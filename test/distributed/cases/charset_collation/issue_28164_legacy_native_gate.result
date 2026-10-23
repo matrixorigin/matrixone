@@ -90,7 +90,7 @@ SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(viewdef, '$.collation_binding_revision')) 
 CAST(JSON_UNQUOTE(JSON_EXTRACT(viewdef, '$.required_protocol_version')) AS SIGNED) AS required_protocol
 FROM mo_catalog.mo_tables WHERE reldatabase = DATABASE() AND relname = 'folded_native_expression';
 ➤ binding_revision[-5,64,0]  ¦  required_protocol[-5,64,0]  𝄀
-1  ¦  129
+1  ¦  130
 PREPARE native_filter FROM 'SELECT id FROM legacy WHERE name COLLATE utf8mb4_general_ci = ? ORDER BY id';
 SET @native_needle = 'ABC';
 EXECUTE native_filter USING @native_needle;

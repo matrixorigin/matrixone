@@ -540,6 +540,24 @@ func NewReader(
 		return nil, err
 	}
 
+	// Composite cluster-by tables keep their sort key in a hidden serialized
+	// column instead of the primary key, so the same expression can also prune
+	// the committed replay iteration through a nonunique cluster iterator.
+	clusterFilter, err := NewMemClusterKeyFilter(
+		tableDef,
+		expr,
+		ts,
+		mp,
+		packerPool,
+	)
+	if err != nil {
+		baseFilter.Cleanup()
+		return nil, err
+	}
+	if clusterFilter.Valid() {
+		memFilter.SetClusterKeyFilter(&clusterFilter)
+	}
+
 	blockFilter, err := ConstructBlockPKFilter(
 		catalog.IsFakePkName(tableDef.Pkey.PkeyColName),
 		baseFilter,
@@ -1014,6 +1032,9 @@ func (r *reader) read(
 	policy := fileservice.GetFileServicePolicy(ctx)
 
 	if r.readBlockCnt > r.threshHold {
+		perfcounter.Update(statsCtx, func(c *perfcounter.CounterSet) {
+			c.FileService.ReaderCacheWriteBypassBlocks.Add(1)
+		})
 		policy |= fileservice.SkipMemoryCacheWrites
 	}
 	r.readBlockCnt++

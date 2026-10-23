@@ -66,7 +66,7 @@ func nativePADPublicationProcess(t *testing.T) *process.Process {
 				rt.CompareAndDeleteGlobalVariables(key, value)
 			}
 		})
-		rt.SetGlobalVariables(key, defines.MORPCVersion129)
+		rt.SetGlobalVariables(key, defines.MORPCVersion130)
 	}
 	return proc
 }
@@ -169,7 +169,7 @@ func TestNativePADPublicationInplaceBindingContext(t *testing.T) {
 func TestNativePADPublicationSchemaExport(t *testing.T) {
 	for _, source := range []*pbplan.TableDef{
 		{Name: "native", Cols: []*pbplan.ColDef{{Name: "s", Typ: pbplan.Type{Id: int32(types.T_varchar), Width: 8, Charset: 3, CollationVersion: 1}}}},
-		{Name: "view", ViewSql: &pbplan.ViewDef{View: `{"Stmt":"create view v as select true as b","collation_binding_revision":1,"required_protocol_version":129}`}},
+		{Name: "view", ViewSql: &pbplan.ViewDef{View: `{"Stmt":"create view v as select true as b","collation_binding_revision":1,"required_protocol_version":130}`}},
 		{Name: "legacy", DefaultCharset: 2, Cols: []*pbplan.ColDef{{Name: "s", Typ: pbplan.Type{Id: int32(types.T_varchar), Width: 8, Charset: 2}, Default: &pbplan.Default{NullAbility: true}}}},
 	} {
 		t.Run(source.Name, func(t *testing.T) {
@@ -194,7 +194,7 @@ func TestNativePADPublicationSchemaExport(t *testing.T) {
 func TestNativePADPublicationDeleteRejectsBeforeEffects(t *testing.T) {
 	for _, source := range []*pbplan.TableDef{
 		{Name: "n", Cols: []*pbplan.ColDef{{Name: "s", Typ: pbplan.Type{Id: int32(types.T_varchar), Width: 8, Charset: 3, CollationVersion: 1}}}},
-		{Name: "v", ViewSql: &pbplan.ViewDef{View: `{"Stmt":"create view v as select true as b","collation_binding_revision":1,"required_protocol_version":129}`}},
+		{Name: "v", ViewSql: &pbplan.ViewDef{View: `{"Stmt":"create view v as select true as b","collation_binding_revision":1,"required_protocol_version":130}`}},
 	} {
 		t.Run(source.Name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)

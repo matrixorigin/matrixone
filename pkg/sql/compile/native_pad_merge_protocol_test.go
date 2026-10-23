@@ -28,9 +28,15 @@ func TestNativePADMergeKeepsIndependentCapabilities(t *testing.T) {
 		{"view_definition", 603, 0, defines.MORPCVersion126},
 		{"view_check", 604, 0, defines.MORPCVersion126},
 		{"json_numeric", 546, 1, defines.MORPCVersion128},
+		{"json_elt", 384, 1, defines.MORPCVersion129},
+		{"json_opaque_text", 16, 0, defines.MORPCVersion129},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expr := &pb.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &pb.Expr_F{F: &pb.Function{Func: &pb.ObjectRef{Obj: tc.id<<32 | tc.overload}}}}
+			if tc.id == 16 {
+				expr.Typ = types.T_varchar.ToType().PlanType()
+				expr.GetF().Args = []*pb.Expr{{Typ: types.T_json.ToType().PlanType()}}
+			}
 			owner := &pb.Node{DedupKeyExprs: []*pb.Expr{expr}}
 			features, err := pb.RequiredExecutableRemoteExpressionFeatures(owner)
 			require.NoError(t, err)
@@ -43,7 +49,7 @@ func TestNativePADMergeKeepsIndependentCapabilities(t *testing.T) {
 			features, err = pb.RequiredExecutableRemoteExpressionFeatures(owner)
 			require.NoError(t, err)
 			require.True(t, features.NativePADCollation)
-			require.Equal(t, defines.MORPCVersion129, remoteExpressionProtocolVersion(features))
+			require.Equal(t, defines.MORPCVersion130, remoteExpressionProtocolVersion(features))
 		})
 	}
 }

@@ -12464,7 +12464,7 @@ func (builder *QueryBuilder) bindView(
 		return 0, err
 	}
 	if requirement := viewCtx.ctasNativeCollationProtocolRequirement; viewData.CollationBindingRevision == 1 && requirement != nil {
-		*requirement = max(*requirement, defines.MORPCVersion129)
+		*requirement = max(*requirement, defines.MORPCVersion130)
 	}
 	restoreCollationBinding, err := enterPersistedCollationBinding(builder.compCtx, viewData.CollationBindingRevision)
 	if err != nil {

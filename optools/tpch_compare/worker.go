@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 
@@ -45,6 +46,9 @@ type WorkerRequest struct {
 	Warmup          bool          `json:"warmup,omitempty"`
 	Seed            uint64        `json:"seed,omitempty"`
 	DeadlinesNS     map[int]int64 `json:"deadlines_ns,omitempty"`
+	Profile         *ProfileSpec  `json:"profile,omitempty"`
+	WarmupSelected  bool          `json:"warmup_selected_only,omitempty"`
+	MaxWindowNS     int64         `json:"max_window_ns,omitempty"`
 }
 type QueryReceipt struct {
 	Query      int     `json:"query"`
@@ -55,24 +59,26 @@ type QueryReceipt struct {
 	Stream     int     `json:"stream,omitempty"`
 }
 type WorkerReceipt struct {
-	Version       int               `json:"version"`
-	Engine        string            `json:"engine"`
-	EngineVersion string            `json:"engine_version"`
-	GoVersion     string            `json:"go_version"`
-	Build         string            `json:"build"`
-	Dataset       FileID            `json:"dataset"`
-	Binary        FileID            `json:"binary"`
-	Settings      map[string]string `json:"effective_settings"`
-	Variant       string            `json:"variant"`
-	Started       time.Time         `json:"started"`
-	Finished      time.Time         `json:"finished"`
-	Queries       []QueryReceipt    `json:"queries,omitempty"`
-	Load          *LoadReceipt      `json:"load,omitempty"`
-	Error         string            `json:"error,omitempty"`
-	Cleanup       string            `json:"cleanup"`
-	WaveNS        int64             `json:"wave_ns,omitempty"`
-	Controlled    bool              `json:"controlled,omitempty"`
-	Clients       int               `json:"clients,omitempty"`
+	Version       int                      `json:"version"`
+	Engine        string                   `json:"engine"`
+	EngineVersion string                   `json:"engine_version"`
+	GoVersion     string                   `json:"go_version"`
+	Build         string                   `json:"build"`
+	Dataset       FileID                   `json:"dataset"`
+	Binary        FileID                   `json:"binary"`
+	Settings      map[string]string        `json:"effective_settings"`
+	Variant       string                   `json:"variant"`
+	Started       time.Time                `json:"started"`
+	Finished      time.Time                `json:"finished"`
+	Queries       []QueryReceipt           `json:"queries,omitempty"`
+	Load          *LoadReceipt             `json:"load,omitempty"`
+	Error         string                   `json:"error,omitempty"`
+	Cleanup       string                   `json:"cleanup"`
+	WaveNS        int64                    `json:"wave_ns,omitempty"`
+	Controlled    bool                     `json:"controlled,omitempty"`
+	Clients       int                      `json:"clients,omitempty"`
+	RuntimeBefore map[string]RuntimeMetric `json:"runtime_before,omitempty"`
+	RuntimeAfter  map[string]RuntimeMetric `json:"runtime_after,omitempty"`
 }
 
 var identifier = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
@@ -110,6 +116,15 @@ func runWorker(ctx context.Context, r WorkerRequest, control *workerControl) (ou
 	if r.Unlimited {
 		out.Variant = "unlimited_diagnostic"
 	}
+	if r.Profile != nil {
+		if !slices.Contains([]string{"operator", "cpu", "alloc", "wait", "branches", "cache"}, r.Profile.Kind) {
+			return out, errors.New("unsupported profile lens")
+		}
+		out.Variant = "profile_" + r.Profile.Kind
+		if r.Profile.Kind == "operator" && r.Clients > 1 {
+			return out, errors.New("native operator profiles require one connection")
+		}
+	}
 	if info, ok := debug.ReadBuildInfo(); ok {
 		out.Build = info.String()
 	}
@@ -121,6 +136,9 @@ func runWorker(ctx context.Context, r WorkerRequest, control *workerControl) (ou
 	}()
 	if r.Version != formatVersion || r.Engine.Threads < 1 || r.Engine.Threads > 64 || r.Engine.MemoryBytes < 128<<20 || r.Repetitions < 0 || r.Repetitions > 2000 || r.QueryDeadlineNS <= 0 || r.Clients < 1 || r.Clients > 8 || r.Repetitions*r.Clients*len(r.Queries) > 4000 {
 		return out, errors.New("invalid bounded worker request")
+	}
+	if r.MaxWindowNS < 0 || r.MaxWindowNS > int64(60*time.Second) {
+		return out, errors.New("invalid diagnostic window cap")
 	}
 	if err := os.Mkdir(r.OutputRoot, 0750); err != nil {
 		return out, fmt.Errorf("worker output must be a new directory: %w", err)
@@ -198,7 +216,14 @@ func runWorker(ctx context.Context, r WorkerRequest, control *workerControl) (ou
 		if r.Repetitions < 1 || len(r.Queries) < 1 || len(r.Queries) > 22 {
 			return out, errors.New("nonempty bounded query selection required")
 		}
-		out.Queries, out.WaveNS, err = runQueryStreams(ctx, db, conn, r, d, control)
+		var evidence *runtimeEvidence
+		if r.Profile != nil || r.MaxWindowNS > 0 {
+			evidence = &runtimeEvidence{}
+		}
+		out.Queries, out.WaveNS, err = runQueryStreams(ctx, db, conn, r, d, control, evidence)
+		if evidence != nil {
+			out.RuntimeBefore, out.RuntimeAfter = evidence.before, evidence.after
+		}
 		return out, err
 	default:
 		return out, fmt.Errorf("unsupported worker operation %q", r.Operation)

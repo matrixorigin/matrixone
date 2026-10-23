@@ -26,8 +26,8 @@ func TestNativePADCTASWireFieldsRemainIndependent(t *testing.T) {
 		{"absent", nil, 0, 0, 0},
 		{"upstream_execution_19", []byte{0x98, 0x01, 122}, 122, 0, 0},
 		{"binding_20", []byte{0xa0, 0x01, 1}, 0, 0, 1},
-		{"native_requirement_21", []byte{0xa8, 0x01, 0x81, 0x01}, 0, 129, 0},
-		{"combined", []byte{0x98, 0x01, 122, 0xa0, 0x01, 1, 0xa8, 0x01, 0x81, 0x01}, 122, 129, 1},
+		{"native_requirement_21", []byte{0xa8, 0x01, 0x82, 0x01}, 0, 130, 0},
+		{"combined", []byte{0x98, 0x01, 122, 0xa0, 0x01, 1, 0xa8, 0x01, 0x82, 0x01}, 122, 130, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var create CreateTable

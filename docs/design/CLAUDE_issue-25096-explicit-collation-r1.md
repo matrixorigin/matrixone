@@ -110,4 +110,12 @@
 | 2026-10-22 / r1公开转录 | PR #30684的P1评审要求 | 将设计和授权来源公开；不伪造maintainer或GitHub批准 |
 | 待定 | GitHub维护者设计评审 | P1公开设计审批尚未获得，仍需显式确认r1；保持Draft，不自行关闭该门 |
 
+## 10. 2026-10-23兼容集成记录（不改变r1范围）
+
+上游`main@2b388dd1690f`已将129分配给JSON ELT/opaque text独立执行契约，本PR未发布的native能力因此迁到**130**，不能覆盖JSON129，也不改变125–128等其他能力。CTAS字段19/20/21仍独立，130使用两字节varint `0x82,0x01`。过去129及125候选的测试与目录保持原身份，不宣称未发布native129/125实验catalog到130的受支持升级。
+
+合并保留JSON typed MIN/MAX及其extra状态所有权，native blob/text仍使用完整域；共享PK/cluster-key读取准入也必须看完整identity/revision，不能因只检查Unicode ID而重新启用native PAD的raw-key剪枝。没有启用新的native物理key或在线转换。
+
+本轮开始时远端PR已为Ready，冲突修复保留远端状态；Ready状态本身不作为新的设计批准记录，不从状态变化推导维护者已批准r1。
+
 参考规范：[MySQL coercibility](https://dev.mysql.com/doc/refman/8.0/en/charset-collation-coercibility.html)、[binary与_bin](https://dev.mysql.com/doc/refman/8.0/en/charset-binary-collations.html)。严格域兼容与历史MO别名是不同承诺，本设计不把alias宣传成完整MySQL字符集实现。

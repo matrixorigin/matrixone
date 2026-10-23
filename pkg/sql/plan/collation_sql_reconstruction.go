@@ -75,7 +75,7 @@ func requireStandaloneViewCollations(ctx context.Context, data ViewData) error {
 		return moerr.NewInvalidInput(ctx, "persisted view protocol version must not be negative")
 	}
 	if data.CollationBindingRevision != 0 ||
-		(data.RequiredProtocolVersion != nil && *data.RequiredProtocolVersion >= defines.MORPCVersion129) {
+		(data.RequiredProtocolVersion != nil && *data.RequiredProtocolVersion >= defines.MORPCVersion130) {
 		return standaloneCollationSQLDisabled(ctx)
 	}
 	sqlMode := legacyViewParserSQLMode
