@@ -14,44 +14,10 @@
 
 package fscache
 
-import (
-	"sync/atomic"
-	"time"
-)
-
 type CapacityFunc func() int64
 
 func ConstCapacity(capacity int64) CapacityFunc {
 	return func() int64 {
 		return capacity
-	}
-}
-
-func CachingCapacity(
-	upstream CapacityFunc,
-	duration time.Duration,
-) CapacityFunc {
-	var capacity atomic.Pointer[int64]
-	c := upstream()
-	capacity.Store(&c)
-	t0 := time.Now()
-	var last atomic.Pointer[time.Duration]
-	elapsed := time.Since(t0)
-	last.Store(&elapsed)
-	return func() int64 {
-		for {
-			alignedElapsed := time.Since(t0) / duration * duration
-			ptr := last.Load()
-			if alignedElapsed == *ptr {
-				// use cache
-				return *capacity.Load()
-			}
-			// update
-			if last.CompareAndSwap(ptr, &alignedElapsed) {
-				c := upstream()
-				capacity.Store(&c)
-				return c
-			}
-		}
 	}
 }

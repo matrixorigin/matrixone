@@ -29,6 +29,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/parquet-go/parquet-go"
@@ -1674,15 +1675,18 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 		return vector.GetFixedAtNoTypeCheck[float32](vec, i), nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, i), nil
-	case types.T_char, types.T_varchar, types.T_text:
-		return string(vec.GetBytesAt(i)), nil
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
+		value := vec.GetBytesAt(i)
+		if !utf8.Valid(value) {
+			return nil, moerr.NewNotSupported(context.Background(),
+				"JSONLINE OUTFILE cannot encode text containing invalid UTF-8; use CSV to preserve raw bytes")
+		}
+		return string(value), nil
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		// #30635: wrap base64 in {"$binary":...} so the jsonline loader can
 		// distinguish MO-encoded binary payloads from plain-text JSON
 		// strings; bare strings keep their byte-exact passthrough on load.
 		return map[string]any{external.JsonBinaryKey: base64.StdEncoding.EncodeToString(vec.GetBytesAt(i))}, nil
-	case types.T_datalink:
-		return string(vec.GetBytesAt(i)), nil
 	case types.T_geometry, types.T_geometry32:
 		return planfunction.GeometryPayloadToText(vec.GetBytesAt(i))
 	case types.T_array_float32:
