@@ -610,6 +610,11 @@ func adjustTestingClusterTiming(svc ServiceOperator) {
 			}
 			if tn != nil {
 				tn.LockService.KeepBindTimeout.Duration = testLockBindTimeout
+				// Functional fixtures use small object sets; explicit estimates
+				// remain available for capacity and large-data scenarios.
+				if tn.GCCfg.GCestimateRows == 0 {
+					tn.GCCfg.GCestimateRows = 100_000
+				}
 			}
 		})
 	case metadata.ServiceType_CN:

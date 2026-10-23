@@ -233,8 +233,8 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	sourcer = w.MakeFilesReader(ctx, fs)
 	bf, err = BuildBloomfilter(
 		ctx,
-		Default_Coarse_EstimateRows,
-		Default_Coarse_Probility,
+		estimateRows,
+		probility,
 		0,
 		sourcer.Read,
 		buffer,
