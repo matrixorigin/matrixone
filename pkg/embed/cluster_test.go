@@ -166,6 +166,24 @@ func TestClusterAdmissionAtStart(t *testing.T) {
 			})
 		}
 	}
+	// Synthetic rollback belongs to the same private admission namespace. It
+	// must not queue behind real clusters or need a second helper process.
+	t.Run("completed-error-rollback", func(t *testing.T) {
+		t.Setenv(clusteradmission.ProcessPoolSizeEnv, "2")
+		failure := errors.New("startup and withdrawal failed")
+		svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
+		c, _ := newFixture(t)
+		c.startFn = func(op *operator) error { op.reset.svc = svc; return failure }
+		require.ErrorIs(t, c.Start(), failure)
+		require.Nil(t, c.testAdmission)
+		require.False(t, c.services[0].needsCleanup())
+		require.Equal(t, int32(1), svc.closeCount.Load())
+
+		next, starts := newFixture(t)
+		require.NoError(t, next.Start(), "completed rollback must admit the next owner")
+		require.Equal(t, 1, *starts)
+	})
+
 }
 
 func runInIsolatedClusterAdmissionProcess(t *testing.T, runPattern string) bool {
@@ -277,23 +295,6 @@ func TestOperatorStartPreservesIncompleteOwnership(t *testing.T) {
 	require.NoError(t, op.Close())
 	require.False(t, op.needsCleanup())
 	require.Nil(t, commonruntime.ServiceRuntime(op.sid))
-}
-
-func TestClusterStartRollbackCompletedErrorReleasesAdmission(t *testing.T) {
-	t.Setenv(clusteradmission.ProcessPoolSizeEnv, "2")
-	failure := errors.New("startup and withdrawal failed")
-	svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
-	op := &operator{serviceType: metadata.ServiceType_CN}
-	c := &cluster{services: []*operator{op}}
-	WithTesting()(c)
-	// The synthetic failure must remain reachable beside the shared base.
-	WithConcurrentTestClusters()(c)
-	c.startFn = func(op *operator) error { op.reset.svc = svc; return failure }
-	t.Cleanup(func() { require.NoError(t, c.Close()) })
-	require.ErrorIs(t, c.Start(), failure)
-	require.Nil(t, c.testAdmission)
-	require.False(t, op.needsCleanup())
-	require.Equal(t, int32(1), svc.closeCount.Load())
 }
 
 func (s *closeTrackingFileService) Close(context.Context) {
