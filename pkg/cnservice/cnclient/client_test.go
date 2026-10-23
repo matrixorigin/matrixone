@@ -16,11 +16,11 @@ package cnclient
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/stretchr/testify/require"
@@ -109,10 +109,10 @@ func (f *retryablePipelineBackendFactory) Create(
 	...morpc.BackendOption,
 ) (morpc.Backend, error) {
 	f.calls.Add(1)
-	// resetConn reports this after its connect retry window expires. MORPC
-	// deliberately treats it as retryable, so the client-level recovery budget
-	// must terminate the retry loop.
-	return nil, moerr.NewRPCTimeoutNoCtx()
+	// Custom factories can report retryable errors that do not establish an
+	// exhausted transport connection budget. The client-level recovery budget
+	// must still terminate those retries.
+	return nil, errors.New("temporary backend factory failure")
 }
 
 func TestPipelineBackendCreateOptionsBoundRetry(t *testing.T) {

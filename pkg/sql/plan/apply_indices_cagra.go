@@ -210,7 +210,7 @@ func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPo
 	if vecColArg.GetCol() == nil {
 		return
 	}
-	if !rule.IsConstant(vecLitArg, true) {
+	if !function.IsConstant(vecLitArg, true) {
 		return
 	}
 

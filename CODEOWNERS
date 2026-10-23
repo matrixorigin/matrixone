@@ -62,8 +62,6 @@
 /pkg/common @XuPeng-SH
 /pkg/common/mpool @XuPeng-SH
 /pkg/common/malloc @XuPeng-SH
-/pkg/common/spool @aunjgr @aptend @XuPeng-SH
-/pkg/common/async @XuPeng-SH @aptend
 /pkg/common/bitmap @aunjgr @XuPeng-SH @aptend
 /pkg/common/hashmap @aunjgr @XuPeng-SH @aptend
 /pkg/common/moerr @XuPeng-SH @aptend
@@ -162,7 +160,6 @@
 /pkg/sql/plan @XuPeng-SH @aunjgr @aptend
 /pkg/sql/plan/function @XuPeng-SH @aunjgr @aptend
 /pkg/sql/plan/explain @XuPeng-SH @aunjgr @aptend
-/pkg/sql/plan/tools @gouhongshen @XuPeng-SH
 /pkg/sql/colexec/indexjoin @aunjgr @XuPeng-SH @aptend
 /pkg/sql/colexec/indexbuild @aunjgr @XuPeng-SH @aptend
 /pkg/sql/colexec/intersect @aunjgr @XuPeng-SH @aptend

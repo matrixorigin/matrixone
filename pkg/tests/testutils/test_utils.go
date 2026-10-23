@@ -36,6 +36,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// SQLCleanupTimeout bounds a test cleanup statement according to its resource.
+func SQLCleanupTimeout(statement string) time.Duration {
+	words := strings.Fields(statement)
+	if len(words) >= 2 && strings.EqualFold(words[0], "drop") && strings.EqualFold(words[1], "account") {
+		// DROP ACCOUNT removes the tenant's complete bootstrap catalog, not one
+		// object. Under race instrumentation those serial DDLs can exceed the
+		// ordinary per-object budget. Keep a separate, bounded account budget;
+		// never retry an unknown-result DROP or skip the artifact checks.
+		return 2 * time.Minute
+	}
+	return 30 * time.Second
+}
+
 func CreateTableAndWaitCNApplied(
 	t *testing.T,
 	db string,

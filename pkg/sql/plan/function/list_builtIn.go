@@ -1085,6 +1085,13 @@ var supportedStringBuiltIns = []FuncNew{
 					return Elt
 				},
 			},
+			{
+				overloadId: 1,
+				retType:    jsonStringConsumerReturnType,
+				newOp: func() executeLogicOfOverload {
+					return Elt
+				},
+			},
 		},
 	},
 
@@ -12373,7 +12380,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		functionId: UNIX_TIMESTAMP,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    unixTimestampTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -12421,6 +12428,20 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInUnixTimestampVarcharToDecimal128
+				},
+			},
+			{
+				overloadId: 4,
+				volatile:   true,
+				args:       []types.T{types.T_datetime},
+				retType: func(parameters []types.Type) types.Type {
+					if parameters[0].Scale > 0 {
+						return types.New(types.T_decimal128, 38, 6)
+					}
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInUnixTimestampDatetime
 				},
 			},
 		},

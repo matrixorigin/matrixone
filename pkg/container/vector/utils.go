@@ -51,39 +51,6 @@ func OrderedFindFirstIndexInSortedSlice[T types.OrderedT](v T, s []T) int {
 	return -1
 }
 
-// FindFirstIndexInSortedSlice finds the first index of v in a sorted slice s
-// If v is not found, return -1
-// compare is a function to compare two elements in s
-func FixedSizeFindFirstIndexInSortedSliceWithCompare[T types.FixedSizeTExceptStrType](
-	v T, s []T, compare func(T, T) int,
-) int {
-	if len(s) == 0 {
-		return -1
-	}
-	if len(s) == 1 {
-		if s[0] == v {
-			return 0
-		}
-		return -1
-	}
-	if s[0] == v {
-		return 0
-	}
-	l, r := 0, len(s)-1
-	for l < r {
-		mid := (l + r) / 2
-		if compare(s[mid], v) >= 0 {
-			r = mid
-		} else {
-			l = mid + 1
-		}
-	}
-	if s[l] == v {
-		return l
-	}
-	return -1
-}
-
 // FindFirstIndexInSortedSlice finds the first index of v in a sorted varlen vector
 func FindFirstIndexInSortedVarlenVector(vec *Vector, v []byte) int {
 	length := vec.Length()
@@ -245,42 +212,6 @@ func FloatGetMinAndMax[T ~float32 | ~float64](vec *Vector) (
 		}
 		if maxv < value {
 			maxv = value
-		}
-	}
-	return
-}
-
-func FixedSizeGetMinMax[T types.OrderedT](
-	vec *Vector, comp func(T, T) int64,
-) (minv, maxv T) {
-	col := MustFixedColNoTypeCheck[T](vec)
-	if vec.HasNull() {
-		first := true
-		for i, j := 0, vec.Length(); i < j; i++ {
-			if vec.IsNull(uint64(i)) {
-				continue
-			}
-			if first {
-				minv, maxv = col[i], col[i]
-				first = false
-			} else {
-				if comp(minv, col[i]) > 0 {
-					minv = col[i]
-				}
-				if comp(maxv, col[i]) < 0 {
-					maxv = col[i]
-				}
-			}
-		}
-	} else {
-		minv, maxv = col[0], col[0]
-		for i, j := 1, vec.Length(); i < j; i++ {
-			if comp(minv, col[i]) > 0 {
-				minv = col[i]
-			}
-			if comp(maxv, col[i]) < 0 {
-				maxv = col[i]
-			}
 		}
 	}
 	return
