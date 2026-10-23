@@ -32,6 +32,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -6190,26 +6191,31 @@ func decimal128ToFloat[T constraints.Float](
 	return nil
 }
 
+// decimalPhysicalPrecision returns the signed coefficient precision for a decimal OID.
+func decimalPhysicalPrecision(oid types.T) int32 {
+	switch oid {
+	case types.T_decimal64:
+		return 18
+	case types.T_decimal128:
+		return 38
+	case types.T_decimal256:
+		return 76
+	default:
+		return 0
+	}
+}
+
 // canWidenDecimalScale proves that increasing the coefficient's scale cannot
 // exceed either the declared precision or the physical DECIMAL representation.
 // Scale reduction can carry into the integer part, so it stays on the checked path.
 // Source and result types are fixed for a batch; evaluate this before the row loop.
 func canWidenDecimalScale(from, to types.Type) bool {
-	return from.Oid.IsDecimal() && to.Oid.IsDecimal() && from.Oid.TypeLen() <= to.Oid.TypeLen() &&
-		from.Width > 0 && from.Width <= from.Oid.ToType().Width &&
+	sourceLimit, targetLimit := decimalPhysicalPrecision(from.Oid), decimalPhysicalPrecision(to.Oid)
+	return sourceLimit > 0 && targetLimit > 0 && sourceLimit <= targetLimit &&
+		from.Width > 0 && from.Width <= sourceLimit &&
 		from.Scale >= 0 && from.Scale <= from.Width && to.Scale > from.Scale &&
-		to.Width > 0 && to.Width <= to.Oid.ToType().Width && to.Scale <= to.Width &&
+		to.Width > 0 && to.Width <= targetLimit && to.Scale <= to.Width &&
 		to.Width-to.Scale >= from.Width-from.Scale
-}
-
-// canWidenResolvedDecimalScale applies the logical range proof after a typed
-// conversion has established its physical precision limits. Keeping this small
-// avoids dynamic TypeLen/ToType calls and preserves cheap scalar conversions.
-func canWidenResolvedDecimalScale(sourceWidth, sourceScale, targetWidth, targetScale, sourceLimit, targetLimit int32) bool {
-	return sourceLimit <= targetLimit && sourceWidth > 0 && sourceWidth <= sourceLimit &&
-		sourceScale >= 0 && sourceScale <= sourceWidth && targetScale > sourceScale &&
-		targetWidth > 0 && targetWidth <= targetLimit && targetScale <= targetWidth &&
-		targetWidth-targetScale >= sourceWidth-sourceScale
 }
 
 // decimalCastAllNull checks only the requested row domain. Endpoint checks
@@ -6232,20 +6238,33 @@ func decimal64ToDecimal64(
 	if length == 0 {
 		return nil
 	}
-	if decimalCastAllNull(from.GetSourceVector(), l) {
-		if length == 1 {
+	if length == 1 {
+		if _, isNull := from.GetValue(0); isNull {
 			return to.Append(dft, true)
 		}
+	}
+	source := from.GetSourceVector()
+	if length > 1 && decimalCastAllNull(source, l) {
 		to.SetNullResult(l)
 		return nil
 	}
-	fromtype := from.GetType()
+	fromtype := *source.GetType()
 	totype := to.GetType()
-	safeGrowth := fromtype.Oid == types.T_decimal64 && totype.Oid == types.T_decimal64 &&
-		canWidenResolvedDecimalScale(fromtype.Width, fromtype.Scale, totype.Width, totype.Scale, 18, 18)
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
 	scaleDelta := totype.Scale - fromtype.Scale
+	values := vector.MustFixedColNoTypeCheck[types.Decimal64](source)
+	constant := source.IsConst()
+	var sourceNulls *bitmap.Bitmap
+	if !constant && !source.GetNulls().EmptyByFlag() {
+		sourceNulls = source.GetNulls().GetBitmap()
+	}
 	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
+		row := i
+		if constant {
+			row = 0
+		}
+		v := values[row]
+		null := sourceNulls != nil && sourceNulls.Contains(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err
@@ -6428,23 +6447,36 @@ func decimal64ToDecimal256Array(
 	if length == 0 {
 		return nil
 	}
-	if decimalCastAllNull(from.GetSourceVector(), l) {
-		if length == 1 {
+	if length == 1 {
+		if _, isNull := from.GetValue(0); isNull {
 			return to.Append(dft, true)
 		}
+	}
+	source := from.GetSourceVector()
+	if length > 1 && decimalCastAllNull(source, l) {
 		to.SetNullResult(l)
 		return nil
 	}
-	fromtype := from.GetType()
+	fromtype := *source.GetType()
 	totype := to.GetType()
-	safeGrowth := fromtype.Oid == types.T_decimal64 && totype.Oid == types.T_decimal256 &&
-		canWidenResolvedDecimalScale(fromtype.Width, fromtype.Scale, totype.Width, totype.Scale, 18, 76)
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
 	scaleDelta := totype.Scale - fromtype.Scale
-	scaleIn64 := safeGrowth && fromtype.Width+scaleDelta <= 18
-	scaleIn128 := safeGrowth && !scaleIn64 && fromtype.Width+scaleDelta <= 38
+	scaleIn64 := safeGrowth && fromtype.Width+scaleDelta <= types.T_decimal64.ToType().Width
+	scaleIn128 := safeGrowth && !scaleIn64 && fromtype.Width+scaleDelta <= types.T_decimal128.ToType().Width
 	needsCheck := totype.Width < fromtype.Width || totype.Scale != fromtype.Scale
+	values := vector.MustFixedColNoTypeCheck[types.Decimal64](source)
+	constant := source.IsConst()
+	var sourceNulls *bitmap.Bitmap
+	if !constant && !source.GetNulls().EmptyByFlag() {
+		sourceNulls = source.GetNulls().GetBitmap()
+	}
 	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
+		row := i
+		if constant {
+			row = 0
+		}
+		v := values[row]
+		null := sourceNulls != nil && sourceNulls.Contains(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err
@@ -6541,21 +6573,34 @@ func decimal128ToDecimal128(
 	if length == 0 {
 		return nil
 	}
-	if decimalCastAllNull(from.GetSourceVector(), l) {
-		if length == 1 {
+	if length == 1 {
+		if _, isNull := from.GetValue(0); isNull {
 			return to.Append(dft, true)
 		}
+	}
+	source := from.GetSourceVector()
+	if length > 1 && decimalCastAllNull(source, l) {
 		to.SetNullResult(l)
 		return nil
 	}
-	fromtype := from.GetType()
+	fromtype := *source.GetType()
 	totype := to.GetType()
-	safeGrowth := fromtype.Oid == types.T_decimal128 && totype.Oid == types.T_decimal128 &&
-		canWidenResolvedDecimalScale(fromtype.Width, fromtype.Scale, totype.Width, totype.Scale, 38, 38)
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
 	scaleDelta := totype.Scale - fromtype.Scale
 	scaleDown := totype.Scale < fromtype.Scale
+	values := vector.MustFixedColNoTypeCheck[types.Decimal128](source)
+	constant := source.IsConst()
+	var sourceNulls *bitmap.Bitmap
+	if !constant && !source.GetNulls().EmptyByFlag() {
+		sourceNulls = source.GetNulls().GetBitmap()
+	}
 	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
+		row := i
+		if constant {
+			row = 0
+		}
+		v := values[row]
+		null := sourceNulls != nil && sourceNulls.Contains(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err
@@ -6594,23 +6639,36 @@ func decimal128ToDecimal256(
 	if length == 0 {
 		return nil
 	}
-	if decimalCastAllNull(from.GetSourceVector(), l) {
-		if length == 1 {
+	if length == 1 {
+		if _, isNull := from.GetValue(0); isNull {
 			return to.Append(dft, true)
 		}
+	}
+	source := from.GetSourceVector()
+	if length > 1 && decimalCastAllNull(source, l) {
 		to.SetNullResult(l)
 		return nil
 	}
-	fromtype := from.GetType()
+	fromtype := *source.GetType()
 	totype := to.GetType()
-	safeGrowth := fromtype.Oid == types.T_decimal128 && totype.Oid == types.T_decimal256 &&
-		canWidenResolvedDecimalScale(fromtype.Width, fromtype.Scale, totype.Width, totype.Scale, 38, 76)
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
 	scaleDelta := totype.Scale - fromtype.Scale
-	scaleIn128 := safeGrowth && fromtype.Width+scaleDelta <= 38
+	scaleIn128 := safeGrowth && fromtype.Width+scaleDelta <= types.T_decimal128.ToType().Width
 	scaleDown := totype.Scale < fromtype.Scale
 	needsCheck := totype.Width < fromtype.Width || totype.Scale != fromtype.Scale
+	values := vector.MustFixedColNoTypeCheck[types.Decimal128](source)
+	constant := source.IsConst()
+	var sourceNulls *bitmap.Bitmap
+	if !constant && !source.GetNulls().EmptyByFlag() {
+		sourceNulls = source.GetNulls().GetBitmap()
+	}
 	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
+		row := i
+		if constant {
+			row = 0
+		}
+		v := values[row]
+		null := sourceNulls != nil && sourceNulls.Contains(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err
@@ -6745,21 +6803,34 @@ func decimal256ToDecimal256(
 	if length == 0 {
 		return nil
 	}
-	if decimalCastAllNull(from.GetSourceVector(), l) {
-		if length == 1 {
+	if length == 1 {
+		if _, isNull := from.GetValue(0); isNull {
 			return to.Append(dft, true)
 		}
+	}
+	source := from.GetSourceVector()
+	if length > 1 && decimalCastAllNull(source, l) {
 		to.SetNullResult(l)
 		return nil
 	}
-	fromtype := from.GetType()
+	fromtype := *source.GetType()
 	totype := to.GetType()
-	safeGrowth := fromtype.Oid == types.T_decimal256 && totype.Oid == types.T_decimal256 &&
-		canWidenResolvedDecimalScale(fromtype.Width, fromtype.Scale, totype.Width, totype.Scale, 76, 76)
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
 	scaleDelta := totype.Scale - fromtype.Scale
 	scaleDown := totype.Scale < fromtype.Scale
+	values := vector.MustFixedColNoTypeCheck[types.Decimal256](source)
+	constant := source.IsConst()
+	var sourceNulls *bitmap.Bitmap
+	if !constant && !source.GetNulls().EmptyByFlag() {
+		sourceNulls = source.GetNulls().GetBitmap()
+	}
 	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
+		row := i
+		if constant {
+			row = 0
+		}
+		v := values[row]
+		null := sourceNulls != nil && sourceNulls.Contains(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err

@@ -376,7 +376,6 @@ func TestDecimalCastScaleGrowthAdmission(t *testing.T) {
 		{types.New(types.T_decimal128, 38, 2), types.New(types.T_decimal64, 18, 4), false},
 	} {
 		require.Equal(t, tc.want, canWidenDecimalScale(tc.from, tc.to), "%v -> %v", tc.from, tc.to)
-		require.Equal(t, tc.want, canWidenResolvedDecimalScale(tc.from.Width, tc.from.Scale, tc.to.Width, tc.to.Scale, tc.from.Oid.ToType().Width, tc.to.Oid.ToType().Width), "resolved %v -> %v", tc.from, tc.to)
 	}
 }
 
@@ -520,13 +519,27 @@ func TestDecimalCastNullDomain(t *testing.T) {
 			fc.fnLength = 2
 			ok, info := fc.Run()
 			require.True(t, ok, info)
+			// A constant broadcasts physical row zero; other NULL bits are irrelevant.
+			fc.parameters[0].GetNulls().Unset(0)
+			fc.parameters[0].SetClass(vector.CONSTANT)
+			wantedNulls := fc.expected.nullList
+			fc.expected.nullList = nil
+			ok, info = fc.Run()
+			require.True(t, ok, info)
+			fc.expected.nullList = wantedNulls
+			// Constant NULLs can have no physical coefficient or NULL bitmap.
+			previous := fc.parameters[0]
+			fc.parameters[0] = vector.NewConstNull(tc.source, 2, proc.Mp())
+			previous.Free(proc.Mp())
+			ok, info = fc.Run()
+			require.True(t, ok, info)
 		})
 	}
 }
 
 // BenchmarkDecimalCastSetup includes actual small/no-work shapes and tails.
 func BenchmarkDecimalCastSetup(b *testing.B) {
-	for _, kind := range []string{"d64", "d128", "d256", "64to256", "128to256", "64to128_control"} {
+	for _, kind := range []string{"d64", "d128", "d256", "64to256", "128to256", "64to128_control", "128to64_control"} {
 		for _, shape := range []string{"one", "empty", "allnull", "constant", "large", "null_one", "tiny2", "tiny8", "tiny16", "tail255", "tail257", "prefix", "mixed"} {
 			b.Run(kind+"/"+shape, func(b *testing.B) {
 				n := 256
@@ -555,6 +568,8 @@ func BenchmarkDecimalCastSetup(b *testing.B) {
 				}
 				src, dst := types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal64, 14, 4)
 				switch kind {
+				case "128to64_control":
+					src, dst = types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal64, 18, 4)
 				case "64to128_control":
 					dst = types.New(types.T_decimal128, 14, 4)
 				case "d128":
