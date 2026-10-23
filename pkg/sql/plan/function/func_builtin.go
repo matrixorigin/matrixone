@@ -1207,13 +1207,75 @@ func concatStringValue(source types.T, value []byte) ([]byte, error) {
 func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
+	direct := !rs.GetResultVector().IsConst()
 	for i := range ps {
 		ps[i] = vector.GenerateFunctionStrParameter(parameters[i])
+		// JSON conversion can fail before a later NULL argument is visited.
+		// Keep that left-to-right behavior on the existing conversion path.
+		direct = direct && parameters[i].GetType().Oid != types.T_json
 	}
+	allocationLimit := mpool.MaxAllocationSize()
+	var inline [types.VarlenaInlineSize]byte
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if direct {
+			var size int64
+			isNull, tooLarge := false, false
+			for _, p := range ps {
+				value, null := p.GetStrValue(i)
+				if null {
+					isNull = true
+					break
+				}
+				if int64(len(value)) > allocationLimit-size {
+					tooLarge = true
+				} else if !tooLarge {
+					size += int64(len(value))
+				}
+			}
+			if isNull {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Check both the row length and cumulative area before arithmetic in
+			// the writer. A later NULL above still takes precedence over size.
+			if tooLarge || (size > types.VarlenaInlineSize &&
+				size > allocationLimit-int64(len(rs.GetResultVector().GetArea()))) {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			if size <= types.VarlenaInlineSize {
+				// Reuse bounded scratch for inline values. Passing a descriptor
+				// through the writer callback would allocate it on every row.
+				dst := inline[:int(size)]
+				offset := 0
+				for _, p := range ps {
+					value, _ := p.GetStrValue(i)
+					offset += copy(dst[offset:], value)
+				}
+				if err := rs.AppendBytes(dst, false); err != nil {
+					return err
+				}
+				continue
+			}
+			// Inputs remain owned by the child expressions. The synchronous
+			// writer reserves the result's storage before copying into it, so
+			// no intermediate concatenation escapes mpool admission.
+			if err := rs.AppendBytesWithWriter(int(size), func(dst []byte) error {
+				offset := 0
+				for _, p := range ps {
+					value, _ := p.GetStrValue(i)
+					offset += copy(dst[offset:], value)
+				}
+				return nil
+			}); err != nil {
 				return err
 			}
 			continue
