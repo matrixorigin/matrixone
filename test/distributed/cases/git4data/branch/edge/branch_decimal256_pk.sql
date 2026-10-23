@@ -42,10 +42,12 @@ insert into del_base values
 data branch create table del_branch from del_base;
 delete from del_branch where d = 9007199254740993.000000000000000000000000000001;
 select count(*) as branch_rows from del_branch;
+select d, note from del_branch order by d;
 data branch diff del_branch against del_base output summary;
 data branch diff del_branch against del_base output count;
 data branch merge del_branch into del_base when conflict accept;
 select count(*) as base_rows from del_base;
+select d, note from del_base order by d;
 data branch diff del_branch against del_base output count;
 
 -- Decimal128 boundary control: 38-digit precision keys keep their existing
@@ -64,3 +66,4 @@ insert into d38_b values
 data branch diff d38_b against d38 output summary;
 data branch merge d38_b into d38 when conflict accept;
 data branch diff d38_b against d38 output count;
+drop database if exists branch_decimal256_pk;

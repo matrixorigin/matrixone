@@ -2843,6 +2843,7 @@ func TestHashDiff_HasLCADecimal256PKUpdateIsNotMisclassified(t *testing.T) {
 	}
 
 	tblStuff := newTestBranchTableStuffDecimal256PK(ctrl, pkType)
+	defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 	worker, err := ants.NewPool(1)
 	require.NoError(t, err)
 	defer worker.Release()
@@ -2965,6 +2966,7 @@ func TestHashDiff_HasLCADecimal256PKDeleteIsReported(t *testing.T) {
 	}
 
 	tblStuff := newTestBranchTableStuffDecimal256PK(ctrl, pkType)
+	defer tblStuff.retPool.freeAllRetBatches(ses.proc.Mp())
 	worker, err := ants.NewPool(1)
 	require.NoError(t, err)
 	defer worker.Release()
