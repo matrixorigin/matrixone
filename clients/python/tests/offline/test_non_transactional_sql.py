@@ -13,6 +13,7 @@ ordinary statements keep the begin() transaction path, without corrupting the
 baseline of caller-supplied engines (Client.from_engine).
 """
 
+import sys
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -1186,7 +1187,13 @@ async def test_unrestorable_pool_connection_is_terminated(pooled_client, outcome
         else:
             with pytest.raises(asyncio.CancelledError) as caught:
                 await _pooled_execute(client, "data branch merge src into dst")
-            assert caught.value is cancel
+            if sys.version_info >= (3, 11):
+                assert caught.value is cancel
+            # On Python <3.11 asyncio converts a coroutine-raised
+            # CancelledError into a fresh bare instance at the task
+            # cancellation state, so instance identity and message are lost
+            # below the SDK; the type and the pool contract below are the
+            # portable guarantees.
         assert created[0].close_calls == 1
         assert owner.pool.checkedout() == 0
         result = await _pooled_execute(client, "SELECT @@autocommit")
