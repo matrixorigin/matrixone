@@ -23,6 +23,7 @@ import (
 type legacySpecialConsumerContextKey struct{}
 type legacyTimestampAddSecondContextKey struct{}
 type legacyDecimalIntegerDivContextKey struct{}
+type legacyExplicitCast1SyntaxContextKey struct{}
 
 // WithLegacySpecialConsumers is only for validating pre-migration catalog
 // expressions against their SQL origin in table DUMP/LOAD. It must never be
@@ -35,6 +36,18 @@ func WithLegacySpecialConsumers(ctx context.Context) context.Context {
 // pre-migration execution signatures. It must not affect normal SQL binding.
 func LegacySpecialConsumers(ctx context.Context) bool {
 	value, _ := ctx.Value(legacySpecialConsumerContextKey{}).(bool)
+	return value
+}
+
+// WithLegacyExplicitCast1Syntax reconstructs persisted SQL CAST nodes from
+// before overload-1 CAST nodes carried an explicit-syntax annotation. It is
+// only for table DUMP/LOAD origin verification.
+func WithLegacyExplicitCast1Syntax(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyExplicitCast1SyntaxContextKey{}, true)
+}
+
+func LegacyExplicitCast1Syntax(ctx context.Context) bool {
+	value, _ := ctx.Value(legacyExplicitCast1SyntaxContextKey{}).(bool)
 	return value
 }
 

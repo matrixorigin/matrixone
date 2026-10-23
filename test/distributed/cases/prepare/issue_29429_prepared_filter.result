@@ -12,11 +12,15 @@ show count(*) warnings;
 ➤ @@session.warning_count[-5,0,0]  𝄀
 0
 set @key = 'invalid';
+set @issue_29429_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@@session.sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 execute scan_key using @key;
 ➤ value[12,12,0]
 show count(*) warnings;
 ➤ @@session.warning_count[-5,0,0]  𝄀
 1
+set session sql_mode = @issue_29429_saved_sql_mode;
+set @issue_29429_saved_sql_mode = null;
 set @key = null;
 execute scan_key using @key;
 ➤ value[12,12,0]
@@ -56,11 +60,15 @@ show count(*) warnings;
 ➤ @@session.warning_count[-5,0,0]  𝄀
 0
 set @key = 'invalid';
+set @issue_29429_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@@session.sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 execute join_key using @key;
 ➤ value[12,12,0]
 show count(*) warnings;
 ➤ @@session.warning_count[-5,0,0]  𝄀
 1
+set session sql_mode = @issue_29429_saved_sql_mode;
+set @issue_29429_saved_sql_mode = null;
 set @key = null;
 execute join_key using @key;
 ➤ value[12,12,0]
@@ -94,6 +102,8 @@ show count(*) warnings;
 ➤ @@session.warning_count[-5,0,0]  𝄀
 0
 set @second = 'invalid';
+set @issue_29429_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = concat_ws(',', nullif(@@session.sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 execute composite_key using @first, @second;
 ➤ value[12,12,0]
 show count(*) warnings;
@@ -104,6 +114,8 @@ execute composite_scalar using @first, @second;
 show count(*) warnings;
 ➤ @@session.warning_count[-5,0,0]  𝄀
 1
+set session sql_mode = @issue_29429_saved_sql_mode;
+set @issue_29429_saved_sql_mode = null;
 set @second = null;
 execute composite_key using @first, @second;
 ➤ value[12,12,0]

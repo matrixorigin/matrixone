@@ -20,6 +20,11 @@ type SQLModeFlag uint8
 
 const SQLModeMatrixOneNative = "MATRIXONE_NATIVE"
 
+// SQLModeMySQLNumericCompatibility enables MySQL's permissive numeric-prefix
+// conversion for string-to-floating-number operations. It is intentionally
+// separate from MATRIXONE_NATIVE and account-level version compatibility.
+const SQLModeMySQLNumericCompatibility = "MYSQL_NUMERIC_COMPATIBILITY"
+
 // SQLModeEnableBoolSumAvg selects MySQL's reading of SUM/AVG over a predicate.
 // MySQL has no BOOL type, so a predicate is an integer 0/1 there and
 // aggregating one is ordinary numeric aggregation; MO types it as BOOL and
@@ -167,6 +172,10 @@ func HasSQLMode(mode string, token string) bool {
 
 func HasMatrixOneNativeSQLMode(mode string) bool {
 	return HasSQLMode(mode, SQLModeMatrixOneNative)
+}
+
+func HasMySQLNumericCompatibilitySQLMode(mode string) bool {
+	return HasSQLMode(mode, SQLModeMySQLNumericCompatibility)
 }
 
 func HasEnableBoolSumAvgSQLMode(mode string) bool {

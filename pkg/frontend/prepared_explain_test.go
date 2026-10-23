@@ -593,7 +593,7 @@ func TestCompileOutputCallbackSuppressesExplainPipelineRows(t *testing.T) {
 				called = true
 				return nil
 			}
-			require.NoError(t, compileOutputCallback(execCtx, nil, tc.stmt, fill)(nil, nil))
+			require.NoError(t, compileOutputCallback(execCtx, nil, tc.stmt, fill, nil)(nil, nil))
 			require.Equal(t, tc.wantCalled, called)
 		})
 	}
@@ -618,7 +618,7 @@ func TestCompileOutputCallbackCapturesSelectIntoUserVariables(t *testing.T) {
 	bat.SetRowCount(1)
 	defer bat.Clean(mp)
 
-	require.NoError(t, compileOutputCallback(execCtx, ses, stmt, fill)(bat, nil))
+	require.NoError(t, compileOutputCallback(execCtx, ses, stmt, fill, nil)(bat, nil))
 	require.False(t, called)
 	require.NotNil(t, execCtx.selectInto)
 	require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select abs(-5) into @out"))

@@ -101,6 +101,9 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 				return
 			}
+			if err = validateSelectIntoArity(execCtx.reqCtx, activeSelectIntoPlan(execCtx), len(st.IntoVars)); err != nil {
+				return
+			}
 			if execCtx.selectInto == nil {
 				return moerr.NewInternalError(execCtx.reqCtx, "SELECT INTO user-variable collector is not initialized")
 			}

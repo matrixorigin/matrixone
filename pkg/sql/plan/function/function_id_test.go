@@ -858,7 +858,9 @@ var predefinedFunids = map[int]int{
 	INTERNAL_TABLE_COLLATION:     600,
 	TIMESTAMPADD_SECOND_INTERVAL: 601,
 	LOAD_FK_IGNORE_CHECK:         602,
-	FUNCTION_END_NUMBER:          605,
+	SCALAR_PROGRAM:               605,
+	SCALAR_PROGRAM_REF:           606,
+	FUNCTION_END_NUMBER:          607,
 }
 
 func Test_funids(t *testing.T) {

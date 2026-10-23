@@ -297,6 +297,10 @@ message PreparedNumericMetadata {
   // A selector inlined from a projected column owns its reconciled result
   // domain; integer consumers must not reinterpret its individual arms.
   bool projected_common_value = 13;
+  // Marks only a binder-inferred CAST1 that normalizes a string source to a
+  // selected string declaration. Numeric kind lowering may carry the source
+  // kind across that conversion without changing the CAST's runtime behavior.
+  bool inferred_string_declaration_cast = 14;
 }
 
 message Expr {
@@ -356,6 +360,10 @@ message CorrelationProgram {
   int32 root_node = 1;
   repeated Type input_types = 2 [(gogoproto.nullable) = false];
   repeated Type output_types = 3 [(gogoproto.nullable) = false];
+  // A scalar dependent result may carry its selected numeric string kind in
+  // one ordinary BOOL passenger column. Zero preserves the legacy one-column
+  // scalar result layout; one identifies physical column 1 as the passenger.
+  uint32 scalar_result_kind_column = 4;
 }
 
 message CorrelationStage {
@@ -1836,6 +1844,13 @@ message Query {
   // Logical access paths, not grants or resolved security roles.
   repeated ViewReference view_references = 18;
   CorrelationSpec correlation = 19;
+
+  // For top-level SELECT ... INTO @var results, maps each visible result
+  // column to its BOOL numeric-literal-kind passenger. -1 means ordinary
+  // string interpretation; nonnegative entries address physical columns
+  // after the visible prefix. This layout is private to the SELECT INTO
+  // collector and does not change SQL result headings or equality keys.
+  repeated int32 into_user_variable_kind_columns = 20;
 }
 
 message TransationControl {

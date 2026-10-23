@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -171,14 +172,14 @@ func TestPreparedVariadicRuntimeSourceDomains(t *testing.T) {
 			want:   []types.T{types.T_float64, types.T_float64},
 		},
 		{
-			name: "field reverse coalesce with text null keeps exact result",
+			name: "field reverse coalesce with text null uses double domain",
 			sql:  "prepare p from 'select field(coalesce(abs(?), ?), abs(cast(9007199254740992 as decimal(20,0))))'", fn: "field",
 			values: []ParamValue{
 				{Value: nil, SourceType: types.T_text.ToType(), HasSourceType: true},
 				{Value: "9007199254740993", SourceType: types.New(types.T_decimal128, 20, 0),
 					HasSourceType: true, PrepareParamKind: vector.PrepareParamDecimal},
 			},
-			want: []types.T{types.T_decimal128, types.T_decimal128},
+			want: []types.T{types.T_float64, types.T_float64},
 		},
 		{
 			name: "field reverse coalesce with binary protocol null keeps exact result",
@@ -475,8 +476,8 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 				"prepare p from 'select "+name+"(?,?)'")
 			require.NoError(t, err)
 			template := prepared.GetDcl().GetPrepare().Plan
-			require.Equal(t, []int32{0, 1}, PreparedPlanNumericFallbackParamPositions(template),
-				"value overload and integer precision each require execution-time source decoding")
+			require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(template),
+				"only the value overload requires execution-time source decoding; precision stays INT64")
 			fn := findPlanFunctionExpr(template, name)
 			require.NotNil(t, fn)
 			require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id, fn.String())
@@ -561,8 +562,16 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 					require.NoError(t, planpb.VisitExpressionsInOwner(bound.Plan, func(root *Expr) error {
 						return planpb.VisitExprTree(root, func(expr *Expr) error {
 							fn := expr.GetF()
-							if fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 &&
-								fn.Args[0].GetP() != nil && types.T(expr.Typ.Id).IsDecimal() && expr.Typ.Scale < 2 {
+							if fn == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 ||
+								!types.T(expr.Typ.Id).IsDecimal() || expr.Typ.Scale >= 2 {
+								return nil
+							}
+							if fn.Args[0].GetP() != nil {
+								narrowSourceCast = true
+							} else if _, policy, ok := numericValueCastAnalysisSource(expr); ok &&
+								policy == function.NumericValueCastPolicyExplicit {
+								// CAST9 is an internal lowering of this original explicit
+								// boundary. Inspect it through the validated source owner.
 								narrowSourceCast = true
 							}
 							return nil

@@ -25,7 +25,7 @@ func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
 	for _, tc := range []struct {
 		id   int64
 		want bool
-	}{{590, false}, {591, false}, {592, false}, {593, false}, {594, false}, {595, false}, {596, false}, {597, false}, {598, false}, {599, false}, {600, false}, {601, false}, {602, false}, {603, true}, {604, true}, {605, false}} {
+	}{{590, false}, {591, false}, {592, false}, {593, false}, {594, false}, {595, false}, {596, false}, {597, false}, {598, false}, {599, false}, {600, false}, {601, false}, {602, false}, {603, true}, {604, true}, {605, false}, {606, false}} {
 		t.Run(fmt.Sprintf("function_%d", tc.id), func(t *testing.T) {
 			// Identity, not the spelling or the surrounding expression shape,
 			// controls the floor. A subquery child exercises nested detection.
@@ -39,7 +39,7 @@ func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
 			require.Equal(t, tc.id == 600, features.TableCollationFunction)
 			require.Equal(t, tc.id == 601, features.TimestampAddSecondIntervals)
 			require.Equal(t, tc.id == 602, features.LoadFKIgnoreCheck)
-			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600 || tc.id == 601 || tc.id == 602, features.Any())
+			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600 || tc.id == 601 || tc.id == 602 || tc.id == 605 || tc.id == 606, features.Any())
 		})
 	}
 	for name, expr := range map[string]*Expr{
@@ -119,6 +119,33 @@ func TestValidateStringLiteralFormRejectsNonStringLiteral(t *testing.T) {
 		Value: &Literal_I64Val{I64Val: 1}, LiteralForm: StringLiteralForm_STRING_LITERAL_TEXT,
 	}}}
 	require.ErrorContains(t, expr.ValidateStringLiteralForms(), "requires a string literal")
+}
+
+func TestValidateStringLiteralFormsRequireIsBinForHexAndBit(t *testing.T) {
+	for _, form := range []StringLiteralForm{
+		StringLiteralForm_STRING_LITERAL_HEX,
+		StringLiteralForm_STRING_LITERAL_BIT,
+	} {
+		expr := &Expr{Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{
+			Value: &Literal_Sval{Sval: "1"}, LiteralForm: form,
+		}}}
+		require.ErrorContains(t, expr.ValidateStringLiteralForms(), "require isBin provenance")
+	}
+}
+
+func TestValidateStringLiteralFormPreservesTextBinaryMarkerAfterWireDecode(t *testing.T) {
+	expr := &Expr{Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{
+		Value:       &Literal_Sval{Sval: "1"},
+		IsBin:       true,
+		LiteralForm: StringLiteralForm_STRING_LITERAL_TEXT,
+	}}}
+	encoded, err := expr.Marshal()
+	require.NoError(t, err)
+	decoded := &Expr{}
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.NoError(t, decoded.ValidateStringLiteralForms())
+	require.True(t, decoded.GetLit().IsBin)
+	require.Equal(t, StringLiteralForm_STRING_LITERAL_TEXT, decoded.GetLit().LiteralForm)
 }
 
 func TestValidateStringLiteralFormsInNestedOwner(t *testing.T) {
@@ -215,6 +242,173 @@ func TestRequiresMORPCVersion30NumericPrefix(t *testing.T) {
 	required, err = RequiresMORPCVersion30NumericPrefix(&struct{ Expr *Expr }{Expr: ordinaryCast})
 	require.NoError(t, err)
 	require.False(t, required)
+}
+
+func TestStrictStringNumericCompatibilityFeature(t *testing.T) {
+	strictCompatibilityRequired := func(owner any) bool {
+		features, err := RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		return features.StrictStringNumericCompatibility
+	}
+	stringValue := &Expr{
+		Typ:  Type{Id: planVarcharTypeID},
+		Expr: &Expr_Col{Col: &ColRef{ColPos: 0}},
+	}
+	strictCast := &Expr{
+		Typ: Type{Id: 30},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: 2, ObjName: "cast"},
+			Args: []*Expr{stringValue},
+		}},
+	}
+	require.True(t, strictCompatibilityRequired(&struct{ Expr *Expr }{Expr: strictCast}),
+		"string-to-numeric casts depend on the strict default")
+
+	numericValue := &Expr{Typ: Type{Id: 23}, Expr: &Expr_Col{Col: &ColRef{ColPos: 1}}}
+	numericCast := &Expr{
+		Typ: Type{Id: 30},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*Expr{numericValue},
+		}},
+	}
+	require.False(t, strictCompatibilityRequired(&struct{ Expr *Expr }{Expr: numericCast}),
+		"numeric-to-numeric casts do not consult string compatibility")
+	features, err := RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: numericCast})
+	require.NoError(t, err)
+	require.False(t, features.OrdinaryFloatInt64Bounds)
+	require.False(t, features.ScalarMathPrecisionCompatibility)
+	require.False(t, features.HistoricalStringMathCompatibility)
+
+	ifExpr := &Expr{
+		Typ: Type{Id: 23},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(iffFunctionID) << 32, ObjName: "if"},
+			Args: []*Expr{
+				stringValue,
+				{Typ: Type{Id: 23}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 10}}}},
+				{Typ: Type{Id: 23}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 20}}}},
+			},
+		}},
+	}
+	features, err = RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: ifExpr})
+	require.NoError(t, err)
+	require.True(t, features.StrictStringNumericCompatibility,
+		"an IF string condition depends on strict numeric text semantics")
+	require.False(t, features.HistoricalStringMathCompatibility,
+		"an ordinary IF owner does not add the historical math feature")
+
+	prefixCast := &Expr{
+		Typ: Type{Id: 30, Charset: 255},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*Expr{stringValue},
+		}},
+	}
+	features, err = RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: prefixCast})
+	require.NoError(t, err)
+	require.True(t, features.NumericPrefix)
+	require.True(t, features.StrictStringNumericCompatibility,
+		"a numeric-prefix FLOAT cast also uses the process compatibility mode")
+	require.False(t, features.NumericValuePrograms,
+		"a plain string-to-FLOAT CAST has no mixed literal provenance")
+
+}
+
+func TestNumericValueProgramsFeatureTracksStableExecutionIDs(t *testing.T) {
+	const (
+		castID    int32 = 21
+		cast9     int32 = 9
+		programID int32 = 605
+		refID     int32 = 606
+		anyType   int32 = 0
+		boolType  int32 = 10
+		textType  int32 = planVarcharTypeID
+	)
+	call := func(id, overload int32, name string, typ int32, args ...*Expr) *Expr {
+		return &Expr{Typ: Type{Id: typ}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(id)<<32 | int64(overload), ObjName: name}, Args: args,
+		}}}
+	}
+	int64Literal := func(value int64) *Expr {
+		return &Expr{Typ: Type{Id: 23}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: value}}}}
+	}
+	text := &Expr{Typ: Type{Id: textType}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: "1"}}}}
+	kind := &Expr{Typ: Type{Id: boolType}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Bval{Bval: true}}}}
+	for _, test := range []struct {
+		name string
+		expr *Expr
+	}{
+		{name: "program", expr: call(programID, 0, "_scalar_numeric_program", anyType, int64Literal(1), text)},
+		{name: "program reference", expr: call(refID, 0, "_scalar_numeric_program_ref", textType, int64Literal(1), int64Literal(0))},
+		{name: "CAST overload 9", expr: call(castID, cast9, "cast", 23, text, &Expr{Typ: Type{Id: 0}, Expr: &Expr_T{T: &TargetType{}}}, kind, int64Literal(0))},
+		{name: "integer argument CAST overload 5", expr: call(castID, 5, "cast", 23, text, &Expr{Typ: Type{Id: 23}, Expr: &Expr_T{T: &TargetType{}}}, kind)},
+		{name: "temporal CAST with kind", expr: call(castID, 1, "cast", 51, text, &Expr{Typ: Type{Id: 0}, Expr: &Expr_T{T: &TargetType{}}}, kind)},
+		{name: "OCT with kind", expr: call(209, 27, "oct", textType, text, kind)},
+		{name: "MAKETIME with kind", expr: call(373, 0, "maketime", 51, int64Literal(1), int64Literal(0), int64Literal(0), kind)},
+		{name: "IF condition with kind", expr: call(113, 0, "if", 23, text, int64Literal(1), int64Literal(0), kind)},
+		{name: "strict cast with kind", expr: call(541, 0, "cast_strict", 23, text, &Expr{Typ: Type{Id: 0}, Expr: &Expr_T{T: &TargetType{}}}, kind)},
+		{name: "assignment cast with kind", expr: call(554, 0, "cast_assign", 23, text, &Expr{Typ: Type{Id: 0}, Expr: &Expr_T{T: &TargetType{}}}, kind)},
+		{name: "ignore cast with kind", expr: call(555, 0, "cast_ignore", 23, text, &Expr{Typ: Type{Id: 0}, Expr: &Expr_T{T: &TargetType{}}}, kind)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(test.expr)
+			require.NoError(t, err)
+			require.True(t, features.NumericValuePrograms)
+			require.True(t, features.Any())
+		})
+	}
+
+	legacyFlow := &Expr{Typ: Type{Id: textType}, Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(caseFunctionID) << 32, ObjName: "case"},
+		Args: []*Expr{
+			{Typ: Type{Id: boolType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}},
+			text,
+			text,
+		},
+	}}}
+	features, err := RequiredRemoteExpressionFeatures(legacyFlow)
+	require.NoError(t, err)
+	require.False(t, features.NumericValuePrograms,
+		"flow control without the program representation does not require its protocol floor")
+
+	queryLayout := &Query{StmtType: Query_SELECT, Headings: []string{"v"}, IntoUserVariableKindColumns: []int32{1}}
+	features, err = RequiredRemoteExpressionFeatures(queryLayout)
+	require.NoError(t, err)
+	require.True(t, features.NumericValuePrograms,
+		"a Query-level SELECT INTO passenger layout requires the same v130 contract")
+	features, err = RequiredRemoteExpressionFeatures(&Plan{Plan: &Plan_Query{Query: queryLayout}})
+	require.NoError(t, err)
+	require.True(t, features.NumericValuePrograms,
+		"the Query-level layout must remain visible through its serialized Plan owner")
+
+	correlatedScalarLayout := &Query{Correlation: &CorrelationSpec{Programs: []*CorrelationProgram{{
+		ScalarResultKindColumn: 1,
+	}}}}
+	features, err = RequiredRemoteExpressionFeatures(correlatedScalarLayout)
+	require.NoError(t, err)
+	require.True(t, features.NumericValuePrograms,
+		"a correlated scalar's physical BOOL result column requires v130 even without private expression nodes")
+	features, err = RequiredRemoteExpressionFeatures(&Plan{Plan: &Plan_Query{Query: correlatedScalarLayout}})
+	require.NoError(t, err)
+	require.True(t, features.NumericValuePrograms,
+		"the correlated scalar layout remains discoverable through its Plan wrapper")
+	wire, err := correlatedScalarLayout.Marshal()
+	require.NoError(t, err)
+	var decoded Query
+	require.NoError(t, decoded.Unmarshal(wire))
+	features, err = RequiredRemoteExpressionFeatures(&decoded)
+	require.NoError(t, err)
+	require.True(t, features.NumericValuePrograms,
+		"the v130 floor survives wire round-trip when the descriptor is the only private feature")
+
+	legacyCorrelation := &Query{Correlation: &CorrelationSpec{Programs: []*CorrelationProgram{{
+		OutputTypes: []Type{{Id: planVarcharTypeID}},
+	}}}}
+	features, err = RequiredRemoteExpressionFeatures(legacyCorrelation)
+	require.NoError(t, err)
+	require.False(t, features.NumericValuePrograms,
+		"legacy scalar layouts keep their existing protocol floor")
 }
 
 func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {
@@ -1110,7 +1304,6 @@ func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T)
 		})
 	}
 }
-
 func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string

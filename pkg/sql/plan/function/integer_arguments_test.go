@@ -522,3 +522,20 @@ func TestIntegerArgumentTextWarningControls(t *testing.T) {
 	require.True(t, ok, info)
 	require.Equal(t, []numericWarning{{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Truncated incorrect INTEGER value: '3x'"}}, session.warnings)
 }
+
+func TestIntegerArgumentTextMixedProvenanceWarnings(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &numericWarningSession{}
+	proc.Session = session
+	// The marked row contains bytes {0x20, 0x3a}; the comma is ordinary text.
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{" :", ","}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+		NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0x203a, 0}, nil), NewIntegerArgumentCast)
+	defer fc.Free()
+	ok, info := fc.Run()
+	require.True(t, ok, info)
+	require.Equal(t, []numericWarning{{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Truncated incorrect INTEGER value: ','"}}, session.warnings,
+		"only ordinary text rows should emit integer conversion warnings")
+}

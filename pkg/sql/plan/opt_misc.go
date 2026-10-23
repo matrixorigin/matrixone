@@ -473,7 +473,14 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 		mapID := [2]int32{ne.Col.RelPos, ne.Col.ColPos}
 		if projExpr, ok := projMap[mapID]; ok {
 			inlined := DeepCopyExpr(projExpr)
-			if isIntegerSelector(inlined) || projectedExplicitFloatValue(inlined) {
+			semanticSource, privateProgram := numericValueProgramSourceOwner(inlined)
+			if privateProgram && semanticSource == nil {
+				return inlined
+			}
+			if privateProgram {
+				ensurePreparedNumericMetadata(inlined)
+			}
+			if isIntegerSelector(semanticSource) || projectedExplicitFloatValue(semanticSource) {
 				ensurePreparedNumericMetadata(inlined).ProjectedCommonValue = true
 			}
 			return inlined
@@ -1178,9 +1185,29 @@ func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
 		for i, expr := range project.ProjectList {
 			node.ProjectList[i] = GetColExpr(expr.Typ, -1, int32(i))
 		}
+		// Numeric-kind passengers are extra projected values, but DISTINCT
+		// must hash only the original visible columns. When the equality keys
+		// directly name outputs of the projection being folded into this AGG,
+		// use those existing GroupBy positions. Appending the old references
+		// would leave them bound to the removed PROJECT tag and fail remapping.
+		projectedKeys := make([]int32, len(node.PhysicalEqualityKeyList))
+		canUseProjectedKeys := len(project.BindingTags) > 0
 		for i, key := range node.PhysicalEqualityKeyList {
-			node.GroupBy = append(node.GroupBy, DeepCopyExpr(key))
-			node.GroupByHashKey = append(node.GroupByHashKey, int32(visibleCount+i))
+			col := key.GetCol()
+			if col == nil || col.RelPos != project.BindingTags[0] || col.ColPos < 0 || int(col.ColPos) >= visibleCount {
+				canUseProjectedKeys = false
+				break
+			}
+			projectedKeys[i] = col.ColPos
+		}
+		if canUseProjectedKeys {
+			node.GroupByHashKey = projectedKeys
+			node.PhysicalEqualityKeyList = nil
+		} else {
+			for i, key := range node.PhysicalEqualityKeyList {
+				node.GroupBy = append(node.GroupBy, DeepCopyExpr(key))
+				node.GroupByHashKey = append(node.GroupByHashKey, int32(visibleCount+i))
+			}
 		}
 	}
 	node.BindingTags = project.BindingTags

@@ -157,7 +157,7 @@ func TestPreparedDecimalComparisonPruning(t *testing.T) {
 							}
 							require.NotNil(t, column, "safe comparisons retain the native column")
 							require.True(t, sameDecimalComparisonType(column.Typ, makePlan2Type(&decimal)))
-							require.True(t, ExprIsZonemappable(context.Background(), filter))
+							require.True(t, ExprIsZonemappable(context.Background(), filter), filter.String())
 						} else {
 							require.Greater(t, args[1].Typ.Width, decimal.Width, "wide bindings retain their wider comparison domain")
 						}
@@ -166,6 +166,57 @@ func TestPreparedDecimalComparisonPruning(t *testing.T) {
 					require.True(t, found)
 				})
 			}
+		})
+	}
+}
+
+func TestPreparedDecimalComparisonPruningRebindsTextKind(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	decimal := types.New(types.T_decimal64, 12, 2)
+	table := makeExprOptCompositeSortKeyTableDef()
+	table.Name, table.TblId = "decimal_kind_filters", 99005
+	table.Cols[2].Typ = makePlan2Type(&decimal)
+	mock.ctxt.tables[table.Name] = table
+	mock.ctxt.objects[table.Name] = &ObjectRef{ObjName: table.Name, Obj: int64(table.TblId)}
+	proc := mock.ctxt.GetProcess()
+
+	for _, tc := range []struct {
+		name               string
+		isBin              bool
+		wantZoneMap        bool
+		wantNumericValueOp bool
+	}{
+		{name: "ordinary text", wantZoneMap: true},
+		{name: "binary kind", isBin: true, wantNumericValueOp: true},
+		{name: "ordinary text after binary rebind", wantZoneMap: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := vector.NewVec(types.T_text.ToType())
+			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+			require.NoError(t, vector.AppendBytes(params, []byte("16001"), tc.isBin, proc.Mp()))
+			proc.SetPrepareParams(params)
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+				"select c from decimal_kind_filters where c=?", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+				[]PreparedSourceBinding{{Position: 0, Type: types.T_varchar.ToType()}},
+				[]any{ParamValue{Value: "16001", IsBin: tc.isBin, IsBinaryProtocol: true}})
+			require.NoError(t, err)
+			require.True(t, bound.ValueDependent,
+				"the text-kind decision must be recomputed for each execution binding")
+			var filter *Expr
+			for _, node := range bound.Plan.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef.Name == table.Name {
+					require.Len(t, node.FilterList, 1)
+					filter = node.FilterList[0]
+				}
+			}
+			require.NotNil(t, filter)
+			require.Equal(t, tc.wantZoneMap, ExprIsZonemappable(context.Background(), filter))
+			require.Equal(t, tc.wantNumericValueOp,
+				findNumericValueFunction(bound.Plan, function.CAST, function.NumericValueCastOverload) != nil)
+			require.True(t, function.ContainsParameter(filter))
 		})
 	}
 }
@@ -467,6 +518,10 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 		{"round scalar collision fallback", "c>=round((select ?))", []string{"9007199254740992"}, false, true},
 		{"round zero precision", "c=round(?,?)", []string{"54321.0", "0"}, true, true},
 		{"truncate zero precision", "c=truncate(?,?)", []string{"54321.0", "0"}, true, true},
+		// The raw bytes spell a small decimal integer, but IsBin means the
+		// source is a binary value. Do not use its byte spelling to prove that
+		// the ROUND result fits the indexed BIGINT domain.
+		{"binary bytes zero precision collision", "c=round(?,?)", []string{"12345678", "0"}, false, true},
 		{"explicit precision cast", "c=round(?,cast(? as signed))", []string{"54321.0", "0"}, true, true},
 		{"round nonzero precision", "c=round(?,?)", []string{"54321.0", "1"}, true, true},
 		{"round negative precision", "c=round(?,?)", []string{"54321.0", "-1"}, true, true},
@@ -492,6 +547,7 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			bindings := make([]PreparedSourceBinding, len(tc.values))
 			values := make([]any, len(tc.values))
+			paramIsBin := make([]bool, len(tc.values))
 			for i, value := range tc.values {
 				bindings[i] = PreparedSourceBinding{Position: int32(i), Type: types.T_float64.ToType()}
 				if tc.integerKey {
@@ -500,10 +556,20 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 						bindings[i].Type = types.T_varchar.ToType()
 					}
 				}
-				values[i] = ParamValue{Value: value, IsBinaryProtocol: true}
+				paramValue := ParamValue{Value: value, IsBinaryProtocol: true}
+				if tc.name == "binary bytes zero precision collision" && i == 0 {
+					paramValue.Value = []byte(value)
+					paramValue.IsBin = true
+				}
+				values[i] = paramValue
+				paramIsBin[i] = paramValue.IsBin
 				require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
 			}
-			proc.SetPrepareParams(params)
+			proc.SetPrepareParamsWithIsBin(params, paramIsBin)
+			if tc.name == "binary bytes zero precision collision" {
+				require.True(t, proc.GetPrepareParamIsBin(0))
+				require.False(t, proc.GetPrepareParamIsBin(1))
+			}
 			if tc.name == "decimal between" {
 				originalCtx := mock.ctxt.GetContext()
 				ctx := withPreparedSourceBindings(originalCtx, bindings, values)
@@ -550,7 +616,7 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 					if tc.native {
 						// BuildPreparedExecutionPlan deliberately skips scan statistics;
 						// assert pruning eligibility here and actual blocks in public QA.
-						require.True(t, ExprIsZonemappable(context.Background(), filter), "safe predicate must allow block pruning")
+						require.True(t, ExprIsZonemappable(context.Background(), filter), "safe predicate must allow block pruning: %s", filter.String())
 					}
 					if checkExplicitResultCast && !tc.native {
 						require.False(t, ExprIsZonemappable(context.Background(), filter), "warning-producing predicate must retain row evaluation")
@@ -1568,6 +1634,62 @@ func TestPreparedExecutionPlanConsumerDomains(t *testing.T) {
 	}
 }
 
+func TestPreparedExecutionPlanMathPrecisionUsesSourceProvenance(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		source     types.Type
+		value      ParamValue
+		wantCastID int32
+	}{
+		{
+			name:   "native double",
+			source: types.T_float64.ToType(),
+			value: ParamValue{
+				Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true,
+			},
+			wantCastID: function.IntegerArgumentCastOverload,
+		},
+		{
+			name:   "native decimal",
+			source: types.New(types.T_decimal64, 3, 1),
+			value: ParamValue{
+				Value: "2.5", SourceType: types.New(types.T_decimal64, 3, 1), HasSourceType: true,
+			},
+			wantCastID: function.IntegerArgumentCastOverload,
+		},
+		{
+			name:   "binary double",
+			source: types.T_float64.ToType(),
+			value: ParamValue{
+				Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true, IsBinaryProtocol: true,
+			},
+			wantCastID: 0,
+		},
+		{
+			name:       "unproven double",
+			source:     types.T_float64.ToType(),
+			value:      ParamValue{Value: 2.5},
+			wantCastID: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select ceil(12.34, ?)", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+				[]PreparedSourceBinding{{Position: 0, Type: tc.source}}, []any{tc.value})
+			require.NoError(t, err)
+			ceil := findPlanFunctionExpr(bound.Plan, "ceil")
+			require.NotNil(t, ceil)
+			precision := ceil.GetF().Args[1]
+			require.NotNil(t, precision.GetF())
+			_, castID := function.DecodeOverloadID(precision.GetF().Func.Obj)
+			require.Equal(t, tc.wantCastID, castID, precision.String())
+		})
+	}
+}
+
 func TestPreparedBinarySourceKeepsRuntimeTextWidth(t *testing.T) {
 	for _, sql := range []string{"select left(?,1)", "select left(v,1) from (select ? v) s"} {
 		t.Run(sql, func(t *testing.T) {
@@ -1698,6 +1820,12 @@ func TestPreparedIntegerComparisonProofDiagnostics(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
 			proc := mock.ctxt.GetProcess()
+			if tc.name == "warning" {
+				info := proc.GetSessionInfo()
+				previousCompatibilityMode := info.MySQLNumericCompatibilityMode
+				info.MySQLNumericCompatibilityMode = true
+				defer func() { info.MySQLNumericCompatibilityMode = previousCompatibilityMode }()
+			}
 			params := vector.NewVec(types.T_text.ToType())
 			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
 			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))

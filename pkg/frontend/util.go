@@ -275,6 +275,10 @@ func getExprValueWithPrepareMeta(
 		reqCtx: execCtx.reqCtx,
 		ses:    ses,
 	}
+	if len(isBin) > 0 && isBin[0] != nil {
+		tempExecCtx.numericValueKindCapture = &scalarNumericValueKindCapture{}
+		tempExecCtx.reqCtx = plan2.WithNumericValueKindDemand(tempExecCtx.reqCtx)
+	}
 	defer func() {
 		// The synthetic SELECT is executed through doComQuery, which points the
 		// session compiler context at tempExecCtx.  Restore the caller's context
@@ -340,8 +344,15 @@ func getExprValueWithPrepareMeta(
 		}
 	}
 
-	if len(isBin) > 0 {
-		*isBin[0] = resultVec.GetIsBin()
+	resultIsBin := false
+	if !resultVec.IsNull(0) {
+		resultIsBin = resultVec.GetIsBin()
+		if kind, available := tempExecCtx.numericValueKindCapture.snapshot(); available {
+			resultIsBin = kind
+		}
+	}
+	if len(isBin) > 0 && isBin[0] != nil {
+		*isBin[0] = resultIsBin
 	}
 	if runtimeDomain != nil {
 		*runtimeDomain = resultVec.GetRuntimeStringDomainAt(0)
@@ -380,10 +391,17 @@ func getExprValueWithPrepareMeta(
 		if literal == nil && resultVec.GetType().Oid == types.T_enum {
 			literal = planrule.GetConstantValue(resultVec, true, 0)
 		}
-		if literal != nil {
+		if literal == nil && resultVec.IsNull(0) {
+			literal = &plan.Literal{Isnull: true}
+		}
+		if literal != nil && !resultVec.IsNull(0) && types.T(resultVec.GetType().Oid).IsMySQLString() {
+			materialized := plan2.MakePlan2StringConstExprWithType(fmt.Sprintf("%v", value), resultIsBin)
+			materialized.Typ = resultType
+			*materializedResult = materialized
+		} else if literal != nil {
 			*materializedResult = &plan.Expr{Typ: resultType, Expr: &plan.Expr_Lit{Lit: literal}}
 		} else {
-			source := plan2.MakePlan2StringConstExprWithType(fmt.Sprintf("%v", value))
+			source := plan2.MakePlan2StringConstExprWithType(fmt.Sprintf("%v", value), resultIsBin)
 			target := &plan.Expr{Typ: resultType, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
 			*materializedResult, err = plan2.BindFuncExprImplByPlanExpr(
 				execCtx.reqCtx, "cast", []*plan.Expr{source, target})
@@ -631,20 +649,60 @@ func getPreparedPlanExprValueWithMeta(
 ) (interface{}, plan.Type, error) {
 	restore := bindFrontendExpressionContext(execCtx.proc, execCtx.reqCtx)
 	defer restore()
-	executor, err := colexec.NewExpressionExecutor(execCtx.proc, expr)
+	rawExpr, kindExpr, hasPairedKind, err := plan2.NumericValueProgramOutputsForScalar(
+		ses.GetTxnCompileCtx(), expr)
 	if err != nil {
 		return nil, plan.Type{}, err
 	}
-	defer executor.Free()
+	var executor colexec.ExpressionExecutor
+	var pairedExecutors []colexec.ExpressionExecutor
+	var programGroup *colexec.ProjectionExpressionProgramGroup
+	if hasPairedKind {
+		pairedExecutors, programGroup, err = colexec.NewProjectionExpressionExecutorsWithAllocation(
+			execCtx.proc, []*plan.Expr{rawExpr, kindExpr}, nil)
+		if err != nil {
+			return nil, plan.Type{}, err
+		}
+		defer func() {
+			for _, pairedExecutor := range pairedExecutors {
+				if pairedExecutor != nil {
+					pairedExecutor.Free()
+				}
+			}
+		}()
+	} else {
+		executor, err = colexec.NewExpressionExecutor(execCtx.proc, rawExpr)
+		if err != nil {
+			return nil, plan.Type{}, err
+		}
+		defer executor.Free()
+	}
 	input := batch.NewWithSize(0)
 	input.SetRowCount(1)
 	defer input.Clean(execCtx.proc.Mp())
-	result, err := executor.Eval(execCtx.proc, []*batch.Batch{input}, nil)
+	var result *vector.Vector
+	var resultIsBin bool
+	if hasPairedKind {
+		programGroup.BeginBatch()
+		result, err = pairedExecutors[0].Eval(execCtx.proc, []*batch.Batch{input}, nil)
+		if err == nil {
+			var kindVector *vector.Vector
+			kindVector, err = pairedExecutors[1].Eval(execCtx.proc, []*batch.Batch{input}, nil)
+			if err == nil && !result.IsNull(0) && !kindVector.IsConstNull() && !kindVector.GetNulls().Contains(0) {
+				resultIsBin = vector.GetFixedAtNoTypeCheck[bool](kindVector, 0)
+			}
+		}
+	} else {
+		result, err = executor.Eval(execCtx.proc, []*batch.Batch{input}, nil)
+		if err == nil && !result.IsNull(0) {
+			resultIsBin = result.GetIsBin()
+		}
+	}
 	if err != nil {
 		return nil, plan.Type{}, err
 	}
 	if isBin != nil {
-		*isBin = result.GetIsBin()
+		*isBin = resultIsBin
 	}
 	if runtimeDomain != nil {
 		*runtimeDomain = result.GetRuntimeStringDomainAt(0)
@@ -656,7 +714,10 @@ func getPreparedPlanExprValueWithMeta(
 		}
 	}
 	value, err := getValueFromVector(execCtx.reqCtx, result, ses, expr)
-	return value, plan2.MakePlan2Type(result.GetType()), err
+	if err != nil {
+		return nil, plan.Type{}, err
+	}
+	return value, plan2.MakePlan2Type(result.GetType()), nil
 }
 
 // transparentPrepareParamKind closes the metadata boundary introduced by SET's

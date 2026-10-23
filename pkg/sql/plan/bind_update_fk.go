@@ -1676,7 +1676,7 @@ func (builder *QueryBuilder) recomputeForeignKeyFunctionalColumns(
 		if _, affected := changed[col.Name]; !affected {
 			continue
 		}
-		expr, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(col.GeneratedCol.Expr), false)
+		expr, err := builder.importGeneratedColumnAssignmentCast(col.GeneratedCol.Expr, false)
 		if err != nil {
 			return err
 		}

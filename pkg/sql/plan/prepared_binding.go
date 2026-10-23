@@ -142,6 +142,47 @@ func preparedExactNumericStringType(ctx context.Context, ordinal int) (types.Typ
 	return PreparedRuntimeTypeFromString(spelling)
 }
 
+// preparedRoundTruncateTextSourceEligible limits exact spelling inference to
+// known text values at ROUND/TRUNCATE's value argument. Binary bytes, binary
+// static domains, numeric runtime types, and unknown sources keep their
+// existing coercion path.
+func preparedRoundTruncateTextSourceEligible(
+	ctx context.Context,
+	ordinal int,
+	binding PreparedSourceBinding,
+) bool {
+	state := preparedBindingState(ctx)
+	if state == nil || ordinal < 0 || ordinal >= len(state.values) {
+		return false
+	}
+	param, ok := state.values[ordinal].(ParamValue)
+	return ok && preparedRoundTruncateTextParamEligible(param, binding.Type)
+}
+
+func preparedRoundTruncateTextParamEligible(param ParamValue, sourceType types.Type) bool {
+	switch sourceType.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+	default:
+		return false
+	}
+	if types.StaticStringDomain(sourceType) != types.StringDomainText {
+		return false
+	}
+	if param.IsBin || param.IsBinaryString ||
+		param.RuntimeStringDomain == types.RuntimeStringBinary {
+		return false
+	}
+	if param.HasSourceType && (!isStringBackedType(param.SourceType) ||
+		types.StaticStringDomain(param.SourceType) != types.StringDomainText) {
+		return false
+	}
+	if param.HasRuntimeType && (!isStringBackedType(param.RuntimeType) ||
+		types.StaticStringDomain(param.RuntimeType) != types.StringDomainText) {
+		return false
+	}
+	return param.IsBinaryProtocol || param.HasSourceType
+}
+
 func preparedSourceBindings(ctx context.Context) []PreparedSourceBinding {
 	if state := preparedBindingState(ctx); state != nil {
 		return state.bindings
@@ -689,11 +730,13 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			continue
 		}
 		if source.GetP() == nil {
-			if len(args) == 1 && types.T(source.Typ.Id).IsMySQLString() &&
-				(name == "sum" || name == "avg" || name == "abs" || name == "sign" || name == "sleep") {
+			if types.T(source.Typ.Id).IsMySQLString() &&
+				(planfunction.IsNumericValueArgument(name, i) ||
+					(len(args) == 1 && (name == "sum" || name == "avg" || name == "sleep"))) {
 				// The source may be a projected marker, scalar subquery, or
-				// ordinary string. These numeric consumers use the same text
-				// conversion as a direct prepared marker.
+				// ordinary string. Registry-declared math value operands and the
+				// existing aggregate/SLEEP consumers use the same text conversion
+				// as a direct prepared marker. Control operands remain unchanged.
 				var err error
 				args[i], err = makePlan2CastExpr(ctx, source, makeSimplePlan2Type(types.T_float64))
 				if err != nil {
@@ -864,8 +907,8 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			// Aggregates consume the numeric prefix of a text marker. The
 			// source remains text for every other occurrence of the marker.
 			target = types.T_float64.ToType()
-		case len(args) == 1 && binding.Type.Oid.IsMySQLString() &&
-			(name == "abs" || name == "sign" || name == "sleep"):
+		case binding.Type.Oid.IsMySQLString() &&
+			(planfunction.IsNumericValueArgument(name, i) || (name == "sleep" && len(args) == 1)):
 			// Prepared string sources can contain fractions. Keep this
 			// conversion at the marker consumer; ordinary string expressions
 			// retain their established overload selection.

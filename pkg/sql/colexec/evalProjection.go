@@ -25,6 +25,7 @@ type Projection struct {
 	projectBat       *batch.Batch
 	ProjectList      []*plan.Expr
 	ProjectExecutors []ExpressionExecutor
+	programGroup     *ProjectionExpressionProgramGroup
 	ProjectAllocSize int64
 }
 
@@ -44,7 +45,7 @@ func (projection *Projection) PrepareProjectionWithAllocation(
 	}
 	projection.ProjectAllocSize = 0
 	if projection.ProjectExecutors == nil {
-		projection.ProjectExecutors, err = NewExpressionExecutorsFromPlanExpressionsWithAllocation(
+		projection.ProjectExecutors, projection.programGroup, err = NewProjectionExpressionExecutorsWithAllocation(
 			proc, projection.ProjectList, selection)
 		if err != nil {
 			return
@@ -70,6 +71,7 @@ func (projection *Projection) EvalProjection(bat *batch.Batch, proc *process.Pro
 	}
 
 	projection.projectBat.ShuffleIDX = bat.ShuffleIDX
+	projection.programGroup.BeginBatch()
 
 	for i := range projection.ProjectExecutors {
 		vec, err := projection.ProjectExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
@@ -94,6 +96,7 @@ func (projection *Projection) ResetProjection(proc *process.Process) {
 			projection.ProjectExecutors[i].ResetForNextQuery()
 		}
 	}
+	projection.programGroup.ResetForNextQuery()
 	projection.ProjectAllocSize = 0
 }
 
@@ -104,6 +107,7 @@ func (projection *Projection) FreeProjection(proc *process.Process) {
 		}
 	}
 	projection.ProjectExecutors = nil
+	projection.programGroup = nil
 
 	if projection.projectBat != nil {
 		// allways call batch.Clean, even if there is no data

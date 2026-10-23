@@ -18,6 +18,7 @@ import (
 	"context"
 	"unsafe"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -40,22 +41,128 @@ type DependentProgramFactory interface {
 }
 
 type dependentExprInstruction struct {
-	expr   *plan.Expr
-	args   []int
-	typ    types.Type
-	fid    int32
-	native func(*process.Process, *vector.AllocationAccountSelection, []ExpressionExecutor) (ExpressionExecutor, error)
+	expr                 *plan.Expr
+	args                 []int
+	typ                  types.Type
+	fid                  int32
+	numericKindDemand    bool
+	inferNumericKind     bool
+	numericKindFrom      int
+	privateValueAlias    bool
+	privateValueFrom     int
+	privateProgramScope  int64
+	dependentKindCapture bool
+	native               func(*process.Process, *vector.AllocationAccountSelection, []ExpressionExecutor) (ExpressionExecutor, error)
 }
 
 // DependentExpressionProgram contains only immutable bound instructions. Native
 // overload selection happens here, never when a row requests a subprogram.
 type DependentExpressionProgram struct {
-	instructions []dependentExprInstruction
-	roots        []int
+	instructions              []dependentExprInstruction
+	roots                     []int
+	numericKindRefs           map[int]int
+	numericProgramDefinitions map[int64]*plan.Expr
+}
+
+type dependentNumericProgramOwner struct {
+	scope    int64
+	raw      int
+	kind     int
+	value    int
+	explicit bool
 }
 
 func CompileDependentExpressions(ctx context.Context, roots []*plan.Expr) (*DependentExpressionProgram, error) {
-	result := &DependentExpressionProgram{}
+	return compileDependentExpressions(ctx, roots, nil)
+}
+
+// CompileDependentExpressionsWithCorrelation binds scalar dependent result
+// layouts together with their expression instructions. A marked program has
+// a physical BOOL passenger in addition to its logical scalar value.
+func CompileDependentExpressionsWithCorrelation(
+	ctx context.Context, roots []*plan.Expr, programs []*plan.CorrelationProgram,
+) (*DependentExpressionProgram, error) {
+	return compileDependentExpressions(ctx, roots, programs)
+}
+
+func compileDependentExpressions(
+	ctx context.Context, roots []*plan.Expr, programs []*plan.CorrelationProgram,
+) (*DependentExpressionProgram, error) {
+	if err := validateDependentExpressionGraphs(ctx, roots); err != nil {
+		return nil, err
+	}
+	type programOwner struct {
+		definition *plan.Expr
+		raw        *plan.Expr
+		explicit   *plan.Expr
+		valueType  *plan.Type
+		state      uint8
+		valueIndex int
+		kindIndex  int
+	}
+	result := &DependentExpressionProgram{
+		numericKindRefs:           make(map[int]int),
+		numericProgramDefinitions: make(map[int64]*plan.Expr),
+	}
+	owners := make(map[int64]*programOwner)
+	var refs []*plan.Expr
+	for _, root := range roots {
+		if root == nil {
+			return nil, moerr.NewInternalError(ctx, "nil dependent expression")
+		}
+		if err := visitDependentExprTree(root, func(expr *plan.Expr) error {
+			f := expr.GetF()
+			if f == nil || f.Func == nil {
+				return nil
+			}
+			fid, _ := function.DecodeOverloadID(f.Func.Obj)
+			if fid != function.SCALAR_PROGRAM_REF {
+				return nil
+			}
+			scope, slot, definition, err := decodeDependentNumericProgramRef(ctx, expr)
+			if err != nil {
+				return err
+			}
+			refs = append(refs, expr)
+			if slot != 0 {
+				return nil
+			}
+			defFn := definition.GetF()
+			defArgs := defFn.Args
+			owner := &programOwner{
+				definition: definition,
+				raw:        defArgs[1],
+				valueType:  &expr.Typ,
+				valueIndex: -1,
+				kindIndex:  -1,
+			}
+			if len(defArgs) == 3 {
+				owner.explicit = defArgs[2]
+			}
+			if previous := owners[scope]; previous != nil {
+				if !proto.Equal(previous.definition, definition) || previous.valueType == nil ||
+					!proto.Equal(previous.valueType, &expr.Typ) {
+					return moerr.NewInvalidInput(ctx, "conflicting dependent numeric program definition")
+				}
+			} else {
+				owners[scope] = owner
+				result.numericProgramDefinitions[scope] = proto.Clone(definition).(*plan.Expr)
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
+	for _, expr := range refs {
+		scope, _, _, err := decodeDependentNumericProgramRef(ctx, expr)
+		if err != nil {
+			return nil, err
+		}
+		if owners[scope] == nil {
+			return nil, moerr.NewInvalidInput(ctx, "scalar numeric program reference has no lexical definition")
+		}
+	}
+
 	indexes := make(map[*plan.Expr]int)
 	memos := make(map[int32]int)
 	active := make(map[*plan.Expr]bool)
@@ -64,9 +171,17 @@ func CompileDependentExpressions(ctx context.Context, roots []*plan.Expr) (*Depe
 		args []*plan.Expr
 		next int
 	}
-	for _, root := range roots {
+	var compileExpression func(*plan.Expr) (int, error)
+	var compileOwner func(int64) (*programOwner, error)
+	compileExpression = func(root *plan.Expr) (int, error) {
 		if root == nil {
-			return nil, moerr.NewInternalError(ctx, "nil dependent expression")
+			return 0, moerr.NewInternalError(ctx, "nil dependent expression")
+		}
+		if index, ok := indexes[root]; ok {
+			return index, nil
+		}
+		if active[root] {
+			return 0, moerr.NewInternalError(ctx, "dependent expression cycle")
 		}
 		pending := []cursor{{expr: root}}
 		for len(pending) > 0 {
@@ -84,7 +199,39 @@ func CompileDependentExpressions(ctx context.Context, roots []*plan.Expr) (*Depe
 			}
 			if !active[top.expr] {
 				active[top.expr] = true
-				if f := top.expr.GetF(); f != nil {
+				if f := top.expr.GetF(); f != nil && f.Func != nil {
+					fid, _ := function.DecodeOverloadID(f.Func.Obj)
+					if fid == function.SCALAR_PROGRAM_REF {
+						scope, slot, _, err := decodeDependentNumericProgramRef(ctx, top.expr)
+						if err != nil {
+							return 0, err
+						}
+						owner, err := compileOwner(scope)
+						if err != nil {
+							return 0, err
+						}
+						index := owner.valueIndex
+						if slot == 1 {
+							index = owner.kindIndex
+						}
+						if index < 0 {
+							return 0, moerr.NewInvalidInput(ctx, "incomplete scalar numeric program output")
+						}
+						indexes[top.expr] = index
+						if top.expr.AuxId < 0 {
+							memos[top.expr.AuxId] = index
+						}
+						delete(active, top.expr)
+						pending = pending[:len(pending)-1]
+						continue
+					}
+					if fid == function.SCALAR_PROGRAM {
+						return 0, moerr.NewInvalidInput(ctx, "scalar numeric program definition must be anchored by output zero")
+					}
+					top.args = f.Args
+				} else if top.expr.GetF() != nil {
+					return 0, moerr.NewInternalError(ctx, "missing native function")
+				} else if f := top.expr.GetF(); f != nil {
 					top.args = f.Args
 				}
 				if l := top.expr.GetList(); l != nil {
@@ -98,33 +245,36 @@ func CompileDependentExpressions(ctx context.Context, roots []*plan.Expr) (*Depe
 				child := top.args[top.next]
 				top.next++
 				if child == nil {
-					return nil, moerr.NewInternalError(ctx, "nil dependent operand")
+					return 0, moerr.NewInternalError(ctx, "nil dependent operand")
 				}
 				if _, ok := indexes[child]; ok {
 					continue
 				}
 				if active[child] {
-					return nil, moerr.NewInternalError(ctx, "dependent expression cycle")
+					return 0, moerr.NewInternalError(ctx, "dependent expression cycle")
 				}
 				pending = append(pending, cursor{expr: child})
 				continue
 			}
-			instruction := dependentExprInstruction{expr: top.expr, fid: -1, args: make([]int, len(top.args))}
+			instruction := dependentExprInstruction{
+				expr: top.expr, fid: -1, args: make([]int, len(top.args)),
+				numericKindFrom: -1, privateValueFrom: -1,
+			}
 			for i, arg := range top.args {
 				instruction.args[i] = indexes[arg]
 			}
 			typ, err := types.TypeFromPlan(top.expr.Typ)
 			if err != nil {
-				return nil, err
+				return 0, err
 			}
 			instruction.typ = typ
 			if f := top.expr.GetF(); f != nil {
 				if f.Func == nil {
-					return nil, moerr.NewInternalError(ctx, "missing native function")
+					return 0, moerr.NewInternalError(ctx, "missing native function")
 				}
 				overload, err := function.GetFunctionById(ctx, f.Func.Obj)
 				if err != nil {
-					return nil, err
+					return 0, err
 				}
 				fid, _ := function.DecodeOverloadID(f.Func.Obj)
 				instruction.fid = fid
@@ -132,7 +282,7 @@ func CompileDependentExpressions(ctx context.Context, roots []*plan.Expr) (*Depe
 				for i, arg := range f.Args {
 					parameterTypes[i], err = types.TypeFromPlan(arg.Typ)
 					if err != nil {
-						return nil, err
+						return 0, err
 					}
 				}
 				overloadID := f.Func.Obj
@@ -156,7 +306,7 @@ func CompileDependentExpressions(ctx context.Context, roots []*plan.Expr) (*Depe
 				}
 			} else if top.expr.GetDependent() == nil && top.expr.GetCol() == nil {
 				if top.expr.GetList() != nil || top.expr.GetSub() != nil || top.expr.GetCorr() != nil || top.expr.GetW() != nil {
-					return nil, moerr.NewInternalError(ctx, "unlowered dependent scalar expression")
+					return 0, moerr.NewInternalError(ctx, "unlowered dependent scalar expression")
 				}
 				expr := top.expr
 				instruction.native = func(proc *process.Process, allocation *vector.AllocationAccountSelection, _ []ExpressionExecutor) (ExpressionExecutor, error) {
@@ -169,12 +319,307 @@ func CompileDependentExpressions(ctx context.Context, roots []*plan.Expr) (*Depe
 				memos[top.expr.AuxId] = index
 			}
 			result.instructions = append(result.instructions, instruction)
+			if call := top.expr.GetDependent(); call != nil && call.Reducer == plan.SubqueryRef_SCALAR && call.Comparison == nil &&
+				call.ProgramId > 0 && int(call.ProgramId) <= len(programs) && programs[call.ProgramId-1] != nil &&
+				programs[call.ProgramId-1].ScalarResultKindColumn == 1 {
+				kindIndex := len(result.instructions)
+				result.instructions = append(result.instructions, dependentExprInstruction{
+					expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}},
+					fid:  -1, typ: types.T_bool.ToType(), numericKindFrom: -1, privateValueFrom: -1,
+					dependentKindCapture: true, privateProgramScope: int64(call.ProgramId),
+				})
+				result.numericKindRefs[index] = kindIndex
+			}
 			delete(active, top.expr)
 			pending = pending[:len(pending)-1]
 		}
-		result.roots = append(result.roots, indexes[root])
+		return indexes[root], nil
+	}
+	compileOwner = func(scope int64) (*programOwner, error) {
+		owner := owners[scope]
+		if owner == nil {
+			return nil, moerr.NewInvalidInput(ctx, "scalar numeric program reference has no lexical definition")
+		}
+		if owner.state == 1 {
+			return nil, moerr.NewInvalidInput(ctx, "cyclic scalar numeric program definition")
+		}
+		if owner.state == 2 {
+			return owner, nil
+		}
+		owner.state = 1
+		rawIndex, err := compileExpression(owner.raw)
+		if err != nil {
+			owner.state = 0
+			return nil, err
+		}
+		if err = visitDependentExprTree(owner.raw, func(expr *plan.Expr) error {
+			if index, ok := indexes[expr]; ok && index >= 0 && index < len(result.instructions) {
+				result.instructions[index].numericKindDemand = true
+			}
+			return nil
+		}); err != nil {
+			owner.state = 0
+			return nil, err
+		}
+		kindIndex := -1
+		if owner.explicit != nil {
+			if owner.explicit.Typ.Id != 10 {
+				owner.state = 0
+				return nil, moerr.NewInvalidInput(ctx, "scalar numeric program kind source must be BOOL")
+			}
+			kindIndex, err = compileExpression(owner.explicit)
+			if err != nil {
+				owner.state = 0
+				return nil, err
+			}
+		} else {
+			boolType := types.T_bool.ToType()
+			definition := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}}
+			kindIndex = len(result.instructions)
+			result.instructions = append(result.instructions, dependentExprInstruction{
+				expr: definition, args: []int{rawIndex}, typ: boolType, fid: -1,
+				inferNumericKind: true, numericKindFrom: rawIndex, privateValueFrom: -1,
+				privateProgramScope: scope,
+			})
+		}
+		valueType, err := types.TypeFromPlan(*owner.valueType)
+		if err != nil {
+			owner.state = 0
+			return nil, err
+		}
+		valueIndex := len(result.instructions)
+		result.instructions = append(result.instructions, dependentExprInstruction{
+			expr: owner.definition, args: []int{rawIndex, kindIndex}, typ: valueType, fid: -1,
+			privateValueAlias: true, privateValueFrom: rawIndex, numericKindFrom: -1,
+			privateProgramScope: scope,
+		})
+		owner.valueIndex, owner.kindIndex, owner.state = valueIndex, kindIndex, 2
+		result.numericKindRefs[valueIndex] = kindIndex
+		return owner, nil
+	}
+
+	for _, root := range roots {
+		index, err := compileExpression(root)
+		if err != nil {
+			return nil, err
+		}
+		result.roots = append(result.roots, index)
 	}
 	return result, nil
+}
+
+// validateDependentExpressionGraphs must run before private-owner discovery:
+// that pass may compare or clone a nested definition, operations that are not
+// safe for cyclic protobuf graphs. A gray/black walk rejects true cycles while
+// allowing repeated pointers in a shared expression DAG.
+func validateDependentExpressionGraphs(ctx context.Context, roots []*plan.Expr) error {
+	type frame struct {
+		expr     *plan.Expr
+		children []*plan.Expr
+		next     int
+	}
+	state := make(map[*plan.Expr]uint8)
+	for _, root := range roots {
+		if root == nil {
+			return moerr.NewInternalError(ctx, "nil dependent expression")
+		}
+		if state[root] == 2 {
+			continue
+		}
+		state[root] = 1
+		stack := []frame{{expr: root, children: dependentExprChildren(root)}}
+		for len(stack) > 0 {
+			top := &stack[len(stack)-1]
+			if top.next == len(top.children) {
+				state[top.expr] = 2
+				stack = stack[:len(stack)-1]
+				continue
+			}
+			child := top.children[top.next]
+			top.next++
+			if child == nil {
+				continue
+			}
+			switch state[child] {
+			case 1:
+				return moerr.NewInternalError(ctx, "dependent expression cycle")
+			case 2:
+				continue
+			default:
+				state[child] = 1
+				stack = append(stack, frame{expr: child, children: dependentExprChildren(child)})
+			}
+		}
+	}
+	return nil
+}
+
+func dependentExprChildren(expr *plan.Expr) []*plan.Expr {
+	children := make([]*plan.Expr, 0)
+	if d := expr.GetDependent(); d != nil {
+		children = append(children, d.Comparison)
+		children = append(children, d.Lhs...)
+		children = append(children, d.Inputs...)
+	}
+	if w := expr.GetW(); w != nil {
+		if w.Frame != nil {
+			if w.Frame.End != nil {
+				children = append(children, w.Frame.End.Val)
+			}
+			if w.Frame.Start != nil {
+				children = append(children, w.Frame.Start.Val)
+			}
+		}
+		for i := len(w.OrderBy) - 1; i >= 0; i-- {
+			if w.OrderBy[i] != nil {
+				children = append(children, w.OrderBy[i].Expr)
+			}
+		}
+		children = append(children, w.PartitionBy...)
+		children = append(children, w.WindowFunc)
+	}
+	if sub := expr.GetSub(); sub != nil {
+		children = append(children, sub.Child)
+	}
+	if list := expr.GetList(); list != nil {
+		children = append(children, list.List...)
+	}
+	if fn := expr.GetF(); fn != nil {
+		children = append(children, fn.Args...)
+	}
+	if lit := expr.GetLit(); lit != nil {
+		children = append(children, lit.Src)
+	}
+	if metadata := expr.GetPreparedNumeric(); metadata != nil {
+		// Clone/equality operations during owner discovery copy this retained
+		// witness pointer even though dependent execution never evaluates it.
+		children = append(children, metadata.StringDomainSource)
+	}
+	return children
+}
+
+// visitDependentExprTree has the same edges as plan.VisitExprTree but visits
+// each expression pointer once. The dependent compiler has its own active
+// stack check that reports cycles while compiling; discovery must be bounded
+// first because bound plans can contain pointer cycles as well as shared DAGs.
+func visitDependentExprTree(root *plan.Expr, visitor func(*plan.Expr) error) error {
+	if root == nil {
+		return nil
+	}
+	pending := []*plan.Expr{root}
+	seen := make(map[*plan.Expr]struct{})
+	for len(pending) > 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if current == nil {
+			continue
+		}
+		if _, ok := seen[current]; ok {
+			continue
+		}
+		seen[current] = struct{}{}
+		if err := visitor(current); err != nil {
+			return err
+		}
+		if d := current.GetDependent(); d != nil {
+			pending = append(pending, d.Comparison)
+			for i := len(d.Lhs) - 1; i >= 0; i-- {
+				pending = append(pending, d.Lhs[i])
+			}
+			for i := len(d.Inputs) - 1; i >= 0; i-- {
+				pending = append(pending, d.Inputs[i])
+			}
+		}
+		if w := current.GetW(); w != nil {
+			if w.Frame != nil {
+				if w.Frame.End != nil {
+					pending = append(pending, w.Frame.End.Val)
+				}
+				if w.Frame.Start != nil {
+					pending = append(pending, w.Frame.Start.Val)
+				}
+			}
+			for i := len(w.OrderBy) - 1; i >= 0; i-- {
+				if w.OrderBy[i] != nil {
+					pending = append(pending, w.OrderBy[i].Expr)
+				}
+			}
+			for i := len(w.PartitionBy) - 1; i >= 0; i-- {
+				pending = append(pending, w.PartitionBy[i])
+			}
+			pending = append(pending, w.WindowFunc)
+		}
+		if sub := current.GetSub(); sub != nil {
+			pending = append(pending, sub.Child)
+		}
+		if list := current.GetList(); list != nil {
+			for i := len(list.List) - 1; i >= 0; i-- {
+				pending = append(pending, list.List[i])
+			}
+		}
+		if fn := current.GetF(); fn != nil {
+			for i := len(fn.Args) - 1; i >= 0; i-- {
+				pending = append(pending, fn.Args[i])
+			}
+		}
+		if lit := current.GetLit(); lit != nil {
+			pending = append(pending, lit.Src)
+		}
+	}
+	return nil
+}
+
+func decodeDependentNumericProgramRef(ctx context.Context, expr *plan.Expr) (int64, int, *plan.Expr, error) {
+	f := expr.GetF()
+	if f == nil || f.Func == nil {
+		return 0, 0, nil, moerr.NewInvalidInput(ctx, "invalid scalar numeric program reference")
+	}
+	fid, refOverload := function.DecodeOverloadID(f.Func.Obj)
+	args := f.Args
+	if fid != function.SCALAR_PROGRAM_REF || refOverload != 0 || (len(args) != 2 && len(args) != 3) {
+		return 0, 0, nil, moerr.NewInvalidInput(ctx, "invalid scalar numeric program reference arity")
+	}
+	var definition, scopeExpr, slotExpr *plan.Expr
+	if len(args) == 3 {
+		definition, scopeExpr, slotExpr = args[0], args[1], args[2]
+	} else {
+		scopeExpr, slotExpr = args[0], args[1]
+	}
+	readInt := func(expr *plan.Expr) (int64, bool) {
+		if expr == nil || expr.GetLit() == nil || expr.GetLit().Isnull {
+			return 0, false
+		}
+		value, ok := expr.GetLit().Value.(*plan.Literal_I64Val)
+		if !ok {
+			return 0, false
+		}
+		return value.I64Val, true
+	}
+	scope, scopeOK := readInt(scopeExpr)
+	slot, slotOK := readInt(slotExpr)
+	if !scopeOK || scope <= 0 || !slotOK || (slot != 0 && slot != 1) {
+		return 0, 0, nil, moerr.NewInvalidInput(ctx, "invalid scalar numeric program scope or slot")
+	}
+	if slot == 0 {
+		if definition == nil || expr.Typ.Id == 10 {
+			return 0, 0, nil, moerr.NewInvalidInput(ctx, "invalid scalar numeric program value reference")
+		}
+		defFn := definition.GetF()
+		if defFn == nil || defFn.Func == nil || len(defFn.Args) < 2 || len(defFn.Args) > 3 {
+			return 0, 0, nil, moerr.NewInvalidInput(ctx, "invalid scalar numeric program definition")
+		}
+		defID, defOverload := function.DecodeOverloadID(defFn.Func.Obj)
+		defScope, defOK := readInt(defFn.Args[0])
+		if defID != function.SCALAR_PROGRAM || defOverload != 0 || !defOK || defScope != scope || defFn.Args[1] == nil ||
+			!proto.Equal(&expr.Typ, &defFn.Args[1].Typ) || (len(defFn.Args) == 3 && (defFn.Args[2] == nil || defFn.Args[2].Typ.Id != 10)) {
+			return 0, 0, nil, moerr.NewInvalidInput(ctx, "invalid scalar numeric program definition")
+		}
+		return scope, 0, definition, nil
+	}
+	if definition != nil || expr.Typ.Id != 10 {
+		return 0, 0, nil, moerr.NewInvalidInput(ctx, "invalid scalar numeric program kind reference")
+	}
+	return scope, 1, nil, nil
 }
 
 // CompileDependentSingleInputExpressions adapts the native single-batch ABI.
@@ -185,7 +630,13 @@ func CompileDependentExpressions(ctx context.Context, roots []*plan.Expr) (*Depe
 // tuple comparison. Already-normalized columns retain their original AST.
 // Adaptation allocates only during compilation, not for each execution row.
 func CompileDependentSingleInputExpressions(ctx context.Context, roots []*plan.Expr) (*DependentExpressionProgram, error) {
-	program, err := CompileDependentExpressions(ctx, roots)
+	return CompileDependentSingleInputExpressionsWithCorrelation(ctx, roots, nil)
+}
+
+func CompileDependentSingleInputExpressionsWithCorrelation(
+	ctx context.Context, roots []*plan.Expr, programs []*plan.CorrelationProgram,
+) (*DependentExpressionProgram, error) {
+	program, err := compileDependentExpressions(ctx, roots, programs)
 	if err != nil {
 		return nil, err
 	}
@@ -309,6 +760,37 @@ func (t *dependentExpressionTask) Step(ctx context.Context) (vm.ContinuationStep
 	if f.failure != nil {
 		return vm.ContinuationStep{}, f.failure
 	}
+	if instruction.dependentKindCapture {
+		return vm.ContinuationStep{}, moerr.NewInternalError(ctx, "dependent kind passenger has no invocation owner")
+	}
+	// A four-operand IFF has an ordinary BOOL companion for its selected
+	// condition kind. Evaluate that companion before truth conversion, while
+	// leaving both value arms lazy. The value and companion share their
+	// lexical program owner, so this does not replay the selector.
+	if instruction.fid == function.IFF && len(instruction.args) == 4 && !t.selected {
+		for _, position := range []int{3, 0} {
+			arg := instruction.args[position]
+			if !f.cells[arg].ready {
+				child, err := f.task(arg)
+				return vm.ContinuationStep{Child: child}, err
+			}
+		}
+		kind := f.cells[instruction.args[3]].value
+		truth, err := function.IffConditionTruthyAt(
+			f.cells[instruction.args[0]].value,
+			0,
+			function.CompatibilityModeFromProcess(f.proc),
+			kind,
+		)
+		if err != nil {
+			return vm.ContinuationStep{}, err
+		}
+		t.next = 2
+		if truth {
+			t.next = 1
+		}
+		t.selected = true
+	}
 	// The selected branch is recorded in this PC before it yields. Resuming
 	// never repeats a condition, native function or dependent invocation.
 	for t.next < len(instruction.args) {
@@ -354,6 +836,34 @@ func (t *dependentExpressionTask) Step(ctx context.Context) (vm.ContinuationStep
 		default:
 			t.next++
 		}
+	}
+	if instruction.inferNumericKind {
+		if instruction.numericKindFrom < 0 || instruction.numericKindFrom >= len(f.cells) ||
+			!f.cells[instruction.numericKindFrom].ready {
+			return vm.ContinuationStep{}, moerr.NewInternalError(ctx, "numeric kind source is not ready")
+		}
+		value := f.cells[instruction.numericKindFrom].value
+		kind := value != nil && !value.IsNull(0) && f.numericValueKindAt(instruction.numericKindFrom, 0)
+		if err := f.reserve(uint64(unsafe.Sizeof(vector.Vector{}))); err != nil {
+			return vm.ContinuationStep{}, err
+		}
+		kindVector, err := newExpressionConstFixed(types.T_bool.ToType(), kind, 1, f.proc.Mp(), f.allocation)
+		if err != nil {
+			return vm.ContinuationStep{}, err
+		}
+		cell.value = kindVector
+		cell.owned = true
+		cell.ready = true
+		return vm.ContinuationStep{Done: true}, nil
+	}
+	if instruction.privateValueAlias {
+		if instruction.privateValueFrom < 0 || instruction.privateValueFrom >= len(f.cells) ||
+			!f.cells[instruction.privateValueFrom].ready {
+			return vm.ContinuationStep{}, moerr.NewInternalError(ctx, "numeric program value source is not ready")
+		}
+		cell.value = f.cells[instruction.privateValueFrom].value
+		cell.ready = true
+		return vm.ContinuationStep{Done: true}, nil
 	}
 	if call := instruction.expr.GetDependent(); call != nil {
 		if t.waiting {
@@ -433,6 +943,9 @@ func (t *dependentExpressionTask) Step(ctx context.Context) (vm.ContinuationStep
 		if err != nil {
 			return vm.ContinuationStep{}, err
 		}
+		if functionExecutor, ok := executor.(*FunctionExpressionExecutor); ok && instruction.numericKindDemand {
+			functionExecutor.numericValueKindDemand = true
+		}
 		cell.executor = executor
 		transferred = true
 		cell.value, err = executor.Eval(f.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
@@ -452,11 +965,22 @@ func (t *dependentExpressionTask) Accept(child vm.Continuation) error {
 	f := t.frame
 	cell := &f.cells[t.index]
 	result := invocation.Result()
-	if result == nil || result.RowCount() != 1 || len(result.Vecs) != 1 {
+	kindColumn := uint32(0)
+	if layout, ok := child.(interface{ ScalarResultKindColumn() uint32 }); ok {
+		kindColumn = layout.ScalarResultKindColumn()
+	}
+	if kindColumn > 1 {
+		return moerr.NewInternalErrorNoCtx("invalid dependent scalar kind column marker")
+	}
+	wantWidth := 1
+	if kindColumn == 1 {
+		wantWidth = 2
+	}
+	if result == nil || result.RowCount() != 1 || len(result.Vecs) != wantWidth {
 		return moerr.NewInternalErrorNoCtx("invalid dependent invocation result")
 	}
 	typ := f.program.instructions[t.index].typ
-	if !typ.Eq(*result.Vecs[0].GetType()) {
+	if result.Vecs[0] == nil || !typ.Eq(*result.Vecs[0].GetType()) {
 		return moerr.NewInternalErrorNoCtx("dependent invocation result type")
 	}
 	if err := f.reserve(uint64(unsafe.Sizeof(vector.Vector{}))); err != nil {
@@ -470,6 +994,30 @@ func (t *dependentExpressionTask) Accept(child vm.Continuation) error {
 	cell.owned = true
 	if err = cell.value.UnionOne(result.Vecs[0], 0, f.proc.Mp()); err != nil {
 		return err
+	}
+	if kindColumn == 1 {
+		kindIndex, ok := f.program.numericKindRefs[t.index]
+		if !ok || kindIndex < 0 || kindIndex >= len(f.cells) || result.Vecs[1] == nil ||
+			!types.T_bool.ToType().Eq(*result.Vecs[1].GetType()) {
+			return moerr.NewInternalErrorNoCtx("invalid dependent scalar kind layout")
+		}
+		kindValue := false
+		if !result.Vecs[0].IsNull(0) && !result.Vecs[1].IsNull(0) {
+			kindValue = vector.GetFixedAtNoTypeCheck[bool](result.Vecs[1], 0)
+		}
+		if err = f.reserve(uint64(unsafe.Sizeof(vector.Vector{}))); err != nil {
+			return err
+		}
+		kindCell := &f.cells[kindIndex]
+		if kindCell.ready || kindCell.value != nil {
+			return moerr.NewInternalErrorNoCtx("dependent scalar kind was already captured")
+		}
+		kindCell.value, err = newExpressionConstFixed(types.T_bool.ToType(), kindValue, 1, f.proc.Mp(), f.allocation)
+		if err != nil {
+			return err
+		}
+		kindCell.owned = true
+		kindCell.ready = true
 	}
 	cell.ready = true
 	return nil
@@ -511,6 +1059,12 @@ func (r *dependentValueReference) Eval(_ *process.Process, _ []*batch.Batch, mas
 func (r *dependentValueReference) EvalWithoutResultReusing(proc *process.Process, b []*batch.Batch, mask []bool) (*vector.Vector, error) {
 	return r.Eval(proc, b, mask)
 }
+func (r *dependentValueReference) numericValueKindAt(row int) bool {
+	if r == nil || r.frame == nil {
+		return false
+	}
+	return r.frame.numericValueKindAt(r.index, row)
+}
 func (r *dependentValueReference) Free() {
 	if r.null != nil {
 		r.null.Free(r.frame.proc.Mp())
@@ -520,6 +1074,34 @@ func (r *dependentValueReference) Free() {
 func (r *dependentValueReference) ResetForNextQuery() {}
 func (r *dependentValueReference) IsColumnExpr() bool { return true }
 func (r *dependentValueReference) TypeName() string   { return "dependent frame value" }
+
+func (f *DependentExpressionFrame) numericValueKindAt(index, row int) bool {
+	if f == nil || f.program == nil || index < 0 || index >= len(f.cells) || row < 0 {
+		return false
+	}
+	value := f.cells[index].value
+	if value == nil || value.IsNull(uint64(row)) {
+		return false
+	}
+	if kindIndex, ok := f.program.numericKindRefs[index]; ok {
+		if kindIndex < 0 || kindIndex >= len(f.cells) || !f.cells[kindIndex].ready {
+			return false
+		}
+		kind := f.cells[kindIndex].value
+		if kind == nil || kind.IsNull(0) {
+			return false
+		}
+		kindRow := row
+		if kind.IsConst() {
+			kindRow = 0
+		}
+		if kindRow >= kind.Length() {
+			return false
+		}
+		return vector.GetFixedAtNoTypeCheck[bool](kind, kindRow)
+	}
+	return numericValueKindAt(f.cells[index].executor, row)
+}
 
 // NewScalarExecutor instances a bound comparison DAG without overload lookup.
 // Every instruction has one owner; parameter edges borrow it, including shared
@@ -532,6 +1114,38 @@ func (p *DependentExpressionProgram) NewScalarExecutor(proc *process.Process, al
 	if err != nil {
 		return nil, err
 	}
+	programOwners := make([]dependentNumericProgramOwner, 0)
+	for valueIndex, instruction := range p.instructions {
+		if !instruction.privateValueAlias {
+			continue
+		}
+		if len(instruction.args) != 2 || instruction.privateValueFrom < 0 || instruction.privateValueFrom >= valueIndex {
+			return nil, moerr.NewInvalidInputNoCtx("invalid scalar numeric program value owner")
+		}
+		kindIndex := instruction.args[1]
+		if kindIndex < 0 || kindIndex >= valueIndex || kindIndex == instruction.privateValueFrom ||
+			kindIndex >= len(p.instructions) || p.instructions[kindIndex].typ.Oid != types.T_bool {
+			return nil, moerr.NewInvalidInputNoCtx("invalid scalar numeric program kind owner")
+		}
+		definition := p.numericProgramDefinitions[instruction.privateProgramScope]
+		if definition == nil || instruction.privateProgramScope <= 0 {
+			return nil, moerr.NewInvalidInputNoCtx("scalar numeric program owner has no definition")
+		}
+		defArgs := definition.GetF().GetArgs()
+		if len(defArgs) != 2 && len(defArgs) != 3 {
+			return nil, moerr.NewInvalidInputNoCtx("invalid scalar numeric program definition")
+		}
+		explicit := len(defArgs) == 3
+		kindInstruction := p.instructions[kindIndex]
+		if explicit == kindInstruction.inferNumericKind ||
+			(!explicit && (kindInstruction.numericKindFrom != instruction.privateValueFrom || kindInstruction.privateProgramScope != instruction.privateProgramScope)) {
+			return nil, moerr.NewInvalidInputNoCtx("scalar numeric program kind definition does not match its owner")
+		}
+		programOwners = append(programOwners, dependentNumericProgramOwner{
+			scope: instruction.privateProgramScope, raw: instruction.privateValueFrom,
+			kind: kindIndex, value: valueIndex, explicit: explicit,
+		})
+	}
 	size := uint64(unsafe.Sizeof(dependentScalarExecutor{}))
 	for _, instruction := range p.instructions {
 		if instruction.expr.GetDependent() != nil || instruction.expr.GetSlot() != nil {
@@ -540,12 +1154,54 @@ func (p *DependentExpressionProgram) NewScalarExecutor(proc *process.Process, al
 		size += uint64(unsafe.Sizeof(FunctionExpressionExecutor{})) + uint64(unsafe.Sizeof(dependentScalarReference{})) + uint64(unsafe.Sizeof(ExpressionExecutor(nil)))
 		size += uint64(len(instruction.args)) * 2 * uint64(unsafe.Sizeof(ExpressionExecutor(nil)))
 	}
+	size += uint64(len(programOwners)) * uint64(unsafe.Sizeof(scalarNumericProgramState{}))
 	if err = budget.AcquireAllocationCapacity(size); err != nil {
 		return nil, err
 	}
-	owner := &dependentScalarExecutor{budget: budget, charged: size, executors: make([]ExpressionExecutor, len(p.instructions))}
+	owner := &dependentScalarExecutor{
+		budget: budget, charged: size, executors: make([]ExpressionExecutor, len(p.instructions)),
+		programs: make([]*scalarNumericProgramState, 0, len(programOwners)),
+	}
 	refs := make([]dependentScalarReference, len(p.instructions))
+	programOwnerAt := make(map[int]dependentNumericProgramOwner, len(programOwners))
+	for _, programOwner := range programOwners {
+		programOwnerAt[programOwner.value] = programOwner
+	}
 	for i, instruction := range p.instructions {
+		if instruction.inferNumericKind {
+			// The matching value alias below creates and publishes the shared
+			// program state, including this BOOL output.
+			continue
+		}
+		if instruction.privateValueAlias {
+			programOwner, ok := programOwnerAt[i]
+			if !ok || owner.executors[programOwner.raw] == nil ||
+				(programOwner.explicit && owner.executors[programOwner.kind] == nil) ||
+				(!programOwner.explicit && !p.instructions[programOwner.kind].inferNumericKind) {
+				owner.Free()
+				return nil, moerr.NewInvalidInputNoCtx("scalar numeric program inputs were not compiled")
+			}
+			state := &scalarNumericProgramState{
+				definition: p.numericProgramDefinitions[programOwner.scope],
+				value:      owner.executors[programOwner.raw],
+				selection:  allocation,
+				mp:         proc.Mp(),
+			}
+			if programOwner.explicit {
+				state.kindSource = owner.executors[programOwner.kind]
+			}
+			owner.programs = append(owner.programs, state)
+			valueRef := &scalarNumericProgramRefExecutor{state: state, slot: 0}
+			kindRef := &scalarNumericProgramRefExecutor{state: state, slot: 1}
+			state.refs = 3
+			owner.executors[programOwner.raw] = valueRef
+			owner.executors[programOwner.kind] = kindRef
+			refs[programOwner.raw].ExpressionExecutor = valueRef
+			refs[programOwner.kind].ExpressionExecutor = kindRef
+			owner.executors[programOwner.value] = &scalarNumericProgramRefExecutor{state: state, slot: 0}
+			refs[programOwner.value].ExpressionExecutor = owner.executors[programOwner.value]
+			continue
+		}
 		args := make([]ExpressionExecutor, len(instruction.args))
 		for j, index := range instruction.args {
 			args[j] = &refs[index]
@@ -559,6 +1215,9 @@ func (p *DependentExpressionProgram) NewScalarExecutor(proc *process.Process, al
 			owner.Free()
 			return nil, err
 		}
+		if functionExecutor, ok := owner.executors[i].(*FunctionExpressionExecutor); ok && instruction.numericKindDemand {
+			functionExecutor.numericValueKindDemand = true
+		}
 		refs[i].ExpressionExecutor = owner.executors[i]
 	}
 	owner.ExpressionExecutor = owner.executors[p.roots[0]]
@@ -567,14 +1226,35 @@ func (p *DependentExpressionProgram) NewScalarExecutor(proc *process.Process, al
 
 type dependentScalarReference struct{ ExpressionExecutor }
 
+func (r *dependentScalarReference) numericValueKindAt(row int) bool {
+	return r != nil && numericValueKindAt(r.ExpressionExecutor, row)
+}
+
 func (*dependentScalarReference) Free()              {}
 func (*dependentScalarReference) ResetForNextQuery() {}
 
 type dependentScalarExecutor struct {
 	ExpressionExecutor
 	executors []ExpressionExecutor
+	programs  []*scalarNumericProgramState
 	budget    *process.ExecutionResourceGeneration
 	charged   uint64
+}
+
+func (e *dependentScalarExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	e.beginBatch()
+	return e.ExpressionExecutor.Eval(proc, batches, selectList)
+}
+
+func (e *dependentScalarExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	e.beginBatch()
+	return e.ExpressionExecutor.EvalWithoutResultReusing(proc, batches, selectList)
+}
+
+func (e *dependentScalarExecutor) beginBatch() {
+	for _, state := range e.programs {
+		state.resetEvaluation()
+	}
 }
 
 func (e *dependentScalarExecutor) Free() {
@@ -584,6 +1264,7 @@ func (e *dependentScalarExecutor) Free() {
 		}
 	}
 	e.executors = nil
+	e.programs = nil
 	e.ExpressionExecutor = nil
 	e.budget.ReleaseAllocationCapacity(e.charged)
 	e.charged = 0
@@ -591,5 +1272,8 @@ func (e *dependentScalarExecutor) Free() {
 func (e *dependentScalarExecutor) ResetForNextQuery() {
 	for _, executor := range e.executors {
 		executor.ResetForNextQuery()
+	}
+	for _, state := range e.programs {
+		state.resetForNextQuery()
 	}
 }

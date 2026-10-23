@@ -671,16 +671,23 @@ func TestPreparedParamValueNumericReprepareType(t *testing.T) {
 func TestPreparedSQLExecuteNumericParamExprPreservesSourceDomain(t *testing.T) {
 	ctx := context.Background()
 	for _, test := range []struct {
-		name       string
-		value      any
-		sourceType types.Type
-		wantType   types.T
-		wantNil    bool
+		name        string
+		value       any
+		sourceType  types.Type
+		allowPrefix bool
+		wantType    types.T
+		wantNil     bool
 	}{
-		{name: "string uses approximate numeric conversion", value: "2tail",
+		{name: "string uses approximate numeric conversion", value: "2tail", allowPrefix: true,
 			sourceType: types.New(types.T_varchar, 5, 0), wantType: types.T_float64},
-		{name: "string without numeric prefix keeps existing error path", value: "not-a-number",
+		{name: "string without numeric prefix converts to zero", value: "not-a-number", allowPrefix: true,
+			sourceType: types.New(types.T_varchar, 12, 0), wantType: types.T_float64},
+		{name: "empty string converts to zero", value: "", allowPrefix: true,
+			sourceType: types.New(types.T_varchar, 1, 0), wantType: types.T_float64},
+		{name: "strict arithmetic rejects wholly nonnumeric string", value: "not-a-number",
 			sourceType: types.New(types.T_varchar, 12, 0), wantNil: true},
+		{name: "strict arithmetic keeps numeric prefix", value: "2tail",
+			sourceType: types.New(types.T_varchar, 5, 0), wantType: types.T_float64},
 		{name: "boolean uses integer arithmetic", value: true,
 			sourceType: types.T_bool.ToType(), wantType: types.T_int64},
 		{name: "bit uses unsigned arithmetic", value: "5",
@@ -702,7 +709,7 @@ func TestPreparedSQLExecuteNumericParamExprPreservesSourceDomain(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			expr, err := preparedSQLExecuteNumericParamExpr(
-				ctx, test.value, false, test.sourceType)
+				ctx, test.value, false, test.sourceType, test.allowPrefix)
 			require.NoError(t, err)
 			if test.wantNil {
 				require.Nil(t, expr)
@@ -710,6 +717,62 @@ func TestPreparedSQLExecuteNumericParamExprPreservesSourceDomain(t *testing.T) {
 			}
 			require.NotNil(t, expr)
 			require.Equal(t, int32(test.wantType), expr.Typ.Id)
+		})
+	}
+}
+
+func TestSummarizePreparedParamRolesKeepsValueAndPrecisionRolesSeparate(t *testing.T) {
+	preparedPlan, paramCount := preparedParamRoleSummaryPlan(1)
+	roles, err := summarizePreparedParamRoles(preparedPlan, paramCount)
+	require.NoError(t, err)
+	require.Equal(t, []bool{true, true, false}, roles.stringMathValue,
+		"only numeric value operands inherit string-math prefix conversion")
+	require.Equal(t, []bool{false, false, true}, roles.ordinaryPrecision,
+		"CEIL precision retains its source marker without becoming a value operand")
+}
+
+func preparedParamRoleSummaryPlan(pairs int) (*plan.Plan, int) {
+	projectList := make([]*plan.Expr, 0, pairs*2)
+	position := int32(0)
+	newParam := func() *plan.Expr {
+		expr := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: position}},
+		}
+		position++
+		return expr
+	}
+	for range pairs {
+		projectList = append(projectList, &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_float64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "abs"},
+				Args: []*plan.Expr{newParam()},
+			}},
+		})
+		projectList = append(projectList, &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_float64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "ceil"},
+				Args: []*plan.Expr{newParam(), newParam()},
+			}},
+		})
+	}
+	return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{ProjectList: projectList}}}}}, int(position)
+}
+
+func BenchmarkSummarizePreparedParamRoles(b *testing.B) {
+	for _, pairs := range []int{16, 64, 256} {
+		b.Run(fmt.Sprintf("value_and_precision_pairs_%d", pairs), func(b *testing.B) {
+			preparedPlan, paramCount := preparedParamRoleSummaryPlan(pairs)
+			b.ReportAllocs()
+			b.ReportMetric(float64(paramCount), "markers/op")
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := summarizePreparedParamRoles(preparedPlan, paramCount); err != nil {
+					b.Fatal(err)
+				}
+			}
 		})
 	}
 }

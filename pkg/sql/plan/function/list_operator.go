@@ -2397,23 +2397,10 @@ var supportedOperators = []FuncNew{
 	// operator `mod`
 	{
 		functionId: MOD,
+		valueArgs:  []int{0, 1},
 		class:      plan.Function_STRICT,
 		layout:     BINARY_ARITHMETIC_OPERATOR,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) == 2 {
-				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
-				if has {
-					if modOperatorSupports(t1, t2) {
-						return newCheckResultWithCast(0, []types.Type{t1, t2})
-					}
-				} else {
-					if modOperatorSupports(inputs[0], inputs[1]) {
-						return newCheckResultWithSuccess(0)
-					}
-				}
-			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		},
+		checkFn:    modTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3229,6 +3216,11 @@ var supportedOperators = []FuncNew{
 				overloadId: int(TemporalIntegerArgumentCastOverload),
 				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
 				newOp:      func() executeLogicOfOverload { return NewTemporalIntegerArgumentCast },
+			},
+			{
+				overloadId: int(NumericValueCastOverload),
+				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:      func() executeLogicOfOverload { return NewNumericValueCast },
 			},
 		},
 	},

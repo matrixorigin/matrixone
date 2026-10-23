@@ -394,6 +394,9 @@ type QueryBuilder struct {
 
 	qry     *plan.Query
 	compCtx CompilerContext
+	// Top-level SELECT ... INTO needs to retain numeric-literal source kind
+	// beside string outputs until the frontend assigns the user variables.
+	intoUserVariableKindDemand bool
 	// Only buildValueScan owns this borrowed scope. Ordinary VALUES keep ctx nil;
 	// the actual subquery binder initializes it once and the owner restores it.
 	valuesSubqueryBinding valuesSubqueryBinding

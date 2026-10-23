@@ -33,33 +33,66 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStringToFloatDefaultCompatibilityUsesNumericPrefix(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	for _, tt := range []struct {
-		input string
-		want  float64
+func TestStringToFloatCompatibilityModes(t *testing.T) {
+	type inputResult struct {
+		input  string
+		want   float64
+		isNull bool
+	}
+	for _, mode := range []struct {
+		name          string
+		mysql, native bool
+		values        []inputResult
 	}{
-		{input: "1abc", want: 1},
-		{input: "a", want: 0},
-		{input: "", want: 0},
-		{input: "   ", want: 0},
-		{input: "  -2.5foo", want: -2.5},
-		{input: ".5xyz", want: 0.5},
-		{input: "1e2foo", want: 100},
-		{input: "1eabc", want: 1},
-		{input: "-0suffix", want: math.Copysign(0, -1)},
-		{input: "2020-01-01", want: 2020},
+		{
+			name: "mysql_numeric_prefix", mysql: true,
+			values: []inputResult{
+				{"1abc", 1, false}, {"a", 0, false}, {"", 0, false}, {"   ", 0, false},
+				{"  -2.5foo", -2.5, false}, {".5xyz", 0.5, false}, {"1e2foo", 100, false},
+				{"1eabc", 1, false}, {"-0suffix", math.Copysign(0, -1), false}, {"2020-01-01", 2020, false},
+			},
+		},
+		{
+			name: "default_strict_incomplete_tokens",
+			values: []inputResult{
+				{"1abc", 0, true}, {"1.5tail", 0, true}, {"abc", 0, true}, {"", 0, true},
+				{"   ", 0, true}, {"  -2.5foo", 0, true}, {".5xyz", 0, true},
+				{"1e2foo", 0, true}, {"1eabc", 0, true}, {"-0suffix", 0, true}, {"1e10000", 0, true},
+			},
+		},
+		{
+			name: "native_precedes_compatibility", mysql: true, native: true,
+			values: []inputResult{
+				{"1.5tail", 0, true}, {"abc", 0, true}, {"", 0, true}, {"   ", 0, true}, {"1eabc", 0, true},
+			},
+		},
+		{
+			name: "strict_complete_tokens",
+			values: []inputResult{
+				{"  -1.5 ", -1.5, false}, {"+1.5", 1.5, false}, {"1e2", 100, false}, {"-1.25E-2", -0.0125, false},
+			},
+		},
 	} {
-		t.Run(tt.input, func(t *testing.T) {
-			tc := NewFunctionTestCase(proc,
-				[]FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{tt.input}, nil),
-					NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
-				},
-				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{tt.want}, nil), NewCast)
-			succeed, info := tc.RunAndFree()
-			require.True(t, succeed, info)
+		t.Run(mode.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().MySQLNumericCompatibilityMode = mode.mysql
+			proc.GetSessionInfo().MatrixOneNativeMode = mode.native
+			for _, input := range mode.values {
+				t.Run(input.input, func(t *testing.T) {
+					var want []float64
+					if !input.isNull {
+						want = []float64{input.want}
+					}
+					testCase := NewFunctionTestCase(proc,
+						[]FunctionTestInput{
+							NewFunctionTestInput(types.T_varchar.ToType(), []string{input.input}, nil),
+							NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
+						},
+						NewFunctionTestResult(types.T_float64.ToType(), input.isNull, want, nil), NewCast)
+					succeed, info := testCase.RunAndFree()
+					require.True(t, succeed, info)
+				})
+			}
 		})
 	}
 }
@@ -164,8 +197,9 @@ func TestStringToFloatMatrixOneNativeRejectsIncompleteTokens(t *testing.T) {
 	}
 }
 
-func TestStringToFloat32DefaultCompatibilityRange(t *testing.T) {
+func TestStringToFloat32ExplicitCompatibilityRange(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	tc := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{"1e100", "-1e100", "1e-100", "-1e-100"}, nil),
@@ -175,6 +209,40 @@ func TestStringToFloat32DefaultCompatibilityRange(t *testing.T) {
 			[]float32{math.MaxFloat32, -math.MaxFloat32, 0, float32(math.Copysign(0, -1))}, nil), NewCast)
 	succeed, info := tc.RunAndFree()
 	require.True(t, succeed, info)
+}
+
+func TestOrdinaryFloatToInt64BoundsAndSelection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{}, nil)
+	defer target.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer result.Free()
+
+	cast := func(values []float64, selection *FunctionSelectList) error {
+		input := newVectorByType(proc.Mp(), types.T_float64.ToType(), values, nil)
+		defer input.Free(proc.Mp())
+		if err := result.PreExtendAndReset(len(values)); err != nil {
+			return err
+		}
+		return NewCast([]*vector.Vector{input, target}, result, proc, len(values), selection)
+	}
+
+	require.NoError(t, cast([]float64{2.5, -2.5}, nil))
+	got := result.GetResultVector()
+	require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](got, 0))
+	require.Equal(t, int64(-3), vector.GetFixedAtNoTypeCheck[int64](got, 1))
+
+	err := cast([]float64{0x1p63}, nil)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+	require.NoError(t, cast([]float64{2.5}, nil), "the same result wrapper must recover after overflow")
+	require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](result.GetResultVector(), 0))
+
+	require.NoError(t, cast([]float64{2.5, math.NaN()},
+		&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
+	got = result.GetResultVector()
+	require.False(t, got.IsNull(0))
+	require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](got, 0))
+	require.True(t, got.IsNull(1), "an inactive invalid row is masked")
 }
 
 func TestCastEnumToNumericTypes(t *testing.T) {
@@ -896,6 +964,61 @@ func TestStringToFloatSkipsInactiveInvalidRows(t *testing.T) {
 	for i := uint64(0); i < 2; i++ {
 		require.True(t, resultVec.GetNulls().Contains(i))
 	}
+}
+
+func TestStringToFloatUsesExplicitNumericValueKindNotBinaryStringDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{
+		{0x31}, []byte("1"), {0x31},
+	}, []types.RuntimeStringDomain{
+		types.RuntimeStringBinary,
+		types.RuntimeStringText,
+		types.RuntimeStringBinary,
+	})
+	defer input.Free(proc.Mp())
+	kind := newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{true, false, false}, nil)
+	defer kind.Free(proc.Mp())
+	from := &numericValueKindParameter{
+		FunctionParameterWrapper: vector.GenerateFunctionStrParameter(input),
+		kind:                      vector.GenerateFunctionFixedTypeParameter[bool](kind),
+	}
+
+	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp()).(*vector.FunctionResult[float64])
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(3))
+	require.NoError(t, strToFloat(context.Background(), SQLCompatibilityMySQL,
+		from, result, 64, 3, nil))
+	require.Equal(t, []float64{49, 1, 1}, vector.MustFixedColWithTypeCheck[float64](result.GetResultVector()),
+		"only the BOOL kind companion selects byte-as-number semantics")
+
+	// A static binary string is not a HEX/BIT literal and keeps the ordinary
+	// text-value conversion contract.
+	ordinary := makeBinaryStringTestInput(t, proc, types.T_varbinary.ToType(), [][]byte{{0x31}}, nil)
+	defer ordinary.Free(proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, strToFloat(context.Background(), SQLCompatibilityMySQL,
+		vector.GenerateFunctionStrParameter(ordinary), result, 64, 1, nil))
+	require.Equal(t, []float64{1}, vector.MustFixedColWithTypeCheck[float64](result.GetResultVector()))
+}
+
+func TestScalarNumericLiteralMarkerDoesNotSetBinaryStringDomain(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendStringList(vec, []string{"hex", "text", "text override"}, nil, mp))
+	vec.SetIsBin(true)
+	require.NoError(t, vec.SetRuntimeStringDomainAtWithMP(2, types.RuntimeStringText, mp))
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	binary, perRow := stringDomainMode(vec)
+	require.False(t, binary)
+	require.True(t, perRow, "runtime-domain overrides remain row-exact")
+	require.False(t, vec.GetIsBinaryStringAt(0), "the scalar marker does not mutate runtime string-domain metadata")
+	require.True(t, binaryStringAt(vec, 0, binary, perRow), "the scalar marker remains independent of domain metadata")
+	require.True(t, binaryStringAt(vec, 1, binary, perRow), "the scalar marker applies uniformly to its source vector")
+	require.False(t, binaryStringAt(vec, 2, binary, perRow), "explicit runtime text takes precedence over literal fallback")
 }
 
 func TestCastSignedStringNumericSign(t *testing.T) {
@@ -5162,12 +5285,33 @@ func TestParseStringToFloatMySQLStrtodRegressionCases(t *testing.T) {
 }
 
 func TestCompatibilityModeFromProcess(t *testing.T) {
-	require.Equal(t, SQLCompatibilityMySQL, CompatibilityModeFromProcess(nil))
+	require.Equal(t, SQLCompatibilityMatrixOne, SQLCompatibilityMode(0))
+	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(nil))
 
 	proc := testutil.NewProcess(t)
+	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(proc))
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	require.Equal(t, SQLCompatibilityMySQL, CompatibilityModeFromProcess(proc))
 	proc.GetSessionInfo().MatrixOneNativeMode = true
 	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(proc))
+	proc.GetSessionInfo().MatrixOneNativeMode = false
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = false
+	proc.GetSessionInfo().LegacyNumericCompatibilityMode = true
+	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(proc),
+		"a pre-contract remote payload remains strict until an explicit compatibility opt-in")
+	proc.GetSessionInfo().MatrixOneNativeMode = true
+	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(proc),
+		"native mode still wins over legacy compatibility")
+}
+
+func TestPreparedStringToFloatRequiresExplicitCompatibilityMode(t *testing.T) {
+	_, err := ParsePreparedStringToFloat64WithMode("1.5tail", SQLCompatibilityMatrixOne)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+
+	got, err := ParsePreparedStringToFloat64WithMode("1.5tail", SQLCompatibilityMySQL)
+	require.NoError(t, err)
+	require.Equal(t, 1.5, got)
 }
 
 func TestMySQLDecimalPrefix(t *testing.T) {

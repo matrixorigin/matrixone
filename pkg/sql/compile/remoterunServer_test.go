@@ -1087,6 +1087,7 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
 }
 
+
 func TestMessageReceiverSendBatchPreservesGrouping(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, _ := runtime.GetGlobalVariables(rt.MOProtocolVersion)

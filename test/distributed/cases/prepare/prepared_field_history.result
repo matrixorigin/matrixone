@@ -57,6 +57,8 @@ EXECUTE p_field_history USING @field_condition, @field_value;
 ➤ f[-5,64,0]  𝄀
 2
 DEALLOCATE PREPARE p_field_history;
+SET @field_history_numeric_compat_saved_sql_mode = @@sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@field_history_numeric_compat_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''0'', ''1'', ''2'', ''-1'') AS f';
 SET @field_value = 1;
 EXECUTE p_field_history USING @field_condition, @field_value;
@@ -399,6 +401,8 @@ EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, 
 ➤ text_f[-5,64,0]  ¦  numeric_f[-5,64,0]  𝄀
 1  ¦  1
 DEALLOCATE PREPARE p_field_history;
+SET SESSION sql_mode = @field_history_numeric_compat_saved_sql_mode;
+SET @field_history_numeric_compat_saved_sql_mode = NULL;
 PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN LAG(?,0) OVER () ELSE NULL END,''A'',''a'') AS lag_f, FIELD(CASE WHEN ? THEN LEAD(?,0) OVER () ELSE NULL END,''A'',''a'') AS lead_f, FIELD(CASE WHEN ? THEN CONCAT(COALESCE(?,NULL)) ELSE NULL END,''A'',''a'') AS concat_f, FIELD(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''A'',''a'') AS lower_f, FIELD(CASE WHEN ? THEN REVERSE(COALESCE(?,NULL)) ELSE NULL END,''A'',''a'') AS reverse_f';
 SET @field_condition = 1, @field_value = NULL;
 EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;

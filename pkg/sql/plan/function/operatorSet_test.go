@@ -863,6 +863,14 @@ func TestIffConditionTruthyAt(t *testing.T) {
 		require.Equal(t, want, got)
 	}
 
+	mixedKindVec := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"0", "0"}, nil)
+	kindVec := newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{true, false}, nil)
+	for row, want := range []bool{true, false} {
+		got, err := IffConditionTruthyAt(mixedKindVec, uint64(row), SQLCompatibilityMySQL, kindVec)
+		require.NoError(t, err)
+		require.Equal(t, want, got, "the selected source kind controls string truthiness")
+	}
+
 	intVec := newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{0, -1, 9}, nil)
 	intVec.GetNulls().Add(2)
 	for row, want := range []bool{false, true, false} {
@@ -894,6 +902,35 @@ func TestIffConditionTruthyAt(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
+}
+
+func TestIffFnUsesExplicitProcessCompatibilityMode(t *testing.T) {
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"1.5tail", "abc", ""}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 11, 12}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{20, 21, 22}, nil),
+	}
+
+	strictProc := testutil.NewProcess(t)
+	strict := NewFunctionTestCase(strictProc, inputs,
+		NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), iffFn)
+	ok, info := strict.RunAndFree()
+	require.True(t, ok, info)
+
+	compatProc := testutil.NewProcess(t)
+	compatProc.GetSessionInfo().MySQLNumericCompatibilityMode = true
+	compat := NewFunctionTestCase(compatProc, inputs,
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{10, 21, 22}, nil), iffFn)
+	ok, info = compat.RunAndFree()
+	require.True(t, ok, info)
+
+	strictProc.GetSessionInfo().MatrixOneNativeMode = true
+	strictProc.GetSessionInfo().MySQLNumericCompatibilityMode = true
+	strictWithBothFlags := NewFunctionTestCase(strictProc, inputs,
+		NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), iffFn)
+	ok, info = strictWithBothFlags.RunAndFree()
+	require.True(t, ok, info)
 }
 
 func TestIffFn_StringCondition(t *testing.T) {

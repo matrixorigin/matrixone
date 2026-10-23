@@ -154,6 +154,105 @@ func TestExplicitDecimalCastDiagnosticOwnership(t *testing.T) {
 	}), "classification must reject unsupported source domains without constructing a runtime type")
 }
 
+func TestExplicitDecimalCastRecognizesNumericValuePolicy(t *testing.T) {
+	decimal := plan.Type{Id: int32(types.T_decimal64), Width: 18, Scale: 2}
+	makeCast := func(policy int32) *plan.Expr {
+		return &plan.Expr{
+			Typ: decimal,
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: EncodeOverloadID(CAST, NumericValueCastOverload), ObjName: "cast"},
+				Args: []*plan.Expr{
+					{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+					{Typ: decimal, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+					{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+					{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: policy}}}},
+				},
+			}},
+		}
+	}
+
+	explicit := makeCast(NumericValueCastPolicyExplicit)
+	require.True(t, IsExplicitDecimalCast(explicit))
+	require.True(t, ContainsRowScopedConversion(explicit))
+	require.False(t, IsExplicitDecimalCast(makeCast(NumericValueCastPolicyOrdinary)))
+
+	wrongTarget := makeCast(NumericValueCastPolicyExplicit)
+	wrongTarget.GetF().Args[1].Typ.Scale++
+	require.False(t, IsExplicitDecimalCast(wrongTarget), "policy metadata cannot make a mismatched target explicit")
+
+	missingPolicy := makeCast(NumericValueCastPolicyExplicit)
+	missingPolicy.GetF().Args = missingPolicy.GetF().Args[:3]
+	require.False(t, IsExplicitDecimalCast(missingPolicy))
+}
+
+func TestStatementDiagnosticRecognizesCompleteNumericValueOwner(t *testing.T) {
+	typ := func(oid types.T, width, scale int32) plan.Type {
+		return plan.Type{Id: int32(oid), Width: width, Scale: scale}
+	}
+	i64 := func(value int64) *plan.Expr {
+		return &plan.Expr{Typ: typ(types.T_int64, 0, 0), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: value}}}}
+	}
+	parameter := func(oid types.T, position int32) *plan.Expr {
+		return &plan.Expr{Typ: typ(oid, 0, 0), Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: position}}}
+	}
+	owner := func(source, sourceKind *plan.Expr, target plan.Type, policy int32) *plan.Expr {
+		const scope int64 = 42
+		scopeExpr := i64(scope)
+		valueSlot, kindSlot := i64(0), i64(1)
+		definitionArgs := []*plan.Expr{scopeExpr, source}
+		if sourceKind != nil {
+			definitionArgs = append(definitionArgs, sourceKind)
+		}
+		definition := &plan.Expr{Typ: source.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: EncodeOverloadID(SCALAR_PROGRAM, 0), ObjName: "_scalar_numeric_program"},
+			Args: definitionArgs,
+		}}}
+		valueRef := &plan.Expr{Typ: source.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: EncodeOverloadID(SCALAR_PROGRAM_REF, 0), ObjName: "_scalar_numeric_program_ref"},
+			Args: []*plan.Expr{definition, scopeExpr, valueSlot},
+		}}}
+		kindRef := &plan.Expr{Typ: typ(types.T_bool, 0, 0), Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: EncodeOverloadID(SCALAR_PROGRAM_REF, 0), ObjName: "_scalar_numeric_program_ref"},
+			Args: []*plan.Expr{scopeExpr, kindSlot},
+		}}}
+		return &plan.Expr{Typ: target, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: EncodeOverloadID(CAST, NumericValueCastOverload), ObjName: "cast"},
+			Args: []*plan.Expr{
+				valueRef,
+				{Typ: target, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+				kindRef,
+				{Typ: typ(types.T_int32, 0, 0), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: policy}}}},
+			},
+		}}}
+	}
+
+	decimal := typ(types.T_decimal256, 39, 4)
+	ordinary := owner(parameter(types.T_varchar, 0), parameter(types.T_bool, 1), decimal, NumericValueCastPolicyOrdinary)
+	require.True(t, IsStatementConstantInput(ordinary), "a complete CAST9 may depend on frozen EXECUTE-time value and kind inputs")
+	require.True(t, MayDiagnoseStatementParameter(ordinary), "ordinary numeric prefix conversion keeps its statement diagnostic owner")
+
+	explicit := owner(parameter(types.T_varchar, 0), parameter(types.T_bool, 1), decimal, NumericValueCastPolicyExplicit)
+	require.True(t, IsStatementConstantInput(explicit))
+	require.True(t, IsExplicitDecimalCast(explicit))
+	require.True(t, ContainsRowScopedConversion(explicit))
+	require.False(t, MayDiagnoseStatementParameter(explicit), "explicit decimal range diagnostics stay row-scoped")
+
+	require.False(t, IsStatementConstantInput(ordinary.GetF().Args[0]), "a standalone private REF is not a statement-constant owner")
+	unknownOverload := ordinary
+	unknownOverload.GetF().Func.Obj = EncodeOverloadID(CAST, NumericValueCastOverload+1)
+	require.False(t, IsStatementConstantInput(unknownOverload))
+	unknownDefinition := owner(parameter(types.T_varchar, 0), parameter(types.T_bool, 1), decimal, NumericValueCastPolicyOrdinary)
+	unknownDefinition.GetF().Args[0].GetF().Args[0].GetF().Func.Obj = EncodeOverloadID(SCALAR_PROGRAM, 1)
+	require.False(t, IsStatementConstantInput(unknownDefinition), "unknown private overloads cannot establish source identity")
+
+	rand, err := GetFunctionByName(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	volatile := &plan.Expr{Typ: typ(types.T_float64, 0, 0), Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
+		Obj: rand.GetEncodedOverloadID(), ObjName: "rand",
+	}}}}
+	require.False(t, IsStatementConstantInput(owner(volatile, nil, decimal, NumericValueCastPolicyOrdinary)))
+}
+
 func diagnosticTestCall(t *testing.T, name string, kinds ...types.T) *plan.Expr {
 	t.Helper()
 	args := make([]*plan.Expr, len(kinds))

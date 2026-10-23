@@ -109,7 +109,18 @@ func TestPreparedProjectedExplicitCastDomain(t *testing.T) {
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
 	originalSource := findPlanFunctionExpr(original, "hex").GetF().Args[0].GetF().Args[0]
-	require.True(t, originalSource.GetPreparedNumeric().GetProjectedCommonValue())
+	require.Equal(t, int32(types.T_float64), originalSource.Typ.Id)
+	originalProducer := findPlanFunctionExpr(original, "cast")
+	require.NotNil(t, originalProducer)
+	originalCast := originalProducer.GetF()
+	require.NotNil(t, originalCast)
+	originalCastID, originalCastOverload := planfunction.DecodeOverloadID(originalCast.Func.Obj)
+	require.Equal(t, int32(planfunction.CAST), originalCastID)
+	require.Equal(t, planfunction.NumericValueCastOverload, originalCastOverload)
+	require.Equal(t, int32(types.T_float64), originalProducer.Typ.Id)
+	require.Len(t, originalCast.Args, 4)
+	require.Equal(t, int32(types.T_bool), originalCast.Args[2].Typ.Id)
+	require.Equal(t, int32(1), originalCast.Args[3].GetLit().GetI32Val(), "the original explicit-cast policy must survive lowering")
 	bound, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, []any{
 		ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true},
 	})
@@ -117,13 +128,30 @@ func TestPreparedProjectedExplicitCastDomain(t *testing.T) {
 	hexExpr := findPlanFunctionExpr(bound, "hex")
 	require.NotNil(t, hexExpr)
 	boundSource := hexExpr.GetF().Args[0].GetF().Args[0]
-	require.True(t, boundSource.GetPreparedNumeric().GetProjectedCommonValue())
 	require.Equal(t, int32(types.T_float64), boundSource.Typ.Id)
+	boundProducer := findPlanFunctionExpr(bound, "cast")
+	require.NotNil(t, boundProducer)
+	boundCast := boundProducer.GetF()
+	require.NotNil(t, boundCast)
+	boundCastID, boundCastOverload := planfunction.DecodeOverloadID(boundCast.Func.Obj)
+	require.Equal(t, int32(planfunction.CAST), boundCastID)
+	require.Equal(t, planfunction.NumericValueCastOverload, boundCastOverload)
+	require.Equal(t, int32(types.T_float64), boundProducer.Typ.Id)
+	require.Len(t, boundCast.Args, 4)
+	require.Equal(t, int32(types.T_bool), boundCast.Args[2].Typ.Id)
+	require.True(t, sameNumericValueProgramScope(boundCast.Args[0], boundCast.Args[2]),
+		"the explicit cast must consume the BOOL companion from its own source program")
+	require.Equal(t, int32(1), boundCast.Args[3].GetLit().GetI32Val(), "the original explicit-cast policy must survive execute-time refresh")
 	proc := testutil.NewProcess(t)
 	executor, err := colexec.NewExpressionExecutor(proc, hexExpr)
 	require.NoError(t, err)
 	defer executor.Free()
-	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], float64(1.5), false, proc.Mp()))
+	input.SetRowCount(1)
+	defer input.Clean(proc.Mp())
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
 	require.Equal(t, "2", string(result.GetBytesAt(0)))
 }
@@ -162,7 +190,11 @@ func TestPreparedGroupedIfnullSourceDomain(t *testing.T) {
 	require.NoError(t, err)
 	charExpr := findPlanFunctionExpr(bound, "char")
 	require.NotNil(t, charExpr)
-	commonValue := charExpr.GetF().Args[0].GetF().Args[0]
+	castExpr := charExpr.GetF().Args[0]
+	require.NotNil(t, castExpr.GetF())
+	commonValue, private := numericValueProgramSourceOwner(castExpr.GetF().Args[0])
+	require.True(t, private, "the common value must be read through the validated slot-zero owner")
+	require.NotNil(t, commonValue)
 	require.True(t, commonValue.GetPreparedNumeric().GetIfnullCommonValue())
 	require.Equal(t, int32(types.T_float64), commonValue.Typ.Id)
 }
@@ -2339,9 +2371,11 @@ func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	result := filled.GetQuery().Nodes[0].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal64), result.Typ.Id)
 	boundArg := result.GetF().Args[0]
-	require.Equal(t, int64(-15), boundArg.GetLit().GetDecimal64Val().A)
-	require.Nil(t, boundArg.GetF())
-	require.Equal(t, int32(types.T_decimal64), boundArg.Typ.Id)
+	boundSource, ok := numericProgramRawValue(boundArg)
+	require.True(t, ok)
+	require.Equal(t, int64(-15), boundSource.GetLit().GetDecimal64Val().A)
+	require.Nil(t, boundSource.GetF())
+	require.Equal(t, int32(types.T_decimal64), boundSource.Typ.Id)
 
 	stringFilled, err := FillValuesOfParamsInPlan(ctx, query, []any{ParamValue{
 		Value:          "-1.5",
@@ -2351,8 +2385,12 @@ func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	require.NoError(t, err)
 	stringResult := stringFilled.GetQuery().Nodes[0].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal64), stringResult.Typ.Id)
-	require.Nil(t, stringResult.GetF().Args[0].GetF())
-	require.Equal(t, int64(-15), stringResult.GetF().Args[0].GetLit().GetDecimal64Val().A)
+	stringSource := stringResult.GetF().Args[0]
+	if raw, ok := numericProgramRawValue(stringSource); ok {
+		stringSource = raw
+	}
+	require.Nil(t, stringSource.GetF())
+	require.Equal(t, int64(-15), stringSource.GetLit().GetDecimal64Val().A)
 
 	sleepParam, err := BindFuncExprImplByPlanExpr(ctx, "sleep", []*planpb.Expr{param()})
 	require.NoError(t, err)
@@ -2645,6 +2683,59 @@ func TestFillValuesOfParamsInstallsValueOnlyNumericSourceRewrite(t *testing.T) {
 			precisionLiteral := precisionCast.Args[0].GetLit()
 			require.NotNil(t, precisionLiteral, result.String())
 			require.True(t, precisionLiteral.GetBval(), result.String())
+		})
+	}
+}
+
+func TestFillValuesOfParamsMaterializesNativePrecisionSources(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"round", "truncate"} {
+		t.Run(name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+				"prepare stmt_native_precision from 'select "+name+"(1.25, ?)'")
+			require.NoError(t, err)
+			for _, test := range []struct {
+				name     string
+				value    ParamValue
+				wantCast bool
+			}{
+				{
+					name:     "boolean",
+					value:    ParamValue{Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true},
+					wantCast: true,
+				},
+				{
+					name:  "integer",
+					value: ParamValue{Value: "2", SourceType: types.T_int64.ToType(), HasSourceType: true},
+				},
+				{
+					name:     "decimal",
+					value:    ParamValue{Value: "1.5", SourceType: types.New(types.T_decimal64, 4, 1), HasSourceType: true},
+					wantCast: true,
+				},
+				{
+					name:     "float",
+					value:    ParamValue{Value: "1.5", SourceType: types.T_float64.ToType(), HasSourceType: true},
+					wantCast: true,
+				},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					filled, specialized, fillErr := FillValuesOfParamsInPlanWithSpecialization(
+						ctx, prepared.GetDcl().GetPrepare().Plan, []any{test.value})
+					require.NoError(t, fillErr)
+					require.True(t, specialized, filled.String())
+					result := findPlanFunctionExpr(filled, name)
+					require.NotNil(t, result, filled.String())
+					precision := result.GetF().Args[1]
+					require.Equal(t, int32(types.T_int64), precision.Typ.Id, result.String())
+					if test.wantCast {
+						cast := precision.GetF()
+						require.NotNil(t, cast, result.String())
+						require.Equal(t, "cast", cast.GetFunc().GetObjName(), result.String())
+						require.NotNil(t, cast.Args[0].GetLit(), result.String())
+					}
+				})
+			}
 		})
 	}
 }
@@ -3158,11 +3249,39 @@ func TestFillValuesOfParamsSpecializationTracksBinaryExecutionDomains(t *testing
 		}},
 	}}}
 
-	_, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+	filledQuery, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
 		ParamValue{Value: "-1.5", IsBinaryProtocol: true},
 	})
 	require.NoError(t, err)
-	require.True(t, specialized, "COM_STMT text numeric values must rebind ABS")
+	proc := testutil.NewProcess(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("-1.5"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+	cachedResult, freeCached, evalErr := colexec.GetReadonlyResultFromExpression(proc, absExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, evalErr)
+	defer freeCached()
+	filledExpr := findPlanFunctionExpr(filledQuery, "abs")
+	filledResult, freeFilled, evalErr := colexec.GetReadonlyResultFromExpression(proc, filledExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, evalErr)
+	defer freeFilled()
+	require.False(t, specialized, "a complete COM_STMT numeric string keeps the cached FLOAT64 ABS plan")
+	require.Equal(t, types.T_float64, cachedResult.GetType().Oid)
+	require.Equal(t, types.T_float64, filledResult.GetType().Oid)
+	require.Equal(t, float64(1.5), vector.GetFixedAtNoTypeCheck[float64](cachedResult, 0))
+	require.Equal(t, float64(1.5), vector.GetFixedAtNoTypeCheck[float64](filledResult, 0))
+
+	integerFilled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+		ParamValue{Value: "9007199254740993", IsBinaryProtocol: true, RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized, "an exact COM_STMT INT64 value must select the integer ABS overload")
+	integerAbs := findPlanFunctionExpr(integerFilled, "abs")
+	require.Equal(t, int32(types.T_int64), integerAbs.Typ.Id)
+	integerResult, freeInteger, evalErr := colexec.GetReadonlyResultFromExpression(proc, integerAbs, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, evalErr)
+	defer freeInteger()
+	require.Equal(t, int64(9007199254740993), vector.GetFixedAtNoTypeCheck[int64](integerResult, 0))
 
 	sleepExpr, err := BindFuncExprImplByPlanExpr(ctx, "sleep", []*planpb.Expr{param()})
 	require.NoError(t, err)

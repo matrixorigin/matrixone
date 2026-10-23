@@ -170,7 +170,7 @@ func (builder *QueryBuilder) singletonProjectedPeerExpression(node *plan.Node, p
 		return nil, false
 	}
 	resolved := replaceColumnsForExpr(DeepCopyExpr(peer), projections)
-	return resolved, function.IsStatementConstantInput(resolved)
+	return resolved, isStatementConstantNumericValueExpression(resolved)
 }
 
 func (builder *QueryBuilder) singletonProjectedFloatValue(node *plan.Node, expr *plan.Expr) (float64, bool) {
@@ -192,7 +192,10 @@ func (builder *QueryBuilder) singletonProjectedFloatValue(node *plan.Node, expr 
 }
 
 func (builder *QueryBuilder) preparedIntegerPeerWitness(node *plan.Node, peer *plan.Expr) (*plan.Expr, bool) {
-	if function.ContainsParameter(peer) && function.IsStatementConstantInput(peer) {
+	if function.ContainsParameter(peer) && isStatementConstantNumericValueExpression(peer) {
+		// Keep the complete paired owner as the proof witness. The caller
+		// evaluates it through the normal executor-backed conversion path,
+		// which retains warning, NULL, and exactness checks.
 		return peer, true
 	}
 	resolved, ok := builder.singletonProjectedPeerExpression(node, peer)

@@ -25,6 +25,47 @@ import (
 type internalExecutorSessionKey struct{}
 type internalExecutorCompilerContextKey struct{}
 type internalExecutorRewriteOptionKey struct{}
+type internalExecutorSessionModeSnapshotKey struct{}
+
+type internalExecutorSessionModeSnapshot struct {
+	matrixOneNativeMode           bool
+	mySQLNumericCompatibilityMode bool
+}
+
+// withInternalExecutorSessionModeSnapshot captures only the statement policy
+// flags needed by internal SQL planning. The value is copied into the context
+// so later session changes cannot alter an already-started internal statement.
+func withInternalExecutorSessionModeSnapshot(
+	ctx context.Context,
+	info *process.SessionInfo,
+) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if info == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, internalExecutorSessionModeSnapshotKey{}, internalExecutorSessionModeSnapshot{
+		matrixOneNativeMode:           info.MatrixOneNativeMode,
+		mySQLNumericCompatibilityMode: info.MySQLNumericCompatibilityMode,
+	})
+}
+
+// applyInternalExecutorSessionModeSnapshot initializes a fresh internal
+// process from the caller's captured statement policy. When no snapshot is
+// present, the process keeps its strict-default mode flags.
+func applyInternalExecutorSessionModeSnapshot(ctx context.Context, proc *process.Process) {
+	if ctx == nil || proc == nil || proc.Base == nil {
+		return
+	}
+	snapshot, ok := ctx.Value(internalExecutorSessionModeSnapshotKey{}).(internalExecutorSessionModeSnapshot)
+	if !ok {
+		return
+	}
+	info := proc.GetSessionInfo()
+	info.MatrixOneNativeMode = snapshot.matrixOneNativeMode
+	info.MySQLNumericCompatibilityMode = snapshot.mySQLNumericCompatibilityMode
+}
 
 // internalExecutorPrivilegeCheckKey toggles internal SQL auth behavior:
 // absent -> bypass as internal executor; present -> run normal auth checks.

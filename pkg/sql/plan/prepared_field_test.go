@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,6 +76,33 @@ func TestPreparedFieldResolvedStringDomain(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestPreparedFieldSeedRecognizesNumericValueCastOwner(t *testing.T) {
+	ctx := context.Background()
+	makeCast := func(position int32, targetType types.Type, policy int32) *Expr {
+		source := &Expr{Typ: makeSimplePlan2Type(types.T_text), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: position}}}
+		value, kind, err := makeNumericValueProgramOutputs(ctx, source)
+		require.NoError(t, err)
+		cast, err := appendNumericValueCastWithKind(ctx, value, kind, makePlan2Type(&targetType), policy)
+		require.NoError(t, err)
+		return cast
+	}
+	decimal := types.New(types.T_decimal256, 39, 4)
+	ordinaryType := types.T_int64.ToType()
+	plan := &Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Steps: []int32{0},
+		Nodes: []*planpb.Node{{NodeType: planpb.Node_PROJECT, ProjectList: []*Expr{
+			makeCast(0, decimal, function.NumericValueCastPolicyExplicit),
+			makeCast(1, ordinaryType, function.NumericValueCastPolicyOrdinary),
+		}}},
+	}}}
+	binding := &preparedFieldTypeBinding{params: make(map[int32]preparedFieldParameter)}
+	binding.seedParameters(plan)
+	require.Equal(t, decimal, binding.params[0].typ)
+	require.True(t, binding.params[0].inherited, "the outer explicit numeric CAST contract must remain pinned")
+	require.Equal(t, ordinaryType, binding.params[1].typ)
+	require.False(t, binding.params[1].inherited, "an implicit numeric consumer must remain eligible for reprepare")
 }
 
 func TestFieldResolvedSelectorStringDomain(t *testing.T) {

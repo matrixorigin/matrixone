@@ -2894,8 +2894,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 		for _, col := range tableDef.Cols {
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil && updateExprs[col.Name] == nil {
-				newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
-				err = replaceFuncId(builder.GetContext(), newDefExpr)
+				newDefExpr, err := importPersistedExpr(builder.GetContext(), col.OnUpdate.Expr)
 				if err != nil {
 					return 0, err
 				}
@@ -2942,8 +2941,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if col.GeneratedCol == nil {
 				continue
 			}
-			genExpr, err := builder.applyGeneratedColumnAssignmentCast(
-				DeepCopyExpr(col.GeneratedCol.Expr),
+			genExpr, err := builder.importGeneratedColumnAssignmentCast(
+				col.GeneratedCol.Expr,
 				builder.isInsertIgnore,
 			)
 			if err != nil {
@@ -5521,8 +5520,8 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 
 	for _, i := range generatedColIdxs {
 		col := tableDef.Cols[i]
-		genExpr, err := builder.applyGeneratedColumnAssignmentCast(
-			DeepCopyExpr(col.GeneratedCol.Expr),
+		genExpr, err := builder.importGeneratedColumnAssignmentCast(
+			col.GeneratedCol.Expr,
 			assignmentIgnore,
 		)
 		if err != nil {

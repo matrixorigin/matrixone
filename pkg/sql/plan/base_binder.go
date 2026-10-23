@@ -211,6 +211,9 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				}
 			}
 			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+			if err == nil && !function.LegacyExplicitCast1Syntax(b.GetContext()) {
+				markSyntaxExplicitCast(expr)
+			}
 			return
 		}
 		parentParamType := b.numericParamType
@@ -249,6 +252,9 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		} else {
 			expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+		}
+		if err == nil && !function.LegacyExplicitCast1Syntax(b.GetContext()) {
+			markSyntaxExplicitCast(expr)
 		}
 
 	case *tree.BitCastExpr:
@@ -532,9 +538,9 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 	}
 	if !astExpr.System && b.numericParamType != nil {
 		// User variables are text-backed when their assignment came from a
-		// string.  Numeric expressions use MySQL's prefix conversion for such
-		// values (for example, '12abc' -> 12), rather than the strict implicit
-		// cast which rejects the trailing text.
+		// string. The explicit FLOAT64 cast keeps the execution-time
+		// compatibility decision: MySQL mode consumes a prefix (for example,
+		// '12abc' -> 12), while MATRIXONE_NATIVE rejects the trailing text.
 		if isStringBackedType(typ) {
 			return appendExplicitCastBeforeExpr(b.GetContext(), variable, *b.numericParamType)
 		}
@@ -579,7 +585,8 @@ func (b *baseBinder) resolveUserVariableType(expr *tree.VarExpr) (Type, bool) {
 // evaluated through one value-independent floating-point target: their
 // contents can change after PREPARE, so selecting BIGINT/DECIMAL from the
 // value observed during binding would freeze the wrong cast in the prepared
-// plan. The explicit cast overload consumes MySQL's numeric prefix at runtime.
+// plan. The explicit cast overload applies the effective MySQL/native
+// compatibility mode at runtime.
 func (b *baseBinder) resolveUserVariableNumericType(expr *tree.VarExpr) (Type, bool) {
 	if typ, ok := b.resolveUserVariableType(expr); ok {
 		resolved := makeTypeByPlan2Type(typ)
@@ -1361,10 +1368,11 @@ type numericAstTypeScan struct {
 	hasParamRef bool
 	// String markers enter arithmetic as numeric values, but an integer peer
 	// alone must not turn their default approximate domain into BIGINT.
-	hasStringParam bool
-	hasVar         bool
-	hasUnknown     bool
-	incompatible   bool
+	hasStringParam       bool
+	hasBinaryStringParam bool
+	hasVar               bool
+	hasUnknown           bool
+	incompatible         bool
 }
 
 func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
@@ -1374,6 +1382,7 @@ func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
 	s.hasParam = s.hasParam || other.hasParam
 	s.hasParamRef = s.hasParamRef || other.hasParamRef
 	s.hasStringParam = s.hasStringParam || other.hasStringParam
+	s.hasBinaryStringParam = s.hasBinaryStringParam || other.hasBinaryStringParam
 	s.hasVar = s.hasVar || other.hasVar
 	s.hasUnknown = s.hasUnknown || other.hasUnknown
 	s.incompatible = s.incompatible || other.incompatible
@@ -1508,7 +1517,11 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 				// A string source remains a string outside numeric arithmetic.
 				// Here its value needs the surrounding numeric domain, not the
 				// string/string CONCAT overload of '+'.
-				scan := numericAstTypeScan{hasParam: true, hasParamRef: true, hasStringParam: true}
+				scan := numericAstTypeScan{
+					hasParam: true, hasParamRef: true, hasStringParam: true,
+					hasBinaryStringParam: !preparedRoundTruncateTextSourceEligible(
+						b.GetContext(), int(expr.Offset-1), binding),
+				}
 				if typ, ok := preparedExactNumericStringType(b.GetContext(), expr.Offset-1); ok && typ.Oid.IsDecimal() {
 					// Exact decimal text can participate in an exact arithmetic
 					// context. The helper keeps every lexical decision out of the
@@ -1584,6 +1597,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 		}
 		scan.hasParam = source.hasParam
 		scan.hasParamRef = source.hasParamRef
+		scan.hasBinaryStringParam = source.hasBinaryStringParam
 		scan.hasVar = source.hasVar
 		return scan, nil
 	case *tree.BitCastExpr:
@@ -1598,6 +1612,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 		}
 		scan.hasParam = source.hasParam
 		scan.hasParamRef = source.hasParamRef
+		scan.hasBinaryStringParam = source.hasBinaryStringParam
 		scan.hasVar = source.hasVar
 		return scan, nil
 	case *tree.NumVal:
@@ -1641,6 +1656,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 					}
 					scan.hasParam = scan.hasParam || argScan.hasParam
 					scan.hasParamRef = scan.hasParamRef || argScan.hasParamRef
+					scan.hasBinaryStringParam = scan.hasBinaryStringParam || argScan.hasBinaryStringParam
 					scan.hasVar = scan.hasVar || argScan.hasVar
 				}
 				return scan, nil
@@ -1653,6 +1669,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 				}
 				scan.hasParam = scan.hasParam || argScan.hasParam
 				scan.hasParamRef = scan.hasParamRef || argScan.hasParamRef
+				scan.hasBinaryStringParam = scan.hasBinaryStringParam || argScan.hasBinaryStringParam
 				scan.hasVar = scan.hasVar || argScan.hasVar
 			}
 			return scan, nil
@@ -1673,6 +1690,7 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 			}
 			scan.hasParam = scan.hasParam || argScan.hasParam
 			scan.hasParamRef = scan.hasParamRef || argScan.hasParamRef
+			scan.hasBinaryStringParam = scan.hasBinaryStringParam || argScan.hasBinaryStringParam
 			scan.hasVar = scan.hasVar || argScan.hasVar
 		}
 		return scan, nil
@@ -2291,17 +2309,19 @@ func (b *baseBinder) resolveNumericFunctionArgs(
 }
 
 func supportsGenericNumericFunctionContext(name string) bool {
-	switch name {
-	// These functions' value arguments are in the same numeric domain as their
-	// result. A numeric return type alone is insufficient: FIELD, LENGTH and
-	// similar functions return numbers while their arguments belong to another
-	// domain.
-	case "abs", "ceil", "ceiling", "floor", "round", "truncate", "sign",
-		"sqrt", "power", "pow", "exp", "ln", "log", "log2", "log10":
-		return true
-	default:
+	// A numeric return type alone is insufficient: FIELD, LENGTH and similar
+	// functions return numbers while their arguments belong to another domain.
+	return function.HasGenericNumericValueContext(name)
+}
+
+// preparedStringMathFunctionValueArg reports a registry-declared numeric
+// value operand. Precision/control arguments such as ROUND's second operand
+// remain under their separate integer-argument contract.
+func preparedStringMathFunctionValueArg(name string, argIndex, argCount int) bool {
+	if argIndex < 0 || argIndex >= argCount {
 		return false
 	}
+	return function.IsNumericValueArgument(name, argIndex)
 }
 
 func isNumericContextFunction(name string) bool {
@@ -2406,6 +2426,15 @@ func mysqlNumericPrefixFunctionArg(name string, idx, argCount int, source, targe
 		return false
 	}
 
+	if function.IsNumericValueArgument(name, idx) {
+		// String-valued operands of these numeric functions are deliberately
+		// bound through the comparison cast.  NewCast is intentionally strict
+		// for ordinary implicit reconciliation, whereas NewComparisonCast is
+		// the execution path that carries MySQL's numeric-prefix behavior and
+		// consults MATRIXONE_NATIVE at runtime.  Only value operands are
+		// eligible; ROUND/TRUNCATE precision remains an integer control input.
+		return true
+	}
 	switch strings.ToLower(name) {
 	case "left", "right", "lpad", "rpad", "repeat":
 		return idx == 1 && argCount >= 2
@@ -3298,6 +3327,7 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 			}
 		}
 	}
+	markPreparedMathFallback := false
 	if strings.EqualFold(funcName, "grouping") {
 		return b.bindGroupingFuncExpr(astExpr)
 	}
@@ -3305,7 +3335,17 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return b.bindGenericFunctionExpr(funcName, astExpr.Exprs, depth)
 	}
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
-		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+		expr, err := b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+		if err != nil {
+			return nil, err
+		}
+		if b.builder != nil && b.builder.isPrepareStatement {
+			hasPreparedParam := hasDirectPreparedNumericParamExprs(astExpr.Exprs)
+			if hasPreparedParam {
+				b.markPreparedNumericFallback(expr)
+			}
+		}
+		return expr, nil
 	}
 	if supportsGenericNumericFunctionContext(strings.ToLower(funcName)) &&
 		mysqlSpecialTypeInExprs(b, astExpr.Exprs) {
@@ -3352,6 +3392,15 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 				return b.bindPreparedGetLockFuncExpr(astExpr.Exprs, depth)
 			}
 		}
+		if targets, ok := preparedMathFunctionTargets(funcName, len(astExpr.Exprs)); ok {
+			hasPreparedParam := hasDirectPreparedNumericParamExprs(astExpr.Exprs)
+			if hasPreparedParam {
+				if b.numericParamType == nil {
+					return b.bindPreparedMathFuncExpr(funcName, astExpr.Exprs, depth, targets)
+				}
+				markPreparedMathFallback = true
+			}
+		}
 		if target, ok := preparedNumericFunctionTarget(funcName, len(astExpr.Exprs)); ok && target != nil &&
 			(strings.EqualFold(funcName, "abs") || strings.EqualFold(funcName, "sign") ||
 				strings.EqualFold(funcName, "sleep") || strings.EqualFold(funcName, "char")) {
@@ -3383,6 +3432,9 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 	if err == nil && strings.EqualFold(funcName, "json_merge") {
 		appendJSONMergeWarning(b.GetContext(), astExpr)
+	}
+	if err == nil && markPreparedMathFallback {
+		b.markPreparedNumericFallback(expr)
 	}
 	return expr, err
 }
@@ -3435,7 +3487,8 @@ func (b *baseBinder) bindPreparedNumericPrecisionFuncExpr(
 			if !known && binding.Type.IsNumeric() {
 				runtimeType, known = binding.Type, true
 			}
-			if !known && binding.Type.Oid.IsMySQLString() {
+			if !known && preparedRoundTruncateTextSourceEligible(
+				b.GetContext(), int(projectedPosition), binding) {
 				runtimeType, known = preparedExactNumericStringType(b.GetContext(), int(projectedPosition))
 			}
 			if !known && binding.Type.Oid.IsMySQLString() {
@@ -3458,7 +3511,8 @@ func (b *baseBinder) bindPreparedNumericPrecisionFuncExpr(
 			if !hasRuntimeType && binding.Type.IsNumeric() {
 				runtimeType, hasRuntimeType = binding.Type, true
 			}
-			if !hasRuntimeType && binding.Type.Oid.IsMySQLString() {
+			if !hasRuntimeType && preparedRoundTruncateTextSourceEligible(
+				b.GetContext(), int(param.Offset-1), binding) {
 				runtimeType, hasRuntimeType = preparedExactNumericStringType(
 					b.GetContext(), int(param.Offset-1))
 			}
@@ -3480,7 +3534,8 @@ func (b *baseBinder) bindPreparedNumericPrecisionFuncExpr(
 				if scanErr != nil {
 					return nil, scanErr
 				}
-				if scan.hasStringParam && len(scan.weakDecimals) == 1 && len(scan.strong) == 0 {
+				if scan.hasStringParam && !scan.hasBinaryStringParam &&
+					len(scan.weakDecimals) == 1 && len(scan.strong) == 0 {
 					target = scan.weakDecimals[0]
 					exactScalar = true
 				}
@@ -3749,6 +3804,15 @@ func (b *baseBinder) preparedProjectedParamPosition(expr *Expr) (int32, bool) {
 		b.builder.qry, nodeID, col.ColPos, make(map[preparedSetOperationNullKey]bool), false)
 }
 
+func hasDirectPreparedNumericParamExprs(exprs []tree.Expr) bool {
+	for _, expr := range exprs {
+		if _, ok := unwrapParenExpr(expr).(*tree.ParamExpr); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func isPreparedNumericAggregate(name string, argCount int) bool {
 	return argCount == 1 && (strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg"))
 }
@@ -3788,6 +3852,64 @@ func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
 		return &target, true
 	}
 	return nil, false
+}
+
+// preparedMathFunctionTargets gives ambiguous prepared math arguments a
+// temporary domain that is broad enough to build a cached plan. The resulting
+// expression is rebound when EXECUTE supplies the actual parameter domain.
+func preparedMathFunctionTargets(name string, argCount int) ([]*Type, bool) {
+	floatType := types.T_float64.ToType()
+	integerType := types.T_int64.ToType()
+	floatTarget := makePlan2Type(&floatType)
+	integerTarget := makePlan2Type(&integerType)
+	switch strings.ToLower(name) {
+	case "sign":
+		if argCount == 1 {
+			return []*Type{&floatTarget}, true
+		}
+	case "ceil", "ceiling", "floor", "round", "truncate":
+		switch argCount {
+		case 1:
+			return []*Type{&floatTarget}, true
+		case 2:
+			return []*Type{&floatTarget, &integerTarget}, true
+		}
+	}
+	return nil, false
+}
+
+func (b *baseBinder) bindPreparedMathFuncExpr(
+	name string,
+	astArgs []tree.Expr,
+	depth int32,
+	targets []*Type,
+) (*plan.Expr, error) {
+	args := make([]*plan.Expr, len(astArgs))
+	for i, arg := range astArgs {
+		var bound *plan.Expr
+		var err error
+		if target, ordinaryPrecision := function.IntegerArgumentOrdinaryCastTarget(name, i); ordinaryPrecision {
+			bound, err = b.bindOrdinaryMathPrecisionAst(arg, depth, target, name, i)
+		} else {
+			bound, err = b.bindNumericExprWithContext(arg, depth, targets[i])
+		}
+		if err != nil {
+			return nil, err
+		}
+		args[i] = bound
+	}
+	expr, err := bindBoundFuncExprAndConstFoldWithObserver(
+		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+		b.observeExpressionProtocol,
+	)
+	if err != nil {
+		return nil, err
+	}
+	// The marker belongs to the whole function, not its provisional casts. At
+	// EXECUTE this lets a VARCHAR parameter choose the dedicated string
+	// overload while integers and DECIMALs recover their native overload.
+	b.markPreparedNumericFallback(expr)
+	return expr, nil
 }
 
 func (b *baseBinder) markPreparedNumericFallback(expr *plan.Expr) {
@@ -4438,6 +4560,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 				expr, err = b.bindIntegerArgumentAst(arg, depth, target)
+			} else if target, ordinaryPrecision := function.IntegerArgumentOrdinaryCastTarget(name, idx); ordinaryPrecision {
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+				expr, err = b.bindOrdinaryMathPrecisionAst(arg, depth, target, name, idx)
 			} else if function.IntegerArgumentSourceDependent(name, idx) {
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
@@ -6471,6 +6597,7 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 		return args, nil
 	}
 	pos, declaredCollation := preparedStringDomainSourceIndex(name, len(args))
+	kindSourceArgs, _ := function.NumericValueKindArgumentPositions(name)
 	var resolver *preparedFieldStringResolver
 	result, copied := args, false
 	for i, arg := range args {
@@ -6485,6 +6612,22 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 			// Numeric roles already own source conversion. In particular,
 			// SECOND may retain a fractional string until interval normalization;
 			// consuming its binary declaration here would truncate that value.
+			continue
+		}
+		kindSourceArg := false
+		for _, position := range kindSourceArgs {
+			if position == i {
+				kindSourceArg = true
+				break
+			}
+		}
+		if preparedStringMathFunctionValueArg(name, i, len(args)) || kindSourceArg ||
+			(name == "if" && i == 0) {
+			// String-to-number functions own value conversion. An implicit
+			// declaration cast around a selected-kind consumer would erase the
+			// selected row's marker before that function owns conversion. Keep
+			// ordinary SQL CAST boundaries in the input tree; this skips only the
+			// binder's additional declaration normalization.
 			continue
 		}
 		if kind == fieldStringBinary && possibleStringDomainsForExpr(arg) == possibleStringDomainBinary {
@@ -6538,6 +6681,9 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 		converted, err := appendExplicitCastBeforeExpr(b.GetContext(), arg, target)
 		if err != nil {
 			return nil, err
+		}
+		if b.builder != nil {
+			markInferredStringDeclarationCast(converted)
 		}
 		b.rememberPreparedFieldReturnSource(converted, preparedFieldReturnSource{value: arg})
 		if !copied {
@@ -7341,6 +7487,15 @@ func bindPreparedFuncExprImplByPlanExpr(
 	args []*Expr,
 	stringDomainModes []function.StringDomainCheckMode,
 ) (*plan.Expr, error) {
+	// IF's fourth argument is the private BOOL companion emitted by numeric
+	// value lowering. It belongs to the same selected branch as the value, but
+	// the SQL binder must see the original three-argument function signature.
+	var selectedKind *Expr
+	if (strings.EqualFold(name, "if") || strings.EqualFold(name, "iff")) && len(args) == 4 &&
+		args[3] != nil && types.T(args[3].Typ.Id) == types.T_bool {
+		selectedKind = args[3]
+		args = append([]*Expr(nil), args[:3]...)
+	}
 	if stringDomainModes == nil && preparedRegexpCompatibilityStringOperandCount(name, len(args)) > 0 {
 		// PREPARE may defer compatibility for parameter-owned domains, but this
 		// path runs only after the current EXECUTE values have been bound. An
@@ -7348,8 +7503,16 @@ func bindPreparedFuncExprImplByPlanExpr(
 		// again and preserves direct-marker/domainless provenance separately.
 		stringDomainModes = make([]function.StringDomainCheckMode, len(args))
 	}
-	return bindFuncExprImplByPlanExpr(
+	rewritten, err := bindFuncExprImplByPlanExpr(
 		ctx, name, args, true, stringDomainModes, originalBoundExpr, true)
+	if err != nil || selectedKind == nil {
+		return rewritten, err
+	}
+	if fn := rewritten.GetF(); fn != nil {
+		fn.Args = append(fn.Args, selectedKind)
+		return rewritten, nil
+	}
+	return nil, moerr.NewInvalidInput(ctx, "IF kind companion lost its value-producing owner")
 }
 
 func bindFuncExprImplByPlanExpr(
@@ -8904,6 +9067,13 @@ func bindFuncExprImplByPlanExpr(
 					// correction local to CHAR instead of changing global arithmetic or
 					// cast semantics.
 					args[idx], err = appendExplicitCastBeforeExpr(ctx, args[idx], typ)
+				} else if function.IsNumericValueArgument(name, idx) &&
+					argsType[idx].Oid.IsMySQLString() && castType.IsNumeric() {
+					// Numeric functions consume a SQL scalar value plus its semantic
+					// kind. Keep the selector and kind output in one plan program so
+					// HEX/BIT rows are interpreted without vector-carried provenance.
+					args[idx], err = appendNumericValueCastBeforeExpr(
+						ctx, args[idx], typ, function.NumericValueCastPolicyComparison)
 				} else if mysqlNumericPrefixBitwiseArg(name, idx, len(args), argsType[idx], castType) ||
 					mysqlNumericPrefixFunctionArg(name, idx, len(args), argsType[idx], castType) {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)

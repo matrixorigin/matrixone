@@ -697,6 +697,9 @@ func TestFloor(t *testing.T) {
 func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
 	proc := newMemoryFunctionTestProcess(t)
 	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	// This fixture verifies the compatibility-mode zero result for malformed
+	// unmasked text; strict-default rejection is covered separately.
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 
 	for _, tc := range []struct {
 		name       string
@@ -733,16 +736,18 @@ func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
 				[]float64{0, 0}, []bool{true, true}),
 		},
 		{
-			name: "unmasked malformed value remains error",
+			name: "unmasked malformed value converts to zero",
 			input: NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{"not-a-number"}, []bool{false}),
-			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{false}),
 		},
 		{
-			name: "non-null empty string remains error",
+			name: "non-null empty string converts to zero",
 			input: NewFunctionTestInput(types.T_varchar.ToType(),
 				[]string{""}, []bool{false}),
-			expect: NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
+				[]float64{0}, []bool{false}),
 		},
 		{
 			name: "masked malformed row",

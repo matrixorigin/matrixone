@@ -1223,6 +1223,20 @@ func containsVolatileFunction(expr *plan.Expr) bool {
 		if exprImpl.F == nil || exprImpl.F.Func == nil {
 			return true
 		}
+		fid, overloadID := function.DecodeOverloadID(exprImpl.F.Func.Obj)
+		if fid == function.CAST && overloadID == function.NumericValueCastOverload {
+			source, sourceKind, ok := function.NumericValueProgramCastOwner(expr)
+			if ok {
+				return containsVolatileFunction(source) ||
+					(sourceKind != nil && containsVolatileFunction(sourceKind))
+			}
+			valueColumn, kindColumn, physical := function.NumericValueCastPhysicalColumns(expr)
+			return !physical || containsVolatileFunction(valueColumn) || containsVolatileFunction(kindColumn)
+		}
+		if fid == function.SCALAR_PROGRAM || fid == function.SCALAR_PROGRAM_REF {
+			// Standalone internal nodes have no complete value/kind owner.
+			return true
+		}
 		overload, ok := function.GetFunctionByIdWithoutError(exprImpl.F.Func.Obj)
 		if !ok || overload.CannotFold() {
 			return true

@@ -77,6 +77,9 @@ func (builder *QueryBuilder) createDependentQuery() (*Query, error) {
 		return nil, err
 	}
 	q := builder.qry
+	if err := builder.lowerNumericValueKinds(); err != nil {
+		return nil, err
+	}
 	// Normalize side ownership before physical column remapping.
 	if err := plan.WalkQueryNodes(q, func(_ int32, n *plan.Node) error {
 		if n.NodeType == plan.Node_JOIN && n.JoinType == plan.Node_RIGHT {
@@ -142,6 +145,12 @@ func (builder *QueryBuilder) createDependentQuery() (*Query, error) {
 	}
 	if err := q.ValidateCorrelation(); err != nil {
 		return nil, moerr.NewInternalErrorf(builder.GetContext(), "invalid dependent plan: %v", err)
+	}
+	if err := ValidateSelectIntoKindLayout(q); err != nil {
+		return nil, moerr.NewInternalErrorf(builder.GetContext(), "invalid SELECT INTO result kind layout: %v", err)
+	}
+	if err := stripInferredStringDeclarationCastProofs(q); err != nil {
+		return nil, err
 	}
 	return q, nil
 }

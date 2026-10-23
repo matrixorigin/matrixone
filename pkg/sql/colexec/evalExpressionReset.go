@@ -25,7 +25,7 @@ import (
 )
 
 func (expr *ColumnExpressionExecutor) ResetForNextQuery() {
-	// do nothing.
+	expr.lastValue = nil
 }
 
 func (expr *FixedVectorExpressionExecutor) ResetForNextQuery() {
@@ -101,6 +101,7 @@ func (expr *FunctionExpressionExecutor) ResetForNextQuery() {
 	// reset the function information.
 	expr.functionInformationForEval.reset()
 	expr.freeIffNullResults()
+	clear(expr.numericValueKindRows)
 
 	// reset its parameters.
 	for i, param := range expr.parameterExecutor {
@@ -429,8 +430,9 @@ func (expr *ParamExpressionExecutor) ResetForNextQuery() {
 	}
 	expr.folded = false
 	expr.foldedNull = false
+	expr.numericValueKind = false
 }
 
 func (expr *VarExpressionExecutor) ResetForNextQuery() {
-	// do nothing.
+	expr.numericValueKind = false
 }

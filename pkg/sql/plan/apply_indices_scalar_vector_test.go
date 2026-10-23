@@ -19,9 +19,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -227,9 +228,13 @@ func TestScalarVectorQueryNestedPreparedPagination(t *testing.T) {
 					expr *plan.Expr
 					want uint64
 				}{{root.Limit, limit}, {root.Offset, 1}} {
-					folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(pagination.expr), proc, false, true)
-					require.NoError(t, err)
-					require.Equal(t, pagination.want, folded.GetLit().GetU64Val())
+					func() {
+						require.NotNil(t, pagination.expr)
+						got, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, DeepCopyExpr(pagination.expr))
+						require.NoError(t, err)
+						defer free()
+						require.Equal(t, pagination.want, vector.MustFixedColWithTypeCheck[uint64](got)[0])
+					}()
 				}
 				require.Equal(t, plan.Node_VECTOR_QUERY_TOP, query.Nodes[root.Children[0]].NodeType)
 				cols := GetResultColumnsFromPlan(filled)
@@ -247,7 +252,9 @@ func TestScalarVectorQueryNestedPreparedPagination(t *testing.T) {
 func TestScalarVectorQueryHnswPreparedProvider(t *testing.T) {
 	q := scalarVectorPlanFixtureForIndex(t, `prepare p from 'select id from scalar_vector_items order by l2_distance(v,
 		(select v from scalar_vector_provider ref where ref.id=?)) limit ?'`, true)
-	require.Equal(t, plan.Node_VECTOR_QUERY_TOP, q.Nodes[q.Steps[0]].NodeType)
+	root := q.Nodes[q.Steps[0]]
+	require.Equal(t, plan.Node_VECTOR_QUERY_TOP, root.NodeType)
+	require.NotNil(t, root.Limit, "the prepared LIMIT is retained by the vector selector")
 	p := &plan.Plan{Plan: &plan.Plan_Query{Query: q}}
 	for _, params := range [][]any{{int64(1), uint64(2)}, {int64(2), uint64(0)}, {int64(3), uint64(1)}} {
 		filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), p, params)

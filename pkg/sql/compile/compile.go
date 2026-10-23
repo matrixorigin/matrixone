@@ -9763,6 +9763,9 @@ func (c *Compile) compileRecursiveCte(node *plan.Node, curNodeIdx int32) ([]*Sco
 	mergecteArg := mergecte.NewArgument().
 		WithNodeCnt(len(node.SourceStep) - 1).
 		WithDistinct(node.RecursiveUnionDistinct)
+	if node.RecursiveUnionDistinct && len(node.PhysicalEqualityKeyList) > 0 {
+		mergecteArg.KeyExprs = node.PhysicalEqualityKeyList
+	}
 	mergecteArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(mergecteArg)
 	c.anal.isFirst = false
@@ -11314,6 +11317,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = withInternalExecutorSessionModeSnapshot(ctx, c.proc.GetSessionInfo())
 	// Ensure ParameterUnit is available in ctx for downstream helpers which call config.GetParameterUnit(ctx)
 	if ctx.Value(config.ParameterUnitKey) == nil {
 		if v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables("parameter-unit"); ok {

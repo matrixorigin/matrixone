@@ -41,6 +41,14 @@ type recursiveCursor struct {
 	marker       batch.Batch
 }
 
+func recursiveMergeCTEArgument(node *plan.Node) *mergecte.MergeCTE {
+	arg := mergecte.NewArgument().WithNodeCnt(len(node.SourceStep) - 1).WithDistinct(node.RecursiveUnionDistinct)
+	if node.RecursiveUnionDistinct && len(node.PhysicalEqualityKeyList) > 0 {
+		arg.KeyExprs = node.PhysicalEqualityKeyList
+	}
+	return arg
+}
+
 func (c *cursor) openRecursive() (*recursiveCursor, error) {
 	r := c.region
 	n := c.template.node
@@ -63,7 +71,7 @@ func (c *cursor) openRecursive() (*recursiveCursor, error) {
 	}
 	var err error
 	state.kernel, err = openKernel(r.proc, func(p *process.Process, ports []*DemandInput) (vm.Operator, error) {
-		op := mergecte.NewArgument().WithNodeCnt(len(n.SourceStep) - 1).WithDistinct(n.RecursiveUnionDistinct)
+		op := recursiveMergeCTEArgument(n)
 		op.SetAnalyzeControl(int(n.NodeId), false)
 		for _, port := range ports {
 			port.SetIdx(int(n.NodeId))

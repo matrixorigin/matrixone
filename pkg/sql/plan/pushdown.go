@@ -15,10 +15,12 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -278,8 +280,328 @@ func increaseNodeTagCnt(node *plan.Node, inc int, tagCnt map[int32]int) {
 const maxVectorIndexTopPushdownLimit = uint64(^uint(0) >> 1)
 
 func (builder *QueryBuilder) filterPushdownBarrier(expr *plan.Expr) bool {
-	return ContainsVolatileFunction(expr) ||
-		builder.containsStatementInvariantFilterDiagnostic(expr)
+	if ContainsVolatileFunction(expr) && !builder.filterHasSafeClosedNumericProgram(expr) {
+		return true
+	}
+	return builder.containsStatementInvariantFilterDiagnostic(expr)
+}
+
+// filterHasSafeClosedNumericProgram is a filter-local exception to the global
+// volatility predicate. A projected numeric-value program is safe to move
+// only when the filter itself supplies a complete, validated REF0/REF1 owner,
+// the owner is used through eager comparison/CAST operands, and every source
+// expression is deterministic. Standalone refs and lazy selector paths remain
+// barriers.
+func (builder *QueryBuilder) filterHasSafeClosedNumericProgram(expr *plan.Expr) bool {
+	if builder == nil || expr == nil || !containsScalarNumericProgram(expr) ||
+		!numericProgramFilterUsePathsAreEager(expr) || function.ContainsRowScopedConversion(expr) {
+		return false
+	}
+	group, err := validatePersistedNumericProgramRoots(builder.GetContext(), []*Expr{expr})
+	if err != nil || group == nil || len(group.definitions) == 0 {
+		return false
+	}
+	return !containsVolatileFunctionWithNumericPrograms(expr, group.definitions, make(map[int64]uint8))
+}
+
+func containsScalarNumericProgram(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func != nil {
+			fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
+			if fid == function.SCALAR_PROGRAM || fid == function.SCALAR_PROGRAM_REF {
+				return true
+			}
+		}
+		for _, arg := range fn.Args {
+			if containsScalarNumericProgram(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if containsScalarNumericProgram(item) {
+				return true
+			}
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		if containsScalarNumericProgram(window.WindowFunc) {
+			return true
+		}
+		for _, item := range window.PartitionBy {
+			if containsScalarNumericProgram(item) {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && containsScalarNumericProgram(order.Expr) {
+				return true
+			}
+		}
+	}
+	if sub := expr.GetSub(); sub != nil {
+		return containsScalarNumericProgram(sub.Child)
+	}
+	return false
+}
+
+func numericProgramFilterUsePathsAreEager(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func == nil {
+			return !containsScalarNumericProgram(expr)
+		}
+		fid, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		switch fid {
+		case function.SCALAR_PROGRAM_REF:
+			_, slot, ok := numericProgramRefIdentity(expr)
+			return ok && slot == 0 && len(fn.Args) == 3 && numericProgramDefinitionMatchesRef(expr)
+		case function.SCALAR_PROGRAM:
+			return false
+		case function.CAST:
+			if overload == function.NumericValueCastOverload {
+				if _, _, ok := function.NumericValueProgramCastOwner(expr); ok {
+					return true
+				}
+				if _, _, ok := function.NumericValueCastPhysicalColumns(expr); ok {
+					return true
+				}
+			}
+		}
+		containsProgram := false
+		for _, arg := range fn.Args {
+			containsProgram = containsProgram || containsScalarNumericProgram(arg)
+		}
+		if containsProgram && fid != function.CAST && !isEagerFilterComparison(fid) {
+			return false
+		}
+		for _, arg := range fn.Args {
+			if containsScalarNumericProgram(arg) && !numericProgramFilterUsePathsAreEager(arg) {
+				return false
+			}
+		}
+		return true
+	}
+	if containsScalarNumericProgram(expr) {
+		return false
+	}
+	return true
+}
+
+func isEagerFilterComparison(fid int32) bool {
+	switch fid {
+	case function.EQUAL, function.NOT_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL,
+		function.LESS_THAN, function.LESS_EQUAL, function.BETWEEN, function.IN,
+		function.NOT_IN_ROWS, function.LIKE, function.IS, function.ISNOT,
+		function.ISNULL, function.ISNOTNULL, function.ISTRUE, function.ISNOTTRUE,
+		function.ISFALSE, function.ISNOTFALSE, function.ISEMPTY:
+		return true
+	default:
+		return false
+	}
+}
+
+func numericProgramSourceTypes(ctx context.Context, roots []*Expr) (map[int64]*plan.Type, error) {
+	group, err := validatePersistedNumericProgramRoots(ctx, roots)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[int64]*plan.Type, len(group.definitions))
+	for scope, definition := range group.definitions {
+		fn := definition.GetF()
+		if fn == nil || len(fn.Args) < 2 || fn.Args[1] == nil {
+			return nil, moerr.NewInternalErrorNoCtxf("numeric value program %d has no typed source", scope)
+		}
+		result[scope] = proto.Clone(&fn.Args[1].Typ).(*plan.Type)
+	}
+	return result, nil
+}
+
+func numericProgramTypeOnlyRefinesNullability(previous, current *plan.Type) bool {
+	if previous == nil || current == nil {
+		return false
+	}
+	oldType := proto.Clone(previous).(*plan.Type)
+	newType := proto.Clone(current).(*plan.Type)
+	oldType.NotNullable = false
+	newType.NotNullable = false
+	if !proto.Equal(oldType, newType) {
+		return false
+	}
+	// A branch-specific source may prove an originally nullable output NOT
+	// NULL. It may not weaken a NOT NULL source or change any other type detail.
+	return !previous.NotNullable || current.NotNullable
+}
+
+// reconcileNumericProgramBranchTypes keeps paired value references aligned
+// with branch-specific source types after set-operation substitution. The
+// only permitted change is a nullable-to-NOT-NULL refinement.
+func reconcileNumericProgramBranchTypes(
+	ctx context.Context,
+	roots []*Expr,
+	previousTypes map[int64]*plan.Type,
+) bool {
+	if len(roots) == 0 {
+		return true
+	}
+	resultTypes := make(map[int64]*plan.Type)
+	if err := walkNumericProgramOwnersPostOrder(ctx, roots, func(expr *Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil {
+			return nil
+		}
+		fid, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if fid != function.SCALAR_PROGRAM_REF || overload != 0 || len(fn.Args) != 3 {
+			return nil
+		}
+		scope, slot, ok := numericProgramRefIdentity(expr)
+		if !ok || slot != 0 || fn.Args[0] == nil || fn.Args[0].GetF() == nil || len(fn.Args[0].GetF().Args) != 2 && len(fn.Args[0].GetF().Args) != 3 {
+			return moerr.NewInternalErrorNoCtx("invalid numeric value program reference")
+		}
+		definition := fn.Args[0].GetF()
+		if definition.Args[1] == nil {
+			return moerr.NewInternalErrorNoCtx("untyped numeric value program source")
+		}
+		previous := previousTypes[scope]
+		sourceType := &definition.Args[1].Typ
+		if previous == nil || !numericProgramTypeOnlyRefinesNullability(previous, sourceType) ||
+			!numericProgramTypeOnlyRefinesNullability(previous, &expr.Typ) {
+			return moerr.NewInternalErrorNoCtx("numeric value program type changed beyond nullability")
+		}
+		if old, exists := resultTypes[scope]; exists && !proto.Equal(old, sourceType) {
+			return moerr.NewInternalErrorNoCtx("numeric value program aliases disagree on branch source type")
+		}
+		resultTypes[scope] = proto.Clone(sourceType).(*plan.Type)
+		expr.Typ = *proto.Clone(sourceType).(*plan.Type)
+		return nil
+	}); err != nil {
+		return false
+	}
+	if _, err := validatePersistedNumericProgramRoots(ctx, roots); err != nil {
+		return false
+	}
+	return true
+}
+
+func walkNumericProgramOwnersPostOrder(ctx context.Context, roots []*Expr, visit func(*Expr) error) error {
+	state := make(map[*Expr]uint8)
+	var walk func(*Expr) error
+	walk = func(expr *Expr) error {
+		if expr == nil {
+			return nil
+		}
+		switch state[expr] {
+		case 1:
+			return persistedNumericProgramError(ctx, "expression graph contains a cycle")
+		case 2:
+			return nil
+		}
+		state[expr] = 1
+		for _, child := range persistedExecutableExprChildren(expr) {
+			if err := walk(child); err != nil {
+				return err
+			}
+		}
+		if err := visit(expr); err != nil {
+			return err
+		}
+		state[expr] = 2
+		return nil
+	}
+	for _, root := range roots {
+		if err := walk(root); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func prepareSetOperationFilterCandidate(ctx context.Context, filter *Expr, projects []*Expr) (*Expr, bool) {
+	originalRoots := make([]*Expr, 0, len(projects)+1)
+	originalRoots = append(originalRoots, filter)
+	originalRoots = append(originalRoots, projects...)
+	previousTypes, err := numericProgramSourceTypes(ctx, originalRoots)
+	if err != nil {
+		return nil, false
+	}
+	candidate := replaceColRefsForSet(DeepCopyExpr(filter), projects)
+	if !reconcileNumericProgramBranchTypes(ctx, []*Expr{candidate}, previousTypes) {
+		return nil, false
+	}
+	if containsScalarNumericProgram(candidate) {
+		clones, err := cloneWithFreshNumericProgramScopes(ctx, []*Expr{candidate})
+		if err != nil || len(clones) != 1 {
+			return nil, false
+		}
+		candidate = clones[0]
+	}
+	return candidate, true
+}
+
+func containsVolatileFunctionWithNumericPrograms(
+	expr *plan.Expr, definitions map[int64]*plan.Expr, state map[int64]uint8,
+) bool {
+	if expr == nil {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func == nil {
+			return true
+		}
+		fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
+		switch fid {
+		case function.SCALAR_PROGRAM_REF:
+			scope, _, ok := numericProgramRefIdentity(expr)
+			definition := definitions[scope]
+			if !ok || definition == nil {
+				return true
+			}
+			switch state[scope] {
+			case 1:
+				return true
+			case 2:
+				return false
+			}
+			state[scope] = 1
+			definitionFn := definition.GetF()
+			if definitionFn == nil || len(definitionFn.Args) < 2 || len(definitionFn.Args) > 3 ||
+				containsVolatileFunctionWithNumericPrograms(definitionFn.Args[1], definitions, state) ||
+				(len(definitionFn.Args) == 3 && containsVolatileFunctionWithNumericPrograms(definitionFn.Args[2], definitions, state)) {
+				return true
+			}
+			state[scope] = 2
+			return false
+		case function.SCALAR_PROGRAM:
+			return true
+		}
+		overload, ok := function.GetFunctionByIdWithoutError(fn.Func.GetObj())
+		if !ok || overload.CannotFold() || overload.IsRealTimeRelated() {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if containsVolatileFunctionWithNumericPrograms(arg, definitions, state) {
+				return true
+			}
+		}
+		return false
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if containsVolatileFunctionWithNumericPrograms(item, definitions, state) {
+				return true
+			}
+		}
+	}
+	if expr.GetSub() != nil || expr.GetW() != nil {
+		return true
+	}
+	return false
 }
 
 func normalizeScalarReaggFilterRefs(expr *plan.Expr, groupTag int32, aliases map[[2]int32]int32) {
@@ -382,7 +704,36 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				if hasGrouping {
 					// Only revisit predicates already blocked by GROUPING. Ordinary
 					// aggregate filters keep their existing expression walks.
-					filter = simplifyActiveGroupingFilter(filter, groupTag, len(node.GroupBy), node.GroupingFlag)
+					original := filter
+					var sourceTypes map[int64]*plan.Type
+					if containsScalarNumericProgram(filter) {
+						var err error
+						sourceTypes, err = numericProgramSourceTypes(builder.GetContext(), []*Expr{filter})
+						if err != nil {
+							sourceTypes = nil
+						}
+					}
+					candidate := simplifyActiveGroupingFilter(DeepCopyExpr(filter), groupTag, len(node.GroupBy), node.GroupingFlag)
+					if containsScalarNumericProgram(candidate) {
+						if sourceTypes == nil || !reconcileNumericProgramBranchTypes(builder.GetContext(), []*Expr{candidate}, sourceTypes) {
+							candidate = original
+						} else {
+							// The rewritten predicate is an independently evaluated owner. Keep
+							// its lexical scopes separate from the aggregate's output program.
+							clones, err := cloneWithFreshNumericProgramScopes(builder.GetContext(), []*Expr{candidate})
+							if err != nil || len(clones) != 1 {
+								candidate = original
+							} else {
+								candidate = clones[0]
+							}
+						}
+					}
+					filter = candidate
+					if builder.filterPushdownBarrier(filter) {
+						// The rewrite is only an optimization. Keep the valid original
+						// predicate if simplification invalidates its program ownership.
+						filter = original
+					}
 					hasGrouping = containGrouping(filter)
 				}
 			}
@@ -971,8 +1322,16 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
-			canPushdown = append(canPushdown, replaceColRefsForSet(DeepCopyExpr(filter), leftChild.ProjectList))
-			canPushDownRight = append(canPushDownRight, replaceColRefsForSet(filter, rightChild.ProjectList))
+			leftCandidate, leftOK := prepareSetOperationFilterCandidate(builder.GetContext(), filter, leftChild.ProjectList)
+			rightCandidate, rightOK := prepareSetOperationFilterCandidate(builder.GetContext(), filter, rightChild.ProjectList)
+			if !leftOK || !rightOK {
+				// Keep the incoming predicate above the set operation unless both
+				// branch owners preserve the same validated value/kind contract.
+				cantPushdown = append(cantPushdown, filter)
+				continue
+			}
+			canPushdown = append(canPushdown, leftCandidate)
+			canPushDownRight = append(canPushDownRight, rightCandidate)
 		}
 
 		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], canPushdown, separateNonEquiConds)
@@ -1008,9 +1367,43 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		projectTag := node.BindingTags[0]
 
 		for _, filter := range filters {
-			introducesVolatile := replaceColRefsIntroducesVolatile(filter, projectTag, node.ProjectList)
-			rewritten := replaceColRefs(DeepCopyExpr(filter), projectTag, node.ProjectList)
-			if introducesVolatile {
+			rewritten := DeepCopyExpr(filter)
+			replacesProjectOutput := false
+			introducesVolatile := false
+			if containsTag(filter, projectTag) {
+				rewritten = replaceColRefs(DeepCopyExpr(filter), projectTag, node.ProjectList)
+				replacesProjectOutput = !proto.Equal(filter, rewritten)
+				if replacesProjectOutput {
+					introducesVolatile = replaceColRefsIntroducesVolatile(filter, projectTag, node.ProjectList)
+				}
+			}
+			hasNumericProgram := containsScalarNumericProgram(rewritten)
+			safeClosedProgram := false
+			if replacesProjectOutput && (introducesVolatile || hasNumericProgram) {
+				safeClosedProgram = builder.filterHasSafeClosedNumericProgram(rewritten)
+			}
+			if replacesProjectOutput && (introducesVolatile || hasNumericProgram) && !safeClosedProgram {
+				cantPushdown = append(cantPushdown, filter)
+				continue
+			}
+			if replacesProjectOutput && hasNumericProgram {
+				// The same filter may also remain represented at the PROJECT
+				// owner. Give this moved, independently evaluated closed group a
+				// fresh shared scope mapping before any lower-level rewrite mutates
+				// its selected-value definition.
+				clones, err := cloneWithFreshNumericProgramScopes(builder.GetContext(), []*Expr{rewritten})
+				if err != nil || len(clones) != 1 {
+					cantPushdown = append(cantPushdown, filter)
+					continue
+				}
+				rewritten = clones[0]
+			}
+			// This extra barrier protects a private value/kind owner imported
+			// from this PROJECT's output. Preserve the established path for
+			// ordinary predicates and child-coordinate predicates that do not
+			// cross this PROJECT boundary; those predicates are checked by the
+			// existing pushdown owners below.
+			if replacesProjectOutput && hasNumericProgram && builder.filterPushdownBarrier(rewritten) {
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}
@@ -1498,15 +1891,28 @@ func simplifyActiveGroupingFilter(expr *plan.Expr, groupTag int32, groupCount in
 		key := fn.Args[2]
 		probe := fn.Args[0].GetF()
 		null := fn.Args[1]
+		activeKey := key != nil && containsTag(key, groupTag) && groupingFilterHasOnlyActiveKeys(key, groupTag, groupCount, flags)
+		removable := key != nil && exprCanRemoveProjectWithNumericValueProgram(key)
+		rowScoped := key != nil && function.ContainsRowScopedConversion(key)
 		if key != nil &&
 			probe != nil && probe.Func != nil && len(probe.Args) == 1 &&
-			proto.Equal(probe.Args[0], key) && null.GetLit() != nil && null.GetLit().Isnull {
+			null.GetLit() != nil && null.GetLit().Isnull {
 			probeID, _ := function.DecodeOverloadID(probe.Func.Obj)
+			sameKey := proto.Equal(probe.Args[0], key)
+			if !sameKey && probeID == function.GROUPING && activeKey {
+				sameKey = groupingProbeMatchesNumericValueReference(probe.Args[0], key)
+			}
 			keyType, nullType, resultType := key.Typ, null.Typ, expr.Typ
 			keyType.NotNullable, nullType.NotNullable, resultType.NotNullable = false, false, false
-			if probeID == function.GROUPING && proto.Equal(&keyType, &nullType) && proto.Equal(&keyType, &resultType) &&
-				containsTag(key, groupTag) && groupingFilterHasOnlyActiveKeys(key, groupTag, groupCount, flags) &&
-				exprCanRemoveProject(key) && !function.ContainsRowScopedConversion(key) {
+			if probeID == function.GROUPING && sameKey && proto.Equal(&keyType, &nullType) && proto.Equal(&keyType, &resultType) &&
+				activeKey && removable && !rowScoped {
+				// Preserve the IFF result's conservative nullability on the copied
+				// active key. The other type fields were proven equal above. A paired
+				// REF0 is reconciled with its source as a whole by the caller.
+				key = DeepCopyExpr(key)
+				if !isNumericProgramValueReference(key) {
+					key.Typ.NotNullable = expr.Typ.NotNullable
+				}
 				return key
 			}
 		}
@@ -1517,11 +1923,155 @@ func simplifyActiveGroupingFilter(expr *plan.Expr, groupTag int32, groupCount in
 	return expr
 }
 
+func groupingProbeMatchesNumericValueReference(groupingArg, key *plan.Expr) bool {
+	if groupingArg == nil || !isNumericProgramValueReference(key) {
+		return false
+	}
+	group, err := validatePersistedNumericProgramRoots(context.Background(), []*Expr{key})
+	if err != nil || group == nil {
+		return false
+	}
+	fn := key.GetF()
+	scope, _, ok := numericProgramRefIdentity(key)
+	if !ok || fn == nil || len(fn.Args) != 3 || !numericProgramDefinitionMatchesRef(key) {
+		return false
+	}
+	definition := group.definitions[scope]
+	if definition == nil || definition.GetF() == nil || len(definition.GetF().Args) < 2 {
+		return false
+	}
+	return proto.Equal(groupingArg, definition.GetF().Args[1])
+}
+
+func exprCanRemoveProjectWithNumericValueProgram(expr *plan.Expr) bool {
+	if !containsScalarNumericProgram(expr) {
+		return exprCanRemoveProject(expr)
+	}
+	group, err := validatePersistedNumericProgramRoots(context.Background(), []*Expr{expr})
+	if err != nil || group == nil {
+		return false
+	}
+	var safe func(*Expr, map[int64]bool) bool
+	safe = func(current *Expr, visiting map[int64]bool) bool {
+		if current == nil {
+			return false
+		}
+		fn := current.GetF()
+		if fn == nil {
+			switch current.Expr.(type) {
+			case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Col, *plan.Expr_T:
+				return true
+			case *plan.Expr_List:
+				for _, item := range current.GetList().List {
+					if !safe(item, visiting) {
+						return false
+					}
+				}
+				return true
+			case *plan.Expr_W:
+				return exprCanRemoveProject(current)
+			default:
+				return false
+			}
+		}
+		if fn.Func == nil {
+			return false
+		}
+		fid, overloadIndex := function.DecodeOverloadID(fn.Func.GetObj())
+		switch fid {
+		case function.SCALAR_PROGRAM_REF:
+			scope, slot, ok := numericProgramRefIdentity(current)
+			definition := group.definitions[scope]
+			if !ok || definition == nil || (slot != 0 && slot != 1) || visiting[scope] {
+				return false
+			}
+			if slot == 1 {
+				return true
+			}
+			if len(fn.Args) != 3 || !numericProgramDefinitionMatchesRef(current) {
+				return false
+			}
+			visiting[scope] = true
+			definitionFn := definition.GetF()
+			ok = safe(definitionFn.Args[1], visiting)
+			if ok && len(definitionFn.Args) == 3 {
+				ok = safe(definitionFn.Args[2], visiting)
+			}
+			delete(visiting, scope)
+			return ok
+		case function.SCALAR_PROGRAM:
+			scope, ok := numericProgramDefinitionScope(current)
+			definition := group.definitions[scope]
+			if !ok || definition == nil || visiting[scope] || !proto.Equal(definition, current) {
+				return false
+			}
+			visiting[scope] = true
+			ok = safe(fn.Args[1], visiting)
+			if ok && len(fn.Args) == 3 {
+				ok = safe(fn.Args[2], visiting)
+			}
+			delete(visiting, scope)
+			return ok
+		case function.CAST:
+			if overloadIndex == function.NumericValueCastOverload {
+				value, kind, ok := function.NumericValueProgramCastOwner(current)
+				return ok && safe(value, visiting) && (kind == nil || safe(kind, visiting))
+			}
+		}
+		overload, ok := function.GetFunctionByIdWithoutError(fn.Func.GetObj())
+		if !ok || overload.CannotFold() || overload.IsRealTimeRelated() {
+			return false
+		}
+		for _, arg := range fn.Args {
+			if !safe(arg, visiting) {
+				return false
+			}
+		}
+		return true
+	}
+	return safe(expr, make(map[int64]bool))
+}
+
+func isNumericProgramValueReference(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	fid, overload := function.DecodeOverloadID(fn.Func.GetObj())
+	if fid != function.SCALAR_PROGRAM_REF || overload != 0 {
+		return false
+	}
+	_, slot, ok := numericProgramRefIdentity(expr)
+	return ok && slot == 0 && len(fn.Args) == 3
+}
+
 // Ordinary literals and scalar operations on active keys cannot introduce a
 // grouping sentinel. Prove every input's ownership and scalar shape;
 // unknown expression forms and foreign/inactive keys retain the boundary.
 func groupingFilterHasOnlyActiveKeys(expr *plan.Expr, groupTag int32, groupCount int, flags []bool) bool {
 	if expr == nil || groupCount == 0 || len(flags) != groupCount {
+		return false
+	}
+	var programs *persistedNumericProgramGroup
+	if containsScalarNumericProgram(expr) {
+		var err error
+		programs, err = validatePersistedNumericProgramRoots(context.Background(), []*Expr{expr})
+		if err != nil {
+			return false
+		}
+	}
+	return groupingFilterHasOnlyActiveKeysInProgram(expr, groupTag, groupCount, flags, programs, make(map[int64]bool))
+}
+
+func groupingFilterHasOnlyActiveKeysInProgram(
+	expr *plan.Expr,
+	groupTag int32,
+	groupCount int,
+	flags []bool,
+	programs *persistedNumericProgramGroup,
+	visiting map[int64]bool,
+) bool {
+	if expr == nil {
 		return false
 	}
 	switch e := expr.Expr.(type) {
@@ -1538,13 +2088,73 @@ func groupingFilterHasOnlyActiveKeys(expr *plan.Expr, groupTag int32, groupCount
 		if e.F == nil || e.F.Func == nil {
 			return false
 		}
-		id, _ := function.DecodeOverloadID(e.F.Func.Obj)
+		id, overloadIndex := function.DecodeOverloadID(e.F.Func.Obj)
+		switch id {
+		case function.SCALAR_PROGRAM_REF:
+			scope, slot, ok := numericProgramRefIdentity(expr)
+			if !ok || programs == nil || programs.definitions[scope] == nil || visiting[scope] {
+				return false
+			}
+			definition := programs.definitions[scope].GetF()
+			if definition == nil || len(definition.Args) < 2 {
+				return false
+			}
+			if slot == 0 && (len(e.F.Args) != 3 || !numericProgramDefinitionMatchesRef(expr)) {
+				return false
+			}
+			if slot == 1 && len(definition.Args) != 3 {
+				return false
+			}
+			if slot != 0 && slot != 1 {
+				return false
+			}
+			visiting[scope] = true
+			ok = groupingFilterHasOnlyActiveKeysInProgram(definition.Args[1], groupTag, groupCount, flags, programs, visiting)
+			if ok {
+				if len(definition.Args) == 3 {
+					ok = groupingFilterHasOnlyActiveKeysInProgram(definition.Args[2], groupTag, groupCount, flags, programs, visiting)
+				} else if slot == 1 {
+					ok = false
+				}
+			}
+			delete(visiting, scope)
+			return ok
+		case function.SCALAR_PROGRAM:
+			scope, ok := numericProgramDefinitionScope(expr)
+			if !ok || programs == nil || programs.definitions[scope] == nil || visiting[scope] ||
+				!proto.Equal(programs.definitions[scope], expr) || len(e.F.Args) < 2 {
+				return false
+			}
+			visiting[scope] = true
+			ok = groupingFilterHasOnlyActiveKeysInProgram(e.F.Args[1], groupTag, groupCount, flags, programs, visiting)
+			if ok && len(e.F.Args) == 3 {
+				ok = groupingFilterHasOnlyActiveKeysInProgram(e.F.Args[2], groupTag, groupCount, flags, programs, visiting)
+			}
+			delete(visiting, scope)
+			return ok
+		case function.CAST:
+			if overloadIndex == function.NumericValueCastOverload {
+				value, kind, ok := function.NumericValueProgramCastOwner(expr)
+				return ok && groupingFilterHasOnlyActiveKeysInProgram(value, groupTag, groupCount, flags, programs, visiting) &&
+					(kind == nil || groupingFilterHasOnlyActiveKeysInProgram(kind, groupTag, groupCount, flags, programs, visiting))
+			}
+		case function.IFF:
+			if len(e.F.Args) == 3 && e.F.Args[0] != nil && e.F.Args[0].GetF() != nil &&
+				e.F.Args[0].GetF().Func != nil && len(e.F.Args[0].GetF().Args) == 1 &&
+				e.F.Args[1] != nil && e.F.Args[1].GetLit() != nil && e.F.Args[1].GetLit().Isnull &&
+				proto.Equal(e.F.Args[0].GetF().Args[0], e.F.Args[2]) {
+				probeID, _ := function.DecodeOverloadID(e.F.Args[0].GetF().Func.GetObj())
+				if probeID == function.GROUPING {
+					return groupingFilterHasOnlyActiveKeysInProgram(e.F.Args[2], groupTag, groupCount, flags, programs, visiting)
+				}
+			}
+		}
 		overload, ok := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
 		if !ok || id == function.GROUPING || overload.IsAgg() || overload.IsWin() {
 			return false
 		}
 		for _, arg := range e.F.Args {
-			if !groupingFilterHasOnlyActiveKeys(arg, groupTag, groupCount, flags) {
+			if !groupingFilterHasOnlyActiveKeysInProgram(arg, groupTag, groupCount, flags, programs, visiting) {
 				return false
 			}
 		}

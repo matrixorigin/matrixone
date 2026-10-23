@@ -81,6 +81,8 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	}()
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
+	builder.intoUserVariableKindDemand = (stmt != nil && len(stmt.IntoVars) > 0) ||
+		HasNumericValueKindDemand(ctx.GetContext())
 	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
 	builder.persistedViewTarget = persistedViewTarget
 	builder.sessionSelectLimitMayStopEarly = sessionSelectLimitMayStopEarly(
@@ -980,6 +982,9 @@ func selectHasExplicitTopLevelLimit(stmt *tree.Select) bool {
 // GetResultColumnsFromPlan
 func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
+		if query == nil || len(query.Steps) == 0 {
+			return nil
+		}
 		step := int(query.MainOutputStep())
 		if query.HasReturning {
 			if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
@@ -987,15 +992,29 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			}
 			step = int(query.ReturningStep)
 		}
-		lastNode := query.Nodes[query.Steps[step]]
+		if step < 0 || step >= len(query.Steps) {
+			return nil
+		}
+		nodeID := query.Steps[step]
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
+			return nil
+		}
+		lastNode := query.Nodes[nodeID]
+		visibleColumns := len(lastNode.ProjectList)
+		if len(query.IntoUserVariableKindColumns) > 0 {
+			if ValidateSelectIntoKindLayout(query) != nil {
+				return nil
+			}
+			visibleColumns = len(query.Headings)
+		}
 		if query.HasReturning && len(query.Headings) != len(lastNode.ProjectList) {
 			return nil
 		}
-		columns := make([]*ColDef, len(lastNode.ProjectList))
+		columns := make([]*ColDef, visibleColumns)
 		// Only BOOLEAN wire metadata consumes expression kind. Keep all other
 		// result types on the existing origin/key path.
 		var kinds *resultColumnKinds
-		for idx, expr := range lastNode.ProjectList {
+		for idx, expr := range lastNode.ProjectList[:visibleColumns] {
 			columns[idx] = &ColDef{
 				Name: query.Headings[idx],
 				Typ:  expr.Typ,

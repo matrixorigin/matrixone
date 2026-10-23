@@ -2698,9 +2698,19 @@ func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 			Typ: typ,
 		}, nil
 	}
-	newDefExpr := DeepCopyExpr(d.Default.Expr)
-	err := replaceFuncId(ctx, newDefExpr)
-	return newDefExpr, err
+	return importPersistedExpr(ctx, d.Default.Expr)
+}
+
+// importGeneratedColumnAssignmentCast gives one DML execution an owned copy of
+// a catalog expression before applying its assignment conversion. Persisted
+// private numeric-value programs are validated and receive fresh lexical
+// scopes by the import helper; catalog bytes remain unchanged.
+func (builder *QueryBuilder) importGeneratedColumnAssignmentCast(catalogExpr *plan.Expr, isIgnore bool) (*plan.Expr, error) {
+	expr, err := importPersistedExpr(builder.GetContext(), catalogExpr)
+	if err != nil || expr == nil {
+		return expr, err
+	}
+	return builder.applyGeneratedColumnAssignmentCast(expr, isIgnore)
 }
 
 func replaceFuncId(ctx context.Context, expr *Expr) error {

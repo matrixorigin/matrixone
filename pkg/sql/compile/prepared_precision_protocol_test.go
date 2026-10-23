@@ -45,12 +45,53 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 	require.NoError(t, err)
 	require.True(t, features.PreparedPrecisionScalar)
+	require.True(t, features.IntegerParameterCoercion)
+	require.True(t, features.ScalarMathPrecisionCompatibility)
+	require.True(t, requiresStringNumericCompatibilityProtocol(c.proc, features))
+
+	// Keep the upstream prepared-precision v95 floor independently covered by
+	// the common destination validator. The real CEIL expression below also
+	// requires v130 because its numeric precision semantics changed there.
+	precisionOnlyFeatures := planpb.RemoteExpressionFeatures{PreparedPrecisionScalar: true}
+	require.Equal(t, defines.MORPCVersion95, remoteExpressionProtocolVersion(precisionOnlyFeatures))
 
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 	op := projection.NewArgument()
 	defer op.Release()
 	op.ProjectList = []*planpb.Expr{expr}
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	precisionPipeline, err := fillPipeline(scope)
+	require.NoError(t, err)
+	client.version = defines.MORPCVersion94
+	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, precisionPipeline, precisionOnlyFeatures),
+		"remote destination does not support prepared scalar precision (MORPC version 95)")
+	client.version = defines.MORPCVersion95
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, precisionPipeline, precisionOnlyFeatures))
+
+	info := c.proc.GetSessionInfo()
+	previousMySQLNumericCompatibilityMode := info.MySQLNumericCompatibilityMode
+	previousMatrixOneNativeMode := info.MatrixOneNativeMode
+	func() {
+		defer func() {
+			info.MySQLNumericCompatibilityMode = previousMySQLNumericCompatibilityMode
+			info.MatrixOneNativeMode = previousMatrixOneNativeMode
+		}()
+		for _, mode := range []struct {
+			name   string
+			mysql  bool
+			native bool
+		}{
+			{name: "strict"},
+			{name: "mysql compatibility", mysql: true},
+			{name: "native", native: true},
+			{name: "native precedence", mysql: true, native: true},
+		} {
+			info.MySQLNumericCompatibilityMode = mode.mysql
+			info.MatrixOneNativeMode = mode.native
+			require.True(t, requiresStringNumericCompatibilityProtocol(c.proc, features), mode.name)
+		}
+	}()
+
 	place := func(version int64) {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
@@ -60,8 +101,51 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 	place(defines.MORPCVersion94)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "remote destination")
+	require.ErrorContains(t, err, "remote destination does not support prepared scalar precision (MORPC version 95)")
 	place(defines.MORPCVersion95)
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 130",
+		"the real CEIL precision contract has an independent v130 floor")
+	place(int64(101))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 130")
+	place(int64(102))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 130")
+	place(defines.MORPCVersion109)
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 130")
+	place(defines.MORPCVersion110)
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 130")
+	place(defines.MORPCVersion111)
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 130")
+	place(defines.MORPCVersion112)
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 130")
+	for _, version := range []int64{
+		defines.MORPCVersion113, defines.MORPCVersion114,
+		defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117,
+		defines.MORPCVersion118, defines.MORPCVersion119,
+		defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122,
+		defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125,
+		defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128,
+		defines.MORPCVersion129,
+	} {
+		place(version)
+		require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+		_, err = encodeRemoteScope(scope, c.proc)
+		require.ErrorContains(t, err, "version 130")
+	}
+	place(defines.MORPCVersion130)
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
@@ -78,8 +162,28 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 	require.NoError(t, err)
 	_, err = decodeScope(data, c.proc, true, nil)
 	require.ErrorContains(t, err, "version 95")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion95)
+	for _, version := range []int64{
+		defines.MORPCVersion95, 101, 102,
+		defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111,
+		defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114,
+		defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117,
+		defines.MORPCVersion118, defines.MORPCVersion119,
+		defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122,
+		defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125,
+		defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128,
+		defines.MORPCVersion129,
+	} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 130")
+		_, err = decodeScope(data, c.proc, true, nil)
+		require.ErrorContains(t, err, "version 130")
+	}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+	decoded, err := decodeScope(data, c.proc, true, nil)
+	require.NoError(t, err)
+	require.NotNil(t, decoded)
+	t.Cleanup(decoded.release)
 }
 
 func temporalResultProtocolExpr(id int32, firstType, resultType types.T) *planpb.Expr {
@@ -518,6 +622,65 @@ func TestTimestampAddSecondProtocolAdmission(t *testing.T) {
 			require.ErrorContains(t, err, "version 124")
 		} else {
 			require.NoError(t, err)
+		}
+	}
+
+	// The temporal expression keeps its independent v124 expression/persisted
+	// floor, while strict numeric execution raises placement and send/receive
+	// admission to max(v124, v130) == v130.
+	numericQry, numericScope := strictStringNumericCompatibilityPipeline(t, types.T_varchar, 0)
+	t.Cleanup(numericScope.RootOp.Release)
+	combinedProjects := []*planpb.Expr{expr, numericQry.Nodes[0].ProjectList[0]}
+	combinedQuery := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: combinedProjects}}, Steps: []int32{0}}
+	combinedFeatures, err := planpb.RequiredRemoteExpressionFeatures(combinedQuery)
+	require.NoError(t, err)
+	require.True(t, combinedFeatures.TimestampAddSecondIntervals)
+	require.True(t, combinedFeatures.StrictStringNumericCompatibility)
+	require.Equal(t, defines.MORPCVersion124, remoteExpressionProtocolVersion(combinedFeatures),
+		"mode-dependent numeric execution is applied separately from the temporal expression/persisted floor")
+
+	numericScope.Proc = c.proc
+	numericScope.RootOp.(*projection.Projection).ProjectList = combinedProjects
+	combinedPipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: combinedProjects}}}
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	for _, tc := range []struct {
+		workerVersion   int64
+		wantDistributed bool
+	}{
+		{workerVersion: defines.MORPCVersion124},
+		{workerVersion: defines.MORPCVersion125},
+		{workerVersion: defines.MORPCVersion126},
+		{workerVersion: defines.MORPCVersion127},
+		{workerVersion: defines.MORPCVersion128},
+		{workerVersion: defines.MORPCVersion129},
+		{workerVersion: defines.MORPCVersion130, wantDistributed: true},
+	} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
+		client.version = tc.workerVersion
+		c.execType = plan2.ExecTypeAP_MULTICN
+		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+		require.NoError(t, c.constrainRemoteExpressionWorkers(combinedQuery))
+		if tc.wantDistributed {
+			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+		} else {
+			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType,
+				"a v124 worker has the temporal contract but not the strict numeric execution contract")
+		}
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.workerVersion)
+		err = validateRemoteExpressionPipelineProtocol(c.proc, combinedPipeline)
+		if tc.workerVersion < defines.MORPCVersion130 {
+			require.ErrorContains(t, err, "string numeric compatibility requires MORPC protocol version 130")
+		} else {
+			require.NoError(t, err)
+		}
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
+		_, err = encodeRemoteScope(numericScope, c.proc)
+		if tc.wantDistributed {
+			require.NoError(t, err)
+		} else {
+			require.ErrorContains(t, err, "MORPC version 130")
 		}
 	}
 	require.Equal(t, client.calls, client.releases)

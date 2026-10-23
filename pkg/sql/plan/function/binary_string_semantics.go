@@ -35,7 +35,14 @@ func stringDomainMode(vec *vector.Vector) (binary, perRow bool) {
 
 func binaryStringAt(vec *vector.Vector, row int, uniformBinary, perRow bool) bool {
 	if perRow {
-		return vec.GetIsBinaryStringAt(row)
+		domain := vec.GetRuntimeStringDomainAt(row)
+		if domain == types.RuntimeStringBinary {
+			return true
+		}
+		if domain == types.RuntimeStringText {
+			return false
+		}
+		return vec.GetIsBinaryStringAt(row) || vec.GetIsBin()
 	}
 	return uniformBinary
 }

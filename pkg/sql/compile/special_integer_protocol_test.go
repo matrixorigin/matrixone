@@ -247,4 +247,52 @@ func TestDateNumericProtocolPlacementSendAndReceive(t *testing.T) {
 	require.ErrorContains(t, validateRemoteExpressionFeatures(c.proc, weekFeatures), "session snapshot")
 	c.proc.Base.SessionInfo.DefaultWeekFormatSet = true
 	require.NoError(t, validateRemoteExpressionFeatures(c.proc, weekFeatures))
+
+	// A query that combines main's v112 date result contract with this PR's
+	// numeric conversion contract must require the newer numeric capability.
+	numericQry, numericScope := strictStringNumericCompatibilityPipeline(t, types.T_varchar, 0)
+	t.Cleanup(numericScope.RootOp.Release)
+	combinedProjects := append([]*planpb.Expr(nil), qry.Nodes[0].ProjectList...)
+	combinedProjects = append(combinedProjects, numericQry.Nodes[0].ProjectList[0])
+	qry.Nodes[0].ProjectList = combinedProjects
+	op.ProjectList = combinedProjects
+	combinedFeatures, err := planpb.RequiredRemoteExpressionFeatures(qry)
+	require.NoError(t, err)
+	require.True(t, combinedFeatures.DateNumericResultContracts)
+	require.True(t, combinedFeatures.StrictStringNumericCompatibility)
+	require.True(t, requiresStringNumericCompatibilityProtocol(c.proc, combinedFeatures))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
+	for _, tc := range []struct {
+		version int64
+		want    plan2.ExecType
+	}{
+		{defines.MORPCVersion112, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion113, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion114, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion115, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion116, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion117, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion118, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion119, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion120, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion121, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion122, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion123, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion124, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion125, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion126, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion127, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion128, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion129, plan2.ExecTypeAP_ONECN},
+		{defines.MORPCVersion130, plan2.ExecTypeAP_MULTICN},
+	} {
+		client.customResponse = false
+		client.version = tc.version
+		c.execType = plan2.ExecTypeAP_MULTICN
+		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+		require.Equal(t, tc.want, c.execType,
+			"combined date/numeric contract must honor both independent protocol floors")
+	}
 }

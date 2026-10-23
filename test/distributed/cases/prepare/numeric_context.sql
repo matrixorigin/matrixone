@@ -35,6 +35,8 @@ DEALLOCATE PREPARE p_mod;
 
 -- Issue #28484: Boolean provenance must survive SQL EXECUTE's text transport.
 -- Reuse one prepared plan across Boolean, NULL and ordinary string values.
+SET @numeric_context_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@numeric_context_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 PREPARE p_bool FROM 'SELECT CAST(? AS DOUBLE) AS d, ROUND(SIN(?),12) AS s, ROUND(ACOS(?),12) AS a';
 SET @bool_math = TRUE;
 EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
@@ -47,6 +49,8 @@ EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
 SET @bool_math = TRUE;
 EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
 DEALLOCATE PREPARE p_bool;
+SET SESSION sql_mode = @numeric_context_saved_sql_mode;
+SET @numeric_context_saved_sql_mode = NULL;
 
 PREPARE p_bool_int FROM 'SELECT ABS(?) AS a, ROUND(?) AS r, SIGN(?) AS s';
 EXECUTE p_bool_int USING @bool_math, @bool_math, @bool_math;

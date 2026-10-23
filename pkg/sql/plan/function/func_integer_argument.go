@@ -32,6 +32,14 @@ const (
 	TruncatedIntegerArgumentCastOverload int32 = 6
 	TextIntegerBitsCastOverload          int32 = 7
 	TemporalIntegerArgumentCastOverload  int32 = 8
+	NumericValueCastOverload             int32 = 9
+)
+
+const (
+	NumericValueCastPolicyOrdinary int32 = iota
+	NumericValueCastPolicyExplicit
+	NumericValueCastPolicyComparison
+	NumericValueCastPolicySetOperation
 )
 
 // integerArgumentValue preserves the full signed and unsigned input domains
@@ -187,8 +195,12 @@ func integerArgumentRows[T types.FixedSizeTExceptStrType, R int64 | uint64](
 	return nil
 }
 
-func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *vector.FunctionResult[R], proc *process.Process, length int, selectList *FunctionSelectList, textBits bool) error {
+func integerArgumentTextRows[R int64 | uint64](source, sourceKind *vector.Vector, result *vector.FunctionResult[R], proc *process.Process, length int, selectList *FunctionSelectList, textBits bool) error {
 	input := vector.GenerateFunctionStrParameter(source)
+	var kinds vector.FunctionParameterWrapper[bool]
+	if sourceKind != nil {
+		kinds = vector.GenerateFunctionFixedTypeParameter[bool](sourceKind)
+	}
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err := result.Append(0, true); err != nil {
@@ -203,7 +215,13 @@ func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *ve
 			}
 			continue
 		}
-		normalized := textIntegerArgument(value, source.GetIsBin())
+		isBinary := source.GetIsBin()
+		if kinds != nil {
+			if value, null := kinds.GetValue(i); !null {
+				isBinary = value
+			}
+		}
+		normalized := textIntegerArgument(value, isBinary)
 		var integer R
 		var err error
 		if textBits && normalized.negative {
@@ -218,7 +236,7 @@ func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *ve
 		if err != nil {
 			return err
 		}
-		if !source.GetIsBin() {
+		if !isBinary {
 			// Keep the original value policy and diagnose only successfully
 			// evaluated text arguments. Binary literals carry numeric bytes.
 			text := convertByteSliceToString(value)
@@ -232,7 +250,7 @@ func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *ve
 	return nil
 }
 
-func integerArgumentCast[R int64 | uint64](source *vector.Vector, result *vector.FunctionResult[R], proc *process.Process, length int, selectList *FunctionSelectList, truncate bool) error {
+func integerArgumentCast[R int64 | uint64](source, sourceKind *vector.Vector, result *vector.FunctionResult[R], proc *process.Process, length int, selectList *FunctionSelectList, truncate bool) error {
 	if source.IsConstNull() || (selectList != nil && selectList.IgnoreAllRow()) {
 		for i := 0; i < length; i++ {
 			if err := result.Append(0, true); err != nil {
@@ -287,22 +305,26 @@ func integerArgumentCast[R int64 | uint64](source *vector.Vector, result *vector
 		})
 	default:
 		if source.GetType().Oid.IsMySQLString() {
-			return integerArgumentTextRows(source, result, proc, length, selectList, false)
+			return integerArgumentTextRows(source, sourceKind, result, proc, length, selectList, false)
 		}
 		return moerr.NewInvalidInputf(proc.Ctx, "unsupported integer argument source %s", source.GetType().Oid)
 	}
 }
 
 func newIntegerArgumentCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, truncate bool) error {
-	if len(parameters) != 2 {
-		return moerr.NewInvalidInput(proc.Ctx, "integer argument cast requires a value and target")
+	if len(parameters) != 2 && (len(parameters) != 3 || parameters[2].GetType().Oid != types.T_bool) {
+		return moerr.NewInvalidInput(proc.Ctx, "integer argument cast requires a value, target, and optional source kind")
+	}
+	var sourceKind *vector.Vector
+	if len(parameters) == 3 {
+		sourceKind = parameters[2]
 	}
 	var err error
 	switch result.GetResultVector().GetType().Oid {
 	case types.T_int64:
-		err = integerArgumentCast(parameters[0], vector.MustFunctionResult[int64](result), proc, length, selectList, truncate)
+		err = integerArgumentCast(parameters[0], sourceKind, vector.MustFunctionResult[int64](result), proc, length, selectList, truncate)
 	case types.T_uint64:
-		err = integerArgumentCast(parameters[0], vector.MustFunctionResult[uint64](result), proc, length, selectList, truncate)
+		err = integerArgumentCast(parameters[0], sourceKind, vector.MustFunctionResult[uint64](result), proc, length, selectList, truncate)
 	default:
 		return moerr.NewInvalidInput(proc.Ctx, "integer argument cast requires int64 or uint64 target")
 	}
@@ -331,17 +353,21 @@ func newIntegerArgumentCast(parameters []*vector.Vector, result vector.FunctionR
 // NewTextIntegerBitsCast is shared by text-valued bit parameters, not numeric
 // sources, public CAST, assignment, or signed count parameters.
 func NewTextIntegerBitsCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if len(parameters) != 2 || result.GetResultVector().GetType().Oid != types.T_uint64 {
-		return moerr.NewInvalidInput(proc.Ctx, "text integer bits cast requires a value and uint64 target")
+	if (len(parameters) != 2 && (len(parameters) != 3 || parameters[2].GetType().Oid != types.T_bool)) || result.GetResultVector().GetType().Oid != types.T_uint64 {
+		return moerr.NewInvalidInput(proc.Ctx, "text integer bits cast requires a value, uint64 target, and optional source kind")
 	}
 	source := parameters[0]
+	var sourceKind *vector.Vector
+	if len(parameters) == 3 {
+		sourceKind = parameters[2]
+	}
 	if source.IsConstNull() || (selectList != nil && selectList.IgnoreAllRow()) {
-		return integerArgumentCast(source, vector.MustFunctionResult[uint64](result), proc, length, selectList, false)
+		return integerArgumentCast(source, sourceKind, vector.MustFunctionResult[uint64](result), proc, length, selectList, false)
 	}
 	if !source.GetType().Oid.IsMySQLString() {
 		return moerr.NewInvalidInput(proc.Ctx, "text integer bits cast requires a text source")
 	}
-	return integerArgumentTextRows(source, vector.MustFunctionResult[uint64](result), proc, length, selectList, true)
+	return integerArgumentTextRows(source, sourceKind, vector.MustFunctionResult[uint64](result), proc, length, selectList, true)
 }
 
 // Temporal values are rounded in their clock/calendar domain before decimal
@@ -373,13 +399,17 @@ func datetimeIntegerArgument(value types.Datetime) (integerArgumentValue, error)
 // Its identity retains the permission across prepared source changes; CAST 5/6
 // must continue rejecting these sources in ordinary integer contexts.
 func NewTemporalIntegerArgumentCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if len(parameters) != 2 || result.GetResultVector().GetType().Oid != types.T_int64 {
-		return moerr.NewInvalidInput(proc.Ctx, "temporal integer argument cast requires a value and int64 target")
+	if (len(parameters) != 2 && (len(parameters) != 3 || parameters[2].GetType().Oid != types.T_bool)) || result.GetResultVector().GetType().Oid != types.T_int64 {
+		return moerr.NewInvalidInput(proc.Ctx, "temporal integer argument cast requires a value, int64 target, and optional source kind")
 	}
 	source := parameters[0]
+	var sourceKind *vector.Vector
+	if len(parameters) == 3 {
+		sourceKind = parameters[2]
+	}
 	rs := vector.MustFunctionResult[int64](result)
 	if source.IsConstNull() || (selectList != nil && selectList.IgnoreAllRow()) || (!integerArgumentTemporalSource(source.GetType().Oid) && source.GetType().Oid != types.T_uuid) {
-		return integerArgumentCast(source, rs, proc, length, selectList, false)
+		return integerArgumentCast(source, sourceKind, rs, proc, length, selectList, false)
 	}
 	switch source.GetType().Oid {
 	case types.T_uuid:

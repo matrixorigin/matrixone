@@ -126,6 +126,16 @@ func (q *Query) ValidateCorrelation() error {
 		if p == nil || len(p.OutputTypes) == 0 {
 			return invalid("program %d has no output", i+1)
 		}
+		switch p.ScalarResultKindColumn {
+		case 0:
+		case 1:
+			if len(p.OutputTypes) != 2 || !isCorrelationMySQLStringType(p.OutputTypes[0].Id) ||
+				p.OutputTypes[1].Id != 10 {
+				return invalid("program %d scalar kind layout", i+1)
+			}
+		default:
+			return invalid("program %d scalar kind column", i+1)
+		}
 		roots = append(roots, root{p.RootNode, uint32(i + 1)})
 	}
 	for _, r := range roots {
@@ -246,7 +256,11 @@ func (q *Query) ValidateCorrelation() error {
 				switch call.Reducer {
 				case SubqueryRef_SCALAR:
 					if call.Comparison == nil {
-						if len(p.OutputTypes) != 1 {
+						wantOutputs := 1
+						if p.ScalarResultKindColumn == 1 {
+							wantOutputs = 2
+						}
+						if len(p.OutputTypes) != wantOutputs {
 							return invalid("tuple scalar requires comparison")
 						}
 						expected := p.OutputTypes[0]
@@ -265,6 +279,10 @@ func (q *Query) ValidateCorrelation() error {
 					}
 				default:
 					return invalid("reducer %d", call.Reducer)
+				}
+				if p.ScalarResultKindColumn != 0 &&
+					(call.Reducer != SubqueryRef_SCALAR || call.Comparison != nil) {
+					return invalid("scalar kind layout on non-scalar call")
 				}
 				if call.Reducer != SubqueryRef_SCALAR || call.Comparison != nil {
 					if e.Typ.Id != 10 {
@@ -319,6 +337,10 @@ func (q *Query) ValidateCorrelation() error {
 		if len(outputs) != len(p.OutputTypes) {
 			return invalid("program %d output arity", i+1)
 		}
+		if p.ScalarResultKindColumn == 1 &&
+			(len(outputs) != 2 || outputs[1] == nil || outputs[1].Typ.Id != 10) {
+			return invalid("program %d scalar kind output", i+1)
+		}
 		for ordinal, output := range outputs {
 			if output == nil || !proto.Equal(&output.Typ, &p.OutputTypes[ordinal]) {
 				return invalid("program %d output type %d", i+1, ordinal)
@@ -354,4 +376,15 @@ func (q *Query) ValidateCorrelation() error {
 		return invalid("program call cycle")
 	}
 	return nil
+}
+
+// Keep this wire-level validator independent of container/types: the plan
+// package is imported by types and must not create an import cycle.
+func isCorrelationMySQLStringType(id int32) bool {
+	switch id {
+	case 60, 61, 64, 65, 70, 71: // CHAR, VARCHAR, BINARY, VARBINARY, BLOB, TEXT
+		return true
+	default:
+		return false
+	}
 }

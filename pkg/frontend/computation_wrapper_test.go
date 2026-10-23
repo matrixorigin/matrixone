@@ -80,6 +80,18 @@ func TestResourceAttemptOwnerEligible(t *testing.T) {
 	require.False(t, resourceAttemptOwnerEligible(derived))
 }
 
+func TestPreparedExecutionBindingKeyIncludesSourceTypeProvenance(t *testing.T) {
+	binding := []plan2.PreparedSourceBinding{{Position: 0, Type: types.T_float64.ToType()}}
+	proven := []any{plan2.ParamValue{
+		Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true,
+	}}
+	unproven := []any{plan2.ParamValue{Value: 2.5}}
+	require.NotEqual(t,
+		preparedExecutionBindingKey(binding, proven),
+		preparedExecutionBindingKey(binding, unproven),
+		"source-aware math precision binding must not reuse an inferred-source plan")
+}
+
 func (m *mockCompile) Run(ts uint64) (*util2.RunResult, error) { return m.runFunc(ts) }
 func (m *mockCompile) GetPlan() *plan.Plan                     { return m.getPlanFunc() }
 func (m *mockCompile) PlanGenerationRebuilt() bool             { return m.planGenerationRebuilt }
@@ -305,14 +317,44 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	sql string,
 	compilerContext plan2.CompilerContext,
 ) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
+	return newPreparedExecuteEnvForSQLWithCompilerContextAndSQLMode(
+		t, stmtID, sql, compilerContext, "")
+}
+
+func newPreparedExecuteEnvForSQLWithSQLMode(
+	t testing.TB,
+	stmtID uint32,
+	sql string,
+	sqlMode string,
+) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
+	return newPreparedExecuteEnvForSQLWithCompilerContextAndSQLMode(
+		t, stmtID, sql, nil, sqlMode)
+}
+
+func newPreparedExecuteEnvForSQLWithCompilerContextAndSQLMode(
+	t testing.TB,
+	stmtID uint32,
+	sql string,
+	compilerContext plan2.CompilerContext,
+	sqlMode string,
+) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
 	ctx := statistic.ContextWithStatsInfo(context.Background(), statistic.NewStatsInfo())
 	ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	if sqlMode != "" {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", sqlMode))
+	}
 	proc := ses.GetProc()
 	require.NotNil(t, proc)
+	if sqlMode != "" {
+		refreshStatementScopedSessionInfo(ses, proc)
+	}
 	proc.Base.SessionInfo.StorageEngine = &disttae.Engine{}
+	if compilerContext == nil {
+		compilerContext = plan2.NewEmptyCompilerContext(proc)
+	}
 
 	stmtName := getPrepareStmtName(stmtID)
 	prepareString := tree.NewPrepareString(tree.Identifier(stmtName), sql)
@@ -324,20 +366,21 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(preparePlan.GetDcl().GetPrepare().Plan)
 	prepareStmt := &PrepareStmt{
-		Name:                       stmtName,
-		Sql:                        prepareString.Sql,
-		PreparePlan:                preparePlan,
-		PrepareStmt:                stmts[0],
-		NativeMode:                 ses.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:            ses.sqlModeHasOnlyFullGroupBy(),
-		BoolSumAvg:                 ses.sqlModeHasEnableBoolSumAvg(),
-		divPrecisionIncrement:      ses.currentDivPrecisionIncrement(),
-		sqlModeFlagsSet:            true,
-		divPrecisionIncrementSet:   true,
-		getFromSendLongData:        make(map[int]struct{}),
-		protocolVersion:            currentProtocolVersion(proc),
-		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
-		inetNtoaParamPositions:     plan2.PreparedPlanInetNtoaParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
+		Name:                          stmtName,
+		Sql:                           prepareString.Sql,
+		PreparePlan:                   preparePlan,
+		PrepareStmt:                   stmts[0],
+		NativeMode:                    ses.sqlModeHasMatrixOneNative(),
+		MySQLNumericCompatibilityMode: ses.sqlModeHasMySQLNumericCompatibility(),
+		OnlyFullGroupBy:               ses.sqlModeHasOnlyFullGroupBy(),
+		BoolSumAvg:                    ses.sqlModeHasEnableBoolSumAvg(),
+		divPrecisionIncrement:         ses.currentDivPrecisionIncrement(),
+		sqlModeFlagsSet:               true,
+		divPrecisionIncrementSet:      true,
+		getFromSendLongData:           make(map[int]struct{}),
+		protocolVersion:               currentProtocolVersion(proc),
+		directResultParamPositions:    plan2.PreparedPlanDirectResultParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
+		inetNtoaParamPositions:        plan2.PreparedPlanInetNtoaParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
 		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
 			preparePlan.GetDcl().GetPrepare().Plan),
 		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
@@ -372,6 +415,33 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	proc.SetResolveVariableStringDomainFunc(ses.txnCompileCtx.ResolveVariableStringDomain)
 	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	return ses, prepareStmt, cw, execCtx
+}
+
+func TestInitExecuteStmtParamRebuildsPreparedPlanWhenMySQLNumericCompatibilityChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 113)
+	defer prepareStmt.Close()
+
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", ""))
+	prepareStmt.MySQLNumericCompatibilityMode = false
+	prepareStmt.sqlModeFlagsSet = true
+	originalPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(
+		execCtx.reqCtx, "sql_mode", "MYSQL_NUMERIC_COMPATIBILITY"))
+
+	_, retPlan, retStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+	require.True(t, prepareStmt.MySQLNumericCompatibilityMode)
+	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+
+	compatibilityPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", ""))
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.False(t, prepareStmt.MySQLNumericCompatibilityMode)
+	require.NotSame(t, compatibilityPlan, prepareStmt.PreparePlan)
 }
 
 func TestInitExecuteStmtParamPreservesStaticBinarySourceType(t *testing.T) {
@@ -2492,6 +2562,13 @@ func TestCOMStmtInetNtoaDomainHintDoesNotLeakIntoComparison(t *testing.T) {
 		prepareStmt.Close()
 		scratchPrepare.Close()
 	}()
+	// This assertion covers the legacy text-prefix comparison semantics.  Keep
+	// it explicit now that strict numeric conversion is the default; without
+	// the compatibility flag the DATE value must fail when compared as a
+	// number.
+	require.NoError(t, ses.SetSessionSysVar(
+		execCtx.reqCtx, "sql_mode", "MYSQL_NUMERIC_COMPATIBILITY"))
+	refreshStatementScopedSessionInfo(ses, cw.proc)
 
 	require.NoError(t, proto.ParseExecuteData(
 		execCtx.reqCtx, cw.proc, prepareStmt,
@@ -2740,9 +2817,20 @@ func TestBinaryProtocolDecimalRebindPreservesExactAbsDomain(t *testing.T) {
 	}
 	require.NotNil(t, abs)
 	require.Equal(t, int32(types.T_decimal256), abs.Typ.Id)
+	require.Equal(t, int32(39), abs.Typ.Width)
+	require.Equal(t, int32(4), abs.Typ.Scale)
 	require.Equal(t, int32(types.T_decimal256), abs.GetF().Args[0].Typ.Id)
-	require.Equal(t, "cast", abs.GetF().Args[0].GetF().Func.GetObjName())
-	require.Equal(t, value, abs.GetF().Args[0].GetF().Args[0].GetLit().GetSval())
+	executor, err := colexec.NewExpressionExecutor(cw.proc, abs)
+	require.NoError(t, err)
+	defer executor.Free()
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_decimal256, result.GetType().Oid)
+	want, err := types.ParseDecimal256(value, 39, 4)
+	require.NoError(t, err)
+	require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
 }
 
 func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
@@ -4450,8 +4538,8 @@ func TestPreparedExecutionBindingKeyPreservesIdentity(t *testing.T) {
 				fmt.Fprintf(&expected, "%d:%d:%d:%d;", typ.Oid, typ.Charset, typ.Width, typ.Scale)
 			}
 			if p, ok := values[i].(plan2.ParamValue); ok {
-				fmt.Fprintf(&expected, "%d:%t:%t:%t:%d:%t:%t;", p.PrepareParamKind,
-					p.IsBinaryProtocol, p.IsBin, p.IsBinaryString, p.RuntimeStringDomain,
+				fmt.Fprintf(&expected, "%d:%t:%t:%t:%t:%d:%t:%t;", p.PrepareParamKind,
+					p.IsBinaryProtocol, p.HasSourceType, p.IsBin, p.IsBinaryString, p.RuntimeStringDomain,
 					p.EnableNumericPrefix, p.Value == nil)
 			}
 		}
@@ -6778,6 +6866,12 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ses, scratch, cw, execCtx := newPreparedExecuteEnv(t, 124)
+			// This fixture exercises prepared string-domain binding while keeping
+			// legacy numeric-prefix behavior for @bound_s + 0 explicit.
+			execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+			require.NoError(t, ses.SetSessionSysVar(
+				execCtx.reqCtx, "sql_mode", "MYSQL_NUMERIC_COMPATIBILITY"))
+			refreshStatementScopedSessionInfo(ses, cw.proc)
 			t.Cleanup(func() {
 				cw.proc.SetPrepareParams(nil)
 				scratch.Close()

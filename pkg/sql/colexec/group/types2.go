@@ -285,7 +285,8 @@ type container struct {
 	groupingAware bool
 
 	// x, y of `group by x, y`.
-	groupByEvaluate colexec.ExprEvalVector
+	groupByEvaluate     colexec.ExprEvalVector
+	groupByProgramGroup *colexec.ProjectionExpressionProgramGroup
 	// m, n of `select agg1(m, n), agg2(m, n)`.
 	aggArgEvaluate []colexec.ExprEvalVector
 
@@ -738,6 +739,7 @@ func (ctr *container) free() {
 	ctr.hr.Free0()
 
 	ctr.groupByEvaluate.Free()
+	ctr.groupByProgramGroup = nil
 
 	for i := range ctr.aggArgEvaluate {
 		ctr.aggArgEvaluate[i].Free()
@@ -811,6 +813,7 @@ func (ctr *container) resetForSpill() {
 	ctr.hr.Free0()
 
 	ctr.groupByEvaluate.ResetForNextQuery()
+	ctr.groupByProgramGroup.ResetForNextQuery()
 
 	for i := range ctr.aggArgEvaluate {
 		ctr.aggArgEvaluate[i].ResetForNextQuery()
@@ -867,6 +870,7 @@ func (ctr *container) hashKeyVectors(vs []*vector.Vector) []*vector.Vector {
 func (group *Group) evaluateGroupByAndAggArgs(proc *process.Process, bat *batch.Batch) (err error) {
 	input := []*batch.Batch{bat}
 	group.ctr.freeGroupingRollups()
+	group.ctr.groupByProgramGroup.BeginBatch()
 
 	// group.
 	for i := range group.ctr.groupByEvaluate.Vec {

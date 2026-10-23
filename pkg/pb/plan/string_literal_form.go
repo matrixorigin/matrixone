@@ -64,8 +64,8 @@ func (m *Expr) validateStringLiteralForm(lit *Literal) error {
 	}
 	binarySyntax := lit.LiteralForm == StringLiteralForm_STRING_LITERAL_HEX ||
 		lit.LiteralForm == StringLiteralForm_STRING_LITERAL_BIT
-	if lit.IsBin != binarySyntax {
-		return moerr.NewInvalidInputNoCtx("string literal form and isBin disagree")
+	if binarySyntax && !lit.IsBin {
+		return moerr.NewInvalidInputNoCtx("hex and bit string literal forms require isBin provenance")
 	}
 	return nil
 }
@@ -308,6 +308,8 @@ const (
 	castJSONToArrayFunctionID         int32 = 513
 	binFunctionID                     int32 = 270
 	convFunctionID                    int32 = 367
+	ceilFunctionID                    int32 = 72
+	floorFunctionID                   int32 = 103
 	asciiFunctionID                   int32 = 52
 	asciiInt32ResultTypeID            int32 = 22
 	findInSetFunctionID               int32 = 101
@@ -340,8 +342,49 @@ const (
 	planAnyTypeID                     int32 = 0
 	internalTableCollationFunctionID  int32 = 600
 	loadFKIgnoreCheckFunctionID       int32 = 602
+	scalarNumericProgramFunctionID    int32 = 605
+	scalarNumericProgramRefFunctionID int32 = 606
+	castFunctionID                    int32 = 21
+	octFunctionID                     int32 = 209
+	makeTimeFunctionID                int32 = 373
+	castStrictFunctionID              int32 = 541
+	castAssignFunctionID              int32 = 554
+	castIgnoreFunctionID              int32 = 555
 	maxVarcharWidth                   int32 = 65535
 )
+
+// UsesNumericValueKindCompanion reports execution identities introduced by
+// the numeric-value provenance program. Keep these checks at the plan boundary:
+// a BOOL argument changes function arity even when its value is a constant and
+// no scalar program or CAST overload 9 appears in the expression tree.
+func usesNumericValueKindCompanion(id, overload int32, args []*Expr) bool {
+	if len(args) == 0 {
+		return false
+	}
+	boolAt := func(index int) bool {
+		return index >= 0 && index < len(args) && args[index] != nil && args[index].Typ.Id == planBooleanTypeID
+	}
+	switch id {
+	case castFunctionID:
+		switch overload {
+		case 0, 1, 2, 3:
+			return len(args) == 3 && boolAt(2)
+		case 5, 6, 7, 8:
+			return len(args) == 3 && boolAt(2)
+		case 9:
+			return true
+		}
+	case octFunctionID:
+		return len(args) == 2 && boolAt(1)
+	case makeTimeFunctionID:
+		return len(args) == 4 && boolAt(3)
+	case iffFunctionID:
+		return len(args) == 4 && boolAt(3)
+	case castStrictFunctionID, castAssignFunctionID, castIgnoreFunctionID:
+		return len(args) == 3 && boolAt(2)
+	}
+	return false
+}
 
 // RemoteExpressionFeatures is the complete set of versioned expression
 // capabilities that can make a pipeline unsafe on an older remote worker.
@@ -397,6 +440,22 @@ const (
 // TIMESTAMP identities; released unary identities retain TIMESTAMP vectors.
 // DynamicTimeResultContracts uses the same epoch for prepared TIME results
 // over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
+// StrictStringNumericCompatibility requires the current latest MORPC floor
+// when the sender uses the strict-by-default contract. Pre-floor workers
+// understand the prefix-cast
+// representation but default to permissive conversion when the new SessionInfo
+// marker is absent.
+// NumericValuePrograms requires MORPC v130 for numeric value/kind programs,
+// explicit kind-aware casts, and optional kind arguments on numeric consumers.
+// These plan expressions carry the selected HEX/BIT interpretation as an
+// ordinary BOOL result, independent of Batch metadata and conversion mode.
+// HistoricalStringMathCompatibility requires MORPC v130 in every mode: old
+// CEIL/FLOOR
+// VARCHAR overloads used ParseFloat, not the current mode-aware parser.
+// Ordinary/comparison/set-operation FLOAT -> INT64 casts require MORPC v130's
+// exact bounds in every mode, independently of string-prefix conversion.
+// ScalarMathPrecisionCompatibility requires MORPC v130 to preserve row-level
+// warnings while presenting a constant precision argument to CEIL/FLOOR kernels.
 type RemoteExpressionFeatures struct {
 	JSONStringConsumerOverload    bool
 	JSONOpaqueTextContracts       bool
@@ -408,21 +467,26 @@ type RemoteExpressionFeatures struct {
 	// execution-only floor; persisted expression contracts remain unchanged.
 	ScalarDivision bool
 	// ViewMetadataFunctions requires v126 for MO_VIEW_DEFINITION/CHECK_OPTION.
-	ViewMetadataFunctions           bool
-	JSONScalarLiteralContracts      bool
-	JSONInputContracts              bool
-	YearBitCast                     bool
-	NumericPrefix                   bool
-	JSONComparisonParam             bool
-	MixedJSONBooleanEquality        bool
-	FormatNumericArguments          bool
-	TypedConversionFunctions        bool
-	IntegerArithmeticDomains        bool
-	RowDependentConvBases           bool
-	ASCIIInt32Result                bool
-	StringNumericResultContracts    bool
-	BoundedConditionalStringDomains bool
-	IPFunctionSemantics             bool
+	ViewMetadataFunctions             bool
+	NumericPrefix                     bool
+	StrictStringNumericCompatibility  bool
+	NumericValuePrograms              bool
+	HistoricalStringMathCompatibility bool
+	OrdinaryFloatInt64Bounds          bool
+	ScalarMathPrecisionCompatibility  bool
+	JSONScalarLiteralContracts        bool
+	JSONInputContracts                bool
+	YearBitCast                       bool
+	JSONComparisonParam               bool
+	MixedJSONBooleanEquality          bool
+	FormatNumericArguments            bool
+	TypedConversionFunctions          bool
+	IntegerArithmeticDomains          bool
+	RowDependentConvBases             bool
+	ASCIIInt32Result                  bool
+	StringNumericResultContracts      bool
+	BoundedConditionalStringDomains   bool
+	IPFunctionSemantics               bool
 	// IntegerParameterCoercion requires v85 for private CAST 5..8.
 	IntegerParameterCoercion          bool
 	TOBase64ResultContracts           bool
@@ -454,7 +518,23 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.JSONStringConsumerOverload ||
+		features.JSONOpaqueTextContracts ||
+		features.JSONNumericComparisons ||
+		features.LoadFKIgnoreCheck ||
+		features.DependentPrograms ||
+		features.CalendarIntervalNormalization ||
+		features.ScalarDivision ||
+		features.ViewMetadataFunctions ||
+		features.NumericPrefix ||
+		features.StrictStringNumericCompatibility ||
+		features.NumericValuePrograms ||
+		features.HistoricalStringMathCompatibility ||
+		features.OrdinaryFloatInt64Bounds ||
+		features.ScalarMathPrecisionCompatibility ||
+		features.JSONScalarLiteralContracts ||
+		features.JSONInputContracts ||
+		features.YearBitCast ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -486,7 +566,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.DateNumericResultContracts ||
 		features.DecimalStatisticalResultContracts ||
 		features.TableCollationFunction ||
-		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
+		features.InvalidDecimalStatisticalResultContract ||
 		features.LeastGreatestCollationSemantics
 }
 
@@ -514,7 +594,6 @@ func isMediumIntArrayCast(current *Expr, fn *Function) bool {
 	literal, ok := fn.Args[0].GetLit().Value.(*Literal_Sval)
 	return ok && hasMediumIntTypeName(literal.Sval)
 }
-
 func hasPrivateIntegerPrecisionCast(expr *Expr) bool {
 	if expr == nil {
 		return false
@@ -582,8 +661,11 @@ func isValidIntegerArgumentSource(id, source int32) bool {
 
 func validateIntegerArgumentCast(expr *Expr, overload int32) error {
 	fn := expr.GetF()
-	if fn == nil || len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+	if fn == nil || (len(fn.Args) != 2 && len(fn.Args) != 3) || fn.Args[0] == nil || fn.Args[1] == nil {
 		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST arity")
+	}
+	if len(fn.Args) == 3 && !usesNumericValueKindCompanion(castFunctionID, overload, fn.Args) {
+		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST source kind")
 	}
 	target := int32(23)
 	if overload == 7 || (overload != 8 && expr.Typ.Id == 28) {
@@ -809,6 +891,8 @@ func conditionalValueSources(fn *Function, functionID int32, name string) (value
 		return nil, false
 	}
 	switch {
+	case functionID == coalesceFunctionID || name == "coalesce":
+		return fn.Args, false
 	case functionID == caseFunctionID || name == "case":
 		// CASE arguments are condition/value pairs, followed by an optional
 		// ELSE value. An even number of arguments therefore means that the
@@ -930,6 +1014,7 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 // can retain precise diagnostics, while sharing one owner walk so adding one
 // feature cannot accidentally replace another feature's compatibility gate.
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
+	features.NumericValuePrograms = ownerHasNumericValueKindLayout(owner)
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
 			features.DependentPrograms = features.DependentPrograms || current.GetDependent() != nil || current.GetSlot() != nil
@@ -956,6 +1041,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				features.JSONNumericComparisons = features.JSONNumericComparisons ||
 					isMixedJSONNumericComparison(fn) || ((id == 546 || id == internalJSONComparisonFunctionID) && overload == 1)
 
+				if id == scalarNumericProgramFunctionID || id == scalarNumericProgramRefFunctionID ||
+					(id == castFunctionID && overload == 9) || usesNumericValueKindCompanion(id, overload, fn.Args) {
+					features.NumericValuePrograms = true
+				}
 				if id == internalTableCollationFunctionID {
 					features.TableCollationFunction = true
 				}
@@ -1139,9 +1228,25 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					features.IntegerArithmeticDomains = true
 				}
 			}
-			if !features.NumericPrefix && current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&
+			if current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&
 				strings.EqualFold(fn.Func.GetObjName(), "cast") {
 				features.NumericPrefix = true
+			}
+			if isStrictStringNumericCompatibilityCast(current) {
+				features.StrictStringNumericCompatibility = true
+			}
+			if !features.StrictStringNumericCompatibility && isStringConditionCompatibilityFunction(current) {
+				features.StrictStringNumericCompatibility = true
+			}
+			if !features.HistoricalStringMathCompatibility && isHistoricalStringMathCompatibilityFunction(current) {
+				features.StrictStringNumericCompatibility = true
+				features.HistoricalStringMathCompatibility = true
+			}
+			if !features.OrdinaryFloatInt64Bounds && isOrdinaryFloatInt64Bounds(current) {
+				features.OrdinaryFloatInt64Bounds = true
+			}
+			if !features.ScalarMathPrecisionCompatibility && isScalarMathPrecisionCompatibility(current) {
+				features.ScalarMathPrecisionCompatibility = true
 			}
 			if !features.JSONComparisonParam && fn != nil && fn.Func != nil &&
 				int32(fn.Func.Obj>>32) == internalJSONComparisonFunctionID {
@@ -1210,6 +1315,158 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 		})
 	})
 	return
+}
+
+// SELECT ... INTO and correlated scalar results carry private BOOL passenger
+// layouts outside the expression tree. Include both descriptors in the same
+// v130 admission feature so older workers cannot misread the physical output.
+func ownerHasNumericValueKindLayout(owner any) bool {
+	seen := make(map[uintptr]struct{})
+	var walk func(reflect.Value) bool
+	walk = func(value reflect.Value) bool {
+		if !value.IsValid() {
+			return false
+		}
+		if value.Kind() == reflect.Interface {
+			return !value.IsNil() && walk(value.Elem())
+		}
+		if value.Kind() == reflect.Pointer {
+			if value.IsNil() {
+				return false
+			}
+			if query, ok := value.Interface().(*Query); ok && len(query.IntoUserVariableKindColumns) != 0 {
+				return true
+			}
+			if program, ok := value.Interface().(*CorrelationProgram); ok && program.ScalarResultKindColumn != 0 {
+				return true
+			}
+			pointer := value.Pointer()
+			if _, ok := seen[pointer]; ok {
+				return false
+			}
+			seen[pointer] = struct{}{}
+			return walk(value.Elem())
+		}
+		switch value.Kind() {
+		case reflect.Struct:
+			for field := 0; field < value.NumField(); field++ {
+				child := value.Field(field)
+				if child.CanInterface() && expressionOwnerContainer(child.Kind()) && walk(child) {
+					return true
+				}
+			}
+		case reflect.Slice, reflect.Array:
+			if !expressionOwnerContainer(value.Type().Elem().Kind()) {
+				return false
+			}
+			for item := 0; item < value.Len(); item++ {
+				if walk(value.Index(item)) {
+					return true
+				}
+			}
+		case reflect.Map:
+			if !expressionOwnerContainer(value.Type().Elem().Kind()) {
+				return false
+			}
+			iterator := value.MapRange()
+			for iterator.Next() {
+				if walk(iterator.Value()) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(reflect.ValueOf(owner))
+}
+
+// isStrictStringNumericCompatibilityCast identifies string-to-floating casts
+// whose executor consults CompatibilityModeFromProcess. This includes the
+// planner's comparison cast and ordinary/explicit CAST identities; integer
+// and decimal CASTs have separate protocol contracts.
+func isStrictStringNumericCompatibilityCast(expr *Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil || len(expr.GetF().Args) == 0 {
+		return false
+	}
+	if !strings.EqualFold(expr.GetF().Func.GetObjName(), "cast") || expr.GetF().Args[0] == nil {
+		return false
+	}
+	return isPlanNumericCompatibilityStringType(expr.GetF().Args[0].Typ.Id) &&
+		(expr.Typ.Id == 30 || expr.Typ.Id == 31)
+}
+
+// isPlanNumericCompatibilityStringType follows the planner's complete string
+// domain. Whether a value is interpreted as raw bytes or text is runtime
+// provenance (vector.IsBin), not the declared OID; a VARBINARY/BLOB column can
+// therefore still take the mode-aware text parser and must be fenced too.
+func isPlanNumericCompatibilityStringType(id int32) bool {
+	switch id {
+	case planCharTypeID, planVarcharTypeID, planTextTypeID,
+		planBinaryTypeID, planVarbinaryTypeID, planBlobTypeID:
+		return true
+	default:
+		return false
+	}
+}
+
+func isOrdinaryFloatInt64Bounds(expr *Expr) bool {
+	if expr == nil || expr.Typ.Id != 23 { // INT64
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || int32(fn.Func.Obj>>32) != 21 || len(fn.Args) == 0 || fn.Args[0] == nil {
+		return false
+	}
+	// Only these stable CAST identities use floatToInt64. Explicit,
+	// assignment and private integer casts retain their own conversion paths.
+	switch int32(fn.Func.Obj) {
+	case 0, 2, 3:
+		return fn.Args[0].Typ.Id == 30 || fn.Args[0].Typ.Id == 31
+	default:
+		return false
+	}
+}
+
+func isScalarMathPrecisionCompatibility(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[1] == nil || fn.Args[1].GetF() == nil {
+		return false
+	}
+	// Direct literals/parameters are already constant. Conservatively fence
+	// function subtrees without duplicating executor folding/volatility rules.
+	id := int32(fn.Func.Obj >> 32)
+	return id == ceilFunctionID || id == floorFunctionID
+}
+
+// IF/IFF consumes string conditions directly, without a floating CAST. Both
+// scalar and vector executors consult the same process compatibility mode.
+func isStringConditionCompatibilityFunction(expr *Expr) bool {
+	if expr == nil || expr.GetF() == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn.Func == nil || len(fn.Args) == 0 || fn.Args[0] == nil {
+		return false
+	}
+	return (int32(fn.Func.Obj>>32) == iffFunctionID ||
+		strings.EqualFold(fn.Func.ObjName, "if") || strings.EqualFold(fn.Func.ObjName, "iff")) &&
+		isPlanNumericCompatibilityStringType(fn.Args[0].Typ.Id)
+}
+
+// isHistoricalStringMathCompatibilityFunction covers the two serialized
+// VARCHAR overloads that predate the numeric-cast routing. They remain
+// executable for old persisted plans and therefore need the same mixed-version
+// admission fence even though their arguments are not wrapped by a CAST.
+func isHistoricalStringMathCompatibilityFunction(expr *Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return false
+	}
+	functionID := int32(expr.GetF().Func.Obj >> 32)
+	overloadID := int32(expr.GetF().Func.Obj)
+	return overloadID == 12 && (functionID == ceilFunctionID || functionID == floorFunctionID)
 }
 
 // isASCIIInt32Result identifies the new physical result contract of ASCII.
@@ -1326,7 +1583,14 @@ func isSpecialIntegerConsumer(fn *Function, id, overload int32) (bool, error) {
 	default:
 		return false, nil
 	}
-	if len(fn.Args) != count {
+	argumentCount := count
+	if id == makeTimeFunctionID && len(fn.Args) == count+1 {
+		if !usesNumericValueKindCompanion(id, overload, fn.Args) {
+			return false, moerr.NewInvalidInputNoCtx("invalid MAKETIME source kind")
+		}
+		argumentCount++
+	}
+	if len(fn.Args) != argumentCount {
 		return false, moerr.NewInvalidInputNoCtx("invalid special integer consumer arity")
 	}
 	for _, arg := range fn.Args {

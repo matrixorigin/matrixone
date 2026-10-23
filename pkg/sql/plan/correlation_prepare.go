@@ -97,7 +97,11 @@ func refreshPreparedCorrelationExpr(
 		}
 		changed = changed || updated
 	} else if call.Reducer == plan.SubqueryRef_SCALAR {
-		if len(program.OutputTypes) != 1 {
+		wantOutputs := 1
+		if program.ScalarResultKindColumn == 1 {
+			wantOutputs = 2
+		}
+		if len(program.OutputTypes) != wantOutputs {
 			return false, moerr.NewInternalError(ctx, "invalid prepared scalar outputs")
 		}
 		typ := *DeepCopyType(&program.OutputTypes[0])

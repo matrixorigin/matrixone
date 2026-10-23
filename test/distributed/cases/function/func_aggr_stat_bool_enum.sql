@@ -26,7 +26,13 @@ select id, cast(var_pop(b) over (order by id rows between unbounded preceding an
 
 -- Retained ENUM provenance across a materialized projection must use ordinals.
 select cast(var_pop(e) as decimal(18,6)) as e_var_pop, cast(var_samp(e) as decimal(18,6)) as e_var_samp, cast(stddev_pop(e) as decimal(18,6)) as e_stddev_pop, cast(stddev_samp(e) as decimal(18,6)) as e_stddev_samp from (select e from stat_inputs where g = 1 order by id limit 3) d;
+-- Explicit CHAR conversion drops ENUM provenance; pin the legacy label coercion
+-- here because the default string-to-number mode is strict.
+SET @stat_label_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY';
 select cast(var_pop(cast(e as char)) as decimal(18,6)) as label_variance from stat_inputs where g = 1;
+SET SESSION sql_mode = @stat_label_saved_sql_mode;
+SET @stat_label_saved_sql_mode = NULL;
 
 -- Repeated prepared execution preserves both typed table-column domains.
 prepare stat_columns from 'select cast(var_pop(b) as decimal(18,6)) as b_var_pop, cast(var_samp(b) as decimal(18,6)) as b_var_samp, cast(stddev_pop(b) as decimal(18,6)) as b_stddev_pop, cast(stddev_samp(b) as decimal(18,6)) as b_stddev_samp, cast(var_pop(e) as decimal(18,6)) as e_var_pop, cast(var_samp(e) as decimal(18,6)) as e_var_samp, cast(stddev_pop(e) as decimal(18,6)) as e_stddev_pop, cast(stddev_samp(e) as decimal(18,6)) as e_stddev_samp from stat_inputs where g = ?';

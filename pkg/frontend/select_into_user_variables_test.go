@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -93,8 +94,10 @@ func TestSelectIntoUserVariablesPreservesBinaryFlagPerColumn(t *testing.T) {
 
 	bat := batch.NewWithSize(2)
 	bat.Vecs[0] = vector.NewVec(types.T_binary.ToType())
-	bat.Vecs[0].SetIsBin(true)
 	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("AB\x00\x00"), false, mp))
+	// SQL HEX/BIT literal provenance is attached after the value is materialized;
+	// a raw bytes append is an ordinary (non-literal) value append.
+	bat.Vecs[0].SetIsBin(true)
 	require.NoError(t, bat.Vecs[0].SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
 	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("text"), false, mp))
@@ -112,6 +115,56 @@ func TestSelectIntoUserVariablesPreservesBinaryFlagPerColumn(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("text"), textVar.Value)
 	require.False(t, textVar.IsBin)
+}
+
+func TestSelectIntoUserVariablesReadsMappedKindPassengers(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "hex_out"}, {Name: "text_out"}})
+
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("31"), false, mp))
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("ordinary"), false, mp))
+	bat.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], true, false, mp))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	require.NoError(t, collector.capture(ctx, ses, bat, []int32{2, -1}))
+	require.Len(t, collector.row, 2, "the physical BOOL passenger is not a visible SQL result")
+	require.NoError(t, collector.apply(ctx, ses, "select value into @hex_out, @text_out"))
+	hex, err := ses.GetUserDefinedVar("hex_out")
+	require.NoError(t, err)
+	require.Equal(t, []byte("31"), hex.Value)
+	require.True(t, hex.IsBin, "the mapped kind passenger carries selected HEX provenance")
+	ordinary, err := ses.GetUserDefinedVar("text_out")
+	require.NoError(t, err)
+	require.Equal(t, []byte("ordinary"), ordinary.Value)
+	require.False(t, ordinary.IsBin, "-1 preserves the ordinary string path")
+}
+
+func TestSelectIntoUserVariablesMappedKindLayoutFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "out"}})
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("31"), false, mp))
+	bat.Vecs[1] = vector.NewVec(types.T_int8.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int8(1), false, mp))
+	bat.SetRowCount(0)
+	defer bat.Clean(mp)
+
+	err := collector.capture(ctx, ses, bat, []int32{1})
+	require.Error(t, err, "even an empty result must validate the mapped physical BOOL slot")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrWrongNumberOfColumnsInSelect))
 }
 
 func TestSetUserDefinedVarWithIsBinPreservesFlagThroughBackSession(t *testing.T) {
@@ -178,16 +231,277 @@ func TestSelectIntoUserVariablesOutputCallbackReinitializesCollector(t *testing.
 
 	selectIntoUserVariablesOutputCallback(execCtx, ses, firstStmt, func(*batch.Batch, *perfcounter.CounterSet) error {
 		return nil
-	})
+	}, nil)
 	firstCollector := execCtx.selectInto
 	require.NotNil(t, firstCollector)
 
 	selectIntoUserVariablesOutputCallback(execCtx, ses, secondStmt, func(*batch.Batch, *perfcounter.CounterSet) error {
 		return nil
-	})
+	}, nil)
 	require.NotNil(t, execCtx.selectInto)
 	require.NotSame(t, firstCollector, execCtx.selectInto)
 	require.Equal(t, "second", execCtx.selectInto.vars[0].Name)
+}
+
+func TestSelectIntoResultSinkDiscardsAbortedAttempts(t *testing.T) {
+	t.Run("zero-row retry", func(t *testing.T) {
+		ctx := context.Background()
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+		stmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "out"}}}
+		execCtx := &ExecCtx{reqCtx: ctx}
+		callback := selectIntoUserVariablesOutputCallback(
+			execCtx, ses, stmt,
+			func(*batch.Batch, *perfcounter.CounterSet) error { return nil }, nil)
+		sink := newSelectIntoResultSink(execCtx, stmt, callback)
+
+		failed := selectIntoIntBatch(t, mp, 7, 1)
+		defer failed.Clean(mp)
+		zero := selectIntoIntBatch(t, mp, 0, 0)
+		defer zero.Clean(mp)
+
+		require.NoError(t, sink.BeginAttempt(ctx, 0, nil))
+		require.NoError(t, sink.Write(0, failed, nil))
+		require.NoError(t, sink.AbortAttempt(0, context.DeadlineExceeded))
+		require.NoError(t, sink.BeginAttempt(ctx, 1, nil))
+		require.Error(t, sink.Write(0, failed, nil), "writes from an aborted generation are rejected")
+		require.NoError(t, sink.Write(1, zero, nil))
+		require.NoError(t, sink.SealAttempt(1))
+		require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select value into @out"))
+		_, err := ses.GetUserDefinedVar("out")
+		require.Error(t, err, "an aborted row must not survive a successful zero-row attempt")
+	})
+
+	t.Run("single-row retry", func(t *testing.T) {
+		ctx := context.Background()
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+		stmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "out"}}}
+		execCtx := &ExecCtx{reqCtx: ctx}
+		callback := selectIntoUserVariablesOutputCallback(
+			execCtx, ses, stmt,
+			func(*batch.Batch, *perfcounter.CounterSet) error { return nil }, nil)
+		sink := newSelectIntoResultSink(execCtx, stmt, callback)
+
+		failed := selectIntoIntBatch(t, mp, 7, 1)
+		defer failed.Clean(mp)
+		succeeded := selectIntoIntBatch(t, mp, 9, 1)
+		defer succeeded.Clean(mp)
+
+		require.NoError(t, sink.BeginAttempt(ctx, 0, nil))
+		require.NoError(t, sink.Write(0, failed, nil))
+		require.NoError(t, sink.AbortAttempt(0, context.DeadlineExceeded))
+		require.NoError(t, sink.BeginAttempt(ctx, 1, nil))
+		require.NoError(t, sink.Write(1, succeeded, nil))
+		require.NoError(t, sink.SealAttempt(1))
+		require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select value into @out"))
+		value, err := ses.GetUserDefinedVar("out")
+		require.NoError(t, err)
+		require.Equal(t, int64(9), value.Value)
+	})
+}
+
+func TestScalarCaptureResultSinkDiscardsAbortedAttempts(t *testing.T) {
+	for _, retryRows := range []int{0, 1} {
+		t.Run(map[int]string{0: "zero-row retry", 1: "single-row retry"}[retryRows], func(t *testing.T) {
+			ctx := context.Background()
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			ses := &Session{feSessionImpl: feSessionImpl{pool: mp}}
+			capture := &scalarNumericValueKindCapture{}
+			stmt := &tree.Select{}
+			execCtx := &ExecCtx{reqCtx: ctx, ses: ses, numericValueKindCapture: capture}
+			activePlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+				StmtType: planpb.Query_SELECT,
+				Steps:    []int32{0},
+				Headings: []string{"value"},
+				Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{
+					{Typ: planpb.Type{Id: int32(types.T_varchar)}},
+					{Typ: planpb.Type{Id: int32(types.T_bool)}},
+				}}},
+				IntoUserVariableKindColumns: []int32{1},
+			}}}
+			callback := selectIntoUserVariablesOutputCallback(
+				execCtx, ses, stmt, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+					return ses.AppendResultBatch(bat)
+				}, func() *planpb.Plan { return activePlan })
+			sink := newSelectIntoResultSink(execCtx, stmt, callback)
+			failed := selectIntoStringKindBatch(t, mp, "failed", true, 1)
+			defer failed.Clean(mp)
+			retry := selectIntoStringKindBatch(t, mp, "retry", true, retryRows)
+			defer retry.Clean(mp)
+
+			require.NoError(t, sink.BeginAttempt(ctx, 0, nil))
+			require.NoError(t, sink.Write(0, failed, nil))
+			require.Len(t, ses.GetResultBatches(), 1)
+			kind, available := capture.snapshot()
+			require.True(t, available)
+			require.True(t, kind)
+			require.NoError(t, sink.AbortAttempt(0, context.DeadlineExceeded))
+			require.Empty(t, ses.GetResultBatches(), "the raw row and paired kind are discarded together")
+			kind, available = capture.snapshot()
+			require.False(t, available)
+			require.False(t, kind)
+
+			require.NoError(t, sink.BeginAttempt(ctx, 1, nil))
+			require.Error(t, sink.Write(0, failed, nil), "writes from an aborted generation are rejected")
+			require.NoError(t, sink.Write(1, retry, nil))
+			require.NoError(t, sink.SealAttempt(1))
+			kind, available = capture.snapshot()
+			if retryRows == 0 {
+				require.False(t, available)
+				require.False(t, kind)
+				for _, result := range ses.GetResultBatches() {
+					require.Zero(t, result.RowCount(), "zero-row retry must not retain a failed-attempt value")
+				}
+			} else {
+				require.True(t, available)
+				require.True(t, kind)
+				results := ses.GetResultBatches()
+				require.Len(t, results, 1)
+				require.Equal(t, 1, results[0].RowCount())
+				require.Equal(t, []byte("retry"), results[0].Vecs[0].GetBytesAt(0))
+			}
+			ses.ClearResultBatches()
+		})
+	}
+}
+
+func selectIntoIntBatch(t *testing.T, mp *mpool.MPool, value int64, rows int) *batch.Batch {
+	t.Helper()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	if rows != 0 {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
+	}
+	bat.SetRowCount(rows)
+	return bat
+}
+
+func selectIntoStringKindBatch(t *testing.T, mp *mpool.MPool, value string, kind bool, rows int) *batch.Batch {
+	t.Helper()
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_bool.ToType())
+	if rows != 0 {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], kind, false, mp))
+	}
+	bat.SetRowCount(rows)
+	return bat
+}
+
+func TestSelectIntoUserVariablesCallbackUsesActivePlanLayout(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+	stmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "hex_out"}, {Name: "text_out"}}}
+	makePlan := func(kindColumns []int32) *planpb.Plan {
+		return &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+			StmtType: planpb.Query_SELECT,
+			Steps:    []int32{0},
+			Headings: []string{"hex_out", "text_out"},
+			Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{
+				{Typ: planpb.Type{Id: int32(types.T_varchar)}},
+				{Typ: planpb.Type{Id: int32(types.T_varchar)}},
+				{Typ: planpb.Type{Id: int32(types.T_bool)}},
+				{Typ: planpb.Type{Id: int32(types.T_bool)}},
+			}}},
+			IntoUserVariableKindColumns: kindColumns,
+		}}}
+	}
+	initialPlan := makePlan([]int32{2, 3})
+	activePlan := makePlan([]int32{3, 2})
+	execCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		cw:     &TxnComputationWrapper{plan: initialPlan},
+	}
+	current := initialPlan
+	callback := selectIntoUserVariablesOutputCallback(
+		execCtx, ses, stmt, func(*batch.Batch, *perfcounter.CounterSet) error { return nil },
+		func() *planpb.Plan { return current },
+	)
+
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("31"), false, mp))
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("31"), false, mp))
+	bat.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], false, false, mp))
+	bat.Vecs[3] = vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[3], true, false, mp))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	// A retry can replace the active compiled plan after the wrapper was
+	// created. The output callback must capture the matching physical layout.
+	current = activePlan
+	require.NoError(t, callback(bat, nil))
+	require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select ... into @hex_out, @text_out"))
+	hexValue, err := ses.GetUserDefinedVar("hex_out")
+	require.NoError(t, err)
+	require.True(t, hexValue.IsBin, "the active plan maps hex_out to passenger column 3")
+	textValue, err := ses.GetUserDefinedVar("text_out")
+	require.NoError(t, err)
+	require.False(t, textValue.IsBin, "the active plan maps text_out to passenger column 2")
+}
+
+func TestScalarNumericKindCallbackCapturesPassengerAndForwardsVisibleBatch(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+	activePlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Headings: []string{"value"},
+		Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_varchar)}},
+			{Typ: planpb.Type{Id: int32(types.T_bool)}},
+		}}},
+		IntoUserVariableKindColumns: []int32{1},
+	}}}
+	execCtx := &ExecCtx{
+		reqCtx:                  ctx,
+		numericValueKindCapture: &scalarNumericValueKindCapture{},
+	}
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("31"), false, mp))
+	// Legacy vector metadata is intentionally ordinary; the paired BOOL owns
+	// the selected HEX provenance for this result.
+	bat.Vecs[1] = vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], true, false, mp))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	var forwarded *batch.Batch
+	callback := selectIntoUserVariablesOutputCallback(
+		execCtx, ses, &tree.Select{}, func(value *batch.Batch, _ *perfcounter.CounterSet) error {
+			forwarded = value
+			return nil
+		}, func() *planpb.Plan { return activePlan })
+	require.NoError(t, callback(bat, nil))
+	require.NotNil(t, forwarded)
+	require.Len(t, forwarded.Vecs, 1, "the result batch exposes only the visible value")
+	require.Len(t, forwarded.Attrs, 0)
+	kind, available := execCtx.numericValueKindCapture.snapshot()
+	require.True(t, available)
+	require.True(t, kind)
+
+	// A mapped false passenger must override any stale legacy vector marker.
+	bat.Vecs[0].SetIsBin(true)
+	bat.Vecs[1].ResetWithSameType()
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], false, false, mp))
+	bat.SetRowCount(1)
+	require.NoError(t, callback(bat, nil))
+	kind, available = execCtx.numericValueKindCapture.snapshot()
+	require.True(t, available)
+	require.False(t, kind)
 }
 
 func TestSelectIntoUserVariablesZeroRowsAddsNoDataDiagnostic(t *testing.T) {

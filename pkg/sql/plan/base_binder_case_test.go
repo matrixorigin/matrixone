@@ -24,13 +24,16 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1099,8 +1102,14 @@ func TestPreparedScalarNumericOverloadsUseDoubleDomain(t *testing.T) {
 			cast := fn.GetF().Args[0].GetF()
 			require.NotNil(t, cast)
 			require.Equal(t, "cast", cast.Func.GetObjName())
-			require.NotNil(t, cast.Args[0].GetP())
-			require.Equal(t, int32(types.T_float64), cast.Args[1].Typ.Id)
+			if source, policy, ok := numericValueCastAnalysisSource(fn.GetF().Args[0]); ok {
+				require.Equal(t, function.NumericValueCastPolicyOrdinary, policy)
+				require.NotNil(t, source.GetP(), "the validated CAST9 source view must retain the marker")
+				require.Equal(t, int32(types.T_float64), cast.Args[1].Typ.Id)
+			} else {
+				require.NotNil(t, cast.Args[0].GetP())
+				require.Equal(t, int32(types.T_float64), cast.Args[1].Typ.Id)
+			}
 		})
 	}
 
@@ -1540,7 +1549,10 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.NotNil(t, fn)
 	require.Equal(t, int32(types.T_int64), fn.Typ.Id)
 	require.Equal(t, int32(types.T_int64), fn.GetF().Args[0].Typ.Id)
-	require.Equal(t, int64(-9007199254740993), fn.GetF().Args[0].GetLit().GetI64Val())
+	valueSource, privateNode := numericValueProgramSourceOwner(fn.GetF().Args[0])
+	require.True(t, privateNode, "the value must be inspected through its validated program owner")
+	require.NotNil(t, valueSource.GetLit())
+	require.Equal(t, int64(-9007199254740993), valueSource.GetLit().GetI64Val())
 
 	prepared, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_abs_multi_exact from 'select abs(? + ?)'")
@@ -1654,8 +1666,11 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.Equal(t, int32(types.T_decimal256), fn.Typ.Id)
 	decimalArg := fn.GetF().Args[0]
 	require.Equal(t, int32(types.T_decimal256), decimalArg.Typ.Id)
-	require.Equal(t, "cast", decimalArg.GetF().Func.GetObjName())
-	require.Equal(t, "12345678901234567890123456789012345.6789", decimalArg.GetF().Args[0].GetLit().GetSval())
+	decimalSource, hasDecimalSource := numericValueProgramSourceOwner(decimalArg)
+	require.True(t, hasDecimalSource, "the decimal value must be inspected through its validated program owner")
+	require.Equal(t, "cast", decimalSource.GetF().Func.GetObjName())
+	require.Equal(t, int32(types.T_decimal256), decimalSource.Typ.Id)
+	require.Equal(t, "12345678901234567890123456789012345.6789", decimalSource.GetF().Args[0].GetLit().GetSval())
 
 	prepared, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_abs_nested_scalar_round from 'select abs((select round(? + 0) from nation limit 1))'")
@@ -1700,6 +1715,101 @@ func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {
 	require.Equal(t, int32(38), arg1.Typ.Width)
 	require.Equal(t, int32(7), arg1.Typ.Scale)
 	require.False(t, isCastExpr(funcExpr.Args[2]), "ELSE value already has the common decimal scale")
+}
+
+func TestFoldedImplicitStringCastPreservesNumericBinaryLiteralMarker(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	source := makePlan2StringConstExprWithType("1", true)
+	source.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_HEX
+	toType := types.T_binary.ToType()
+	toType.Width = 1
+
+	implicit, err := appendCastBeforeExpr(ctx, source, makePlan2Type(&toType))
+	require.NoError(t, err)
+	foldedImplicit, err := ConstantFold(batch.EmptyForConstFoldBatch, implicit, proc, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, foldedImplicit.GetLit())
+	require.True(t, foldedImplicit.GetLit().GetIsBin(),
+		"folding an implicit string cast must retain the HEX/BIT numeric-literal marker")
+
+	explicit, err := appendSyntaxExplicitCastBeforeExpr(ctx, source, makePlan2Type(&toType))
+	require.NoError(t, err)
+	foldedExplicit, err := ConstantFold(batch.EmptyForConstFoldBatch, explicit, proc, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, foldedExplicit.GetLit())
+	require.False(t, foldedExplicit.GetLit().GetIsBin(),
+		"an explicit cast is a numeric-literal provenance boundary")
+}
+
+func TestBoundFlowControlAfterImplicitStringCastFoldRetainsHexBitNumericRows(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	input := batch.NewWithSize(2)
+	defer input.Clean(proc.Mp())
+	for pos, values := range [][]bool{{true, false, false}, {false, true, false}} {
+		input.Vecs[pos] = vector.NewVec(types.T_bool.ToType())
+		require.NoError(t, vector.AppendFixedList(input.Vecs[pos], values, nil, proc.Mp()))
+	}
+	input.SetRowCount(3)
+
+	column := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: pos}},
+		}
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+
+	text := makePlan2StringConstExprWithType("1")
+	binaryType := types.T_binary.ToType()
+	binaryType.Width = 1
+	explicitBinary, err := appendSyntaxExplicitCastBeforeExpr(ctx, text, makePlan2Type(&binaryType))
+	require.NoError(t, err)
+	numericHex := makePlan2StringConstExprWithType("1", true)
+	numericHex.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_HEX
+
+	caseExpr := bind("case", column(0), DeepCopyExpr(explicitBinary),
+		column(1), numericHex, makePlan2StringConstExprWithType("1"))
+	abs := bind("abs", caseExpr)
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, abs, proc, false, true)
+	require.NoError(t, err)
+	features, err := planpb.RequiredRemoteExpressionFeatures(folded)
+	require.NoError(t, err)
+	require.True(t, features.NumericValuePrograms)
+
+	executor, err := colexec.NewExpressionExecutor(proc, folded)
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	values := vector.MustFixedColNoTypeCheck[float64](result)
+	require.Equal(t, []float64{1, 49, 1}, values,
+		"explicit BINARY and ordinary text stay text-numeric; the selected HEX literal remains numeric")
+}
+
+func TestStringMathBinderPreservesMixedCaseNumericLiteralDomain(t *testing.T) {
+	ctx := context.Background()
+	numericHex := makePlan2StringConstExprWithType("1", true)
+	numericHex.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_HEX
+	caseExpr, err := BindFuncExprImplByPlanExpr(ctx, "case", []*planpb.Expr{
+		makePlan2BoolConstExprWithType(true), numericHex, makePlan2StringConstExprWithType("1"),
+	})
+	require.NoError(t, err)
+
+	args, err := (&baseBinder{sysCtx: ctx}).bindStringSourceDeclaration("abs", []*planpb.Expr{caseExpr})
+	require.NoError(t, err)
+	require.Len(t, args, 1)
+	require.Same(t, caseExpr, args[0],
+		"ABS owns string-to-number conversion and must not erase a mixed CASE's selected HEX marker")
 }
 
 func TestBuildPreparedCaseConditionParameter(t *testing.T) {

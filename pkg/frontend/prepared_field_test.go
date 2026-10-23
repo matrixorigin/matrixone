@@ -59,8 +59,15 @@ func TestPreparedFieldHistoryCacheAndMigration(t *testing.T) {
 	require.ErrorContains(t, err, "field metadata failure")
 	require.Nil(t, prepared.fieldTypes)
 	writer.makeColumnDefDataFunc = nil
+	// This fixture expects MySQL numeric-prefix comparison for strings passed
+	// through FIELD. Keep the metadata-failure assertion above in strict mode,
+	// then opt in before the first successful execution snapshots history.
+	require.NoError(t, ses.SetSessionSysVar(ec.reqCtx, "sql_mode", "MYSQL_NUMERIC_COMPATIBILITY"))
+	refreshStatementScopedSessionInfo(ses, cw.proc)
 
 	cacheHits := 0
+	strictPlan := prepared.PreparePlan
+	compatibilityPlanCaptured := false
 	for _, run := range []struct {
 		typ   defines.MysqlType
 		value string
@@ -92,6 +99,11 @@ func TestPreparedFieldHistoryCacheAndMigration(t *testing.T) {
 			stmt.Free()
 		}
 		require.NoError(t, err)
+		if !compatibilityPlanCaptured {
+			require.NotSame(t, strictPlan, prepared.PreparePlan, "enabling numeric compatibility must rebuild the prepared plan")
+			original = prepared.PreparePlan.String()
+			compatibilityPlanCaptured = true
+		}
 		require.NotNil(t, prepared.fieldTypes)
 		q := p.GetQuery()
 		expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
@@ -213,7 +225,7 @@ func TestPreparedFieldHistoryCacheAndMigration(t *testing.T) {
 
 func TestPreparedFieldProtocolHistory(t *testing.T) {
 	const sql = "select field(case when ? then ? else null end, 'Z','A','a')"
-	ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 25302, sql)
+	ses, prepared, cw, ec := newPreparedExecuteEnvForSQLWithSQLMode(t, 25302, sql, "MYSQL_NUMERIC_COMPATIBILITY")
 	prepared.proc = cw.proc
 	t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
 	proto, _, scratch := newBinaryPrepareProtocolTestCase(t, sql)
@@ -285,7 +297,7 @@ func TestPreparedFieldCandidateHistory(t *testing.T) {
 		{"select field(cast('9007199254740992' as decimal(30,0)),case when ? then ? else null end,cast('9007199254740992' as decimal(30,0)))", []run{{defines.MYSQL_TYPE_LONGLONG, "9007199254740993", 2}, {defines.MYSQL_TYPE_VAR_STRING, "9007199254740993", 2}, {defines.MYSQL_TYPE_BLOB, "9007199254740993", 2}}},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
-			ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 25303, tc.sql)
+			ses, prepared, cw, ec := newPreparedExecuteEnvForSQLWithSQLMode(t, 25303, tc.sql, "MYSQL_NUMERIC_COMPATIBILITY")
 			prepared.proc = cw.proc
 			t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
 			for _, r := range tc.runs {

@@ -194,8 +194,8 @@ func CeilStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
-	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
-		floatVal, err1 := strconv.ParseFloat(v, 64)
+	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string, row uint64) (float64, error) {
+		floatVal, err1 := parseMathStringToFloat(v, ivecs[0].GetIsBin(), proc)
 		if err1 != nil {
 			return 0, err1
 		}
@@ -517,8 +517,8 @@ func FloorStr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		digits = vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0]
 	}
 
-	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string) (float64, error) {
-		floatVal, err1 := strconv.ParseFloat(v, 64)
+	return opUnaryStrToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v string, row uint64) (float64, error) {
+		floatVal, err1 := parseMathStringToFloat(v, ivecs[0].GetIsBin(), proc)
 		if err1 != nil {
 			return 0, err1
 		}
@@ -9109,15 +9109,23 @@ func makeTimeDecimal256IntegerGetter(vec *vector.Vector) func(uint64) (int64, bo
 	}
 }
 
-func makeTimeStringIntegerGetter(vec *vector.Vector) func(uint64) (int64, bool) {
+func makeTimeSourceIsBinary(vec, sourceKind *vector.Vector, row uint64) bool {
+	if sourceKind != nil {
+		if isBinary, isNull := vector.GenerateFunctionFixedTypeParameter[bool](sourceKind).GetValue(row); !isNull {
+			return isBinary
+		}
+	}
+	return vec.GetIsBin()
+}
+
+func makeTimeStringIntegerGetter(vec, sourceKind *vector.Vector) func(uint64) (int64, bool) {
 	param := vector.GenerateFunctionStrParameter(vec)
-	isBinary := vec.GetIsBin()
 	return func(i uint64) (int64, bool) {
 		value, null := param.GetStrValue(i)
 		if null {
 			return 0, true
 		}
-		if isBinary {
+		if makeTimeSourceIsBinary(vec, sourceKind, i) {
 			return makeTimeBinaryInteger(value), false
 		}
 		result, _ := parseLeadingInteger(strings.TrimSpace(functionUtil.QuickBytesToStr(value)))
@@ -9268,15 +9276,14 @@ func makeTimeExactSecond(value string) (int64, uint32, bool) {
 		uint32(totalMicroseconds % types.MicroSecsPerSec), false
 }
 
-func makeTimeStringSecondGetter(vec *vector.Vector) func(uint64) (int64, uint32, bool) {
+func makeTimeStringSecondGetter(vec, sourceKind *vector.Vector) func(uint64) (int64, uint32, bool) {
 	param := vector.GenerateFunctionStrParameter(vec)
-	isBinary := vec.GetIsBin()
 	return func(i uint64) (int64, uint32, bool) {
 		value, null := param.GetStrValue(i)
 		if null {
 			return 0, 0, true
 		}
-		if isBinary {
+		if makeTimeSourceIsBinary(vec, sourceKind, i) {
 			return makeTimeIntegerSecond(makeTimeBinaryInteger(value), false)
 		}
 		return makeTimeExactSecond(functionUtil.QuickBytesToStr(value))
@@ -9285,6 +9292,16 @@ func makeTimeStringSecondGetter(vec *vector.Vector) func(uint64) (int64, uint32,
 
 // MakeTime: MAKETIME(hour, minute, second) - Returns a time value calculated from the hour, minute, and second arguments.
 func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(ivecs) != 3 && len(ivecs) != 4 {
+		return moerr.NewInvalidInput(proc.Ctx, "MAKETIME requires three values and an optional seconds source kind")
+	}
+	var secondsKind *vector.Vector
+	if len(ivecs) == 4 {
+		if ivecs[3].GetType().Oid != types.T_bool {
+			return moerr.NewInvalidInput(proc.Ctx, "MAKETIME seconds source kind must be BOOL")
+		}
+		secondsKind = ivecs[3]
+	}
 	rs := vector.MustFunctionResult[types.Time](result)
 
 	var getHourValue func(uint64) (int64, bool)
@@ -9292,7 +9309,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	var getSecondValue func(uint64) (int64, uint32, bool)
 
 	if ivecs[0].GetType().Oid.IsMySQLString() {
-		getHourValue = makeTimeStringIntegerGetter(ivecs[0])
+		getHourValue = makeTimeStringIntegerGetter(ivecs[0], nil)
 	} else if ivecs[0].GetType().Oid == types.T_decimal128 {
 		getHourValue = makeTimeDecimal128IntegerGetter(ivecs[0])
 	} else if ivecs[0].GetType().Oid == types.T_decimal256 {
@@ -9326,7 +9343,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}
 
 	if ivecs[1].GetType().Oid.IsMySQLString() {
-		getMinuteValue = makeTimeStringIntegerGetter(ivecs[1])
+		getMinuteValue = makeTimeStringIntegerGetter(ivecs[1], nil)
 	} else if ivecs[1].GetType().Oid == types.T_decimal128 {
 		getMinuteValue = makeTimeDecimal128IntegerGetter(ivecs[1])
 	} else if ivecs[1].GetType().Oid == types.T_decimal256 {
@@ -9357,7 +9374,7 @@ func MakeTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}
 
 	if ivecs[2].GetType().Oid.IsMySQLString() {
-		getSecondValue = makeTimeStringSecondGetter(ivecs[2])
+		getSecondValue = makeTimeStringSecondGetter(ivecs[2], secondsKind)
 	} else if getter, ok := makeTimeIntegerGetter(ivecs[2]); ok {
 		getSecondValue = func(i uint64) (int64, uint32, bool) {
 			value, null := getter(i)

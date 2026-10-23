@@ -16,10 +16,11 @@ package function
 
 import (
 	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestZoneMapCapabilityRegistryCoverage(t *testing.T) {
@@ -27,8 +28,13 @@ func TestZoneMapCapabilityRegistryCoverage(t *testing.T) {
 	// The flag is inventory, not permission for paired endpoint execution.
 	expected := []int32{EQUAL, GREAT_THAN, GREAT_EQUAL, LESS_THAN, LESS_EQUAL, BETWEEN,
 		AND, OR, IN, ISNULL, ISNOTNULL, PLUS, MINUS, MULTI, DIV, INTEGER_DIV, UNARY_PLUS, UNARY_MINUS,
-		PREFIX_EQ, PREFIX_BETWEEN, PREFIX_IN_RANGE, PREFIX_IN, IN_RANGE, CEIL, FLOOR, ROUND, PI,
+		PREFIX_EQ, PREFIX_BETWEEN, PREFIX_IN_RANGE, PREFIX_IN, IN_RANGE, PI,
 		TS_TO_TIME, CURRENT_TIMESTAMP, LOCALTIME, DATE, DATE_SUB, FROM_UNIXTIME, YEAR, DATE_TRUNC}
+	// String-numeric conversion is not monotonic with string ordering, so these
+	// families intentionally do not advertise function-wide zonemap pruning.
+	require.False(t, allSupportedFunctions[CEIL].testFlag(plan.Function_ZONEMAPPABLE))
+	require.False(t, allSupportedFunctions[FLOOR].testFlag(plan.Function_ZONEMAPPABLE))
+	require.False(t, allSupportedFunctions[ROUND].testFlag(plan.Function_ZONEMAPPABLE))
 	families := make(map[int32]bool, len(expected))
 	for _, id := range expected {
 		require.True(t, allSupportedFunctions[id].testFlag(plan.Function_ZONEMAPPABLE))
@@ -111,6 +117,93 @@ func TestRuntimeConstantKeepsLazyFoldingPolicy(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRuntimeConstantAcceptsOnlyCompleteNumericValueOwner(t *testing.T) {
+	typ := func(oid types.T) plan.Type { return plan.Type{Id: int32(oid)} }
+	i64 := func(value int64) *plan.Expr {
+		return &plan.Expr{Typ: typ(types.T_int64), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: value}}}}
+	}
+	parameter := func(oid types.T, position int32) *plan.Expr {
+		return &plan.Expr{Typ: typ(oid), Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: position}}}
+	}
+	stringLiteral := func(value string) *plan.Expr {
+		return &plan.Expr{Typ: typ(types.T_varchar), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: value}}}}
+	}
+	owner := func(source, sourceKind *plan.Expr) *plan.Expr {
+		scope := i64(42)
+		valueSlot, kindSlot := i64(0), i64(1)
+		definitionArgs := []*plan.Expr{scope, source}
+		if sourceKind != nil {
+			definitionArgs = append(definitionArgs, sourceKind)
+		}
+		definition := &plan.Expr{Typ: source.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: EncodeOverloadID(SCALAR_PROGRAM, 0), ObjName: "_scalar_numeric_program"},
+			Args: definitionArgs,
+		}}}
+		valueRef := &plan.Expr{Typ: source.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: EncodeOverloadID(SCALAR_PROGRAM_REF, 0), ObjName: "_scalar_numeric_program_ref"},
+			Args: []*plan.Expr{definition, scope, valueSlot},
+		}}}
+		kindRef := &plan.Expr{Typ: typ(types.T_bool), Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: EncodeOverloadID(SCALAR_PROGRAM_REF, 0), ObjName: "_scalar_numeric_program_ref"},
+			Args: []*plan.Expr{scope, kindSlot},
+		}}}
+		targetType := typ(types.T_float64)
+		return &plan.Expr{Typ: targetType, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: EncodeOverloadID(CAST, NumericValueCastOverload), ObjName: "cast"},
+			Args: []*plan.Expr{
+				valueRef,
+				{Typ: targetType, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+				kindRef,
+				{Typ: typ(types.T_int32), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: NumericValueCastPolicyOrdinary}}}},
+			},
+		}}}
+	}
+
+	preparedOwner := owner(parameter(types.T_varchar, 0), parameter(types.T_bool, 1))
+	require.True(t, IsRuntimeConstant(preparedOwner), "a validated CAST9 may depend on frozen execute-time parameters")
+	require.False(t, IsConstant(preparedOwner, true), "runtime admission must not broaden folding")
+	require.False(t, IsStatementConstant(preparedOwner), "runtime admission must not broaden statement proofs")
+
+	rowScoped, err := GetFunctionByName(context.Background(), "format", []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()})
+	require.NoError(t, err)
+	rowDiagnosticSource := &plan.Expr{Typ: typ(types.T_varchar), Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{Obj: rowScoped.GetEncodedOverloadID(), ObjName: "format"},
+		Args: []*plan.Expr{stringLiteral("%s"), stringLiteral("value"), stringLiteral("en_US")},
+	}}}
+	volatile, err := GetFunctionByName(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	volatileSource := &plan.Expr{Typ: typ(types.T_float64), Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{Obj: volatile.GetEncodedOverloadID(), ObjName: "rand"},
+	}}}
+	column := &plan.Expr{Typ: typ(types.T_varchar), Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1}}}
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+	}{
+		{"row-scoped diagnostic source", owner(rowDiagnosticSource, nil)},
+		{"volatile source", owner(volatileSource, nil)},
+		{"row-dependent source", owner(column, nil)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.False(t, IsRuntimeConstant(tc.expr))
+		})
+	}
+
+	malformed := owner(parameter(types.T_varchar, 0), parameter(types.T_bool, 1))
+	malformed.GetF().Args[2].GetF().Args[1] = i64(2)
+	require.False(t, IsRuntimeConstant(malformed), "an unpaired private REF cannot establish row independence")
+	unknownRefOverload := owner(parameter(types.T_varchar, 0), parameter(types.T_bool, 1))
+	unknownRefOverload.GetF().Args[0].GetF().Func.Obj = EncodeOverloadID(SCALAR_PROGRAM_REF, 1)
+	require.False(t, IsRuntimeConstant(unknownRefOverload), "an unknown private REF overload cannot establish row independence")
+	unknownDefinitionOverload := owner(parameter(types.T_varchar, 0), parameter(types.T_bool, 1))
+	unknownDefinitionOverload.GetF().Args[0].GetF().Args[0].GetF().Func.Obj = EncodeOverloadID(SCALAR_PROGRAM, 1)
+	require.False(t, IsRuntimeConstant(unknownDefinitionOverload), "an unknown private definition overload cannot establish row independence")
+	physical := owner(parameter(types.T_varchar, 0), parameter(types.T_bool, 1))
+	physical.GetF().Args[0] = &plan.Expr{Typ: typ(types.T_varchar), Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1}}}
+	physical.GetF().Args[2] = &plan.Expr{Typ: typ(types.T_bool), Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 1}}}
+	require.False(t, IsRuntimeConstant(physical), "materialized row columns are not runtime constants")
 }
 
 func TestZoneMapArithmeticScaleDomain(t *testing.T) {

@@ -89,7 +89,7 @@ func Compile(ctx context.Context, query *plan.Query, compileSource SourceCompile
 			return plan.VisitExprTree(e, func(e *plan.Expr) error {
 				if call := e.GetDependent(); call != nil {
 					if call.Comparison != nil && comparisons[call.OccurrenceId] == nil {
-						bound, err := colexec.CompileDependentExpressions(ctx, []*plan.Expr{call.Comparison})
+						bound, err := colexec.CompileDependentExpressionsWithCorrelation(ctx, []*plan.Expr{call.Comparison}, query.Correlation.Programs)
 						if err != nil {
 							return err
 						}
@@ -174,7 +174,7 @@ func Compile(ctx context.Context, query *plan.Query, compileSource SourceCompile
 			}
 			if len(bounds) > 0 {
 				var err error
-				nt.bounds, err = colexec.CompileDependentExpressions(ctx, bounds)
+				nt.bounds, err = colexec.CompileDependentExpressionsWithCorrelation(ctx, bounds, query.Correlation.Programs)
 				if err != nil {
 					return nil, err
 				}
@@ -222,7 +222,7 @@ func Compile(ctx context.Context, query *plan.Query, compileSource SourceCompile
 					}
 					projection := &plan.Node{NodeType: plan.Node_PROJECT, NodeId: n.NodeId, Children: []int32{n.Children[j]}, ProjectList: exprs}
 					input := &nodeTemplate{node: projection, children: projection.Children}
-					if err = input.compileExpressions(ctx, exprs); err != nil {
+					if err = input.compileExpressions(ctx, exprs, query.Correlation.Programs); err != nil {
 						return nil, err
 					}
 					r.index[virtualID] = len(r.nodes)
@@ -271,7 +271,7 @@ func Compile(ctx context.Context, query *plan.Query, compileSource SourceCompile
 					})
 				}
 			}
-			if err := nt.compileExpressions(ctx, roots); err != nil {
+			if err := nt.compileExpressions(ctx, roots, query.Correlation.Programs); err != nil {
 				return nil, err
 			}
 			r.index[id] = len(r.nodes)
@@ -285,12 +285,12 @@ func Compile(ctx context.Context, query *plan.Query, compileSource SourceCompile
 	return t, nil
 }
 
-func (n *nodeTemplate) compileExpressions(ctx context.Context, roots []*plan.Expr) error {
+func (n *nodeTemplate) compileExpressions(ctx context.Context, roots []*plan.Expr, programs []*plan.CorrelationProgram) error {
 	var err error
 	// rowTask evaluates these projections/filters over one materialized node
 	// output, including native-kernel and virtual input projections. JOIN's
 	// two-input condition and reducer comparisons use their own namespaces.
-	n.expressions, err = colexec.CompileDependentSingleInputExpressions(ctx, roots)
+	n.expressions, err = colexec.CompileDependentSingleInputExpressionsWithCorrelation(ctx, roots, programs)
 	if err != nil {
 		return err
 	}
@@ -412,7 +412,7 @@ func (e *Execution) Open(parent *process.Process, call *plan.DependentExpr, slot
 	}
 	lhsBatch := &batch.Batch{Vecs: lhs}
 	lhsBatch.SetRowCount(1)
-	inv := &invocation{region: r, proc: child}
+	inv := &invocation{region: r, proc: child, scalarResultKindColumn: p.ScalarResultKindColumn}
 	inv.reducer, err = colexec.NewDependentReducer(child, call, p.OutputTypes, lhsBatch, e.allocation, e.template.comparisons[call.OccurrenceId])
 	if err != nil {
 		_ = inv.Close(err)
@@ -422,12 +422,15 @@ func (e *Execution) Open(parent *process.Process, call *plan.DependentExpr, slot
 }
 
 type invocation struct {
-	region  *region
-	proc    *process.Process
-	reducer *colexec.DependentReducer
-	done    bool
-	result  *batch.Batch
+	region                 *region
+	proc                   *process.Process
+	reducer                *colexec.DependentReducer
+	done                   bool
+	result                 *batch.Batch
+	scalarResultKindColumn uint32
 }
+
+func (i *invocation) ScalarResultKindColumn() uint32 { return i.scalarResultKindColumn }
 
 func (i *invocation) Step(context.Context) (vm.ContinuationStep, error) {
 	if i.done {

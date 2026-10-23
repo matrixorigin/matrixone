@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/cteaccount"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -39,15 +40,16 @@ const (
 )
 
 type container struct {
-	allocation  colexec.SetOperationAllocation
-	directories colexec.AnalyticAllocation
-	accounted   bool
-	iterator    hashmap.Iterator
-	buf         *batch.Batch
-	bats        []*batch.Batch
-	curNodeCnt  int32
-	status      int32
-	last        bool
+	allocation   colexec.SetOperationAllocation
+	directories  colexec.AnalyticAllocation
+	accounted    bool
+	iterator     hashmap.Iterator
+	keyEvaluator colexec.SetOperationKeyEvaluator
+	buf          *batch.Batch
+	bats         []*batch.Batch
+	curNodeCnt   int32
+	status       int32
+	last         bool
 	// freeBats owns the cached batches. buf and bats are only aliases.
 	freeBats       []*batch.Batch
 	i              int
@@ -65,6 +67,7 @@ type MergeCTE struct {
 
 	NodeCnt  int
 	Distinct bool
+	KeyExprs []*planpb.Expr
 
 	vm.OperatorBase
 }
@@ -147,6 +150,7 @@ func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.recursiveLevel = 0
 	ctr.hasRecursiveRows = false
 	ctr.cleanHashTable(proc.Mp())
+	ctr.keyEvaluator.Reset()
 }
 
 func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -163,6 +167,7 @@ func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.i = 0
 	ctr.hasRecursiveRows = false
 	ctr.cleanHashTable(proc.Mp())
+	ctr.keyEvaluator.Free()
 	ctr.directories.FreeMetadata()
 }
 

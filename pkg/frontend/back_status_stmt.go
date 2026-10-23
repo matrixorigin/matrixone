@@ -47,6 +47,9 @@ func executeStatusStmtInBack(backSes *backSession,
 		return
 	}
 	if intoVars > 0 {
+		if err = validateSelectIntoArity(execCtx.reqCtx, activeSelectIntoPlan(execCtx), intoVars); err != nil {
+			return
+		}
 		if execCtx.selectInto == nil {
 			return moerr.NewInternalError(execCtx.reqCtx, "SELECT INTO user-variable collector is not initialized")
 		}

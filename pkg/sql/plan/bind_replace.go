@@ -1507,8 +1507,8 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 
 	for _, i := range generatedColIdxs {
 		col := tableDef.Cols[i]
-		genExpr, err := builder.applyGeneratedColumnAssignmentCast(
-			DeepCopyExpr(col.GeneratedCol.Expr),
+		genExpr, err := builder.importGeneratedColumnAssignmentCast(
+			col.GeneratedCol.Expr,
 			false,
 		)
 		if err != nil {

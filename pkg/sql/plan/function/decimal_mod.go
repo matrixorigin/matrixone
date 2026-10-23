@@ -16,11 +16,28 @@ package function
 
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-// DecimalModReturnType derives exact-value MOD metadata from the original
-// operands. Implicit casts describe storage, not the operands' SQL precision.
-// Keep the selected physical type: modFn's result kernel must match its inputs.
+// DecimalModReturnType derives MOD result metadata from the original operands.
+// Implicit casts describe storage, not the operands' SQL precision. Keep the
+// selected physical type: modFn's result kernel must match its inputs.
 func DecimalModReturnType(original []types.Type, selected types.Type) types.Type {
-	if len(original) != 2 || !selected.Oid.IsDecimal() ||
+	if len(original) != 2 {
+		return selected
+	}
+	if selected.Oid == types.T_float64 &&
+		((original[0].Oid.IsDecimal() && original[1].Oid.IsMySQLString()) ||
+			(original[1].Oid.IsDecimal() && original[0].Oid.IsMySQLString())) {
+		// String MOD executes with default DOUBLE casts, but its result metadata
+		// historically came from the arithmetic cast rule applied to the
+		// original operands. Restore only that metadata when its left target is
+		// still the selected physical type.
+		_, historicalLeft, _ := arithmeticTypeCastRule1(original[0], original[1])
+		if historicalLeft.Oid == selected.Oid {
+			selected.Width = historicalLeft.Width
+			selected.Scale = historicalLeft.Scale
+		}
+		return selected
+	}
+	if !selected.Oid.IsDecimal() ||
 		(!original[0].Oid.IsDecimal() && !original[1].Oid.IsDecimal()) {
 		return selected
 	}

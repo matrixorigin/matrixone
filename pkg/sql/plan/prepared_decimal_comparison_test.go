@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,8 +63,19 @@ func requirePreparedDecimalComparisonArgs(
 	cast := fn.Args[paramPos].GetF()
 	require.NotNil(t, cast)
 	require.Equal(t, "cast", cast.Func.GetObjName())
-	require.Len(t, cast.Args, 2)
-	require.NotNil(t, cast.Args[0].GetP())
+	_, overload := function.DecodeOverloadID(cast.Func.GetObj())
+	if overload == function.NumericValueCastOverload {
+		source, policy, ok := numericValueCastAnalysisSource(fn.Args[paramPos])
+		require.True(t, ok, "prepared decimal conversion must retain a validated paired source owner")
+		require.Equal(t, function.NumericValueCastPolicyOrdinary, policy)
+		require.Equal(t, int32(want.Oid), cast.Args[1].Typ.Id)
+		require.Equal(t, want.Width, cast.Args[1].Typ.Width)
+		require.Equal(t, want.Scale, cast.Args[1].Typ.Scale)
+		require.NotNil(t, source.GetP())
+	} else {
+		require.Len(t, cast.Args, 2)
+		require.NotNil(t, cast.Args[0].GetP())
+	}
 }
 
 func TestPreparedDecimalBinaryComparisonsDeriveParamType(t *testing.T) {
@@ -775,7 +787,11 @@ func TestPreparedDecimalComparisonPlannerReplacementAndReuse(t *testing.T) {
 		}
 		require.False(t, planExprContainsPreparedDecimalParam(comparison))
 
-		literal := firstPreparedDecimalComparisonLiteral(comparison.GetF().Args[1])
+		valueSource := comparison.GetF().Args[1]
+		if source, _, ok := numericValueCastAnalysisSource(valueSource); ok {
+			valueSource = source
+		}
+		literal := firstPreparedDecimalComparisonLiteral(valueSource)
 		require.NotNil(t, literal)
 		if value == nil {
 			require.True(t, literal.Isnull)

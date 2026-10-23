@@ -61,6 +61,12 @@ func (mergeCTE *MergeCTE) Prepare(proc *process.Process) error {
 		mergeCTE.ctr.hashTable = hashTable
 		mergeCTE.ctr.iterator = hashTable.NewIterator()
 	}
+	if mergeCTE.Distinct && len(mergeCTE.KeyExprs) > 0 {
+		if err := mergeCTE.ctr.keyEvaluator.Prepare(
+			proc, mergeCTE.KeyExprs, mergeCTE.ctr.allocation.ExpressionAllocation()); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -291,13 +297,17 @@ func (ctr *container) filterInsertedRows(
 	ctr.insertedRows = rows[:0]
 	itr := ctr.iterator
 	oldSize := ctr.hashTable.Size()
+	keyVectors, err := ctr.keyEvaluator.Eval(proc, src)
+	if err != nil {
+		return nil, err
+	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
 			n = hashmap.UnitLimit
 		}
 		oldGroupCount := ctr.hashTable.GroupCount()
-		values, _, err := itr.Insert(i, n, src.Vecs)
+		values, _, err := itr.Insert(i, n, keyVectors)
 		if err != nil {
 			return nil, err
 		}

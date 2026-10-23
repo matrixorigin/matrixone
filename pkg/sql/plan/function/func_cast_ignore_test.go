@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -265,6 +266,59 @@ func TestAssignmentIgnoreEmptyTimeIsZeroWithWarning(t *testing.T) {
 	require.Equal(t, []types.Time{0}, vector.MustFixedColWithTypeCheck[types.Time](result))
 	require.False(t, result.GetNulls().Contains(0))
 	require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}}, stripWarningMessages(session.warnings))
+}
+
+func runAssignmentIgnoreTimeCastWithMixedNumericBinaryRows(
+	t *testing.T,
+	values []string,
+) (*vector.Vector, *numericWarningSession, error) {
+	t.Helper()
+	session := &numericWarningSession{}
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() {
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	proc.Session = session
+	target := types.T_time.ToTypeWithScale(6)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), values, nil),
+			NewFunctionTestInput(target, []types.Time{}, nil),
+		},
+		NewFunctionTestResult(target, false, nil, nil),
+		NewAssignIgnoreCast,
+	)
+	t.Cleanup(testCase.Free)
+	kind := newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{true, false}, nil)
+	defer kind.Free(proc.Mp())
+	testCase.fn = func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		return newCast(parameters, result, proc, length, selectList, castModeAssignmentIgnore, true, kind)
+	}
+	result, err := testCase.DebugRun()
+	if err != nil {
+		return nil, session, err
+	}
+	return result, session, nil
+}
+
+func TestAssignmentIgnoreTimeUsesExplicitNumericValueKind(t *testing.T) {
+	t.Run("empty HEX row is NULL but ordinary empty text is zero with warning", func(t *testing.T) {
+		result, session, err := runAssignmentIgnoreTimeCastWithMixedNumericBinaryRows(t, []string{"", ""})
+		require.NoError(t, err)
+		require.Equal(t, []types.Time{0, 0}, vector.MustFixedColWithTypeCheck[types.Time](result))
+		require.True(t, result.GetNulls().Contains(0), "empty HEX literal converts to NULL")
+		require.False(t, result.GetNulls().Contains(1), "ordinary empty text converts to zero TIME")
+		require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}}, stripWarningMessages(session.warnings))
+	})
+
+	t.Run("marked malformed row does not use IGNORE prefix recovery", func(t *testing.T) {
+		_, session, err := runAssignmentIgnoreTimeCastWithMixedNumericBinaryRows(
+			t, []string{"12:34:56tail", "tail"})
+		require.Error(t, err, "a marked row retains the HEX/BIT temporal parse behavior")
+		require.Empty(t, session.warnings, "marked malformed text is not adjusted by IGNORE")
+	})
 }
 
 func TestAssignmentIgnoreDecimalClassification(t *testing.T) {

@@ -221,6 +221,13 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 		return expr
 	}
 	overloadID := fn.Func.GetObj()
+	functionID, _ := function.DecodeOverloadID(overloadID)
+	if functionID == function.SCALAR_PROGRAM || functionID == function.SCALAR_PROGRAM_REF {
+		// These private nodes are lexical executor instructions, not SQL
+		// functions. Folding a REF or its definition independently can detach
+		// the selected value from its paired kind output.
+		return expr
+	}
 	if r.isPrepared && IsNullIntegerArgumentCast(expr) {
 		return expr
 	}
@@ -478,7 +485,7 @@ func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
 		return
 	}
 	fid, overload := function.DecodeOverloadID(fn.GetFunc().GetObj())
-	if fid != function.CAST || overload != 0 {
+	if fid != function.CAST || overload != 0 || fn.GetSyntaxExplicitCast() {
 		return
 	}
 	source := fn.Args[0]
@@ -490,6 +497,10 @@ func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
 	sourceDomain := types.StaticStringDomain(types.MustTypeFromPlan(
 		source.Typ))
 	if sourceLiteral := source.GetLit(); sourceLiteral != nil {
+		// CAST0 preserves the source's selected numeric-literal provenance
+		// separately from the runtime string domain. Constant-folding that
+		// implicit string conversion must keep both facts on the literal.
+		literal.IsBin = sourceLiteral.IsBin
 		switch sourceLiteral.LiteralForm {
 		case plan.StringLiteralForm_STRING_LITERAL_TEXT:
 			sourceDomain = types.StringDomainText
@@ -719,6 +730,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) (literal *p
 				Sval: vec.GetStringAt(int(row)),
 			},
 		}
+		literal.IsBin = vec.GetIsBin()
 		if vec.GetType().Oid.IsMySQLString() {
 			switch vec.GetRuntimeStringDomainAt(int(row)) {
 			case types.RuntimeStringText:

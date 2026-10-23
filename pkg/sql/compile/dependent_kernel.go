@@ -43,6 +43,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func (c *Compile) dependentCorrelationPrograms() []*plan.CorrelationProgram {
+	if c == nil || c.anal == nil || c.anal.qry == nil || c.anal.qry.Correlation == nil {
+		return nil
+	}
+	return c.anal.qry.Correlation.Programs
+}
+
 func (c *Compile) compileDependentKernel(node *plan.Node, children []*plan.Node) (dependent.KernelFactory, [][]*plan.Expr, error) {
 	n := plan2.DeepCopyNode(node)
 	inputs := make([][]*plan.Expr, len(children))
@@ -250,7 +257,7 @@ func (c *Compile) compileDependentKernel(node *plan.Node, children []*plan.Node)
 			}
 			if needsSetup {
 				var err error
-				setup, err = colexec.CompileDependentExpressions(c.proc.Ctx, n.FillVal)
+				setup, err = colexec.CompileDependentExpressionsWithCorrelation(c.proc.Ctx, n.FillVal, c.dependentCorrelationPrograms())
 				if err != nil {
 					return nil, nil, err
 				}
@@ -461,7 +468,7 @@ func (c *Compile) compileDependentJoin(n *plan.Node, children []*plan.Node) (dep
 	var program *colexec.DependentExpressionProgram
 	var err error
 	if cond != nil {
-		program, err = colexec.CompileDependentExpressions(c.proc.Ctx, []*plan.Expr{cond})
+		program, err = colexec.CompileDependentExpressionsWithCorrelation(c.proc.Ctx, []*plan.Expr{cond}, c.dependentCorrelationPrograms())
 		if err != nil {
 			return nil, err
 		}
@@ -514,7 +521,7 @@ func (c *Compile) compileDependentHashJoin(n *plan.Node, children []*plan.Node) 
 	var updateCols []int32
 	if ctx := n.DedupJoinCtx; ctx != nil && ctx.EmitActionRows {
 		for _, expr := range ctx.UpdateColExprList {
-			program, err := colexec.CompileDependentExpressions(c.proc.Ctx, []*plan.Expr{expr})
+			program, err := colexec.CompileDependentExpressionsWithCorrelation(c.proc.Ctx, []*plan.Expr{expr}, c.dependentCorrelationPrograms())
 			if err != nil {
 				return nil, err
 			}

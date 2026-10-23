@@ -623,15 +623,19 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			// the outer EXECUTE fragment, which cannot contain the inner hint.
 			retComp.SetQuerySchedulingIntent(cwft.querySchedulingIntentForPreparedStatement(originSQL))
 			retComp.SetSchedulingTraceRecorder(&cwft.schedulingTrace)
+			outputCallback := compileOutputCallback(execCtx, cwft.ses, cwft.stmt, fill, retComp.GetPlan)
 			if err = retComp.Reset(
 				cwft.proc,
 				getStatementStartAt(execCtx.reqCtx),
-				compileOutputCallback(execCtx, cwft.ses, cwft.stmt, fill),
+				outputCallback,
 				cwft.ses.GetSql(),
 				cwft.preparedJoinDiagnosticFree,
 			); err != nil {
 				return nil, err
 			}
+			// Reset may reuse a Compile from the previous prepared execution. Always
+			// replace its sink so no prior statement's attempt state survives.
+			retComp.SetResultSink(newSelectIntoResultSink(execCtx, cwft.stmt, outputCallback))
 			if preparedCTASNeedsSemanticParams(cwft.stmt) {
 				retComp.SetPreparedParamValues(cwft.paramVals)
 			}
@@ -1415,6 +1419,7 @@ func initExecuteStmtParamWithResolverInSession(
 	previousGroupConcatMaxLenFloor := prepareStmt.groupConcatMaxLenFloor
 	currentSQLMode := sessionSQLMode(owner)
 	currentNativeMode := mysql.HasMatrixOneNativeSQLMode(currentSQLMode)
+	currentMySQLNumericCompatibilityMode := mysql.HasMySQLNumericCompatibilitySQLMode(currentSQLMode)
 	currentOnlyFullGroupBy := mysql.HasSQLMode(currentSQLMode, "ONLY_FULL_GROUP_BY")
 	currentBoolSumAvg := mysql.HasEnableBoolSumAvgSQLMode(currentSQLMode)
 	currentNoUnsignedSubtraction := mysql.HasSQLMode(currentSQLMode, "NO_UNSIGNED_SUBTRACTION")
@@ -1474,6 +1479,7 @@ func initExecuteStmtParamWithResolverInSession(
 	// value, while subscription metadata plans expand the current visible
 	// subscription set. Rebuild both classes on every EXECUTE.
 	modeMismatch := prepareStmt.NativeMode != currentNativeMode ||
+		prepareStmt.MySQLNumericCompatibilityMode != currentMySQLNumericCompatibilityMode ||
 		prepareStmt.sqlModeFlagsSet && (prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy ||
 			prepareStmt.BoolSumAvg != currentBoolSumAvg ||
 			prepareStmt.NoUnsignedSubtraction != currentNoUnsignedSubtraction) ||
@@ -1600,6 +1606,7 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 		}
 		prepareStmt.NativeMode = currentNativeMode
+		prepareStmt.MySQLNumericCompatibilityMode = currentMySQLNumericCompatibilityMode
 		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
@@ -2971,10 +2978,12 @@ func createCompile(
 	retCompile.SetBuildPlanFunc(preparedExecutionBuildPlanFunc(
 		ses, stmt, forcePrepare, preparedRetry, databaseName, usePreparedDatabase))
 
-	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(execCtx, ses, stmt, fill))
+	outputCallback := compileOutputCallback(execCtx, ses, stmt, fill, retCompile.GetPlan)
+	err = retCompile.Compile(compileCtx, plan, outputCallback)
 	if err != nil {
 		return
 	}
+	retCompile.SetResultSink(newSelectIntoResultSink(execCtx, stmt, outputCallback))
 	retCompile.SetOriginSQL(originSQL)
 	return
 }
@@ -3006,12 +3015,13 @@ func compileOutputCallback(
 	ses FeSession,
 	stmt tree.Statement,
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
+	currentPlan func() *plan.Plan,
 ) func(*batch.Batch, *perfcounter.CounterSet) error {
 	switch stmt.(type) {
 	case *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 		return func(*batch.Batch, *perfcounter.CounterSet) error { return nil }
 	default:
-		return selectIntoUserVariablesOutputCallback(execCtx, ses, stmt, fill)
+		return selectIntoUserVariablesOutputCallback(execCtx, ses, stmt, fill, currentPlan)
 	}
 }
 

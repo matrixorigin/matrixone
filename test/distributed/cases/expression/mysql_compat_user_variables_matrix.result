@@ -1,3 +1,5 @@
+SET @mysql_compat_user_variables_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@mysql_compat_user_variables_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 select @uv_matrix_missing;
 ➤ @uv_matrix_missing[12,0,0]  𝄀
 null
@@ -156,3 +158,5 @@ select @uv_matrix_batch_a, @uv_matrix_batch_b;
 ➤ @uv_matrix_batch_a[-5,64,0]  ¦  @uv_matrix_batch_b[-5,64,0]  𝄀
 1  ¦  2
 drop database mysql_compat_user_variables_matrix;
+SET SESSION sql_mode = @mysql_compat_user_variables_saved_sql_mode;
+SET @mysql_compat_user_variables_saved_sql_mode = NULL;
