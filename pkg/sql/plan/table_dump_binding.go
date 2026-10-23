@@ -43,12 +43,13 @@ type tableDumpBindingBudget struct {
 }
 
 type tableDumpExpressionVisitor struct {
-	nodes              int
-	hasDivision        bool
-	hasIntegerDivision bool
-	hasSpecial         bool
-	hasTimestampAdd    bool
-	hasJSON            bool
+	nodes                     int
+	hasDivision               bool
+	hasIntegerDivision        bool
+	hasSpecial                bool
+	hasTimestampAdd           bool
+	mayUseJapaneseMonthAbbrev bool
+	hasJSON                   bool
 }
 
 func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
@@ -63,6 +64,22 @@ func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 			v.hasSpecial = true
 		case "timestampadd":
 			v.hasTimestampAdd = true
+		case "date_format":
+			// A literal format without %b cannot use the historical ja_JP
+			// spelling. Keep computed formats eligible: their value is unknown
+			// until binding and folding.
+			mayUseAbbrev := true
+			if len(fn.Exprs) >= 2 {
+				switch format := unwrapParenExpr(fn.Exprs[1]).(type) {
+				case *tree.StrVal:
+					mayUseAbbrev = strings.Contains(format.String(), "%b")
+				case *tree.NumVal:
+					if format.ValType == tree.P_char {
+						mayUseAbbrev = strings.Contains(format.String(), "%b")
+					}
+				}
+			}
+			v.mayUseJapaneseMonthAbbrev = v.mayUseJapaneseMonthAbbrev || mayUseAbbrev
 		case "json_length", "json_set", "json_insert", "json_replace":
 			v.hasJSON = true
 		}
@@ -213,10 +230,12 @@ const (
 	tableDumpBindingLegacyZeroTemporalDefault
 )
 
-// A flag selects one coherent pre-migration binding, never per-node metadata.
-const tableDumpBindingPreTemporalNullability tableDumpBindingMode = 1 << 7
-
-const tableDumpBindingPreJSON tableDumpBindingMode = 1 << 6
+// Flags select one coherent pre-migration binding, never per-node metadata.
+const (
+	tableDumpBindingLegacyJapaneseMonthAbbrev tableDumpBindingMode = 1 << 5
+	tableDumpBindingPreJSON                   tableDumpBindingMode = 1 << 6
+	tableDumpBindingPreTemporalNullability    tableDumpBindingMode = 1 << 7
+)
 
 type tableDumpDefaultSession struct {
 	timeZone, locale, folded bool
@@ -224,7 +243,7 @@ type tableDumpDefaultSession struct {
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON)
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingLegacyJapaneseMonthAbbrev)
 	if mode&tableDumpBindingPreTemporalNullability != 0 {
 		bindCtx = function.WithLegacyTemporalNullability(bindCtx)
 	}
@@ -239,6 +258,12 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 	proc := ctx.GetProcess()
 	if proc == nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "table dump expression binding requires a process")
+	}
+	if mode&tableDumpBindingLegacyJapaneseMonthAbbrev != 0 {
+		bindCtx = function.WithLegacyJapaneseMonthAbbrev(bindCtx)
+		previous := proc.GetTopContext()
+		proc.ReplaceTopCtx(function.WithLegacyJapaneseMonthAbbrev(previous))
+		defer proc.ReplaceTopCtx(previous)
 	}
 	if mode&tableDumpBindingPreJSON != 0 {
 		// Constant folding executes with proc.Ctx. This process is private to
@@ -706,8 +731,11 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			localesFor := func(needsLocale bool) []string {
 				locales := []string{locale}
 				if needsLocale {
+					if locale != "ja_JP" {
+						locales = append(locales, "ja_JP")
+					}
 					for _, other := range function.TemporalLocaleNames() {
-						if other != locale {
+						if other != locale && other != "ja_JP" {
 							locales = append(locales, other)
 						}
 					}
@@ -733,44 +761,164 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					}
 				}
 			}
-			for _, search := range sessions {
-				if matched {
+			// Try every precision and binding era with the historical Japanese
+			// spelling before any timezone enumeration can consume the budget.
+			var legacySessions []sessionCandidate
+			if !matched && item.kind == "default" && visit.mayUseJapaneseMonthAbbrev {
+				for increment := int64(0); increment <= maxIncrement && !matched; increment++ {
+					for _, mode := range modes {
+						dependency = tableDumpDefaultSession{}
+						legacyMode := mode | tableDumpBindingLegacyJapaneseMonthAbbrev
+						candidate, err := bind(increment, legacyMode, zone, "ja_JP")
+						if fatal != nil {
+							stmt.Free()
+							return false, fatal
+						}
+						if err == nil && sameTableDumpBoundExpression(want, candidate) {
+							matched, sensitive = true, true
+							break
+						}
+						_, folded := tableDumpTimestampLiteral(candidate)
+						_, stored := tableDumpTimestampLiteral(want)
+						typeCanMatch := err != nil || candidate == nil || want == nil ||
+							sameTableDumpBoundType(candidate.Typ, want.Typ)
+						if typeCanMatch && (dependency.timeZone || folded || stored) {
+							legacySessions = append(legacySessions,
+								sessionCandidate{increment, legacyMode, dependency, folded, stored})
+						}
+					}
+				}
+			}
+			// Keep one list of complete-tree candidates for every timezone. This
+			// gives the historical spelling a turn at each zone before another
+			// precision or locale can consume the shared candidate budget.
+			type timezoneCandidate struct {
+				sessionCandidate
+				locales []string
+				legacy  bool
+			}
+			var zoneCandidates []timezoneCandidate
+			currentIndex, legacyIndex := 0, 0
+			for increment := int64(0); increment <= maxIncrement; increment++ {
+				// Give historical spelling the same precision priority as the
+				// current spelling. The exhaustive phase searches each complete
+				// candidate across zones before moving to the next precision;
+				// otherwise early zones can consume the shared budget first.
+				for legacyIndex < len(legacySessions) && legacySessions[legacyIndex].increment == increment {
+					search := legacySessions[legacyIndex]
+					zoneCandidates = append(zoneCandidates,
+						timezoneCandidate{search, []string{"ja_JP"}, true})
+					legacyIndex++
+				}
+				for currentIndex < len(sessions) && sessions[currentIndex].increment == increment {
+					search := sessions[currentIndex]
+					if search.dependency.timeZone || search.folded || search.stored {
+						zoneCandidates = append(zoneCandidates,
+							timezoneCandidate{search, localesFor(search.dependency.locale), false})
+					}
+					currentIndex++
+				}
+			}
+			// Timestamp defaults can recover a fixed creation offset directly.
+			for _, search := range zoneCandidates {
+				if matched || fatal != nil {
 					break
 				}
-				increment, mode := search.increment, search.mode
-				dependency = search.dependency
-				folded, stored := search.folded, search.stored
-				locales := localesFor(search.dependency.locale)
-				if search.dependency.timeZone || folded || stored {
-					for _, lc := range locales {
+				if !search.folded && !search.stored {
+					continue
+				}
+				for _, lc := range search.locales {
+					matched = matchTableDumpTimestampDefault(want, nil, zone, func(tz *time.Location) (*planpb.Expr, error) {
+						return bind(search.increment, search.mode, tz, lc)
+					})
+					if matched {
+						sensitive = sensitive || search.legacy
+					}
+					if matched || fatal != nil {
+						break
+					}
+				}
+			}
+			if !matched && fatal == nil && len(zoneCandidates) > 0 {
+				probe := func(search timezoneCandidate, tz *time.Location, lc string) {
+					rebound, err := bind(search.increment, search.mode, tz, lc)
+					if fatal == nil && err == nil && sameTableDumpBoundExpression(want, rebound) {
+						matched = true
+						sensitive = sensitive || search.legacy
+					}
+				}
+				if len(legacySessions) > 0 {
+					// Try common whole-hour offsets across every precision, era and
+					// locale before a wrong candidate enumerates all named zones.
+					// Full rule-bearing zones and arbitrary minute offsets remain in
+					// the exhaustive search below, under the same visit budget.
+					fastZones := make([]*time.Location, 0, 28)
+					for hour := -13; hour <= 14; hour++ {
+						fastZones = append(fastZones, time.FixedZone("table dump common offset", hour*3600))
+					}
+					for _, search := range zoneCandidates {
 						if matched || fatal != nil {
 							break
 						}
-						if folded || stored {
-							matched = matchTableDumpTimestampDefault(want, nil, zone, func(tz *time.Location) (*planpb.Expr, error) {
-								return bind(increment, mode, tz, lc)
-							})
-						}
-						if matched || fatal != nil {
-							break
-						}
-						for tz := range timeZones {
-							rebound, _ := bind(increment, mode, tz, lc)
-							if fatal != nil {
-								break
+						for _, lc := range search.locales {
+							for _, tz := range fastZones {
+								probe(search, tz, lc)
+								if matched || fatal != nil {
+									break
+								}
 							}
-							if sameTableDumpBoundExpression(want, rebound) {
-								matched = true
+							if matched || fatal != nil {
 								break
 							}
 						}
 					}
 				}
-				if fatal != nil {
-					stmt.Free()
-					return false, fatal
+				searchZones := func(search timezoneCandidate, locales []string) {
+					for _, lc := range locales {
+						for tz := range timeZones {
+							probe(search, tz, lc)
+							if matched || fatal != nil {
+								break
+							}
+						}
+						if matched || fatal != nil {
+							break
+						}
+					}
 				}
-
+				for _, search := range zoneCandidates {
+					if matched || fatal != nil {
+						break
+					}
+					if len(legacySessions) == 0 {
+						searchZones(search, search.locales)
+					} else {
+						// The reading locale and both Japanese spellings get all
+						// precisions before other current locales. This keeps old and
+						// new ja_JP defaults reachable at non-UTC creation zones.
+						priority := 1
+						if !search.legacy && len(search.locales) > 1 && search.locales[1] == "ja_JP" {
+							priority = 2
+						}
+						searchZones(search, search.locales[:priority])
+					}
+				}
+				if !matched && fatal == nil && len(legacySessions) > 0 {
+					for _, search := range zoneCandidates {
+						if matched || fatal != nil {
+							break
+						}
+						priority := 1
+						if !search.legacy && len(search.locales) > 1 && search.locales[1] == "ja_JP" {
+							priority = 2
+						}
+						searchZones(search, search.locales[priority:])
+					}
+				}
+			}
+			if fatal != nil {
+				stmt.Free()
+				return false, fatal
 			}
 			stmt.Free()
 			if matched {

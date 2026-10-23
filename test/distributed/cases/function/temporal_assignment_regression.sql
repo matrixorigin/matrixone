@@ -86,6 +86,18 @@ EXECUTE locale_query;
 SET lc_time_names = 'en_US';
 EXECUTE locale_query;
 DEALLOCATE PREPARE locale_query;
+-- Locale names and abbreviations reported by #28597.
+SET lc_time_names = 'zh_CN';
+SELECT CONCAT(DAYNAME('2024-03-01'), '|', MONTHNAME('2024-03-01'), '|', DATE_FORMAT('2024-03-01', '%a'), '|', DATE_FORMAT('2024-03-01', '%b')) AS names;
+SET lc_time_names = 'ru_RU';
+SELECT CONCAT(DAYNAME('2024-03-01'), '|', MONTHNAME('2024-03-01'), '|', DATE_FORMAT('2024-03-01', '%a'), '|', DATE_FORMAT('2024-03-01', '%b')) AS names;
+SET lc_time_names = 'tr_TR';
+SELECT CONCAT(DAYNAME('2024-03-01'), '|', MONTHNAME('2024-03-01'), '|', DATE_FORMAT('2024-03-01', '%a'), '|', DATE_FORMAT('2024-03-01', '%b')) AS names;
+SET lc_time_names = 'ar_EG';
+SELECT CONCAT(DAYNAME('2024-03-01'), '|', MONTHNAME('2024-03-01'), '|', DATE_FORMAT('2024-03-01', '%a'), '|', DATE_FORMAT('2024-03-01', '%b')) AS names;
+SET lc_time_names = 'ja_JP';
+SELECT CONCAT('[', DATE_FORMAT('2024-03-01', '%b'), ']') AS names;
+SET lc_time_names = 'en_US';
 SET sql_mode = '';
 PREPARE fractional_query FROM 'SELECT CAST("2024-01-02 03:04:05.9999999" AS DATETIME(6)), CAST("12:34:56.9999999" AS TIME(6))';
 EXECUTE fractional_query;
