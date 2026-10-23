@@ -65,6 +65,10 @@ func TestInformationSchemaVisibleOrdinalProjection(t *testing.T) {
 					old, updated := ordinalProjectionClauses(before), ordinalProjectionClauses(view.AsSource)
 					require.Equal(t, len(old), len(updated))
 					for i, clause := range updated {
+						if ordinalPartitionColumn(old[i].Exprs[1].Expr).TblName() != old[i].Exprs[4].Expr.(*tree.UnresolvedName).TblName() {
+							require.Equal(t, tree.String(old[i].Exprs[4].Expr, dialect.MYSQL), tree.String(clause.Exprs[4].Expr, dialect.MYSQL), "derived View ordinals must remain unchanged")
+							continue
+						}
 						cast := clause.Exprs[4].Expr.(*tree.CastExpr)
 						require.Equal(t, int32(32), cast.Type.(*tree.T).InternalType.Width)
 						function := cast.Expr.(*tree.FuncExpr)

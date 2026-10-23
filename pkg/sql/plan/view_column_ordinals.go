@@ -56,6 +56,13 @@ func rewriteInformationSchemaColumnOrdinals(statement tree.SelectStatement) bool
 			ordinal.NumParts != 2 || ordinal.ColName() != "attnum" {
 			return false
 		}
+		if schema.TblName() != ordinal.TblName() {
+			// Derived View functions already return dense public ordinals.
+			// A window here would block target-View filters above APPLY and
+			// could describe unrelated definitions before eliminating them.
+			return schema.TblName() == "mt" && schema.ColName() == "reldatabase" &&
+				table.ColName() == "relname" && ordinal.TblName() == "mc"
+		}
 		account := tree.NewUnresolvedName(tree.NewCStr(schema.TblName(), 1), tree.NewCStr("account_id", 1))
 		window := &tree.FuncExpr{
 			Func:     tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("row_number")),
