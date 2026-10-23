@@ -2,6 +2,8 @@
 
 Owning issue: https://github.com/matrixorigin/matrixone/issues/30995
 
+Implementation PR: https://github.com/matrixorigin/matrixone/pull/30998
+
 ## Decision
 
 Extend the existing single COUNT DISTINCT pair-Group optimization to **tuples whose every argument is proven effectively non-NULL at the aggregate input**. Group by all canonical tuple components, distribute locally reduced rows using one sufficiently high-NDV canonical component, deduplicate the complete key at the destination, and finish with ordinary unary COUNT. Reuse existing Group, shuffle, spill and count owners.
