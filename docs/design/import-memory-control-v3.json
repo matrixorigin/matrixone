@@ -1,5 +1,5 @@
 {
-  "version": 18,
+  "version": 19,
   "status": "reviewed-design",
   "title": "4.1.6 import memory control: ownership, progress, byte batching and spill",
   "base": "3c7eb8de7f2388de84624fdaf719cc218f8078dc",
@@ -19,7 +19,8 @@
     "Deterministic compiler fixtures: after full reclaim permits 64 MiB, old solver grants 4 bytes; max-row floor with identical envelopes shrinks 64 to 32 MiB despite no memory benefit. This is a throughput defect, not yet an explanation of the interrupted native table 29.",
     "Final candidate581d746 failed faithful table21 am_case_comprehensive_dataset after20 successes: old insert.Insert returned exhausted on three tries (ask720360..765440, Available about21GB), while RSS peak3.804GiB and cgroup OOM events0. Independent isolated original-schema/original-CSV reproduction also fails. Compiler already reserved old Insert output I/W but the consumer never used them.",
     "Frozen v8 f082 binary: fresh independent two-process CN remote controlled broadcast INSERT JOIN fails with1105 broadcast spill generation is unavailable. An old-source overlay adding actual Free immediately after the existing first.Reset deterministically reproduces the same named failure (reset-free-repro.json, exit1 after successful compilation). Pipeline cleanup retires an early nonfinalizer while another expected actual is still collecting; successful registration was reset to false, so Free incorrectly aborts the shared generation.",
-    "Independent review of 0c69895511 reproduced seven failures: partition metadata frame loss, shared-varlen copy expansion, undersized clone promises, retry label mutation, unbounded fused projections admitted as bounded, deferred delete credit refunded before materialization, and unconditional legacy expression-key spill. Sibling audits confirmed partition-writer terminal cleanup and partial-allocation cleanup defects."
+    "Independent review of 0c69895511 reproduced seven failures: partition metadata frame loss, shared-varlen copy expansion, undersized clone promises, retry label mutation, unbounded fused projections admitted as bounded, deferred delete credit refunded before materialization, and unconditional legacy expression-key spill. Sibling audits confirmed partition-writer terminal cleanup and partial-allocation cleanup defects.",
+    "Actual TKE cgroup v1 private bind has mount root equal to process membership. Old dependency repeats the membership under the exposed mountpoint, misses valid accounting files, and leaves a 1.87GiB LOAD waiting despite actual usage419MiB/limit55GiB. Two full-CN dumps, actual process/mount/stat files and node-RAM equality close the cause; local v2 acceptance did not cover this runtime layout."
   ],
   "goals": [
     "The tested amway import semantics, indexes, row counts and SQL success remain intact under fixed 22 GiB and no inter-round idle/GC/restart.",
@@ -367,6 +368,24 @@
         "decision": "APPROVED BEFORE IMPLEMENTATION",
         "reviewed_draft_sha256": "a18b6729e872e9a2f92e3d1a72b9797ac0c203308d7709f25f6bec300a29303b",
         "independent_report_sha256": "7b3fd926b9c5a49477738b12cd900166d80b14e2ec379a0486e80e5fe61156a2"
+      }
+    },
+    {
+      "id": "D35",
+      "choice": "Translate current-process cgroup membership into the selected controller mount coordinates before sampling. Equal root maps to mountpoint; descendants use a component-relative path. Reuse v1 Load/Stat with its selected controller and v2 scalar/stat reader.",
+      "rationale": "A private bind exposes an existing cgroup subtree at a new filesystem mountpoint. Concatenating the original hierarchy-absolute membership repeats the subtree and turns valid accounting into a persistent fail-closed wait. The same geometry is valid for v2.",
+      "constraints": [
+        "Read the selected controller directory mount ID with O_PATH and /proc/self/fdinfo, then select that exact mountinfo record. Validate record identity, filesystem/controller, decoded paths and component containment. No guessed first/last/stack order or Kubernetes/memory-size constants.",
+        "Validate raw absolute paths before cleaning; reject raw dot/dotdot and noncontained or sibling-prefix geometry as accounting errors, never host fallback. Preserve proven absent-controller versus partial/unreadable accounting classification and retained known limits.",
+        "V1 Memory paths always consume the shared validated decoded relative mapping, preserving the same hierarchy/Stat. V2 consumes the localized directory with unchanged readUnifiedMemory. Each O_PATH descriptor closes lexically on all returns; missing/malformed identity remains accounting failure.",
+        "Add the existing throttled wait-log accounting error after releasing sample lock. No new metrics labels, endpoint or timer.",
+        "Real archived v1 shape plus nearest v1/v2 mappings, escaped paths, wrong aliases/errors, real reader-to-working-ticket consumer, disabled old-path failure and runtime TKE55Gi verification are required. Local v2-only trials cannot establish v1 correctness."
+      ],
+      "design_review": {
+        "reviewer": "csv_column_bound; root integration",
+        "decision": "APPROVED BEFORE IMPLEMENTATION",
+        "reviewed_draft_sha256": "81d1682b36892ffd19baf1d81a727a9ec11e0ea1f6cf7836334edcbddfa3dc82",
+        "independent_report_sha256": "7d1d5976158aa9f2882d6a87bf3a9c3262b98643f4e53c65a7de2d67ebf45e1b"
       }
     }
   ],
@@ -763,6 +782,117 @@
         "execution": "Parent runs exact focused normal tests first after approved external overlay, then owning compile/rscthrottler and applicable frontend package normal/race. Child does not execute Go/build/SQL/service. Native explicit-transaction fitting/capacity/cleanup proof to be assigned by parent after N5/post, without changing SQL semantics or arbitrary pressure thresholds.",
         "performance": "No new row hot-path code; transaction policy read once per manifest build, at most one finite candidate scan per noWait attempt, optional two scalar capacity fields only on failure. Autocommit selection/candidate/recovery path is unchanged. TKE ab96 autocommit evidence remains pending/semantically reusable; no premature performance claim."
       }
+    },
+    "cgroup_mount_coordinates_revision19": {
+      "reviewed_draft_sha256": "81d1682b36892ffd19baf1d81a727a9ec11e0ea1f6cf7836334edcbddfa3dc82",
+      "design_revision": 4,
+      "contract": [
+        "A visible cgroup mount root is the directory exposed at its mountpoint. When the process membership path equals that root, current-process controller files are at the mountpoint itself, not mountpoint+membership.",
+        "A valid complete sample must supply the actual55Gi effective limit and nonzero actual container current to the existing admission consumer; never fabricate current0 or treat a read/mapping failure as host fallback.",
+        "Retain the existing distinction between proven absent memory controller and partial/unreadable/malformed accounting. Once observed, a lost controller remains fail-closed with retained known limit.",
+        "No new waiting worker, retries, thresholds, caches, source/DOP changes, or scalar/stat parser rewrite. Admission and physicalFits accounting remain unchanged.",
+        "Preserve the hierarchy-selected controller mountpoint M identity. Obtain kernel mnt_id from an owned open directory FD at M; match that exact ID in mountinfo, then verify its decoded mountpoint, filesystem type and exact controller token. Hidden first roots, last line, maximum ID, parent graph guesses, and unrelated aliases must not choose the accounting domain."
+      ],
+      "v1_minimal_plan": [
+        "Resolve the same existing SingleSubsystem(Default,Memory) hierarchy once; retain its exact selected subsystem object and actual exposed Path(\"/\") mountpoint. Feed the same hierarchy result into Load, so no controller choice silently changes.",
+        "Read raw membership using existing ParseCgroupFile. Resolve the same selected memory controller Path(\"/\") M, open it with O_PATH, read fdinfo mnt_id and select that record from mountinfo. Verify decoded record M and cgroup+exact memory token. Pass the immutable selected mount and same controller hierarchy to the existing Legacy Load/Stat boundary.",
+        "Validate decoded mount root/mountpoint and raw membership through the same pure mapping helper. Wrap the existing pathFunc so Memory always returns the validated path relative to that selected mountpoint (\"/\" at root, \"/child\" below it). Other controller names delegate unchanged. Ordinary unescaped root and descendant results retain their previous correct values; the same rule fixes private-root equality and escaped-root descendants without separate branches.",
+        "Keep cgroup1.Load/Stat and existing error types/classification. No arbitrary ENOENT retry at mount root, no hard-coded Kubernetes path/namespace/image or55Gi parameter.",
+        "Expose only private pure reader/path seams needed by tests; no exported production injection interface."
+      ],
+      "v2_sibling": {
+        "known_valid_geometry": [
+          {
+            "membership": "/tenant/container",
+            "mount_root": "/tenant/container",
+            "mountpoint": "/sys/fs/cgroup",
+            "correct": "/sys/fs/cgroup",
+            "current_wrong": "/sys/fs/cgroup/tenant/container"
+          },
+          {
+            "membership": "/tenant/container/child",
+            "mount_root": "/tenant/container",
+            "mountpoint": "/sys/fs/cgroup",
+            "correct": "/sys/fs/cgroup/child",
+            "current_wrong": "/sys/fs/cgroup/tenant/container/child"
+          }
+        ],
+        "why_same_defect": "A host cgroup namespace can retain hierarchy-absolute process membership while the filesystem is bind-mounted at a nonroot subtree. Mountinfo root-to-mountpoint translation has the same semantics for cgroupfs v1 and v2. The current v2 code validates only path string format then blindly joins the hierarchy path under the mountpoint.",
+        "preferred_minimal_option_under_review": "ADOPTED: capture kernel mount ID for exact unified M, verify that record, localize its decoded equal-root/descendant path through the shared mapper and call unchanged readUnifiedMemory.",
+        "boundary_needing_explicit_review": "RESOLVED by primary Linux namespace contract: both /proc/PID/cgroup and mountinfo roots are shown in the reader cgroup namespace. Normal private namespaces yield P=\"/\",R=\"/\". Inherited ancestor mounts can show raw R=\"/..\" (documented example); this cannot be cleaned into \"/\" because the visible mount root is an ancestor and the hidden relative child name is not recoverable from these strings. It produces explicit fail-closed mapping error; do not guess a controller directory.",
+        "alternative": "Rejected: a v1-only repair would knowingly leave the same valid v2 host-namespace/nonroot-bind equal/child mapping broken. Sharing only pure path localization avoids a second stat parser, worker or configuration mechanism.",
+        "primary_sources": [
+          {
+            "title": "Linux cgroup namespaces manual",
+            "url": "https://man7.org/linux/man-pages/man7/cgroup_namespaces.7.html",
+            "support": "Both proc views are namespace virtualized; inherited ancestor mount example reports mount root /.. while current membership is /."
+          },
+          {
+            "title": "Linux kernel cgroup implementation",
+            "url": "https://raw.githubusercontent.com/gregkh/linux/v6.12.63/kernel/cgroup/cgroup.c",
+            "support": "cgroup_show_path and proc_cgroup_show use the reader current cgroup namespace. This supports comparing the two raw paths without inventing a second coordinate system."
+          }
+        ]
+      },
+      "diagnostic_plan": {
+        "change": "On existing rate-limited waiting log, copy c.sample.err under sampleMu after releasing coordinator.mu and release sampleMu before logging; include the fixed error field. No labels/endpoints/timers/new state.",
+        "purpose": "Unknown/partial accounting should show why a small request is denied; physical-used/host-limit alone currently suggests false capacity pressure.",
+        "lock_contract": "Do not retain sampleMu across logging/scavenging or acquire coordinator.mu while holding it. This adds no transaction/pipeline wait edge.",
+        "test_scope": "Race/owning validation covers sampling/logging synchronization; avoid a new logger framework just for a static field."
+      },
+      "deterministic_validation_plan": [
+        "Use the actual archived process/mount mapping shape (with generic tenant/group names in shipped UT) as counterexample: P==R nonroot, files at M, old dependency resolves M/P, corrected Memory path resolves root. Controller tokens and first-memory-mount selection are exact.",
+        "Nearest controls: v1 ordinary root/child keep same correct values; decoded escapedroot+child has real Load/Stat and old full-P failure shape. Both versions test selected FD mount ID against forward/reverse same-M records, deliberately unsorted IDs, hidden ancestor/differentfstype records, wrong visible top type/token, cross-M aliases, absent/duplicate record IDs. fdinfo missing/malformed/nonpositive/duplicate mnt_id and read errors fail closed. Add raw ../ and nonprefix path controls and verify selected-M real readers/admission outcomes.",
+        "Retain root-selection literal55Gi only as test input; production has no new constants. Build a temp controller directory with real cgroup1.NewMemory and existing Load/Stat semantics, full small valid stat/scalar files. Exercise real reader output through injected memorySample in existing admissionFixture: effective limit55Gi, current438,996,992, and a complete2Gi working layout must grant immediately with zero queue/reclaim/worker.",
+        "Same real consumer with the old PidPath result points to nonexistent M/P, returns accounting error and denies a try even though RSS is small; this is a non-hanging disabled semantic witness. Cancellation cleans any optional queued final request; no test waits for a20min timeout.",
+        "Keep existing v2 absence/partial/invalid numeric and known-limit tests. Add shared-path v2 equal-root, descendant, normal-root, private namespace P=R=/, raw R=/.., nonprefix/sibling-prefix and escaped mountpoint controls. Feed corrected v2 reader output to the same real admission consumer and demonstrate complete working ticket success.",
+        "Parent centrally executes focused then owning rscthrottler normal/race, incremental static/build. A real TKE containerv1 minimal valid sample/admission must be observed after rebuild before rerunning expensive throughput gates; no green claim from local v2-only native trials.",
+        "A private pure fdinfo parser and exact-ID record parser provide deterministic seams; real runtime probe owned by parent verifies actual O_PATH/fdinfo/mountinfo behavior. Do not build a global FD counter or require concurrent FD number reuse assertions; lexical defer code review is the cleanup proof. A small local O_PATH exercise may use a test-owned directory without directory read permission, restoring permissions in immediate cleanup, but must not require os.Open failure under privileged/root users."
+      ],
+      "common_mapping_contract": {
+        "inputs": "Raw decoded mountinfo root R and mountpoint M, raw process membership P from the same process namespace. Metadata I/O is an ordinary sample operation, not a new hot row path. No global mutable injection or cache.",
+        "selection": "Expected mountpoint M is mandatory. V1 derives M from the existing selected memory controller Path(\"/\"); V2 uses existing /sys/fs/cgroup. Open M with unix.O_PATH|O_DIRECTORY|O_CLOEXEC and immediately defer unix.Close in the same function. Read /proc/self/fdinfo/<ownedfd> and parse exactly one positive decimal mnt_id. While FD remains owned, match exactly one mountinfo record with that ID and verify its decoded mountpoint==M, fs type (v1 cgroup/v2 cgroup2), and v1 exact memory super-option token. Missing/invalid/duplicate fdinfo key or selected mountinfo ID, permission/read error and identity/type/token mismatch are ordinary accounting errors, never root or host fallback.",
+        "format": "Parse mountinfo using its \" - \" separator (not a fixed count of optional fields); decode standard \\040/\\011/\\012/\\134 path escapes. Require clean absolute raw P/R/M and reject raw dot/dotdot components BEFORE any filepath.Clean/Join can erase them.",
+        "mapping": "Compute filepath.Rel(R,P) only after raw validation. Equality yields local \"/\"; descendants yield \"/\"+relative; reject rel==\"..\" or a component-prefixed \"../\". Component checks reject /tenant/container2 as a descendant of /tenant/container. Resolve under M only after validation.",
+        "no_fallback": "A mapping error is an ordinary accounting error, not errNoMemoryController. Do not fall back to M itself, old M+P, host memory, a directory selected by file existence, or a customer/runtime-specific prefix.",
+        "topology_examples": [
+          {
+            "records": [
+              "A root=/ fs=cgroup2 M",
+              "B parent=A root=/tenant/container fs=cgroup2 M"
+            ],
+            "selection": "fdinfo mnt_id=B selects B regardless of record order or ID magnitude"
+          },
+          {
+            "records": [
+              "A root=/ fs=cgroup memory M",
+              "B parent=A root=/tenant/container fs=cgroup memory M"
+            ],
+            "selection": "fdinfo B selects B for v1 as well"
+          },
+          {
+            "records": [
+              "A fs=cgroup2 M",
+              "B parent=A fs=tmpfs M",
+              "C parent=B fs=cgroup2 M"
+            ],
+            "selection": "fdinfo C directly selects C without reconstructing the intervening graph"
+          },
+          {
+            "records": [
+              "A fs=cgroup2 M",
+              "B parent=A fs=tmpfs M"
+            ],
+            "selection": "fdinfo B selects wrong visible filesystem and returns ordinary accounting error; never fall back to A"
+          }
+        ],
+        "cost_and_lifetime": "One extra O_PATH directory open/close and small self-fdinfo read per existing process-coalesced sample. The directory FD is lexical, bounded to identity resolution, closed on every successful/error return and never stored in coordinator/query state. Existing mountinfo/proc reads remain ordinary metadata I/O. No new hot row work or periodic mechanism."
+      },
+      "validation_nonclaims": [
+        "No permission to mount/unshare/change production cgroup state is inferred. UTs use pure archived metadata and temporary controller files, with parent-run tests.",
+        "The old-path disabled witness must return a concrete accounting error/no grant; it must not rely on a hung goroutine, arbitrary sleep, timeout, nil provider, changed memory threshold, or fake zero-current success.",
+        "The fix localizes the current process controller correctly. It does not redesign general ancestor-limit aggregation, namespace remount administration, or controller migration; genuine unavailable accounting remains fail-closed and visible in the existing waiting log."
+      ]
     }
   },
   "ownership_and_wait_graphs": [
@@ -861,13 +991,14 @@
   ],
   "approval": {
     "kind": "internal-independent-design-review",
-    "revision": 18,
+    "revision": 19,
     "decision": "PASS",
-    "scope": "D34 cross-statement admission wait policy; previous D32/D33 scoped approvals retained",
-    "condition": "Design approval only. Exact implementation/negative control/owning tests, minimal public transaction semantics and final-binary repeated import verification remain required; valid ab96 autocommit evidence is reused only after semantic-closure review.",
+    "scope": "D35 cgroup mount-coordinate sampling; prior scoped D32-D34 approvals retained",
+    "condition": "Design approval only. Exact implementation/disabled-path/normal/race/static/build evidence and actual TKE private-v1 sample/admission success remain mandatory; no performance result from the hung/cancelled ab96 run.",
     "reviewer": "csv_column_bound; root integration",
-    "approved_at": "2026-10-23T19:36:38.545401+08:00",
-    "reviewed_draft_sha256": "a18b6729e872e9a2f92e3d1a72b9797ac0c203308d7709f25f6bec300a29303b"
+    "approved_at": "2026-10-23T20:12:02.907267+08:00",
+    "reviewed_draft_sha256": "81d1682b36892ffd19baf1d81a727a9ec11e0ea1f6cf7836334edcbddfa3dc82",
+    "independent_report_sha256": "7d1d5976158aa9f2882d6a87bf3a9c3262b98643f4e53c65a7de2d67ebf45e1b"
   },
   "approval_history": [
     {
@@ -921,6 +1052,16 @@
       "condition": "Implementation/discriminating tests and both CPU controls plus new uninterrupted native acceptance required; no universal no-regression claim from design.",
       "reviewer": "csv_column_bound; root integration",
       "approved_at": "2026-10-23T18:46:42.837265+08:00"
+    },
+    {
+      "kind": "internal-independent-design-review",
+      "revision": 18,
+      "decision": "PASS",
+      "scope": "D34 cross-statement admission wait policy; previous D32/D33 scoped approvals retained",
+      "condition": "Design approval only. Exact implementation/negative control/owning tests, minimal public transaction semantics and final-binary repeated import verification remain required; valid ab96 autocommit evidence is reused only after semantic-closure review.",
+      "reviewer": "csv_column_bound; root integration",
+      "approved_at": "2026-10-23T19:36:38.545401+08:00",
+      "reviewed_draft_sha256": "a18b6729e872e9a2f92e3d1a72b9797ac0c203308d7709f25f6bec300a29303b"
     }
   ],
   "review_amendment": {
