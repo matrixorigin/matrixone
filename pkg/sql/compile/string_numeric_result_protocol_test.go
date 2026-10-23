@@ -365,6 +365,61 @@ func TestSelectIntoKindLayoutProtocolAdmission(t *testing.T) {
 		"the v129 receiver accepts the SELECT INTO kind map")
 }
 
+func TestDependentScalarKindResultRequiresV129(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	query := &planpb.Query{Correlation: &planpb.CorrelationSpec{Programs: []*planpb.CorrelationProgram{{
+		OutputTypes: []planpb.Type{
+			{Id: int32(types.T_varchar)},
+			{Id: int32(types.T_bool)},
+		},
+		ScalarResultKindColumn: 1,
+	}}}}
+	pipeline := &pipeline.Pipeline{Qry: &planpb.Plan{Plan: &planpb.Plan_Query{Query: query}}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(query)
+	require.NoError(t, err)
+	require.True(t, features.NumericValuePrograms)
+	require.Equal(t, defines.MORPCVersion129, remoteExpressionProtocolVersion(features),
+		"the descriptor alone carries an ordinary BOOL passenger without private expression nodes")
+
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	for _, version := range []int64{defines.MORPCVersion128, defines.MORPCVersion129} {
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+		err := validateRemoteExpressionPipelineProtocol(c.proc, pipeline)
+		if version < defines.MORPCVersion129 {
+			require.ErrorContains(t, err, "version 129")
+		} else {
+			require.NoError(t, err)
+		}
+	}
+
+	client.version = defines.MORPCVersion128
+	c.execType = plan.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(query))
+	require.Equal(t, plan.ExecTypeAP_ONECN, c.execType,
+		"a v128 worker must not receive a correlated scalar kind layout")
+	client.version = defines.MORPCVersion129
+	c.execType = plan.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(query))
+	require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType,
+		"a v129 worker accepts the correlated scalar kind layout")
+
+	c.execType = plan.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "unknown-worker", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(query))
+	require.Equal(t, plan.ExecTypeAP_ONECN, c.execType,
+		"an unaddressable worker has unknown capability and must fail closed")
+}
+
 func TestStringNumericCompatibilityAdmissionBoundaries(t *testing.T) {
 	cases := []struct {
 		name            string

@@ -402,14 +402,30 @@ func numericValueProgramDefinition(scope int64, raw, sourceKind *Expr) *Expr {
 // that the query does not need a numeric kind companion. The cast itself
 // remains unchanged in the published plan.
 func stripInferredStringDeclarationCastProofs(owner any) error {
-	return planpb.VisitExpressionsInOwner(owner, func(root *Expr) error {
+	seen := make(map[*Expr]struct{})
+	var stripTree func(*Expr) error
+	stripTree = func(root *Expr) error {
 		return planpb.VisitExprTree(root, func(expr *Expr) error {
-			metadata := expr.GetPreparedNumeric()
-			if metadata != nil {
-				metadata.InferredStringDeclarationCast = false
+			if expr == nil {
+				return nil
 			}
-			return nil
+			if _, ok := seen[expr]; ok {
+				return nil
+			}
+			seen[expr] = struct{}{}
+			metadata := expr.GetPreparedNumeric()
+			if metadata == nil {
+				return nil
+			}
+			metadata.InferredStringDeclarationCast = false
+			// StringDomainSource is a proof witness, not an executable child
+			// of the expression tree. Visit it only for transient metadata
+			// cleanup, and guard shared/cyclic witnesses explicitly.
+			return stripTree(metadata.StringDomainSource)
 		})
+	}
+	return planpb.VisitExpressionsInOwner(owner, func(root *Expr) error {
+		return stripTree(root)
 	})
 }
 

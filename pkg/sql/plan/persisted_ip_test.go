@@ -145,6 +145,53 @@ func TestPersistedDecimalDivisionRequiresV97(t *testing.T) {
 	require.Equal(t, defines.MORPCVersion97, required)
 }
 
+func TestPersistedDependentScalarKindDescriptorRequiresV129(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	query := &planpb.Query{Correlation: &planpb.CorrelationSpec{Programs: []*planpb.CorrelationProgram{{
+		OutputTypes: []planpb.Type{
+			{Id: int32(types.T_varchar)},
+			{Id: int32(types.T_bool)},
+		},
+		ScalarResultKindColumn: 1,
+	}}}}
+	required, err := RequiredPersistedExpressionProtocolVersion(query)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion129, required)
+
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		}
+		if hadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldFloor)
+		} else if value, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, value)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if value, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, value)
+		}
+	})
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion128)
+	require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, query), "protocol version 129")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion128)
+	require.ErrorContains(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, query), "protocol version 129")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion129)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion129)
+	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, query))
+	require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, query))
+}
+
 func TestPersistedDecimalDivisionViewAdmissionBeforeFold(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	proc := ctx.GetProcess()

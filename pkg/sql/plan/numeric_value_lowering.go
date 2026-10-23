@@ -635,6 +635,7 @@ func (l *numericValueKindLowerer) kindForCorrelationSlot(slot *planpb.Correlatio
 
 	type inputOwner struct {
 		call   *planpb.DependentExpr
+		raw    *Expr
 		kind   *Expr
 		paired bool
 	}
@@ -657,11 +658,14 @@ func (l *numericValueKindLowerer) kindForCorrelationSlot(slot *planpb.Correlatio
 				if int(slot.Ordinal) >= len(call.Inputs) || !proto.Equal(&call.Inputs[slot.Ordinal].Typ, &program.InputTypes[slot.Ordinal]) {
 					return moerr.NewInvalidInput(l.builder.GetContext(), "numeric kind demand has an inconsistent correlation input")
 				}
-				_, kind, err := l.numericArgumentProgramOutputs(call.Inputs[slot.Ordinal], false)
+				raw, kind, err := l.numericArgumentProgramOutputs(call.Inputs[slot.Ordinal], false)
 				if err != nil {
 					return err
 				}
-				owners = append(owners, inputOwner{call: call, kind: kind, paired: !isFalseBoolLiteral(kind)})
+				if raw == nil || !proto.Equal(&raw.Typ, &program.InputTypes[slot.Ordinal]) {
+					return moerr.NewInvalidInput(l.builder.GetContext(), "numeric kind demand changes a correlation input type")
+				}
+				owners = append(owners, inputOwner{call: call, raw: raw, kind: kind, paired: !isFalseBoolLiteral(kind)})
 				return nil
 			})
 		}); err != nil {
@@ -693,6 +697,10 @@ func (l *numericValueKindLowerer) kindForCorrelationSlot(slot *planpb.Correlatio
 		}
 		kind = DeepCopyExpr(kind)
 		kind.Typ = kindType
+		// Publish the transformed value together with its passenger. Leaving
+		// the original selector here would make REF1 describe different bytes
+		// (and can leave it pointing at an orphaned lexical owner).
+		owner.call.Inputs[slot.Ordinal] = DeepCopyExpr(owner.raw)
 		owner.call.Inputs = append(owner.call.Inputs, kind)
 	}
 	program.InputTypes = append(program.InputTypes, kindType)

@@ -381,6 +381,34 @@ func TestNumericValueProgramsFeatureTracksStableExecutionIDs(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, features.NumericValuePrograms,
 		"the Query-level layout must remain visible through its serialized Plan owner")
+
+	correlatedScalarLayout := &Query{Correlation: &CorrelationSpec{Programs: []*CorrelationProgram{{
+		ScalarResultKindColumn: 1,
+	}}}}
+	features, err = RequiredRemoteExpressionFeatures(correlatedScalarLayout)
+	require.NoError(t, err)
+	require.True(t, features.NumericValuePrograms,
+		"a correlated scalar's physical BOOL result column requires v129 even without private expression nodes")
+	features, err = RequiredRemoteExpressionFeatures(&Plan{Plan: &Plan_Query{Query: correlatedScalarLayout}})
+	require.NoError(t, err)
+	require.True(t, features.NumericValuePrograms,
+		"the correlated scalar layout remains discoverable through its Plan wrapper")
+	wire, err := correlatedScalarLayout.Marshal()
+	require.NoError(t, err)
+	var decoded Query
+	require.NoError(t, decoded.Unmarshal(wire))
+	features, err = RequiredRemoteExpressionFeatures(&decoded)
+	require.NoError(t, err)
+	require.True(t, features.NumericValuePrograms,
+		"the v129 floor survives wire round-trip when the descriptor is the only private feature")
+
+	legacyCorrelation := &Query{Correlation: &CorrelationSpec{Programs: []*CorrelationProgram{{
+		OutputTypes: []Type{{Id: planVarcharTypeID}},
+	}}}}
+	features, err = RequiredRemoteExpressionFeatures(legacyCorrelation)
+	require.NoError(t, err)
+	require.False(t, features.NumericValuePrograms,
+		"legacy scalar layouts keep their existing protocol floor")
 }
 
 func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {

@@ -623,15 +623,19 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			// the outer EXECUTE fragment, which cannot contain the inner hint.
 			retComp.SetQuerySchedulingIntent(cwft.querySchedulingIntentForPreparedStatement(originSQL))
 			retComp.SetSchedulingTraceRecorder(&cwft.schedulingTrace)
+			outputCallback := compileOutputCallback(execCtx, cwft.ses, cwft.stmt, fill, retComp.GetPlan)
 			if err = retComp.Reset(
 				cwft.proc,
 				getStatementStartAt(execCtx.reqCtx),
-				compileOutputCallback(execCtx, cwft.ses, cwft.stmt, fill, retComp.GetPlan),
+				outputCallback,
 				cwft.ses.GetSql(),
 				cwft.preparedJoinDiagnosticFree,
 			); err != nil {
 				return nil, err
 			}
+			// Reset may reuse a Compile from the previous prepared execution. Always
+			// replace its sink so no prior statement's attempt state survives.
+			retComp.SetResultSink(newSelectIntoResultSink(execCtx, cwft.stmt, outputCallback))
 			if preparedCTASNeedsSemanticParams(cwft.stmt) {
 				retComp.SetPreparedParamValues(cwft.paramVals)
 			}
@@ -2974,10 +2978,12 @@ func createCompile(
 	retCompile.SetBuildPlanFunc(preparedExecutionBuildPlanFunc(
 		ses, stmt, forcePrepare, preparedRetry, databaseName, usePreparedDatabase))
 
-	err = retCompile.Compile(compileCtx, plan, compileOutputCallback(execCtx, ses, stmt, fill, retCompile.GetPlan))
+	outputCallback := compileOutputCallback(execCtx, ses, stmt, fill, retCompile.GetPlan)
+	err = retCompile.Compile(compileCtx, plan, outputCallback)
 	if err != nil {
 		return
 	}
+	retCompile.SetResultSink(newSelectIntoResultSink(execCtx, stmt, outputCallback))
 	retCompile.SetOriginSQL(originSQL)
 	return
 }

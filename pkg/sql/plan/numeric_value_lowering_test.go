@@ -123,6 +123,64 @@ func TestNumericValueKindLoweringUsesOwnerSpecificCompanions(t *testing.T) {
 	}
 }
 
+func TestNumericValueKindCorrelationSlotPublishesRawAndKindTogether(t *testing.T) {
+	ctx := context.Background()
+	selector, err := BindFuncExprImplByPlanExpr(ctx, "case", []*Expr{
+		makePlan2BoolConstExprWithType(true),
+		makePlan2StringConstExprWithType("1", true),
+		makePlan2StringConstExprWithType("1"),
+	})
+	require.NoError(t, err)
+	require.True(t, types.T(selector.Typ.Id).IsMySQLString())
+	textType := *DeepCopyType(&selector.Typ)
+
+	firstCall := &planpb.DependentExpr{ProgramId: 1, Inputs: []*Expr{DeepCopyExpr(selector)}}
+	secondCall := &planpb.DependentExpr{ProgramId: 1, Inputs: []*Expr{DeepCopyExpr(selector)}}
+	query := &planpb.Query{
+		Nodes: []*planpb.Node{
+			{NodeId: 0, ProjectList: []*Expr{
+				{Expr: &planpb.Expr_Dependent{Dependent: firstCall}},
+				{Expr: &planpb.Expr_Dependent{Dependent: secondCall}},
+			}},
+			{NodeId: 1, ProjectList: []*Expr{{Typ: textType, Expr: &planpb.Expr_Slot{Slot: &planpb.CorrelationSlot{ProgramId: 1, Ordinal: 0}}}}},
+		},
+		Steps: []int32{0},
+		Correlation: &planpb.CorrelationSpec{Programs: []*planpb.CorrelationProgram{{
+			RootNode:    1,
+			InputTypes:  []planpb.Type{textType},
+			OutputTypes: []planpb.Type{makeSimplePlan2Type(types.T_int64)},
+		}}},
+	}
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	lowerer := &numericValueKindLowerer{
+		builder:        &QueryBuilder{compCtx: &mock.ctxt, qry: query},
+		slotKinds:      make(map[[2]uint32]uint32),
+		slotKindActive: make(map[[2]uint32]bool),
+	}
+	kind, err := lowerer.kindForCorrelationSlot(&planpb.CorrelationSlot{ProgramId: 1, Ordinal: 0})
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), kind.GetSlot().Ordinal)
+	require.Equal(t, []planpb.Type{textType, makeSimplePlan2Type(types.T_bool)}, query.Correlation.Programs[0].InputTypes)
+
+	for _, call := range []*planpb.DependentExpr{firstCall, secondCall} {
+		require.Len(t, call.Inputs, 2)
+		raw, passenger := call.Inputs[0], call.Inputs[1]
+		require.Equal(t, textType, raw.Typ)
+		require.Equal(t, int32(types.T_bool), passenger.Typ.Id)
+		rawProgram, rawOK := numericProgramRefScope(raw)
+		require.True(t, rawOK)
+		kindProgram, kindSlot, kindOK := numericProgramRefIdentity(passenger)
+		valueProgram, valueSlot, valueOK := numericProgramRefIdentity(raw)
+		require.True(t, kindOK && valueOK)
+		require.Equal(t, rawProgram, valueProgram)
+		require.Equal(t, rawProgram, kindProgram)
+		require.Equal(t, int64(0), valueSlot)
+		require.Equal(t, int64(1), kindSlot)
+		_, ok := numericProgramRawValue(raw)
+		require.True(t, ok, "the raw slot must own the selector definition used by both outputs")
+	}
+}
+
 func TestNumericValueLoweringKeepsStaticOrdinaryCastIdentities(t *testing.T) {
 	for _, sql := range []string{
 		`SELECT CAST(NULL AS int unsigned)`,
@@ -166,6 +224,29 @@ func TestInferredStringDeclarationCastProofIsNarrowAndTransient(t *testing.T) {
 	features, err := planpb.RequiredRemoteExpressionFeatures(query)
 	require.NoError(t, err)
 	require.False(t, features.NumericValuePrograms, "a proof on an unused string cast must not raise the protocol floor")
+}
+
+func TestInferredStringDeclarationCastProofCleanupVisitsWitnesses(t *testing.T) {
+	makeCast := func() *Expr {
+		target := types.T_text.ToType()
+		cast, err := appendExplicitCastBeforeExpr(context.Background(), makePlan2StringConstExprWithType("1"), makePlan2Type(&target))
+		require.NoError(t, err)
+		require.True(t, markInferredStringDeclarationCast(cast))
+		return cast
+	}
+
+	root, witness, nested := makeCast(), makeCast(), makeCast()
+	root.PreparedNumeric.StringDomainSource = witness
+	witness.PreparedNumeric.StringDomainSource = nested
+	// Witness graphs can share or refer back to an expression. Cleanup must
+	// cover the non-executable proof graph without looping on that cycle.
+	nested.PreparedNumeric.StringDomainSource = root
+
+	query := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*Expr{root}}}}
+	require.NoError(t, stripInferredStringDeclarationCastProofs(query))
+	for _, cast := range []*Expr{root, witness, nested} {
+		require.False(t, isInferredStringDeclarationCast(cast))
+	}
 }
 
 func TestNumericValueProgramSelectorOwnerRebindIsIdempotent(t *testing.T) {

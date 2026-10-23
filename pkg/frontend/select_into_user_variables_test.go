@@ -243,6 +243,156 @@ func TestSelectIntoUserVariablesOutputCallbackReinitializesCollector(t *testing.
 	require.Equal(t, "second", execCtx.selectInto.vars[0].Name)
 }
 
+func TestSelectIntoResultSinkDiscardsAbortedAttempts(t *testing.T) {
+	t.Run("zero-row retry", func(t *testing.T) {
+		ctx := context.Background()
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+		stmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "out"}}}
+		execCtx := &ExecCtx{reqCtx: ctx}
+		callback := selectIntoUserVariablesOutputCallback(
+			execCtx, ses, stmt,
+			func(*batch.Batch, *perfcounter.CounterSet) error { return nil }, nil)
+		sink := newSelectIntoResultSink(execCtx, stmt, callback)
+
+		failed := selectIntoIntBatch(t, mp, 7, 1)
+		defer failed.Clean(mp)
+		zero := selectIntoIntBatch(t, mp, 0, 0)
+		defer zero.Clean(mp)
+
+		require.NoError(t, sink.BeginAttempt(ctx, 0, nil))
+		require.NoError(t, sink.Write(0, failed, nil))
+		require.NoError(t, sink.AbortAttempt(0, context.DeadlineExceeded))
+		require.NoError(t, sink.BeginAttempt(ctx, 1, nil))
+		require.Error(t, sink.Write(0, failed, nil), "writes from an aborted generation are rejected")
+		require.NoError(t, sink.Write(1, zero, nil))
+		require.NoError(t, sink.SealAttempt(1))
+		require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select value into @out"))
+		_, err := ses.GetUserDefinedVar("out")
+		require.Error(t, err, "an aborted row must not survive a successful zero-row attempt")
+	})
+
+	t.Run("single-row retry", func(t *testing.T) {
+		ctx := context.Background()
+		mp := mpool.MustNewZero()
+		defer mpool.DeleteMPool(mp)
+		ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+		stmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "out"}}}
+		execCtx := &ExecCtx{reqCtx: ctx}
+		callback := selectIntoUserVariablesOutputCallback(
+			execCtx, ses, stmt,
+			func(*batch.Batch, *perfcounter.CounterSet) error { return nil }, nil)
+		sink := newSelectIntoResultSink(execCtx, stmt, callback)
+
+		failed := selectIntoIntBatch(t, mp, 7, 1)
+		defer failed.Clean(mp)
+		succeeded := selectIntoIntBatch(t, mp, 9, 1)
+		defer succeeded.Clean(mp)
+
+		require.NoError(t, sink.BeginAttempt(ctx, 0, nil))
+		require.NoError(t, sink.Write(0, failed, nil))
+		require.NoError(t, sink.AbortAttempt(0, context.DeadlineExceeded))
+		require.NoError(t, sink.BeginAttempt(ctx, 1, nil))
+		require.NoError(t, sink.Write(1, succeeded, nil))
+		require.NoError(t, sink.SealAttempt(1))
+		require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select value into @out"))
+		value, err := ses.GetUserDefinedVar("out")
+		require.NoError(t, err)
+		require.Equal(t, int64(9), value.Value)
+	})
+}
+
+func TestScalarCaptureResultSinkDiscardsAbortedAttempts(t *testing.T) {
+	for _, retryRows := range []int{0, 1} {
+		t.Run(map[int]string{0: "zero-row retry", 1: "single-row retry"}[retryRows], func(t *testing.T) {
+			ctx := context.Background()
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			ses := &Session{feSessionImpl: feSessionImpl{pool: mp}}
+			capture := &scalarNumericValueKindCapture{}
+			stmt := &tree.Select{}
+			execCtx := &ExecCtx{reqCtx: ctx, ses: ses, numericValueKindCapture: capture}
+			activePlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+				StmtType: planpb.Query_SELECT,
+				Steps:    []int32{0},
+				Headings: []string{"value"},
+				Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{
+					{Typ: planpb.Type{Id: int32(types.T_varchar)}},
+					{Typ: planpb.Type{Id: int32(types.T_bool)}},
+				}}},
+				IntoUserVariableKindColumns: []int32{1},
+			}}}
+			callback := selectIntoUserVariablesOutputCallback(
+				execCtx, ses, stmt, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+					return ses.AppendResultBatch(bat)
+				}, func() *planpb.Plan { return activePlan })
+			sink := newSelectIntoResultSink(execCtx, stmt, callback)
+			failed := selectIntoStringKindBatch(t, mp, "failed", true, 1)
+			defer failed.Clean(mp)
+			retry := selectIntoStringKindBatch(t, mp, "retry", true, retryRows)
+			defer retry.Clean(mp)
+
+			require.NoError(t, sink.BeginAttempt(ctx, 0, nil))
+			require.NoError(t, sink.Write(0, failed, nil))
+			require.Len(t, ses.GetResultBatches(), 1)
+			kind, available := capture.snapshot()
+			require.True(t, available)
+			require.True(t, kind)
+			require.NoError(t, sink.AbortAttempt(0, context.DeadlineExceeded))
+			require.Empty(t, ses.GetResultBatches(), "the raw row and paired kind are discarded together")
+			kind, available = capture.snapshot()
+			require.False(t, available)
+			require.False(t, kind)
+
+			require.NoError(t, sink.BeginAttempt(ctx, 1, nil))
+			require.Error(t, sink.Write(0, failed, nil), "writes from an aborted generation are rejected")
+			require.NoError(t, sink.Write(1, retry, nil))
+			require.NoError(t, sink.SealAttempt(1))
+			kind, available = capture.snapshot()
+			if retryRows == 0 {
+				require.False(t, available)
+				require.False(t, kind)
+				for _, result := range ses.GetResultBatches() {
+					require.Zero(t, result.RowCount(), "zero-row retry must not retain a failed-attempt value")
+				}
+			} else {
+				require.True(t, available)
+				require.True(t, kind)
+				results := ses.GetResultBatches()
+				require.Len(t, results, 1)
+				require.Equal(t, 1, results[0].RowCount())
+				require.Equal(t, []byte("retry"), results[0].Vecs[0].GetBytesAt(0))
+			}
+			ses.ClearResultBatches()
+		})
+	}
+}
+
+func selectIntoIntBatch(t *testing.T, mp *mpool.MPool, value int64, rows int) *batch.Batch {
+	t.Helper()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	if rows != 0 {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, mp))
+	}
+	bat.SetRowCount(rows)
+	return bat
+}
+
+func selectIntoStringKindBatch(t *testing.T, mp *mpool.MPool, value string, kind bool, rows int) *batch.Batch {
+	t.Helper()
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	bat.Vecs[1] = vector.NewVec(types.T_bool.ToType())
+	if rows != 0 {
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte(value), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], kind, false, mp))
+	}
+	bat.SetRowCount(rows)
+	return bat
+}
+
 func TestSelectIntoUserVariablesCallbackUsesActivePlanLayout(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()

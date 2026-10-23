@@ -24,8 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // selectIntoUserVariables collects the result of SELECT ... INTO @var.  The
@@ -49,6 +51,16 @@ type scalarNumericValueKindCapture struct {
 	mu        sync.Mutex
 	value     bool
 	available bool
+}
+
+func (capture *scalarNumericValueKindCapture) reset() {
+	if capture == nil {
+		return
+	}
+	capture.mu.Lock()
+	capture.value = false
+	capture.available = false
+	capture.mu.Unlock()
 }
 
 func (capture *scalarNumericValueKindCapture) captureBatch(
@@ -282,6 +294,120 @@ func (collector *selectIntoUserVariables) capture(ctx context.Context, ses FeSes
 		}
 	}
 	collector.rowCount += uint64(bat.RowCount())
+	return nil
+}
+
+func (collector *selectIntoUserVariables) resetAttempt() {
+	if collector == nil {
+		return
+	}
+	collector.mu.Lock()
+	collector.row = nil
+	collector.rowIsBin = nil
+	collector.rowType = nil
+	collector.rowDomain = nil
+	collector.rowCount = 0
+	collector.mu.Unlock()
+}
+
+type selectIntoAttemptState uint8
+
+const (
+	selectIntoAttemptIdle selectIntoAttemptState = iota
+	selectIntoAttemptWriting
+	selectIntoAttemptSealed
+)
+
+// selectIntoResultSink stages callback writes under Compile's retry generation.
+// A failed attempt can have delivered a batch before a later operator requests
+// a retry, so its collector/capture must be discarded before the next attempt
+// begins.
+type selectIntoResultSink struct {
+	mu         sync.Mutex
+	write      func(*batch.Batch, *perfcounter.CounterSet) error
+	collector  *selectIntoUserVariables
+	capture    *scalarNumericValueKindCapture
+	session    FeSession
+	state      selectIntoAttemptState
+	generation uint64
+}
+
+func newSelectIntoResultSink(
+	execCtx *ExecCtx,
+	stmt tree.Statement,
+	write func(*batch.Batch, *perfcounter.CounterSet) error,
+) compile.ResultSink {
+	selectStmt, isSelect := stmt.(*tree.Select)
+	needsAttemptScope := isSelect && len(selectStmt.IntoVars) != 0
+	if execCtx != nil && execCtx.numericValueKindCapture != nil {
+		needsAttemptScope = true
+	}
+	if execCtx == nil || !needsAttemptScope {
+		return nil
+	}
+	return &selectIntoResultSink{
+		write:     write,
+		collector: execCtx.selectInto,
+		capture:   execCtx.numericValueKindCapture,
+		session:   execCtx.ses,
+	}
+}
+
+func (sink *selectIntoResultSink) resetAttemptLocked() {
+	sink.collector.resetAttempt()
+	sink.capture.reset()
+	// Internal SET evaluation also retains raw output batches on the session.
+	// Clear them with the paired BOOL snapshot so a failed generation cannot
+	// leave a value row from one attempt beside a kind bit from another.
+	if sink.capture != nil && sink.session != nil {
+		if cleaner, ok := sink.session.(interface{ ClearResultBatches() }); ok {
+			cleaner.ClearResultBatches()
+		}
+	}
+}
+
+func (sink *selectIntoResultSink) BeginAttempt(_ context.Context, generation uint64, _ *process.Process) error {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if sink.state == selectIntoAttemptWriting {
+		return moerr.NewInternalErrorNoCtx("SELECT INTO output attempt already active")
+	}
+	sink.resetAttemptLocked()
+	sink.generation = generation
+	sink.state = selectIntoAttemptWriting
+	return nil
+}
+
+func (sink *selectIntoResultSink) Write(generation uint64, bat *batch.Batch, counters *perfcounter.CounterSet) error {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if sink.state != selectIntoAttemptWriting || generation != sink.generation {
+		return moerr.NewInternalErrorNoCtxf(
+			"SELECT INTO output generation mismatch: got %d, active %d", generation, sink.generation)
+	}
+	return sink.write(bat, counters)
+}
+
+func (sink *selectIntoResultSink) SealAttempt(generation uint64) error {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if sink.state != selectIntoAttemptWriting || generation != sink.generation {
+		return moerr.NewInternalErrorNoCtxf(
+			"SELECT INTO output seal generation mismatch: got %d, active %d", generation, sink.generation)
+	}
+	sink.state = selectIntoAttemptSealed
+	return nil
+}
+
+func (sink *selectIntoResultSink) AbortAttempt(generation uint64, _ error) error {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if sink.state != selectIntoAttemptWriting || generation != sink.generation {
+		return moerr.NewInternalErrorNoCtxf(
+			"SELECT INTO output abort generation mismatch: got %d, active %d", generation, sink.generation)
+	}
+	sink.resetAttemptLocked()
+	sink.state = selectIntoAttemptIdle
 	return nil
 }
 

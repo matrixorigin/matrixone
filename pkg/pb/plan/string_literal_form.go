@@ -1014,7 +1014,7 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 // can retain precise diagnostics, while sharing one owner walk so adding one
 // feature cannot accidentally replace another feature's compatibility gate.
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
-	features.NumericValuePrograms = ownerHasSelectIntoKindLayout(owner)
+	features.NumericValuePrograms = ownerHasNumericValueKindLayout(owner)
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
 			features.DependentPrograms = features.DependentPrograms || current.GetDependent() != nil || current.GetSlot() != nil
@@ -1317,10 +1317,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 	return
 }
 
-// SELECT ... INTO carries a private BOOL passenger layout on Query rather than
-// inside an Expr. Include that descriptor in the same v129 admission feature
-// so older workers cannot silently treat the passenger columns as visible.
-func ownerHasSelectIntoKindLayout(owner any) bool {
+// SELECT ... INTO and correlated scalar results carry private BOOL passenger
+// layouts outside the expression tree. Include both descriptors in the same
+// v129 admission feature so older workers cannot misread the physical output.
+func ownerHasNumericValueKindLayout(owner any) bool {
 	seen := make(map[uintptr]struct{})
 	var walk func(reflect.Value) bool
 	walk = func(value reflect.Value) bool {
@@ -1335,6 +1335,9 @@ func ownerHasSelectIntoKindLayout(owner any) bool {
 				return false
 			}
 			if query, ok := value.Interface().(*Query); ok && len(query.IntoUserVariableKindColumns) != 0 {
+				return true
+			}
+			if program, ok := value.Interface().(*CorrelationProgram); ok && program.ScalarResultKindColumn != 0 {
 				return true
 			}
 			pointer := value.Pointer()
