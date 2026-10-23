@@ -6,8 +6,10 @@ Approval: the user accepted the comparison plan and requested implementation.
 Revision 0.4 fixes the workstation, resource accounting, and three-part delivery.
 Owners: benchmark runner, MO SQL/storage, and performance analysis.
 Tracking issue: [#30569](https://github.com/matrixorigin/matrixone/issues/30569).
-Implementation series: workload/correctness; controlled measurement; profiling.
-PR numbers are recorded here when published.
+Implementation series: [workload #30588](https://github.com/matrixorigin/matrixone/pull/30588)
+and [controlled measurement #30599](https://github.com/matrixorigin/matrixone/pull/30599)
+are merged; [profiling #30600](https://github.com/matrixorigin/matrixone/pull/30600)
+builds on their final measurement and cleanup contracts.
 
 ## 1. Purpose and decisions
 
@@ -392,6 +394,11 @@ the ordinary query results. Keep its operator evidence, but use actual SELECT
 replays for CPU, allocation and output-path diagnosis. Check that the relevant
 plan shape and workload match before relating the two.
 
+The pinned MO SQL interface rejects ANALYZE with FORMAT=JSON. Retain its
+structured EXPLAIN FORMAT=JSON plan and text EXPLAIN ANALYZE output separately;
+do not present estimated JSON statistics as actual execution counters. DuckDB
+uses detailed JSON with ALL statement coverage and distinct Q15 statement files.
+
 ### 8.2 Audit metric semantics before translating them
 
 Store each raw name and value alongside its engine version, unit, scope, meaning,
@@ -475,6 +482,15 @@ frame-pointer method with matching symbols; do not assume `perf -g` alone can
 unwind every optimized C++ or Go/cgo stack [15]. A profiler pilot must recover
 known Go and native hot paths before source-level attribution is accepted.
 
+Bound postprocessing to one minute overall. Full callgraph conversion has a
+30-second sub-budget; if it fails while the caller remains active, a separate
+15-second `perf script -G` conversion may recover weighted leaf attribution.
+Keep the raw recording and partial full output, mark callgraph coverage as
+unavailable, and retain a partial attempt outcome. Optional SVG rendering has
+its own five-second sub-budget. Cancellation terminates owned symbolizer process
+groups. Escape folded-stack display delimiters and retain original symbol names
+in structured evidence so Go generic names cannot create fictitious frames.
+
 Very short queries need bounded repeated-query profiling windows: target 20
 seconds, cap at 60 seconds or 2,000 completed repetitions, and record the actual
 count. Warmup and connection setup are outside that window. Normalize accumulated
@@ -482,6 +498,13 @@ work by completed calls. Repeating a query creates a steady-repeat diagnostic
 profile; it does not replace a cold or first-use measurement. If there are too few
 samples for a function-level claim, report that limitation rather than making
 the SQL or data artificially more expensive.
+
+Every diagnostic and its controls discard a target warm execution before opening
+the collector gate; the first execution never contributes samples or captured
+repetitions. The profiler reuses timing-report evidence admission for baseline
+selection and aborts before another arm if process/cgroup cleanup is unproven.
+This proof includes external perf collectors; unjoined writers retain their
+private capture directories and cannot supply immutable archived artifacts.
 
 ### 8.5 Allocation, copies, storage waits and critical paths
 

@@ -306,6 +306,22 @@ func TestInsertOnDupGeneratedPrimaryKeyRejected(t *testing.T) {
 	require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
 }
 
+func TestInsertOnDupSelfPrimaryKeyKeepsGeneratedUniqueKeyImmutable(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	configureMockGeneratedIndex(t, mock, true)
+	base := mock.ctxt.tables["t_on_update_gen"]
+	idPos := mockTableColPos(t, base, "id")
+	id := base.Cols[idPos]
+	generated := base.Cols[mockTableColPos(t, base, "g")].GeneratedCol
+	generated.Expr = generatedColumnRefExpr(id.Typ, idPos, id.Name)
+	generated.OriginString = "id"
+
+	_, err := runOneStmt(mock, t,
+		"insert into constraint_test.t_on_update_gen (id,val,updated_at) values (1,1,null) "+
+			"on duplicate key update id=id, updated_at=values(updated_at)")
+	require.NoError(t, err, "an unchanged PK must not invalidate its dependent generated UNIQUE key")
+}
+
 func findUpdateCtxByTableName(query *planpb.Query, tableName string) *planpb.UpdateCtx {
 	for _, node := range query.Nodes {
 		if node.NodeType != planpb.Node_MULTI_UPDATE {

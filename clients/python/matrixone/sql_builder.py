@@ -575,6 +575,7 @@ class MatrixOneSQLBuilder:
     def clone(self) -> "MatrixOneSQLBuilder":
         """Create a copy of the current builder"""
         clone = MatrixOneSQLBuilder()
+        clone._query_type = self._query_type
         clone._select_columns = self._select_columns.copy()
         clone._from_table = self._from_table
         clone._from_snapshot = self._from_snapshot
@@ -588,6 +589,10 @@ class MatrixOneSQLBuilder:
         clone._limit_count = self._limit_count
         clone._offset_count = self._offset_count
         clone._ctes = self._ctes.copy()
+        clone._insert_columns = self._insert_columns.copy()
+        clone._insert_values = [row.copy() for row in self._insert_values]
+        clone._update_set_columns = self._update_set_columns.copy()
+        clone._update_set_values = self._update_set_values.copy()
         return clone
 
     def __str__(self) -> str:
@@ -687,7 +692,7 @@ def build_select_query(
     if order_by:
         builder.order_by(*order_by)
 
-    if limit:
+    if limit is not None:
         builder.limit(limit)
 
     if use_parameter_substitution:
