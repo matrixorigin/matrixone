@@ -32,7 +32,7 @@ from .account import AccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import ConnectionError, QueryError
-from ._utils import detach_from_pool, is_non_transactional_statement
+from ._utils import discard_unrestored_connection, is_non_transactional_statement
 from .fulltext_manager import FulltextIndexManager
 from .load_data import LoadDataManager
 from .stage import StageManager
@@ -1332,16 +1332,9 @@ class Client(BaseMatrixOneClient):
             # String SQL - original implementation
             final_sql = self._substitute_parameters(sql_or_stmt, params)
 
-            # DATA BRANCH MERGE/PICK commit immediately and are rejected by the
-            # server when they arrive inside a transaction (error 20101).
-            # Pooled driver connections run with autocommit=False (implicit
-            # transactions), so these statements execute on a checked-out
-            # connection flipped to autocommit. The flip happens inside the
-            # connection context and inside the protected section below, so a
-            # flip that fails after the server applied it is still restored or
-            # invalidated; the exact previous autocommit state is restored
-            # afterwards, so caller-supplied engines (from_engine) keep their
-            # baseline. Ordinary statements keep the engine.begin() path.
+            # MERGE/PICK require autocommit outside explicit sessions. Change
+            # only this checkout, restoring its baseline before pool reuse.
+            # Ordinary SQL retains the engine.begin() transaction path.
             non_transactional = is_non_transactional_statement(final_sql)
             with self._engine.connect() if non_transactional else self._engine.begin() as conn:
                 restore_autocommit = False
@@ -1350,6 +1343,7 @@ class Client(BaseMatrixOneClient):
                     prev_autocommit = conn.exec_driver_sql("SELECT @@autocommit").scalar()
                     if isinstance(prev_autocommit, bytes):
                         prev_autocommit = prev_autocommit.decode()
+                execution_failed = False
                 try:
                     if non_transactional and str(prev_autocommit).strip().lower() not in ("1", "true", "on"):
                         # Record restoration responsibility BEFORE flipping, so a
@@ -1368,40 +1362,27 @@ class Client(BaseMatrixOneClient):
                         from sqlalchemy import text
 
                         result = conn.execute(text(final_sql))
+                except BaseException:
+                    execution_failed = True
+                    raise
                 finally:
                     if restore_autocommit:
                         try:
                             conn.exec_driver_sql("SET autocommit = 0")
-                        except Exception:
-                            # The connection may be dead or already invalidated
-                            # (e.g. issuing restore SQL after an async
-                            # cancellation would mask the original outcome).
-                            # Drop the mutated connection rather than returning
-                            # it to the pool, and never replace the original
-                            # statement outcome with a restoration error. Guard
-                            # the discard itself: a ResourceClosedError or pool
-                            # finalization error from invalidate() must not
-                            # escape the finally and mask the original outcome
-                            # either; a BaseException raised by the discard
-                            # (interrupt/cancellation) still propagates. When
-                            # the discard itself raises, detach keeps the
-                            # mutated connection out of the pool (SQLAlchemy
-                            # 1.4 runs invalidate listeners before closing).
+                        except BaseException as restore_error:
                             try:
-                                conn.invalidate()
-                            except Exception:
-                                detach_from_pool(conn)
-                        except BaseException:
-                            # KeyboardInterrupt/SystemExit delivered during the
-                            # restore escape the clause above and leave the
-                            # server-side autocommit state unknown; discard the
-                            # connection instead of pooling it, then re-raise
-                            # the original interrupt unreplaced.
-                            try:
-                                conn.invalidate()
-                            except Exception:
-                                detach_from_pool(conn)
-                            raise
+                                discard_unrestored_connection(conn)
+                            except BaseException as discard_error:
+                                # Preserve an in-flight SQL error/cancellation.
+                                # A new interrupt after successful SQL still propagates.
+                                if (
+                                    not execution_failed
+                                    and isinstance(restore_error, Exception)
+                                    and not isinstance(discard_error, Exception)
+                                ):
+                                    raise
+                            if not execution_failed and not isinstance(restore_error, Exception):
+                                raise
 
                 execution_time = time.time() - start_time
 

@@ -54,25 +54,10 @@ from .exceptions import (
     SnapshotError,
 )
 from .logger import MatrixOneLogger, create_default_logger
-from ._utils import detach_from_pool, is_non_transactional_statement
+from ._utils import discard_unrestored_connection, is_non_transactional_statement
 from .pitr import AsyncPitrManager
 from .pubsub import AsyncPubSubManager
 from .snapshot import Snapshot, SnapshotLevel
-
-
-def _detach_failed_invalidate(async_conn):
-    """Detach an async connection whose await-invalidate raised.
-
-    AsyncConnection has no detach of its own; the proxied sync Connection
-    does, and detaching it is bookkeeping only (no driver I/O), so it is
-    safe to call directly from the event loop thread.
-    """
-    try:
-        sync_conn = async_conn.sync_connection
-    except Exception:
-        sync_conn = None
-    if sync_conn is not None:
-        detach_from_pool(sync_conn)
 
 
 class AsyncResultSet:
@@ -1428,15 +1413,9 @@ class AsyncClient(BaseMatrixOneClient):
             # String SQL - original implementation
             final_sql = self._substitute_parameters(sql_or_stmt, params)
 
-            # DATA BRANCH MERGE/PICK commit immediately and are rejected by the
-            # server when they arrive inside a transaction (error 20101).
-            # Pooled driver connections run with autocommit=False (implicit
-            # transactions), so these statements execute on a checked-out
-            # connection flipped to autocommit. The flip happens inside the
-            # connection context so a failing flip still releases the checkout,
-            # and the exact previous autocommit state is restored afterwards,
-            # so caller-supplied engines (from_engine) keep their baseline.
-            # Ordinary statements keep the engine.begin() transaction path.
+            # MERGE/PICK require autocommit outside explicit sessions. Change
+            # only this checkout, restoring its baseline before pool reuse.
+            # Ordinary SQL retains the engine.begin() transaction path.
             non_transactional = is_non_transactional_statement(final_sql)
             async with self._engine.connect() if non_transactional else self._engine.begin() as conn:
                 restore_autocommit = False
@@ -1445,6 +1424,7 @@ class AsyncClient(BaseMatrixOneClient):
                     prev_autocommit = (await conn.exec_driver_sql("SELECT @@autocommit")).scalar()
                     if isinstance(prev_autocommit, bytes):
                         prev_autocommit = prev_autocommit.decode()
+                execution_failed = False
                 try:
                     if non_transactional and str(prev_autocommit).strip().lower() not in ("1", "true", "on"):
                         # Record restoration responsibility BEFORE flipping, so a
@@ -1463,45 +1443,27 @@ class AsyncClient(BaseMatrixOneClient):
                         from sqlalchemy import text
 
                         result = await conn.execute(text(final_sql))
+                except BaseException:
+                    execution_failed = True
+                    raise
                 finally:
                     if restore_autocommit:
                         try:
                             await conn.exec_driver_sql("SET autocommit = 0")
-                        except Exception:
-                            # After a cancellation SQLAlchemy invalidates the
-                            # async connection; issuing this restore raises and
-                            # would mask the original cancellation. Drop the
-                            # mutated connection rather than returning it to the
-                            # pool, and never replace the original statement
-                            # outcome (cancellation, timeout, execution error)
-                            # with a restoration error. Guard the discard
-                            # itself: a ResourceClosedError or pool finalization
-                            # failure from invalidate() must not escape the
-                            # finally and mask the original outcome either; a
-                            # BaseException raised by the discard
-                            # (interrupt/cancellation) still propagates. When
-                            # the discard itself raises, detach keeps the
-                            # mutated connection out of the pool (SQLAlchemy
-                            # 1.4 runs invalidate listeners before closing).
+                        except BaseException as restore_error:
                             try:
-                                await conn.invalidate()
-                            except Exception:
-                                _detach_failed_invalidate(conn)
-                        except BaseException:
-                            # asyncio.CancelledError derives from BaseException,
-                            # so a cancellation delivered while awaiting this
-                            # restore escapes the clause above. Whether the SET
-                            # was applied server-side is then unknown, and
-                            # engine-level invalidation of a cancelled call
-                            # differs across the supported SQLAlchemy 1.4-2.x
-                            # range. Discard the connection here instead of
-                            # relying on either, and re-raise the original
-                            # outcome (cancellation or interrupt) unreplaced.
-                            try:
-                                await conn.invalidate()
-                            except Exception:
-                                _detach_failed_invalidate(conn)
-                            raise
+                                discard_unrestored_connection(conn.sync_connection)
+                            except BaseException as discard_error:
+                                # Preserve an in-flight SQL error/cancellation.
+                                # A new interrupt after successful SQL still propagates.
+                                if (
+                                    not execution_failed
+                                    and isinstance(restore_error, Exception)
+                                    and not isinstance(discard_error, Exception)
+                                ):
+                                    raise
+                            if not execution_failed and not isinstance(restore_error, Exception):
+                                raise
 
                 execution_time = time.time() - start_time
 

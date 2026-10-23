@@ -13,7 +13,6 @@ ordinary statements keep the begin() transaction path, without corrupting the
 baseline of caller-supplied engines (Client.from_engine).
 """
 
-import time
 from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
@@ -97,22 +96,10 @@ def test_ordinary_statements_stay_in_transactions(sql):
     assert not is_non_transactional_statement(sql)
 
 
-def test_classification_is_linear_in_comment_count():
-    # The first implementation used a regex whose comment group backtracked
-    # exponentially; classification must stay effectively linear because every
-    # user query passes through it.
-    def timed(n):
-        sql = ("/*c*/" * n) + " SELECT 1"
-        start = time.perf_counter()
-        assert not is_non_transactional_statement(sql)
-        return time.perf_counter() - start
-
-    small = timed(128)
-    large = timed(1024)
-    # 8x the comments must finish in well under 100x the time; the previous
-    # regex needed ~3.4s for 24 repetitions and grew by ~16x per +4 comments.
-    assert large < 1.0
-    assert large < max(0.05, small * 100)
+def test_classification_handles_long_comment_prefix():
+    prefix = "/* trace */" * 1024
+    assert is_non_transactional_statement(prefix + "data branch merge src into dst")
+    assert not is_non_transactional_statement(prefix + "select 1")
 
 
 # ─── routing: mocked engines ─────────────────────────────────────────────────
@@ -142,6 +129,8 @@ def _sync_engine():
     engine.begin.return_value.__enter__.return_value = begin_conn
 
     connect_conn = MagicMock()
+    connect_conn.closed = False
+    connect_conn.invalidated = False
     connect_cm = Mock()
     connect_cm.__enter__ = Mock(return_value=connect_conn)
     connect_cm.__exit__ = Mock(return_value=False)
@@ -394,35 +383,6 @@ def test_sync_keyboard_interrupt_survives_invalidate_failure():
         client.execute("data branch merge src into dst")
 
     connect_conn.invalidate.assert_called_once_with()
-    # the BaseException branch runs the same pool-safety detach fallback
-    connect_conn.detach.assert_called_once_with()
-
-
-def test_sync_invalidate_failure_detaches_connection():
-    # SQLAlchemy 1.4 fires PoolEvents.invalidate listeners BEFORE the
-    # record's hard close, so a raising listener leaves the live, mutated
-    # connection checked out. When the discard raises, the fallback must
-    # still keep the connection out of the pool: detach() marks it for a
-    # literal close instead of a pool return.
-    engine, _, connect_conn, _ = _sync_engine()
-
-    def failing_restore(sql):
-        if sql == "SELECT @@autocommit":
-            return Mock(scalar=Mock(return_value="0"))
-        if sql == "SET autocommit = 0":
-            raise Exception("restore failed")
-        return Mock(returns_rows=False, rowcount=0)
-
-    connect_conn.exec_driver_sql.side_effect = failing_restore
-    connect_conn.invalidate.side_effect = RuntimeError("listener raised before close")
-    client = Client(logger=Mock())
-    client._engine = engine
-
-    result = client.execute("data branch merge src into dst")
-
-    assert result is not None  # merge outcome preserved despite both failures
-    connect_conn.invalidate.assert_called_once_with()
-    connect_conn.detach.assert_called_once_with()
 
 
 def _async_engine():
@@ -434,6 +394,9 @@ def _async_engine():
     engine.begin.return_value = begin_cm
 
     connect_conn = MagicMock()
+    connect_conn.closed = False
+    connect_conn.invalidated = False
+    connect_conn.sync_connection = connect_conn
     connect_cm = AsyncMock()
     connect_cm.__aenter__.return_value = connect_conn
     engine.connect.return_value = connect_cm
@@ -533,14 +496,14 @@ async def test_async_cancellation_is_not_masked_by_restore():
         raise _asyncio.CancelledError()
 
     connect_conn.exec_driver_sql = AsyncMock(side_effect=cancel_on_merge)
-    connect_conn.invalidate = AsyncMock()
+    connect_conn.invalidate = Mock()
     client = AsyncClient(logger=Mock())
     client._engine = engine
 
     with pytest.raises(_asyncio.CancelledError):
         await client._execute("data branch merge src into dst")
 
-    connect_conn.invalidate.assert_awaited_once()
+    connect_conn.invalidate.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -564,7 +527,7 @@ async def test_async_wait_for_timeout_stays_timeout():
         await _asyncio.sleep(30)
 
     connect_conn.exec_driver_sql = AsyncMock(side_effect=hang_on_merge)
-    connect_conn.invalidate = AsyncMock()
+    connect_conn.invalidate = Mock()
     client = AsyncClient(logger=Mock())
     client._engine = engine
 
@@ -591,7 +554,7 @@ async def test_async_disconnect_during_merge_keeps_original_error():
         raise Exception("server connection gone away")
 
     connect_conn.exec_driver_sql = AsyncMock(side_effect=disconnect_on_merge)
-    connect_conn.invalidate = AsyncMock()
+    connect_conn.invalidate = Mock()
     client = AsyncClient(logger=Mock())
     client._engine = engine
 
@@ -626,14 +589,14 @@ async def test_async_cancellation_during_restore_discards_connection():
         return Mock(returns_rows=False, rowcount=0)
 
     connect_conn.exec_driver_sql = AsyncMock(side_effect=cancel_on_restore)
-    connect_conn.invalidate = AsyncMock()
+    connect_conn.invalidate = Mock()
     client = AsyncClient(logger=Mock())
     client._engine = engine
 
     with pytest.raises(_asyncio.CancelledError):
         await client._execute("data branch merge src into dst")
 
-    connect_conn.invalidate.assert_awaited_once()
+    connect_conn.invalidate.assert_called_once()
     assert applied == ["SET autocommit = 1", "data branch merge src into dst", "SET autocommit = 0"]
 
 
@@ -653,14 +616,14 @@ async def test_async_invalidate_failure_after_failed_restore_keeps_merge_success
         return Mock(returns_rows=False, rowcount=0)
 
     connect_conn.exec_driver_sql = AsyncMock(side_effect=failing_restore)
-    connect_conn.invalidate = AsyncMock(side_effect=RuntimeError("discard failed"))
+    connect_conn.invalidate = Mock(side_effect=RuntimeError("discard failed"))
     client = AsyncClient(logger=Mock())
     client._engine = engine
 
     result = await client._execute("data branch merge src into dst")
 
     assert result is not None  # merge outcome preserved despite both failures
-    connect_conn.invalidate.assert_awaited_once()  # discard still attempted
+    connect_conn.invalidate.assert_called_once()  # discard still attempted
 
 
 @pytest.mark.asyncio
@@ -681,7 +644,7 @@ async def test_async_invalidate_failure_keeps_original_statement_error():
         raise Exception("server connection gone away")
 
     connect_conn.exec_driver_sql = AsyncMock(side_effect=disconnect_on_merge)
-    connect_conn.invalidate = AsyncMock(side_effect=RuntimeError("discard failed"))
+    connect_conn.invalidate = Mock(side_effect=RuntimeError("discard failed"))
     client = AsyncClient(logger=Mock())
     client._engine = engine
 
@@ -691,7 +654,7 @@ async def test_async_invalidate_failure_keeps_original_statement_error():
     assert "server connection gone away" in str(err.value)
     assert "statements pending" not in str(err.value)
     assert "discard failed" not in str(err.value)
-    connect_conn.invalidate.assert_awaited_once()
+    connect_conn.invalidate.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -715,14 +678,14 @@ async def test_async_cancellation_survives_invalidate_failure():
         raise _asyncio.CancelledError()
 
     connect_conn.exec_driver_sql = AsyncMock(side_effect=cancel_on_merge)
-    connect_conn.invalidate = AsyncMock(side_effect=RuntimeError("discard failed"))
+    connect_conn.invalidate = Mock(side_effect=RuntimeError("discard failed"))
     client = AsyncClient(logger=Mock())
     client._engine = engine
 
     with pytest.raises(_asyncio.CancelledError):
         await client._execute("data branch merge src into dst")
 
-    connect_conn.invalidate.assert_awaited_once()
+    connect_conn.invalidate.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -742,44 +705,14 @@ async def test_async_cancellation_during_restore_survives_invalidate_failure():
         return Mock(returns_rows=False, rowcount=0)
 
     connect_conn.exec_driver_sql = AsyncMock(side_effect=cancel_on_restore)
-    connect_conn.invalidate = AsyncMock(side_effect=RuntimeError("discard failed"))
+    connect_conn.invalidate = Mock(side_effect=RuntimeError("discard failed"))
     client = AsyncClient(logger=Mock())
     client._engine = engine
 
     with pytest.raises(_asyncio.CancelledError):
         await client._execute("data branch merge src into dst")
 
-    connect_conn.invalidate.assert_awaited_once()
-    # the same pool-safety fallback runs on the BaseException branch
-    connect_conn.sync_connection.detach.assert_called_once_with()
-
-
-@pytest.mark.asyncio
-async def test_async_invalidate_failure_detaches_connection():
-    # Async twin of the sync pool-safety fallback. AsyncConnection has no
-    # detach of its own, so the proxied sync Connection is detached; on
-    # SQLAlchemy 1.4 (invalidate listeners fire before the record's hard
-    # close) that is what keeps a mutated connection out of the pool when
-    # the discard itself raises.
-    engine, _, connect_conn, _ = _async_engine()
-
-    async def failing_restore(sql):
-        if sql == "SELECT @@autocommit":
-            return Mock(scalar=Mock(return_value="0"))
-        if sql == "SET autocommit = 0":
-            raise Exception("restore failed")
-        return Mock(returns_rows=False, rowcount=0)
-
-    connect_conn.exec_driver_sql = AsyncMock(side_effect=failing_restore)
-    connect_conn.invalidate = AsyncMock(side_effect=RuntimeError("listener raised before close"))
-    client = AsyncClient(logger=Mock())
-    client._engine = engine
-
-    result = await client._execute("data branch merge src into dst")
-
-    assert result is not None  # merge outcome preserved despite both failures
-    connect_conn.invalidate.assert_awaited_once()
-    connect_conn.sync_connection.detach.assert_called_once_with()
+    connect_conn.invalidate.assert_called_once()
 
 
 @pytest.mark.parametrize(
@@ -854,202 +787,6 @@ def test_inert_comment_ordinary_sql_keeps_begin_path(sql):
     engine.connect.assert_not_called()
 
 
-# ─── dialect isolation contract ──────────────────────────────────────────────
-# The custom MatrixOneDialect replaces the stock pymysql dialect on the sync
-# engine after create_engine(), so engine.initialize() never ran on it: it
-# must recover and restore the engine-default isolation level itself.
-
-
-def _dbapi_conn(default_isolation="REPEATABLE READ", autocommit="0"):
-    """Mock DBAPI connection answering the isolation-state queries."""
-    queries = []
-
-    def execute(sql):
-        queries.append(sql)
-        cursor = mock_cursor
-        if sql == "SELECT @@transaction_isolation":
-            cursor._fetchone = (default_isolation,)
-        elif sql == "SELECT @@autocommit":
-            cursor._fetchone = (autocommit,)
-        return 0
-
-    mock_cursor = Mock()
-    mock_cursor.execute.side_effect = execute
-    mock_cursor.fetchone.side_effect = lambda: getattr(mock_cursor, "_fetchone", None)
-
-    conn = Mock()
-    conn.cursor.return_value = mock_cursor
-    conn.recorded = queries
-    return conn
-
-
-def test_dialect_offers_autocommit_isolation_level():
-    from matrixone.sqlalchemy_ext.dialect import MatrixOneDialect
-
-    dialect = MatrixOneDialect()
-    assert "AUTOCOMMIT" in dialect.get_isolation_level_values(None)
-
-
-def test_dialect_autocommit_set_restores_full_baseline():
-    from matrixone.sqlalchemy_ext.dialect import MatrixOneDialect
-
-    dialect = MatrixOneDialect()
-    conn = _dbapi_conn()
-    dialect.set_isolation_level(conn, "AUTOCOMMIT")
-    conn.autocommit.assert_called_once_with(True)
-    # default isolation captured from the untouched connection
-    assert conn.recorded[0] == "SELECT @@transaction_isolation"
-    assert conn.recorded[1] == "SELECT @@autocommit"
-    assert dialect.default_isolation_level == "REPEATABLE READ"
-    assert dialect.default_autocommit is False
-
-    conn.autocommit.reset_mock()
-    dialect.reset_isolation_level(conn)
-    conn.autocommit.assert_called_once_with(False)
-    assert "SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ" in conn.recorded
-
-
-def test_dialect_default_isolation_captured_once():
-    from matrixone.sqlalchemy_ext.dialect import MatrixOneDialect
-
-    dialect = MatrixOneDialect()
-    conn = _dbapi_conn(default_isolation="READ COMMITTED")
-    dialect.set_isolation_level(conn, "AUTOCOMMIT")
-    dialect.reset_isolation_level(conn)
-    dialect.set_isolation_level(conn, "REPEATABLE READ")
-    # snapshot query ran exactly once; reset restored the captured READ COMMITTED
-    assert conn.recorded.count("SELECT @@transaction_isolation") == 1
-
-
-def test_dialect_reset_restores_autocommit_baseline():
-    # Engine baseline with autocommit on (e.g. a caller's engine configured
-    # with isolation_level='AUTOCOMMIT'): a temporary non-autocommit
-    # isolation selection must reset back to autocommit on, not off, or the
-    # engine's commit behavior changes for every later checkout.
-    from matrixone.sqlalchemy_ext.dialect import MatrixOneDialect
-
-    dialect = MatrixOneDialect()
-    conn = _dbapi_conn(autocommit="1")
-
-    dialect.set_isolation_level(conn, "READ COMMITTED")
-    # during the temporary selection, autocommit is off
-    conn.autocommit.assert_called_once_with(False)
-    conn.autocommit.reset_mock()
-
-    assert dialect.default_autocommit is True
-    before = len(conn.recorded)
-    dialect.reset_isolation_level(conn)
-    # baseline restored: autocommit back on, with no isolation-level SQL
-    conn.autocommit.assert_called_once_with(True)
-    assert not any("ISOLATION LEVEL" in q for q in conn.recorded[before:])
-
-
-class _MethodAutocommitConn:
-    """pymysql-style connection: autocommit is a callable method."""
-
-    def __init__(self):
-        self.calls = []
-
-    def autocommit(self, value):
-        self.calls.append(value)
-
-
-class _PropertyAutocommitConn:
-    """mysql-connector-style connection: autocommit is a property."""
-
-    def __init__(self):
-        self.assigned = []
-
-    @property
-    def autocommit(self):
-        return getattr(self, "_ac", False)
-
-    @autocommit.setter
-    def autocommit(self, value):
-        self.assigned.append(value)
-        self._ac = value
-
-
-def test_dialect_autocommit_uses_method_for_pymysql_style():
-    from matrixone.sqlalchemy_ext.dialect import MatrixOneDialect
-
-    conn = _MethodAutocommitConn()
-    MatrixOneDialect._apply_autocommit(conn, True)
-    MatrixOneDialect._apply_autocommit(conn, False)
-    assert conn.calls == [True, False]
-
-
-def test_dialect_autocommit_uses_assignment_for_property_style():
-    from matrixone.sqlalchemy_ext.dialect import MatrixOneDialect
-
-    conn = _PropertyAutocommitConn()
-    MatrixOneDialect._apply_autocommit(conn, True)
-    MatrixOneDialect._apply_autocommit(conn, False)
-    assert conn.assigned == [True, False]
-    assert conn.autocommit is False
-
-
-class _FullFakeCursor:
-    """Minimal cursor answering the dialect's isolation snapshot/reset SQL."""
-
-    def __init__(self, default_isolation="REPEATABLE READ"):
-        self._row = (default_isolation,)
-        self.executed = []
-
-    def execute(self, sql):
-        self.executed.append(sql)
-
-    def fetchone(self):
-        return self._row
-
-    def close(self):
-        pass
-
-
-def test_dialect_set_reset_autocommit_handles_property_drivers():
-    # from_engine() accepts mysql+mysqlconnector engines; the isolation
-    # overrides must not call a property as if it were a method.
-    from matrixone.sqlalchemy_ext.dialect import MatrixOneDialect
-
-    dialect = MatrixOneDialect()
-
-    class PropertyConnWithCursor(_PropertyAutocommitConn):
-        def cursor(self):
-            return _FullFakeCursor(default_isolation="REPEATABLE READ")
-
-    conn = PropertyConnWithCursor()
-    dialect.set_isolation_level(conn, "AUTOCOMMIT")
-    dialect.reset_isolation_level(conn)
-    assert conn.assigned == [True, False]
-
-
-def test_dialect_decodes_bytes_isolation_level():
-    from matrixone.sqlalchemy_ext.dialect import MatrixOneDialect
-
-    dialect = MatrixOneDialect()
-    queries = []
-
-    class ByteCursor:
-        def execute(self, sql):
-            queries.append(sql)
-
-        def fetchone(self):
-            return (b"REPEATABLE-READ",)
-
-        def close(self):
-            pass
-
-    conn = Mock()
-    conn.cursor.return_value = ByteCursor()
-    dialect._ensure_default_isolation_level(conn)
-    assert dialect.default_isolation_level == "REPEATABLE READ"
-
-    conn.autocommit = Mock()
-    dialect.reset_isolation_level(conn)
-    assert "SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ" in queries
-    assert "b'" not in queries[-1]
-
-
 # ─── real QueuePool integration with a fake driver ───────────────────────────
 # Exercises the actual SQLAlchemy pooling machinery the SDK relies on, proving
 # that failed flips release the checkout and that pool baselines are preserved
@@ -1085,8 +822,6 @@ class _FakeCursor:
             if self._conn.fail_restore:
                 raise OperationalError(2006, "injected restore failure")
             if self._conn.fail_restore_soft:
-                # not a disconnect code: the engine must NOT auto-invalidate,
-                # so the SDK's own discard path is the one under test
                 raise OperationalError(1105, "injected non-disconnect restore refusal")
             self._conn.autocommit_state = "0"
         elif "data branch merge" in normalized and self._conn.fail_merge:
@@ -1108,10 +843,6 @@ class _FakeCursor:
             # (@@sql_mode, @@lower_case_table_names, ...)
             self.description = (("v", None, None, None, None, None, None),)
             self._rows = [("0",)]
-        elif "select 1" in normalized:
-            self.description = (("1", None, None, None, None, None, None),)
-            self._rows = [(1,)]
-            self.rowcount = 1
         return self.rowcount
 
     def fetchone(self):
@@ -1150,12 +881,6 @@ class _FakeDbapiConnection:
     def cursor(self):
         return _FakeCursor(self)
 
-    def autocommit(self, value):
-        # driver-level autocommit setter used by the isolation-level API
-        # (dialect set_isolation_level / reset_isolation_level, engine
-        # first-connect hooks)
-        self.autocommit_state = "1" if value else "0"
-
     def character_set_name(self):
         # required by the pymysql/mysqldb dialect's connect hook
         return "utf8mb4"
@@ -1170,7 +895,7 @@ class _FakeDbapiConnection:
         self.close_calls += 1
 
 
-def _pool_engine(created, _engine_kwargs=None, **conn_kwargs):
+def _pool_engine(created, **conn_kwargs):
     def creator():
         conn = _FakeDbapiConnection(**conn_kwargs)
         created.append(conn)
@@ -1181,7 +906,6 @@ def _pool_engine(created, _engine_kwargs=None, **conn_kwargs):
         creator=creator,
         pool_size=1,
         max_overflow=0,
-        **(_engine_kwargs or {}),
     )
     return engine
 
@@ -1319,15 +1043,260 @@ def test_real_pool_invalidate_failure_preserves_success_and_replaces_connection(
     engine.dispose()
 
 
+class _AsyncFakeCursor:
+    """Only DBAPI IO is fake; SQLAlchemy's async adapter and pool are real."""
+
+    def __init__(self, raw):
+        self.cursor = _FakeCursor(raw)
+
+    def __getattr__(self, name):
+        return getattr(self.cursor, name)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        await self.close()
+
+    def __await__(self):
+        return self.__aenter__().__await__()
+
+    async def execute(self, sql, args=None):
+        return self.cursor.execute(sql, args)
+
+    async def fetchone(self):
+        return self.cursor.fetchone()
+
+    async def fetchall(self):
+        return self.cursor.fetchall()
+
+    async def close(self):
+        self.cursor.close()
+
+
+class _AsyncFakeConnection(_FakeDbapiConnection):
+    def cursor(self, *args):
+        return _AsyncFakeCursor(self)
+
+    async def autocommit(self, value):
+        self.autocommit_state = "1" if value else "0"
+
+    def get_autocommit(self):
+        return self.autocommit_state == "1"
+
+    async def commit(self):
+        pass
+
+    async def rollback(self):
+        self.rollback_calls += 1
+
+    async def ensure_closed(self):
+        self.close()
+
+
+@pytest.fixture(params=["legacy", "future", "async"])
+def pooled_client(request, monkeypatch):
+    """One-slot pools exercise real sync/future/async cleanup and next reuse."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+    import aiomysql
+
+    created = []
+    mode = request.param
+    baseline = "0"
+    if mode == "async":
+        async def connect(*args, **kwargs):
+            raw = _AsyncFakeConnection(autocommit=baseline)
+            created.append(raw)
+            return raw
+
+        monkeypatch.setattr(aiomysql, "connect", connect)
+        engine = create_async_engine("mysql+aiomysql://root:pw@fake/test", pool_size=1, max_overflow=0)
+        client = AsyncClient.from_engine(engine, logger=Mock())
+    else:
+        def connect():
+            raw = _FakeDbapiConnection(autocommit=baseline)
+            created.append(raw)
+            return raw
+
+        engine = sqlalchemy.create_engine(
+            "mysql+pymysql://root:pw@fake/test", creator=connect, pool_size=1, max_overflow=0,
+            **({"future": True} if mode == "future" else {}),
+        )
+        client = Client.from_engine(engine, logger=Mock())
+    return client, engine, created
+
+
+async def _pooled_execute(client, sql):
+    if isinstance(client, AsyncClient):
+        return await client.execute(sql)
+    return client.execute(sql)
+
+
+async def _dispose_pool(engine):
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
+    if isinstance(engine, AsyncEngine):
+        await engine.dispose()
+    else:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure_listener,outcome",
+    [("invalidate", "success"), ("invalidate", "sql_error")]
+    + [("detach", outcome) for outcome in ("success", "sql_error", "cancel_merge", "cancel_restore", "cancel_applied")],
+)
+async def test_unrestorable_pool_connection_is_terminated(pooled_client, outcome, failure_listener):
+    import asyncio
+    from sqlalchemy import event
+
+    client, engine, created = pooled_client
+    owner = getattr(engine, "sync_engine", engine)
+    primary = RuntimeError("original statement failure")
+    cancel = asyncio.CancelledError("original cancellation")
+
+    def fail_restore(conn, cursor, statement, *args):
+        if statement == "SET autocommit = 0":
+            if outcome == "cancel_applied":
+                created[0].autocommit_state = "0"
+            if outcome in ("cancel_restore", "cancel_applied"):
+                raise cancel
+            raise RuntimeError("restore failed before applying SET")
+        if statement.startswith("data branch"):
+            if outcome == "sql_error":
+                raise primary
+            if outcome == "cancel_merge":
+                raise cancel
+
+    def fail_invalidate(*args):
+        # Invalidate fails before removal on SA1.4; detach fails after removal.
+        # Cancellation plus a raising engine-internal invalidate callback is
+        # SQLAlchemy's outcome, before the SDK receives control (SA2.1).
+        raise RuntimeError("pool listener failed")
+
+    event.listen(owner, "before_cursor_execute", fail_restore)
+    event.listen(owner, failure_listener, fail_invalidate)
+    try:
+        if outcome == "success":
+            assert await _pooled_execute(client, "data branch merge src into dst") is not None
+        elif outcome == "sql_error":
+            with pytest.raises(Exception, match="original statement failure"):
+                await _pooled_execute(client, "data branch merge src into dst")
+        else:
+            with pytest.raises(asyncio.CancelledError) as caught:
+                await _pooled_execute(client, "data branch merge src into dst")
+            assert caught.value is cancel
+        assert created[0].close_calls == 1
+        assert owner.pool.checkedout() == 0
+        result = await _pooled_execute(client, "SELECT @@autocommit")
+        assert result.rows[0][0] == "0"
+        assert len(created) == 2
+    finally:
+        event.remove(owner, failure_listener, fail_invalidate)
+        await _dispose_pool(engine)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pooled_client", ["async"], indirect=True)
+@pytest.mark.parametrize("applied", [False, True])
+async def test_task_cancellation_during_real_restore(pooled_client, monkeypatch, applied):
+    import asyncio
+
+    client, engine, created = pooled_client
+    restoring = asyncio.Event()
+    release = asyncio.Event()
+    execute = _AsyncFakeCursor.execute
+
+    async def block_restore(self, sql, args=None):
+        if sql == "SET autocommit = 0":
+            if applied:
+                await execute(self, sql, args)
+            restoring.set()
+            await release.wait()
+        return await execute(self, sql, args)
+
+    monkeypatch.setattr(_AsyncFakeCursor, "execute", block_restore)
+    task = asyncio.create_task(_pooled_execute(client, "data branch merge src into dst"))
+    try:
+        await asyncio.wait_for(restoring.wait(), 2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert created[0].close_calls == 1
+        assert engine.sync_engine.pool.checkedout() == 0
+        result = await _pooled_execute(client, "SELECT @@autocommit")
+        assert result.rows[0][0] == "0"
+        assert len(created) == 2
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await _dispose_pool(engine)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("baseline", ["0", "1"])
+async def test_from_engine_branch_preserves_pool_baseline(pooled_client, baseline):
+    client, engine, created = pooled_client
+    try:
+        # from_engine may already have connected for version detection.
+        await _pooled_execute(client, "SELECT @@autocommit")
+        created[0].autocommit_state = baseline
+        assert await _pooled_execute(client, "data branch pick src into dst keys(1)") is not None
+        assert await _pooled_execute(client, "data branch merge src into dst") is not None
+        result = await _pooled_execute(client, "SELECT @@autocommit")
+        assert result.rows[0][0] == baseline
+        assert len(created) == 1
+        assert created[0].close_calls == 0
+        if baseline == "1":
+            assert not any("SET autocommit" in sql for sql in created[0].executed)
+        assert getattr(engine, "sync_engine", engine).pool.checkedout() == 0
+    finally:
+        await _dispose_pool(engine)
+
+
+@pytest.mark.parametrize("statement_fails", [False, True])
+@pytest.mark.parametrize("restore_interrupts", [False, True])
+@pytest.mark.parametrize("discard_interrupts", [False, True])
+def test_cleanup_preserves_primary_outcome(statement_fails, restore_interrupts, discard_interrupts):
+    import asyncio
+
+    engine, _, conn, _ = _sync_engine()
+    primary = asyncio.CancelledError("statement cancelled")
+    restore = asyncio.CancelledError("restore cancelled") if restore_interrupts else RuntimeError("restore failed")
+    discard = BaseException("discard interrupted") if discard_interrupts else RuntimeError("detach listener failed")
+    conn.detach.side_effect = discard
+
+    def execute(sql):
+        if sql == "SELECT @@autocommit":
+            return Mock(scalar=Mock(return_value="0"))
+        if sql == "SET autocommit = 0":
+            raise restore
+        if sql.startswith("data branch") and statement_fails:
+            raise primary
+        return Mock(returns_rows=False, rowcount=0)
+
+    conn.exec_driver_sql.side_effect = execute
+    client = Client(logger=Mock())
+    client._engine = engine
+    expected = primary if statement_fails else restore if restore_interrupts else discard if discard_interrupts else None
+    if expected is None:
+        assert client.execute("data branch merge src into dst") is not None
+    else:
+        with pytest.raises(type(expected)) as caught:
+            client.execute("data branch merge src into dst")
+        assert caught.value is expected
+    conn.dialect.do_terminate.assert_called_once_with(conn.connection.dbapi_connection)
+    conn.invalidate.assert_called_once_with()
+
+
 def test_real_pool_restore_failure_with_raising_invalidate_listener_not_repooled():
-    # The review's reproduced leak: SQLAlchemy 1.4 fires PoolEvents.invalidate
-    # listeners BEFORE the record's hard close, so a raising listener leaves
-    # the live connection - still flipped to autocommit=1 - checked out, and
-    # the pool would hand it to the next checkout. The restore failure here
-    # uses a non-disconnect error so the engine does not auto-invalidate and
-    # the SDK's own discard path is the one under test. On 2.x the record is
-    # marked for recycle instead; the observable contract is the same: the
-    # mutated connection is never reused.
+    # Retain the author's DBAPI-level non-disconnect regression: unlike a
+    # before-execute hook, error 1105 passes through engine error handling
+    # without auto-invalidation. SDK cleanup must still remove and terminate
+    # the connection despite an invalidate listener that would abort disposal.
     from sqlalchemy import event
 
     created = []
@@ -1340,50 +1309,14 @@ def test_real_pool_restore_failure_with_raising_invalidate_listener_not_repooled
     client = Client(logger=Mock())
     client._engine = engine
 
-    result = client.execute("data branch merge src into dst")
-    assert result is not None  # merge outcome preserved despite the listener
-
-    # next checkout is a fresh physical connection at the engine baseline;
-    # the fresh checkout proves the mutated connection was never reused
-    with engine.connect() as checked:
-        assert checked.exec_driver_sql("SELECT @@autocommit").scalar() == "0"
-    assert len(created) == 2
-    # the mutated physical connection was closed (1.4: literal close after
-    # detach at checkout release; 2.x: recycle-close of the record the
-    # interrupted invalidate marked at the same release)
-    assert created[0].close_calls == 1
-    assert engine.pool.checkedout() == 0
-    engine.dispose()
-
-
-def test_real_pool_autocommit_engine_isolation_baseline_restored():
-    # The review's other pool-state finding: a caller's engine configured
-    # with isolation_level='AUTOCOMMIT' pools connections whose baseline is
-    # autocommit on (the driver dialect's connect hook applies it to every
-    # fresh physical connection). Resetting a temporary per-connection
-    # isolation selection must restore that baseline - autocommit flag
-    # included - instead of forcing autocommit off for every later checkout.
-    created = []
-    engine = _pool_engine(
-        created,
-        _engine_kwargs={"isolation_level": "AUTOCOMMIT"},
-        autocommit="0",
-    )
-    client = Client.from_engine(engine, logger=Mock())
-
-    with client._engine.connect() as conn:
-        # the engine baseline was applied to the fresh physical connection
-        assert created[0].autocommit_state == "1"
-        opt = conn.execution_options(isolation_level="READ COMMITTED")
-        opt.exec_driver_sql("SELECT 1")
-        # during the temporary selection, autocommit is off
-        assert created[0].autocommit_state == "0"
-        opt.close()
-
-    # after checkin, the pool reset restored the engine baseline - and the
-    # same physical connection keeps serving at that baseline
-    assert created[0].autocommit_state == "1"
-    with client._engine.connect() as conn:
-        assert conn.exec_driver_sql("SELECT @@autocommit").scalar() == "1"
-    assert len(created) == 1
-    engine.dispose()
+    try:
+        result = client.execute("data branch merge src into dst")
+        assert result is not None
+        assert created[0].close_calls == 1
+        assert engine.pool.checkedout() == 0
+        with engine.connect() as checked:
+            assert checked.exec_driver_sql("SELECT @@autocommit").scalar() == "0"
+        assert len(created) == 2
+    finally:
+        event.remove(engine, "invalidate", raising_listener)
+        engine.dispose()

@@ -136,22 +136,23 @@ def is_non_transactional_statement(sql: Optional[str]) -> bool:
     return words[0] == "data" and words[1] == "branch" and words[2] in ("merge", "pick")
 
 
-def detach_from_pool(connection) -> None:
-    """Remove a checked-out SQLAlchemy Connection from its pool, swallowing
-    cleanup errors.
+def discard_unrestored_connection(conn):
+    """Remove an unrestorable checkout and terminate it without pool reset IO.
 
-    Used after Connection.invalidate() itself failed: SQLAlchemy 1.4 fires
-    PoolEvents.invalidate listeners BEFORE the record's hard close, so a
-    raising listener leaves the live driver connection checked out and the
-    pool would hand it - mutated state included - to the next checkout.
-    Detaching unlinks the driver connection from the pool's bookkeeping, so
-    the Connection's close() physically closes it instead of returning it.
-    SQLAlchemy 2.x instead marks the interrupted record for recycle on next
-    checkout, and detach() of the connection it severed raises
-    InvalidRequestError; already-safe versions and failure modes both end
-    here without propagating.
+    Detach before termination: SQLAlchemy 1.4 invalidate listeners can raise
+    before disposal. Invalidation alone after detach does not close the DBAPI
+    handle, so retain and terminate it even if a detach callback raises.
     """
+    if conn.closed or conn.invalidated:
+        return
+    proxy = conn.connection
+    raw = getattr(proxy, "dbapi_connection", None)
+    if raw is None:  # SQLAlchemy < 1.4.24
+        raw = proxy.connection
     try:
-        connection.detach()
-    except Exception:
-        pass
+        conn.detach()
+    finally:
+        try:
+            conn.dialect.do_terminate(raw)
+        finally:
+            conn.invalidate()
