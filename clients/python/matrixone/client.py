@@ -1329,9 +1329,11 @@ class Client(BaseMatrixOneClient):
                         return result_set
 
             # String SQL - original implementation
-            final_sql = self._substitute_parameters(sql_or_stmt, params)
-
             with self._engine.begin() as conn:
+                from ._sql_literals import connection_sql_mode
+
+                mode = connection_sql_mode(conn) if params is not None and '\\' in sql_or_stmt else ''
+                final_sql = self._substitute_parameters(sql_or_stmt, params, sql_mode=mode)
                 # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
                 # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
                 if hasattr(conn, 'exec_driver_sql'):
@@ -1342,7 +1344,7 @@ class Client(BaseMatrixOneClient):
                     # Fallback for testing or older SQLAlchemy versions
                     from sqlalchemy import text
 
-                    result = conn.execute(text(final_sql))
+                    result = conn.execute(text(final_sql.replace(':', r'\:')))
 
                 execution_time = time.time() - start_time
 
@@ -1506,66 +1508,11 @@ class Client(BaseMatrixOneClient):
         executor = ClientExecutor(self)
         return executor.batch_insert(table_name, data_list)
 
-    def _substitute_parameters(self, sql: str, params=None) -> str:
-        """
-        Substitute ? placeholders or named parameters with actual values since MatrixOne
-        doesn't support prepared statements
+    def _substitute_parameters(self, sql: str, params=None, *, sql_mode='') -> str:
+        """Render legacy parameters outside SQL literals, identifiers and comments."""
+        from ._sql_literals import substitute_parameters
 
-        Args::
-
-            sql: SQL query string with ? placeholders or named parameters (:name)
-            params: Tuple of parameter values or dict of named parameters
-
-        Returns::
-
-            SQL string with parameters substituted
-        """
-        if not params:
-            return sql
-
-        final_sql = sql
-
-        # Handle named parameters (dict)
-        if isinstance(params, dict):
-            for key, value in params.items():
-                placeholder = f":{key}"
-                if placeholder in final_sql:
-                    if isinstance(value, str):
-                        # Escape single quotes in string values
-                        escaped_value = value.replace("'", "''")
-                        final_sql = final_sql.replace(placeholder, f"'{escaped_value}'")
-                    elif value is None:
-                        final_sql = final_sql.replace(placeholder, "NULL")
-                    else:
-                        final_sql = final_sql.replace(placeholder, str(value))
-        # Handle positional parameters (tuple/list)
-        elif isinstance(params, (tuple, list)):
-            for param in params:
-                # Skip empty lists that might come from CTE queries
-                if isinstance(param, list) and len(param) == 0:
-                    continue
-                elif isinstance(param, str):
-                    # Escape single quotes in string values
-                    escaped_param = param.replace("'", "''")
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", f"'{escaped_param}'", 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", f"'{escaped_param}'", 1)
-                elif param is None:
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", "NULL", 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", "NULL", 1)
-                else:
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", str(param), 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", str(param), 1)
-
-        return final_sql
+        return substitute_parameters(sql, params, sql_mode=sql_mode)
 
     def get_sqlalchemy_engine(self) -> Engine:
         """
@@ -3290,10 +3237,8 @@ class SnapshotClient:
 
         snapshot_sql = re.sub(pattern, replace_func, sql, count=1)
 
-        # Handle parameter substitution for MatrixOne compatibility
-        final_sql = self.client._substitute_parameters(snapshot_sql, params)
-
-        return self.client.execute(final_sql)
+        # The execution connection owns mode-sensitive parameter rendering.
+        return self.client.execute(snapshot_sql, params)
 
 
 class Session(SQLAlchemySession):
@@ -3439,12 +3384,11 @@ class Session(SQLAlchemySession):
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                final_sql = self.client._substitute_parameters(sql_or_stmt, params)
                 original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
-                result = execute_session_sql(super().execute, final_sql, **kwargs)
+                result = execute_session_sql(super().execute, sql_or_stmt, client=self.client, params=params, **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)

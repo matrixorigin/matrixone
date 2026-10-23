@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 
 import asyncio
+import re
 from contextlib import contextmanager, nullcontext
 from unittest.mock import Mock
 
@@ -44,11 +45,19 @@ def data():
     return [{'id': i, 'embedding': [i, i + 1], 'label': label} for i, label in enumerate(LABELS)]
 
 
+def sqlite_hex_text_transport(conn, cursor, sql, parameters, context, many):
+    # SQLite is only the execution transport for these lifecycle tests. Map
+    # MySQL's generated UTF-8 hex conversion to SQLite's equivalent text cast.
+    sql = re.sub(r"CONVERT\((X'[0-9a-f]*') USING utf8mb4\)", r'CAST(\1 AS TEXT)', sql)
+    return sql, parameters
+
+
 @pytest.fixture
 def client(tmp_path):
     c = Client(logger=Mock())
     c._engine = create_engine('sqlite:///' + str(tmp_path / 'sync.sqlite'))
     Base.metadata.create_all(c._engine)
+    event.listen(c._engine, 'before_cursor_execute', sqlite_hex_text_transport, retval=True)
     try:
         yield c
     finally:
@@ -61,6 +70,7 @@ async def async_client(tmp_path):
     c._engine = create_async_engine('sqlite+aiosqlite:///' + str(tmp_path / 'async.sqlite'))
     async with c._engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+    event.listen(c._engine.sync_engine, 'before_cursor_execute', sqlite_hex_text_transport, retval=True)
     try:
         yield c
     finally:

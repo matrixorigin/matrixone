@@ -646,12 +646,11 @@ class Session(SQLAlchemySession):
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                final_sql = self.client._substitute_parameters(sql_or_stmt, params)
                 original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
-                result = execute_session_sql(super().execute, final_sql, **kwargs)
+                result = execute_session_sql(super().execute, sql_or_stmt, client=self.client, params=params, **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)
@@ -1247,12 +1246,11 @@ class AsyncSession(SQLAlchemyAsyncSession):
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                final_sql = self.client._substitute_parameters(sql_or_stmt, params)
                 original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
-                result = await execute_session_sql(super().execute, final_sql, **kwargs)
+                result = await execute_session_sql(super().execute, sql_or_stmt, client=self.client, params=params, **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = await super().execute(sql_or_stmt, params, **kwargs)
