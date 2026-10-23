@@ -1,4 +1,59 @@
-# Bounded spill cleanup ownership, revision 2
+# Spill cleanup ownership: local lifecycle redirection, revision 3
+
+Status: **design-only response; replacement design approval pending**. The
+background queue proposed in revision 2 is not the selected delivery direction.
+The existing implementation in #30099/#30102 is not certified by this document.
+
+## Maintainer feedback and implementation boundary
+
+[Review 5567086544](https://github.com/matrixorigin/matrixone/pull/30099#pullrequestreview-5567086544)
+rejects detached/background deletion and requests local spill ownership:
+open the local file, unlink it immediately, and retain the descriptor until its
+final reader/owner closes it. Named files needed for descriptor rotation must
+instead be deleted synchronously by operator close. Previous-incarnation files
+are cleared during CN startup after the old process has stopped.
+[Review 5567094738](https://github.com/matrixorigin/matrixone/pull/30102#pullrequestreview-5567094738)
+asks for the related changes and responses to be consolidated.
+
+This feedback supersedes the revision-2 choice of a process-global 16,384-file
+reservation controller and four retry workers. Those constants, a retry queue,
+and lifetime extension of borrowed FileService references are not requirements
+for the replacement. They must not be presented as accepted operational policy.
+
+## Concrete replacement scope for design review
+
+1. Inventory GROUP, HashBuild, JoinMap and JOIN consumers against current main.
+   For each spill, identify whether it needs a pathname after creation or can
+   transfer an already-open descriptor. Prefer the existing
+   `MutableFileService.CreateAndRemoveFile` boundary for the latter.
+2. Successful unlink transfers the lifetime to the open descriptor. Error,
+   cancellation, rejected handoff, Reset/Free and pool release must each end in
+   exactly one descriptor close, with disk/FD accounting retained until the
+   resource is actually released. No callback may outlive its FileService.
+3. An unlink failure at creation must never return a successful anonymous-file
+   result. Specify who owns the partially created pathname, how its failure is
+   surfaced and how repeated failures remain bounded before implementing this
+   path. Merely closing the descriptor or discarding the error is insufficient.
+4. If pathname reopening/descriptor rotation is indispensable, define the
+   synchronous operator-close ownership and error-reporting contract first.
+   Do not add a detached retry path as an implicit fallback. An FD-exhaustion
+   error must not silently enable a different lifetime model.
+5. Startup cleanup requires exclusive ownership of the scratch root and a
+   proven old-process stop. Specify in-process service replacement/root reuse
+   explicitly; retaining a service pointer is not that proof.
+6. Validate with small real local files: open/unlink/read/write/close, failed
+   unlink and partial initialization, cancellation, rejected JOIN handoff,
+   Reset/Free/pool reuse, FD exhaustion and crash/startup cleanup. Use barriers
+   for ownership races, and assert physical files plus exact accounting.
+
+The proposed consolidation target is #30099, with #30102's distinct JOIN and
+HashBuild failure oracles preserved in the eventual combined change. This is a
+delivery plan, not permission to merge or close either GitHub PR. The exact
+replacement design and its remaining failure/root-lifecycle decisions still
+need maintainer review before implementation. Existing queue tests and green CI
+do not validate that replacement. No runtime pass or design approval is claimed.
+
+## Historical revision 2: superseded queue proposal
 
 Status: **proposed; design approval pending**. This is a documentation-only
 revision of the proposal, not authorization to deliver the implementation.
