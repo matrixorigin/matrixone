@@ -1354,9 +1354,12 @@ var getPubInfo = func(ctx context.Context, bh BackgroundExec, pubName string) (p
 	return
 }
 
-// getPubInfoByName gets publication info by name only, without filtering by account_id.
-// This allows non-sys tenants to query publications created by any account (e.g., sys tenant).
-func getPubInfoByName(ctx context.Context, bh BackgroundExec, pubName string) (pubInfo *pubsub.PubInfo, err error) {
+// getPubInfosByName gets all publication infos by name only, without filtering by
+// account_id. This allows non-sys tenants to query publications created by any
+// account (e.g., sys tenant). Publication names are unique per account (the
+// primary key of mo_pubs is (account_id, pub_name)) but not across accounts, so
+// callers must resolve which same-named publication applies to them.
+func getPubInfosByName(ctx context.Context, bh BackgroundExec, pubName string) (pubInfos []*pubsub.PubInfo, err error) {
 	accountNameColExists, err := checkColExists(ctx, bh, "mo_catalog", "mo_pubs", "account_name")
 	if err != nil {
 		return
@@ -1382,7 +1385,6 @@ func getPubInfoByName(ctx context.Context, bh BackgroundExec, pubName string) (p
 		return
 	}
 
-	var pubInfos []*pubsub.PubInfo
 	if accountNameColExists {
 		if pubInfos, err = extractPubInfosFromExecResult(ctx, erArray); err != nil {
 			return
@@ -1391,9 +1393,6 @@ func getPubInfoByName(ctx context.Context, bh BackgroundExec, pubName string) (p
 		if pubInfos, err = extractPubInfosFromExecResultOld(ctx, erArray); err != nil {
 			return
 		}
-	}
-	if len(pubInfos) > 0 {
-		pubInfo = pubInfos[0]
 	}
 	return
 }
@@ -2348,18 +2347,37 @@ func doShowPublicationCoverage(ctx context.Context, ses *Session, spc *tree.Show
 	}
 	accountName := tenantInfo.GetTenant()
 
-	// Get publication info by name only (without filtering by current account_id)
-	// This allows non-sys tenants to query publications created by sys tenant
-	pubInfo, err := getPubInfoByName(ctx, bh, spc.Name)
+	// Get candidate publications by name only (without filtering by current
+	// account_id). This allows non-sys tenants to query publications created
+	// by any account (e.g., sys tenant).
+	pubInfos, err := getPubInfosByName(ctx, bh, spc.Name)
 	if err != nil {
 		return err
 	}
-	if pubInfo == nil {
+	if len(pubInfos) == 0 {
 		return moerr.NewInternalErrorf(ctx, "publication '%s' does not exist", spc.Name)
 	}
 
-	// Check if current account is in subscribed accounts
-	if !pubInfo.InSubAccounts(accountName) {
+	// Resolve which same-named publication the statement refers to and
+	// authorize the access in one pass. The publication's owning account wins
+	// over subscriber access; the sys account may inspect every publication's
+	// coverage; any other account must be in the subscriber list, and an
+	// identically named publication it cannot access must not shadow one it
+	// can.
+	var pubInfo *pubsub.PubInfo
+	for _, candidate := range pubInfos {
+		if candidate.PubAccountId == tenantInfo.TenantID {
+			pubInfo = candidate
+			break
+		}
+		if pubInfo == nil && candidate.InSubAccounts(accountName) {
+			pubInfo = candidate
+		}
+	}
+	if pubInfo == nil && tenantInfo.TenantID == catalog.System_Account {
+		pubInfo = pubInfos[0]
+	}
+	if pubInfo == nil {
 		return moerr.NewInternalErrorf(ctx, "account '%s' is not allowed to access publication '%s'", accountName, spc.Name)
 	}
 
