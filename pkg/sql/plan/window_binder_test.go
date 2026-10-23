@@ -2107,3 +2107,23 @@ func TestNtileRequiresRowIndependentBuckets(t *testing.T) {
 		})
 	}
 }
+
+func TestRangeFrameBoundTypeWidening(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		orderType types.T
+		boundType types.T
+	}{
+		{name: "tinyint", orderType: types.T_int8, boundType: types.T_int64},
+		{name: "smallint", orderType: types.T_int16, boundType: types.T_int64},
+		{name: "int", orderType: types.T_int32, boundType: types.T_int64},
+		{name: "bigint", orderType: types.T_int64, boundType: types.T_int64},
+		{name: "uint", orderType: types.T_uint32, boundType: types.T_uint32},
+		{name: "decimal", orderType: types.T_decimal64, boundType: types.T_decimal64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := rangeFrameBoundType(tc.orderType.ToType().PlanType())
+			require.Equal(t, int32(tc.boundType), got.Id)
+		})
+	}
+}
