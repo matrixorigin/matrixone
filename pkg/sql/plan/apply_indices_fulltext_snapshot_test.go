@@ -311,6 +311,7 @@ func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 				assert.Contains(t, opts.IncludePreds, `"op":"is_null"`)
 				require.Equal(t, 1, reachableFullTextOrderSorts(planned, query.Steps[0]),
 					"the explicit sort must replace, rather than duplicate, implicit relevance sorting")
+				assert.False(t, search.IndexSearchScan.PostFilterOverFetch, "a covered search has no join to drop candidates")
 			}
 			if tc.wantLimit != 0 {
 				require.NotNil(t, fulltextScanLimit(search))
@@ -332,6 +333,7 @@ func TestJoinFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 		residual   string
 		wantLimit  uint64
 	}{
+		{name: "implicit order", pagination: "LIMIT 2", wantLimit: 2},
 		{name: "score alias", orderBy: "sc DESC", pagination: "LIMIT 2", wantLimit: 2},
 		{name: "score alias offset", orderBy: "sc DESC", pagination: "LIMIT 2 OFFSET 1", wantLimit: 3},
 		{name: "explicit match score", orderBy: "MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) DESC", pagination: "LIMIT 2", wantLimit: 2},
@@ -369,6 +371,8 @@ func TestJoinFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 			} else {
 				require.Nil(t, fulltextScanLimit(scans[0]))
 			}
+			assert.Equal(t, tc.wantLimit != 0, scans[0].IndexSearchScan.PostFilterOverFetch,
+				"a search bounded below the base-table join over-fetches")
 		})
 	}
 }

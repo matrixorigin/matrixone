@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -67,6 +68,13 @@ type Hooks struct{}
 var _ searchplugin.Hooks = Hooks{}
 var _ searchplugin.EmptyScanHooks = Hooks{}
 var _ searchplugin.ExplainHooks = Hooks{}
+var _ searchplugin.CandidateBudgetHooks = Hooks{}
+
+// PostFilterCandidateBudget is the fulltext2 over-fetch of resultLimit for a search whose
+// candidates the base-table join may drop.
+func (Hooks) PostFilterCandidateBudget(resultLimit uint64) uint64 {
+	return overfetch.PostFilterLimit(resultLimit)
+}
 
 // ExplainSettings describes the static semantics using the same options as the reader.
 func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, _ bool) ([]string, error) {
@@ -105,13 +113,17 @@ func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req se
 	if err != nil {
 		return nil, err
 	}
+	limit := req.ResultLimit
+	if limit != 0 {
+		limit = max(limit, req.CandidateBudget)
+	}
 	return &reader{
 		proc:         proc,
 		spec:         spec,
 		req:          req,
 		opts:         opts,
-		limit:        req.ResultLimit,
-		plannedLimit: req.ResultLimit,
+		limit:        limit,
+		plannedLimit: limit,
 	}, nil
 }
 

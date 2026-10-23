@@ -771,9 +771,10 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			},
 		}
 
-		// pushdown limit
+		// pushdown limit; the search over-fetches for the candidates the base-table join drops
 		if limitExpr != nil {
 			curr_ftnode.IndexSearchScan.CandidateLimit = DeepCopyExpr(limitExpr)
+			curr_ftnode.IndexSearchScan.PostFilterOverFetch = true
 		}
 		if i == 0 {
 			drivingSearchID = curr_ftnode_id
@@ -1603,6 +1604,7 @@ func (builder *QueryBuilder) pushJoinFulltext2ScoreLimitFromSort(sortNode *plan.
 		return
 	}
 	spec.CandidateLimit = bound
+	spec.PostFilterOverFetch = true
 }
 
 // probeSpineNodeIDs returns the nodes reached from nodeID through the probe

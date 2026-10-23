@@ -62,8 +62,8 @@ across the build, CDC, and query paths; the maintenance (REINDEX, idxcron)
 behavior of a `token_filter` index; the query-time high-df term cutoff, its
 accepted result change, and its configuration lifetime; and the parallel build's
 identical-output, ordering, memory, transaction-ownership and failure contract;
-and which explicit score orderings bound the index search, and the accepted
-index-lag limit of that bound.
+and which explicit score orderings bound the index search, and how the bound
+tolerates index lag.
 
 Out of scope: any posting/segment format or wire change; a positional (phrase)
 analyzer; non-`stop` filters (`synonym` and others are reserved names only);
@@ -433,20 +433,28 @@ Decided by @cpegeric, 2026-10-23 (PR #30618 review P2). Follow-up:
 
 The bound counts candidates by the index's view of each document. While the
 asynchronous index lags the base table (briefly after a committed write, and always
-for the transaction's own uncommitted writes), a candidate whose current values fail
-the base-table recheck still takes one of the bounded slots, so the query can return
-fewer than `n` rows. On the base-table join path, predicates evaluated in the index
-are re-checked on current values, so the result is short but holds no wrong rows.
-Before this PR an explicit score ordering on that path was unbounded and did not
-come up short; the bound extends the short-result case to it.
+for the transaction's own uncommitted writes), a deleted or no-longer-matching
+document is still a candidate. On the base-table join path the join drops it,
+because predicates evaluated in the index are re-checked on current values.
 
-The cause is the general index-freshness problem, present on main for every
-FULLTEXT2 search (a covered search, answered from the index alone, can also return
-stale rows while the index lags). It is tracked as
-[#30853](https://github.com/matrixorigin/matrixone/issues/30853). The fix is a
-freshness check that searches the index only when it reflects every row the read
-can see, and otherwise falls back to an exact scan; it belongs there, not in this
-pushdown's eligibility rule.
+A search bounded below that join therefore over-fetches: it keeps more candidates
+than `LIMIT + OFFSET`, using the same post-filter over-fetch budget as the vector
+indexes, and the sort above applies the exact LIMIT and OFFSET to the rows that
+survive the join. Stale candidates up to the over-fetch headroom no longer shorten
+the result, for the implicit relevance order and an explicit score order alike. As
+for a post-filtered vector search, the result is not guaranteed: more stale
+candidates than the headroom can still return fewer rows than exist.
+
+Rejected alternatives: proving index freshness before every bounded search (a
+per-query freshness check with an exact-scan fallback), dropping the bound whenever
+the transaction has written the source table, and counting the transaction's
+deleted rows to size an exact budget. Each costs more per query or covers only
+uncommitted writes, and the first diverges from how the vector indexes treat
+post-filtered candidates.
+
+A covered search, answered from the index alone, has no join to drop a stale
+document and can return it while the index lags. That, and the exact freshness
+contract, are tracked as #30853.
 
 ## Source fan-out and resource bounds
 

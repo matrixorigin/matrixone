@@ -45,4 +45,65 @@ Project  𝄀
                     Runtime Filter Probe: t.id  𝄀
               ->  Fulltext Index Scan on ftx  𝄀
                     Fulltext Index: ftx
+create table rk (id bigint primary key, body text, category int, tag varchar(10));
+insert into rk values (11, 'needle needle needle', 1, 'a'), (12, 'needle needle filler', 1, 'b'), (13, 'needle filler filler', 1, 'c'),
+(14, 'other filler filler', 1, 'd'), (15, 'other other filler', 1, 'e');
+create fulltext2 index rkx on rk(body) include(category) with parser gojieba;
+explain select id, tag from rk where match(body) against('needle') order by match(body) against('needle') desc limit 1;
+-- @regex("Candidate Limit: 1", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (rk.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_include_recheck.rk  𝄀
+                    Runtime Filter Probe: rk.id  𝄀
+              ->  Fulltext Index Scan on rkx  𝄀
+                    Fulltext Index: rkx, Candidate Limit: 1
+explain select id, tag from rk where match(body) against('needle') and category = 1 limit 1;
+-- @regex("Candidate Limit: 1", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (rk.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_include_recheck.rk  𝄀
+                    Filter Cond: (rk.category = 1)  𝄀
+                    Runtime Filter Probe: rk.id  𝄀
+              ->  Fulltext Index Scan on rkx  𝄀
+                    Fulltext Index: rkx, Candidate Limit: 1
+begin;
+delete from rk where id = 11;
+select id, tag from rk where match(body) against('needle') order by match(body) against('needle') desc limit 1;
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+12  ¦  b
+select id, tag from rk where match(body) against('needle') limit 1;
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+12  ¦  b
+select id, tag from rk where match(body) against('needle') order by match(body) against('needle') desc limit 1 offset 1;
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+13  ¦  c
+rollback;
+begin;
+update rk set category = 2 where id = 11;
+select id, tag from rk where match(body) against('needle') and category = 1 order by match(body) against('needle') desc limit 1;
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+12  ¦  b
+select id, tag from rk where match(body) against('needle') and category = 1 limit 1;
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+12  ¦  b
+rollback;
+select id, match(body) against('needle') > 0 as positive from rk where match(body) against('needle') order by match(body) against('needle') desc;
+➤ id[-5,64,0]  ¦  positive[-6,8,0]  𝄀
+11  ¦  1  𝄀
+12  ¦  1  𝄀
+13  ¦  1
 drop database fulltext2_include_recheck;
