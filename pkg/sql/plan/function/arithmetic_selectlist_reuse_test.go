@@ -90,7 +90,9 @@ func runWithStaleSelectList(
 func TestArithmeticStaleSelectListOutsideLength(t *testing.T) {
 	t.Run("decimal addition keeps current valid row", func(t *testing.T) {
 		decType := types.New(types.T_decimal64, 18, 2)
-		resultType := resolvedReturnType(t, PLUS, []types.Type{decType, decType})
+		// This exercises the Decimal64 kernel with prepared physical inputs.
+		// Planner carrier promotion is covered by the resolver regression.
+		resultType := decType
 		vec, err := runWithStaleSelectList(t, 0,
 			[]FunctionTestInput{
 				NewFunctionTestInput(decType, []types.Decimal64{100, 0}, []bool{false, false}),
@@ -147,7 +149,7 @@ func TestArithmeticStaleSelectListOutsideLength(t *testing.T) {
 
 	t.Run("decimal overflow still errors", func(t *testing.T) {
 		decType := types.New(types.T_decimal64, 18, 0)
-		resultType := resolvedReturnType(t, PLUS, []types.Type{decType, decType})
+		resultType := decType
 		_, err := runWithStaleSelectList(t, 0,
 			[]FunctionTestInput{
 				NewFunctionTestInput(decType, []types.Decimal64{types.Decimal64(math.MaxInt64), 0}, []bool{false, false}),

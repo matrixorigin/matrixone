@@ -7340,6 +7340,7 @@ func bindPreparedFuncExprImplByPlanExpr(
 	name string,
 	args []*Expr,
 	stringDomainModes []function.StringDomainCheckMode,
+	originalArgs ...[]*Expr,
 ) (*plan.Expr, error) {
 	if stringDomainModes == nil && preparedRegexpCompatibilityStringOperandCount(name, len(args)) > 0 {
 		// PREPARE may defer compatibility for parameter-owned domains, but this
@@ -7349,7 +7350,11 @@ func bindPreparedFuncExprImplByPlanExpr(
 		stringDomainModes = make([]function.StringDomainCheckMode, len(args))
 	}
 	return bindFuncExprImplByPlanExpr(
-		ctx, name, args, true, stringDomainModes, originalBoundExpr, true)
+		ctx, name, args, true, stringDomainModes, originalBoundExpr, true, originalArgs...)
+}
+
+func bindReboundNumericExpr(ctx context.Context, name string, args, original []*Expr) (*Expr, error) {
+	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil, nil, false, original)
 }
 
 func bindFuncExprImplByPlanExpr(
@@ -7360,6 +7365,7 @@ func bindFuncExprImplByPlanExpr(
 	stringDomainModes []function.StringDomainCheckMode,
 	originalBoundExpr *Expr,
 	allowInternalFunctionArgs bool,
+	originalLiteralArgs ...[]*Expr,
 ) (*plan.Expr, error) {
 	var err error
 	// Validate before rewriting or converting argument metadata. Checked public
@@ -8147,10 +8153,33 @@ func bindFuncExprImplByPlanExpr(
 				types.T_varchar, 0, 0, types.CharsetUTF8)}
 		}
 	}
+	// A prepared TIME boundary may already be represented by a decimal cast.
+	// Resolve from its existing TIME provenance, as the ordinary binder does;
+	// that envelope is not a genuine DECIMAL arithmetic domain.
+	if isPreparedTemporalIntegerArithmetic(name) {
+		for i, arg := range args {
+			if peer, ok := preparedTemporalNumericPeer(arg); ok && peer.Oid.IsDecimal() {
+				if &lookupTypes[0] == &argsType[0] {
+					lookupTypes = append([]types.Type(nil), lookupTypes...)
+				}
+				lookupTypes[i] = types.New(types.T_time, 0, peer.Scale)
+			}
+		}
+	}
 	// MOD literal refinement is metadata-only; its existing casts must retain
 	// the integer's full storage domain.
 	if name != "mod" && name != "%" {
+		originalLookup := lookupTypes
 		lookupTypes = refineDecimalArithmeticLiteralLookupTypes(name, args, lookupTypes)
+		if len(originalLiteralArgs) > 0 && len(originalLiteralArgs[0]) == len(args) {
+			// EXECUTE values keep their declared domains; a materialized marker
+			// is not a weak SQL literal even when it has no retained ParamRef.
+			for i, original := range originalLiteralArgs[0] {
+				if lookupTypes[i] != originalLookup[i] && (isExplicitPreparedCast(original) || len(preparedNumericValueParamPositions(original)) > 0) {
+					lookupTypes[i] = originalLookup[i]
+				}
+			}
+		}
 	}
 	var fGet function.FuncGetResult
 	if stringDomainModes == nil {
@@ -10979,7 +11008,15 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 			if isExplicitPreparedCast(current) {
 				break
 			}
-			if lit = current.GetLit(); lit != nil {
+			if value := current.GetLit(); value != nil {
+				// A folded runtime value keeps its source domain. Follow the
+				// source before deciding it is a direct numeric literal;
+				// parameters and explicit casts are not weak literals.
+				if value.Src != nil {
+					current = value.Src
+					continue
+				}
+				lit = value
 				literalExpr = current
 				break
 			}
@@ -10992,14 +11029,11 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 		if lit == nil || lit.Isnull {
 			continue
 		}
-		// Integer literal precision matters for multiplication and MOD because the
-		// declared integer type's full domain can otherwise make a small factor
-		// spuriously widen the result. MOD uses this bound only for metadata.
-		// Addition and subtraction already derive
-		// their safe result precision from the integer domain; retaining their
-		// established Decimal128 coercion also avoids changing outer-join decimal
-		// expression execution paths.
-		if (name == "*" || name == "mod" || name == "%") && hasDecimalInput && inputs[i].IsIntOrUint() {
+		// A direct integer literal has an exact value domain. Keep the existing
+		// Decimal128 carrier for addition/subtraction, while preserving the
+		// literal's precision so a later product does not inherit 38 digits.
+		// Columns and syntax-explicit casts retain their declared domains.
+		if hasDecimalInput && inputs[i].IsIntOrUint() {
 			width, exact := decimalIntegerWidth(literalExpr, inputs[i])
 			if !exact || width <= 0 {
 				continue
@@ -11009,7 +11043,7 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 				changed = true
 			}
 			oid := types.T_decimal64
-			if width > types.T_decimal64.ToType().Width {
+			if width > types.T_decimal64.ToType().Width || name == "+" || name == "-" {
 				oid = types.T_decimal128
 			}
 			result[i] = types.New(oid, width, 0)

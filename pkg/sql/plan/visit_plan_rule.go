@@ -1808,7 +1808,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 				}
 			}
 		}
-		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
+		bound, err := bindReboundNumericExpr(rule.ctx, name, copy.GetF().Args, fn.Args)
 		if err != nil {
 			return nil, false, err
 		}
@@ -1949,21 +1949,29 @@ func restorePreparedIntegerArithmeticOperands(name string, args []*Expr) {
 }
 
 func preparedTemporalNumericPeer(expr *Expr) (types.Type, bool) {
-	if expr == nil {
+	if expr == nil || !types.T(expr.Typ.Id).IsDecimal() {
 		return types.Type{}, false
 	}
-	if metadata := expr.GetPreparedNumeric(); metadata.GetProvisionalResultPeer() &&
-		metadata.GetProvisionalResultPeerTypeId() == int32(types.T_time) {
-		return makeTypeByPlan2Expr(expr), true
-	}
-	if literal := expr.GetLit(); literal != nil && literal.Src != nil &&
-		types.T(literal.Src.Typ.Id) == types.T_time {
-		return makeTypeByPlan2Expr(expr), true
-	}
-	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
-		strings.EqualFold(fn.Func.GetObjName(), "cast") && !isExplicitPreparedCast(expr) && len(fn.Args) > 0 &&
-		types.T(fn.Args[0].Typ.Id) == types.T_time {
-		return makeTypeByPlan2Expr(expr), true
+	for current := expr; current != nil; {
+		if metadata := current.GetPreparedNumeric(); metadata.GetProvisionalResultPeer() {
+			if metadata.GetProvisionalResultPeerTypeId() == int32(types.T_time) {
+				return types.New(types.T_decimal64, 18, metadata.GetProvisionalResultPeerScale()), true
+			}
+			// An explicit numeric peer owns its domain, even if its source was TIME.
+			return types.Type{}, false
+		}
+		if types.T(current.Typ.Id) == types.T_time {
+			return types.New(types.T_decimal64, 18, current.Typ.Scale), true
+		}
+		if literal := current.GetLit(); literal != nil {
+			current = literal.Src
+			continue
+		}
+		fn := current.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") || isExplicitPreparedCast(current) || len(fn.Args) == 0 {
+			break
+		}
+		current = fn.Args[0]
 	}
 	return types.Type{}, false
 }
@@ -2181,6 +2189,7 @@ func (rule *ResetParamRefRule) preparedTemporalNullEnvelopeType(
 	originalArgs []*Expr,
 ) (plan.Type, bool, error) {
 	argTypes := make([]types.Type, len(originalArgs))
+	integerBoundary := false
 	for i, arg := range originalArgs {
 		if peer, ok := preparedTemporalNumericPeer(arg); ok && peer.Oid.IsDecimal() {
 			argTypes[i] = peer
@@ -2195,11 +2204,19 @@ func (rule *ResetParamRefRule) preparedTemporalNullEnvelopeType(
 		// in the type-only inference as well; resolving DECIMAL64 + INT directly
 		// would widen an explicit CAST(... AS SIGNED/UNSIGNED) to DECIMAL128.
 		if types.T(typ.Oid).IsInteger() {
+			integerBoundary = true
 			integerPeer := temporalPeer
 			integerPeer.Scale = 0
 			typ = integerPeer
 		}
 		argTypes[i] = typ
+	}
+	if integerBoundary {
+		for i, arg := range originalArgs {
+			if peer, ok := preparedTemporalNumericPeer(arg); ok {
+				argTypes[i] = types.New(types.T_time, 0, peer.Scale)
+			}
+		}
 	}
 	resolved, err := planfunction.GetFunctionByName(rule.ctx, functionName, argTypes)
 	if err != nil {
@@ -3858,6 +3875,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					exprImpl.F.Func.GetObjName(),
 					boundArgs,
 					stringDomainModes,
+					originalArgs,
 				)
 			}
 			if err != nil {

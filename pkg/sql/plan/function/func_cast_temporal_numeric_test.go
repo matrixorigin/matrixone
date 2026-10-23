@@ -272,7 +272,7 @@ func TestTimeNumericArithmeticPreservesFractionAndMetadata(t *testing.T) {
 		operator   string
 		wantReturn types.Type
 	}{
-		{name: "multiply", operator: "*", wantReturn: decimal128Scale3Type},
+		{name: "multiply", operator: "*", wantReturn: types.New(types.T_decimal128, 36, 3)},
 		{name: "divide", operator: "/", wantReturn: decimal128Scale7Type},
 		{name: "modulo", operator: "%", wantReturn: decimal64Type},
 	} {

@@ -154,56 +154,73 @@ func decimalArithmeticDomain(input types.Type) (width, scale int32, ok bool) {
 	return 0, 0, false
 }
 
-// widenedDecimalArithmeticInputs derives the Decimal256 cast domains from the
-// original numeric operands. fixedTypeCastRule1 intentionally uses a full
-// Decimal128 envelope for mixed decimal/integer operands, so deciding from its
-// output alone loses the integer's actual 3..20 digit domain and can either
-// miss a required widening or make small literal arithmetic unnecessarily wide.
-func widenedDecimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]types.Type, bool) {
-	if len(inputs) != 2 || len(coerced) != 2 ||
-		coerced[0].Oid != types.T_decimal128 || coerced[1].Oid != types.T_decimal128 {
+// decimalArithmeticInputs keeps logical precision through physical coercion.
+// Only the physical carrier is widened; its full capacity is not the operand's
+// precision. This prevents a small intermediate from making later operations
+// appear to require Decimal256.
+func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]types.Type, bool) {
+	if len(inputs) != 2 || len(coerced) != 2 || !coerced[0].Oid.IsDecimal() || coerced[0].Oid != coerced[1].Oid || (!inputs[0].Oid.IsDecimal() && !inputs[1].Oid.IsDecimal()) {
 		return nil, false
 	}
-
-	leftWidth, leftScale, leftOK := decimalArithmeticDomain(inputs[0])
-	rightWidth, rightScale, rightOK := decimalArithmeticDomain(inputs[1])
-	if !leftOK || !rightOK || (!inputs[0].Oid.IsDecimal() && !inputs[1].Oid.IsDecimal()) {
+	widths := [2]int32{}
+	scales := [2]int32{}
+	for i := range inputs {
+		var ok bool
+		widths[i], scales[i], ok = decimalArithmeticDomain(inputs[i])
+		if !ok && inputs[i].Oid == types.T_any {
+			widths[i], scales[i], ok = decimalArithmeticDomain(coerced[i])
+		}
+		if !ok {
+			return nil, false
+		}
+	}
+	precision := int64(widths[0]) + int64(widths[1])
+	if operator != "*" {
+		precision = int64(max(widths[0]-scales[0], widths[1]-scales[1])) + int64(max(scales[0], scales[1])) + 1
+	}
+	oid := coerced[0].Oid
+	if oid != types.T_decimal256 && precision > 38 {
+		oid = types.T_decimal256
+	} else if operator != "*" && oid == types.T_decimal64 && precision > 18 {
+		oid = types.T_decimal128
+	} else if operator == "*" && oid == types.T_decimal128 && precision <= 38 {
+		// Keep the existing signed-integer/Decimal64 MUL kernel, whose output
+		// is Decimal128. Integer domains retain 19 digits for signed BIGINT;
+		// UINT64/BIT require a wider input coefficient and cannot use it.
+		a, b := inputs[0].Oid, inputs[1].Oid
+		if (a == types.T_decimal64 || b == types.T_decimal64) && a != types.T_decimal128 && b != types.T_decimal128 && a != types.T_uint64 && b != types.T_uint64 && a != types.T_bit && b != types.T_bit {
+			oid = types.T_decimal64
+		}
+	}
+	targets := [2]types.Type{coerced[0], coerced[1]}
+	changed := false
+	for i := range targets {
+		targets[i].Oid = oid
+		targets[i].Size = int32(oid.TypeLen())
+		targets[i].Width = widths[i]
+		targets[i].Scale = scales[i]
+		changed = changed || targets[i] != coerced[i]
+	}
+	if !changed {
 		return nil, false
 	}
-
-	var precision int32
-	switch operator {
-	case "+", "-":
-		scale := max(leftScale, rightScale)
-		integerDigits := max(leftWidth-leftScale, rightWidth-rightScale)
-		precision = integerDigits + scale + 1
-	case "*":
-		precision = leftWidth + rightWidth
-	default:
-		return nil, false
-	}
-	if precision <= types.T_decimal128.ToType().Width {
-		return nil, false
-	}
-	return []types.Type{
-		types.New(types.T_decimal256, leftWidth, leftScale),
-		types.New(types.T_decimal256, rightWidth, rightScale),
-	}, true
+	return []types.Type{targets[0], targets[1]}, true
 }
 
 func decimalAddSubReturnType(parameters []types.Type) types.Type {
-	scale := max(parameters[0].Scale, parameters[1].Scale)
+	leftWidth, leftScale, _ := decimalArithmeticDomain(parameters[0])
+	rightWidth, rightScale, _ := decimalArithmeticDomain(parameters[1])
+	scale := max(leftScale, rightScale)
+	precision := int64(max(leftWidth-leftScale, rightWidth-rightScale)) + int64(scale) + 1
+	oid := types.T_decimal64
 	if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-		integerDigits := max(
-			parameters[0].Width-parameters[0].Scale,
-			parameters[1].Width-parameters[1].Scale,
-		)
-		return types.New(types.T_decimal256, min(integerDigits+scale+1, int32(65)), scale)
+		oid = types.T_decimal256
+	} else if parameters[0].Oid == types.T_decimal128 || parameters[1].Oid == types.T_decimal128 {
+		oid = types.T_decimal128
 	}
-	if parameters[0].Oid == types.T_decimal128 || parameters[1].Oid == types.T_decimal128 {
-		return types.New(types.T_decimal128, 38, scale)
-	}
-	return types.New(types.T_decimal64, 18, scale)
+	// Unsupported non-numeric coercion domains keep their historical carrier.
+	// Exact numeric domains were promoted by decimalArithmeticInputs already.
+	return types.New(oid, int32(min(precision, int64(min(oid.ToType().Width, 65)))), scale)
 }
 
 func decimalMultiplyReturnType(parameters []types.Type) types.Type {
@@ -218,10 +235,13 @@ func decimalMultiplyReturnType(parameters []types.Type) types.Type {
 	if scale1+scale2 < scale {
 		scale = scale1 + scale2
 	}
+	leftWidth, _, _ := decimalArithmeticDomain(parameters[0])
+	rightWidth, _, _ := decimalArithmeticDomain(parameters[1])
+	oid := types.T_decimal128
 	if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-		return types.New(types.T_decimal256, min(parameters[0].Width+parameters[1].Width, int32(65)), scale)
+		oid = types.T_decimal256
 	}
-	return types.New(types.T_decimal128, 38, scale)
+	return types.New(oid, int32(min(int64(leftWidth)+int64(rightWidth), int64(min(oid.ToType().Width, 65)))), scale)
 }
 
 // isJSONBooleanComparison identifies equality predicates whose result depends
@@ -2028,7 +2048,7 @@ var supportedOperators = []FuncNew{
 					return newCheckResultWithCast(2, integerDomainOperands(inputs))
 				}
 				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
-				if widened, ok := widenedDecimalArithmeticInputs("+", inputs, []types.Type{t1, t2}); ok {
+				if widened, ok := decimalArithmeticInputs("+", inputs, []types.Type{t1, t2}); ok {
 					return newCheckResultWithCast(0, widened)
 				}
 				if has {
@@ -2099,7 +2119,7 @@ var supportedOperators = []FuncNew{
 					return newCheckResultWithCast(2, integerDomainOperands(inputs))
 				}
 				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
-				if widened, ok := widenedDecimalArithmeticInputs("-", inputs, []types.Type{t1, t2}); ok {
+				if widened, ok := decimalArithmeticInputs("-", inputs, []types.Type{t1, t2}); ok {
 					return newCheckResultWithCast(0, widened)
 				}
 				if has {
@@ -2121,24 +2141,8 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					if parameters[0].Oid == types.T_decimal256 {
+					if parameters[0].Oid.IsDecimal() {
 						return decimalAddSubReturnType(parameters)
-					}
-					if parameters[0].Oid == types.T_decimal64 {
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 < scale2 {
-							scale1 = scale2
-						}
-						return types.New(types.T_decimal64, 18, scale1)
-					}
-					if parameters[0].Oid == types.T_decimal128 {
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 < scale2 {
-							scale1 = scale2
-						}
-						return types.New(types.T_decimal128, 38, scale1)
 					}
 					if parameters[0].Oid == types.T_date || parameters[0].Oid == types.T_datetime || parameters[0].Oid == types.T_year {
 						return types.T_int64.ToType()
@@ -2200,7 +2204,7 @@ var supportedOperators = []FuncNew{
 					t2 = types.New(types.T_decimal128, 38, t2.Scale)
 					has = true
 				}
-				if widened, ok := widenedDecimalArithmeticInputs("*", inputs, []types.Type{t1, t2}); ok {
+				if widened, ok := decimalArithmeticInputs("*", inputs, []types.Type{t1, t2}); ok {
 					return newCheckResultWithCast(0, widened)
 				}
 				if has {
@@ -2238,23 +2242,8 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
+					if parameters[0].Oid.IsDecimal() {
 						return decimalMultiplyReturnType(parameters)
-					}
-					if parameters[0].Oid == types.T_decimal64 || parameters[0].Oid == types.T_decimal128 {
-						scale := int32(12)
-						scale1 := parameters[0].Scale
-						scale2 := parameters[1].Scale
-						if scale1 > scale {
-							scale = scale1
-						}
-						if scale2 > scale {
-							scale = scale2
-						}
-						if scale1+scale2 < scale {
-							scale = scale1 + scale2
-						}
-						return types.New(types.T_decimal128, 38, scale)
 					}
 					if parameters[0].Oid == types.T_year {
 						return types.T_int64.ToType()
