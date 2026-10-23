@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -2066,6 +2067,29 @@ func (result *aggregateSpineEmptyResult) nullEquivalent(count int) bool {
 // empty. Unknown deterministic filters may retain or remove a singleton;
 // upper aggregates must make those possibilities converge before admission.
 func (builder *QueryBuilder) aggregateSpineOriginalEmpty(subID int32, ctx *BindContext) *aggregateSpineEmptyResult {
+	if builder.compCtx != nil && defines.IsPublicationViewBinding(builder.GetContext()) {
+		// The empty-input proof evaluates substituted constant expressions of
+		// the stored definition through ConstantFold (foldAggregateSpineLiteral
+		// and substituteAggregateSpineEmptyExpr are this file's only fold
+		// sites, and every path into them starts here): a correlated CTE
+		// projection like (WITH x AS (SELECT COUNT(*) AS c FROM base i WHERE
+		// i.id = o.id) SELECT c + CAST(enable_fault_injection() AS SIGNED)
+		// FROM x) reaches it during binding - before the marker's build
+		// boundary - with complete membership, and an unflagged builtin
+		// executes while validation binds. containsVolatileFunction does not
+		// exclude unflagged builtins, so the marker must gate the analysis
+		// itself. nil is this analysis' pre-existing "cannot prove" outcome:
+		// every caller consults the result through nil-safe checks and the
+		// restoration machinery declines to restore, so binding remains a
+		// pure metadata verdict while the subscriber's ordinary compile
+		// answers the same aggregate shape with the full analysis as usual.
+		// The marker is only ever carried by a compilation context: a
+		// builder assembled for a pure structural walk of qry.Nodes (the
+		// direct construction the 29412 proof uses) has no compCtx and so no
+		// marker to consult, and the gate must leave that minimal proof's
+		// pre-marker behavior - the plain analysis below - unchanged.
+		return nil
+	}
 	var path []*plan.Node
 	for nodeID := subID; len(path) < 32; {
 		node := builder.qry.Nodes[nodeID]
@@ -3719,8 +3743,8 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	// Restrictions (avoid known correctness traps):
 	//  1. Exactly one outer binding.  Multiple bindings would force us to
 	//     pick a single tag for the AGG, dropping access to the others.
-	//  2. The current outer stream must expose that table unchanged. Earlier
-	//     scalar joins or other output-changing nodes cannot survive this AGG.
+	//  2. Native row identity must survive the outer stream. Transparent inline
+	//     CTEs can forward it privately; unknown output changes stay rejected.
 	if len(ctx.bindings) != 1 {
 		return 0, nil, moerr.NewNYIf(builder.GetContext(),
 			"aggregation with non equal predicate in scalar subquery referencing multiple outer tables will be supported in future version")
@@ -3733,19 +3757,38 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 			"non-equality correlated aggregate with outer composition cannot be safely decorrelated")
 	}
 	outerMarker := builder.findPreservedOuterRowIDColRef(nodeID)
+	var outerSource *scalarCTERowSource
 	if outerMarker == nil || outerMarker.GetCol() == nil ||
 		outerMarker.GetCol().RelPos != outerBinding.tag ||
 		outerMarker.GetCol().ColPos < 0 ||
 		int(outerMarker.GetCol().ColPos) >= len(outerBinding.cols) ||
 		int(outerMarker.GetCol().ColPos) >= len(outerBinding.colIsHidden) ||
 		!outerBinding.colIsHidden[outerMarker.GetCol().ColPos] {
-		return 0, nil, moerr.NewNYIf(builder.GetContext(),
-			"non-equality correlated aggregate with outer composition cannot be safely decorrelated")
+		outerSource = builder.analyzeScalarCTERowSource(outerBinding.nodeId, len(outerBinding.cols))
+		if outerSource == nil || outerSource.marker.GetCol().RelPos != outerBinding.tag ||
+			!builder.preservesScalarCTEIdentity(nodeID, outerSource) {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"non-equality correlated aggregate with outer composition cannot be safely decorrelated")
+		}
 	}
 	outerOutputs, ok := builder.collectScalarOuterOutputs(nodeID, outerBinding.tag, int32(len(outerBinding.cols)), ctx)
 	if !ok {
 		return 0, nil, moerr.NewNYI(builder.GetContext(),
 			"correlated aggregate on an outer input without preserved row columns")
+	}
+	if outerSource != nil {
+		marker := outerSource.marker.GetCol()
+		found := false
+		for _, output := range outerOutputs {
+			found = found || output.ref == [2]int32{marker.RelPos, marker.ColPos}
+		}
+		if !found {
+			// The first private group slot precedes any earlier scalar/MARK
+			// outputs, keeping identity stable across consecutive aggregates.
+			outerOutputs = append([]scalarOuterOutput{{
+				ref: [2]int32{marker.RelPos, marker.ColPos}, typ: outerSource.marker.Typ, aliases: outerSource.aliases,
+			}}, outerOutputs...)
+		}
 	}
 	outerGroupBy := make([]*plan.Expr, 0, len(outerBinding.cols))
 	for i := range outerBinding.cols {
@@ -3758,6 +3801,16 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	aliased := make(map[[2]int32]bool)
 	for _, output := range outerOutputs {
 		if output.ref[0] == outerBinding.tag && output.ref[1] < int32(len(outerBinding.cols)) {
+			if outerSource != nil {
+				// Projection elimination can expose the source tag above this
+				// aggregate. Keep its proven aliases at the same visible slot.
+				for _, alias := range output.aliases {
+					if alias != output.ref && !aliased[alias] {
+						passthrough = append(passthrough, scalarReaggAlias{ref: alias, groupPos: output.ref[1]})
+						aliased[alias] = true
+					}
+				}
+			}
 			continue
 		}
 		groupPos := int32(len(outerGroupBy))
@@ -3802,23 +3855,29 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	// A LEFT JOIN creates one synthetic row for an unmatched outer row.
 	// Only the inner scan's accessible Row_ID distinguishes it from real input.
 	markerCol := builder.findReachableRowIDColRef(innerID)
-	if markerCol == nil || markerCol.GetCol() == nil {
+	var innerSource *scalarCTERowSource
+	var innerColCount int
+	if markerCol == nil {
+		innerSource = builder.analyzeScalarCTERowSource(innerID, -1)
+		if innerSource == nil {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"non-equality correlated aggregate requires an accessible inner row marker")
+		}
+		markerCol = DeepCopyExpr(innerSource.marker)
+		innerColCount = len(innerSource.columns)
+	} else {
+		innerScanID := innerID
+		for builder.qry.Nodes[innerScanID].NodeType != plan.Node_TABLE_SCAN {
+			innerScanID = builder.qry.Nodes[innerScanID].Children[0]
+		}
+		innerColCount = len(builder.qry.Nodes[innerScanID].TableDef.Cols)
+	}
+	if innerColCount == 0 {
 		return 0, nil, moerr.NewNYI(builder.GetContext(),
 			"non-equality correlated aggregate requires an accessible inner row marker")
 	}
 	markerCol.Typ.NotNullable = false // nullable after the LEFT JOIN
 	markerTag := markerCol.GetCol().RelPos
-	// CTE bindings can differ from the underlying scan tag; validate aggregate
-	// arguments against the scan that supplies the reachable Row_ID.
-	innerScanID := innerID
-	for builder.qry.Nodes[innerScanID].NodeType != plan.Node_TABLE_SCAN {
-		innerScanID = builder.qry.Nodes[innerScanID].Children[0]
-	}
-	innerColCount := len(builder.qry.Nodes[innerScanID].TableDef.Cols)
-	if innerColCount == 0 {
-		return 0, nil, moerr.NewNYI(builder.GetContext(),
-			"non-equality correlated aggregate requires an accessible inner row marker")
-	}
 	markerIsNull, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{markerCol})
 	if err != nil {
 		return 0, nil, err
@@ -3862,7 +3921,8 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 			switch input := arg.Expr.(type) {
 			case *plan.Expr_Col:
 				if input.Col == nil || input.Col.RelPos != markerTag || input.Col.ColPos < 0 ||
-					int(input.Col.ColPos) >= innerColCount {
+					int(input.Col.ColPos) >= innerColCount ||
+					(innerSource != nil && arg.Typ.Id != innerSource.columns[input.Col.ColPos].Typ.Id) {
 					return 0, nil, moerr.NewNYI(builder.GetContext(),
 						"unsupported non-equality correlated aggregate input")
 				}
@@ -3884,6 +3944,9 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 		// zero, while the other admitted aggregates can return NULL.
 		agg.Typ.NotNullable = fid == function.COUNT
 	}
+
+	outerSource.publish()
+	innerSource.publish()
 
 	// LEFT JOIN outer with inner scan, all predicates as join conditions
 	nodeID = builder.appendNode(&plan.Node{

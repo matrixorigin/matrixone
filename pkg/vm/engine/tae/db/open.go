@@ -92,7 +92,7 @@ func Open(
 		Dir:       dirname,
 		Opts:      opts,
 		Closed:    new(atomic.Value),
-		usageMemo: logtail.NewTNUsageMemo(nil),
+		usageMemo: logtail.NewTNUsageMemo(),
 	}
 	for _, opt := range dbOpts {
 		opt(db)
@@ -146,7 +146,6 @@ func Open(
 		logutil.Error(Phase_Open+"-open-catalog-error", zap.Error(err))
 		return
 	}
-	db.usageMemo.C = db.Catalog
 	rollbackSteps.Add("rollback open catalog", func() error {
 		db.Catalog.Close()
 		return nil

@@ -377,6 +377,22 @@ func saveQueryResult2(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.
 	if canSaveQueryResult(execCtx.reqCtx, ses) {
 		newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
 		if bat == nil {
+			// A query that produced zero rows sends no data batches, so the
+			// meta would have no block file to reference and result_scan
+			// rejects the saved result (issue #30553). Stage one typed empty
+			// block first, mirroring the cursor path's FinishStage handling.
+			if ses.queryRowCount == 0 && ses.blockIdx == 0 && ses.rs != nil && len(ses.rs.ResultCols) > 0 {
+				empty := batch.NewWithSize(len(ses.rs.ResultCols))
+				for i, col := range ses.rs.ResultCols {
+					empty.Vecs[i] = vector.NewVec(types.MustTypeFromPlan(col.Typ))
+				}
+				empty.SetRowCount(0)
+				if err := saveBatch(newCtx, ses, empty); err != nil {
+					empty.Clean(ses.GetMemPool())
+					return err
+				}
+				empty.Clean(ses.GetMemPool())
+			}
 			if err := saveMeta(newCtx, ses); err != nil {
 				return err
 			}
@@ -489,7 +505,7 @@ func buildColumnMap(ctx context.Context, rs *plan.ResultColDef) (string, error) 
 	return buf.String(), nil
 }
 
-func isResultQuery(proc *process.Process, p *plan.Plan) ([]string, error) {
+func isResultQuery(ctx context.Context, proc *process.Process, p *plan.Plan) ([]string, error) {
 	var uuids []string = nil
 	if q, ok := p.Plan.(*plan.Plan_Query); ok {
 		for _, n := range q.Query.Nodes {
@@ -500,12 +516,19 @@ func isResultQuery(proc *process.Process, p *plan.Plan) ([]string, error) {
 			} else if n.NodeType == plan.Node_FUNCTION_SCAN {
 				if n.TableDef.TblFunc.Name == "meta_scan" {
 					// calculate uuid
-					vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, n.TblFuncExprList[0])
+					uuid, err := func() (types.Uuid, error) {
+						restore := bindFrontendExpressionContext(proc, ctx)
+						defer restore()
+						vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, n.TblFuncExprList[0])
+						if err != nil {
+							return types.Uuid{}, err
+						}
+						defer free()
+						return vector.MustFixedColNoTypeCheck[types.Uuid](vec)[0], nil
+					}()
 					if err != nil {
 						return nil, err
 					}
-					uuid := vector.MustFixedColNoTypeCheck[types.Uuid](vec)[0]
-					free()
 
 					uuids = append(uuids, uuid.String())
 				}

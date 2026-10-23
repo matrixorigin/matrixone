@@ -174,6 +174,77 @@ func TestViewColumnsLegacyBatchCompatibility(t *testing.T) {
 	require.False(t, tf.ApplyPreserveBatch())
 }
 
+// A filtered-out candidate (a NULL argument row) must yield an empty scan,
+// not an error: bulk metadata enumeration keeps producing rows for the
+// remaining candidates, and an empty result must not be confused with a
+// failed description.
+func TestViewColumnsSkipsNullCandidatesYieldsEmptyResult(t *testing.T) {
+	newNullVec := func(t *testing.T, proc *process.Process, typ types.Type) *vector.Vector {
+		t.Helper()
+		vec := vector.NewConstNull(typ, 1, proc.Mp())
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		return vec
+	}
+	t.Run("legacy null relation id", func(t *testing.T) {
+		s, tf, proc := viewColumnsOutputFixture(t, nil)
+		tf.ctr.argVecs = []*vector.Vector{newNullVec(t, proc, types.T_uint64.ToType())}
+		require.NoError(t, s.start(tf, proc, 0, nil))
+		require.Empty(t, s.columns)
+		require.False(t, s.derived)
+	})
+	t.Run("derived all null", func(t *testing.T) {
+		s, tf, proc := viewColumnsOutputFixture(t, nil)
+		tf.ctr.argVecs = []*vector.Vector{
+			newNullVec(t, proc, types.T_varchar.ToType()),
+			newNullVec(t, proc, types.T_varchar.ToType()),
+			newNullVec(t, proc, types.T_uint64.ToType()),
+		}
+		require.NoError(t, s.start(tf, proc, 0, nil))
+		require.Empty(t, s.columns)
+		require.True(t, s.derived)
+	})
+	for _, nullArg := range []int{0, 1, 2} {
+		t.Run(fmt.Sprintf("derived null arg %d", nullArg), func(t *testing.T) {
+			s, tf, proc := viewColumnsOutputFixture(t, nil)
+			database, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("db"), 1, proc.Mp())
+			require.NoError(t, err)
+			defer database.Free(proc.Mp())
+			name, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("v"), 1, proc.Mp())
+			require.NoError(t, err)
+			defer name.Free(proc.Mp())
+			id, err := vector.NewConstFixed(types.T_uint64.ToType(), uint64(7), 1, proc.Mp())
+			require.NoError(t, err)
+			defer id.Free(proc.Mp())
+			tf.ctr.argVecs = []*vector.Vector{database, name, id}
+			argTypes := []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType()}
+			tf.ctr.argVecs[nullArg] = newNullVec(t, proc, argTypes[nullArg])
+			require.NoError(t, s.start(tf, proc, 0, nil))
+			require.Empty(t, s.columns)
+			require.True(t, s.derived)
+			result, err := s.call(tf, proc)
+			require.NoError(t, err)
+			require.Equal(t, vm.CancelResult, result)
+		})
+	}
+}
+
+// Cancellation at scan start must abort the description before any candidate
+// work: the scan reports the context error instead of publishing partial
+// columns for the canceled statement.
+func TestViewColumnsStartRejectsCancelledContext(t *testing.T) {
+	s, tf, proc := viewColumnsOutputFixture(t, nil)
+	id, err := vector.NewConstFixed(types.T_uint64.ToType(), uint64(7), 1, proc.Mp())
+	require.NoError(t, err)
+	defer id.Free(proc.Mp())
+	tf.ctr.argVecs = []*vector.Vector{id}
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	cancel()
+	proc.Ctx = ctx
+	err = s.start(tf, proc, 0, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, s.columns)
+}
+
 func TestSkippableViewDescriptionError(t *testing.T) {
 	ctx := t.Context()
 	for _, err := range []error{

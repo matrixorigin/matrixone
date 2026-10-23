@@ -271,6 +271,10 @@ func drain(ctx context.Context, conn interface {
 }
 
 func executeUnit(ctx context.Context, conn *sql.Conn, q Query, path string, limit int64) (cap Capture, retErr error) {
+	return executeUnitClock(ctx, conn, q, path, limit, nil, nil)
+}
+
+func executeUnitClock(ctx context.Context, conn *sql.Conn, q Query, path string, limit int64, clock *waveClock, native *nativeProfile) (cap Capture, retErr error) {
 	cap.Version = formatVersion
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -287,8 +291,14 @@ func executeUnit(ctx context.Context, conn *sql.Conn, q Query, path string, limi
 	buffer := bufio.NewWriterSize(lw, 64<<10)
 	encoder := json.NewEncoder(buffer)
 	start := time.Now()
+	if clock != nil {
+		clock.start(start)
+	}
 	var first, last *time.Time
 	for i, s := range q.Statements {
+		if err = native.statement(ctx, conn, i); err != nil {
+			break
+		}
 		if i == q.ResultStatement {
 			cap.Columns, cap.Rows, first, last, err = drain(ctx, conn, s, q.Columns, func(row Row) error { return encoder.Encode(row) })
 		} else {
@@ -309,6 +319,9 @@ func executeUnit(ctx context.Context, conn *sql.Conn, q Query, path string, limi
 	err = errors.Join(err, f.Close())
 	closed = true
 	end := time.Now()
+	if clock != nil {
+		clock.finish(end)
+	}
 	cap.ElapsedNS = end.Sub(start).Nanoseconds()
 	cap.CleanupNS = end.Sub(cleanupStart).Nanoseconds()
 	if first != nil {
