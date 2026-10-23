@@ -5976,7 +5976,7 @@ func IsVectorMatmulConfigExpr(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}
-	if rule.IsConstant(expr, false) {
+	if function.IsConstant(expr, false) {
 		return true
 	}
 	switch e := expr.Expr.(type) {
