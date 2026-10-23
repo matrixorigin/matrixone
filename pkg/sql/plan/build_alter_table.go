@@ -711,6 +711,13 @@ func addAlterCopyForeignKeys(
 		if err != nil {
 			return err
 		}
+		// #30282: reject ON DELETE/ON UPDATE SET NULL declared over NOT NULL
+		// child columns (MySQL error 1830). The check runs against the final
+		// schema view so a NOT NULL column introduced by an earlier action of
+		// this same ALTER statement is caught as well.
+		if err = checkFkSetNullColumnsRequireNullable(ctx, finalTableDef.Cols, fkData.Def, fkData.Cols.Cols); err != nil {
+			return err
+		}
 		if fkData.IsSelfRefer {
 			if err = checkFkColsAreValid(cctx, fkData, finalTableDef); err != nil {
 				return err

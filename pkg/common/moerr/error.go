@@ -248,6 +248,10 @@ const (
 	// surviving CHECK still references the column (MySQL 3959). CHECKs that
 	// reference only the dropped column follow it instead of erroring.
 	ErrDependentByCheckConstraint uint16 = 20483
+	// ErrFkColumnNotNull reports a foreign key with an ON DELETE/ON UPDATE
+	// SET NULL action over a NOT NULL child column (MySQL error 1830,
+	// ER_FK_COLUMN_NOT_NULL). The action could never write NULL at runtime.
+	ErrFkColumnNotNull uint16 = 20484
 
 	// Group 5: rpc errors
 	//
@@ -597,6 +601,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrFKIncompatibleColumns:                    {ER_FK_INCOMPATIBLE_COLUMNS, []string{MySQLDefaultSqlState}, "Referencing column '%s' and referenced column '%s' in foreign key constraint '%s' are incompatible."},
 	ErrForeignKeyColumnCannotChangeChild:        {ER_FK_COLUMN_CANNOT_CHANGE_CHILD, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s' of table '%-.192s'"},
 	ErrForeignKeyColumnCannotChange:             {ER_FK_COLUMN_CANNOT_CHANGE, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s'"},
+	ErrFkColumnNotNull:                          {ER_FK_COLUMN_NOT_NULL, []string{MySQLDefaultSqlState}, "Column '%-.192s' cannot be NOT NULL: needed in a foreign key constraint '%-.192s' SET NULL"},
 	ErrForeignKeyOnPartitioned:                  {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
 	ErrKeyColumnDoesNotExist:                    {ER_KEY_COLUMN_DOES_NOT_EXIST, []string{"42000"}, "Key column '%-.192s' doesn't exist in table"},
 	ErrKeyDoesNotExist:                          {ER_KEY_DOES_NOT_EXIST, []string{"42000"}, "Key '%-.192s' doesn't exist in table '%-.192s'"},
@@ -2087,6 +2092,10 @@ func NewErrForeignKeyColumnCannotChangeChild(ctx context.Context, args1 any, arg
 
 func NewErrForeignKeyColumnCannotChange(ctx context.Context, oriColName any, fkName any) *Error {
 	return newError(ctx, ErrForeignKeyColumnCannotChange, oriColName, fkName)
+}
+
+func NewErrFkColumnNotNull(ctx context.Context, colName any, fkName any) *Error {
+	return newError(ctx, ErrFkColumnNotNull, colName, fkName)
 }
 
 func NewErrTableMustHaveColumns(ctx context.Context) *Error {

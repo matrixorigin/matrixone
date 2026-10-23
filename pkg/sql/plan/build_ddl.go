@@ -4591,6 +4591,21 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		}
 	}
 
+	// #30282: reject ON DELETE/ON UPDATE SET NULL declared over NOT NULL child
+	// columns (MySQL error 1830). Runs after the primary-key pass so implied
+	// NOT NULL columns are caught as well. Recovery replay keeps the
+	// historical (already accepted) layout buildable.
+	if replay == nil {
+		for i, fk := range createTable.TableDef.Fkeys {
+			if i >= len(createTable.FkCols) || createTable.FkCols[i] == nil {
+				break
+			}
+			if err := checkFkSetNullColumnsRequireNullable(ctx.GetContext(), createTable.TableDef.Cols, fk, createTable.FkCols[i].Cols); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -7144,6 +7159,11 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				if err != nil {
 					return nil, err
 				}
+				// #30282: reject ON DELETE/ON UPDATE SET NULL declared over
+				// NOT NULL child columns (MySQL error 1830).
+				if err = checkFkSetNullColumnsRequireNullable(ctx.GetContext(), currentTableDef.Cols, fkData.Def, fkData.Cols.Cols); err != nil {
+					return nil, err
+				}
 				currentTableDef.Fkeys = append(currentTableDef.Fkeys, fkData.Def)
 				alterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AddFk{
@@ -8068,6 +8088,53 @@ this selected name makes information_schema.REFERENTIAL_CONSTRAINTS deterministi
 */
 func checkFkColsAreValid(ctx CompilerContext, fkData *FkData, parentTableDef *TableDef) error {
 	return checkForeignKeyColumns(ctx.GetContext(), fkData, parentTableDef)
+}
+
+// checkFkSetNullColumnsRequireNullable enforces MySQL error 1830
+// (ER_FK_COLUMN_NOT_NULL): a foreign key declared with an ON DELETE or
+// ON UPDATE SET NULL action must not name a NOT NULL child column, because the
+// action could never write NULL into it at runtime. MySQL rejects the
+// definition at CREATE TABLE and ALTER TABLE ADD [CONSTRAINT] time; without
+// the check, the invalid ON DELETE action silently keeps the old child value
+// (leaving an orphan) and the ON UPDATE action fails only when the parent
+// row is updated, far away from the DDL that created the trap.
+//
+// The caller must hand over the final column list. Primary-key implied NOT
+// NULL is applied only after the whole CREATE TABLE column pass, so a
+// validation running mid-loop would miss it.
+func checkFkSetNullColumnsRequireNullable(gctx context.Context, tableCols []*plan.ColDef, fkDef *plan.ForeignKeyDef, fkColNames []string) error {
+	if fkDef == nil ||
+		(fkDef.OnDelete != plan.ForeignKeyDef_SET_NULL &&
+			fkDef.OnUpdate != plan.ForeignKeyDef_SET_NULL) {
+		return nil
+	}
+	name2Col := make(map[string]*plan.ColDef, len(tableCols))
+	for _, col := range tableCols {
+		name2Col[col.Name] = col
+	}
+	for _, colName := range fkColNames {
+		col, ok := name2Col[strings.ToLower(colName)]
+		if !ok || col == nil {
+			// The accurate "column does not exist" error is raised elsewhere.
+			continue
+		}
+		// Default.NullAbility is the authoritative flag: it carries both the
+		// explicit NOT NULL attribute and the primary-key implied NOT NULL.
+		// NotNull/Typ.NotNullable cover catalog-loaded definitions whose
+		// Default slot may be unset.
+		notNull := col.NotNull || col.Typ.NotNullable
+		if col.Default != nil {
+			notNull = notNull || !col.Default.NullAbility
+		}
+		if notNull {
+			name := col.Name
+			if col.OriginName != "" {
+				name = col.OriginName
+			}
+			return moerr.NewErrFkColumnNotNull(gctx, name, fkDef.Name)
+		}
+	}
+	return nil
 }
 
 func checkForeignKeyColumns(ctx context.Context, fkData *FkData, parentTableDef *TableDef) error {
