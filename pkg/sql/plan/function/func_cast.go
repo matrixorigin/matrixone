@@ -1349,6 +1349,37 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 	return err
 }
 
+// widenDecimal256Batch writes a same-scale, non-NULL batch directly. Physical
+// widening preserves every coefficient bit, and an equal or wider declared
+// precision needs no per-row validation. Other shapes use the checked path.
+func widenDecimal256Batch(from *vector.Vector, to *vector.FunctionResult[types.Decimal256], target types.Type, length int) bool {
+	source := from.GetType()
+	if length == 0 || source.Scale != target.Scale || source.Width > target.Width || from.IsConst() || !from.GetNulls().EmptyByFlag() {
+		return false
+	}
+	dst := vector.MustFixedColNoTypeCheck[types.Decimal256](to.GetResultVector())
+	_ = dst[length-1]
+	switch source.Oid {
+	case types.T_decimal64:
+		values := vector.MustFixedColNoTypeCheck[types.Decimal64](from)
+		_ = values[length-1]
+		for i := 0; i < length; i++ {
+			sign := uint64(int64(values[i]) >> 63)
+			dst[i] = types.Decimal256{B0_63: uint64(values[i]), B64_127: sign, B128_191: sign, B192_255: sign}
+		}
+	case types.T_decimal128:
+		values := vector.MustFixedColNoTypeCheck[types.Decimal128](from)
+		_ = values[length-1]
+		for i := 0; i < length; i++ {
+			sign := uint64(int64(values[i].B64_127) >> 63)
+			dst[i] = types.Decimal256{B0_63: values[i].B0_63, B64_127: values[i].B64_127, B128_191: sign, B192_255: sign}
+		}
+	default:
+		return false
+	}
+	return true
+}
+
 func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, mode castMode) error {
 	rs := vector.MustFunctionResult[types.Decimal256](result)
 	switch from.GetType().Oid {
@@ -1391,10 +1422,16 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 		s := vector.GenerateFunctionFixedTypeParameter[float64](from)
 		return floatToDecimal256(s, rs, length, selectList)
 	case types.T_decimal64:
+		if widenDecimal256Batch(from, rs, toType, length) {
+			return nil
+		}
 		rs.UseOptFunctionParamFrame(1)
 		s := vector.OptGetParamFromWrapper[types.Decimal64](rs, 0, from)
 		return decimal64ToDecimal256Array(s, rs, length, selectList)
 	case types.T_decimal128:
+		if widenDecimal256Batch(from, rs, toType, length) {
+			return nil
+		}
 		rs.UseOptFunctionParamFrame(1)
 		s := vector.OptGetParamFromWrapper[types.Decimal128](rs, 0, from)
 		return decimal128ToDecimal256(s, rs, length, selectList)
@@ -6556,6 +6593,10 @@ func decimal128ToDecimal64(
 	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
+	constant := from.GetSourceVector().IsConst()
+	if constant && length > 1 {
+		l = 1
+	}
 	var dft types.Decimal64
 	fromtype := from.GetType()
 	totype := to.GetType()
@@ -6584,6 +6625,17 @@ func decimal128ToDecimal64(
 			if err = to.Append(result, false); err != nil {
 				return err
 			}
+		}
+	}
+	if constant && length > 1 {
+		if from.GetSourceVector().IsConstNull() {
+			to.SetNullResult(uint64(length))
+			return nil
+		}
+		dst := vector.MustFixedColNoTypeCheck[types.Decimal64](to.GetResultVector())
+		value := dst[0]
+		for i := 1; i < length; i++ {
+			dst[i] = value
 		}
 	}
 	return nil
