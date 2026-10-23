@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
 )
@@ -120,6 +121,27 @@ func TestDependentSingleInputPreservesValidation(t *testing.T) {
 		require.Error(t, err)
 		require.Nil(t, program)
 	}
+	scope := int64(91001)
+	privateRef := func(raw *plan.Expr) *plan.Expr {
+		definition := &plan.Expr{Typ: plan.Type{Id: int32(types.T_any)}, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "_scalar_numeric_program", Obj: int64(function.SCALAR_PROGRAM) << 32},
+			Args: []*plan.Expr{dependentInt(scope), raw},
+		}}}
+		return &plan.Expr{Typ: raw.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "_scalar_numeric_program_ref", Obj: int64(function.SCALAR_PROGRAM_REF) << 32},
+			Args: []*plan.Expr{definition, dependentInt(scope), dependentInt(0)},
+		}}}
+	}
+	cycleInOwner := dependentFunction(t, proc, "+", dependentInt(1), dependentInt(2))
+	cycleInOwner.GetF().Args[0] = cycleInOwner
+	_, err := CompileDependentExpressions(proc.Ctx, []*plan.Expr{privateRef(cycleInOwner)})
+	require.ErrorContains(t, err, "dependent expression cycle")
+	cycleInWitness := dependentFunction(t, proc, "+", dependentInt(1), dependentInt(2))
+	cycleInWitness.GetF().Args[0] = cycleInWitness
+	ordinary := dependentInt(1)
+	ordinary.PreparedNumeric = &plan.PreparedNumericMetadata{StringDomainSource: cycleInWitness}
+	_, err = CompileDependentExpressions(proc.Ctx, []*plan.Expr{privateRef(ordinary)})
+	require.ErrorContains(t, err, "dependent expression cycle")
 	left, right := int64(17), int64(29)
 	inputs := []DependentInput{{Batch: dependentTestInts(t, proc, &left)}, {Batch: dependentTestInts(t, proc, &right)}}
 	budget, err := proc.GetExecutionResourceBudget()

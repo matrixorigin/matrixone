@@ -88,6 +88,9 @@ func CompileDependentExpressionsWithCorrelation(
 func compileDependentExpressions(
 	ctx context.Context, roots []*plan.Expr, programs []*plan.CorrelationProgram,
 ) (*DependentExpressionProgram, error) {
+	if err := validateDependentExpressionGraphs(ctx, roots); err != nil {
+		return nil, err
+	}
 	type programOwner struct {
 		definition *plan.Expr
 		raw        *plan.Expr
@@ -107,7 +110,7 @@ func compileDependentExpressions(
 		if root == nil {
 			return nil, moerr.NewInternalError(ctx, "nil dependent expression")
 		}
-		if err := plan.VisitExprTree(root, func(expr *plan.Expr) error {
+		if err := visitDependentExprTree(root, func(expr *plan.Expr) error {
 			f := expr.GetF()
 			if f == nil || f.Func == nil {
 				return nil
@@ -349,7 +352,7 @@ func compileDependentExpressions(
 			owner.state = 0
 			return nil, err
 		}
-		if err = plan.VisitExprTree(owner.raw, func(expr *plan.Expr) error {
+		if err = visitDependentExprTree(owner.raw, func(expr *plan.Expr) error {
 			if index, ok := indexes[expr]; ok && index >= 0 && index < len(result.instructions) {
 				result.instructions[index].numericKindDemand = true
 			}
@@ -403,6 +406,167 @@ func compileDependentExpressions(
 		result.roots = append(result.roots, index)
 	}
 	return result, nil
+}
+
+// validateDependentExpressionGraphs must run before private-owner discovery:
+// that pass may compare or clone a nested definition, operations that are not
+// safe for cyclic protobuf graphs. A gray/black walk rejects true cycles while
+// allowing repeated pointers in a shared expression DAG.
+func validateDependentExpressionGraphs(ctx context.Context, roots []*plan.Expr) error {
+	type frame struct {
+		expr     *plan.Expr
+		children []*plan.Expr
+		next     int
+	}
+	state := make(map[*plan.Expr]uint8)
+	for _, root := range roots {
+		if root == nil {
+			return moerr.NewInternalError(ctx, "nil dependent expression")
+		}
+		if state[root] == 2 {
+			continue
+		}
+		state[root] = 1
+		stack := []frame{{expr: root, children: dependentExprChildren(root)}}
+		for len(stack) > 0 {
+			top := &stack[len(stack)-1]
+			if top.next == len(top.children) {
+				state[top.expr] = 2
+				stack = stack[:len(stack)-1]
+				continue
+			}
+			child := top.children[top.next]
+			top.next++
+			if child == nil {
+				continue
+			}
+			switch state[child] {
+			case 1:
+				return moerr.NewInternalError(ctx, "dependent expression cycle")
+			case 2:
+				continue
+			default:
+				state[child] = 1
+				stack = append(stack, frame{expr: child, children: dependentExprChildren(child)})
+			}
+		}
+	}
+	return nil
+}
+
+func dependentExprChildren(expr *plan.Expr) []*plan.Expr {
+	children := make([]*plan.Expr, 0)
+	if d := expr.GetDependent(); d != nil {
+		children = append(children, d.Comparison)
+		children = append(children, d.Lhs...)
+		children = append(children, d.Inputs...)
+	}
+	if w := expr.GetW(); w != nil {
+		if w.Frame != nil {
+			if w.Frame.End != nil {
+				children = append(children, w.Frame.End.Val)
+			}
+			if w.Frame.Start != nil {
+				children = append(children, w.Frame.Start.Val)
+			}
+		}
+		for i := len(w.OrderBy) - 1; i >= 0; i-- {
+			if w.OrderBy[i] != nil {
+				children = append(children, w.OrderBy[i].Expr)
+			}
+		}
+		children = append(children, w.PartitionBy...)
+		children = append(children, w.WindowFunc)
+	}
+	if sub := expr.GetSub(); sub != nil {
+		children = append(children, sub.Child)
+	}
+	if list := expr.GetList(); list != nil {
+		children = append(children, list.List...)
+	}
+	if fn := expr.GetF(); fn != nil {
+		children = append(children, fn.Args...)
+	}
+	if lit := expr.GetLit(); lit != nil {
+		children = append(children, lit.Src)
+	}
+	if metadata := expr.GetPreparedNumeric(); metadata != nil {
+		// Clone/equality operations during owner discovery copy this retained
+		// witness pointer even though dependent execution never evaluates it.
+		children = append(children, metadata.StringDomainSource)
+	}
+	return children
+}
+
+// visitDependentExprTree has the same edges as plan.VisitExprTree but visits
+// each expression pointer once. The dependent compiler has its own active
+// stack check that reports cycles while compiling; discovery must be bounded
+// first because bound plans can contain pointer cycles as well as shared DAGs.
+func visitDependentExprTree(root *plan.Expr, visitor func(*plan.Expr) error) error {
+	if root == nil {
+		return nil
+	}
+	pending := []*plan.Expr{root}
+	seen := make(map[*plan.Expr]struct{})
+	for len(pending) > 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if current == nil {
+			continue
+		}
+		if _, ok := seen[current]; ok {
+			continue
+		}
+		seen[current] = struct{}{}
+		if err := visitor(current); err != nil {
+			return err
+		}
+		if d := current.GetDependent(); d != nil {
+			pending = append(pending, d.Comparison)
+			for i := len(d.Lhs) - 1; i >= 0; i-- {
+				pending = append(pending, d.Lhs[i])
+			}
+			for i := len(d.Inputs) - 1; i >= 0; i-- {
+				pending = append(pending, d.Inputs[i])
+			}
+		}
+		if w := current.GetW(); w != nil {
+			if w.Frame != nil {
+				if w.Frame.End != nil {
+					pending = append(pending, w.Frame.End.Val)
+				}
+				if w.Frame.Start != nil {
+					pending = append(pending, w.Frame.Start.Val)
+				}
+			}
+			for i := len(w.OrderBy) - 1; i >= 0; i-- {
+				if w.OrderBy[i] != nil {
+					pending = append(pending, w.OrderBy[i].Expr)
+				}
+			}
+			for i := len(w.PartitionBy) - 1; i >= 0; i-- {
+				pending = append(pending, w.PartitionBy[i])
+			}
+			pending = append(pending, w.WindowFunc)
+		}
+		if sub := current.GetSub(); sub != nil {
+			pending = append(pending, sub.Child)
+		}
+		if list := current.GetList(); list != nil {
+			for i := len(list.List) - 1; i >= 0; i-- {
+				pending = append(pending, list.List[i])
+			}
+		}
+		if fn := current.GetF(); fn != nil {
+			for i := len(fn.Args) - 1; i >= 0; i-- {
+				pending = append(pending, fn.Args[i])
+			}
+		}
+		if lit := current.GetLit(); lit != nil {
+			pending = append(pending, lit.Src)
+		}
+	}
+	return nil
 }
 
 func decodeDependentNumericProgramRef(ctx context.Context, expr *plan.Expr) (int64, int, *plan.Expr, error) {
