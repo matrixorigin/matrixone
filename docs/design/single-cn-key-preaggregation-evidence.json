@@ -16,12 +16,20 @@
     "GOFLAGS": "-p=2",
     "max_dop": 4,
     "optimizer_hints": "empty; natural statistics",
-    "file_cache_memory_bytes": 536870912,
-    "file_cache_disk_bytes": 536870912,
     "fixture_spill_allowance_bytes": 1073741824,
     "normal_agg_spill_threshold_bytes": 1073741824,
     "forced_agg_spill_threshold_bytes": 33554432,
-    "note": "Shared external diagnostic fixture overlays only; production configuration and owners unchanged. No claim about a 32MiB total statement cap."
+    "note": "Shared external diagnostic fixture overlays only; production configuration and owners unchanged. No claim about a 32MiB total statement cap.",
+    "file_caches_bytes": {
+      "CN": {
+        "memory": 536870912,
+        "disk": 536870912
+      },
+      "TN": {
+        "memory": 536870912,
+        "disk": 1073741824
+      }
+    }
   },
   "reproduction": {
     "setup_sql": [
@@ -675,5 +683,76 @@
     "Initial diagnostic SQL hint overwrote estimates; discarded. Initial default 32MiB-cache probe was I/O dominated; not used as benchmark evidence. Both diagnostic records remain external.",
     "Cancellation observed Group and shuffle execution; no claim of cancellation specifically during spill I/O.",
     "These empirical guards do not estimate worker-local skew or guarantee universal speedups."
-  ]
+  ],
+  "static_analysis": {
+    "go_vet": "PASS",
+    "molint_exit": 0,
+    "molint_existing_diagnostics": [
+      {
+        "check": "checkrecover",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/allocation_account_lifecycle.go:31:19",
+        "message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.allocationLifecycleCall()",
+        "file": "pkg/sql/compile/allocation_account_lifecycle.go",
+        "base_and_head_sha256": "8f80fec72d3b6713596c084fc42776462761338ea0cfe187b831efa33a4e7cf5"
+      },
+      {
+        "check": "checkrecover",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/compile2.go:615:19",
+        "message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.Compile.Run()",
+        "file": "pkg/sql/compile/compile2.go",
+        "base_and_head_sha256": "613465ed1f2abb1dd274fc5a8b13899294bdc07856ddcf25cc9a4c752baf1a86"
+      },
+      {
+        "check": "checkrecover",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/compile2.go:1017:19",
+        "message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.Compile.buildRetryCompile()",
+        "file": "pkg/sql/compile/compile2.go",
+        "base_and_head_sha256": "613465ed1f2abb1dd274fc5a8b13899294bdc07856ddcf25cc9a4c752baf1a86"
+      },
+      {
+        "check": "checkrecover",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/remoterunServer.go:412:17",
+        "message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.handlePipelineMessage()",
+        "file": "pkg/sql/compile/remoterunServer.go",
+        "base_and_head_sha256": "154af88dbb84a155a2152f814368c108fa322616257aa5d587f4abd3300f8b38"
+      },
+      {
+        "check": "checkrecover",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/remoterunServer.go:435:20",
+        "message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.handlePipelineMessage()",
+        "file": "pkg/sql/compile/remoterunServer.go",
+        "base_and_head_sha256": "154af88dbb84a155a2152f814368c108fa322616257aa5d587f4abd3300f8b38"
+      },
+      {
+        "check": "checkrecover",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/sirius_runtime.go:131:19",
+        "message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.Compile.runSiriusRead()",
+        "file": "pkg/sql/compile/sirius_runtime.go",
+        "base_and_head_sha256": "2a44fc6d9f57a0b782b593c02b839e350063ffa9968c8abd9bbc512f743d1149"
+      },
+      {
+        "check": "checkrecover",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/temporary_ddl.go:148:12",
+        "message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.Scope.createSessionTemporaryTable()",
+        "file": "pkg/sql/compile/temporary_ddl.go",
+        "base_and_head_sha256": "8ad84136bbd1b54cb382bde1d5bd2ddbf2c0e0c0100dc5216f0ade6f97f5bf73"
+      },
+      {
+        "check": "checkunsafe",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/dependent.go:35:2",
+        "message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/compile/dependent.go",
+        "file": "pkg/sql/compile/dependent.go",
+        "base_and_head_sha256": "0a20605879416399a68fbda28e14f71dded3346d2371872257885f50269e78d7"
+      },
+      {
+        "check": "checkunsafe",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/dependent_external.go:28:2",
+        "message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/compile/dependent_external.go",
+        "file": "pkg/sql/compile/dependent_external.go",
+        "base_and_head_sha256": "9d0ab5aa793c141ff8debe3bbcc558baab67851e785a3a544ce4772a4a62a844"
+      }
+    ],
+    "golangci_configured_issues": 0,
+    "new_findings": 0
+  }
 }

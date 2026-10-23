@@ -7,7 +7,7 @@ This records current, traceable evidence for PR #30982. The existing compiler op
 - Dependency base: `f039b89fa923821fa0fa9219fe567e54a9d0f2ed`; tested optimization: `db0a75e38beb75451f124b0a84029c82422bdffe`.
 - Linux amd64, Go 1.27.1, `GOMAXPROCS=4`, session `max_dop=4`, no statistics-overriding optimizer hints.
 - Matching baseline/candidate binaries share the same native library and external one-CN SQL integration fixture. The baseline replaces only the compiler implementation with the target version.
-- Both use 512MiB memory/disk file caches and a 1GiB fixture spill allowance. The default 32MiB feature-test caches caused repeated evictions; that I/O-dominated diagnostic is excluded from these measurements.
+- Both use 512MiB CN memory/disk caches, a 512MiB TN memory cache, the existing 1GiB TN disk cache, and a 1GiB fixture spill allowance. The default 32MiB feature-test caches caused repeated evictions; that I/O-dominated diagnostic is excluded from these measurements.
 - No production configuration, allocation/spill ownership, runtime knob or execution state was added.
 
 ## Public execution and lifecycle
@@ -34,6 +34,6 @@ These are bounded measurements, not a universal no-regression guarantee or the h
 ## Validation and audit trail
 
 - Full compiler UT: 1553 roots. Owning compiler race: 1553 roots; shuffle 46 and projection 6 roots. No failures or race reports.
-- `go vet`, pinned molint and configured incremental golangci-lint on `pkg/sql/compile`: pass, 0 issues.
+- `go vet` passes. Pinned molint exits successfully with nine existing diagnostics in files verified byte-identical to the base. Configured incremental golangci-lint on `pkg/sql/compile` reports 0 issues; no new SCA finding is demonstrated.
 - The [machine-readable evidence](single-cn-key-preaggregation-evidence.json) contains source/native/binary hashes, command and exit receipts, SQL data generation, raw phase samples, logical plans, physical pipeline excerpts and Group spill statistics.
 - Full diagnostic source, overlays and runtime logs are retained at the recorded external paths with SHA-256 hashes. They are evidence artifacts, not million-row ordinary UT fixtures.
