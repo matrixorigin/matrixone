@@ -72,9 +72,10 @@ type refreshFairnessClient struct {
 
 type bindCursorClient struct {
 	Client
-	mu        sync.Mutex
-	submitted map[uint64]int
-	started   chan struct{}
+	mu           sync.Mutex
+	submitted    map[uint64]int
+	started      chan struct{}
+	getBindCalls atomic.Int64
 }
 
 type missingOwnerKeeperClient struct {
@@ -139,6 +140,7 @@ func (c *bindCursorClient) Send(
 	ctx context.Context,
 	_ *pb.Request,
 ) (*pb.Response, error) {
+	c.getBindCalls.Add(1)
 	return nil, ctx.Err()
 }
 
@@ -1013,6 +1015,7 @@ func TestKeepRemoteLockPeerCursorIsFairAcrossSlowRounds(t *testing.T) {
 	client.mu.Unlock()
 
 	runRound()
+	require.Zero(t, client.getBindCalls.Load(), "cancelled keepalive rounds must not refresh remote binds")
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	for table := uint64(1); table <= peerCount; table++ {
@@ -1175,6 +1178,45 @@ func TestKeepRemoteLockBindRefreshHonorsContext(t *testing.T) {
 		require.FailNow(t, "keeper bind refresh ignored cancellation")
 	}
 	require.Equal(t, bind, svc.tableGroups.get(bind.Group, bind.Table).getBind())
+}
+
+func TestKeepRemoteLockEndedRefreshPreservesFencing(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		expired    bool
+		invalidate bool
+	}{
+		{name: "cancelled transport failure"},
+		{name: "cancelled bind change", invalidate: true},
+		{name: "expired transport failure", expired: true},
+		{name: "expired bind change", expired: true, invalidate: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logger := getLogger("")
+			client := &bindCursorClient{submitted: make(map[uint64]int)}
+			svc := &service{serviceID: "local", logger: logger}
+			bind := pb.LockTable{Group: 0, Table: 1, OriginTable: 1, ServiceID: "peer", Version: 1, Valid: true}
+			tables := &lockTableHolders{service: svc.serviceID, logger: logger, holders: map[uint32]*lockTableHolder{}}
+			tables.set(bind.Group, bind.Table, newRemoteLockTable(svc.serviceID, time.Second, bind, client, func(pb.LockTable) {}, logger))
+			svc.tableGroups = tables
+			keeper := &lockTableKeeper{serviceID: svc.serviceID, client: client, groupTables: tables, service: svc}
+			var ctx context.Context
+			var cancel context.CancelFunc
+			if tc.expired {
+				ctx, cancel = context.WithDeadline(context.Background(), time.Unix(0, 0))
+			} else {
+				ctx, cancel = context.WithCancel(context.Background())
+			}
+			cancel()
+			keeper.maybeHandleRemoteBindChanged(ctx, bind, tc.invalidate)
+			if tc.invalidate {
+				require.Nil(t, tables.get(bind.Group, bind.Table))
+			} else {
+				require.Equal(t, bind, tables.get(bind.Group, bind.Table).getBind())
+			}
+			require.Zero(t, client.getBindCalls.Load(), "ended refresh must not call the allocator")
+		})
+	}
 }
 
 func TestKeepRemoteLockBindChangedFencesActiveTxn(t *testing.T) {
