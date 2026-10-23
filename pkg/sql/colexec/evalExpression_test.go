@@ -516,7 +516,37 @@ func TestFlowControlExecutionPreservesHexNumericRows(t *testing.T) {
 		column(2, types.T_bool.ToType()), ordinaryText,
 		elseNull,
 	)
-	numericCast := cast(flow, types.T_float64.ToType(), 0)
+	int64Literal := func(value int64) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: value}}}}
+	}
+	int32Literal := func(value int32) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: value}}}}
+	}
+	scope := int64(53001)
+	definition := &plan.Expr{Typ: plan.Type{Id: int32(types.T_any)}, Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "_scalar_numeric_program", Obj: int64(function.SCALAR_PROGRAM) << 32},
+		Args: []*plan.Expr{int64Literal(scope), flow},
+	}}}
+	valueRef := &plan.Expr{Typ: flow.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "_scalar_numeric_program_ref", Obj: int64(function.SCALAR_PROGRAM_REF) << 32},
+		Args: []*plan.Expr{definition, int64Literal(scope), int64Literal(0)},
+	}}}
+	kindRef := &plan.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "_scalar_numeric_program_ref", Obj: int64(function.SCALAR_PROGRAM_REF) << 32},
+		Args: []*plan.Expr{int64Literal(scope), int64Literal(1)},
+	}}}
+	target := types.T_float64.ToType()
+	castArgs := []*plan.Expr{valueRef,
+		{Typ: target.PlanType(), Expr: &plan.Expr_T{T: &plan.TargetType{}}},
+		kindRef,
+		int32Literal(function.NumericValueCastPolicyOrdinary),
+	}
+	castTypes := []types.Type{types.MustTypeFromPlan(valueRef.Typ), target, types.T_bool.ToType(), types.T_int32.ToType()}
+	castOverload, err := function.GetFunctionByNameWithOverload(proc.Ctx, "cast", castTypes, function.NumericValueCastOverload)
+	require.NoError(t, err)
+	numericCast := &plan.Expr{Typ: target.PlanType(), Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "cast", Obj: castOverload.GetEncodedOverloadID()}, Args: castArgs,
+	}}}
 	executor, err := NewExpressionExecutor(proc, bind("abs", numericCast))
 	require.NoError(t, err)
 	defer executor.Free()
