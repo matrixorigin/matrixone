@@ -731,8 +731,11 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			localesFor := func(needsLocale bool) []string {
 				locales := []string{locale}
 				if needsLocale {
+					if locale != "ja_JP" {
+						locales = append(locales, "ja_JP")
+					}
 					for _, other := range function.TemporalLocaleNames() {
-						if other != locale {
+						if other != locale && other != "ja_JP" {
 							locales = append(locales, other)
 						}
 					}
@@ -795,15 +798,26 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				legacy  bool
 			}
 			var zoneCandidates []timezoneCandidate
-			for _, search := range sessions {
-				if search.dependency.timeZone || search.folded || search.stored {
+			currentIndex, legacyIndex := 0, 0
+			for increment := int64(0); increment <= maxIncrement; increment++ {
+				// Give historical spelling the same precision priority as the
+				// current spelling. The exhaustive phase searches each complete
+				// candidate across zones before moving to the next precision;
+				// otherwise early zones can consume the shared budget first.
+				for legacyIndex < len(legacySessions) && legacySessions[legacyIndex].increment == increment {
+					search := legacySessions[legacyIndex]
 					zoneCandidates = append(zoneCandidates,
-						timezoneCandidate{search, localesFor(search.dependency.locale), false})
+						timezoneCandidate{search, []string{"ja_JP"}, true})
+					legacyIndex++
 				}
-			}
-			for _, search := range legacySessions {
-				zoneCandidates = append(zoneCandidates,
-					timezoneCandidate{search, []string{"ja_JP"}, true})
+				for currentIndex < len(sessions) && sessions[currentIndex].increment == increment {
+					search := sessions[currentIndex]
+					if search.dependency.timeZone || search.folded || search.stored {
+						zoneCandidates = append(zoneCandidates,
+							timezoneCandidate{search, localesFor(search.dependency.locale), false})
+					}
+					currentIndex++
+				}
 			}
 			// Timestamp defaults can recover a fixed creation offset directly.
 			for _, search := range zoneCandidates {
@@ -833,40 +847,72 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 						sensitive = sensitive || search.legacy
 					}
 				}
-				if len(legacySessions) == 0 {
-					// Other expressions retain the established current-era search
-					// order, which reaches far named zones at low precision cheaply.
+				if len(legacySessions) > 0 {
+					// Try common whole-hour offsets across every precision, era and
+					// locale before a wrong candidate enumerates all named zones.
+					// Full rule-bearing zones and arbitrary minute offsets remain in
+					// the exhaustive search below, under the same visit budget.
+					fastZones := make([]*time.Location, 0, 28)
+					for hour := -13; hour <= 14; hour++ {
+						fastZones = append(fastZones, time.FixedZone("table dump common offset", hour*3600))
+					}
 					for _, search := range zoneCandidates {
 						if matched || fatal != nil {
 							break
 						}
 						for _, lc := range search.locales {
-							for tz := range timeZones {
+							for _, tz := range fastZones {
 								probe(search, tz, lc)
 								if matched || fatal != nil {
 									break
 								}
 							}
-						}
-					}
-				} else {
-					// With two possible spellings, advance zones fairly across
-					// every precision and era within the same bounded budget.
-					for tz := range timeZones {
-						for _, search := range zoneCandidates {
 							if matched || fatal != nil {
 								break
 							}
-							for _, lc := range search.locales {
-								probe(search, tz, lc)
-								if matched || fatal != nil {
-									break
-								}
+						}
+					}
+				}
+				searchZones := func(search timezoneCandidate, locales []string) {
+					for _, lc := range locales {
+						for tz := range timeZones {
+							probe(search, tz, lc)
+							if matched || fatal != nil {
+								break
 							}
 						}
 						if matched || fatal != nil {
 							break
 						}
+					}
+				}
+				for _, search := range zoneCandidates {
+					if matched || fatal != nil {
+						break
+					}
+					if len(legacySessions) == 0 {
+						searchZones(search, search.locales)
+					} else {
+						// The reading locale and both Japanese spellings get all
+						// precisions before other current locales. This keeps old and
+						// new ja_JP defaults reachable at non-UTC creation zones.
+						priority := 1
+						if !search.legacy && len(search.locales) > 1 && search.locales[1] == "ja_JP" {
+							priority = 2
+						}
+						searchZones(search, search.locales[:priority])
+					}
+				}
+				if !matched && fatal == nil && len(legacySessions) > 0 {
+					for _, search := range zoneCandidates {
+						if matched || fatal != nil {
+							break
+						}
+						priority := 1
+						if !search.legacy && len(search.locales) > 1 && search.locales[1] == "ja_JP" {
+							priority = 2
+						}
+						searchZones(search, search.locales[priority:])
 					}
 				}
 			}

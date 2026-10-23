@@ -456,15 +456,21 @@ func TestTableDumpDefaultLocales(t *testing.T) {
 func TestTableDumpHistoricalJapaneseMonthAbbrev(t *testing.T) {
 	for _, tc := range []struct {
 		name, declaration, currentValue, oldValue, forgedValue, readingLocale string
-		increment, readingZoneSeconds                                         int64
+		increment, creationZoneSeconds, readingZoneSeconds                    int64
 	}{
-		{"constant", "varchar(64) default (date_format('2024-03-01','%b'))", " 3月", "3月", "4月", "ja_JP", 4, 0},
-		{"division_and_zone", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b')))", "0.3333: 3月", "0.3333:3月", "0.3333:4月", "de_DE", 4, 0},
-		{"cross_zone", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b')))", "0: 3月", "0:3月", "0:4月", "ja_JP", 0, -8 * 3600},
+		{"constant", "varchar(64) default (date_format('2024-03-01','%b'))", " 3月", "3月", "4月", "ja_JP", 4, 0, 0},
+		{"division_and_zone", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b')))", "0.3333: 3月", "0.3333:3月", "0.3333:4月", "de_DE", 4, 0, 0},
+		{"cross_zone", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b')))", "0: 3月", "0:3月", "0:4月", "ja_JP", 0, 0, -8 * 3600},
+		{"non_utc_creation", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b %Y-%m-%d %H:%i:%s')))", "0: 3月 2024-03-01 09:00:00", "0:3月 2024-03-01 09:00:00", "0:4月 2024-03-01 09:00:00", "en_US", 0, 9 * 3600, 0},
+		{"non_utc_creation_precision_4", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b %Y-%m-%d %H:%i:%s')))", "0.3333: 3月 2024-03-01 09:00:00", "0.3333:3月 2024-03-01 09:00:00", "0.3333:4月 2024-03-01 09:00:00", "en_US", 4, 9 * 3600, 0},
+		{"half_hour_creation", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b %Y-%m-%d %H:%i:%s')))", "0: 3月 2024-03-01 05:30:00", "0:3月 2024-03-01 05:30:00", "0:4月 2024-03-01 05:30:00", "en_US", 0, 5*3600 + 30*60, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := newPlanTestProcess(t)
 			proc.GetSessionInfo().TimeZone = time.UTC
+			if tc.creationZoneSeconds != 0 {
+				proc.GetSessionInfo().TimeZone = time.FixedZone("creation zone", int(tc.creationZoneSeconds))
+			}
 			proc.GetSessionInfo().LCTimeNames = "ja_JP"
 			locale := "ja_JP"
 			proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
@@ -526,6 +532,74 @@ func TestTableDumpHistoricalJapaneseMonthAbbrev(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestTableDumpCurrentMonthAbbrevNonUTCCreation(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.FixedZone("creation zone", 9*3600)
+	proc.GetSessionInfo().LCTimeNames = "en_US"
+	compiler := NewMockCompilerContext(false, proc)
+	compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+		switch name {
+		case "lc_time_names":
+			return "en_US", nil
+		case "div_precision_increment":
+			return int64(0), nil
+		case "explicit_defaults_for_timestamp":
+			return true, nil
+		}
+		return "", nil
+	}
+	stmt, err := mysql.ParseOne(t.Context(), "create table t(a varchar(200) default (concat("+
+		"cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', "+
+		"date_format(from_unixtime(1709251200),'%b %Y-%m-%d %H:%i:%s'))))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, "0:Mar 2024-03-01 09:00:00", def.Cols[0].Default.Expr.GetLit().GetSval())
+	proc.GetSessionInfo().TimeZone = time.UTC
+	for _, readingLocale := range []string{"en_US", "de_DE"} {
+		t.Run(readingLocale, func(t *testing.T) {
+			proc.GetSessionInfo().LCTimeNames = readingLocale
+			_, err = AnalyzeTableDumpBindings(compiler, def, def)
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestTableDumpCurrentMonthAbbrevNamedZoneRules(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	creationZone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = creationZone
+	proc.GetSessionInfo().LCTimeNames = "en_US"
+	compiler := NewMockCompilerContext(false, proc)
+	compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+		switch name {
+		case "lc_time_names":
+			return "en_US", nil
+		case "div_precision_increment":
+			return int64(0), nil
+		case "explicit_defaults_for_timestamp":
+			return true, nil
+		}
+		return "", nil
+	}
+	stmt, err := mysql.ParseOne(t.Context(), "create table t(a varchar(200) default (concat("+
+		"cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', "+
+		"date_format(from_unixtime(1704067200),'%Y-%m-%d %H:%i'), '|', "+
+		"date_format(from_unixtime(1722470400),'%Y-%m-%d %H:%i %b'))))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, "0:2023-12-31 19:00|2024-07-31 20:00 Jul", def.Cols[0].Default.Expr.GetLit().GetSval())
+	proc.GetSessionInfo().TimeZone = time.UTC
+	_, err = AnalyzeTableDumpBindings(compiler, def, def)
+	require.NoError(t, err)
 }
 
 const tableDumpSessionSearchTestTimezoneBindings = 8
