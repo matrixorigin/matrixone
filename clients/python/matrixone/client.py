@@ -1378,8 +1378,16 @@ class Client(BaseMatrixOneClient):
                             # cancellation would mask the original outcome).
                             # Drop the mutated connection rather than returning
                             # it to the pool, and never replace the original
-                            # statement outcome with a restoration error.
-                            conn.invalidate()
+                            # statement outcome with a restoration error. Guard
+                            # the discard itself: a ResourceClosedError or pool
+                            # finalization error from invalidate() must not
+                            # escape the finally and mask the original outcome
+                            # either; a BaseException raised by the discard
+                            # (interrupt/cancellation) still propagates.
+                            try:
+                                conn.invalidate()
+                            except Exception:
+                                pass
                         except BaseException:
                             # KeyboardInterrupt/SystemExit delivered during the
                             # restore escape the clause above and leave the

@@ -1459,8 +1459,16 @@ class AsyncClient(BaseMatrixOneClient):
                             # mutated connection rather than returning it to the
                             # pool, and never replace the original statement
                             # outcome (cancellation, timeout, execution error)
-                            # with a restoration error.
-                            await conn.invalidate()
+                            # with a restoration error. Guard the discard
+                            # itself: a ResourceClosedError or pool finalization
+                            # failure from invalidate() must not escape the
+                            # finally and mask the original outcome either; a
+                            # BaseException raised by the discard
+                            # (interrupt/cancellation) still propagates.
+                            try:
+                                await conn.invalidate()
+                            except Exception:
+                                pass
                         except BaseException:
                             # asyncio.CancelledError derives from BaseException,
                             # so a cancellation delivered while awaiting this

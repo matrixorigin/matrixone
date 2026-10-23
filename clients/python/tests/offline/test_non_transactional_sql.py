@@ -320,6 +320,82 @@ def test_sync_restore_keyboard_interrupt_discards_connection():
     assert applied == ["SET autocommit = 1", "data branch merge src into dst", "SET autocommit = 0"]
 
 
+def test_sync_invalidate_failure_after_failed_restore_keeps_merge_success():
+    # invalidate() itself can raise (ResourceClosedError on an already-closed
+    # connection, a pool finalization error). That failure must not escape
+    # the finally and replace the statement's successful outcome.
+    engine, _, connect_conn, _ = _sync_engine()
+
+    def failing_restore(sql):
+        if sql == "SELECT @@autocommit":
+            return Mock(scalar=Mock(return_value="0"))
+        if sql == "SET autocommit = 0":
+            raise Exception("restore failed")
+        return Mock(returns_rows=False, rowcount=0)
+
+    connect_conn.exec_driver_sql.side_effect = failing_restore
+    connect_conn.invalidate.side_effect = RuntimeError("discard failed")
+    client = Client(logger=Mock())
+    client._engine = engine
+
+    result = client.execute("data branch merge src into dst")
+
+    assert result is not None  # merge outcome preserved despite both failures
+    connect_conn.invalidate.assert_called_once_with()  # discard still attempted
+
+
+def test_sync_invalidate_failure_keeps_original_statement_error():
+    # Error-path twin: the original statement error must survive even when
+    # both the restore and the invalidation fail.
+    engine, _, connect_conn, _ = _sync_engine()
+
+    def failing_everything(sql):
+        if sql == "SELECT @@autocommit":
+            return Mock(scalar=Mock(return_value="0"))
+        if sql == "SET autocommit = 1":
+            return Mock(returns_rows=False, rowcount=0)
+        if sql == "SET autocommit = 0":
+            raise Exception("restore failed")
+        raise Exception("merge blew up")
+
+    connect_conn.exec_driver_sql.side_effect = failing_everything
+    connect_conn.invalidate.side_effect = RuntimeError("discard failed")
+    client = Client(logger=Mock())
+    client._engine = engine
+
+    with pytest.raises(Exception) as err:
+        client.execute("data branch merge src into dst")
+
+    assert "merge blew up" in str(err.value)
+    assert "restore failed" not in str(err.value)
+    assert "discard failed" not in str(err.value)
+    connect_conn.invalidate.assert_called_once_with()
+
+
+def test_sync_keyboard_interrupt_survives_invalidate_failure():
+    # The BaseException branch guards invalidate() so a discard failure can
+    # never swallow an in-flight interrupt; pin that guarantee so the two
+    # branches cannot drift apart.
+    engine, _, connect_conn, _ = _sync_engine()
+
+    def interrupt_on_restore(sql):
+        if sql == "SELECT @@autocommit":
+            return Mock(scalar=Mock(return_value="0"))
+        if sql == "SET autocommit = 0":
+            raise KeyboardInterrupt()
+        return Mock(returns_rows=False, rowcount=0)
+
+    connect_conn.exec_driver_sql.side_effect = interrupt_on_restore
+    connect_conn.invalidate.side_effect = RuntimeError("discard failed")
+    client = Client(logger=Mock())
+    client._engine = engine
+
+    with pytest.raises(KeyboardInterrupt):
+        client.execute("data branch merge src into dst")
+
+    connect_conn.invalidate.assert_called_once_with()
+
+
 def _async_engine():
     engine = MagicMock()
 
@@ -530,6 +606,121 @@ async def test_async_cancellation_during_restore_discards_connection():
 
     connect_conn.invalidate.assert_awaited_once()
     assert applied == ["SET autocommit = 1", "data branch merge src into dst", "SET autocommit = 0"]
+
+
+@pytest.mark.asyncio
+async def test_async_invalidate_failure_after_failed_restore_keeps_merge_success():
+    # Async twin of the sync guard: an invalidate() that raises must not
+    # escape the finally and replace the statement's successful outcome.
+    from sqlalchemy.exc import PendingRollbackError
+
+    engine, _, connect_conn, _ = _async_engine()
+
+    async def failing_restore(sql):
+        if sql == "SELECT @@autocommit":
+            return Mock(scalar=Mock(return_value="0"))
+        if sql == "SET autocommit = 0":
+            raise PendingRollbackError("statements pending")
+        return Mock(returns_rows=False, rowcount=0)
+
+    connect_conn.exec_driver_sql = AsyncMock(side_effect=failing_restore)
+    connect_conn.invalidate = AsyncMock(side_effect=RuntimeError("discard failed"))
+    client = AsyncClient(logger=Mock())
+    client._engine = engine
+
+    result = await client._execute("data branch merge src into dst")
+
+    assert result is not None  # merge outcome preserved despite both failures
+    connect_conn.invalidate.assert_awaited_once()  # discard still attempted
+
+
+@pytest.mark.asyncio
+async def test_async_invalidate_failure_keeps_original_statement_error():
+    # Error-path twin: the original statement error must survive even when
+    # both the restore and the invalidation fail.
+    from sqlalchemy.exc import PendingRollbackError
+
+    engine, _, connect_conn, _ = _async_engine()
+
+    async def disconnect_on_merge(sql):
+        if sql == "SELECT @@autocommit":
+            return Mock(scalar=Mock(return_value="0"))
+        if sql == "SET autocommit = 1":
+            return Mock(returns_rows=False, rowcount=0)
+        if sql == "SET autocommit = 0":
+            raise PendingRollbackError("statements pending")
+        raise Exception("server connection gone away")
+
+    connect_conn.exec_driver_sql = AsyncMock(side_effect=disconnect_on_merge)
+    connect_conn.invalidate = AsyncMock(side_effect=RuntimeError("discard failed"))
+    client = AsyncClient(logger=Mock())
+    client._engine = engine
+
+    with pytest.raises(Exception) as err:
+        await client._execute("data branch merge src into dst")
+
+    assert "server connection gone away" in str(err.value)
+    assert "statements pending" not in str(err.value)
+    assert "discard failed" not in str(err.value)
+    connect_conn.invalidate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_cancellation_survives_invalidate_failure():
+    # Cancellation during the merge, restore failing on the invalidated
+    # connection, and invalidate() itself raising: the CancelledError must
+    # still propagate unreplaced.
+    import asyncio as _asyncio
+
+    from sqlalchemy.exc import PendingRollbackError
+
+    engine, _, connect_conn, _ = _async_engine()
+
+    async def cancel_on_merge(sql):
+        if sql == "SELECT @@autocommit":
+            return Mock(scalar=Mock(return_value="0"))
+        if sql == "SET autocommit = 1":
+            return Mock(returns_rows=False, rowcount=0)
+        if sql == "SET autocommit = 0":
+            raise PendingRollbackError("statements pending")
+        raise _asyncio.CancelledError()
+
+    connect_conn.exec_driver_sql = AsyncMock(side_effect=cancel_on_merge)
+    connect_conn.invalidate = AsyncMock(side_effect=RuntimeError("discard failed"))
+    client = AsyncClient(logger=Mock())
+    client._engine = engine
+
+    with pytest.raises(_asyncio.CancelledError):
+        await client._execute("data branch merge src into dst")
+
+    connect_conn.invalidate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_async_cancellation_during_restore_survives_invalidate_failure():
+    # BaseException branch pin: cancellation delivered during the restore
+    # await, then invalidate() itself failing — the cancellation still
+    # propagates unreplaced.
+    import asyncio as _asyncio
+
+    engine, _, connect_conn, _ = _async_engine()
+
+    async def cancel_on_restore(sql):
+        if sql == "SELECT @@autocommit":
+            return Mock(scalar=Mock(return_value="0"))
+        if sql == "SET autocommit = 0":
+            raise _asyncio.CancelledError()
+        return Mock(returns_rows=False, rowcount=0)
+
+    connect_conn.exec_driver_sql = AsyncMock(side_effect=cancel_on_restore)
+    connect_conn.invalidate = AsyncMock(side_effect=RuntimeError("discard failed"))
+    client = AsyncClient(logger=Mock())
+    client._engine = engine
+
+    with pytest.raises(_asyncio.CancelledError):
+        await client._execute("data branch merge src into dst")
+
+    connect_conn.invalidate.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -989,6 +1180,41 @@ def test_real_pool_restore_failure_replaces_connection_without_masking_success()
     assert result is not None
 
     # the mutated connection was invalidated, so the next checkout is recreated
+    with engine.connect() as checked:
+        assert checked.exec_driver_sql("SELECT 1") is not None
+    assert len(created) == 2
+    engine.dispose()
+
+
+def test_real_pool_invalidate_failure_preserves_success_and_replaces_connection(monkeypatch):
+    # Direct probe of the review's remaining edge with the real pool
+    # machinery: every Connection.invalidate() call runs the genuine discard
+    # and then raises. The code must (a) preserve the merge's successful
+    # outcome despite the invalidate failure escaping from the engine, and
+    # (b) still dispose of the mutated physical connection, which the next
+    # checkout proves by being a fresh one.
+    from sqlalchemy.engine.base import Connection as SAConnection
+
+    created = []
+    engine = _pool_engine(created, autocommit="0", fail_restore=True)
+    client = Client(logger=Mock())
+    client._engine = engine
+
+    real_invalidate = SAConnection.invalidate
+    discard_calls = []
+
+    def raising_invalidate(self, exception=None):
+        real_invalidate(self, exception)  # the genuine pool disposal still runs
+        discard_calls.append(exception)
+        raise RuntimeError("injected post-disposal invalidate failure")
+
+    monkeypatch.setattr(SAConnection, "invalidate", raising_invalidate)
+
+    result = client.execute("data branch merge src into dst")
+    assert result is not None  # outcome preserved even though every invalidate raised
+    assert discard_calls  # the engine's auto-invalidation ran through the wrapper
+
+    # the mutated connection was discarded: the next checkout is recreated
     with engine.connect() as checked:
         assert checked.exec_driver_sql("SELECT 1") is not None
     assert len(created) == 2
