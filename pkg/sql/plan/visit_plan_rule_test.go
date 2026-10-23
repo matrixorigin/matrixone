@@ -2371,9 +2371,11 @@ func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	result := filled.GetQuery().Nodes[0].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal64), result.Typ.Id)
 	boundArg := result.GetF().Args[0]
-	require.Equal(t, int64(-15), boundArg.GetLit().GetDecimal64Val().A)
-	require.Nil(t, boundArg.GetF())
-	require.Equal(t, int32(types.T_decimal64), boundArg.Typ.Id)
+	boundSource, ok := numericProgramRawValue(boundArg)
+	require.True(t, ok)
+	require.Equal(t, int64(-15), boundSource.GetLit().GetDecimal64Val().A)
+	require.Nil(t, boundSource.GetF())
+	require.Equal(t, int32(types.T_decimal64), boundSource.Typ.Id)
 
 	stringFilled, err := FillValuesOfParamsInPlan(ctx, query, []any{ParamValue{
 		Value:          "-1.5",
@@ -2383,8 +2385,12 @@ func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	require.NoError(t, err)
 	stringResult := stringFilled.GetQuery().Nodes[0].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal64), stringResult.Typ.Id)
-	require.Nil(t, stringResult.GetF().Args[0].GetF())
-	require.Equal(t, int64(-15), stringResult.GetF().Args[0].GetLit().GetDecimal64Val().A)
+	stringSource := stringResult.GetF().Args[0]
+	if raw, ok := numericProgramRawValue(stringSource); ok {
+		stringSource = raw
+	}
+	require.Nil(t, stringSource.GetF())
+	require.Equal(t, int64(-15), stringSource.GetLit().GetDecimal64Val().A)
 
 	sleepParam, err := BindFuncExprImplByPlanExpr(ctx, "sleep", []*planpb.Expr{param()})
 	require.NoError(t, err)

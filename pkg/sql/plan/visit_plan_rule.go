@@ -3062,13 +3062,17 @@ func (rule *ResetParamRefRule) applyNumericValueProgramDefinition(expr *plan.Exp
 		return nil, moerr.NewInvalidInput(rule.ctx, "numeric value program definition has an invalid scope")
 	}
 	rewritten := DeepCopyExpr(expr)
-	value, err := rule.ApplyExpr(DeepCopyExpr(fn.Args[1]))
+	// Preserve the occurrence identity while applying the prepared-plan rules:
+	// source-root authority and exprMemo are keyed by this owned expression.
+	// The returned expression is installed into the copied definition below,
+	// so the immutable prepared plan remains unchanged.
+	value, err := rule.ApplyExpr(fn.Args[1])
 	if err != nil {
 		return nil, err
 	}
 	rewritten.GetF().Args[1] = value
 	if len(fn.Args) == 3 {
-		kind, kindErr := rule.ApplyExpr(DeepCopyExpr(fn.Args[2]))
+		kind, kindErr := rule.ApplyExpr(fn.Args[2])
 		if kindErr != nil {
 			return nil, kindErr
 		}

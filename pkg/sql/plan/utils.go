@@ -7523,11 +7523,12 @@ func refreshPreparedPlanProjectionExprType(
 		// projection refresh. Reconcile IFNULL's common value from those
 		// refreshed sources rather than retaining PREPARE's TEXT envelopes.
 		if (expr.GetPreparedNumeric().GetIfnullCommonValue() || expr.GetPreparedNumeric().GetProjectedCommonValue()) &&
-			types.T(expr.Typ.Id).IsMySQLString() &&
+			(types.T(expr.Typ.Id).IsMySQLString() || types.T(expr.Typ.Id) == types.T_any) &&
 			len(exprImpl.F.Args) == 3 {
 			args := DeepCopyExprList(exprImpl.F.Args)
 			for _, i := range []int{1, 2} {
 				args[i] = stripIntegerSelectionReconciliation(args[i])
+				args[i] = stripPreparedCommonValueAnyEnvelope(args[i])
 				if args[i].GetPreparedNumeric().GetProvisionalResultPeer() {
 					var err error
 					args[i], err = restorePreparedResultPeer(ctx, args[i])
@@ -7540,7 +7541,7 @@ func refreshPreparedPlanProjectionExprType(
 			if err != nil {
 				return false, err
 			}
-			if !types.T(bound.Typ.Id).IsMySQLString() {
+			if types.T(bound.Typ.Id) != types.T_any && !types.T(bound.Typ.Id).IsMySQLString() {
 				preserveReboundFunctionMetadata(exprImpl.F, bound.GetF())
 				expr.Typ = bound.Typ
 				expr.Expr = bound.Expr
@@ -7685,6 +7686,23 @@ func refreshPreparedPlanProjectionExprType(
 	}
 
 	return changed, nil
+}
+
+// stripPreparedCommonValueAnyEnvelope removes only the unresolved CAST0 that
+// the binder inserted to keep a selected IFNULL/CASE branch at ANY. It is
+// used while recomputing a prepared common-value owner's concrete domain; user
+// CAST boundaries and other overloads remain intact.
+func stripPreparedCommonValueAnyEnvelope(expr *Expr) *Expr {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || fn.SyntaxExplicitCast || len(fn.Args) != 2 ||
+		fn.Args[0] == nil || fn.Args[1] == nil || fn.Args[1].GetT() == nil || types.T(fn.Args[1].Typ.Id) != types.T_any {
+		return expr
+	}
+	_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+	if overload != function.NumericValueCastPolicyOrdinary {
+		return expr
+	}
+	return fn.Args[0]
 }
 
 // refreshPreparedNumericValueProgram follows the lexical owner instead of

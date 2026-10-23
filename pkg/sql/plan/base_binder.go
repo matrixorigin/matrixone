@@ -211,7 +211,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				}
 			}
 			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
-			if err == nil {
+			if err == nil && !function.LegacyExplicitCast1Syntax(b.GetContext()) {
 				markSyntaxExplicitCast(expr)
 			}
 			return
@@ -253,7 +253,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		} else {
 			expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		}
-		if err == nil {
+		if err == nil && !function.LegacyExplicitCast1Syntax(b.GetContext()) {
 			markSyntaxExplicitCast(expr)
 		}
 

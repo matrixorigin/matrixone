@@ -43,12 +43,13 @@ type tableDumpBindingBudget struct {
 }
 
 type tableDumpExpressionVisitor struct {
-	nodes              int
-	hasDivision        bool
-	hasIntegerDivision bool
-	hasSpecial         bool
-	hasTimestampAdd    bool
-	hasJSON            bool
+	nodes                  int
+	hasDivision            bool
+	hasIntegerDivision     bool
+	hasSpecial             bool
+	hasExplicitCast1Syntax bool
+	hasTimestampAdd        bool
+	hasJSON                bool
 }
 
 func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
@@ -66,6 +67,9 @@ func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 		case "json_length", "json_set", "json_insert", "json_replace":
 			v.hasJSON = true
 		}
+	}
+	if cast, ok := e.(*tree.CastExpr); ok && useExplicitCastOverload(cast.Type) {
+		v.hasExplicitCast1Syntax = true
 	}
 	return e, false
 }
@@ -214,6 +218,7 @@ const (
 )
 
 // A flag selects one coherent pre-migration binding, never per-node metadata.
+const tableDumpBindingPreExplicitCast1Syntax tableDumpBindingMode = 1 << 5
 const tableDumpBindingPreTemporalNullability tableDumpBindingMode = 1 << 7
 
 const tableDumpBindingPreJSON tableDumpBindingMode = 1 << 6
@@ -224,7 +229,10 @@ type tableDumpDefaultSession struct {
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON)
+	baseMode := mode &^ (tableDumpBindingPreExplicitCast1Syntax | tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON)
+	if mode&tableDumpBindingPreExplicitCast1Syntax != 0 {
+		bindCtx = function.WithLegacyExplicitCast1Syntax(bindCtx)
+	}
 	if mode&tableDumpBindingPreTemporalNullability != 0 {
 		bindCtx = function.WithLegacyTemporalNullability(bindCtx)
 	}
@@ -631,6 +639,15 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					}
 				}
 				modes = append(modes, tableDumpBindingCurrent|tableDumpBindingPreJSON)
+			}
+			if visit.hasExplicitCast1Syntax {
+				// Older persisted CAST1 trees predate SyntaxExplicitCast. Rebuild
+				// that coherent annotation era instead of weakening whole-tree
+				// comparison or changing current SQL binding.
+				currentModes := append([]tableDumpBindingMode(nil), modes...)
+				for _, mode := range currentModes {
+					modes = append(modes, mode|tableDumpBindingPreExplicitCast1Syntax)
+				}
 			}
 			// All session witnesses share the ordinary cancellation and total
 			// candidate-node budget. Only complete rebound trees can match.
