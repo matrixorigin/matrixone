@@ -19,20 +19,19 @@ package search
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/search/planreader"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
-	hnswcoverage "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/coverage"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -122,7 +121,6 @@ type searcher struct {
 	membership      docfilter.MembershipFilter
 	membershipCount uint64
 	emptyMembership bool
-	sourceID        uint64
 }
 
 func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (*searcher, error) {
@@ -162,14 +160,17 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 	if tblcfg.MetadataTable == "" || tblcfg.IndexTable == "" {
 		return nil, moerr.NewInvalidInputNoCtx("hnsw index search is missing its hidden tables")
 	}
+	local, err := transactionLocalBudget(proc, spec, req.ResultLimit)
+	if err != nil {
+		return nil, err
+	}
 	s := &searcher{
 		proc:        proc,
 		idxcfg:      idxcfg,
 		tblcfg:      tblcfg,
 		query:       req.QueryPayload,
-		limit:       max(req.CandidateBudget, 1),
+		limit:       max(req.CandidateBudget, local, 1),
 		snapshot:    spec.ScanSnapshot,
-		sourceID:    spec.SourceTableDef.TblId,
 		resultLimit: req.ResultLimit,
 		maxLimit:    req.MaxInternalTopK,
 		iterative:   opts.Iterative,
@@ -180,6 +181,46 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 		}
 	}
 	return s, nil
+}
+
+// transactionLocalBudget returns LIMIT+OFFSET plus the source rows this transaction deleted
+// or updated and has not committed. The asynchronous index still returns those rows and the
+// base-table join drops them, so the search keeps room for each. It is 0 when the transaction
+// has no such rows or they cannot be counted.
+//
+// WARNING: TOXIC. Do not fall back to a full table scan, or retry into one, when the index
+// lags the source (#30987). Commits by other transactions that ISCP has not applied yet are
+// eventually consistent; only this transaction's own deletes and updates are counted here.
+// Accepted consequence: while the index lags, a query can return fewer than LIMIT rows (the
+// join drops candidates other transactions deleted or changed) and miss rows not yet indexed.
+// This is by design, not a bug.
+func transactionLocalBudget(proc *process.Process, spec *plan.IndexSearchScan, resultLimit uint64) (uint64, error) {
+	txn := proc.GetTxnOperator()
+	if resultLimit == 0 || txn == nil || txn.GetWorkspace() == nil || txn.GetWorkspace().Readonly() ||
+		sqlexec.NewSqlProcess(proc).ApplyScanSnapshot(spec.ScanSnapshot) != nil {
+		return 0, nil
+	}
+	if proc.GetSessionInfo() == nil || proc.GetSessionInfo().StorageEngine == nil {
+		return 0, nil
+	}
+	ctx := proc.Ctx
+	db, err := proc.GetSessionInfo().StorageEngine.Database(ctx, spec.SourceTable.SchemaName, txn)
+	if err != nil {
+		return 0, err
+	}
+	rel, err := db.Relation(ctx, spec.SourceTableDef.Name, nil)
+	if err != nil {
+		return 0, err
+	}
+	provider, ok := rel.(engine.TransactionLocalDeletesProvider)
+	if !ok {
+		return 0, nil
+	}
+	deleted, ok, err := provider.TransactionLocalDeletedRows(ctx)
+	if err != nil || !ok || deleted > math.MaxUint64-resultLimit {
+		return 0, err
+	}
+	return resultLimit + deleted, nil
 }
 
 // setMembership builds the exact primary-key filter of the serialized key vector payload.
@@ -233,7 +274,6 @@ func search[T types.RealNumbers](s *searcher) ([]int64, []float64, error) {
 	if ets := sp.ApplyScanSnapshot(s.snapshot); ets != nil {
 		cacheKey = veccache.SnapshotKey(s.tblcfg.IndexTable, *ets)
 	}
-	var searchedBuildTS int64
 	rt := vectorindex.RuntimeConfig{
 		Limit:           uint(s.limit),
 		OrigFuncName:    s.tblcfg.OrigFuncName,
@@ -242,13 +282,9 @@ func search[T types.RealNumbers](s *searcher) ([]int64, []float64, error) {
 		Iterative:       s.iterative,
 		ResultLimit:     uint(s.resultLimit),
 		MaxLimit:        uint(s.maxLimit),
-		SearchedBuildTS: &searchedBuildTS,
 	}
 	keys, distances, err := veccache.Cache.Search(sp, cacheKey, newAlgo(s.idxcfg, s.tblcfg), query, rt)
 	if err != nil {
-		return nil, nil, err
-	}
-	if err := s.validateSearchedGeneration(searchedBuildTS); err != nil {
 		return nil, nil, err
 	}
 	ids, ok := keys.([]int64)
@@ -256,51 +292,4 @@ func search[T types.RealNumbers](s *searcher) ([]int64, []float64, error) {
 		return nil, nil, moerr.NewInternalError(s.proc.Ctx, "keys is not []int64")
 	}
 	return ids, distances, nil
-}
-
-// validateSearchedGeneration closes the planning-to-execution race. The cache
-// entry is protected while Search records the generation it actually used, so
-// this check cannot be fooled by a concurrent evict/reload publishing a
-// different generation after the search. An unsafe generation requests the
-// compiler's exact (pre-vector) retry instead of returning incomplete top-k
-// candidates.
-func (s *searcher) validateSearchedGeneration(buildTS int64) error {
-	if s == nil || s.proc == nil || s.sourceID == 0 || s.proc.GetTxnOperator() == nil {
-		// Synthetic reader tests do not have a catalog transaction or source ID.
-		return nil
-	}
-	if buildTS <= 0 || s.proc.GetSessionInfo() == nil || s.proc.GetSessionInfo().StorageEngine == nil {
-		return moerr.NewVectorIndexSnapshotChangedNoCtx()
-	}
-
-	sp := sqlexec.NewSqlProcess(s.proc)
-	snapshotTS := sp.ApplyScanSnapshot(s.snapshot)
-	readTxn := s.proc.GetTxnOperator()
-	readTS := types.TimestampToTS(readTxn.SnapshotTS())
-	if snapshotTS != nil {
-		readTS = types.TimestampToTS(*snapshotTS)
-	}
-	if !hnswcoverage.BuildPrecedesSnapshot(buildTS, readTS) {
-		return moerr.NewVectorIndexSnapshotChangedNoCtx()
-	}
-	if snapshotTS != nil {
-		readTxn = readTxn.CloneSnapshotOp(*snapshotTS)
-	}
-	ctx := s.proc.GetTopContext()
-	if accountID, err := sp.EffectiveAccountID(); err == nil {
-		ctx = defines.AttachAccountId(ctx, accountID)
-	}
-	_, _, rel, err := s.proc.GetSessionInfo().StorageEngine.GetRelationById(ctx, readTxn, s.sourceID)
-	if err != nil {
-		return moerr.NewVectorIndexSnapshotChangedNoCtx()
-	}
-	provider, ok := rel.(engine.SourceCommitTSProvider)
-	if !ok {
-		return moerr.NewVectorIndexSnapshotChangedNoCtx()
-	}
-	sourceTS, err := provider.SourceCommitTS(ctx, types.BuildTS(buildTS, 0))
-	if err != nil || !hnswcoverage.BuildCoversSnapshot(buildTS, readTS, sourceTS) {
-		return moerr.NewVectorIndexSnapshotChangedNoCtx()
-	}
-	return nil
 }

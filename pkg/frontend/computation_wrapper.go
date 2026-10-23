@@ -3028,9 +3028,6 @@ func buildPlanForCompileRetry(
 	if planningContext == nil {
 		planningContext = ctx
 	}
-	if ctx.Value(defines.HnswSnapshotFallbackKey{}) == true {
-		planningContext = context.WithValue(planningContext, defines.HnswSnapshotFallbackKey{}, true)
-	}
 	compilerContext.SetContext(plan2.WithJSONMergeWarningOrigin(planningContext, plan2.JSONMergeWarningInternalReprepare))
 	defer compilerContext.SetContext(originalContext)
 	if ses != nil {

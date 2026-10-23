@@ -300,7 +300,7 @@ func TestExecutorTemporaryDDLPolicyRetryAndPoolReuse(t *testing.T) {
 	from.pn = &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
 		DdlType: plan.DataDefinition_CREATE_TABLE,
 	}}}
-	retry, err := from.buildRetryCompile(false, from.proc.GetTopContext())
+	retry, err := from.buildRetryCompile(false)
 	require.NoError(t, err)
 	defer retry.Release()
 	require.True(t, retry.temporaryDDLInExecutorTxn)
@@ -309,7 +309,7 @@ func TestExecutorTemporaryDDLPolicyRetryAndPoolReuse(t *testing.T) {
 	retry.SetPreparedParamValues([]any{"1"})
 	require.Equal(t, []any{"2020-01-01", "2020-01-03"}, from.preparedParamValues)
 	from.SetBuildPlanFunc(func(context.Context) (*plan.Plan, error) { return from.pn, nil })
-	rebuilt, err := from.buildRetryCompile(true, from.proc.GetTopContext())
+	rebuilt, err := from.buildRetryCompile(true)
 	require.NoError(t, err)
 	defer rebuilt.Release()
 	require.Same(t, from.temporaryDropRetryStage, rebuilt.temporaryDropRetryStage)
