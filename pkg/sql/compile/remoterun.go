@@ -2442,10 +2442,10 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 		)
 	}
 	if features.NumericValuePrograms &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion129) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion130) {
 		return moerr.NewNotSupportedNoCtxf(
 			"numeric value programs require MORPC protocol version %d",
-			defines.MORPCVersion129,
+			defines.MORPCVersion130,
 		)
 	}
 	if requiresStringNumericCompatibilityProtocol(proc, features) {
@@ -2454,10 +2454,10 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 				"string numeric compatibility cannot run with a legacy session contract",
 			)
 		}
-		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion129 {
+		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion130 {
 			return moerr.NewNotSupportedNoCtxf(
 				"string numeric compatibility requires MORPC protocol version %d",
-				defines.MORPCVersion129,
+				defines.MORPCVersion130,
 			)
 		}
 	}

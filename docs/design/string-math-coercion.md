@@ -111,13 +111,13 @@ v117, v118, and v119 floors. Upstream exact fractional TIMESTAMPADD SECOND
 intervals retain their independent MORPC v124 floor. This change's numeric
 value/kind programs, private function IDs 605/606, SELECT INTO kind layouts,
 dependent scalar result layouts, and strict/default numeric semantics use
-MORPC v129. Upstream LOAD IGNORE remains v125, VIEW metadata remains v126,
-index/vector-scan features remain v127, and mixed JSON remains v128; numeric
-support does not relabel an upstream feature as v129. Function IDs 603/604
-remain the upstream view metadata functions. The separate upstream
+MORPC v130. Upstream JSON string-consumer contracts use v129, LOAD IGNORE
+remains v125, VIEW metadata remains v126, index/vector-scan features remain
+v127, and mixed JSON comparisons remain v128. Numeric support does not relabel
+an upstream feature as v130. Function IDs 603/604 remain the upstream view metadata functions. The separate upstream
 Unicode-collation metadata contract uses v109. For expressions whose features
 require numeric programs, placement falls back to local execution when a
-worker is below v129 or has unknown capability, sender preflight rejects a
+worker is below v130 or has unknown capability, sender preflight rejects a
 destination downgrade, and receivers reject private IDs or layout descriptors
 they cannot interpret. Unchanged expressions retain their existing
 compatibility gates.
@@ -181,7 +181,7 @@ prepare role/source classification
   a value program and ID 606 references its value or BOOL output; IDs 603/604
   remain upstream view metadata functions. The numeric feature classifier
   recognizes the complete program and its explicit layout descriptors at
-  MORPC v129.
+  MORPC v130.
 - Cross-operator kind passengers are ordinary BOOL columns declared by the
   lowering pass. DISTINCT, GROUP BY, and set operations retain their original
   visible equality keys and carry passengers only with the chosen payload row.
@@ -259,7 +259,7 @@ expressions.
 | Roles and boundaries | Value/control argument tests; precision remains `INT64`; nested ownership; explicit CAST stops provenance; unknown/non-owning function controls |
 | HEX/BIT row provenance | CASE/IF/COALESCE tests for mixed, uniform, marked-plus-NULL, text, ordinary BINARY, explicit casts, and nested selectors; paired-output masks, allocation, reuse, and cleanup |
 | Physical layouts | Query SELECT INTO visible-to-kind mapping, correlated scalar value/BOOL descriptors, deepcopy/retry validation, recursive feedback schemas, and unchanged equality keys |
-| Mixed-version admission | Numeric program IDs and nonempty numeric layout descriptors require v129: local fallback below/unknown, v128 rejection, and v129 acceptance. Independent upstream v101 JSON/YearBit, v109 Unicode collation, v112 date results, v117 LEAST/GREATEST, v118 database defaults/table charset, v119 dependent-program controls, v120 current-session KILL authorization/proxy cleanup, v121 exact unsigned DECIMAL DIV, v122 temporal result contracts, v123 capability-gated nonblocking row-lock admission, v124 exact fractional TIMESTAMPADD SECOND intervals, v125 LOAD IGNORE FK admission/diagnostics, v126 VIEW metadata, v127 index/vector scan, and v128 mixed JSON; legacy-session rejection |
+| Mixed-version admission | Numeric program IDs and nonempty numeric layout descriptors require v130: local fallback below/unknown, v128/v129 rejection, and v130 acceptance. Independent upstream v101 JSON/YearBit, v109 Unicode collation, v112 date results, v117 LEAST/GREATEST, v118 database defaults/table charset, v119 dependent-program controls, v120 current-session KILL authorization/proxy cleanup, v121 exact unsigned DECIMAL DIV, v122 temporal result contracts, v123 capability-gated nonblocking row-lock admission, v124 exact fractional TIMESTAMPADD SECOND intervals, v125 LOAD IGNORE FK admission/diagnostics, v126 VIEW metadata, v127 index/vector scan, v128 mixed JSON, and v129 JSON string consumers; legacy-session rejection |
 | SessionInfo wire allocation | Unknown varints at fields 23/26 are not interpreted as numeric mode/marker; field 22 remains `lc_time_names`; fields 24/25 round trip the explicit mode and sender marker; forwarding preserves a zero legacy marker |
 | Prepared-plan reuse | Type changes, error-to-success, NULL-to-success, and restoration of the cached base plan |
 | Numeric correctness and pruning | Integer/DECIMAL/FLOAT source controls; zonemap endpoint traps must not prune matching rows |

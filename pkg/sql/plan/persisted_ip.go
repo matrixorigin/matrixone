@@ -178,7 +178,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion126)
 	}
 	if features.NumericValuePrograms {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion129)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion130)
 	}
 	return requiredVersion, nil
 }

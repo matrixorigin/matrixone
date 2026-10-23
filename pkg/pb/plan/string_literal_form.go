@@ -445,16 +445,16 @@ func usesNumericValueKindCompanion(id, overload int32, args []*Expr) bool {
 // understand the prefix-cast
 // representation but default to permissive conversion when the new SessionInfo
 // marker is absent.
-// NumericValuePrograms requires MORPC v129 for numeric value/kind programs,
+// NumericValuePrograms requires MORPC v130 for numeric value/kind programs,
 // explicit kind-aware casts, and optional kind arguments on numeric consumers.
 // These plan expressions carry the selected HEX/BIT interpretation as an
 // ordinary BOOL result, independent of Batch metadata and conversion mode.
-// HistoricalStringMathCompatibility requires MORPC v129 in every mode: old
+// HistoricalStringMathCompatibility requires MORPC v130 in every mode: old
 // CEIL/FLOOR
 // VARCHAR overloads used ParseFloat, not the current mode-aware parser.
-// Ordinary/comparison/set-operation FLOAT -> INT64 casts require MORPC v129's
+// Ordinary/comparison/set-operation FLOAT -> INT64 casts require MORPC v130's
 // exact bounds in every mode, independently of string-prefix conversion.
-// ScalarMathPrecisionCompatibility requires MORPC v129 to preserve row-level
+// ScalarMathPrecisionCompatibility requires MORPC v130 to preserve row-level
 // warnings while presenting a constant precision argument to CEIL/FLOOR kernels.
 type RemoteExpressionFeatures struct {
 	JSONStringConsumerOverload    bool
@@ -465,7 +465,7 @@ type RemoteExpressionFeatures struct {
 	CalendarIntervalNormalization bool
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
 	// execution-only floor; persisted expression contracts remain unchanged.
-	ScalarDivision                    bool
+	ScalarDivision bool
 	// ViewMetadataFunctions requires v126 for MO_VIEW_DEFINITION/CHECK_OPTION.
 	ViewMetadataFunctions             bool
 	NumericPrefix                     bool
@@ -1319,7 +1319,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 
 // SELECT ... INTO and correlated scalar results carry private BOOL passenger
 // layouts outside the expression tree. Include both descriptors in the same
-// v129 admission feature so older workers cannot misread the physical output.
+// v130 admission feature so older workers cannot misread the physical output.
 func ownerHasNumericValueKindLayout(owner any) bool {
 	seen := make(map[uintptr]struct{})
 	var walk func(reflect.Value) bool

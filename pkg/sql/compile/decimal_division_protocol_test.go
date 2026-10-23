@@ -149,7 +149,7 @@ func TestDecimalIntegerDivisionProtocol(t *testing.T) {
 		require.ErrorContains(t, err, "coordinator execution owner")
 	})
 	// DECIMAL DIV keeps its independent v121 floor, while a query that also
-	// uses the PR numeric contract must satisfy the newer v129 floor.
+	// uses the PR numeric contract must satisfy the newer v130 floor.
 	numericQry, numericScope := strictStringNumericCompatibilityPipeline(t, types.T_varchar, 0)
 	t.Cleanup(numericScope.RootOp.Release)
 	combinedProjects := []*planpb.Expr{expr, numericQry.Nodes[0].ProjectList[0]}
@@ -161,23 +161,24 @@ func TestDecimalIntegerDivisionProtocol(t *testing.T) {
 	require.True(t, combinedFeatures.DecimalIntegerDivisionSemantics)
 	require.True(t, combinedFeatures.StrictStringNumericCompatibility)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
 	for _, tc := range []struct {
 		version        int64
 		placementError string
 		receiverError  string
 	}{
 		{defines.MORPCVersion120, "version 121", "version 121"},
-		{defines.MORPCVersion121, "version 129", "version 129"},
-		{defines.MORPCVersion122, "version 129", "version 129"},
-		{defines.MORPCVersion123, "version 129", "version 129"},
-		{defines.MORPCVersion124, "version 129", "version 129"},
-		{defines.MORPCVersion125, "version 129", "version 129"},
-		{defines.MORPCVersion126, "version 129", "version 129"},
-		{defines.MORPCVersion127, "version 129", "version 129"},
-		{defines.MORPCVersion128, "version 129", "version 129"},
+		{defines.MORPCVersion121, "version 130", "version 130"},
+		{defines.MORPCVersion122, "version 130", "version 130"},
+		{defines.MORPCVersion123, "version 130", "version 130"},
+		{defines.MORPCVersion124, "version 130", "version 130"},
+		{defines.MORPCVersion125, "version 130", "version 130"},
+		{defines.MORPCVersion126, "version 130", "version 130"},
+		{defines.MORPCVersion127, "version 130", "version 130"},
+		{defines.MORPCVersion128, "version 130", "version 130"},
+		{defines.MORPCVersion129, "version 130", "version 130"},
 	} {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
 		client.version = tc.version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
@@ -189,8 +190,8 @@ func TestDecimalIntegerDivisionProtocol(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.version)
 		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, combinedPipeline), tc.receiverError)
 	}
-	client.version = defines.MORPCVersion129
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
+	client.version = defines.MORPCVersion130
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))

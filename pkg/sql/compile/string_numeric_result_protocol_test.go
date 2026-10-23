@@ -200,27 +200,27 @@ func numericValueProgramProtocolVersion(
 	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion) })
 	// The coordinator is on the new contract while the fake worker is varied
 	// across protocol versions to prove mixed-version admission.
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion129)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion130)
 	client.version = version
 	c.execType = plan.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 
-	if version < defines.MORPCVersion129 {
+	if version < defines.MORPCVersion130 {
 		require.Equal(t, plan.ExecTypeAP_ONECN, c.execType,
-			"pre-v129 placement must fall back locally")
+			"pre-v130 placement must fall back locally")
 		require.Equal(t, c.addr, c.cnList[0].Addr)
 		_, err := encodeRemoteScope(scope, c.proc)
-		require.ErrorContains(t, err, fmt.Sprintf("version %d", defines.MORPCVersion129),
+		require.ErrorContains(t, err, fmt.Sprintf("version %d", defines.MORPCVersion130),
 			"a destination downgrade after placement must be rejected before send")
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline), fmt.Sprintf("version %d", defines.MORPCVersion129),
-			"pre-v129 receivers must fail closed")
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline), fmt.Sprintf("version %d", defines.MORPCVersion130),
+			"pre-v130 receivers must fail closed")
 		return
 	}
 
 	require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType,
-		"v129 placement must retain distributed execution")
+		"v130 placement must retain distributed execution")
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
@@ -248,6 +248,10 @@ func TestNumericValueProgramAdmissionEveryMode(t *testing.T) {
 			features, err := planpb.RequiredRemoteExpressionFeatures(qry)
 			require.NoError(t, err)
 			require.True(t, features.NumericValuePrograms)
+			combinedFeatures := features
+			combinedFeatures.JSONStringConsumerOverload = true
+			require.Equal(t, defines.MORPCVersion130, remoteExpressionProtocolVersion(combinedFeatures),
+				"numeric programs raise the independent JSON v129 floor to v130")
 
 			info := c.proc.GetSessionInfo()
 			info.MySQLNumericCompatibilityMode = mode.mysql
@@ -268,6 +272,7 @@ func TestNumericValueProgramAdmissionEveryMode(t *testing.T) {
 			numericValueProgramProtocolVersion(t, c, client, qry, scope, wirePipeline, defines.MORPCVersion127)
 			numericValueProgramProtocolVersion(t, c, client, qry, scope, wirePipeline, defines.MORPCVersion128)
 			numericValueProgramProtocolVersion(t, c, client, qry, scope, wirePipeline, defines.MORPCVersion129)
+			numericValueProgramProtocolVersion(t, c, client, qry, scope, wirePipeline, defines.MORPCVersion130)
 
 		})
 	}
@@ -285,7 +290,7 @@ func TestNumericValueProgramUnknownWorkerCapabilityFailsClosed(t *testing.T) {
 	c.proc.GetSessionInfo().LegacyNumericCompatibilityMode = false
 
 	rt := runtime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion129)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion130)
 	client.customResponse = true
 	client.response = &querypb.Response{}
 	c.execType = plan.ExecTypeAP_MULTICN
@@ -295,7 +300,7 @@ func TestNumericValueProgramUnknownWorkerCapabilityFailsClosed(t *testing.T) {
 		"unknown worker capability must not admit numeric value programs")
 	require.Equal(t, c.addr, c.cnList[0].Addr)
 	_, err := encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 129",
+	require.ErrorContains(t, err, "version 130",
 		"the final destination fence must reject an unknown worker for numeric value programs")
 	require.Equal(t, client.calls, client.releases)
 
@@ -305,13 +310,22 @@ func TestNumericValueProgramUnknownWorkerCapabilityFailsClosed(t *testing.T) {
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan.ExecTypeAP_ONECN, c.execType,
-		"a known v128 worker must not receive v129 numeric program IDs")
+		"a known v128 worker must not receive v130 numeric program IDs")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion128)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline), "version 129",
-		"a v128 receiver must reject the v129 numeric program IDs")
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline), "version 130",
+		"a v128 receiver must reject the v130 numeric program IDs")
+	client.version = defines.MORPCVersion129
+	c.execType = plan.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+	require.Equal(t, plan.ExecTypeAP_ONECN, c.execType,
+		"the JSON-only v129 worker must not receive numeric program IDs")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion129)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline), "version 130",
+		"a v129 receiver must reject the v130 numeric program IDs")
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, "unknown")
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline), "version 129",
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline), "version 130",
 		"the receiver fence must reject an unknown local protocol for numeric value programs")
 }
 
@@ -330,8 +344,8 @@ func TestSelectIntoKindLayoutProtocolAdmission(t *testing.T) {
 	features, err := planpb.RequiredRemoteExpressionFeatures(query)
 	require.NoError(t, err)
 	require.True(t, features.NumericValuePrograms)
-	require.Equal(t, defines.MORPCVersion129, remoteExpressionProtocolVersion(features),
-		"Query metadata needs the same independent v129 sender floor as expression programs")
+	require.Equal(t, defines.MORPCVersion130, remoteExpressionProtocolVersion(features),
+		"Query metadata needs the same independent v130 sender floor as expression programs")
 
 	wire := &pipeline.Pipeline{
 		Qry:  &planpb.Plan{Plan: &planpb.Plan_Query{Query: query}},
@@ -341,31 +355,40 @@ func TestSelectIntoKindLayoutProtocolAdmission(t *testing.T) {
 	oldVersion, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion128)
 	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion) })
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 129",
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 130",
 		"a receiver must inspect Query-level metadata even without an expression marker")
-	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, wire, features), "version 129",
+	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, wire, features), "version 130",
 		"the final destination fence must include Query-level metadata")
-
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion129)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 130",
+		"v129 JSON support alone must not admit a SELECT INTO kind map")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion130)
 	client.version = defines.MORPCVersion128
 	c.execType = plan.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(query))
 	require.Equal(t, plan.ExecTypeAP_ONECN, c.execType,
-		"the sender must keep the SELECT INTO kind map away from pre-v129 workers")
+		"the sender must keep the SELECT INTO kind map away from pre-v130 workers")
 	client.version = defines.MORPCVersion129
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion129)
+	c.execType = plan.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(query))
+	require.Equal(t, plan.ExecTypeAP_ONECN, c.execType,
+		"the sender must keep the SELECT INTO kind map away from JSON-only v129 workers")
+	client.version = defines.MORPCVersion130
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion130)
 	c.execType = plan.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(query))
 	require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType,
-		"the v129 worker accepts the SELECT INTO kind map")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion129)
+		"the v130 worker accepts the SELECT INTO kind map")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion130)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, wire),
-		"the v129 receiver accepts the SELECT INTO kind map")
+		"the v130 receiver accepts the SELECT INTO kind map")
 }
 
-func TestDependentScalarKindResultRequiresV129(t *testing.T) {
+func TestDependentScalarKindResultRequiresV130(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	query := &planpb.Query{Correlation: &planpb.CorrelationSpec{Programs: []*planpb.CorrelationProgram{{
 		OutputTypes: []planpb.Type{
@@ -378,7 +401,7 @@ func TestDependentScalarKindResultRequiresV129(t *testing.T) {
 	features, err := planpb.RequiredRemoteExpressionFeatures(query)
 	require.NoError(t, err)
 	require.True(t, features.NumericValuePrograms)
-	require.Equal(t, defines.MORPCVersion129, remoteExpressionProtocolVersion(features),
+	require.Equal(t, defines.MORPCVersion130, remoteExpressionProtocolVersion(features),
 		"the descriptor alone carries an ordinary BOOL passenger without private expression nodes")
 
 	rt := runtime.ServiceRuntime(c.proc.GetService())
@@ -390,11 +413,11 @@ func TestDependentScalarKindResultRequiresV129(t *testing.T) {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 		}
 	})
-	for _, version := range []int64{defines.MORPCVersion128, defines.MORPCVersion129} {
+	for _, version := range []int64{defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130} {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
 		err := validateRemoteExpressionPipelineProtocol(c.proc, pipeline)
-		if version < defines.MORPCVersion129 {
-			require.ErrorContains(t, err, "version 129")
+		if version < defines.MORPCVersion130 {
+			require.ErrorContains(t, err, "version 130")
 		} else {
 			require.NoError(t, err)
 		}
@@ -410,8 +433,14 @@ func TestDependentScalarKindResultRequiresV129(t *testing.T) {
 	c.execType = plan.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(query))
+	require.Equal(t, plan.ExecTypeAP_ONECN, c.execType,
+		"a JSON-only v129 worker must not receive a correlated scalar kind layout")
+	client.version = defines.MORPCVersion130
+	c.execType = plan.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(query))
 	require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType,
-		"a v129 worker accepts the correlated scalar kind layout")
+		"a v130 worker accepts the correlated scalar kind layout")
 
 	c.execType = plan.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "unknown-worker", Mcpu: 4}}
@@ -495,20 +524,21 @@ func TestStringNumericCompatibilityAdmissionBoundaries(t *testing.T) {
 				defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125,
 				defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128,
 				defines.MORPCVersion129,
+				defines.MORPCVersion130,
 			} {
-				// The coordinator uses v129 while worker placement varies; then
+				// The coordinator uses v130 while worker placement varies; then
 				// receiver validation is run at the worker's actual version.
-				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion129)
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion130)
 				client.version = version
 				c.execType = plan.ExecTypeAP_MULTICN
 				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 				require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-				denied := tc.requiresCurrent && version < defines.MORPCVersion129
+				denied := tc.requiresCurrent && version < defines.MORPCVersion130
 				if denied {
 					require.Equal(t, plan.ExecTypeAP_ONECN, c.execType)
 					require.Equal(t, c.addr, c.cnList[0].Addr)
 					_, err = encodeRemoteScope(scope, c.proc)
-					require.ErrorContains(t, err, fmt.Sprintf("version %d", defines.MORPCVersion129))
+					require.ErrorContains(t, err, fmt.Sprintf("version %d", defines.MORPCVersion130))
 				} else {
 					require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType)
 					data, sendErr := encodeRemoteScope(scope, c.proc)
@@ -518,7 +548,7 @@ func TestStringNumericCompatibilityAdmissionBoundaries(t *testing.T) {
 				rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
 				err = validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline)
 				if denied {
-					require.ErrorContains(t, err, fmt.Sprintf("version %d", defines.MORPCVersion129))
+					require.ErrorContains(t, err, fmt.Sprintf("version %d", defines.MORPCVersion130))
 				} else {
 					require.NoError(t, err)
 				}

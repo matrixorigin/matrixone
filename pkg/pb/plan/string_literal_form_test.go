@@ -376,7 +376,7 @@ func TestNumericValueProgramsFeatureTracksStableExecutionIDs(t *testing.T) {
 	features, err = RequiredRemoteExpressionFeatures(queryLayout)
 	require.NoError(t, err)
 	require.True(t, features.NumericValuePrograms,
-		"a Query-level SELECT INTO passenger layout requires the same v129 contract")
+		"a Query-level SELECT INTO passenger layout requires the same v130 contract")
 	features, err = RequiredRemoteExpressionFeatures(&Plan{Plan: &Plan_Query{Query: queryLayout}})
 	require.NoError(t, err)
 	require.True(t, features.NumericValuePrograms,
@@ -388,7 +388,7 @@ func TestNumericValueProgramsFeatureTracksStableExecutionIDs(t *testing.T) {
 	features, err = RequiredRemoteExpressionFeatures(correlatedScalarLayout)
 	require.NoError(t, err)
 	require.True(t, features.NumericValuePrograms,
-		"a correlated scalar's physical BOOL result column requires v129 even without private expression nodes")
+		"a correlated scalar's physical BOOL result column requires v130 even without private expression nodes")
 	features, err = RequiredRemoteExpressionFeatures(&Plan{Plan: &Plan_Query{Query: correlatedScalarLayout}})
 	require.NoError(t, err)
 	require.True(t, features.NumericValuePrograms,
@@ -400,7 +400,7 @@ func TestNumericValueProgramsFeatureTracksStableExecutionIDs(t *testing.T) {
 	features, err = RequiredRemoteExpressionFeatures(&decoded)
 	require.NoError(t, err)
 	require.True(t, features.NumericValuePrograms,
-		"the v129 floor survives wire round-trip when the descriptor is the only private feature")
+		"the v130 floor survives wire round-trip when the descriptor is the only private feature")
 
 	legacyCorrelation := &Query{Correlation: &CorrelationSpec{Programs: []*CorrelationProgram{{
 		OutputTypes: []Type{{Id: planVarcharTypeID}},

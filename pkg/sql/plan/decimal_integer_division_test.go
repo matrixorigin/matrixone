@@ -150,7 +150,7 @@ func TestDecimalIntegerDivPersistedFloor(t *testing.T) {
 		{
 			name:  "prepared parameter preserves source kind",
 			sql:   "prepare decimal_div_floor from 'select cast(? as decimal(10,3)) div cast(2 as unsigned)'",
-			floor: defines.MORPCVersion129,
+			floor: defines.MORPCVersion130,
 		},
 		{
 			name:  "native decimal division keeps its existing floor",

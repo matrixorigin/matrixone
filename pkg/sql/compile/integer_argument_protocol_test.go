@@ -79,21 +79,21 @@ func TestIntegerArgumentProtocolBoundaries(t *testing.T) {
 				if features.OrdinaryFloatInt64Bounds {
 					// These FLOAT -> INT64 identities use the corrected bounds,
 					// independently of the v85 private integer-argument casts.
-					require.ErrorContains(t, err, "version 129")
-					// Upstream v101–v128 floors do not establish this independent
-					// numeric contract; it begins at v129.
+					require.ErrorContains(t, err, "version 130")
+					// Upstream v101–v129 floors do not establish this independent
+					// numeric contract; it begins at v130.
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(101))
-					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 129")
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 130")
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(102))
-					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 129")
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 130")
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
-					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 129")
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 130")
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
-					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 129")
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 130")
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
-					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 129")
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 130")
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
-					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 129")
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 130")
 					for _, version := range []int64{
 						defines.MORPCVersion113, defines.MORPCVersion114,
 						defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117,
@@ -101,11 +101,12 @@ func TestIntegerArgumentProtocolBoundaries(t *testing.T) {
 						defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122,
 						defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125,
 						defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128,
+						defines.MORPCVersion129,
 					} {
 						rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-						require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 129")
+						require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 130")
 					}
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
 					require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 					// The same ordinary identity with an integer source remains
 					// executable on old peers; do not fence every CAST0/2/3.
