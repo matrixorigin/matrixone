@@ -1742,7 +1742,7 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-// builtInPurgeLog act like `select mo_purge_log('rawlog,statement_info,metric', '2023-06-27')`
+// builtInPurgeLog acts like `select purge_log('statement_info', '2023-06-27')`.
 // moc#3199
 // - Not Support TXN
 // - Not Support Multi-table in one cmd
