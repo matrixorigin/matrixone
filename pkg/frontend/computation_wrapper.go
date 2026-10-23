@@ -93,12 +93,13 @@ type TxnComputationWrapper struct {
 	// specialization outside the live PrepareStmt cache. The candidate is
 	// installed only after its Compile succeeds, so a failed replacement leaves
 	// the preceding category and Compile intact.
-	runtimeCacheTarget          *PrepareStmt
-	runtimeCacheKey             string
-	runtimeCachePlan            *plan.Plan
-	runtimeCacheDiagnostics     []*plan.Expr
-	runtimeCacheColDefData      [][]byte
-	runtimeCacheRetiredCompiles []retiredRuntimeCompile
+	runtimeCacheTarget             *PrepareStmt
+	runtimeCacheKey                string
+	runtimeCachePlan               *plan.Plan
+	runtimeCacheDiagnostics        []*plan.Expr
+	runtimeCacheDecimalFloatProofs []plan2.PreparedDecimalFloatProof
+	runtimeCacheColDefData         [][]byte
+	runtimeCacheRetiredCompiles    []retiredRuntimeCompile
 
 	explainBuffer *bytes.Buffer
 	binaryPrepare bool
@@ -352,7 +353,7 @@ func checkResultQueryPrivilege(proc *process.Process, p *plan.Plan, reqCtx conte
 	var stats statistic.StatsArray
 	stats.Reset()
 
-	if ids, err = isResultQuery(proc, p); err != nil || ids == nil {
+	if ids, err = isResultQuery(reqCtx, proc, p); err != nil || ids == nil {
 		return stats, err
 	}
 	return checkPrivilege(sid, ids, reqCtx, ses)
@@ -1856,7 +1857,8 @@ func initExecuteStmtParamWithResolverInSession(
 			proof = func(expr *plan.Expr) bool { return preparedBinaryIntegerCastDiagnosticFree(prepareStmt, expr, true) }
 		}
 		if key == prepareStmt.runtimeSpecializationKey && prepareStmt.runtimePlan != nil &&
-			!fieldTypes.NeedsReprepare(cwft.paramBindings, cwft.paramVals) {
+			!fieldTypes.NeedsReprepare(cwft.paramBindings, cwft.paramVals) &&
+			plan2.MatchPreparedDecimalFloatProofs(prepareStmt.runtimeDecimalFloatProofs, cwft.paramBindings, cwft.paramVals) {
 			safe, probeErr := plan2.ProbePreparedDiagnosticCandidatesWithProof(cwft.proc, prepareStmt.runtimeDiagnosticCandidates, proof)
 			if probeErr != nil {
 				return nil, nil, nil, originSQL, false, probeErr
@@ -1920,6 +1922,7 @@ func initExecuteStmtParamWithResolverInSession(
 			if cacheable {
 				cwft.runtimeCacheTarget, cwft.runtimeCacheKey, cwft.runtimeCachePlan = prepareStmt, key, executionPlan
 				cwft.runtimeCacheDiagnostics = bound.DiagnosticCandidates
+				cwft.runtimeCacheDecimalFloatProofs = bound.DecimalFloatProofs
 			}
 		}
 	} else if numParams > 0 && (executionPlan.GetDdl().GetQuery() != nil || executionPlan.GetDcl().GetSetVariables() != nil) {
@@ -2026,6 +2029,7 @@ func (cwft *TxnComputationWrapper) discardRuntimeCacheCandidate() {
 	cwft.runtimeCacheKey = ""
 	cwft.runtimeCachePlan = nil
 	cwft.runtimeCacheDiagnostics = nil
+	cwft.runtimeCacheDecimalFloatProofs = nil
 	cwft.runtimeCacheColDefData = nil
 }
 
@@ -2046,7 +2050,7 @@ func (cwft *TxnComputationWrapper) installRuntimeCacheCandidate(runtimeCompile *
 		return false
 	}
 	retiredCompile := cwft.runtimeCacheTarget.installRuntimeSpecializationCache(
-		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile, cwft.runtimeCacheDiagnostics, cwft.runtimeCacheColDefData)
+		cwft.runtimeCacheKey, cwft.runtimeCachePlan, runtimeCompile, cwft.runtimeCacheDiagnostics, cwft.runtimeCacheDecimalFloatProofs, cwft.runtimeCacheColDefData)
 	if retiredCompile != nil {
 		// NewCompile has already installed runtimeCompile's execution state on the
 		// shared session Process. Releasing the displaced compile here would call

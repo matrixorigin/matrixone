@@ -387,6 +387,73 @@ func TestExportStatementLifecycle(t *testing.T) {
 	}
 }
 
+func TestExportJSONLineConversionFailureCompletesPipeWrite(t *testing.T) {
+	ses := newValidateSession(t)
+	ses.pool = ses.proc.Mp()
+	pu := getPu(ses.GetService())
+	original := pu.FileService
+	t.Cleanup(func() { pu.FileService = original })
+
+	cfg := newDiffCSVUserConfig()
+	cfg.ExportFormat = "jsonline"
+	cfg.FilePath = "SHARED:/jsonline-conversion-error.jsonl"
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	ses.InitExportConfig(cfg)
+	ep := ses.GetExportConfig()
+
+	writeDone := make(chan error, 1)
+	fs := &exportLifecycleFS{write: func(_ context.Context, v fileservice.IOVector) error {
+		_, err := io.Copy(io.Discard, v.Entries[0].ReaderForWrite)
+		writeDone <- err
+		return err
+	}}
+	pu.FileService = fs
+
+	column := &MysqlColumn{}
+	column.SetName("value")
+	column.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	source := batch.NewOffHeapWithSize(1)
+	defer source.Clean(ses.pool)
+	source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte{'x', 0xff, 'y'}, false, ses.pool))
+	source.SetRowCount(1)
+
+	var execCtx *ExecCtx
+	execCtx = &ExecCtx{
+		reqCtx: context.Background(),
+		ses:    ses,
+		stmt:   &tree.Select{},
+		cw:     exportStatusColumns{columns: []interface{}{column}},
+		runner: exportStatusRunner{run: func() error {
+			err := ep.Write(execCtx, nil, source)
+			source.Clean(ses.pool)
+			return err
+		}},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- executeStatusStmt(ses, execCtx) }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("invalid UTF-8 export did not finish its statement")
+	}
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid UTF-8")
+	select {
+	case <-writeDone:
+	case <-time.After(time.Second):
+		t.Fatal("failed conversion did not complete the async pipe Write")
+	}
+	require.Nil(t, ep.AsyncReader)
+	require.Nil(t, ep.AsyncWriter)
+	require.Nil(t, ep.AsyncGroup)
+	require.Nil(t, ep.ByteChan)
+	require.Zero(t, ses.pool.CurrNB())
+	require.False(t, fs.closed.Load(), "shared file service is borrowed")
+}
+
 type exportHeldProducer struct {
 	*pickStreamingExecutor
 	entered, release chan struct{}
