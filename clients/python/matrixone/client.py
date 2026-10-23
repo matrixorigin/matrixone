@@ -1380,6 +1380,17 @@ class Client(BaseMatrixOneClient):
                             # it to the pool, and never replace the original
                             # statement outcome with a restoration error.
                             conn.invalidate()
+                        except BaseException:
+                            # KeyboardInterrupt/SystemExit delivered during the
+                            # restore escape the clause above and leave the
+                            # server-side autocommit state unknown; discard the
+                            # connection instead of pooling it, then re-raise
+                            # the original interrupt unreplaced.
+                            try:
+                                conn.invalidate()
+                            except Exception:
+                                pass
+                            raise
 
                 execution_time = time.time() - start_time
 

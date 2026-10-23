@@ -1461,6 +1461,21 @@ class AsyncClient(BaseMatrixOneClient):
                             # outcome (cancellation, timeout, execution error)
                             # with a restoration error.
                             await conn.invalidate()
+                        except BaseException:
+                            # asyncio.CancelledError derives from BaseException,
+                            # so a cancellation delivered while awaiting this
+                            # restore escapes the clause above. Whether the SET
+                            # was applied server-side is then unknown, and
+                            # engine-level invalidation of a cancelled call
+                            # differs across the supported SQLAlchemy 1.4-2.x
+                            # range. Discard the connection here instead of
+                            # relying on either, and re-raise the original
+                            # outcome (cancellation or interrupt) unreplaced.
+                            try:
+                                await conn.invalidate()
+                            except Exception:
+                                pass
+                            raise
 
                 execution_time = time.time() - start_time
 

@@ -293,6 +293,33 @@ def test_sync_restore_failure_invalidates_without_masking_success():
     connect_conn.invalidate.assert_called_once_with()
 
 
+def test_sync_restore_keyboard_interrupt_discards_connection():
+    # KeyboardInterrupt delivered during the restore is a BaseException: it
+    # escapes `except Exception`, leaving the server-side autocommit state
+    # unknown. The connection must still be discarded instead of returned to
+    # the pool, and the interrupt must propagate unreplaced.
+    engine, _, connect_conn, _ = _sync_engine()
+    applied = []
+
+    def interrupt_on_restore(sql):
+        if sql == "SELECT @@autocommit":
+            return Mock(scalar=Mock(return_value="0"))
+        applied.append(sql)
+        if sql == "SET autocommit = 0":
+            raise KeyboardInterrupt()
+        return Mock(returns_rows=False, rowcount=0)
+
+    connect_conn.exec_driver_sql.side_effect = interrupt_on_restore
+    client = Client(logger=Mock())
+    client._engine = engine
+
+    with pytest.raises(KeyboardInterrupt):
+        client.execute("data branch merge src into dst")
+
+    connect_conn.invalidate.assert_called_once_with()
+    assert applied == ["SET autocommit = 1", "data branch merge src into dst", "SET autocommit = 0"]
+
+
 def _async_engine():
     engine = MagicMock()
 
@@ -468,6 +495,41 @@ async def test_async_disconnect_during_merge_keeps_original_error():
 
     assert "server connection gone away" in str(err.value)
     assert "statements pending" not in str(err.value)
+
+
+@pytest.mark.asyncio
+async def test_async_cancellation_during_restore_discards_connection():
+    # The restore can land server-side while its response is lost to a task
+    # cancellation: the restore await then raises CancelledError, which is a
+    # BaseException and escapes `except Exception`. Unlike the test above —
+    # which cancels during the merge and sees the *restore* fail on the
+    # already-invalidated connection — this cancels during the restore itself.
+    # The connection in an unknown autocommit state must be discarded rather
+    # than returned to the pool, and the cancellation must propagate
+    # unreplaced.
+    import asyncio as _asyncio
+
+    engine, _, connect_conn, _ = _async_engine()
+    applied = []
+
+    async def cancel_on_restore(sql):
+        if sql == "SELECT @@autocommit":
+            return Mock(scalar=Mock(return_value="0"))
+        applied.append(sql)  # the server applies the statement...
+        if sql == "SET autocommit = 0":
+            raise _asyncio.CancelledError()  # ...then the response is lost to cancellation
+        return Mock(returns_rows=False, rowcount=0)
+
+    connect_conn.exec_driver_sql = AsyncMock(side_effect=cancel_on_restore)
+    connect_conn.invalidate = AsyncMock()
+    client = AsyncClient(logger=Mock())
+    client._engine = engine
+
+    with pytest.raises(_asyncio.CancelledError):
+        await client._execute("data branch merge src into dst")
+
+    connect_conn.invalidate.assert_awaited_once()
+    assert applied == ["SET autocommit = 1", "data branch merge src into dst", "SET autocommit = 0"]
 
 
 @pytest.mark.parametrize(
