@@ -440,7 +440,8 @@ number of rows the transaction deleted or updated in the source table (and at le
 the post-filter over-fetch the vector indexes use), and the sort above applies the
 exact LIMIT and OFFSET to the rows that survive the join. A transaction therefore
 reads its own deletes and updates completely. When those rows cannot be counted (an
-object-level delete in the transaction), the search runs unbounded.
+object-level delete or an ALTER of the table in the transaction), the search keeps the
+post-filter over-fetch and can return fewer than LIMIT rows; it never runs unbounded.
 
 Commits by other transactions that the asynchronous index has not applied yet are
 not counted. During that window the index also lacks the inserted rows and the new
@@ -452,7 +453,9 @@ freshness contract are tracked as #30853.
 Rejected alternatives: proving index freshness before every bounded search with an
 exact-scan fallback; falling back to an unbounded search whenever the searched
 generation is behind the source, which on a large index (88M rows) streams millions
-of candidates into the join while the index is stale anyway; dropping the bound
+of candidates into the join while the index is stale anyway; falling back to an
+unbounded search when the transaction's own deletes cannot be counted, which hits the
+transactions that just deleted whole objects; dropping the bound
 whenever the transaction has written the source table; counting committed deletes
 after the searched generation from the source's change state; and a fixed over-fetch
 alone, which returns too few rows once the transaction has deleted more candidates

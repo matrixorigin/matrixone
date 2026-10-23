@@ -724,7 +724,7 @@ func TestTransactionLocalBound(t *testing.T) {
 	proc := testutil.NewProc(t)
 	sp := sqlexec.NewSqlProcess(proc)
 	src := &plan.TableDef{DbName: "db", Name: "src"}
-	bound := func(rel engine.Relation, readonly bool, resultLimit uint64, def *plan.TableDef) (uint64, bool, error) {
+	bound := func(rel engine.Relation, readonly bool, resultLimit uint64, def *plan.TableDef) (uint64, error) {
 		proc.Base.SessionInfo.StorageEngine = deletedRowsEngine{rel: rel}
 		proc.Base.TxnOperator = workspaceTxn{ws: writableWorkspace{readonly: readonly}}
 		u := &reader{proc: proc, spec: &plan.IndexSearchScan{SourceTableDef: def},
@@ -732,14 +732,12 @@ func TestTransactionLocalBound(t *testing.T) {
 		return u.transactionLocalBound(sp)
 	}
 
-	n, ok, err := bound(deletedRowsRelation{rows: 4, ok: true}, false, 2, src)
+	n, err := bound(deletedRowsRelation{rows: 4, ok: true}, false, 2, src)
 	require.NoError(t, err)
-	require.True(t, ok)
 	require.Equal(t, uint64(6), n, "LIMIT+OFFSET plus every row the transaction deleted")
 
-	n, ok, err = bound(nil, true, 2, src)
+	n, err = bound(nil, true, 2, src)
 	require.NoError(t, err)
-	require.True(t, ok)
 	require.Equal(t, uint64(2), n, "a read-only transaction has no local deletes")
 
 	for _, tc := range []struct {
@@ -756,9 +754,9 @@ func TestTransactionLocalBound(t *testing.T) {
 		{name: "error", rel: deletedRowsRelation{err: errors.New("workspace unavailable")}, limit: 2, def: src, err: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, ok, err := bound(tc.rel, false, tc.limit, tc.def)
+			n, err := bound(tc.rel, false, tc.limit, tc.def)
 			require.Equal(t, tc.err, err != nil)
-			require.False(t, ok)
+			require.Zero(t, n)
 		})
 	}
 }
@@ -785,7 +783,7 @@ func TestApplyTransactionLocalBound(t *testing.T) {
 	require.Equal(t, uint64(11), limit, "the over-fetch already covers the deletes")
 	limit, err = apply(deletedRowsRelation{}, true, 11)
 	require.NoError(t, err)
-	require.Equal(t, uint64(0), limit, "uncounted deletes search unbounded")
+	require.Equal(t, uint64(11), limit, "uncounted deletes keep the over-fetch, never unbounded")
 	limit, err = apply(deletedRowsRelation{rows: 15, ok: true}, false, 1)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), limit, "a covered search has no join to drop candidates")
