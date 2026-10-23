@@ -339,6 +339,88 @@ func TestJSONStringConsumersDoNotTruncateWideJSON(t *testing.T) {
 	)
 }
 
+func TestJSONStringConsumersJSONNullAndMaskedRows(t *testing.T) {
+	visible := []string{`null`, `"a\nb"`}
+	digests := func(hash func([]byte) []byte) []string {
+		return []string{hex.EncodeToString(hash([]byte(visible[0]))), hex.EncodeToString(hash([]byte(visible[1])))}
+	}
+	md5Want := digests(func(v []byte) []byte { sum := md5.Sum(v); return sum[:] })
+	sha1Want := digests(func(v []byte) []byte { sum := sha1.Sum(v); return sum[:] })
+	sha2Want := digests(func(v []byte) []byte { sum := sha256.Sum256(v); return sum[:] })
+	for _, tc := range []struct {
+		name       string
+		fn         executeLogicOfOverload
+		lengthType types.T
+		want       []string
+	}{
+		{name: "md5", fn: Md5, want: md5Want},
+		{name: "sha1", fn: SHA1Func, want: sha1Want},
+		{name: "sha2 integer length", fn: SHA2Func, lengthType: types.T_int64, want: sha2Want},
+		// Retained character-length overloads can still execute directly even
+		// though new bindings normalize the length to the integer overload.
+		{name: "sha2 character length", fn: SHA2StringLengthFunc, lengthType: types.T_varchar, want: sha2Want},
+		{name: "compress", fn: Compress},
+		{name: "quote", fn: Quote, want: []string{"'null'", "'\"a\\\\nb\"'"}},
+		{name: "soundex", fn: Soundex, want: []string{"N400", "A510"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			nativeBefore, heapBefore := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
+			func() {
+				input := newVectorByType(proc.Mp(), types.T_json.ToType(), []string{
+					mustJsonBinaryString(t, `1`), mustJsonBinaryString(t, `1`),
+					mustJsonBinaryString(t, visible[0]), mustJsonBinaryString(t, visible[1]),
+				}, nil)
+				defer input.Free(proc.Mp())
+				input.GetNulls().Add(1)
+				// A masked row must not decode stored JSON at all. Corrupt only
+				// after normal vector admission, as in the malformed-input suite.
+				input.GetBytesAt(0)[0] = 0xff
+				parameters := []*vector.Vector{input}
+				if tc.lengthType != types.T_any {
+					var lengths *vector.Vector
+					if tc.lengthType == types.T_int64 {
+						lengths = newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{256, 256, 256, 256}, nil)
+					} else {
+						lengths = newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"256tail", "256tail", "256tail", "256tail"}, nil)
+					}
+					defer lengths.Free(proc.Mp())
+					parameters = append(parameters, lengths)
+				}
+				resultType := types.T_text.ToType()
+				if tc.name == "compress" {
+					resultType = types.T_blob.ToType()
+				}
+				result := vector.NewFunctionResultWrapper(resultType, proc.Mp())
+				defer result.Free()
+				require.NoError(t, result.PreExtendAndReset(4))
+				require.NoError(t, tc.fn(parameters, result, proc, 4,
+					&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true, true}}))
+				got := result.GetResultVector()
+				require.True(t, got.IsNull(0), "masked malformed JSON must not be evaluated")
+				if tc.name == "quote" {
+					require.False(t, got.IsNull(1))
+					require.Equal(t, "NULL", string(got.GetBytesAt(1)))
+				} else {
+					require.True(t, got.IsNull(1), "SQL NULL must remain SQL NULL")
+				}
+				for i, v := range visible {
+					row := uint64(i + 2)
+					require.False(t, got.IsNull(row), "JSON null is a visible non-SQL-NULL value")
+					if tc.name == "compress" {
+						requireJSONStringConsumerCompression(t, got.GetBytesAt(int(row)), []byte(v))
+					} else {
+						require.Equal(t, tc.want[i], string(got.GetBytesAt(int(row))))
+					}
+				}
+			}()
+			require.Equal(t, nativeBefore, proc.Mp().CurrNB())
+			require.Equal(t, heapBefore, proc.Mp().OnHeapCurrNB())
+		})
+	}
+}
+
 func TestJSONStringConsumerBinaryReturnType(t *testing.T) {
 	binaryType := types.T_blob.ToType()
 	for _, name := range []string{"concat", "concat_ws", "elt"} {
@@ -420,6 +502,47 @@ func TestJSONStringConsumersRejectMalformedStoredJSON(t *testing.T) {
 			},
 			jsonAt: 1,
 			fn:     Elt,
+		},
+		{
+			name:   "md5",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), []string{validJSON}, nil)},
+			fn:     Md5,
+		},
+		{
+			name:   "sha1",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), []string{validJSON}, nil)},
+			fn:     SHA1Func,
+		},
+		{
+			name: "sha2 integer length",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{validJSON}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{256}, nil),
+			},
+			fn: SHA2Func,
+		},
+		{
+			name: "sha2 character length",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{validJSON}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"256tail"}, nil),
+			},
+			fn: SHA2StringLengthFunc,
+		},
+		{
+			name:   "compress",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), []string{validJSON}, nil)},
+			fn:     Compress,
+		},
+		{
+			name:   "quote",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), []string{validJSON}, nil)},
+			fn:     Quote,
+		},
+		{
+			name:   "soundex",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), []string{validJSON}, nil)},
+			fn:     Soundex,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
