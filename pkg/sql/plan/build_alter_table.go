@@ -348,6 +348,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 	}
 
 	for ordinal, spec := range validAlterSpecs {
+		if isIgnoredStorageTableOption(spec) {
+			continue
+		}
 		switch option := spec.(type) {
 		case *tree.AlterOptionAdd:
 			switch optionAdd := option.Def.(type) {
@@ -1633,6 +1636,25 @@ func allowTempTableAlter(stmt *tree.AlterTable) bool {
 		}
 	}
 	return true
+}
+
+// isIgnoredStorageTableOption reports MySQL storage-engine table options that
+// CREATE TABLE accepts and ignores (see buildCreateTable); ALTER TABLE ignores
+// them the same way. CHARSET/COLLATE/COMMENT/AUTO_INCREMENT have real effects
+// and are handled separately.
+func isIgnoredStorageTableOption(option tree.AlterTableOption) bool {
+	switch option.(type) {
+	case *tree.TableOptionAUTOEXTEND_SIZE, *tree.TableOptionAvgRowLength,
+		*tree.TableOptionChecksum, *tree.TableOptionCompression,
+		*tree.TableOptionConnection, *tree.TableOptionDataDirectory, *tree.TableOptionIndexDirectory,
+		*tree.TableOptionDelayKeyWrite, *tree.TableOptionEncryption, *tree.TableOptionEngine, *tree.TableOptionEngineAttr,
+		*tree.TableOptionKeyBlockSize, *tree.TableOptionMaxRows, *tree.TableOptionMinRows, *tree.TableOptionPackKeys,
+		*tree.TableOptionPassword, *tree.TableOptionRowFormat, *tree.TableOptionStartTrans, *tree.TableOptionSecondaryEngineAttr,
+		*tree.TableOptionStatsAutoRecalc, *tree.TableOptionStatsPersistent, *tree.TableOptionStatsSamplePages,
+		*tree.TableOptionTablespace, *tree.TableOptionUnion:
+		return true
+	}
+	return false
 }
 
 func ResolveAlterTableAlgorithm(

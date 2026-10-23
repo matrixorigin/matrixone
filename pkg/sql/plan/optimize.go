@@ -27,7 +27,6 @@ var prepareRules = []Rule{}
 func init() {
 	defaultRules = []Rule{
 		rule.NewConstantFold(false),
-		// rule.NewPredicatePushdown(),
 	}
 	prepareRules = []Rule{
 		rule.NewConstantFold(true),

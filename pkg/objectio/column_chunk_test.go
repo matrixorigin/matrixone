@@ -31,10 +31,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
 func TestChunkedColumnRoundTripAndRangedRead(t *testing.T) {
-	ctx := context.Background()
+	var attribution perfcounter.CounterSet
+	ctx := perfcounter.WithCounterSet(context.Background(), &attribution)
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
 
@@ -54,10 +56,13 @@ func TestChunkedColumnRoundTripAndRangedRead(t *testing.T) {
 	require.Equal(t, uint32(rows), totalRows)
 	require.Greater(t, len(metas), 1)
 
-	cacheData, err := constructorFactory(int64(source.Size()), compress.Lz4Chunked)(
+	cacheData, err := columnCacheConstructorFactory(int64(source.Size()), compress.Lz4Chunked)(
 		ctx, bytes.NewReader(encoded), encoded, fileservice.DefaultCacheDataAllocator(),
 	)
 	require.NoError(t, err)
+	require.EqualValues(t, 1, attribution.FileService.ColumnConstruction.Chunked.Calls.Load())
+	require.Equal(t, cacheData.Size(), attribution.FileService.ColumnConstruction.Chunked.Bytes.Load())
+	require.Zero(t, attribution.FileService.ColumnConstruction.Chunked.Errors.Load())
 	decodedObject, err := DecodeCached(cacheData)
 	require.NoError(t, err)
 	decoded := decodedObject.(*vector.Vector)
