@@ -418,7 +418,7 @@ func TestPreparedWindowRangeFrameMarkers(t *testing.T) {
 	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
 	require.NoError(t, err)
 	window := firstWindowSpec(t, queryPlan)
-	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int32, 1)
+	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int64, 1)
 	require.Equal(t, planpb.FrameBound_CURRENT_ROW, window.Frame.End.Type)
 	require.Nil(t, window.Frame.End.Val)
 }
@@ -436,8 +436,8 @@ func TestPreparedWindowRangeFrameMarkersInBothBounds(t *testing.T) {
 	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
 	require.NoError(t, err)
 	window := firstWindowSpec(t, queryPlan)
-	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int32, 1)
-	requirePreparedWindowFrameParam(t, window.Frame.End.Val, types.T_int32, 2)
+	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int64, 1)
+	requirePreparedWindowFrameParam(t, window.Frame.End.Val, types.T_int64, 2)
 }
 
 func TestPreparedWindowRangeFrameMarkerRequiresNumericOrder(t *testing.T) {

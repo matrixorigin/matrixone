@@ -1,10 +1,7 @@
 drop database if exists window_numeric_range_wide_30563;
 create database window_numeric_range_wide_30563;
 use window_numeric_range_wide_30563;
-create table tiny(
-k tinyint,
-v int
-);
+create table tiny(k tinyint, v int);
 insert into tiny values
 (1,10),
 (2,20),
@@ -31,9 +28,7 @@ k    mixed_c
 1    3
 2    3
 3    3
-create table small(
-k smallint
-);
+create table small(k smallint);
 insert into small values
 (1),
 (2),
@@ -45,9 +40,7 @@ k    preceding_c
 1    1
 2    2
 3    3
-create table integers(
-k int
-);
+create table integers(k int);
 insert into integers values
 (1),
 (2),
