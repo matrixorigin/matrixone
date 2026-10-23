@@ -456,9 +456,11 @@ func TestTableDumpDefaultLocales(t *testing.T) {
 func TestTableDumpHistoricalJapaneseMonthAbbrev(t *testing.T) {
 	for _, tc := range []struct {
 		name, declaration, currentValue, oldValue, forgedValue, readingLocale string
+		increment, readingZoneSeconds                                         int64
 	}{
-		{"constant", "varchar(64) default (date_format('2024-03-01','%b'))", " 3月", "3月", "4月", "ja_JP"},
-		{"division_and_zone", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b')))", "0.3333: 3月", "0.3333:3月", "0.3333:4月", "de_DE"},
+		{"constant", "varchar(64) default (date_format('2024-03-01','%b'))", " 3月", "3月", "4月", "ja_JP", 4, 0},
+		{"division_and_zone", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b')))", "0.3333: 3月", "0.3333:3月", "0.3333:4月", "de_DE", 4, 0},
+		{"cross_zone", "varchar(200) default (concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1709251200),'%b')))", "0: 3月", "0:3月", "0:4月", "ja_JP", 0, -8 * 3600},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := newPlanTestProcess(t)
@@ -477,7 +479,7 @@ func TestTableDumpHistoricalJapaneseMonthAbbrev(t *testing.T) {
 				case "lc_time_names":
 					return locale, nil
 				case "div_precision_increment":
-					return int64(4), nil
+					return tc.increment, nil
 				case "explicit_defaults_for_timestamp":
 					return true, nil
 				}
@@ -502,14 +504,21 @@ func TestTableDumpHistoricalJapaneseMonthAbbrev(t *testing.T) {
 			before := proto.Clone(&persisted)
 			locale = tc.readingLocale
 			proc.GetSessionInfo().LCTimeNames = locale
+			readingZone := time.UTC
+			if tc.readingZoneSeconds != 0 {
+				readingZone = time.FixedZone("reading zone", int(tc.readingZoneSeconds))
+			}
+			proc.GetSessionInfo().TimeZone = readingZone
 			for _, target := range []*planpb.TableDef{&persisted, current} {
 				sensitive, err := AnalyzeTableDumpBindings(compiler, target, &persisted)
 				require.NoError(t, err)
 				require.True(t, sensitive)
 			}
+			_, err = AnalyzeTableDumpBindings(compiler, current, current)
+			require.NoError(t, err)
 			require.True(t, proto.Equal(before, &persisted))
 			require.Equal(t, locale, proc.GetSessionInfo().LCTimeNames)
-			require.Same(t, time.UTC, proc.GetSessionInfo().TimeZone)
+			require.Same(t, readingZone, proc.GetSessionInfo().TimeZone)
 
 			forged := proto.Clone(&persisted).(*planpb.TableDef)
 			forged.Cols[0].Default.Expr.GetLit().Value = &planpb.Literal_Sval{Sval: tc.forgedValue}
