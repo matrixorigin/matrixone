@@ -72,28 +72,51 @@ func (ctr *container) outputRowBytes(join *HashJoin, leftRow, rightBatch, rightR
 	return total
 }
 
-func (ctr *container) boundedMatchCount(join *HashJoin, leftRow int64, limit int) int {
-	if ctr.outputTarget <= 0 {
-		return limit
+// fixedOutputRowWidth is computed once per controlled Prepare. A zero width
+// falls back to the general path (including zero-column projections).
+func (join *HashJoin) fixedOutputRowWidth() (int64, bool) {
+	width := int64(0)
+	for _, column := range join.ResultCols {
+		var typ types.Type
+		if column.Rel == 0 {
+			typ = join.LeftTypes[column.Pos]
+		} else {
+			typ = join.RightTypes[column.Pos]
+		}
+		if typ.IsVarlen() || int64(typ.TypeSize()) > math.MaxInt64-width {
+			return 0, false
+		}
+		width += int64(typ.TypeSize())
 	}
-	bytes := ctr.outputBytes
+	return width, true
+}
+
+// Return the logical bytes along with the selected count so bulk append does
+// not traverse the same varlen projected values a second time.
+func (ctr *container) boundedMatchCount(join *HashJoin, leftRow int64, limit int) (int, int64) {
+	if ctr.outputRowWidth > 0 {
+		count := min(limit, int(max(int64(1), (ctr.outputTarget-ctr.outputBytes)/ctr.outputRowWidth)))
+		return count, int64(count) * ctr.outputRowWidth
+	}
+	bytes := int64(0)
 	count := 0
 	for count < limit {
 		selected := ctr.sels[count]
 		next := ctr.outputRowBytes(join, leftRow, int64(selected/8192), int64(selected%8192), true)
-		if count > 0 && next > ctr.outputTarget-bytes {
+		if count > 0 && next > ctr.outputTarget-ctr.outputBytes-bytes {
 			break
 		}
 		bytes += next
 		count++
-		if bytes >= ctr.outputTarget {
+		if bytes >= ctr.outputTarget-ctr.outputBytes {
 			break
 		}
 	}
-	return max(count, 1)
+	return count, bytes
 }
 
-func preExtendJoinValue(dst, src *vector.Vector, row int64, proc *process.Process) error {
-	area := src.WindowSize(int(row), int(row)+1) - int64(src.GetType().TypeSize())
-	return dst.PreExtendWithArea(1, int(area), proc.Mp())
+func preExtendJoinValue(dst, src *vector.Vector, row int64, proc *process.Process) (int64, error) {
+	bytes := src.WindowSize(int(row), int(row)+1)
+	area := bytes - int64(src.GetType().TypeSize())
+	return bytes, dst.PreExtendWithArea(1, int(area), proc.Mp())
 }

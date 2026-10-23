@@ -138,9 +138,9 @@ func TestSkewBoundedAllJoinSemantics(t *testing.T) {
 					b.GetCol().RelPos = 1
 					join.NonEqCond = &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "<"}, Args: []*plan.Expr{a, b}}}}
 				}
+				proc.Base.ImportMemory = &process.ImportMemory{UnitBytes: 1, JoinInputBytes: 8 << 20}
 				require.NoError(t, join.Prepare(proc))
 				defer join.Free(proc, false, nil)
-				join.ctr.outputTarget = 1   // force every row over a distinct Call boundary
 				join.ctr.spillThreshold = 2 // one build row per chunk; duplicate keys cross chunks
 				fs, err := proc.GetSpillFileService()
 				require.NoError(t, err)
@@ -324,9 +324,9 @@ func TestSkewExpressionKeysKeepOriginalSemantics(t *testing.T) {
 			require.NoError(t, err)
 			expr := &plan.Expr{Typ: plan.Type{Id: int32(outputType)}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: name}, Args: args}}}
 			join := &HashJoin{JoinType: plan.Node_LEFT, LeftTypes: []types.Type{types.T_int32.ToType(), types.T_int32.ToType()}, RightTypes: []types.Type{types.T_int32.ToType(), types.T_int32.ToType()}, EqConds: [][]*plan.Expr{{expr}, {expr}}, ResultCols: []colexec.ResultPos{colexec.NewResultPos(0, 1), colexec.NewResultPos(1, 1)}}
+			proc.Base.ImportMemory = &process.ImportMemory{UnitBytes: 1, JoinInputBytes: 8 << 20}
 			require.NoError(t, join.Prepare(proc))
 			defer join.Free(proc, false, nil)
-			join.ctr.outputTarget = 1
 			join.ctr.spillThreshold = 2
 			envelope, ok := join.InputEnvelope(1 << 20)
 			require.True(t, ok)

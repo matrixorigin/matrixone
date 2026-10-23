@@ -211,6 +211,13 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		ctr.releaseMemory(ctr.memoryReserved)
 		return nil
 	}
+	// Ordinary broadcast builds have no consumer for copy forecasts or retained
+	// allocation accounting. Shuffle/import spill budgets remain active even
+	// when the execution has no import-memory view.
+	accountBatches := ctr.spillAllowed && hashBuild.NeedHashMap
+	if accountBatches {
+		ctr.hashmapBuilder.Batches.TrackAllocation()
+	}
 	for {
 		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, analyzer)
 		if err != nil {
@@ -224,7 +231,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		}
 		analyzer.Alloc(int64(result.Batch.Size()))
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
-		if !spillMode {
+		if !spillMode && accountBatches {
 			growth := ctr.hashmapBuilder.Batches.AppendAllocation(result.Batch)
 			if hashBuild.shouldSpillBeforeCopy(result.Batch, growth) {
 				if err := beginSpill(); err != nil {

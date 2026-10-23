@@ -59,6 +59,7 @@ func TestJoinBatchesFullCopyAllocation(t *testing.T) {
 			}
 			src.SetRowCount(colexec.DefaultBatchSize)
 			var copied colexec.Batches
+			copied.TrackAllocation()
 			defer copied.Clean(mp)
 			// Repeated copies also cross the list's initial sixteen-entry
 			// capacity. Compare the forecast with independent owned storage.
@@ -66,6 +67,7 @@ func TestJoinBatchesFullCopyAllocation(t *testing.T) {
 				beforeOwned, beforePool := copied.Allocated(), mp.AllocatedBytes()
 				promise := copied.AppendAllocation(src)
 				require.NoError(t, copied.CopyIntoBatches(src, proc))
+				require.Equal(t, copied.Allocated(), copied.RetainedBytes())
 				require.LessOrEqual(t, copied.Allocated()-beforeOwned, promise, "owned growth: %s copy %d", mode, step)
 				require.LessOrEqual(t, mp.AllocatedBytes()-beforePool, promise, "pool growth: %s copy %d", mode, step)
 			}
@@ -81,6 +83,7 @@ func TestJoinBatchesPartialCopyAllocation(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	var copied colexec.Batches
+	copied.TrackAllocation()
 	defer copied.Clean(proc.Mp())
 	for _, rows := range []int{8191, 8193, 63, 65} {
 		src := batch.NewOffHeapWithSize(2)
@@ -96,6 +99,7 @@ func TestJoinBatchesPartialCopyAllocation(t *testing.T) {
 		before := copied.Allocated()
 		promise := copied.AppendAllocation(src)
 		require.NoError(t, copied.CopyIntoBatches(src, proc))
+		require.Equal(t, copied.Allocated(), copied.RetainedBytes())
 		require.LessOrEqual(t, copied.Allocated()-before, promise, "partial tail plus new windows: %d", rows)
 		src.Clean(proc.Mp())
 	}
@@ -116,11 +120,13 @@ func TestJoinBatchesGrowthCoversBitmapCapacity(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(src.Vecs[1], []byte("a referenced payload beyond inline varlena size"), true, proc.Mp()))
 	src.SetRowCount(1)
 	var copied colexec.Batches
+	copied.TrackAllocation()
 	defer copied.Clean(proc.Mp())
 	for row := 0; row < 130; row++ {
 		before := copied.Allocated()
 		growth := copied.AppendAllocation(src)
 		require.NoError(t, copied.CopyIntoBatches(src, proc))
+		require.Equal(t, copied.Allocated(), copied.RetainedBytes())
 		require.LessOrEqual(t, copied.Allocated(), before+growth, "full new allocation bound must include bitmap word expansion at row %d", row)
 	}
 	var bitmapBytes int

@@ -225,6 +225,7 @@ func (hashJoin *HashJoin) loadSkewChunk(proc *process.Process) error {
 	if err := builder.Prepare(hashJoin.EqConds[1], -1, -1, nil, proc); err != nil {
 		return err
 	}
+	builder.Batches.TrackAllocation()
 	limit := int64(64 << 20)
 	if proc.Base.ImportMemory != nil {
 		limit = proc.Base.ImportMemory.UnitBytes
@@ -259,7 +260,7 @@ func (hashJoin *HashJoin) loadSkewChunk(proc *process.Process) error {
 			return err
 		}
 		growth := builder.Batches.AppendAllocation(view)
-		current := builder.Batches.Allocated()
+		current := builder.Batches.RetainedBytes()
 		rowKey, keyOK := hashbuild.EncodedKeyRowBytes(hashJoin.EqConds[1], skew.buildFrame, skew.buildRow)
 		nextKeyWindow := keyWindow
 		if builder.InputBatchRowCount%hashmap.UnitLimit == 0 {
@@ -387,16 +388,21 @@ func (hashJoin *HashJoin) appendSkewBuildRow(proc *process.Process, row int64) e
 			if err := ctr.resBat.Vecs[col].UnionNull(proc.Mp()); err != nil {
 				return err
 			}
-			ctr.outputBytes += int64(hashJoin.LeftTypes[projection.Pos].TypeSize())
+			if ctr.outputTarget > 0 {
+				ctr.outputBytes += int64(hashJoin.LeftTypes[projection.Pos].TypeSize())
+			}
 		} else {
 			vec := ctr.rightBats[index].Vecs[projection.Pos]
-			if err := preExtendJoinValue(ctr.resBat.Vecs[col], vec, offset, proc); err != nil {
-				return err
+			if ctr.outputTarget > 0 {
+				bytes, err := preExtendJoinValue(ctr.resBat.Vecs[col], vec, offset, proc)
+				if err != nil {
+					return err
+				}
+				ctr.outputBytes += bytes
 			}
 			if err := ctr.resBat.Vecs[col].UnionOne(vec, offset, proc.Mp()); err != nil {
 				return err
 			}
-			ctr.outputBytes += vec.WindowSize(int(offset), int(offset)+1)
 		}
 	}
 	return nil

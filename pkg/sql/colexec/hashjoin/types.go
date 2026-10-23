@@ -112,6 +112,7 @@ type container struct {
 	joinInputLeases [2]*rscthrottler.InputLease
 	outputLease     *rscthrottler.InputLease
 	outputTarget    int64
+	outputRowWidth  int64
 	outputBytes     int64
 	maxAllocSize    int64
 
