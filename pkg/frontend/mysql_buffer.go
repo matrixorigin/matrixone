@@ -163,6 +163,7 @@ func (block *MemBlock) Adjust() {
 type Conn struct {
 	id                    uint64
 	conn                  net.Conn
+	livenessProbe         atomic.Pointer[socketLivenessProbe]
 	localAddr, remoteAddr string
 	sequenceId            uint8
 	header                [4]byte
@@ -234,6 +235,7 @@ func NewIOSession(conn net.Conn, pu *config.ParameterUnit, service string) (_ *C
 
 	c.curHeader = c.fixBuf.data[:HeaderLengthOfTheProtocol]
 	c.curBuf = &c.fixBuf
+	c.livenessProbe.Store(newSocketLivenessProbe(conn))
 	return c, err
 }
 
@@ -247,6 +249,7 @@ func (c *Conn) RawConn() net.Conn {
 
 func (c *Conn) UseConn(conn net.Conn) {
 	c.conn = conn
+	c.livenessProbe.Store(newSocketLivenessProbe(conn))
 }
 
 func (c *Conn) freeDynamicBuffUnsafe() {

@@ -52,6 +52,10 @@ type RoutineManager struct {
 	// reportSystemStatusTime is the time when report system status last time.
 	reportSystemStatusTime atomic.Pointer[time.Time]
 	cancel                 context.CancelFunc
+
+	// Serialize probes and reuse their snapshot without retaining closed sessions.
+	disconnectProbeMu      sync.Mutex
+	disconnectProbeScratch []activeClientRequest
 }
 
 type AccountRoutineManager struct {
