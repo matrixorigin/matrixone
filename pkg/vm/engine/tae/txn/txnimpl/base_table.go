@@ -16,10 +16,7 @@ package txnimpl
 
 import (
 	"context"
-	"sync"
 	"time"
-
-	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -396,25 +392,6 @@ func incrementalObjectGroupName(group catalog.ObjectListGroup) string {
 	}
 }
 
-func prePrepareObjectKind(obj *catalog.ObjectEntry) string {
-	if obj.IsAppendable() {
-		return "aobject"
-	}
-	return "naobject"
-}
-
-func prePrepareObjectHasDrop(group catalog.ObjectListGroup) string {
-	switch group {
-	case catalog.ObjectListGroupAppendableCreateWithDrop,
-		catalog.ObjectListGroupAppendableDrop,
-		catalog.ObjectListGroupNonAppendableCreateWithDrop,
-		catalog.ObjectListGroupNonAppendableDrop:
-		return "true"
-	default:
-		return "false"
-	}
-}
-
 // A drop entry represents the old physical object.  If the drop belongs to
 // the reader transaction itself, that old object is no longer a competing
 // source for incremental dedup; the transaction may be publishing its
@@ -422,72 +399,6 @@ func prePrepareObjectHasDrop(group catalog.ObjectListGroup) string {
 // transaction conflict with its own rewrite.
 func skipOwnDroppedObject(obj *catalog.ObjectEntry, txn txnif.TxnReader) bool {
 	return obj.IsDEntry() && obj.DeleteNode.IsSameTxn(txn)
-}
-
-func observeIncrementalObjectScanStats(metricPhase string, isTombstone bool, stats incrementalObjectScanStats) {
-	observePrePrepareDedupStepDuration(metricPhase, isTombstone, "object_list_scan", stats.scan)
-	observePrePrepareDedupStepDuration(metricPhase, isTombstone, "object_entry_filter", stats.filter)
-	observePrePrepareDedupStepDuration(metricPhase, isTombstone, "object_filter_created_at", stats.createdAt)
-	observePrePrepareDedupStepDuration(metricPhase, isTombstone, "object_filter_deleted_at", stats.deletedAt)
-	observePrePrepareDedupStepDuration(metricPhase, isTombstone, "object_filter_visible_by_ts", stats.visibleByTS)
-	observePrePrepareDedupStepDuration(metricPhase, isTombstone, "object_filter_group_state", stats.groupState)
-	observePrePrepareDedupStepDuration(metricPhase, isTombstone, "object_max_commit_lookup", stats.maxCommit)
-	observePrePrepareDedupStepDuration(metricPhase, isTombstone, "object_operation", stats.operation)
-
-	// The iterator duration includes callback execution. Subtracting the
-	// measured entry work leaves the time spent in the ObjectList traversal
-	// itself (tree navigation, callback dispatch, and group boundaries).
-	iterator := stats.scan - stats.filter - stats.maxCommit - stats.operation
-	if iterator > 0 {
-		observePrePrepareDedupStepDuration(metricPhase, isTombstone, "object_list_iterator", iterator)
-	}
-}
-
-type objectStepMetricKey struct {
-	phase string
-	typ   string
-	group string
-	step  string
-}
-
-var objectStepObservers sync.Map // objectStepMetricKey -> prometheus.Observer
-
-func observeIncrementalObjectGroupScanStats(
-	metricPhase string,
-	isTombstone bool,
-	group catalog.ObjectListGroup,
-	stats incrementalObjectScanStats,
-) {
-	typ := "data"
-	if isTombstone {
-		typ = "tombstone"
-	}
-	groupName := incrementalObjectGroupName(group)
-	observeObjectStep := func(step string, duration time.Duration) {
-		key := objectStepMetricKey{metricPhase, typ, groupName, step}
-		observer, ok := objectStepObservers.Load(key)
-		if !ok {
-			observer, _ = objectStepObservers.LoadOrStore(key,
-				v2.TxnTNPrePrepareObjectStepDurationHistogram.WithLabelValues(metricPhase, typ, groupName, step))
-		}
-		observer.(prometheus.Observer).Observe(duration.Seconds())
-	}
-	observeObjectStep("object_list_scan", stats.scan)
-	observeObjectStep("object_list_iterator", maxDuration(0, stats.scan-stats.filter-stats.maxCommit-stats.operation))
-	observeObjectStep("object_entry_filter", stats.filter)
-	observeObjectStep("object_filter_created_at", stats.createdAt)
-	observeObjectStep("object_filter_deleted_at", stats.deletedAt)
-	observeObjectStep("object_filter_visible_by_ts", stats.visibleByTS)
-	observeObjectStep("object_filter_group_state", stats.groupState)
-	observeObjectStep("object_max_commit_lookup", stats.maxCommit)
-	observeObjectStep("object_operation", stats.operation)
-}
-
-func maxDuration(left, right time.Duration) time.Duration {
-	if left > right {
-		return left
-	}
-	return right
 }
 
 func foreachIncrementalObjectWithStats(

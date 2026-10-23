@@ -74,21 +74,6 @@ func dedupMetricPhase(phase string) string {
 	}
 }
 
-func observePrePrepareDedupStep(phase string, isTombstone bool, step string, start time.Time) {
-	observePrePrepareDedupStepDuration(phase, isTombstone, step, time.Since(start))
-}
-
-func observePrePrepareDedupStepDuration(phase string, isTombstone bool, step string, duration time.Duration) {
-	if duration <= 0 {
-		return
-	}
-	typ := "data"
-	if isTombstone {
-		typ = "tombstone"
-	}
-	v2.TxnTNPrePrepareDeduplicateStepDurationHistogram.WithLabelValues(phase, typ, step).Observe(duration.Seconds())
-}
-
 // debugSkipFreezePhaseTransfer is a test-only flag. When enabled,
 // TransferDeletes is skipped during the Freeze phase so that the
 // PrePrepare phase is the only transfer pass. This makes vector
