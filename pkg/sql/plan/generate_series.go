@@ -244,7 +244,19 @@ func generateSeriesMetadataSourceExpr(expr *plan.Expr) *plan.Expr {
 }
 
 func generateSeriesSourceParamPosition(expr *plan.Expr) (int, bool) {
-	return preparedRuntimeSourceParamPosition(generateSeriesMetadataSourceExpr(expr))
+	source := generateSeriesMetadataSourceExpr(expr)
+	if source == nil {
+		return 0, false
+	}
+	if param := source.GetP(); param != nil && param.Pos >= 0 {
+		return int(param.Pos), true
+	}
+	if literal := source.GetLit(); literal != nil {
+		if param := literal.GetSrc().GetP(); param != nil && param.Pos >= 0 {
+			return int(param.Pos), true
+		}
+	}
+	return 0, false
 }
 
 func datetimeLiteralScale(value string) int32 {

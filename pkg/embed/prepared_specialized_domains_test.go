@@ -824,6 +824,44 @@ func TestPreparedSpecializedDomains(t *testing.T) {
 			exec(t, "set @step='1 day'")
 			require.Equal(t, want, query(t, "execute gs_fixed_step using @step"))
 		})
+		t.Run("series_explicit_char_cast_numeric_wire_boundary", func(t *testing.T) {
+			readResult := func(query string, args ...any) (string, [][]string) {
+				t.Helper()
+				rows, queryErr := conn.QueryContext(ctx, query, args...)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				columns, queryErr := rows.ColumnTypes()
+				require.NoError(t, queryErr)
+				require.Len(t, columns, 1)
+				var got [][]string
+				for rows.Next() {
+					var value string
+					require.NoError(t, rows.Scan(&value))
+					got = append(got, []string{value})
+				}
+				require.NoError(t, rows.Err())
+				return columns[0].DatabaseTypeName(), got
+			}
+			wantType, want := readResult(
+				"select result from generate_series(cast(20240101 as char), '2024-01-03', '1 day') g order by result")
+			stmt, err := conn.PrepareContext(ctx,
+				"select result from generate_series(cast(? as char), '2024-01-03', '1 day') g order by result")
+			require.NoError(t, err)
+			defer stmt.Close()
+			gotType, got := readResult(
+				"select result from generate_series(cast(? as char), '2024-01-03', '1 day') g order by result",
+				int64(20240101))
+			require.Equal(t, wantType, gotType, "explicit CAST AS CHAR must preserve the result domain")
+			require.Equal(t, want, got, "explicit CAST AS CHAR must preserve the string endpoint domain")
+
+			stringWantType, stringWant := readResult(
+				"select result from generate_series(cast('20240101' as char), '2024-01-03', '1 day') g order by result")
+			stringGotType, stringGot := readResult(
+				"select result from generate_series(cast(? as char), '2024-01-03', '1 day') g order by result",
+				"20240101")
+			require.Equal(t, stringWantType, stringGotType, "the reused explicit cast keeps its declared result domain")
+			require.Equal(t, stringWant, stringGot, "changing the wire type does not reinterpret the explicit CHAR cast")
+		})
 		t.Run("series_binary_domain_and_scale_reuse", func(t *testing.T) {
 			stmt, err := conn.PrepareContext(ctx,
 				"select result from generate_series(?,?,?) g order by result")

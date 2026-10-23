@@ -60,6 +60,33 @@ func TestPreparedGenerateSeriesParameterInfo(t *testing.T) {
 		prepared.GetDcl().GetPrepare().Plan)
 	require.True(t, parameterized)
 	require.Empty(t, positions)
+
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "explicit char endpoint",
+			sql:  "prepare series_explicit_char from 'select result from generate_series(cast(? as char), ''2024-01-03'', ''1 day'') g'",
+		},
+		{
+			name: "explicit signed endpoint",
+			sql:  "prepare series_explicit_signed from 'select result from generate_series(cast(? as signed), cast(20240103 as signed), cast(1 as signed)) g'",
+		},
+		{
+			name: "explicit datetime endpoint",
+			sql:  "prepare series_explicit_datetime from 'select result from generate_series(cast(? as datetime(3)), cast(''2024-01-03 00:00:00.000'' as datetime(3)), ''1 day'') g'",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
+			require.NoError(t, err)
+			positions, parameterized := PreparedPlanGenerateSeriesParameterInfo(
+				prepared.GetDcl().GetPrepare().Plan)
+			require.False(t, parameterized, "an explicit cast fixes the endpoint domain")
+			require.Empty(t, positions)
+		})
+	}
 }
 
 func TestGenerateSeriesDatetimeScale(t *testing.T) {
