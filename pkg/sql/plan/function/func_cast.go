@@ -1288,13 +1288,16 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 		s := vector.GenerateFunctionFixedTypeParameter[float64](from)
 		err = float64ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_decimal64:
-		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
+		result.UseOptFunctionParamFrame(1)
+		s := vector.OptGetParamFromWrapper[types.Decimal64](result, 0, from)
 		err = decimal64ToOthers(execProc, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
 	case types.T_decimal128:
-		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
+		result.UseOptFunctionParamFrame(1)
+		s := vector.OptGetParamFromWrapper[types.Decimal128](result, 0, from)
 		err = decimal128ToOthers(execProc, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
 	case types.T_decimal256:
-		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from)
+		result.UseOptFunctionParamFrame(1)
+		s := vector.OptGetParamFromWrapper[types.Decimal256](result, 0, from)
 		err = decimal256ToOthersWithProc(execProc, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
 	case types.T_date:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Date](from)
@@ -1388,13 +1391,16 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 		s := vector.GenerateFunctionFixedTypeParameter[float64](from)
 		return floatToDecimal256(s, rs, length, selectList)
 	case types.T_decimal64:
-		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
+		rs.UseOptFunctionParamFrame(1)
+		s := vector.OptGetParamFromWrapper[types.Decimal64](rs, 0, from)
 		return decimal64ToDecimal256Array(s, rs, length, selectList)
 	case types.T_decimal128:
-		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
+		rs.UseOptFunctionParamFrame(1)
+		s := vector.OptGetParamFromWrapper[types.Decimal128](rs, 0, from)
 		return decimal128ToDecimal256(s, rs, length, selectList)
 	case types.T_decimal256:
-		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from)
+		rs.UseOptFunctionParamFrame(1)
+		s := vector.OptGetParamFromWrapper[types.Decimal256](rs, 0, from)
 		if s.GetType().Scale == toType.Scale && s.GetType().Width <= toType.Width {
 			if err := rs.DupFromParameter(s, length); err != nil {
 				return err
@@ -2520,6 +2526,17 @@ func decimal64ToOthers(proc *process.Process,
 		return decimal64ToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
+		if length == 0 {
+			return nil
+		}
+		if length == 1 {
+			if _, isNull := source.GetValue(0); isNull {
+				return rs.Append(types.Decimal128{}, true)
+			}
+		} else if decimalCastAllNull(source.GetSourceVector(), uint64(length)) {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
 		return decimal64ToDecimal128Array(source, rs, length, selectList)
 	case types.T_decimal256:
 		rs := vector.MustFunctionResult[types.Decimal256](result)

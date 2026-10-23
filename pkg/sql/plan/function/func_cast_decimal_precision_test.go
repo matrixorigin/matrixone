@@ -510,6 +510,7 @@ func TestDecimalCastNullDomain(t *testing.T) {
 		{"256", types.New(types.T_decimal256, 4, 2), types.New(types.T_decimal256, 5, 4), []types.Decimal256{{}, {}, {B0_63: 9999}}, []types.Decimal256{{}, {}}},
 		{"64to256", types.New(types.T_decimal64, 4, 2), types.New(types.T_decimal256, 5, 4), []types.Decimal64{0, 0, 9999}, []types.Decimal256{{}, {}}},
 		{"128to256", types.New(types.T_decimal128, 4, 2), types.New(types.T_decimal256, 5, 4), []types.Decimal128{{}, {}, {B0_63: 9999}}, []types.Decimal256{{}, {}}},
+		{"64to128", types.New(types.T_decimal64, 4, 2), types.New(types.T_decimal128, 5, 4), []types.Decimal64{0, 0, 9999}, []types.Decimal128{{}, {}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
@@ -534,6 +535,41 @@ func TestDecimalCastNullDomain(t *testing.T) {
 			ok, info = fc.Run()
 			require.True(t, ok, info)
 		})
+	}
+}
+
+func TestDecimalCastParameterRebinding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	sourceType, targetType := types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal128, 22, 4)
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(sourceType, []types.Decimal128{{B0_63: 100}}, nil), NewFunctionTestInput(targetType, []types.Decimal128{}, nil)}, NewFunctionTestResult(targetType, false, []types.Decimal128{{B0_63: 10000}}, nil), NewCast)
+	t.Cleanup(fc.Free)
+	for _, tc := range []struct {
+		scale             int32
+		coefficient, want uint64
+		overflow          bool
+	}{
+		{2, 100, 10000, false},
+		{2, 200, 20000, false},
+		{0, 200, 2000000, false},
+		{0, 1000000000000000000, 0, true},
+		{2, 100, 10000, false},
+	} {
+		typ := types.New(types.T_decimal128, 20, tc.scale)
+		replacement, err := vector.NewConstFixed(typ, types.Decimal128{B0_63: tc.coefficient}, 1, proc.Mp())
+		require.NoError(t, err)
+		replacement.SetClass(vector.FLAT)
+		previous := fc.parameters[0]
+		fc.parameters[0] = replacement
+		previous.Free(proc.Mp())
+		if tc.overflow {
+			_, err := fc.DebugRun()
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+		} else {
+			fc.expected.wanted = []types.Decimal128{{B0_63: tc.want}}
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		}
 	}
 }
 
