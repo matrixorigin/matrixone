@@ -1141,6 +1141,13 @@ func viewSelectExprsWithExpandedStableHeadings(
 		if i >= len(originalExprs) {
 			continue
 		}
+		// A resolved simple expression can carry a synthetic heading alias from
+		// binding. Keep the original SQL shape when that alias is not needed;
+		// retain aliases only when they stabilize a changed expression heading.
+		if (originalExprs[i].As == nil || originalExprs[i].As.Empty()) &&
+			stableExprs[i].As != nil && !viewExprNeedsHeadingAlias(stableExprs[i].Expr, stableExprs[i].As.Origin()) {
+			stableExprs[i].As = nil
+		}
 		if rewriteClonedExprSubqueriesWithExpandedStars(
 			reflect.ValueOf(originalExprs[i].Expr),
 			reflect.ValueOf(stableExprs[i].Expr),
