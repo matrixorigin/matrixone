@@ -101,7 +101,6 @@ func TestMarshalRemoteBatchExplicitTextProtocolGate(t *testing.T) {
 	require.NoError(t, err)
 }
 
-
 func (child *emptyDispatchChild) Call(*process.Process) (vm.CallResult, error) {
 	close(child.called)
 	return vm.NewCallResult(), nil

@@ -276,41 +276,6 @@ func isStatementConstantNumericValueExpression(expr *Expr) bool {
 	return function.IsStatementConstantInput(expr)
 }
 
-// isStatementConstantNumericCastInput limits prepared comparison rewriting to
-// a complete numeric CAST chain. Non-cast scalar functions can still carry a
-// statement-constant program for diagnostics, but scan predicates keep their
-// original executable function tree and zone-map eligibility.
-func isStatementConstantNumericCastInput(expr *Expr) bool {
-	if function.IsStatementConstantInput(expr) {
-		return true
-	}
-	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || len(fn.Args) < 1 {
-		return false
-	}
-	fid, overload := function.DecodeOverloadID(fn.Func.GetObj())
-	if fid != function.CAST {
-		return false
-	}
-	if overload == function.NumericValueCastOverload {
-		source, _, ok := numericValueCastAnalysisSource(expr)
-		if !ok || !isStatementConstantNumericValueExpression(source) {
-			return false
-		}
-		if _, private := numericValueProgramSourceOwner(fn.Args[0]); private {
-			valueScope, valueSlot, valueOK := numericProgramRefIdentity(fn.Args[0])
-			kindScope, kindSlot, kindOK := numericProgramRefIdentity(fn.Args[2])
-			return valueOK && kindOK && valueSlot == 0 && kindSlot == 1 && valueScope == kindScope
-		}
-		return isStatementConstantNumericValueExpression(fn.Args[2])
-	}
-	if overload < function.NumericValueCastPolicyOrdinary || overload > function.NumericValueCastPolicySetOperation ||
-		len(fn.Args) != 2 {
-		return false
-	}
-	return isStatementConstantNumericCastInput(fn.Args[0])
-}
-
 func numericValueProgramScope(expr *Expr) (int64, bool) {
 	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
 		return 0, false

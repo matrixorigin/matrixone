@@ -389,14 +389,6 @@ func inspectTableDumpBoundExpression(expr *planpb.Expr) (normalize, hasPrivate, 
 	return normalize, hasPrivate, cycle
 }
 
-// tableDumpBoundExpressionNeedsNormalization follows exactly the edges that
-// the compatibility normalization below changes. Other expression variants
-// retain exact protobuf comparison semantics.
-func tableDumpBoundExpressionNeedsNormalization(expr *planpb.Expr) bool {
-	needs, _, cycle := inspectTableDumpBoundExpression(expr)
-	return needs || cycle
-}
-
 func sameTableDumpBoundExpression(a, b *planpb.Expr) bool {
 	if a == nil || b == nil {
 		return a == b

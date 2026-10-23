@@ -136,24 +136,6 @@ func makeStringLiteralExpr(value string, form planpb.StringLiteralForm) *planpb.
 	}
 }
 
-func makeStringNumericFlowExpr(name string, functionID int64, args ...*planpb.Expr) *planpb.Expr {
-	return &planpb.Expr{
-		Typ: planpb.Type{Id: int32(types.T_varchar)},
-		Expr: &planpb.Expr_F{F: &planpb.Function{
-			Func: &planpb.ObjectRef{Obj: functionID << 32, ObjName: name}, Args: args,
-		}},
-	}
-}
-
-func makeStringNumericCastExpr(value *planpb.Expr, typ types.T) *planpb.Expr {
-	return &planpb.Expr{
-		Typ: planpb.Type{Id: int32(typ)},
-		Expr: &planpb.Expr_F{F: &planpb.Function{
-			Func: &planpb.ObjectRef{Obj: int64(21) << 32, ObjName: "cast"}, Args: []*planpb.Expr{value},
-		}},
-	}
-}
-
 func makeNumericValueProgramExpr() *planpb.Expr {
 	int64Literal := func(value int64) *planpb.Expr {
 		return &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{

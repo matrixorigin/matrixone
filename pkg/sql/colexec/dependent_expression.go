@@ -361,7 +361,7 @@ func compileDependentExpressions(
 			owner.state = 0
 			return nil, err
 		}
-		kindIndex := -1
+		var kindIndex int
 		if owner.explicit != nil {
 			if owner.explicit.Typ.Id != 10 {
 				owner.state = 0

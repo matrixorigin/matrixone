@@ -1028,14 +1028,14 @@ func (l *numericValueKindLowerer) kindForProjectOutput(nodeID int32, node *planp
 	if value == nil || (!types.T(value.Typ.Id).IsMySQLString() && types.T(value.Typ.Id) != types.T_any) {
 		return makePlan2BoolConstExprWithType(false), nil
 	}
-	if kind, ok := scalarNumericProgramKindRef(value); ok {
+	if _, ok := scalarNumericProgramKindRef(value); ok {
 		bound, err := l.bindNumericValueLeaves(value)
 		if err != nil {
 			return nil, err
 		}
 		node.ProjectList[col] = bound
 		value = bound
-		kind, _ = scalarNumericProgramKindRef(value)
+		kind, _ := scalarNumericProgramKindRef(value)
 		if len(node.BindingTags) == 0 {
 			l.pairs[key] = kind
 			return DeepCopyExpr(kind), nil
@@ -1164,7 +1164,7 @@ func isFalseBoolLiteral(expr *Expr) bool {
 		return false
 	}
 	value, ok := lit.Value.(*planpb.Literal_Bval)
-	return ok && value.Bval == false
+	return ok && !value.Bval
 }
 
 func numericPlanInt64(expr *Expr) (int64, bool) {

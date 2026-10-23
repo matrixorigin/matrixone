@@ -980,7 +980,7 @@ func TestStringToFloatUsesExplicitNumericValueKindNotBinaryStringDomain(t *testi
 	defer kind.Free(proc.Mp())
 	from := &numericValueKindParameter{
 		FunctionParameterWrapper: vector.GenerateFunctionStrParameter(input),
-		kind:                      vector.GenerateFunctionFixedTypeParameter[bool](kind),
+		kind:                     vector.GenerateFunctionFixedTypeParameter[bool](kind),
 	}
 
 	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp()).(*vector.FunctionResult[float64])
