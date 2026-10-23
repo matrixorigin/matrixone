@@ -36,10 +36,6 @@ type AppendNode struct {
 	isTombstone bool
 }
 
-func CompareAppendNode(e, o *AppendNode) int {
-	return e.Compare(o.TxnMVCCNode)
-}
-
 func MockAppendNode(ts types.TS, startRow, maxRow uint32, mvcc *AppendMVCCHandle) *AppendNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
@@ -131,7 +127,7 @@ func (node *AppendNode) PrepareCommit() error {
 	oldPrepare := node.Prepare
 	_, err := node.TxnMVCCNode.PrepareCommit()
 	if err == nil {
-		node.mvcc.reorderPrepareLocked(node, oldPrepare)
+		node.mvcc.updatePrepareTreeLocked(&appendPrepareEntry{prepare: oldPrepare, startRow: node.startRow}, node)
 	}
 	return err
 }
@@ -254,7 +250,7 @@ func (node *AppendNode) PrepareRollback() (err error) {
 	err = node.TxnMVCCNode.PrepareRollback()
 	if err == nil && node.GetTxn() != nil {
 		node.Prepare = node.GetTxn().GetPrepareTS()
-		node.mvcc.reorderPrepareLocked(node, oldPrepare)
+		node.mvcc.updatePrepareTreeLocked(&appendPrepareEntry{prepare: oldPrepare, startRow: node.startRow}, node)
 	}
 	return
 }
