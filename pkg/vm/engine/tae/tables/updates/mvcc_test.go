@@ -298,9 +298,7 @@ func TestAppendMVCCPrepareAndRowOrders(t *testing.T) {
 	assert.False(t, h.IsPrepareSnapshotCurrent(unpreparedSnapshot))
 	_, preparedSnapshot := h.GetRowSelectionAfterWithSnapshot(types.TS{}, types.MaxTs())
 	assert.True(t, h.IsPrepareSnapshotCurrent(preparedSnapshot))
-	assert.Same(t, n2, h.appends.MVCC[0])
-	assert.Same(t, n1, h.appends.MVCC[1])
-	assert.Same(t, n3, h.appends.MVCC[2])
+	assert.Equal(t, n3.Prepare, h.GetLatestAppendPrepareTSLocked())
 	assert.Same(t, n1, h.rows[0])
 	assert.Same(t, n2, h.rows[1])
 	assert.Same(t, n3, h.rows[2])
@@ -324,6 +322,31 @@ func TestAppendMVCCPrepareAndRowOrders(t *testing.T) {
 	assert.True(t, selection.Holes.Contains(19))
 	assert.False(t, selection.Holes.Contains(9))
 	assert.False(t, selection.Holes.Contains(20))
+
+	// Removing a node must remove it from the dedup snapshot as well as the
+	// physical-row index.
+	h.DeleteAppendNodeLocked(n2)
+	selection = h.GetRowSelectionAfter(types.BuildTS(1, 0), types.BuildTS(3, 0))
+	assert.Equal(t, uint32(0), selection.MinRow)
+	assert.Equal(t, uint32(10), selection.MaxRow)
+	assert.Same(t, n3, h.GetAppendNodeByRowLocked(25))
+}
+
+func TestLatestAppendPrepareTSWithOutOfOrderRows(t *testing.T) {
+	handle := &AppendMVCCHandle{}
+	initial := handle.GetLatestAppendPrepareTSLocked()
+	require.True(t, initial.IsEmpty())
+
+	first := NewAppendNode(nil, 0, 1, false, handle)
+	first.Prepare = types.BuildTS(5, 0)
+	second := NewAppendNode(nil, 1, 2, false, handle)
+	second.Prepare = types.BuildTS(3, 0)
+	handle.rows = []*AppendNode{first, second}
+	require.Equal(t, first.Prepare, handle.GetLatestAppendPrepareTSLocked())
+
+	// An active later row must still force a flush task to retry.
+	second.Prepare = txnif.UncommitTS
+	require.Equal(t, txnif.UncommitTS, handle.GetLatestAppendPrepareTSLocked())
 }
 
 func TestAppendMVCCPrepareTreeConcurrentReaders(t *testing.T) {

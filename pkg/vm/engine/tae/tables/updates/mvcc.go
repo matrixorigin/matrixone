@@ -16,7 +16,9 @@ package updates
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -61,11 +63,8 @@ type AppendMVCCHandle struct {
 	sealed                bool
 	appendHistoryComplete bool
 	finalizedCommit       atomic.Pointer[appendFinalizedCommit]
-	// appends is ordered by (prepare TS, physical start row). Active nodes use
-	// UncommitTS and therefore stay at the end until their txn is prepared.
-	appends *txnbase.MVCCSlice[*AppendNode]
-	// rows contains the same nodes in physical row order. Append payload and
-	// commit/abort vectors must always be interpreted through this view.
+	// rows is the sole AppendNode collection, ordered by physical row. Prepare
+	// timestamps need not follow row order because Freeze applies concurrently.
 	rows []*AppendNode
 	// prepareTree is an immutable, copy-on-write snapshot used by dedup to
 	// select (PrepareTS, row range) entries without holding the object lock.
@@ -125,7 +124,6 @@ func NewAppendMVCCHandle(meta *catalog.ObjectEntry) *AppendMVCCHandle {
 		RWMutex:               &sync.RWMutex{},
 		meta:                  meta,
 		appendHistoryComplete: true,
-		appends:               txnbase.NewMVCCSlice(NewEmptyAppendNode, CompareAppendNode),
 		rows:                  make([]*AppendNode, 0),
 	}
 	node.prepareTree.Store(&AppendPrepareSnapshot{tree: newAppendPrepareTree()})
@@ -173,7 +171,6 @@ func (n *AppendMVCCHandle) ReleaseAppends() {
 	if n.finalizedCommit.Load() == nil {
 		n.appendHistoryComplete = false
 	}
-	n.appends = nil
 	n.rows = nil
 	n.prepareTree.Store(nil)
 }
@@ -225,7 +222,7 @@ func (n *AppendMVCCHandle) NotifyFinalizedMax() {
 }
 
 func (n *AppendMVCCHandle) tryFinalizeCommitLocked() {
-	if !n.sealed || !n.appendHistoryComplete || n.finalizedCommit.Load() != nil || n.appends == nil {
+	if !n.sealed || !n.appendHistoryComplete || n.finalizedCommit.Load() != nil || n.rows == nil {
 		return
 	}
 	maxCommit := types.TS{}
@@ -252,35 +249,12 @@ func (n *AppendMVCCHandle) GetMaxCommitTS() (types.TS, bool) {
 	return state.max, true
 }
 
-func compareAppendPrepare(a, b *AppendNode) int {
-	// Compare the stored value: it changes only while holding this handle's
-	// lock. GetPrepare may expose the txn's new prepare TS before that node has
-	// been repositioned, temporarily violating the ordering invariant.
-	if cmp := a.Prepare.Compare(&b.Prepare); cmp != 0 {
-		return cmp
-	}
-	if a.startRow < b.startRow {
-		return -1
-	}
-	if a.startRow > b.startRow {
-		return 1
-	}
-	return 0
-}
-
 func (n *AppendMVCCHandle) insertPrepareLocked(node *AppendNode) {
-	off, _ := slices.BinarySearchFunc(n.appends.MVCC, node, compareAppendPrepare)
-	n.appends.MVCC = slices.Insert(n.appends.MVCC, off, node)
 	n.updatePrepareTreeLocked(nil, node)
 }
 
 func (n *AppendMVCCHandle) removePrepareLocked(node *AppendNode) {
-	for i, candidate := range n.appends.MVCC {
-		if candidate == node {
-			n.appends.MVCC = slices.Delete(n.appends.MVCC, i, i+1)
-			return
-		}
-	}
+	n.updatePrepareTreeLocked(&appendPrepareEntry{prepare: node.Prepare, startRow: node.startRow}, nil)
 }
 
 func (n *AppendMVCCHandle) insertRowLocked(node *AppendNode) {
@@ -294,14 +268,6 @@ func (n *AppendMVCCHandle) insertRowLocked(node *AppendNode) {
 		return 0
 	})
 	n.rows = slices.Insert(n.rows, off, node)
-}
-
-func (n *AppendMVCCHandle) reorderPrepareLocked(node *AppendNode, oldPrepare types.TS) {
-	n.removePrepareLocked(node)
-	off, _ := slices.BinarySearchFunc(n.appends.MVCC, node, compareAppendPrepare)
-	n.appends.MVCC = slices.Insert(n.appends.MVCC, off, node)
-	old := appendPrepareEntry{prepare: oldPrepare, startRow: node.startRow}
-	n.updatePrepareTreeLocked(&old, node)
 }
 
 func (n *AppendMVCCHandle) updatePrepareTreeLocked(oldEntry *appendPrepareEntry, node *AppendNode) {
@@ -425,7 +391,7 @@ func (n *AppendMVCCHandle) CollectAppendLocked(
 	start, end types.TS, mp *mpool.MPool,
 ) (selection index.RowSelection, commitTSVec, abortVec containers.Vector) {
 	txns := make([]txnif.TxnReader, 0)
-	for _, node := range n.appends.MVCC {
+	for _, node := range n.rows {
 		txn := node.GetTxn()
 		if txn == nil {
 			continue
@@ -512,7 +478,7 @@ func (n *AppendMVCCHandle) GetVisibleRowLocked(
 	txn txnif.TxnReader,
 ) (selection index.RowSelection, visible bool, err error) {
 	txnToWait := make([]txnif.TxnReader, 0)
-	for _, an := range n.appends.MVCC {
+	for _, an := range n.rows {
 		if !an.IsSameTxn(txn) {
 			if needWait, waitTxn := an.NeedWaitCommitting(txn.GetStartTS()); needWait {
 				txnToWait = append(txnToWait, waitTxn)
@@ -542,20 +508,20 @@ func (n *AppendMVCCHandle) CollectUncommittedANodesPreparedBeforeLocked(
 	ts types.TS,
 	foreachFn func(*AppendNode),
 ) (anyWaitable bool) {
-	if n.appends.IsEmpty() {
+	if len(n.rows) == 0 {
 		return
 	}
-	n.appends.ForEach(func(an *AppendNode) bool {
+	for i := len(n.rows) - 1; i >= 0; i-- {
+		an := n.rows[i]
 		needWait, txn := an.NeedWaitCommitting(ts)
 		if txn == nil {
-			return true
+			continue
 		}
 		if needWait {
 			foreachFn(an)
 			anyWaitable = true
 		}
-		return true
-	}, false)
+	}
 	return
 }
 
@@ -610,10 +576,15 @@ func (n *AppendMVCCHandle) PrepareCompact() bool {
 }
 
 func (n *AppendMVCCHandle) GetLatestAppendPrepareTSLocked() types.TS {
-	if n.appends == nil || n.appends.IsEmpty() {
-		return types.TS{}
+	// Flush retry is cold relative to PrepareCommit. Scan the physical-row
+	// index instead of maintaining a second PrepareTS-ordered index.
+	latest := types.TS{}
+	for _, node := range n.rows {
+		if node.Prepare.GT(&latest) {
+			latest = node.Prepare
+		}
 	}
-	return n.appends.GetUpdateNodeLocked().Prepare
+	return latest
 }
 func (n *AppendMVCCHandle) GetMeta() *catalog.ObjectEntry {
 	return n.meta
@@ -621,18 +592,18 @@ func (n *AppendMVCCHandle) GetMeta() *catalog.ObjectEntry {
 
 // check if all appendnodes are committed.
 func (n *AppendMVCCHandle) allAppendsCommittedLocked() bool {
-	if n.appends == nil {
+	if n.rows == nil {
 		meta := n.GetMeta()
-		logutil.Warnf("[MetadataCheck] appends mvcc is nil, obj %v, has dropped %v, deleted at %v",
+		logutil.Warnf("[MetadataCheck] append rows are nil, obj %v, has dropped %v, deleted at %v",
 			meta.ID().String(),
 			meta.HasDropCommitted(),
 			meta.GetDeleteAt().ToString())
 		return false
 	}
-	if n.appends.IsEmpty() {
+	if len(n.rows) == 0 {
 		return true
 	}
-	for _, node := range n.appends.MVCC {
+	for _, node := range n.rows {
 		if !node.IsCommitted() {
 			return false
 		}
@@ -671,23 +642,31 @@ func (n *AppendMVCCHandle) GetAppendListener() func(txnif.AppendNode) error {
 // AllAppendsCommittedBefore returns true if all appendnode is committed before ts.
 func (n *AppendMVCCHandle) AllAppendsCommittedBeforeLocked(ts types.TS) bool {
 	// get the latest appendnode
-	for _, anode := range n.appends.MVCC {
+	for _, anode := range n.rows {
 		commitTS := anode.GetCommitTS()
 		if !anode.IsCommitted() || !commitTS.LT(&ts) {
 			return false
 		}
 	}
-	return len(n.appends.MVCC) != 0
+	return len(n.rows) != 0
 }
 
 func (n *AppendMVCCHandle) StringLocked() string {
-	return n.appends.StringLocked()
+	if n.rows == nil {
+		return "nil"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "[%d]", len(n.rows))
+	for i := len(n.rows) - 1; i >= 0; i-- {
+		fmt.Fprintf(&b, " -> \n%s", n.rows[i].String())
+	}
+	return b.String()
 }
 
 func (n *AppendMVCCHandle) EstimateMemSizeLocked() int {
 	asize := 0
-	if n.appends != nil {
-		asize += len(n.appends.MVCC) * catalog.AppendNodeApproxSize
+	if n.rows != nil {
+		asize += len(n.rows) * catalog.AppendNodeApproxSize
 	}
 	return asize
 }
