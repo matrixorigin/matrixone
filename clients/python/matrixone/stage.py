@@ -380,7 +380,7 @@ class BaseStageManager:
         if_exists: bool = False,
     ) -> str:
         """Prepare SQL for alter operation"""
-        if not any([url, credentials, comment, enable is not None]):
+        if not any([url, credentials, comment is not None, enable is not None]):
             raise ValueError("At least one of url, credentials, comment, or enable must be provided")
         return self._build_alter_stage_sql(name, url, credentials, enable, comment, if_exists)
 
