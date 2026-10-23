@@ -364,6 +364,9 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 			require.Equal(t, []int32{3}, gotIDs)
 			require.Equal(t, []string{"first"}, gotLabels)
 		})
+		t.Run("cross-consumer DDL snapshots", func(t *testing.T) {
+			testNativeViewMetadataDDLTransitions(t, ctx, cn, svc, database)
+		})
 	})
 }
 
