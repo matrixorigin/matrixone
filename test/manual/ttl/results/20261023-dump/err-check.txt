@@ -1,0 +1,2 @@
+Does not find 'fmt.Errorf()', 'errors.New()','context.WithTimeout' and 'context.WithDeadline'
+make: Nothing to be done for 'err-check'.

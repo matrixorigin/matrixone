@@ -1,0 +1,58 @@
+--- FAIL: TestTTLDumpReplayAfterAlter (6.98s)
+    testing.go:681: MO_UT_SETUP fixture=shared-cluster phase=cluster-start cn_count=1 duration=4.31733074s status=ready
+    testing.go:681: MO_UT_SETUP fixture=shared-cluster phase=task-services-ready cn_count=1 duration=114.133095ms status=ready
+    testing.go:242: MO_UT_SETUP fixture=shared-cluster phase=initialize-total duration=4.431532037s status=ready
+    --- FAIL: TestTTLDumpReplayAfterAlter/add/metadata_only=true (0.04s)
+        ttl_dump_test.go:94:
+                Error Trace:    /workspace/matrixone-ttl-oct19/pkg/tests/sqlintegration/ttl_dump_test.go:66
+                                            /workspace/matrixone-ttl-oct19/pkg/tests/sqlintegration/ttl_dump_test.go:94
+                Error:          Received unexpected error:
+                                Error 20301 (HY000): invalid input: target table schema does not match table dump
+                Test:           TestTTLDumpReplayAfterAlter/add/metadata_only=true
+                Messages:       load table replay_add_true from '/tmp/TestTTLDumpReplayAfterAlteraddmetadata_only=true378459000/001'
+    --- FAIL: TestTTLDumpReplayAfterAlter/modify/metadata_only=true (0.04s)
+        ttl_dump_test.go:94:
+                Error Trace:    /workspace/matrixone-ttl-oct19/pkg/tests/sqlintegration/ttl_dump_test.go:66
+                                            /workspace/matrixone-ttl-oct19/pkg/tests/sqlintegration/ttl_dump_test.go:94
+                Error:          Received unexpected error:
+                                Error 20301 (HY000): invalid input: target table schema does not match table dump
+                Test:           TestTTLDumpReplayAfterAlter/modify/metadata_only=true
+                Messages:       load table replay_modify_true from '/tmp/TestTTLDumpReplayAfterAltermodifymetadata_only=true4276288437/001'
+    --- FAIL: TestTTLDumpReplayAfterAlter/remove/metadata_only=true (0.05s)
+        ttl_dump_test.go:94:
+                Error Trace:    /workspace/matrixone-ttl-oct19/pkg/tests/sqlintegration/ttl_dump_test.go:66
+                                            /workspace/matrixone-ttl-oct19/pkg/tests/sqlintegration/ttl_dump_test.go:94
+                Error:          Received unexpected error:
+                                Error 20301 (HY000): invalid input: target table schema does not match table dump
+                Test:           TestTTLDumpReplayAfterAlter/remove/metadata_only=true
+                Messages:       load table replay_remove_true from '/tmp/TestTTLDumpReplayAfterAlterremovemetadata_only=true2091744553/001'
+    --- FAIL: TestTTLDumpReplayAfterAlter/add/metadata_only=false (0.55s)
+        ttl_dump_test.go:94:
+                Error Trace:    /workspace/matrixone-ttl-oct19/pkg/tests/sqlintegration/ttl_dump_test.go:66
+                                            /workspace/matrixone-ttl-oct19/pkg/tests/sqlintegration/ttl_dump_test.go:94
+                Error:          Received unexpected error:
+                                Error 20301 (HY000): invalid input: target table schema does not match table dump
+                Test:           TestTTLDumpReplayAfterAlter/add/metadata_only=false
+                Messages:       load table replay_add_false from '/tmp/TestTTLDumpReplayAfterAlteraddmetadata_only=false1901758868/001'
+    --- FAIL: TestTTLDumpReplayAfterAlter/modify/metadata_only=false (0.55s)
+        ttl_dump_test.go:94:
+                Error Trace:    /workspace/matrixone-ttl-oct19/pkg/tests/sqlintegration/ttl_dump_test.go:66
+                                            /workspace/matrixone-ttl-oct19/pkg/tests/sqlintegration/ttl_dump_test.go:94
+                Error:          Received unexpected error:
+                                Error 20301 (HY000): invalid input: target table schema does not match table dump
+                Test:           TestTTLDumpReplayAfterAlter/modify/metadata_only=false
+                Messages:       load table replay_modify_false from '/tmp/TestTTLDumpReplayAfterAltermodifymetadata_only=false578671375/001'
+    --- FAIL: TestTTLDumpReplayAfterAlter/remove/metadata_only=false (0.55s)
+        ttl_dump_test.go:94:
+                Error Trace:    /workspace/matrixone-ttl-oct19/pkg/tests/sqlintegration/ttl_dump_test.go:66
+                                            /workspace/matrixone-ttl-oct19/pkg/tests/sqlintegration/ttl_dump_test.go:94
+                Error:          Received unexpected error:
+                                Error 20301 (HY000): invalid input: target table schema does not match table dump
+                Test:           TestTTLDumpReplayAfterAlter/remove/metadata_only=false
+                Messages:       load table replay_remove_false from '/tmp/TestTTLDumpReplayAfterAlterremovemetadata_only=false2640612536/001'
+    fixture_test.go:45: MO_UT_SETUP fixture=sql-integration phase=scenario-body duration=2.536855781s status=error
+    testing.go:363: MO_UT_SETUP fixture=shared-cluster phase=failed-test-seal generation=1 status=ready
+    testing.go:414: MO_UT_SETUP fixture=shared-cluster phase=failed-test-quarantine generation=1 duration=9.005501ms status=ready complete=true
+FAIL
+FAIL    github.com/matrixorigin/matrixone/pkg/tests/sqlintegration  7.065s
+FAIL

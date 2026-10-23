@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/ttl"
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -2212,5 +2213,56 @@ func TestReadTableDumpManifestBindingFormats(t *testing.T) {
 			require.Equal(t, payload, got.BoundExpressions)
 		}
 		require.NoError(t, fs.Delete(ctx, tableDumpManifestName))
+	}
+}
+
+// Replay DDL and the schema hash must describe the same current definition,
+// even when the stored CREATE provenance predates an ALTER.
+func TestTableDumpManifestCreateSQLUsesCurrentPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, stored string
+		seconds      uint64
+	}{
+		{"unchanged", " ttl ts + interval 1 day", 86400},
+		{"add", "", 86400},
+		{"modify", " ttl ts + interval 1 day", 172800},
+		{"remove", " ttl ts + interval 1 day", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			def := &plan.TableDef{Name: "source", TableType: catalog.SystemOrdinaryRel,
+				Createsql: "create table source(id int, ts datetime(6))" + tc.stored,
+				Cols: []*plan.ColDef{
+					{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: true}},
+					{Name: "ts", Seqnum: 1, Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6}, Default: &plan.Default{NullAbility: true}},
+				},
+			}
+			if tc.seconds != 0 {
+				ttl.Set(def, &ttl.Policy{Version: 1, Column: "ts", Seqnum: 1, Seconds: tc.seconds})
+			}
+			before := proto.Clone(def)
+			createSQL, err := tableDumpManifestCreateSQL(t.Context(), def, nil)
+			require.NoError(t, err)
+			require.True(t, proto.Equal(before, def), "dump must not mutate shared catalog metadata")
+			stmt, err := mysql.ParseOne(t.Context(), createSQL, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			create, ok := stmt.(*tree.CreateTable)
+			require.True(t, ok)
+			policies := 0
+			for _, option := range create.Options {
+				if policy, ok := option.(*tree.TableOptionTTL); ok {
+					policies++
+					seconds, err := ttl.Duration(policy.Amount, policy.Unit)
+					require.NoError(t, err)
+					require.Equal(t, tc.seconds, seconds)
+					require.Equal(t, tree.Identifier("ts"), policy.Column)
+				}
+			}
+			if tc.seconds == 0 {
+				require.Zero(t, policies)
+			} else {
+				require.Equal(t, 1, policies)
+			}
+		})
 	}
 }
