@@ -2778,10 +2778,22 @@ func TestRegexpWideMultilineReviewFindings(t *testing.T) {
 	require.False(t, like("^b$", "a\x85", "m", true), "binary trailing NEL")
 	require.True(t, like("^b$", "a\x85b", "m", true), "binary NEL interior line")
 
-	// A terminator-matching pattern over the size cap fails explicitly.
+	// A terminator-matching pattern over the size cap fails explicitly when a
+	// wide terminator is genuinely present in the subject.
 	require.Equal(t, regexpRouteWideTooLarge, regexpWideMultilineRoute("^a\rb", "m", big+"\r", false), "oversized terminator-matching pattern: explicit error")
 	require.True(t, like("^a.", strings.Repeat("a", regexp2MaxSubjectBytes+1)+"\r", "m", false), "plain dot oversized: per-line, no admission cap")
-	_, err = op.regMap.regularLikeWithMode("^a\rb", strings.Repeat("a", regexp2MaxSubjectBytes+1), "m", false)
+	// A subject proven free of line terminators takes the exact RE2 path even
+	// for terminator-matching patterns (they cannot match a single-line
+	// subject), so an oversized MEDIUMTEXT subject still gets the MySQL
+	// verdict instead of an admission error.
+	require.False(t, like("^a\rb", big, "m", false), "terminator-matching pattern cannot match a single-line subject")
+	// With a wide terminator present and over the admission budget, LIKE
+	// still fails explicitly rather than falling back to LF-only semantics.
+	_, err = op.regMap.regularLikeWithMode("^a\rb", big+"\r", "m", false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "wide multiline")
+	// A constant (anchor/operator-free) pattern never needs the wide route:
+	// literal matching is multiline-insensitive, so the exact RE2 path
+	// answers it on any subject size, with or without terminators.
+	require.True(t, like("a\rb", big+"\rb", "m", false), "constant pattern has no multiline-sensitive operators")
 }

@@ -142,3 +142,139 @@ func TestReviewWideLineInstrInitialEmptyLine(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(2), got)
 }
+
+// Interior and trailing empty lines keep their own anchor matches: an empty
+// line is not an empty subject, so the base empty-subject shortcut must not
+// swallow them (mo-bot review on #30646: '\na' with '^' becomes 'X\nXa').
+func TestReviewWideLineEmptyLineReplace(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	for _, tc := range []struct {
+		name     string
+		subject  string
+		pat      string
+		repl     string
+		pos, occ int64
+		want     string
+	}{
+		{"leading", "\na", "^", "X", 1, 0, "X\nXa"},
+		{"interior", "a\n\nb", "^", "X", 1, 0, "Xa\nX\nXb"},
+		{"trailing_lf", "a\n", "^", "X", 1, 0, "Xa\nX"},
+		{"empty_subject_shortcut", "", "^", "X", 1, 0, ""},
+		{"occurrence_second_empty_line", "\n\n", "^", "X", 1, 2, "\nX\n"},
+		{"dollar_interior_empty_line", "a\n\nb", "$", "X", 1, 0, "aX\nX\nbX"},
+		{"template_on_empty_line", "\na", "^", "[$0]", 1, 0, "[]\n[]a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := op.regMap.regularReplaceWithMatchType(tc.pat, tc.subject, tc.repl, tc.pos, tc.occ, false, "m")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// The terminal segment after a trailing lone CR/NEL/LS/PS still binds '$'
+// at the true end of input, while '^' stays suppressed there (mo-bot review
+// on #30646: 'a\r' with '$' becomes 'aX\rX', matching ICU 76.1).
+func TestReviewWideLineTerminalDollar(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	for _, tc := range []struct {
+		name    string
+		subject string
+		binary  bool
+		want    string
+	}{
+		{"cr", "a\r", false, "aX\rX"},
+		{"nel_text", "a\xc2\x85", false, "aX\xc2\x85X"},
+		{"ls_text", "a\xe2\x80\xa8", false, "aX\xe2\x80\xa8X"},
+		{"ps_text", "a\xe2\x80\xa9", false, "aX\xe2\x80\xa9X"},
+		{"nel_binary", "a\x85", true, "aX\x85X"},
+		{"crlf_keeps_lf_contract", "a\r\n", false, "aX\r\nX"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := op.regMap.regularReplaceWithMatchType(`$`, tc.subject, "X", 1, 0, tc.binary, "m")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+	// The caret stays suppressed on the same terminal segment.
+	got, err := op.regMap.regularReplaceWithMatchType(`^`, "a\r", "X", 1, 0, false, "m")
+	require.NoError(t, err)
+	require.Equal(t, "Xa\r", got)
+	liked, err := op.regMap.regularLikeWithMode(`^$`, "a\r", "m", false)
+	require.NoError(t, err)
+	require.False(t, liked)
+	// INSTR sees the terminal '$' match as the second occurrence.
+	at, err := op.regMap.regularInstrWithMatchType(`$`, "a\r", 1, 1, 0, false, "m")
+	require.NoError(t, err)
+	require.Equal(t, int64(2), at)
+	at, err = op.regMap.regularInstrWithMatchType(`$`, "a\r", 1, 2, 0, false, "m")
+	require.NoError(t, err)
+	require.Equal(t, int64(3), at)
+}
+
+// The aggregate replacement-size budget is enforced across lines: nine 8
+// MiB line replacements each pass the per-line check, but the accumulated
+// result must stop at the shared maximum (mo-bot review on #30646).
+func TestReviewWideLineReplaceAggregateLimit(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	repl := strings.Repeat("R", 8<<20)
+	_, err := op.regMap.regularReplaceWithMatchType(`^a`, strings.Repeat("a\n", 9), repl, 1, 0, false, "m")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "maximum supported size")
+	// Control: one large replacement under the budget stays legal.
+	got, err := op.regMap.regularReplaceWithMatchType(`^a`, "a", repl, 1, 0, false, "m")
+	require.NoError(t, err)
+	require.Len(t, got, 8<<20)
+}
+
+// Anchored-prefix matches on a long terminator-free line keep the prefix
+// short-circuit cost of the whole-subject engine, through one bounded
+// prefix probe instead of a full-line scan (mo-bot review on #30646).
+func TestReviewWideLinePrefixShortCircuit(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	long := "alpha" + strings.Repeat("x", 32768)
+	got, err := op.regMap.regularLikeWithMode(`^alpha`, long, "m", false)
+	require.NoError(t, err)
+	require.True(t, got)
+	got, err = op.regMap.regularLikeWithMode(`^alphz`, long, "m", false)
+	require.NoError(t, err)
+	require.False(t, got)
+	// An unanchored hit strictly inside the bounded prefix probe is
+	// definitive too.
+	got, err = op.regMap.regularLikeWithMode(`ay`, "ay"+strings.Repeat("x", 32768), "m", false)
+	require.NoError(t, err)
+	require.True(t, got)
+	// A terminator inside the prefix resolves the line bound directly.
+	got, err = op.regMap.regularLikeWithMode(`^z`, "ab\r\n"+strings.Repeat("x", 32768)+"\r\nz", "m", false)
+	require.NoError(t, err)
+	require.True(t, got)
+	// No match anywhere on a multi-line long subject still finishes false.
+	got, err = op.regMap.regularLikeWithMode(`^z`, "aa\r"+strings.Repeat("x", 32768)+"\rbb", "m", false)
+	require.NoError(t, err)
+	require.False(t, got)
+}
+
+// A terminator-capable pattern keeps whole-subject routing, but subjects
+// with no wide terminator keep the supported base input domain instead of
+// bouncing into regexp2 admission (mo-bot review on #30646: REGEXP_LIKE
+// '^a\s' on a 16 KiB / >1 MiB LF-only subject answers through the base
+// engine again).
+func TestReviewWideLineTerminatorClassRoute(t *testing.T) {
+	subject := "a\n" + strings.Repeat("y", 16384)
+	require.Equal(t, regexpRouteRE2, regexpWideMultilineRoute(`^a\s`, "m", subject, false))
+	// A genuine wide terminator keeps whole-subject regexp2 routing.
+	wide := "a\r" + strings.Repeat("y", 1024)
+	require.Equal(t, regexpRouteRegexp2, regexpWideMultilineRoute(`^a\s`, "m", wide, false))
+
+	op := newOpBuiltInRegexp()
+	got, err := op.regMap.regularLikeWithMode(`^a\s`, subject, "m", false)
+	require.NoError(t, err)
+	require.True(t, got)
+	got, err = op.regMap.regularLikeWithMode(`^a\s`, "a\n"+strings.Repeat("y", 1048579), "m", false)
+	require.NoError(t, err)
+	require.True(t, got)
+	// The wide-terminator control takes the ICU route and agrees.
+	got, err = op.regMap.regularLikeWithMode(`^a\s`, wide, "m", false)
+	require.NoError(t, err)
+	require.True(t, got)
+}
