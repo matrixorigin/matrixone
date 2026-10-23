@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -78,6 +79,18 @@ type container struct {
 	pool           *BatchPool
 	// debug_len      uint32
 
+	// unrecordedSinkNames holds every tombstone object name the flush
+	// persisted but whose ObjectMeta_ObjectStats record has not landed in
+	// the transaction's workspace yet (issue #25590 round-21 review,
+	// finding G4). The flush closes its writer before the merge-delete
+	// consumer records anything, so the snapshot is collected BEFORE that
+	// in-flush close drops the tracked references — the multi_update
+	// delegate's collect-then-close shape — and Reset/Free hand the list
+	// to the workspace's unrecorded-sink retainer, which keeps it out of
+	// the deletion queue while the recording statement is still in
+	// flight and re-checks recorded membership at the next boundary.
+	unrecordedSinkNames []string
+
 	state        vm.CtrState
 	resBat       *batch.Batch
 	source       engine.Relation
@@ -104,8 +117,20 @@ func newDeletionTombstoneWriter(
 	fs fileservice.FileService,
 	pkType types.Type,
 ) *colexec.CNS3Writer {
+	// Issue #25590 round-21 review, finding G4 (design r5 §5.3): this
+	// tombstone writer persists on the workspace's behalf, so it joins the
+	// per-object reservation surface every other producer already binds —
+	// one in-flight unit reserved BEFORE the object goes durable, a
+	// saturated ledger refusing the spill with nothing half-persisted
+	// behind it. A proc without a transaction operator or a workspace
+	// without the owner surface keeps an unhooked writer, exactly the
+	// pre-fix compat shape.
+	var sinkerOpts []ioutil.SinkerOption
+	if opt := colexec.WorkspaceSinkerCapacityOption(proc); opt != nil {
+		sinkerOpts = append(sinkerOpts, opt)
+	}
 	return colexec.NewCNS3TombstoneWriterForService(
-		proc.GetService(), proc.Mp(), fs, pkType, -1,
+		proc.GetService(), proc.Mp(), fs, pkType, -1, sinkerOpts...,
 	)
 }
 
@@ -150,7 +175,42 @@ type DeleteCtx struct {
 	Engine engine.Engine
 }
 
+// retainUnrecordedSinkObjects hands the flush's collected tombstone-object
+// names to the transaction workspace's unrecorded-sink retainer before the
+// container's state is discarded (issue #25590 round-21 review, finding
+// G4). The deletion flush persists tombstone objects inside its own call,
+// while the ObjectMeta_ObjectStats record runs only in the downstream
+// merge-delete consumer — a stream that dies between the two, or a record
+// refused at a saturated admission bound, leaves physical tombstone objects
+// that no workspace entry enumerates; without this transfer the in-flush
+// writer Close dropped the only surviving name reference and repeated
+// refusals leaked one object each behind a ledger whose count never
+// included them. Safe to call repeatedly: the first handoff nils the
+// collection.
+func (deletion *Deletion) retainUnrecordedSinkObjects(proc *process.Process) {
+	names := deletion.ctr.unrecordedSinkNames
+	if len(names) == 0 {
+		return
+	}
+	deletion.ctr.unrecordedSinkNames = nil
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return
+	}
+	ws := txnOp.GetWorkspace()
+	if ws == nil {
+		return
+	}
+	retainer, ok := ws.(ioutil.UnrecordedSinkerObjectsRetainer)
+	if !ok {
+		return
+	}
+	retainer.RetainUnrecordedS3Objects(
+		names, "s3 delete-flush tombstone writer unwound before its metadata record: the pipeline failed or the merge-delete record was refused between persistence and the consumer (issue #25590 round-21 review)")
+}
+
 func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	deletion.retainUnrecordedSinkObjects(proc)
 	ctr := &deletion.ctr
 	ctr.state = vm.Build
 	if deletion.RemoteDelete {
@@ -195,6 +255,7 @@ func (deletion *Deletion) Reset(proc *process.Process, pipelineFailed bool, err 
 
 // delete from t1 using t1 join t2 on t1.a = t2.a;
 func (deletion *Deletion) Free(proc *process.Process, pipelineFailed bool, err error) {
+	deletion.retainUnrecordedSinkObjects(proc)
 	ctr := &deletion.ctr
 	if deletion.RemoteDelete {
 		deletion.SegmentMap = nil
@@ -293,6 +354,18 @@ func (ctr *container) flush(proc *process.Process, analyzer process.Analyzer) (u
 		}); err != nil {
 			return 0, err
 		}
+
+		// Issue #25590 round-21 review, finding G4 (design r5 §5.3): the
+		// writer's persisted names must leave the sinker BEFORE the
+		// function-level deferred Close drops the tracked references — the
+		// ObjectsMeta_ObjectStats record runs in the downstream
+		// merge-delete consumer, only after this flush returned, so the
+		// collection rides the container and the teardown hands it to the
+		// workspace retainer: the names stay out of the deletion queue
+		// while the recording statement is still in flight and the
+		// boundary re-checks recorded membership before enqueuing.
+		ctr.unrecordedSinkNames = append(
+			ctr.unrecordedSinkNames, s3writer.PersistedNames()...)
 
 		for _, stats := range statsList {
 			bat := batch.New([]string{catalog.ObjectMeta_ObjectStats})

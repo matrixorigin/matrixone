@@ -55,11 +55,24 @@ type poolSinkJob struct {
 	mp      *mpool.MPool
 	fs      fileservice.FileService
 	result  *pipelineResult
+	// capacityHook, when the owning sinker carries one, gates each
+	// spilling object right before the pool's sync worker would make it
+	// durable — the SAME edge-of-persistence contract as the sync path's
+	// syncFileSinker, so a pipelined writer cannot push its objects past
+	// an admission bound its non-pipelined sibling respects (issue
+	// #25590 round-19 review). A refused job persists nothing and only
+	// the job's error surfaces.
+	capacityHook UncommittedCapacityHook
 }
 
 type poolSyncJob struct {
 	fSinker FileSinker
 	result  *pipelineResult
+	// capacityHook gates one spilling object before the sync worker
+	// persists it — the same edge-of-persistence contract as
+	// syncFileSinker, so pipelined writers respect the admission bound
+	// (issue #25590 round-19 review). Refusal persists nothing.
+	capacityHook UncommittedCapacityHook
 }
 
 // pipelineResult tracks accumulated results and errors for one Sinker's
@@ -168,7 +181,11 @@ func (p *SinkPool) runSinkWorker() {
 		// Forward to sync worker. Do NOT call r.pending.Done() here;
 		// the sync worker calls it after completing the IO.
 		select {
-		case p.syncChan <- &poolSyncJob{fSinker: fSinker, result: r}:
+		case p.syncChan <- &poolSyncJob{
+			fSinker:      fSinker,
+			result:       r,
+			capacityHook: job.capacityHook,
+		}:
 		case <-r.ctx.Done():
 			fSinker.Close()
 			r.setError(context.Cause(r.ctx))
@@ -189,6 +206,23 @@ func (p *SinkPool) runSyncWorker() {
 			job.fSinker.Close()
 			r.pending.Done()
 			continue
+		}
+
+		// The hook gate runs before the pool's Sync exactly like
+		// syncFileSinker runs it on the sync path: a refusal aborts the
+		// object before anything goes durable — nothing lands in
+		// r.unpublished because the object never met storage — and the
+		// error fails the writer's Sync through result.getError (issue
+		// #25590 round-19 review).
+		if job.capacityHook != nil {
+			if name := activeFileSinkerObjectName(job.fSinker); name != "" {
+				if err := job.capacityHook(name); err != nil {
+					job.fSinker.Close()
+					r.setError(err)
+					r.pending.Done()
+					continue
+				}
+			}
 		}
 
 		syncStart := time.Now()

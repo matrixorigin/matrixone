@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/mergeutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -229,10 +230,12 @@ func (txn *Transaction) ensureInsertKeyOffsetsLocked(entry *Entry) (*insertKeyOf
 	if !entry.pkRange.inited {
 		return nil, false
 	}
-	if entry.bat.RowCount() == 0 {
-		// A zero-row entry's index is provably empty: fail closed to the
-		// FilterVector path instead of charging a map that can never
-		// surface a row.
+	if entry.bat == nil || entry.bat.RowCount() == 0 {
+		// A nil-batch or zero-row entry's index is provably empty: fail
+		// closed to the FilterVector path instead of charging a map that
+		// can never surface a row (a nil slot is the fully-superseded
+		// entry's retired state until the post-dump compaction, issue
+		// #25590).
 		return nil, false
 	}
 	var packer *types.Packer
@@ -343,17 +346,30 @@ func (txn *Transaction) releaseWorkspaceEntryBatchLocked(idx int) {
 	entry.bat = nil
 }
 
-func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) {
+// shrinkWorkspaceEntryBatchLocked applies pending delete selections to the
+// entry's batch. It reports whether the batch became empty and was retired:
+// every row superseded within the txn (UPDATE/REPLACE/DELETE of rows
+// inserted by earlier statements) leaves an entry with no live rows. Such
+// an entry is retired instead of lingering as a zero-row slot, which keeps
+// txn.writes proportional to the live working set: every workspace consumer
+// (reads, statement merging, tombstone transfer, delete resolution) rescans
+// txn.writes per statement and must not pay for superseded history
+// (issue #25590). IncrStatementID and Commit compact the retired slot away
+// AFTER the fallible dump of the same admission, in the critical section
+// that appends the new statement boundary, so dump errors never reuse a
+// pre-compaction rollback boundary; until then the nil slot never moves, so
+// recorded statement boundaries stay valid.
+func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) (retired bool) {
 	entry := &txn.writes[idx]
 	if entry.bat == nil {
-		return
+		return false
 	}
 	txn.beginCatalogMutation()
 	defer txn.endCatalogMutation()
 	bat := entry.bat
 	if len(sels) == 0 {
 		delete(txn.batchSelectList, bat)
-		return
+		return false
 	}
 
 	slices.Sort(sels)
@@ -363,7 +379,31 @@ func (txn *Transaction) shrinkWorkspaceEntryBatchLocked(idx int, sels []int64) {
 	shrinkBatchWithRowids(bat, sels)
 	txn.accountWorkspaceEntryLocked(entry)
 	delete(txn.batchSelectList, bat)
+	if bat.RowCount() == 0 {
+		// All rows were superseded; the empty batch serves no reader,
+		// merge, dump or commit payload (all of which skip zero-row
+		// batches), so release it. accountWorkspaceEntryLocked has just
+		// reconciled the accounting and releaseWorkspaceEntryBatchLocked
+		// unaccounts it again, Clean()s the empty batch and nils the
+		// slot for the compaction pass below.
+		txn.releaseWorkspaceEntryBatchLocked(idx)
+		return true
+	}
+	return false
 }
+
+// mergeWorkspaceEntryBatchesLocked historically merged workspace entries in
+// place and only regenerated the combined batch's rowids afterwards; the
+// round-6 review of issue #25590 showed that a rowid-allocation failure at
+// that point left a mixed-block batch with its sources already destroyed, so
+// the merge pass in mergeTxnWorkspaceLocked now stages the combined batch
+// and publishes it only after the copy, every column append and the rowid
+// regeneration all succeeded. The production pass keeps that staged flow;
+// this in-place helper stays as the isolated two-entry merge unit that
+// validates the shared key-index and envelope ownership rules
+// (issue #26796) — drop its hydrated key index up front, fail the envelope
+// open on the append error path, and union the sources' envelopes on
+// success; the staged pass carries the same invariants at its publication.
 
 func (txn *Transaction) mergeWorkspaceEntryBatchesLocked(
 	ctx context.Context,
@@ -1107,9 +1147,965 @@ func (txn *Transaction) scanInMemInsertSize(from int) uint64 {
 	return size
 }
 
+// retryPendingObjectCleanup was removed by the round-14 review (issue
+// #25590): its one synchronous deletion round ran inside dumpBatchLocked's
+// pre-gate step — statement admission under the transaction's locks — so a
+// stalled file service parked admission and the request's cancellation
+// behind it. The pre-gate step hands the names to the engine's lossless
+// queue instead (handoffPendingObjectCleanup), and the engine's scheduled
+// drain and GC-scheduler tick own every retry; the accounting moves with
+// the names in the queue-mutex section they already share.
+
+// handoffPendingObjectCleanup transfers the ownership of orphaned storage
+// objects to the engine's durable pending-unpublished queue — the same
+// pool that collects the workspace's recorded files at rollback drains
+// it. It runs once — as the whole transaction-destruction cleanup, see
+// finalizePendingObjectCleanup — because nothing of the transaction will
+// survive to retry the deletion, so the files must leave with the engine
+// or be lost. The round-8 review (issue #25590) pinned that a
+// fire-and-forget pool task was NOT a transfer of ownership: its failed
+// delete merely logged the captured names and the last owner was gone.
+// The queue retains every name until a delete succeeds, so the
+// transaction may end here without losing them — not to a busy pool that
+// rejects the submission, not to a dirty file service that makes the
+// asynchronous attempt fail. The round-12 review moved the transfer
+// BEFORE every storage I/O: it holds no lock but the queue's and performs
+// no file-service call, so the terminal path terminates independently of
+// any storage fate. The live-orphan accounting the admission bound
+// consults moves with the names: the enqueue may not double-count them,
+// and the accounting is preserved across the ownership transfer and
+// released only by a successful deletion (issue #25590 round-12 review).
+// The transfer and its accounting release run inside one queue-mutex
+// section — the round-13 review's linearization point — so nothing sees
+// a torn admission total while the names are on their way. Round 16
+// extends that one section across the WHOLE transfer window: the clear,
+// the seam below and the enqueue run together under the queue mutex, so
+// Engine.Close's snapshot of (producers, queued) — taken under the same
+// queue mutex — can no longer observe the two sides of a transfer
+// separately and conclude behind a registration that landed between two
+// separately-read observations (issue #25590 round-16 review).
+// orphanHandoffAfterClear is a nil-in-production test seam invoked with
+// the orphan handoff mid-window: the names have LEFT the transaction's
+// list — they are visible to no owner yet — and the enqueue has not
+// run. The round-15 and round-16 regressions park real orphan transfers
+// here to prove Engine.Close's final drain cannot conclude on the empty
+// queue while the transfer is registered — including one registered
+// AFTER the drain had already observed producers==0 (round 16): a
+// parked window HOLDS the queue mutex, so the drain's next snapshot
+// waits behind it instead of deciding on a stale count.
+var orphanHandoffAfterClear func()
+
+// registerOrphanHandoffProducer counts an in-flight orphan transfer as a
+// producer of queue names for Engine.Close's shutdown ownership protocol
+// (issue #25590 round-15 review): between the moment a handoff clears
+// the transaction's list and the moment its names are visible on the
+// engine queue, the names are enumerable in NO owner, and a shutdown
+// sampling producers==0 alongside an empty queue would conclude that no
+// obligation exists while live accounting still counts the transfer in
+// flight. Registering the window on the same counter the Close drain
+// reads closes exactly the interval the round-14 producer protocol left
+// open for GC callers (round 15), and round 16 makes the registration
+// COORDINATED instead of merely counted: the drain reads producers and
+// queued as one atomic pair — under the queue mutex this transfer's
+// window also holds — so a transfer that registers while the drain is
+// mid-flight can never fall behind a decision the drain already made.
+// The returned release drops the registration; it runs only AFTER the
+// enqueue, so producers==0 implies every transferring name is already
+// owned by the queue.
+func (e *Engine) registerOrphanHandoffProducer() func() {
+	e.gcMu.Lock()
+	e.gcProducers++
+	e.gcMu.Unlock()
+	return func() {
+		e.gcMu.Lock()
+		e.gcProducers--
+		e.gcMu.Unlock()
+	}
+}
+
+// pendingObjectCleanupItem couples one retained storage-object name with
+// its statement-epoch classification (issue #25590 round-21 review,
+// finding G1). A name an operator teardown retains while its downstream
+// recording consumer can still run — a publication in flight inside the
+// recording statement — carries retainedIfRecordingLater with the retaining
+// epoch; a definite orphan (a failed dump's epilogue, the compaction
+// back-out, a refused record's fail-open retain) carries false and keeps
+// the round-14 immediate-transfer semantics.
+type pendingObjectCleanupItem struct {
+	name                     string
+	retainedIfRecordingLater bool
+	retainedAt               int
+}
+
+// pendingObjectCleanupNames returns the plain-name snapshot of the
+// transaction's retained cleanup list (tests and logging).
+func (txn *Transaction) pendingObjectCleanupNames() []string {
+	names := make([]string, 0, len(txn.pendingObjectCleanup))
+	for i := range txn.pendingObjectCleanup {
+		names = append(names, txn.pendingObjectCleanup[i].name)
+	}
+	return names
+}
+
+// handoffPendingObjectCleanup moves every boundary-eligible retained name
+// to the engine's lossless queue at a QUIESCED boundary. Callers HOLD the
+// transaction's lock — the wrapper's contract since round 12: the
+// terminal callers and the tiered regression sites run under the
+// already-held transaction lock, so taking the mutex here would
+// self-deadlock them (the exact shape the round-21 full-package run
+// pinned with a goroutine dump at a pre-existing call site that ran
+// handoffPendingObjectCleanup inside its own txn.Lock() section).
+func (txn *Transaction) handoffPendingObjectCleanup() {
+	txn.handoffPendingObjectCleanupLocked(true)
+}
+
+// handoffPendingObjectCleanupLocked moves the transaction's retained
+// cleanup names toward the engine's lossless queue (issue #25590
+// rounds 12–16 protocol), under the r5 boundary classification (round-21
+// review, finding G1):
+//
+//   - a name whose record has landed since the retain stays behind — its
+//     record's lifecycle owns the decision (publish on commit, the
+//     rollback's queue transfer), and a live or committed object may
+//     never re-enter the deletion queue through the pending handoff;
+//   - a publication-in-flight entry (retainedIfRecordingLater) of the
+//     CURRENT statement epoch defers: its downstream recording consumer
+//     still runs, so a mid-statement handoff (quiesced=false, a dump
+//     attempt inside the recording statement) may not move it;
+//   - everything else — older epochs, definite orphans, any entry at a
+//     quiesced boundary (the next statement's admission, the commit's
+//     dump, a terminal) — moves through the round-15/16 transfer
+//     window.
+//
+// Callers hold the transaction lock.
+func (txn *Transaction) handoffPendingObjectCleanupLocked(quiesced bool) {
+	if len(txn.pendingObjectCleanup) == 0 {
+		return
+	}
+	e := txn.engine
+	if e == nil {
+		logutil.Warn(
+			"WORKSPACE-PENDING-CLEANUP-DROPPED",
+			zap.Strings("files", txn.pendingObjectCleanupNames()),
+			zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
+		)
+		return
+	}
+	epoch := txn.statementLifecycle.Load()
+	var moved []string
+	var kept []pendingObjectCleanupItem
+	for i := range txn.pendingObjectCleanup {
+		it := &txn.pendingObjectCleanup[i]
+		if _, ok := txn.recordedUnpublishedObjectNames[it.name]; ok {
+			continue // owned by its record's lifecycle since it landed
+		}
+		// INV1 (issue #25590 round-24 finding F1, design r11 D1'): the
+		// handoff's moved split applies the same predicate as the
+		// retain funnels, so a committed-borrowed name can never reach
+		// the engine's unpublished queue through any path — it is
+		// dropped here without moving, in the exact class gcFiles'
+		// filter already protects everywhere. Txn-local shared names
+		// and every fresh name keep the r21/r22 handoff semantics.
+		if borrowsCommittedCloneShare(e, txn, it.name) {
+			continue
+		}
+		if !quiesced && it.retainedIfRecordingLater && int64(it.retainedAt) == epoch {
+			kept = append(kept, *it)
+			continue
+		}
+		moved = append(moved, it.name)
+	}
+	if len(moved) == 0 {
+		txn.pendingObjectCleanup = kept
+		return
+	}
+	// The transfer window joins the shutdown ownership protocol BEFORE
+	// the names leave the transaction's list: from the write below until
+	// the enqueue the moved names are visible to no owner — neither the
+	// transaction's list nor the queue — so a descheduled handoff would
+	// otherwise outlive an Engine.Close whose final drain concluded on
+	// producers==0 and an empty queue, and its resumed enqueue would land
+	// on a queue the stopped scheduler never drains again (issue
+	// #25590 round-15 review). Round 16 runs the whole window INSIDE the
+	// queue mutex: the drain's snapshot of the two shutdown obligations
+	// also holds that mutex, so its (producers, queued) pair can never
+	// straddle this transfer — a transfer registering while a drain
+	// decision is abroad shows up in the drain's very next
+	// decision instead of behind its stale captured count (issue
+	// #25590 round-16 review). Ownership moves BEFORE anything
+	// fallible: whatever the scheduling or the file service does next,
+	// the names are the engine's now. The KEPT entries (r5: the
+	// recording statement's in-flight publications) stay
+	// transaction-owned in the same write.
+	releaseProducer := e.registerOrphanHandoffProducer()
+	e.unpublishedPending.mu.Lock()
+	txn.pendingObjectCleanup = kept
+	if orphanHandoffAfterClear != nil {
+		orphanHandoffAfterClear()
+	}
+	queued := e.handoffUnpublishedPendingLocked(moved)
+	e.unpublishedPending.mu.Unlock()
+	releaseProducer()
+	if queued > 0 {
+		e.scheduleUnpublishedPendingDrain()
+	}
+}
+
+// handoffUnpublishedPendingLocked is the queue-locked ownership-transfer
+// body — the orphan-handoff wrapper's clear-and-enqueue window runs whole
+// inside ONE queue-mutex section so Engine.Close's obligation snapshot
+// cannot straddle it (issue #25590 round-16 review). Returns the number
+// of names enqueued fresh.
+func (e *Engine) handoffUnpublishedPendingLocked(names []string) int {
+	if e.unpublishedPending.nameSet == nil {
+		e.unpublishedPending.nameSet = make(map[string]struct{}, len(names))
+	}
+	queued := 0
+	for _, n := range names {
+		if _, ok := e.unpublishedPending.nameSet[n]; !ok {
+			e.unpublishedPending.nameSet[n] = struct{}{}
+			e.unpublishedPending.names = append(
+				e.unpublishedPending.names, n)
+			queued++
+		}
+	}
+	if queued > 0 {
+		e.unpublishedPending.arrivalSeq++
+	}
+	// The inbound names leave the owned-name ledger here: a name that
+	// reaches this queue was counted as owned exactly once at
+	// creation - as a failed publication's orphan, a record entry's
+	// recorded object, or a converted reservation - and its move to
+	// queued ownership retires exactly that count (the move either
+	// drops the name from ownedNames, or the name never entered the
+	// ledger, as with test-seeded queue names). The set move keeps
+	// duplicate names from corrupting the counter the admission bound
+	// reads (issue #25590 round-18 review).
+	for _, n := range names {
+		if _, ok := e.unpublishedPending.ownedNames[n]; ok {
+			delete(e.unpublishedPending.ownedNames, n)
+			e.unpublishedPending.live--
+		}
+	}
+	return queued
+}
+
+// unpublishedPendingQueue retains storage-object names whose deletion has
+// not succeeded yet, keyed by nothing but membership: each drain attempt
+// deletes every batch whose names the storage accepts and keeps the
+// rest. drainScheduled coalesces those attempts: at most one pipeline —
+// a submission waiting for GC capacity plus the running task itself —
+// exists per engine, so a handoff storm or the GC-scheduler tick cannot
+// stack one worker-occupying ladder per trigger onto the shared GC pool
+// (issue #25590 round-9 review). The drain context/cancel carry the
+// engine-owned cancellation every background drain runs under, and
+// drainIdle is non-nil exactly while a pipeline exists — Close cancels
+// and joins it (issue #25590 round-10 review). live counts every
+// proven-unpublished object an ACTIVE transaction still owns — the
+// accounting that survives every ownership transfer intact and that
+// only a successful deletion releases — and inFlight counts the dumps
+// admitted but not yet finished persisting, so concurrent admissions
+// reserve the boundary capacity instead of racing one another past the
+// bound (issue #25590 round-12 review). The round-13 review turns that
+// pair into a shared linearization point with the names themselves:
+// names, live and inFlight all live under THE SAME mutex — every
+// retaken append, the failed-retry release, the handoff's enqueue plus
+// release, the drain's retirement, and the admission slot's take and
+// release run inside one mutex section, so a concurrent admission
+// observes the whole three-owner total atomically and can never miss
+// the names riding a transfer between a transaction's list and this
+// queue.
+type unpublishedPendingQueue struct {
+	mu    sync.Mutex
+	names []string
+	// nameSet is the membership index of names; it must stay in lockstep
+	// with the slice so an enqueuer answers a duplicate in constant time
+	// instead of rescanning the whole retained backlog under the mutex
+	// (issue #25590 round-11 review).
+	nameSet        map[string]struct{}
+	drainScheduled bool
+	drainCtx       context.Context
+	drainCancel    context.CancelFunc
+	drainIdle      chan struct{}
+	// ownedNames is the live-name ledger of the admission bound: every
+	// name that CREATES an obligation on this engine is a member for
+	// exactly as long as it is neither published at commit, physically
+	// deleted nor enqueued here. live is len(ownedNames), kept in
+	// lockstep under this mutex so the counter the bound reads and the
+	// set the ownership transitions move can never disagree. The
+	// members are failed-publication orphan names, recorded workspace
+	// objects (direct-S3 records and successfully dumped objects
+	// alike), and names an admitted GC caller holds on the way to a
+	// delete or an enqueue - every name that could yet need this
+	// queue's space (issue #25590 round-18 review).
+	ownedNames map[string]struct{}
+	live       int64
+	inFlight   int64
+	// arrivalSeq counts enqueue events (one bump per call that added at
+	// least one name) under the same mutex as the queue itself: two
+	// readers of the same sequence value saw the exact same set of
+	// arrivals, so Engine.Close's final drain can tell an attempt that
+	// genuinely retired nothing from one whose retirable names were
+	// compensated by names enqueued mid-attempt — only the first may
+	// feed the no-progress conclusion, the second is owed a fresh
+	// decision the arrivals never got (issue #25590 round-16 review).
+	arrivalSeq uint64
+}
+
+// unpublishedPendingDrainRounds bounds one drain task's retry ladder; the
+// queue keeps every name that survives the ladder, and the engine's GC
+// scheduler — not the arrival of a new orphan — schedules the backlog's
+// next attempt (issue #25590 round-9 review).
+const unpublishedPendingDrainRounds = 8
+
+// unpublishedPendingDeleteBatch partitions one drain round into
+// independently attempted batches: a failing batch keeps exactly its own
+// names and never walls the later queued names away from every retry
+// (issue #25590 round-10 review). It matches the storage-side delete
+// batch bound of DeleteUnpublishedObjects.
+const unpublishedPendingDeleteBatch = 1000
+
+// gcUnpublishedPendingObjectTicker paces the engine GC scheduler's retry
+// of this queue (engine.go). The tick costs one mutex round-trip while
+// the queue is empty and is coalesced behind an in-flight drain, so a
+// one-minute pace makes storage recovery produce cleanup without any new
+// orphan.
+var gcUnpublishedPendingObjectTicker = time.Minute
+
+// unpublishedPendingDrainBudget bounds one whole drain task — every round
+// of it, not just one storage attempt — on the engine-owned drain
+// context: a slow or stalling storage may not keep a GC worker for
+// ladder after ladder while the shutdown waits behind it. Names the
+// budget strands stay queued for the tick's next attempt, so the bound
+// costs nothing but time (issue #25590 round-10 review).
+var unpublishedPendingDrainBudget = 10 * time.Minute
+
+// unpublishedPendingCloseDrainTimeout bounds the shutdown-time drain
+// work Close performs: the bounded join of an already-running drain and
+// its single final delete attempt. Test-pinnable as a package var.
+var unpublishedPendingCloseDrainTimeout = 10 * time.Second
+
+// workspaceDumpWriteS3Threshold is the memory threshold the workspace
+// dump's spilling writers run with; -1 keeps the production default.
+// It exists as a package var because the round-18 regressions make one
+// dump spill several objects deterministically by pinning it to spill
+// per batch, while production stays byte-identical to the previous
+// fixed default.
+var workspaceDumpWriteS3Threshold = -1
+
+// unpublishedPendingAdmissionLimit bounds every obligation name this
+// engine retains toward the cleanup queue: the queue's own names, every
+// transaction-owned orphan and recorded workspace object (direct-S3
+// inserts and successfully dumped objects alike — anything a rollback
+// could hand to the queue), and the per-object reservations of spilling
+// writers in flight. Refusal is fail-closed: only NEW obligations stop
+// (a spilling writer's object, a recording write), while everything
+// already owned stays exactly as owned — the handoffs stay lossless —
+// and the refusal ends the moment a drain retires work
+// (issue #25590 round-12/18 reviews). Test-pinnable as a package var.
+var unpublishedPendingAdmissionLimit = 500_000
+
+// PinUnpublishedPendingAdmissionLimitForTest pins the admission bound for
+// an external-package regression driver — the engine-level saturation
+// regressions round 19 adds — and returns its restore func. Nested pins
+// restore the value they found; production code never calls this.
+func PinUnpublishedPendingAdmissionLimitForTest(limit int) (restore func()) {
+	old := unpublishedPendingAdmissionLimit
+	unpublishedPendingAdmissionLimit = limit
+	return func() {
+		unpublishedPendingAdmissionLimit = old
+	}
+}
+
+// NewEngineForTest builds a bare engine fixture attached to a real file
+// service for an external-package regression driver (issue #25590 round-31
+// review, finding 3): the unpublished-cleanup queue's accounting and its
+// bounded delete pass then run exactly as production against that
+// service, so a settlement driver can prove the exact queue handoff AND
+// the physical retirement. Production code never constructs an engine
+// this way.
+func NewEngineForTest(fs fileservice.FileService) *Engine {
+	return &Engine{fs: fs}
+}
+
+// InspectUnpublishedPendingForTest returns the cleanup queue's exact
+// snapshot — the retire-pending names in queue order plus the owned and
+// in-flight capacity counters — so an external-package settlement
+// regression can assert which names reached engine cleanup and that the
+// accounting balances (issue #25590 round-31 review, finding 3).
+// Production code never calls this.
+func (e *Engine) InspectUnpublishedPendingForTest() (queued []string, live int, inFlight int) {
+	e.unpublishedPending.mu.Lock()
+	defer e.unpublishedPending.mu.Unlock()
+	queued = slices.Clone(e.unpublishedPending.names)
+	return queued, int(e.unpublishedPending.live), int(e.unpublishedPending.inFlight)
+}
+
+// DrainUnpublishedPendingForTest applies the queue's bounded delete pass
+// once — the same unit the asynchronous ladder and the shutdown-time
+// drain share — so an external-package settlement regression can prove
+// the physical deletion and the exact queue retirement. Deleting
+// tolerates an already-absent file exactly as production (issue #25590
+// round-31 review, finding 3). Production code never calls this.
+func (e *Engine) DrainUnpublishedPendingForTest(ctx context.Context) error {
+	return e.deleteQueuedUnpublishedPendingOnce(ctx)
+}
+
+// UnsettledCleanupOwnershipForTest returns the cleanup names this
+// transaction still owns — the pending cleanup list plus the outstanding
+// reservation map — so an external-package settlement regression can
+// assert that a terminal transfer or handoff cleared the transaction's
+// ownership instead of leaving it stranded (issue #25590 round-31
+// review, finding 3). Production code never calls this.
+func (txn *Transaction) UnsettledCleanupOwnershipForTest() (pending []string, reserved []string) {
+	pending = append(pending, txn.pendingObjectCleanupNames()...)
+	txn.unpublishedDumpReservationsMu.Lock()
+	reserved = make([]string, 0, len(txn.unpublishedDumpReservations))
+	for name := range txn.unpublishedDumpReservations {
+		reserved = append(reserved, name)
+	}
+	txn.unpublishedDumpReservationsMu.Unlock()
+	slices.Sort(pending)
+	slices.Sort(reserved)
+	return pending, reserved
+}
+
+// enqueueUnpublishedPending takes the engine-level ownership of names,
+// immediately and losslessly: the queue append is the transfer. A
+// duplicate name is a no-op — a later transaction can hand the same file
+// only once. Draining is scheduled opportunistically; every failure mode
+// of the schedule leaves the names owned here, retried by the engine's
+// GC scheduler on its next tick.
+func (e *Engine) enqueueUnpublishedPending(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	e.unpublishedPending.mu.Lock()
+	if e.unpublishedPending.nameSet == nil {
+		e.unpublishedPending.nameSet = make(map[string]struct{}, len(names))
+	}
+	added := 0
+	for _, n := range names {
+		if _, ok := e.unpublishedPending.nameSet[n]; !ok {
+			e.unpublishedPending.nameSet[n] = struct{}{}
+			e.unpublishedPending.names = append(e.unpublishedPending.names, n)
+			added++
+			// A name entering the queue retires exactly its owned-ledger
+			// membership - a recorded object handed off at rollback, a GC
+			// caller's tail, or a failed publication's orphan - so the
+			// inbound move can never double-count a name that enters
+			// queued ownership while already counted as owned
+			// (issue #25590 round-18 review).
+			if e.unpublishedPending.ownedNames != nil {
+				if _, ok := e.unpublishedPending.ownedNames[n]; ok {
+					delete(e.unpublishedPending.ownedNames, n)
+					e.unpublishedPending.live--
+				}
+			}
+		}
+	}
+	if added > 0 {
+		e.unpublishedPending.arrivalSeq++
+	}
+	e.unpublishedPending.mu.Unlock()
+	e.scheduleUnpublishedPendingDrain()
+}
+
+// reserveUnpublishedPendingObject is the fail-closed admission gate for
+// ONE storage object a workspace spilling writer is about to persist:
+// the sinker's capacity hook calls it right before the object would go
+// durable, holding one in-flight reservation in OBJECT units rather
+// than writer units - a dump whose writer spills three objects takes
+// three reservations and can no longer push the ledger past the bound
+// by spilling several objects behind one slot (issue #25590 round-18
+// review, finding 1). The reservation, the snapshot and the decision all
+// run inside ONE queue-mutex section - the linearization point every
+// accounting transition shares (issue #25590 round-13 review) - so a
+// refusal never observes a torn total and CONCURRENT spilling writers
+// share the remaining capacity through their per-name reservations
+// instead of racing one another past the bound. Only the spilling
+// writer stops: everything already held stays exactly as owned, and
+// every drain that retires work re-opens admission. A refused
+// reservation aborts the spill before the object persists, so nothing
+// half-persisted can appear behind it.
+func (e *Engine) reserveUnpublishedPendingObject(name string) error {
+	e.unpublishedPending.mu.Lock()
+	e.unpublishedPending.inFlight++
+	queued := len(e.unpublishedPending.names)
+	owned := int(e.unpublishedPending.live)
+	inFlight := int(e.unpublishedPending.inFlight)
+	if queued+owned+inFlight > unpublishedPendingAdmissionLimit {
+		e.unpublishedPending.inFlight--
+		e.unpublishedPending.mu.Unlock()
+		logutil.Warn(
+			"WORKSPACE-UNPUBLISHED-PENDING-ADMISSION",
+			zap.String("object", name),
+			zap.Int("retained", queued+owned),
+			zap.Int("limit", unpublishedPendingAdmissionLimit),
+			zap.Int("live", owned),
+			zap.Int("inflight", inFlight),
+		)
+		return moerr.NewInternalErrorf(
+			context.Background(),
+			"workspace admission paused: %d retained unpublished storage objects reached the admission bound %d",
+			queued+owned, unpublishedPendingAdmissionLimit,
+		)
+	}
+	e.unpublishedPending.mu.Unlock()
+	return nil
+}
+
+// convertUnpublishedPendingReservations turns the spilled dump's
+// per-object reservations into RETAINED OWNERSHIP in one queue-mutex
+// section: every name the dump persisted - successfully recorded or
+// taken over the failed-publication epilogue - releases exactly its
+// reservation and joins the owned-name ledger, so the inbound move is
+// atomic against every admission snapshot and the ledger can never
+// hold a reservation whose owning dump already ended (issue #25590
+// round-18 review, finding 1). The names are unique per object, but the
+// conversion still consumes exactly one reservation per input name -
+// the hook fired once per persisted object - independent of any
+// membership the name already has elsewhere.
+func (e *Engine) convertUnpublishedPendingReservations(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	e.unpublishedPending.mu.Lock()
+	e.unpublishedPending.inFlight -= int64(len(names))
+	if e.unpublishedPending.ownedNames == nil {
+		e.unpublishedPending.ownedNames = make(map[string]struct{}, len(names))
+	}
+	for _, n := range names {
+		if _, ok := e.unpublishedPending.ownedNames[n]; !ok {
+			e.unpublishedPending.ownedNames[n] = struct{}{}
+			e.unpublishedPending.live++
+		}
+	}
+	e.unpublishedPending.mu.Unlock()
+}
+
+// admitUnpublishedPendingRecordedNames admits recorded objects into the
+// ledger AT CREATION - every write that records S3 object names a
+// rollback could hand to this queue (the direct-S3 metadata branches of
+// txnTable.Write among them) counts its names here first, so obligations
+// that can reach the queue from ROLLBACK no longer pass behind the
+// bound (issue #25590 round-18 review, finding 2). Refusal fails the
+// recording write fail-closed: only new obligations stop, every owner
+// keeps exactly what it holds, and a drain retiring work re-opens
+// admission. Already-counted names (a duplicate record of the same
+// object) are admitted without spending capacity twice.
+func (e *Engine) admitUnpublishedPendingRecordedNames(names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	e.unpublishedPending.mu.Lock()
+	if e.unpublishedPending.ownedNames == nil {
+		e.unpublishedPending.ownedNames = make(map[string]struct{}, len(names))
+	}
+	fresh := 0
+	for _, n := range names {
+		if _, ok := e.unpublishedPending.ownedNames[n]; !ok {
+			if _, ok := e.unpublishedPending.nameSet[n]; ok {
+				continue // queued names are already counted and bound
+			}
+			fresh++
+		}
+	}
+	queued := len(e.unpublishedPending.names)
+	owned := int(e.unpublishedPending.live)
+	inFlight := int(e.unpublishedPending.inFlight)
+	if queued+owned+inFlight+fresh > unpublishedPendingAdmissionLimit {
+		e.unpublishedPending.mu.Unlock()
+		logutil.Warn(
+			"WORKSPACE-UNPUBLISHED-PENDING-ADMISSION",
+			zap.Strings("objects", names),
+			zap.Int("retained", queued+owned),
+			zap.Int("limit", unpublishedPendingAdmissionLimit),
+			zap.Int("live", owned),
+			zap.Int("inflight", inFlight),
+		)
+		return moerr.NewInternalErrorf(
+			context.Background(),
+			"workspace admission paused: %d retained unpublished storage objects reached the admission bound %d",
+			queued+owned, unpublishedPendingAdmissionLimit,
+		)
+	}
+	for _, n := range names {
+		if _, ok := e.unpublishedPending.ownedNames[n]; !ok {
+			if _, ok := e.unpublishedPending.nameSet[n]; ok {
+				continue
+			}
+			e.unpublishedPending.ownedNames[n] = struct{}{}
+			e.unpublishedPending.live++
+		}
+	}
+	e.unpublishedPending.mu.Unlock()
+	return nil
+}
+
+// releaseUnpublishedPendingPublished retires the ledger membership of
+// names whose writing transaction COMMITTED - a committed workspace
+// object is published data, not a cleanup obligation, and must return
+// its capacity to the bound the moment the commit brings it into the
+// visible dataset (issue #25590 round-18 review, finding 2). Membership
+// is idempotent: names already moved out - handed off, deleted, or never
+// counted - simply no-op, so commit after any intermediate transfer
+// cannot double-release.
+func (e *Engine) releaseUnpublishedPendingPublished(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	e.unpublishedPending.mu.Lock()
+	if e.unpublishedPending.ownedNames != nil {
+		for _, n := range names {
+			if _, ok := e.unpublishedPending.ownedNames[n]; ok {
+				delete(e.unpublishedPending.ownedNames, n)
+				e.unpublishedPending.live--
+			}
+		}
+	}
+	e.unpublishedPending.mu.Unlock()
+}
+
+// retainUnpublishedPendingNames gains owned-ledger membership for names
+// that are already persisted obligations of a failed dump but whose
+// per-object reservations the record choke or the epilogue never saw —
+// the membership is the invariant (issue #25590 round-18 review); a
+// name that IS already a member joins exactly once (fresh names from a
+// spilling writer are impossible, this is the robustness path).
+func (e *Engine) retainUnpublishedPendingNames(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	e.unpublishedPending.mu.Lock()
+	if e.unpublishedPending.ownedNames == nil {
+		e.unpublishedPending.ownedNames = make(map[string]struct{}, len(names))
+	}
+	for _, n := range names {
+		if _, ok := e.unpublishedPending.ownedNames[n]; !ok {
+			if _, ok := e.unpublishedPending.nameSet[n]; !ok {
+				e.unpublishedPending.ownedNames[n] = struct{}{}
+				e.unpublishedPending.live++
+			}
+		}
+	}
+	e.unpublishedPending.mu.Unlock()
+}
+
+// abandonUnpublishedPendingReservations closes the given outstanding
+// reservations without any obligation behind them: the transaction's
+// storage work ended without the objects ever being recorded or swept,
+// so their in-flight units return to the bound exactly once
+// (issue #25590 round-18 review).
+func (e *Engine) abandonUnpublishedPendingReservations(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	e.unpublishedPending.mu.Lock()
+	e.unpublishedPending.inFlight -= int64(len(names))
+	e.unpublishedPending.mu.Unlock()
+}
+
+// settleUnpublishedPendingDeleted retires the ledger membership of
+// names an admitted GC caller finished with - successfully deleted or
+// dropped with the caller's own pre-existing loss class - so capacity
+// held for a name a workspace recorded cannot stay frozen behind a
+// caller whose whole batch already left the caller's hands (issue
+// #25590 round-18 review).
+func (e *Engine) settleUnpublishedPendingDeleted(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	e.unpublishedPending.mu.Lock()
+	if e.unpublishedPending.ownedNames != nil {
+		for _, n := range names {
+			if _, ok := e.unpublishedPending.ownedNames[n]; ok {
+				delete(e.unpublishedPending.ownedNames, n)
+				e.unpublishedPending.live--
+			}
+		}
+	}
+	e.unpublishedPending.mu.Unlock()
+}
+
+// scheduleUnpublishedPendingDrain hands the drain of the queue to the
+// engine's GC pool — the pool that also collects workspace GC batches at
+// rollback. The round-9 review pinned two defects of a synchronous
+// Submit: the production GC pool is a five-worker blocking pool shared
+// with other GC work, so a finalization scheduling with every worker
+// occupied parked the commit itself inside ants' unbounded worker wait;
+// and every handoff could stack another worker-occupying ladder for the
+// same backlog. The schedule therefore coalesces — one pipeline per
+// engine — and never waits on the caller's goroutine: the submission runs
+// in a background goroutine, so Rollback and the commit finalizers return
+// with the GC pool fully occupied and the parked submission starts the
+// drain on the first freed worker. Whatever refuses the submission — a
+// released pool, a missing engine dependency — leaves the names owned by
+// the queue, and the GC-scheduler tick schedules the retry (issue #25590
+// round-9 review).
+func (e *Engine) scheduleUnpublishedPendingDrain() {
+	e.unpublishedPending.mu.Lock()
+	if e.unpublishedPending.drainScheduled || len(e.unpublishedPending.names) == 0 {
+		e.unpublishedPending.mu.Unlock()
+		return
+	}
+	e.unpublishedPending.drainScheduled = true
+	// Each pipeline gets a join handle Close can wait on, and the engine
+	// owns one cancellation context shared by every background drain: an
+	// in-flight deletion must become abortable at shutdown instead of
+	// outliving its own attempt timer (issue #25590 round-10 review).
+	e.unpublishedPending.drainIdle = make(chan struct{})
+	if e.unpublishedPending.drainCtx == nil {
+		e.unpublishedPending.drainCtx, e.unpublishedPending.drainCancel =
+			context.WithCancel(context.Background())
+	}
+	drainCtx := e.unpublishedPending.drainCtx
+	e.unpublishedPending.mu.Unlock()
+	e.gcMu.Lock()
+	pool := e.gcPool
+	closed := e.dynamicCtx.closed.Load()
+	e.gcMu.Unlock()
+	if pool == nil || closed || e.fs == nil || drainCtx == nil {
+		e.clearUnpublishedPendingSchedule()
+		logutil.Debug("WORKSPACE-UNPUBLISHED-PENDING-NOPOOL")
+		return
+	}
+	go func() {
+		if err := pool.Submit(func() { e.drainUnpublishedPending() }); err != nil {
+			// The submission was refused: the names stay owned by the
+			// queue, and the GC-scheduler tick or a later handoff
+			// schedules the retry of the whole backlog.
+			e.clearUnpublishedPendingSchedule()
+			logutil.Warn(
+				"WORKSPACE-UNPUBLISHED-CLEANUP-SCHED",
+				zap.Error(err),
+			)
+		}
+	}()
+}
+
+// clearUnpublishedPendingSchedule releases the coalescing slot so the next
+// GC-scheduler tick or enqueue can schedule a fresh drain of the backlog,
+// and closes the pipeline's join handle.
+func (e *Engine) clearUnpublishedPendingSchedule() {
+	e.unpublishedPending.mu.Lock()
+	e.unpublishedPending.drainScheduled = false
+	if e.unpublishedPending.drainIdle != nil {
+		close(e.unpublishedPending.drainIdle)
+		e.unpublishedPending.drainIdle = nil
+	}
+	e.unpublishedPending.mu.Unlock()
+}
+
+// cancelUnpublishedPendingDrains cancels the engine-owned context under
+// which every background drain runs, so a deletion already blocked inside
+// the file service aborts promptly instead of running out its own
+// attempt timer while Close waits behind it (issue #25590 round-10
+// review). Ownership is untouched: only successfully deleted names ever
+// leave the queue.
+func (e *Engine) cancelUnpublishedPendingDrains() {
+	e.unpublishedPending.mu.Lock()
+	cancel := e.unpublishedPending.drainCancel
+	e.unpublishedPending.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// waitUnpublishedPendingDrains joins a drain pipeline that exists when
+// shutdown begins, bounded by the cleanup budget: a drain that ignores
+// the cancellation (no cooperative context in the storage path) must not
+// hold Close longer than that.
+func (e *Engine) waitUnpublishedPendingDrains(timeout time.Duration) {
+	e.unpublishedPending.mu.Lock()
+	idle := e.unpublishedPending.drainIdle
+	e.unpublishedPending.mu.Unlock()
+	if idle == nil {
+		return
+	}
+	select {
+	case <-idle:
+	case <-time.After(timeout):
+		logutil.Warn("WORKSPACE-UNPUBLISHED-PENDING-DRAIN-JOIN-TIMEOUT",
+			zap.Duration("budget", timeout))
+	}
+}
+
+// deleteQueuedUnpublishedPendingOnce attempts one bounded delete of the
+// queued snapshot as INDEPENDENT batches — the unit shared by the
+// asynchronous ladder and the shutdown-time drain. A batch the storage
+// accepts is retired from the queue exactly; a batch whose deletion
+// fails keeps exactly its own names and never walls the later queued
+// names behind it, so one poisoned object can no longer keep every
+// healthy name stranded from every retry and GC tick (issue #25590
+// round-10 review) — the storage-side DeleteUnpublishedObjects stops at
+// its own first failing batch, so the partitioning here is what restores
+// per-batch liveness. The return is nil only when every batch succeeded.
+func (e *Engine) deleteQueuedUnpublishedPendingOnce(ctx context.Context) error {
+	fs := e.fs
+	if fs == nil {
+		return moerr.NewInternalErrorNoCtx("file service is unavailable")
+	}
+	e.unpublishedPending.mu.Lock()
+	pending := slices.Clone(e.unpublishedPending.names)
+	e.unpublishedPending.mu.Unlock()
+	if len(pending) == 0 {
+		return nil
+	}
+	var failed error
+	for start := 0; start < len(pending); start += unpublishedPendingDeleteBatch {
+		end := min(start+unpublishedPendingDeleteBatch, len(pending))
+		batch := pending[start:end]
+		// The engine outlives the transaction: the delete runs on the given
+		// context and keeps no transaction state alive.
+		if _, err := ioutil.DeleteUnpublishedObjects(ctx, fs, batch...); err != nil {
+			logutil.Warn(
+				"WORKSPACE-UNPUBLISHED-PENDING-KEEP",
+				zap.Strings("files", batch),
+				zap.Error(err),
+			)
+			if failed == nil {
+				failed = err
+			}
+			continue
+		}
+		e.unpublishedPending.mu.Lock()
+		done := make(map[string]struct{}, len(batch))
+		for _, n := range batch {
+			done[n] = struct{}{}
+		}
+		rest := make([]string, 0, len(e.unpublishedPending.names))
+		for _, n := range e.unpublishedPending.names {
+			if _, ok := done[n]; !ok {
+				rest = append(rest, n)
+			} else if e.unpublishedPending.nameSet != nil {
+				delete(e.unpublishedPending.nameSet, n)
+			}
+		}
+		e.unpublishedPending.names = rest
+		e.unpublishedPending.mu.Unlock()
+	}
+	return failed
+}
+
+// drainUnpublishedPending deletes the queued backlog with a bounded
+// retry ladder; only a successful delete removes a batch, and every
+// name the ladder does not delete stays owned by the queue. The round-9
+// review pinned that this task was the queue's only trigger: once the
+// ladder exhausted on a dirty file service or the submission was refused,
+// nothing but a new orphan's enqueue could ever schedule the deletions
+// again. The engine's GC scheduler now schedules the drain on every tick,
+// so storage recovery alone completes the cleanup — this ladder first,
+// the tick after it. The round-10 review added that the ladder must run
+// inside the engine's own cancellation context with an overall budget —
+// Close cancels the context, so a deletion already blocked inside the
+// file service aborts promptly and the worker returns, instead of
+// holding the pool worker until its attempt timer expires while Close
+// waits behind it (issue #25590 round-10 review).
+func (e *Engine) drainUnpublishedPending() {
+	// The coalescing slot is free again when the task ends. A backlog that
+	// survived the ladder stays queued for the GC-scheduler tick; a
+	// success reschedules immediately for the names a concurrent enqueue
+	// parked behind this drain's coalescing slot.
+	resched := false
+	defer func() {
+		e.clearUnpublishedPendingSchedule()
+		if resched {
+			e.scheduleUnpublishedPendingDrain()
+		}
+	}()
+	e.unpublishedPending.mu.Lock()
+	drainCtx := e.unpublishedPending.drainCtx
+	e.unpublishedPending.mu.Unlock()
+	if e.fs == nil || drainCtx == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(drainCtx, unpublishedPendingDrainBudget)
+	defer cancel()
+	delay := 25 * time.Millisecond
+	for round := 0; round < unpublishedPendingDrainRounds; round++ {
+		if e.dynamicCtx.closed.Load() || ctx.Err() != nil {
+			return
+		}
+		if err := e.deleteQueuedUnpublishedPendingOnce(ctx); err != nil {
+			if ctx.Err() != nil {
+				// Canceled or budget-spent: hands the names back to the
+				// queue for the tick after shutdown or the tick after the
+				// budget.
+				return
+			}
+			time.Sleep(delay)
+			if delay < time.Second {
+				delay *= 2
+			}
+			continue
+		}
+		e.unpublishedPending.mu.Lock()
+		remaining := len(e.unpublishedPending.names) > 0
+		e.unpublishedPending.mu.Unlock()
+		resched = remaining
+		return
+	}
+	// The ladder ran out on a still-failing file service: the names stay
+	// owned by the queue — the engine's registry — until the GC-scheduler
+	// tick schedules the next attempt.
+	logutil.Warn(
+		"WORKSPACE-UNPUBLISHED-PENDING-HELD",
+		zap.Int("names", func() int {
+			e.unpublishedPending.mu.Lock()
+			defer e.unpublishedPending.mu.Unlock()
+			return len(e.unpublishedPending.names)
+		}()),
+	)
+}
+
+// finalizePendingObjectCleanup is the one terminal owner of the proven-
+// unpublished storage-object list, shared by every transaction-destruction
+// path: Rollback, FinalizeCommit and FinalizeCommitWithUnknownResult
+// (issue #25590 round-7 review). The list only ever holds objects whose
+// publication failed before any workspace entry recorded them, so no
+// commit payload — even one that already reached TN under an unknown
+// result — can ever reference a name on it, and handing the names over
+// under every finalization path is always safe. The round-11 bound ran
+// one synchronous deletion attempt on a short overall budget before the
+// transfer; the round-12 review (issue #25590) pinned that this still
+// parked the transaction's final moment whenever the storage ignores
+// cancellation — the LocalFS deleteSingle shape performs synchronous
+// filesystem work no deadline or the 10-minute sinker bound can move —
+// and behind it, through rollbackOwned, the transaction locks. The
+// terminal round therefore performs NO storage I/O at all: the
+// ownership transfer alone — a mutex-guarded queue append that never
+// touches the file service — carries every name to the engine, and the
+// engine's own scheduled drain performs every deletion afterwards.
+// Transaction destruction thus terminates independently of any storage
+// fate, for an alive caller and an already-dead caller alike, and after
+// delTransaction nothing of this transaction exists to retry with — the
+// queue is the only owner left.
+func (txn *Transaction) finalizePendingObjectCleanup() {
+	txn.handoffPendingObjectCleanup()
+}
+
 func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	var size uint64
 	var pkCount int
+
+	// Orphans kept from a failed publication transfer here to the engine's
+	// lossless queue, before the gates below can return early — commit
+	// included (issue #25590 round-14 review). A dump attempt is part of
+	// statement admission under the transaction's own locks, so the
+	// transfer must not touch the file service: the engine's scheduled
+	// drain retries every retained deletion with the r10 ladder and
+	// GC-tick machinery, which keeps a stalled file service from parking
+	// statement admission — or behind it the request's cancellation —
+	// while the ownership, the accounting and every retry obligation move
+	// to the queue in one section. The r5 boundary classification (round-
+	// 21 review, finding G1) rides the same call: a mid-statement dump
+	// (offset >= 0, the statement still executing) moves only entries
+	// older than the recording statement plus the recording consumer's
+	// definite orphans — an in-flight publication of the current epoch
+	// cannot be orphaned yet — while the commit-prepare dump (offset < 0,
+	// every statement quiesced) hands the whole classified list over.
+	txn.handoffPendingObjectCleanupLocked(offset < 0)
 
 	// Check fault injection first - if enabled, force flush
 	forceFlush := objectio.CNWorkspaceForceFlushInjected()
@@ -1196,6 +2192,23 @@ func (txn *Transaction) dumpBatchLocked(ctx context.Context, offset int) error {
 	if fs, err = colexec.GetSharedFSFromProc(txn.proc); err != nil {
 		return err
 	}
+
+	// Admission control in OBJECT units over additional persistence
+	// (issue #25590 round-11/12/18 reviews): the gates above already
+	// returned the workspaces that dump nothing, so only dumps that
+	// will really persist reach this point. The writers below carry
+	// the engine's per-object capacity hook: every object a spilling
+	// writer is about to persist reserves one in-flight unit under the
+	// admission bound before it persists, a refusal aborts that spill
+	// before anything persists, the record choke converts successful
+	// reservations into retained ownership, and the failed-publication
+	// epilogue sweeps the rest - no writer can hold a unit beyond its
+	// dump's end. A dump can no longer push the ledger past the bound
+	// by spilling several objects behind one unit, concurrent writers
+	// share the remaining capacity through their per-name reservations,
+	// and no name is dropped by a refusal: every owner keeps exactly
+	// what it owns, only the stream that would add more obligations
+	// stops, and it resumes the moment a drain retires work.
 
 	if err := txn.dumpInsertBatchLocked(ctx, fs, offset, &pkCount); err != nil {
 		return err
@@ -1326,67 +2339,61 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		return nil
 	}
 
-	lastWriteIndex := offset
-	writes := txn.writes
+	// Stage the dump candidates WITHOUT retiring them: the sources stay
+	// live — they back the staged views the publication below writes out —
+	// and each one is retired only after its replacement file entries are
+	// recorded (issue #25590). A storage failure mid-publication must
+	// leave the earlier successful statements' rows available to the
+	// statement rollback the frontend issues on the admission error,
+	// instead of having staged them away before the failure.
 	mp := make(map[workspaceTableKey][]*batch.Batch)
+	mpIdxs := make(map[workspaceTableKey][]int)
+	mpRows := make(map[workspaceTableKey]int)
 	for i := offset; i < len(txn.writes); i++ {
 		if skipTable[txn.writes[i].tableId] {
-			writes[lastWriteIndex] = writes[i]
-			lastWriteIndex++
 			continue
 		}
 		if txn.writes[i].isCatalog() {
-			writes[lastWriteIndex] = writes[i]
-			lastWriteIndex++
 			continue
 		}
 		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
-			writes[lastWriteIndex] = writes[i]
-			lastWriteIndex++
+			continue
+		}
+		if txn.writes[i].typ != INSERT || txn.writes[i].fileName != "" {
 			continue
 		}
 
-		keepElement := true
-		if txn.writes[i].typ == INSERT && txn.writes[i].fileName == "" {
-			tbKey := workspaceTableKey{
-				tableKey: tableKey{
-					accountId:  txn.writes[i].accountId,
-					databaseId: txn.writes[i].databaseId,
-					dbName:     txn.writes[i].databaseName,
-					name:       txn.writes[i].tableName,
-				},
-				autoIncrEpoch:      txn.writes[i].autoIncrEpoch,
-				autoIncrEpochKnown: txn.writes[i].autoIncrEpochKnown,
-			}
-			// Tables not resolved in the pre-resolution pass were appended
-			// to the workspace while the lock was released; keep them in
-			// memory for the next dump instead of calling getTable with
-			// the lock held.
-			if _, ok := tables[tbKey.tableKey]; ok {
-				bat := txn.writes[i].bat
-				*pkCount += bat.RowCount()
-				txn.unaccountInsertKeyOffsetsLocked(&txn.writes[i])
-				txn.unaccountWorkspaceEntryLocked(&txn.writes[i])
-				// skip rowid
-				newBatch := batch.NewWithSize(len(bat.Vecs) - 1)
-				newBatch.SetAttributes(bat.Attrs[1:])
-				newBatch.Vecs = bat.Vecs[1:]
-				newBatch.SetRowCount(bat.Vecs[0].Length())
-				mp[tbKey] = append(mp[tbKey], newBatch)
-				defer bat.Clean(txn.proc.GetMPool())
-
-				keepElement = false
-			}
+		tbKey := workspaceTableKey{
+			tableKey: tableKey{
+				accountId:  txn.writes[i].accountId,
+				databaseId: txn.writes[i].databaseId,
+				dbName:     txn.writes[i].databaseName,
+				name:       txn.writes[i].tableName,
+			},
+			autoIncrEpoch:      txn.writes[i].autoIncrEpoch,
+			autoIncrEpochKnown: txn.writes[i].autoIncrEpochKnown,
 		}
-
-		if keepElement {
-			writes[lastWriteIndex] = writes[i]
-			lastWriteIndex++
+		// Tables not resolved in the pre-resolution pass were appended
+		// to the workspace while the lock was released; keep them in
+		// memory for the next dump instead of calling getTable with
+		// the lock held.
+		if _, ok := tables[tbKey.tableKey]; !ok {
+			continue
 		}
+		bat := txn.writes[i].bat
+		// skip rowid
+		newBatch := batch.NewWithSize(len(bat.Vecs) - 1)
+		newBatch.SetAttributes(bat.Attrs[1:])
+		newBatch.Vecs = bat.Vecs[1:]
+		newBatch.SetRowCount(bat.Vecs[0].Length())
+		mp[tbKey] = append(mp[tbKey], newBatch)
+		mpIdxs[tbKey] = append(mpIdxs[tbKey], i)
+		mpRows[tbKey] += bat.RowCount()
 	}
-
-	clearVacatedWriteSlots(writes, lastWriteIndex, len(writes))
-	txn.writes = writes[:lastWriteIndex]
+	// Entries appended at or after stagedEnd — the block-info entries a
+	// publication records — are not eligible for this dump round and must
+	// survive the retirement compaction below.
+	stagedEnd := len(txn.writes)
 
 	var (
 		stats    []objectio.ObjectStats
@@ -1401,28 +2408,104 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		}
 	}()
 
-	for tbKey := range mp {
+	// publishTable flushes one staged table out and records its replacement
+	// file entries. It is fallible without side effects on staging: on a
+	// pre-recording error, exactly this table's publication is abandoned
+	// and nobody touches the workspace before the epilogue below. A
+	// published report means the replacement entry is recorded — such a
+	// table retires its sources even if a post-recording error follows.
+	publishTable := func(tbKey workspaceTableKey) (published bool, err error) {
+		defer func() {
+			if published || err == nil || s3Writer == nil {
+				return
+			}
+			// This publication stopped before its replacement file entry
+			// was recorded, so its storage objects are recorded nowhere:
+			// the file entry the workspace GC walks was the recording, and
+			// s3Writer.Close below drops the sinker's persisted references
+			// without deleting the files. Take their names over here — the
+			// only remaining owner — and delete NOTHING on this path: this
+			// epilogue runs inside the statement's admission with the
+			// transaction lock held, and a file service whose deletion a
+			// stalled context cannot move must not park the statement, the
+			// statements behind the lock, or rollback with it (issue
+			// #25590 round-15 review). The names transfer to the
+			// asynchronous cleanup owner: the transaction lists them and
+			// counts them into the engine's live-orphan accounting now, and
+			// the next statement boundary's handoff — or the terminal one —
+			// moves them to the engine queue whose own drain deletes them.
+			files := s3Writer.PersistedNames()
+			s3Writer.Close()
+			s3Writer = nil
+			if len(files) > 0 {
+				// r5 (round-21 review): a failed dump epilogue's names are
+				// DEFINITE orphans — the publication failed and the retry
+				// replaces them with fresh objects, so no recording consumer
+				// can ever land for these names — they keep the round-14
+				// immediate-transfer semantics (retainedIfRecordingLater
+				// false).
+				for _, n := range files {
+					txn.pendingObjectCleanup = append(txn.pendingObjectCleanup,
+						pendingObjectCleanupItem{name: n})
+				}
+				// The names enter the engine's live-orphan accounting the
+				// admission bound consults: orphans still owned by an
+				// ACTIVE transaction are part of the retained backlog
+				// long before any handoff, or an explicit transaction's
+				// repeated failures could grow its own backlog without
+				// limit while the engine queue stays empty (issue #25590
+				// round-12 review). The count joins, like every other
+				// accounting transition, under the queue's mutex (issue
+				// #25590 round-13 review). Round 18 pairs the retention
+				// with its reservations: every persisted name below
+				// consumed one per-object capacity reservation when its
+				// file sinker spilled, so the same one-section move
+				// retires those reservations and retains the names —
+				// the ledger never keeps a reservation whose dump has
+				// ended, and never counts a name whose spilling writer
+				// was never admitted (issue #25590 round-18 review).
+				if txn.engine != nil {
+					txn.convertDumpedReservationsLocked(files)
+				}
+				logutil.Warn(
+					"WORKSPACE-PENDING-CLEANUP-RETAKE",
+					zap.Strings("files", files),
+					zap.String("reason", "publication failed: the statement path performs no deletion (issue #25590 round-15 review)"),
+					zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
+				)
+			}
+		}()
+		if objectio.CNDumpInsertWriteFailedInjected() {
+			return false, moerr.NewInternalErrorNoCtx(
+				"fault injection: insert dump write failed")
+		}
+
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
 		tbl := tables[tbKey.tableKey]
 
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
 		s3Writer = colexec.NewCNS3DataWriterForService(
-			txn.proc.GetService(), txn.proc.GetMPool(), fs, tableDef, -1, false,
+			txn.proc.GetService(), txn.proc.GetMPool(), fs, tableDef,
+			workspaceDumpWriteS3Threshold, false, txn.dumpSinkerCapacityOption(),
 		)
 
 		for _, bat = range mp[tbKey] {
 			if err = s3Writer.Write(txn.proc.Ctx, bat); err != nil {
-				return err
+				return false, err
 			}
 		}
 
+		if objectio.CNDumpInsertSyncFailedInjected() {
+			return false, moerr.NewInternalErrorNoCtx(
+				"fault injection: insert dump sync failed")
+		}
 		if stats, err = s3Writer.Sync(txn.proc.Ctx); err != nil {
-			return err
+			return false, err
 		}
 
 		fileName = stats[0].ObjectLocation().String()
 		if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
-			return err
+			return false, err
 		}
 
 		var table *txnTable
@@ -1445,15 +2528,67 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			tbKey.autoIncrEpoch,
 			tbKey.autoIncrEpochKnown,
 		); err != nil {
-			return err
+			return false, err
 		}
 
 		s3Writer.Close()
 
 		s3Writer = nil
+		return true, nil
 	}
 
-	return nil
+	published := make(map[int]bool)
+	var publishErr error
+	for tbKey := range mp {
+		publishedNow, perr := publishTable(tbKey)
+		if publishedNow {
+			for _, idx := range mpIdxs[tbKey] {
+				published[idx] = true
+			}
+			// count rows that actually left the in-memory workspace; the
+			// rows of unpublished tables never leave it.
+			*pkCount += mpRows[tbKey]
+		}
+		if perr != nil {
+			publishErr = perr
+			break
+		}
+	}
+
+	// Retire exactly the published sources, compacting in place: every
+	// other entry — an unpublished staging's source, or one a publication
+	// appended — stays raw and accounted, so the workspace a failed dump
+	// leaves behind is the one the statements actually produced.
+	if len(published) > 0 {
+		writes := txn.writes
+		w := offset
+		for i := offset; i < stagedEnd; i++ {
+			if published[i] {
+				// The published source leaves the workspace entirely:
+				// refund its hydrated key index through the same
+				// batching-mutation choke point the shrink and entry
+				// release paths use before its batch is cleaned
+				// (issue #26796 ownership).
+				txn.unaccountInsertKeyOffsetsLocked(&writes[i])
+				txn.unaccountWorkspaceEntryLocked(&writes[i])
+				writes[i].bat.Clean(txn.proc.GetMPool())
+				continue
+			}
+			writes[w] = writes[i]
+			w++
+		}
+		if drop := stagedEnd - w; drop > 0 {
+			copy(writes[w:], writes[stagedEnd:])
+			txn.writes = writes[:len(writes)-drop]
+			// Drop the vacated tail's stale Entry references through the
+			// original full-length slice so the truncated workspace cannot
+			// pin retired batches (same contract as clearVacatedWriteSlots
+			// callers on main, issue #26796).
+			clearVacatedWriteSlots(txn.writes, len(txn.writes), len(writes))
+		}
+	}
+
+	return publishErr
 }
 
 func (txn *Transaction) dumpDeleteBatchLocked(
@@ -1472,64 +2607,54 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 		return nil
 	}
 
-	deleteCnt := 0
-	lastWriteIndex := offset
-	writes := txn.writes
+	// Stage the dump candidates WITHOUT retiring them, mirroring
+	// dumpInsertBatchLocked (issue #25590): delete sources stay live until
+	// their replacement tombstone entries are published, so a storage
+	// failure mid-publication never drops deletes that succeeded earlier.
 	mp := make(map[workspaceTableKey][]*batch.Batch)
+	mpIdxs := make(map[workspaceTableKey][]int)
 	for i := offset; i < len(txn.writes); i++ {
 		if txn.writes[i].isCatalog() {
-			writes[lastWriteIndex] = writes[i]
-			lastWriteIndex++
 			continue
 		}
 		if txn.writes[i].bat == nil || txn.writes[i].bat.RowCount() == 0 {
-			writes[lastWriteIndex] = writes[i]
-			lastWriteIndex++
+			continue
+		}
+		if txn.writes[i].typ != DELETE || txn.writes[i].fileName != "" {
 			continue
 		}
 
-		keepElement := true
-		if txn.writes[i].typ == DELETE && txn.writes[i].fileName == "" {
-			tbKey := workspaceTableKey{
-				tableKey: tableKey{
-					accountId:  txn.writes[i].accountId,
-					databaseId: txn.writes[i].databaseId,
-					dbName:     txn.writes[i].databaseName,
-					name:       txn.writes[i].tableName,
-				},
-				autoIncrEpoch:      txn.writes[i].autoIncrEpoch,
-				autoIncrEpochKnown: txn.writes[i].autoIncrEpochKnown,
-			}
-			// Tables not resolved in the pre-resolution pass were appended
-			// to the workspace while the lock was released; keep them in
-			// memory for the next dump instead of calling getTable with
-			// the lock held.
-			if _, ok := tables[tbKey.tableKey]; ok {
-				bat := txn.writes[i].bat
-				deleteCnt += bat.RowCount()
-				txn.unaccountInsertKeyOffsetsLocked(&txn.writes[i])
-				txn.unaccountWorkspaceEntryLocked(&txn.writes[i])
-
-				newBat := batch.NewWithSize(len(bat.Vecs))
-				newBat.SetAttributes(bat.Attrs)
-				newBat.Vecs = bat.Vecs
-				newBat.SetRowCount(bat.Vecs[0].Length())
-
-				mp[tbKey] = append(mp[tbKey], newBat)
-				defer bat.Clean(txn.proc.GetMPool())
-
-				keepElement = false
-			}
+		tbKey := workspaceTableKey{
+			tableKey: tableKey{
+				accountId:  txn.writes[i].accountId,
+				databaseId: txn.writes[i].databaseId,
+				dbName:     txn.writes[i].databaseName,
+				name:       txn.writes[i].tableName,
+			},
+			autoIncrEpoch:      txn.writes[i].autoIncrEpoch,
+			autoIncrEpochKnown: txn.writes[i].autoIncrEpochKnown,
 		}
-
-		if keepElement {
-			writes[lastWriteIndex] = writes[i]
-			lastWriteIndex++
+		// Tables not resolved in the pre-resolution pass were appended
+		// to the workspace while the lock was released; keep them in
+		// memory for the next dump instead of calling getTable with
+		// the lock held.
+		if _, ok := tables[tbKey.tableKey]; !ok {
+			continue
 		}
+		bat := txn.writes[i].bat
+
+		newBat := batch.NewWithSize(len(bat.Vecs))
+		newBat.SetAttributes(bat.Attrs)
+		newBat.Vecs = bat.Vecs
+		newBat.SetRowCount(bat.Vecs[0].Length())
+
+		mp[tbKey] = append(mp[tbKey], newBat)
+		mpIdxs[tbKey] = append(mpIdxs[tbKey], i)
 	}
-
-	clearVacatedWriteSlots(writes, lastWriteIndex, len(writes))
-	txn.writes = writes[:lastWriteIndex]
+	// Entries appended at or after stagedEnd — the tombstone entries a
+	// publication records — are not eligible for this dump round and must
+	// survive the retirement compaction below.
+	stagedEnd := len(txn.writes)
 
 	var (
 		pkCol    *plan.ColDef
@@ -1546,29 +2671,109 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 		}
 	}()
 
-	for tbKey := range mp {
+	// publishTable flushes one staged table's tombstones out and records
+	// the replacement entries. It is fallible without side effects on
+	// staging, mirroring dumpInsertBatchLocked (issue #25590): a
+	// pre-recording error abandons exactly this table's publication. Once
+	// the replacement entry is recorded the table counts as published —
+	// a Close error after that point cannot retire to its sources without
+	// double-applying the tombstones at commit, so the sources retire and
+	// the dump still reports the error.
+	publishTable := func(tbKey workspaceTableKey) (published bool, err error) {
+		defer func() {
+			if published || err == nil || s3Writer == nil {
+				return
+			}
+			// Mirrors the insert path: a publication stopped before its
+			// replacement file entry was recorded leaves storage objects
+			// that no workspace slot can ever collect — Close drops the
+			// sinker's persisted references without deleting the files —
+			// so the failed writer hands its objects' names over here and
+			// deletes NOTHING on this path, which runs inside the
+			// statement's admission under the transaction lock: a stalled
+			// context-blind deletion must park neither this statement nor
+			// rollback (issue #25590 round-15 review). The names transfer
+			// to the asynchronous cleanup owner — the transaction lists
+			// them and counts them into the engine's live-orphan
+			// accounting now, and the next statement boundary's handoff —
+			// or the terminal one — moves them to the engine queue whose
+			// own drain deletes them. A recorded publication returns
+			// published=true even with a Close error, so legitimately
+			// recorded objects are never touched by this cleanup.
+			files := s3Writer.PersistedNames()
+			s3Writer.Close()
+			s3Writer = nil
+			if len(files) > 0 {
+				// r5 (round-21 review): a failed dump epilogue's names are
+				// DEFINITE orphans — the publication failed and the retry
+				// replaces them with fresh objects, so no recording consumer
+				// can ever land for these names — they keep the round-14
+				// immediate-transfer semantics (retainedIfRecordingLater
+				// false).
+				for _, n := range files {
+					txn.pendingObjectCleanup = append(txn.pendingObjectCleanup,
+						pendingObjectCleanupItem{name: n})
+				}
+				// The names enter the engine's live-orphan accounting the
+				// admission bound consults: orphans still owned by an
+				// ACTIVE transaction are part of the retained backlog
+				// long before any handoff, or an explicit transaction's
+				// repeated failures could grow its own backlog without
+				// limit while the engine queue stays empty (issue #25590
+				// round-12 review). The count joins, like every other
+				// accounting transition, under the queue's mutex (issue
+				// #25590 round-13 review). Round 18 pairs the retention
+				// with its reservations: every persisted name below
+				// consumed one per-object capacity reservation when its
+				// file sinker spilled, so the same one-section move
+				// retires those reservations and retains the names —
+				// the ledger never keeps a reservation whose dump has
+				// ended, and never counts a name whose spilling writer
+				// was never admitted (issue #25590 round-18 review).
+				if txn.engine != nil {
+					txn.convertDumpedReservationsLocked(files)
+				}
+				logutil.Warn(
+					"WORKSPACE-PENDING-CLEANUP-RETAKE",
+					zap.Strings("files", files),
+					zap.String("reason", "publication failed: the statement path performs no deletion (issue #25590 round-15 review)"),
+					zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
+				)
+			}
+		}()
+		if objectio.CNDumpDeleteWriteFailedInjected() {
+			return false, moerr.NewInternalErrorNoCtx(
+				"fault injection: delete dump write failed")
+		}
+
 		// scenario 2 for cn write s3, more info in the comment of S3Writer
 		tbl := tables[tbKey.tableKey]
 
 		pkCol = plan2.PkColByTableDef(tbl.GetTableDef(txn.proc.Ctx))
 		s3Writer = colexec.NewCNS3TombstoneWriterForService(
-			txn.proc.GetService(), txn.proc.GetMPool(), fs, plan2.ExprType2Type(&pkCol.Typ), -1,
+			txn.proc.GetService(), txn.proc.GetMPool(), fs,
+			plan2.ExprType2Type(&pkCol.Typ), workspaceDumpWriteS3Threshold,
+			txn.dumpSinkerCapacityOption(),
 		)
 
 		for i := 0; i < len(mp[tbKey]); i++ {
 			if err = s3Writer.Write(txn.proc.Ctx, mp[tbKey][i]); err != nil {
-				return err
+				return false, err
 			}
 		}
 
+		if objectio.CNDumpDeleteSyncFailedInjected() {
+			return false, moerr.NewInternalErrorNoCtx(
+				"fault injection: delete dump sync failed")
+		}
 		if stats, err = s3Writer.Sync(txn.proc.Ctx); err != nil {
-			return err
+			return false, err
 		}
 
 		fileName = stats[0].ObjectLocation().String()
 
 		if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
-			return err
+			return false, err
 		}
 
 		var table *txnTable
@@ -1591,15 +2796,64 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			tbKey.autoIncrEpoch,
 			tbKey.autoIncrEpochKnown,
 		); err != nil {
-			return err
+			return false, err
 		}
 
-		if err = s3Writer.Close(); err != nil {
-			return err
+		closeErr := s3Writer.Close()
+		s3Writer = nil
+		if objectio.CNDumpDeleteCloseFailedInjected() {
+			closeErr = moerr.NewInternalErrorNoCtx(
+				"fault injection: delete dump close failed")
+		}
+		return true, closeErr
+	}
+
+	published := make(map[int]bool)
+	var publishErr error
+	for tbKey := range mp {
+		publishedNow, perr := publishTable(tbKey)
+		if publishedNow {
+			for _, idx := range mpIdxs[tbKey] {
+				published[idx] = true
+			}
+		}
+		if perr != nil {
+			publishErr = perr
+			break
 		}
 	}
 
-	return nil
+	// Retire exactly the published sources, compacting in place, mirroring
+	// dumpInsertBatchLocked: unpublished staging's sources stay raw and
+	// accounted, as do the entries a publication appended.
+	if len(published) > 0 {
+		writes := txn.writes
+		w := offset
+		for i := offset; i < stagedEnd; i++ {
+			if published[i] {
+				// Same choke point as the insert path: DELETE entries
+				// carry no exact-key index, and the refund below is the
+				// documented no-op for them while clearing an INSERT
+				// entry could never reach this delete-dump retirement.
+				txn.unaccountInsertKeyOffsetsLocked(&writes[i])
+				txn.unaccountWorkspaceEntryLocked(&writes[i])
+				writes[i].bat.Clean(txn.proc.GetMPool())
+				continue
+			}
+			writes[w] = writes[i]
+			w++
+		}
+		if drop := stagedEnd - w; drop > 0 {
+			copy(writes[w:], writes[stagedEnd:])
+			txn.writes = writes[:len(writes)-drop]
+			// Same vacated-tail contract as the insert dump's retirement
+			// compaction (issue #26796): the truncated slice must not pin
+			// the retired sources' cleaned batches.
+			clearVacatedWriteSlots(txn.writes, len(txn.writes), len(writes))
+		}
+	}
+
+	return publishErr
 }
 
 // resolveDumpTablesLocked resolves the engine.Relation of every table whose
@@ -1863,6 +3117,239 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpoch(
 		databaseName, tableName, fileName, inputBat, tnStore, autoIncrEpoch, true)
 }
 
+// stagedWorkspaceRecord holds one S3 metadata record between its
+// complete fallible preparation and its infallible publication (issue
+// #25590 round-20 reviews, findings 1 and 3). Every fallible step of the
+// record — the epoch fence, the workspace's own batch copy, the record's
+// admission choke — runs while STAGING, so a pass that publishes several
+// records at once (object compaction) can prepare all of them before the
+// first workspace mutation; a record in this shape has committed nothing
+// its rollback could observe until publish runs.
+type stagedWorkspaceRecord struct {
+	typ                int
+	accountId          uint32
+	databaseId         uint64
+	tableId            uint64
+	databaseName       string
+	tableName          string
+	fileName           string
+	bat                *batch.Batch
+	tnStore            DNStore
+	skipTransfer       bool
+	autoIncrEpoch      uint32
+	autoIncrEpochKnown bool
+
+	// admittedNames are the distinct storage-object names the staged
+	// record's choke registered. A back-out before publication retracts
+	// them from the transaction's recorded-name set so the unwinding
+	// retainer can hand every UNRECORDED persisted object to the cleanup
+	// queue — the names would otherwise sit invisible to every
+	// leftover-object enumeration while no workspace entry owns their
+	// lifecycle (issue #25590 round-20 review, finding 1), and a name
+	// whose copy failed after its registration would strand ownerless
+	// (round-20 review, finding 3).
+	admittedNames []string
+}
+
+// stageWorkspaceRecordLocked completes EVERY fallible step of an S3
+// metadata record without mutating the workspace (issue #25590
+// round-20 reviews, findings 1 and 3). Callers hold the transaction
+// lock. The step order is part of the ownership contract: the
+// workspace's own batch copy comes BEFORE the admission choke, so a
+// copy failure leaves no recorded-name membership and consumes no
+// reservation — the persisted objects a failed copy leaves behind stay
+// reachable for the unwinding retainer and their in-flight units
+// settle at the terminal drain exactly like an unrecorded writer's.
+// retainFreshRecordPreparationFailureLocked is the record
+// preparation's failed-side reachability guard (issue #25590 round-22
+// review, finding H1): every early failure of the record's own
+// preparation — the epoch fence, the keyed stage refusal, the batch
+// copy — leaves the record's persisted objects behind with no one left
+// to unwind them when their names carry no reservation on this side
+// (the legacy-relayed class: its reservation sat on the fragment
+// engine) and the record's choke therefore never runs its own refusal
+// retain. The guard retains EXACTLY the record's extracted names that
+// no reservation covers — the same fresh-name filter the choke's
+// refusal retain applies one checkpoint later — so producers whose
+// writers already reserved (every in-tree class) keep their r19
+// epilogue and terminal-drain owners untouched, and a caller-specific
+// fileName variant (a compaction delta location) never becomes a
+// phantom cleanup member. CCPR holds the shared-file exemption.
+// Callers hold the transaction lock.
+func (txn *Transaction) retainFreshRecordPreparationFailureLocked(
+	typ int, inputBat *batch.Batch, reason string,
+) {
+	if txn.isCCPRTxn {
+		return
+	}
+	names := txn.recordedUnpublishedObjectNamesLocked(typ, inputBat)
+	var fresh []string
+	for _, n := range names {
+		if n == "" || txn.hasUnpublishedDumpReservation(n) {
+			continue
+		}
+		fresh = append(fresh, n)
+	}
+	txn.retainDefiniteOrphansLocked(fresh, reason)
+}
+
+func (txn *Transaction) stageWorkspaceRecordLocked(
+	typ int,
+	accountId uint32,
+	databaseId,
+	tableId uint64,
+	databaseName,
+	tableName string,
+	fileName string,
+	inputBat *batch.Batch,
+	tnStore DNStore,
+	autoIncrEpoch uint32,
+	autoIncrEpochKnown bool,
+	skipTransfer bool,
+) (*stagedWorkspaceRecord, error) {
+	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
+		txn.retainFreshRecordPreparationFailureLocked(typ, inputBat,
+			"record preparation failed at the epoch fence: the recording side fail-open-retains the reservation-less names so a remote fragment's persisted files keep their cleanup owner (issue #25590 round-22 review)")
+		return nil, err
+	}
+
+	// Test-only refusal point for the staged record (issue #25590
+	// round-20 review, finding 1): armed for the named table it fails a
+	// record's preparation AFTER an earlier replacement of the same pass
+	// already staged, with nothing consumed — the deterministic shape of
+	// a pass whose LATER record fails while an earlier one is ready.
+	if objectio.CNWorkspaceRecordStageFailedInjected(tableName) {
+		txn.retainFreshRecordPreparationFailureLocked(typ, inputBat,
+			"record staging refused by the keyed fault: the recording side fail-open-retains the reservation-less names so a remote fragment's persisted files keep their cleanup owner (issue #25590 round-22 review)")
+		return nil, moerr.NewInternalErrorNoCtx(
+			"fault injection: workspace record staging failed")
+	}
+
+	// The record's spill already made S3 part of this transaction's
+	// commit path; the flag is monotonic and conservative, so setting it
+	// before the remaining steps keeps a refused record flagged exactly
+	// as before.
+	txn.hasS3Op.Store(true)
+
+	copied, err := inputBat.Dup(txn.proc.Mp())
+	if err != nil {
+		txn.retainFreshRecordPreparationFailureLocked(typ, inputBat,
+			"record preparation failed at its own batch copy: the recording side fail-open-retains the reservation-less names so a remote fragment's persisted files keep their cleanup owner (issue #25590 round-22 review)")
+		return nil, err
+	}
+
+	// Admission of the objects this record creates (issue #25590
+	// round-18 review, finding 2): every name a rollback could later
+	// hand to the engine's cleanup queue joins the capacity ledger
+	// here — direct-S3 records and compaction rewrites are admitted at
+	// creation with a fail-closed bound check, while the workspace
+	// dump's per-object reservations convert into retained ownership.
+	// A refusal cleans the prepared copy — the batch never entered the
+	// workspace, so nothing else owns it — and fails this write with
+	// the workspace untouched.
+	if err := txn.registerUnpublishedObjectRecordLocked(typ, inputBat); err != nil {
+		copied.Clean(txn.proc.Mp())
+		return nil, err
+	}
+
+	return &stagedWorkspaceRecord{
+		typ:                typ,
+		accountId:          accountId,
+		databaseId:         databaseId,
+		tableId:            tableId,
+		databaseName:       databaseName,
+		tableName:          tableName,
+		fileName:           fileName,
+		bat:                copied,
+		tnStore:            tnStore,
+		skipTransfer:       skipTransfer,
+		autoIncrEpoch:      autoIncrEpoch,
+		autoIncrEpochKnown: autoIncrEpochKnown,
+		admittedNames:      txn.recordedUnpublishedObjectNamesLocked(typ, inputBat),
+	}, nil
+}
+
+// publishStagedWorkspaceRecordLocked appends one fully staged record to
+// the workspace. Every fallible step already succeeded while staging,
+// so this suffix touches only maps, engine state and the writes slice —
+// a pass that publishes several staged records has no failure point
+// between them, which is what makes compaction's replacement records
+// atomic across the whole pass (issue #25590 round-20 review, finding
+// 1). Callers hold the transaction lock.
+func (txn *Transaction) publishStagedWorkspaceRecordLocked(s *stagedWorkspaceRecord) {
+	if s == nil {
+		return
+	}
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
+
+	if s.typ == INSERT {
+		server := colexec.MustGetServer(txn.engine.service)
+		col, area := vector.MustVarlenaRawData(s.bat.Vecs[1])
+		for i := range col {
+			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
+			oid := stats.ObjectName().ObjectId()
+			sid := oid.Segment()
+
+			server.PutCnSegment(txn.op.Txn().ID, s.tableId, sid, colexec.TxnWorkspaceUnCommitType)
+			txn.registerCNObjects(*oid, s.accountId, s.databaseId, s.tableId,
+				s.bat, s.databaseName, s.tableName, s.autoIncrEpoch, s.autoIncrEpochKnown)
+		}
+	}
+
+	txn.readOnly.Store(false)
+
+	if s.typ == DELETE {
+		col, area := vector.MustVarlenaRawData(s.bat.Vecs[0])
+		for i := range col {
+			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
+			txn.StashFlushedTombstones(stats)
+		}
+	}
+
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ:                s.typ,
+		accountId:          s.accountId,
+		tableId:            s.tableId,
+		databaseId:         s.databaseId,
+		tableName:          s.tableName,
+		databaseName:       s.databaseName,
+		fileName:           s.fileName,
+		bat:                s.bat,
+		tnStore:            s.tnStore,
+		pkCheckPos:         -1,
+		pkCheckReady:       true,
+		skipTransfer:       s.skipTransfer,
+		autoIncrEpoch:      s.autoIncrEpoch,
+		autoIncrEpochKnown: s.autoIncrEpochKnown,
+	})
+	s.bat = nil // ownership passed to the workspace entry
+}
+
+// retractUnpublishedRecordAdmissionLocked removes the names a STAGED
+// record's choke registered from the transaction's recorded-name set
+// (issue #25590 round-20 review, finding 1). Called only from a
+// back-out whose staged records were never published, it restores the
+// pre-record state the unwinding retainer expects: every UNRECORDED
+// name becomes visible to the cleanup ownership again, because no
+// workspace entry exists to own its lifecycle either way. Every name
+// this staged record admitted belongs to a freshly persisted
+// replacement this same pass created (compaction rewrites brand-new
+// names), and the transaction lock serializes the choke and the
+// back-out, so no other record can have claimed the same names in
+// between. The capacity ledger keeps its owned membership — that
+// membership is exactly the cleanup obligation the queue's drain will
+// exercise below, so counting never falls off the bound the refusal was
+// admitted under.
+func (txn *Transaction) retractUnpublishedRecordAdmissionLocked(st *stagedWorkspaceRecord) {
+	if st == nil || len(st.admittedNames) == 0 {
+		return
+	}
+	for _, n := range st.admittedNames {
+		delete(txn.recordedUnpublishedObjectNames, n)
+	}
+}
+
 func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 	typ int,
 	accountId uint32,
@@ -1876,64 +3363,463 @@ func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) (err error) {
-	txn.beginCatalogMutation()
-	defer txn.endCatalogMutation()
-	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
+	stagedRec, err := txn.stageWorkspaceRecordLocked(typ, accountId, databaseId, tableId,
+		databaseName, tableName, fileName, inputBat, tnStore,
+		autoIncrEpoch, autoIncrEpochKnown, false)
+	if err != nil {
 		return err
 	}
-
-	txn.hasS3Op.Store(true)
-
-	var (
-		copied *batch.Batch
-	)
-
-	if copied, err = inputBat.Dup(txn.proc.Mp()); err != nil {
-		return err
-	}
-
-	if typ == INSERT {
-		server := colexec.MustGetServer(txn.engine.service)
-		col, area := vector.MustVarlenaRawData(copied.Vecs[1])
-		for i := range col {
-			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
-			oid := stats.ObjectName().ObjectId()
-			sid := oid.Segment()
-
-			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
-			txn.registerCNObjects(*oid, accountId, databaseId, tableId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
-		}
-	}
-
-	txn.readOnly.Store(false)
-
-	if typ == DELETE {
-		col, area := vector.MustVarlenaRawData(copied.Vecs[0])
-		for i := range col {
-			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
-			txn.StashFlushedTombstones(stats)
-		}
-	}
-
-	entry := Entry{
-		typ:                typ,
-		accountId:          accountId,
-		tableId:            tableId,
-		databaseId:         databaseId,
-		tableName:          tableName,
-		databaseName:       databaseName,
-		fileName:           fileName,
-		bat:                copied,
-		tnStore:            tnStore,
-		pkCheckPos:         -1,
-		pkCheckReady:       true,
-		autoIncrEpoch:      autoIncrEpoch,
-		autoIncrEpochKnown: autoIncrEpochKnown,
-	}
-
-	txn.appendWorkspaceEntryLocked(entry)
-
+	txn.publishStagedWorkspaceRecordLocked(stagedRec)
 	return nil
+}
+
+// dumpSinkerCapacityOption installs the engine's per-object admission hook
+// on the dump's spilling writers: each object the sinker is about to
+// persist reserves one in-flight capacity unit before anything goes
+// durable, in OBJECT units rather than writer units (issue #25590
+// round-18 review, finding 1), and the reservation is keyed by name on
+// this transaction so the record choke — or the failed-publication
+// epilogue — converts exactly the names the dump persisted.
+// SinkerCapacityOption is this workspace's public sinker option — the
+// binding an S3 writer constructed on this transaction's behalf needs to
+// join the per-object admission before it persists (issue #25590
+// round-19 review, finding 2): the pipeline's direct-S3 insert operator
+// resolves thisTransaction through the transaction operator's workspace
+// (the ioutil.SinkerOwner structural interface) and appends the option
+// to its writer, so the record's choke is no longer the FIRST gate the
+// objects pass: every spilled object reserves one in-flight unit under
+// the bound before it goes durable, and a saturated ledger refuses the
+// writer's spill with nothing half-persisted behind it.
+func (txn *Transaction) SinkerCapacityOption() ioutil.SinkerOption {
+	return txn.dumpSinkerCapacityOption()
+}
+
+func (txn *Transaction) dumpSinkerCapacityOption() ioutil.SinkerOption {
+	hook := func(name string) error {
+		if err := txn.engine.reserveUnpublishedPendingObject(name); err != nil {
+			return err
+		}
+		txn.noteUnpublishedDumpReservation(name)
+		return nil
+	}
+	return ioutil.WithUncommittedCapacityHook(
+		ioutil.UncommittedCapacityHook(hook))
+}
+
+// hasUnpublishedDumpReservation reports whether a per-object reservation
+// is outstanding for the name, under the map's own guard.
+func (txn *Transaction) hasUnpublishedDumpReservation(name string) bool {
+	txn.unpublishedDumpReservationsMu.Lock()
+	defer txn.unpublishedDumpReservationsMu.Unlock()
+	_, ok := txn.unpublishedDumpReservations[name]
+	return ok
+}
+
+// AdoptRemoteTransferredObjectNames adopts the storage-object names a
+// remote fragment relayed to this recording workspace (issue #25590
+// round-22 review, finding H1): the coordinator's transport client calls
+// this at its intake — BEFORE forwarding the batch into the local
+// pipeline and BEFORE the ack returns to the fragment — so an
+// enumerable cleanup owner exists on the recording side from the moment
+// the bytes leave the wire, earlier than the fragment's own terminal
+// settlement. Every name is admitted through the SAME per-object
+// reservation the writers use (finding H2): the engine's bound either
+// counts the obligation now and the record choke converts it as a
+// reserved name later, or the refusal propagates the error — the
+// transport fails the run, the fragment's terminal keeps a reachable
+// local owner, and the recording side books nothing. A name whose
+// record already landed keeps its record's own lifecycle; a repeated
+// adoption is a no-op.
+func (txn *Transaction) AdoptRemoteTransferredObjectNames(names []string) error {
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		txn.Lock()
+		recorded := false
+		if _, ok := txn.recordedUnpublishedObjectNames[name]; ok {
+			recorded = true
+		}
+		txn.Unlock()
+		if recorded || txn.hasUnpublishedDumpReservation(name) {
+			continue
+		}
+		if txn.engine == nil {
+			continue
+		}
+		if err := txn.engine.reserveUnpublishedPendingObject(name); err != nil {
+			return err
+		}
+		txn.noteUnpublishedDumpReservation(name)
+	}
+	return nil
+}
+
+// noteUnpublishedDumpReservation records the name's outstanding
+// per-object reservation. The hook fires on sink-pool and compaction
+// worker goroutines that hold NO transaction lock, so this uses the map's
+// own guard; a dump's hook under the transaction lock is single-threaded
+// but takes the same guard, keeping one lock order everywhere (issue
+// #25590 round-19 review).
+func (txn *Transaction) noteUnpublishedDumpReservation(name string) {
+	txn.unpublishedDumpReservationsMu.Lock()
+	defer txn.unpublishedDumpReservationsMu.Unlock()
+	if txn.unpublishedDumpReservations == nil {
+		txn.unpublishedDumpReservations = make(map[string]struct{})
+	}
+	txn.unpublishedDumpReservations[name] = struct{}{}
+}
+
+// recordedUnpublishedObjectNamesLocked extracts the DISTINCT storage-object
+// names a record entry carries — the record layout holds one object-stats
+// row per block, so the same object can appear several times and dedup
+// keeps ONE ledger member per object — or an empty set when the record
+// creates no objects. Callers hold the transaction lock.
+func (txn *Transaction) recordedUnpublishedObjectNamesLocked(
+	typ int, bat *batch.Batch,
+) []string {
+	if bat == nil || bat.Vecs == nil {
+		return nil
+	}
+	var vec *vector.Vector
+	switch typ {
+	case INSERT:
+		vec = bat.Vecs[1] // [%!%mo__meta_loc, object_stats]
+	case DELETE:
+		vec = bat.Vecs[0] // [object_stats, pk]
+	default:
+		return nil
+	}
+	if vec == nil || vec.Length() == 0 {
+		return nil
+	}
+	col, area := vector.MustVarlenaRawData(vec)
+	var (
+		names []string
+		seen  map[string]struct{}
+	)
+	for i := range col {
+		stats := objectio.ObjectStats(col[i].GetByteSlice(area))
+		name := stats.ObjectName().String()
+		if seen == nil {
+			seen = make(map[string]struct{}, vec.Length())
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names
+}
+
+// registerUnpublishedObjectRecordLocked is the single admission choke of
+// every recorded workspace object (issue #25590 round-18 review): when the
+// transaction's spilling dump holds per-object reservations for these
+// names — the writer's capacity hook reserved each object before it
+// persisted — the names CONVERT those reservations into retained
+// ownership in one atomic move; every other record creator (the
+// direct-S3 metadata branches, compaction rewrites, transferred records)
+// is admitted at CREATION with the fail-closed bound check, so names a
+// ROLLBACK could hand to the queue can never pass behind the advertised
+// limit. Callers hold the transaction lock.
+func (txn *Transaction) registerUnpublishedObjectRecordLocked(
+	typ int, bat *batch.Batch,
+) error {
+	names := txn.recordedUnpublishedObjectNamesLocked(typ, bat)
+	if len(names) == 0 {
+		return nil
+	}
+	e := txn.engine
+	if e == nil {
+		return nil
+	}
+	// Split the record's names by outstanding reservations: a
+	// reservation is converted (one in-flight unit retires per name), a
+	// name without one is admitted fail-closed at creation. Admitting
+	// keeps refusal failure-atomic — the reserved names stay
+	// outstanding until the admission has succeeded and are deleted
+	// only in the same move that converts them, so the failed dump's
+	// epilogue (or the terminal drain) still settles exactly the names
+	// this dump persisted. The map carries its own guard since the
+	// round-19 hook fires on writer goroutines without the transaction
+	// lock; the engine's queue itself stays the capacity
+	// linearization point.
+	var reserved, fresh []string
+	txn.unpublishedDumpReservationsMu.Lock()
+	for _, n := range names {
+		if _, ok := txn.unpublishedDumpReservations[n]; ok {
+			reserved = append(reserved, n)
+		} else {
+			fresh = append(fresh, n)
+		}
+	}
+	txn.unpublishedDumpReservationsMu.Unlock()
+	if len(fresh) > 0 {
+		if err := e.admitUnpublishedPendingRecordedNames(fresh); err != nil {
+			// The refusal consumed no reservations; the split above was
+			// read-only, so nothing needs to be restored and the reserved
+			// names stay exactly as the failed dump's epilogue expects
+			// them.
+			// r5 (issue #25590 round-21 review, finding G2): the refused
+			// input names that carry NO LOCAL reservation are the
+			// remote-fragment class — no local writer exists to unwind and
+			// re-assert them, so without this fail-open retain a clean
+			// remote fragment whose metadata the recording side refused
+			// would leave physical files no owner can reach (the fragment
+			// already released them through its transferred settlement).
+			// They are definite orphans here: the refusal failed this very
+			// record, and a retry publishes fresh objects. CCPR records
+			// keep their shared-file exemption — the txn cache owns those
+			// shares — and local hooked producers are untouched: their
+			// names carry reservations and stay with the epilogue/unwind
+			// semantics exactly as r18 pinned.
+			if !txn.isCCPRTxn {
+				txn.retainDefiniteOrphansLocked(fresh,
+					"record refused at the admission bound: the recording side fail-open-retains the refused reservation-less names so a remote fragment's persisted files never lose their cleanup owner (issue #25590 round-21 review)")
+			}
+			return err
+		}
+	}
+	if len(reserved) > 0 {
+		txn.unpublishedDumpReservationsMu.Lock()
+		for _, n := range reserved {
+			delete(txn.unpublishedDumpReservations, n)
+		}
+		txn.unpublishedDumpReservationsMu.Unlock()
+		e.convertUnpublishedPendingReservations(reserved)
+	}
+	txn.mergeRecordedUnpublishedObjectNames(names)
+	return nil
+}
+
+// mergeRecordedUnpublishedObjectNames keeps the transaction's own copy of
+// the recorded names so its terminal paths can retire exactly its
+// obligations: commit releases what is still owned, rollback's queue
+// handoff already moves the members, and stale members that intermediate
+// transfers retired earlier simply no-op on release.
+func (txn *Transaction) mergeRecordedUnpublishedObjectNames(names []string) {
+	if txn.recordedUnpublishedObjectNames == nil {
+		txn.recordedUnpublishedObjectNames = make(
+			map[string]struct{}, len(names))
+	}
+	for _, n := range names {
+		txn.recordedUnpublishedObjectNames[n] = struct{}{}
+	}
+}
+
+// releaseRecordedUnpublishedObjectsLocked retires the still-owned ledger
+// members of this transaction's recorded names and drops the
+// transaction's bookkeeping copy. Commit (its obligations were published
+// as data) and the CCPR rollback (whose shared files deliberately stay
+// on storage under the txn cache's ownership) are the two terminal paths
+// that retire without the queue; the ordinary rollback's transfers
+// already moved every member. Callers hold the transaction lock.
+func (txn *Transaction) releaseRecordedUnpublishedObjectsLocked() {
+	if len(txn.recordedUnpublishedObjectNames) == 0 {
+		return
+	}
+	names := make([]string, 0, len(txn.recordedUnpublishedObjectNames))
+	for n := range txn.recordedUnpublishedObjectNames {
+		names = append(names, n)
+	}
+	txn.recordedUnpublishedObjectNames = nil
+	if txn.engine != nil {
+		txn.engine.releaseUnpublishedPendingPublished(names)
+	}
+}
+
+// convertDumpedReservationsLocked settles the persisted names of a failed
+// publication — a dump whose record was refused, or a direct-S3 writer
+// unwinding after its record was refused (issue #25590 round-18/19
+// reviews): each name with an outstanding reservation — the capacity hook
+// reserved it before it persisted — retires exactly its in-flight unit
+// and retains owned membership; a persisted name without a reservation
+// only gains the membership (it was never countable twice).
+func (txn *Transaction) convertDumpedReservationsLocked(files []string) {
+	e := txn.engine
+	if e == nil || len(files) == 0 {
+		return
+	}
+	var reserved, extra []string
+	txn.unpublishedDumpReservationsMu.Lock()
+	for _, n := range files {
+		if _, ok := txn.unpublishedDumpReservations[n]; ok {
+			delete(txn.unpublishedDumpReservations, n)
+			reserved = append(reserved, n)
+		} else {
+			extra = append(extra, n)
+		}
+	}
+	txn.unpublishedDumpReservationsMu.Unlock()
+	if len(reserved) > 0 {
+		e.convertUnpublishedPendingReservations(reserved)
+	}
+	if len(extra) > 0 {
+		e.retainUnpublishedPendingNames(extra)
+	}
+}
+
+// drainUnpublishedDumpReservationsTerminalReason is the retain reason the
+// transaction/fragment terminals pass the reservation drain: at a
+// terminal the drain is each leftover's last reachable owner (issue
+// #25590 round-22 review, finding H1). The statement-rollback boundary
+// passes its own reason — an earlier, still-open-transaction recycle.
+const drainUnpublishedDumpReservationsTerminalReason = "terminal reservation drain: the record never landed on a persisted or adopted name, so the terminal adopts it as its last reachable cleanup owner (issue #25590 round-22 review)"
+
+// drainUnpublishedDumpReservationsLocked settles the outstanding
+// reservations at a storage-quiet boundary whose statements can no
+// longer record — the transaction's and remote fragments' TERMINALS,
+// where the drain is each leftover's LAST reachable owner, and the
+// quiesced STATEMENT-ROLLBACK boundary (round-33 review, finding 2),
+// where the aborted statement's records can never land. Every
+// reservation closes exactly once (a converted record settled by the
+// epilogue washes out first, the epilogue swept the failures, and the
+// terminal drain covers a dump interrupted between spill and record) —
+// so no in-flight unit can outlive its statement's rollback, and none
+// can outlive its transaction. The retain's recorded-membership recheck
+// keeps every landed record's file on its own lifecycle and the
+// committed-borrowed exemption keeps clone-cache shares intact at BOTH
+// boundary classes, and the transfer itself performs no storage I/O:
+// the boundary's queue handoff and the engine's drain collect the
+// files afterwards exactly the r11 design's decision 3 records. Callers
+// hold the transaction lock.
+func (txn *Transaction) drainUnpublishedDumpReservationsLocked(reason string) {
+	txn.unpublishedDumpReservationsMu.Lock()
+	if len(txn.unpublishedDumpReservations) == 0 {
+		txn.unpublishedDumpReservationsMu.Unlock()
+		return
+	}
+	names := make([]string, 0, len(txn.unpublishedDumpReservations))
+	for n := range txn.unpublishedDumpReservations {
+		names = append(names, n)
+	}
+	txn.unpublishedDumpReservationsMu.Unlock()
+	if e := txn.engine; e != nil {
+		// r6 (issue #25590 round-22 review, finding H1): a name whose
+		// reservation is still outstanding at the boundary did NOT get
+		// recorded — the choke converts every reserved name it registers,
+		// and any epilogue that retained a failed publication already
+		// consumed its reservation out of the map. The leftovers are the
+		// adopted remote-transferred names whose record the coordinator
+		// never reached — cancellation, discarded metadata, a preparation
+		// failure — and the local writer classes whose record never
+		// landed; both name classes can carry a physically persisted
+		// object, and a terminal is their last reachable owner. The
+		// retain converts each leftover's in-flight unit into owned
+		// membership (the recorded filter keeps any live record's file
+		// untouched), and the caller's pending handoff moves them to the
+		// engine's lossless queue — the drain must therefore run BEFORE
+		// the terminal's handoff. CCPR keeps the shared-file exemption
+		// (the clone cache owns the shares) and abandons exactly.
+		if txn.isCCPRTxn {
+			txn.unpublishedDumpReservationsMu.Lock()
+			txn.unpublishedDumpReservations = nil
+			txn.unpublishedDumpReservationsMu.Unlock()
+			e.abandonUnpublishedPendingReservations(names)
+			return
+		}
+		txn.retainDefiniteOrphansLocked(names, reason)
+	}
+	txn.unpublishedDumpReservationsMu.Lock()
+	txn.unpublishedDumpReservations = nil
+	txn.unpublishedDumpReservationsMu.Unlock()
+}
+
+// RetainUnrecordedS3Objects implements the structural retainer interface
+// the direct-S3 insert writer asserts on (ioutil.UnrecordedSinkerObjectsRetainer)
+// — the pipeline's teardown hands the writer's persisted / possibly
+// persisted names here when its metadata record was refused, or the
+// stream broke between persistence and recording (issue #25590
+// round-19 review, finding 2). Every name whose record DID land stays
+// behind: its deletion is owned by the record's own lifecycle — rollback's
+// queue handoff, commit's release — and Re-taking a recorded name would
+// both double-count it and hand a live workspace object to the deleter.
+// The UNRECORDED remainder joins the transaction's pending-object cleanup
+// list — handed to the engine's lossless cleanup queue at the next
+// statement admission or at the terminal — and the capacity ledger at
+// the same time: each persisted name's per-object reservation converts
+// into retained ownership, a name the hook never covered (a writer built
+// without the capacity option) gains membership through the
+// fail-open retain path, because the only alternative to counting an
+// already-physical object is dropping its last cleanup owner.
+func (txn *Transaction) RetainUnrecordedS3Objects(persisted []string, reason string) {
+	txn.Lock()
+	defer txn.Unlock()
+	txn.retainUnrecordedS3ObjectsLocked(persisted, reason)
+}
+
+// retainUnrecordedS3ObjectsLocked is the lock-holding core of
+// RetainUnrecordedS3Objects; the compaction pass reuses it for its
+// rewritten-but-unrecorded replacements (issue #25590 round-19 review,
+// finding 1). Callers hold the transaction lock.
+func (txn *Transaction) retainUnrecordedS3ObjectsLocked(persisted []string, reason string) {
+	// r5 (round-21 review, finding G1): the exported retainer surface serves
+	// operator teardowns (insert, multi_update, the deletion flush, the
+	// external producer seam) whose downstream recording consumer can still
+	// run inside the SAME statement — a publication in flight until the
+	// epoch moves.
+	txn.retainUnrecordedS3ObjectsAtLocked(persisted, true, reason)
+}
+
+// retainDefiniteOrphansLocked is the r5 definite-orphan twin of
+// retainUnrecordedS3ObjectsLocked: the names' recording consumer cannot run
+// anymore — a failed compaction pass's replacements (the r19 back-out), a
+// refused record's fail-open retain — so the round-14 immediate-transfer
+// semantics apply (retainedIfRecordingLater false). Callers hold the
+// transaction lock.
+func (txn *Transaction) retainDefiniteOrphansLocked(persisted []string, reason string) {
+	txn.retainUnrecordedS3ObjectsAtLocked(persisted, false, reason)
+}
+
+func (txn *Transaction) retainUnrecordedS3ObjectsAtLocked(
+	persisted []string, retainedIfRecordingLater bool, reason string,
+) {
+	if len(persisted) == 0 {
+		return
+	}
+	var unrecorded []string
+	for _, n := range persisted {
+		if _, ok := txn.recordedUnpublishedObjectNames[n]; ok {
+			continue // owned by its record's lifecycle
+		}
+		// INV1 (issue #25590 round-24 finding F1, design r11 D1'): a
+		// CLONE-COMMITTED-BORROWED name — an object this clone
+		// transaction borrowed from committed state — never enters
+		// the orphan machinery through either retain funnel. Its
+		// prior owners still reference it: the clone completion and
+		// the gcFiles scope rules own its lifecycle. Txn-local shared
+		// names are a different class and keep flowing through here.
+		if borrowsCommittedCloneShare(txn.engine, txn, n) {
+			continue
+		}
+		unrecorded = append(unrecorded, n)
+	}
+	if len(unrecorded) == 0 {
+		return
+	}
+	// r5: the lifecycle ordinal the retaining statement owns — advanced at
+	// StartStatement, loaded lock-free (the retain runs under the
+	// transaction lock; the lifecycle moves only in the serial statement
+	// ceremony).
+	epoch := int(txn.statementLifecycle.Load())
+	for _, n := range unrecorded {
+		txn.pendingObjectCleanup = append(txn.pendingObjectCleanup,
+			pendingObjectCleanupItem{
+				name:                     n,
+				retainedIfRecordingLater: retainedIfRecordingLater,
+				retainedAt:               epoch,
+			})
+	}
+	if txn.engine != nil {
+		txn.convertDumpedReservationsLocked(unrecorded)
+	}
+	logutil.Warn(
+		"WORKSPACE-PENDING-CLEANUP-RETAKE",
+		zap.Strings("files", unrecorded),
+		zap.String("reason", reason),
+		zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
+	)
 }
 
 func (txn *Transaction) requireAutoIncrEpochFenceCommit(autoIncrEpoch uint32, autoIncrEpochKnown bool) error {
@@ -1992,62 +3878,19 @@ func (txn *Transaction) writeFileLockedSkipTransferWithAutoIncrEpochKnown(
 	autoIncrEpoch uint32,
 	autoIncrEpochKnown bool,
 ) (err error) {
-	txn.beginCatalogMutation()
-	defer txn.endCatalogMutation()
-	if err := txn.requireAutoIncrEpochFenceCommit(autoIncrEpoch, autoIncrEpochKnown); err != nil {
+	// Same staged fallible prefix and infallible suffix as the
+	// transferring record path (issue #25590 round-18/20 reviews): the
+	// CCPR skip-transfer record also creates rollback obligations the
+	// ledger must count at creation, and its copy completes before that
+	// counting commits so a failed copy leaves the object reachable for
+	// the unwinding retainer.
+	stagedRec, err := txn.stageWorkspaceRecordLocked(typ, accountId, databaseId, tableId,
+		databaseName, tableName, fileName, inputBat, tnStore,
+		autoIncrEpoch, autoIncrEpochKnown, true)
+	if err != nil {
 		return err
 	}
-
-	txn.hasS3Op.Store(true)
-
-	var (
-		copied *batch.Batch
-	)
-
-	if copied, err = inputBat.Dup(txn.proc.Mp()); err != nil {
-		return err
-	}
-
-	if typ == INSERT {
-		server := colexec.MustGetServer(txn.engine.service)
-		col, area := vector.MustVarlenaRawData(copied.Vecs[1])
-		for i := range col {
-			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
-			oid := stats.ObjectName().ObjectId()
-			sid := oid.Segment()
-
-			server.PutCnSegment(txn.op.Txn().ID, tableId, sid, colexec.TxnWorkspaceUnCommitType)
-			txn.registerCNObjects(*oid, accountId, databaseId, tableId, copied, databaseName, tableName, autoIncrEpoch, autoIncrEpochKnown)
-		}
-	}
-
-	txn.readOnly.Store(false)
-
-	if typ == DELETE {
-		col, area := vector.MustVarlenaRawData(copied.Vecs[0])
-		for i := range col {
-			stats := objectio.ObjectStats(col[i].GetByteSlice(area))
-			txn.StashFlushedTombstones(stats)
-		}
-	}
-
-	entry := Entry{
-		typ:                typ,
-		accountId:          accountId,
-		tableId:            tableId,
-		databaseId:         databaseId,
-		tableName:          tableName,
-		databaseName:       databaseName,
-		fileName:           fileName,
-		bat:                copied,
-		tnStore:            tnStore,
-		skipTransfer:       true,
-		autoIncrEpoch:      autoIncrEpoch,
-		autoIncrEpochKnown: autoIncrEpochKnown,
-	}
-
-	txn.appendWorkspaceEntryLocked(entry)
-
+	txn.publishStagedWorkspaceRecordLocked(stagedRec)
 	return nil
 }
 
@@ -2323,6 +4166,14 @@ func (txn *Transaction) batchAllocNewRowIds(count int) (*vector.Vector, error) {
 func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 	txn.restoreTxnTableFunc = txn.restoreTxnTableFunc[:0]
 
+	// Apply pending delete selections; fully-superseded entries are
+	// retired as nil slots. The nil slots are NOT compacted here:
+	// compaction changes the length recorded statement boundaries point
+	// into, and IncrStatementID still has a fallible dump ahead, so the
+	// statement's callers (IncrStatementID, Commit) run
+	// compactNilWorkspaceSlotsLocked immediately after the dump succeeds,
+	// right before the new boundary is appended — admission bookkeeping
+	// and compaction are failure-atomic that way (issue #25590).
 	if len(txn.batchSelectList) > 0 {
 		for i := range txn.writes {
 			if sels, ok := txn.batchSelectList[txn.writes[i].bat]; ok {
@@ -2394,43 +4245,116 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 				continue
 			}
 
-			merged := false
+			// Round-6 review (issue #25590): dry-run the merge first.
+			// Every fallible step of the publication below — copying the
+			// anchor, appending all columns of each source, regenerating
+			// the combined batch's rowids — runs before the first
+			// workspace mutation, so a failure preserves the original
+			// sources. The old flow merged each pair in place and only
+			// allocated the combined batch's new rowids afterwards: an
+			// allocation failure at that point left the retained batch
+			// mixing the rowids of several blocks with the merged
+			// sources already gone, breaking the one-block-per-batch,
+			// zero-based-offset invariants that workspace reads and
+			// deleteTableWrites rely on — and the merge that shrank the
+			// entry count would not run again to repair it.
+			rowCount := a.bat.RowCount()
+			sources := make([]int64, 0, 4)
 			for j := i + 1; j < len(idxes); j++ {
 				b := &txn.writes[idxes[j]]
 				if b.bat != nil && a.tableId == b.tableId && a.databaseId == b.databaseId &&
-					a.bat.RowCount()+b.bat.RowCount() <= objectio.BlockMaxRows {
-					merged = true
-					if err = txn.mergeWorkspaceEntryBatchesLocked(ctx, idxes[i], idxes[j]); err != nil {
-						return err
-					}
+					rowCount+b.bat.RowCount() <= objectio.BlockMaxRows {
+					sources = append(sources, idxes[j])
+					rowCount += b.bat.RowCount()
 				}
 
-				if a.bat.RowCount() == objectio.BlockMaxRows {
+				if rowCount == objectio.BlockMaxRows {
 					break
 				}
 			}
 
-			if merged && a.typ == INSERT {
-				// rewrite rowIds.
-				// all the rowIds in the batch share one blkId.
-				rowIdVector, err := txn.batchAllocNewRowIds(a.bat.RowCount())
-				if err != nil {
-					if rowIdVector != nil {
-						rowIdVector.Free(txn.proc.Mp())
-					}
+			if len(sources) == 0 {
+				continue
+			}
+
+			mp := txn.proc.GetMPool()
+
+			var rowIdVector *vector.Vector
+			if a.typ == INSERT {
+				if objectio.CNWorkspaceMergeRowidAllocFailedInjected() {
+					return moerr.NewInternalErrorNoCtx(
+						"fault injection: workspace merge rowid alloc failed")
+				}
+				// regenerate the rowids for the published batch: all the
+				// rowIds in one raw insert batch share one blkId, with
+				// offsets running consecutively from zero.
+				if rowIdVector, err = txn.batchAllocNewRowIds(rowCount); err != nil {
 					return err
 				}
+			}
 
+			// Stage the merged batch: the anchor's full copy carries the
+			// rows of every source and the regenerated rowids. None of
+			// the workspace entries is touched before this completes.
+			staged, dupErr := a.bat.Dup(mp)
+			if dupErr != nil {
+				if rowIdVector != nil {
+					rowIdVector.Free(mp)
+				}
+				return dupErr
+			}
+			for _, j := range sources {
+				if _, aerr := staged.Append(ctx, mp, txn.writes[j].bat); aerr != nil {
+					staged.Clean(mp)
+					if rowIdVector != nil {
+						rowIdVector.Free(mp)
+					}
+					return aerr
+				}
+			}
+			if rowIdVector != nil {
 				rowIds := vector.MustFixedColNoTypeCheck[types.Rowid](rowIdVector)
-				for x := range a.bat.RowCount() {
-					if err = vector.SetFixedAtWithTypeCheck[objectio.Rowid](a.bat.Vecs[0], x, rowIds[x]); err != nil {
-						rowIdVector.Free(txn.proc.GetMPool())
+				for x := range staged.RowCount() {
+					if err = vector.SetFixedAtWithTypeCheck[objectio.Rowid](
+						staged.Vecs[0], x, rowIds[x],
+					); err != nil {
+						staged.Clean(mp)
+						rowIdVector.Free(mp)
 						return err
 					}
 				}
-
-				rowIdVector.Free(txn.proc.GetMPool())
+				rowIdVector.Free(mp)
 			}
+
+			// Every fallible step succeeded: publish the merged batch and
+			// retire its sources. Only accounting swaps and releases
+			// remain here, so a failure between the mutation steps
+			// cannot leave a half-merged combination behind.
+			txn.beginCatalogMutation()
+			// The staged batch replaces the anchor's layout: drop the
+			// anchor's hydrated key index (and refund its budget bytes)
+			// through the batching-mutation choke point before the swap,
+			// so the stale layout is never answered, then fold every
+			// source's key envelope into the survivor — the merged rows
+			// span all contributing envelopes (issue #26796 ownership,
+			// same invariants the dropped in-place merge carried).
+			txn.unaccountInsertKeyOffsetsLocked(a)
+			txn.unaccountWorkspaceEntryLocked(a)
+			oldBat := a.bat
+			a.bat = staged
+			delete(txn.batchSelectList, oldBat)
+			txn.accountWorkspaceEntryLocked(a)
+			for _, j := range sources {
+				src := &txn.writes[j]
+				unionInsertKeyRange(a, src)
+				txn.unaccountInsertKeyOffsetsLocked(src)
+				txn.unaccountWorkspaceEntryLocked(src)
+				delete(txn.batchSelectList, src.bat)
+				src.bat.Clean(mp)
+				src.bat = nil
+			}
+			txn.endCatalogMutation()
+			oldBat.Clean(mp)
 		}
 
 		return nil
@@ -2453,21 +4377,15 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 			return err
 		}
 
-		n := 0
-		for i := range txn.writes {
-			if txn.writes[i].bat == nil {
-				continue
-			}
-			txn.writes[n] = txn.writes[i]
-			n++
-		}
-
-		clearVacatedWriteSlots(txn.writes, n, len(txn.writes))
-		txn.writes = txn.writes[:n]
-
 		var sortBuf []int64
 		var shuffleBuf []byte
 		for i := range txn.writes {
+			// merge sources above (and the shrink pass) may have left nil
+			// retired/combined slots; compaction runs after the admission
+			// dump (issue #25590), so guard each entry here.
+			if txn.writes[i].bat == nil {
+				continue
+			}
 			if txn.writes[i].typ == DELETE && txn.writes[i].bat.RowCount() > 1 {
 				if err := mergeutil.SortColumnsByIndexWithBuf(
 					txn.writes[i].bat.Vecs, 0, txn.proc.Mp(), &sortBuf, &shuffleBuf); err != nil {
@@ -2479,6 +4397,33 @@ func (txn *Transaction) mergeTxnWorkspaceLocked(ctx context.Context) error {
 
 	txn.assertWorkspaceAccountingLocked()
 	return nil
+}
+
+// compactNilWorkspaceSlotsLocked drops retired (nil-batch) slots from the
+// workspace in place, shifting surviving entries left. Admission bookkeeping
+// must stay failure-atomic with this (issue #25590): the callers
+// (IncrStatementID, Commit) run it only after the fallible dump, in the
+// same critical section that appends the new statement boundary, so a dump
+// error can never leave a pre-compaction recorded boundary for statement
+// rollback to reuse against the shortened workspace. Recorded boundaries
+// are consumed newest-first (statement rollback truncation, forced-dump
+// start, workspace reads), so the boundary appended right after this call
+// stays exact.
+func (txn *Transaction) compactNilWorkspaceSlotsLocked() {
+	n := 0
+	for i := range txn.writes {
+		if txn.writes[i].bat == nil {
+			continue
+		}
+		txn.writes[n] = txn.writes[i]
+		n++
+	}
+	// Drop the vacated slots' stale Entry references through the
+	// original full-length slice so the truncated workspace cannot pin
+	// retired batches (the same reason the writeS3 epilogue clears its
+	// vacated slots before truncating).
+	clearVacatedWriteSlots(txn.writes, n, len(txn.writes))
+	txn.writes = txn.writes[:n]
 }
 
 // resolveCompactTablesLocked resolves the engine.Relation of every table
@@ -2532,6 +4477,76 @@ func (txn *Transaction) resolveCompactTablesLocked(ctx context.Context) (map[tab
 	}
 }
 
+// compactRepublication holds one fully staged re-publication of a clean
+// object that shares a metadata batch with a dirty one: the single-object
+// metadata batch the workspace will own (issue #25590 round-8 review).
+// Every fallible step of a re-publication — the epoch-fence check, the
+// batch allocation, the union of the block info, the stats bytes and the
+// workspace's own batch copy — runs while a replacement is being staged,
+// BEFORE the first workspace mutation of the compaction pass; only the
+// publishStagedRepublicationLocked block below, which cannot fail, moves
+// the staged batches into the workspace registries and txn.writes.
+type compactRepublication struct {
+	bat                 *batch.Batch
+	name                string
+	accountId           uint32
+	databaseId, tableId uint64
+	databaseName        string
+	tableName           string
+	tnStore             DNStore
+	autoIncrEpoch       uint32
+	autoIncrEpochKnown  bool
+}
+
+// publishStagedRepublicationLocked is the second, failure-free half of the
+// staged compaction re-publication: segment registration, the CN-object
+// summary overwrite, the transaction flags and the workspace append. With
+// no error left anywhere in this chain, the pass either publishes every
+// staged replacement back-to-back, or — when staging failed first — none.
+// A partial publication (the first affected object re-published, the next
+// failing while its original waits un-retired in the same statement region
+// the interrupted-admission rollback then truncates) cannot survive: the
+// stranded duplicate object references re-read and re-committed the same
+// object twice (issue #25590 round-8 P1).
+func (txn *Transaction) publishStagedRepublicationLocked(
+	r *compactRepublication,
+) {
+	txn.beginCatalogMutation()
+	defer txn.endCatalogMutation()
+
+	server := colexec.MustGetServer(txn.engine.service)
+	col, area := vector.MustVarlenaRawData(r.bat.Vecs[1])
+	for i := range col {
+		stats := objectio.ObjectStats(col[i].GetByteSlice(area))
+		oid := stats.ObjectName().ObjectId()
+		sid := oid.Segment()
+		server.PutCnSegment(txn.op.Txn().ID, r.tableId, sid,
+			colexec.TxnWorkspaceUnCommitType)
+		txn.registerCNObjects(*oid, r.accountId, r.databaseId, r.tableId,
+			r.bat, r.databaseName, r.tableName, r.autoIncrEpoch,
+			r.autoIncrEpochKnown)
+	}
+
+	txn.hasS3Op.Store(true)
+	txn.readOnly.Store(false)
+
+	txn.appendWorkspaceEntryLocked(Entry{
+		typ:                INSERT,
+		accountId:          r.accountId,
+		tableId:            r.tableId,
+		databaseId:         r.databaseId,
+		tableName:          r.tableName,
+		databaseName:       r.databaseName,
+		fileName:           r.name,
+		bat:                r.bat,
+		tnStore:            r.tnStore,
+		pkCheckPos:         -1,
+		pkCheckReady:       true,
+		autoIncrEpoch:      r.autoIncrEpoch,
+		autoIncrEpochKnown: r.autoIncrEpochKnown,
+	})
+}
+
 // CN blocks compaction for txn
 func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 
@@ -2555,10 +4570,6 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 	objTables := make(map[objectio.ObjectId]workspaceTableKey)
 
 	affectedBats := make(map[*batch.Batch]struct{})
-
-	defer func() {
-		txn.deletedBlocks.clean()
-	}()
 
 	txn.deletedBlocks.iter(
 		func(blkId *types.Blockid, offsets []int64) bool {
@@ -2589,81 +4600,76 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			return true
 		})
 
-	waiter := sync.WaitGroup{}
-	locker := sync.Mutex{}
-
-	compactFunc := func(stats objectio.ObjectStats) {
-		defer func() {
-			waiter.Done()
-		}()
-
-		// need to rewrite the whole object
-		objId := stats.ObjectName().ObjectId()
-
-		tbKey := objTables[*objId]
-
-		panicWhenFailed := func(err error, hint string) {
-			logutil.Panic(hint,
-				zap.Error(err),
-				zap.String("txn", txn.op.Txn().DebugString()),
-				zap.Uint32("account id", tbKey.accountId),
-				zap.String("db name", tbKey.dbName),
-				zap.String("tbl name", tbKey.name),
-				zap.String("obj", stats.String()),
-			)
-		}
-
-		// resolveCompactTablesLocked guarantees every table referenced by
-		// txn.deletedBlocks is in the map
-		rel, ok := tables[tbKey.tableKey]
-		if !ok {
-			panicWhenFailed(moerr.NewInternalErrorNoCtx(
-				"table not pre-resolved for object compaction"), "get table failed")
-		}
-
-		tbl, ok := rel.(*txnTable)
-		if !ok {
-			delegate := rel.(*txnTableDelegate)
-			tbl = delegate.origin
-		}
-
-		locker.Lock()
-		tbl.ensureSeqnumsAndTypesExpectRowid()
-		locker.Unlock()
-
-		bat, fileName, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[*objId])
-		if err != nil {
-			panicWhenFailed(err, "rewrite object by deletion failed")
-		}
-
-		locker.Lock()
-		defer locker.Unlock()
-		writeName := tbl.tableName
-		if tbl.db.databaseId == catalog.MO_CATALOG_ID && tbl.tableId == catalog.MO_COLUMNS_ID &&
-			tbKey.name == catalog.MO_COLUMNS_UPDATE {
-			writeName = tbKey.name
-		}
-		if err = txn.writeFileLockedWithAutoIncrEpochKnown(
-			INSERT,
-			tbl.accountId,
-			tbl.db.databaseId,
-			tbl.tableId,
-			tbl.db.databaseName,
-			writeName,
-			fileName,
-			bat,
-			txn.tnStores[0],
-			tbKey.autoIncrEpoch,
-			tbKey.autoIncrEpochKnown,
-		); err != nil {
-			bat.Clean(txn.proc.Mp())
-			panicWhenFailed(err, "write txn file failed")
-		}
-
-		bat.Clean(txn.proc.Mp())
+	// round-19 restructure (issue #25590 round-19 review, finding 1): the
+	// compaction keeps its fallible-prefix / infallible-tail discipline
+	// across EVERY phase. Phase A workers run only the PHYSICAL rewrite
+	// of a dirty object — the reader, the block copies, the spilling
+	// writer with the per-object capacity hook — and return the
+	// replacement plus its persisted names to the parent instead of
+	// recording them under a lock they do not hold. Phase B — the parent,
+	// holding the transaction lock admission already grants — records
+	// every finished replacement, the single remaining fallible step.
+	// Only after the last fallible step succeeds does the infallible
+	// tail run: staged republications publish, the originals' batches
+	// retire, the original objects unprotect and GC, the pending marks
+	// clear. A refusal at any fallible point — the hook on a spilling
+	// replacement object, the record choke — now fails the WHOLE
+	// admission with the workspace exactly as found: the pre-fix worker
+	// converted the record's admission error into a panic, the ants pool
+	// recovered it, waiter.Done still ran, and the tail garbage-collected
+	// the original objects, wiped the marks and returned nil — the
+	// rejected replacement's surviving rows vanished from the workspace
+	// (and the physically persisted replacement leaked with no cleanup
+	// owner).
+	type compactRewrite struct {
+		tbl       *txnTable
+		tbKey     workspaceTableKey
+		writeName string
+		bat       *batch.Batch
+		fileName  string
+		persisted []string
+		err       error
 	}
 
+	waiter := sync.WaitGroup{}
+	locker := sync.Mutex{}
+	rewrites := make([]compactRewrite, 0, 8)
+
 	dirtyObject := make([]objectio.ObjectStats, 0, 1)
+
+	// Metadata entries whose objects this pass fully classified are retired
+	// only after the tail below published every staged re-publication AND
+	// recorded every replacement — never mid-loop and never before the
+	// pass's last fallible step succeeded: the re-publications and
+	// replacement records live in this statement's workspace region, and
+	// the statement rollback that follows a failed admission truncates
+	// exactly that region. Retiring an original before the pass outcome is
+	// known would strand it — the rollback cannot restore a slot outside
+	// the failing statement — and leave objects recorded by neither their
+	// old nor their new metadata (issue #25590).
+	//
+	// The re-publication itself is two-phase (issue #25590 round-8 review):
+	// the staging loop below runs EVERY fallible step of EVERY affected
+	// object — the epoch-fence check, the fault window, the batch
+	// allocation, the union of the object's block info, the stats bytes and
+	// the workspace's own batch copy — before the first workspace mutation
+	// of this pass. Only a complete staging set reaches the publication
+	// loop, whose remaining steps touch nothing but maps and the writes
+	// slice; with no failure point left between them, a partial
+	// publication — one affected object's replacement appended, the next
+	// failing, the originals all un-retired — can no longer be stranded
+	// inside the rolled-back statement as duplicate object references that
+	// re-read and re-commit the same object twice.
+	retired := make([]int, 0, 4)
+	staged := make([]compactRepublication, 0, 8)
+	// cleanStagedRepubs forgives every staged batch on any staging error, so
+	// an aborting pass leaves the workspace exactly as it found it.
+	cleanStagedRepubs := func() {
+		for k := range staged {
+			staged[k].bat.Clean(txn.proc.Mp())
+		}
+		staged = staged[:0]
+	}
 
 	ll := len(txn.writes)
 	for i, entry := range txn.writes[:ll] {
@@ -2683,45 +4689,78 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			}
 		}
 
+		// The epoch fence is part of the publication's fallible prefix: it
+		// must hold for every staged object before the pass mutates any
+		// registry, so a fenced entry cannot strand partially published
+		// replacements behind it.
+		if err := txn.requireAutoIncrEpochFenceCommit(
+			entry.autoIncrEpoch, entry.autoIncrEpochKnown); err != nil {
+			cleanStagedRepubs()
+			return err
+		}
+
 		offset := 0
 		col, area := vector.MustVarlenaRawData(entry.bat.Vecs[1])
 		for j := range len(col) {
 			stats := objectio.ObjectStats(col[j].GetByteSlice(area))
 
 			if objBlkDeletion[*stats.ObjectName().ObjectId()] == nil {
-				// clean object, no deletion on it
+				// clean object, no deletion on it: stage its metadata as
+				// its own single-object batch. Every step from here on is
+				// fallible (the fault window, mpool allocations, the
+				// workspace's own copy) and the pass is in the middle of
+				// staging replacements for a batch that also holds
+				// un-rewritten dirty objects — an error must keep the
+				// workspace re-runnable as-found, so the pending
+				// deletedBlocks of this and every other object stay
+				// untouched, the retried admission reapplies them
+				// (issue #25590 round 7), and nothing staged — not even
+				// the objects whose staging already succeeded — reaches
+				// any registry while staging continues (round 8).
+				if objectio.CNWorkspaceCompactPublishFailedInjected() {
+					cleanStagedRepubs()
+					return moerr.NewInternalErrorNoCtx(
+						"fault injection: object compaction publish failed")
+				}
 				bat := colexec.AllocCNS3ResultBat(false)
 				if err := bat.Vecs[0].UnionBatch(entry.bat.Vecs[0],
 					int64(offset), int(stats.BlkCnt()), nil, txn.proc.Mp()); err != nil {
+					bat.Clean(txn.proc.Mp())
+					cleanStagedRepubs()
 					return err
 				}
 				if err := vector.AppendBytes(
 					bat.Vecs[1], stats.Marshal(), false, txn.proc.Mp()); err != nil {
-					return nil
+					bat.Clean(txn.proc.Mp())
+					cleanStagedRepubs()
+					return err
 				}
 
 				bat.SetRowCount(bat.Vecs[0].Length())
 
-				if err := txn.writeFileLockedWithAutoIncrEpochKnown(
-					INSERT,
-					entry.accountId,
-					entry.databaseId,
-					entry.tableId,
-					entry.databaseName,
-					entry.tableName,
-					stats.ObjectName().String(),
-					bat,
-					entry.tnStore,
-					entry.autoIncrEpoch,
-					entry.autoIncrEpochKnown,
-				); err != nil {
-					bat.Clean(txn.proc.Mp())
+				// The workspace's own copy of the replacement batch — the
+				// last allocation of the fallible prefix. The staged copy
+				// transfers to the workspace entry in the publication loop
+				// below, whose steps cannot fail anymore.
+				entryBat, err := bat.Dup(txn.proc.Mp())
+				bat.Clean(txn.proc.Mp())
+				if err != nil {
+					cleanStagedRepubs()
 					return err
 				}
 
-				//_ = txn.GCObjsByStats(stats)
-				bat.Clean(txn.proc.Mp())
-
+				staged = append(staged, compactRepublication{
+					bat:                entryBat,
+					name:               stats.ObjectName().String(),
+					accountId:          entry.accountId,
+					databaseId:         entry.databaseId,
+					tableId:            entry.tableId,
+					databaseName:       entry.databaseName,
+					tableName:          entry.tableName,
+					tnStore:            entry.tnStore,
+					autoIncrEpoch:      entry.autoIncrEpoch,
+					autoIncrEpochKnown: entry.autoIncrEpochKnown,
+				})
 			} else {
 				dirtyObject = append(dirtyObject, stats)
 			}
@@ -2729,28 +4768,229 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			offset += int(stats.BlkCnt())
 		}
 
-		txn.releaseWorkspaceEntryBatchLocked(i)
+		retired = append(retired, i)
 	}
 
-	if txn.compactWorker == nil {
-		txn.compactWorker, _ = ants.NewPool(min(runtime.NumCPU(), 4))
-		defer func() {
-			txn.compactWorker.Release()
-			txn.compactWorker = nil
-		}()
-	}
+	// Phase A: rewrite every dirty object physically — the ONLY remaining
+	// fallible work after staging, and it touches no workspace state at
+	// all, so a failed rewrite (or the replacement's capacity refusal at
+	// its bound sinker's hook) leaves nothing that a rollback would have
+	// to restore. The parent pre-resolves each table and pre-computes the
+	// record's write shapes, so a worker owns nothing but its own
+	// result slot and its filesystem reader/writer.
+	for i := range dirtyObject {
+		stats := dirtyObject[i]
+		objId := stats.ObjectName().ObjectId()
+		tbKey := objTables[*objId]
 
-	for _, stats := range dirtyObject {
-		waiter.Add(1)
-		txn.compactWorker.Submit(func() {
-			compactFunc(stats)
+		// resolveCompactTablesLocked guarantees every table referenced by
+		// txn.deletedBlocks is in the map
+		tbl, _ := tables[tbKey.tableKey].(*txnTable)
+		if tbl == nil {
+			delegate, _ := tables[tbKey.tableKey].(*txnTableDelegate)
+			tbl = delegate.origin
+		}
+		writeName := tbl.tableName
+		if tbl.db.databaseId == catalog.MO_CATALOG_ID && tbl.tableId == catalog.MO_COLUMNS_ID &&
+			tbKey.name == catalog.MO_COLUMNS_UPDATE {
+			writeName = tbKey.name
+		}
+		rewrites = append(rewrites, compactRewrite{
+			tbl:       tbl,
+			tbKey:     tbKey,
+			writeName: writeName,
 		})
 	}
+	if len(rewrites) > 0 {
+		if txn.compactWorker == nil {
+			txn.compactWorker, _ = ants.NewPool(min(runtime.NumCPU(), 4))
+			defer func() {
+				txn.compactWorker.Release()
+				txn.compactWorker = nil
+			}()
+		}
+		for i := range rewrites {
+			waiter.Add(1)
+			stats := dirtyObject[i]
+			blkDeletion := objBlkDeletion[*dirtyObject[i].ObjectName().ObjectId()]
+			txn.compactWorker.Submit(func() {
+				defer waiter.Done()
+				tbl := rewrites[i].tbl
+				locker.Lock()
+				tbl.ensureSeqnumsAndTypesExpectRowid()
+				locker.Unlock()
+				bat, fileName, persisted, err := tbl.rewriteObjectByDeletion(
+					ctx, stats, blkDeletion)
+				rewrites[i].bat = bat
+				rewrites[i].fileName = fileName
+				rewrites[i].persisted = persisted
+				rewrites[i].err = err
+			})
+		}
+		waiter.Wait()
+	}
 
-	waiter.Wait()
+	// Phase B: prepare every finished replacement's record on the parent,
+	// under the transaction lock admission already holds — STAGED, never
+	// appended (issue #25590 round-20 review, finding 1). Every fallible
+	// step of every record (the epoch fence, the workspace's own batch
+	// copy, the record's admission choke) runs here on data the parent
+	// owns; a record that staged committed only still-retractable
+	// admission state, because the publication loop below — the pass's
+	// INFALLIBLE tail — appends the staged entries to the writes slice
+	// back-to-back. The FIRST error still stops the staging loop, and the
+	// back-out retracts every staged admission, releases every staged
+	// re-publication batch and hands every unrecorded persisted
+	// replacement to the cleanup queue. This is what makes the pass
+	// atomic across ALL its replacements: the pre-fix loop recorded each
+	// replacement the moment its own record call returned, so with two
+	// dirty objects an earlier successful record survived a later
+	// refusal as a live workspace entry next to an un-retired original —
+	// its statement boundary sits above that appended record, so the
+	// statement rollback could not remove it, and the retried compaction
+	// wrote a SECOND replacement for the same original, committing the
+	// surviving rows twice.
+	var compactErr error
+	recordStages := make([]*stagedWorkspaceRecord, 0, len(rewrites))
+	for i := range rewrites {
+		r := &rewrites[i]
+		if r.err != nil {
+			if compactErr == nil {
+				compactErr = r.err
+			}
+			continue
+		}
+		if compactErr != nil {
+			continue
+		}
+		if r.bat == nil {
+			// round-32 review, finding 1: a fully deleted rewrite is NO
+			// replacement record (rewriteObjectByDeletion returns a nil
+			// bat for an object whose deletions removed every row), so
+			// nothing stages here and its original entry retires through
+			// the pass's own retirement loop below exactly like every
+			// other classified object - the pass stays atomic across
+			// all its replacements, and the fully deleted object leaves
+			// no empty workspace entry behind. A degenerate name the
+			// rewrite nonetheless persisted takes the same
+			// definite-orphan funnel an unrecorded replacement takes,
+			// so no unrecorded file can outlive the entries.
+			if len(r.persisted) > 0 {
+				txn.retainDefiniteOrphansLocked(r.persisted,
+					"the fully deleted rewrite staged no replacement record: the recording side fail-open-retains the degenerate persisted name so its file never loses its cleanup owner (issue #25590 round-32 review)")
+			}
+			continue
+		}
+		st, err := txn.stageWorkspaceRecordLocked(
+			INSERT,
+			r.tbl.accountId,
+			r.tbl.db.databaseId,
+			r.tbl.tableId,
+			r.tbl.db.databaseName,
+			r.writeName,
+			r.fileName,
+			r.bat,
+			txn.tnStores[0],
+			r.tbKey.autoIncrEpoch,
+			r.tbKey.autoIncrEpochKnown,
+			false,
+		)
+		if err != nil {
+			compactErr = err
+			continue
+		}
+		recordStages = append(recordStages, st)
+	}
+
+	if compactErr != nil {
+		// Failure-atomic back-out: no staged re-publication published, no
+		// original batch retired, no original object GC'd, no pending
+		// mark cleared — the workspace stays re-runnable exactly as
+		// found and the retried admission re-runs the whole pass.
+		// Staged records never reached the writes slice, so their
+		// admissions UNDO here first: retracting the staged names from
+		// the recorded set puts them back where every leftover-object
+		// enumeration can see them, and the prepared copies clean with
+		// the staged re-publication batches (issue #25590 round-20
+		// reviews, findings 1 and 4 — those batches never entered
+		// txn.writes, so no transaction cleanup can release them:
+		// without this release every refused admission would strand one
+		// allocated batch per clean object behind the bound).
+		for _, st := range recordStages {
+			txn.retractUnpublishedRecordAdmissionLocked(st)
+			if st.bat != nil {
+				st.bat.Clean(txn.proc.Mp())
+				st.bat = nil
+			}
+		}
+		cleanStagedRepubs()
+		// Every physical replacement this pass created — rewritten but
+		// never recorded, or commit-ambiguously half-persisted by a
+		// failing rewrite — transfers to the transaction's asynchronous
+		// cleanup ownership, the SAME transfer a failed dump
+		// publication performs: the names join pendingObjectCleanup (the
+		// next admission boundary — or the terminal — moves them to the
+		// engine's lossless queue whose drain deletes them) and the
+		// capacity ledger, and the deletedBlocks marks stay put so the
+		// retried pass reapplies them (issue #25590 round-19 review,
+		// finding 1).
+		for i := range rewrites {
+			r := &rewrites[i]
+			if r.bat != nil {
+				r.bat.Clean(txn.proc.Mp())
+				r.bat = nil
+			}
+			if len(r.persisted) == 0 {
+				continue
+			}
+			// r5 (round-21 review): the failed pass's replacements are
+			// definite orphans — the retry rewrites the originals freshly,
+			// so no recording consumer can ever land for these names.
+			txn.retainDefiniteOrphansLocked(
+				r.persisted,
+				"object compaction admitted a replacement's persistence but returned before recording any replacement: no append could survive the statement rollback, so the names hand to the cleanup queue and the marks stay for the retried admission (issue #25590 round-19/20 reviews)")
+		}
+		return compactErr
+	}
+
+	// The pass's last fallible step is done: publish the staged
+	// replacement records back-to-back, then all staged re-publications,
+	// then retire the originals' batches — none of the three published
+	// steps can fail, they touch only engine maps, txn state and the
+	// writes slice, so this tail appends every record and re-publication
+	// together or, had any earlier step failed, none at all (issue
+	// #25590 round-8/20 reviews).
+	for _, st := range recordStages {
+		txn.publishStagedWorkspaceRecordLocked(st)
+	}
+	for i := range rewrites {
+		r := &rewrites[i]
+		if r.bat != nil {
+			r.bat.Clean(txn.proc.Mp())
+			r.bat = nil
+		}
+	}
+	for k := range staged {
+		txn.publishStagedRepublicationLocked(&staged[k])
+		staged[k].bat = nil
+	}
+
+	// The classification survived every entry, and every replacement and
+	// re-publication of the pass has recorded, so the originals' batches
+	// and objects can be replaced by them.
+	for _, i := range retired {
+		txn.releaseWorkspaceEntryBatchLocked(i)
+	}
+	txn.assertWorkspaceAccountingLocked()
+
 	txn.unprotectUnreferencedTxnLocalSharedFilesLocked(dirtyObject, nil)
 	_ = txn.GCObjsByStats(dirtyObject...)
 
+	// The rewrites above physically embody the pending deletions, so the
+	// marks may go now. Every early return above intends the opposite:
+	// the deletions are still pending state of earlier statements and the
+	// next admission reapplies them (issue #25590).
+	txn.deletedBlocks.clean()
 	return nil
 }
 
@@ -3009,6 +5249,10 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 		txn.Unlock()
 		return nil, err
 	}
+	// Same failure-atomic discipline as IncrStatementID: retired and
+	// merge-combined nil slots are compacted only after the fallible
+	// dump, before the commit payload is assembled from the workspace.
+	txn.compactNilWorkspaceSlotsLocked()
 	txn.Unlock()
 
 	if msg, injected := objectio.CNCommitAfterWorkspaceDumpFailedInjected(); injected {
@@ -3052,6 +5296,17 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 	if err != nil {
 		return nil, err
 	}
+
+	// r5 (issue #25590 round-21 review, finding G3): the ledger release that
+	// r18/r20 performed HERE — right after drafting the commit payload —
+	// moved out. This function only PREPARES the commit: the caller still
+	// runs the commit RPC and classifies the outcome after it, and a
+	// prepared-but-unclassified transaction must keep holding its recorded
+	// names' capacity (a competing transaction can never consume the unit
+	// a parked commit still needs; a definite failure transfers owned→
+	// queued without increasing the total). The terminal releases live in
+	// FinalizeCommit (published), Rollback (definite failure, transfer)
+	// and FinalizeCommitWithUnknownResult (release without deletion).
 
 	return reqs, nil
 }
@@ -3149,21 +5404,118 @@ func missingCreatedDatabaseWriteError(ctx context.Context, pending map[databaseK
 	)
 }
 
-func (txn *Transaction) FinalizeCommit(context.Context) {
+func (txn *Transaction) FinalizeCommit(ctx context.Context) {
 	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
 		txn.engine.ccprTxnCache.OnTxnCommit(txn.op.Txn().ID)
 	}
+	// r5 terminal settlement (issue #25590 round-21 review, finding G3):
+	// the caller classified a SUCCESSFUL commit, so the transaction's
+	// recorded workspace objects are published — retain their capacity no
+	// longer. The pending handoff runs first (under the transaction's
+	// recorded set intact, per the r5 boundary classification): the
+	// unrecorded remainder moves to the engine's lossless quiesced handoff
+	// with no storage I/O on the dying transaction's path, then the
+	// recorded names retire as published (no deletion), and every
+	// outstanding dump reservation settles so no in-flight unit can
+	// outlive its transaction.
+	txn.Lock()
+	// r6 (round-22): the reservation drain runs FIRST — unconverted
+	// reservations adopt the terminal as their last reachable owner and
+	// join the pending list below — then the quiesced handoff carries
+	// everything (the retained adoptions included) to the engine's
+	// lossless queue with the recorded set intact, and the recorded
+	// names retire as published.
+	txn.drainUnpublishedDumpReservationsLocked(drainUnpublishedDumpReservationsTerminalReason)
+	txn.handoffPendingObjectCleanupLocked(true)
+	txn.releaseRecordedUnpublishedObjectsLocked()
+	txn.Unlock()
 	txn.delTransaction()
 }
 
-func (txn *Transaction) FinalizeCommitWithUnknownResult(context.Context) {
+func (txn *Transaction) FinalizeCommitWithUnknownResult(ctx context.Context) {
 	if txn.isCCPRTxn && txn.engine.ccprTxnCache != nil {
 		txn.engine.ccprTxnCache.OnTxnUnknownResult(txn.op.Txn().ID)
 	}
+	// r5 terminal settlement (issue #25590 round-21 review, finding G3):
+	// the unknown-outcome classification also settles exactly once, and it
+	// RETIRES without deleting: the commit may have reached TN, so no
+	// recorded object may be enqueued for deletion here (the pre-existing
+	// ambiguity doctrine), while the capacity obligation ends with this
+	// transaction no matter which way TN resolves it — a parked unit
+	// could otherwise never return to the bound, because nothing ever
+	// classifies this workspace a second time. The unrecorded remaining
+	// pending names hand off to the engine's queue through the same
+	// lossless, storage-free transfer (recorded-membership rechecked
+	// first): no commit payload can reference them.
+	txn.Lock()
+	// r6 (round-22): the drain adopts unconverted reservations (the
+	// coordinator never recorded them) into the pending list first, the
+	// quiesced handoff carries everything to the queue with the recorded
+	// set intact, and the recorded names retire without deletion.
+	txn.drainUnpublishedDumpReservationsLocked(drainUnpublishedDumpReservationsTerminalReason)
+	txn.handoffPendingObjectCleanupLocked(true)
+	txn.releaseRecordedUnpublishedObjectsLocked()
+	txn.Unlock()
 	// The Commit may have reached TN. delTransaction releases only CN-local
 	// state and intentionally does not run gcObjsByIdxRange or delete shared
-	// object-storage data.
+	// object-storage data for recorded objects.
 	txn.delTransaction()
+}
+
+// FinalizeRemoteFragmentWorkspace performs the r5 one-of terminal
+// settlement of a workspace a remote statement run constructed — the
+// per-message mirror-txn workspace remoterunServer binds with
+// disttae.NewTxnWorkSpace before the fragment's writers run (issue
+// #25590 round-21 review, finding G2). On this tree no other terminal
+// ever reaches that workspace: the run's cleanup releases scopes and
+// process resources only, so the fragment's per-object reservations and
+// teardown-retained names would stay counted on the remote engine's
+// ledger forever — every successful distributed write permanently
+// consuming remote capacity.
+//
+// transferred=true — the fragment ran clean, so every metadata batch it
+// emitted flowed to the coordinator, whose record choke IS the
+// acknowledgment (an admission releases with the record; a refusal
+// fail-open-retains the reservation-less names on the recording side).
+// The settlement releases exactly: outstanding reservations settle,
+// the retained pending names retire WITHOUT deletion (their records own
+// the fate: publish on commit, the coordinator's rollback transfer on
+// failure), and any remotely-recorded names release as published. No
+// local storage I/O runs at all.
+//
+// transferred=false — the run failed or was cancelled, so the statement
+// fails everywhere and the in-flight names share one deletion fate: the
+// ordinary workspace Rollback terminal both settles and cleans (retains
+// and enqueues the unrecorded remainder, transfers recorded names
+// owned→queued, settles reservations, destroys the workspace state) on
+// the local engine that owns them.
+func (txn *Transaction) FinalizeRemoteFragmentWorkspace(
+	ctx context.Context, transferred bool,
+) error {
+	if !transferred {
+		return txn.Rollback(ctx)
+	}
+	txn.Lock()
+	defer txn.Unlock()
+	// r6 (issue #25590 round-22 review): the reservation drain runs FIRST —
+	// leftover reservations (a fragment writer the coordinator never
+	// recorded) adopt this terminal as their last reachable owner and join
+	// the pending list — so the names collected below cover them, and the
+	// published release settles every obligation exactly once (the
+	// coordinator's adopted reservations own the files' fate).
+	txn.drainUnpublishedDumpReservationsLocked(drainUnpublishedDumpReservationsTerminalReason)
+	names := txn.pendingObjectCleanupNames()
+	txn.pendingObjectCleanup = nil
+	txn.releaseRecordedUnpublishedObjectsLocked()
+	if txn.engine != nil && len(names) > 0 {
+		txn.engine.releaseUnpublishedPendingPublished(names)
+	}
+	logutil.Info(
+		"WORKSPACE-REMOTE-FRAGMENT-SETTLED",
+		zap.Int("retained-names-released", len(names)),
+		zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
+	)
+	return nil
 }
 
 func (txn *Transaction) transferTombstonesByStatement(
@@ -3255,6 +5607,19 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 	}
 	_, loadCleanupErr := txn.deleteLoadFiles(ctx, nil)
 
+	// Storage objects orphaned by failed dump publications were recorded by
+	// no workspace entry, so the gc sweep below cannot know them — this
+	// pass hands every still-owned name to the engine's queue. The shared
+	// terminal helper is the SAME leg the two commit finalizers run and
+	// performs no storage I/O itself (issue #25590 round-12 review), so a
+	// dirty — even context-blind-stalled — file service cannot park the
+	// rollback's final moment or the transaction locks behind it: the queue
+	// owns the names the moment the transaction ends, and the drain
+	// collects them storage-fate notwithstanding.
+	txn.Lock()
+	txn.finalizePendingObjectCleanup()
+	txn.Unlock()
+
 	// For CCPR transactions, call OnTxnRollback to clean up the cache and GC objects
 	// Skip normal GCObjsByIdxRange for CCPR transactions because:
 	// 1. CCPR objects may be shared across transactions
@@ -3263,10 +5628,40 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 		txn.engine.ccprTxnCache.OnTxnRollback(txn.op.Txn().ID)
 	} else {
 		//to gc the s3 objs
-		if err := txn.gcObjsByIdxRange(0, len(txn.writes)-1, cloneGCTxnRollback); err != nil {
+		// The recorded files transfer to the engine's lossless queue
+		// instead of a pool submission: this rollback releases the
+		// transaction locks only after it returns, and a saturated GC
+		// pool would park the rollback behind stalled storage exactly
+		// where the transaction's final moment must stay free of every
+		// storage fate (issue #25590 round-14 review).
+		if err := txn.gcObjsByIdxRangeToOwner(0, len(txn.writes)-1, cloneGCTxnRollback); err != nil {
 			panic("Rollback txn failed: to gc objects generated by CN failed")
 		}
 	}
+
+	// Terminal retirement of the recorded-name ledger (issue #25590
+	// round-18 review, finding 2): the ordinary rollback's queue
+	// transfers above moved every handed member already — clone-scope
+	// filters and the CCPR branch's deliberately-shared files are the
+	// remaining still-owned members, and their obligations also END at
+	// this terminal (the clone cache owns the shares), so the release
+	// is idempotent for moved names and exact for the rest.
+	//
+	// r6 (issue #25590 round-22 review): the reservation drain now RESETTLES
+	// the leftover reservations — the adopted remote-transferred names whose
+	// record the coordinator never reached among them — by adopting them
+	// into the pending list as definite orphans (the retain reads the
+	// recorded set and mutates the pending list, so this section holds the
+	// transaction lock), and the quiesced handoff below carries them to the
+	// engine's lossless queue; the head finalize above handed the
+	// pre-existing list off already, so this second pass moves exactly the
+	// drain's adoptions and is idempotent for the rest.
+	txn.Lock()
+	txn.drainUnpublishedDumpReservationsLocked(drainUnpublishedDumpReservationsTerminalReason)
+	txn.handoffPendingObjectCleanup()
+	txn.releaseRecordedUnpublishedObjectsLocked()
+	txn.Unlock()
+
 	txn.delTransaction()
 	return loadCleanupErr
 }
@@ -3413,6 +5808,15 @@ func (txn *Transaction) CloneSnapshotWS() client.Workspace {
 	}
 
 	ws.readOnly.Store(true)
+
+	// Mirror NewTxnWorkSpace: the rowid generator of a cloned workspace
+	// must issue TxnWorkspaceSegment rowids. Without the segment, rows
+	// inserted through a cloned workspace leave the workspace-resident
+	// delete path: deleteTableWrites/deleteBatch classify by segment, so
+	// deletes of those rows would not be marked via batchSelectList and
+	// would fall back to emitting persistent tombstones for rows that
+	// never left the transaction.
+	ws.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 
 	return ws
 }
