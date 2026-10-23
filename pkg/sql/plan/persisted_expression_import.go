@@ -81,6 +81,31 @@ func importPersistedExprRoots(ctx context.Context, catalogRoots []*Expr) ([]*Exp
 		return nil, err
 	}
 
+	if err := freshenValidatedNumericProgramScopes(ctx, roots, programs); err != nil {
+		return nil, err
+	}
+	return roots, nil
+}
+
+// cloneWithFreshNumericProgramScopes creates a new plan owner for one complete
+// expression group. The shared mapping preserves every REF0/REF1 alias while
+// preventing an independently rewritten copy from reusing query-wide scope IDs.
+func cloneWithFreshNumericProgramScopes(ctx context.Context, roots []*Expr) ([]*Expr, error) {
+	programs, err := validatePersistedNumericProgramRoots(ctx, roots)
+	if err != nil {
+		return nil, err
+	}
+	clones := DeepCopyExprList(roots)
+	if err := freshenValidatedNumericProgramScopes(ctx, clones, programs); err != nil {
+		return nil, err
+	}
+	return clones, nil
+}
+
+func freshenValidatedNumericProgramScopes(ctx context.Context, roots []*Expr, programs *persistedNumericProgramGroup) error {
+	if programs == nil || len(programs.scopes) == 0 {
+		return nil
+	}
 	reserved := make(map[int64]struct{}, len(programs.scopes))
 	for scope := range programs.scopes {
 		reserved[scope] = struct{}{}
@@ -89,7 +114,7 @@ func importPersistedExprRoots(ctx context.Context, catalogRoots []*Expr) ([]*Exp
 	for oldScope := range programs.scopes {
 		newScope, err := allocateNumericValueProgramScope(ctx, reserved)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		reserved[newScope] = struct{}{}
 		remapped[oldScope] = newScope
@@ -103,26 +128,28 @@ func importPersistedExprRoots(ctx context.Context, catalogRoots []*Expr) ([]*Exp
 		switch fid {
 		case function.SCALAR_PROGRAM:
 			scope, ok := numericPlanInt64(fn.Args[0])
-			if !ok {
+			newScope, exists := remapped[scope]
+			if !ok || !exists {
 				return persistedNumericProgramError(ctx, "program scope is not an int64 literal")
 			}
-			setNumericPlanInt64(fn.Args[0], remapped[scope])
+			setNumericPlanInt64(fn.Args[0], newScope)
 		case function.SCALAR_PROGRAM_REF:
 			argOffset := 0
 			if len(fn.Args) == 3 {
 				argOffset = 1
 			}
 			scope, ok := numericPlanInt64(fn.Args[argOffset])
-			if !ok {
+			newScope, exists := remapped[scope]
+			if !ok || !exists {
 				return persistedNumericProgramError(ctx, "reference scope is not an int64 literal")
 			}
-			setNumericPlanInt64(fn.Args[argOffset], remapped[scope])
+			setNumericPlanInt64(fn.Args[argOffset], newScope)
 		}
 		return nil
 	}); err != nil {
-		return nil, err
+		return err
 	}
-	return roots, nil
+	return nil
 }
 
 type persistedNumericProgramGroup struct {

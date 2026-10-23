@@ -3249,11 +3249,39 @@ func TestFillValuesOfParamsSpecializationTracksBinaryExecutionDomains(t *testing
 		}},
 	}}}
 
-	_, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+	filledQuery, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
 		ParamValue{Value: "-1.5", IsBinaryProtocol: true},
 	})
 	require.NoError(t, err)
-	require.True(t, specialized, "COM_STMT text numeric values must rebind ABS")
+	proc := testutil.NewProcess(t)
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("-1.5"), false, proc.Mp()))
+	proc.SetPrepareParams(params)
+	t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+	cachedResult, freeCached, evalErr := colexec.GetReadonlyResultFromExpression(proc, absExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, evalErr)
+	defer freeCached()
+	filledExpr := findPlanFunctionExpr(filledQuery, "abs")
+	filledResult, freeFilled, evalErr := colexec.GetReadonlyResultFromExpression(proc, filledExpr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, evalErr)
+	defer freeFilled()
+	require.False(t, specialized, "a complete COM_STMT numeric string keeps the cached FLOAT64 ABS plan")
+	require.Equal(t, types.T_float64, cachedResult.GetType().Oid)
+	require.Equal(t, types.T_float64, filledResult.GetType().Oid)
+	require.Equal(t, float64(1.5), vector.GetFixedAtNoTypeCheck[float64](cachedResult, 0))
+	require.Equal(t, float64(1.5), vector.GetFixedAtNoTypeCheck[float64](filledResult, 0))
+
+	integerFilled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, []any{
+		ParamValue{Value: "9007199254740993", IsBinaryProtocol: true, RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+	})
+	require.NoError(t, err)
+	require.True(t, specialized, "an exact COM_STMT INT64 value must select the integer ABS overload")
+	integerAbs := findPlanFunctionExpr(integerFilled, "abs")
+	require.Equal(t, int32(types.T_int64), integerAbs.Typ.Id)
+	integerResult, freeInteger, evalErr := colexec.GetReadonlyResultFromExpression(proc, integerAbs, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, evalErr)
+	defer freeInteger()
+	require.Equal(t, int64(9007199254740993), vector.GetFixedAtNoTypeCheck[int64](integerResult, 0))
 
 	sleepExpr, err := BindFuncExprImplByPlanExpr(ctx, "sleep", []*planpb.Expr{param()})
 	require.NoError(t, err)
