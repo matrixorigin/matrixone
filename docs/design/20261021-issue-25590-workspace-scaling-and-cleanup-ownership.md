@@ -2,13 +2,14 @@
 
 - Owning issue: [matrixorigin/matrixone#25590](https://github.com/matrixorigin/matrixone/issues/25590)
   ([Bug] AI-WALK (Txn workspace): repeated mutations degrade super-linearly in long transactions)
-- Implementation series: one PR from branch `agent/issue-25590-6d5e84a3` on base HEAD
-  `83222fa837` (merge base `83222fa8371007c7969d3aeca3ab8ced90695f4c`); 30 changed paths
-  (r6 adds the relay-name recognizer, its unit contract, the client-side intake
-  in remoterunClient.go, and the local-FS not-found completion the concurrent
-  drains' tolerance contract depends on), all currently uncommitted
-  in the supplied worktree.
-- Document version: **r6** (2026-10-22). Revision r1 was the round-17 design-gate
+- Implementation series: pull request [#30988](https://github.com/matrixorigin/matrixone/pull/30988)
+  from branch `agent/issue-25590-6d5e84a3`, 55 changed paths, built on main
+  `be663676872` after the r12 post-merge rebase recorded below; the design-review
+  rounds and the 2026-10-23 implementation-review series ran against the original
+  parent `83222fa8371007c7969d3aeca3ab8ced90695f4c`, which main absorbed before the
+  rebase.
+- Document version: **r12** (2026-10-23; independent review outcomes r8-r12 recorded
+  2026-10-24 in the closing §10 sections below). Revision r1 was the round-17 design-gate
   artifact; r2 revised §5.1, §5.3, §5.5, §6, §7, §8, §9 and the §10 review record to
   resolve the round-18 pre-PR review's two blocking findings (B6/B7 in §10): capacity
   must be reserved per persisted OBJECT rather than per dump, and every recorded
@@ -54,8 +55,18 @@
   §4.5/§5.3 atomicity, ordering and producer-coverage decisions; r5 by the round-21
   re-review of the boundary-classification, commit-terminal-capacity,
   producer-closure and cross-CN-settlement decisions; r6 by the round-22 re-review
-  of the remote-transfer adoption and two-engine capacity-admission decisions
-  (see §10); implementation review unblocks from that PASS.
+  of the remote-transfer adoption and two-engine capacity-admission decisions;
+  r7 by the round-23 re-review (Decision: PASS at r7, §10); r8, r9 and r10 were
+  each returned REQUEST_CHANGES by the round 24-26 independent design reviews and
+  their blockers were resolved by their successor revisions (exact reviewed content
+  hashes and the findings in the closing §10 record); the operative approval is
+  **PASS at r11** by the round-27 independent design-only review of 2026-10-22
+  (reviewed content sha256
+  74edf0d9ba9c2e1711467ef718b08f76b724c1a513b92c716db9547021e5c836); r12 is the
+  recorded post-merge conflict resolution under that PASS, independently covered
+  together with the implementation by the six complete-worktree reviews of
+  2026-10-23, the sixth approving with no blocking findings (§10 closing record).
+  Implementation PR: #30988.
 
 ### Revision r6 (round-22 pre-PR review, findings H1/H2)
 
@@ -2754,3 +2765,115 @@ renumbered constants (the UTs were renumbered to the same intent), and
 the full r11 primary proof set is re-run on the rebased tree (focused
 UT set + the BVT case legs); no new test surface is required by this
 revision beyond the renumbering already present in those suites.
+
+## 10 design review record - rounds 24-27 outcomes (r11 independent PASS)
+
+This closing section records the independent review decisions the loop
+prior to 2026-10-24 kept only in its private review artifacts, while the
+submission records above ended at their "submitted for independent
+review" states. The sequence, verified against those artifacts:
+
+- Round 24 returned REQUEST_CHANGES for the r8 submission (reviewed
+  content sha256
+  5e8d032249eda255f8dabe4cbe2dcb518214d1a94242c44d29a25a3a924873c6),
+  with three design blockers: the adoption-capable transfer must not
+  delete successful writes when the coordinator lacks adoption
+  capability; the design must specify how the coordinator advertises
+  its capability to the fragment; the clone-protection predicate must
+  keep its cleanup scope when shared. r9 resolves exactly these three
+  (refuse-before-persistence for incapable peers, the per-request
+  capability advertisement, the committed-borrowed-only orphan
+  exemption) and rescinds r8's contradicted wordings recorded in its
+  round-25 section above.
+- Round 25 returned REQUEST_CHANGES for the r9 submission (reviewed
+  content sha256
+  0105fd23c57196ecb9ed7fbd3d9315b3ac871680a948b34c09d47494ce37e5d5)
+  with one blocker: the public and mixed-version validation matrix
+  remained incomplete. The reviewer confirmed the revised ownership and
+  capability mechanisms ("address the previous three design findings").
+  r10's D4'' resolves it: the in-repo public fixture over a real
+  handler-owned 2-CN cluster with the shipped mo_ctl
+  SetProtocolVersion/GetProtocolVersion controls and the routing
+  discriminators.
+- Round 26 returned REQUEST_CHANGES for the r10 submission (reviewed
+  content sha256
+  d9cd157031dc4f7bb098018ebcab47d33604cdf44dd5bf87795dcc338534580e)
+  with three validation blockers: P3 does not exercise an actual
+  old-fragment binary; statement atomicity must be proved before the
+  explicit rollback; the UPDATE forcing conditions and fixture cost need
+  correction. r11's P3' (the coordinator on the proposed build, the
+  fragment receiver on the pristine parent build, with reach and
+  committed-readability assertions), P2a (the default-policy oracle
+  with statement-only rollback, P2b retained separately) and the
+  corrected forcing matrix resolve them.
+- Round 27 returned **PASS** for the r11 submission on 2026-10-22:
+  Decision: **PASS at r11**, on the complete submitted document with
+  content sha256
+  74edf0d9ba9c2e1711467ef718b08f76b724c1a513b92c716db9547021e5c836.
+  The reviewer's recorded basis: "P3' and P2a resolve the prior
+  blockers", closing the three submitted questions (the isolated
+  two-binary P3' topology; the fixed public failure contract -
+  ErrNotSupported with statement-only default disposition and the
+  mo_rollback_txn_on_error opt-in for whole-transaction rollback; the
+  P2a oracle with the CN2 receive-log reach evidence). One nonblocking
+  note was recorded: the legs must explicitly enable the parent
+  receive-log witness by arming the existing inject_send_pipeline fault
+  point with a substring identifying the target DML, assert its marker
+  in the receiver's parent-binary log, and restore the fault state at
+  teardown. That note is folded into the shipped cases: both
+  update_remote_fragment_capability case files arm inject_send_pipeline
+  with the 'rfc_t' substring and remove it in teardown. The reviewer
+  bounded the approval's own scope: it "covers this exact design only;
+  D1' remediation, implementation, and executable proof require
+  subsequent full review."
+
+The operative design approval for PR #30988 is this r11 PASS. This
+handler does not self-approve the design gate; the decisions above are
+the independent reviewer's, recorded here for repository traceability
+after the fact.
+
+## 10 design review record - r12 (post-merge conflict resolution) and the 2026-10-23 implementation approval
+
+r12 above was authored after the r11 PASS, during the 2026-10-23 rebase
+of the implementation branch onto main `be663676872` (main had absorbed
+the design-review parent `83222fa837` and allocated MORPC versions
+114-129 past the original branch point). Under the deviation rule it
+changed no r11-approved decision: the adoption line renumbers to
+MORPCVersion130 under the unchanged fail-closed rule; main's #26796
+workspace-ownership invariants are carried through the same choke points
+main defined; the regenerated pipeline protobuf only re-carries the
+additive coordinator field alongside main's message changes; and
+Engine.Close merges main's shutdown ordering ahead of the r11 drain.
+No design decision was reopened, so none required r11 re-review.
+
+The rebase-resolution content was independently covered by the
+2026-10-23 implementation-review series: six consecutive complete-worktree
+reviews against the cumulative diff from parent `83222fa837`, each
+reusing the exact r11 PASS identity recorded above. The five
+REQUEST_CHANGES rounds placed blocking findings precisely in the
+r11/r12 territory - the intake's mode authentication before adoption,
+the capability advertisement and mo_ctl pins running on the renumbered
+V_adopt (with the additive protobuf generation verified), the
+adoption-precedes-settlement transport proof, clone-materialization
+admission before persistence, post-rollback reservation recycling, and
+the failed-merge pending-cleanup handoff - each confirmed, fixed and
+re-reviewed. The sixth review approved the complete implementation:
+"Source, parent/head scaling evidence, r34 red/green recovery,
+package/race results and BVT/mixed-version evidence support the fix. No
+blocking findings.", recording two nonblocking test-hygiene notes
+(synchronize on completed deletion rather than the call counter before
+asserting file absence - the pre-existing load-sensitive window this PR
+documents as a known risk; barrier the GC scheduling around the
+transfer-snapshot inspections) which the approval carried as accepted,
+documented tradeoffs.
+
+Decision: r12 stands as a recorded conflict-resolution revision under
+the operative r11 PASS, with its content independently covered by the
+approved 2026-10-23 series above. The r12 document as shipped in PR
+#30988 head `9694277ba9` carried content sha256
+8cb0dab2bb76421fe7a227f4d9d0ec9a41f5cd595f43a3406d626bbf3cb5405c; this
+closing record is documentary only - it records decisions already made
+by the independent reviews and changes no design decision. The
+deviation rule stands: the first change that alters any r11-approved
+decision requires updating this document and re-reviewing the affected
+decisions before implementation approval resumes.
