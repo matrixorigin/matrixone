@@ -1397,7 +1397,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				}
 				rewritten = clones[0]
 			}
-			if builder.filterPushdownBarrier(rewritten) {
+			// This extra barrier protects a private value/kind owner imported
+			// from this PROJECT's output. Preserve the established path for
+			// ordinary predicates and child-coordinate predicates that do not
+			// cross this PROJECT boundary; those predicates are checked by the
+			// existing pushdown owners below.
+			if replacesProjectOutput && hasNumericProgram && builder.filterPushdownBarrier(rewritten) {
 				cantPushdown = append(cantPushdown, filter)
 				continue
 			}

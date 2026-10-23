@@ -123,6 +123,48 @@ func TestRollupComputedOutputFilterPushdown(t *testing.T) {
 	}
 }
 
+func TestRollupNumericProgramProofRejectsUnsafeOwnerEdges(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	groupTag := int32(17)
+	active := []bool{true}
+	groupKey := GetColExpr(Type{Id: int32(types.T_varchar)}, groupTag, 0)
+	ordinaryKind := makePlan2BoolConstExprWithType(false)
+
+	value, kind, err := makeNumericValueProgramOutputsWithKind(ctx.GetContext(), groupKey, ordinaryKind)
+	require.NoError(t, err)
+	require.True(t, groupingFilterHasOnlyActiveKeys(value, groupTag, 1, active),
+		"a closed value/kind owner sourced entirely from the active group key is eligible")
+
+	require.False(t, groupingFilterHasOnlyActiveKeys(kind, groupTag, 1, active),
+		"a companion reference without its value-owner sibling is not a closed proof root")
+
+	aggregateKind, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "any_value", []*planpb.Expr{
+		makePlan2BoolConstExprWithType(true),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_bool), aggregateKind.Typ.Id)
+	valueWithAggregateKind, _, err := makeNumericValueProgramOutputsWithKind(ctx.GetContext(), groupKey, aggregateKind)
+	require.NoError(t, err)
+	require.False(t, groupingFilterHasOnlyActiveKeys(valueWithAggregateKind, groupTag, 1, active),
+		"a grouped raw value cannot borrow a BOOL companion produced by an aggregate")
+
+	cast, err := appendNumericValueCastWithKind(ctx.GetContext(), value, kind,
+		makeSimplePlan2Type(types.T_float64), function.NumericValueCastPolicyComparison)
+	require.NoError(t, err)
+	comparison, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), ">", []*planpb.Expr{
+		cast, makePlan2Float64ConstExprWithType(1),
+	})
+	require.NoError(t, err)
+	masked, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "if", []*planpb.Expr{
+		GetColExpr(Type{Id: int32(types.T_bool)}, groupTag, 0),
+		comparison,
+		makePlan2BoolConstExprWithType(false),
+	})
+	require.NoError(t, err)
+	require.False(t, numericProgramFilterUsePathsAreEager(masked),
+		"a value/kind owner beneath a lazy selector is not an eager filter proof")
+}
+
 func TestRollupMultiColumnFilterPushdownRespectsEachBranch(t *testing.T) {
 	for _, test := range []struct {
 		name            string
