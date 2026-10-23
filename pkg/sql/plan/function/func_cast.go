@@ -1297,6 +1297,14 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 		}
 		err = decimal64ToOthers(execProc, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
 	case types.T_decimal128:
+		if toType.Oid == types.T_decimal64 {
+			s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
+			rs := vector.MustFunctionResult[types.Decimal64](result)
+			if length > 1 && from.IsConst() {
+				return decimal128ConstToDecimal64(execProc.Ctx, s, rs, length, selectList)
+			}
+			return decimal128ToDecimal64(execProc.Ctx, s, rs, length, selectList)
+		}
 		var s vector.FunctionParameterWrapper[types.Decimal128]
 		if toType.Oid == types.T_decimal128 {
 			result.UseOptFunctionParamFrame(1)
@@ -2646,9 +2654,6 @@ func decimal128ToOthers(proc *process.Process,
 		return decimal128ToUnsigned(ctx, source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		if length > 1 && source.GetSourceVector().IsConst() {
-			return decimal128ConstToDecimal64(ctx, source, rs, length, selectList)
-		}
 		return decimal128ToDecimal64(ctx, source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
@@ -6600,7 +6605,7 @@ func decimal64ToDecimal256Array(
 }
 
 // decimal128ConstToDecimal64 evaluates the checked conversion once, then
-// materializes the broadcast without changing the ordinary vector kernel.
+// materializes the checked result across the requested rows.
 func decimal128ConstToDecimal64(ctx context.Context, from vector.FunctionParameterWrapper[types.Decimal128], to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
 	if err := decimal128ToDecimal64(ctx, from, to, 1, selectList); err != nil {
 		return err
@@ -6621,11 +6626,34 @@ func decimal128ToDecimal64(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+	if length == 1 {
+		if _, isNull := from.GetValue(0); isNull {
+			return to.Append(0, true)
+		}
+	} else if decimalCastAllNull(from.GetSourceVector(), uint64(length)) {
+		to.SetNullResult(uint64(length))
+		return nil
+	}
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
 	fromtype := from.GetType()
 	totype := to.GetType()
+	// For valid Decimal64 metadata, prove the scaled signed coefficient fits
+	// before multiplying. Scale reduction uses the same rounding as the legacy
+	// conversion; rejected values retain its exact error conversion below.
+	numeric := totype.Width > 0 && totype.Width <= 18 && totype.Scale >= 0 && totype.Scale <= totype.Width && fromtype.Scale >= 0 && fromtype.Scale <= 38
+	delta := totype.Scale - fromtype.Scale
+	factor, bound := uint64(1), uint64(0)
+	if numeric {
+		if delta > 0 {
+			factor = types.Pow10[delta]
+		}
+		bound = (types.Pow10[totype.Width] - 1) / factor
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -6633,6 +6661,27 @@ func decimal128ToDecimal64(
 				return err
 			}
 		} else {
+			if numeric {
+				scaled := v
+				if delta < 0 {
+					var err error
+					scaled, err = v.Scale(delta)
+					if err != nil {
+						return err
+					}
+				}
+				coefficient := int64(scaled.B0_63)
+				magnitude := uint64(coefficient)
+				if coefficient < 0 {
+					magnitude = 0 - magnitude
+				}
+				if scaled.B64_127 == uint64(coefficient>>63) && magnitude <= bound {
+					if err := to.Append(types.Decimal64(coefficient*int64(factor)), false); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			var dec string
 			scale := totype.Scale
 			if totype.Scale < fromtype.Scale {

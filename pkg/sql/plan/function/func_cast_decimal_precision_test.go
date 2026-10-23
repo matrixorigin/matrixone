@@ -240,6 +240,32 @@ func TestDecimalCastPrecisionContract(t *testing.T) {
 			want:     []types.Decimal128{{B0_63: ^uint64(123399), B64_127: ^uint64(0)}},
 			constant: true},
 
+		{name: "narrow128_numeric_limit_signed", source: types.New(types.T_decimal128, 20, 0), target: types.New(types.T_decimal64, 18, 0),
+			values: []types.Decimal128{{B0_63: 999999999999999999}, {B0_63: ^uint64(999999999999999998), B64_127: ^uint64(0)}}, want: []types.Decimal64{999999999999999999, types.Decimal64(999999999999999999).Minus()}},
+		{name: "narrow128_numeric_growth_limit", source: types.New(types.T_decimal128, 20, 2), target: types.New(types.T_decimal64, 5, 4),
+			values: []types.Decimal128{{B0_63: 999}, (types.Decimal128{B0_63: 999}).Minus()}, want: []types.Decimal64{99900, types.Decimal64(99900).Minus()}},
+		{name: "narrow128_numeric_growth_reject_second", source: types.New(types.T_decimal128, 20, 2), target: types.New(types.T_decimal64, 5, 4),
+			values: []types.Decimal128{{B0_63: 999}, {B0_63: 1000}}, wantErr: "Decimal64(5,4)"},
+		{name: "narrow128_numeric_negative_growth_reject_second", source: types.New(types.T_decimal128, 20, 2), target: types.New(types.T_decimal64, 5, 4),
+			values: []types.Decimal128{(types.Decimal128{B0_63: 999}).Minus(), (types.Decimal128{B0_63: 1000}).Minus()}, wantErr: "Decimal64(5,4)"},
+		{name: "narrow128_numeric_wide_scale_down", source: types.New(types.T_decimal128, 20, 2), target: types.New(types.T_decimal64, 18, 0),
+			values: []types.Decimal128{{B0_63: ^uint64(0)}, {B0_63: 1, B64_127: ^uint64(0)}, {B64_127: 1}, {B64_127: ^uint64(0)}},
+			want:   []types.Decimal64{184467440737095516, types.Decimal64(184467440737095516).Minus(), 184467440737095516, types.Decimal64(184467440737095516).Minus()}},
+		{name: "narrow128_numeric_half38_signed", source: types.New(types.T_decimal128, 38, 38), target: types.New(types.T_decimal64, 1, 0),
+			values: []types.Decimal128{below38, half38, below38.Minus(), half38.Minus()}, want: []types.Decimal64{0, 1, 0, types.Decimal64(1).Minus()}},
+		{name: "narrow128_numeric_round_below_carry", source: types.New(types.T_decimal128, 4, 3), target: types.New(types.T_decimal64, 3, 2),
+			values: []types.Decimal128{{B0_63: 9994}, (types.Decimal128{B0_63: 9994}).Minus()}, want: []types.Decimal64{999, types.Decimal64(999).Minus()}},
+		{name: "narrow128_numeric_negative_round_carry_reject", source: types.New(types.T_decimal128, 4, 3), target: types.New(types.T_decimal64, 3, 2),
+			values: []types.Decimal128{(types.Decimal128{B0_63: 9995}).Minus()}, wantErr: "Decimal64(3,0)"},
+		{name: "narrow128_numeric_positive_high_limb_reject", source: types.New(types.T_decimal128, 20, 0), target: types.New(types.T_decimal64, 18, 0),
+			values: []types.Decimal128{{B0_63: 1}, {B64_127: 1}}, wantErr: "Decimal64(18,0)"},
+		{name: "narrow128_numeric_negative_high_limb_reject", source: types.New(types.T_decimal128, 20, 0), target: types.New(types.T_decimal64, 18, 0),
+			values: []types.Decimal128{{B0_63: 1}, {B64_127: ^uint64(0)}}, wantErr: "Decimal64(18,0)"},
+		{name: "narrow128_numeric_min_int64_reject", source: types.New(types.T_decimal128, 20, 0), target: types.New(types.T_decimal64, 18, 0),
+			values: []types.Decimal128{{B0_63: 1 << 63, B64_127: ^uint64(0)}}, wantErr: "Decimal64(18,0)"},
+		{name: "narrow128_width19_legacy_error", source: types.New(types.T_decimal128, 20, 0), target: types.New(types.T_decimal64, 19, 0),
+			values: []types.Decimal128{{B0_63: 1000000000000000000}}, wantErr: "Decimal64(18,0)"},
+
 		{name: "constant128_to64_growth_batch", source: types.New(types.T_decimal128, 20, 2), target: types.New(types.T_decimal64, 18, 4),
 			values: []types.Decimal128{{B0_63: 1234}}, want: []types.Decimal64{123400, 123400, 123400}, constant: true, length: 3},
 		{name: "constant128_to64_negative_round_batch", source: types.New(types.T_decimal128, 4, 3), target: types.New(types.T_decimal64, 3, 2),
@@ -622,7 +648,10 @@ func TestDecimalCastParameterRebinding(t *testing.T) {
 // BenchmarkDecimalCastSetup includes actual small/no-work shapes and tails.
 func BenchmarkDecimalCastSetup(b *testing.B) {
 	for _, kind := range []string{"d64", "d128", "d256", "64to256", "128to256", "64to128_control", "128to64_control"} {
-		for _, shape := range []string{"one", "empty", "allnull", "constant", "large", "null_one", "tiny2", "tiny8", "tiny16", "tail255", "tail257", "prefix", "mixed", "same_scale", "same_scale_one", "same_scale_large"} {
+		for _, shape := range []string{"one", "empty", "allnull", "constant", "large", "null_one", "tiny2", "tiny8", "tiny16", "tail255", "tail257", "prefix", "mixed", "same_scale", "same_scale_one", "same_scale_large", "narrow_downscale", "narrow_same_scale"} {
+			if (shape == "narrow_downscale" || shape == "narrow_same_scale") && kind != "128to64_control" {
+				continue
+			}
 			if (shape == "same_scale" || shape == "same_scale_one" || shape == "same_scale_large") && kind != "64to256" && kind != "128to256" {
 				continue
 			}
@@ -667,6 +696,14 @@ func BenchmarkDecimalCastSetup(b *testing.B) {
 					src, dst = types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal256, 22, 4)
 				}
 				expectedCoefficient := int64(123400)
+				if shape == "narrow_downscale" {
+					dst.Scale = 0
+					expectedCoefficient = 12
+				}
+				if shape == "narrow_same_scale" {
+					dst.Scale = src.Scale
+					expectedCoefficient = 1234
+				}
 				if shape == "same_scale" || shape == "same_scale_one" || shape == "same_scale_large" {
 					dst.Scale = src.Scale
 					expectedCoefficient = 1234
