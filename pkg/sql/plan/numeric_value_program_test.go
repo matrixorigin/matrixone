@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -172,7 +173,7 @@ func BenchmarkNumericValueProgramExpressionExecution(b *testing.B) {
 		b.Fatal(err)
 	}
 	ordinaryCast, err := appendNumericValueCastWithKind(ctx, ordinaryRaw, ordinaryKind,
-		makeSimplePlan2Type(types.T_float64), function.NumericValueCastPolicyOrdinary)
+		makeSimplePlan2Type(types.T_float64), function.NumericValueCastPolicyComparison)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -182,13 +183,29 @@ func BenchmarkNumericValueProgramExpressionExecution(b *testing.B) {
 	}
 	legacyCast := ordinaryCase.GetF().Args[0]
 	legacyFID, legacyOverload := function.DecodeOverloadID(legacyCast.GetF().Func.GetObj())
-	if legacyFID != function.CAST || legacyOverload != 0 {
-		b.Fatalf("ordinary CASE control must use CAST0, got function %d overload %d", legacyFID, legacyOverload)
+	if legacyFID != function.CAST || legacyOverload != function.NumericValueCastPolicyComparison {
+		b.Fatalf("ordinary CASE comparison control must use CAST2, got function %d overload %d", legacyFID, legacyOverload)
+	}
+	if !proto.Equal(legacyCast.GetF().Args[0], ordinarySelector) {
+		b.Fatal("ordinary CASE comparison control must consume the same selector")
 	}
 	pairedCast := ordinaryProgram.GetF().Args[0]
 	pairedFID, pairedOverload := function.DecodeOverloadID(pairedCast.GetF().Func.GetObj())
 	if pairedFID != function.CAST || pairedOverload != function.NumericValueCastOverload {
 		b.Fatalf("paired CASE control must use CAST9, got function %d overload %d", pairedFID, pairedOverload)
+	}
+	if !proto.Equal(pairedCast.GetF().Args[1], legacyCast.GetF().Args[1]) {
+		b.Fatal("paired CASE comparison control must use the same cast target")
+	}
+	pairedSource, pairedKind, ok := function.NumericValueProgramCastOwner(pairedCast)
+	if !ok || !proto.Equal(pairedSource, ordinarySelector) ||
+		!proto.Equal(pairedKind, column(3, types.T_bool.ToType())) {
+		b.Fatal("paired CASE comparison control must consume the same selector and kind input")
+	}
+	policyLiteral := pairedCast.GetF().Args[3].GetLit()
+	policyValue, policyOK := policyLiteral.Value.(*planpb.Literal_I32Val)
+	if !policyOK || policyValue == nil || policyValue.I32Val != function.NumericValueCastPolicyComparison {
+		b.Fatalf("paired CASE control must use the same comparison policy, got %v", policyLiteral)
 	}
 	raw, kind, err := makeNumericValueProgramOutputs(ctx, selector)
 	if err != nil {
@@ -211,8 +228,8 @@ func BenchmarkNumericValueProgramExpressionExecution(b *testing.B) {
 	}{
 		{name: "native_numeric", expr: native, wantFirst: 1, wantNext: 2},
 		{name: "ordinary_text", expr: text, wantFirst: 1, wantNext: 1},
-		{name: "ordinary_text_case_cast0", expr: ordinaryCase, wantFirst: 1, wantNext: 2},
-		{name: "ordinary_text_case_program_cast9", expr: ordinaryProgram, wantFirst: 1, wantNext: 2},
+		{name: "ordinary_text_case_cast2_comparison", expr: ordinaryCase, wantFirst: 1, wantNext: 2},
+		{name: "ordinary_text_case_program_cast9_comparison", expr: ordinaryProgram, wantFirst: 1, wantNext: 2},
 		{name: "mixed_hex_text_program", expr: mixed, wantFirst: 49, wantNext: 1},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
