@@ -21,6 +21,14 @@ func TestProtocolMemoryCapabilityCompatibility(t *testing.T) {
 	require.Equal(t, int64(42), oldPeer.Version)
 	require.False(t, oldPeer.MemoryAdmission)
 	require.Empty(t, oldPeer.MemoryAdmissionProcessId)
+	require.Zero(t, oldPeer.MemoryAdmissionVersion)
+	// The first admission implementation advertised only the bool and process
+	// identity. It cannot account for the new producer descriptors.
+	var boolOnlyPeer query.GetProtocolVersionResponse
+	require.NoError(t, boolOnlyPeer.Unmarshal([]byte{8, 42, 16, 1, 26, 1, 'p'}))
+	require.True(t, boolOnlyPeer.MemoryAdmission)
+	require.Equal(t, "p", boolOnlyPeer.MemoryAdmissionProcessId)
+	require.Zero(t, boolOnlyPeer.MemoryAdmissionVersion)
 	service := t.Name()
 	rt := runtime.NewRuntime(metadata.ServiceType_CN, service, zap.NewNop())
 	runtime.SetupServiceBasedRuntime(service, rt)
@@ -31,6 +39,7 @@ func TestProtocolMemoryCapabilityCompatibility(t *testing.T) {
 	require.NoError(t, response.UnwrapError())
 	require.True(t, response.GetProtocolVersion.MemoryAdmission)
 	require.Equal(t, runtime.ProcessInstanceID(), response.GetProtocolVersion.MemoryAdmissionProcessId)
+	require.Equal(t, query.MemoryAdmissionProtocolVersion, response.GetProtocolVersion.MemoryAdmissionVersion)
 	wire, err := response.GetProtocolVersion.Marshal()
 	require.NoError(t, err)
 	require.Equal(t, []byte{8, 42, 16, 1}, wire[:4], "existing field number and version are preserved")
@@ -38,4 +47,5 @@ func TestProtocolMemoryCapabilityCompatibility(t *testing.T) {
 	require.NoError(t, current.Unmarshal(wire))
 	require.True(t, current.MemoryAdmission)
 	require.Equal(t, runtime.ProcessInstanceID(), current.MemoryAdmissionProcessId)
+	require.Equal(t, query.MemoryAdmissionProtocolVersion, current.MemoryAdmissionVersion)
 }

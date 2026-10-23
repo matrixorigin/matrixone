@@ -18,7 +18,15 @@ import (
 type SpillKeyMemory struct {
 	EncodedUnit     int64
 	ExpressionBytes int64
-	StringKeys      bool
+	// ResultBytes bounds the root result vectors for all requested rows,
+	// including flattened headers, area capacity and null/grouping words.
+	// Borrowed column results count here but not in ExpressionBytes.
+	ResultBytes int64
+	// LogicalResultBytes bounds referenced logical headers and payload. It
+	// excludes allocation-class rounding, bitmap backing and retained stores,
+	// so a producer must not feed ResultBytes back as the next logical row.
+	LogicalResultBytes int64
+	StringKeys         bool
 }
 
 // A payload is affine in the referenced source columns. Their combined bytes
@@ -72,7 +80,7 @@ func (p *keyPayload) add(other keyPayload, multiplier int64) bool {
 	}
 	return true
 }
-func (p keyPayload) bytes(inputBytes int64, rows int) (int64, bool) {
+func (p keyPayload) bytes(inputBytes int64, rows int, columnBytes []int64) (int64, bool) {
 	fixed, ok := keyProduct(p.fixed, int64(rows))
 	if !ok {
 		return 0, false
@@ -81,8 +89,32 @@ func (p keyPayload) bytes(inputBytes int64, rows int) (int64, bool) {
 	for _, n := range p.columns {
 		weight = max(weight, n)
 	}
-	variable, ok := keyProduct(weight, inputBytes)
-	if !ok {
+	variable, aggregateOK := keyProduct(weight, inputBytes)
+	if columnBytes != nil {
+		var selected int64
+		selectedOK := true
+		for column, coefficient := range p.columns {
+			if column < 0 || int(column) >= len(columnBytes) || columnBytes[column] < 0 {
+				return 0, false
+			}
+			n, ok := keyProduct(coefficient, columnBytes[column])
+			if !ok {
+				selectedOK = false
+				break
+			}
+			selected, ok = keySum(selected, n)
+			if !ok {
+				selectedOK = false
+				break
+			}
+		}
+		// Either independent proof can establish a finite bound. A large
+		// unrelated input need not overflow a small referenced-column proof.
+		if selectedOK && (!aggregateOK || selected < variable) {
+			variable, aggregateOK = selected, true
+		}
+	}
+	if !aggregateOK {
 		return 0, false
 	}
 	return keySum(fixed, variable)
@@ -113,14 +145,14 @@ func keyVectorPeak(width, payload int64, rows int) (int64, bool) {
 	}
 	return keySum(total, 16384)
 }
-func keyExpressionContract(expr *plan.Expr, inputBytes int64, rows int) (keyContract, bool) {
+func keyExpressionContract(expr *plan.Expr, inputBytes int64, rows int, columnBytes []int64) (keyContract, bool) {
 	if expr == nil || rows <= 0 || inputBytes < 0 {
 		return keyContract{}, false
 	}
 	typ := types.T(expr.Typ.Id).ToType()
 	result := keyContract{width: int64(typ.TypeSize()), varlen: typ.IsVarlen()}
 	if col := expr.GetCol(); col != nil {
-		if col.ColPos < 0 {
+		if col.ColPos < 0 || columnBytes != nil && int(col.ColPos) >= len(columnBytes) {
 			return keyContract{}, false
 		}
 		if result.varlen {
@@ -131,18 +163,32 @@ func keyExpressionContract(expr *plan.Expr, inputBytes int64, rows int) (keyCont
 		return result, true
 	}
 	if literal := expr.GetLit(); literal != nil {
-		// Large literal expansion is a separate batch-boundary contract. Keep it on
-		// the legacy path; fixed literals and NULL retain their existing semantics.
+		literalBytes := int64(0)
 		if result.varlen && !literal.Isnull {
-			return keyContract{}, false
+			// These Sval types are copied as bytes by the constant executor.
+			// Arrays and datalinks perform parsing, so their scratch is not
+			// bounded merely by the encoded literal's length.
+			switch typ.Oid {
+			case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_geometry:
+			default:
+				return keyContract{}, false
+			}
+			value, ok := literal.Value.(*plan.Literal_Sval)
+			if !ok {
+				return keyContract{}, false
+			}
+			literalBytes = int64(len(value.Sval))
 		}
 		result.payload.fixed = result.width
+		if result.varlen {
+			result.payload.fixed = literalBytes
+		}
 		if literal.Isnull {
 			result.payload = keyPayload{}
 		}
 		result.expression = true
 		var ok bool
-		result.scratch, ok = keyVectorPeak(result.width, 0, rows)
+		result.scratch, ok = keyVectorPeak(result.width, literalBytes, rows)
 		return result, ok
 	}
 	function := expr.GetF()
@@ -151,11 +197,15 @@ func keyExpressionContract(expr *plan.Expr, inputBytes int64, rows int) (keyCont
 	}
 	name := strings.ToLower(function.Func.ObjName)
 	serial := name == "serial" || name == "serial_full"
+	nullPredicate := name == "isnull" || name == "isnotnull"
+	if nullPredicate && (typ.Oid != types.T_bool || len(function.Args) != 1 || function.Args[0] == nil || function.Args[0].GetT() != nil) {
+		return keyContract{}, false
+	}
 	if !serial {
 		// Result width alone is not an allocation contract (JSON predicates, for
 		// example, parse a variable-sized tree before producing one BOOL).
 		switch name {
-		case "+", "-", "*", "/", "div", "%", "mod", "=", "<>", "!=", "<", "<=", ">", ">=", "and", "or", "xor", "not", "cast":
+		case "+", "-", "*", "/", "div", "%", "mod", "=", "<>", "!=", "<", "<=", ">", ">=", "and", "or", "xor", "not", "cast", "isnull", "isnotnull":
 		default:
 			return keyContract{}, false
 		}
@@ -167,7 +217,10 @@ func keyExpressionContract(expr *plan.Expr, inputBytes int64, rows int) (keyCont
 				continue
 			}
 			typ := types.T(arg.Typ.Id).ToType()
-			if !typ.IsFixedLen() {
+			// These two predicates read only IsConstNull/GetNulls. Their BOOL
+			// result does not inspect, parse or copy a varlen argument's payload.
+			// The child executor still needs its own recursive contract below.
+			if !nullPredicate && !typ.IsFixedLen() {
 				return keyContract{}, false
 			}
 		}
@@ -181,7 +234,7 @@ func keyExpressionContract(expr *plan.Expr, inputBytes int64, rows int) (keyCont
 		if arg != nil && arg.GetT() != nil {
 			continue
 		}
-		child, ok := keyExpressionContract(arg, inputBytes, rows)
+		child, ok := keyExpressionContract(arg, inputBytes, rows, columnBytes)
 		if !ok {
 			return keyContract{}, false
 		}
@@ -208,7 +261,7 @@ func keyExpressionContract(expr *plan.Expr, inputBytes int64, rows int) (keyCont
 	payload := int64(0)
 	var ok bool
 	if result.varlen {
-		payload, ok = result.payload.bytes(inputBytes, rows)
+		payload, ok = result.payload.bytes(inputBytes, rows, columnBytes)
 		if !ok {
 			return keyContract{}, false
 		}
@@ -245,7 +298,7 @@ func SupportsBoundedSpillKeys(conditions []*plan.Expr) bool {
 		return false
 	}
 	for _, expr := range conditions {
-		if _, ok := keyExpressionContract(expr, 1, 1); !ok {
+		if _, ok := keyExpressionContract(expr, 1, 1, nil); !ok {
 			return false
 		}
 	}
@@ -256,19 +309,65 @@ func SupportsBoundedSpillKeys(conditions []*plan.Expr) bool {
 // input envelope. inputBytes bounds all referenced input payload together;
 // rows is the largest batch evaluated by one executor generation.
 func SpillKeyMemoryBound(conditions []*plan.Expr, inputBytes int64, rows int) (SpillKeyMemory, bool) {
+	return SpillKeyMemoryBoundForColumns(conditions, inputBytes, rows, nil)
+}
+
+// SpillKeyMemoryBoundForColumns additionally accepts logical referenced bytes
+// for each input column over the same rows. Call with row bounds for one-row
+// derivation and batch bounds for a batch. Headers may be included in a column
+// bound, conservatively. A nil slice retains the aggregate-only contract.
+// Affine payloads use both the aggregate correlation and the actual referenced
+// columns, so an unrelated JSON/array column cannot inflate a small serial key.
+func SpillKeyMemoryBoundForColumns(conditions []*plan.Expr, inputBytes int64, rows int, columnBytes []int64) (SpillKeyMemory, bool) {
 	if len(conditions) == 0 || inputBytes < 0 || rows <= 0 {
 		return SpillKeyMemory{}, false
+	}
+	for _, n := range columnBytes {
+		if n < 0 {
+			return SpillKeyMemory{}, false
+		}
 	}
 	contracts := make([]keyContract, 0, len(conditions))
 	var encoded keyPayload
 	result := SpillKeyMemory{}
 	var physicalWidth int64
 	for _, expr := range conditions {
-		contract, ok := keyExpressionContract(expr, inputBytes, rows)
+		contract, ok := keyExpressionContract(expr, inputBytes, rows, columnBytes)
 		if !ok {
 			return SpillKeyMemory{}, false
 		}
 		contracts = append(contracts, contract)
+		data, ok := keyProduct(contract.width, int64(rows))
+		if !ok || data > int64(mpool.CapLimit) {
+			return SpillKeyMemory{}, false
+		}
+		area := int64(0)
+		if contract.varlen {
+			area, ok = contract.payload.bytes(inputBytes, rows, columnBytes)
+			if !ok || area > int64(mpool.CapLimit) {
+				return SpillKeyMemory{}, false
+			}
+		}
+		logical, ok := keySum(data, area)
+		if !ok {
+			return SpillKeyMemory{}, false
+		}
+		result.LogicalResultBytes, ok = keySum(result.LogicalResultBytes, logical)
+		if !ok {
+			return SpillKeyMemory{}, false
+		}
+		backing, ok := keySum(mpool.GrowCapacity(0, data), mpool.GrowCapacity(0, area))
+		if !ok {
+			return SpillKeyMemory{}, false
+		}
+		backing, ok = keySum(backing, int64((uint64(rows)+64)/64)*16)
+		if !ok {
+			return SpillKeyMemory{}, false
+		}
+		result.ResultBytes, ok = keySum(result.ResultBytes, backing)
+		if !ok {
+			return SpillKeyMemory{}, false
+		}
 		result.ExpressionBytes, ok = keySum(result.ExpressionBytes, contract.scratch)
 		if !ok {
 			return SpillKeyMemory{}, false
@@ -295,7 +394,7 @@ func SpillKeyMemoryBound(conditions []*plan.Expr, inputBytes int64, rows int) (S
 	}
 	result.StringKeys = physicalWidth > 8
 	var ok bool
-	result.EncodedUnit, ok = encoded.bytes(inputBytes, min(rows, hashmap.UnitLimit))
+	result.EncodedUnit, ok = encoded.bytes(inputBytes, min(rows, hashmap.UnitLimit), columnBytes)
 	if !ok {
 		return SpillKeyMemory{}, false
 	}
@@ -309,7 +408,7 @@ func SpillKeyMemoryBound(conditions []*plan.Expr, inputBytes int64, rows int) (S
 		for _, contract := range contracts {
 			payload := int64(0)
 			if contract.varlen {
-				payload, ok = contract.payload.bytes(inputBytes, rows)
+				payload, ok = contract.payload.bytes(inputBytes, rows, columnBytes)
 				if !ok {
 					return SpillKeyMemory{}, false
 				}

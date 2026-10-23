@@ -161,6 +161,9 @@ message GetProtocolVersionResponse {
   // All CN services in one process share physical memory admission. This
   // incarnation identity orders that resource and detects endpoint restarts.
   string memory_admission_process_id = 3;
+  // Complete producer/expression capacity contracts require version 2.
+  // Absent in bool-only responses; probe before opening a control stream.
+  uint32 memory_admission_version = 4;
 }
 
 message SetProtocolVersionRequest {

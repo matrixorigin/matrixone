@@ -108,3 +108,49 @@ func TestControlledBuildResetRetiresExpressionCapacity(t *testing.T) {
 		require.Equal(t, baseline, proc.Mp().AllocatedBytes())
 	}
 }
+
+func TestLegacyExpressionBuildSpillsOnlyUnderPressure(t *testing.T) {
+	for _, mode := range []string{"memory-available", "copy-budget-denied", "threshold-reached"} {
+		t.Run(mode, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			proc.SetMessageBoard(message.NewMessageBoard())
+			defer proc.GetMessageBoard().Reset()
+			require.Nil(t, proc.Base.ImportMemory)
+			input := batch.NewOffHeapWithSize(1)
+			input.Vecs[0] = testutil.MakeInt64Vector([]int64{-7}, nil, proc.Mp())
+			input.SetRowCount(1)
+			defer input.Clean(proc.Mp())
+			fn, err := function.GetFunctionByName(proc.Ctx, "abs", []types.Type{types.T_int64.ToType()})
+			require.NoError(t, err)
+			key := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "abs"},
+				Args: []*plan.Expr{newExpr(0, types.T_int64.ToType())},
+			}}}
+			require.False(t, SupportsBoundedSpillKeys([]*plan.Expr{key}), "ordinary supported functions need not have an import capacity contract")
+			build := &HashBuild{NeedHashMap: true, NeedBatches: true, IsShuffle: true, CanSpill: true,
+				Conditions: []*plan.Expr{key}, JoinMapTag: 702, JoinMapRefCnt: 1,
+				SpillThreshold: 1 << 30, RuntimeFilterSpec: &plan.RuntimeFilterSpec{Tag: 701}}
+			if mode == "threshold-reached" {
+				build.SpillThreshold = 1
+			}
+			build.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+			require.NoError(t, build.Prepare(proc))
+			defer build.Free(proc, false, nil)
+			budget := &observedBuildBudget{acquire: func(int64) bool { return mode != "copy-budget-denied" }}
+			build.ctr.memoryThrottler = budget
+			_, err = build.Call(proc)
+			require.NoError(t, err)
+			jm, err := message.ReceiveJoinMap(702, true, 0, proc.GetMessageBoard(), proc.Ctx)
+			require.NoError(t, err)
+			require.NotNil(t, jm)
+			require.Equal(t, mode != "memory-available", jm.IsSpilled())
+			if !jm.IsSpilled() {
+				require.Equal(t, int64(1), jm.GetRowCount())
+				require.Equal(t, int64(-7), vector.GetFixedAtNoTypeCheck[int64](jm.GetBatches()[0].Vecs[0], 0))
+			}
+			jm.Free()
+			require.Zero(t, budget.held, "consumer cleanup retires the transferred copy reservation once")
+		})
+	}
+}

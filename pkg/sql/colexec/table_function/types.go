@@ -45,6 +45,9 @@ type TableFunction struct {
 
 	OffsetTotal [][2]int64
 	CanOpt      bool
+	// Set per input document by Apply after admission. Zero retains the legacy
+	// 8192-row chunk; this is execution state, never a serialized plan option.
+	memoryOutputRows int
 
 	vm.OperatorBase
 }
@@ -111,6 +114,18 @@ func (tableFunction *TableFunction) Reset(proc *process.Process, pipelineFailed 
 	}
 	tableFunction.ctr.nextRow = 0
 	tableFunction.ctr.inputBatch = nil
+	tableFunction.memoryOutputRows = 0
+	if proc != nil && proc.Base.ImportMemory != nil && tableFunction.SupportsMemoryBound() {
+		// A statement's promise ends after pipeline cleanup. Destroy retained
+		// executor/document/result storage before returning that promise; next
+		// Prepare builds a fresh generation. Prepared statements stay legacy.
+		tableFunction.ctr.cleanExecutors()
+		if tableFunction.ctr.state != nil {
+			tableFunction.ctr.state.free(tableFunction, proc, pipelineFailed, err)
+			tableFunction.ctr.state = nil
+		}
+		return
+	}
 	for i := range tableFunction.ctr.executorsForArgs {
 		if tableFunction.ctr.executorsForArgs[i] != nil {
 			if i < len(tableFunction.ctr.argVecs) {

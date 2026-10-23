@@ -284,6 +284,9 @@ type Compile struct {
 	importMemoryDetach   func()
 	importMemoryControls []*statementMemoryControl
 	importMemoryRemote   bool
+	// Retry attempts have normal pool ownership while preserving the prepared
+	// statement's memory eligibility across the entire execution.
+	importMemoryPrepared bool
 	// runSqlToken tracks the current statement in txn operator coordination.
 	runSqlToken uint64
 	// TxnOffset read starting offset position within the transaction during the execute current statement

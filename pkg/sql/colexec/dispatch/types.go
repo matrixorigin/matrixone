@@ -184,22 +184,27 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 	// told the local receiver to stop if it is still running.
 	if dispatch.ctr != nil && dispatch.ctr.sp != nil {
 		sp := dispatch.ctr.sp
-		sendCtx, cancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
-		queryDone, sendErr := sp.SendBatch(sendCtx, pSpool.SendToAllLocal, nil, err)
-		cancel()
-
+		publicationFailed := sp.PublicationFailed()
 		terminalSignalName := "direct"
-		if sendErr == nil && !queryDone {
-			terminalSignalName = "spool"
-		} else {
-			process.WarnPipelineCleanupf(
-				proc,
-				"dispatch_cleanup_enqueue_terminal_spool",
-				"dispatch cleanup timed out enqueueing terminal spool message: timeout=%s query_done=%t err=%v",
-				process.PipelineSignalSendTimeout,
-				queryDone,
-				sendErr)
+		if !publicationFailed {
+			sendCtx, cancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
+			queryDone, sendErr := sp.SendBatch(sendCtx, pSpool.SendToAllLocal, nil, err)
+			cancel()
+			if sendErr == nil && !queryDone {
+				terminalSignalName = "spool"
+			} else {
+				process.WarnPipelineCleanupf(
+					proc,
+					"dispatch_cleanup_enqueue_terminal_spool",
+					"dispatch cleanup timed out enqueueing terminal spool message: timeout=%s query_done=%t err=%v",
+					process.PipelineSignalSendTimeout,
+					queryDone,
+					sendErr)
+			}
 		}
+		// A partial broadcast publication can leave live borrowers alongside
+		// unpublished references. Direct End preserves the published FIFO and
+		// leaves both lifetimes intact until the attempt owner joins readers.
 
 		allTerminalSignalsSent := true
 		pendingLocalRegs := make([]int, 0, len(dispatch.LocalRegs))
@@ -253,7 +258,7 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 					pipelineFailed,
 					err)
 			}
-		} else {
+		} else if !publicationFailed {
 			process.WarnPipelineCleanupf(
 				proc,
 				"dispatch_cleanup_skip_spool_close",

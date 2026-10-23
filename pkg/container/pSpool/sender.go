@@ -56,6 +56,29 @@ type PipelineSpool struct {
 	drainedReceivers int
 
 	cleanupOnce sync.Once
+	// A slot stays occupied until its final reader returns the clone. The
+	// query-attempt owner inspects this only after all senders/readers joined.
+	occupied []bool
+
+	// Data is enqueued before its external pipeline signal is published. Once
+	// a publication fails, that receiver queue contains an entry with no
+	// matching signal. Only the sender/Reset owner reads or writes this flag;
+	// it belongs to this spool generation, never to the reusable operator.
+	publicationFailed bool
+}
+
+// MarkPublicationFailed records an enqueued data entry whose external signal
+// could not be delivered. Such a generation must terminate with direct End
+// markers: another spool signal could consume that orphaned data instead of
+// the intended End. Abandoned storage remains owned by joined-attempt cleanup.
+func (ps *PipelineSpool) MarkPublicationFailed() {
+	if ps != nil {
+		ps.publicationFailed = true
+	}
+}
+
+func (ps *PipelineSpool) PublicationFailed() bool {
+	return ps != nil && ps.publicationFailed
 }
 
 // pipelineSpoolMessage is the element of PipelineSpool.
@@ -84,12 +107,17 @@ func (ps *PipelineSpool) SendBatch(
 	if done {
 		return true, nil
 	}
+	if ps.occupied == nil {
+		ps.occupied = make([]bool, len(ps.shardPool))
+	}
 
 	dst, useCache, cacheID, err := ps.cache.GetCopiedBatch(data)
 	if err != nil {
+		ps.freeShardPool <- messageIdx
 		return false, err
 	}
 	ps.updateSpoolMessage(messageIdx, dst, info, useCache, cacheID)
+	ps.occupied[messageIdx] = true
 
 	if receiverID == SendToAllLocal {
 		ps.sendToAll(messageIdx)
@@ -105,6 +133,8 @@ func (ps *PipelineSpool) ReleaseCurrent(idx int) {
 		if !ps.doRefCheck[last] || ps.shardRefs[last].Add(-1) == 0 {
 			ps.cache.CacheBatch(
 				ps.shardPool[last].useCache, ps.shardPool[last].cacheID, ps.shardPool[last].dataContent)
+			ps.shardPool[last] = pipelineSpoolMessage{}
+			ps.occupied[last] = false
 			ps.freeShardPool <- last
 		}
 		ps.rs[idx].flagLastPopRelease()
@@ -168,10 +198,9 @@ func (ps *PipelineSpool) CloseWithTimeout(timeout time.Duration) bool {
 //
 // So we reclaim only after draining one csDoneSignal per receiver (each receiver
 // emits it once it has read its End-message and therefore released every
-// real-data slot it consumed). If some receiver has not finished yet, we leave
-// the spool memory intact - it is bounded and reclaimed when the owning MPool is
-// destroyed - and do NOT consume cleanupOnce, so a later call can still reclaim
-// once the spool has fully drained.
+// real-data slot it consumed). If a receiver has not finished, leave its memory
+// intact and do not consume cleanupOnce. A controlled query-attempt owner can
+// instead destroy abandoned slots once it has joined every sender and reader.
 func (ps *PipelineSpool) ForceCleanup() {
 	if ps == nil {
 		return
@@ -195,6 +224,29 @@ func (ps *PipelineSpool) forceCleanup() {
 	// real-data slot was already released back to the cache on consumption, so
 	// freeing the whole buffer is now safe.
 	ps.cache.free()
+}
+
+// CloseAfterReadersStopped is the final destructor for a controlled query
+// attempt. Its caller MUST have joined every sender and receiver, including
+// pipeline cleanup, before calling. Unlike ForceCleanup it can then discard
+// abandoned queued/current frames even when cancellation lost an End marker.
+// It must never be called merely because a cleanup wait timed out.
+func (ps *PipelineSpool) CloseAfterReadersStopped() {
+	if ps == nil {
+		return
+	}
+	ps.cleanupOnce.Do(func() {
+		for i, occupied := range ps.occupied {
+			if !occupied {
+				continue
+			}
+			message := &ps.shardPool[i]
+			ps.cache.CacheBatch(message.useCache, message.cacheID, message.dataContent)
+			*message = pipelineSpoolMessage{}
+			ps.occupied[i] = false
+		}
+		ps.cache.free()
+	})
 }
 
 func (ps *PipelineSpool) getFreeIdFromSharedPool(

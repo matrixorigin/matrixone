@@ -12,6 +12,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -219,6 +220,9 @@ func handleMemoryControl(ctx context.Context, serviceID string, msg *pipeline.Me
 		return fail(decodeErr)
 	}
 	if request.Action == MemoryControlOpen {
+		if request.Manifest != nil && request.Manifest.Version != query.MemoryAdmissionProtocolVersion {
+			return fail(errors.New("unsupported memory manifest version"))
+		}
 		if request.Manifest == nil || request.Token != "" || cs.SessionCtx().Done() == nil {
 			return fail(errors.New("invalid memory control open"))
 		}

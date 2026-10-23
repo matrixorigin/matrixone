@@ -116,7 +116,11 @@ func newControlledS3(proc *process.Process, owner *Insert, fs fileservice.FileSe
 
 func (s *controlledS3) reconcileLocked() {
 	if s.throttler != nil && s.dataMP != nil {
-		if excess := s.granted - s.dataMP.AllocatedBytes(); excess > 0 {
+		retained := s.dataMP.AllocatedBytes()
+		if s.writer != nil {
+			retained += s.writer.RetainedBitmapBytes()
+		}
+		if excess := s.granted - retained; excess > 0 {
 			s.throttler.Release(excess)
 			s.granted -= excess
 		}
@@ -279,6 +283,10 @@ func (s *controlledS3) flush(proc *process.Process, analyzer process.Analyzer) e
 	if s.writer == nil {
 		return nil
 	}
+	// Sync/Close transfer or retire local bitmap owners as well as vector
+	// backing. A worker callback must not inspect those lists mid-mutation.
+	s.begin()
+	defer s.end()
 	counters := analyzer.GetOpCounterSet()
 	ctx := perfcounter.AttachS3RequestKey(proc.Ctx, counters)
 	stats, err := s.writer.Sync(ctx)
@@ -293,7 +301,6 @@ func (s *controlledS3) flush(proc *process.Process, analyzer process.Analyzer) e
 	err = errors.Join(err, s.writer.Close())
 	s.writer = nil
 	s.staged = 0
-	s.sourceReleased()
 	return err
 }
 
@@ -308,7 +315,10 @@ func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) (err error) {
 		}
 		blocks += int64(stats[i].BlkCnt())
 	}
-	frameLimit := s.outputSlot.Capacity() / 4
+	frameLimit, err := s.metadataFrameLimit()
+	if err != nil {
+		return err
+	}
 	// Fixed encoding/footer and vector headers have ample room in the output
 	// envelope's fixed overhead. Check the variable payload before allocation.
 	if blocks > math.MaxInt64/int64(objectio.BlockInfoSize+24) || int64(len(stats)) > math.MaxInt64/int64(objectio.ObjectStatsLen+24) {
@@ -375,6 +385,16 @@ func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) (err error) {
 	return nil
 }
 
+// The shared output slot may also serve raw joins or deletes. Its capacity
+// cannot redefine this writer's fixed metadata protocol.
+func (s *controlledS3) metadataFrameLimit() (int64, error) {
+	limit, err := colexec.InsertMetadataFrameLimit(s.unit, 1)
+	if err != nil {
+		return 0, err
+	}
+	return min(limit, s.outputSlot.Capacity()/4), nil
+}
+
 func (s *controlledS3) next() (*batch.Batch, error) {
 	if s.output != nil {
 		s.output.Clean(s.outputMP)
@@ -391,7 +411,11 @@ func (s *controlledS3) next() (*batch.Batch, error) {
 		return nil, err
 	}
 	n := binary.LittleEndian.Uint64(header[:])
-	if n > uint64(s.written-s.read-8) || n > uint64(s.outputSlot.Capacity()/4) {
+	frameLimit, err := s.metadataFrameLimit()
+	if err != nil {
+		return nil, err
+	}
+	if n > uint64(s.written-s.read-8) || n > uint64(frameLimit) {
 		return nil, fmt.Errorf("invalid insert metadata frame size %d", n)
 	}
 	r := io.NewSectionReader(s.spool, s.read+8, int64(n))
@@ -412,11 +436,14 @@ func (s *controlledS3) next() (*batch.Batch, error) {
 }
 
 func (s *controlledS3) close() (err error) {
+	s.begin()
 	if s.writer != nil {
 		err = s.writer.Close()
 		s.writer = nil
 	}
-	s.sourceReleased()
+	// Reconcile after the writer's callbacks have joined and before deleting
+	// its pool; otherwise the final grant would lose its measurable owner.
+	s.end()
 	if s.output != nil {
 		s.output.Clean(s.outputMP)
 		s.output = nil

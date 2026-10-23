@@ -550,7 +550,7 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 	}
 
 	bound, ok := builder.BuildMemoryBound(hashJoin.EqConds[1], !hashJoin.HashOnPK, false)
-	if !legacyMaxDepth && (!ok || !acquire(bound)) {
+	if !legacyMaxDepth && (!ok && proc.Base.ImportMemory != nil || ok && !acquire(bound)) {
 		_, spillErr := hashJoin.reSpillBucket(proc, bucket, builder, reader, nextDepth, analyzer)
 		cleanupBuilder()
 		return nil, true, spillErr

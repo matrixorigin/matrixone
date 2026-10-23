@@ -61,6 +61,8 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id uint32, bat *batch.Batch) {
 		// we don't need to cache it.
 		if vec.IsConst() || vec.NeedDup() {
 			vec.Free(mp)
+			bat.ReplaceVector(vec, nil, i)
+			continue
 		}
 
 		data := vector.GetAndClearVecData(vec)
@@ -72,6 +74,9 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id uint32, bat *batch.Batch) {
 		if area != nil {
 			b.bytesCache[id].bs = append(b.bytesCache[id].bs, area)
 		}
+		// Data/area have moved to this cache; release the vector's remaining
+		// bitmap/header ownership before discarding the vector reference.
+		vec.Free(mp)
 
 		bat.ReplaceVector(vec, nil, i)
 	}
@@ -79,6 +84,32 @@ func (b *spoolBuffer) putCacheID(mp *mpool.MPool, id uint32, bat *batch.Batch) {
 	bat.Attrs = bat.Attrs[:0]
 	bat.SetRowCount(0)
 	bat.ExtraBuf = nil
+	cache := &b.bytesCache[id]
+	if cache.retainedLimit > 0 {
+		var retained int64
+		for _, bs := range cache.bs {
+			retained += int64(cap(bs))
+		}
+		// Keep smaller reusable blocks. Wide historical allocations cannot make
+		// the cache grow with every distinct column's maximum over the import.
+		for retained > cache.retainedLimit {
+			largest := -1
+			for i, bs := range cache.bs {
+				if largest < 0 || cap(bs) > cap(cache.bs[largest]) {
+					largest = i
+				}
+			}
+			if largest < 0 {
+				break
+			}
+			bs := cache.bs[largest]
+			retained -= int64(cap(bs))
+			mp.Free(bs)
+			cache.bs[largest] = cache.bs[len(cache.bs)-1]
+			cache.bs[len(cache.bs)-1] = nil
+			cache.bs = cache.bs[:len(cache.bs)-1]
+		}
+	}
 
 	// put id into free list.
 	b.Lock()
@@ -102,5 +133,6 @@ func (b *spoolBuffer) clean(mp *mpool.MPool) {
 		for j := range b.bytesCache[i].bs {
 			mp.Free(b.bytesCache[i].bs[j])
 		}
+		b.bytesCache[i].bs = nil
 	}
 }

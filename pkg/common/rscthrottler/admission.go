@@ -516,12 +516,24 @@ func (m *memThrottler) ReclaimForWorkingSet(ctx context.Context) error {
 }
 
 func (m *memThrottler) ReserveWorkingSet(ctx context.Context, spec WorkingSetSpec) (*WorkingSet, error) {
-	return m.reserveWorkingSetCandidates(ctx, []WorkingSetSpec{spec}, false)
+	return m.reserveWorkingSetCandidates(ctx, []WorkingSetSpec{spec}, workingSetSingleSpec)
 }
 
 func (m *memThrottler) ReserveWorkingSetCandidates(ctx context.Context, specs []WorkingSetSpec) (*WorkingSet, error) {
-	return m.reserveWorkingSetCandidates(ctx, specs, true)
+	return m.reserveWorkingSetCandidates(ctx, specs, workingSetCandidatesRetry)
 }
+
+func (m *memThrottler) ReserveWorkingSetCandidatesUntilFit(ctx context.Context, specs []WorkingSetSpec) (*WorkingSet, error) {
+	return m.reserveWorkingSetCandidates(ctx, specs, workingSetCandidatesUntilFit)
+}
+
+type workingSetAdmissionMode uint8
+
+const (
+	workingSetSingleSpec workingSetAdmissionMode = iota
+	workingSetCandidatesRetry
+	workingSetCandidatesUntilFit
+)
 
 type workingSetCandidate struct {
 	spec  WorkingSetSpec
@@ -530,7 +542,7 @@ type workingSetCandidate struct {
 
 // One FIFO node owns the entire choice. Candidate construction is outside the
 // mutex; fitting and publication use the current shared W maximum under it.
-func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []WorkingSetSpec, ownerlessTerminal bool) (*WorkingSet, error) {
+func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []WorkingSetSpec, mode workingSetAdmissionMode) (*WorkingSet, error) {
 	if len(specs) == 0 {
 		return nil, errors.New("empty memory working-set candidates")
 	}
@@ -551,13 +563,20 @@ func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []
 	}
 	m.Refresh()
 	maximum := int64(m.actualTotalMemory.Load())
-	if !ownerlessTerminal && maximum > 0 && candidates[0].input+candidates[0].spec.IOBytes > maximum {
+	candidateRequest := mode != workingSetSingleSpec
+	if !candidateRequest && maximum > 0 && candidates[0].input+candidates[0].spec.IOBytes > maximum {
 		return nil, &RequestTooLargeError{candidates[0].input + candidates[0].spec.IOBytes, maximum}
 	}
-	if ownerlessTerminal && maximum > 0 {
+	firstFeasible := 0
+	if candidateRequest && maximum > 0 {
 		minimum := int64(math.MaxInt64)
-		for _, candidate := range candidates {
-			minimum = min(minimum, candidate.input+candidate.spec.IOBytes)
+		firstFeasible = len(candidates)
+		for i, candidate := range candidates {
+			total := candidate.input + candidate.spec.IOBytes
+			minimum = min(minimum, total)
+			if firstFeasible == len(candidates) && total <= maximum {
+				firstFeasible = i
+			}
 		}
 		// Even with zero resident memory and no other inputs, this ticket must
 		// account for its entire I and W. Existing owners cannot make it fit.
@@ -581,12 +600,24 @@ func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []
 		}
 		if c.queue[0] == n {
 			minimum := int64(math.MaxInt64)
-			for _, candidate := range candidates {
+			selected := -1
+			for i, candidate := range candidates {
 				delta := candidate.input + max(0, candidate.spec.IOBytes-c.workspacePromise.Load())
 				minimum = min(minimum, delta)
-				if !m.physicalFits(delta) {
-					continue
+				if m.physicalFits(delta) {
+					selected = i
+					break
 				}
+			}
+			hasOwners := len(c.tickets) > 0 || c.dataReserved.Load() > 0 || c.ioBusy
+			// An idle process can retain reclaimable cache/native pages from the
+			// previous statement. Before accepting a smaller unit, give its largest
+			// statically possible candidate one recovery attempt. Keep this FIFO
+			// node while recovery runs; the next iteration rechecks cancellation,
+			// other-pool owners, physical usage and the shared workspace promise.
+			recoverFirst := candidateRequest && !hasOwners && !reclaimed && selected > firstFeasible
+			if selected >= 0 && !recoverFirst {
+				candidate := candidates[selected]
 				w := newWorkingSet(c, candidate.spec, candidate.input)
 				c.inputPromise.Add(candidate.input)
 				c.workspacePromise.Store(max(c.workspacePromise.Load(), candidate.spec.IOBytes))
@@ -595,8 +626,7 @@ func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []
 				c.mu.Unlock()
 				return w, nil
 			}
-			hasOwners := len(c.tickets) > 0 || c.dataReserved.Load() > 0 || c.ioBusy
-			if ownerlessTerminal && !hasOwners {
+			if candidateRequest && !hasOwners {
 				if !reclaimed {
 					// The queued node stays in place while this existing process-wide full
 					// reclaim runs. New requests cannot bypass it or consume its progress.
@@ -611,13 +641,20 @@ func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []
 					reclaimed = true
 					continue
 				}
-				available := max(0, int64(m.actualTotalMemory.Load())-m.physicalUsed()-c.inputPromise.Load()-c.workspacePromise.Load()-max(c.dataReserved.Load(), m.reserved.Load()))
-				if m.sampleInvalid.Load() {
-					available = 0
+				if mode == workingSetCandidatesRetry {
+					available := max(0, int64(m.actualTotalMemory.Load())-m.physicalUsed()-c.inputPromise.Load()-c.workspacePromise.Load()-max(c.dataReserved.Load(), m.reserved.Load()))
+					if m.sampleInvalid.Load() {
+						available = 0
+					}
+					c.removeAdmissionLocked(n)
+					c.mu.Unlock()
+					return nil, &WorkingSetCapacityError{Minimum: minimum, Available: available}
 				}
-				c.removeAdmissionLocked(n)
-				c.mu.Unlock()
-				return nil, &WorkingSetCapacityError{Minimum: minimum, Available: available}
+				// No controlled owner does not mean all physical memory is
+				// permanently resident. Background completion can release or
+				// repopulate idle pools after this recovery. A final graph keeps
+				// its node and full candidate set for the existing worker's next
+				// sample, rather than turning temporary pressure into failure.
 			}
 		}
 		c.startWorkerLocked()

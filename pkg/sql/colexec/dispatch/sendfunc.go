@@ -62,7 +62,9 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (
 		return queryDone, err
 	}
 	for i, reg := range ap.LocalRegs {
-		reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(ap.ctr.sp, i)
+		if err = process.PublishPipelineSpoolSignal(proc.Ctx, reg, ap.ctr.sp, i); err != nil {
+			return true, err
+		}
 	}
 	return false, nil
 }
@@ -119,7 +121,9 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuff
 			if err != nil || queryDone {
 				return err
 			}
-			onlyOneRegToDealThis(i, ap)
+			if err = onlyOneRegToDealThis(i, ap, proc); err != nil {
+				return err
+			}
 			break
 		}
 	}
@@ -169,7 +173,9 @@ func sendBatToLocalMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 			if err != nil || queryDone {
 				return err
 			}
-			onlyOneRegToDealThis(i, ap)
+			if err = onlyOneRegToDealThis(i, ap, proc); err != nil {
+				return err
+			}
 			break
 		}
 	}
@@ -214,7 +220,9 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 			if err != nil || queryDone {
 				return err
 			}
-			onlyOneRegToDealThis(i, ap)
+			if err = onlyOneRegToDealThis(i, ap, proc); err != nil {
+				return err
+			}
 			break
 		}
 	}
@@ -255,8 +263,8 @@ func sendToAllFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool,
 	return sendToAllLocalFunc(bat, ap, proc)
 }
 
-func onlyOneRegToDealThis(sendto int, ap *Dispatch) {
-	ap.LocalRegs[sendto].Ch2 <- process.NewPipelineSignalToGetFromSpool(ap.ctr.sp, sendto)
+func onlyOneRegToDealThis(sendto int, ap *Dispatch, proc *process.Process) error {
+	return process.PublishPipelineSpoolSignal(proc.Ctx, ap.LocalRegs[sendto], ap.ctr.sp, sendto)
 }
 
 // common sender: send to any LocalReceiver
@@ -269,7 +277,9 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (
 	if err != nil || queryDone {
 		return true, err
 	}
-	onlyOneRegToDealThis(sendto, ap)
+	if err = onlyOneRegToDealThis(sendto, ap, proc); err != nil {
+		return true, err
+	}
 
 	ap.ctr.sendCnt++
 

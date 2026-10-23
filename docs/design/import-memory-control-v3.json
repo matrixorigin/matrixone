@@ -1,5 +1,5 @@
 {
-  "version": 9,
+  "version": 17,
   "status": "reviewed-design",
   "title": "4.1.6 import memory control: ownership, progress, byte batching and spill",
   "base": "3c7eb8de7f2388de84624fdaf719cc218f8078dc",
@@ -18,7 +18,8 @@
     "HashBuild spills only shuffle, copies before testing the threshold; scatter buffers are row bounded and max-depth skew reload is unbounded.",
     "Deterministic compiler fixtures: after full reclaim permits 64 MiB, old solver grants 4 bytes; max-row floor with identical envelopes shrinks 64 to 32 MiB despite no memory benefit. This is a throughput defect, not yet an explanation of the interrupted native table 29.",
     "Final candidate581d746 failed faithful table21 am_case_comprehensive_dataset after20 successes: old insert.Insert returned exhausted on three tries (ask720360..765440, Available about21GB), while RSS peak3.804GiB and cgroup OOM events0. Independent isolated original-schema/original-CSV reproduction also fails. Compiler already reserved old Insert output I/W but the consumer never used them.",
-    "Frozen v8 f082 binary: fresh independent two-process CN remote controlled broadcast INSERT JOIN fails with1105 broadcast spill generation is unavailable. An old-source overlay adding actual Free immediately after the existing first.Reset deterministically reproduces the same named failure (reset-free-repro.json, exit1 after successful compilation). Pipeline cleanup retires an early nonfinalizer while another expected actual is still collecting; successful registration was reset to false, so Free incorrectly aborts the shared generation."
+    "Frozen v8 f082 binary: fresh independent two-process CN remote controlled broadcast INSERT JOIN fails with1105 broadcast spill generation is unavailable. An old-source overlay adding actual Free immediately after the existing first.Reset deterministically reproduces the same named failure (reset-free-repro.json, exit1 after successful compilation). Pipeline cleanup retires an early nonfinalizer while another expected actual is still collecting; successful registration was reset to false, so Free incorrectly aborts the shared generation.",
+    "Independent review of 0c69895511 reproduced seven failures: partition metadata frame loss, shared-varlen copy expansion, undersized clone promises, retry label mutation, unbounded fused projections admitted as bounded, deferred delete credit refunded before materialization, and unconditional legacy expression-key spill. Sibling audits confirmed partition-writer terminal cleanup and partial-allocation cleanup defects."
   ],
   "goals": [
     "The tested amway import semantics, indexes, row counts and SQL success remain intact under fixed 22 GiB and no inter-round idle/GC/restart.",
@@ -117,7 +118,7 @@
     },
     {
       "id": "D15",
-      "choice": "Enable statement working sets only for whole-DAG bounded CSV/JSONLINE sources and join-key expression contracts supported before evaluation. Column keys, fixed-width expressions and bounded serial/composite keys share one capacity derivation for normal hash, spill and skew. Unknown variable-length expression expansion retains whole-query legacy execution.",
+      "choice": "Enable statement working sets only for whole-DAG bounded CSV sources and join-key expression contracts supported before evaluation. Column keys, fixed-width expressions and bounded serial/composite keys share one capacity derivation for normal hash, spill and skew. Unknown variable-length expression expansion retains whole-query legacy execution.",
       "rationale": "The CSV raw-record limit does not bound generic table scans or arbitrary expression expansion. Fallback must preserve legal query semantics and cannot advertise unbounded operators as admitted memory."
     },
     {
@@ -176,6 +177,180 @@
         "Normal non-spilled/empty-build completion calls FinishParticipant exactly once, not Abort. Pipeline.Cleanup cancels contexts on normal exit too; proc.Ctx.Err alone is not a success/failure oracle.",
         "Inspect the actual compiler hooks and test the real consumer sequence. Arm expected actual ownership before scheduler/reader/Prepare failures; never infer ownership merely from a sealed template topology."
       ]
+    },
+    {
+      "id": "D22",
+      "choice": "Correct copy bounds at vector ownership and preserve shared varlen areas when no larger than referenced payload; use the same copy sizing for full and partial hash-build batches, including bitmap capacity and allocation failure cleanup. Ordinary legacy joins only spill on real pressure.",
+      "rationale": "A prediction must describe the allocation actually performed; unsupported static bounds are not memory pressure for a legacy query."
+    },
+    {
+      "id": "D23",
+      "choice": "PartitionMultiUpdate drains exactly one producer frame per Call and destroys every active/retired writer on terminal cleanup. Deferred committed-delete materialization remains charged until corresponding prepared state is destroyed or transferred, and its worst-case footprint sets the delete window.",
+      "rationale": "The producer now streams metadata. A double Call drops frames; reconciling only present buffers discards future credits before the corresponding bitmap/map/vector is allocated."
+    },
+    {
+      "id": "D24",
+      "choice": "NewCompile owns a clone of caller routing labels. Every DOP retry and pool cleanup preserves the original selector.",
+      "rationale": "A rebuilt Compile can be released before the next retry without deleting routing labels in the original Compile."
+    },
+    {
+      "id": "D25",
+      "choice": "Memory admission version 2 includes immutable, validated producer descriptors and dedicated expression/embedded-producer I promises per actual executor. Bounds propagate source rows and per-column payload through projections, filters, shuffles, merges, joins and the audited default tokenizer Apply. Every receiver derives the full promise without executing SQL.",
+      "rationale": "Raw CSV input bytes do not bound fused expression outputs, scratch, or hidden table-function producers. A whole-DAG claim must cover those allocations explicitly.",
+      "constraints": [
+        "Descriptor dependencies are topological and validated, with checked arithmetic, real executor counts and real result-column lineage. Schema widths are finite only when the physical path enforces that bound.",
+        "CSV bounds include its legal crossing row; generic unbounded scans, opaque producers and unsupported expressions choose whole-query legacy before any Open.",
+        "Shared key-expression contract derives output and all simultaneously live intermediate buffers. Promises remain live through real nonprepared operator Free.",
+        "Prepared queries retain executor capacity across Reset; until there is a separate retained-owner contract they select whole-query legacy before admission, including subsequent executions.",
+        "Default/ngram fulltext_index_tokenize gets a table_function-owned bound covering content copies, tokenizer scratch, Document.Words growth/copies, bounded output, argument expressions and actual Apply result columns. Datalink and unproven parsers choose whole-query legacy.",
+        "All remote peers must advertise protocol version 2 before Open; old bool-only or vanilla peers select legacy. Unknown manifest versions/roles are rejected before execution. No new tuning parameter, polling worker, customer name or fixed incident shape.",
+        "Controlled default tokenizer and CROSS Apply output are byte chunked using the same unit with a legal singleton exception. Actual document arguments and Apply result columns determine runtime chunk rows; no data is skipped, replayed or truncated. OUTER or unaudited TVF modes select legacy."
+      ]
+    },
+    {
+      "id": "D26",
+      "choice": "Prove and charge local transfer queues and retained operator copies explicitly. Controlled pSpool idle caches retain at most the shared unit per cache ID; only the final receiver return can free an oversized idle cache. Its active clones and replacement peaks have dedicated producer I promises. PreInsert copies and supported LockOp key/packer/nullable/refresh buffers receive explicit promises at the same root.",
+      "rationale": "A byte-bounded CSV does not bound multiple queued deep copies or independently retained operator capacity. Deriving a per-column lifetime high-water from unrelated maximum-sized rows also produces an unusable promise; bounded idle reuse closes that state without a user knob.",
+      "constraints": [
+        "Keep active borrowed frames valid through final reader release; apply the cap at quiescent cache return only, with no active truncation.",
+        "Keep the existing legacy spool policy when there is no statement working set. Destroy all controlled caches before the root promise is released.",
+        "Unknown retaining operators (including unbounded shuffle buckets, FuzzyFilter cardinality/collision state and deferred PostDml SQL lists) select whole-query legacy before Open.",
+        "Remote CSV edges currently include uncharged backend codecs, queues and reassembly pools with independent lifetimes. Until that ownership is explicitly bounded, those complete statements select legacy before opening any admission controls; ordinary local CSV imports stay controlled.",
+        "This safe support-domain correction does not reject a legal query or claim an OOM guarantee for a legacy path. Non-CSV queries retain their existing path.",
+        "LockOp Packer uses class-backed Go storage; its bound follows ClassAllocationSize rather than assuming libc malloc.",
+        "Local Dispatch fanout metadata includes C separately rounded receiver queues, each with nextPowerOfTwo(max(2,C)) message slots, plus receiver/slot/ref/cache headers. Derive checked capacity from the first owner; the quadratic C-squared term cannot be replaced with a linear clone allowance or an arbitrary fanout cap."
+      ]
+    },
+    {
+      "id": "D27",
+      "choice": "Every local spool has a final query-attempt owner in BaseProcess. Register immediately after creation, before later Prepare steps can fail. After all local pipeline/notify/IO owners have joined, the joined attempt/RPC boundary drains the BaseProcess registries and calls CloseAfterReadersStopped before restoring views, detaching or closing the working-set root.",
+      "rationale": "Normal ForceCleanup must preserve queued/borrowed frames until End. Cleanup timeouts can leave End undelivered; dropping the operator pointer and destroying an MPool does not free those native buffers. A query root knows when there can no longer be a reader, so it is the correct final destructor. Data signal sends must observe query cancellation so a missing receiver cannot block the join required by final destruction.",
+      "constraints": [
+        "Register every local spool, including legacy. Only the joined attempt/RPC boundary collects legacy registries, checking each BaseProcess has no unowned ImportMemory; never collect them from an inactive Compile.clear or Process.Free. Controlled roots also collect installed views before memory-detach/Close.",
+        "Track occupied message slots; last receiver return clears the slot before returning its id. The final destructor frees only still-occupied owned clones plus remaining idle storage, and shares the existing cleanupOnce.",
+        "Final destruction does not wait for End or mutate drainedReceivers; caller must already have joined all senders and readers. Normal ForceCleanup continues to preserve outstanding borrowers.",
+        "Copy failure returns both the cache ID and the message slot; partial initialization stays atomic.",
+        "Registries are mutex protected, taken and cleared per attempt, and do not survive a completed attempt into reuse."
+      ],
+      "design_review": {
+        "reviewer": "independent foundation/join worker",
+        "decision": "APPROVED BEFORE IMPLEMENTATION",
+        "evidence": "Verified runOnce root errC closure, Scope.Run deferred Pipeline.Cleanup, Scope.MergeRun deferred wg.Wait including notify cleanup, and fresh BaseProcess in remote decode. Independent reviewer also approved legacy extension with per-Base unowned-ticket guards and cleanup only at the real joined attempt/RPC boundary."
+      }
+    },
+    {
+      "id": "D28",
+      "choice": "Treat a local spool data enqueue and its external Ch2 publication as one ownership protocol. Record a publication failure on that exact spool generation. After any data publication fails, terminal cleanup sends direct End markers to every local receiver, does not enqueue a spool End, and does not wait for spool acknowledgements. Preserve every previously published borrower and transfer abandoned frames to the existing joined-attempt destructor.",
+      "rationale": "Native LIMIT1 on 2bacd2829a returned after30s with three missing End markers. Cancellation between spool enqueue and Ch2 notification orphaned a data entry. The later token intended for a spool End popped that data instead, so receiver nil counts never reached zero. Call-only cancellation tests skipped the real Reset/drain protocol.",
+      "constraints": [
+        "Normal successful publication retains the existing ordered spool End/ack protocol. No timeout reduction, unconditional receiver bypass or premature destruction.",
+        "The publication state belongs to the spool generation and is set by a shared data-publication helper; cover Connector plus all/any/index/local-match/multi-match Dispatch routes.",
+        "A direct terminal token follows all successfully published tokens on each receiver channel. Active broadcast borrowers stay valid until release; unpublished references remain owned until every pipeline joins.",
+        "Only the joined attempt/RPC boundary may finally destroy unacknowledged frames. Operator Reset may retain cleanupSpool and attempt ordinary ForceCleanup, which must preserve borrowers.",
+        "Deterministic regressions execute canceled publication -> actual Reset -> real receiver drain -> joined final destruction. Their End markers must come only from Reset, and broadcast tests must include one successful reader plus one failed publication."
+      ],
+      "design_review": {
+        "reviewer": "finish_queue_review independent source review",
+        "decision": "APPROVED BEFORE IMPLEMENTATION",
+        "evidence": "F/pipeline-publication-review.json establishes enqueue-before-publish -> orphaned queue head -> spool-End token consumes data -> missing receiver End. Reviewer proposed generation-local broken-publication mode, direct terminal markers, preserved live broadcast borrowers and joined ownership. Root approved that design before code changes."
+      }
+    },
+    {
+      "id": "D29",
+      "choice": "Separate logical producer payload from rounded retained vector capacity. Shared expression contracts accept actual referenced-column bounds and expose logical result bytes separately from allocation backing. Lock bounds use the actual primary-key columns. INSERT metadata gets a dedicated unit-derived fixed-object envelope, shared by output promises, runtime framing and downstream producer/merge/spool proofs; unrelated raw JSON singleton capacity cannot inflate metadata frames.",
+      "rationale": "Native case21 needs59,784,372,035 promised bytes at a3.19GiB RSS and fails22GiB without OOM. Faithful public compilation identifies about25.78GB in two metadata spools and two MergeBlock consumers because raw-row503MB was reused as each metadata-frame limit. Serial key evaluation also counted unreferenced JSON and treated rounded vector stores as logical row payload. These are proof imprecision and resource-policy defects, not grounds to raise the cap or silently disable control.",
+      "constraints": [
+        "Keep current ResultBytes allocation semantics for compatibility; add a distinct logical-result bound. For each affine payload use the smaller of aggregate-input multiplicity and the weighted sum of referenced column bounds. Apply the same bound recursively to expression scratch, Packer, result and encoded keys.",
+        "Old callers without per-column information retain conservative behavior. Compiler preserves source lineage and index/type checks; no new independent function whitelist.",
+        "A fixed INSERT frame contains BlockInfo/ObjectStats and fixed protocol/header overhead, never raw row contents. Derive maximum object/block metadata from the existing pre-crossing/common-unit flush policy, including partial blocks and a legal wide singleton. Preserve the existing four-copy/fixed-overhead serializer allowance.",
+        "Use that same dedicated envelope before runtime serialization and when propagating metadata through MergeBlock, Flush and local spools. Raw join or raw-delete output capacity may remain larger but is not the metadata protocol limit.",
+        "Classify modern fixed INSERT only when every MultiUpdateCtx has no DeleteCols. Old Insert.ToWriteS3 is inherently INSERT-only. Preserve the existing conservative raw-delete envelope and semantics; do not apply INSERT bounds to RowID/PK frames or hide unsupported cases as successful imports.",
+        "No customer/table names, reduced raw-entry limit, larger memory cap, new tunable threshold, changed SQL/load method or fallback of the failing task. Native acceptance remains three complete39-table rounds under22GiB.",
+        "Source descriptors and source-slot envelopes use the same physical makeType/ParallelLoad conversion as External.Prepare. Synthesized hidden filepath values are not raw CSV fields; until a finite static path-size contract exists those graphs select whole-query legacy before Open. Normal customer LOAD graphs remain eligible. Compact CSV column bounds cover inline value bytes through their fixed Varlena headers and must not be confused with header-plus-inline double counting.",
+        "JSONLINE parsing and transJson field construction do not yet have a complete conversion scratch/expansion contract. These entire graphs retain legacy before Open; this does not change JSONLINE SQL results and is independent of the successful39-CSV budget repair."
+      ],
+      "design_review": {
+        "reviewer": "finish_admission and finish_native_checks independent first-owner analysis",
+        "decision": "APPROVED BEFORE IMPLEMENTATION",
+        "evidence": "Independent expression owner proposed logical/capacity split and column-affine bounds; writer owner traced pre-crossing flush, fixed metadata entries, all-ctx DeleteCols classification and compatibility encoding. Root approved their combined design before assigning edits. Native failed evidence and pure-layout owner breakdown are retained in F."
+      }
+    },
+    {
+      "id": "D30",
+      "choice": "Forecast null/grouping bitmap growth by examining only the selected source window with Contains, without a prefix iterator.",
+      "rationale": "Exact native CPU samples attribute26.46% cumulative CPU to windowHasBitmapBits; per-row MergeSortBatches forecasts restart Foreach at bit0 and create quadratic dense-bitmap work.",
+      "constraints": [
+        "Keep constNULL short circuit, logical grouping rows, stale-bit exclusion, actual bitmap growth/capacity and overflow contracts.",
+        "No new bitmap API, cache, thresholds, allocations, or SQL/plan changes. Cost is O(selected-window width), O(1) for a one-row merge append.",
+        "Semantic range oracle, before/after128/8192-row benchmark, owning-vector race and actual mergeutil consumer validation."
+      ],
+      "design_review": {
+        "reviewer": "csv_column_bound independent source/pprof review",
+        "decision": "APPROVED BEFORE DELIVERY WORKTREE IMPLEMENTATION",
+        "evidence": "F/performance-bitmap-review.json; F/performance-window-fix-contract.json; overlay prototype and121 race passes retained."
+      }
+    },
+    {
+      "id": "D31",
+      "choice": "Before an ownerless FIFO admission head selects a smaller-than-statically-feasible unit, attempt at most one existing full recovery and reselect from current candidates/physical state.",
+      "rationale": "Exact DOP2 public manifest matches native promises: table35 first unit256KiB and10064 local writes/108.34s, second16MiB at DOP1 and66writes/8.68s; table24 units2MiB,4MiB and live1MiB. The current code recovers only when no candidate fits, prematurely preserving reclaimable prior-statement residency by forcing tiny batches.",
+      "constraints": [
+        "Reference the first descending candidate whose full own I+W fits process total; statically impossible targets do not cause performance recovery.",
+        "Only candidate API, FIFO head, no tracked tickets/data/IO owner, and not previously reclaimed. Existing active-owner small-fit and legacy single-spec behavior remain unchanged.",
+        "Keep the same FIFO node during existing cancellable recovery. On return, recheck cancellation, current physical sample, all input/data/sharedW commitments and any new cross-pool owner. Never reuse the old fit result.",
+        "One unsuccessful attempt still grants a currently fitting small candidate; no new sleep/timer/worker/state or DOP-policy change.",
+        "This existing full recovery can evict idle arenas/cache(target0), run Go/native reclamation and cold-cache unrelated workloads; record that per-statement cost and measure native throughput.",
+        "Retain all failure/cancel/FIFO/unfit paths. Discriminating small-already-fits controls, statically impossible target, activeowner, cancel and crosspool-during-reclaim tests plus exact native continuous import acceptance."
+      ],
+      "design_review": {
+        "reviewer": "csv_column_bound independent protocol review; root integration",
+        "decision": "APPROVED BEFORE DELIVERY WORKTREE IMPLEMENTATION",
+        "evidence": "F/performance-reclaim-design-review.json; F/performance-reclaim-fix-contract.json; F/performance-admission-review.json."
+      }
+    },
+    {
+      "id": "D32",
+      "choice": "Separate retry-capable candidate admission from final candidate admission. Add a small optional UntilFit capability on the real throttler, backed by the same existing FIFO/recovery/sample worker. Compiler Parallel>1 retains pressure-driven DOP retry; final Parallel<=1 waits cancellably for dynamic physical pressure to clear and always reselects the largest currently fitting candidate.",
+      "rationale": "Native be8 N4 fails an8-row LOAD after28 successes, despite zeroOOM: three5-second-spaced samples show available14,877,761,536 ->16,236,711,936 ->16,853,712,896 versus minimum16,874,101,262. Neighbour samples already exceed minimum within the same retry interval, and exact originalSQL later succeeds in0.284s on the unchanged process without forcedGC/restart. No tracked tickets/data/IO owner is not a proof that whole-process physical residency is irreducible; backend completion can return more arenas after a full recovery.",
+      "constraints": [
+        "Candidate modes immediately reject only min complete I+W greater than known total. Keep existing ordinary single-spec semantics and old provider compatibility.",
+        "Reuse one private single/retry/final mode implementation, the same FIFO node, immutable candidate list, owner accounting, physicalFits, one initial full recovery and existing1s coalesced recovery/sample worker. No new waiting timer/worker/queue/threshold, client retry or physical accounting relaxation.",
+        "Retain higher-DOP pressure -> real graph recompile; final DOP waiting must not freeze the smallest unit or disable larger-unit reselection when memory later returns.",
+        "Cancellation removes the node promptly, stops the last-worker lifecycle, and unblocks successors without waiting for a blocked reclamation callback. Static impossible, invalid sample and late new-owner boundaries remain covered.",
+        "Current-statement admission precedes its execution locks, input reader and new I/D/W publication. Frontend transaction/LOCAL pipe and explicit-transaction historical ownership can already exist; cancellation and existing distributed ordered acquisition/rollback remain necessary. Do not claim all process background resources are represented by tracked owners.",
+        "Persistent external pressure with a never-cancelled caller cannot simultaneously guarantee finite success and avoid false refusal. Existing caller deadline/cancellation is the termination boundary; no arbitrary internal deadline is introduced.",
+        "Full native acceptance must restart a new candidate trial and require at least117 imports plus postchecks; final validation is predeclared as five continuous39-table rounds (195 imports) to observe late-pool and kernel-charge accumulation. N4 remains failed28-success evidence, and the isolated debug success is not a continuous-trial pass."
+      ],
+      "design_review": {
+        "reviewer": "finish_queue_review independent wait-for/protocol review; root integration",
+        "decision": "APPROVED BEFORE IMPLEMENTATION",
+        "evidence": [
+          "F/admission-transient-pressure-design.json",
+          "F/admission-transient-independent-review.json",
+          "F/native-v4-prequery-residency-review.json",
+          "F/native-v4/failure-29/debug-retry/result.json"
+        ]
+      }
+    },
+    {
+      "id": "D33",
+      "choice": "For a retry-capable parallel graph, prefer lowering DOP before shrinking the configured target when its largest legal target complete I+W cannot fit even the known empty process limit. Reuse WorkingSetHeadroom.Limit and saturated workingLayoutTotal; unknown or statically fitting targets keep the existing candidate policy. Final graphs still use every candidate with D32 UntilFit.",
+      "rationale": "The reviewed N4 source succeeds on its first28 tables but takes297.122s versus243.357s for the same28 baseline tables (+22.09%), excluding later client retry time. Largest table113.317s versus80.4s; DOP2 unit4MiB remains constrained by physical charge even after RSS recovers. Same DOP1 layout supports16MiB with larger remaining physical margin. Waiting/recovery correctness alone does not restore bulk throughput.",
+      "constraints": [
+        "Only manifest.Parallel>1, positive known total limit, and largest legal finite target full I+W strictly greater than Limit trigger existing importDOPRetry. Equality, unknown Limit and statically fitting targets including active-owner situations preserve prior candidates.",
+        "Reuse existing budget arithmetic and graph reconstruction/label ownership/ordered control rollback. No new numeric threshold, interface, wire field, timeout, raw-size/cache/memory-limit setting or schema/data special case.",
+        "Recheck context after the headroom sample before returning a DOP retry. This precheck must not publish a ticket or start execution/source work.",
+        "This is a resource-selection preference, not a proof of universal throughput optimality. A higher-DOP smaller-unit CPU workload can outperform a lower-DOP larger-unit one; native target-fitting narrow and target-static-impossible CPU controls are mandatory, and TKE100G/1T remain separate pending performance evidence.",
+        "Keep D32 as an independent functional correction and retain its final-wait and higher-DOP pressure fallback. Record performance causes and correctness evidence separately."
+      ],
+      "design_review": {
+        "reviewer": "csv_column_bound independent static-bound and context/control review; root integration",
+        "decision": "APPROVED BEFORE IMPLEMENTATION; PERFORMANCE ACCEPTANCE PENDING",
+        "evidence": [
+          "F/performance-dop-selection-review.json",
+          "F/dop-target-design-independent-review.json"
+        ]
+      }
     }
   ],
   "alternatives": [
@@ -437,7 +612,7 @@
     "wire": "Backward-compatible optional pipeline topology fields identify per-CN broadcast spill participants. Missing topology disables new broadcast spill. No SQL protocol or cross-CN FD transfer.",
     "persistence": "Only anonymous temporary spill framing may change; no persistent object/catalog format change.",
     "upgrade": "New queries use one process binary. No cross-version temporary FD sharing is introduced.",
-    "scope": "Enable the new working-set admission only when the complete physical DAG has a controlled CSV/JSONLINE source. Generic SELECT/UPDATE/table scans lack this raw-row/typed-batch contract and retain the legacy path; already admitted remote tokens remain valid on a CN without a source.",
+    "scope": "Enable the new working-set admission only when the complete physical DAG has a controlled CSV source. Generic SELECT/UPDATE/table scans lack this raw-row/typed-batch contract and retain the legacy path; already admitted remote tokens remain valid on a CN without a source.",
     "capability_probe": "GetProtocolVersionResponse optional bool memory_admission=2; old peers omit it. Probe all CNs before Open; any false uses whole-query legacy, network errors fail normally. Legacy pipeline StopSending does not ACK and cannot be used for probing.",
     "legacy_skew": "Without ImportMemory, every max-depth shuffle preserves the prior whole-bucket path. No new default 64MiB singleton limit is imposed on ordinary SELECT/UPDATE or unsupported function-key imports."
   },
@@ -521,13 +696,12 @@
   ],
   "approval": {
     "kind": "internal-independent-design-review",
-    "revision": 9,
+    "revision": 17,
     "decision": "PASS",
-    "scope": "D22 and broadcast_participant_revision9, exact actual/template compiler hooks and mapped terminal/negative/real-2CN validation",
-    "condition": "Design approval only; implementation and real consumer evidence remain mandatory before delivery.",
-    "reviewer": "final_parameter_review",
-    "approved_at": "2026-10-23T01:08:52.524792+08:00",
-    "reviewed_draft_sha256": "5a13c9c2ff38d193e81a88d3e4cf3d133321b9b8fe2c201e5a7dc28b06ea3389"
+    "scope": "D33 static-impossible target preference with preserved fallback boundaries; D32 previous approval retained",
+    "condition": "Implementation/discriminating tests and both CPU controls plus new uninterrupted native acceptance required; no universal no-regression claim from design.",
+    "reviewer": "csv_column_bound; root integration",
+    "approved_at": "2026-10-23T18:46:42.837265+08:00"
   },
   "approval_history": [
     {
@@ -540,6 +714,56 @@
       "ignore_source_review": "CSV worker traced the public SQL failure through early source and final projection; root approved action-by-index-layout DAG UT plus unchanged ignored-word/old-word/new-word public oracles before native import.",
       "largest_unit_review": "2026-10-23 00:05 +08:00: Galileo reproduced stale-unit and max-row plateau failures deterministically; root approved bounded descending full-envelope candidates. Independent final_parameter_review approved with mandatory ownerless full-reclaim-and-typed-capacity-error terminal, including last-owner exit; exact I/W delta and full-layout dedup required.",
       "old_insert_review": "2026-10-23 00:25 +08:00: Socrates traced old Insert through CNS3Writer/Sinker/MergeBlock and proposed the existing I/D/W ownership pattern plus bounded anonymous metadata framing. Root approved preserving original output semantics, high-headroom D-denial progress and all terminal owners; Galileo independently verified compiler role/count/envelope and required cumulative Sync metadata bounds. Derived PreInsert and partition wrappers explicitly retain legacy to avoid claiming absent contracts."
+    },
+    {
+      "kind": "internal-independent-design-review",
+      "revision": 9,
+      "decision": "PASS",
+      "scope": "D22 and broadcast_participant_revision9, exact actual/template compiler hooks and mapped terminal/negative/real-2CN validation",
+      "condition": "Design approval only; implementation and real consumer evidence remain mandatory before delivery.",
+      "reviewer": "final_parameter_review",
+      "approved_at": "2026-10-23T01:08:52.524792+08:00",
+      "reviewed_draft_sha256": "5a13c9c2ff38d193e81a88d3e4cf3d133321b9b8fe2c201e5a7dc28b06ea3389"
+    },
+    {
+      "kind": "internal-independent-design-review",
+      "revision": 15,
+      "decision": "PASS",
+      "scope": "D30 window cost and D31 ownerless candidate recovery refinement; previous scoped approvals preserved in decisions/history",
+      "condition": "Design approval only; all discriminating tests, independent code review and exact new-binary continuous import/performance evidence remain mandatory before delivery.",
+      "reviewer": "csv_column_bound independent design review; root integration",
+      "approved_at": "2026-10-23T18:08:20.002038+08:00",
+      "evidence": [
+        "F/performance-bitmap-review.json",
+        "F/performance-reclaim-design-review.json"
+      ]
+    },
+    {
+      "kind": "internal-independent-design-review",
+      "revision": 16,
+      "decision": "PASS",
+      "scope": "D32 transient-pressure final admission and preserved higher-DOP retry boundary",
+      "condition": "Design approval only; discriminating normal/race/consumer/static and complete new-binary native acceptance remain mandatory.",
+      "reviewer": "finish_queue_review; root integration",
+      "approved_at": "2026-10-23T18:41:28.930642+08:00"
     }
-  ]
+  ],
+  "review_amendment": {
+    "at": "2026-10-23T14:34:37.962843+08:00",
+    "revision": 10,
+    "author": "component workers",
+    "reviewer": "root independent integration reviewer",
+    "decision": "APPROVED BEFORE IMPLEMENTATION",
+    "scope": "focused closure of confirmed independent-review defects and reachable sibling ownership/producers",
+    "required_evidence": [
+      "Original seven independent negation witnesses and nearest positive controls",
+      "Partition streamed metadata and active/error/reset writer cleanup",
+      "Full/partial shared/constant clone actual capacity plus injected allocation failure",
+      "DOP label caller/retry/reuse preservation",
+      "Public compiled projection fallback before any admission; finite serial/default-FT controlled producer contracts",
+      "Version2 versus old capability wire roundtrip and before-Open legacy",
+      "Deferred delete charge versus actual bitmap/vector retained peak and cleanup",
+      "Owning packages, focused lifecycle race, incremental static checks, native SQL and uninterrupted identical import rounds"
+    ]
+  }
 }

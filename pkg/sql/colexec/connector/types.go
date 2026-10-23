@@ -89,24 +89,29 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 
 	if connector.ctr.sp != nil {
 		sp := connector.ctr.sp
-		sendCtx, cancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
-		queryDone, sendErr := sp.SendBatch(sendCtx, pSpool.SendToAllLocal, nil, err)
-		cancel()
-
+		publicationFailed := sp.PublicationFailed()
 		terminalSignal := newDirectSignal()
 		terminalSignalName := "direct"
-		if sendErr == nil && !queryDone {
-			terminalSignal = process.NewPipelineSignalToGetFromSpool(sp, 0)
-			terminalSignalName = "spool"
-		} else {
-			process.WarnPipelineCleanupf(
-				proc,
-				"connector_cleanup_enqueue_terminal_spool",
-				"connector cleanup timed out enqueueing terminal spool message: timeout=%s query_done=%t err=%v",
-				process.PipelineSignalSendTimeout,
-				queryDone,
-				sendErr)
+		if !publicationFailed {
+			sendCtx, cancel := context.WithTimeout(context.TODO(), process.PipelineSignalSendTimeout)
+			queryDone, sendErr := sp.SendBatch(sendCtx, pSpool.SendToAllLocal, nil, err)
+			cancel()
+			if sendErr == nil && !queryDone {
+				terminalSignal = process.NewPipelineSignalToGetFromSpool(sp, 0)
+				terminalSignalName = "spool"
+			} else {
+				process.WarnPipelineCleanupf(
+					proc,
+					"connector_cleanup_enqueue_terminal_spool",
+					"connector cleanup timed out enqueueing terminal spool message: timeout=%s query_done=%t err=%v",
+					process.PipelineSignalSendTimeout,
+					queryDone,
+					sendErr)
+			}
 		}
+		// A failed data publication has no matching external token. Publish
+		// End directly after the already-published tokens instead of letting
+		// a new spool token consume the orphaned data entry.
 
 		sentTerminalSignal := process.SendPipelineSignalWithTimeout(connector.Reg, terminalSignal, process.PipelineSignalSendTimeout)
 		if !sentTerminalSignal {
@@ -135,7 +140,7 @@ func (connector *Connector) Reset(proc *process.Process, pipelineFailed bool, er
 					pipelineFailed,
 					err)
 			}
-		} else {
+		} else if !publicationFailed {
 			process.WarnPipelineCleanupf(
 				proc,
 				"connector_cleanup_skip_spool_close",

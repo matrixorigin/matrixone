@@ -18,6 +18,7 @@ import (
 	"context"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
@@ -93,18 +94,36 @@ func SendPipelineSignalWithTimeout(reg *WaitRegister, signal PipelineSignal, tim
 }
 
 func SendPipelineSignalWithContext(ctx context.Context, reg *WaitRegister, signal PipelineSignal) bool {
+	return SendPipelineSignal(ctx, reg, signal) == nil
+}
+
+// SendPipelineSignal observes query cancellation even if its receiver could
+// not start. A queued spool frame remains owned by the joined attempt cleanup.
+func SendPipelineSignal(ctx context.Context, reg *WaitRegister, signal PipelineSignal) error {
 	if reg == nil || reg.Ch2 == nil {
-		return false
+		return moerr.NewInternalErrorNoCtx("pipeline receiver is unavailable")
 	}
 	if ctx == nil {
 		ctx = context.TODO()
 	}
 	select {
 	case reg.Ch2 <- signal:
-		return true
+		return nil
 	case <-ctx.Done():
-		return false
+		return context.Cause(ctx)
 	}
+}
+
+// PublishPipelineSpoolSignal is the publication half of a successful data
+// enqueue. Failure leaves an unobservable queue entry, so the same generation
+// must use direct terminal markers during Reset. It cannot free that entry
+// while other receivers may still borrow the shared frame.
+func PublishPipelineSpoolSignal(ctx context.Context, reg *WaitRegister, spool *pSpool.PipelineSpool, index int) error {
+	err := SendPipelineSignal(ctx, reg, NewPipelineSignalToGetFromSpool(spool, index))
+	if err != nil {
+		spool.MarkPublicationFailed()
+	}
+	return err
 }
 
 func TrySendPipelineSignal(reg *WaitRegister, signal PipelineSignal) bool {

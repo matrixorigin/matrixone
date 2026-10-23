@@ -37,7 +37,20 @@ type cachedBatch struct {
 
 type oneBatchMemoryCache struct {
 	// bytes to copy vector's data and area to.
-	bs [][]byte
+	bs            [][]byte
+	retainedLimit int64
+}
+
+// SetCacheMemoryLimit is configured before sending the first batch. It limits
+// only backing returned by the last consumer; an active borrowed batch is never
+// evicted. Zero preserves the legacy cache policy.
+func (ps *PipelineSpool) SetCacheMemoryLimit(bytes int64) {
+	if ps == nil || bytes <= 0 {
+		return
+	}
+	for i := range ps.cache.buffer.bytesCache {
+		ps.cache.buffer.bytesCache[i].retainedLimit = bytes
+	}
 }
 
 func initCachedBatch(mp *mpool.MPool, capacity uint32) *cachedBatch {
@@ -71,6 +84,16 @@ func (cb *cachedBatch) GetCopiedBatch(
 	}
 
 	cacheID, dst = cb.buffer.getCacheID()
+	attemptBatch, attemptID := dst, cacheID
+	success := false
+	defer func() {
+		if !success {
+			// The caller receives no batch/cache ID on failure. Return the actual
+			// ID here after destroying only this attempt's partial vector stores.
+			attemptBatch.Clean(cb.mp)
+			cb.buffer.putCacheID(cb.mp, attemptID, attemptBatch)
+		}
+	}()
 	dst.Recursive = src.Recursive
 	dst.ShuffleIDX = src.ShuffleIDX
 
@@ -105,7 +128,6 @@ func (cb *cachedBatch) GetCopiedBatch(
 
 		if vec.IsConst() {
 			if err = vector.GetConstSetFunction(typ, cb.mp)(dst.Vecs[i], vec, 0, vec.Length()); err != nil {
-				dst.Clean(cb.mp)
 				return nil, false, 0, err
 			}
 
@@ -116,7 +138,6 @@ func (cb *cachedBatch) GetCopiedBatch(
 			if err = vector.GetUnionAllFunction(typ, cb.mp)(
 				dst.Vecs[i],
 				vec); err != nil {
-				dst.Clean(cb.mp)
 				return nil, false, 0, err
 			}
 
@@ -137,6 +158,7 @@ func (cb *cachedBatch) GetCopiedBatch(
 
 	// set row count.
 	dst.SetRowCount(src.RowCount())
+	success = true
 
 	return dst, true, cacheID, nil
 }

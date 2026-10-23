@@ -5,6 +5,7 @@ package vector
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
 )
@@ -69,14 +70,76 @@ func (v *Vector) AppendAllocation(addRows, extraAreaBytes int) int64 {
 	return data + area
 }
 
-// AppendWindowAllocation uses the same growth policy as the actual vector
-// append, counting only referenced out-of-line values of the source window.
+// UnionBatchAreaBytes is the area appended by a no-flags UnionBatch of this
+// window. Constants share one copied value. Flat vectors preserve shared
+// offsets when copying the whole physical area costs no more than compacting
+// the referenced values; otherwise dead area outside the window is discarded.
+func (v *Vector) UnionBatchAreaBytes(start, end int) int64 {
+	if start < 0 || end < start || end > v.length {
+		panic("invalid vector memory window")
+	}
+	if start == end || !v.typ.IsVarlen() || v.IsConstNull() {
+		return 0
+	}
+	if v.IsConst() {
+		value := MustFixedColNoTypeCheck[types.Varlena](v)[0]
+		if value.IsSmall() {
+			return 0
+		}
+		_, length := value.OffsetLen()
+		return int64(length)
+	}
+	payload := v.WindowSize(start, end) - int64(end-start)*int64(v.typ.TypeSize())
+	return min(int64(len(v.area)), payload)
+}
+
+func windowHasBitmapBits(bitmap *nulls.Nulls, start, end int) bool {
+	if start == end || bitmap.EmptyByFlag() {
+		return false
+	}
+	// Merge-sort forecasts one row at a time. Starting an iterator at zero
+	// would rescan the entire preceding bitmap for every row, making dense
+	// null/grouping inputs quadratic. Examine only the selected window.
+	for row := start; row < end; row++ {
+		if bitmap.Contains(uint64(row)) {
+			return true
+		}
+	}
+	return false
+}
+
+// AppendWindowAllocation predicts complete new backing stores for UnionBatch
+// and GetUnionAllFunction, including null/grouping bitmaps. Existing storage
+// remains live until each replacement is installed. Only bitmaps with a source
+// bit in the selected window grow; stale source words are not copied.
 func (v *Vector) AppendWindowAllocation(src *Vector, start, end int) int64 {
-	size := src.WindowSize(start, end)
-	fixed := int64(end-start) * int64(src.typ.TypeSize())
-	area := size - fixed
+	area := src.UnionBatchAreaBytes(start, end)
+	if start == end {
+		return 0
+	}
+	if v.length > math.MaxInt-(end-start)-1 {
+		return math.MaxInt64
+	}
 	if area > int64(math.MaxInt) {
 		return math.MaxInt64
 	}
-	return v.AppendAllocation(end-start, int(area))
+	total := v.AppendAllocation(end-start, int(area))
+	bitmaps := []struct {
+		destination *nulls.Nulls
+		copied      bool
+	}{
+		{&v.nsp, src.IsConstNull() || windowHasBitmapBits(&src.nsp, start, end)},
+		{&v.gsp, windowHasBitmapBits(&src.gsp, start, end)},
+	}
+	for _, bitmap := range bitmaps {
+		if !bitmap.copied {
+			continue
+		}
+		growth := nulls.GrowthAllocation(bitmap.destination, v.length+end-start+1)
+		if total > math.MaxInt64-growth {
+			return math.MaxInt64
+		}
+		total += growth
+	}
+	return total
 }

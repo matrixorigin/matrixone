@@ -103,7 +103,11 @@ type s3WriterDelegate struct {
 	schemaVersions []uint32
 	isClusterBys   []bool
 
-	deleteBlockMap      []map[types.Blockid]*deleteBlockData
+	deleteBlockMap []map[types.Blockid]*deleteBlockData
+	// Each retained delete source owns its future split/dedup/merge growth.
+	// Credit remains live until preparation and synchronous serialization have
+	// both retired the source and all intermediate split/merge buffers.
+	deleteFutureBytes   []int64
 	deleteKeys          []*deleteKeySet
 	deleteBlockInfo     []*deleteBlockInfo
 	insertBlockInfo     []*batch.Batch
@@ -113,17 +117,18 @@ type s3WriterDelegate struct {
 	// so pre-allocated vector capacity is reused instead of re-allocated.
 	insertFreeLists []*containers.BatchFreeList
 
-	outputBat       *batch.Batch
-	ownedMP         *mpool.MPool
-	outputMP        *mpool.MPool
-	metadataSpool   *os.File
-	metadataWritten int64
-	metadataRead    int64
-	metadataPass    uint8
-	tailFlushed     bool
-	outputLease     *rscthrottler.InputLease
-	activeWorkspace *rscthrottler.WorkspaceLease
-	activeMP        *mpool.MPool
+	outputBat        *batch.Batch
+	ownedMP          *mpool.MPool
+	outputMP         *mpool.MPool
+	metadataSpool    *os.File
+	metadataWritten  int64
+	metadataRead     int64
+	metadataPass     uint8
+	tailFlushed      bool
+	outputLease      *rscthrottler.InputLease
+	outputFrameLimit int64
+	activeWorkspace  *rscthrottler.WorkspaceLease
+	activeMP         *mpool.MPool
 
 	batchSize      uint64
 	flushThreshold uint64
@@ -158,6 +163,7 @@ func newS3Writer(
 		insertBlockInfo:     make([]*batch.Batch, tableCount),
 		insertBlockRowCount: make([]uint64, tableCount),
 		deleteBlockMap:      make([]map[types.Blockid]*deleteBlockData, tableCount),
+		deleteFutureBytes:   make([]int64, tableCount),
 		deleteKeys:          make([]*deleteKeySet, tableCount),
 		insertFreeLists:     make([]*containers.BatchFreeList, tableCount),
 		isRemote:            update.IsRemote,
@@ -251,6 +257,7 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 }
 
 func (writer *s3WriterDelegate) cleanDeleteBatches(mp *mpool.MPool) {
+	clear(writer.deleteFutureBytes)
 	for i, bs := range writer.deleteBatches {
 		if bs == nil {
 			continue
@@ -297,13 +304,28 @@ func (writer *s3WriterDelegate) ensureOutputSlot(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
+	if lease == nil {
+		return fmt.Errorf("admitted multi-update has no output slot")
+	}
+	limit := lease.Capacity() / 4
+	if InsertOnlyOutput(writer.updateCtxs) {
+		unit := min(proc.Base.ImportMemory.UnitBytes, rscthrottler.BatchBytes(writer.memController.throttler))
+		metadata, boundErr := colexec.InsertMetadataFrameLimit(unit, len(writer.updateCtxs))
+		if boundErr != nil {
+			lease.Release()
+			return boundErr
+		}
+		limit = min(limit, metadata)
+	}
 	writer.outputLease = lease
+	writer.outputFrameLimit = limit
 	return nil
 }
 func (writer *s3WriterDelegate) releaseOutputSlot() {
 	if writer.outputLease != nil {
 		writer.outputLease.Release()
 		writer.outputLease = nil
+		writer.outputFrameLimit = 0
 	}
 }
 
@@ -331,15 +353,46 @@ func (writer *s3WriterDelegate) retainedBytes() int64 {
 	if writer.ownedMP != nil {
 		size = writer.ownedMP.AllocatedBytes()
 	}
+	for _, sinker := range writer.insertSinkers {
+		if sinker != nil {
+			size += sinker.RetainedBitmapBytes()
+		}
+	}
 	for _, blocks := range writer.deleteBlockMap {
 		// Include map growth slack and per-entry Go objects in addition to the
 		// separately tracked vectors. These maps are discarded after a flush;
 		// no empty high-water map remains behind a released grant.
 		for _, block := range blocks {
 			if block != nil {
-				size += int64(nulls.Size(block.bitmap)) + 128
+				size += int64(nulls.Allocated(block.bitmap)) + deleteBlockObjectsBytes
+				size += batchBitmapBytes(block.bat)
 			}
 		}
+	}
+	for _, batches := range writer.deleteBatches {
+		if batches != nil {
+			for i := 0; i < batches.Length(); i++ {
+				size += batchBitmapBytes(batches.Get(i))
+			}
+		}
+	}
+	return size
+}
+
+func batchBitmapBytes(bat *batch.Batch) int64 {
+	var size int64
+	if bat != nil {
+		for _, vec := range bat.Vecs {
+			size += int64(nulls.Allocated(vec.GetNulls()) + nulls.Allocated(vec.GetGrouping()))
+		}
+	}
+	return size
+}
+
+func (writer *s3WriterDelegate) chargedBytes() int64 {
+	size := writer.retainedBytes()
+	for _, future := range writer.deleteFutureBytes {
+		size = addMemoryBytes(size, future)
 	}
 	return size
 }
@@ -367,7 +420,7 @@ func (writer *s3WriterDelegate) sourceReleased() {
 	}
 }
 func (writer *s3WriterDelegate) reconcileMemoryLocked() {
-	if excess := writer.memController.grantedSize - writer.retainedBytes(); excess > 0 {
+	if excess := writer.memController.grantedSize - writer.chargedBytes(); excess > 0 {
 		writer.memController.throttler.Release(excess)
 		writer.memController.grantedSize -= excess
 	}
@@ -451,13 +504,13 @@ func (writer *s3WriterDelegate) projectionBytes(bat *batch.Batch, start, end int
 
 func (writer *s3WriterDelegate) windowEnd(bat *batch.Batch, start int, unit int64) int {
 	last := min(bat.RowCount(), start+objectio.BlockMaxRows)
-	if writer.projectionBytes(bat, start, last) <= unit {
+	if writer.windowFootprint(bat, start, last) <= unit {
 		return last
 	}
 	lo, hi := start+1, last
 	for lo < hi {
 		mid := lo + (hi-lo+1)/2
-		if writer.projectionBytes(bat, start, mid) <= unit {
+		if writer.windowFootprint(bat, start, mid) <= unit {
 			lo = mid
 		} else {
 			hi = mid - 1
@@ -533,12 +586,8 @@ func (writer *s3WriterDelegate) appendAllocation(inBatch *batch.Batch, unit int6
 			if rowids.GetNulls().Count() == inBatch.RowCount() {
 				continue
 			}
-			for _, idx := range updateCtx.DeleteCols {
-				tmp := vector.NewOffHeapVecWithType(*inBatch.Vecs[idx].GetType())
-				increment += 4 * tmp.AppendWindowAllocation(inBatch.Vecs[idx], 0, inBatch.RowCount())
-			}
-			// Worst case each non-null row starts a new block bitmap/map entry.
-			increment += int64(inBatch.RowCount()-rowids.GetNulls().Count()) * (int64(options.DefaultBlockMaxRows/8) + 128)
+			increment = addMemoryBytes(increment, writer.deleteAppendAllocation(i, inBatch, updateCtx.DeleteCols))
+			increment = addMemoryBytes(increment, deletePreparationBytes(inBatch, 0, inBatch.RowCount(), updateCtx.DeleteCols))
 		}
 	}
 	return increment
@@ -558,7 +607,7 @@ func (writer *s3WriterDelegate) appendWindow(
 	}
 	// Keep the retained aggregate below one shared byte unit. Flush before a
 	// crossing window so W's bound need not include two complete units.
-	windowBytes := uint64(writer.projectionBytes(inBatch, 0, inBatch.RowCount()))
+	windowBytes := uint64(writer.windowFootprint(inBatch, 0, inBatch.RowCount()))
 	if writer.batchSize > 0 && writer.batchSize+windowBytes > uint64(unit) {
 		if err = writer.sortAndSync(proc, analyzer); err != nil {
 			return err
@@ -715,13 +764,29 @@ func (writer *s3WriterDelegate) appendWindow(
 		if writer.deleteBatches[i] == nil {
 			writer.deleteBatches[i] = batch.NewBatchSet(objectio.BlockMaxRows)
 		}
+		if !direct {
+			if len(writer.deleteFutureBytes) < len(writer.updateCtxs) {
+				writer.deleteFutureBytes = append(writer.deleteFutureBytes, make([]int64, len(writer.updateCtxs)-len(writer.deleteFutureBytes))...)
+			}
+			writer.deleteFutureBytes[i] = addMemoryBytes(writer.deleteFutureBytes[i], deletePreparationBytes(inBatch, 0, inBatch.RowCount(), updateCtx.DeleteCols))
+		}
 		projBat := inBatch.SelectColumns(updateCtx.DeleteCols, DeleteBatchAttrs)
 		if _, err = writer.deleteBatches[i].Extend(mp, projBat, nil); err != nil {
 			return
 		}
+		if direct {
+			// W is sized for the largest individual projection/singleton.
+			// Several wide index keys must not coexist as cloned delete
+			// sources. Serialize this table before materializing the next;
+			// retain the already acquired O slot until all metadata is spooled.
+			if err = writer.prepareAndSyncDeleteTable(proc, analyzer, i); err != nil {
+				return
+			}
+			writer.deleteBatches[i] = nil
+		}
 	}
 
-	writer.batchSize += uint64(writer.projectionBytes(inBatch, 0, inBatch.RowCount()))
+	writer.batchSize += windowBytes
 
 	if direct || writer.batchSize >= writer.flushThreshold {
 		if err = writer.sortAndSync(proc, analyzer); err != nil {
@@ -757,6 +822,8 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 	src []*batch.Batch,
 	needClean bool,
 ) ([]*batch.Batch, error) {
+	writer.beginMemoryMutation()
+	defer writer.endMemoryMutation()
 	defer func() {
 		if needClean {
 			for _, bat := range src {
@@ -790,6 +857,9 @@ func (writer *s3WriterDelegate) prepareDeleteBatches(
 
 		rowIDs := vector.MustFixedColWithTypeCheck[types.Rowid](rowIDVec)
 		for i, rowID := range rowIDs {
+			if err := context.Cause(proc.Ctx); err != nil {
+				return nil, err
+			}
 			if nulls.Contains(uint64(i)) {
 				continue
 			}
@@ -903,22 +973,22 @@ func (writer *s3WriterDelegate) sortAndSync(proc *process.Process, analyzer proc
 		if len(updateCtx.DeleteCols) == 0 || writer.deleteBatches[i] == nil {
 			continue
 		}
-		// Take batches from the per-table delete accumulator.
-		delSrcBats := writer.deleteBatches[i].TakeBatches()
-		var delBatches []*batch.Batch
-		// needClean=true: prepareDeleteBatches cleans source batches after use.
-		if delBatches, err = writer.prepareDeleteBatches(proc, i, delSrcBats, true); err != nil {
-			return
-		}
-		if err = writer.sortAndSyncOneTable(
-			proc, updateCtx.TableDef, analyzer, i, true, delBatches, true,
-		); err != nil {
+		if err = writer.prepareAndSyncDeleteTable(proc, analyzer, i); err != nil {
 			return
 		}
 		// Insert data is managed by persistent sinkers (auto-spill via Write).
 	}
 
 	return
+}
+
+func (writer *s3WriterDelegate) prepareAndSyncDeleteTable(proc *process.Process, analyzer process.Analyzer, idx int) error {
+	src := writer.deleteBatches[idx].TakeBatches()
+	prepared, err := writer.prepareDeleteBatches(proc, idx, src, true)
+	if err != nil {
+		return err
+	}
+	return writer.sortAndSyncOneTable(proc, writer.updateCtxs[idx].TableDef, analyzer, idx, true, prepared, true)
 }
 
 func (writer *s3WriterDelegate) sortAndSyncOneTable(
@@ -961,7 +1031,11 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		return
 	}
 
-	opts = append(opts, ioutil.WithBufferBytes(rscthrottler.BatchBytes(writer.memController.throttler)))
+	unit := rscthrottler.BatchBytes(writer.memController.throttler)
+	if proc.Base.ImportMemory != nil {
+		unit = min(unit, proc.Base.ImportMemory.UnitBytes)
+	}
+	opts = append(opts, ioutil.WithBufferBytes(unit))
 	if proc.Base.ImportMemory != nil && writer.activeWorkspace == nil {
 		opts = append(opts, ioutil.WithMemoryWorkspace(proc.Base.ImportMemory.WorkingSet))
 	}
@@ -1161,8 +1235,8 @@ func (writer *s3WriterDelegate) spoolFrame(proc *process.Process, action actionT
 	if err := writer.ensureOutputSlot(proc); err != nil {
 		return err
 	}
-	// OutputEnvelope reserves four copies of the largest frame plus fixed
-	// metadata overhead. Reject an impossible frame before serializing its
+	// The protocol envelope reserves four copies plus fixed metadata
+	// overhead. Reject an impossible frame before serializing its
 	// borrowed source or growing the output vector.
 	if err := writer.checkMetadataFrameSize(src.MarshalBinarySize() + int64(len(name)) + 4096); err != nil {
 		return err
@@ -1213,7 +1287,7 @@ func (writer *s3WriterDelegate) spoolFrame(proc *process.Process, action actionT
 }
 
 func (writer *s3WriterDelegate) checkMetadataFrameSize(n int64) error {
-	if n < 0 || writer.outputLease != nil && n > writer.outputLease.Capacity()/4 {
+	if n < 0 || writer.outputLease != nil && n > writer.outputFrameLimit {
 		return fmt.Errorf("import metadata frame exceeds admitted output capacity: %d bytes", n)
 	}
 	return nil
@@ -1243,6 +1317,7 @@ func (writer *s3WriterDelegate) spoolMetadata(proc *process.Process, final bool)
 				block.bat.Clean(mp)
 				delete(blocks, key)
 			}
+			writer.deleteBlockMap[i] = nil
 		}
 	}
 	for i, bat := range writer.insertBlockInfo {
@@ -1362,13 +1437,14 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 			writer.deleteBlockInfo[i] = nil
 		}
 	}
-	for _, data := range writer.deleteBlockMap {
+	for i, data := range writer.deleteBlockMap {
 		for k, block := range data {
 			if block != nil && block.bat != nil {
 				block.bat.Clean(writer.memoryPool(proc))
 			}
 			delete(data, k)
 		}
+		writer.deleteBlockMap[i] = nil
 	}
 
 	if writer.outputBat != nil {

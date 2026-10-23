@@ -33,6 +33,10 @@ func (connector *Connector) String(buf *bytes.Buffer) {
 func (connector *Connector) Prepare(proc *process.Process) error {
 	if connector.ctr.sp == nil {
 		connector.ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), 1)
+		if memory := proc.Base.ImportMemory; memory != nil {
+			connector.ctr.sp.SetCacheMemoryLimit(memory.UnitBytes)
+		}
+		proc.RegisterPipelineSpool(connector.ctr.sp)
 	}
 
 	if connector.OpAnalyzer == nil {
@@ -65,6 +69,8 @@ func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 	if queryDone || err != nil {
 		return result, err
 	}
-	connector.Reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(connector.ctr.sp, 0)
+	if err = process.PublishPipelineSpoolSignal(proc.Ctx, connector.Reg, connector.ctr.sp, 0); err != nil {
+		return vm.CancelResult, err
+	}
 	return result, nil
 }
