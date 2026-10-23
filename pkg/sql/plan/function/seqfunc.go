@@ -522,7 +522,8 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 	}
 	values := _values[0]
 	prevCalled, _ := values[6].(bool)
-	//#30650: stored flag = prev || !third-arg; see setVal for the full rule.
+	// Preserve the established called-state contract. The third argument may
+	// mark a fresh sequence called, but cannot reset an already-called one.
 	storedCalled := prevCalled || !iscalled
 
 	switch values[0].(type) {
@@ -592,12 +593,10 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 }
 
 func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled, storedCalled bool, rel engine.Relation, db, tbl string) (string, error) {
-	//#30650: persist is_called together with last_seq_num; NEXTVAL advances
-	// only when the stored flag is set. The documented rule stores !setisCalled
-	// (SETVAL(n, true) returns n on the next NEXTVAL, SETVAL(n, false) returns
-	// n+increment), and a sequence that was ever called must keep its flag so
-	// that SETVAL(n, true) after a call still reports called=true (#28243), so
-	// the caller passes storedCalled = prevCalled || !setisCalled.
+	// Assign the value and called flag atomically in the caller's transaction.
+	// NEXTVAL advances when storedCalled is true. SETVAL(n, true) returns n on
+	// the next NEXTVAL only while the sequence was still uncalled; once marked
+	// called, both third-argument values retain the existing advancing behavior.
 	_, err := sequenceSQL(proc, db, fmt.Sprintf("update %s set last_seq_num = %d, is_called = %t", sequenceTableName(db, tbl), setv, storedCalled))
 	if err != nil {
 		return "", err
