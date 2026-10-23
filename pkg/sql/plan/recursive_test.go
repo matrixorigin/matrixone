@@ -333,8 +333,13 @@ func TestRecursiveCteFilteredPrecedingCteStaysInline(t *testing.T) {
 			logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
 			require.NoError(t, err)
 			for _, node := range logicPlan.GetQuery().Nodes {
-				require.NotEqual(t, materialized.CTESinkOption, node.ExtraOptions,
-					"a preceding CTE used by recursive steps must not be partially shared")
+				if node.ExtraOptions == materialized.CTESinkOption {
+					require.Equal(t, planpb.Node_SINK, node.NodeType)
+					require.Len(t, node.Children, 1)
+					child := logicPlan.GetQuery().Nodes[node.Children[0]]
+					require.Equal(t, planpb.Node_SINK_SCAN, child.NodeType, "only the completed recursive result is shared")
+					require.True(t, logicPlan.GetQuery().Nodes[logicPlan.GetQuery().Steps[child.SourceStep[0]]].RecursiveSink)
+				}
 			}
 		})
 	}
@@ -365,7 +370,12 @@ func TestRecursiveCtePrecedingCteReuseStepGraphGuards(t *testing.T) {
 		logicPlan, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
 		require.NoError(t, err)
 		for _, node := range logicPlan.GetQuery().Nodes {
-			require.NotEqual(t, materialized.CTESinkOption, node.ExtraOptions)
+			if node.ExtraOptions == materialized.CTESinkOption {
+				require.Len(t, node.Children, 1)
+				child := logicPlan.GetQuery().Nodes[node.Children[0]]
+				require.Equal(t, planpb.Node_SINK_SCAN, child.NodeType, "preceding CTEs must remain inline")
+				require.True(t, logicPlan.GetQuery().Nodes[logicPlan.GetQuery().Steps[child.SourceStep[0]]].RecursiveSink)
+			}
 		}
 	}
 }
