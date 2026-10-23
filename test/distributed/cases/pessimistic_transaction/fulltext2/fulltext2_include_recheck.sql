@@ -55,4 +55,17 @@ select id, tag from rk where match(body) against('needle') and category = 1 limi
 rollback;
 select id, match(body) against('needle') > 0 as positive from rk where match(body) against('needle') order by match(body) against('needle') desc;
 
+-- More stale top candidates (15) than the LIMIT 1 over-fetch alone: the search keeps room for
+-- every row the transaction deleted, so the lower-ranked live match 120 still fills the page.
+create table rk2 (id bigint primary key, body text, tag varchar(10));
+insert into rk2 select result, 'needle needle needle', 'top' from generate_series(101, 115) g;
+insert into rk2 values (120, 'needle filler filler', 'live');
+insert into rk2 select result, 'other filler filler', 'other' from generate_series(200, 240) g;
+create fulltext2 index rk2x on rk2(body) with parser gojieba;
+begin;
+delete from rk2 where id between 101 and 115;
+select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc limit 1;
+select id, tag from rk2 where match(body) against('needle') limit 1;
+rollback;
+
 drop database fulltext2_include_recheck;

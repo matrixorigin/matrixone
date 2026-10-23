@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -732,6 +733,10 @@ func (u *reader) start() (err error) {
 		cacheKey = veccache.SnapshotKey(u.tblcfg.IndexTable, *ets)
 	}
 
+	if err := u.applyTransactionLocalBound(sp); err != nil {
+		return err
+	}
+
 	mode := u.opts.Mode
 	// INCLUDE/pk prefilter predicate JSON: the planner peels a WHERE predicate on
 	// INCLUDE columns / the pk into this ivfpq-aligned JSON, which the engine evaluates
@@ -836,6 +841,56 @@ func (u *reader) start() (err error) {
 		rt.SearchedBuildTS = &u.tailSearchedBuildTS // captured under the cache lock during the search
 	}
 	return veccache.Cache.SearchInto(sp, cacheKey, newsearch, q, rt, u.out)
+}
+
+// applyTransactionLocalBound widens a search bounded below the base-table join by the
+// candidates this transaction deleted or updated, which the index cannot see and the join
+// drops, or makes it unbounded when they cannot be counted.
+func (u *reader) applyTransactionLocalBound(sp *sqlexec.SqlProcess) error {
+	if u.limit == 0 || !u.spec.GetPostFilterOverFetch() {
+		return nil
+	}
+	bound, ok, err := u.transactionLocalBound(sp)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		u.limit = 0
+		return nil
+	}
+	u.limit = max(u.limit, bound)
+	return nil
+}
+
+// transactionLocalBound returns LIMIT+OFFSET plus the source rows this transaction
+// deleted or updated and has not committed. ok is false when they cannot be counted.
+func (u *reader) transactionLocalBound(sp *sqlexec.SqlProcess) (uint64, bool, error) {
+	txn := u.proc.GetTxnOperator()
+	if txn == nil || txn.GetWorkspace() == nil || txn.GetWorkspace().Readonly() || sp.EffectiveSnapshotTS() != nil {
+		return u.req.ResultLimit, true, nil
+	}
+	src := u.spec.GetSourceTableDef()
+	if src == nil {
+		return 0, false, nil
+	}
+	ctx := u.proc.Ctx
+	db, err := u.proc.GetSessionInfo().StorageEngine.Database(ctx, src.DbName, txn)
+	if err != nil {
+		return 0, false, err
+	}
+	rel, err := db.Relation(ctx, src.Name, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	provider, ok := rel.(engine.TransactionLocalDeletesProvider)
+	if !ok {
+		return 0, false, nil
+	}
+	deleted, ok, err := provider.TransactionLocalDeletedRows(ctx)
+	if err != nil || !ok || deleted > math.MaxUint64-u.req.ResultLimit {
+		return 0, false, err
+	}
+	return u.req.ResultLimit + deleted, true, nil
 }
 
 // scoreAlgo resolves the relevance formula from fulltext2's OWN session

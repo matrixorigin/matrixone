@@ -431,30 +431,29 @@ single distance key, and add tie handling to every top-k path.
 Decided by @cpegeric, 2026-10-23 (PR #30618 review P2). Follow-up:
 [#30853](https://github.com/matrixorigin/matrixone/issues/30853).
 
-The bound counts candidates by the index's view of each document. While the
-asynchronous index lags the base table (briefly after a committed write, and always
-for the transaction's own uncommitted writes), a deleted or no-longer-matching
-document is still a candidate. On the base-table join path the join drops it,
-because predicates evaluated in the index are re-checked on current values.
+The bound counts candidates by the index's view of each document. A document the
+reading transaction has deleted or updated but not committed is still a candidate,
+and on the base-table join path the join drops it, because predicates evaluated in
+the index are re-checked on current values. A search bounded below that join
+therefore keeps room for every such row: it is bounded to `LIMIT + OFFSET` plus the
+number of rows the transaction deleted or updated in the source table (and at least
+the post-filter over-fetch the vector indexes use), and the sort above applies the
+exact LIMIT and OFFSET to the rows that survive the join. A transaction therefore
+reads its own deletes and updates completely. When those rows cannot be counted (an
+object-level delete in the transaction), the search runs unbounded.
 
-A search bounded below that join therefore over-fetches: it keeps more candidates
-than `LIMIT + OFFSET`, using the same post-filter over-fetch budget as the vector
-indexes, and the sort above applies the exact LIMIT and OFFSET to the rows that
-survive the join. Stale candidates up to the over-fetch headroom no longer shorten
-the result, for the implicit relevance order and an explicit score order alike. As
-for a post-filtered vector search, the result is not guaranteed: more stale
-candidates than the headroom can still return fewer rows than exist.
+Commits by other transactions that the asynchronous index has not applied yet are
+not counted. During that window the index also lacks the inserted rows and the new
+versions of updated rows, so a query is eventually consistent whatever the bound;
+counting only the committed deletes would repair half of that window at a per-query
+cost. The window, the covered search answered from the index alone, and an exact
+freshness contract are tracked as #30853.
 
-Rejected alternatives: proving index freshness before every bounded search (a
-per-query freshness check with an exact-scan fallback), dropping the bound whenever
-the transaction has written the source table, and counting the transaction's
-deleted rows to size an exact budget. Each costs more per query or covers only
-uncommitted writes, and the first diverges from how the vector indexes treat
-post-filtered candidates.
-
-A covered search, answered from the index alone, has no join to drop a stale
-document and can return it while the index lags. That, and the exact freshness
-contract, are tracked as #30853.
+Rejected alternatives: proving index freshness before every bounded search with an
+exact-scan fallback, dropping the bound whenever the transaction has written the
+source table, counting committed deletes after the searched generation from the
+source's change state, and a fixed over-fetch alone, which returns too few rows once
+the transaction has deleted more candidates than its headroom.
 
 ## Source fan-out and resource bounds
 
