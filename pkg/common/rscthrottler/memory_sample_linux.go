@@ -27,21 +27,81 @@ func readCgroupMemory() (limit, current, inactive int64, err error) {
 		return 0, 0, 0, errors.New("cannot determine cgroup mount state")
 	}
 	if mode == cgroups.Unified {
-		path, e := cgroup2.NestedGroupPath("")
+		_, group, e := cgroups.ParseCgroupFileUnified("/proc/self/cgroup")
 		if e != nil {
 			return 0, 0, 0, e
 		}
-		if e = cgroup2.VerifyGroupPath(path); e != nil {
+		if e = cgroup2.VerifyGroupPath(group); e != nil {
 			return 0, 0, 0, e
 		}
-		return readUnifiedMemory(filepath.Join("/sys/fs/cgroup", path))
-	}
-	cg, e := cgroup1.Load(cgroup1.PidPath(os.Getpid()), cgroup1.WithHiearchy(cgroup1.SingleSubsystem(cgroup1.Default, cgroup1.Memory)))
-	if e != nil {
-		if errors.Is(e, cgroup1.ErrMountPointNotExist) || errors.Is(e, cgroup1.ErrMemoryNotSupported) || errors.Is(e, cgroup1.ErrNoCgroupMountDestination) {
-			return 0, 0, 0, errNoMemoryController
+		mount, e := readMemoryCgroupMount("/sys/fs/cgroup", "cgroup2", "")
+		if e != nil {
+			return 0, 0, 0, e
 		}
+		path, e := resolveMemoryCgroupPath(group, mount)
+		if e != nil {
+			return 0, 0, 0, e
+		}
+		return readUnifiedMemory(path)
+	}
+	groups, e := cgroup1.ParseCgroupFile("/proc/self/cgroup")
+	if e != nil {
 		return 0, 0, 0, e
+	}
+	subsystems, e := cgroup1.SingleSubsystem(cgroup1.Default, cgroup1.Memory)()
+	if e != nil {
+		return 0, 0, 0, legacyMemoryError(e)
+	}
+	mountpoint, e := legacyMemoryControllerPath(subsystems)
+	if e != nil {
+		return 0, 0, 0, e
+	}
+	mount, e := readMemoryCgroupMount(mountpoint, "cgroup", "memory")
+	if e != nil {
+		return 0, 0, 0, e
+	}
+	return readLegacyMemory(groups[string(cgroup1.Memory)], mount, cgroup1.PidPath(os.Getpid()), func() ([]cgroup1.Subsystem, error) { return subsystems, nil })
+}
+
+// readLegacyMemory retains the existing controller and Stat implementation.
+// Selected metadata and the hierarchy are explicit only at this private boundary
+// so tests can exercise a real temporary controller without mounting cgroupfs.
+func readLegacyMemory(group string, mount memoryCgroupMount, path cgroup1.Path, hierarchy cgroup1.Hierarchy) (limit, current, inactive int64, err error) {
+	subsystems, e := hierarchy()
+	if e != nil {
+		return 0, 0, 0, legacyMemoryError(e)
+	}
+	mountpoint, e := legacyMemoryControllerPath(subsystems)
+	if e != nil {
+		return 0, 0, 0, e
+	}
+	if mount.mountpoint != mountpoint {
+		return 0, 0, 0, errors.New("memory cgroup mount does not match selected controller")
+	}
+	directory, e := resolveMemoryCgroupPath(group, mount)
+	if e != nil {
+		return 0, 0, 0, e
+	}
+	relative, e := filepath.Rel(mountpoint, directory)
+	if e != nil {
+		return 0, 0, 0, e
+	}
+	memoryPath := "/"
+	if relative != "." {
+		memoryPath += relative
+	}
+	// The dependency mishandles private-root equality and escaped roots.
+	// Use the same decoded, validated mapping for every Memory path.
+	legacyPath := path
+	path = func(name cgroup1.Name) (string, error) {
+		if name == cgroup1.Memory {
+			return memoryPath, nil
+		}
+		return legacyPath(name)
+	}
+	cg, e := cgroup1.Load(path, cgroup1.WithHiearchy(func() ([]cgroup1.Subsystem, error) { return subsystems, nil }))
+	if e != nil {
+		return 0, 0, 0, legacyMemoryError(e)
 	}
 	stats, e := cg.Stat(cgroup1.IgnoreNotExist)
 	if e != nil {
@@ -57,6 +117,24 @@ func readCgroupMemory() (limit, current, inactive int64, err error) {
 	inactive = max(0, memoryInt(m.GetTotalInactiveFile())-memoryInt(m.GetTotalDirty()))
 	inactive = max(0, inactive-memoryInt(m.GetTotalWriteback()))
 	return memoryInt(m.GetHierarchicalMemoryLimit()), memoryInt(m.GetUsage().GetUsage()), inactive, nil
+}
+
+func legacyMemoryControllerPath(subsystems []cgroup1.Subsystem) (string, error) {
+	if len(subsystems) != 1 || subsystems[0].Name() != cgroup1.Memory {
+		return "", errors.New("invalid memory cgroup hierarchy")
+	}
+	controller, ok := subsystems[0].(interface{ Path(string) string })
+	if !ok {
+		return "", errors.New("memory cgroup controller has no path")
+	}
+	return controller.Path("/"), nil
+}
+
+func legacyMemoryError(err error) error {
+	if errors.Is(err, cgroup1.ErrMountPointNotExist) || errors.Is(err, cgroup1.ErrMemoryNotSupported) || errors.Is(err, cgroup1.ErrNoCgroupMountDestination) {
+		return errNoMemoryController
+	}
+	return err
 }
 
 // cgroup2.Manager.Stat masks missing memory.stat and scalar read failures as

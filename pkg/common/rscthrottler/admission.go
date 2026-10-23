@@ -234,9 +234,12 @@ func (c *memoryCoordinator) reportWait(m *memThrottler) {
 	request, kind, waited, waiters := n.ask, n.kind, now.Sub(n.enqueued), len(c.queue)
 	c.lastWaitLog = now
 	c.mu.Unlock()
+	c.sampleMu.Lock()
+	sampleErr := c.sample.err
+	c.sampleMu.Unlock()
 	logutil.Info("memory admission waiting",
 		zap.String("pool", m.name), zap.String("role", kind), zap.Int64("ask", request), zap.Duration("waited", waited), zap.Int("waiters", waiters),
-		zap.Int64("physical-used", m.physicalUsed()), zap.Uint64("limit", m.actualTotalMemory.Load()), zap.Int64("ordinary", c.dataReserved.Load()), zap.Int64("input", c.inputPromise.Load()), zap.Int64("workspace", c.workspacePromise.Load()))
+		zap.Int64("physical-used", m.physicalUsed()), zap.Uint64("limit", m.actualTotalMemory.Load()), zap.Int64("ordinary", c.dataReserved.Load()), zap.Int64("input", c.inputPromise.Load()), zap.Int64("workspace", c.workspacePromise.Load()), zap.Error(sampleErr))
 }
 
 func (c *memoryCoordinator) invalidateSample() {
