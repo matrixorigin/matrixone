@@ -3303,22 +3303,6 @@ func requiresRegexp2PatternWithMatchType(pat, pureMatchType string) bool {
 	return requiresRegexp2Pattern(regexpPatternWithPureMatchType(pat, pureMatchType, false))
 }
 
-// regexpWideMultilineSubjectNeedsICU reports whether a subject contains any
-// of MySQL's wide multiline terminators that Go RE2's (?m) does not treat as
-// line boundaries: \r anywhere (both lone-\r caret and \rCRLF-dollar
-// positions differ from LF-only semantics), NEL, LINE SEPARATOR or
-// PARAGRAPH SEPARATOR. Binary subjects span only the byte-sized subset
-// (\r, NEL); LS/PS cannot appear as single bytes.
-func regexpWideMultilineSubjectNeedsICU(subject string, binary bool) bool {
-	if strings.ContainsRune(subject, '\r') {
-		return true
-	}
-	if binary {
-		return strings.IndexByte(subject, 0x85) >= 0
-	}
-	return strings.ContainsAny(subject, "\u0085\u2028\u2029")
-}
-
 // regexpPositionSearchPattern wraps a user pattern so matching can start at a
 // later subject position without changing the original anchor context. A
 // trailing \Q is valid RE2 syntax and quotes through end-of-pattern; close that

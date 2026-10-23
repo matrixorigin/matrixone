@@ -35,19 +35,21 @@ import (
 //
 // This file replaces that routing with a per-line evaluation strategy:
 //
-//   - Subjects without any wide terminator evaluate exactly as before via
-//     Go RE2 `(?m)` (the ordinary multiline fast path is untouched).
-//   - Wide-m patterns whose rewritten anchors cannot match a line terminator
-//     are evaluated per line with the plain (non-multiline) pattern form.
-//     Inside a line buffer, RE2's `^` equals the line start and `$` equals
-//     the line end, which is exactly the MySQL multiline contract; per-line
-//     iteration runs in O(subject), needs no regexp2 admission budget, and
-//     holds at any subject size. After a trailing lone CR/NEL/LS/PS the
-//     cursor stops (ICU's caret exclusion), while a trailing LF — including
-//     the LF half of a CRLF pair — leaves one final empty line, preserving
-//     Go RE2's native multiline end-of-input contract.
-//   - Patterns that can match a line terminator (literal \n, `.`, \s, ...)
-//     do not admit the per-line transform and fall back to regexp2 up to
+//   - Wide-m patterns admitted for per-line evaluation run with the plain
+//     (non-multiline) pattern form against each terminator-free line buffer,
+//     where RE2's `^` equals the line start and `$` equals the line end —
+//     exactly the MySQL multiline contract. Admission inspects only the
+//     pattern, so a prefix hit keeps its short-circuit and never pays a
+//     whole-subject pre-scan. Iteration runs in O(subject), needs no regexp2
+//     admission budget, and holds at any subject size. After a trailing lone
+//     CR/NEL/LS/PS the cursor stops (ICU's caret exclusion), while a
+//     trailing LF — including the LF half of a CRLF pair — leaves one final
+//     empty line, yielded once, preserving Go RE2's native multiline
+//     end-of-input contract.
+//   - Patterns that can match a line terminator (literal \n, terminator
+//     classes, \s, '.' only under match_type 'n') or that carry
+//     whole-subject anchors (\A, \z, or anchors under a (?-m) scope) do not
+//     admit the per-line transform and fall back to regexp2 up to
 //     regexp2MaxSubjectBytes, above which they are rejected explicitly
 //     instead of returning a silently wrong LF-only result.
 
@@ -68,10 +70,10 @@ func regexpWideMultilineRoute(pat, pureMatchType, subject string, binary bool) i
 	if rewriteRegexpWideMultilineAnchors(pat, binary) == pat {
 		return regexpRouteRE2
 	}
-	if !regexpWideMultilineSubjectNeedsICU(subject, binary) {
-		return regexpRouteRE2
-	}
-	if regexpPatternMatchesLineTerminator(pat, pureMatchType, binary) {
+	// Line-route admission inspects the pattern only: no whole-subject
+	// pre-scan may sit in front of a prefix short-circuit match (mo-bot
+	// review on #30646).
+	if !regexpWideLineAdmissible(pat, pureMatchType, binary) {
 		if len(subject) <= regexp2MaxSubjectBytes {
 			return regexpRouteRegexp2
 		}
@@ -102,9 +104,11 @@ func wideMultilineNextLine(subject string, from int, binary bool) (lineStart, li
 		// trailing line, matching Go RE2's native multiline ^/$ at \z, which
 		// the MySQL compatibility contract keeps for that terminator. A
 		// trailing lone CR/NEL/LS/PS terminates the input without a caret at
-		// end of input, so no line follows them.
-		if len(subject) > 0 && from == len(subject) && subject[len(subject)-1] == 0x0A {
-			return len(subject), len(subject), len(subject), true
+		// end of input, so no line follows them. The trailing line is yielded
+		// exactly once: its termEnd of len(subject)+1 is the exhausted
+		// sentinel, so the next cursor stops instead of yielding it again.
+		if from == len(subject) && (len(subject) == 0 || subject[len(subject)-1] == 0x0A) {
+			return len(subject), len(subject), len(subject) + 1, true
 		}
 		return 0, 0, 0, false
 	}
@@ -152,18 +156,49 @@ func regexpLineTerminators(binary bool) []rune {
 	return []rune{0x0A, 0x0D, 0x85, 0x2028, 0x2029}
 }
 
-// regexpPatternMatchesLineTerminator reports whether a pattern can match a
-// string containing a line terminator. All line terminator runes are
-// case-fold-invariant, so a FoldCase-expanded class never gains a terminator
-// it did not already contain: plain intersection is exact.
-func regexpPatternMatchesLineTerminator(pat, pureMatchType string, binary bool) bool {
+// regexpWideLineAdmissible reports whether per-line evaluation preserves the
+// pattern's whole-subject semantics; inadmissible patterns keep whole-subject
+// routing (regexp2 within its budget, explicit rejection beyond it).
+//
+//   - Constructs that can match a line terminator (literal terminators,
+//     terminator classes, \s, '.' only when match_type 'n' compiles it to
+//     (?s)) need cross-line context. A plain '.' (OpAnyCharNotNL) matches no
+//     line terminator under the MySQL/ICU default contract, and per-line
+//     evaluation of a terminator-free line keeps exactly that meaning.
+//   - Whole-subject anchors (\A, \z) and ^/$ compiled with multiline disabled
+//     inside a (?-m:...) scope become OpBeginText/OpEndText and would gain
+//     fake line boundaries when evaluated per line.
+//
+// All line terminator runes are case-fold-invariant, so a FoldCase-expanded
+// class never gains a terminator it did not already contain: plain
+// intersection is exact.
+func regexpWideLineAdmissible(pat, pureMatchType string, binary bool) bool {
 	rule := regexpPatternWithPureMatchTypeRE2(pat, pureMatchType)
 	re, err := syntax.Parse(rule, syntax.Perl)
 	if err != nil {
 		// The compile path reports the real error; stay off the line route.
-		return true
+		return false
 	}
-	return regexpSyntaxHitsLineTerminator(re, binary)
+	return !regexpSyntaxHasSubjectAnchor(re) && !regexpSyntaxHitsLineTerminator(re, binary)
+}
+
+// regexpSyntaxHasSubjectAnchor reports whether the parsed pattern contains a
+// whole-subject anchor: \A, \z, or ^/$ evaluated with multiline disabled (for
+// example inside a (?-m:...) scope). The pattern is parsed under the
+// match_type wrapper, so top-level multiline anchors appear as
+// OpBeginLine/OpEndLine and stay admissible.
+func regexpSyntaxHasSubjectAnchor(re *syntax.Regexp) bool {
+	switch re.Op {
+	case syntax.OpBeginText, syntax.OpEndText:
+		return true
+	default:
+		for _, sub := range re.Sub {
+			if regexpSyntaxHasSubjectAnchor(sub) {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 func regexpSyntaxHitsLineTerminator(re *syntax.Regexp, binary bool) bool {
@@ -187,7 +222,7 @@ func regexpSyntaxHitsLineTerminator(re *syntax.Regexp, binary bool) bool {
 			}
 		}
 		return false
-	case syntax.OpAnyChar, syntax.OpAnyCharNotNL:
+	case syntax.OpAnyChar:
 		return true
 	default:
 		for _, sub := range re.Sub {
@@ -248,7 +283,10 @@ func (rs *regexpSet) wideNthMatch(
 			return [2]int{}, false, nil
 		}
 		line := str[lineStart:lineEnd]
-		if lineEnd > startByte {
+		// lineEnd >= startByte: a zero-width match may sit exactly at the line
+		// end that equals the requested start (for example '^' on an initial
+		// empty line), so such a line must still be searched.
+		if lineEnd >= startByte {
 			localStart := 0
 			if startByte > lineStart {
 				localStart = startByte - lineStart
@@ -363,9 +401,17 @@ func (rs *regexpSet) regularReplaceWide(
 			break
 		}
 		line := str[lineStart:lineEnd]
-		term := str[lineEnd:termEnd]
+		// termEnd may be len(str)+1 for the trailing empty line after a final
+		// LF (the exhausted sentinel); that line has no terminator bytes.
+		sliceTermEnd := termEnd
+		if sliceTermEnd > len(str) {
+			sliceTermEnd = len(str)
+		}
+		term := str[lineEnd:sliceTermEnd]
 		writeLine := line
-		if lineEnd > startByte && !(occurrence > 0 && remaining <= 0) {
+		// lineEnd >= startByte keeps zero-width matches sitting exactly at
+		// the requested start inside the replaced range.
+		if lineEnd >= startByte && !(occurrence > 0 && remaining <= 0) {
 			localStart := 0
 			if startByte > lineStart {
 				localStart = startByte - lineStart
@@ -375,6 +421,7 @@ func (rs *regexpSet) regularReplaceWide(
 				localPos = int64(utf8.RuneCountInString(str[lineStart:lineStart+localStart])) + 1
 			}
 			useOcc := int64(0)
+			skipReplace := false
 			if occurrence > 0 {
 				visited := int64(0)
 				searchSubject := line
@@ -395,13 +442,19 @@ func (rs *regexpSet) regularReplaceWide(
 					useOcc = remaining
 					remaining = 0
 				} else {
+					// The requested occurrence is on a later line; leave
+					// this line unchanged and carry the remaining ordinal
+					// over.
 					remaining -= visited
+					skipReplace = true
 				}
 			}
-			writeLine, err = rs.regularReplaceWithMatchType(
-				pat, line, repl, localPos, useOcc, subjectIsBinary, lineFlags)
-			if err != nil {
-				return "", err
+			if !skipReplace {
+				writeLine, err = rs.regularReplaceWithMatchType(
+					pat, line, repl, localPos, useOcc, subjectIsBinary, lineFlags)
+				if err != nil {
+					return "", err
+				}
 			}
 		}
 		out.WriteString(writeLine)

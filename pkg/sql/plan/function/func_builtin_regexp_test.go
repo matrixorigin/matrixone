@@ -2686,9 +2686,10 @@ func Test_BuiltIn_RegularSubstr(t *testing.T) {
 
 // TestRegexpWideMultilineReviewFindings pins the mo-bot review on PR #30646:
 // (P2) no caret match at end-of-input after a trailing CR/NEL/LS/PS, and
-// (P1/P2) LF-only and oversized subjects keep the base RE2 execution path so
-// constant multiline predicates and large TEXT inputs are not regressed by
-// the internal lookaround rewrite (#30210).
+// (P1/P2) anchored multiline predicates short-circuit on the first line and
+// large TEXT inputs run without an admission budget, so constant multiline
+// predicates and oversized subjects are not regressed by the wide-anchor
+// compatibility path (#30210).
 func TestRegexpWideMultilineReviewFindings(t *testing.T) {
 	op := newOpBuiltInRegexp()
 
@@ -2727,23 +2728,26 @@ func TestRegexpWideMultilineReviewFindings(t *testing.T) {
 	require.Equal(t, int64(0), got, "binary instr occurrence 2 on trailing CR")
 
 	// Routing: one of RE2 / per-line / regexp2 / explicit error per row
-	// (see regexpWideMultilineRoute). LF-only subjects keep the base RE2
-	// path; anchor-only patterns on wide subjects take the per-line route
-	// at any size; patterns that can match a line terminator keep regexp2
-	// up to the admission budget and are rejected explicitly beyond it.
-	require.Equal(t, regexpRouteRE2, regexpWideMultilineRoute("^alpha", "m", "alpha\nbeta", false), "LF-only subject: RE2")
-	require.Equal(t, regexpRouteRE2, regexpWideMultilineRoute("^a", "m", "a\nb", false), "LF-only subject: RE2")
+	// (see regexpWideMultilineRoute). Anchor-only patterns that cannot
+	// match a line terminator take the per-line route at any size and on
+	// any subject -- routing never pre-scans the subject, so an anchored
+	// prefix hit still short-circuits on the first line; patterns that
+	// can match a line terminator keep regexp2 up to the admission budget
+	// and are rejected explicitly beyond it.
+	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute("^alpha", "m", "alpha\nbeta", false), "LF-only subject: per-line, no pre-scan")
+	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute("^a", "m", "a\nb", false), "LF-only subject: per-line, no pre-scan")
 	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute("^a", "m", "a\rb", false), "CR subject: per-line")
 	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute("^a", "m", "a\u0085b", false), "NEL subject: per-line")
 	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute("^a", "m", "a\u2028b", false), "LS subject: per-line")
 	require.Equal(t, regexpRouteRE2, regexpWideMultilineRoute("alpha", "m", "a\rb", false), "no anchors: rewrite no-op")
 	require.Equal(t, regexpRouteRE2, regexpWideMultilineRoute("^a", "mu", "a\rb", false), "u pins LF-only endings")
 	require.Equal(t, regexpRouteRegexp2, regexpWideMultilineRoute("^(a)\\1", "m", "aa", false), "user backref keeps regexp2")
-	require.Equal(t, regexpRouteRegexp2, regexpWideMultilineRoute("^a.b", "m", "a\rb", false), "terminator-matching pattern: regexp2")
+	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute("^a.b", "m", "a\rb", false), "plain dot is line-local: per-line")
+	require.Equal(t, regexpRouteRegexp2, regexpWideMultilineRoute("^a.b", "mn", "a\rb", false), "dot with n matches terminators: regexp2")
 
 	// Oversized subjects stay supported: per-line evaluation has no size cap.
 	big := strings.Repeat("a", regexp2MaxSubjectBytes+1)
-	require.Equal(t, regexpRouteRE2, regexpWideMultilineRoute("^a", "m", big, false), "oversized LF-only: RE2")
+	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute("^a", "m", big, false), "oversized LF-only: per-line, no pre-scan")
 	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute("^a", "m", big+"\r", false), "oversized with CR: per-line")
 	require.True(t, like("^a", big, "m", false), "oversized MEDIUMTEXT subject")
 	require.True(t, like("^a", big+"\r", "m", false), "oversized wide-terminator subject")
@@ -2775,8 +2779,9 @@ func TestRegexpWideMultilineReviewFindings(t *testing.T) {
 	require.True(t, like("^b$", "a\x85b", "m", true), "binary NEL interior line")
 
 	// A terminator-matching pattern over the size cap fails explicitly.
-	require.Equal(t, regexpRouteWideTooLarge, regexpWideMultilineRoute("^a.b", "m", big+"\r", false), "oversized terminator-matching pattern: explicit error")
-	_, err = op.regMap.regularLikeWithMode("^a.b", strings.Repeat("a", regexp2MaxSubjectBytes+1)+"\r", "m", false)
+	require.Equal(t, regexpRouteWideTooLarge, regexpWideMultilineRoute("^a\rb", "m", big+"\r", false), "oversized terminator-matching pattern: explicit error")
+	require.True(t, like("^a.", strings.Repeat("a", regexp2MaxSubjectBytes+1)+"\r", "m", false), "plain dot oversized: per-line, no admission cap")
+	_, err = op.regMap.regularLikeWithMode("^a\rb", strings.Repeat("a", regexp2MaxSubjectBytes+1), "m", false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "wide multiline")
 }
