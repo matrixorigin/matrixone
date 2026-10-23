@@ -5962,6 +5962,23 @@ func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Exp
 	return nil
 }
 
+// validateQuantileExactWeightedArgs enforces the flat three-argument contract
+// of quantileExactWeighted: [value, weight, level]. The level is stripped into
+// execution-invariant aggregate configuration exactly like the ordered-set
+// percentiles' percentile argument; the value and weight remain row arguments.
+func validateQuantileExactWeightedArgs(ctx context.Context, name string, args []*Expr) error {
+	if len(args) != 3 {
+		return moerr.NewInvalidInputf(ctx,
+			"%s requires a value, a weight, and a level argument", name)
+	}
+	level := args[2]
+	if level == nil || isNullExpr(level) || !IsPercentileConfigExpr(level) {
+		return moerr.NewInvalidInputf(ctx,
+			"level argument of %s must be a non-null constant or parameter in [0,1]", name)
+	}
+	return nil
+}
+
 // IsPercentileConfigExpr reports whether expr can be evaluated without an
 // input row and is safe to use as execution-invariant percentile
 // configuration. Existing foldable constants remain supported. Prepared
@@ -6017,6 +6034,22 @@ func isPreparedPercentileExpr(expr *Expr) bool {
 // numeric expression types so exact DECIMAL configuration reaches range
 // validation and the rational percentile codec without FLOAT64 rounding.
 func normalizePercentileParam(ctx context.Context, name string, args []*Expr) error {
+	if strings.EqualFold(name, NameQuantileExactWeighted) {
+		if len(args) != 3 || !isPreparedPercentileExpr(args[2]) ||
+			function.IsConstant(args[2], false) {
+			return nil
+		}
+		if percentileParamTypeSupported(name, makeTypeByPlan2Expr(args[2])) {
+			return nil
+		}
+		floatType := types.T_float64.ToType()
+		level, err := appendCastBeforeExpr(ctx, args[2], makePlan2Type(&floatType))
+		if err != nil {
+			return err
+		}
+		args[2] = level
+		return nil
+	}
 	if (name != NameApproxPercentile && name != NamePercentileCont && name != NamePercentileDisc) ||
 		len(args) != 2 || !isPreparedPercentileExpr(args[1]) || function.IsConstant(args[1], false) {
 		return nil
@@ -7438,6 +7471,11 @@ func bindFuncExprImplByPlanExpr(
 	}
 	if name == NamePercentileCont || name == NamePercentileDisc {
 		if err = validateOrderedPercentileArgs(ctx, name, args); err != nil {
+			return nil, err
+		}
+	}
+	if strings.EqualFold(name, NameQuantileExactWeighted) {
+		if err = validateQuantileExactWeightedArgs(ctx, name, args); err != nil {
 			return nil, err
 		}
 	}

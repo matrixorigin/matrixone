@@ -165,7 +165,8 @@ const (
 	MORPCVersion127    int64 = 127 // IndexSearchScan internal_topk / max_internal_topk search knobs
 	MORPCVersion128    int64 = 128 // category-preserving mixed JSON/numeric comparisons
 	MORPCVersion129    int64 = 129 // selected JSON ELT and opaque text expression execution
-	MORPCLatestVersion       = MORPCVersion129
+	MORPCVersion130    int64 = 130 // exact weighted percentile aggregate remote dispatch
+	MORPCLatestVersion       = MORPCVersion130
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

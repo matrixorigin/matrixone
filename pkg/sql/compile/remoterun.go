@@ -165,6 +165,14 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if requiredProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion129)
 	}
+	// Decision D10 of the exact weighted percentile design: the encoded
+	// aggregate travels by encoded ID, so every destination receiving this
+	// pipeline must advertise the aggregate's dispatch capability version;
+	// the destination confirms the raised floor on the live stream before the
+	// pipeline is delivered.
+	if requiredProtocol != nil && pipelineContainsQuantileExactWeighted(p) {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion130)
+	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
@@ -2083,6 +2091,16 @@ func validateRemoteAggregateProtocol(
 				"approx_percentile remote execution requires MORPC protocol version 76",
 			)
 		}
+		// The service-local self-gate gives the coherent coordinator-side
+		// message; destination verification for this aggregate is layered at
+		// compile time (AllCNsSupportProtocol), on the requiredProtocol floor
+		// above, and on the pre-dispatch stream confirmation.
+		if agg.GetAggID() == aggexec.AggIdOfQuantileExactWeighted &&
+			(proc == nil || !supportsRemoteQuantileExactWeighted(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"quantileExactWeighted remote execution requires MORPC protocol version 130",
+			)
+		}
 		if (agg.GetAggID() == aggexec.AggIdOfApproxCount ||
 			agg.GetAggID() == aggexec.AggIdOfApproxCountDistinct ||
 			agg.GetAggID() == aggexec.AggIdOfHllAdd ||
@@ -2223,6 +2241,33 @@ func isVarianceAggregate(agg aggexec.AggFuncExecExpression) bool {
 	case aggexec.AggIdOfVarPop, aggexec.AggIdOfVarSample,
 		aggexec.AggIdOfStdDevPop, aggexec.AggIdOfStdDevSample:
 		return true
+	}
+	return false
+}
+
+// pipelineContainsQuantileExactWeighted reports whether an encoded remote
+// pipeline carries the exact weighted percentile aggregate in any group or
+// merge-group stage, so encodeRemoteScopeWithProtocol can raise the
+// destination capability floor before the pipeline is delivered.
+func pipelineContainsQuantileExactWeighted(p *pipeline.Pipeline) bool {
+	if p == nil {
+		return false
+	}
+	for _, in := range p.InstructionList {
+		if in == nil || (in.Op != int32(vm.Group) && in.Op != int32(vm.MergeGroup)) ||
+			in.Agg == nil {
+			continue
+		}
+		for _, wire := range in.Agg.Aggs {
+			if wire != nil && wire.Op == aggexec.AggIdOfQuantileExactWeighted {
+				return true
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if pipelineContainsQuantileExactWeighted(child) {
+			return true
+		}
 	}
 	return false
 }

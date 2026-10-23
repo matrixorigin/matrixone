@@ -4979,7 +4979,18 @@ func PreparedPlanHasPercentileParams(preparePlan *Plan) bool {
 			}
 			seen[expr] = struct{}{}
 			fn := expr.GetF()
-			if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+			if fn == nil || fn.Func == nil {
+				return nil
+			}
+			if strings.EqualFold(fn.Func.ObjName, NameQuantileExactWeighted) {
+				// quantileExactWeighted keeps [value, weight, level]; only
+				// the level is value-bound configuration.
+				if len(fn.Args) == 3 {
+					found = preparedExprContainsParam(fn.Args[2])
+				}
+				return nil
+			}
+			if len(fn.Args) != 2 {
 				return nil
 			}
 			switch strings.ToLower(fn.Func.ObjName) {
