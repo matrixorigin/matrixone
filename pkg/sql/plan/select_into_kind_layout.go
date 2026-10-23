@@ -16,8 +16,8 @@ package plan
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -53,23 +53,23 @@ func ValidateSelectIntoKindLayout(query *planpb.Query) error {
 		return nil
 	}
 	if query.StmtType != planpb.Query_SELECT || query.HasReturning {
-		return fmt.Errorf("SELECT INTO kind layout is only valid for a top-level SELECT")
+		return moerr.NewInternalErrorNoCtx("SELECT INTO kind layout is only valid for a top-level SELECT")
 	}
 	visible := len(query.Headings)
 	if visible == 0 || len(query.IntoUserVariableKindColumns) != visible {
-		return fmt.Errorf("SELECT INTO kind layout has %d entries for %d visible columns", len(query.IntoUserVariableKindColumns), visible)
+		return moerr.NewInternalErrorNoCtxf("SELECT INTO kind layout has %d entries for %d visible columns", len(query.IntoUserVariableKindColumns), visible)
 	}
 	step := query.MainOutputStep()
 	if step < 0 || int(step) >= len(query.Steps) {
-		return fmt.Errorf("SELECT INTO kind layout has no main output step")
+		return moerr.NewInternalErrorNoCtx("SELECT INTO kind layout has no main output step")
 	}
 	nodeID := query.Steps[step]
 	if nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
-		return fmt.Errorf("SELECT INTO kind layout has an invalid output node")
+		return moerr.NewInternalErrorNoCtx("SELECT INTO kind layout has an invalid output node")
 	}
 	projectList := query.Nodes[nodeID].ProjectList
 	if visible > len(projectList) {
-		return fmt.Errorf("SELECT INTO kind layout has %d visible columns but %d physical columns", visible, len(projectList))
+		return moerr.NewInternalErrorNoCtxf("SELECT INTO kind layout has %d visible columns but %d physical columns", visible, len(projectList))
 	}
 	used := make([]bool, len(projectList))
 	for visibleColumn, physicalColumn := range query.IntoUserVariableKindColumns {
@@ -77,17 +77,17 @@ func ValidateSelectIntoKindLayout(query *planpb.Query) error {
 			continue
 		}
 		if physicalColumn < int32(visible) || int(physicalColumn) >= len(projectList) {
-			return fmt.Errorf("SELECT INTO kind layout column %d references invalid passenger %d", visibleColumn, physicalColumn)
+			return moerr.NewInternalErrorNoCtxf("SELECT INTO kind layout column %d references invalid passenger %d", visibleColumn, physicalColumn)
 		}
 		passenger := projectList[physicalColumn]
 		if passenger == nil || passenger.Typ.Id != int32(types.T_bool) {
-			return fmt.Errorf("SELECT INTO kind layout column %d references a non-BOOL passenger %d", visibleColumn, physicalColumn)
+			return moerr.NewInternalErrorNoCtxf("SELECT INTO kind layout column %d references a non-BOOL passenger %d", visibleColumn, physicalColumn)
 		}
 		used[physicalColumn] = true
 	}
 	for physicalColumn := visible; physicalColumn < len(projectList); physicalColumn++ {
 		if !used[physicalColumn] {
-			return fmt.Errorf("SELECT INTO kind layout leaves physical passenger %d unaccounted", physicalColumn)
+			return moerr.NewInternalErrorNoCtxf("SELECT INTO kind layout leaves physical passenger %d unaccounted", physicalColumn)
 		}
 	}
 	return nil

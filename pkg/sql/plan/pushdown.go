@@ -20,6 +20,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -415,7 +416,7 @@ func numericProgramSourceTypes(ctx context.Context, roots []*Expr) (map[int64]*p
 	for scope, definition := range group.definitions {
 		fn := definition.GetF()
 		if fn == nil || len(fn.Args) < 2 || fn.Args[1] == nil {
-			return nil, fmt.Errorf("numeric value program %d has no typed source", scope)
+			return nil, moerr.NewInternalErrorNoCtxf("numeric value program %d has no typed source", scope)
 		}
 		result[scope] = proto.Clone(&fn.Args[1].Typ).(*plan.Type)
 	}
@@ -461,20 +462,20 @@ func reconcileNumericProgramBranchTypes(
 		}
 		scope, slot, ok := numericProgramRefIdentity(expr)
 		if !ok || slot != 0 || fn.Args[0] == nil || fn.Args[0].GetF() == nil || len(fn.Args[0].GetF().Args) != 2 && len(fn.Args[0].GetF().Args) != 3 {
-			return fmt.Errorf("invalid numeric value program reference")
+			return moerr.NewInternalErrorNoCtx("invalid numeric value program reference")
 		}
 		definition := fn.Args[0].GetF()
 		if definition.Args[1] == nil {
-			return fmt.Errorf("untyped numeric value program source")
+			return moerr.NewInternalErrorNoCtx("untyped numeric value program source")
 		}
 		previous := previousTypes[scope]
 		sourceType := &definition.Args[1].Typ
 		if previous == nil || !numericProgramTypeOnlyRefinesNullability(previous, sourceType) ||
 			!numericProgramTypeOnlyRefinesNullability(previous, &expr.Typ) {
-			return fmt.Errorf("numeric value program type changed beyond nullability")
+			return moerr.NewInternalErrorNoCtx("numeric value program type changed beyond nullability")
 		}
 		if old, exists := resultTypes[scope]; exists && !proto.Equal(old, sourceType) {
-			return fmt.Errorf("numeric value program aliases disagree on branch source type")
+			return moerr.NewInternalErrorNoCtx("numeric value program aliases disagree on branch source type")
 		}
 		resultTypes[scope] = proto.Clone(sourceType).(*plan.Type)
 		expr.Typ = *proto.Clone(sourceType).(*plan.Type)
