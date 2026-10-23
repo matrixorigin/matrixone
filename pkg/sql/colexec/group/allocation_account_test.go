@@ -3360,3 +3360,86 @@ func TestAccountedGroupAndMergeGroupAcceptOrderedGroupConcat(t *testing.T) {
 	merge.Free(proc, false, nil)
 	finalizeGroupTestAllocation(t, merge, allocation)
 }
+
+// Hard capacity can spill a streaming partial before its soft flush boundary.
+// Its downstream consumer must receive every key and aggregate contribution.
+func TestStreamingGroupDrainsCapacitySpill(t *testing.T) {
+	for _, withAggregate := range []bool{false, true} {
+		t.Run(strconv.FormatBool(withAggregate), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			generation := installGroupTestResourceBudget(t, proc)
+			inputs := make([]*batch.Batch, 2)
+			for pass := range inputs {
+				input := batch.NewWithSize(1)
+				input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+				for row := range 512 {
+					key := strings.Repeat("shared prefix ", 6) + strconv.Itoa(row+pass*256)
+					require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(key), false, proc.Mp()))
+				}
+				input.SetRowCount(512)
+				inputs[pass] = input
+				defer input.Clean(proc.Mp())
+			}
+			var aggs []aggexec.AggFuncExecExpression
+			if withAggregate {
+				aggs = []aggexec.AggFuncExecExpression{countStarAgg()}
+			}
+			partial := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_varchar)}, aggs)
+			partial.NeedEval = false
+			registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
+			require.NoError(t, err)
+			controller := &rejectNextGroupAllocationController{}
+			account, err := registry.OpenWithController(64<<20, controller)
+			require.NoError(t, err)
+			require.NoError(t, partial.ctr.setAllocationAccount(account))
+			allocation := groupTestAllocation{generation: generation, registry: registry, account: account}
+			partial.AppendChild(colexec.NewMockOperator().WithBatchs(inputs).WithBatchCallback(func(index int) {
+				if index == 1 {
+					controller.arm()
+				}
+			}))
+			merge := newMergeGroupOp(aggs)
+			merge.AppendChild(partial)
+			defer func() {
+				merge.Free(proc, false, nil)
+				partial.Free(proc, false, nil)
+				require.Zero(t, account.Snapshot().Used)
+				require.Zero(t, generation.Snapshot().SpillDiskUsed)
+				require.Zero(t, generation.Snapshot().SpillFDUsed)
+				finalizeGroupTestAllocation(t, partial, allocation)
+			}()
+			require.NoError(t, partial.Prepare(proc))
+			require.NoError(t, merge.Prepare(proc))
+			got := make(map[string]int64)
+			for {
+				result, execErr := vm.Exec(merge, proc)
+				require.NoError(t, execErr)
+				if result.Batch == nil {
+					break
+				}
+				for row := range result.Batch.RowCount() {
+					key := string(result.Batch.Vecs[0].GetBytesAt(row))
+					count := int64(1)
+					if withAggregate {
+						count = vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[1], row)
+					}
+					got[key] += count
+				}
+			}
+			_, rejected := controller.snapshot()
+			require.True(t, rejected)
+			require.Positive(t, partial.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
+			require.Positive(t, partial.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadBuckets"])
+			require.Len(t, got, 768)
+			for row := range 768 {
+				want := int64(1)
+				if withAggregate && row >= 256 && row < 512 {
+					want = 2
+				}
+				key := strings.Repeat("shared prefix ", 6) + strconv.Itoa(row)
+				require.Equal(t, want, got[key], "key %d", row)
+			}
+		})
+	}
+}

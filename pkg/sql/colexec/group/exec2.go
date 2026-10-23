@@ -1297,15 +1297,26 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 				group.ctr.state = vm.End
 				return vm.CancelResult, nil
 			}
+		} else if group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) &&
+			group.ctr.spillBkts != nil && group.ctr.spillBkts.Len() != 0 {
+			// Hard-capacity recovery can spill even a streaming partial. Retire
+			// the previously returned batch before loading its next bucket, just
+			// as final output does; every partial must reach the merge consumer.
+			if _, err := group.ctr.loadSpilledData(proc, group.OpAnalyzer, group.Aggs); err != nil {
+				return vm.CancelResult, err
+			}
 		}
-		// no need to eval, we are in streaming mode.  spill never happen
-		// here.
+		// Publish intermediate aggregate state rather than final values.
 		res, hasMore, err := group.getNextIntermediateResult(proc)
 		if err != nil {
 			return vm.CancelResult, err
 		}
 		if !hasMore {
-			if group.ctr.inputDone {
+			if group.ctr.spillBkts != nil && group.ctr.spillBkts.Len() != 0 {
+				// Keep Eval until all generic spill buckets have been returned.
+				// Resetting or ending here would discard every remaining bucket.
+				group.ctr.state = vm.Eval
+			} else if group.ctr.inputDone {
 				if group.ctr.distinctSpill != nil {
 					// Keep Eval so the next Call can safely retire this returned
 					// batch before loading another exact-key leaf.
