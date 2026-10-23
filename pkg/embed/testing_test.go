@@ -364,6 +364,8 @@ func TestSharedTestClusterFailureCleanupCannotCloseReplacement(t *testing.T) {
 	oldCleanup := firstReporter.cleanups[0]
 	require.NoError(t, state.CloseIfActive(), "an outer defer must not close before callback cleanup")
 	require.Same(t, first, state.cluster)
+	require.ErrorContains(t, state.closeIfActive(false), "callback cleanup is still pending")
+	require.Same(t, first, state.cluster)
 	for index := len(firstReporter.cleanups) - 1; index >= 0; index-- {
 		firstReporter.cleanups[index]()
 	}
@@ -815,6 +817,20 @@ func TestSharedTestClusterCloseIfActiveLeavesUnusedFixtureReusable(t *testing.T)
 	require.NoError(t, state.CloseIfActive())
 }
 
+func TestSharedTestClusterTopologySwitchRejectsActiveCallback(t *testing.T) {
+	state := SharedTestCluster{}
+	fixture := &cluster{}
+	t.Cleanup(func() { require.NoError(t, state.CloseIfActive()) })
+	state.Run(panicTestReporter{}, func() (Cluster, error) {
+		return fixture, nil
+	}, func(Cluster) {
+		require.ErrorContains(t, state.closeIfActive(false), "callback is still active")
+		require.Same(t, fixture, state.cluster)
+	})
+	require.NoError(t, state.closeIfActive(false))
+	require.Nil(t, state.cluster)
+}
+
 func TestSharedTestClusterDisposableGeneration(t *testing.T) {
 	for _, outcome := range []string{"success", "canceled", "partial-setup-goexit"} {
 		t.Run(outcome, func(t *testing.T) {
@@ -898,7 +914,7 @@ func TestSharedTestClusterCloseIfActiveBlocksReuseAfterFailure(t *testing.T) {
 	state.Run(panicTestReporter{}, func() (Cluster, error) {
 		return value, nil
 	}, func(Cluster) {})
-	require.ErrorIs(t, state.CloseIfActive(), closeErr)
+	require.ErrorIs(t, state.closeIfActive(false), closeErr)
 	require.True(t, state.closed)
 	require.Same(t, value, state.cluster)
 	require.PanicsWithValue(t, "shared cluster is closed", func() {

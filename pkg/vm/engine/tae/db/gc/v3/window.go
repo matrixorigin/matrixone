@@ -114,6 +114,10 @@ type GCWindow struct {
 	mp  *mpool.MPool
 	fs  fileservice.FileService
 
+	// Zero preserves Sinker's default staging budget. Small fixtures can
+	// exercise a real spill without constructing a production-sized batch.
+	sinkerMemorySizeThreshold int
+
 	retainUnpublished     func(context.Context, []string) error
 	prepareUnpublished    func(context.Context, ioutil.UnpublishedObject) (string, error)
 	finishUnpublished     func(context.Context, string, string) error
@@ -465,6 +469,7 @@ func (w *GCWindow) getSinker(
 		w.mp,
 		w.fs,
 		ioutil.WithTailSizeCap(tailSize),
+		ioutil.WithMemorySizeThreshold(w.sinkerMemorySizeThreshold),
 		ioutil.WithBuffer(buffer, false),
 		ioutil.WithBeforePersist(w.prepareObject),
 	)
