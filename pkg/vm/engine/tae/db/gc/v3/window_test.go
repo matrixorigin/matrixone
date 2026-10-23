@@ -286,6 +286,8 @@ func TestGCWindowScanCheckpointsDeletesSpilledObjectsOnReaderError(t *testing.T)
 	defer mpool.DeleteMPool(mp)
 
 	window := NewGCWindow(mp, fs, WithWindowDir(t.TempDir()))
+	// Two rows exercise sorting and a real spill before the next checkpoint fails.
+	window.sinkerMemorySizeThreshold = 1
 	buffer := containers.NewOneSchemaBatchBuffer(32*mpool.MB, ObjectTableAttrs, ObjectTableTypes, false)
 	defer buffer.Close(mp)
 	entries := []*checkpoint.CheckpointEntry{
@@ -302,7 +304,7 @@ func TestGCWindowScanCheckpointsDeletesSpilledObjectsOnReaderError(t *testing.T)
 				readerCalls++
 				if readerCalls == 1 {
 					reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, objectio.Location{}, mp, nil)
-					injectCKPDataReader(reader, &spillingCKPDataReader{rows: 300000})
+					injectCKPDataReader(reader, &spillingCKPDataReader{rows: 2})
 					return reader, nil
 				}
 				reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, objectio.Location{}, mp, nil)
@@ -343,7 +345,9 @@ func TestGCWindowScanCheckpointsRollsBackPersistedMetadataOnWriteError(t *testin
 		[]*checkpoint.CheckpointEntry{entry},
 		func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader, error) {
 			reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, objectio.Location{}, mp, nil)
-			injectCKPDataReader(reader, &spillingCKPDataReader{rows: 300000})
+			// Sync persists this row before metadata publication; an early
+			// spill is unnecessary for a metadata-write failure.
+			injectCKPDataReader(reader, &spillingCKPDataReader{rows: 1})
 			return reader, nil
 		},
 		nil,
@@ -391,7 +395,9 @@ func TestGCWindowRetainsMetadataWithItsDependencies(t *testing.T) {
 		func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader, error) {
 			reader := logtail.NewCKPReader(
 				logtail.CheckpointCurrentVersion, objectio.Location{}, mp, nil)
-			injectCKPDataReader(reader, &spillingCKPDataReader{rows: 300000})
+			// Sync persists this row before metadata publication; an early
+			// spill is unnecessary for a metadata-write failure.
+			injectCKPDataReader(reader, &spillingCKPDataReader{rows: 1})
 			return reader, nil
 		},
 		nil,
@@ -423,6 +429,8 @@ func TestGCWindowScanCheckpointsTransfersCleanupOnDeleteError(t *testing.T) {
 			return nil
 		}),
 	)
+	// Two rows exercise sorting and a real spill before the next checkpoint fails.
+	window.sinkerMemorySizeThreshold = 1
 	buffer := containers.NewOneSchemaBatchBuffer(32*mpool.MB, ObjectTableAttrs, ObjectTableTypes, false)
 	defer buffer.Close(mp)
 	entries := []*checkpoint.CheckpointEntry{
@@ -437,7 +445,7 @@ func TestGCWindowScanCheckpointsTransfersCleanupOnDeleteError(t *testing.T) {
 			readerCalls++
 			reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, objectio.Location{}, mp, nil)
 			if readerCalls == 1 {
-				injectCKPDataReader(reader, &spillingCKPDataReader{rows: 300000})
+				injectCKPDataReader(reader, &spillingCKPDataReader{rows: 2})
 			} else {
 				injectFailingCKPDataReader(reader)
 			}
