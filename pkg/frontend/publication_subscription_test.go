@@ -2196,6 +2196,57 @@ func Test_doShowPublicationCoverage(t *testing.T) {
 			wantTables: []string{"t9"},
 		},
 		{
+			name:       "two accessible same-named publications report ambiguity",
+			tenantName: "acc2", tenantID: 2, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 1, accountName: "acc1", dbName: "db1", tables: "t1,t2", subs: "acc2"},
+				{accountID: 3, accountName: "acc3", dbName: "db3", tables: "t9", subs: "acc2"},
+			},
+			wantErr: "publication name 'pub1' is ambiguous: 2 publications with this name " +
+				"owned by accounts 'acc1', 'acc3' are accessible to account 'acc2'",
+		},
+		{
+			name:       "ambiguity does not depend on catalog row order",
+			tenantName: "acc2", tenantID: 2, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 3, accountName: "acc3", dbName: "db3", tables: "t9", subs: "acc2"},
+				{accountID: 1, accountName: "acc1", dbName: "db1", tables: "t1,t2", subs: "acc2"},
+			},
+			wantErr: "publication name 'pub1' is ambiguous: 2 publications with this name " +
+				"owned by accounts 'acc1', 'acc3' are accessible to account 'acc2'",
+		},
+		{
+			name:       "sys reports ambiguity between publications it does not own",
+			tenantName: sysAccountName, tenantID: sysAccountID, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 1, accountName: "acc1", dbName: "db1", tables: "t1,t2", subs: "acc2"},
+				{accountID: 3, accountName: "acc3", dbName: "db3", tables: "t9", subs: "acc3"},
+			},
+			wantErr: "publication name 'pub1' is ambiguous: 2 publications with this name " +
+				"owned by accounts 'acc1', 'acc3' are accessible to account 'sys'",
+		},
+		{
+			name:       "own publication wins over several accessible ones",
+			tenantName: "acc1", tenantID: 1, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 2, accountName: "acc2", dbName: pubsub.TableAll, tables: pubsub.TableAll, subs: pubsub.AccountAll},
+				{accountID: 3, accountName: "acc3", dbName: pubsub.TableAll, tables: pubsub.TableAll, subs: pubsub.AccountAll},
+				pubOwnedByAcc1,
+			},
+			wantDbs:    []string{"db1", "db1"},
+			wantTables: []string{"t1", "t2"},
+		},
+		{
+			name:       "ambiguity without account_name column reports owner ids",
+			tenantName: "acc2", tenantID: 2, newSchema: false,
+			pubs: []pubRow{
+				{accountID: 1, dbName: "db1", tables: "t1,t2", subs: "acc2"},
+				{accountID: 3, dbName: "db3", tables: "t9", subs: "acc2"},
+			},
+			wantErr: "publication name 'pub1' is ambiguous: 2 publications with this name " +
+				"owned by accounts account_id 1, account_id 3 are accessible to account 'acc2'",
+		},
+		{
 			name:       "missing publication reports not exist",
 			tenantName: "acc1", tenantID: 1, newSchema: true,
 			pubs:    nil,

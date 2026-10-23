@@ -2336,6 +2336,25 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 	return trySaveQueryResult(ctx, ses, rs)
 }
 
+// newAmbiguousPublicationCoverageError reports that a bare publication name
+// matches several publications accessible to the caller, so SHOW PUBLICATION
+// COVERAGE cannot resolve it deterministically. The owner list is sorted to
+// keep the message independent of catalog row order.
+func newAmbiguousPublicationCoverageError(ctx context.Context, pubName, accountName string, accessible []*pubsub.PubInfo) error {
+	owners := make([]string, 0, len(accessible))
+	for _, candidate := range accessible {
+		if candidate.PubAccountName != "" {
+			owners = append(owners, fmt.Sprintf("'%s'", candidate.PubAccountName))
+		} else {
+			owners = append(owners, fmt.Sprintf("account_id %d", candidate.PubAccountId))
+		}
+	}
+	slices.Sort(owners)
+	return moerr.NewInternalErrorf(ctx,
+		"publication name '%s' is ambiguous: %d publications with this name owned by accounts %s are accessible to account '%s'",
+		pubName, len(accessible), strings.Join(owners, ", "), accountName)
+}
+
 func doShowPublicationCoverage(ctx context.Context, ses *Session, spc *tree.ShowPublicationCoverage) (err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -2360,22 +2379,34 @@ func doShowPublicationCoverage(ctx context.Context, ses *Session, spc *tree.Show
 
 	// Resolve which same-named publication the statement refers to and
 	// authorize the access in one pass. The publication's owning account wins
-	// over subscriber access; the sys account may inspect every publication's
-	// coverage; any other account must be in the subscriber list, and an
-	// identically named publication it cannot access must not shadow one it
-	// can.
+	// over subscriber access: the mo_pubs primary key (account_id, pub_name)
+	// makes that match unique. Otherwise every candidate the caller may access
+	// is collected: any publication for the sys account, otherwise the ones
+	// whose subscriber list contains the caller. Exactly one accessible
+	// candidate resolves the reference; several make the name ambiguous because
+	// the statement cannot qualify the owning account, so a deterministic
+	// result is impossible; none rejects the caller, and an identically named
+	// publication it cannot access must not shadow one it can.
 	var pubInfo *pubsub.PubInfo
+	var accessible []*pubsub.PubInfo
 	for _, candidate := range pubInfos {
 		if candidate.PubAccountId == tenantInfo.TenantID {
 			pubInfo = candidate
 			break
 		}
-		if pubInfo == nil && candidate.InSubAccounts(accountName) {
-			pubInfo = candidate
+		if tenantInfo.TenantID == catalog.System_Account || candidate.InSubAccounts(accountName) {
+			accessible = append(accessible, candidate)
 		}
 	}
-	if pubInfo == nil && tenantInfo.TenantID == catalog.System_Account {
-		pubInfo = pubInfos[0]
+	if pubInfo == nil {
+		switch len(accessible) {
+		case 1:
+			pubInfo = accessible[0]
+		case 0:
+			// pubInfo stays nil; the caller is rejected below.
+		default:
+			return newAmbiguousPublicationCoverageError(ctx, spc.Name, accountName, accessible)
+		}
 	}
 	if pubInfo == nil {
 		return moerr.NewInternalErrorf(ctx, "account '%s' is not allowed to access publication '%s'", accountName, spc.Name)

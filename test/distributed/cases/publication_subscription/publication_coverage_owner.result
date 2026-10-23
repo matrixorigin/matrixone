@@ -48,6 +48,14 @@ show publication coverage cov_pub;
 ➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
 cov_db2  ¦  *  𝄀
 cov_db2  ¦  shadow
+create publication amb_pub database cov_db account cov_stranger;
+create publication amb_pub database cov_db2 account cov_stranger;
+show publication coverage amb_pub;
+internal error: publication name 'amb_pub' is ambiguous: 2 publications with this name owned by accounts 'cov_owner', 'cov_reader' are accessible to account 'cov_stranger'
+show publication coverage amb_pub;
+internal error: publication name 'amb_pub' is ambiguous: 2 publications with this name owned by accounts 'cov_owner', 'cov_reader' are accessible to account 'sys'
+drop publication amb_pub;
+drop publication amb_pub;
 drop publication cov_pub;
 drop publication cov_pub_t1;
 drop database cov_db;

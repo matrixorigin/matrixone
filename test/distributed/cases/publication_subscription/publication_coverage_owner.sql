@@ -50,6 +50,25 @@ show publication coverage cov_pub;
 show publication coverage cov_pub;
 -- @session
 
+-- A caller subscribed to two same-named publications must get a clear
+-- ambiguity error instead of an arbitrary coverage result.
+-- @session:id=1&user=cov_owner:admin&password=111
+create publication amb_pub database cov_db account cov_stranger;
+-- @session:id=2&user=cov_reader:admin&password=111
+create publication amb_pub database cov_db2 account cov_stranger;
+-- @session:id=3&user=cov_stranger:admin&password=111
+-- cov_stranger can access both cov_owner's and cov_reader's amb_pub, so the
+-- bare name cannot be resolved deterministically.
+show publication coverage amb_pub;
+-- @session
+-- sys owns neither amb_pub, so the name stays ambiguous for it too.
+show publication coverage amb_pub;
+-- @session:id=1&user=cov_owner:admin&password=111
+drop publication amb_pub;
+-- @session:id=2&user=cov_reader:admin&password=111
+drop publication amb_pub;
+-- @session
+
 -- @session:id=1&user=cov_owner:admin&password=111
 drop publication cov_pub;
 drop publication cov_pub_t1;
