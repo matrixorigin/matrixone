@@ -1567,6 +1567,12 @@ func (l *lockTableAllocator) handleGetBind(
 	cs morpc.ClientSession) {
 	resp.GetBind.AllocatorID = l.allocatorID
 	resp.GetBind.AllocatorVersion = l.version
+	if req.GetBind.LookupOnly {
+		resp.GetBind.LookupOnly = true
+		resp.GetBind.LockTable = l.lookupBind(req.GetBind)
+		writeResponse(l.logger, cancel, resp, nil, cs)
+		return
+	}
 	if !l.canGetBind(req.GetBind.ServiceID) {
 		writeResponse(l.logger, cancel, resp, moerr.NewNewTxnInCNRollingRestart(), cs)
 		return
@@ -1587,6 +1593,22 @@ func (l *lockTableAllocator) handleGetBind(
 		return
 	}
 	writeResponse(l.logger, cancel, resp, nil, cs)
+}
+
+// lookupBind deliberately bypasses service registration, admission and
+// keepalive. Cleanup must not assign a new owner after the old one retired.
+func (l *lockTableAllocator) lookupBind(req pb.GetBindRequest) pb.LockTable {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if bind := l.mu.lockTables[req.Group][req.Table]; bind.Valid {
+		return bind
+	}
+	// Do not return the retired owner's identity/version: Changed compares
+	// those fields, rather than Valid, when deciding old-generation cleanup.
+	return pb.LockTable{
+		Group: req.Group, Table: req.Table, OriginTable: req.OriginTable,
+		Sharding: req.Sharding, AllocatorID: l.allocatorID,
+	}
 }
 
 func (l *lockTableAllocator) handleKeepLockTableBind(
