@@ -32,6 +32,7 @@ func (b *observedBuildBudget) Acquire(n int64) (int64, bool) {
 	return b.held, true
 }
 func (b *observedBuildBudget) Release(n int64) int64 { b.held -= n; return b.held }
+func (b *observedBuildBudget) Available() int64      { return 0 }
 
 func TestBuildReservesBeforeCopyAndHashAllocation(t *testing.T) {
 	for _, deny := range []int{1, 2, 0} {

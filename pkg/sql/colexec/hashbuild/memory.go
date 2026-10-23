@@ -65,21 +65,24 @@ func (ctr *container) reconcileBatches() {
 	}
 }
 
-func (hashBuild *HashBuild) shouldSpillBeforeCopy(bat *batch.Batch, growth int64) bool {
+func (hashBuild *HashBuild) shouldSpillBeforeCopy(bat *batch.Batch, growth int64) (bool, string) {
 	if !hashBuild.ctr.spillAllowed || !hashBuild.NeedHashMap {
-		return false
+		return false, ""
 	}
 	ctr := &hashBuild.ctr
 	if ctr.spillThreshold > 0 {
 		if ctr.spillThreshold <= 100000 {
 			if int64(ctr.hashmapBuilder.Batches.RowCount()+bat.RowCount()) >= ctr.spillThreshold {
-				return true
+				return true, "row-threshold"
 			}
 		} else if growth > ctr.spillThreshold-ctr.hashmapBuilder.Batches.RetainedBytes() {
-			return true
+			return true, "byte-threshold"
 		}
 	}
-	return !ctr.acquireMemory(growth)
+	if !ctr.acquireMemory(growth) {
+		return true, "reservation-denied"
+	}
+	return false, ""
 }
 
 // BuildMemoryBound obtains encoded-key bounds from actual column values. An
