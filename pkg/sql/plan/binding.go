@@ -37,7 +37,6 @@ func NewBinding(tag, nodeID int32, db, table string, tableID uint64, cols []stri
 		originCols:     cols,
 		colIsHidden:    colIsHidden,
 		types:          types,
-		refCnts:        make([]uint, len(cols)),
 		isClusterTable: isClusterTable,
 		defaults:       defaultVals,
 	}

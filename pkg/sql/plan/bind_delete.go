@@ -329,7 +329,7 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 			colPos[strings.ToLower(col.Name)] = pos
 		}
 		lastNodeID = builder.materializeReturningSource(
-			bindCtx, lastNodeID, selectNodeTag, tableDef, dmlCtx.objRefs[0], tableDef.Name, alias, colPos,
+			bindCtx, lastNodeID, selectNodeTag, tableDef, tableDef.Name, alias, colPos,
 		)
 		if len(returningIrregularIndexes) > 0 {
 			pkPos, ok := colPos[strings.ToLower(tableDef.Pkey.PkeyColName)]

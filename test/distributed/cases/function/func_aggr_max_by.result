@@ -52,4 +52,23 @@ order by pump, _wstart;
 p1  ¦  2026-01-01 10:00:00  ¦  null  ¦  first  𝄀
 p1  ¦  2026-01-01 10:01:00  ¦  null  ¦  null  𝄀
 p1  ¦  2026-01-01 10:02:00  ¦  last  ¦  last
+create table json_keys(v varchar(32), j json, k bigint);
+insert into json_keys values ('one', '1', 1), ('two_fifty_six', '256', 256);
+select max_by(v, j, cast(0 as signed)) from json_keys;
+invalid argument aggregate function max_by, bad value [VARCHAR JSON BIGINT]
+select max_by(v, cast(0 as signed), j) from json_keys;
+invalid argument aggregate function max_by, bad value [VARCHAR BIGINT JSON]
+select max_by_non_null(v, j, cast(0 as signed)) from json_keys;
+invalid argument aggregate function max_by_non_null, bad value [VARCHAR JSON BIGINT]
+select max_by_non_null(v, cast(0 as signed), j) from json_keys;
+invalid argument aggregate function max_by_non_null, bad value [VARCHAR BIGINT JSON]
+select max_by(v, k, cast(0 as signed)) as winner, max_by_non_null(v, k, cast(0 as signed)) as non_null_winner from json_keys;
+➤ winner[12,-1,0]  ¦  non_null_winner[12,-1,0]  𝄀
+two_fifty_six  ¦  two_fifty_six
+select json_type(max_by(j, k, cast(0 as signed))) = json_type(cast('256' as json)) as json_return_type, max_by(j, k, cast(0 as signed)) = cast('256' as json) as json_return_value, max_by_non_null(j, k, cast(0 as signed)) = cast('256' as json) as non_null_json_value from json_keys;
+➤ json_return_type[-7,1,0]  ¦  json_return_value[-7,1,0]  ¦  non_null_json_value[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+select min(j) = cast('1' as json) as json_min, max(j) = cast('256' as json) as json_max from json_keys;
+➤ json_min[-7,1,0]  ¦  json_max[-7,1,0]  𝄀
+1  ¦  1
 drop database max_by_bvt;

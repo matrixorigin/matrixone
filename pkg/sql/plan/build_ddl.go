@@ -1555,6 +1555,18 @@ func viewJoinCondWithExpandedStars(
 	return &stableCond, rewritten
 }
 
+// CTAS writes the temporal fractional precision into both plan fields used
+// by schema metadata. Expression types may carry the precision only in Scale.
+func ctasTemporalSchemaType(typ plan.Type) plan.Type {
+	switch types.T(typ.Id) {
+	case types.T_time, types.T_datetime, types.T_timestamp:
+		if typ.Scale >= 0 && typ.Scale <= MaxFsp {
+			typ.Width = typ.Scale
+		}
+	}
+	return typ
+}
+
 // RefreshPreparedCTASInferredColumns aligns columns inferred from AS SELECT
 // with the execute-time query. Explicit column definitions remain the user's
 // schema contract even when a parameter changes the source domain.
@@ -1623,7 +1635,7 @@ func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, 
 			return moerr.NewNotSupportedf(ctx,
 				"prepared CTAS inferred column %q has a type-dependent default", target.Name)
 		}
-		target.Typ = source.Typ
+		target.Typ = ctasTemporalSchemaType(source.Typ)
 	}
 	return nil
 }
@@ -1678,7 +1690,7 @@ func genAsSelectCols(
 				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
-		typ = decimalDivSchemaType(typ, provenance)
+		typ = ctasTemporalSchemaType(decimalDivSchemaType(typ, provenance))
 		// CTAS creates a new table from the query result.  A source column's
 		// AUTO_INCREMENT attribute is not part of that result schema and must
 		// not be copied to the new table.
@@ -3154,7 +3166,7 @@ func buildCreateTable(
 	} else if stmt.Param != nil {
 		for i := 0; i < len(stmt.Param.Option); i += 2 {
 			switch strings.ToLower(stmt.Param.Option[i]) {
-			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns", "arrow_container", ExternalWriteFilePatternKey, CSVCommentKey:
+			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression", "format", "jsondata", "provider", "role_arn", "external_id", "hive_partitioning", "hive_partition_columns", "arrow_container", JSONBinaryOptionKey, ExternalWriteFilePatternKey, CSVCommentKey:
 			default:
 				return nil, moerr.NewBadConfigf(ctx.GetContext(), "the keyword '%s' is not support", strings.ToLower(stmt.Param.Option[i]))
 			}
@@ -3164,6 +3176,9 @@ func buildCreateTable(
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "Arrow format is supported only by LOAD DATA")
 		}
 
+		if err := initJSONBinaryOption(stmt.Param); err != nil {
+			return nil, err
+		}
 		if err := validateWriteFilePattern(ctx.GetContext(), stmt.Param, createTable.TableDef); err != nil {
 			return nil, err
 		}
@@ -7028,6 +7043,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	droppedIndexNames := make(map[string]bool)
 	droppedForeignKeyNames := make(map[string]bool)
 	for i, option := range stmt.Options {
+		if isIgnoredStorageTableOption(option) {
+			continue
+		}
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
 			alterTableDrop := new(plan.AlterTableDrop)
