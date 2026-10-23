@@ -125,16 +125,21 @@ func TestNewReaderValidatesItsInput(t *testing.T) {
 	_, err = Hooks{}.NewReader(proc, &plan.IndexSearchScan{AlgoOptions: []byte("{")}, searchplugin.Request{})
 	require.ErrorContains(t, err, "invalid fulltext2 scan options")
 
-	r, err := Hooks{}.NewReader(proc, scanSpec(t, ft2plan.ScanOptions{Config: "{}"}), searchplugin.Request{ResultLimit: 7})
-	require.NoError(t, err)
-	u := r.(*reader)
-	require.Equal(t, uint64(7), u.limit)
-	require.Equal(t, uint64(7), u.plannedLimit)
-	require.NoError(t, r.Close())
-	require.NoError(t, r.Close())
-	end, err := r.Read(context.Background(), nil, nil, nil, nil)
-	require.NoError(t, err)
-	require.True(t, end, "a closed reader is at its end")
+	for _, limit := range []uint64{0, 7} {
+		func() {
+			r, err := Hooks{}.NewReader(proc, scanSpec(t, ft2plan.ScanOptions{Config: "{}"}), searchplugin.Request{ResultLimit: limit})
+			require.NoError(t, err)
+			defer func() { require.NoError(t, r.Close()) }()
+			u := r.(*reader)
+			require.Equal(t, limit, u.limit)
+			require.Equal(t, limit, u.plannedLimit, "zero has no implicit candidate cap")
+			require.NoError(t, r.Close())
+			require.NoError(t, r.Close())
+			end, err := r.Read(context.Background(), nil, nil, nil, nil)
+			require.NoError(t, err)
+			require.True(t, end, "a closed reader is at its end")
+		}()
+	}
 }
 
 func TestEmptyScanChecksTheGuard(t *testing.T) {
@@ -351,6 +356,38 @@ func TestReadStreaming(t *testing.T) {
 	u = streamingReader(proc)
 	_, err = u.Read(context.Background(), nil, nil, mp, out)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+// The reader preserves the complete provider's raw signed FLOAT32 scores across
+// multiple streamed batches, and emits non-NULL doc_id/score columns.
+func TestReadStreamingPreservesSignedScores(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+	u := streamingReader(proc)
+	_, u.cancel = context.WithCancel(context.Background())
+	t.Cleanup(func() { require.NoError(t, u.Close()) })
+	u.streamCh <- &vectorindex.SearchOutput{Keys: int64ColumnBuffer(1, 2), Dists: []float32{-2.5, 0}}
+	u.streamCh <- &vectorindex.SearchOutput{Keys: int64ColumnBuffer(3), Dists: []float32{0.75}}
+	close(u.streamCh)
+	u.errCh <- nil
+	out := pkScoreBatch()
+	t.Cleanup(func() { out.Clean(mp) })
+	got := make(map[int64]float32)
+	for {
+		end, err := u.Read(context.Background(), nil, nil, mp, out)
+		require.NoError(t, err)
+		if end {
+			break
+		}
+		for i := 0; i < out.RowCount(); i++ {
+			require.False(t, out.Vecs[0].IsNull(uint64(i)))
+			require.False(t, out.Vecs[1].IsNull(uint64(i)))
+			pk := vector.GetFixedAtWithTypeCheck[int64](out.Vecs[0], i)
+			require.NotContains(t, got, pk)
+			got[pk] = vector.GetFixedAtWithTypeCheck[float32](out.Vecs[1], i)
+		}
+	}
+	require.Equal(t, map[int64]float32{1: -2.5, 2: 0, 3: 0.75}, got)
 }
 
 // TestReadStreamingCovered drives the COVERED streaming path: include values arrive

@@ -786,13 +786,10 @@ func (ctr *container) Less(i, j int) bool {
 
 func (ctr *container) Swap(i, j int) {
 	ctr.spillReaders[i], ctr.spillReaders[j] = ctr.spillReaders[j], ctr.spillReaders[i]
-	ctr.spillReaders[i].heapIdx = i
-	ctr.spillReaders[j].heapIdx = j
 }
 
 func (ctr *container) Push(x any) {
 	reader := x.(*spillRunReader)
-	reader.heapIdx = len(ctr.spillReaders)
 	ctr.spillReaders = append(ctr.spillReaders, reader)
 }
 
@@ -800,7 +797,6 @@ func (ctr *container) Pop() any {
 	old := ctr.spillReaders
 	n := len(old)
 	reader := old[n-1]
-	reader.heapIdx = -1
 	ctr.spillReaders = old[:n-1]
 	return reader
 }
@@ -885,9 +881,6 @@ func (ctr *container) openSpillReaders(
 		} else {
 			reader.close(proc)
 		}
-	}
-	for i := range ctr.spillReaders {
-		ctr.spillReaders[i].heapIdx = i
 	}
 	if len(ctr.spillReaders) > 1 {
 		heap.Init(ctr)

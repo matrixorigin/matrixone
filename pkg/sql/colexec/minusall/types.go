@@ -100,10 +100,6 @@ func (minusAll *MinusAll) Free(proc *process.Process, pipelineFailed bool, err e
 	minusAll.FreeMetadata()
 }
 
-func (minusAll *MinusAll) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (ctr *container) cleanHashMap() {
 	hashmap.IteratorClearOwner(ctr.iterator)
 	ctr.iterator = nil

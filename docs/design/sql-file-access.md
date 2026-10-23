@@ -149,6 +149,14 @@ indexes require moving inputs to supported remote sources and rebuilding, or
 materializing into TEXT under administrator authority. Retry/restart never invents
 missing authority for old URLs.
 
+Classic asynchronous index admission must scan every indexed source value while
+returning one fixed-width aggregate result row: each existing checker expression
+is wrapped in `SUM(CAST(checker AS UNSIGNED))`. The internal nonstreaming executor
+must not retain a discarded result row per source row. Complete scanning and
+failure-before-CDC registration ordering remain unchanged, as do the existing
+transaction, identity and cleanup owners. This bounds retained admission output,
+not total scan, index-build, transaction or process memory.
+
 External resources remain mutable. Deliberately dropping/retargeting a stage,
 removing an object, changing credentials or losing storage/network can invalidate
 a previously admissible remote source after commit. This retains the existing
@@ -303,7 +311,7 @@ rollback/retry behavior. Both normal and race execution must cover affected
 owners. GPU compile/runtime and multi-CN evidence are separate platform proofs;
 their absence cannot be reported as a pass.
 
-## Review record
+## Decision and historical validation
 
 The issue task ledger contains the design-first approval for owned artifact
 persistence and asynchronous Datalink admission, followed by provider and
@@ -318,3 +326,34 @@ validation record. GPU native execution remains unverified because no suitable
 machine is available; the user explicitly permitted PR update with that gap
 visible. Root confinement and bounded reading of trusted operator certificate
 configuration are separate configuration/lifecycle contracts.
+
+### Cleanup ownership
+
+CSV failure cleanup retains the operation's acquired SQL policy. It detaches
+cancellation using the existing 30-second cleanup context budget, preserves the
+original export error, deletes owned output and closes only operation-created
+ETL services. Named SHARED services are borrowed and must not be closed.
+Fileservice owns the shared reader/service close-once wrapper: close the reader
+before the owned service even if reader Close fails; repeated and concurrent
+Close return the first reader error. Datalink and raw load_file retain their
+owned/borrowed decisions. Parser, CSV completion/error ordering and owned
+argument lifetime remain with their existing owners.
+
+### Revision-scoped historical acceptance
+
+The [original review record](https://github.com/matrixorigin/matrixone/blob/6cbe375b49696021d72778baa292a66287f080bd/docs/design/sql-file-access-review.md)
+and [validation record](https://github.com/matrixorigin/matrixone/blob/6cbe375b49696021d72778baa292a66287f080bd/docs/design/sql-file-access-validation.md)
+retain the design amendments, command receipts, adverse measurements and limits.
+Their latest decision was SOURCE ACCEPT and delivery acceptance under a specific
+PR-update-only timing exception and GPU waiver. The whole-PR/main performance
+merge gate remained unresolved. That historical product gate is neither waived
+by this consolidation nor a runtime acceptance claim about later revisions.
+
+The +6.16% and −2.13% elapsed SQL cohorts compare different bases. The latter
+used the same binary and complete validators; it does not establish whole-PR/main
+acceptance. Tests from base `97415db10bd` were reused after the later `8669eeda`
+rebase, rather than all rerun. CPU/local results do not prove GPU/ONNX, live cloud,
+HDFS or remote CI behavior. Failed commands, empty selections, reproduced baseline
+failures, invalid Linux preparations, interrupted cohorts, quoted/long fallback
+costs and transport allocation increases remain in the archived records. No new
+performance, runtime or CI result follows from moving those records into history.

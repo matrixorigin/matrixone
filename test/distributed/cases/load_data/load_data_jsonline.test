@@ -171,3 +171,19 @@ drop table if exists jsonline01;
 create table jsonline01(col1 bool,col2 int,col3 varchar, col4 date,col5 datetime,col6 timestamp,col7 decimal,col8 float);
 load data infile {'filepath'='$resources/load_data/jsonline_array01.jl','format'='jsonline','jsondata'='array'} into table jsonline01;
 drop table jsonline01;
+
+-- Clean up every table created by this case and assert that none remain.
+drop table if exists t1;
+drop table if exists jsonline_t1;
+drop table if exists jsonline_t2;
+drop table if exists jsonline_t3;
+drop table if exists jsonline_t4;
+drop table if exists jsonline_t5;
+drop table if exists jsonline_t6;
+drop table if exists jsonline_t7;
+drop table if exists jsonline_t8;
+drop table if exists jsonline_gzip;
+drop table if exists jsonline_bzip2;
+drop table if exists jsonline_lz4;
+drop table if exists jsonline01;
+select count(*) from information_schema.tables where table_schema = database() and table_name in ('t1','jsonline_t1','jsonline_t2','jsonline_t3','jsonline_t4','jsonline_t5','jsonline_t6','jsonline_t7','jsonline_t8','jsonline_gzip','jsonline_bzip2','jsonline_lz4','jsonline01');

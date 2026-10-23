@@ -8,6 +8,7 @@ drop database if exists mysql_compat_only_full_group_by;
 create database mysql_compat_only_full_group_by;
 use mysql_compat_only_full_group_by;
 
+set @having_alias_saved_sql_mode = @@session.sql_mode;
 set session sql_mode = 'ONLY_FULL_GROUP_BY';
 
 create table t_sales(region varchar(10), product varchar(10), qty int);
@@ -23,6 +24,18 @@ from t_sales
 where product = 'phone'
 group by region
 order by region is null, region;
+
+-- HAVING resolves a projected alias before an ungrouped same-named input (#30795).
+select region, sum(qty) as product from t_sales group by region having product >= 3 order by region is null, region;
+select region, sum(qty) as product from t_sales group by region having sum(qty) >= 3 order by region is null, region;
+select region, sum(qty) + 1 as product from t_sales group by region having product = 4 order by region;
+-- A real GROUP BY column still wins, even when it is absent from SELECT.
+select sum(qty) as region from t_sales group by t_sales.region having region = 'west';
+-- Inside an aggregate, product still names the varchar input, not SUM(qty).
+select region, sum(qty) as product from t_sales group by region having count(product) = 2;
+set session sql_mode = '';
+select region, sum(qty) as product from t_sales group by region having product >= 3 order by region is null, region;
+set session sql_mode = 'ONLY_FULL_GROUP_BY';
 
 create table t_fd(id int primary key, name varchar(20), amount int);
 insert into t_fd values (1, 'a', 10), (2, 'b', 20), (3, 'c', 30);
@@ -152,5 +165,5 @@ from t_fd
 group by id
 order by id;
 
-set session sql_mode = '';
+set session sql_mode = @having_alias_saved_sql_mode;
 drop database mysql_compat_only_full_group_by;
