@@ -1,5 +1,5 @@
 {
-  "version": 20,
+  "version": 21,
   "status": "reviewed-design",
   "title": "4.1.6 import memory control: ownership, progress, byte batching and spill",
   "base": "ed9d8aacc74448ed0deffd93925c049f9686f151",
@@ -1022,12 +1022,14 @@
   ],
   "approval": {
     "kind": "internal-independent-design-review",
-    "revision": 20,
+    "revision": 21,
     "decision": "PASS (design only)",
-    "scope": "D36 revision3 (B1 saved current and B5 semantic capability/version); prior scoped approvals retained",
+    "scope": "D36 architecture revision3 remains independently approved; revision21 applies the explicit user policy to reuse existing matching-deployment official hotfix1021 TPCH evidence.",
     "reviewed_draft_sha256": "f13bbfcf88b05c999d306aedc3646809d022f908cbcf3735c383655fb793caf4",
-    "condition": "Design only; strict v3/new-source normal/race/public functional/import/performance validation remains mandatory.",
-    "evidence": "F/hotfix20261021-integration/design-d36-review.json and design-d36-review.md"
+    "condition": "Design only. New-source Go/race/static/binary/public/native5 and newcandidate TKE remain mandatory. No hotfix1021 baseline rerun is required or permitted without changed user instructions.",
+    "evidence": "F/hotfix20261021-integration/design-d36-review.json and design-d36-review.md",
+    "policy_owner": "user",
+    "policy_evidence": "hotfix20261021-integration/user-baseline-policy.json"
   },
   "approval_history": [
     {
@@ -1102,6 +1104,16 @@
       "approved_at": "2026-10-23T20:12:02.907267+08:00",
       "reviewed_draft_sha256": "81d1682b36892ffd19baf1d81a727a9ec11e0ea1f6cf7836334edcbddfa3dc82",
       "independent_report_sha256": "7d1d5976158aa9f2882d6a87bf3a9c3262b98643f4e53c65a7de2d67ebf45e1b"
+    },
+    {
+      "kind": "internal-independent-design-review",
+      "revision": 20,
+      "decision": "PASS (design only)",
+      "scope": "D36 revision3 (B1 saved current and B5 semantic capability/version); prior scoped approvals retained",
+      "reviewed_draft_sha256": "f13bbfcf88b05c999d306aedc3646809d022f908cbcf3735c383655fb793caf4",
+      "condition": "Design only; strict v3/new-source normal/race/public functional/import/performance validation remains mandatory.",
+      "evidence": "F/hotfix20261021-integration/design-d36-review.json and design-d36-review.md",
+      "archived_at": "2026-10-23T16:59:37.630127+00:00"
     }
   ],
   "review_amendment": {
@@ -1121,5 +1133,29 @@
       "Deferred delete charge versus actual bitmap/vector retained peak and cleanup",
       "Owning packages, focused lifecycle race, incremental static checks, native SQL and uninterrupted identical import rounds"
     ]
+  },
+  "user_baseline_policy": {
+    "owner": "user",
+    "recorded_utc": "2026-10-23T16:59:37.630127+00:00",
+    "instruction": "hotfix1021 的就不给 tke 了，之前不是有吗",
+    "decision": "Reuse the existing complete same-deployment hotfix1021 reference. Do not dispatch or rerun the released hotfix baseline; only run the new combined candidate.",
+    "baseline_tag": "v4.1.6-hotfix-20261021",
+    "baseline_commit": "ed9d8aacc74448ed0deffd93925c049f9686f151",
+    "baseline_run_id": 39559943872,
+    "baseline_job_id": 119096996259,
+    "baseline_url": "https://github.com/matrixorigin/mo-nightly-regression/actions/runs/39559943872/job/119096996259",
+    "baseline_raw_record": "tpch-final-comparison/reference-ed9/tpch-job.log",
+    "baseline_raw_sha256": "70b54104ea32d286b3094a45fb57247a3634e8b00a01289a21b4ff9f67529de9",
+    "basis": "Already verified same legacy3CN resources/cache, exact same harness and loader;330 raw samples with complete22-query cycles and warmup exclusion independently reconciled.",
+    "canceled_duplicate_run": 39990090323,
+    "canceled_duplicate_record": "hotfix20261021-integration/tke-release-control/canceled-at-user-request.json",
+    "duplicate_cancellation": "verified completed/cancelled with jobs[]; no cluster created",
+    "unchanged_requirements": [
+      "New combined-source owning/race/static and exact nativebinary.",
+      "Five uninterrupted39-table imports under22GiB/no swap, no forcedGC/restart/wait/retry, strictpost125.",
+      "New candidate legacy3CN TKE100G/1T raw/plans with matching declared resources/cache/harness/loader.",
+      "Investigate any slower result; do not label memory tradeoffs or noise as proved causes without evidence."
+    ],
+    "limitations": "Reference is historical matching deployment, not a contemporaneous same-host paired experiment. Do not claim strict causal attribution or invent a fresh control requirement against the explicit user instruction."
   }
 }
