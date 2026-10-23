@@ -337,47 +337,107 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 	}
 }
 
+// inspectTableDumpBoundExpression follows all retained identities to find
+// private program scopes, while reporting Type.Table/TIME-width differences
+// only on the same edges the legacy comparison has always normalized.
+func inspectTableDumpBoundExpression(expr *planpb.Expr) (normalize, hasPrivate, cycle bool) {
+	state := make(map[*planpb.Expr]uint8)
+	var walk func(*planpb.Expr, bool)
+	walk = func(current *planpb.Expr, normalizeType bool) {
+		if current == nil || cycle {
+			return
+		}
+		switch state[current] {
+		case 1:
+			cycle = true
+			return
+		case 2:
+			return
+		}
+		state[current] = 1
+		if normalizeType && (current.Typ.Table != "" ||
+			(current.Typ.Id == int32(types.T_time) && current.Typ.Width != 0 && current.Typ.Width == current.Typ.Scale)) {
+			normalize = true
+		}
+		if fn := current.GetF(); fn != nil {
+			if fn.Func != nil {
+				fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
+				hasPrivate = hasPrivate || fid == function.SCALAR_PROGRAM || fid == function.SCALAR_PROGRAM_REF
+			}
+			for _, arg := range fn.Args {
+				walk(arg, true)
+			}
+		} else if list := current.GetList(); list != nil {
+			for _, entry := range list.List {
+				walk(entry, true)
+			}
+		} else if lit := current.GetLit(); lit != nil {
+			walk(lit.Src, true)
+		} else {
+			// Other Expr variants are not compatibility-normalized, but their
+			// retained identities still participate in private-program checks.
+			for _, child := range persistedExecutableExprChildren(current) {
+				walk(child, false)
+			}
+		}
+		if prepared := current.GetPreparedNumeric(); prepared != nil {
+			walk(prepared.StringDomainSource, false)
+		}
+		state[current] = 2
+	}
+	walk(expr, true)
+	return normalize, hasPrivate, cycle
+}
+
 // tableDumpBoundExpressionNeedsNormalization follows exactly the edges that
 // the compatibility normalization below changes. Other expression variants
-// must retain their exact protobuf comparison semantics.
+// retain exact protobuf comparison semantics.
 func tableDumpBoundExpressionNeedsNormalization(expr *planpb.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	if expr.Typ.Table != "" || (expr.Typ.Id == int32(types.T_time) && expr.Typ.Width != 0 && expr.Typ.Width == expr.Typ.Scale) {
-		return true
-	}
-	if fn := expr.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			if tableDumpBoundExpressionNeedsNormalization(arg) {
-				return true
-			}
-		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, entry := range list.List {
-			if tableDumpBoundExpressionNeedsNormalization(entry) {
-				return true
-			}
-		}
-	}
-	if lit := expr.GetLit(); lit != nil {
-		return tableDumpBoundExpressionNeedsNormalization(lit.Src)
-	}
-	return false
+	needs, _, cycle := inspectTableDumpBoundExpression(expr)
+	return needs || cycle
 }
 
 func sameTableDumpBoundExpression(a, b *planpb.Expr) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
+	needsA, privateA, cycleA := inspectTableDumpBoundExpression(a)
+	needsB, privateB, cycleB := inspectTableDumpBoundExpression(b)
+	if cycleA || cycleB {
+		return false
+	}
 	// Canonical trees need no compatibility rewrite. Avoid copying both
 	// complete trees for each speculative binding in the witness search.
-	if !tableDumpBoundExpressionNeedsNormalization(a) && !tableDumpBoundExpressionNeedsNormalization(b) {
+	if !needsA && !needsB && !privateA && !privateB {
 		return proto.Equal(a, b)
+	}
+	var programsA, programsB *persistedNumericProgramGroup
+	if privateA {
+		var err error
+		programsA, err = validatePersistedNumericProgramRoots(context.Background(), []*Expr{a})
+		if err != nil {
+			return false
+		}
+	}
+	if privateB {
+		var err error
+		programsB, err = validatePersistedNumericProgramRoots(context.Background(), []*Expr{b})
+		if err != nil {
+			return false
+		}
 	}
 	left := proto.Clone(a).(*planpb.Expr)
 	right := proto.Clone(b).(*planpb.Expr)
+	if privateA {
+		if err := canonicalizeValidatedNumericProgramScopes(context.Background(), []*Expr{left}, programsA); err != nil {
+			return false
+		}
+	}
+	if privateB {
+		if err := canonicalizeValidatedNumericProgramScopes(context.Background(), []*Expr{right}, programsB); err != nil {
+			return false
+		}
+	}
 	var normalize func(*planpb.Expr)
 	normalize = func(expr *planpb.Expr) {
 		if expr == nil {

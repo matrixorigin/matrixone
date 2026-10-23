@@ -160,6 +160,58 @@ func TestImportPersistedNumericProgramRefreshesNativeIdentityAndType(t *testing.
 	require.True(t, proto.Equal(originalType, &importedSource.Typ), "function refresh must preserve bound result metadata")
 }
 
+func TestTableDumpBoundComparisonCanonicalizesValidatedProgramScopes(t *testing.T) {
+	ctx := context.Background()
+	valueSource := MakePlan2StringConstExprWithType("31")
+	valueSource.GetLit().IsBin = true
+	value, kind, err := makeNumericValueProgramOutputs(ctx, valueSource)
+	require.NoError(t, err)
+	root := &Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*Expr{value, kind}}}}
+	snapshot := DeepCopyExpr(root)
+	rebound, err := cloneWithFreshNumericProgramScopes(ctx, []*Expr{root})
+	require.NoError(t, err)
+	require.Len(t, rebound, 1)
+	require.NotEqual(t, mustProgramScope(t, value), mustProgramScope(t, rebound[0].GetList().List[0]))
+	require.False(t, proto.Equal(root, rebound[0]), "independent plan owners have different private scope IDs")
+	require.True(t, sameTableDumpBoundExpression(root, rebound[0]), "a complete validated group is alpha-equivalent across scope allocation")
+	require.True(t, proto.Equal(snapshot, root), "comparison must not mutate either input tree")
+
+	t.Run("retained string-domain witness scopes", func(t *testing.T) {
+		witness := MakePlan2StringConstExprWithType("ordinary value")
+		witness.PreparedNumeric = &planpb.PreparedNumericMetadata{StringDomainSource: DeepCopyExpr(value)}
+		rebound, err := cloneWithFreshNumericProgramScopes(ctx, []*Expr{witness})
+		require.NoError(t, err)
+		require.False(t, proto.Equal(witness, rebound[0]))
+		require.True(t, sameTableDumpBoundExpression(witness, rebound[0]), "retained proof identity participates without supplying an executable anchor")
+	})
+
+	t.Run("tampered body remains unequal", func(t *testing.T) {
+		tampered := DeepCopyExpr(root)
+		definition := tampered.GetList().List[0].GetF().Args[0]
+		definition.GetF().Args[1].GetLit().Value = &planpb.Literal_Sval{Sval: "32"}
+		require.False(t, sameTableDumpBoundExpression(root, tampered))
+	})
+
+	t.Run("identical malformed private identity is rejected", func(t *testing.T) {
+		malformed := DeepCopyExpr(root)
+		malformed.GetList().List[0].GetF().Func.Obj = function.EncodeOverloadID(function.SCALAR_PROGRAM_REF, 1)
+		require.False(t, sameTableDumpBoundExpression(malformed, malformed))
+	})
+
+	t.Run("conflicting definitions are rejected", func(t *testing.T) {
+		conflict := DeepCopyExpr(value)
+		conflict.GetF().Args[0].GetF().Args[1].GetLit().Value = &planpb.Literal_Sval{Sval: "different"}
+		group := &Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*Expr{value, conflict}}}}
+		require.False(t, sameTableDumpBoundExpression(group, group))
+	})
+
+	t.Run("retained-graph cycle is rejected", func(t *testing.T) {
+		cyclic := MakePlan2StringConstExprWithType("cycle")
+		cyclic.PreparedNumeric = &planpb.PreparedNumericMetadata{StringDomainSource: cyclic}
+		require.False(t, sameTableDumpBoundExpression(cyclic, cyclic))
+	})
+}
+
 func TestPersistedNumericProgramCycleValidationScansDirectDependencies(t *testing.T) {
 	ctx := context.Background()
 	const depth = 64

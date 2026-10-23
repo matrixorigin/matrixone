@@ -119,6 +119,51 @@ func freshenValidatedNumericProgramScopes(ctx context.Context, roots []*Expr, pr
 		reserved[newScope] = struct{}{}
 		remapped[oldScope] = newScope
 	}
+	return remapValidatedNumericProgramScopes(ctx, roots, programs, remapped)
+}
+
+// canonicalizeValidatedNumericProgramScopes assigns first-encounter ordinals
+// to one already-validated expression group. This is for semantic comparison
+// of independently bound trees; unlike import, it does not allocate plan IDs.
+func canonicalizeValidatedNumericProgramScopes(
+	ctx context.Context, roots []*Expr, programs *persistedNumericProgramGroup,
+) error {
+	if programs == nil || len(programs.scopes) == 0 {
+		return nil
+	}
+	remapped := make(map[int64]int64, len(programs.scopes))
+	if err := walkPersistedExprRoots(ctx, roots, func(expr *Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil {
+			return nil
+		}
+		fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
+		if fid != function.SCALAR_PROGRAM && fid != function.SCALAR_PROGRAM_REF {
+			return nil
+		}
+		scope, ok := numericValueProgramScope(expr)
+		if !ok {
+			return persistedNumericProgramError(ctx, "program scope is not an int64 literal")
+		}
+		if _, exists := remapped[scope]; !exists {
+			remapped[scope] = int64(len(remapped) + 1)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if len(remapped) != len(programs.scopes) {
+		return persistedNumericProgramError(ctx, "program scope is missing from retained expression graph")
+	}
+	return remapValidatedNumericProgramScopes(ctx, roots, programs, remapped)
+}
+
+func remapValidatedNumericProgramScopes(
+	ctx context.Context, roots []*Expr, programs *persistedNumericProgramGroup, remapped map[int64]int64,
+) error {
+	if programs == nil {
+		return nil
+	}
 	if err := walkPersistedExprRoots(ctx, roots, func(expr *Expr) error {
 		fn := expr.GetF()
 		if fn == nil || fn.Func == nil {
@@ -467,14 +512,14 @@ func walkPersistedExprRootsWithChildren(
 }
 
 func persistedExprChildren(expr *Expr) []*Expr {
-	return persistedExprChildrenWithLiteralSource(expr, true)
+	return persistedExprChildrenWithRetainedSources(expr, true)
 }
 
 func persistedExecutableExprChildren(expr *Expr) []*Expr {
-	return persistedExprChildrenWithLiteralSource(expr, false)
+	return persistedExprChildrenWithRetainedSources(expr, false)
 }
 
-func persistedExprChildrenWithLiteralSource(expr *Expr, includeLiteralSource bool) []*Expr {
+func persistedExprChildrenWithRetainedSources(expr *Expr, includeRetainedSources bool) []*Expr {
 	children := make([]*Expr, 0, 4)
 	switch node := expr.Expr.(type) {
 	case *planpb.Expr_F:
@@ -482,9 +527,6 @@ func persistedExprChildrenWithLiteralSource(expr *Expr, includeLiteralSource boo
 			children = append(children, node.F.Args...)
 		}
 	case *planpb.Expr_Lit:
-		if includeLiteralSource && node.Lit != nil {
-			children = append(children, node.Lit.Src)
-		}
 	case *planpb.Expr_List:
 		if node.List != nil {
 			children = append(children, node.List.List...)
@@ -516,6 +558,14 @@ func persistedExprChildrenWithLiteralSource(expr *Expr, includeLiteralSource boo
 			children = append(children, node.Dependent.Inputs...)
 			children = append(children, node.Dependent.Lhs...)
 			children = append(children, node.Dependent.Comparison)
+		}
+	}
+	if includeRetainedSources {
+		if literal := expr.GetLit(); literal != nil {
+			children = append(children, literal.Src)
+		}
+		if prepared := expr.GetPreparedNumeric(); prepared != nil {
+			children = append(children, prepared.StringDomainSource)
 		}
 	}
 	return children

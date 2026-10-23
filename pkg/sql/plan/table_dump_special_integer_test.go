@@ -380,6 +380,108 @@ func TestTableDumpDirectDefaultUsesHistoricalEra(t *testing.T) {
 	require.True(t, proto.Equal(before, currentDef))
 }
 
+func TestTableDumpDefaultVerificationCanonicalizesNumericProgramScopes(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(id int, n varchar(20) default(abs(case when id=1 then X'31' else '1' end)))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	target := built.GetDdl().GetCreateTable().GetTableDef()
+	source := proto.Clone(target).(*planpb.TableDef)
+	item := tableDumpExpressions(target)[0]
+	_, ast, _, err := parseTableDumpExpression(compiler.GetContext(), item.origin, tableDumpParserModesForOrigin(item.origin)[0])
+	require.NoError(t, err)
+	boundAgain, err := bindTableDumpExpression(
+		tableDumpBindContext{CompilerContext: compiler, ctx: compiler.GetContext()},
+		target, item, ast, 0, tableDumpBindingCurrent, &tableDumpDefaultSession{})
+	require.NoError(t, err)
+	sourceScope, ok := firstTableDumpProgramScope(item.expr)
+	require.True(t, ok)
+	reboundScope, ok := firstTableDumpProgramScope(boundAgain)
+	require.True(t, ok)
+	require.NotEqual(t, sourceScope, reboundScope, "each bind allocates independent private program identities")
+	require.True(t, sameTableDumpBoundExpression(item.expr, boundAgain), "only validated lexical scope identities may differ")
+
+	snapshot := proto.Clone(source)
+	_, err = AnalyzeTableDumpBindings(compiler, target, source)
+	require.NoError(t, err, "a known persisted default must verify after rebinding allocates fresh scope IDs")
+	require.True(t, proto.Equal(snapshot, source), "verification must not mutate persisted catalog bytes")
+
+	tampered := proto.Clone(source).(*planpb.TableDef)
+	changed := false
+	var mutate func(*planpb.Expr)
+	mutate = func(expr *planpb.Expr) {
+		if expr == nil || changed {
+			return
+		}
+		if lit := expr.GetLit(); lit != nil && lit.IsBin {
+			if value, ok := lit.Value.(*planpb.Literal_Sval); ok {
+				value.Sval = "32"
+				changed = true
+				return
+			}
+		}
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				mutate(arg)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, entry := range list.List {
+				mutate(entry)
+			}
+		}
+		if lit := expr.GetLit(); lit != nil {
+			mutate(lit.Src)
+		}
+	}
+	mutate(tampered.Cols[1].Default.Expr)
+	require.True(t, changed, "test must tamper with the persisted HEX branch")
+	require.False(t, sameTableDumpBoundExpression(tampered.Cols[1].Default.Expr, item.expr), "scope normalization must not hide a changed value")
+	_, err = AnalyzeTableDumpBindings(compiler, target, tampered)
+	require.ErrorContains(t, err, "cannot verify bound default expression")
+}
+
+func firstTableDumpProgramScope(expr *planpb.Expr) (int64, bool) {
+	var scope int64
+	var found bool
+	var visit func(*planpb.Expr)
+	visit = func(current *planpb.Expr) {
+		if current == nil || found {
+			return
+		}
+		if fn := current.GetF(); fn != nil {
+			if fn.Func != nil {
+				fid, _ := function.DecodeOverloadID(fn.Func.Obj)
+				if fid == function.SCALAR_PROGRAM {
+					scope, found = numericProgramDefinitionScope(current)
+					if found {
+						return
+					}
+				}
+			}
+			for _, arg := range fn.Args {
+				visit(arg)
+			}
+		}
+		if list := current.GetList(); list != nil {
+			for _, entry := range list.List {
+				visit(entry)
+			}
+		}
+		if lit := current.GetLit(); lit != nil {
+			visit(lit.Src)
+			if current.GetPreparedNumeric() != nil {
+				visit(current.GetPreparedNumeric().StringDomainSource)
+			}
+		}
+	}
+	visit(expr)
+	return scope, found
+}
+
 // Captured by the real pre-v121 binder at 0f9b9cc6c4d7d8afa19a24624f5c3aa019614eb1.
 // This fixture is independent of the compatibility mode under test.
 func TestTableDumpExactPreDecimalDivBindings(t *testing.T) {
