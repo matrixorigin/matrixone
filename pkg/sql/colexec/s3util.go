@@ -421,6 +421,30 @@ func WorkspaceSinkerCapacityOption(proc *process.Process) ioutil.SinkerOption {
 	return owner.SinkerCapacityOption()
 }
 
+// RebindWorkspaceSinkerCapacity re-arms ONE persistent writer's per-object
+// capacity admission with the CURRENT proc's transaction workspace (issue
+// #25590 round-35 review): a writer a cached plan keeps alive across
+// executions — the multi_update delegate's persistent insert sinkers,
+// which Prepare may find ALREADY-CREATED with the FIRST transaction's
+// hook — enters its next execution still wearing a FINALIZED workspace's
+// hook, and every object it spills next would reserve against a workspace
+// whose terminal boundaries can never release or convert that
+// reservation, permanently consuming engine admission capacity. The
+// rebind follows WorkspaceSinkerCapacityOption's own resolution rules: a
+// proc without a transaction operator, or a workspace without the owner
+// surface, ends up UNHOOKED — exactly the freshly-constructed compat
+// shape — never on the previous workspace's stale hook.
+func (w *CNS3Writer) RebindWorkspaceSinkerCapacity(proc *process.Process) {
+	if w == nil || w.sinker == nil {
+		return
+	}
+	if opt := WorkspaceSinkerCapacityOption(proc); opt != nil {
+		opt(w.sinker)
+		return
+	}
+	w.sinker.RebindUncommittedCapacityHook(nil)
+}
+
 // Reset discards any buffered or staged data accumulated since the last
 // Sync, without tearing down the underlying sinker. Call this when the
 // enclosing pipeline execution is being reset so that stale data is not

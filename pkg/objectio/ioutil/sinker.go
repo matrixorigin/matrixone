@@ -893,6 +893,22 @@ func (sinker *Sinker) HasUncommittedCapacityHook() bool {
 	return sinker != nil && sinker.config.capacityHook != nil
 }
 
+// RebindUncommittedCapacityHook installs hook as the per-object admission
+// this sinker consults before each object persists, replacing whatever
+// earlier hook (or none) it carried; nil removes it. Writers that
+// outlive their binding transaction — a cached plan keeps the
+// multi_update delegate's persistent insert sinkers alive exactly for
+// their buffer pools and arenas — must rebind to the CURRENT execution's
+// workspace when they are reused: the workspace that built them settles
+// its own reservations at its terminal, and the next execution's objects
+// reserve under a workspace whose release path can still reach them
+// (issue #25590 round-35 review: without the rebind, every reused
+// writer's next spill reserved against the finalized first workspace,
+// stranding engine-wide admission capacity permanently).
+func (sinker *Sinker) RebindUncommittedCapacityHook(hook UncommittedCapacityHook) {
+	sinker.config.capacityHook = hook
+}
+
 // syncFileSinker persists the file sinker's data. On error, the caller is
 // responsible for cleanup via resetFileSinker(); the executor is eventually
 // closed in Sinker.Close().

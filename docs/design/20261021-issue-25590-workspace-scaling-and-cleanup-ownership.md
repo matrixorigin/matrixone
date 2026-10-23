@@ -2877,3 +2877,83 @@ by the independent reviews and changes no design decision. The
 deviation rule stands: the first change that alters any r11-approved
 decision requires updating this document and re-reviewing the affected
 decisions before implementation approval resumes.
+
+## 10 design review record - round 35 (implementation follow-up): the reused writer's capacity admission rebinds to the current workspace
+
+The 2026-10-23 implementation approval was followed by one further
+blocking review (round 35, against head `604f6e4551`) that confirmed a
+defect in the r4/f2b producer binding's reuse path and blocked on it:
+the multi_update S3 delegate's persistent insert sinkers outlive their
+transaction exactly as designed - a cached TP plan keeps the delegate
+and its sinkers alive across executions for their buffer pools and
+arenas - but the per-object capacity admission landed on them only at
+construction time, so a reused delegate entered its next execution
+still wearing the FIRST transaction's hook. Every object its next
+spill persisted then reserved an in-flight unit through the FINALIZED
+first workspace (the review's delegate probe observed first-owner
+calls=2, second-owner calls=0; its real-workspace probe ended with
+queued=0, live=0, inFlight=1), and no terminal of a later transaction
+can reach such a reservation: repeated reuses permanently consumed
+engine-wide admission capacity until unrelated persistence was
+refused. §5.3's own invariant decides this - a reservation is
+settleable only by the workspace whose statement persisted the object
+- so the defect is an implementation gap inside the r11-approved
+admission contract, and no design decision changes here.
+
+The deliberate repair (the reviewer's first suggested option): a
+reused delegate REBINDS its persistent sinkers' admission to the
+CURRENT statement's workspace at every Prepare, before any spill of
+the next execution can run. `Sinker.RebindUncommittedCapacityHook`
+installs (or clears) the per-object hook on a live sinker;
+`CNS3Writer.RebindWorkspaceSinkerCapacity` resolves the current
+workspace through the same `WorkspaceSinkerCapacityOption` rules as
+construction - a proc without a transaction operator, or a workspace
+without the `SinkerOwner` surface, ends exactly as a freshly built
+unhooked writer (never on the previous workspace's stale hook) - and
+`MultiUpdate.Prepare` performs the rebind in the reuse branch beside
+`refreshSelectorState`. Temporary writers, the deletion tombstone
+writer and the insert operator were re-checked and construct fresh per
+execution or per spill, so the persistent insert sinkers were the only
+stale-hook surface.
+
+Proof (commands run with the repository CGo wrapper
+`.agents/skills/mo-dev/scripts/mo-cgo-test` on this tree):
+
+- New focused regressions, red on parent `604f6e4551`, green after the
+  fix - `go test -run TestMultiUpdatePrepareReuse
+  ./pkg/sql/colexec/multi_update/`: pre-fix exit 1 with the review's
+  exact shape (the second execution's spill consulted the stale first
+  workspace's hook, second-owner calls=0; an owner-less reuse kept the
+  stale hook), post-fix exit 0.
+- Engine-level settlement through real workspaces and the real ledger -
+  `TestIssue25590ReusedWriterReservationsSettleUnderReboundWorkspace`
+  reconstructs the reviewer's probe on one shared engine: transaction 1
+  spills, its commit settles its own unrecorded object to the cleanup
+  queue, the drain deletes it; transaction 2 rebinds the SAME writer and
+  spills - the reservation rides the current workspace's
+  `unpublishedDumpReservations` (nothing on the finalized one), its
+  commit hands the object to the queue, and the ledger closes at
+  queued=0, live=0, inFlight=0 with both objects drained physically.
+  This is the unit the pre-fix stale hook stranded.
+- The refusal still gates through the rebound hook: a saturated
+  CURRENT workspace refuses the reused sinker's Sync before anything
+  persists (the saturated-round case inside the same multi_update
+  regression), and an owner-less reuse restores the fresh-construction
+  unhooked shape while the finalized workspace's hook consults
+  nothing further.
+- Packages touched: `./pkg/objectio/ioutil/`, `./pkg/sql/colexec/multi_update/`,
+  `./pkg/sql/colexec/insert/` all green with the new tests included
+  (`ok` each, exit 0), and `go vet` over the changed package closure
+  exits 0.
+
+Decision: round 35 is recorded as an implementation defect of the
+r11-approved admission binding, repaired inside the unchanged decision
+set (the binding now follows the execution rather than the writer's
+construction, which is what the reservation-settlement invariants of
+§5.3 and the producer protocol of §5.4 already required). No r11- or
+r12-approved decision is altered, so the deviation rule opens no
+design re-review; the two new sinks that reached validation with this
+round - the inverse-resolution clear (an owner-less reuse must end
+unhooked, not stale) and the reused-sinker refusal gate - are
+decision-compliant consequences of the existing owner-surface rules,
+pinned by the regressions above.

@@ -213,6 +213,24 @@ func (writer *s3WriterDelegate) refreshSelectorState(update *MultiUpdate) {
 	writer.takeAffectedRows = update.takeS3AffectedRowsFunc
 }
 
+// rebindWorkspaceCapacity re-arms every ALREADY-CREATED persistent insert
+// sinker's per-object capacity admission with the CURRENT statement's
+// workspace (issue #25590 round-35 review): the delegate outlives the
+// transaction that built it — a cached plan's next execution enters under a
+// different transaction — so each sinker's construction-time hook goes
+// stale the moment its first workspace finalizes, and without the rebind
+// every next-execution spill would reserve against that finalized
+// workspace, whose release path can never see the reservation again. The
+// rebind clears the stale hook when the current execution exposes no
+// owner surface, matching the construction-time compat shape; sinkers
+// the lazy ensureInsertSinkers creates after this point bind the current
+// workspace already.
+func (writer *s3WriterDelegate) rebindWorkspaceCapacity(proc *process.Process) {
+	for _, s3w := range writer.insertSinkers {
+		s3w.RebindWorkspaceSinkerCapacity(proc)
+	}
+}
+
 func s3WriterAction(updateCtxs []*MultiUpdateCtx) actionType {
 	hasInsert := false
 	hasDelete := false
