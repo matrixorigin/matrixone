@@ -12373,7 +12373,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		functionId: UNIX_TIMESTAMP,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    unixTimestampTypeMatch,
 
 		Overloads: []overload{
 			{

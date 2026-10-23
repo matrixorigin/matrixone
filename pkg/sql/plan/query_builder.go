@@ -100,6 +100,9 @@ func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Con
 	if function.LegacyTemporalNullability(ctx.GetContext()) {
 		bound = function.WithLegacyTemporalNullability(bound)
 	}
+	if function.LegacyUnixTimestampDatetime(ctx.GetContext()) {
+		bound = function.WithLegacyUnixTimestampDatetime(bound)
+	}
 	return bound
 }
 

@@ -784,6 +784,29 @@ func TestUnixTimestampTemporalReturnScale(t *testing.T) {
 	require.Equal(t, types.New(types.T_decimal128, 38, 6), fractionalDatetimeResult.retType)
 }
 
+func TestUnixTimestampDatetimeOverloadDoesNotAdmitTime(t *testing.T) {
+	ctx := context.Background()
+	_, err := GetFunctionByName(ctx, "unix_timestamp", []types.Type{types.T_time.ToType()})
+	require.ErrorContains(t, err, "invalid argument function unix_timestamp")
+
+	current, err := GetFunctionByName(ctx, "unix_timestamp", []types.Type{types.T_datetime.ToTypeWithScale(6)})
+	require.NoError(t, err)
+	require.Equal(t, int32(4), current.overloadId)
+	require.False(t, current.needCast)
+
+	legacy, err := GetFunctionByName(WithLegacyUnixTimestampDatetime(ctx), "unix_timestamp", []types.Type{types.T_datetime.ToTypeWithScale(6)})
+	require.NoError(t, err)
+	require.Equal(t, int32(1), legacy.overloadId)
+	require.True(t, legacy.needCast)
+	require.Equal(t, types.T_timestamp, legacy.targetTypes[0].Oid)
+
+	// The verifier's legacy context must not alter ordinary overload families.
+	for _, input := range []types.T{types.T_timestamp, types.T_varchar} {
+		_, err := GetFunctionByName(WithLegacyUnixTimestampDatetime(ctx), "unix_timestamp", []types.Type{input.ToType()})
+		require.NoError(t, err)
+	}
+}
+
 func requireLegacyMakeTimeSignature(t *testing.T, args []types.T) {
 	t.Helper()
 	signatures := make([][]types.T, 0, MakeTimeIntegerFloatOverload)
