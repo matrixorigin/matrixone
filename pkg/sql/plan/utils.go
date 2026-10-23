@@ -6328,11 +6328,28 @@ func preparedWindowArgumentParamPosition(expr *Expr) (int32, bool) {
 		return param.Pos, true
 	}
 	fn := expr.GetF()
-	if fn == nil || fn.GetFunc().GetObjName() != "cast" || len(fn.Args) == 0 {
+	if fn == nil || fn.GetFunc() == nil {
+		return 0, false
+	}
+	fid, overload := function.DecodeOverloadID(fn.Func.GetObj())
+	if fid == function.CAST && overload == function.NumericValueCastOverload {
+		if fn.GetSyntaxExplicitCast() {
+			return 0, false
+		}
+		source, policy, ok := numericValueCastAnalysisSource(expr)
+		if !ok || policy != function.NumericValueCastPolicyOrdinary || source == nil {
+			return 0, false
+		}
+		if param := source.GetP(); param != nil && param.Pos >= 0 {
+			return param.Pos, true
+		}
+		return 0, false
+	}
+	if fn.GetFunc().GetObjName() != "cast" || len(fn.Args) == 0 {
 		return 0, false
 	}
 	param := fn.Args[0].GetP()
-	if param == nil {
+	if param == nil || param.Pos < 0 {
 		return 0, false
 	}
 	return param.Pos, true

@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -1275,7 +1276,13 @@ func requirePreparedWindowFrameParam(t *testing.T, expr *planpb.Expr, typ types.
 	require.NotNil(t, cast)
 	require.Equal(t, "cast", cast.Func.ObjName)
 	require.NotEmpty(t, cast.Args)
-	param := cast.Args[0].GetP()
+	paramExpr := cast.Args[0]
+	if source, policy, ok := numericValueCastAnalysisSource(expr); ok {
+		require.False(t, cast.GetSyntaxExplicitCast())
+		require.Equal(t, function.NumericValueCastPolicyOrdinary, policy)
+		paramExpr = source
+	}
+	param := paramExpr.GetP()
 	require.NotNil(t, param)
 	require.Equal(t, pos, param.Pos)
 }
