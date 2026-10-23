@@ -1744,16 +1744,6 @@ func MakeSliceAccountedWithCapacityClass[T any](
 	return values[:n:n], nil
 }
 
-func MakeSliceArgs[T any](mp *MPool, offHeap bool, args ...T) ([]T, error) {
-	detailk := mp.getDetailK()
-	ret, err := makeSliceWithCapWithDetailK[T](detailk, len(args), len(args), mp, offHeap)
-	if err != nil {
-		return ret, err
-	}
-	copy(ret, args)
-	return ret, nil
-}
-
 func FreeSlice[T any](mp *MPool, bs []T) {
 	if cap(bs) == 0 {
 		return

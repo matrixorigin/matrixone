@@ -97,7 +97,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
@@ -711,12 +710,14 @@ func (c *Compile) run(s *Scope) error {
 	return nil
 }
 
-// isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
-// he statement
+// isRetryErr accepts transaction retries under RC and snapshot-coverage retries
+// under either isolation level. A coverage retry changes the access path, not
+// the transaction snapshot.
 func (c *Compile) isRetryErr(err error) bool {
-	return (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-		c.proc.GetTxnOperator().Txn().IsRCIsolation()
+	return moerr.IsMoErrCode(err, moerr.ErrVectorIndexSnapshotChanged) ||
+		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
+			c.proc.GetTxnOperator().Txn().IsRCIsolation()
 }
 
 type scopeRunResult struct {
@@ -7689,7 +7690,7 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 		return c.compileOrder(node, ss)
 
 	case node.Limit != nil && node.Offset != nil && len(node.OrderBy) > 0:
-		if rule.IsConstant(node.Limit, false) && rule.IsConstant(node.Offset, false) {
+		if function.IsConstant(node.Limit, false) && function.IsConstant(node.Offset, false) {
 			// get limit
 			vec1, free1, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, node.Limit)
 			if err != nil {

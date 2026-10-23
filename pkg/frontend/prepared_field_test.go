@@ -103,7 +103,7 @@ func TestPreparedFieldHistoryCacheAndMigration(t *testing.T) {
 		}()
 		if cw.runtimeCachePlan != nil {
 			cacheHits++
-			prepared.installRuntimeSpecializationCache(cw.runtimeCacheKey, cw.runtimeCachePlan, nil, cw.runtimeCacheDiagnostics, cw.runtimeCacheColDefData)
+			prepared.installRuntimeSpecializationCache(cw.runtimeCacheKey, cw.runtimeCachePlan, nil, cw.runtimeCacheDiagnostics, cw.runtimeCacheDecimalFloatProofs, cw.runtimeCacheColDefData)
 			cw.discardRuntimeCacheCandidate()
 			_, cached, clone, _, owned, err := initExecuteStmtParam(ec, ses, cw, nil, prepared.Name)
 			if owned && clone != nil {

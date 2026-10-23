@@ -297,8 +297,8 @@ SIRIUS_BUILD_MODE ?= release
 SIRIUS_MERGED_REF ?=
 SIRIUS_PREPARED := $(ROOT_DIR)/.sirius-sdk
 ifeq ($(MO_SIRIUS),1)
-ifneq ($(UNAME_S)/$(UNAME_M),linux/x86_64)
-$(error MO_SIRIUS=1 requires Linux amd64)
+ifeq ($(filter linux/x86_64 linux/aarch64 linux/arm64,$(UNAME_S)/$(UNAME_M)),)
+$(error MO_SIRIUS=1 requires Linux amd64 or arm64)
 endif
 ifeq ($(strip $(SIRIUS_SDK)),)
 $(error MO_SIRIUS=1 requires a generated SIRIUS_SDK directory)

@@ -1256,7 +1256,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			colPos[strings.ToLower(col.Name)] = pos
 		}
 		lastNodeID = builder.materializeReturningSource(
-			bindCtx, lastNodeID, selectNodeTag, tableDef, dmlCtx.objRefs[0], tableDef.Name, alias, colPos,
+			bindCtx, lastNodeID, selectNodeTag, tableDef, tableDef.Name, alias, colPos,
 		)
 		selectNode = builder.qry.Nodes[lastNodeID]
 		selectNodeTag = selectNode.BindingTags[0]

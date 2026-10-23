@@ -71,7 +71,6 @@ func (sample *Sample) Prepare(proc *process.Process) (err error) {
 
 	sample.ctr = &container{
 		isGroupBy:     len(sample.GroupExprs) != 0,
-		isMultiSample: len(sample.SampleExprs) > 1,
 		tempBatch1:    make([]*batch.Batch, 1),
 		sampleVectors: make([]*vector.Vector, len(sample.SampleExprs)),
 	}

@@ -15,15 +15,23 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	indexcoverage "github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type hnswIndexContext struct {
@@ -39,6 +47,80 @@ type hnswIndexContext struct {
 	nThread      int64
 }
 
+// hnswIndexCoversSnapshot is the correctness gate for the HNSW top-k rewrite.
+// The rewrite is an inner join between ANN candidates and the base table; an
+// async generation that is behind the source can therefore silently lose rows.
+// A false result deliberately leaves the original exact scan in place.
+func (builder *QueryBuilder) hnswIndexCoversSnapshot(scanNode *plan.Node, metaDef, idxDef *plan.IndexDef) bool {
+	if builder == nil || builder.compCtx == nil || scanNode == nil ||
+		scanNode.TableDef == nil || idxDef == nil {
+		return false
+	}
+	if builder.GetContext().Value(defines.HnswSnapshotFallbackKey{}) == true {
+		return false
+	}
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	txn := proc.GetTxnOperator()
+	if txn == nil {
+		// Synthetic planner contexts used by unit tests do not have a transaction
+		// and cannot execute a query, so retain the existing plan-construction
+		// behavior for those contexts only.
+		return true
+	}
+	if scanNode.TableDef.TblId == 0 || scanNode.ObjRef == nil ||
+		proc.GetSessionInfo() == nil || proc.GetSessionInfo().StorageEngine == nil {
+		return false
+	}
+
+	sp := sqlexec.NewSqlProcess(proc)
+	scanSnapshotTS := sp.ApplyScanSnapshot(scanNode.ScanSnapshot)
+	readTxn := txn
+	if scanSnapshotTS != nil {
+		readTxn = txn.CloneSnapshotOp(*scanSnapshotTS)
+	}
+
+	ctx := proc.GetTopContext()
+	if acctID, err := sp.EffectiveAccountID(); err == nil {
+		ctx = defines.AttachAccountId(ctx, acctID)
+	}
+	_, _, rel, err := proc.GetSessionInfo().StorageEngine.GetRelationById(
+		ctx, readTxn, scanNode.TableDef.TblId)
+	if err != nil {
+		logutil.Debugf("hnsw index coverage: resolve source relation failed for %s: %v", idxDef.IndexName, err)
+		return false
+	}
+	commitTSProvider, ok := rel.(engine.SourceCommitTSProvider)
+	if !ok {
+		return false
+	}
+
+	readTS := types.TimestampToTS(txn.SnapshotTS())
+	if scanSnapshotTS != nil {
+		readTS = types.TimestampToTS(*scanSnapshotTS)
+	}
+	req := indexcoverage.Request{
+		CNUUID:             proc.GetService(),
+		Txn:                txn,
+		TableID:            scanNode.TableDef.TblId,
+		IndexDef:           metaDef,
+		Snapshot:           readTS,
+		IndexStorageTable:  idxDef.IndexTableName,
+		IndexMetadataDB:    scanNode.ObjRef.SchemaName,
+		IndexMetadataTable: metaDef.IndexTableName,
+		ScanSnapshotTS:     scanSnapshotTS,
+		SourceCommitTS: func(ctx context.Context, mustExceed types.TS) (types.TS, error) {
+			return commitTSProvider.SourceCommitTS(ctx, mustExceed)
+		},
+	}
+	covered, _, err := indexplugin.CoversSnapshot(ctx, idxDef.IndexAlgo, req)
+	if err != nil {
+		logutil.Debugf("hnsw index coverage check failed for %s: %v", idxDef.IndexName, err)
+	}
+	return covered
+}
 func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*hnswIndexContext, error) {
 	if vecCtx == nil || multiTableIndex == nil {
 		return nil, nil
@@ -61,6 +143,9 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 	metaDef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
 	idxDef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Storage]
 	if metaDef == nil || idxDef == nil {
+		return nil, nil
+	}
+	if !builder.hnswIndexCoversSnapshot(vecCtx.scanNode, metaDef, idxDef) {
 		return nil, nil
 	}
 
@@ -388,7 +473,7 @@ func (builder *QueryBuilder) getArgsFromDistFn(distFnExpr *plan.Function, partPo
 	if vecColArg.GetCol() == nil {
 		return
 	}
-	if !rule.IsConstant(vecLitArg, true) {
+	if !function.IsConstant(vecLitArg, true) {
 		return
 	}
 

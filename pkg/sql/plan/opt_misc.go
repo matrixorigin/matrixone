@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
 
 func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]int) {
@@ -227,6 +226,9 @@ func increaseRefCntForColRefList(cols []plan.ColRef, inc int, colRefCnt map[[2]i
 
 // FIXME: We should remove PROJECT node for more cases, but keep them now to avoid intricate issues.
 func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, node *plan.Node) bool {
+	if builder.isFullTextBooleanScoreProject(node) {
+		return false
+	}
 	if _, protected := builder.existentialGateProjects[node.NodeId]; protected {
 		// Inlining its TRUE slot would turn an ANTI hash key back into a
 		// residual and enumerate every duplicate-key match.
@@ -1547,7 +1549,7 @@ func (builder *QueryBuilder) isConstantSingletonGroupOrderExpr(
 		nodeID = node.Children[0]
 	}
 
-	if !rule.IsConstant(resolved, false) {
+	if !function.IsConstant(resolved, false) {
 		return false, usesSingletonGroup
 	}
 	if resolved.GetLit() != nil {
@@ -2383,7 +2385,7 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 	}
 	switch key {
 	case "vectorLocalDOP":
-		builder.optimizerHints.vectorLocalDOP = value
+		// Read directly by VectorLocalDOPEnabled at planning and compilation.
 	case "pushDownLimitToScan":
 		builder.optimizerHints.pushDownLimitToScan = value
 	case "pushDownTopThroughLeftJoin":
@@ -2574,17 +2576,17 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 				if e.F.Func.GetObjName() == "=" && !isJSONNumericComparisonArgs(e.F.Args) {
 					//update t1 set a = 1 where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
 					//delete from where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
-					if checkIsPkColExpr(e.F.Args[0]) && rule.IsConstant(e.F.Args[1], true) {
+					if checkIsPkColExpr(e.F.Args[0]) && function.IsConstant(e.F.Args[1], true) {
 						lockRows = e.F.Args[1]
-					} else if checkIsPkColExpr(e.F.Args[1]) && rule.IsConstant(e.F.Args[0], true) {
+					} else if checkIsPkColExpr(e.F.Args[1]) && function.IsConstant(e.F.Args[0], true) {
 						lockRows = e.F.Args[0]
 					}
 				} else if e.F.Func.GetObjName() == "in" {
 					//update t1 set a = 1 where pk in (1,2); then we allays lock rows pk in (1,2), even pk=1 is not exists
 					//delete from where pk in (1,2); then we allays lock rows pk in (1,2), even pk in (1,2) is not exists
-					if checkIsPkColExpr(e.F.Args[0]) && rule.IsConstant(e.F.Args[1], true) {
+					if checkIsPkColExpr(e.F.Args[0]) && function.IsConstant(e.F.Args[1], true) {
 						lockRows = e.F.Args[1]
-					} else if checkIsPkColExpr(e.F.Args[1]) && rule.IsConstant(e.F.Args[0], true) {
+					} else if checkIsPkColExpr(e.F.Args[1]) && function.IsConstant(e.F.Args[0], true) {
 						lockRows = e.F.Args[0]
 					}
 				}

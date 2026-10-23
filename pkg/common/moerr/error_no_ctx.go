@@ -568,3 +568,7 @@ func NewSyncProtectionInvalidNoCtx() *Error {
 func NewSyncProtectionExpiredNoCtx(jobID string, validTS, prepareTS int64) *Error {
 	return newError(Context(), ErrSyncProtectionExpired, jobID, validTS, prepareTS)
 }
+
+func NewVectorIndexSnapshotChangedNoCtx() *Error {
+	return newError(Context(), ErrVectorIndexSnapshotChanged)
+}

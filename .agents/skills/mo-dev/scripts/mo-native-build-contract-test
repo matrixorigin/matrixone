@@ -29,6 +29,18 @@ source_dir="$work/source"
 destination_dir="$work/destination"
 mkdir -p "$source_dir" "$destination_dir" "$work/bin"
 
+# The GPU dry runs below use Linux amd64 fixture paths on every test host.
+cat >"$work/bin/uname" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+    -s|'') echo Linux ;;
+    -m) echo x86_64 ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod +x "$work/bin/uname"
+export PATH="$work/bin:$PATH"
+
 failures=0
 
 pass() {

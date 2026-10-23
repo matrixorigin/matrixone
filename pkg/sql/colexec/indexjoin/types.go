@@ -87,7 +87,3 @@ func (indexJoin *IndexJoin) Free(proc *process.Process, pipelineFailed bool, err
 		indexJoin.ctr.buf = nil
 	}
 }
-
-func (indexJoin *IndexJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}

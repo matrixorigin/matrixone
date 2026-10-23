@@ -5791,7 +5791,7 @@ func bindFuncExprAndConstFoldInternal(
 		// DECIMAL256 constants can remain executable casts because scalar
 		// Literal has no DECIMAL256 representation. Check constancy rather
 		// than requiring one particular folded representation.
-		if arg1.Typ.Id == int32(types.T_any) || !rule.IsConstant(arg1, false) {
+		if arg1.Typ.Id == int32(types.T_any) || !function.IsConstant(arg1, false) {
 			return nil, moerr.NewInvalidInput(ctx, "2nd argument of in_range must be constant")
 		}
 
@@ -5801,7 +5801,7 @@ func bindFuncExprAndConstFoldInternal(
 		}
 		fnArgs[2] = arg2
 
-		if arg2.Typ.Id == int32(types.T_any) || !rule.IsConstant(arg2, false) {
+		if arg2.Typ.Id == int32(types.T_any) || !function.IsConstant(arg2, false) {
 			return nil, moerr.NewInvalidInput(ctx, "3rd argument of in_range must be constant")
 		}
 
@@ -6018,7 +6018,7 @@ func isPreparedPercentileExpr(expr *Expr) bool {
 // validation and the rational percentile codec without FLOAT64 rounding.
 func normalizePercentileParam(ctx context.Context, name string, args []*Expr) error {
 	if (name != NameApproxPercentile && name != NamePercentileCont && name != NamePercentileDisc) ||
-		len(args) != 2 || !isPreparedPercentileExpr(args[1]) || rule.IsConstant(args[1], false) {
+		len(args) != 2 || !isPreparedPercentileExpr(args[1]) || function.IsConstant(args[1], false) {
 		return nil
 	}
 	if percentileParamTypeSupported(name, makeTypeByPlan2Expr(args[1])) {
@@ -8240,12 +8240,23 @@ func bindFuncExprImplByPlanExpr(
 		returnType = function.ConvertReturnTypeForBinder(argsType)
 	}
 	if name == "convert_tz" && len(argsType) > 0 {
-		// CONVERT_TZ preserves the source temporal precision.  The overload
-		// lookup may use the implicit DATETIME cast target (whose default scale
-		// is zero), so restore the source scale for view/CTAS metadata.
+		// The implicit DATETIME cast used for overload lookup loses the source
+		// precision. A constant string has the precision of its parsed value,
+		// while a temporal column retains its declared precision.
+		scale := argsType[0].Scale
+		if argsType[0].Oid.IsMySQLString() {
+			scale = 0
+			if lit := args[0].GetLit(); lit != nil && !lit.Isnull {
+				if value, ok := lit.Value.(*plan.Literal_Sval); ok {
+					if _, err := types.ParseDatetime(value.Sval, MaxFsp); err == nil {
+						scale = datetimeLiteralScale(value.Sval)
+					}
+				}
+			}
+		}
 		returnType.Oid = types.T_datetime
-		returnType.Scale = argsType[0].Scale
-		returnType.Width = argsType[0].Width
+		returnType.Scale = scale
+		returnType.Width = scale
 	}
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
 	adjustDateFormatMetadata(name, args, &returnType)
@@ -10730,7 +10741,7 @@ func foldDecimalStringComparisonConstants(
 			if candidate == nil || peer == nil ||
 				!types.T(candidate.Typ.Id).IsMySQLString() ||
 				!types.T(peer.Typ.Id).IsDecimal() ||
-				candidate.GetLit() != nil || !rule.IsConstant(candidate, false) {
+				candidate.GetLit() != nil || !function.IsConstant(candidate, false) {
 				continue
 			}
 			folded, err := ConstantFold(

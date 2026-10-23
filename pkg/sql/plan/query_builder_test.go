@@ -1117,7 +1117,6 @@ func genBuilderAndCtx(t testing.TB) (builder *QueryBuilder, bindCtx *BindContext
 		cols:           []string{"a", "b", "c"},
 		colIsHidden:    []bool{false, false, false},
 		types:          []*plan.Type{&plan2Type, &plan2Type, &plan2Type},
-		refCnts:        []uint{0, 0, 0},
 		colIdByName:    map[string]int32{"a": 0, "b": 1, "c": 2},
 		isClusterTable: false,
 		defaults:       []string{"", "", ""},
@@ -2958,7 +2957,6 @@ func genBuilderAndCtxWithColumnTypesType(t testing.TB, typesType types.Type, col
 		cols:           []string{colName},
 		colIsHidden:    []bool{false},
 		types:          []*plan.Type{&plan2Type},
-		refCnts:        []uint{0},
 		colIdByName:    map[string]int32{colName: 0},
 		isClusterTable: false,
 		defaults:       []string{""},
@@ -5096,6 +5094,88 @@ func TestSetOperationMixedCharVarcharCommonTypeIsOrderIndependent(t *testing.T) 
 
 }
 
+func TestSetOperationMixedTextBinaryKeepsByteWidth(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sql   string
+		oid   types.T
+		width int32
+	}{
+		{
+			name:  "char before binary with three branches",
+			sql:   "select cast('' as char(1)) union all select cast('hello-long' as binary) union all select cast('' as char(1))",
+			oid:   types.T_blob,
+			width: types.MaxLongTextLen,
+		},
+		{
+			name:  "binary before char",
+			sql:   "select cast('hello-long' as binary) union all select cast('' as char(1))",
+			oid:   types.T_blob,
+			width: types.MaxLongTextLen,
+		},
+		{
+			name:  "bare null has no width",
+			sql:   "select null union all select cast('' as char(1)) union all select cast('hello-long' as binary)",
+			oid:   types.T_blob,
+			width: types.MaxLongTextLen,
+		},
+		{
+			name:  "nested blob stays wide",
+			sql:   "select cast('' as char(1)) as v union all select v from (select cast('hello-long' as binary) as v union all select cast('' as char(1))) as nested",
+			oid:   types.T_blob,
+			width: types.MaxLongTextLen,
+		},
+		{
+			name:  "utf8 character width becomes byte width",
+			sql:   "select cast('abc' as char(3)) union all select cast('x' as binary(1))",
+			oid:   types.T_varbinary,
+			width: 12,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			var setNode *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_UNION_ALL {
+					setNode = node
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Equal(t, int32(tc.oid), setNode.ProjectList[0].Typ.Id)
+			require.Equal(t, tc.width, setNode.ProjectList[0].Typ.Width)
+			require.Equal(t, uint32(types.CharsetBinary), setNode.ProjectList[0].Typ.Charset)
+			require.False(t, setNode.ProjectList[0].Typ.PadSpace)
+			for _, childID := range setNode.Children {
+				child := logicPlan.GetQuery().Nodes[childID]
+				require.Equal(t, int32(tc.oid), child.ProjectList[0].Typ.Id)
+				require.Equal(t, tc.width, child.ProjectList[0].Typ.Width)
+			}
+		})
+	}
+
+	t.Run("explicit Unicode collation keeps unbounded text", func(t *testing.T) {
+		logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"select cast('Á' as char(1)) collate utf8mb4_unicode_ci union all select cast('a ' as binary)")
+		require.NoError(t, err)
+		var setNode *plan.Node
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_UNION_ALL {
+				setNode = node
+			}
+		}
+		require.NotNil(t, setNode)
+		require.Equal(t, int32(types.T_text), setNode.ProjectList[0].Typ.Id)
+		require.Equal(t, int32(types.MaxLongTextLen), setNode.ProjectList[0].Typ.Width)
+		require.Equal(t, uint32(types.CharsetUTF8MB4UnicodeCI), setNode.ProjectList[0].Typ.Charset)
+		require.True(t, setNode.ProjectList[0].Typ.PadSpace)
+		for _, childID := range setNode.Children {
+			child := logicPlan.GetQuery().Nodes[childID]
+			require.Equal(t, int32(types.T_text), child.ProjectList[0].Typ.Id)
+		}
+	})
+}
+
 func TestPreparedSetOperationPureCharUsesCommonPaddedType(t *testing.T) {
 	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare pure_char_set from 'select ? as v union all select ? as v'")
@@ -6023,7 +6103,6 @@ func TestQueryBuilder_bindOrderByEnum(t *testing.T) {
 		cols:           []string{"id", "val"},
 		colIsHidden:    []bool{false, false},
 		types:          []*plan.Type{&plan2IntType, &plan2Type},
-		refCnts:        []uint{0, 0},
 		colIdByName:    map[string]int32{"id": 0, "val": 1},
 		isClusterTable: false,
 		defaults:       []string{"", ""},
@@ -6072,7 +6151,6 @@ func TestQueryBuilder_bindOrderByEnumDistinct(t *testing.T) {
 		cols:           []string{"id", "val"},
 		colIsHidden:    []bool{false, false},
 		types:          []*plan.Type{&plan2IntType, &plan2Type},
-		refCnts:        []uint{0, 0},
 		colIdByName:    map[string]int32{"id": 0, "val": 1},
 		isClusterTable: false,
 		defaults:       []string{"", ""},
@@ -6339,6 +6417,33 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			width:       8,
 			notNullable: true,
 		},
+		{
+			name:        "mixed char and binary keeps later bytes",
+			rows:        "row(cast('' as char(1))), row(cast('hello-long' as binary)), row(cast('' as char(1)))",
+			oid:         types.T_blob,
+			width:       types.MaxLongTextLen,
+			notNullable: true,
+		},
+		{
+			name:        "mixed binary and char is order independent",
+			rows:        "row(cast('hello-long' as binary)), row(cast('' as char(1)))",
+			oid:         types.T_blob,
+			width:       types.MaxLongTextLen,
+			notNullable: true,
+		},
+		{
+			name:  "bare null before mixed char and binary",
+			rows:  "row(null), row(cast('' as char(1))), row(cast('hello-long' as binary))",
+			oid:   types.T_blob,
+			width: types.MaxLongTextLen,
+		},
+		{
+			name:        "character width reserves utf8 bytes",
+			rows:        "row(cast('abc' as char(3))), row(cast('x' as binary(1)))",
+			oid:         types.T_varbinary,
+			width:       12,
+			notNullable: true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			node, err := bindValues(t, test.rows)
@@ -6349,6 +6454,10 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			require.Equal(t, test.width, columnType.Width)
 			require.Equal(t, test.scale, columnType.Scale)
 			require.Equal(t, test.notNullable, columnType.NotNullable)
+			if test.oid == types.T_blob || test.oid == types.T_varbinary {
+				require.Equal(t, uint32(types.CharsetBinary), columnType.Charset)
+				require.False(t, columnType.PadSpace)
+			}
 
 			require.Len(t, node.RowsetData.Cols, 1)
 			for _, row := range node.RowsetData.Cols[0].Data {
@@ -6358,6 +6467,28 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("explicit text collation retains text admission", func(t *testing.T) {
+		for _, test := range []struct {
+			rows  string
+			oid   types.T
+			width int32
+		}{
+			{"row(cast('a' as char(1)) collate utf8mb4_unicode_ci), row(cast('A' as binary(1)))", types.T_varchar, 4},
+			{"row(cast('a' as char(1)) collate utf8mb4_unicode_ci), row(cast('A' as binary))", types.T_text, types.MaxLongTextLen},
+		} {
+			node, err := bindValues(t, test.rows)
+			require.NoError(t, err)
+			columnType := node.TableDef.Cols[0].Typ
+			require.Equal(t, int32(test.oid), columnType.Id)
+			require.Equal(t, test.width, columnType.Width)
+			require.Equal(t, uint32(types.CharsetUTF8MB4UnicodeCI), columnType.Charset)
+			for _, row := range node.RowsetData.Cols[0].Data {
+				require.Equal(t, columnType.Id, row.Expr.Typ.Id)
+				require.Equal(t, columnType.Width, row.Expr.Typ.Width)
+			}
+		}
+	})
 
 	t.Run("string comparison provenance", func(t *testing.T) {
 		for _, test := range []struct {
@@ -7305,7 +7436,6 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 					cols:           []string{"string_col"},
 					colIsHidden:    []bool{false},
 					types:          []*plan.Type{&plan2Type},
-					refCnts:        []uint{0},
 					colIdByName:    map[string]int32{"string_col": 0},
 					isClusterTable: false,
 					defaults:       []string{""},
@@ -7342,7 +7472,6 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 					cols:           []string{"string_col"},
 					colIsHidden:    []bool{false},
 					types:          []*plan.Type{&plan2Type},
-					refCnts:        []uint{0},
 					colIdByName:    map[string]int32{"string_col": 0},
 					isClusterTable: false,
 					defaults:       []string{""},
@@ -7548,7 +7677,6 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 					cols:           []string{"string_col"},
 					colIsHidden:    []bool{false},
 					types:          []*plan.Type{&plan2Type},
-					refCnts:        []uint{0},
 					colIdByName:    map[string]int32{"string_col": 0},
 					isClusterTable: false,
 					defaults:       []string{""},
@@ -7585,7 +7713,6 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 					cols:           []string{"string_col"},
 					colIsHidden:    []bool{false},
 					types:          []*plan.Type{&plan2Type},
-					refCnts:        []uint{0},
 					colIdByName:    map[string]int32{"string_col": 0},
 					isClusterTable: false,
 					defaults:       []string{""},

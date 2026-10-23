@@ -80,13 +80,13 @@ func TestIvfPreFulltextMembershipSearchesOnce(t *testing.T) {
 		{name: "fulltext2", fulltext2: true, query: "select id from docs where match(body) against('needle')", searches: 1},
 		{name: "scalar and null", query: "select id from docs where match(body) against('needle') and tag = 2 and body is not null", searches: 1},
 		{name: "score threshold", query: "select id from docs where match(body) against('needle') > 0.5", searches: 1},
-		{name: "mixed or", query: "select id from docs where match(body) against('needle') and (match(body) against('needle') or tag = 2)", searches: 1},
+		{name: "mixed or", exactSort: true, query: "select id from docs where match(body) against('needle') and (match(body) against('needle') or tag = 2)", searches: 1},
 		{name: "two terms", query: "select id from docs where match(body) against('needle') and match(body) against('omega')", searches: 2},
 		{name: "boolean mode", query: "select id from docs where match(body) against('+needle +omega' in boolean mode)", searches: 1},
 		{name: "projected score", query: "select id, match(body) against('needle') from docs where match(body) against('needle')", searches: 2},
 		{name: "wrapped projected score", query: "select id, round(match(body) against('needle'), 3) from docs where match(body) against('needle')", searches: 2},
 		{name: "projected body", query: "select id, body from docs where match(body) against('needle')", searches: 1},
-		{name: "volatile conjunct", query: "select id from docs where match(body) against('needle') and match(body) against('needle') > rand()", exactSort: true},
+		{name: "volatile conjunct", query: "select id from docs where match(body) against('needle') and match(body) against('needle') > rand()", searches: 1, exactSort: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -95,9 +95,19 @@ func TestIvfPreFulltextMembershipSearchesOnce(t *testing.T) {
 			qry := buildIvfFulltextMembershipTestPlan(t, ctx, query, false)
 			fulltext, vector, membership := countIvfFulltextSearches(qry)
 			if test.exactSort {
-				// A volatile filter cannot run in both PRE scans.
+				// Boolean composition and volatile filters retain exact ordering.
 				require.Zero(t, vector)
 				require.Zero(t, membership)
+				exactSort := false
+				for _, node := range booleanFullTextNodes(qry, qry.Steps[0]) {
+					if node.NodeType == planpb.Node_SORT {
+						for _, order := range node.OrderBy {
+							exactSort = exactSort || exprCallsFunc(order.Expr, "l2_distance")
+						}
+					}
+				}
+				require.True(t, exactSort, "fallback must retain exact distance ordering")
+				require.Equal(t, test.searches, fulltext)
 				return
 			}
 			require.Equal(t, 1, vector)
