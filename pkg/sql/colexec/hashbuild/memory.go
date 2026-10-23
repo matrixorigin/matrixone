@@ -81,8 +81,9 @@ func (hashBuild *HashBuild) shouldSpillBeforeCopy(bat *batch.Batch, growth int64
 }
 
 // BuildMemoryBound obtains encoded-key bounds from actual column values. An
-// expression without a precomputed capacity contract returns false, selecting
-// spill before hash allocation instead of assuming the old 128-byte heuristic.
+// expression without a precomputed capacity contract returns false. Controlled
+// imports must spill in that case; ordinary joins may retain their legacy
+// expression path. A known bound is reserved before either path allocates.
 func (hb *HashmapBuilder) BuildMemoryBound(conditions []*plan.Expr, needSels, needUnique bool) (int64, bool) {
 	keyMax, keyTotal := int64(0), int64(0)
 	for _, condition := range conditions {

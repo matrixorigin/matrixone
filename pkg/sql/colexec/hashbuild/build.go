@@ -246,7 +246,10 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 	needUniqueVec := !hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec != nil && hashBuild.RuntimeFilterSpec.Expr != nil
 	if !spillMode && ctr.spillAllowed && hashBuild.NeedHashMap && ctr.hashmapBuilder.InputBatchRowCount > 0 {
 		bound, ok := ctr.hashmapBuilder.BuildMemoryBound(hashBuild.Conditions, hashBuild.NeedAllocateSels, needUniqueVec)
-		if !ok || !ctr.acquireMemory(bound) {
+		// The import controller admits only key expressions with a capacity
+		// contract. Ordinary joins retain their existing expression behavior;
+		// an unknown import bound alone is not evidence of memory pressure.
+		if !ok && proc.Base.ImportMemory != nil || ok && !ctr.acquireMemory(bound) {
 			if err := beginSpill(); err != nil {
 				return err
 			}

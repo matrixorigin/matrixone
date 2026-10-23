@@ -14,7 +14,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -25,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -89,16 +87,17 @@ func memoryStage(op vm.Operator, count int) (MemoryStageDescriptor, bool, error)
 			return stage, false, nil
 		}
 		stage.Role = MemoryStageCSV
-		stage.Schema = make([]types.Type, len(value.Es.Cols))
-		for i, col := range value.Es.Cols {
-			stage.Schema[i] = plan2.MakeTypeByPlan2Type(col.Typ)
-		}
+		stage.Schema, _ = value.MemoryInputSchema()
 		stage.RetainedFields = max(0, int(value.Es.ColumnListLen)+2)
 		for _, attr := range value.Es.Attrs {
 			stage.RetainedFields = max(stage.RetainedFields, int(attr.ColFieldIndex)+1)
 		}
 	case *multi_update.MultiUpdate:
+		if value.Action != multi_update.UpdateWriteS3 {
+			return stage, false, nil
+		}
 		stage.Role = MemoryStageOutput
+		stage.InsertOnly = multi_update.InsertOnlyOutput(value.MultiUpdateCtx)
 		stage.TableCount = len(value.MultiUpdateCtx)
 		for _, table := range value.MultiUpdateCtx {
 			stage.Projections = append(stage.Projections, tableMemorySchema(table.TableDef))
@@ -108,6 +107,7 @@ func memoryStage(op vm.Operator, count int) (MemoryStageDescriptor, bool, error)
 			return stage, false, nil
 		}
 		stage.Role = MemoryStageOutput
+		stage.InsertOnly = true
 		stage.TableCount = 1
 		stage.Schema = tableMemorySchema(value.InsertCtx.TableDef)
 	case *hashjoin.HashJoin:
@@ -142,11 +142,18 @@ func memoryStage(op vm.Operator, count int) (MemoryStageDescriptor, bool, error)
 }
 
 func (c *Compile) collectMemoryManifests(target int64) (map[string]*memoryCNManifest, map[*Scope]string, error) {
+	producers, ids, supported, err := c.memoryProducers()
+	if err != nil {
+		return nil, nil, err
+	}
+	if !supported {
+		return nil, nil, nil
+	}
 	locations := c.memoryExecutionLocations()
 	manifests := make(map[string]*memoryCNManifest)
 	// Include the origin even if it has no controlled stage: all queries acquire
 	// any resources there in exactly the same global CN ordering.
-	manifests[c.addr] = &memoryCNManifest{addr: c.addr, id: c.proc.GetService(), manifest: MemoryManifest{TargetUnit: target, Parallel: c.ncpu}}
+	manifests[c.addr] = &memoryCNManifest{addr: c.addr, id: c.proc.GetService(), manifest: MemoryManifest{TargetUnit: target, Parallel: c.ncpu, Version: query.MemoryAdmissionProtocolVersion, Producers: producers}}
 	var walk func(*Scope) error
 	walk = func(scope *Scope) error {
 		if scope == nil {
@@ -155,7 +162,7 @@ func (c *Compile) collectMemoryManifests(target int64) (map[string]*memoryCNMani
 		addr := locations[scope]
 		entry := manifests[addr]
 		if entry == nil {
-			entry = &memoryCNManifest{addr: addr, id: scope.NodeInfo.Id, manifest: MemoryManifest{TargetUnit: target, Parallel: c.ncpu}}
+			entry = &memoryCNManifest{addr: addr, id: scope.NodeInfo.Id, manifest: MemoryManifest{TargetUnit: target, Parallel: c.ncpu, Version: query.MemoryAdmissionProtocolVersion, Producers: producers}}
 			manifests[addr] = entry
 		}
 		if entry.id == "" {
@@ -173,6 +180,7 @@ func (c *Compile) collectMemoryManifests(target int64) (map[string]*memoryCNMani
 			if ok {
 				entry.manifest.Stages = append(entry.manifest.Stages, stage)
 			}
+			entry.manifest.Stages = append(entry.manifest.Stages, memoryProducerStages(producers, ids[op], uint32(count))...)
 			return nil
 		}); err != nil {
 			return err
@@ -246,7 +254,7 @@ func (c *Compile) memoryCapabilities(ctx context.Context, entries []*memoryCNMan
 			return false, errors.New("empty memory capability response")
 		}
 		err = response.UnwrapError()
-		capable := response.GetProtocolVersion != nil && response.GetProtocolVersion.MemoryAdmission
+		capable := response.GetProtocolVersion != nil && response.GetProtocolVersion.MemoryAdmission && response.GetProtocolVersion.MemoryAdmissionVersion >= query.MemoryAdmissionProtocolVersion
 		if capable {
 			entry.processID = response.GetProtocolVersion.MemoryAdmissionProcessId
 			// Earlier admission-capable peers lack physical resource identity.
@@ -400,6 +408,11 @@ func closeMemoryControls(controls []*statementMemoryControl, cause error) {
 // before DOP recompilation or a terminal failure.
 func (c *Compile) beginStatementImportMemory(ctx context.Context, t rscthrottler.RSCThrottler) error {
 	c.clearImportMemoryTokens()
+	// Prepared Reset deliberately retains expression vectors for the next
+	// execution. A statement ticket cannot promise that cross-execution lifetime.
+	if c.isPrepare || c.importMemoryPrepared {
+		return nil
+	}
 	if !c.supportsBoundedImportKeys() {
 		return nil
 	}
@@ -601,5 +614,9 @@ func (c *Compile) supportsBoundedImportKeys() bool {
 	for _, scope := range c.scopes {
 		walk(scope)
 	}
-	return supported
+	if !supported {
+		return false
+	}
+	_, _, supported, err := c.memoryProducers()
+	return supported && err == nil
 }

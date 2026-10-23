@@ -17,6 +17,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -188,6 +189,9 @@ func memoryControlCall(t *testing.T, ctx context.Context, service string, sessio
 	t.Helper()
 	if request.Action == MemoryControlOpen && request.ExpectedProcessID == "" {
 		request.ExpectedProcessID = runtime.ProcessInstanceID()
+	}
+	if request.Action == MemoryControlOpen && request.Manifest != nil {
+		request.Manifest.Version = query.MemoryAdmissionProtocolVersion
 	}
 	data, err := EncodeMemoryControlRequest(request)
 	require.NoError(t, err)

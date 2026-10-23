@@ -13,6 +13,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -72,8 +73,15 @@ func (c *Compile) walkLocalImportOperators(visit func(vm.Operator, int) error) e
 
 // localMemoryManifest uses actual planned copies, with no source allocation.
 func (c *Compile) localMemoryManifest(unit int64) (MemoryManifest, error) {
-	manifest := MemoryManifest{TargetUnit: unit, Parallel: c.ncpu}
-	err := c.walkLocalImportOperators(func(op vm.Operator, parallel int) error {
+	producers, ids, supported, err := c.memoryProducers()
+	if err != nil {
+		return MemoryManifest{}, err
+	}
+	if !supported {
+		return MemoryManifest{}, nil
+	}
+	manifest := MemoryManifest{TargetUnit: unit, Parallel: c.ncpu, Version: query.MemoryAdmissionProtocolVersion, Producers: producers}
+	err = c.walkLocalImportOperators(func(op vm.Operator, parallel int) error {
 		if uint64(parallel) > math.MaxUint32 {
 			return errors.New("too many import working slots")
 		}
@@ -84,6 +92,7 @@ func (c *Compile) localMemoryManifest(unit int64) (MemoryManifest, error) {
 		if controlled {
 			manifest.Stages = append(manifest.Stages, stage)
 		}
+		manifest.Stages = append(manifest.Stages, memoryProducerStages(producers, ids[op], uint32(parallel))...)
 		return nil
 	})
 	return manifest, err
@@ -212,6 +221,12 @@ func (c *Compile) endImportMemory() {
 	if c.importMemory == nil {
 		return
 	}
+	// runOnce and the remote scope runner have joined local scopes, their
+	// pipeline cleanup and IO owners. A timed-out End wait must not orphan a
+	// native spool clone after this attempt returns its complete I promise.
+	for base := range c.importMemoryBases {
+		base.ClosePipelineSpoolsAfterReadersStopped()
+	}
 	for base, previous := range c.importMemoryBases {
 		if base.ImportMemory == c.importMemory {
 			base.ImportMemory = previous
@@ -231,6 +246,7 @@ func (c *Compile) endImportMemory() {
 
 func (c *Compile) recompileImportMemory(ctx context.Context, parallel int) (*Compile, error) {
 	next := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	next.importMemoryPrepared = c.isPrepare || c.importMemoryPrepared
 	next.ncpu = parallel
 	next.SetOriginSQL(c.originSQL)
 	if err := next.Compile(ctx, c.pn, c.fill); err != nil {

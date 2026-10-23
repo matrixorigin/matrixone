@@ -192,6 +192,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		}
 		defer func() {
 			runCompile.endSpillEpochs(err != nil)
+			runCompile.closePipelineSpoolsAfterReadersStopped()
 			runCompile.endImportMemory()
 			runCompile.clear()
 			runCompile.Release()

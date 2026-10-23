@@ -251,7 +251,11 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// Every attempt owns its admission root. Pipeline Cleanup has joined
 		// the local scope and IO owners before runOnce returns.
 		err = func() (attemptErr error) {
-			defer func() { runC.endSpillEpochs(attemptErr != nil); runC.endImportMemory() }()
+			defer func() {
+				runC.endSpillEpochs(attemptErr != nil)
+				runC.closePipelineSpoolsAfterReadersStopped()
+				runC.endImportMemory()
+			}()
 			if attemptErr = runC.prePipelineInitializer(); attemptErr != nil {
 				return attemptErr
 			}
@@ -591,6 +595,7 @@ func (c *Compile) prepareRetry(defChanged bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.importMemoryPrepared = c.isPrepare || c.importMemoryPrepared
 	runC.SetOriginSQL(c.originSQL)
 	defer func() {
 		if e != nil {

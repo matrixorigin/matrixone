@@ -258,7 +258,7 @@ func TestMemoryControlEndLostACKClosesConnection(t *testing.T) {
 	}
 }
 
-func TestMemoryControlManifestIncludesEveryRemoteScope(t *testing.T) {
+func TestMemoryControlRemoteTransportKeepsWholeStatementLegacy(t *testing.T) {
 	c := memoryCompileFixture(t, 8)
 	remoteA := memorySourceScope("127.0.0.2:6001", 3, 1)
 	remoteB := memorySourceScope("127.0.0.2:6001", 5, 4)
@@ -269,17 +269,20 @@ func TestMemoryControlManifestIncludesEveryRemoteScope(t *testing.T) {
 	c.scopes = append(c.scopes, remoteA, remoteB)
 	manifests, locations, err := c.collectMemoryManifests(64 << 20)
 	require.NoError(t, err)
-	require.Len(t, manifests, 2)
-	for _, entry := range manifests {
-		require.Zero(t, entry.manifest.IncomingUnit, "global commit happens before any execution RPC can send a frame")
-	}
+	require.Empty(t, manifests, "remote queue/fragment/decode owners have no complete transport promise")
+	require.Empty(t, locations)
+	locations = c.memoryExecutionLocations()
 	require.Equal(t, remoteA.NodeInfo.Addr, locations[remoteA])
 	require.Equal(t, remoteB.NodeInfo.Addr, locations[remoteB])
-	remote := manifests[remoteA.NodeInfo.Addr]
-	_, spec, controlled, err := memoryManifestLayout(remote.manifest, 32<<20)
+	// Keep the pure all-copies envelope oracle independently of eligibility.
+	hypothetical := MemoryManifest{Stages: []MemoryStageDescriptor{{Role: MemoryStageCSV, Count: 3, Schema: []types.Type{types.T_int64.ToType()}}, {Role: MemoryStageCSV, Count: 5, Schema: []types.Type{types.T_int64.ToType()}}}}
+	_, spec, controlled, err := memoryManifestLayout(hypothetical, 32<<20)
 	require.NoError(t, err)
 	require.True(t, controlled)
 	require.Equal(t, uint32(8), spec.Inputs[0].Count, "the first RPC must reserve both present and future remote source scopes")
+	m := &compilerMemoryAdmission{failure: errors.New("unsupported transport must not open")}
+	require.NoError(t, c.beginStatementImportMemory(context.Background(), m))
+	require.Zero(t, m.tries)
 	c.scopes[0].MemoryToken = "closed-previous-generation"
 	remoteA.MemoryToken = "closed-previous-generation"
 	c.endImportMemory()
@@ -310,7 +313,7 @@ func TestMemoryControlCapabilityLegacyAndNetworkFailureDiffer(t *testing.T) {
 	client.send = func(addr string, req *query.Request) (*query.Response, error) {
 		require.Equal(t, query.CmdMethod_GetProtocolVersion, req.CmdMethod)
 		require.NotNil(t, req.GetProtocolVersion)
-		return &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{MemoryAdmission: addr == "new", MemoryAdmissionProcessId: addr}}, nil
+		return &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{MemoryAdmission: addr == "new", MemoryAdmissionProcessId: addr, MemoryAdmissionVersion: query.MemoryAdmissionProtocolVersion}}, nil
 	}
 	capable, err := c.memoryCapabilities(context.Background(), entries)
 	require.NoError(t, err)
@@ -342,7 +345,7 @@ func TestMemoryControlProcessAliasesAndMissingIdentityKeepWholeStatementLegacy(t
 				if addr == "second" {
 					index = 1
 				}
-				return &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{MemoryAdmission: true, MemoryAdmissionProcessId: test.ids[index]}}, nil
+				return &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{MemoryAdmission: true, MemoryAdmissionProcessId: test.ids[index], MemoryAdmissionVersion: query.MemoryAdmissionProtocolVersion}}, nil
 			}}
 			c.proc.Base.QueryClient = client
 			capable, err := c.memoryCapabilities(context.Background(), entries)
@@ -505,12 +508,15 @@ func TestMemoryControlWriterEligibilityDoesNotExtendToUnrelatedOperators(t *test
 	serial := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varbinary)}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "serial"}, Args: []*plan.Expr{col, col}}}}
 	for _, op := range []vm.Operator{
 		&insert.Insert{InsertCtx: &insert.InsertCtx{Engine: &memoryengine.BindedEngine{}}},
-		&projection.Projection{ProjectList: []*plan.Expr{serial}},
+		&multi_update.MultiUpdate{Action: multi_update.UpdateWriteTable},
 	} {
 		c := memoryCompileFixture(t, 1)
 		c.scopes = append(c.scopes, &Scope{RootOp: op})
-		require.True(t, c.supportsBoundedImportKeys(), "this gate covers memoryengine S3 raw output and the two PreInsert derived fields; it does not redefine Project expression support")
+		require.False(t, c.supportsBoundedImportKeys(), "direct engine/transaction workspace writes have no complete retained-data promise")
 	}
+	c := memoryCompileFixture(t, 1)
+	c.scopes = append(c.scopes, &Scope{RootOp: &projection.Projection{ProjectList: []*plan.Expr{serial}}})
+	require.True(t, c.supportsBoundedImportKeys(), "bounded Project serial retains its independent supported contract")
 }
 
 func TestMemoryControlUnknownVarlenKeysKeepWholeLoadLegacy(t *testing.T) {

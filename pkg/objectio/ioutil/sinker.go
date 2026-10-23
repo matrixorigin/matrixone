@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -370,7 +371,10 @@ func (s *sinkerStats) updateBytes(n int) {
 }
 
 type Sinker struct {
-	schema struct {
+	// Pipeline sources have immutable bitmap capacity after submission. The
+	// counter remains live until their worker destroys the source batches.
+	pipelineBitmapBytes atomic.Int64
+	schema              struct {
 		attrs      []string
 		attrTypes  []types.Type
 		sortKeyIdx int
@@ -483,6 +487,36 @@ func (sinker *Sinker) AppendAllocation(data *batch.Batch) int64 {
 		tail = sinker.staged.inMemory[n-1]
 	}
 	return SinkerAppendAllocation(data, tail, sinker.buf.buffers, sinker.config.bufferBytes)
+}
+
+func batchBitmapAllocation(bat *batch.Batch) int64 {
+	var size int64
+	if bat != nil {
+		for _, vec := range bat.Vecs {
+			size += int64(nulls.Allocated(vec.GetNulls()) + nulls.Allocated(vec.GetGrouping()))
+		}
+	}
+	return size
+}
+
+// RetainedBitmapBytes reports Go bitmap backing not charged by MPool. Like
+// AppendAllocation, local state must be inspected on the owning goroutine (or
+// while that goroutine is excluded by its owner's mutation lock). Pipeline
+// sources are counted atomically without visiting worker-owned batches.
+func (sinker *Sinker) RetainedBitmapBytes() int64 {
+	size := sinker.pipelineBitmapBytes.Load()
+	for _, bat := range sinker.staged.inMemory {
+		size += batchBitmapAllocation(bat)
+	}
+	for _, bat := range sinker.result.tail {
+		size += batchBitmapAllocation(bat)
+	}
+	if buffers, ok := sinker.buf.buffers.(interface{ Peek(int) *batch.Batch }); ok {
+		for i := 0; i < sinker.buf.buffers.Len(); i++ {
+			size += batchBitmapAllocation(buffers.Peek(i))
+		}
+	}
+	return size
 }
 
 // WriteBorrowedToFile is the zero-retained-credit path. The caller owns a W
@@ -647,14 +681,24 @@ func (sinker *Sinker) pipelineSubmit(ctx context.Context, data []*batch.Batch) e
 		}
 	}
 	waitStart := time.Now()
+	var bitmapBytes int64
+	for _, bat := range data {
+		bitmapBytes += batchBitmapAllocation(bat)
+	}
+	sinker.pipelineBitmapBytes.Add(bitmapBytes)
 	err := GetDefaultSinkPool().Submit(&poolSinkJob{
-		data:           data,
-		factory:        sinker.fSinker.factory,
-		mp:             sinker.mp,
-		fs:             sinker.fs,
-		result:         sinker.pipe.result,
-		workspace:      sinker.workspace,
-		sourceReleased: sinker.retainedRelease,
+		data:      data,
+		factory:   sinker.fSinker.factory,
+		mp:        sinker.mp,
+		fs:        sinker.fs,
+		result:    sinker.pipe.result,
+		workspace: sinker.workspace,
+		sourceReleased: func() {
+			sinker.pipelineBitmapBytes.Add(-bitmapBytes)
+			if sinker.retainedRelease != nil {
+				sinker.retainedRelease()
+			}
+		},
 	})
 	atomic.AddInt64(&sinker.timing.waitNs, int64(time.Since(waitStart)))
 	return err
@@ -1077,7 +1121,7 @@ func (sinker *Sinker) Write(
 		toAdd = end - offset
 		for col, vec := range curr.Vecs {
 			src := data.Vecs[col]
-			area := src.WindowSize(offset, end) - int64(toAdd*src.GetType().TypeSize())
+			area := src.UnionBatchAreaBytes(offset, end)
 			if err = vec.PreExtendWithArea(toAdd, int(area), sinker.mp); err != nil {
 				return
 			}

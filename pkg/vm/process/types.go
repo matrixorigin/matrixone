@@ -301,9 +301,10 @@ type BaseProcess struct {
 	// sqlContext includes the client context and the query context.
 	sqlContext QueryBaseContext
 	// atRuntime indicates whether the process is running in runtime.
-	atRuntime    bool
-	LoadTag      bool
-	ImportMemory *ImportMemory
+	atRuntime      bool
+	LoadTag        bool
+	ImportMemory   *ImportMemory
+	pipelineSpools pipelineSpoolRegistry
 
 	StmtProfile *StmtProfile
 	// Id, query id.

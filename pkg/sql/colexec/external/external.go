@@ -70,24 +70,59 @@ func (external *External) OpType() vm.OpType {
 	return vm.External
 }
 
-// UsesMemoryInput is shared with compiler admission. CSV and JSONLINE have a
-// source allocation table; Parquet and result-scan readers retain their own
-// existing resource paths and cannot claim that table as their memory bound.
+// UsesMemoryInput is shared with compiler admission. The physical CSV reader
+// has a source allocation table. JSONLINE also parses and constructs fields
+// through transJson*, whose conversion scratch/expansion has no complete input
+// contract here; it retains legacy execution alongside Parquet/result scans.
 func (external *External) UsesMemoryInput() bool {
+	_, ok := external.memoryInputParam()
+	return ok
+}
+
+func (external *External) memoryInputParam() (*tree.ExternParam, bool) {
 	if external == nil || external.Es == nil {
-		return false
+		return nil, false
 	}
 	param := external.Es.Extern
 	if param == nil {
 		param = &tree.ExternParam{}
 		if json.Unmarshal([]byte(external.Es.CreateSql), param) != nil {
-			return false
+			return nil, false
 		}
 		if plan2.InitS3Param(param) != nil {
-			return false
+			return nil, false
 		}
 	}
-	return param.ExternType != int32(plan.ExternType_RESULT_SCAN) && (param.Format == tree.CSV || param.Format == tree.JSONLINE)
+	if param.ExternType == int32(plan.ExternType_RESULT_SCAN) || param.Format != tree.CSV || len(external.Es.Attrs) > len(external.Es.Cols) {
+		return nil, false
+	}
+	for i, attr := range external.Es.Attrs {
+		// getFieldFromLine substitutes a filename for this synthetic column.
+		// Its length is unrelated to the bounded raw record, so that source
+		// cannot claim the CSV allocation table without a separate path bound.
+		if catalog.ContainExternalHidenCol(attr.ColName) || external.Es.Cols[i] == nil ||
+			attr.ColIndex < 0 || int(attr.ColIndex) >= len(external.Es.Attrs) || attr.ColFieldIndex < 0 {
+			return nil, false
+		}
+	}
+	return param, true
+}
+
+// MemoryInputSchema describes the physical vectors allocated by Prepare before
+// any fused projection. ParallelLoad reads raw VARCHAR vectors even when SQL
+// declares numeric/JSON/vector columns. Cluster-table row validation does not
+// change this allocation rule. Keep the same makeType owner as Prepare.
+func (external *External) MemoryInputSchema() ([]types.Type, bool) {
+	param, ok := external.memoryInputParam()
+	if !ok {
+		return nil, false
+	}
+	parallelLoad := external.Es.ParallelLoad && param.Format != tree.PARQUET
+	schema := make([]types.Type, len(external.Es.Attrs))
+	for i := range schema {
+		schema[i] = makeType(&external.Es.Cols[i].Typ, parallelLoad)
+	}
+	return schema, true
 }
 
 func (external *External) Prepare(proc *process.Process) error {

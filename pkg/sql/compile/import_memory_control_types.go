@@ -14,6 +14,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
@@ -30,6 +31,7 @@ const (
 	MemoryStageCSV      = "csv"
 	MemoryStageOutput   = "output"
 	MemoryStageJoin     = "join"
+	MemoryStageProducer = "producer"
 )
 
 // MemoryManifest describes the entire physical DAG on one CN. It is sent before
@@ -37,19 +39,23 @@ const (
 // produce frames until all CNs commit min(admitted units). A nonzero value is
 // reserved for an already materialized input and never supplied by this origin.
 type MemoryManifest struct {
-	TargetUnit   int64                   `json:"target_unit"`
-	IncomingUnit int64                   `json:"incoming_unit"`
-	Parallel     int                     `json:"parallel"`
-	Stages       []MemoryStageDescriptor `json:"stages"`
+	Version      uint32                     `json:"version,omitempty"`
+	Producers    []MemoryProducerDescriptor `json:"producers,omitempty"`
+	TargetUnit   int64                      `json:"target_unit"`
+	IncomingUnit int64                      `json:"incoming_unit"`
+	Parallel     int                        `json:"parallel"`
+	Stages       []MemoryStageDescriptor    `json:"stages"`
 }
 
 type MemoryStageDescriptor struct {
+	Producer        uint32              `json:"producer,omitempty"`
 	Role            string              `json:"role"`
 	Count           uint32              `json:"count"`
 	Schema          []types.Type        `json:"schema,omitempty"`
 	Projections     [][]types.Type      `json:"projections,omitempty"`
 	RetainedFields  int                 `json:"retained_fields,omitempty"`
 	TableCount      int                 `json:"table_count,omitempty"`
+	InsertOnly      bool                `json:"insert_only,omitempty"`
 	LeftTypes       []types.Type        `json:"left_types,omitempty"`
 	RightTypes      []types.Type        `json:"right_types,omitempty"`
 	NonEqExpression []byte              `json:"non_eq_expression,omitempty"`
@@ -123,6 +129,26 @@ func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportM
 	spec := rscthrottler.WorkingSetSpec{UnitBytes: unit, Inputs: []rscthrottler.InputSlotSpec{{Name: "csv"}, {Name: "output"}, {Name: "join-input"}}}
 	var projections [][]types.Type
 	var maxRow int64
+	var producerBounds []memoryProducerBound
+	if len(manifest.Producers) > 0 {
+		if manifest.Version != query.MemoryAdmissionProtocolVersion {
+			return nil, spec, false, errors.New("unsupported producer manifest version")
+		}
+		var err error
+		producerBounds, err = memoryProducerBounds(manifest.Producers, unit)
+		if err != nil {
+			return nil, spec, false, err
+		}
+		for _, bound := range producerBounds {
+			// Encoded writer frames are consumed only by metadata flushers, not
+			// by raw-data writers/joins. Their byte bound comes from the final
+			// output promise below; feeding it back into the raw-row floor would
+			// introduce a false circular envelope.
+			if !bound.Metadata {
+				maxRow = max(maxRow, bound.Row)
+			}
+		}
+	}
 	for _, stage := range manifest.Stages {
 		if stage.Count == 0 {
 			continue
@@ -144,6 +170,7 @@ func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportM
 		}
 	}
 	controlled := false
+	var producerStages []MemoryStageDescriptor
 	for _, stage := range manifest.Stages {
 		if stage.Count == 0 {
 			continue
@@ -160,7 +187,13 @@ func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportM
 				return nil, spec, false, err
 			}
 		case MemoryStageOutput:
-			capacity, err := multi_update.OutputEnvelope(unit, maxRow, max(1, stage.TableCount))
+			var capacity int64
+			var err error
+			if stage.InsertOnly {
+				capacity, err = colexec.InsertMetadataOutputEnvelope(unit, max(1, stage.TableCount))
+			} else {
+				capacity, err = multi_update.OutputEnvelope(unit, maxRow, max(1, stage.TableCount))
+			}
 			if err != nil {
 				return nil, spec, false, err
 			}
@@ -206,6 +239,11 @@ func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportM
 			if err := addMemorySlots(&spec.Inputs[2].Count, int(stage.Count), 2); err != nil {
 				return nil, spec, false, err
 			}
+		case MemoryStageProducer:
+			if uint64(stage.Producer) >= uint64(len(producerBounds)) {
+				return nil, spec, false, errors.New("invalid producer stage index")
+			}
+			producerStages = append(producerStages, stage)
 		default:
 			return nil, spec, false, fmt.Errorf("unknown memory stage %q", stage.Role)
 		}
@@ -226,6 +264,22 @@ func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportM
 	spec.Inputs[0].Bytes = meta.SourceBytes
 	spec.Inputs[1].Bytes = meta.OutputBytes
 	spec.Inputs[2].Bytes = meta.JoinInputBytes
+	if len(producerBounds) > 0 && meta.OutputBytes > 0 {
+		// Older manifests and raw-delete metadata retain the conservative
+		// shared output limit. Explicit INSERT-only producers derive their own
+		// unit-based protocol cap; a larger unrelated output owner must never
+		// enlarge their frames or downstream spool/consumer promises.
+		producerBounds, err = memoryProducerBoundsWithFrame(manifest.Producers, unit, meta.OutputBytes/4)
+		if err != nil {
+			return nil, spec, false, err
+		}
+	}
+	for _, stage := range producerStages {
+		capacity := producerBounds[stage.Producer].Scratch
+		if capacity > 0 {
+			spec.Inputs = append(spec.Inputs, rscthrottler.InputSlotSpec{Name: fmt.Sprintf("producer-%d", stage.Producer), Count: stage.Count, Bytes: capacity})
+		}
+	}
 	return meta, spec, true, nil
 }
 
@@ -289,8 +343,23 @@ func admitMemoryManifest(ctx context.Context, throttler rscthrottler.RSCThrottle
 	if err != nil || len(specs) == 0 {
 		return nil, err
 	}
+	if manifest.Parallel > 1 {
+		headroom := rscthrottler.WorkingSetHeadroom(throttler)
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
+		// A target that cannot fit even an empty process gains nothing from
+		// reclaim. Prefer a smaller graph before permanently shrinking its
+		// unit. Temporary pressure still uses the complete candidate set.
+		if headroom.Limit > 0 && workingLayoutTotal(specs[0]) > headroom.Limit {
+			return nil, &importDOPRetryError{max(1, manifest.Parallel/2)}
+		}
+	}
 	var working *rscthrottler.WorkingSet
-	if _, capable := throttler.(rscthrottler.WorkingSetCandidatesThrottler); capable {
+	final, untilFit := throttler.(rscthrottler.WorkingSetCandidatesUntilFitThrottler)
+	if manifest.Parallel <= 1 && untilFit {
+		working, err = final.ReserveWorkingSetCandidatesUntilFit(ctx, specs)
+	} else if _, capable := throttler.(rscthrottler.WorkingSetCandidatesThrottler); capable {
 		working, err = rscthrottler.ReserveWorkingSetCandidates(ctx, throttler, specs)
 	} else {
 		// Older test/embedding providers retain their single-spec API. The real CN

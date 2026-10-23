@@ -226,6 +226,8 @@ func (w *CNS3Writer) WriteOwned(ctx context.Context, bat *batch.Batch) (bool, er
 
 func (w *CNS3Writer) AppendAllocation(bat *batch.Batch) int64 { return w.sinker.AppendAllocation(bat) }
 
+func (w *CNS3Writer) RetainedBitmapBytes() int64 { return w.sinker.RetainedBitmapBytes() }
+
 func (w *CNS3Writer) WriteBorrowedToFile(ctx context.Context, bat *batch.Batch, workspace *rscthrottler.WorkspaceLease) error {
 	return w.sinker.WriteBorrowedToFile(ctx, bat, workspace)
 }

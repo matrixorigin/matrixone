@@ -182,7 +182,7 @@ func appendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int,
 		length = src.RowCount() - offset
 	}
 	for i := range dst.Vecs {
-		area := src.Vecs[i].WindowSize(offset, offset+length) - int64(length*src.Vecs[i].GetType().TypeSize())
+		area := src.Vecs[i].UnionBatchAreaBytes(offset, offset+length)
 		if err = dst.Vecs[i].PreExtendWithArea(length, int(area), proc.Mp()); err != nil {
 			return 0, err
 		}
@@ -226,15 +226,11 @@ func (bs *Batches) AppendAllocation(src *batch.Batch) int64 {
 	if src.RowCount() == DefaultBatchSize {
 		total = batchAllocationMetadata(src)
 		for _, vec := range src.Vecs {
-			rows := src.RowCount()
-			if vec.IsConst() {
-				rows = 1
-			}
-			if vec.IsConstNull() {
-				rows = 0
-			}
-			total = add(total, mpool.GrowCapacity(0, int64(rows*vec.GetType().TypeSize())))
-			total = add(total, int64(len(vec.GetArea())+nulls.Allocated(vec.GetNulls())+nulls.Allocated(vec.GetGrouping())))
+			// Dup flattens constants and uses UnionBatch's physical-area copy
+			// policy. The destination growth (including per-column capacity
+			// rounding and bitmaps) is identical to an empty vector append.
+			empty := vector.NewVec(*vec.GetType())
+			total = add(total, empty.AppendWindowAllocation(vec, 0, vec.Length()))
 		}
 	} else {
 		offset, oldCount := 0, len(bs.Buf)
@@ -243,19 +239,15 @@ func (bs *Batches) AppendAllocation(src *batch.Batch) int64 {
 			rows := min(src.RowCount(), DefaultBatchSize-last.RowCount())
 			for i, vec := range last.Vecs {
 				total = add(total, vec.AppendWindowAllocation(src.Vecs[i], 0, rows))
-				total = add(total, nulls.GrowthAllocation(vec.GetNulls(), last.RowCount()+rows+1)+nulls.GrowthAllocation(vec.GetGrouping(), last.RowCount()+rows+1))
 			}
 			offset = rows
 		}
 		for offset < src.RowCount() {
 			rows := min(src.RowCount()-offset, DefaultBatchSize)
-			prealloc := min(src.RowCount()-offset, DefaultBatchSize)
 			total = add(total, batchAllocationMetadata(src))
 			for _, vec := range src.Vecs {
-				total = add(total, mpool.GrowCapacity(0, int64(prealloc*vec.GetType().TypeSize())))
-				area := vec.WindowSize(offset, offset+rows) - int64(rows*vec.GetType().TypeSize())
-				total = add(total, mpool.GrowCapacity(0, area))
-				total = add(total, nulls.GrowthAllocation(nil, rows+1)*2)
+				empty := vector.NewVec(*vec.GetType())
+				total = add(total, empty.AppendWindowAllocation(vec, offset, offset+rows))
 			}
 			offset += rows
 		}

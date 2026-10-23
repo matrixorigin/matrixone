@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"sort"
 	"strconv"
@@ -132,7 +133,9 @@ func NewCompile(
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
-	c.cnLabel = cnLabel
+	// A Compile clears its labels on Release. Retries and the connection may
+	// still use the supplied map after this attempt has retired.
+	c.cnLabel = maps.Clone(cnLabel)
 	c.startAt = startAt
 	c.disableRetry = false
 	c.ncpu = system.GoMaxProcs()
@@ -275,6 +278,7 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.isPrepare = false
+	c.importMemoryPrepared = false
 	c.hasMergeOp = false
 	c.needBlock = false
 	c.ignorePublish = false

@@ -5,6 +5,7 @@ package rscthrottler
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -95,7 +96,7 @@ func TestWorkingSetCandidatesReleaseReselectsLargest(t *testing.T) {
 	require.Equal(t, int64(300), input.Capacity())
 }
 
-func TestWorkingSetCandidatesLastOwnerImpossibleUnblocksFIFO(t *testing.T) {
+func TestWorkingSetCandidatesLastOwnerPressureUnblocksFIFO(t *testing.T) {
 	m, _, queued := admissionFixture(t, 1000, 900, 800)
 	_, ok := m.Acquire(100)
 	require.True(t, ok)
@@ -121,7 +122,7 @@ func TestWorkingSetCandidatesLastOwnerImpossibleUnblocksFIFO(t *testing.T) {
 	require.Equal(t, int64(250), capacity.Minimum)
 	require.Equal(t, int64(200), capacity.Available)
 	succeeded := await(t, second)
-	require.NoError(t, succeeded.err, "the impossible head must retire rather than blocking a fitting successor")
+	require.NoError(t, succeeded.err, "a retry-capable head retires its pressure response before a fitting successor")
 	t.Cleanup(succeeded.working.Close)
 }
 
@@ -189,4 +190,166 @@ func TestWorkingSetSingleSpecKeepsOwnerlessWaitContract(t *testing.T) {
 	require.Equal(t, "working-set", await(t, queued))
 	cancel()
 	require.ErrorIs(t, await(t, result), context.Canceled, "legacy single-spec users retain their cancellable wait rather than new capacity errors")
+}
+
+// Unlike ReclaimRestoresLargest, a smaller unit already fits before recovery.
+// These cells distinguish avoiding needless fragmentation from capacity failure.
+func TestWorkingSetCandidatesReclaimBeforeSmallerFit(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		specs       []WorkingSetSpec
+		rssAfter    int64
+		wantUnit    int64
+		wantReclaim int32
+	}{
+		{
+			name:        "reclaim_restores_largest_feasible",
+			specs:       []WorkingSetSpec{candidateSpec(64, 400, 100), candidateSpec(32, 100, 100)},
+			rssAfter:    100,
+			wantUnit:    64,
+			wantReclaim: 1,
+		},
+		{
+			name:        "unchanged_resident_keeps_smaller_fit_after_once",
+			specs:       []WorkingSetSpec{candidateSpec(64, 400, 100), candidateSpec(32, 100, 100)},
+			rssAfter:    600,
+			wantUnit:    32,
+			wantReclaim: 1,
+		},
+		{
+			name:        "statically_impossible_largest_needs_no_reclaim",
+			specs:       []WorkingSetSpec{candidateSpec(64, 1000, 100), candidateSpec(32, 100, 100)},
+			rssAfter:    100,
+			wantUnit:    32,
+			wantReclaim: 0,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			m, c, _ := admissionFixture(t, 1000, 900, 600)
+			var rss atomic.Int64
+			rss.Store(600)
+			var reclaims atomic.Int32
+			c.readSample = func() memorySample { return memorySample{rss: rss.Load(), total: 1000} }
+			c.reclaim = func(*memThrottler) { reclaims.Add(1); rss.Store(test.rssAfter) }
+			w, err := m.ReserveWorkingSetCandidates(context.Background(), test.specs)
+			require.NoError(t, err)
+			t.Cleanup(w.Close)
+			require.Equal(t, test.wantUnit, w.UnitBytes())
+			require.Equal(t, test.wantReclaim, reclaims.Load())
+			require.Nil(t, c.workerStop, "a fitting ownerless request must not start periodic recovery")
+		})
+	}
+}
+
+func TestWorkingSetCandidatesActiveOwnerKeepsSmallerFitWithoutReclaim(t *testing.T) {
+	m, c, _ := admissionFixture(t, 1000, 900, 100)
+	owner, err := m.ReserveWorkingSet(context.Background(), WorkingSetSpec{UnitBytes: 1, IOBytes: 300})
+	require.NoError(t, err)
+	t.Cleanup(owner.Close)
+	var reclaims atomic.Int32
+	c.reclaim = func(*memThrottler) { reclaims.Add(1) }
+	w, err := m.ReserveWorkingSetCandidates(context.Background(), []WorkingSetSpec{candidateSpec(64, 700, 300), candidateSpec(32, 500, 300)})
+	require.NoError(t, err)
+	t.Cleanup(w.Close)
+	require.Equal(t, int64(32), w.UnitBytes(), "an active owner's shared W still permits immediate smaller-unit progress")
+	require.Zero(t, reclaims.Load())
+	require.Equal(t, int64(500), c.inputPromise.Load())
+	require.Equal(t, int64(300), c.workspacePromise.Load())
+}
+
+func TestWorkingSetCandidatesCancelDuringReclaimDespiteSmallerFit(t *testing.T) {
+	m, c, queued := admissionFixture(t, 1000, 900, 600)
+	entered, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(func() {
+		unblock()
+		c.fullMu.Lock()
+		done := c.fullDone
+		c.fullMu.Unlock()
+		if done != nil {
+			await(t, done)
+		}
+	})
+	c.reclaim = func(*memThrottler) { close(entered); <-release }
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	result := make(chan candidateResult, 1)
+	go func() {
+		w, err := m.ReserveWorkingSetCandidates(ctx, []WorkingSetSpec{candidateSpec(64, 400, 100), candidateSpec(32, 100, 100)})
+		result <- candidateResult{w, err}
+	}()
+	require.Equal(t, "working-set", await(t, queued))
+	await(t, entered)
+	cancel()
+	actual := await(t, result)
+	if actual.working != nil {
+		t.Cleanup(actual.working.Close)
+	}
+	require.Nil(t, actual.working)
+	require.ErrorIs(t, actual.err, context.Canceled, "an already fitting small candidate cannot hide cancellation during recovery")
+	c.mu.Lock()
+	empty := len(c.queue) == 0
+	c.mu.Unlock()
+	require.True(t, empty, "cancelled recovery must relinquish its FIFO node before the recovery callback finishes")
+	next, granted, err := m.TryReserveWorkingSet(context.Background(), candidateSpec(1, 10, 10))
+	require.NoError(t, err)
+	require.True(t, granted, "a successor may acquire after the cancelled head has retired")
+	t.Cleanup(next.Close)
+}
+
+func TestWorkingSetCandidatesReclaimRechecksAnotherPoolOwner(t *testing.T) {
+	m, c, queued := admissionFixture(t, 1000, 900, 600)
+	var rss atomic.Int64
+	rss.Store(600)
+	c.readSample = func() memorySample { return memorySample{rss: rss.Load(), total: 1000} }
+	entered, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(func() {
+		unblock()
+		c.fullMu.Lock()
+		done := c.fullDone
+		c.fullMu.Unlock()
+		if done != nil {
+			await(t, done)
+		}
+	})
+	var reclaims atomic.Int32
+	c.reclaim = func(*memThrottler) {
+		reclaims.Add(1)
+		close(entered)
+		<-release
+		rss.Store(300)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	result := make(chan candidateResult, 1)
+	go func() {
+		w, err := m.ReserveWorkingSetCandidates(ctx, []WorkingSetSpec{candidateSpec(64, 400, 100), candidateSpec(32, 100, 100)})
+		result <- candidateResult{w, err}
+	}()
+	require.Equal(t, "working-set", await(t, queued))
+	await(t, entered)
+	// Nonblocking Acquire in another pool has the same process coordinator,
+	// but it is not behind this pool's FIFO node. Its live D must be re-read.
+	other := &memThrottler{coordinator: c, limitRate: .9}
+	other.fillDefaults()
+	other.limit.Store(900)
+	other.actualTotalMemory.Store(1000)
+	other.rss.Store(600)
+	other.lastRefresh.Store(m.lastRefresh.Load())
+	_, granted := other.Acquire(300)
+	require.True(t, granted)
+	t.Cleanup(func() { other.Release(300) })
+	unblock()
+	actual := await(t, result)
+	if actual.working != nil {
+		t.Cleanup(actual.working.Close)
+	}
+	require.NoError(t, actual.err)
+	require.Equal(t, int64(32), actual.working.UnitBytes(), "new D300 plus refreshed RSS300 makes I400/W100 unsafe")
+	require.Equal(t, int32(1), reclaims.Load())
+	require.Equal(t, int64(300), c.dataReserved.Load())
+	require.Equal(t, int64(100), c.inputPromise.Load())
+	require.Equal(t, int64(100), c.workspacePromise.Load())
+	require.LessOrEqual(t, m.physicalUsed()+c.dataReserved.Load()+c.inputPromise.Load()+c.workspacePromise.Load(), int64(1000))
 }

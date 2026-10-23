@@ -37,8 +37,10 @@ func (e *RequestTooLargeError) Error() string {
 	return fmt.Sprintf("memory request %d exceeds maximum %d", e.Requested, e.Maximum)
 }
 
-// WorkingSetCapacityError means that no candidate fits after the last active
-// owner has retired and a complete process reclaim has finished.
+// WorkingSetCapacityError reports a statically impossible layout, or an
+// ownerless pressure snapshot to a caller that can retry a smaller graph.
+// UntilFit callers receive it only for static impossibility, not temporary
+// whole-process physical pressure.
 type WorkingSetCapacityError struct{ Minimum, Available int64 }
 
 func (e *WorkingSetCapacityError) Error() string {
@@ -49,6 +51,15 @@ func (e *WorkingSetCapacityError) Error() string {
 // mocks retain their original interface and waiting contract.
 type WorkingSetCandidatesThrottler interface {
 	ReserveWorkingSetCandidates(context.Context, []WorkingSetSpec) (*WorkingSet, error)
+}
+
+// WorkingSetCandidatesUntilFitThrottler is the optional final-graph capability.
+// Dynamic process pressure waits in one FIFO node until a candidate fits or the
+// caller cancels. A minimum larger than the entire process limit still fails.
+// The older candidate API remains available to callers that can retry a smaller
+// execution graph after an ownerless pressure response.
+type WorkingSetCandidatesUntilFitThrottler interface {
+	ReserveWorkingSetCandidatesUntilFit(context.Context, []WorkingSetSpec) (*WorkingSet, error)
 }
 
 var ErrWorkingSetClosed = errors.New("memory working set closed")

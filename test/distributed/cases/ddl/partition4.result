@@ -124,3 +124,18 @@ sale_id    product_id    sale_amount    sale_date
 6    2    1500.00    1992-05-01
 7    1    2000.00    1991-07-01
 drop table insert_ignore_06;
+drop table if exists partition_write_frames;
+create table partition_write_frames(id bigint) partition by range(id)(partition p0 values less than (0), partition p1 values less than (100000), partition p2 values less than maxvalue);
+insert into partition_write_frames select result from generate_series(-100000, 100000, 1) g;
+select count(*) as rows_written, sum(id) as id_sum from partition_write_frames;
+rows_written    id_sum
+200001    0
+insert into partition_write_frames select result from generate_series(-100000, 100000, 1) g;
+select count(*) as rows_written, sum(id) as id_sum from partition_write_frames;
+rows_written    id_sum
+400002    0
+delete from partition_write_frames where id < 0;
+select count(*) as rows_written, sum(id) as id_sum from partition_write_frames;
+rows_written    id_sum
+200002    10000100000
+drop table partition_write_frames;
