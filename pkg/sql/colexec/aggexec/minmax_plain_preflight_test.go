@@ -210,6 +210,47 @@ func TestFixedMinMaxPlainMetadataPreflightStandby(t *testing.T) {
 	}
 }
 
+func TestFixedMinMaxTargetShapePreflight(t *testing.T) {
+	for _, id := range []int64{AggIdOfMin, AggIdOfMax} {
+		t.Run(fmt.Sprint(id), func(t *testing.T) {
+			f := newFixedMetadataPreflightFixture(t, id, types.T_int64.ToType())
+			require.NoError(t, f.exec.GroupGrow(1))
+			input := f.intInput(t, []int64{7}, nil)
+			nullInput := f.intInput(t, []int64{0}, []bool{true})
+			ahead := f.intInput(t, []int64{3, 4}, nil)
+			for _, test := range []struct {
+				name string
+				vecs []*vector.Vector
+				want error
+			}{
+				{"nil vector list", nil, mpool.ErrAllocationAccountInvariant},
+				{"empty vector list", []*vector.Vector{}, mpool.ErrAllocationAccountInvariant},
+				{"nil first vector", []*vector.Vector{nil}, mpool.ErrAllocationAccountInvalid},
+				{"vector length ahead of state", []*vector.Vector{ahead}, mpool.ErrAllocationAccountInvalid},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					before := snapshotFixedMetadataPreflight(f)
+					used, calls := f.account.Snapshot().Used, f.controller.calls
+					func() {
+						state := &f.base.state[0]
+						original := state.vecs
+						state.vecs = test.vecs
+						// Restore before assertions can reach fixture cleanup or a
+						// snapshot, including FailNow/panic from a preflight call.
+						defer func() { state.vecs = original }()
+						require.NoError(t, f.exec.PreflightBatchFill(0, []uint64{1}, []*vector.Vector{nullInput}), "NULL candidates do not inspect target shape")
+						require.NoError(t, f.exec.PreflightBatchFill(0, []uint64{GroupNotMatched}, []*vector.Vector{input}), "unmatched groups do not inspect target shape")
+						require.ErrorIs(t, f.exec.PreflightBatchFill(0, []uint64{1}, []*vector.Vector{input}), test.want)
+					}()
+					require.Equal(t, before, snapshotFixedMetadataPreflight(f))
+					require.Equal(t, calls, f.controller.calls)
+					require.Equal(t, used, f.account.Snapshot().Used)
+				})
+			}
+		})
+	}
+}
+
 func TestFixedMinMaxTargetMetadataPreflight(t *testing.T) {
 	for _, kind := range []string{"kind", "kind-second-chunk", "empty-kind-sidecar", "source"} {
 		t.Run(kind, func(t *testing.T) {

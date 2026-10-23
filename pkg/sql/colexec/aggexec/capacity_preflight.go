@@ -2404,11 +2404,15 @@ func (exec *minMaxExecFixed[T]) PreflightBatchFill(
 				continue
 			}
 			_ = values[physicalRow]
-			_, _, state, err := exec.validatePreflightTarget(group)
+			_, y, state, err := exec.validatePreflightTarget(group)
 			if err != nil {
 				return err
 			}
-			if !hasDefaultFixedMinMaxMetadata(state.vecs[0]) {
+			// Preserve the original metadata preflight's shape errors as well
+			// as its allocation checks; an incomplete target must fall back.
+			if len(state.vecs) == 0 || state.vecs[0] == nil ||
+				max(int(state.length), int(y)+1) < state.vecs[0].Length() ||
+				!hasDefaultFixedMinMaxMetadata(state.vecs[0]) {
 				plain = false
 				break
 			}
