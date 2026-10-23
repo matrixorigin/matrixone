@@ -14,7 +14,7 @@ show create table em_csv;
 ➤ Table[12,6,0]  ¦  Create Table[12,249,0]  𝄀
 em_csv  ¦  CREATE EXTERNAL TABLE `em_csv` (
   `a` int DEFAULT NULL,
-  `s` varchar(20) COLLATE utf8mb4_general_ci DEFAULT NULL
+  `s` varchar(20) COLLATE utf8mb4_0900_ai_ci DEFAULT NULL
 ) INFILE{'FILEPATH'='','COMPRESSION'='','FORMAT'='csv','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '' LINES TERMINATED BY '\n'
 select a, s from em_csv;
 internal error: the input value 'notanint' is not int32 type for column 0

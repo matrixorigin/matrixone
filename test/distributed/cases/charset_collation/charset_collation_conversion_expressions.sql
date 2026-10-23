@@ -10,21 +10,24 @@ create table t (
     g varchar(64) generated always as (a / b) stored,
     authored varchar(64) generated always as (cast(a / b as decimal(10,4))) stored,
     d varchar(64) default (cast(1 as decimal(10,2)) / cast(3 as decimal(10,2)))
-) collate utf8mb4_bin;
+) collate utf32_bin;
 insert into t(id,a,b) values (1,1,3);
 select id,g,authored,d from t order by id;
 set div_precision_increment = 0;
 alter table t add column extra int, algorithm=copy;
 select id,g,authored,d from t order by id;
-alter table t convert to character set utf8mb4 collate utf8mb4_bin;
+alter table t convert to character set utf8mb4 collate utf32_bin;
 select id,g,authored,d from t order by id;
 insert into t(id,a,b) values (2,1,3);
 select id,g,authored,d from t order by id;
-alter table t convert to character set utf8mb4 collate utf8mb4_general_ci;
+alter table t convert to character set utf8mb4 collate utf8mb4_0900_ai_ci;
 select id,g,authored,d from t order by id;
 select column_name,collation_name from information_schema.columns where table_schema='charset_conversion_expressions' and table_name='t' and column_name in ('g','authored','d') order by column_name;
 insert into t(id,a,b) values (3,1,3);
 select id,g,authored,d from t order by id;
+-- New explicit native computations remain rejected before publication.
+create table rejected_native_expr(v varchar(8), fixed varchar(8) generated always as (if(v collate utf8mb4_bin='X','yes','no')) stored) collate utf32_bin;
+select count(*) from information_schema.tables where table_schema=database() and table_name='rejected_native_expr';
 -- A changed character dependency must not re-author unrelated arithmetic.
 set div_precision_increment = 10;
 create table dependent (
@@ -35,12 +38,12 @@ create table dependent (
     g varchar(64) generated always as (concat(v,a/b)) stored,
     authored varchar(64) generated always as (concat(v,cast(a/b as decimal(10,4)))) stored,
     eq varchar(8) generated always as (if(v='X','yes','no')) stored,
-    fixed varchar(8) generated always as (if(v collate utf8mb4_bin='X','yes','no')) stored
-) collate utf8mb4_bin;
+    fixed varchar(8) generated always as (if(v collate utf8mb4_0900_ai_ci='X','yes','no')) stored
+) collate utf32_bin;
 insert into dependent(id,v,a,b) values (1,'x',1,3);
 select id,g,authored from dependent order by id;
 set div_precision_increment = 0;
-alter table dependent convert to character set utf8mb4 collate utf8mb4_general_ci;
+alter table dependent convert to character set utf8mb4 collate utf8mb4_0900_ai_ci;
 select id,g,authored from dependent order by id;
 insert into dependent(id,v,a,b) values (2,'x',1,3);
 select id,g,authored from dependent order by id;

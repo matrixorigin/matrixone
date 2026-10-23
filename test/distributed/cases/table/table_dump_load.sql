@@ -48,7 +48,7 @@ select hist_id > 100000 as auto_increment_restored from auto_dst where value = '
 -- metadata can differ even though the indexed column types are identical.
 create table index_src (id varchar(255) primary key, value varchar(32), key idx_value (value));
 dump table index_src to 'stage://table_dump_load_stage/indexed' metadata only;
-create table index_dst (id varchar(255) primary key, value varchar(32), key idx_value (value)) collate=utf8mb4_general_ci;
+create table index_dst (id varchar(255) primary key, value varchar(32), key idx_value (value)) collate=utf8mb4_0900_ai_ci;
 load table index_dst from 'stage://table_dump_load_stage/indexed';
 select count(*) from index_dst;
 

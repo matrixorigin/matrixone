@@ -69,7 +69,7 @@ show create table pushed;
 ➤ Table[12,6,0]  ¦  Create Table[12,259,0]  𝄀
 pushed  ¦  CREATE EXTERNAL TABLE `pushed` (
   `id` int DEFAULT NULL,
-  `name` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `name` varchar(50) COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
   `amount` decimal(12,2) DEFAULT NULL,
   `created` datetime DEFAULT NULL
 ) ENGINE = SQL WITH ("config" = '<redacted>', "pushdown" = 'true')
@@ -77,7 +77,7 @@ show create table plain;
 ➤ Table[12,5,0]  ¦  Create Table[12,237,0]  𝄀
 plain  ¦  CREATE EXTERNAL TABLE `plain` (
   `id` int DEFAULT NULL,
-  `name` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `name` varchar(50) COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
   `amount` decimal(12,2) DEFAULT NULL,
   `created` datetime DEFAULT NULL
 ) ENGINE = SQL WITH ("config" = '<redacted>')

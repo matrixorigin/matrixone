@@ -1,6 +1,6 @@
 CREATE TABLE tp1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3) PARTITIONS 4;
 show create table tp1;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,3,0]  ¦  Create Table[12,160,0]  𝄀
 tp1  ¦  CREATE TABLE `tp1` (
   `col1` int DEFAULT NULL,
   `col2` char(5) DEFAULT NULL,
@@ -8,7 +8,7 @@ tp1  ¦  CREATE TABLE `tp1` (
 ) partition by key algorithm = 2 (`col3`) partitions 4
 CREATE TABLE tp2 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3) PARTITIONS 4;
 show create table tp2;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,3,0]  ¦  Create Table[12,160,0]  𝄀
 tp2  ¦  CREATE TABLE `tp2` (
   `col1` int DEFAULT NULL,
   `col2` char(5) DEFAULT NULL,
@@ -16,7 +16,7 @@ tp2  ¦  CREATE TABLE `tp2` (
 ) partition by key algorithm = 2 (`col3`) partitions 4
 CREATE TABLE tp3 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR KEY(col3) PARTITIONS 5;
 show create table tp3;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,3,0]  ¦  Create Table[12,167,0]  𝄀
 tp3  ¦  CREATE TABLE `tp3` (
   `col1` int DEFAULT NULL,
   `col2` char(5) DEFAULT NULL,
@@ -24,7 +24,7 @@ tp3  ¦  CREATE TABLE `tp3` (
 ) partition by linear key algorithm = 2 (`col3`) partitions 5
 CREATE TABLE tp4 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY ALGORITHM = 1 (col3) PARTITIONS 5;
 show create table tp4;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,3,0]  ¦  Create Table[12,160,0]  𝄀
 tp4  ¦  CREATE TABLE `tp4` (
   `col1` int DEFAULT NULL,
   `col2` char(5) DEFAULT NULL,
@@ -32,7 +32,7 @@ tp4  ¦  CREATE TABLE `tp4` (
 ) partition by key algorithm = 1 (`col3`) partitions 5
 CREATE TABLE tp5 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR KEY ALGORITHM = 1 (col3) PARTITIONS 5;
 show create table tp5;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,3,0]  ¦  Create Table[12,167,0]  𝄀
 tp5  ¦  CREATE TABLE `tp5` (
   `col1` int DEFAULT NULL,
   `col2` char(5) DEFAULT NULL,
@@ -40,7 +40,7 @@ tp5  ¦  CREATE TABLE `tp5` (
 ) partition by linear key algorithm = 1 (`col3`) partitions 5
 CREATE TABLE tp6 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col1, col2) PARTITIONS 4;
 show create table tp6;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,3,0]  ¦  Create Table[12,168,0]  𝄀
 tp6  ¦  CREATE TABLE `tp6` (
   `col1` int DEFAULT NULL,
   `col2` char(5) DEFAULT NULL,
@@ -48,7 +48,7 @@ tp6  ¦  CREATE TABLE `tp6` (
 ) partition by key algorithm = 2 (`col1`, `col2`) partitions 4
 CREATE TABLE tp7 (col1 INT NOT NULL PRIMARY KEY, col2 DATE NOT NULL, col3 INT NOT NULL, col4 INT NOT NULL) PARTITION BY KEY(col1) PARTITIONS 4;
 show create table tp7;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,3,0]  ¦  Create Table[12,191,0]  𝄀
 tp7  ¦  CREATE TABLE `tp7` (
   `col1` int NOT NULL,
   `col2` date NOT NULL,
@@ -58,21 +58,21 @@ tp7  ¦  CREATE TABLE `tp7` (
 ) partition by key algorithm = 2 (`col1`) partitions 4
 CREATE TABLE tp8 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1) PARTITIONS 4;
 show create table tp8;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,3,0]  ¦  Create Table[12,119,0]  𝄀
 tp8  ¦  CREATE TABLE `tp8` (
   `col1` int DEFAULT NULL,
   `col2` char(5) DEFAULT NULL
 ) partition by hash (`col1`) partitions 4
 CREATE TABLE tp9 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1) PARTITIONS 4;
 show create table tp9;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,3,0]  ¦  Create Table[12,119,0]  𝄀
 tp9  ¦  CREATE TABLE `tp9` (
   `col1` int DEFAULT NULL,
   `col2` char(5) DEFAULT NULL
 ) partition by hash (`col1`) partitions 4
 CREATE TABLE tp10 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3)) PARTITIONS 4;
 show create table tp10;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,4,0]  ¦  Create Table[12,158,0]  𝄀
 tp10  ¦  CREATE TABLE `tp10` (
   `col1` int DEFAULT NULL,
   `col2` char(5) DEFAULT NULL,
@@ -80,7 +80,7 @@ tp10  ¦  CREATE TABLE `tp10` (
 ) partition by hash (YEAR(`col3`)) partitions 4
 CREATE TABLE tp11 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6;
 show create table tp11;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,4,0]  ¦  Create Table[12,161,0]  𝄀
 tp11  ¦  CREATE TABLE `tp11` (
   `col1` int DEFAULT NULL,
   `col2` char(5) DEFAULT NULL,
@@ -88,7 +88,7 @@ tp11  ¦  CREATE TABLE `tp11` (
 ) partition by linear hash (YEAR(`col3`)) partitions 6
 CREATE TABLE tp12 (col1 INT NOT NULL PRIMARY KEY, col2 DATE NOT NULL, col3 INT NOT NULL, col4 INT NOT NULL) PARTITION BY HASH(col1) PARTITIONS 4;
 show create table tp12;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,4,0]  ¦  Create Table[12,179,0]  𝄀
 tp12  ¦  CREATE TABLE `tp12` (
   `col1` int NOT NULL,
   `col2` date NOT NULL,
@@ -112,7 +112,7 @@ PARTITION p2 VALUES LESS THAN (16),
 PARTITION p3 VALUES LESS THAN (21)
 );
 show create table tp13;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,4,0]  ¦  Create Table[12,457,0]  𝄀
 tp13  ¦  CREATE TABLE `tp13` (
   `id` int NOT NULL,
   `fname` varchar(30) DEFAULT NULL,
@@ -139,7 +139,7 @@ PARTITION p2 VALUES LESS THAN (2001),
 PARTITION p3 VALUES LESS THAN MAXVALUE
 );
 show create table tp14;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,4,0]  ¦  Create Table[12,469,0]  𝄀
 tp14  ¦  CREATE TABLE `tp14` (
   `id` int NOT NULL,
   `fname` varchar(30) DEFAULT NULL,
@@ -161,7 +161,7 @@ PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),
 PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
 );
 show create table tp16;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,4,0]  ¦  Create Table[12,348,0]  𝄀
 tp16  ¦  CREATE TABLE `tp16` (
   `id` int NOT NULL,
   `name` varchar(35) DEFAULT NULL,
@@ -180,7 +180,7 @@ PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),
 PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
 );
 show create table tp17;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,4,0]  ¦  Create Table[12,330,0]  𝄀
 tp17  ¦  CREATE TABLE `tp17` (
   `id` int DEFAULT NULL,
   `name` varchar(35) DEFAULT NULL,
@@ -195,7 +195,7 @@ col4 INT NOT NULL
 PARTITION BY KEY(col3)
 PARTITIONS 4;
 show create table tp19;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,4,0]  ¦  Create Table[12,198,0]  𝄀
 tp19  ¦  CREATE TABLE `tp19` (
   `col1` int NOT NULL,
   `col2` date NOT NULL,
@@ -212,7 +212,7 @@ col4 INT NOT NULL
 PARTITION BY HASH(col3)
 PARTITIONS 4;
 show create table tp20;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,4,0]  ¦  Create Table[12,185,0]  𝄀
 tp20  ¦  CREATE TABLE `tp20` (
   `col1` int NOT NULL,
   `col2` date NOT NULL,
@@ -247,17 +247,17 @@ CREATE TABLE test01 (
 `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'pk',
 `pk_id` bigint NOT NULL COMMENT 'pk_id',
 `config_id` bigint NOT NULL COMMENT 'config_id',
-`trace_id` varchar(255) COLLATE utf8mb4_general_ci NOT NULL,
-`type` varchar(8) COLLATE utf8mb4_general_ci NOT NULL COMMENT 'message_type',
-`data` varchar(1024) COLLATE utf8mb4_general_ci NOT NULL,
+`trace_id` varchar(255) COLLATE utf8mb4_0900_ai_ci NOT NULL,
+`type` varchar(8) COLLATE utf8mb4_0900_ai_ci NOT NULL COMMENT 'message_type',
+`data` varchar(1024) COLLATE utf8mb4_0900_ai_ci NOT NULL,
 `times` tinyint NOT NULL,
 `status` tinyint NOT NULL,
-`push_time` varchar(255) COLLATE utf8mb4_general_ci NOT NULL,
+`push_time` varchar(255) COLLATE utf8mb4_0900_ai_ci NOT NULL,
 `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 PRIMARY KEY (`id`,`create_time`) USING BTREE,
 UNIQUE KEY (`trace_id`,`create_time`)
-) ENGINE=InnoDB AUTO_INCREMENT=654 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='trace id'
+) ENGINE=InnoDB AUTO_INCREMENT=654 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='trace id'
 /*!50500 PARTITION BY RANGE  COLUMNS(create_time)
 (PARTITION p20240115 VALUES LESS THAN ('2024-01-15 00:00:00') ENGINE = InnoDB,
 PARTITION p20240116 VALUES LESS THAN ('2024-01-16 00:00:00') ENGINE = InnoDB,
@@ -272,7 +272,7 @@ PARTITION p20240124 VALUES LESS THAN ('2024-01-24 00:00:00') ENGINE = InnoDB,
 PARTITION p20240125 VALUES LESS THAN ('2024-01-25 00:00:00') ENGINE = InnoDB) */;
 /*!40101 SET character_set_client = @saved_cs_client */;
 show create table test01;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,6,0]  ¦  Create Table[12,1345,0]  𝄀
 test01  ¦  CREATE TABLE `test01` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'pk',
   `pk_id` bigint NOT NULL COMMENT 'pk_id',
@@ -295,17 +295,17 @@ CREATE TABLE test02 (
 `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'pk',
 `pk_id` bigint NOT NULL COMMENT 'pk_id',
 `config_id` bigint NOT NULL COMMENT 'config_id',
-`trace_id` varchar(255) COLLATE utf8mb4_general_ci NOT NULL,
-`type` varchar(8) COLLATE utf8mb4_general_ci NOT NULL COMMENT 'message_type',
-`data` varchar(1024) COLLATE utf8mb4_general_ci NOT NULL,
+`trace_id` varchar(255) COLLATE utf8mb4_0900_ai_ci NOT NULL,
+`type` varchar(8) COLLATE utf8mb4_0900_ai_ci NOT NULL COMMENT 'message_type',
+`data` varchar(1024) COLLATE utf8mb4_0900_ai_ci NOT NULL,
 `times` tinyint NOT NULL,
 `status` tinyint NOT NULL,
-`push_time` varchar(255) COLLATE utf8mb4_general_ci NOT NULL,
+`push_time` varchar(255) COLLATE utf8mb4_0900_ai_ci NOT NULL,
 `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 `update_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 PRIMARY KEY (`id`,`create_time`) USING BTREE,
 UNIQUE KEY (`trace_id`,`create_time`)
-) ENGINE=InnoDB AUTO_INCREMENT=654 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='trace id'
+) ENGINE=InnoDB AUTO_INCREMENT=654 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='trace id'
 PARTITION BY RANGE  COLUMNS(create_time)
 (PARTITION p20240115 VALUES LESS THAN ('2024-01-15 00:00:00') ENGINE = InnoDB,
 PARTITION p20240116 VALUES LESS THAN ('2024-01-16 00:00:00') ENGINE = InnoDB,
@@ -320,7 +320,7 @@ PARTITION p20240124 VALUES LESS THAN ('2024-01-24 00:00:00') ENGINE = InnoDB,
 PARTITION p20240125 VALUES LESS THAN ('2024-01-25 00:00:00') ENGINE = InnoDB);
 /*!40101 SET character_set_client = @saved_cs_client */;
 show create table test02;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,6,0]  ¦  Create Table[12,1345,0]  𝄀
 test02  ¦  CREATE TABLE `test02` (
   `id` bigint NOT NULL AUTO_INCREMENT COMMENT 'pk',
   `pk_id` bigint NOT NULL COMMENT 'pk_id',
@@ -349,7 +349,7 @@ partition p1 values in ('C')
 );
 insert into sql_mode_partition values ('A\\B'), ('C');
 select hex(category) from sql_mode_partition order by category;
-➤ hex(category)[12,-1,0]  𝄀
+➤ hex(category)[12,160,0]  𝄀
 415C42  𝄀
 43
 drop table sql_mode_partition;

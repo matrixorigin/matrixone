@@ -22,7 +22,7 @@ insert into src_numbers values
 (5, '2022-07-04 00:00:00', 'epsilon', 'fifth row');
 create external table ext_file (col1 int, col2 datetime, col3 varchar(50), col4 text) engine = datastream with ('server' = '127.0.0.1', 'port' = '4444', 'table' = 'file_numbers');
 select * from ext_file order by col1;
-➤ col1[4,32,0]  ¦  col2[93,64,0]  ¦  col3[12,50,0]  ¦  col4[12,0,0]  𝄀
+➤ col1[4,32,0]  ¦  col2[93,19,0]  ¦  col3[12,50,0]  ¦  col4[-1,16383,0]  𝄀
 1  ¦  2020-01-01 10:00:00  ¦  alpha  ¦  first row  𝄀
 2  ¦  2020-06-15 12:30:00  ¦  beta  ¦  second, with comma  𝄀
 3  ¦  2021-03-10 08:45:00  ¦  gamma  ¦  null  𝄀
@@ -41,12 +41,12 @@ show create table ext_file;
 ext_file  ¦  CREATE EXTERNAL TABLE `ext_file` (
   `col1` int DEFAULT NULL,
   `col2` datetime DEFAULT NULL,
-  `col3` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `col4` text COLLATE utf8mb4_general_ci DEFAULT NULL
+  `col3` varchar(50) COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
+  `col4` text COLLATE utf8mb4_0900_ai_ci DEFAULT NULL
 ) ENGINE = DATASTREAM WITH ("server" = '127.0.0.1', "port" = '4444', "table" = 'file_numbers', "recheck" = 'true')
 create external table ext_jdbc (col1 int, col2 datetime, col3 varchar(50), col4 text) engine = datastream with ('server' = '127.0.0.1', 'port' = '4444', 'table' = 'jdbc_numbers');
 select * from ext_jdbc order by col1;
-➤ col1[4,32,0]  ¦  col2[93,64,0]  ¦  col3[12,50,0]  ¦  col4[12,0,0]  𝄀
+➤ col1[4,32,0]  ¦  col2[93,19,0]  ¦  col3[12,50,0]  ¦  col4[-1,16383,0]  𝄀
 1  ¦  2020-01-01 10:00:00  ¦  alpha  ¦  first row  𝄀
 2  ¦  2020-06-15 12:30:00  ¦  beta  ¦  second, with comma  𝄀
 3  ¦  2021-03-10 08:45:00  ¦  gamma  ¦  null  𝄀
@@ -69,8 +69,8 @@ show create table ext_jdbc_norecheck;
 ext_jdbc_norecheck  ¦  CREATE EXTERNAL TABLE `ext_jdbc_norecheck` (
   `col1` int DEFAULT NULL,
   `col2` datetime DEFAULT NULL,
-  `col3` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `col4` text COLLATE utf8mb4_general_ci DEFAULT NULL
+  `col3` varchar(50) COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
+  `col4` text COLLATE utf8mb4_0900_ai_ci DEFAULT NULL
 ) ENGINE = DATASTREAM WITH ("server" = '127.0.0.1', "port" = '4444', "table" = 'jdbc_numbers', "recheck" = 'false')
 create table dest (col1 int, col2 datetime, col3 varchar(50), col4 text);
 insert into dest select * from ext_jdbc;
@@ -101,8 +101,8 @@ show create table ext_keyed;
 ext_keyed  ¦  CREATE EXTERNAL TABLE `ext_keyed` (
   `col1` int DEFAULT NULL,
   `col2` datetime DEFAULT NULL,
-  `col3` varchar(50) COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `col4` text COLLATE utf8mb4_general_ci DEFAULT NULL
+  `col3` varchar(50) COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
+  `col4` text COLLATE utf8mb4_0900_ai_ci DEFAULT NULL
 ) ENGINE = DATASTREAM WITH ("server" = '127.0.0.1', "port" = '4444', "table" = 'jdbc_numbers', "recheck" = 'true')
 select count(*) from ext_keyed;
 ➤ count(*)[-5,64,0]  𝄀

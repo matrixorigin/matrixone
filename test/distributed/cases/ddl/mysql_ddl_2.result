@@ -2,71 +2,116 @@ create database if not exists mysql_ddl_test_db;
 use mysql_ddl_test_db;
 create table if not exists mmysql_ddl_test_t21(id int, name varchar(255)) engine = 'InnoDB';
 show create table mmysql_ddl_test_t21;
-Table    Create Table
-mmysql_ddl_test_t21    CREATE TABLE `mmysql_ddl_test_t21` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
-create table if not exists mmysql_ddl_test_t22(id int, name varchar(255)) DEFAULT CHARSET=utf8 COLLATE = utf8mb4_general_ci ;
+➤ Table[12,19,0]  ¦  Create Table[12,98,0]  𝄀
+mmysql_ddl_test_t21  ¦  CREATE TABLE `mmysql_ddl_test_t21` (
+  `id` int DEFAULT NULL,
+  `name` varchar(255) DEFAULT NULL
+)
+create table if not exists mmysql_ddl_test_t22(id int, name varchar(255)) DEFAULT CHARSET=utf8 COLLATE = utf8mb4_0900_ai_ci ;
 show create table mmysql_ddl_test_t22;
-Table    Create Table
-mmysql_ddl_test_t22    CREATE TABLE `mmysql_ddl_test_t22` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
+➤ Table[12,19,0]  ¦  Create Table[12,98,0]  𝄀
+mmysql_ddl_test_t22  ¦  CREATE TABLE `mmysql_ddl_test_t22` (
+  `id` int DEFAULT NULL,
+  `name` varchar(255) DEFAULT NULL
+)
 create table if not exists mmysql_ddl_test_t23(id int, name varchar(255)) DEFAULT CHARSET = utf8;
 show create table mmysql_ddl_test_t23;
-Table    Create Table
-mmysql_ddl_test_t23    CREATE TABLE `mmysql_ddl_test_t23` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
+➤ Table[12,19,0]  ¦  Create Table[12,98,0]  𝄀
+mmysql_ddl_test_t23  ¦  CREATE TABLE `mmysql_ddl_test_t23` (
+  `id` int DEFAULT NULL,
+  `name` varchar(255) DEFAULT NULL
+)
 create table if not exists mmysql_ddl_test_t24(id int, name varchar(255)) DEFAULT CHARSET= utf8;
 show create table mmysql_ddl_test_t24;
-Table    Create Table
-mmysql_ddl_test_t24    CREATE TABLE `mmysql_ddl_test_t24` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
+➤ Table[12,19,0]  ¦  Create Table[12,98,0]  𝄀
+mmysql_ddl_test_t24  ¦  CREATE TABLE `mmysql_ddl_test_t24` (
+  `id` int DEFAULT NULL,
+  `name` varchar(255) DEFAULT NULL
+)
 create table if not exists mmysql_ddl_test_t25(id int, name varchar(255)) DEFAULT CHARSET =utf8;
 show create table mmysql_ddl_test_t25;
-Table    Create Table
-mmysql_ddl_test_t25    CREATE TABLE `mmysql_ddl_test_t25` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
-create table if not exists mmysql_ddl_test_t26(id int, name varchar(255)) DEFAULT CHARSET     =       utf8 COLLATE=utf8mb4_general_ci ;
+➤ Table[12,19,0]  ¦  Create Table[12,98,0]  𝄀
+mmysql_ddl_test_t25  ¦  CREATE TABLE `mmysql_ddl_test_t25` (
+  `id` int DEFAULT NULL,
+  `name` varchar(255) DEFAULT NULL
+)
+create table if not exists mmysql_ddl_test_t26(id int, name varchar(255)) DEFAULT CHARSET     =       utf8 COLLATE=utf8mb4_0900_ai_ci ;
 show create table mmysql_ddl_test_t26;
-Table    Create Table
-mmysql_ddl_test_t26    CREATE TABLE `mmysql_ddl_test_t26` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
-create table if not exists mmysql_ddl_test_t27(id int, name varchar(255) CHARACTER SET utf8 COLLATE utf8mb4_general_ci);
+➤ Table[12,19,0]  ¦  Create Table[12,98,0]  𝄀
+mmysql_ddl_test_t26  ¦  CREATE TABLE `mmysql_ddl_test_t26` (
+  `id` int DEFAULT NULL,
+  `name` varchar(255) DEFAULT NULL
+)
+create table if not exists mmysql_ddl_test_t27(id int, name varchar(255) CHARACTER SET utf8 COLLATE utf8mb4_0900_ai_ci);
 show create table mmysql_ddl_test_t27;
-Table    Create Table
-mmysql_ddl_test_t27    CREATE TABLE `mmysql_ddl_test_t27` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
-create table if not exists mmysql_ddl_test_t28(id int, name varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci);
+➤ Table[12,19,0]  ¦  Create Table[12,98,0]  𝄀
+mmysql_ddl_test_t27  ¦  CREATE TABLE `mmysql_ddl_test_t27` (
+  `id` int DEFAULT NULL,
+  `name` varchar(255) DEFAULT NULL
+)
+create table if not exists mmysql_ddl_test_t28(id int, name varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci);
 show create table mmysql_ddl_test_t28;
-Table    Create Table
-mmysql_ddl_test_t28    CREATE TABLE `mmysql_ddl_test_t28` (\n  `id` int DEFAULT NULL,\n  `name` varchar(255) DEFAULT NULL\n)
+➤ Table[12,19,0]  ¦  Create Table[12,98,0]  𝄀
+mmysql_ddl_test_t28  ¦  CREATE TABLE `mmysql_ddl_test_t28` (
+  `id` int DEFAULT NULL,
+  `name` varchar(255) DEFAULT NULL
+)
 create table if not exists mmysql_ddl_test_t29(id int, name varchar(255),primary key (id)  USING BTREE);
 show create table mmysql_ddl_test_t29;
-Table    Create Table
-mmysql_ddl_test_t29    CREATE TABLE `mmysql_ddl_test_t29` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+➤ Table[12,19,0]  ¦  Create Table[12,116,0]  𝄀
+mmysql_ddl_test_t29  ¦  CREATE TABLE `mmysql_ddl_test_t29` (
+  `id` int NOT NULL,
+  `name` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
 create table mmysql_ddl_test_t210 (id int);
 LOCK TABLES t10 WRITE;
 alter table mmysql_ddl_test_t210 add column class varchar(50);
 UNLOCK TABLES;
 show create table mmysql_ddl_test_t210;
-Table    Create Table
-mmysql_ddl_test_t210    CREATE TABLE `mmysql_ddl_test_t210` (\n  `id` int DEFAULT NULL,\n  `class` varchar(50) DEFAULT NULL\n)
+➤ Table[12,20,0]  ¦  Create Table[12,99,0]  𝄀
+mmysql_ddl_test_t210  ¦  CREATE TABLE `mmysql_ddl_test_t210` (
+  `id` int DEFAULT NULL,
+  `class` varchar(50) DEFAULT NULL
+)
 create table mmysql_ddl_test_t211 (id int AUTO_INCREMENT);
 show create table mmysql_ddl_test_t211;
-Table    Create Table
-mmysql_ddl_test_t211    CREATE TABLE `mmysql_ddl_test_t211` (\n  `id` int NOT NULL AUTO_INCREMENT\n)
+➤ Table[12,20,0]  ¦  Create Table[12,74,0]  𝄀
+mmysql_ddl_test_t211  ¦  CREATE TABLE `mmysql_ddl_test_t211` (
+  `id` int NOT NULL AUTO_INCREMENT
+)
 create table mmysql_ddl_test_t212 (id int) AUTO_INCREMENT = 157472;
 show create table mmysql_ddl_test_t212;
-Table    Create Table
-mmysql_ddl_test_t212    CREATE TABLE `mmysql_ddl_test_t212` (\n  `id` int DEFAULT NULL\n)
+➤ Table[12,20,0]  ¦  Create Table[12,63,0]  𝄀
+mmysql_ddl_test_t212  ¦  CREATE TABLE `mmysql_ddl_test_t212` (
+  `id` int DEFAULT NULL
+)
 create table mmysql_ddl_test_t213 (id int AUTO_INCREMENT) AUTO_INCREMENT = 157472;
 show create table mmysql_ddl_test_t213;
-Table    Create Table
-mmysql_ddl_test_t213    CREATE TABLE `mmysql_ddl_test_t213` (\n  `id` int NOT NULL AUTO_INCREMENT\n)
+➤ Table[12,20,0]  ¦  Create Table[12,74,0]  𝄀
+mmysql_ddl_test_t213  ¦  CREATE TABLE `mmysql_ddl_test_t213` (
+  `id` int NOT NULL AUTO_INCREMENT
+)
 create table mmysql_ddl_test_t214 (id int) ROW_FORMAT=DYNAMIC;
 show create table mmysql_ddl_test_t214;
-Table    Create Table
-mmysql_ddl_test_t214    CREATE TABLE `mmysql_ddl_test_t214` (\n  `id` int DEFAULT NULL\n)
+➤ Table[12,20,0]  ¦  Create Table[12,63,0]  𝄀
+mmysql_ddl_test_t214  ¦  CREATE TABLE `mmysql_ddl_test_t214` (
+  `id` int DEFAULT NULL
+)
 create table mmysql_ddl_test_t215 (id int) ROW_FORMAT = COMPACT;
 show create table mmysql_ddl_test_t215;
-Table    Create Table
-mmysql_ddl_test_t215    CREATE TABLE `mmysql_ddl_test_t215` (\n  `id` int DEFAULT NULL\n)
-create table if not exists mmysql_ddl_test_t216(id int AUTO_INCREMENT, name varchar(255) CHARACTER SET utf8 COLLATE utf8mb4_general_ci,primary key (id)  USING BTREE) AUTO_INCREMENT=123 engine = 'InnoDB' DEFAULT CHARSET=utf8 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
+➤ Table[12,20,0]  ¦  Create Table[12,63,0]  𝄀
+mmysql_ddl_test_t215  ¦  CREATE TABLE `mmysql_ddl_test_t215` (
+  `id` int DEFAULT NULL
+)
+create table if not exists mmysql_ddl_test_t216(id int AUTO_INCREMENT, name varchar(255) CHARACTER SET utf8 COLLATE utf8mb4_0900_ai_ci,primary key (id)  USING BTREE) AUTO_INCREMENT=123 engine = 'InnoDB' DEFAULT CHARSET=utf8 COLLATE = utf8mb4_0900_ai_ci ROW_FORMAT = COMPACT;
 show create table mmysql_ddl_test_t216;
-Table    Create Table
-mmysql_ddl_test_t216    CREATE TABLE `mmysql_ddl_test_t216` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `name` varchar(255) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
+➤ Table[12,20,0]  ¦  Create Table[12,132,0]  𝄀
+mmysql_ddl_test_t216  ¦  CREATE TABLE `mmysql_ddl_test_t216` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+)
 1. unre
 DROP TABLE IF EXISTS `projects`;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 2 near "1. unre
@@ -108,36 +153,36 @@ KEY `idx_project_state` (`project_state`),
 KEY `idx_sub_company_id` (`sub_company_id`)
 );
 desc `projects`;
-Field    Type    Null    Key    Default    Extra    Comment
-project_id    varchar(64)    NO    PRI    null        
-company_id    varchar(64)    NO    MUL    null        
-project_no    varchar(255)    YES        null        
-project_name    varchar(255)    NO        null        
-project_type    varchar(255)    NO        null        
-project_unit    varchar(255)    YES        null        
-project_leader    varchar(255)    NO        null        
-address    varchar(255)    YES        null        
-number_of_building    int    YES        null        
-project_state    varchar(64)    YES    MUL    null        
-supervisor    varchar(255)    YES        null        
-build_license    varchar(64)    YES        null        
-ceiling_normal_plane_distance    varchar(32)    YES        null        顶板距法面距离
-floor_normal_plane_distance    varchar(32)    YES        null        底板距法面距离
-ext1    varchar(1024)    YES        null        扩展字段
-ext2    varchar(1024)    YES        null        扩展字段
-ext3    varchar(1024)    YES        null        扩展字段
-sub_company_id    varchar(64)    YES    MUL    null        
-parent_project_id    varchar(64)    YES        null        
-distinguish_suite    int    YES        1        是否分户(0,否 1，是)
-draw_switch    int    YES        null        
-version    varchar(64)    YES        null        
-created_by    varchar(64)    YES        null        
-created_time    datetime    YES        null        
-updated_by    varchar(64)    YES        null        
-updated_time    datetime    YES        null        
-is_deleted    int    YES        null        
-deleted_by    varchar(64)    YES        null        
-deleted_time    datetime    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+project_id  ¦  varchar(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+company_id  ¦  varchar(64)  ¦  NO  ¦  MUL  ¦  null  ¦    ¦    𝄀
+project_no  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+project_name  ¦  varchar(255)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+project_type  ¦  varchar(255)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+project_unit  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+project_leader  ¦  varchar(255)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+address  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+number_of_building  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+project_state  ¦  varchar(64)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+supervisor  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+build_license  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ceiling_normal_plane_distance  ¦  varchar(32)  ¦  YES  ¦    ¦  null  ¦    ¦  顶板距法面距离  𝄀
+floor_normal_plane_distance  ¦  varchar(32)  ¦  YES  ¦    ¦  null  ¦    ¦  底板距法面距离  𝄀
+ext1  ¦  varchar(1024)  ¦  YES  ¦    ¦  null  ¦    ¦  扩展字段  𝄀
+ext2  ¦  varchar(1024)  ¦  YES  ¦    ¦  null  ¦    ¦  扩展字段  𝄀
+ext3  ¦  varchar(1024)  ¦  YES  ¦    ¦  null  ¦    ¦  扩展字段  𝄀
+sub_company_id  ¦  varchar(64)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+parent_project_id  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+distinguish_suite  ¦  int  ¦  YES  ¦    ¦  1  ¦    ¦  是否分户(0,否 1，是)  𝄀
+draw_switch  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+version  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+created_by  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+created_time  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+updated_by  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+updated_time  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+is_deleted  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+deleted_by  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+deleted_time  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦  
 ALTER TABLE `projects`
 MODIFY COLUMN `build_license` varchar (64) NULL DEFAULT NULL AFTER `supervisor`,
 MODIFY COLUMN `created_by` varchar(64) NULL DEFAULT NULL AFTER `distinguish_suite`,
@@ -158,38 +203,38 @@ MODIFY COLUMN `deleted_time` datetime(0) NULL DEFAULT NULL AFTER `deleted_by`,
 ADD COLUMN `draw_switch2` int(11) NULL AFTER `distinguish_suite`,
 ADD COLUMN `version2` varchar (64) NULL AFTER `draw_switch`;
 desc `projects`;
-Field    Type    Null    Key    Default    Extra    Comment
-project_id    varchar(64)    NO    PRI    null        
-company_id    varchar(64)    NO    MUL    null        
-project_no    varchar(255)    YES        null        
-project_name    varchar(255)    NO        null        
-project_type    varchar(255)    NO        null        
-project_unit    varchar(255)    YES        null        
-project_leader    varchar(255)    NO        null        
-address    varchar(255)    YES        null        
-number_of_building    int    YES        null        
-project_state    varchar(64)    YES    MUL    null        
-supervisor    varchar(255)    YES        null        
-build_license    varchar(64)    YES        null        
-ceiling_normal_plane_distance    varchar(32)    YES        null        顶板距法面距离
-floor_normal_plane_distance    varchar(32)    YES        null        底板距法面距离
-ext1    varchar(1024)    YES        null        扩展字段
-ext2    varchar(1024)    YES        null        扩展字段
-ext3    varchar(1024)    YES        null        扩展字段
-sub_company_id    varchar(64)    YES    MUL    null        
-parent_project_id    varchar(64)    YES        null        
-distinguish_suite    int    YES        1        是否分户(0,否 1，是)
-draw_switch2    int    YES        null        
-created_by    varchar(64)    YES        null        
-created_time    datetime    YES        null        
-draw_switch    int    YES        null        
-version2    varchar(64)    YES        null        
-version    varchar(64)    YES        null        
-updated_by    varchar(64)    YES        null        
-updated_time    datetime    YES        null        
-is_deleted    int    YES        null        
-deleted_by    varchar(64)    YES        null        
-deleted_time    datetime    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+project_id  ¦  varchar(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+company_id  ¦  varchar(64)  ¦  NO  ¦  MUL  ¦  null  ¦    ¦    𝄀
+project_no  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+project_name  ¦  varchar(255)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+project_type  ¦  varchar(255)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+project_unit  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+project_leader  ¦  varchar(255)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+address  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+number_of_building  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+project_state  ¦  varchar(64)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+supervisor  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+build_license  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ceiling_normal_plane_distance  ¦  varchar(32)  ¦  YES  ¦    ¦  null  ¦    ¦  顶板距法面距离  𝄀
+floor_normal_plane_distance  ¦  varchar(32)  ¦  YES  ¦    ¦  null  ¦    ¦  底板距法面距离  𝄀
+ext1  ¦  varchar(1024)  ¦  YES  ¦    ¦  null  ¦    ¦  扩展字段  𝄀
+ext2  ¦  varchar(1024)  ¦  YES  ¦    ¦  null  ¦    ¦  扩展字段  𝄀
+ext3  ¦  varchar(1024)  ¦  YES  ¦    ¦  null  ¦    ¦  扩展字段  𝄀
+sub_company_id  ¦  varchar(64)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+parent_project_id  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+distinguish_suite  ¦  int  ¦  YES  ¦    ¦  1  ¦    ¦  是否分户(0,否 1，是)  𝄀
+draw_switch2  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+created_by  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+created_time  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+draw_switch  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+version2  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+version  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+updated_by  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+updated_time  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+is_deleted  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+deleted_by  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+deleted_time  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop database if exists mysql_ddl_test_db;
 create database  mysql_ddl_test_db;
 use mysql_ddl_test_db;
@@ -223,50 +268,50 @@ KEY col3_col4 (col3,col4),
 UNIQUE KEY col4 (col4)
 ) ;
 desc table_basic_for_alter_100m;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    tinyint    YES        null        
-col2    smallint    YES        null        
-col3    int    NO    MUL    null        
-col4    bigint    NO    PRI    null        
-col5    tinyint unsigned    YES        null        
-col6    smallint unsigned    YES        null        
-col7    int unsigned    YES        null        
-col8    bigint unsigned    YES        null        
-col9    float    YES        null        
-col10    double    YES        null        
-col11    varchar(255)    YES        null        
-col12    date    YES        null        
-col13    datetime    YES        null        
-col14    timestamp    YES        null        
-col15    boolean    YES        null
-col16    decimal(16,6)    YES        null        
-col17    text    YES        null        
-col18    json    YES        null        
-col19    blob    YES        null
-col20    binary(255)    YES        null        
-col21    varbinary(255)    YES        null        
-col22    VECF32(3)    YES        null        
-col23    VECF32(3)    YES        null        
-col24    VECF64(3)    YES        null        
-col25    VECF64(3)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1  ¦  tinyint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col2  ¦  smallint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col3  ¦  int  ¦  NO  ¦  MUL  ¦  null  ¦    ¦    𝄀
+col4  ¦  bigint  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+col5  ¦  tinyint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col6  ¦  smallint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col7  ¦  int unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col8  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col9  ¦  float  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col10  ¦  double  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col11  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col12  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col13  ¦  datetime  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col14  ¦  timestamp  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col15  ¦  boolean  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col16  ¦  decimal(16,6)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col17  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col18  ¦  json  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col19  ¦  blob  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col20  ¦  binary(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col21  ¦  varbinary(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col22  ¦  VECF32(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col23  ¦  VECF32(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col24  ¦  VECF64(3)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col25  ¦  VECF64(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
 CREATE TABLE user_table (
 id INT(11),
 name VARCHAR(50),
 UNIQUE KEY (id)
 );
 desc user_table;
-Field    Type    Null    Key    Default    Extra    Comment
-id    int    YES    UNI    null        
-name    varchar(50)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
+name  ¦  varchar(50)  ¦  YES  ¦    ¦  null  ¦    ¦  
 CREATE TABLE users (
 id INT(11) NOT NULL,
 name VARCHAR(50),
 UNIQUE KEY (id)
 );
 desc users;
-Field    Type    Null    Key    Default    Extra    Comment
-id    int    NO    PRI    null        
-name    varchar(50)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+name  ¦  varchar(50)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop database if exists mysql_ddl_test_db;
 drop database if exists db1;
 create database db1;
@@ -280,11 +325,11 @@ d decimal(7,2),
 UNIQUE KEY(a, b)
 );
 desc t1;
-Field    Type    Null    Key    Default    Extra    Comment
-a    int    YES    MUL    null        
-b    char(10)    YES        null        
-c    date    YES        null        
-d    decimal(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  int  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+b  ¦  char(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  decimal(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop table if exists t2;
 CREATE TABLE t2(
 col1 TINYINT DEFAULT NULL,
@@ -295,11 +340,11 @@ KEY (col3,col4),
 UNIQUE KEY (col4)
 ) ;
 desc t2;
-Field    Type    Null    Key    Default    Extra    Comment
-col1    tinyint    YES        null        
-col2    smallint    YES        null        
-col3    int    NO    MUL    null        
-col4    bigint    NO    PRI    null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+col1  ¦  tinyint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col2  ¦  smallint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col3  ¦  int  ¦  NO  ¦  MUL  ¦  null  ¦    ¦    𝄀
+col4  ¦  bigint  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  
 drop table if exists t3;
 CREATE TABLE t3(
 a INTEGER,
@@ -310,11 +355,11 @@ KEY (c, d),
 UNIQUE KEY (d)
 );
 desc t3;
-Field    Type    Null    Key    Default    Extra    Comment
-a    int    YES        null        
-b    char(10)    YES        null        
-c    date    YES    MUL    null        
-d    decimal(7,2)    YES    UNI    null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  char(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  date  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+d  ¦  decimal(7,2)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦  
 drop table if exists t4;
 CREATE TABLE t4(
 a INTEGER,
@@ -325,9 +370,9 @@ KEY (a, b),
 UNIQUE KEY (a)
 );
 desc t4;
-Field    Type    Null    Key    Default    Extra    Comment
-a    int    YES    UNI    null        
-b    char(10)    YES        null        
-c    date    YES        null        
-d    decimal(7,2)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+a  ¦  int  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
+b  ¦  char(10)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+c  ¦  date  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  decimal(7,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
 drop database if exists db1;

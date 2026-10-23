@@ -223,9 +223,10 @@ INSERT INTO t_agg_test VALUES (3, 'APPLE', 30);
 INSERT INTO t_agg_test VALUES (4, 'Banana', 40);
 INSERT INTO t_agg_test VALUES (5, 'banana', 50);
 
-SELECT category, SUM(value) as total FROM t_agg_test GROUP BY category ORDER BY category;
-SELECT category, AVG(value) as avg_val FROM t_agg_test GROUP BY category ORDER BY category;
-SELECT category, COUNT(*) as cnt FROM t_agg_test GROUP BY category ORDER BY category;
+-- Normalize only the displayed peer label; distributed groups may retain any original spelling.
+SELECT LOWER(category) as category, SUM(value) as total FROM t_agg_test GROUP BY category ORDER BY category;
+SELECT LOWER(category) as category, AVG(value) as avg_val FROM t_agg_test GROUP BY category ORDER BY category;
+SELECT LOWER(category) as category, COUNT(*) as cnt FROM t_agg_test GROUP BY category ORDER BY category;
 
 -- @case
 -- @desc: Test subquery with different collations
@@ -258,7 +259,7 @@ INSERT INTO t_having_test VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 INSERT INTO t_having_test VALUES (4, 'Banana'), (5, 'banana');
 INSERT INTO t_having_test VALUES (6, 'Cherry');
 
-SELECT category, COUNT(*) as cnt 
+SELECT LOWER(category) as category, COUNT(*) as cnt
 FROM t_having_test 
 GROUP BY category 
 HAVING COUNT(*) > 1 
@@ -270,9 +271,14 @@ ORDER BY category;
 CREATE TABLE t_pk_ci (
     name VARCHAR(100) PRIMARY KEY
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='t_pk_ci';
+-- Historical physical keys stay separate from new native admission.
+CREATE TABLE t_pk_ci (
+    name VARCHAR(100) PRIMARY KEY
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 INSERT INTO t_pk_ci VALUES ('Apple');
--- This should fail due to case-insensitive duplicate
+-- Native case-insensitive duplicate handling is not a physical-key capability.
 -- INSERT INTO t_pk_ci VALUES ('apple');
 
 SELECT * FROM t_pk_ci;
@@ -280,6 +286,10 @@ SELECT * FROM t_pk_ci;
 CREATE TABLE t_pk_bin (
     name VARCHAR(100) PRIMARY KEY
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='t_pk_bin';
+CREATE TABLE t_pk_bin (
+    name VARCHAR(100) PRIMARY KEY
+) CHARACTER SET utf8mb4 COLLATE utf32_bin;
 
 INSERT INTO t_pk_bin VALUES ('Apple');
 -- This should succeed with case-sensitive
@@ -295,12 +305,23 @@ CREATE TABLE t_fk_parent (
     id INT PRIMARY KEY,
     code VARCHAR(50) UNIQUE
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='t_fk_parent';
+CREATE TABLE t_fk_parent (
+    id INT PRIMARY KEY,
+    code VARCHAR(50) UNIQUE
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 CREATE TABLE t_fk_child (
     id INT PRIMARY KEY,
     parent_code VARCHAR(50),
     FOREIGN KEY (parent_code) REFERENCES t_fk_parent(code)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='t_fk_child';
+CREATE TABLE t_fk_child (
+    id INT PRIMARY KEY,
+    parent_code VARCHAR(50),
+    FOREIGN KEY (parent_code) REFERENCES t_fk_parent(code)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 INSERT INTO t_fk_parent VALUES (1, 'CODE001');
 INSERT INTO t_fk_child VALUES (1, 'CODE001');
@@ -400,6 +421,8 @@ INSERT INTO t_trailing_space VALUES (3, 'test  ');
 -- Behavior may differ based on PAD SPACE vs NO PAD
 SELECT * FROM t_trailing_space WHERE data = 'test' ORDER BY id;
 SELECT COUNT(*) FROM t_trailing_space WHERE data = 'test';
+SELECT COUNT(*) FROM t_trailing_space WHERE CAST(data AS BINARY) = CAST('test' AS BINARY);
+SELECT id, HEX(data) FROM t_trailing_space ORDER BY id;
 
 -- @case
 -- @desc: Test WEIGHT_STRING function (if supported)

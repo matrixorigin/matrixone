@@ -60,7 +60,7 @@ SELECT @@character_set_client = @before_client,
 @@character_set_connection = @before_connection,
 @@character_set_results = @before_results,
 @@collation_connection = @before_collation;
-➤ @@character_set_client = @before_client[-7,1,0]  ¦  @@character_set_connection = @before_connection[-7,1,0]  ¦  @@character_set_results = @before_results[-7,1,0]  ¦  @@collation_connection = @before_collation[-7,1,0]  𝄀
+➤ @@character_set_client = @before_client[-6,8,0]  ¦  @@character_set_connection = @before_connection[-6,8,0]  ¦  @@character_set_results = @before_results[-6,8,0]  ¦  @@collation_connection = @before_collation[-6,8,0]  𝄀
 1  ¦  1  ¦  1  ¦  1
 SET character_set_client = @saved_client;
 SET character_set_connection = @saved_connection;
@@ -96,6 +96,12 @@ WHERE table_schema = 'charset_error_test' AND table_name = 't_byte_boundary' AND
 0
 ALTER TABLE t_byte_boundary CHARACTER SET utf8;
 ALTER TABLE t_byte_boundary CONVERT TO CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+not supported: online native PAD collation conversion is disabled; use explicit copy/reload
+SELECT character_set_name, collation_name FROM information_schema.columns
+WHERE table_schema = 'charset_error_test' AND table_name = 't_byte_boundary' AND column_name = 'data';
+➤ character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
+utf8mb4  ¦  utf8mb4_general_ci
+ALTER TABLE t_byte_boundary CONVERT TO CHARACTER SET utf8mb3 COLLATE utf32_bin;
 SELECT character_set_name, collation_name FROM information_schema.columns
 WHERE table_schema = 'charset_error_test' AND table_name = 't_byte_boundary' AND column_name = 'data';
 ➤ character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
@@ -148,7 +154,7 @@ INSERT INTO t_null_handling VALUES (1, NULL);
 INSERT INTO t_null_handling VALUES (2, '');
 INSERT INTO t_null_handling VALUES (3, 'NULL');
 SELECT id, data, data IS NULL as is_null, (data = '') as is_empty, LENGTH(data) as len FROM t_null_handling ORDER BY id;
-➤ id[4,32,0]  ¦  data[12,100,0]  ¦  is_null[-7,1,0]  ¦  is_empty[-7,1,0]  ¦  len[-5,64,0]  𝄀
+➤ id[4,32,0]  ¦  data[12,100,0]  ¦  is_null[-6,8,0]  ¦  is_empty[-6,8,0]  ¦  len[-5,64,0]  𝄀
 1  ¦  null  ¦  1  ¦  null  ¦  null  𝄀
 2  ¦    ¦  0  ¦  1  ¦  0  𝄀
 3  ¦  NULL  ¦  0  ¦  0  ¦  4
@@ -284,6 +290,7 @@ SELECT * FROM t_query_collate WHERE name = 'apple' ORDER BY id;
 2  ¦  apple
 SELECT * FROM t_query_collate WHERE name COLLATE utf8mb4_general_ci = 'apple' ORDER BY id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
+1  ¦  Apple  𝄀
 2  ¦  apple
 CREATE TABLE t_type_conversion (
 id INT PRIMARY KEY,
@@ -363,7 +370,7 @@ INSERT INTO t_only_spaces VALUES (2, '  ');
 INSERT INTO t_only_spaces VALUES (3, '   ');
 INSERT INTO t_only_spaces VALUES (4, '    ');
 SELECT id, LENGTH(data), CHAR_LENGTH(data), data = '' FROM t_only_spaces ORDER BY id;
-➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  ¦  data = [-7,1,0]  𝄀
+➤ id[4,32,0]  ¦  LENGTH(data)[-5,64,0]  ¦  CHAR_LENGTH(data)[-5,64,0]  ¦  data = [-6,8,0]  𝄀
 1  ¦  1  ¦  1  ¦  0  𝄀
 2  ¦  2  ¦  2  ¦  0  𝄀
 3  ¦  3  ¦  3  ¦  0  𝄀
@@ -430,6 +437,14 @@ CREATE TABLE t_duplicate_key (
 id INT PRIMARY KEY,
 name VARCHAR(100) UNIQUE
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+not supported: native PAD collation index on column name is disabled
+SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='t_duplicate_key';
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+CREATE TABLE t_duplicate_key (
+id INT PRIMARY KEY,
+name VARCHAR(100) UNIQUE
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 INSERT INTO t_duplicate_key VALUES (1, 'Test');
 SELECT * FROM t_duplicate_key;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀

@@ -86,7 +86,7 @@ show create table with_default;
 ➤ Table[12,12,0]  ¦  Create Table[12,314,0]  𝄀
 with_default  ¦  CREATE EXTERNAL TABLE `with_default` (
   `id` bigint DEFAULT NULL,
-  `name` varchar(64) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `name` varchar(64) COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
   `amount` decimal(12,2) DEFAULT NULL,
   `created` datetime DEFAULT NULL
 ) ENGINE = SQL WITH ("config" = '<redacted>', "query" = 'select id, name, amount, created from src order by id')
@@ -133,7 +133,7 @@ select id, js, json_extract(js, '$.a') as ja from typed_ext order by id;
 2  ¦  [1, "two", null, {"k": true}]  ¦  null  𝄀
 3  ¦  null  ¦  null
 select id, hex(vb) as vbhex from typed_ext order by id;
-➤ id[4,32,0]  ¦  vbhex[12,65535,0]  𝄀
+➤ id[4,32,0]  ¦  vbhex[12,128,0]  𝄀
 1  ¦  DEADBEEF00FF  𝄀
 2  ¦  00  𝄀
 3  ¦  null
@@ -146,6 +146,6 @@ or not (x.ts <=> s.ts) or not (x.vb <=> s.vb) or not (x.txt <=> s.txt);
 create external table bad_ext (id int, __mo_query varchar(10)) engine = sql with ('config'='{"driver":"mysql","dsn":"x@tcp(h)/d"}');
 invalid input: column name __mo_query is reserved for external table scans
 select sql_tvf_disconnect(sql_tvf_connect('{"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_exttab"}'));
-➤ sql_tvf_disconnect(sql_tvf_connect({"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_exttab"}))[-7,1,0]  𝄀
+➤ sql_tvf_disconnect(sql_tvf_connect({"driver":"mysql","dsn":"dump:111@tcp(127.0.0.1:6001)/foreign_exttab"}))[-6,8,0]  𝄀
 1
 drop database foreign_exttab;

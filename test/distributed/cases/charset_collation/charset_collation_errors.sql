@@ -100,6 +100,10 @@ ALTER TABLE t_byte_boundary CHARACTER SET utf8;
 ALTER TABLE t_byte_boundary CONVERT TO CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
 SELECT character_set_name, collation_name FROM information_schema.columns
 WHERE table_schema = 'charset_error_test' AND table_name = 't_byte_boundary' AND column_name = 'data';
+-- Retain the successful historical charset-compatibility conversion separately.
+ALTER TABLE t_byte_boundary CONVERT TO CHARACTER SET utf8mb3 COLLATE utf32_bin;
+SELECT character_set_name, collation_name FROM information_schema.columns
+WHERE table_schema = 'charset_error_test' AND table_name = 't_byte_boundary' AND column_name = 'data';
 
 -- UTF-8 can have 1-4 bytes per character
 -- Test 1-byte characters (ASCII)
@@ -470,6 +474,11 @@ CREATE TABLE t_duplicate_key (
     id INT PRIMARY KEY,
     name VARCHAR(100) UNIQUE
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name='t_duplicate_key';
+CREATE TABLE t_duplicate_key (
+    id INT PRIMARY KEY,
+    name VARCHAR(100) UNIQUE
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 
 INSERT INTO t_duplicate_key VALUES (1, 'Test');
 

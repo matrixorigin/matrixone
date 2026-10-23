@@ -54,7 +54,7 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase =
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 ➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
-274474  ¦  test01  ¦  def  ¦  create database test01  ¦  2  ¦  2  ¦  2026-10-11 02:17:28  ¦  4
+296836  ¦  test01  ¦  def  ¦  create database test01  ¦  2  ¦  2  ¦  2026-10-23 15:00:31  ¦  10011  ¦  
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 ➤ attname[12,256,0]  𝄀
 __mo_fake_pk_col  𝄀
@@ -82,7 +82,7 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase =
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 ➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
-274474  ¦  test01  ¦  def  ¦  create database test01  ¦  2  ¦  2  ¦  2026-10-11 02:17:28  ¦  4
+296836  ¦  test01  ¦  def  ¦  create database test01  ¦  2  ¦  2  ¦  2026-10-23 15:00:31  ¦  10011  ¦  
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 ➤ attname[12,256,0]  𝄀
 __mo_fake_pk_col  𝄀
@@ -127,7 +127,7 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'sp02'} where reldatabase =
 2
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
 ➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
-274509  ¦  test02  ¦  def  ¦  create database test02  ¦  2  ¦  2  ¦  2026-10-11 02:17:28  ¦  4
+296871  ¦  test02  ¦  def  ¦  create database test02  ¦  2  ¦  2  ¦  2026-10-23 15:00:32  ¦  10011  ¦  
 select attname from mo_catalog.mo_columns{snapshot = 'sp02'} where att_database = 'test02';
 ➤ attname[12,256,0]  𝄀
 __mo_fake_pk_col  𝄀
@@ -247,13 +247,13 @@ drop snapshot if exists sp04;
 create snapshot sp04 for account acc01;
 show snapshots where snapshot_name = 'sp04';
 ➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
-sp04  ¦  2026-10-10 18:17:29.190845999  ¦  account  ¦  acc01
+sp04  ¦  2026-10-23 07:00:33.515422999  ¦  account  ¦  acc01  ¦    ¦  
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp04'} where reldatabase = 'test03';
 ➤ count(*)[-5,64,0]  𝄀
 2
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
 ➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
-274546  ¦  test03  ¦  def  ¦  create database test03  ¦  2  ¦  2  ¦  2026-10-11 02:17:29  ¦  4
+296908  ¦  test03  ¦  def  ¦  create database test03  ¦  2  ¦  2  ¦  2026-10-23 15:00:33  ¦  10011  ¦  
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
 ➤ attname[12,256,0]  𝄀
 __mo_rowid  𝄀
@@ -522,8 +522,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for account acc01;
 show snapshots;
 ➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
-sp08  ¦  2026-10-10 18:17:30.832704999  ¦  account  ¦  acc01  ¦    ¦    𝄀
-sp07  ¦  2026-10-10 18:17:30.802757999  ¦  account  ¦  acc01
+sp08  ¦  2026-10-23 07:00:37.301438999  ¦  account  ¦  acc01  ¦    ¦    𝄀
+sp07  ¦  2026-10-23 07:00:37.247402999  ¦  account  ¦  acc01  ¦    ¦  
 restore account acc01{snapshot="sp08"};
 select * from table02;
 ➤ col1[4,32,0]  ¦  col2[12,20,0]  𝄀
@@ -569,8 +569,8 @@ drop snapshot if exists sp10;
 create snapshot sp10 for account acc01;
 show snapshots;
 ➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
-sp10  ¦  2026-10-10 18:17:32.598825999  ¦  account  ¦  acc01  ¦    ¦    𝄀
-sp09  ¦  2026-10-10 18:17:32.570783999  ¦  account  ¦  acc01
+sp10  ¦  2026-10-23 07:00:38.461539999  ¦  account  ¦  acc01  ¦    ¦    𝄀
+sp09  ¦  2026-10-23 07:00:38.423460999  ¦  account  ¦  acc01  ¦    ¦  
 restore account acc01{snapshot="sp09"};
 select * from table02;
 ➤ col1[4,32,0]  ¦  col2[12,20,0]  𝄀
@@ -690,14 +690,14 @@ ti1  ¦  CREATE TABLE `ti1` (
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL,
   CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table tm1 {snapshot = 'sp13'};
 ➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
 tm1  ¦  CREATE TABLE `tm1` (
   `a` int NOT NULL,
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table ti1 {snapshot = 'sp14'};
 ➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
 ti1  ¦  CREATE TABLE `ti1` (
@@ -705,14 +705,14 @@ ti1  ¦  CREATE TABLE `ti1` (
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL,
   CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table tm1 {snapshot = 'sp13'};
 ➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
 tm1  ¦  CREATE TABLE `tm1` (
   `a` int NOT NULL,
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 alter table ti1 drop foreign key fi1;
 alter table tm1 drop foreign key fm1;
 truncate ti1;
@@ -726,14 +726,14 @@ ti1  ¦  CREATE TABLE `ti1` (
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL,
   CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table tm1 {snapshot = 'sp15'};
 ➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
 tm1  ¦  CREATE TABLE `tm1` (
   `a` int NOT NULL,
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table ti1 {snapshot = 'sp14'};
 ➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
 ti1  ¦  CREATE TABLE `ti1` (
@@ -741,14 +741,14 @@ ti1  ¦  CREATE TABLE `ti1` (
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL,
   CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table tm1 {snapshot = 'sp15'};
 ➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
 tm1  ¦  CREATE TABLE `tm1` (
   `a` int NOT NULL,
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 select count(*) from ti1;
 ➤ count(*)[-5,64,0]  𝄀
 0
@@ -867,11 +867,11 @@ tm2  ¦  CREATE TABLE `tm2` (
 )
 show snapshots;
 ➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
-sp15  ¦  2026-10-10 18:17:33.504801999  ¦  account  ¦  acc01  ¦    ¦    𝄀
-sp14  ¦  2026-10-10 18:17:33.436868999  ¦  account  ¦  acc01  ¦    ¦    𝄀
-sp13  ¦  2026-10-10 18:17:33.390809999  ¦  account  ¦  acc01  ¦    ¦    𝄀
-sp12  ¦  2026-10-10 18:17:33.364967999  ¦  account  ¦  acc01  ¦    ¦    𝄀
-sp11  ¦  2026-10-10 18:17:33.332841999  ¦  account  ¦  acc01
+sp15  ¦  2026-10-23 07:00:40.513522999  ¦  account  ¦  acc01  ¦    ¦    𝄀
+sp14  ¦  2026-10-23 07:00:40.421470999  ¦  account  ¦  acc01  ¦    ¦    𝄀
+sp13  ¦  2026-10-23 07:00:40.371521999  ¦  account  ¦  acc01  ¦    ¦    𝄀
+sp12  ¦  2026-10-23 07:00:40.325447999  ¦  account  ¦  acc01  ¦    ¦    𝄀
+sp11  ¦  2026-10-23 07:00:40.239505999  ¦  account  ¦  acc01  ¦    ¦  
 drop database db03;
 drop snapshot sp15;
 drop snapshot sp14;
@@ -1003,7 +1003,7 @@ table02  ¦  CREATE TABLE `table02` (
   `col1` int DEFAULT NULL,
   `col2` enum('a','b','c') DEFAULT NULL,
   UNIQUE KEY `col1` (`col1`)
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 drop database db08;
 restore database db07{snapshot="sp14"};
 restore database db08{snapshot="sp14"};
@@ -1026,7 +1026,7 @@ show create table table01 {snapshot = 'sp14'};
 table01  ¦  CREATE TABLE `table01` (
   `col1` int DEFAULT NULL,
   `col2` enum('a','b','c') DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table table01;
 ➤ Table[12,7,0]  ¦  Create Table[12,93,0]  𝄀
 table01  ¦  CREATE TABLE `table01` (
@@ -1065,7 +1065,7 @@ show create table table01 {snapshot = 'sp14'};
 table01  ¦  CREATE TABLE `table01` (
   `col1` int DEFAULT NULL,
   `col2` enum('a','b','c') DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table table01;
 ➤ Table[12,7,0]  ¦  Create Table[12,93,0]  𝄀
 table01  ¦  CREATE TABLE `table01` (
@@ -1074,8 +1074,8 @@ table01  ¦  CREATE TABLE `table01` (
 )
 show snapshots;
 ➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
-sp15  ¦  2026-10-10 18:17:34.944721999  ¦  account  ¦  acc01  ¦    ¦    𝄀
-sp14  ¦  2026-10-10 18:17:34.722784999  ¦  account  ¦  acc01
+sp15  ¦  2026-10-23 07:00:42.593516999  ¦  account  ¦  acc01  ¦    ¦    𝄀
+sp14  ¦  2026-10-23 07:00:42.213448999  ¦  account  ¦  acc01  ¦    ¦  
 drop snapshot sp14;
 drop snapshot sp15;
 drop database db07;
@@ -1188,7 +1188,7 @@ select * from index03;
 9002  ¦  1981-02-20  ¦  ALLEN  ¦  SALESMAN  ¦  F  ¦  2008-02-20
 show snapshots;
 ➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
-sp16  ¦  2026-10-10 18:17:35.378795999  ¦  account  ¦  acc01
+sp16  ¦  2026-10-23 07:00:43.171536999  ¦  account  ¦  acc01  ¦    ¦  
 drop database db09;
 drop database db10;
 drop snapshot sp16;
@@ -1269,13 +1269,13 @@ select * from pri01;
 show columns from pri01;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col1  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-col2  ¦  decimal(38,0)  ¦  YES  ¦    ¦  null
+col2  ¦  decimal(38,0)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select count(*) from mo_catalog.mo_tables{snapshot = 'sp18'} where reldatabase = 'db11';
 ➤ count(*)[-5,64,0]  𝄀
 1
 select * from mo_catalog.mo_database{snapshot = 'sp18'} where datname = 'db11';
 ➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
-274950  ¦  db11  ¦  def  ¦  create database db11  ¦  2  ¦  2  ¦  2026-10-11 02:17:35  ¦  4
+297312  ¦  db11  ¦  def  ¦  create database db11  ¦  2  ¦  2  ¦  2026-10-23 15:00:43  ¦  10011  ¦  
 select attname from mo_catalog.mo_columns{snapshot = 'sp18'} where att_database = 'db11';
 ➤ attname[12,256,0]  𝄀
 __mo_rowid  𝄀

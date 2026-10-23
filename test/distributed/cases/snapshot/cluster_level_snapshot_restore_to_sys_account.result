@@ -65,7 +65,7 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase =
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 ➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
-273040  ¦  test01  ¦  def  ¦  create database test01  ¦  0  ¦  1  ¦  2026-10-11 02:17:04  ¦  0
+295402  ¦  test01  ¦  def  ¦  create database test01  ¦  0  ¦  1  ¦  2026-10-23 14:59:53  ¦  0  ¦  
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 ➤ attname[12,256,0]  𝄀
 col1  𝄀
@@ -102,7 +102,7 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'sp01'} where reldatabase =
 1
 select * from mo_catalog.mo_database{snapshot = 'sp01'} where datname = 'test01';
 ➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
-273040  ¦  test01  ¦  def  ¦  create database test01  ¦  0  ¦  1  ¦  2026-10-11 02:17:04  ¦  0
+295402  ¦  test01  ¦  def  ¦  create database test01  ¦  0  ¦  1  ¦  2026-10-23 14:59:53  ¦  0  ¦  
 select attname from mo_catalog.mo_columns{snapshot = 'sp01'} where att_database = 'test01';
 ➤ attname[12,256,0]  𝄀
 col1  𝄀
@@ -156,10 +156,10 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'sp02'} where reldatabase =
 2
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'test02';
 ➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
-273098  ¦  test02  ¦  def  ¦  create database test02  ¦  0  ¦  1  ¦  2026-10-11 02:17:05  ¦  0
+295460  ¦  test02  ¦  def  ¦  create database test02  ¦  0  ¦  1  ¦  2026-10-23 14:59:54  ¦  0  ¦  
 select * from mo_catalog.mo_database{snapshot = 'sp02'} where datname = 'mo_catalog';
 ➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
-1  ¦  mo_catalog  ¦  mo_catalog  ¦    ¦  0  ¦  0  ¦  2026-10-11 02:16:36  ¦  0
+1  ¦  mo_catalog  ¦  mo_catalog  ¦    ¦  0  ¦  0  ¦  2026-10-23 14:50:15  ¦  0  ¦  
 use mo_catalog;
 insert into cluster01 values(100,2,0);
 insert into cluster01 values(200,3,0);
@@ -288,7 +288,7 @@ select count(*) from mo_catalog.mo_tables{snapshot = 'sp04'} where reldatabase =
 2
 select * from mo_catalog.mo_database{snapshot = 'sp04'} where datname = 'test03';
 ➤ dat_id[-5,64,0]  ¦  datname[12,5000,0]  ¦  dat_catalog_name[12,5000,0]  ¦  dat_createsql[12,5000,0]  ¦  owner[4,32,0]  ¦  creator[4,32,0]  ¦  created_time[93,19,0]  ¦  account_id[4,32,0]  ¦  dat_type[12,32,0]  𝄀
-273158  ¦  test03  ¦  def  ¦  create database test03  ¦  0  ¦  1  ¦  2026-10-11 02:17:06  ¦  0
+295520  ¦  test03  ¦  def  ¦  create database test03  ¦  0  ¦  1  ¦  2026-10-23 14:59:56  ¦  0  ¦  
 select attname from mo_catalog.mo_columns{snapshot = 'sp04'} where att_database = 'test03';
 ➤ attname[12,256,0]  𝄀
 empno  𝄀
@@ -306,7 +306,7 @@ loc  𝄀
 __mo_rowid
 show snapshots where snapshot_name = 'sp04';
 ➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
-sp04  ¦  2026-10-10 18:17:06.904569999  ¦  cluster
+sp04  ¦  2026-10-23 06:59:56.673081999  ¦  cluster  ¦    ¦    ¦  
 select * from aff01{snapshot = 'sp04'};
 ➤ empno[4,32,0]  ¦  ename[12,15,0]  ¦  job[12,10,0]  ¦  mgr[4,32,0]  ¦  hiredate[91,10,0]  ¦  sal[3,7,2]  ¦  comm[3,7,2]  ¦  deptno[4,32,0]  𝄀
 7369  ¦  SMITH  ¦  CLERK  ¦  7902  ¦  1980-12-17  ¦  800.00  ¦  null  ¦  20  𝄀
@@ -591,8 +591,8 @@ drop snapshot if exists sp08;
 create snapshot sp08 for cluster;
 show snapshots;
 ➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
-sp08  ¦  2026-10-10 18:17:12.184850999  ¦  cluster  ¦    ¦    ¦    𝄀
-sp07  ¦  2026-10-10 18:17:12.032952999  ¦  cluster
+sp08  ¦  2026-10-23 07:00:02.787095999  ¦  cluster  ¦    ¦    ¦    𝄀
+sp07  ¦  2026-10-23 07:00:02.739728999  ¦  cluster  ¦    ¦    ¦  
 restore account sys{snapshot="sp08"};
 select * from table02;
 ➤ col1[4,32,0]  ¦  col2[12,20,0]  𝄀
@@ -649,8 +649,8 @@ drop snapshot if exists sp10;
 create snapshot sp10 for cluster;
 show snapshots;
 ➤ SNAPSHOT_NAME[12,64,0]  ¦  TIMESTAMP[12,65535,0]  ¦  SNAPSHOT_LEVEL[12,65535,0]  ¦  ACCOUNT_NAME[12,300,0]  ¦  DATABASE_NAME[12,5000,0]  ¦  TABLE_NAME[12,5000,0]  𝄀
-sp10  ¦  2026-10-10 18:17:13.822738999  ¦  cluster  ¦    ¦    ¦    𝄀
-sp09  ¦  2026-10-10 18:17:13.776971999  ¦  cluster
+sp10  ¦  2026-10-23 07:00:06.471124999  ¦  cluster  ¦    ¦    ¦    𝄀
+sp09  ¦  2026-10-23 07:00:06.405940999  ¦  cluster  ¦    ¦    ¦  
 restore account sys{snapshot="sp09"};
 select * from table02;
 ➤ col1[4,32,0]  ¦  col2[12,20,0]  𝄀
@@ -801,7 +801,7 @@ ti1  ¦  CREATE TABLE `ti1` (
   `a` int NOT NULL,
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table tm1;
 ➤ Table[12,3,0]  ¦  Create Table[12,188,0]  𝄀
 tm1  ¦  CREATE TABLE `tm1` (
@@ -816,7 +816,7 @@ tm1  ¦  CREATE TABLE `tm1` (
   `a` int NOT NULL,
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 drop snapshot if exists sp14;
 create snapshot sp14 for cluster;
 show create table ti1 {snapshot = 'sp14'};
@@ -826,14 +826,14 @@ ti1  ¦  CREATE TABLE `ti1` (
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL,
   CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table tm1 {snapshot = 'sp13'};
 ➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
 tm1  ¦  CREATE TABLE `tm1` (
   `a` int NOT NULL,
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table ti1 {snapshot = 'sp14'};
 ➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
 ti1  ¦  CREATE TABLE `ti1` (
@@ -841,14 +841,14 @@ ti1  ¦  CREATE TABLE `ti1` (
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL,
   CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table tm1 {snapshot = 'sp13'};
 ➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
 tm1  ¦  CREATE TABLE `tm1` (
   `a` int NOT NULL,
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 alter table ti1 drop foreign key fi1;
 alter table tm1 drop foreign key fm1;
 truncate ti2;
@@ -862,14 +862,14 @@ ti1  ¦  CREATE TABLE `ti1` (
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL,
   CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table tm1 {snapshot = 'sp15'};
 ➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
 tm1  ¦  CREATE TABLE `tm1` (
   `a` int NOT NULL,
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table ti1 {snapshot = 'sp14'};
 ➤ Table[12,3,0]  ¦  Create Table[12,215,0]  𝄀
 ti1  ¦  CREATE TABLE `ti1` (
@@ -877,14 +877,14 @@ ti1  ¦  CREATE TABLE `ti1` (
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL,
   CONSTRAINT `fi1` FOREIGN KEY (`b`) REFERENCES `ti2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table tm1 {snapshot = 'sp15'};
 ➤ Table[12,3,0]  ¦  Create Table[12,116,0]  𝄀
 tm1  ¦  CREATE TABLE `tm1` (
   `a` int NOT NULL,
   `b` int DEFAULT NULL,
   `c` int DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 select count(*) from ti1;
 ➤ count(*)[-5,64,0]  𝄀
 2
