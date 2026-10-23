@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -56,8 +57,9 @@ func TestStatementAuthorizationEpochAcrossCatalogCommit(t *testing.T) {
 				for _, db := range tenantPools {
 					assert.Zero(t, db.Stats().OpenConnections, "tenant pool still open before DROP ACCOUNT")
 				}
-				cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
-				_, err := root.ExecContext(cleanup, "drop account epoch_auth")
+				statement := "drop account epoch_auth"
+				cleanup, stop := context.WithTimeout(context.Background(), testutils.SQLCleanupTimeout(statement))
+				_, err := root.ExecContext(cleanup, statement)
 				stop()
 				if !assert.NoError(t, err) {
 					return
