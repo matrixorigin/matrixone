@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
+from typing import List, Optional
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -353,8 +354,26 @@ class TestCDCManagerSQLGeneration:
             watermark=f"{nanos}-7",
             err_msg=None,
         )
+        future_iso_watermark = CDCWatermarkInfo(
+            task_id="task-id-1",
+            task_name="cdc_task",
+            database="test_db",
+            table="future_orders",
+            watermark="20990101",
+            err_msg=None,
+        )
+        future_iso_datetime_watermark = CDCWatermarkInfo(
+            task_id="task-id-1",
+            task_name="cdc_task",
+            database="test_db",
+            table="future_events",
+            watermark="20990101-030405",
+            err_msg=None,
+        )
         self.manager.list = Mock(return_value=[task])  # type: ignore[method-assign]
-        self.manager.list_watermarks = Mock(return_value=[watermark])  # type: ignore[method-assign]
+        self.manager.list_watermarks = Mock(  # type: ignore[method-assign]
+            return_value=[watermark, future_iso_watermark, future_iso_datetime_watermark]
+        )
 
         assert self.manager.list_late_table_watermarks() == [watermark]
 

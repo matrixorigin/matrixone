@@ -139,10 +139,10 @@ def _parse_watermark_timestamp(value: Optional[str]) -> Optional[datetime.dateti
     if not value:
         return None
     value = value.strip()
-    hlc_match = re.fullmatch(r"(?P<physical>\d+)(?:-\d+)?", value)
-    if hlc_match:
+
+    def from_nanoseconds(raw_nanos: str) -> Optional[datetime.datetime]:
         try:
-            nanos = int(hlc_match.group("physical"))
+            nanos = int(raw_nanos)
             seconds, remaining_nanos = divmod(nanos, 1_000_000_000)
             return datetime.datetime.fromtimestamp(seconds, tz=datetime.timezone.utc) + datetime.timedelta(
                 microseconds=remaining_nanos // 1_000
@@ -158,6 +158,12 @@ def _parse_watermark_timestamp(value: Optional[str]) -> Optional[datetime.dateti
         except ValueError:
             dt = None
     if dt is None:
+        hlc_match = re.fullmatch(r"(?P<physical>\d+)-\d+", value)
+        if hlc_match:
+            return from_nanoseconds(hlc_match.group("physical"))
+        if value.isdigit():
+            return from_nanoseconds(value)
+
         formats = (
             "%Y-%m-%d %H:%M:%S",
             "%Y-%m-%d %H:%M:%S.%f",
