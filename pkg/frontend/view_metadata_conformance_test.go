@@ -83,7 +83,19 @@ func testNativeViewMetadataDDLTransitions(t *testing.T, ctx context.Context, cn 
 			exec(t, "alter table conformance_source modify column label varchar(20) default 'metadata', algorithm=inplace")
 			after := describeNativeViewSchema(t, request, database, "conformance_root", nil)
 			require.Equal(t, before, after, "同一 statement 的合法旧快照不能拼入 DDL 后的字段")
+			// 使用真实 statement owner 推进 RC，而不是修改 provider 的假 stamp。
+			oldSnapshot := op.SnapshotTS()
+			boundary, err := svc.GetSQLExecutor().Exec(ctx, "select 1", executor.Options{}.
+				WithDatabase(database).WithTxn(op).WithKeepTxnAlive().WithForceRebuildPlan())
+			require.NoError(t, err)
+			boundary.Close()
+			require.True(t, oldSnapshot.Less(op.SnapshotTS()))
+			stale, err := request.Describe(database, "conformance_root", nil)
+			stale.Release()
+			require.Nil(t, stale)
+			require.ErrorIs(t, err, plan.ErrViewSchemaChanged, "旧请求不能跨 statement 刷新继续复用")
 			request.Close()
+			testNativeViewMetadataSameSnapshot(t, ctx, compiler, op, proc, database, 20, "metadata")
 			generation, err := proc.GetExecutionResourceBudget()
 			require.NoError(t, err)
 			require.Zero(t, generation.Used())
@@ -147,6 +159,9 @@ func testNativeViewMetadataDDLTransitions(t *testing.T, ctx context.Context, cn 
 			testNativeViewMetadataSameSnapshot(t, ctx, compiler, op, proc, database, 20, "original")
 		})
 	})
+	t.Run("database clone and PITR", func(t *testing.T) {
+		testNativeViewMetadataRecoveryTransitions(t, ctx, cn, svc, public, database)
+	})
 }
 
 func testNativeViewMetadataSameSnapshot(t *testing.T, ctx context.Context, compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process, database string, width int32, defaultValue string) {
@@ -184,25 +199,32 @@ func testNativeViewMetadataSameSnapshot(t *testing.T, ctx context.Context, compi
 		}()
 	}
 
-	bound := 0
-	request := compiler.NewViewMetadataRequest(ctx, func(ctx context.Context, db, name string, snapshot *plan.Snapshot) error {
-		bound++
-		return authorize(ctx, db, name, snapshot)
-	})
-	defer request.Close()
-	for _, sql := range []string{"describe conformance_root", "show columns from conformance_root", "show full columns from conformance_root"} {
-		rows, err := frontend.ReadNativeViewMetadataSQLForTest(request.Context(), compiler, sql)
-		require.NoError(t, err, sql)
-		require.Len(t, rows, 2)
-		require.Equal(t, "label", rows[1][0])
-		require.Equal(t, fmt.Sprintf("varchar(%d)", width), rows[1][1])
+	for _, cacheOff := range []bool{false, true} {
+		func() {
+			bound := 0
+			request := compiler.NewViewMetadataRequest(ctx, func(ctx context.Context, db, name string, snapshot *plan.Snapshot) error {
+				bound++
+				return authorize(ctx, db, name, snapshot)
+			})
+			defer request.Close()
+			if cacheOff {
+				request.DisableMemoForIntegrationTest()
+			}
+			for _, sql := range []string{"describe conformance_root", "show columns from conformance_root", "show full columns from conformance_root"} {
+				rows, err := frontend.ReadNativeViewMetadataSQLForTest(request.Context(), compiler, sql)
+				require.NoError(t, err, sql)
+				require.Len(t, rows, 2)
+				require.Equal(t, "label", rows[1][0])
+				require.Equal(t, fmt.Sprintf("varchar(%d)", width), rows[1][1])
+			}
+			query := fmt.Sprintf("select column_name, lower(column_type), column_default from information_schema.columns where table_schema='%s' and table_name='conformance_root' order by ordinal_position", database)
+			rows, err := frontend.ReadNativeViewMetadataSQLForTest(request.Context(), compiler, query)
+			require.NoError(t, err)
+			require.Equal(t, [][]string{{"id", "int", "7"}, {"label", fmt.Sprintf("varchar(%d)", width), "'" + defaultValue + "'"}}, rows)
+			require.Positive(t, bound, "必须实际调用 opt-in provider，不能只测已有默认路径")
+			request.Close()
+		}()
 	}
-	query := fmt.Sprintf("select column_name, lower(column_type), column_default from information_schema.columns where table_schema='%s' and table_name='conformance_root' order by ordinal_position", database)
-	rows, err := frontend.ReadNativeViewMetadataSQLForTest(request.Context(), compiler, query)
-	require.NoError(t, err)
-	require.Equal(t, [][]string{{"id", "int", "7"}, {"label", fmt.Sprintf("varchar(%d)", width), "'" + defaultValue + "'"}}, rows)
-	require.Positive(t, bound, "必须实际调用 opt-in provider，不能只测已有默认路径")
-	request.Close()
 
 	afterStamp, afterRevision := nativeViewSchemaStamp(t, op)
 	require.Equal(t, beforeStamp, afterStamp)

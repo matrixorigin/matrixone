@@ -206,7 +206,11 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 
 	var statements []tree.Statement
 	if useSQLMode {
-		statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, v.(int64), sqlMode)
+		lowerCase, modeErr := plan2.RestoredViewLowerCaseTableNames(ctx, sql, v.(int64))
+		if modeErr != nil {
+			return modeErr
+		}
+		statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, lowerCase, sqlMode)
 	} else {
 		statements, err = mysql.Parse(ctx, sql, v.(int64))
 	}

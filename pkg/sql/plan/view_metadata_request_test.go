@@ -375,7 +375,10 @@ func TestViewMetadataWarmMemoCancellationDuringRootRead(t *testing.T) {
 		return nil
 	}
 	ctx, cancel := context.WithCancelCause(r.Context())
-	defer cancel(nil)
+	defer func() {
+		cancel(nil)
+		viewSchemaTestWait(t, done) // Join before the deferred request.Close, including assertion failures.
+	}()
 	var invalid bool
 	go func() {
 		defer close(done)
