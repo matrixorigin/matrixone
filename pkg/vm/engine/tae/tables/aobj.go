@@ -17,7 +17,6 @@ package tables
 import (
 	"context"
 	"fmt"
-	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -41,6 +40,7 @@ type aobject struct {
 	*baseObject
 	frozen     atomic.Bool
 	freezelock sync.Mutex
+	reserved   atomic.Uint32
 }
 
 func newAObject(
@@ -52,6 +52,10 @@ func newAObject(
 	obj.baseObject = newBaseObject(obj, meta, rt)
 	dropped := meta.HasDropCommitted()
 	if (meta.IsForcePNode() || dropped) && !isUnwrittenAppendable(meta) {
+		// A recovered persisted object does not carry the complete in-memory
+		// AppendNode history. Its max commit bound must remain unknown.
+		obj.appendMVCC.MarkAppendHistoryIncomplete()
+		meta.MarkAppendMaxPending()
 		pnode := newPersistedNode(obj.baseObject)
 		node := NewNode(pnode)
 		node.Ref()
@@ -61,17 +65,36 @@ func newAObject(
 		node := NewNode(mnode)
 		node.Ref()
 		obj.node.Store(node)
+		// A live aobject has no safe prefix bound until it is sealed and all
+		// of its AppendNodes are terminal.
+		meta.MarkAppendMaxPending()
 	}
 	if dropped || meta.IsForcePNode() {
 		// Replayed empty shells still have no file and must stay in memory,
 		// but their committed drop must never allow another append.
 		obj.FreezeAppend()
 	}
+	rows, _ := obj.Rows()
+	obj.reserved.Store(uint32(rows))
 	return obj
 }
 
 func (obj *aobject) FreezeAppend() {
 	obj.frozen.Store(true)
+}
+
+// SealAppend permanently closes the object's AppendNode set. Unlike the
+// legacy FreezeAppend flag, sealing also enables a stable max-commit
+// timestamp once all already attached append transactions finish.
+func (obj *aobject) SealAppend() {
+	obj.freezelock.Lock()
+	defer obj.freezelock.Unlock()
+	obj.frozen.Store(true)
+	obj.appendMVCC.Seal()
+}
+
+func (obj *aobject) GetAppendMaxCommitTS() (types.TS, bool) {
+	return obj.appendMVCC.GetMaxCommitTS()
 }
 
 func (obj *aobject) IsAppendFrozen() bool {
@@ -87,8 +110,9 @@ func (obj *aobject) IsAppendable() bool {
 	if node.IsPersisted() {
 		return false
 	}
-	rows, _ := node.Rows()
-	return rows < obj.meta.Load().GetSchema().Extra.BlockMaxRows
+	// Capacity follows reservations, including rollback holes. Materialized
+	// vector length can lag a reservation and is protected by the MVCC lock.
+	return obj.reserved.Load() < obj.meta.Load().GetSchema().Extra.BlockMaxRows
 }
 
 func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
@@ -96,7 +120,7 @@ func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {
 		reason = fmt.Sprintf("entering refcount %d", n)
 		return
 	}
-	obj.FreezeAppend()
+	obj.SealAppend()
 	if !obj.meta.Load().PrepareCompact() || !obj.appendMVCC.PrepareCompact() {
 		if !obj.meta.Load().PrepareCompact() {
 			reason = "meta preparecomp false"
@@ -124,9 +148,7 @@ func (obj *aobject) PrepareCompact() bool {
 		return false
 	}
 	// see more notes in flushtabletail.go
-	obj.freezelock.Lock()
-	obj.FreezeAppend()
-	obj.freezelock.Unlock()
+	obj.SealAppend()
 
 	droppedCommitted := obj.meta.Load().HasDropCommitted()
 
@@ -165,23 +187,8 @@ func (obj *aobject) Pin() *common.PinnedItem[*aobject] {
 // create ts and less than the block's delete ts
 // it is a coarse-grained check
 func (obj *aobject) CoarseCheckAllRowsCommittedBefore(ts types.TS) bool {
-	// if the block is not frozen, always return false
-	if !obj.IsAppendFrozen() {
-		return false
-	}
-
-	node := obj.PinNode()
-	defer node.Unref()
-
-	// if the block is in memory, check with the in-memory node
-	// it is a fine-grained check if the block is in memory
-	if !node.IsPersisted() {
-		return node.MustMNode().allRowsCommittedBefore(ts)
-	}
-
-	// always return false for if the block is persisted
-	// it is a coarse-grained check
-	return false
+	maxCommit, finalized := obj.GetAppendMaxCommitTS()
+	return finalized && maxCommit.LT(&ts)
 }
 
 func (obj *aobject) GetDuplicatedRows(
@@ -201,20 +208,27 @@ func (obj *aobject) GetDuplicatedRows(
 	node := obj.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
-		fn := func() (minv, maxv int32, err error) {
-			obj.RUnlock()
-			defer obj.RLock()
-			if maxv, err = obj.GetMaxRowByTS(to); err != nil {
-				return
+		// Build the prepare-range selection from the immutable COW snapshot
+		// before GetDuplicatedRows takes the object lock for ART and conflict
+		// checks. PrePrepare assigns/publishes predecessor PrepareTS values in
+		// the same serialized worker before this read; later active appends are
+		// still handled by the newest-owner conflict check under the lock.
+		// GetRowSelectionAfter keeps the historical (from, to] contract.
+		// The public dedup window is [from, to], as it was when this path
+		// used GetMaxRowByTS, so move the lower endpoint back one timestamp.
+		lower := from
+		if !lower.IsEmpty() {
+			lower = lower.Prev()
+		}
+		selection, snapshot := obj.appendMVCC.GetRowSelectionAfterWithSnapshot(lower, to)
+		fn := func() (index.RowSelection, error) {
+			// PrepareCommit also takes the object lock. If it published a new
+			// snapshot between the lock-free traversal above and this callback,
+			// rebuild from the now-stable snapshot while holding the lock.
+			if !obj.appendMVCC.IsPrepareSnapshotCurrent(snapshot) {
+				return obj.appendMVCC.GetRowSelectionAfter(lower, to), nil
 			}
-			// GetMaxRowByTS returns an exclusive row endpoint. Include appends
-			// at from by looking up the endpoint immediately before it.
-			lowerTS := from
-			if !lowerTS.IsEmpty() {
-				lowerTS = lowerTS.Prev()
-			}
-			minv, err = obj.GetMaxRowByTS(lowerTS)
-			return
+			return selection, nil
 		}
 		return node.GetDuplicatedRows(
 			ctx,
@@ -239,36 +253,6 @@ func (obj *aobject) GetDuplicatedRows(
 	}
 }
 
-func (obj *aobject) GetMaxRowByTS(ts types.TS) (int32, error) {
-	if ts.IsEmpty() {
-		return -1, nil
-	}
-	maxTS := types.MaxTs()
-	if ts.EQ(&maxTS) {
-		return math.MaxInt32, nil
-	}
-	node := obj.PinNode()
-	defer node.Unref()
-	if !node.IsPersisted() {
-		obj.RLock()
-		defer obj.RUnlock()
-		return int32(obj.appendMVCC.GetMaxRowByTSLocked(ts)), nil
-	} else {
-		vec, err := obj.LoadPersistedCommitTS(0)
-		if err != nil {
-			return 0, err
-		}
-		defer vec.Close()
-		tsVec := vector.MustFixedColNoTypeCheck[types.TS](
-			vec.GetDownstreamVector())
-		for i := range tsVec {
-			if tsVec[i].GT(&ts) {
-				return int32(i), nil
-			}
-		}
-		return int32(vec.Length()), nil
-	}
-}
 func (obj *aobject) ApplyDebugBatch(bat *containers.Batch, txn txnif.AsyncTxn) (ans []txnif.TxnEntry, err error) {
 	node := obj.PinNode()
 	defer node.Unref()
@@ -343,15 +327,27 @@ func (obj *aobject) OnReplayAppend(node txnif.AppendNode) (err error) {
 	defer obj.Unlock()
 	an := node.(*updates.AppendNode)
 	obj.appendMVCC.OnReplayAppendNode(an)
+	if max := an.GetMaxRow(); max > obj.reserved.Load() {
+		obj.reserved.Store(max)
+	}
 	return
 }
 
-func (obj *aobject) OnReplayAppendPayload(bat *containers.Batch) (err error) {
+func (obj *aobject) OnReplayAppendPayload(bat *containers.Batch, offset uint32) (err error) {
+	// MakeAppender returns a lightweight view and does not acquire an object
+	// reference.  Replay owns the appender only for this call, so acquire the
+	// matching reference before Close releases it.
+	obj.Ref()
 	appender, err := obj.MakeAppender()
 	if err != nil {
+		obj.Unref()
 		return
 	}
-	_, err = appender.ReplayAppend(bat, nil)
+	defer appender.Close()
+	err = appender.ApplyAppendAt(bat, offset, nil)
+	if err == nil {
+		obj.meta.Load().GetTable().AddRows(uint64(bat.Length()))
+	}
 	return
 }
 

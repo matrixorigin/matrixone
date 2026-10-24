@@ -17,10 +17,15 @@ package tables
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -31,12 +36,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type waitCountingTxn struct {
+	txnif.AsyncTxn
+	waits atomic.Int32
+}
+
+func (txn *waitCountingTxn) GetTxnState(wait bool) txnif.TxnState {
+	if wait {
+		txn.waits.Add(1)
+	}
+	return txn.AsyncTxn.GetTxnState(false)
+}
 
 func TestValidatePersistedCommitTSVectors(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -165,6 +183,20 @@ func TestAppendableUpgradeAfterSnapshotPublication(t *testing.T) {
 	require.Equal(t, int64(1), old.RefCount())
 }
 
+func TestCompactAbortRowsRemapsDeletes(t *testing.T) {
+	bat := containers.MockBatch([]types.Type{types.T_int32.ToType()}, 6, -1, nil)
+	defer bat.Close()
+	// Rows 0, 1, 3, and 4 are aborted append holes. Row 2 is a committed row
+	// deleted by a tombstone; row 5 remains visible.
+	bat.Deletes = nulls.Build(6, 0, 1, 2, 3, 4)
+	abortRows := nulls.Build(6, 0, 1, 3, 4)
+
+	compactInvisibleAppendRows(bat, abortRows)
+
+	require.Equal(t, 2, bat.Length())
+	require.Equal(t, []uint64{0}, bat.Deletes.ToArray())
+}
+
 func TestGetActiveRow(t *testing.T) {
 	ts1 := types.BuildTS(1, 0)
 	schema := catalog.MockSchema(1, 0)
@@ -214,6 +246,161 @@ func TestGetActiveRow(t *testing.T) {
 	err := idx.BatchUpsert(vec.GetDownstreamVector(), 0)
 	assert.NoError(t, err)
 	blk.node.Load().MustMNode().pkIndex = idx
+
+	// An append that has not reached its prepare-queue slot is not a valid PK
+	// owner for point lookup or snapshot dedup.
+	an2.Prepare = txnif.UncommitTS
+	require.ErrorIs(t, mnode.checkConflictLocked(nil)(1), index.ErrNotFound)
+}
+
+func TestPrepareAppendSealsFullObjectAndPublishesCommitBound(t *testing.T) {
+	schema := catalog.MockSchema(1, 0)
+	schema.Extra.BlockMaxRows = 2
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(schema, nil, nil)
+	require.NoError(t, err)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	entry, err := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	require.NoError(t, err)
+	obj := newAObject(entry, nil, false)
+	appender := newAppender(obj)
+	txn := &txnbase.Txn{
+		TxnCtx: txnbase.NewTxnCtx(
+			common.NewTxnIDAllocator().Alloc(),
+			types.BuildTS(1, 0),
+			types.TS{},
+		),
+	}
+
+	appender.LockFreeze()
+	appendNode, created, rows, err := appender.PrepareAppend(false, 2, txn)
+	appender.UnlockFreeze()
+	require.NoError(t, err)
+	require.True(t, created)
+	require.Equal(t, uint32(2), rows)
+	require.True(t, obj.IsAppendFrozen())
+	_, finalized := obj.GetAppendMaxCommitTS()
+	require.False(t, finalized)
+
+	txn.CommitTS = types.BuildTS(5, 0)
+	require.NoError(t, appendNode.ApplyCommit(txn.ID))
+	maxCommit, finalized := obj.GetAppendMaxCommitTS()
+	require.True(t, finalized)
+	require.Equal(t, types.BuildTS(5, 0), maxCommit)
+	require.False(t, obj.CoarseCheckAllRowsCommittedBefore(types.BuildTS(5, 0)))
+	require.True(t, obj.CoarseCheckAllRowsCommittedBefore(types.BuildTS(6, 0)))
+}
+
+func TestWaitAppendCommittingBeforeSkipsSameTxn(t *testing.T) {
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(schema, nil, nil)
+	require.NoError(t, err)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	obj, err := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	require.NoError(t, err)
+
+	mvcc := updates.NewAppendMVCCHandle(obj)
+	base := &baseObject{RWMutex: mvcc.RWMutex, appendMVCC: mvcc}
+	base.meta.Store(obj)
+	mnode := newMemoryNode(base, false)
+	node := NewNode(mnode)
+	node.Ref()
+	base.node.Store(node)
+	defer node.Unref()
+
+	startTS := types.BuildTS(1, 0)
+	prepareTS := types.BuildTS(2, 0)
+	txn := &txnbase.Txn{
+		TxnCtx: txnbase.NewTxnCtx(
+			common.NewTxnIDAllocator().Alloc(),
+			startTS,
+			types.TS{},
+		),
+	}
+	txn.Lock()
+	require.NoError(t, txn.ToPreparingLocked(prepareTS))
+	txn.Unlock()
+	appendNode, _ := mvcc.AddAppendNodeLocked(txn, 0, 1)
+	require.NoError(t, appendNode.PrepareCommit())
+	keys := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	defer keys.Close()
+	keys.Append(int32(7), false)
+	require.NoError(t, mnode.pkIndex.BatchUpsert(keys.GetDownstreamVector(), 0))
+	keysZM := index.NewZM(types.T_int32, 0)
+	require.NoError(t, index.BatchUpdateZM(keysZM, keys.GetDownstreamVector()))
+
+	// The transaction is still preparing. Without the same-txn guard this call
+	// waits on its own DoneCond forever.
+	base.WaitAppendCommittingBefore(types.MaxTs(), txn, keys, keysZM)
+}
+
+func TestWaitAppendCommittingBeforeOnlyWaitsSelectedKeys(t *testing.T) {
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(schema, nil, nil)
+	require.NoError(t, err)
+	noid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&noid, true, false, false)
+	obj, err := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	require.NoError(t, err)
+
+	mvcc := updates.NewAppendMVCCHandle(obj)
+	base := &baseObject{RWMutex: mvcc.RWMutex, appendMVCC: mvcc}
+	base.meta.Store(obj)
+	mnode := newMemoryNode(base, false)
+	node := NewNode(mnode)
+	node.Ref()
+	base.node.Store(node)
+	defer node.Unref()
+
+	newPreparingTxn := func(start, prepare types.TS) *waitCountingTxn {
+		txn := &txnbase.Txn{
+			TxnCtx: txnbase.NewTxnCtx(
+				common.NewTxnIDAllocator().Alloc(), start, types.TS{},
+			),
+		}
+		txn.Lock()
+		require.NoError(t, txn.ToPreparingLocked(prepare))
+		txn.Unlock()
+		return &waitCountingTxn{AsyncTxn: txn}
+	}
+	txn1 := newPreparingTxn(types.BuildTS(1, 0), types.BuildTS(3, 0))
+	txn2 := newPreparingTxn(types.BuildTS(2, 0), types.BuildTS(4, 0))
+	an1, _ := mvcc.AddAppendNodeLocked(txn1, 0, 1)
+	an2, _ := mvcc.AddAppendNodeLocked(txn2, 1, 2)
+	require.NoError(t, an1.PrepareCommit())
+	require.NoError(t, an2.PrepareCommit())
+
+	indexed := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	defer indexed.Close()
+	indexed.Append(int32(10), false)
+	indexed.Append(int32(20), false)
+	require.NoError(t, mnode.pkIndex.BatchUpsert(indexed.GetDownstreamVector(), 0))
+
+	selected := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	defer selected.Close()
+	selected.Append(int32(10), false)
+	selected.Append(nil, true)
+	selectedZM := index.NewZM(types.T_int32, 0)
+	require.NoError(t, index.BatchUpdateZM(selectedZM, selected.GetDownstreamVector()))
+
+	require.True(t, base.WaitAppendCommittingBefore(
+		types.MaxTs(), nil, selected, selectedZM,
+	))
+	require.Equal(t, int32(1), txn1.waits.Load())
+	require.Equal(t, int32(0), txn2.waits.Load())
 }
 
 func TestApplyAppendLockedPadsMissingColumnsForUpgradedSchema(t *testing.T) {
@@ -415,10 +602,12 @@ func TestAppendableDuplicatedRowsTimestampWindow(t *testing.T) {
 				start, end uint32
 				ts         int64
 			}{{0, 1, 10}, {1, 3, 20}, {3, 4, 30}} {
-				an, _ := mvcc.AddAppendNodeLocked(nil, appendRange.start, appendRange.end)
-				an.Start = types.BuildTS(appendRange.ts, 0)
-				an.Prepare = an.Start
-				an.End = an.Start
+				txn := updates.MockTxnWithStartTS(types.BuildTS(appendRange.ts-1, 0))
+				txn.PrepareTS = types.BuildTS(appendRange.ts, 0)
+				txn.CommitTS = txn.PrepareTS
+				an, _ := mvcc.AddAppendNodeLocked(txn, appendRange.start, appendRange.end)
+				require.NoError(t, an.PrepareCommit())
+				require.NoError(t, an.ApplyCommit(txn.ID))
 			}
 			keys := containers.MakeVector(types.T_int8.ToType(), common.DefaultAllocator)
 			defer keys.Close()
@@ -456,4 +645,95 @@ func TestAppendableDuplicatedRowsTimestampWindow(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestApplyAppendAtLockedOutOfOrder(t *testing.T) {
+	schema := catalog.MockSchema(2, 0)
+	mnode := &memoryNode{writeSchema: schema}
+
+	makeBatch := func(value int32) *containers.Batch {
+		bat := containers.BuildBatch(
+			schema.AllNames(), schema.AllTypes(),
+			containers.Options{Allocator: common.DefaultAllocator},
+		)
+		for i, vec := range bat.Vecs {
+			if i == 0 {
+				vec.Append(value, false)
+			} else {
+				vec.Append(nil, true)
+			}
+		}
+		return bat
+	}
+
+	later := makeBatch(3)
+	defer later.Close()
+	require.NoError(t, mnode.ApplyAppendAtLocked(later, 2))
+	defer mnode.data.Close()
+	// An earlier owner may materialize after the later payload. Reserving a
+	// shorter prefix must not clear that payload, including varlen/null data.
+	mnode.ReserveRowsLocked(1)
+	require.Equal(t, int32(3), mnode.data.Vecs[0].Get(2))
+	mnode.ReserveRowsLocked(4)
+	for _, vec := range mnode.data.Vecs {
+		require.Equal(t, 4, vec.Length())
+		require.True(t, vec.IsNull(3), "a failed trailing owner retains a physical hole")
+	}
+	first := makeBatch(1)
+	defer first.Close()
+	require.NoError(t, mnode.ApplyAppendAtLocked(first, 0))
+	second := makeBatch(2)
+	defer second.Close()
+	require.NoError(t, mnode.ApplyAppendAtLocked(second, 1))
+
+	vec := mnode.data.Vecs[0]
+	require.Equal(t, 4, vec.Length())
+	require.Equal(t, int32(1), vec.Get(0))
+	require.Equal(t, int32(2), vec.Get(1))
+	require.Equal(t, int32(3), vec.Get(2))
+}
+
+func TestFrozenAppenderRejectionDoesNotWaitForSealing(t *testing.T) {
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(schema, nil, nil)
+	require.NoError(t, err)
+	id := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&id, true, false, false)
+	entry, err := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	require.NoError(t, err)
+	obj := newAObject(entry, nil, false)
+	defer obj.node.Load().Unref()
+	h := newHandle(newTable(table, nil), obj, false)
+	obj.FreezeAppend() // Legacy flag-only freezing leaves the bound unknown.
+	obj.appendMVCC.LockForAppend()
+	locked := true
+	release := func() {
+		if locked {
+			locked = false
+			obj.appendMVCC.UnlockForAppend()
+		}
+	}
+	done := make(chan error, 1)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); _, err := h.GetAppender(); done <- err }()
+	defer func() { release(); wg.Wait() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	select {
+	case err := <-done:
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound), "%v", err)
+	case <-ctx.Done():
+		t.Fatal("candidate rejection waited for the object's writer")
+	}
+	_, finalized := obj.GetAppendMaxCommitTS()
+	require.False(t, finalized, "unknown history remains conservative before lifecycle sealing")
+	release()
+	obj.SealAppend()
+	_, finalized = obj.GetAppendMaxCommitTS()
+	require.True(t, finalized)
 }

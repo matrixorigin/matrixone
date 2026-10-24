@@ -42,9 +42,13 @@ type ObjectAppender interface {
 	PrepareAppend(isMergeCompact bool, rows uint32,
 		txn txnif.AsyncTxn) (
 		node txnif.AppendNode, created bool, n uint32, err error)
+	ReserveAppend(offset, rows uint32)
 	ApplyAppend(bat *containers.Batch,
 		txn txnif.AsyncTxn,
 	) (int, error)
+	ApplyAppendAt(bat *containers.Batch, offset uint32,
+		txn txnif.AsyncTxn,
+	) error
 	IsAppendable() bool
 	ReplayAppend(bat *containers.Batch,
 		txn txnif.AsyncTxn) (int, error)
@@ -54,7 +58,7 @@ type ObjectAppender interface {
 
 type ObjectReplayer interface {
 	OnReplayAppend(node txnif.AppendNode) (err error)
-	OnReplayAppendPayload(bat *containers.Batch) (err error)
+	OnReplayAppendPayload(bat *containers.Batch, offset uint32) (err error)
 }
 
 type Object interface {
@@ -80,12 +84,23 @@ type Object interface {
 	// check if all rows are committed before ts
 	// NOTE: here we assume that the object is visible to the ts
 	// if the object is an appendable object:
-	// 1. if the object is not frozen, return false
-	// 2. if the object is frozen and in-memory, check with the max ts committed
-	// 3. if the object is persisted, return false
+	// 1. if its AppendNode set is not permanently sealed, return false
+	// 2. if any attached append transaction is unfinished, return false
+	// 3. otherwise compare the stable max commit ts with ts; the in-memory
+	//    bound remains valid if the object is subsequently persisted
 	// if the object is not an appendable object:
 	// only check with the created ts
 	CoarseCheckAllRowsCommittedBefore(ts types.TS) bool
+	// WaitAppendCommittingBefore waits for append transactions whose prepare
+	// timestamp precedes ts and whose tombstone key occurs in the non-null keys.
+	// Callers use it before evaluating row visibility at ts; it does not wait for
+	// unrelated appends or appends prepared outside that snapshot.
+	WaitAppendCommittingBefore(
+		ts types.TS,
+		reader txnif.TxnReader,
+		keys containers.Vector,
+		keysZM index.ZM,
+	) bool
 	GetDuplicatedRows(
 		ctx context.Context,
 		txn txnif.TxnReader,
