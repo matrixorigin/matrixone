@@ -147,7 +147,7 @@ func remoteRunScopesAdmitAdoption(scopes []*Scope) bool {
 // including the absent/zero default an older coordinator build
 // produces — is an incapable coordinator for remotely dispatched
 // persistence-producing DML.
-const coordinatorIntakeAdoptionVersion = defines.MORPCVersion130
+const coordinatorIntakeAdoptionVersion = defines.MORPCVersion131
 
 // requestAdoptsIntakeAdmission reports whether an execution request's
 // advertised coordinator capability reaches the first adoption build.

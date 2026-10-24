@@ -3199,3 +3199,76 @@ is engine-queue state guarded by the queue's existing mutex; the retire
 is the existing round-37 helper on its existing guard). No r11- or
 r12-approved decision is altered, so the deviation rule opens no
 design re-review.
+
+## 10 design review record - round 39 (implementation follow-up): intake-build V_adopt renumbers to MORPCVersion131 after main shipped 130
+
+Context. Main advanced from the PR's original base `2b94111625` to
+`ac13078b98` and the PR became CONFLICTING. The single git-level conflict
+was `pkg/defines/const.go`: main's #30311 (`5a813a324d`, incomplete
+temporal string overloads and rejection diagnostics) had shipped
+`MORPCVersion130` — the number r12 had renumbered V_adopt to, from 114,
+when main consumed 114-129. Two claims on one protocol number is a
+semantic collision, the same external condition that forced r12's
+original renumbering.
+
+Decision. Keep main's `MORPCVersion130` (main's own temporal feature
+references it through files this PR does not touch) and renumber this
+PR's first-adoption intake build to `MORPCVersion131`; `MORPCLatestVersion`
+follows, and the const's comment now records "114-130 were taken on main,
+admission renumbered from the original 114". This is r12's own
+renumbering rule applied once more under the unchanged r11 D3''
+fail-closed contract — an externally forced identifier-slot move, not a
+decision change: the refusal still compares only the REQUEST-carried
+advertisement against the intake line, the absent/zero default still
+fails closed, the statement-only-default public failure contract and
+the `mo_rollback_txn_on_error` opt-in are untouched, and the additive
+protobuf field keeps number 20. The mixed-version partition is intact
+and sharper: main's shipped latest (130) and every older build sit below
+the intake line and are refused for remote-write fragments, while plain
+read fragments stay ungated.
+
+Rebase equivalence and rename scope. `git range-diff` over the eight
+replayed commits shows commits 2-8 patch-identical and commit 1
+differing only in the const.go resolution above; main's only other
+overlap with this PR's files is its dead-comment cleanup (`6f773c556d`)
+in the disttae core files, with no textual or semantic interaction with
+this PR's machinery. Renames stay inside this PR's own file set: the
+intake constant in `pkg/sql/compile/remote_object_admission.go`, its
+r11/r29 unit pins, and the D4'' BVT expected outputs that embed the
+printed text ("capability 131 or newer (coordinator advertised 129)" and
+the restore echo `:131`); the D4'' case's coordinator pin stays the
+literal 129 — a real pre-adoption main build, now labeled as such in the
+case comment. The r11 unit's former "parent-HEAD latest" sibling
+assertions re-pin to main's shipped latest (130) with 129 kept as an
+additional older-main-build row in both the threshold and refusal
+positions, and the per-request settle's below leg follows the same
+translation (129 → 130) while the advertisement walker pairs the fresh
+131 against main's 130.
+
+Validation (repository CGo wrapper; disk capacity was first repaired by
+clearing a 180 GB stale go-build cache on the validation host — the
+first compile-family attempt died on `no space left on device` before
+any test ran):
+
+- The compile-package admission family (every `TestIssue25590` root in
+  `pkg/sql/compile`, including the r11 threshold/advertisement/receiver/
+  settle/run-case-contract tests and the r29 remote dispatch transport
+  family) exits 0 on the renumbered tree.
+- The full disttae `TestIssue25590|TestGCFiles` family exits 0 — the
+  disttae implementation differs from the reviewed round-38 tree only by
+  main's deleted dead-comment blocks.
+- `go vet` over `./pkg/sql/compile/...` and `./pkg/vm/engine/disttae/...`
+  (with the repository CGo include paths the wrapper exports) exits 0;
+  `gofmt -l` is clean over every changed file.
+- No synchronization-bearing change exists in this round (a constant
+  renumber plus test/literal pins), so the race evidence of rounds 35-38
+  remains valid for the untouched synchronization surfaces.
+- The multi-CN D4''/forward-compat BVT legs remain for CI; their expected
+  outcomes were re-derived from the same production format strings the
+  unit family pins, and only the two printed version numbers changed.
+
+Decision: round 39 is an implementation-level reassignment of the
+intake-build identifier under r12's own recorded renumbering rule, not
+an r11/r12 decision change; the deviation rule opens no design
+re-review, and the renumbered head is covered by the re-run unit
+families above plus the pending review of the new head.

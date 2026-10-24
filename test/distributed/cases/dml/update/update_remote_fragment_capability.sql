@@ -7,8 +7,9 @@
 --   build) the mass remote metadata-producing DML COMMITS and reads back
 --   exactly in a fresh session.
 -- leg P2a: after pinning the session's COORDINATOR CN (the CN this
---   session is connected to, @@server_id) to the pre-merge advertisement
---   (129, mo_ctl 'SetProtocolVersion') the same mass UPDATE is REFUSED with
+--   session is connected to, @@server_id) to a pre-adoption main build
+--   advertisement (129, a real main version below the intake line,
+--   mo_ctl 'SetProtocolVersion') the same mass UPDATE is REFUSED with
 --   the definite not-supported error, and under the DEFAULT policy the
 --   transaction stays open: the earlier sentinel write is STILL VISIBLE in
 --   the same transaction after the refusal, COMMIT succeeds, and the fresh
