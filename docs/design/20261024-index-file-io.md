@@ -56,10 +56,21 @@ internal detail of how a file is stored.
 
 ### File names
 
-A file name is derived from the file identity and its version: the index table,
-`index_id`, `tag` and the checksum in the metadata row the loader already reads. A name
-is never reused for different content, so a rewritten file has a new name and nothing is
-invalidated.
+A file name is derived from the file identity and its version: the index table's id,
+`index_id`, `tag` and the checksum in the metadata row the loader already reads; a CDC
+tail frame's name also carries its starting chunk and its length. A name is never reused
+for different content, so a rewritten file has a new name and nothing is invalidated.
+
+- The index table is named by its table id (decision, @cpegeric, 2026-10-24). Table ids
+  are never reused. An operation that gives the hidden table a new id (truncate, a copying
+  ALTER, clone, restore) gives its files new names; identical bytes under two table ids
+  are cached twice. A rebuild in place (REINDEX) keeps the table id; its new generation
+  has a new `index_id` and checksum, so a new name. A snapshot read resolves the table id
+  visible at its snapshot.
+- A CDC tail frame's checksum is 32 bits, weaker than a base file's (decision,
+  @cpegeric, 2026-10-24). After a merge rewrites the tail, a frame with different content
+  may start at the same chunk; the length in the name narrows a collision, and the
+  remaining chance (same start, length and checksum) is accepted.
 
 The name carries no snapshot timestamp (decision, @cpegeric, 2026-10-24). Snapshot reads
 are handled by the storage engine and the content-addressed name: a reader resolves names
@@ -113,10 +124,15 @@ format gate is needed.
   checksum in the file's metadata row, by the rule of that row's kind (a whole-file
   checksum for a base file, the frame's own footer checksum for a CDC tail frame), then
   writes the file and its manifest.
-- When a cached file is opened, its manifest verifies the local copy. The manifest never
-  leaves the CN, so it uses one checksum for every file kind.
-- The file and its manifest are written together. A missing or mismatched manifest makes
-  the file a miss, rebuilt from the rows; a partial cache state is never served.
+- The manifest never leaves the CN, so it uses one checksum for every file kind. The
+  full checksum is verified on the first open of a cached file after the CN starts; later
+  opens on the same CN check the length only (decision, @cpegeric, 2026-10-24). A failed
+  check removes the cached file and rebuilds it from the rows.
+- The file and its manifest are one cache entry: a directory holding both (decision,
+  @cpegeric, 2026-10-24). It is written complete under a temporary name and renamed into
+  place in one step, evicted and deleted as a unit, and counted as one entry of their
+  combined size. A partial entry is never visible; a missing or mismatched manifest makes
+  the file a miss.
 
 Rejected alternatives: a header or trailer inside the cached file, which changes the
 bytes path-based consumers read; and a header inside the chunk rows, which changes the
@@ -132,6 +148,18 @@ table data and index files is explicit: a large index load cannot evict hot tabl
 nor the reverse. Index files exist only in this cache: a miss is never served from the
 storage backend, only rebuilt from the chunk rows. A CN without a disk cache uses a
 private temporary directory instead, with no reuse between loads.
+
+- The share is enabled by default (decision, @cpegeric, 2026-10-24): on upgrade the
+  table-data cache shrinks by that share. A runtime resize of the disk cache applies the
+  same split to the new size.
+- Several CNs in one process configured with the same cache directory share it, as they
+  share the table-data cache directory today (decision, @cpegeric, 2026-10-24). Files are
+  immutable and content-named and every write is a single rename, so sharing is safe; a
+  file evicted by one CN is a miss for the other. Rejected alternative: a CN id in the
+  path, which stores identical bytes once per CN.
+- The cache is best effort. A failure to write the cache (disk full, a file larger than
+  the cache) never fails the transaction or the query: the rows are the truth, and the
+  reader gets its file from a private temporary file removed when it is closed.
 
 Rejected alternative: placing index files in the shared table-data cache under a reserved
 namespace. It needs no new capacity setting, but a large index load and hot table blocks
@@ -160,8 +188,25 @@ Accepted consequences:
 - A consumer must use the handle the layer returns, not reopen the cache path by name: an
   eviction between the two opens makes the name disappear.
 
+Explicit removal frees disk as today. Today a loaded index's file is unlinked and freed
+when the loaded index is destroyed. When the index cache destroys a loaded index on
+explicit removal (DDL, a CDC or MERGE replacement, a replaced generation), its files are
+deleted from the index-file cache. When it evicts a current index because it is idle or
+under memory pressure, the files stay, so the next load reads them from disk instead of
+from the rows; this is the one intended change (decision, @cpegeric, 2026-10-24). A CN
+that never learns of a DROP keeps the files until capacity eviction.
+
 Rejected alternative: pinning open files so eviction skips them. It keeps disk use within
 capacity, but adds a second eviction rule to the shared disk-cache code.
+
+### One rebuild per file (decision)
+
+Decided by @cpegeric, 2026-10-24. Concurrent misses of the same file rebuild it once. A
+rebuild holds a lock per file name, shared by every CN in the process; other readers of
+that file wait for it (and can be cancelled), then find it in the cache. If the rebuild
+fails, the next waiter tries. A short wait on the cache's own write coordination is not
+enough: a rebuild takes seconds, and a reader that stops waiting would rebuild the file
+again.
 
 ### Memory
 
@@ -186,6 +231,9 @@ gate, and each algorithm can switch its readers and writers independently.
 - Not in scope: the incremental-update algorithm itself (the next PR); a new on-disk
   format; changes to what clone, restore or backup copy; IVFFLAT, which stores no
   chunks; GPU residency.
+- Before a vector algorithm adopts the layer: its libraries open files by name, so they
+  must be given the handle the layer returns; and IVF-PQ and CAGRA unpack their archive
+  into a second copy on disk, outside the cache and its capacity.
 - Range reads of a file. Consumers map or load whole files today, and the disk cache
   serves the whole file.
 
@@ -224,6 +272,14 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
   than it;
 - a file evicted while open or mapped stays readable through the open handle, and the next
   open is a miss that rebuilds it;
+- concurrent readers missing the same file rebuild it once; cancelling a waiter does not
+  affect the rebuild; a failed rebuild lets the next waiter rebuild;
+- the file and its manifest are never visible apart, and are evicted together; a
+  corrupted cached file is detected on the first open after a restart and rebuilt;
+- two CNs in one process sharing the directory never serve a partial file;
+- explicit removal deletes the removed index's files; idle eviction keeps them;
+- a cache write failure does not fail the write transaction or the read;
+- a runtime disk-cache resize applies the share;
 - each rebuild cache setting behaves as stated: the default fills neither the memory nor
   the table-data disk cache, bypass reads none of them, read-and-fill fills them;
 - cached index files are reused after a CN restart;
