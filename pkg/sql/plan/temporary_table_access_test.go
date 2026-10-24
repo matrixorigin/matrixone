@@ -36,12 +36,13 @@ func (s *temporaryAccessTestSession) RemoveTempTable(string, string)            
 func (s *temporaryAccessTestSession) RemoveTempTableByRealName(string)           {}
 func (s *temporaryAccessTestSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
 func (s *temporaryAccessTestSession) OwnsTemporaryTable(_, physical string) bool {
-	return s.physical == physical
+	return s.physical == physical || physical == s.physical+"___mo_index_unique_00112233-4455-6677-8899-aabbccddeeff" || physical == s.physical+"___mo_index_secondary_00112233-4455-6677-8899-aabbccddeeff"
 }
 func (s *temporaryAccessTestSession) CheckTemporaryTableCapacity(context.Context) error {
 	return nil
 }
-func (s *temporaryAccessTestSession) PublishTemporaryTable(string, string, string)          {}
+func (s *temporaryAccessTestSession) PublishTemporaryTable(string, string, string, map[string]string) {
+}
 func (s *temporaryAccessTestSession) RetireTemporaryTable(string, string, string, []string) {}
 
 var _ process.TemporaryTableDDL = (*temporaryAccessTestSession)(nil)
@@ -62,6 +63,7 @@ func TestTemporaryTableAccessAllowed(t *testing.T) {
 		{name: "owner root", tableDef: &TableDef{TableType: catalog.SystemTemporaryTable}, physical: physical, want: true},
 		{name: "owner hidden index", tableDef: &TableDef{TableType: catalog.SystemTemporaryTable}, physical: physical + "___mo_index_unique_00112233-4455-6677-8899-aabbccddeeff", want: true},
 		{name: "owner generated index relation", tableDef: &TableDef{TableType: catalog.SystemIndexRel}, physical: physical + "___mo_index_secondary_00112233-4455-6677-8899-aabbccddeeff", want: true},
+		{name: "unregistered index with owned prefix", tableDef: &TableDef{TableType: catalog.SystemIndexRel}, physical: physical + "___mo_index_secondary_unregistered", want: false},
 		{name: "foreign root", tableDef: &TableDef{TableType: catalog.SystemTemporaryTable}, physical: physical + "_other", want: false},
 		{name: "foreign hidden index", tableDef: &TableDef{TableType: catalog.SystemTemporaryTable}, physical: foreignPhysical + "___mo_index_unique_ffeeddcc-bbaa-9988-7766-554433221100", want: false},
 		{name: "foreign generated index relation", tableDef: &TableDef{TableType: catalog.SystemIndexRel}, physical: foreignPhysical + "___mo_index_secondary_ffeeddcc-bbaa-9988-7766-554433221100", want: false},

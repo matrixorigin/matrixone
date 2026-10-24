@@ -35,22 +35,19 @@ func (ses *Session) OwnsTemporaryTable(db, physical string) bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	key, ok := ses.tempTablesRev[physical]
-	owned := ok && ses.tempTableIdentityLocked(key).dbName == db
-	if owned {
-		return true
-	}
-	for ownedPhysical, key := range ses.tempTablesRev {
-		if strings.HasPrefix(ownedPhysical, physical+"_") && ses.tempTableIdentityLocked(key).dbName == db {
-			return true
-		}
-	}
-	return false
+	return ok && ses.tempTableIdentityLocked(key).dbName == db
 }
 
 func (ses *Session) CheckTemporaryTableCapacity(ctx context.Context) error {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	if len(ses.tempTables)+len(ses.retiredTempTables) >= maxSessionTemporaryTableGenerations {
+	generations := len(ses.retiredTempTables)
+	for key := range ses.tempTables {
+		if !ses.tempTableIdentityLocked(key).internal {
+			generations++
+		}
+	}
+	if generations >= maxSessionTemporaryTableGenerations {
 		return moerr.NewInvalidInput(ctx, "temporary table generation limit reached; finish the active transaction before creating more tables")
 	}
 	return nil
@@ -65,11 +62,9 @@ func (ses *Session) forgetTemporaryTableUndoLocked(key string) {
 	}
 }
 
-func (ses *Session) PublishTemporaryTable(db, alias, physical string) {
+func (ses *Session) PublishTemporaryTable(db, alias, physical string, indexes map[string]string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	key := defines.TempTableAliasKey(db, alias)
-	ses.forgetTemporaryTableUndoLocked(key)
 	if ses.tempTables == nil {
 		ses.tempTables = make(map[string]string)
 	}
@@ -79,12 +74,20 @@ func (ses *Session) PublishTemporaryTable(db, alias, physical string) {
 	if ses.tempTableIdentities == nil {
 		ses.tempTableIdentities = make(map[string]tempTableIdentity)
 	}
-	if old, ok := ses.tempTables[key]; ok {
-		delete(ses.tempTablesRev, old)
+	publish := func(alias, name string, internal bool) {
+		key := defines.TempTableAliasKey(db, alias)
+		ses.forgetTemporaryTableUndoLocked(key)
+		if old, ok := ses.tempTables[key]; ok {
+			delete(ses.tempTablesRev, old)
+		}
+		ses.tempTables[key] = name
+		ses.tempTablesRev[name] = key
+		ses.tempTableIdentities[key] = tempTableIdentity{dbName: db, alias: alias, internal: internal}
 	}
-	ses.tempTables[key] = physical
-	ses.tempTablesRev[physical] = key
-	ses.tempTableIdentities[key] = tempTableIdentity{dbName: db, alias: alias}
+	publish(alias, physical, false)
+	for indexAlias, name := range indexes {
+		publish(indexAlias, name, true)
+	}
 	ses.tempTableVersion++
 }
 

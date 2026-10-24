@@ -60,6 +60,8 @@ type temporaryDDLSession struct {
 	aliases    map[string]string
 }
 
+func (s *temporaryDDLSession) GetSessId() uuid.UUID { return s.sessionID }
+
 func (s *temporaryDDLSession) TemporaryTableName(db, alias string) string {
 	return defines.GenTempTableName(s.sessionID, db, s.generation+"_"+alias)
 }
@@ -71,8 +73,8 @@ func (s *temporaryDDLSession) GetTempTable(db, alias string) (string, bool) {
 }
 
 // OwnsTemporaryTable keeps the schema transaction's staged aliases visible to
-// the shared temporary-relation access gate. Hidden index relations derive
-// their ownership from the staged root before that root is published upstream.
+// the shared temporary-relation access gate. Every hidden index is registered
+// explicitly; a root rename must not change its physical ownership.
 func (s *temporaryDDLSession) OwnsTemporaryTable(db, physical string) bool {
 	if s == nil {
 		return false
@@ -83,7 +85,7 @@ func (s *temporaryDDLSession) OwnsTemporaryTable(db, physical string) bool {
 		return true
 	}
 	for key, name := range s.aliases {
-		if strings.HasPrefix(key, db+".") && (name == physical || strings.HasPrefix(name, physical+"_")) {
+		if strings.HasPrefix(key, db+".") && name == physical {
 			return true
 		}
 	}
@@ -104,6 +106,26 @@ func (s *temporaryDDLSession) RemoveTempTableByRealName(name string) {
 		if physical == name {
 			delete(s.aliases, alias)
 		}
+	}
+}
+
+func (s *temporaryDDLSession) indexNames(db, rootAlias string) []string {
+	var names []string
+	for key, name := range s.aliases {
+		if strings.HasPrefix(key, db+".") && key != db+"."+rootAlias {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func addTemporaryIndexAlias(session process.Session, db, alias, physical string) {
+	if indexSession, ok := session.(interface {
+		AddTempIndexTable(string, string, string)
+	}); ok {
+		indexSession.AddTempIndexTable(db, alias, physical)
+	} else {
+		session.AddTempTable(db, alias, physical)
 	}
 }
 
@@ -165,7 +187,7 @@ func (s *Scope) createSessionTemporaryTable(c *Compile, owner process.TemporaryT
 	completed, created := false, false
 	defer func() {
 		if created && !completed {
-			owner.RetireTemporaryTable(db, alias, physical, nil)
+			owner.RetireTemporaryTable(db, alias, physical, stage.indexNames(db, alias))
 		}
 	}()
 	err = exec.ExecTxn(c.proc.Ctx, func(tx executor.TxnExecutor) (err error) {
@@ -203,7 +225,13 @@ func (s *Scope) createSessionTemporaryTable(c *Compile, owner process.TemporaryT
 	if err != nil {
 		return err
 	}
-	owner.PublishTemporaryTable(db, alias, physical)
+	indexes := make(map[string]string, len(stage.aliases))
+	for key, name := range stage.aliases {
+		if key != db+"."+alias {
+			indexes[strings.TrimPrefix(key, db+".")] = name
+		}
+	}
+	owner.PublishTemporaryTable(db, alias, physical, indexes)
 	// New metadata is session-visible, but DML continues to use the parent
 	// snapshot and workspace. Existing DDL routing keeps this transaction local.
 	c.setHaveDDL(true)

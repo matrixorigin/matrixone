@@ -54,9 +54,12 @@ func (s *sessionTemporaryDDLTestOwner) OwnsTemporaryTable(db, physical string) b
 	return false
 }
 func (*sessionTemporaryDDLTestOwner) CheckTemporaryTableCapacity(context.Context) error { return nil }
-func (s *sessionTemporaryDDLTestOwner) PublishTemporaryTable(db, alias, name string) {
+func (s *sessionTemporaryDDLTestOwner) PublishTemporaryTable(db, alias, name string, indexes map[string]string) {
 	s.published = append(s.published, name)
 	s.AddTempTable(db, alias, name)
+	for alias, physical := range indexes {
+		s.AddTempTable(db, alias, physical)
+	}
 }
 func (s *sessionTemporaryDDLTestOwner) RetireTemporaryTable(db, alias, name string, _ []string) {
 	s.retired = append(s.retired, name)
@@ -703,7 +706,12 @@ func TestTemporaryDDLSessionOwnsStagedRoot(t *testing.T) {
 		aliases: map[string]string{"db.t": "staged_t"},
 	}
 	require.True(t, stage.OwnsTemporaryTable("db", "staged_t"))
-	require.True(t, stage.OwnsTemporaryTable("db", "staged"))
+	require.False(t, stage.OwnsTemporaryTable("db", "staged"))
+	stage.sessionID = uuid.New()
+	require.Equal(t, stage.sessionID, stage.GetSessId())
+	stage.AddTempIndexTable("db", "idx", "staged_index")
+	require.True(t, stage.OwnsTemporaryTable("db", "staged_index"))
+	require.False(t, stage.OwnsTemporaryTable("db", "staged_ind"))
 	require.False(t, stage.OwnsTemporaryTable("other-db", "staged_t"))
 	owner.AddTempTable("db", "published", "published-root")
 	require.True(t, stage.OwnsTemporaryTable("db", "published-root"))

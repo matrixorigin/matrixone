@@ -199,7 +199,8 @@ func AttachInternalExecutor(ctx context.Context) context.Context {
 }
 
 // AttachTemporaryTableAccess grants the narrow capability used by session
-// reset/disconnect and orphan-GC cleanup. Ordinary SQL cannot set context
+// reset/disconnect, orphan-GC cleanup, and validated ISCP index maintenance.
+// Ordinary SQL cannot set context
 // values, and InternalExecutorKey alone does not grant this access.
 func AttachTemporaryTableAccess(ctx context.Context) context.Context {
 	return context.WithValue(ctx, TemporaryTableAccessKey{}, true)
