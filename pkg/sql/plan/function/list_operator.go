@@ -154,6 +154,16 @@ func decimalArithmeticDomain(input types.Type) (width, scale int32, ok bool) {
 	return 0, 0, false
 }
 
+// useDecimal64MultiplyInputs owns the existing signed-integer/D64 eligibility
+// rule for both exact numeric domains and legacy temporal coercions. UINT64
+// and BIT cannot use a signed int64 coefficient.
+func useDecimal64MultiplyInputs(a, b, leftCoerced, rightCoerced types.T) bool {
+	if leftCoerced != types.T_decimal128 || rightCoerced != types.T_decimal128 {
+		return false
+	}
+	return (a == types.T_decimal64 || b == types.T_decimal64) && a != types.T_decimal128 && b != types.T_decimal128 && a != types.T_uint64 && b != types.T_uint64 && a != types.T_bit && b != types.T_bit
+}
+
 // decimalArithmeticInputs keeps logical precision through physical coercion.
 // Only the physical carrier is widened; its full capacity is not the operand's
 // precision. This prevents a small intermediate from making later operations
@@ -185,8 +195,10 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 		// Keep the existing signed-integer/Decimal64 MUL kernel, whose output
 		// is Decimal128. Integer domains retain 19 digits for signed BIGINT;
 		// UINT64/BIT require a wider input coefficient and cannot use it.
-		a, b := inputs[0].Oid, inputs[1].Oid
-		if (a == types.T_decimal64 || b == types.T_decimal64) && a != types.T_decimal128 && b != types.T_decimal128 && a != types.T_uint64 && b != types.T_uint64 && a != types.T_bit && b != types.T_bit {
+		// Width 19 is an internal BIGINT domain annotation, not a SQL D64
+		// declaration: signedToDecimal64 retains the full signed coefficient
+		// and d64Mul returns D128. Do not use this rule for an int64 result.
+		if useDecimal64MultiplyInputs(inputs[0].Oid, inputs[1].Oid, coerced[0].Oid, coerced[1].Oid) {
 			oid = types.T_decimal64
 		}
 	}
@@ -209,16 +221,20 @@ func decimalAddSubReturnType(parameters []types.Type) types.Type {
 	if parameters[0].Oid == types.T_decimal64 && parameters[1].Oid == types.T_decimal64 {
 		return types.New(types.T_decimal64, 18, max(parameters[0].Scale, parameters[1].Scale))
 	}
-	leftWidth, leftScale, _ := decimalArithmeticDomain(parameters[0])
-	rightWidth, rightScale, _ := decimalArithmeticDomain(parameters[1])
-	scale := max(leftScale, rightScale)
-	precision := int64(max(leftWidth-leftScale, rightWidth-rightScale)) + int64(scale) + 1
 	oid := types.T_decimal64
 	if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
 		oid = types.T_decimal256
 	} else if parameters[0].Oid == types.T_decimal128 || parameters[1].Oid == types.T_decimal128 {
 		oid = types.T_decimal128
 	}
+	leftWidth, leftScale, leftOK := decimalArithmeticDomain(parameters[0])
+	rightWidth, rightScale, rightOK := decimalArithmeticDomain(parameters[1])
+	if !leftOK || !rightOK {
+		// A non-exact peer must retain the historical carrier envelope.
+		return types.New(oid, min(oid.ToType().Width, int32(65)), max(parameters[0].Scale, parameters[1].Scale))
+	}
+	scale := max(leftScale, rightScale)
+	precision := int64(max(leftWidth-leftScale, rightWidth-rightScale)) + int64(scale) + 1
 	// Unsupported non-numeric coercion domains keep their historical carrier.
 	// Exact numeric domains were promoted by decimalArithmeticInputs already.
 	return types.New(oid, int32(min(precision, int64(min(oid.ToType().Width, 65)))), scale)
@@ -236,11 +252,14 @@ func decimalMultiplyReturnType(parameters []types.Type) types.Type {
 	if scale1+scale2 < scale {
 		scale = scale1 + scale2
 	}
-	leftWidth, _, _ := decimalArithmeticDomain(parameters[0])
-	rightWidth, _, _ := decimalArithmeticDomain(parameters[1])
 	oid := types.T_decimal128
 	if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
 		oid = types.T_decimal256
+	}
+	leftWidth, _, leftOK := decimalArithmeticDomain(parameters[0])
+	rightWidth, _, rightOK := decimalArithmeticDomain(parameters[1])
+	if !leftOK || !rightOK {
+		return types.New(oid, min(oid.ToType().Width, int32(65)), scale)
 	}
 	return types.New(oid, int32(min(int64(leftWidth)+int64(rightWidth), int64(min(oid.ToType().Width, 65)))), scale)
 }
@@ -1671,16 +1690,11 @@ var supportedOperators = []FuncNew{
 					// D128 output so overflow is impossible, and it's ~4× faster
 					// than d128Mul (1 vs 4 hardware MUL instructions).
 					// Exclude UINT64/BIT (their full domain does not fit in D64).
-					if t1.Oid == types.T_decimal128 && t2.Oid == types.T_decimal128 {
-						i0, i1 := inputs[0].Oid, inputs[1].Oid
-						hasD64 := i0 == types.T_decimal64 || i1 == types.T_decimal64
-						noD128 := i0 != types.T_decimal128 && i1 != types.T_decimal128
-						if hasD64 && noD128 && !wideUnsigned {
-							t1 = types.T_decimal64.ToType()
-							t2 = types.T_decimal64.ToType()
-							SetTargetScaleFromSource(&inputs[0], &t1)
-							SetTargetScaleFromSource(&inputs[1], &t2)
-						}
+					if useDecimal64MultiplyInputs(inputs[0].Oid, inputs[1].Oid, t1.Oid, t2.Oid) {
+						t1 = types.T_decimal64.ToType()
+						t2 = types.T_decimal64.ToType()
+						SetTargetScaleFromSource(&inputs[0], &t1)
+						SetTargetScaleFromSource(&inputs[1], &t2)
 					}
 					if multiOperatorSupportsVectorScalar(t1, t2) {
 						return newCheckResultWithCast(1, []types.Type{t1, t2})

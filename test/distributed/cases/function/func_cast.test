@@ -221,6 +221,7 @@ select cast(timestamp '2020-08-23 11:52:21' as char(4)), length(cast(timestamp '
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
 
 select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
+-- @metacmp(true)
 select cast(5 as unsigned) -6.0;
 select cast(NULL as signed);
 select cast(1/2 as signed);
@@ -255,6 +256,7 @@ select (_binary X'31' | X'31');
 select _binary '1' + 0;
 select (_binary X'31' | X'31') + 0;
 select 1.0 * (_binary X'312E35' | X'312E35');
+-- @metacmp(true)
 select 1.0 * (X'312E35' | X'312E35');
 select (_binary X'31' | NULL) + 0;
 SELECT CAST(X'' AS SIGNED);

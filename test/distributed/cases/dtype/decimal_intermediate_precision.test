@@ -12,4 +12,32 @@ create table revenue as select price * (1 - discount) as amount, price * discoun
 select column_name, numeric_precision, numeric_scale from information_schema.columns where table_schema = 'decimal_intermediate_precision' and table_name = 'revenue' order by ordinal_position;
 select amount, direct_product from revenue order by amount;
 select cast('99999999999999999999' as decimal(20,0)) * cast('99999999999999999999' as decimal(20,0)) as wide_product;
+create table aggregate_precision as select sum(price * discount) as sum_amount, avg(price * discount) as avg_amount from source_values;
+select column_name, numeric_precision, numeric_scale from information_schema.columns where table_schema = 'decimal_intermediate_precision' and table_name = 'aggregate_precision' order by ordinal_position;
+-- @metacmp(true)
+select sum_amount, avg_amount from aggregate_precision;
+prepare precision_plus from 'select price + ? as amount from source_values order by price';
+set @decimal_precision_runtime = cast(1 as signed);
+-- @metacmp(true)
+execute precision_plus using @decimal_precision_runtime;
+set @decimal_precision_runtime = cast(1.25 as decimal(20,2));
+-- @metacmp(true)
+execute precision_plus using @decimal_precision_runtime;
+deallocate prepare precision_plus;
+prepare precision_minus from 'select price - ? as amount from source_values order by price';
+set @decimal_precision_runtime = cast(1 as signed);
+-- @metacmp(true)
+execute precision_minus using @decimal_precision_runtime;
+set @decimal_precision_runtime = cast(1.25 as decimal(20,2));
+-- @metacmp(true)
+execute precision_minus using @decimal_precision_runtime;
+deallocate prepare precision_minus;
+prepare precision_multiply from 'select price * ? as amount from source_values order by price';
+set @decimal_precision_runtime = cast(1 as signed);
+-- @metacmp(true)
+execute precision_multiply using @decimal_precision_runtime;
+set @decimal_precision_runtime = cast(1.25 as decimal(20,2));
+-- @metacmp(true)
+execute precision_multiply using @decimal_precision_runtime;
+deallocate prepare precision_multiply;
 drop database decimal_intermediate_precision;

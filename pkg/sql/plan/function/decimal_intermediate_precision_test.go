@@ -57,3 +57,34 @@ func TestDecimalRevenueIntermediateStays128(t *testing.T) {
 		require.NotEqual(t, types.T_decimal256, arg.Oid)
 	}
 }
+
+func TestDecimalMultiplyRetainsBIGINTCastDomain(t *testing.T) {
+	integer := types.T_int64.ToType()
+	decimal := types.New(types.T_decimal64, 15, 2)
+	for _, reverse := range []bool{false, true} {
+		inputs := []types.Type{integer, decimal}
+		want := []types.Type{types.New(types.T_decimal64, 19, 0), decimal}
+		if reverse {
+			inputs[0], inputs[1] = inputs[1], inputs[0]
+			want[0], want[1] = want[1], want[0]
+		}
+		resolved, err := GetFunctionByName(context.Background(), "*", inputs)
+		require.NoError(t, err)
+		require.Equal(t, want, resolved.targetTypes)
+		require.Equal(t, types.New(types.T_decimal128, 34, 2), resolved.retType)
+	}
+}
+
+func TestDecimalReturnTypeUnknownDomainKeepsCarrierEnvelope(t *testing.T) {
+	for _, tc := range []struct {
+		carrier types.T
+		width   int32
+	}{
+		{types.T_decimal128, 38},
+		{types.T_decimal256, 65},
+	} {
+		inputs := []types.Type{types.New(tc.carrier, 20, 2), types.New(types.T_time, 0, 3)}
+		require.Equal(t, types.New(tc.carrier, tc.width, 3), decimalAddSubReturnType(inputs))
+		require.Equal(t, types.New(tc.carrier, tc.width, 5), decimalMultiplyReturnType(inputs))
+	}
+}

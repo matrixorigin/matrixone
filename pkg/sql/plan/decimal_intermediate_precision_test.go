@@ -84,3 +84,56 @@ func TestDecimalPrecisionRetainsFullIntegerValues(t *testing.T) {
 		})
 	}
 }
+
+func TestCTASDecimalAggregatePrecisionUsesColumnDomains(t *testing.T) {
+	for _, tc := range []struct {
+		name, aggregate string
+		id              types.T
+		width, scale    int32
+	}{
+		{"sum", "sum", types.T_decimal256, 52, 4},
+		{"average", "avg", types.T_decimal128, 34, 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			built, err := buildSingleStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+				"create table derived_aggregate as select "+tc.aggregate+"(l_extendedprice * l_discount) as amount from lineitem")
+			require.NoError(t, err)
+			col := built.GetDdl().GetCreateTable().GetTableDef().Cols[0]
+			require.Equal(t, int32(tc.id), col.Typ.Id)
+			require.Equal(t, tc.width, col.Typ.Width)
+			require.Equal(t, tc.scale, col.Typ.Scale)
+		})
+	}
+}
+
+func TestPreparedDecimalArithmeticRetainsDeclaredRuntimeDomains(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		runtime     types.Type
+		widths      []int32
+		scales      []int32
+	}{
+		{"bigint", "1", types.T_int64.ToType(), []int32{22, 22, 34}, []int32{2, 2, 2}},
+		{"decimal", "1.25", types.New(types.T_decimal128, 20, 2), []int32{21, 21, 35}, []int32{2, 2, 4}},
+	} {
+		for i, op := range []string{"+", "-", "*"} {
+			t.Run(tc.name+op, func(t *testing.T) {
+				prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+					"prepare arithmetic_domain from 'select cast(n_nationkey as decimal(15,2)) "+op+" ? as amount from nation'")
+				require.NoError(t, err)
+				cached := prepared.GetDcl().GetPrepare().Plan
+				before := proto.Clone(cached)
+				filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), cached, []any{
+					ParamValue{Value: tc.value, RuntimeType: tc.runtime, HasRuntimeType: true, IsBinaryProtocol: true},
+				})
+				require.NoError(t, err)
+				query := filled.GetQuery()
+				expr := query.Nodes[len(query.Nodes)-1].ProjectList[0]
+				require.Equal(t, int32(types.T_decimal128), expr.Typ.Id)
+				require.Equal(t, tc.widths[i], expr.Typ.Width)
+				require.Equal(t, tc.scales[i], expr.Typ.Scale)
+				require.True(t, proto.Equal(before, cached), "EXECUTE must not mutate the prepared domain")
+			})
+		}
+	}
+}

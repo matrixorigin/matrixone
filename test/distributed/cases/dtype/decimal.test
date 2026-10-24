@@ -24,7 +24,9 @@ drop table t1;
 create table t1 ( a int not null default 1, big decimal(29,11) );
 insert into t1 (big) values (-1),(12.34567891234567),(92.23372036854775807);
 select * from t1 order by a desc, big asc;
+-- @metacmp(true)
 select min(big),max(big),max(big)-1 from t1;
+-- @metacmp(true)
 select min(big),avg(big),max(big)-1 from t1 group by a order by 1+2;
 drop table t1;
 create table t1 ( a int not null default 1, big decimal(20,4) primary key);
@@ -32,7 +34,9 @@ insert into t1 (big) values (0),(18446744073), (0xFFFFFE), (184467.13), (184462)
 select * from t1 order by 1,2 desc;
 select * from t1 order by big limit 1,2;
 select * from t1 order by big limit 2 offset 1;
+-- @metacmp(true)
 select min(big),max(big),max(big)-1 from t1;
+-- @metacmp(true)
 select min(big),count(big),max(big)-1 from t1 group by a;
 
 #Test cases of query with multi tables
@@ -269,11 +273,17 @@ drop table t1;
 drop table if exists t1;
 create table t1 (a decimal(12,2));
 insert into t1 values (301934.27);
+-- @metacmp(true)
 select a * 4589.6 from t1;
+-- @metacmp(true)
 select a * 4589.60 from t1;
+-- @metacmp(true)
 select a * 54545.5 from t1;
+-- @metacmp(true)
 select a * 54545.50 from t1;
+-- @metacmp(true)
 select a * 54545.8 from t1;
+-- @metacmp(true)
 select a * 54545.80 from t1;
 drop table t1;
 
@@ -319,10 +329,13 @@ DELETE FROM decimal01 WHERE a = -3278.389284;
 DELETE FROM decimal01 WHERE a = 0.372817;
 
 -- Mathematical operation(+ - * /)
+-- @metacmp(true)
 SELECT a + 7382121 FROM decimal01;
 SELECT a - 0.27832 FROM decimal01;
+-- @metacmp(true)
 SELECT a * 0 FROM decimal01;
 SELECT a / 6 FROM decimal01;
+-- @metacmp(true)
 SELECT a * a FROM decimal01;
 
 -- insert null
@@ -374,6 +387,7 @@ SELECT * FROM decimal07;
 -- Mathematical operation:*，+，-，/，DIV
 SELECT a, a * b FROM decimal07;
 SELECT a, a + b FROM decimal07;
+-- @metacmp(true)
 SELECT a, a - b - b FROM decimal07;
 SELECT a, b DIV a FROM decimal07;
 
@@ -453,9 +467,11 @@ SELECT EXP(a div c) FROM decimal10;
 
 -- Aggregate function test
 SELECT SUM(a) FROM decimal10;
+-- @metacmp(true)
 SELECT AVG(a + b) FROM decimal10;
 SELECT COUNT(a) FROM decimal10;
 SELECT MAX(a) FROM decimal10;
+-- @metacmp(true)
 SELECT MIN(a) + MAX(b) FROM decimal10;
 
 -- sort
@@ -508,6 +524,7 @@ SELECT a,b,c FROM decimal10 WHERE a NOT IN(1.00000,9.00000);
 SELECT * FROM decimal10 WHERE a IN(1,9);
 SELECT a,b,c FROM decimal10 WHERE a NOT IN(1,9);
 
+-- @metacmp(true)
 SELECT a * b FROM decimal10 WHERE a NOT BETWEEN 2 AND 9;
 SELECT any_value(a) FROM decimal10 WHERE ABS(a) >= 0 GROUP BY id;
 SELECT * FROM decimal10 WHERE a > (SELECT COUNT(a) FROM decimal10);
@@ -914,10 +931,15 @@ DROP TABLE float_precision_test;
 -- Test 33-39: DECIMAL minus integer literal should allow negative results.
 -- This covers Decimal128 diff-scale subtraction where the scaled operand may
 -- alias the result buffer.
+-- @metacmp(true)
 SELECT CAST(8000.00 AS DECIMAL(12,2)) - 1299 AS dec_minus_int_positive;
+-- @metacmp(true)
 SELECT CAST(300.00 AS DECIMAL(12,2)) - 300 AS dec_minus_int_zero;
+-- @metacmp(true)
 SELECT CAST(300.00 AS DECIMAL(12,2)) - 301 AS dec_minus_int_negative_one;
+-- @metacmp(true)
 SELECT CAST(100.00 AS DECIMAL(12,2)) - 200 AS dec_minus_int_negative_hundred;
+-- @metacmp(true)
 SELECT CAST(300.00 AS DECIMAL(12,2)) - 3999 AS dec_minus_int_large_negative;
 
 -- Decimal literal right operand keeps the same-scale Decimal64 path.
@@ -927,6 +949,7 @@ SELECT CAST(300.00 AS DECIMAL(12,2)) - 3999.00 AS dec_minus_decimal_large_negati
 DROP TABLE IF EXISTS decimal_minus_int_regression;
 CREATE TABLE decimal_minus_int_regression(bal DECIMAL(12,2));
 INSERT INTO decimal_minus_int_regression VALUES (300.00);
+-- @metacmp(true)
 SELECT bal - 3999 AS bal_minus_int FROM decimal_minus_int_regression;
 DROP TABLE decimal_minus_int_regression;
 
@@ -934,6 +957,7 @@ DROP TABLE decimal_minus_int_regression;
 DROP TABLE IF EXISTS decimal_minus_int_rhs_vector;
 CREATE TABLE decimal_minus_int_rhs_vector(i INT);
 INSERT INTO decimal_minus_int_rhs_vector VALUES (300), (301), (3999);
+-- @metacmp(true)
 SELECT CAST(300.00 AS DECIMAL(12,2)) - i AS dec_minus_int_col
 FROM decimal_minus_int_rhs_vector
 ORDER BY i;
@@ -943,6 +967,7 @@ DROP TABLE decimal_minus_int_rhs_vector;
 DROP TABLE IF EXISTS decimal_minus_int_rhs_null;
 CREATE TABLE decimal_minus_int_rhs_null(id INT, i INT);
 INSERT INTO decimal_minus_int_rhs_null VALUES (1, 300), (2, NULL), (3, 301), (4, 3999);
+-- @metacmp(true)
 SELECT id, CAST(300.00 AS DECIMAL(12,2)) - i AS dec_minus_nullable_int_col
 FROM decimal_minus_int_rhs_null
 ORDER BY id;
@@ -950,11 +975,15 @@ DROP TABLE decimal_minus_int_rhs_null;
 
 -- Explicit Decimal128 left operand keeps the regression covered even if
 -- decimal-int cast rules change for narrower DECIMAL widths.
+-- @metacmp(true)
 SELECT CAST(300.00 AS DECIMAL(20,2)) - 301 AS dec128_minus_int_negative_one;
+-- @metacmp(true)
 SELECT CAST(300.00 AS DECIMAL(20,2)) - 3999 AS dec128_minus_int_large_negative;
 
 -- Reverse operand order is a related decimal-int diff-scale subtraction shape.
+-- @metacmp(true)
 SELECT 301 - CAST(300.00 AS DECIMAL(12,2)) AS int_minus_decimal_positive_one;
+-- @metacmp(true)
 SELECT 200 - CAST(300.00 AS DECIMAL(12,2)) AS int_minus_decimal_negative_hundred;
 
 -- Non-equi joins materialize an integer literal as a batch-wide decimal constant.

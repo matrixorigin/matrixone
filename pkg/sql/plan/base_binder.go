@@ -4856,7 +4856,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		// first look for builtin func
 		builtinExpr, err := bindFuncExprImplByPlanExpr(
-			b.GetContext(), name, args, false, nil, nil, findInSetInternalArgs)
+			b.GetContext(), name, args, false, nil, nil, findInSetInternalArgs, nil)
 		if err == nil {
 			if isNullIf {
 				b.rememberPreparedFieldNullIfDomain(builtinExpr, args)
@@ -5646,7 +5646,7 @@ func bindFuncExprAndConstFoldInternal(
 	// covering every other function of the definition.
 	foldGeometrySRIDConstArg(proc, name, args)
 	retExpr, err := bindFuncExprImplByPlanExpr(
-		ctx, name, args, descendFunctions, nil, nil, allowInternalFunctionArgs)
+		ctx, name, args, descendFunctions, nil, nil, allowInternalFunctionArgs, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -7292,7 +7292,7 @@ func preparedRegexpResultStringOperandCount(name string, arity int) int {
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
-	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil, nil, false)
+	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil, nil, false, nil)
 }
 
 func preparedBetweenHasMixedNumericText(ctx context.Context, args []*Expr) bool {
@@ -7340,7 +7340,7 @@ func bindPreparedFuncExprImplByPlanExpr(
 	name string,
 	args []*Expr,
 	stringDomainModes []function.StringDomainCheckMode,
-	originalArgs ...[]*Expr,
+	originalArgs []*Expr,
 ) (*plan.Expr, error) {
 	if stringDomainModes == nil && preparedRegexpCompatibilityStringOperandCount(name, len(args)) > 0 {
 		// PREPARE may defer compatibility for parameter-owned domains, but this
@@ -7350,7 +7350,7 @@ func bindPreparedFuncExprImplByPlanExpr(
 		stringDomainModes = make([]function.StringDomainCheckMode, len(args))
 	}
 	return bindFuncExprImplByPlanExpr(
-		ctx, name, args, true, stringDomainModes, originalBoundExpr, true, originalArgs...)
+		ctx, name, args, true, stringDomainModes, originalBoundExpr, true, originalArgs)
 }
 
 func bindReboundNumericExpr(ctx context.Context, name string, args, original []*Expr) (*Expr, error) {
@@ -7365,7 +7365,7 @@ func bindFuncExprImplByPlanExpr(
 	stringDomainModes []function.StringDomainCheckMode,
 	originalBoundExpr *Expr,
 	allowInternalFunctionArgs bool,
-	originalLiteralArgs ...[]*Expr,
+	originalLiteralArgs []*Expr,
 ) (*plan.Expr, error) {
 	var err error
 	preparedCalendarResult := preparedRawCalendarResult(name, args)
@@ -8177,6 +8177,8 @@ func bindFuncExprImplByPlanExpr(
 	if isPreparedTemporalIntegerArithmetic(name) {
 		for i, arg := range args {
 			if peer, ok := preparedTemporalNumericPeer(arg); ok && peer.Oid.IsDecimal() {
+				// Copy once before changing a TIME lookup; argsType describes
+				// the unchanged executable operands used later in this binder.
 				if &lookupTypes[0] == &argsType[0] {
 					lookupTypes = append([]types.Type(nil), lookupTypes...)
 				}
@@ -8187,12 +8189,14 @@ func bindFuncExprImplByPlanExpr(
 	// MOD literal refinement is metadata-only; its existing casts must retain
 	// the integer's full storage domain.
 	if name != "mod" && name != "%" {
+		// Refinement is copy-on-write: keep argsType and the original lookup
+		// immutable so runtime parameters can restore their declared domains.
 		originalLookup := lookupTypes
 		lookupTypes = refineDecimalArithmeticLiteralLookupTypes(name, args, lookupTypes)
-		if len(originalLiteralArgs) > 0 && len(originalLiteralArgs[0]) == len(args) {
+		if len(originalLiteralArgs) == len(args) {
 			// EXECUTE values keep their declared domains; a materialized marker
 			// is not a weak SQL literal even when it has no retained ParamRef.
-			for i, original := range originalLiteralArgs[0] {
+			for i, original := range originalLiteralArgs {
 				if lookupTypes[i] != originalLookup[i] && (isExplicitPreparedCast(original) || len(preparedNumericValueParamPositions(original)) > 0) {
 					lookupTypes[i] = originalLookup[i]
 				}
