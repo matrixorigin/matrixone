@@ -92,21 +92,28 @@ would store one copy of identical bytes per snapshot read.
 - A missing or duplicated chunk is an error, never a short or padded file.
 - Each CN fills its own disk cache from the rows on first read.
 
-### Integrity (decision)
+### Integrity: a manifest beside the file (decision)
 
-Decided by @cpegeric, 2026-10-24. A cached index file carries a self-describing
-integrity record (format version, length, checksum); chunk rows never do. The record is
-attached when a file is assembled into the disk cache and removed when a file is split
-into chunks, so the rows keep exactly today's bytes and no format gate is needed.
+Decided by @cpegeric, 2026-10-24. Each cached index file is paired with a separate
+manifest (format version, length, checksum). The index file itself is exactly the
+payload, byte for byte what the chunk rows hold: a tarball stays a tarball, a graph file
+stays a graph file. Chunk rows carry neither, so the rows keep today's bytes and no
+format gate is needed.
 
+- Consumers that open the file by path (an archive unpacker, a library that maps the
+  whole file) see the same bytes as today; nothing is appended or prepended.
 - When the layer rebuilds a file from its rows, it verifies the bytes against the
   checksum in the file's metadata row, by the rule of that row's kind (a whole-file
   checksum for a base file, the frame's own footer checksum for a CDC tail frame), then
-  attaches the record.
-- When a cached file is opened, the record verifies the local copy. The record never
+  writes the file and its manifest.
+- When a cached file is opened, its manifest verifies the local copy. The manifest never
   leaves the CN, so it uses one checksum for every file kind.
-- The record follows the data, so the file's bytes start at offset zero and a consumer
-  maps them unchanged.
+- The file and its manifest are written together. A missing or mismatched manifest makes
+  the file a miss, rebuilt from the rows; a partial cache state is never served.
+
+Rejected alternatives: a header or trailer inside the cached file, which changes the
+bytes path-based consumers read; and a header inside the chunk rows, which changes the
+stored format and needs a rollout gate.
 
 ### Memory
 
@@ -157,8 +164,10 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
 - a missing or duplicated chunk fails the read;
 - an aborted write leaves no rows, and no reader reaches its cached file;
 - a rewritten file never serves its previous content;
-- a corrupted chunk fails verification at rebuild, and a corrupted cached file fails its
-  integrity record at open, instead of being served;
+- a corrupted chunk fails verification at rebuild, and a corrupted cached file or
+  manifest, or a file without its manifest, is rebuilt instead of being served;
+- the cached file is byte-identical to the payload (an archive or mapped file opens
+  unchanged);
 - the chunk rows written through the layer are byte-identical to those the SQL path writes
   for the same file;
 - clone, restore and snapshot reads of an index written through the layer behave as
