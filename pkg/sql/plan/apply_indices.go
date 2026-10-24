@@ -1562,7 +1562,8 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 
 	forceIndex := builder.scanHintsForceIndexes(node)
-	for i := range node.FilterList { // if already have filter on first pk column and have a good selectivity, no need to go index
+	sortedSelectivity := 1.0
+	for i := range node.FilterList {
 		expr := node.FilterList[i]
 		fn := expr.GetF()
 		if fn == nil {
@@ -1572,8 +1573,11 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		if col == nil {
 			continue
 		}
-		if !forceIndex && GetSortOrder(node.TableDef, col.ColPos) == 0 && node.FilterList[i].Selectivity <= 0.001 {
-			return node.NodeId
+		// Default statistics leave expression selectivities unset (zero).
+		// Only actual estimates can justify a sorted-scan cost preference.
+		if !forceIndex && hasKnownScanCardinality(node.Stats) &&
+			GetSortOrder(node.TableDef, col.ColPos) == 0 && expr.Selectivity >= 0 && expr.Selectivity <= 0.001 {
+			sortedSelectivity = min(sortedSelectivity, node.FilterList[i].Selectivity)
 		}
 	}
 
@@ -1600,23 +1604,30 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		scanSnapshot = &Snapshot{}
 	}
 
-	// Apply unique/secondary indices if only indexed column is referenced
-	for i := range indexes {
-		ret := builder.tryIndexOnlyScan(indexes[i], node, colRefCnt, idxColMap, scanSnapshot)
-		if ret != -1 {
-			return ret
+	// Preserve the sorted-scan preference for covering and range access.
+	if sortedSelectivity == 1 {
+		// Apply unique/secondary indices if only indexed column is referenced
+		for i := range indexes {
+			ret := builder.tryIndexOnlyScan(indexes[i], node, colRefCnt, idxColMap, scanSnapshot)
+			if ret != -1 {
+				return ret
+			}
+		}
+		for i := range spatialIndexes {
+			ret := builder.trySpatialIndexOnlyScan(spatialIndexes[i], node, colRefCnt, idxColMap, scanSnapshot)
+			if ret != -1 {
+				return ret
+			}
 		}
 	}
-	for i := range spatialIndexes {
-		ret := builder.trySpatialIndexOnlyScan(spatialIndexes[i], node, colRefCnt, idxColMap, scanSnapshot)
-		if ret != -1 {
-			return ret
-		}
-	}
-
 	//small table means this table maybe not flushed yet, or it's not worse to go index
 	ignoreStats := forceIndex || node.Stats.TableCnt < 50000
-	if !ignoreStats {
+	idxToChoose, filterIdx := builder.getMostSelectiveIndexForPointSelect(indexes, node, ignoreStats, sortedSelectivity)
+	// A cardinality-proven unique point cannot produce the broad output that
+	// the aggregate scan estimates below are intended to guard against.
+	singletonPoint := idxToChoose != -1 && indexes[idxToChoose].Unique &&
+		len(filterIdx) == len(indexes[idxToChoose].Parts) && hasKnownScanCardinality(node.Stats)
+	if !ignoreStats && !singletonPoint {
 		if catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
 			// for cluster by table, make it less prone to go index
 			if node.Stats.Selectivity >= InFilterSelectivityLimit/2 || node.Stats.Outcnt >= InFilterCardLimitNonPK {
@@ -1629,13 +1640,15 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 
 	// Apply unique/secondary indices for point select
-	idxToChoose, filterIdx := builder.getMostSelectiveIndexForPointSelect(indexes, node, ignoreStats)
 	if idxToChoose != -1 {
 		retID, idxTableNodeID := builder.applyIndexJoin(indexes[idxToChoose], node, EqualIndexCondition, filterIdx, scanSnapshot)
 		builder.applyExtraFiltersOnIndex(indexes[idxToChoose], node, builder.qry.Nodes[idxTableNodeID], filterIdx)
 		return retID
 	}
 
+	if sortedSelectivity < 1 {
+		return nodeID
+	}
 	idxToChoose, filterIdx = builder.getIndexForNonEquiCond(indexes, node)
 	if idxToChoose != -1 {
 		condType := NonEqualIndexCondition
@@ -1733,19 +1746,10 @@ func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []
 		}
 		found := false
 		for j := range node.FilterList {
-			fn := node.FilterList[j].GetF()
-			if fn == nil {
-				continue
-			}
-			switch fn.Func.ObjName {
-			case "=":
-				col := fn.Args[0].GetCol()
-				if col != nil && col.ColPos == currentPos && isRuntimeConstExpr(fn.Args[1]) {
-					leadingPos = append(leadingPos, int32(j))
-					found = true
-				}
-			}
-			if found {
+			kind, col := checkIndexFilter(node.FilterList[j].GetF())
+			if kind == EqualIndexCondition && col.ColPos == currentPos {
+				leadingPos = append(leadingPos, int32(j))
+				found = true
 				break
 			}
 		}
@@ -1769,26 +1773,41 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 		}
 		col := fn.Args[0].GetCol()
 		if col != nil && isRuntimeConstExpr(fn.Args[1]) {
+			// Serialized regular-index keys preserve the physical distinction
+			// between -0 and +0. SQL equality does not, so using this predicate
+			// as an index access condition can silently drop one of the zeros.
+			// Fall back to the base scan until the access path compares decoded
+			// floating-point values.
+			if isFloatIndexFilterExpr(fn.Args[0]) {
+				return UnsupportedIndexCondition, nil
+			}
 			return EqualIndexCondition, col
 		}
 
 	case "in", "between":
 		col := fn.Args[0].GetCol()
-		if col != nil {
+		if col != nil && !isFloatIndexFilterExpr(fn.Args[0]) {
 			return NonEqualIndexCondition, col
 		}
 
 	case ">", ">=", "<", "<=":
 		if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
+			if isFloatIndexFilterExpr(fn.Args[0]) {
+				return UnsupportedIndexCondition, nil
+			}
 			return NonEqualIndexCondition, fn.Args[0].GetCol()
 		}
 		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+			if isFloatIndexFilterExpr(fn.Args[1]) {
+				return UnsupportedIndexCondition, nil
+			}
 			return NonEqualIndexCondition, fn.Args[1].GetCol()
 		}
 
 	case "in_range":
 		col := fn.Args[0].GetCol()
-		if col != nil && isRuntimeConstExpr(fn.Args[1]) && isRuntimeConstExpr(fn.Args[2]) {
+		if col != nil && !isFloatIndexFilterExpr(fn.Args[0]) &&
+			isRuntimeConstExpr(fn.Args[1]) && isRuntimeConstExpr(fn.Args[2]) {
 			return NonEqualIndexCondition, col
 		}
 
@@ -1810,6 +1829,14 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 		return NonEqualIndexCondition, col
 	}
 	return UnsupportedIndexCondition, nil
+}
+
+func isFloatIndexFilterExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	typ := types.T(expr.Typ.Id)
+	return typ == types.T_float32 || typ == types.T_float64
 }
 
 func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
@@ -1930,20 +1957,28 @@ func needsIndexOnlyResidualLeadingFilters(idxDef *IndexDef, filterList []*plan.E
 		if pos < 0 || int(pos) >= len(filterList) {
 			continue
 		}
-		if indexFilterMayCompareNullAtRuntime(filterList[pos]) {
+		if indexFilterNeedsDecodedResidual(filterList[pos]) {
 			return true
 		}
 	}
 	return false
 }
 
-func indexFilterMayCompareNullAtRuntime(expr *plan.Expr) bool {
+func indexFilterNeedsDecodedResidual(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
 		return false
+	}
+	// serial_full prefix comparisons can include an escaped-NUL peer of a
+	// byte string. Keep the SQL predicate on decoded index values as an exact
+	// recheck, just as for nullable runtime bounds.
+	for _, arg := range fn.Args {
+		if arg.GetCol() != nil && types.T(arg.Typ.Id).IsMySQLString() {
+			return true
+		}
 	}
 	switch fn.Func.ObjName {
 	case "=":
@@ -1958,7 +1993,7 @@ func indexFilterMayCompareNullAtRuntime(expr *plan.Expr) bool {
 		return len(fn.Args) > 2 && (runtimeConstMayBeNull(fn.Args[1]) || runtimeConstMayBeNull(fn.Args[2]))
 	case "or":
 		for _, arg := range fn.Args {
-			if indexFilterMayCompareNullAtRuntime(arg) {
+			if indexFilterNeedsDecodedResidual(arg) {
 				return true
 			}
 		}
@@ -2102,11 +2137,13 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	newFilterList := make([]*plan.Expr, 0, len(node.FilterList))
 	newFilterList = append(newFilterList, newLeadingFilter)
 	if needsIndexOnlyResidualLeadingFilters(idxDef, node.FilterList, leadingPos) {
-		// serial_full preserves NULL as key bytes. Keep the original SQL
-		// predicate as a residual recheck so prepared NULL values still follow
-		// SQL three-valued logic on covering index-only scans.
+		// NULL key bytes and escaped-NUL prefixes are candidate supersets.
+		// Recheck the original SQL predicate on decoded covering values.
 		for _, idx := range leadingPos {
-			newFilterList = append(newFilterList, replaceColumnsForExpr(DeepCopyExpr(node.FilterList[idx]), idxColMap))
+			residual := replaceColumnsForExpr(DeepCopyExpr(node.FilterList[idx]), idxColMap)
+			// Lookup already accounts for this predicate's selectivity.
+			residual.Selectivity = 1
+			newFilterList = append(newFilterList, residual)
 		}
 	}
 	for _, idx := range missFilterIdx {
@@ -2521,9 +2558,40 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	return joinNodeID, idxTableNodeID
 }
 
-func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node, ignoreStats bool) (int, []int32) {
-	currentSel := 1.0
+// A strict primary-key prefix is not a singleton lookup and must not veto a
+// more selective secondary index. Keep the shortcut only for the complete key.
+func hasPrimaryKeyEquality(table *TableDef, equalFilters map[int32]int32) bool {
+	if table == nil || table.Pkey == nil || len(table.Pkey.Names) == 0 {
+		return false
+	}
+	for i, name := range table.Pkey.Names {
+		colPos, ok := table.Name2ColIndex[name]
+		if !ok || colPos < 0 || int(colPos) >= len(table.Cols) {
+			return false
+		}
+		if _, ok := equalFilters[colPos]; !ok {
+			return false
+		}
+		for _, previous := range table.Pkey.Names[:i] {
+			if table.Name2ColIndex[previous] == colPos {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Default statistics carry a placeholder row count, not cardinality evidence.
+func hasKnownScanCardinality(stats *plan.Stats) bool {
+	return stats != nil && !IsDefaultStats(stats) && stats.TableCnt > 0 &&
+		!math.IsNaN(stats.TableCnt) && !math.IsInf(stats.TableCnt, 0)
+}
+
+func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*IndexDef, node *plan.Node, ignoreStats bool, maxSelectivity float64) (int, []int32) {
+	currentSel := maxSelectivity
 	currentIdx := -1
+	knownCardinality := hasKnownScanCardinality(node.Stats)
+	selectedCompleteUnique := false
 	savedFilterIdx := make([]int32, 0)
 
 	col2filter := make(map[int32]int32)
@@ -2534,9 +2602,7 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 		}
 	}
 
-	firstPkColIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.Names[0]]
-	_, ok := col2filter[firstPkColIdx]
-	if ok { //point select filter on first column of primary key, no need to go index
+	if !builder.scanHintsForceIndexes(node) && hasPrimaryKeyEquality(node.TableDef, col2filter) {
 		return -1, nil
 	}
 
@@ -2572,16 +2638,36 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 			continue
 		}
 
-		compositeFilterSel := 1.0
-		for k := range filterIdx {
-			compositeFilterSel *= node.FilterList[filterIdx[k]].Selectivity
-		}
-		if compositeFilterSel < currentSel {
+		completeUnique := idxDef.Unique && len(filterIdx) == len(idxDef.Parts)
+		if !knownCardinality {
+			// Unset/neutral estimates cannot compare unknown candidates. Within
+			// the existing cost bypass, prefer a schema-bounded unique point;
+			// preserve catalog order within each class and a nonunique fallback.
+			if !ignoreStats || maxSelectivity != 1 ||
+				(currentIdx != -1 && (selectedCompleteUnique || !completeUnique)) {
+				continue
+			}
+		} else {
+			compositeFilterSel := 1.0
+			for k := range filterIdx {
+				compositeFilterSel *= node.FilterList[filterIdx[k]].Selectivity
+			}
+			if math.IsNaN(compositeFilterSel) || math.IsInf(compositeFilterSel, 0) || compositeFilterSel < 0 || compositeFilterSel > 1 {
+				continue
+			}
+			if completeUnique {
+				compositeFilterSel = min(compositeFilterSel, 1/node.Stats.TableCnt)
+			}
+			forceFallback := currentIdx == -1 && compositeFilterSel == 1 && builder.scanHintsForceIndexes(node)
+			if compositeFilterSel >= currentSel && !forceFallback {
+				continue
+			}
 			currentSel = compositeFilterSel
-			currentIdx = i
-			savedFilterIdx = savedFilterIdx[:0]
-			savedFilterIdx = append(savedFilterIdx, filterIdx...)
 		}
+		currentIdx = i
+		selectedCompleteUnique = completeUnique
+		savedFilterIdx = savedFilterIdx[:0]
+		savedFilterIdx = append(savedFilterIdx, filterIdx...)
 	}
 	return currentIdx, savedFilterIdx
 }

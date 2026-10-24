@@ -1,51 +1,89 @@
-# Issue #31046 — preserve logical predicates until access selection
+# Secondary-index selection with composite primary and cluster keys
 
-**PASS for implementation**, superseding the original design's assumption that all component equalities still reach regular-index selection. Author: **gpt-6.1-sol / xhigh**, selected-model session `/root/issue31037_design`, 2026-10-24. Bases remain main `ac13078b9872fe9ca84e0eeb4d1571312f99382a` and4.2-dev `0da0d693d7c7e54e57fd37f31ab8cd3fa71b7941`. No production edits by this reviewer.
+## Problem and ownership
 
-## New evidence and first owner
+A predicate on the first component of a composite primary key does not identify
+one row. It may select a large tenant history while a complete secondary unique
+key identifies at most one row. Three existing decisions prevented that access:
+composite-key lowering consumed the logical component predicate before index
+matching, point matching treated the first primary component as a complete key,
+and a selective sorted predicate returned before evaluating secondary points.
 
-The corrected full-planner fixture still fails after the two veto repairs. E3's real main service likewise retains10004-row base scans for all four original-schema composite queries. This is independent evidence that the first design is incomplete.
+`FilterList` remains the single owner of semantic row predicates. Secondary
+matching, hint validation, candidate ranking and backfill remain in the existing
+index-selection code. `BlockFilterList` remains optional derived pruning state;
+it cannot supply missing logical facts. The existing composite rewriter owns
+physical key encoding. Storage, protocol, locking and execution do not change.
 
-Both branches call `mergeFiltersOnCompositeKey` inside `optimizeFilters`, before secondary-index selection. It consumes `a=1` into `prefix_eq(hidden_compound_key,serial(1))`; the later point matcher cannot see `a`. Covering access also loses its logical input shape. `BlockFilterList` is optional derived pruning state, explicitly absent with `blockFilter=2`; it is not an authoritative source of logical facts.
+## Phase boundary
 
-Repair the phase boundary at the existing composite-filter owner: **keep semantic `FilterList` predicates logical until the regular access path has been selected, then lower surviving base scans with the existing composite rewriter.** Keep the original complete-PK/FORCE and sorted-preference corrections from `design.md`.
+For scans with a composite physical primary or cluster key and a materialized
+ordinary secondary index, retain logical predicates through access selection.
+Other scans keep their existing early lowering. This is a metadata-defined
+class; generated columns, parameter syntax and particular schemas are
+irrelevant.
 
-## Implementable phase API on both branches
+The existing recursive composite rewriter takes an explicit phase. Its late
+phase processes surviving deferred base scans, including the base side of an
+index backfill. An index-only replacement has no source secondary metadata and
+needs no base-key lowering. The same lowering and constant-folding owners are
+reused. Repeated early optimization and late lowering must be stable.
 
-1. Give the existing recursive `mergeFiltersOnCompositeKey` owner a small explicit phase argument, e.g. `mergeFiltersOnCompositeKey(nodeID int32, beforeIndexSelection bool)`. Reuse its traversal and `doMergeFiltersOnCompositeKey`; do not add a second general tree visitor.
-2. Add one bounded structural class check: the scan has a composite physical primary/cluster key (reuse `compositeKeyPartColumns`) and at least one materialized ordinary regular secondary index. Use existing catalog algorithm/`TableExist` metadata; exclude spatial/nonregular algorithms from this deferral class. Do not match tenant names, SQL text, generated-column syntax or the particular index definition in the issue.
-3. In the early phase (`optimizeFilters`), skip destructive merging for that class. Other scans retain their current early behavior, including its existing scan-stat calculation/reset. The semantic predicates stay solely in their existing `FilterList`; no saved predicate map, extra plan field, block-filter promotion or serialized-expression decoder is introduced.
-4. In the late phase, process **only that deferred class** among surviving TABLE_SCAN nodes. Index-only replacements no longer have the source table's secondary-index metadata and need no composite lowering. Base scans under INDEX backfill still lower their exact residuals. Use the current branch's existing lowering/encoding guards unchanged.
-5. The late phase must not call `resetHashMapStats` or otherwise clear already chosen distribution state. It changes filters only; let the existing following `reCalcNodeStatsAfterSwap(..., needResetHashMapStats=false)` refresh estimates. Do not reuse the early method's unconditional `calcScanStats`+reset in this phase.
+Late lowering occurs after FORCE and automatic selection, before runtime filters
+and physical column remapping. Existing helpers preserve consumed component
+block filters and append compound pruning filters. Refresh statistics without
+resetting chosen hash/shuffle decisions, sort predicates, and recompute complete
+column-reference counts because logical columns can disappear and hidden key
+columns can appear. Final remapping and block-filter deduplication retain their
+existing owners. Do not reconstruct semantic predicates from serialized keys.
 
-## Exact late call-site closure
+## Access decisions
 
-In `createQuery`, immediately after successful `applyForceIndexHints` and `applyIndices`, before runtime-filter generation and final remapping:
+Only equality on every primary-key component proves the existing cheap primary
+point path. Explicit FORCE bypasses that cost preference while retaining access
+legality, hint filtering, encoding and residual checks.
 
-- Collect component block-filter candidates through existing `collectCompositePartBlockFilters` before lowering.
-- Run the late composite merge on deferred scans, then existing `retainConsumedCompositePartBlockFilters`.
-- Fold the resulting scan predicates with the existing `foldTableScanFilters` owner, including serialized constants/IN representation as required by the branch.
-- Use the already following non-resetting stats recalculation. Append compound and consumed-component block filters with existing `appendCompoundKeyBlockFilters` / `appendCompositePartBlockFilters`; their disable-hint and deduplication behavior remains authoritative. Keep the existing filter-ordering owner after newly generated predicates are ready.
-- **Clear and recompute the full `colRefCnt` from the resulting root** before any subsequent consumer of that map. Logical component refs may disappear and hidden compound refs may appear. Do not patch counts by guessed deltas. Final `remapAllColRefs` still derives its own physical scan projection/remap.
+A selective leading sorted predicate remains a base-scan preference only with
+finite positive, nondefault scan cardinality and a valid predicate estimate.
+Absent statistics can leave selectivity unset at zero; that is not cost
+evidence. A meaningful known-statistics zero remains valid. Let a secondary
+point candidate escape it only with stronger evidence. Keep the
+covering/range/spatial classes excluded by the old shortcut outside that escape.
+Main uses its existing encoded-access scorer and requires a valid candidate with
+strictly less work than the base scan. Unknown scores do not bypass this saved
+preference. Existing normal candidate ranking and small-table policy remain.
 
-Apply the same phase contract using each branch's existing call shape;4.2's `optimizeFilters` return signature need not change. Update direct composite-merge UT callers to state the phase they exercise.
+4.2 uses its existing selectivity ranker rather than importing main's cost
+framework. A complete equality lookup on a declared UNIQUE key has a schema
+bound of at most one index row. With valid nondefault cardinality, cap that
+candidate's estimated selectivity at one/table rows and preserve strict
+comparison with the sorted preference. Partial UNIQUE, nonunique and range
+access do not acquire this bound. The existing small/unflushed-table policy
+prefers a complete UNIQUE point over unknown nonunique candidates when no sorted
+preference is active. Within each unknown class it keeps catalog order, and
+retains a legal nonunique fallback. It does not invent cardinality or compare
+unset estimates as numeric evidence. Broad-output admission estimates cannot
+veto a selected, cardinality-proven singleton.
 
-## Invariants, tradeoffs and scope
+## Risks and validation
 
-Access matchers see original typed logical predicates, including complete/prefix PK, secondary leading parts, parameters, ranges and covering inputs. This remains true when statistics are absent or block pruning is disabled. Exact residual evaluation, snapshot/locking, index hints, physical encoding and backfill identity remain with existing owners. No extra row predicate is duplicated merely to preserve facts.
+Earlier join and distribution passes now see logical rather than serialized
+predicates for the deferred class. Statistical formulas are unchanged, but plans
+can change. Preserve chosen distribution during late lowering and validate
+indexed composite joins, ranges, broad secondary predicates, covering access and
+nonindexed controls. This is not a universal no-regression claim.
 
-There is one normal late index-selection/finalization phase per root. Repeated **pre-selection** filter optimization must preserve the logical input, and late finalization must be idempotent; test both. Do not recover predicates from an already finalized physical plan to rerun access selection. Any reachable caller requiring that reverse phase transition is a blocker to resolve explicitly, not grounds for a block-filter decoder.
-
-No statistics formula or ranking system is changed. Nevertheless, deferred scans retain logical rather than serialized predicates during earlier estimate/join/distribution passes, so some estimates and plans can differ. This is an explicit bounded indexed-composite-class risk, not a claim of identical global statistics. Nonindexed/nonregular scans keep their prior phase. Preserve existing distribution decisions at late lowering and validate the affected class with public controls.
-
-The implementation remains a focused planner phase correction if it uses this one owner and existing helpers. If the implementation grows into new persistent predicate state or a general lowering/cost framework, stop and redesign before that expansion. Version this concise amendment in the repository before the new phase edits if the repository's architectural gate is applied.
-
-## Added validation required before final review
-
-- The real SQL-to-full-planner witness, covering and noncovering, automatic/FORCE and plain/FOR UPDATE, must pass on **both branches**. Direct-selector tests alone do not close this issue. Retain E3 as the negative control for the two-veto-only implementation.
-- Assert phase behavior: indexed composite logical equalities survive early optimization; nonindexed composite scans still lower early; surviving deferred base scans lower late; repeated early optimization and repeated late finalization are stable. Include composite cluster-key and full-PK controls, a range/no-secondary-point control, absent stats and `blockFilter=2`.
-- Assert late lowering preserves a seeded chosen shuffle/hash-map strategy and that the refreshed reference counts/remapped scan columns contain the needed hidden key without retaining unused logical row columns. Covering replacement must not acquire an unbound hidden-base-key residual.
-- Reuse the two branch baseline public artifacts. Fresh final public checks must cover original generated schema, plain-column witness, SQL PREPARE/EXECUTE reuse/NULL/no-match, exact results/metadata, actual lock conflict/release, actual rows read and matched timing controls. Add nonindexed composite, covering, sorted-range, unselective secondary and a join/distribution control within the deferred class to detect material estimate/phase regressions.
-- Recompute final affected test/SCA scope to include `expr_opt.go`, `opt_misc.go`, `query_builder.go` and their direct consumers. Run owning planner normal once, affected nonempty race selection once, and final incremental static checks per branch with supported native/toolchain prerequisites. No repeated baseline discovery is required.
-
-Final overall selected-model review remains mandatory before the authorized pushes/two PRs; no merge is authorized.
+Planner tests cover missing/known statistics, prefix versus complete primary
+keys, hints, threshold boundaries, covering/backfill, composite cluster keys,
+block pruning disabled, repeated phases and distribution/reference preservation.
+The SQL regression covers generated NULL/empty keys, prepared reuse, rollback
+and FOR UPDATE. Real-service validation checks exact results and metadata,
+actual rows read, competing lock conflict/release, and matched performance
+controls on both branches. Floating-point equality/ranges must stay outside
+serialized regular-index matching: physical signed zeros differ although SQL
+equality merges them. Main already enforces this shared classifier boundary; 4.2
+uses the same guard before any singleton proof. Exact predicates remain on the
+base scan. No new persistent state or execution path is added. Serialized nonunique covering lookups also
+retain exact decoded string predicates: escaped NUL bytes can make the physical
+prefix a superset of SQL equality. 4.2 extends its existing residual predicate
+owner, preserving its NULL checks and integer fast path.

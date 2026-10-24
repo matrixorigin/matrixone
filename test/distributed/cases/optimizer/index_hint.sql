@@ -181,4 +181,73 @@ from join_dup_l l
 join join_pk_r r force index for join(primary)
   on l.x = r.id;
 
+-- A primary-key tenant prefix must not exclude a complete secondary unique lookup.
+create table pk_prefix_execution (
+  user_id varchar(16) not null,
+  session_id varchar(16) not null,
+  run_id varchar(16) not null,
+  parent_run_id varchar(16),
+  status varchar(16) not null,
+  execution_key varchar(16) generated always as (
+    case when status in ('running','waiting')
+      then case when parent_run_id is null then '' else run_id end
+      else null end
+  ) virtual,
+  primary key(user_id,run_id),
+  unique key uq_execution_key(user_id,session_id,execution_key)
+);
+insert into pk_prefix_execution(user_id,session_id,run_id,parent_run_id,status) values
+('owner','target','root',null,'running'),
+('owner','target','child-1','root','waiting'),
+('owner','target','history',null,'completed'),
+('other','target','foreign',null,'running');
+-- @separator:table
+-- @regex("Index Table Scan.*uq_execution_key",true)
+explain select run_id from pk_prefix_execution force index(uq_execution_key)
+where user_id='owner' and session_id='target' and execution_key='';
+select run_id from pk_prefix_execution
+where user_id='owner' and session_id='target' and execution_key='';
+begin;
+-- @separator:table
+-- @regex("Index Table Scan.*uq_execution_key",true)
+explain select run_id from pk_prefix_execution force index(uq_execution_key)
+where user_id='owner' and session_id='target' and execution_key='' for update;
+select run_id from pk_prefix_execution force index(uq_execution_key)
+where user_id='owner' and session_id='target' and execution_key='' for update;
+rollback;
+prepare pk_prefix_stmt from 'select run_id from pk_prefix_execution force index(uq_execution_key) where user_id=? and session_id=? and execution_key=? for update';
+begin;
+set @pk_user='owner', @pk_session='target', @pk_key='';
+execute pk_prefix_stmt using @pk_user,@pk_session,@pk_key;
+set @pk_key='child-1';
+execute pk_prefix_stmt using @pk_user,@pk_session,@pk_key;
+set @pk_key=null;
+execute pk_prefix_stmt using @pk_user,@pk_session,@pk_key;
+rollback;
+deallocate prepare pk_prefix_stmt;
+-- @separator:table
+-- @regex("Index Table Scan",false)
+explain select run_id from pk_prefix_execution where user_id='owner' and run_id='root';
+select run_id from pk_prefix_execution where user_id='owner' and run_id='root';
+
+-- SQL equality merges signed zeros even though serialized index keys differ.
+create table pk_prefix_float(a int not null,id int not null,d double,payload int,
+  primary key(a,id),unique key uq_ad(a,d));
+insert into pk_prefix_float values
+(1,1,cast('0' as double),100),(1,2,cast('-0' as double),200);
+select payload from pk_prefix_float ignore index(uq_ad) where a=1 and d=0 order by payload;
+select payload from pk_prefix_float where a=1 and d=0 order by payload;
+select payload from pk_prefix_float force index(uq_ad) where a=1 and d=0 order by payload;
+select payload from pk_prefix_float where a=1 and d between 0 and 0 order by payload;
+
+select count(*) from pk_prefix_float where a=1 and d=0;
+
+-- A serialized prefix can include an escaped-NUL peer; SQL equality is exact.
+create table pk_prefix_bytes(a int not null,id int not null,s varchar(16) not null,
+  primary key(a,id),key idx_as(a,s));
+insert into pk_prefix_bytes values(1,1,'a'),(1,2,concat('a',char(0),'b'));
+select hex(s) from pk_prefix_bytes ignore index(idx_as) where a=1 and s='a';
+select hex(s) from pk_prefix_bytes where a=1 and s='a';
+select hex(s) from pk_prefix_bytes force index(idx_as) where a=1 and s='a';
+
 drop database mysql_compat_index_hint;

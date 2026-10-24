@@ -300,4 +300,126 @@ join join_pk_r r force index for join(primary)
 on l.x = r.id;
 ➤ count(*)[-5,64,0]  𝄀
 3
+create table pk_prefix_execution (
+user_id varchar(16) not null,
+session_id varchar(16) not null,
+run_id varchar(16) not null,
+parent_run_id varchar(16),
+status varchar(16) not null,
+execution_key varchar(16) generated always as (
+case when status in ('running','waiting')
+then case when parent_run_id is null then '' else run_id end
+else null end
+) virtual,
+primary key(user_id,run_id),
+unique key uq_execution_key(user_id,session_id,execution_key)
+);
+insert into pk_prefix_execution(user_id,session_id,run_id,parent_run_id,status) values
+('owner','target','root',null,'running'),
+('owner','target','child-1','root','waiting'),
+('owner','target','history',null,'completed'),
+('other','target','foreign',null,'running');
+explain select run_id from pk_prefix_execution force index(uq_execution_key)
+where user_id='owner' and session_id='target' and execution_key='';
+-- @regex("Index Table Scan.*uq_execution_key", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Join  𝄀
+        Join Type: INDEX  𝄀
+        Join Cond: (pk_prefix_execution.__mo_cpkey_col = __mo_index_pri_col)  𝄀
+        Runtime Filter Build: #[-1,0]  𝄀
+        ->  Table Scan on mysql_compat_index_hint.pk_prefix_execution [ForceOneCN]  𝄀
+              Filter Cond: prefix_eq(pk_prefix_execution.__mo_cpkey_col), (pk_prefix_execution.session_id = 'target'), (pk_prefix_execution.execution_key = '')  𝄀
+              Block Filter Cond: (pk_prefix_execution.user_id = 'owner'), prefix_eq(pk_prefix_execution.__mo_cpkey_col)  𝄀
+              Runtime Filter Probe: pk_prefix_execution.__mo_cpkey_col  𝄀
+        ->  Index Table Scan on pk_prefix_execution.uq_execution_key [ForceOneCN]  𝄀
+              Filter Cond: (__mo_index_idx_col = '<opaque>')  𝄀
+              Block Filter Cond: (__mo_index_idx_col = '<opaque>')
+select run_id from pk_prefix_execution
+where user_id='owner' and session_id='target' and execution_key='';
+➤ run_id[12,16,0]  𝄀
+root
+begin;
+explain select run_id from pk_prefix_execution force index(uq_execution_key)
+where user_id='owner' and session_id='target' and execution_key='' for update;
+-- @regex("Index Table Scan.*uq_execution_key", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Lock  𝄀
+        ->  Join  𝄀
+              Join Type: INDEX  𝄀
+              Join Cond: (pk_prefix_execution.__mo_cpkey_col = __mo_index_pri_col)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on mysql_compat_index_hint.pk_prefix_execution [ForceOneCN]  𝄀
+                    Filter Cond: prefix_eq(pk_prefix_execution.__mo_cpkey_col), (pk_prefix_execution.session_id = 'target'), (pk_prefix_execution.execution_key = '')  𝄀
+                    Block Filter Cond: (pk_prefix_execution.user_id = 'owner'), prefix_eq(pk_prefix_execution.__mo_cpkey_col)  𝄀
+                    Runtime Filter Probe: pk_prefix_execution.__mo_cpkey_col  𝄀
+              ->  Index Table Scan on pk_prefix_execution.uq_execution_key [ForceOneCN]  𝄀
+                    Filter Cond: (__mo_index_idx_col = '<opaque>')  𝄀
+                    Block Filter Cond: (__mo_index_idx_col = '<opaque>')
+select run_id from pk_prefix_execution force index(uq_execution_key)
+where user_id='owner' and session_id='target' and execution_key='' for update;
+➤ run_id[12,16,0]  𝄀
+root
+rollback;
+prepare pk_prefix_stmt from 'select run_id from pk_prefix_execution force index(uq_execution_key) where user_id=? and session_id=? and execution_key=? for update';
+begin;
+set @pk_user='owner', @pk_session='target', @pk_key='';
+execute pk_prefix_stmt using @pk_user,@pk_session,@pk_key;
+➤ run_id[12,16,0]  𝄀
+root
+set @pk_key='child-1';
+execute pk_prefix_stmt using @pk_user,@pk_session,@pk_key;
+➤ run_id[12,16,0]  𝄀
+child-1
+set @pk_key=null;
+execute pk_prefix_stmt using @pk_user,@pk_session,@pk_key;
+➤ run_id[12,16,0]
+rollback;
+deallocate prepare pk_prefix_stmt;
+explain select run_id from pk_prefix_execution where user_id='owner' and run_id='root';
+-- @regex("Index Table Scan", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Table Scan on mysql_compat_index_hint.pk_prefix_execution  𝄀
+        Filter Cond: (pk_prefix_execution.__mo_cpkey_col = )  𝄀
+        Block Filter Cond: (pk_prefix_execution.user_id = 'owner'), (pk_prefix_execution.run_id = 'root'), (pk_prefix_execution.__mo_cpkey_col = )
+select run_id from pk_prefix_execution where user_id='owner' and run_id='root';
+➤ run_id[12,16,0]  𝄀
+root
+create table pk_prefix_float(a int not null,id int not null,d double,payload int,
+primary key(a,id),unique key uq_ad(a,d));
+insert into pk_prefix_float values
+(1,1,cast('0' as double),100),(1,2,cast('-0' as double),200);
+select payload from pk_prefix_float ignore index(uq_ad) where a=1 and d=0 order by payload;
+➤ payload[4,32,0]  𝄀
+100  𝄀
+200
+select payload from pk_prefix_float where a=1 and d=0 order by payload;
+➤ payload[4,32,0]  𝄀
+100  𝄀
+200
+select payload from pk_prefix_float force index(uq_ad) where a=1 and d=0 order by payload;
+➤ payload[4,32,0]  𝄀
+100  𝄀
+200
+select payload from pk_prefix_float where a=1 and d between 0 and 0 order by payload;
+➤ payload[4,32,0]  𝄀
+100  𝄀
+200
+select count(*) from pk_prefix_float where a=1 and d=0;
+➤ count(*)[-5,64,0]  𝄀
+2
+create table pk_prefix_bytes(a int not null,id int not null,s varchar(16) not null,
+primary key(a,id),key idx_as(a,s));
+insert into pk_prefix_bytes values(1,1,'a'),(1,2,concat('a',char(0),'b'));
+select hex(s) from pk_prefix_bytes ignore index(idx_as) where a=1 and s='a';
+➤ hex(s)[12,32,0]  𝄀
+61
+select hex(s) from pk_prefix_bytes where a=1 and s='a';
+➤ hex(s)[12,32,0]  𝄀
+61
+select hex(s) from pk_prefix_bytes force index(idx_as) where a=1 and s='a';
+➤ hex(s)[12,32,0]  𝄀
+61
 drop database mysql_compat_index_hint;
