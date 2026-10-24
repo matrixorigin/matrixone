@@ -25,6 +25,23 @@ The initial range-rejection optimization built a min/max and empty-slot index on
 
 The range index and all production probe changes are removed. An index-free contiguous-membership alternative also failed the caller-sized benchmark and is not retained. Future optimization of #30847 requires a design grounded in the real caller's work and state lifecycle.
 
+## Matched current-source check
+
+A separate current-source comparison used main `6fb6531432` and the
+PR source `5affe39d58`. Both production SUM blobs are
+`e282f8d3188a3d172fe5209104117648dea7c938`; no non-test aggexec file differs.
+Ten balanced process pairs used one physical CPU, GOMAXPROCS=1, GOAMD64=v3 and
+GOEXPERIMENT=simd. Each case ran twice per process; the first result was excluded.
+The complete controls, samples and uncertainty are retained in the PR discussion.
+
+The large-call permuted control measured 400.272 versus 404.339 microseconds per
+8192 rows; the paired estimate is +0.95% with ratio interval [0.9958, 1.0228].
+Caller-sized permuted calls measured 130.859 versus 131.376 microseconds, with
+paired estimate +0.40% and interval [0.9863, 1.0119]. These uncertain differences
+are not the removed implementation's +155.68% and +14.65% results. Every scored
+control reported zero allocations. No current SUM optimization or speedup is
+claimed; this check confirms which source the historical failure describes.
+
 ## Validation contract
 
 Benchmark public aggregate dispatch with 8192 rows consumed in hashmap.UnitLimit-sized calls, original vector offsets, and state allocated outside timing. Include cardinalities 4/254/255/256, sequential and permuted high-cardinality IDs, and a high endpoint. Keep explicitly named large-call sequential/permuted controls to expose the misleading amortization assumption. Allocation counts and timing belong to benchmarks, not wall-clock assertions in unit tests.
