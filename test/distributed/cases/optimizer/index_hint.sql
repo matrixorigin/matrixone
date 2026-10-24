@@ -285,4 +285,37 @@ select payload from pk_prefix_truncated force index(ix) where b=2 and length(s)>
 insert into pk_prefix_truncated values(2,2,'a',200);
 select payload from pk_prefix_truncated force index(ix) where b=2 and (length(s)>1 or id=2) order by payload;
 
+-- Normalize logical disjunctions before choosing a composite-PK access path.
+create table primary_access(a int not null,id int not null,b int,payload int,
+ primary key(a,id),key idx_b(b),key idx_cover(a,b,id));
+insert into primary_access values(1,1,1,100),(1,2,2,200),(1,3,null,300),(2,1,3,400);
+-- @separator:table
+-- @regex("Index Table Scan.*idx_b",true)
+explain select payload from primary_access where b=1 or b=2;
+select payload from primary_access where b=1 or b=2 order by payload;
+select payload from primary_access force index(idx_b) where b=1 or b=2 order by payload;
+select payload from primary_access where b in (1,2) order by payload;
+-- @separator:table
+-- @regex("Index Table Scan",false)
+explain select id from primary_access where a=1 and id=2;
+select id from primary_access where a=1 and id=2;
+select id from primary_access force index(idx_cover) where a=1 and id=2;
+select id from primary_access ignore index(idx_cover,idx_b) where a=1 and id=2;
+select payload from primary_access where (a=1 and b=1) or (a=2 and b=3) order by payload;
+prepare logical_or from 'select payload from primary_access where b=? or b=? order by payload';
+set @or_left=1,@or_right=2;
+execute logical_or using @or_left,@or_right;
+set @or_left=null;
+execute logical_or using @or_left,@or_right;
+set @or_left=2;
+execute logical_or using @or_left,@or_right;
+set @or_right=null,@or_left=null;
+execute logical_or using @or_left,@or_right;
+deallocate prepare logical_or;
+-- A supported CLUSTER BY table retains its own physical-key policy.
+create table logical_cluster(a int,b int,payload int) cluster by(a,b);
+insert into logical_cluster values(1,1,100),(1,2,200),(2,1,300);
+select payload from logical_cluster where a=1 and b=2;
+select x.payload from logical_cluster x join primary_access y on x.a=y.a and x.b=y.b where y.a=1 order by x.payload;
+
 drop database mysql_compat_index_hint;

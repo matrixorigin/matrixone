@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -168,7 +169,14 @@ func TestCompositeKeyFilterMergePhases(t *testing.T) {
 			builder.qry.Nodes = []*pb.Node{{NodeType: pb.Node_TABLE_SCAN, BindingTags: []int32{tag}, TableDef: table, FilterList: []*pb.Expr{a, c}}}
 			node := builder.qry.Nodes[0]
 			for range 2 {
+				parts, _ := builder.collectCompositePartBlockFilters(0, false)
+				if tc.indexed {
+					require.Empty(t, parts, "fresh deferred scans must not take discarded early snapshots")
+				}
 				builder.mergeFiltersOnCompositeKey(0, true)
+				builder.retainConsumedCompositePartBlockFilters(parts)
+				builder.appendCompoundKeyBlockFilters(0)
+				builder.appendCompositePartBlockFilters(parts)
 				if tc.indexed {
 					requireFuncNames(t, node.FilterList, "=", ">")
 					requireNoFuncNames(t, node.FilterList, "prefix_eq")
@@ -179,7 +187,8 @@ func TestCompositeKeyFilterMergePhases(t *testing.T) {
 			chosen := &pb.HashMapStats{HashmapSize: 17, Shuffle: true, ShuffleType: pb.ShuffleType_Range}
 			node.Stats = &pb.Stats{HashmapStats: chosen}
 			for range 2 {
-				componentFilters := builder.collectCompositePartBlockFilters(0)
+				componentFilters, needsLate := builder.collectCompositePartBlockFilters(0, true)
+				require.Equal(t, tc.indexed, needsLate)
 				builder.mergeFiltersOnCompositeKey(0, false)
 				builder.retainConsumedCompositePartBlockFilters(componentFilters)
 				builder.appendCompoundKeyBlockFilters(0)
@@ -189,6 +198,9 @@ func TestCompositeKeyFilterMergePhases(t *testing.T) {
 			}
 			if tc.disableBlocks {
 				require.Empty(t, node.BlockFilterList)
+			} else {
+				requireFuncNames(t, node.BlockFilterList, "prefix_eq", "=")
+				require.Len(t, node.BlockFilterList, 2, "compound and consumed component pruning survive without duplicates")
 			}
 			refs := make(map[[2]int32]int)
 			builder.countColRefs(0, refs)
@@ -505,4 +517,207 @@ func TestIndexColumnMapRequiresCompleteValues(t *testing.T) {
 	mapping, err = builder.regularIndexColumnMap(idx, node, 20, idxTable)
 	require.Error(t, err)
 	require.Nil(t, mapping)
+}
+
+func TestSecondaryDisjunctionBeforeCompositeLowering(t *testing.T) {
+	for _, hint := range []string{"", "force index(idx_a)"} {
+		for _, predicate := range []string{"b=1 or b=2", "b in (1,2)"} {
+			t.Run(hint+predicate, func(t *testing.T) {
+				mock := NewMockOptimizer(true)
+				proc := mock.ctxt.GetProcess()
+				t.Cleanup(func() { proc.Free(); proc.GetFileService().Close(proc.Ctx) })
+				mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+				addPrimaryPrefixIndexTableForTest(mock)
+				table := mock.ctxt.tables["index_hint_t"]
+				idx := table.Indexes[0]
+				idx.Parts = []string{"b", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+				table.Indexes = []*pb.IndexDef{idx}
+				p, err := runOneStmt(mock, t, "select payload from index_hint_t "+hint+" where "+predicate)
+				require.NoError(t, err)
+				require.Equal(t, "idx_a", findFirstIndexScanName(p))
+			})
+		}
+	}
+}
+func TestFullPrimaryPointBeforeSecondaryCosting(t *testing.T) {
+	for _, hint := range []string{"", "force index(idx_ab)"} {
+		t.Run(hint, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			proc := mock.ctxt.GetProcess()
+			t.Cleanup(func() { proc.Free(); proc.GetFileService().Close(proc.Ctx) })
+			mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+			addPrimaryPrefixIndexTableForTest(mock)
+			table := mock.ctxt.tables["index_hint_t"]
+			idx := table.Indexes[1]
+			idx.Parts = []string{"a", "b", "id", catalog.CreateAlias(catalog.CPrimaryKeyColName)}
+			table.Indexes = []*pb.IndexDef{idx}
+			p, err := runOneStmt(mock, t, "select id from index_hint_t "+hint+" where a=1 and id=9")
+			require.NoError(t, err)
+			want := ""
+			if hint != "" {
+				want = "idx_ab"
+			}
+			require.Equal(t, want, findFirstIndexScanName(p))
+		})
+	}
+}
+
+func TestPrimaryEqualityAdmission(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	proc := ctx.GetProcess()
+	t.Cleanup(func() { proc.Free(); proc.GetFileService().Close(proc.Ctx) })
+	ctx.GetProcessFunc = func() *process.Process { return proc }
+	bind := func(name string, args ...*pb.Expr) *pb.Expr {
+		e, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return e
+	}
+	col := func(pos int32) *pb.Expr { return makeExprOptInt64Col(10, pos, "key") }
+	value := MakePlan2Int64ConstExprWithType(1)
+	a := bind("=", col(0), value)
+	b := bind("=", col(1), value)
+	reversed := bind("=", value, col(1))
+	cast, err := appendCastBeforeExpr(ctx.GetContext(), col(1), pb.Type{Id: int32(types.T_varchar), Width: 32})
+	require.NoError(t, err)
+	floating := GetColExpr(pb.Type{Id: int32(types.T_float64)}, 10, 1)
+	floatEq := bind("=", floating, &pb.Expr{Typ: floating.Typ, Expr: &pb.Expr_Lit{Lit: &pb.Literal{Value: &pb.Literal_Dval{Dval: 1}}}})
+	for _, tc := range []struct {
+		name    string
+		filters []*pb.Expr
+		want    bool
+	}{
+		{"complete", []*pb.Expr{a, b}, true},
+		{"reversed", []*pb.Expr{a, reversed}, true},
+		{"prefix", []*pb.Expr{a}, false},
+		{"duplicate", []*pb.Expr{a, DeepCopyExpr(a)}, false},
+		{"range", []*pb.Expr{a, bind(">", col(1), value)}, false},
+		{"in", []*pb.Expr{a, makeExprOptInExpr(t, ctx, 10, 1, 1, 2)}, false},
+		{"foreign tag", []*pb.Expr{a, bind("=", makeExprOptInt64Col(99, 1, "other"), value)}, false},
+		{"column rhs", []*pb.Expr{a, bind("=", col(1), col(2))}, false},
+		{"cast column", []*pb.Expr{a, bind("=", cast, makePlan2StringConstExprWithType("1"))}, false},
+		{"float domain", []*pb.Expr{a, floatEq}, false},
+		{"parameter", []*pb.Expr{a, bind("=", col(1), &pb.Expr{Typ: col(1).Typ, Expr: &pb.Expr_P{P: &pb.ParamRef{Pos: 0}}})}, true},
+		{"malformed", []*pb.Expr{a, {Expr: &pb.Expr_F{F: &pb.Function{}}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node := &pb.Node{TableDef: makeExprOptCompositeSortKeyTableDef(), BindingTags: []int32{10}, FilterList: tc.filters}
+			require.Equal(t, tc.want, hasPrimaryKeyEquality(node))
+			require.Zero(t, testing.AllocsPerRun(10, func() { hasPrimaryKeyEquality(node) }))
+		})
+	}
+	node := &pb.Node{TableDef: makeExprOptCompositeSortKeyTableDef(), BindingTags: []int32{10}, FilterList: []*pb.Expr{a, b}}
+	node.TableDef.Pkey.Names = []string{"a", "a"}
+	require.False(t, hasPrimaryKeyEquality(node))
+	node.TableDef.Pkey.Names = []string{"a", "missing"}
+	require.False(t, hasPrimaryKeyEquality(node))
+}
+
+func TestDeferredLogicalNormalization(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	proc := ctx.GetProcess()
+	t.Cleanup(func() { proc.Free(); proc.GetFileService().Close(proc.Ctx) })
+	ctx.GetProcessFunc = func() *process.Process { return proc }
+	builder := NewQueryBuilder(pb.Query_SELECT, ctx, false, false)
+	tag := builder.genNewBindTag()
+	table := makeExprOptCompositeSortKeyTableDef()
+	table.Indexes = []*pb.IndexDef{{IndexName: "idx_c", Parts: []string{"c"}, TableExist: true}}
+	bind := func(name string, args ...*pb.Expr) *pb.Expr {
+		e, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return e
+	}
+	a1 := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 0, "a"), 1)
+	a2 := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 0, "a"), 2)
+	b3 := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 1, "b"), 3)
+	c1 := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 2, "c"), 1)
+	c2 := makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, 2, "c"), 2)
+	for _, tc := range []struct {
+		expr *pb.Expr
+		want string
+	}{{bind("or", c1, c2), "in"}, {bind("or", a1, bind("and", a2, b3)), "or"}, {bind("or", a1, a2), "in"}} {
+		expr := tc.expr
+		chosen := &pb.HashMapStats{HashmapSize: 17, Shuffle: true}
+		node := &pb.Node{NodeType: pb.Node_TABLE_SCAN, TableDef: table, BindingTags: []int32{tag}, FilterList: []*pb.Expr{expr}, Stats: &pb.Stats{HashmapStats: chosen}}
+		builder.qry.Nodes = []*pb.Node{node}
+		for range 2 {
+			builder.mergeFiltersOnCompositeKey(0, true)
+		}
+		var check func(*pb.Expr)
+		check = func(e *pb.Expr) {
+			if ref := e.GetCol(); ref != nil {
+				require.Less(t, ref.ColPos, int32(3))
+				require.Equal(t, tag, ref.RelPos)
+			}
+			if fn := e.GetF(); fn != nil {
+				require.NotContains(t, []string{"prefix_eq", "prefix_in", "serial", "serial_full"}, fn.Func.ObjName)
+				for _, arg := range fn.Args {
+					check(arg)
+				}
+			}
+		}
+		for _, e := range node.FilterList {
+			check(e)
+		}
+		require.Same(t, chosen, node.Stats.HashmapStats)
+		require.Equal(t, tc.want, node.FilterList[0].GetF().Func.ObjName)
+		early, _ := builder.collectCompositePartBlockFilters(0, false)
+		require.Empty(t, early)
+		if fn := node.FilterList[0].GetF(); fn.Func.ObjName == "in" && fn.Args[0].GetCol().ColPos == 0 {
+			late, needsLate := builder.collectCompositePartBlockFilters(0, true)
+			require.True(t, needsLate)
+			require.Len(t, late[0], 1)
+			require.Equal(t, "in", late[0][0].copy.GetF().Func.ObjName)
+			builder.mergeFiltersOnCompositeKey(0, false)
+			builder.retainConsumedCompositePartBlockFilters(late)
+			builder.appendCompoundKeyBlockFilters(0)
+			builder.appendCompositePartBlockFilters(late)
+			requireFuncNames(t, node.BlockFilterList, "prefix_in", "in")
+		}
+	}
+	builder.optimizerHints = &OptimizerHints{blockFilter: 2}
+	builder.qry.Nodes = []*pb.Node{{NodeType: pb.Node_TABLE_SCAN, TableDef: table, BindingTags: []int32{tag}, FilterList: []*pb.Expr{a1}}}
+	candidates, needsLate := builder.collectCompositePartBlockFilters(0, true)
+	require.True(t, needsLate)
+	require.Empty(t, candidates)
+	builder.mergeFiltersOnCompositeKey(0, false)
+	requireFuncNames(t, builder.qry.Nodes[0].FilterList, "prefix_eq")
+	table.Indexes = nil
+	candidates, needsLate = builder.collectCompositePartBlockFilters(0, true)
+	require.False(t, needsLate)
+	require.Empty(t, candidates)
+}
+
+// Real-PK plus CLUSTER BY is a metadata boundary, not currently legal DDL.
+// Preserve the existing covering-before-point-veto policy for that boundary.
+func TestPrimaryPointAdmissionRespectsPhysicalLayout(t *testing.T) {
+	for _, tc := range []struct {
+		name, projection, hint, want string
+		cluster                      bool
+	}{
+		{"physical primary", "b", "", "", false},
+		{"cluster covering", "b", "", "idx_ab", true},
+		{"cluster point veto", "payload", "", "", true},
+		{"cluster forced backfill", "payload", "force index(idx_ab)", "idx_ab", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			proc := mock.ctxt.GetProcess()
+			t.Cleanup(func() { proc.Free(); proc.GetFileService().Close(proc.Ctx) })
+			mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+			addPrimaryPrefixIndexTableForTest(mock)
+			table := mock.ctxt.tables["index_hint_t"]
+			table.Pkey = &pb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}, Cols: []uint64{0}}
+			mock.ctxt.pks[table.Name] = []int{0}
+			if tc.cluster {
+				table.ClusterBy = &pb.ClusterByDef{Name: "a"}
+			}
+			idx := table.Indexes[1]
+			idx.Parts = []string{"id", "b", catalog.CreateAlias("id")}
+			table.Indexes = []*pb.IndexDef{idx}
+			mock.ctxt.tables[idx.IndexTableName].Cols[1].Typ = table.Cols[0].Typ
+			p, err := runOneStmt(mock, t, "select "+tc.projection+" from index_hint_t "+tc.hint+" where id=1")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, findFirstIndexScanName(p))
+		})
+	}
 }

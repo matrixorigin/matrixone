@@ -1526,12 +1526,59 @@ func getVectorIndexIncludedColumns(multiTableIndex *MultiTableIndex) ([]string, 
 	return nil, nil
 }
 
+// hasPrimaryKeyEquality proves equality on every distinct PK component using
+// the same eligible equality classifier as index matching, without a fact map.
+func hasPrimaryKeyEquality(node *plan.Node) bool {
+	if node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
+		return false
+	}
+	table := node.TableDef
+	parts := table.Pkey.Names
+	if len(parts) == 0 || len(parts) > len(node.FilterList) {
+		return false
+	}
+	for i, name := range parts {
+		pos, ok := table.Name2ColIndex[name]
+		if !ok || pos < 0 || int(pos) >= len(table.Cols) {
+			return false
+		}
+		for _, previous := range parts[:i] {
+			if table.Name2ColIndex[previous] == pos {
+				return false
+			}
+		}
+		found := false
+		for _, filter := range node.FilterList {
+			fn := filter.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 || !hasNonNilFunctionArgs(fn, 2) {
+				continue
+			}
+			kind, col := checkIndexFilter(fn)
+			if kind == EqualIndexCondition && col.RelPos == node.BindingTags[0] && col.ColPos == pos {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
 
 	forceIndex := builder.scanHintsForceIndexes(node)
+	pointBlocked := !forceIndex && hasPrimaryKeyEquality(node)
+	if pointBlocked && node.TableDef.ClusterBy == nil && !catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
+		// A real, physically ordered full PK is already a point lookup.
+		// Do not build or score partial secondary candidates for a singleton.
+		return nodeID
+	}
+
 	sortedSelectivity := 1.0
 	for i := range node.FilterList {
 		expr := node.FilterList[i]
@@ -1592,7 +1639,11 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	}
 	//small table means this table maybe not flushed yet, or it's not worse to go index
 	ignoreStats := forceIndex || node.Stats.TableCnt < 50000
-	idxToChoose, filterIdx := builder.getMostSelectiveIndexForPointSelect(indexes, node, ignoreStats, sortedSelectivity)
+	idxToChoose := -1
+	var filterIdx []int32
+	if !pointBlocked {
+		idxToChoose, filterIdx = builder.getMostSelectiveIndexForPointSelect(indexes, node, ignoreStats, sortedSelectivity)
+	}
 	// A cardinality-proven unique point cannot produce the broad output that
 	// the aggregate scan estimates below are intended to guard against.
 	singletonPoint := idxToChoose != -1 && indexes[idxToChoose].Unique &&
@@ -2548,29 +2599,6 @@ func (builder *QueryBuilder) applyIndexJoin(idxDef *IndexDef, node *plan.Node, f
 	return joinNodeID, idxTableNodeID
 }
 
-// A strict primary-key prefix is not a singleton lookup and must not veto a
-// more selective secondary index. Keep the shortcut only for the complete key.
-func hasPrimaryKeyEquality(table *TableDef, equalFilters map[int32]int32) bool {
-	if table == nil || table.Pkey == nil || len(table.Pkey.Names) == 0 {
-		return false
-	}
-	for i, name := range table.Pkey.Names {
-		colPos, ok := table.Name2ColIndex[name]
-		if !ok || colPos < 0 || int(colPos) >= len(table.Cols) {
-			return false
-		}
-		if _, ok := equalFilters[colPos]; !ok {
-			return false
-		}
-		for _, previous := range table.Pkey.Names[:i] {
-			if table.Name2ColIndex[previous] == colPos {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 // Default statistics carry a placeholder row count, not cardinality evidence.
 func hasKnownScanCardinality(stats *plan.Stats) bool {
 	return stats != nil && !IsDefaultStats(stats) && stats.TableCnt > 0 &&
@@ -2590,10 +2618,6 @@ func (builder *QueryBuilder) getMostSelectiveIndexForPointSelect(indexes []*Inde
 		if filterType == EqualIndexCondition {
 			col2filter[col.ColPos] = int32(i)
 		}
-	}
-
-	if !builder.scanHintsForceIndexes(node) && hasPrimaryKeyEquality(node.TableDef, col2filter) {
-		return -1, nil
 	}
 
 	filterIdx := make([]int32, 0, len(col2filter))

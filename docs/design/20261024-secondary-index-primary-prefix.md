@@ -23,7 +23,12 @@ Other scans keep their existing early lowering. This is a metadata-defined
 class; generated columns, parameter syntax and particular schemas are
 irrelevant.
 
-The existing recursive composite rewriter takes an explicit phase. Its late
+The existing recursive composite rewriter takes an explicit phase and physical
+lowering mode. Logical OR-to-IN normalization remains before access selection,
+including recursive OR/AND arms; only compound-key encoding is deferred. Both
+phases reuse the same normalization and domain checks.
+
+The rewriter takes an explicit phase. Its late
 phase processes surviving deferred base scans, including the base side of an
 index backfill. An index-only replacement has no source secondary metadata and
 needs no base-key lowering. The same lowering and constant-folding owners are
@@ -39,8 +44,13 @@ existing owners. Do not reconstruct semantic predicates from serialized keys.
 
 ## Access decisions
 
-Only equality on every primary-key component proves the existing cheap primary
-point path. Explicit FORCE bypasses that cost preference while retaining access
+Only eligible equality on every distinct primary-key component of the scan
+proves a singleton. An allocation-free check runs before secondary candidate
+construction. For a real PK with no CLUSTER BY override, automatic selection
+retains the cheap primary point path, including when a partial covering index
+is available. CLUSTER BY and synthetic-PK metadata retain their existing late
+point-only preference, so covering access remains available. A strict PK prefix
+does not activate this admission guard. Explicit FORCE bypasses that cost preference while retaining access
 legality, hint filtering, encoding and residual checks.
 
 A selective leading sorted predicate remains a base-scan preference only with
@@ -101,3 +111,20 @@ abandons optional pushdown before publishing any filters. The original base
 predicate remains intact; the index copy cannot change SQL results. Regression
 coverage checks mixed-column predicates, nested mapped expressions, range
 access, NULL and prepared reuse against literal SQL result oracles.
+
+Late pruning preservation uses its existing collector to identify surviving
+deferred scans and copies candidates only when present. Without deferred work,
+skip late lowering, sorting and reference recount; keep the pre-existing stats
+refresh unconditional. Disabling block pruning suppresses copies, never required
+physical lowering. No extra traversal cache or persistent phase state is added.
+
+Performance acceptance compares full scalar-PK predicates with/without secondary
+predicates, non-PK controls, indexed composite prefixes, and nonindexed composite
+primary/cluster scans using one process per benchmark. The singleton proof has
+zero allocations. SQL regression covers OR/IN access, partial covering controls,
+prepared NULL/duplicate reuse, and recursive disjunction/cluster results.
+
+Early component snapshots skip fresh deferred scans because logical
+normalization consumes no physical key parts. Already-lowered indexed scans
+retain their existing component-filter preservation; surviving logical
+predicates are snapshotted at the late consumption boundary.
