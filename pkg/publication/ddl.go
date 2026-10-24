@@ -36,24 +36,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// DatabaseMetadata represents metadata from mo_databases table
-type DatabaseMetadata struct {
-	DatID        uint64
-	DatName      string
-	DatCreateSQL sql.NullString
-	AccountID    uint32
-}
-
-// TableMetadata represents metadata from mo_tables table
-type TableMetadata struct {
-	RelID         uint64
-	RelName       string
-	RelDatabaseID uint64
-	RelDatabase   string
-	RelCreateSQL  sql.NullString
-	AccountID     uint32
-}
-
 // TableDDLInfo contains table DDL information
 type TableDDLInfo struct {
 	TableID         uint64

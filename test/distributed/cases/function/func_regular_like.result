@@ -19,6 +19,18 @@ NULL
 SELECT REGEXP_LIKE(NULL, NULL);
 regexp_like(null, null)
 NULL
+select regexp_like(cast(NULL as varbinary(20)), cast(concat('^', char(92), 'x{100}') as varbinary(20)), 'm');
+invalid input: binary regular expressions only support byte escapes up to \x{FF}
+select regexp_like(cast(NULL as varbinary(20)), cast(concat('^', char(92), 'x{100}') as varbinary(20)), 'mu');
+invalid input: binary regular expressions only support byte escapes up to \x{FF}
+select regexp_like(cast(NULL as varbinary(20)), cast(_binary'^a' as varbinary(2)), 'm') as valid_binary_null;
+valid_binary_null
+NULL
+select regexp_instr(concat('a', convert(char(13) using utf8mb4)), '($)+', 1, 2, 0, 'm') as terminal_at,
+length(regexp_substr(concat('a', convert(char(13) using utf8mb4)), '($)+', 1, 2, 'm')) as terminal_len,
+hex(regexp_replace(concat('a', convert(char(13) using utf8mb4)), '($)+', 'X', 1, 0, 'm')) as terminal_replaced;
+terminal_at    terminal_len    terminal_replaced
+3    0    61580D58
 drop table if exists t1;
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
@@ -169,16 +181,36 @@ mt VARCHAR(8)
 INSERT INTO t_regexp_match_type VALUES
 (1, 'Abc', 'abc', 'X', 'i'),
 (2, 'Abc', 'abc', 'X', 'c'),
-(3, 'abc', 'abc', 'X', 'u');
+(3, 'abc', 'abc', 'X', 'u'),
+(4, CONCAT('a', CHAR(13), 'b'), '^b', 'X', 'm'),
+(5, CONCAT('a', CHAR(13), 'b'), '^b', 'X', 'mu');
 SELECT id,
 REGEXP_LIKE(s, p, mt) AS is_match,
 REGEXP_INSTR(s, p, 1, 1, 0, mt) AS start_pos,
 REGEXP_SUBSTR(s, p, 1, 1, mt) AS substr_value,
-REGEXP_REPLACE(s, p, r, 1, 0, mt) AS replaced
+HEX(REGEXP_REPLACE(s, p, r, 1, 0, mt)) AS replaced_hex
 FROM t_regexp_match_type
 ORDER BY id;
-id    is_match    start_pos    substr_value    replaced
-1    1    1    Abc    X
-2    0    0    null    Abc
-3    1    1    abc    X
+id    is_match    start_pos    substr_value    replaced_hex
+1    1    1    Abc    58
+2    0    0    null    416263
+3    1    1    abc    58
+4    1    3    b    610D58
+5    0    0    null    610D62
 DROP TABLE t_regexp_match_type;
+SELECT REGEXP_LIKE('$', '[[:alpha:]^$]', 'm') AS posix_literal,
+REGEXP_LIKE('a', '[^]$]', 'm') AS negated_class,
+REGEXP_LIKE(CAST(CONCAT('a', CHAR(13), 'b') AS CHAR), '(?-m:^b)', 'm') AS scoped_off;
+posix_literal    negated_class    scoped_off
+1    1    0
+SELECT REGEXP_LIKE(X'618562', _binary '^b', 'm') AS binary_nel,
+REGEXP_LIKE(X'618562', _binary '^b', 'mu') AS binary_unix;
+binary_nel    binary_unix
+1    0
+SELECT REGEXP_LIKE(s, '^a\\sb', 'm') AS matched,
+REGEXP_INSTR(s, '^a\\sb', 1, 1, 1, 'm') AS end_pos,
+HEX(REGEXP_SUBSTR(s, '^a\\sb', 1, 1, 'm')) AS matched_hex,
+LENGTH(REGEXP_REPLACE(s, '^a\\sb', 'X', 1, 1, 'm')) AS replaced_length
+FROM (SELECT CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b', REPEAT('y', 1048577)) AS s) AS input;
+matched    end_pos    matched_hex    replaced_length
+1    4    610D62    1048578
