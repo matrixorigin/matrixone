@@ -1,6 +1,6 @@
 # Per-statement SELECT INTO OUTFILE audit receipts
 
-Design revision: 1, 2026-10-24. Owner: MatrixOne frontend and statement tracing maintainers. Owning issue: [#30745](https://github.com/matrixorigin/matrixone/issues/30745), partial acceptance slice. Implementation: [PR #30916](https://github.com/matrixorigin/matrixone/pull/30916). Issue [#30815](https://github.com/matrixorigin/matrixone/issues/30815) supplies diagnostic context and is not fixed here.
+Design revision: 2, 2026-10-24. Owner: MatrixOne frontend and statement tracing maintainers. Owning issue: [#30745](https://github.com/matrixorigin/matrixone/issues/30745), partial acceptance slice. Implementation: [PR #30916](https://github.com/matrixorigin/matrixone/pull/30916). Issue [#30815](https://github.com/matrixorigin/matrixone/issues/30815) supplies diagnostic context and is not fixed here.
 
 ## Decision and review boundary
 
@@ -8,7 +8,7 @@ This document designs the complete receipt feature already present in PR #30916,
 
 The mandatory design gate applies because the feature adds persisted `exec_plan.outfile` JSON, crosses frontend/exporter/tracing ownership, changes per-statement aggregation admission, and adds target redaction at a security-sensitive diagnostic boundary. The package and production-line count is not used to waive those complexity triggers.
 
-Source snapshot reviewed: original PR head `ad4dff1adb408bb0b23048f08f501c5a72393041`; original base `2b388dd1690f83e2e807d6809180336dae2a68eb`; requested rebase target frozen at `70e48cbef1235a8ef4b6c887cb37b0947bace714`; clean rebased feature head `3a3052bdc938e0a01e80655f7c38effaec31bf88`. References to symbols below refer to that rebased head. Rebase source review found the same feature patch, with new base-side JSONLINE duplicate-column rejection; that failure must remain incomplete and preserve its existing SQL error.
+Source snapshot reviewed: original PR head `ad4dff1adb408bb0b23048f08f501c5a72393041`; original base `2b388dd1690f83e2e807d6809180336dae2a68eb`; requested rebase target frozen at `70e48cbef1235a8ef4b6c887cb37b0947bace714`; clean rebased feature head `3a3052bdc938e0a01e80655f7c38effaec31bf88`. Revision 2 additionally reviews repair head `7927962f94cfa3c297a027d1c98c3cccfc88a55f` and its introduced `checkrecover` static diagnostic. Symbol references use the rebased source, with section A specifying the subsequent completion-guard correction. Rebase source review found the same feature patch, with new base-side JSONLINE duplicate-column rejection; that failure must remain incomplete and preserve its existing SQL error.
 
 Evidence classification: the existing PR/issue comments describe historical tests and production observations, not new executed evidence from this design review. All behavior findings below are source-derived unless explicitly labelled otherwise. The implementation owner must supply terminal validation records for the final changed revision. Reviewing a design does not certify an unrun test or an untested backend.
 
@@ -26,7 +26,7 @@ Success means a terminal statement record for each traced, admitted in-scope exe
 
 1. **One statement owner.** A newly admitted in-scope statement owns one detached receipt before authorization/compile can fail. Another statement, pooled object, frontend request, exporter, or background worker cannot own or mutate that receipt after terminal publication.
 2. **Confirmation, not attempted bytes.** A file contributes totals only when the existing sink contract has confirmed it. CSV/JSONLINE require clean pipe close and successful async `FileService.Write` completion. Parquet requires the completed file bytes and successful synchronous `FileService.Write`. Pipe acceptance and buffered serialization remain provisional.
-3. **Completion includes the producer.** `complete=true` requires normal producer completion, ordered conversion drain/finalization, successful sink confirmation, and successful exporter cleanup. A panic, cancellation, error, or incomplete producer path leaves `complete=false`. A later transaction/protocol failure may coexist with a complete sink receipt; `complete` describes the export sink, while statement `status` describes the enclosing statement.
+3. **Completion includes the producer.** `complete=true` requires normal producer completion, ordered conversion drain/finalization, successful sink confirmation, and successful exporter cleanup. A panic, Goexit, cancellation, error, or incomplete producer path leaves `complete=false`. A later transaction/protocol failure may coexist with a complete sink receipt; `complete` describes the export sink, while statement `status` describes the enclosing statement.
 4. **Lower bounds on failure.** An incomplete receipt preserves previously confirmed files. An incomplete zero is a lower bound, never proof that no bytes escaped. Failed files and unconfirmed partial tails may have side effects that are deliberately uncounted.
 5. **Checked monotonic arithmetic.** Totals never wrap; confirmed files are counted once. Overflow is a terminal export error with the already confirmed lower bound retained. Per-file provisional row/byte counters cannot wrap before adding confirmed totals.
 6. **Privacy before retention.** Retained target identity excludes URI user-info, query/fragment data, dynamic service arguments, and recognized credential-shaped fields. Safe paths retain their byte identity, including sink-legal `@`, literal `%`, and printable Unicode, until an explicit redaction/truncation/invalid flag says otherwise. No URL normalization may conflate distinct sink keys.
@@ -75,13 +75,36 @@ There is no receipt retry or recovery protocol. An existing statement retry must
 
 ## Small coherent repairs and optimization
 
-### A. Panic-aware OUTFILE finalization
+### A. Completion-guarded OUTFILE finalization
 
-Concrete source path: `executeStatusStmt` registers its OUTFILE defer while named `err` is nil; `runner.Run` (or a later exporter call) panics; the defer calls `ep.finish(nil)` before `executeStmtWithWorkspace` recovers that panic. The success branch of `finish` waits conversion workers before canceling, then cleanly closes the sink. A prefix may therefore be marked complete. If a converter is blocked publishing into the full bounded result channel, the same branch can wait indefinitely before the outer recovery can run.
+Concrete original source path: `executeStatusStmt` registers its OUTFILE defer while named `err` is nil; `runner.Run` (or a later exporter call) panics; the defer calls `ep.finish(nil)` before `executeStmtWithWorkspace` recovers that panic. The success branch of `finish` waits conversion workers before canceling, then cleanly closes the sink. A prefix may therefore be marked complete. If a converter is blocked publishing into the full bounded result channel, the same branch can wait indefinitely before the outer recovery can run.
 
-Repair the first owner, the OUTFILE execution defer: detect an unwinding panic directly, convert it only into a cleanup cause, call abort/finish so cancellation precedes join, transfer confirmed totals with `complete=false`, and re-panic the original value so the established outer recovery/error contract remains responsible for the SQL error. Normal named-error returns continue through `ep.finish(err)` and preserve primary concrete errors. All panics must cross the cleanup guard, including errors before `openNewFile` finishes and after a confirmed split. Keep success completion contingent on returning normally through `exportAllDataFromBatches`; a fully drained exporter that encounters a subsequent unrelated transaction error retains accurate sink completion semantics.
+Revision 1 proposed a local recover/cleanup/re-panic guard. At repair head `7927962f94cfa3c297a027d1c98c3cccfc88a55f`, configured molint emitted an introduced `checkrecover` diagnostic at `status_stmt.go:121:17`; its vettool process exit status alone did not establish a clean static result. The repository's [error-handling contract](../../pkg/common/moerr/error_handling.md) says, “You should not recover any panics unless it is at a few well defined places.” Keep the existing outer statement recovery as the effective error-conversion owner. Revision 2 supersedes the additional recover mechanism with the following smaller completion guard.
 
-Do not recover-and-swallow the panic, replace its payload, call terminal statement accounting inside the exporter, or add a background cleanup owner. This repair closes both the new receipt truthfulness contract and the existing exporter owner’s reachable cleanup path.
+Declare a stack-local `exportCompleted := false` immediately before registering the OUTFILE defer. Only set it true after `exportAllDataFromBatches(ep)` returns nil. In the defer, select the named primary `err` as the cleanup cause; when it is nil and `exportCompleted` is false, use `context.Canceled` solely as an abort cause for the existing exporter cleanup. Then call `ep.finish(cause)` and transfer scalar confirmed totals with `complete = exportCompleted && err == nil`.
+
+```go
+exportCompleted := false
+defer func() {
+    cause := err
+    if cause == nil && !exportCompleted {
+        cause = context.Canceled
+    }
+    err = ep.finish(cause)
+    // Transfer confirmed totals only after finish; completion requires both
+    // the producer/drain marker and a successful finish.
+    // UpdateOutfileReceipt(..., exportCompleted && err == nil)
+}()
+// Existing GetColumns/open/runner/error paths are unchanged.
+if err = exportAllDataFromBatches(ep); err != nil {
+    return
+}
+exportCompleted = true
+```
+
+A normal error return keeps its concrete primary error. A panic or Goexit before the successful drain sees `exportCompleted=false`, so `finish` cancels before joining the abandoned publication workers, closes the current unconfirmed sink as failed, and preserves previously confirmed files as a lower bound. Because the defer never calls recover, the original panic propagates automatically and unchanged to the established outer recovery; Goexit continues after cleanup. The cancellation sentinel does not replace a propagating panic or create a new normal-path error. If a future normal nil return bypasses the completed drain, it fails closed as canceled/incomplete. A normal successful drain sets the marker; `finish` still detects late cancellation or sink-close failure, which prevents `complete=true`. A later unrelated transaction/protocol failure retains the independently correct sink-completion semantics.
+
+All paths after guard installation, including partial `openNewFile` initialization and a panic after a confirmed split, must cross this cleanup owner. Do not introduce recover, panic conversion, explicit re-panic, terminal statement accounting, or a background cleanup owner at this boundary. This repair closes both the new receipt truthfulness contract and the existing exporter's reachable cleanup path with one stack-local boolean and existing cancellation/cleanup operations.
 
 ### B. Preserve URI path bytes during target sanitization
 
@@ -125,7 +148,7 @@ Statement account/user/role/session identity and `system.statement_info` access 
 
 ## Capacity, performance, and failure containment
 
-Per traced OUTFILE execution: one bounded target string, receipt scalar fields, and four exporter scalar counters. Retained target size is O(min(input,4096)); no per-file target list is retained. Statement cloning copies bounded receipt data; pool cleanup releases it. Existing converter/sink queues and parquet buffers retain their existing bounds and owners; this patch does not add workers or increase their admission capacity. The panic repair makes cancellation precede join on its failure path.
+Per traced OUTFILE execution: one bounded target string, receipt scalar fields, and four exporter scalar counters. Retained target size is O(min(input,4096)); no per-file target list is retained. Statement cloning copies bounded receipt data; pool cleanup releases it. Existing converter/sink queues and parquet buffers retain their existing bounds and owners; this patch does not add workers or increase their admission capacity. The stack-local completion guard makes cancellation precede join on an incomplete producer path, including panic and Goexit, without a new recovery owner.
 
 Frontend sanitization and diagnostic redaction may scan/temporarily allocate O(full target/SQL length), bounded by existing statement admission rather than the retained 4096-byte cap. JSON composition costs O(existing plan size plus bounded receipt), with the existing TEXT limit bounding retained composed output; existing plan production cost is unchanged. Checked arithmetic is constant per existing write/chunk/file boundary, with no additional I/O or synchronization in per-row loops. Receipt transfer adds the existing statement mutex acquisition after worker shutdown. Ordinary direct statements incur only small statement-kind checks; ordinary prepared statements preserve the existing redactor behavior where its output can be retained.
 
@@ -142,6 +165,7 @@ A source observation outside this repair: `writeParquetToFile` does not close a 
 | Collect export stats in distributed operators/resource metrics | potentially unifies other egress types | frontend owns final serialized files; operator rows/bytes cannot prove sink close or headers/footer size |
 | Per-statement additive receipt at existing frontend sink/tracing boundary | smallest cross-owner contract; preserves existing telemetry persistence/readers | selected; existing tracing availability and crash-loss limits remain explicit |
 | Record attempted/buffered bytes as exact | cheap early counters | wrong on conversion/write/close failure; use confirmed file lower bounds instead |
+| Local recover/convert/re-panic in export defer | directly observes panic | violates the established recovery-boundary policy and triggers configured molint; completion marker preserves original panic automatically and covers Goexit |
 | URL-normalize all audit targets | convenient parser rendering | conflates raw sink keys; parse boundaries while preserving path bytes |
 | Clip prepared SQL then redact | bounded scan | can remove a later privacy trigger and leak retained prefix; rejected |
 | Cache redacted prepared SQL | removes repeated scans | extra retention and invalidation contract; defer redaction past known prefix truncation instead |
@@ -162,7 +186,7 @@ The original complete diff was read, including test and result files. The rebase
 
 Tests must use existing exporter/session fixtures before inventing heavier setup. Specific new oracles:
 
-* Panic: use a fake runner that creates deterministic outstanding conversion publication or injected barrier state and panics with a sentinel payload. Recover only in the test. Assert original payload survives, joined workers/cancel/pipe ownership are cleared, receipt is incomplete, and a prior confirmed split survives. No sleeps, probabilistic channel filling, or leaked completion goroutine. A normal-return neighbor proves completion still true.
+* Panic/completion guard: use a fake runner that creates deterministic outstanding conversion publication or injected barrier state and panics with a sentinel payload. Recover only in the test. Assert original payload survives, joined workers/cancel/pipe ownership are cleared, receipt is incomplete, and a prior confirmed split survives. No sleeps, probabilistic channel filling, or leaked completion goroutine. A normal-return neighbor proves completion still true. Existing named-error cases prove the original error survives; source inspection proves no new recover boundary, and the configured checker must show no introduced `checkrecover` diagnostic. Goexit uses the same incomplete-marker abort path; a dedicated Goexit test is optional because the changed mechanism does not branch on the panic payload or termination type.
 * URI identity: distinct sink-legal Unicode and literal-percent paths have distinct unflagged receipt targets; preserved raw path and user-info/query removal compose correctly. Retain the existing closed @/% regression suite rather than duplicate it as a new issue.
 * Prepared prefix: limits shorter than/equal to environment and separator boundaries must retain identical abbreviated text and avoid inaccessible SQL work; when prepared SQL is retained, secrets remain removed even when a marker is beyond the output prefix. Include unlimited/UTF-8 controls. Benchmark a large valid prepared SQL under a tiny limit against small SQL, recording ns/op and allocations; setup must not parse/create a cluster inside the measured loop.
 * Rebase: current main's duplicate JSONLINE aliases fail with their original concrete SQL error, incomplete receipt, and zero or prior-file lower bound; ordinary valid JSONLINE still succeeds. Reuse existing base-side tests when they already prove the same error and add only the missing receipt oracle.
