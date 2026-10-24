@@ -157,6 +157,22 @@ func TestMaskStageCredentialLiteralsWithInitialState(t *testing.T) {
 			CredentialStateNone,
 			`url s3option{'access_key_id'='123', 'secret_access_key'='456'}`,
 		},
+		{ // JSON-style colon maps (invalid grammar, parse fails mid-map) scrub too (#30746)
+			`create stage s credentials={'access_key_id':'AK1','secret_key':'ts'}`,
+			CredentialStateNone,
+			`create stage s credentials={'access_key_id':'******','secret_key':'******'}`,
+		},
+		{ // colon-map tail starting right AT the separator
+			`:'AK1','secret_key':'ts'}`,
+			CredentialStateInMapAfterEq,
+			`:'******','secret_key':'******'}`,
+		},
+		{ // colon-map tail starting at a key: the key token is taken as the
+			// pending value (diagnostic-only over-mask), later values scrubbed
+			`'secret_key':'ts'}`,
+			CredentialStateInMapAfterEq,
+			`'******':'******'}`,
+		},
 	}
 	for _, c := range cases {
 		require.Equal(t, c.want, MaskStageCredentialLiteralsWithInitialState(c.sql, c.in), c.sql)

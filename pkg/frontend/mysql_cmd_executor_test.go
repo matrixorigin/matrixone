@@ -12785,6 +12785,25 @@ func TestRedactStatementErrorForLoggingMasksSerializedNearPassword(t *testing.T)
 	require.Contains(t, redacted, "IDENTIFIED BY '******'")
 }
 
+// A stage credential map written with JSON-style colons instead of '=' fails
+// parsing INSIDE the map; the near echo begins mid-map at a raw separator and
+// replays no keyword. The diagnostic must still scrub every value (#30746).
+func TestRedactStatementErrorForLoggingMasksMidMapCredentialTail(t *testing.T) {
+	sql := "create stage diag_midmap url='s3,endpoint=x' credentials={'access_key_id':'AKIAMIDMAP','secret_key':'midmapsecret'}"
+	_, parseErr := mysql.ParseOne(context.Background(), sql, 1)
+	require.Error(t, parseErr)
+	require.Contains(t, parseErr.Error(), "near \"", "test premise: the echo carries the mid-map tail")
+	redacted := redactStatementErrorForLogging(parseErr, sql).Error()
+	require.NotContains(t, redacted, "AKIAMIDMAP")
+	require.NotContains(t, redacted, "midmapsecret")
+	// equals-form maps keep working through the same mid-map fallback
+	sqlEq := "create stage diag_midmap2 url='s3,endpoint=x' credentials={'access_key_id'='AKIAMIDMAP2','secret_key'='midmapsecret2'}"
+	_, parseErr2 := mysql.ParseOne(context.Background(), sqlEq, 1)
+	if parseErr2 != nil { // '=' maps may parse; if they fail the echo is scrubbed too
+		require.NotContains(t, redactStatementErrorForLogging(parseErr2, sqlEq).Error(), "AKIAMIDMAP2")
+	}
+}
+
 // The COM_QUERY debug trace logs raw request text before any downstream
 // masking hook ran; the helper must mask first, then abbreviate, so no
 // partial secret can survive in the log either. (#30747 review)

@@ -108,6 +108,14 @@ func maskSensitiveSqlLiteralsScoped(sql string, initial CredentialMapState, mask
 	defer PutScanner(scanner)
 	previousToken := 0
 	eq := int('=')
+	// The stage map grammar takes '=', but users commonly write JSON-style
+	// `{'key':'value'}` instead — which then fails parsing mid-map with the
+	// remainder echoed in the diagnostics (#30746). A bare ':' reaches the
+	// scanner as LEX_ERROR; accept it as an in-map separator too, so that
+	// malformed input still gets scrubbed.
+	isMapSep := func(typ int, rawPos int) bool {
+		return typ == eq || (typ == LEX_ERROR && rawPos < len(sql) && sql[rawPos] == ':')
+	}
 	lbrace := int('{')
 	rbrace := int('}')
 	credState := initial
@@ -140,13 +148,14 @@ func maskSensitiveSqlLiteralsScoped(sql string, initial CredentialMapState, mask
 					credState = CredentialStateNone
 					continue
 				}
-				if typ == eq {
+				if isMapSep(typ, tokStart) {
 					credState = CredentialStateInMapAfterEq
 				}
 				continue
 			case CredentialStateInMapAfterEq:
-				if typ == eq {
-					// a doubled '=' inside the map still precedes the value
+				if isMapSep(typ, tokStart) {
+					// a doubled separator inside the map still precedes the
+					// value
 					continue
 				}
 				if typ == lbrace {

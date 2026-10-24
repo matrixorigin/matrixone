@@ -390,7 +390,7 @@ func redactStatementErrorForLogging(err error, text string) error {
 		return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
 	}
 	errText := err.Error()
-	errText = maskSerializedNearFragment(errText)
+	errText = maskSerializedNearFragment(errText, text)
 	if masked := parsers.MaskSensitiveLiteralsForLogging(errText); masked != err.Error() {
 		// Downstream (RecordParseErrorStatement) wraps the returned error with
 		// moerr.NewParseError, whose template prepends "SQL parser error: ".
@@ -427,7 +427,7 @@ func maskQueryForDebugTrace(query string, maxLen int) string {
 // renderer appends the closing quote directly before the trailing `;`/suffix,
 // which never contains quotes, so the LAST double quote in the message closes
 // the fragment.
-func maskSerializedNearFragment(errText string) string {
+func maskSerializedNearFragment(errText string, stmtText string) string {
 	anchor := strings.Index(errText, " near \"")
 	if anchor < 0 {
 		return errText
@@ -443,6 +443,15 @@ func maskSerializedNearFragment(errText string) string {
 	}
 	fragment := errText[start:end]
 	masked := parsers.MaskSensitiveLiteralsForLogging(fragment)
+	if masked == fragment && stmtText != "" &&
+		mysql.MaskStageCredentialLiteralsWithInitialState(stmtText, mysql.CredentialStateNone) != stmtText {
+		// The whole statement is a stage credential statement whose parse
+		// failed mid-map: the near echo begins inside the braces, replays no
+		// keyword, and may even use JSON-style colons, so the keyword-driven
+		// pass above finds nothing (#30746). Mask the fragment by map
+		// position instead.
+		masked = mysql.MaskStageCredentialLiteralsWithInitialState(fragment, mysql.CredentialStateInMapAfterEq)
+	}
 	if masked == fragment {
 		return errText
 	}
