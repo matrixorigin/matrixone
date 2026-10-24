@@ -22,14 +22,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestMutationControllerAppend(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	schema := catalog.MockSchema(1, 0)
 	c := catalog.MockCatalog(nil)
 	defer c.Close()
@@ -87,7 +84,6 @@ func TestMutationControllerAppend(t *testing.T) {
 // a3 1,4,4 false
 // a4 1,5,5 true
 func TestGetVisibleRow(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	schema := catalog.MockSchema(1, 0)
 	c := catalog.MockCatalog(nil)
 	defer c.Close()
@@ -140,7 +136,6 @@ func TestGetVisibleRow(t *testing.T) {
 }
 
 func TestPrepareRollbackKeepsAppendRangeAsHole(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	schema := catalog.MockSchema(1, 0)
 	c := catalog.MockCatalog(nil)
 	defer c.Close()

@@ -1,0 +1,36 @@
+{
+  "name": "perf",
+  "command": [
+    "/private/tmp/mo-27683-bench-20261023/venv/bin/python",
+    "/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/perf_abba.py"
+  ],
+  "cwd": "/private/tmp/mo-issue30995",
+  "started_epoch": 1792802940.9058728,
+  "finished_epoch": 1792803031.184762,
+  "exit": 1,
+  "source_head": "3d1b86fcaee0b83eb10c50b2b5cee141ab3f0396",
+  "pkg_tree": "e92b301ddfb3ad233451251e6406dea894255a11",
+  "binary_sha256": {
+    "baseline": "bbd27b9a8a693a8ab0543e9473a5d1eaea6cffeddd5307bf3f311a58ed34773a",
+    "candidate": "0e3a90e2cc11f34761fe849e441f72e616065420271e7dd61a0f0cac5942ac6c"
+  },
+  "script_sha256": {
+    "public_qa.py": "e28917a6449f3ddc625ccb3d285d283d13c228f77d9b64e4a781c2ace02721f9",
+    "harness.py": "0622dfcc8ec401daafc368fff2350964151d72ca6f8a7b0261dfdf0ce8d422c4",
+    "cancel_qa.py": "f6374d116200b2ae3fa5f3eefbe895b5d9ded74126fd7d7f69cc81983e0a3b9f",
+    "outer_join_qa.py": "326741b986973332dfd460b599c4fee8cd48be50580d7749984f1a7c11b2cfd3",
+    "string_qa.py": "62f830f350c4c5083bd6396ba015c508558d06c6110b33e3d0af9c471be0d701",
+    "publish_bundle.py": "5eb35e23a389979d15efe40637653594e3edd1204de185647bb036d9cfc12081",
+    "perf_abba.py": "5ce4dd4b26b8b689fad1b4b4a7f1134d46ff118816725414327022fd300e85d0",
+    "axis_qa.py": "a6e66ebaee25ee8ceb409ba66f41418b58e41c2da985cff7adce8befbf189cb8",
+    "build_both.py": "6d60073636f45d7678b6624058b45db553b47d15579390421f47d6b3c88f4660",
+    "final_public_qa.py": "d84ef87031e9b09d55ac938527ce3d83bf846262add0f03b7ccd4e5440ca060a",
+    "run_checks.py": "3cf0309948a8321776eaa1fb4feb7721bb62ece964d5317fb81211553437224a",
+    "derive_sca.py": "38865f3e38eb1bbe39765ce8dcb4476152cc562f7bcbb343359613a6f0f20847",
+    "run_experiment.py": "73c75df9c762c054422df217c7ab19e5be85d3ccfeb9600e71f05cf7cd5b9a5d",
+    "multicn.py": "68afa1b2eeab626e708a31d878cc9764d0412914db033c193f1148e7d241d92b",
+    "remote_qa.py": "56da9c7745db27e09e8ef97c7fb9fb70cde7a8141c9c7c775cf8a6ac410fc69d",
+    "run_sca.py": "bf3a97970e1b8bc33200da49c7292c61ad50b15afe1fa7076d1bfaccafb2be73"
+  },
+  "output_sha256": "f0da0b41947059c2bc5876adfc6c1b60217881731b71ea59586c89eb0db04640"
+}

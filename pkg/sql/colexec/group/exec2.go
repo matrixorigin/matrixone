@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -203,13 +204,21 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 				variableLengthKey = true
 			}
 			width := GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, group.ctr.keyNullable)
-			group.ctr.keyWidth += int32(width)
+			// Width only selects the hash-key codec. A LONGTEXT key plus its
+			// NULL marker already exceeds int32; wrapping a composite width can
+			// misclassify real keys as H0 or legacy H8. Saturate wide estimates
+			// while preserving exact widths for the eight-byte fast path.
+			if width < 0 || width > math.MaxInt32-int(group.ctr.keyWidth) {
+				group.ctr.keyWidth = math.MaxInt32
+			} else {
+				group.ctr.keyWidth += int32(width)
+			}
 		}
 
 		legacyShortVariableKey := variableLengthKey && group.ctr.keyWidth <= 8 &&
 			!groupHashStringWireEnabled(proc)
 		group.ctr.legacyH8CharSemantics = legacyShortVariableKey
-		if group.ctr.keyWidth == 0 {
+		if hashKeyCount == 0 {
 			group.ctr.mtyp = H0
 		} else if (compactHashKey || legacyShortVariableKey) && group.ctr.keyWidth <= 8 {
 			group.ctr.mtyp = H8
@@ -636,7 +645,13 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := min(count-i, hashmap.UnitLimit)
 			var preview groupInsertPreview
-			var aggregateGroupScratch [hashmap.UnitLimit]uint64
+			// Only dynamic grouping needs to mask synthetic rows. Passing this
+			// scratch to aggregate interfaces makes it escape, so ordinary GROUP
+			// BY must not allocate a row-sized array for every input chunk.
+			var aggregateGroupScratch []uint64
+			if group.DynamicGrouping {
+				aggregateGroupScratch = make([]uint64, n)
+			}
 			for {
 				err = nil
 				if !evaluated {

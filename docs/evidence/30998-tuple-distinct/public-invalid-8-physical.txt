@@ -1,0 +1,45 @@
+Overview:
+	MemoryUsage:1801392B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0
+	S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 
+	CPU Usage: 
+		- Total CPU Time: 9436016ns 
+		- CPU Time Detail: Parse(113917)+BuildPlan(294208)+Compile(394667)+PhyExec(8906303)+PrepareRun(165000)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(438079)-IOMerge(0)
+		- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]
+Physical Plan Deployment:
+Scope 1 (Magic: Merge, addr:127.0.0.1:54200, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 1750ns
+  Pipeline: └── output(idx:-1, isFirst:false, isLast:false)
+                └── projection(idx:2, isFirst:true, isLast:true)
+                    └── merge group(idx:1, isFirst:false, isLast:true)
+                        └── merge(idx:1, isFirst:false, isLast:false)
+  PreScopes: {
+    Scope 1 (Magic: Remote, addr:127.0.0.1:54200, mcpu: 4, Receiver: []) PrepareTimeConsumed: 103500ns
+      DataSource: qa30995.nullable[g a b]
+      Pipeline: └── connect(idx:1, isFirst:false, isLast:false) to MergeReceiver [0]
+                    └── group(idx:1, isFirst:true, isLast:false)
+                        └── tablescan(idx:0, isFirst:true, isLast:true)
+      PreScopes: {
+        Scope 1 (Magic: Normal, addr:, mcpu: 0, Receiver: []) PrepareTimeConsumed: 2500ns
+          PreScopes: {
+            Scope 1 (Magic: Normal, addr:127.0.0.1:54200, mcpu: 1, Receiver: []) PrepareTimeConsumed: 84ns
+              DataSource: qa30995.nullable[g a b]
+              Pipeline: └── connect(idx:1, isFirst:false, isLast:false) to MergeReceiver [0]
+                            └── group(idx:1, isFirst:true, isLast:false)
+                                └── tablescan(idx:0, isFirst:true, isLast:true)
+            Scope 2 (Magic: Normal, addr:127.0.0.1:54200, mcpu: 1, Receiver: []) PrepareTimeConsumed: 0ns
+              DataSource: qa30995.nullable[g a b]
+              Pipeline: └── connect(idx:1, isFirst:false, isLast:false) to MergeReceiver [0]
+                            └── group(idx:1, isFirst:true, isLast:false)
+                                └── tablescan(idx:0, isFirst:true, isLast:true)
+            Scope 3 (Magic: Normal, addr:127.0.0.1:54200, mcpu: 1, Receiver: []) PrepareTimeConsumed: 125ns
+              DataSource: qa30995.nullable[g a b]
+              Pipeline: └── connect(idx:1, isFirst:false, isLast:false) to MergeReceiver [0]
+                            └── group(idx:1, isFirst:true, isLast:false)
+                                └── tablescan(idx:0, isFirst:true, isLast:true)
+            Scope 4 (Magic: Normal, addr:127.0.0.1:54200, mcpu: 1, Receiver: []) PrepareTimeConsumed: 0ns
+              DataSource: qa30995.nullable[g a b]
+              Pipeline: └── connect(idx:1, isFirst:false, isLast:false) to MergeReceiver [0]
+                            └── group(idx:1, isFirst:true, isLast:false)
+                                └── tablescan(idx:0, isFirst:true, isLast:true)
+          }
+      }
+  }

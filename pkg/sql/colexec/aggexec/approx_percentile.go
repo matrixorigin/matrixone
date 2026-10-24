@@ -1717,11 +1717,6 @@ func newApproxPercentileExec(mp *mpool.MPool, info singleAggInfo) (AggFuncExec, 
 	}
 }
 
-// Exact helpers retained for direct callers and small-data regression tests.
-func PercentileNumeric[T numeric](vs *Vectors[T], p float64) (float64, error) {
-	return percentileNumericVals(collectMedianValues(vs), p), nil
-}
-
 func interpolateFloat64(lo, hi, fraction float64) float64 {
 	if fraction == 0 {
 		return lo
@@ -1765,10 +1760,6 @@ func percentileNumericVals[T numeric](values []T, p float64) float64 {
 	lo := selectKthNumeric(values, int(loRank))
 	hi := selectKthNumeric(values, int(hiRank))
 	return interpolateNumeric(lo, hi, frac)
-}
-
-func PercentileDecimal64(vs *Vectors[types.Decimal64], p float64, argScale int32) (types.Decimal128, error) {
-	return percentileDecimal64Vals(collectMedianValues(vs), p, argScale)
 }
 
 func percentileDecimal64Vals(values []types.Decimal64, p float64, argScale int32) (types.Decimal128, error) {

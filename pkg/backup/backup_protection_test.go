@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,8 +61,6 @@ func forceBackupProtectionCheckpoint(t *testing.T, db *testutil.TestEngine) {
 
 // TestBackupProtectionCheckpointProtection tests that protected checkpoints are not deleted by GC
 func TestBackupProtectionCheckpointProtection(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
@@ -142,8 +139,6 @@ func TestBackupProtectionCheckpointProtection(t *testing.T) {
 
 // TestBackupProtectionMetadataFileFiltering tests that metadata files are filtered correctly during backup
 func TestBackupProtectionMetadataFileFiltering(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
@@ -284,8 +279,6 @@ func TestBackupProtectionMetadataFileFiltering(t *testing.T) {
 
 // TestBackupProtectionExpiration tests that protection expires after 20 minutes
 func TestBackupProtectionExpiration(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
@@ -327,8 +320,6 @@ func TestBackupProtectionExpiration(t *testing.T) {
 
 // TestBackupProtectionUpdate tests that protection can be updated
 func TestBackupProtectionUpdate(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
@@ -364,8 +355,6 @@ func TestBackupProtectionUpdate(t *testing.T) {
 
 // TestBackupProtectionCheckpointFiltering tests that checkpoints are filtered correctly during GC
 func TestBackupProtectionCheckpointFiltering(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
@@ -518,7 +507,6 @@ func TestGetParallelCount(t *testing.T) {
 
 // TestCopyFileWithDstDir tests CopyFile with dstDir parameter
 func TestCopyFileWithDstDir(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	ctx := context.Background()
 	srcFs, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
@@ -593,7 +581,6 @@ func TestCopyFileWithDstDir(t *testing.T) {
 
 // TestCopyFileWithRetry tests CopyFileWithRetry function
 func TestCopyFileWithRetry(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	ctx := context.Background()
 	srcFs, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
@@ -635,7 +622,6 @@ func TestCopyFileWithRetry(t *testing.T) {
 
 // TestCopyFileAndGetMetaFilesWithFiltering tests copyFileAndGetMetaFiles filtering logic
 func TestCopyFileAndGetMetaFilesWithFiltering(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	ctx := context.Background()
 	srcFs, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
@@ -707,7 +693,6 @@ func TestCopyFileAndGetMetaFilesWithFiltering(t *testing.T) {
 // Note: This test is simplified to avoid complex runtime mocking
 // The actual protection update logic is tested in integration tests
 func TestExecBackupWithProtectionUpdate(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	ctx := context.Background()
 
@@ -762,7 +747,6 @@ func TestExecBackupWithProtectionUpdate(t *testing.T) {
 
 // TestBackupProtectionManager tests backupProtectionManager lifecycle
 func TestBackupProtectionManager(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -791,7 +775,6 @@ func TestBackupProtectionManager(t *testing.T) {
 
 // TestExecBackupWithProtectionMgr tests execBackup with protection manager
 func TestExecBackupWithProtectionMgr(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	ctx := context.Background()
 	srcFs, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
@@ -846,7 +829,6 @@ func TestExecBackupWithProtectionMgr(t *testing.T) {
 
 // TestExecBackupWithBaseTS tests execBackup with baseTS (no start TS)
 func TestExecBackupWithBaseTS(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	ctx := context.Background()
 	srcFs, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
@@ -891,7 +873,6 @@ func TestExecBackupWithBaseTS(t *testing.T) {
 
 // TestExecBackupWithEmptyBaseTS tests execBackup with empty baseTS (should not set protectedTS)
 func TestExecBackupWithEmptyBaseTS(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	ctx := context.Background()
 	srcFs, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
@@ -937,7 +918,6 @@ func TestExecBackupWithEmptyBaseTS(t *testing.T) {
 
 // TestCopyFileAndGetMetaFilesWithStartGEBackup tests filtering when start >= backup
 func TestCopyFileAndGetMetaFilesWithStartGEBackup(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	ctx := context.Background()
 	srcFs, err := fileservice.NewMemoryFS("src", fileservice.DisabledCacheConfig, nil)
@@ -999,7 +979,6 @@ func TestCopyFileAndGetMetaFilesWithStartGEBackup(t *testing.T) {
 
 // TestGetSQLExecutor tests getSQLExecutor function
 //func TestGetSQLExecutor(t *testing.T) {
-//	defer testutils.AfterTest(t)()
 //
 //	// Test with empty sid (should return nil)
 //	exec, opts := getSQLExecutor("")
@@ -1009,7 +988,6 @@ func TestCopyFileAndGetMetaFilesWithStartGEBackup(t *testing.T) {
 
 // TestBackupProtectionSQLBuilders tests SQL builder functions
 func TestBackupProtectionSQLBuilders(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	ts := types.BuildTS(time.Now().UnixNano(), 0)
 

@@ -919,7 +919,12 @@ func (mo *MOServer) handleRequest(rs *Conn) error {
 	err = mo.rm.Handler(rs, msg)
 	if err != nil {
 		if skipClientQuit(err.Error()) {
-			return nil
+			// COM_QUIT is terminal on the wire: the client has finished the
+			// session and waits for the server to close the connection, so
+			// the read loop must not keep waiting for a next command.
+			// Ending like a clean EOF lets handleConn close the connection
+			// and run the routine/session cleanup once, on the owning path.
+			return io.EOF
 		} else {
 			logutil.LogConnectionCloseEvent(frontendSessionHandleEvents, err)
 		}
