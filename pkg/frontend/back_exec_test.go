@@ -57,6 +57,8 @@ func TestBindBackExecSession(t *testing.T) {
 	realName, ok := clientSession.GetTempTable("db1", "tmp1")
 	require.True(t, ok)
 	require.Equal(t, "real_tmp1", realName)
+	require.True(t, backSes.OwnsTemporaryTable("db1", "real_tmp1"))
+	require.False(t, backSes.OwnsTemporaryTable("other-db", "real_tmp1"))
 	cleaner, ok := proc.GetSession().(interface {
 		RemoveTempTablesByDatabase(string)
 	})

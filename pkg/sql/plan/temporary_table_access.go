@@ -23,8 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+type temporaryTableOwner interface {
+	OwnsTemporaryTable(database, physicalName string) bool
+}
 
 // TemporaryTableAccessAllowed is the shared relation-resolution gate for
 // session temporary roots and their generated index relations. Durable kind
@@ -55,7 +58,7 @@ func TemporaryTableAccessAllowed(
 	if defines.HasTemporaryTableAccess(ctx) || aliasResolved {
 		return true
 	}
-	owner, ok := session.(process.TemporaryTableDDL)
+	owner, ok := session.(temporaryTableOwner)
 	if !ok {
 		return false
 	}
