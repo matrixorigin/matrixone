@@ -4594,8 +4594,11 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	// #30282: reject ON DELETE/ON UPDATE SET NULL declared over NOT NULL child
 	// columns (MySQL error 1830). Runs after the primary-key pass so implied
 	// NOT NULL columns are caught as well. Recovery replay keeps the
-	// historical (already accepted) layout buildable.
-	if replay == nil {
+	// historical (already accepted) layout buildable; a trusted physical
+	// reconstruction of an owned table (TRUNCATE's drop-and-recreate and the
+	// truncate-optimized unfiltered DELETE) reinstalls that same unchanged
+	// layout and is not a newly authored constraint.
+	if replay == nil && !trustedForeignKeyLayoutRebuild(ctx.GetContext()) {
 		for i, fk := range createTable.TableDef.Fkeys {
 			if i >= len(createTable.FkCols) || createTable.FkCols[i] == nil {
 				break
@@ -4607,6 +4610,16 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	return nil
+}
+
+// trustedForeignKeyLayoutRebuild reports whether the current CREATE physically
+// reconstructs an owned table unchanged (TRUNCATE / truncate-optimized DELETE
+// recreate reaching the internal executor with the bridge from
+// StatementOption.WithTrustedForeignKeyLayout). Such statements reinstall a
+// historical foreign-key layout rather than author a new constraint (#30282).
+func trustedForeignKeyLayoutRebuild(gctx context.Context) bool {
+	trusted, _ := gctx.Value(defines.TrustedForeignKeyLayout{}).(bool)
+	return trusted
 }
 
 func findCTASColumn(cols []*ColDef, name string) *ColDef {

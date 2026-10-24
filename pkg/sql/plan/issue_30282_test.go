@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -146,6 +147,31 @@ func TestIssue30282NotSkippedForPlainDDL(t *testing.T) {
 			"constraint fk_guard foreign key (pid) references nation (n_nationkey) on update set null)")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "cannot be NOT NULL")
+}
+
+// Review round 4 (#30282): a table whose NOT NULL + SET NULL layout predates
+// validation must stay maintainable — TRUNCATE and the truncate-optimized
+// unfiltered DELETE physically reconstruct it through the internal executor,
+// which marks the recreate with defines.TrustedForeignKeyLayout. That bridge
+// keeps the unchanged layout out of 1830 while user-authored CREATE TABLE
+// keeps failing.
+func TestIssue30282TrustedForeignKeyLayoutRebuild(t *testing.T) {
+	sql := "create table t30282_legacy (id int primary key, pid int not null, key idx_pid (pid), " +
+		"constraint fk_legacy foreign key (pid) references nation (n_nationkey) on delete set null)"
+
+	// user-authored CREATE is still rejected
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	_, err := runOneStmt(mock, t, sql)
+	require.Error(t, err)
+	var me *moerr.Error
+	require.ErrorAs(t, err, &me)
+	require.Equal(t, uint16(1830), me.MySQLCode())
+
+	// the trusted physical-reconstruction bridge admits the unchanged layout
+	mockRebuild := NewMockOptimizer(true, newPlanTestProcess(t))
+	mockRebuild.ctxt.SetContext(context.WithValue(
+		context.Background(), defines.TrustedForeignKeyLayout{}, true))
+	runTestShouldPass(mockRebuild, t, []string{sql}, false, false)
 }
 
 // Review follow-up (#30282): unresolved declarations admitted under
