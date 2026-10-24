@@ -2957,3 +2957,23 @@ round - the inverse-resolution clear (an owner-less reuse must end
 unhooked, not stale) and the reused-sinker refusal gate - are
 decision-compliant consequences of the existing owner-surface rules,
 pinned by the regressions above.
+
+### Reset-generation ownership follow-up (2026-10-24)
+
+A post-persistence synchronous write failure leaves the object's name in
+`Sinker.staged.unpublished`. The delegate transfers that snapshot to its current
+workspace before Reset, but Reset previously kept this failure-only list while
+clearing successful results. A reused writer could therefore adopt already-retired
+names into a later workspace. The common Sinker Reset boundary now discards the
+failure-name slice after the existing pipeline drain. Snapshotting and workspace
+handoff remain non-consuming and precede Reset; physical cleanup remains owned by
+the workspace/engine. This restores the approved generation/ownership contract
+without adding another state machine, wait, storage call, or hot-path scan.
+
+Focused regressions cover the common snapshot boundary, successful and failed
+subsequent executions, repeated teardown, and real-workspace reservation/cleanup
+settlement. They reuse existing post-persistence fault and workspace fixtures.
+The new spill uses one row because explicit Sync already forces persistence.
+This is an implementation correction under r11/r12, with no protocol or admission
+policy change. The rebase onto `2b94111625` retains capability 130 (main is 129)
+and replays all five original commits without patch changes.

@@ -17,6 +17,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -2506,7 +2507,7 @@ func TestGCFiles(t *testing.T) {
 	var (
 		pool    *ants.Pool
 		files   = make([]objectio.ObjectStats, 3)
-		release chan struct{}
+		release func()
 	)
 
 	objectio.SetObjectStatsObjectName(&files[0], objectio.ObjectName{0x1})
@@ -2540,8 +2541,10 @@ func TestGCFiles(t *testing.T) {
 			pool, err = ants.NewPool(1, ants.WithNonblocking(true))
 			require.NoError(t, err)
 			require.NoError(t, p.D.Engine.ResetGCWorkerPool(pool))
-			release = make(chan struct{})
-			require.NoError(t, pool.Submit(func() { <-release }))
+			releaseCh := make(chan struct{})
+			release = sync.OnceFunc(func() { close(releaseCh) })
+			defer release()
+			require.NoError(t, pool.Submit(func() { <-releaseCh }))
 		}
 
 		err = txn.GCObjsByStats(files...)
@@ -2560,17 +2563,19 @@ func TestGCFiles(t *testing.T) {
 		for i := range files {
 			objectio.SetObjectStatsBlkCnt(&files[i], 1)
 			objectio.SetObjectStatsRowCnt(&files[i], 1)
-			bat := colexec.AllocCNS3ResultBat(false)
-			colexec.ExpandObjectStatsToBatch(p.Mp, false, bat, true, files[i])
-			err = txn.WriteFile(
-				disttae.INSERT,
-				0, 0, 0,
-				"", "", "0x1",
-				bat, disttae.DNStore{},
-			)
+			func() {
+				bat := colexec.AllocCNS3ResultBat(false)
+				defer bat.Clean(p.Mp)
+				colexec.ExpandObjectStatsToBatch(p.Mp, false, bat, true, files[i])
+				err = txn.WriteFile(
+					disttae.INSERT,
+					0, 0, 0,
+					"", "", "0x1",
+					bat, disttae.DNStore{},
+				)
 
-			require.NoError(t, err)
-			bat.Clean(p.Mp)
+				require.NoError(t, err)
+			}()
 		}
 
 		err = txn.GCObjsByIdxRange(0, len(files)-1)
@@ -2589,7 +2594,7 @@ func TestGCFiles(t *testing.T) {
 	// these synthetic names carry no parseable file path, so the storage
 	// keeps refusing them and one bounded engine drain pass must keep
 	// exactly the queued names for the next retry (issue #25590).
-	close(release)
+	release()
 	err = p.D.Engine.DrainUnpublishedPendingForTest(context.Background())
 	require.Error(t, err)
 	queued, _, _ := p.D.Engine.InspectUnpublishedPendingForTest()

@@ -1372,7 +1372,8 @@ func (sinker *Sinker) Close() error {
 // It is safe to call after an aborted pipeline execution so that the next
 // Write/Sync cycle starts from a clean state. The buf pool, file-sinker
 // executor (and its arena), mpool, and fileservice references are all kept
-// alive so they can be reused without reallocation.
+// alive so they can be reused without reallocation. Callers must publish,
+// delete, or transfer cleanup ownership of persisted objects before Reset.
 func (sinker *Sinker) Reset() {
 	// Drain any in-flight pipeline jobs before clearing state, so pool
 	// workers don't race with the cleanup below. Clearing pipe.result
@@ -1385,6 +1386,7 @@ func (sinker *Sinker) Reset() {
 
 	sinker.cleanupInMemoryStaged()
 	sinker.staged.persisted = sinker.staged.persisted[:0]
+	sinker.staged.unpublished = nil
 
 	for i := range sinker.result.tail {
 		if sinker.result.tail[i] != nil {

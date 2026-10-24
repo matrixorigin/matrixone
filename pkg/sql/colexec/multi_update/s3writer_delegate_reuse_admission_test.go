@@ -15,11 +15,15 @@
 package multi_update
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -79,7 +83,7 @@ func issue25590SpillOneObjectViaSinkers(
 	if err := writer.ensureInsertSinkers(proc); err != nil {
 		return err
 	}
-	bats, _ := prepareTestInsertBatchs(proc.Mp(), 2, colexec.DefaultBatchSize, false, false)
+	bats, _ := prepareTestInsertBatchs(proc.Mp(), 1, 2, false, false)
 	defer func() {
 		for _, bat := range bats {
 			bat.Clean(proc.Mp())
@@ -208,4 +212,88 @@ func TestMultiUpdatePrepareReuseWithoutOwnerClearsStaleHook(t *testing.T) {
 		"the finalized first workspace's hook consulted nothing further")
 
 	require.NoError(t, update.ctr.s3Writer.free(proc2))
+}
+
+// This wrapper reports a failed write only after the object is durable.
+type reusePostPersistErrorFS struct {
+	fileservice.FileService
+	fail      bool
+	persisted string
+}
+
+func (fs *reusePostPersistErrorFS) Write(ctx context.Context, v fileservice.IOVector) error {
+	if err := fs.FileService.Write(ctx, v); err != nil {
+		return err
+	}
+	fs.persisted = v.FilePath
+	if fs.fail {
+		return errors.New("reuse post-persist failure")
+	}
+	return nil
+}
+
+func TestMultiUpdatePrepareReuseDoesNotReadoptFailedObjects(t *testing.T) {
+	for _, secondFails := range []bool{false, true} {
+		name := "success_after_failure"
+		if secondFails {
+			name = "failure_after_failure"
+		}
+		t.Run(name, func(t *testing.T) {
+			proc1, owner1 := issue25590ReuseProcRound(t)
+			proc2, owner2 := issue25590ReuseProcRound(t)
+			baseFS, err := colexec.GetSharedFSFromProc(proc1)
+			require.NoError(t, err)
+			fs := &reusePostPersistErrorFS{FileService: baseFS, fail: true}
+			proc1.SetFileService(fs)
+			proc2.SetFileService(fs)
+			update := issue25590S3UpdateOp()
+			cleanupProc := proc1
+			t.Cleanup(func() {
+				if update.ctr.s3Writer != nil {
+					require.NoError(t, update.ctr.s3Writer.free(cleanupProc))
+				}
+			})
+
+			require.NoError(t, update.Prepare(proc1))
+			require.ErrorContains(t, issue25590SpillOneObjectViaSinkers(t, update, proc1),
+				"reuse post-persist failure")
+			oldName := fs.persisted
+			require.NotEmpty(t, oldName)
+			_, err = baseFS.StatFile(proc1.Ctx, oldName)
+			require.NoError(t, err, "failure must occur after physical persistence")
+
+			require.NoError(t, update.ctr.s3Writer.reset(proc1))
+			oldOwned, _ := owner1.retained()
+			require.Equal(t, []string{oldName}, oldOwned)
+			_, err = ioutil.DeleteUnpublishedObjects(proc1.Ctx, baseFS, oldOwned...)
+			require.NoError(t, err)
+			_, err = baseFS.StatFile(proc1.Ctx, oldName)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+
+			fs.fail = secondFails
+			cleanupProc = proc2
+			require.NoError(t, update.Prepare(proc2))
+			spillErr := issue25590SpillOneObjectViaSinkers(t, update, proc2)
+			if secondFails {
+				require.ErrorContains(t, spillErr, "reuse post-persist failure")
+			} else {
+				require.NoError(t, spillErr)
+			}
+			newName := fs.persisted
+			require.NotEqual(t, oldName, newName)
+			require.NoError(t, update.ctr.s3Writer.reset(proc2))
+			newOwned, _ := owner2.retained()
+			require.Equal(t, []string{newName}, newOwned,
+				"the next workspace must not adopt the previous execution's retired object")
+			require.NoError(t, update.ctr.s3Writer.reset(proc2))
+			require.NoError(t, update.ctr.s3Writer.free(proc2))
+			afterTeardown, _ := owner2.retained()
+			require.Equal(t, newOwned, afterTeardown, "reset/free must not repeat the handoff")
+			stillOwned, _ := owner1.retained()
+			require.Equal(t, oldOwned, stillOwned, "the first handoff snapshot remains independent")
+			_, err = ioutil.DeleteUnpublishedObjects(proc2.Ctx, baseFS, newOwned...)
+			require.NoError(t, err)
+
+		})
+	}
 }
