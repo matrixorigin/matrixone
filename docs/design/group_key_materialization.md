@@ -14,8 +14,8 @@ independent model review responsibility.
 Version this content before production edits at
 `docs/design/group_key_materialization.md` (a design-only commit is sufficient).
 The complete change affects shared planner/executor hot paths and memory
-publication, so use the mo-dev hot-path design gate. The task record is the owning
-work item; add the eventual implementation PR link to the versioned document.
+publication, so use the mo-dev hot-path design gate. Implementation: [PR #31061](https://github.com/matrixorigin/matrixone/pull/31061).
+The local task record retains the complete evidence ledger.
 
 Tracking: Related to https://github.com/matrixorigin/matrixone/issues/27665.
 Implementation PR: pending validation and publication.
