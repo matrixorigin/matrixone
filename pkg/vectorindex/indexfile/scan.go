@@ -15,6 +15,7 @@
 package indexfile
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -121,8 +122,9 @@ func forEachChunk(bat *batch.Batch, ref *Ref, fn func(chunkID int64, data []byte
 	ids, chunks, datas, tags := bat.Vecs[0], bat.Vecs[1], bat.Vecs[2], bat.Vecs[3]
 	chunkIDs := vector.MustFixedColNoTypeCheck[int64](chunks)
 	tagVals := vector.MustFixedColNoTypeCheck[int64](tags)
+	indexID := []byte(ref.IndexID)
 	for i := 0; i < bat.RowCount(); i++ {
-		if tagVals[i] != ref.Tag || ids.GetStringAt(i) != ref.IndexID {
+		if tagVals[i] != ref.Tag || !bytes.Equal(ids.GetBytesAt(i), indexID) {
 			continue
 		}
 		if err := fn(chunkIDs[i], datas.GetBytesAt(i)); err != nil {
