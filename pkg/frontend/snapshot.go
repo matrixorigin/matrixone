@@ -16,6 +16,8 @@ package frontend
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -3755,7 +3757,9 @@ func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to re-create dropped account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 	createAccountSql := makeCreateAccountSqlByAccountRecord(account)
-	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to create account: %v, create account sql: %s", snapshotName, account.accountName, createAccountSql))
+	// #30752: never log the bootstrap statement; it embeds the one-shot temp
+	// password and would leave a live credential in the log files.
+	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to create account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 	var ast []tree.Statement
 	ast, err = mysql.Parse(ctx, createAccountSql, 1)
@@ -4008,6 +4012,31 @@ func getRestoreAcurrentExistsAccount(
 	return
 }
 
+// newSnapshotRestoreTempPassword returns a CSPRNG-generated one-shot
+// password for the account bootstrap performed inside the snapshot/PITR
+// restore pipeline. The catalog (mo_account) stores no password material, so
+// a dropped account is first re-created with this temporary password and the
+// real credentials land later when the snapshot's mo_user rows are restored.
+// #30752: the previous constant "111" was the shipped factory default of
+// every MatrixOne instance, making the restored account loginable with a
+// widely-known credential for the whole restore window — and leaving a
+// permanent backdoor admin whenever the restore failed after the account
+// creation step. The random value is never logged, never returned to any
+// client, and never leaves the pipeline in plaintext.
+// snapshotRestoreRandRead exists so tests can exercise the entropy-failure
+// branch; in production it is always crypto/rand.Read.
+var snapshotRestoreRandRead = cryptorand.Read
+
+func newSnapshotRestoreTempPassword() (string, error) {
+	var buf [24]byte
+	if _, err := snapshotRestoreRandRead(buf[:]); err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("generate snapshot restore temp password: %v", err)
+	}
+	// 48 lowercase hex characters: safe to embed in a single-quoted SQL
+	// literal, and 192 bits of entropy make it unguessable.
+	return hex.EncodeToString(buf[:]), nil
+}
+
 func makeCreateAccountSqlByAccountRecord(record accountRecord) string {
 	baseSQL := fmt.Sprintf(
 		"create account IF NOT EXISTS %s ADMIN_NAME '%s' IDENTIFIED BY '%s'",
@@ -4079,7 +4108,12 @@ func getPastExistsAccounts(
 				return nil, err
 			}
 
-			account.pwd = "111"
+			// #30752: no password material exists in mo_account to restore
+			// from; give every account its own unguessable bootstrap password
+			// instead of the hardcoded factory default.
+			if account.pwd, err = newSnapshotRestoreTempPassword(); err != nil {
+				return nil, err
+			}
 
 			accounts = append(accounts, account)
 		}
@@ -4449,7 +4483,10 @@ func getAccountRecordByTs(ctx context.Context, ses *Session, bh BackgroundExec, 
 		if account.comments, err = erArray[0].GetString(ctx, 0, 3); err != nil {
 			return &accountRecord{}, err
 		}
-		account.pwd = "111"
+		// #30752: unguessable per-restore bootstrap password, never "111".
+		if account.pwd, err = newSnapshotRestoreTempPassword(); err != nil {
+			return &accountRecord{}, err
+		}
 		return &account, nil
 	}
 

@@ -1,0 +1,40 @@
+service-type = "LOG"
+data-dir = "/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/isolated-runtime/data"
+[log]
+level = "info"
+[limit]
+memory = "1TB"
+[hakeeper-client]
+service-addresses = ["127.0.0.1:54301"]
+[[fileservice]]
+name = "LOCAL"
+backend = "DISK-V2"
+data-dir = "/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/isolated-runtime/data/local"
+[[fileservice]]
+name = "SHARED"
+backend = "DISK-V2"
+data-dir = "/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/isolated-runtime/data/shared"
+[fileservice.cache]
+memory-capacity = "128MB"
+disk-capacity = "1GB"
+disk-path = "/Users/xupeng/.codex/issue-to-pr/matrixone/30995/rebase-94faf020/isolated-runtime/data/cache"
+[[fileservice]]
+name = "ETL"
+backend = "DISK-ETL"
+[observability]
+disableTrace = true
+disableMetric = true
+[logservice]
+uuid = "7c4dccb4-4d3c-41f8-b482-5251dc7a4183"
+deployment-id = 27683
+logservice-port = 54301
+raft-port = 54300
+gossip-port = 54302
+gossip-seed-addresses = ["127.0.0.1:54302"]
+gossip-allow-self-as-seed = true
+[logservice.BootstrapConfig]
+bootstrap-cluster = true
+num-of-log-shards = 1
+num-of-tn-shards = 1
+num-of-log-shard-replicas = 1
+init-hakeeper-members = ["131072:7c4dccb4-4d3c-41f8-b482-5251dc7a4183"]
