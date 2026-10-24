@@ -498,3 +498,24 @@ func TestOpenConcurrentMissesRebuildOnce(t *testing.T) {
 	}
 	require.Equal(t, int32(1), tbl.scans.Load(), "concurrent misses rebuild once")
 }
+
+func TestFDPathSurvivesEviction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	data := randomBytes(2*ChunkSize+3, 17)
+	ref := testRef(data)
+	tbl := &fakeTable{tableID: 18, rows: func() []chunkRow { return fileRows(ref, data, 18) }}
+	env := newEnv(t, ctrl, tbl, newCache(t, t.TempDir()))
+
+	f, err := Open(context.Background(), env, ref)
+	require.NoError(t, err)
+	defer f.Close()
+	require.NoError(t, env.Cache.Delete(context.Background(), entryName(18, &ref)))
+	_, err = env.Cache.Open(context.Background(), entryName(18, &ref), dataFile)
+	require.Error(t, err, "the cache entry is gone")
+
+	got, err := os.ReadFile(f.FDPath())
+	require.NoError(t, err)
+	require.Equal(t, data, got, "a library opening FDPath reads the file after eviction")
+	// the layer reads by offset, so a shared descriptor offset does not disturb it
+	require.Equal(t, data, readFile(t, f))
+}

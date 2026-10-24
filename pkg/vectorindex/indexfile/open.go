@@ -17,6 +17,7 @@ package indexfile
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -49,6 +50,10 @@ func (f *File) File() *os.File { return f.f }
 
 // Size returns the file size.
 func (f *File) Size() int64 { return f.size }
+
+// FDPath returns a path that opens this file through its open descriptor, for libraries
+// that take a path. It stays valid until Close, even after the cache evicts the file.
+func (f *File) FDPath() string { return fmt.Sprintf("/dev/fd/%d", f.f.Fd()) }
 
 // Close closes the file.
 func (f *File) Close() error { return f.f.Close() }
