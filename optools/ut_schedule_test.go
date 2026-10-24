@@ -87,6 +87,11 @@ const scheduleFixturePID = `function fixture_self_pid() {
 
 func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transform func(string) string, variables ...string) ([]byte, error) {
 	t.Helper()
+	return scheduleHarnessWithMockTimeout(t, 15*time.Second, script, mock, transform, variables...)
+}
+
+func scheduleHarnessWithMockTimeout(t *testing.T, timeout time.Duration, script, mock string, transform func(string) string, variables ...string) ([]byte, error) {
+	t.Helper()
 	script = scheduleFixturePID + script
 	mock = strings.Replace(mock, "#!/bin/bash\n", "#!/bin/bash\n"+scheduleFixturePID, 1)
 	root := t.TempDir()
@@ -118,7 +123,7 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(mock), 0755); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
 	cmd.Dir = dir

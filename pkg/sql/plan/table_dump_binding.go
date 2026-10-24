@@ -220,6 +220,7 @@ const (
 const (
 	tableDumpBindingPreTemporalNullability   tableDumpBindingMode = 1 << 7
 	tableDumpBindingPreUnixTimestampDatetime tableDumpBindingMode = 1 << 8
+	tableDumpBindingPreIntegerDecimal        tableDumpBindingMode = 1 << 9
 )
 
 const tableDumpBindingPreJSON tableDumpBindingMode = 1 << 6
@@ -228,9 +229,37 @@ type tableDumpDefaultSession struct {
 	timeZone, locale, folded bool
 }
 
+// Only decimal coercions owned by numeric operators changed in this migration.
+// In particular, a folded ordinary integer default must not pay for redundant
+// historical candidates or exhaust the existing candidate-work budget.
+func tableDumpHasIntegerDecimalCoercion(expr *planpb.Expr) bool {
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		if catalogDecimalOperator(fn.Func.ObjName, len(fn.Args)) {
+			for _, arg := range fn.Args {
+				if source := catalogImplicitDecimalSource(arg); source != nil &&
+					(makeTypeByPlan2Type(source.Typ).IsIntOrUint() || types.T(source.Typ.Id) == types.T_bit) {
+					return true
+				}
+			}
+		}
+		for _, arg := range fn.Args {
+			if tableDumpHasIntegerDecimalCoercion(arg) {
+				return true
+			}
+		}
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return tableDumpHasIntegerDecimalCoercion(lit.Src)
+	}
+	return false
+}
+
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime)
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime | tableDumpBindingPreIntegerDecimal)
+	if mode&tableDumpBindingPreIntegerDecimal != 0 {
+		bindCtx = function.WithLegacyIntegerDecimalCoercions(bindCtx)
+	}
 	if mode&tableDumpBindingPreTemporalNullability != 0 {
 		bindCtx = function.WithLegacyTemporalNullability(bindCtx)
 	}
@@ -578,6 +607,10 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 		if supplied != nil && (sourceItems[i].kind != item.kind || !strings.EqualFold(sourceItems[i].name, item.name) || sourceItems[i].origin != item.origin) {
 			return false, moerr.NewInvalidInputNoCtx("table dump expression declaration does not match target")
 		}
+		integerDecimal := tableDumpHasIntegerDecimalCoercion(item.expr)
+		if supplied != nil {
+			integerDecimal = integerDecimal || tableDumpHasIntegerDecimalCoercion(sourceItems[i].expr)
+		}
 		if len(item.origin) == 0 {
 			return false, moerr.NewInvalidInputNoCtx("persisted table expression has no SQL origin")
 		}
@@ -647,6 +680,14 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				oldModes := append([]tableDumpBindingMode(nil), modes...)
 				for _, mode := range oldModes {
 					modes = append(modes, mode|tableDumpBindingPreUnixTimestampDatetime)
+				}
+			}
+			if integerDecimal {
+				// Integer-domain widening is a separate migration. Reconstruct
+				// each earlier whole-tree binding; never normalize an untrusted
+				// payload before checking its exact SQL-origin witness.
+				for _, mode := range append([]tableDumpBindingMode(nil), modes...) {
+					modes = append(modes, mode|tableDumpBindingPreIntegerDecimal)
 				}
 			}
 			// All session witnesses share the ordinary cancellation and total
