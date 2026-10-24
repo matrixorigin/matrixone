@@ -3217,17 +3217,6 @@ func (ses *Session) RemoveAllPrepareStmts() {
 
 // GetUserDefinedVar gets value of the config
 func (ses *Session) GetConfig(ctx context.Context, varName, dbName, tblName string) (any, error) {
-	// if val, ok := ses.configs[dbName+"-"+varName]; ok {
-	// 	return val, nil
-	// }
-	// if varName == "unique_check_on_autoincr" {
-	// 	ret, err := GetUniqueCheckOnAutoIncr(ctx, ses, dbName)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	ses.configs[dbName+"-"+varName] = ret
-	// 	return ret, nil
-	// }
 	return nil, moerr.NewInternalError(ctx, errorConfigDoesNotExist())
 }
 
@@ -4327,34 +4316,6 @@ func (ses *Session) closeForReset(ctx context.Context) error {
 }
 
 func commitAfterMigrate(ses *Session, err error) error {
-	//if ses == nil {
-	//	logutil.Error("session is nil")
-	//	return moerr.NewInternalErrorNoCtx("session is nil")
-	//}
-	//txnHandler := ses.GetTxnHandler()
-	//if txnHandler == nil {
-	//	logutil.Error("txn handler is nil")
-	//	return moerr.NewInternalErrorNoCtx("txn handler is nil")
-	//}
-	//if txnHandler.GetSession() == nil {
-	//	logutil.Error("ses in txn handler is nil")
-	//	return moerr.NewInternalErrorNoCtx("ses in txn handler is nil")
-	//}
-	//defer func() {
-	//	txnHandler.ClearServerStatus(SERVER_STATUS_IN_TRANS)
-	//	txnHandler.ClearOptionBits(OPTION_BEGIN)
-	//}()
-	//if err != nil {
-	//	if rErr := txnHandler.RollbackTxn(); rErr != nil {
-	//		logutil.Errorf("failed to rollback txn: %v", rErr)
-	//	}
-	//	return err
-	//} else {
-	//	if cErr := txnHandler.CommitTxn(); cErr != nil {
-	//		logutil.Errorf("failed to commit txn: %v", cErr)
-	//		return cErr
-	//	}
-	//}
 	return nil
 }
 

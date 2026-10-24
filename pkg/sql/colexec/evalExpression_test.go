@@ -1263,7 +1263,7 @@ func TestFlowControlFolding(t *testing.T) {
 				require.NoError(t, expr.Init(proc, len(argTypes), test.resultType))
 				expr.fid = test.fid
 				expr.overloadID = resolved.GetEncodedOverloadID()
-				expr.evalFn, expr.resetFn, expr.freeFn, expr.retainedBytesFn = overload.GetExecuteMethod()
+				expr.evalFn, expr.resetFn, expr.freeFn, _ = overload.GetExecuteMethod()
 				expr.folded.needFoldingCheck = true
 				offset := 0
 				if test.fid != function.COALESCE {
