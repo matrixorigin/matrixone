@@ -247,6 +247,10 @@ func TestBuiltInInternalNumericPrecisionUsesMySQLDigits(t *testing.T) {
 		types.New(types.T_float64, 25, -1),
 		types.New(types.T_float64, 18, 6),
 		types.New(types.T_decimal128, 20, 6),
+		types.T_bf16.ToType(),
+		types.T_float16.ToType(),
+		types.T_float8.ToType(),
+		types.T_float4.ToType(),
 		types.T_year.ToType(),
 		types.T_date.ToType(),
 		types.T_varchar.ToType(),
@@ -266,8 +270,9 @@ func TestBuiltInInternalNumericPrecisionUsesMySQLDigits(t *testing.T) {
 		NewFunctionTestResult(
 			types.T_int64.ToType(),
 			false,
-			[]int64{3, 3, 5, 5, 10, 10, 7, 7, 19, 20, 5, 1, 12, 12, 8, 22, 22, 18, 20, 0, 0, 0},
-			[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true},
+			// bf16/float16/float8/float4: the significand bits
+			[]int64{3, 3, 5, 5, 10, 10, 7, 7, 19, 20, 5, 1, 12, 12, 8, 22, 22, 18, 20, 8, 11, 4, 2, 0, 0, 0},
+			[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true, true, true},
 		),
 		builtInInternalNumericPrecision,
 	)

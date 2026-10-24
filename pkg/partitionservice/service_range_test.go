@@ -205,3 +205,33 @@ func newTestRangeColumnsOption(
 		),
 	)
 }
+
+// TestRangePartitionRejectsLowPrecisionColumns checks that a bf16, float16, float8 or float4
+// column is not a RANGE or RANGE COLUMNS partition column, whose bounds would round to the
+// column type and leave values rounding onto a bound without a partition; float32 is accepted.
+func TestRangePartitionRejectsLowPrecisionColumns(t *testing.T) {
+	runTestPartitionServiceTest(
+		func(
+			ctx context.Context,
+			txnOp client.TxnOperator,
+			s *Service,
+			store PartitionStorage,
+		) {
+			for _, typ := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4, types.T_float32} {
+				def := newTestTablePartitionDefine(1, []string{"c1"}, []types.T{typ}, 2, partition.PartitionMethod_Range)
+				for _, stmt := range []*tree.CreateTable{
+					newTestRangeOption(t, "C1", 2),
+					newTestRangeColumnsOption(t, "c1", 2),
+					getCreateTableStatement(t, "create table t(c1 int) partition by range((c1)) (partition p1 values less than (1))"),
+				} {
+					_, err := s.getMetadataByRangeType(stmt.PartitionOption, def)
+					if typ == types.T_float32 {
+						require.NoError(t, err)
+						continue
+					}
+					require.ErrorContains(t, err, "cannot be a RANGE partition column", typ.String())
+				}
+			}
+		},
+	)
+}

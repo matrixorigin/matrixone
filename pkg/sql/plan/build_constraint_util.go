@@ -1368,7 +1368,7 @@ func needsSameTypeAssignmentCast(targetType Type) bool {
 		targetType.Id == int32(types.T_blob) ||
 		targetType.Id == int32(types.T_text) ||
 		targetType.Id == int32(types.T_time) ||
-		(types.T(targetType.Id).IsArrayRelate() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
+		(types.T(targetType.Id).IsArray() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
 }
 
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {
@@ -1506,6 +1506,18 @@ func requireMediumIntProtocolForAuthoring(ctx context.Context, proc *process.Pro
 		return nil
 	}
 	return RequirePersistedProtocolVersionForAuthoring(ctx, proc, defines.MORPCVersion110)
+}
+
+// requireColumnTypeProtocolForAuthoring gates catalog column types that older
+// CNs cannot enforce (MEDIUMINT) or decode (bf16/float16/float8/float4/vecf8/vecf4).
+func requireColumnTypeProtocolForAuthoring(ctx context.Context, proc *process.Process, colType Type) error {
+	if err := requireMediumIntProtocolForAuthoring(ctx, proc, colType); err != nil {
+		return err
+	}
+	if proc == nil || !isLowPrecisionFloatContractType(colType.Id) {
+		return nil
+	}
+	return RequirePersistedProtocolVersionForAuthoring(ctx, proc, LowPrecisionFloatProtocolVersion)
 }
 
 // The existing private COPY scope owns the target write. Check final binary

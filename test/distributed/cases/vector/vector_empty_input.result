@@ -1,0 +1,85 @@
+drop database if exists vector_empty_input;
+create database vector_empty_input;
+use vector_empty_input;
+create table vi (id int, v vecf32(2), n int);
+insert into vi values (1, '[1,2]', '');
+invalid argument cast to int, bad value 
+insert into vi select 1, '[1,2]', '';
+invalid argument cast to int, bad value 
+create table e32 (id int, v vecf32(2));
+insert into e32 values (1, '');
+internal error: malformed vector input: 
+insert into e32 select 2, cast('' as varchar(3));
+internal error: malformed vector input: 
+prepare s from 'insert into e32 values (3, ?)';
+set @e = '';
+execute s using @e;
+internal error: malformed vector input: 
+deallocate prepare s;
+insert into e32 values (4, cast(unhex('') as blob));
+invalid input: vector payload is empty
+select count(*) from e32;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table e64 (id int, v vecf64(2));
+insert into e64 values (1, '');
+internal error: malformed vector input: 
+insert into e64 select 2, cast('' as varchar(3));
+internal error: malformed vector input: 
+create table ebf (id int, v vecbf16(2));
+insert into ebf select 2, cast('' as varchar(3));
+internal error: malformed vector input: 
+create table ef16 (id int, v vecf16(2));
+insert into ef16 select 2, cast('' as varchar(3));
+internal error: malformed vector input: 
+create table ei8 (id int, v vecint8(2));
+insert into ei8 select 2, cast('' as varchar(3));
+internal error: malformed vector input: 
+create table eu8 (id int, v vecuint8(2));
+insert into eu8 select 2, cast('' as varchar(3));
+internal error: malformed vector input: 
+create table ef8 (id int, v vecf8(2));
+insert into ef8 values (1, '');
+internal error: malformed vector input: 
+insert into ef8 select 2, cast('' as varchar(3));
+internal error: malformed vector input: 
+insert into ef8 values (4, cast(unhex('') as blob));
+invalid input: 0-byte value is neither a vecf8(2) cell (15 bytes) nor 2 float32 elements (8 bytes)
+create table ef4 (id int, v vecf4(2));
+insert into ef4 values (1, '');
+internal error: malformed vector input: 
+insert into ef4 select 2, cast('' as varchar(3));
+internal error: malformed vector input: 
+select (select count(*) from e64) + (select count(*) from ebf) + (select count(*) from ef16) + (select count(*) from ei8) + (select count(*) from eu8) + (select count(*) from ef8) + (select count(*) from ef4) as stored;
+➤ stored[-5,64,0]  𝄀
+0
+create table up (id int, v vecf32(2), w vecf8(2));
+insert into up values (1, '[1,2]', '[1,2]');
+update up set v = cast('' as varchar(3)) where id = 1;
+internal error: malformed vector input: 
+update up set w = '' where id = 1;
+internal error: malformed vector input: 
+select id, v, w from up;
+➤ id[4,32,0]  ¦  v[12,2,0]  ¦  w[12,2,0]  𝄀
+1  ¦  [1, 2]  ¦  [1, 2]
+insert into e32 values (5, null);
+insert into ef8 select 5, cast(null as varchar(3));
+select id, v is null from e32 order by id;
+➤ id[4,32,0]  ¦  v is null[-7,1,0]  𝄀
+5  ¦  1
+select id, v is null from ef8 order by id;
+➤ id[4,32,0]  ¦  v is null[-7,1,0]  𝄀
+5  ¦  1
+create table l32 (id int, v vecf32(2), n int);
+load data infile '$resources/vector/vector_empty_field.csv' into table l32 fields terminated by ',' enclosed by '"';
+select id, v, n from l32 order by id;
+➤ id[4,32,0]  ¦  v[12,2,0]  ¦  n[4,32,0]  𝄀
+1  ¦  null  ¦  null  𝄀
+2  ¦  [1, 2]  ¦  5
+create table l8 (id int, v vecf8(2), n int);
+load data infile '$resources/vector/vector_empty_field.csv' into table l8 fields terminated by ',' enclosed by '"';
+select id, v, n from l8 order by id;
+➤ id[4,32,0]  ¦  v[12,2,0]  ¦  n[4,32,0]  𝄀
+1  ¦  null  ¦  null  𝄀
+2  ¦  [1, 2]  ¦  5
+drop database vector_empty_input;

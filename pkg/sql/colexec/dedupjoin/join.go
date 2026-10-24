@@ -1421,6 +1421,10 @@ func odkuValuesEqual(left, right *vector.Vector) bool {
 			vector.GetFixedAtNoTypeCheck[float64](left, 0),
 			vector.GetFixedAtNoTypeCheck[float64](right, 0),
 		)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		l, _ := vector.GetLowPrecisionFloatAt(left, 0)
+		r, _ := vector.GetLowPrecisionFloatAt(right, 0)
+		return odkuFloat32Equal(l, r)
 	case types.T_bool:
 		return odkuFixedValuesEqual[bool](left, right)
 	case types.T_bit, types.T_uint64:
@@ -1501,6 +1505,9 @@ func odkuValuesEqual(left, right *vector.Vector) bool {
 			types.DecodeJson(left.GetBytesAt(0)),
 			types.DecodeJson(right.GetBytesAt(0)),
 		) == 0
+	case types.T_array_float8, types.T_array_float4:
+		l, r := left.GetBytesAt(0), right.GetBytesAt(0)
+		return bytes.Equal(l, r) || types.CompareBlockScaledFromBytes(l, r, false) == 0
 	case types.T_varchar, types.T_blob, types.T_text, types.T_binary,
 		types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return bytes.Equal(left.GetBytesAt(0), right.GetBytesAt(0))

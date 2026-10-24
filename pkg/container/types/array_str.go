@@ -294,28 +294,33 @@ func stringToT[T ArrayElement](str string) (t T, err error) {
 		}
 		return *(*T)(unsafe.Pointer(&num)), nil
 	case BF16:
-		num, err := strconv.ParseFloat(str, 32)
+		// rounded once from the exact value of the text
+		num, v64, err := Float32RoundToOddString(str)
 		if err != nil {
 			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_bf16.String())
 		}
-		bf := BF16FromFloat32(float32(num))
-		// Check the NARROWED value: a NaN/Inf literal, or a finite literal that overflows
-		// the 16-bit range (e.g. 3.4e38 for bf16), becomes ±Inf only after narrowing.
-		if err = rejectNonFiniteArrayElem(float64(bf.ToFloat32())); err != nil {
+		if err = rejectNonFiniteArrayElem(float64(num)); err != nil {
 			return t, err
 		}
+		// checked by the float32 value, as a scalar bf16 (RejectNarrowFloatInput)
+		if f := float32(v64); f > BF16MaxFinite || f < -BF16MaxFinite {
+			return t, moerr.NewOutOfRangeNoCtxf(T_array_bf16.String(), "element %s", str)
+		}
+		bf := BF16FromFloat32(num)
 		return *(*T)(unsafe.Pointer(&bf)), nil
 	case Float16:
-		num, err := strconv.ParseFloat(str, 32)
+		// rounded once from the exact value of the text
+		num, _, err := Float32RoundToOddString(str)
 		if err != nil {
 			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_float16.String())
 		}
-		h := Float16FromFloat32(float32(num))
-		// Check the NARROWED value: a NaN/Inf literal, or a finite literal that overflows
-		// the 16-bit range (e.g. 70000 for f16), becomes ±Inf only after narrowing.
-		if err = rejectNonFiniteArrayElem(float64(h.ToFloat32())); err != nil {
+		if err = rejectNonFiniteArrayElem(float64(num)); err != nil {
 			return t, err
 		}
+		if num > Float16MaxFinite || num < -Float16MaxFinite {
+			return t, moerr.NewOutOfRangeNoCtxf(T_array_float16.String(), "element %s", str)
+		}
+		h := Float16FromFloat32(num)
 		return *(*T)(unsafe.Pointer(&h)), nil
 	case int8:
 		// Strict: a vecint8 string literal must be an integer in [-128,127].

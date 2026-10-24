@@ -460,3 +460,46 @@ func TestReshapeBatches3(t *testing.T) {
 		releaseF()
 	}
 }
+
+// TestAObjMergeLowPrecisionSortKey merges appendable objects whose sort key is a bf16,
+// float16, float8 or float4 column, as a cluster key of a table created before such keys
+// were rejected: the rows come out in float32 order, none lost.
+func TestAObjMergeLowPrecisionSortKey(t *testing.T) {
+	testPool := &testPool{pool: mocks.GetTestVectorPool()}
+	runs := [][]float32{{-6, -1, 0, 0.5, 2, 4}, {-3, -0.5, 1, 1.5, 3, 6}}
+	for _, oid := range []types.T{types.T_bf16, types.T_float16, types.T_float8, types.T_float4} {
+		batches := make([]*containers.Batch, len(runs))
+		var want []float32
+		for i, run := range runs {
+			vec := containers.NewVector(oid.ToType())
+			for _, x := range run {
+				switch oid {
+				case types.T_bf16:
+					vec.Append(types.BF16FromFloat32(x), false)
+				case types.T_float16:
+					vec.Append(types.Float16FromFloat32(x), false)
+				case types.T_float8:
+					vec.Append(types.Float8FromFloat32(x), false)
+				case types.T_float4:
+					vec.Append(types.Float4FromFloat32(x), false)
+				}
+				want = append(want, x)
+			}
+			batches[i] = containers.NewBatch()
+			batches[i].AddVector("", vec)
+		}
+		slices.Sort(want)
+		merged, releaseF, _, err := MergeAObj(context.Background(), testPool, batches, 0, []uint32{uint32(len(want))})
+		require.NoError(t, err, oid.String())
+		var got []float32
+		for _, bat := range merged {
+			for i := 0; i < bat.Vecs[0].Length(); i++ {
+				f, ok := vector.GetLowPrecisionFloatAt(bat.Vecs[0], i)
+				require.True(t, ok)
+				got = append(got, f)
+			}
+		}
+		require.Equal(t, want, got, oid.String())
+		releaseF()
+	}
+}
