@@ -5,6 +5,7 @@ create database issue_30506_temp_txn;
 use issue_30506_temp_txn;
 create temporary table tx1 (id int primary key);
 not supported: temporary table in an uncommitted database generation
+rollback;
 drop database if exists issue_30506_temp_txn;
 create database issue_30506_temp_committed;
 use issue_30506_temp_committed;
