@@ -518,13 +518,17 @@ pub_full01    sys    null    null    null    null    sub_pull01    2025-07-18 22
 restore database pub_fulltext_table{snapshot="sp_pub01"};
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
+pub_full01    pub_fulltext_table    *    acc01    acc01    2025-07-18 22:50:59    null
 show subscriptions;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-pub_full01    sys    null    null    null    null    sub_pull01    2025-07-18 22:50:59    2
+pub_full01    sys    pub_fulltext_table    *        2025-07-18 22:50:59    sub_pull01    2025-07-18 22:50:59    0
 use sub_pull01;
-internal error: there is no publication pub_full01
 select * from src;
-No database selected
+id    json1    json2
+0    {"a":1, "b":"redredredredredredredredredredrerr"}    {"d": "happybirthday.happy-birthday_happybirthday", "f":"winterautumnsummerspring"}
+1    {"a":2, "b":"中文學習教材"}    ["apple", "orange", "banana", "指引"]
+2    {"a":3, "b":"redbluebrownyelloworange"}    {"d":"兒童中文"}
+drop publication if exists pub_full01;
 drop database pub_fulltext_table;
 drop snapshot sp_pub01;
 drop publication pub_full01;

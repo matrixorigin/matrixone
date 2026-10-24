@@ -244,6 +244,10 @@ const (
 	// session state that has been invalidated and must not be executed again.
 	ErrNeedReprepare    uint16 = 20481
 	ErrSPRecursionLimit uint16 = 20482
+	// ErrDependentByCheckConstraint rejects ALTER DROP/RENAME COLUMN when a
+	// surviving CHECK still references the column (MySQL 3959). CHECKs that
+	// reference only the dropped column follow it instead of erroring.
+	ErrDependentByCheckConstraint uint16 = 20483
 
 	// Group 5: rpc errors
 	//
@@ -602,6 +606,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrFkColumnCannotDrop:                       {ER_FK_COLUMN_CANNOT_DROP, []string{MySQLDefaultSqlState}, "Cannot drop column '%-.192s': needed in a foreign key constraint '%-.192s'"},
 	ErrFkColumnCannotDropChild:                  {ER_FK_COLUMN_CANNOT_DROP_CHILD, []string{MySQLDefaultSqlState}, "Cannot drop column '%-.192s': needed in a foreign key constraint '%-.192s' of table '%-.192s'"},
 	ErrDependentByPartitionFunction:             {ER_DEPENDENT_BY_PARTITION_FUNC, []string{MySQLDefaultSqlState}, "Column '%s' has a partitioning function dependency and cannot be dropped or renamed"},
+	ErrDependentByCheckConstraint:               {ER_DEPENDENT_BY_CHECK_CONSTRAINT, []string{MySQLDefaultSqlState}, "Check constraint '%-.192s' uses column '%-.192s', hence column cannot be dropped or renamed."},
 	ErrAlterOperationNotSupportedReasonFkRename: {ER_ALTER_OPERATION_NOT_SUPPORTED_REASON_FK_RENAME, []string{MySQLDefaultSqlState}, "Columns participating in a foreign key are renamed"},
 	ErrPrimaryCantHaveNull:                      {ER_PRIMARY_CANT_HAVE_NULL, []string{"42000"}, "All parts of a PRIMARY KEY must be NOT NULL; if you need NULL in a key, use UNIQUE instead"},
 	ErrPartitionMgmtOnNonpartitioned:            {ER_PARTITION_MGMT_ON_NONPARTITIONED, []string{MySQLDefaultSqlState}, "Partition management on a not partitioned table is not possible"},
@@ -2102,6 +2107,10 @@ func NewErrFkColumnCannotDrop(ctx context.Context, colName any, fKName any) *Err
 
 func NewErrDependentByPartitionFunction(ctx context.Context, colName any) *Error {
 	return newError(ctx, ErrDependentByPartitionFunction, colName)
+}
+
+func NewErrDependentByCheckConstraint(ctx context.Context, checkName any, colName any) *Error {
+	return newError(ctx, ErrDependentByCheckConstraint, checkName, colName)
 }
 
 func NewErrAlterOperationNotSupportedReasonFkRename(ctx context.Context) *Error {

@@ -1592,15 +1592,16 @@ func runOperatorTestsWithOptions(
 	minTS timestamp.Timestamp,
 	options []TxnOption,
 	clientOptions ...TxnClientCreateOption) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
+	t.Helper()
 	RunTxnTests(
 		func(
 			c TxnClient,
 			ts rpc.TxnSender) {
+			// The operation budget starts after the client fixture is ready.
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
 			txn, err := c.New(ctx, minTS, options...)
-			assert.Nil(t, err)
+			require.NoError(t, err)
 			tc(ctx, txn.(*txnOperator), ts.(*testTxnSender))
 		},
 		clientOptions...)
