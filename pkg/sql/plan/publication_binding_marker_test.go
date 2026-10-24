@@ -21,7 +21,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -1045,11 +1047,11 @@ type countingUdfService struct {
 
 func (s *countingUdfService) Language() string { return "python" }
 
-func (s *countingUdfService) Run(
-	_ context.Context, _ *udf.Request, _ udf.PkgReader,
-) (*udf.Response, error) {
+func (s *countingUdfService) Execute(
+	_ context.Context, _ *udf.Invocation, _ vector.FunctionResultWrapper, _ *mpool.MPool,
+) error {
 	s.runs++
-	return nil, moerr.NewInternalErrorNoCtx("udf service unavailable in binding tests")
+	return moerr.NewInternalErrorNoCtx("udf service unavailable in binding tests")
 }
 
 // TestPublicationViewBindingMarkerKeepsProbeLiteralStatements binds the
