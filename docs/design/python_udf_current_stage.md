@@ -108,7 +108,7 @@ rechecks every CN before catalog access on login compensation or direct replay; 
 
 Python DDL probes the required tenant schema and refuses admission until it is
 present. Shared revision publication and Python reads require active protocol
-127. That value is rollout state in the service runtime, not a computed live
+130. That value is rollout state in the service runtime, not a computed live
 cluster minimum. Cached/prepared Python plans and new or reused physical
 evaluators check it again before catalog reads, input evaluation or worker calls.
 Below the floor, revision-bearing SQL plans invalidate and rebind to the legacy
@@ -121,7 +121,7 @@ uses `routine_dependencies = 20`. Both fields survive serialization, generated
 descriptor lookup, and deep-copy without aliasing. Python-bearing plans require
 protocol 127 before Prepare, publication, send, or execution; main-only dependent
 programs retain their independent protocol-119 admission. The read-only
-`GetPythonUdfStatus` method uses wire capability 127, query method 47, request
+`GetPythonUdfStatus` method uses wire capability 130, query method 47, request
 field 49 and response field 50. Official session KILL/disconnect methods 45/46,
 request fields 47/48 and response fields 48/49 retain capability 120. The status
 wire fixtures use these current allocations; older unmerged candidate allocations
