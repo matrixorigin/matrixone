@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -465,4 +466,95 @@ func TestPartitionTopOneRunsFloatAndConstantPeers(t *testing.T) {
 			}
 		}
 	}
+}
+
+// Embed an alias so the delegated interface does not collide with Compare.
+type topOneOrderCompare = compare.Compare
+
+type topOneWorkCompare struct {
+	topOneOrderCompare
+	vectors                    [2]*vector.Vector
+	retained, input, longPairs int
+}
+
+func (c *topOneWorkCompare) Set(i int, vec *vector.Vector) {
+	c.vectors[i] = vec
+	c.topOneOrderCompare.Set(i, vec)
+}
+
+func (c *topOneWorkCompare) Compare(i, j int, left, right int64) int {
+	if j == 0 {
+		c.retained++
+	} else {
+		c.input++
+	}
+	if len(c.vectors[i].GetBytesAt(int(left))) > 4096 && len(c.vectors[j].GetBytesAt(int(right))) > 4096 {
+		c.longPairs++
+	}
+	return c.topOneOrderCompare.Compare(i, j, left, right)
+}
+
+func TestPartitionTopOneRunsRetainedBaseline(t *testing.T) {
+	prefix := strings.Repeat("z", 4096)
+	for _, tc := range []struct {
+		name, retained                        string
+		incoming                              []string
+		winner                                int64
+		retainedComparisons, inputComparisons int
+	}{
+		{"retained_wins", "a", []string{prefix + "1", prefix + "2"}, 0, 2, 0},
+		{"candidate_improves_then_peers", "m", []string{"z", "l", "b", "b"}, 3, 2, 2},
+		{"retained_peer", "a", []string{"a", "z"}, 0, 2, 0},
+		{"singleton_improvement", "m", []string{"b"}, 1, 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+			t.Cleanup(proc.Free)
+			child := colexec.NewMockOperator()
+			t.Cleanup(func() { child.Free(proc, false, nil) })
+			arg := newTopNArgument(1)
+			t.Cleanup(func() { arg.Free(proc, false, nil) })
+			arg.OrderBySpecs = arg.OrderBySpecs[:2]
+			arg.OrderBySpecs[1].Expr = topNCol(1, types.T_varchar)
+			arg.OrderBySpecs[1].Flag = 0
+			arg.AppendChild(child)
+			child.WithBatchs([]*batch.Batch{topOneStringRunBatch(t, proc, []string{tc.retained}, 0)})
+			child.WithBatchs([]*batch.Batch{topOneStringRunBatch(t, proc, tc.incoming, 1)})
+			require.NoError(t, arg.Prepare(proc))
+			cmp := &topOneWorkCompare{topOneOrderCompare: arg.top.compares[0]}
+			arg.top.compares[0] = cmp
+			result, err := arg.Call(proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			require.Equal(t, 1, result.Batch.RowCount())
+			require.Equal(t, tc.winner, vector.GetFixedAtWithTypeCheck[int64](result.Batch.Vecs[2], 0))
+			require.Zero(t, cmp.longPairs, "losers must use the retained winner as their baseline")
+			require.Equal(t, tc.retainedComparisons, cmp.retained)
+			require.Equal(t, tc.inputComparisons, cmp.input)
+			result, err = arg.Call(proc)
+			require.NoError(t, err)
+			require.True(t, result.Batch == nil || result.Status == vm.ExecStop)
+		})
+	}
+}
+
+func topOneStringRunBatch(t testing.TB, proc *process.Process, keys []string, firstID int64) (result *batch.Batch) {
+	t.Helper()
+	bat := batch.NewWithSize(3)
+	defer func() {
+		if result == nil {
+			bat.Clean(proc.Mp())
+		}
+	}()
+	for i, typ := range []types.T{types.T_int32, types.T_varchar, types.T_int64} {
+		bat.Vecs[i] = vector.NewVec(typ.ToType())
+	}
+	for row, key := range keys {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(key), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], firstID+int64(row), false, proc.Mp()))
+	}
+	bat.SetRowCount(len(keys))
+	return bat
 }

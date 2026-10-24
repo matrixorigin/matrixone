@@ -15,6 +15,7 @@
 package partition
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -46,6 +47,9 @@ func BenchmarkPartitionTopOneRuns(b *testing.B) {
 		{"GroupedIncreasingK2", "increasing", 2},
 	} {
 		b.Run(tc.name, func(b *testing.B) {
+			proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
+			b.Cleanup(func() { require.Zero(b, proc.Mp().CurrNB()) })
+			b.Cleanup(proc.Free)
 			rows := make([]topOneRunRow, rowCount)
 			groupCount := rowCount / 1024
 			if tc.layout == "unique" {
@@ -68,19 +72,17 @@ func BenchmarkPartitionTopOneRuns(b *testing.B) {
 			b.ResetTimer()
 			for iteration := 0; iteration < b.N; iteration++ {
 				b.StopTimer()
-				proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 				child := colexec.NewMockOperator()
-				arg := topOneRunArgument(true, true)
-				arg.Limit = newTopNArgument(tc.limit).Limit
-				arg.PreReduce = true // emit packed groups, keeping client overhead small
-				arg.AppendChild(child)
 				func() {
 					defer func() {
-						arg.Free(proc, false, nil)
 						child.Free(proc, false, nil)
-						proc.Free()
 						require.Zero(b, proc.Mp().CurrNB())
 					}()
+					arg := topOneRunArgument(true, true)
+					defer arg.Free(proc, false, nil)
+					arg.Limit = newTopNArgument(tc.limit).Limit
+					arg.PreReduce = true // emit packed groups, keeping client overhead small
+					arg.AppendChild(child)
 					// Batches exceed UnitLimit and do not divide the 1024-row
 					// group runs, so both chunk and input boundaries are exercised.
 					for start := 0; start < rowCount; start += 8191 {
@@ -110,5 +112,47 @@ func BenchmarkPartitionTopOneRuns(b *testing.B) {
 				}()
 			}
 		})
+	}
+}
+
+// A retained cheap winner must prevent comparisons between expensive losers.
+// Time the full operator; setup and cleanup use the same fixture as the numeric controls.
+func BenchmarkPartitionTopOneLongPrefix(b *testing.B) {
+	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
+	b.Cleanup(func() { require.Zero(b, proc.Mp().CurrNB()) })
+	b.Cleanup(proc.Free)
+	keys := make([]string, 16384)
+	keys[0] = "a"
+	prefix := strings.Repeat("z", 4096)
+	for row := 1; row < len(keys); row++ {
+		keys[row] = prefix + strconv.Itoa(row)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for iteration := 0; iteration < b.N; iteration++ {
+		b.StopTimer()
+		func() {
+			child := colexec.NewMockOperator()
+			defer func() { child.Free(proc, false, nil); require.Zero(b, proc.Mp().CurrNB()) }()
+			arg := newTopNArgument(1)
+			defer arg.Free(proc, false, nil)
+			arg.OrderBySpecs = arg.OrderBySpecs[:2]
+			arg.OrderBySpecs[1].Expr = topNCol(1, types.T_varchar)
+			arg.OrderBySpecs[1].Flag = 0
+			arg.PreReduce = true
+			arg.AppendChild(child)
+			child.WithBatchs([]*batch.Batch{topOneStringRunBatch(b, proc, keys, 0)})
+			require.NoError(b, arg.Prepare(proc))
+			b.StartTimer()
+			result, err := arg.Call(proc)
+			require.NoError(b, err)
+			require.NotNil(b, result.Batch)
+			require.Equal(b, 1, result.Batch.RowCount())
+			require.Equal(b, int64(0), vector.GetFixedAtWithTypeCheck[int64](result.Batch.Vecs[2], 0))
+			result, err = arg.Call(proc)
+			require.NoError(b, err)
+			require.True(b, result.Batch == nil || result.Status == vm.ExecStop)
+			b.StopTimer()
+		}()
 	}
 }
