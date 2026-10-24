@@ -21,7 +21,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 
@@ -73,6 +72,13 @@ var _ searchplugin.CandidateBudgetHooks = Hooks{}
 
 // PostFilterCandidateBudget is the fulltext2 over-fetch of resultLimit for a search whose
 // candidates the base-table join may drop.
+//
+// WARNING: TOXIC. Do not widen or drop this bound when the index lags the source.
+// Decision (PR #30618 review P2, @cpegeric, 2026-10-24): the search reads only the index.
+// Accepted consequence, for uncommitted writes of the reading transaction and for commits
+// ISCP has not applied: rows not in the index are not matched, changed text is matched and
+// scored as indexed, and when the join drops more candidates than this over-fetch adds the
+// page has fewer than LIMIT rows. Index freshness is tracked by #30853.
 func (Hooks) PostFilterCandidateBudget(resultLimit uint64) uint64 {
 	return overfetch.PostFilterLimit(resultLimit)
 }
@@ -733,10 +739,6 @@ func (u *reader) start() (err error) {
 		cacheKey = veccache.SnapshotKey(u.tblcfg.IndexTable, *ets)
 	}
 
-	if err := u.applyTransactionLocalBound(sp); err != nil {
-		return err
-	}
-
 	mode := u.opts.Mode
 	// INCLUDE/pk prefilter predicate JSON: the planner peels a WHERE predicate on
 	// INCLUDE columns / the pk into this ivfpq-aligned JSON, which the engine evaluates
@@ -841,63 +843,6 @@ func (u *reader) start() (err error) {
 		rt.SearchedBuildTS = &u.tailSearchedBuildTS // captured under the cache lock during the search
 	}
 	return veccache.Cache.SearchInto(sp, cacheKey, newsearch, q, rt, u.out)
-}
-
-// applyTransactionLocalBound widens a search bounded below the base-table join by the
-// candidates this transaction deleted or updated, which the index cannot see and the join
-// drops. When they cannot be counted the post-filter over-fetch stands.
-//
-// WARNING: TOXIC. Do not fall back to an unbounded search when the index lags the source,
-// or when the transaction's own deletes cannot be counted.
-//
-// Decision (PR #30618 review P2, @cpegeric, 2026-10-23): commits by other transactions that
-// the async index has not applied yet are not counted, and a generation behind the source
-// does not fall back to an unbounded search. A lagging index is stale whatever the bound
-// (it lacks inserted rows and new versions), and an unbounded search over a large index
-// (88M rows) streams millions of candidates into the join. That fallback is refused; index
-// freshness is tracked by #30853. Accepted consequence: while the index lags, or after an
-// uncounted delete in the transaction, a page can return fewer than LIMIT rows.
-func (u *reader) applyTransactionLocalBound(sp *sqlexec.SqlProcess) error {
-	if u.limit == 0 || !u.spec.GetPostFilterOverFetch() {
-		return nil
-	}
-	bound, err := u.transactionLocalBound(sp)
-	if err != nil {
-		return err
-	}
-	u.limit = max(u.limit, bound)
-	return nil
-}
-
-// transactionLocalBound returns LIMIT+OFFSET plus the source rows this transaction
-// deleted or updated and has not committed, or 0 when they cannot be counted.
-func (u *reader) transactionLocalBound(sp *sqlexec.SqlProcess) (uint64, error) {
-	txn := u.proc.GetTxnOperator()
-	if txn == nil || txn.GetWorkspace() == nil || txn.GetWorkspace().Readonly() || sp.EffectiveSnapshotTS() != nil {
-		return u.req.ResultLimit, nil
-	}
-	src := u.spec.GetSourceTableDef()
-	if src == nil {
-		return 0, nil
-	}
-	ctx := u.proc.Ctx
-	db, err := u.proc.GetSessionInfo().StorageEngine.Database(ctx, src.DbName, txn)
-	if err != nil {
-		return 0, err
-	}
-	rel, err := db.Relation(ctx, src.Name, nil)
-	if err != nil {
-		return 0, err
-	}
-	provider, ok := rel.(engine.TransactionLocalDeletesProvider)
-	if !ok {
-		return 0, nil
-	}
-	deleted, ok, err := provider.TransactionLocalDeletedRows(ctx)
-	if err != nil || !ok || deleted > math.MaxUint64-u.req.ResultLimit {
-		return 0, err
-	}
-	return u.req.ResultLimit + deleted, nil
 }
 
 // scoreAlgo resolves the relevance formula from fulltext2's OWN session

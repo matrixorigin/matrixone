@@ -3,8 +3,8 @@
 - Status: Review required
 - Tracking issue: [#30402](https://github.com/matrixorigin/matrixone/issues/30402)
 - Implementation PR: [#30618](https://github.com/matrixorigin/matrixone/pull/30618)
-- Design revision: 5
-- Last updated: 2026-10-23
+- Design revision: 6
+- Last updated: 2026-10-24
 
 ## Problem and intent
 
@@ -41,7 +41,7 @@ search and build paths:
    build.
 
 5. **Score-ordered LIMIT pushdown.** An explicit `ORDER BY <score> DESC LIMIT n`
-   over a MATCH query now bounds the index search to the top `LIMIT + OFFSET`
+   over a MATCH query now bounds the index search to a fixed number of top-scoring
    candidates, as the implicit relevance order already did, instead of streaming
    every match into the sort. Its contract is below.
 
@@ -428,38 +428,34 @@ single distance key, and add tie handling to every top-k path.
 
 ### Index lag (decision)
 
-Decided by @cpegeric, 2026-10-23 (PR #30618 review P2). Follow-up:
+Decided by @cpegeric, 2026-10-24 (PR #30618 review P2). Follow-up:
 [#30853](https://github.com/matrixorigin/matrixone/issues/30853).
 
-The bound counts candidates by the index's view of each document. A document the
-reading transaction has deleted or updated but not committed is still a candidate,
-and on the base-table join path the join drops it, because predicates evaluated in
-the index are re-checked on current values. A search bounded below that join
-therefore keeps room for every such row: it is bounded to `LIMIT + OFFSET` plus the
-number of rows the transaction deleted or updated in the source table (and at least
-the post-filter over-fetch the vector indexes use), and the sort above applies the
-exact LIMIT and OFFSET to the rows that survive the join. A transaction therefore
-reads its own deletes and updates completely. When those rows cannot be counted (an
-object-level delete or an ALTER of the table in the transaction), the search keeps the
-post-filter over-fetch and can return fewer than LIMIT rows; it never runs unbounded.
+The search reads only the index. Matching, scores and INCLUDE values come from the
+text and values the index holds. The index holds a write once ISCP has applied it and
+the CN's index cache has loaded that version; a transaction's uncommitted writes are
+never in it. Until then, for the reading transaction's own writes and for commits
+ISCP has not applied alike:
 
-Commits by other transactions that the asynchronous index has not applied yet are
-not counted. During that window the index also lacks the inserted rows and the new
-versions of updated rows, so a query is eventually consistent whatever the bound;
-counting only the committed deletes would repair half of that window at a per-query
-cost. The window, the covered search answered from the index alone, and an exact
-freshness contract are tracked as #30853.
+- A row not in the index (a new insert) is not matched.
+- A row whose text changed is matched and scored by its indexed text.
+- When the plan joins the search to a scan of the source table, the join drops rows
+  deleted from the source and re-checks predicates on INCLUDE columns and the primary
+  key against current values. A bounded search keeps the post-filter over-fetch of
+  `LIMIT + OFFSET` that the vector indexes use; when the join drops more of its
+  candidates than that over-fetch adds, the page has fewer than LIMIT rows, possibly
+  none.
+- When the plan answers the query from the index alone (no scan of the source table),
+  deleted rows and old INCLUDE values are returned as indexed.
 
-Rejected alternatives: proving index freshness before every bounded search with an
-exact-scan fallback; falling back to an unbounded search whenever the searched
-generation is behind the source, which on a large index (88M rows) streams millions
-of candidates into the join while the index is stale anyway; falling back to an
-unbounded search when the transaction's own deletes cannot be counted, which hits the
-transactions that just deleted whole objects; dropping the bound
-whenever the transaction has written the source table; counting committed deletes
-after the searched generation from the source's change state; and a fixed over-fetch
-alone, which returns too few rows once the transaction has deleted more candidates
-than its headroom.
+The bound never grows to make the page complete. Rejected alternatives: proving index
+freshness before every bounded search with an exact-scan fallback; falling back to an
+unbounded search whenever the searched generation is behind the source, which on a
+large index (88M rows) streams millions of candidates into the join; dropping the
+bound whenever the transaction has written the source table; widening the bound by the
+number of rows the transaction deleted, which is unbounded for a large delete and does
+not correct changed text; and counting committed deletes after the searched generation
+from the source's change state.
 
 ## Source fan-out and resource bounds
 

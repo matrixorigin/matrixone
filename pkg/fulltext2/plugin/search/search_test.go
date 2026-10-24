@@ -17,8 +17,6 @@ package search
 import (
 	"context"
 	"encoding/binary"
-	"errors"
-	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -34,12 +32,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -675,121 +671,4 @@ func TestReaderNoOpSettersAndOptions(t *testing.T) {
 	got, err := ft2plan.DecodeScanOptions(data)
 	require.NoError(t, err)
 	require.Equal(t, opts, got)
-}
-
-type deletedRowsEngine struct {
-	engine.Engine
-	rel engine.Relation
-}
-
-func (e deletedRowsEngine) Database(context.Context, string, client.TxnOperator) (engine.Database, error) {
-	return deletedRowsDatabase{rel: e.rel}, nil
-}
-
-type deletedRowsDatabase struct {
-	engine.Database
-	rel engine.Relation
-}
-
-func (d deletedRowsDatabase) Relation(context.Context, string, any) (engine.Relation, error) {
-	return d.rel, nil
-}
-
-type deletedRowsRelation struct {
-	engine.Relation
-	rows uint64
-	ok   bool
-	err  error
-}
-
-func (r deletedRowsRelation) TransactionLocalDeletedRows(context.Context) (uint64, bool, error) {
-	return r.rows, r.ok, r.err
-}
-
-type writableWorkspace struct {
-	client.Workspace
-	readonly bool
-}
-
-func (w writableWorkspace) Readonly() bool { return w.readonly }
-
-type workspaceTxn struct {
-	client.TxnOperator
-	ws client.Workspace
-}
-
-func (o workspaceTxn) GetWorkspace() client.Workspace { return o.ws }
-
-func TestTransactionLocalBound(t *testing.T) {
-	proc := testutil.NewProc(t)
-	sp := sqlexec.NewSqlProcess(proc)
-	src := &plan.TableDef{DbName: "db", Name: "src"}
-	bound := func(rel engine.Relation, readonly bool, resultLimit uint64, def *plan.TableDef) (uint64, error) {
-		proc.Base.SessionInfo.StorageEngine = deletedRowsEngine{rel: rel}
-		proc.Base.TxnOperator = workspaceTxn{ws: writableWorkspace{readonly: readonly}}
-		u := &reader{proc: proc, spec: &plan.IndexSearchScan{SourceTableDef: def},
-			req: searchplugin.Request{ResultLimit: resultLimit}}
-		return u.transactionLocalBound(sp)
-	}
-
-	n, err := bound(deletedRowsRelation{rows: 4, ok: true}, false, 2, src)
-	require.NoError(t, err)
-	require.Equal(t, uint64(6), n, "LIMIT+OFFSET plus every row the transaction deleted")
-
-	n, err = bound(nil, true, 2, src)
-	require.NoError(t, err)
-	require.Equal(t, uint64(2), n, "a read-only transaction has no local deletes")
-
-	for _, tc := range []struct {
-		name  string
-		rel   engine.Relation
-		limit uint64
-		def   *plan.TableDef
-		err   bool
-	}{
-		{name: "no source table", rel: deletedRowsRelation{ok: true}, limit: 2},
-		{name: "no provider", rel: struct{ engine.Relation }{}, limit: 2, def: src},
-		{name: "uncounted deletes", rel: deletedRowsRelation{}, limit: 2, def: src},
-		{name: "overflow", rel: deletedRowsRelation{rows: 2, ok: true}, limit: math.MaxUint64, def: src},
-		{name: "error", rel: deletedRowsRelation{err: errors.New("workspace unavailable")}, limit: 2, def: src, err: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			n, err := bound(tc.rel, false, tc.limit, tc.def)
-			require.Equal(t, tc.err, err != nil)
-			require.Zero(t, n)
-		})
-	}
-}
-
-func TestApplyTransactionLocalBound(t *testing.T) {
-	proc := testutil.NewProc(t)
-	sp := sqlexec.NewSqlProcess(proc)
-	proc.Base.TxnOperator = workspaceTxn{ws: writableWorkspace{}}
-	src := &plan.TableDef{DbName: "db", Name: "src"}
-	apply := func(rel engine.Relation, overFetch bool, limit uint64) (uint64, error) {
-		proc.Base.SessionInfo.StorageEngine = deletedRowsEngine{rel: rel}
-		u := &reader{proc: proc, limit: limit,
-			spec: &plan.IndexSearchScan{SourceTableDef: src, PostFilterOverFetch: overFetch},
-			req:  searchplugin.Request{ResultLimit: 1}}
-		err := u.applyTransactionLocalBound(sp)
-		return u.limit, err
-	}
-
-	limit, err := apply(deletedRowsRelation{rows: 15, ok: true}, true, 11)
-	require.NoError(t, err)
-	require.Equal(t, uint64(16), limit, "room for every deleted candidate beyond the over-fetch")
-	limit, err = apply(deletedRowsRelation{rows: 2, ok: true}, true, 11)
-	require.NoError(t, err)
-	require.Equal(t, uint64(11), limit, "the over-fetch already covers the deletes")
-	limit, err = apply(deletedRowsRelation{}, true, 11)
-	require.NoError(t, err)
-	require.Equal(t, uint64(11), limit, "uncounted deletes keep the over-fetch, never unbounded")
-	limit, err = apply(deletedRowsRelation{rows: 15, ok: true}, false, 1)
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), limit, "a covered search has no join to drop candidates")
-	limit, err = apply(deletedRowsRelation{rows: 15, ok: true}, true, 0)
-	require.NoError(t, err)
-	require.Equal(t, uint64(0), limit, "an unbounded search stays unbounded")
-	_, err = apply(deletedRowsRelation{err: errors.New("workspace unavailable")}, true, 11)
-	require.Error(t, err)
 }

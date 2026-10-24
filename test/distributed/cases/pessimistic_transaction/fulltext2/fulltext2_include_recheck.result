@@ -113,11 +113,97 @@ insert into rk2 select result, 'other filler filler', 'other' from generate_seri
 create fulltext2 index rk2x on rk2(body) with parser gojieba;
 begin;
 delete from rk2 where id between 101 and 115;
+explain select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc limit 1;
+-- @regex("Candidate Limit: 1", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (rk2.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_include_recheck.rk2  𝄀
+                    Runtime Filter Probe: rk2.id  𝄀
+              ->  Fulltext Index Scan on rk2x  𝄀
+                    Fulltext Index: rk2x, Candidate Limit: 1
 select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc limit 1;
-➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
-120  ¦  live
+➤ id[-5,64,0]  ¦  tag[12,10,0]
 select id, tag from rk2 where match(body) against('needle') limit 1;
+➤ id[-5,64,0]  ¦  tag[12,10,0]
+explain select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc, id limit 1;
+-- @regex("Candidate Limit", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC, rk2.id INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (rk2.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_include_recheck.rk2  𝄀
+                    Runtime Filter Probe: rk2.id  𝄀
+              ->  Fulltext Index Scan on rk2x  𝄀
+                    Fulltext Index: rk2x
+select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc, id limit 1;
 ➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
 120  ¦  live
+explain select id from rk2 where match(body) against('needle') order by match(body) against('needle') desc limit 1;
+-- @regex("Table Scan on fulltext2_include_recheck.rk2", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (rk2.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_include_recheck.rk2  𝄀
+                    Runtime Filter Probe: rk2.id  𝄀
+              ->  Fulltext Index Scan on rk2x  𝄀
+                    Fulltext Index: rk2x, Candidate Limit: 1
+select id from rk2 where match(body) against('needle') order by match(body) against('needle') desc limit 1;
+➤ id[-5,64,0]
+rollback;
+begin;
+delete from rk where id = 11;
+update rk set category = 2 where id = 12;
+explain select id, category from rk where match(body) against('needle') order by match(body) against('needle') desc;
+-- @regex("Table Scan", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Fulltext Index Scan on rkx  𝄀
+              Fulltext Index: rkx
+select id, category from rk where match(body) against('needle') order by match(body) against('needle') desc;
+➤ id[-5,64,0]  ¦  category[4,32,0]  𝄀
+11  ¦  1  𝄀
+12  ¦  1  𝄀
+13  ¦  1
+select id, category from rk where id in (11, 12, 13) order by id;
+➤ id[-5,64,0]  ¦  category[4,32,0]  𝄀
+12  ¦  2  𝄀
+13  ¦  1
+rollback;
+begin;
+insert into rk2 values (130, 'needle needle needle needle', 'new');
+select id from rk2 where match(body) against('needle') and id = 130;
+➤ id[-5,64,0]
+select id from rk2 where body like '%needle%' and id = 130;
+➤ id[-5,64,0]  𝄀
+130
+rollback;
+begin;
+update rk2 set body = 'other filler filler' where id = 120;
+select id, tag from rk2 where match(body) against('needle') and tag = 'live';
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+120  ¦  live
+select id, body like '%needle%' as has_needle from rk2 where id = 120;
+➤ id[-5,64,0]  ¦  has_needle[-6,8,0]  𝄀
+120  ¦  0
 rollback;
 drop database fulltext2_include_recheck;

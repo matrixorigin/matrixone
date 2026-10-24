@@ -380,4 +380,17 @@ explain select id, payload from (select id, payload, match(body) against('needle
 select id from (select id, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc limit 3) as page order by id;
 select id, payload from (select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc limit 3) as page order by id desc;
 
+-- Other shapes the bound cannot see through decline: SQL_CALC_FOUND_ROWS, an aggregate
+-- and a join between the sort and the search.
+-- @regex("Candidate Limit",false)
+explain select sql_calc_found_rows id, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc limit 2;
+-- @regex("Candidate Limit",false)
+explain select payload, max(match(body) against('needle')) as sc from ft_join where match(body) against('needle') group by payload order by sc desc limit 2;
+-- @regex("Candidate Limit",false)
+explain select j.id, t.payload, match(j.body) against('needle') as sc from ft_join j join ft_tie t on j.id = t.id where match(j.body) against('needle') order by sc desc limit 2;
+select sql_calc_found_rows id from ft_join where match(body) against('needle') order by match(body) against('needle') desc limit 2;
+select found_rows();
+select payload, max(match(body) against('needle')) as sc from ft_join where match(body) against('needle') group by payload order by sc desc limit 2;
+select j.id, t.payload from ft_join j join ft_tie t on j.id = t.id where match(j.body) against('needle') order by match(j.body) against('needle') desc, j.id limit 2;
+
 drop database fulltext2_candidate_limit;

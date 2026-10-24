@@ -44,5 +44,70 @@ select count(*) as match_count_on
 from t where match(body) against('rare common' in bm25 mode);
 ➤ match_count_on[-5,64,0]  𝄀
 3
+select count(*) as single_term from t where match(body) against('common' in bm25 mode);
+➤ single_term[-5,64,0]  𝄀
+8
+select count(*) as all_dropped from t where match(body) against('common data' in bm25 mode);
+➤ all_dropped[-5,64,0]  𝄀
+10
+select count(*) as survivor_absent from t where match(body) against('common zzz' in bm25 mode);
+➤ survivor_absent[-5,64,0]  𝄀
+8
+select count(*) as boolean_required from t where match(body) against('+common' in boolean mode);
+➤ boolean_required[-5,64,0]  𝄀
+8
+select count(*) as boolean_either from t where match(body) against('rare common' in boolean mode);
+➤ boolean_either[-5,64,0]  𝄀
+8
+select count(*) as natural_language from t where match(body) against('rare common');
+➤ natural_language[-5,64,0]  𝄀
+3
+select count(*) as filtered_on from t where match(body) against('rare common' in bm25 mode) and id > 3;
+➤ filtered_on[-5,64,0]  𝄀
+0
+set fulltext2_search_df_cutoff = 0.9;
+select count(*) as kept_below from t where match(body) against('rare common' in bm25 mode);
+➤ kept_below[-5,64,0]  𝄀
+8
+set fulltext2_search_df_cutoff = 1.5;
+internal error: convert to the system variable uint type failed
+set fulltext2_search_df_cutoff = -0.1;
+internal error: convert to the system variable uint type failed
+select @@fulltext2_search_df_cutoff as unchanged;
+➤ unchanged[-1,16383,0]  𝄀
+0.9
+set fulltext2_search_df_cutoff = 0;
+select count(*) as filtered_off from t where match(body) against('rare common' in bm25 mode) and id > 3;
+➤ filtered_off[-5,64,0]  𝄀
+5
+select count(*) as all_dropped_off from t where match(body) against('common data' in bm25 mode);
+➤ all_dropped_off[-5,64,0]  𝄀
+10
+select count(*) as boolean_required_off from t where match(body) against('+common' in boolean mode);
+➤ boolean_required_off[-5,64,0]  𝄀
+8
+select count(*) as boolean_either_off from t where match(body) against('rare common' in boolean mode);
+➤ boolean_either_off[-5,64,0]  𝄀
+8
+select count(*) as natural_language_off from t where match(body) against('rare common');
+➤ natural_language_off[-5,64,0]  𝄀
+3
+prepare s1 from 'select count(*) from t where match(body) against(''rare common'' in bm25 mode)';
+execute s1;
+➤ count(*)[-5,64,0]  𝄀
+8
+set fulltext2_search_df_cutoff = 0.7;
+execute s1;
+➤ count(*)[-5,64,0]  𝄀
+3
+set fulltext2_search_df_cutoff = 0.7;
+execute s1;
+➤ count(*)[-5,64,0]  𝄀
+3
+set fulltext2_search_df_cutoff = 0;
+execute s1;
+➤ count(*)[-5,64,0]  𝄀
+8
+deallocate prepare s1;
 set fulltext2_search_df_cutoff = 0;
 drop database ft2_cutoff;

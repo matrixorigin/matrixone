@@ -1215,14 +1215,6 @@ type SourceCommitTSProvider interface {
 	SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error)
 }
 
-// TransactionLocalDeletesProvider is an optional relation capability used by async
-// indexes that bound a search below a join with the source table. It returns the
-// rows the transaction has deleted or updated in the table and not yet committed,
-// which the index cannot see. ok is false when they cannot be counted.
-type TransactionLocalDeletesProvider interface {
-	TransactionLocalDeletedRows(ctx context.Context) (rows uint64, ok bool, err error)
-}
-
 // SourceCommitTSAfterCopyProvider returns committed source mutations while
 // excluding writes made by the current transaction. ALTER COPY has already
 // copied transaction-visible writes; it still must detect commits by other

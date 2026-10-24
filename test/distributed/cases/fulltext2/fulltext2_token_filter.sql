@@ -57,4 +57,19 @@ alter table t alter reindex ft fulltext2 position_free = true;
 select algo_params from mo_catalog.mo_indexes where name = 'ft' and algo_params like '%token_filter%' limit 1;
 select id from t where match(body) against('the fox' in bm25 mode) order by id;
 
+-- No segment holds a stopword posting, on the CREATE build and REINDEX (the CDC tail is
+-- checked in pessimistic_transaction/fulltext2/fulltext2_token_filter_cdc.sql). A
+-- document's indexed length feeds BM25, so 'fox' and 'the the the the fox' score equally
+-- only when the stopwords were stripped; the unfiltered index p scores them differently.
+create table s (id bigint primary key, body text);
+insert into s values (1, 'fox'), (2, 'the the the the fox'), (3, 'bear');
+create fulltext2 index sx on s(body) with parser gojieba position_free = true token_filter = 'stop';
+create table p (id bigint primary key, body text);
+insert into p values (1, 'fox'), (2, 'the the the the fox'), (3, 'bear');
+create fulltext2 index px on p(body) with parser gojieba position_free = true;
+select count(distinct match(body) against('fox' in bm25 mode)) as scores from s where match(body) against('fox' in bm25 mode);
+select count(distinct match(body) against('fox' in bm25 mode)) as scores from p where match(body) against('fox' in bm25 mode);
+alter table s alter reindex sx fulltext2 position_free = true;
+select count(distinct match(body) against('fox' in bm25 mode)) as scores from s where match(body) against('fox' in bm25 mode);
+
 drop database ft2_tokfilter;
