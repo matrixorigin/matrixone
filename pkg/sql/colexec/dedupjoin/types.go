@@ -512,7 +512,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.cleanStableUpdateVecs(proc)
 	ctr.cleanBatch(proc)
 	if ctr.spillEngine != nil {
-		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine.Close(proc)
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()
@@ -535,7 +535,7 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanExprExecutor()
 	ctr.cleanStableUpdateVecs(proc)
 	if ctr.spillEngine != nil {
-		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine.Close(proc)
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()

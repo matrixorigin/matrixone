@@ -205,7 +205,7 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 	ctr.cleanResultBatch(proc)
 	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
-		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine.Close(proc)
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()
@@ -219,7 +219,7 @@ func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed
 	ctr.cleanResultBatch(proc)
 	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
-		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine.Close(proc)
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()

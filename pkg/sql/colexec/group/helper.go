@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -727,10 +728,18 @@ func (ctr *container) openSpillBucket(
 	if bkt.file != nil {
 		return nil
 	}
+	metadata, err := spillcleanup.Reserve()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if metadata != nil {
+			metadata.Release()
+		}
+	}()
 	var (
 		fdToken   *process.ExecutionSpillFDReservation
 		diskToken *process.ExecutionSpillDiskReservation
-		err       error
 	)
 	if ctr.budget != nil {
 		fdToken, err = ctr.budget.ReserveSpillFD(1)
@@ -757,9 +766,11 @@ func (ctr *container) openSpillBucket(
 	bkt.fileFS = spillfs
 	bkt.fdToken = fdToken
 	bkt.diskToken = diskToken
+	bkt.cleanupToken = metadata
+	metadata = nil // the bucket now owns admission, including writer-init errors
 	bkt.writer, err = newGroupSpillWriter(ctr, file, proc.Ctx, diskToken)
 	if err != nil {
-		_ = bkt.free()
+		_ = ctr.freeSpillBucket(bkt)
 		return err
 	}
 	return nil
@@ -1395,13 +1406,13 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 					return false, err
 				}
 				if err := bkt.finishWriting(); err != nil {
-					bkt.free()
+					ctr.freeSpillBucket(bkt)
 					ctr.currentSpillBkt[i] = nil
 					return false, err
 				}
 				ctr.spillBkts.PushBack(bkt)
 			} else {
-				bkt.free()
+				ctr.freeSpillBucket(bkt)
 			}
 			// Ownership has moved to spillBkts or ended at free(). Do not leave
 			// a second source reference behind if a later flush fails/cancels.
@@ -1423,7 +1434,7 @@ func (ctr *container) loadSpilledData(proc *process.Process, opAnalyzer process.
 	bkt := ctr.spillBkts.PopBack().Value
 	defer func() {
 		spillio.DropReadCache(bkt.file)
-		if err := bkt.free(); err != nil && retErr == nil {
+		if err := ctr.freeSpillBucket(bkt); err != nil && retErr == nil {
 			retErr = err
 		}
 		ctr.freeSpillAggList()

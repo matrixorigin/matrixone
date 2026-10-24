@@ -125,7 +125,9 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 					return result, hashbuild.TerminalBudgetError(proc.Ctx, readErr)
 				}
 				if bat == nil {
-					ctr.spillEngine.FinishBucket()
+					if err := ctr.spillEngine.FinishBucket(); err != nil {
+						return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
+					}
 					ctr.state = Finalize
 					continue
 				}
@@ -267,7 +269,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 			); err != nil {
 				ctr.mp.Free()
 				ctr.mp = nil
-				engine.Cleanup(proc)
+				engine.Close(proc)
 				ctr.spillEngine = nil
 				return err
 			}
