@@ -119,8 +119,10 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 				preInsert.ctr.canFreeVecIdx[int(preInsert.ColOffset)+idx] = true
 			}
 		}
-		if preInsert.IsNewUpdate {
+		preserveInput := preInsert.IsNewUpdate || preInsert.PreserveInput
+		if preserveInput {
 			preInsert.ctr.buf = batch.NewOffHeapWithSize(len(bat.Vecs))
+			preInsert.ctr.buf.Attrs = slices.Clone(bat.Attrs)
 		} else {
 			preInsert.ctr.buf = batch.NewOffHeapWithSize(len(preInsert.Attrs))
 			preInsert.ctr.buf.Attrs = slices.Clone(preInsert.Attrs)
@@ -131,7 +133,7 @@ func (preInsert *PreInsert) constructColBuf(proc *proc, bat *batch.Batch, first 
 	// if col is AutoIncr, genAutoIncrCol function may change the vector of this col, we should copy the vec from children vec, so it in canFreeVecIdx
 	// and the other cols of preInsert.Attrs is stable, we just use the vecs of children's vecs
 	vecCnt := len(preInsert.Attrs)
-	if preInsert.IsNewUpdate {
+	if preInsert.IsNewUpdate || preInsert.PreserveInput {
 		vecCnt = len(bat.Vecs)
 	}
 	for idx := 0; idx < vecCnt; idx++ {

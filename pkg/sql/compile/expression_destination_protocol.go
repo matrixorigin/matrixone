@@ -30,6 +30,11 @@ import (
 // their diagnostic order. One send observes its actual destination once; no
 // observation survives a later send, placement, or receiver validation.
 func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipeline, features plan.RemoteExpressionFeatures) error {
+	return validateRemoteExpressionDestinationWithProtocol(proc, p, features, nil)
+}
+
+// Carry every admitted floor to the handshake on the actual execution stream.
+func validateRemoteExpressionDestinationWithProtocol(proc *process.Process, p *pipeline.Pipeline, features plan.RemoteExpressionFeatures, requiredProtocol *int64) error {
 	integerArgumentsVersion := defines.MORPCVersion85
 	if features.SpecialIntegerConsumers {
 		integerArgumentsVersion = defines.MORPCVersion98
@@ -105,6 +110,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.DecimalLiteralSemantics, defines.MORPCVersion89,
 			"exact DECIMAL256 literal semantics require a versioned remote destination",
 			"remote destination does not support exact DECIMAL256 literal semantics (MORPC protocol version %d)"},
+		{pipelineRequiresPartitionFulltextRoute(p), defines.MORPCVersion130,
+			"partitioned FULLTEXT routing requires a versioned remote destination",
+			"remote destination does not support partitioned FULLTEXT routing (MORPC protocol version %d)"},
 		{features.ViewMetadataFunctions, defines.MORPCVersion126,
 			"view metadata remote execution requires a versioned remote destination",
 			"remote destination does not support view metadata functions (MORPC version %d)"},
@@ -152,6 +160,36 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		if !known || observed < gate.version {
 			return moerr.NewNotSupportedNoCtxf(gate.unsupported, gate.version)
 		}
+		if requiredProtocol != nil {
+			*requiredProtocol = max(*requiredProtocol, gate.version)
+		}
 	}
 	return nil
+}
+
+// Lowered children can carry routing metadata without an expression marker.
+// Check the whole wire tree before a send: an older receiver ignores unknown
+// protobuf fields and cannot enforce the new receiver-side admission check.
+func pipelineRequiresPartitionFulltextRoute(p *pipeline.Pipeline) bool {
+	if p == nil {
+		return false
+	}
+	for _, instruction := range p.InstructionList {
+		if preInsert := instruction.GetPreInsert(); preInsert != nil && preInsert.PreserveInput {
+			return true
+		}
+		if update := instruction.GetMultiUpdate(); update != nil {
+			for _, target := range update.UpdateCtxList {
+				if target != nil && target.PartitionIndexCtx != nil {
+					return true
+				}
+			}
+		}
+	}
+	for _, child := range p.Children {
+		if pipelineRequiresPartitionFulltextRoute(child) {
+			return true
+		}
+	}
+	return false
 }

@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -293,4 +294,21 @@ func TestReturningFallbackFeature(t *testing.T) {
 			moerr.NewUnsupportedDML(ctx, "update vector/full-text index"),
 		),
 	))
+}
+
+func TestDMLReturningRejectsSynchronousFulltextPrimaryKeyUpdate(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	base := mock.ctxt.tables["nation"]
+	base.Indexes = []*planpb.IndexDef{{
+		IndexName: "ft", IndexTableName: "ft_entries",
+		IndexAlgo:          catalog.MOIndexFullTextAlgo.ToString(),
+		IndexAlgoTableType: catalog.FullTextIndex_TblType,
+		Parts:              []string{"n_comment"}, TableExist: true,
+	}}
+	stmt, err := parsers.ParseOne(mock.CurrentContext().GetContext(), dialect.MYSQL, "update nation set n_nationkey = 2 where n_nationkey = 1 returning n_nationkey", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	builder := NewQueryBuilder(planpb.Query_UPDATE, mock.CurrentContext(), false, true)
+	_, err = builder.bindUpdate(stmt.(*tree.Update), NewBindContext(builder, nil))
+	require.ErrorContains(t, err, "primary-key UPDATE on synchronous full-text/vector index")
 }
