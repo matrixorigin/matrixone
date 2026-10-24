@@ -47,7 +47,34 @@ func TemporaryTableAccessAllowed(
 		return true
 	}
 	owner, ok := session.(process.TemporaryTableDDL)
-	return ok && owner.OwnsTemporaryTable(database, physical)
+	if !ok {
+		return false
+	}
+	if owner.OwnsTemporaryTable(database, physical) {
+		return true
+	}
+	// Index relations created together with a temporary root are durable
+	// catalog objects, but their hidden physical names are not published in
+	// the session reverse map. Resolve their ownership through the root name;
+	// this also keeps rollback/rebuild paths usable after a new generation is
+	// published.
+	marker := "_" + catalog.IndexTableNamePrefix
+	for offset := strings.Index(physical, marker); offset >= 0; {
+		root := physical[:offset]
+		if root != "" && owner.OwnsTemporaryTable(database, root) {
+			return true
+		}
+		next := offset + len(marker)
+		if next >= len(physical) {
+			break
+		}
+		relative := strings.Index(physical[next:], marker)
+		if relative < 0 {
+			break
+		}
+		offset = next + relative
+	}
+	return false
 }
 
 func isUserVisibleRelationKind(kind string) bool {
