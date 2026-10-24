@@ -52,7 +52,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func runNativeViewSchemaCluster(t *testing.T, run func(embed.ServiceOperator, cnservice.Service)) {
+func nativeViewSchemaShortTempDir(t *testing.T) {
 	t.Helper()
 	// 沿用本地集群 fixture 的短相对路径，避免 macOS Unix socket 路径超限。
 	cwd, err := os.Getwd()
@@ -60,6 +60,11 @@ func runNativeViewSchemaCluster(t *testing.T, run func(embed.ServiceOperator, cn
 	tmp, err := filepath.Rel(cwd, os.TempDir())
 	require.NoError(t, err)
 	t.Setenv("TMPDIR", tmp)
+}
+
+func runNativeViewSchemaCluster(t *testing.T, run func(embed.ServiceOperator, cnservice.Service)) {
+	t.Helper()
+	nativeViewSchemaShortTempDir(t)
 	t.Cleanup(func() { require.NoError(t, embed.CloseSingleCNBaseClusterTests()) })
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		cn, err := cluster.GetCNService(0)
@@ -363,6 +368,15 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, []int32{3}, gotIDs)
 			require.Equal(t, []string{"first"}, gotLabels)
+		})
+		t.Run("cross-consumer DDL snapshots", func(t *testing.T) {
+			testNativeViewMetadataDDLTransitions(t, ctx, cn, svc, database)
+		})
+		t.Run("real protocol prepare cursor and reprepare", func(t *testing.T) {
+			testNativeViewSchemaProtocol(t, ctx, cn, svc, database)
+		})
+		t.Run("supported historical system template", func(t *testing.T) {
+			testNativeViewMetadataHistoricalTemplate(t, ctx, cn, svc, database)
 		})
 	})
 }
@@ -861,6 +875,12 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 					}
 				}
 			})
+		})
+		t.Run("definer invoker and authorization transitions", func(t *testing.T) {
+			testNativeViewMetadataSecurityTransitions(t, ctx, cn, svc, subscriber, system, tenant)
+		})
+		t.Run("publication withdrawal recreation and remapping", func(t *testing.T) {
+			testNativeViewMetadataPublicationTransitions(t, ctx, cn, svc, system, tenant)
 		})
 		_, err = subscriber.ExecContext(ctx, "create user denied identified by 'test123'")
 		require.NoError(t, err)

@@ -2043,7 +2043,7 @@ func sortedViewInfos(
 
 		viewCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 		freeStatements(stmts)
 		if err != nil {
 			getLogger(ses.GetService()).Debug(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
@@ -2051,7 +2051,7 @@ func sortedViewInfos(
 			if err != nil {
 				return nil, err
 			}
-			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 			freeStatements(stmts)
 			if err != nil {
 				// The dependency sort plans every view BEFORE the restore loop, so the
@@ -2906,7 +2906,21 @@ func parseViewCreateSQLForRestore(ctx context.Context, tblInfo *tableInfo, lower
 		return nil, err
 	}
 
+	ctx = plan.WithRestoredViewDefinition(ctx, tblInfo.dbName, tblInfo.tblName, tblInfo.viewDef, tblInfo.createSql)
+	lowerCaseTableNames, err = plan.RestoredViewLowerCaseTableNames(ctx, tblInfo.createSql, lowerCaseTableNames)
+	if err != nil {
+		return nil, err
+	}
 	return parsers.ParseWithSQLMode(ctx, dialect.MYSQL, tblInfo.createSql, lowerCaseTableNames, parserSQLMode)
+}
+
+// The three restore dependency sorts own isolated mutable compiler contexts.
+// Their dependency discovery must use the same creation environment as replay.
+func buildViewCreatePlanForRestore(compCtx plan.CompilerContext, tblInfo *tableInfo, stmt tree.Statement) (*pbplan.Plan, error) {
+	original := compCtx.GetContext()
+	compCtx.SetContext(plan.WithRestoredViewDefinition(original, tblInfo.dbName, tblInfo.tblName, tblInfo.viewDef, tblInfo.createSql))
+	defer compCtx.SetContext(original)
+	return plan.BuildPlan(compCtx, stmt, false)
 }
 
 func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblInfo *tableInfo) error {
@@ -2921,6 +2935,7 @@ func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblI
 	if err != nil {
 		return err
 	}
+	ctx = plan.WithRestoredViewDefinition(ctx, tblInfo.dbName, tblInfo.tblName, tblInfo.viewDef, tblInfo.createSql)
 	return bh.ExecWithSQLMode(ctx, tblInfo.createSql, parserSQLMode)
 }
 
