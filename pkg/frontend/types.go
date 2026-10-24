@@ -269,31 +269,6 @@ type ComputationWrapper interface {
 	BinaryExecute() (bool, string) //binary execute for COM_STMT_EXECUTE
 }
 
-type ColumnInfo interface {
-	GetName() string
-
-	GetType() types.T
-}
-
-var _ ColumnInfo = &engineColumnInfo{}
-
-type TableInfo interface {
-	GetColumns()
-}
-
-type engineColumnInfo struct {
-	name string
-	typ  types.Type
-}
-
-func (ec *engineColumnInfo) GetName() string {
-	return ec.name
-}
-
-func (ec *engineColumnInfo) GetType() types.T {
-	return ec.typ.Oid
-}
-
 type PrepareStmt struct {
 	fieldTypes *plan2.PreparedFieldTypes
 	// A committed type-generation rebuild can fail before execution metadata
@@ -2312,15 +2287,6 @@ type MysqlRrWr interface {
 	MysqlHelper
 }
 
-// MysqlPayloadWriter make final payload for the packet
-type MysqlPayloadWriter interface {
-	OpenRow() error
-	CloseRow() error
-	OpenPayload() error
-	FillPayload() error
-	ClosePayload(bool) error
-}
-
 // BinaryWriter write batch into fileservice
 type BinaryWriter interface {
 	MediaWriter
@@ -2338,11 +2304,6 @@ type StagedBinaryWriter interface {
 
 // CsvWriter write batch into csv file
 type CsvWriter interface {
-	MediaWriter
-}
-
-// MemWriter write batch into memory pool
-type MemWriter interface {
 	MediaWriter
 }
 

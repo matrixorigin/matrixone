@@ -567,53 +567,6 @@ func MergeCkpMeta(
 	return name, err
 }
 
-func ReplayCheckpointEntries(bat *containers.Batch, checkpointVersion int) (entries []*CheckpointEntry, maxGlobalEnd types.TS) {
-	entries = make([]*CheckpointEntry, bat.Length())
-	for i := 0; i < bat.Length(); i++ {
-		start := bat.GetVectorByName(CheckpointAttr_StartTS).Get(i).(types.TS)
-		end := bat.GetVectorByName(CheckpointAttr_EndTS).Get(i).(types.TS)
-		cnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_MetaLocation).Get(i).([]byte))
-		typ := ET_Global
-		if checkpointVersion > 2 {
-			typ = EntryType(bat.GetVectorByName(CheckpointAttr_Type).Get(i).(int8))
-		} else {
-			isIncremental := bat.GetVectorByName(CheckpointAttr_EntryType).Get(i).(bool)
-			if isIncremental {
-				typ = ET_Incremental
-			}
-		}
-		var tableIDLocation objectio.LocationSlice
-		if checkpointVersion > 3 {
-			tableIDLocation = objectio.LocationSlice(bat.GetVectorByName(CheckpointAttr_TableIDLocation).Get(i).([]byte))
-		}
-		version := bat.GetVectorByName(CheckpointAttr_Version).Get(i).(uint32)
-		tnLoc := objectio.Location(bat.GetVectorByName(CheckpointAttr_AllLocations).Get(i).([]byte))
-		var ckpLSN, truncateLSN uint64
-		ckpLSN = bat.GetVectorByName(CheckpointAttr_CheckpointLSN).Get(i).(uint64)
-		truncateLSN = bat.GetVectorByName(CheckpointAttr_TruncateLSN).Get(i).(uint64)
-		checkpointEntry := &CheckpointEntry{
-			start:           start,
-			end:             end,
-			cnLocation:      cnLoc,
-			tnLocation:      tnLoc,
-			tableIDLocation: tableIDLocation,
-			state:           ST_Finished,
-			entryType:       typ,
-			version:         version,
-			ckpLSN:          ckpLSN,
-			truncateLSN:     truncateLSN,
-			doneC:           make(chan struct{}),
-		}
-		entries[i] = checkpointEntry
-		if typ == ET_Global {
-			if end.GT(&maxGlobalEnd) {
-				maxGlobalEnd = end
-			}
-		}
-	}
-	return
-}
-
 type CheckpointReader struct {
 	checkpointEntries []*CheckpointEntry
 	maxGlobalEnd      types.TS

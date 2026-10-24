@@ -3321,16 +3321,6 @@ func AssignAuxIdForExpr(expr *plan.Expr, start int32) int32 {
 	return vertexCnt
 }
 
-func ResetAuxIdForExpr(expr *plan.Expr) {
-	expr.AuxId = 0
-
-	if f, ok := expr.Expr.(*plan.Expr_F); ok {
-		for _, child := range f.F.Args {
-			ResetAuxIdForExpr(child)
-		}
-	}
-}
-
 func ExprType2Type(typ *plan.Type) types.Type {
 	return types.MustTypeFromPlan(*typ)
 }

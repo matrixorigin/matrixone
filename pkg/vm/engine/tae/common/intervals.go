@@ -247,16 +247,3 @@ func NewClosedIntervalsByInterval(i *ClosedInterval) *ClosedIntervals {
 		}},
 	}
 }
-
-func NewClosedIntervalsByIntervals(i *ClosedIntervals) *ClosedIntervals {
-	intervals := &ClosedIntervals{
-		Intervals: make([]*ClosedInterval, len(i.Intervals)),
-	}
-	for i, interval := range i.Intervals {
-		intervals.Intervals[i] = &ClosedInterval{
-			Start: interval.Start,
-			End:   interval.End,
-		}
-	}
-	return intervals
-}

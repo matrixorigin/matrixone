@@ -61,11 +61,6 @@ func MakeDefaultTestPath(module string, t *testing.T) string {
 
 type TestDisttaeEngineOptions func(*TestDisttaeEngine)
 
-func WithDisttaeEngineMPool(mp *mpool.MPool) TestDisttaeEngineOptions {
-	return func(e *TestDisttaeEngine) {
-		e.mp = mp
-	}
-}
 func WithDisttaeEngineInsertEntryMaxCount(v int) TestDisttaeEngineOptions {
 	return func(e *TestDisttaeEngine) {
 		e.insertEntryMaxCount = v
@@ -240,48 +235,6 @@ func EngineDefAddIndex(defs []engine.TableDef, idxColName string) []engine.Table
 		}
 	}
 	return defs
-}
-
-func PlanTableDefBySchema(schema *catalog.Schema, tableId uint64, databaseName string) plan.TableDef {
-	tblDef := plan.TableDef{
-		Pkey: &plan.PrimaryKeyDef{},
-	}
-
-	tblDef.Name = schema.Name
-	tblDef.TblId = tableId
-
-	for idx := range schema.ColDefs {
-		tblDef.Cols = append(tblDef.Cols, &plan.ColDef{
-			ColId:     uint64(schema.ColDefs[idx].Idx),
-			Name:      schema.ColDefs[idx].Name,
-			Hidden:    schema.ColDefs[idx].Hidden,
-			NotNull:   !schema.ColDefs[idx].Nullable(),
-			TblName:   schema.Name,
-			DbName:    databaseName,
-			ClusterBy: schema.ColDefs[idx].ClusterBy,
-			Primary:   schema.ColDefs[idx].IsPrimary(),
-			Pkidx:     int32(schema.GetPrimaryKey().Idx),
-			Typ: plan.Type{
-				Id:          int32(schema.ColDefs[idx].Type.Oid),
-				NotNullable: !schema.ColDefs[idx].Nullable(),
-				Width:       schema.ColDefs[idx].Type.Oid.ToType().Width,
-			},
-			Seqnum: uint32(schema.ColDefs[idx].Idx),
-		})
-	}
-
-	tblDef.Pkey.PkeyColName = schema.GetPrimaryKey().Name
-	tblDef.Pkey.PkeyColId = uint64(schema.GetPrimaryKey().Idx)
-	tblDef.Pkey.Names = append(tblDef.Pkey.Names, schema.GetPrimaryKey().Name)
-	tblDef.Pkey.CompPkeyCol = nil
-	tblDef.Pkey.Cols = append(tblDef.Pkey.Cols, uint64(schema.GetPrimaryKey().Idx))
-
-	tblDef.Name2ColIndex = make(map[string]int32)
-	for idx := range schema.ColDefs {
-		tblDef.Name2ColIndex[schema.ColDefs[idx].Name] = int32(schema.ColDefs[idx].Idx)
-	}
-
-	return tblDef
 }
 
 func NewDefaultTableReader(

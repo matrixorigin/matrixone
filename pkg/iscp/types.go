@@ -135,14 +135,6 @@ type JobStatus struct {
 	ErrorMsg         string
 }
 
-type InitWatermark struct {
-	AccountID uint32
-	TableID   uint64
-	JobName   string
-	JobID     uint64
-	Watermark types.TS
-}
-
 // Intra-System Change Propagation Task Executor
 // iscp executor manages iterations, updates watermarks, and updates the iscp table.
 type ISCPTaskExecutor struct {
