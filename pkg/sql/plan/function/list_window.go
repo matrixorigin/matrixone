@@ -267,6 +267,204 @@ var supportedWindowInNewFramework = []FuncNew{
 			},
 		},
 	},
+	// Technical-indicator window kernels (issue #29949; docs/design/
+	// technical_indicator_window_kernels.md, section 4). WIN_VALUE-class
+	// registrations evaluated by the window operator's indicator state
+	// machine: no aggexec kernel and no aggName. The window binder enforces
+	// the section-4 OVER surface (required ORDER BY, explicit-frame
+	// rejection, constant-integer period in [1, 1024]); argument domains are
+	// shaped here and values are row-admitted at execution.
+	{
+		functionId: SMA,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    checkIndicatorValueArgs,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(_ []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+			},
+		},
+	},
+	{
+		functionId: WMA,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    checkIndicatorValueArgs,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(_ []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+			},
+		},
+	},
+	{
+		functionId: TRIMA,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    checkIndicatorValueArgs,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(_ []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+			},
+		},
+	},
+	{
+		functionId: EMA,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    checkIndicatorValueArgs,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(_ []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+			},
+		},
+	},
+	{
+		functionId: WILDER,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    checkIndicatorValueArgs,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(_ []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+			},
+		},
+	},
+	{
+		functionId: KAMA,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    checkIndicatorValueArgs,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(_ []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+			},
+		},
+	},
+	{
+		functionId: DEMA,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    checkIndicatorValueArgs,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(_ []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+			},
+		},
+	},
+	{
+		functionId: TEMA,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    checkIndicatorValueArgs,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(_ []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+			},
+		},
+	},
+	{
+		functionId: T3,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    checkIndicatorValueArgs,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(_ []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+			},
+		},
+	},
+	{
+		functionId: MMAXDRAWDOWN,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    checkIndicatorValueArgs,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(_ []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+			},
+		},
+	},
+	{
+		functionId: CUMPOSITIVESTREAK,
+		class:      plan.Function_WIN_VALUE,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    checkIndicatorStreakArgs,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isWin:      true,
+				retType: func(_ []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+			},
+		},
+	},
+}
+
+// checkIndicatorValueArgs shapes the (x, n) arguments of the ten period
+// indicator kernels: a numeric series argument and an integer period.
+// checkIndicatorValueArgs admits exactly the two-argument indicator shapes
+// down the window binder's section-4 validation. Value and period domains
+// are decided there with the pinned diagnostics ("argument 1 of <fn> must
+// be numeric", "period argument of <fn> must be a constant integer in
+// [1, 1024]"); a type-shaped rejection here would surface the generic
+// function-parameters error instead and shadow them. The executor mirrors
+// both domains per row (indicatorRowValue, validateIndicatorPeriods).
+func checkIndicatorValueArgs(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 2 {
+		return newCheckResultWithSuccess(0)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
+// checkIndicatorStreakArgs shapes the single (x) argument of
+// cumPositiveStreak; the numeric domain is decided by the window binder's
+// section-4 validation and mirrored per row by indicatorRowValue.
+func checkIndicatorStreakArgs(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 {
+		return newCheckResultWithSuccess(0)
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
 // checkValueWindowDomain gives domainless NULL the same concrete transport

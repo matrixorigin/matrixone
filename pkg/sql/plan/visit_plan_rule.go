@@ -227,14 +227,6 @@ func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_P:
 		pos := int(exprImpl.P.Pos)
 		rule.params[pos] = 0
-		/*
-			if e.Typ.Id == int32(types.T_any) && e.Typ.NotNullable {
-				// is not null, use string
-				rule.mapTypes[pos] = int32(types.T_varchar)
-			} else {
-				rule.mapTypes[pos] = e.Typ.Id
-			}
-		*/
 		return e, nil
 	case *plan.Expr_List:
 		for i := range exprImpl.List.List {
@@ -3193,7 +3185,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 							param.SourceType.Oid == types.T_float64)
 				}
 			}
-			if functionName == "timestamp" && len(originalArgs) == 1 && temporalDirectMarker(originalArgs[i]) {
+			if (functionName == "timestamp" && len(originalArgs) == 1 && temporalDirectMarker(originalArgs[i])) ||
+				((functionName == "date_add" || functionName == "date_sub") && i == 0 &&
+					rawPreparedCalendarMarker(originalArgs[i])) {
 				var known bool
 				rewrittenArg, known, err = rule.preparedRuntimeSourceExpr(paramPos, false)
 				if err != nil {

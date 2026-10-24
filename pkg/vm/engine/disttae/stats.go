@@ -181,10 +181,6 @@ func newUpdateStatsRequest(
 	}
 }
 
-type GlobalStatsConfig struct {
-	LogtailUpdateStatsThreshold int
-}
-
 const optimizerStatsRefreshStripes = 64
 
 type GlobalStatsOption func(s *GlobalStats)

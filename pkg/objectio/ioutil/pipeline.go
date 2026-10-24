@@ -61,24 +61,6 @@ func init() {
 
 type Option func(*IoPipeline)
 
-func WithFetchParallism(num int) Option {
-	return func(p *IoPipeline) {
-		p.options.fetchParallism = num
-	}
-}
-
-func WithPrefetchParallism(num int) Option {
-	return func(p *IoPipeline) {
-		p.options.prefetchParallism = num
-	}
-}
-
-func WithJobFactory(factory IOJobFactory) Option {
-	return func(p *IoPipeline) {
-		p.jobFactory = factory
-	}
-}
-
 func getJob(
 	ctx context.Context,
 	id string,
