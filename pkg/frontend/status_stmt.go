@@ -114,14 +114,14 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 		if ep.needExportToFile() {
+			exportCompleted := false
 			defer func() {
-				// The producer may panic before the ordered drain. Abort first so
-				// abandoned conversion publication cannot block worker cleanup.
-				// The outer statement owner still handles the original panic.
-				panicked := recover()
+				// A producer panic skips the ordered drain. Abort before joining
+				// abandoned publishers; the panic continues to the existing outer
+				// recovery boundary without changing its payload.
 				cause := err
-				if panicked != nil {
-					cause = moerr.ConvertPanicError(execCtx.reqCtx, panicked)
+				if !exportCompleted && cause == nil {
+					cause = context.Canceled
 				}
 				err = ep.finish(cause)
 				if ep.auditEnabled && ses.tStmt != nil {
@@ -129,11 +129,8 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 						outfileFormat(ep.userConfig),
 						ep.auditBytesWritten,
 						ep.auditRowsWritten,
-						panicked == nil && err == nil,
+						exportCompleted && err == nil,
 					)
-				}
-				if panicked != nil {
-					panic(panicked)
 				}
 			}()
 			columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
@@ -180,6 +177,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if err = exportAllDataFromBatches(ep); err != nil {
 				return
 			}
+			exportCompleted = true
 
 		} else {
 			return moerr.NewInternalError(execCtx.reqCtx, "select without it generates the result rows")
