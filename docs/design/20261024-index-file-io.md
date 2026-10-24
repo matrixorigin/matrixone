@@ -94,9 +94,19 @@ would store one copy of identical bytes per snapshot read.
 
 ### Integrity (decision)
 
-No new checksum is added. A base file is verified against the whole-file checksum in its
-metadata row; a CDC tail frame carries a checksum in its own footer. Because reads are
-whole files, these cover every read.
+Decided by @cpegeric, 2026-10-24. A cached index file carries a self-describing
+integrity record (format version, length, checksum); chunk rows never do. The record is
+attached when a file is assembled into the disk cache and removed when a file is split
+into chunks, so the rows keep exactly today's bytes and no format gate is needed.
+
+- When the layer rebuilds a file from its rows, it verifies the bytes against the
+  checksum in the file's metadata row, by the rule of that row's kind (a whole-file
+  checksum for a base file, the frame's own footer checksum for a CDC tail frame), then
+  attaches the record.
+- When a cached file is opened, the record verifies the local copy. The record never
+  leaves the CN, so it uses one checksum for every file kind.
+- The record follows the data, so the file's bytes start at offset zero and a consumer
+  maps them unchanged.
 
 ### Memory
 
@@ -128,9 +138,10 @@ gate, and each algorithm can switch its readers and writers independently.
 1. **Mapping a cached file.** FULLTEXT2 maps whole files. The disk cache exposes no local
    path for an entry today, and it must not evict (or count as free) a file that is still
    mapped. The layer needs a way to hold a cached file open for the life of the mapping.
-2. **CDC tail as files.** The tail grows by appended frames. Each frame becomes its own
-   named file; whether a reader opens frames individually or the layer presents the tail
-   as an ordered list of frame files is to be decided with the incremental-update design.
+2. **CDC tail as files.** Proposed: each frame is one file, whatever the number of chunks
+   it spans; readers open the frame files in order. The frame encoding, which both the
+   vector indexes and FULLTEXT2 already share, moves out of the GPU package so neither
+   depends on it. To be confirmed with the incremental-update design.
 
 ## Validation
 
@@ -146,7 +157,10 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
 - a missing or duplicated chunk fails the read;
 - an aborted write leaves no rows, and no reader reaches its cached file;
 - a rewritten file never serves its previous content;
-- a corrupted cached file or chunk fails verification instead of being served;
+- a corrupted chunk fails verification at rebuild, and a corrupted cached file fails its
+  integrity record at open, instead of being served;
+- the chunk rows written through the layer are byte-identical to those the SQL path writes
+  for the same file;
 - clone, restore and snapshot reads of an index written through the layer behave as
   before, including a snapshot search after a merge, which rebuilds the merged-away
   segment from the rows visible at the snapshot;
