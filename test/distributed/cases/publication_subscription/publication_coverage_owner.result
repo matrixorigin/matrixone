@@ -1,0 +1,66 @@
+drop account if exists cov_owner;
+drop account if exists cov_reader;
+drop account if exists cov_stranger;
+create account cov_owner admin_name = 'admin' identified by '111';
+create account cov_reader admin_name = 'admin' identified by '111';
+create account cov_stranger admin_name = 'admin' identified by '111';
+create database cov_db;
+create table cov_db.t1 (id int primary key, v int);
+create table cov_db.t2 (id int primary key);
+create publication cov_pub database cov_db account cov_reader;
+create publication cov_pub_t1 database cov_db table t1 account cov_reader;
+show publication coverage cov_pub;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+cov_db  ¦  *  𝄀
+cov_db  ¦  t1  𝄀
+cov_db  ¦  t2
+show publication coverage cov_pub_t1;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+cov_db  ¦  t1
+show publication coverage cov_pub;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+cov_db  ¦  *  𝄀
+cov_db  ¦  t1  𝄀
+cov_db  ¦  t2
+show publication coverage cov_pub_t1;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+cov_db  ¦  t1
+show publication coverage cov_pub;
+internal error: account 'cov_stranger' is not allowed to access publication 'cov_pub'
+show publication coverage cov_pub;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+cov_db  ¦  *  𝄀
+cov_db  ¦  t1  𝄀
+cov_db  ¦  t2
+create database cov_db2;
+create table cov_db2.shadow (id int primary key);
+create publication cov_pub database cov_db2 account cov_stranger;
+show publication coverage cov_pub;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+cov_db2  ¦  *  𝄀
+cov_db2  ¦  shadow
+show publication coverage cov_pub;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+cov_db  ¦  *  𝄀
+cov_db  ¦  t1  𝄀
+cov_db  ¦  t2
+show publication coverage cov_pub;
+➤ Database[12,-1,0]  ¦  Table[12,-1,0]  𝄀
+cov_db2  ¦  *  𝄀
+cov_db2  ¦  shadow
+create publication amb_pub database cov_db account cov_stranger;
+create publication amb_pub database cov_db2 account cov_stranger;
+show publication coverage amb_pub;
+internal error: publication name 'amb_pub' is ambiguous: 2 publications with this name owned by accounts 'cov_owner', 'cov_reader' are accessible to account 'cov_stranger'
+show publication coverage amb_pub;
+internal error: publication name 'amb_pub' is ambiguous: 2 publications with this name owned by accounts 'cov_owner', 'cov_reader' are accessible to account 'sys'
+drop publication amb_pub;
+drop publication amb_pub;
+drop publication cov_pub;
+drop publication cov_pub_t1;
+drop database cov_db;
+drop publication cov_pub;
+drop database cov_db2;
+drop account cov_stranger;
+drop account cov_reader;
+drop account cov_owner;

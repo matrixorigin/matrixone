@@ -115,7 +115,9 @@ func NewCheckpointBasedGCJob(
 	for _, opt := range opts {
 		opt(e)
 	}
-	e.fillDefaults()
+	if e.config.canGCCacheSize <= 0 {
+		e.config.canGCCacheSize = Default_CanGC_TailSize
+	}
 	e.GCExecutor = *NewGCExecutor(buffer, isOwner, e.config.canGCCacheSize, mp, fs)
 	return e
 }
@@ -134,18 +136,6 @@ func (e *CheckpointBasedGCJob) Close() error {
 	e.result.vecToGC = nil
 	e.result.filesNotGC = nil
 	return e.GCExecutor.Close()
-}
-
-func (e *CheckpointBasedGCJob) fillDefaults() {
-	if e.config.coarseEstimateRows <= 0 {
-		e.config.coarseEstimateRows = Default_Coarse_EstimateRows
-	}
-	if e.config.coarseProbility <= 0 {
-		e.config.coarseProbility = Default_Coarse_Probility
-	}
-	if e.config.canGCCacheSize <= 0 {
-		e.config.canGCCacheSize = Default_CanGC_TailSize
-	}
 }
 
 func (e *CheckpointBasedGCJob) Execute(ctx context.Context) error {

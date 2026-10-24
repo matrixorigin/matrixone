@@ -23,6 +23,7 @@ from matrixone.sqlalchemy_ext import (
     json_insert,
     json_replace,
     json_set,
+    json_unquote,
 )
 
 from .test_config import online_config
@@ -232,7 +233,13 @@ class TestJSONExtract:
 
     def test_extract_with_filter(self, client, test_table):
         """Test json_extract in WHERE clause."""
-        results = client.query(Product).filter(json_extract(Product.specifications, '$.brand') == '"Dell"').execute()
+        # json_extract returns a JSON-typed value, not a plain string, so use
+        # json_unquote before comparing against a plain Python string.
+        results = (
+            client.query(Product)
+            .filter(json_unquote(json_extract(Product.specifications, '$.brand')) == 'Dell')
+            .execute()
+        )
 
         assert len(results.rows) == 1
         assert results.rows[0][1] == 'Laptop'
@@ -325,7 +332,8 @@ class TestJSONModification:
 
         result = client.query(Product).filter(Product.product_id == 3).first()
         specs = json.loads(result.specifications) if isinstance(result.specifications, str) else result.specifications
-        assert specs['price'] == '499.99'  # Updated
+        # json_replace keeps the numeric Python value as a JSON number.
+        assert specs['price'] == 499.99  # Updated
         assert 'discount' not in specs  # Not added
 
 
@@ -385,7 +393,9 @@ class TestStandardSyntax:
 
     def test_filter_with_dict_syntax(self, client, test_table):
         """Test WHERE with column['key']."""
-        results = client.query(Product).filter(Product.specifications['brand'] == 'Dell').execute()  # Auto-quotes
+        # Compare the plain-text form: .astext removes JSON quoting, matching
+        # how plain string values behave in MySQL/MatrixOne WHERE clauses.
+        results = client.query(Product).filter(Product.specifications['brand'].astext == 'Dell').execute()
 
         assert len(results.rows) == 1
         assert results.rows[0][1] == 'Laptop'

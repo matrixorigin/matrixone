@@ -752,24 +752,8 @@ func (m *MemCache) Update(
 ) error {
 
 	if vector.Policy.Any(SkipMemoryCacheWrites) {
-		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-			c.FileService.Cache.Memory.UpdatePolicySkips.Add(1)
-		}, m.counterSets...)
 		return nil
 	}
-
-	var candidates, admitted, present, pressureSkipped int64
-	defer func() {
-		if candidates == 0 {
-			return
-		}
-		perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-			c.FileService.Cache.Memory.UpdateEntries.Add(candidates)
-			c.FileService.Cache.Memory.UpdateAdmitted.Add(admitted)
-			c.FileService.Cache.Memory.UpdateAlreadyPresent.Add(present)
-			c.FileService.Cache.Memory.UpdatePressureSkips.Add(pressureSkipped)
-		}, m.counterSets...)
-	}()
 
 	path, err := ParsePath(vector.FilePath)
 	if err != nil {
@@ -784,10 +768,8 @@ func (m *MemCache) Update(
 		if entry.fromCache == m {
 			continue
 		}
-		candidates++
 		if !m.cacheAdmissionAllowed(entry.CachedData) {
 			metric.FSCachePressureMemorySkipCounter.Inc()
-			pressureSkipped++
 			continue
 		}
 
@@ -798,7 +780,6 @@ func (m *MemCache) Update(
 		}
 		if !m.cacheAdmissionAllowed(entry.CachedData) {
 			metric.FSCachePressureMemorySkipCounter.Inc()
-			pressureSkipped++
 			continue
 		}
 
@@ -808,20 +789,14 @@ func (m *MemCache) Update(
 			Sz:     entry.Size,
 		}
 		LogEvent(ctx, str_set_memory_cache_entry_begin)
-		inserted, err := m.cache.Set(ctx, key, entry.CachedData)
+		_, err := m.cache.Set(ctx, key, entry.CachedData)
 		LogEvent(ctx, str_set_memory_cache_entry_end)
 		if errors.Is(err, fscache.ErrCacheAdmissionRejected) {
 			metric.FSCachePressureMemorySkipCounter.Inc()
-			pressureSkipped++
 			continue
 		}
 		if err != nil {
 			return err
-		}
-		if inserted {
-			admitted++
-		} else {
-			present++
 		}
 	}
 	return nil
