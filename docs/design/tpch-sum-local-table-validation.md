@@ -6,6 +6,19 @@ Owner: #30847; umbrella #30838.
 
 The grouped SUM change adds tests and benchmarks only. Production SUM code is identical to main; its cache, executor state, arithmetic and update/scatter order are unchanged.
 
+## Regression disposition
+
+The frozen comparison of main `517a0a412b` with the rejected implementation
+`f4beca75c7` measured +14.65% for caller-sized permuted groups and +155.68% for
+the large-call permuted control. Those results are failures, not accepted
+tradeoffs or performance claims for the current head. The range index was
+removed before the current test-only SUM revision; the final diff against
+main contains no production file under `pkg/sql/colexec/aggexec`.
+
+The remaining production change belongs to HAKeeper CN mutation deadlines,
+not SUM execution. The retained tests/benchmarks preserve the real caller's
+256-row boundary and the reordered-ID controls for future optimization work.
+
 ## Review finding and correction
 
 The initial range-rejection optimization built a min/max and empty-slot index once a 255-entry local table filled. Its 8192-row single-call benchmark showed a gain, but group.buildOneBatch calls BatchFill with at most hashmap.UnitLimit (256) rows. In such a call the index can be built for at most the last row, cannot amortize its scans, and regresses reordered group IDs. The initially claimed 5.07x kernel gain does not describe normal grouped execution and is withdrawn.
