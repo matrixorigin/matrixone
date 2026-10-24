@@ -12744,3 +12744,27 @@ func TestPreparedCTASCompileRetryPreservesNamesAndParameters(t *testing.T) {
 		require.Contains(t, got.GetDdl().Query.String(), fmt.Sprintf("sval:%q", fmt.Sprint(value)))
 	}
 }
+
+func TestRedactStatementErrorForLoggingMasksSecrets(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+
+	// a malformed stage statement: the secrets are already cut out of the
+	// parse error near-fragment at the lexer level (#30747/#30746)
+	sql := `create stage bad credentials={'aws_secret_key'='XYZCANARY',`
+	err := doComQuery(ses, execCtx, &UserInput{sql: sql})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "XYZCANARY")
+	require.NotContains(t, ses.GetSqlOfStmt(), "XYZCANARY")
+
+	// the redaction hook leaves both masked and mundane diagnostics stable
+	redacted := redactStatementErrorForLogging(err, sql).Error()
+	require.NotContains(t, redacted, "XYZCANARY")
+
+	mundane := moerr.NewParseErrorNoCtx("SQL parser error: plain syntax issue")
+	require.Same(t, mundane, redactStatementErrorForLogging(mundane, "select 1"))
+}

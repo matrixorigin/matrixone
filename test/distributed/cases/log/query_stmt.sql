@@ -25,6 +25,14 @@ create user if not exists abc1 identified by '123', abc2 identified by '234', ab
 set @uuid_hide_2 = last_uuid();
 create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='123', 'secret_access_key'='123', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'};
 set @uuid_hide_3 = last_uuid();
+-- case 5: hide stage credentials, issue #30747
+create stage bvt_mask_stage URL = 'file:///tmp/mo-bvt' CREDENTIALS = {"AWS_KEY_ID"='AKIAV5CANARY9', "AWS_SECRET_KEY"='SECRETV5CANARY9', "AWS_REGION"='us-east-1'};
+set @uuid_hide_5 = last_uuid();
+alter stage bvt_mask_stage set credentials={'aws_key'='ALTERV5CANARY9', 'aws_secret'='ALTERV5SECCANARY9'};
+set @uuid_hide_6 = last_uuid();
+create stage bvt_mask_bad credentials={'aws_secret_key'='BADV5CANARY9',;
+set @uuid_hide_7 = last_uuid();
+drop stage bvt_mask_stage;
 -- hide /* cloud_user */
 /* cloud_user */select 1;
 set @uuid_hide_4 = last_uuid();

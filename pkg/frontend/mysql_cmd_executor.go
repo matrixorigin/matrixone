@@ -345,6 +345,13 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 		return diagnostic
 	}
 
+	// Credential literals follow the same record-mask rules as the statement
+	// recorder (identified by, access keys, CREDENTIALS option maps). The
+	// successful-statement path already applies them upstream; the failed-parse
+	// diagnostic path passes raw, AST-less text here, and they must apply too
+	// before any truncation keeps a partial secret (#30747). Idempotent.
+	text = parsers.MaskSensitiveLiteralsForLogging(text)
+
 	switch stmt := statement.(type) {
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
 		*tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection:
@@ -366,11 +373,21 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 
 // redactStatementErrorForLogging replaces a parser echo of __mo_query before it
 // reaches a client, statement telemetry, or the terminal statement logger.
+// Parse diagnostics echo the remaining input ("near ..."), and a malformed
+// credential-bearing statement would leak its secrets there as well
+// (#30747/#30746): mask the same credential literals that the statement
+// record masker covers, keeping the rest of the parse diagnostics intact.
 func redactStatementErrorForLogging(err error, text string) error {
-	if err == nil || sqlmongodb.RedactSQLForDiagnostics(text) == text {
+	if err == nil {
 		return err
 	}
-	return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
+	if sqlmongodb.RedactSQLForDiagnostics(text) != text {
+		return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
+	}
+	if masked := parsers.MaskSensitiveLiteralsForLogging(err.Error()); masked != err.Error() {
+		return moerr.NewParseErrorNoCtx(masked)
+	}
+	return err
 }
 
 func refreshProcessStmtProfileForPreparedStmt(proc *process.Process, statement tree.Statement) {

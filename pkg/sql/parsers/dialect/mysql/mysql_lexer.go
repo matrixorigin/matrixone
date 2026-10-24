@@ -288,6 +288,12 @@ type Lexer struct {
 	parseFirst            bool
 	stopLexing            bool
 	statementEnd          int
+	// credentialsState tracks the CREDENTIALS = { ... } option-map context
+	// while tokens flow to the parser (0 none, 1 after the CREDENTIALS
+	// keyword, 2 after '=', 3 inside the map). Error diagnostics echo the
+	// raw remaining input; knowing whether the echo starts inside such a map
+	// keeps the credentials mask effective there (#30747/#30746).
+	credentialsState int
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -406,6 +412,26 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if typ == NOT && l.HasSQLMode(SQLModeHighNotPrecedence) {
 		typ = HIGH_NOT
 	}
+	// Track the CREDENTIALS option-map context so the error diagnostic can
+	// keep masking credential values even when the echo tail starts inside
+	// the map. (#30747/#30746)
+	switch {
+	case l.credentialsState == 1 && typ == int('='):
+		l.credentialsState = 2
+	case l.credentialsState == 2 && typ == int('{'):
+		l.credentialsState = 3
+	case l.credentialsState == 3 && typ == int('}'):
+		l.credentialsState = 0
+	case l.credentialsState == 3:
+		// stay inside the map until the closing brace
+	case typ == CREDENTIALS:
+		l.credentialsState = 1
+	case typ == int(';'):
+		l.credentialsState = 0
+	default:
+		l.credentialsState = 0
+	}
+
 	if typ == OFFSET && l.syntaxLastToken == int(')') && l.lastClosedTableParen && l.scanner.offsetAliasColumnListAhead() {
 		// OFFSET is non-reserved. In a table-factor context, the established
 		// `(...) offset (c1, c2)` syntax is an implicit alias plus column list,
@@ -629,6 +655,11 @@ func (l *Lexer) Error(err string) {
 		lenStr = " (total length " + strconv.Itoa(len(lenStr)) + ")"
 		near = near[:commonutil.UTF8PrefixLen(near, 1024)]
 	}
+	// The remaining input echoes into every downstream parse diagnostic
+	// (client, ERROR log, statement telemetry). Mask credential literals in it
+	// so a malformed credential-bearing statement cannot leak its secrets
+	// (#30747/#30746).
+	near = MaskSensitiveSqlLiteralsWithInitialState(near, l.credentialsState == 3)
 	near = commonutil.Abbreviate(near, -1)
 	l.scanner.LastError = PositionedErr{Err: errMsg, Line: l.scanner.Line, Col: l.scanner.Col, Near: near, LenStr: lenStr}
 }
