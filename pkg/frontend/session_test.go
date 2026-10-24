@@ -1601,6 +1601,7 @@ func TestRetireTemporaryTableRemovesUnknownIndexAliases(t *testing.T) {
 	index := "__mo_tmp_session_db_generation_index"
 	ses.PublishTemporaryTable("db", "root", root)
 	ses.AddTempIndexTable("db", "index", index)
+	ses.PublishTemporaryTable("db", "sibling", "__mo_tmp_session_db_generation_sibling")
 
 	ses.RetireTemporaryTable("db", "root", root, nil)
 
@@ -1608,7 +1609,10 @@ func TestRetireTemporaryTableRemovesUnknownIndexAliases(t *testing.T) {
 	require.False(t, ok)
 	_, ok = ses.GetTempTable("db", "index")
 	require.False(t, ok)
-	require.Empty(t, ses.tempTablesRev)
+	name, ok := ses.GetTempTable("db", "sibling")
+	require.True(t, ok)
+	require.Equal(t, "__mo_tmp_session_db_generation_sibling", name)
+	require.Len(t, ses.tempTablesRev, 1)
 }
 
 func TestSessionTempTableMigrationSnapshot(t *testing.T) {

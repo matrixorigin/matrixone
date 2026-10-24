@@ -107,7 +107,7 @@ func (ses *Session) RetireTemporaryTable(db, alias, physical string, indexes []s
 				continue
 			}
 			identity := ses.tempTableIdentityLocked(key)
-			if identity.dbName == db && name != physical {
+			if identity.dbName == db && identity.internal && name != physical {
 				remove(name)
 			}
 		}
