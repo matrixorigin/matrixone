@@ -14022,7 +14022,7 @@ func lastDayDate(dt types.Date) (types.Date, bool) {
 }
 
 func LastDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
-	_ *process.Process, length int, selectList *FunctionSelectList) error {
+	proc *process.Process, length int, selectList *FunctionSelectList) error {
 	switch ivecs[0].GetType().Oid {
 	case types.T_date:
 		return opUnaryFixedToFixedWithNullCheck[types.Date, types.Date](ivecs, result, length, lastDayDate, selectList)
@@ -14072,6 +14072,9 @@ func LastDay(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			dt = datetime.ToDate()
 		}
 		if err != nil {
+			if calendar, partial := parseIncompleteCalendar(day); partial && calendar.month == 0 {
+				appendIncompleteCalendarWarning(proc, day)
+			}
 			if err := appendDate(0, true); err != nil {
 				return err
 			}

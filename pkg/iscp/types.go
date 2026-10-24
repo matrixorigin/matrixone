@@ -140,7 +140,6 @@ type JobStatus struct {
 type ISCPTaskExecutor struct {
 	tables      *btree.BTreeG[*TableEntry]
 	tableMu     sync.RWMutex
-	packer      *types.Packer
 	mp          *mpool.MPool
 	cnUUID      string
 	txnEngine   engine.Engine
