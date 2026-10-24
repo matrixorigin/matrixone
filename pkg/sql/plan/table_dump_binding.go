@@ -50,7 +50,7 @@ type tableDumpExpressionVisitor struct {
 	hasSpecial            bool
 	hasTimestampAdd       bool
 	hasUnixTimestamp      bool
-	hasJSON                bool
+	hasJSON               bool
 	hasIncompleteTemporal bool
 }
 
@@ -228,7 +228,7 @@ const (
 	tableDumpBindingPreTemporalNullability   tableDumpBindingMode = 1 << 7
 	tableDumpBindingPreUnixTimestampDatetime tableDumpBindingMode = 1 << 8
 	tableDumpBindingPreJSON                  tableDumpBindingMode = 1 << 6
-	tableDumpBindingPreIncompleteTemporal   tableDumpBindingMode = 1 << 10
+	tableDumpBindingPreIncompleteTemporal    tableDumpBindingMode = 1 << 10
 	tableDumpBindingDDLColumnScope           tableDumpBindingMode = 1 << 9
 )
 
