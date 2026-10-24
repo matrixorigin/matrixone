@@ -152,6 +152,11 @@ private temporary directory instead, with no reuse between loads.
 - The share is enabled by default (decision, @cpegeric, 2026-10-24): on upgrade the
   table-data cache shrinks by that share. A runtime resize of the disk cache applies the
   same split to the new size.
+- A CN whose storage backend is local disk has no table-data disk cache, because table
+  data is already local, but it still gets the index-file cache, sized as the same share of
+  the configured disk capacity (decision, @cpegeric, 2026-10-24): rebuilding a file from its
+  rows costs the same on any backend.
+- Only CNs get the cache; TN, LOG and proxy nodes do not serve index searches.
 - Several CNs in one process configured with the same cache directory share it, as they
   share the table-data cache directory today (decision, @cpegeric, 2026-10-24). Files are
   immutable and content-named and every write is a single rename, so sharing is safe; a
