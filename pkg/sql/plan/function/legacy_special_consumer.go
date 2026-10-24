@@ -23,6 +23,18 @@ import (
 type legacySpecialConsumerContextKey struct{}
 type legacyTimestampAddSecondContextKey struct{}
 type legacyDecimalIntegerDivContextKey struct{}
+type legacyUnixTimestampDatetimeContextKey struct{}
+
+// WithLegacyUnixTimestampDatetime reconstructs pre-DATETIME-overload trees
+// only while verifying persisted table expressions during DUMP/LOAD.
+func WithLegacyUnixTimestampDatetime(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyUnixTimestampDatetimeContextKey{}, true)
+}
+
+func LegacyUnixTimestampDatetime(ctx context.Context) bool {
+	value, _ := ctx.Value(legacyUnixTimestampDatetimeContextKey{}).(bool)
+	return value
+}
 
 // WithLegacySpecialConsumers is only for validating pre-migration catalog
 // expressions against their SQL origin in table DUMP/LOAD. It must never be

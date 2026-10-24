@@ -115,6 +115,17 @@ func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 	return false
 }
 
+// GetFunctionValueUnstableByID reports the resolved function's own instability
+// within one execution. Callers must inspect its arguments separately.
+// Execution stability does not relax folding or diagnostic-count restrictions.
+func GetFunctionValueUnstableByID(overloadID int64) (unstable, known bool) {
+	ov, known := GetFunctionByIdWithoutError(overloadID)
+	if !known {
+		return false, false
+	}
+	return ov.IsVolatile() && !ov.executionStable, true
+}
+
 // provenPureValueFunctions lists every SQL builtin registration that is
 // positively proven to evaluate as a pure value transformation: an
 // in-process computation over its own argument vectors with no effects
@@ -567,6 +578,9 @@ func getFunctionByName(
 	}
 
 	check := f.checkArgumentTypes(args, stringDomainModes)
+	if r.fid == UNIX_TIMESTAMP && LegacyUnixTimestampDatetime(ctx) {
+		check = fixedTypeMatch(f.Overloads[:4], args)
+	}
 	if r.fid == INTEGER_DIV && LegacyDecimalIntegerDiv(ctx) {
 		check = legacyIntegerDivCheck(args)
 	}
@@ -1167,8 +1181,13 @@ type overload struct {
 	// TODO: there is not a good place to use that in plan now. the attribute is not effective.
 	cannotParallel bool
 
-	// Volatile overloads can return different values for the same inputs.
+	// Legacy volatile policy also protects execution-time diagnostics and session
+	// settings from folding. It need not imply different values on replay.
 	volatile bool
+	// A positive proof of repeatable values for fixed arguments and execution
+	// context. Folding and diagnostic-count restrictions remain in force.
+	// Unannotated volatile overloads retain conservative identity requirements.
+	executionStable bool
 	// Deterministic values may still emit diagnostics once per evaluated row.
 	// Folding or changing their evaluation count would lose those effects.
 	rowScopedDiagnostics bool
@@ -1176,8 +1195,8 @@ type overload struct {
 	realTimeRelated bool
 }
 
-// IsVolatile reports value instability, independently of diagnostic effects.
-// Use this for deterministic-expression admission, such as generated columns.
+// IsVolatile retains the legacy conservative evaluation policy. For value
+// repeatability within one execution, use GetFunctionValueUnstableByID.
 func (ov *overload) IsVolatile() bool {
 	return ov.volatile
 }
