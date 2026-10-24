@@ -47,7 +47,24 @@ func MaskSensitiveSqlLiteralsWithInitialState(sql string, inCredentialMap bool) 
 	return maskSensitiveSqlLiterals(sql, inCredentialMap)
 }
 
+// MaskStageCredentialLiteralsWithInitialState masks ONLY the values inside a
+// CREDENTIALS = {...} option map (stage credentials, #30747) and leaves every
+// other literal visible. It is used for the parse-error "near" echo, where
+// the pre-existing diagnostics convention keeps e.g. `identified by
+// '<password>'` readable (zz_accesscontrol goldens), while stage credential
+// maps must still be scrubbed even when the echo begins mid-map.
+func MaskStageCredentialLiteralsWithInitialState(sql string, inCredentialMap bool) string {
+	return maskSensitiveSqlLiteralsScoped(sql, inCredentialMap, false)
+}
+
 func maskSensitiveSqlLiterals(sql string, inCredentialMap bool) string {
+	return maskSensitiveSqlLiteralsScoped(sql, inCredentialMap, true)
+}
+
+// maskSensitiveSqlLiteralsScoped is the shared scanner. maskAll controls the
+// identified-by/with and access-key rules; the CREDENTIALS map rule always
+// runs.
+func maskSensitiveSqlLiteralsScoped(sql string, inCredentialMap bool, maskAll bool) string {
 	scanner := NewScanner(dialect.MYSQL, sql)
 	defer PutScanner(scanner)
 	previousToken := 0
@@ -105,6 +122,9 @@ func maskSensitiveSqlLiterals(sql string, inCredentialMap bool) string {
 		}
 		if typ == CREDENTIALS {
 			credState = credAfterKeyword
+			continue
+		}
+		if !maskAll {
 			continue
 		}
 		if typ == IDENTIFIED {

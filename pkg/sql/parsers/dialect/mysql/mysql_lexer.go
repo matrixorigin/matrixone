@@ -656,10 +656,12 @@ func (l *Lexer) Error(err string) {
 		near = near[:commonutil.UTF8PrefixLen(near, 1024)]
 	}
 	// The remaining input echoes into every downstream parse diagnostic
-	// (client, ERROR log, statement telemetry). Mask credential literals in it
-	// so a malformed credential-bearing statement cannot leak its secrets
-	// (#30747/#30746).
-	near = MaskSensitiveSqlLiteralsWithInitialState(near, l.credentialsState == 3)
+	// (client, ERROR log, statement telemetry). Scrub stage CREDENTIALS map
+	// values in it so a malformed credential-bearing statement cannot leak
+	// its cloud secrets (#30747/#30746). Other secret-looking literals (e.g.
+	// identified by) are left alone: the near echo keeps its established,
+	// golden-tested diagnostic shape.
+	near = MaskStageCredentialLiteralsWithInitialState(near, l.credentialsState == 3)
 	near = commonutil.Abbreviate(near, -1)
 	l.scanner.LastError = PositionedErr{Err: errMsg, Line: l.scanner.Line, Col: l.scanner.Col, Near: near, LenStr: lenStr}
 }
