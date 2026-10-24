@@ -5937,11 +5937,6 @@ func executeStmtWithIncrStmt(ses FeSession,
 			panic("need txn handler 3")
 		}
 
-		//!!!NOTE!!!: it does not work
-		//_, txnOp = ses.GetTxnHandler().GetTxn()
-		//if txnOp != nil {
-		//	err = rollbackLastStmt(execCtx, txnOp, err)
-		//}
 	}()
 
 	err = dispatchStmt(ses, statsArr, execCtx)

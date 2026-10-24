@@ -8686,16 +8686,6 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 	return
 }
 
-// do not lock table if lock no rows now.
-// if need to lock table, uncomment these codes
-// func getLockTableAtTheEnd(tableDef *TableDef) bool {
-// if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName || //fake pk, skip
-// 	tableDef.Partition != nil { // unsupport partition table
-// 	return false
-// }
-// return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
-// }
-
 // DbNameOfObjRef return subscription name of ObjectRef if exists, to avoid the mismatching of account id and db name
 func DbNameOfObjRef(objRef *ObjectRef) string {
 	if objRef.SubscriptionName == "" {

@@ -1158,16 +1158,6 @@ var supportedOperators = []FuncNew{
 					return newOpOperatorStrIn().operatorIn
 				},
 			},
-			// {
-			// 	overloadId: 49,
-			// 	args:       []types.T{types.T_array_float32, types.T_tuple},
-			// 	retType: func(parameters []types.Type) types.Type {
-			// 		return types.T_bool.ToType()
-			// 	},
-			// 	newOp: func() executeLogicOfOverload {
-			// 		return newOpOperatorStrIn().operatorIn
-			// 	},
-			// },
 			{
 				overloadId: 25,
 				args:       []types.T{types.T_array_float64, types.T_array_float64},

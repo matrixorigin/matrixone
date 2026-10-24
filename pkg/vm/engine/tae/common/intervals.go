@@ -77,12 +77,6 @@ func (intervals *ClosedIntervals) TryMerge(o *ClosedIntervals) {
 }
 
 func (intervals *ClosedIntervals) Contains(o ClosedIntervals) bool {
-	// sort.Slice(intervals.Intervals, func(i, j int) bool {
-	// 	return intervals.Intervals[i].Start < intervals.Intervals[j].Start
-	// })
-	// sort.Slice(o.Intervals, func(i, j int) bool {
-	// 	return o.Intervals[i].Start < o.Intervals[j].Start
-	// })
 	ilen := len(intervals.Intervals)
 	i := 0
 	for _, oIntervals := range o.Intervals {
@@ -118,12 +112,6 @@ func (intervals *ClosedIntervals) ContainsInt(n uint64) bool {
 	return false
 }
 func (intervals *ClosedIntervals) ContainsInterval(oIntervals ClosedInterval) bool {
-	// sort.Slice(intervals.Intervals, func(i, j int) bool {
-	// 	return intervals.Intervals[i].Start < intervals.Intervals[j].Start
-	// })
-	// sort.Slice(o.Intervals, func(i, j int) bool {
-	// 	return o.Intervals[i].Start < o.Intervals[j].Start
-	// })
 	ilen := len(intervals.Intervals)
 	i := 0
 	contains := false

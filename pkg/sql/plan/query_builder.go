@@ -3056,14 +3056,6 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			})
 		}
 
-		//for _, expr := range node.AggList {
-		//	increaseRefCnt(expr, -1, colRefCnt)
-		//	err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
-		//	if err != nil {
-		//		return nil, err
-		//	}
-		//}
-
 	case plan.Node_SORT, plan.Node_PARTITION:
 		for _, orderBy := range node.OrderBy {
 			increaseRefCnt(orderBy.Expr, 1, colRefCnt)
