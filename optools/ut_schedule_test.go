@@ -262,6 +262,8 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 			}
 			values := strings.Fields(string(out))
 			script := `source ./run_ut.sh UT
+# These cases do not override shards: each requested process gets one generation.
+[[ "$PLAN_RACE_SHARDS" == "$PLAN_RACE_PARALLEL" ]] || exit 93
 function logger() { printf '%s\n' "$*" >> "$CASE_DIR/validation-log"; }
 # Stop at the existing post-validation boundary, before cache/native work.
 function mark_ut_stage() {
