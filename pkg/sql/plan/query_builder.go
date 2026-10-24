@@ -4456,15 +4456,19 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
-		compositePartBlockFilters := builder.collectCompositePartBlockFilters(rootID)
-		builder.mergeFiltersOnCompositeKey(rootID, false)
-		builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
+		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true)
+		if needsLate {
+			builder.mergeFiltersOnCompositeKey(rootID, false)
+			builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
+		}
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
-		builder.appendCompoundKeyBlockFilters(rootID)
-		builder.appendCompositePartBlockFilters(compositePartBlockFilters)
-		sortFilterListByStats(builder.GetContext(), rootID, builder)
-		clear(colRefCnt)
-		builder.countColRefs(rootID, colRefCnt)
+		if needsLate {
+			builder.appendCompoundKeyBlockFilters(rootID)
+			builder.appendCompositePartBlockFilters(compositePartBlockFilters)
+			sortFilterListByStats(builder.GetContext(), rootID, builder)
+			clear(colRefCnt)
+			builder.countColRefs(rootID, colRefCnt)
+		}
 
 		builder.generateRuntimeFilters(rootID)
 		builder.pushdownVectorIndexTopToTableScan(rootID)

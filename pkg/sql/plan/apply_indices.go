@@ -2331,13 +2331,60 @@ type regularIndexAccessCandidate struct {
 	work               float64
 }
 
+// hasPrimaryKeyEquality proves equality on every distinct PK component using
+// the same eligible equality classifier as index matching, without a fact map.
+func hasPrimaryKeyEquality(node *plan.Node) bool {
+	if node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
+		return false
+	}
+	table := node.TableDef
+	parts := table.Pkey.Names
+	if len(parts) == 0 || len(parts) > len(node.FilterList) {
+		return false
+	}
+	for i, name := range parts {
+		pos, ok := table.Name2ColIndex[name]
+		if !ok || pos < 0 || int(pos) >= len(table.Cols) {
+			return false
+		}
+		for _, previous := range parts[:i] {
+			if table.Name2ColIndex[previous] == pos {
+				return false
+			}
+		}
+		found := false
+		for _, filter := range node.FilterList {
+			fn := filter.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 || !hasNonNilFunctionArgs(fn, 2) {
+				continue
+			}
+			kind, col := checkIndexFilter(fn)
+			if kind == EqualIndexCondition && col.RelPos == node.BindingTags[0] && col.ColPos == pos {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) int32 {
 	if len(node.FilterList) == 0 || len(node.TableDef.Indexes) == 0 {
 		return nodeID
 	}
-	builder.addFunctionalIndexFilters(node)
 
 	forceIndex := builder.scanHintsForceIndexes(node)
+	pointBlocked := !forceIndex && hasPrimaryKeyEquality(node)
+	if pointBlocked && node.TableDef.ClusterBy == nil && !catalog.IsFakePkName(node.TableDef.Pkey.PkeyColName) {
+		// A real, physically ordered full PK is already a point lookup.
+		// Do not build or score partial secondary candidates for a singleton.
+		return nodeID
+	}
+	builder.addFunctionalIndexFilters(node)
+
 	preferSortedScan := false
 	for i := range node.FilterList {
 		expr := node.FilterList[i]
@@ -2409,7 +2456,6 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	best := regularIndexAccessCandidate{indexPos: -1, work: math.Inf(1)}
 	fallback := regularIndexAccessCandidate{indexPos: -1}
 	sawScorable := false
-	pointBlocked := !forceIndex && costCtx.hasPrimaryKeyEquality()
 	consider := func(candidate regularIndexAccessCandidate) {
 		idxDef := indexes[candidate.indexPos]
 		work, skip, valid := costCtx.score(idxDef, candidate.filterIdx, candidate.residualLeadingPos, candidate.shape)
@@ -3413,26 +3459,6 @@ func (builder *QueryBuilder) newEncodedRegularIndexCostContext(
 		ctx.valid = finitePositive(ctx.baseWork) && finitePositive(ctx.baseUpperWork)
 	}
 	return ctx
-}
-
-// Only equality on every primary-key component proves a singleton base lookup.
-// A tenant prefix may still cover arbitrarily many rows.
-func (ctx *encodedRegularIndexCostContext) hasPrimaryKeyEquality() bool {
-	if ctx.node == nil || ctx.node.TableDef == nil || ctx.node.TableDef.Pkey == nil || len(ctx.node.TableDef.Pkey.Names) == 0 {
-		return false
-	}
-	for i, name := range ctx.node.TableDef.Pkey.Names {
-		colPos, ok := ctx.node.TableDef.Name2ColIndex[name]
-		if !ok || colPos < 0 || int(colPos) >= len(ctx.equalFilters) || ctx.equalFilters[colPos] < 0 {
-			return false
-		}
-		for _, previous := range ctx.node.TableDef.Pkey.Names[:i] {
-			if ctx.node.TableDef.Name2ColIndex[previous] == colPos {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func (ctx *encodedRegularIndexCostContext) matchPointBackfill(idxDef *IndexDef, ignoreStats bool) []int32 {

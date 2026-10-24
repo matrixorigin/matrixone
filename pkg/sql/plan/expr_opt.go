@@ -46,11 +46,23 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32, beforeInde
 	}
 
 	deferred := compositeKeyFiltersNeedIndexSelection(node.TableDef)
-	if beforeIndexSelection == deferred {
+	if beforeIndexSelection && deferred {
+		// Keep logical normalization before matching, but never hide a key
+		// component behind physical compound-key encoding at this phase.
+		for _, filter := range node.FilterList {
+			if fn := filter.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "or" {
+				node.FilterList = builder.doMergeFiltersOnCompositeKey(false, node.TableDef, node.BindingTags[0], node.FilterList...)
+				break
+			}
+		}
+		// optimizeFilters owns the following fold/statistics refresh.
+		return
+	}
+	if !beforeIndexSelection && !deferred {
 		return
 	}
 
-	newFilterList := builder.doMergeFiltersOnCompositeKey(node.TableDef, node.BindingTags[0], node.FilterList...)
+	newFilterList := builder.doMergeFiltersOnCompositeKey(true, node.TableDef, node.BindingTags[0], node.FilterList...)
 	node.FilterList = newFilterList
 	if beforeIndexSelection {
 		node.Stats = calcScanStats(node, builder)
@@ -636,10 +648,12 @@ type compositePartBlockFilter struct {
 	copy     *plan.Expr
 }
 
-func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32) map[int32][]compositePartBlockFilter {
-	ret := make(map[int32][]compositePartBlockFilter)
-	if builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2 {
-		return ret
+func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32, deferredOnly bool) (map[int32][]compositePartBlockFilter, bool) {
+	var ret map[int32][]compositePartBlockFilter
+	needsLate := false
+	blockDisabled := builder.optimizerHints != nil && builder.optimizerHints.blockFilter == 2
+	if blockDisabled && !deferredOnly {
+		return nil, false
 	}
 	visited := make(map[int32]struct{})
 	var visit func(int32)
@@ -656,6 +670,21 @@ func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32) map[
 			return
 		}
 
+		if deferredOnly {
+			if len(node.FilterList) == 0 || len(node.BindingTags) == 0 || node.TableDef.Pkey == nil || !compositeKeyFiltersNeedIndexSelection(node.TableDef) {
+				return
+			}
+			needsLate = true
+		} else if compositeKeyFiltersNeedIndexSelection(node.TableDef) && !hasCompoundKeyFilter(node.FilterList, node) {
+			// Fresh deferred scans consume no component predicates in the early
+			// phase. Snapshot them only at late lowering; preserve already-lowered
+			// scans whose component predicates survive only in BlockFilterList.
+			return
+		}
+		if blockDisabled {
+			return
+		}
+
 		partCols := compositeKeyPartColumns(node.TableDef)
 		if len(partCols) < 2 || len(node.BindingTags) == 0 {
 			return
@@ -669,12 +698,15 @@ func (builder *QueryBuilder) collectCompositePartBlockFilters(nodeID int32) map[
 		for _, filter := range filters {
 			if ExprIsZonemappable(builder.GetContext(), filter) &&
 				exprOnlyReferencesColumns(filter, node.BindingTags[0], partCols) {
+				if ret == nil {
+					ret = make(map[int32][]compositePartBlockFilter)
+				}
 				ret[id] = append(ret[id], compositePartBlockFilter{original: filter, copy: DeepCopyExpr(filter)})
 			}
 		}
 	}
 	visit(nodeID)
-	return ret
+	return ret, needsLate
 }
 
 func compositeKeyPartColumns(tableDef *plan.TableDef) map[int32]struct{} {
@@ -2741,9 +2773,12 @@ func compositeKeyPredicateHasMixedJSONNumericArgs(fn *plan.Function) bool {
 	return false
 }
 
-func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDef, tableTag int32, filters ...*plan.Expr) []*plan.Expr {
+func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(lowerCompoundKey bool, tableDef *plan.TableDef, tableTag int32, filters ...*plan.Expr) []*plan.Expr {
 	sortkeyIdx := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
-	col2filter := make(map[int32]int)
+	var col2filter map[int32]int
+	if lowerCompoundKey {
+		col2filter = make(map[int32]int)
+	}
 	Parts := tableDef.Pkey.Names
 	numParts := len(Parts)
 	if tableDef.ClusterBy != nil && util.JudgeIsCompositeClusterByColumn(tableDef.ClusterBy.Name) {
@@ -2772,6 +2807,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 
 		funcName := fn.Func.ObjName
+		if !lowerCompoundKey && funcName != "=" && funcName != "or" {
+			continue
+		}
 		if funcName == "=" {
 			if !hasNonNilFunctionArgs(fn, 2) {
 				continue
@@ -2785,7 +2823,9 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				continue
 			}
 
-			col2filter[col.ColPos] = i
+			if lowerCompoundKey {
+				col2filter[col.ColPos] = i
+			}
 		} else if funcName == "between" {
 			if !hasNonNilFunctionArgs(fn, 3) {
 				continue
@@ -2857,7 +2897,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 				if subFn.Func.ObjName == "=" || subFn.Func.ObjName == "in" {
 					if numParts > 1 {
-						newArgs := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, subExpr)
+						newArgs := builder.doMergeFiltersOnCompositeKey(lowerCompoundKey, tableDef, tableTag, subExpr)
 						if len(newArgs) == 0 {
 							newOrArgs = append(newOrArgs, subExpr)
 							continue
@@ -2868,7 +2908,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 					var andArgs []*plan.Expr
 					flattenLogicalExpressions(subExpr, "and", &andArgs)
 
-					newArgs := builder.doMergeFiltersOnCompositeKey(tableDef, tableTag, andArgs...)
+					newArgs := builder.doMergeFiltersOnCompositeKey(lowerCompoundKey, tableDef, tableTag, andArgs...)
 					if len(newArgs) == 1 {
 						subExpr = newArgs[0]
 					} else {
@@ -3028,7 +3068,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 
 			if len(newOrArgs) == 1 {
 				filters[i] = newOrArgs[0]
-				if firstEquiExpr != nil {
+				if lowerCompoundKey && firstEquiExpr != nil {
 					colPos := firstEquiExpr.GetF().Args[0].GetCol().ColPos
 					if colPos != sortkeyIdx {
 						col2filter[colPos] = i
@@ -3040,7 +3080,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		}
 	}
 
-	if numParts == 1 {
+	if !lowerCompoundKey || numParts == 1 {
 		return filters
 	}
 
