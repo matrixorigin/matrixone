@@ -21,6 +21,7 @@ import (
 	"math"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,11 +31,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
-func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
+func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32, beforeIndexSelection bool) {
 	node := builder.qry.Nodes[nodeID]
 	if node.NodeType != plan.Node_TABLE_SCAN {
 		for _, childID := range node.Children {
-			builder.mergeFiltersOnCompositeKey(childID)
+			builder.mergeFiltersOnCompositeKey(childID, beforeIndexSelection)
 		}
 
 		return
@@ -44,10 +45,35 @@ func (builder *QueryBuilder) mergeFiltersOnCompositeKey(nodeID int32) {
 		return
 	}
 
+	deferred := compositeKeyFiltersNeedIndexSelection(node.TableDef)
+	if beforeIndexSelection == deferred {
+		return
+	}
+
 	newFilterList := builder.doMergeFiltersOnCompositeKey(node.TableDef, node.BindingTags[0], node.FilterList...)
 	node.FilterList = newFilterList
-	node.Stats = calcScanStats(node, builder)
-	resetHashMapStats(node.Stats)
+	if beforeIndexSelection {
+		node.Stats = calcScanStats(node, builder)
+		resetHashMapStats(node.Stats)
+	} else {
+		// Lower only after index consumers have used the logical predicates.
+		// Preserve distribution decisions; the following stats pass does too.
+		foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, nodeID, true)
+	}
+}
+
+// Secondary access matching needs the component predicates, not their physical
+// compound encoding. Keep one logical FilterList until that consumer finishes.
+func compositeKeyFiltersNeedIndexSelection(table *plan.TableDef) bool {
+	if table == nil {
+		return false
+	}
+	for _, index := range table.Indexes {
+		if index != nil && index.TableExist && catalog.IsRegularIndexAlgo(index.IndexAlgo) && !isSpatialIndexDef(index) {
+			return len(compositeKeyPartColumns(table)) > 1
+		}
+	}
+	return false
 }
 
 func comparisonCastSource(expr *plan.Expr) *plan.Expr {

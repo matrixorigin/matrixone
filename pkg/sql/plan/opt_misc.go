@@ -2483,7 +2483,7 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
 	compositePartBlockFilters := builder.collectCompositePartBlockFilters(rootID)
-	builder.mergeFiltersOnCompositeKey(rootID)
+	builder.mergeFiltersOnCompositeKey(rootID, true)
 	builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
 	builder.optimizeDateFormatExpr(rootID)
