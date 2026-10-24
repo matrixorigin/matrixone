@@ -870,33 +870,6 @@ func maskOnePrepareLiteral(sql string, scanner *Scanner, previousToken *int,
 	return effStart, scanner.Pos, body, true
 }
 
-// decodeSqlLiteralContent decodes a quoted literal body into its payload:
-// doubled delimiter bytes collapse into one and, unless the
-// NO_BACKSLASH_ESCAPES mode applies, a backslash quoting the delimiter or
-// another backslash folds into that byte. Other escape sequences keep their
-// exact two-byte shape so the round trip stays faithful for arbitrary
-// content; the re-encode below restores a valid literal for the same mode.
-func decodeSqlLiteralContent(content string, quote byte, mode SQLModeFlags) string {
-	backslash := !mode.Has(SQLModeNoBackslashEscapes)
-	var b strings.Builder
-	b.Grow(len(content))
-	for i := 0; i < len(content); i++ {
-		c := content[i]
-		if backslash && c == '\\' && i+1 < len(content) && (content[i+1] == quote || content[i+1] == '\\') {
-			b.WriteByte(content[i+1])
-			i++
-			continue
-		}
-		if c == quote && i+1 < len(content) && content[i+1] == quote {
-			b.WriteByte(quote)
-			i++
-			continue
-		}
-		b.WriteByte(c)
-	}
-	return b.String()
-}
-
 // encodeSqlLiteralContent re-encodes a masked payload for a quoted literal:
 // delimiter bytes double (valid under any SQL mode) and, when backslash
 // escapes apply, backslash bytes double as well, so the result reads back as
