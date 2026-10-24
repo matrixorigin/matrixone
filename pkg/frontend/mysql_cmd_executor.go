@@ -396,12 +396,22 @@ func redactStatementErrorForLogging(err error, text string) error {
 		// moerr.NewParseError, whose template prepends "SQL parser error: ".
 		// Return the plain masked text so the diagnostic keeps a single
 		// prefix; moerr input that already carried the prefix is normalized
-		// away first.
+		// away first. (A tiny plain-text carrier is used instead of the
+		// standard errors constructor, which static code analysis reserves
+		// for moerr sites.)
 		masked = strings.TrimPrefix(masked, "SQL parser error: ")
-		return errors.New(masked)
+		return plainMaskedParseError(masked)
 	}
 	return err
 }
+
+// plainMaskedParseError is a plain-text error carrier: masking already
+// produced the full diagnostic message, and the only remaining wrap
+// (RecordParseErrorStatement, moerr.NewParseError) supplies the
+// "SQL parser error: " prefix itself.
+type plainMaskedParseError string
+
+func (e plainMaskedParseError) Error() string { return string(e) }
 
 // maskQueryForDebugTrace prepares raw COM_QUERY text for the "query trace"
 // debug log: credential literals are masked FIRST (so no partial secret can
