@@ -655,7 +655,6 @@ type QueryBuilder struct {
 	returningRequested         bool
 	bindingReturningProjection bool
 	returningTableDef          *plan.TableDef
-	returningObjRef            *plan.ObjectRef
 	returningTableName         string
 	returningAlias             string
 	returningColPos            map[string]int32
