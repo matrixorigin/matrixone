@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -795,6 +796,7 @@ func TestConcurrentDedupSamePK(t *testing.T) {
 		"same-PK concurrent commit: successes=%d failures=%d duplicates=%d ww-conflicts=%d other=%d rows=%d",
 		successes, failures, duplicates, wwConflicts, otherFailures, tableEntry.GetRows(),
 	)
+	require.Zero(t, otherFailures, "every failed writer must report duplicate entry or WW conflict")
 	it := tableEntry.MakeDataObjectIt()
 	defer it.Release()
 	for ok := it.First(); ok; ok = it.Next() {
@@ -1151,12 +1153,15 @@ func TestTxnManager1(t *testing.T) {
 	assert.Equal(t, expected, seqs)
 }
 
-func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Store) {
+func initTestContext(ctx context.Context, t *testing.T, dir string, decorators ...func(catalog.DataFactory) catalog.DataFactory) (*catalog.Catalog, *txnbase.TxnManager, wal.Store) {
 	fs := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
 	rt := dbutils.NewRuntime(
 		dbutils.WithRuntimeObjectFS(fs),
 	)
-	factory := tables.NewDataFactory(rt, dir)
+	var factory catalog.DataFactory = tables.NewDataFactory(rt, dir)
+	for _, decorate := range decorators {
+		factory = decorate(factory)
+	}
 	c := catalog.MockCatalog(factory)
 	driver := wal.NewLocalHandle(dir, "store", nil)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt),
@@ -1857,7 +1862,18 @@ func TestPrePrepareDedupRangeCoverage(t *testing.T) {
 				}, types.BuildTS(5, 0))
 				entry.AddEntryLocked(obj)
 			}
+			phase := dedupMetricPhase(tc.phase)
+			opposite := dedupMetricFreeze
+			if phase == opposite {
+				opposite = dedupMetricPrePrepare
+			}
+			metric := objectScanMetrics(phase, tc.first, catalog.ObjectListGroupNonAppendableCreate)
+			other := objectScanMetrics(opposite, tc.first, catalog.ObjectListGroupNonAppendableCreate)
+			before := testutil.ToFloat64(metric.operation)
+			oppositeBefore := testutil.ToFloat64(other.operation)
 			require.NoError(t, tbl.PrePrepareDedup(ctx, tc.first, tc.phase, phaseTS))
+			require.Equal(t, before+1, testutil.ToFloat64(metric.operation))
+			require.Equal(t, oppositeBefore, testutil.ToFloat64(other.operation))
 			require.Equal(t, 1, calls[tc.first])
 			require.Equal(t, phaseTS, tbl.getBaseTable(tc.first).dedupTS)
 			require.True(t, tbl.getBaseTable(!tc.first).dedupTS.IsEmpty())

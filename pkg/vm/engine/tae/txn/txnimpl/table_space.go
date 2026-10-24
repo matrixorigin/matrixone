@@ -21,17 +21,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
-	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
 
@@ -51,7 +48,6 @@ type tableSpace struct {
 	preparedRows uint32
 	frozenRows   uint32
 	frozenInfos  int
-	tableHandle  data.TableHandle
 	nobj         handle.Object
 
 	stats         []objectio.ObjectStats
@@ -62,8 +58,8 @@ type tableSpace struct {
 	objs []*objectio.ObjectId
 }
 
-func (space *tableSpace) FreezeApply() error {
-	if err := space.PrepareApply(); err != nil {
+func (space *tableSpace) FreezeApply(ctx context.Context) error {
+	if err := space.PrepareApply(ctx); err != nil {
 		return err
 	}
 	if err := space.ApplyAppend(); err != nil {
@@ -188,7 +184,7 @@ func (space *tableSpace) ApplyAppend() (err error) {
 	return
 }
 
-func (space *tableSpace) PrepareApply() (err error) {
+func (space *tableSpace) PrepareApply(ctx context.Context) (err error) {
 	defer func() {
 		if err != nil {
 			// Close All unclosed Appends: un-reference all the appendable blocks.
@@ -196,7 +192,7 @@ func (space *tableSpace) PrepareApply() (err error) {
 		}
 	}()
 	if space.node != nil {
-		if err = space.prepareApplyANode(space.node, space.preparedRows); err != nil {
+		if err = space.prepareApplyANode(ctx, space.node, space.preparedRows); err != nil {
 			return
 		}
 		space.preparedRows = space.node.Rows()
@@ -210,7 +206,7 @@ func (space *tableSpace) PrepareApply() (err error) {
 	return
 }
 
-func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) (err error) {
+func (space *tableSpace) prepareApplyANode(ctx context.Context, node *anode, startOffset uint32) (err error) {
 	if startOffset == 0 {
 		node.Compact()
 	}
@@ -228,19 +224,20 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) (err
 		vec = node.data.Vecs[space.table.GetLocalSchema(space.isTombstone).PhyAddrKey.Idx]
 	}
 	for appended < node.Rows() {
-		// Only object selection and row reservation are serialized per table.
-		// Rowid construction, txn bookkeeping, and payload application remain
-		// concurrent across transactions.
+		// The table lock owns candidate selection/creation only. A transaction
+		// waiting for an object's writer must not block the other object kind.
 		tableData.LockAppend()
-		if space.tableHandle == nil {
-			space.tableHandle = tableData.GetHandle(space.isTombstone)
+		if err = ctx.Err(); err != nil {
+			tableData.UnlockAppend()
+			return err
 		}
-		appender, err := space.tableHandle.GetAppender()
+		tableHandle := tableData.GetHandle(space.isTombstone)
+		appender, err := tableHandle.GetAppender()
 		if moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound) {
 			// A txn-local handle can still point to an object another txn has
 			// filled. GetAppender clears that stale cache; retry once to resolve
 			// the catalog's current appendable object before creating a new one.
-			appender, err = space.tableHandle.GetAppender()
+			appender, err = tableHandle.GetAppender()
 		}
 		if moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound) {
 			objH, err2 := space.table.CreateObject(space.isTombstone)
@@ -248,8 +245,7 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) (err
 				tableData.UnlockAppend()
 				return err2
 			}
-			appender = space.tableHandle.SetAppender(objH.Fingerprint())
-			// logutil.Info("CreateObject", zap.String("objH", appender.GetID().ObjectString()), zap.String("txn", node.GetTxn().String()))
+			appender = tableHandle.SetAppender(objH.Fingerprint())
 			objH.Close()
 		} else if err != nil {
 			tableData.UnlockAppend()
@@ -261,18 +257,23 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) (err
 			return moerr.NewInternalErrorNoCtx("schema changed, please rollback and retry")
 		}
 
-		// see more notes in flushtabletail.go
-		/// ----------- Choose a ablock ---------
+		// Appendable carriers are independently committed. Publish only the
+		// non-owning candidate here; the referenced appender and object locks
+		// protect the subsequent reservation, not this table-wide mutex.
+		tableData.ApplyHandle(tableHandle, space.isTombstone)
+		tableData.UnlockAppend()
 		appender.LockFreeze()
+		if err = ctx.Err(); err != nil {
+			appender.UnlockFreeze()
+			appender.Close()
+			return err
+		}
 		// no one can touch freeze for now, check it
 		if appender.CheckFreeze() {
 			// freezed, try to find another ablock
 			appender.UnlockFreeze()
-			appenderDesc := appender.PPString()
 			// Unref the appender, otherwise it can't be PrepareCompact(ed) successfully
 			appender.Close()
-			tableData.UnlockAppend()
-			logutil.Info("LockFreeze", zap.String("appender", appenderDesc))
 			continue
 		}
 
@@ -286,19 +287,18 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) (err
 		if err != nil {
 			appender.UnlockFreeze()
 			appender.Close()
-			tableData.UnlockAppend()
 			return err
 		}
 		destOff := anode.GetMaxRow() - toAppend
-		appender.ReserveAppend(destOff, toAppend)
-		// Publish the selected object while appendMu still serializes allocation.
-		// The table keeps only a non-owning candidate; the next txn gets its own
-		// handle and GetAppender validates and references the object before use.
-		tableData.ApplyHandle(space.tableHandle, space.isTombstone)
 		appender.UnlockFreeze()
-		tableData.UnlockAppend()
+		// Materialize the reserved range without holding the table allocator
+		// locks. The appender reference pins the object until this range has an
+		// append context; rollback must retain physical rows even if applying
+		// the payload fails. ReserveAppend is monotonic, so a later reservation
+		// may materialize first without being overwritten here.
+		appender.ReserveAppend(destOff, toAppend)
 		/// ------- Attach AppendNode Successfully -----
-		ctx := &appendCtx{
+		appendContext := &appendCtx{
 			driver: appender,
 			node:   node,
 			anode:  anode,
@@ -306,7 +306,7 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) (err
 			count:  toAppend,
 			dest:   destOff,
 		}
-		space.appends = append(space.appends, ctx)
+		space.appends = append(space.appends, appendContext)
 		if created {
 			space.table.txnEntries.Append(anode)
 			if err = space.table.store.IncreateWriteCnt("prepare apply anode"); err != nil {
@@ -336,8 +336,6 @@ func (space *tableSpace) prepareApplyANode(node *anode, startOffset uint32) (err
 		space.table.store.warChecker.Insert(appender.GetMeta().(*catalog.ObjectEntry))
 		space.table.store.txn.GetMemo().AddObject(space.table.entry.GetDB().ID,
 			id.TableID, id.ObjectID(), space.isTombstone)
-		// logutil.Debugf("%s: toAppend %d, appended %d, blks=%d",
-		// 	id.String(), toAppend, appended, len(space.appends))
 		appended += toAppend
 		if appended == node.Rows() {
 			break

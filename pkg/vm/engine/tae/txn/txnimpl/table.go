@@ -1256,23 +1256,10 @@ func (tbl *txnTable) addObjsWithMetaLoc(
 func (tbl *txnTable) GetByFilter(
 	ctx context.Context, filter *handle.Filter,
 ) (id *common.ID, offset uint32, err error) {
-	lookupPath := "object-scan"
-	defer func() {
-		if err == nil && id != nil {
-			logutil.Info("GetByFilter result",
-				zap.String("table", tbl.dataTable.schema.Name),
-				zap.String("txn", tbl.store.txn.String()),
-				zap.String("path", lookupPath),
-				zap.String("id", id.String()),
-				zap.Uint32("offset", offset),
-			)
-		}
-	}()
 	if filter.Op != handle.FilterEq {
 		panic("logic error")
 	}
 	if tbl.dataTable.tableSpace != nil {
-		lookupPath = "appendable-pk-index"
 		id, offset, err = tbl.dataTable.tableSpace.GetByFilter(filter)
 		if err == nil {
 			return
@@ -1632,7 +1619,7 @@ retryScan:
 	for {
 		tbl.entry.WaitTombstoneObjectCommitted(to)
 		snapshot := tbl.entry.MakeTombstoneObjectSnapshot()
-		_, err = foreachIncrementalObjectWithStats(snapshot, true, from, to, tbl.entry.ID, metricPhase, func(obj *catalog.ObjectEntry) error {
+		err = foreachIncrementalObjectInPhase(snapshot, true, from, to, metricPhase, func(obj *catalog.ObjectEntry) error {
 			objData := obj.GetObjectData()
 			if objData == nil {
 				panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
@@ -1912,14 +1899,14 @@ func (tbl *txnTable) ApplyAppend() (err error) {
 	return
 }
 
-func (tbl *txnTable) FreezeAppend() (err error) {
+func (tbl *txnTable) FreezeAppend(ctx context.Context) (err error) {
 	if tbl.dataTable.tableSpace != nil {
-		if err = tbl.dataTable.tableSpace.FreezeApply(); err != nil {
+		if err = tbl.dataTable.tableSpace.FreezeApply(ctx); err != nil {
 			return err
 		}
 	}
 	if tbl.tombstoneTable != nil && tbl.tombstoneTable.tableSpace != nil {
-		err = tbl.tombstoneTable.tableSpace.FreezeApply()
+		err = tbl.tombstoneTable.tableSpace.FreezeApply(ctx)
 	}
 	return err
 }
@@ -1931,13 +1918,13 @@ func (tbl *txnTable) ReapplyTransferredTombstones() error {
 	return tbl.tombstoneTable.tableSpace.ReapplyFrozen()
 }
 
-func (tbl *txnTable) PrePrepare() (err error) {
-	err = tbl.dataTable.PrePrepare()
+func (tbl *txnTable) PrePrepare(ctx context.Context) (err error) {
+	err = tbl.dataTable.PrePrepare(ctx)
 	if err != nil {
 		return
 	}
 	if tbl.tombstoneTable != nil {
-		err = tbl.tombstoneTable.PrePrepare()
+		err = tbl.tombstoneTable.PrePrepare(ctx)
 	}
 	return
 }
@@ -2218,7 +2205,7 @@ func (tbl *txnTable) DeleteByPhyAddrKeys(
 		anode.isMergeCompact = true
 		if tbl.store.txn.GetTxnState(false) != txnif.TxnStateActive {
 			startOffset := anode.data.Length() - deleteBatch.Length()
-			if err = tbl.tombstoneTable.tableSpace.prepareApplyANode(anode, uint32(startOffset)); err != nil {
+			if err = tbl.tombstoneTable.tableSpace.prepareApplyANode(context.WithoutCancel(tbl.store.ctx), anode, uint32(startOffset)); err != nil {
 				return
 			}
 		}

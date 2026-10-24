@@ -187,21 +187,22 @@ func NewObjectListWithTableID(tableID uint64, isTombstone bool) *ObjectList {
 func (l *ObjectList) SetTableID(tableID uint64) {
 	l.Lock()
 	l.tableID = tableID
-	currentTableID, counts := l.appendMaxMetricSnapshotLocked()
 	l.Unlock()
-	l.publishAppendMaxMetrics(currentTableID, counts)
+	l.publishAppendMaxMetrics()
 }
 
-func (l *ObjectList) appendMaxMetricSnapshotLocked() (uint64, [3]int) {
-	return l.tableID, l.appendMaxCounts
-}
-
-func (l *ObjectList) publishAppendMaxMetrics(tableID uint64, counts [3]int) {
+// Call after releasing the ObjectList lock. Read the authoritative counts only
+// after acquiring publication order, so an older callback cannot restore stale
+// gauges after a newer lifecycle transition has already been published.
+func (l *ObjectList) publishAppendMaxMetrics() {
 	l.metricPublication.Lock()
 	defer l.metricPublication.Unlock()
 	if l.metricPublication.retired {
 		return
 	}
+	l.RLock()
+	tableID, counts := l.tableID, l.appendMaxCounts
+	l.RUnlock()
 	v2.UpdateTxnAObjectMaxCommitState(
 		tableID,
 		l.isTombstone,
@@ -487,9 +488,8 @@ func (l *ObjectList) MarkAppendMaxPending(id *objectio.ObjectId) {
 	next := &objectListTrees{all: trees.all, groups: trees.groups, visible: trees.visible, bookmarks: trees.bookmarks}
 	clearObjectListBookmarks(next)
 	l.trees.Store(next)
-	tableID, counts := l.appendMaxMetricSnapshotLocked()
 	l.Unlock()
-	l.publishAppendMaxMetrics(tableID, counts)
+	l.publishAppendMaxMetrics()
 	l.requestBookmarkRebuild()
 }
 
@@ -499,9 +499,8 @@ func (l *ObjectList) MarkAppendMaxPending(id *objectio.ObjectId) {
 func (l *ObjectList) MarkAppendMaxSealedWaiting(id *objectio.ObjectId) {
 	l.Lock()
 	l.setAppendMaxStateLocked(id, appendMaxStateSealedWaiting)
-	tableID, counts := l.appendMaxMetricSnapshotLocked()
 	l.Unlock()
-	l.publishAppendMaxMetrics(tableID, counts)
+	l.publishAppendMaxMetrics()
 }
 
 // UpdateAppendMaxCommit publishes an exact max for one object. Rebuilding the
@@ -519,9 +518,8 @@ func (l *ObjectList) UpdateAppendMaxCommit(id *objectio.ObjectId, max types.TS) 
 	next := &objectListTrees{all: trees.all, groups: trees.groups, visible: trees.visible, bookmarks: trees.bookmarks}
 	clearObjectListBookmarks(next)
 	l.trees.Store(next)
-	tableID, counts := l.appendMaxMetricSnapshotLocked()
 	l.Unlock()
-	l.publishAppendMaxMetrics(tableID, counts)
+	l.publishAppendMaxMetrics()
 	l.requestBookmarkRebuild()
 }
 
@@ -564,9 +562,8 @@ func (l *ObjectList) MarkRestartSealedPrefix(restartTS types.TS) {
 		clearObjectListBookmarks(next)
 		l.trees.Store(next)
 	}
-	tableID, counts := l.appendMaxMetricSnapshotLocked()
 	l.Unlock()
-	l.publishAppendMaxMetrics(tableID, counts)
+	l.publishAppendMaxMetrics()
 	if marked > 0 {
 		logutil.Debugf(
 			"[ObjectListBookmark] restart sealed prefix tombstone=%v restart_ts=%s objects=%d",
@@ -883,9 +880,8 @@ func (l *ObjectList) UpdateObjectInfo(
 func (l *ObjectList) DeleteAllEntries(id *objectio.ObjectId) error {
 	l.Lock()
 	defer func() {
-		tableID, counts := l.appendMaxMetricSnapshotLocked()
 		l.Unlock()
-		l.publishAppendMaxMetrics(tableID, counts)
+		l.publishAppendMaxMetrics()
 		l.requestBookmarkRebuild()
 	}()
 	index, ok := l.objectID_index[*id]

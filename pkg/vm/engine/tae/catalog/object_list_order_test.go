@@ -33,11 +33,12 @@ func TestObjectListRetiredMetricsCannotRepublish(t *testing.T) {
 	const tableID uint64 = 0xfedcba9876543211
 	before := testutil.CollectAndCount(v2.TxnAObjectMaxCommitStateGauge)
 	list := NewObjectListWithTableID(tableID, false)
-	list.publishAppendMaxMetrics(tableID, [3]int{1, 0, 0})
+	id := objectio.NewObjectid()
+	list.MarkAppendMaxPending(&id)
 	require.Equal(t, before+1, testutil.CollectAndCount(v2.TxnAObjectMaxCommitStateGauge))
 	list.retireMetrics()
 	v2.RemoveTxnAObjectMaxCommitState(tableID)
-	list.publishAppendMaxMetrics(tableID, [3]int{1, 0, 0})
+	list.MarkAppendMaxPending(&id)
 	require.Equal(t, before, testutil.CollectAndCount(v2.TxnAObjectMaxCommitStateGauge))
 }
 
@@ -48,14 +49,15 @@ func TestDatabaseRemovalRetiresChildTableMetrics(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		db, err := c.CreateDBEntry(fmt.Sprintf("metric_gc_%d", i), "", "", nil)
 		require.NoError(t, err)
+		id := objectio.NewObjectid()
 		table, err := db.CreateTableEntry(MockSchema(2, 0), nil, nil)
 		require.NoError(t, err)
-		table.dataObjects.publishAppendMaxMetrics(table.ID, [3]int{1, 0, 0})
-		table.tombstoneObjects.publishAppendMaxMetrics(table.ID, [3]int{0, 1, 0})
+		table.dataObjects.MarkAppendMaxPending(&id)
+		table.tombstoneObjects.MarkAppendMaxPending(&id)
 		require.NoError(t, c.RemoveDBEntry(db))
 		// Simulate a callback already queued before catalog removal.
-		table.dataObjects.publishAppendMaxMetrics(table.ID, [3]int{1, 0, 0})
-		table.tombstoneObjects.publishAppendMaxMetrics(table.ID, [3]int{0, 1, 0})
+		table.dataObjects.MarkAppendMaxPending(&id)
+		table.tombstoneObjects.MarkAppendMaxPending(&id)
 		require.Equal(t, beforeSeries, testutil.CollectAndCount(v2.TxnAObjectMaxCommitStateGauge))
 	}
 }
@@ -632,4 +634,21 @@ func TestObjectListReplayTimestampReordersDropEntry(t *testing.T) {
 	require.Same(t, updatedDrop, nodes[0])
 	require.Same(t, updatedDrop.prevVersion, nodes[1])
 	require.Empty(t, collectVisibleObjectMarkers(list))
+}
+
+func TestObjectListMetricPublicationReadsLatestState(t *testing.T) {
+	const tableID uint64 = 0xfedcba9876543212
+	defer v2.RemoveTxnAObjectMaxCommitState(tableID)
+	list := NewObjectListWithTableID(tableID, false)
+	id := objectio.NewObjectid()
+	list.MarkAppendMaxPending(&id)
+	// A callback can be delayed across later transitions. It must publish the
+	// current state when it finally obtains publication order.
+	latePublication := list.publishAppendMaxMetrics
+	list.MarkAppendMaxSealedWaiting(&id)
+	list.UpdateAppendMaxCommit(&id, types.BuildTS(9, 0))
+	latePublication()
+	label := fmt.Sprint(tableID)
+	require.Equal(t, float64(0), testutil.ToFloat64(v2.TxnAObjectMaxCommitStateGauge.WithLabelValues(label, "data", "pending")))
+	require.Equal(t, float64(1), testutil.ToFloat64(v2.TxnAObjectMaxCommitStateGauge.WithLabelValues(label, "data", "finalized")))
 }
