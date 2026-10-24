@@ -35,3 +35,29 @@ func TestProcessInfoAffectedRowsRoundTrip(t *testing.T) {
 		require.Equal(t, v, out.GetAffectedRows(), "GetAffectedRows=%d", v)
 	}
 }
+
+func TestProcessInfoSelectAndODKUWireFieldsRemainIndependent(t *testing.T) {
+	// Field 17 belongs to upstream SELECT classification. ODKU must use 18
+	// so an ordinal cannot be decoded as the outer statement's SELECT flag.
+	legacy := new(ProcessInfo)
+	require.NoError(t, legacy.Unmarshal([]byte{0x88, 0x01, 0x01}))
+	require.True(t, legacy.StatementRuntimeSelect)
+	require.Zero(t, legacy.OdkuOrdinalBase)
+
+	for _, selectStatement := range []bool{false, true} {
+		info := &ProcessInfo{StatementRuntimeSelect: selectStatement, OdkuOrdinalBase: 700}
+		data, err := info.Marshal()
+		require.NoError(t, err)
+		want := []byte{0x90, 0x01, 0xbc, 0x05}
+		if selectStatement {
+			want = append([]byte{0x88, 0x01, 0x01}, want...)
+		}
+		// Non-nullable nested messages precede these fields even at zero.
+		require.GreaterOrEqual(t, len(data), len(want))
+		require.Equal(t, want, data[len(data)-len(want):])
+		decoded := new(ProcessInfo)
+		require.NoError(t, decoded.Unmarshal(data))
+		require.Equal(t, selectStatement, decoded.StatementRuntimeSelect)
+		require.Equal(t, uint64(700), decoded.OdkuOrdinalBase)
+	}
+}

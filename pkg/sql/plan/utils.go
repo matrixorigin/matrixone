@@ -2000,6 +2000,11 @@ func constantFoldWithPreparedExactSource(
 		}
 		spatialChecked, jsonFeatureChecked = true, true
 	}
+	// Keep the selected-consumer ELT identity visible to remote and persisted
+	// admission. Its executor owns lazy folding of the selected value subtree.
+	if requiresJSON, jsonErr := plan.RequiresMORPCVersion129JSONStringConsumerOverload(expr); jsonErr != nil || requiresJSON {
+		return expr, nil
+	}
 	// Preserve lazy ELT evaluation instead of folding unselected arguments.
 	if functionID == function.ELT && int32(overloadID) == 1 {
 		return expr, nil

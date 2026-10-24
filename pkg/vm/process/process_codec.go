@@ -181,6 +181,8 @@ func (proc *Process) BuildProcessInfo(
 			SqlMode:                resolveSqlMode(proc),
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
+			LastInsertId:           proc.GetLastInsertID(),
+			LastInsertIdSet:        proc.Base.LastInsertID != nil,
 			MaxErrorCount:          uint32(maxErrorCount),
 			MaxErrorCountSet:       maxErrorCountSet,
 		}
@@ -502,6 +504,8 @@ func ConvertToProcessSessionInfo(
 		LCTimeNames:                         sei.LcTimeNames,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
+		LastInsertID:                        sei.LastInsertId,
+		LastInsertIDSet:                     sei.LastInsertIdSet,
 		MaxErrorCount:                       int(sei.MaxErrorCount),
 		MaxErrorCountSet:                    sei.MaxErrorCountSet,
 	}

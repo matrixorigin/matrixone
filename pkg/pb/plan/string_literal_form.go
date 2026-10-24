@@ -398,6 +398,9 @@ const (
 // DynamicTimeResultContracts uses the same epoch for prepared TIME results
 // over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
 type RemoteExpressionFeatures struct {
+	SessionLastInsertIDBaseline   bool
+	ODKUStatementResult           bool
+	JSONMinMaxTypedComparison     bool
 	JSONStringConsumerOverload    bool
 	JSONOpaqueTextContracts       bool
 	LoadFKIgnoreCheck             bool // v125: LOAD IGNORE FK admission and diagnostics
@@ -455,6 +458,7 @@ type RemoteExpressionFeatures struct {
 
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+		features.ODKUStatementResult || features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -947,7 +951,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
+				features.JSONMinMaxTypedComparison = features.JSONMinMaxTypedComparison || IsJSONMinMaxAggregate(fn.Func.Obj, fn.Args)
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				// LAST_INSERT_ID() is function237/overload0; remote evaluation
+				// needs the captured session baseline, not a worker-local zero.
+				features.SessionLastInsertIDBaseline = features.SessionLastInsertIDBaseline || (id == 237 && overload == 0)
 				features.JSONStringConsumerOverload = features.JSONStringConsumerOverload || isRemoteJSONStringConsumerOverload(id, overload)
 				features.JSONOpaqueTextContracts = features.JSONOpaqueTextContracts || isJSONOpaqueTextContract(current, fn, id)
 				if id == loadFKIgnoreCheckFunctionID {
@@ -1208,6 +1216,19 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			return nil
 		})
+	}, func(owner any) {
+		// The same owner walk sees lowered protobuf tracking metadata even
+		// when there are no session-function expressions. Getter interfaces
+		// avoid coupling plan to pipeline, which already imports plan.
+		switch metadata := owner.(type) {
+		case interface{ GetTrackOdkuResult() bool }:
+			features.ODKUStatementResult = features.ODKUStatementResult || metadata.GetTrackOdkuResult()
+		case interface{ GetOdkuResultTracking() bool }:
+			features.ODKUStatementResult = features.ODKUStatementResult || metadata.GetOdkuResultTracking()
+		case *DedupJoinCtx:
+			features.ODKUStatementResult = features.ODKUStatementResult ||
+				(metadata.OdkuOrdinalCol != nil && metadata.OdkuGeneratedCol != nil)
+		}
 	})
 	return
 }
@@ -1688,7 +1709,7 @@ func validateStringLiteralFormsInOwner(owner any) error {
 	})
 }
 
-func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
+func walkExpressionsInOwner(owner any, visitor func(*Expr) error, metadataVisitors ...func(any)) error {
 	seen := make(map[uintptr]struct{})
 	var walk func(reflect.Value) error
 	walk = func(value reflect.Value) error {
@@ -1713,6 +1734,9 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 				return nil
 			}
 			seen[pointer] = struct{}{}
+			for _, observe := range metadataVisitors {
+				observe(value.Interface())
+			}
 			return walk(value.Elem())
 		}
 		switch value.Kind() {
@@ -1787,6 +1811,15 @@ func isRemoteJSONStringConsumerOverload(functionID, overloadID int32) bool {
 	default:
 		return false
 	}
+}
+
+// IsJSONMinMaxAggregate identifies the unchanged MIN/MAX overload zero with a
+// physical JSON argument. DISTINCT sets the high bit of the aggregate identity.
+// Lowered pipelines retain Op and arguments but no outer function expression.
+func IsJSONMinMaxAggregate(op int64, args []*Expr) bool {
+	op = int64(uint64(op) & ^(uint64(1) << 63))
+	return (op == int64(139)<<32 || op == int64(137)<<32) &&
+		len(args) > 0 && args[0] != nil && args[0].Typ.Id == planJSONTypeID
 }
 
 // isJSONOpaqueTextContract fences operations that create subtype-preserving
