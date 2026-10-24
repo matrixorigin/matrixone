@@ -15,7 +15,9 @@
 package frontend
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -82,5 +84,26 @@ func TestNewSnapshotRestoreTempPasswordRandFailure(t *testing.T) {
 	pwd, err := newSnapshotRestoreTempPassword()
 	require.Error(t, err)
 	require.Empty(t, pwd)
+	require.Contains(t, err.Error(), "generate snapshot restore temp password")
+}
+
+// The entropy failure must also propagate out of the account-scan loop: the
+// restore must re-create the dropped account with a random bootstrap
+// password or not at all — never with a fallback.
+func TestGetPastExistsAccountsPropagatesRandFailure(t *testing.T) {
+	orig := snapshotRestoreRandRead
+	snapshotRestoreRandRead = func(b []byte) (int, error) {
+		return 0, errors.New("entropy source unavailable")
+	}
+	t.Cleanup(func() { snapshotRestoreRandRead = orig })
+
+	const ts = 12345
+	bh := &backgroundExecTest{sql2result: make(map[string]ExecResult)}
+	bh.sql2result[fmt.Sprintf(getPastAccountsFmt, int64(ts))] = newMrsForRestoreStringRows(
+		[]string{"account_id", "account_name", "admin_name", "comments"},
+		[][]interface{}{{uint64(42), "acc_past_30752", "adm_30752", ""}})
+
+	_, err := getPastExistsAccounts(context.Background(), "svc-test-30752", bh, "snap_30752", ts)
+	require.Error(t, err)
 	require.Contains(t, err.Error(), "generate snapshot restore temp password")
 }
