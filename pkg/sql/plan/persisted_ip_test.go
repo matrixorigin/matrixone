@@ -902,15 +902,27 @@ func TestPersistedBoundedConditionalStringProtocolAdmission(t *testing.T) {
 	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 	require.NoError(t, err)
 	require.True(t, features.BoundedConditionalStringDomains)
+	require.True(t, features.BinaryAssignmentSemantics, "the binder inserted bounded binary CAST operands")
 
 	required, err := RequiredPersistedExpressionProtocolVersion(expr)
 	require.NoError(t, err)
-	require.Equal(t, int64(defines.MORPCVersion83), required)
+	require.Equal(t, int64(defines.MORPCVersion130), required)
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
 	require.ErrorContains(t,
-		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 83")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion83)
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 130")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
+	require.ErrorContains(t,
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 130")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
+	require.ErrorContains(t,
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 130")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
+	require.ErrorContains(t,
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 130")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
+	require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 130")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
 
 }

@@ -984,7 +984,8 @@ func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Typ
 	if useAssignmentStrictCast(targetType) {
 		funcName = "cast_strict"
 	}
-	if targetType.Id == int32(types.T_blob) || targetType.Id == int32(types.T_text) {
+	if targetType.Id == int32(types.T_binary) || targetType.Id == int32(types.T_varbinary) ||
+		targetType.Id == int32(types.T_blob) || targetType.Id == int32(types.T_text) {
 		return forceAssignmentCastExprWithName(ctx, expr, targetType, funcName)
 	}
 	return makePlan2CastExprWithName(ctx, expr, targetType, funcName)
@@ -994,7 +995,7 @@ func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Typ
 // semantics. Stored procedure declarations and assignments use the same
 // conversion contract as values written to SQL columns.
 func MakePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
-	if isMediumIntPlanType(targetType) {
+	if isMediumIntPlanType(targetType) || targetType.Id == int32(types.T_binary) || targetType.Id == int32(types.T_varbinary) {
 		return forceAssignmentCastExprWithName(
 			ctx, expr, targetType, assignmentCastFunctionName(targetType, false, nil))
 	}

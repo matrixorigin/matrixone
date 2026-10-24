@@ -39,6 +39,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
+		{features.BinaryAssignmentSemantics, defines.MORPCVersion130,
+			"binary assignment semantics require a versioned remote destination",
+			"remote destination does not support binary assignment semantics (MORPC version %d)"},
 		{features.LoadFKIgnoreCheck, defines.MORPCVersion125,
 			"LOAD IGNORE foreign-key filtering requires a versioned remote destination",
 			"remote destination does not support LOAD IGNORE foreign-key filtering (MORPC version %d)"},

@@ -442,6 +442,7 @@ type RemoteExpressionFeatures struct {
 	LegacyIntervalUnits                     bool
 	WeekSessionDefault                      bool
 	MediumIntAssignmentBounds               bool
+	BinaryAssignmentSemantics               bool // v130: byte capacity and physical BINARY replay
 	DateNumericResultContracts              bool
 	TimestampDatetimeResultContracts        bool
 	DynamicTimeResultContracts              bool
@@ -481,7 +482,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.TimestampAddSecondIntervals ||
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault ||
-		features.MediumIntAssignmentBounds ||
+		features.MediumIntAssignmentBounds || features.BinaryAssignmentSemantics ||
 		features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts ||
 		features.DateNumericResultContracts ||
 		features.DecimalStatisticalResultContracts ||
@@ -950,6 +951,15 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
 				features.JSONStringConsumerOverload = features.JSONStringConsumerOverload || isRemoteJSONStringConsumerOverload(id, overload)
 				features.JSONOpaqueTextContracts = features.JSONOpaqueTextContracts || isJSONOpaqueTextContract(current, fn, id)
+				if len(fn.Args) > 1 && fn.Args[1] != nil {
+					target := fn.Args[1].Typ
+					binaryTarget := target.Id == planBinaryTypeID || target.Id == planVarbinaryTypeID
+					assignment := id == mediumIntStrictCastFunctionID || id == mediumIntAssignmentCastFunctionID || id == mediumIntIgnoreCastFunctionID
+					// Positive-width ordinary CAST is the legacy IGNORE fallback.
+					// Explicit BINARY and zero-width opaque CAST keep their ABI.
+					fallback := id == 21 && target.Width > 0 && target.Scale != -1
+					features.BinaryAssignmentSemantics = features.BinaryAssignmentSemantics || (binaryTarget && (assignment || fallback))
+				}
 				if id == loadFKIgnoreCheckFunctionID {
 					features.LoadFKIgnoreCheck = true
 				}
