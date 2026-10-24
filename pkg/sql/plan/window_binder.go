@@ -994,7 +994,7 @@ func bindWindowSpec(
 		if len(w.OrderBy) == 0 {
 			break
 		}
-		typ = &w.OrderBy[0].Expr.Typ
+		typ = rangeFrameBoundType(w.OrderBy[0].Expr.Typ)
 		t := types.Type{Oid: types.T(typ.Id)}
 		if consumerSpecific && !function.GetFunctionIsWinOrderFunByName(funcName) && isNRange(ws.Frame) && !t.IsNumericOrTemporal() {
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with RANGE frame requires ORDER BY expression of numeric or temporal type")
@@ -1051,6 +1051,22 @@ func bindWindowSpec(
 	}
 
 	return w, nil
+}
+
+// rangeFrameBoundType returns the arithmetic domain used to fold and carry a
+// numeric RANGE offset. Narrow signed ORDER BY columns must not narrow the
+// offset itself: key +/- offset is evaluated in the signed 64-bit domain and
+// the window executor maps results outside the physical key domain to an
+// insertion boundary.
+func rangeFrameBoundType(orderType plan.Type) *plan.Type {
+	switch types.T(orderType.Id) {
+	case types.T_int8, types.T_int16, types.T_int32:
+		typ := types.T_int64.ToType().PlanType()
+		return &typ
+	default:
+		typ := orderType
+		return &typ
+	}
 }
 
 func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
