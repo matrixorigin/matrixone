@@ -19,6 +19,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"math/big"
 	"slices"
@@ -237,12 +238,39 @@ func (op *opBuiltInJq) appendJqConstResult(
 func (op *opBuiltInJq) jqImpl(jsonStr []byte, code *gojq.Code) error {
 	// first, turn jsonstr to any
 	var jv any
-	err := json.Unmarshal(jsonStr, &jv)
-	if err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(jsonStr))
+	decoder.UseNumber()
+	if err := decoder.Decode(&jv); err != nil {
+		var validated any
+		if syntaxErr := json.Unmarshal(jsonStr, &validated); syntaxErr != nil {
+			return syntaxErr
+		}
 		return err
+	}
+	// json.Decoder accepts multiple top-level values, while jq() accepts one
+	// JSON document. Preserve that contract and its existing syntax errors.
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		var validated any
+		if syntaxErr := json.Unmarshal(jsonStr, &validated); syntaxErr != nil {
+			return syntaxErr
+		}
+		if err == nil {
+			return fmt.Errorf("multiple top-level JSON values")
+		}
+		return err
+	}
+	if jqNumberOutOfFloat64Range(jv) {
+		// Keep json.Unmarshal's historical range error while retaining the
+		// original json.Number values for integers that float64 can represent.
+		var validated any
+		if err := json.Unmarshal(jsonStr, &validated); err != nil {
+			return err
+		}
 	}
 
 	iter := code.Run(jv)
+	first := true
 	for {
 		v, ok := iter.Next()
 		if !ok {
@@ -253,12 +281,37 @@ func (op *opBuiltInJq) jqImpl(jsonStr []byte, code *gojq.Code) error {
 			return verr
 		}
 
+		if !first {
+			op.enc.w.WriteByte('\n')
+		}
 		if err := op.enc.encode(v); err != nil {
 			op.enc.done()
 			return err
 		}
+		first = false
 	}
 	return nil
+}
+
+func jqNumberOutOfFloat64Range(v any) bool {
+	switch v := v.(type) {
+	case json.Number:
+		_, err := v.Float64()
+		return err != nil
+	case []any:
+		for _, item := range v {
+			if jqNumberOutOfFloat64Range(item) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, item := range v {
+			if jqNumberOutOfFloat64Range(item) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (op *opBuiltInJq) getJqCode(jq string) (*gojq.Code, error) {
