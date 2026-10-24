@@ -151,6 +151,9 @@ func (s *Scope) createSessionTemporaryTable(c *Compile, owner process.TemporaryT
 		}()
 		schemaDB, err := c.e.Database(c.proc.Ctx, db, tx.Txn())
 		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				return moerr.NewNotSupported(c.proc.Ctx, "temporary table in an uncommitted database generation")
+			}
 			return err
 		}
 		if schemaDB.GetDatabaseId(c.proc.Ctx) != parentID {
