@@ -763,6 +763,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 	isHiddens := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_HIDDEN_IDX + MO_OFF))
 	isUnsigneds := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_UNSIGNED_IDX + MO_OFF))
 	isAutos := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX + MO_OFF))
+	notNulls := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATTNOTNULL_IDX + MO_OFF))
 	constraintTypes := bat.GetVector(catalog.MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX + MO_OFF)
 	typs := bat.GetVector(catalog.MO_COLUMNS_ATTTYP_IDX + MO_OFF)
 	hasDefs := vector.MustFixedColWithTypeCheck[int8](bat.GetVector(catalog.MO_COLUMNS_ATTHASDEF_IDX + MO_OFF))
@@ -790,6 +791,7 @@ func ParseColumnsBatchAnd(bat *batch.Batch, f func(map[TableItemKey]Columns)) {
 			IsHidden:        isHiddens[i],
 			IsUnsigned:      isUnsigneds[i],
 			IsAutoIncrement: isAutos[i],
+			NotNull:         notNulls[i],
 			HasDef:          hasDefs[i],
 			HasUpdate:       hasUpdates[i],
 			HasGenerated:    hasGenerateds[i],
@@ -902,6 +904,9 @@ func genTableDefOfColumn(col catalog.Column) engine.TableDef {
 			panic(err)
 		}
 	}
+	// attnotnull is the authoritative nullability field. A default expression
+	// descriptor can be stale or incomplete after a concurrent catalog update.
+	attr.Default.NullAbility = col.NotNull == 0
 	if col.HasUpdate == 1 {
 		attr.OnUpdate = new(plan.OnUpdate)
 		if err := types.Decode(col.UpdateExpr, attr.OnUpdate); err != nil {

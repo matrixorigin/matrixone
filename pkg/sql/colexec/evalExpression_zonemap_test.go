@@ -396,6 +396,41 @@ func TestEvaluateFilterByZoneMapNullComparisonsPrune(t *testing.T) {
 	})
 }
 
+func TestEvaluateFilterByZoneMapM0MissingColumnUsesObjectProof(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := proc.Ctx
+	column := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int32), Width: 32},
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{RelPos: 0, ColPos: 1, Name: "added"},
+		},
+	}
+
+	dataMeta := objectio.BuildMetaData(1, 1)
+	meta := dataMeta.GetBlockMeta(0)
+	proofCtx := objectio.WithM0ProvenObject(ctx, objectio.M0ObjectProof{
+		ObjectName: "customer-object", WrittenSize: 1, SchemaSize: 2,
+	})
+	for _, test := range []struct {
+		name   string
+		funcID string
+		want   bool
+	}{
+		{name: "is null", funcID: "isnull", want: true},
+		{name: "is not null", funcID: "isnotnull", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := plan2.BindFuncExprImplByPlanExpr(ctx, test.funcID, []*plan.Expr{column})
+			require.NoError(t, err)
+			zms, vecs := makeZoneMapEvalScratch(expr)
+			selected := colexec.EvaluateFilterByZoneMap(
+				proofCtx, proc, expr, meta, map[int]int{1: 1}, zms, vecs,
+			)
+			require.Equal(t, test.want, selected)
+		})
+	}
+}
+
 func TestEvaluateFilterByZoneMapInListWithUnknownMemberIsConservative(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx := proc.Ctx

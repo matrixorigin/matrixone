@@ -17,6 +17,7 @@ package colexec
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -58,13 +59,35 @@ func FilterRowIdForDel(proc *process.Process, retBat *batch.Batch, srcBat *batch
 }
 
 func BatchDataNotNullCheck(vecs []*vector.Vector, attrs []string, tableDef *plan.TableDef, ctx context.Context) error {
-	for j := range vecs {
-		if vecs[j] == nil {
+	for j, vec := range vecs {
+		if vec == nil {
 			continue
 		}
-		nsp := vecs[j].GetNulls()
-		if tableDef.Cols[j].Default != nil && !tableDef.Cols[j].Default.NullAbility && nulls.Any(nsp) {
+		col := findColumnByName(tableDef, attrs[j])
+		if col == nil || col.Default == nil || col.Default.NullAbility {
+			continue
+		}
+		if vec.IsConstNull() || nulls.Any(vec.GetNulls()) {
 			return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", attrs[j]))
+		}
+	}
+	return nil
+}
+
+func findColumnByName(tableDef *plan.TableDef, name string) *plan.ColDef {
+	if tableDef == nil {
+		return nil
+	}
+	if index, ok := tableDef.Name2ColIndex[strings.ToLower(name)]; ok &&
+		index >= 0 && int(index) < len(tableDef.Cols) {
+		if col := tableDef.Cols[index]; col != nil &&
+			(strings.EqualFold(col.Name, name) || strings.EqualFold(col.OriginName, name)) {
+			return col
+		}
+	}
+	for _, col := range tableDef.Cols {
+		if col != nil && (strings.EqualFold(col.Name, name) || strings.EqualFold(col.OriginName, name)) {
+			return col
 		}
 	}
 	return nil

@@ -235,7 +235,10 @@ func newCNS3DataWriter(
 
 	sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey := GetSequmsAttrsSortKeyIdxFromTableDef(tableDef)
 
-	factor := ioutil.NewFSinkerImplFactory(sequms, sortKeyIdx, isPrimaryKey, false, tableDef.Version)
+	factor := ioutil.NewFSinkerImplFactory(
+		sequms, sortKeyIdx, isPrimaryKey, false,
+		activeM0WriterSchemaVersion(tableDef, sequms),
+	)
 	if memoryThreshold < 0 {
 		memoryThreshold = WriteS3Threshold
 	}

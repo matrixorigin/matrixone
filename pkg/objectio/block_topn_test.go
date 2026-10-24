@@ -106,7 +106,12 @@ func persistBlockTopNTest(t testing.TB, fs fileservice.FileService, source *vect
 
 func readBlockTopNTest(t testing.TB, fs fileservice.FileService, location Location, mp *mpool.MPool, op *IndexReaderTopOp) *BlockTopNRead {
 	t.Helper()
-	r, err := ReadBlockForTopN(context.Background(), []uint16{3, 0, 1, 2},
+	proof := M0ObjectProof{
+		ObjectName:  location.Name().String(),
+		WrittenSize: 3,
+		SchemaSize:  4,
+	}
+	r, err := ReadBlockForTopN(WithM0ProvenObject(context.Background(), proof), []uint16{3, 0, 1, 2},
 		[]types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.T_array_float32.ToType(), types.T_array_float32.ToType()},
 		fs, location, 2, op, mp, fileservice.SkipFullFilePreloads)
 	require.NoError(t, err)

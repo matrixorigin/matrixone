@@ -49,6 +49,7 @@ func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 								Func: &plan.ObjectRef{ObjName: "count"},
 								Args: []*plan.Expr{
 									{
+										Typ: plan.Type{NotNullable: true},
 										Expr: &plan.Expr_Col{
 											Col: &plan.ColRef{ColPos: 0},
 										},
@@ -177,6 +178,12 @@ func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 			}
 
 			partialResults, partialResultTypes, columnMap := checkAggOptimize(tt.node)
+			if activeM0DisableCountNotNullRewrite {
+				require.Nil(t, partialResults)
+				require.Nil(t, partialResultTypes)
+				require.Nil(t, columnMap)
+				return
+			}
 
 			if tt.wantObjName == "" {
 				require.Nil(t, partialResults)
@@ -197,4 +204,28 @@ func TestCheckAggOptimize_CountNotNull(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCheckAggOptimizeNullableExpression(t *testing.T) {
+	// A NOT NULL base column can become nullable on the outer side of a join.
+	node := &plan.Node{
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+			{Name: "id", Seqnum: 0, Typ: plan.Type{NotNullable: true}},
+		}},
+		AggList: []*plan.Expr{{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "count"},
+			Args: []*plan.Expr{{
+				Typ:  plan.Type{NotNullable: false},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+			}},
+		}}}},
+	}
+	partial, _, columns := checkAggOptimize(node)
+	if activeM0DisableCountNotNullRewrite {
+		require.Nil(t, partial)
+		require.Nil(t, columns)
+	} else {
+		require.Equal(t, map[int]int{0: 0}, columns)
+	}
+	require.Equal(t, "count", node.AggList[0].GetF().Func.ObjName)
 }
