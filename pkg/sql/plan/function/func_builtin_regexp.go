@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"regexp"
 	"regexp/syntax"
 	"slices"
 	"strconv"
@@ -27,6 +26,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexp"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -49,12 +49,7 @@ type opBuiltInRegexp struct {
 }
 
 func newOpBuiltInRegexp() *opBuiltInRegexp {
-	return &opBuiltInRegexp{
-		regMap: regexpSet{
-			mp:  make(map[regexpCacheKey]*regexp.Regexp, mapSizeForRegexp),
-			icu: make(map[regexpCacheKey]*regexp2Matcher, mapSizeForRegexp),
-		},
-	}
+	return &opBuiltInRegexp{}
 }
 
 func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1135,7 +1130,7 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 
 		patternString := functionUtil.QuickBytesToStr(pattern)
 		binary := regexpMatchUsesBinary(parameters, int(i))
-		if requiresRegexp2Pattern(patternString) {
+		if op.regMap.requiresRegexp2(patternString, pureMatchType, binary) {
 			matcher, err := op.regMap.getRegexp2MatcherWithMatchType(
 				patternString, pureMatchType, binary)
 			if err != nil {
@@ -2031,11 +2026,23 @@ type regexpSet struct {
 	icuBytes      int
 }
 
+func (rs *regexpSet) requiresRegexp2(pat, matchType string, binary bool) bool {
+	key := regexpCacheKey{pattern: pat, matchType: matchType, binary: binary, binaryCaseFold: binary && strings.ContainsRune(matchType, 'i')}
+	if _, ok := rs.mp[key]; ok {
+		return false
+	}
+	if _, ok := rs.icu[key]; ok {
+		return true
+	}
+	return requiresRegexp2Pattern(pat)
+}
+
 func (rs *regexpSet) getRegularMatcher(pat string) (*regexp.Regexp, error) {
 	return rs.getRegularMatcherWithMode(pat, false)
 }
 
 type regexpCacheKey struct {
+	matchType      string
 	pattern        string
 	binary         bool
 	binaryCaseFold bool
@@ -2053,9 +2060,11 @@ func (rs *regexpSet) getRegularMatcherInfoWithMode(pat string, binary bool) (*re
 func (rs *regexpSet) getRegularMatcherInfoWithBinaryCaseFold(
 	pat string, binary bool, binaryCaseFold bool,
 ) (*regexp.Regexp, bool, error) {
-	var err error
+	return rs.getRegularMatcherInfoForKey(regexpCacheKey{pattern: pat, binary: binary, binaryCaseFold: binaryCaseFold})
+}
 
-	key := regexpCacheKey{pattern: pat, binary: binary, binaryCaseFold: binaryCaseFold}
+func (rs *regexpSet) getRegularMatcherInfoForKey(key regexpCacheKey) (*regexp.Regexp, bool, error) {
+	var err error
 	reg, ok := rs.mp[key]
 	if !ok {
 		if len(rs.mp)+len(rs.icu) >= mapSizeForRegexp {
@@ -2064,22 +2073,35 @@ func (rs *regexpSet) getRegularMatcherInfoWithBinaryCaseFold(
 
 		// pat can be a zero-copy string backed by a reusable input vector. Both
 		// map keys and regexp expressions must outlive the current data block.
-		pat = strings.Clone(pat)
-		key.pattern = pat
-		expression := pat
-		if binary {
-			expression, err = encodeBinaryRegexpPattern(pat, binaryCaseFold)
+		key.pattern = strings.Clone(key.pattern)
+		key.matchType = strings.Clone(key.matchType)
+		expression := regexpPatternWithPureMatchTypeRE2(key.pattern, key.matchType)
+		if key.binary {
+			expression, err = encodeBinaryRegexpPattern(expression, key.binaryCaseFold)
 			if err != nil {
 				return nil, false, err
 			}
 		}
-		reg, err = regexp.Compile(expression)
+		lineMode := regexp.UnixLines
+		if regexpMatchTypeWideMultiline(key.matchType) {
+			lineMode = regexp.WideTextLines
+			if key.binary {
+				lineMode = regexp.WideBinaryLines
+				if key.binaryCaseFold {
+					lineMode = regexp.WideBinaryFoldLines
+				}
+			}
+		}
+		reg, err = regexp.CompileWithLineMode(expression, lineMode)
 		if err != nil {
 			return nil, false, err
 		}
 		parsed, parseErr := syntax.Parse(expression, syntax.Perl)
 		if parseErr != nil {
 			return nil, false, parseErr
+		}
+		if rs.mp == nil {
+			rs.mp = make(map[regexpCacheKey]*regexp.Regexp, mapSizeForRegexp)
 		}
 		if rs.mayMatchEmpty == nil {
 			rs.mayMatchEmpty = make(map[regexpCacheKey]bool, mapSizeForRegexp)
@@ -2198,7 +2220,7 @@ func (rs *regexpSet) validateRegexpBeforeNullableResultWithMatchType(
 	pureMatchType string,
 ) error {
 	if laterArgumentIsNull {
-		if requiresRegexp2Pattern(pat) {
+		if rs.requiresRegexp2(pat, pureMatchType, binary) {
 			if err := validateRegexpPattern(pat); err != nil {
 				return err
 			}
@@ -2357,7 +2379,7 @@ func (rs *regexpSet) regularSubstrWithMatchType(
 	subjectIsBinary bool,
 	pureMatchType string,
 ) (match bool, substr string, err error) {
-	if requiresRegexp2Pattern(pat) {
+	if rs.requiresRegexp2(pat, pureMatchType, subjectIsBinary) {
 		return rs.regexp2SubstrWithMatchType(
 			pat, str, pos, occurrence, subjectIsBinary, pureMatchType)
 	}
@@ -2405,7 +2427,7 @@ func (rs *regexpSet) regularReplaceWithMatchType(
 	if err = validateRegexpPattern(pat); err != nil {
 		return "", err
 	}
-	if requiresRegexp2Pattern(pat) {
+	if rs.requiresRegexp2(pat, pureMatchType, subjectIsBinary) {
 		return rs.regexp2ReplaceWithMatchType(
 			pat, str, repl, pos, occurrence, subjectIsBinary, pureMatchType)
 	}
@@ -2507,7 +2529,7 @@ func (rs *regexpSet) regularInstrWithMatchType(
 	subjectIsBinary bool,
 	pureMatchType string,
 ) (index int64, err error) {
-	if requiresRegexp2Pattern(pat) {
+	if rs.requiresRegexp2(pat, pureMatchType, subjectIsBinary) {
 		return rs.regexp2InstrWithMatchType(
 			pat, str, pos, occurrence, retOption, subjectIsBinary, pureMatchType)
 	}
@@ -2686,14 +2708,11 @@ func (rs *regexpSet) regexpVisitAtOrAfterWithMatchType(
 	visited := int64(0)
 	nextStart := startByte
 	for nextStart <= len(str) {
-		start, end, found, err := rs.regexpFindAtOrAfterWithMatchType(
-			reg, pat, str, nextStart, subjectIsBinary, pureMatchType)
-		if err != nil {
-			return err
-		}
-		if !found {
+		indices := reg.FindStringIndexAt(str, nextStart)
+		if indices == nil {
 			break
 		}
+		start, end := indices[0], indices[1]
 		visit(start, end)
 		visited++
 		if limit > 0 && visited >= limit {
@@ -2756,50 +2775,6 @@ func (rs *regexpSet) regexpReplaceAllAtOrAfterWithMatchType(
 		}
 	}
 	return result, nil
-}
-
-// regexpFindAtOrAfterWithMatchType supplies context lost by slicing at
-// startByte. It consumes exactly the preceding text unit, then lazily searches
-// for the original pattern. This keeps ^, multiline ^, and word boundaries
-// relative to the original subject while excluding matches before startByte.
-// The wrapped matcher is cached with the ordinary pattern matchers.
-func (rs *regexpSet) regexpFindAtOrAfterWithMatchType(
-	reg *regexp.Regexp,
-	pat, str string,
-	startByte int,
-	subjectIsBinary bool,
-	pureMatchType string,
-) (start, end int, found bool, err error) {
-	if startByte <= 0 {
-		indices := reg.FindStringIndex(str)
-		if indices == nil {
-			return 0, 0, false, nil
-		}
-		return indices[0], indices[1], true, nil
-	}
-	if startByte > len(str) {
-		return 0, 0, false, nil
-	}
-
-	_, size := utf8.DecodeLastRuneInString(str[:startByte])
-	contextStart := startByte - size
-	if size < 1 {
-		contextStart = startByte - 1
-	}
-	wrappedPattern := regexpPositionSearchPattern(pat, pureMatchType)
-	wrapped, _, err := rs.getRegularMatcherInfoWithBinaryCaseFold(
-		wrappedPattern,
-		subjectIsBinary,
-		subjectIsBinary && strings.ContainsRune(pureMatchType, 'i'),
-	)
-	if err != nil {
-		return 0, 0, false, err
-	}
-	indices := wrapped.FindStringSubmatchIndex(str[contextStart:])
-	if len(indices) < 4 || indices[2] < 0 {
-		return 0, 0, false, nil
-	}
-	return contextStart + indices[2], contextStart + indices[3], true, nil
 }
 
 func regexpAdvancePosition(str string, offset int) int {
@@ -3138,72 +3113,164 @@ func (rs *regexpSet) getRegularLikeMatcherForPureMatchTypeWithMode(
 	return reg, err
 }
 
-func regexpPatternWithPureMatchType(pat, pureMatchType string) string {
-	if pureMatchType == "" {
-		return pat
-	}
-	return "(?" + pureMatchType + ")" + pat
+// regexpMatchTypeUnixLines reports whether the (pure) match_type marker
+// requests MySQL's Unix-only line-ending multiline behavior (u).
+func regexpMatchTypeUnixLines(pureMatchType string) bool {
+	return strings.ContainsRune(pureMatchType, 'u')
 }
 
-// regexpPositionSearchPattern wraps a user pattern so matching can start at a
-// later subject position without changing the original anchor context. A
-// trailing \Q is valid RE2 syntax and quotes through end-of-pattern; close that
-// quote before adding wrapper syntax so the generated parenthesis stays syntax.
-func regexpPositionSearchPattern(pat, pureMatchType string) string {
-	const prefix = "^(?s:.)(?s:.*?)("
-	var wrapped strings.Builder
-	wrapped.Grow(len(prefix) + len(pat) + len(pureMatchType) + 5)
-	wrapped.WriteString(prefix)
-	if pureMatchType != "" {
-		wrapped.WriteString("(?")
-		wrapped.WriteString(pureMatchType)
-		wrapped.WriteByte(')')
+// regexpMatchTypeWideMultiline reports whether multiline matching must
+// accept MySQL's wider line-terminator set (m without u): CR, NEL,
+// LINE SEPARATOR, PARAGRAPH SEPARATOR, plus LF (issue #30210). The regular
+// engine applies this policy to assertions; genuine ICU patterns use the
+// equivalent lookaround rewrite below.
+func regexpMatchTypeWideMultiline(pureMatchType string) bool {
+	return strings.ContainsRune(pureMatchType, 'm') && !regexpMatchTypeUnixLines(pureMatchType)
+}
+
+// Zero-width forms of ^ and $ covering the MySQL multiline terminators.
+// CRLF still counts as a single terminator.
+// After a trailing CR/NEL/LS/PS there is no caret match at end of input:
+// ICU/MySQL report no (nonexistent empty) line there. LF keeps Go RE2's
+// native multiline behavior, which already coincides with the database's
+// observable contract for that terminator (mo-bot review on #30646).
+const regexpWideMultilineCaret = `(?:\A|(?<=[\n])|(?<=[\x85\x{2028}\x{2029}])(?!\z)|(?<=\r(?!\n))(?!\z))`
+const regexpWideMultilineDollar = `(?:\z|(?=\r)|(?<!\r)(?=\n)|(?=[\x85\x{2028}\x{2029}]))`
+
+// Binary-mode variants only emit byte escapes: NEL stays (x85 is one byte),
+// while LS/PS are dropped because binary patterns reject escapes above
+// \x{FF} and neither terminator fits in a single byte (#30210 binary fix).
+const regexpWideMultilineCaretBinary = `(?:\A|(?<=[\n])|(?<=\x85)(?!\z)|(?<=\r(?!\n))(?!\z))`
+const regexpWideMultilineDollarBinary = `(?:\z|(?=\r)|(?<!\r)(?=\n)|(?=\x85))`
+
+// rewriteRegexpWideMultilineAnchors rewrites unescaped ^ and $ anchors
+// outside character classes and \Q..\E quotes so multiline matching
+// recognizes MySQL's full line-terminator set (issue #30210). It is a
+// syntax-level transform.
+func rewriteRegexpWideMultilineAnchors(pat string, binary bool, limit int) (string, error) {
+	caret, dollar := regexpWideMultilineCaret, regexpWideMultilineDollar
+	if binary {
+		caret, dollar = regexpWideMultilineCaretBinary, regexpWideMultilineDollarBinary
 	}
+	var b strings.Builder
+	b.Grow(min(len(pat), limit))
 	quoted := false
+	type mode struct{ multiline, freeSpacing bool }
+	current := mode{multiline: true}
+	var scopes []mode
 	for i := 0; i < len(pat); {
-		if pat[i] != '\\' || i+1 == len(pat) {
-			wrapped.WriteByte(pat[i])
-			i++
-			continue
-		}
+		end := i + 1
+		replacement := ""
 		if quoted {
-			if pat[i+1] == 'E' {
-				wrapped.WriteString(pat[i : i+2])
+			if pat[i] == '\\' && i+1 < len(pat) && pat[i+1] == 'E' {
 				quoted = false
-				i += 2
+				end = i + 2
 			} else {
-				// Inside \Q, only the first literal \E ends quoting. Do not
-				// treat a preceding backslash as escaping that terminator.
-				wrapped.WriteByte(pat[i])
-				i++
+				_, size := utf8.DecodeRuneInString(pat[i:])
+				end = i + max(size, 1)
 			}
-			continue
+		} else if current.freeSpacing && pat[i] == '#' {
+			for end < len(pat) && pat[end] != '\n' {
+				end++
+			}
+		} else if strings.HasPrefix(pat[i:], "(?#") {
+			end = len(pat)
+			if close := strings.IndexByte(pat[i+3:], ')'); close >= 0 {
+				end = i + 3 + close + 1
+			}
+		} else {
+			switch pat[i] {
+			case '\\':
+				if i+1 < len(pat) && pat[i+1] == 'Q' {
+					quoted = true
+					end = i + 2
+				} else {
+					end = i + regexpEscapeTokenLen(pat, i)
+				}
+			case '[':
+				end = regexpCharClassEnd(pat, i)
+			case '(':
+				if next, multiline, scoped, ok := regexpInlineOption(pat, i, current.multiline, 'm'); ok {
+					_, freeSpacing, _, _ := regexpInlineFreeSpacing(pat, i, current.freeSpacing)
+					if scoped {
+						scopes = append(scopes, current)
+					}
+					current = mode{multiline: multiline, freeSpacing: freeSpacing}
+					end = next
+				} else {
+					scopes = append(scopes, current)
+				}
+			case ')':
+				if n := len(scopes); n > 0 {
+					current = scopes[n-1]
+					scopes = scopes[:n-1]
+				}
+			case '^':
+				if current.multiline {
+					replacement = caret
+				}
+			case '$':
+				if current.multiline {
+					replacement = dollar
+				}
+			}
 		}
-		_, size := utf8.DecodeRuneInString(pat[i+1:])
-		if size < 1 {
-			size = 1
+		if replacement == "" {
+			replacement = pat[i:end]
 		}
-		end := i + 1 + size
-		wrapped.WriteString(pat[i:end])
-		if pat[i+1] == 'Q' {
-			quoted = true
+		if len(replacement) > limit-b.Len() {
+			return "", regexp2InvalidInputf("regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxPatternBytes)
 		}
+		b.WriteString(replacement)
 		i = end
 	}
-	if quoted {
-		wrapped.WriteString("\\E")
+	return b.String(), nil
+}
+
+// regexpPatternWithPureMatchType is the ICU pattern-size admission owner.
+// Bound raw input and every generated append before allocating an expansion.
+func regexpPatternWithPureMatchType(pat, pureMatchType string, binary bool) (string, error) {
+	if len(pat) > regexp2MaxPatternBytes {
+		return "", regexp2InvalidInputf("regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxPatternBytes)
 	}
-	wrapped.WriteByte(')')
-	return wrapped.String()
+	engineFlags := strings.ReplaceAll(pureMatchType, "u", "")
+	prefix := ""
+	if engineFlags != "" {
+		prefix = "(?" + engineFlags + ")"
+	}
+	limit := regexp2MaxPatternBytes - len(prefix)
+	if regexpMatchTypeWideMultiline(pureMatchType) {
+		var err error
+		pat, err = rewriteRegexpWideMultilineAnchors(pat, binary, limit)
+		if err != nil {
+			return "", err
+		}
+	} else if len(pat) > limit {
+		return "", regexp2InvalidInputf("regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxPatternBytes)
+	}
+	return prefix + pat, nil
+}
+
+// regexpPatternWithPureMatchTypeRE2 folds match_type into the RE2 flag
+// prefix without applying the wide-multiline anchor rewrite: the rewrite is
+// regexp2-only syntax (lookarounds). The regular engine applies its immutable
+// line mode directly when evaluating empty-width assertions.
+func regexpPatternWithPureMatchTypeRE2(pat, pureMatchType string) string {
+	engineFlags := strings.ReplaceAll(pureMatchType, "u", "")
+	if engineFlags == "" {
+		return pat
+	}
+	return "(?" + engineFlags + ")" + pat
 }
 
 func (rs *regexpSet) getRegularMatcherInfoWithMatchType(
 	pat, pureMatchType string,
 	binary bool,
 ) (*regexp.Regexp, bool, error) {
-	rule := regexpPatternWithPureMatchType(pat, pureMatchType)
-	binaryCaseFold := binary && strings.ContainsRune(pureMatchType, 'i')
-	return rs.getRegularMatcherInfoWithBinaryCaseFold(rule, binary, binaryCaseFold)
+	return rs.getRegularMatcherInfoForKey(regexpCacheKey{
+		pattern: pat, matchType: pureMatchType, binary: binary,
+		binaryCaseFold: binary && strings.ContainsRune(pureMatchType, 'i'),
+	})
 }
 
 func (rs *regexpSet) getRegularMatcherWithMatchType(
@@ -3245,7 +3312,7 @@ func (rs *regexpSet) regularLikeWithMode(pat string, str string, matchType strin
 	if err != nil {
 		return false, err
 	}
-	if requiresRegexp2Pattern(pat) {
+	if rs.requiresRegexp2(pat, pureMatchType, binary) {
 		if err := validateRegexpPattern(pat); err != nil {
 			return false, err
 		}
@@ -3278,6 +3345,7 @@ func getPureMatchType(input string) (string, error) {
 	caseType := ""
 	foundn := false
 	foundm := false
+	foundu := false
 
 	for _, c := range input {
 		switch c {
@@ -3298,6 +3366,13 @@ func getPureMatchType(input string) (string, error) {
 		case 'u':
 			// Go regexp uses LF as its only line terminator, which is the
 			// Unix-lines behavior requested by MySQL's explicit u option.
+			// Keep the marker: m must widen its line-terminator set to
+			// MySQL's (CR, NEL, U+2028, U+2029) unless u pins it to LF
+			// (issue #30210).
+			if !foundu {
+				retstring += "u"
+				foundu = true
+			}
 		default:
 			return "", moerr.NewInvalidInputNoCtx("regexp_like got invalid match_type input!")
 		}

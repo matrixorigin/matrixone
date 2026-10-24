@@ -30,7 +30,6 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,7 +40,6 @@ const (
 )
 
 func TestCreateDB1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
@@ -129,7 +127,6 @@ func TestCreateDB1(t *testing.T) {
 //	  | [TXN1]: CREATE DB1-TB1 [OK] | GET TBL [OK]
 //	[TXN1]: CREATE DB1 [OK] | GET DB [OK]
 func TestTableEntry1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
@@ -204,7 +201,6 @@ func TestTableEntry1(t *testing.T) {
 }
 
 func TestDropTableSharesSchemaAndAlterKeepsCopyOnWrite(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
@@ -263,7 +259,6 @@ func TestDropTableSharesSchemaAndAlterKeepsCopyOnWrite(t *testing.T) {
 }
 
 func TestTableEntry2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
@@ -327,7 +322,6 @@ func TestTableEntry2(t *testing.T) {
 }
 
 func TestDB1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
@@ -363,7 +357,6 @@ func TestDB1(t *testing.T) {
 }
 
 func TestTable1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	catalog := MockCatalog(nil)
 	defer catalog.Close()
 
@@ -416,7 +409,6 @@ func TestTable1(t *testing.T) {
 // 4. Txn3 scan "tb" and also only "obj1" found
 // 5. Start Txn4, scan "tb" and both "obj1" and "obj2" found
 func TestObject1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	catalog := MockCatalog(nil)
 	defer catalog.Close()
 	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))

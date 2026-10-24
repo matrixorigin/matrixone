@@ -3557,15 +3557,6 @@ func appendSinkNodeWithTag(builder *QueryBuilder, bindCtx *BindContext, lastNode
 	return lastNodeId
 }
 
-// func appendFuzzyFilterByColExpf(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32) (int32, error) {
-// 	fuzzyFilterNode := &Node{
-// 		NodeType:    plan.Node_FUZZY_FILTER,
-// 		Children:    []int32{lastNodeId},
-// 	}
-// 	lastNodeId = builder.appendNode(fuzzyFilterNode, bindCtx)
-// 	return lastNodeId, nil
-// }
-
 func appendAggCountGroupByColExpr(builder *QueryBuilder, bindCtx *BindContext, lastNodeId int32, colExpr *plan.Expr) (int32, error) {
 	aggExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "starcount", []*Expr{colExpr})
 	if err != nil {
@@ -4098,21 +4089,6 @@ func buildSerialFullAndPKColsProjMasterIndex(builder *QueryBuilder, bindCtx *Bin
 			},
 		},
 	}
-
-	// TODO: verify this with Feng, Ouyuanning and Qingx (not reusing the row_id)
-	//if isUpdate {
-	//	// 2.iii add row_id if Update
-	//	projectProjection = append(projectProjection, &plan.Expr{
-	//		Typ: rowIdType,
-	//		Expr: &plan.Expr_Col{
-	//			Col: &plan.ColRef{
-	//				RelPos: 0,
-	//				ColPos: int32(rowIdPos),
-	//				Name:   catalog.Row_ID,
-	//			},
-	//		},
-	//	})
-	//}
 
 	projectNode := &Node{
 		NodeType:    plan.Node_PROJECT,
@@ -5501,17 +5477,6 @@ func makePreUpdateDeletePlan(
 
 	return lastNodeId, nil
 }
-
-// func getColPos(expr *Expr, colPos map[int32]int32) {
-// 	switch e := expr.Expr.(type) {
-// 	case *plan.Expr_Col:
-// 		colPos[e.Col.ColPos] = 0
-// 	case *plan.Expr_F:
-// 		for _, arg := range e.F.Args {
-// 			getColPos(arg, colPos)
-// 		}
-// 	}
-// }
 
 func appendLockNode(
 	builder *QueryBuilder,

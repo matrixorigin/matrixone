@@ -47,8 +47,10 @@ select count(*) as total from (select category from items order by id desc limit
 select count(rn) as total from (select row_number() over (order by id) as rn from items order by rn desc) s;
 select id from items order by id desc;
 
--- A sort-only failing cast must not disappear behind an alias.
-select count(*) from (select cast(name as unsigned) as k from items order by k) s;
+-- A lexical DECIMAL failure must not disappear behind a sort-only alias.
+-- Any non-NULL fixture name is invalid; its scan order is not the oracle.
+-- @regex('^invalid input: "[xyz]" is invalid decimal string$', true)
+select count(*) from (select cast(name as decimal(10,0)) as k from items order by k) s;
 
 -- A LEFT JOIN branch kept alive only by the COUNT input ordering must not be
 -- pruned together with its failing ON cast.
@@ -59,7 +61,7 @@ insert into left_join_keepalive_r values (1, 'bad');
 select count(*) from (
     select l.id
     from left_join_keepalive_l l left join left_join_keepalive_r r
-      on l.id = r.id and cast(r.bad as unsigned) > 0
+      on l.id = r.id and cast(r.bad as decimal(10,0)) > 0
     order by r.id
 ) s;
 -- The same shape with a total ON condition may still drop the ordering.
