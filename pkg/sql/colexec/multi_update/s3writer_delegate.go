@@ -109,6 +109,17 @@ type s3WriterDelegate struct {
 	// so pre-allocated vector capacity is reused instead of re-allocated.
 	insertFreeLists []*containers.BatchFreeList
 
+	// unrecordedSinkNames accumulates the persisted names of the
+	// temporary S3 writers (delete/tombstone and spill-over table
+	// writers) whose Close already dropped the only tracked references:
+	// their metadata records run in the CALLER (multi_update.go's
+	// source.Write), so a refusal there leaves these names recorded
+	// nowhere, and the delegate's Reset/Free — the only teardown left —
+	// must hand them to the workspace's unrecorded-objects retainer
+	// instead of orphaning the physical files (issue #25590 round-20
+	// review, finding 2).
+	unrecordedSinkNames []string
+
 	outputBat *batch.Batch
 
 	batchSize      uint64
@@ -202,6 +213,24 @@ func (writer *s3WriterDelegate) refreshSelectorState(update *MultiUpdate) {
 	writer.takeAffectedRows = update.takeS3AffectedRowsFunc
 }
 
+// rebindWorkspaceCapacity re-arms every ALREADY-CREATED persistent insert
+// sinker's per-object capacity admission with the CURRENT statement's
+// workspace (issue #25590 round-35 review): the delegate outlives the
+// transaction that built it — a cached plan's next execution enters under a
+// different transaction — so each sinker's construction-time hook goes
+// stale the moment its first workspace finalizes, and without the rebind
+// every next-execution spill would reserve against that finalized
+// workspace, whose release path can never see the reservation again. The
+// rebind clears the stale hook when the current execution exposes no
+// owner surface, matching the construction-time compat shape; sinkers
+// the lazy ensureInsertSinkers creates after this point bind the current
+// workspace already.
+func (writer *s3WriterDelegate) rebindWorkspaceCapacity(proc *process.Process) {
+	for _, s3w := range writer.insertSinkers {
+		s3w.RebindWorkspaceSinkerCapacity(proc)
+	}
+}
+
 func s3WriterAction(updateCtxs []*MultiUpdateCtx) actionType {
 	hasInsert := false
 	hasDelete := false
@@ -251,6 +280,17 @@ func (writer *s3WriterDelegate) ensureInsertSinkers(proc *process.Process) error
 		}
 		if v, ok := proc.Ctx.Value(ioutil.PipelineFlushKey).(bool); ok && v {
 			opts = append(opts, ioutil.WithPipelineFlush())
+		}
+		// Bind this writer to its workspace's per-object capacity
+		// admission (issue #25590 round-20 review, finding 2): the
+		// persistent insert sinkers SPILL objects during append — before
+		// multi_update.go's source.Write records them — so without the
+		// workspace's capacity hook a saturated ledger cannot refuse the
+		// spill, the record's choke refuses later instead, and the
+		// refused statement's persisted objects fall out of every
+		// ownership enumeration.
+		if opt := colexec.WorkspaceSinkerCapacityOption(proc); opt != nil {
+			opts = append(opts, opt)
 		}
 		writer.insertSinkers[i] = colexec.NewCNS3DataWriterForService(
 			proc.GetService(), proc.Mp(), fs, updateCtx.TableDef, -1, false,
@@ -674,6 +714,18 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 		return
 	}
 
+	// Both temporary writer shapes (data and tombstone) bind the
+	// workspace's per-object capacity option (issue #25590 round-20
+	// review, finding 2): they persist objects here — BEFORE the caller
+	// (multi_update.go's source.Delete/source.Write loop) records their
+	// metadata — so the record choke is not the first gate these objects
+	// pass: with the hook a saturated ledger refuses the writer's Sync
+	// with nothing half-persisted, while without it a refused record
+	// leaves ownerless files on storage.
+	if opt := colexec.WorkspaceSinkerCapacityOption(proc); opt != nil {
+		opts = append(append([]ioutil.SinkerOption(nil), opts...), opt)
+	}
+
 	if isTombstone {
 		pkCol := plan2.PkColByTableDef(tblDef)
 		s3Writer = colexec.NewCNS3TombstoneWriterForService(
@@ -686,6 +738,20 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 	}
 
 	defer s3Writer.Close()
+	// Collect-then-close (issue #25590 round-20 review, finding 2): the
+	// deferred Close below drops the writer's tracked references to the
+	// files it persisted, and the metadata record runs only in the
+	// CALLER — after this function returned. Keep the persisted names
+	// on the delegate so Reset/Free can hand the unrecorded ones to the
+	// workspace's retainer; a successful record filters every handed
+	// name out in the workspace itself, so this never double-owns a
+	// recorded object. Registered before Close, deferred calls run this
+	// FIRST (LIFO).
+	defer func() {
+		if names := s3Writer.PersistedNames(); len(names) > 0 {
+			writer.unrecordedSinkNames = append(writer.unrecordedSinkNames, names...)
+		}
+	}()
 
 	counterSet := analyzer.GetOpCounterSet()
 	writeCtx := perfcounter.AttachS3RequestKey(proc.Ctx, counterSet)
@@ -903,9 +969,52 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 	return nil
 }
 
+// retainUnrecordedSinkObjects hands every name this delegate's S3 writers
+// persisted that no completed metadata record owns to the workspace's
+// unrecorded-objects retainer (issue #25590 round-20 review, finding 2).
+// Both teardown paths call it BEFORE the writers close: the accumulated
+// names of already-closed temporary writers, and the persistent insert
+// sinkers' persisted names — a refused statement's spill is recorded
+// nowhere, and the workspace's retainer keeps only the UNRECORDED names
+// (its recorded-name filter owns that), so a successful statement can
+// reuse this same path without re-owning its live objects.
+func (writer *s3WriterDelegate) retainUnrecordedSinkObjects(proc *process.Process) {
+	names := writer.unrecordedSinkNames
+	writer.unrecordedSinkNames = nil
+	for _, s3w := range writer.insertSinkers {
+		if s3w == nil {
+			continue
+		}
+		names = append(names, s3w.PersistedNames()...)
+	}
+	if len(names) == 0 {
+		return
+	}
+	txnOp := proc.GetTxnOperator()
+	if txnOp == nil {
+		return
+	}
+	ws := txnOp.GetWorkspace()
+	if ws == nil {
+		return
+	}
+	retainer, ok := ws.(ioutil.UnrecordedSinkerObjectsRetainer)
+	if !ok {
+		return
+	}
+	retainer.RetainUnrecordedS3Objects(
+		names, "multi_update s3 writers unwound before their metadata records: the pipeline failed or source.Write's record was refused between persistence and recording (issue #25590 round-20 review)")
+}
+
 func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 
 	writer.cleanDeleteBatches(proc.Mp())
+
+	// Hand the writers' unrecorded persisted names to the workspace's
+	// cleanup ownership BEFORE the reset drops them: a reused operator
+	// must not carry a refused statement's orphan-producing spill into
+	// the next execution (issue #25590 round-20 review, finding 2).
+	writer.retainUnrecordedSinkObjects(proc)
 
 	// Reset persistent insert sinkers so any buffered data from a failed
 	// pipeline execution is discarded. The sinkers stay alive and reuse
@@ -953,6 +1062,14 @@ func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
 
 	writer.cleanDeleteBatches(proc.Mp())
 	mp := proc.Mp()
+
+	// Hand the writers' unrecorded persisted names to the workspace's
+	// cleanup ownership BEFORE the close drops the tracked references —
+	// the delegate's last chance a refused statement's orphan-producing
+	// spill has (issue #25590 round-20 review, finding 2). Idempotent
+	// with reset: the names were cleared there, and names a successful
+	// statement recorded are filtered by the workspace itself.
+	writer.retainUnrecordedSinkObjects(proc)
 
 	// Close persistent insert sinkers.
 	for i, s3w := range writer.insertSinkers {

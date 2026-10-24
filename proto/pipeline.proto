@@ -77,6 +77,11 @@ message Message {
   uint64 batch_ack_sequence = 18;
   // Request: minimum required version. Response: actual receiver version.
   int64 protocol_version = 19;
+  // Request-only: the coordinator's OWN build protocol version (issue
+  // #25590): the fragment receiver refuses remotely dispatched
+  // persistence-producing DML from coordinators below the first adoption
+  // build, fail-closed — absent/zero means an older coordinator build.
+  int64 coordinator_protocol_version = 20;
 }
 
 message Connector {

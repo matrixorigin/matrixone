@@ -1,0 +1,51 @@
+select enable_fault_injection();
+➤ enable_fault_injection()[-7,1,0]  𝄀
+1
+select add_fault_point('inject_send_pipeline', ':::', 'return', 0, 'rfc_t');
+➤ add_fault_point(inject_send_pipeline, :::, return, 0, rfc_t)[-7,1,0]  𝄀
+1
+drop database if exists issue_25590_remote_capability;
+create database issue_25590_remote_capability;
+use issue_25590_remote_capability;
+create table rfc_t (id bigint primary key, v bigint, payload varchar(128));
+create table h16 (n int);
+insert into h16 values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12),(13),(14),(15);
+create table h68 (n int);
+insert into h68 values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12),(13),(14),(15),
+(16),(17),(18),(19),(20),(21),(22),(23),(24),(25),(26),(27),(28),(29),(30),(31),
+(32),(33),(34),(35),(36),(37),(38),(39),(40),(41),(42),(43),(44),(45),(46),(47),
+(48),(49),(50),(51),(52),(53),(54),(55),(56),(57),(58),(59),(60),(61),(62),(63),
+(64),(65),(66),(67);
+insert into rfc_t
+select t.digit_id * 68 + k.n,
+0,
+concat('issue25590-payload-', k.n)
+from (select h1.n * 4096 + h2.n * 256 + h3.n * 16 + h4.n as digit_id
+from h16 h1, h16 h2, h16 h3, h16 h4) t
+cross join h68 k;
+analyze table rfc_t;
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+issue_25590_remote_capability.rfc_t  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  3  ¦  4456448  ¦  1  ¦  300142  ¦  513  ¦  464784768  ¦  OK  ¦  q=9375/139264
+select count(*) from rfc_t;
+➤ count(*)[-5,64,0]  𝄀
+4456448
+select count(*) from rfc_t where payload like 'issue25590-payload-%';
+➤ count(*)[-5,64,0]  𝄀
+4456448
+begin;
+update rfc_t set v = v + 1;
+commit;
+select count(*) from rfc_t where v = 1;
+➤ count(*)[-5,64,0]  𝄀
+4456448
+use issue_25590_remote_capability;
+select count(*) from rfc_t where v = 1;
+➤ count(*)[-5,64,0]  𝄀
+4456448
+select remove_fault_point('inject_send_pipeline');
+➤ remove_fault_point(inject_send_pipeline)[-7,1,0]  𝄀
+1
+select disable_fault_injection();
+➤ disable_fault_injection()[-7,1,0]  𝄀
+1
+drop database issue_25590_remote_capability;

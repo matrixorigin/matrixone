@@ -257,6 +257,76 @@ func waitUntilPipelineBatchFlowDrained(
 	return err
 }
 
+// settleRemoteFragmentWorkspaceAfterDrain is the r6 terminal settlement
+// of a remote-run fragment's mirror workspace (issue #25590 round-22
+// review, finding H1): it first waits the message's batch flow DRAINED —
+// the adoption barrier, because the recording side's transport client
+// adopts every relayed object name at its intake BEFORE it acks the
+// batch — and then settles the fragment's workspace while the run's
+// Compile and Process are still alive (a non-transferred settlement
+// runs the full workspace Rollback, which needs the process to release
+// the workspace's entry batches). The run's error travels by pointer:
+// a post-run drain failure cancels the whole message.
+func settleRemoteFragmentWorkspaceAfterDrain(
+	receiver *messageReceiverOnServer,
+	runCompile *Compile,
+	runErr *error,
+) error {
+	txnOp := runCompile.proc.GetTxnOperator()
+	if txnOp == nil {
+		return nil
+	}
+	dtRun, ok := txnOp.GetWorkspace().(*disttae.Transaction)
+	if !ok {
+		return nil
+	}
+	// r23 registered-producer boundary (issue #25590 round-23 review,
+	// finding 3): a clean, drained run may transfer only when the
+	// fragment's own operator tree contains a REGISTERED persistence
+	// producer — the same predicate the coordinator's intake uses to
+	// admit its relayed ownership metadata for adoption. Every other
+	// fragment keeps a reachable local owner on every ending, so a
+	// producer class the intake does not cover cannot release files the
+	// recording side never adopted.
+	if !remoteRunScopesAdmitAdoption(runCompile.scopes) {
+		return dtRun.FinalizeRemoteFragmentWorkspace(runCompile.proc.Ctx, false)
+	}
+	// D3'' (issue #25590 design r11): capability reaches settlement
+	// through the stored REQUEST value, never a receiver-side global.
+	// A below-adoption or absent advertisement keeps the transferred
+	// classification unreachable — fail-closed, exactly like the run
+	// case's refusal (whose empty runs carry nothing to transfer, so a
+	// non-transferred settlement only ever runs an empty rollback for
+	// them).
+	if !requestAdoptsIntakeAdmission(receiver.coordinatorProtocolVersion) {
+		return dtRun.FinalizeRemoteFragmentWorkspace(runCompile.proc.Ctx, false)
+	}
+	transferred := *runErr == nil
+	if *runErr == nil &&
+		receiver.streamLifecycle != nil &&
+		receiver.streamLifecycle.batchFlow != nil {
+		flow := receiver.streamLifecycle.batchFlow
+		drainErr := waitUntilPipelineBatchFlowDrained(
+			receiver.messageCtx,
+			receiver.connectionCtx,
+			flow,
+			func(count int, bytes uint64) {
+				logutil.Warn("pipeline batch drain delayed before fragment settlement",
+					zap.Uint64("stream-id", receiver.messageId),
+					zap.String("remote-address", receiver.clientSession.RemoteAddress()),
+					zap.Int("outstanding-batches", count),
+					zap.Uint64("outstanding-bytes", bytes))
+			})
+		// A receiver-driven stop maps an aborted flow to a drained
+		// terminal: batches the stream dropped after the stop never
+		// reached the recording side, so the fragment must keep its
+		// local owner for them instead of transferring.
+		transferred = drainErr == nil && !flow.wasStoppedByReceiver()
+		*runErr = drainErr
+	}
+	return dtRun.FinalizeRemoteFragmentWorkspace(runCompile.proc.Ctx, transferred)
+}
+
 // waitUntilDisconnectedOrCancelled blocks until either the client connection is
 // closed or the message context is cancelled (e.g. the query was killed). It
 // keeps listening so a remote dispatch can still stream data back, but no longer
@@ -594,6 +664,19 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		}
 
 		runCompile.scopes = []*Scope{s}
+		// D3' (issue #25590 design r11): before any fragment pipeline
+		// step executes, a persistence-producing fragment refuses a
+		// request whose advertised coordinator capability is below the
+		// first adoption build — nothing persists, the definite error
+		// takes the sendError terminal, and the statement fails on
+		// both sides with nothing to delete.
+		if errRefuse := refuseRemoteWriteFromIncapableCoordinator(
+			receiver.getMessageContext(),
+			receiver.coordinatorProtocolVersion,
+			runCompile.scopes,
+		); errRefuse != nil {
+			return errRefuse
+		}
 		if runErr = validateRemoteAllocationTopologyCapability(
 			runCompile.scopes,
 			runCompile.remoteFragmentCounts,
@@ -633,6 +716,45 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		if runErr == nil {
 			runCompile.GenPhyPlan(runCompile)
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
+		}
+
+		// Issue #25590 round-22 review, finding H1 (design r6 §5.3): the
+		// fragment's ONE terminal settlement runs AFTER this run's batch
+		// flow drained — while the run's Compile and Process are still
+		// alive, because a non-transferred settlement runs the full
+		// workspace Rollback and needs the process to release the
+		// workspace's entry batches.
+		//
+		// The r5 settlement classified transfer from the run's error
+		// alone (round-21 finding G2): a clean fragment released every
+		// reserved and retained name on the wire's word — but the wire's
+		// acknowledgment only proves the recording side DECODED each
+		// batch (a discarded decoded batch acks the same), and nothing
+		// before the release listed the names on a workspace that could
+		// enumerate them, so cancellation and discarded metadata between
+		// the ack and the record left physical files ownerless.
+		//
+		// r6 makes the release structurally depend on adoption: the
+		// coordinator's transport client ADOPTS each relayed S3 object at
+		// its intake — before forwarding the batch into its pipeline,
+		// before the ack — through the SAME per-object reservation the
+		// writers use, so the batch-flow drain that finishes below proves
+		// every emitted metadata batch already has an enumerable cleanup
+		// owner on the recording side. Only then does the fragment
+		// TRANSFER: the drained, non-stopped, clean run releases its
+		// reservations and retained names without deleting anything (the
+		// adopted reservations own the files' fate on the recording
+		// side). Every other ending — the run failed, the drain failed
+		// (cancellation), the receiver stopped the stream before its
+		// end — settles through the ordinary rollback terminal and keeps
+		// a reachable deletion owner on THIS engine for exactly the names
+		// whose records can still land nowhere. A stream that negotiated
+		// no batch flow keeps the r5 clean-run classification (the peer
+		// cannot prove adoption; the design scopes the r6 guarantee to
+		// the negotiated protocol).
+		settleErr := settleRemoteFragmentWorkspaceAfterDrain(receiver, runCompile, &runErr)
+		if settleErr != nil && runErr == nil {
+			runErr = settleErr
 		}
 		return runErr
 
@@ -883,6 +1005,15 @@ type messageReceiverOnServer struct {
 	acceptedTeardownMode  pipeline.StreamTeardownMode
 	streamLifecycle       *pipelineStreamLifecycle
 
+	// coordinatorProtocolVersion is the request's D3'' advertisement —
+	// the coordinator's own build protocol, stored per execution
+	// request (a fresh receiver per pipeline message is the reset).
+	// The run case's D3' refusal and the settlement's transferred
+	// classification consume exactly this stored value; absent/zero
+	// (an older coordinator build never sent the field) is the
+	// fail-closed incapable default.
+	coordinatorProtocolVersion int64
+
 	colexecServer *colexec.Server
 
 	// result.
@@ -920,16 +1051,17 @@ func newMessageReceiverOnServer(
 	colexecServer *colexec.Server) (messageReceiverOnServer, error) {
 	connectionCtx := cs.SessionCtx()
 	receiver := messageReceiverOnServer{
-		messageCtx:            ctx,
-		connectionCtx:         connectionCtx,
-		messageId:             m.GetId(),
-		messageTyp:            m.GetCmd(),
-		clientSession:         cs,
-		messageAcquirer:       messageAcquirer,
-		maxMessageSize:        maxMessageSizeToMoRpc,
-		needNotReply:          m.NeedNotReply,
-		requestedTeardownMode: m.GetRequestedTeardownMode(),
-		colexecServer:         colexecServer,
+		messageCtx:                 ctx,
+		connectionCtx:              connectionCtx,
+		messageId:                  m.GetId(),
+		messageTyp:                 m.GetCmd(),
+		clientSession:              cs,
+		messageAcquirer:            messageAcquirer,
+		maxMessageSize:             maxMessageSizeToMoRpc,
+		needNotReply:               m.NeedNotReply,
+		requestedTeardownMode:      m.GetRequestedTeardownMode(),
+		coordinatorProtocolVersion: m.GetCoordinatorProtocolVersion(),
+		colexecServer:              colexecServer,
 	}
 	receiver.cnInformation = cnInformation{
 		cnAddr:      cnAddr,

@@ -119,12 +119,59 @@ const (
 	// -> NewCompile -> UpdateSnapshotWriteOffset.
 	FJ_CNReenterSnapshotOffsetOnGetTable = "fj/cn/reenter_snapshot_offset_on_get_table"
 
+	// FJ_CNWorkspaceMergeRowidAllocFailed is a test-only fault that makes
+	// the >=30-entries merge pass of the admission merge fail exactly at
+	// its combined-batch rowid regeneration. Before the round-6 rewrite
+	// of issue #25590 this fired AFTER the merge had already destroyed
+	// the combined sources, which left the retained batch mixing the
+	// rowids of several blocks with no reader-safe invariants left.
+	FJ_CNWorkspaceMergeRowidAllocFailed = "fj/cn/workspace_merge_rowid_alloc_failed"
+
+	// FJ_CNWorkspaceCompactPublishFailed is a test-only fault that makes
+	// the object-compaction pass of the admission merge fail exactly at
+	// the post-lookup re-publication of another object sharing a metadata
+	// batch with a compacted (dirty) object — the mpool-fallible window
+	// between the compaction's table resolution and the pending-deletion
+	// rewrite. Before the round-7 fix of issue #25590 this fired where the
+	// compaction still wiped pending deletedBlocks unconditionally while
+	// the dirty object had not been rewritten yet, so the retried
+	// admission resurrected the rows those marks deleted.
+	FJ_CNWorkspaceCompactPublishFailed = "fj/cn/workspace_compact_publish_failed"
+
 	// FJ_CNDumpResolveWindowWait is a test-only orchestration point inside the
 	// unlocked table-resolution window of a workspace dump. Armed with the
 	// WAIT action, it parks the dumping goroutine right before the transaction
 	// lock is re-acquired, so a test can deterministically mutate the
 	// workspace from another goroutine while the window is open.
 	FJ_CNDumpResolveWindowWait = "fj/cn/dump_resolve_window_wait"
+
+	// FJ_CNWorkspaceRecordStageFailed is a test-only fault that fails one
+	// table's S3 metadata record inside its fallible preparation (the
+	// staged record phase of issue #25590's object compaction): armed
+	// with the table's name — or empty to fire for every record — it
+	// makes the record fail AFTER an earlier replacement of the same
+	// pass has already staged, which is the exact window the round-20
+	// atomicity contract covers: nothing the failed record prepared may
+	// survive a partially failed pass as a live workspace entry.
+	FJ_CNWorkspaceRecordStageFailed = "fj/cn/workspace_record_stage_failed"
+
+	// The four FJ_CNDump{Insert,Delete}{Write,Sync}Failed keys are test-only
+	// faults inside the fallible publication phase of the workspace dumps
+	// (Transaction.dumpInsertBatchLocked / dumpDeleteBatchLocked). They let a
+	// test fail the publication deterministically — before the writer Write,
+	// or between Write and Sync — to pin that a failed dump leaves the
+	// workspace intact instead of discarding staged sources whose
+	// replacement file entries were never published (issue #25590).
+	FJ_CNDumpInsertWriteFailed = "fj/cn/dump_insert_write_fails"
+	FJ_CNDumpInsertSyncFailed  = "fj/cn/dump_insert_sync_fails"
+	FJ_CNDumpDeleteWriteFailed = "fj/cn/dump_delete_write_fails"
+	FJ_CNDumpDeleteSyncFailed  = "fj/cn/dump_delete_sync_fails"
+
+	// FJ_CNDumpDeleteCloseFailed fails the tombstone writer's Close AFTER
+	// the replacement entry is recorded, pinning that such a table counts
+	// as published (retiring to its sources would double-apply the
+	// tombstones) while the dump still reports the error.
+	FJ_CNDumpDeleteCloseFailed = "fj/cn/dump_delete_close_fails"
 
 	// FJ_ArrowLoadRolloutWait is a test-only post-admission/pre-publication
 	// barrier. Arrow's reader triggers it after a range has been admitted and
@@ -386,11 +433,75 @@ func CNReenterSnapshotOffsetOnGetTableInjected() (injected bool, rogueUpdate boo
 	return true, iarg == 2, iarg != 1
 }
 
+// CNWorkspaceMergeRowidAllocFailedInjected reports whether the
+// FJ_CNWorkspaceMergeRowidAllocFailed fault is active: when it is, the
+// admission merge's staged publication fails before the regenerated rowids
+// of the combined raw-insert batch are installed.
+func CNWorkspaceMergeRowidAllocFailedInjected() bool {
+	return SimpleInjected(FJ_CNWorkspaceMergeRowidAllocFailed)
+}
+
+// CNWorkspaceCompactPublishFailedInjected reports whether the
+// FJ_CNWorkspaceCompactPublishFailed fault is active: when it is, the
+// object-compaction pass' re-publication of a metadata-batch-sharing
+// object fails after the compaction's table lookup has resolved, so the
+// pass returns mid-batch with the dirty object's rewrite still pending.
+func CNWorkspaceCompactPublishFailedInjected() bool {
+	return SimpleInjected(FJ_CNWorkspaceCompactPublishFailed)
+}
+
+// CNWorkspaceRecordStageFailedInjected reports whether the table's S3
+// record belongs to the FJ_CNWorkspaceRecordStageFailed fault — armed by
+// table name (or with no name to refuse every record): the staged record
+// fails at the head of its fallible preparation, consuming nothing, which
+// lets a regression deterministically fail one pass record after an
+// earlier replacement already staged (issue #25590 round-20 review).
+func CNWorkspaceRecordStageFailedInjected(tbName string) bool {
+	_, sarg, injected := fault.TriggerFault(FJ_CNWorkspaceRecordStageFailed)
+	return injected && (sarg == "" || sarg == tbName)
+}
+
 // CNDumpResolveWindowWait triggers FJ_CNDumpResolveWindowWait. With the WAIT
 // action armed it blocks until a test notifies the fault point; when the
 // fault is not registered it is a no-op.
 func CNDumpResolveWindowWait() {
 	fault.TriggerFault(FJ_CNDumpResolveWindowWait)
+}
+
+// The four CNDump staged-publication faults report whether the matching
+// fallible phase of a workspace dump must fail with an injected storage
+// error. dumpInsertBatchLocked/dumpDeleteBatchLocked consult them inside
+// their per-table publication: a fired Write fault aborts before the s3
+// writer is used, a fired Sync fault aborts between Write and Sync. Both
+// leave the staged workspace sources untouched, pinning the failure-atomic
+// staging contract of issue #25590: sources are retired only after their
+// replacement file entries are published.
+func CNDumpInsertWriteFailedInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CNDumpInsertWriteFailed)
+	return injected
+}
+
+func CNDumpInsertSyncFailedInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CNDumpInsertSyncFailed)
+	return injected
+}
+
+func CNDumpDeleteWriteFailedInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CNDumpDeleteWriteFailed)
+	return injected
+}
+
+func CNDumpDeleteSyncFailedInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CNDumpDeleteSyncFailed)
+	return injected
+}
+
+// CNDumpDeleteCloseFailedInjected reports whether the tombstone writer's
+// Close, after its table's replacement entry is recorded, must fail with an
+// injected error (issue #25590).
+func CNDumpDeleteCloseFailedInjected() bool {
+	_, _, injected := fault.TriggerFault(FJ_CNDumpDeleteCloseFailed)
+	return injected
 }
 
 // inject log reader and partition state
