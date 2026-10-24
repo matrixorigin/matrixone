@@ -97,6 +97,61 @@ func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
 	return ctx, stubs
 }
 
+func TestSessionTimestampToUnixNano(t *testing.T) {
+	maximum := float64(math.MaxInt64) / 1e9
+	for _, tc := range []struct {
+		name    string
+		seconds float64
+		want    int64
+	}{
+		{"whole", 1704067200, 1704067200000000000},
+		{"one_microsecond", 1704067200.000001, 1704067200000001000},
+		{"fraction_123456", 1704067200.123456, 1704067200123456000},
+		{"fraction_125000", 1704067200.125, 1704067200125000000},
+		{"fraction_250000", 1704067200.25, 1704067200250000000},
+		{"fraction_375000", 1704067200.375, 1704067200375000000},
+		{"fraction_500000", 1704067200.5, 1704067200500000000},
+		{"fraction_625000", 1704067200.625, 1704067200625000000},
+		{"fraction_750000", 1704067200.75, 1704067200750000000},
+		{"fraction_875000", 1704067200.875, 1704067200875000000},
+		{"fraction_999999", 1704067200.999999, 1704067200999999000},
+		{"zero", 0, 0},
+		{"smallest_positive", math.SmallestNonzeroFloat64, 0},
+		{"below_half_microsecond", math.Nextafter(0.0000005, 0), 0},
+		{"half_microsecond_even_down", 0.0000005, 0},
+		{"above_half_microsecond", math.Nextafter(0.0000005, 1), 1000},
+		{"half_microsecond_even_up", 0.0000015, 2000},
+		{"binary_half_even_down", 1.0078125, 1007812000},
+		{"binary_half_even_up", 1.0234375, 1023438000},
+		{"below_whole_second", math.Nextafter(1, 0), 999999000},
+		{"fraction_does_not_carry", 1.9999999, 1999999000},
+		{"maximum_whole", 9223372036, 9223372036000000000},
+		{"below_maximum", math.Nextafter(maximum, 0), 9223372036854774000},
+		{"maximum", maximum, 9223372036854775000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sessionTimestampToUnixNano(tc.seconds)
+			require.Equal(t, tc.want, got)
+			require.Zero(t, got%int64(time.Microsecond))
+			require.GreaterOrEqual(t, got, int64(0))
+		})
+	}
+}
+
+func TestSessionTimestampConversionDomain(t *testing.T) {
+	variable := gSysVarsDefs["timestamp"]
+	maximum := float64(math.MaxInt64) / 1e9
+	for _, value := range []float64{0, math.SmallestNonzeroFloat64, maximum} {
+		converted, err := variable.Type.Convert(value)
+		require.NoError(t, err)
+		require.Equal(t, value, converted)
+	}
+	for _, value := range []float64{-1, math.NaN(), math.Inf(-1), math.Inf(1), math.Nextafter(maximum, math.Inf(1))} {
+		_, err := variable.Type.Convert(value)
+		require.Error(t, err)
+	}
+}
+
 func TestDoComQueryParseErrorReplacesPreviousDiagnostics(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	ctrl := gomock.NewController(t)
