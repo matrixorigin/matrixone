@@ -54,6 +54,7 @@ from .exceptions import (
     SnapshotError,
 )
 from .logger import MatrixOneLogger, create_default_logger
+from ._utils import discard_unrestored_connection, is_non_transactional_statement
 from .pitr import AsyncPitrManager
 from .pubsub import AsyncPubSubManager
 from .snapshot import Snapshot, SnapshotLevel
@@ -142,25 +143,28 @@ class AsyncSnapshotManager:
         else:
             raise SnapshotError(f"Invalid snapshot level: {level}")
 
-        if description:
-            sql += f" COMMENT '{description}'"
-
         await self.client.execute(sql)
-
-        # Return snapshot object
-        import datetime
-
-        return Snapshot(name, level, datetime.datetime.now(), description, database, table)
+        return await self.get(name)
 
     async def get(self, name: str) -> Snapshot:
         """Get snapshot asynchronously"""
         # Use mo_catalog.mo_snapshots table like sync client
+        lookup_name = name
+        if (
+            len(lookup_name) >= 2
+            and lookup_name[0] in ('`', '"')
+            and lookup_name[-1] == lookup_name[0]
+        ):
+            quote = lookup_name[0]
+            lookup_name = lookup_name[1:-1].replace(quote * 2, quote)
+        # Let MatrixOne apply the same Go Unicode tables used by its parser;
+        # supported Python releases can ship older character mappings.
         sql = """
             SELECT sname, ts, level, account_name, database_name, table_name
             FROM mo_catalog.mo_snapshots
-            WHERE sname = :name
+            WHERE sname = LOWER(?)
         """
-        result = await self.client.execute(sql, {"name": name})
+        result = await self.client.execute(sql, (lookup_name,))
 
         if not result.rows:
             raise SnapshotError(f"Snapshot '{name}' not found")
@@ -1409,18 +1413,57 @@ class AsyncClient(BaseMatrixOneClient):
             # String SQL - original implementation
             final_sql = self._substitute_parameters(sql_or_stmt, params)
 
-            async with self._engine.begin() as conn:
-                # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
-                # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
-                if hasattr(conn, 'exec_driver_sql'):
-                    # Escape % to %% for pymysql's format string handling
-                    escaped_sql = final_sql.replace('%', '%%')
-                    result = await conn.exec_driver_sql(escaped_sql)
-                else:
-                    # Fallback for testing or older SQLAlchemy versions
-                    from sqlalchemy import text
+            # MERGE/PICK require autocommit outside explicit sessions. Change
+            # only this checkout, restoring its baseline before pool reuse.
+            # Ordinary SQL retains the engine.begin() transaction path.
+            non_transactional = is_non_transactional_statement(final_sql)
+            async with self._engine.connect() if non_transactional else self._engine.begin() as conn:
+                restore_autocommit = False
+                prev_autocommit = None
+                if non_transactional:
+                    prev_autocommit = (await conn.exec_driver_sql("SELECT @@autocommit")).scalar()
+                    if isinstance(prev_autocommit, bytes):
+                        prev_autocommit = prev_autocommit.decode()
+                execution_failed = False
+                try:
+                    if non_transactional and str(prev_autocommit).strip().lower() not in ("1", "true", "on"):
+                        # Record restoration responsibility BEFORE flipping, so a
+                        # SET whose result read dies after the server applied it
+                        # is still restored (or the connection invalidated).
+                        restore_autocommit = True
+                        await conn.exec_driver_sql("SET autocommit = 1")
+                    # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
+                    # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
+                    if hasattr(conn, 'exec_driver_sql'):
+                        # Escape % to %% for pymysql's format string handling
+                        escaped_sql = final_sql.replace('%', '%%')
+                        result = await conn.exec_driver_sql(escaped_sql)
+                    else:
+                        # Fallback for testing or older SQLAlchemy versions
+                        from sqlalchemy import text
 
-                    result = await conn.execute(text(final_sql))
+                        result = await conn.execute(text(final_sql))
+                except BaseException:
+                    execution_failed = True
+                    raise
+                finally:
+                    if restore_autocommit:
+                        try:
+                            await conn.exec_driver_sql("SET autocommit = 0")
+                        except BaseException as restore_error:
+                            try:
+                                discard_unrestored_connection(conn.sync_connection)
+                            except BaseException as discard_error:
+                                # Preserve an in-flight SQL error/cancellation.
+                                # A new interrupt after successful SQL still propagates.
+                                if (
+                                    not execution_failed
+                                    and isinstance(restore_error, Exception)
+                                    and not isinstance(discard_error, Exception)
+                                ):
+                                    raise
+                            if not execution_failed and not isinstance(restore_error, Exception):
+                                raise
 
                 execution_time = time.time() - start_time
 

@@ -1361,9 +1361,12 @@ var getPubInfo = func(ctx context.Context, bh BackgroundExec, pubName string) (p
 	return
 }
 
-// getPubInfoByName gets publication info by name only, without filtering by account_id.
-// This allows non-sys tenants to query publications created by any account (e.g., sys tenant).
-func getPubInfoByName(ctx context.Context, bh BackgroundExec, pubName string) (pubInfo *pubsub.PubInfo, err error) {
+// getPubInfosByName gets all publication infos by name only, without filtering by
+// account_id. This allows non-sys tenants to query publications created by any
+// account (e.g., sys tenant). Publication names are unique per account (the
+// primary key of mo_pubs is (account_id, pub_name)) but not across accounts, so
+// callers must resolve which same-named publication applies to them.
+func getPubInfosByName(ctx context.Context, bh BackgroundExec, pubName string) (pubInfos []*pubsub.PubInfo, err error) {
 	accountNameColExists, err := checkColExists(ctx, bh, "mo_catalog", "mo_pubs", "account_name")
 	if err != nil {
 		return
@@ -1389,7 +1392,6 @@ func getPubInfoByName(ctx context.Context, bh BackgroundExec, pubName string) (p
 		return
 	}
 
-	var pubInfos []*pubsub.PubInfo
 	if accountNameColExists {
 		if pubInfos, err = extractPubInfosFromExecResult(ctx, erArray); err != nil {
 			return
@@ -1398,9 +1400,6 @@ func getPubInfoByName(ctx context.Context, bh BackgroundExec, pubName string) (p
 		if pubInfos, err = extractPubInfosFromExecResultOld(ctx, erArray); err != nil {
 			return
 		}
-	}
-	if len(pubInfos) > 0 {
-		pubInfo = pubInfos[0]
 	}
 	return
 }
@@ -2344,6 +2343,25 @@ func doShowCcprSubscriptions(ctx context.Context, ses *Session, scs *tree.ShowCc
 	return trySaveQueryResult(ctx, ses, rs)
 }
 
+// newAmbiguousPublicationCoverageError reports that a bare publication name
+// matches several publications accessible to the caller, so SHOW PUBLICATION
+// COVERAGE cannot resolve it deterministically. The owner list is sorted to
+// keep the message independent of catalog row order.
+func newAmbiguousPublicationCoverageError(ctx context.Context, pubName, accountName string, accessible []*pubsub.PubInfo) error {
+	owners := make([]string, 0, len(accessible))
+	for _, candidate := range accessible {
+		if candidate.PubAccountName != "" {
+			owners = append(owners, fmt.Sprintf("'%s'", candidate.PubAccountName))
+		} else {
+			owners = append(owners, fmt.Sprintf("account_id %d", candidate.PubAccountId))
+		}
+	}
+	slices.Sort(owners)
+	return moerr.NewInternalErrorf(ctx,
+		"publication name '%s' is ambiguous: %d publications with this name owned by accounts %s are accessible to account '%s'",
+		pubName, len(accessible), strings.Join(owners, ", "), accountName)
+}
+
 func doShowPublicationCoverage(ctx context.Context, ses *Session, spc *tree.ShowPublicationCoverage) (err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
@@ -2355,18 +2373,49 @@ func doShowPublicationCoverage(ctx context.Context, ses *Session, spc *tree.Show
 	}
 	accountName := tenantInfo.GetTenant()
 
-	// Get publication info by name only (without filtering by current account_id)
-	// This allows non-sys tenants to query publications created by sys tenant
-	pubInfo, err := getPubInfoByName(ctx, bh, spc.Name)
+	// Get candidate publications by name only (without filtering by current
+	// account_id). This allows non-sys tenants to query publications created
+	// by any account (e.g., sys tenant).
+	pubInfos, err := getPubInfosByName(ctx, bh, spc.Name)
 	if err != nil {
 		return err
 	}
-	if pubInfo == nil {
+	if len(pubInfos) == 0 {
 		return moerr.NewInternalErrorf(ctx, "publication '%s' does not exist", spc.Name)
 	}
 
-	// Check if current account is in subscribed accounts
-	if !pubInfo.InSubAccounts(accountName) {
+	// Resolve which same-named publication the statement refers to and
+	// authorize the access in one pass. The publication's owning account wins
+	// over subscriber access: the mo_pubs primary key (account_id, pub_name)
+	// makes that match unique. Otherwise every candidate the caller may access
+	// is collected: any publication for the sys account, otherwise the ones
+	// whose subscriber list contains the caller. Exactly one accessible
+	// candidate resolves the reference; several make the name ambiguous because
+	// the statement cannot qualify the owning account, so a deterministic
+	// result is impossible; none rejects the caller, and an identically named
+	// publication it cannot access must not shadow one it can.
+	var pubInfo *pubsub.PubInfo
+	var accessible []*pubsub.PubInfo
+	for _, candidate := range pubInfos {
+		if candidate.PubAccountId == tenantInfo.TenantID {
+			pubInfo = candidate
+			break
+		}
+		if tenantInfo.TenantID == catalog.System_Account || candidate.InSubAccounts(accountName) {
+			accessible = append(accessible, candidate)
+		}
+	}
+	if pubInfo == nil {
+		switch len(accessible) {
+		case 1:
+			pubInfo = accessible[0]
+		case 0:
+			// pubInfo stays nil; the caller is rejected below.
+		default:
+			return newAmbiguousPublicationCoverageError(ctx, spc.Name, accountName, accessible)
+		}
+	}
+	if pubInfo == nil {
 		return moerr.NewInternalErrorf(ctx, "account '%s' is not allowed to access publication '%s'", accountName, spc.Name)
 	}
 

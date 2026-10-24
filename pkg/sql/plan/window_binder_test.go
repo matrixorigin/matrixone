@@ -259,6 +259,19 @@ func TestNthValueRequiresConstantPositiveOffset(t *testing.T) {
 			sql:  "select nth_value(a, 1 + 1) over (order by a) from select_test.bind_select",
 		},
 		{
+			name: "warning-free speculative constant",
+			sql:  "select nth_value(a, bit_count('3 ')) over (order by a) from select_test.bind_select",
+		},
+		{
+			name: "warning-free scalar constant",
+			sql:  "select nth_value(1, bit_count('3 ')) over (order by 1)",
+		},
+		{
+			name:    "warningful constant stays executable",
+			sql:     "select nth_value(a, bit_count('3x')) over (order by a) from select_test.bind_select",
+			wantErr: true,
+		},
+		{
 			name:    "zero offset",
 			sql:     "select nth_value(a, 0) over (order by a) from select_test.bind_select",
 			wantErr: true,

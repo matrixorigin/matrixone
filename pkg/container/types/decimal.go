@@ -918,29 +918,6 @@ func (x *Decimal128) Mul64InPlace(y Decimal64) error {
 	return nil
 }
 
-func (x *Decimal128) Mul128InPlace(y *Decimal128) error {
-	if x.B64_127 != 0 && y.B64_127 != 0 {
-		return moerr.NewInvalidInputNoCtxf("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
-	}
-	z := Decimal128{0, 0}
-	z.B64_127, z.B0_63 = bits.Mul64(x.B0_63, y.B0_63)
-	w := Decimal128{0, 0}
-	if x.B64_127 == 0 {
-		w.B0_63, w.B64_127 = bits.Mul64(x.B0_63, y.B64_127)
-	} else {
-		w.B0_63, w.B64_127 = bits.Mul64(x.B64_127, y.B0_63)
-	}
-	if w.B0_63 != 0 || w.Sign() || z.Sign() {
-		return moerr.NewInvalidInputNoCtxf("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
-	}
-	z.B64_127 += w.B64_127
-	if z.Sign() {
-		return moerr.NewInvalidInputNoCtxf("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
-	}
-	*x = z
-	return nil
-}
-
 func (x Decimal128) Mul128(y Decimal128) (Decimal128, error) {
 	if x.B64_127 != 0 && y.B64_127 != 0 {
 		return x, moerr.NewInvalidInputNoCtxf("Decimal128 Mul overflow: %s*%s", x.Format(0), y.Format(0))
@@ -1309,24 +1286,6 @@ func (x Decimal128) Add64(y Decimal64) (Decimal128, error) {
 		err = moerr.NewInvalidInputNoCtxf("Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
 	}
 	return z, err
-}
-
-// for performance sake, must make sure x and y has same scale, then call this function
-func (x *Decimal128) AddInplace(y *Decimal128) (err error) {
-	signx := x.Sign()
-	var carryout uint64
-	if signx == y.Sign() {
-		x.B0_63, carryout = bits.Add64(x.B0_63, y.B0_63, 0)
-		x.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, carryout)
-		if signx != x.Sign() {
-			err = moerr.NewInvalidInputNoCtxf("Decimal128 Add overflow: %s+%s", x.Format(0), y.Format(0))
-			return
-		}
-	} else {
-		x.B0_63, carryout = bits.Add64(x.B0_63, y.B0_63, 0)
-		x.B64_127, _ = bits.Add64(x.B64_127, y.B64_127, carryout)
-	}
-	return
 }
 
 func (x Decimal128) Add(y Decimal128, scale1, scale2 int32) (z Decimal128, scale int32, err error) {

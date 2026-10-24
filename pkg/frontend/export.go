@@ -29,6 +29,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/parquet-go/parquet-go"
@@ -1575,6 +1576,22 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 	for i, col := range ep.mrs.Columns {
 		columnNames[i] = col.Name()
 	}
+	// A JSON object cannot carry two members with the same name. Two SELECT
+	// aliases that collide would otherwise silently write one value over the
+	// other on every row, so reject the export up front instead of returning
+	// success and dropping columns (#30703). CSV and parquet exports are not
+	// affected: they write values positionally.
+	if dup, found := duplicatedJSONLineColumn(columnNames); found {
+		err := moerr.NewInvalidInputNoCtxf(
+			"jsonline export cannot write duplicate column names ('%s'); give every output column a unique alias",
+			dup)
+		if !sendExportBatchByte(ctx, ByteChan, &BatchByte{
+			err: err,
+		}) {
+			return
+		}
+		return
+	}
 
 	for i := 0; i < bat.RowCount(); i++ {
 		if ctx.Err() != nil {
@@ -1658,15 +1675,18 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 		return vector.GetFixedAtNoTypeCheck[float32](vec, i), nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, i), nil
-	case types.T_char, types.T_varchar, types.T_text:
-		return string(vec.GetBytesAt(i)), nil
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
+		value := vec.GetBytesAt(i)
+		if !utf8.Valid(value) {
+			return nil, moerr.NewNotSupported(context.Background(),
+				"JSONLINE OUTFILE cannot encode text containing invalid UTF-8; use CSV to preserve raw bytes")
+		}
+		return string(value), nil
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		// #30635: wrap base64 in {"$binary":...} so the jsonline loader can
 		// distinguish MO-encoded binary payloads from plain-text JSON
 		// strings; bare strings keep their byte-exact passthrough on load.
 		return map[string]any{external.JsonBinaryKey: base64.StdEncoding.EncodeToString(vec.GetBytesAt(i))}, nil
-	case types.T_datalink:
-		return string(vec.GetBytesAt(i)), nil
 	case types.T_geometry, types.T_geometry32:
 		return planfunction.GeometryPayloadToText(vec.GetBytesAt(i))
 	case types.T_array_float32:
@@ -1740,4 +1760,17 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 	default:
 		return nil, moerr.NewInternalErrorf(context.Background(), "vectorValueToJSON: unsupported type %d", vec.GetType().Oid)
 	}
+}
+
+// duplicatedJSONLineColumn returns the first repeated column name and whether
+// one was found. Empty names are valid result metadata and can also repeat.
+func duplicatedJSONLineColumn(names []string) (string, bool) {
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if _, dup := seen[name]; dup {
+			return name, true
+		}
+		seen[name] = struct{}{}
+	}
+	return "", false
 }

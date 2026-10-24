@@ -366,11 +366,11 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 			continue
 		}
 
-		val, err := jsonLineScalarText(ctx, valN, types.T(tp))
+		val, err := jsonLineScalarText(ctx, valN, types.T(tp), r.legacyJSONBinary())
 		if err != nil {
 			return nil, err
 		}
-		res[attr.ColFieldIndex] = csvparser.Field{Val: val, IsNull: isJsonNullSentinel(valN)}
+		res[attr.ColFieldIndex] = csvparser.Field{Val: val}
 	}
 	return res, nil
 }
@@ -426,19 +426,23 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 			continue
 		}
 
-		val, err := jsonLineScalarText(ctx, valN, types.T(tp))
+		val, err := jsonLineScalarText(ctx, valN, types.T(tp), r.legacyJSONBinary())
 		if err != nil {
 			return nil, err
 		}
-		res = append(res, csvparser.Field{Val: val, IsNull: isJsonNullSentinel(valN)})
+		res = append(res, csvparser.Field{Val: val})
 	}
 	return res, nil
+}
+
+func (r *CsvReader) legacyJSONBinary() bool {
+	return r.param != nil && r.param.Extern != nil && r.param.Extern.JsonBinary == plan.JSONBinaryLegacyBase64
 }
 
 // jsonLineScalarText preserves numeric array boundaries for vector columns.
 // Node.String uses Go slice formatting, whose spaces are removed by the vector
 // parser. Keep the original numeric lexemes to avoid intermediate rounding.
-func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T) (string, error) {
+func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T, legacyBinary bool) (string, error) {
 	group, ok := node.V.(*bytejson.Group)
 	if !typ.IsArrayRelate() || !ok || group.Obj {
 		//#30635: JSONLINE OUTFILE writes binary columns wrapped as
@@ -458,6 +462,17 @@ func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T) (s
 				return string(decoded), nil
 			}
 		}
+		if legacyBinary && (typ == types.T_binary || typ == types.T_varbinary || typ == types.T_blob) {
+			encoded, ok := node.V.(string)
+			if !ok {
+				return "", moerr.NewInvalidInput(ctx, "legacy JSONLINE binary value must be a base64 string or a $binary wrapper")
+			}
+			decoded, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				return "", moerr.NewInvalidInput(ctx, "invalid base64 payload in legacy JSONLINE binary column")
+			}
+			return string(decoded), nil
+		}
 		return fmt.Sprint(node), nil
 	}
 	var text strings.Builder
@@ -474,17 +489,6 @@ func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T) (s
 	}
 	text.WriteByte(']')
 	return text.String(), nil
-}
-
-// isJsonNullSentinel decides NULL solely from the undecoded JSON input: only
-// a raw JSON string equal to the JsonNull sentinel ("\N") is NULL. A wrapped
-// base64 payload that decodes to the sentinel's bytes (e.g. X'5C4E') is a
-// value and must never be lost to NULL (matrixone#30635). For any non-string
-// scalar the converted text can never equal the sentinel, so this matches the
-// previous value-based comparison for every other column type.
-func isJsonNullSentinel(node bytejson.Node) bool {
-	s, ok := node.V.(string)
-	return ok && s == JsonNull
 }
 
 // isExternalErrorAttr reports whether an attribute is one of the synthesized
