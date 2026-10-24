@@ -2756,6 +2756,8 @@ func InitInfileParam(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			// Parsed and validated by initJSONBinaryOption after format resolution.
 		case ExternalWriteFilePatternKey, CSVCommentKey:
 			// write_file_pattern is write-only; comment is read at parse time. Both
 			// are kept in Option and consumed elsewhere, ignored here.
@@ -2778,7 +2780,7 @@ func InitInfileParam(param *tree.ExternParam) error {
 	if err := validateArrowContainerOption(param); err != nil {
 		return err
 	}
-	return nil
+	return initJSONBinaryOption(param)
 }
 
 func InitS3Param(param *tree.ExternParam) error {
@@ -2831,6 +2833,8 @@ func InitS3Param(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			// Parsed and validated by initJSONBinaryOption after format resolution.
 		case ExternalWriteFilePatternKey, CSVCommentKey:
 			// write_file_pattern is write-only; comment is read at parse time. Both
 			// are kept in Option and consumed elsewhere, ignored here.
@@ -2850,6 +2854,45 @@ func InitS3Param(param *tree.ExternParam) error {
 	if err := validateArrowContainerOption(param); err != nil {
 		return err
 	}
+	return initJSONBinaryOption(param)
+}
+
+// JSONBinaryOptionKey explicitly identifies pre-wrapper MatrixOne JSONLINE
+// archives. Bare strings are otherwise ambiguous and must remain plain text.
+const JSONBinaryOptionKey = "json_binary"
+
+const JSONBinaryLegacyBase64 = "legacy_base64"
+
+func initJSONBinaryOption(param *tree.ExternParam) error {
+	mode, format := param.JsonBinary, param.Format
+	seen := false
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "format":
+			format = strings.ToLower(param.Option[i+1])
+		case "jsondata":
+			format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			if seen {
+				return moerr.NewBadConfig(param.Ctx, "duplicate json_binary option")
+			}
+			seen = true
+			mode = strings.ToLower(strings.TrimSpace(param.Option[i+1]))
+		}
+	}
+	if !seen && mode == "" {
+		return nil
+	}
+	if mode != JSONBinaryLegacyBase64 {
+		return moerr.NewBadConfigf(param.Ctx, "unsupported json_binary '%s'; use 'legacy_base64' for old MatrixOne JSONLINE archives", mode)
+	}
+	if format != tree.JSONLINE {
+		return moerr.NewBadConfig(param.Ctx, "json_binary requires format='jsonline'")
+	}
+	if _, writable := GetWriteFilePattern(param); writable {
+		return moerr.NewBadConfig(param.Ctx, "json_binary is only supported on read-only JSONLINE inputs")
+	}
+	param.JsonBinary = mode
 	return nil
 }
 
@@ -3009,6 +3052,8 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			// Parsed and validated by initJSONBinaryOption after format resolution.
 		case ExternalWriteFilePatternKey, CSVCommentKey:
 			// write_file_pattern is write-only; comment is read at parse time. Both
 			// are kept in Option and consumed elsewhere, ignored here.
@@ -3030,8 +3075,7 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 		return err
 	}
 
-	return nil
-
+	return initJSONBinaryOption(param)
 }
 
 func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) error {

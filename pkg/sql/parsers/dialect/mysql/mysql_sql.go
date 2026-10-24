@@ -32165,10 +32165,10 @@ yydefault:
 				locale := ""
 				t := &tree.T{
 					InternalType: tree.InternalType{
-						Family:       tree.TimestampFamily,
-						FamilyString: "DATETIME",
+						Family:       tree.DateFamily,
+						FamilyString: "DATE",
 						Locale:       &locale,
-						Oid:          uint32(defines.MYSQL_TYPE_DATETIME),
+						Oid:          uint32(defines.MYSQL_TYPE_DATE),
 					},
 				}
 				yyLOCAL = tree.NewCastExpr(yyDollar[3].exprUnion(), t)
