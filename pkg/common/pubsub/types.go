@@ -16,6 +16,8 @@ package pubsub
 
 import (
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 )
 
 const (
@@ -79,13 +81,27 @@ func (pubInfo *PubInfo) InSubAccounts(accountName string) bool {
 }
 
 func (pubInfo *PubInfo) GetCreateSql() string {
-	sql := "CREATE PUBLICATION " + pubInfo.PubName + " DATABASE " + pubInfo.DbName
+	sql := "CREATE PUBLICATION " + sqlquote.Ident(pubInfo.PubName) + " DATABASE " + sqlquote.Ident(pubInfo.DbName)
+	// Catalog lists contain names, not SQL: quote each member separately,
+	// while retaining the all-tables and all-accounts sentinel semantics.
 	if pubInfo.TablesStr != TableAll {
-		sql += " TABLE " + pubInfo.TablesStr
+		tables := strings.Split(pubInfo.TablesStr, Sep)
+		for i := range tables {
+			tables[i] = sqlquote.Ident(tables[i])
+		}
+		sql += " TABLE " + strings.Join(tables, Sep)
 	}
-	sql += " ACCOUNT " + pubInfo.SubAccountsStr
+	if strings.EqualFold(pubInfo.SubAccountsStr, AccountAll) {
+		sql += " ACCOUNT " + AccountAll
+	} else {
+		accounts := pubInfo.GetSubAccountNames()
+		for i := range accounts {
+			accounts[i] = sqlquote.Ident(accounts[i])
+		}
+		sql += " ACCOUNT " + strings.Join(accounts, Sep)
+	}
 	if len(pubInfo.Comment) > 0 {
-		sql += " COMMENT '" + pubInfo.Comment + "'"
+		sql += " COMMENT " + sqlquote.String(pubInfo.Comment)
 	}
 	return sql
 }

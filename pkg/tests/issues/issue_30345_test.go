@@ -34,7 +34,13 @@ import (
 func TestIssue30345LoadIgnoreCheckConstraints(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
-		defer cancel()
+		defer func() { cancel() }()
+		// Independent LOAD families keep their original two-minute budget;
+		// earlier SQL and filesystem preparation must not consume the next one.
+		nextPhase := func() {
+			cancel()
+			ctx, cancel = context.WithTimeout(t.Context(), 2*time.Minute)
+		}
 		open := func(index int) (*sql.DB, client.TxnTimestampAware) {
 			cn, err := c.GetCNService(index)
 			require.NoError(t, err)
@@ -147,6 +153,7 @@ func TestIssue30345LoadIgnoreCheckConstraints(t *testing.T) {
 				})
 			}
 		}
+		nextPhase()
 		t.Run("insert ignore keeps duplicate arbitration", func(t *testing.T) {
 			exec(t, "create table "+database+".dup(id int primary key,k varchar(20),tag int,v int,check(v>0))")
 			exec(t, "insert into "+database+".dup values(2,'seed',1,5)")
@@ -156,9 +163,11 @@ func TestIssue30345LoadIgnoreCheckConstraints(t *testing.T) {
 			requireWarningCodes(t, ctx, conn, map[uint16]int{1062: 1})
 			require.Equal(t, [][3]int{{2, 5, 10}, {3, 8, 16}}, read(t, database+".dup", "v*2"))
 		})
+		nextPhase()
 		t.Run("load ignore foreign key admission", func(t *testing.T) {
 			testLoadIgnoreForeignKeyAdmission(t, ctx, conn, peer, writer, reader, database)
 		})
+		nextPhase()
 		exec(t, "set experimental_fulltext_index=1")
 		files := make(map[string]string)
 		for name, data := range map[string]string{
