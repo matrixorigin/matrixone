@@ -528,9 +528,9 @@ class AsyncPitrManager:
             created_time=row[1],
             modified_time=row[2],
             level=row[3],
-            account_name=row[4],
-            database_name=row[5],
-            table_name=row[6],
+            account_name=row[4] if row[4] != "*" else None,
+            database_name=row[5] if row[5] != "*" else None,
+            table_name=row[6] if row[6] != "*" else None,
             range_value=row[7],
             range_unit=row[8],
         )
