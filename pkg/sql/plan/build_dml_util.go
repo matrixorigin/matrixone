@@ -1069,11 +1069,56 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			unionNodeId := builder.appendNode(unionNode, bindCtx)
 			newSinkNodeId := appendSinkNode(builder, bindCtx, unionNodeId)
 			endStep := builder.appendStep(newSinkNodeId)
+			// Every consumer of the previous ownership stream must follow the
+			// merge: the halves deleting the shared child table itself, the
+			// index-maintenance deletes (the hidden index tables carry their
+			// own TblId), and the descendant referential-action branches
+			// (grandchild tables have their own TblIds again, and their
+			// positional cascade pieces may not have been wired under a DELETE
+			// node yet when this merge runs). The only consumers of the stream
+			// that must NOT follow are the INSERT-side images of an
+			// update-driven action: they carry the widened, action-local layout
+			// (base row plus temporary update columns) and are fenced off by
+			// the INSERT-branch reachability below together with the
+			// newSourceDependencies guard (#30246).
+			insertReachable := make(map[int32]bool)
+			var markInsertDownstream func(nodeID int32)
+			markInsertDownstream = func(nodeID int32) {
+				if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || insertReachable[nodeID] {
+					return
+				}
+				insertReachable[nodeID] = true
+				for _, child := range builder.qry.Nodes[nodeID].Children {
+					markInsertDownstream(child)
+				}
+			}
+			for _, node := range builder.qry.Nodes {
+				if node.NodeType == plan.Node_INSERT ||
+					node.NodeType == plan.Node_PRE_INSERT ||
+					node.NodeType == plan.Node_PRE_INSERT_UK ||
+					node.NodeType == plan.Node_PRE_INSERT_SK ||
+					node.NodeType == plan.Node_MULTI_UPDATE ||
+					node.InsertCtx != nil || node.PreInsertCtx != nil {
+					markInsertDownstream(node.NodeId)
+				}
+			}
 			for i, n := range builder.qry.Nodes {
 				_, feedsNewSource := newSourceDependencies[int32(i)]
+				if insertReachable[int32(i)] {
+					continue
+				}
 				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep[0] == int32(step) &&
 					i != int(oldDelPlanSinkScanNodeId) && !feedsNewSource {
 					n.SourceStep[0] = endStep
+					if len(n.ProjectList) > len(unionProjection) {
+						// The previous source stream may be wider than the
+						// union (an UPDATE-driven action appends its temporary
+						// image after the old base row). A rewired scan reads
+						// the union's flat layout; keep it inside the union
+						// width so it cannot reference the sliced tail
+						// (#30246 order-panic).
+						n.ProjectList = n.ProjectList[:len(unionProjection)]
+					}
 				}
 			}
 			// Store the new SINK (not the UNION) so the next merge can find the step directly.
@@ -1242,12 +1287,31 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 			// A child row matched by both CASCADE and SET NULL has a single owner:
 			// CASCADE deletes it, while SET NULL must not create a replacement row.
+			// candidateTag == 0 means the local executor ABI (JOIN child=0 at the
+			// left input and 1 for the right), used by direct DELETE plans, which
+			// are appended after createQuery has remapped the statement graph;
+			// only REPLACE and already-tagged recursive plans may keep planner
+			// bind tags.
 			appendExcludeCascadeOwnedRows := func(inputNodeID, candidateTag int32) (int32, error) {
-				if !delCtx.skipTargetDelete || isUpdate {
+				if isUpdate {
 					return inputNodeID, nil
 				}
+				if delCtx.skipTargetDelete {
+					if candidateTag == 0 {
+						return inputNodeID, nil
+					}
+				} else if candidateTag != 0 {
+					return inputNodeID, nil
+				}
+				childRelPos := candidateTag
+				parentRelPos := int32(1)
+				if candidateTag != 0 {
+					parentRelPos = builder.genNewBindTag()
+				} else {
+					// local positional ABI of a direct DELETE plan
+					childRelPos = 0
+				}
 				var cascadeMatch *Expr
-				parentTag := builder.genNewBindTag()
 				for _, candidateFK := range childTableDef.Fkeys {
 					selfRefer := candidateFK.ForeignTbl == 0 && childTableDef.TblId == delCtx.tableDef.TblId
 					if candidateFK.OnDelete != plan.ForeignKeyDef_CASCADE ||
@@ -1259,10 +1323,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						childName := childId2name[childColID]
 						parentName := idNameMap[candidateFK.ForeignCols[i]]
 						childExpr := &Expr{Typ: *childTypMap[childName], Expr: &plan.Expr_Col{Col: &plan.ColRef{
-							RelPos: candidateTag, ColPos: childPosMap[childName], Name: childName,
+							RelPos: childRelPos, ColPos: childPosMap[childName], Name: childName,
 						}}}
 						parentExpr := &Expr{Typ: *nameTypMap[parentName], Expr: &plan.Expr_Col{Col: &plan.ColRef{
-							RelPos: parentTag, ColPos: nameIdxMap[parentName], Name: parentName,
+							RelPos: parentRelPos, ColPos: nameIdxMap[parentName], Name: parentName,
 						}}}
 						partMatch, bindErr := BindFuncExprImplByPlanExpr(
 							builder.GetContext(), "=", []*Expr{childExpr, parentExpr})
@@ -1294,10 +1358,26 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					return inputNodeID, nil
 				}
 				parentNodeID := appendDeleteSourceScan()
+				if candidateTag == 0 {
+					// Left input carries the candidate rows, right input the
+					// parent key values, both stitched by position.
+					inputProjection := builder.qry.Nodes[inputNodeID].ProjectList
+					candidateProjection := make([]*Expr, len(inputProjection))
+					for i, expr := range inputProjection {
+						candidateProjection[i] = &Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: 0, ColPos: int32(i),
+						}}}
+					}
+					return builder.appendNode(&plan.Node{
+						NodeType: plan.Node_JOIN, Children: []int32{inputNodeID, parentNodeID},
+						JoinType: plan.Node_ANTI, OnList: []*Expr{cascadeMatch},
+						ProjectList: candidateProjection,
+					}, bindCtx), nil
+				}
 				parentNodeID = builder.appendNode(&plan.Node{
 					NodeType: plan.Node_PROJECT, Children: []int32{parentNodeID},
 					ProjectList: DeepCopyExprList(builder.qry.Nodes[parentNodeID].ProjectList),
-					BindingTags: []int32{parentTag},
+					BindingTags: []int32{parentRelPos},
 				}, bindCtx)
 				inputProjection := builder.qry.Nodes[inputNodeID].ProjectList
 				candidateProjection := make([]*Expr, len(inputProjection))
@@ -1808,13 +1888,21 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					// shared tagged action stream; keep its existing tagged layout.
 					upPlanCtx.isConditionalFkSetNullAction = true
 					upPlanCtx.isPostCreateQueryFkSetNullAction = localCombined
+					_, hadRegisteredDeleteSource := builder.deleteNode[childTableDef.TblId]
 					resetReferentialDeleteSource()
 					err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 					putDmlPlanCtx(upPlanCtx)
 					if err != nil {
 						return err
 					}
-					setNullDeleteSourcePending = delCtx.skipTargetDelete
+					// A combined SET NULL action registers the child table through its
+					// UPDATE-driven plan, which carries no delete-side index maintenance
+					// or descendant referential expansion. When this action owns the
+					// registration, a later CASCADE must not merge into it - rewiring
+					// existing scans cannot supply actions that were never built; the
+					// CASCADE branch keeps the streams disjoint and performs the full
+					// delete-plan build (#30246 review round 2).
+					setNullDeleteSourcePending = delCtx.skipTargetDelete || !hadRegisteredDeleteSource
 				}
 			}
 
@@ -2319,6 +2407,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						for _, childColID := range fk.Cols {
 							upPlanCtx.fkSetNullColumns[childId2name[childColID]] = struct{}{}
 						}
+						_, hadRegisteredDeleteSource := builder.deleteNode[childTableDef.TblId]
 						resetReferentialDeleteSource()
 
 						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
@@ -2326,7 +2415,11 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						if err != nil {
 							return err
 						}
-						setNullDeleteSourcePending = delCtx.skipTargetDelete
+						// A single SET NULL action carries the same registration hazard
+						// as the combined path above: its UPDATE-driven plan owns no
+						// delete-side maintenance, so a following CASCADE builds the full
+						// delete plan instead of merging (#30246 review round 2).
+						setNullDeleteSourcePending = delCtx.skipTargetDelete || !hadRegisteredDeleteSource
 
 					case plan.ForeignKeyDef_CASCADE:
 						// A self-reference is expanded to its complete descendant set by
