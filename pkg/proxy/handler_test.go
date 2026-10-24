@@ -1228,7 +1228,7 @@ func TestDisconnectCleanupClosesBackendBeforeNotification(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	h := &handler{logger: rt.Logger(), counterSet: newCounterSet()}
 
-	notificationStarted := make(chan struct{})
+	notificationStarted := make(chan ServerConn, 1)
 	releaseNotification := make(chan struct{})
 	release := sync.OnceFunc(func() { close(releaseNotification) })
 	t.Cleanup(release)
@@ -1244,8 +1244,7 @@ func TestDisconnectCleanupClosesBackendBeforeNotification(t *testing.T) {
 	}
 	tun.mu.sc = current
 	cc := &mockClientConn{killFn: func(sc ServerConn) error {
-		require.Same(t, current, sc)
-		close(notificationStarted)
+		notificationStarted <- sc
 		<-releaseNotification
 		return nil
 	}}
@@ -1255,7 +1254,7 @@ func TestDisconnectCleanupClosesBackendBeforeNotification(t *testing.T) {
 		done <- h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeClientDisconnect), cc, tun)
 	}()
 
-	<-notificationStarted
+	require.Same(t, current, <-notificationStarted)
 	select {
 	case <-backendClosed:
 	case <-time.After(time.Second):
