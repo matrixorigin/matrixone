@@ -25,13 +25,13 @@ import (
 // so the scanner must start directly in map state. (#30747/#30746)
 func TestMaskSensitiveSqlLiteralsWithInitialState(t *testing.T) {
 	frag := `{'aws_secret_key'='XYZCANARY', 'aws_region'='r1'} more text`
-	got := MaskSensitiveSqlLiteralsWithInitialState(frag, true)
+	got := MaskSensitiveSqlLiteralsWithInitialState(frag, CredentialStateInMap)
 	require.NotContains(t, got, "XYZCANARY")
 	require.Contains(t, got, "'aws_secret_key'='******'")
 	require.Equal(t, " more text", got[len(got)-len(" more text"):])
 
 	// without the map context the fragment is left alone
-	got = MaskSensitiveSqlLiteralsWithInitialState(frag, false)
+	got = MaskSensitiveSqlLiteralsWithInitialState(frag, CredentialStateNone)
 	require.Contains(t, got, "XYZCANARY")
 }
 
@@ -53,6 +53,23 @@ func TestParseErrorMasksStageCredentials(t *testing.T) {
 	}
 }
 
+// The error tail can begin AT the secret value itself (right after '='), so
+// the lexer additionally tracks the pending-value state. An unterminated
+// value must never reach the client error. (#30747 review)
+func TestParseErrorMasksUnterminatedCredentialValue(t *testing.T) {
+	cases := []string{
+		// missing closing quote inside the map: the echo starts at the value
+		"create stage s url='file:///x' credentials={'aws_secret_key'='CANARYNOEND",
+		// numeric value shape
+		"create stage s url='file:///x' credentials={'aws_port'=CANARY12345",
+	}
+	for _, sql := range cases {
+		_, err := ParseOne(context.Background(), sql, 1)
+		require.Error(t, err, sql)
+		require.NotContains(t, err.Error(), "CANARY", sql)
+	}
+}
+
 // The client-side parse-error "near" echo deliberately keeps identified-by
 // literals readable: that diagnostic shape is part of the existing behavior
 // (zz_accesscontrol goldens). Secrets of that kind are masked on the
@@ -68,35 +85,76 @@ func TestParseErrorKeepsIdentifiedByInNearEcho(t *testing.T) {
 	require.Contains(t, err.Error(), "IDENTIFIED BY 'PWN123456'")
 }
 
+// Masking offsets must follow the RAW source span of each value token, so
+// escapes and dollar-quoted values never leave a residue of the original
+// secret in the masked text. (#30747 review)
+func TestMaskSensitiveSqlLiteralsRawSpans(t *testing.T) {
+	cases := []struct {
+		sql  string
+		want string
+	}{
+		// dollar-quoted credential value
+		{
+			`create stage s url='file:///x' credentials={'aws_secret_key'=$credential$CANARY$credential$}`,
+			`create stage s url='file:///x' credentials={'aws_secret_key'=$credential$******$credential$}`,
+		},
+		// single-quote escape inside the value
+		{
+			`create stage s url='file:///x' credentials={'aws_secret_key'='CAN''ARY'}`,
+			`create stage s url='file:///x' credentials={'aws_secret_key'='******'}`,
+		},
+		// unquoted numeric-looking value
+		{
+			`credentials={'aws_port'=123456789}`,
+			`credentials={'aws_port'=******}`,
+		},
+	}
+	for _, c := range cases {
+		got := MaskSensitiveSqlLiterals(c.sql)
+		require.Equal(t, c.want, got, c.sql)
+		require.NotContains(t, got, "CAN", c.sql)
+	}
+}
+
 func TestMaskStageCredentialLiteralsWithInitialState(t *testing.T) {
 	cases := []struct {
 		sql  string
-		in   bool
+		in   CredentialMapState
 		want string
 	}{
 		{
 			`create stage s credentials={'aws_key'='AK1', "aws_secret"='SEC1'}`,
-			false,
+			CredentialStateNone,
 			`create stage s credentials={'aws_key'='******', "aws_secret"='******'}`,
 		},
 		{ // mid-map tail: keyword context cut off
 			`{'aws_secret_key'='SEC1',`,
-			true,
+			CredentialStateInMap,
 			`{'aws_secret_key'='******',`,
+		},
+		{ // tail starts AT the value (pending-value state)
+			`'SEC1'`,
+			CredentialStateInMapAfterEq,
+			`'******'`,
+		},
+		{ // unterminated tail starting at the value
+			`'SEC1`,
+			CredentialStateInMapAfterEq,
+			`'******`,
 		},
 		{ // idempotent
 			`credentials={'aws_key'='******'}`,
-			false,
+			CredentialStateNone,
 			`credentials={'aws_key'='******'}`,
 		},
 		{ // out of scope for this masker: identified-by stays visible
 			`create user u identified by 'pw1'`,
-			false,
+			CredentialStateNone,
 			`create user u identified by 'pw1'`,
 		},
 		{ // out of scope: s3 access keys stay visible
 			`url s3option{'access_key_id'='123', 'secret_access_key'='456'}`,
-			false,
+			CredentialStateNone,
 			`url s3option{'access_key_id'='123', 'secret_access_key'='456'}`,
 		},
 	}

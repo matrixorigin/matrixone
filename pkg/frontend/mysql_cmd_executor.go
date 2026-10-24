@@ -377,6 +377,11 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 // credential-bearing statement would leak its secrets there as well
 // (#30747/#30746): mask the same credential literals that the statement
 // record masker covers, keeping the rest of the parse diagnostics intact.
+// The near echo is embedded as one outer double-quoted string inside the
+// serialized error, so a plain token scan of the whole message cannot see
+// through it — the fragment is extracted, masked on its own, and spliced
+// back. (The client-visible echo keeps the identified-by plaintext by
+// convention; only this diagnostic copy is fully masked.)
 func redactStatementErrorForLogging(err error, text string) error {
 	if err == nil {
 		return err
@@ -384,10 +389,54 @@ func redactStatementErrorForLogging(err error, text string) error {
 	if sqlmongodb.RedactSQLForDiagnostics(text) != text {
 		return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
 	}
-	if masked := parsers.MaskSensitiveLiteralsForLogging(err.Error()); masked != err.Error() {
-		return moerr.NewParseErrorNoCtx(masked)
+	errText := err.Error()
+	errText = maskSerializedNearFragment(errText)
+	if masked := parsers.MaskSensitiveLiteralsForLogging(errText); masked != err.Error() {
+		// Downstream (RecordParseErrorStatement) wraps the returned error with
+		// moerr.NewParseError, whose template prepends "SQL parser error: ".
+		// Return the plain masked text so the diagnostic keeps a single
+		// prefix; moerr input that already carried the prefix is normalized
+		// away first.
+		masked = strings.TrimPrefix(masked, "SQL parser error: ")
+		return errors.New(masked)
 	}
 	return err
+}
+
+// maskQueryForDebugTrace prepares raw COM_QUERY text for the "query trace"
+// debug log: credential literals are masked FIRST (so no partial secret can
+// survive pagination), then the masked text is abbreviated to the configured
+// print length (#30747). kept as a helper so the masking-then-abbreviate
+// order is testable without a session.
+func maskQueryForDebugTrace(query string, maxLen int) string {
+	return commonutil.Abbreviate(redactStatementTextForLogging(nil, query), maxLen)
+}
+
+// maskSerializedNearFragment extracts the `near "..."` echo from a serialized
+// parse error and runs the record masker over the fragment's own text. The
+// renderer appends the closing quote directly before the trailing `;`/suffix,
+// which never contains quotes, so the LAST double quote in the message closes
+// the fragment.
+func maskSerializedNearFragment(errText string) string {
+	anchor := strings.Index(errText, " near \"")
+	if anchor < 0 {
+		return errText
+	}
+	start := anchor + len(" near \"")
+	end := strings.LastIndex(errText, "\"")
+	if end <= start {
+		return errText
+	}
+	tail := errText[end+1:]
+	if tail != "" && !strings.HasPrefix(tail, ";") && !strings.HasPrefix(tail, " (") {
+		return errText
+	}
+	fragment := errText[start:end]
+	masked := parsers.MaskSensitiveLiteralsForLogging(fragment)
+	if masked == fragment {
+		return errText
+	}
+	return errText[:start] + masked + errText[end:]
 }
 
 func refreshProcessStmtProfileForPreparedStmt(proc *process.Process, statement tree.Statement) {
@@ -7138,7 +7187,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 			return resp, nil
 		}
-		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(commonutil.Abbreviate(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
+		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(maskQueryForDebugTrace(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
 		input := &UserInput{sql: query, rewritePolicy: rewritePolicy}
 		err = doComQuery(ses, execCtx, input)
 		if err != nil {

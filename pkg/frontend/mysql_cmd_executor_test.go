@@ -12768,3 +12768,32 @@ func TestRedactStatementErrorForLoggingMasksSecrets(t *testing.T) {
 	mundane := moerr.NewParseErrorNoCtx("SQL parser error: plain syntax issue")
 	require.Same(t, mundane, redactStatementErrorForLogging(mundane, "select 1"))
 }
+
+// The diagnostic copy must mask an identified-by password inside the
+// serialized near echo, even though the client-visible echo keeps it readable
+// by convention; a naive whole-message token scan cannot see the password
+// because the echo is one outer double-quoted string (#30747 review).
+func TestRedactStatementErrorForLoggingMasksSerializedNearPassword(t *testing.T) {
+	sql := `create accout a1 ADMIN_NAME 'admin' IDENTIFIED BY 'PWN123456';`
+	_, parseErr := mysql.ParseOne(context.Background(), sql, 1)
+	require.Error(t, parseErr)
+	// raw client-side error keeps the identified-by literal (convention)
+	require.Contains(t, parseErr.Error(), "PWN123456")
+	// diagnostic copy masks it inside the near fragment
+	redacted := redactStatementErrorForLogging(parseErr, sql).Error()
+	require.NotContains(t, redacted, "PWN123456")
+	require.Contains(t, redacted, "IDENTIFIED BY '******'")
+}
+
+// The COM_QUERY debug trace logs raw request text before any downstream
+// masking hook ran; the helper must mask first, then abbreviate, so no
+// partial secret can survive in the log either. (#30747 review)
+func TestMaskQueryForDebugTrace(t *testing.T) {
+	q := `create stage s url='file:///x' credentials={'aws_secret_key'='TRACECANARY42', 'aws_region'='us-east-1'}`
+	out := maskQueryForDebugTrace(q, 40)
+	require.NotContains(t, out, "TRACECANARY42")
+	require.LessOrEqual(t, len(out), 43, "maxLen plus ellipsis")
+	out = maskQueryForDebugTrace(q, -1)
+	require.NotContains(t, out, "TRACECANARY42")
+	require.Contains(t, out, "'******'")
+}

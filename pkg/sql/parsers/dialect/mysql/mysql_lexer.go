@@ -290,10 +290,15 @@ type Lexer struct {
 	statementEnd          int
 	// credentialsState tracks the CREDENTIALS = { ... } option-map context
 	// while tokens flow to the parser (0 none, 1 after the CREDENTIALS
-	// keyword, 2 after '=', 3 inside the map). Error diagnostics echo the
+	// keyword, 2 after '=', 3 inside the map, 4 inside the map right after
+	// '=' — i.e. the next token is a value). Error diagnostics echo the
 	// raw remaining input; knowing whether the echo starts inside such a map
 	// keeps the credentials mask effective there (#30747/#30746).
 	credentialsState int
+	// credentialsValuePos remembers where the value token began when state 4
+	// was consumed. If the error position equals it, the near echo starts AT
+	// the secret value itself and must be masked in pending-value state.
+	credentialsValuePos int
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -414,7 +419,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	}
 	// Track the CREDENTIALS option-map context so the error diagnostic can
 	// keep masking credential values even when the echo tail starts inside
-	// the map. (#30747/#30746)
+	// the map — including right at a value token (state 4). (#30747/#30746)
 	switch {
 	case l.credentialsState == 1 && typ == int('='):
 		l.credentialsState = 2
@@ -422,6 +427,15 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		l.credentialsState = 3
 	case l.credentialsState == 3 && typ == int('}'):
 		l.credentialsState = 0
+	case l.credentialsState == 3 && typ == int('='):
+		l.credentialsState = 4
+	case l.credentialsState == 4 && typ == int('='):
+		// doubled '=' still precedes the value
+	case l.credentialsState == 4:
+		// the value itself arrived; back to plain in-map, but remember where
+		// it started so the error echo recognizes a value-position failure.
+		l.credentialsValuePos = l.scanner.PrePos
+		l.credentialsState = 3
 	case l.credentialsState == 3:
 		// stay inside the map until the closing brace
 	case typ == CREDENTIALS:
@@ -658,12 +672,37 @@ func (l *Lexer) Error(err string) {
 	// The remaining input echoes into every downstream parse diagnostic
 	// (client, ERROR log, statement telemetry). Scrub stage CREDENTIALS map
 	// values in it so a malformed credential-bearing statement cannot leak
-	// its cloud secrets (#30747/#30746). Other secret-looking literals (e.g.
-	// identified by) are left alone: the near echo keeps its established,
-	// golden-tested diagnostic shape.
-	near = MaskStageCredentialLiteralsWithInitialState(near, l.credentialsState == 3)
+	// its cloud secrets (#30747/#30746) — including an echo that begins
+	// right at the secret value, where the map context alone is not enough
+	// to recognize it. Other secret-looking literals (e.g. identified by)
+	// are left alone: the near echo keeps its established, golden-tested
+	// diagnostic shape.
+	nearState := credentialMapStateForNear(l.credentialsState)
+	if l.credentialsState == 3 && l.credentialsValuePos == l.scanner.PrePos {
+		// the failure is exactly at a map value: the echo opens with the
+		// secret itself.
+		nearState = CredentialStateInMapAfterEq
+	}
+	near = MaskStageCredentialLiteralsWithInitialState(near, nearState)
 	near = commonutil.Abbreviate(near, -1)
 	l.scanner.LastError = PositionedErr{Err: errMsg, Line: l.scanner.Line, Col: l.scanner.Col, Near: near, LenStr: lenStr}
+}
+
+// credentialMapStateForNear maps the lexer's small integer tracker onto the
+// exported CredentialMapState understood by the diagnostic masker.
+func credentialMapStateForNear(state int) CredentialMapState {
+	switch state {
+	case 1:
+		return CredentialStateAfterKeyword
+	case 2:
+		return CredentialStateAfterMapEq
+	case 3:
+		return CredentialStateInMap
+	case 4:
+		return CredentialStateInMapAfterEq
+	default:
+		return CredentialStateNone
+	}
 }
 
 func (l *Lexer) AppendStmt(stmt tree.Statement) {
