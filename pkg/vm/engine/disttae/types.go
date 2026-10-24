@@ -1001,23 +1001,6 @@ func (txn *Transaction) adjustUpdateOrderLocked(writeOffset uint64) error {
 
 	return nil
 
-	//	// old logic
-	//	if txn.statementID > 0 {
-	//		writes := make([]Entry, 0, len(txn.writes[writeOffset:]))
-	//		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
-	//			if !txn.writes[i].isCatalog() && txn.writes[i].typ == DELETE {
-	//				writes = append(writes, txn.writes[i])
-	//			}
-	//		}
-	//		for i := writeOffset; i < uint64(len(txn.writes)); i++ {
-	//			if txn.writes[i].isCatalog() || txn.writes[i].typ != DELETE {
-	//				writes = append(writes, txn.writes[i])
-	//			}
-	//		}
-	//		txn.writes = append(txn.writes[:writeOffset], writes...)
-	//	}
-	//
-	//	return nil
 }
 
 type cloneGCScope int

@@ -41,6 +41,7 @@ type windowFuncExprBinder interface {
 	makeFrameConstValue(tree.Expr, *plan.Type) (*plan.Expr, error)
 	mysqlSpecialOrderKey(*plan.Expr, *plan.Type) (*plan.Expr, error)
 	GetContext() context.Context
+	GetProcess() *process.Process
 }
 
 const maxWindowsPerQueryBlock = 127
@@ -1129,6 +1130,15 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	if err != nil {
 		return nil, err
 	}
+	if function.GetFunctionIsWinIndicatorFunByName(funcName) {
+		// Section-4 SQL surface of the technical-indicator kernels
+		// (issue #29949): required ORDER BY, explicit-frame rejection and
+		// the constant-integer period domain.
+		if err := validateIndicatorWindowSpec(
+			b.GetContext(), funcName, ws, windowFunc, b.GetProcess()); err != nil {
+			return nil, err
+		}
+	}
 	if orderedSet {
 		if err = applyOrderedSetAggregateDirection(
 			b.GetContext(), windowFunc, orderedSetSpec, orderedSetOrder); err != nil {
@@ -1157,6 +1167,113 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	ctx.windowByAst[astStr] = colPos
 
 	return buildWindowColRefExpr(ctx, w.WindowFunc.Typ, colPos), nil
+}
+
+// validateIndicatorWindowSpec enforces the section-4 SQL surface contract
+// of the technical-indicator window kernels (issue #29949; docs/design/
+// technical_indicator_window_kernels.md): ORDER BY inside OVER is required
+// (series order is part of the operator's mathematical definition),
+// explicit ROWS/RANGE/GROUPS frames are rejected (the period parameter
+// defines extent), and the period argument must fold to an integer constant
+// in [1, 1024].
+func validateIndicatorWindowSpec(
+	ctx context.Context,
+	funcName string,
+	ws *tree.WindowSpec,
+	bound *plan.Expr,
+	proc *process.Process,
+) error {
+	if len(ws.OrderBy) == 0 {
+		return moerr.NewInvalidInputf(ctx,
+			"window function '%s' requires an ORDER BY expression: series order is part of the indicator's definition",
+			funcName)
+	}
+	if ws.HasFrame {
+		return moerr.NewInvalidInputf(ctx,
+			"window frame is not applicable to %s: the period is given by %s's parameter",
+			funcName, funcName)
+	}
+	fn := bound.GetF()
+	if fn == nil {
+		return moerr.NewInternalErrorf(ctx, "invalid bound window function %s", funcName)
+	}
+	if len(fn.Args) == 0 || !types.MustTypeFromPlan(fn.Args[0].Typ).IsNumeric() {
+		return moerr.NewInvalidInputf(ctx, "argument 1 of %s must be numeric", funcName)
+	}
+	if funcName == "cumpositivestreak" {
+		return nil
+	}
+	if len(fn.Args) != 2 {
+		return moerr.NewInvalidInputf(ctx, "%s takes exactly two arguments (x, n)", funcName)
+	}
+	period, ok := constantFoldedPeriod(fn.Args[1], proc)
+	if !ok || period < 1 || period > 1024 {
+		return moerr.NewInvalidInputf(ctx,
+			"period argument of %s must be a constant integer in [1, 1024]", funcName)
+	}
+	return nil
+}
+
+// constantFoldedPeriod evaluates a period expression through the package's
+// shared deterministic constant-expression evaluator - the same ConstantFold
+// used inside base binding and the optimizer - and reports the folded
+// integer. Section 4 admits any expression that folds to an integer
+// constant, including deterministic scalar functions outside the base
+// binder's automatic fold set (LENGTH('abc'), GREATEST(2,3)); the evaluator
+// itself refuses to fold volatile, real-time, aggregate or window
+// functions, expressions that evaluate only with warnings, and errors, so
+// every such form plus non-constant inputs, NULL and non-integer results
+// reports !ok and rejects with the pinned section-4 diagnostic. Without a
+// process (builder-less unit-test stubs) only a directly-bound integer
+// literal qualifies. The folded value decides admission only; the executed
+// period still flows through the argument expression's own evaluation and
+// the executor-side per-row validation.
+func constantFoldedPeriod(expr *plan.Expr, proc *process.Process) (int64, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	folded := expr
+	if proc != nil {
+		var err error
+		folded, err = ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), proc, false, true)
+		if err != nil {
+			return 0, false
+		}
+	} else if folded.GetLit() == nil {
+		return 0, false
+	}
+	if folded.Typ.Id == int32(types.T_any) {
+		return 0, false
+	}
+	if !types.T(folded.Typ.Id).IsInteger() {
+		return 0, false
+	}
+	lit := folded.GetLit()
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	switch val := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		return int64(val.I8Val), true
+	case *plan.Literal_I16Val:
+		return int64(val.I16Val), true
+	case *plan.Literal_I32Val:
+		return int64(val.I32Val), true
+	case *plan.Literal_I64Val:
+		return val.I64Val, true
+	case *plan.Literal_U8Val:
+		return int64(val.U8Val), true
+	case *plan.Literal_U16Val:
+		return int64(val.U16Val), true
+	case *plan.Literal_U32Val:
+		return int64(val.U32Val), true
+	case *plan.Literal_U64Val:
+		if val.U64Val > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(val.U64Val), true
+	}
+	return 0, false
 }
 
 func isWindowFrameParam(expr tree.Expr) bool {

@@ -7422,6 +7422,7 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
+	preparedCalendarResult := preparedRawCalendarResult(name, args)
 	// Validate before rewriting or converting argument metadata. Checked public
 	// binding must not turn an unknown identity into a MustTypeFromPlan panic.
 	for _, arg := range args {
@@ -7653,6 +7654,23 @@ func bindFuncExprImplByPlanExpr(
 		}
 	case "date_add", "date_sub":
 		if preparedDateFunctionArgs(originalBoundExpr, name, args) {
+			// A template's raw marker may specialize to an epoch number or a
+			// typed calendar. Preserve main's TIMESTAMP source interpretation
+			// before returning to raw arithmetic and the template's result cast.
+			if rawPreparedCalendarMarker(originalBoundExpr.GetF().Args[0]) {
+				source := unwrapPreparedImplicitCast(args[0], true)
+				oid := types.T(source.Typ.Id)
+				if oid != types.T_any && !oid.IsMySQLString() {
+					value, e := bindTemporalMarkerConsumer(ctx, source, types.New(types.T_datetime, 6, 6))
+					if e != nil {
+						return nil, e
+					}
+					args[0], e = appendCastBeforeExpr(ctx, value, plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen})
+					if e != nil {
+						return nil, e
+					}
+				}
+			}
 			args[2] = DeepCopyExpr(originalBoundExpr.GetF().Args[2])
 			if args[0].Typ.Id == int32(types.T_time) && types.T(args[1].Typ.Id).IsInteger() {
 				unit, _ := dateFunctionUnitFromPlanExpr(args[2])
@@ -8342,7 +8360,7 @@ func bindFuncExprImplByPlanExpr(
 		returnType.Width = scale
 	}
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
-	adjustDateFormatMetadata(name, args, &returnType)
+	adjustDateFormatMetadata(ctx, name, args, &returnType)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
@@ -9045,6 +9063,11 @@ func bindFuncExprImplByPlanExpr(
 			},
 		},
 		Typ: Typ,
+	}
+	if preparedCalendarResult != nil {
+		// Keep raw components until arithmetic owns its row diagnostics, then
+		// preserve the prepared consumer's independently inferred result type.
+		return appendCastBeforeExpr(ctx, result, makePlan2Type(preparedCalendarResult))
 	}
 	return result, nil
 }
@@ -10192,7 +10215,7 @@ func adjustControlFlowTemporalMetadata(argTypes []types.Type, valueIndexes []int
 // MatrixOne's temporal domain can produce longer values. Dynamic patterns
 // retain the overload's conservative VARCHAR capacity because their output
 // bound is not known at bind time.
-func adjustDateFormatMetadata(name string, args []*Expr, returnType *types.Type) {
+func adjustDateFormatMetadata(ctx context.Context, name string, args []*Expr, returnType *types.Type) {
 	if (name != "date_format" && name != "time_format") ||
 		len(args) != 2 || returnType.Oid != types.T_varchar {
 		return
@@ -10205,10 +10228,14 @@ func adjustDateFormatMetadata(name string, args []*Expr, returnType *types.Type)
 	if !ok {
 		return
 	}
-	returnType.Width = mysqlDateFormatWidth(name, value.Sval)
+	returnType.Width = mysqlDateFormatWidthForCalendar(name, value.Sval, !function.LegacyIncompleteTemporalStrings(ctx))
 }
 
 func mysqlDateFormatWidth(name, format string) int32 {
+	return mysqlDateFormatWidthForCalendar(name, format, true)
+}
+
+func mysqlDateFormatWidthForCalendar(name, format string, rawCalendar bool) int32 {
 	width := int64(0)
 	add := func(value int64) {
 		width = min(width+value, int64(types.MaxVarcharLen))
@@ -10230,8 +10257,16 @@ func mysqlDateFormatWidth(name, format string) int32 {
 		switch format[i] {
 		case 'M', 'W':
 			add(64)
-		case 'D', 'Y', 'x', 'X':
+		case 'D', 'Y':
 			add(4)
+		case 'x', 'X':
+			if isTimeFormat || !rawCalendar {
+				add(4)
+			} else {
+				// Raw calendar week-years can wrap zero to uint32 max.
+				// The formatter's four-digit padding is only a minimum.
+				add(10)
+			}
 		case 'a', 'b':
 			add(32)
 		case 'j':
@@ -10244,7 +10279,13 @@ func mysqlDateFormatWidth(name, format string) int32 {
 				// sentinel, which is wider than an ordinary two-digit week.
 				add(9)
 			}
-		case 'v', 'y', 'm', 'd', 'h', 'I', 'i', 'l', 'p', 'S', 's', 'c', 'e':
+		case 'v':
+			if isTimeFormat || !rawCalendar {
+				add(2)
+			} else {
+				add(9)
+			}
+		case 'y', 'm', 'd', 'h', 'I', 'i', 'l', 'p', 'S', 's', 'c', 'e':
 			add(2)
 		case 'k', 'H':
 			if isTimeFormat {
@@ -11743,6 +11784,18 @@ func (b *baseBinder) bindInetNtoaBinaryLiteral(astExpr *tree.NumVal, typ Type) (
 
 func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 
+// GetProcess exposes the compile session's process to the window-function
+// binder surface so constant-expression folding uses the same deterministic
+// evaluation engine (proc, mpool, sql_mode) as the rest of binding. The
+// builder-less stub contexts used by unit tests report no process and the
+// callers fall back to a bare-literal check.
+func (b *baseBinder) GetProcess() *process.Process {
+	if b == nil || b.builder == nil || b.builder.compCtx == nil {
+		return nil
+	}
+	return b.builder.compCtx.GetProcess()
+}
+
 // --- util functions ----
 
 // isBitwiseAggregateConversionInput selects only MySQL numeric-evaluation
@@ -12403,7 +12456,11 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 		if timestampAddDateUnit(intervalType) || intervalType == types.Year_Month {
 			target = types.T_date.ToType()
 		}
-		dateExpr, err = bindTemporalMarkerConsumer(ctx, dateExpr, target)
+		if rawPreparedCalendarMarker(dateExpr) {
+			dateExpr, err = appendCastBeforeExpr(ctx, unwrapPreparedImplicitCast(dateExpr, true), plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen})
+		} else {
+			dateExpr, err = bindTemporalMarkerConsumer(ctx, dateExpr, target)
+		}
 		if err != nil {
 			return nil, err
 		}

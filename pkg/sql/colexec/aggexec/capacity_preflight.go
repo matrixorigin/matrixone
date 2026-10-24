@@ -2462,6 +2462,46 @@ func (exec *minMaxExecFixed[T]) PreflightBatchMerge(
 	if offset < 0 || offset > other.GetNumGroups()-len(groups) {
 		return mpool.ErrAllocationAccountInvalid
 	}
+	if len(groups) > hashmap.UnitLimit {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	// Merging ordinary fixed values cannot create provenance metadata when
+	// every touched destination is ordinary too. Validate the same sources
+	// and active/standby targets without simulating per-group winners.
+	plain := true
+	for row, group := range groups {
+		if group == GroupNotMatched {
+			continue
+		}
+		x, y := other.getXY(uint64(offset + row))
+		if x < 0 || x >= len(other.state) ||
+			int(y) >= int(other.state[x].length) {
+			return mpool.ErrAllocationAccountInvariant
+		}
+		if len(other.state[x].vecs) == 0 || other.state[x].vecs[0] == nil ||
+			!hasDefaultFixedMinMaxMetadata(other.state[x].vecs[0]) {
+			plain = false
+			break
+		}
+		source := other.state[x].vecs[0]
+		if source.IsNull(uint64(y)) {
+			continue
+		}
+		_ = vector.GetFixedAtNoTypeCheck[T](source, int(y))
+		_, targetRow, state, err := exec.validatePreflightTarget(group)
+		if err != nil {
+			return err
+		}
+		if len(state.vecs) == 0 || state.vecs[0] == nil ||
+			max(int(state.length), int(targetRow)+1) < state.vecs[0].Length() ||
+			!hasDefaultFixedMinMaxMetadata(state.vecs[0]) {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		return nil
+	}
 	candidate := func(row int) (T, vector.PrepareParamKind, bool, error) {
 		x, y := other.getXY(uint64(offset + row))
 		if x < 0 || x >= len(other.state) ||

@@ -799,11 +799,13 @@ const (
 	MO_VIEW_CHECK_OPTION = 604
 
 	// Local sliding-window ranks (issue #29947): argument-windowed frame-local
-	// competition rank, registered as value-window functions. Allocated after
-	// 603/604 per the documented protocol: append before the sentinel.
-	MRANK   = 605
-	CUMRANK = 606
-	TMRANK  = 607
+	// competition rank, registered as value-window functions. Renumbered
+	// 605/606/607 -> 616/617/618 when main's technical-indicator kernels
+	// (#31017) claimed 605..615; ids are referenced by name everywhere, so
+	// renumbering is safe, and the ranks stay below the sentinel.
+	MRANK   = 616
+	CUMRANK = 617
+	TMRANK  = 618
 
 	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
 	// (549->554->556); referenced by name only, so renumbering is safe.
@@ -877,6 +879,26 @@ const (
 	EXTRACTVALUE            = 581
 	UPDATEXML               = 582
 	TO_INTERVAL_MICROSECOND = 583
+	// Technical-indicator window-function family (issue #29949): eleven
+	// native SQL window kernels with per-partition sequential state, per
+	// docs/design/technical_indicator_window_kernels.md section 5.1.
+	// IDs follow the upstream convention (newest id one below
+	// FUNCTION_END_NUMBER): 605..615 are the first free block above the
+	// internal helpers MO_VIEW_DEFINITION(603)/MO_VIEW_CHECK_OPTION(604);
+	// reusing those silently swaps their overloads and breaks the
+	// information_schema views maintenance.
+	SMA               = 605
+	WMA               = 606
+	TRIMA             = 607
+	EMA               = 608
+	WILDER            = 609
+	KAMA              = 610
+	DEMA              = 611
+	TEMA              = 612
+	T3                = 613
+	MMAXDRAWDOWN      = 614
+	CUMPOSITIVESTREAK = 615
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	UUID_SHORT = 587
@@ -899,10 +921,10 @@ const (
 	// Internal LOAD IGNORE predicate; gated by cluster protocol 125.
 	LOAD_FK_IGNORE_CHECK = 602
 
-	// 605/606/607 hold the local sliding-window ranks (MRANK/CUMRANK/TMRANK)
-	// declared near mo_view_definition; keep FUNCTION_END_NUMBER one past the
-	// highest allocated function id.
-	FUNCTION_END_NUMBER = 608
+	// 616/617/618 hold the local sliding-window ranks (MRANK/CUMRANK/TMRANK)
+	// renumbered above main's 605..615 indicator block; keep
+	// FUNCTION_END_NUMBER one past the highest allocated function id.
+	FUNCTION_END_NUMBER = 619
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1566,4 +1588,17 @@ var functionIdRegister = map[string]int32{
 
 	// date_trunc function
 	"date_trunc": DATE_TRUNC,
+
+	// technical-indicator window functions (issue #29949)
+	"sma":               SMA,
+	"wma":               WMA,
+	"trima":             TRIMA,
+	"ema":               EMA,
+	"wilder":            WILDER,
+	"kama":              KAMA,
+	"dema":              DEMA,
+	"tema":              TEMA,
+	"t3":                T3,
+	"mmaxdrawdown":      MMAXDRAWDOWN,
+	"cumpositivestreak": CUMPOSITIVESTREAK,
 }

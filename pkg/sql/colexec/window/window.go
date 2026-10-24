@@ -376,10 +376,14 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 			// with the previous partition's stale spans. Clear it here, with
 			// the other generation-scoped state.
 			ctr.clearCivilOrder()
+			ctr.freeIndicatorState(proc.Mp())
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
 			if err = ctr.validateLagLeadOffsets(0, window, proc); err != nil {
+				return result, err
+			}
+			if err = ctr.validateIndicatorPeriods(0, window, proc); err != nil {
 				return result, err
 			}
 			for i := range window.Aggs {
@@ -496,6 +500,12 @@ func (ctr *container) processFuncRange(
 		err error
 	)
 	switch {
+	case function.GetFunctionIsWinIndicatorFunByName(funcName):
+		// Technical-indicator kernels (issue #29949) are per-partition
+		// sequential-state machines: they borrow the value-function
+		// materialization and emit from a cached, incrementally advanced
+		// prefix (docs/design/technical_indicator_window_kernels.md 5.2).
+		vec, err = ctr.processIndicatorFuncRange(idx, ap, proc, outputStart, outputEnd)
 	case function.GetFunctionIsWinValueFunByName(funcName):
 		// Value window functions use direct source-row lookup and therefore can
 		// materialize only the rows requested by this output chunk.

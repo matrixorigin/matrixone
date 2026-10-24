@@ -426,14 +426,17 @@ SELECT tick, tmrank(v, INTERVAL 3 DAY) OVER (ORDER BY tick) FROM ev;
    (`SELECT tmrank(v, INTERVAL 3 DAY)` already
    parses today through the generic expression rule; the new production keeps accepting that
    argument shape.)
-2. `pkg/sql/plan/function/function_id.go`: add `MRANK`, `CUMRANK`, `TMRANK` IDs **605**, **606**,
-   **607** — the smallest function-unused numbers at the base (603 and 604 are already
-   allocated to `MO_VIEW_DEFINITION` and `MO_VIEW_CHECK_OPTION`, and 605 is only the
-   current sentinel) — and advance `FUNCTION_END_NUMBER` to **608**, per the
+2. `pkg/sql/plan/function/function_id.go`: add `MRANK`, `CUMRANK`, `TMRANK` IDs **616**, **617**,
+   **618** — the smallest function-unused numbers after the base merge (603 and 604 are already
+   allocated to `MO_VIEW_DEFINITION` and `MO_VIEW_CHECK_OPTION`; main's technical-indicator
+   kernels #31017 claimed 605-615 and advanced the sentinel to 616 before this branch's
+   conflict-resolution merge) — and advance `FUNCTION_END_NUMBER` to **619**, keeping the
    repo's documented allocation protocol (append before the sentinel, never renumber existing
-   IDs; existing `mo_view_definition`/`mo_view_check_option` keep 603/604 so the
+   or already-on-main IDs; existing `mo_view_definition`/`mo_view_check_option` keep 603/604 so the
    `ViewMetadataFunctions` protocol feature detection in `pkg/pb/plan/string_literal_form.go`
-   is untouched). Register lowercase names in `functionIdRegister`; update `predefinedFunids`
+   is untouched). Nothing but the rank IDs themselves moved: they are referenced by name
+   everywhere (the file's own ONNX_RUN/LOAD_TEXT renumbered-on-main-merge precedent), so the
+   ordered renumber is behavior-neutral. Register lowercase names in `functionIdRegister`; update `predefinedFunids`
    (`function_id_test.go`) with the exact new IDs alongside a registry-uniqueness check.
 3. `pkg/sql/plan/function/list_window.go`: register three `FuncNew` entries in
    `supportedWindowInNewFramework` with class `plan.Function_WIN_VALUE` (value-window =
@@ -797,7 +800,7 @@ Validation map per the testing contract (UT = internal invariant, BVT = public S
 | Behavior | Layer | Case |
 |---|---|---|
 | Parser acceptance/rejection | UT | the three `function_call_window` productions parse `mrank(v,3) OVER (...)`, `cumrank(v) OVER (...)`, `tmrank(v, INTERVAL n unit) OVER (...)` (round-trip formatting tests in `mysql_sql_test.go`); the OVER-less forms produce the 1064 parse error like `rank()`; **existing table/column/alias identifiers named mrank/cumrank/tmrank keep parsing unquoted** (non-reserved pattern, LAG/LEAD precedent); goyacc regeneration passes the repository zero-conflict gate |
-| Function-id allocation hygiene | UT | `predefinedFunids` pinned to the exact new IDs 605-607 under `FUNCTION_END_NUMBER = 608`; registry uniqueness holds (no duplicate ids or names); `mo_view_definition`/`mo_view_check_option` keep 603/604 with their view-metadata regression suites green |
+| Function-id allocation hygiene | UT | `predefinedFunids` pinned to the exact new IDs 616-618 under `FUNCTION_END_NUMBER = 619` (renumbered from the drafted 605-607 when main's #31017 claimed that block; see the §9 merge note); registry uniqueness holds across the merged registry (no duplicate ids or names); `mo_view_definition`/`mo_view_check_option` keep 603/604 with their view-metadata regression suites green, and main's `SMA`..`CUMPOSITIVESTREAK` keep 605-615 |
 | Local-rank invariant values/NULL bits/row alignment | UT | operator-level table cases vs an independent `O(n·W)` brute-force oracle implemented in the test (a self-contained re-derivation of §2.1), plus the six-row issue fixture verbatim |
 | Frame entry/exit, ties, all-NULL frame | UT | table cases: partition-start short frames; adjacent equal values; all frame-role NULL combinations; `N=1`; `N ≥ partition size` |
 | Partition boundaries | UT | multi-partition batches, reproducible partition order via ORDER BY; frames confined to partitions |
@@ -937,12 +940,17 @@ suites are green with no result-file regressions; the same focused BVT fails on 
   mandatory window_spec, verified live on the base). The issue states the
   probe checks entry availability only, and every SQL window keyword in matrixone requires
   OVER at the grammar level; consistency with `RANK` dominates inventing a scalar fallback.
-- D8 (finding 1; accepted): function IDs are the first genuinely unused numbers — 605, 606,
-  607 with `FUNCTION_END_NUMBER` bumped to 608 — because 603/604 already belong to
+- D8 (finding 1; accepted): function IDs are the first genuinely unused numbers — 616, 617,
+  618 with `FUNCTION_END_NUMBER` raised to 619 — because 603/604 already belong to
   `mo_view_definition`/`mo_view_check_option` (base `function_id.go:797-799`) and those IDs
   participate in `ViewMetadataFunctions` protocol detection
   (`pkg/pb/plan/string_literal_form.go:995`). Never renumber existing functions; the
-  validation ladder adds registry-uniqueness and view-function regression checks.
+  validation ladder adds registry-uniqueness and view-function regression checks. Merge
+  application (2026-10-24): the draft had taken 605-607/608; by PR #31020's conflict-resolution
+  merge, main's #31017 had already claimed 605-615 with the sentinel at 616, so applying this
+  decision to the merged base moves the never-on-main rank IDs to 616-619 exactly as recorded
+  in §9 — the invariant (first genuinely unused numbers, existing functions untouched) is
+  unchanged, only its realized numbers moved.
 - D9 (finding 2; superseded in shape by D13): revision 2 specified `tmrank`'s interval
   as a **frame-bound representation** — a binding-synthesized internal `RANGE` frame with
   `[v]`-only executed arguments. The round-3 review showed that carrier cannot bind: the
@@ -1412,4 +1420,21 @@ Implementation deviations: none remaining. The 2026-10-24 implementation
   real-time or internal registration refuse pre-evaluation with the
   boundary's function-named error. An implementation-stage fix to match an
   approved decision is not a design change and requires no re-review.
+Merge-conflict ID renumber (2026-10-24, post-approval bookkeeping): resolving
+  PR #31020's conflicts against main incorporated #31017's technical-indicator
+  kernels, which had already registered function IDs 605-615 with
+  FUNCTION_END_NUMBER = 616. D8 therefore realizes on the merged base as
+  MRANK/CUMRANK/TMRANK = 616/617/618 with FUNCTION_END_NUMBER = 619: no
+  already-registered function was renumbered, the draft rank IDs — never
+  present on main or in any release — moved as name-only references (the
+  function_id.go ONNX_RUN/LOAD_TEXT merge-renumber precedent), and no public
+  SQL surface (names, grammar, overloads, protocol-gated features) changed.
+  Applying the approved first-free-numbers decision to a changed base is not
+  a design change and requires no re-review; the implementation and its
+  registry-uniqueness ladder moved with the ID change and stay green. The
+  §3.3 allocation statement, the D8 record and the §6 validation-map row
+  above were updated to the 616-619 realization together with this note;
+  the change is delivered by the conflict-resolution merge of main into
+  PR #31020's branch, and every other approved statement is
+  byte-identical to the reviewed revision-8 snapshot.
 ```

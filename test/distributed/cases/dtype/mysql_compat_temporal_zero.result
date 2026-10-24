@@ -406,6 +406,71 @@ select count(*) as invalid_prepared_date_rows from mysql_compat_temporal_zero_dm
 ➤ invalid_prepared_date_rows[-5,64,0]  𝄀
 0
 deallocate prepare temporal_invalid_date_insert;
+select date_format('2024-00-00', '%Y-%m-%d') as partial_format;
+➤ partial_format[12,10,0]  𝄀
+2024-00-00
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+select to_days('2024-00-00') is null as partial_is_null;
+➤ partial_is_null[-7,1,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2024-00-00'
+select to_seconds('2024-00-00') is null as partial_is_null;
+➤ partial_is_null[-7,1,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2024-00-00'
+select dayofweek('2024-00-00') is null as partial_is_null;
+➤ partial_is_null[-7,1,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2024-00-00'
+select week('2024-00-00', 0) is null as partial_is_null;
+➤ partial_is_null[-7,1,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2024-00-00'
+select last_day('2024-00-00') is null as partial_is_null;
+➤ partial_is_null[-7,1,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2024-00-00'
+select date_add('2024-00-00', interval 1 day) is null as partial_is_null;
+➤ partial_is_null[-7,1,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2024-00-00'
+select datediff('2024-00-00', '2024-01-01') is null as partial_is_null;
+➤ partial_is_null[-7,1,0]  𝄀
+1
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Incorrect datetime value: '2024-00-00'
+drop table if exists temporal_incomplete_strings_30234;
+create table temporal_incomplete_strings_30234(id int, v varchar(16));
+insert into temporal_incomplete_strings_30234 values (1, '2024-00-00'), (2, '2024-02-29');
+select v, date_format(v, '%Y-%m-%d') as formatted from temporal_incomplete_strings_30234 order by id;
+➤ v[12,16,0]  ¦  formatted[12,10,0]  𝄀
+2024-00-00  ¦  2024-00-00  𝄀
+2024-02-29  ¦  2024-02-29
+prepare temporal_incomplete_format from 'select date_format(?, ''%Y-%m-%d'') as formatted';
+set @incomplete30234 = '2024-00-00';
+execute temporal_incomplete_format using @incomplete30234;
+➤ formatted[12,10,0]  𝄀
+2024-00-00
+set @incomplete30234 = '2024-02-29';
+execute temporal_incomplete_format using @incomplete30234;
+➤ formatted[12,10,0]  𝄀
+2024-02-29
+deallocate prepare temporal_incomplete_format;
+drop table temporal_incomplete_strings_30234;
 set sql_mode = @old_sql_mode;
 set time_zone = @old_time_zone;
 drop table mysql_compat_temporal_zero;

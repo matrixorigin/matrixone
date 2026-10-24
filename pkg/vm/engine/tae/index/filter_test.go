@@ -24,13 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/require"
 )
 
 func TestStaticFilterNumeric(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	typ := types.T_int32.ToType()
 	data := containers.MockVector2(typ, 40000, 0)
 	defer data.Close()
@@ -90,7 +87,6 @@ func TestStaticFilterNumeric(t *testing.T) {
 }
 
 func TestNewBinaryFuseFilter(t *testing.T) {
-	testutils.EnsureNoLeak(t)
 	typ := types.T_uint32.ToType()
 	data := containers.MockVector2(typ, 2000, 0)
 	defer data.Close()
@@ -266,8 +262,6 @@ func TestHybridBloomFilter(t *testing.T) {
 }
 
 func TestStaticFilterString(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	typ := types.T_varchar.ToType()
 	data := containers.MockVector2(typ, 40000, 0)
 	defer data.Close()
@@ -319,8 +313,6 @@ func TestStaticFilterString(t *testing.T) {
 }
 
 func TestBloomFilterBuilderReuse(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	typ := types.T_int32.ToType()
 	const rounds = 5
