@@ -20,6 +20,7 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/golang/mock/gomock"
@@ -342,8 +343,11 @@ func Test_updateStorageUsageCache(t *testing.T) {
 }
 
 func Test_checkStorageUsageCache_V2(t *testing.T) {
+	synctest.Test(t, testCheckStorageUsageCacheV2)
+}
+
+func testCheckStorageUsageCacheV2(t *testing.T) {
 	origCache := cnUsageCache
-	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
 	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
 	t.Cleanup(func() {
 		cnUsageCache = origCache
@@ -367,15 +371,23 @@ func Test_checkStorageUsageCache_V2(t *testing.T) {
 		require.Equal(t, rep.Sizes[i], usages[int64(i)][0])
 	}
 
-	require.Eventually(t, func() bool {
-		_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
-		return !ok
-	}, time.Second+200*time.Millisecond, 10*time.Millisecond)
+	// Advance the bubble's fake clock, not wall time. Synchronous checks
+	// cannot leave an Eventually predicate racing the cache cleanup.
+	time.Sleep(time.Second - time.Nanosecond)
+	_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
+	require.True(t, ok, "cache must remain valid before the expiry boundary")
+	time.Sleep(time.Nanosecond)
+	usages, ok = checkStorageUsageCache([][]int64{rep.AccIds})
+	require.False(t, ok, "cache must expire at the lazy threshold")
+	require.Nil(t, usages)
 }
 
 func Test_checkStorageUsageCache(t *testing.T) {
+	synctest.Test(t, testCheckStorageUsageCache)
+}
+
+func testCheckStorageUsageCache(t *testing.T) {
 	origCache := cnUsageCache
-	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
 	cnUsageCache = logtail.NewStorageUsageCache(logtail.WithLazyThreshold(1))
 	t.Cleanup(func() {
 		cnUsageCache = origCache
@@ -401,10 +413,15 @@ func Test_checkStorageUsageCache(t *testing.T) {
 		require.Equal(t, rep.SnapshotSizes[i], usages[int64(i)][1])
 	}
 
-	require.Eventually(t, func() bool {
-		_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
-		return !ok
-	}, time.Second+200*time.Millisecond, 10*time.Millisecond)
+	// The virtual-clock boundary is independent of scheduler delays and
+	// has no polling goroutine that can outlive cache restoration.
+	time.Sleep(time.Second - time.Nanosecond)
+	_, ok = checkStorageUsageCache([][]int64{rep.AccIds})
+	require.True(t, ok, "cache must remain valid before the expiry boundary")
+	time.Sleep(time.Nanosecond)
+	usages, ok = checkStorageUsageCache([][]int64{rep.AccIds})
+	require.False(t, ok, "cache must expire at the lazy threshold")
+	require.Nil(t, usages)
 }
 
 func Test_GetObjectCount_V2(t *testing.T) {
