@@ -155,6 +155,15 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if features.IncompleteTemporalStrings && requiredProtocol != nil {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion130)
 	}
+	if features.TimestampAddSecondIntervals && requiredProtocol != nil {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion124)
+	}
+	if features.ViewMetadataFunctions && requiredProtocol != nil {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion126)
+	}
+	if features.PythonRoutineContract && requiredProtocol != nil {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion131)
+	}
 	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
 		return nil, err
 	}
@@ -2396,6 +2405,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.JSONNumericComparisons && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion128) {
 		return moerr.NewNotSupportedNoCtx("mixed JSON/numeric comparisons require MORPC protocol version 128")
+	}
+	if features.PythonRoutineContract && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion131) {
+		return moerr.NewNotSupportedNoCtx("Python routine execution requires MORPC protocol version 131")
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")

@@ -333,9 +333,11 @@ func TestEmbeddedPrebuiltAdmission(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			script := embeddedSetup + `
 scope=$'github.com/matrixorigin/matrixone/pkg/bootstrap\ngithub.com/matrixorigin/matrixone/pkg/embed\ngithub.com/matrixorigin/matrixone/pkg/tests/arrowload\ngithub.com/matrixorigin/matrixone/pkg/tests/sqlintegration\ngithub.com/matrixorigin/matrixone/pkg/tests/dml'
-mkfifo "$CASE_DIR/release-heavy" "$CASE_DIR/release-light"
-exec 10<>"$CASE_DIR/release-heavy" 11<>"$CASE_DIR/release-light"
-release_children() { printf 'release\nrelease\nrelease\n' >&10; printf 'release\nrelease\n' >&11; }
+# Concurrent Bash readers do not consume FIFO lines atomically. Give each
+# light package its own release channel; heavy packages execute exclusively.
+mkfifo "$CASE_DIR/release-heavy" "$CASE_DIR/release-arrowload" "$CASE_DIR/release-dml"
+exec 10<>"$CASE_DIR/release-heavy" 11<>"$CASE_DIR/release-arrowload" 12<>"$CASE_DIR/release-dml"
+release_children() { printf 'release\nrelease\nrelease\n' >&10; printf 'arrowload\n' >&11; printf 'dml\n' >&12; }
 driver_pid=""
 cleanup_driver() {
  release_children
@@ -347,29 +349,48 @@ artifact_dir=$CLUSTER_PREBUILD_DIR
 (
  trap release_children EXIT
  trap 'exit 143' TERM INT
+ # Model expiry of any readiness-local clock without a wall-clock sleep.
+ # This override belongs only to the controller; dispatcher and child reads
+ # stay real. Untimed reads must consume all five real readiness messages.
+ ready_observations=0
+ function read() {
+  local argument
+  for argument in "$@"; do
+   [[ "$argument" != -t* ]] || return 142
+  done
+  builtin read "$@" || return $?
+  ready_observations=$((ready_observations + 1))
+ }
+ # Readiness is a barrier, bounded by the harness's existing outer deadline.
  for heavy in embed bootstrap; do
-  read -r -t 5 leaf pid <&8 || exit 100
+  read -r leaf pid <&8 || exit 100
   [[ "$leaf" == "$heavy" ]] || exit 101
   kill -0 "$pid" || exit 102
   printf 'release\n' >&10
  done
  if [[ "$UT_EMBEDDED_PACKAGE_PARALLEL" == 2 ]]; then
-  read -r -t 5 first first_pid <&8 || exit 103
-  read -r -t 5 second second_pid <&8 || exit 104
+  read -r first first_pid <&8 || exit 103
+  read -r second second_pid <&8 || exit 104
   [[ "$first $second" == 'arrowload dml' || "$first $second" == 'dml arrowload' ]] || exit 105
   [[ "$first_pid" != "$second_pid" ]] || exit 106
   kill -0 "$first_pid" && kill -0 "$second_pid" || exit 107
-  printf 'release\nrelease\n' >&11
-  read -r -t 5 leaf pid <&8 || exit 108
+  printf 'arrowload\n' >&11
+  printf 'dml\n' >&12
+  read -r leaf pid <&8 || exit 108
   [[ "$leaf" == sqlintegration ]] || exit 109
   printf 'release\n' >&10
  else
   for next in arrowload sqlintegration dml; do
-   read -r -t 5 leaf pid <&8 || exit 110
+   read -r leaf pid <&8 || exit 110
    [[ "$leaf" == "$next" ]] || exit 111
-   if [[ "$leaf" == sqlintegration ]]; then printf 'release\n' >&10; else printf 'release\n' >&11; fi
+   case "$leaf" in
+    arrowload) printf 'arrowload\n' >&11 ;;
+    dml) printf 'dml\n' >&12 ;;
+    sqlintegration) printf 'release\n' >&10 ;;
+   esac
   done
  fi
+ [[ "$ready_observations" == 5 ]] || exit 116
 ) &
 driver_pid=$!
 status=0
@@ -381,7 +402,7 @@ driver_pid=""
 if [[ "$MODE" == heavy-failure ]]; then [[ "$status" != 0 ]] || exit 112; else [[ "$status" == 0 ]] || exit 113; fi
 [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" && ! -d "$artifact_dir" ]] || exit 114
 # Reconstruction proves every exclusion interval, not a sampled absence.
-awk -v limit="$UT_EMBEDDED_PACKAGE_PARALLEL" '
+awk -v limit="$UT_EMBEDDED_PACKAGE_PARALLEL" -v mode="$MODE" '
 $5 == "stage=embedded" && /detail=package_index=[0-4] .*prebuilt=true/ {
  package=substr($6,7); heavy=(package !~ /\/(arrowload|dml)$/)
  if ($4 == "event=start") {
@@ -390,6 +411,8 @@ $5 == "stage=embedded" && /detail=package_index=[0-4] .*prebuilt=true/ {
   if (heavy) heavy_active++
  } else if ($4 == "event=finish") {
   if (!started[package] || finished[package]++) bad=1
+  expected_status=(mode == "heavy-failure" && package ~ /\/embed$/) ? "status=7" : "status=0"
+  if ($7 != expected_status) bad=1
   active--; if (heavy) heavy_active--
  }
  if (active<0 || active>limit) bad=1
@@ -423,7 +446,11 @@ if [[ "$1" == tool && "$2" == test2json ]]; then
  [[ " $* " == *' -test.run=.* '* || "${!#}" == '-test.run=.*' ]] || exit 123
  mkdir "$CASE_DIR/executed-$leaf" || exit 124
  printf '%s %s\n' "$leaf" "$$" >&8
- case "$leaf" in arrowload|dml) read -r _ <&11 ;; *) read -r _ <&10 ;; esac
+ case "$leaf" in
+  arrowload) read -r released <&11; [[ "$released" == "$leaf" ]] || exit 126 ;;
+  dml) read -r released <&12; [[ "$released" == "$leaf" ]] || exit 126 ;;
+  *) read -r _ <&10 ;;
+ esac
  if [[ "$MODE" == heavy-failure && "$leaf" == embed ]]; then
   printf '{"Action":"fail","Package":"%s"}\n' "$package"
   exit 7
@@ -1051,6 +1078,27 @@ func TestEmbeddedPrebuiltFailureKeepsReportJSONOnly(t *testing.T) {
 		t.Run("parallel="+parallel, func(t *testing.T) {
 			script := embeddedSetup + `
 function logger() { printf '%s\n' "$*"; }
+# Inject one live probe only at the explicitly selected watchdog cleanup.
+# Prebuild children, test processes and parent joins keep their real probes.
+# A zero grace period reaches force-stop without a wall-clock phase trigger.
+eval "$(declare -f ut_process_group_alive | sed '1s/ut_process_group_alive/original_ut_process_group_alive/')"
+function ut_process_group_alive() {
+ if [[ "$1" == "${forced_watchdog_pid:-}" ]] && (( forced_watchdog_probes == 0 )); then
+  forced_watchdog_probes=1
+  return 0
+ fi
+ original_ut_process_group_alive "$@"
+}
+force_stop_injected=0
+function wait_for_fixture_watchdog() {
+ if (( force_stop_injected != 0 )); then
+  wait_for_ut_process_group "$@"
+  return $?
+ fi
+ force_stop_injected=1
+ local forced_watchdog_pid=$1 forced_watchdog_probes=0
+ wait_for_ut_process_group "$1" 0
+}
 start_embedded_prebuild "$scope" 1
 status=0
 run_embedded_tests "$scope" 2 > "$CASE_DIR/outer-log" || status=$?
@@ -1058,8 +1106,18 @@ run_embedded_tests "$scope" 2 > "$CASE_DIR/outer-log" || status=$?
 cat "$UT_REPORT"
 
 grep -q 'prebuilt embedded package example/b failed' "$UT_STDERR" || exit 92
+grep -q 'UT cancellation: force stopping process group' "$UT_STDERR" || exit 93
 `
-			out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, nil,
+			transform := func(text string) string {
+				const anchor = `wait_for_ut_process_group "${watchdog_pids[index]}" 20`
+				if strings.Count(text, anchor) != 1 {
+					t.Fatal("missing unique watchdog cleanup wait")
+				}
+				// Preserve the call's redirection: removing it must contaminate
+				// the real JSON report and fail the independent parser oracle.
+				return strings.Replace(text, anchor, `wait_for_fixture_watchdog "${watchdog_pids[index]}" 20`, 1)
+			}
+			out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, transform,
 				"MODE=test-failure", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=", "UT_EMBEDDED_PACKAGE_PARALLEL="+parallel)
 			if err != nil {
 				t.Fatalf("embedded failure JSON report: %v\n%s", err, out)

@@ -1,0 +1,471 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package protocol
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+func testTuple() FencingTuple {
+	return FencingTuple{
+		AccountID: 1, StatementID: "statement", GroupID: "group",
+		GroupEpoch: 2, InvocationID: "invocation", LeaseEpoch: 3,
+	}
+}
+
+func TestControlRoundTripIsBoundedAndVersioned(t *testing.T) {
+	wire, err := MarshalControl(Control{Kind: "OpenInvocation", Tuple: testTuple(), Payload: []byte(`{"mode":"VECTOR"}`)})
+	require.NoError(t, err)
+	got, err := UnmarshalControl(wire)
+	require.NoError(t, err)
+	require.Equal(t, Version, got.Version)
+	require.Equal(t, "OpenInvocation", got.Kind)
+	require.JSONEq(t, `{"mode":"VECTOR"}`, string(got.Payload))
+
+	_, err = UnmarshalControl(bytes.Repeat([]byte{'x'}, MaxControlBytes+1))
+	require.ErrorIs(t, err, ErrProtocol)
+	_, err = UnmarshalControl(append(wire, []byte(" trailing")...))
+	require.ErrorIs(t, err, ErrProtocol)
+	_, err = MarshalControl(Control{Kind: "", Tuple: testTuple()})
+	require.ErrorIs(t, err, ErrProtocol)
+}
+
+func TestControlRejectsUnknownEnvelopeFields(t *testing.T) {
+	wire, err := MarshalControl(Control{Kind: "InputBatch", Tuple: testTuple(), Sequence: 1})
+	require.NoError(t, err)
+	var object map[string]any
+	require.NoError(t, json.Unmarshal(wire, &object))
+	object["future_field"] = "must not be ignored"
+	wire, err = json.Marshal(object)
+	require.NoError(t, err)
+	_, err = UnmarshalControl(wire)
+	require.ErrorIs(t, err, ErrProtocol)
+	require.ErrorContains(t, err, "unknown field")
+}
+
+func TestControlRejectsDuplicateJSONFields(t *testing.T) {
+	wire := []byte(`{"version":1,"kind":"InputBatch","tuple":{"account_id":1,"statement_id":"statement","group_id":"group","group_epoch":2,"invocation_id":"invocation","lease_epoch":3},"sequence":1,"sequence":2}`)
+	_, err := UnmarshalControl(wire)
+	require.ErrorIs(t, err, ErrProtocol)
+	require.ErrorContains(t, err, "duplicate control JSON field")
+}
+
+func TestControlRejectsExcessiveJSONNesting(t *testing.T) {
+	deepPayload := `{"value":` + strings.Repeat("[", MaxJSONNesting) + "0" + strings.Repeat("]", MaxJSONNesting) + "}"
+	wire, err := MarshalControl(Control{
+		Kind:    "OpenInvocation",
+		Tuple:   testTuple(),
+		Payload: json.RawMessage(deepPayload),
+	})
+	require.ErrorContains(t, err, "nesting exceeds")
+	require.Nil(t, wire)
+
+	// The same bound must protect an incoming frame even when it was produced
+	// by an older or non-Go peer that did not enforce the outbound check.
+	outer := `{"version":1,"kind":"OpenInvocation","tuple":{"account_id":1,"statement_id":"statement","group_id":"group","group_epoch":2,"invocation_id":"invocation","lease_epoch":3},"payload":` + deepPayload + `}`
+	_, err = UnmarshalControl([]byte(outer))
+	require.ErrorContains(t, err, "nesting exceeds")
+}
+
+func TestOpenInvocationPayloadMustBeObject(t *testing.T) {
+	for _, payload := range []string{"null", "[]", `"text"`} {
+		wire := []byte(`{"version":1,"kind":"OpenInvocation","tuple":{"account_id":1,"statement_id":"statement","group_id":"group","group_epoch":2,"invocation_id":"invocation","lease_epoch":3},"payload":` + payload + `}`)
+		_, err := UnmarshalControl(wire)
+		require.ErrorIs(t, err, ErrProtocol)
+		require.ErrorContains(t, err, "payload must be a JSON object")
+
+		_, err = MarshalControl(Control{Kind: "OpenInvocation", Tuple: testTuple(), Payload: json.RawMessage(payload)})
+		require.ErrorIs(t, err, ErrProtocol)
+		require.ErrorContains(t, err, "payload must be a JSON object")
+	}
+}
+
+func TestControlFieldsBelongToTheirKind(t *testing.T) {
+	wire, err := MarshalControl(Control{Kind: "InputBatch", Tuple: testTuple(), Sequence: 1})
+	require.NoError(t, err)
+	var object map[string]any
+	require.NoError(t, json.Unmarshal(wire, &object))
+	object["last_sequence"] = 1
+	wire, err = json.Marshal(object)
+	require.NoError(t, err)
+	_, err = UnmarshalControl(wire)
+	require.ErrorIs(t, err, ErrProtocol)
+	require.ErrorContains(t, err, "not valid for control kind")
+
+	_, err = MarshalControl(Control{Kind: "InputBatch", Tuple: testTuple(), Sequence: 1, Status: "ERROR"})
+	require.ErrorIs(t, err, ErrProtocol)
+	require.ErrorContains(t, err, "not valid for control kind")
+
+	_, err = UnmarshalControl([]byte(`{"version":1,"kind":"Unknown","tuple":{"account_id":1,"statement_id":"statement","group_id":"group","group_epoch":2,"invocation_id":"invocation","lease_epoch":3}}`))
+	require.ErrorIs(t, err, ErrProtocol)
+	require.ErrorContains(t, err, "unsupported control kind")
+}
+
+func TestClosingControlCarriesZeroLastSequence(t *testing.T) {
+	for _, kind := range []string{"EndInput", "Finish"} {
+		control := Control{Kind: kind, Tuple: testTuple()}
+		if kind == "Finish" {
+			control.Status = "OK"
+			control.FinishID = "finish"
+			control.LastResultSequence = 0
+		}
+		wire, err := MarshalControl(control)
+		require.NoError(t, err)
+		var object map[string]any
+		require.NoError(t, json.Unmarshal(wire, &object))
+		lastSequence, ok := object["last_sequence"]
+		require.True(t, ok, "%s must carry an explicit last_sequence", kind)
+		require.Equal(t, float64(0), lastSequence)
+
+		decoded, err := UnmarshalControl(wire)
+		require.NoError(t, err)
+		require.Zero(t, decoded.LastSequence)
+	}
+
+	wire, err := MarshalControl(Control{Kind: "InputBatch", Tuple: testTuple(), Sequence: 1})
+	require.NoError(t, err)
+	var object map[string]any
+	require.NoError(t, json.Unmarshal(wire, &object))
+	_, ok := object["last_sequence"]
+	require.False(t, ok, "non-closing controls should not grow a closing-only field")
+}
+
+func TestInputConsumedCarriesReleaseCredit(t *testing.T) {
+	control := Control{
+		Kind:            "InputConsumed",
+		Tuple:           testTuple(),
+		Sequence:        2,
+		ReleasedBytes:   128,
+		ReleasedBatches: 1,
+	}
+	wire, err := MarshalControl(control)
+	require.NoError(t, err)
+	decoded, err := UnmarshalControl(wire)
+	require.NoError(t, err)
+	require.Equal(t, int64(128), decoded.ReleasedBytes)
+	require.Equal(t, uint64(1), decoded.ReleasedBatches)
+
+	var object map[string]any
+	require.NoError(t, json.Unmarshal(wire, &object))
+	require.Equal(t, float64(128), object["released_bytes"])
+	require.Equal(t, float64(1), object["released_batches"])
+	delete(object, "released_batches")
+	invalid, err := json.Marshal(object)
+	require.NoError(t, err)
+	_, err = UnmarshalControl(invalid)
+	require.ErrorIs(t, err, ErrProtocol)
+}
+
+func TestSystemAccountIsValidFencingIdentity(t *testing.T) {
+	tuple := testTuple()
+	tuple.AccountID = 0
+	require.NoError(t, tuple.Validate())
+	_, err := MarshalControl(Control{Kind: "OpenInvocation", Tuple: tuple, Payload: []byte(`{}`)})
+	require.NoError(t, err)
+}
+
+func TestFencingTupleRejectsInvalidUTF8(t *testing.T) {
+	tuple := testTuple()
+	tuple.StatementID = string([]byte{0xff})
+	require.ErrorContains(t, tuple.Validate(), "invalid UTF-8")
+	_, err := MarshalControl(Control{Kind: "OpenInvocation", Tuple: tuple, Payload: []byte(`{}`)})
+	require.ErrorContains(t, err, "invalid UTF-8")
+}
+
+func TestFencingTupleRejectsUnboundedIdentityComponents(t *testing.T) {
+	tuple := testTuple()
+	tuple.GroupID = string(bytes.Repeat([]byte{'g'}, MaxFenceComponentBytes+1))
+	require.ErrorContains(t, tuple.Validate(), "component is too large")
+	_, err := MarshalControl(Control{Kind: "OpenInvocation", Tuple: tuple, Payload: []byte(`{}`)})
+	require.ErrorContains(t, err, "component is too large")
+}
+
+func TestUnmarshalControlRejectsInvalidWireUTF8(t *testing.T) {
+	wire := []byte(`{"version":1,"kind":"InputBatch","tuple":{"account_id":1,"statement_id":"`)
+	wire = append(wire, 0xff)
+	wire = append(wire, []byte(`","group_id":"group","group_epoch":2,"invocation_id":"invocation","lease_epoch":3},"sequence":1}`)...)
+	_, err := UnmarshalControl(wire)
+	require.ErrorIs(t, err, ErrProtocol)
+	require.ErrorContains(t, err, "invalid UTF-8")
+}
+
+func TestSequenceKeepsHalfCloseIndependentFromResults(t *testing.T) {
+	var sequence Sequence
+	require.NoError(t, sequence.AcceptInput(1))
+	require.NoError(t, sequence.AcceptInput(2))
+	require.NoError(t, sequence.EndInput(2))
+	require.NoError(t, sequence.AcceptResult(1))
+	require.False(t, sequence.ReadyToFinish())
+	require.NoError(t, sequence.AcknowledgeResults(1))
+	require.NoError(t, sequence.AcceptResult(2))
+	require.NoError(t, sequence.AcknowledgeResults(2))
+	require.True(t, sequence.ReadyToFinish())
+
+	require.ErrorIs(t, sequence.AcceptInput(3), ErrSequence)
+	require.ErrorIs(t, sequence.AcknowledgeResults(3), ErrSequence)
+	require.ErrorIs(t, sequence.AcknowledgeResults(0), ErrSequence)
+	require.NoError(t, sequence.EndInput(2))
+}
+
+func TestOutputSnapshotFreezesBeforeWorkerCanRewrite(t *testing.T) {
+	worker := []byte("trusted-before-barrier")
+	snapshot, err := FreezeOutput(worker, 1024)
+	require.NoError(t, err)
+	worker[0] = 'X'
+
+	require.NoError(t, snapshot.Validate(len("trusted-before-barrier"), snapshot.Digest()))
+	worker[1] = 'Y'
+	require.Equal(t, "trusted-before-barrier", string(snapshot.Bytes()))
+	require.Equal(t, "trusted-before-barrier", string(snapshot.TrustedBytes()))
+
+	empty, err := FreezeOutput(nil, 1024)
+	require.NoError(t, err)
+	require.NoError(t, empty.Validate(0, empty.Digest()))
+}
+
+func TestOutputSnapshotDetectsTrustedBackingMutation(t *testing.T) {
+	snapshot, err := FreezeOutput([]byte("trusted"), 1024)
+	require.NoError(t, err)
+	snapshot.TrustedBytes()[0] = 'X'
+	require.ErrorContains(t, snapshot.Validate(snapshot.Len(), snapshot.Digest()), "backing changed")
+}
+
+func TestExecutionGroupReleasesOnlyAfterCloseAndAllMembersTerminal(t *testing.T) {
+	var releases atomic.Int32
+	group, err := NewExecutionGroup("g", 1, 2, func() error {
+		releases.Add(1)
+		return nil
+	})
+	require.NoError(t, err)
+	a, err := group.BeginOpen("a")
+	require.NoError(t, err)
+	require.NoError(t, a.Commit())
+	b, err := group.BeginOpen("b")
+	require.NoError(t, err)
+	require.NoError(t, b.Commit())
+
+	require.NoError(t, group.MemberTerminal("a"))
+	require.NoError(t, group.MemberTerminal("a"))
+	_, err = group.BeginOpen("a")
+	require.ErrorIs(t, err, ErrDuplicate)
+	require.NoError(t, group.Close(ReasonInputEOF))
+	require.Equal(t, int32(0), releases.Load())
+	require.NoError(t, group.MemberTerminal("b"))
+	require.Equal(t, int32(1), releases.Load())
+	require.Equal(t, GroupReleased, group.State())
+
+	_, err = group.BeginOpen("late")
+	require.ErrorIs(t, err, ErrGroupClosed)
+	require.ErrorIs(t, group.Close(ReasonCancel), ErrProtocol)
+	require.NoError(t, group.Close(ReasonInputEOF))
+	require.Equal(t, int32(1), releases.Load())
+}
+
+func TestExecutionGroupZeroMemberAndAbortedOpenRelease(t *testing.T) {
+	var releases atomic.Int32
+	group, err := NewExecutionGroup("g", 1, 1, func() error {
+		releases.Add(1)
+		return nil
+	})
+	require.NoError(t, err)
+	open, err := group.BeginOpen("will-abort")
+	require.NoError(t, err)
+	require.NoError(t, group.Close(ReasonPartialOpenError))
+	require.Equal(t, int32(0), releases.Load())
+	require.NoError(t, open.Abort())
+	require.Equal(t, int32(1), releases.Load())
+
+	group, err = NewExecutionGroup("empty", 1, 1, func() error {
+		releases.Add(1)
+		return nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, group.Close(ReasonEmptyInput))
+	require.Equal(t, int32(2), releases.Load())
+
+	group, err = NewExecutionGroup("late", 1, 1, func() error {
+		releases.Add(1)
+		return nil
+	})
+	require.NoError(t, err)
+	open, err = group.BeginOpen("late-member")
+	require.NoError(t, err)
+	require.NoError(t, group.Close(ReasonCancel))
+	require.ErrorIs(t, open.Commit(), ErrGroupClosed)
+	require.ErrorIs(t, open.Commit(), ErrProtocol)
+}
+
+func TestExecutionGroupReservesPendingMemberIdentity(t *testing.T) {
+	group, err := NewExecutionGroup("g", 1, 2, func() error { return nil })
+	require.NoError(t, err)
+	first, err := group.BeginOpen("member")
+	require.NoError(t, err)
+	_, err = group.BeginOpen("member")
+	require.ErrorIs(t, err, ErrDuplicate)
+	registered, active, inFlight := group.Counts()
+	require.Equal(t, 0, registered)
+	require.Equal(t, 0, active)
+	require.Equal(t, 1, inFlight)
+	require.NoError(t, first.Abort())
+	_, _, inFlight = group.Counts()
+	require.Zero(t, inFlight)
+
+	second, err := group.BeginOpen("member")
+	require.NoError(t, err)
+	require.NoError(t, second.Commit())
+	registered, active, inFlight = group.Counts()
+	require.Equal(t, 1, registered)
+	require.Equal(t, 1, active)
+	require.Zero(t, inFlight)
+}
+
+func TestExecutionGroupCloseReasonIsImmutable(t *testing.T) {
+	group, err := NewExecutionGroup("g", 1, 1, func() error { return nil })
+	require.NoError(t, err)
+	require.NoError(t, group.Close(ReasonIdle))
+	require.NoError(t, group.Close(ReasonIdle))
+	require.ErrorIs(t, group.Close(ReasonCancel), ErrProtocol)
+	require.Equal(t, ReasonIdle, group.Reason())
+}
+
+func TestTerminalLedgerRetainsTombstonesUntilExpiry(t *testing.T) {
+	ledger, err := NewTerminalLedger(2, 200)
+	require.NoError(t, err)
+	now := time.Unix(100, 0)
+	credit, err := ledger.Reserve("g1", 1, 1, 100)
+	require.NoError(t, err)
+	require.NoError(t, credit.Add("i1", 100, now.Add(time.Hour)))
+	require.NoError(t, ledger.Complete("i1"))
+	credit.ReleaseUnused()
+
+	second, err := ledger.Reserve("g2", 1, 1, 100)
+	require.NoError(t, err)
+	require.NoError(t, second.Add("i2", 100, now.Add(time.Hour)))
+	require.NoError(t, ledger.Complete("i2"))
+	second.ReleaseUnused()
+	_, err = ledger.Reserve("g3", 1, 1, 1)
+	require.ErrorIs(t, err, ErrLedgerFull)
+
+	require.Equal(t, 2, func() int { n, _ := ledger.Counts(); return n }())
+	require.Equal(t, 0, ledger.Expire(now.Add(time.Minute), func(string, uint64) bool { return true }))
+	require.Equal(t, 2, func() int { n, _ := ledger.Counts(); return n }())
+	require.Equal(t, 0, ledger.Expire(now.Add(2*time.Hour), nil), "TTL must not advance the ownership epoch")
+	require.Equal(t, 2, ledger.Expire(now.Add(2*time.Hour), func(groupID string, groupEpoch uint64) bool {
+		return groupID == "g1" && groupEpoch == 1 || groupID == "g2" && groupEpoch == 1
+	}))
+	third, err := ledger.Reserve("g3", 1, 1, 1)
+	require.NoError(t, err)
+	require.NoError(t, third.Add("i3", 1, now.Add(3*time.Hour)))
+
+	require.ErrorIs(t, ledger.Complete("missing"), ErrUnknownIdentity)
+	require.NoError(t, ledger.Complete("i3"))
+	require.NoError(t, ledger.Complete("i3"))
+}
+
+func TestTerminalLedgerDoesNotExpireActiveEntries(t *testing.T) {
+	ledger, err := NewTerminalLedger(1, 100)
+	require.NoError(t, err)
+	now := time.Unix(100, 0)
+	credit, err := ledger.Reserve("g", 1, 1, 100)
+	require.NoError(t, err)
+	require.NoError(t, credit.Add("active", 100, now.Add(time.Second)))
+	credit.ReleaseUnused()
+	require.Equal(t, 0, ledger.Expire(now.Add(time.Hour), func(string, uint64) bool { return true }))
+	entries, bytes := ledger.Counts()
+	require.Equal(t, 1, entries)
+	require.Equal(t, int64(100), bytes)
+	_, err = ledger.Reserve("other", 1, 1, 1)
+	require.ErrorIs(t, err, ErrLedgerFull)
+	require.NoError(t, ledger.Abandon("active"))
+	entries, bytes = ledger.Counts()
+	require.Zero(t, entries)
+	require.Zero(t, bytes)
+}
+
+func TestExecutionGroupReleaseErrorCanBeRetried(t *testing.T) {
+	var attempts atomic.Int32
+	group, err := NewExecutionGroup("g", 1, 1, func() error {
+		if attempts.Add(1) == 1 {
+			return errors.New("temporary release failure")
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	require.Error(t, group.Close(ReasonCancel))
+	require.Equal(t, GroupDraining, group.State())
+	// A second close is the scheduler's retry-safe release trigger.
+	require.NoError(t, group.Close(ReasonCancel))
+	require.Equal(t, GroupReleased, group.State())
+	require.Equal(t, int32(2), attempts.Load())
+}
+
+func TestExecutionGroupConcurrentReleaseWaitersObserveTheSameFailure(t *testing.T) {
+	releaseStarted := make(chan struct{})
+	releaseContinue := make(chan struct{})
+	var releaseStartOnce sync.Once
+	group, err := NewExecutionGroup("concurrent", 1, 1, func() error {
+		releaseStartOnce.Do(func() { close(releaseStarted) })
+		<-releaseContinue
+		return errors.New("temporary concurrent release failure")
+	})
+	require.NoError(t, err)
+	member, err := group.BeginOpen("member")
+	require.NoError(t, err)
+	require.NoError(t, member.Commit())
+	require.NoError(t, group.Close(ReasonCancel))
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- group.MemberTerminal("member") }()
+	<-releaseStarted
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- group.Close(ReasonCancel) }()
+	close(releaseContinue)
+	require.ErrorContains(t, <-firstDone, "temporary concurrent release failure")
+	require.ErrorContains(t, <-secondDone, "temporary concurrent release failure")
+	require.Equal(t, GroupDraining, group.State())
+}
+
+func TestExecutionGroupCommitReportsReleaseFailure(t *testing.T) {
+	var attempts atomic.Int32
+	group, err := NewExecutionGroup("g", 1, 1, func() error {
+		if attempts.Add(1) == 1 {
+			return errors.New("temporary release failure")
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	open, err := group.BeginOpen("member")
+	require.NoError(t, err)
+	require.NoError(t, group.Close(ReasonCancel))
+
+	err = open.Commit()
+	require.ErrorIs(t, err, ErrGroupClosed)
+	require.ErrorContains(t, err, "temporary release failure")
+	require.ErrorIs(t, open.Commit(), ErrProtocol)
+	require.ErrorIs(t, open.Abort(), ErrProtocol)
+	require.Equal(t, GroupDraining, group.State())
+	require.NoError(t, group.Close(ReasonCancel))
+	require.Equal(t, GroupReleased, group.State())
+	require.Equal(t, int32(2), attempts.Load())
+}

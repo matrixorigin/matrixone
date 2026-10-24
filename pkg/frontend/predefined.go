@@ -99,10 +99,16 @@ var (
 
 	MoCatalogMoUserDefinedFunctionDDL = fmt.Sprintf(`create table mo_catalog.mo_user_defined_function (
 				function_id int auto_increment,
+				active_revision bigint unsigned not null default 0,
+				namespace_version bigint unsigned not null default 0,
 				name     varchar(100),
 				owner  int unsigned,
 				args     json,
 				arg_types varchar(%d) not null default '',
+				canonical_input_descriptor varchar(%d) not null default '',
+				return_descriptor varchar(%d) not null default '',
+				signature_key_schema_version int not null default 0,
+				signature_fingerprint varchar(128) not null default '',
 				retType  varchar(20),
 				body     text,
 				language varchar(20),
@@ -111,14 +117,38 @@ var (
 				modified_time timestamp,
 				created_time  timestamp,
 				type    varchar(10),
-				security_type varchar(10),
+				security_type varchar(10) not null default 'DEFINER',
 				comment  varchar(5000),
 				character_set_client varchar(64),
 				collation_connection varchar(64),
 				database_collation varchar(64),
 				sql_mode varchar(1024) not null default 'PIPES_AS_CONCAT',
 				primary key(function_id),
-				unique key name_db_arg_types(name, db, arg_types)
+				unique key name_db_arg_types_descriptor(name, db, arg_types, canonical_input_descriptor)
+			)`, types.MaxStringSize, types.MaxStringSize, types.MaxStringSize)
+
+	MoCatalogMoFunctionRevisionDDL = fmt.Sprintf(`create table mo_catalog.mo_function_revisions (
+				function_id bigint unsigned not null,
+				revision bigint unsigned not null,
+				namespace_version bigint unsigned not null,
+				name varchar(100) not null,
+				args json not null,
+				arg_types varchar(%d) not null default '',
+				rettype varchar(20) not null,
+				body text not null,
+				language varchar(20) not null,
+				definition_schema_version int not null default 0,
+				abi_contract varchar(64) not null default '',
+				adapter_version varchar(64) not null default '',
+				artifact_digest varchar(128) not null default '',
+				environment_digest varchar(128) not null default '',
+				sdk_version varchar(64) not null default '',
+				null_policy varchar(64) not null default '',
+				volatility varchar(20) not null default 'VOLATILE',
+				definition_fingerprint varchar(128) not null default '',
+				created_time timestamp,
+				security_type varchar(10) not null default 'DEFINER',
+				primary key(function_id, revision)
 			)`, types.MaxStringSize)
 
 	MoCatalogMoMysqlCompatibilityModeDDL = `create table mo_catalog.mo_mysql_compatibility_mode (

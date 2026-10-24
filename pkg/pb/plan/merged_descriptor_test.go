@@ -25,12 +25,16 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	// The compressed descriptor must agree with both generated Go contracts.
 	// Resolving a descriptor-only conflict by choosing either side loses one.
 	want := map[string]map[string]int32{
-		"Query":            {"correlation": 19},
+		"Function":         {"routine_call": 6},
+		"Node":             {"dedup_key_exprs": 95},
+		"PreInsertUkCtx":   {"key_diagnostic_exprs": 19},
+		"Query":            {"correlation": 19, "routine_dependencies": 20},
 		"CreateDatabase":   {"defaults": 5},
 		"AlterDatabase":    {"defaults": 3},
 		"CreateTable":      {"database_defaults": 18, "ctas_execution_protocol_version": 19},
 		"DatabaseDefaults": {"collation_revision": 6},
 		"ColDef":           {"result_column_kind": 23},
+		"LockTarget":       {"no_wait": 18, "skip_locked": 19},
 	}
 	file := decodePlanDescriptor(t, proto.FileDescriptor("plan.proto"))
 	for _, message := range file.GetMessageType() {

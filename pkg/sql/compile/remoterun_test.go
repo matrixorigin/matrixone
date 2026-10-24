@@ -5436,7 +5436,10 @@ func TestRemoteStatementSendErrorPreservesCauseWithoutMaskingInvariant(t *testin
 func TestDedupDiagnosticExpressionsRemoteRoundTrip(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
-	exprs := []*planpb.Expr{{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 3}}}}
+	exprs := []*planpb.Expr{
+		{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 3}}},
+		{Expr: &planpb.Expr_F{F: &planpb.Function{RoutineCall: &planpb.RoutineCall{}}}},
+	}
 	diagnosticExprs := func(op vm.Operator) []*planpb.Expr {
 		switch arg := op.(type) {
 		case *dedupjoin.DedupJoin:
@@ -5462,6 +5465,9 @@ func TestDedupDiagnosticExpressionsRemoteRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			decoded := new(pipeline.Instruction)
 			require.NoError(t, decoded.Unmarshal(wire))
+			features, err := planpb.RequiredRemoteExpressionFeatures(decoded)
+			require.NoError(t, err)
+			require.True(t, features.PythonRoutineContract, "diagnostic expression carriers must retain protocol admission")
 			restored, err := convertToVmOperator(decoded, ctx, nil)
 			require.NoError(t, err)
 			require.Equal(t, exprs, diagnosticExprs(restored))
@@ -5474,6 +5480,9 @@ func TestDedupDiagnosticExpressionsRemoteRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	decoded := new(pipeline.Instruction)
 	require.NoError(t, decoded.Unmarshal(wire))
+	features, err := planpb.RequiredRemoteExpressionFeatures(decoded)
+	require.NoError(t, err)
+	require.True(t, features.PythonRoutineContract, "diagnostic expression carriers must retain protocol admission")
 	restored, err := convertToVmOperator(decoded, ctx, nil)
 	require.NoError(t, err)
 	require.Equal(t, exprs, restored.(*preinsertunique.PreInsertUnique).PreInsertCtx.KeyDiagnosticExprs[0].List)
