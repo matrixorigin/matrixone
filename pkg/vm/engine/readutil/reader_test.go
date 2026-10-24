@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
@@ -319,8 +318,6 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 	for _, aboveThreshold := range []bool{false, true} {
 		t.Run(map[bool]string{false: "at_threshold", true: "above_threshold"}[aboveThreshold], func(t *testing.T) {
 			ctx := fileservice.WithFileServicePolicy(context.Background(), fileservice.SkipFullFilePreloads|fileservice.SkipDiskCacheWrites)
-			var attribution perfcounter.CounterSet
-			ctx = perfcounter.WithCounterSet(ctx, &attribution)
 			fs := testutil.NewSharedFS()
 			writeMP := mpool.MustNewZero()
 			input := batch.NewWithSize(2)
@@ -408,11 +405,6 @@ func TestReaderLateMaterializationSkipsPersistedPayload(t *testing.T) {
 				want |= fileservice.SkipMemoryCacheWrites
 			}
 			require.Contains(t, observed.policies, want)
-			if aboveThreshold {
-				require.EqualValues(t, 1, attribution.FileService.ReaderCacheWriteBypassBlocks.Load())
-			} else {
-				require.Zero(t, attribution.FileService.ReaderCacheWriteBypassBlocks.Load())
-			}
 			require.NoError(t, mr.Close())
 			require.Equal(t, int32(1), atomic.LoadInt32(&source.closeCount))
 

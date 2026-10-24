@@ -2072,7 +2072,11 @@ func findDeleteAndUpdateBat(
 			if tuple, _, err2 = tombstoneHashmap.DecodeRow(key); err2 != nil {
 				return err2
 			}
-			if err2 = vector.AppendAny(tBat1.Vecs[0], tuple[0], false, ses.proc.Mp()); err2 != nil {
+			// The decoded tombstone key carries the packed heap encoding of
+			// the PK column. Fixed-width key payloads such as Decimal256 decode
+			// as raw bytes, so normalize to the PK column type before appending;
+			// AppendAny would assert the typed representation and panic.
+			if err2 = appendTupleValueToVector(tBat1.Vecs[0], tuple[0], ses.proc.Mp()); err2 != nil {
 				return err2
 			}
 			var tombTuple types.Tuple

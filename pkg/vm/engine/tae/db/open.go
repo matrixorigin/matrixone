@@ -161,18 +161,6 @@ func Open(
 	return
 }
 
-// TODO: remove it
-// func checkObjectState(db *DB) {
-// 	p := &catalog.LoopProcessor{}
-// 	p.ObjectFn = func(oe *catalog.ObjectEntry) error {
-// 		if oe.IsAppendable() == oe.IsSorted() {
-// 			panic(fmt.Sprintf("logic err %v", oe.ID.String()))
-// 		}
-// 		return nil
-// 	}
-// 	db.Catalog.RecurLoop(p)
-// }
-
 func mpoolAllocatorSubTask() {
 	v2.MemTAEDefaultAllocatorGauge.Set(float64(common.DefaultAllocator.CurrNB()))
 	v2.MemTAEDefaultHighWaterMarkGauge.Set(float64(common.DefaultAllocator.Stats().HighWaterMark.Load()))

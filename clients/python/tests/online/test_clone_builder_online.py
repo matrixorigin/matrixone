@@ -8,6 +8,7 @@ unique prefix 'cb_' (clone builder) with timestamps to avoid collisions.
 import pytest
 import time
 from matrixone.clone_builder import clone_table, clone_database
+from .test_config import online_config
 
 
 def _uid():
@@ -58,7 +59,11 @@ class TestCloneTableOnline:
             test_client.execute(f"CREATE TABLE {src} (id INT PRIMARY KEY, val INT)")
             test_client.execute(f"INSERT INTO {src} VALUES (1, 100)")
 
-            test_client.execute(f"CREATE SNAPSHOT {snap} FOR TABLE test {src}")
+            # The table above is created unqualified, so it lives in the
+            # connection's active database. Snapshot that same database;
+            # MATRIXONE_TEST_DATABASE may name a different one.
+            db_name = test_client._escape_identifier(online_config.database)
+            test_client.execute(f"CREATE SNAPSHOT {snap} FOR TABLE {db_name} {src}")
 
             # Insert after snapshot — should NOT appear in clone
             test_client.execute(f"INSERT INTO {src} VALUES (2, 200)")

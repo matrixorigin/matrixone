@@ -119,6 +119,172 @@ insert into drop_columns values (1,1,1);
 alter table drop_columns drop column a, drop check ck_sum;
 select * from drop_columns order by id;
 
+-- Issue #30956: DROP COLUMN implicitly removes the CHECKs that reference it.
+create table dc_single(id int primary key,v int,constraint ck_dcs check(v>0));
+insert into dc_single values (1,10);
+alter table dc_single drop column v;
+select column_name from information_schema.columns
+    where table_schema=database() and table_name='dc_single' order by ordinal_position;
+select constraint_name from information_schema.table_constraints
+    where table_schema=database() and table_name='dc_single' and constraint_type='CHECK';
+select * from dc_single;
+
+-- Dropping a column no CHECK references keeps every constraint and its enforcement.
+create table dc_none(id int primary key,v int,w int,constraint ck_dcn check(w>0));
+insert into dc_none values (1,10,20);
+alter table dc_none drop column v;
+select constraint_name,check_clause from information_schema.check_constraints
+    where constraint_schema=database() and constraint_name='ck_dcn' order by constraint_name;
+insert into dc_none values (2,-1);
+insert into dc_none values (2,30);
+select * from dc_none order by id;
+
+-- A CHECK spanning a surviving column rejects the DROP COLUMN instead
+-- (MySQL ER_DEPENDENT_BY_CHECK_CONSTRAINT 3959); an explicit DROP CHECK in the
+-- same statement releases the column.
+create table dc_multi(id int primary key,a int,b int,c int,constraint ck_dcm_ab check(a+b>0),constraint ck_dcm_c check(c>0));
+insert into dc_multi values (1,1,1,1);
+alter table dc_multi drop column b;
+select column_name from information_schema.columns
+    where table_schema=database() and table_name='dc_multi' order by ordinal_position;
+select constraint_name,check_clause from information_schema.check_constraints
+    where constraint_schema=database() and constraint_name like 'ck_dcm%' order by constraint_name;
+insert into dc_multi values (2,-1,0,1);
+insert into dc_multi values (2,1,0,1);
+select count(*) from dc_multi;
+alter table dc_multi drop check ck_dcm_ab, drop column b;
+select column_name from information_schema.columns
+    where table_schema=database() and table_name='dc_multi' order by ordinal_position;
+select constraint_name,check_clause from information_schema.check_constraints
+    where constraint_schema=database() and constraint_name like 'ck_dcm%' order by constraint_name;
+insert into dc_multi values (3,1,-2);
+insert into dc_multi values (3,1,2);
+select * from dc_multi order by id;
+
+-- The name of an auto-dropped CHECK is released to a same-statement
+-- replacement (MySQL releases dropped_cc_names before admitting new checks);
+-- the replacement binds to the post-drop schema and stays enforced.
+create table dc_replace(id int primary key,v int,w int,constraint ck_dcmn check(v>0));
+insert into dc_replace values (1,10,20);
+alter table dc_replace drop column v, add constraint ck_dcmn check(w>0);
+select column_name from information_schema.columns
+    where table_schema=database() and table_name='dc_replace' order by ordinal_position;
+select constraint_name,check_clause from information_schema.check_constraints
+    where constraint_schema=database() and constraint_name='ck_dcmn';
+insert into dc_replace values (2,-5);
+insert into dc_replace values (2,30);
+select * from dc_replace order by id;
+
+-- Re-adding the dropped name in one statement does not resurrect the removed CHECK.
+create table dc_readd(id int primary key,v int,constraint ck_dcr check(v>0));
+insert into dc_readd values (1,10);
+alter table dc_readd drop column v,add column v int default -1;
+select constraint_name from information_schema.table_constraints
+    where table_schema=database() and table_name='dc_readd' and constraint_type='CHECK';
+insert into dc_readd values (2,default);
+insert into dc_readd values (3,-5);
+select * from dc_readd order by id;
+
+-- A rejected DROP COLUMN leaves the column, its CHECKs and the rows untouched.
+create table dc_atomic(id int primary key,v int,w int generated always as (v+1) stored,constraint ck_dca check(v>0));
+insert into dc_atomic(id,v) values (1,10);
+alter table dc_atomic drop column v;
+select column_name from information_schema.columns
+    where table_schema=database() and table_name='dc_atomic' order by ordinal_position;
+select constraint_name from information_schema.table_constraints
+    where table_schema=database() and table_name='dc_atomic' and constraint_type='CHECK';
+select * from dc_atomic;
+
+-- A CHECK follows its column through an earlier rename in the same ALTER, so
+-- dropping the re-added fresh column keeps the constraint on the surviving
+-- renamed column and keeps it enforced.
+create table dc_identity(id int primary key,v int,constraint ck_dci check(v>0));
+insert into dc_identity values (1,10);
+alter table dc_identity rename column v to x, add column v int, drop column v;
+select column_name from information_schema.columns
+    where table_schema=database() and table_name='dc_identity' order by ordinal_position;
+select constraint_name,check_clause from information_schema.check_constraints
+    where constraint_schema=database() and constraint_name='ck_dci';
+insert into dc_identity values (2,-1);
+insert into dc_identity values (2,1);
+select * from dc_identity order by id;
+
+-- The generic DROP CONSTRAINT spelling resolves the same CHECK identity and
+-- co-drops with its column in either clause order.
+create table dc_generic(id int primary key,v int,constraint ck_dcg check(v>0));
+insert into dc_generic values (1,10);
+alter table dc_generic drop constraint ck_dcg, drop column v;
+select column_name from information_schema.columns
+    where table_schema=database() and table_name='dc_generic' order by ordinal_position;
+select * from dc_generic;
+create table dc_generic2(id int primary key,v int,constraint ck_dcg2 check(v>0));
+insert into dc_generic2 values (1,10);
+alter table dc_generic2 drop column v, drop constraint ck_dcg2;
+select column_name from information_schema.columns
+    where table_schema=database() and table_name='dc_generic2' order by ordinal_position;
+select * from dc_generic2;
+
+-- A same-statement replacement CHECK must bind its own authored expression.
+-- The row violates the replacement over w, so the combined ALTER is rejected
+-- atomically and the original table stays intact.
+create table dc_rebind(id int primary key,v int,w int,constraint ck_dcr check(v>0));
+insert into dc_rebind values (1,10,-1);
+alter table dc_rebind drop column v, add column v int default 1, add constraint ck_dcr check(w>0);
+select column_name from information_schema.columns
+    where table_schema=database() and table_name='dc_rebind' order by ordinal_position;
+select constraint_name,check_clause from information_schema.check_constraints
+    where constraint_schema=database() and constraint_name='ck_dcr';
+select * from dc_rebind;
+
+-- When existing rows satisfy the replacement, the combined ALTER succeeds.
+-- The recreated table is (id,w,v): w=-5 violates the replacement even though
+-- the same-name recreated v=9 passes, and w=5 lands together with v=-9
+-- because the original v>0 was auto-dropped with the old column.
+create table dc_rebind2(id int primary key,v int,w int,constraint ck_dcr2 check(v>0));
+insert into dc_rebind2 values (1,10,5);
+alter table dc_rebind2 drop column v, add column v int default 1, add constraint ck_dcr2 check(w>0);
+select constraint_name,check_clause from information_schema.check_constraints
+    where constraint_schema=database() and constraint_name='ck_dcr2';
+insert into dc_rebind2 values (2,-5,9);
+insert into dc_rebind2 values (2,5,-9);
+select * from dc_rebind2 order by id;
+
+-- A CHECK retained through RENAME keeps its creation-time bound semantics:
+-- the division was bound with div_precision_increment 10, so the same row
+-- stays valid through COPY and enforcement is unchanged afterwards even when
+-- the ALTER runs under 0.
+set @saved_dcp = @@div_precision_increment;
+set div_precision_increment = 10;
+create table dc_prec(id int primary key,a decimal(10,2),b decimal(10,2),v int,constraint ck_dcp check(a/b>0.3333333));
+insert into dc_prec values (1,1,3,0);
+create table dc_prec2(id int primary key,a decimal(10,2),b decimal(10,2),v int,constraint ck_dcp2 check(a/b>0.3333333));
+set div_precision_increment = 0;
+alter table dc_prec rename column a to x, drop column v;
+select constraint_name,check_clause from information_schema.check_constraints
+    where constraint_schema=database() and constraint_name='ck_dcp';
+insert into dc_prec values (2,1,3);
+insert into dc_prec values (3,1,4);
+select * from dc_prec order by id;
+-- The empty-table form persists unchanged semantics: the first inserted row
+-- is still validated at the creation-time scale, so 1/3 satisfies the check.
+alter table dc_prec2 rename column a to x, drop column v;
+insert into dc_prec2 values (1,1,3);
+select * from dc_prec2;
+set div_precision_increment = @saved_dcp;
+drop table dc_prec;
+drop table dc_prec2;
+drop table dc_single;
+drop table dc_none;
+drop table dc_multi;
+drop table dc_replace;
+drop table dc_readd;
+drop table dc_atomic;
+drop table dc_identity;
+drop table dc_generic;
+drop table dc_generic2;
+drop table dc_rebind;
+drop table dc_rebind2;
+
 -- MLflow's migration adds an unnamed CHECK to an existing status column.
 create table runs(id int primary key,status varchar(20));
 insert into runs values (1,'RUNNING');
