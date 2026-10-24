@@ -19,9 +19,12 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"io"
 	"math/rand"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -38,6 +41,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -117,6 +121,18 @@ func TestAssembler(t *testing.T) {
 	exact := randomBytes(2*ChunkSize, 2)
 	exactRef := testRef(exact)
 	require.Equal(t, int64(2), exactRef.numChunks())
+	f, err = os.CreateTemp(t.TempDir(), "asm")
+	require.NoError(t, err)
+	defer f.Close()
+	a, err = newAssembler(f, &exactRef)
+	require.NoError(t, err)
+	require.ErrorContains(t, a.add(1, exact[ChunkSize:2*ChunkSize-1]), "chunk 1 has 65535 bytes")
+	require.NoError(t, a.add(1, exact[ChunkSize:]))
+	require.NoError(t, a.add(0, exact[:ChunkSize]))
+	require.NoError(t, a.finish())
+	got, err = io.ReadAll(io.NewSectionReader(f, 0, exactRef.Size))
+	require.NoError(t, err)
+	require.Equal(t, exact, got)
 }
 
 func TestManifestAndNames(t *testing.T) {
@@ -268,6 +284,7 @@ func newEnv(t *testing.T, ctrl *gomock.Controller, tbl *fakeTable, cache *filese
 	rel.EXPECT().GetTableID(gomock.Any()).Return(tbl.tableID).AnyTimes()
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(storageTableDef()).AnyTimes()
 	txn.EXPECT().GetWorkspace().Return(ws).AnyTimes()
+	txn.EXPECT().Txn().Return(pbtxn.TxnMeta{ID: []byte("txn-1")}).AnyTimes()
 	ws.EXPECT().GetSnapshotWriteOffset().Return(0).AnyTimes()
 	rel.EXPECT().Ranges(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, p engine.RangesParam) (engine.RelData, error) {
@@ -315,7 +332,9 @@ func readFile(t *testing.T, f *File) []byte {
 }
 
 func resetVerified() {
-	verified.Range(func(k, _ any) bool { verified.Delete(k); return true })
+	verified.mu.Lock()
+	clear(verified.m)
+	verified.mu.Unlock()
 }
 
 func TestOpenRebuildsThenHitsCache(t *testing.T) {
@@ -518,4 +537,92 @@ func TestFDPathSurvivesEviction(t *testing.T) {
 	require.Equal(t, data, got, "a library opening FDPath reads the file after eviction")
 	// the layer reads by offset, so a shared descriptor offset does not disturb it
 	require.Equal(t, data, readFile(t, f))
+}
+
+func TestWriteCachesUnderNameAndCleansUp(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	dir := t.TempDir()
+	cache := newCache(t, dir)
+	tbl := &fakeTable{tableID: 19, rows: func() []chunkRow { return nil }}
+	env := newEnv(t, ctrl, tbl, cache)
+	ctx := context.Background()
+	data := randomBytes(2*ChunkSize+9, 19)
+
+	var token string
+	ref := Ref{DB: "db", Table: "idx", IndexID: "cdc_tail", Tag: 1, FirstChunk: 7, Checksum: "frame0001"}
+	size, sum, err := Write(ctx, env, ref, bytes.NewReader(data), func(sql string) error {
+		require.Contains(t, sql, "FROM index_file_chunks('")
+		token = sql[strings.Index(sql, "('")+2 : strings.Index(sql, "',")]
+		src, err := LookupSource(token, []byte("txn-1"))
+		require.NoError(t, err)
+		buf := make([]byte, ChunkSize)
+		last, err := src.ReadChunk(9, buf)
+		require.NoError(t, err)
+		require.Equal(t, data[2*ChunkSize:], last, "the last chunk is short")
+		_, err = src.ReadChunk(10, buf)
+		require.Error(t, err)
+		_, err = src.ReadChunk(6, buf)
+		require.Error(t, err)
+		_, err = LookupSource(token, []byte("txn-2"))
+		require.Error(t, err, "another transaction cannot use the source")
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(data)), size)
+	require.Equal(t, md5Hex(data), sum)
+	_, err = LookupSource(token, []byte("txn-1"))
+	require.Error(t, err, "the source is unregistered after Write")
+
+	ref.Size = size
+	f, err := Open(ctx, env, ref)
+	require.NoError(t, err, "the caller's checksum names the cached file")
+	require.Equal(t, data, readFile(t, f))
+	require.NoError(t, f.Close())
+	require.Equal(t, int32(0), tbl.scans.Load(), "the writing CN reads its file from the cache")
+
+	boom := errors.New("insert failed")
+	failed := Ref{DB: "db", Table: "idx", IndexID: "idx:2:0"}
+	_, _, err = Write(ctx, env, failed, bytes.NewReader(data), func(sql string) error {
+		token = sql[strings.Index(sql, "('")+2 : strings.Index(sql, "',")]
+		return boom
+	})
+	require.ErrorIs(t, err, boom)
+	_, err = LookupSource(token, []byte("txn-1"))
+	require.Error(t, err, "the source is unregistered after a failed Write")
+	failed.Size, failed.Checksum = size, sum
+	_, err = cache.Open(ctx, entryName(19, &failed), dataFile)
+	require.Error(t, err, "a failed write caches nothing")
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	for _, e := range entries {
+		require.False(t, strings.HasSuffix(e.Name(), ".tmp"), "temp files are removed: %s", e.Name())
+	}
+
+	empty := Ref{DB: "db", Table: "idx", IndexID: "empty"}
+	size, sum, err = Write(ctx, env, empty, bytes.NewReader(nil), func(string) error {
+		t.Fatal("an empty file writes no rows")
+		return nil
+	})
+	require.NoError(t, err)
+	require.Zero(t, size)
+	empty.Checksum = sum
+	f, err = Open(ctx, env, empty)
+	require.NoError(t, err)
+	require.Zero(t, f.Size())
+	require.NoError(t, f.Close())
+}
+
+func TestVerifiedSetIsBounded(t *testing.T) {
+	resetVerified()
+	defer resetVerified()
+	for i := 0; i <= maxVerified; i++ {
+		verified.add(strconv.Itoa(i))
+	}
+	verified.mu.Lock()
+	n := len(verified.m)
+	verified.mu.Unlock()
+	require.Equal(t, 1, n, "the set is cleared when full")
+	require.True(t, verified.has(strconv.Itoa(maxVerified)))
+	verified.remove(strconv.Itoa(maxVerified))
+	require.False(t, verified.has(strconv.Itoa(maxVerified)))
 }

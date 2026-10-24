@@ -106,7 +106,7 @@ func Write(ctx context.Context, env *Env, ref Ref, src io.Reader, runSQL func(sq
 			return 0, "", err
 		}
 		if written {
-			verified.Store(env.Cache.Path()+"\x00"+name, struct{}{})
+			verified.add(env.Cache.Path() + "\x00" + name)
 		}
 	}
 	return size, sum, nil

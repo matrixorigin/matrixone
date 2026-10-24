@@ -22,8 +22,11 @@ import (
 	"os"
 	"sync"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -51,8 +54,11 @@ func (f *File) File() *os.File { return f.f }
 // Size returns the file size.
 func (f *File) Size() int64 { return f.size }
 
-// FDPath returns a path that opens this file through its open descriptor, for libraries
-// that take a path. It stays valid until Close, even after the cache evicts the file.
+// FDPath returns a path that opens this file through its open descriptor (/dev/fd/N), for
+// libraries that take a path. It stays valid until Close, even after the cache evicts the
+// file, and must not be used after Close, when the descriptor number can be reused. On
+// Linux opening it creates an independent file description; on macOS it duplicates the
+// descriptor and shares its offset, so readers of the File use ReadAt.
 func (f *File) FDPath() string { return fmt.Sprintf("/dev/fd/%d", f.f.Fd()) }
 
 // Close closes the file.
@@ -89,25 +95,63 @@ func Open(ctx context.Context, env *Env, ref Ref) (*File, error) {
 }
 
 // verified holds the cache entries whose full checksum was checked since the process
-// started; later opens check the length only.
-var verified sync.Map
+// started; later opens check the length only. It is cleared when it reaches
+// maxVerified entries, which only costs a full check on the next open of each entry.
+var verified = verifiedSet{m: make(map[string]struct{})}
 
-// openCached opens entry name. A missing or invalid entry is a miss (nil, nil); an
-// invalid entry is deleted.
+const maxVerified = 1 << 16
+
+type verifiedSet struct {
+	mu sync.Mutex
+	m  map[string]struct{}
+}
+
+func (v *verifiedSet) has(key string) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	_, ok := v.m[key]
+	return ok
+}
+
+func (v *verifiedSet) add(key string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if len(v.m) >= maxVerified {
+		clear(v.m)
+	}
+	v.m[key] = struct{}{}
+}
+
+func (v *verifiedSet) remove(key string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	delete(v.m, key)
+}
+
+// openCached opens entry name. A missing, invalid or unreadable entry is a miss
+// (nil, nil); an invalid entry is deleted. Only cancellation is an error.
 func openCached(ctx context.Context, cache *fileservice.IndexFileCache, name string, ref *Ref) (*File, error) {
 	files, err := cache.Open(ctx, name, dataFile, manifestFile)
 	if err != nil {
-		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-			return nil, nil
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
 		}
-		return nil, err
+		if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			logutil.Warn("index file cache open failed", zap.String("entry", name), zap.Error(err))
+		}
+		return nil, nil
 	}
 	data, manifest := files[0], files[1]
 	defer manifest.Close()
-	if err := checkCached(data, manifest, ref, cache.Path()+"\x00"+name); err != nil {
+	key := cache.Path() + "\x00" + name
+	if err := checkCached(data, manifest, ref, key); err != nil {
 		_ = data.Close()
+		verified.remove(key)
+		logutil.Warn("index file cache entry invalid, rebuilding", zap.String("entry", name), zap.Error(err))
 		if delErr := cache.Delete(ctx, name); delErr != nil {
-			return nil, delErr
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
 		}
 		return nil, nil
 	}
@@ -130,7 +174,7 @@ func checkCached(data, manifest *os.File, ref *Ref, key string) error {
 	if size != ref.Size || stat.Size() != ref.Size {
 		return moerr.NewInternalErrorNoCtxf("index file %s: cached size %d/%d, want %d", ref.IndexID, size, stat.Size(), ref.Size)
 	}
-	if _, ok := verified.Load(key); ok {
+	if verified.has(key) {
 		return nil
 	}
 	got, err := fileCRC(data, size)
@@ -140,7 +184,7 @@ func checkCached(data, manifest *os.File, ref *Ref, key string) error {
 	if got != crc {
 		return moerr.NewInternalErrorNoCtxf("index file %s: cached file checksum mismatch", ref.IndexID)
 	}
-	verified.Store(key, struct{}{})
+	verified.add(key)
 	return nil
 }
 
@@ -168,7 +212,7 @@ func rebuildCached(ctx context.Context, env *Env, rel engine.Relation, ref *Ref,
 		return nil, err
 	}
 	if written {
-		verified.Store(env.Cache.Path()+"\x00"+name, struct{}{})
+		verified.add(env.Cache.Path() + "\x00" + name)
 	}
 	if f, err := openCached(ctx, env.Cache, name, ref); f != nil || err != nil {
 		_ = tmp.Close()

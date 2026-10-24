@@ -69,6 +69,11 @@ func (st *indexFileChunksState) end(tf *TableFunction, proc *process.Process) er
 
 func (st *indexFileChunksState) start(tf *TableFunction, proc *process.Process, nthRow int, analyzer process.Analyzer) error {
 	st.src = nil
+	// The source registry is local to the CN that registered it; a function with an
+	// input may be compiled into remote scopes.
+	if !tf.isTbFuncSourceOp() {
+		return moerr.NewNotSupported(proc.Ctx, indexfile.FuncName+" cannot take an input")
+	}
 	if len(tf.ctr.argVecs) != 3 {
 		return moerr.NewInvalidInput(proc.Ctx, indexfile.FuncName+" requires 3 arguments (source, first chunk, chunk count)")
 	}
@@ -89,7 +94,7 @@ func (st *indexFileChunksState) start(tf *TableFunction, proc *process.Process, 
 		return err
 	}
 	numChunks := (src.Size + indexfile.ChunkSize - 1) / indexfile.ChunkSize
-	if count <= 0 || start < src.FirstChunk || start+count > src.FirstChunk+numChunks {
+	if count <= 0 || start < src.FirstChunk || count > src.FirstChunk+numChunks-start {
 		return moerr.NewInvalidInputf(proc.Ctx, "%s: chunks [%d, %d) outside the file", indexfile.FuncName, start, start+count)
 	}
 

@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -42,6 +43,7 @@ type indexFileEngine struct {
 	t    *testing.T
 	ctx  context.Context
 	de   *testutil.TestDisttaeEngine
+	tae  *testutil.TestTxnStorage
 	exec executor.SQLExecutor
 }
 
@@ -64,7 +66,7 @@ func setupIndexFileEngine(t *testing.T) *indexFileEngine {
 	require.NoError(t, exec_sql(de, ctx, frontend.MoCatalogMoForeignKeysDDL))
 	exec, ok := lookupInternalSQLExecutor()
 	require.True(t, ok)
-	e := &indexFileEngine{t: t, ctx: ctx, de: de, exec: exec}
+	e := &indexFileEngine{t: t, ctx: ctx, de: de, tae: tae, exec: exec}
 	e.run(nil, "create database ifdb")
 	e.run(nil, "create table ifdb.idx (index_id varchar(128), chunk_id bigint, data longblob, tag bigint, primary key (index_id, chunk_id))")
 	return e
@@ -84,6 +86,18 @@ func (e *indexFileEngine) run(txn client.TxnOperator, sql string) error {
 		require.NoError(e.t, err, sql)
 	}
 	return err
+}
+
+// flush persists the chunk table's rows into storage objects.
+func (e *indexFileEngine) flush() {
+	op := e.txn()
+	db, err := e.de.Engine.Database(e.ctx, "ifdb", op)
+	require.NoError(e.t, err)
+	rel, err := db.Relation(e.ctx, "idx", nil)
+	require.NoError(e.t, err)
+	require.NoError(e.t, e.tae.GetDB().FlushTable(e.ctx, catalog.System_Account, rel.GetDBID(e.ctx), rel.GetTableID(e.ctx),
+		types.TimestampToTS(e.de.Now())))
+	require.NoError(e.t, op.Commit(e.ctx))
 }
 
 func (e *indexFileEngine) txn() client.TxnOperator {
@@ -176,9 +190,17 @@ func TestIndexFileWriteOpenThroughEngine(t *testing.T) {
 	require.Equal(t, base, e.open(txn1, writeCache, baseRef), "the writing CN has the file cached")
 	require.NoError(t, txn1.Commit(e.ctx))
 
+	// rows the chunk-range filter must exclude: other ids sharing a prefix, the same id
+	// beyond the file and other frames of the tail
+	e.run(nil, "insert into ifdb.idx values "+
+		"('idx:1', 0, 'prefix id', 0), ('idx:1:0x', 0, 'extended id', 0), "+
+		"('idx:1:0', 5000, 'beyond the file', 0), ('cdc_tail', 39, 'previous frame', 1), "+
+		"('cdc_tail', 43, 'next frame', 1)")
+	e.flush()
+
 	txn2 := e.txn()
 	readCache := e.cache()
-	require.Equal(t, base, e.open(txn2, readCache, baseRef), "another CN rebuilds from committed rows")
+	require.Equal(t, base, e.open(txn2, readCache, baseRef), "another CN rebuilds from flushed rows")
 	require.Equal(t, frame, e.open(txn2, readCache, frameRef))
 	require.Equal(t, base, e.open(txn2, readCache, baseRef))
 	require.NoError(t, txn2.Commit(e.ctx))
@@ -195,6 +217,7 @@ func TestIndexFileWriteOpenThroughEngine(t *testing.T) {
 	txnNow := e.txn()
 	_, err = indexfile.Open(e.ctx, e.env(txnNow, e.cache()), baseRef)
 	require.ErrorContains(t, err, "missing chunk", "the current snapshot no longer has the rows")
+	require.Equal(t, base, e.open(txnNow, writeCache, baseRef), "a cached file is served without its rows")
 	require.NoError(t, txnNow.Commit(e.ctx))
 	txnLater := e.txn()
 	txnSnap := txnLater.CloneSnapshotOp(snapshotTS)

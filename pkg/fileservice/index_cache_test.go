@@ -398,8 +398,12 @@ func TestIndexFileCacheConcurrentOperations(t *testing.T) {
 						assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
 						continue
 					}
-					assert.Equal(t, payload(name), readAllFile(t, files[0]))
-					assert.Equal(t, []byte(fmt.Sprintf("len=%d", len(payload(name)))), readAllFile(t, files[1]))
+					data, derr := io.ReadAll(io.NewSectionReader(files[0], 0, 1<<30))
+					manifest, merr := io.ReadAll(io.NewSectionReader(files[1], 0, 1<<30))
+					assert.NoError(t, derr)
+					assert.NoError(t, merr)
+					assert.Equal(t, payload(name), data)
+					assert.Equal(t, []byte(fmt.Sprintf("len=%d", len(payload(name)))), manifest)
 					closeFiles(files)
 				case 3:
 					assert.NoError(t, c.Delete(ctx, name))
@@ -647,4 +651,43 @@ func TestIndexFileCachePutMovesTempFile(t *testing.T) {
 	require.Error(t, err, "a missing source file is the caller's error")
 	_, err = c.Put(ctx, "both", []IndexCacheFile{{Name: "data", Path: "x", Open: indexCacheBytes("d", nil).Open}})
 	require.Error(t, err)
+}
+
+func TestIndexFileCachePathMustNotOverlapDiskCache(t *testing.T) {
+	config := indexCacheConfig(t, 100<<20)
+	trailing := *config.DiskPath + string(filepath.Separator)
+	config.DiskPath = &trailing
+	caches := newTestFileServiceCaches(t, config)
+	require.Equal(t, filepath.Clean(trailing)+"-index-file", caches.index.disk.path,
+		"a trailing slash on disk-path does not put the index cache inside it")
+
+	for name, indexPath := range map[string]func(disk string) string{
+		"same":   func(disk string) string { return disk },
+		"inside": func(disk string) string { return filepath.Join(disk, "index") },
+		"parent": func(disk string) string { return filepath.Dir(disk) },
+	} {
+		config := indexCacheConfig(t, 100<<20)
+		p := indexPath(*config.DiskPath)
+		config.IndexFileDiskPath = &p
+		_, err := newFileServiceCaches(context.Background(), config, nil, "test", true)
+		require.ErrorContains(t, err, "overlaps", name)
+	}
+}
+
+func TestIndexFileCachePutRepairsIncompleteEntry(t *testing.T) {
+	ctx := context.Background()
+	c := newTestIndexFileCache(t, t.TempDir(), 1<<30)
+	diskPath, err := c.disk.pathForDir("e")
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(diskPath, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(diskPath, "data"), []byte("stale"), 0644))
+	requireIndexCacheMiss(t, c, "e")
+
+	written, err := c.Put(ctx, "e", indexCacheEntry([]byte("fresh")))
+	require.NoError(t, err)
+	require.True(t, written, "an entry missing files is replaced")
+	files, err := c.Open(ctx, "e", "data", "manifest")
+	require.NoError(t, err)
+	defer closeFiles(files)
+	require.Equal(t, []byte("fresh"), readAllFile(t, files[0]))
 }

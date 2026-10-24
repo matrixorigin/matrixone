@@ -20,6 +20,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"testing"
@@ -212,4 +213,91 @@ func TestIndexFileChunksRejectsMisuse(t *testing.T) {
 	boom := fmt.Errorf("insert failed")
 	_, _, err = indexfile.Write(context.Background(), env, ref, bytes.NewReader(data), func(string) error { return boom })
 	require.ErrorIs(t, err, boom)
+}
+
+func indexFileChunksArgs(token *string, start, count any) []*plan.Expr {
+	str := func(s *string) *plan.Expr {
+		if s == nil {
+			return &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+		}
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: *s}}}}
+	}
+	num := func(v any) *plan.Expr {
+		switch x := v.(type) {
+		case int32:
+			return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: x}}}}
+		case int64:
+			return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: x}}}}
+		case string:
+			return &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 8}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: x}}}}
+		}
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+	}
+	return []*plan.Expr{str(token), num(start), num(count)}
+}
+
+// drainIndexFileChunks runs the operator until it ends and returns the chunk ids.
+func drainIndexFileChunks(t *testing.T, tf *TableFunction, proc *process.Process) ([]int64, error) {
+	var ids []int64
+	for {
+		res, err := tf.Call(proc)
+		if err != nil {
+			return ids, err
+		}
+		if res.Batch == nil || res.Batch.IsDone() {
+			return ids, nil
+		}
+		require.LessOrEqual(t, res.Batch.RowCount(), indexFileChunksBatchRows)
+		ids = append(ids, vector.MustFixedColNoTypeCheck[int64](res.Batch.Vecs[1])...)
+	}
+}
+
+func TestIndexFileChunksOperatorLifecycle(t *testing.T) {
+	env, proc := indexFileTestEnv(t, "txn-1")
+	data := indexFileTestData(100*indexfile.ChunkSize + 3)
+	ref := indexfile.Ref{DB: "db", Table: "idx", IndexID: "i", FirstChunk: 5}
+	_, _, err := indexfile.Write(context.Background(), env, ref, bytes.NewReader(data), func(sql string) error {
+		token := indexFileChunksCall.FindStringSubmatch(sql)[1]
+
+		tf := newIndexFileChunksTF()
+		tf.Args = indexFileChunksArgs(&token, int32(10), int64(70))
+		require.NoError(t, tf.Prepare(proc))
+		ids, err := drainIndexFileChunks(t, tf, proc)
+		require.NoError(t, err)
+		require.Len(t, ids, 70)
+		require.Equal(t, int64(10), ids[0])
+		require.Equal(t, int64(79), ids[69])
+
+		tf.Reset(proc, false, nil)
+		ids, err = drainIndexFileChunks(t, tf, proc)
+		require.NoError(t, err)
+		require.Len(t, ids, 70, "a reset operator runs again")
+		tf.Free(proc, false, nil)
+
+		for name, args := range map[string][]*plan.Expr{
+			"null token":      indexFileChunksArgs(nil, int64(5), int64(1)),
+			"null start":      indexFileChunksArgs(&token, nil, int64(1)),
+			"string count":    indexFileChunksArgs(&token, int64(5), "1"),
+			"huge count":      indexFileChunksArgs(&token, int64(6), int64(math.MaxInt64)),
+			"count past end":  indexFileChunksArgs(&token, int64(100), int64(10)),
+			"wrong arguments": indexFileChunksArgs(&token, int64(5), int64(1))[:2],
+		} {
+			tf := newIndexFileChunksTF()
+			tf.Args = args
+			require.NoError(t, tf.Prepare(proc), name)
+			_, err := drainIndexFileChunks(t, tf, proc)
+			require.Error(t, err, name)
+			tf.Free(proc, false, nil)
+		}
+
+		withInput := newIndexFileChunksTF()
+		withInput.Args = indexFileChunksArgs(&token, int64(5), int64(1))
+		withInput.AppendChild(newIndexFileChunksTF())
+		st, err := indexFileChunksPrepare(proc, withInput)
+		require.NoError(t, err)
+		require.ErrorContains(t, st.start(withInput, proc, 0, nil), "cannot take an input")
+		withInput.ctr.cleanExecutors()
+		return nil
+	})
+	require.NoError(t, err)
 }

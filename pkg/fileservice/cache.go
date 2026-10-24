@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -162,9 +164,12 @@ func newFileServiceCaches(
 	}
 
 	if indexShare > 0 {
-		path := *config.DiskPath + "-index-file"
+		path := filepath.Clean(*config.DiskPath) + "-index-file"
 		if config.IndexFileDiskPath != nil && *config.IndexFileDiskPath != "" {
-			path = *config.IndexFileDiskPath
+			path = filepath.Clean(*config.IndexFileDiskPath)
+		}
+		if err = checkIndexFileDiskPath(*config.DiskPath, path); err != nil {
+			return caches, err
 		}
 		capacity := int64(float64(*config.DiskCapacity) * indexShare)
 		caches.index, err = newIndexFileCache(
@@ -187,6 +192,28 @@ func newFileServiceCaches(
 	}
 
 	return caches, nil
+}
+
+// checkIndexFileDiskPath rejects an index-file cache directory that is, contains or lies
+// inside the table-data disk cache directory: each cache's restart scan removes files it
+// does not own.
+func checkIndexFileDiskPath(diskPath, indexPath string) error {
+	disk, err := filepath.Abs(diskPath)
+	if err != nil {
+		return err
+	}
+	index, err := filepath.Abs(indexPath)
+	if err != nil {
+		return err
+	}
+	within := func(dir, path string) bool {
+		rel, err := filepath.Rel(dir, path)
+		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+	if within(disk, index) || within(index, disk) {
+		return moerr.NewInvalidInputNoCtxf("index-file-disk-path %q overlaps disk-path %q", indexPath, diskPath)
+	}
+	return nil
 }
 
 // indexFileDiskShare returns the share of the disk capacity for the index-file cache, 0

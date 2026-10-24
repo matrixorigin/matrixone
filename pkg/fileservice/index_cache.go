@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -277,10 +278,16 @@ func (d *DiskCache) putDir(ctx context.Context, diskPath string, files []IndexCa
 	}
 
 	if size, err := cacheDirSize(diskPath); err == nil {
-		if _, ok := d.cache.Get(ctx, diskPath); !ok {
-			d.cache.Set(ctx, diskPath, struct{}{}, size)
+		if cacheDirHasFiles(diskPath, files) {
+			if _, ok := d.cache.Get(ctx, diskPath); !ok {
+				d.cache.Set(ctx, diskPath, struct{}{}, size)
+			}
+			return false, nil
 		}
-		return false, nil
+		// an incomplete entry is replaced
+		if err := removeCacheDir(diskPath); err != nil && !os.IsNotExist(err) {
+			return false, err
+		}
 	} else if !os.IsNotExist(err) {
 		return false, err
 	}
@@ -315,6 +322,9 @@ func (d *DiskCache) putDir(ctx context.Context, diskPath string, files []IndexCa
 		d.beforeFilePublication()
 	}
 	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := syncDir(tmp); err != nil {
 		return false, err
 	}
 	if err := os.Rename(tmp, diskPath); err != nil {
@@ -489,6 +499,28 @@ func (d *DiskCache) openDir(ctx context.Context, name string, diskPath string, f
 		}
 	}
 	return opened, nil
+}
+
+func cacheDirHasFiles(dir string, files []IndexCacheFile) bool {
+	for _, f := range files {
+		if info, err := os.Stat(filepath.Join(dir, f.Name)); err != nil || !info.Mode().IsRegular() {
+			return false
+		}
+	}
+	return true
+}
+
+// syncDir makes the names in dir durable before dir is published.
+func syncDir(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := f.Sync(); err != nil && !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOTSUP) {
+		return err
+	}
+	return nil
 }
 
 // cacheDirSize returns the disk usage of the files in an entry directory.
