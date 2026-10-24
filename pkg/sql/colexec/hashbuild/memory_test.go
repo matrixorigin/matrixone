@@ -3,8 +3,13 @@
 package hashbuild
 
 import (
+	"io"
+	"strings"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -15,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 type observedBuildBudget struct {
@@ -35,11 +39,25 @@ func (b *observedBuildBudget) Release(n int64) int64 { b.held -= n; return b.hel
 func (b *observedBuildBudget) Available() int64      { return 0 }
 
 func TestBuildReservesBeforeCopyAndHashAllocation(t *testing.T) {
-	for _, deny := range []int{1, 2, 0} {
-		name := map[int]string{1: "copy denied", 2: "hash denied", 0: "map owns reservation"}[deny]
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		deny       int
+		controlled bool
+	}{
+		{"copy denied", 1, false},
+		{"hash denied", 2, false},
+		{"map owns reservation", 0, false},
+		{"controlled copy denied", 1, true},
+		{"controlled hash denied", 2, true},
+		{"controlled map owns reservation", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deny := tc.deny
 			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
+			if tc.controlled {
+				proc.Base.ImportMemory = &process.ImportMemory{UnitBytes: 1 << 20, JoinInputBytes: 8 << 20}
+			}
 			proc.SetMessageBoard(message.NewMessageBoard())
 			source := batch.NewOffHeapWithSize(1)
 			source.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
@@ -155,6 +173,205 @@ func TestLegacyExpressionBuildSpillsOnlyUnderPressure(t *testing.T) {
 			}
 			jm.Free()
 			require.Zero(t, budget.held, "consumer cleanup retires the transferred copy reservation once")
+		})
+	}
+}
+
+func TestBuildPayloadSpillPolicy(t *testing.T) {
+	const payloadLimit = int64(2 * colexec.DefaultBatchSize * 8)
+	for _, tc := range []struct {
+		name       string
+		rows       []int
+		threshold  int64
+		controlled bool
+		noBudget   bool
+		denyCopy   bool
+		spill      bool
+	}{
+		{"ordinary equal payload", []int{8192, 8192}, payloadLimit, false, false, false, false},
+		{"controlled keeps capacity threshold", []int{8192, 8192}, payloadLimit, true, false, false, true},
+		{"no budget keeps capacity threshold", []int{8192, 8192}, payloadLimit, false, true, false, true},
+		{"ordinary payload exceeds threshold", []int{8192, 8192, 1}, payloadLimit, false, false, false, true},
+		{"ordinary includes partial tail", []int{8192, 8191}, 100001, false, false, false, true},
+		{"ordinary copy budget denied", []int{8192, 8192}, payloadLimit, false, false, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previousRuntime := moruntime.ServiceRuntime("")
+			rt := moruntime.DefaultRuntime()
+			moruntime.SetupServiceBasedRuntime("", rt)
+			t.Cleanup(func() { moruntime.SetupServiceBasedRuntime("", previousRuntime) })
+			budget := &observedBuildBudget{acquire: func(int64) bool { return !tc.denyCopy }}
+			if !tc.noBudget {
+				rt.SetGlobalVariables(moruntime.CNMemoryThrottler, budget)
+			}
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			t.Cleanup(proc.Free)
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB(), "all source, copy, spill and map storage released") })
+			t.Cleanup(func() { require.Zero(t, budget.held, "reservation retired exactly once") })
+			proc.SetMessageBoard(message.NewMessageBoard())
+			t.Cleanup(func() { proc.GetMessageBoard().Reset() })
+			if tc.controlled {
+				proc.Base.ImportMemory = &process.ImportMemory{UnitBytes: 1 << 20, JoinInputBytes: 8 << 20}
+			}
+			inputs := make([]*batch.Batch, 0, len(tc.rows))
+			totalRows := 0
+			for _, rows := range tc.rows {
+				input := batch.NewOffHeapWithSize(1)
+				t.Cleanup(func() { input.Clean(mp) })
+				values := make([]int64, rows)
+				for i := range values {
+					values[i] = int64(totalRows + i)
+				}
+				input.Vecs[0] = testutil.MakeInt64Vector(values, nil, mp)
+				input.SetRowCount(rows)
+				require.Equal(t, rows*8, input.Size(), "independent fixed-width payload")
+				inputs = append(inputs, input)
+				totalRows += rows
+			}
+			build := &HashBuild{
+				NeedHashMap: true, NeedBatches: true, HashOnPK: true,
+				IsShuffle: true, CanSpill: true, Conditions: []*plan.Expr{newExpr(0, types.T_int64.ToType())},
+				JoinMapTag: 711, JoinMapRefCnt: 1, SpillThreshold: tc.threshold,
+				RuntimeFilterSpec: &plan.RuntimeFilterSpec{Tag: 712},
+			}
+			build.AppendChild(colexec.NewMockOperator().WithBatchs(inputs))
+			require.NoError(t, build.Prepare(proc))
+			t.Cleanup(func() { build.Free(proc, false, nil) })
+			if tc.noBudget {
+				require.Nil(t, build.ctr.memoryThrottler)
+			} else {
+				require.Same(t, budget, build.ctr.memoryThrottler, "use the real runtime budget lookup")
+			}
+			_, err := build.Call(proc)
+			require.NoError(t, err)
+			jm, err := message.ReceiveJoinMap(711, true, 0, proc.GetMessageBoard(), proc.Ctx)
+			require.NoError(t, err)
+			require.NotNil(t, jm)
+			t.Cleanup(jm.Free)
+			require.Equal(t, tc.spill, jm.IsSpilled())
+			require.Equal(t, int64(totalRows), jm.GetRowCount())
+			assertBuildPayloadRows(t, proc, jm, totalRows)
+			if !tc.spill {
+				require.Equal(t, uint64(totalRows), jm.GetGroupCount(), "all input keys reached the actual hash table")
+				require.Positive(t, budget.held, "the consumer owns the admitted allocation")
+			}
+		})
+	}
+}
+
+// Read actual producer output, including every spill file. A post-copy spill
+// must not write the just-copied incoming batch a second time.
+func assertBuildPayloadRows(t *testing.T, proc *process.Process, jm *message.JoinMap, rows int) {
+	t.Helper()
+	seen := make([]bool, rows)
+	count := 0
+	check := func(bat *batch.Batch) {
+		for _, value := range vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]) {
+			require.GreaterOrEqual(t, value, int64(0))
+			require.Less(t, value, int64(rows))
+			require.False(t, seen[value], "input row %d duplicated", value)
+			seen[value] = true
+			count++
+		}
+	}
+	if !jm.IsSpilled() {
+		for _, bat := range jm.GetBatches() {
+			check(bat)
+		}
+	} else {
+		for _, file := range jm.SpillBuildFds {
+			if file == nil {
+				continue
+			}
+			_, err := file.Seek(0, io.SeekStart)
+			require.NoError(t, err)
+			for {
+				var header [16]byte
+				_, err = io.ReadFull(file, header[:])
+				if err == io.EOF {
+					break
+				}
+				require.NoError(t, err)
+				frameRows, bytes := types.DecodeInt64(header[:8]), types.DecodeInt64(header[8:])
+				require.Positive(t, frameRows)
+				require.Positive(t, bytes)
+				func() {
+					bat := batch.NewOffHeapWithSize(0)
+					defer bat.Clean(proc.Mp())
+					reader := &io.LimitedReader{R: file, N: bytes}
+					require.NoError(t, bat.UnmarshalFromReader(reader, proc.Mp()))
+					require.Zero(t, reader.N)
+					require.Equal(t, frameRows, int64(bat.RowCount()))
+					check(bat)
+				}()
+				var marker [8]byte
+				_, err = io.ReadFull(file, marker[:])
+				require.NoError(t, err)
+				require.Equal(t, uint64(spillMagic), types.DecodeUint64(marker[:]))
+			}
+		}
+	}
+	require.Equal(t, rows, count, "all input rows occur exactly once")
+}
+
+func TestCollectedBatchBytes(t *testing.T) {
+	for _, mode := range []string{"tail-full-tail", "cross-8193", "const-fixed", "const-varlen", "varlen-window"} {
+		t.Run(mode, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			t.Cleanup(proc.Free)
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			newBatch := func(vec *vector.Vector, rows int) *batch.Batch {
+				bat := batch.NewOffHeapWithSize(1)
+				bat.Vecs[0] = vec
+				bat.SetRowCount(rows)
+				t.Cleanup(func() { bat.Clean(mp) })
+				return bat
+			}
+			var inputs []*batch.Batch
+			switch mode {
+			case "tail-full-tail":
+				for _, rows := range []int{3, 8192, 8189} {
+					inputs = append(inputs, newBatch(testutil.MakeInt64Vector(make([]int64, rows), nil, mp), rows))
+				}
+			case "cross-8193":
+				inputs = append(inputs, newBatch(testutil.MakeInt64Vector(make([]int64, 8193), nil, mp), 8193))
+			case "const-fixed":
+				vec, err := vector.NewConstFixed(types.T_int64.ToType(), int64(17), 8193, mp)
+				require.NoError(t, err)
+				inputs = append(inputs, newBatch(vec, 8193))
+			case "const-varlen":
+				vec, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(strings.Repeat("v", 32)), 8193, mp)
+				require.NoError(t, err)
+				inputs = append(inputs, newBatch(vec, 8193))
+			case "varlen-window":
+				values := make([]string, 40)
+				for i := range values {
+					values[i] = strings.Repeat("w", 32+i)
+				}
+				base := newBatch(testutil.MakeVarcharVector(values, nil, mp), len(values))
+				window, err := base.Window(3, 33)
+				require.NoError(t, err)
+				t.Cleanup(func() { window.Clean(mp) })
+				inputs = append(inputs, window)
+			}
+			builder := &HashmapBuilder{}
+			t.Cleanup(func() { builder.Batches.Clean(mp) })
+			require.Zero(t, builder.CollectedBatchBytes())
+			rows := 0
+			for _, input := range inputs {
+				require.NoError(t, builder.Batches.CopyIntoBatches(input, proc))
+				rows += input.RowCount()
+				var recount int64
+				for _, bat := range builder.Batches.Buf {
+					recount += int64(bat.Size())
+				}
+				fullBytes := builder.Batches.MemSize
+				require.Equal(t, recount, builder.CollectedBatchBytes(), "compare with an independent full destination recount")
+				require.Equal(t, fullBytes, builder.Batches.MemSize, "read-only payload lookup preserves the full-batch counter")
+				require.Equal(t, rows, builder.Batches.RowCount())
+			}
 		})
 	}
 }

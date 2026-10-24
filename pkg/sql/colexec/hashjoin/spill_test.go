@@ -23,9 +23,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1509,4 +1512,173 @@ func TestScatterSkipsDisabledWriters(t *testing.T) {
 		r.close()
 	}
 	require.Equal(t, expectedOddRows, totalRows, "only rows hashing to odd buckets should be written")
+}
+
+type rebuildPayloadBudget struct {
+	rscthrottler.RSCThrottler
+	held     int64
+	calls    int
+	denyCall int
+	denied   bool
+}
+
+func (b *rebuildPayloadBudget) Acquire(bytes int64) (int64, bool) {
+	b.calls++
+	if b.calls == b.denyCall {
+		b.denied = true
+		return b.held, false
+	}
+	b.held += bytes
+	return b.held, true
+}
+
+func (b *rebuildPayloadBudget) Release(bytes int64) int64 { b.held -= bytes; return b.held }
+func (b *rebuildPayloadBudget) Available() int64          { return 1<<30 - b.held }
+
+func TestRebuildPayloadSpillPolicy(t *testing.T) {
+	const payloadLimit = int64(2 * colexec.DefaultBatchSize * 8)
+	for _, tc := range []struct {
+		name       string
+		rows       []int
+		threshold  int64
+		controlled bool
+		noBudget   bool
+		denyCall   int
+		reSpill    bool
+	}{
+		{"ordinary equal payload", []int{8192, 8192}, payloadLimit, false, false, 0, false},
+		{"controlled keeps capacity threshold", []int{8192, 8192}, payloadLimit, true, false, 0, true},
+		{"no budget keeps capacity threshold", []int{8192, 8192}, payloadLimit, false, true, 0, true},
+		{"ordinary payload exceeds threshold", []int{8192, 8192, 1}, payloadLimit, false, false, 0, true},
+		{"ordinary includes partial tail", []int{8192, 8191}, 100001, false, false, 0, true},
+		{"ordinary copy budget denied", []int{8192, 8192}, payloadLimit, false, false, 1, true},
+		{"ordinary map budget denied", []int{8192, 8192}, payloadLimit, false, false, 3, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previousRuntime := moruntime.ServiceRuntime("")
+			rt := moruntime.DefaultRuntime()
+			moruntime.SetupServiceBasedRuntime("", rt)
+			t.Cleanup(func() { moruntime.SetupServiceBasedRuntime("", previousRuntime) })
+			budget := &rebuildPayloadBudget{denyCall: tc.denyCall}
+			if !tc.noBudget {
+				rt.SetGlobalVariables(moruntime.CNMemoryThrottler, budget)
+			}
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			t.Cleanup(proc.Free)
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB(), "all input, reader, copy and map storage released") })
+			t.Cleanup(func() { require.Zero(t, budget.held, "all copied and transferred reservations retired") })
+			if tc.controlled {
+				proc.Base.ImportMemory = &process.ImportMemory{UnitBytes: 1 << 20, JoinInputBytes: 8 << 20}
+			}
+			spillfs, err := proc.GetSpillFileService()
+			require.NoError(t, err)
+			buildFile, err := spillfs.CreateAndRemoveFile(proc.Ctx, "payload_build_"+uuid.NewString())
+			require.NoError(t, err)
+			buildWriter := &spillBucketWriter{file: buildFile}
+			t.Cleanup(buildWriter.close)
+			probeFile, err := spillfs.CreateAndRemoveFile(proc.Ctx, "payload_probe_"+uuid.NewString())
+			require.NoError(t, err)
+			probeWriter := &spillBucketWriter{file: probeFile}
+			t.Cleanup(probeWriter.close)
+			key := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			join := &HashJoin{JoinType: plan.Node_INNER, EqConds: [][]*plan.Expr{{key}, {key}}, HashOnPK: true,
+				LeftTypes: []types.Type{types.T_int64.ToType()}, RightTypes: []types.Type{types.T_int64.ToType()}}
+			t.Cleanup(func() { join.Free(proc, false, nil) })
+			// Rebuild initializes build keys itself; direct callers also need the
+			// probe executors that Prepare normally installs for re-partitioning.
+			join.ctr.eqCondExecs, err = colexec.NewExpressionExecutorsFromPlanExpressions(proc, join.EqConds[0])
+			require.NoError(t, err)
+			join.ctr.eqCondVecs = make([]*vector.Vector, len(join.ctr.eqCondExecs))
+			join.ctr.spillThreshold = tc.threshold
+			analyzer := process.NewAnalyzer(0, false, false, "payload threshold")
+			totalRows := 0
+			for _, rows := range tc.rows {
+				func() {
+					input := batch.NewOffHeapWithSize(1)
+					defer input.Clean(mp)
+					values := make([]int64, rows)
+					for i := range values {
+						values[i] = int64(totalRows + i)
+					}
+					input.Vecs[0] = testutil.MakeInt64Vector(values, nil, mp)
+					input.SetRowCount(rows)
+					_, err = join.ctr.flushBucketBuffer(proc, input, buildWriter, analyzer)
+					require.NoError(t, err)
+					_, err = join.ctr.flushBucketBuffer(proc, input, probeWriter, analyzer)
+					require.NoError(t, err)
+				}()
+				totalRows += rows
+			}
+			bucket := spillBucket{buildFd: buildWriter.handOffFd(), probeFd: probeWriter.handOffFd(), baseName: uuid.NewString(), depth: 0}
+			join.ctr.activeBucket = &bucket
+			jm, reSpilled, err := join.rebuildHashmapForBucket(proc, bucket, analyzer)
+			require.NoError(t, err)
+			require.Equal(t, tc.reSpill, reSpilled)
+			if tc.denyCall > 0 {
+				require.True(t, budget.denied, "the intended copy/map allocation must actually reach Acquire")
+			}
+			if !reSpilled {
+				require.NotNil(t, jm)
+				t.Cleanup(jm.Free)
+				require.Equal(t, int64(totalRows), jm.GetRowCount())
+				require.Empty(t, join.ctr.spillQueue)
+				seen := make([]bool, totalRows)
+				for _, bat := range jm.GetBatches() {
+					assertRebuildPayloadBatch(t, bat, seen)
+				}
+				require.NotContains(t, seen, false)
+				require.Positive(t, budget.held, "actual JoinMap owns its memory lease")
+			} else {
+				require.Nil(t, jm)
+				require.NotEmpty(t, join.ctr.spillQueue)
+				// Inspect both repartitioned inputs. The post-copy current batch
+				// is already in builder.Batches and must not also be pending.
+				for _, buildSide := range []bool{true, false} {
+					seen := make([]bool, totalRows)
+					for i := range join.ctr.spillQueue {
+						part := &join.ctr.spillQueue[i]
+						fileSlot := &part.probeFd
+						if buildSide {
+							fileSlot = &part.buildFd
+						}
+						file := *fileSlot
+						*fileSlot = nil
+						if file == nil {
+							continue
+						}
+						func() {
+							reader := &spillBucketReader{}
+							reader.resetForFd(file)
+							defer reader.close()
+							decoded := batch.NewOffHeapWithSize(0)
+							defer decoded.Clean(mp)
+							for {
+								bat, err := reader.readBatch(proc, decoded)
+								if err == io.EOF {
+									break
+								}
+								require.NoError(t, err)
+								assertRebuildPayloadBatch(t, bat, seen)
+							}
+						}()
+					}
+					for value, found := range seen {
+						require.True(t, found, "%t-side input row %d missing after re-spill", buildSide, value)
+					}
+				}
+				require.Zero(t, budget.held, "repartition retires its copied storage")
+			}
+		})
+	}
+}
+
+func assertRebuildPayloadBatch(t *testing.T, bat *batch.Batch, seen []bool) {
+	t.Helper()
+	for _, value := range vector.MustFixedColNoTypeCheck[int64](bat.Vecs[0]) {
+		require.GreaterOrEqual(t, value, int64(0))
+		require.Less(t, value, int64(len(seen)))
+		require.False(t, seen[value], "input row %d duplicated during re-spill", value)
+		seen[value] = true
+	}
 }

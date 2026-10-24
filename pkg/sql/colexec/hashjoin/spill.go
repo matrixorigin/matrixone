@@ -503,6 +503,9 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 	if !legacyMaxDepth {
 		builder.Batches.TrackAllocation()
 	}
+	// Match initial HashBuild: ordinary queries with a CN budget use a logical
+	// payload threshold, while every actual copy still requires admission.
+	logicalThreshold := !legacyMaxDepth && proc.Base.ImportMemory == nil && throttler != nil
 
 	// Stream batches from build file — reuse the cached reader (and its 4 MiB buffer).
 	if ctr.spillBuildReader == nil {
@@ -537,7 +540,7 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 			threshold := false
 			if ctr.spillThreshold > 0 && ctr.spillThreshold <= 100000 {
 				threshold = int64(builder.InputBatchRowCount+bat.RowCount()) >= ctr.spillThreshold
-			} else if ctr.spillThreshold > 100000 {
+			} else if ctr.spillThreshold > 100000 && !logicalThreshold {
 				threshold = growth > ctr.spillThreshold-builder.Batches.RetainedBytes()
 			}
 			if threshold || !acquire(growth) {
@@ -554,7 +557,13 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 		if reserved > 0 {
 			release(reserved - builder.Batches.RetainedBytes())
 		}
-
+		if logicalThreshold && ctr.spillThreshold > 100000 && builder.CollectedBatchBytes() > ctr.spillThreshold {
+			// The current batch is already in builder; passing it as pending
+			// would write the same rows a second time.
+			_, spillErr := hashJoin.reSpillBucket(proc, bucket, builder, reader, nextDepth, analyzer)
+			cleanupBuilder()
+			return nil, true, spillErr
+		}
 	}
 
 	if !legacyMaxDepth {

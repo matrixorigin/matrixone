@@ -221,6 +221,11 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 	// allocation accounting. Shuffle/import spill budgets remain active even
 	// when the execution has no import-memory view.
 	accountBatches := ctr.spillAllowed && hashBuild.NeedHashMap
+	// The operator threshold describes logical build data. Ordinary queries can
+	// use it after copying because their actual allocation peak is still admitted
+	// before copying. Imports and executions without that CN budget retain the
+	// conservative capacity threshold.
+	logicalThreshold := accountBatches && proc.Base.ImportMemory == nil && ctr.memoryThrottler != nil
 	if accountBatches {
 		ctr.hashmapBuilder.Batches.TrackAllocation()
 	}
@@ -239,7 +244,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
 		if !spillMode && accountBatches {
 			growth := ctr.hashmapBuilder.Batches.AppendAllocation(result.Batch)
-			if spill, reason := hashBuild.shouldSpillBeforeCopy(result.Batch, growth); spill {
+			if spill, reason := hashBuild.shouldSpillBeforeCopy(result.Batch, growth, !logicalThreshold); spill {
 				if err := beginSpill("before-copy", reason, growth); err != nil {
 					return err
 				}
@@ -254,6 +259,12 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				return err
 			}
 			ctr.reconcileBatches()
+			if logicalThreshold && ctr.spillThreshold > 100000 && ctr.hashmapBuilder.CollectedBatchBytes() > ctr.spillThreshold {
+				// beginSpill writes all collected batches, including this one.
+				if err := beginSpill("after-copy", "logical-byte-threshold", 0); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	needUniqueVec := !hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec != nil && hashBuild.RuntimeFilterSpec.Expr != nil

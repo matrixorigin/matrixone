@@ -14,6 +14,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -65,7 +66,7 @@ func (ctr *container) reconcileBatches() {
 	}
 }
 
-func (hashBuild *HashBuild) shouldSpillBeforeCopy(bat *batch.Batch, growth int64) (bool, string) {
+func (hashBuild *HashBuild) shouldSpillBeforeCopy(bat *batch.Batch, growth int64, capacityThreshold bool) (bool, string) {
 	if !hashBuild.ctr.spillAllowed || !hashBuild.NeedHashMap {
 		return false, ""
 	}
@@ -75,7 +76,7 @@ func (hashBuild *HashBuild) shouldSpillBeforeCopy(bat *batch.Batch, growth int64
 			if int64(ctr.hashmapBuilder.Batches.RowCount()+bat.RowCount()) >= ctr.spillThreshold {
 				return true, "row-threshold"
 			}
-		} else if growth > ctr.spillThreshold-ctr.hashmapBuilder.Batches.RetainedBytes() {
+		} else if capacityThreshold && growth > ctr.spillThreshold-ctr.hashmapBuilder.Batches.RetainedBytes() {
 			return true, "byte-threshold"
 		}
 	}
@@ -83,6 +84,21 @@ func (hashBuild *HashBuild) shouldSpillBeforeCopy(bat *batch.Batch, growth int64
 		return true, "reservation-denied"
 	}
 	return false, ""
+}
+
+// CollectedBatchBytes returns logical payload during CopyIntoBatches collection,
+// before BuildHashmap can shrink or otherwise transform the batches. Full
+// batches are in MemSize; CopyIntoBatches keeps the sole partial batch last.
+// Only that tail needs a Size call, independent of the number of prior batches.
+func (hb *HashmapBuilder) CollectedBatchBytes() int64 {
+	size := hb.Batches.MemSize
+	if n := len(hb.Batches.Buf); n > 0 {
+		last := hb.Batches.Buf[n-1]
+		if last != nil && last.RowCount() < colexec.DefaultBatchSize {
+			size += int64(last.Size())
+		}
+	}
+	return size
 }
 
 // BuildMemoryBound obtains encoded-key bounds from actual column values. An
