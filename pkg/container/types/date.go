@@ -367,6 +367,18 @@ func ParseDateCast(s string) (Date, error) {
 	return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 }
 
+// ParseDateCastWithoutTime preserves ParseDateCast's date grammar while
+// rejecting a datetime component. SQL/JSON RETURNING DATE must route a
+// datetime-valued scalar through ON ERROR instead of silently discarding its
+// time portion.
+func ParseDateCastWithoutTime(s string) (Date, error) {
+	s = strings.TrimSpace(s)
+	if strings.ContainsAny(s, " T") {
+		return ZeroDate, moerr.NewInvalidArgNoCtx("parsedate", s)
+	}
+	return ParseDateCast(s)
+}
+
 // date[0001-01-01 to 9999-12-31]
 func ValidDate(year int32, month, day uint8) bool {
 	return year >= MinDateYear && ValidCalendarDate(year, month, day)

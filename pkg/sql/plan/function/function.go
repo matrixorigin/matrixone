@@ -490,6 +490,9 @@ func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool,
 		return false, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	f := allSupportedFunctions[fid]
+	if oIndex < 0 || int(oIndex) >= len(f.Overloads) {
+		return false, moerr.NewInvalidInput(ctx, "function overload id not found")
+	}
 	if f.Overloads[oIndex].CannotFold() {
 		return false, nil
 	}
@@ -499,6 +502,9 @@ func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool,
 func GetFunctionById(ctx context.Context, overloadID int64) (f overload, err error) {
 	fid, oIndex := DecodeOverloadID(overloadID)
 	if !validFunctionOverloadID(fid, oIndex) {
+		return overload{}, moerr.NewInvalidInput(ctx, "function overload id not found")
+	}
+	if oIndex < 0 || int(oIndex) >= len(allSupportedFunctions[fid].Overloads) {
 		return overload{}, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], nil
@@ -515,6 +521,9 @@ func GetLayoutById(ctx context.Context, overloadID int64) (FuncExplainLayout, er
 func GetFunctionByIdWithoutError(overloadID int64) (f overload, exists bool) {
 	fid, oIndex := DecodeOverloadID(overloadID)
 	if !validFunctionOverloadID(fid, oIndex) {
+		return overload{}, false
+	}
+	if oIndex < 0 || int(oIndex) >= len(allSupportedFunctions[fid].Overloads) {
 		return overload{}, false
 	}
 	return allSupportedFunctions[fid].Overloads[oIndex], true
@@ -947,6 +956,7 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 	// uuid_extract_timestamp also for versions without a time source (e.g. v4).
 	case DIV, INTEGER_DIV, MOD,
 		POW, EXP, COT, ACOSH, ATANH,
+		JSON_VALUE,
 		JSON_EXTRACT, JSON_EXTRACT_STRING, JSON_EXTRACT_FLOAT64,
 		REGEXP_SUBSTR,
 		INET6_ATON, INET_ATON, INET6_NTOA, ELT, UNHEX, CONV, MAKEDATE,

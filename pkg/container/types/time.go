@@ -132,6 +132,22 @@ func (t Time) NumericString(scale int32) string {
 //	"11:11:11.9995"      		"11:11:12.000"
 //	"-11:11:11.1235"		"-11:11:11.124"
 //	"-11:11:11.9995"      		"-11:11:12.000"
+//
+// ParseTimeWithoutDate preserves ParseTime's duration grammar but rejects the
+// datetime branch that would discard a calendar date. SQL/JSON conversion and
+// DEFAULT validation use this boundary; ordinary SQL casts still use ParseTime.
+func ParseTimeWithoutDate(s string, scale int32) (Time, error) {
+	s = strings.TrimSpace(s)
+	timeString := s
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		timeString = s[:dot]
+	}
+	if isDateType(timeString) {
+		return 0, moerr.NewInvalidArgNoCtx("parsetime", s)
+	}
+	return ParseTime(s, scale)
+}
+
 func ParseTime(s string, scale int32) (Time, error) {
 	return parseTime(s, scale, nil, nil)
 }
