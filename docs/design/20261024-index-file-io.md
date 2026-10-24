@@ -117,16 +117,24 @@ stored format and needs a rollout gate.
 
 ### Where files are cached (decision)
 
-Decided by @cpegeric, 2026-10-24. Index files live in the disk cache of the shared
-fileservice, the same cache that holds table data, under a reserved namespace that no
-storage object uses. They exist only in the cache: a miss is never served from the
+Decided by @cpegeric, 2026-10-24. Index files live in their own disk cache: a separate
+directory and cache instance on the CN, built from the same disk-cache code as the
+table-data cache but not shared with it. Its capacity is a configured share carved out of
+the existing disk-cache capacity, so total disk use is unchanged and the split between
+table data and index files is explicit: a large index load cannot evict hot table data,
+nor the reverse. Index files exist only in this cache: a miss is never served from the
 storage backend, only rebuilt from the chunk rows. A CN without a disk cache uses a
 private temporary directory instead, with no reuse between loads.
 
+Rejected alternative: placing index files in the shared table-data cache under a reserved
+namespace. It needs no new capacity setting, but pinning would change eviction for all
+table data, and index files and table blocks would evict each other.
+
 ### Pinning (decision)
 
-Decided by @cpegeric, 2026-10-24. The disk cache gains a whole-file API: put a file, open
-it as a pinned handle, release it, delete it.
+Decided by @cpegeric, 2026-10-24. The index-file cache offers a whole-file API: put a
+file, open it as a pinned handle, release it, delete it. Pinning applies to this cache
+only; the table-data cache's eviction is unchanged.
 
 - A file is pinned from open until its last release. A pinned file is never evicted and
   stays counted against the cache capacity, so space held by a mapped or open index file
@@ -196,4 +204,6 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
 - a pinned file survives eviction pressure and is evicted after its last release; a
   delete of a pinned file takes effect at release; eviction with only pinned files left
   terminates;
-- a CN without a disk cache still serves reads, rebuilding each load from the rows.
+- a CN without a disk cache still serves reads, rebuilding each load from the rows;
+- the table-data cache behaves exactly as before: its capacity is reduced by the
+  configured share and nothing else changes.
