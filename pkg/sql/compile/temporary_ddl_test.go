@@ -21,6 +21,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -196,6 +197,64 @@ func TestSessionTemporaryDDLCompile(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSessionTemporaryDDLMapsSchemaDatabaseEOB(t *testing.T) {
+	stubs := gostub.New()
+	defer stubs.Reset()
+	stubs.Stub(&engine.PlanDefsToExeDefs, func(*plan.TableDef) ([]engine.TableDef, *api.SchemaExtra, error) {
+		return nil, &api.SchemaExtra{}, nil
+	})
+	stubs.Stub(&maybeCreateAutoIncrement, func(context.Context, string, engine.Database, *plan.TableDef, client.TxnOperator, func() string) error {
+		t.Fatal("schema creation must stop before physical side effects")
+		return nil
+	})
+
+	ctrl := gomock.NewController(t)
+	parent, schema := mock_frontend.NewMockTxnOperator(ctrl), mock_frontend.NewMockTxnOperator(ctrl)
+	parent.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	schema.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
+	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: make(map[string]string)}}
+	exec := &temporaryDDLTestExecutor{t: t, schema: schema, parent: parent, owner: owner}
+	proc := testutil.NewProcess(t)
+	proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)
+	proc.Session, proc.Base.TxnOperator = owner, parent
+	proc.Base.IsFrontend = true
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, _ := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	previousVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+	t.Cleanup(func() {
+		rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, previousVersion)
+	})
+
+	db := newStubDatabase("test")
+	eng := newStubEngine()
+	eng.databaseFn = func(ctx context.Context, name string, op client.TxnOperator) (engine.Database, error) {
+		require.Equal(t, "test", name)
+		if op == parent {
+			return db, nil
+		}
+		require.Equal(t, schema, op)
+		return nil, moerr.GetOkExpectedEOB()
+	}
+	qry := &plan.CreateTable{Database: "test", Temporary: true, TableDef: &plan.TableDef{Name: "t"}}
+	pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{Definition: &plan.DataDefinition_CreateTable{CreateTable: qry}}}}
+	c := NewCompile("test", "test", "create temporary table t (a int)", "", "", eng, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	c.pn = pn
+
+	err := (&Scope{Plan: pn}).CreateTable(c)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.EqualError(t, err, "not supported: temporary table in an uncommitted database generation")
+	require.Empty(t, owner.published)
+	require.Empty(t, owner.retired)
+	require.Empty(t, owner.tables)
+	require.Empty(t, db.rels)
+	require.Equal(t, 1, exec.execTxnCalls)
 }
 
 func TestSessionTemporaryDDLOwnerAdmission(t *testing.T) {
