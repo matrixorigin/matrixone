@@ -33,6 +33,10 @@ type MetadataMVCCNode struct {
 	NeedCheckDeleteChainWhenCommit bool
 }
 
+func NewEmptyMetadataMVCCNode() *MetadataMVCCNode {
+	return &MetadataMVCCNode{}
+}
+
 func (e *MetadataMVCCNode) CloneAll() *MetadataMVCCNode {
 	node := &MetadataMVCCNode{
 		MetaLoc:  e.MetaLoc,
@@ -110,6 +114,29 @@ func (e *ObjectMVCCNode) ApproxSize() int64 {
 func NewEmptyObjectMVCCNode() *ObjectMVCCNode {
 	return &ObjectMVCCNode{
 		ObjectStats: *objectio.NewObjectStats(),
+	}
+}
+
+func NewObjectInfoWithMetaLocation(metaLoc objectio.Location, id *objectio.ObjectId) *ObjectMVCCNode {
+	node := NewEmptyObjectMVCCNode()
+	if metaLoc.IsEmpty() {
+		objectio.SetObjectStatsObjectName(&node.ObjectStats, objectio.BuildObjectNameWithObjectID(id))
+		return node
+	}
+	objectio.SetObjectStatsObjectName(&node.ObjectStats, metaLoc.Name())
+	objectio.SetObjectStatsExtent(&node.ObjectStats, metaLoc.Extent())
+	return node
+}
+
+func NewObjectInfoWithObjectID(id *objectio.ObjectId) *ObjectMVCCNode {
+	node := NewEmptyObjectMVCCNode()
+	objectio.SetObjectStatsObjectName(&node.ObjectStats, objectio.BuildObjectNameWithObjectID(id))
+	return node
+}
+
+func NewObjectInfoWithObjectStats(stats *objectio.ObjectStats) *ObjectMVCCNode {
+	return &ObjectMVCCNode{
+		ObjectStats: *stats.Clone(),
 	}
 }
 

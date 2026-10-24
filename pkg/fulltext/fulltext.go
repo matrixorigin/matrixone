@@ -552,14 +552,6 @@ func GetOp(op rune) int {
 		return GREATERTHAN
 	case '~':
 		return RANKLESS
-	/*
-		case '*':
-			return STAR
-		case '"':
-			return PHRASE
-		case '(':
-			return GROUP
-	*/
 	default:
 		return TEXT
 	}

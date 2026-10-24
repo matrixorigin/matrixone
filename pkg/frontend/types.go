@@ -792,12 +792,6 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 	}
 }
 
-// TableInfoCache tableInfos of a database
-//type TableInfoCache struct {
-//	db         string
-//	tableInfos map[string][]ColumnInfo
-//}
-
 func (prepareStmt *PrepareStmt) releaseRuntimeCompile(runtimeCompile *compile.Compile) {
 	if runtimeCompile == nil || runtimeCompile == prepareStmt.compile {
 		return

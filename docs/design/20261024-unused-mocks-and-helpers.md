@@ -1,6 +1,6 @@
 # Retire unconsumed mocks and helper closures
 
-Version 2, 2026-10-24. Owner: engineering-quality issue #29249.
+Version 3, 2026-10-24. Owner: engineering-quality issue #29249.
 Implementation: [PR #31011](https://github.com/matrixorigin/matrixone/pull/31011).
 Frozen base: `2b94111625d746d048468ccc214c6b27fc23bd0d`.
 
@@ -27,6 +27,9 @@ storage/catalog constructors and adapters, test-data builders, option wrappers,
 and unconsumed named interfaces. Keep live constructors, the error registry and
 codes, codecs, storage layouts, query admission/accounting and configuration
 fields. Retiring an unused setter does not alter the actual defaults or readers.
+Honor the existing reserved catalog/checkpoint replay and read-instance
+integration boundary in `retire-unused-kernel-execution-paths.md`; preserve
+those decoder/constructor/handler entrypoints despite missing callers.
 Parser constructors, protocol revision predicates, diagnostic tools, tagged
 entrypoints and optional external capabilities are excluded from this retirement.
 Unknown out-of-tree imports of these internal Go helpers are outside the source

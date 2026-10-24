@@ -170,13 +170,6 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 				return nil, err
 			}
 			alterPlan.CopyTableDef.Indexes = append(alterPlan.CopyTableDef.Indexes, indexDef)
-		//case *tree.AttributeDefault, *tree.AttributeNull:
-		//	defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
-		//	if err != nil {
-		//		return nil, err
-		//	}
-		//	newCol.Default = defaultValue
-		//	hasDefaultValue = true
 		case *tree.AttributeOnUpdate:
 			onUpdateExpr, err := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess())
 			if err != nil {
