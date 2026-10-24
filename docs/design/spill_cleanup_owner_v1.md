@@ -1,5 +1,9 @@
 # Spill cleanup ownership: local lifecycle redirection, revision 3
 
+**Superseded proposal:** the concrete replacement decisions are now in
+[revision 4](spill_cleanup_local_lifecycle_v4.md). The open questions and queue
+decision tables below are historical, not active replacement policy or approval.
+
 Status: **design-only response; replacement design approval pending**. The
 background queue proposed in revision 2 is not the selected delivery direction.
 The existing implementation in #30099/#30102 is not certified by this document.
