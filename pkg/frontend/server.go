@@ -310,6 +310,7 @@ func (mo *MOServer) cleanOrphanTempTables() error {
 	}
 
 	ctx, cancel = context.WithTimeoutCause(ctx, time.Second*60, context.DeadlineExceeded)
+	ctx = defines.AttachTemporaryTableAccess(ctx)
 	defer func() {
 		cancel()
 	}()

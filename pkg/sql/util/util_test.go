@@ -67,6 +67,16 @@ func TestBuildTableScanAccountFilter(t *testing.T) {
 	}
 }
 
+func TestBuildTableScanTemporaryFilter(t *testing.T) {
+	filter := BuildTableScanTemporaryFilter("00112233-4455-6677-8899-aabbccddeeff")
+	require.NotNil(t, filter)
+	sql := tree.String(filter, dialect.MYSQL)
+	require.Contains(t, sql, "relkind = temporary_table")
+	require.Contains(t, sql, "mo_is_legacy_temporary_table")
+	require.Contains(t, sql, "startswith(relname, __mo_tmp_00112233445566778899aabbccddeeff_)")
+	require.Nil(t, BuildTableScanTemporaryFilter(""))
+}
+
 type kase struct {
 	a       string
 	b       string
