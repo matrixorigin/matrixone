@@ -61,6 +61,12 @@ A file name is derived from the file identity and its version: the index table,
 is never reused for different content, so a rewritten file has a new name and nothing is
 invalidated.
 
+The name carries no snapshot timestamp (decision, @cpegeric, 2026-10-24). Snapshot reads
+are handled by the storage engine and the content-addressed name: a reader resolves names
+from the metadata visible to its transaction, and identical content read at different
+snapshots is one file in the cache. Rejected alternative: a timestamp in the name, which
+would store one copy of identical bytes per snapshot read.
+
 ### Writing
 
 - The writer takes the whole file as a stream. It writes the chunk rows through the
@@ -76,7 +82,9 @@ invalidated.
 
 ### Reading
 
-- A read by name returns the local file from the disk cache when present.
+- A read takes a file name and the caller's transaction, which may be pinned to a
+  snapshot; the layer has no snapshot logic of its own. It returns the local file from
+  the disk cache when present.
 - On a miss, the layer rebuilds the file from its chunk rows through the storage engine's
   relation readers, under the caller's transaction and snapshot (no SQL), verifies it,
   places it in the disk cache, and returns it. It sees exactly the rows a SQL `SELECT`
@@ -140,6 +148,7 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
 - a rewritten file never serves its previous content;
 - a corrupted cached file or chunk fails verification instead of being served;
 - clone, restore and snapshot reads of an index written through the layer behave as
-  before;
+  before, including a snapshot search after a merge, which rebuilds the merged-away
+  segment from the rows visible at the snapshot;
 - writes and reads use no memory cache, and disk-cache use stays within its configured
   capacity under a load larger than it.
