@@ -496,3 +496,16 @@ func TestTemporaryDDLGenerationPreservesIndexIdentity(t *testing.T) {
 	s.generation = uuid.NewString()
 	require.NotEqual(t, first, s.TemporaryTableName("db", "t"))
 }
+
+func TestTemporaryDDLSessionOwnsStagedRoot(t *testing.T) {
+	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: make(map[string]string)}}
+	stage := &temporaryDDLSession{
+		Session: owner,
+		aliases: map[string]string{"db.t": "staged_t"},
+	}
+	require.True(t, stage.OwnsTemporaryTable("db", "staged_t"))
+	require.True(t, stage.OwnsTemporaryTable("db", "staged"))
+	require.False(t, stage.OwnsTemporaryTable("other-db", "staged_t"))
+	owner.AddTempTable("db", "published", "published-root")
+	require.True(t, stage.OwnsTemporaryTable("db", "published-root"))
+}

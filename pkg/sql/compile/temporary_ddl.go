@@ -13,6 +13,8 @@
 package compile
 
 import (
+	"strings"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -66,6 +68,26 @@ func (s *temporaryDDLSession) GetTempTable(db, alias string) (string, bool) {
 		return name, true
 	}
 	return s.Session.GetTempTable(db, alias)
+}
+
+// OwnsTemporaryTable keeps the schema transaction's staged aliases visible to
+// the shared temporary-relation access gate. Hidden index relations derive
+// their ownership from the staged root before that root is published upstream.
+func (s *temporaryDDLSession) OwnsTemporaryTable(db, physical string) bool {
+	if s == nil {
+		return false
+	}
+	if owner, ok := s.Session.(interface {
+		OwnsTemporaryTable(database, physicalName string) bool
+	}); ok && owner.OwnsTemporaryTable(db, physical) {
+		return true
+	}
+	for key, name := range s.aliases {
+		if strings.HasPrefix(key, db+".") && (name == physical || strings.HasPrefix(name, physical+"_")) {
+			return true
+		}
+	}
+	return false
 }
 func (s *temporaryDDLSession) AddTempTable(db, alias, name string) { s.aliases[db+"."+alias] = name }
 func (s *temporaryDDLSession) AddTempIndexTable(db, alias, name string) {

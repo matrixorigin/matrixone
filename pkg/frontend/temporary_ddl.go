@@ -15,6 +15,7 @@ package frontend
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -32,7 +33,16 @@ func (ses *Session) OwnsTemporaryTable(db, physical string) bool {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	key, ok := ses.tempTablesRev[physical]
-	return ok && ses.tempTableIdentityLocked(key).dbName == db
+	owned := ok && ses.tempTableIdentityLocked(key).dbName == db
+	if owned {
+		return true
+	}
+	for ownedPhysical, key := range ses.tempTablesRev {
+		if strings.HasPrefix(ownedPhysical, physical+"_") && ses.tempTableIdentityLocked(key).dbName == db {
+			return true
+		}
+	}
+	return false
 }
 
 func (ses *Session) CheckTemporaryTableCapacity(ctx context.Context) error {
