@@ -457,7 +457,8 @@ func TestPipelineDescriptorMergedScalarAndLockContracts(t *testing.T) {
 }
 
 func TestMergedDiagnosticPipelineExpressionAdmission(t *testing.T) {
-	expr := &planpb.Expr{Typ: planpb.Type{Id: 28}, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: 605 << 32}}}}
+	// Keep this wire fixture aligned with SET_OPERATION_FLOAT_KEY in the function registry.
+	expr := &planpb.Expr{Typ: planpb.Type{Id: 28}, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: 616 << 32}}}}
 	for _, instruction := range []*Instruction{
 		{ScalarSetReaggregation: true, DedupJoin: &DedupJoin{DedupKeyExprs: []*planpb.Expr{expr}}},
 		{ScalarSetReaggregation: true, RightDedupJoin: &RightDedupJoin{DedupKeyExprs: []*planpb.Expr{expr}}},
