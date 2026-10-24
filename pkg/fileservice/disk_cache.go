@@ -55,10 +55,8 @@ type DiskCache struct {
 
 	cache        *fifocache.Cache[string, struct{}]
 	capacityFunc fscache.CapacityFunc
-	// dirEntries makes directories named with cacheDirSuffix cache entries
-	// (IndexFileCache). Set before the cache is loaded.
-	dirEntries  bool
-	directoryMu sync.RWMutex
+	dirEntries   bool
+	directoryMu  sync.RWMutex
 	// diskFullEviction is held by the single eviction that responds to
 	// disk-full write failures.
 	diskFullEviction atomic.Bool
@@ -126,7 +124,14 @@ func newDiskCacheWithMetricScope(
 	name string,
 	metricScope string,
 ) (ret *DiskCache, err error) {
-	return newDiskCache(ctx, path, capacity, perfCounterSets, asyncLoad, cacheDataAllocator, name, metricScope, false)
+	return newDiskCache(ctx, path, capacity, perfCounterSets, asyncLoad, cacheDataAllocator, name, metricScope, diskCacheOptions{})
+}
+
+type diskCacheOptions struct {
+	// dirEntries makes directories named with cacheDirSuffix cache entries (IndexFileCache).
+	dirEntries bool
+	// sizeHintShare scales GlobalDiskCacheSizeHint for this cache; 0 means the whole hint.
+	sizeHintShare float64
 }
 
 func newDiskCache(
@@ -138,7 +143,7 @@ func newDiskCache(
 	cacheDataAllocator CacheDataAllocator,
 	name string,
 	metricScope string,
-	dirEntries bool,
+	opts diskCacheOptions,
 ) (ret *DiskCache, err error) {
 
 	err = os.MkdirAll(path, 0755)
@@ -158,6 +163,9 @@ func newDiskCache(
 	capacityFunc := func() int64 {
 		// read from global size hint
 		if n := GlobalDiskCacheSizeHint.Load(); n > 0 {
+			if opts.sizeHintShare > 0 {
+				return int64(float64(n) * opts.sizeHintShare)
+			}
 			return n
 		}
 		// fallback
@@ -172,7 +180,7 @@ func newDiskCache(
 		fileSync:           func(file *os.File) error { return file.Sync() },
 
 		capacityFunc: capacityFunc,
-		dirEntries:   dirEntries,
+		dirEntries:   opts.dirEntries,
 	}
 	cache = fifocache.NewWithPrepareEvict(
 

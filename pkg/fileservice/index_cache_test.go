@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -30,7 +31,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
+	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -466,4 +469,142 @@ func TestDiskCacheIgnoresDirectoryEntriesWithoutIndexCache(t *testing.T) {
 	require.False(t, cache.cache.Contains(entry), "a table-data cache never indexes a directory")
 	_, err = os.Stat(filepath.Join(entry, "data"))
 	require.True(t, os.IsNotExist(err), "a table-data cache removes unknown files, as before")
+}
+
+func indexCacheConfig(t *testing.T, capacity int64) CacheConfig {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "disk-cache")
+	c := toml.ByteSize(capacity)
+	return CacheConfig{
+		DiskPath:              &path,
+		DiskCapacity:          &c,
+		IndexFileCacheEnabled: true,
+	}
+}
+
+func newTestFileServiceCaches(t *testing.T, config CacheConfig) fileServiceCaches {
+	t.Helper()
+	caches, err := newFileServiceCaches(context.Background(), config, nil, "test", true)
+	require.NoError(t, err)
+	t.Cleanup(func() { caches.close(context.Background()) })
+	return caches
+}
+
+func TestIndexFileCacheSplitsDiskCapacity(t *testing.T) {
+	config := indexCacheConfig(t, 100<<20)
+	caches := newTestFileServiceCaches(t, config)
+	require.NotNil(t, caches.disk)
+	require.NotNil(t, caches.index)
+	require.Equal(t, int64(70<<20), caches.disk.capacityFunc())
+	require.Equal(t, int64(30<<20), caches.index.disk.capacityFunc())
+	require.Equal(t, *config.DiskPath+"-index-file", caches.index.disk.path)
+	require.True(t, caches.index.disk.dirEntries)
+	require.False(t, caches.disk.dirEntries)
+	require.Equal(t, IndexFileRebuildPolicyDefault, caches.index.RebuildPolicy())
+
+	share := 0.5
+	path := filepath.Join(t.TempDir(), "index")
+	config = indexCacheConfig(t, 100<<20)
+	config.IndexFileDiskShare = &share
+	config.IndexFileDiskPath = &path
+	config.IndexFileRebuildCache = IndexFileRebuildCacheNone
+	caches = newTestFileServiceCaches(t, config)
+	require.Equal(t, int64(50<<20), caches.disk.capacityFunc())
+	require.Equal(t, int64(50<<20), caches.index.disk.capacityFunc())
+	require.Equal(t, path, caches.index.disk.path)
+	require.Equal(t, Policy(SkipAllCache), caches.index.RebuildPolicy())
+}
+
+func TestIndexFileCacheDisabledKeepsDiskCapacity(t *testing.T) {
+	zero := 0.0
+	for name, mutate := range map[string]func(*CacheConfig){
+		"not enabled for this service": func(c *CacheConfig) { c.IndexFileCacheEnabled = false },
+		"share 0":                      func(c *CacheConfig) { c.IndexFileDiskShare = &zero },
+	} {
+		config := indexCacheConfig(t, 100<<20)
+		mutate(&config)
+		caches := newTestFileServiceCaches(t, config)
+		require.Nil(t, caches.index, name)
+		require.Equal(t, int64(100<<20), caches.disk.capacityFunc(), name)
+	}
+
+	config := indexCacheConfig(t, 100<<20)
+	disabled := toml.ByteSize(DisableCacheCapacity)
+	config.DiskCapacity = &disabled
+	caches := newTestFileServiceCaches(t, config)
+	require.Nil(t, caches.index)
+	require.Nil(t, caches.disk)
+}
+
+func TestIndexFileCacheWithoutTableDiskCache(t *testing.T) {
+	config := indexCacheConfig(t, 100<<20)
+	caches, err := newFileServiceCaches(context.Background(), config, nil, "test", false)
+	require.NoError(t, err)
+	defer caches.close(context.Background())
+	require.Nil(t, caches.disk)
+	require.NotNil(t, caches.index)
+	require.Equal(t, int64(30<<20), caches.index.disk.capacityFunc())
+}
+
+func TestIndexFileCacheRejectsInvalidConfig(t *testing.T) {
+	for _, share := range []float64{-0.1, 1, 1.5, math.NaN()} {
+		config := indexCacheConfig(t, 100<<20)
+		config.IndexFileDiskShare = &share
+		_, err := newFileServiceCaches(context.Background(), config, nil, "test", true)
+		require.Error(t, err, share)
+	}
+	config := indexCacheConfig(t, 100<<20)
+	config.IndexFileRebuildCache = "sometimes"
+	_, err := newFileServiceCaches(context.Background(), config, nil, "test", true)
+	require.Error(t, err)
+
+	for s, want := range map[string]Policy{
+		"":                             IndexFileRebuildPolicyDefault,
+		IndexFileRebuildCacheRead:      SkipMemoryCacheWrites | SkipDiskCacheWrites,
+		IndexFileRebuildCacheNone:      SkipAllCache,
+		IndexFileRebuildCacheReadWrite: 0,
+	} {
+		got, err := ParseIndexFileRebuildCache(s)
+		require.NoError(t, err, s)
+		require.Equal(t, want, got, s)
+	}
+}
+
+func TestIndexFileCacheSizeHintSplit(t *testing.T) {
+	old := GlobalDiskCacheSizeHint.Load()
+	t.Cleanup(func() { GlobalDiskCacheSizeHint.Store(old) })
+
+	caches := newTestFileServiceCaches(t, indexCacheConfig(t, 100<<20))
+	plain, err := NewDiskCache(context.Background(), t.TempDir(), fscache.ConstCapacity(100<<20), nil, false, nil, "")
+	require.NoError(t, err)
+	defer plain.Close(context.Background())
+
+	GlobalDiskCacheSizeHint.Store(1000 << 20)
+	require.Equal(t, int64(700<<20), caches.disk.capacityFunc())
+	require.Equal(t, int64(300<<20), caches.index.disk.capacityFunc())
+	require.Equal(t, int64(1000<<20), plain.capacityFunc(), "a cache without the split takes the whole hint")
+}
+
+func TestGetIndexFileCacheFromFileServices(t *testing.T) {
+	ctx := context.Background()
+	config := indexCacheConfig(t, 100<<20)
+	shared, err := NewLocalFS(ctx, defines.SharedFileServiceName, t.TempDir(), config, nil)
+	require.NoError(t, err)
+	local, err := NewLocalFS(ctx, defines.LocalFileServiceName, t.TempDir(), CacheConfig{}, nil)
+	require.NoError(t, err)
+	fs, err := NewFileServices(defines.SharedFileServiceName, shared, local)
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+
+	c := GetIndexFileCache(fs)
+	require.NotNil(t, c)
+	require.Same(t, shared.IndexFileCache(), c)
+	require.Nil(t, local.IndexFileCache())
+	require.Nil(t, GetIndexFileCache(nil))
+	require.Nil(t, GetIndexFileCache(local))
+
+	<-c.disk.load.done
+	written, err := c.Put(ctx, "e", indexCacheEntry([]byte("x")))
+	require.NoError(t, err)
+	require.True(t, written)
 }
