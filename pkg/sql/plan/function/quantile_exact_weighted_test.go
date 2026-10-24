@@ -36,7 +36,7 @@ func TestQuantileExactWeightedRegistration(t *testing.T) {
 	fid, overload := DecodeOverloadID(fn.GetEncodedOverloadID())
 	require.Equal(t, int32(QUANTILE_EXACT_WEIGHTED), fid)
 	require.Zero(t, overload)
-	require.Equal(t, int64(606<<32), aggexec.AggIdOfQuantileExactWeighted,
+	require.Equal(t, int64(616<<32), aggexec.AggIdOfQuantileExactWeighted,
 		"the executor aggregate id must track the catalog function id")
 	require.Equal(t, intValue.Oid, fn.GetReturnType().Oid,
 		"the exact weighted percentile returns the value argument's own type")

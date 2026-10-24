@@ -115,6 +115,27 @@ Revision log:
   advertising only the temporal 130 as below this aggregate's gate. The
   approved revision-5 bytes remain byte-preserved at the introducing
   commit recorded above.
+- Post-merge annotation, second (2026-10-24; documentation change only,
+  not a design revision): the aggregate's catalog function ID is
+  re-issued from the drafted `606` to the delivered `616`. Upstream main
+  merged #31017 (`6fb6531432`, technical-indicator window kernels)
+  before this branch's second base merge, allocating SQL function IDs
+  605-615 for its indicator registry (with `MO_VIEW`'s internal 603/604
+  helpers in front), which raised the merge conflicts in
+  `pkg/sql/plan/function/function_id.go`, `function_id_test.go`,
+  `window_binder.go` and the generated parser. The resolution keeps
+  upstream's 605-615, re-issues `QUANTILE_EXACT_WEIGHTED = 616` with the
+  sentinel at 617, and keeps `AggIdOfQuantileExactWeighted` tracking the
+  catalog id as `616 << 32`; the two window-binder blocks coexist as
+  upstream-authored (indicator-window validation) and this aggregate's
+  reviewed DISTINCT recording, with disjoint paths. The reviewed decision
+  (registry item 3) is to allocate the first unassigned catalog function
+  ID past the current `FUNCTION_END_NUMBER` sentinel, whichever slot is
+  free when it merges — no decision, invariant, admission set or
+  validation plan changed; only the concrete number moved (the wire
+  gate stays D10's `MORPCVersion131`, untouched). The approved
+  revision-5 bytes remain byte-preserved at the introducing commit
+  recorded above.
 
 ## Status
 
@@ -515,8 +536,10 @@ First owner of each boundary (all in the assigned worktree):
    aggregate rebuild; extend the sliding time-window gate to reject the name.
 3. Function registry (`pkg/sql/plan/function`): allocate the first
    unassigned catalog function ID past the current `FUNCTION_END_NUMBER`
-   sentinel (605; the register's consistency tests audit gaps and the
-   sentinel); register `class: Function_AGG`, `layout: STANDARD_FUNCTION`
+   sentinel (605 at approval; the register's consistency tests audit gaps
+   and the sentinel — after upstream #31017 allocated 605-615, the
+   delivered aggregate id is the next unassigned slot `616`; see the second
+   post-merge annotation in the revision log); register `class: Function_AGG`, `layout: STANDARD_FUNCTION`
    with a three-argument `checkFn` (value domain as in the ordered percentile
    continuous check; weight admitted exactly for decision D4's set —
    signed/unsigned integer widths, BIT, FLOAT32/64, DECIMAL64/DECIMAL128

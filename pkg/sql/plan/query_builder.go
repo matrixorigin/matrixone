@@ -12617,6 +12617,7 @@ func (builder *QueryBuilder) bindView(
 			state.memoFrames = append(state.memoFrames, memoFrame)
 			defer func() { memoFrame.finish(viewCtx, err) }()
 		}
+		state.request.benchmark.bind()
 	}
 
 	isSubscriptionStatistics := isSubscriptionStatisticsView(schema, table, metadataSubscription)

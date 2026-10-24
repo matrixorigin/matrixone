@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,6 +69,12 @@ func (b *stubWindowBinder) mysqlSpecialOrderKey(expr *planpb.Expr, typ *planpb.T
 
 func (b *stubWindowBinder) GetContext() context.Context {
 	return context.Background()
+}
+
+// GetProcess reports no process: the stub contexts used by these unit tests
+// carry the literal-only fallback of the indicator period validation.
+func (b *stubWindowBinder) GetProcess() *process.Process {
+	return nil
 }
 
 func testNumVal(v int64) tree.Expr {
