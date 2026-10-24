@@ -4708,18 +4708,6 @@ func builtInToSeconds(parameters []*vector.Vector, result vector.FunctionResultW
 	return nil
 }
 
-// CalcToSeconds: CalcToDays is used to return a day number (the number of days since year 0)
-func CalcToSeconds(ctx context.Context, datetimes []types.Datetime, ns *nulls.Nulls) ([]int64, error) {
-	res := make([]int64, len(datetimes))
-	for idx, datetime := range datetimes {
-		if nulls.Contains(ns, uint64(idx)) {
-			continue
-		}
-		res[idx] = DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetime) + ADZeroSeconds
-	}
-	return res, nil
-}
-
 func builtInSin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[float64](parameters[0])
 	rs := vector.MustFunctionResult[float64](result)

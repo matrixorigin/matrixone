@@ -659,32 +659,6 @@ func TestReplayTableRows(t *testing.T) {
 	assert.Equal(t, rows, tbl.GetMeta().(*catalog.TableEntry).GetRows())
 	assert.Nil(t, txn.Commit(context.Background()))
 
-	// worker := ops.NewOpWorker("xx")
-	// worker.Start()
-	// txn, err = tae3.StartTxn(nil)
-	// assert.Nil(t, err)
-	// db, err = txn.GetDatabase("db")
-	// assert.Nil(t, err)
-	// tbl, err = db.GetRelationByName(schema.Name)
-	// assert.Nil(t, err)
-	// blkIterator := tbl.MakeBlockIt()
-	// blks := make([]*catalog.BlockEntry, 0)
-	// for blkIterator.Valid() {
-	// 	blk := blkIterator.GetBlock().GetMeta().(*catalog.BlockEntry)
-	// 	blks = append(blks, blk)
-	// 	blkIterator.Next()
-	// }
-	// for _, blk := range blks {
-	// 	ctx := &tasks.Context{Waitable: true}
-	// 	task, err := jobs.NewCompactBlockTask(ctx, txn, blk, tae3.Scheduler)
-	// 	assert.Nil(t, err)
-	// 	worker.SendOp(task)
-	// 	err = task.WaitDone()
-	// 	assert.Nil(t, err)
-	// }
-	// assert.Nil(t, txn.Commit(context.Background()))
-	// worker.Stop()
-
 	err = tae3.Close()
 	assert.Nil(t, err)
 

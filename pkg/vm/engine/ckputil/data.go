@@ -67,14 +67,6 @@ var DataScan_ObjectEntrySeqnums = []uint16{
 	// objectio.SEQNUM_ROWID,
 }
 
-func MakeDataScanTableEntryBatch() *batch.Batch {
-	return batch.NewWithSchema(
-		true,
-		DataScan_ObjectEntryAttrs,
-		DataScan_ObjectEntryTypes,
-	)
-}
-
 func NewDataReader(
 	ctx context.Context,
 	fs fileservice.FileService,
