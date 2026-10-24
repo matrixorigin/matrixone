@@ -17,9 +17,12 @@ package tables
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -668,6 +671,16 @@ func TestApplyAppendAtLockedOutOfOrder(t *testing.T) {
 	later := makeBatch(3)
 	defer later.Close()
 	require.NoError(t, mnode.ApplyAppendAtLocked(later, 2))
+	defer mnode.data.Close()
+	// An earlier owner may materialize after the later payload. Reserving a
+	// shorter prefix must not clear that payload, including varlen/null data.
+	mnode.ReserveRowsLocked(1)
+	require.Equal(t, int32(3), mnode.data.Vecs[0].Get(2))
+	mnode.ReserveRowsLocked(4)
+	for _, vec := range mnode.data.Vecs {
+		require.Equal(t, 4, vec.Length())
+		require.True(t, vec.IsNull(3), "a failed trailing owner retains a physical hole")
+	}
 	first := makeBatch(1)
 	defer first.Close()
 	require.NoError(t, mnode.ApplyAppendAtLocked(first, 0))
@@ -676,8 +689,53 @@ func TestApplyAppendAtLockedOutOfOrder(t *testing.T) {
 	require.NoError(t, mnode.ApplyAppendAtLocked(second, 1))
 
 	vec := mnode.data.Vecs[0]
-	require.Equal(t, 3, vec.Length())
+	require.Equal(t, 4, vec.Length())
 	require.Equal(t, int32(1), vec.Get(0))
 	require.Equal(t, int32(2), vec.Get(1))
 	require.Equal(t, int32(3), vec.Get(2))
+}
+
+func TestFrozenAppenderRejectionDoesNotWaitForSealing(t *testing.T) {
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(schema, nil, nil)
+	require.NoError(t, err)
+	id := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&id, true, false, false)
+	entry, err := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	require.NoError(t, err)
+	obj := newAObject(entry, nil, false)
+	defer obj.node.Load().Unref()
+	h := newHandle(newTable(table, nil), obj, false)
+	obj.FreezeAppend() // Legacy flag-only freezing leaves the bound unknown.
+	obj.appendMVCC.LockForAppend()
+	locked := true
+	release := func() {
+		if locked {
+			locked = false
+			obj.appendMVCC.UnlockForAppend()
+		}
+	}
+	done := make(chan error, 1)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); _, err := h.GetAppender(); done <- err }()
+	defer func() { release(); wg.Wait() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	select {
+	case err := <-done:
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableObjectNotFound), "%v", err)
+	case <-ctx.Done():
+		t.Fatal("candidate rejection waited for the object's writer")
+	}
+	_, finalized := obj.GetAppendMaxCommitTS()
+	require.False(t, finalized, "unknown history remains conservative before lifecycle sealing")
+	release()
+	obj.SealAppend()
+	_, finalized = obj.GetAppendMaxCommitTS()
+	require.True(t, finalized)
 }

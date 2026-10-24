@@ -90,7 +90,8 @@ For an ordinary append, the logical transition is:
 
 ```text
 workspace append
-  -> table append lock selects object and reserves destination
+  -> table append lock selects/publishes a referenced carrier
+  -> object freeze lock and MVCC reserve the destination
   -> FreezeApply installs the physical row range
   -> transaction remains uncommitted and is visible only under txn MVCC rules
   -> ordered pre-prepare performs dedup and assigns prepare-ts
@@ -109,9 +110,9 @@ leaking the temporary sink or leaving a half-transferred tombstone.
 The required lock order is:
 
 ```text
-table append lock
-  -> per-appendable-object admission/gate
-  -> object/append MVCC lock
+selection:       table append lock (no object freeze/gate/MVCC wait)
+reservation:     object freeze lock -> object admission/gate -> MVCC lock
+materialization: object admission/gate -> MVCC lock
 ```
 
 The queue-side writer path may have priority over a Freeze writer for the same object,
@@ -174,3 +175,62 @@ The implementation is acceptable only when all of the following are evidenced:
 The review gate for this document is explicit: owners must approve this revision (or
 an updated revision) before the implementation is considered design-approved. Open
 questions and any invariant change must be recorded here and linked from the PR.
+
+## Selection and reservation lock boundary (2026-10-24)
+
+The table append lock owns candidate selection, validation, creation, and
+publication only. Every attempt reads the latest shared candidate through a new
+local handle. The old transaction-local handle cache is removed. No publication
+occurs after reservation, so a delayed owner cannot restore an older candidate.
+
+Normal appendable carriers are independently committed through
+`AllocateAndPublishCommitTS`. Publishing a non-owning candidate before reservation
+does not publish transaction rows. The appender reference protects the selected
+object; its freeze lock and existing MVCC gate serialize row reservation after
+the table lock is released. Capacity and freezing are monotonic. A frozen loser
+releases its reference and retries selection without retaining the old handle.
+The preparing-transfer branch keeps its existing parent-prepare timestamp and
+read-wait/replay contract; it does not allocate an independent visibility boundary.
+
+Candidate rejection validates state and releases references without synchronous
+sealing. Capacity exhaustion seals with the final reservation; compaction owns
+lifecycle sealing. A legacy-frozen or recovered object can retain an unknown
+commit bound until then, which forces conservative scanning rather than skipping
+rows. Allocator selection must not acquire an object's freeze or MVCC locks while
+holding the table lock.
+
+Physical placeholder materialization follows release of both allocation locks.
+Capacity checks use reserved rows, not vector length. Another transaction can
+reserve or install a later payload first; materialization extends short vectors
+without clearing existing values. Once an AppendNode is attached, padding and
+rollback ownership are completed before any additional cancellation exit or
+fallible bookkeeping. Failed rows retain their physical offsets until cleanup;
+removing padding would break collection of a trailing aborted range.
+
+The current Freeze/pre-prepare context reaches reservation attempts. Cancellation
+is checked after acquiring the table lock before selection/creation, and after
+acquiring the object freeze lock before attaching a range. These are per-object
+admission boundaries, not per-row polling. Preparing-transfer appends retain a
+noncanceling lifecycle context after the parent has entered preparation. A
+cancellation racing carrier creation may leave one reusable committed empty
+carrier; it cannot remove another transaction's committed rows.
+
+Observability uses cached, bounded scan/bookmark counter handles and publishes
+counts per object group, with separate Freeze/pre-prepare phases. It avoids
+per-object clock reads and metric label lookup. Queue timers sample only executed
+work. Queue wait includes producer backpressure; apply wait includes worker
+admission. Freeze measures the entire store call, including errors. Append-max
+gauges read current counts inside their existing publication mutex, preventing
+delayed callbacks from restoring stale snapshots. Retirement still prevents
+republication after catalog removal. Unconnected queue-depth/per-step metric
+definitions, unused scan statistics, and successful-read/retry diagnostics are
+removed.
+
+Local validation distinguishes pinned main, the rebased feature, and each lock
+change. The initial padding-only change retained dominant table-lock contention
+and was rejected as a completed optimization, even though its final throughput
+and client tails were close to main. Acceptance requires current-candidate phase
+histograms, CPU/mutex profiles, exact committed-data accounting, and end-to-end
+results. Temporary baseline timing probes and macOS CPU-affinity limitations
+must be identified separately. Historical throughput figures cannot satisfy the
+current candidate's performance gate.

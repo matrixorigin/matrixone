@@ -163,17 +163,6 @@ var (
 	TxnPKMayBeChangedMemNotFlushedCounter = txnPKMayBeChangedCounter.WithLabelValues("mem_not_flushed")
 	TxnPKMayBeChangedPersistedCounter     = txnPKMayBeChangedCounter.WithLabelValues("persisted")
 
-	// TxnAObjectDedupCounter records object-list decisions made by
-	// incremental dedup. max_commit_unavailable means the append history is
-	// not sealed/finalized yet, so the object must be read.
-	TxnAObjectDedupCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "txn",
-			Name:      "aobject_dedup_total",
-			Help:      "Total number of appendable objects considered by incremental dedup.",
-		}, []string{"phase", "result"})
-
 	// TxnAObjectMaxCommitStateGauge is the current number of appendable
 	// objects in each max-commit state, split by table and data/tombstone.
 	// pending means the object is still accepting appends (or its append
@@ -201,18 +190,6 @@ var (
 	txnAObjectMetricCounts = make(map[uint64][2][3]int)
 	txnAObjectMetricTables = make(map[uint64]struct{})
 
-	// TxnTNPrePrepareObjectCounter counts object-list work done by incremental
-	// dedup. The bounded phase label separates Freeze from queued PrePrepare;
-	// group identifies the independent object-list B-tree; result distinguishes
-	// traversal, filtering, and the actual GetDuplicatedRows call.
-	TxnTNPrePrepareObjectCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "mo",
-			Subsystem: "txn",
-			Name:      "tn_preprepare_object_total",
-			Help:      "Object-list entries considered by TN incremental dedup, split by phase.",
-		}, []string{"phase", "type", "group", "result"})
-
 	// TxnTNPrePrepareObjectScanCounter splits the object-list scan by object
 	// kind without a table-id label. Table IDs are unbounded over the life of
 	// a TN; a counter child for every historical table would never be evicted.
@@ -222,7 +199,7 @@ var (
 			Subsystem: "txn",
 			Name:      "tn_preprepare_object_scan_total",
 			Help:      "Objects reached by TN incremental dedup, split by phase and object kind.",
-		}, []string{"phase", "type", "object_kind", "drop", "group", "result"})
+		}, []string{"phase", "type", "group", "result"})
 
 	// TxnTNPrePrepareObjectBookmarkCounter records whether the appendable-create
 	// group could use its prefix max-commit bookmark and how many entries that
@@ -365,17 +342,6 @@ var (
 			Help:      "Duration of the TN transaction-store Freeze phase before queue admission.",
 			Buckets:   getDurationBuckets(),
 		})
-
-	TxnTNCommitQueueSizeGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "mo",
-			Subsystem: "txn",
-			Name:      "tn_commit_queue_size",
-			Help:      "Current number of transactions pending in each TN commit queue.",
-		}, []string{"queue"})
-	TxnTNPreWalQueueSizeGauge = TxnTNCommitQueueSizeGauge.WithLabelValues("pre_wal")
-	TxnTNWalQueueSizeGauge    = TxnTNCommitQueueSizeGauge.WithLabelValues("wal")
-	TxnTNApplyQueueSizeGauge  = TxnTNCommitQueueSizeGauge.WithLabelValues("apply")
 
 	TxnDeadlockDetectorQueueDepthGauge = prometheus.NewGauge(
 		prometheus.GaugeOpts{
@@ -645,27 +611,6 @@ var (
 
 	TxnTNAppendDeduplicateDurationHistogram     = txnTNDeduplicateDurationHistogram.WithLabelValues("append_deduplicate")
 	TxnTNPrePrepareDeduplicateDurationHistogram = txnTNDeduplicateDurationHistogram.WithLabelValues("prePrepare_deduplicate")
-
-	TxnTNPrePrepareDeduplicateStepDurationHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "mo",
-			Subsystem: "txn",
-			Name:      "tn_preprepare_deduplicate_step_duration_seconds",
-			Help: "Bucketed histogram of individual TN incremental deduplication steps, split by phase. " +
-				"Object-list steps include object_list_scan (total), object_list_iterator " +
-				"(iterator residual), object_entry_filter, object_max_commit_lookup, and " +
-				"object_operation.",
-			Buckets: getDurationBuckets(),
-		}, []string{"phase", "type", "step"})
-
-	TxnTNPrePrepareObjectStepDurationHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "mo",
-			Subsystem: "txn",
-			Name:      "tn_preprepare_object_step_duration_seconds",
-			Help:      "Bucketed histogram of TN incremental ObjectList steps by phase and object-list group.",
-			Buckets:   getDurationBuckets(),
-		}, []string{"phase", "type", "group", "step"})
 
 	TxnTNLogServiceAppendDurationHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{

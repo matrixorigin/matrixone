@@ -12191,6 +12191,13 @@ func testConcurrentUpdateByPreviousRowIDWithFlushMerge(
 						errC <- fmt.Errorf("worker %d update %d: %w", worker, update, ctx.Err())
 						return
 					}
+					if !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+						errC <- fmt.Errorf(
+							"worker %d update %d attempt %d stage %s returned unexpected error: %w",
+							worker, update, attempt, stage, err,
+						)
+						return
+					}
 					time.Sleep(time.Millisecond)
 				}
 				if !committed {

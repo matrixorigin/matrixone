@@ -16,7 +16,10 @@ package txnimpl
 
 import (
 	"context"
-	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -354,23 +357,7 @@ func foreachIncrementalObject(
 	from, to types.TS,
 	fn func(*catalog.ObjectEntry) error,
 ) error {
-	_, err := foreachIncrementalObjectWithStats(snapshot, false, from, to, 0, dedupMetricOther, fn)
-	return err
-}
-
-// incrementalObjectScanStats separates time spent by the object-list iterator
-// from time spent in the callback. filter is the per-entry catalog checks
-// excluding maxCommit; maxCommit is tracked separately, and operation is the
-// object-level GetDuplicatedRows/Contains work.
-type incrementalObjectScanStats struct {
-	scan        time.Duration
-	filter      time.Duration
-	createdAt   time.Duration
-	deletedAt   time.Duration
-	visibleByTS time.Duration
-	groupState  time.Duration
-	maxCommit   time.Duration
-	operation   time.Duration
+	return foreachIncrementalObjectInPhase(snapshot, false, from, to, dedupMetricOther, fn)
 }
 
 func incrementalObjectGroupName(group catalog.ObjectListGroup) string {
@@ -392,6 +379,51 @@ func incrementalObjectGroupName(group catalog.ObjectListGroup) string {
 	}
 }
 
+// Handles and labels are bounded at initialization; no Prometheus label lookup
+// or time.Now call is performed for each visited object.
+type incrementalObjectMetrics struct {
+	visited, operation, maxCommitSkipped          prometheus.Counter
+	bookmarkValid, bookmarkInvalid, prefixSkipped prometheus.Counter
+}
+
+var incrementalScanMetrics = func() (handles [5][2][catalog.ObjectListGroupNonAppendableDrop + 1]incrementalObjectMetrics) {
+	for phaseIndex, phase := range [...]string{dedupMetricFreeze, dedupMetricPrePrepare, dedupMetricAppend, dedupMetricLookup, dedupMetricOther} {
+		for kindIndex, kind := range [...]string{"data", "tombstone"} {
+			for groupIndex := range handles[phaseIndex][kindIndex] {
+				group := catalog.ObjectListGroup(groupIndex)
+				name := incrementalObjectGroupName(group)
+				h := &handles[phaseIndex][kindIndex][groupIndex]
+				h.visited = v2.TxnTNPrePrepareObjectScanCounter.WithLabelValues(phase, kind, name, "visited")
+				h.operation = v2.TxnTNPrePrepareObjectScanCounter.WithLabelValues(phase, kind, name, "operation")
+				h.maxCommitSkipped = v2.TxnTNPrePrepareObjectScanCounter.WithLabelValues(phase, kind, name, "max_commit_skipped")
+				h.bookmarkValid = v2.TxnTNPrePrepareObjectBookmarkCounter.WithLabelValues(phase, kind, name, "valid")
+				h.bookmarkInvalid = v2.TxnTNPrePrepareObjectBookmarkCounter.WithLabelValues(phase, kind, name, "invalid")
+				h.prefixSkipped = v2.TxnTNPrePrepareObjectBookmarkCounter.WithLabelValues(phase, kind, name, "prefix_skipped")
+			}
+		}
+	}
+	return
+}()
+
+func objectScanMetrics(phase string, tombstone bool, group catalog.ObjectListGroup) *incrementalObjectMetrics {
+	phaseIndex := 4
+	switch phase {
+	case dedupMetricFreeze:
+		phaseIndex = 0
+	case dedupMetricPrePrepare:
+		phaseIndex = 1
+	case dedupMetricAppend:
+		phaseIndex = 2
+	case dedupMetricLookup:
+		phaseIndex = 3
+	}
+	kindIndex := 0
+	if tombstone {
+		kindIndex = 1
+	}
+	return &incrementalScanMetrics[phaseIndex][kindIndex][group]
+}
+
 // A drop entry represents the old physical object.  If the drop belongs to
 // the reader transaction itself, that old object is no longer a competing
 // source for incremental dedup; the transaction may be publishing its
@@ -401,14 +433,13 @@ func skipOwnDroppedObject(obj *catalog.ObjectEntry, txn txnif.TxnReader) bool {
 	return obj.IsDEntry() && obj.DeleteNode.IsSameTxn(txn)
 }
 
-func foreachIncrementalObjectWithStats(
+func foreachIncrementalObjectInPhase(
 	snapshot catalog.ObjectListSnapshot,
 	isTombstone bool,
 	from, to types.TS,
-	tableID uint64,
 	metricPhase string,
 	fn func(*catalog.ObjectEntry) error,
-) (stats incrementalObjectScanStats, err error) {
+) (err error) {
 	shouldSkipAObject := func(obj *catalog.ObjectEntry) bool {
 		if !obj.IsAppendable() {
 			return false
@@ -438,8 +469,16 @@ func foreachIncrementalObjectWithStats(
 		// prepared in [from, to]. Do not use the lower CreatedAt bound to
 		// truncate an appendable create group. The upper bound is safe because
 		// the group's tree is ordered by CreatedAt.
+		metrics := objectScanMetrics(metricPhase, isTombstone, group)
+		var visited, operations, maxSkipped uint64
+		defer func() {
+			metrics.visited.Add(float64(visited))
+			metrics.operation.Add(float64(operations))
+			metrics.maxCommitSkipped.Add(float64(maxSkipped))
+		}()
 		var err error
 		visitEntry := func(obj *catalog.ObjectEntry) bool {
+			visited++
 			createdAfterTo := obj.CreatedAt.GT(&to)
 			if createdAfterTo {
 				return false
@@ -451,11 +490,13 @@ func foreachIncrementalObjectWithStats(
 				return true
 			}
 			if shouldSkipAObject(obj) {
+				maxSkipped++
 				return true
 			}
 			// A create-only group contains serving C entries without a D
 			// counterpart. With CreatedAt <= to established above,
 			// VisibleByTS(to) cannot reject the entry.
+			operations++
 			err = fn(obj)
 			return err == nil
 		}
@@ -464,20 +505,12 @@ func foreachIncrementalObjectWithStats(
 		var bookmarkSkipped int
 		if appendable && from != txnif.UncommitTS {
 			bookmarkStart, bookmarkValid, bookmarkSkipped = snapshot.CommitBookmarkStartWithCount(group, from)
-		}
-		if group == catalog.ObjectListGroupAppendableCreate {
-			kind := "data"
-			if isTombstone {
-				kind = "tombstone"
+			if bookmarkValid {
+				metrics.bookmarkValid.Inc()
+			} else {
+				metrics.bookmarkInvalid.Inc()
 			}
-			groupName := incrementalObjectGroupName(group)
-			startID := "<none>"
-			if bookmarkStart != nil {
-				startID = bookmarkStart.ID().ShortStringEx()
-			}
-			logutil.Debugf(
-				"[PrePrepareDedup] object-list bookmark group=%s type=%s valid=%v prefix-skipped=%d start=%s from=%s to=%s",
-				groupName, kind, bookmarkValid, bookmarkSkipped, startID, from.ToString(), to.ToString())
+			metrics.prefixSkipped.Add(float64(bookmarkSkipped))
 		}
 		if bookmarkValid {
 			// The prefix bookmark proves that every entry before bookmarkStart
@@ -494,11 +527,19 @@ func foreachIncrementalObjectWithStats(
 		return err
 	}
 	if err := visitCreateGroup(catalog.ObjectListGroupAppendableCreate, true); err != nil {
-		return stats, err
+		return err
 	}
 	visitDropGroup := func(group catalog.ObjectListGroup) error {
+		metrics := objectScanMetrics(metricPhase, isTombstone, group)
+		var visited, operations, maxSkipped uint64
+		defer func() {
+			metrics.visited.Add(float64(visited))
+			metrics.operation.Add(float64(operations))
+			metrics.maxCommitSkipped.Add(float64(maxSkipped))
+		}()
 		var err error
 		visitEntry := func(obj *catalog.ObjectEntry) bool {
+			visited++
 			deletedAfterFrom := obj.DeletedAt.GT(&from)
 			// Ascend is inclusive. Drop processing starts strictly after from.
 			if !deletedAfterFrom {
@@ -518,15 +559,24 @@ func foreachIncrementalObjectWithStats(
 				return true
 			}
 			if shouldSkipAObject(obj) {
+				maxSkipped++
 				return true
 			}
+			operations++
 			err = fn(obj)
 			return err == nil
 		}
 		var bookmarkStart *catalog.ObjectEntry
 		var bookmarkValid bool
 		if group == catalog.ObjectListGroupAppendableDrop && from != txnif.UncommitTS {
-			bookmarkStart, bookmarkValid = snapshot.CommitBookmarkStart(group, from)
+			var skipped int
+			bookmarkStart, bookmarkValid, skipped = snapshot.CommitBookmarkStartWithCount(group, from)
+			if bookmarkValid {
+				metrics.bookmarkValid.Inc()
+			} else {
+				metrics.bookmarkInvalid.Inc()
+			}
+			metrics.prefixSkipped.Add(float64(skipped))
 		}
 		if bookmarkValid {
 			if bookmarkStart != nil {
@@ -538,14 +588,14 @@ func foreachIncrementalObjectWithStats(
 		return err
 	}
 	if err := visitDropGroup(catalog.ObjectListGroupAppendableDrop); err != nil {
-		return stats, err
+		return err
 	}
 
 	if err := visitCreateGroup(catalog.ObjectListGroupNonAppendableCreate, false); err != nil {
-		return stats, err
+		return err
 	}
 	err = visitDropGroup(catalog.ObjectListGroupNonAppendableDrop)
-	return stats, err
+	return err
 }
 
 // incrementalGetRowsByPK checks the inclusive logical interval [from, to].
@@ -575,7 +625,7 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 		pks.Length(),
 		common.WorkspaceAllocator,
 	)
-	_, err = foreachIncrementalObjectWithStats(snapshot, tbl.isTombstone, from, to, tbl.txnTable.entry.ID, metricPhase, func(obj *catalog.ObjectEntry) error {
+	err = foreachIncrementalObjectInPhase(snapshot, tbl.isTombstone, from, to, metricPhase, func(obj *catalog.ObjectEntry) error {
 		if isEmptyDroppedAppendableObject(obj) {
 			return nil
 		}
@@ -629,9 +679,9 @@ func (tbl *baseTable) CleanUp() {
 	}
 }
 
-func (tbl *baseTable) PrePrepare() error {
+func (tbl *baseTable) PrePrepare(ctx context.Context) error {
 	if tbl.tableSpace != nil {
-		return tbl.tableSpace.PrepareApply()
+		return tbl.tableSpace.PrepareApply(ctx)
 	}
 	return nil
 }

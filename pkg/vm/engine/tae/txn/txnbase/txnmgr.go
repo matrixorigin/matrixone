@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/panjf2000/ants/v2"
-	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -543,78 +542,9 @@ func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
 	if op.Txn.GetStore().IsOffline() {
 		panic("offline txn should not be here")
 	}
+	op.preWalEnqueuedAt = time.Now()
 	_, err = mgr.preWalQueue.Enqueue(op)
 	return
-}
-
-func observeTNCommitQueueStage(stage string, started time.Time) {
-	if !started.IsZero() {
-		var observer prometheus.Observer
-		switch stage {
-		case "pre_wal_queue_wait":
-			observer = v2.TxnTNPreWalQueueWaitDurationHistogram
-		case "pre_prepare":
-			observer = v2.TxnTNPrePrepareDurationHistogram
-		case "prepare_ts":
-			observer = v2.TxnTNPrepareTSDurationHistogram
-		case "prepare_commit":
-			observer = v2.TxnTNPrepareCommitDurationHistogram
-		case "pre_apply_commit":
-			observer = v2.TxnTNPreApplyCommitDurationHistogram
-		case "wal_queue_wait":
-			observer = v2.TxnTNWalQueueWaitDurationHistogram
-		case "prepare_wal":
-			observer = v2.TxnTNPrepareWalDurationHistogram
-		case "apply_queue_wait":
-			observer = v2.TxnTNApplyQueueWaitDurationHistogram
-		case "wait_wal_and_tail":
-			observer = v2.TxnTNWaitWalAndTailDurationHistogram
-		case "apply_commit":
-			observer = v2.TxnTNApplyCommitDurationHistogram
-		default:
-			return
-		}
-		observer.Observe(time.Since(started).Seconds())
-	}
-}
-
-func (mgr *TxnManager) observePreWalQueueSize(processed ...int) {
-	if q, ok := mgr.preWalQueue.(interface{ Pending() int64 }); ok {
-		pending := q.Pending()
-		if len(processed) > 0 {
-			pending -= int64(processed[0])
-		}
-		if pending < 0 {
-			pending = 0
-		}
-		v2.TxnTNPreWalQueueSizeGauge.Set(float64(pending))
-	}
-}
-
-func (mgr *TxnManager) observeWalQueueSize(processed ...int) {
-	if q, ok := mgr.walQueue.(interface{ Pending() int64 }); ok {
-		pending := q.Pending()
-		if len(processed) > 0 {
-			pending -= int64(processed[0])
-		}
-		if pending < 0 {
-			pending = 0
-		}
-		v2.TxnTNWalQueueSizeGauge.Set(float64(pending))
-	}
-}
-
-func (mgr *TxnManager) observeApplyQueueSize(processed ...int) {
-	if q, ok := mgr.applyQueue.(interface{ Pending() int64 }); ok {
-		pending := q.Pending()
-		if len(processed) > 0 {
-			pending -= int64(processed[0])
-		}
-		if pending < 0 {
-			pending = 0
-		}
-		v2.TxnTNApplyQueueSizeGauge.Set(float64(pending))
-	}
 }
 
 func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
@@ -628,16 +558,21 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 	// If txn is trying committing, call txn.PrePrepare()
 	now := time.Now()
 	op.Txn.SetError(op.Txn.PrePrepare(op.ctx))
+	v2.TxnTNPrePrepareDurationHistogram.Observe(time.Since(now).Seconds())
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
 	})
 }
 
 func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
+	started := time.Now()
 	txn.SetError(txn.PrepareCommit())
+	v2.TxnTNPrepareCommitDurationHistogram.Observe(time.Since(started).Seconds())
 }
 
 func (mgr *TxnManager) onPreApplyCommit(txn txnif.AsyncTxn) {
+	started := time.Now()
+	defer func() { v2.TxnTNPreApplyCommitDurationHistogram.Observe(time.Since(started).Seconds()) }()
 	if err := txn.PreApplyCommit(); err != nil {
 		txn.SetError(err)
 		mgr.OnException(err)
@@ -722,7 +657,10 @@ func (mgr *TxnManager) on1PCApply(op *OpTxn) {
 	switch op.Op {
 	case OpCommit:
 		isAbort = false
-		if err = op.Txn.ApplyCommit(); err != nil {
+		started := time.Now()
+		err = op.Txn.ApplyCommit()
+		v2.TxnTNApplyCommitDurationHistogram.Observe(time.Since(started).Seconds())
+		if err != nil {
 			panic(err)
 		}
 	case OpRollback:
@@ -763,7 +701,9 @@ func (mgr *TxnManager) preWal(op *OpTxn) bool {
 	//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
 	//1. Allocate a timestamp , set it to txn's prepare timestamp and commit timestamp,
 	//2. Set transaction's state to Preparing or Rollbacking if op.Op is OpRollback.
+	started := time.Now()
 	ts := mgr.onBindPrepareTimeStamp(op)
+	v2.TxnTNPrepareTSDurationHistogram.Observe(time.Since(started).Seconds())
 
 	mgr.onPrepare1PC(op, ts)
 	if !op.Txn.IsReplay() {
@@ -788,7 +728,10 @@ func (mgr *TxnManager) onWal(op *OpTxn) bool {
 		return false
 	}
 
-	if err := op.Txn.PrepareWAL(); err != nil {
+	started := time.Now()
+	err := op.Txn.PrepareWAL()
+	v2.TxnTNPrepareWalDurationHistogram.Observe(time.Since(started).Seconds())
+	if err != nil {
 		panic(err)
 	}
 
@@ -815,10 +758,17 @@ func (mgr *TxnManager) onApply(items ...any) {
 		store := op.Txn.GetStore()
 		store.TriggerTrace(txnif.TraceOnApply)
 		mgr.workers.Submit(func() {
+			if !op.applyEnqueuedAt.IsZero() {
+				v2.TxnTNApplyQueueWaitDurationHistogram.Observe(time.Since(op.applyEnqueuedAt).Seconds())
+			}
+			started := time.Now()
 			//Notice that WaitWalAndTail do nothing when op is OpRollback
 			if err := op.Txn.WaitWalAndTail(op.ctx); err != nil {
 				// v0.6 TODO: Error handling
 				panic(err)
+			}
+			if op.Op == OpCommit {
+				v2.TxnTNWaitWalAndTailDurationHistogram.Observe(time.Since(started).Seconds())
 			}
 			if _, injected := objectio.CommitWaitInjected(op.Txn.GetTenantID(), op.Txn.GetID()); injected {
 				duration := time.Millisecond * time.Duration(rand.Intn(10))
@@ -942,10 +892,14 @@ func (mgr *TxnManager) onPreWalStage(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
+		if !op.preWalEnqueuedAt.IsZero() {
+			v2.TxnTNPreWalQueueWaitDurationHistogram.Observe(time.Since(op.preWalEnqueuedAt).Seconds())
+		}
 		op.Txn.GetStore().TriggerTrace(txnif.TracePreWal)
 		if !mgr.preWal(op) {
 			continue
 		}
+		op.walEnqueuedAt = time.Now()
 		if _, err := mgr.walQueue.Enqueue(op); err != nil {
 			panic(err)
 		}
@@ -963,6 +917,9 @@ func (mgr *TxnManager) onWalStage(items ...any) {
 	for _, item := range items {
 		t1 := time.Now()
 		op := item.(*OpTxn)
+		if !op.walEnqueuedAt.IsZero() {
+			v2.TxnTNWalQueueWaitDurationHistogram.Observe(time.Since(op.walEnqueuedAt).Seconds())
+		}
 		op.Txn.GetStore().TriggerTrace(txnif.TraceOnWal)
 		inWal := mgr.onWal(op)
 		t2 := time.Now()
@@ -996,6 +953,7 @@ func (mgr *TxnManager) postWal(op *OpTxn, inWal bool) {
 	}
 
 	// waiting for all things done and then to apply this commit/rollback
+	op.applyEnqueuedAt = time.Now()
 	if _, err := mgr.applyQueue.Enqueue(op); err != nil {
 		panic(err)
 	}

@@ -110,8 +110,9 @@ func (obj *aobject) IsAppendable() bool {
 	if node.IsPersisted() {
 		return false
 	}
-	rows, _ := node.Rows()
-	return rows < obj.meta.Load().GetSchema().Extra.BlockMaxRows
+	// Capacity follows reservations, including rollback holes. Materialized
+	// vector length can lag a reservation and is protected by the MVCC lock.
+	return obj.reserved.Load() < obj.meta.Load().GetSchema().Extra.BlockMaxRows
 }
 
 func (obj *aobject) PrepareCompactInfo() (result bool, reason string) {

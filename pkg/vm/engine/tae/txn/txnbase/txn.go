@@ -48,7 +48,8 @@ type OpTxn struct {
 	Txn txnif.AsyncTxn
 	Op  OpType
 
-	// Queue enqueue timestamps are used only for TN queue wait metrics. They
+	// Stamped before enqueue: wait includes producer backpressure and, for
+	// apply, worker admission. Each handoff has one producer and consumer. They
 	// are owned by the commit pipeline and are not part of txn persistence.
 	preWalEnqueuedAt time.Time
 	walEnqueuedAt    time.Time
