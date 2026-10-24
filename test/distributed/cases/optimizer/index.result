@@ -322,11 +322,27 @@ explain SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
   ->  Index Table Scan on t14.pseudo  𝄀
-        Filter Cond: prefix_eq(__mo_index_idx_col)
+        Filter Cond: prefix_eq(__mo_index_idx_col), (serial_extract(__mo_index_idx_col, 0, CHAR)) = 'joce')
 SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 ➤ pseudo1[1,35,0]  𝄀
 testtt  𝄀
 tsestset
+INSERT INTO t14(pseudo,pseudo1,same) VALUES(concat('joce',char(0),'x'),'nul_peer',1);
+SELECT pseudo1 FROM t14 WHERE pseudo='joce' ORDER BY pseudo1;
+➤ pseudo1[1,35,0]  𝄀
+testtt  𝄀
+tsestset
+SELECT pseudo1 FROM t14 FORCE INDEX(pseudo) WHERE pseudo='joce' ORDER BY pseudo1;
+➤ pseudo1[1,35,0]  𝄀
+testtt  𝄀
+tsestset
+SELECT pseudo1 FROM t14 IGNORE INDEX(pseudo) WHERE pseudo='joce' ORDER BY pseudo1;
+➤ pseudo1[1,35,0]  𝄀
+testtt  𝄀
+tsestset
+SELECT pseudo1 FROM t14 FORCE INDEX(pseudo) WHERE pseudo=concat('joce',char(0),'x');
+➤ pseudo1[1,35,0]  𝄀
+nul_peer
 drop table t1;
 create table t1(a bigint, b bigint default null, c int, primary key(a), key(b));
 insert into t1(a,b,c) select result,result%10, result from generate_series(1,3000000)g;

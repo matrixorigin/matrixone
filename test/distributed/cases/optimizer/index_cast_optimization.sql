@@ -51,9 +51,12 @@ EXPLAIN SELECT * FROM t_float32 WHERE val = 9.0;
 -- @separator:table
 EXPLAIN SELECT * FROM t_float32 WHERE val = 9;
 
--- Should NOT have cast on column: FLOAT32 >= INT
+-- FLOAT32 >= INT keeps a raw-column comparison; serialized float access is unsafe.
 -- @separator:table
--- @regex("Index Table Scan.*idx_val",true)
+-- @regex("Table Scan on .*t_float32", true)
+-- @regex("Filter Cond: [(]t_float32[.]val >= 9[)]", true)
+-- @regex("Index Table Scan", false)
+-- @regex("(?i)cast[(]t_float32[.]val", false)
 EXPLAIN SELECT * FROM t_float32 WHERE val >= 9;
 
 -- Verify results
@@ -138,6 +141,30 @@ EXPLAIN SELECT * FROM t_float32 WHERE val = ABS(-9);
 SELECT * FROM t_float32 WHERE val = CAST(9.0 AS DECIMAL);
 SELECT * FROM t_float32 WHERE val = 8 + 1;
 SELECT * FROM t_float32 WHERE val = ABS(-9);
+
+-- Signed-zero access must retain both SQL-equal rows; each comparison owner is exercised.
+INSERT INTO t_float32 VALUES (4, 0.0), (5, bit_cast(unhex('00000080') as float));
+SELECT id FROM t_float32 WHERE val = 0 ORDER BY id;
+SELECT id FROM t_float32 FORCE INDEX(idx_val) WHERE val = 0 ORDER BY id;
+SELECT id FROM t_float32 IGNORE INDEX(idx_val) WHERE val = 0 ORDER BY id;
+SELECT id FROM t_float32 WHERE val IN (0) ORDER BY id;
+SELECT id FROM t_float32 WHERE val BETWEEN 0 AND 0 ORDER BY id;
+SELECT id FROM t_float32 WHERE val >= 0 AND val <= 0 ORDER BY id;
+SELECT id FROM t_float32 WHERE val < 0 ORDER BY id;
+SELECT id FROM t_float32 WHERE val <= 0 ORDER BY id;
+SELECT id FROM t_float32 WHERE val > 0 ORDER BY id;
+SELECT id FROM t_float32 WHERE val >= 0 ORDER BY id;
+SELECT id FROM t_float32 WHERE val = 0 OR val = 9 ORDER BY id;
+PREPARE float_point FROM 'SELECT id FROM t_float32 WHERE val = ? ORDER BY id';
+SET @float_bound = 9;
+EXECUTE float_point USING @float_bound;
+SET @float_bound = 0;
+EXECUTE float_point USING @float_bound;
+SET @float_bound = NULL;
+EXECUTE float_point USING @float_bound;
+SET @float_bound = 0;
+EXECUTE float_point USING @float_bound;
+DEALLOCATE PREPARE float_point;
 
 -- Cleanup
 DROP TABLE t_int32;

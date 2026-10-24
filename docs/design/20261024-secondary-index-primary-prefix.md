@@ -128,3 +128,10 @@ Early component snapshots skip fresh deferred scans because logical
 normalization consumes no physical key parts. Already-lowered indexed scans
 retain their existing component-filter preservation; surviving logical
 predicates are snapshotted at the late consumption boundary.
+
+FLOAT/DOUBLE predicates are excluded from serialized regular-index access.
+Queries relying on those predicates may scan the base table, including finite
+nonzero comparisons, increasing rows read, I/O and latency. Safe predicates on
+other index parts may still provide access while the float predicate remains
+an exact residual. Avoiding a cast on the column does not establish eligibility
+for serialized index access.
