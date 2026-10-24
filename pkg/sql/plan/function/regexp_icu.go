@@ -193,7 +193,17 @@ func requiresRegexp2Pattern(pattern string) bool {
 			}
 		}
 		if pattern[i] == '(' {
+			if strings.HasPrefix(pattern[i:], "(?#") {
+				return true
+			}
 			if end, enabled, scoped, ok := regexpInlineFreeSpacing(pattern, i, freeSpacing); ok {
+				// RE2 accepts only these inline options. ICU comments and flags
+				// must be classified before the regular compiler is selected.
+				for _, option := range pattern[i+2 : end] {
+					if !strings.ContainsRune("imsU-:)", option) {
+						return true
+					}
+				}
 				if scoped {
 					freeSpacingStack = append(freeSpacingStack, freeSpacing)
 					freeSpacing = enabled
@@ -1319,17 +1329,17 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 	pat, pureMatchType string,
 	binary bool,
 ) (*regexp2Matcher, error) {
-	rule := regexpPatternWithPureMatchType(pat, pureMatchType, binary)
 	binaryCaseFold := binary && strings.ContainsRune(pureMatchType, 'i')
-	key := regexpCacheKey{pattern: rule, binary: binary, binaryCaseFold: binaryCaseFold}
+	key := regexpCacheKey{pattern: pat, matchType: pureMatchType, binary: binary, binaryCaseFold: binaryCaseFold}
 	if rs.icu == nil {
 		rs.icu = make(map[regexpCacheKey]*regexp2Matcher, mapSizeForRegexp)
 	}
 	if matcher, ok := rs.icu[key]; ok {
 		return matcher, nil
 	}
-	if len(rule) > regexp2MaxPatternBytes {
-		return nil, regexp2InvalidInputf("regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxPatternBytes)
+	rule, err := regexpPatternWithPureMatchType(pat, pureMatchType, binary)
+	if err != nil {
+		return nil, err
 	}
 	if binary {
 		if err := validateBinaryRegexpPattern(rule); err != nil {
@@ -1340,7 +1350,8 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 		return nil, err
 	}
 	rule = strings.Clone(rule)
-	key.pattern = rule
+	key.pattern = strings.Clone(pat)
+	key.matchType = strings.Clone(pureMatchType)
 	expression, err := translateRegexp2Pattern(rule, binary)
 	if err != nil {
 		return nil, err

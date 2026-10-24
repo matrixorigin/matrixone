@@ -22,9 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Regression coverage for the mo-bot review round on the per-line evaluation
-// of wide-multiline anchors (#30210, #30646): trailing-LF termination,
-// short-circuit routing, regexp2 admission for '.', whole-subject anchors,
+// Wide-multiline anchor regressions (#30210, #30646): trailing-LF termination,
+// prefix short-circuiting, regular subject admission, whole-subject anchors,
 // replace occurrence accounting across lines, and zero-width matches at the
 // requested start position.
 
@@ -68,23 +67,15 @@ func TestReviewWideLinesTrailingLFTerminates(t *testing.T) {
 // Route selection must depend on pattern and match_type alone; no whole-subject
 // pre-scan may sit in front of a prefix short-circuit match.
 func TestReviewWideLineRouteSelection(t *testing.T) {
-	subject := "alpha\n" + strings.Repeat("a", 32768)
-	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute(`^alpha`, "m", subject, false))
-	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute(`a$`, "m", "a\rb", false))
-	require.Equal(t, regexpRouteRE2, regexpWideMultilineRoute(`^a`, "", "a\rb", false))
-	// An anchorless pattern skips routing entirely and runs native RE2.
-	require.Equal(t, regexpRouteRE2, regexpWideMultilineRoute(`a\rb`, "m", "a\rb", false))
-	// A terminator-capable pattern with anchors keeps whole-subject routing.
-	require.Equal(t, regexpRouteRegexp2, regexpWideMultilineRoute(`^a\rb`, "m", "a\rb", false))
+	op := newOpBuiltInRegexp()
+	for _, pattern := range []string{`^alpha`, `a$`, `^a\rb`, `^a\s`, `^a\z`} {
+		require.False(t, op.regMap.requiresRegexp2(pattern, "m", false), pattern)
+	}
+	require.True(t, op.regMap.requiresRegexp2(`(?<=a)b`, "m", false))
 }
 
-// '.' under the default match_type never matches a line terminator under the
-// MySQL/ICU contract, so it must not force the regexp2 admission path.
+// A regular dot pattern must retain the regular engine's subject domain.
 func TestReviewWideLineDotAdmission(t *testing.T) {
-	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute(`^a.`, "m", "a\rb", false))
-	// match_type 'n' makes '.' terminator-capable and stays off the line route.
-	require.Equal(t, regexpRouteRegexp2, regexpWideMultilineRoute(`^a.`, "mn", "a\rb", false))
-
 	op := newOpBuiltInRegexp()
 	got, err := op.regMap.regularLikeWithMode(`^a.`, strings.Repeat("a", 16384)+"\r", "m", false)
 	require.NoError(t, err)
@@ -94,7 +85,6 @@ func TestReviewWideLineDotAdmission(t *testing.T) {
 // Whole-subject anchors (\A, \z) and (?-m) scopes must keep whole-subject
 // routing; per-line evaluation would hand them fake line boundaries.
 func TestReviewWideLineSubjectAnchors(t *testing.T) {
-	require.Equal(t, regexpRouteRegexp2, regexpWideMultilineRoute(`^a\z`, "m", "a\rb", false))
 
 	op := newOpBuiltInRegexp()
 	for _, pat := range []string{`^a\z`, `\Ab$`, `(?-m:^b)|^z`} {
@@ -226,7 +216,7 @@ func TestReviewWideLineTerminalDollar(t *testing.T) {
 }
 
 // The aggregate replacement-size budget is enforced across lines: nine 8
-// MiB line replacements each pass the per-line check, but the accumulated
+// MiB individual replacements each fit the limit, but the accumulated
 // result must stop at the shared maximum (mo-bot review on #30646).
 func TestReviewWideLineReplaceAggregateLimit(t *testing.T) {
 	op := newOpBuiltInRegexp()
@@ -241,8 +231,7 @@ func TestReviewWideLineReplaceAggregateLimit(t *testing.T) {
 }
 
 // Anchored-prefix matches on a long terminator-free line keep the prefix
-// short-circuit cost of the whole-subject engine, through one bounded
-// prefix probe instead of a full-line scan (mo-bot review on #30646).
+// short-circuit cost of the regular engine without scanning the subject.
 func TestReviewWideLinePrefixShortCircuit(t *testing.T) {
 	op := newOpBuiltInRegexp()
 	long := "alpha" + strings.Repeat("x", 32768)
@@ -252,12 +241,11 @@ func TestReviewWideLinePrefixShortCircuit(t *testing.T) {
 	got, err = op.regMap.regularLikeWithMode(`^alphz`, long, "m", false)
 	require.NoError(t, err)
 	require.False(t, got)
-	// An unanchored hit strictly inside the bounded prefix probe is
-	// definitive too.
+	// Unanchored hits also retain their ordinary result.
 	got, err = op.regMap.regularLikeWithMode(`ay`, "ay"+strings.Repeat("x", 32768), "m", false)
 	require.NoError(t, err)
 	require.True(t, got)
-	// A terminator inside the prefix resolves the line bound directly.
+	// Search can also reach a later line.
 	got, err = op.regMap.regularLikeWithMode(`^z`, "ab\r\n"+strings.Repeat("x", 32768)+"\r\nz", "m", false)
 	require.NoError(t, err)
 	require.True(t, got)
@@ -267,17 +255,12 @@ func TestReviewWideLinePrefixShortCircuit(t *testing.T) {
 	require.False(t, got)
 }
 
-// A terminator-capable pattern keeps whole-subject routing, but subjects
-// with no wide terminator keep the supported base input domain instead of
-// bouncing into regexp2 admission (mo-bot review on #30646: REGEXP_LIKE
-// '^a\s' on a 16 KiB / >1 MiB LF-only subject answers through the base
-// engine again).
+// Whitespace-consuming patterns retain the regular subject domain with both
+// LF and wide terminators.
 func TestReviewWideLineTerminatorClassRoute(t *testing.T) {
 	subject := "a\n" + strings.Repeat("y", 16384)
-	require.Equal(t, regexpRouteRE2, regexpWideMultilineRoute(`^a\s`, "m", subject, false))
-	// A genuine wide terminator keeps whole-subject regexp2 routing.
+	// A wide terminator must not change engine admission.
 	wide := "a\r" + strings.Repeat("y", 1024)
-	require.Equal(t, regexpRouteRegexp2, regexpWideMultilineRoute(`^a\s`, "m", wide, false))
 
 	op := newOpBuiltInRegexp()
 	got, err := op.regMap.regularLikeWithMode(`^a\s`, subject, "m", false)
@@ -286,7 +269,7 @@ func TestReviewWideLineTerminatorClassRoute(t *testing.T) {
 	got, err = op.regMap.regularLikeWithMode(`^a\s`, "a\n"+strings.Repeat("y", 1048579), "m", false)
 	require.NoError(t, err)
 	require.True(t, got)
-	// The wide-terminator control takes the ICU route and agrees.
+	// The wide-terminator control agrees.
 	got, err = op.regMap.regularLikeWithMode(`^a\s`, wide, "m", false)
 	require.NoError(t, err)
 	require.True(t, got)

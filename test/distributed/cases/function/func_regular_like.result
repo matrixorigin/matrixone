@@ -207,3 +207,10 @@ SELECT REGEXP_LIKE(X'618562', _binary '^b', 'm') AS binary_nel,
 REGEXP_LIKE(X'618562', _binary '^b', 'mu') AS binary_unix;
 binary_nel    binary_unix
 1    0
+SELECT REGEXP_LIKE(s, '^a\\sb', 'm') AS matched,
+REGEXP_INSTR(s, '^a\\sb', 1, 1, 1, 'm') AS end_pos,
+HEX(REGEXP_SUBSTR(s, '^a\\sb', 1, 1, 'm')) AS matched_hex,
+LENGTH(REGEXP_REPLACE(s, '^a\\sb', 'X', 1, 1, 'm')) AS replaced_length
+FROM (SELECT CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b', REPEAT('y', 1048577)) AS s) AS input;
+matched    end_pos    matched_hex    replaced_length
+1    4    610D62    1048578

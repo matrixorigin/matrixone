@@ -141,3 +141,10 @@ SELECT REGEXP_LIKE('$', '[[:alpha:]^$]', 'm') AS posix_literal,
        REGEXP_LIKE(CAST(CONCAT('a', CHAR(13), 'b') AS CHAR), '(?-m:^b)', 'm') AS scoped_off;
 SELECT REGEXP_LIKE(X'618562', _binary '^b', 'm') AS binary_nel,
        REGEXP_LIKE(X'618562', _binary '^b', 'mu') AS binary_unix;
+
+# Regular cross-line patterns keep their input domain beyond ICU limits.
+SELECT REGEXP_LIKE(s, '^a\\sb', 'm') AS matched,
+       REGEXP_INSTR(s, '^a\\sb', 1, 1, 1, 'm') AS end_pos,
+       HEX(REGEXP_SUBSTR(s, '^a\\sb', 1, 1, 'm')) AS matched_hex,
+       LENGTH(REGEXP_REPLACE(s, '^a\\sb', 'X', 1, 1, 'm')) AS replaced_length
+FROM (SELECT CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b', REPEAT('y', 1048577)) AS s) AS input;

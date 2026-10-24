@@ -15,7 +15,7 @@
 package function
 
 import (
-	"regexp"
+	"strings"
 	"testing"
 	"unicode/utf8"
 
@@ -117,20 +117,44 @@ func TestRegexpMultilineBinaryAndPositionControls(t *testing.T) {
 		require.EqualValues(t, 4, pos)
 	}
 	for _, pattern := range []string{`\^\$`, `[^^$]`, `\Q^雪$\E`} {
-		require.False(t, requiresRegexp2PatternWithMatchType(pattern, "m"))
+		require.False(t, requiresRegexp2Pattern(pattern))
 	}
-	require.True(t, requiresRegexp2PatternWithMatchType(`^b`, "m"))
-	require.False(t, requiresRegexp2PatternWithMatchType(`^b`, "mu"))
-	require.Equal(t, `(?m)^b`, regexpPatternWithPureMatchType(`^b`, "mu", false))
-	require.Equal(t, `b`, regexpPatternWithPureMatchType(`b`, "u", false))
-	// The position wrapper must close a trailing quoted literal before its
-	// generated group suffix; compile and match independently with Go RE2.
-	wrapped := regexpPositionSearchPattern(`\Q^雪$`, "mu", false)
-	re, err := regexp.Compile(wrapped)
+	require.False(t, requiresRegexp2Pattern(`^b`))
+	rule, err := regexpPatternWithPureMatchType(`^b`, "mu", false)
 	require.NoError(t, err)
-	require.True(t, re.MatchString("x^雪$"))
+	require.Equal(t, `(?m)^b`, rule)
+	rule, err = regexpPatternWithPureMatchType(`b`, "u", false)
+	require.NoError(t, err)
+	require.Equal(t, `b`, rule)
+	// Original-context offset search keeps quoted literals and capture numbering.
+	reg, err := op.regMap.getRegularMatcherWithMatchType(`\Q^雪$`, "mu", false)
+	require.NoError(t, err)
+	require.Equal(t, []int{1, 6}, reg.FindStringIndexAt("x^雪$", 1))
 	for _, pattern := range []string{`[`, `\`, `(?-m`, `(?#`, `)`} {
 		_, err := op.regMap.regularLikeWithMode(pattern, "x", "m", false)
 		require.Error(t, err)
+	}
+}
+
+func TestRegexpMultilineExpansionAdmission(t *testing.T) {
+	for _, binary := range []bool{false, true} {
+		rs := newOpBuiltInRegexp().regMap
+		for _, pattern := range []string{`(?=a)` + strings.Repeat("^", 1048560), strings.Repeat("x", regexp2MaxPatternBytes+1)} {
+			_, err := rs.getRegexp2MatcherWithMatchType(pattern, "m", binary)
+			require.ErrorContains(t, err, "maximum supported size")
+			require.Empty(t, rs.icu)
+			require.Zero(t, rs.icuBytes)
+		}
+		caret := regexpWideMultilineCaret
+		if binary {
+			caret = regexpWideMultilineCaretBinary
+		}
+		count := (regexp2MaxPatternBytes - len("(?m)") - len("(?=a)")) / len(caret)
+		pattern := `(?=a)` + strings.Repeat("^", count)
+		rule, err := regexpPatternWithPureMatchType(pattern, "m", binary)
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(rule), regexp2MaxPatternBytes)
+		_, err = regexpPatternWithPureMatchType(pattern+"^", "m", binary)
+		require.ErrorContains(t, err, "maximum supported size")
 	}
 }
