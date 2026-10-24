@@ -2367,6 +2367,11 @@ func (exec *minMaxExecFixed[T]) preflightFixedStringSources(
 	return exec.applyStringSourceEvents(&events, eventCount)
 }
 
+func hasDefaultFixedMinMaxMetadata(vec *vector.Vector) bool {
+	return vec.GetPrepareParamKind() == vector.PrepareParamNone &&
+		vec.GetPrepareParamKinds() == nil && !vec.HasStringSourceMetadata()
+}
+
 func (exec *minMaxExecFixed[T]) PreflightBatchFill(
 	offset int,
 	groups []uint64,
@@ -2382,6 +2387,40 @@ func (exec *minMaxExecFixed[T]) PreflightBatchFill(
 		return err
 	}
 	values := vector.MustFixedColNoTypeCheck[T](vectors[0])
+	if hasDefaultFixedMinMaxMetadata(vectors[0]) {
+		// Ordinary fixed values cannot create a provenance sidecar when every
+		// touched destination is ordinary too. Validate the same active/standby
+		// targets without simulating winners or recording metadata events.
+		plain := true
+		for row, group := range groups {
+			if group == GroupNotMatched {
+				continue
+			}
+			physicalRow, err := preflightPhysicalRow(vectors[0], offset+row)
+			if err != nil {
+				return err
+			}
+			if vectors[0].IsNull(uint64(physicalRow)) {
+				continue
+			}
+			_ = values[physicalRow]
+			_, y, state, err := exec.validatePreflightTarget(group)
+			if err != nil {
+				return err
+			}
+			// Preserve the original metadata preflight's shape errors as well
+			// as its allocation checks; an incomplete target must fall back.
+			if len(state.vecs) == 0 || state.vecs[0] == nil ||
+				max(int(state.length), int(y)+1) < state.vecs[0].Length() ||
+				!hasDefaultFixedMinMaxMetadata(state.vecs[0]) {
+				plain = false
+				break
+			}
+		}
+		if plain {
+			return nil
+		}
+	}
 	candidate := func(row int) (T, vector.PrepareParamKind, bool, error) {
 		physicalRow, err := preflightPhysicalRow(vectors[0], offset+row)
 		if err != nil {

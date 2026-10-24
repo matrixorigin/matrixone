@@ -44,15 +44,20 @@ type tableDumpBindingBudget struct {
 
 type tableDumpExpressionVisitor struct {
 	nodes              int
+	hasColumn          bool
 	hasDivision        bool
 	hasIntegerDivision bool
 	hasSpecial         bool
 	hasTimestampAdd    bool
+	hasUnixTimestamp   bool
 	hasJSON            bool
 }
 
 func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 	v.nodes++
+	if _, ok := e.(*tree.UnresolvedName); ok {
+		v.hasColumn = true
+	}
 	if binary, ok := e.(*tree.BinaryExpr); ok {
 		v.hasDivision = v.hasDivision || binary.Op == tree.DIV
 		v.hasIntegerDivision = v.hasIntegerDivision || binary.Op == tree.INTEGER_DIV
@@ -63,6 +68,8 @@ func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 			v.hasSpecial = true
 		case "timestampadd":
 			v.hasTimestampAdd = true
+		case "unix_timestamp":
+			v.hasUnixTimestamp = true
 		case "json_length", "json_set", "json_insert", "json_replace":
 			v.hasJSON = true
 		}
@@ -202,7 +209,7 @@ func parseTableDumpExpression(ctx context.Context, origin, mode string) (tree.St
 	return stmt, expr, visitor, nil
 }
 
-type tableDumpBindingMode uint8
+type tableDumpBindingMode uint16
 
 const (
 	tableDumpBindingCurrent tableDumpBindingMode = iota
@@ -214,9 +221,14 @@ const (
 )
 
 // A flag selects one coherent pre-migration binding, never per-node metadata.
-const tableDumpBindingPreTemporalNullability tableDumpBindingMode = 1 << 7
+const (
+	tableDumpBindingPreTemporalNullability   tableDumpBindingMode = 1 << 7
+	tableDumpBindingPreUnixTimestampDatetime tableDumpBindingMode = 1 << 8
+)
 
 const tableDumpBindingPreJSON tableDumpBindingMode = 1 << 6
+
+const tableDumpBindingDDLColumnScope tableDumpBindingMode = 1 << 9
 
 type tableDumpDefaultSession struct {
 	timeZone, locale, folded bool
@@ -224,9 +236,12 @@ type tableDumpDefaultSession struct {
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON)
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime)
 	if mode&tableDumpBindingPreTemporalNullability != 0 {
 		bindCtx = function.WithLegacyTemporalNullability(bindCtx)
+	}
+	if mode&tableDumpBindingPreUnixTimestampDatetime != 0 {
+		bindCtx = function.WithLegacyUnixTimestampDatetime(bindCtx)
 	}
 	switch baseMode {
 	case tableDumpBindingLegacyTimestampAdd:
@@ -533,6 +548,24 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 	if len(items) == 0 {
 		return false, nil
 	}
+	// CREATE binds against declared column types before the catalog adds
+	// NotNullable from Default.NullAbility. ALTER can bind against the catalog
+	// scope instead. Keep both complete witnesses; never discard nullability
+	// from supplied expressions or change the target's stored declarations.
+	var ddlScope *planpb.TableDef
+	for i, col := range target.Cols {
+		if col == nil || !col.Typ.NotNullable {
+			continue
+		}
+		if ddlScope == nil {
+			scope := *target
+			scope.Cols = append([]*planpb.ColDef(nil), target.Cols...)
+			ddlScope = &scope
+		}
+		copy := *col
+		copy.Typ.NotNullable = false
+		ddlScope.Cols[i] = &copy
+	}
 	parent := ctx.GetProcess()
 	if parent == nil {
 		return false, moerr.NewInternalError(ctx.GetContext(), "table dump expression binding requires a process")
@@ -632,6 +665,19 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				}
 				modes = append(modes, tableDumpBindingCurrent|tableDumpBindingPreJSON)
 			}
+			if visit.hasUnixTimestamp {
+				// Rebind complete pre-overload trees, including their implicit
+				// DATETIME -> TIMESTAMP cast, under each applicable earlier era.
+				oldModes := append([]tableDumpBindingMode(nil), modes...)
+				for _, mode := range oldModes {
+					modes = append(modes, mode|tableDumpBindingPreUnixTimestampDatetime)
+				}
+			}
+			if ddlScope != nil && visit.hasColumn {
+				for _, mode := range append([]tableDumpBindingMode(nil), modes...) {
+					modes = append(modes, mode|tableDumpBindingDDLColumnScope)
+				}
+			}
 			// All session witnesses share the ordinary cancellation and total
 			// candidate-node budget. Only complete rebound trees can match.
 			var fatal error
@@ -647,7 +693,17 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				}
 				proc.GetSessionInfo().TimeZone = tz
 				proc.GetSessionInfo().LCTimeNames = lc
-				return bindTableDumpExpression(ctx, target, item, ast, increment, mode, &dependency)
+				scope, declaration := target, item
+				if mode&tableDumpBindingDDLColumnScope != 0 {
+					scope = ddlScope
+					mode &^= tableDumpBindingDDLColumnScope
+					if item.col != nil {
+						col := *item.col
+						col.Typ.NotNullable = false
+						declaration.col = &col
+					}
+				}
+				return bindTableDumpExpression(ctx, scope, declaration, ast, increment, mode, &dependency)
 			}
 			var first *planpb.Expr
 			want := item.expr
