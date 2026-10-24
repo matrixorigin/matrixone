@@ -495,10 +495,37 @@ type Transaction struct {
 	// storage-object names its recorded workspace entries created — the
 	// obligations a ROLLBACK would hand to the engine's cleanup queue.
 	// They joined the engine's capacity ledger at creation (the record
-	// choke), and the terminal paths retire exactly the members still
-	// owned: commit published them, CCPR rollback shares them, other
-	// transfers moved them already (issue #25590 round-18 review).
-	recordedUnpublishedObjectNames map[string]struct{}
+	// choke). The copy holds a member for exactly as long as the name's
+	// obligation is LIVE: the record choke merges every recorded name at
+	// creation, a staged record's back-out retracts exactly its own
+	// admissions, and the GC settle that retires a deleted object's
+	// ledger membership retires this copy in the same worker step
+	// (issue #25590 round-37 review) — so a long transaction that
+	// repeatedly spills and fully deletes objects keeps the set
+	// proportional to the LIVE working set rather than the full spill
+	// history, and the terminal paths retire exactly the members whose
+	// ownership is still real (commit published them, CCPR rollback
+	// shares them, other transfers moved them already). A name whose
+	// file is already deleted keeps no recorded-name protection: every
+	// late producer handoff of such a name can only re-adopt a deleted
+	// file whose queue membership the drain's tolerated no-op delete
+	// retires again, so the boundary classification still needs exactly
+	// the LIVE members. The terminal paths keep their round-18
+	// semantics, and members settled by an earlier transfer — transfer
+	// moved them, the drain deleted them — simply no-op on release
+	// (issue #25590 round-18 review).
+	//
+	// round-37: the map has its own small guard for the same reason the
+	// reservation map gained one in round 19 — the gcFiles pool worker
+	// that settles a deleted object's names holds NO transaction lock,
+	// and taking the transaction lock there would put a GC worker behind
+	// any transaction's lock while pool callers park in ants' worker
+	// wait, exactly the admission-chain the round-13 decoupling removed.
+	// Every section is short and never reaches back out to the
+	// transaction lock or the engine queue; lock order stays
+	// txn.Lock -> recordedUnpublishedObjectNamesMu.
+	recordedUnpublishedObjectNamesMu sync.Mutex
+	recordedUnpublishedObjectNames   map[string]struct{}
 
 	// pendingObjectCleanup holds the storage-object names this transaction
 	// owns as unrecorded cleanup obligations — files persisted by a failed
@@ -1302,6 +1329,20 @@ func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
 			// names held at creation returns to the bound (issue #25590
 			// round-18 review).
 			txn.engine.settleUnpublishedPendingDeleted(batch)
+			// round-37 (issue #25590 review of 2026-10-24, finding 1):
+			// ending the obligation also retires the TRANSACTION's
+			// recorded-name copy of the same names. The settle above ends
+			// every cleanup ownership the set was protecting — the file is
+			// gone for good, so no commit release, rollback transfer or
+			// boundary classification can ever reference this name again —
+			// and keeping the member until termination instead made a long
+			// transaction's set grow with its whole spill history,
+			// memory no admission bound ever counted, with the terminal
+			// release copying and scanning it all. The prune runs under
+			// the recorded-name guard only — NOT the transaction lock: a
+			// GC worker behind any transaction's lock would chain pool
+			// callers through ants' worker wait again.
+			txn.retireSettledRecordedUnpublishedObjectNames(batch)
 		}); err != nil {
 			// A pool released between admission and submit — most
 			// commonly Engine.Close racing a capacity-parked GC caller

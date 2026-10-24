@@ -4345,7 +4345,7 @@ func TestIssue25590DumpReservesCapacityPerPersistedObject(t *testing.T) {
 	// and the refused loser recorded nothing.
 	recorders := 0
 	for _, contestant := range []*Transaction{txnA, txnB} {
-		if len(contestant.recordedUnpublishedObjectNames) == 1 {
+		if issue25590RecordedLen(contestant) == 1 {
 			recorders++
 		}
 	}
@@ -5920,7 +5920,7 @@ func TestIssue25590CompactionRefusalRetainsDirtyObjectSources(t *testing.T) {
 	require.Equal(t, int64(objCount+1), live,
 		"the replacements' reservations converted into exactly one owned member per object")
 	require.Zero(t, inFlight)
-	require.Contains(t, txn.recordedUnpublishedObjectNames, rewriteNames[0],
+	require.Contains(t, issue25590RecordedSnapshot(txn), rewriteNames[0],
 		"the replacement's record carries its name's obligation")
 	require.Empty(t, txn.pendingObjectCleanup)
 	require.NoError(t, txn.checkWorkspaceAccountingLocked())
@@ -6052,7 +6052,7 @@ func TestIssue25590DirectWritesReserveAndRetainOnUnwind(t *testing.T) {
 		"the record retired the reservation exactly")
 	require.Equal(t, int64(1), liveB,
 		"the recorded object is the ledger's one owned member")
-	require.Contains(t, txn.recordedUnpublishedObjectNames, recordedName,
+	require.Contains(t, issue25590RecordedSnapshot(txn), recordedName,
 		"the record carries its object's obligation")
 	w1.Close()
 
@@ -6101,7 +6101,32 @@ func TestIssue25590DirectWritesReserveAndRetainOnUnwind(t *testing.T) {
 
 func issue25590AssertLiveMapSize(t *testing.T, txn *Transaction, want int, msgAndArgs ...interface{}) {
 	t.Helper()
-	require.Len(t, txn.recordedUnpublishedObjectNames, want, msgAndArgs...)
+	require.Len(t, issue25590RecordedSnapshot(txn), want, msgAndArgs...)
+}
+
+// issue25590RecordedSnapshot copies the transaction's recorded-name set
+// under the recorded-name guard: the round-37 gcFiles settle retires
+// settled members from its pool worker without the transaction lock, so
+// every assertion on the set reads the same guarded copy the production
+// settle path owns (issue #25590 round-37 review).
+func issue25590RecordedSnapshot(txn *Transaction) map[string]struct{} {
+	txn.recordedUnpublishedObjectNamesMu.Lock()
+	defer txn.recordedUnpublishedObjectNamesMu.Unlock()
+	if txn.recordedUnpublishedObjectNames == nil {
+		return nil
+	}
+	names := make(map[string]struct{}, len(txn.recordedUnpublishedObjectNames))
+	for n := range txn.recordedUnpublishedObjectNames {
+		names[n] = struct{}{}
+	}
+	return names
+}
+
+// issue25590RecordedLen is the counting twin of issue25590RecordedSnapshot.
+func issue25590RecordedLen(txn *Transaction) int {
+	txn.recordedUnpublishedObjectNamesMu.Lock()
+	defer txn.recordedUnpublishedObjectNamesMu.Unlock()
+	return len(txn.recordedUnpublishedObjectNames)
 }
 
 // TestIssue25590TwoDirtyObjectCompactionIsAtomicAcrossReplacements pins
@@ -6419,7 +6444,7 @@ func TestIssue25590TwoDirtyObjectCompactionIsAtomicAcrossReplacements(t *testing
 	require.Len(t, freshReplacements, 2,
 		"exactly TWO fresh replacement names - the retried pass re-rewrote both dirty objects without resurrecting the aborted attempt's name")
 	for _, name := range freshReplacements {
-		require.Contains(t, txn.recordedUnpublishedObjectNames, name,
+		require.Contains(t, issue25590RecordedSnapshot(txn), name,
 			"the completed pass's replacement record carries its name's obligation")
 		issue25590RequireKept(t, failFS.FileService, name,
 			"the completed pass's replacement object")
@@ -6831,7 +6856,7 @@ func TestIssue25590FailedRecordCopyKeepsObjectRetrievable(t *testing.T) {
 
 	// The copy failure consumed NOTHING: the name never registered and
 	// the reservation stays outstanding until an owner settles it.
-	require.NotContains(t, txn.recordedUnpublishedObjectNames, nameA,
+	require.NotContains(t, issue25590RecordedSnapshot(txn), nameA,
 		"a record whose copy failed registered no name membership (issue #25590 round-20 review, finding 3)")
 	require.Empty(t, txn.pendingObjectCleanup)
 	_, liveA, inFlightA := ledger()
@@ -6888,7 +6913,7 @@ func TestIssue25590FailedRecordCopyKeepsObjectRetrievable(t *testing.T) {
 	require.Equal(t, currNB, txn.proc.Mp().CurrNB(),
 		"the refused record released its prepared copy exactly")
 	unpublishedPendingAdmissionLimit = knobSaved
-	require.NotContains(t, txn.recordedUnpublishedObjectNames, nameB)
+	require.NotContains(t, issue25590RecordedSnapshot(txn), nameB)
 	// The r5 refusal itself owns the refused fresh name now (issue #25590
 	// round-21 review, finding G2): the record choke fail-open-retains the
 	// reservation-less name so the refused record's output keeps a
@@ -8585,10 +8610,32 @@ func TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement(t *testing.T) {
 	}
 
 	persistedBefore := len(failFS.persistedSnapshot())
+	// round-37 (issue #25590 review of 2026-10-24, finding 1): the loop
+	// also pins the boundedness of the transaction's recorded-name copy.
+	// The admission bound is pinned to the review's smallest working
+	// value: every round's settle closes the ledger, and the recorded set
+	// must keep exactly the LIVE obligations rather than carrying every
+	// historical name until transaction termination — memory no admission
+	// bound ever counted, and a terminal release that copied and scanned
+	// the whole spill history. The mixed round below restores the
+	// production bound first because it legitimately exceeds two.
+	restoreAdmissionLimit := PinUnpublishedPendingAdmissionLimitForTest(2)
+	// recordedNames reads the transaction's recorded-name copy - the
+	// round-37 settle path may clear it from a GC worker without the
+	// transaction lock, so the green tree reads it under the recorded-name
+	// guard exactly like the production settle does.
+	recordedNames := func() int {
+		return issue25590RecordedLen(txn)
+	}
 	for round := 0; round < 4; round++ {
 		st, block := dumpObject()
 		require.Len(t, failFS.persistedSnapshot(), persistedBefore+round+1,
 			"round %d: the statement's dump persisted exactly its one small object", round)
+		// While the round's obligation is still live, the recorded-name
+		// copy keeps protecting it: exactly the one recorded object of
+		// this round — never the retired history.
+		require.Equal(t, 1, recordedNames(),
+			"round %d: a live recorded obligation keeps its recorded-name copy", round)
 		fullyDelete(st, block)
 
 		txn.Lock()
@@ -8614,7 +8661,20 @@ func TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement(t *testing.T) {
 		queued, _, inFlight := e.InspectUnpublishedPendingForTest()
 		require.Zero(t, queued, "round %d: the engine queue holds nothing", round)
 		require.Zero(t, inFlight, "round %d: the pass retired every in-flight unit", round)
+		// round-37: the GC settle that retires the deleted original's
+		// ledger membership retires the recorded-name copy at the same
+		// boundary, so the copy tracks the LIVE working set — repeated
+		// spill/fully-delete rounds leave nothing recorded behind, and
+		// every later boundary or terminal classification walks a set
+		// bounded by what the admission bound ever counted. The live
+		// membership retires in the same GC worker right before the copy.
+		require.Eventually(t, func() bool {
+			_, live, _ := e.InspectUnpublishedPendingForTest()
+			return live == 0 && recordedNames() == 0
+		}, 10*time.Second, 20*time.Millisecond,
+			"round %d: the settle that ends the file's ownership must retire BOTH the deleted original's ledger membership and the transaction's recorded-name copy (round entered with %d recorded)", round, recordedNames())
 	}
+	restoreAdmissionLimit()
 
 	// The boundary proves the live-set bound: after the last admission the
 	// nil slots the passes left behind compact away entirely - the writes

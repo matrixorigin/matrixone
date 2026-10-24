@@ -368,7 +368,7 @@ func TestIssue25590FailedMergeStillHandsOffForInTxnRecovery(t *testing.T) {
 	for name := range freshNames {
 		require.NotContains(t, orphanNames, name,
 			"the retry rewrote the objects freshly, not the orphaned names")
-		require.Contains(t, txn.recordedUnpublishedObjectNames, name,
+		require.Contains(t, issue25590RecordedSnapshot(txn), name,
 			"the fresh replacements are recorded members")
 	}
 	queued, live, inFlight = issue25590LedgerNow(e)

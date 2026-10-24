@@ -1296,7 +1296,7 @@ func (txn *Transaction) handoffPendingObjectCleanupLocked(quiesced bool) {
 	var kept []pendingObjectCleanupItem
 	for i := range txn.pendingObjectCleanup {
 		it := &txn.pendingObjectCleanup[i]
-		if _, ok := txn.recordedUnpublishedObjectNames[it.name]; ok {
+		if txn.hasRecordedUnpublishedObjectName(it.name) {
 			continue // owned by its record's lifecycle since it landed
 		}
 		// INV1 (issue #25590 round-24 finding F1, design r11 D1'): the
@@ -1941,6 +1941,20 @@ func (e *Engine) waitUnpublishedPendingDrains(timeout time.Duration) {
 // round-10 review) — the storage-side DeleteUnpublishedObjects stops at
 // its own first failing batch, so the partitioning here is what restores
 // per-batch liveness. The return is nil only when every batch succeeded.
+//
+// round-37 (issue #25590 review of 2026-10-24, finding 2): every
+// successful batch's names accumulate and ONE in-place compaction below
+// removes them all under a single mutex section, replacing the
+// per-batch rebuild that cloned and rescanned the WHOLE remaining queue
+// per 1,000-name batch — quadratic work at the GC worker's pace that
+// held the mutex shared with admission and ownership transfers for
+// seconds at the 500,000-name bound. The deferral changes no contract:
+// the membership index keeps each done name until the compaction, so a
+// duplicate delivery mid-invocation dedupes against the still-visible
+// member exactly as before, a concurrent enqueue only ever APPENDS to
+// the queue (the arrivals never appear in this snapshot and survive the
+// compaction untouched), and every name the storage still refuses keeps
+// its place exactly.
 func (e *Engine) deleteQueuedUnpublishedPendingOnce(ctx context.Context) error {
 	fs := e.fs
 	if fs == nil {
@@ -1952,7 +1966,10 @@ func (e *Engine) deleteQueuedUnpublishedPendingOnce(ctx context.Context) error {
 	if len(pending) == 0 {
 		return nil
 	}
-	var failed error
+	var (
+		failed error
+		done   []string
+	)
 	for start := 0; start < len(pending); start += unpublishedPendingDeleteBatch {
 		end := min(start+unpublishedPendingDeleteBatch, len(pending))
 		batch := pending[start:end]
@@ -1969,23 +1986,46 @@ func (e *Engine) deleteQueuedUnpublishedPendingOnce(ctx context.Context) error {
 			}
 			continue
 		}
+		done = append(done, batch...)
+	}
+	if len(done) > 0 {
 		e.unpublishedPending.mu.Lock()
-		done := make(map[string]struct{}, len(batch))
-		for _, n := range batch {
-			done[n] = struct{}{}
-		}
-		rest := make([]string, 0, len(e.unpublishedPending.names))
-		for _, n := range e.unpublishedPending.names {
-			if _, ok := done[n]; !ok {
-				rest = append(rest, n)
-			} else if e.unpublishedPending.nameSet != nil {
-				delete(e.unpublishedPending.nameSet, n)
-			}
-		}
-		e.unpublishedPending.names = rest
+		e.retireQueuedUnpublishedPendingLocked(done)
 		e.unpublishedPending.mu.Unlock()
 	}
 	return failed
+}
+
+// retireQueuedUnpublishedPendingLocked removes from the queue exactly the
+// names this invocation's batches deleted, in ONE in-place compaction over
+// the live slice instead of a per-batch rebuild of the whole backlog
+// (issue #25590 round-37 review, finding 2): the survivors keep their
+// queue order, the membership index drops every retired name in the same
+// pass — a later delivery of the same name is accepted again exactly as
+// after the per-batch shape — and one O(live+done) hold of the queue
+// mutex replaces the per-batch O(live) holds admission used to wait
+// behind. The removal is by NAME against the LIVE slice: a copy of a
+// retired name that a fresh delivery appended between the compactions of
+// two invocations was already deduped by the still-indexed member until
+// this pass, and the file its producer names was just deleted by this
+// very drain, so the queue keeps receiving exactly one live member per
+// existing obligation. Callers hold the queue mutex.
+func (e *Engine) retireQueuedUnpublishedPendingLocked(done []string) {
+	doneSet := make(map[string]struct{}, len(done))
+	for _, n := range done {
+		doneSet[n] = struct{}{}
+	}
+	kept := e.unpublishedPending.names[:0]
+	for _, n := range e.unpublishedPending.names {
+		if _, ok := doneSet[n]; ok {
+			if e.unpublishedPending.nameSet != nil {
+				delete(e.unpublishedPending.nameSet, n)
+			}
+			continue
+		}
+		kept = append(kept, n)
+	}
+	e.unpublishedPending.names = kept
 }
 
 // drainUnpublishedPending deletes the queued backlog with a bounded
@@ -3345,9 +3385,11 @@ func (txn *Transaction) retractUnpublishedRecordAdmissionLocked(st *stagedWorksp
 	if st == nil || len(st.admittedNames) == 0 {
 		return
 	}
+	txn.recordedUnpublishedObjectNamesMu.Lock()
 	for _, n := range st.admittedNames {
 		delete(txn.recordedUnpublishedObjectNames, n)
 	}
+	txn.recordedUnpublishedObjectNamesMu.Unlock()
 }
 
 func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
@@ -3436,10 +3478,7 @@ func (txn *Transaction) AdoptRemoteTransferredObjectNames(names []string) error 
 			continue
 		}
 		txn.Lock()
-		recorded := false
-		if _, ok := txn.recordedUnpublishedObjectNames[name]; ok {
-			recorded = true
-		}
+		recorded := txn.hasRecordedUnpublishedObjectName(name)
 		txn.Unlock()
 		if recorded || txn.hasUnpublishedDumpReservation(name) {
 			continue
@@ -3599,12 +3638,53 @@ func (txn *Transaction) registerUnpublishedObjectRecordLocked(
 // handoff already moves the members, and stale members that intermediate
 // transfers retired earlier simply no-op on release.
 func (txn *Transaction) mergeRecordedUnpublishedObjectNames(names []string) {
+	txn.recordedUnpublishedObjectNamesMu.Lock()
+	defer txn.recordedUnpublishedObjectNamesMu.Unlock()
 	if txn.recordedUnpublishedObjectNames == nil {
 		txn.recordedUnpublishedObjectNames = make(
 			map[string]struct{}, len(names))
 	}
 	for _, n := range names {
 		txn.recordedUnpublishedObjectNames[n] = struct{}{}
+	}
+}
+
+// hasRecordedUnpublishedObjectName reports whether the name's record landed
+// on this transaction — the record's lifecycle owns the object's fate, so
+// the retain funnels, the pending-cleanup handoff and the remote adoption
+// all skip it. Callers hold the transaction lock; the read takes the
+// recorded-name guard so its answer stays consistent with the gcFiles
+// settle that can retire the copy without the transaction lock
+// (issue #25590 round-37 review).
+func (txn *Transaction) hasRecordedUnpublishedObjectName(name string) bool {
+	txn.recordedUnpublishedObjectNamesMu.Lock()
+	defer txn.recordedUnpublishedObjectNamesMu.Unlock()
+	_, ok := txn.recordedUnpublishedObjectNames[name]
+	return ok
+}
+
+// retireSettledRecordedUnpublishedObjectNames retires the transaction's
+// recorded-name copy of names whose cleanup ownership JUST ENDED: the
+// gcFiles pool worker calls it for exactly the batch whose ledger
+// membership the settle above retired, so the copy keeps tracking the
+// LIVE obligations of a long transaction instead of its whole spill
+// history (issue #25590 round-37 review, finding 1). The worker holds
+// NO transaction lock, so the prune takes the recorded-name guard
+// instead — a GC worker behind any transaction's lock would put pool
+// callers through ants' worker wait again, the exact admission-chain the
+// round-13 decoupling removed. Names never recorded simply no-op, and a
+// member that a concurrent choke re-registered after its settle follows
+// the new record's own lifecycle like every fresh recording.
+func (txn *Transaction) retireSettledRecordedUnpublishedObjectNames(
+	names []string,
+) {
+	if len(names) == 0 {
+		return
+	}
+	txn.recordedUnpublishedObjectNamesMu.Lock()
+	defer txn.recordedUnpublishedObjectNamesMu.Unlock()
+	for _, n := range names {
+		delete(txn.recordedUnpublishedObjectNames, n)
 	}
 }
 
@@ -3616,7 +3696,9 @@ func (txn *Transaction) mergeRecordedUnpublishedObjectNames(names []string) {
 // that retire without the queue; the ordinary rollback's transfers
 // already moved every member. Callers hold the transaction lock.
 func (txn *Transaction) releaseRecordedUnpublishedObjectsLocked() {
+	txn.recordedUnpublishedObjectNamesMu.Lock()
 	if len(txn.recordedUnpublishedObjectNames) == 0 {
+		txn.recordedUnpublishedObjectNamesMu.Unlock()
 		return
 	}
 	names := make([]string, 0, len(txn.recordedUnpublishedObjectNames))
@@ -3624,6 +3706,7 @@ func (txn *Transaction) releaseRecordedUnpublishedObjectsLocked() {
 		names = append(names, n)
 	}
 	txn.recordedUnpublishedObjectNames = nil
+	txn.recordedUnpublishedObjectNamesMu.Unlock()
 	if txn.engine != nil {
 		txn.engine.releaseUnpublishedPendingPublished(names)
 	}
@@ -3780,7 +3863,7 @@ func (txn *Transaction) retainUnrecordedS3ObjectsAtLocked(
 	}
 	var unrecorded []string
 	for _, n := range persisted {
-		if _, ok := txn.recordedUnpublishedObjectNames[n]; ok {
+		if txn.hasRecordedUnpublishedObjectName(n) {
 			continue // owned by its record's lifecycle
 		}
 		// INV1 (issue #25590 round-24 finding F1, design r11 D1'): a

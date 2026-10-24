@@ -258,7 +258,7 @@ func TestIssue25590MaterializingWritersReserveBeforePersistence(t *testing.T) {
 	require.Zero(t, inFlight)
 	require.Equal(t, 1, live,
 		"the converted reservation became the recorded object's owned membership")
-	require.Contains(t, txn.recordedUnpublishedObjectNames, matName)
+	require.Contains(t, issue25590RecordedSnapshot(txn), matName)
 
 	// ------------------------------------------------------------------
 	// Leg 2: at the saturated bound, repeated attempts of BOTH families

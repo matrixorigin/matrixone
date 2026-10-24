@@ -2977,3 +2977,116 @@ The new spill uses one row because explicit Sync already forces persistence.
 This is an implementation correction under r11/r12, with no protocol or admission
 policy change. The rebase onto `2b94111625` retains capability 130 (main is 129)
 and replays all five original commits without patch changes.
+## 10 design review record - round 37 (implementation follow-up): settled names retire from the transaction's recorded set, and the drain retires one pass
+
+The 2026-10-24 review against head `184ae95675` accepted the round-35/36
+repairs and blocked on two scaling defects the ledger's own accounting
+exposes, with reproduced measurements:
+
+1. `recordedUnpublishedObjectNames` — the transaction's copy of the names
+   its records created — kept EVERY member until transaction termination,
+   even after the object's workspace entry, ledger membership and physical
+   file were long gone. A long transaction that repeatedly spills objects
+   and fully deletes their rows (the I1 loop of the fully-deleted-object
+   regression) grew the copy with the whole spill history — memory no
+   admission bound ever counted — and every terminal release copied and
+   scanned the entire history. The review's 32-round probe held the
+   ledger at queued=0/live=0/inFlight=0 while the copy carried all 32
+   names.
+2. `deleteQueuedUnpublishedPendingOnce` rebuilt the whole remaining queue
+   once per successful 1,000-name batch: each rebuild allocated a fresh
+   copy of the backlog and rescanned it under the queue mutex that
+   admission and every ownership transfer share — O(N^2/1000) work, about
+   95 MB at 100,000 queued names and about 2 GB at the 500,000-name
+   admission limit per the review's benchmark, for seconds of mutex-held
+   scanning.
+
+Both stay inside the r11/r12-approved decision set. The conservation law
+(§5.1) and the r18 release semantics ALREADY define a settle as the end
+of an obligation — a member that an intermediate transfer or settle
+retired no-ops on release — so the recorded-name copy's lifetime was a
+bookkeeping representation choice, not a pinned decision, and its boundary
+classification only ever needs the LIVE members. The drain ladder's
+pinned contract (§5.2) is per-batch independence and exactly-once
+retirement; the per-batch queue rebuild was an implementation of that
+contract, not part of the contract.
+
+The repairs:
+
+- The gcFiles pool worker that settles a batch's ledger membership now
+  also retires the transaction's recorded-name copy of the same batch,
+  at the same ownership boundary: the copy tracks the LIVE obligations.
+  Because the worker holds no transaction lock — and a GC worker
+  blocking on any transaction's lock would rebuild the ants worker-wait
+  chain round 13 removed — the recorded set gained its own small guard
+  (`recordedUnpublishedObjectNamesMu`), the same shape the round-19
+  reservation map already uses; lock order stays
+  txn.Lock -> recordedUnpublishedObjectNamesMu, and every accessor
+  (the choke's merge, the retraction, the terminal release, the two
+  classification reads and the remote-adoption check) goes through it.
+  Protection against late producer handoffs is preserved exactly for the
+  names whose files still exist: the retain funnels, the quiesced
+  handoff and the adoption check keep skipping every LIVE recorded
+  member. A name whose file is already deleted keeps no protection
+  because there is nothing left to protect: a late handoff of such a
+  name can only re-adopt a deleted file, whose queue membership the
+  drain's tolerated no-op delete retires again — bounded by producer
+  events, never by transaction history.
+- The once-drain accumulates the successful batches' names and removes
+  them in ONE in-place compaction of the live queue under a single
+  mutex section, replacing the per-batch rebuild. The per-batch
+  contract is untouched: a failing batch keeps exactly its own names,
+  every name the storage keeps refusing stays queued, a concurrent
+  enqueue only appends (arrivals never appear in the pass's snapshot
+  and survive the compaction untouched), and the membership index drops
+  every retired name in the same pass — a fresh delivery of the same
+  name is accepted again exactly as before. The deferral keeps the
+  retire-by-NAME removal, so two overlapping invocations (Close's
+  detached final tail racing a still-running worker) stay idempotent.
+
+Proof (commands run with the repository CGo wrapper
+`.agents/skills/mo-dev/scripts/mo-cgo-test` on this tree):
+
+- Red on parent `184ae95675`, green after the fix, same tests:
+  `TestIssue25590FullyDeletedObjectLeavesNoEmptyReplacement` — extended,
+  as the review requested, over the production dump/compaction/GC loop
+  with the admission bound pinned at 2 — failed pre-fix at round 0 ("the
+  settle that ends the file's ownership must retire BOTH the deleted
+  original's ledger membership and the transaction's recorded-name
+  copy", round entered with 1 recorded) and passes post-fix: each round
+  settles the original (live=0) and the recorded set returns to empty —
+  the copy never carries history.
+  `TestIssue25590DrainRetirementCostStaysLinear` — the production
+  once-drain on a 120,000-name queue with the storage delete made a
+  cost-isolated no-op so the bytes are the queue-side mechanics your own
+  benchmark isolated — failed pre-fix with
+  `measured 133659648 bytes` against the regression's 48 MiB linear
+  budget (exit 1) and passes post-fix at
+  `measured 27772432 bytes` — 4.8x below the pre-fix count on the same
+  input — with the queue empty afterward and the membership index
+  accepting the same names again on re-delivery.
+- Behavior pins that pass on BOTH trees (the fixed retirement must not
+  change the contract): `TestIssue25590DrainRetiresEachBatchInOnePass`
+  (five independent batches, one poisoned — exactly its 1,000 names stay
+  queued in queue order, the retried pass re-attempts only the retained
+  batch) and `TestIssue25590DrainKeepsConcurrentArrivals` (200 names
+  enqueued while the drain parks between batches survive the pass's
+  retirement untouched).
+- Related behavior re-run green with the change: the drain/queue family
+  (`FailedBatchRetainsWhileLaterBatchesCollect`, `ExhaustedLadder…`,
+  `RejectedSchedule…`, `QueueMembershipDeduplicatesAtScale`, the
+  Close-budget tests), the compaction suites that record and settle
+  originals, and the recorded-set boundary tests (`RecordedBeforeBoundary…`,
+  `UnrecordedRetainedNameDrainsAtBoundary`) — the classification skips
+  keep exactly their recorded-member protection.
+- `go vet` over the changed package exits 0; `gofmt -l` clean; the
+  focused regressions including the recorded-set and compaction families
+  pass under `-race` (the new guard is exercised by the GC worker settle
+  against transaction-side readers).
+
+Decision: round 37 is recorded as an implementation correction of two
+bookkeeping representations inside the approved r11/r12 decision set —
+the obligation conservation law, the boundary classification, the
+admission bound, the lossless handoffs and the per-batch liveness of the
+drain ladder are all unchanged. No r11- or r12-approved decision is
+altered, so the deviation rule opens no design re-review.

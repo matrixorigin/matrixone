@@ -132,7 +132,7 @@ func TestIssue25590RollbackRecyclesUnrecordedReservations(t *testing.T) {
 		require.Len(t, recordedPrior, live-1,
 			"round %d: the ledger holds the prior recorded writes plus exactly the recycled orphan's owned membership - the ownership transfer is capacity-neutral until the queue's drain deletes it",
 			round)
-		require.Contains(t, txn.recordedUnpublishedObjectNames, probeName,
+		require.Contains(t, issue25590RecordedSnapshot(txn), probeName,
 			"round %d: the prior recorded write keeps its recorded membership", round)
 		require.Equal(t, writesBefore, liveEntryCount(txn),
 			"round %d: the rollback restored the workspace exactly around the prior statements' entries", round)
@@ -190,6 +190,6 @@ func TestIssue25590RollbackRecyclesUnrecordedReservations(t *testing.T) {
 	require.Len(t, recordedPrior, live,
 		"the ledger holds exactly the recorded members' owned memberships")
 	for _, prior := range recordedPrior {
-		require.Contains(t, txn.recordedUnpublishedObjectNames, prior)
+		require.Contains(t, issue25590RecordedSnapshot(txn), prior)
 	}
 }
