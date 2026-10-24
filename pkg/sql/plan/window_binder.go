@@ -954,6 +954,32 @@ func bindWindowSpec(
 		}
 	}
 
+	if isLocalSlidingRankWindowFunction(funcName) {
+		// Decision D4 (#29947): the three local-rank operators derive every
+		// row's frame from their own arguments, so a user-written frame would
+		// create two conflicting window sources; refuse it, and do not
+		// synthesize a default frame on the window spec either: tmrank's
+		// width travels as its published (count, unit) function arguments and
+		// the operator derives each row's frame at evaluation time.
+		if ws.HasFrame {
+			return nil, moerr.NewInvalidInput(
+				b.GetContext(),
+				funcName+"'s window comes from its arguments and does not accept an explicit frame")
+		}
+		// Decision D21: tmrank resolves RANGE-interval membership through the
+		// shared RANGE-search resolver, whose temporal key domain is exactly
+		// DATE/TIME/DATETIME/TIMESTAMP (the switch has no T_year case even
+		// though IsTemporal() admits it), so restrict the ORDER BY key domain
+		// at binding time with a named diagnostic.
+		if funcName == "tmrank" &&
+			(len(w.OrderBy) != 1 || !isSupportedTmRankOrderKeyOid(w.OrderBy[0].Expr.Typ.Id)) {
+			return nil, moerr.NewParseError(
+				b.GetContext(),
+				"tmrank window order key requires exactly one ORDER BY expression of DATE, TIME, DATETIME or TIMESTAMP type")
+		}
+		return w, nil
+	}
+
 	switch ws.Frame.Start.Type {
 	case tree.Following:
 		if ws.Frame.Start.UnBounded {
@@ -1411,6 +1437,103 @@ func buildWindowColRefExpr(ctx *BindContext, typ plan.Type, colPos int32) *plan.
 	}
 }
 
+// admitWindowIntervalBindSource is the shared pre-evaluation admission
+// boundary for every window-interval bind source (frame bounds and tmrank's
+// width alike). A bound is evaluated HERE at bind time -- before the
+// frontend's mo_ctl sys-admin gate runs on the built plan -- and the evaluated
+// bound is then replaced by a constant so the gate's plan scan can never see
+// it. A control function (mo_ctl / fault_inject) is never a legitimate
+// interval magnitude, so reject it outright rather than let its cluster-wide
+// side effect fire unauthenticated (#28985). The ctl execution-entry backstop
+// also blocks it, but this gives a precise error and refuses it for every
+// account, including sys-admin.
+func admitWindowIntervalBindSource(bindCtx context.Context, e *Expr) error {
+	if HasMoCtrl(e) {
+		return moerr.NewNotSupported(bindCtx, "mo_ctl or fault_inject is not allowed in a window frame bound")
+	}
+	return nil
+}
+
+// windowIntervalBindSourceAdmitted is the static shape admission for an
+// eagerly evaluated window-interval source: literal constants, the direct
+// prepared magnitude marker (the raw pair's retained source) and
+// deterministic constant-foldable spines -- the resolver's fold-switch
+// operators over literals plus functions the registry positively proves
+// pure -- are admitted. Every other shape -- a column reference, an indirect
+// prepared form (a marker inside arithmetic), a subquery, a window entry or
+// a volatile/effectful function such as rand() or sleep() whose foldable
+// argument shapes do not prove purity -- is refused BEFORE any eager
+// evaluation (tmrank's conversion routes through it; frame bounds keep their
+// established emergent rejection so their observable errors do not shift).
+func windowIntervalBindSourceAdmitted(e *Expr) bool {
+	switch item := e.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_P:
+		// Only the direct whole-magnitude marker is admitted at the top
+		// level (D18's retained source); the spine walk below rejects a
+		// marker nested inside arithmetic as an indirect prepared form.
+		return true
+	case *plan.Expr_F:
+		return windowIntervalFunctionNodeAdmitted(item.F)
+	default:
+		return false
+	}
+}
+
+// windowIntervalFoldSpineAdmitted walks the argument spine of a function
+// source: literals (and the cast protocol's inert TargetType descriptor,
+// which carries no evaluated child) and function nodes admitted by
+// windowIntervalFunctionNodeAdmitted only. A prepared marker hidden inside
+// arithmetic is an indirect prepared form and must not reach the eager
+// executor.
+func windowIntervalFoldSpineAdmitted(e *Expr) bool {
+	switch item := e.Expr.(type) {
+	case *plan.Expr_Lit:
+		return true
+	case *plan.Expr_T:
+		// The base cast binder wraps a cast's target type as the function's
+		// second argument; a decimal literal binds as cast(literal, type), so
+		// the descriptor is part of every constant-foldable decimal source.
+		return item.T != nil
+	case *plan.Expr_F:
+		return windowIntervalFunctionNodeAdmitted(item.F)
+	default:
+		return false
+	}
+}
+
+// windowIntervalFunctionNodeAdmitted gates one function node of an eagerly
+// evaluated window-interval source. Argument shapes alone cannot admit a
+// function: rand() and sleep(0) take literal-shaped arguments, yet evaluating
+// rand() at bind time freezes a nondeterministic width into the plan (D22's
+// constant-foldable admission) and sleep() runs its side effect during
+// binding. The gate therefore mirrors the guarded fold of the geometry SRID
+// probe (isGeometrySRIDConstFoldSafe): the resolver's fold-switch operators
+// that the ordinary bind's own constant fold evaluates stay admitted by
+// name, and every other function is admitted only through the registry's
+// positively proven pure value set -- GetFunctionIsProvenPureFoldableById,
+// never through the absence of a flag, so rand/sleep-style volatility,
+// real-time overloads, internal machinery and unproven builtins are all
+// refused pre-evaluation. Every argument must pass the spine walk.
+func windowIntervalFunctionNodeAdmitted(f *plan.Function) bool {
+	if f == nil || f.Func == nil {
+		return false
+	}
+	switch f.Func.GetObjName() {
+	case "+", "-", "*", "/", "div", "%", "mod", "unary_plus", "unary_minus",
+		"unary_tilde", "cast", "serial", "serial_full":
+	default:
+		if !function.GetFunctionIsProvenPureFoldableById(f.Func.GetObj()) {
+			return false
+		}
+	}
+	for _, arg := range f.Args {
+		if !windowIntervalFoldSpineAdmitted(arg) {
+			return false
+		}
+	}
+	return true
+}
+
 func makeWindowFrameConstValue(
 	baseBindExpr func(tree.Expr, int32, bool) (*Expr, error),
 	proc *process.Process,
@@ -1422,14 +1545,11 @@ func makeWindowFrameConstValue(
 	if err != nil {
 		return nil, err
 	}
-	// A window frame bound is evaluated HERE, at bind time -- before the frontend's mo_ctl
-	// sys-admin gate runs on the built plan, and the evaluated bound is then replaced by a
-	// constant so the gate's plan scan can never see it. A control function (mo_ctl / fault_inject)
-	// is never a legitimate frame offset, so reject it outright rather than let its cluster-wide
-	// side effect fire unauthenticated (#28985). The ctl execution-entry backstop also blocks it,
-	// but this gives a precise error and refuses it for every account, including sys-admin.
-	if HasMoCtrl(e) {
-		return nil, moerr.NewNotSupported(bindCtx, "mo_ctl or fault_inject is not allowed in a window frame bound")
+	// The shared admission boundary owns the #28985 control-function
+	// prohibition for every route that eagerly evaluates a window interval
+	// bind source (tmrank's conversion calls it too).
+	if err := admitWindowIntervalBindSource(bindCtx, e); err != nil {
+		return nil, err
 	}
 	if e.Typ.Id == int32(types.T_interval) {
 		return resetWindowIntervalExpr(bindCtx, proc, e)
@@ -1489,6 +1609,13 @@ func makeWindowFrameConstValue(
 }
 
 func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *Expr) (*Expr, error) {
+	// Defense-in-depth for the shared admission boundary (#28985 / decision
+	// D22): the frame-bound gate already runs it, but this normalizer
+	// evaluates its source eagerly and is safe only when every caller admits
+	// first. A pure read-only re-check keeps any future route honest.
+	if err := admitWindowIntervalBindSource(bindCtx, e.Expr.(*plan.Expr_List).List.List[0]); err != nil {
+		return nil, err
+	}
 	e1 := e.Expr.(*plan.Expr_List).List.List[0]
 	e2 := e.Expr.(*plan.Expr_List).List.List[1]
 
@@ -1632,6 +1759,77 @@ func setWindowIntervalValue(
 	list[0] = valueExpr
 	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
 	return e, nil
+}
+
+// bindTmRankWidthArgument converts tmrank's bound T_interval width into the
+// internal (count, unit) function arguments the catalog registers (decisions
+// D14/D18/D22). The binder's name-keyed conversion case calls it BEFORE
+// overload resolution, so no raw T_interval is ever published.
+//
+//   - the #28985 control-function prohibition runs first (the shared
+//     admission boundary's tier 1, same message as the frame-bound gate);
+//   - a direct prepared magnitude retains the raw pair -- the marker source
+//     expression plus the unit-string literal -- exactly as prepared frame
+//     bounds retain theirs, materializing per execution through the shared
+//     raw pipeline;
+//   - every other source passes the static admission walk and then the window
+//     frame-bound normalization matrix (D14/D20), yielding the normalized
+//     pair (int64 count const -- possibly null-marked for the D15
+//     NULL-arithmetic outcome -- plus int64 unit code).
+//
+// Non-foldable magnitudes and indirect prepared forms are refused by the
+// admission walk ahead of the eager const-fold instead of relying on the
+// executor's emergent failure.
+func bindTmRankWidthArgument(
+	bindCtx context.Context,
+	proc *process.Process,
+	interval *Expr,
+	name string,
+) (count *Expr, unit *Expr, err error) {
+	listPair := interval.GetList()
+	if listPair == nil || len(listPair.List) != 2 ||
+		listPair.List[0] == nil || listPair.List[1] == nil {
+		return nil, nil, moerr.NewInvalidArg(bindCtx, name+" interval width", "malformed interval")
+	}
+	if err := admitWindowIntervalBindSource(bindCtx, listPair.List[0]); err != nil {
+		return nil, nil, err
+	}
+	if listPair.List[0].GetP() != nil {
+		return listPair.List[0], listPair.List[1], nil
+	}
+	if !windowIntervalBindSourceAdmitted(listPair.List[0]) {
+		return nil, nil, moerr.NewInvalidArg(bindCtx, name+" interval width",
+			"a constant, foldable expression or direct parameter")
+	}
+	if proc == nil {
+		return nil, nil, moerr.NewInvalidInput(bindCtx, name+" interval width must be a constant")
+	}
+	normalized, normErr := resetWindowIntervalExpr(bindCtx, proc, interval)
+	if normErr != nil {
+		return nil, nil, normErr
+	}
+	normList := normalized.GetList()
+	return normList.List[0], normList.List[1], nil
+}
+
+// isLocalSlidingRankWindowFunction reports the three argument-windowed
+// frame-local competition rank operators of issue #29947.
+func isLocalSlidingRankWindowFunction(name string) bool {
+	switch name {
+	case "mrank", "cumrank", "tmrank":
+		return true
+	}
+	return false
+}
+
+// isSupportedTmRankOrderKeyOid matches the shared RANGE-search resolver's
+// temporal key domain exactly: T_year is deliberately absent (decision D21).
+func isSupportedTmRankOrderKeyOid(id int32) bool {
+	switch types.T(id) {
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+		return true
+	}
+	return false
 }
 
 func newWindowFrameOrderError(ctx context.Context) error {

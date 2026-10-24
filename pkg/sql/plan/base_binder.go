@@ -4063,6 +4063,12 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	astArgs []tree.Expr,
 	depth int32,
 ) (*plan.Expr, error) {
+	// MRANK's width is the only multi-argument NTILE-role contract: the
+	// integer context applies to the WIDTH marker (arg index 1), never to the
+	// value argument, so route around the single-argument generic body below.
+	if strings.EqualFold(name, "mrank") {
+		return b.bindPreparedMrankWidthExpr(astArgs, depth)
+	}
 	target, ok := preparedNumericFunctionTarget(name, len(astArgs))
 	if b.builder == nil || !b.builder.isPrepareStatement || !ok {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
@@ -4111,6 +4117,45 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	}
 	return bindBoundFuncExprAndConstFoldWithObserver(
 		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+		b.observeExpressionProtocol,
+	)
+}
+
+// bindPreparedMrankWidthExpr gives MRANK's WIDTH argument the same deferred
+// marker typing NTILE's bucket count uses (issue #29947 design §3.1: N is
+// "any integer-typed expression ... as with NTILE's bucket count"). A bare
+// prepared marker publishes TEXT transport, which fails the catalog's
+// integer-domain check at PREPARE time, so bind the marker under the int64
+// context - the plan publishes cast(ParamRef -> int64) exactly as a prepared
+// ntile does, and the EXECUTE fill lands in the retention cast. The value
+// argument always binds through the ordinary path. Only a BARE (possibly
+// parenthesized) width marker routes here: constant, column, arithmetic and
+// explicit-cast widths (for example CAST(? AS UNSIGNED), whose prepared plan
+// keeps the unsigned domain) stay on the ordinary overload check, preserving
+// the documented bind rejection of non-integer ordinary widths and every
+// existing unsigned boundary surface. Invalid EXECUTE values are rejected at
+// execution time by the operator's own named width check (N >= 1, non-NULL)
+// per §3.1.
+func (b *baseBinder) bindPreparedMrankWidthExpr(astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	if b.builder == nil || !b.builder.isPrepareStatement || len(astArgs) != 2 {
+		return b.bindFuncExprImplByAstExpr("mrank", astArgs, depth)
+	}
+	if _, direct := unwrapParenExpr(astArgs[1]).(*tree.ParamExpr); !direct {
+		return b.bindFuncExprImplByAstExpr("mrank", astArgs, depth)
+	}
+	typ := types.T_int64.ToType()
+	target := makePlan2Type(&typ)
+	value, err := b.impl.BindExpr(astArgs[0], depth, false)
+	if err != nil {
+		return nil, err
+	}
+	width, err := b.bindNumericExprWithContext(astArgs[1], depth, &target)
+	if err != nil {
+		return nil, err
+	}
+	return bindBoundFuncExprAndConstFoldWithObserver(
+		b.GetContext(), b.builder.compCtx.GetProcess(), "mrank",
+		[]*Expr{value, width},
 		b.observeExpressionProtocol,
 	)
 }
@@ -4848,7 +4893,14 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// The builtin binder also uses ErrNotSupported for its interval
 		// no-escape postcondition. Preserve that boundary error instead of
 		// misinterpreting it as an unknown builtin and falling through to UDF
-		// resolution.
+		// resolution. tmrank's conversion case consumes T_interval arguments
+		// itself and owns their refusal diagnostics (including the shared
+		// admission boundary's control-function message), so its own errors —
+		// not the standalone-interval postcondition's — surface verbatim, and
+		// no UDF lookup rewrites them.
+		if name == "tmrank" {
+			return nil, err
+		}
 		if intervalErr := rejectBoundIntervalFunctionArgs(b.GetContext(), name, args); intervalErr != nil {
 			return nil, intervalErr
 		}
@@ -4856,7 +4908,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		// first look for builtin func
 		builtinExpr, err := bindFuncExprImplByPlanExpr(
-			b.GetContext(), name, args, false, nil, nil, findInSetInternalArgs)
+			b.GetContext(), nil, name, args, false, nil, nil, findInSetInternalArgs)
 		if err == nil {
 			if isNullIf {
 				b.rememberPreparedFieldNullIfDomain(builtinExpr, args)
@@ -4870,6 +4922,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return builtinExpr, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
+			return nil, err
+		}
+		// tmrank's conversion case consumes T_interval arguments itself and
+		// owns their refusal diagnostics (issue #29947): surface them verbatim
+		// instead of rewriting a consumed pair into the standalone-interval
+		// postcondition's message or consulting UDF resolution.
+		if name == "tmrank" {
 			return nil, err
 		}
 		if intervalErr := rejectBoundIntervalFunctionArgs(b.GetContext(), name, args); intervalErr != nil {
@@ -5646,7 +5705,7 @@ func bindFuncExprAndConstFoldInternal(
 	// covering every other function of the definition.
 	foldGeometrySRIDConstArg(proc, name, args)
 	retExpr, err := bindFuncExprImplByPlanExpr(
-		ctx, name, args, descendFunctions, nil, nil, allowInternalFunctionArgs)
+		ctx, proc, name, args, descendFunctions, nil, nil, allowInternalFunctionArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -7325,7 +7384,7 @@ func preparedRegexpResultStringOperandCount(name string, arity int) int {
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
-	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil, nil, false)
+	return bindFuncExprImplByPlanExpr(ctx, nil, name, args, true, nil, nil, false)
 }
 
 func preparedBetweenHasMixedNumericText(ctx context.Context, args []*Expr) bool {
@@ -7382,11 +7441,12 @@ func bindPreparedFuncExprImplByPlanExpr(
 		stringDomainModes = make([]function.StringDomainCheckMode, len(args))
 	}
 	return bindFuncExprImplByPlanExpr(
-		ctx, name, args, true, stringDomainModes, originalBoundExpr, true)
+		ctx, nil, name, args, true, stringDomainModes, originalBoundExpr, true)
 }
 
 func bindFuncExprImplByPlanExpr(
 	ctx context.Context,
+	proc *process.Process,
 	name string,
 	args []*Expr,
 	descendFunctions bool,
@@ -7702,6 +7762,29 @@ func bindFuncExprImplByPlanExpr(
 		} else if len(args) > 1 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function needs zero or one arg", len(args))
 		}
+	case "tmrank":
+		// tmrank's public form is tmrank(v, INTERVAL n unit). Consume the raw
+		// T_interval argument HERE -- before overload resolution and before
+		// the publish-time standalone-interval postcondition -- and publish
+		// the internal (v, count, unit) shape the catalog registers, exactly
+		// as date_add publishes its converted overload (issue #29947).
+		// Rebinding of the saved internal form (prepared re-binding and
+		// projection refresh, both allowInternalFunctionArgs) passes through
+		// so the registered overload re-resolves with refreshed types; the
+		// grammar makes direct three-argument spellings unreachable from user
+		// SQL, and ordinary binding still rejects them here.
+		if allowInternalFunctionArgs && len(args) == 3 {
+			break
+		}
+		if len(args) != 2 || args[1] == nil ||
+			args[1].Typ.Id != int32(types.T_interval) {
+			return nil, moerr.NewInvalidArg(ctx, "tmrank function needs one value argument and one INTERVAL width", len(args))
+		}
+		countSlot, unitSlot, convErr := bindTmRankWidthArgument(ctx, proc, args[1], "tmrank")
+		if convErr != nil {
+			return nil, convErr
+		}
+		args = []*Expr{args[0], countSlot, unitSlot}
 	case "mo_win_truncate":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))

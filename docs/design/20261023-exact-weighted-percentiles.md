@@ -136,6 +136,27 @@ Revision log:
   gate stays D10's `MORPCVersion131`, untouched). The approved
   revision-5 bytes remain byte-preserved at the introducing commit
   recorded above.
+- Post-merge annotation, third (2026-10-24; documentation change only,
+  not a design revision): the aggregate's catalog function ID is
+  re-issued from the delivered `616` to `619`. Upstream main merged
+  #31020 (`ac4ec31587`, local sliding-window ranks mrank/cumrank/tmrank)
+  before this branch's fourth base merge, allocating SQL function IDs
+  616-618 for those three operators (themselves renumbered around
+  #31017's 605-615 block) with `FUNCTION_END_NUMBER = 619`, which raised
+  the merge conflicts in `pkg/sql/plan/function/function_id.go`,
+  `function_id_test.go` and the generated parser (the grammar,
+  keywords and window-binder seams auto-merged with disjoint paths).
+  The resolution re-applies the same allocation rule as the second
+  annotation: keep upstream's 616-618, re-issue
+  `QUANTILE_EXACT_WEIGHTED = 619` with the sentinel at 620, and keep
+  `AggIdOfQuantileExactWeighted` tracking the catalog id as
+  `619 << 32`; every reference stays by name, so renumbering is safe.
+  No decision, invariant, admission set or validation plan changed;
+  only the concrete number moved (the wire gate stays D10's
+  `MORPCVersion131`, untouched; the `Test_funids` pin and the
+  executor-id tracking assertion are updated with it). The approved
+  revision-5 bytes remain byte-preserved at the introducing commit
+  recorded above.
 
 ## Status
 

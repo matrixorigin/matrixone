@@ -674,7 +674,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> CLUSTER_CENTERS KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
-%token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK
+%token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK MRANK CUMRANK TMRANK
 %token <str> SMA WMA TRIMA EMA WILDER KAMA DEMA TEMA T3 MMAXDRAWDOWN CUMPOSITIVESTREAK
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 %token <str> JSON_ARRAYAGG JSON_OBJECTAGG
@@ -13432,6 +13432,36 @@ function_call_window:
             WindowSpec: $9,
         }
     }
+|	MRANK '(' expression ',' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            WindowSpec: $7,
+        }
+    }
+|	CUMRANK '(' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $5,
+        }
+    }
+|	TMRANK '(' expression ',' interval_expr ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            WindowSpec: $7,
+        }
+    }
 
 |	SMA '(' expression_list ')' window_spec_opt
     {
@@ -17062,6 +17092,9 @@ non_reserved_keyword:
 |   FIRST_VALUE
 |   LAST_VALUE
 |   NTH_VALUE
+|   MRANK
+|   CUMRANK
+|   TMRANK
 |   SMA
 |   WMA
 |   TRIMA
