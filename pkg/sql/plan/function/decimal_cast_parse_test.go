@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -97,6 +98,39 @@ func TestDecimalScientificCastContracts(t *testing.T) {
 	require.Error(t, err)
 	_, err = ParseDecimal64CastString("0Ebad", 5, 2)
 	require.Error(t, err)
+	t.Run("128-rounding-carry18-to19", func(t *testing.T) {
+		for _, sign := range []string{"", "-"} {
+			got, err := ParseDecimal128CastString(sign+"999999999999999999.5", 20, 0)
+			require.NoError(t, err)
+			want := types.Decimal128{B0_63: 1000000000000000000}
+			if sign == "-" {
+				want = want.Minus()
+			}
+			require.Equal(t, want, got, "rounding must carry into the existing19-digit path")
+		}
+	})
+	t.Run("128-rounding-width18-clamp-warnings", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		sink := &numericWarningSession{}
+		proc.WarningSink = sink
+		target := types.New(types.T_decimal128, 18, 0)
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"999999999999999999.5", "-999999999999999999.5"}, nil),
+			NewFunctionTestInput(target, []types.Decimal128{}, nil),
+		}, NewFunctionTestResult(target, false, nil, nil), NewExplicitCast)
+		t.Cleanup(fc.Free)
+		got, err := fc.DebugRun()
+		require.NoError(t, err)
+		require.Equal(t, 2, got.Length())
+		for row, want := range []string{"999999999999999999", "-999999999999999999"} {
+			require.False(t, got.IsNull(uint64(row)))
+			require.Equal(t, want, explicitCastDecimalTestValue(got, row))
+		}
+		require.Equal(t, []numericWarning{
+			{1264, "Out of range value for column 'decimal' at row 1"},
+			{1264, "Out of range value for column 'decimal' at row 2"},
+		}, sink.warnings)
+	})
 }
 
 func TestDecimalScientificWideValues(t *testing.T) {

@@ -135,14 +135,6 @@ type JobStatus struct {
 	ErrorMsg         string
 }
 
-type InitWatermark struct {
-	AccountID uint32
-	TableID   uint64
-	JobName   string
-	JobID     uint64
-	Watermark types.TS
-}
-
 // Intra-System Change Propagation Task Executor
 // iscp executor manages iterations, updates watermarks, and updates the iscp table.
 type ISCPTaskExecutor struct {
@@ -406,22 +398,6 @@ func (bat *AtomicBatch) GetRowIterator() RowIterator {
 		iter: bat.Rows.Iter(),
 	}
 }
-
-//func (bat *AtomicBatch) DebugString(tableDef *plan.TableDef, isDelete bool) string {
-//	ctx := context.Background()
-//	keys := make([]string, 0, bat.Rows.Len())
-//	iter := bat.Rows.Iter()
-//	defer iter.Release()
-//	for iter.Next() {
-//		row := iter.Item()
-//		s, err := getRowPkAndTsFromBat(ctx, row.Src, tableDef, isDelete, row.Offset)
-//		if err != nil {
-//			return ""
-//		}
-//		keys = append(keys, s)
-//	}
-//	return fmt.Sprintf("count=%d, key=%v", bat.Rows.Len(), keys)
-//}
 
 var _ RowIterator = new(atomicBatchRowIter)
 

@@ -193,7 +193,17 @@ func requiresRegexp2Pattern(pattern string) bool {
 			}
 		}
 		if pattern[i] == '(' {
+			if strings.HasPrefix(pattern[i:], "(?#") {
+				return true
+			}
 			if end, enabled, scoped, ok := regexpInlineFreeSpacing(pattern, i, freeSpacing); ok {
+				// RE2 accepts only these inline options. ICU comments and flags
+				// must be classified before the regular compiler is selected.
+				for _, option := range pattern[i+2 : end] {
+					if !strings.ContainsRune("imsU-:)", option) {
+						return true
+					}
+				}
 				if scoped {
 					freeSpacingStack = append(freeSpacingStack, freeSpacing)
 					freeSpacing = enabled
@@ -551,6 +561,12 @@ func isRegexpPatternWhitespace(ch byte) bool {
 // consumed together so forms such as (?ix:...) do not make a comment scanner
 // lose synchronization. enabled is the x state after applying the header.
 func regexpInlineFreeSpacing(pattern string, start int, current bool) (end int, enabled, scoped, ok bool) {
+	return regexpInlineOption(pattern, start, current, 'x')
+}
+
+// regexpInlineOption reads one flag's state while consuming the complete
+// existing inline-option grammar. Other flags must not split the header.
+func regexpInlineOption(pattern string, start int, current bool, option byte) (end int, enabled, scoped, ok bool) {
 	if start+2 >= len(pattern) || pattern[start] != '(' || pattern[start+1] != '?' {
 		return 0, false, false, false
 	}
@@ -569,10 +585,10 @@ func regexpInlineFreeSpacing(pattern string, start int, current bool) (end int, 
 			off = true
 		case '+':
 			off = false
-		case 'x', 'X':
-			enabled = !off
-			seenOption = true
-		case 'c', 'C', 'd', 'D', 'e', 'E', 'i', 'I', 'm', 'M', 'n', 'N', 's', 'S', 'u', 'U':
+		case 'c', 'C', 'd', 'D', 'e', 'E', 'i', 'I', 'm', 'M', 'n', 'N', 's', 'S', 'u', 'U', 'x', 'X':
+			if pattern[i] == option || pattern[i] == option-('a'-'A') {
+				enabled = !off
+			}
 			seenOption = true
 		default:
 			return 0, false, false, false
@@ -1313,17 +1329,17 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 	pat, pureMatchType string,
 	binary bool,
 ) (*regexp2Matcher, error) {
-	rule := regexpPatternWithPureMatchType(pat, pureMatchType)
 	binaryCaseFold := binary && strings.ContainsRune(pureMatchType, 'i')
-	key := regexpCacheKey{pattern: rule, binary: binary, binaryCaseFold: binaryCaseFold}
+	key := regexpCacheKey{pattern: pat, matchType: pureMatchType, binary: binary, binaryCaseFold: binaryCaseFold}
 	if rs.icu == nil {
 		rs.icu = make(map[regexpCacheKey]*regexp2Matcher, mapSizeForRegexp)
 	}
 	if matcher, ok := rs.icu[key]; ok {
 		return matcher, nil
 	}
-	if len(rule) > regexp2MaxPatternBytes {
-		return nil, regexp2InvalidInputf("regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxPatternBytes)
+	rule, err := regexpPatternWithPureMatchType(pat, pureMatchType, binary)
+	if err != nil {
+		return nil, err
 	}
 	if binary {
 		if err := validateBinaryRegexpPattern(rule); err != nil {
@@ -1334,7 +1350,8 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 		return nil, err
 	}
 	rule = strings.Clone(rule)
-	key.pattern = rule
+	key.pattern = strings.Clone(pat)
+	key.matchType = strings.Clone(pureMatchType)
 	expression, err := translateRegexp2Pattern(rule, binary)
 	if err != nil {
 		return nil, err
