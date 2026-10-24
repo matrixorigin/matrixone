@@ -58,7 +58,7 @@ explain select id from t where id > 0 order by l2_distance(v, '[0,0]') limit 1;
 -- @regex("Vector Index Scan", false)
 explain select id from t order by l2_distance(v, '[0,0]') limit 1 by rank with option 'mode=force';
 
--- Each statement of the HNSW section of docs/cn/vector_search.md, checked from SQL.
+-- Each statement of docs/cn/vector_search.md "异步维护的向量索引", checked from SQL for HNSW.
 -- A transaction's uncommitted writes are never in the index, so they hold the index
 -- behind the source deterministically. Each index query is paired with mode=force.
 create table t2 (id bigint primary key, v vecf32(2));
