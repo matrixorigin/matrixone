@@ -115,6 +115,27 @@ Rejected alternatives: a header or trailer inside the cached file, which changes
 bytes path-based consumers read; and a header inside the chunk rows, which changes the
 stored format and needs a rollout gate.
 
+### Where files are cached (decision)
+
+Decided by @cpegeric, 2026-10-24. Index files live in the disk cache of the shared
+fileservice, the same cache that holds table data, under a reserved namespace that no
+storage object uses. They exist only in the cache: a miss is never served from the
+storage backend, only rebuilt from the chunk rows. A CN without a disk cache uses a
+private temporary directory instead, with no reuse between loads.
+
+### Pinning (decision)
+
+Decided by @cpegeric, 2026-10-24. The disk cache gains a whole-file API: put a file, open
+it as a pinned handle, release it, delete it.
+
+- A file is pinned from open until its last release. A pinned file is never evicted and
+  stays counted against the cache capacity, so space held by a mapped or open index file
+  is never treated as free.
+- Eviction skips pinned files. When only pinned files remain, eviction stops instead of
+  spinning; the cache may then exceed its capacity by the pinned bytes, which are in use.
+- Deleting a pinned file takes effect at its last release.
+- Unpinned files are evicted under the same policy as table data.
+
 ### Memory
 
 The layer uses no memory cache: file bytes live in the disk cache, sized and evicted by
@@ -142,10 +163,7 @@ gate, and each algorithm can switch its readers and writers independently.
 
 ## Open questions
 
-1. **Mapping a cached file.** FULLTEXT2 maps whole files. The disk cache exposes no local
-   path for an entry today, and it must not evict (or count as free) a file that is still
-   mapped. The layer needs a way to hold a cached file open for the life of the mapping.
-2. **CDC tail as files.** Proposed: each frame is one file, whatever the number of chunks
+1. **CDC tail as files.** Proposed: each frame is one file, whatever the number of chunks
    it spans; readers open the frame files in order. The frame encoding, which both the
    vector indexes and FULLTEXT2 already share, moves out of the GPU package so neither
    depends on it. To be confirmed with the incremental-update design.
@@ -174,4 +192,8 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
   before, including a snapshot search after a merge, which rebuilds the merged-away
   segment from the rows visible at the snapshot;
 - writes and reads use no memory cache, and disk-cache use stays within its configured
-  capacity under a load larger than it.
+  capacity, plus pinned bytes, under a load larger than it;
+- a pinned file survives eviction pressure and is evicted after its last release; a
+  delete of a pinned file takes effect at release; eviction with only pinned files left
+  terminates;
+- a CN without a disk cache still serves reads, rebuilding each load from the rows.
