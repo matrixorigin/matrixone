@@ -305,8 +305,9 @@ func newEnv(t *testing.T, ctrl *gomock.Controller, tbl *fakeTable, cache *filese
 }
 
 func fileRows(ref Ref, data []byte, shuffleSeed int64) []chunkRow {
-	var rows []chunkRow
-	for id, b := range chunksOf(data, ref.FirstChunk) {
+	chunks := chunksOf(data, ref.FirstChunk)
+	rows := make([]chunkRow, 0, len(chunks)+2)
+	for id, b := range chunks {
 		rows = append(rows, chunkRow{indexID: ref.IndexID, chunkID: id, data: b, tag: ref.Tag})
 	}
 	// rows of other files and tags in the same key range
