@@ -35,6 +35,42 @@ select id, cascade_pid, a_pid, b_pid from c3 order by id;
 id	cascade_pid	a_pid	b_pid
 12	2	NULL	3
 13	2	3	3
+create table p4 (id int primary key);
+create table c4 (id int primary key, a int, b int, u int,
+unique key uk_c4 (u),
+constraint fk_cascade_a foreign key (a) references p4(id) on delete cascade,
+constraint fk_cascade_b foreign key (b) references p4(id) on delete cascade);
+create table g4 (id int primary key, cid int,
+key k_cid (cid),
+constraint fk_gc foreign key (cid) references c4(id) on delete cascade);
+insert into p4 values (1), (2);
+insert into c4 values (10,2,1,100);
+insert into g4 values (1000,10);
+delete from p4 where id = 1;
+select count(*) as c4_rows from c4;
+c4_rows
+0
+select count(*) as g4_rows from g4;
+g4_rows
+0
+insert into c4 values (11,2,2,100);
+insert into g4 values (1001,11);
+select id, a, b, u from c4;
+id	a	b	u
+11	2	2	100
+select id, cid from g4;
+id	cid
+1001	11
+delete from p4 where id = 2;
+select count(*) as c4_rows_final from c4;
+c4_rows_final
+0
+select count(*) as g4_rows_final from g4;
+g4_rows_final
+0
+drop table g4;
+drop table c4;
+drop table p4;
 drop table c1, c2, c3;
 drop table p1, p2, p3;
 drop database fk_issue_30246;

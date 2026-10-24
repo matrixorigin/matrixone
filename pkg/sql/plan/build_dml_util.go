@@ -1069,32 +1069,42 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			unionNodeId := builder.appendNode(unionNode, bindCtx)
 			newSinkNodeId := appendSinkNode(builder, bindCtx, unionNodeId)
 			endStep := builder.appendStep(newSinkNodeId)
-			// Only the delete halves that consumed the previous ownership
-			// stream may follow the merge. Streams feeding the INSERT side of
-			// an UPDATE-driven action consume its widened own image (including
-			// the temporary, action-local update columns) and must not be
-			// re-pointed at the union's flat base-row layout (#30246).
-			deleteReachable := make(map[int32]bool)
-			var markDeleteDownstream func(nodeID int32)
-			markDeleteDownstream = func(nodeID int32) {
-				if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || deleteReachable[nodeID] {
+			// Every consumer of the previous ownership stream must follow the
+			// merge: the halves deleting the shared child table itself, the
+			// index-maintenance deletes (the hidden index tables carry their
+			// own TblId), and the descendant referential-action branches
+			// (grandchild tables have their own TblIds again, and their
+			// positional cascade pieces may not have been wired under a DELETE
+			// node yet when this merge runs). The only consumers of the stream
+			// that must NOT follow are the INSERT-side images of an
+			// update-driven action: they carry the widened, action-local layout
+			// (base row plus temporary update columns) and are fenced off by
+			// the INSERT-branch reachability below together with the
+			// newSourceDependencies guard (#30246).
+			insertReachable := make(map[int32]bool)
+			var markInsertDownstream func(nodeID int32)
+			markInsertDownstream = func(nodeID int32) {
+				if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || insertReachable[nodeID] {
 					return
 				}
-				deleteReachable[nodeID] = true
+				insertReachable[nodeID] = true
 				for _, child := range builder.qry.Nodes[nodeID].Children {
-					markDeleteDownstream(child)
+					markInsertDownstream(child)
 				}
 			}
 			for _, node := range builder.qry.Nodes {
-				if node.NodeType == plan.Node_DELETE &&
-					node.DeleteCtx != nil && node.DeleteCtx.TableDef != nil &&
-					node.DeleteCtx.TableDef.TblId == delCtx.tableDef.TblId {
-					markDeleteDownstream(node.NodeId)
+				if node.NodeType == plan.Node_INSERT ||
+					node.NodeType == plan.Node_PRE_INSERT ||
+					node.NodeType == plan.Node_PRE_INSERT_UK ||
+					node.NodeType == plan.Node_PRE_INSERT_SK ||
+					node.NodeType == plan.Node_MULTI_UPDATE ||
+					node.InsertCtx != nil || node.PreInsertCtx != nil {
+					markInsertDownstream(node.NodeId)
 				}
 			}
 			for i, n := range builder.qry.Nodes {
 				_, feedsNewSource := newSourceDependencies[int32(i)]
-				if !deleteReachable[int32(i)] {
+				if insertReachable[int32(i)] {
 					continue
 				}
 				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep[0] == int32(step) &&

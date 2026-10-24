@@ -96,6 +96,135 @@ func assertHasCascadeOwnedAntiJoin(t *testing.T, query *plan.Query) {
 	require.True(t, seen, "the SET NULL stream must anti-join cascade-owned rows")
 }
 
+// sinkStepsUnderTargetDeleteRoots returns the distinct SourceStep values
+// consumed by SINK_SCAN nodes inside the Children-closure of the DELETE nodes
+// whose target table belongs to the named family (the shared child table, its
+// hidden index-maintenance tables, and its descendant cascade tables). After a
+// repeated-source merge (#30246) EVERY deletion-dependent consumer of the
+// shared child stream must read the same final union step; anything still
+// holding the superseded step is a stale index entry or an orphaned grandchild
+// waiting to happen.
+func sinkStepsUnderTargetDeleteRoots(query *plan.Query, family map[string]bool) map[int32]bool {
+	inBranch := make([]bool, len(query.Nodes))
+	var mark func(int32)
+	mark = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || inBranch[nodeID] {
+			return
+		}
+		inBranch[nodeID] = true
+		for _, child := range query.Nodes[nodeID].Children {
+			mark(child)
+		}
+	}
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_DELETE || node.DeleteCtx == nil || node.DeleteCtx.TableDef == nil {
+			continue
+		}
+		if family[node.DeleteCtx.TableDef.Name] {
+			mark(node.NodeId)
+		}
+	}
+	steps := make(map[int32]bool)
+	for i, node := range query.Nodes {
+		if inBranch[i] && node.NodeType == plan.Node_SINK_SCAN && len(node.SourceStep) > 0 {
+			steps[node.SourceStep[0]] = true
+		}
+	}
+	return steps
+}
+
+// #30246 review: with two ON DELETE CASCADE constraints to the same parent on
+// a child that also carries secondary/unique indexes and a cascade
+// grandchild, the second cascade's source merge must re-point ALL
+// deletion-dependent consumers of the first stream — not only the delete
+// halves of the shared child table (same TblId) but also the hidden
+// index-maintenance branches and the grandchild cascade branches.
+func TestIssue30246MergedCascadeRewiresAllDeleteConsumers(t *testing.T) {
+	const mockGrandchildTableID uint64 = 88890
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	empUnderCascadeSetNullOverlap(t, mock, []plan.ForeignKeyDef_RefAction{
+		plan.ForeignKeyDef_CASCADE, plan.ForeignKeyDef_CASCADE,
+	})
+
+	// Cascade grandchild empgc(col0) -> emp(empno): re-uses the dept column
+	// conventions by deep copy, without any index definitions of its own.
+	empTable := mock.ctxt.tables["emp"]
+	require.NotNil(t, empTable)
+	gc := DeepCopyTableDef(mock.ctxt.tables["dept"], true)
+	require.NotNil(t, gc)
+	gc.Name = "empgc"
+	gc.TblId = mockGrandchildTableID
+	gc.Indexes = nil
+	gc.Fkeys = []*plan.ForeignKeyDef{{
+		Name:        "fk30246_grandchild",
+		Cols:        []uint64{0},
+		ForeignTbl:  empTable.TblId,
+		ForeignCols: []uint64{0}, // emp.empno
+		OnDelete:    plan.ForeignKeyDef_CASCADE,
+		OnUpdate:    plan.ForeignKeyDef_RESTRICT,
+	}}
+	gc.RefChildTbls = nil
+	mock.ctxt.objects["empgc"] = &ObjectRef{SchemaName: "tpch", ObjName: "empgc", Obj: int64(mockGrandchildTableID)}
+	mock.ctxt.tables["empgc"] = gc
+	mock.ctxt.id2name[mockGrandchildTableID] = "empgc"
+	empTable.RefChildTbls = []uint64{mockGrandchildTableID}
+
+	logicPlan, err := runOneStmt(mock, t, "DELETE FROM dept WHERE deptno = 10")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	requireQueryStepDependenciesAcyclic(t, query)
+
+	// The shared-child family: emp itself, its hidden index-maintenance tables,
+	// and the descendant cascade table. dept's own delete branches legitimately
+	// keep reading the parent statement's stream.
+	empFamily := map[string]bool{"emp": true, "empgc": true}
+	for _, idx := range empTable.Indexes {
+		empFamily[idx.IndexTableName] = true
+	}
+	steps := sinkStepsUnderTargetDeleteRoots(query, empFamily)
+	if len(steps) != 1 {
+		parents := make(map[int32][]int32)
+		for i, n := range query.Nodes {
+			for _, c := range n.Children {
+				parents[c] = append(parents[c], int32(i))
+			}
+		}
+		for i, n := range query.Nodes {
+			tgt := ""
+			if n.DeleteCtx != nil && n.DeleteCtx.TableDef != nil {
+				tgt = " del:" + n.DeleteCtx.TableDef.Name
+			}
+			if n.InsertCtx != nil && n.InsertCtx.TableDef != nil {
+				tgt += " ins:" + n.InsertCtx.TableDef.Name
+			}
+			t.Logf("node %d type=%v children=%v parents=%v sourceStep=%v%s", i, n.NodeType, n.Children, parents[int32(i)], n.SourceStep, tgt)
+		}
+		for s, sn := range query.Steps {
+			t.Logf("step %d -> node %d", s, sn)
+		}
+	}
+	require.Len(t, steps, 1,
+		"every deletion-dependent consumer of the merged emp stream must read the final union step, found steps %v", steps)
+	// …and that step is exactly the stream the child's own delete consumes,
+	// i.e. the final merged ownership stream, not a superseded action source.
+	var empDeleteSource int32 = -1
+	for _, node := range query.Nodes {
+		if node.NodeType == plan.Node_DELETE && node.DeleteCtx != nil &&
+			node.DeleteCtx.TableDef != nil && node.DeleteCtx.TableDef.Name == "emp" {
+			for _, child := range node.Children {
+				if query.Nodes[child].NodeType == plan.Node_SINK_SCAN {
+					empDeleteSource = query.Nodes[child].SourceStep[0]
+				}
+			}
+		}
+	}
+	require.NotEqual(t, int32(-1), empDeleteSource)
+	require.True(t, steps[empDeleteSource],
+		"index-maintenance and descendant consumers must read the emp delete's own merged stream step %d, found %v",
+		empDeleteSource, steps)
+}
+
 // #30246: overlapping ON DELETE CASCADE and ON DELETE SET NULL actions to the
 // same parent must build a plan for a plain parent DELETE in either
 // declaration order: no projection/width raggedness (previously a runtime
