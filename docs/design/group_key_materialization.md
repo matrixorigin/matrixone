@@ -1,6 +1,6 @@
 # Bounded group-key materialization optimization
 
-Status: **APPROVED for implementation, design v1, 2026-10-25**.
+Status: **APPROVED for implementation, design v1.1, 2026-10-25**.
 
 Design gate: **gpt-6.1-sol / xhigh**, parent-selected gate agent
 `/root/clickbench_design_20261025`. Reviewed MatrixOne revision:
@@ -112,6 +112,14 @@ GroupBy and hash positions:
    nil/all-columns hash representation. Otherwise record the complete N-element
    equality mapping, including reused visible positions. Clone slice backing
    before appending; do not alias/mutate a child or cached-plan slice.
+
+For a root bound ColRef, DISTINCT binding may enrich only the visible expression's
+Name/TblName/DbName diagnostic labels. Normalize only those three fields in a
+shallow copy of the physical Expr and ColRef before complete protobuf equality.
+Keep RelPos/ColPos, complete type/provenance, unknown fields, and all remaining
+metadata exact. Never mutate either input. Complex expressions remain exact.
+This v1.1 amendment was approved by the same gpt-6.1-sol/xhigh design gate before
+its implementation; broad structural/type-loose matching is not approved.
 
 For example, `[a, pad_value, url]` becomes four retained columns and hash
 positions `[0,3,2]`, rather than six columns and `[3,4,5]`. Q40 becomes six retained
