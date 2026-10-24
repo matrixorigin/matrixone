@@ -1374,6 +1374,7 @@ func TestHAKeeperClientRetryableError(t *testing.T) {
 		{name: "backend cannot connect", err: moerr.NewBackendCannotConnect(ctx), want: true},
 		{name: "no available backend", err: moerr.NewNoAvailableBackend(ctx), want: true},
 		{name: "connection reset", err: moerr.NewConnectionReset(ctx), want: true},
+		{name: "closed client generation", err: moerr.NewClientClosed(ctx), want: true},
 		{name: "raw connection reset", err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, want: true},
 		{name: "connection reset text is not a transport error", err: errors.New("connection reset by peer"), want: false},
 		{name: "context canceled", err: context.Canceled, want: false},
@@ -1387,6 +1388,23 @@ func TestHAKeeperClientRetryableError(t *testing.T) {
 			require.Equal(t, tt.want, c.isRetryableError(tt.err))
 		})
 	}
+
+	closedClient := &managedHAKeeperClient{}
+	closedClient.mu.Lock()
+	closedClient.mu.closed = true
+	closedClient.mu.Unlock()
+	require.False(t, closedClient.isRetryableError(moerr.NewClientClosed(ctx)))
+	// Keyed allocation holds this lock across preparation and send. Classifying
+	// a closed generation must not recursively take the same RWMutex.
+	c.mu.Lock()
+	require.True(t, c.isRetryableErrorLocked(moerr.NewClientClosed(ctx)))
+	c.mu.closed = true
+	require.False(t, c.isRetryableErrorLocked(moerr.NewClientClosed(ctx)))
+	c.mu.Unlock()
+	closedCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	_, err := c.AllocateIDByKeyWithRequestID(closedCtx, "bootstrap", 1, "cn-1")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrClientClosed))
 }
 
 func TestAllocateIDRetriesPrepareClientError(t *testing.T) {
@@ -1491,6 +1509,7 @@ func TestAllocateIDRetriesTransportSendError(t *testing.T) {
 		{name: "eof", err: io.EOF},
 		{name: "raw connection reset", err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}},
 		{name: "backend closed", err: moerr.NewBackendClosed(context.Background())},
+		{name: "client generation closed", err: moerr.NewClientClosed(context.Background())},
 	}
 
 	for _, tt := range tests {
@@ -1668,9 +1687,12 @@ func TestAllocateIDByKeyWithRequestIDRetriesLostResponse(t *testing.T) {
 		require.Equal(t, "bootstrap", key)
 		require.Equal(t, uint64(1), batch)
 		require.Equal(t, "cn-1", requestID)
-		if attempts == 1 {
+		if attempts%2 == 1 {
 			// The allocation was committed, but the reply did not reach the CN.
-			return 0, io.ErrUnexpectedEOF
+			if attempts == 1 {
+				return 0, io.ErrUnexpectedEOF
+			}
+			return 0, moerr.NewClientClosed(context.Background())
 		}
 		return 1, nil
 	}
@@ -1682,6 +1704,13 @@ func TestAllocateIDByKeyWithRequestIDRetriesLostResponse(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), id)
 	require.Equal(t, 2, attempts)
+	// A closed transport generation follows the same idempotent retry path,
+	// even though this API retains the managed lock across send/reset.
+	c = &managedHAKeeperClient{cfg: HAKeeperClientConfig{}}
+	id, err = c.AllocateIDByKeyWithRequestID(ctx, "bootstrap", 1, "cn-1")
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), id)
+	require.Equal(t, 4, attempts)
 }
 
 func TestAllocateIDByKeyWithRequestIDRejectsInvalidInputBeforeRPC(t *testing.T) {

@@ -197,7 +197,7 @@ func TestTableDumpLegacySpecialIntegerBindings(t *testing.T) {
 					def.Cols[2].Default = bound
 				case "on_update":
 					col.Attributes = []tree.ColumnAttribute{&tree.AttributeOnUpdate{Expr: ast}}
-					bound, bindErr := buildOnUpdate(ctx, col, typ, compiler.GetProcess())
+					bound, bindErr := buildOnUpdate(ctx, col, typ, compiler.GetProcess(), def.Cols)
 					require.NoError(t, bindErr)
 					def.Cols[2].OnUpdate = bound
 				}

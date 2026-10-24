@@ -165,6 +165,9 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if requiredProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion129)
 	}
+	if requiredProtocol != nil && features.CRC32JSONTextBytes {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion130)
+	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
@@ -2518,6 +2521,12 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion90) {
 		return moerr.NewNotSupportedNoCtx(
 			"geodetic spatial-distance semantics require MORPC protocol version 90",
+		)
+	}
+	if features.CRC32JSONTextBytes &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion130) {
+		return moerr.NewNotSupportedNoCtx(
+			"CRC32 JSON text-byte semantics require MORPC protocol version 130",
 		)
 	}
 	if features.ViewMetadataFunctions && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion126) {

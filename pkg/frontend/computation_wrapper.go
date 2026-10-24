@@ -1499,6 +1499,12 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		needRebuild = statsChanged
 	}
+	if prepareStmt.directTableMigration != nil && (needRebuild || catalogCache == nil ||
+		prepareStmt.schedulingSQLMode != sessionSQLModeForParser(owner)) {
+		// Never transparently rebind migrated SQL against a newer view/object.
+		// Even a stats rebuild is refused rather than using an unguarded binder.
+		return nil, nil, nil, "", false, moerr.NewNeedReprepare(reqCtx)
+	}
 	cwft.planGenerationReused = !needRebuild
 	fieldTypes := prepareStmt.fieldTypes
 	// Session DDL and temporary-table revisions conservatively invalidate plans,

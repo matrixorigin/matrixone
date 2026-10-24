@@ -1185,7 +1185,8 @@ func alterCopyCreateOptions(qry *plan.AlterTable) executor.StatementOption {
 	opts := executor.StatementOption{}.
 		WithIgnoreForeignKey().
 		WithSkipIndexTaskRegistration().
-		WithTrustedCheckConstraintNames()
+		WithTrustedCheckConstraintNames().
+		WithCRC32CopyExpressions(qry.CopyTableDef)
 	opts = opts.WithDisableLock()
 	if oldLogicalId := qry.GetTableDef().GetLogicalId(); oldLogicalId != 0 {
 		opts = opts.WithKeepLogicalId(oldLogicalId)
