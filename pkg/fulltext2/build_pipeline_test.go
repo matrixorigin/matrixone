@@ -377,3 +377,17 @@ func TestBuildPipelineWritePanicWaitsForTokenizers(t *testing.T) {
 	p.Abort()
 	requireEmptyDir(t, dir)
 }
+
+func TestBuildPipelineDirectTermsCountTowardChunkBytes(t *testing.T) {
+	p := newTestPipeline(t, 1, 1, int32(types.T_int64), 0, 0, t.TempDir(), func(*SpilledSegment) error { return nil })
+	defer p.Abort()
+	big := string(make([]byte, 1<<20))
+	for i := 0; i < 2; i++ {
+		require.NoError(t, p.Add(BuildDoc{PK: int64(i + 1), Terms: []WordPos{{Word: big, Pos: 0}}}))
+		require.Less(t, p.chunkBytes, p.maxBytes)
+	}
+	require.Empty(t, p.chunk, "terms-only rows must flush on the byte budget")
+
+	inc := BuildDoc{PK: int64(3), Content: []byte("a"), Include: []any{make([]byte, 1<<20), int64(1)}, HasInclude: true}
+	require.Equal(t, 1+1<<20, buildDocBytes(&inc))
+}

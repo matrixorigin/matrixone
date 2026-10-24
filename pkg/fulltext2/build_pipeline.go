@@ -17,6 +17,7 @@ package fulltext2
 import (
 	"runtime"
 	"sync"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -112,7 +113,7 @@ func (p *BuildPipeline) Add(doc BuildDoc) error {
 		return moerr.NewInternalErrorNoCtx("fulltext2 build pipeline: add after close")
 	}
 	p.chunk = append(p.chunk, doc)
-	p.chunkBytes += len(doc.Content)
+	p.chunkBytes += buildDocBytes(&doc)
 	if p.chunkBytes >= p.maxBytes || len(p.chunk) >= p.maxRows {
 		return p.processChunk()
 	}
@@ -152,6 +153,23 @@ func (p *BuildPipeline) Abort() {
 	p.finishing = 0
 	p.chunk = nil
 	p.cur = nil
+}
+
+// buildDocBytes returns the variable-sized payload a queued BuildDoc owns.
+func buildDocBytes(doc *BuildDoc) int {
+	n := len(doc.Content) + len(doc.Terms)*int(unsafe.Sizeof(WordPos{}))
+	for i := range doc.Terms {
+		n += len(doc.Terms[i].Word)
+	}
+	for _, v := range doc.Include {
+		switch x := v.(type) {
+		case []byte:
+			n += len(x)
+		case string:
+			n += len(x)
+		}
+	}
+	return n
 }
 
 func (p *BuildPipeline) processChunk() error {
