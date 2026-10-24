@@ -68,9 +68,14 @@ func appendBatchesConcurrently(
 	// purge/ticktock goroutines.
 	var wg sync.WaitGroup
 	wg.Add(len(batches))
+	start := make(chan struct{})
 	for _, data := range batches {
-		go testutil.AppendClosure(t, data, relation, engine, &wg)()
+		go func() {
+			<-start
+			testutil.AppendClosure(t, data, relation, engine, &wg)()
+		}()
 	}
+	close(start)
 	wg.Wait()
 }
 
@@ -288,7 +293,9 @@ func TestBackupData(t *testing.T) {
 	totalRows := uint64(schema.Extra.BlockMaxRows * 30)
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
-	bats := bat.Split(100)
+	// Eight competing appends keep all 300 typed rows, multiple blocks,
+	// and full/partial block boundaries in this backup/restore fixture.
+	bats := bat.Split(8)
 
 	start := time.Now()
 	appendBatchesConcurrently(t, bats, schema.Name, db.DB)
@@ -362,7 +369,7 @@ func TestBackupData(t *testing.T) {
 	db.Opts.Fs = service
 	db.Restart(ctx)
 	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
-	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100)-deletedRows, true)
+	testutil.CheckAllColRowsByScan(t, rel, int(totalRows)-len(bats)-deletedRows, true)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 }
@@ -440,7 +447,9 @@ func TestBackupData2(t *testing.T) {
 	totalRows := uint64(schema.Extra.BlockMaxRows * 30)
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
-	bats := bat.Split(100)
+	// Eight competing appends keep all 300 typed rows, multiple blocks,
+	// and full/partial block boundaries in this backup/restore fixture.
+	bats := bat.Split(8)
 
 	start := time.Now()
 	appendBatchesConcurrently(t, bats, schema.Name, db.DB)
@@ -515,7 +524,7 @@ func TestBackupData2(t *testing.T) {
 	db.Opts.Fs = service
 	db.Restart(ctx)
 	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
-	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100)-deletedRows, true)
+	testutil.CheckAllColRowsByScan(t, rel, int(totalRows)-len(bats)-deletedRows, true)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 }
@@ -916,7 +925,9 @@ func TestBackupData5(t *testing.T) {
 	totalRows := uint64(schema.Extra.BlockMaxRows * 30)
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
-	bats := bat.Split(100)
+	// Eight competing appends keep all 300 typed rows, multiple blocks,
+	// and full/partial block boundaries in this backup/restore fixture.
+	bats := bat.Split(8)
 
 	start := time.Now()
 	appendBatchesConcurrently(t, bats, schema.Name, db.DB)
@@ -1004,7 +1015,7 @@ func TestBackupData5(t *testing.T) {
 	db.Opts.Fs = service
 	db.Restart(ctx)
 	txn, rel := testutil.GetDefaultRelation(t, db.DB, schema.Name)
-	testutil.CheckAllColRowsByScan(t, rel, int(totalRows-100)-deletedRows, true)
+	testutil.CheckAllColRowsByScan(t, rel, int(totalRows)-len(bats)-deletedRows, true)
 	assert.NoError(t, txn.Commit(context.Background()))
 
 }
