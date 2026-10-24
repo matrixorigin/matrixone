@@ -94,6 +94,7 @@ func (mo *MOServer) Start() error {
 	logutil.Infof("Server Listening on : %s ", mo.addr)
 	mo.running = true
 	mo.startTempTableGC(24 * time.Hour)
+	mo.startConnectionLivenessMonitor()
 	mo.startListener()
 	setMoServerStarted(mo.service, true)
 	return nil

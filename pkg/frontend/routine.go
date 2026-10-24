@@ -56,7 +56,7 @@ type Routine struct {
 
 	closeOnce sync.Once
 
-	inProcessRequest bool
+	inProcessRequest atomic.Bool
 
 	cancelled atomic.Bool
 
@@ -127,7 +127,7 @@ func (rt *Routine) isCancelled() bool {
 func (rt *Routine) setInProcessRequest(b bool) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	rt.inProcessRequest = b
+	rt.inProcessRequest.Store(b)
 }
 
 // execCallbackInProcessRequestOnly denotes if inProcessRequest is true,
@@ -136,7 +136,7 @@ func (rt *Routine) setInProcessRequest(b bool) {
 func (rt *Routine) execCallbackBasedOnRequest(want bool, callback func()) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
-	if rt.inProcessRequest == want {
+	if rt.inProcessRequest.Load() == want {
 		if callback != nil {
 			callback()
 		}
@@ -195,8 +195,27 @@ func (rt *Routine) getSession() *Session {
 
 func (rt *Routine) setCancelRequestFunc(cf context.CancelFunc) {
 	rt.mu.Lock()
-	defer rt.mu.Unlock()
 	rt.cancelRequestFunc = cf
+	cancelled := rt.isCancelled()
+	rt.mu.Unlock()
+	// A disconnect can be observed after request admission but before its
+	// cancel function is published. Do not let that request escape cancellation.
+	if cancelled && cf != nil {
+		cf()
+	}
+}
+
+// cancelOnDisconnect only signals the request owner. In particular, it must
+// not roll back or free the session while ExecRequest is still using it, nor
+// cancel the transaction context needed by the owner's rollback path.
+func (rt *Routine) cancelOnDisconnect() {
+	rt.mu.Lock()
+	rt.setCancelled(true)
+	cancel := rt.cancelRequestFunc
+	rt.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (rt *Routine) cancelRequestCtx() {

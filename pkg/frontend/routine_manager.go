@@ -52,6 +52,10 @@ type RoutineManager struct {
 	// reportSystemStatusTime is the time when report system status last time.
 	reportSystemStatusTime atomic.Pointer[time.Time]
 	cancel                 context.CancelFunc
+
+	// Serialize probes and reuse their snapshot without retaining closed sessions.
+	disconnectProbeMu      sync.Mutex
+	disconnectProbeScratch []activeClientRequest
 }
 
 type AccountRoutineManager struct {
@@ -310,17 +314,19 @@ func (rm *RoutineManager) Closed(rs *Conn) {
 		defer func() {
 			ses.Debugf(rm.getCtx(), "resource of the connection %d:%s has been cleaned", rs.ID(), rs.RemoteAddress())
 		}()
+		account := ses.GetTenantInfo()
+		accountName := sysAccountName
+		accountId := uint32(0)
+		if account != nil {
+			accountName = account.GetTenant()
+			accountId = account.GetTenantID()
+		}
 		rt.decreaseCount(func() {
-			account := ses.GetTenantInfo()
-			accountName := sysAccountName
-			accountId := uint32(0)
-			if account != nil {
-				accountName = account.GetTenant()
-				accountId = account.GetTenantID()
-			}
 			metric.ConnectionCounter(accountName, accountId).Dec()
-			rm.accountRoutine.deleteRoutine(int64(account.GetTenantID()), rt)
 		})
+		// Request cancellation may have already decremented the metric, but
+		// tenant registration must always be removed when the connection closes.
+		rm.accountRoutine.deleteRoutine(int64(accountId), rt)
 		rm.sessionManager.RemoveSession(ses)
 		ses.Debugf(rm.getCtx(), "the io session was closed.")
 	}
