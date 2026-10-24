@@ -300,49 +300,6 @@ func (p *Pattern) EvalOR(s *SearchAccum, docvec []uint8, aggcnt []int64, arg, re
 	return result, nil
 }
 
-/*
-func (p *Pattern) EvalPhrase(s *SearchAccum, arg map[any]float32) (map[any]float32, error) {
-	// check word order here
-
-	result := make(map[any]float32)
-
-	for docid := range arg {
-		var pos []int32
-		for j, c := range p.Children {
-			wacc := s.WordAccums[c.Text]
-			word := wacc.Words[docid]
-			currpos := word.Position
-			if j == 0 {
-				pos = word.Position
-			} else {
-				retpos := make([]int32, 0, len(pos))
-				// always compare with the first word offset '0'
-				for _, p1 := range pos {
-					for _, p2 := range currpos {
-						diff := p2 - p1
-						if c.Position == diff {
-							retpos = append(retpos, p1)
-						}
-					}
-				}
-				if len(retpos) == 0 {
-					pos = nil
-					break
-				} else {
-					pos = retpos
-				}
-			}
-		}
-
-		if len(pos) > 0 {
-			result[docid] = arg[docid]
-		}
-	}
-
-	return result, nil
-}
-*/
-
 // Get the weight for compute the TFIDF
 // LESSTHAN is lower the ranking
 // GREATERTHAN is higher the ranking

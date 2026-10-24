@@ -407,22 +407,6 @@ func (bat *AtomicBatch) GetRowIterator() RowIterator {
 	}
 }
 
-//func (bat *AtomicBatch) DebugString(tableDef *plan.TableDef, isDelete bool) string {
-//	ctx := context.Background()
-//	keys := make([]string, 0, bat.Rows.Len())
-//	iter := bat.Rows.Iter()
-//	defer iter.Release()
-//	for iter.Next() {
-//		row := iter.Item()
-//		s, err := getRowPkAndTsFromBat(ctx, row.Src, tableDef, isDelete, row.Offset)
-//		if err != nil {
-//			return ""
-//		}
-//		keys = append(keys, s)
-//	}
-//	return fmt.Sprintf("count=%d, key=%v", bat.Rows.Len(), keys)
-//}
-
 var _ RowIterator = new(atomicBatchRowIter)
 
 type atomicBatchRowIter struct {
