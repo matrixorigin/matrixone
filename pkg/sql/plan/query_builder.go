@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -88,6 +89,13 @@ func resolveDivPrecisionIncrement(ctx CompilerContext) int32 {
 // expressions with the same statement setting as ordinary SELECT expressions.
 func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Context {
 	bound := function.WithDivPrecisionIncrement(base, resolveDivPrecisionIncrement(ctx))
+	// 独立DEFAULT/generated binder从process借用基础context，但绑定来源
+	// 属于compiler/object，不能因为换了context owner而丢掉历史/原生代际。
+	if source := ctx.GetContext(); source != nil {
+		if revision := source.Value(collationBindingRevisionKey{}); revision != nil {
+			bound = context.WithValue(bound, collationBindingRevisionKey{}, revision)
+		}
+	}
 	if function.LegacySpecialConsumers(ctx.GetContext()) {
 		bound = function.WithLegacySpecialConsumers(bound)
 	}
@@ -4911,9 +4919,13 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				targetArgType = types.T_blob.ToType()
 			}
 			targetType = makePlan2Type(&targetArgType)
-			branchExprs := make([]*Expr, len(nodes))
+			branchExprs := make([]*Expr, 0, len(nodes))
 			for i, id := range nodes {
-				branchExprs[i] = builder.qry.Nodes[id].ProjectList[columnIdx]
+				// 与common type采用相同的pure-NULL来源证明；派生NULL的临时
+				// legacy容器不是一个声明的域，显式typed NULL则仍须参与选择。
+				if !setBranchPureNull[i][columnIdx] {
+					branchExprs = append(branchExprs, builder.qry.Nodes[id].ProjectList[columnIdx])
+				}
 			}
 			if err := setExpressionCollation(builder.GetContext(), "union", branchExprs, &targetType); err != nil {
 				return 0, err
@@ -12530,6 +12542,7 @@ func (builder *QueryBuilder) bindView(
 	viewCtx := NewBindContext(builder, nil)
 	// Preserve execution admission while keeping view name resolution isolated.
 	viewCtx.ctasExecutionProtocolRequirement = ctx.ctasExecutionProtocolRequirement
+	viewCtx.ctasNativeCollationProtocolRequirement = ctx.ctasNativeCollationProtocolRequirement
 	viewCtx.cteDatabase = schema
 	// View expansion has its own name-resolution scope, but it must retain the
 	// outer query's row-rewrite policy so base-table access rules still apply
@@ -12543,6 +12556,17 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return 0, err
 	}
+	if err = requireViewCollationMarker(builder.GetContext(), viewData); err != nil {
+		return 0, err
+	}
+	if requirement := viewCtx.ctasNativeCollationProtocolRequirement; viewData.CollationBindingRevision == 1 && requirement != nil {
+		*requirement = max(*requirement, defines.MORPCVersion130)
+	}
+	restoreCollationBinding, err := enterPersistedCollationBinding(builder.compCtx, viewData.CollationBindingRevision)
+	if err != nil {
+		return 0, err
+	}
+	defer restoreCollationBinding()
 	if viewData.RequiredProtocolVersion != nil {
 		if *viewData.RequiredProtocolVersion < 0 {
 			return 0, moerr.NewInvalidInput(
@@ -13373,7 +13397,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		// replacing scans, after preserving the existing snapshot-scope error.
 		// The final plan fence cannot see metadata erased by those rewrites,
 		// even when the query only projects a constant.
-		if err = plan.RequireLegacyCollations(tableDef); err != nil {
+		if err = RequireCatalogCollations(builder.GetContext(), builder.compCtx.GetProcess(), tableDef); err != nil {
 			return 0, "", err
 		}
 

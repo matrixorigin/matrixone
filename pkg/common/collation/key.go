@@ -75,6 +75,34 @@ func (d Domain) KeySizeUpperBound(inputBytes int) (int, error) {
 	return inputBytes*multiplier + extra, nil
 }
 
+// PADKeySize 计算 C1 payload 的精确长度，不生成临时 key。用于消费者在
+// 分配/计费前确定容量；与 Key 一样，末尾 SPACE 不占 payload 字节。
+func (d Domain) PADKeySize(value []byte) (int, error) {
+	if d != UTF8MB4Bin && d != UTF8MB4GeneralCI {
+		return 0, ErrDomain
+	}
+	if err := d.ValidateValue(value); err != nil {
+		return 0, err
+	}
+	size, spaces := 1, 0 // C1 终止标记。
+	for len(value) != 0 {
+		w, n := d.next(value)
+		value = value[n:]
+		if w == 0x20 {
+			spaces++
+			continue
+		}
+		size += spaces
+		spaces = 0
+		if w < 128 {
+			size++
+		} else {
+			size += utf8.RuneLen(rune(w))
+		}
+	}
+	return size, nil
+}
+
 // Key returns borrowed bytes: Raw and 0900-bin borrow the input; other domains
 // reuse scratch[:0]. Scratch must not overlap value. Callers must copy retained
 // keys before reusing input/scratch. Invalid text/domain/size leaves scratch

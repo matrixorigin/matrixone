@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -190,6 +191,8 @@ func TestBuildUniqueKeyBatchDecimal256(t *testing.T) {
 
 func TestBuildUniqueKeyBatchRejectsInvalidNativeUnicodeCompositeValue(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	defer func() { require.Zero(t, proc.Mp().CurrNB()) }()
 	native := types.New(types.T_varchar, 16, 0)
 	native.Charset = uint8(types.CharsetUTF8MB4UnicodeCI)
 	native.CollationVersion = uint8(collation.RevisionV1)
@@ -198,15 +201,15 @@ func TestBuildUniqueKeyBatchRejectsInvalidNativeUnicodeCompositeValue(t *testing
 	// metadata. This simulates a decoded/corrupted batch and proves the
 	// composite unique-key boundary validates before serializing.
 	text := vector.NewVec(types.T_varchar.ToType())
+	defer text.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(text, []byte{0xff, 0xfe}, false, proc.Mp()))
 	text.SetType(native)
 	other := testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1})
-	defer text.Free(proc.Mp())
 	defer other.Free(proc.Mp())
 
 	packers := PackerList{}
 	defer packers.Free()
-	_, _, err := BuildUniqueKeyBatch(
+	got, _, err := BuildUniqueKeyBatch(
 		[]*vector.Vector{text, other},
 		[]string{"v", "n"},
 		[]string{"v", "n"},
@@ -214,7 +217,105 @@ func TestBuildUniqueKeyBatchRejectsInvalidNativeUnicodeCompositeValue(t *testing
 		proc,
 		&packers,
 	)
-	require.Error(t, err)
+	if got != nil {
+		defer got.Clean(proc.Mp())
+	}
+	require.ErrorContains(t, err, "invalid UTF-8 in collation key")
+	require.Nil(t, got)
+}
+
+func TestBuildUniqueKeyBatchRejectsUnadmittedCollationTypes(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetUTF8MB4UnicodeCI, types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
+		for _, shape := range []string{"empty", "null", "const_null", "value"} {
+			for _, path := range []string{"unique_single", "unique_composite", "secondary_composite"} {
+				t.Run(fmt.Sprintf("%d/%s/%s", charset, shape, path), func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					defer proc.Free()
+					defer func() { require.Zero(t, proc.Mp().CurrNB()) }()
+					var text *vector.Vector
+					if shape == "const_null" {
+						text = vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
+					} else {
+						text = vector.NewVec(types.T_varchar.ToType())
+					}
+					defer text.Free(proc.Mp())
+					other := vector.NewVec(types.T_int64.ToType())
+					defer other.Free(proc.Mp())
+					if shape != "empty" {
+						if shape != "const_null" {
+							require.NoError(t, vector.AppendBytes(text, []byte("a"), shape == "null", proc.Mp()))
+						}
+						require.NoError(t, vector.AppendFixed(other, int64(1), false, proc.Mp()))
+					}
+					text.GetType().Charset = charset
+					if charset != types.CharsetUTF8MB4UnicodeCI {
+						text.GetType().CollationVersion = types.CollationVersionV1
+					}
+					packers := PackerList{}
+					defer packers.Free()
+					if path == "secondary_composite" {
+						output := vector.NewVec(types.T_varchar.ToType())
+						defer output.Free(proc.Mp())
+						_, err := SerialWithoutCompacted([]*vector.Vector{other, text}, output, proc, &packers, DefaultPackerSize)
+						require.Error(t, err)
+						require.Zero(t, output.Length())
+					} else {
+						parts := []string{"v"}
+						if path == "unique_composite" {
+							parts = append(parts, "n")
+						}
+						got, _, err := BuildUniqueKeyBatch([]*vector.Vector{text, other},
+							[]string{"v", "n"}, parts, "", proc, &packers)
+						if got != nil {
+							defer got.Clean(proc.Mp())
+						}
+						require.Error(t, err)
+						require.Nil(t, got)
+					}
+					require.Zero(t, packers.PackerCount())
+				})
+			}
+		}
+	}
+}
+
+func TestPhysicalIndexHelpersKeepAdmittedUnicodeDomain(t *testing.T) {
+	for _, shape := range []string{"empty", "null", "const_null", "value"} {
+		t.Run(shape, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			defer func() { require.Zero(t, proc.Mp().CurrNB()) }()
+			typ := types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetUTF8MB4UnicodeCI)
+			typ.CollationVersion = types.CollationVersionV1
+			var text *vector.Vector
+			if shape == "const_null" {
+				text = vector.NewConstNull(typ, 1, proc.Mp())
+			} else {
+				text = vector.NewVec(typ)
+			}
+			defer text.Free(proc.Mp())
+			if shape == "null" || shape == "value" {
+				require.NoError(t, vector.AppendBytes(text, []byte("a"), shape == "null", proc.Mp()))
+			}
+			unique := vector.NewVec(types.T_varchar.ToType())
+			defer unique.Free(proc.Mp())
+			_, err := CompactSingleIndexCol(text, unique, proc)
+			require.NoError(t, err)
+			if shape == "value" {
+				require.Equal(t, 1, unique.Length())
+			} else {
+				require.Zero(t, unique.Length())
+			}
+
+			secondary := vector.NewVec(types.T_varchar.ToType())
+			defer secondary.Free(proc.Mp())
+			packers := PackerList{}
+			defer packers.Free()
+			_, err = SerialWithoutCompacted([]*vector.Vector{text}, secondary, proc, &packers, DefaultPackerSize)
+			require.NoError(t, err)
+			require.Equal(t, text.Length(), secondary.Length())
+		})
+	}
 }
 
 func mustParseDecimal256ForIndexTest(t *testing.T, typ types.Type, value string) types.Decimal256 {

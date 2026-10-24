@@ -171,6 +171,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.TableCollationFunction {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion118)
 	}
+	if features.NativePADCollation {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion130)
+	}
 	if features.CalendarIntervalNormalization {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
 	}
@@ -192,6 +195,15 @@ func (b *baseBinder) observeExpressionProtocol(expr *planpb.Expr) error {
 		timestamp, dynamicTime := planpb.TemporalResultContractFeatures(expr)
 		if timestamp || dynamicTime {
 			*requirement = defines.MORPCVersion122
+		}
+	}
+	if requirement := b.ctx.ctasNativeCollationProtocolRequirement; requirement != nil && *requirement < defines.MORPCVersion130 {
+		features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+		if err != nil {
+			return err
+		}
+		if features.NativePADCollation {
+			*requirement = defines.MORPCVersion130
 		}
 	}
 	if b.ctx.persistedExpressionProtocolRequirement == nil {

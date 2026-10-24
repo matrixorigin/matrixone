@@ -1176,7 +1176,7 @@ func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		}, selectList)
 	case types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink,
 		types.T_geometry, types.T_geometry32:
-		if !types.IsUnicodeCollation(paramType.Charset) && parameters[0].GetArea() == nil && parameters[1].GetArea() == nil && (selectList == nil) {
+		if !types.HasCollationKey(*paramType) && parameters[0].GetArea() == nil && parameters[1].GetArea() == nil && (selectList == nil) {
 			return compareVarlenaEqual(parameters, rs, proc, length, selectList)
 		}
 		return opBinaryBytesBytesToFixed[bool](parameters, rs, proc, length, func(v1, v2 []byte) bool {

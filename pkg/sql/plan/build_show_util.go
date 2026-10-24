@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -60,6 +61,15 @@ func ConstructCreateTableSQL(
 	)
 }
 
+// ConstructLegacyCreateTableSQL freezes the spelling used by existing manifest
+// hashes and external MySQL sinks. It is NOT replay-safe in a native MO binder.
+// MO's generation-preserving aliases must not change either persisted hashes
+// or an external server's charset/UCA domain. Native PAD metadata is rejected.
+func ConstructLegacyCreateTableSQL(tableDef *plan.TableDef, useDbName bool) (string, error) {
+	text, _, err := constructCreateTableSQL(nil, tableDef, nil, useDbName, nil, true, nil, true)
+	return text, err
+}
+
 func createTableIndexVisible(indexDef *plan.IndexDef) bool {
 	if visible, isSet := catalog.GetIndexVisibility(indexDef); isSet {
 		return visible
@@ -67,6 +77,14 @@ func createTableIndexVisible(indexDef *plan.IndexDef) bool {
 	// A context-free caller cannot query mo_indexes. Preserve proto3's
 	// historical default rather than treating an omitted bool as INVISIBLE.
 	return true
+}
+
+// 仅供携带typed replay的内部DDL骨架；不能把此SQL独立交给dump/CDC。
+func constructCreateTableSQLForReplay(ctx CompilerContext, tableDef *plan.TableDef, snapshot *Snapshot, useDbName bool, cloneStmt *tree.CloneTable, includeChecks bool, sourceSubscription *SubscriptionMeta) (string, tree.Statement, error) {
+	parent := ctx.GetContext()
+	ctx.SetContext(WithPersistedDDLReplay(parent, tableDef, tableDef))
+	defer ctx.SetContext(parent)
+	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, includeChecks, sourceSubscription)
 }
 
 func constructCreateTableSQL(
@@ -77,10 +95,20 @@ func constructCreateTableSQL(
 	cloneStmt *tree.CloneTable,
 	includeChecks bool,
 	sourceSubscription *SubscriptionMeta,
+	legacyMySQL ...bool,
 ) (string, tree.Statement, error) {
-	// Replaying native metadata through a legacy SQL alias would change its
-	// semantics. Until activation, reject rather than emit a lossy dump.
-	if err := plan.RequireLegacyCollations(tableDef); err != nil {
+	// 内部骨架有独立typed replay。普通SHOW/dump不能仅凭拼写复原代际。
+	mysqlNames := len(legacyMySQL) != 0 && legacyMySQL[0]
+	outputCtx := context.Background()
+	if ctx != nil && ctx.GetContext() != nil {
+		outputCtx = ctx.GetContext()
+	}
+	internal := isRestoreSchemaInspection(ctx) || (ctx != nil && ddlReplayForTable(ctx.GetContext(), tableDef.Name) != nil)
+	if internal {
+		if err := plan.RequirePersistedCollations(tableDef); err != nil {
+			return "", nil, err
+		}
+	} else if err := RequireLegacySQLMetadata(outputCtx, tableDef); err != nil {
 		return "", nil, err
 	}
 	var err error
@@ -137,6 +165,7 @@ func constructCreateTableSQL(
 	var pkDefs []string
 	isClusterTable := util.TableIsClusterTable(tableDef.TableType)
 	displayTableCharset := effectiveTableCharsetForShowCreate(tableDef)
+	tableRevision := tableColumnCollationRevision(tableDef)
 	columnTableCharset := displayTableCharset
 	if tableDef.TableType == catalog.SystemExternalRel {
 		// External-table grammar has no table charset option. Use a sentinel
@@ -191,7 +220,7 @@ func constructCreateTableSQL(
 			typeStr = strings.ToLower(typeStr)
 		}
 		fmt.Fprintf(buf, "  %s %s", sqlquote.Ident(colNameOrigin), typeStr)
-		appendTextCharsetForShowCreate(buf, col.Typ, columnTableCharset)
+		appendTextCharsetForShowCreate(buf, col.Typ, columnTableCharset, tableRevision, mysqlNames)
 
 		//-------------------------------------------------------------------------------------------------------------
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
@@ -665,7 +694,7 @@ func constructCreateTableSQL(
 				charsetContext = nil
 			}
 		}
-		createStr += tableCharsetForShowCreate(charsetContext, displayTableCharset)
+		createStr += tableCharsetForShowCreate(charsetContext, displayTableCharset, tableRevision, mysqlNames)
 	}
 
 	var comment string
@@ -887,6 +916,11 @@ func constructCreateTableSQL(
 			createStr += fmt.Sprintf(" IGNORE %d LINES", param.Tail.IgnoredLines)
 		}
 	}
+	if !internal && !mysqlNames {
+		if err := requireStandaloneSQLCollationExpressions(outputCtx, createStr, sqlMode); err != nil {
+			return "", nil, err
+		}
+	}
 	var stmt tree.Statement
 	if ctx != nil {
 		rewriteStr := createStr
@@ -898,7 +932,7 @@ func constructCreateTableSQL(
 	return createStr, stmt, err
 }
 
-func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableCharset uint32) {
+func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableCharset, tableRevision uint32, mysqlNames bool) {
 	switch types.T(typ.Id) {
 	case types.T_char, types.T_varchar, types.T_text:
 	default:
@@ -911,11 +945,19 @@ func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableChars
 		// catalog row still has no charset metadata. Preserve that column's
 		// historical bytewise ordering even when it cannot inherit the table
 		// display default.
-		if tableCharset != uint32(types.CharsetUTF8MB4Bin) {
-			buf.WriteString(" COLLATE utf8mb4_bin")
+		if tableCharset != uint32(types.CharsetUTF8MB4Bin) || tableRevision != 0 {
+			if mysqlNames {
+				buf.WriteString(" COLLATE utf8mb4_bin")
+			} else {
+				buf.WriteString(" COLLATE utf32_bin")
+			}
 		}
 	case uint32(types.CharsetUTF8MB4Bin):
-		buf.WriteString(" COLLATE utf8mb4_bin")
+		if typ.CollationVersion == 0 && !mysqlNames {
+			buf.WriteString(" COLLATE utf32_bin")
+		} else {
+			buf.WriteString(" COLLATE utf8mb4_bin")
+		}
 	case uint32(types.CharsetUTF8MB3UnicodeCI):
 		buf.WriteString(" COLLATE utf8_unicode_ci")
 	case uint32(types.CharsetUTF8MB4UnicodeCI):
@@ -926,8 +968,12 @@ func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableChars
 		// SET binary would instead change the physical type to VARBINARY/BLOB.
 		buf.WriteString(" COLLATE binary")
 	case uint32(types.CharsetUTF8):
-		if tableCharset != uint32(types.CharsetUTF8) {
-			buf.WriteString(" COLLATE utf8mb4_general_ci")
+		if tableCharset != uint32(types.CharsetUTF8) || typ.CollationVersion != tableRevision {
+			if typ.CollationVersion == 0 && !mysqlNames {
+				buf.WriteString(" COLLATE utf8mb4_0900_ai_ci")
+			} else {
+				buf.WriteString(" COLLATE utf8mb4_general_ci")
+			}
 		}
 	}
 }
@@ -961,22 +1007,28 @@ func effectiveTableCharsetForShowCreate(tableDef *plan.TableDef) uint32 {
 	return uint32(types.CharsetUTF8)
 }
 
-func tableCharsetForShowCreate(ctx CompilerContext, charset uint32) string {
+func tableCharsetForShowCreate(ctx CompilerContext, charset, revision uint32, mysqlNames bool) string {
 	switch charset {
 	case uint32(types.CharsetUTF8):
+		if revision != 0 || mysqlNames {
+			return " COLLATE=utf8mb4_general_ci"
+		}
 		// collation_server is runtime-configurable. Spell general_ci whenever it
 		// differs from the effective runtime default. Callers such as CDC and
 		// table dump have no compiler context, so they must also spell it: an
 		// unknown target default is not safe to inherit during DDL replay.
 		if ctx == nil {
-			return " COLLATE=utf8mb4_general_ci"
+			return " COLLATE=utf8mb4_0900_ai_ci"
 		}
 		serverCharset, err := tableDefaultCharset(ctx, nil)
 		if err == nil && serverCharset == uint32(types.CharsetUTF8) {
 			return ""
 		}
-		return " COLLATE=utf8mb4_general_ci"
+		return " COLLATE=utf8mb4_0900_ai_ci"
 	case uint32(types.CharsetUTF8MB4Bin):
+		if revision == 0 && !mysqlNames {
+			return " COLLATE=utf32_bin"
+		}
 		return " COLLATE=utf8mb4_bin"
 	case uint32(types.CharsetUTF8MB3UnicodeCI):
 		return " COLLATE=utf8_unicode_ci"

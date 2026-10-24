@@ -145,7 +145,7 @@ func TestDDLVarcharWidthPreservesInternalDDL(t *testing.T) {
 			defer stmt.Free()
 			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
 			ctx := context.WithValue(t.Context(), defines.InternalExecutorKey{}, true)
-			typ, err := getColumnTypeFromAst(ctx, col, uint32(types.CharsetUTF8), nil)
+			typ, err := getColumnTypeFromAst(ctx, col, uint32(types.CharsetUTF8), 0, nil)
 			require.NoError(t, err)
 			require.Equal(t, int32(types.MaxVarcharLen), typ.Width)
 		})
@@ -168,14 +168,14 @@ func TestDDLVarcharWidthReplayAdmission(t *testing.T) {
 		{name: "changed width", column: "v varchar(65534)", wantError: true},
 		{name: "changed width above capacity", column: "v varchar(65536)", wantError: true},
 		{name: "new column", column: "extra varchar(65535)", wantError: true},
-		{name: "changed charset", column: "v varchar(65535) collate utf8mb4_bin", wantError: true},
+		{name: "changed legacy charset", column: "v varchar(65535) collate utf32_bin", wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), "create table copy("+tc.column+")", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
 			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
-			_, err = getColumnTypeFromAst(t.Context(), col, uint32(types.CharsetUTF8), replay)
+			_, err = getColumnTypeFromAst(t.Context(), col, uint32(types.CharsetUTF8), 0, replay)
 			if tc.wantError {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooBigFieldLength), err)
 			} else {
@@ -192,7 +192,7 @@ func TestDDLVarcharWidthAdmissionDoesNotMutateAST(t *testing.T) {
 	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
 	astType := col.Type.(*tree.T)
 
-	_, err = getColumnTypeFromAst(t.Context(), col, uint32(types.CharsetUTF8), nil)
+	_, err = getColumnTypeFromAst(t.Context(), col, uint32(types.CharsetUTF8), 0, nil)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooBigFieldLength), err)
 	require.Equal(t, int32(65536), astType.InternalType.DisplayWith)
 
@@ -200,7 +200,7 @@ func TestDDLVarcharWidthAdmissionDoesNotMutateAST(t *testing.T) {
 	_, err = getTypeFromAst(t.Context(), col.Type)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 	internal := context.WithValue(t.Context(), defines.InternalExecutorKey{}, true)
-	_, err = getColumnTypeFromAst(internal, col, uint32(types.CharsetUTF8), nil)
+	_, err = getColumnTypeFromAst(internal, col, uint32(types.CharsetUTF8), 0, nil)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 	require.Equal(t, int32(65536), astType.InternalType.DisplayWith)
 }

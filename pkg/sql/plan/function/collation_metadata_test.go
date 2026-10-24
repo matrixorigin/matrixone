@@ -15,10 +15,70 @@
 package function
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
 )
+
+func TestVersionedCollationConsumers(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, charset := range []uint8{types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
+		for _, revision := range []uint8{0, 1} {
+			typ := types.NewWithCharset(types.T_varchar, 16, 0, charset)
+			typ.CollationVersion = revision
+			for _, name := range []string{"=", "<=>", "in", "least", "greatest"} {
+				resolved, err := GetFunctionByName(t.Context(), name, []types.Type{typ, typ})
+				require.NoError(t, err)
+				var inputs []FunctionTestInput
+				var result FunctionTestResult
+				switch name {
+				case "=", "<=>":
+					inputs = []FunctionTestInput{
+						NewFunctionTestInput(typ, []string{"A", "a ", "é"}, nil),
+						NewFunctionTestInput(typ, []string{"a", "a", "e"}, nil),
+					}
+					ci := revision == 1 && charset == types.CharsetUTF8
+					result = NewFunctionTestResult(types.T_bool.ToType(), false, []bool{ci, revision == 1, ci}, nil)
+				case "in":
+					inputs = []FunctionTestInput{
+						NewFunctionTestInput(typ, []string{"A", "a ", "b"}, nil),
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{"a"}, nil),
+					}
+					result = NewFunctionTestResult(types.T_bool.ToType(), false,
+						[]bool{revision == 1 && charset == types.CharsetUTF8, revision == 1, false}, nil)
+				case "least", "greatest":
+					inputs = []FunctionTestInput{
+						NewFunctionTestInput(typ, []string{"a"}, nil),
+						NewFunctionTestInput(typ, []string{"B"}, nil),
+					}
+					want := "B"
+					if (name == "least") == (revision == 1 && charset == types.CharsetUTF8) {
+						want = "a"
+					}
+					result = NewFunctionTestResult(typ, false, []string{want}, nil)
+				}
+				fn, err := GetFunctionById(t.Context(), resolved.GetEncodedOverloadID())
+				require.NoError(t, err)
+				tc := NewFunctionTestCase(proc, inputs, result, fn.newOp())
+				ok, info := tc.RunAndFree()
+				require.True(t, ok, "charset=%d revision=%d name=%s: %s", charset, revision, name, info)
+			}
+			legacy := typ
+			legacy.CollationVersion = 0
+			cast, left, right := comparisonTypeCastRule(typ, legacy)
+			require.Equal(t, revision == 1, cast)
+			require.Equal(t, revision, left.CollationVersion)
+			require.Equal(t, revision, right.CollationVersion)
+			target := typ.PlanType()
+			require.Equal(t, revision == 0, CanUseZoneMapComparison(EncodeOverloadID(EQUAL, 0),
+				[]*plan.Expr{{Typ: target}, {Typ: target}}))
+		}
+	}
+}
 
 func TestCollationMetadataStringShapeConversions(t *testing.T) {
 	for _, tc := range []struct {

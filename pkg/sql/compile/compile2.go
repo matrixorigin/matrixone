@@ -169,7 +169,7 @@ func (c *Compile) Compile(
 	if err = validateJSONStringConsumerProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}
-	if err = plan.RequireLegacyCollations(queryPlan); err != nil {
+	if err = plan.RequireExecutableCollations(queryPlan); err != nil {
 		return err
 	}
 	if err = validateTemporalResultProtocol(c.proc, queryPlan); err != nil {

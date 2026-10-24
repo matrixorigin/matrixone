@@ -158,7 +158,7 @@ func ConstructBasePKFilter(
 	// true match (for example `A = 'a'`) before the residual row comparator
 	// runs. Leave this optional fast path disabled until the persisted summary
 	// format carries the same collation domain.
-	if tablePrimaryKeyUsesUnicodeCollation(tblDef) || exprUsesUnicodeCollationColumn(expr, tblDef) {
+	if tablePrimaryKeyNeedsCollationComparison(tblDef) || exprNeedsCollationComparison(expr, tblDef) {
 		return BasePKFilter{}, nil
 	}
 	filter, err = constructBaseSortKeyFilter(expr, tblDef, mp, cleanup, primaryKeySortKeyName(tblDef))
@@ -207,7 +207,7 @@ func ConstructBaseClusterFilter(
 	return filter, nil
 }
 
-func tablePrimaryKeyUsesUnicodeCollation(tblDef *plan.TableDef) bool {
+func tablePrimaryKeyNeedsCollationComparison(tblDef *plan.TableDef) bool {
 	if tblDef == nil || tblDef.Pkey == nil {
 		return false
 	}
@@ -220,16 +220,15 @@ func tablePrimaryKeyUsesUnicodeCollation(tblDef *plan.TableDef) bool {
 		}
 	}
 	if tblDef.Pkey.CompPkeyCol != nil {
-		return types.IsUnicodeCollation(uint8(tblDef.Pkey.CompPkeyCol.Typ.Charset))
+		return typeNeedsCollationComparison(tblDef.Pkey.CompPkeyCol.Typ)
 	}
 	return false
 }
 
 // columnUsesUnicodeCollation reports whether the named column of tblDef is a
-// native-Unicode-collation text column. Reader table definitions assembled
-// from a snapshot or an index path are not required to carry Name2ColIndex;
-// failing to find the column in that optional map must not re-enable a
-// raw-byte key probe.
+// collation-aware text column, including revisioned native PAD domains.
+// Reader table definitions assembled from a snapshot or an index path are not
+// required to carry Name2ColIndex; missing it must not enable raw-byte probes.
 func columnUsesUnicodeCollation(tblDef *plan.TableDef, name string) bool {
 	if name == "" {
 		return false
@@ -237,12 +236,12 @@ func columnUsesUnicodeCollation(tblDef *plan.TableDef, name string) bool {
 	if tblDef.Name2ColIndex != nil {
 		if pos, ok := tblDef.Name2ColIndex[name]; ok && pos >= 0 &&
 			int(pos) < len(tblDef.Cols) && tblDef.Cols[pos] != nil {
-			return types.IsUnicodeCollation(uint8(tblDef.Cols[pos].Typ.Charset))
+			return typeNeedsCollationComparison(tblDef.Cols[pos].Typ)
 		}
 	}
 	for _, col := range tblDef.Cols {
 		if col != nil && strings.EqualFold(col.Name, name) {
-			return types.IsUnicodeCollation(uint8(col.Typ.Charset))
+			return typeNeedsCollationComparison(col.Typ)
 		}
 	}
 	return false

@@ -10188,7 +10188,7 @@ func canPregrowRawByteList(vec *Vector, isNulls []bool) bool {
 	case types.T_varbinary:
 		return true
 	case types.T_varchar:
-		return !types.IsUnicodeCollation(vec.typ.Charset)
+		return !types.HasCollationKey(vec.typ)
 	default:
 		return false
 	}
@@ -12309,7 +12309,7 @@ func buildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejso
 func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m *mpool.MPool) error {
 	// Legacy domains need no collation admission. Check the domain before
 	// extracting bytes, especially for inline values copied in merge loops.
-	if types.IsUnicodeCollation(vec.typ.Charset) {
+	if types.HasCollationKey(vec.typ) {
 		if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
 			return err
 		}

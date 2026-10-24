@@ -489,7 +489,7 @@ func TestAlterConstraintUsesResolvedIndexAdmission(t *testing.T) {
 		{"native explicit primary", "utf8mb4_unicode_ci", "drop primary key", true, false},
 		{"native generic primary", "utf8mb4_unicode_ci", "drop constraint `PRIMARY`", true, false},
 		{"native generic check", "utf8mb4_unicode_ci", "drop constraint ck", false, true},
-		{"legacy generic unique", "utf8mb4_bin", "drop constraint u", false, false},
+		{"legacy generic unique", "utf32_bin", "drop constraint u", false, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v varchar(8) collate "+test.collation+",n int,unique key u(v),constraint ck check(n>0))")

@@ -156,17 +156,32 @@ func TestUnicodeUniqueDiagnostics(t *testing.T) {
 				})
 				t.Run("controls", func(t *testing.T) {
 					duplicate(t, "insert into u_single values(1,'Other',1)", "1", "id")
-					exec(t, "create table u_binary(s varchar(30) collate utf8mb4_bin unique)")
+					_, err := conn.ExecContext(ctx, "create table u_binary(s varchar(30) collate utf8mb4_bin unique)")
+					require.ErrorContains(t, err, "native PAD collation index")
+					var count int
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"select count(*) from mo_catalog.mo_tables where reldatabase=? and relname='u_binary'", database).Scan(&count))
+					require.Zero(t, count)
+					// The compatibility alias retains the historical byte-key control.
+					exec(t, "create table u_binary(s varchar(30) collate utf32_bin unique)")
 					exec(t, "insert into u_binary values('Alpha'),('alpha')")
 					duplicate(t, "insert into u_binary values('alpha')", "alpha", "s")
 				})
 				t.Run("nullable_sibling_keys", func(t *testing.T) {
 					for _, tc := range []struct{ name, typ, value, entry string }{
 						{"integer", "int", "7", "7"},
-						{"binary", "varchar(30) collate utf8mb4_bin", "'dup'", "dup"},
+						{"binary", "varchar(30) collate utf32_bin", "'dup'", "dup"},
 					} {
 						t.Run(tc.name, func(t *testing.T) {
 							table := "u_sibling_" + tc.name
+							if tc.name == "binary" {
+								_, err := conn.ExecContext(ctx, "create table "+table+"(id int primary key,s varchar(30) collate utf8mb4_unicode_ci,k varchar(30) collate utf8mb4_bin,unique key uk_s(s),unique key uk_k(k))")
+								require.ErrorContains(t, err, "native PAD collation index on column k is disabled")
+								var published int
+								require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase=? and relname=?", database, table).Scan(&published))
+								require.Zero(t, published)
+							}
+							// Keep the original nullable-sibling physical-key oracle on its legacy domain.
 							exec(t, "create table "+table+"(id int primary key,s varchar(30) collate utf8mb4_unicode_ci,k "+tc.typ+",unique key uk_s(s),unique key uk_k(k))")
 							exec(t, "insert into "+table+" values(1,'Alpha',"+tc.value+")")
 							duplicate(t, "insert into "+table+" values(6,'Beta',NULL),(7,'Gamma',"+tc.value+")", tc.entry, "uk_k")

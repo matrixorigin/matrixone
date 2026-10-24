@@ -1295,5 +1295,20 @@ func TestPersistedDependentProgramRequiresV119(t *testing.T) {
 	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: timestamp}})
 	version, err = RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion122, version, "new result contract composes above all main capabilities")
+	require.Equal(t, defines.MORPCVersion122, version, "new result contract composes above earlier main capabilities")
+	fractionalSecond := &planpb.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TIMESTAMPADD_SECOND_INTERVAL, 0)},
+	}}}
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: fractionalSecond}})
+	features, err = planpb.RequiredRemoteExpressionFeatures(owner)
+	require.NoError(t, err)
+	require.True(t, features.TimestampAddSecondIntervals)
+	require.False(t, features.NativePADCollation)
+	version, err = RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion124, version, "fractional SECOND retains the upstream capability")
+	owner.Cols = append(owner.Cols, &planpb.ColDef{Typ: planpb.Type{Id: int32(types.T_varchar), Charset: 3, CollationVersion: 1}})
+	version, err = RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion130, version, "native PAD must preserve independent upstream capabilities")
 }

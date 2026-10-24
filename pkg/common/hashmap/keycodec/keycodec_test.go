@@ -716,6 +716,33 @@ func TestUnicodeCollationUsesUCAEqualityKey(t *testing.T) {
 	require.NotEqual(t, left, canonical)
 }
 
+func TestVersionedCollationKeys(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
+		for _, revision := range []uint8{0, 1} {
+			typ := types.NewWithCharset(types.T_varchar, 32, 0, charset)
+			typ.CollationVersion = revision
+			left, right := []byte("a"), []byte("a ")
+			key := AppendCanonicalValue(nil, typ, left)
+			require.Equal(t, len(key), CanonicalValueSize(typ, left))
+			require.Equal(t, revision == 1, CanonicalValuesEqual(typ, left, right))
+			require.Equal(t, revision == 1, bytes.Equal(key, AppendCanonicalValue(nil, typ, right)))
+			require.Equal(t, revision == 0, SupportsExactRawRuntimeFilterPair(typ, typ))
+			mp := mpool.MustNewZero()
+			func() {
+				vec := vector.NewVec(typ)
+				defer vec.Free(mp)
+				require.NoError(t, vector.AppendBytesList(vec, [][]byte{left, right}, nil, mp))
+				hashes := make([]uint64, 2)
+				ComputeXXHash([]*vector.Vector{vec}, hashes, 0)
+				require.Equal(t, revision == 1, hashes[0] == hashes[1])
+				canonical, _ := CanonicalBytesAt(vec, 0, nil)
+				require.Equal(t, key, canonical)
+			}()
+			require.Zero(t, mp.CurrNB())
+		}
+	}
+}
+
 func TestComputeXXHashCanonicalVarlenaGroupingRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	negativeZero := float32(math.Copysign(0, -1))

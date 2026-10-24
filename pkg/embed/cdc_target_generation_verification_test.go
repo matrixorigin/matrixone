@@ -129,9 +129,15 @@ func testCDCTargetGenerationVerificationOnMO(t *testing.T, cluster Cluster) {
 			t.Errorf("drop CDC target verification database: %v", cleanupErr)
 		}
 	}()
-	_, err = conn.ExecContext(ctx, "CREATE TABLE cdc_generation_verify.good (id INT PRIMARY KEY, v VARCHAR(20) COLLATE utf8mb4_bin, UNIQUE KEY uk_v(v))")
+	_, err = conn.ExecContext(ctx, "CREATE TABLE cdc_generation_verify.rejected_native (id INT PRIMARY KEY, v VARCHAR(20) COLLATE utf8mb4_bin, UNIQUE KEY uk_v(v))")
+	require.ErrorContains(t, err, "native PAD collation index on column v is disabled")
+	var rejected int
+	require.NoError(t, conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM mo_catalog.mo_tables WHERE account_id=0 AND reldatabase='cdc_generation_verify' AND relname='rejected_native'").Scan(&rejected))
+	require.Zero(t, rejected)
+	// These targets exercise historical physical-key identity, not native index admission.
+	_, err = conn.ExecContext(ctx, "CREATE TABLE cdc_generation_verify.good (id INT PRIMARY KEY, v VARCHAR(20) COLLATE utf32_bin, UNIQUE KEY uk_v(v))")
 	require.NoError(t, err)
-	_, err = conn.ExecContext(ctx, "CREATE TABLE cdc_generation_verify.bad (id INT PRIMARY KEY, v VARCHAR(20) COLLATE utf8mb4_general_ci, UNIQUE KEY uk_v(v))")
+	_, err = conn.ExecContext(ctx, "CREATE TABLE cdc_generation_verify.bad (id INT PRIMARY KEY, v VARCHAR(20) COLLATE utf8mb4_0900_ai_ci, UNIQUE KEY uk_v(v))")
 	require.NoError(t, err)
 
 	source := &plan.TableDef{

@@ -34,8 +34,11 @@ func updateNewColumnInTableDef(
 ) (bool, error) {
 	ctx := cctx.GetContext()
 
-	nTy, err := getColumnTypeFromAst(ctx, nColSpec, tableDef.DefaultCharset, nil)
+	nTy, err := getColumnTypeFromAst(ctx, nColSpec, tableDef.DefaultCharset, tableColumnCollationRevision(tableDef), nil)
 	if err != nil {
+		return false, err
+	}
+	if err = rejectNativePADColumnRelabel(ctx, oCol.Typ, nTy); err != nil {
 		return false, err
 	}
 	if err = requireMediumIntProtocolForAuthoring(ctx, cctx.GetProcess(), nTy); err != nil {

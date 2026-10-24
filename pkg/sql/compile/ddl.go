@@ -146,6 +146,32 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	return nil
 }
 
+// requireDropDatabaseCollations preflights the known native writer obligation
+// before transaction-local subscription/FK/view-metadata mutations. The actual
+// drop owners still validate complete schemas and recheck the floor later.
+func (c *Compile) requireDropDatabaseCollations(db engine.Database, dbName string) error {
+	if plan2.RequirePersistedProtocolVersionForAuthoring(c.proc.Ctx, c.proc, defines.MORPCVersion130) == nil {
+		return nil
+	}
+	names, err := db.Relations(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		relation, err := db.Relation(c.proc.Ctx, name, nil)
+		if err != nil {
+			if logAndSkipMissingRelationByNameForDropDatabase(c, dbName, name, "cannot open relation when admitting drop database", err) {
+				continue
+			}
+			return err
+		}
+		if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, relation.GetTableDef(c.proc.Ctx)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Scope) DropDatabase(c *Compile) error {
 	if c.scalarDropLifecycle() {
 		return moerr.NewInternalError(c.proc.Ctx, "scalar lifecycle cannot authorize DROP DATABASE")
@@ -282,6 +308,10 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		}
 	}
 
+	if err := c.requireDropDatabaseCollations(db, dbName); err != nil {
+		return err
+	}
+
 	// handle sub
 	if db.IsSubscription(c.proc.Ctx) {
 		if err = dropSubscription(c.proc.Ctx, c, dbName); err != nil {
@@ -410,6 +440,11 @@ func (s *Scope) DropDatabase(c *Compile) error {
 			return err
 		}
 	}
+	for _, table := range dropTables {
+		if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, table.TableDef); err != nil {
+			return err
+		}
+	}
 	err = c.e.Delete(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
@@ -532,6 +567,13 @@ func (c *Compile) dropDatabaseRelations(
 
 	s := &Scope{}
 	for _, table := range tables {
+		// Views are retired by the database owner, not scalar DROP. A bool-only
+		// view still carries native binding provenance and cannot be skipped.
+		if table != nil {
+			if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, table.TableDef); err != nil {
+				return err
+			}
+		}
 		if table == nil || table.Table == "" || table.TableDef == nil ||
 			table.IsView || table.TableDef.ViewSql != nil ||
 			table.TableDef.TableType == catalog.SystemSequenceRel {
@@ -778,6 +820,9 @@ func isMissingTableByIdForFkCleanup(err error) bool {
 // Drop the old view, and create the new view.
 func (s *Scope) AlterView(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterView()
+	if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
+		return err
+	}
 
 	// The planner has already resolved the (possibly schema-qualified) target
 	// database into the plan. Use it instead of the current database so that
@@ -985,6 +1030,9 @@ func (s *Scope) AlterTableInplace(c *Compile) (err error) {
 
 func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCleanup) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
+	if err := plan2.RequireAlterTableCollationsForAuthoring(c.proc.Ctx, c.proc, qry); err != nil {
+		return err
+	}
 	dbName := qry.Database
 	if dbName == "" {
 		dbName = c.db
@@ -1782,6 +1830,9 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		reqs = append(reqs, api.NewUpdateConstraintReq(did, tid, string(ct)))
 	}
 
+	if err := plan2.RequireAlterTableCollationsForAuthoring(c.proc.Ctx, c.proc, qry); err != nil {
+		return err
+	}
 	err = rel.AlterTable(c.proc.Ctx, newCt, reqs)
 	if err != nil {
 		return err
@@ -1908,6 +1959,9 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateTable()
+	if err := plan2.RequireCreateTableCollationsForAuthoring(c.proc.Ctx, c.proc, qry); err != nil {
+		return err
+	}
 	if !qry.GetTemporary() && createTablePublishesForeignKeys(qry) {
 		if err := c.admitForeignKeyCreate(); err != nil {
 			return err
@@ -2689,6 +2743,7 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 			oldCtx := c.proc.Ctx
 			// CTAS follow-up SQL needs frontend session for temp-table alias resolution.
 			ctxWithSession := attachInternalExecutorSession(c.proc.Ctx, c.proc.GetSession())
+			ctxWithSession = plan2.WithCollationBindingRevision(ctxWithSession, qry.CollationBindingRevision)
 			if helper := c.proc.GetSessionInfo().SqlHelper; helper != nil {
 				if compilerContext, ok := helper.GetCompilerContext().(plan2.CompilerContext); ok {
 					ctxWithSession = attachInternalExecutorCompilerContext(ctxWithSession, compilerContext)
@@ -3092,6 +3147,9 @@ func (s *Scope) CreateView(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateView()
+	if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
+		return err
+	}
 
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -3238,6 +3296,9 @@ func (s *Scope) CreateIndex(c *Compile) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateIndex()
+	if err := plan2.RequireCreateIndexCollationsForAuthoring(c.proc.Ctx, c.proc, qry); err != nil {
+		return err
+	}
 	tempIndexNameMap := map[string]string{}
 	var tempTableSession process.Session
 
@@ -3447,6 +3508,11 @@ func (s *Scope) doCreateIndex(
 	databaseId := dbSource.GetDatabaseId(c.proc.Ctx)
 	tableId := r.GetTableID(c.proc.Ctx)
 	tableDef := r.GetTableDef(c.proc.Ctx)
+	resolvedIndex := *qry
+	resolvedIndex.TableDef = tableDef
+	if err := plan2.RequireCreateIndexCollationsForAuthoring(c.proc.Ctx, c.proc, &resolvedIndex); err != nil {
+		return err
+	}
 	extra := r.GetExtraInfo()
 
 	originalTableDef := plan2.DeepCopyTableDef(qry.TableDef, true)
@@ -3532,6 +3598,9 @@ func (s *Scope) doCreateIndex(
 	}
 	newCt, err := MakeNewCreateConstraint(oldCt, ct.Cts[0])
 	if err != nil {
+		return err
+	}
+	if err := plan2.RequireCreateIndexCollationsForAuthoring(c.proc.Ctx, c.proc, &resolvedIndex); err != nil {
 		return err
 	}
 	err = r.UpdateConstraint(c.proc.Ctx, newCt)
@@ -3641,6 +3710,9 @@ func (s *Scope) DropIndex(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, r.GetTableDef(c.proc.Ctx)); err != nil {
+		return err
+	}
 
 	if !c.disableLock && c.proc.GetTxnOperator().Txn().IsPessimistic() {
 		retained, err := c.proc.GetTxnOperator().Snapshot()
@@ -3706,6 +3778,9 @@ func (s *Scope) DropIndex(c *Compile) error {
 
 	// old tabledef
 	oldTableDef := r.CopyTableDef(c.proc.Ctx)
+	if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, oldTableDef); err != nil {
+		return err
+	}
 	if err := plan2.CheckDropReferencedKeyForeignKeyDependency(c.proc.Ctx, oldTableDef, qry.IndexName, nil,
 		func(id uint64) (*plan.TableDef, error) {
 			_, _, child, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), id)
@@ -3732,6 +3807,9 @@ func (s *Scope) DropIndex(c *Compile) error {
 	}
 	err = DrainIndexCdcTaskConsumer(c, oldTableDef, qry.Database, qry.Table, qry.IndexName)
 	if err != nil {
+		return err
+	}
+	if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, oldTableDef); err != nil {
 		return err
 	}
 	err = r.UpdateConstraint(c.proc.Ctx, newCt)
@@ -4172,6 +4250,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if err != nil {
 		return err
 	}
+	if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, rel.GetTableDef(c.proc.Ctx)); err != nil {
+		return err
+	}
 	oldID := rel.GetTableID(c.proc.Ctx)
 	if plannedID := truncate.GetTableId(); plannedID != 0 && plannedID != oldID {
 		// The visible name can switch between a session temporary table and a
@@ -4301,6 +4382,21 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	// delete from tables => truncate, need keep increment value
 	// Get logicalId from tableDef and pass it when creating the new table
 	tableDef := rel.GetTableDef(c.proc.Ctx)
+	if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, tableDef); err != nil {
+		return err
+	}
+	// SHOW supplies only a skeleton. Keep the complete source types and
+	// already-bound expressions across the synchronous replacement, including
+	// temporary tables whose public alias differs from the catalog name.
+	replayTarget := *tableDef
+	replayTarget.Name = table
+	originalCtx := c.proc.Ctx
+	replayCtx, err := plan2.WithAlterTableDDLReplay(originalCtx, db, tableDef, &replayTarget)
+	if err != nil {
+		return err
+	}
+	c.proc.Ctx = replayCtx
+	defer func() { c.proc.Ctx = originalCtx }()
 	oldLogicalId := tableDef.GetLogicalId()
 	dropOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish().WithIgnoreCheckExperimental()
 	createOpts := executor.StatementOption{}.WithIgnoreForeignKey().WithIgnorePublish().WithIgnoreCheckExperimental()
@@ -4366,6 +4462,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	// A single synchronous owner preserves logical declarations across both
 	// physical operations, including declarations for an absent parent.
 	replace := func() error {
+		if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, tableDef); err != nil {
+			return err
+		}
 		dropSQL := fmt.Sprintf("drop table `%s`.`%s`", db, table)
 		if isTemp {
 			dropSQL = fmt.Sprintf("drop temporary table `%s`.`%s`", db, table)
@@ -4662,6 +4761,11 @@ func (c *Compile) finishTemporaryDropRetry() {
 }
 
 func (s *Scope) DropTable(c *Compile) error {
+	if qry := s.Plan.GetDdl().GetDropTable(); len(qry.GetTables()) == 0 {
+		if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
+			return err
+		}
+	}
 	// Unpublished scalar cleanup uses the same proof as local replacement.
 	// Protected, multi-target and already-certified DROP retain their owners.
 	if _, borrowed := c.proc.Ctx.Value(dropLifecycleKey{}).(*dropLifecycleReceipt); !borrowed && c.isLifecycleRC() {
@@ -4806,6 +4910,11 @@ func (s *Scope) dropTableSingleResolved(
 	if tblName == "" {
 		return nil
 	}
+	// Keep multi-target DROP's ordered ownership: validate each member here,
+	// rather than moving a later member's rejection before earlier temporary effects.
+	if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
+		return err
+	}
 	if temporaryRetire != nil && qry.GetTableDef().GetIsTemporary() && temporaryRetire.contains(dbName, tblName) {
 		if qry.GetIfExists() {
 			return nil
@@ -4889,7 +4998,11 @@ func (s *Scope) dropTableSingleResolved(
 	}
 	if isTemp {
 		if owner, ok := sessionTemporaryDDLOwner(c); ok {
-			indexes := temporaryIndexNames(rel.GetTableDef(c.proc.Ctx))
+			tableDef := rel.GetTableDef(c.proc.Ctx)
+			if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, tableDef); err != nil {
+				return err
+			}
+			indexes := temporaryIndexNames(tableDef)
 			if temporaryRetire != nil {
 				temporaryRetire.add(owner, dbName, originTableName, tblName, indexes)
 			} else {
@@ -4937,6 +5050,11 @@ func (s *Scope) dropTableSingleResolved(
 		}
 	}
 
+	// Admission may have waited on lifecycle locks. Validate the actual catalog
+	// definition and current writer floor before any publication or deletion.
+	if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, droppedTableDef); err != nil {
+		return err
+	}
 	// if dbSource is a pub, update tableList
 	if !c.ignorePublish {
 		if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {
@@ -5383,6 +5501,9 @@ func (s *Scope) TableClone(c *Compile) error {
 	)
 
 	clonePlan := s.Plan.GetDdl().GetCloneTable()
+	if err := plan2.RequireCloneTableCollationsForAuthoring(c.proc.Ctx, c.proc, clonePlan); err != nil {
+		return err
+	}
 
 	if clonePlan.CreateTable != nil {
 		s.Plan = clonePlan.CreateTable
@@ -5425,6 +5546,9 @@ func (s *Scope) TableClone(c *Compile) error {
 //     clone txn) is what avoids the SnapshotTS replay that double-counts the
 //     cloned rows.
 func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
+	if err := plan2.RequireCloneTableCollationsForAuthoring(c.proc.Ctx, c.proc, clonePlan); err != nil {
+		return err
+	}
 	tableDef := clonePlan.GetCreateTable().GetDdl().GetCreateTable().GetTableDef()
 	if tableDef == nil {
 		return s.Run(c)
@@ -5451,6 +5575,9 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		tableDef = dstRelation.GetTableDef(c.proc.Ctx)
 		tblName = physicalName
 	}
+	if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, tableDef); err != nil {
+		return err
+	}
 	logutil.Infof("[RestoreTable] BEGIN %s.%s", dbName, tblName)
 
 	// 1. drop the CDC tasks CreateTable registered, before cloning data.
@@ -5476,6 +5603,9 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 	}
 
 	// 3. clone main table + index hidden tables (append onto empty).
+	if err := plan2.RequireCloneTableCollationsForAuthoring(c.proc.Ctx, c.proc, clonePlan); err != nil {
+		return err
+	}
 	logutil.Infof("[RestoreTable] clone (s.Run): %s.%s", dbName, tblName)
 	if err := s.Run(c); err != nil {
 		return err
@@ -5521,6 +5651,9 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 			startFromNow = false
 		}
 		logutil.Infof("[RestoreTable] re-register CDC index=%s startFromNow=%v initSQL=%q", name, startFromNow, initSQL)
+		if err := plan2.RequireCloneTableCollationsForAuthoring(c.proc.Ctx, c.proc, clonePlan); err != nil {
+			return err
+		}
 		if err := CreateIndexCdcTask(c, dbName, tblName, tableDef.GetTblId(), name,
 			getSinkerTypeFromAlgo(mti.IndexAlgo), startFromNow, initSQL, tableDef); err != nil {
 			return err

@@ -367,14 +367,16 @@ type BaseOptimizer struct {
 }
 
 type ViewData struct {
-	Stmt                string
-	Definition          string `json:"definition,omitempty"`
-	CheckOption         string `json:"check_option,omitempty"`
-	DefaultDatabase     string
-	SQLMode             *string          `json:"sql_mode,omitempty"`
-	SecurityType        string           `json:"security_type,omitempty"`
-	LowerCaseTableNames *int64           `json:"lower_case_table_names,omitempty"`
-	Dependencies        []ViewDependency `json:"dependencies,omitempty"`
+	// 缺失marker的历史SQL始终使用revision 0重绑定；非零代际必须显式获准。
+	CollationBindingRevision uint32 `json:"collation_binding_revision,omitempty"`
+	Stmt                     string
+	Definition               string `json:"definition,omitempty"`
+	CheckOption              string `json:"check_option,omitempty"`
+	DefaultDatabase          string
+	SQLMode                  *string          `json:"sql_mode,omitempty"`
+	SecurityType             string           `json:"security_type,omitempty"`
+	LowerCaseTableNames      *int64           `json:"lower_case_table_names,omitempty"`
+	Dependencies             []ViewDependency `json:"dependencies,omitempty"`
 	// RequiredProtocolVersion records the minimum protocol needed to bind the
 	// persisted view expression on a local CN. It is a defense-in-depth marker;
 	// cluster admission remains the authoritative old-CN re-entry fence.
@@ -947,7 +949,11 @@ type BindContext struct {
 	// expressions immediately after function binding, before a bind-time fold
 	// can erase the function from the persisted plan.
 	persistedExpressionProtocolRequirement *int64
-	ctasExecutionProtocolRequirement       *int64
+	// 记录绑定期真正使用的COLLATE代际，独立于可被fold消去的结果类型。
+	persistedCollationBindingRevision *uint32
+	ctasExecutionProtocolRequirement  *int64
+	// CTAS仅持久化native来源义务；其他临时函数能力由execution捕获器负责。
+	ctasNativeCollationProtocolRequirement *int64
 	// expandedSelectLists records the expanded output for each SELECT clause
 	// participating in a view definition, including UNION branches.
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
@@ -1158,6 +1164,8 @@ type baseBinder struct {
 	// Catalog FORMAT must choose its legacy string contract before binding
 	// precision: some historical source types (e.g. DATE) cannot cast to INT64.
 	persistedFormatCompatibility bool
+	// 绑定期持久化边界不能等到常量折叠后才检查原生域。
+	persistedExpressionBinding bool
 	// Integer consumers own the source domain of their operands. An enclosing
 	// default/assignment target must not pre-convert their numeric literals.
 	integerArgumentSourceContext     bool

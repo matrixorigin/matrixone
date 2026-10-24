@@ -17,22 +17,36 @@ package aggexec
 import (
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func requireLegacyAggregateType(typ types.Type) error {
-	return plan.RequireLegacyCollations(typ.PlanType())
+func requireExecutableAggregateType(typ types.Type) error {
+	return plan.RequireExecutableCollations(typ.PlanType())
 }
 
 // Generic vector codecs preserve structurally valid future metadata. Aggregate
 // state is executable: its inner type must be admitted before decoding can
 // repack, merge, or publish it. The caller retains ownership on either outcome.
 func unmarshalAggregateVector(vec *vector.Vector, reader io.Reader, mp *mpool.MPool) error {
+	expected := *vec.GetType()
 	if err := vec.UnmarshalWithReader(reader, mp); err != nil {
 		return err
 	}
-	return requireLegacyAggregateType(*vec.GetType())
+	actual := *vec.GetType()
+	if err := requireExecutableAggregateType(actual); err != nil {
+		return err
+	}
+	// 聚合参数的声明Type承载协议要求，内部状态不得偷偷更换原生域。
+	if (plan.HasNativePADCollation(expected.PlanType()) || plan.HasNativePADCollation(actual.PlanType())) &&
+		(actual.Oid != expected.Oid || actual.Charset != expected.Charset || actual.CollationVersion != expected.CollationVersion) {
+		return moerr.NewInvalidInputNoCtx("aggregate vector collation differs from declared type")
+	}
+	if plan.HasNativePADCollation(actual.PlanType()) {
+		return vec.ValidateCollationValues()
+	}
+	return nil
 }

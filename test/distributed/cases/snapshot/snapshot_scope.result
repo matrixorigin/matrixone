@@ -49,7 +49,7 @@ t  ¦  CREATE TABLE `t` (
   `id` int NOT NULL,
   `v` varchar(16) DEFAULT NULL,
   PRIMARY KEY (`id`)
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table snapshot_scope_a.other {snapshot = 'snapshot_scope_table'};
 internal error: table-level snapshot(snapshot_scope_table) does not belong to the table(snapshot_scope_a-other)
 show create table snapshot_scope_a.t {snapshot = 'snapshot_scope_database'};
@@ -58,7 +58,7 @@ t  ¦  CREATE TABLE `t` (
   `id` int NOT NULL,
   `v` varchar(16) DEFAULT NULL,
   PRIMARY KEY (`id`)
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table snapshot_scope_b.t {snapshot = 'snapshot_scope_database'};
 internal error: database-level snapshot(snapshot_scope_database) does not belong to the database(snapshot_scope_b)
 show tables from snapshot_scope_a {snapshot = 'snapshot_scope_database'};

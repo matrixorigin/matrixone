@@ -328,6 +328,9 @@ func tableSchemaHashWithOptions(
 	if def == nil {
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
 	}
+	if err := sqlplan.RequireLegacySQLMetadata(ctx, def); err != nil {
+		return "", err
+	}
 	// Catalogs written before TINYTEXT had a durable width marker retain the
 	// subtype only in Createsql. Normalize a planner-owned clone before hashing
 	// so DUMP and LOAD compare the same logical schema without mutating the
@@ -359,7 +362,7 @@ func tableSchemaHashWithOptions(
 		clone.Name = "__table_dump_target__"
 		clone.DbName = ""
 		clone.Createsql = ""
-		canonical, _, err := sqlplan.ConstructCreateTableSQL(nil, &clone, nil, false, nil)
+		canonical, err := sqlplan.ConstructLegacyCreateTableSQL(&clone, false)
 		if err != nil {
 			return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
 		}
@@ -452,12 +455,19 @@ func tableDumpManifestCreateSQL(
 	if def == nil {
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
 	}
+	if err := sqlplan.RequireLegacySQLMetadata(ctx, def); err != nil {
+		return "", err
+	}
 	needsLegacyCollationRebuild := tableDumpHasLegacyTextMetadata(def)
-	needsLegacyBlobRebuild := tableDumpHasLegacyUnboundedBlob(def)
-	if (!sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) && !needsLegacyCollationRebuild && !needsLegacyBlobRebuild) ||
-		!canReconstructTableSchema(def) {
+	if !canReconstructTableSchema(def) {
+		if err := sqlplan.RequireStandaloneLegacySQL(ctx, def.Createsql); err != nil {
+			return "", err
+		}
 		return def.Createsql, nil
 	}
+	// Even modern revision-0 catalogs can retain canonical COLLATE spellings
+	// in Createsql. Reconstruct all eligible tables, not only old text/blob
+	// metadata, so another binder cannot silently author revision 1.
 	clone := sqlplan.CloneTableDefForPlan(def, true)
 	if err := sqlplan.RecoverLegacyTinyText(ctx, clone, resolve); err != nil {
 		return "", moerr.NewInternalErrorNoCtxf("cannot normalize table schema: %v", err)
@@ -476,15 +486,6 @@ func tableDumpManifestCreateSQL(
 		return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
 	}
 	return canonical, nil
-}
-
-func tableDumpHasLegacyUnboundedBlob(def *plan.TableDef) bool {
-	for _, col := range def.Cols {
-		if col != nil && types.T(col.Typ.Id) == types.T_blob && col.Typ.Width == 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func tableDumpHasLegacyTextMetadata(def *plan.TableDef) bool {

@@ -2482,6 +2482,48 @@ func TestCompileFilterExprUnicodeFailsOpen(t *testing.T) {
 	require.False(t, canCompile)
 }
 
+func TestVersionedCollationFiltersFailOpen(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	for _, charset := range []uint8{types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
+		for _, revision := range []uint8{0, 1} {
+			for _, expressionOnly := range []bool{false, true} {
+				typ := types.NewWithCharset(types.T_varchar, 32, 0, charset)
+				table := &plan.TableDef{
+					Name2ColIndex: map[string]int32{"a": 0},
+					Pkey:          &plan.PrimaryKeyDef{Names: []string{"a"}, PkeyColName: "a"},
+					Cols:          []*plan.ColDef{{Name: "a", Typ: typ.PlanType()}},
+				}
+				col := MakeColExprForTest(0, types.T_varchar)
+				value := &plan.Expr{Typ: typ.PlanType(),
+					Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: []byte("a")}}}
+				typ.CollationVersion = revision
+				if expressionOnly {
+					col.Typ, value.Typ = typ.PlanType(), typ.PlanType()
+				} else {
+					table.Cols[0].Typ = typ.PlanType()
+				}
+				expr := MakeFunctionExprForTest("=", []*plan.Expr{col, value})
+				for _, withMap := range []bool{true, false} {
+					if !withMap {
+						table.Name2ColIndex = nil
+					}
+					filter, err := ConstructBasePKFilter(expr, table, mp)
+					require.NoError(t, err)
+					require.Equal(t, revision == 0, filter.Valid)
+					filter.Cleanup()
+				}
+				table.Name2ColIndex = map[string]int32{"a": 0}
+				_, _, _, _, _, canCompile, _ := CompileFilterExpr(expr, table, nil)
+				require.Equal(t, revision == 0, canCompile)
+			}
+		}
+	}
+	bad := types.T_varchar.ToType().PlanType()
+	bad.CollationVersion = 255
+	require.True(t, typeNeedsCollationComparison(bad))
+}
+
 func TestUnmarshalPKInVectorValidatesConstPhysicalValueOnce(t *testing.T) {
 	mp := mpool.MustNew(t.Name())
 	const logicalLength = 1 << 30

@@ -195,12 +195,13 @@ func TestCreateTableInheritsDatabaseDefaults(t *testing.T) {
 		sql                                string
 		want, inherited, revision          uint32
 		read, legacy, readError, badServer bool
+		authoredNative                     bool
 	}{
 		{sql: "create table target.t(v varchar(8))", want: 2, inherited: 2, read: true},
 		{sql: "create table target.t(v varchar(8))", want: 10, inherited: 10, revision: 1, read: true},
 		{sql: "create table target.t(v varchar(8))", want: 2, inherited: 2, read: true, badServer: true},
-		{sql: "create table target.t(v varchar(8) collate utf8mb4_general_ci)", want: 3, inherited: 2, read: true},
-		{sql: "create table target.t(v varchar(8)) collate utf8mb4_general_ci", want: 3},
+		{sql: "create table target.t(v varchar(8) collate utf8mb4_general_ci)", want: 3, inherited: 2, read: true, authoredNative: true},
+		{sql: "create table target.t(v varchar(8)) collate utf8mb4_general_ci", want: 3, authoredNative: true},
 		{sql: "create table target.t(v varchar(8)) character set utf8mb4", want: 3},
 		{sql: "create table target.legacy(v varchar(8))", want: 3, read: true, legacy: true},
 		{sql: "create table target.failure(v varchar(8))", read: true, readError: true},
@@ -208,6 +209,9 @@ func TestCreateTableInheritsDatabaseDefaults(t *testing.T) {
 		t.Run(tc.sql, func(t *testing.T) {
 			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			proc := ctx.GetProcess()
+			if tc.authoredNative {
+				databaseDefaultsProtocol(t, defines.MORPCVersion130)
+			}
 			reads := 0
 			ctx.GetDatabaseIdFunc = func(name string, _ *Snapshot) (uint64, error) { require.Equal(t, "target", name); return 42, nil }
 			ctx.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
@@ -242,6 +246,11 @@ func TestCreateTableInheritsDatabaseDefaults(t *testing.T) {
 				require.NoError(t, err)
 				create := p.GetDdl().GetCreateTable()
 				require.Equal(t, tc.want, create.TableDef.Cols[0].Typ.Charset)
+				wantRevision := tc.revision
+				if tc.authoredNative {
+					wantRevision = 1
+				}
+				require.Equal(t, wantRevision, create.TableDef.Cols[0].Typ.CollationVersion)
 				if tc.read {
 					require.Equal(t, uint64(42), create.DatabaseDefaults.DatabaseId)
 					if tc.legacy {
@@ -268,7 +277,7 @@ func TestDatabaseDefaultsPreserveReplayedTableCollation(t *testing.T) {
 	for _, replay := range []bool{false, true} {
 		t.Run(map[bool]string{false: "show after alter database", true: "like into different database"}[replay], func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
-			def, err := buildTestCreateTableStmt(mock, "create table source(v varchar(8)) collate utf8mb4_general_ci")
+			def, err := buildTestLegacyCreateTableStmt(mock, "create table source(v varchar(8)) collate utf8mb4_general_ci")
 			require.NoError(t, err)
 			proc := mock.ctxt.GetProcess()
 			mock.ctxt.internalSQLExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
@@ -281,7 +290,7 @@ func TestDatabaseDefaultsPreserveReplayedTableCollation(t *testing.T) {
 			sql, stmt, err := ConstructCreateTableSQL(&mock.ctxt, def, nil, replay, nil)
 			require.NoError(t, err)
 			defer stmt.Free()
-			require.Contains(t, sql, "COLLATE=utf8mb4_general_ci")
+			require.Contains(t, sql, "COLLATE=utf8mb4_0900_ai_ci")
 			rebound, err := BuildPlan(&mock.ctxt, stmt, false)
 			require.NoError(t, err)
 			require.Equal(t, uint32(types.CharsetUTF8), rebound.GetDdl().GetCreateTable().TableDef.Cols[0].Typ.Charset)

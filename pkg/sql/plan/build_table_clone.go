@@ -94,6 +94,10 @@ func buildCloneTable(
 			"table %v-%v does not exist", stmt.SrcTable.Schema(), stmt.SrcTable.Name())
 	}
 
+	if err := RequireCatalogCollations(ctx.GetContext(), ctx.GetProcess(), srcTblDef); err != nil {
+		return nil, err
+	}
+
 	var (
 		dstTableName    string
 		dstDatabaseName string
@@ -158,19 +162,24 @@ func buildCloneTable(
 		return nil, err
 	}
 
+	clone := &plan.CloneTable{
+		SrcTableDef:     srcTblDef,
+		SrcObjDef:       srcObj,
+		DstDatabaseName: dstDatabaseName,
+		DstTableName:    dstTableName,
+		CreateTable:     createTablePlan,
+		ScanSnapshot:    bindCtx.snapshot,
+	}
+	if err := RequireCloneTableCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), clone); err != nil {
+		return nil, err
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
 				DdlType: plan.DataDefinition_CREATE_TABLE_WITH_CLONE,
 				Definition: &plan.DataDefinition_CloneTable{
-					CloneTable: &plan.CloneTable{
-						SrcTableDef:     srcTblDef,
-						SrcObjDef:       srcObj,
-						DstDatabaseName: dstDatabaseName,
-						DstTableName:    dstTableName,
-						CreateTable:     createTablePlan,
-						ScanSnapshot:    bindCtx.snapshot,
-					},
+					CloneTable: clone,
 				},
 			},
 		},

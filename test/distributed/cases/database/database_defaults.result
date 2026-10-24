@@ -29,10 +29,10 @@ show create database defaults_b;
 ➤ Database[12,5000,0]  ¦  Create Database[12,70,0]  𝄀
 defaults_b  ¦  CREATE DATABASE `defaults_b` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
 show create table defaults_b.binary_values;
-➤ Table[12,13,0]  ¦  Create Table[12,102,0]  𝄀
+➤ Table[12,13,0]  ¦  Create Table[12,98,0]  𝄀
 binary_values  ¦  CREATE TABLE `binary_values` (
-  `v` varchar(8) COLLATE utf8mb4_bin DEFAULT NULL
-) COLLATE=utf8mb4_bin
+  `v` varchar(8) COLLATE utf32_bin DEFAULT NULL
+) COLLATE=utf32_bin
 select @@collation_database, @@collation_server;
 ➤ @@collation_database[-1,16383,0]  ¦  @@collation_server[-1,16383,0]  𝄀
 utf8mb4_general_ci  ¦  utf8mb4_general_ci

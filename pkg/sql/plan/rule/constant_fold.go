@@ -205,7 +205,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 			}
 
 			return &plan.Expr{
-				Typ: expr.Typ,
+				Typ: FoldedVectorType(expr.Typ, vec),
 				Expr: &plan.Expr_Vec{
 					Vec: &plan.LiteralVec{
 						Len:                       int32(vec.Length()),
@@ -311,7 +311,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 		}
 
 		return &plan.Expr{
-			Typ: expr.Typ,
+			Typ: FoldedVectorType(expr.Typ, vec),
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
 					Len:                       int32(vec.Length()),
@@ -588,6 +588,18 @@ func CanMaterializeConstantVector(expr *plan.Expr) bool {
 		return nil
 	})
 	return !requiresSource
+}
+
+// FoldedVectorType 保持新原生opaque list的实际域在外层可见。
+// 仅替换tuple声明；已声明的标量Type必须保留显式coercibility等信息，
+// 也不能通过改写声明掩盖执行器产生的域不匹配。
+func FoldedVectorType(declared plan.Type, vec *vector.Vector) plan.Type {
+	actual := vec.GetType().PlanType()
+	if declared.Id == int32(types.T_tuple) && plan.HasNativePADCollation(actual) {
+		actual.NotNullable = declared.NotNullable
+		return actual
+	}
+	return declared
 }
 
 // IsScalarConstantVector distinguishes a broadcast scalar from a literal list.

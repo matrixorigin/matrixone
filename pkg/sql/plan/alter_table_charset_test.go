@@ -63,6 +63,8 @@ func TestAlterTableCharsetContract(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			// This matrix describes historical domains at protocol 118, including UCA400.
+			mock.ctxt.SetContext(WithCollationBindingRevision(mock.ctxt.GetContext(), 0))
 			sourceSQL := tc.source
 			if sourceSQL == "" {
 				sourceSQL = "create table charset_target(v varchar(8)) collate=utf8mb4_bin"
@@ -126,6 +128,7 @@ func TestAlterCopyCollationInvalidatesDedupProof(t *testing.T) {
 func TestAlterTableDefaultPreservesNativeUniqueSchemaMarker(t *testing.T) {
 	databaseDefaultsProtocol(t, defines.MORPCVersion118)
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	ctx.SetContext(WithCollationBindingRevision(ctx.GetContext(), 0))
 	table := &plan.TableDef{
 		DefaultCharset: uint32(collation.UTF8MB4UnicodeCIIdentity), CollationVersion: uint32(collation.RevisionV1), KeyFormat: collation.KeyFormatV1,
 		Cols:    []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_varchar), Width: 8, Charset: uint32(collation.UTF8MB4UnicodeCIIdentity), CollationVersion: uint32(collation.RevisionV1)}}},

@@ -226,6 +226,9 @@ func (interpreter *Interpreter) ExecuteStarlark(spBody string, dbName string, bg
 		}
 	}
 
+	// SQL issued by an unversioned stored body keeps its historical binding.
+	// Enter only after evaluating CALL arguments in the caller's context.
+	interpreter.ctx = plan.WithCollationBindingRevision(interpreter.ctx, 0)
 	interpreter.setAffectedRows(interpreter.initialAffectedRows)
 	globals, err := starlark.ExecFileOptions(
 		&syntax.FileOptions{

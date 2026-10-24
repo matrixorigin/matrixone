@@ -6,6 +6,30 @@ DROP DATABASE IF EXISTS collation_expression_test;
 CREATE DATABASE collation_expression_test;
 USE collation_expression_test;
 
+-- 普通公开请求激活显式general-ci/bin；隐式、binary与既有legacy别名不升级。
+SELECT 'A' COLLATE utf8mb4_general_ci = 'a' AS ci_case,
+       'café' COLLATE utf8mb4_general_ci = 'cafe' AS ci_accent,
+       'a ' COLLATE utf8mb4_general_ci = 'a' AS ci_pad,
+       'A' COLLATE utf8mb4_bin = 'a' AS bin_case,
+       'a ' COLLATE utf8mb4_bin = 'a' AS bin_pad,
+       _binary'a ' = _binary'a' AS binary_pad,
+       'A' COLLATE utf8mb4_0900_ai_ci = 'a' AS legacy_alias,
+       'A' = 'a' AS implicit_case;
+-- utf8/utf8mb3仍映射到有效utf8mb4域，不引入严格三字节限制。
+SELECT 'Á ' COLLATE utf8_general_ci = 'a' AS utf8_ci,
+       'Á ' COLLATE utf8mb3_general_ci = 'a' AS utf8mb3_ci,
+       '😀a ' COLLATE utf8_bin = '😀a' AS utf8_bin_pad,
+       '😀a ' COLLATE utf8mb3_bin = '😀a' AS utf8mb3_bin_pad;
+SELECT 'Á ' COLLATE utf8mb4_general_ci IN ('a', 'z') AS ci_in,
+       'Á ' COLLATE utf8mb4_general_ci BETWEEN 'a' AND 'b' AS ci_between,
+       LEAST('a' COLLATE utf8mb4_general_ci, 'B') AS ci_least,
+       GREATEST('a' COLLATE utf8mb4_general_ci, 'B') AS ci_greatest;
+-- CHAR CAST未指定目标COLLATE时仍使用既有隐式域；外层显式COLLATE重新选择native。
+SELECT COALESCE(NULL, 'Á ' COLLATE utf8mb4_general_ci) = 'a' AS ci_coalesce,
+       CASE WHEN TRUE THEN 'Á ' COLLATE utf8mb4_general_ci ELSE CAST('bad' AS SIGNED) END = 'a' AS ci_case_branch,
+       CAST('A ' COLLATE utf8mb4_general_ci AS CHAR(8)) = 'a' AS implicit_cast,
+       CAST('A ' COLLATE utf8mb4_general_ci AS CHAR(8)) COLLATE utf8mb4_general_ci = 'a' AS ci_cast;
+
 -- Explicit native comparison overrides weaker text operands in either order.
 SELECT 'Á' COLLATE utf8mb4_unicode_ci = 'a',
        'a' = 'Á' COLLATE utf8mb4_unicode_ci,

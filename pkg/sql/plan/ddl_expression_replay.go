@@ -33,9 +33,11 @@ type persistedDDLReplayKey struct{}
 // still bind from SQL; character-only changes adapt affected typed nodes without
 // re-authoring unaffected computation using the current session.
 type persistedDDLReplay struct {
-	tableName string
-	columns   map[string]*replayedColumnExpressions
-	checks    map[string]*planpb.CheckDef
+	tableName                       string
+	columns                         map[string]*replayedColumnExpressions
+	columnTypes                     map[string]planpb.Type
+	defaultCharset, defaultRevision uint32
+	checks                          map[string]*planpb.CheckDef
 	// Inverse of the visible CREATE coordinates, used by in-place MODIFY.
 	rawPositions map[int32]int32
 	err          error
@@ -105,10 +107,13 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		return ctx
 	}
 	replay := &persistedDDLReplay{
-		tableName:    strings.ToLower(target.Name),
-		columns:      make(map[string]*replayedColumnExpressions),
-		checks:       make(map[string]*planpb.CheckDef),
-		rawPositions: make(map[int32]int32),
+		tableName:       strings.ToLower(target.Name),
+		columns:         make(map[string]*replayedColumnExpressions),
+		columnTypes:     make(map[string]planpb.Type),
+		defaultCharset:  target.DefaultCharset,
+		defaultRevision: tableColumnCollationRevision(target),
+		checks:          make(map[string]*planpb.CheckDef),
+		rawPositions:    make(map[int32]int32),
 	}
 	targetByID := make(map[uint64]*planpb.ColDef, len(target.Cols))
 	targetRawPosByID := make(map[uint64]int32, len(target.Cols))
@@ -124,6 +129,7 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 			(targetIsCluster && util.IsClusterTableAttribute(col.GetOriginCaseName())) {
 			continue
 		}
+		replay.columnTypes[strings.ToLower(col.Name)] = col.Typ
 		replay.rawPositions[visiblePos] = int32(i)
 		targetByID[col.ColId] = col
 		targetRawPosByID[col.ColId] = int32(i)

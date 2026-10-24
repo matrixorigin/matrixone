@@ -38,7 +38,7 @@ show create table test_snapshot_read {snapshot = 'snapshot_01'};
 ➤ Table[12,18,0]  ¦  Create Table[12,87,0]  𝄀
 test_snapshot_read  ¦  CREATE TABLE `test_snapshot_read` (
   `a` int DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table test_snapshot_read_view {snapshot = 'snapshot_01'};
 ➤ View[12,23,0]  ¦  Create View[12,105,0]  ¦  character_set_client[12,7,0]  ¦  collation_connection[12,18,0]  𝄀
 test_snapshot_read_view  ¦  create view `test_snapshot_read_view` as select `test_snapshot_read`.`a` as `a` from `test_snapshot_read`  ¦  utf8mb4  ¦  utf8mb4_general_ci
@@ -87,7 +87,7 @@ show create table test_snapshot_read {snapshot = 'snapshot_01'};
 ➤ Table[12,18,0]  ¦  Create Table[12,87,0]  𝄀
 test_snapshot_read  ¦  CREATE TABLE `test_snapshot_read` (
   `a` int DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table test_snapshot_read_view {snapshot = 'snapshot_01'};
 ➤ View[12,23,0]  ¦  Create View[12,105,0]  ¦  character_set_client[12,7,0]  ¦  collation_connection[12,18,0]  𝄀
 test_snapshot_read_view  ¦  create view `test_snapshot_read_view` as select `test_snapshot_read`.`a` as `a` from `test_snapshot_read`  ¦  utf8mb4  ¦  utf8mb4_general_ci
@@ -103,7 +103,7 @@ show create table snapshot_read.test_snapshot_read {snapshot = 'snapshot_01'};
 ➤ Table[12,18,0]  ¦  Create Table[12,87,0]  𝄀
 test_snapshot_read  ¦  CREATE TABLE `test_snapshot_read` (
   `a` int DEFAULT NULL
-) COLLATE=utf8mb4_general_ci
+) COLLATE=utf8mb4_0900_ai_ci
 show create table snapshot_read.test_snapshot_read_view {snapshot = 'snapshot_01'};
 ➤ View[12,23,0]  ¦  Create View[12,105,0]  ¦  character_set_client[12,7,0]  ¦  collation_connection[12,18,0]  𝄀
 test_snapshot_read_view  ¦  create view `test_snapshot_read_view` as select `test_snapshot_read`.`a` as `a` from `test_snapshot_read`  ¦  utf8mb4  ¦  utf8mb4_general_ci

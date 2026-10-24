@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -1235,6 +1236,24 @@ func (receiver *messageReceiverOnServer) sendBatch(
 	if runtime := moruntime.ServiceRuntime(service); runtime != nil {
 		if value, ok := runtime.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
 			version, _ = value.(int64)
+		}
+	}
+	// 类型准入与原生域协议检查都先于编码、batch credit和发送副作用。
+	for _, vec := range b.Vecs {
+		if vec == nil {
+			continue
+		}
+		typ := vec.GetType().PlanType()
+		if err := plan.RequireExecutableCollations(typ); err != nil {
+			return err
+		}
+		if plan.HasNativePADCollation(typ) {
+			if version < defines.MORPCVersion130 {
+				return moerr.NewNotSupportedNoCtx("native PAD collation requires MORPC protocol version 130 for remote results")
+			}
+			if err := vec.ValidateCollationValues(); err != nil {
+				return err
+			}
 		}
 	}
 	if b.HasGrouping() && version < defines.MORPCVersion87 {

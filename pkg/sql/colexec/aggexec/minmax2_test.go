@@ -414,6 +414,43 @@ func TestFixedMinMaxPreservesAndMergesStringSources(t *testing.T) {
 	}
 }
 
+func TestMinMaxVersionedCollation(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetUTF8, types.CharsetUTF8MB4Bin, types.CharsetUTF8MB4UnicodeCI} {
+		for _, oid := range []types.T{types.T_char, types.T_varchar, types.T_text, types.T_blob} {
+			for _, isMin := range []bool{true, false} {
+				func() {
+					mp := mpool.MustNewZero()
+					defer func() { require.Zero(t, mp.CurrNB()) }()
+					typ := types.NewWithCharset(oid, 16, 0, charset)
+					typ.CollationVersion = 1
+					vec := vector.NewVec(typ)
+					defer vec.Free(mp)
+					values, minimum, maximum := []string{"", "\x00"}, "\x00", ""
+					if charset == types.CharsetUTF8MB4UnicodeCI {
+						values, minimum, maximum = []string{"a", "B"}, "a", "B"
+					}
+					require.NoError(t, vector.AppendStringList(vec, values, nil, mp))
+					id, want := AggIdOfMin, minimum
+					if !isMin {
+						id, want = AggIdOfMax, maximum
+					}
+					agg := makeMinMaxExec(mp, id, isMin, typ)
+					defer agg.Free()
+					require.NoError(t, agg.GroupGrow(1))
+					require.NoError(t, agg.BulkFill(0, []*vector.Vector{vec}))
+					results, err := agg.Flush()
+					require.NoError(t, err)
+					for _, result := range results {
+						defer result.Free(mp)
+					}
+					require.Len(t, results, 1)
+					require.Equal(t, want, string(results[0].GetBytesAt(0)), "oid=%v charset=%d min=%t", oid, charset, isMin)
+				}()
+			}
+		}
+	}
+}
+
 func TestTextMinMaxUsesGeneralCICollation(t *testing.T) {
 	values := []string{"a", "b", "c", "E", "C", "D"}
 	testCases := []struct {

@@ -60,6 +60,82 @@ func TestCollationMetadataWireAndAdmission(t *testing.T) {
 	require.True(t, legacy.SameCollation(legacy))
 }
 
+func TestExecutableCollationAdmissionRetainsLegacyFence(t *testing.T) {
+	for _, id := range []int32{planCharTypeID, planVarcharTypeID, planTextTypeID, planBlobTypeID} {
+		for _, charset := range []uint32{2, 3} {
+			native := Type{Id: id, Charset: charset, CollationVersion: 1}
+			require.True(t, HasNativePADCollation(native))
+			for _, owner := range []any{native, &native, &Expr{Typ: native}, Expr{Typ: native},
+				&Query{Nodes: []*Node{{TableDef: &TableDef{Cols: []*ColDef{{Typ: native}}}}}},
+				struct{ Types []Type }{[]Type{native}}} {
+				require.NoError(t, RequireExecutableCollations(owner), "%T", owner)
+				features, err := RequiredExecutableRemoteExpressionFeatures(owner)
+				require.NoError(t, err)
+				require.True(t, features.NativePADCollation)
+				require.Error(t, RequireLegacyCollations(owner), "%T必须继续被legacy准入拒绝", owner)
+			}
+			native.CollationCoercibilitySet = true
+			native.CollationCoercibility = 7
+			require.Error(t, RequireExecutableCollations(native))
+		}
+	}
+	for _, typ := range []Type{{Id: 61, Charset: 3}, {Id: 61, Charset: 2},
+		{Id: 61, Charset: 10, CollationVersion: 1}, {Id: 64, Charset: 1}, {Id: 23, Charset: 255}} {
+		require.False(t, HasNativePADCollation(typ))
+		require.NoError(t, RequireExecutableCollations(typ))
+	}
+	for _, typ := range []Type{{Id: 61, Charset: 4, CollationVersion: 1},
+		{Id: 61, Charset: 3, CollationVersion: 2}, {Id: 23, Charset: 3, CollationVersion: 1},
+		{Id: 64, Charset: 3, CollationVersion: 1}} {
+		require.Error(t, RequireExecutableCollations(typ))
+		_, err := RequiredExecutableRemoteExpressionFeatures(typ)
+		require.Error(t, err)
+	}
+	// C的schema形状可传输，但legacy入口和未授权物理格式仍关闭。
+	table := &TableDef{DefaultCharset: 3, CollationVersion: 1}
+	require.NoError(t, RequireExecutableCollations(table))
+	require.Error(t, RequireLegacyCollations(table))
+	require.Error(t, RequireExecutableCollations(&IndexDef{KeyFormat: 1}))
+	require.NoError(t, RequireExecutableCollations((*Plan)(nil)))
+}
+
+func TestNativePADFeaturesTraverseCompleteOwners(t *testing.T) {
+	native := Type{Id: planVarcharTypeID, Charset: 3, CollationVersion: 1}
+	fn := &Expr{Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(internalTableCollationFunctionID) << 32}}}}
+	cycle := &Expr{Typ: native}
+	cycle.Expr = &Expr_List{List: &ExprList{List: []*Expr{cycle, fn}}}
+	type foreignOwner struct {
+		Next    *foreignOwner
+		Types   []Type
+		Expr    Expr
+		Payload []byte
+	}
+	foreign := &foreignOwner{Types: []Type{native}, Expr: *fn, Payload: make([]byte, 1<<20)}
+	foreign.Next = foreign
+	for _, owner := range []any{native, &native, Expr{Typ: native}, []Type{native}, map[string]Type{"v": native},
+		&RuntimeFilterSpec{ProbeType: &native},
+		&Query{Nodes: []*Node{{TableDef: &TableDef{Cols: []*ColDef{{Typ: native}}}}}},
+		&TableDef{DefaultCharset: 3, CollationVersion: 1},
+		struct{ Values [1]Type }{[1]Type{native}}, foreign, cycle} {
+		features, err := RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err, "%T", owner)
+		require.True(t, features.NativePADCollation, "%T", owner)
+		require.True(t, features.Any())
+	}
+	for _, owner := range []any{foreign, cycle, *fn} {
+		features, err := RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		require.True(t, features.TableCollationFunction, "同一次遍历保留既有函数特性检测")
+	}
+	for _, owner := range []any{nil, (*Expr)(nil), Type{Id: 61, Charset: 3},
+		Type{Id: 61, Charset: 10, CollationVersion: 1}, Type{Id: 64, Charset: 1},
+		foreign.Payload, []uint64{2, 3}, [2]uint32{1, 3}, map[string]uint32{"Charset": 3, "CollationVersion": 1}} {
+		features, err := RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		require.False(t, features.NativePADCollation)
+	}
+}
+
 func TestCollationMetadataUnknownValuesFailClosed(t *testing.T) {
 	for _, typ := range []Type{
 		{Id: 61, Charset: 259}, {Id: 61, Charset: 255}, {Id: 61, Charset: 4},

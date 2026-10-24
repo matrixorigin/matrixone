@@ -800,7 +800,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			continue
 		}
 
-		bat, err = decodeBatch(sender.mp, dataBuffer)
+		bat, err = decodeBatch(sender.mp, dataBuffer, sender.proc)
 		/* 		bat := batch.NewOffHeapEmpty()
 		   		if err := bat.UnmarshalBinary(dataBuffer); err != nil {
 		   			bat.Clean(sender.mp)

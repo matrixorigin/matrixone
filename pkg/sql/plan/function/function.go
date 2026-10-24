@@ -426,8 +426,11 @@ func CanUseZoneMapComparison(overloadID int64, args []*plan.Expr) bool {
 	// Keep the admission owner conservative until the persisted summary domain
 	// carries the same collation identity and probe encoding.
 	for _, arg := range args {
-		if arg != nil && types.IsUnicodeCollation(uint8(arg.Typ.Charset)) {
-			return false
+		if arg != nil {
+			typ, err := types.TypeFromPlan(arg.Typ)
+			if err != nil || types.HasCollationKey(typ) {
+				return false
+			}
 		}
 	}
 	switch fid {
@@ -443,7 +446,11 @@ func CanUseZoneMapComparison(overloadID int64, args []*plan.Expr) bool {
 				return false
 			}
 			for _, item := range tuple.List.List {
-				if item == nil || types.T(item.Typ.Id) == types.T_char || types.IsUnicodeCollation(uint8(item.Typ.Charset)) {
+				if item == nil || types.T(item.Typ.Id) == types.T_char {
+					return false
+				}
+				typ, err := types.TypeFromPlan(item.Typ)
+				if err != nil || types.HasCollationKey(typ) {
 					return false
 				}
 			}

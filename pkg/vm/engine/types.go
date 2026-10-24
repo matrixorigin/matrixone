@@ -161,7 +161,7 @@ func PlanDefToCstrDef(tableDef *plan.TableDef) *ConstraintDef {
 }
 
 var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaExtra, error) {
-	if err := plan.RequireLegacyCollations(tableDef); err != nil {
+	if err := plan.RequirePersistedCollations(tableDef); err != nil {
 		return nil, nil, err
 	}
 	planDefs := tableDef.GetDefs()

@@ -13,30 +13,30 @@ col4 bool
 set time_zone = 'SYSTEM';
 load data infile '$resources/load_data/time_date_1.csv' into table t1 fields terminated by ',';
 select * from t1;
-➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[-7,1,0]  𝄀
+➤ col1[91,10,0]  ¦  col2[93,19,0]  ¦  col3[93,19,0]  ¦  col4[-7,1,0]  𝄀
 1000-01-01  ¦  0001-01-01 00:00:00  ¦  1970-01-02 00:00:01  ¦  0  𝄀
 9999-12-31  ¦  9999-12-31 00:00:00  ¦  2038-01-19 00:00:00  ¦  1
 drop stage if exists stage01;
 create stage stage01 url = 'file:///$resources/into_outfile';
 drop stage if exists substage01;
 create stage substage01 url = 'stage://stage01/stage/';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20025  ¦  stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:49  ¦    𝄀
-20026  ¦  substage01  ¦  stage://stage01/stage/  ¦    ¦  in_use  ¦  2026-07-27 03:38:49  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+10001  ¦  stage01  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:48  ¦    𝄀
+10002  ¦  substage01  ¦  stage://stage01/stage/  ¦    ¦  in_use  ¦  2026-10-23 07:18:48  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
+stage01  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦  in_use  ¦    𝄀
 substage01  ¦  stage://stage01/stage/  ¦  in_use  ¦  
 select * from t1 into outfile 'stage://substage01/local_stage_t01.csv';
 truncate t1;
 load data infile 'stage://substage01/local_stage_t01.csv' into table t1 fields terminated by ',' ignore 1 lines;
 select * from t1;
-➤ col1[91,64,0]  ¦  col2[93,64,0]  ¦  col3[93,64,0]  ¦  col4[-7,1,0]  𝄀
+➤ col1[91,10,0]  ¦  col2[93,19,0]  ¦  col3[93,19,0]  ¦  col4[-7,1,0]  𝄀
 1000-01-01  ¦  0001-01-01 00:00:00  ¦  1970-01-02 00:00:01  ¦  0  𝄀
 9999-12-31  ¦  9999-12-31 00:00:00  ¦  2038-01-19 00:00:00  ¦  1
 show create table t1;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,2,0]  ¦  Create Table[12,145,0]  𝄀
 t1  ¦  CREATE TABLE `t1` (
   `col1` date NOT NULL,
   `col2` datetime DEFAULT NULL,
@@ -55,28 +55,28 @@ col4 decimal(20,5)
 );
 load data infile '$resources/load_data/float_1.csv' into table t2 fields terminated by ',';
 select * from t2;
-➤ col1[7,24,0]  ¦  col2[8,54,0]  ¦  col3[3,5,2]  ¦  col4[3,20,5]  𝄀
+➤ col1[7,23,31]  ¦  col2[8,53,31]  ¦  col3[3,5,2]  ¦  col4[3,20,5]  𝄀
 1.3  ¦  1.3  ¦  1.30  ¦  1.30000
 drop stage if exists stage02;
 create stage stage02 url = 'file:///$resources/into_outfile';
 drop stage if exists substage02;
 create stage substage02 url = 'stage://stage02/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20027  ¦  stage02  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:49  ¦    𝄀
-20028  ¦  substage02  ¦  stage://stage02/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:49  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+10003  ¦  stage02  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:49  ¦    𝄀
+10004  ¦  substage02  ¦  stage://stage02/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:49  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-stage02  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
+stage02  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦  in_use  ¦    𝄀
 substage02  ¦  stage://stage02/stage  ¦  in_use  ¦  
 select * from t2 into outfile 'stage://substage02/local_stage_t02.csv';
 truncate t2;
 load data infile 'stage://substage02/local_stage_t02.csv' into table t2 fields terminated by ',' ignore 1 lines;
 select * from t2;
-➤ col1[7,24,0]  ¦  col2[8,54,0]  ¦  col3[3,5,2]  ¦  col4[3,20,5]  𝄀
+➤ col1[7,23,31]  ¦  col2[8,53,31]  ¦  col3[3,5,2]  ¦  col4[3,20,5]  𝄀
 1.3  ¦  1.3  ¦  1.30  ¦  1.30000
 show create table t2;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,2,0]  ¦  Create Table[12,152,0]  𝄀
 t2  ¦  CREATE TABLE `t2` (
   `col1` float DEFAULT NULL,
   `col2` double DEFAULT NULL,
@@ -95,7 +95,7 @@ col4 varchar(225)
 );
 load data infile '$resources/load_data/char_varchar_1.csv' into table t3 fields terminated by ',';
 select * from t3;
-➤ col1[1,225,0]  ¦  col2[12,-1,0]  ¦  col3[12,0,0]  ¦  col4[12,-1,0]  𝄀
+➤ col1[1,225,0]  ¦  col2[12,225,0]  ¦  col3[-1,16383,0]  ¦  col4[12,225,0]  𝄀
 a  ¦  b  ¦  c  ¦  d  𝄀
 a  ¦  b  ¦  c  ¦  d  𝄀
 'a'  ¦  'b'  ¦  'c'  ¦  'd'  𝄀
@@ -121,19 +121,19 @@ drop stage if exists stage03;
 create stage stage03 url = 'file:///$resources/into_outfile';
 drop stage if exists substage03;
 create stage substage03 url = 'stage://stage03/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20029  ¦  stage03  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦    𝄀
-20030  ¦  substage03  ¦  stage://stage03/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+10005  ¦  stage03  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:49  ¦    𝄀
+10006  ¦  substage03  ¦  stage://stage03/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:49  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-stage03  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
+stage03  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦  in_use  ¦    𝄀
 substage03  ¦  stage://stage03/stage  ¦  in_use  ¦  
 select * from t3 into outfile 'stage://substage03/local_stage_t03.csv';
 delete from t3;
 load data infile 'stage://substage03/local_stage_t03.csv' into table t3 fields terminated by ',' ignore 1 lines;
 select * from t3;
-➤ col1[1,225,0]  ¦  col2[12,-1,0]  ¦  col3[12,0,0]  ¦  col4[12,-1,0]  𝄀
+➤ col1[1,225,0]  ¦  col2[12,225,0]  ¦  col3[-1,16383,0]  ¦  col4[12,225,0]  𝄀
 a  ¦  b  ¦  c  ¦  d  𝄀
 a  ¦  b  ¦  c  ¦  d  𝄀
 'a'  ¦  'b'  ¦  'c'  ¦  'd'  𝄀
@@ -156,7 +156,7 @@ null  ¦  null  ¦  null  ¦  null  𝄀
 "  ¦  "  ¦  "  ¦  "  𝄀
 ""  ¦  ""  ¦  ""  ¦  ""
 show create table t3;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,2,0]  ¦  Create Table[12,152,0]  𝄀
 t3  ¦  CREATE TABLE `t3` (
   `col1` char(225) DEFAULT 'a',
   `col2` varchar(225) DEFAULT NULL,
@@ -191,13 +191,13 @@ drop stage if exists stage04;
 create stage stage04 url = 'file:///$resources/into_outfile';
 drop stage if exists substage04;
 create stage substage04 url = 'stage://stage04/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20031  ¦  stage04  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦    𝄀
-20032  ¦  substage04  ¦  stage://stage04/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+10007  ¦  stage04  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:49  ¦    𝄀
+10008  ¦  substage04  ¦  stage://stage04/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:49  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-stage04  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
+stage04  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦  in_use  ¦    𝄀
 substage04  ¦  stage://stage04/stage  ¦  in_use  ¦  
 select * from t4 into outfile 'stage://substage04/local_stage_t04.csv';
 delete from t4;
@@ -212,7 +212,7 @@ null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
 null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
 127  ¦  32767  ¦  2147483647  ¦  9223372036854775807  ¦  255  ¦  65535  ¦  4294967295  ¦  18446744073709551615
 show create table t4;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,2,0]  ¦  Create Table[12,296,0]  𝄀
 t4  ¦  CREATE TABLE `t4` (
   `col1` tinyint DEFAULT NULL,
   `col2` smallint DEFAULT NULL,
@@ -244,13 +244,13 @@ drop stage if exists stage05;
 create stage stage05 url = 'file:///$resources/into_outfile';
 drop stage if exists substage05;
 create stage substage05 url = 'stage://stage05/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20033  ¦  stage05  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦    𝄀
-20034  ¦  substage05  ¦  stage://stage05/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+10009  ¦  stage05  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:49  ¦    𝄀
+10010  ¦  substage05  ¦  stage://stage05/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:49  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-stage05  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
+stage05  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦  in_use  ¦    𝄀
 substage05  ¦  stage://stage05/stage  ¦  in_use  ¦  
 select * from t5 into outfile 'stage://substage05/local_stage_t05.csv';
 truncate t5;
@@ -265,7 +265,7 @@ select * from t5;
 4  ¦  4  ¦  4  𝄀
 5  ¦  5  ¦  5
 show create table t5;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,2,0]  ¦  Create Table[12,136,0]  𝄀
 t5  ¦  CREATE TABLE `t5` (
   `col1` int NOT NULL AUTO_INCREMENT,
   `col2` int DEFAULT NULL,
@@ -279,29 +279,29 @@ drop table if exists t6;
 create table t6 (col1 varchar(20), col2 varchar(20));
 load data infile '$resources/load_data/test_enclosed_by01.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n';
 select * from t6;
-➤ col1[12,-1,0]  ¦  col2[12,-1,0]  𝄀
+➤ col1[12,20,0]  ¦  col2[12,20,0]  𝄀
 "Hello""  ¦  "Hi"  𝄀
 "database"  ¦  ""db"
 drop stage if exists stage06;
 create stage stage06 url = 'file:///$resources/into_outfile';
 drop stage if exists substage06;
 create stage substage06 url = 'stage://stage06/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20035  ¦  stage06  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦    𝄀
-20036  ¦  substage06  ¦  stage://stage06/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+10011  ¦  stage06  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:49  ¦    𝄀
+10012  ¦  substage06  ¦  stage://stage06/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:49  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-stage06  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
+stage06  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦  in_use  ¦    𝄀
 substage06  ¦  stage://stage06/stage  ¦  in_use  ¦  
 select * from t6 into outfile 'stage://substage06/local_stage_t06.csv' fields terminated by ',' enclosed by '' lines terminated by '\n' header 'false';
 truncate t6;
 load data infile 'stage://substage06/local_stage_t06.csv' into table t6 fields terminated by ',' enclosed by '`' lines terminated by '\n' ignore 1 lines;
 select * from t6;
-➤ col1[12,-1,0]  ¦  col2[12,-1,0]  𝄀
+➤ col1[12,20,0]  ¦  col2[12,20,0]  𝄀
 "database"  ¦  ""db"
 show create table t6;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,2,0]  ¦  Create Table[12,90,0]  𝄀
 t6  ¦  CREATE TABLE `t6` (
   `col1` varchar(20) DEFAULT NULL,
   `col2` varchar(20) DEFAULT NULL
@@ -313,30 +313,30 @@ drop table if exists t7;
 create table t7(col1 text, col2 text);
 load data infile {'filepath'='$resources/load_data/text.csv.tar.gz', 'compression'='tar.gz'} into table t7 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
 select * from t7;
-➤ col1[12,0,0]  ¦  col2[12,0,0]  𝄀
+➤ col1[-1,16383,0]  ¦  col2[-1,16383,0]  𝄀
 hello  ¦  1  𝄀
 hello  ¦  2
 drop stage if exists stage07;
 create stage stage07 url = 'file:///$resources/into_outfile';
 drop stage if exists substage07;
 create stage substage07 url = 'stage://stage07/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20037  ¦  stage07  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦    𝄀
-20038  ¦  substage07  ¦  stage://stage07/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+10013  ¦  stage07  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:49  ¦    𝄀
+10014  ¦  substage07  ¦  stage://stage07/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:49  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-stage07  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦    𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
+stage07  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦  in_use  ¦    𝄀
 substage07  ¦  stage://stage07/stage  ¦  in_use  ¦  
 select * from t7 into outfile 'stage://substage07/local_stage_t07.csv';
 truncate t7;
 load data infile 'stage://substage07/local_stage_t07.csv' into table t7 FIELDS ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' ignore 1 lines parallel 'true';
 select * from t7;
-➤ col1[12,0,0]  ¦  col2[12,0,0]  𝄀
+➤ col1[-1,16383,0]  ¦  col2[-1,16383,0]  𝄀
 hello  ¦  1  𝄀
 hello  ¦  2
 show create table t7;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,2,0]  ¦  Create Table[12,76,0]  𝄀
 t7  ¦  CREATE TABLE `t7` (
   `col1` text DEFAULT NULL,
   `col2` text DEFAULT NULL
@@ -348,30 +348,30 @@ drop table if exists t8;
 create table t8(col1 text, col2 text);
 load data infile {'filepath'='$resources/load_data/text.csv.tar.gz', 'compression'='tar.gz'} into table t8 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
 select * from t8;
-➤ col1[12,0,0]  ¦  col2[12,0,0]  𝄀
+➤ col1[-1,16383,0]  ¦  col2[-1,16383,0]  𝄀
 hello  ¦  1  𝄀
 hello  ¦  2
 drop stage if exists stage08;
 create stage stage08 url = 'file:///$resources/into_outfile' comment = 'this is a stage';
 drop stage if exists substage08;
 create stage substage08 url = 'stage://stage08/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20039  ¦  stage08  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦  this is a stage  𝄀
-20040  ¦  substage08  ¦  stage://stage08/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+10015  ¦  stage08  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:49  ¦  this is a stage  𝄀
+10016  ¦  substage08  ¦  stage://stage08/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:49  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-stage08  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦  this is a stage  𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
+stage08  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦  in_use  ¦  this is a stage  𝄀
 substage08  ¦  stage://stage08/stage  ¦  in_use  ¦  
 select * from t8 into outfile 'stage://substage08/local_stage_t08.csv';
 truncate t8;
 load data infile 'stage://substage08/local_stage_t08.csv' into table t8 FIELDS ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' ignore 1 lines parallel 'true';
 select * from t8;
-➤ col1[12,0,0]  ¦  col2[12,0,0]  𝄀
+➤ col1[-1,16383,0]  ¦  col2[-1,16383,0]  𝄀
 hello  ¦  1  𝄀
 hello  ¦  2
 show create table t8;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,2,0]  ¦  Create Table[12,76,0]  𝄀
 t8  ¦  CREATE TABLE `t8` (
   `col1` text DEFAULT NULL,
   `col2` text DEFAULT NULL
@@ -383,7 +383,7 @@ drop table if exists t9;
 create table t9(col1 int unique key, col2 bigint, col3 varchar(30));
 load data infile '$resources/load_data/test_starting_by03.csv' into table t9 fields terminated by '|' lines terminated by '\n';
 select * from t9;
-➤ col1[4,32,0]  ¦  col2[-5,64,0]  ¦  col3[12,-1,0]  𝄀
+➤ col1[4,32,0]  ¦  col2[-5,64,0]  ¦  col3[12,30,0]  𝄀
 11  ¦  2  ¦  2342424124312  𝄀
 1234  ¦  242324  ¦  3243vevewvw  𝄀
 1000  ¦  123123  ¦  32424234234  𝄀
@@ -392,25 +392,25 @@ drop stage if exists stage09;
 create stage stage09 url = 'file:///$resources/into_outfile' comment = '这是一个基于file system创建的stage';
 drop stage if exists substage09;
 create stage substage09 url = 'stage://stage09/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20041  ¦  stage09  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦  这是一个基于file system创建的stage  𝄀
-20042  ¦  substage09  ¦  stage://stage09/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+10017  ¦  stage09  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:50  ¦  这是一个基于file system创建的stage  𝄀
+10018  ¦  substage09  ¦  stage://stage09/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:50  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-stage09  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦  这是一个基于file system创建的stage  𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
+stage09  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦  in_use  ¦  这是一个基于file system创建的stage  𝄀
 substage09  ¦  stage://stage09/stage  ¦  in_use  ¦  
 select * from t9 into outfile 'stage://substage09/local_stage_t09.csv';
 truncate t9;
 load data infile 'stage://substage09/local_stage_t09.csv' into table t9 fields terminated by ',' lines terminated by '\n' ignore 1 lines;
 select * from t9;
-➤ col1[4,32,0]  ¦  col2[-5,64,0]  ¦  col3[12,-1,0]  𝄀
+➤ col1[4,32,0]  ¦  col2[-5,64,0]  ¦  col3[12,30,0]  𝄀
 11  ¦  2  ¦  2342424124312  𝄀
 1234  ¦  242324  ¦  3243vevewvw  𝄀
 1000  ¦  123123  ¦  32424234234  𝄀
 1110  ¦  234323  ¦  csrvevreerev
 show create table t9;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,2,0]  ¦  Create Table[12,142,0]  𝄀
 t9  ¦  CREATE TABLE `t9` (
   `col1` int DEFAULT NULL,
   `col2` bigint DEFAULT NULL,
@@ -419,11 +419,11 @@ t9  ¦  CREATE TABLE `t9` (
 )
 drop table t9;
 drop stage stage09;
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20042  ¦  substage09  ¦  stage://stage09/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+10018  ¦  substage09  ¦  stage://stage09/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:50  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
 substage09  ¦  stage://stage09/stage  ¦  in_use  ¦  
 drop stage substage09;
 drop database if exists db01;
@@ -441,13 +441,13 @@ drop stage if exists stage11;
 create stage stage11 url = 'file:///$resources/into_outfile' comment = 'stage11';
 drop stage if exists substage11;
 create stage substage11 url = 'stage://stage11/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-1  ¦  stage11  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦  stage11  𝄀
-2  ¦  substage11  ¦  stage://stage11/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:50  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+1  ¦  stage11  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:50  ¦  stage11  𝄀
+2  ¦  substage11  ¦  stage://stage11/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:50  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-stage11  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦  stage11  𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
+stage11  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦  in_use  ¦  stage11  𝄀
 substage11  ¦  stage://stage11/stage  ¦  in_use  ¦  
 select * from t11 into outfile 'stage://substage11/local_stage_t11.csv';
 internal error: only the sys account moadmin role can access SQL file paths
@@ -471,7 +471,7 @@ drop table if exists ab_table01;
 create table ab_table01(col1 text, col2 text);
 load data infile {'filepath'='$resources/load_data/text.csv.tar.gz', 'compression'='tar.gz'} into table ab_table01 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
 select * from ab_table01;
-➤ col1[12,0,0]  ¦  col2[12,0,0]  𝄀
+➤ col1[-1,16383,0]  ¦  col2[-1,16383,0]  𝄀
 hello  ¦  1  𝄀
 hello  ¦  2
 drop stage if exists ab_stage;
@@ -487,7 +487,7 @@ drop table if exists ab_table02;
 create table ab_table02(col1 text, col2 text);
 load data infile {'filepath'='$resources/load_data/text.csv.tar.gz', 'compression'='tar.gz'} into table ab_table02 FIELDS  ENCLOSED BY '"' TERMINATED BY "," LINES TERMINATED BY '\n' parallel 'true';
 select * from ab_table02;
-➤ col1[12,0,0]  ¦  col2[12,0,0]  𝄀
+➤ col1[-1,16383,0]  ¦  col2[-1,16383,0]  𝄀
 hello  ¦  1  𝄀
 hello  ¦  2
 drop stage if exists ab_stage;
@@ -499,7 +499,7 @@ truncate ab_table02;
 load data infile '$resources/into_outfile/stage/abc.csv' into table ab_table02 CHARACTER SET "utf_8" fields terminated by ',' lines starting by 'cha' ignore 1 lines;
 invalid input: the file does not exist in load flow
 select * from ab_table02;
-➤ col1[12,0,0]  ¦  col2[12,0,0]
+➤ col1[-1,16383,0]  ¦  col2[-1,16383,0]
 drop table ab_table02;
 drop stage ab_stage;
 drop stage sub_stage;
@@ -507,7 +507,7 @@ drop table if exists t15;
 create table t15(col1 int unique key, col2 bigint, col3 varchar(30));
 load data infile '$resources/load_data/test_starting_by03.csv' into table t15 fields terminated by '|' lines terminated by '\n';
 select * from t15;
-➤ col1[4,32,0]  ¦  col2[-5,64,0]  ¦  col3[12,-1,0]  𝄀
+➤ col1[4,32,0]  ¦  col2[-5,64,0]  ¦  col3[12,30,0]  𝄀
 11  ¦  2  ¦  2342424124312  𝄀
 1234  ¦  242324  ¦  3243vevewvw  𝄀
 1000  ¦  123123  ¦  32424234234  𝄀
@@ -516,29 +516,29 @@ drop stage if exists alter_stage01;
 create stage alter_stage01 url = 'file:///$resources/into_outfile' comment = '这是一个基于file system创建的stage';
 drop stage if exists alter_substage01;
 create stage alter_substage01 url = 'stage://alter_stage01/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20049  ¦  alter_stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:51  ¦  这是一个基于file system创建的stage  𝄀
-20050  ¦  alter_substage01  ¦  stage://alter_stage01/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:51  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+10025  ¦  alter_stage01  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:50  ¦  这是一个基于file system创建的stage  𝄀
+10026  ¦  alter_substage01  ¦  stage://alter_stage01/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:50  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-alter_stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦  这是一个基于file system创建的stage  𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
+alter_stage01  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦  in_use  ¦  这是一个基于file system创建的stage  𝄀
 alter_substage01  ¦  stage://alter_stage01/stage  ¦  in_use  ¦  
 alter stage alter_stage01 set url = 'file:/into_outfile';
 invalid configuration: URL protocol only supports stage://, s3:// and file:///
 select * from t15 into outfile 'stage://alter_stage01/local_stage_t09.csv';
 alter stage alter_stage01 set comment = 'this is a modified stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20050  ¦  alter_substage01  ¦  stage://alter_stage01/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:51  ¦    𝄀
-20049  ¦  alter_stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:51  ¦  this is a modified stage
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+10025  ¦  alter_stage01  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:50  ¦  this is a modified stage  𝄀
+10026  ¦  alter_substage01  ¦  stage://alter_stage01/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:50  ¦  
 truncate t15;
 load data infile 'file:/into_outfile/into_outfile/stage/local_stage_t09.csv' into table t15 fields terminated by ',' lines terminated by '\n' ignore 1 lines;
 service /file not found
 select * from t15;
-➤ col1[4,32,0]  ¦  col2[-5,64,0]  ¦  col3[12,-1,0]
+➤ col1[4,32,0]  ¦  col2[-5,64,0]  ¦  col3[12,30,0]
 show create table t15;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,3,0]  ¦  Create Table[12,143,0]  𝄀
 t15  ¦  CREATE TABLE `t15` (
   `col1` int DEFAULT NULL,
   `col2` bigint DEFAULT NULL,
@@ -559,18 +559,18 @@ date_3 timestamp
 load data infile '$resources/external_table_file/ex_table_char.csv' into table ex_table_3 fields terminated by ',' enclosed by '\"' lines terminated by '\n';
 no such table test.ex_table_3
 select * from ex_table_1;
-➤ char_1[1,20,0]  ¦  char_2[12,-1,0]  ¦  date_1[91,64,0]  ¦  date_2[93,64,0]  ¦  date_3[93,64,0]
+➤ char_1[1,20,0]  ¦  char_2[12,10,0]  ¦  date_1[91,10,0]  ¦  date_2[93,19,0]  ¦  date_3[93,19,0]
 drop stage if exists ex_stage01;
 create stage ex_stage01 url = 'file:///$resources/into_outfile' comment = '基于external table加载数据';
 drop stage if exists sub_stage01;
 create stage sub_stage01 url = 'stage://ex_stage01/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20051  ¦  ex_stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:51  ¦  基于external table加载数据  𝄀
-20052  ¦  sub_stage01  ¦  stage://ex_stage01/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:51  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+10027  ¦  ex_stage01  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:50  ¦  基于external table加载数据  𝄀
+10028  ¦  sub_stage01  ¦  stage://ex_stage01/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:50  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-ex_stage01  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦  基于external table加载数据  𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
+ex_stage01  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦  in_use  ¦  基于external table加载数据  𝄀
 sub_stage01  ¦  stage://ex_stage01/stage  ¦  in_use  ¦  
 select * from ex_table_1 into outfile 'stage://sub_stage01/external_t01.csv';
 drop table if exists ex_table_1;
@@ -582,12 +582,12 @@ date_2 datetime,
 date_3 timestamp)
 infile 'stage://sub_stage01/external_t01.csv' fields terminated by ',' enclosed by '\"' lines terminated by '\n' ignore 1 lines;
 select * from ex_table_1;
-➤ char_1[1,20,0]  ¦  char_2[12,-1,0]  ¦  date_1[91,64,0]  ¦  date_2[93,64,0]  ¦  date_3[93,64,0]
+➤ char_1[1,20,0]  ¦  char_2[12,10,0]  ¦  date_1[91,10,0]  ¦  date_2[93,19,0]  ¦  date_3[93,19,0]
 show create table ex_table_1;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,10,0]  ¦  Create Table[12,419,0]  𝄀
 ex_table_1  ¦  CREATE EXTERNAL TABLE `ex_table_1` (
-  `char_1` char(20) COLLATE utf8mb4_general_ci DEFAULT NULL,
-  `char_2` varchar(10) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `char_1` char(20) COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
+  `char_2` varchar(10) COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
   `date_1` date DEFAULT NULL,
   `date_2` datetime DEFAULT NULL,
   `date_3` timestamp NULL DEFAULT NULL
@@ -620,7 +620,7 @@ col20 varchar(255)
 );
 load data infile '$resources/external_table_file/ex_table_sep_1.csv' into table ex_table_2 fields terminated by '|' enclosed by '' lines terminated by '\n';
 select col1, col2, col5, col6, col7, col8, col9, col10, col12, col13 from ex_table_2;
-➤ col1[-6,8,0]  ¦  col2[5,16,0]  ¦  col5[-6,8,0]  ¦  col6[5,16,0]  ¦  col7[4,32,0]  ¦  col8[-5,64,0]  ¦  col9[7,24,0]  ¦  col10[8,54,0]  ¦  col12[91,64,0]  ¦  col13[93,64,0]  𝄀
+➤ col1[-6,8,0]  ¦  col2[5,16,0]  ¦  col5[-6,8,0]  ¦  col6[5,16,0]  ¦  col7[4,32,0]  ¦  col8[-5,64,0]  ¦  col9[7,23,31]  ¦  col10[8,53,31]  ¦  col12[91,10,0]  ¦  col13[93,19,0]  𝄀
 -62  ¦  5807  ¦  154  ¦  8113  ¦  2658450361  ¦  14999475422109240954  ¦  3.4365  ¦  5.559  ¦  4149-04-30  ¦  5732-08-07 00:00:00  𝄀
 91  ¦  19514  ¦  122  ¦  44115  ¦  625429347  ¦  6204822205090614210  ¦  7.2914  ¦  6.5836  ¦  2865-02-22  ¦  9976-06-04 00:00:00  𝄀
 33  ¦  4300  ¦  104  ¦  9233  ¦  3258037690  ¦  17397115807377870895  ¦  1.1559  ¦  6.5635  ¦  6316-02-16  ¦  3647-01-21 23:59:59  𝄀
@@ -629,13 +629,13 @@ drop stage if exists ex_stage02;
 create stage ex_stage02 url = 'file:///$resources/into_outfile' comment = 'ex_stage02';
 drop stage if exists sub_stage02;
 create stage sub_stage02 url = 'stage://ex_stage02/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-20053  ¦  ex_stage02  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:51  ¦  ex_stage02  𝄀
-20054  ¦  sub_stage02  ¦  stage://ex_stage02/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:51  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+10029  ¦  ex_stage02  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:50  ¦  ex_stage02  𝄀
+10030  ¦  sub_stage02  ¦  stage://ex_stage02/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:50  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-ex_stage02  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦  ex_stage02  𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
+ex_stage02  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦  in_use  ¦  ex_stage02  𝄀
 sub_stage02  ¦  stage://ex_stage02/stage  ¦  in_use  ¦  
 select col1, col2, col5, col6, col7, col8, col9, col10, col12, col13 from ex_table_2 into outfile 'stage://sub_stage02/external_t02.csv';
 drop table ex_table_2;
@@ -651,13 +651,13 @@ col10 double,
 col11 varchar(255),
 col12 Date) infile 'stage://sub_stage02/external_t02.csv' fields terminated by ',' enclosed by '' lines terminated by '\n' ignore 1 lines;
 select * from ex_table_2;
-➤ col1[-6,8,0]  ¦  col2[5,16,0]  ¦  col5[-6,8,0]  ¦  col6[5,16,0]  ¦  col7[4,32,0]  ¦  col8[-5,64,0]  ¦  col9[7,24,0]  ¦  col10[8,54,0]  ¦  col11[12,-1,0]  ¦  col12[91,64,0]  𝄀
+➤ col1[-6,8,0]  ¦  col2[5,16,0]  ¦  col5[-6,8,0]  ¦  col6[5,16,0]  ¦  col7[4,32,0]  ¦  col8[-5,64,0]  ¦  col9[7,23,31]  ¦  col10[8,53,31]  ¦  col11[12,255,0]  ¦  col12[91,10,0]  𝄀
 -62  ¦  5807  ¦  154  ¦  8113  ¦  2658450361  ¦  14999475422109240954  ¦  3.4365  ¦  5.559  ¦  4149-04-30  ¦  5732-08-07  𝄀
 91  ¦  19514  ¦  122  ¦  44115  ¦  625429347  ¦  6204822205090614210  ¦  7.2914  ¦  6.5836  ¦  2865-02-22  ¦  9976-06-04  𝄀
 33  ¦  4300  ¦  104  ¦  9233  ¦  3258037690  ¦  17397115807377870895  ¦  1.1559  ¦  6.5635  ¦  6316-02-16  ¦  3647-01-21  𝄀
 121  ¦  -22564  ¦  141  ¦  14546  ¦  849972079  ¦  3143191107533743301  ¦  4.0199  ¦  1.1732  ¦  9948-05-08  ¦  6216-12-30
 show create table ex_table_2;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,10,0]  ¦  Create Table[12,561,0]  𝄀
 ex_table_2  ¦  CREATE EXTERNAL TABLE `ex_table_2` (
   `col1` tinyint DEFAULT NULL,
   `col2` smallint DEFAULT NULL,
@@ -667,7 +667,7 @@ ex_table_2  ¦  CREATE EXTERNAL TABLE `ex_table_2` (
   `col8` bigint unsigned DEFAULT NULL,
   `col9` float DEFAULT NULL,
   `col10` double DEFAULT NULL,
-  `col11` varchar(255) COLLATE utf8mb4_general_ci DEFAULT NULL,
+  `col11` varchar(255) COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,
   `col12` date DEFAULT NULL
 ) INFILE{'FILEPATH'='','COMPRESSION'='auto','FORMAT'='csv','JSONDATA'=''} FIELDS TERMINATED BY ',' ENCLOSED BY '' LINES TERMINATED BY '\n' IGNORE 1 LINES
 drop table ex_table_2;
@@ -698,13 +698,13 @@ drop stage if exists ex_stage03;
 create stage ex_stage03 url = 'file:///$resources/into_outfile' comment = 'ex_stage03';
 drop stage if exists sub_stage03;
 create stage sub_stage03 url = 'stage://ex_stage03/stage';
-select * from mo_catalog.mo_stages;
-➤ stage_id[4,32,0]  ¦  stage_name[12,-1,0]  ¦  url[12,0,0]  ¦  stage_credentials[12,0,0]  ¦  stage_status[12,-1,0]  ¦  created_time[93,64,0]  ¦  comment[12,0,0]  𝄀
-3  ¦  ex_stage03  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦    ¦  in_use  ¦  2026-07-27 03:38:51  ¦  ex_stage03  𝄀
-4  ¦  sub_stage03  ¦  stage://ex_stage03/stage  ¦    ¦  in_use  ¦  2026-07-27 03:38:51  ¦  
+select * from mo_catalog.mo_stages order by stage_name;
+➤ stage_id[4,32,0]  ¦  stage_name[12,64,0]  ¦  url[-1,16383,0]  ¦  stage_credentials[-1,16383,0]  ¦  stage_status[12,64,0]  ¦  created_time[93,19,0]  ¦  comment[-1,16383,0]  𝄀
+3  ¦  ex_stage03  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦    ¦  in_use  ¦  2026-10-23 07:18:51  ¦  ex_stage03  𝄀
+4  ¦  sub_stage03  ¦  stage://ex_stage03/stage  ¦    ¦  in_use  ¦  2026-10-23 07:18:51  ¦  
 show stages;
-➤ STAGE_NAME[12,-1,0]  ¦  URL[12,0,0]  ¦  STATUS[12,-1,0]  ¦  COMMENT[12,0,0]  𝄀
-ex_stage03  ¦  file:////mnt/fastdata/temp/matrixone/test/distributed/resources/into_outfile  ¦  in_use  ¦  ex_stage03  𝄀
+➤ STAGE_NAME[12,64,0]  ¦  URL[-1,16383,0]  ¦  STATUS[12,64,0]  ¦  COMMENT[-1,16383,0]  𝄀
+ex_stage03  ¦  file:////tmp/mo-bvt-ci-resources-25096/into_outfile  ¦  in_use  ¦  ex_stage03  𝄀
 sub_stage03  ¦  stage://ex_stage03/stage  ¦  in_use  ¦  
 select * from jsonline_t1 into outfile 'stage://sub_stage03/external_t03.csv';
 internal error: only the sys account moadmin role can access SQL file paths

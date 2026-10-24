@@ -3237,6 +3237,9 @@ func TestDropDatabaseSkipsDeletedRelationsWhenCollectingTables(t *testing.T) {
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
+	for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolAuthoringFloor} {
+		restoreRuntimeVariableForTest(t, proc.GetService(), key, defines.MORPCLatestVersion)
+	}
 	proc.Base.SessionInfo.Buf = buffer.New()
 	ctx := defines.AttachAccountId(context.Background(), sysAccountId)
 	proc.Ctx = ctx
@@ -3387,6 +3390,9 @@ func TestDropDatabaseReturnsInternalRelationErrorWhenCollectingTables(t *testing
 	defer ctrl.Finish()
 
 	proc := testutil.NewProcess(t)
+	for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolAuthoringFloor} {
+		restoreRuntimeVariableForTest(t, proc.GetService(), key, defines.MORPCLatestVersion)
+	}
 	installDropDDLExecutor(t, proc, executor.NewMemExecutor(func(string) (executor.Result, error) {
 		return executor.Result{}, nil
 	}))

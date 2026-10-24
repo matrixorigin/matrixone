@@ -37,6 +37,7 @@ func TestExpressionDefaultNullIfStringSource(t *testing.T) {
 	for _, tc := range []struct {
 		name, sourceType, expression, input, wantHex string
 		nullInput, nullResult, integerResult         bool
+		rejectNative, legacyBinding                  bool
 		wantLength                                   int64
 	}{
 		{name: "selected text", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", input: "你a", wantHex: "61e4bda0"},
@@ -56,7 +57,8 @@ func TestExpressionDefaultNullIfStringSource(t *testing.T) {
 		{name: "IF length of binary column", sourceType: "varbinary(16)", expression: "char_length(if(txt is not null,txt,_binary '0'))", input: "你a", integerResult: true, wantLength: 4},
 		{name: "CASE length with explicit binary peer", sourceType: "varchar(16)", expression: "char_length(case when txt is not null then txt else cast('' as binary(4)) end)", input: "你a", integerResult: true, wantLength: 4},
 		{name: "CASE explicit binary COLLATE", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else _binary '' collate binary end)", input: "你a", wantHex: "61a0bde4"},
-		{name: "CASE explicit text COLLATE", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt collate utf8mb4_bin else _binary '' end)", input: "你a", wantHex: "61e4bda0"},
+		{name: "CASE historical explicit text COLLATE", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt collate utf8mb4_bin else _binary '' end)", input: "你a", wantHex: "61e4bda0", legacyBinding: true},
+		{name: "CASE native explicit text COLLATE rejects persistence", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt collate utf8mb4_bin else _binary '' end)", rejectNative: true},
 		{name: "CASE explicit binary peer", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else cast('' as binary(4)) end)", input: "你a", wantHex: "61a0bde4"},
 		{name: "CASE explicit binary NULL", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else cast(null as binary(4)) end)", input: "你a", wantHex: "61a0bde4"},
 		{name: "CASE hex literal peer", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else X'ff' end)", input: "你a", wantHex: "61e4bda0"},
@@ -77,7 +79,20 @@ func TestExpressionDefaultNullIfStringSource(t *testing.T) {
 				", result "+resultType+" default ("+tc.expression+"))", 1)
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
-			bound, err := BuildPlan(ctx, stmt, false)
+			parent := ctx.GetContext()
+			bound, err := func() (*Plan, error) {
+				if tc.legacyBinding {
+					ctx.SetContext(WithCollationBindingRevision(parent, 0))
+					defer ctx.SetContext(parent)
+				}
+				return BuildPlan(ctx, stmt, false)
+			}()
+			require.Equal(t, parent, ctx.GetContext())
+			if tc.rejectNative {
+				require.ErrorContains(t, err, "native PAD collation persistence is disabled")
+				require.Nil(t, bound)
+				return
+			}
 			require.NoError(t, err)
 			original := DeepCopyPlan(bound)
 			require.Equal(t, bound.GetDdl().GetCreateTable().TableDef.Cols[1].Default.Expr,

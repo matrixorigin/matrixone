@@ -2089,6 +2089,10 @@ message CreateTable {
   // Execution-only requirement for retained CTAS population SQL.
   // Zero means no additional requirement; this is not a catalog format floor.
   int64 ctas_execution_protocol_version = 19;
+  // Binding provenance for the internal INSERT ... SELECT replay, not session state.
+  uint32 collation_binding_revision = 20;
+  // CTAS binds before folding; execution rechecks this floor before publication.
+  int64 required_protocol_version = 21;
 }
 
 message AlterTableDrop {

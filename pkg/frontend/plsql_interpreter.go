@@ -341,7 +341,9 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string, bg
 	// save parameters as local variables
 	*interpreter.varScope = append(*interpreter.varScope, curScope)
 	*interpreter.varTypeScope = append(*interpreter.varTypeScope, curTypeScope)
-	interpreter.ctx = interpreter.storedProcedureContext()
+	// Unversioned stored bodies remain legacy. CALL arguments below still
+	// use argumentCtx, not the body's collation binding generation.
+	interpreter.ctx = plan2.WithCollationBindingRevision(interpreter.storedProcedureContext(), 0)
 	for k, v := range interpreter.argsMap {
 		name := strings.ToLower(k)
 		argType, hasArgType := interpreter.argsType[name]

@@ -12,6 +12,7 @@ package plan
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
@@ -69,6 +70,67 @@ func (t *TableDef) ValidateCollation() error {
 
 func (t *IndexDef) ValidateCollation() error {
 	return collation.ValidateKeyFormat(t.KeyFormat)
+}
+
+type collationVisitMode uint8
+
+const (
+	legacyCollationAdmission collationVisitMode = iota
+	executableCollationAdmission
+	persistedCollationAdmission
+	collationFeatureCollection
+)
+
+// HasNativePADCollation 识别需要新执行协议的原生general-ci/bin文本类型。
+// 合法metadata、可执行性、可持久化性是三个不同边界。
+func HasNativePADCollation(value Type) bool {
+	if value.CollationVersion != uint32(collation.RevisionV1) ||
+		(value.Charset != uint32(collation.UTF8MB4GeneralCIIdentity) && value.Charset != uint32(collation.UTF8MB4BinIdentity)) {
+		return false
+	}
+	switch value.Id {
+	case planCharTypeID, planVarcharTypeID, planBlobTypeID, planTextTypeID:
+		return true
+	default:
+		return false
+	}
+}
+
+func (v *legacyCollationVisitor) checkType(value Type) error {
+	native := false
+	if v.mode != legacyCollationAdmission {
+		native = HasNativePADCollation(value)
+		v.features.NativePADCollation = v.features.NativePADCollation || native
+	}
+	if v.mode == collationFeatureCollection {
+		return nil
+	}
+	if (v.mode == executableCollationAdmission || v.mode == persistedCollationAdmission) && native {
+		return value.ValidateCollation()
+	}
+	return requireLegacyType(value)
+}
+
+func (v *legacyCollationVisitor) checkTable(value *TableDef) error {
+	if v.mode == collationFeatureCollection || v.collectExpressions {
+		v.features.NativePADCollation = v.features.NativePADCollation || value.KeyFormat == collation.KeyFormatLegacy && HasNativePADCollation(Type{
+			Id: planVarcharTypeID, Charset: value.DefaultCharset, CollationVersion: value.CollationVersion,
+		})
+	}
+	if v.mode == collationFeatureCollection {
+		return nil
+	}
+	if v.mode == persistedCollationAdmission || v.mode == executableCollationAdmission {
+		return requirePersistedTable(value)
+	}
+	return requireLegacyTable(value)
+}
+
+func (v *legacyCollationVisitor) checkIndex(table *TableDef, index *IndexDef) error {
+	if v.mode == collationFeatureCollection {
+		return nil
+	}
+	return requireLegacyTableIndex(table, index)
 }
 
 func requireLegacyType(value Type) error {
@@ -267,13 +329,125 @@ func requireLegacyTableIndex(table *TableDef, index *IndexDef) error {
 	return requireLegacySchema(0, 0, index.KeyFormat)
 }
 
+// requirePersistedTable只放行原值列的语义metadata，不授权新的物理key。
+// catalog完整定义必须在任何列裁剪前验证；后续执行shell只保留可见列。
+func requirePersistedTable(table *TableDef) error {
+	if table == nil {
+		return nil
+	}
+	if err := table.ValidateCollation(); err != nil {
+		return err
+	}
+	native := make(map[string]struct{})
+	for _, col := range table.Cols {
+		if col != nil && HasNativePADCollation(col.Typ) {
+			if col.Primary || col.ClusterBy {
+				return moerr.NewNotSupportedNoCtxf("native PAD collation physical key on column %s is disabled", col.Name)
+			}
+			native[strings.ToLower(col.Name)] = struct{}{}
+		}
+	}
+	check := func(name string) error {
+		name = strings.TrimPrefix(strings.ToLower(name), "__mo_alias_")
+		if _, exists := native[name]; exists {
+			return moerr.NewNotSupportedNoCtxf("native PAD collation physical key on column %s is disabled", name)
+		}
+		return nil
+	}
+	if len(native) != 0 {
+		if table.Pkey != nil {
+			for _, name := range append([]string{table.Pkey.PkeyColName}, table.Pkey.Names...) {
+				if err := check(name); err != nil {
+					return err
+				}
+			}
+		}
+		for _, index := range table.Indexes {
+			if index == nil {
+				continue
+			}
+			for _, part := range index.Parts {
+				if err := check(part); err != nil {
+					return err
+				}
+			}
+		}
+		if len(table.Fkeys) != 0 {
+			nativeIDs := make(map[uint64]struct{}, len(native))
+			for _, col := range table.Cols {
+				if col != nil && HasNativePADCollation(col.Typ) {
+					nativeIDs[col.ColId] = struct{}{}
+				}
+			}
+			for _, fk := range table.Fkeys {
+				if fk == nil {
+					continue
+				}
+				for _, id := range fk.Cols {
+					if _, exists := nativeIDs[id]; exists {
+						return moerr.NewNotSupportedNoCtx("native PAD collation foreign keys are disabled")
+					}
+				}
+				if fk.ForeignTbl == 0 {
+					for _, id := range fk.ForeignCols {
+						if _, exists := nativeIDs[id]; exists {
+							return moerr.NewNotSupportedNoCtx("native PAD collation foreign keys are disabled")
+						}
+					}
+				}
+			}
+		}
+		if table.ClusterBy != nil {
+			name := table.ClusterBy.Name
+			if strings.HasPrefix(name, "__mo_cbkey_") {
+				for rest := strings.TrimPrefix(name, "__mo_cbkey_"); rest != ""; {
+					if len(rest) < 3 {
+						return moerr.NewInvalidInputNoCtx("invalid composite cluster key metadata")
+					}
+					n, err := strconv.Atoi(rest[:3])
+					if err != nil || n <= 0 || n > len(rest)-3 {
+						return moerr.NewInvalidInputNoCtx("invalid composite cluster key metadata")
+					}
+					if err = check(rest[3 : 3+n]); err != nil {
+						return err
+					}
+					rest = rest[3+n:]
+				}
+			} else if err := check(name); err != nil {
+				return err
+			}
+		}
+	}
+	if table.KeyFormat == collation.KeyFormatLegacy && HasNativePADCollation(Type{
+		Id: planVarcharTypeID, Charset: table.DefaultCharset, CollationVersion: table.CollationVersion,
+	}) {
+		return nil
+	}
+	return requireLegacyTable(table)
+}
+
+// RequirePersistedCollations校验可持久化的metadata/物理key形状。
+// 调用方仍必须在读取或发布前独立验证集群read/authoring floor。
+func RequirePersistedCollations(owner any) error {
+	return walkCollationMetadata(owner, &legacyCollationVisitor{mode: persistedCollationAdmission})
+}
+
 // RequireLegacyCollations admits mutable plans and foreign pipeline owners.
 // Generated paths visit only metadata-bearing protobuf fields; foreign wrappers
 // retain a reflective fallback. Each call owns its cycle state, so mutation
 // between planner publication and direct compilation is checked again.
 // Byte payloads remain opaque and are admitted by their actual decode owner.
 func RequireLegacyCollations(owner any) error {
-	visitor := legacyCollationVisitor{}
+	return walkCollationMetadata(owner, &legacyCollationVisitor{mode: legacyCollationAdmission})
+}
+
+// RequireExecutableCollations 仅用于已受协议保护的执行入口，不替代catalog、
+// DDL和物理key的严格准入；调用方仍须独立验证source/destination/receiver能力。
+func RequireExecutableCollations(owner any) error {
+	return walkCollationMetadata(owner, &legacyCollationVisitor{mode: executableCollationAdmission})
+}
+
+func walkCollationMetadata(owner any, visitor *legacyCollationVisitor) error {
 	if handled, err := visitor.typed(owner); handled {
 		return err
 	}
@@ -307,29 +481,33 @@ func RequireLegacyCollations(owner any) error {
 		// Foreign wrappers retain their admission boundary. Only metadata
 		// structs are boxed here; scalar fields and opaque bytes are not.
 		if v.Kind() == reflect.Struct && v.CanInterface() &&
-			(v.Type() == reflect.TypeOf(Type{}) || v.Type() == reflect.TypeOf(TableDef{}) || v.Type() == reflect.TypeOf(IndexDef{})) {
+			(v.Type() == reflect.TypeOf(Type{}) || v.Type() == reflect.TypeOf(TableDef{}) ||
+				v.Type() == reflect.TypeOf(IndexDef{}) || v.Type() == reflect.TypeOf(Expr{})) {
 			switch value := v.Interface().(type) {
 			case Type:
-				return requireLegacyType(value)
+				return visitor.checkType(value)
+			case Expr:
+				return visitor.walkExpr(&value)
 			case TableDef:
 				return visitor.walkTableDef(&value)
 			case IndexDef:
-				if err := collation.RequireLegacy(0, 0, value.KeyFormat); err != nil {
+				if err := visitor.checkIndex(nil, &value); err != nil {
 					return err
 				}
 			}
 		}
 		switch v.Kind() {
 		case reflect.Struct:
-			for i := 0; i < v.NumField(); i++ {
-				if v.Type().Field(i).PkgPath == "" {
-					if err := walk(v.Field(i)); err != nil {
+			for i, fields := 0, v.NumField(); i < fields; i++ {
+				child := v.Field(i)
+				if child.CanInterface() && expressionOwnerContainer(child.Kind()) {
+					if err := walk(child); err != nil {
 						return err
 					}
 				}
 			}
 		case reflect.Slice, reflect.Array:
-			if v.Type().Elem().Kind() == reflect.Uint8 {
+			if !expressionOwnerContainer(v.Type().Elem().Kind()) {
 				return nil
 			}
 			for i := 0; i < v.Len(); i++ {
@@ -338,6 +516,9 @@ func RequireLegacyCollations(owner any) error {
 				}
 			}
 		case reflect.Map:
+			if !expressionOwnerContainer(v.Type().Elem().Kind()) {
+				return nil
+			}
 			iter := v.MapRange()
 			for iter.Next() {
 				if err := walk(iter.Value()); err != nil {

@@ -956,6 +956,36 @@ func TestAppendStringHashSelsUsesUnicodeComparisonDomain(t *testing.T) {
 	}
 }
 
+func TestAppendStringHashSelsVersionedCollation(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
+		func() {
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+			typ := types.NewWithCharset(types.T_varchar, 16, 0, charset)
+			typ.CollationVersion = 1
+			vec := vector.NewVec(typ)
+			defer vec.Free(mp)
+			require.NoError(t, vector.AppendStringList(vec, []string{"a", "a "}, nil, mp))
+			col, area := vector.MustVarlenaRawData(vec)
+			for _, stable := range []bool{false, true} {
+				arg := &Shuffle{}
+				arg.ctr.stableStringHash = stable
+				sels := make([][]int32, 8)
+				appendStringHashSels(arg, sels, vec, col, area, uint64(len(sels)), false)
+				seen := false
+				for _, rows := range sels {
+					if len(rows) > 0 {
+						require.False(t, seen)
+						require.Equal(t, []int32{0, 1}, rows)
+						seen = true
+					}
+				}
+				require.True(t, seen)
+			}
+		}()
+	}
+}
+
 func BenchmarkAppendStringHashSelsByKeyLength(b *testing.B) {
 	for _, keyLength := range []int{8, 32, 64, 1024, 64 << 10, 1 << 20} {
 		rows := min(256, max(1, (4<<20)/keyLength))

@@ -41,6 +41,23 @@ func TestTableCollationExpressionProtocolIdentity(t *testing.T) {
 	}
 }
 
+func TestNativePADProtocolObservationSurvivesFolding(t *testing.T) {
+	for _, charset := range []uint32{2, 3} {
+		native := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Charset: charset, CollationVersion: 1}}
+		required, err := RequiredPersistedExpressionProtocolVersion(native)
+		require.NoError(t, err)
+		require.Equal(t, defines.MORPCVersion130, required)
+		require.ErrorContains(t, planpb.RequireLegacyCollations(native), "disabled", "协议识别不是持久化准入")
+		var observed int64
+		binder := &baseBinder{ctx: &BindContext{persistedExpressionProtocolRequirement: &observed}}
+		require.NoError(t, binder.observeExpressionProtocol(native))
+		// 模拟折叠后的类型形状；真正SQL绑定/折叠由B4另行验证。
+		folded := &planpb.Expr{Typ: types.T_bool.ToType().PlanType()}
+		require.NoError(t, binder.observeExpressionProtocol(folded))
+		require.Equal(t, defines.MORPCVersion130, observed)
+	}
+}
+
 func TestTableCollationViewProtocol(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())

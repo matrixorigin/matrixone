@@ -705,7 +705,8 @@ func TestViewDescriptionSubscription(t *testing.T) {
 		defer cleanup(sys, "drop account view_description_sub")
 		exec("create database view_description_pub")
 		defer cleanup(sys, "drop database view_description_pub")
-		exec("create table view_description_pub.src (x varchar(5) character set utf8mb4 collate utf8mb4_general_ci)")
+		// This source must permit the historical width changes used by snapshot/upgrade checks.
+		exec("create table view_description_pub.src (x varchar(5) character set utf8mb4 collate utf8mb4_0900_ai_ci)")
 		exec("create table view_description_pub.charset_src (mb4 varchar(5) character set utf8mb4 collate utf8mb4_general_ci, mb4_bin varchar(5) character set utf8mb4 collate utf8mb4_bin, legacy varchar(5) character set utf8, raw varbinary(5), txt text)")
 		exec("create view view_description_pub.charset_v as select mb4, mb4_bin, legacy, raw, txt from view_description_pub.charset_src")
 		exec("create table view_description_pub.bad_src (x int)")

@@ -3386,6 +3386,7 @@ func Test_restoreViewsWithPitr(t *testing.T) {
 				dbName:    "db01",
 				tblName:   "tbl01",
 				typ:       "VIEW",
+				viewDef:   `{"Stmt":"create view view01 as select 1"}`,
 				createSql: "create view view01",
 			},
 		}
@@ -3397,6 +3398,7 @@ func Test_restoreViewsWithPitr(t *testing.T) {
 				dbName:    "db01",
 				tblName:   "tbl01",
 				typ:       "VIEW",
+				viewDef:   `{"Stmt":"create view view01 as select 1"}`,
 				createSql: "create database db02",
 			},
 		}

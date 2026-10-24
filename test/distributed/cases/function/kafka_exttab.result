@@ -6,14 +6,14 @@ show create table kt;
 ➤ Table[12,2,0]  ¦  Create Table[12,303,0]  𝄀
 kt  ¦  CREATE EXTERNAL TABLE `kt` (
   `a` int DEFAULT NULL,
-  `b` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL
+  `b` varchar(100) COLLATE utf8mb4_0900_ai_ci DEFAULT NULL
 ) ENGINE = KAFKA WITH ("brokers" = '127.0.0.1:19092', "topic" = 'events', "partition" = '0', "autocommit" = 'false', "group" = 'mo_kafka_kafka_exttab_kt', "format" = 'csv', "separator" = ',')
 create external table kt2 (a int, b varchar(100)) engine = kafka with ('brokers' = 'h1:9092,h2:9092', 'topic' = 't2', 'partition' = '3', 'autocommit' = 'true', 'group' = 'g2', 'format' = 'jsonl');
 show create table kt2;
 ➤ Table[12,3,0]  ¦  Create Table[12,260,0]  𝄀
 kt2  ¦  CREATE EXTERNAL TABLE `kt2` (
   `a` int DEFAULT NULL,
-  `b` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL
+  `b` varchar(100) COLLATE utf8mb4_0900_ai_ci DEFAULT NULL
 ) ENGINE = KAFKA WITH ("brokers" = 'h1:9092,h2:9092', "topic" = 't2', "partition" = '3', "autocommit" = 'true', "group" = 'g2', "format" = 'jsonl')
 create external table kt3 (a int) engine = kafka with ('brokers' = 'h:9092', 'topic' = 't3', 'separator' = '|');
 show create table kt3;
@@ -53,9 +53,9 @@ select * from kt;
 invalid input: kafka external table with autocommit=false requires a __mo_read_start_id = <last consumed offset> predicate (-1 for the earliest)
 select * from kt where __mo_read_start_id = -2;
 invalid input: __mo_read_start_id must be >= -1, got -2
--- @regex("cannot reach", true)
 select * from kt where __mo_read_start_id = 0 and __mo_read_size = 0;
-internal error: kafka: cannot reach 127.0.0.1:19092 or list offsets of topic "events": unable to dial
+-- @regex("cannot reach", true)
+internal error: kafka: cannot reach 127.0.0.1:19092 or list offsets of topic "events": unable to dial: dial tcp 127.0.0.1:19092: connect: connection refused
 select * from kt where __mo_read_start_id = 0 and __mo_read_size = -3;
 invalid input: __mo_read_size must be >= 0 (0 = unlimited), got -3
 select * from kt where __mo_read_start_id = 0 and __mo_read_timeout = -1;

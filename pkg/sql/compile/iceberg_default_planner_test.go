@@ -166,9 +166,39 @@ func restoreRuntimeVariableForTest(t *testing.T, serviceID, key string, value an
 		if hadOld {
 			rt.SetGlobalVariables(key, old)
 		} else {
+			// nil is still present (and invalid for protocol floors). Restore
+			// absence without comparing possibly non-comparable factory values.
 			rt.SetGlobalVariables(key, nil)
+			rt.CompareAndDeleteGlobalVariables(key, nil)
 		}
 	})
+}
+
+func TestRestoreRuntimeVariableForTestPreservesPresence(t *testing.T) {
+	sid := t.Name()
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { moruntime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+	for _, tc := range []struct {
+		name    string
+		present bool
+		old     any
+	}{
+		{"absent", false, nil},
+		{"explicit_nil", true, nil},
+		{"version", true, int64(72)},
+	} {
+		if tc.present {
+			rt.SetGlobalVariables(tc.name, tc.old)
+		}
+		t.Run(tc.name, func(t *testing.T) {
+			// Factories may be functions, so cleanup must not compare them.
+			restoreRuntimeVariableForTest(t, sid, tc.name, func() {})
+		})
+		got, present := rt.GetGlobalVariables(tc.name)
+		require.Equal(t, tc.present, present, tc.name)
+		require.Equal(t, tc.old, got, tc.name)
+	}
 }
 
 type testIcebergTokenResolver struct {

@@ -230,7 +230,7 @@ func NewJoinProbeExpressionExecutors(
 		execs, err := NewExpressionExecutorsFromPlanExpressionsWithAllocation(proc, planExprs, selection)
 		return execs, nil, err
 	}
-	if err := plan.RequireLegacyCollations(planExprs); err != nil {
+	if err := plan.RequireExecutableCollations(planExprs); err != nil {
 		return nil, nil, err
 	}
 	activation := make([]ExpressionExecutor, 0)
@@ -263,7 +263,7 @@ func newExpressionExecutorsWithDiagnosticOwner(
 	foldOwnedConstantCasts bool,
 	owner *DeferredJoinDiagnostic,
 ) (executors []ExpressionExecutor, err error) {
-	if err := plan.RequireLegacyCollations(planExprs); err != nil {
+	if err := plan.RequireExecutableCollations(planExprs); err != nil {
 		return nil, err
 	}
 	executors = make([]ExpressionExecutor, len(planExprs))
@@ -295,7 +295,7 @@ func NewExpressionExecutorWithAllocation(
 	planExpr *plan.Expr,
 	selection *vector.AllocationAccountSelection,
 ) (ExpressionExecutor, error) {
-	if err := plan.RequireLegacyCollations(planExpr); err != nil {
+	if err := plan.RequireExecutableCollations(planExpr); err != nil {
 		return nil, err
 	}
 	buildCtx := &expressionExecutorBuildContext{}
@@ -417,9 +417,22 @@ func newExpressionExecutorWithAllocation(
 		}
 		// The opaque payload may carry a different type than the enclosing Expr.
 		// Decoding permits known metadata; executing it still requires admission.
-		if err := plan.RequireLegacyCollations(vec.GetType().PlanType()); err != nil {
+		inner := vec.GetType()
+		if err := plan.RequireExecutableCollations(inner.PlanType()); err != nil {
 			vec.Free(proc.Mp())
 			return nil, err
+		}
+		// 协议检测读取外层Type；禁止不透明payload隐藏或改写原生域。
+		if (plan.HasNativePADCollation(inner.PlanType()) || plan.HasNativePADCollation(planExpr.Typ)) &&
+			(inner.Oid != typ.Oid || inner.Charset != typ.Charset || inner.CollationVersion != typ.CollationVersion) {
+			vec.Free(proc.Mp())
+			return nil, moerr.NewInvalidInputNoCtx("literal vector collation differs from expression type")
+		}
+		if plan.HasNativePADCollation(inner.PlanType()) {
+			if err := vec.ValidateCollationValues(); err != nil {
+				vec.Free(proc.Mp())
+				return nil, err
+			}
 		}
 		// The stable Vector payload does not carry runtime provenance. LiteralVec
 		// explicitly records its uniform owner because the same container is used
@@ -1971,7 +1984,7 @@ func (expr *FunctionExpressionExecutor) semanticParameterVectors(parameters []*v
 			continue
 		}
 		typ := expr.parameterTypes[i]
-		if !types.IsUnicodeCollation(typ.Charset) || vec.GetType().Oid != typ.Oid {
+		if !types.HasCollationKey(typ) || vec.GetType().Oid != typ.Oid {
 			continue
 		}
 		switch typ.Oid {
@@ -2337,7 +2350,7 @@ func DecodeLiteralStringSource(literal *plan.Literal) (types.StringSource, error
 }
 
 func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (result *vector.Vector, err error) {
-	if err := plan.RequireLegacyCollations(exprs); err != nil {
+	if err := plan.RequireExecutableCollations(exprs); err != nil {
 		return nil, err
 	}
 	lenList := len(exprs)
@@ -2690,6 +2703,11 @@ func EvaluateFilterByZoneMap(
 func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 	vec := vector.NewVec(types.T_any.ToType())
 	if err := vec.UnmarshalBinary(data); err != nil {
+		return nil, false
+	}
+	// 外层tuple/Fold声明不是编码域的证明。原生域的sorted标志、常量和
+	// NULL快捷路径也不能授权对persisted raw-byte元数据剪枝。
+	if vec.GetType().CollationVersion != types.CollationVersionLegacy {
 		return nil, false
 	}
 	if !prefixSearch && vec.GetType().Oid == types.T_char {

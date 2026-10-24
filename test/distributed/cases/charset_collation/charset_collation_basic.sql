@@ -124,12 +124,20 @@ SELECT HEX(name), HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_
 -- 历史 COLLATE 别名按有效 utf8mb4 域校验，保留四字节文本。
 SELECT HEX('😀' COLLATE utf8_general_ci), HEX(name COLLATE utf8mb3_general_ci),
        HEX('😀' COLLATE utf8_bin), HEX(name_mb3 COLLATE utf8mb3_bin) FROM t_utf8;
+-- 新域不能在线重标为另一比较域；拒绝后原字符与元数据保持不变。
 ALTER TABLE t_utf8 MODIFY name_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
 SELECT HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_utf8;
 SELECT column_name, character_set_name, collation_name FROM information_schema.columns
 WHERE table_schema = 'charset_test' AND table_name = 't_utf8' AND column_name <> 'id'
 ORDER BY ordinal_position;
 SELECT HEX(CONVERT('😀' USING utf8)), HEX(CONVERT('😀' USING utf8mb3));
+-- 既有legacy别名仍允许原有转换，utf8mb3兼容入口不限制四字节字符。
+ALTER TABLE t_utf8 ADD legacy_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf8mb4_0900_ai_ci;
+UPDATE t_utf8 SET legacy_mb3 = name_mb3;
+ALTER TABLE t_utf8 MODIFY legacy_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf32_bin;
+SELECT HEX(legacy_mb3), LENGTH(legacy_mb3), CHAR_LENGTH(legacy_mb3) FROM t_utf8;
+SELECT collation_name FROM information_schema.columns
+WHERE table_schema = 'charset_test' AND table_name = 't_utf8' AND column_name = 'legacy_mb3';
 
 -- UTF8MB4 with different collations
 CREATE TABLE t_utf8mb4_bin (
@@ -243,9 +251,9 @@ INSERT INTO t_compare_ci VALUES (3, 'APPLE');
 INSERT INTO t_compare_ci VALUES (4, 'aPpLe');
 
 -- Case-insensitive comparison
-SELECT * FROM t_compare_ci WHERE name = 'apple';
-SELECT * FROM t_compare_ci WHERE name = 'APPLE';
-SELECT * FROM t_compare_ci WHERE name = 'Apple';
+SELECT * FROM t_compare_ci WHERE name = 'apple' ORDER BY id;
+SELECT * FROM t_compare_ci WHERE name = 'APPLE' ORDER BY id;
+SELECT * FROM t_compare_ci WHERE name = 'Apple' ORDER BY id;
 
 SELECT COUNT(*) FROM t_compare_ci WHERE name = 'apple';
 
@@ -288,8 +296,8 @@ INSERT INTO t_sort_ci VALUES (7, 'banana');
 INSERT INTO t_sort_ci VALUES (8, 'Banana');
 INSERT INTO t_sort_ci VALUES (9, 'BANANA');
 
-SELECT * FROM t_sort_ci ORDER BY name;
-SELECT * FROM t_sort_ci ORDER BY name DESC;
+SELECT * FROM t_sort_ci ORDER BY name, id;
+SELECT * FROM t_sort_ci ORDER BY name DESC, id;
 
 CREATE TABLE t_sort_bin (
     id INT PRIMARY KEY,
@@ -319,7 +327,8 @@ CREATE TABLE t_distinct_ci (
 INSERT INTO t_distinct_ci VALUES ('Apple'), ('apple'), ('APPLE');
 INSERT INTO t_distinct_ci VALUES ('Banana'), ('banana'), ('BANANA');
 
-SELECT DISTINCT name FROM t_distinct_ci ORDER BY name;
+-- 等价类可返回任一原始代表；只归一化本fixture的ASCII大小写。
+SELECT LOWER(name) AS name FROM (SELECT DISTINCT name FROM t_distinct_ci) AS d ORDER BY name;
 SELECT COUNT(DISTINCT name) FROM t_distinct_ci;
 
 CREATE TABLE t_distinct_bin (
@@ -343,7 +352,7 @@ CREATE TABLE t_group_ci (
 INSERT INTO t_group_ci VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 INSERT INTO t_group_ci VALUES (4, 'Banana'), (5, 'banana'), (6, 'BANANA');
 
-SELECT name, COUNT(*) as cnt FROM t_group_ci GROUP BY name ORDER BY name;
+SELECT LOWER(name) AS normalized_name, COUNT(*) as cnt FROM t_group_ci GROUP BY name ORDER BY normalized_name;
 
 CREATE TABLE t_group_bin (
     id INT,
@@ -356,7 +365,7 @@ INSERT INTO t_group_bin VALUES (4, 'Banana'), (5, 'banana'), (6, 'BANANA');
 SELECT name, COUNT(*) as cnt FROM t_group_bin GROUP BY name ORDER BY name;
 
 -- @case
--- @desc: Test LIKE operator with different collations
+-- @desc: LIKE保留既有匹配行为；完整collation模式匹配不在本批比较/hash/order激活范围
 -- @label:bvt
 CREATE TABLE t_like_ci (
     id INT PRIMARY KEY,
@@ -439,15 +448,17 @@ CREATE TABLE t_union2_ci (
 INSERT INTO t_union1_ci VALUES ('Apple'), ('Banana');
 INSERT INTO t_union2_ci VALUES ('apple'), ('Cherry');
 
-SELECT name FROM t_union1_ci
-UNION
-SELECT name FROM t_union2_ci
-ORDER BY name;
+SELECT LOWER(name) AS name FROM (
+    SELECT name FROM t_union1_ci
+    UNION
+    SELECT name FROM t_union2_ci
+) AS u ORDER BY name;
 
-SELECT name FROM t_union1_ci
-UNION ALL
-SELECT name FROM t_union2_ci
-ORDER BY name;
+SELECT name FROM (
+    SELECT name FROM t_union1_ci
+    UNION ALL
+    SELECT name FROM t_union2_ci
+) AS u ORDER BY name, HEX(name);
 
 -- @case
 -- @desc: Test string functions with different charsets
@@ -485,6 +496,7 @@ CREATE TABLE t_alter (
     name VARCHAR(100)
 );
 
+INSERT INTO t_alter VALUES (1, 'A'), (2, 'a');
 -- Alter table charset
 ALTER TABLE t_alter CHARACTER SET utf8mb4;
 SHOW CREATE TABLE t_alter;
@@ -497,9 +509,10 @@ SHOW CREATE TABLE t_alter;
 ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4;
 SHOW CREATE TABLE t_alter;
 
--- Alter column collation
+-- 新默认值不重标已有列；在线转换拒绝后原列仍有两个legacy身份。
 ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 SHOW CREATE TABLE t_alter;
+SELECT COUNT(*), COUNT(DISTINCT name) FROM t_alter;
 
 -- @case
 -- @desc: Test index with different collations
@@ -510,6 +523,14 @@ CREATE TABLE t_index_ci (
     KEY idx_name (name)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 
+SELECT COUNT(*) AS rejected_index_table FROM information_schema.tables
+WHERE table_schema = 'charset_test' AND table_name = 't_index_ci';
+-- 现有legacy general-ci别名保留原物理索引格式及字节比较。
+CREATE TABLE t_index_ci (
+    id INT PRIMARY KEY,
+    name VARCHAR(100),
+    KEY idx_name (name)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 INSERT INTO t_index_ci VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 INSERT INTO t_index_ci VALUES (4, 'Banana'), (5, 'banana');
 
@@ -521,6 +542,13 @@ CREATE TABLE t_index_bin (
     KEY idx_name (name)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
+SELECT COUNT(*) AS rejected_index_table FROM information_schema.tables
+WHERE table_schema = 'charset_test' AND table_name = 't_index_bin';
+CREATE TABLE t_index_bin (
+    id INT PRIMARY KEY,
+    name VARCHAR(100),
+    KEY idx_name (name)
+) CHARACTER SET utf8mb4 COLLATE utf32_bin;
 INSERT INTO t_index_bin VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 INSERT INTO t_index_bin VALUES (4, 'Banana'), (5, 'banana');
 
@@ -534,22 +562,33 @@ CREATE TABLE t_unique_ci (
     name VARCHAR(100) UNIQUE
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 
-INSERT INTO t_unique_ci VALUES (1, 'Apple');
--- This should fail due to case-insensitive unique constraint
--- INSERT INTO t_unique_ci VALUES (2, 'apple');
-
-SELECT * FROM t_unique_ci;
+SELECT COUNT(*) AS rejected_unique_table FROM information_schema.tables
+WHERE table_schema = 'charset_test' AND table_name = 't_unique_ci';
+CREATE TABLE t_unique_ci (
+    id INT PRIMARY KEY,
+    name VARCHAR(100) UNIQUE
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+-- legacy唯一键允许大小写变体，但仍拒绝完全相同的原值。
+INSERT INTO t_unique_ci VALUES (1, 'Apple'), (2, 'apple');
+INSERT INTO t_unique_ci VALUES (3, 'Apple');
+SELECT * FROM t_unique_ci ORDER BY id;
 
 CREATE TABLE t_unique_bin (
     id INT PRIMARY KEY,
     name VARCHAR(100) UNIQUE
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
+SELECT COUNT(*) AS rejected_unique_table FROM information_schema.tables
+WHERE table_schema = 'charset_test' AND table_name = 't_unique_bin';
+CREATE TABLE t_unique_bin (
+    id INT PRIMARY KEY,
+    name VARCHAR(100) UNIQUE
+) CHARACTER SET utf8mb4 COLLATE utf32_bin;
 INSERT INTO t_unique_bin VALUES (1, 'Apple');
 -- This should succeed with case-sensitive unique constraint
 INSERT INTO t_unique_bin VALUES (2, 'apple');
 INSERT INTO t_unique_bin VALUES (3, 'APPLE');
-
+INSERT INTO t_unique_bin VALUES (4, 'Apple');
 SELECT * FROM t_unique_bin ORDER BY id;
 
 -- @case
@@ -733,6 +772,7 @@ CREATE TABLE t_binary_default_general_columns (
 ) CHARACTER SET binary;
 ALTER TABLE t_binary_default_general_columns
     ADD COLUMN add_col VARCHAR(100) COLLATE utf8mb4_general_ci;
+-- 不支持的native在线转换必须拒绝，modify_col保留原bin域。
 ALTER TABLE t_binary_default_general_columns
     MODIFY COLUMN modify_col VARCHAR(100) COLLATE utf8mb4_general_ci;
 INSERT INTO t_binary_default_general_columns VALUES

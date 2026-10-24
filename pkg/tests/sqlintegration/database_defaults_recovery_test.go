@@ -149,13 +149,27 @@ func TestDatabaseDefaultsFailureAndRecovery(t *testing.T) {
 				return err == nil && at != previous
 			}, 5*time.Second, 20*time.Millisecond)
 			exec(t, ctx, db, "alter database "+schema+" collate utf8mb4_bin")
-			exec(t, ctx, db, "alter table "+schema+".t convert to character set utf8mb4 collate utf8mb4_bin")
+			_, err := db.ExecContext(ctx, "alter table "+schema+".t convert to character set utf8mb4 collate utf8mb4_bin")
+			require.ErrorContains(t, err, "online native PAD collation conversion is disabled")
+			column(t, ctx, db, "t", "utf8mb4_unicode_ci")
+			var matched, replacements int
+			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+schema+".t force index(iv) where v='ss'").Scan(&matched))
+			require.Equal(t, 2, matched)
+			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from information_schema.tables where table_schema=? and table_name like 't_copy_%'", schema).Scan(&replacements))
+			require.Zero(t, replacements)
 			for _, restore := range []string{
 				"restore table " + schema + ".t {snapshot='c03_recovery_snapshot'}",
 				"restore database " + schema + " table t from pitr c03_recovery_pitr '" + at + "'",
 			} {
+				// Each restore must repair observable damage, not an already-restored table.
+				exec(t, ctx, db, "alter table "+schema+".t convert to character set utf8mb4 collate utf32_bin")
+				column(t, ctx, db, "t", "utf8mb4_bin")
+				require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+schema+".t force index(iv) where v='ss'").Scan(&matched))
+				require.Equal(t, 1, matched)
 				exec(t, ctx, db, restore)
 				column(t, ctx, db, "t", "utf8mb4_unicode_ci")
+				require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+schema+".t force index(iv) where v='ss'").Scan(&matched))
+				require.Equal(t, 2, matched)
 				var current string
 				require.NoError(t, db.QueryRowContext(ctx, "select default_collation_name from information_schema.schemata where schema_name=?", schema).Scan(&current))
 				require.Equal(t, "utf8mb4_bin", current, "table-only restore must not overwrite the database")
@@ -163,7 +177,6 @@ func TestDatabaseDefaultsFailureAndRecovery(t *testing.T) {
 			exec(t, ctx, db, "restore database "+schema+" from pitr c03_recovery_pitr '"+at+"'")
 			exec(t, ctx, db, "create table "+schema+".inherited(v varchar(8))")
 			column(t, ctx, db, "inherited", "utf8mb4_unicode_ci")
-			var matched int
 			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+schema+".t force index(iv) where v='ss'").Scan(&matched))
 			require.Equal(t, 2, matched)
 		}) {

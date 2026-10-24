@@ -290,10 +290,14 @@ func TestUnicodeCollationConsumerContract(t *testing.T) {
 		// Legacy CHAR keeps its historical byte-order tie behavior. TopN must
 		// agree with the full ORDER BY prefix even though scalar CHAR equality
 		// ignores trailing spaces.
-		exec("create table chars (id int primary key, s char(4) collate utf8mb4_bin)")
+		exec("create table chars (id int primary key, s char(4) collate utf32_bin)")
 		exec("insert into chars values (1,'a '),(2,'a'),(3,'b')")
 		require.Equal(t, []string{"2", "1", "3"}, queryStrings("select id from chars order by s,id"))
 		require.Equal(t, []string{"2"}, queryStrings("select id from chars order by s,id limit 1"))
+		exec("create table native_chars (id int primary key, s char(4) collate utf8mb4_bin)")
+		exec("insert into native_chars select id,s from chars")
+		require.Equal(t, []string{"1", "2", "3"}, queryStrings("select id from native_chars order by s,id"))
+		require.Equal(t, []string{"1"}, queryStrings("select id from native_chars order by s,id limit 1"))
 
 		var original, serialized string
 		require.NoError(t, db.QueryRowContext(ctx,

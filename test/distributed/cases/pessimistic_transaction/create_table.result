@@ -6,7 +6,7 @@ create table t(a int);
 alter table t add column b int;
 commit;
 select * from t;
-a    b
+➤ a[4,32,0]  ¦  b[4,32,0]
 drop database test;
 create database if not exists ry_flowable;
 use ry_flowable;
@@ -25,27 +25,27 @@ SUB_SCOPE_ID_ varchar(255),
 SCOPE_TYPE_ varchar(255),
 SCOPE_DEFINITION_ID_ varchar(255),
 primary key (ID_)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE utf8_bin;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE utf32_bin;
 create index ACT_IDX_IDENT_LNK_USER on ACT_RU_IDENTITYLINK(USER_ID_);
 create index ACT_IDX_IDENT_LNK_GROUP on ACT_RU_IDENTITYLINK(GROUP_ID_);
 create index ACT_IDX_IDENT_LNK_SCOPE on ACT_RU_IDENTITYLINK(SCOPE_ID_, SCOPE_TYPE_);
 create index ACT_IDX_IDENT_LNK_SUB_SCOPE on ACT_RU_IDENTITYLINK(SUB_SCOPE_ID_, SCOPE_TYPE_);
 desc ACT_RU_IDENTITYLINK;
-Field    Type    Null    Key    Default    Extra    Comment
-ID_    varchar(64)    NO    PRI    null        
-REV_    int    YES        null        
-GROUP_ID_    varchar(255)    YES    MUL    null        
-TYPE_    varchar(255)    YES        null        
-USER_ID_    varchar(255)    YES    MUL    null        
-TASK_ID_    varchar(64)    YES        null        
-PROC_INST_ID_    varchar(64)    YES        null        
-PROC_DEF_ID_    varchar(64)    YES        null        
-SCOPE_ID_    varchar(255)    YES    MUL    null        
-SUB_SCOPE_ID_    varchar(255)    YES    MUL    null        
-SCOPE_TYPE_    varchar(255)    YES        null        
-SCOPE_DEFINITION_ID_    varchar(255)    YES        null        
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+ID_  ¦  varchar(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
+REV_  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+GROUP_ID_  ¦  varchar(255)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+TYPE_  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+USER_ID_  ¦  varchar(255)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+TASK_ID_  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+PROC_INST_ID_  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+PROC_DEF_ID_  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+SCOPE_ID_  ¦  varchar(255)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+SUB_SCOPE_ID_  ¦  varchar(255)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
+SCOPE_TYPE_  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+SCOPE_DEFINITION_ID_  ¦  varchar(255)  ¦  YES  ¦    ¦  null  ¦    ¦  
 SELECT @@session.transaction_read_only;
-@@transaction_read_only
+➤ @@transaction_read_only[-1,16383,0]  𝄀
 0
 SELECT TABLE_SCHEMA AS TABLE_CAT,
 NULL AS TABLE_SCHEM,
@@ -68,10 +68,10 @@ NULL AS SELF_REFERENCING_COL_NAME,
 NULL AS REF_GENERATION
 FROM INFORMATION_SCHEMA.TABLES
 WHERE TABLE_SCHEMA = 'ry_flowable' AND TABLE_NAME LIKE 'act_ru_identitylink';
-TABLE_CAT    TABLE_SCHEM    TABLE_NAME    TABLE_TYPE    REMARKS    TYPE_CAT    TYPE_SCHEM    TYPE_NAME    SELF_REFERENCING_COL_NAME    REF_GENERATION
-ry_flowable    null    act_ru_identitylink    TABLE        null    null    null    null    null
+➤ TABLE_CAT[12,5000,0]  ¦  TABLE_SCHEM[12,1,0]  ¦  TABLE_NAME[12,5000,0]  ¦  TABLE_TYPE[12,15,0]  ¦  REMARKS[-1,16383,0]  ¦  TYPE_CAT[12,1,0]  ¦  TYPE_SCHEM[12,1,0]  ¦  TYPE_NAME[12,1,0]  ¦  SELF_REFERENCING_COL_NAME[12,1,0]  ¦  REF_GENERATION[12,1,0]  𝄀
+ry_flowable  ¦  null  ¦  act_ru_identitylink  ¦  TABLE  ¦    ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
 commit;
 show tables;
-Tables_in_ry_flowable
+➤ Tables_in_ry_flowable[12,5000,0]  𝄀
 act_ru_identitylink
 drop database ry_flowable;

@@ -14,7 +14,7 @@ use mysql_ddl_test_db;
 create table if not exists mmysql_ddl_test_t21(id int, name varchar(255)) engine = 'InnoDB';
 show create table mmysql_ddl_test_t21;
 
-create table if not exists mmysql_ddl_test_t22(id int, name varchar(255)) DEFAULT CHARSET=utf8 COLLATE = utf8mb4_general_ci ;
+create table if not exists mmysql_ddl_test_t22(id int, name varchar(255)) DEFAULT CHARSET=utf8 COLLATE = utf8mb4_0900_ai_ci ;
 show create table mmysql_ddl_test_t22;
 
 create table if not exists mmysql_ddl_test_t23(id int, name varchar(255)) DEFAULT CHARSET = utf8;
@@ -26,13 +26,13 @@ show create table mmysql_ddl_test_t24;
 create table if not exists mmysql_ddl_test_t25(id int, name varchar(255)) DEFAULT CHARSET =utf8;
 show create table mmysql_ddl_test_t25;
 
-create table if not exists mmysql_ddl_test_t26(id int, name varchar(255)) DEFAULT CHARSET     =       utf8 COLLATE=utf8mb4_general_ci ;
+create table if not exists mmysql_ddl_test_t26(id int, name varchar(255)) DEFAULT CHARSET     =       utf8 COLLATE=utf8mb4_0900_ai_ci ;
 show create table mmysql_ddl_test_t26;
 
-create table if not exists mmysql_ddl_test_t27(id int, name varchar(255) CHARACTER SET utf8 COLLATE utf8mb4_general_ci);
+create table if not exists mmysql_ddl_test_t27(id int, name varchar(255) CHARACTER SET utf8 COLLATE utf8mb4_0900_ai_ci);
 show create table mmysql_ddl_test_t27;
 
-create table if not exists mmysql_ddl_test_t28(id int, name varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci);
+create table if not exists mmysql_ddl_test_t28(id int, name varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci);
 show create table mmysql_ddl_test_t28;
 
 create table if not exists mmysql_ddl_test_t29(id int, name varchar(255),primary key (id)  USING BTREE);
@@ -59,7 +59,7 @@ show create table mmysql_ddl_test_t214;
 create table mmysql_ddl_test_t215 (id int) ROW_FORMAT = COMPACT;
 show create table mmysql_ddl_test_t215;
 
-create table if not exists mmysql_ddl_test_t216(id int AUTO_INCREMENT, name varchar(255) CHARACTER SET utf8 COLLATE utf8mb4_general_ci,primary key (id)  USING BTREE) AUTO_INCREMENT=123 engine = 'InnoDB' DEFAULT CHARSET=utf8 COLLATE = utf8mb4_general_ci ROW_FORMAT = COMPACT;
+create table if not exists mmysql_ddl_test_t216(id int AUTO_INCREMENT, name varchar(255) CHARACTER SET utf8 COLLATE utf8mb4_0900_ai_ci,primary key (id)  USING BTREE) AUTO_INCREMENT=123 engine = 'InnoDB' DEFAULT CHARSET=utf8 COLLATE = utf8mb4_0900_ai_ci ROW_FORMAT = COMPACT;
 show create table mmysql_ddl_test_t216;
 
 1. unre

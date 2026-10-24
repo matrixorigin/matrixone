@@ -861,7 +861,7 @@ func compileFilterExpr(
 	// discard a matching block before the residual SQL comparator runs. Keep
 	// this optional pruning path disabled for expressions that read a Unicode
 	// string column until the persisted zone-map domain is versioned as well.
-	if exprUsesUnicodeCollationColumn(expr, tableDef) {
+	if exprNeedsCollationComparison(expr, tableDef) {
 		canCompile = false
 		return
 	}
@@ -1788,9 +1788,18 @@ func compileFilterExpr(
 	return
 }
 
-func exprUsesUnicodeCollationColumn(expr *plan.Expr, tableDef *plan.TableDef) bool {
+func typeNeedsCollationComparison(typ plan.Type) bool {
+	runtime, err := types.TypeFromPlan(typ)
+	return err != nil || types.HasCollationKey(runtime)
+}
+
+func exprNeedsCollationComparison(expr *plan.Expr, tableDef *plan.TableDef) bool {
 	if expr == nil || tableDef == nil {
 		return false
+	}
+	// 显式 COLLATE 可以只改变表达式域，不改变底层 legacy 列的 metadata。
+	if typeNeedsCollationComparison(expr.Typ) {
+		return true
 	}
 	switch impl := expr.Expr.(type) {
 	case *plan.Expr_Col:
@@ -1808,13 +1817,13 @@ func exprUsesUnicodeCollationColumn(expr *plan.Expr, tableDef *plan.TableDef) bo
 		if !ok || pos < 0 || int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos] == nil {
 			return false
 		}
-		return types.IsUnicodeCollation(uint8(tableDef.Cols[pos].Typ.Charset))
+		return typeNeedsCollationComparison(tableDef.Cols[pos].Typ)
 	case *plan.Expr_F:
 		if impl.F == nil {
 			return false
 		}
 		for _, arg := range impl.F.Args {
-			if exprUsesUnicodeCollationColumn(arg, tableDef) {
+			if exprNeedsCollationComparison(arg, tableDef) {
 				return true
 			}
 		}
@@ -1823,7 +1832,7 @@ func exprUsesUnicodeCollationColumn(expr *plan.Expr, tableDef *plan.TableDef) bo
 			return false
 		}
 		for _, item := range impl.List.List {
-			if exprUsesUnicodeCollationColumn(item, tableDef) {
+			if exprNeedsCollationComparison(item, tableDef) {
 				return true
 			}
 		}

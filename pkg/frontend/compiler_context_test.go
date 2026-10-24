@@ -526,7 +526,7 @@ func TestRecoverTableDefForPlanMigratesLegacyHex(t *testing.T) {
 func TestCollationMetadataResolveRejectsBeforeLegacyRecovery(t *testing.T) {
 	for _, catalogDef := range []*pbplan.TableDef{
 		{Cols: []*pbplan.ColDef{{Name: "v", Typ: pbplan.Type{Id: int32(types.T_varchar), Charset: 4, CollationVersion: 1}}}},
-		{DefaultCharset: 3, CollationVersion: 1},
+		{DefaultCharset: 4, CollationVersion: 1},
 		{KeyFormat: 1},
 		{Indexes: []*pbplan.IndexDef{{KeyFormat: 1}}},
 	} {
@@ -550,6 +550,32 @@ func TestCollationMetadataResolveRejectsBeforeLegacyRecovery(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, before, after)
 	}
+}
+
+func TestNativePADCatalogFloorBeforeRecovery(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolFloor} {
+		previous, existed := rt.GetGlobalVariables(key)
+		t.Cleanup(func() {
+			if existed {
+				rt.SetGlobalVariables(key, previous)
+			} else if current, ok := rt.GetGlobalVariables(key); ok {
+				rt.CompareAndDeleteGlobalVariables(key, current)
+			}
+		})
+	}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion119)
+	tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: proc.Ctx, proc: proc}}
+	table := &pbplan.TableDef{DefaultCharset: 3, CollationVersion: 1}
+	before, err := table.Marshal()
+	require.NoError(t, err)
+	err = tcc.recoverLegacyTinyText(proc.Ctx, "db", table, nil, nil)
+	require.ErrorContains(t, err, "protocol version 130")
+	after, err := table.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, before, after, "拒绝必须先于legacy恢复和元数据改写")
 }
 
 func TestResolveByIdPreservesUnassignableLegacyHexDefault(t *testing.T) {

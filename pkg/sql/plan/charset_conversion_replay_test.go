@@ -31,6 +31,7 @@ func TestCharsetConversionRetainsTypedComputation(t *testing.T) {
 		for _, collation := range []string{"utf8mb4_bin", "utf8mb4_general_ci", "utf8mb4_unicode_ci"} {
 			t.Run(expression+"/"+collation, func(t *testing.T) {
 				compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+				compiler.SetContext(WithCollationBindingRevision(compiler.GetContext(), 0))
 				compiler.tables["t"] = &planpb.TableDef{Name: "t"}
 				build := func(increment int64, sql string) *planpb.Plan {
 					t.Helper()

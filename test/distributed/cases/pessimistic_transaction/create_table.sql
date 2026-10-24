@@ -27,7 +27,7 @@ create table ACT_RU_IDENTITYLINK (
                                      SCOPE_TYPE_ varchar(255),
                                      SCOPE_DEFINITION_ID_ varchar(255),
                                      primary key (ID_)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE utf8_bin;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE utf32_bin;
 
 create index ACT_IDX_IDENT_LNK_USER on ACT_RU_IDENTITYLINK(USER_ID_);
 create index ACT_IDX_IDENT_LNK_GROUP on ACT_RU_IDENTITYLINK(GROUP_ID_);

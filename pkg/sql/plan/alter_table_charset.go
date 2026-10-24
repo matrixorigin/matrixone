@@ -56,8 +56,15 @@ func alterTableCharsetDefaultOptions(options []tree.AlterTableOption) []tree.Tab
 	return defaults
 }
 
-func alterTableCharsetConversion(ctx CompilerContext, options []tree.AlterTableOption) (*plan.DatabaseDefaults, error) {
-	var conversion *plan.DatabaseDefaults
+// Keep the authored target separate from normalized database metadata: a
+// canonical spelling reconstructed from a legacy alias is not a new request.
+type alterCharsetConversionTarget struct {
+	characterSet string
+	collation    string
+}
+
+func alterTableCharsetConversion(ctx CompilerContext, options []tree.AlterTableOption) (*alterCharsetConversionTarget, error) {
+	var conversion *alterCharsetConversionTarget
 	for _, option := range options {
 		opt, ok := option.(*tree.TableOptionCharset)
 		if !ok || !opt.Convert || opt.NonCharsetSyntax {
@@ -67,10 +74,26 @@ func alterTableCharsetConversion(ctx CompilerContext, options []tree.AlterTableO
 		if opt.Collate != "" {
 			request = append(request, &tree.CreateOptionCollate{Collate: opt.Collate})
 		}
-		var err error
-		conversion, err = NormalizeDatabaseDefaults(ctx.GetContext(), request, "utf8mb4_general_ci")
+		normalized, err := NormalizeDatabaseDefaults(ctx.GetContext(), request, "utf8mb4_general_ci")
 		if err != nil {
 			return nil, err
+		}
+		conversion = &alterCharsetConversionTarget{
+			characterSet: normalized.CharacterSet,
+			collation:    normalized.Collation,
+		}
+		if opt.Collate != "" {
+			conversion.collation = opt.Collate
+		} else {
+			// A charset-only request retains the legacy default in both the
+			// target preflight and the later MODIFY replay. Do not synthesize
+			// a canonical explicit request that would acquire revision 1.
+			switch normalized.CollationId {
+			case uint32(collation.UTF8MB4BinIdentity):
+				conversion.collation = "utf32_bin"
+			case uint32(collation.UTF8MB4GeneralCIIdentity):
+				conversion.collation = "utf8mb4_0900_ai_ci"
+			}
 		}
 	}
 	return conversion, nil
@@ -86,7 +109,13 @@ func applyAlterTableCharsetDefault(ctx CompilerContext, table *plan.TableDef, op
 		return err
 	}
 	table.DefaultCharset = identity
-	table.CollationVersion = uint32(types.CollationVersionLegacy)
+	table.CollationVersion, err = tableDefaultCollationRevision(ctx.GetContext(), defaults, identity)
+	if err != nil {
+		return err
+	}
+	if table.KeyFormat == collation.KeyFormatV1 && table.CollationVersion == 1 && !types.IsUnicodeCollation(uint8(identity)) {
+		return moerr.NewNotSupported(ctx.GetContext(), "native PAD table default with versioned unique indexes is disabled")
+	}
 	// V1 physical unique keys also own this schema marker; changing only
 	// inheritance must not revoke optimizer-pruned native-unique table shells.
 	if types.IsUnicodeCollation(uint8(identity)) || table.KeyFormat == collation.KeyFormatV1 {
@@ -98,8 +127,8 @@ func applyAlterTableCharsetDefault(ctx CompilerContext, table *plan.TableDef, op
 // Reuse MODIFY's type/default/generated/constraint binding rather than changing
 // only the Type tag. COPY owns row validation, index rebuild, publication and
 // failure cleanup. The parsed replay schema and its added attributes stay local.
-func convertAlterTableCharacterColumns(ctx CompilerContext, alter *plan.AlterTable, state *AlterTableContext, conversion *plan.DatabaseDefaults) error {
-	_, parsed, err := constructCreateTableSQL(ctx, alter.CopyTableDef, nil, true, nil, true, nil)
+func convertAlterTableCharacterColumns(ctx CompilerContext, alter *plan.AlterTable, state *AlterTableContext, conversion *alterCharsetConversionTarget) error {
+	_, parsed, err := constructCreateTableSQLForReplay(ctx, alter.CopyTableDef, nil, true, nil, true, nil)
 	if err != nil {
 		return err
 	}
@@ -125,9 +154,9 @@ func convertAlterTableCharacterColumns(ctx CompilerContext, alter *plan.AlterTab
 		switch types.T(old.Typ.Id) {
 		case types.T_char, types.T_varchar, types.T_text:
 			column.Attributes = append(column.Attributes,
-				tree.NewAttributeCharset(conversion.CharacterSet),
-				tree.NewAttributeCollate(conversion.Collation))
-			old.Typ, err = getColumnTypeFromAst(ctx.GetContext(), column, target.DefaultCharset, nil)
+				tree.NewAttributeCharset(conversion.characterSet),
+				tree.NewAttributeCollate(conversion.collation))
+			old.Typ, err = getColumnTypeFromAst(ctx.GetContext(), column, target.DefaultCharset, tableColumnCollationRevision(target), nil)
 			if err != nil {
 				return err
 			}

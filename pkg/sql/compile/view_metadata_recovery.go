@@ -1295,6 +1295,9 @@ func refreshPendingView(proc *process.Process, pending *pendingViewRefresh) (boo
 	replacement := plan2.DeepCopyTableDef(currentDef, true)
 	replacement.Cols = plan2.DeepCopyColDefList(regenerated.TableDef.Cols)
 	replacement.ViewSql = regenerated.TableDef.ViewSql
+	if err = plan2.RequireCatalogCollationsForAuthoring(targetContext, proc, replacement); err != nil {
+		return false, err
+	}
 	if err = relation.AlterTable(targetContext, nil, []*api.AlterTableReq{
 		api.NewGuardedReplaceDefReq(
 			pending.databaseID, pending.relationID, currentDef.Version,

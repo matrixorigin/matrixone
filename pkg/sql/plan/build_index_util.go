@@ -320,6 +320,9 @@ func checkIndexColumnSupportabilityWithKeyFormat(
 	}
 
 	colName := keyPart.ColName.ColNameOrigin()
+	if planpb.HasNativePADCollation(col.Typ) {
+		return moerr.NewNotSupportedf(ctx, "native PAD collation index on column %s is disabled", colName)
+	}
 	switch indexKind {
 	case "primary":
 		if err := rejectNativeUnicodePrimaryKey(ctx, col.Typ, colName); err != nil {

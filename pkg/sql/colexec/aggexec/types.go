@@ -550,7 +550,7 @@ func makeAgg(
 	// Compact spill vectors inherit their type from this execution contract;
 	// ordinary partial-state vectors also validate their own wire metadata.
 	for _, typ := range param {
-		if err := requireLegacyAggregateType(typ); err != nil {
+		if err := requireExecutableAggregateType(typ); err != nil {
 			return nil, err
 		}
 	}

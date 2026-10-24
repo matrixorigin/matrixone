@@ -234,6 +234,7 @@ type viewColumnInference struct {
 	provenance          []OutputColumnProvenance
 	dependencies        []ViewDependency
 	requiredProtocol    int64
+	bindingRevision     uint32
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
 }
 
@@ -252,6 +253,13 @@ func inferViewColumns(
 	// persisted view. Keep the requirement observed on the bound plan so the
 	// catalog marker cannot depend on whether that fold happened to run.
 	var preOptimizeViewRequiredProtocol int64
+	var bindingRevision uint32
+	if forAuthoring && ctx.GetContext() != nil {
+		if replay, ok := ctx.GetContext().Value(persistedViewCollationReplayKey{}).(persistedViewCollationReplay); ok {
+			preOptimizeViewRequiredProtocol = replay.requiredProtocol
+			bindingRevision = replay.bindingRevision
+		}
+	}
 	validate := func(query *Query) error {
 		for _, node := range query.Nodes {
 			if node != nil && node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef.GetTblFunc().GetName() == "json_table" {
@@ -285,6 +293,9 @@ func inferViewColumns(
 	var outputColumnProvenance []OutputColumnProvenance
 	var expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
 	captureColumnTypes := func(bindCtx *BindContext) {
+		if bindCtx.persistedCollationBindingRevision != nil {
+			bindingRevision = max(bindingRevision, *bindCtx.persistedCollationBindingRevision)
+		}
 		if bindCtx.persistedExpressionProtocolRequirement != nil &&
 			*bindCtx.persistedExpressionProtocolRequirement > preOptimizeViewRequiredProtocol {
 			preOptimizeViewRequiredProtocol = *bindCtx.persistedExpressionProtocolRequirement
@@ -329,6 +340,9 @@ func inferViewColumns(
 	}
 	if preOptimizeViewRequiredProtocol > viewRequiredProtocol {
 		viewRequiredProtocol = preOptimizeViewRequiredProtocol
+	}
+	if bindingRevision == 1 {
+		viewRequiredProtocol = max(viewRequiredProtocol, defines.MORPCVersion130)
 	}
 	if viewRequiredProtocol > 0 {
 		if forAuthoring {
@@ -392,6 +406,7 @@ func inferViewColumns(
 		provenance:          outputColumnProvenance,
 		dependencies:        dependencyCapture.dependencies(),
 		requiredProtocol:    viewRequiredProtocol,
+		bindingRevision:     bindingRevision,
 		expandedSelectLists: expandedSelectLists,
 	}, nil
 }
@@ -457,14 +472,15 @@ func genViewTableDef(
 		// Definition must be generated from the same star-expanded SELECT that is
 		// persisted in Stmt. Formatting the original AST would let metadata replay
 		// a later schema's columns even though the View itself remains frozen.
-		Definition:              tree.StringWithOpts(definitionStmt, dialect.MYSQL, tree.WithViewDefinition()),
-		CheckOption:             strings.ToUpper(checkOption),
-		DefaultDatabase:         ctx.DefaultDatabase(),
-		SQLMode:                 parserSQLModeFromContext(ctx),
-		SecurityType:            getViewSecurityTypeFromContext(ctx),
-		LowerCaseTableNames:     &lowerCaseTableNames,
-		Dependencies:            inferred.dependencies,
-		RequiredProtocolVersion: persistedRequiredProtocol,
+		Definition:               tree.StringWithOpts(definitionStmt, dialect.MYSQL, tree.WithViewDefinition()),
+		CheckOption:              strings.ToUpper(checkOption),
+		DefaultDatabase:          ctx.DefaultDatabase(),
+		SQLMode:                  parserSQLModeFromContext(ctx),
+		SecurityType:             getViewSecurityTypeFromContext(ctx),
+		LowerCaseTableNames:      &lowerCaseTableNames,
+		Dependencies:             inferred.dependencies,
+		RequiredProtocolVersion:  persistedRequiredProtocol,
+		CollationBindingRevision: inferred.bindingRevision,
 	})
 	if err != nil {
 		return nil, err
@@ -1645,11 +1661,15 @@ func genAsSelectCols(
 	stmt *tree.Select,
 	isPrepareStmt bool,
 	explicitTargetColumns map[string]struct{},
+	create *plan.CreateTable,
 ) ([]*ColDef, *Query, int64, error) {
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
+	// 来源与fold前协议需求跟随DDL plan，内部INSERT重绑定不得猜当前session。
+	bindCtx.ctasNativeCollationProtocolRequirement = &create.RequiredProtocolVersion
+	bindCtx.persistedCollationBindingRevision = &create.CollationBindingRevision
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
@@ -1663,6 +1683,9 @@ func genAsSelectCols(
 	}
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
 		return nil, nil, 0, err
+	}
+	if create.CollationBindingRevision == 1 {
+		create.RequiredProtocolVersion = max(create.RequiredProtocolVersion, defines.MORPCVersion130)
 	}
 	outputColumnProvenance := make([]OutputColumnProvenance, len(bindCtx.headings))
 	for i := range outputColumnProvenance {
@@ -2846,7 +2869,7 @@ func buildCreateTable(
 		if sub != nil {
 			ctx.SetQueryingSubscription(previousSubscription)
 		}
-		_, newStmt, err := constructCreateTableSQL(
+		_, newStmt, err := constructCreateTableSQLForReplay(
 			ctx,
 			likeSkeletonDef,
 			snapshot,
@@ -2870,7 +2893,7 @@ func buildCreateTable(
 			// The SQL skeleton describes the source columns, but its expression
 			// text must not be rebound under the cloning session's settings.
 			originalCtx := ctx.GetContext()
-			ctx.SetContext(WithPersistedDDLReplay(originalCtx, tableDef, tableDef))
+			ctx.SetContext(WithPersistedDDLReplay(originalCtx, tableDef, likeSkeletonDef))
 			p, err := func() (*Plan, error) {
 				defer ctx.SetContext(originalCtx)
 				return buildCreateTable(ctx, stmtLike, nil, isPrepareStmt)
@@ -2945,7 +2968,7 @@ func buildCreateTable(
 			}
 		}
 		if asSelectCols, asSelectQuery, createTable.CtasExecutionProtocolVersion, err = genAsSelectCols(
-			ctx, stmt.AsSource, isPrepareStmt, explicitTargetColumns,
+			ctx, stmt.AsSource, isPrepareStmt, explicitTargetColumns, createTable,
 		); err != nil {
 			return nil, err
 		}
@@ -3296,6 +3319,9 @@ func buildCreateTable(
 		}
 	}
 
+	if err := RequireCreateTableCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), createTable); err != nil {
+		return nil, err
+	}
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -3634,12 +3660,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			return err
 		}
 	}
-	createTable.TableDef.DefaultCharset = tableCharset
-	if types.IsUnicodeCollation(uint8(tableCharset)) {
-		createTable.TableDef.CollationVersion = uint32(types.CollationVersionV1)
-	} else {
-		createTable.TableDef.CollationVersion = uint32(types.CollationVersionLegacy)
+	tableRevision, err := tableDefaultCollationRevision(ctx.GetContext(), stmt.Options, tableCharset)
+	if err != nil {
+		return err
 	}
+	if replay != nil {
+		tableCharset, tableRevision = replay.defaultCharset, replay.defaultRevision
+	}
+	createTable.TableDef.DefaultCharset = tableCharset
+	createTable.TableDef.CollationVersion = tableRevision
 
 	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil ||
 		stmt.DataStreamParam != nil || stmt.ForeignParam != nil || stmt.KafkaParam != nil {
@@ -3666,7 +3695,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					return moerr.NewErrTooManyFields(ctx.GetContext())
 				}
 			}
-			cType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, replay)
+			cType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, tableRevision, replay)
 			if err != nil {
 				return err
 			}
@@ -3693,7 +3722,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
-			colType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, replay)
+			colType, err := getColumnTypeFromAst(ctx.GetContext(), def, tableCharset, tableRevision, replay)
 			if err != nil {
 				return err
 			}
@@ -4502,6 +4531,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 			ctx.GetContext(), ctx.GetProcess(), defines.MORPCVersion114,
 		); err != nil {
 			return err
+		}
+		if tableRevision == uint32(types.CollationVersionV1) && !types.IsUnicodeCollation(uint8(tableCharset)) {
+			return moerr.NewNotSupported(ctx.GetContext(), "native PAD table default with versioned unique indexes is disabled")
 		}
 		createTable.TableDef.KeyFormat = collation.KeyFormatV1
 		// Keep the native-unique contract visible after optimizer projection
@@ -5925,6 +5957,9 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 	} else {
+		if err := RequireCatalogCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), tableDef); err != nil {
+			return nil, err
+		}
 		if err := validateTableIndexDefinitions(tableDef); err != nil {
 			return nil, err
 		}
@@ -6196,6 +6231,9 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 		}
 	}
 
+	if err := RequireCatalogCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), tableDef); err != nil {
+		return nil, err
+	}
 	dropTable.TableDef = tableDef
 	if !tableDef.IsTemporary {
 		dropTable.UpdateFkSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
@@ -6246,6 +6284,13 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		}
 	}
 	dropTable.IsView = true
+	if tableDef != nil && tableDef.ViewSql != nil {
+		if err := RequireCatalogCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), tableDef); err != nil {
+			return nil, err
+		}
+		// A bool-only View still carries binding provenance needed by the writer.
+		dropTable.TableDef = tableDef
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -6491,6 +6536,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	createIndex.Index = indexInfo
 	createIndex.Table = tableName
 	createIndex.TableDef = tableDef
+	if err := RequireCreateIndexCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), createIndex); err != nil {
+		return nil, err
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -6682,6 +6730,9 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop index in subscription database")
 	}
 
+	if err := RequireCatalogCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), tableDef); err != nil {
+		return nil, err
+	}
 	// check index
 	requestedIndexName := string(stmt.Name)
 	resolvedIndexName, found := resolveIndexName(tableDef.Indexes, requestedIndexName)
@@ -6922,6 +6973,9 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 			}
 			alterTablePlan.UpdateFkSqls = updateSqls
+		}
+		if err := RequireAlterTableCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), alterTablePlan); err != nil {
+			return nil, err
 		}
 		renameTables = append(renameTables, alterTablePlan)
 	}
@@ -7725,6 +7779,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		return nil, err
 	}
 
+	if err := RequireCatalogCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), currentTableDef); err != nil {
+		return nil, err
+	}
+	if err := RequireAlterTableCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), alterTable); err != nil {
+		return nil, err
+	}
 	alterTable.DetectSqls = detectSqls
 	// Ordered ADD/DROP catalog mutations use the original identity. Rename
 	// their surviving rows and incoming references only after all mutations.
@@ -7878,6 +7938,9 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	for i, keyPart := range def.KeyParts {
 		colName := keyPart.ColName.ColName()
 		if colDef, has := name2ColDef[colName]; has {
+			if plan.HasNativePADCollation(colDef.Typ) {
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "native PAD collation foreign keys are disabled")
+			}
 			// column id from tableDef
 			fkData.Def.Cols[i] = colDef.ColId
 			// column name from tableDef
@@ -8099,6 +8162,9 @@ func checkForeignKeyColumns(ctx context.Context, fkData *FkData, parentTableDef 
 	matchCols := make([]uint64, len(fkData.ColsReferred.Cols))
 	for i, referredColName := range fkData.ColsReferred.Cols {
 		colID := parentTableDef.Cols[columnNamePos[referredColName]].ColId
+		if plan.HasNativePADCollation(parentTableDef.Cols[columnIdPos[colID]].Typ) || plan.HasNativePADCollation(*fkData.ColTyps[i]) {
+			return moerr.NewNotSupported(ctx, "native PAD collation foreign keys are disabled")
+		}
 		if parentTableDef.Cols[columnIdPos[colID]].Typ.Id != fkData.ColTyps[i].Id {
 			return moerr.NewInternalErrorf(ctx, "type of reference column '%v' is not match for column '%v'", referredColName, fkData.Cols.Cols[i])
 		}

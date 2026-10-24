@@ -584,11 +584,14 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 		}
 	}
 
+	if err := RequireAlterTableCollationsForAuthoring(ctx, cctx.GetProcess(), alterTablePlan); err != nil {
+		return nil, err
+	}
 	if err := validateAlterColumnCount(ctx, tableDef, copyTableDef); err != nil {
 		return nil, err
 	}
 
-	createTmpDdl, _, err := constructCreateTableSQL(
+	createTmpDdl, _, err := constructCreateTableSQLForReplay(
 		cctx, copyTableDef, snapshot, true, nil, true, nil,
 	)
 	if err != nil {
@@ -1885,7 +1888,7 @@ func isInplaceColumnDefinition(
 		return
 	}
 
-	ok, err = storageAgnosticType(ctx, column, oCol, tableDef.DefaultCharset)
+	ok, err = storageAgnosticType(ctx, column, oCol, tableDef.DefaultCharset, tableColumnCollationRevision(tableDef))
 	if err != nil {
 		return
 	}
@@ -1930,10 +1933,10 @@ func storageAgnosticType(
 	ctx context.Context,
 	nCol *tree.ColumnTableDef,
 	oCol *ColDef,
-	defaultCharset uint32,
+	defaultCharset, defaultRevision uint32,
 ) (ok bool, err error) {
 
-	nTy, err := getColumnTypeFromAst(ctx, nCol, defaultCharset, nil)
+	nTy, err := getColumnTypeFromAst(ctx, nCol, defaultCharset, defaultRevision, nil)
 	if err != nil {
 		return
 	}

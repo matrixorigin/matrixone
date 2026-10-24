@@ -2,9 +2,12 @@
 package plan
 
 type legacyCollationVisitor struct {
-	inline [32]any
-	count  int
-	seen   map[any]struct{}
+	inline             [32]any
+	count              int
+	seen               map[any]struct{}
+	mode               collationVisitMode
+	collectExpressions bool
+	features           RemoteExpressionFeatures
 }
 
 func (v *legacyCollationVisitor) visited(p any) bool {
@@ -236,6 +239,8 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkTableDef(&p)
 	case IndexDef:
 		return true, v.walkIndexDef(&p)
+	case Expr:
+		return true, v.walkExpr(&p)
 	case []*Expr:
 		for _, p := range p {
 			if err := v.walkExpr(p); err != nil {
@@ -809,6 +814,11 @@ func (v *legacyCollationVisitor) walkExpr(p *Expr) error {
 	if v.visited(p) {
 		return nil
 	}
+	if v.collectExpressions {
+		if err := v.features.observeExpression(p); err != nil {
+			return err
+		}
+	}
 	if err := v.walkType(&p.Typ); err != nil {
 		return err
 	}
@@ -962,7 +972,7 @@ func (v *legacyCollationVisitor) walkIndexDef(p *IndexDef) error {
 	if p == nil {
 		return nil
 	}
-	if err := requireLegacySchema(0, 0, p.KeyFormat); err != nil {
+	if err := v.checkIndex(nil, p); err != nil {
 		return err
 	}
 	return nil
@@ -1550,7 +1560,7 @@ func (v *legacyCollationVisitor) walkTableDef(p *TableDef) error {
 	if p == nil {
 		return nil
 	}
-	if err := requireLegacyTable(p); err != nil {
+	if err := v.checkTable(p); err != nil {
 		return err
 	}
 	for _, item0 := range p.Cols {
@@ -1562,7 +1572,7 @@ func (v *legacyCollationVisitor) walkTableDef(p *TableDef) error {
 		return err
 	}
 	for _, item0 := range p.Indexes {
-		if err := requireLegacyTableIndex(p, item0); err != nil {
+		if err := v.checkIndex(p, item0); err != nil {
 			return err
 		}
 	}
@@ -1592,7 +1602,7 @@ func (v *legacyCollationVisitor) walkType(p *Type) error {
 	if p == nil {
 		return nil
 	}
-	return requireLegacyType(*p)
+	return v.checkType(*p)
 }
 func (v *legacyCollationVisitor) walkUpdateCtx(p *UpdateCtx) error {
 	if p == nil {

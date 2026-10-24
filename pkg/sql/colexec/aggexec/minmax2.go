@@ -779,14 +779,19 @@ func makeMinMaxExecWithLegacyText(
 			param.Charset == types.CharsetLegacy {
 			return newStrMinMaxExec(mp, aggID, isMin, param)
 		}
-		if types.IsUnicodeCollation(param.Charset) {
+		if types.HasCollationKey(param) {
 			return newUnicodeMinMaxExec(mp, aggID, isMin, param)
 		}
 		if param.Charset == types.CharsetUTF8MB4Bin {
 			return newUTF8mb4BinMinMaxExec(mp, aggID, isMin, param)
 		}
 		return newTextMinMaxExec(mp, aggID, isMin, param)
-	case types.T_blob, types.T_binary, types.T_varbinary, types.T_datalink:
+	case types.T_blob:
+		if !legacyTextComparator && types.HasCollationKey(param) {
+			return newUnicodeMinMaxExec(mp, aggID, isMin, param)
+		}
+		return newStrMinMaxExec(mp, aggID, isMin, param)
+	case types.T_binary, types.T_varbinary, types.T_datalink:
 		return newStrMinMaxExec(mp, aggID, isMin, param)
 	case types.T_json:
 		return newJSONMinMaxExec(mp, aggID, isMin, param)

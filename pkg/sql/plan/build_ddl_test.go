@@ -471,11 +471,26 @@ func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *test
 	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8mb3").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetBinary), FindColumn(tableDef.Cols, "c_binary").Typ.Charset)
+	require.Zero(t, FindColumn(tableDef.Cols, "c_utf8mb4_ci").Typ.CollationVersion)
+	for _, name := range []string{"c_utf8mb4_bin", "c_utf8mb4_general", "c_utf8", "c_utf8mb3"} {
+		require.Equal(t, uint32(1), FindColumn(tableDef.Cols, name).Typ.CollationVersion)
+	}
+	_, _, err = ConstructCreateTableSQL(ctx, tableDef, nil, false, nil)
+	require.ErrorContains(t, err, "versioned collations")
 
-	showSQL, _, err := ConstructCreateTableSQL(ctx, tableDef, nil, false, nil)
+	// Historical canonical spellings remain exportable without changing their
+	// meaning when the resulting SQL is read by the public generation-1 binder.
+	legacy, err := func() (*Plan, error) {
+		parent := ctx.GetContext()
+		ctx.SetContext(WithCollationBindingRevision(parent, 0))
+		defer ctx.SetContext(parent)
+		return BuildPlan(ctx, stmt, false)
+	}()
+	require.NoError(t, err)
+	showSQL, _, err := ConstructCreateTableSQL(ctx, legacy.GetDdl().GetCreateTable().GetTableDef(), nil, false, nil)
 	require.NoError(t, err)
 	require.NotContains(t, showSQL, "0900")
-	require.Contains(t, showSQL, "COLLATE utf8mb4_bin")
+	require.Contains(t, showSQL, "COLLATE utf32_bin")
 }
 
 func TestBuildCreateTableAcceptsNativeUnicodeCollations(t *testing.T) {
@@ -626,7 +641,21 @@ func TestBuildCreateTableAcceptsUTF32CompatibilityAliases(t *testing.T) {
 
 			showSQL, _, err := ConstructCreateTableSQL(ctx, tableDef, nil, false, nil)
 			require.NoError(t, err)
-			require.NotContains(t, strings.ToLower(showSQL), "utf32")
+			if tc.wantTable == uint32(types.CharsetUTF8MB4Bin) {
+				require.Contains(t, strings.ToLower(showSQL), "collate=utf32_bin")
+			} else {
+				require.NotContains(t, strings.ToLower(showSQL), "utf32")
+			}
+			// The existing alias denotes MO's legacy UTF-8 bin identity, not a
+			// new UTF-32 domain, even under a native authoring binder.
+			ctx.SetContext(WithCollationBindingRevision(t.Context(), 1))
+			replay, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, showSQL, 1)
+			require.NoError(t, err)
+			defer replay.Free()
+			rebuilt, err := BuildPlan(ctx, replay, false)
+			require.NoError(t, err)
+			require.Equal(t, tableDef.Cols[0].Typ, rebuilt.GetDdl().GetCreateTable().TableDef.Cols[0].Typ)
+			require.Zero(t, rebuilt.GetDdl().GetCreateTable().TableDef.CollationVersion)
 		})
 	}
 }

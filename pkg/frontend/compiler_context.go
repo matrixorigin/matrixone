@@ -599,7 +599,7 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 ) error {
 	// Reject disabled domains before any legacy recovery or ALTER rewrite can
 	// replace their type metadata. Final-plan validation alone is too late.
-	if err := plan.RequireLegacyCollations(tableDef); err != nil {
+	if err := plan2.RequireCatalogCollations(ctx, tcc.GetProcess(), tableDef); err != nil {
 		return err
 	}
 	if tableDef.DbName == "" {
@@ -618,7 +618,7 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 			return nil, err
 		}
 		sourceDef := plan2.CloneTableDefForPlan(relation.GetTableDef(sourceCtx), true)
-		if err := plan.RequireLegacyCollations(sourceDef); err != nil {
+		if err := plan2.RequireCatalogCollations(sourceCtx, tcc.GetProcess(), sourceDef); err != nil {
 			return nil, err
 		}
 		if sourceDef.DbName == "" {

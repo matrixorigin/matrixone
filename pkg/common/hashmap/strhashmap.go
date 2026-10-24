@@ -416,8 +416,8 @@ func canonicalVarlenaHashValue(oid types.T, value []byte) []byte {
 }
 
 func canonicalVarlenaHashValueForType(typ types.Type, value []byte) []byte {
-	if types.IsUnicodeCollation(typ.Charset) && typ.Oid.IsMySQLString() {
-		return types.CollationKeyOrOriginal(typ.Charset, value)
+	if types.HasCollationKey(typ) {
+		return types.CollationKeyOrOriginal(typ, value)
 	}
 	return canonicalVarlenaHashValue(typ.Oid, value)
 }

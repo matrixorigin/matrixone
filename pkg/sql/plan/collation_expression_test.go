@@ -284,7 +284,7 @@ func TestExpressionCollationUTF8CharsetAdmission(t *testing.T) {
 				query := p.GetQuery()
 				expr := query.Nodes[query.Steps[0]].ProjectList[0]
 				require.Equal(t, alias.identity, expr.Typ.Charset)
-				require.Zero(t, expr.Typ.CollationVersion)
+				require.Equal(t, uint32(1), expr.Typ.CollationVersion)
 				require.True(t, expr.Typ.CollationCoercibilitySet)
 				require.Zero(t, expr.Typ.CollationCoercibility)
 			})

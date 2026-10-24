@@ -257,7 +257,7 @@ func getStringColsListFromTS(ctx context.Context, bh BackgroundExec, sql string,
 
 func getCreateTableSqlFromTS(ctx context.Context, bh BackgroundExec, dbName string, tblName string, ts int64, from, to uint32) (string, error) {
 	getLogger("").Info(fmt.Sprintf("[%d:%d] start to get create table sql: datatabse `%s`, table `%s`", from, ts, dbName, tblName))
-	newCtx := defines.AttachAccountId(ctx, from)
+	newCtx := plan.WithRestoreSchemaInspection(defines.AttachAccountId(ctx, from))
 	sql := showCreateTableSQL(dbName, tblName)
 	if ts > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d}", ts)
@@ -783,7 +783,7 @@ func restoreViewsFromTS(
 
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		_, err = buildViewPlanForRestore(compCtx, stmts[0], viewEntry)
 		freeStatements(stmts)
 		if err != nil {
 			getLogger(ses.GetService()).Info(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
@@ -791,7 +791,7 @@ func restoreViewsFromTS(
 			if err != nil {
 				return err
 			}
-			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			_, err = buildViewPlanForRestore(compCtx, stmts[0], viewEntry)
 			freeStatements(stmts)
 			if err != nil {
 				if markUnservableViewInSort(ses, fmt.Sprintf("%d:%d", restoreAccount, snapshotTs), viewEntry, &g, key, err) {

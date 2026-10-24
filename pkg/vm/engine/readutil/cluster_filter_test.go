@@ -367,6 +367,15 @@ func TestNewMemClusterKeyFilterInvalidCases(t *testing.T) {
 	singleClusterTable.ClusterBy = &plan.ClusterByDef{Name: clusterDeviceCol}
 
 	unicodeTable := makeCompositeClusterTableDef(unicodeCharsetFor)
+	nativeTable := makeCompositeClusterTableDef(binaryCharset)
+	nativeTable.Cols[1].Typ = types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8).PlanType()
+	nativeTable.Cols[1].Typ.CollationVersion = 1
+	nativeWithoutMap := makeCompositeClusterTableDef(binaryCharset)
+	nativeWithoutMap.Cols[1].Typ = nativeTable.Cols[1].Typ
+	nativeWithoutMap.Name2ColIndex = nil
+	legacyTable := makeCompositeClusterTableDef(binaryCharset)
+	legacyTable.Cols[1].Typ = nativeTable.Cols[1].Typ
+	legacyTable.Cols[1].Typ.CollationVersion = 0
 
 	missingCompoundCol := makeCompositeClusterTableDef(binaryCharset)
 	missingCompoundCol.Cols = missingCompoundCol.Cols[:len(missingCompoundCol.Cols)-1]
@@ -414,6 +423,8 @@ func TestNewMemClusterKeyFilterInvalidCases(t *testing.T) {
 		{"no cluster by", &plan.TableDef{}, clusterPredicate},
 		{"single-column cluster by", singleClusterTable, clusterPredicate},
 		{"unicode collated cluster part", unicodeTable, clusterPredicate},
+		{"native PAD cluster part", nativeTable, clusterPredicate},
+		{"native PAD without name map", nativeWithoutMap, clusterPredicate},
 		{"compound column missing from cols", missingCompoundCol, clusterPredicate},
 		{"predicate on non-cluster column", tableDef, nonClusterPredicate},
 		{"nil expression", tableDef, func() *plan.Expr { return nil }},
@@ -428,6 +439,13 @@ func TestNewMemClusterKeyFilterInvalidCases(t *testing.T) {
 			require.Nil(t, filter.Specs())
 		})
 	}
+
+	t.Run("legacy cluster part stays valid", func(t *testing.T) {
+		filter, err := NewMemClusterKeyFilter(legacyTable, clusterPredicate(), ts, proc.Mp(), packerPool)
+		require.NoError(t, err)
+		require.True(t, filter.Valid())
+		require.NotEmpty(t, filter.Specs())
+	})
 
 	t.Run("or of two cluster arms stays valid", func(t *testing.T) {
 		filter, err := NewMemClusterKeyFilter(

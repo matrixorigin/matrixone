@@ -865,18 +865,47 @@ func buildTestCreateTableStmt(opt Optimizer, sql string) (*TableDef, error) {
 	if err != nil {
 		return nil, err
 	}
-	// this sql always return single statement
+	for _, stmt := range statements {
+		defer stmt.Free()
+	}
+	// this sql always returns a single statement
 	context := opt.CurrentContext()
 	ddlPlan, err := BuildPlan(context, statements[0], false)
-	//if ddlPlan != nil {
-	//	testDeepCopy(ddlPlan)
-	//}
+	if err != nil {
+		return nil, err
+	}
 
 	planDdl := ddlPlan.Plan.(*plan.Plan_Ddl)
 	definition := planDdl.Ddl.Definition.(*plan.DataDefinition_CreateTable)
 	definition.CreateTable.TableDef.TableType = catalog.SystemOrdinaryRel
 
-	return definition.CreateTable.TableDef, err
+	return definition.CreateTable.TableDef, nil
+}
+
+// Only source-fixture authoring is historical; callers replay/export under their
+// original context, so the public binder still validates portable legacy SQL.
+func buildTestLegacyCreateTableStmt(opt Optimizer, sql string) (*TableDef, error) {
+	ctx := opt.CurrentContext()
+	parent := ctx.GetContext()
+	ctx.SetContext(WithCollationBindingRevision(parent, 0))
+	defer ctx.SetContext(parent)
+	return buildTestCreateTableStmt(opt, sql)
+}
+
+func TestBuildTestCreateTableStmtPreservesErrorAndContext(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	parent := t.Context()
+	mock.ctxt.SetContext(parent)
+	for _, build := range []func(Optimizer, string) (*TableDef, error){buildTestCreateTableStmt, buildTestLegacyCreateTableStmt} {
+		table, err := build(mock, "create table duplicate_columns (id int, id int)")
+		require.Error(t, err)
+		require.Nil(t, table)
+		require.Same(t, parent, mock.ctxt.GetContext())
+	}
+	table, err := buildTestLegacyCreateTableStmt(mock, "create table historical_source (s varchar(8) collate utf8mb4_general_ci)")
+	require.NoError(t, err)
+	require.Zero(t, table.Cols[0].Typ.CollationVersion)
+	require.Same(t, parent, mock.ctxt.GetContext())
 }
 
 func buildTestShowCreateTable(t testing.TB, sql string) (string, error) {
@@ -985,7 +1014,7 @@ func TestShowCreateMongoDBExternalTable(t *testing.T) {
 	showSQL, stmt, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
 	require.NoError(t, err)
 	require.NotNil(t, stmt)
-	require.Equal(t, "CREATE EXTERNAL TABLE `events` (\n  `DeviceID` varchar(64) COLLATE utf8mb4_bin DEFAULT NULL MONGODB_PATH 'metadata.device_id' MONGODB_CONVERT 'strict',\n  `measurement` double DEFAULT NULL MONGODB_PATH 'reading.measurement' MONGODB_CONVERT 'try_null'\n) ENGINE = MONGODB WITH (\"connection\" = 'telemetry_source', \"database\" = 'telemetry', \"collection\" = 'measurements', \"schema_mode\" = 'explicit', \"conversion_mode\" = 'strict', \"max_parallelism\" = '1')", showSQL)
+	require.Equal(t, "CREATE EXTERNAL TABLE `events` (\n  `DeviceID` varchar(64) COLLATE utf32_bin DEFAULT NULL MONGODB_PATH 'metadata.device_id' MONGODB_CONVERT 'strict',\n  `measurement` double DEFAULT NULL MONGODB_PATH 'reading.measurement' MONGODB_CONVERT 'try_null'\n) ENGINE = MONGODB WITH (\"connection\" = 'telemetry_source', \"database\" = 'telemetry', \"collection\" = 'measurements', \"schema_mode\" = 'explicit', \"conversion_mode\" = 'strict', \"max_parallelism\" = '1')", showSQL)
 	require.NotContains(t, strings.ToLower(showSQL), "credential")
 	require.NotContains(t, strings.ToLower(showSQL), "password")
 }
@@ -1585,7 +1614,7 @@ func TestConstructCreateTableSQLPreservesExternalLineTerminators(t *testing.T) {
 
 func TestShowCreatePreservesTextCollationMetadata(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
-	tableDef, err := buildTestCreateTableStmt(mock, `create table collated_show(
+	tableDef, err := buildTestLegacyCreateTableStmt(mock, `create table collated_show(
 		bin_text varchar(10),
 		general_text varchar(10) collate utf8mb4_general_ci,
 		packed varchar(10)
@@ -1595,10 +1624,10 @@ func TestShowCreatePreservesTextCollationMetadata(t *testing.T) {
 
 	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
 	require.NoError(t, err)
-	require.Contains(t, showSQL, "`bin_text` varchar(10) COLLATE utf8mb4_bin")
-	require.Contains(t, showSQL, "`general_text` varchar(10) COLLATE utf8mb4_general_ci")
+	require.Contains(t, showSQL, "`bin_text` varchar(10) COLLATE utf32_bin")
+	require.Contains(t, showSQL, "`general_text` varchar(10) COLLATE utf8mb4_0900_ai_ci")
 	require.Contains(t, showSQL, "`packed` varchar(10) COLLATE binary")
-	require.Contains(t, showSQL, ") COLLATE=utf8mb4_bin")
+	require.Contains(t, showSQL, ") COLLATE=utf32_bin")
 }
 
 func TestShowCreateSerializesGeneralCIDefault(t *testing.T) {
@@ -1609,24 +1638,24 @@ func TestShowCreateSerializesGeneralCIDefault(t *testing.T) {
 		}
 		return nil, nil
 	}
-	tableDef, err := buildTestCreateTableStmt(mock,
+	tableDef, err := buildTestLegacyCreateTableStmt(mock,
 		"create table general_show(v varchar(10)) collate utf8mb4_general_ci")
 	require.NoError(t, err)
 
 	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
 	require.NoError(t, err)
-	require.Contains(t, showSQL, ") COLLATE=utf8mb4_general_ci")
+	require.Contains(t, showSQL, ") COLLATE=utf8mb4_0900_ai_ci")
 }
 
 func TestCreateSQLWithoutContextSerializesGeneralCIDefault(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
-	tableDef, err := buildTestCreateTableStmt(mock,
+	tableDef, err := buildTestLegacyCreateTableStmt(mock,
 		"create table general_replay(v varchar(10)) collate utf8mb4_general_ci")
 	require.NoError(t, err)
 
 	createSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, false, nil)
 	require.NoError(t, err)
-	require.Contains(t, createSQL, ") COLLATE=utf8mb4_general_ci")
+	require.Contains(t, createSQL, ") COLLATE=utf8mb4_0900_ai_ci")
 }
 
 func TestShowCreateKeepsLegacyDefaultOutputStable(t *testing.T) {
@@ -1650,7 +1679,7 @@ func TestShowCreateRoundTripsMigratedGeneralCIColumnWithLegacyDefault(t *testing
 		}
 		return nil, nil
 	}
-	tableDef, err := buildTestCreateTableStmt(mock,
+	tableDef, err := buildTestLegacyCreateTableStmt(mock,
 		"create table legacy_show(general_text varchar(10)) collate utf8mb4_general_ci")
 	require.NoError(t, err)
 	tableDef.DefaultCharset = uint32(types.CharsetLegacy)
@@ -1658,7 +1687,7 @@ func TestShowCreateRoundTripsMigratedGeneralCIColumnWithLegacyDefault(t *testing
 
 	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
 	require.NoError(t, err)
-	require.Contains(t, showSQL, ") COLLATE=utf8mb4_general_ci")
+	require.Contains(t, showSQL, ") COLLATE=utf8mb4_0900_ai_ci")
 
 	roundTripped, err := buildTestCreateTableStmt(mock, showSQL)
 	require.NoError(t, err)
@@ -1678,8 +1707,8 @@ func TestShowCreateDistinguishesMixedLegacyAndGeneralCIColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, showSQL, "`legacy_text` varchar(10) DEFAULT NULL")
 	require.Contains(t, showSQL,
-		"`general_text` varchar(10) COLLATE utf8mb4_general_ci DEFAULT NULL")
-	require.Contains(t, showSQL, ") COLLATE=utf8mb4_bin")
+		"`general_text` varchar(10) COLLATE utf8mb4_0900_ai_ci DEFAULT NULL")
+	require.Contains(t, showSQL, ") COLLATE=utf32_bin")
 
 	roundTripped, err := buildTestCreateTableStmt(mock, showSQL)
 	require.NoError(t, err)
@@ -1712,7 +1741,7 @@ func TestShowCreateRoundTripsFullyLegacyBytewiseText(t *testing.T) {
 
 	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
 	require.NoError(t, err)
-	require.Contains(t, showSQL, ") COLLATE=utf8mb4_bin")
+	require.Contains(t, showSQL, ") COLLATE=utf32_bin")
 
 	roundTripped, err := buildTestCreateTableStmt(mock, showSQL)
 	require.NoError(t, err)
@@ -1725,14 +1754,14 @@ func TestShowCreateRoundTripsFullyLegacyBytewiseText(t *testing.T) {
 
 func TestShowCreateRoundTripsLegacyColumnWithGeneralDefault(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
-	tableDef, err := buildTestCreateTableStmt(mock,
+	tableDef, err := buildTestLegacyCreateTableStmt(mock,
 		"create table migrated_default(legacy_text varchar(10)) collate utf8mb4_general_ci")
 	require.NoError(t, err)
 	FindColumn(tableDef.Cols, "legacy_text").Typ.Charset = uint32(types.CharsetLegacy)
 
 	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, tableDef, nil, false, nil)
 	require.NoError(t, err)
-	require.Contains(t, showSQL, "`legacy_text` varchar(10) COLLATE utf8mb4_bin")
+	require.Contains(t, showSQL, "`legacy_text` varchar(10) COLLATE utf32_bin")
 
 	roundTripped, err := buildTestCreateTableStmt(mock, showSQL)
 	require.NoError(t, err)

@@ -16,23 +16,29 @@ package types
 
 import (
 	"bytes"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const (
-	// Collation keys used by equality/hash consumers carry a small domain
-	// marker.  A raw fallback for malformed/repertoire-invalid input must not
-	// be able to collide with a valid UCA weight string.
+	// 无效原值与有效权重必须处于互不相交的比较域。
 	validCollationKeyTag   byte = 0
 	invalidCollationKeyTag byte = 1
 )
 
-// CollationDomainForCharset resolves the executable key domain for a text
-// identity. Keeping this mapping beside Type prevents SQL consumers from
-// silently treating utf8*_unicode_ci as the existing general_ci class.
-func CollationDomainForCharset(charset uint8) (collation.Domain, bool) {
-	switch charset {
+// comparisonKeyDomain 只用于已校验的类型；SQL/持久化准入仍由各自边界负责。
+// 同一 charset 的 revision 0/1 不能共享语义，binary 物理类型始终保留字节。
+func comparisonKeyDomain(typ Type) (collation.Domain, bool) {
+	if typ.CollationVersion != CollationVersionV1 || !isCollationStringType(typ.Oid) {
+		return collation.Raw, false
+	}
+	switch typ.Charset {
+	case CharsetUTF8MB4Bin:
+		return collation.UTF8MB4Bin, true
+	case CharsetUTF8:
+		return collation.UTF8MB4GeneralCI, true
 	case CharsetUTF8MB4UnicodeCI:
 		return collation.UTF8MB4UnicodeCI, true
 	case CharsetUTF8MB3UnicodeCI:
@@ -42,28 +48,67 @@ func CollationDomainForCharset(charset uint8) (collation.Domain, bool) {
 	}
 }
 
-// CollationKey returns the opaque comparison key for a native Unicode
-// collation. Non-Unicode identities are returned unchanged so callers can use
-// this helper in shared serialization paths without changing legacy bytes.
-func CollationKey(charset uint8, scratch, value []byte) ([]byte, error) {
-	domain, ok := CollationDomainForCharset(charset)
+// HasCollationKey 判断已校验类型是否需要权重；不表示该类型已获 SQL/索引准入。
+func HasCollationKey(typ Type) bool {
+	_, ok := comparisonKeyDomain(typ)
+	return ok
+}
+
+// CollationDomainForType 同时检查 identity、revision 和物理类型。
+// 可表示但尚无执行实现的域不能静默退回 raw；合法 metadata 也不代表可发布。
+func CollationDomainForType(typ Type) (collation.Domain, bool, error) {
+	if err := typ.ValidateCollation(); err != nil {
+		return collation.Raw, false, err
+	}
+	if !isCollationStringType(typ.Oid) || typ.CollationVersion == CollationVersionLegacy || typ.Charset == CharsetBinary {
+		return collation.Raw, false, nil
+	}
+	domain, ok := comparisonKeyDomain(typ)
 	if !ok {
-		return value, nil
+		return collation.Raw, false, collation.ErrDomain
+	}
+	return domain, true, nil
+}
+
+// CollationKey 返回借用的原值或复用 scratch 的不透明权重，不修改原值。
+// 输入与 scratch 不得重叠；需要保留的 key 由调用方复制。
+func CollationKey(typ Type, scratch, value []byte) ([]byte, error) {
+	domain, _, err := CollationDomainForType(typ)
+	if err != nil {
+		return nil, err
 	}
 	return domain.Key(scratch, value)
 }
 
-// PhysicalCollationKey returns the tagged key used by a versioned physical
-// index boundary.  Unlike CollationKeyOrOriginal, it never turns an invalid
-// or out-of-repertoire value into a tagged raw-value fallback.  Physical key
-// producers, probes and locks must either use the same canonical bytes or
-// fail before publishing a row; a fallback would create two identities for
-// one relation key format.
+// ValidatePhysicalCollationType 在写入/打包之前检查完整 Type；公共执行支持
+// 不等于索引格式准入。必须也校验空批次和全 NULL 输入，不能只依赖值校验。
+func ValidatePhysicalCollationType(typ Type) error {
+	_, _, err := physicalCollationDomain(typ)
+	return err
+}
+
+func physicalCollationDomain(typ Type) (collation.Domain, bool, error) {
+	domain, transformed, err := CollationDomainForType(typ)
+	if err != nil {
+		return domain, false, err
+	}
+	if transformed && !IsUnicodeCollation(typ.Charset) {
+		return domain, false, moerr.NewNotSupportedNoCtx("physical keys for this collation revision are not enabled")
+	}
+	return domain, transformed, nil
+}
+
+// PhysicalCollationKey 是已获准的 UCA400 物理索引边界，不使用无效值 fallback。
+// 公共比较能力的扩展不能顺带启用尚未闭合的物理 key 写入路径。
 func PhysicalCollationKey(typ Type, value []byte) ([]byte, error) {
-	if !IsUnicodeCollation(typ.Charset) || !isUnicodeStringType(typ.Oid) {
+	domain, transformed, err := physicalCollationDomain(typ)
+	if err != nil {
+		return nil, err
+	}
+	if !transformed {
 		return value, nil
 	}
-	key, err := CollationKey(typ.Charset, nil, value)
+	key, err := domain.Key(nil, value)
 	if err != nil {
 		return nil, err
 	}
@@ -73,16 +118,18 @@ func PhysicalCollationKey(typ Type, value []byte) ([]byte, error) {
 	return out, nil
 }
 
-// CollationKeyOrOriginal returns the canonical equality/hash/physical-key
-// representation for a native Unicode collation. The leading domain marker
-// keeps a malformed or repertoire-invalid raw fallback disjoint from valid UCA
-// weight bytes. Callers that need generic SERIAL's lossless value contract must
-// keep using the original bytes instead.
-func CollationKeyOrOriginal(charset uint8, value []byte) []byte {
-	if !IsUnicodeCollation(charset) {
+// CollationKeyOrOriginal 为已校验类型返回比较/hash 的统一身份。
+// 无效 UTF-8/repertoire 原值带独立标签，不能与有效权重碰撞。
+// 泛用 SERIAL 的原值往返契约不能使用此 key；物理写入使用严格入口。
+func CollationKeyOrOriginal(typ Type, value []byte) []byte {
+	domain, transformed := comparisonKeyDomain(typ)
+	if !transformed {
 		return value
 	}
-	key, err := CollationKey(charset, nil, value)
+	if domain == collation.UTF8MB4GeneralCI || domain == collation.UTF8MB4Bin {
+		return appendPADCollationKey(nil, domain, value)
+	}
+	key, err := domain.Key(nil, value)
 	if err != nil {
 		out := make([]byte, 1+len(value))
 		out[0] = invalidCollationKeyTag
@@ -95,61 +142,80 @@ func CollationKeyOrOriginal(charset uint8, value []byte) []byte {
 	return out
 }
 
-// ValidateCollationValue checks the admission contract for a typed native
-// Unicode string without materializing a comparison key. Unlike
-// CollationKeyOrOriginal, which deliberately retains a tagged fallback for
-// comparison-only callers, typed values must not carry malformed UTF-8 or a
-// value outside the charset repertoire. Rejecting those bytes at the typed
-// write boundary prevents a binary payload from aliasing a valid UCA key after
-// a later vector loses its collation metadata.
-func ValidateCollationValue(typ Type, value []byte) error {
-	if !IsUnicodeCollation(typ.Charset) || !isUnicodeStringType(typ.Oid) {
-		return nil
+// CollationKeyOrOriginalSize 与带标签的 key 长度完全一致；C1 不分配中间 key。
+func CollationKeyOrOriginalSize(typ Type, value []byte) int {
+	domain, transformed := comparisonKeyDomain(typ)
+	if !transformed {
+		return len(value)
 	}
-	domain, ok := CollationDomainForCharset(typ.Charset)
-	if !ok {
+	if domain == collation.UTF8MB4GeneralCI || domain == collation.UTF8MB4Bin {
+		size, err := domain.PADKeySize(value)
+		if err != nil {
+			return 1 + len(value)
+		}
+		return 1 + size
+	}
+	return len(CollationKeyOrOriginal(typ, value))
+}
+
+// AppendCollationKeyOrOriginal 供已有计费 buffer/scratch 的消费者使用。
+// dst 与 value 不得重叠；原值不会被修改，C1 只写入一次完整 key。
+func AppendCollationKeyOrOriginal(dst []byte, typ Type, value []byte) []byte {
+	domain, transformed := comparisonKeyDomain(typ)
+	if transformed && (domain == collation.UTF8MB4GeneralCI || domain == collation.UTF8MB4Bin) {
+		return appendPADCollationKey(dst, domain, value)
+	}
+	return append(dst, CollationKeyOrOriginal(typ, value)...)
+}
+
+func appendPADCollationKey(dst []byte, domain collation.Domain, value []byte) []byte {
+	size, err := domain.PADKeySize(value)
+	if err != nil {
+		dst = append(dst, invalidCollationKeyTag)
+		return append(dst, value...)
+	}
+	// PADKeySize 已检查 payload 上界（4*n+1），可表示输入下再加标签不会溢出。
+	dst = slices.Grow(dst, size+1)
+	dst = append(dst, validCollationKeyTag)
+	key, _ := domain.Key(dst[len(dst):], value) // 与 size 共用已验证的输入和域。
+	return dst[:len(dst)+len(key)]
+}
+
+// ValidateCollationValue 只校验支持域的值编码，不构造 key。通用向量 codec
+// 仍允许合法但禁用的 metadata 往返；结构校验/生产准入由各自边界负责。
+func ValidateCollationValue(typ Type, value []byte) error {
+	domain, transformed := comparisonKeyDomain(typ)
+	if !transformed {
 		return nil
 	}
 	return domain.ValidateValue(value)
 }
 
-func isUnicodeStringType(oid T) bool {
+func isCollationStringType(oid T) bool {
 	switch oid {
 	case T_char, T_varchar, T_blob, T_text:
 		return true
 	default:
-		// BINARY and VARBINARY are opaque byte domains even when a caller
-		// happens to carry a non-zero charset in their physical metadata.
 		return false
 	}
 }
 
-// CompareStringValues compares two values in one resolved text identity. The
-// native UCA domains compare the same tagged representation used by hash and
-// membership consumers; all other identities keep the caller's historical byte
-// order. Using one canonical representation is important for values that the
-// native domain cannot encode: a raw fallback must not compare equal to a valid
-// UCA key, and its ordering must not depend on the other operand.
+// CompareStringValues 对已解析到同一域的值比较。legacy 保持原有 CHAR
+// 行为；native 的比较和 hash 使用同一带标签权重，原值只用于结果投影。
 func CompareStringValues(typ Type, left, right []byte) int {
-	if !IsUnicodeCollation(typ.Charset) {
+	if !HasCollationKey(typ) {
 		if typ.Oid == T_char {
 			return bytes.Compare(bytes.TrimRight(left, " "), bytes.TrimRight(right, " "))
 		}
 		return bytes.Compare(left, right)
 	}
-	return bytes.Compare(
-		CollationKeyOrOriginal(typ.Charset, left),
-		CollationKeyOrOriginal(typ.Charset, right),
-	)
+	return bytes.Compare(CollationKeyOrOriginal(typ, left), CollationKeyOrOriginal(typ, right))
 }
 
-// CompareStringOrderValues is the comparator used by SQL ORDER BY consumers.
-// Native Unicode identities use the same UCA key relation as scalar equality.
-// Legacy CHAR keeps the historical raw-byte order so TopN/merge ordering stays
-// aligned with full sort and peer partitioning; physical/storage callers keep
-// their existing raw-byte contract as well.
+// CompareStringOrderValues 仅用于 SQL 排序。legacy CHAR 的历史 raw 顺序
+// 不变；storage 的物理排序不能因 SQL 比较域扩展而被重新解释。
 func CompareStringOrderValues(typ Type, left, right []byte) int {
-	if !IsUnicodeCollation(typ.Charset) {
+	if !HasCollationKey(typ) {
 		return bytes.Compare(left, right)
 	}
 	return CompareStringValues(typ, left, right)

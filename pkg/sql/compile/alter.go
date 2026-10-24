@@ -1318,6 +1318,9 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 
 func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetCleanup) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
+	if err := plan2.RequireAlterTableCollationsForAuthoring(c.proc.Ctx, c.proc, qry); err != nil {
+		return err
+	}
 	dbName := qry.Database
 
 	if dbName == "" {
@@ -1712,6 +1715,11 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		}
 	}
 
+	// Private preparation and lifecycle admission may outlive the writer
+	// capability. Recheck before publishing lineage, FK rows, or replacing the source.
+	if err = plan2.RequireAlterTableCollationsForAuthoring(c.proc.Ctx, c.proc, qry); err != nil {
+		return err
+	}
 	newId := newRel.GetTableID(c.proc.Ctx)
 	if err = c.preserveAlterDataBranchLineage(
 		lineagePlan, oldId, newId, dbName, tblName,
@@ -2630,6 +2638,11 @@ func (s *Scope) RenameTable(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetRenameTable()
+	for _, alter := range qry.AlterTables {
+		if err = plan2.RequireAlterTableCollationsForAuthoring(c.proc.Ctx, c.proc, alter); err != nil {
+			return err
+		}
+	}
 	if err = checkRoleRuleRenameAdmissionBatch(c, qry.AlterTables); err != nil {
 		return err
 	}

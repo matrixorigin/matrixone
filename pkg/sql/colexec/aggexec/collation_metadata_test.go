@@ -86,10 +86,109 @@ func TestAggregateCollationAdmission(t *testing.T) {
 	}
 }
 
-func TestAggregateFactoryRejectsDisabledCollation(t *testing.T) {
-	typ := types.NewWithCharset(types.T_varchar, 8, 0, 3)
-	typ.CollationVersion = 1
-	exec, err := MakeAgg(nil, AggIdOfMin, false, typ)
-	require.ErrorContains(t, err, "disabled")
-	require.Nil(t, exec)
+func TestAggregateFactoryNativePADCollation(t *testing.T) {
+	for _, charset := range []uint8{2, 3, 4} {
+		for _, id := range []int64{AggIdOfMin, AggIdOfMax} {
+			t.Run(fmt.Sprintf("charset_%d/agg_%d", charset, id), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				defer func() {
+					require.Zero(t, mp.CurrNB())
+					mpool.DeleteMPool(mp)
+				}()
+				typ := types.NewWithCharset(types.T_varchar, 8, 0, charset)
+				typ.CollationVersion = 1
+				source, err := MakeAgg(mp, id, false, typ)
+				if charset == 4 {
+					require.ErrorContains(t, err, "disabled")
+					require.Nil(t, source)
+					return
+				}
+				require.NoError(t, err)
+				defer source.Free()
+				input := vector.NewVec(typ)
+				defer input.Free(mp)
+				for _, value := range []string{"a", "B"} {
+					require.NoError(t, vector.AppendBytes(input, []byte(value), false, mp))
+				}
+				require.NoError(t, source.GroupGrow(1))
+				require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
+				var wire bytes.Buffer
+				require.NoError(t, source.SaveIntermediateResultOfChunk(0, &wire))
+				target, err := MakeAgg(mp, id, false, typ)
+				require.NoError(t, err)
+				defer target.Free()
+				require.NoError(t, target.UnmarshalFromReader(&wire, mp))
+				result, err := target.Flush()
+				require.NoError(t, err)
+				defer func() {
+					for _, vec := range result {
+						vec.Free(mp)
+					}
+				}()
+				want := "a"
+				if (charset == 3) == (id == AggIdOfMax) {
+					want = "B"
+				}
+				require.Equal(t, want, result[0].GetStringAt(0))
+				require.Equal(t, uint8(1), result[0].GetType().CollationVersion)
+			})
+		}
+	}
+}
+
+func TestAggregateVectorRejectsInvalidNativePADValues(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	for _, charset := range []uint8{2, 3, 4} {
+		raw := types.NewWithCharset(types.T_varchar, 8, 0, 3)
+		source := vector.NewVec(raw)
+		require.NoError(t, vector.AppendBytes(source, []byte{0xff}, false, mp))
+		typ := raw
+		typ.Charset = charset
+		typ.CollationVersion = 1
+		source.SetType(typ)
+		var wire bytes.Buffer
+		require.NoError(t, source.MarshalBinaryTo(&wire))
+		target := vector.NewOffHeapVecWithType(typ)
+		err := unmarshalAggregateVector(target, &wire, mp)
+		if charset == 4 {
+			require.ErrorContains(t, err, "disabled")
+		} else {
+			require.ErrorContains(t, err, "UTF-8")
+		}
+		target.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}
+}
+
+func TestAggregateVectorCannotHideNativePADDomain(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	native := types.NewWithCharset(types.T_varchar, 8, 0, 3)
+	native.CollationVersion = 1
+	legacy := native
+	legacy.CollationVersion = 0
+	bin := native
+	bin.Charset = 2
+	for _, pair := range [][2]types.Type{{legacy, native}, {native, legacy}, {native, bin}, {native, native}} {
+		for _, rows := range []int{0, 1} {
+			source := vector.NewVec(pair[1])
+			if rows != 0 {
+				require.NoError(t, vector.AppendBytes(source, nil, true, mp))
+			}
+			var wire bytes.Buffer
+			require.NoError(t, source.MarshalBinaryTo(&wire))
+			target := vector.NewOffHeapVecWithType(pair[0])
+			err := unmarshalAggregateVector(target, &wire, mp)
+			if pair[0] == pair[1] {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "collation differs")
+			}
+			target.Free(mp)
+			source.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		}
+	}
 }

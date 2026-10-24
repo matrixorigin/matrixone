@@ -428,9 +428,9 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 		).Scan(&renamedCopyLength))
 		require.Equal(t, 255, renamedCopyLength)
 
-		// DUMP rebuilds stale historical DDL for renamed and type-altered tables,
-		// but preserves an unaltered legacy LIKE statement whose hash is normalized
-		// through the source lineage. Every manifest must recreate a matching target.
+		// DUMP rebuilds historical DDL into standalone legacy-safe SQL. A LIKE
+		// statement must not borrow the future source table's binding generation.
+		// Every manifest must recreate a matching target.
 		stageRoot := t.TempDir()
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
 			fmt.Sprintf("create stage %s url = 'file://%s'", stageName, stageRoot))
@@ -483,7 +483,7 @@ func TestV406UpgradeRecoversLegacyTinyText(t *testing.T) {
 		mustExecTinyTextUpgradeSQL(t, ctx, conn,
 			"dump table "+databaseName+"."+cloneTable+" to '"+stagePath+"' metadata only")
 		cloneManifestSQL := readManifestCreateSQL(dumpPath)
-		require.Equal(t, legacyCloneSQL, cloneManifestSQL)
+		require.Equal(t, fmt.Sprintf("CREATE TABLE `%s` (\n  `id` int NOT NULL,\n  `payload` tinytext DEFAULT NULL,\n  PRIMARY KEY (`id`)\n) COLLATE=utf8mb4_0900_ai_ci", cloneTable), cloneManifestSQL)
 		mustExecTinyTextUpgradeSQL(t, ctx, conn, "drop table "+databaseName+"."+cloneTable)
 		mustExecTinyTextUpgradeSQL(t, ctx, conn, cloneManifestSQL)
 		require.Equal(t, int64(types.MaxTinyTextLen), tinyTextCatalogWidth(
