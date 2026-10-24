@@ -88,7 +88,14 @@ would store one copy of identical bytes per snapshot read.
 - On a miss, the layer rebuilds the file from its chunk rows through the storage engine's
   relation readers, under the caller's transaction and snapshot (no SQL), verifies it,
   places it in the disk cache, and returns it. It sees exactly the rows a SQL `SELECT`
-  would see at that snapshot, including historical (snapshot) reads.
+  would see at that snapshot, including historical (snapshot) reads, uncommitted rows of
+  the caller's transaction and rows not yet flushed to storage objects. The relation
+  readers read the stored objects through the fileservice, as any scan does.
+- How a rebuild uses the existing memory and table-data disk caches is a CN configuration
+  setting (decision, @cpegeric, 2026-10-24): read without filling them (default), bypass
+  them, or read and fill them like an ordinary scan. The default reuses chunk data that is
+  already cached without storing it a second time beside the assembled file, which goes
+  to the index-file cache in every mode.
 - A missing or duplicated chunk is an error, never a short or padded file.
 - Each CN fills its own disk cache from the rows on first read.
 
@@ -127,27 +134,40 @@ storage backend, only rebuilt from the chunk rows. A CN without a disk cache use
 private temporary directory instead, with no reuse between loads.
 
 Rejected alternative: placing index files in the shared table-data cache under a reserved
-namespace. It needs no new capacity setting, but pinning would change eviction for all
-table data, and index files and table blocks would evict each other.
+namespace. It needs no new capacity setting, but a large index load and hot table blocks
+would evict each other.
 
-### Pinning (decision)
+### Eviction: the existing disk-cache rules (decision)
 
-Decided by @cpegeric, 2026-10-24. The index-file cache offers a whole-file API: put a
-file, open it as a pinned handle, release it, delete it. Pinning applies to this cache
-only; the table-data cache's eviction is unchanged.
+Decided by @cpegeric, 2026-10-24. The index-file cache uses the existing disk cache's
+eviction mechanism and rules unchanged; index files get no pinning or other special
+treatment.
 
-- A file is pinned from open until its last release. A pinned file is never evicted and
-  stays counted against the cache capacity, so space held by a mapped or open index file
-  is never treated as free.
-- Eviction skips pinned files. When only pinned files remain, eviction stops instead of
-  spinning; the cache may then exceed its capacity by the pinned bytes, which are in use.
-- Deleting a pinned file takes effect at its last release.
-- Unpinned files are evicted under the same policy as table data.
+- Eviction follows the existing policy against the cache's capacity, including eviction
+  when the disk is full, and removes the evicted file.
+- A reader never blocks eviction. It only waits for an in-progress write or eviction of
+  the same file, then opens it. A file evicted while a reader holds it open or mapped stays
+  readable through that handle; its space is freed when the last handle closes.
+- A file that is gone when a reader opens it is a miss, rebuilt from the chunk rows.
+- Cached files survive a CN restart, as table-data cache files do; the manifest is checked
+  on open.
+
+Accepted consequences:
+
+- Disk use may exceed the configured capacity by evicted files that are still mapped.
+  Table-data reads hold a file briefly; a loaded index holds its file while it is loaded.
+  The excess is bounded by what the index-cache governor keeps loaded.
+- A consumer must use the handle the layer returns, not reopen the cache path by name: an
+  eviction between the two opens makes the name disappear.
+
+Rejected alternative: pinning open files so eviction skips them. It keeps disk use within
+capacity, but adds a second eviction rule to the shared disk-cache code.
 
 ### Memory
 
-The layer uses no memory cache: file bytes live in the disk cache, sized and evicted by
-its configured capacity. What a search keeps resident (a loaded graph, a GPU index,
+The layer never stores file bytes in the memory cache: file bytes live in the index-file
+disk cache, sized and evicted by its configured capacity. A miss rebuild may read chunk
+data already in the memory cache, under the rebuild setting above. What a search keeps resident (a loaded graph, a GPU index,
 mapped postings) stays under the existing index-cache governor. This is how index I/O
 shares the CN with SQL instead of claiming its memory.
 
@@ -199,11 +219,14 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
 - clone, restore and snapshot reads of an index written through the layer behave as
   before, including a snapshot search after a merge, which rebuilds the merged-away
   segment from the rows visible at the snapshot;
-- writes and reads use no memory cache, and disk-cache use stays within its configured
-  capacity, plus pinned bytes, under a load larger than it;
-- a pinned file survives eviction pressure and is evicted after its last release; a
-  delete of a pinned file takes effect at release; eviction with only pinned files left
-  terminates;
+- the layer never stores file bytes in the memory cache, and index-file cache use stays
+  within its configured capacity, plus evicted files still mapped, under a load larger
+  than it;
+- a file evicted while open or mapped stays readable through the open handle, and the next
+  open is a miss that rebuilds it;
+- each rebuild cache setting behaves as stated: the default fills neither the memory nor
+  the table-data disk cache, bypass reads none of them, read-and-fill fills them;
+- cached index files are reused after a CN restart;
 - a CN without a disk cache still serves reads, rebuilding each load from the rows;
 - the table-data cache behaves exactly as before: its capacity is reduced by the
   configured share and nothing else changes.
