@@ -1568,35 +1568,9 @@ func shouldShuffleGroupState(node, child *plan.Node, builder *QueryBuilder) bool
 		return false
 	}
 
-	payload := float64(0)
-	for _, expr := range node.GroupBy {
-		if expr == nil {
-			return false
-		}
-		width, ok := shuffleGroupInputWidth(expr)
-		if !ok {
-			return false
-		}
-		payload += width
-	}
-	for _, expr := range node.AggList {
-		if expr == nil || expr.Typ.Id != int32(types.T_int64) {
-			return false
-		}
-		agg := expr.GetF()
-		if agg == nil || agg.Func == nil || uint64(agg.Func.Obj)&function.Distinct != 0 ||
-			len(agg.Args) != 1 || agg.Args[0] == nil {
-			return false
-		}
-		id, overload := function.DecodeOverloadID(agg.Func.Obj)
-		if (id != function.COUNT && id != function.STARCOUNT) || overload != 0 {
-			return false
-		}
-		if _, knownInput := shuffleGroupInputWidth(agg.Args[0]); !knownInput {
-			return false
-		}
-		// COUNT and STARCOUNT each retain one INT64 vector, without auxiliary state.
-		payload += float64(types.T_int64.TypeLen())
+	payload, known := knownFixedGroupStatePayload(node.GroupBy, node.AggList)
+	if !known {
+		return false
 	}
 
 	keys := node.GroupByHashKey
@@ -1641,6 +1615,44 @@ func shouldShuffleGroupState(node, child *plan.Node, builder *QueryBuilder) bool
 		return float64(estimateCells(uint64(count))) + count*payload
 	}
 	return retained(partial) > float64(budget) && retained(partitioned) <= float64(budget)
+}
+
+// knownFixedGroupStatePayload bounds both optional distribution costing and
+// logical key pruning to the same known state and raw input transport domain.
+// Other aggregate layouts remain owned by their executors.
+func knownFixedGroupStatePayload(groups, aggregates []*plan.Expr) (float64, bool) {
+	payload := float64(0)
+	for _, expr := range groups {
+		if expr == nil {
+			return 0, false
+		}
+		width, ok := shuffleGroupInputWidth(expr)
+		if !ok {
+			return 0, false
+		}
+		payload += width
+	}
+	for _, expr := range aggregates {
+		if expr == nil || expr.Typ.Id != int32(types.T_int64) {
+			return 0, false
+		}
+		agg := expr.GetF()
+		if agg == nil || agg.Func == nil || uint64(agg.Func.Obj)&function.Distinct != 0 ||
+			len(agg.Args) != 1 || agg.Args[0] == nil {
+			return 0, false
+		}
+		id, overload := function.DecodeOverloadID(agg.Func.Obj)
+		if (id != function.COUNT && id != function.STARCOUNT) || overload != 0 {
+			return 0, false
+		}
+		if _, knownInput := shuffleGroupInputWidth(agg.Args[0]); !knownInput {
+			return 0, false
+		}
+		// COUNT and STARCOUNT each retain one INT64 vector, without auxiliary state.
+		payload += float64(types.T_int64.TypeLen())
+	}
+
+	return payload, true
 }
 
 // Group evaluates its expressions after shuffle. A fixed-width expression can

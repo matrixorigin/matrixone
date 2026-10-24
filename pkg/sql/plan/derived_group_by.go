@@ -132,6 +132,12 @@ func (builder *QueryBuilder) pruneDerivedGroupBy(
 			flags = append(flags, ctx.groupingFlag[i])
 		}
 	}
+	// Pruning can change cardinality and therefore aggregate distribution.
+	// Keep the original plan when its state or raw transport costs are outside
+	// the existing distribution owner's supported domain.
+	if _, known := knownFixedGroupStatePayload(groups, ctx.aggregates); !known {
+		return
+	}
 	sources := make(map[[2]int32]*planpb.Expr, len(anchors))
 	for key, anchor := range anchors {
 		sources[key] = replacements[anchor.position]

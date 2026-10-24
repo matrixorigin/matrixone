@@ -132,6 +132,14 @@ func TestBuildPlanPrunesDerivedGroupKeys(t *testing.T) {
 		name, sql string
 		keys      int
 	}{
+		{"sum retains original distribution keys", "select deptno,deptno-1,deptno-2,deptno-3,sum(deptno) from constraint_test.emp group by deptno,deptno-1,deptno-2,deptno-3", 4},
+		{"mixed count sum", "select deptno,deptno-1,count(*),sum(deptno) from constraint_test.emp group by deptno,deptno-1", 2},
+		{"avg", "select deptno,deptno-1,avg(deptno) from constraint_test.emp group by deptno,deptno-1", 2},
+		{"min max", "select deptno,deptno-1,min(deptno),max(deptno) from constraint_test.emp group by deptno,deptno-1", 2},
+		{"distinct count", "select deptno,deptno-1,count(distinct mgr) from constraint_test.emp group by deptno,deptno-1", 2},
+		{"wide count", "select deptno,deptno-1,count(ename) from constraint_test.emp group by deptno,deptno-1", 2},
+		{"computed count", "select deptno,deptno-1,count(length(ename)) from constraint_test.emp group by deptno,deptno-1", 2},
+		{"unsupported retained key", "select deptno,ename,deptno-1,count(*) from constraint_test.emp group by deptno,ename,deptno-1", 3},
 		{"q36", "select deptno,deptno-1,deptno-2,deptno-3,count(*) c from constraint_test.emp group by deptno,deptno-1,deptno-2,deptno-3 order by c desc limit 10", 1},
 		{"alias ordinal reordered", "select e.deptno-1 d,e.deptno,count(*) c from constraint_test.emp e group by 1,2 having d>0 order by 1", 1},
 		{"multiple source columns", "select deptno,mgr,cast(deptno as signed)+cast(mgr as signed),count(*) from constraint_test.emp group by cast(deptno as signed)+cast(mgr as signed),deptno,mgr", 2},
@@ -156,6 +164,42 @@ func TestBuildPlanPrunesDerivedGroupKeys(t *testing.T) {
 				}
 			}
 			require.True(t, found)
+		})
+	}
+}
+
+func TestPruneDerivedGroupByUnknownStateIsAtomic(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(false, newPlanTestProcess(t)), false, true)
+	for _, tc := range []struct {
+		name, function string
+		typ            types.T
+		mixed          bool
+	}{
+		{"sum-int", "sum", types.T_int32, false},
+		{"sum-bigint", "sum", types.T_int64, false},
+		{"sum-float", "sum", types.T_float64, false},
+		{"sum-decimal", "sum", types.T_decimal128, false},
+		{"avg", "avg", types.T_int32, false},
+		{"min", "min", types.T_int32, false},
+		{"max", "max", types.T_int32, false},
+		{"mixed-count-sum", "sum", types.T_int32, true},
+		{"wide-count", "count", types.T_varchar, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := derivedGroupTestContext(t, builder)
+			arg := GetColExpr(planpb.Type{Id: int32(tc.typ), Width: 20, Scale: 2}, 7, 2)
+			agg, err := BindFuncExprImplByPlanExpr(builder.GetContext(), tc.function, []*planpb.Expr{arg})
+			require.NoError(t, err)
+			ctx.aggregates = []*planpb.Expr{agg}
+			if tc.mixed {
+				count, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "count", []*planpb.Expr{DeepCopyExpr(ctx.groups[1])})
+				require.NoError(t, err)
+				ctx.aggregates = append([]*planpb.Expr{count}, ctx.aggregates...)
+			}
+			order := &planpb.OrderBySpec{Expr: DeepCopyExpr(ctx.projects[0])}
+			before := fmt.Sprint(ctx.groups, ctx.aggregates, ctx.projects, ctx.groupingFlag, ctx.groupByAst, ctx.groupByCanonicalAst, ctx.groupByParamAst, order)
+			builder.pruneDerivedGroupBy(ctx, [][]*planpb.Expr{ctx.projects}, []*planpb.OrderBySpec{order})
+			require.Equal(t, before, fmt.Sprint(ctx.groups, ctx.aggregates, ctx.projects, ctx.groupingFlag, ctx.groupByAst, ctx.groupByCanonicalAst, ctx.groupByParamAst, order))
 		})
 	}
 }
