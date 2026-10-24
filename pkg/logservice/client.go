@@ -392,13 +392,6 @@ func (c *managedClient) GetLeaderID(ctx context.Context) (uint64, error) {
 }
 
 func (c *managedClient) isRetryableError(err error) bool {
-	/*
-		old code, obviously strange
-		if errors.Is(err, dragonboat.ErrTimeout) {
-			return false
-		}
-		return errors.Is(err, dragonboat.ErrShardNotFound)
-	*/
 
 	// Dragonboat error leaked here
 	if errors.Is(err, dragonboat.ErrShardNotFound) {

@@ -1,0 +1,16 @@
+from harness import *
+with Service('candidate','axis-qa') as svc:
+ s=svc.s;s.execute('SHOW TABLES FROM qa30995 LIKE "tuple_axes"')
+ if not s.fetchall():
+  s.execute('CREATE TABLE qa30995.tuple_axes(a BIGINT NOT NULL,b BIGINT NOT NULL)')
+  s.execute('INSERT INTO qa30995.tuple_axes SELECT k%333337,(k DIV 333337)%2 FROM qa30982_history_20261024.natural_unique5m WHERE k<1000000')
+  s.execute("SELECT mo_ctl('dn','flush','qa30995.tuple_axes')");s.fetchall()
+ s.execute("SELECT table_cnt,block_number,ndv_map FROM table_stats('qa30995.tuple_axes','refresh','full') t");s.fetchall()
+ for dop in [1,8]:
+  s.execute(f'SET SESSION max_dop={dop}')
+  for args in ['a,b','b,a']:
+   sql=f'SELECT COUNT(DISTINCT {args}) FROM qa30995.tuple_axes'
+   run(s,sql,((666674,),))
+   s.execute('EXPLAIN PHYPLAN VERBOSE '+sql);raw='\n'.join(str(x[0]) for x in s.fetchall());(root/f'axes-{dop}-{args.replace(",","_")}-physical.txt').write_text(raw)
+   if dop==8:assert 'shuffle(' in raw
+ print('AXIS_QA_PASS',flush=True)

@@ -1,0 +1,38 @@
+[
+  {
+    "sql": "CREATE DATABASE q33_bench",
+    "affected_rows": 1
+  },
+  {
+    "sql": "CREATE DATABASE qa30982_history_20261024",
+    "affected_rows": 1
+  },
+  {
+    "sql": "CREATE DATABASE qa30995",
+    "affected_rows": 1
+  },
+  {
+    "sql": "CREATE TABLE qa30982_history_20261024.natural_unique5m(k BIGINT NOT NULL,g8 INT NOT NULL)",
+    "affected_rows": 0
+  },
+  {
+    "sql": "INSERT INTO qa30982_history_20261024.natural_unique5m SELECT result,result%8 FROM generate_series(0,4999999) g",
+    "affected_rows": 5000000
+  },
+  {
+    "sql": "CREATE TABLE qa30995.nn(g INT NOT NULL,a BIGINT NOT NULL,b BIGINT NOT NULL,s VARCHAR(32) NOT NULL,c CHAR(32) NOT NULL)",
+    "affected_rows": 0
+  },
+  {
+    "sql": "INSERT INTO qa30995.nn SELECT a%4,a,a%7,cast(a as varchar),concat(cast(a as varchar),case when k%2=0 then ' ' else '  ' end) FROM (SELECT k,k%333337 a FROM qa30982_history_20261024.natural_unique5m WHERE k<1000000) x",
+    "affected_rows": 1000000
+  },
+  {
+    "sql": "CREATE TABLE qa30995.nullable(g INT NOT NULL,a BIGINT,b BIGINT)",
+    "affected_rows": 0
+  },
+  {
+    "sql": "INSERT INTO qa30995.nullable SELECT case when k%11=0 then 4 else k%4 end,case when k%11=0 or k%7=0 then NULL else k%333337 end,case when k%13=0 then NULL else k end FROM qa30982_history_20261024.natural_unique5m WHERE k<1000000",
+    "affected_rows": 1000000
+  }
+]

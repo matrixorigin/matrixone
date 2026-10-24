@@ -18,9 +18,8 @@ import (
 	"context"
 	"regexp"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -58,34 +57,9 @@ func TableDefs(rel handle.Relation) ([]engine.TableDef, error) {
 	return catalog.SchemaToDefs(schema)
 }
 
-func TableNamesOfDB(db handle.Database) ([]string, error) {
-	var names []string
-
-	it := db.MakeRelationIt()
-	for it.Valid() {
-		names = append(names, it.GetRelation().Schema(false).(*catalog.Schema).Name)
-		it.Next()
-	}
-	return names, nil
-}
-
 func AppendDataToTable(ctx context.Context, rel handle.Relation, bat *batch.Batch) (err error) {
 	tnBat := containers.ToTNBatch(bat, common.WorkspaceAllocator)
 	defer tnBat.Close()
 	err = rel.Append(ctx, tnBat)
 	return
-}
-
-func GetHideKeysOfTable(rel handle.Relation) ([]*engine.Attribute, error) {
-	schema := rel.Schema(false).(*catalog.Schema)
-	if schema.PhyAddrKey == nil {
-		return nil, moerr.NewNotSupportedNoCtx("system table has no rowid")
-	}
-	key := new(engine.Attribute)
-	key.Name = schema.PhyAddrKey.Name
-	key.Type = schema.PhyAddrKey.Type
-	key.IsRowId = true
-	// key.IsHidden = true
-	logutil.Debugf("GetHideKey: %v", key)
-	return []*engine.Attribute{key}, nil
 }
