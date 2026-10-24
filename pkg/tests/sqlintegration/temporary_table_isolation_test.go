@@ -17,12 +17,16 @@ package sqlintegration
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -121,6 +125,65 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			_, err = owner.ExecContext(ctx, "insert into victim_t values(3, 'recreated')")
 			require.ErrorAs(t, err, &sqlErr)
 			require.EqualValues(t, 1062, sqlErr.Number)
+		})
+
+		t.Run("inline_index_survives_alter", func(t *testing.T) {
+			exec(owner, "create temporary table alter_t(id int primary key, v varchar(32), unique index uk(v))")
+			exec(owner, "insert into alter_t values(1, 'hello')")
+			exec(owner, "alter table alter_t rename to renamed_t")
+			defer exec(owner, "drop table renamed_t")
+			exec(owner, "insert into renamed_t values(2, 'world')")
+			exec(owner, "alter table renamed_t add index secondary_v(v), algorithm=inplace")
+			exec(owner, "insert into renamed_t values(6, 'added')")
+			exec(owner, "alter table renamed_t drop index secondary_v, algorithm=inplace")
+			exec(owner, "alter table renamed_t add column extra int, algorithm=copy")
+			exec(owner, "insert into renamed_t(id,v) values(3, 'copy')")
+			exec(owner, "truncate table renamed_t")
+			exec(owner, "insert into renamed_t(id,v) values(4, 'truncate')")
+			var v string
+			require.NoError(t, owner.QueryRowContext(ctx, "select v from renamed_t").Scan(&v))
+			require.Equal(t, "truncate", v)
+			_, err := owner.ExecContext(ctx, "insert into renamed_t(id,v) values(5, 'truncate')")
+			var sqlErr *mysql.MySQLError
+			require.ErrorAs(t, err, &sqlErr)
+			require.EqualValues(t, 1062, sqlErr.Number)
+		})
+
+		t.Run("permanent_prefix_view", func(t *testing.T) {
+			exec(owner, "create table __mo_tmp(id int)")
+			defer exec(owner, "drop table __mo_tmp")
+			exec(owner, "insert into __mo_tmp values(7)")
+			exec(owner, "create view permanent_view as select * from __mo_tmp")
+			defer exec(owner, "drop view permanent_view")
+			var id int
+			require.NoError(t, attacker.QueryRowContext(ctx, "select id from permanent_view").Scan(&id))
+			require.Equal(t, 7, id)
+		})
+
+		t.Run("inline_async_and_background_fulltext", func(t *testing.T) {
+			var original int
+			require.NoError(t, owner.QueryRowContext(ctx, "select @@experimental_fulltext2_index").Scan(&original))
+			exec(owner, "set experimental_fulltext2_index=1")
+			defer func() {
+				_, _ = owner.ExecContext(context.WithoutCancel(ctx), fmt.Sprintf("set experimental_fulltext2_index=%d", original))
+			}()
+			exec(owner, "create temporary table async_t(id int primary key, body varchar(100), fulltext ft(body) async)")
+			defer exec(owner, "drop table async_t")
+			exec(owner, "create temporary table background_t(id int primary key, body varchar(100), fulltext2 ft(body))")
+			defer exec(owner, "drop table background_t")
+			exec(owner, "insert into background_t values(1, 'apple')")
+			var physical string
+			require.NoError(t, owner.QueryRowContext(ctx,
+				"select relname from mo_catalog.mo_tables where reldatabase=? and relname like '%_background_t'", schema).Scan(&physical))
+			service := cn.RawService().(cnservice.Service)
+			initSQL := fmt.Sprintf("alter table `%s`.`%s` alter reindex ft fulltext2 force_sync", schema, physical)
+			accountCtx := defines.AttachAccountId(ctx, 0)
+			require.NoError(t, iscp.ProcessInitSQL(accountCtx, service.ID(), service.GetEngine(), service.GetTxnClient(),
+				base64.StdEncoding.EncodeToString([]byte(initSQL)), schema, physical, "ft"))
+			var id int
+			require.NoError(t, owner.QueryRowContext(ctx, "select id from background_t where match(body) against('apple')").Scan(&id))
+			require.Equal(t, 1, id)
+			assertMySQLError("select * from `"+schema+"`.`"+physical+"`", 1146)
 		})
 
 		t.Run("clone_preserves_allocator", func(t *testing.T) {

@@ -181,8 +181,10 @@ func BuildTableScanAccountFilter(
 // BuildTableScanTemporaryFilter hides session temporary roots from direct
 // mo_catalog.mo_tables scans. The durable relkind marker is the classifier;
 // the generated physical-name prefix only selects the current session's rows.
-// A nil session ID deliberately leaves the scan unchanged for context-free
-// catalog tooling and internal maintenance, which use their own capability.
+// An empty string leaves the scan unchanged. Internal processes normally pass
+// the zero UUID instead, which hides all real session-owned temporary rows.
+// Authorized maintenance bypasses this filter with TemporaryTableAccessKey;
+// it must not rely on an absent frontend session to obtain catalog visibility.
 func BuildTableScanTemporaryFilter(sessionID string) tree.Expr {
 	if sessionID == "" {
 		return nil
