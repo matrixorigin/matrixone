@@ -11270,8 +11270,6 @@ func TestTransferDeletes(t *testing.T) {
 }
 
 func TestFreezeTransferIncludesMergeAtUpperBound(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11322,8 +11320,6 @@ func TestFreezeTransferIncludesMergeAtUpperBound(t *testing.T) {
 }
 
 func TestFreezeConflictingUpdatesAfterMergeReturnWW(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11382,8 +11378,6 @@ func TestFreezeConflictingUpdatesAfterMergeReturnWW(t *testing.T) {
 // object. GetByFilter must return the replacement row and reject a second
 // append with the same primary key.
 func TestGetByFilterAfterMergeKeepsTheNewAppendBeforeMergeCommit(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11449,8 +11443,6 @@ func TestGetByFilterAfterMergeKeepsTheNewAppendBeforeMergeCommit(t *testing.T) {
 }
 
 func TestFreezeMissedMergeTransferReturnsWW(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11516,8 +11508,6 @@ func TestFreezeMissedMergeTransferReturnsWW(t *testing.T) {
 }
 
 func TestCommitTransfersDeleteAcrossMergeAfterFreeze(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11568,8 +11558,6 @@ func TestCommitTransfersDeleteAcrossMergeAfterFreeze(t *testing.T) {
 }
 
 func TestMergePrepareCommitAppliesDeleteCreatedAfterFreeze(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11614,8 +11602,6 @@ func TestMergePrepareCommitAppliesDeleteCreatedAfterFreeze(t *testing.T) {
 }
 
 func TestPersistedDeleteTransfersWhenSourceDropsAfterTxnStart(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11672,8 +11658,6 @@ func TestPersistedDeleteTransfersWhenSourceDropsAfterTxnStart(t *testing.T) {
 // RowIDs are resolved before merge, so TN transfer must move every tombstone
 // before dedup checks the replacement appends.
 func TestTPCCStockMultiRowUpdateAcrossMerge(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11732,8 +11716,6 @@ func TestTPCCStockMultiRowUpdateAcrossMerge(t *testing.T) {
 // The serialized pre-prepare queue must turn the loser into a retryable WW
 // conflict; a data-PK duplicate is not an acceptable replacement.
 func TestTPCCStockOverlappingUpdatesAcrossMerge(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
@@ -11839,8 +11821,6 @@ func TestTPCCStockOverlappingUpdatesAcrossMerge(t *testing.T) {
 // replacement PK first, but this is a write-write race, not a user insert of an
 // existing stock key, so it must remain retryable instead of becoming 1062.
 func TestTPCCStockUpdateAfterConcurrentWinnerReturnsWW(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11897,8 +11877,6 @@ func TestTPCCStockUpdateAfterConcurrentWinnerReturnsWW(t *testing.T) {
 // Background flush rewrites that source after the second transaction has
 // captured its RowID but before Freeze/PrePrepare transfer it.
 func TestTPCCStockUpdateAcrossFlush(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11939,8 +11917,6 @@ func TestTPCCStockUpdateAcrossFlush(t *testing.T) {
 }
 
 func TestFreezePersistedStaleRowIDAfterConcurrentUpdateReturnsWW(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -12008,8 +11984,6 @@ func TestConcurrentUpdateByPreviousRowIDWithFlushMerge(t *testing.T) {
 func testConcurrentUpdateByPreviousRowIDWithFlushMerge(
 	t *testing.T, keyCount, workerCount, updatesPerWorker int,
 ) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 

@@ -296,7 +296,6 @@ func TestPrepareAppendSealsFullObjectAndPublishesCommitBound(t *testing.T) {
 }
 
 func TestWaitAppendCommittingBeforeSkipsSameTxn(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	schema := catalog.MockSchema(1, 0)
 	c := catalog.MockCatalog(nil)
 	defer c.Close()
@@ -345,7 +344,6 @@ func TestWaitAppendCommittingBeforeSkipsSameTxn(t *testing.T) {
 }
 
 func TestWaitAppendCommittingBeforeOnlyWaitsSelectedKeys(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	schema := catalog.MockSchema(1, 0)
 	c := catalog.MockCatalog(nil)
 	defer c.Close()

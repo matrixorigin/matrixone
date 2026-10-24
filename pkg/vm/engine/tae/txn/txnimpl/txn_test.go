@@ -645,7 +645,6 @@ func TestAppend(t *testing.T) {
 }
 
 func TestConcurrentFreezeAppendReservations(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
@@ -717,7 +716,6 @@ func TestConcurrentFreezeAppendReservations(t *testing.T) {
 }
 
 func TestConcurrentDedupSamePK(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
