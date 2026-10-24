@@ -178,6 +178,54 @@ func BuildTableScanAccountFilter(
 	}
 }
 
+// BuildTableScanTemporaryFilter hides session temporary roots from direct
+// mo_catalog.mo_tables scans. The durable relkind marker is the classifier;
+// the generated physical-name prefix only selects the current session's rows.
+// A nil session ID deliberately leaves the scan unchanged for context-free
+// catalog tooling and internal maintenance, which use their own capability.
+func BuildTableScanTemporaryFilter(sessionID string) tree.Expr {
+	if sessionID == "" {
+		return nil
+	}
+	sessionID = strings.ReplaceAll(sessionID, "-", "")
+	relKind := tree.NewUnresolvedColName(catalog.SystemRelAttr_Kind)
+	relName := tree.NewUnresolvedColName(catalog.SystemRelAttr_Name)
+	temporaryRoot := tree.NewComparisonExpr(
+		tree.EQUAL,
+		relKind,
+		tree.NewNumVal(catalog.SystemTemporaryTable, catalog.SystemTemporaryTable, false, tree.P_char),
+	)
+	coalesce := func(column string) tree.Expr {
+		return &tree.FuncExpr{
+			Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedName(tree.NewCStr("coalesce", 1))),
+			Exprs: tree.Exprs{
+				tree.NewUnresolvedColName(column),
+				tree.NewNumVal("", "", false, tree.P_char),
+			},
+		}
+	}
+	legacyTemporary := &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedName(tree.NewCStr("mo_is_legacy_temporary_table", 1))),
+		Exprs: tree.Exprs{
+			coalesce(catalog.SystemRelAttr_Kind),
+			coalesce(catalog.SystemRelAttr_Name),
+			coalesce(catalog.SystemRelAttr_DBName),
+			coalesce(catalog.SystemRelAttr_CreateSQL),
+			coalesce(catalog.SystemRelAttr_ExtraInfo),
+		},
+	}
+	temporary := tree.NewOrExpr(temporaryRoot, legacyTemporary)
+	prefix := defines.TempTableNamePrefix + sessionID + "_"
+	owned := &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedName(tree.NewCStr("startswith", 1))),
+		Exprs: tree.Exprs{
+			relName,
+			tree.NewNumVal(prefix, prefix, false, tree.P_char),
+		},
+	}
+	return tree.NewOrExpr(tree.NewNotExpr(temporary), owned)
+}
+
 // BuildViewMetadataDependenciesFilter exposes only the current account's
 // dependency rows plus the system activation sentinel. The sentinel is cluster
 // wide state used by tenant information_schema views to fail closed while a

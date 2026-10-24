@@ -2153,6 +2153,7 @@ func dropSessionTempTables(
 				WithRoleID(tenant.GetDefaultRoleID()),
 		)
 	}
+	ctx = defines.AttachTemporaryTableAccess(ctx)
 	var cleanupErr error
 	for _, tbl := range tempTables {
 		dropSQL := "DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent(tbl.dbName, tbl.realName)
