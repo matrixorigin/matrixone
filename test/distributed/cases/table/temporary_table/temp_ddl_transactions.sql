@@ -142,6 +142,22 @@ insert into temp_ddl_stale.stale values (22);
 commit;
 select id from temp_ddl_stale.stale;
 drop temporary table temp_ddl_stale.stale;
+
+-- Stored-procedure planning must clean the upstream owner, including hidden indexes.
+create temporary table temp_ddl_stale.stale (id int primary key);
+create index stale_ix on temp_ddl_stale.stale(id);
+create procedure temp_ddl_transactions.drop_missing_temp() 'begin drop temporary table temp_ddl_stale.stale; end';
+-- @session:id=2&user=sys:dump&password=111
+drop database temp_ddl_stale;
+create database temp_ddl_stale;
+-- @session
+-- @regex("no such table",true)
+call temp_ddl_transactions.drop_missing_temp();
+create temporary table temp_ddl_stale.stale (id int primary key);
+insert into temp_ddl_stale.stale values (33);
+select id from temp_ddl_stale.stale;
+drop procedure temp_ddl_transactions.drop_missing_temp;
+drop temporary table temp_ddl_stale.stale;
 drop database temp_ddl_stale;
 
 drop temporary table tc, td, tg, ta, tp, ti, ts, tf;
