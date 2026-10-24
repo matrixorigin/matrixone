@@ -26,10 +26,14 @@ type observedBuildBudget struct {
 	rscthrottler.RSCThrottler
 	acquire func(int64) bool
 	held    int64
+	calls   int
+	denied  bool
 }
 
 func (b *observedBuildBudget) Acquire(n int64) (int64, bool) {
+	b.calls++
 	if !b.acquire(n) {
+		b.denied = true
 		return b.held, false
 	}
 	b.held += n
@@ -180,27 +184,36 @@ func TestLegacyExpressionBuildSpillsOnlyUnderPressure(t *testing.T) {
 func TestBuildPayloadSpillPolicy(t *testing.T) {
 	const payloadLimit = int64(2 * colexec.DefaultBatchSize * 8)
 	for _, tc := range []struct {
-		name       string
-		rows       []int
-		threshold  int64
-		controlled bool
-		noBudget   bool
-		denyCopy   bool
-		spill      bool
+		name        string
+		rows        []int
+		threshold   int64
+		controlled  bool
+		noBudget    bool
+		denyCall    int
+		spill       bool
+		auto        bool
+		unsupported bool
 	}{
-		{"ordinary equal payload", []int{8192, 8192}, payloadLimit, false, false, false, false},
-		{"controlled keeps capacity threshold", []int{8192, 8192}, payloadLimit, true, false, false, true},
-		{"no budget keeps capacity threshold", []int{8192, 8192}, payloadLimit, false, true, false, true},
-		{"ordinary payload exceeds threshold", []int{8192, 8192, 1}, payloadLimit, false, false, false, true},
-		{"ordinary includes partial tail", []int{8192, 8191}, 100001, false, false, false, true},
-		{"ordinary copy budget denied", []int{8192, 8192}, payloadLimit, false, false, true, true},
+		{name: "ordinary equal payload", rows: []int{8192, 8192}, threshold: payloadLimit},
+		{name: "controlled keeps capacity threshold", rows: []int{8192, 8192}, threshold: payloadLimit, controlled: true, spill: true},
+		{name: "no budget keeps capacity threshold", rows: []int{8192, 8192}, threshold: payloadLimit, noBudget: true, spill: true},
+		{name: "ordinary payload exceeds threshold", rows: []int{8192, 8192, 1}, threshold: payloadLimit, spill: true},
+		{name: "ordinary includes partial tail", rows: []int{8192, 8191}, threshold: 100001, spill: true},
+		{name: "ordinary copy budget denied", rows: []int{8192, 8192}, threshold: payloadLimit, denyCall: 1, spill: true},
+		{name: "auto admits payload above static share", rows: []int{8192, 8192, 1}, threshold: payloadLimit, auto: true},
+		{name: "auto copy budget denied", rows: []int{1}, threshold: payloadLimit, auto: true, denyCall: 1, spill: true},
+		{name: "auto map budget denied", rows: []int{1}, threshold: payloadLimit, auto: true, denyCall: 2, spill: true},
+		{name: "auto controlled keeps capacity threshold", rows: []int{8192, 8192}, threshold: payloadLimit, auto: true, controlled: true, spill: true},
+		{name: "auto no budget keeps capacity threshold", rows: []int{8192, 8192}, threshold: payloadLimit, auto: true, noBudget: true, spill: true},
+		{name: "auto unsupported key keeps payload threshold", rows: []int{8192, 8192, 1}, threshold: payloadLimit, auto: true, unsupported: true, spill: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			previousRuntime := moruntime.ServiceRuntime("")
 			rt := moruntime.DefaultRuntime()
 			moruntime.SetupServiceBasedRuntime("", rt)
 			t.Cleanup(func() { moruntime.SetupServiceBasedRuntime("", previousRuntime) })
-			budget := &observedBuildBudget{acquire: func(int64) bool { return !tc.denyCopy }}
+			budget := &observedBuildBudget{}
+			budget.acquire = func(int64) bool { return budget.calls != tc.denyCall }
 			if !tc.noBudget {
 				rt.SetGlobalVariables(moruntime.CNMemoryThrottler, budget)
 			}
@@ -229,15 +242,33 @@ func TestBuildPayloadSpillPolicy(t *testing.T) {
 				inputs = append(inputs, input)
 				totalRows += rows
 			}
+			key := newExpr(0, types.T_int64.ToType())
+			if tc.unsupported {
+				fn, err := function.GetFunctionByName(proc.Ctx, "abs", []types.Type{types.T_int64.ToType()})
+				require.NoError(t, err)
+				key = &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "abs"}, Args: []*plan.Expr{key},
+				}}}
+			}
+			require.Equal(t, !tc.unsupported, SupportsBoundedSpillKeys([]*plan.Expr{key}))
 			build := &HashBuild{
 				NeedHashMap: true, NeedBatches: true, HashOnPK: true,
-				IsShuffle: true, CanSpill: true, Conditions: []*plan.Expr{newExpr(0, types.T_int64.ToType())},
+				IsShuffle: true, CanSpill: true, Conditions: []*plan.Expr{key},
 				JoinMapTag: 711, JoinMapRefCnt: 1, SpillThreshold: tc.threshold,
 				RuntimeFilterSpec: &plan.RuntimeFilterSpec{Tag: 712},
+			}
+			if tc.auto {
+				build.SpillThreshold = 0
 			}
 			build.AppendChild(colexec.NewMockOperator().WithBatchs(inputs))
 			require.NoError(t, build.Prepare(proc))
 			t.Cleanup(func() { build.Free(proc, false, nil) })
+			if tc.auto {
+				require.Zero(t, build.SpillThreshold, "Prepare preserves the requested auto mode")
+				// Scale only the computed byte share; do not change global memory,
+				// cache hints or CPU counts to make this boundary inexpensive.
+				build.ctr.spillThreshold = tc.threshold
+			}
 			if tc.noBudget {
 				require.Nil(t, build.ctr.memoryThrottler)
 			} else {
@@ -245,6 +276,9 @@ func TestBuildPayloadSpillPolicy(t *testing.T) {
 			}
 			_, err := build.Call(proc)
 			require.NoError(t, err)
+			if tc.denyCall > 0 {
+				require.True(t, budget.denied, "the intended copy/map allocation must reach Acquire")
+			}
 			jm, err := message.ReceiveJoinMap(711, true, 0, proc.GetMessageBoard(), proc.Ctx)
 			require.NoError(t, err)
 			require.NotNil(t, jm)
@@ -258,6 +292,75 @@ func TestBuildPayloadSpillPolicy(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAutoBuildCompetingJoinMapsReleaseAdmission(t *testing.T) {
+	previousRuntime := moruntime.ServiceRuntime("")
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime("", rt)
+	t.Cleanup(func() { moruntime.SetupServiceBasedRuntime("", previousRuntime) })
+	limit := int64(1 << 30)
+	budget := &observedBuildBudget{}
+	budget.acquire = func(bytes int64) bool { return bytes <= limit-budget.held }
+	rt.SetGlobalVariables(moruntime.CNMemoryThrottler, budget)
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	t.Cleanup(proc.Free)
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	t.Cleanup(func() { require.Zero(t, budget.held) })
+	proc.SetMessageBoard(message.NewMessageBoard())
+	t.Cleanup(func() { proc.GetMessageBoard().Reset() })
+	input := batch.NewOffHeapWithSize(1)
+	input.Vecs[0] = testutil.MakeInt64Vector([]int64{0, 1}, nil, mp)
+	input.SetRowCount(2)
+	t.Cleanup(func() { input.Clean(mp) })
+	var maps []*message.JoinMap
+	t.Cleanup(func() {
+		for _, jm := range maps {
+			if jm != nil {
+				jm.Free()
+			}
+		}
+	})
+	buildMap := func() *message.JoinMap {
+		t.Helper()
+		tag := int32(720 + len(maps)*2)
+		build := &HashBuild{NeedHashMap: true, NeedBatches: true, HashOnPK: true,
+			IsShuffle: true, CanSpill: true, Conditions: []*plan.Expr{newExpr(0, types.T_int64.ToType())},
+			JoinMapTag: tag, JoinMapRefCnt: 1, RuntimeFilterSpec: &plan.RuntimeFilterSpec{Tag: tag + 1}}
+		build.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+		require.NoError(t, build.Prepare(proc))
+		t.Cleanup(func() { build.Free(proc, false, nil) })
+		require.Zero(t, build.SpillThreshold)
+		require.Same(t, budget, build.ctr.memoryThrottler)
+		_, err := build.Call(proc)
+		require.NoError(t, err)
+		jm, err := message.ReceiveJoinMap(tag, true, 0, proc.GetMessageBoard(), proc.Ctx)
+		require.NoError(t, err)
+		require.NotNil(t, jm)
+		maps = append(maps, jm)
+		assertBuildPayloadRows(t, proc, jm, 2)
+		build.Free(proc, false, nil)
+		return jm
+	}
+	first := buildMap()
+	require.False(t, first.IsSpilled())
+	perMap := budget.held
+	require.Positive(t, perMap, "the live JoinMap owns both copied input and hashmap reservations")
+	limit = 2 * perMap
+	second := buildMap()
+	require.False(t, second.IsSpilled())
+	require.Equal(t, limit, budget.held, "two live consumers exhaust the finite CN budget")
+	third := buildMap()
+	require.True(t, third.IsSpilled(), "another build must spill while both admitted maps are live")
+	require.True(t, budget.denied)
+	require.Equal(t, limit, budget.held)
+	first.Free()
+	maps[0] = nil
+	require.Equal(t, perMap, budget.held)
+	fourth := buildMap()
+	require.False(t, fourth.IsSpilled(), "releasing one consumer admits a later build without restarting CN")
+	require.Equal(t, limit, budget.held)
 }
 
 // Read actual producer output, including every spill file. A post-copy spill

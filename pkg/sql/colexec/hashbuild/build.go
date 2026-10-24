@@ -226,6 +226,10 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 	// before copying. Imports and executions without that CN budget retain the
 	// conservative capacity threshold.
 	logicalThreshold := accountBatches && proc.Base.ImportMemory == nil && ctr.memoryThrottler != nil
+	// The computed automatic share is only a heuristic. A bounded build with a
+	// real CN budget may borrow beyond it; each copy and the map construction
+	// peak must still be admitted. Explicit thresholds retain their semantics.
+	borrowBudget := logicalThreshold && hashBuild.SpillThreshold == 0 && SupportsBoundedSpillKeys(hashBuild.Conditions)
 	if accountBatches {
 		ctr.hashmapBuilder.Batches.TrackAllocation()
 	}
@@ -259,7 +263,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				return err
 			}
 			ctr.reconcileBatches()
-			if logicalThreshold && ctr.spillThreshold > 100000 && ctr.hashmapBuilder.CollectedBatchBytes() > ctr.spillThreshold {
+			if logicalThreshold && !borrowBudget && ctr.spillThreshold > 100000 && ctr.hashmapBuilder.CollectedBatchBytes() > ctr.spillThreshold {
 				// beginSpill writes all collected batches, including this one.
 				if err := beginSpill("after-copy", "logical-byte-threshold", 0); err != nil {
 					return err
@@ -270,13 +274,15 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 	needUniqueVec := !hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec != nil && hashBuild.RuntimeFilterSpec.Expr != nil
 	if !spillMode && ctr.spillAllowed && hashBuild.NeedHashMap && ctr.hashmapBuilder.InputBatchRowCount > 0 {
 		bound, ok := ctr.hashmapBuilder.BuildMemoryBound(hashBuild.Conditions, hashBuild.NeedAllocateSels, needUniqueVec)
-		// The import controller admits only key expressions with a capacity
-		// contract. Ordinary joins retain their existing expression behavior;
-		// an unknown import bound alone is not evidence of memory pressure.
-		if !ok && proc.Base.ImportMemory != nil || ok && !ctr.acquireMemory(bound) {
+		// Borrowing beyond the automatic share also requires a known map peak.
+		// Other ordinary expressions retain their existing behavior.
+		if !ok && (proc.Base.ImportMemory != nil || borrowBudget) || ok && !ctr.acquireMemory(bound) {
 			stage, reason := "build-hashmap", "reservation-denied"
 			if !ok {
-				stage, reason = "unsupported-controlled-bound", "unsupported-bound"
+				reason = "unsupported-bound"
+				if proc.Base.ImportMemory != nil {
+					stage = "unsupported-controlled-bound"
+				}
 			}
 			if err := beginSpill(stage, reason, bound); err != nil {
 				return err

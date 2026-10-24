@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -30,6 +31,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -1520,11 +1523,12 @@ type rebuildPayloadBudget struct {
 	calls    int
 	denyCall int
 	denied   bool
+	denyAll  bool
 }
 
 func (b *rebuildPayloadBudget) Acquire(bytes int64) (int64, bool) {
 	b.calls++
-	if b.calls == b.denyCall {
+	if b.denyAll || b.calls == b.denyCall {
 		b.denied = true
 		return b.held, false
 	}
@@ -1538,21 +1542,36 @@ func (b *rebuildPayloadBudget) Available() int64          { return 1<<30 - b.hel
 func TestRebuildPayloadSpillPolicy(t *testing.T) {
 	const payloadLimit = int64(2 * colexec.DefaultBatchSize * 8)
 	for _, tc := range []struct {
-		name       string
-		rows       []int
-		threshold  int64
-		controlled bool
-		noBudget   bool
-		denyCall   int
-		reSpill    bool
+		name         string
+		rows         []int
+		threshold    int64
+		controlled   bool
+		noBudget     bool
+		denyCall     int
+		reSpill      bool
+		auto         bool
+		unsupported  bool
+		depth        int
+		oom          bool
+		unknownBound bool
 	}{
-		{"ordinary equal payload", []int{8192, 8192}, payloadLimit, false, false, 0, false},
-		{"controlled keeps capacity threshold", []int{8192, 8192}, payloadLimit, true, false, 0, true},
-		{"no budget keeps capacity threshold", []int{8192, 8192}, payloadLimit, false, true, 0, true},
-		{"ordinary payload exceeds threshold", []int{8192, 8192, 1}, payloadLimit, false, false, 0, true},
-		{"ordinary includes partial tail", []int{8192, 8191}, 100001, false, false, 0, true},
-		{"ordinary copy budget denied", []int{8192, 8192}, payloadLimit, false, false, 1, true},
-		{"ordinary map budget denied", []int{8192, 8192}, payloadLimit, false, false, 3, true},
+		{name: "ordinary equal payload", rows: []int{8192, 8192}, threshold: payloadLimit},
+		{name: "controlled keeps capacity threshold", rows: []int{8192, 8192}, threshold: payloadLimit, controlled: true, reSpill: true},
+		{name: "no budget keeps capacity threshold", rows: []int{8192, 8192}, threshold: payloadLimit, noBudget: true, reSpill: true},
+		{name: "ordinary payload exceeds threshold", rows: []int{8192, 8192, 1}, threshold: payloadLimit, reSpill: true},
+		{name: "ordinary includes partial tail", rows: []int{8192, 8191}, threshold: 100001, reSpill: true},
+		{name: "ordinary copy budget denied", rows: []int{8192, 8192}, threshold: payloadLimit, denyCall: 1, reSpill: true},
+		{name: "ordinary map budget denied", rows: []int{8192, 8192}, threshold: payloadLimit, denyCall: 3, reSpill: true},
+		{name: "auto admits payload above static share", rows: []int{8192, 8192, 1}, threshold: payloadLimit, auto: true},
+		{name: "auto copy budget denied", rows: []int{1}, threshold: payloadLimit, auto: true, denyCall: 1, reSpill: true},
+		{name: "auto map budget denied", rows: []int{1}, threshold: payloadLimit, auto: true, denyCall: 2, reSpill: true},
+		{name: "auto controlled keeps capacity threshold", rows: []int{8192, 8192}, threshold: payloadLimit, auto: true, controlled: true, reSpill: true},
+		{name: "auto no budget keeps capacity threshold", rows: []int{8192, 8192}, threshold: payloadLimit, auto: true, noBudget: true, reSpill: true},
+		{name: "auto unsupported key keeps payload threshold", rows: []int{8192, 8192, 1}, threshold: payloadLimit, auto: true, unsupported: true, reSpill: true},
+		{name: "auto max depth admits payload above static share", rows: []int{8192, 8192, 1}, threshold: payloadLimit, auto: true, depth: spillMaxPass},
+		{name: "auto max depth copy budget denied", rows: []int{1}, threshold: payloadLimit, auto: true, depth: spillMaxPass, denyCall: 1, oom: true},
+		{name: "auto max depth map budget denied", rows: []int{1}, threshold: payloadLimit, auto: true, depth: spillMaxPass, denyCall: 2, oom: true},
+		{name: "auto max depth unknown runtime bound", rows: []int{1}, threshold: payloadLimit, auto: true, depth: spillMaxPass, unknownBound: true, oom: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			previousRuntime := moruntime.ServiceRuntime("")
@@ -1582,8 +1601,23 @@ func TestRebuildPayloadSpillPolicy(t *testing.T) {
 			probeWriter := &spillBucketWriter{file: probeFile}
 			t.Cleanup(probeWriter.close)
 			key := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+			if tc.unsupported {
+				fn, err := function.GetFunctionByName(proc.Ctx, "abs", []types.Type{types.T_int64.ToType()})
+				require.NoError(t, err)
+				key = &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "abs"}, Args: []*plan.Expr{key},
+				}}}
+			} else if tc.unknownBound {
+				// The key kind has a contract, but the actual input cannot supply
+				// its column. Never allocate an unbounded fallback at max depth.
+				key.GetCol().ColPos = 1
+			}
+			require.Equal(t, !tc.unsupported, hashbuild.SupportsBoundedSpillKeys([]*plan.Expr{key}))
 			join := &HashJoin{JoinType: plan.Node_INNER, EqConds: [][]*plan.Expr{{key}, {key}}, HashOnPK: true,
-				LeftTypes: []types.Type{types.T_int64.ToType()}, RightTypes: []types.Type{types.T_int64.ToType()}}
+				LeftTypes: []types.Type{types.T_int64.ToType()}, RightTypes: []types.Type{types.T_int64.ToType()}, SpillThreshold: tc.threshold}
+			if tc.auto {
+				join.SpillThreshold = 0
+			}
 			t.Cleanup(func() { join.Free(proc, false, nil) })
 			// Rebuild initializes build keys itself; direct callers also need the
 			// probe executors that Prepare normally installs for re-partitioning.
@@ -1610,17 +1644,30 @@ func TestRebuildPayloadSpillPolicy(t *testing.T) {
 				}()
 				totalRows += rows
 			}
-			bucket := spillBucket{buildFd: buildWriter.handOffFd(), probeFd: probeWriter.handOffFd(), baseName: uuid.NewString(), depth: 0}
+			bucket := spillBucket{buildFd: buildWriter.handOffFd(), probeFd: probeWriter.handOffFd(), baseName: uuid.NewString(), depth: tc.depth}
 			join.ctr.activeBucket = &bucket
 			jm, reSpilled, err := join.rebuildHashmapForBucket(proc, bucket, analyzer)
-			require.NoError(t, err)
+			if jm != nil {
+				t.Cleanup(jm.Free)
+			}
 			require.Equal(t, tc.reSpill, reSpilled)
 			if tc.denyCall > 0 {
 				require.True(t, budget.denied, "the intended copy/map allocation must actually reach Acquire")
 			}
+			if tc.oom {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), "denied/unknown admission must terminate with ErrOOM: %v", err)
+				require.Nil(t, jm)
+				require.Empty(t, join.ctr.spillQueue, "max depth cannot repartition again")
+				require.Nil(t, join.ctr.skew, "ordinary query has no admitted skew workspace")
+				require.Zero(t, budget.held, "failed rebuild releases every copy/map reservation")
+				if tc.unknownBound {
+					require.Equal(t, 1, budget.calls, "copy is admitted, unknown hashmap bound cannot reach allocation")
+				}
+				return
+			}
+			require.NoError(t, err)
 			if !reSpilled {
 				require.NotNil(t, jm)
-				t.Cleanup(jm.Free)
 				require.Equal(t, int64(totalRows), jm.GetRowCount())
 				require.Empty(t, join.ctr.spillQueue)
 				seen := make([]bool, totalRows)
@@ -1629,6 +1676,11 @@ func TestRebuildPayloadSpillPolicy(t *testing.T) {
 				}
 				require.NotContains(t, seen, false)
 				require.Positive(t, budget.held, "actual JoinMap owns its memory lease")
+				if tc.depth >= spillMaxPass {
+					lease := budget.held
+					join.Free(proc, false, nil)
+					require.Equal(t, lease, budget.held, "producer cleanup cannot retire a published map's lease")
+				}
 			} else {
 				require.Nil(t, jm)
 				require.NotEmpty(t, join.ctr.spillQueue)
@@ -1670,6 +1722,80 @@ func TestRebuildPayloadSpillPolicy(t *testing.T) {
 				require.Zero(t, budget.held, "repartition retires its copied storage")
 			}
 		})
+	}
+}
+
+func TestAutoRebuildEmptyLeftBuildSkipsAdmission(t *testing.T) {
+	for _, depth := range []int{0, spillMaxPass} {
+		for _, expression := range []bool{false, true} {
+			t.Run(fmt.Sprintf("depth-%d/expression-%t", depth, expression), func(t *testing.T) {
+				previousRuntime := moruntime.ServiceRuntime("")
+				rt := moruntime.DefaultRuntime()
+				moruntime.SetupServiceBasedRuntime("", rt)
+				t.Cleanup(func() { moruntime.SetupServiceBasedRuntime("", previousRuntime) })
+				budget := &rebuildPayloadBudget{denyAll: true}
+				rt.SetGlobalVariables(moruntime.CNMemoryThrottler, budget)
+				mp := mpool.MustNewZero()
+				proc := testutil.NewProcessWithMPool(t, "", mp)
+				t.Cleanup(proc.Free)
+				t.Cleanup(func() { require.Zero(t, mp.CurrNB(), "empty rebuild and probe reader release their storage") })
+				t.Cleanup(func() { require.Zero(t, budget.held) })
+				key := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+				if expression {
+					fn, err := function.GetFunctionByName(proc.Ctx, "+", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()})
+					require.NoError(t, err)
+					key = &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_F{F: &plan.Function{
+						Func: &plan.ObjectRef{Obj: fn.GetEncodedOverloadID(), ObjName: "+"}, Args: []*plan.Expr{key, key},
+					}}}
+				}
+				require.True(t, hashbuild.SupportsBoundedSpillKeys([]*plan.Expr{key}))
+				join := &HashJoin{JoinType: plan.Node_LEFT, EqConds: [][]*plan.Expr{{key}, {key}}, HashOnPK: true,
+					LeftTypes: []types.Type{types.T_int64.ToType()}, RightTypes: []types.Type{types.T_int64.ToType()}}
+				t.Cleanup(func() { join.Free(proc, false, nil) })
+				join.ctr.spillThreshold = 128 << 20
+				fs, err := proc.GetSpillFileService()
+				require.NoError(t, err)
+				buildFile, err := fs.CreateAndRemoveFile(proc.Ctx, "empty_auto_build_"+uuid.NewString())
+				require.NoError(t, err)
+				buildWriter := &spillBucketWriter{file: buildFile}
+				t.Cleanup(buildWriter.close)
+				probeFile, err := fs.CreateAndRemoveFile(proc.Ctx, "empty_auto_probe_"+uuid.NewString())
+				require.NoError(t, err)
+				probeWriter := &spillBucketWriter{file: probeFile}
+				t.Cleanup(probeWriter.close)
+				probe := batch.NewOffHeapWithSize(1)
+				probe.Vecs[0] = testutil.MakeInt64Vector([]int64{31}, nil, mp)
+				probe.SetRowCount(1)
+				t.Cleanup(func() { probe.Clean(mp) })
+				analyzer := process.NewAnalyzer(0, false, false, "empty auto build")
+				_, err = join.ctr.flushBucketBuffer(proc, probe, probeWriter, analyzer)
+				require.NoError(t, err)
+				bucket := spillBucket{buildFd: buildWriter.handOffFd(), probeFd: probeWriter.handOffFd(), baseName: uuid.NewString(), depth: depth}
+				join.ctr.activeBucket = &bucket
+				jm, reSpilled, err := join.rebuildHashmapForBucket(proc, bucket, analyzer)
+				if jm != nil {
+					t.Cleanup(jm.Free)
+				}
+				require.NoError(t, err, "zero build rows need neither hash allocation nor an admission fallback")
+				require.Nil(t, jm)
+				require.False(t, reSpilled)
+				require.Empty(t, join.ctr.spillQueue)
+				require.Nil(t, join.ctr.skew)
+				require.Zero(t, budget.calls, "even a bounded expression must skip the empty-map bound and Acquire")
+				require.NotNil(t, bucket.probeFd, "LEFT join keeps the unmatched probe side")
+				reader := &spillBucketReader{}
+				reader.resetForFd(bucket.probeFd)
+				bucket.probeFd = nil
+				t.Cleanup(reader.close)
+				decoded := batch.NewOffHeapWithSize(0)
+				t.Cleanup(func() { decoded.Clean(mp) })
+				actual, err := reader.readBatch(proc, decoded)
+				require.NoError(t, err)
+				require.Equal(t, []int64{31}, vector.MustFixedColNoTypeCheck[int64](actual.Vecs[0]))
+				_, err = reader.readBatch(proc, decoded)
+				require.Equal(t, io.EOF, err)
+			})
+		}
 	}
 }
 

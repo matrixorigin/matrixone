@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"os"
 
 	"github.com/cespare/xxhash/v2"
@@ -450,9 +451,6 @@ func computeXXHash(keyVecs []*vector.Vector, hashValues []uint64, seed uint64) e
 // it re-spills into sub-buckets (prepended to spillQueue) and returns nil, nil.
 func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket spillBucket, analyzer process.Analyzer) (jm *message.JoinMap, reSpilled bool, err error) {
 	ctr := &hashJoin.ctr
-	// An uncontrolled query has no admitted singleton workspace. Preserve its
-	// existing max-depth behavior without imposing a new SQL row-size limit.
-	legacyMaxDepth := bucket.depth >= spillMaxPass && proc.Base.ImportMemory == nil
 	if bucket.depth >= spillMaxPass && proc.Base.ImportMemory != nil {
 		if err := hashJoin.startSkew(proc, bucket); err != nil {
 			return nil, false, err
@@ -465,10 +463,17 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 	if value, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.CNMemoryThrottler); ok {
 		throttler, _ = value.(rscthrottler.RSCThrottler)
 	}
+	// Match the initial build's automatic policy, including its key-capacity
+	// requirement. Reaching the depth limit cannot waive this admission.
+	borrowBudget := proc.Base.ImportMemory == nil && throttler != nil && hashJoin.SpillThreshold == 0 && hashbuild.SupportsBoundedSpillKeys(hashJoin.EqConds[1])
+	legacyMaxDepth := bucket.depth >= spillMaxPass && proc.Base.ImportMemory == nil && !borrowBudget
 	reserved := int64(0)
 	acquire := func(bytes int64) bool {
 		if bytes <= 0 {
 			return true
+		}
+		if bytes == math.MaxInt64 || reserved > math.MaxInt64-bytes {
+			return false
 		}
 		if throttler != nil {
 			if _, ok := throttler.Acquire(bytes); !ok {
@@ -544,6 +549,10 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 				threshold = growth > ctr.spillThreshold-builder.Batches.RetainedBytes()
 			}
 			if threshold || !acquire(growth) {
+				if borrowBudget && bucket.depth >= spillMaxPass {
+					cleanupBuilder()
+					return nil, false, moerr.NewOOM(proc.Ctx)
+				}
 				_, spillErr := hashJoin.reSpillBucket(proc, bucket, builder, reader, nextDepth, analyzer, bat)
 				cleanupBuilder()
 				return nil, true, spillErr
@@ -557,7 +566,7 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 		if reserved > 0 {
 			release(reserved - builder.Batches.RetainedBytes())
 		}
-		if logicalThreshold && ctr.spillThreshold > 100000 && builder.CollectedBatchBytes() > ctr.spillThreshold {
+		if logicalThreshold && !borrowBudget && ctr.spillThreshold > 100000 && builder.CollectedBatchBytes() > ctr.spillThreshold {
 			// The current batch is already in builder; passing it as pending
 			// would write the same rows a second time.
 			_, spillErr := hashJoin.reSpillBucket(proc, bucket, builder, reader, nextDepth, analyzer)
@@ -566,9 +575,15 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 		}
 	}
 
-	if !legacyMaxDepth {
+	// Empty build buckets construct no map, and must preserve unmatched probe
+	// rows even if the CN budget refuses all allocations.
+	if !legacyMaxDepth && builder.InputBatchRowCount > 0 {
 		bound, ok := builder.BuildMemoryBound(hashJoin.EqConds[1], !hashJoin.HashOnPK, false)
-		if !ok && proc.Base.ImportMemory != nil || ok && !acquire(bound) {
+		if !ok && (proc.Base.ImportMemory != nil || borrowBudget) || ok && !acquire(bound) {
+			if borrowBudget && bucket.depth >= spillMaxPass {
+				cleanupBuilder()
+				return nil, false, moerr.NewOOM(proc.Ctx)
+			}
 			_, spillErr := hashJoin.reSpillBucket(proc, bucket, builder, reader, nextDepth, analyzer)
 			cleanupBuilder()
 			return nil, true, spillErr
