@@ -888,16 +888,13 @@ func maybeRunInDaemonMode() {
 }
 
 func clearSpillFiles(ctx context.Context, fs fileservice.FileService) error {
-	localFS, err := fileservice.Get[fileservice.FileService](fs, defines.LocalFileServiceName)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	localFS, err := fileservice.Get[fileservice.MutableFileService](fs, defines.LocalFileServiceName)
 	if err != nil {
 		return err
 	}
-	spillFS := fileservice.SubPath(localFS, defines.SpillFileServiceName)
-	for entry, listErr := range spillFS.List(ctx, "/") {
-		if listErr != nil {
-			return listErr
-		}
-		_ = spillFS.Delete(ctx, entry.Name)
-	}
-	return nil
+	_, err = fileservice.GetSpillFileService(ctx, localFS, defines.SpillFileServiceName)
+	return err
 }

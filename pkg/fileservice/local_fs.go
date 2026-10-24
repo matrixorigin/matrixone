@@ -66,6 +66,7 @@ type LocalFS struct {
 	// framing), matching the S3 (disk-backed) on-disk format. Selected by the
 	// DISK-V2 backend.
 	noChecksum bool
+	spillRoot  spillRootHolder
 }
 
 var _ FileService = new(LocalFS)
@@ -1354,6 +1355,7 @@ func (l *LocalFS) Replace(ctx context.Context, vector IOVector) error {
 var _ CachingFileService = new(LocalFS)
 
 func (l *LocalFS) Close(ctx context.Context) {
+	l.spillRoot.close()
 	caches := fileServiceCaches{memory: l.memCache, disk: l.diskCache}
 	caches.close(ctx)
 	closeDirFiles(&l.RWMutex, l.dirFiles)
@@ -1485,12 +1487,5 @@ func (l *LocalFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os
 		return nil, err
 	}
 	nativePath := l.toNativeFilePath(path.File)
-	f, err := os.Create(nativePath)
-	if err != nil {
-		return nil, err
-	}
-
-	// do not check error for this one
-	os.Remove(nativePath)
-	return f, nil
+	return createAndRemoveFile(nativePath, os.Create, os.Remove)
 }

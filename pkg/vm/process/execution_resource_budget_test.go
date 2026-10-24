@@ -18,10 +18,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"weak"
 
 	"github.com/stretchr/testify/require"
 
@@ -40,7 +42,7 @@ type testPhysicalAllocation struct {
 
 func TestExecutionResourceBudgetObserverDimensionsAreFixed(t *testing.T) {
 	components := [...]string{"memory", "recovery_memory", "spill_disk", "spill_fd"}
-	events := [...]string{"reserve", "release", "reconcile", "reject"}
+	events := [...]string{"reserve", "release", "reconcile", "reject", "abandon"}
 	scopes := [...]string{"query", "cn"}
 	want := len(components) * len(events) * len(scopes)
 	if len(executionResourceBudgetObservers) != want {
@@ -411,6 +413,67 @@ func TestExecutionResourceBudgetSpillLedgers(t *testing.T) {
 	if budget.SpillDiskUsed() != 0 || budget.SpillFDUsed() != 0 {
 		t.Fatal("spill reservations leaked")
 	}
+}
+
+func TestExecutionSpillDiskAbandonIsTerminal(t *testing.T) {
+	for _, bytes := range []uint64{0, 13} {
+		t.Run(fmt.Sprint(bytes), func(t *testing.T) {
+			budget := MustNewExecutionResourceBudget(64, 64)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			disk, err := generation.ReserveSpillDisk(bytes)
+			require.NoError(t, err)
+			copied := *disk
+			generation.Close()
+			require.True(t, disk.Abandon())
+			require.False(t, copied.Abandon())
+			require.False(t, copied.Release())
+			require.ErrorIs(t, copied.Grow(1), ErrExecutionSpillReservationInactive)
+			_, err = copied.ReconcileDown(0)
+			require.ErrorIs(t, err, ErrExecutionSpillReservationInactive)
+			require.Equal(t, bytes, budget.SpillDiskUsed())
+			require.Equal(t, bytes, generation.SpillDiskUsed())
+		})
+	}
+}
+
+func TestExecutionSpillDiskAbandonRejectsConcurrentRefund(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(64, 64)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	disk, err := generation.ReserveSpillDisk(7)
+	require.NoError(t, err)
+	require.True(t, disk.Abandon())
+	var workers sync.WaitGroup
+	var refunds atomic.Int32
+	for i := 0; i < 16; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			if disk.Release() || disk.Abandon() {
+				refunds.Add(1)
+			}
+		}()
+	}
+	workers.Wait()
+	require.Zero(t, refunds.Load())
+	require.EqualValues(t, 7, budget.SpillDiskUsed())
+}
+
+func TestExecutionSpillDiskAbandonDoesNotRetainGeneration(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(64, 64)
+	t.Cleanup(budget.Close)
+	generationRef := func() weak.Pointer[ExecutionResourceGeneration] {
+		generation, err := budget.OpenGeneration(1)
+		require.NoError(t, err)
+		disk, err := generation.ReserveSpillDisk(13)
+		require.NoError(t, err)
+		require.True(t, disk.Abandon())
+		generation.Close()
+		return weak.Make(generation)
+	}()
+	require.Eventually(t, func() bool { runtime.GC(); return generationRef.Value() == nil }, 5*time.Second, 10*time.Millisecond)
+	require.EqualValues(t, 13, budget.SpillDiskUsed(), "a collected query must not refund surviving bytes")
 }
 
 func TestExecutionResourceBudgetSpillReleaseRejectsLedgerUnderflow(t *testing.T) {

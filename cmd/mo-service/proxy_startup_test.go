@@ -185,7 +185,7 @@ func TestInitServiceFileServicesPropagatesCreatorError(t *testing.T) {
 }
 
 type listErrorFileService struct {
-	fileservice.FileService
+	*fileservice.LocalETLFS
 	err error
 }
 
@@ -229,11 +229,11 @@ func TestInitServiceFileServicesPublishesETLAfterSpillCleanup(t *testing.T) {
 		stopper.NewStopper("proxy-spill-list-error"),
 		func(ctx context.Context, fsCfg fileservice.Config, counters []*perfcounter.CounterSet) (fileservice.FileService, error) {
 			if fsCfg.Name == defines.LocalFileServiceName {
-				local, err := fileservice.NewMemoryFS(fsCfg.Name, fileservice.CacheConfig{}, counters)
+				local, err := fileservice.NewLocalETLFS(fsCfg.Name, t.TempDir())
 				if err != nil {
 					return nil, err
 				}
-				return &listErrorFileService{FileService: local, err: listErr}, nil
+				return &listErrorFileService{LocalETLFS: local, err: listErr}, nil
 			}
 			return fileservice.NewFileService(ctx, fsCfg, counters)
 		},

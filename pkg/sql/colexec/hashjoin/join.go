@@ -16,6 +16,7 @@ package hashjoin
 
 import (
 	"bytes"
+	"errors"
 	"math/bits"
 	"slices"
 	"strings"
@@ -518,10 +519,10 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				return takeErr
 			}
 			if hashJoin.allocationAccount == nil {
-				_ = payload.Close()
+				cleanupErr := payload.Close()
 				ctr.mp.Free()
 				ctr.mp = nil
-				return mpool.ErrAllocationAccountInvalid
+				return errors.Join(mpool.ErrAllocationAccountInvalid, cleanupErr)
 			}
 			buildKeyExprs, probeKeyExprs := hashJoin.EqConds[1], hashJoin.EqConds[0]
 			needsProbeForEmptyBuild := hashJoin.EmitUnmatchedProbe() || hashJoin.IsMark()
@@ -544,7 +545,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 				Budget:                  budget,
 			}, hashJoin.allocationAccount, mpool.AllocationOwnerHashBuild)
 			if engineErr != nil {
-				_ = payload.Close()
+				engineErr = errors.Join(engineErr, payload.Close())
 				ctr.mp.Free()
 				ctr.mp = nil
 				ctr.cleanEqCondExecutors()
@@ -567,7 +568,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 			); err != nil {
 				ctr.mp.Free()
 				ctr.mp = nil
-				engine.Cleanup(proc)
+				err = errors.Join(err, engine.Cleanup(proc))
 				ctr.spillEngine = nil
 				return err
 			}
@@ -626,7 +627,9 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 				return result, nil
 			}
 			// EOF on probe file.
-			engine.FinishBucket()
+			if err := engine.FinishBucket(); err != nil {
+				return result, err
+			}
 			ctr.probeBucketActive = false
 			if hashJoin.AsofBuildLeft && ctr.asofBuildLeftInitialized {
 				return result, nil // finalize this logical-left build bucket
