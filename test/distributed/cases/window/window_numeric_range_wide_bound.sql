@@ -33,4 +33,3 @@ select k,
 from integers order by k;
 
 drop database window_numeric_range_wide_30563;
--- @suite

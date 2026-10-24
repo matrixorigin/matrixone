@@ -48,4 +48,3 @@ k    int32_c    int64_c
 4    5    5
 5    6    6
 drop database window_numeric_range_wide_30563;
--- @suite
