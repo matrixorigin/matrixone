@@ -39,7 +39,7 @@ func TestPythonRevisionRepairUpgradePath(t *testing.T) {
 	require.Equal(t, "4.0.17", metadata.MinUpgradeVersion)
 	require.Equal(t, versions.No, metadata.UpgradeCluster)
 	require.Equal(t, versions.Yes, metadata.UpgradeTenant)
-	require.Equal(t, int64(defines.MORPCVersion127), metadata.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion130), metadata.RequiredProtocolVersion)
 	require.Equal(t, uint32(len(v4_0_7.PythonRevisionUpgradeEntries())), metadata.VersionOffset)
 	require.True(t, metadata.CanDirectUpgrade("4.0.17"))
 	require.False(t, metadata.CanDirectUpgrade("4.0.16"))
