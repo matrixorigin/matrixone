@@ -60,7 +60,11 @@ func TestFixedMinMaxPlainMergeMetadataPreflight(t *testing.T) {
 						0, []int32{0, 1, 2, 3, 4, 5, 6}, &encoded))
 					source = newFixedMetadataPreflightFixture(t, id, types.T_int64.ToType())
 					require.NoError(t, source.exec.(SpillStateCodec).UnmarshalSpillFromReader(&encoded, source.mp))
-					require.Equal(t, 7, source.base.state[0].vecs[0].Capacity())
+					require.Equal(t, 7, source.exec.GetNumGroups())
+					require.Equal(t, 7, source.base.state[0].vecs[0].Length())
+					// Accounted allocation may round physical capacity; the source stays compact.
+					require.GreaterOrEqual(t, source.base.state[0].vecs[0].Capacity(), 7)
+					require.Less(t, source.base.state[0].vecs[0].Capacity(), AggBatchSize)
 				}
 				if mode == "unrelated-source-metadata" {
 					require.NoError(t, source.exec.GroupGrow(AggBatchSize+1-source.exec.GetNumGroups()))
