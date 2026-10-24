@@ -76,6 +76,11 @@ func TestIssue30545ShowMetadataQuotedAndTemporaryTables(t *testing.T) {
 			defer rows.Close()
 			columns, err := rows.Columns()
 			require.NoError(t, err)
+			columnTypes, err := rows.ColumnTypes()
+			require.NoError(t, err)
+			for _, columnType := range columnTypes {
+				require.Equal(t, "VARCHAR", columnType.DatabaseTypeName(), statement)
+			}
 			field := -1
 			for i, column := range columns {
 				if column == "Field" {
@@ -114,7 +119,7 @@ func TestIssue30545ShowMetadataQuotedAndTemporaryTables(t *testing.T) {
 			"show fields from temp_show",
 			"show full columns from temp_show",
 		} {
-			require.GreaterOrEqual(t, queryRowCount(statement), 2, statement)
+			require.GreaterOrEqual(t, len(queryFields(statement)), 2, statement)
 		}
 		require.GreaterOrEqual(t, queryRowCount("show index from temp_show"), 2)
 		require.Equal(t, 1, queryRowCount("show create table temp_show"))
