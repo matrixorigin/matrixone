@@ -11488,7 +11488,7 @@ func Test_handleShowTableStatus(t *testing.T) {
 
 		require.NoError(t, handleShowTableStatus(ses, ec, shv))
 		require.Contains(t, statsSQL, "row('quoted_db', 'a''b')")
-		require.Contains(t, indexSQL, "row('quoted_db', '__mo_index_quoted')")
+		require.Contains(t, indexSQL, "row('quoted_db', '"+catalog.SecondaryIndexTableNamePrefix+"quoted')")
 	})
 
 	convey.Convey("handleShowTableStatus succ", t, func() {
