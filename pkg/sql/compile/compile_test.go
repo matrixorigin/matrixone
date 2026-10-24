@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	goruntime "runtime"
 	godebug "runtime/debug"
 	"sync/atomic"
@@ -3849,7 +3850,7 @@ func TestCompileLocalPreAggregationKeepsEveryInputScope(t *testing.T) {
 		inputRoots[i] = inputs[i].RootOp
 	}
 
-	result := c.compileLocalGroupBy(local, inputs, nodes)
+	result := c.compileLocalGroupBy(local, final, inputs, nodes)
 
 	require.Len(t, result, 4,
 		"local pre-dedup output must remain parallel for the parent exchange")
@@ -3870,6 +3871,222 @@ func TestCompileLocalPreAggregationKeepsEveryInputScope(t *testing.T) {
 		require.IsType(t, &group.Group{}, owner.RootOp,
 			"the parent exchange must retain four final pair owners")
 	}
+}
+
+func newLocalPreAggregationTestNodes() (*plan.Node, *plan.Node, []*plan.Node) {
+	local, nodes := newShuffleGroupTestNodes(4)
+	input := nodes[0]
+	input.Stats.Outcnt = 8_000_000
+	key := plan2.DeepCopyExpr(local.GroupBy[0])
+	key.GetCol().ColPos = 1
+	input.ProjectList = []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_int32)}},
+		plan2.DeepCopyExpr(key),
+	}
+	local.NodeId = 1
+	local.GroupBy = []*plan.Expr{key}
+	local.ProjectList = []*plan.Expr{{
+		Typ: key.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: -1, ColPos: 0}},
+	}}
+	local.Stats.Outcnt = 2_000_000
+	local.Stats.HashmapStats.Shuffle = false
+	final := &plan.Node{
+		NodeType: plan.Node_AGG, Children: []int32{1},
+		Stats: &plan.Stats{Dop: 4, HashmapStats: &plan.HashMapStats{
+			Shuffle: true, ShuffleColIdx: 0, ShuffleType: plan.ShuffleType_Hash,
+		}},
+		GroupBy: []*plan.Expr{{
+			Typ: key.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		}},
+	}
+	return local, final, append(nodes, local)
+}
+
+func TestCompileLocalPreAggregationPhysicalSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		mcpu         int
+		sources      int
+		targets      int
+		remoteSource bool
+		partial      bool
+		dop          int32
+		reuse        bool
+		coordinator  bool
+		wantOmit     bool
+	}{
+		{name: "packed local shuffle", mcpu: 4, sources: 1, targets: 1, dop: 4, wantOmit: true},
+		{name: "parallel local sources", mcpu: 1, sources: 4, targets: 1, dop: 4, wantOmit: true},
+		{name: "local dispatch fallback", mcpu: 1, sources: 1, targets: 1, dop: 4, wantOmit: true},
+		{name: "distributed targets", mcpu: 1, sources: 1, targets: 2, dop: 4},
+		{name: "remote source to local target", mcpu: 1, sources: 1, targets: 1, remoteSource: true, dop: 4},
+		{name: "single owner", mcpu: 1, sources: 1, targets: 1, dop: 1},
+		{name: "shuffle reuse", mcpu: 4, sources: 1, targets: 1, dop: 4, reuse: true},
+		{name: "metadata partial results", mcpu: 4, sources: 1, targets: 1, dop: 4, partial: true},
+		{name: "parent coordinator projection", mcpu: 4, sources: 1, targets: 1, dop: 4, coordinator: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newCompileForShuffleGroupTest(t)
+			c.addr = "127.0.0.1:18000"
+			// Placement, rather than this nominal classification, owns selection.
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: 4}}
+			if tc.targets == 2 {
+				c.cnList = append(c.cnList, engine.Node{Addr: "127.0.0.1:18001", Mcpu: 4})
+			}
+			local, final, nodes := newLocalPreAggregationTestNodes()
+			local.Stats.Dop, final.Stats.Dop = tc.dop, tc.dop
+			if tc.reuse {
+				final.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
+			}
+			if tc.coordinator {
+				c.addr = "127.0.0.1:18002"
+				fn, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "found_rows", nil)
+				require.NoError(t, err)
+				final.ProjectList = []*plan.Expr{plan2.DeepCopyExpr(local.ProjectList[0]), fn}
+			}
+			beforeLocal, err := local.Marshal()
+			require.NoError(t, err)
+			beforeFinal, err := final.Marshal()
+			require.NoError(t, err)
+			inputs := make([]*Scope, tc.sources)
+			for i := range inputs {
+				inputs[i] = newShuffleGroupInputScope(t, tc.mcpu)
+				inputs[i].HasPartialResults = tc.partial
+				if tc.remoteSource {
+					inputs[i].NodeInfo.Addr = "127.0.0.1:18001"
+				}
+			}
+			result := c.compileLocalGroupBy(local, final, inputs, nodes)
+			require.Len(t, result, tc.sources)
+			for i, source := range result {
+				require.Same(t, inputs[i], source)
+				if tc.wantOmit {
+					proj, ok := source.RootOp.(*projection.Projection)
+					require.True(t, ok)
+					require.Equal(t, local.GroupBy, proj.ProjectList)
+					require.NotSame(t, local.GroupBy[0], proj.ProjectList[0])
+					require.Equal(t, int32(1), proj.ProjectList[0].GetCol().ColPos,
+						"raw key slot 1 must be projected into final key slot 0")
+				} else {
+					op, ok := source.RootOp.(*group.Group)
+					require.True(t, ok)
+					require.False(t, op.NeedEval)
+				}
+			}
+			if tc.coordinator {
+				relocated := c.ensureCoordinatorOnlyFunctions(final, result)
+				require.Len(t, relocated, 1)
+				require.NotSame(t, result[0], relocated[0])
+				require.Equal(t, c.addr, relocated[0].NodeInfo.Addr)
+				require.IsType(t, &group.Group{}, result[0].RootOp.GetOperatorBase().GetChildren(0),
+					"local reduction must precede the parent coordinator transfer")
+			}
+			if tc.wantOmit || tc.targets == 2 || tc.remoteSource {
+				owners := c.compileShuffleGroup(final, result, nodes)
+				ownerSlots := 0
+				for _, owner := range owners {
+					ownerSlots += owner.NodeInfo.Mcpu
+					op, ok := owner.RootOp.(*group.Group)
+					require.True(t, ok)
+					require.True(t, op.NeedEval)
+					require.Equal(t, int32(0), op.GroupBy[0].GetCol().ColPos)
+				}
+				require.Equal(t, tc.targets*int(tc.dop), ownerSlots)
+			}
+			afterLocal, err := local.Marshal()
+			require.NoError(t, err)
+			afterFinal, err := final.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, beforeLocal, afterLocal, "physical selection must not mutate a reusable plan")
+			require.Equal(t, beforeFinal, afterFinal)
+		})
+	}
+}
+
+func TestLocalPreAggregationOmissionGuards(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(local, final, input *plan.Node, source *Scope)
+		want   bool
+	}{
+		{name: "inclusive size and ratio", want: true},
+		{name: "below size", change: func(l, _, _ *plan.Node, _ *Scope) { l.Stats.Outcnt-- }},
+		{name: "below ratio", change: func(_, _, in *plan.Node, _ *Scope) { in.Stats.Outcnt++ }},
+		{name: "missing input stats", change: func(_, _, in *plan.Node, _ *Scope) { in.Stats = nil }},
+		{name: "missing group stats", change: func(l, _, _ *plan.Node, _ *Scope) { l.Stats = nil }},
+		{name: "zero input", change: func(_, _, in *plan.Node, _ *Scope) { in.Stats.Outcnt = 0 }},
+		{name: "unknown groups", change: func(l, _, _ *plan.Node, _ *Scope) { l.Stats.Outcnt = -1 }},
+		{name: "NaN groups", change: func(l, _, _ *plan.Node, _ *Scope) { l.Stats.Outcnt = math.NaN() }},
+		{name: "infinite input", change: func(_, _, in *plan.Node, _ *Scope) { in.Stats.Outcnt = math.Inf(1) }},
+		{name: "inconsistent cardinality", change: func(l, _, in *plan.Node, _ *Scope) { l.Stats.Outcnt = in.Stats.Outcnt + 1 }},
+		{name: "computed key", change: func(l, _, _ *plan.Node, _ *Scope) { l.GroupBy[0] = plan2.MakePlan2Int64ConstExprWithType(7) }},
+		{name: "PAD SPACE key", change: func(l, _, _ *plan.Node, _ *Scope) { l.GroupBy[0].Typ.PadSpace = true }},
+		{name: "multiple keys", change: func(l, f, _ *plan.Node, _ *Scope) {
+			l.GroupBy = append(l.GroupBy, l.GroupBy[0])
+			f.GroupBy = append(f.GroupBy, f.GroupBy[0])
+		}},
+		{name: "physical key transform", change: func(l, _, _ *plan.Node, _ *Scope) { l.GroupByHashKey = []int32{1} }},
+		{name: "final key transform", change: func(_, f, _ *plan.Node, _ *Scope) { f.GroupByHashKey = []int32{1} }},
+		{name: "local shuffle", change: func(l, _, _ *plan.Node, _ *Scope) { l.Stats.HashmapStats.Shuffle = true }},
+		{name: "transformed output", change: func(l, _, _ *plan.Node, _ *Scope) { l.ProjectList[0].GetCol().ColPos = 1 }},
+		{name: "order", change: func(l, _, _ *plan.Node, _ *Scope) { l.OrderBy = []*plan.OrderBySpec{{Expr: l.GroupBy[0]}} }},
+		{name: "limit", change: func(l, _, _ *plan.Node, _ *Scope) { l.Limit = plan2.MakePlan2Int64ConstExprWithType(1) }},
+		{name: "filter", change: func(l, _, _ *plan.Node, _ *Scope) {
+			l.FilterList = []*plan.Expr{plan2.MakePlan2BoolConstExprWithType(true)}
+		}},
+		{name: "runtime filter", change: func(l, _, _ *plan.Node, _ *Scope) { l.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{{}} }},
+		{name: "parent filter", change: func(_, f, _ *plan.Node, _ *Scope) {
+			f.FilterList = []*plan.Expr{plan2.MakePlan2BoolConstExprWithType(true)}
+		}},
+		{name: "raw grouping expansion", change: func(_, _, in *plan.Node, _ *Scope) { in.ExtraOptions = "grouping_set_expand:2" }},
+		{name: "physical equality transform", change: func(l, _, _ *plan.Node, _ *Scope) { l.PhysicalEqualityKeyList = l.GroupBy }},
+		{name: "grouping option", change: func(l, _, _ *plan.Node, _ *Scope) { l.ExtraOptions = "nonempty" }},
+		{name: "invalid input key", change: func(l, _, _ *plan.Node, _ *Scope) { l.GroupBy[0].GetCol().ColPos = 2 }},
+		{name: "input type mismatch", change: func(_, _, in *plan.Node, _ *Scope) { in.ProjectList[1].Typ.Id = int32(types.T_int32) }},
+		{name: "unsupported key", change: func(l, _, in *plan.Node, _ *Scope) {
+			l.GroupBy[0].Typ.Id = int32(types.T_float64)
+			in.ProjectList[1].Typ.Id = int32(types.T_float64)
+		}},
+		{name: "unknown placement", change: func(_, _, _ *plan.Node, s *Scope) { s.NodeInfo = engine.Node{} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newCompileForShuffleGroupTest(t)
+			local, final, nodes := newLocalPreAggregationTestNodes()
+			source := newShuffleGroupInputScope(t, 4)
+			if tc.change != nil {
+				tc.change(local, final, nodes[0], source)
+			}
+			require.Equal(t, tc.want, c.canOmitLocalPreAggregation(final, local, nodes[0], []*Scope{source}))
+		})
+	}
+}
+
+func TestLocalPreAggregationOmissionProjectsRawKey(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	local, final, nodes := newLocalPreAggregationTestNodes()
+	source := newShuffleGroupInputScope(t, 4)
+	proc := source.Proc
+	baseline := proc.Mp().CurrNB()
+	in := batch.NewWithSize(2)
+	in.Vecs[0] = testutil.MakeInt32Vector([]int32{100, 200, 300, 400}, nil, proc.Mp())
+	in.Vecs[1] = testutil.MakeInt64Vector([]int64{7, 0, 7, 8}, []uint64{1}, proc.Mp())
+	in.SetRowCount(4)
+	mock := source.RootOp.(*colexec.MockOperator).WithBatchs([]*batch.Batch{in})
+	result := c.compileLocalGroupBy(local, final, []*Scope{source}, nodes)
+	proj := result[0].RootOp.(*projection.Projection)
+	t.Cleanup(func() {
+		proj.Free(proc, false, nil)
+		mock.Free(proc, false, nil)
+		require.Equal(t, baseline, proc.Mp().CurrNB())
+	})
+	require.NoError(t, mock.Prepare(proc))
+	require.NoError(t, proj.Prepare(proc))
+	out, err := vm.Exec(proj, proc)
+	require.NoError(t, err)
+	require.Len(t, out.Batch.Vecs, 1)
+	require.Equal(t, []int64{7, 0, 7, 8}, vector.MustFixedColWithTypeCheck[int64](out.Batch.Vecs[0]))
+	require.True(t, out.Batch.Vecs[0].GetNulls().Contains(1))
 }
 
 type distinctPreAggregationCompilerContext struct {
@@ -3909,29 +4126,46 @@ func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 		cache:               cache,
 	}
 
-	const sql = "select l_returnflag, count(distinct l_orderkey) " +
-		"from lineitem group by l_returnflag"
-	statements, err := mysql.Parse(context.Background(), sql, 1)
-	require.NoError(t, err)
-	query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(statements[0], false)
-	require.NoError(t, err)
-
-	found := false
-	for _, parent := range query.Nodes {
-		if parent == nil || len(parent.Children) != 1 {
-			continue
-		}
-		childID := parent.Children[0]
-		if childID < 0 || int(childID) >= len(query.Nodes) {
-			continue
-		}
-		if isLocalPreAggregationGroup(parent, query.Nodes[childID]) {
-			found = true
-			break
-		}
+	for _, tc := range []struct {
+		name     string
+		sql      string
+		ndv      float64
+		wantOmit bool
+	}{
+		{name: "grouped fallback", sql: "select l_returnflag, count(distinct l_orderkey) from lineitem group by l_returnflag", ndv: 1_500_000},
+		{name: "large global key", sql: "select count(distinct l_orderkey) from lineitem", ndv: 5_000_000, wantOmit: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stats.NdvMap["l_orderkey"] = tc.ndv
+			statements, err := mysql.Parse(context.Background(), tc.sql, 1)
+			require.NoError(t, err)
+			query, err := plan2.NewPrepareOptimizer(compilerCtx).Optimize(statements[0], false)
+			require.NoError(t, err)
+			plan2.CalcQueryDOP(&plan.Plan{Plan: &plan.Plan_Query{Query: query}}, 4, 1, plan2.ExecTypeAP_ONECN)
+			for _, parent := range query.Nodes {
+				if len(parent.Children) != 1 {
+					continue
+				}
+				local := query.Nodes[parent.Children[0]]
+				if !isLocalPreAggregationGroup(parent, local) {
+					continue
+				}
+				c := newCompileForShuffleGroupTest(t)
+				source := newShuffleGroupInputScope(t, 4)
+				require.Equal(t, tc.wantOmit,
+					c.canOmitLocalPreAggregation(parent, local, query.Nodes[local.Children[0]], []*Scope{source}))
+				result := c.compileLocalGroupBy(local, parent, []*Scope{source}, query.Nodes)
+				if tc.wantOmit {
+					require.IsType(t, &projection.Projection{}, result[0].RootOp)
+				} else {
+					require.IsType(t, &group.Group{}, result[0].RootOp)
+				}
+				return
+			}
+			t.Fatal("finalized SQL plan did not retain the local-pair compile contract")
+		})
 	}
-	require.True(t, found,
-		"the finalized and column-remapped SQL plan must retain the local-pair compile contract")
+
 }
 
 func newCompileForShuffleGroupTest(t *testing.T) *Compile {
