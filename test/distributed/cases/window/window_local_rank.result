@@ -287,6 +287,12 @@ select id, tmrank(v, interval null day) over (order by ts) as r from tmrank_src 
 SQL parser error: Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type
 select id, tmrank(v, interval (0-sin(1)) day) over (order by ts) as r from tmrank_src order by id;
 SQL parser error: Window '<unnamed window>': frame start or end is negative, NULL or of non-integral type
+select id, tmrank(v, interval rand() day) over (order by ts) from tmrank_src order by id;
+invalid argument tmrank interval width, bad value a constant, foldable expression or direct parameter
+select id, tmrank(v, interval sleep(0) day) over (order by ts) as r from tmrank_src order by id;
+invalid argument tmrank interval width, bad value a constant, foldable expression or direct parameter
+select id, tmrank(v, interval (1 + rand()) day) over (order by ts) as r from tmrank_src order by id;
+invalid argument tmrank interval width, bad value a constant, foldable expression or direct parameter
 select id, tmrank(v, interval 9223372036854775807 year) over (order by ts) as r
 from tmrank_src order by id;
 invalid argument interval, bad value 9223372036854775807

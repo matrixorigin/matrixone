@@ -242,6 +242,17 @@ select id, tmrank(v, interval -1 day) over (order by ts) as r from tmrank_src or
 select id, tmrank(v, interval null day) over (order by ts) as r from tmrank_src order by id;
 select id, tmrank(v, interval (0-sin(1)) day) over (order by ts) as r from tmrank_src order by id;
 
+-- Volatile and effectful functions are refused pre-evaluation even with
+-- foldable-looking argument shapes: the tier-2 admission walk requires a
+-- positively proven pure function (or fold-switch arithmetic over admitted
+-- spines), so rand() is never eagerly evaluated into a frozen plan width,
+-- sleep() cannot run its side effect at bind time, and the nested variant
+-- keeps the same refusal under admitted outer arithmetic. The message
+-- matches the non-foldable column-reference width above.
+select id, tmrank(v, interval rand() day) over (order by ts) from tmrank_src order by id;
+select id, tmrank(v, interval sleep(0) day) over (order by ts) as r from tmrank_src order by id;
+select id, tmrank(v, interval (1 + rand()) day) over (order by ts) as r from tmrank_src order by id;
+
 -- Overflowing interval magnitudes share the frame-bound judge row-
 -- independently: the compile-time owner rejects the width on populated
 -- input, on EMPTY INPUT and under LIMIT 0 with the same surface, before any

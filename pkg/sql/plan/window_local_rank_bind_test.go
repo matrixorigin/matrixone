@@ -200,8 +200,11 @@ func TestLocalRankBindTmRankWidthMatrix(t *testing.T) {
 }
 
 // TestLocalRankBindTmRankAdmissionBoundary pins the D22 static admission
-// walk: column-reference magnitudes and indirect prepared forms never reach
-// the eager evaluation; the direct prepared marker is retained raw.
+// walk through real SQL: column-reference magnitudes, indirect prepared
+// forms and volatile or effectful function sources (rand/sleep, direct or
+// nested -- a literal argument shape does not make them constant-foldable)
+// never reach the eager evaluation, while the registry-proven pure control
+// keeps folding.
 func TestLocalRankBindTmRankAdmissionBoundary(t *testing.T) {
 	requireReject := func(t *testing.T, widthSQL, errText string) {
 		args, err := bindTmRankWidthSQL(t, widthSQL)
@@ -215,6 +218,23 @@ func TestLocalRankBindTmRankAdmissionBoundary(t *testing.T) {
 	requireReject(t,
 		"interval (3 + o_orderkey) day",
 		"a constant, foldable expression or direct parameter")
+	requireReject(t,
+		"interval rand() day",
+		"a constant, foldable expression or direct parameter")
+	requireReject(t,
+		"interval sleep(0) day",
+		"a constant, foldable expression or direct parameter")
+	requireReject(t,
+		"interval (1 + rand()) day",
+		"a constant, foldable expression or direct parameter")
+
+	// Positive control: the registry-proven pure spine still folds through the
+	// shared pipeline (the prepared marker's raw retention keeps its own
+	// dedicated pin in TestLocalRankBindPreparedWidth).
+	args, err := bindTmRankWidthSQL(t, "interval sin(1) day")
+	require.NoError(t, err)
+	require.Len(t, args, 3)
+	require.Equal(t, int64(1), args[1].GetLit().GetI64Val())
 }
 
 // TestLocalRankBindTmRankMoCtlRejected pins the D22 tier-1 boundary through
@@ -348,8 +368,9 @@ func TestLocalRankBindArityAndDomain(t *testing.T) {
 
 // TestLocalRankBindWindowIntervalSourceAdmitted pins the static shape-walk of
 // the admission boundary (tier 2): literal constants, the direct prepared
-// marker and constant-foldable spines are admitted; column references,
-// markers hidden inside arithmetic and any other shape are not.
+// marker and deterministic foldable spines are admitted; column references,
+// markers hidden inside arithmetic, volatile functions and any other shape
+// are not.
 func TestLocalRankBindWindowIntervalSourceAdmitted(t *testing.T) {
 	col := &planpb.Expr{
 		Typ:  planpb.Type{Id: int32(types.T_int32)},
@@ -365,14 +386,36 @@ func TestLocalRankBindWindowIntervalSourceAdmitted(t *testing.T) {
 			Args: args,
 		}}}
 	}
+	// bindFunctionNode resolves one call through the real overload resolver,
+	// so the walk sees exactly the node shape production binding produces
+	// (function id, overload and any cast/target-type wrapping included).
+	bindFunctionNode := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		t.Helper()
+		bound, err := bindFuncExprImplByPlanExpr(context.Background(), nil, name,
+			args, false, nil, nil, false)
+		require.NoError(t, err, name)
+		return bound
+	}
 
 	require.True(t, windowIntervalBindSourceAdmitted(lit64(3)))
 	require.True(t, windowIntervalBindSourceAdmitted(marker))
-	require.True(t, windowIntervalBindSourceAdmitted(fold("sin", lit64(1))))
+	require.True(t, windowIntervalBindSourceAdmitted(bindFunctionNode("sin", lit64(1))))
+	require.True(t, windowIntervalBindSourceAdmitted(bindFunctionNode("+", lit64(1), lit64(2))))
 	require.False(t, windowIntervalBindSourceAdmitted(col))
 	require.False(t, windowIntervalBindSourceAdmitted(fold("sin", col)))
 	require.False(t, windowIntervalBindSourceAdmitted(fold("+", lit64(1), marker)))
 	require.False(t, windowIntervalBindSourceAdmitted(fold("+", lit64(1), col)))
+	// Volatile and effectful functions are refused regardless of their
+	// foldable-looking argument shapes: rand() takes no argument at all and
+	// sleep(0) takes a literal, yet neither is a constant-foldable spine, so
+	// refusing them keeps the eager bind-time evaluation deterministic and
+	// side-effect free -- also when the volatile source is nested inside
+	// admitted fold-switch arithmetic.
+	randNode := bindFunctionNode("rand")
+	require.False(t, windowIntervalBindSourceAdmitted(randNode))
+	require.False(t, windowIntervalBindSourceAdmitted(bindFunctionNode("sleep", lit64(0))))
+	require.False(t, windowIntervalBindSourceAdmitted(
+		bindFunctionNode("+", lit64(1), randNode)))
 	require.False(t, windowIntervalBindSourceAdmitted(&planpb.Expr{
 		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{lit64(1)}}},
 	}))
@@ -427,7 +470,7 @@ func TestLocalRankBindTmRankWidthNilProcSafety(t *testing.T) {
 	}
 
 	// The static walk also refuses before evaluation: a column-reference
-	// magnitude never reaches the nil proc.
+	// magnitude and a volatile magnitude both never reach the nil proc.
 	col := &planpb.Expr{
 		Typ:  planpb.Type{Id: int32(types.T_int32)},
 		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
@@ -435,6 +478,23 @@ func TestLocalRankBindTmRankWidthNilProcSafety(t *testing.T) {
 	_, _, err := bindTmRankWidthArgument(ctx, nil, intervalOf(col), "tmrank")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "a constant, foldable expression or direct parameter")
+
+	boundFuncExpr := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		t.Helper()
+		bound, bErr := bindFuncExprImplByPlanExpr(ctx, nil, name, args,
+			false, nil, nil, false)
+		require.NoError(t, bErr, name)
+		return bound
+	}
+	for _, source := range []*planpb.Expr{
+		boundFuncExpr("rand"),
+		boundFuncExpr("sleep", lit64(0)),
+	} {
+		_, _, err := bindTmRankWidthArgument(ctx, nil, intervalOf(source), "tmrank")
+		require.Error(t, err)
+		require.Contains(t, err.Error(),
+			"a constant, foldable expression or direct parameter")
+	}
 
 	// An admitted literal source reaches the proc==nil guard: the const-path
 	// carries the named "must be a constant" diagnostic rather than crashing.

@@ -1330,9 +1330,12 @@ func admitWindowIntervalBindSource(bindCtx context.Context, e *Expr) error {
 // windowIntervalBindSourceAdmitted is the static shape admission for an
 // eagerly evaluated window-interval source: literal constants, the direct
 // prepared magnitude marker (the raw pair's retained source) and
-// constant-foldable function spines over literals are admitted. Every other
-// shape -- a column reference, an indirect prepared form (a marker inside
-// arithmetic), a subquery or a window entry -- is refused BEFORE any eager
+// deterministic constant-foldable spines -- the resolver's fold-switch
+// operators over literals plus functions the registry positively proves
+// pure -- are admitted. Every other shape -- a column reference, an indirect
+// prepared form (a marker inside arithmetic), a subquery, a window entry or
+// a volatile/effectful function such as rand() or sleep() whose foldable
+// argument shapes do not prove purity -- is refused BEFORE any eager
 // evaluation (tmrank's conversion routes through it; frame bounds keep their
 // established emergent rejection so their observable errors do not shift).
 func windowIntervalBindSourceAdmitted(e *Expr) bool {
@@ -1343,24 +1346,17 @@ func windowIntervalBindSourceAdmitted(e *Expr) bool {
 		// marker nested inside arithmetic as an indirect prepared form.
 		return true
 	case *plan.Expr_F:
-		if item.F == nil {
-			return false
-		}
-		for _, arg := range item.F.Args {
-			if !windowIntervalFoldSpineAdmitted(arg) {
-				return false
-			}
-		}
-		return true
+		return windowIntervalFunctionNodeAdmitted(item.F)
 	default:
 		return false
 	}
 }
 
-// windowIntervalFoldSpineAdmitted walks the argument spine of a foldable
-// function source: literals (and the cast protocol's inert TargetType
-// descriptor, which carries no evaluated child) only. A prepared marker hidden
-// inside arithmetic is an indirect prepared form and must not reach the eager
+// windowIntervalFoldSpineAdmitted walks the argument spine of a function
+// source: literals (and the cast protocol's inert TargetType descriptor,
+// which carries no evaluated child) and function nodes admitted by
+// windowIntervalFunctionNodeAdmitted only. A prepared marker hidden inside
+// arithmetic is an indirect prepared form and must not reach the eager
 // executor.
 func windowIntervalFoldSpineAdmitted(e *Expr) bool {
 	switch item := e.Expr.(type) {
@@ -1372,18 +1368,43 @@ func windowIntervalFoldSpineAdmitted(e *Expr) bool {
 		// the descriptor is part of every constant-foldable decimal source.
 		return item.T != nil
 	case *plan.Expr_F:
-		if item.F == nil {
-			return false
-		}
-		for _, arg := range item.F.Args {
-			if !windowIntervalFoldSpineAdmitted(arg) {
-				return false
-			}
-		}
-		return true
+		return windowIntervalFunctionNodeAdmitted(item.F)
 	default:
 		return false
 	}
+}
+
+// windowIntervalFunctionNodeAdmitted gates one function node of an eagerly
+// evaluated window-interval source. Argument shapes alone cannot admit a
+// function: rand() and sleep(0) take literal-shaped arguments, yet evaluating
+// rand() at bind time freezes a nondeterministic width into the plan (D22's
+// constant-foldable admission) and sleep() runs its side effect during
+// binding. The gate therefore mirrors the guarded fold of the geometry SRID
+// probe (isGeometrySRIDConstFoldSafe): the resolver's fold-switch operators
+// that the ordinary bind's own constant fold evaluates stay admitted by
+// name, and every other function is admitted only through the registry's
+// positively proven pure value set -- GetFunctionIsProvenPureFoldableById,
+// never through the absence of a flag, so rand/sleep-style volatility,
+// real-time overloads, internal machinery and unproven builtins are all
+// refused pre-evaluation. Every argument must pass the spine walk.
+func windowIntervalFunctionNodeAdmitted(f *plan.Function) bool {
+	if f == nil || f.Func == nil {
+		return false
+	}
+	switch f.Func.GetObjName() {
+	case "+", "-", "*", "/", "div", "%", "mod", "unary_plus", "unary_minus",
+		"unary_tilde", "cast", "serial", "serial_full":
+	default:
+		if !function.GetFunctionIsProvenPureFoldableById(f.Func.GetObj()) {
+			return false
+		}
+	}
+	for _, arg := range f.Args {
+		if !windowIntervalFoldSpineAdmitted(arg) {
+			return false
+		}
+	}
+	return true
 }
 
 func makeWindowFrameConstValue(

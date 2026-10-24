@@ -2,7 +2,19 @@
 
 - Owning issue: matrixorigin/matrixone#29947 ("[Feature Request]: local sliding-window ranks
   distinct from partition-wide RANK")
-- Status: revision 8, 2026-10-23, design-first checkpoint (not yet an approved design).
+- Status: revision 8, 2026-10-23, **approved design**. The design-only review of
+  this exact revision — file content SHA-256
+  `7bd5296382c677319455fc8fafc3ed63b4fdf3900e3ab36ff108f51f9ba52e76` at base
+  `f8c872001603fed3d23784e1ada26f9a2d8f4fba` — returned **PASS** on 2026-10-23
+  from the repository's independent feature-design gate reviewer of the owning
+  issue loop (review session `1792796064`, verdict preserved in the loop's
+  review artifact `pre-pr-review-1792781301952.json`; record in section 9).
+  The two advisory validation-plan corrections it left were both adopted by the
+  implementation. After that approval this file received only the record
+  bookkeeping the review contract requires — the section-9 approval record, the
+  implementation-PR link below, and the closed implementation-review deviation
+  noted in section 9 — so it is no longer byte-identical to the approved
+  snapshot; no design decision changed after approval.
   Revision 1 was reviewed REQUEST_CHANGES on five findings (resolved in revision 2,
   decisions D8-D12); revision 2 was reviewed REQUEST_CHANGES on one finding
   (tmrank's public-to-internal binding contract), resolved in revision 3 (D13);
@@ -19,8 +31,10 @@
   pre-evaluation safety gate that protects frame bounds — resolved in this revision
   and mapped to decision D22, verified against the repository at the same base
   commit.
-- Implementation PR: to be opened in the follow-up delivery turn after design approval;
-  that PR must link this exact revision.
+- Implementation PR: [matrixorigin/matrixone#31020](https://github.com/matrixorigin/matrixone/pull/31020)
+  ("feat(sql): add local sliding-window ranks mrank, cumrank, tmrank"), which carries and
+  links this design; the PR base at review time was
+  `89462b162f7f35a90d68525b484a853b20989b11`.
 - Assigned base: `f8c872001603fed3d23784e1ada26f9a2d8f4fba` (worktree `issue-29947-main-a57124ee`,
   Git base `origin/main`).
 - Design gate trigger: complexity triggers of
@@ -1369,8 +1383,33 @@ Design: docs/design/20261023-local-sliding-window-ranks.md, revision 8 (2026-10-
   scanning cannot cover the bind-time evaluation, and the ladder adds the
   direct/nested mo_ctl/fault_inject and admission rejection cases following
   window_binder_moctl_test.go's nil-proc pattern.
-Blocking findings: (reviewer of revision 8)
+Blocking findings: (reviewer of revision 8) NONE — the design-only review of
+  revision 8 returned PASS; the two advisory validation-plan corrections it
+  recorded (a RANGE-membership-with-trailing-cutoff reference oracle and the
+  0-SIN(1) negative witness) were both adopted by the implementation.
 Decision log: D1-D22 above
-Decision: PASS | REQUEST_CHANGES (reviewer of revision 8)
-Implementation deviations: none yet
+Decision: PASS (design-only review of revision 8, the file content with SHA-256
+  7bd5296382c677319455fc8fafc3ed63b4fdf3900e3ab36ff108f51f9ba52e76 at base
+  f8c872001603fed3d23784e1ada26f9a2d8f4fba, completed 2026-10-23 by the
+  repository's independent feature-design gate reviewer of the owning issue
+  loop; verdict recorded in review session 1792796064 and preserved in the
+  loop's review artifact pre-pr-review-1792781301952.json). Approval carries
+  into the implementation PR #31020 unchanged because no design decision
+  changed after it; the bytes added to this document since the snapshot are
+  the approval record, this section-9 bookkeeping and the PR link above.
+Implementation deviations: none remaining. The 2026-10-24 implementation
+  review of PR #31020 returned one implementation-stage gap against D22's
+  own constant-foldable-spine admission: the tier-2 static shape walk
+  admitted volatile function sources (INTERVAL RAND() DAY, INTERVAL SLEEP(0)
+  DAY, INTERVAL (1 + RAND()) DAY) purely from their literal argument shapes,
+  so the eager bind-time const-fold had evaluated and frozen them. The
+  review-fix commit closes the gap by implementing the approved admission
+  exactly: every function node of the walk is now admitted only as a
+  resolver fold-switch operator (arithmetic/cast) over an admitted spine or
+  through the registry's positively proven pure value set
+  (function.GetFunctionIsProvenPureFoldableById, the guarded-fold precedent
+  of isGeometrySRIDConstFoldSafe), so rand/sleep and every unproven, volatile,
+  real-time or internal registration refuse pre-evaluation with the
+  boundary's function-named error. An implementation-stage fix to match an
+  approved decision is not a design change and requires no re-review.
 ```
