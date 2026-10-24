@@ -4453,16 +4453,6 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.preflightRowCount = 0
 	v.areaDisjoint = true
 
-	// if !v.OnUsed || v.OnPut {
-	// 	panic("free vector which unalloc or in put list")
-	// }
-	// v.OnUsed = false
-	// v.OnPut = false
-	// if len(v.FreeMsg) > 20 {
-	// 	v.FreeMsg = v.FreeMsg[1:]
-	// }
-	// v.FreeMsg = append(v.FreeMsg, time.Now().String()+" : typ="+v.typ.DescString()+" "+string(debug.Stack()))
-
 	//reuse.Free[Vector](v, nil)
 }
 
