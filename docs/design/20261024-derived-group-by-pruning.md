@@ -148,3 +148,26 @@ The model omits variable-size aggregate states and variable-width key payloads i
 - Run new/direct shuffle tests normal and focused race, planner package normal once, scoped required SCA, then final exact-fingerprint overall review. No executor changes imply no new cleanup/restart/fault harness requirement; actual spill and generic topology execution remain mandatory.
 - Commit this design amendment before production/test edits. Final acceptance requires measured resolution of the reproduced regression and explicit control results, not only the analytical estimate.
 
+
+
+# Wide aggregate inputs — amendment to spill-pressure design
+
+Status: PASS for the bounded follow-up correction, before its implementation.
+Model/reviewer: gpt-6.1-sol, xhigh; 2026-10-24. Scope: new shouldShuffleGroupState optional estimate only.
+
+The independent review challenge confirmed a material performance regression: with one million rows,100000 fixed INT groups, nullable VARCHAR(1024) payloads, DOP4 and4MiB aggregate budget, COUNT(v) changed from approximately103ms to299ms (five timed samples, exact counts unchanged). The partial owner counts nullness locally; complete ownership transports/copies the wide raw argument vector before Group evaluates COUNT. Fixed aggregate state width does not bound that raw shuffle cost.
+
+Keep the common-owner pressure fix and its runtime hash/state formula. Bound its positive cost domain further instead of adding another traffic estimator, a pre-shuffle expression projection, a type registry, or a runtime controller.
+
+For this optional estimate, accept every logical grouping input and every ordinary COUNT/STARCOUNT argument only when it is a direct input ColRef or source-free literal, its complete declared type is supported by fixedTypeRetainedBytes, and it carries no PreparedNumeric/Literal.Src dynamic reconstruction provenance. Decline function, parameter, variable, subquery/correlation and other shapes. Preserve existing cardinality/DISTINCT decisions for every declined case.
+
+Checking only an expression's output type is insufficient: COUNT(length(v)), COUNT(CAST(v AS BIGINT)) and GROUP BY x,length(v) have fixed-width results but Group evaluates those transforms after raw input is shuffled. The direct-input restriction closes that adjacent class without a new general expression walk. Input projections that already materialize a fixed-width direct slot before grouping retain their existing owner/normalization contract; do not bypass that contract by inserting a new projection here.
+
+The restriction retains the measured correction for pruned Q36 (direct x), handwritten single-key COUNT(*), grouped-only, multiple ordinary counts and direct nullable fixed-width COUNT. Source-free COUNT(*)'s integer literal remains eligible. Variable-width direct arguments, even ones that could be optimized by a separate nullness projection, conservatively retain the old policy. No output/error/type or runtime resource/lifecycle/wire behavior changes.
+
+Use one small local eligibility check for this narrow input shape and existing fixed-type helper; apply it at both grouping-input and COUNT argument boundaries. Do not introduce a generic visitor/wrapper framework. Keep the already added dynamic-grouping exclusion and all original early topology/NDV/budget guards.
+
+Validation: extend the existing focused table with direct variable-width COUNT, a fixed-result function over a wide source, a function grouping input, and dynamic provenance. Repeat only the relevant focused/package/static gates for the changed helper. Reuse ordinary4MiB P-F-F-P evidence by semantic identity if its accepted direct inputs and selected topology are unchanged. Run matched wide COUNT before/after-fix exact results and actual plans; include COUNT(length(v)) or equivalent fixed-result wide-source control. No million-row BVT or timing assertion is needed; the deterministic table test owns eligibility, and existing public semantics plus the retained performance harness own the external evidence.
+
+This is an actual finding in the initial pressure implementation, not an unresolved hypothetical concern. Final overall PASS remains withheld until the corrected eligibility, focused evidence and matched wide-input result are reviewed.
+
