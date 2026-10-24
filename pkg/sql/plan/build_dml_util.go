@@ -1069,11 +1069,46 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 			unionNodeId := builder.appendNode(unionNode, bindCtx)
 			newSinkNodeId := appendSinkNode(builder, bindCtx, unionNodeId)
 			endStep := builder.appendStep(newSinkNodeId)
+			// Only the delete halves that consumed the previous ownership
+			// stream may follow the merge. Streams feeding the INSERT side of
+			// an UPDATE-driven action consume its widened own image (including
+			// the temporary, action-local update columns) and must not be
+			// re-pointed at the union's flat base-row layout (#30246).
+			deleteReachable := make(map[int32]bool)
+			var markDeleteDownstream func(nodeID int32)
+			markDeleteDownstream = func(nodeID int32) {
+				if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || deleteReachable[nodeID] {
+					return
+				}
+				deleteReachable[nodeID] = true
+				for _, child := range builder.qry.Nodes[nodeID].Children {
+					markDeleteDownstream(child)
+				}
+			}
+			for _, node := range builder.qry.Nodes {
+				if node.NodeType == plan.Node_DELETE &&
+					node.DeleteCtx != nil && node.DeleteCtx.TableDef != nil &&
+					node.DeleteCtx.TableDef.TblId == delCtx.tableDef.TblId {
+					markDeleteDownstream(node.NodeId)
+				}
+			}
 			for i, n := range builder.qry.Nodes {
 				_, feedsNewSource := newSourceDependencies[int32(i)]
+				if !deleteReachable[int32(i)] {
+					continue
+				}
 				if n.NodeType == plan.Node_SINK_SCAN && n.SourceStep[0] == int32(step) &&
 					i != int(oldDelPlanSinkScanNodeId) && !feedsNewSource {
 					n.SourceStep[0] = endStep
+					if len(n.ProjectList) > len(unionProjection) {
+						// The previous source stream may be wider than the
+						// union (an UPDATE-driven action appends its temporary
+						// image after the old base row). A rewired scan reads
+						// the union's flat layout; keep it inside the union
+						// width so it cannot reference the sliced tail
+						// (#30246 order-panic).
+						n.ProjectList = n.ProjectList[:len(unionProjection)]
+					}
 				}
 			}
 			// Store the new SINK (not the UNION) so the next merge can find the step directly.
@@ -1242,12 +1277,31 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 
 			// A child row matched by both CASCADE and SET NULL has a single owner:
 			// CASCADE deletes it, while SET NULL must not create a replacement row.
+			// candidateTag == 0 means the local executor ABI (JOIN child=0 at the
+			// left input and 1 for the right), used by direct DELETE plans, which
+			// are appended after createQuery has remapped the statement graph;
+			// only REPLACE and already-tagged recursive plans may keep planner
+			// bind tags.
 			appendExcludeCascadeOwnedRows := func(inputNodeID, candidateTag int32) (int32, error) {
-				if !delCtx.skipTargetDelete || isUpdate {
+				if isUpdate {
 					return inputNodeID, nil
 				}
+				if delCtx.skipTargetDelete {
+					if candidateTag == 0 {
+						return inputNodeID, nil
+					}
+				} else if candidateTag != 0 {
+					return inputNodeID, nil
+				}
+				childRelPos := candidateTag
+				parentRelPos := int32(1)
+				if candidateTag != 0 {
+					parentRelPos = builder.genNewBindTag()
+				} else {
+					// local positional ABI of a direct DELETE plan
+					childRelPos = 0
+				}
 				var cascadeMatch *Expr
-				parentTag := builder.genNewBindTag()
 				for _, candidateFK := range childTableDef.Fkeys {
 					selfRefer := candidateFK.ForeignTbl == 0 && childTableDef.TblId == delCtx.tableDef.TblId
 					if candidateFK.OnDelete != plan.ForeignKeyDef_CASCADE ||
@@ -1259,10 +1313,10 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						childName := childId2name[childColID]
 						parentName := idNameMap[candidateFK.ForeignCols[i]]
 						childExpr := &Expr{Typ: *childTypMap[childName], Expr: &plan.Expr_Col{Col: &plan.ColRef{
-							RelPos: candidateTag, ColPos: childPosMap[childName], Name: childName,
+							RelPos: childRelPos, ColPos: childPosMap[childName], Name: childName,
 						}}}
 						parentExpr := &Expr{Typ: *nameTypMap[parentName], Expr: &plan.Expr_Col{Col: &plan.ColRef{
-							RelPos: parentTag, ColPos: nameIdxMap[parentName], Name: parentName,
+							RelPos: parentRelPos, ColPos: nameIdxMap[parentName], Name: parentName,
 						}}}
 						partMatch, bindErr := BindFuncExprImplByPlanExpr(
 							builder.GetContext(), "=", []*Expr{childExpr, parentExpr})
@@ -1294,10 +1348,26 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					return inputNodeID, nil
 				}
 				parentNodeID := appendDeleteSourceScan()
+				if candidateTag == 0 {
+					// Left input carries the candidate rows, right input the
+					// parent key values, both stitched by position.
+					inputProjection := builder.qry.Nodes[inputNodeID].ProjectList
+					candidateProjection := make([]*Expr, len(inputProjection))
+					for i, expr := range inputProjection {
+						candidateProjection[i] = &Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: 0, ColPos: int32(i),
+						}}}
+					}
+					return builder.appendNode(&plan.Node{
+						NodeType: plan.Node_JOIN, Children: []int32{inputNodeID, parentNodeID},
+						JoinType: plan.Node_ANTI, OnList: []*Expr{cascadeMatch},
+						ProjectList: candidateProjection,
+					}, bindCtx), nil
+				}
 				parentNodeID = builder.appendNode(&plan.Node{
 					NodeType: plan.Node_PROJECT, Children: []int32{parentNodeID},
 					ProjectList: DeepCopyExprList(builder.qry.Nodes[parentNodeID].ProjectList),
-					BindingTags: []int32{parentTag},
+					BindingTags: []int32{parentRelPos},
 				}, bindCtx)
 				inputProjection := builder.qry.Nodes[inputNodeID].ProjectList
 				candidateProjection := make([]*Expr, len(inputProjection))

@@ -1,0 +1,38 @@
+drop database if exists fk_issue_30246;
+create database fk_issue_30246;
+use fk_issue_30246;
+
+-- declaration order 1: CASCADE first, then SET NULL
+create table p1 (id int primary key);
+create table c1 (id int primary key, cascade_pid int, null_pid int, v int,
+    constraint fk_cascade foreign key (cascade_pid) references p1(id) on delete cascade,
+    constraint fk_set_null foreign key (null_pid) references p1(id) on delete set null);
+insert into p1 values (1), (2), (3);
+insert into c1 values (10,1,1,100),(11,1,2,101),(12,2,1,102),(13,2,3,103);
+delete from p1 where id = 1;
+select id, cascade_pid, null_pid from c1 order by id;
+
+-- declaration order 2: SET NULL first, then CASCADE
+create table p2 (id int primary key);
+create table c2 (id int primary key, cascade_pid int, null_pid int, v int,
+    constraint fk_set_null foreign key (null_pid) references p2(id) on delete set null,
+    constraint fk_cascade foreign key (cascade_pid) references p2(id) on delete cascade);
+insert into p2 values (1), (2), (3);
+insert into c2 values (10,1,1,100),(11,1,2,101),(12,2,1,102),(13,2,3,103);
+delete from p2 where id = 1;
+select id, cascade_pid, null_pid from c2 order by id;
+
+-- three-way overlap: one child row matched by a CASCADE and two SET NULL actions
+create table p3 (id int primary key);
+create table c3 (id int primary key, cascade_pid int, a_pid int, b_pid int,
+    constraint fk_cascade foreign key (cascade_pid) references p3(id) on delete cascade,
+    constraint fk_set_null_a foreign key (a_pid) references p3(id) on delete set null,
+    constraint fk_set_null_b foreign key (b_pid) references p3(id) on delete set null);
+insert into p3 values (1), (2), (3);
+insert into c3 values (10,1,1,1),(11,1,2,3),(12,2,1,3),(13,2,3,3);
+delete from p3 where id = 1;
+select id, cascade_pid, a_pid, b_pid from c3 order by id;
+
+drop table c1, c2, c3;
+drop table p1, p2, p3;
+drop database fk_issue_30246;
