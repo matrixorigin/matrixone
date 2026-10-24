@@ -8,26 +8,26 @@ parent_id int not null,
 key idx_parent (parent_id),
 constraint fk_parent_del foreign key (parent_id) references parent (id) on delete set null
 );
-internal error: Column 'parent_id' cannot be NOT NULL: needed in a foreign key constraint 'fk_parent_del' SET NULL
+Column 'parent_id' cannot be NOT NULL: needed in a foreign key constraint 'fk_parent_del' SET NULL
 create table child_upd (
 id int primary key,
 parent_id int not null,
 key idx_parent (parent_id),
 constraint fk_parent_upd foreign key (parent_id) references parent (id) on update set null
 );
-internal error: Column 'parent_id' cannot be NOT NULL: needed in a foreign key constraint 'fk_parent_upd' SET NULL
+Column 'parent_id' cannot be NOT NULL: needed in a foreign key constraint 'fk_parent_upd' SET NULL
 create table child_pk (
 parent_id int primary key,
 constraint fk_parent_pk foreign key (parent_id) references parent (id) on delete set null
 );
-internal error: Column 'parent_id' cannot be NOT NULL: needed in a foreign key constraint 'fk_parent_pk' SET NULL
+Column 'parent_id' cannot be NOT NULL: needed in a foreign key constraint 'fk_parent_pk' SET NULL
 create table self_ref (
 id int primary key,
 pid int not null,
 key idx_pid (pid),
 constraint fk_self foreign key (pid) references self_ref (id) on update set null
 );
-internal error: Column 'pid' cannot be NOT NULL: needed in a foreign key constraint 'fk_self' SET NULL
+Column 'pid' cannot be NOT NULL: needed in a foreign key constraint 'fk_self' SET NULL
 create table child_notnull (
 id int primary key,
 parent_id int not null,
@@ -35,12 +35,12 @@ key idx_parent (parent_id)
 );
 alter table child_notnull
 add constraint fk_parent_alter foreign key (parent_id) references parent (id) on delete set null;
-internal error: Column 'parent_id' cannot be NOT NULL: needed in a foreign key constraint 'fk_parent_alter' SET NULL
+Column 'parent_id' cannot be NOT NULL: needed in a foreign key constraint 'fk_parent_alter' SET NULL
 alter table child_notnull
 add constraint fk_parent_alter foreign key (parent_id) references parent (id) on update set null;
-internal error: Column 'parent_id' cannot be NOT NULL: needed in a foreign key constraint 'fk_parent_alter' SET NULL
+Column 'parent_id' cannot be NOT NULL: needed in a foreign key constraint 'fk_parent_alter' SET NULL
 alter table child_notnull add column val int, add constraint fk_parent_copy foreign key (parent_id) references parent (id) on delete set null;
-internal error: Column 'parent_id' cannot be NOT NULL: needed in a foreign key constraint 'fk_parent_copy' SET NULL
+Column 'parent_id' cannot be NOT NULL: needed in a foreign key constraint 'fk_parent_copy' SET NULL
 select count(*) as fk_count from information_schema.table_constraints where constraint_schema = 'fk_issue_30282' and constraint_type = 'FOREIGN KEY';
 fk_count
 0
