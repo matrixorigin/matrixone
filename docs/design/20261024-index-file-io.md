@@ -208,6 +208,30 @@ fails, the next waiter tries. A short wait on the cache's own write coordination
 enough: a rebuild takes seconds, and a reader that stops waiting would rebuild the file
 again.
 
+### CDC tail: one file per frame (decision)
+
+Decided by @cpegeric, 2026-10-24, for the first version. Each CDC tail frame is one
+file, whatever the number of chunks it spans; a reader opens the frame files in order.
+The frame encoding, which the vector indexes and FULLTEXT2 already share, moves out of
+the GPU package so neither depends on it.
+
+- A frame is immutable and matches its metadata row one to one, so a reload rebuilds only
+  frames it has not cached, and the writing CN already holds the frames it wrote.
+- MERGE removes the whole tail, and its files with it, so the number of frame files is
+  bounded by the frames between merges.
+
+Rejected alternatives: one file for the whole tail, whose content and name change on
+every appended frame, rewriting the tail each time (quadratic bytes); and appending to a
+cached file in place, which reuses a name for different content and breaks the write-once
+entry that CNs sharing a directory rely on.
+
+Revisit when measurement shows the frame count between merges makes per-frame opens or
+the file count matter. The candidate then is packing inside the cache, in doubling tiers:
+new frames form small packs, two packs of similar size combine into one twice as large,
+and each pack is immutable and named by its first and last frame and a checksum over its
+frames' checksums. About log n files per tail, each byte rewritten about log n times; the
+chunk rows are unchanged. Decide together with the incremental-update design.
+
 ### Memory
 
 The layer never stores file bytes in the memory cache: file bytes live in the index-file
@@ -236,13 +260,6 @@ gate, and each algorithm can switch its readers and writers independently.
   into a second copy on disk, outside the cache and its capacity.
 - Range reads of a file. Consumers map or load whole files today, and the disk cache
   serves the whole file.
-
-## Open questions
-
-1. **CDC tail as files.** Proposed: each frame is one file, whatever the number of chunks
-   it spans; readers open the frame files in order. The frame encoding, which both the
-   vector indexes and FULLTEXT2 already share, moves out of the GPU package so neither
-   depends on it. To be confirmed with the incremental-update design.
 
 ## Validation
 
@@ -278,6 +295,8 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
   corrupted cached file is detected on the first open after a restart and rebuilt;
 - two CNs in one process sharing the directory never serve a partial file;
 - explicit removal deletes the removed index's files; idle eviction keeps them;
+- a tail reload rebuilds only frames not yet cached, and a merge deletes every frame file
+  of the old tail;
 - a cache write failure does not fail the write transaction or the read;
 - a runtime disk-cache resize applies the share;
 - each rebuild cache setting behaves as stated: the default fills neither the memory nor
