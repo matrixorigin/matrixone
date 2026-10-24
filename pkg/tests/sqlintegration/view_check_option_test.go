@@ -29,8 +29,8 @@ import (
 
 func TestViewCheckOptionCanonicalization(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {
-		ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
-		defer cancel()
+		setupCtx, cancelSetup := context.WithTimeout(t.Context(), 120*time.Second)
+		defer cancelSetup()
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
@@ -39,9 +39,14 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 
 		const schema = "view_check_option_canonicalization"
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
-		execSQLRequire(t, ctx, db, "drop database if exists "+schema)
+		execSQLRequire(t, setupCtx, db, "drop database if exists "+schema)
+		cancelSetup()
 		for round := 0; round < 2; round++ {
 			t.Run(fmt.Sprintf("round_%d", round+1), func(t *testing.T) {
+				// Each replay/recreation round owns its complete execution and
+				// teardown budget; the preceding round must not consume it.
+				ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+				defer cancel()
 				execSQLRequire(t, ctx, db, "create database "+schema)
 				execSQLRequire(t, ctx, db, "create view "+schema+".current_v as select 1 with cAsCaDeD check option")
 				var current string
@@ -186,14 +191,14 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 					}
 				}
 				execSQLRequire(t, ctx, db, "drop database "+schema)
+				var remaining int
+				require.NoError(t, db.QueryRowContext(ctx,
+					"select count(*) from mo_catalog.mo_tables where reldatabase=? and account_id=0", schema).Scan(&remaining))
+				require.Zero(t, remaining, "verify teardown before reusing the same CN")
 			})
 			if t.Failed() {
 				return
 			}
-			var remaining int
-			require.NoError(t, db.QueryRowContext(ctx,
-				"select count(*) from mo_catalog.mo_tables where reldatabase=? and account_id=0", schema).Scan(&remaining))
-			require.Zero(t, remaining, "verify teardown before reusing the same CN")
 		}
 	})
 }
