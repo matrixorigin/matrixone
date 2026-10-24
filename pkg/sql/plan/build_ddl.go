@@ -6119,7 +6119,16 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 
 	dropTable.Table = string(name.ObjectName)
 
-	obj, tableDef, err := ctx.Resolve(dropTable.Database, dropTable.Table, nil)
+	var obj *plan.ObjectRef
+	var tableDef *plan.TableDef
+	var err error
+	if resolver, ok := ctx.(interface {
+		ResolveForDrop(string, string) (*plan.ObjectRef, *plan.TableDef, error)
+	}); ok {
+		obj, tableDef, err = resolver.ResolveForDrop(dropTable.Database, dropTable.Table)
+	} else {
+		obj, tableDef, err = ctx.Resolve(dropTable.Database, dropTable.Table, nil)
+	}
 	if err != nil {
 		return nil, err
 	}

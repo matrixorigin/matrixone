@@ -132,5 +132,36 @@ select id from base order by id;
 4  𝄀
 6
 set session transaction isolation level read committed;
+drop database if exists temp_ddl_stale;
+create database temp_ddl_stale;
+create temporary table temp_ddl_stale.stale (id int primary key);
+drop database temp_ddl_stale;
+create database temp_ddl_stale;
+drop table temp_ddl_stale.stale;
+-- @regex("no such table", true)
+no such table temp_ddl_stale.stale
+create temporary table temp_ddl_stale.stale (id int primary key);
+insert into temp_ddl_stale.stale values (11);
+select id from temp_ddl_stale.stale;
+➤ id[4,32,0]  𝄀
+11
+drop database temp_ddl_stale;
+create database temp_ddl_stale;
+drop temporary table temp_ddl_stale.stale;
+-- @regex("no such table", true)
+no such table temp_ddl_stale.stale
+create temporary table temp_ddl_stale.stale (id int primary key);
+drop database temp_ddl_stale;
+create database temp_ddl_stale;
+start transaction;
+drop temporary table if exists temp_ddl_stale.stale;
+create temporary table temp_ddl_stale.stale (id int primary key);
+insert into temp_ddl_stale.stale values (22);
+commit;
+select id from temp_ddl_stale.stale;
+➤ id[4,32,0]  𝄀
+22
+drop temporary table temp_ddl_stale.stale;
+drop database temp_ddl_stale;
 drop temporary table tc, td, tg, ta, tp, ti, ts, tf;
 drop database temp_ddl_transactions;
