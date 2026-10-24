@@ -88,13 +88,6 @@ func waitTxnRateLimit(limiter *rate.Limiter, ctx context.Context) error {
 	return err
 }
 
-// WithTxnIDGenerator setup txn id generator
-func WithTxnIDGenerator(generator TxnIDGenerator) TxnClientCreateOption {
-	return func(tc *txnClient) {
-		tc.generator = generator
-	}
-}
-
 // WithLockService setup lock service
 func WithLockService(lockService lockservice.LockService) TxnClientCreateOption {
 	return func(tc *txnClient) {
