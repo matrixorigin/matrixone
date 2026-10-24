@@ -12,7 +12,7 @@ create database issue_30506_temp_txn;
 use issue_30506_temp_txn;
 create temporary table tx1 (id int primary key);
 -- Expected: not supported: temporary table in an uncommitted database generation
--- Closing this session rolls back the uncommitted database generation.
+rollback;
 -- @session}
 drop database if exists issue_30506_temp_txn;
 
