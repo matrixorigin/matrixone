@@ -215,6 +215,26 @@ func BuildTableScanTemporaryFilter(sessionID string) tree.Expr {
 		},
 	}
 	temporary := tree.NewOrExpr(temporaryRoot, legacyTemporary)
+	legacyDerived := tree.NewAndExpr(
+		tree.NewComparisonExpr(tree.NOT_IN, relKind, tree.NewTuple(tree.Exprs{
+			tree.NewNumVal(catalog.SystemOrdinaryRel, catalog.SystemOrdinaryRel, false, tree.P_char),
+			tree.NewNumVal(catalog.SystemViewRel, catalog.SystemViewRel, false, tree.P_char),
+			tree.NewNumVal(catalog.SystemExternalRel, catalog.SystemExternalRel, false, tree.P_char),
+			tree.NewNumVal(catalog.SystemMaterializedRel, catalog.SystemMaterializedRel, false, tree.P_char),
+			tree.NewNumVal(catalog.SystemSourceRel, catalog.SystemSourceRel, false, tree.P_char),
+			tree.NewNumVal(catalog.SystemClusterRel, catalog.SystemClusterRel, false, tree.P_char),
+			tree.NewNumVal(catalog.SystemPartitionRel, catalog.SystemPartitionRel, false, tree.P_char),
+			tree.NewNumVal(catalog.SystemSequenceRel, catalog.SystemSequenceRel, false, tree.P_char),
+		})),
+		&tree.FuncExpr{
+			Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedName(tree.NewCStr("regexp_like", 1))),
+			Exprs: tree.Exprs{
+				relName,
+				tree.NewNumVal(`^__mo_tmp_[0-9a-f]{32}_`, `^__mo_tmp_[0-9a-f]{32}_`, false, tree.P_char),
+			},
+		},
+	)
+	temporary = tree.NewOrExpr(temporary, legacyDerived)
 	prefix := defines.TempTableNamePrefix + sessionID + "_"
 	owned := &tree.FuncExpr{
 		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedName(tree.NewCStr("startswith", 1))),

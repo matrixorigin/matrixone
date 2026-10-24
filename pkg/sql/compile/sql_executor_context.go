@@ -682,7 +682,7 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	if owner, ok := c.proc.GetSession().(process.TemporaryTableDDL); ok {
 		ownedTemporary = owner.OwnsTemporaryTable(dbName, tableName)
 	}
-	if !plan.TemporaryTableAccessAllowed(c.GetContext(), c.proc.GetSession(), dbName, tableName, tableDef, isTmpTable) {
+	if !plan.TemporaryTableAccessAllowed(c.GetContext(), c.proc.GetSession(), dbName, tableName, tableDef, table.GetExtraInfo(), isTmpTable) {
 		return nil, nil, nil
 	}
 	if isTmpTable || ownedTemporary || tableDef.IsTemporary {
