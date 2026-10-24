@@ -78,18 +78,32 @@ from the metadata visible to its transaction, and identical content read at diff
 snapshots is one file in the cache. Rejected alternative: a timestamp in the name, which
 would store one copy of identical bytes per snapshot read.
 
-### Writing
+### Writing (decision)
 
-- The writer takes the whole file as a stream. It writes the chunk rows through the
-  storage engine's relation write path in the caller's transaction (no SQL is parsed,
-  planned or executed) and, from the same bytes, the file into the CN's disk cache. Commit
-  and abort of the rows are atomic with the metadata row, exactly as with today's
-  `INSERT`. Large writes spill to storage objects through the existing transaction
-  workspace mechanism.
-- The file goes to the disk cache only, never the memory cache. The writing CN reads it
-  warm from local disk.
+Decided by @cpegeric, 2026-10-24.
+
+- The writer takes the whole file as a stream and keeps it as one local file. The chunk
+  rows reach the table through internal `INSERT ... SELECT` statements in the caller's
+  transaction, whose source is a table function that cuts the local file into chunk rows.
+  The usual insert pipeline therefore applies unchanged: primary-key locks, the duplicate
+  check, the composite key and the workspace spill. Commit and abort of the rows are atomic
+  with the metadata row, as with today's `INSERT`.
+- Each statement writes a bounded range of chunks, as today's writers do, so what one
+  statement holds in memory does not grow with the file. Chunks travel as batches of the
+  pipeline, not as statement parameters.
+- The table function is reachable only from internal SQL, and only for the transaction
+  that registered the file; it takes a handle, never a path.
+- After the statements succeed, the same local file becomes the cached file, without a
+  second copy. It goes to the disk cache only, never the memory cache. The writing CN reads
+  it warm from local disk.
 - A file cached by a transaction that aborts is never named by a committed metadata row,
   so no reader reaches it; it is evicted unused.
+
+Rejected alternative: writing the rows through the storage engine's relation write path
+without SQL. It skips the primary-key lock and duplicate check that `INSERT` performs, so
+two writers that choose the same chunk ids could both commit and corrupt the file; the
+storage engine catches such a duplicate only between overlapping transactions, and not at
+all once the rows are flushed to storage objects.
 
 ### Reading
 
@@ -98,9 +112,11 @@ would store one copy of identical bytes per snapshot read.
   the disk cache when present.
 - On a miss, the layer rebuilds the file from its chunk rows through the storage engine's
   relation readers, under the caller's transaction and snapshot (no SQL), verifies it,
-  places it in the disk cache, and returns it. It sees exactly the rows a SQL `SELECT`
-  would see at that snapshot, including historical (snapshot) reads, uncommitted rows of
-  the caller's transaction and rows not yet flushed to storage objects. The relation
+  places it in the disk cache, and returns it. It sees exactly the rows a SQL `SELECT` in
+  the caller's position would see: at the caller's snapshot, including historical
+  (snapshot) reads, rows not yet flushed to storage objects, and the caller's uncommitted
+  rows up to the same workspace position (the statement boundary for a statement, the
+  whole workspace for internal SQL that opens no statement). The relation
   readers read the stored objects through the fileservice, as any scan does.
 - How a rebuild uses the existing memory and table-data disk caches is a CN configuration
   setting (decision, @cpegeric, 2026-10-24): read without filling them (default), bypass
@@ -286,6 +302,10 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
   unchanged);
 - the chunk rows written through the layer are byte-identical to those the SQL path writes
   for the same file;
+- writing chunk rows that already exist fails with a duplicate-key error, as an `INSERT`
+  does;
+- the table function cannot be called from user SQL, nor by another transaction, nor after
+  its write finished;
 - clone, restore and snapshot reads of an index written through the layer behave as
   before, including a snapshot search after a merge, which rebuilds the merged-away
   segment from the rows visible at the snapshot;
