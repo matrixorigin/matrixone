@@ -61,7 +61,7 @@ func scanChunks(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, fn
 	if err != nil {
 		return err
 	}
-	txnOffset := env.Txn.GetWorkspace().GetSnapshotWriteOffset()
+	txnOffset := workspaceOffset(env)
 	relData, err := rel.Ranges(ctx, engine.RangesParam{
 		BlockFilters: []*plan.Expr{filter},
 		TxnOffset:    txnOffset,
@@ -104,6 +104,17 @@ func scanChunks(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, fn
 		}
 	}
 	return nil
+}
+
+// workspaceOffset is the workspace position a SQL SELECT on env.Proc would read to: the
+// whole workspace for borrowed SQL that opens no statement, otherwise the statement
+// boundary.
+func workspaceOffset(env *Env) int {
+	ws := env.Txn.GetWorkspace()
+	if env.Proc.IncrStatementDisabled() {
+		return int(ws.WriteOffset())
+	}
+	return ws.GetSnapshotWriteOffset()
 }
 
 func forEachChunk(bat *batch.Batch, ref *Ref, fn func(chunkID int64, data []byte) error) error {
