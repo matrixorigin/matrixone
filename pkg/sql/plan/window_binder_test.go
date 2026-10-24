@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -2113,4 +2114,73 @@ func TestNtileRequiresRowIndependentBuckets(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestQuantileExactWeightedDistinctWindowBinding proves the one DISTINCT
+// window aggregate: quantileExactWeighted windows bind successfully and
+// record the DISTINCT modifier in the bound plan function's obj bits (the
+// same encoding constructWindow reads), while every other DISTINCT window
+// aggregate (here sum, covered also by the validation subtests above)
+// stays NYI.
+func TestQuantileExactWeightedDistinctWindowBinding(t *testing.T) {
+	const quantileObj = int64(1234)
+	quantileWindowFunc := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_float64)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: quantileObj},
+			}},
+		}
+	}
+	binder := &stubWindowBinder{
+		bindExprFunc: func(tree.Expr, int32, bool) (*planpb.Expr, error) {
+			return makePlan2Int64ConstExprWithType(1), nil
+		},
+		bindFuncExprFunc: func(string, []tree.Expr, int32) (*planpb.Expr, error) {
+			return quantileWindowFunc(), nil
+		},
+		makeFrameValueFunc: func(tree.Expr, *planpb.Type) (*planpb.Expr, error) {
+			return makePlan2Int64ConstExprWithType(1), nil
+		},
+	}
+	bindQuantileWindow := func(funcType tree.FuncType) (*BindContext, *planpb.Expr, error) {
+		ctx := &BindContext{windowTag: 9, windowByAst: make(map[string]int32)}
+		_, err := bindWindowFuncExpr(
+			binder, ctx, "quantileExactWeighted",
+			testWindowFuncExpr(
+				"quantileExactWeighted",
+				funcType,
+				&tree.WindowSpec{
+					OrderBy:  tree.OrderBy{tree.NewOrder(testNumVal(1), tree.Ascending, tree.DefaultNullsPosition, false)},
+					HasFrame: true,
+					Frame: &tree.FrameClause{
+						Type:  tree.Rows,
+						Start: &tree.FrameBound{Type: tree.Preceding},
+						End:   &tree.FrameBound{Type: tree.CurrentRow},
+					},
+				},
+				testNumVal(1), testNumVal(2), testNumVal(3),
+			),
+			0,
+			true,
+		)
+		return ctx, nil, err
+	}
+
+	ctx, _, err := bindQuantileWindow(tree.FUNC_TYPE_DISTINCT)
+	require.NoError(t, err)
+	require.Len(t, ctx.windows, 1)
+	windowFunc := ctx.windows[0].Expr.(*planpb.Expr_W).W.WindowFunc.Expr.(*planpb.Expr_F)
+	require.EqualValues(t, uint64(quantileObj)|uint64(function.Distinct),
+		uint64(windowFunc.F.Func.Obj),
+		"the DISTINCT window binding must carry the distinct bit into the plan function")
+	require.EqualValues(t, quantileObj,
+		uint64(windowFunc.F.Func.Obj)&uint64(function.DistinctMask),
+		"the aggregate id below the flag bits must be preserved")
+
+	plainCtx, _, err := bindQuantileWindow(tree.FUNC_TYPE_DEFAULT)
+	require.NoError(t, err)
+	plainFunc := plainCtx.windows[0].Expr.(*planpb.Expr_W).W.WindowFunc.Expr.(*planpb.Expr_F)
+	require.EqualValues(t, quantileObj, uint64(plainFunc.F.Func.Obj),
+		"a plain window binding must stay unflagged")
 }

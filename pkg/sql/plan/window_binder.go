@@ -1054,7 +1054,8 @@ func bindWindowSpec(
 }
 
 func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
+	if astExpr.Type == tree.FUNC_TYPE_DISTINCT &&
+		!strings.EqualFold(funcName, NameQuantileExactWeighted) {
 		return nil, moerr.NewNYI(b.GetContext(), "DISTINCT in window function")
 	}
 
@@ -1103,6 +1104,15 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	windowFunc, err := b.bindPreparedNumericFuncExpr(funcName, windowArgs, depth)
 	if err != nil {
 		return nil, err
+	}
+	// quantileExactWeighted is the one DISTINCT window aggregate: the
+	// design contract admits the combination, and constructWindow reads
+	// the distinct bit out of the bound function exactly like the group
+	// aggregate path (having_binder.go) records it.
+	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
+		if f := windowFunc.GetF(); f != nil {
+			f.Func.Obj = int64(uint64(f.Func.Obj) | function.Distinct)
+		}
 	}
 	if function.GetFunctionIsWinIndicatorFunByName(funcName) {
 		// Section-4 SQL surface of the technical-indicator kernels

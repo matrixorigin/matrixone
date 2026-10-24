@@ -5603,6 +5603,7 @@ const NameMedian = "median"
 const NameApproxPercentile = "approx_percentile"
 const NamePercentileCont = "percentile_cont"
 const NamePercentileDisc = "percentile_disc"
+const NameQuantileExactWeighted = "quantileExactWeighted"
 
 func (builder *QueryBuilder) bindNoRecursiveCte(
 	ctx *BindContext,

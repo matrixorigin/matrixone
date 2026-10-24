@@ -912,7 +912,11 @@ const (
 	// Internal LOAD IGNORE predicate; gated by cluster protocol 125.
 	LOAD_FK_IGNORE_CHECK = 602
 
-	FUNCTION_END_NUMBER = 616
+	// SQL exact weighted percentile aggregate quantileExactWeighted; remote
+	// dispatch is gated by cluster protocol 131.
+	QUANTILE_EXACT_WEIGHTED = 616
+
+	FUNCTION_END_NUMBER = 617
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1027,6 +1031,7 @@ var functionIdRegister = map[string]int32{
 	"max_by_non_null":              MAX_BY_NON_NULL,
 	"percentile_cont":              PERCENTILE_CONT,
 	"percentile_disc":              PERCENTILE_DISC,
+	"quantileexactweighted":        QUANTILE_EXACT_WEIGHTED,
 	// count window
 	"rank":         RANK,
 	"row_number":   ROW_NUMBER,

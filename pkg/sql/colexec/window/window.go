@@ -704,7 +704,8 @@ func orderedSetWindowAggregate(name string) bool {
 	return strings.EqualFold(name, "median") ||
 		strings.EqualFold(name, "approx_percentile") ||
 		strings.EqualFold(name, "percentile_cont") ||
-		strings.EqualFold(name, "percentile_disc")
+		strings.EqualFold(name, "percentile_disc") ||
+		strings.EqualFold(name, "quantileExactWeighted")
 }
 
 func fullPartitionWindowFrame(frame *plan.FrameClause) bool {
