@@ -357,3 +357,151 @@ func TestSetScannerResetsCredentialContext(t *testing.T) {
 	require.Zero(t, lex.credentialsState)
 	require.Zero(t, lex.credentialsValuePos)
 }
+
+// #30747 review round 4, finding 1: a prepare body can encode the very
+// bytes that name the credential keyword. The descent must decode the
+// literal with the scanner's OWN rules (authoritative payload), so
+// newline-escape sequences, backslash-escaped letters and charset
+// introducers cannot hide credentials from the inner scan, while the raw
+// prefix and closing delimiter are carried over verbatim.
+func TestMaskPreparedSqlLiteralsEdgeEncodings(t *testing.T) {
+	// `\n` decodes to a newline: `credentials\n=` IS a credentials map.
+	sql := `prepare p from 'create stage s credentials\n={''aws_key''=''EDGE_CANARY_A''}'`
+	got := MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "EDGE_CANARY_A")
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+	_, err := ParseOne(context.Background(), got, 1)
+	require.NoError(t, err, "masked prepare must re-parse")
+
+	// `\e` decodes to `e`: `cred\entials` decodes to the keyword itself.
+	sql = `prepare p from 'create stage s cred\entials={''aws_key''=''EDGE_CANARY_B''}'`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "EDGE_CANARY_B")
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+	_, err = ParseOne(context.Background(), got, 1)
+	require.NoError(t, err, "masked prepare must re-parse")
+
+	// a charset introducer prefixes the literal but is one token.
+	sql = `prepare p from _utf8mb4'create stage s credentials={''aws_key''=''EDGE_CANARY_C''}'`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "EDGE_CANARY_C")
+	require.Contains(t, got, "_utf8mb4", "the introducer prefix is preserved")
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+	_, err = ParseOne(context.Background(), got, 1)
+	require.NoError(t, err, "masked prepare must re-parse")
+
+	// unterminated prepare bodies: quote and dollar-quoted tails are still
+	// credential-bearing payloads.
+	sql = `prepare p from 'create stage s credentials={''aws_key''=''EDGE_CANARY_D`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "EDGE_CANARY_D")
+	sql = `prepare p from $$create stage s credentials={'aws_key'='EDGE_CANARY_E`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "EDGE_CANARY_E")
+}
+
+// #30747 review round 4, finding 2: an executable comment WITH a version
+// prefix before a quoted map value made the masker treat the value as
+// unquoted (the version digits masqueraded as the value start, and masking
+// stopped at an embedded comma); an `=` assignment INSIDE `/*! = */` before
+// a comma-bearing quoted value did the same. The version prefix and the
+// comment terminator are trivia, and a value-less close token must not
+// consume the pending assignment.
+func TestMaskExecutableCommentVersionPrefixValue(t *testing.T) {
+	sql := `create stage s url='file:///x' credentials={'aws_key'=/*!12345 'prefix,CANARY_VERSION4' */}`
+	got := MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "CANARY_VERSION4")
+	require.Contains(t, got, "******")
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+
+	sql = `create stage s credentials={'aws_key' /*! = */ 'prefix,CANARY_ASSIGN4' */`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "CANARY_ASSIGN4")
+	require.Contains(t, got, "******")
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+}
+
+// #30747 review round 4, finding 3: the quadratic guard covered only runs
+// closed by a separator; unclosed runs at END-OF-INPUT and runs inside
+// executable comments re-scanned the tail once per token. coveredUntil now
+// consumes every byte of a run exactly once for those shapes too.
+func TestMaskMalformedRunsAtEOFAndInCommentStayLinear(t *testing.T) {
+	repeat := strings.Repeat("a=", 1<<18)
+
+	// run reaches end-of-input
+	sql := `create stage s credentials={'aws_key'=` + repeat
+	start := time.Now()
+	got := MaskSensitiveSqlLiterals(sql)
+	elapsed := time.Since(start)
+	require.NotContains(t, got, "a=a=")
+	require.Less(t, elapsed, 2*time.Second, "unclosed run at EOF must be consumed once")
+
+	// run stays inside an executable comment
+	sql = `create stage s credentials={'aws_key'=/*! ` + repeat + ` */}`
+	start = time.Now()
+	got = MaskSensitiveSqlLiterals(sql)
+	elapsed = time.Since(start)
+	require.NotContains(t, got, "a=a=")
+	require.Less(t, elapsed, 2*time.Second, "run inside an exec comment must be consumed once")
+}
+
+// #30747 review round 4, finding 4: the COM_QUERY debug trace receives the
+// WHOLE multi-statement request, so a leading SET sql_mode must re-tune the
+// lexical mode for the statements after it; masking everything under the
+// request's INITIAL mode leaves backslash-bearing secrets visible.
+func TestMaskPerStatementSQLMode(t *testing.T) {
+	stage := ` create stage s credentials={'aws_key'='a\', url='STAGED_CANARY_A'}`
+
+	// the reviewer repro: WITHOUT the transition the initial-mode masking
+	// leaves the second value visible; per-statement masking hides it.
+	require.Contains(t,
+		maskSensitiveSqlLiteralsScoped(stage, CredentialStateNone, true, 0), "STAGED_CANARY_A")
+	sql := `set sql_mode='NO_BACKSLASH_ESCAPES';` + stage
+	got := MaskSensitiveSqlLiteralsPerStatement(sql, 0)
+	require.NotContains(t, got, "STAGED_CANARY_A")
+	require.Contains(t, got, "url='******'")
+
+	// qualified assignment forms
+	got = MaskSensitiveSqlLiteralsPerStatement(
+		`SET @@session.sql_mode='NO_BACKSLASH_ESCAPES';`+stage, 0)
+	require.NotContains(t, got, "STAGED_CANARY_A")
+
+	// unevaluable values (expression, DEFAULT, a mode the session would
+	// reject) fall back to conservative every-variant masking
+	for _, prefix := range []string{
+		`set sql_mode=concat('NO_BACKSLASH');`,
+		`set sql_mode=DEFAULT;`,
+		`set sql_mode='ORACLE';`,
+	} {
+		got = MaskSensitiveSqlLiteralsPerStatement(prefix+stage, 0)
+		require.NotContains(t, got, "STAGED_CANARY_A", "prefix %q", prefix)
+	}
+
+	// the INITIAL mode still applies before the transition
+	got = MaskSensitiveSqlLiteralsPerStatement(
+		stage+`; set sql_mode='NO_BACKSLASH_ESCAPES'`,
+		SQLModeFlags(SQLModeNoBackslashEscapes))
+	require.NotContains(t, got, "STAGED_CANARY_A")
+
+	// DML SET-clauses are not mode switches
+	sql = `update t set sql_mode='x';` + stage[1:]
+	got = MaskSensitiveSqlLiteralsPerStatement(sql, SQLModeFlags(SQLModeNoBackslashEscapes))
+	require.Contains(t, got, "sql_mode='x'")
+	require.NotContains(t, got, "STAGED_CANARY_A")
+
+	// fast paths stay equivalent to the single-pass scoped form
+	for _, s := range []string{
+		`select 1`,
+		`select 'sql_mode'`,
+		`select 1; select 'no mode word'`,
+		`create stage s credentials={'k'='v1'}`,
+		`prepare p from 'create stage s credentials={''k''=''v2''}'`,
+	} {
+		require.Equal(t, maskSensitiveSqlLiteralsScoped(s, CredentialStateNone, true, 0),
+			MaskSensitiveSqlLiteralsPerStatement(s, 0), "no-transition equivalence: %q", s)
+	}
+
+	// idempotent on a transitioned request
+	got = MaskSensitiveSqlLiteralsPerStatement(`set sql_mode='NO_BACKSLASH_ESCAPES';`+stage, 0)
+	require.Equal(t, got, MaskSensitiveSqlLiteralsPerStatement(got, 0), "idempotent")
+}

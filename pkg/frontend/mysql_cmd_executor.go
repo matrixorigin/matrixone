@@ -420,9 +420,19 @@ func (e plainMaskedParseError) Error() string { return string(e) }
 // debug log: credential literals are masked FIRST (so no partial secret can
 // survive pagination), then the masked text is abbreviated to the configured
 // print length (#30747). kept as a helper so the masking-then-abbreviate
-// order is testable without a session.
+// order is testable without a session. The trace receives the WHOLE
+// multi-statement request, so a leading `SET sql_mode=...` must re-tune the
+// lexical mode for the statements that follow it (#30747 review).
 func maskQueryForDebugTrace(query string, maxLen int, sqlMode string) string {
-	return commonutil.Abbreviate(redactStatementTextForLogging(nil, query, sqlMode), maxLen)
+	// __mo_query payloads are redacted whole, same as the statement path.
+	if diagnostic := sqlmongodb.RedactSQLForDiagnostics(query); diagnostic != query {
+		return commonutil.Abbreviate(diagnostic, maxLen)
+	}
+	// The credential masking must be ONE per-statement pass over the raw
+	// text: masked spans from the initial mode can swallow separators that a
+	// later mode needs to delimit the next value (#30747 review).
+	redacted := mysql.MaskSensitiveSqlLiteralsPerStatement(query, mysql.ParseSQLModeFlags(sqlMode))
+	return commonutil.Abbreviate(redacted, maxLen)
 }
 
 // maskSerializedNearFragment extracts the `near "..."` echo from a serialized

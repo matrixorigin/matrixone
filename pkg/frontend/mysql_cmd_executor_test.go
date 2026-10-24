@@ -12855,3 +12855,25 @@ func TestStageCredentialsFormatRedactsValues(t *testing.T) {
 	require.NotContains(t, rendered, "FORMAT_CANARY")
 	require.Contains(t, rendered, "'aws_key'='******'")
 }
+
+// #30747 review round 4: the debug trace receives the WHOLE multi-statement
+// request text; a leading `SET sql_mode='NO_BACKSLASH_ESCAPES'` re-tunes the
+// lexical mode for the statements that follow it, and masking every
+// statement under the request's INITIAL mode leaves a backslash-bearing
+// credential visible in the trace.
+func TestMaskQueryForDebugTraceStagedSQLMode(t *testing.T) {
+	q := `set sql_mode='NO_BACKSLASH_ESCAPES'; create stage s credentials={'aws_key'='a\', url='STAGED_DBG_CANARY'}`
+	out := maskQueryForDebugTrace(q, -1, "")
+	require.NotContains(t, out, "STAGED_DBG_CANARY")
+	require.Contains(t, out, "url='******'")
+
+	// same shape through the abbreviation boundary
+	out = maskQueryForDebugTrace(q, 400, "")
+	require.NotContains(t, out, "STAGED_DBG_CANARY")
+
+	// a single statement still masks under the session mode directly
+	out = maskQueryForDebugTrace(
+		`create stage s credentials={'aws_key'='a\', url='STAGED_DBG_CANARY2'}`, -1,
+		"NO_BACKSLASH_ESCAPES")
+	require.NotContains(t, out, "STAGED_DBG_CANARY2")
+}
