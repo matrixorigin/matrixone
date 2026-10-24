@@ -18,6 +18,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -333,4 +334,175 @@ func TestIndexOnlyByteStringLeadingPredicatesRetainExactResidual(t *testing.T) {
 		})
 	}
 	require.False(t, needsIndexOnlyResidualLeadingFilters(index, []*pb.Expr{makeEqFilterExpr(0)}, []int32{0}))
+}
+
+// Planning must succeed when only part of a residual expression is indexed.
+func TestIndexBackfillResidualPlanning(t *testing.T) {
+	for _, tc := range []struct{ name, hint, predicate string }{
+		{"automatic mixed columns", "", "id<payload"},
+		{"forced mixed columns", "force index(uk_ab)", "id<payload"},
+		{"index against payload", "", "b<payload"},
+		{"nested mixed columns", "force index(idx_ab)", "abs(id)<payload"},
+		{"all mapped columns", "force index(uk_ab)", "id<b+10"},
+		{"range residual", "force index(idx_ab)", "id<payload and b>0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addPrimaryPrefixIndexTableForTest(mock)
+			// Use the same INT type as id: an implicit cast otherwise hides the
+			// direct-column shape that exposed partial predicate rewriting.
+			mock.ctxt.tables["index_hint_t"].Cols[3].Typ = pb.Type{Id: int32(types.T_int32)}
+			p, err := runOneStmt(mock, t, "select payload from index_hint_t "+tc.hint+" where a=1 and b=2 and "+tc.predicate)
+			require.NoError(t, err)
+			require.True(t, planHasIndexJoin(p))
+		})
+	}
+}
+
+func TestIndexBackfillResidualMapping(t *testing.T) {
+	for _, layout := range []string{"composite unique", "composite nonunique", "simple raw"} {
+		t.Run(layout, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			addPrimaryPrefixIndexTableForTest(mock)
+			builder := NewQueryBuilder(pb.Query_SELECT, &mock.ctxt, false, true)
+			table := mock.ctxt.tables["index_hint_t"]
+			idx := table.Indexes[2]
+			if layout == "composite nonunique" {
+				idx = table.Indexes[1]
+			} else if layout == "simple raw" {
+				table.Pkey = &pb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}
+				idx = &pb.IndexDef{Parts: []string{"b"}, Unique: true, IndexTableName: idx.IndexTableName}
+			}
+			idxTable := DeepCopyTableDef(mock.ctxt.tables[idx.IndexTableName], true)
+			if layout == "simple raw" {
+				idxTable.Cols[0].Typ = table.Cols[2].Typ
+				idxTable.Cols[1].Typ = table.Cols[0].Typ
+			}
+			mapping, err := builder.regularIndexColumnMap(idx, &pb.Node{TableDef: table, BindingTags: []int32{10}}, 20, idxTable)
+			require.NoError(t, err)
+			if layout == "simple raw" {
+				require.Equal(t, int32(0), mapping[[2]int32{10, 2}].GetCol().ColPos)
+				require.Equal(t, int32(1), mapping[[2]int32{10, 0}].GetCol().ColPos)
+			} else {
+				// b comes from serialized index key part 1; id comes from
+				// serialized primary key part 1, independently of index layout.
+				for _, pos := range []int32{2, 0} {
+					fn := mapping[[2]int32{10, pos}].GetF()
+					require.Equal(t, "serial_extract", fn.Func.ObjName)
+					require.Equal(t, int64(1), fn.Args[1].GetLit().GetI64Val())
+					wantSource := int32(0)
+					if pos == 0 {
+						wantSource = 1
+					}
+					require.Equal(t, wantSource, fn.Args[0].GetCol().ColPos)
+				}
+			}
+			col := func(pos int32) *pb.Expr { return GetColExpr(table.Cols[pos].Typ, 10, pos) }
+			bind := func(name string, args ...*pb.Expr) *pb.Expr {
+				expr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), name, args)
+				require.NoError(t, err)
+				return expr
+			}
+			for _, tc := range []struct {
+				name string
+				expr *pb.Expr
+				push bool
+			}{
+				{"literal", bind("<", col(0), MakePlan2Int64ConstExprWithType(20)), true},
+				{"both columns", bind("<", col(0), col(2)), true},
+				{"nested and repeated", bind("<", bind("abs", col(0)), bind("+", col(2), col(0))), true},
+				{"parameter", bind("<", col(0), &pb.Expr{Typ: table.Cols[0].Typ, Expr: &pb.Expr_P{P: &pb.ParamRef{Pos: 0}}}), true},
+				{"unmapped second", bind("<", col(0), col(3)), false},
+				{"unmapped nested", bind("<", bind("abs", col(0)), col(3)), false},
+				{"foreign same position", bind("<", col(0), GetColExpr(table.Cols[2].Typ, 99, 2)), false},
+				{"volatile", bind("<", col(0), bind("rand")), false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					original := DeepCopyExpr(tc.expr)
+					node := &pb.Node{TableDef: table, BindingTags: []int32{10}, FilterList: []*pb.Expr{tc.expr}}
+					indexNode := &pb.Node{TableDef: idxTable, BindingTags: []int32{20}}
+					builder.applyExtraFiltersOnIndex(idx, node, indexNode, nil)
+					require.True(t, proto.Equal(original, node.FilterList[0]), "base residual must remain unchanged")
+					if !tc.push {
+						require.Empty(t, indexNode.FilterList)
+						return
+					}
+					require.Len(t, indexNode.FilterList, 1)
+					var checkRefs func(*pb.Expr)
+					checkRefs = func(expr *pb.Expr) {
+						if ref := expr.GetCol(); ref != nil {
+							require.Equal(t, int32(20), ref.RelPos)
+							require.Contains(t, []int32{0, 1}, ref.ColPos)
+						}
+						if fn := expr.GetF(); fn != nil {
+							for _, arg := range fn.Args {
+								checkRefs(arg)
+							}
+						}
+					}
+					checkRefs(indexNode.FilterList[0])
+					// The index copy must not alias the retained base expression.
+					indexNode.FilterList[0].GetF().Args[0] = MakePlan2Int64ConstExprWithType(99)
+					require.True(t, proto.Equal(original, node.FilterList[0]))
+				})
+			}
+			// With no residual there is no map construction or allocation,
+			// regardless of the number of unrelated table columns.
+			node := &pb.Node{TableDef: table, BindingTags: []int32{10}, FilterList: []*pb.Expr{bind("=", col(2), MakePlan2Int64ConstExprWithType(2))}}
+			indexNode := &pb.Node{TableDef: idxTable, BindingTags: []int32{20}}
+			indices := []int32{0}
+			for _, width := range []int{len(table.Cols), 1000} {
+				for len(table.Cols) < width {
+					table.Cols = append(table.Cols, &pb.ColDef{})
+				}
+				require.Zero(t, testing.AllocsPerRun(10, func() { builder.applyExtraFiltersOnIndex(idx, node, indexNode, indices) }))
+			}
+		})
+	}
+}
+
+func TestIndexMappedExpressionDomain(t *testing.T) {
+	col := GetColExpr(pb.Type{Id: int32(types.T_int32)}, 10, 0)
+	mapping := map[[2]int32]*pb.Expr{{10, 0}: col}
+	for _, tc := range []struct {
+		name string
+		expr *pb.Expr
+		want bool
+	}{
+		{"constant list", &pb.Expr{Expr: &pb.Expr_List{List: &pb.ExprList{List: []*pb.Expr{MakePlan2Int64ConstExprWithType(1)}}}}, true},
+		{"column list", &pb.Expr{Expr: &pb.Expr_List{List: &pb.ExprList{List: []*pb.Expr{col}}}}, false},
+		{"correlated", &pb.Expr{Expr: &pb.Expr_Corr{Corr: &pb.CorrColRef{}}}, false},
+		{"subquery", &pb.Expr{Expr: &pb.Expr_Sub{Sub: &pb.SubqueryRef{}}}, false},
+		{"window", &pb.Expr{Expr: &pb.Expr_W{W: &pb.WindowSpec{}}}, false},
+		{"raw", &pb.Expr{Expr: &pb.Expr_Raw{Raw: &pb.RawColRef{}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, exprUsesOnlyMappedCols(tc.expr, mapping)) })
+	}
+}
+
+func TestIndexColumnMapRequiresCompleteValues(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	addPrimaryPrefixIndexTableForTest(mock)
+	builder := NewQueryBuilder(pb.Query_SELECT, &mock.ctxt, false, true)
+	table := mock.ctxt.tables["index_hint_t"]
+	table.Cols[2].Typ = pb.Type{Id: int32(types.T_varchar), Width: 16}
+	table.Cols[1].Typ = table.Cols[2].Typ
+	idx := table.Indexes[2]
+	idx.IndexAlgoParams = `{"prefix_lengths":"b:1"}`
+	node := &pb.Node{TableDef: table, BindingTags: []int32{10}}
+	idxTable := mock.ctxt.tables[idx.IndexTableName]
+	mapping, err := builder.regularIndexColumnMap(idx, node, 20, idxTable)
+	require.NoError(t, err)
+	require.NotContains(t, mapping, [2]int32{10, 2}, "a truncated index part is not a complete base value")
+	require.Contains(t, mapping, [2]int32{10, 0}, "the full primary key is still available")
+	require.Contains(t, mapping, [2]int32{10, 1}, "untruncated parts remain usable")
+	// A prefix on a PK component must use the complete stored PK instead.
+	idx.IndexAlgoParams = `{"prefix_lengths":"a:1"}`
+	mapping, err = builder.regularIndexColumnMap(idx, node, 20, idxTable)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), mapping[[2]int32{10, 1}].GetF().Args[0].GetCol().ColPos)
+	idx.IndexAlgoParams = `{bad json`
+	mapping, err = builder.regularIndexColumnMap(idx, node, 20, idxTable)
+	require.Error(t, err)
+	require.Nil(t, mapping)
 }

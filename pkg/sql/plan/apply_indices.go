@@ -285,27 +285,10 @@ func exprUsesOnlyMappedCols(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) bo
 		}
 		return true
 	case *plan.Expr_List:
-		for _, arg := range ne.List.List {
-			if !exprUsesOnlyMappedCols(arg, projMap) {
-				return false
-			}
-		}
-		return true
-	case *plan.Expr_W:
-		if !exprUsesOnlyMappedCols(ne.W.WindowFunc, projMap) {
-			return false
-		}
-		for _, arg := range ne.W.PartitionBy {
-			if !exprUsesOnlyMappedCols(arg, projMap) {
-				return false
-			}
-		}
-		for _, order := range ne.W.OrderBy {
-			if !exprUsesOnlyMappedCols(order.Expr, projMap) {
-				return false
-			}
-		}
-		return true
+		// replaceColumnsForExpr does not rewrite list elements.
+		return isRuntimeConstExpr(expr)
+	case *plan.Expr_W, *plan.Expr_Corr, *plan.Expr_Sub, *plan.Expr_Raw:
+		return false
 	default:
 		return true
 	}
@@ -1089,29 +1072,16 @@ func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, n
 	if len(idxTableDef.Cols) < 2 {
 		return -1, moerr.NewInternalErrorf(builder.GetContext(), "index table metadata for %s has invalid columns", idxDef.IndexName)
 	}
-	hiddenKey := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
-	colMap := make(map[[2]int32]*plan.Expr, len(idxDef.Parts))
-	for i, part := range idxDef.Parts {
-		colName := catalog.ResolveAlias(part)
-		colIdx, ok := node.TableDef.Name2ColIndex[colName]
-		if !ok {
-			continue
-		}
-		if colName == node.TableDef.Pkey.PkeyColName {
-			colMap[[2]int32{node.BindingTags[0], colIdx}] = GetColExpr(idxTableDef.Cols[1].Typ, idxTag, 1)
-		} else if len(idxDef.Parts) == 1 {
-			colMap[[2]int32{node.BindingTags[0], colIdx}] = DeepCopyExpr(hiddenKey)
-		} else {
-			mappedExpr, bindErr := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(hiddenKey), node.TableDef.Cols[colIdx].Typ, int64(i))
-			if bindErr != nil {
-				return -1, bindErr
-			}
-			colMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
-		}
+	colMap, err := builder.regularIndexColumnMap(idxDef, node, idxTag, idxTableDef)
+	if err != nil {
+		return -1, err
 	}
-	if idxDef.Unique {
-		pkIdx := node.TableDef.Name2ColIndex[node.TableDef.Pkey.PkeyColName]
-		colMap[[2]int32{node.BindingTags[0], pkIdx}] = GetColExpr(idxTableDef.Cols[1].Typ, idxTag, 1)
+	for key, count := range colRefCnt {
+		if key[0] == node.BindingTags[0] && count != 0 {
+			if _, ok := colMap[key]; !ok {
+				return -1, nil
+			}
+		}
 	}
 	newFilters := make([]*plan.Expr, len(node.FilterList))
 	for i, filter := range node.FilterList {
@@ -1670,67 +1640,86 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 	return nodeID
 }
 
+// regularIndexColumnMap describes the values available in a regular index scan.
+// Build it from index and primary-key parts, independently of base-table width.
+func (builder *QueryBuilder) regularIndexColumnMap(idxDef *IndexDef, node *plan.Node, idxTag int32, idxTable *plan.TableDef) (map[[2]int32]*plan.Expr, error) {
+	prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+	if err != nil {
+		return nil, err
+	}
+	colMap := make(map[[2]int32]*plan.Expr, len(idxDef.Parts)+len(node.TableDef.Pkey.Names))
+	baseTag := node.BindingTags[0]
+	pk := node.TableDef.Pkey
+	if pos, ok := node.TableDef.Name2ColIndex[pk.PkeyColName]; ok {
+		colMap[[2]int32{baseTag, pos}] = GetColExpr(idxTable.Cols[1].Typ, idxTag, 1)
+	}
+	for i, part := range idxDef.Parts {
+		name := catalog.ResolveAlias(part)
+		if prefixLengths[name] > 0 {
+			// A prefix key cannot represent the complete base value. A full
+			// PK component, if present, is mapped from the stored PK below.
+			continue
+		}
+		pos, ok := node.TableDef.Name2ColIndex[name]
+		if !ok {
+			continue
+		}
+		key := [2]int32{baseTag, pos}
+		if _, exists := colMap[key]; exists {
+			continue
+		}
+		value := GetColExpr(idxTable.Cols[0].Typ, idxTag, 0)
+		if len(idxDef.Parts) > 1 {
+			var err error
+			value, err = MakeSerialExtractExpr(builder.GetContext(), value, node.TableDef.Cols[pos].Typ, int64(i))
+			if err != nil {
+				return nil, err
+			}
+		}
+		colMap[key] = value
+	}
+	for i, name := range pk.Names {
+		pos, ok := node.TableDef.Name2ColIndex[name]
+		if !ok {
+			continue
+		}
+		key := [2]int32{baseTag, pos}
+		if _, exists := colMap[key]; exists {
+			continue
+		}
+		value := GetColExpr(idxTable.Cols[1].Typ, idxTag, 1)
+		if len(pk.Names) > 1 {
+			var err error
+			value, err = MakeSerialExtractExpr(builder.GetContext(), value, node.TableDef.Cols[pos].Typ, int64(i))
+			if err != nil {
+				return nil, err
+			}
+		}
+		colMap[key] = value
+	}
+	return colMap, nil
+}
+
 func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *plan.Node, idxTableNode *plan.Node, filterIdx []int32) {
-	for i := range node.FilterList {
-		// if already in filterIdx, continue
-		applied := false
-		for _, j := range filterIdx {
-			if i == int(j) {
-				applied = true
-			}
-		}
-		if applied {
+	var colMap map[[2]int32]*plan.Expr
+	for i, filter := range node.FilterList {
+		if slices.Contains(filterIdx, int32(i)) {
 			continue
 		}
-
-		fn := node.FilterList[i].GetF()
-		if fn == nil || len(fn.Args) < 2 {
-			continue
-		}
-		colArgIdx := 0
-		col := fn.Args[0].GetCol()
-		if col == nil {
-			col = fn.Args[1].GetCol()
-			colArgIdx = 1
-		}
-		if col == nil {
-			continue
-		}
-		for k := range idxDef.Parts {
-			colIdx := node.TableDef.Name2ColIndex[catalog.ResolveAlias(idxDef.Parts[k])]
-			if colIdx != col.ColPos {
-				continue
-			}
-			idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[0].Typ, idxTableNode.BindingTags[0], 0)
-			deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
-			newFilter := DeepCopyExpr(node.FilterList[i])
-			newFilter.GetF().Args[colArgIdx] = deserialExpr
-			idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
-			applied = true
-		}
-		if applied {
-			continue
-		}
-
-		if len(node.TableDef.Pkey.Names) == 1 {
-			if col.Name == node.TableDef.Pkey.PkeyColName {
-				idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[1].Typ, idxTableNode.BindingTags[0], 1)
-				newFilter := DeepCopyExpr(node.FilterList[i])
-				newFilter.GetF().Args[colArgIdx] = idxColExpr
-				idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
-			}
-		} else {
-			for k := range node.TableDef.Pkey.Names {
-				if col.Name == node.TableDef.Pkey.Names[k] {
-					idxColExpr := GetColExpr(idxTableNode.TableDef.Cols[1].Typ, idxTableNode.BindingTags[0], 1)
-					deserialExpr, _ := MakeSerialExtractExpr(builder.GetContext(), idxColExpr, fn.Args[colArgIdx].Typ, int64(k))
-					newFilter := DeepCopyExpr(node.FilterList[i])
-					newFilter.GetF().Args[colArgIdx] = deserialExpr
-					idxTableNode.FilterList = append(idxTableNode.FilterList, newFilter)
-					continue
-				}
+		if colMap == nil {
+			var err error
+			colMap, err = builder.regularIndexColumnMap(idxDef, node, idxTableNode.BindingTags[0], idxTableNode.TableDef)
+			if err != nil {
+				// Optional pushdown must not publish a partially constructed map.
+				return
 			}
 		}
+		// The base scan retains the original predicate. Only duplicate a stable
+		// predicate when every reference can be rewritten into the index scan.
+		if !exprUsesOnlyMappedCols(filter, colMap) || scalarAggregateDomainContainsVolatile(filter) {
+			continue
+		}
+		idxTableNode.FilterList = append(idxTableNode.FilterList, replaceColumnsForExpr(DeepCopyExpr(filter), colMap))
 	}
 }
 
@@ -2113,25 +2102,26 @@ func (builder *QueryBuilder) tryIndexOnlyScan(idxDef *IndexDef, node *plan.Node,
 	if e != nil {
 		panic(e)
 	}
-	builder.addNameByColRef(idxTag, idxTableDef)
-	leadingColExpr := GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
-
-	if numParts == 1 {
-		colIdx := node.TableDef.Name2ColIndex[idxDef.Parts[0]]
-		idxColMap[[2]int32{node.BindingTags[0], colIdx}] = leadingColExpr
-	} else {
-		for i := 0; i < numParts; i++ {
-			colName := catalog.ResolveAlias(idxDef.Parts[i])
-			colIdx := node.TableDef.Name2ColIndex[colName]
-			if colName == node.TableDef.Pkey.PkeyColName {
-				idxColMap[[2]int32{node.BindingTags[0], colIdx}] = GetColExpr(idxTableDef.Cols[1].Typ, idxTag, 1)
-			} else {
-				origType := node.TableDef.Cols[colIdx].Typ
-				mappedExpr, _ := MakeSerialExtractExpr(builder.GetContext(), DeepCopyExpr(leadingColExpr), origType, int64(i))
-				idxColMap[[2]int32{node.BindingTags[0], colIdx}] = mappedExpr
+	colMap, err := builder.regularIndexColumnMap(idxDef, node, idxTag, idxTableDef)
+	if err != nil {
+		return -1
+	}
+	for key, count := range colRefCnt {
+		if key[0] == node.BindingTags[0] && count > 0 {
+			if _, ok := colMap[key]; !ok {
+				return -1
 			}
 		}
 	}
+	for _, filter := range node.FilterList {
+		if !exprUsesOnlyMappedCols(filter, colMap) {
+			return -1
+		}
+	}
+	for key, expr := range colMap {
+		idxColMap[key] = expr
+	}
+	builder.addNameByColRef(idxTag, idxTableDef)
 
 	newLeadingFilter := builder.replaceLeadingFilter(idxDef, node.FilterList, leadingPos, leadingEqualCond, idxTag, idxTableDef)
 	newFilterList := make([]*plan.Expr, 0, len(node.FilterList))

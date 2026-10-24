@@ -250,4 +250,39 @@ select hex(s) from pk_prefix_bytes ignore index(idx_as) where a=1 and s='a';
 select hex(s) from pk_prefix_bytes where a=1 and s='a';
 select hex(s) from pk_prefix_bytes force index(idx_as) where a=1 and s='a';
 
+-- Residuals are pushed only when every column is available in the index.
+create table pk_prefix_residual(a int not null,id int not null,b int,payload int,
+  primary key(a,id),unique key uk_ab(a,b),key idx_b(b));
+insert into pk_prefix_residual values
+(1,1,2,100),(1,2,3,0),(1,3,4,null),(2,5,2,9);
+select payload from pk_prefix_residual where a=1 and b=2 and id<payload;
+select payload from pk_prefix_residual force index(uk_ab) where a=1 and b=2 and id<payload;
+select payload from pk_prefix_residual ignore index(uk_ab,idx_b) where a=1 and b=2 and id<payload;
+select payload from pk_prefix_residual where a=1 and b=2 and id<payload for update;
+select count(*) from pk_prefix_residual where a=1 and b=3 and id<payload;
+select count(*) from pk_prefix_residual where a=1 and b=4 and id<payload;
+select payload from pk_prefix_residual force index(idx_b) where b>=2 and b<3 and id<payload order by payload;
+select payload from pk_prefix_residual force index(uk_ab) where a=1 and b=2 and abs(id)<b+10;
+prepare residual_stmt from 'select payload from pk_prefix_residual where a=? and b=? and id<payload';
+set @res_a=1,@res_b=2;
+execute residual_stmt using @res_a,@res_b;
+set @res_b=3;
+execute residual_stmt using @res_a,@res_b;
+set @res_b=null;
+execute residual_stmt using @res_a,@res_b;
+set @res_b=2;
+execute residual_stmt using @res_a,@res_b;
+deallocate prepare residual_stmt;
+
+-- A prefix key is not the complete string, for projection or residuals.
+create table pk_prefix_truncated(id int primary key,b int,s varchar(8),payload int,key ix(b,s(1)));
+insert into pk_prefix_truncated values(1,2,'ab',100);
+select s from pk_prefix_truncated force index(ix) where b=2;
+select s from pk_prefix_truncated force index(ix) where b=2 and length(s)>1;
+select payload from pk_prefix_truncated force index(ix) where b=2 and length(s)>1;
+
+-- Keep an index survivor so an empty runtime filter cannot mask a lost row.
+insert into pk_prefix_truncated values(2,2,'a',200);
+select payload from pk_prefix_truncated force index(ix) where b=2 and (length(s)>1 or id=2) order by payload;
+
 drop database mysql_compat_index_hint;

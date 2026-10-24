@@ -87,3 +87,17 @@ base scan. No new persistent state or execution path is added. Serialized nonuni
 retain exact decoded string predicates: escaped NUL bytes can make the physical
 prefix a superset of SQL equality. 4.2 extends its existing residual predicate
 owner, preserving its NULL checks and integer fast path.
+
+Residual pushdown must map every reference in the entire predicate, including
+nested arguments and both sides of a column comparison. Covering scans and
+backfill filters share the regular-index column map: raw single-part keys,
+serialized complete index parts, and the stored primary key. Truncated prefix
+parts cannot represent the base column; covering projections and residuals
+requiring them must use backfill, unless the full value is in the stored PK. The map is bounded by index
+and primary-key width and is built only when an extra filter exists. Unmapped
+or foreign-table references, volatile expressions, and reference-bearing forms
+unsupported by the expression remapper stay on the base scan. Mapping failure
+abandons optional pushdown before publishing any filters. The original base
+predicate remains intact; the index copy cannot change SQL results. Regression
+coverage checks mixed-column predicates, nested mapped expressions, range
+access, NULL and prepared reuse against literal SQL result oracles.
