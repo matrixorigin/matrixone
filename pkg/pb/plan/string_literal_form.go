@@ -397,7 +397,7 @@ const (
 // TIMESTAMP identities; released unary identities retain TIMESTAMP vectors.
 // DynamicTimeResultContracts uses the same epoch for prepared TIME results
 // over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
-// IncompleteTemporalStrings requires MORPC v127 for raw-calendar string
+// IncompleteTemporalStrings requires MORPC v130 for raw-calendar string
 // overloads and incomplete-input rejection diagnostics.
 type RemoteExpressionFeatures struct {
 	JSONStringConsumerOverload    bool

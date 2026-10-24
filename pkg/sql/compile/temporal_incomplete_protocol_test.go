@@ -45,7 +45,7 @@ func TestIncompleteTemporalProtocolPlacementSendReceive(t *testing.T) {
 	require.True(t, features.IncompleteTemporalStrings)
 	require.True(t, features.DateNumericResultContracts)
 	require.False(t, features.WeekSessionDefault)
-	require.Equal(t, defines.MORPCVersion127, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion130, remoteExpressionProtocolVersion(features))
 	// A string DATE_ADD can also contain the upstream v115 interval normalizer.
 	// Preserve both requirements: a v117 worker supports only the latter.
 	interval := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_interval)}, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
@@ -59,10 +59,10 @@ func TestIncompleteTemporalProtocolPlacementSendReceive(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, combinedFeatures.IncompleteTemporalStrings)
 	require.True(t, combinedFeatures.CalendarIntervalNormalization)
-	require.Equal(t, defines.MORPCVersion127, remoteExpressionProtocolVersion(combinedFeatures))
+	require.Equal(t, defines.MORPCVersion130, remoteExpressionProtocolVersion(combinedFeatures))
 	floor, err := plan2.RequiredPersistedExpressionProtocolVersion(combined)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion127, floor)
+	require.Equal(t, defines.MORPCVersion130, floor)
 	// The upstream SELECT-division policy is execution-only and must compose
 	// with both temporal contracts without lowering their persisted floor.
 	c.proc.SetStmtProfile(&process.StmtProfile{})
@@ -133,16 +133,16 @@ func TestIncompleteTemporalProtocolPlacementSendReceive(t *testing.T) {
 	require.True(t, features.ViewMetadataFunctions)
 	floor, err = plan2.RequiredPersistedExpressionProtocolVersion(qry)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion127, floor)
-	require.Equal(t, defines.MORPCVersion127, executionRemoteExpressionProtocolVersion(c.proc, features))
+	require.Equal(t, defines.MORPCVersion130, floor)
+	require.Equal(t, defines.MORPCVersion130, executionRemoteExpressionProtocolVersion(c.proc, features))
 	c.proc.GetSessionInfo().SqlMode = ""
-	require.Equal(t, defines.MORPCVersion127, executionRemoteExpressionProtocolVersion(c.proc, features))
+	require.Equal(t, defines.MORPCVersion130, executionRemoteExpressionProtocolVersion(c.proc, features))
 	c.proc.GetSessionInfo().SqlMode = "ERROR_FOR_DIVISION_BY_ZERO"
 	op := projection.NewArgument()
 	defer op.Release()
 	op.ProjectList = expressions
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-	for _, version := range []int64{defines.MORPCVersion126, defines.MORPCVersion127} {
+	for _, version := range []int64{defines.MORPCVersion126, defines.MORPCVersion130} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
@@ -154,11 +154,11 @@ func TestIncompleteTemporalProtocolPlacementSendReceive(t *testing.T) {
 		}
 	}
 	// Every send must observe the actual destination, including a rollback after success.
-	for _, version := range []int64{defines.MORPCVersion127, defines.MORPCVersion126, defines.MORPCVersion127} {
+	for _, version := range []int64{defines.MORPCVersion130, defines.MORPCVersion126, defines.MORPCVersion130} {
 		client.version = version
 		data, sendErr := encodeRemoteScope(scope, c.proc)
 		if version == defines.MORPCVersion126 {
-			require.ErrorContains(t, sendErr, "version 127")
+			require.ErrorContains(t, sendErr, "version 130")
 			require.Nil(t, data)
 		} else {
 			require.NoError(t, sendErr)
@@ -174,12 +174,12 @@ func TestIncompleteTemporalProtocolPlacementSendReceive(t *testing.T) {
 	data, err := p.Marshal()
 	require.NoError(t, err)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	for _, version := range []any{nil, "127", defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion126} {
+	for _, version := range []any{nil, "130", defines.MORPCVersion126, defines.MORPCVersion130, defines.MORPCVersion126} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		decoded, decodeErr := decodeScope(data, c.proc, true, nil)
-		if version != defines.MORPCVersion127 {
+		if version != defines.MORPCVersion130 {
 			if version == defines.MORPCVersion126 {
-				require.ErrorContains(t, decodeErr, "version 127")
+				require.ErrorContains(t, decodeErr, "version 130")
 			} else {
 				// Unknown floors may fail an earlier independent gate first.
 				require.ErrorContains(t, decodeErr, "protocol version")
@@ -212,26 +212,26 @@ func TestIncompleteTemporalProtocolPlanAdmissionAndCachedRun(t *testing.T) {
 		require.NoError(t, err)
 		cached := &planpb.Plan{}
 		require.NoError(t, cached.Unmarshal(data))
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
 		require.NoError(t, validateIncompleteTemporalStringProtocol(c.proc, cached))
 		// Reuse the same logical generation after the effective floor rolls back.
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 		compile := &Compile{proc: c.proc, pn: cached}
-		require.ErrorContains(t, compile.Compile(context.Background(), cached, nil), "version 127")
+		require.ErrorContains(t, compile.Compile(context.Background(), cached, nil), "version 130")
 		_, err = compile.Run(0)
-		require.ErrorContains(t, err, "version 127")
-		for _, version := range []any{nil, "127", defines.MORPCVersion126} {
+		require.ErrorContains(t, err, "version 130")
+		for _, version := range []any{nil, "130", defines.MORPCVersion126} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-			require.ErrorContains(t, validateIncompleteTemporalStringProtocol(c.proc, cached), "version 127")
+			require.ErrorContains(t, validateIncompleteTemporalStringProtocol(c.proc, cached), "version 130")
 			required, err := plan2.RequiredPersistedExpressionProtocolVersion(owner)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion127, required)
-			require.ErrorContains(t, plan2.RequirePersistedExpressionProtocol(c.proc.Ctx, c.proc, owner), "version 127")
+			require.Equal(t, defines.MORPCVersion130, required)
+			require.ErrorContains(t, plan2.RequirePersistedExpressionProtocol(c.proc.Ctx, c.proc, owner), "version 130")
 		}
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
 		require.NoError(t, plan2.RequirePersistedExpressionProtocol(c.proc.Ctx, c.proc, owner))
 	}
-	require.ErrorContains(t, validateIncompleteTemporalStringProtocol(nil, expr), "version 127")
+	require.ErrorContains(t, validateIncompleteTemporalStringProtocol(nil, expr), "version 130")
 	typed, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "week", []*planpb.Expr{
 		{Typ: types.T_date.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}, plan2.MakePlan2Int64ConstExprWithType(3),
 	})

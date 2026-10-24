@@ -153,7 +153,7 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	// The Query RPC probe and the execution stream can reach different worker
 	// generations. Fence affected payloads on the bound stream as well.
 	if features.IncompleteTemporalStrings && requiredProtocol != nil {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion127)
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion130)
 	}
 	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
 		return nil, err
@@ -2421,8 +2421,8 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion122) {
 		return moerr.NewNotSupportedNoCtx("temporal result contracts require MORPC protocol version 122")
 	}
-	if features.IncompleteTemporalStrings && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion127) {
-		return moerr.NewNotSupportedNoCtx("incomplete temporal strings require MORPC protocol version 127")
+	if features.IncompleteTemporalStrings && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion130) {
+		return moerr.NewNotSupportedNoCtx("incomplete temporal strings require MORPC protocol version 130")
 	}
 	if features.DateNumericResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
 		return moerr.NewNotSupportedNoCtx("signed date result contracts require MORPC protocol version 112")

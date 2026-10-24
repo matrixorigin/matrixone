@@ -1,8 +1,8 @@
-# Incomplete temporal strings — revision 9
+# Incomplete temporal strings — revision 10
 
 Issue: #30234. Implementation: https://github.com/matrixorigin/matrixone/pull/30311.
 Status: revision 7 semantics were independently approved on 2026-10-18.
-Revision 9 updates the official successor epoch and preserves invalid-string conversion behavior; its
+Revision 10 updates the official successor epoch and preserves invalid-string conversion behavior; its
 implementation design was reviewed by gpt-6-astra / medium. Independent review
 of this revision remains external to this repair.
 
@@ -22,18 +22,21 @@ An older worker either lacks the new identity or produces different diagnostics.
 The existing signed WEEK result detector also misses new overloads 4 and 5,
 causing the folded-view admission regression in run 38751428918, attempt 1.
 
-Every expression using these contracts must require MORPC 127. Official main
-7038c8520e5fc1ba456914b3c389ccedb69e22f7 has latest version 126; the candidate
-is latest + 1 and must be recalculated if main changes before delivery.
+Every expression using these contracts must require MORPC 130. Official main
+91639500503a301742e0c84c8aa6c524f1e70792 has latest version 129; this PR
+appends the temporal protocol at latest + 1 (MORPC 130) and must be recalculated
+if main changes before delivery.
 Version 118 remains reserved for transactional database defaults and table charset alteration;
 version 119 remains reserved for coordinator-owned parameterized subquery programs.
 Official 120 KILL, 121 unsigned DECIMAL DIV, 122 TIMESTAMP/TIME contracts,
 123 nonblocking row locks, 124 fractional TIMESTAMPADD SECOND, 125 LOAD
-IGNORE FK diagnostics and 126 parser-derived view metadata retain their own gates. This PR appends only 127.
+IGNORE FK diagnostics, 126 parser-derived view metadata, 127 vector search knobs,
+128 mixed JSON/numeric comparisons and 129 JSON string-consumer identities retain
+their own gates. This PR appends only 130 for incomplete temporal strings.
 Official v115 CalendarIntervalNormalization remains independently detected and gated;
 Official v116 SELECT division warnings retain their execution-only floor;
 official v117 collation-aware LEAST/GREATEST ordering retains its own floor;
-expressions combining these capabilities require the maximum floor, 127.
+expressions combining these capabilities require the maximum floor, 130.
 Division warning policy does not add a persisted expression requirement.
 Independent signed-result and session-snapshot requirements remain intact.
 Typed temporal storage, global casts and released overload identities do not
@@ -52,15 +55,15 @@ one-argument WEEK 0/1/4 retains its session-snapshot feature.
 The existing planner observer records the maximum requirement before folding
 and persists it with VIEW SQL. Runtime and authoring floors reject unsupported
 persisted owners. Placement falls back to one CN when a peer cannot support
-127. Actual destination validation probes the Query RPC endpoint again for every
+130. Actual destination validation probes the Query RPC endpoint again for every
 send. That connection can reach a different worker generation from the execution
 connection. After variable folding and final pipeline encoding, affected fragments
-carry an execution requirement of max(existing vector requirement, 127). The
+carry an execution requirement of max(existing vector requirement, 130). The
 sender performs the existing protocol handshake on the very stream that will
 carry the pipeline, before sending any execution payload. Only a correctly
-identified terminal handshake response advertising at least 127 admits it; an
-old, unknown, malformed, closed or canceled stream fails closed. Query RPC 127
-with an execution peer at 126 therefore sends no pipeline payload. Receiver
+identified terminal handshake response advertising at least 130 admits it; an
+old, unknown, malformed, closed or canceled stream fails closed. Query RPC 130
+with an execution peer at 129 therefore sends no pipeline payload. Receiver
 validation rejects an insufficient or unknown floor before constructing
 operators. Compile and Run admission recheck the expression floor before pipeline
 initialization and operator Prepare, including cached executions after a protocol
@@ -73,17 +76,17 @@ cleanup owner; no stop-response wait is needed before a payload has started.
 ## Alternatives and rollout
 
 Broadening only the v112/v98 WEEK detectors fixes the assertion but allows
-pre-PR v126 workers to receive unknown overloads. Reusing typed overloads and
+pre-PR v129 workers to receive unknown overloads. Reusing typed overloads and
 encoding zero components in DATE/DATETIME would violate the storage contract.
 Disabling remote execution for all temporal functions would unnecessarily
 restrict unaffected typed expressions. A single additional expression feature
 uses the established version-floor mechanism with the smallest boundary.
 
-Upgrade all CN binaries before authoring these expressions at floor 127.
+Upgrade all CN binaries before authoring these expressions at floor 130.
 During mixed-version rollout, one-CN fallback is safe on the upgraded
-coordinator. A rollback of the effective floor to 126 rejects newly authored
+coordinator. A rollback of the effective floor to 129 rejects newly authored
 persisted expressions and cached affected pipelines before operator Prepare; existing
-typed WEEK expressions retain floor 112. Catalogs containing new floor-127
+typed WEEK expressions retain floor 112. Catalogs containing new floor-130
 owners require upgraded readers or removal/rebinding before binary downgrade;
 no automatic catalog rewrite or claim that an old binary enforces a future
 floor is made. Backup/restore preserves the existing owner metadata. Failures
@@ -103,16 +106,16 @@ are unchanged. No new SQL privilege or external trust boundary is introduced.
 
 Acceptance: serialized detection covers every affected identity plus typed and
 unknown-overload controls; one-argument string WEEK requires a captured default;
-folded VIEW authoring and persisted owners reject 126 and accept 127; typed
+folded VIEW authoring and persisted owners reject 129 and accept 130; typed
 WEEK still rejects 111 and accepts 112. Placement, actual send, receiver decode
-and Prepare accept 127 and reject its immediate predecessor. A production-bound
-projection with Query RPC 127 and execution peer 126 must perform one handshake
-and send no payload; peer 127 admits the payload on that same stream. Tests
+and Prepare accept 130 and reject its immediate predecessor. A production-bound
+projection with Query RPC 130 and execution peer 129 must perform one handshake
+and send no payload; peer 130 admits the payload on that same stream. Tests
 cover sender cleanup on rejection, malformed replies, send errors and cancellation,
 plus nested/folded pipelines and composition with vector floors, including rollback
 after an earlier success. A real-bound composition of string WEEK, calendar
 DATE_ADD, SELECT division and collation-aware LEAST retains all predicates;
-LEAST alone remains at 117 while the combined expression requires 127.
+LEAST alone remains at 117 while the combined expression requires 130.
 Run focused tests, owning packages and incremental
 static checks. Reuse the PR's passing BVT evidence for unchanged value semantics.
 The bounded feature predicates require no new cluster fixture. Measure the
@@ -127,15 +130,15 @@ is a minimum, not a maximum. TIME_FORMAT retains its existing bounds. The
 2020-00-00 / %v case must preserve 613566753 through CTAS and later INSERT,
 with catalog width 9; typed/literal/dynamic pattern controls remain covered.
 
-At official main 7038c8520e5fc1ba456914b3c389ccedb69e22f7 (MORPC126),
-list_builtIn.go blob 16b2c8a64c9f2f31be9de1814ae0e95f7c706a60 registers
+At official main 91639500503a301742e0c84c8aa6c524f1e70792 (MORPC129),
+list_builtIn.go blob 7d1eda6ac3a40c7b4b6b923d7aa11f168cdb1d67 registers
 DATE_FORMAT only 0/1, DATEDIFF and TO_DAYS/TO_SECONDS only 0, WEEK 0–3,
 and DAYOFWEEK 0–2. An AST inspection of that exact source verifies that all
 new string identities are absent and released overload 0 remains present.
-This source-qualified predecessor evidence is paired with 126-reject/127-accept
+This source-qualified predecessor evidence is paired with 129-reject/130-accept
 placement, persisted, send/stream and receive tests. It is not execution of an
 old binary or a claim that lowering the new binary's floor changes its registry.
-Independent 121/122/124/126 features retain their own floors and compose with 127.
+Independent 121/122/124/126/127/128/129 features retain their own floors and compose with 130.
 
 ## Integration with prepared metadata and catalog origins
 
@@ -156,11 +159,11 @@ never uses this context. Frozen generated-expression fixtures were captured
 on the historical 838cc78aa1efe46693876a48c05c202979047b7b / MORPC125
 source overlay, covering %Y-%m-%d, %X, %x and %v. Historical main numeric
 prepared SELECT/CTAS behavior was also checked through that overlay. These
-fixtures are distinct from the current 7038c852 / MORPC126 registry proof above.
+fixtures are distinct from the current 916395005 / MORPC129 registry proof above.
 
-Revision 9 conversion correction: malformed complete strings in DATE_FORMAT retain
+Revision 10 conversion correction: malformed complete strings in DATE_FORMAT retain
 normal expression-cast behavior (NULL without diagnostics), while raw incomplete
 calendars, zero-date SQL modes and fractional precision keep their existing rules.
 The six failing BVT inputs are regression controls; invalid rows must not abort
 valid neighbors or poison a reused prepared statement. View metadata alone keeps
-floor 126 and composition with temporal strings requires 127.
+floor 126 and composition with temporal strings requires 130.

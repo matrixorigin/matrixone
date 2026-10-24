@@ -732,7 +732,6 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					modes = append(modes, mode|tableDumpBindingDDLColumnScope)
 				}
 			}
-			}
 			// All session witnesses share the ordinary cancellation and total
 			// candidate-node budget. Only complete rebound trees can match.
 			var fatal error
