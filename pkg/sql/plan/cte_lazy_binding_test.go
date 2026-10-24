@@ -1170,7 +1170,7 @@ func TestCTEReuseRewritesConsumersInsideInlineCTE(t *testing.T) {
 	require.Equal(t, 1, lineitemScans)
 }
 
-func TestCTEReuseRejectsProducerContainingRecursiveCTE(t *testing.T) {
+func TestCTEIdentityIncludesProducerContainingRecursiveCTE(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	logicPlan, err := runOneStmt(mock, t, `with recursive r(n) as (
 		select 1
@@ -1190,7 +1190,8 @@ func TestCTEReuseRejectsProducerContainingRecursiveCTE(t *testing.T) {
 			cteSinks++
 		}
 	}
-	require.Equal(t, 0, cteSinks)
+	require.Equal(t, 2, cteSinks)
+	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_RECURSIVE_CTE))
 }
 
 func TestCTEMultiReferenceReuseGuards(t *testing.T) {
@@ -1212,7 +1213,18 @@ func TestCTEMultiReferenceReuseGuards(t *testing.T) {
 				select a.n_nationkey from c a join c b on a.n_nationkey = b.n_nationkey`,
 		},
 		{
-			name: "volatile producer",
+			name: "stable session reader remains no-fold",
+			sql: `with c as(select n_regionkey,max(row_count())x from nation group by n_regionkey)
+				select a.x from c a join c b on a.n_regionkey=b.n_regionkey`,
+		},
+		{
+			name: "stable JSON_TABLE keeps optional scan guard",
+			sql: `with c as(select x from json_table('[1,2,3]','$[*]' columns(x int path '$'))j)
+				select a.x from c a join c b on a.x=b.x`,
+		},
+		{
+			name:          "volatile producer",
+			wantSinkScans: 2,
 			sql: `with c as (
 				select n_regionkey, max(rand()) as r from nation group by n_regionkey
 			) select a.n_regionkey from c a join c b on a.n_regionkey = b.n_regionkey`,
@@ -1224,7 +1236,8 @@ func TestCTEMultiReferenceReuseGuards(t *testing.T) {
 			) select a.n_regionkey from c a join c b on a.n_regionkey = b.n_regionkey`,
 		},
 		{
-			name: "sample producer",
+			name:          "sample producer",
+			wantSinkScans: 2,
 			sql: `with c as (
 				select sample(total, 2 rows) as n from (
 					select l_suppkey, sum(l_extendedprice) as total

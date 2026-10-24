@@ -21,6 +21,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
@@ -563,6 +565,265 @@ func TestAlterCopyReplacementIndexBindings(t *testing.T) {
 	}
 }
 
+func TestAlterDropColumnRemovesDependentChecks(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		ddl     string
+		clause  string
+		want    []string
+		wantErr string
+	}{
+		{
+			name:   "check on the dropped column follows it",
+			ddl:    "create table check_t(id int primary key,v int,constraint ck_v check(v>0))",
+			clause: "drop column v",
+		},
+		{
+			name:   "unrelated check survives",
+			ddl:    "create table check_t(id int primary key,v int,w int,constraint ck_v check(v>0),constraint ck_w check(w>0))",
+			clause: "drop column v",
+			want:   []string{"ck_w"},
+		},
+		{
+			// MySQL auto-drops only CHECKs referencing the dropped column alone;
+			// a CHECK spanning other columns rejects the drop instead
+			// (prepare_check_constraints_for_alter, ER_DEPENDENT_BY_CHECK_CONSTRAINT).
+			name:    "multi column check referencing the dropped column rejects the drop",
+			ddl:     "create table check_t(id int primary key,v int,w int,constraint ck_mix check(v>0 and w>0),constraint ck_w check(w>0))",
+			clause:  "drop column v",
+			wantErr: "Check constraint 'ck_mix' uses column 'v'",
+		},
+		{
+			name:    "multi column check rejects dropping every referenced column together",
+			ddl:     "create table check_t(id int primary key,v int,w int,constraint ck_mix check(v>0 and w>0))",
+			clause:  "drop column v, drop column w",
+			wantErr: "Check constraint 'ck_mix' uses column 'v'",
+		},
+		{
+			name:    "function expression over kept columns still rejects the drop",
+			ddl:     "create table check_t(id int primary key,v int,w int,constraint ck_fn check(abs(v)+w>0))",
+			clause:  "drop column v",
+			wantErr: "Check constraint 'ck_fn' uses column 'v'",
+		},
+		{
+			name:   "checks on each dropped column follow them together",
+			ddl:    "create table check_t(id int primary key,v int,w int,constraint ck_v check(v>0),constraint ck_w check(w>0),constraint ck_id check(id>0))",
+			clause: "drop column v, drop column w",
+			want:   []string{"ck_id"},
+		},
+		{
+			name:   "function expression referencing the dropped column follows it",
+			ddl:    "create table check_t(id int primary key,v int,w int,constraint ck_fn check(abs(v)>0),constraint ck_w check(abs(w)>0))",
+			clause: "drop column v",
+			want:   []string{"ck_w"},
+		},
+		{
+			name:   "near name reference survives",
+			ddl:    "create table check_t(id int primary key,v int,v2 int,constraint ck_v2 check(v2>0))",
+			clause: "drop column v",
+			want:   []string{"ck_v2"},
+		},
+		{
+			name:   "re-added column does not resurrect the removed check",
+			ddl:    "create table check_t(id int primary key,v int,constraint ck_v check(v>0))",
+			clause: "drop column v, add column v int",
+		},
+		{
+			name:   "explicit co-drop after the column clause",
+			ddl:    "create table check_t(id int primary key,v int,constraint ck_v check(v>0))",
+			clause: "drop column v, drop check ck_v",
+		},
+		{
+			name:   "explicit co-drop before the column clause",
+			ddl:    "create table check_t(id int primary key,v int,constraint ck_v check(v>0))",
+			clause: "drop check ck_v, drop column v",
+		},
+		{
+			// The generic spelling resolves the same CHECK identity and must
+			// co-drop in either clause order, exactly like DROP CHECK above.
+			name:   "generic constraint co-drop after the column clause",
+			ddl:    "create table check_t(id int primary key,v int,constraint ck_v check(v>0))",
+			clause: "drop column v, drop constraint ck_v",
+		},
+		{
+			name:   "generic constraint co-drop before the column clause",
+			ddl:    "create table check_t(id int primary key,v int,constraint ck_v check(v>0))",
+			clause: "drop constraint ck_v, drop column v",
+		},
+		{
+			// The rename runs before the drop, so the CHECK follows its column
+			// to x; the re-added v is a fresh column. Dropping it must keep the
+			// constraint bound to the surviving x.
+			name:   "identity rename keeps the checked column constraint",
+			ddl:    "create table check_t(id int primary key,v int,constraint ck_v check(v>0))",
+			clause: "rename column v to x, add column v int, drop column v",
+			want:   []string{"ck_v"},
+		},
+		{
+			name:   "identity change keeps the checked column constraint",
+			ddl:    "create table check_t(id int primary key,v int,constraint ck_v check(v>0))",
+			clause: "change column v x int, add column v int, drop column v",
+			want:   []string{"ck_v"},
+		},
+		{
+			name:    "generated column dependency still rejects the drop",
+			ddl:     "create table check_t(id int primary key,v int,g int generated always as (v+1) stored,constraint ck_v check(v>0))",
+			clause:  "drop column v",
+			wantErr: "generated column 'g' depends on it",
+		},
+	} {
+		for _, legacy := range []bool{false, true} {
+			t.Run(test.name+map[bool]string{false: "/structured", true: "/legacy"}[legacy], func(t *testing.T) {
+				mock := newCheckAlterOptimizer(t, test.ddl)
+				source := mock.ctxt.tables["check_t"]
+				if legacy {
+					source.Checks = nil
+				}
+				before := proto.Clone(source).(*planpb.TableDef)
+				p, err := runOneStmt(mock, t, "alter table check_t "+test.clause)
+				if test.wantErr != "" {
+					require.ErrorContains(t, err, test.wantErr)
+					require.Equal(t, before, source)
+					return
+				}
+				require.NoError(t, err)
+				alter := p.GetDdl().GetAlterTable()
+				require.Equal(t, planpb.AlterTable_COPY, alter.AlgorithmType)
+				require.Len(t, alter.CopyTableDef.Checks, len(test.want))
+				for i, name := range test.want {
+					require.Equal(t, name, alter.CopyTableDef.Checks[i].Name)
+				}
+				// The serialized copy CREATE is exactly what the COPY executor
+				// replans and installs; it must bind against the final schema
+				// and carry precisely the surviving constraints.
+				rebuilt, err := runOneStmt(mock, t, alter.CreateTmpTableSql)
+				require.NoError(t, err, "copy DDL must replan: %s", alter.CreateTmpTableSql)
+				rebuiltChecks := rebuilt.GetDdl().GetCreateTable().TableDef.Checks
+				require.Len(t, rebuiltChecks, len(test.want))
+				for i, name := range test.want {
+					require.Equal(t, name, rebuiltChecks[i].Name)
+				}
+				if len(test.want) == 0 {
+					require.NotContains(t, alter.CreateTmpTableSql, "CHECK (")
+				}
+				require.Equal(t, before, source, "planning must not rewrite the catalog source")
+			})
+		}
+	}
+}
+
+func TestAlterDropColumnCheckNameMatchingBoundaries(t *testing.T) {
+	// A string literal or a qualified-looking token that only spells the
+	// column name inside a constant must not remove the constraint.
+	mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int,s varchar(20),constraint ck_s check(s <> 'v'))")
+	p, err := runOneStmt(mock, t, "alter table check_t drop column v")
+	require.NoError(t, err)
+	alter := p.GetDdl().GetAlterTable()
+	require.Len(t, alter.CopyTableDef.Checks, 1)
+	require.Equal(t, "ck_s", alter.CopyTableDef.Checks[0].Name)
+	rebuilt, err := runOneStmt(mock, t, alter.CreateTmpTableSql)
+	require.NoError(t, err)
+	require.Len(t, rebuilt.GetDdl().GetCreateTable().TableDef.Checks, 1)
+}
+
+func TestAlterDropColumnReleasesCheckNamesForReplacement(t *testing.T) {
+	// MySQL releases the name of an auto-dropped CHECK before admitting new
+	// constraints (prepare_check_constraints_for_alter consults
+	// dropped_cc_names), so a same-ALTER replacement succeeds in either clause
+	// order and binds against the post-drop schema.
+	for _, test := range []struct {
+		name    string
+		ddl     string
+		clause  string
+		want    []string
+		wantErr string
+	}{
+		{
+			name:   "replacement reuses the auto-dropped name",
+			ddl:    "create table check_t(id int primary key,v int,w int,constraint ck check(v>0))",
+			clause: "drop column v, add constraint ck check(w>0)",
+			want:   []string{"ck"},
+		},
+		{
+			name:   "release is independent of clause order",
+			ddl:    "create table check_t(id int primary key,v int,w int,constraint ck check(v>0))",
+			clause: "add constraint ck check(w>0), drop column v",
+			want:   []string{"ck"},
+		},
+		{
+			name:    "surviving names still reject the duplicate",
+			ddl:     "create table check_t(id int primary key,v int,w int,constraint ck_w check(w>0))",
+			clause:  "drop column v, add constraint ck_w check(w>0)",
+			wantErr: "duplicate check constraint name 'ck_w'",
+		},
+		{
+			name:    "multi column dependents are not released",
+			ddl:     "create table check_t(id int primary key,v int,w int,constraint ck check(v>0 and w>0))",
+			clause:  "drop column v, add constraint ck check(w>0)",
+			wantErr: "duplicate check constraint name 'ck'",
+		},
+		{
+			name:    "two replacement adds still collide",
+			ddl:     "create table check_t(id int primary key,v int,w int,constraint ck check(v>0))",
+			clause:  "drop column v, add constraint ck2 check(w>0), add constraint ck2 check(w>0)",
+			wantErr: "duplicate check constraint name 'ck2'",
+		},
+		{
+			// The old CHECK follows the rename to x and survives the drop, so
+			// its name was never released; a same-ALTER replacement must still
+			// fail the duplicate admission.
+			name:    "identity survival keeps the name taken",
+			ddl:     "create table check_t(id int primary key,v int,w int,constraint ck check(v>0))",
+			clause:  "rename column v to x, add column v int, drop column v, add constraint ck check(x>0)",
+			wantErr: "duplicate check constraint name 'ck'",
+		},
+		{
+			// Release resolves the identity at the drop clause: the rename
+			// redirected the CHECK to x, so dropping x auto-drops it and the
+			// replacement may take its name.
+			name:   "identity release follows the renamed checked column",
+			ddl:    "create table check_t(id int primary key,v int,w int,constraint ck check(v>0))",
+			clause: "rename column v to x, drop column x, add constraint ck check(w>0)",
+			want:   []string{"ck"},
+		},
+	} {
+		for _, legacy := range []bool{false, true} {
+			t.Run(test.name+map[bool]string{false: "/structured", true: "/legacy"}[legacy], func(t *testing.T) {
+				mock := newCheckAlterOptimizer(t, test.ddl)
+				source := mock.ctxt.tables["check_t"]
+				if legacy {
+					source.Checks = nil
+				}
+				before := proto.Clone(source).(*planpb.TableDef)
+				p, err := runOneStmt(mock, t, "alter table check_t "+test.clause)
+				if test.wantErr != "" {
+					require.ErrorContains(t, err, test.wantErr)
+					require.Equal(t, before, source)
+					return
+				}
+				require.NoError(t, err)
+				alter := p.GetDdl().GetAlterTable()
+				require.Equal(t, planpb.AlterTable_COPY, alter.AlgorithmType)
+				require.Len(t, alter.CopyTableDef.Checks, len(test.want))
+				for i, name := range test.want {
+					require.Equal(t, name, alter.CopyTableDef.Checks[i].Name)
+				}
+				// The replacement must bind against the post-drop schema: the
+				// serialized copy CREATE would fail to replan if the surviving
+				// CHECK still referenced the dropped column.
+				rebuilt, err := runOneStmt(mock, t, alter.CreateTmpTableSql)
+				require.NoError(t, err, "copy DDL must replan: %s", alter.CreateTmpTableSql)
+				rebuiltChecks := rebuilt.GetDdl().GetCreateTable().TableDef.Checks
+				require.Len(t, rebuiltChecks, len(test.want))
+				for i, name := range test.want {
+					require.Equal(t, name, rebuiltChecks[i].Name)
+				}
+				require.Equal(t, before, source, "planning must not rewrite the catalog source")
+			})
+		}
+	}
+}
+
 func TestAlterConstraintReplacementKeepsUniqueNamespace(t *testing.T) {
 	for _, clause := range []string{
 		"drop column v,add column v int,drop constraint u",
@@ -637,4 +898,107 @@ func TestAlterConstraintMergedIncludeBindingReleasesIndexName(t *testing.T) {
 			require.Equal(t, []string{"u"}, alter.CopyTableDef.Indexes[0].Parts)
 		})
 	}
+}
+
+func TestAlterDropColumnReplacementCheckBindsAuthoredColumn(t *testing.T) {
+	// Execution wraps the temporary COPY CREATE in WithAlterTableDDLReplay
+	// (pkg/sql/compile/alter.go). The persisted-expression replay preserves
+	// inherited CHECKs; a same-statement replacement was authored in this
+	// ALTER and must bind its own expression even when the dropped original
+	// shares its name and a positionally identical bound expression.
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "structured", true: "legacy"}[legacy], func(t *testing.T) {
+			mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int,w int,constraint ck check(v>0))")
+			source := mock.ctxt.tables["check_t"]
+			if legacy {
+				source.Checks = nil
+			}
+			before := proto.Clone(source).(*planpb.TableDef)
+			p, err := runOneStmt(mock, t, "alter table check_t drop column v, add column v int default 1, add constraint ck check(w>0)")
+			require.NoError(t, err)
+			alter := p.GetDdl().GetAlterTable()
+			parent, err := WithAlterTableDDLReplay(t.Context(), mock.ctxt.DefaultDatabase(), alter.TableDef, alter.CopyTableDef)
+			require.NoError(t, err)
+			mock.ctxt.SetContext(parent)
+			rebuilt, err := runOneStmt(mock, t, alter.CreateTmpTableSql)
+			require.NoError(t, err, "copy DDL must replan: %s", alter.CreateTmpTableSql)
+			def := rebuilt.GetDdl().GetCreateTable().TableDef
+			require.Len(t, def.Checks, 1)
+			require.Equal(t, "ck", def.Checks[0].Name)
+			positions := make(map[string]int32)
+			var visible int32
+			for _, col := range def.Cols {
+				if col.Hidden || col.Name == catalog.Row_ID {
+					continue
+				}
+				positions[col.Name] = visible
+				visible++
+			}
+			require.Equal(t, int32(3), visible)
+			// The rebuilt definition is (id, w, v): the replacement was
+			// authored over w and must bind w, never the recreated v.
+			ref := def.Checks[0].Check.GetF().GetArgs()[0].GetCol()
+			require.NotNil(t, ref)
+			require.Equal(t, positions["w"], ref.ColPos, "replacement CHECK must bind the authored column w")
+			require.Equal(t, before, source, "planning must not rewrite the catalog source")
+		})
+	}
+}
+
+func findCheckDivision(expr *planpb.Expr) *planpb.Expr {
+	if f := expr.GetF(); f != nil {
+		if id, _ := function.DecodeOverloadID(f.Func.Obj); id == function.DIV {
+			return expr
+		}
+		for _, arg := range f.Args {
+			if div := findCheckDivision(arg); div != nil {
+				return div
+			}
+		}
+	}
+	return nil
+}
+
+func TestAlterRenameRetainedCheckPreservesBoundPrecision(t *testing.T) {
+	// A CHECK retained through RENAME still belongs to the source definition:
+	// the persisted-expression replay must preserve its creation-time bound
+	// expression (decimal division scale fixed by div_precision_increment at
+	// CREATE), not rebind it under the session setting active when the COPY
+	// executes. Execution wraps the temporary CREATE in
+	// WithAlterTableDDLReplay (pkg/sql/compile/alter.go).
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	ddl := "create table check_t(id int primary key,a decimal(10,2),b decimal(10,2),v int,constraint ck check(a/b>0.3333333))"
+	createdStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, ddl, 1)
+	require.NoError(t, err)
+	defer createdStmt.Free()
+	created, err := BuildPlan(divPrecisionCompilerContext{CompilerContext: &mock.ctxt, increment: 10}, createdStmt, false)
+	require.NoError(t, err)
+	source := created.GetDdl().GetCreateTable().TableDef
+	source.TblId = 25387
+	source.Createsql = ddl
+	mock.ctxt.tables[source.Name] = source
+	mock.ctxt.objects[source.Name] = &ObjectRef{SchemaName: mock.ctxt.DefaultDatabase(), ObjName: source.Name}
+	require.Len(t, source.Checks, 1)
+	want := types.New(types.T_decimal128, 22, 12)
+	require.Equal(t, want, makeTypeByPlan2Expr(findCheckDivision(source.Checks[0].Check)),
+		"creation binding must use the creating session precision")
+
+	// The ALTER runs under the default increment; the replayed expression must
+	// not be rebound from the rewritten SQL text at this setting.
+	before := proto.Clone(source).(*planpb.TableDef)
+	p, err := runOneStmt(mock, t, "alter table check_t rename column a to x, drop column v")
+	require.NoError(t, err)
+	alter := p.GetDdl().GetAlterTable()
+	parent, err := WithAlterTableDDLReplay(t.Context(), mock.ctxt.DefaultDatabase(), alter.TableDef, alter.CopyTableDef)
+	require.NoError(t, err)
+	mock.ctxt.SetContext(parent)
+	rebuilt, err := runOneStmt(mock, t, alter.CreateTmpTableSql)
+	require.NoError(t, err, "copy DDL must replan: %s", alter.CreateTmpTableSql)
+	def := rebuilt.GetDdl().GetCreateTable().TableDef
+	require.Len(t, def.Checks, 1)
+	require.Equal(t, "ck", def.Checks[0].Name)
+	require.Contains(t, def.Checks[0].OriginSql, "x", "the declared text follows the rename")
+	require.Equal(t, want, makeTypeByPlan2Expr(findCheckDivision(def.Checks[0].Check)),
+		"renamed retained CHECK must keep its creation-time bound division scale")
+	require.Equal(t, before, source, "planning must not rewrite the catalog source")
 }

@@ -50,6 +50,51 @@ type replayedColumnExpressions struct {
 	generated   *planpb.GeneratedCol
 }
 
+// checkReferencesPreservedByColID reports whether every column a persisted
+// CHECK expression references still resolves by ColId in the COPY target.
+// Column identity separates a retained CHECK (its source columns survive,
+// renamed or not) from a same-name replacement whose original references were
+// dropped and would resolve only through a recreated name. Synthetic LIKE
+// columns can carry zero IDs; their declarations are unchanged in the
+// reconstructed skeleton, so their existing name resolution stays accepted.
+func checkReferencesPreservedByColID(expr *planpb.Expr, originalCols []*planpb.ColDef, originalIsCluster bool, targetByID map[uint64]*planpb.ColDef) bool {
+	preserved := true
+	var walk func(e *planpb.Expr)
+	walk = func(e *planpb.Expr) {
+		if e == nil || !preserved {
+			return
+		}
+		if ref := e.GetCol(); ref != nil && ref.RelPos == 0 {
+			if ref.ColPos < 0 || int(ref.ColPos) >= len(originalCols) {
+				preserved = false
+				return
+			}
+			oldCol := originalCols[ref.ColPos]
+			if oldCol == nil || oldCol.Hidden || oldCol.Name == catalog.Row_ID ||
+				(originalIsCluster && util.IsClusterTableAttribute(oldCol.GetOriginCaseName())) {
+				preserved = false
+				return
+			}
+			if oldCol.ColId != 0 && targetByID[oldCol.ColId] == nil {
+				preserved = false
+				return
+			}
+		}
+		if f := e.GetF(); f != nil {
+			for _, arg := range f.Args {
+				walk(arg)
+			}
+		}
+		if list := e.GetList(); list != nil {
+			for _, item := range list.List {
+				walk(item)
+			}
+		}
+	}
+	walk(expr)
+	return preserved
+}
+
 // WithPersistedDDLReplay scopes expression preservation to one reconstructed
 // CREATE, used by COPY ALTER and CREATE TABLE LIKE. It does not change the
 // ordinary CREATE path.
@@ -298,6 +343,17 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		}
 		newCheck := targetChecks[strings.ToLower(oldCheck.Name)]
 		if newCheck == nil || !proto.Equal(oldCheck.Check, newCheck.Check) {
+			continue
+		}
+		// Replay only a retained CHECK. RENAME and CHANGE rewrite its authored
+		// SQL but keep every referenced ColId, so its preserved bound
+		// expression remains correct and must not be rebound under the current
+		// session settings (for example div_precision_increment). A same-name
+		// replacement authored in this ALTER can reach the dropped column's
+		// name and bind a positionally identical expression over different
+		// columns; it must bind from its own declaration text below instead of
+		// replaying the old expression.
+		if !checkReferencesPreservedByColID(oldCheck.Check, original.Cols, originalIsCluster, targetByID) {
 			continue
 		}
 		if expr := copyExpr(oldCheck.Check, visiblePositions); expr != nil {

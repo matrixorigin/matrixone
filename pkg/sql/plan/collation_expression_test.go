@@ -678,6 +678,43 @@ func TestExpressionCollationResolution(t *testing.T) {
 	}
 }
 
+func TestImplicitSameCharsetTextBinWinsAcrossCollationRevisions(t *testing.T) {
+	ctx := context.Background()
+	unicode := expressionCollation{charset: uint32(types.CharsetUTF8MB4UnicodeCI), version: 1, rank: 2}
+	general := expressionCollation{charset: uint32(types.CharsetUTF8), rank: 2}
+	bin := expressionCollation{charset: uint32(types.CharsetUTF8MB4Bin), rank: 2}
+	for _, candidates := range [][]expressionCollation{
+		{unicode, bin}, {bin, unicode},
+		{unicode, general, bin}, {bin, general, unicode},
+	} {
+		selected, active, err := resolveExpressionCollation(ctx, "=", candidates)
+		require.NoError(t, err)
+		require.True(t, active)
+		require.Equal(t, bin, selected)
+	}
+
+	// An explicit conflict, a different charset, or two CI revisions cannot
+	// borrow the implicit same-charset _bin precedence.
+	_, _, err := resolveExpressionCollation(ctx, "=", []expressionCollation{
+		{charset: unicode.charset, version: 1, rank: 0},
+		{charset: bin.charset, rank: 0},
+	})
+	require.Error(t, err)
+	_, _, err = resolveExpressionCollation(ctx, "=", []expressionCollation{
+		{charset: uint32(types.CharsetUTF8MB3UnicodeCI), version: 1, rank: 2}, bin,
+	})
+	require.Error(t, err)
+	_, _, err = resolveExpressionCollation(ctx, "=", []expressionCollation{unicode, general})
+	require.Error(t, err)
+	selected, active, err := resolveExpressionCollation(ctx, "=", []expressionCollation{
+		{charset: unicode.charset, version: 1, rank: 0}, bin,
+	})
+	require.NoError(t, err)
+	require.True(t, active)
+	require.Equal(t, uint32(types.CharsetUTF8MB4UnicodeCI), selected.charset)
+	require.Equal(t, uint32(1), selected.version)
+}
+
 func TestExpressionCollationVectorAndReuse(t *testing.T) {
 	proc := newPlanTestProcess(t)
 	for _, nullable := range []bool{false, true} {

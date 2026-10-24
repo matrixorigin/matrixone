@@ -435,6 +435,13 @@ func DropColumn(
 		return column.Primary, err
 	}
 
+	// The COPY CREATE could not resolve CHECK expressions naming the dropped
+	// column otherwise; MySQL drops or rejects them at this clause
+	// (prepare_check_constraints_for_alter).
+	if err := handleDropColumnWithCheck(ctx, colName, tableDef); err != nil {
+		return column.Primary, err
+	}
+
 	if err := handleDropColumnPosition(ctx.GetContext(), tableDef, column); err != nil {
 		return column.Primary, err
 	}
