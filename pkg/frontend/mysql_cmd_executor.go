@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -565,7 +566,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			if i != 0 {
 				sqlBuilder.WriteString(", ")
 			}
-			sqlBuilder.WriteString(fmt.Sprintf("row('%s', '%s')", dbName, tblName))
+			sqlBuilder.WriteString(fmt.Sprintf("row(%s, %s)", sqlquote.String(dbName), sqlquote.String(tblName)))
 		}
 		sqlBuilder.WriteString(") as tmp(db, tbl)")
 
@@ -604,7 +605,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			if i != 0 {
 				sqlBuilder.WriteString(", ")
 			}
-			sqlBuilder.WriteString(fmt.Sprintf("row('%s', '%s')", dbName, tblName))
+			sqlBuilder.WriteString(fmt.Sprintf("row(%s, %s)", sqlquote.String(dbName), sqlquote.String(tblName)))
 		}
 		sqlBuilder.WriteString(") as tmp(db, tbl)")
 		rets, err := ExeSqlInBgSes(ctx, bh, sqlBuilder.String())
