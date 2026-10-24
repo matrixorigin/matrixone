@@ -405,7 +405,7 @@ func TestPreparedTimeArithmeticFallbackPreservesIntegerBoundary(t *testing.T) {
 							strings.ReplaceAll(tc.expression, "?", "cast("+value+" as "+castType+")"))
 						require.NoError(t, err)
 						expected := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
-						require.Equal(t, expected.Typ.Id, actual.Typ.Id)
+						require.Equal(t, expected.Typ.Id, actual.Typ.Id, "expected=%s actual=%s", expected.String(), actual.String())
 						require.Equal(t, expected.Typ.Width, actual.Typ.Width)
 						require.Equal(t, expected.Typ.Scale, actual.Typ.Scale)
 						want, wantErr := eval(expected)
@@ -594,15 +594,15 @@ func TestPreparedTimeArithmeticPreservesNullEnvelope(t *testing.T) {
 		{name: "left null", values: []any{
 			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
 			ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
-		}, width: 65, id: types.T_decimal256},
+		}, width: 40, id: types.T_decimal256},
 		{name: "right null", values: []any{
 			ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamInteger},
 			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
-		}, width: 65, id: types.T_decimal256},
+		}, width: 40, id: types.T_decimal256},
 		{name: "both null", values: []any{
 			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
 			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
-		}, width: 65, id: types.T_decimal256},
+		}, width: 40, id: types.T_decimal256},
 		{name: "both integers", values: []any{
 			ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamInteger},
 			ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
@@ -638,7 +638,7 @@ func TestPreparedTimeArithmeticPreservesNullEnvelopeThroughAbs(t *testing.T) {
 	require.NoError(t, err)
 	expr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
-	require.Equal(t, int32(65), expr.Typ.Width)
+	require.Equal(t, int32(40), expr.Typ.Width)
 	require.Equal(t, int32(0), expr.Typ.Scale)
 	require.False(t, expr.Typ.NotNullable)
 }
@@ -737,7 +737,7 @@ func TestPreparedTimeArithmeticPreservesExplicitDecimalAndNestedDomains(t *testi
 	require.NoError(t, err)
 	ordinaryExpr := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal128), ordinaryExpr.Typ.Id)
-	require.Equal(t, int32(38), ordinaryExpr.Typ.Width)
+	require.Equal(t, int32(22), ordinaryExpr.Typ.Width)
 	require.Equal(t, int32(2), ordinaryExpr.Typ.Scale)
 
 	prepared, err := runOneStmt(mock, t,

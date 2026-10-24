@@ -73,35 +73,35 @@ func TestCOMStmtPreparedTimeArithmeticRebindsDecodedNumericTypes(t *testing.T) {
 			packet: func() []byte {
 				return buildLongLongExecutePacket(10, false)
 			},
-			wantType: types.T_decimal128, wantWidth: 38, wantScale: 0, wantValue: "10",
+			wantType: types.T_decimal128, wantWidth: 36, wantScale: 0, wantValue: "10",
 		},
 		{
 			name: "newdecimal high scale",
 			packet: func() []byte {
 				return buildStringExecutePacket(proto, defines.MYSQL_TYPE_NEWDECIMAL, "1.2345678901234")
 			},
-			wantType: types.T_decimal128, wantWidth: 38, wantScale: 13, wantValue: "1.2345678901234",
+			wantType: types.T_decimal128, wantWidth: 32, wantScale: 13, wantValue: "1.2345678901234",
 		},
 		{
 			name: "newdecimal lower scale",
 			packet: func() []byte {
 				return buildStringExecutePacket(proto, defines.MYSQL_TYPE_NEWDECIMAL, "1.25")
 			},
-			wantType: types.T_decimal128, wantWidth: 38, wantScale: 2, wantValue: "1.25",
+			wantType: types.T_decimal128, wantWidth: 21, wantScale: 2, wantValue: "1.25",
 		},
 		{
 			name: "null resets to prepare domain",
 			packet: func() []byte {
 				return buildNullExecutePacket(defines.MYSQL_TYPE_NULL)
 			},
-			wantType: types.T_decimal128, wantWidth: 38, wantScale: 0, wantNull: true,
+			wantType: types.T_decimal128, wantWidth: 36, wantScale: 0, wantNull: true,
 		},
 		{
 			name: "integer after decimal",
 			packet: func() []byte {
 				return buildLongLongExecutePacket(10, false)
 			},
-			wantType: types.T_decimal128, wantWidth: 38, wantScale: 0, wantValue: "10",
+			wantType: types.T_decimal128, wantWidth: 36, wantScale: 0, wantValue: "10",
 		},
 		{
 			name: "unsigned multiplication keeps wide domain",
@@ -271,7 +271,7 @@ func TestCOMStmtPreparedTimeArithmeticPreservesExplicitDecimalBoundary(t *testin
 			queryPlan := runtimePlan.GetQuery()
 			project := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList[0]
 			require.Equal(t, types.T_decimal128, types.T(project.Typ.Id))
-			require.Equal(t, int32(38), project.Typ.Width)
+			require.Equal(t, int32(22), project.Typ.Width)
 			require.Equal(t, int32(2), project.Typ.Scale)
 			executor, err := colexec.NewExpressionExecutor(cw.proc, project)
 			require.NoError(t, err)

@@ -115,11 +115,11 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 			defer cleanupCancel()
 			_, _ = conn.ExecContext(cleanupCtx, statement)
 		}
-		queryText := func(statement, want string, wantNull bool, scale int64) {
+		queryText := func(statement, want string, wantNull bool, precision, scale int64) {
 			t.Helper()
 			rows, err := conn.QueryContext(ctx, statement)
 			require.NoError(t, err, statement)
-			assertPreparedTimeResult(t, rows, want, wantNull, 38, scale)
+			assertPreparedTimeResult(t, rows, want, wantNull, precision, scale)
 		}
 		queryDecimal64Text := func(statement, want string) {
 			t.Helper()
@@ -214,20 +214,21 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 			assignment string
 			want       string
 			wantNull   bool
+			precision  int64
 			scale      int64
 		}{
-			{assignment: "cast(10 as signed)", want: "10", scale: 0},
-			{assignment: "cast(1.2345678901234 as decimal(14,13))", want: "1.2345678901234", scale: 13},
-			{assignment: "cast(1.25 as decimal(3,2))", want: "1.25", scale: 2},
-			{assignment: "null", wantNull: true, scale: 0},
-			{assignment: "(null)", wantNull: true, scale: 0},
-			{assignment: "@issue28963_time_value", wantNull: true, scale: 0},
-			{assignment: "cast(null as decimal(3,2))", wantNull: true, scale: 2},
-			{assignment: "cast(10 as signed)", want: "10", scale: 0},
+			{assignment: "cast(10 as signed)", want: "10", precision: 36, scale: 0},
+			{assignment: "cast(1.2345678901234 as decimal(14,13))", want: "1.2345678901234", precision: 32, scale: 13},
+			{assignment: "cast(1.25 as decimal(3,2))", want: "1.25", precision: 21, scale: 2},
+			{assignment: "null", wantNull: true, precision: 36, scale: 0},
+			{assignment: "(null)", wantNull: true, precision: 36, scale: 0},
+			{assignment: "@issue28963_time_value", wantNull: true, precision: 36, scale: 0},
+			{assignment: "cast(null as decimal(3,2))", wantNull: true, precision: 21, scale: 2},
+			{assignment: "cast(10 as signed)", want: "10", precision: 36, scale: 0},
 		} {
 			exec("set @issue28963_time_value = " + tc.assignment)
 			queryText("execute issue28963_time_sql using @issue28963_time_value",
-				tc.want, tc.wantNull, tc.scale)
+				tc.want, tc.wantNull, tc.precision, tc.scale)
 		}
 
 		// Arithmetic converts typed string NULL at its consumer, preserving the
@@ -301,16 +302,16 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 		}()
 		exec("set @issue28963_time_value = cast(10 as signed)")
 		queryText("execute issue28963_time_sql_fractional using @issue28963_time_value",
-			"304051.234560", false, 6)
+			"304051.234560", false, 36, 6)
 		exec("set @issue28963_time_value = cast(1.25 as decimal(3,2))")
 		queryText("execute issue28963_time_sql_fractional using @issue28963_time_value",
-			"38006.40432000", false, 8)
+			"38006.40432000", false, 21, 8)
 
 		// Keep ordinary expressions as controls for both result domains.
 		queryText("select cast('00:00:01' as time(0)) * cast(1.2345678901234 as decimal(14,13)) as result",
-			"1.2345678901234", false, 13)
+			"1.2345678901234", false, 32, 13)
 		queryText("select cast('03:04:05.123456' as time(6)) * cast(1.25 as decimal(3,2)) as result",
-			"38006.40432000", false, 8)
+			"38006.40432000", false, 21, 8)
 
 		// database/sql with interpolateParams=false uses the binary protocol.
 		// The same *sql.Stmt is deliberately reused across integer, DOUBLE,
@@ -350,7 +351,7 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 				if tc.isDouble {
 					assertPreparedTimeDoubleResult(t, rows, 38006.40432)
 				} else {
-					assertPreparedTimeResult(t, rows, tc.want, tc.wantNull, 38, tc.scale)
+					assertPreparedTimeResult(t, rows, tc.want, tc.wantNull, 36, tc.scale)
 				}
 			})
 		}
@@ -464,7 +465,7 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 			} {
 				rows, err := stmt.QueryContext(ctx, tc.value)
 				require.NoError(t, err)
-				assertPreparedTimeResult(t, rows, tc.want, false, 38, 2)
+				assertPreparedTimeResult(t, rows, tc.want, false, 22, 2)
 			}
 		})
 

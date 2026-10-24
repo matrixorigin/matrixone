@@ -7216,7 +7216,7 @@ func refreshPreparedPlanProjectionExprType(
 			rebound, err = appendIntegerArgument(ctx, rebindArgs[0], target, false)
 		}
 		if rebound == nil && err == nil {
-			rebound, err = bindPreparedFuncExprImplByPlanExpr(ctx, expr, functionName, rebindArgs, nil)
+			rebound, err = bindPreparedFuncExprImplByPlanExpr(ctx, expr, functionName, rebindArgs, nil, nil)
 		}
 		if err != nil {
 			return false, err
