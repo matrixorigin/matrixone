@@ -2128,6 +2128,9 @@ func Test_BuiltIn_DynamicRegexpPatternCacheOwnsKeys(t *testing.T) {
 			)
 			defer tcc.Free()
 
+			// 先经生产入口建立惰性缓存，再设置原有的借用键碰撞反例。
+			_, err := op.regMap.getRegularMatcher("sentinel")
+			require.NoError(t, err)
 			pattern, _ := vector.GenerateFunctionStrParameter(tcc.parameters[1]).GetStrValue(0)
 			collision := findRegexpCacheHashCollision(t, op.regMap.mp, pattern)
 			copy(pattern, "aaaa")

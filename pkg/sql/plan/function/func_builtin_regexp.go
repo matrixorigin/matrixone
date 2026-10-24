@@ -49,12 +49,7 @@ type opBuiltInRegexp struct {
 }
 
 func newOpBuiltInRegexp() *opBuiltInRegexp {
-	return &opBuiltInRegexp{
-		regMap: regexpSet{
-			mp:  make(map[regexpCacheKey]*regexp.Regexp, mapSizeForRegexp),
-			icu: make(map[regexpCacheKey]*regexp2Matcher, mapSizeForRegexp),
-		},
-	}
+	return &opBuiltInRegexp{}
 }
 
 func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -2104,6 +2099,9 @@ func (rs *regexpSet) getRegularMatcherInfoForKey(key regexpCacheKey) (*regexp.Re
 		parsed, parseErr := syntax.Parse(expression, syntax.Perl)
 		if parseErr != nil {
 			return nil, false, parseErr
+		}
+		if rs.mp == nil {
+			rs.mp = make(map[regexpCacheKey]*regexp.Regexp, mapSizeForRegexp)
 		}
 		if rs.mayMatchEmpty == nil {
 			rs.mayMatchEmpty = make(map[regexpCacheKey]bool, mapSizeForRegexp)
