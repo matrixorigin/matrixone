@@ -1,7 +1,7 @@
 # Native exact weighted percentiles with window support
 
 Owning issue: matrixone/matrixone#29944 (kind/feature).
-Implementation PR: to be linked here before implementation delivery.
+Implementation PR: matrixone/matrixone#31000.
 Revision: 5 (2026-10-23; design revision after the independent design review's
 fourth REQUEST_CHANGES; revision 4, SHA256 9f02eeeedb217c52758b34919c3757c8ae82e7e938a174f0649311484dedd129, was
 otherwise supported — typed weight admission, destination verification,
@@ -87,12 +87,40 @@ Revision log:
   only on error; on success their ownership transfers to the caller, which
   retains, reads, and releases them through its own consumer cleanup. The
   validation plan gains an ownership witness for that transfer.
+- Post-approval annotation (2026-10-24; documentation change only, not a
+  design revision): the Status section below now records the independent
+  design review's final decision — PASS for revision 5, whose reviewed
+  content is identified by SHA256
+  b2705c13ab4d3f9965ab3d83a6f3e4a83d3426e4ffefdcdc8b6713864c69e083 — in
+  place of the pre-review "pending" wording, and the header links
+  implementation PR #31000. No reviewed decision, invariant, or validation
+  plan changed in this annotation; the approved revision-5 bytes remain
+  byte-preserved in the commit that first delivered this document
+  (`60d88ff6adb4ae6ea9e1ba0946ee82bc61f26ea7`, inside PR #31000), so the
+  reviewed content stays verifiable against the recorded hash.
 
 ## Status
 
-Proposed, pending independent design review. This document is the review
-artifact required by the feature-design gate; implementation is blocked until
-this revision (or a successor) is approved.
+Approved by the mandatory independent design review on 2026-10-24: decision
+PASS for revision 5, whose reviewed content (SHA256
+b2705c13ab4d3f9965ab3d83a6f3e4a83d3426e4ffefdcdc8b6713864c69e083)
+was verified by the reviewer against the inspected code. The review was
+performed by an independent review session (separate from the
+implementation work) under this repository's contract
+`.agents/skills/mo-dev/references/feature-design-review.md`, design-only,
+with implementation blocked throughout: revisions 1–4 each returned
+REQUEST_CHANGES (every blocker and its resolution is recorded in the
+revision log above), and each successor revision was re-reviewed before the
+final decision — "Numerical semantics, typed saved state, destination
+protocol gates and corrected output ownership are coherent with the
+inspected code. No blocking design findings remain." One non-blocking P3
+(exercise executor destruction before retained-result reads) was carried
+into the implementation's window UT. The subsequent implementation review
+reused this recorded approval and found no deviation from it. This
+document is the review artifact required by the feature-design gate, with
+the approved revision identified above and preserved byte-for-byte in the
+introducing commit recorded in the revision log; implementation is
+delivered in PR matrixone/matrixone#31000.
 
 ## Classification
 
