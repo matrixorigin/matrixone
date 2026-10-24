@@ -823,6 +823,45 @@ func TestResolveInt64VariableNilFallsBackToDefault(t *testing.T) {
 	require.Error(t, err)
 }
 
+// resolveFloat64Variable backs the fulltext2_search_df_cutoff (a DOUBLE session var):
+// nil falls back to the default, a float64 passes through, an int64 widens, and any
+// other type / a resolver error surfaces an error instead of panicking.
+func TestResolveFloat64VariableTypes(t *testing.T) {
+	baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	var value any
+	var resolveErr error
+	mockCtx := &customMockCompilerContext{
+		MockCompilerContext: baseMockCtx,
+		resolveVarFunc: func(string, bool, bool) (interface{}, error) {
+			return value, resolveErr
+		},
+	}
+	builder := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
+
+	value = nil
+	got, err := builder.resolveFloat64Variable("fulltext2_search_df_cutoff", 0)
+	require.NoError(t, err)
+	require.Equal(t, float64(0), got)
+
+	value = 0.5
+	got, err = builder.resolveFloat64Variable("fulltext2_search_df_cutoff", 0)
+	require.NoError(t, err)
+	require.Equal(t, 0.5, got)
+
+	value = int64(1)
+	got, err = builder.resolveFloat64Variable("fulltext2_search_df_cutoff", 0)
+	require.NoError(t, err)
+	require.Equal(t, float64(1), got)
+
+	value = "0.5"
+	require.NotPanics(t, func() { _, err = builder.resolveFloat64Variable("fulltext2_search_df_cutoff", 0) })
+	require.Error(t, err)
+
+	value, resolveErr = nil, moerr.NewInternalError(context.Background(), "test error")
+	_, err = builder.resolveFloat64Variable("fulltext2_search_df_cutoff", 0)
+	require.Error(t, err)
+}
+
 func TestHnswIndexCoversSnapshotGuards(t *testing.T) {
 	scan := &plan.Node{TableDef: &plan.TableDef{TblId: 1}}
 	idx := &plan.IndexDef{IndexName: "idx_hnsw"}
