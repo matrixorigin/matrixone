@@ -331,7 +331,7 @@ select col2 / col1 from time01;
 117979.5000  𝄀
 null
 select col1 * col2 from time01;
-➤ col1 * col2[3,38,0]  𝄀
+➤ col1 * col2[3,36,0]  𝄀
 122059  𝄀
 471918  𝄀
 null
