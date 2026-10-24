@@ -1,7 +1,8 @@
 # Configure existing ISCP cadences for CI
 
 Revision: 1. Owner: #29249. Implementation series:
-`codex/ut-bvt-quality-20261023` (PR link to be added when published).
+[#31021](https://github.com/matrixorigin/matrixone/pull/31021)
+(`codex/ut-bvt-quality-20261023`).
 
 ## Problem and evidence
 
