@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
@@ -595,6 +596,9 @@ type vectorMatmulState struct {
 	entries []vectorMatmulEntry // q*k; heap of query j at [j*k, j*k+counts[j])
 	arena   []byte              // used prefix [0, used)
 	used    int
+	// order is q*k entry indices, sorted by arena span for compaction and merge;
+	// allocated on first use.
+	order []uint32
 	// pending is the id text of this group's rows waiting in the GPU tile; preflight
 	// reserves arena space for it.
 	pending    int
@@ -681,33 +685,53 @@ func (s *vectorMatmulState) insert(j int, e vectorMatmulEntry) {
 	}
 }
 
+// spanOrder returns the indices of src's live entries sorted by arena span, in s.order.
+func (s *vectorMatmulState) spanOrder(src *vectorMatmulState) ([]uint32, error) {
+	if s.q*s.k == 0 {
+		return nil, nil
+	}
+	if s.order == nil {
+		order, err := makeAccountedScratch[uint32](s.allocation, s.mp, s.q*s.k)
+		if err != nil {
+			return nil, err
+		}
+		s.order = order
+	}
+	order := s.order[:0]
+	for j := 0; j < src.q; j++ {
+		for i := 0; i < int(src.counts[j]); i++ {
+			order = append(order, uint32(j*src.k+i))
+		}
+	}
+	slices.SortFunc(order, func(a, b uint32) int {
+		x, y := src.entries[a], src.entries[b]
+		if c := cmp.Compare(x.off, y.off); c != 0 {
+			return c
+		}
+		return cmp.Compare(x.n, y.n)
+	})
+	return order, nil
+}
+
 // compact moves the referenced id text to the front of the arena in offset order.
-func (s *vectorMatmulState) compact() {
-	var refs []vectorMatmulSpan
-	seen := make(map[vectorMatmulSpan]struct{})
-	for j := 0; j < s.q; j++ {
-		for _, e := range s.hits(j) {
-			if _, ok := seen[e.span()]; !ok {
-				seen[e.span()] = struct{}{}
-				refs = append(refs, e.span())
-			}
-		}
+func (s *vectorMatmulState) compact() error {
+	order, err := s.spanOrder(s)
+	if err != nil {
+		return err
 	}
-	slices.SortFunc(refs, func(a, b vectorMatmulSpan) int { return int(a.off) - int(b.off) })
-	moved := make(map[vectorMatmulSpan]uint32, len(refs))
-	w := 0
-	for _, r := range refs {
-		copy(s.arena[w:], s.arena[r.off:r.off+r.n])
-		moved[r] = uint32(w)
-		w += int(r.n)
-	}
-	for j := 0; j < s.q; j++ {
-		h := s.hits(j)
-		for i := range h {
-			h[i].off = moved[h[i].span()]
+	w, off := 0, uint32(0)
+	var last vectorMatmulSpan
+	for i, idx := range order {
+		e := &s.entries[idx]
+		if sp := e.span(); i == 0 || sp != last {
+			copy(s.arena[w:], s.arena[sp.off:sp.off+sp.n])
+			last, off = sp, uint32(w)
+			w += int(sp.n)
 		}
+		e.off = off
 	}
 	s.used = w
+	return nil
 }
 
 // reserve makes room for extra more arena bytes, compacting before growing.
@@ -715,7 +739,11 @@ func (s *vectorMatmulState) reserve(extra int) error {
 	if s.used+extra <= len(s.arena) {
 		return nil
 	}
-	s.compact()
+	if s.used > 0 {
+		if err := s.compact(); err != nil {
+			return err
+		}
+	}
 	need := s.used + extra
 	if need <= len(s.arena) {
 		return nil
@@ -797,27 +825,34 @@ func (s *vectorMatmulState) Merge(other *vectorMatmulState) error {
 	if other.q != s.q || other.k != s.k {
 		return moerr.NewInvalidInputNoCtx("vector_matmul: cannot merge different query configurations")
 	}
-	// reserve up front: a compaction inside the loop would move offsets cached in moved
+	// reserve up front: a compaction inside the loop would move the cached offsets
 	if err := s.reserve(other.used); err != nil {
 		return err
 	}
-	moved := make(map[vectorMatmulSpan]uint32)
-	for j := 0; j < other.q; j++ {
-		for _, e := range other.hits(j) {
-			id := other.id(e)
-			if !s.admits(j, e.score, id) {
-				continue
-			}
-			off, ok := moved[e.span()]
-			if !ok {
-				var err error
-				if off, err = s.appendID(id); err != nil {
-					return err
-				}
-				moved[e.span()] = off
-			}
-			s.insert(j, vectorMatmulEntry{score: e.score, off: off, n: e.n})
+	order, err := s.spanOrder(other)
+	if err != nil {
+		return err
+	}
+	var last vectorMatmulSpan
+	off := int64(-1)
+	for i, idx := range order {
+		e := other.entries[idx]
+		if sp := e.span(); i == 0 || sp != last {
+			last, off = sp, -1
 		}
+		j := int(idx) / other.k
+		id := other.id(e)
+		if !s.admits(j, e.score, id) {
+			continue
+		}
+		if off < 0 {
+			stored, err := s.appendID(id)
+			if err != nil {
+				return err
+			}
+			off = int64(stored)
+		}
+		s.insert(j, vectorMatmulEntry{score: e.score, off: uint32(off), n: e.n})
 	}
 	return nil
 }
@@ -838,7 +873,7 @@ func (s *vectorMatmulState) sorted(j int) []vectorMatmulEntry {
 }
 
 func (s *vectorMatmulState) Size() int64 {
-	return int64(cap(s.counts))*4 + int64(cap(s.entries))*16 + int64(cap(s.arena))
+	return int64(cap(s.counts))*4 + int64(cap(s.entries))*16 + int64(cap(s.arena)) + int64(cap(s.order))*4
 }
 
 func (s *vectorMatmulState) Free() {
@@ -851,7 +886,10 @@ func (s *vectorMatmulState) Free() {
 	if cap(s.arena) > 0 {
 		mpool.FreeSlice(s.mp, s.arena)
 	}
-	s.counts, s.entries, s.arena, s.used = nil, nil, nil, 0
+	if cap(s.order) > 0 {
+		mpool.FreeSlice(s.mp, s.order)
+	}
+	s.counts, s.entries, s.arena, s.order, s.used = nil, nil, nil, nil, 0
 }
 
 // Encoding: version byte, q uint32, k uint32, then per query a count uint32 and per hit

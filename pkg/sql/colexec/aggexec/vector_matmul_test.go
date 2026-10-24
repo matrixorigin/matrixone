@@ -735,6 +735,114 @@ func TestVectorMatmulStateMergeAcrossCompaction(t *testing.T) {
 	}
 }
 
+// vmAccountWithLimit opens an allocation account with the given byte limit.
+func vmAccountWithLimit(t *testing.T, limit uint64) *AllocationAccount {
+	t.Helper()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	require.NoError(t, err)
+	account, err := registry.Open(limit)
+	require.NoError(t, err)
+	allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+		VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+	})
+	require.NoError(t, err)
+	return allocation
+}
+
+// Compaction of a state holding many distinct hits allocates nothing on the Go heap; its
+// scratch is the accounted order slice, counted by Size.
+func TestVectorMatmulCompactionLargeHitCardinality(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	const q, k = 128, 256
+	allocation := vmAllocation(t)
+	s, err := newVectorMatmulState(mp, allocation, q, k)
+	require.NoError(t, err)
+	defer s.Free()
+	r := rand.New(rand.NewSource(17))
+	scores := make([]float64, q)
+	for row := 0; row < 4*q*k; row++ {
+		for j := range scores {
+			scores[j] = r.Float64()
+		}
+		require.NoError(t, s.offer(scores, []byte(fmt.Sprintf("id-%012d", row))))
+	}
+	distinct := map[string]struct{}{}
+	for j := 0; j < q; j++ {
+		require.Len(t, s.hits(j), k)
+		for _, e := range s.hits(j) {
+			distinct[string(s.id(e))] = struct{}{}
+		}
+	}
+	require.Greater(t, len(distinct), q*k/2)
+	require.Len(t, s.order, q*k)
+	require.Equal(t, int64(cap(s.counts))*4+int64(cap(s.entries))*16+int64(cap(s.arena))+int64(q*k)*4, s.Size())
+
+	before := make([][]string, q)
+	for j := range before {
+		for _, e := range s.sorted(j) {
+			before[j] = append(before[j], string(s.id(e)))
+		}
+	}
+	var compactErr error
+	allocs := testing.AllocsPerRun(5, func() {
+		if err := s.compact(); err != nil {
+			compactErr = err
+		}
+	})
+	require.NoError(t, compactErr)
+	require.Zero(t, allocs)
+	require.Equal(t, len(distinct)*len("id-000000000000"), s.used)
+	for j := range before {
+		var got []string
+		for _, e := range s.sorted(j) {
+			got = append(got, string(s.id(e)))
+		}
+		require.Equal(t, before[j], got)
+	}
+}
+
+// When the account cannot admit the compaction scratch, the fill and the merge that need
+// it fail with the capacity error and the retained hits are unchanged.
+func TestVectorMatmulCompactionScratchAdmission(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	const q, k = 4, 4
+	first := []byte(strings.Repeat("a", 64))
+	second := []byte(strings.Repeat("b", 64))
+	scores := []float64{1, 1, 1, 1}
+
+	probe := vmAllocation(t)
+	p, err := newVectorMatmulState(mp, probe, q, k)
+	require.NoError(t, err)
+	require.NoError(t, p.offer(scores, first))
+	limit := probe.account.Snapshot().Used
+	p.Free()
+
+	allocation := vmAccountWithLimit(t, limit)
+	s, err := newVectorMatmulState(mp, allocation, q, k)
+	require.NoError(t, err)
+	defer s.Free()
+	require.NoError(t, s.offer(scores, first))
+	require.Equal(t, limit, allocation.account.Snapshot().Used)
+
+	require.ErrorIs(t, s.offer(scores, second), mpool.ErrAllocationAccountCapacity)
+	require.Nil(t, s.order)
+
+	other, err := newVectorMatmulState(mp, nil, q, k)
+	require.NoError(t, err)
+	defer other.Free()
+	require.NoError(t, other.offer([]float64{2, 2, 2, 2}, second))
+	require.ErrorIs(t, s.Merge(other), mpool.ErrAllocationAccountCapacity)
+
+	require.Equal(t, limit, allocation.account.Snapshot().Used)
+	for j := 0; j < q; j++ {
+		hits := s.hits(j)
+		require.Len(t, hits, 1)
+		require.Equal(t, first, s.id(hits[0]))
+	}
+}
+
 // vmPlainCase holds a plain vector type and how a float32 maps to it.
 type vmPlainCase struct {
 	oid    types.T
