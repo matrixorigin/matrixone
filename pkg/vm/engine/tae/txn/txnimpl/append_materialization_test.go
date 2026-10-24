@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
@@ -105,7 +104,6 @@ func (a *materializationAppender) ReserveAppend(offset, rows uint32) {
 }
 
 func TestFreezeMaterializationDoesNotHoldAllocatorLocks(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -222,7 +220,6 @@ func appendAllocatorRow(t *testing.T, ctx context.Context, txn txnif.AsyncTxn, s
 func TestFreezeReservationDoesNotBlockOtherObjectKind(t *testing.T) {
 	for _, pauseTombstone := range []bool{false, true} {
 		t.Run(fmt.Sprintf("pause_tombstone_%v", pauseTombstone), func(t *testing.T) {
-			defer testutils.AfterTest(t)()
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			entered, release := make(chan struct{}), make(chan struct{})
@@ -313,7 +310,6 @@ func TestFreezeReservationDoesNotBlockOtherObjectKind(t *testing.T) {
 }
 
 func TestFreezeSelectedOwnersRollOverWithoutExtraCarriers(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	const owners = 4
@@ -436,7 +432,6 @@ func TestFreezeSelectedOwnersRollOverWithoutExtraCarriers(t *testing.T) {
 }
 
 func TestFreezeCancelledCreatorLeavesSharedCarrierUsable(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	freezeCtx, cancelFreeze := context.WithCancel(ctx)
