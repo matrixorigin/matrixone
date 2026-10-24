@@ -17,7 +17,6 @@ package function
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -434,9 +434,9 @@ func TestRegexpMatchTypeParser(t *testing.T) {
 		input string
 		want  string
 	}{
-		{input: "u", want: ""},
-		{input: "mu", want: "m"},
-		{input: "nu", want: "s"},
+		{input: "u", want: "u"},
+		{input: "mu", want: "mu"},
+		{input: "nu", want: "su"},
 		{input: "ic", want: ""},
 		{input: "ci", want: "i"},
 	} {
@@ -1871,6 +1871,30 @@ func Test_BuiltIn_RegexpValidatesPresentArgumentsBeforeNullableResult(t *testing
 		})
 	}
 
+	for _, matchType := range []string{"m", "mu"} {
+		t.Run("binary_pattern_null_subject/"+matchType, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, []FunctionTestInput{
+				nullText,
+				NewFunctionTestInput(text, []string{`^\x{100}`}, nil),
+				NewFunctionTestInput(text, []string{matchType}, nil),
+			}, NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil), newOpBuiltInRegexp().builtInRegexpLike)
+			defer tcc.Free()
+			require.NoError(t, tcc.parameters[1].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+			_, err := tcc.DebugRun()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "binary")
+		})
+	}
+	t.Run("valid_binary_pattern_null_subject", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc, []FunctionTestInput{
+			nullText, NewFunctionTestInput(text, []string{`^a`}, nil),
+			NewFunctionTestInput(text, []string{"m"}, nil),
+		}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true}), newOpBuiltInRegexp().builtInRegexpLike)
+		require.NoError(t, tcc.parameters[1].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+		ok, info := tcc.RunAndFree()
+		require.True(t, ok, info)
+	})
+
 	nullMatchType := NewFunctionTestInput(text, []string{""}, []bool{true})
 	for _, tc := range []struct {
 		name       string
@@ -2682,4 +2706,98 @@ func Test_BuiltIn_RegularSubstr(t *testing.T) {
 		require.True(t, match, i)
 		require.Equal(t, c.expected, val, i)
 	}
+}
+
+// TestRegexpWideMultilineReviewFindings pins the mo-bot review on PR #30646:
+// (P2) no caret match at end-of-input after a trailing CR/NEL/LS/PS, and
+// (P1/P2) anchored multiline predicates short-circuit on the first line and
+// large TEXT inputs run without an admission budget, so constant multiline
+// predicates and oversized subjects are not regressed by the wide-anchor
+// compatibility path (#30210).
+func TestRegexpWideMultilineReviewFindings(t *testing.T) {
+	op := newOpBuiltInRegexp()
+
+	like := func(pat, str, mt string, binary bool) bool {
+		m, err := op.regMap.regularLikeWithMode(pat, str, mt, binary)
+		require.NoError(t, err)
+		return m
+	}
+
+	// P2 terminal anchor: no caret match at end-of-input after a trailing CR.
+	require.False(t, like("^$", "a\r", "m", false), "caret at end after trailing CR")
+	// Nor after the other MySQL line terminators.
+	require.False(t, like("^$", "a\u0085", "m", false), "caret at end after NEL")
+	require.False(t, like("^$", "a\u2028", "m", false), "caret at end after LS")
+	require.False(t, like("^$", "a\u2029", "m", false), "caret at end after PS")
+	// Trailing LF keeps Go RE2's native multiline contract (unchanged).
+	require.True(t, like("^$", "a\n", "m", false), "trailing LF unchanged")
+	require.True(t, like("^$", "a\r\n", "m", false), "trailing CRLF unchanged")
+	// Interior boundaries and the empty input are preserved.
+	require.True(t, like("^$", "a\n\n", "m", false), "interior empty line")
+	require.True(t, like("^$", "", "m", false), "empty input")
+	require.True(t, like("^b$", "a\rb", "m", false), "interior CR line")
+	require.True(t, like("^b$", "a\r\nb", "m", false), "interior CRLF line")
+	// Binary domain: the same terminal-anchor exclusion on the byte path.
+	require.False(t, like("^$", "a\r", "m", true), "binary trailing CR")
+	require.False(t, like("^$", "a\x85", "m", true), "binary trailing NEL")
+	require.True(t, like("^b$", "a\rb", "m", true), "binary interior CR line")
+
+	// REGEXP_INSTR('a\r', '^', 1, 2, 0, 'm'): only the initial caret exists,
+	// so the second occurrence must be 0 (was 3 before the anchor fix).
+	got, err := op.regMap.regularInstrWithMatchType("^", "a\r", 1, 2, 0, false, "m")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), got, "instr occurrence 2 on trailing CR")
+	got, err = op.regMap.regularInstrWithMatchType("^", "a\r", 1, 2, 0, true, "m")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), got, "binary instr occurrence 2 on trailing CR")
+
+	// Every regular syntax remains in the regular engine, independent of size.
+	require.False(t, op.regMap.requiresRegexp2(`^a\s`, "m", false))
+	require.True(t, op.regMap.requiresRegexp2(`^(a)\1`, "m", false))
+	// Oversized subjects stay supported: regular evaluation has no subject admission cap.
+	big := strings.Repeat("a", regexp2MaxSubjectBytes+1)
+	require.True(t, like("^a", big, "m", false), "oversized MEDIUMTEXT subject")
+	require.True(t, like("^a", big+"\r", "m", false), "oversized wide-terminator subject")
+
+	// mo-bot review: ordinary anchors on wide subjects must not hit regexp2's
+	// admission memory budget (P1), and the >1MiB path must preserve the
+	// multiline contract instead of degrading to LF-only semantics (P2).
+	require.True(t, like("^a", strings.Repeat("a", 16384)+"\r", "m", false), "ordinary anchor + CR: no regexp2 admission")
+	require.True(t, like("^b$", strings.Repeat("a", 1048575)+"\r"+"b", "m", false), "oversized wide multiline parity with ICU")
+
+	// Per-line positional functions keep byte-accurate results on wide
+	// subjects, including terminator preservation in REPLACE.
+	got, err = op.regMap.regularInstrWithMatchType("^cd", "ab\rcd", 1, 1, 0, false, "m")
+	require.NoError(t, err)
+	require.Equal(t, int64(4), got, "instr wide CR: caret after interior terminator")
+
+	found, sub, err := op.regMap.regularSubstrWithMatchType("^b$", "a\nb\rc", 1, 1, false, "m")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "b", sub, "substr wide CR line")
+
+	rep, err := op.regMap.regularReplaceWithMatchType("^b$", "a\r\nb\rc", "Q", 1, 0, false, "m")
+	require.NoError(t, err)
+	require.Equal(t, "a\r\nQ\rc", rep, "replace preserves CRLF bytes")
+
+	// NEL interior line (text) and the binary byte-0x85 variant.
+	require.True(t, like("^b$", "a\u0085b", "m", false), "NEL interior line")
+	require.False(t, like("^b$", "a\x85", "m", true), "binary trailing NEL")
+	require.True(t, like("^b$", "a\x85b", "m", true), "binary NEL interior line")
+
+	// A terminator-matching pattern over the size cap fails explicitly when a
+	// wide terminator is genuinely present in the subject.
+	require.True(t, like("^a.", strings.Repeat("a", regexp2MaxSubjectBytes+1)+"\r", "m", false), "plain dot oversized: regular engine, no admission cap")
+	// A subject proven free of line terminators takes the exact RE2 path even
+	// for terminator-matching patterns (they cannot match a single-line
+	// subject), so an oversized MEDIUMTEXT subject still gets the MySQL
+	// verdict instead of an admission error.
+	require.False(t, like("^a\rb", big, "m", false), "terminator-matching pattern cannot match a single-line subject")
+	// A wide terminator cannot introduce a size restriction for regular syntax.
+	require.False(t, like("^a\rb", big+"\r", "m", false))
+	require.True(t, like("^a+\rb$", big+"\rb", "m", false))
+	// A constant (anchor/operator-free) pattern never needs the wide route:
+	// literal matching is multiline-insensitive, so the exact RE2 path
+	// answers it on any subject size, with or without terminators.
+	require.True(t, like("a\rb", big+"\rb", "m", false), "constant pattern has no multiline-sensitive operators")
 }
