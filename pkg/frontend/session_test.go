@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -1927,17 +1928,35 @@ func TestSessionTemporaryDDLLifetime(t *testing.T) {
 	t.Run("published schema survives unrelated transaction rollback", func(t *testing.T) {
 		ses := newSession()
 		ses.addTempTable("db", "internal", "internal-physical", "txn", "stmt")
-		ses.PublishTemporaryTable("db", "public", "public-generation")
+		ses.PublishTemporaryTable("db", "public", "public-generation", nil)
 		ses.rollbackTempTableTransaction("txn")
 		name, ok := ses.GetTempTable("db", "public")
 		require.True(t, ok)
 		require.Equal(t, "public-generation", name)
 		require.True(t, ses.OwnsTemporaryTable("db", name))
+		ses.PublishTemporaryTable("db", "generated", "public-generation_t", nil)
+		require.True(t, ses.OwnsTemporaryTable("db", "public-generation"))
 		require.False(t, ses.OwnsTemporaryTable("other-db", name))
 		require.False(t, ses.OwnsTemporaryTable("db", "__mo_tmp_unowned"))
 		_, ok = ses.GetTempTable("db", "internal")
 		require.False(t, ok)
 	})
+	t.Run("exact index ownership survives root rename and rollback", func(t *testing.T) {
+		ses := newSession()
+		ses.PublishTemporaryTable("db", "t", "__mo_tmp_generation_t", map[string]string{"idx": "index-physical"})
+		require.False(t, ses.OwnsTemporaryTable("db", "__mo_tmp"))
+		require.False(t, ses.OwnsTemporaryTable("db", "__mo_tmp_generation"))
+		ses.removeTempTable("db", "t", "txn", "stmt")
+		ses.addTempTable("db", "renamed", "renamed-physical", "txn", "stmt")
+		require.True(t, ses.OwnsTemporaryTable("db", "index-physical"))
+		ses.rollbackTempTableTransaction("txn")
+		require.True(t, ses.OwnsTemporaryTable("db", "__mo_tmp_generation_t"))
+		require.True(t, ses.OwnsTemporaryTable("db", "index-physical"))
+		require.Len(t, ses.snapshotTempTables(), 1, "hidden indexes must not become migration roots")
+		ses.RetireTemporaryTable("db", "t", "__mo_tmp_generation_t", []string{"index-physical"})
+		require.False(t, ses.OwnsTemporaryTable("db", "index-physical"))
+	})
+
 	t.Run("retirement cannot be undone or overwrite replacement", func(t *testing.T) {
 		ses := newSession()
 		ses.addTempTable("db", "t", "old", "", "")
@@ -1949,7 +1968,7 @@ func TestSessionTemporaryDDLLifetime(t *testing.T) {
 		ses.rollbackTempTableStatement("txn", "stmt")
 		_, ok := ses.GetTempTable("db", "t")
 		require.False(t, ok)
-		ses.PublishTemporaryTable("db", "t", "new-generation")
+		ses.PublishTemporaryTable("db", "t", "new-generation", nil)
 		ses.rollbackTempTableTransaction("txn")
 		name, ok := ses.GetTempTable("db", "t")
 		require.True(t, ok)
@@ -1966,7 +1985,7 @@ func TestSessionTemporaryDDLLifetime(t *testing.T) {
 		for i := 0; i < maxSessionTemporaryTableGenerations; i++ {
 			name := fmt.Sprintf("generation-%d", i)
 			require.NoError(t, ses.CheckTemporaryTableCapacity(context.Background()))
-			ses.PublishTemporaryTable("db", "t", name)
+			ses.PublishTemporaryTable("db", "t", name, nil)
 			ses.RetireTemporaryTable("db", "t", name, nil)
 		}
 		require.Error(t, ses.CheckTemporaryTableCapacity(context.Background()))
@@ -2053,7 +2072,7 @@ func TestSessionResetTempTablesIsSynchronousAndRetryable(t *testing.T) {
 
 	ses := NewSession(context.Background(), service, &testMysqlWriter{}, nil)
 	ses.SetTenantInfo(&TenantInfo{Tenant: "tenant", TenantID: 42})
-	ses.AddTempTable("db", "alias", "physical")
+	ses.PublishTemporaryTable("db", "alias", "physical", map[string]string{"idx": "physical-index"})
 	t.Cleanup(ses.Close)
 
 	err := ses.resetTempTables(context.Background())
@@ -2061,17 +2080,19 @@ func TestSessionResetTempTablesIsSynchronousAndRetryable(t *testing.T) {
 	realName, ok := ses.GetTempTable("db", "alias")
 	require.True(t, ok, "failed cleanup must retain an owner for retry")
 	require.Equal(t, "physical", realName)
+	require.True(t, ses.OwnsTemporaryTable("db", "physical-index"))
 
 	require.NoError(t, ses.resetTempTables(context.Background()))
 	_, ok = ses.GetTempTable("db", "alias")
 	require.False(t, ok)
+	require.False(t, ses.OwnsTemporaryTable("db", "physical-index"))
 	require.Equal(t, []string{
 		"DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent("db", "physical"),
 		"DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent("db", "physical"),
 	}, exec.sql)
 	// A failed reset preserves reclamation ownership, not logical visibility.
 	exec.failures = 1
-	ses.PublishTemporaryTable("db", "alias", "retired-generation")
+	ses.PublishTemporaryTable("db", "alias", "retired-generation", nil)
 	ses.RetireTemporaryTable("db", "alias", "retired-generation", nil)
 	require.ErrorIs(t, ses.resetTempTables(context.Background()), assert.AnError)
 	_, ok = ses.GetTempTable("db", "alias")
@@ -2085,7 +2106,7 @@ func TestSessionResetTempTablesIsSynchronousAndRetryable(t *testing.T) {
 	// generation. A cancelled user request does not discard cleanup ownership.
 	exec.failures = 1
 	ses.RetireTemporaryTable("db", "alias", "retired-again", nil)
-	ses.PublishTemporaryTable("db", "alias", "replacement")
+	ses.PublishTemporaryTable("db", "alias", "replacement", nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	ses.cleanupRetiredTempTables(ctx)
@@ -2382,4 +2403,20 @@ func TestSession_Cleanup(t *testing.T) {
 	rt.ses = ses
 	ctx4 := rt.getCleanupContext()
 	assert.Equal(t, ses.txnHandler.txnCtx, ctx4)
+}
+
+func BenchmarkSessionOwnsTemporaryTableOrdinary(b *testing.B) {
+	ses := &Session{}
+	for i := 0; i < 1024; i++ {
+		alias := fmt.Sprintf("t%d", i)
+		ses.PublishTemporaryTable("db", alias, "__mo_tmp_00112233445566778899aabbccddeeff_db_"+alias, nil)
+	}
+	ordinary := strings.Repeat("ordinary", 8)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if ses.OwnsTemporaryTable("db", ordinary) {
+			b.Fatal("ordinary table claimed as temporary")
+		}
+	}
 }
