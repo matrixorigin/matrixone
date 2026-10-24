@@ -123,7 +123,7 @@ its implementation; broad structural/type-loose matching is not approved.
 
 For example, `[a, pad_value, url]` becomes four retained columns and hash
 positions `[0,3,2]`, rather than six columns and `[3,4,5]`. Q40 becomes six retained
-columns and five equality positions `[0,1,2,5,4]`; its CASE canonical key stays
+columns and five equality positions `[0,1,2,4,5]`; its CASE canonical key stays
 hidden. Keep ordinal order; do not search for equal expressions elsewhere.
 
 Integrate this same conversion in:
@@ -276,3 +276,18 @@ opportunities, not blockers for a measured general improvement.
   `areaDisjoint` alone is insufficient.
 - Deferred: B2 mixed-span copies and string-storage redesign require evidence and
   separate approval. Implementation/performance/QA evidence remains pending.
+
+### A2: keep the executor's sorted subset grammar
+
+The mixed tuple initially emitted positions in logical ordinal order. Real Q40
+execution rejected [0,1,2,5,4]: Group and MergeGroup require strictly increasing
+positions. Sort only the newly constructed physical-key position list before
+returning it. This list is a selected set of retained GroupBy slots, not a
+logical-to-physical ordinal map. Keep the visible prefix and hidden expressions
+unchanged. Every local, merge, spill/reload and transport consumer uses these
+same positions. DISTINCT appends positions after the existing retained prefix,
+so its extension remains sorted. Preserve existing strict-subset validation.
+
+Approved by gpt-6.1-sol/xhigh on 2026-10-25 after tracing those consumers. Test
+complete selected-key membership and ascending indexes, then execute Q40 and
+mixed-key DISTINCT/COUNT DISTINCT through real service and spill paths.
