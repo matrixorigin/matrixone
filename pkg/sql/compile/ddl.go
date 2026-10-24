@@ -1941,6 +1941,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
 		}
+		// Index initialization SQL runs before the staged aliases are
+		// published. Lend the schema transaction's owner to nested execution.
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, session)
+		defer func() { c.proc.Ctx = originalCtx }()
 		if _, exists := session.GetTempTable(dbName, aliasName); exists {
 			if qry.GetIfNotExists() {
 				return nil
@@ -5441,6 +5446,11 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table clone")
 		}
+		// Seed deletion and index restore SQL must use the destination's
+		// authenticated owner, just like the preceding CREATE phase.
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, session)
+		defer func() { c.proc.Ctx = originalCtx }()
 		physicalName, ok := session.GetTempTable(dbName, tblName)
 		if !ok {
 			return moerr.NewInternalErrorf(c.proc.Ctx,
