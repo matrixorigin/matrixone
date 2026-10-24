@@ -137,6 +137,50 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			require.Equal(t, 12, id)
 		})
 
+		t.Run("fulltext_search_keeps_owner", func(t *testing.T) {
+			_, err := owner.ExecContext(ctx, "create temporary table search_t(id int primary key, title varchar(50), body varchar(100))")
+			require.NoError(t, err)
+			_, err = owner.ExecContext(ctx, "insert into search_t values(1, 'apple news', 'red apple'), (2, 'banana news', 'yellow banana')")
+			require.NoError(t, err)
+			_, err = owner.ExecContext(ctx, "create fulltext index ft on search_t(title, body)")
+			require.NoError(t, err)
+			var id int
+			require.NoError(t, owner.QueryRowContext(ctx, "select id from search_t where match(title, body) against('apple')").Scan(&id))
+			require.Equal(t, 1, id)
+			var indexPhysical string
+			require.NoError(t, owner.QueryRowContext(ctx,
+				"select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=? and t.relname like '%_search_t' and i.name='ft'", schema).Scan(&indexPhysical))
+			_, err = attacker.ExecContext(ctx, "select * from `"+schema+"`.`"+indexPhysical+"`")
+			var sqlErr *mysql.MySQLError
+			require.ErrorAs(t, err, &sqlErr)
+			require.EqualValues(t, 1146, sqlErr.Number, "nested search must not grant another session access")
+			_, err = owner.ExecContext(ctx, "create temporary table search_clone clone search_t")
+			require.NoError(t, err)
+			require.NoError(t, owner.QueryRowContext(ctx, "select id from search_clone where match(title, body) against('apple')").Scan(&id))
+			require.Equal(t, 1, id)
+		})
+
+		t.Run("clone_vector_index_keeps_owner", func(t *testing.T) {
+			var originalIVF int
+			require.NoError(t, owner.QueryRowContext(ctx, "select @@experimental_ivf_index").Scan(&originalIVF))
+			_, err := owner.ExecContext(ctx, "set experimental_ivf_index=1")
+			require.NoError(t, err)
+			defer func() {
+				_, _ = owner.ExecContext(context.WithoutCancel(ctx), fmt.Sprintf("set experimental_ivf_index=%d", originalIVF))
+			}()
+			_, err = owner.ExecContext(ctx, "create table vector_source(id int primary key, v vecf32(3))")
+			require.NoError(t, err)
+			_, err = owner.ExecContext(ctx, "insert into vector_source values(1, '[1,2,3]'), (2, '[2,2,3]')")
+			require.NoError(t, err)
+			_, err = owner.ExecContext(ctx, "create index ivf using ivfflat on vector_source(v) lists=1 op_type 'vector_l2_ops'")
+			require.NoError(t, err)
+			_, err = owner.ExecContext(ctx, "create temporary table vector_target clone vector_source")
+			require.NoError(t, err)
+			var id int
+			require.NoError(t, owner.QueryRowContext(ctx, "select id from vector_target order by l2_distance(v, '[2,2,3]') limit 1").Scan(&id))
+			require.Equal(t, 2, id)
+		})
+
 		t.Run("procedure_temporary_lifecycle", func(t *testing.T) {
 			_, err := owner.ExecContext(ctx, "create procedure temp_lifecycle() 'begin create temporary table proc_t(id int); insert into proc_t values(1); drop table proc_t; end'")
 			require.NoError(t, err)
