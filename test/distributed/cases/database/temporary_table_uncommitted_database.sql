@@ -6,14 +6,12 @@ drop database if exists issue_30506_temp_txn;
 drop database if exists issue_30506_temp_committed;
 
 -- The database generation is uncommitted in the parent transaction.
--- @session:id=1{
 begin;
 create database issue_30506_temp_txn;
 use issue_30506_temp_txn;
 create temporary table tx1 (id int primary key);
 -- Expected: not supported: temporary table in an uncommitted database generation
 rollback;
--- @session}
 drop database if exists issue_30506_temp_txn;
 
 -- A committed database remains a valid temporary-table target.
