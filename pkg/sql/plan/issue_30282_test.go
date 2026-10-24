@@ -247,6 +247,51 @@ func TestCheckAlterSurvivingFkSetNull(t *testing.T) {
 	require.NoError(t, checkAlterSurvivingFkSetNull(cctx, "c", nil, oldDef, &plan.TableDef{
 		Name: "c", Cols: oldDef.Cols, Fkeys: []*plan.ForeignKeyDef{setNullFk},
 	}))
+
+	// Name-reuse bypasses (#30282 review round 3): nullability comparison is
+	// by ColId identity, so inheriting the NAME of a column dropped or
+	// renamed away by the same ALTER must not inherit its NOT NULL exemption.
+
+	// DROP COLUMN other (NOT NULL) + CHANGE pid other ... NOT NULL: the
+	// renamed fk column (ColId 1) must not inherit dropped ColId 2's
+	// exemption even though it now carries the dropped column's name.
+	oldDefs := &plan.TableDef{Name: "c", Cols: []*plan.ColDef{mkCol(1, "pid", false), mkCol(2, "other", true)}}
+	dropRename := &plan.TableDef{Name: "c",
+		Cols:  []*plan.ColDef{mkCol(1, "other", true)},
+		Fkeys: []*plan.ForeignKeyDef{setNullFk},
+	}
+	err = checkAlterSurvivingFkSetNull(cctx, "c", nil, oldDefs, dropRename)
+	require.Error(t, err, "dropped-column name reuse must not bypass the guard")
+	var me2 *moerr.Error
+	require.ErrorAs(t, err, &me2)
+	require.Equal(t, uint16(1830), me2.MySQLCode())
+
+	// rename-away-plus-rename: CHANGE other tmp ... NULL, CHANGE pid other
+	// ... NOT NULL frees the name "other" mid-statement, then reuses it.
+	twoRename := &plan.TableDef{Name: "c",
+		Cols:  []*plan.ColDef{mkCol(1, "other", true), mkCol(2, "tmp", false)},
+		Fkeys: []*plan.ForeignKeyDef{setNullFk},
+	}
+	err = checkAlterSurvivingFkSetNull(cctx, "c", nil, oldDefs, twoRename)
+	require.Error(t, err, "rename-away name reuse must not bypass the guard")
+	require.ErrorAs(t, err, &me2)
+	require.Equal(t, uint16(1830), me2.MySQLCode())
+
+	// Control: reusing the dropped column's name while staying NULLABLE is
+	// legal (no tightening on the fk column at all).
+	require.NoError(t, checkAlterSurvivingFkSetNull(cctx, "c", nil, oldDefs, &plan.TableDef{
+		Name: "c", Fkeys: []*plan.ForeignKeyDef{setNullFk},
+		Cols: []*plan.ColDef{mkCol(1, "other", false)},
+	}))
+
+	// Control: renaming the pre-existing NOT NULL column itself keeps its
+	// exemption — ColId identity follows the physical column around.
+	require.NoError(t, checkAlterSurvivingFkSetNull(cctx, "c", nil, oldDefs, &plan.TableDef{
+		Name: "c", Fkeys: []*plan.ForeignKeyDef{
+			{Name: "fk_o", Cols: []uint64{2}, OnDelete: plan.ForeignKeyDef_SET_NULL},
+		},
+		Cols: []*plan.ColDef{mkCol(2, "other2", true)},
+	}))
 }
 
 // End-to-end strategy coverage (#30282 review): the child carries a SURVIVING
@@ -324,5 +369,69 @@ func TestIssue30282AlterSurvivingSetNullTightening(t *testing.T) {
 	runTestShouldPass(controls, t, []string{
 		"alter table t30282_alt modify pid int",
 		"alter table t30282_alt add column w int",
+	}, false, false)
+}
+
+// Review round 3 (#30282): reusing the NAME of a column dropped or renamed
+// away by the same ALTER must not inherit the dropped column's NOT NULL
+// exemption — CHANGE/RENAME preserve ColId, so the surviving-constraint
+// guard compares pre- and post-ALTER nullability by that identity. Both
+// variants below installed an impossible SET NULL constraint before the fix
+// and orphaned child rows on the next parent DELETE.
+func TestIssue30282AlterNameReuseCannotBypassSetNullGuard(t *testing.T) {
+	seed := func(t *testing.T) *MockOptimizer {
+		mock := NewMockOptimizer(false, newPlanTestProcess(t))
+		name := "t30282_nr"
+		mock.ctxt.objects[name] = &ObjectRef{
+			SchemaName: "constraint_test",
+			ObjName:    name,
+		}
+		mock.ctxt.tables[name] = &TableDef{
+			TableType: catalog.SystemOrdinaryRel,
+			Name:      name,
+			Cols: []*plan.ColDef{
+				{ColId: 0, Name: "id", Primary: true, NotNull: true,
+					Typ: plan.Type{Id: int32(types.T_int32), Width: 32, Scale: -1}, Default: &plan.Default{NullAbility: false}},
+				{ColId: 1, Name: "pid",
+					Typ: plan.Type{Id: int32(types.T_int32), Width: 32, Scale: -1}, Default: &plan.Default{NullAbility: true}},
+				{ColId: 2, Name: "other", NotNull: true,
+					Typ: plan.Type{Id: int32(types.T_int32), Width: 32, Scale: -1}, Default: &plan.Default{NullAbility: false}},
+			},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: "id", Cols: []uint64{0}, Names: []string{"id"}},
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:        "fk_nr_setnull",
+				Cols:        []uint64{1},
+				ForeignTbl:  0, // durable self-reference marker
+				ForeignCols: []uint64{0},
+				OnDelete:    plan.ForeignKeyDef_SET_NULL,
+				OnUpdate:    plan.ForeignKeyDef_RESTRICT,
+			}},
+		}
+		return mock
+	}
+
+	shouldError := []string{
+		// exact review probe: DROP COLUMN frees the name, CHANGE renames the
+		// fk column onto it while tightening to NOT NULL
+		"alter table t30282_nr drop column other, change pid other int not null",
+		// rename-away-plus-rename: the freed name is reused mid-statement
+		"alter table t30282_nr change other tmp int null, change pid other int not null",
+	}
+	for _, sql := range shouldError {
+		mock := seed(t)
+		_, err := runOneStmt(mock, t, sql)
+		require.Error(t, err, sql)
+		var me *moerr.Error
+		require.ErrorAs(t, err, &me, sql)
+		require.Equal(t, uint16(1830), me.MySQLCode(), sql)
+		require.Contains(t, me.Error(), "'fk_nr_setnull'", sql)
+	}
+
+	// Control: reusing the dropped column's name without tightening the fk
+	// column stays legal.
+	controls := seed(t)
+	runTestShouldPass(controls, t, []string{
+		"alter table t30282_nr drop column other, change pid other int",
+		"alter table t30282_nr change pid pid2 int", // plain rename of the fk col
 	}, false, false)
 }

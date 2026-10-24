@@ -8152,6 +8152,13 @@ func fkColumnNotNullable(col *plan.ColDef) bool {
 // keep their previously validated constraint, constraints dropped by the
 // same statement are ignored, and the historical-restore replay keeps the
 // legacy layout buildable.
+//
+// The pre-ALTER nullability is compared by ColId identity, never by column
+// name: CHANGE/RENAME preserve a column's ColId, while a name can be reused
+// by a different physical column inside one ALTER (DROP COLUMN old, CHANGE
+// col old ... NOT NULL) — a name-keyed comparison would inherit the dropped
+// column's NOT NULL exemption and reinstall an impossible SET NULL
+// constraint (#30282 review round 3).
 func checkAlterSurvivingFkSetNull(cctx CompilerContext, tableName string, droppedFks map[string]bool, oldDef, newDef *plan.TableDef) error {
 	if ddlReplayForTable(cctx.GetContext(), tableName) != nil {
 		// historical-restore exception
@@ -8160,14 +8167,20 @@ func checkAlterSurvivingFkSetNull(cctx CompilerContext, tableName string, droppe
 	if len(newDef.Fkeys) == 0 {
 		return nil
 	}
-	oldNotNull := make(map[string]bool, len(oldDef.Cols))
+	oldNotNull := make(map[uint64]bool, len(oldDef.Cols))
 	for _, col := range oldDef.Cols {
+		if col == nil {
+			continue
+		}
 		if fkColumnNotNullable(col) {
-			oldNotNull[strings.ToLower(col.Name)] = true
+			oldNotNull[col.ColId] = true
 		}
 	}
 	id2col := make(map[uint64]*plan.ColDef, len(newDef.Cols))
 	for _, col := range newDef.Cols {
+		if col == nil {
+			continue
+		}
 		id2col[col.ColId] = col
 	}
 	for _, fk := range newDef.Fkeys {
@@ -8184,7 +8197,10 @@ func checkAlterSurvivingFkSetNull(cctx CompilerContext, tableName string, droppe
 			if !ok || col == nil {
 				continue
 			}
-			if !fkColumnNotNullable(col) || oldNotNull[strings.ToLower(col.Name)] {
+			// no entry in oldNotNull for this ColId means either the column
+			// was nullable before or it did not exist at all — both leave the
+			// NOT NULL status attributable to this ALTER.
+			if !fkColumnNotNullable(col) || oldNotNull[col.ColId] {
 				continue
 			}
 			name := col.Name

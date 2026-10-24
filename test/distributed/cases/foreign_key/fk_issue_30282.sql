@@ -149,6 +149,29 @@ create table alt_child_n (
 alter table alt_child_n modify pid int;
 select count(*) as n_nullable_pid from information_schema.columns where table_schema = 'fk_issue_30282' and table_name = 'alt_child_n' and column_name = 'pid' and is_nullable = 'YES';
 
+-- review round 3: reusing the NAME of a column dropped or renamed away by
+-- the same ALTER must not let the fk column inherit the dropped column's
+-- NOT NULL exemption (CHANGE/RENAME preserve the column identity)
+create table nr_parent (id int primary key);
+create table nr_child (
+    id int primary key,
+    pid int,
+    other int not null,
+    key idx_pid (pid),
+    constraint fk_nr_setnull foreign key (pid) references nr_parent (id) on delete set null
+);
+alter table nr_child drop column other, change pid other int not null;
+alter table nr_child change other tmp int null, change pid other int not null;
+
+-- once the constraint is gone the very same rename-and-tighten is legal
+alter table nr_child drop foreign key fk_nr_setnull;
+alter table nr_child change other tmp int null, change pid other int not null;
+select count(*) as nr_non_null_other from information_schema.columns where table_schema = 'fk_issue_30282' and table_name = 'nr_child' and column_name = 'other' and is_nullable = 'NO';
+select count(*) as nr_fk_count from information_schema.table_constraints where constraint_schema = 'fk_issue_30282' and table_name = 'nr_child' and constraint_type = 'FOREIGN KEY';
+
+drop table nr_child;
+drop table nr_parent;
+
 drop table fwd_child_ok;
 drop table fwd_parent;
 drop table alt_child;
