@@ -870,6 +870,26 @@ const (
 	EXTRACTVALUE            = 581
 	UPDATEXML               = 582
 	TO_INTERVAL_MICROSECOND = 583
+	// Technical-indicator window-function family (issue #29949): eleven
+	// native SQL window kernels with per-partition sequential state, per
+	// docs/design/technical_indicator_window_kernels.md section 5.1.
+	// IDs follow the upstream convention (newest id one below
+	// FUNCTION_END_NUMBER): 605..615 are the first free block above the
+	// internal helpers MO_VIEW_DEFINITION(603)/MO_VIEW_CHECK_OPTION(604);
+	// reusing those silently swaps their overloads and breaks the
+	// information_schema views maintenance.
+	SMA               = 605
+	WMA               = 606
+	TRIMA             = 607
+	EMA               = 608
+	WILDER            = 609
+	KAMA              = 610
+	DEMA              = 611
+	TEMA              = 612
+	T3                = 613
+	MMAXDRAWDOWN      = 614
+	CUMPOSITIVESTREAK = 615
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	UUID_SHORT = 587
@@ -892,7 +912,7 @@ const (
 	// Internal LOAD IGNORE predicate; gated by cluster protocol 125.
 	LOAD_FK_IGNORE_CHECK = 602
 
-	FUNCTION_END_NUMBER = 605
+	FUNCTION_END_NUMBER = 616
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1553,4 +1573,17 @@ var functionIdRegister = map[string]int32{
 
 	// date_trunc function
 	"date_trunc": DATE_TRUNC,
+
+	// technical-indicator window functions (issue #29949)
+	"sma":               SMA,
+	"wma":               WMA,
+	"trima":             TRIMA,
+	"ema":               EMA,
+	"wilder":            WILDER,
+	"kama":              KAMA,
+	"dema":              DEMA,
+	"tema":              TEMA,
+	"t3":                T3,
+	"mmaxdrawdown":      MMAXDRAWDOWN,
+	"cumpositivestreak": CUMPOSITIVESTREAK,
 }
