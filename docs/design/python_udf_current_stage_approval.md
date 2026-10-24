@@ -610,3 +610,12 @@ its offset/worker/upgrade tests correct that discrepancy. Historical approval
 records above remain immutable. Independent Architecture and SQL/Planner
 approval of r28 remains pending; maintenance validation does not supply it.
 No production or security scope is added.
+
+
+## r29-r30 official-main rebase allocation addendum (2026-10-24)
+
+The current official main retains MORPC 127 for IndexSearchScan internal_topk/max_internal_topk search knobs, MORPC 128 for category-preserving mixed JSON/numeric comparisons, and MORPC 129 for selected JSON ELT and opaque-text expression execution. This rebase preserves those sender, receiver and Prepare gates and allocates the single Python UDF capability at MORPC 130 (latest + 1).
+
+Catalog revision publication and reads, prepared-plan reuse, evaluator Prepare, remote sender/receiver, and GetPythonUdfStatus reject predecessor 129 and mixed 130/129 CNs before Python mutation or execution. Rolling the active floor from 130 to 129 disables Python while retaining the three official main capabilities. Combined pipelines negotiate the maximum required floor through the existing stream protocol; no new round trip or lifecycle owner is introduced.
+
+The merged plan descriptor and parser artifacts preserve both the official main schema additions and the Python routine fields. Focused protocol, queryservice, UDF and generated-plan tests pass; full planner/frontend execution remains dependent on the repository native CGo facility. Independent Architecture and SQL/Planner approval remains pending and is not substituted by this maintenance rebase.
