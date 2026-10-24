@@ -171,3 +171,40 @@ Validation: extend the existing focused table with direct variable-width COUNT, 
 
 This is an actual finding in the initial pressure implementation, not an unresolved hypothetical concern. Final overall PASS remains withheld until the corrected eligibility, focused evidence and matched wide-input result are reviewed.
 
+# Conservative pruning domain — SUM regression correction
+
+Design gate: gpt-6.1-sol / xhigh, 2026-10-24; accepted before implementation.
+
+The COUNT-only distribution pressure correction cannot protect pruning with
+unsupported aggregate state. The reviewer confirmed that SUM over one million
+INT rows / 100000 groups at DOP 4 and a 4 MiB budget changes from resident
+distributed aggregation to replicated partial aggregation with merge spill.
+The task host independently reproduced 10.90 MiB spill and correct results.
+
+Share the existing fixed-input/grouped-only/COUNT eligibility and payload
+calculation between the distribution owner and the pruning admission boundary.
+After identifying removable keys, check the proposed retained groups and the
+complete aggregate list before copying/installing consumers. If unsupported,
+abandon pruning atomically: groups, consumers, flags and registries stay intact.
+Do not check the original derived groups, which would disable the intended rule.
+
+This retains verified COUNT and grouped-only wins. SUM, AVG, MIN/MAX, DISTINCT,
+variable-state and mixed aggregate lists, wide/computed COUNT inputs and
+unsupported retained grouping inputs keep the original plan. A handwritten
+single-key SUM keeps its pre-existing policy; eliminating its spill is outside
+this correction. Shared admission does not prove universal speedups inside the
+supported domain, and the existing pressure estimate remains approximate.
+
+Do not infer state from result width, instantiate executors, duplicate their
+state layouts, retain shadow cardinality, force shuffle, or add runtime state.
+SUM/AVG/decimal/provenance layouts have different authoritative execution owners.
+A general state-cost interface requires separate design and evidence.
+
+Validation: reuse the pressure-owner table unchanged; extend atomic fallback
+and binder-produced plan tests with unsupported aggregate/input domains. Compare
+public rebased-base and fixed SUM rows, metadata, topology and spill on the
+retained million-row dataset, with COUNT/grouped-only, mixed aggregates, wide
+inputs, DOP and budget controls. Run affected planner normal/race and incremental
+SCA. Refresh CAST diagnostic witnesses because rebased main intentionally uses
+zero plus warning 1292 for invalid lexical integer casts. No runtime cleanup,
+protocol, spill implementation or admission rule changes.
