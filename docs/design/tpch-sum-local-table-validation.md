@@ -4,7 +4,7 @@ Owner: #30847; umbrella #30838.
 
 ## Final scope
 
-This PR adds tests and benchmarks only. Production SUM code is identical to main. No cache, executor state, arithmetic, update/scatter order, API, wire or cancellation behavior changes.
+The grouped SUM change adds tests and benchmarks only. Production SUM code is identical to main; its cache, executor state, arithmetic and update/scatter order are unchanged.
 
 ## Review finding and correction
 
@@ -16,8 +16,14 @@ The range index and all production probe changes are removed. An index-free cont
 
 Benchmark public aggregate dispatch with 8192 rows consumed in hashmap.UnitLimit-sized calls, original vector offsets, and state allocated outside timing. Include cardinalities 4/254/255/256, sequential and permuted high-cardinality IDs, and a high endpoint. Keep explicitly named large-call sequential/permuted controls to expose the misleading amortization assumption. Allocation counts and timing belong to benchmarks, not wall-clock assertions in unit tests.
 
-Extend the existing small boundary fixture for both caller-sized chunks and a whole call, with independent expected sums/NULLs, constants, offsets, unmatched IDs, repeated local groups and sparse group IDs. Retain the physical-overflow-order witness because it protects direct updates and deferred scatter. No service, cluster, input dataset, sleeps or benchmark result-verification script is needed. No new SQL-visible behavior requires BVT; the existing head's successful CI and owning-package tests remain evidence for unchanged production code.
+Extend the existing small boundary fixture for both caller-sized chunks and a whole call, with independent expected sums/NULLs, constants, offsets, unmatched IDs, repeated local groups and sparse group IDs. Retain the physical-overflow-order witness because it protects direct updates and deferred scatter. No service, cluster, input dataset, sleeps or benchmark result-verification script is needed. The SUM changes introduce no new SQL-visible behavior requiring BVT. Current validation must be tied to the rebased source; historical passing runs do not establish a green pipeline.
 
 ## Review classification
 
 Focused removal of an unsuccessful optimization and correction of test coverage; no new feature or major refactor. Design gate is exempt for this review fix. Original approved optimization design is superseded by the final test-only scope above.
+
+## HAKeeper caller-budget correction
+
+The CI failure in `TestCDCNoFullPublicTakeoverLifecycle` occurred while its deferred CN C label cleanup returned a Dragonboat timeout. CN label update, patch and deletion each detached their preflight checker-state read into a background context with a fixed two-second deadline, even though the mutation already had a caller-owned deadline. They now use that context for both the read and proposal, matching CN work-state updates. The CDC cleanup and takeover assertions remain intact. No retry loop, global deadline change, new hook or wire change is introduced.
+
+The existing store fixture checks all four mutations with an already-expired deadline and an unknown CN. This distinguishes deadline rejection from the detached read's missing-CN error or successful no-op deletion, without sleeps or another cluster. Normal and race tests also cover the existing successful label/patch/delete/work-state paths and the real multi-CN takeover consumer. The original CI timeout has not been reproduced locally, so this correction does not claim to eliminate every cause of HAKeeper stalls.
