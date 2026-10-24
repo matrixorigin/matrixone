@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -66,4 +67,20 @@ func TestMakeCreateAccountSqlByAccountRecordUsesTempPassword(t *testing.T) {
 	pwd2, err := newSnapshotRestoreTempPassword()
 	require.NoError(t, err)
 	require.NotEqual(t, pwd, pwd2)
+}
+
+// An entropy-source failure must surface as an error (and never fall back to
+// a predictable password) so the restore pipeline refuses to bootstrap with a
+// guessable credential.
+func TestNewSnapshotRestoreTempPasswordRandFailure(t *testing.T) {
+	orig := snapshotRestoreRandRead
+	snapshotRestoreRandRead = func(b []byte) (int, error) {
+		return 0, errors.New("entropy source unavailable")
+	}
+	defer func() { snapshotRestoreRandRead = orig }()
+
+	pwd, err := newSnapshotRestoreTempPassword()
+	require.Error(t, err)
+	require.Empty(t, pwd)
+	require.Contains(t, err.Error(), "generate snapshot restore temp password")
 }

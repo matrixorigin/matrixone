@@ -4009,9 +4009,13 @@ func getRestoreAcurrentExistsAccount(
 // permanent backdoor admin whenever the restore failed after the account
 // creation step. The random value is never logged, never returned to any
 // client, and never leaves the pipeline in plaintext.
+// snapshotRestoreRandRead exists so tests can exercise the entropy-failure
+// branch; in production it is always crypto/rand.Read.
+var snapshotRestoreRandRead = cryptorand.Read
+
 func newSnapshotRestoreTempPassword() (string, error) {
 	var buf [24]byte
-	if _, err := cryptorand.Read(buf[:]); err != nil {
+	if _, err := snapshotRestoreRandRead(buf[:]); err != nil {
 		return "", moerr.NewInternalErrorNoCtxf("generate snapshot restore temp password: %v", err)
 	}
 	// 48 lowercase hex characters: safe to embed in a single-quoted SQL
@@ -4093,8 +4097,7 @@ func getPastExistsAccounts(
 			// #30752: no password material exists in mo_account to restore
 			// from; give every account its own unguessable bootstrap password
 			// instead of the hardcoded factory default.
-			account.pwd, err = newSnapshotRestoreTempPassword()
-			if err != nil {
+			if account.pwd, err = newSnapshotRestoreTempPassword(); err != nil {
 				return nil, err
 			}
 
