@@ -227,14 +227,6 @@ func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_P:
 		pos := int(exprImpl.P.Pos)
 		rule.params[pos] = 0
-		/*
-			if e.Typ.Id == int32(types.T_any) && e.Typ.NotNullable {
-				// is not null, use string
-				rule.mapTypes[pos] = int32(types.T_varchar)
-			} else {
-				rule.mapTypes[pos] = e.Typ.Id
-			}
-		*/
 		return e, nil
 	case *plan.Expr_List:
 		for i := range exprImpl.List.List {
