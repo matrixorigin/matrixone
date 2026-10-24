@@ -15081,6 +15081,21 @@ func dateTruncTimestamp(unit string, ts types.Timestamp, loc *time.Location) (ty
 
 // dateTruncCore performs the core truncation logic on a Datetime value.
 func dateTruncCore(unit string, dt types.Datetime) (types.Datetime, error) {
+	// Valid DATETIME values are civil microseconds from midnight on 0001-01-01.
+	// Fixed units need no calendar decomposition. Keep the existing path for
+	// SQL zero/invalid raw values and calendar units; TIMESTAMP owns its zone.
+	if dt >= types.DatetimeEpoch && dt <= types.Datetime(types.TimestampMaxValue) {
+		switch unit {
+		case "second":
+			return dt - dt%types.MicroSecsPerSec, nil
+		case "minute":
+			return dt - dt%(types.SecsPerMinute*types.MicroSecsPerSec), nil
+		case "hour":
+			return dt - dt%(types.SecsPerHour*types.MicroSecsPerSec), nil
+		case "day":
+			return dt - dt%(types.SecsPerDay*types.MicroSecsPerSec), nil
+		}
+	}
 	year := int32(dt.Year())
 	month := dt.Month()
 	day := dt.Day()
