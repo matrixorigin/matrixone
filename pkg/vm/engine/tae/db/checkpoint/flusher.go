@@ -132,12 +132,6 @@ func WithFlusherInterval(interval time.Duration) FlusherOption {
 	}
 }
 
-func WithFlusherQueueSize(size int) FlusherOption {
-	return func(flusher *flushImpl) {
-		flusher.flushQueueSize = size
-	}
-}
-
 func WithFlusherCfg(cfg FlushCfg) FlusherOption {
 	return func(flusher *flushImpl) {
 		WithFlusherInterval(cfg.FlushInterval)(flusher)

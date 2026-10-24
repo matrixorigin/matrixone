@@ -1227,23 +1227,6 @@ func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, e
 	// builder := NewQueryBuilder(plan.Query_SELECT, ctx)
 	// binder := NewWhereBinder(builder, &BindContext{})
 
-	// if stmt.Like != nil {
-	//  // here will error because stmt.Like.Left is nil, you need add left expr like : stmt.Like.Left = tree.SetUnresolvedName("column_name")
-	//  // but we have no column name, because Variables is save in a hashmap in frontend, not a table.
-	// 	expr, err := binder.bindComparisonExpr(stmt.Like, 0, false)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	showVariables.Where = append(showVariables.Where, expr)
-	// }
-	// if stmt.Where != nil {
-	// 	exprs, err := splitAndBindCondition(stmt.Where.Expr, &BindContext{})
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	showVariables.Where = append(showVariables.Where, exprs...)
-	// }
-
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
@@ -1372,12 +1355,4 @@ func getReturnDdlBySelectStmt(ctx CompilerContext, stmt tree.Statement,
 		return nil, err
 	}
 	return queryPlan, nil
-	// return &Plan{
-	// 	Plan: &plan.Plan_Ddl{
-	// 		Ddl: &plan.DataDefinition{
-	// 			DdlType: ddlType,
-	// 			Query:   queryPlan.GetQuery(),
-	// 		},
-	// 	},
-	// }, nil
 }

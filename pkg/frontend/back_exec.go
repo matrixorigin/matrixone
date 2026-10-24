@@ -222,25 +222,6 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 	if len(statements) > 1 {
 		return moerr.NewInternalErrorf(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
-	// uncomment this to enable backExec export data to CSV file.
-	//
-	//if st, ok := statements[0].(*tree.Select); ok && st != nil && st.Ep != nil {
-	//	back.backSes.ep = &ExportConfig{
-	//		userConfig: st.Ep,
-	//		service:    back.Service(),
-	//	}
-	//
-	//	back.backSes.ep.init()
-	//	back.backSes.ep.DefaultBufSize = getPu(back.backSes.GetService()).SV.ExportDataDefaultFlushSize
-	//	initExportFileParam(back.backSes.ep, back.backSes.mrs)
-	//	if err = openNewFile(ctx, back.backSes.ep, back.backSes.mrs); err != nil {
-	//		return err
-	//	}
-	//
-	//	defer func() {
-	//		retErr = errors.Join(retErr, Close(back.backSes.ep))
-	//	}()
-	//}
 
 	//share txn can not run transaction statement
 	if back.backSes.GetTxnHandler().IsShareTxn() {
@@ -1000,27 +981,6 @@ func backSesOutputCallback(handle FeSession, execCtx *ExecCtx, dataSet *batch.Ba
 	if execCtx != nil && isPerformStatement(execCtx.stmt) {
 		return nil
 	}
-
-	// uncomment this to enable backExec export data to CSV file.
-	//back := handle.(*backSession)
-	//if back.ep != nil {
-	//	back.ep.Index.Add(1)
-	//	copied, err := dataSet.Dup(execCtx.ses.GetMemPool())
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	constructByte(execCtx.reqCtx, execCtx.ses, copied, back.ep.Index.Load(), back.ep.ByteChan, back.ep)
-	//
-	//	if err = exportDataFromBatchToCSVFile(back.ep); err != nil {
-	//		execCtx.ses.Error(execCtx.reqCtx,
-	//			"Error occurred while exporting to CSV file",
-	//			zap.Error(err))
-	//		return err
-	//	}
-	//
-	//	return nil
-	//}
 
 	return fakeDataSetFetcher2(handle, execCtx, dataSet, nil)
 }

@@ -136,17 +136,6 @@ func runeByteOffset(value string, runeIndex int64) (int, bool) {
 	return offset, true
 }
 
-// Locate2Args is retained for direct callers and follows the existing text
-// general-ci approximation.
-func Locate2Args(str string, subStr string) int64 {
-	return locateString([]byte(subStr), []byte(str), 1, false, false)
-}
-
-// Locate3Args is retained for direct callers and uses character positions.
-func Locate3Args(str string, subStr string, pos int64) int64 {
-	return locateString([]byte(subStr), []byte(str), pos, false, false)
-}
-
 // getSubstring returns a suffix whose start is measured in characters.
 func getSubstring(str string, start int) string {
 	offset, ok := runeByteOffset(str, int64(start))
