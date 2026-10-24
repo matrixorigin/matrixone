@@ -1,6 +1,6 @@
 # Bounded group-key materialization optimization
 
-Status: **APPROVED for implementation, design v1.1, 2026-10-25**.
+Status: **APPROVED for implementation, design v1.2, 2026-10-25**.
 
 Design gate: **gpt-6.1-sol / xhigh**, parent-selected gate agent
 `/root/clickbench_design_20261025`. Reviewed MatrixOne revision:
@@ -110,7 +110,8 @@ GroupBy and hash positions:
    only when it differs, and record its new position.
 3. If no physical expression differs, keep no hidden suffix and allow the legacy
    nil/all-columns hash representation. Otherwise record the complete N-element
-   equality mapping, including reused visible positions. Clone slice backing
+   equality selected-slot subset, including reused visible positions, sorted in
+   ascending order for the existing executor grammar. Clone slice backing
    before appending; do not alias/mutate a child or cached-plan slice.
 
 For a root bound ColRef, DISTINCT binding may enrich only the visible expression's
@@ -122,9 +123,10 @@ This v1.1 amendment was approved by the same gpt-6.1-sol/xhigh design gate befor
 its implementation; broad structural/type-loose matching is not approved.
 
 For example, `[a, pad_value, url]` becomes four retained columns and hash
-positions `[0,3,2]`, rather than six columns and `[3,4,5]`. Q40 becomes six retained
+positions `[0,2,3]`, rather than six columns and `[3,4,5]`. Q40 becomes six retained
 columns and five equality positions `[0,1,2,4,5]`; its CASE canonical key stays
-hidden. Keep ordinal order; do not search for equal expressions elsewhere.
+hidden. Keep visible/hidden expression order; sort only the selected-slot list.
+Do not search for equal expressions at other ordinals.
 
 Integrate this same conversion in:
 
@@ -291,3 +293,56 @@ so its extension remains sorted. Preserve existing strict-subset validation.
 Approved by gpt-6.1-sol/xhigh on 2026-10-25 after tracing those consumers. Test
 complete selected-key membership and ascending indexes, then execute Q40 and
 mixed-key DISTINCT/COUNT DISTINCT through real service and spill paths.
+
+### Deliberate boundary
+
+Normal set-operation mergeDistinctSetScopes still retains its complete physical
+tuple after nullable-domain relaxation. It remains correct and is outside this
+measured ClickBench aggregation change; no claim is made that every UNION,
+INTERSECT or MINUS factory benefits. B2 sparse-span coalescing is also deferred.
+
+## Implementation validation (2026-10-25)
+
+Environment: Apple M4, 10 CPUs, 16 GiB; Go 1.27.1, native macOS arm64,
+production GOEXPERIMENT=simd build, four execution threads. Main baseline is
+`dae02bbaaaa18aac7fa9b788e42f4483b3adf091`; DuckDB is the local source-built
+`cc9648d736fd7e4fb2fc813cba6f6d34932c3386`. Both engines use the official
+ClickBench schema and the same persisted input values. The full suite uses the
+first 1M rows and all 105 columns. The 10M fixture projects 18 needed columns
+from dispersed original row groups (0,10,...,220 plus the tail); it has 2,608,215
+URL values and contains no CounterID=62, so Q37–Q43 there are empty controls.
+Positive Q40 evidence comes from the full-width 1M fixture.
+
+| Measurement | Main | Candidate | Interpretation |
+|---|---:|---:|---|
+| Q40, 1M, resident, ABBA paired median | 184.65 ms | 151.49 ms | 18.0% lower elapsed time |
+| Q40 retained columns / EXPLAIN aggregate memory | 10 / 324.18 MiB | 6 / 250.81 MiB | Same 5 physical equality axes, less retained payload; memory is not RSS |
+| Q40, 1M, 1 MiB spill threshold, DOP4 | 4.199 s | 3.229 s | 23.1% lower elapsed time; actual SpillRows observed |
+| Q34, 10M, automatic spill, ABBA median | 2.041 s | 1.960 s | Modest 4% difference; not claimed as a robust latency gain |
+| Q34, 10M, explicit 4 GiB aggregate budget | 863.52 ms | 863.77 ms | Essentially unchanged; no spill in the recorded plan |
+| Vector all-selected, 256 × 128-byte values | 2252 ns | 907.4 ns | 2.48× throughput in existing preflight+publish cycle |
+| Same vector benchmark, every other row selected | 1271 ns | 1244 ns | Sparse fallback control retained |
+
+Paired Q40 and Q38 use main/candidate/candidate/main process blocks with a
+warmup and 3 timed samples per block. Paired Q34 uses 2 warmups and 5 timed
+samples per block. Microbenchmarks use 3 × 300 ms. Q38's first-screen regression
+did not repeat: paired medians are 30.65/29.91 ms. These are local observations,
+not portable guarantees. The source-built DuckDB remains faster: Q40 1M is
+18.50 ms, and Q34 10M at a 4 GiB engine limit is 160.36 ms. MO statement limits,
+operator spill thresholds, Go's 3 GiB soft limit and DuckDB's engine budget are
+different scopes; they are not equivalent total-process memory caps. Automatic
+MO Q34 spills at roughly 512 MiB, unlike the explicit 4 GiB control. No budget
+or growth policy was changed to obtain the optimization.
+
+All 43 original queries execute on the candidate. Q29 uses
+NO_BACKSLASH_ESCAPES and the engine's `$1` replacement syntax. Ordinary and
+candidate rows agree after handling SQL's unordered results and legitimate TopN
+ties; Q12/Q19/Q31/Q33/Q40 additionally agree with main and source-built DuckDB
+under deterministic tie-break ordering (AVG normalized to four decimal places).
+The existing 5-row BVT extension passed normal mo-tester comparison twice,
+35/35 statements each, with teardown checked. Public controls additionally cover
+DOP1/2/4, NDV1/64/65536, string width8/128, NULL/PAD SPACE, prepared reuse,
+ROLLUP, scalar/tuple DISTINCT, automatic and forced spill. Full owning-package
+normal UT and relevant owning/consumer race checks pass. Incremental gofmt,
+vet, repository molint and configured golangci-lint pass on vector, group,
+compile, planner and directly affected explain packages.
