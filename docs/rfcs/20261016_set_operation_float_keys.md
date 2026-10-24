@@ -1519,8 +1519,7 @@ GROUP BY equality and avoids a new set executor; the bounded scalar composition 
 
 The current official main assigns MORPC v130 to incomplete temporal string
 overloads and their rejection diagnostics. This capability therefore uses the
-immediate next version, MORPC v131, for signed-zero set keys and bounded local
-scalar-set reaggregation. Placement, send, receive-before-decode,
+immediate next version, MORPC v131, and appends function ID 616 with sentinel 617, for signed-zero set keys and bounded local scalar-set reaggregation. Placement, send, receive-before-decode,
 executor/Prepare, and persisted-expression gates all use v131; a worker at the
 immediate predecessor v130 must reject these markers before decoding. The
 implementation and protocol tests were updated together, while historical
@@ -1535,11 +1534,11 @@ and coordinator-only scope when deploying; broader distributed execution and
 universal latency or process-RSS guarantees remain unqualified.
 
 Official main at this revision allocates MORPC127 to IndexSearchScan internal
-search knobs, MORPC128 to category-preserving mixed JSON/numeric comparisons, MORPC129 to selected JSON ELT/opaque text expression execution, and MORPC130 to incomplete temporal string overloads and rejection diagnostics.
+search knobs, MORPC128 to category-preserving mixed JSON/numeric comparisons, MORPC129 to selected JSON ELT/opaque text expression execution, and MORPC130 to incomplete temporal string overloads and rejection diagnostics,
 while function602/MORPC125 remains LOAD IGNORE foreign-key rejection diagnostics. VIEWS metadata retains functions603/604 and floor126.
 TIMESTAMPADD SECOND retains function601 and floor124. This PR's single
-unpublished set-key/scalar-marker capability uses function605, sentinel606 and
-MORPC **131**. The feature walker recognizes encoded function identity 605 without
+unpublished set-key/scalar-marker capability uses function616, sentinel617 and
+MORPC **131**. The feature walker recognizes encoded function identity 616 without
 depending on its display name. It sees hidden physical equality lists, grouping
 keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar composition adds no separate function identity. It adds
 `plan.Node.scalar_set_reaggregation` field 96 and
@@ -1564,7 +1563,7 @@ plan rollback checks remain in force; temporal CTAS checks keep their125 fast
 path only after the retained requirement has been checked. Set-key/marker
 admission has its independent 131 owner. Earlier unpublished set-key602/603 payloads
 are historical artifacts, not aliases to the released LOAD602, VIEWS603/604 or
-new set-key605 identities; this revision neither remaps nor replays them.
+new set-key616 identities; this revision neither remaps nor replays them.
 
 TIMESTAMPADD SECOND normalization alone retains function 601 and floor 124.
 A combination with set keys or scalar markers requires 131; the actual-stream
@@ -1590,11 +1589,11 @@ A new binary configured at immediate predecessor floor 130 rejects these
 expressions before execution. An actual old binary lacks the new guard: new
 senders must exclude it, and durable authoring must not publish an expression
 under a floor below 131. Lowering a new binary's floor does not rewrite existing
-catalog expressions or teach an old binary identity 605.
+catalog expressions or teach an old binary identity 616.
 
 VIEWS metadata alone requires126, including its actual-stream handshake. Combining
 VIEWS metadata with a set key or scalar marker requires 131. Literal IDs603/604
-remain VIEWS functions; they are never recognized as set keys. Fresh605 FLOAT/DOUBLE
+remain VIEWS functions; they are never recognized as set keys. Fresh616 FLOAT/DOUBLE
 wire fixtures are checked against actual official-main130 source, where the key
 is absent but both VIEWS functions, LOAD602 and TIMESTAMPADD601 remain available.
 
