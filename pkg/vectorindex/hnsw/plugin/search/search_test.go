@@ -16,8 +16,6 @@ package search
 
 import (
 	"context"
-	"errors"
-	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -28,13 +26,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/search/planreader"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -248,85 +244,4 @@ func TestExplainSettings(t *testing.T) {
 	got, err = Hooks{}.ExplainSettings(malformed, false)
 	require.NoError(t, err)
 	require.Nil(t, got)
-}
-
-type localDeletesEngine struct {
-	engine.Engine
-	rel engine.Relation
-}
-
-func (e localDeletesEngine) Database(context.Context, string, client.TxnOperator) (engine.Database, error) {
-	return localDeletesDatabase{rel: e.rel}, nil
-}
-
-type localDeletesDatabase struct {
-	engine.Database
-	rel engine.Relation
-}
-
-func (d localDeletesDatabase) Relation(context.Context, string, any) (engine.Relation, error) {
-	return d.rel, nil
-}
-
-type localDeletesRelation struct {
-	engine.Relation
-	rows uint64
-	ok   bool
-	err  error
-}
-
-func (r localDeletesRelation) TransactionLocalDeletedRows(context.Context) (uint64, bool, error) {
-	return r.rows, r.ok, r.err
-}
-
-type localWorkspace struct {
-	client.Workspace
-	readonly bool
-}
-
-func (w localWorkspace) Readonly() bool { return w.readonly }
-
-type localWorkspaceTxn struct {
-	client.TxnOperator
-	ws client.Workspace
-}
-
-func (o localWorkspaceTxn) GetWorkspace() client.Workspace { return o.ws }
-
-func TestTransactionLocalBudget(t *testing.T) {
-	proc := testutil.NewProc(t)
-	spec := &plan.IndexSearchScan{
-		SourceTable:    &plan.ObjectRef{SchemaName: "db"},
-		SourceTableDef: &plan.TableDef{Name: "src"},
-	}
-	budget := func(rel engine.Relation, readonly bool, resultLimit uint64) (uint64, error) {
-		proc.Base.SessionInfo.StorageEngine = localDeletesEngine{rel: rel}
-		proc.Base.TxnOperator = localWorkspaceTxn{ws: localWorkspace{readonly: readonly}}
-		return transactionLocalBudget(proc, spec, resultLimit)
-	}
-
-	n, err := budget(localDeletesRelation{rows: 15, ok: true}, false, 1)
-	require.NoError(t, err)
-	require.Equal(t, uint64(16), n, "LIMIT plus every row the transaction deleted")
-
-	for _, tc := range []struct {
-		name     string
-		rel      engine.Relation
-		readonly bool
-		limit    uint64
-	}{
-		{name: "read-only transaction", rel: localDeletesRelation{rows: 15, ok: true}, readonly: true, limit: 1},
-		{name: "no limit", rel: localDeletesRelation{rows: 15, ok: true}, limit: 0},
-		{name: "no provider", rel: struct{ engine.Relation }{}, limit: 1},
-		{name: "uncounted deletes", rel: localDeletesRelation{}, limit: 1},
-		{name: "overflow", rel: localDeletesRelation{rows: 2, ok: true}, limit: math.MaxUint64},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			n, err := budget(tc.rel, tc.readonly, tc.limit)
-			require.NoError(t, err)
-			require.Zero(t, n)
-		})
-	}
-	_, err = budget(localDeletesRelation{err: errors.New("workspace unavailable")}, false, 1)
-	require.Error(t, err)
 }

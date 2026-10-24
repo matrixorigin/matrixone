@@ -21,8 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -225,95 +223,5 @@ func TestTxnTableDelegateSourceCommitTS(t *testing.T) {
 	combined.combined.is = true
 	combined.combined.tbl = &combinedTxnTable{}
 	_, err = combined.SourceCommitTS(context.Background(), types.TS{})
-	require.Error(t, err)
-}
-
-type localDeletesStub struct {
-	engine.Relation
-	rows uint64
-	ok   bool
-	err  error
-}
-
-func (rel *localDeletesStub) TransactionLocalDeletedRows(context.Context) (uint64, bool, error) {
-	return rel.rows, rel.ok, rel.err
-}
-
-func deleteEntry(tableID uint64, rows int) Entry {
-	bat := batch.NewWithSize(1)
-	bat.SetRowCount(rows)
-	return Entry{typ: DELETE, tableId: tableID, bat: bat}
-}
-
-func s3DeleteEntry(t *testing.T, proc *process.Process, tableID uint64, objectRows ...uint32) Entry {
-	bat := batch.NewWithSize(1)
-	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
-	for _, rows := range objectRows {
-		id := objectio.NewObjectid()
-		stats := objectio.NewObjectStatsWithObjectID(&id, false, false, true)
-		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, rows))
-		require.NoError(t, vector.AppendBytes(bat.Vecs[0], stats.Marshal(), false, proc.Mp()))
-	}
-	bat.SetRowCount(len(objectRows))
-	return Entry{typ: DELETE, tableId: tableID, fileName: "tombstone", bat: bat}
-}
-
-func TestTransactionLocalDeletedRows(t *testing.T) {
-	ctx := context.Background()
-	tbl, proc := newViewPathTxnTable(t)
-	insert := deleteEntry(42, 4)
-	insert.typ = INSERT
-	soft := deleteEntry(42, 1)
-	soft.typ = SOFT_DELETE_OBJECT
-
-	tbl.getTxn().writes = []Entry{deleteEntry(42, 3), deleteEntry(7, 100), insert, s3DeleteEntry(t, proc, 42, 10, 20)}
-	rows, ok, err := tbl.TransactionLocalDeletedRows(ctx)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, uint64(3+10+20), rows, "own deletes, row and S3 tombstones, other tables and inserts ignored")
-
-	tbl.getTxn().writes = append(tbl.getTxn().writes, soft)
-	_, ok, err = tbl.TransactionLocalDeletedRows(ctx)
-	require.NoError(t, err)
-	require.False(t, ok, "an object-level delete has no row count")
-}
-
-func TestCombinedTxnTableTransactionLocalDeletedRows(t *testing.T) {
-	ctx := context.Background()
-	members := func(rels ...engine.Relation) *combinedTxnTable {
-		return &combinedTxnTable{tablesFunc: func() ([]engine.Relation, error) { return rels, nil }}
-	}
-	rows, ok, err := members(&localDeletesStub{rows: 2, ok: true}, &localDeletesStub{rows: 5, ok: true}).
-		TransactionLocalDeletedRows(ctx)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, uint64(7), rows)
-
-	_, ok, err = members(&localDeletesStub{rows: 2, ok: true}, &localDeletesStub{}).TransactionLocalDeletedRows(ctx)
-	require.NoError(t, err)
-	require.False(t, ok)
-
-	_, ok, err = members(struct{ engine.Relation }{}).TransactionLocalDeletedRows(ctx)
-	require.NoError(t, err)
-	require.False(t, ok)
-
-	_, _, err = members(&localDeletesStub{err: errors.New("member unavailable")}).TransactionLocalDeletedRows(ctx)
-	require.Error(t, err)
-
-	_, _, err = (&combinedTxnTable{}).TransactionLocalDeletedRows(ctx)
-	require.Error(t, err)
-}
-
-func TestTxnTableDelegateTransactionLocalDeletedRows(t *testing.T) {
-	ctx := context.Background()
-	rows, ok, err := (&txnTableDelegate{origin: failClosedTxnTable(t)}).TransactionLocalDeletedRows(ctx)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, uint64(0), rows, "an insert is not a delete")
-
-	combined := &txnTableDelegate{}
-	combined.combined.is = true
-	combined.combined.tbl = &combinedTxnTable{}
-	_, _, err = combined.TransactionLocalDeletedRows(ctx)
 	require.Error(t, err)
 }

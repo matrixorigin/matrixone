@@ -145,6 +145,20 @@ Project  𝄀
                     Runtime Filter Probe: t2.id  𝄀
               ->  Vector Index Scan on idx_hnsw2 [l2_distance]  𝄀
                     Vector Index: idx_hnsw2, Metric: l2_distance, Candidate Limit: 1
+select id, l2_distance(v, '[0,0]') as d from t2 order by d limit 3;
+➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
+1  ¦  1.4142135381698608  𝄀
+2  ¦  2.8284270763397217  𝄀
+3  ¦  4.242640495300293
+begin;
+insert into t2 values (21, '[0,0]');
+select id from t2 order by l2_distance(v, '[0,0]') limit 1;
+➤ id[-5,64,0]  𝄀
+1
+select id from t2 order by l2_distance(v, '[0,0]') limit 1 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+21
+rollback;
 begin;
 delete from t2 where id <= 15;
 explain select id from t2 order by l2_distance(v, '[0,0]') limit 2;
@@ -163,16 +177,46 @@ Project  𝄀
                     Runtime Filter Probe: t2.id  𝄀
               ->  Vector Index Scan on idx_hnsw2 [l2_distance]  𝄀
                     Vector Index: idx_hnsw2, Metric: l2_distance, Candidate Limit: 2
-select id from t2 order by l2_distance(v, '[0,0]') limit 1;
-➤ id[-5,64,0]  𝄀
-16
+select count(*) from t2;
+➤ count(*)[-5,64,0]  𝄀
+5
 select id from t2 order by l2_distance(v, '[0,0]') limit 2;
+➤ id[-5,64,0]
+select id from t2 order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=force';
 ➤ id[-5,64,0]  𝄀
 16  𝄀
 17
 rollback;
-select id from t2 order by l2_distance(v, '[0,0]') limit 1;
+begin;
+update t2 set v = '[100,100]' where id = 1;
+select id, v, l2_distance(v, '[0,0]') as d from t2 order by d limit 2;
+➤ id[-5,64,0]  ¦  v[12,2,0]  ¦  d[8,9,0]  𝄀
+1  ¦  [100, 100]  ¦  1.4142135381698608  𝄀
+2  ¦  [2, 2]  ¦  2.8284270763397217
+select id, v, l2_distance(v, '[0,0]') as d from t2 order by d limit 2 by rank with option 'mode=force';
+➤ id[-5,64,0]  ¦  v[12,2,0]  ¦  d[8,53,31]  𝄀
+2  ¦  [2, 2]  ¦  2.8284270763397217  𝄀
+3  ¦  [3, 3]  ¦  4.242640495300293
+rollback;
+insert into t2 values (22, '[0,0]');
+select id from t2 order by l2_distance(v, '[0,0]') limit 1 by rank with option 'mode=force';
 ➤ id[-5,64,0]  𝄀
-1
+22
+explain select id from t2 order by l2_distance(v, '[0,0]') limit 1;
+-- @regex("Vector Index Scan on idx_hnsw2", true)
+-- @regex("Sort Key: l2_distance", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t2.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on issue_29889_hnsw.t2  𝄀
+                    Runtime Filter Probe: t2.id  𝄀
+              ->  Vector Index Scan on idx_hnsw2 [l2_distance]  𝄀
+                    Vector Index: idx_hnsw2, Metric: l2_distance, Candidate Limit: 1
 drop database issue_29889_hnsw;
 set experimental_hnsw_index = 0;

@@ -51,14 +51,13 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 	// - "force": Disable vector index, force full table scan (for debugging/comparison)
 	// - nil/other: Enable vector index with default behavior
 	//
-	// WARNING: TOXIC. Do not fall back to a full table scan when the async index lags the
-	// source. Decision (#30987, @cpegeric, 2026-10-23): a lagging index is searched as is; it
-	// is eventually consistent (it lacks inserted rows and new versions until ISCP applies
-	// them), and a brute-force scan of a large table (88M vectors) on every lag window is not
-	// affordable. Only mode=force scans the table.
-	// Accepted consequence: while the index lags, a query can return fewer than LIMIT rows
-	// (the join drops candidates deleted or changed since the build) and miss rows not yet
-	// indexed. This is by design, not a bug.
+	// WARNING: TOXIC. Do not fall back to a full table scan, or widen the search, when the
+	// async index lags the source. Decision (#30987, @cpegeric, 2026-10-24): the search
+	// returns the candidates found in the usearch index, joined to the source table by primary
+	// key; only mode=force scans the table. Accepted consequence, for uncommitted writes of
+	// this transaction and for commits ISCP has not applied: rows not in the index are not
+	// returned, rows deleted from the source are dropped by the join (fewer than LIMIT rows),
+	// and rows whose vector changed are ranked and returned with the indexed vector's distance.
 	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "force" {
 		return nil, nil
 	}

@@ -19,7 +19,6 @@ package search
 import (
 	"context"
 	"fmt"
-	"math"
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -160,16 +159,12 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 	if tblcfg.MetadataTable == "" || tblcfg.IndexTable == "" {
 		return nil, moerr.NewInvalidInputNoCtx("hnsw index search is missing its hidden tables")
 	}
-	local, err := transactionLocalBudget(proc, spec, req.ResultLimit)
-	if err != nil {
-		return nil, err
-	}
 	s := &searcher{
 		proc:        proc,
 		idxcfg:      idxcfg,
 		tblcfg:      tblcfg,
 		query:       req.QueryPayload,
-		limit:       max(req.CandidateBudget, local, 1),
+		limit:       max(req.CandidateBudget, 1),
 		snapshot:    spec.ScanSnapshot,
 		resultLimit: req.ResultLimit,
 		maxLimit:    req.MaxInternalTopK,
@@ -181,46 +176,6 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 		}
 	}
 	return s, nil
-}
-
-// transactionLocalBudget returns LIMIT+OFFSET plus the source rows this transaction deleted
-// or updated and has not committed. The asynchronous index still returns those rows and the
-// base-table join drops them, so the search keeps room for each. It is 0 when the transaction
-// has no such rows or they cannot be counted.
-//
-// WARNING: TOXIC. Do not fall back to a full table scan, or retry into one, when the index
-// lags the source (#30987). Commits by other transactions that ISCP has not applied yet are
-// eventually consistent; only this transaction's own deletes and updates are counted here.
-// Accepted consequence: while the index lags, a query can return fewer than LIMIT rows (the
-// join drops candidates other transactions deleted or changed) and miss rows not yet indexed.
-// This is by design, not a bug.
-func transactionLocalBudget(proc *process.Process, spec *plan.IndexSearchScan, resultLimit uint64) (uint64, error) {
-	txn := proc.GetTxnOperator()
-	if resultLimit == 0 || txn == nil || txn.GetWorkspace() == nil || txn.GetWorkspace().Readonly() ||
-		sqlexec.NewSqlProcess(proc).ApplyScanSnapshot(spec.ScanSnapshot) != nil {
-		return 0, nil
-	}
-	if proc.GetSessionInfo() == nil || proc.GetSessionInfo().StorageEngine == nil {
-		return 0, nil
-	}
-	ctx := proc.Ctx
-	db, err := proc.GetSessionInfo().StorageEngine.Database(ctx, spec.SourceTable.SchemaName, txn)
-	if err != nil {
-		return 0, err
-	}
-	rel, err := db.Relation(ctx, spec.SourceTableDef.Name, nil)
-	if err != nil {
-		return 0, err
-	}
-	provider, ok := rel.(engine.TransactionLocalDeletesProvider)
-	if !ok {
-		return 0, nil
-	}
-	deleted, ok, err := provider.TransactionLocalDeletedRows(ctx)
-	if err != nil || !ok || deleted > math.MaxUint64-resultLimit {
-		return 0, err
-	}
-	return resultLimit + deleted, nil
 }
 
 // setMembership builds the exact primary-key filter of the serialized key vector payload.

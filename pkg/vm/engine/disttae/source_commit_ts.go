@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -78,72 +77,6 @@ func (tbl *txnTable) hasTransactionLocalWrites() bool {
 		}
 	}
 	return false
-}
-
-var (
-	_ engine.TransactionLocalDeletesProvider = (*txnTable)(nil)
-	_ engine.TransactionLocalDeletesProvider = (*txnTableDelegate)(nil)
-	_ engine.TransactionLocalDeletesProvider = (*combinedTxnTable)(nil)
-)
-
-// TransactionLocalDeletedRows counts the rows this transaction deleted from the
-// table, including tombstones already written to S3. A soft-deleted object or an
-// ALTER of the table removes rows without a per-row count, so it reports no count.
-func (tbl *txnTable) TransactionLocalDeletedRows(context.Context) (uint64, bool, error) {
-	txn := tbl.getTxn()
-	txn.Lock()
-	defer txn.Unlock()
-	var rows uint64
-	for _, entry := range txn.writes {
-		if entry.tableId != tbl.tableId || entry.bat == nil || entry.bat.RowCount() == 0 {
-			continue
-		}
-		switch entry.typ {
-		case DELETE:
-			if entry.fileName == "" {
-				rows += uint64(entry.bat.RowCount())
-				continue
-			}
-			stats := entry.bat.Vecs[0]
-			for i := range stats.Length() {
-				ss := objectio.ObjectStats(stats.GetBytesAt(i))
-				rows += uint64(ss.Rows())
-			}
-		case SOFT_DELETE_OBJECT, ALTER:
-			return 0, false, nil
-		}
-	}
-	return rows, true, nil
-}
-
-func (tbl *txnTableDelegate) TransactionLocalDeletedRows(ctx context.Context) (uint64, bool, error) {
-	if tbl.combined.is {
-		return tbl.combined.tbl.TransactionLocalDeletedRows(ctx)
-	}
-	return tbl.origin.TransactionLocalDeletedRows(ctx)
-}
-
-func (t *combinedTxnTable) TransactionLocalDeletedRows(ctx context.Context) (uint64, bool, error) {
-	if t.tablesFunc == nil {
-		return 0, false, moerr.NewInternalErrorNoCtx("transaction-local deletes have no partitioned members")
-	}
-	relations, err := t.tablesFunc()
-	if err != nil {
-		return 0, false, err
-	}
-	var rows uint64
-	for _, relation := range relations {
-		provider, ok := relation.(engine.TransactionLocalDeletesProvider)
-		if !ok {
-			return 0, false, nil
-		}
-		n, ok, err := provider.TransactionLocalDeletedRows(ctx)
-		if err != nil || !ok {
-			return 0, false, err
-		}
-		rows += n
-	}
-	return rows, true, nil
 }
 
 func (tbl *txnTableDelegate) SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error) {
