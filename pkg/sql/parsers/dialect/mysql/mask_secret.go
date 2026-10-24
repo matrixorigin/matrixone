@@ -51,6 +51,9 @@ const (
 //     CREATE/ALTER otherwise persist cloud keys, secrets and tokens verbatim;
 //     and the parse-error echo of a malformed such statement must not leak
 //     them either, #30746)
+//   - the same rules applied INSIDE the string literal of a leading
+//     `PREPARE ... FROM '<sql>'`: that literal is SQL of its own whose
+//     credential text is invisible to an outer token scan (#30747 review)
 //
 // Replacement happens on the RAW source span of each value token — the
 // scanner-decoded token length is never trusted, so escaped content,
@@ -58,7 +61,16 @@ const (
 // Quoted values keep their quotes (`'******'`). The function tolerates
 // incomplete, unterminated or truncated fragments and is idempotent.
 func MaskSensitiveSqlLiterals(sql string) string {
-	return maskSensitiveSqlLiteralsScoped(sql, CredentialStateNone, true)
+	return MaskSensitiveSqlLiteralsWithSQLMode(sql, 0)
+}
+
+// MaskSensitiveSqlLiteralsWithSQLMode is MaskSensitiveSqlLiterals evaluated
+// under the effective lexical SQL mode: whether a backslash escapes a quote
+// changes where string tokens — and therefore credential values — begin and
+// end, so diagnostics must mask what the session parser actually read
+// (#30747 review).
+func MaskSensitiveSqlLiteralsWithSQLMode(sql string, mode SQLModeFlags) string {
+	return maskSensitiveSqlLiteralsScoped(sql, CredentialStateNone, true, mode)
 }
 
 // MaskSensitiveSqlLiteralsWithInitialState is MaskSensitiveSqlLiterals for a
@@ -67,7 +79,7 @@ func MaskSensitiveSqlLiterals(sql string) string {
 // a value): the keyword context is no longer visible, so the scanner starts
 // in the given state.
 func MaskSensitiveSqlLiteralsWithInitialState(sql string, initial CredentialMapState) string {
-	return maskSensitiveSqlLiteralsScoped(sql, initial, true)
+	return maskSensitiveSqlLiteralsScoped(sql, initial, true, 0)
 }
 
 // MaskStageCredentialLiteralsWithInitialState masks ONLY the values inside a
@@ -78,7 +90,14 @@ func MaskSensitiveSqlLiteralsWithInitialState(sql string, initial CredentialMapS
 // maps must still be scrubbed even when the echo begins mid-map or right at
 // a value token.
 func MaskStageCredentialLiteralsWithInitialState(sql string, initial CredentialMapState) string {
-	return maskSensitiveSqlLiteralsScoped(sql, initial, false)
+	return maskSensitiveSqlLiteralsScoped(sql, initial, false, 0)
+}
+
+// MaskStageCredentialLiteralsWithInitialStateAndSQLMode is
+// MaskStageCredentialLiteralsWithInitialState under the effective lexical
+// SQL mode (see MaskSensitiveSqlLiteralsWithSQLMode).
+func MaskStageCredentialLiteralsWithInitialStateAndSQLMode(sql string, initial CredentialMapState, mode SQLModeFlags) string {
+	return maskSensitiveSqlLiteralsScoped(sql, initial, false, mode)
 }
 
 // maskableSecretKeywords is the fast-path filter: without any of these
@@ -88,8 +107,10 @@ var maskableSecretKeywords = []string{"identified", "credentials", "access_key_i
 
 // maskSensitiveSqlLiteralsScoped is the shared scanner. maskAll controls the
 // identified-by/with and access-key rules; the CREDENTIALS map rule always
-// runs.
-func maskSensitiveSqlLiteralsScoped(sql string, initial CredentialMapState, maskAll bool) string {
+// runs. Effective token boundaries follow the scanner's own trivia skipping
+// exactly, so whitespace or comments before a token never desynchronize the
+// map separator and value detection (#30747 review).
+func maskSensitiveSqlLiteralsScoped(sql string, initial CredentialMapState, maskAll bool, mode SQLModeFlags) string {
 	if initial == CredentialStateNone && maskAll {
 		lower := strings.ToLower(sql)
 		found := false
@@ -104,7 +125,7 @@ func maskSensitiveSqlLiteralsScoped(sql string, initial CredentialMapState, mask
 		}
 	}
 
-	scanner := NewScanner(dialect.MYSQL, sql)
+	scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
 	defer PutScanner(scanner)
 	previousToken := 0
 	eq := int('=')
@@ -124,6 +145,10 @@ func maskSensitiveSqlLiteralsScoped(sql string, initial CredentialMapState, mask
 	for scanner.Pos < len(sql) {
 		tokStart := scanner.Pos
 		typ, s := scanSensitiveToken(scanner, &previousToken)
+		// Scan() consumes leading whitespace and comments itself, so the
+		// token's byte identity lives at the first post-trivia position, not
+		// at tokStart (#30747 review: `{'key' : 'v'}` or `=/*c*/'v'`).
+		effStart := scanner.skipBlankAndCommentsFrom(tokStart)
 		if credState != CredentialStateNone {
 			switch credState {
 			case CredentialStateAfterKeyword:
@@ -139,21 +164,26 @@ func maskSensitiveSqlLiteralsScoped(sql string, initial CredentialMapState, mask
 			case CredentialStateAfterMapEq:
 				if typ == lbrace {
 					credState = CredentialStateInMap
-				} else {
-					credState = CredentialStateNone
+					continue
 				}
+				if isMapSep(typ, effStart) {
+					// a doubled separator (CREDENTIALS = = {...}) must not
+					// abandon the sensitive map context (#30747 review).
+					continue
+				}
+				credState = CredentialStateNone
 				continue
 			case CredentialStateInMap:
 				if typ == rbrace {
 					credState = CredentialStateNone
 					continue
 				}
-				if isMapSep(typ, tokStart) {
+				if isMapSep(typ, effStart) {
 					credState = CredentialStateInMapAfterEq
 				}
 				continue
 			case CredentialStateInMapAfterEq:
-				if isMapSep(typ, tokStart) {
+				if isMapSep(typ, effStart) {
 					// a doubled separator inside the map still precedes the
 					// value
 					continue
@@ -165,7 +195,18 @@ func maskSensitiveSqlLiteralsScoped(sql string, initial CredentialMapState, mask
 					credState = CredentialStateInMap
 					continue
 				}
-				spans = appendValueMaskSpan(spans, sql, tokStart, scanner.Pos)
+				if effStart < scanner.Pos && (sql[effStart] == '\'' || sql[effStart] == '"' ||
+					(sql[effStart] == '$' && len(dollarQuoteDelimiter(sql, effStart)) > 0)) {
+					spans = appendValueMaskSpan(spans, sql, effStart, scanner.Pos)
+				} else {
+					// An UNQUOTED value is already outside the stage map
+					// grammar: a single token is not a trustworthy boundary
+					// and punctuation between tokens (/, +, ...) would leave
+					// the tail of the secret visible (#30747 review). Redact
+					// everything up to the next map-level separator, where
+					// the next key or the map end reliably resumes.
+					spans = append(spans, maskUnquotedValueRun(sql, effStart))
+				}
 				credState = CredentialStateInMap
 				continue
 			}
@@ -183,7 +224,8 @@ func maskSensitiveSqlLiteralsScoped(sql string, initial CredentialMapState, mask
 				valueStart := scanner.Pos
 				typ, _ = scanSensitiveToken(scanner, &previousToken)
 				if typ != RANDOM {
-					spans = appendValueMaskSpan(spans, sql, valueStart, scanner.Pos)
+					spans = appendValueMaskSpan(spans, sql,
+						scanner.skipBlankAndCommentsFrom(valueStart), scanner.Pos)
 				}
 			}
 		} else if strings.ToLower(s) == "access_key_id" || strings.ToLower(s) == "secret_access_key" {
@@ -191,27 +233,111 @@ func maskSensitiveSqlLiteralsScoped(sql string, initial CredentialMapState, mask
 			if typ == eq {
 				valueStart := scanner.Pos
 				scanSensitiveToken(scanner, &previousToken)
-				spans = appendValueMaskSpan(spans, sql, valueStart, scanner.Pos)
+				spans = appendValueMaskSpan(spans, sql,
+					scanner.skipBlankAndCommentsFrom(valueStart), scanner.Pos)
 			}
 		}
 	}
 
-	if len(spans) == 0 {
+	out := sql
+	if len(spans) > 0 {
+		var builder strings.Builder
+		builder.Grow(len(sql))
+		prev := 0
+		for _, sp := range spans {
+			if sp[1] <= sp[0] || sp[0] < prev {
+				continue
+			}
+			builder.WriteString(sql[prev:sp[0]])
+			builder.WriteString("******")
+			prev = sp[1]
+		}
+		builder.WriteString(sql[prev:])
+		out = builder.String()
+	}
+	if initial == CredentialStateNone {
+		// A leading PREPARE wraps its statement in one string token; the
+		// outer scan cannot see credentials inside it (#30747 review).
+		out = maskPreparedSqlLiterals(out, maskAll, mode)
+	}
+	return out
+}
+
+// maskUnquotedValueRun covers an unquoted (malformed) credential value: from
+// the value's first byte through the next `,` or `}` — the nearest positions
+// where map structure reliably resumes. Idempotent: the replacement `******`
+// re-derives the identical span.
+func maskUnquotedValueRun(sql string, start int) [2]int {
+	end := start
+	for end < len(sql) && sql[end] != ',' && sql[end] != '}' {
+		end++
+	}
+	return [2]int{start, end}
+}
+
+// dollarQuoteDelimiter reports the opening delimiter of a well-formed
+// dollar-quoted string starting at pos, or "" when pos does not start one.
+func dollarQuoteDelimiter(sql string, pos int) string {
+	if pos >= len(sql) || sql[pos] != '$' {
+		return ""
+	}
+	i := strings.IndexByte(sql[pos+1:], '$')
+	if i < 0 {
+		return ""
+	}
+	if !isDollarQuoteTag(sql[pos+1 : pos+1+i]) {
+		return ""
+	}
+	return sql[pos : pos+2+i]
+}
+
+// maskPreparedSqlLiterals descends into the string literal of a leading
+// `PREPARE <name> FROM '<sql>'`: that literal is a statement of its own, so
+// its credential literals must be masked by the same rules before the text
+// reaches statement records, diagnostics, or debug traces (#30747 review).
+// Text without the PREPARE/FROM string shape is returned unchanged. The
+// descent is depth-1: prepared content is masked in the base state without
+// re-entering this wrapper.
+func maskPreparedSqlLiterals(sql string, maskAll bool, mode SQLModeFlags) string {
+	scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
+	defer PutScanner(scanner)
+	previousToken := 0
+	typ, _ := scanSensitiveToken(scanner, &previousToken)
+	if typ != PREPARE {
 		return sql
 	}
-	var builder strings.Builder
-	builder.Grow(len(sql))
-	prev := 0
-	for _, sp := range spans {
-		if sp[1] <= sp[0] || sp[0] < prev {
-			continue
-		}
-		builder.WriteString(sql[prev:sp[0]])
-		builder.WriteString("******")
-		prev = sp[1]
+	typ, _ = scanSensitiveToken(scanner, &previousToken)
+	if typ == EofChar() || typ == LEX_ERROR {
+		return sql
 	}
-	builder.WriteString(sql[prev:])
-	return builder.String()
+	typ, _ = scanSensitiveToken(scanner, &previousToken)
+	if typ != FROM {
+		return sql
+	}
+	tokStart := scanner.Pos
+	typ, _ = scanSensitiveToken(scanner, &previousToken)
+	if typ == EofChar() {
+		return sql
+	}
+	effStart := scanner.skipBlankAndCommentsFrom(tokStart)
+	if effStart >= scanner.Pos || (sql[effStart] != '\'' && sql[effStart] != '"') {
+		return sql
+	}
+	quote := sql[effStart]
+	contentEnd := scanner.Pos - 1 // closing delimiter when terminated
+	if effStart+1 > contentEnd || sql[contentEnd] != quote {
+		// unterminated literal: everything after the opening quote is content
+		contentEnd = scanner.Pos
+		if contentEnd > len(sql) {
+			contentEnd = len(sql)
+		}
+	}
+	content := sql[effStart+1 : contentEnd]
+	masked := maskSensitiveSqlLiteralsScoped(content, CredentialStateNone, maskAll, mode)
+	if masked == content {
+		return sql
+	}
+	return sql[:effStart+1] + masked + sql[contentEnd:]
 }
 
 // appendValueMaskSpan records the RAW source span of a value token scanned

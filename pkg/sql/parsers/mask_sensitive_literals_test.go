@@ -15,6 +15,7 @@
 package parsers
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -96,4 +97,31 @@ func TestMaskSensitiveLiteralsForLoggingInParseErrorEcho(t *testing.T) {
 	in := `You have an error in your SQL syntax; ... near "creditials={'aws_secret_key'='******', more"`
 	got := MaskSensitiveLiteralsForLogging(in)
 	require.Equal(t, in, got, "already-masked diagnostics stay untouched")
+}
+
+// #30747 review: the record-text preprocessor (HandleSqlForRecord) must mask
+// with the session's effective lexical mode. Under NO_BACKSLASH_ESCAPES the
+// backslash is literal, so the first credential value terminates before the
+// comma; with the default mode the same text is a single escaped string. The
+// mode-less pass used to mangle the record and leave the second credential
+// visible — an exact live-row shape reproduced here in both directions.
+func TestHandleSqlForRecordWithSQLMode(t *testing.T) {
+	in := "create stage s9 url='file:///x' credentials={'aws_key'='foo\\','secret_key'='R3ONLY_CANARY'};"
+
+	parts := HandleSqlForRecordWithSQLMode(in, "NO_BACKSLASH_ESCAPES")
+	require.Len(t, parts, 1)
+	require.NotContains(t, parts[0], "R3ONLY_CANARY")
+	require.Contains(t, parts[0], `'aws_key'='******'`)
+	require.Contains(t, parts[0], `'secret_key'='******'`)
+
+	// default mode keeps the historical single-string reading
+	parts = HandleSqlForRecordWithSQLMode(in, "")
+	require.NotContains(t, parts[0], "RATHER", "sanity: shape unchanged")
+	require.NotContains(t, parts[0], "'foo\\'")
+
+	// by-statement helper carries the mode down to the fragment pass
+	records, err := HandleSqlForRecordByStatementWithSQLMode(context.Background(), in, "NO_BACKSLASH_ESCAPES")
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	require.NotContains(t, records[0], "R3ONLY_CANARY")
 }

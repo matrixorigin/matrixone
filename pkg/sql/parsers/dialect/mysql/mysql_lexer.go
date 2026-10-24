@@ -344,6 +344,11 @@ func (l *Lexer) setScanner(s *Scanner, lower int64, sqlMode SQLModeFlags) {
 	l.parseFirst = false
 	l.stopLexing = false
 	l.statementEnd = 0
+	// Parser reuse must not inherit the previous statement's credential-map
+	// context: a near echo of unrelated SQL would otherwise redact text that
+	// merely sits where a credential value once did (#30747 review).
+	l.credentialsState = 0
+	l.credentialsValuePos = 0
 }
 
 func (l *Lexer) HasSQLMode(flag SQLModeFlag) bool {
@@ -423,6 +428,9 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	switch {
 	case l.credentialsState == 1 && typ == int('='):
 		l.credentialsState = 2
+	case l.credentialsState == 2 && typ == int('='):
+		// a doubled separator (CREDENTIALS = = {...}) keeps the pending map
+		// context instead of dropping it (#30747 review)
 	case l.credentialsState == 2 && typ == int('{'):
 		l.credentialsState = 3
 	case l.credentialsState == 3 && typ == int('}'):
@@ -683,7 +691,7 @@ func (l *Lexer) Error(err string) {
 		// secret itself.
 		nearState = CredentialStateInMapAfterEq
 	}
-	near = MaskStageCredentialLiteralsWithInitialState(near, nearState)
+	near = MaskStageCredentialLiteralsWithInitialStateAndSQLMode(near, nearState, l.sqlMode)
 	near = commonutil.Abbreviate(near, -1)
 	l.scanner.LastError = PositionedErr{Err: errMsg, Line: l.scanner.Line, Col: l.scanner.Col, Near: near, LenStr: lenStr}
 }

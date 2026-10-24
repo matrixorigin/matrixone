@@ -76,14 +76,23 @@ var stripContents = map[string]int8{
 }
 
 var HandleSqlForRecord = func(sql string) []string {
+	return HandleSqlForRecordWithSQLMode(sql, "")
+}
+
+// HandleSqlForRecordWithSQLMode is HandleSqlForRecord whose credential masking
+// runs under the effective lexical SQL mode: backslash-escape handling decides
+// where string tokens — and therefore credential values — begin and end, so
+// the record mask must mirror the session parser (#30747 review).
+func HandleSqlForRecordWithSQLMode(sql string, sqlMode string) []string {
 	split := SplitSqlBySemicolon(sql)
+	flags := mysql.ParseSQLModeFlags(sqlMode)
 	for i := range split {
-		split[i] = handleSQLForRecordFragment(split[i])
+		split[i] = handleSQLForRecordFragment(split[i], flags)
 	}
 	return split
 }
 
-func handleSQLForRecordFragment(sql string) string {
+func handleSQLForRecordFragment(sql string, flags mysql.SQLModeFlags) string {
 	stripScanner := mysql.NewScanner(dialect.MYSQL, sql)
 	defer mysql.PutScanner(stripScanner)
 	//strip needed comment "/*XXX*/"
@@ -117,7 +126,7 @@ func handleSQLForRecordFragment(sql string) string {
 		sql = strings.TrimSpace(builder.String())
 	}
 
-	sql = MaskSensitiveLiteralsForLogging(sql)
+	sql = MaskSensitiveLiteralsForLoggingWithSQLMode(sql, flags)
 	sql = strings.TrimSpace(sql)
 	return sql
 }
@@ -138,6 +147,14 @@ func handleSQLForRecordFragment(sql string) string {
 // already-masked text produces the same text.
 func MaskSensitiveLiteralsForLogging(sql string) string {
 	return mysql.MaskSensitiveSqlLiterals(sql)
+}
+
+// MaskSensitiveLiteralsForLoggingWithSQLMode is MaskSensitiveLiteralsForLogging
+// under the effective lexical SQL mode of the session that produced the text:
+// backslash-escape handling changes where string tokens — and therefore
+// credential values — begin and end (#30747 review).
+func MaskSensitiveLiteralsForLoggingWithSQLMode(sql string, mode mysql.SQLModeFlags) string {
+	return mysql.MaskSensitiveSqlLiteralsWithSQLMode(sql, mode)
 }
 
 // scanSQLToken preserves qualified identifier context across raw token scans.
@@ -805,7 +822,7 @@ func HandleSqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, s
 	}
 	records := make([]string, len(fragments))
 	for i, fragment := range fragments {
-		records[i] = strings.Join(HandleSqlForRecord(fragment), ";")
+		records[i] = strings.Join(HandleSqlForRecordWithSQLMode(fragment, sqlMode), ";")
 	}
 	return records, nil
 }

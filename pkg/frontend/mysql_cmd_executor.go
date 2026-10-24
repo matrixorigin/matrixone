@@ -200,7 +200,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
 	}
-	envStmt = redactStatementTextForLogging(statement, envStmt)
+	envStmt = redactStatementTextForLogging(statement, envStmt, sessionSQLModeForParser(ses))
 
 	if cw != nil {
 		ses.ast = statement
@@ -216,7 +216,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	// envStmt has been redacted. Redact the completed diagnostic payload too:
 	// this is the final boundary before either session state or statement
 	// telemetry can retain it.
-	text = redactStatementTextForLogging(nil, text)
+	text = redactStatementTextForLogging(nil, text, sessionSQLModeForParser(ses))
 	ses.SetStmtId(stmID)
 	stmtTyp := getStatementType(statement).GetStatementType()
 	queryTyp := getStatementType(statement).GetQueryType()
@@ -333,7 +333,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return ctx, nil
 }
 
-func redactStatementTextForLogging(statement tree.Statement, text string) string {
+func redactStatementTextForLogging(statement tree.Statement, text string, sqlMode string) string {
 	// __mo_query is a user-supplied MongoDB filter or pipeline. It is valid in
 	// ordinary SELECT statements, whose AST formatting deliberately preserves
 	// string literals, so neither the default branch nor a re-rendered AST is a
@@ -349,8 +349,10 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 	// recorder (identified by, access keys, CREDENTIALS option maps). The
 	// successful-statement path already applies them upstream; the failed-parse
 	// diagnostic path passes raw, AST-less text here, and they must apply too
-	// before any truncation keeps a partial secret (#30747). Idempotent.
-	text = parsers.MaskSensitiveLiteralsForLogging(text)
+	// before any truncation keeps a partial secret (#30747). The session's
+	// effective lexical mode decides where string tokens — and therefore
+	// secrets — begin and end (#30747 review). Idempotent.
+	text = parsers.MaskSensitiveLiteralsForLoggingWithSQLMode(text, mysql.ParseSQLModeFlags(sqlMode))
 
 	switch stmt := statement.(type) {
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
@@ -382,16 +384,17 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 // through it — the fragment is extracted, masked on its own, and spliced
 // back. (The client-visible echo keeps the identified-by plaintext by
 // convention; only this diagnostic copy is fully masked.)
-func redactStatementErrorForLogging(err error, text string) error {
+func redactStatementErrorForLogging(err error, text string, sqlMode string) error {
 	if err == nil {
 		return err
 	}
 	if sqlmongodb.RedactSQLForDiagnostics(text) != text {
 		return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
 	}
+	mode := mysql.ParseSQLModeFlags(sqlMode)
 	errText := err.Error()
-	errText = maskSerializedNearFragment(errText, text)
-	if masked := parsers.MaskSensitiveLiteralsForLogging(errText); masked != err.Error() {
+	errText = maskSerializedNearFragment(errText, text, mode)
+	if masked := parsers.MaskSensitiveLiteralsForLoggingWithSQLMode(errText, mode); masked != err.Error() {
 		// Downstream (RecordParseErrorStatement) wraps the returned error with
 		// moerr.NewParseError, whose template prepends "SQL parser error: ".
 		// Return the plain masked text so the diagnostic keeps a single
@@ -418,8 +421,8 @@ func (e plainMaskedParseError) Error() string { return string(e) }
 // survive pagination), then the masked text is abbreviated to the configured
 // print length (#30747). kept as a helper so the masking-then-abbreviate
 // order is testable without a session.
-func maskQueryForDebugTrace(query string, maxLen int) string {
-	return commonutil.Abbreviate(redactStatementTextForLogging(nil, query), maxLen)
+func maskQueryForDebugTrace(query string, maxLen int, sqlMode string) string {
+	return commonutil.Abbreviate(redactStatementTextForLogging(nil, query, sqlMode), maxLen)
 }
 
 // maskSerializedNearFragment extracts the `near "..."` echo from a serialized
@@ -427,7 +430,7 @@ func maskQueryForDebugTrace(query string, maxLen int) string {
 // renderer appends the closing quote directly before the trailing `;`/suffix,
 // which never contains quotes, so the LAST double quote in the message closes
 // the fragment.
-func maskSerializedNearFragment(errText string, stmtText string) string {
+func maskSerializedNearFragment(errText string, stmtText string, mode mysql.SQLModeFlags) string {
 	anchor := strings.Index(errText, " near \"")
 	if anchor < 0 {
 		return errText
@@ -442,15 +445,15 @@ func maskSerializedNearFragment(errText string, stmtText string) string {
 		return errText
 	}
 	fragment := errText[start:end]
-	masked := parsers.MaskSensitiveLiteralsForLogging(fragment)
+	masked := parsers.MaskSensitiveLiteralsForLoggingWithSQLMode(fragment, mode)
 	if masked == fragment && stmtText != "" &&
-		mysql.MaskStageCredentialLiteralsWithInitialState(stmtText, mysql.CredentialStateNone) != stmtText {
+		mysql.MaskStageCredentialLiteralsWithInitialStateAndSQLMode(stmtText, mysql.CredentialStateNone, mode) != stmtText {
 		// The whole statement is a stage credential statement whose parse
 		// failed mid-map: the near echo begins inside the braces, replays no
 		// keyword, and may even use JSON-style colons, so the keyword-driven
 		// pass above finds nothing (#30746). Mask the fragment by map
 		// position instead.
-		masked = mysql.MaskStageCredentialLiteralsWithInitialState(fragment, mysql.CredentialStateInMapAfterEq)
+		masked = mysql.MaskStageCredentialLiteralsWithInitialStateAndSQLMode(fragment, mysql.CredentialStateInMapAfterEq, mode)
 	}
 	if masked == fragment {
 		return errText
@@ -5199,8 +5202,8 @@ func rewriteSQLStatementInput(ctx context.Context, ses *Session, input *UserInpu
 	return &rewrittenInput, nil
 }
 
-func sqlForRecord(sql string) string {
-	parts := parsers.HandleSqlForRecord(sql)
+func sqlForRecord(sql string, sqlMode string) string {
+	parts := parsers.HandleSqlForRecordWithSQLMode(sql, sqlMode)
 	if len(parts) == 0 {
 		return strings.TrimSpace(sql)
 	}
@@ -6520,7 +6523,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// internal and diagnostic inputs outside the client boundary.
 		resetDiagnosticsForStatement(ses, execCtx, errorInput, nil)
 		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
-		diagnosticErr := redactStatementErrorForLogging(parseErr, errorInput.getSql())
+		diagnosticErr := redactStatementErrorForLogging(parseErr, errorInput.getSql(), sessionSQLModeForParser(ses))
 		records, sources := errorInput.parseErrorRecords(ses)
 		var recordErr error
 		execCtx.reqCtx, recordErr = RecordParseErrorStatement(
@@ -6543,7 +6546,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// Keep the terminal error log on the same diagnostic boundary as
 		// RecordParseErrorStatement. Parse failures have no AST, so use the raw
 		// text scanner and never pass the original selector to the logger.
-		logStatementStringStatus(execCtx.reqCtx, ses, redactStatementTextForLogging(nil, errorInput.getSql()), fail, diagnosticErr)
+		logStatementStringStatus(execCtx.reqCtx, ses, redactStatementTextForLogging(nil, errorInput.getSql(), sessionSQLModeForParser(ses)), fail, diagnosticErr)
 		return parseErr
 	}
 
@@ -6591,7 +6594,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	stagedSQLRecords := make([]string, 0, 1)
 	if stagedSQLMode {
 		stagedInputs = append(stagedInputs, executionInput)
-		stagedSQLRecords = append(stagedSQLRecords, sqlForRecord(executionInput.getSql()))
+		stagedSQLRecords = append(stagedSQLRecords, sqlForRecord(executionInput.getSql(), sessionSQLModeForParser(ses)))
 	}
 
 	for i := 0; i < len(cws); i++ {
@@ -6917,7 +6920,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			}
 			cws = append(cws, nextCWs[0])
 			stagedInputs = append(stagedInputs, nextInput)
-			stagedSQLRecords = append(stagedSQLRecords, sqlForRecord(nextInput.getSql()))
+			stagedSQLRecords = append(stagedSQLRecords, sqlForRecord(nextInput.getSql(), sessionSQLModeForParser(ses)))
 			stagedRemaining = remaining
 		}
 
@@ -7206,7 +7209,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 			return resp, nil
 		}
-		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(maskQueryForDebugTrace(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted))))
+		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(maskQueryForDebugTrace(query, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted), sessionSQLModeForParser(ses))))
 		input := &UserInput{sql: query, rewritePolicy: rewritePolicy}
 		err = doComQuery(ses, execCtx, input)
 		if err != nil {
@@ -7285,7 +7288,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		newLastStmtID := ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
 		sql = wrapNativePrepareSQL(newStmtName, sql)
-		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(sql))
+		// The wrapped PREPARE embeds the payload SQL in one string literal;
+		// credential text inside it needs the same scrub before logging as
+		// the text protocol path (#30747 review).
+		ses.Debug(execCtx.reqCtx, "query trace", logutil.QueryField(maskQueryForDebugTrace(sql, int(getPu(ses.GetService()).SV.LengthOfQueryPrinted), sessionSQLModeForParser(ses))))
 
 		savedRowCount := ses.GetLastAffectedRows()
 		err = doComQuery(ses, execCtx, &UserInput{

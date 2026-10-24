@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -177,4 +178,85 @@ func TestMaskStageCredentialLiteralsWithInitialState(t *testing.T) {
 	for _, c := range cases {
 		require.Equal(t, c.want, MaskStageCredentialLiteralsWithInitialState(c.sql, c.in), c.sql)
 	}
+}
+
+// #30747 review: the scanner skips whitespace and comments before a token,
+// so separator/value detection must use post-trivia positions; malformed
+// maps (doubled separators, unquoted punctuated values) keep conservative
+// masking instead of abandoning the sensitive context.
+func TestMaskCredentialMapTriviaAndMalformedShapes(t *testing.T) {
+	cases := []struct {
+		sql  string
+		want string
+	}{
+		// whitespace before a JSON-style separator
+		{`credentials={'aws_key' : 'CANARY_ALPHA'}`, `credentials={'aws_key' : '******'}`},
+		// comment before the separator
+		{`credentials={'aws_key' /*c*/ : 'CANARY_ALPHA'}`, `credentials={'aws_key' /*c*/ : '******'}`},
+		// comment before the value: quote delimiters survive, masking idempotent
+		{`credentials={'aws_key'=/*a*/'CANARY_ALPHA'}`, `credentials={'aws_key'=/*a*/'******'}`},
+		// doubled map separator keeps the pending map context
+		{`CREDENTIALS = = {'aws_key'='CANARY_ALPHA'}`, `CREDENTIALS = = {'aws_key'='******'}`},
+		// malformed unquoted value: the punctuated tail is secret too
+		{`credentials={'aws_key'=prefix/CANARY_BETA+suffix}`, `credentials={'aws_key'=******}`},
+	}
+	for _, c := range cases {
+		got := MaskSensitiveSqlLiterals(c.sql)
+		require.Equal(t, c.want, got, c.sql)
+		require.NotContains(t, got, "CANARY", c.sql)
+		require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent: "+c.sql)
+	}
+}
+
+// #30747 review: under NO_BACKSLASH_ESCAPES a backslash does not escape the
+// closing quote; masking with the effective lexical mode must not scan across
+// the first value's terminator into the second credential.
+func TestMaskCredentialMapNoBackslashEscapes(t *testing.T) {
+	sql := `create stage s credentials={'aws_key'='foo\','secret_key'='CANARY_BETA'}`
+	got := MaskSensitiveSqlLiteralsWithSQLMode(sql, ParseSQLModeFlags("NO_BACKSLASH_ESCAPES"))
+	require.NotContains(t, got, "CANARY")
+	require.Contains(t, got, `'aws_key'='******'`)
+	require.Contains(t, got, `'secret_key'='******'`)
+	require.Equal(t, got, MaskSensitiveSqlLiteralsWithSQLMode(got, ParseSQLModeFlags("NO_BACKSLASH_ESCAPES")))
+}
+
+// #30747 review: PREPARE wraps its statement in one string literal, so an
+// outer token scan cannot see credential text inside it; the masker descends
+// into that literal at its owning boundary.
+func TestMaskPreparedSqlLiterals(t *testing.T) {
+	sql := `prepare p from "create stage s url='file:///x' credentials={'aws_key'='PREPARE_CANARY'}"`
+	got := MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "PREPARE_CANARY")
+	require.Contains(t, got, `prepare p from "create stage s url='file:///x' credentials={'aws_key'='******'}"`)
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+
+	// single-quoted prepare with an identified-by inside
+	got = MaskSensitiveSqlLiterals(`prepare q from 'create user u2 identified by "PWSECRET"'`)
+	require.NotContains(t, got, "PWSECRET")
+
+	// an ordinary string literal that is not a PREPARE body stays untouched
+	plain := `select "credentials={'aws_key'='VISIBLE_LITERAL'}"`
+	require.Equal(t, plain, MaskSensitiveSqlLiterals(plain))
+
+	// PREPARE over an unterminated literal: content still scrubbed
+	got = MaskSensitiveSqlLiterals(`prepare p from "create stage s credentials={'aws_key'='OPEN_END`)
+	require.NotContains(t, got, "OPEN_END")
+
+	// stage-only narrowing descends too (near-echo prefetch path)
+	got = MaskStageCredentialLiteralsWithInitialState(
+		`prepare p from "create stage s url='file:///x' credentials={'aws_key'='PREPARE_CANARY'}"`,
+		CredentialStateNone)
+	require.NotContains(t, got, "PREPARE_CANARY")
+}
+
+// #30747 review: parser reuse must not inherit the previous statement's
+// credential-map context; an unrelated later statement would otherwise see
+// its literals redacted by position.
+func TestSetScannerResetsCredentialContext(t *testing.T) {
+	lex := NewLexer(dialect.MYSQL, "create stage s credentials={'aws_key'='x'", 1)
+	lex.credentialsState = 4
+	lex.credentialsValuePos = 42
+	lex.setScanner(NewScanner(dialect.MYSQL, "badquery where value = 'VISIBLE'"), 1, 0)
+	require.Zero(t, lex.credentialsState)
+	require.Zero(t, lex.credentialsValuePos)
 }

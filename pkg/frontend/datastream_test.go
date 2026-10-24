@@ -30,7 +30,7 @@ func TestDataStreamCreateStatementLoggingRedactsApiKey(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
 	require.NoError(t, err)
 
-	redacted := redactStatementTextForLogging(stmt, sql)
+	redacted := redactStatementTextForLogging(stmt, sql, "")
 	require.NotContains(t, redacted, "top-secret-key")
 	require.Contains(t, redacted, "<redacted>")
 
@@ -40,13 +40,13 @@ func TestDataStreamCreateStatementLoggingRedactsApiKey(t *testing.T) {
 		"('server'='127.0.0.1','port'='4444','table'='src')"
 	plainStmt, err := mysql.ParseOne(context.Background(), plainSQL, 1)
 	require.NoError(t, err)
-	require.NotContains(t, strings.ToLower(redactStatementTextForLogging(plainStmt, plainSQL)), "apikey")
+	require.NotContains(t, strings.ToLower(redactStatementTextForLogging(plainStmt, plainSQL, "")), "apikey")
 
 	// an ordinary CREATE TABLE is passed through verbatim (not re-rendered)
 	ordinary := "create table t (a int)"
 	ordinaryStmt, err := mysql.ParseOne(context.Background(), ordinary, 1)
 	require.NoError(t, err)
-	require.Equal(t, ordinary, redactStatementTextForLogging(ordinaryStmt, ordinary))
+	require.Equal(t, ordinary, redactStatementTextForLogging(ordinaryStmt, ordinary, ""))
 }
 
 func TestMongoDBQueryStatementLoggingRedactsSelector(t *testing.T) {
@@ -78,7 +78,7 @@ func TestMongoDBQueryStatementLoggingRedactsSelector(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			redacted := redactStatementTextForLogging(stmt, test.sql)
+			redacted := redactStatementTextForLogging(stmt, test.sql, "")
 			require.NotContains(t, redacted, "password")
 			require.NotContains(t, redacted, "api_key")
 			require.NotContains(t, redacted, "super-secret-value")
