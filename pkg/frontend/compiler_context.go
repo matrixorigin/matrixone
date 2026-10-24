@@ -757,6 +757,15 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		}
 		useSessionTemporary = tcc.resolvePhysicalObjectAccount(identity, nil, snapshot) == tcc.GetSession().GetAccountId()
 	}
+	if useSessionTemporary && tcc.execCtx != nil &&
+		defines.IsPublicationViewBinding(tcc.execCtx.reqCtx) {
+		// Publication scope validation binds persisted objects only. A
+		// temporary table of the validating session would not merely shadow
+		// the persisted schema here (admitting the declaration a subscriber
+		// can never bind), it can also false-reject a healthy persisted
+		// schema, so it stays out of resolution entirely.
+		useSessionTemporary = false
+	}
 	isTmpTable := false
 	if useSessionTemporary {
 		realName, temporary := tcc.GetSession().GetTempTable(dbName, tableName)
@@ -1091,8 +1100,11 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 
 	ctx := tcc.execCtx.reqCtx
 
-	if val, ok := resolveStoredProcedureVariable(ctx, varName); ok {
-		return val, nil
+	// Procedure locals share ordinary variable lookup, never the system namespace.
+	if !isSystemVar {
+		if val, ok := resolveStoredProcedureVariable(ctx, varName); ok {
+			return val, nil
+		}
 	}
 
 	if isSystemVar {
@@ -1517,7 +1529,9 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 		v2.GetSubMetaDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	tempCtx := tcc.execCtx.reqCtx
+	// Subscription metadata SQL is a trusted catalog read, including when
+	// executed in a cloned historical transaction, not another user root.
+	tempCtx := plan2.ViewSchemaCatalogContext(tcc.execCtx.reqCtx)
 	txn := tcc.GetTxnHandler().GetTxn()
 	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
@@ -1549,7 +1563,7 @@ func (tcc *TxnCompilerContext) GetSubscriptionMetadata(
 	snapshot *plan2.Snapshot,
 	maxCandidates int,
 ) ([]*plan2.SubscriptionMetadata, error) {
-	tempCtx := tcc.execCtx.reqCtx
+	tempCtx := plan2.ViewSchemaCatalogContext(tcc.execCtx.reqCtx)
 	txn := tcc.GetTxnHandler().GetTxn()
 	var bh BackgroundExec
 	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
@@ -1578,6 +1592,16 @@ func (tcc *TxnCompilerContext) GetSubscriptionMetadata(
 	}
 
 	metas, err := subscriptionMetasFromSubInfos(tempCtx, subInfos)
+	if err != nil {
+		return nil, err
+	}
+	// Statement paths resolve the physical source through
+	// checkSubscriptionValidCommon; the metadata enumeration path must agree,
+	// or statistics and other metadata consumers would read the publisher's
+	// catalog for a foreign-source publication. Unauthorized foreign-source
+	// rows are dropped rather than enumerated through the publisher identity,
+	// which would substitute a same-named publisher database for the source.
+	metas, err = resolveSubscriptionSourceAccounts(tempCtx, bh, metas)
 	if err != nil {
 		return nil, err
 	}
@@ -1709,7 +1733,10 @@ func subscriptionMetadataVisibilitySQL(subscriptionNames string, protocolVersion
 func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {
 	bh := tcc.getOrCreateBackExec(tcc.GetContext())
 	bh.ClearExecResultSet()
-	_, err := checkSubscriptionValidCommon(tcc.GetContext(), tcc.GetSession(), subName, accName, pubName, bh)
+	// The create-only admission variant: CREATE DATABASE ... FROM must prove
+	// the subscriber can resolve every published view, while runtime resolves
+	// stay on the metadata-only checks.
+	_, err := checkSubscriptionValidForCreate(tcc.GetContext(), tcc.GetSession(), subName, accName, pubName, bh)
 	return err
 }
 

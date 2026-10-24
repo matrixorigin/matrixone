@@ -132,6 +132,22 @@ func Test_doCreatePublication(t *testing.T) {
 		return []interface{}{er}
 	}
 
+	mockedPublicationRelations := func(ctrl *gomock.Controller) []interface{} {
+		er := mock_frontend.NewMockExecResult(ctrl)
+		er.EXPECT().GetRowCount().Return(uint64(2)).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("t1", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return(catalog.SystemOrdinaryRel, nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(4)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(0)).Return("t2", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(1)).Return(catalog.SystemOrdinaryRel, nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(2)).Return("", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(1), uint64(3)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(1), uint64(4)).Return(uint64(0), nil).AnyTimes()
+		return []interface{}{er}
+	}
+
 	mockedSubInfoResults := func(ctrl *gomock.Controller) []interface{} {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
@@ -164,6 +180,12 @@ func Test_doCreatePublication(t *testing.T) {
 		// show tables
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedTblResults(ctrl))
+		// publication view scope relations
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedPublicationRelations(ctrl))
+		// publication view scope stability re-read
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedPublicationRelations(ctrl))
 		// insert into mo_pubs
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		// getSubInfosFromPub
@@ -177,7 +199,7 @@ func Test_doCreatePublication(t *testing.T) {
 			return
 		}
 
-		err = createPublication(ctx, bh, stmts[0].(*tree.CreatePublication))
+		err = createPublication(ctx, bh, stmts[0].(*tree.CreatePublication), int64(1))
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -198,8 +220,59 @@ func TestCreatePublicationRejectsMissingContextAccount(t *testing.T) {
 	require.NoError(t, err)
 	defer freeStatements(stmts)
 
-	err = createPublication(ctx, bh, stmts[0].(*tree.CreatePublication))
+	err = createPublication(ctx, bh, stmts[0].(*tree.CreatePublication), int64(1))
 	require.ErrorContains(t, err, "account 99 does not exist")
+}
+
+// TestPublicationCreateValidatesTableScope pins which CREATE PUBLICATION
+// shapes createPublication certifies under the caller-provided
+// lower_case_table_names mode: only an explicit table list of a named
+// database. Replay paths (PITR and snapshot restore) rely on this predicate
+// to resolve the replay executor's mode exactly then, so an account-level
+// publication or a TABLE * whole-database list - both certifying nothing -
+// must keep replaying when the executor cannot name a mode (issue #27767
+// CI: a PITR account-level replay began failing with the mode-unavailable
+// error).
+func TestPublicationCreateValidatesTableScope(t *testing.T) {
+	parseCreate := func(sql string) *tree.CreatePublication {
+		stmts, err := mysql.Parse(context.Background(), sql, 1)
+		require.NoError(t, err)
+		t.Cleanup(func() { freeStatements(stmts) })
+		cp, ok := stmts[0].(*tree.CreatePublication)
+		require.True(t, ok)
+		return cp
+	}
+
+	require.False(t, publicationCreateValidatesTableScope(
+		parseCreate("create publication pub1 database * account all")),
+		"account-level publications certify no table scope")
+
+	require.False(t, publicationCreateValidatesTableScope(
+		parseCreate("create publication pub1 database db1 account acc1")),
+		"a publication without a table list publishes the whole database")
+
+	require.False(t, publicationCreateValidatesTableScope(
+		parseCreate("create publication pub1 database db1 table `*` account acc1")),
+		"TABLE * is the whole-database scope by construction")
+
+	require.True(t, publicationCreateValidatesTableScope(
+		parseCreate("create publication pub1 database db1 table t1 account acc1")),
+		"an explicit table list is certified")
+
+	require.True(t, publicationCreateValidatesTableScope(
+		parseCreate("create publication pub1 database db1 table t1,t2 account acc1")),
+		"an explicit multi-table list is certified")
+
+	// Account level publications cannot carry a table list at all: the
+	// statement is refused by createPublication before any scope validation,
+	// so the replay must not resolve a mode for it either. Construct it
+	// directly because the persisted CREATE SQL never spells this shape.
+	accountLevelWithTables := &tree.CreatePublication{
+		Database: "*",
+		Table:    tree.TableNames{{ObjectName: "t1"}},
+	}
+	require.False(t, publicationCreateValidatesTableScope(accountLevelWithTables),
+		"an account-level statement with tables is refused before validation")
 }
 
 func newCreatePublicationIfNotExistsTest(
@@ -228,6 +301,14 @@ func newCreatePublicationIfNotExistsTest(
 	bh.sql2result["show tables from `db1`"] = newMrsForRestoreStringRows(
 		[]string{"Tables_in_db1"},
 		[][]interface{}{{"t1"}},
+	)
+	bh.sql2result[publicationRelationsSQL("db1", sysAccountID)] = newMrsForRestoreStringRows(
+		[]string{"relname", "relkind", "viewdef", "rel_id", "rel_version"},
+		[][]interface{}{{"t1", catalog.SystemOrdinaryRel, "", uint64(0), uint64(0)}},
+	)
+	bh.sql2result[publicationRelationsSQL("db1", 1)] = newMrsForRestoreStringRows(
+		[]string{"relname", "relkind", "viewdef", "rel_id", "rel_version"},
+		[][]interface{}{{"t1", catalog.SystemOrdinaryRel, "", uint64(0), uint64(0)}},
 	)
 
 	columnCheckSQL := "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'"
@@ -262,8 +343,8 @@ func newCreatePublicationIfNotExistsTest(
 func TestCreatePublicationIfNotExistsSkipsExistingPublication(t *testing.T) {
 	bh, ctx, stmt := newCreatePublicationIfNotExistsTest(t, true, true)
 
-	require.NoError(t, createPublication(ctx, bh, stmt))
-	require.Len(t, bh.executedSQLs, 5) // account, database, tables, schema and publication reads
+	require.NoError(t, createPublication(ctx, bh, stmt, int64(1)))
+	require.Len(t, bh.executedSQLs, 7) // account, database, tables, relations, stability relations, schema and publication reads
 	for _, sql := range bh.executedSQLs {
 		require.NotContains(t, sql, "insert into mo_catalog.mo_pubs")
 		require.NotContains(t, sql, "mo_catalog.mo_subs")
@@ -301,7 +382,7 @@ func TestCreatePublicationIfNotExistsUsesPublisherAccount(t *testing.T) {
 					bh.sql2err[sql] = insertErr
 				}
 			}
-			err = createPublication(ctx, bh, stmt)
+			err = createPublication(ctx, bh, stmt, int64(1))
 			if existing {
 				require.NoError(t, err)
 				require.Zero(t, inserts)
@@ -324,7 +405,7 @@ func TestCreatePublicationIfNotExistsLegacyCatalog(t *testing.T) {
 		[]string{"account_id", "pub_name", "database_name", "database_id", "table_list", "account_list", "created_time", "update_time", "owner", "creator", "comment"},
 		[][]interface{}{{int64(sysAccountID), "pub1", "db1", uint64(7), "t1", pubsub.AccountAll, "", nil, uint64(0), uint64(0), "original"}},
 	)
-	require.NoError(t, createPublication(ctx, bh, stmt))
+	require.NoError(t, createPublication(ctx, bh, stmt, int64(1)))
 	require.Contains(t, bh.executedSQLs, legacySQL)
 	for _, sql := range bh.executedSQLs {
 		require.NotContains(t, sql, "insert into")
@@ -482,7 +563,42 @@ func Test_showTablesFromDbQuotesDatabaseName(t *testing.T) {
 	}
 }
 
-func TestGenPubTablesStrDeduplicatesExplicitTables(t *testing.T) {
+// showTablesFromDb runs on the DDL statement's background executor. A
+// foreign-source publication stamps that executor to the source database
+// owner's account, while the SHOW TABLES plan's metadata-visibility fragment
+// evaluates against the DDL session's roles, which never include the foreign
+// owner's objects; without the internal-executor marker the read comes back
+// empty and every explicit table list fails with "table not exists".
+type internalExecutorContext struct{}
+
+func (internalExecutorContext) Matches(v any) bool {
+	ctx, ok := v.(context.Context)
+	return ok && defines.IsInternalExecutor(ctx)
+}
+
+func (internalExecutorContext) String() string {
+	return "context marked as trusted internal executor"
+}
+
+func Test_showTablesFromDbExecutesAsInternalDiscovery(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().ClearExecResultSet()
+	bh.EXPECT().Exec(internalExecutorContext{}, "show tables from `db`").Return(nil)
+
+	er := mock_frontend.NewMockExecResult(ctrl)
+	er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+	er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("resume_data", nil).AnyTimes()
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{er})
+
+	tables, err := showTablesFromDb(context.Background(), bh, "db")
+	require.NoError(t, err)
+	require.True(t, tables["resume_data"])
+}
+
+func TestResolvePubTableNamesDeduplicatesExplicitTables(t *testing.T) {
 	ctx := context.Background()
 	statements, err := mysql.Parse(ctx,
 		"create publication pub database db table t2, t1, t2 account all", 1)
@@ -501,10 +617,23 @@ func TestGenPubTablesStrDeduplicatesExplicitTables(t *testing.T) {
 	bh.init()
 	bh.sql2result[showTablesSQL] = result
 
-	pubTables, err := genPubTablesStr(ctx, bh, "db", statements[0].(*tree.CreatePublication).Table)
+	tableNames, err := resolvePubTableNames(ctx, bh, "db", statements[0].(*tree.CreatePublication).Table)
 	require.NoError(t, err)
-	require.Equal(t, "t1,t2", pubTables)
+	require.Equal(t, []string{"t1", "t2"}, tableNames)
 	require.Equal(t, []string{showTablesSQL}, bh.executedSQLs)
+}
+
+func TestPubTablesAllSelected(t *testing.T) {
+	ctx := context.Background()
+	// TABLE * is not producible by the current grammar; the guard keeps the
+	// legacy whole-database meaning of a sole "*" table entry.
+	all := tree.TableNames{{ObjectName: pubsub.TableAll}}
+	require.True(t, pubTablesAllSelected(all))
+
+	missingTable, err := mysql.Parse(ctx, "create publication pub database db table t1 account all", 1)
+	require.NoError(t, err)
+	defer freeStatements(missingTable)
+	require.False(t, pubTablesAllSelected(missingTable[0].(*tree.CreatePublication).Table))
 }
 
 func Test_doAlterPublication(t *testing.T) {
@@ -562,6 +691,22 @@ func Test_doAlterPublication(t *testing.T) {
 		er.EXPECT().GetRowCount().Return(uint64(2)).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("t1", nil).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(0)).Return("t2", nil).AnyTimes()
+		return []interface{}{er}
+	}
+
+	mockedAlterPublicationRelations := func(ctrl *gomock.Controller) []interface{} {
+		er := mock_frontend.NewMockExecResult(ctrl)
+		er.EXPECT().GetRowCount().Return(uint64(2)).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("t1", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return(catalog.SystemOrdinaryRel, nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(4)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(0)).Return("t2", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(1)).Return(catalog.SystemOrdinaryRel, nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(2)).Return("", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(1), uint64(3)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(1), uint64(4)).Return(uint64(0), nil).AnyTimes()
 		return []interface{}{er}
 	}
 
@@ -633,6 +778,12 @@ func Test_doAlterPublication(t *testing.T) {
 		// show tables
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedTblResults(ctrl))
+		// publication view scope relations
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedAlterPublicationRelations(ctrl))
+		// publication view scope stability re-read
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedAlterPublicationRelations(ctrl))
 		// getSubInfosFromPub
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedSubInfoResults(ctrl))
@@ -902,6 +1053,10 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 					[]string{"Tables_in_" + test.tableLookupDB},
 					[][]interface{}{{"t"}},
 				)
+				bh.sql2result[publicationRelationsSQL(test.tableLookupDB, 1)] = newMrsForRestoreStringRows(
+					[]string{"relname", "relkind", "viewdef", "rel_id", "rel_version"},
+					[][]interface{}{{"t", catalog.SystemOrdinaryRel, "", uint64(0), uint64(0)}},
+				)
 			}
 			bh.sql2result[getSubsSql+" and pub_account_name = 'sys' and pub_name = 'pub1'"] =
 				newMrsForRestoreStringRows(
@@ -957,6 +1112,16 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 					}
 				}
 				require.True(t, foundTableLookup)
+				// The view-scope relation read stays in the same source
+				// account context as the table list read.
+				foundRelationLookup := false
+				for i, sql := range bh.executedSQLs {
+					if sql == publicationRelationsSQL(test.tableLookupDB, test.wantTableAccount) {
+						foundRelationLookup = true
+						require.Equal(t, test.wantTableAccount, bh.executionAccountIDs[i])
+					}
+				}
+				require.True(t, foundRelationLookup)
 			}
 		})
 	}
@@ -1899,73 +2064,274 @@ func Test_doShowCcprSubscriptions(t *testing.T) {
 }
 
 func Test_doShowPublicationCoverage(t *testing.T) {
-	convey.Convey("show publication coverage", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
+	type pubRow struct {
+		accountID   int64
+		accountName string
+		dbName      string
+		tables      string
+		subs        string
+	}
 
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
+	newCheckColResult := func(ctrl *gomock.Controller, exists bool) []interface{} {
+		er := mock_frontend.NewMockExecResult(ctrl)
+		n := uint64(0)
+		if exists {
+			n = 1
 		}
-		ses := newSes(nil, ctrl)
-		ses.tenant = tenant
+		er.EXPECT().GetRowCount().Return(n).AnyTimes()
+		return []interface{}{er}
+	}
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		setPu("", pu)
-
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
-
-		mockedCheckColResults := func(ctrl *gomock.Controller) []interface{} {
-			er := mock_frontend.NewMockExecResult(ctrl)
-			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-			return []interface{}{er}
+	newPubResult := func(ctrl *gomock.Controller, pubs []pubRow, newSchema bool) []interface{} {
+		er := mock_frontend.NewMockExecResult(ctrl)
+		er.EXPECT().GetRowCount().Return(uint64(len(pubs))).AnyTimes()
+		getStr := func(col uint64, val func(pubRow) string) {
+			er.EXPECT().GetString(gomock.Any(), gomock.Any(), col).DoAndReturn(
+				func(_ context.Context, r, _ uint64) (string, error) { return val(pubs[r]), nil }).AnyTimes()
 		}
-
-		// Mock pub info result with specific tables
-		mockedPubInfoResults := func(ctrl *gomock.Controller) []interface{} {
-			er := mock_frontend.NewMockExecResult(ctrl)
-			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("sys", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("pub1", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("db1", nil).AnyTimes()
-			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(4)).Return(uint64(0), nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("t1,t2", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("all", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("", nil).AnyTimes()
-			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(8)).Return(true, nil).AnyTimes()
-			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(9)).Return(uint64(0), nil).AnyTimes()
-			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(10)).Return(uint64(0), nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(11)).Return("", nil).AnyTimes()
-			return []interface{}{er}
+		getUint64 := func(col uint64, val func(pubRow) uint64) {
+			er.EXPECT().GetUint64(gomock.Any(), gomock.Any(), col).DoAndReturn(
+				func(_ context.Context, r, _ uint64) (uint64, error) { return val(pubs[r]), nil }).AnyTimes()
 		}
+		er.EXPECT().GetInt64(gomock.Any(), gomock.Any(), uint64(0)).DoAndReturn(
+			func(_ context.Context, r, _ uint64) (int64, error) { return pubs[r].accountID, nil }).AnyTimes()
+		if newSchema {
+			// account_id, account_name, pub_name, database_name, database_id,
+			// table_list, account_list, created_time, update_time, owner, creator, comment
+			getStr(1, func(p pubRow) string { return p.accountName })
+			getStr(2, func(p pubRow) string { return "pub1" })
+			getStr(3, func(p pubRow) string { return p.dbName })
+			getUint64(4, func(p pubRow) uint64 { return 0 })
+			getStr(5, func(p pubRow) string { return p.tables })
+			getStr(6, func(p pubRow) string { return p.subs })
+			getStr(7, func(p pubRow) string { return "" })
+			er.EXPECT().ColumnIsNull(gomock.Any(), gomock.Any(), uint64(8)).Return(true, nil).AnyTimes()
+			getUint64(9, func(p pubRow) uint64 { return 0 })
+			getUint64(10, func(p pubRow) uint64 { return 0 })
+			getStr(11, func(p pubRow) string { return "" })
+		} else {
+			// old schema without account_name: account_id, pub_name, database_name,
+			// database_id, table_list, account_list, created_time, update_time, owner, creator, comment
+			getStr(1, func(p pubRow) string { return "pub1" })
+			getStr(2, func(p pubRow) string { return p.dbName })
+			getUint64(3, func(p pubRow) uint64 { return 0 })
+			getStr(4, func(p pubRow) string { return p.tables })
+			getStr(5, func(p pubRow) string { return p.subs })
+			getStr(6, func(p pubRow) string { return "" })
+			er.EXPECT().ColumnIsNull(gomock.Any(), gomock.Any(), uint64(7)).Return(true, nil).AnyTimes()
+			getUint64(8, func(p pubRow) uint64 { return 0 })
+			getUint64(9, func(p pubRow) uint64 { return 0 })
+			getStr(10, func(p pubRow) string { return "" })
+		}
+		return []interface{}{er}
+	}
 
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
+	newTablesResult := func(ctrl *gomock.Controller, tables []string) []interface{} {
+		er := mock_frontend.NewMockExecResult(ctrl)
+		er.EXPECT().GetRowCount().Return(uint64(len(tables))).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), gomock.Any(), uint64(0)).DoAndReturn(
+			func(_ context.Context, r, _ uint64) (string, error) { return tables[r], nil }).AnyTimes()
+		return []interface{}{er}
+	}
 
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-		// check col exists
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		bh.EXPECT().GetExecResultSet().Return(mockedCheckColResults(ctrl))
-		// get pub info
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		bh.EXPECT().GetExecResultSet().Return(mockedPubInfoResults(ctrl))
+	pubOwnedByAcc1 := pubRow{accountID: 1, accountName: "acc1", dbName: "db1", tables: "t1,t2", subs: "acc2"}
 
-		spc := &tree.ShowPublicationCoverage{Name: "pub1"}
-		err := doShowPublicationCoverage(ctx, ses, spc)
-		convey.So(err, convey.ShouldBeNil)
+	cases := []struct {
+		name        string
+		tenantName  string
+		tenantID    uint32
+		newSchema   bool
+		pubs        []pubRow
+		tablesQuery bool
+		tables      []string
+		wantErr     string
+		wantDbs     []string
+		wantTables  []string
+	}{
+		{
+			name:       "owner not in explicit subscriber list",
+			tenantName: "acc1", tenantID: 1, newSchema: true,
+			pubs:       []pubRow{pubOwnedByAcc1},
+			wantDbs:    []string{"db1", "db1"},
+			wantTables: []string{"t1", "t2"},
+		},
+		{
+			name:       "subscriber in explicit list",
+			tenantName: "acc2", tenantID: 2, newSchema: true,
+			pubs:       []pubRow{pubOwnedByAcc1},
+			wantDbs:    []string{"db1", "db1"},
+			wantTables: []string{"t1", "t2"},
+		},
+		{
+			name:       "unrelated account is rejected",
+			tenantName: "acc3", tenantID: 3, newSchema: true,
+			pubs:    []pubRow{pubOwnedByAcc1},
+			wantErr: "account 'acc3' is not allowed to access publication 'pub1'",
+		},
+		{
+			name:       "sys can inspect any publication coverage",
+			tenantName: sysAccountName, tenantID: sysAccountID, newSchema: true,
+			pubs:       []pubRow{pubOwnedByAcc1},
+			wantDbs:    []string{"db1", "db1"},
+			wantTables: []string{"t1", "t2"},
+		},
+		{
+			name:       "own publication wins over identically named accessible publication",
+			tenantName: "acc1", tenantID: 1, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 2, accountName: "acc2", dbName: pubsub.TableAll, tables: pubsub.TableAll, subs: pubsub.AccountAll},
+				pubOwnedByAcc1,
+			},
+			wantDbs:    []string{"db1", "db1"},
+			wantTables: []string{"t1", "t2"},
+		},
+		{
+			name:       "subscriber resolves the publication it can access when shadowed by a denied one",
+			tenantName: "acc2", tenantID: 2, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 1, accountName: "acc1", dbName: "db1", tables: "t1,t2", subs: "acc3"},
+				{accountID: 3, accountName: "acc3", dbName: "db3", tables: "t9", subs: "acc2"},
+			},
+			wantDbs:    []string{"db3"},
+			wantTables: []string{"t9"},
+		},
+		{
+			name:       "two accessible same-named publications report ambiguity",
+			tenantName: "acc2", tenantID: 2, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 1, accountName: "acc1", dbName: "db1", tables: "t1,t2", subs: "acc2"},
+				{accountID: 3, accountName: "acc3", dbName: "db3", tables: "t9", subs: "acc2"},
+			},
+			wantErr: "publication name 'pub1' is ambiguous: 2 publications with this name " +
+				"owned by accounts 'acc1', 'acc3' are accessible to account 'acc2'",
+		},
+		{
+			name:       "ambiguity does not depend on catalog row order",
+			tenantName: "acc2", tenantID: 2, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 3, accountName: "acc3", dbName: "db3", tables: "t9", subs: "acc2"},
+				{accountID: 1, accountName: "acc1", dbName: "db1", tables: "t1,t2", subs: "acc2"},
+			},
+			wantErr: "publication name 'pub1' is ambiguous: 2 publications with this name " +
+				"owned by accounts 'acc1', 'acc3' are accessible to account 'acc2'",
+		},
+		{
+			name:       "sys reports ambiguity between publications it does not own",
+			tenantName: sysAccountName, tenantID: sysAccountID, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 1, accountName: "acc1", dbName: "db1", tables: "t1,t2", subs: "acc2"},
+				{accountID: 3, accountName: "acc3", dbName: "db3", tables: "t9", subs: "acc3"},
+			},
+			wantErr: "publication name 'pub1' is ambiguous: 2 publications with this name " +
+				"owned by accounts 'acc1', 'acc3' are accessible to account 'sys'",
+		},
+		{
+			name:       "own publication wins over several accessible ones",
+			tenantName: "acc1", tenantID: 1, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 2, accountName: "acc2", dbName: pubsub.TableAll, tables: pubsub.TableAll, subs: pubsub.AccountAll},
+				{accountID: 3, accountName: "acc3", dbName: pubsub.TableAll, tables: pubsub.TableAll, subs: pubsub.AccountAll},
+				pubOwnedByAcc1,
+			},
+			wantDbs:    []string{"db1", "db1"},
+			wantTables: []string{"t1", "t2"},
+		},
+		{
+			name:       "ambiguity without account_name column reports owner ids",
+			tenantName: "acc2", tenantID: 2, newSchema: false,
+			pubs: []pubRow{
+				{accountID: 1, dbName: "db1", tables: "t1,t2", subs: "acc2"},
+				{accountID: 3, dbName: "db3", tables: "t9", subs: "acc2"},
+			},
+			wantErr: "publication name 'pub1' is ambiguous: 2 publications with this name " +
+				"owned by accounts account_id 1, account_id 3 are accessible to account 'acc2'",
+		},
+		{
+			name:       "missing publication reports not exist",
+			tenantName: "acc1", tenantID: 1, newSchema: true,
+			pubs:    nil,
+			wantErr: "publication 'pub1' does not exist",
+		},
+		{
+			name:       "owner without account_name column",
+			tenantName: "acc1", tenantID: 1, newSchema: false,
+			pubs:       []pubRow{pubOwnedByAcc1},
+			wantDbs:    []string{"db1", "db1"},
+			wantTables: []string{"t1", "t2"},
+		},
+		{
+			name:       "owner of database level publication sees all tables",
+			tenantName: "acc1", tenantID: 1, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 1, accountName: "acc1", dbName: "db1", tables: pubsub.TableAll, subs: "acc2"},
+			},
+			tablesQuery: true,
+			tables:      []string{"ta", "tb"},
+			wantDbs:     []string{"db1", "db1", "db1"},
+			wantTables:  []string{pubsub.TableAll, "ta", "tb"},
+		},
+	}
 
-		// Verify result set has data
-		convey.So(len(ses.mrs.Data), convey.ShouldBeGreaterThan, 0)
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			tenant := &TenantInfo{
+				Tenant:        tc.tenantName,
+				User:          rootName,
+				DefaultRole:   moAdminRoleName,
+				TenantID:      tc.tenantID,
+				UserID:        rootID,
+				DefaultRoleID: moAdminRoleID,
+			}
+			ses := newSes(nil, ctrl)
+			ses.tenant = tenant
+
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			setPu("", pu)
+
+			ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+			ctx = defines.AttachAccount(ctx, tc.tenantID, rootID, moAdminRoleID)
+
+			results := [][]interface{}{
+				newCheckColResult(ctrl, tc.newSchema),
+				newPubResult(ctrl, tc.pubs, tc.newSchema),
+			}
+			if tc.tablesQuery {
+				results = append(results, newTablesResult(ctrl, tc.tables))
+			}
+
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer bhStub.Reset()
+
+			bh.EXPECT().Close().Return().AnyTimes()
+			bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+			for _, res := range results {
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil)
+				bh.EXPECT().GetExecResultSet().Return(res)
+			}
+
+			spc := &tree.ShowPublicationCoverage{Name: "pub1"}
+			err := doShowPublicationCoverage(ctx, ses, spc)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+
+			var gotDbs, gotTables []string
+			for _, row := range ses.mrs.Data {
+				gotDbs = append(gotDbs, row[0].(string))
+				gotTables = append(gotTables, row[1].(string))
+			}
+			require.Equal(t, tc.wantDbs, gotDbs)
+			require.Equal(t, tc.wantTables, gotTables)
+		})
+	}
 }
 
 func Test_parseSubscriptionUri(t *testing.T) {
@@ -2799,4 +3165,36 @@ func Test_getSubscriptionMeta_ErrorPropagation(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, sub)
 	})
+}
+
+// TestSplitPublicationPersistedTableList proves the persisted membership
+// split preserves identifier bytes end to end: publication and subscription
+// statements accept quoted identifiers with leading or trailing spaces, the
+// list is their exact comma-joined byte sequence, and the subscriber's
+// InSubMetaTables compares the exact names - so a trimmed split would
+// validate a name the publisher never published (the round-15 review's
+// ' t' becomes 't' and admission fails 'table t not exists') or silently
+// inspect a same-named trimmed counterpart. Only genuinely empty segments
+// are dropped.
+func TestSplitPublicationPersistedTableList(t *testing.T) {
+	require.Equal(t, []string{"base", "v_only"},
+		splitPublicationPersistedTableList("base,v_only"))
+
+	// quoted bytes survive untouched, in any position
+	require.Equal(t, []string{" t", " v"},
+		splitPublicationPersistedTableList(strings.Join([]string{" t", " v"}, pubsub.Sep)))
+	require.Equal(t, []string{" t"},
+		splitPublicationPersistedTableList(" t"))
+	require.Equal(t, []string{"v_only", "  spaced  view"},
+		splitPublicationPersistedTableList("v_only"+","+"  spaced  view"))
+	// the split is the exact inverse of the join that persists the list
+	names := []string{" t", "plain", "  spaced"}
+	require.Equal(t, names,
+		splitPublicationPersistedTableList(strings.Join(names, pubsub.Sep)))
+	// a trailing counterpart of the same name stays distinct
+	require.Equal(t, []string{"t", " t", "t "},
+		splitPublicationPersistedTableList("t"+","+" t"+","+"t "))
+	// genuinely empty segments are dropped without touching any byte
+	require.Equal(t, []string{"base"}, splitPublicationPersistedTableList("base,,"))
+	require.Empty(t, splitPublicationPersistedTableList(""))
 }

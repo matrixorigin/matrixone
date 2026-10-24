@@ -1907,7 +1907,7 @@ func TestRollupWindowHavingPreservesFromScopeErrors(t *testing.T) {
 				select sum(n_nationkey) as n_name
 				from nation
 				group by n_regionkey with rollup
-				having n_name <> ''`,
+				having nation.n_name <> ''`,
 			wantError: "must appear in the GROUP BY clause",
 		},
 		{
@@ -1917,7 +1917,7 @@ func TestRollupWindowHavingPreservesFromScopeErrors(t *testing.T) {
 				       row_number() over (order by sum(n_nationkey)) as rn
 				from nation
 				group by n_regionkey with rollup
-				having n_name <> ''`,
+				having nation.n_name <> ''`,
 			wantError: "must appear in the GROUP BY clause",
 		},
 	}
@@ -6372,6 +6372,7 @@ func TestLoadCheckConstraintPolicy(t *testing.T) {
 		} {
 			t.Run(table+"/"+tc.name, func(t *testing.T) {
 				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				setLoadPrimaryKeyCheck(&mock.ctxt, 1)
 				addPositiveCheck(t, mock, table, "deptno")
 				stmt, err := mysql.ParseOne(t.Context(), fmt.Sprintf(tc.sql, table), 1)
 				require.NoError(t, err)

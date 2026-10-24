@@ -67,7 +67,6 @@ type container struct {
 	// safe check.
 	workDone             bool
 	isGroupBy            bool
-	isMultiSample        bool
 	groupVectorsNullable bool
 	useIntHashMap        bool
 
@@ -245,10 +244,6 @@ func (sample *Sample) Free(proc *process.Process, pipelineFailed bool, err error
 
 		sample.ctr = nil
 	}
-}
-
-func (sample *Sample) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }
 
 func (sample *Sample) ConvertToPipelineOperator(in *pipeline.Instruction) {

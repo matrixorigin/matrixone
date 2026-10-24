@@ -368,6 +368,8 @@ type BaseOptimizer struct {
 
 type ViewData struct {
 	Stmt                string
+	Definition          string `json:"definition,omitempty"`
+	CheckOption         string `json:"check_option,omitempty"`
 	DefaultDatabase     string
 	SQLMode             *string          `json:"sql_mode,omitempty"`
 	SecurityType        string           `json:"security_type,omitempty"`
@@ -620,7 +622,6 @@ type QueryBuilder struct {
 	returningFilterPos int32
 	returningRequested bool
 	returningTableDef  *plan.TableDef
-	returningObjRef    *plan.ObjectRef
 	returningTableName string
 	returningAlias     string
 	returningColPos    map[string]int32
@@ -651,6 +652,16 @@ type QueryBuilder struct {
 	// semantics.
 	cteRefs []*CTERef
 
+	// Required CTE identity belongs to this builder, including validation-only builders.
+	boundCTEs        map[*CTERef]map[*BindContext]*boundCTE
+	semanticCTESinks map[int32]*boundCTE
+	// Finalize after the complete statement binds, before optimizer rewrites.
+	cteIdentityFinalized bool
+	// Completed stable CTE roots, valid only until the next binding rewrite.
+	stableCTERoots           map[int32]bool
+	cteRecursiveBindingDepth int
+	recursiveCTEOwners       map[int32]*CTERef
+
 	// cteSinkNodes owns shared CTE publication schemas. Unlike other users of
 	// CTESinkOption, all of their readers register for positional column remapping.
 	cteSinkNodes map[int32]struct{}
@@ -674,7 +685,6 @@ type irregularUpdateMaintenance struct {
 }
 
 type OptimizerHints struct {
-	vectorLocalDOP             int
 	pushDownLimitToScan        int
 	pushDownTopThroughLeftJoin int
 	pushDownSemiAntiJoins      int
@@ -1014,7 +1024,7 @@ type BindContext struct {
 	numericProjectionTypes          []Type
 	numericTableProjectionTypes     map[string][]Type
 	numericTableProjectionAmbiguous map[string][]bool
-	numericCteByName                map[string]*tree.CTE
+	numericCteByName                map[string]*CTERef
 
 	timeAsts []tree.Expr
 
@@ -1313,7 +1323,6 @@ type Binding struct {
 	// outputColumnProvenance is aligned with cols and carries planner-local
 	// source or pure-NULL output identity. It is never serialized into the plan.
 	outputColumnProvenance []OutputColumnProvenance
-	refCnts                []uint
 	// lower case
 	colIdByName    map[string]int32
 	isClusterTable bool

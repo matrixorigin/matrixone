@@ -21,6 +21,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
+	for _, tc := range []struct {
+		id   int64
+		want bool
+	}{{590, false}, {591, false}, {592, false}, {593, false}, {594, false}, {595, false}, {596, false}, {597, false}, {598, false}, {599, false}, {600, false}, {601, false}, {602, false}, {603, true}, {604, true}, {605, false}} {
+		t.Run(fmt.Sprintf("function_%d", tc.id), func(t *testing.T) {
+			// Identity, not the spelling or the surrounding expression shape,
+			// controls the floor. A subquery child exercises nested detection.
+			expr := &Expr{Expr: &Expr_Sub{Sub: &SubqueryRef{Child: &Expr{Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: tc.id << 32, ObjName: "mo_view_definition"},
+			}}}}}}
+			features, err := RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.ViewMetadataFunctions)
+			require.Equal(t, tc.id == 598, features.CalendarIntervalNormalization)
+			require.Equal(t, tc.id == 600, features.TableCollationFunction)
+			require.Equal(t, tc.id == 601, features.TimestampAddSecondIntervals)
+			require.Equal(t, tc.id == 602, features.LoadFKIgnoreCheck)
+			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600 || tc.id == 601 || tc.id == 602, features.Any())
+		})
+	}
+	for name, expr := range map[string]*Expr{
+		"dependent_program": {Expr: &Expr_Dependent{Dependent: &DependentExpr{ProgramId: 1}}},
+		"correlation_slot":  {Expr: &Expr_Slot{Slot: &CorrelationSlot{ProgramId: 1}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.True(t, features.DependentPrograms)
+			require.True(t, features.Any(), "the independent v119 capability must survive the VIEWS gate")
+			require.False(t, features.ViewMetadataFunctions)
+		})
+	}
+}
+
 func TestValidateStringLiteralFormsAfterWireDecode(t *testing.T) {
 	original := &Expr{Expr: &Expr_Lit{Lit: &Literal{
 		Value:       &Literal_Sval{Sval: "x"},
@@ -986,6 +1021,43 @@ func TestTemporalConversionProtocolSourceMatrix(t *testing.T) {
 	}
 }
 
+func TestRequiresMORPCVersion129JSONStringConsumerOverload(t *testing.T) {
+	consumer := func(functionID, overloadID int32) *Expr {
+		return &Expr{
+			Typ: Type{Id: 61},
+			Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(functionID)<<32 | int64(overloadID)},
+			}},
+		}
+	}
+
+	for _, functionID := range []int32{remoteJSONStringConsumerELTFunctionID} {
+		t.Run(fmt.Sprintf("function_%d", functionID), func(t *testing.T) {
+			required, err := RequiresMORPCVersion129JSONStringConsumerOverload(consumer(functionID, 1))
+			require.NoError(t, err)
+			require.True(t, required)
+			for _, overloadID := range []int32{0, 2} {
+				required, err = RequiresMORPCVersion129JSONStringConsumerOverload(consumer(functionID, overloadID))
+				require.NoError(t, err)
+				require.False(t, required)
+			}
+		})
+	}
+
+	for _, control := range []*Expr{consumer(17, 1), consumer(16, 0)} {
+		required, err := RequiresMORPCVersion129JSONStringConsumerOverload(control)
+		require.NoError(t, err)
+		require.False(t, required)
+	}
+
+	features, err := RequiredRemoteExpressionFeatures(&struct{ Expressions []*Expr }{
+		Expressions: []*Expr{consumer(remoteJSONStringConsumerELTFunctionID, 1)},
+	})
+	require.NoError(t, err)
+	require.True(t, features.JSONStringConsumerOverload)
+	require.True(t, features.Any())
+}
+
 func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T) {
 	cast := func(functionID int32, functionName string, target Type) *Expr {
 		return &Expr{Typ: target, Expr: &Expr_F{F: &Function{
@@ -1067,6 +1139,98 @@ func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {
 			require.Equal(t, tc.id == 216 && tc.overload < 2, features.WeekSessionDefault)
 		})
 	}
+}
+
+func TestJSONBinaryCastAndStoredOpaqueRenderingFeatures(t *testing.T) {
+	function := func(id, source, target int32, param bool) *Expr {
+		arg := &Expr{Typ: Type{Id: source}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+		if param {
+			arg.Expr = &Expr_P{P: &ParamRef{Pos: 2}}
+		}
+		return &Expr{Typ: Type{Id: target}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(id) << 32}, Args: []*Expr{arg}}}}
+	}
+	for _, tc := range []struct {
+		name               string
+		id, source, target int32
+		param, want        bool
+	}{
+		{"binarycast", 21, 64, 62, false, true}, {"varbinarycast", 21, 65, 62, false, true}, {"blobcast", 21, 70, 62, false, true},
+		{"knowntextcast", 21, 61, 62, false, false}, {"unknowncast", 21, 0, 62, false, true}, {"textparametercast", 21, 71, 62, true, true},
+		{"storedconcat", 16, 62, 71, false, true}, {"storedconcatws", 76, 62, 71, false, true},
+		{"jsonvarchar", 21, 62, 61, false, true}, {"jsonbinary", 21, 62, 64, false, true}, {"jsonassign", 554, 62, 71, false, true},
+		{"jsonignore", 555, 62, 70, false, true}, {"jsonstrict", 541, 62, 61, false, true},
+		{"jsonunquote", 256, 62, 61, false, true}, {"jsonpretty", 459, 62, 71, false, true},
+		{"jsonrow", 257, 62, 71, false, true}, {"jsonschema", 460, 62, 10, false, true}, {"jsonschemareport", 461, 62, 62, false, true}, {"udfjson", 326, 62, 22, false, true},
+		{"legacySQLbinarykey", 366, 70, 62, false, false}, {"storedobjectkey", 366, 62, 62, false, true},
+		{"plainconcat", 16, 61, 71, false, false},
+		{"jsontype", 456, 62, 61, false, false}, {"numericjsoncast", 21, 22, 62, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := function(tc.id, tc.source, tc.target, tc.param)
+			features, err := RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.JSONOpaqueTextContracts)
+		})
+	}
+}
+
+func TestSerializedGroupConcatAggregateJSONFeature(t *testing.T) {
+	const (
+		groupConcatID = uint64(185)
+		distinctFlag  = uint64(1) << 63
+	)
+	for _, tc := range []struct {
+		name     string
+		objName  string
+		distinct bool
+		jsonArg  bool
+	}{
+		{name: "group_concat", objName: "group_concat", jsonArg: true},
+		{name: "group_concat distinct", objName: "group_concat", distinct: true, jsonArg: true},
+		{name: "listagg alias", objName: "listagg", jsonArg: true},
+		{name: "listagg distinct alias", objName: "listagg", distinct: true, jsonArg: true},
+		{name: "ordinary string control", objName: "group_concat"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := groupConcatID << 32
+			if tc.distinct {
+				obj |= distinctFlag
+			}
+			argType := int32(61)
+			if tc.jsonArg {
+				argType = planJSONTypeID
+			}
+			aggregate := &Expr{Typ: Type{Id: 61}, Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(obj), ObjName: tc.objName},
+				Args: []*Expr{{Typ: Type{Id: argType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}},
+			}}}
+			serializedNode := &Node{AggList: []*Expr{aggregate}}
+			data, err := serializedNode.Marshal()
+			require.NoError(t, err)
+			decodedNode := &Node{}
+			require.NoError(t, decodedNode.Unmarshal(data))
+
+			features, err := RequiredRemoteExpressionFeatures(decodedNode)
+			require.NoError(t, err)
+			require.Equal(t, tc.jsonArg, features.JSONOpaqueTextContracts)
+			requires129, err := RequiresMORPCVersion129JSONStringConsumerOverload(decodedNode)
+			require.NoError(t, err)
+			require.Equal(t, tc.jsonArg, requires129)
+		})
+	}
+}
+
+func TestJSONBinaryCastKnownNumericParameterResultNotOpaque(t *testing.T) {
+	marker := &Expr{Typ: Type{Id: 71}, Expr: &Expr_P{P: &ParamRef{Pos: 0}}}
+	numeric := &Expr{Typ: Type{Id: 22}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(21)<<32 | 1}, Args: []*Expr{marker}}}}
+	outer := &Expr{Typ: Type{Id: 62}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(21)<<32 | 1}, Args: []*Expr{numeric}}}}
+	features, err := RequiredRemoteExpressionFeatures(outer)
+	require.NoError(t, err)
+	require.False(t, features.JSONOpaqueTextContracts)
+}
+
+func TestJSONOpaqueRendererDoesNotExpandSharedStringTypes(t *testing.T) {
+	require.False(t, isPlanMySQLStringType(72))
 }
 
 func TestCalendarIntervalFeatureRoundTrip(t *testing.T) {

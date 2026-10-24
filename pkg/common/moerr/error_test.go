@@ -198,6 +198,14 @@ func TestWrongArgumentsMySQLError(t *testing.T) {
 	require.Equal(t, "Incorrect arguments to nth_value", err.Error())
 }
 
+func TestSPRecursionLimitMySQLError(t *testing.T) {
+	err := NewSPRecursionLimit(context.Background(), 1, "self_rec")
+	require.Equal(t, ErrSPRecursionLimit, err.ErrorCode())
+	require.Equal(t, uint16(1456), err.MySQLCode())
+	require.Equal(t, "HY000", err.SqlState())
+	require.Equal(t, "Recursive limit 1 (as set by the max_sp_recursion_depth variable) was exceeded for routine self_rec", err.Error())
+}
+
 func TestWindowInvalidUseMySQLError(t *testing.T) {
 	err := NewWindowInvalidUse(context.Background(), "row_number")
 	require.Equal(t, ErrWindowInvalidUse, err.ErrorCode())
@@ -238,6 +246,31 @@ func TestViewSelectTmpTableMySQLError(t *testing.T) {
 	require.Equal(t, ER_VIEW_SELECT_TMPTABLE, err.MySQLCode())
 	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
 	require.Equal(t, "View's SELECT refers to a temporary table 'temp_for_view'", err.Error())
+}
+
+func TestDeadLockDetectedMySQLError(t *testing.T) {
+	for name, err := range map[string]*Error{
+		"context":    NewDeadLockDetected(context.Background()),
+		"no context": NewDeadLockDetectedNoCtx(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			check := func(err *Error) {
+				t.Helper()
+				require.Equal(t, ErrDeadLockDetected, err.ErrorCode())
+				require.Equal(t, uint16(1213), err.MySQLCode())
+				require.Equal(t, "40001", err.SqlState())
+				require.Equal(t, "deadlock detected", err.Error())
+				require.True(t, IsMoErrCode(err, ErrDeadLockDetected))
+				require.True(t, MustRollbackTxn(err))
+			}
+			check(err)
+			data, encodeErr := err.MarshalBinary()
+			require.NoError(t, encodeErr)
+			var decoded Error
+			require.NoError(t, decoded.UnmarshalBinary(data))
+			check(&decoded)
+		})
+	}
 }
 
 func TestLockWaitTimeoutMySQLError(t *testing.T) {

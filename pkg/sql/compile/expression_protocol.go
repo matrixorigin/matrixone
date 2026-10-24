@@ -50,6 +50,13 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	if features.LegacyIntervalUnits {
 		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")
 	}
+	if queryHasMixedJSONNumericAsof(qry) {
+		// This pass runs after the first scheduling pass and before scopes
+		// are compiled. Replace both execution type and the worker list.
+		c.execType = plan2.ExecTypeAP_ONECN
+		c.cnList, err = c.scheduleQueryWorkers()
+		return err
+	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return nil
 	}
@@ -135,10 +142,19 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	if features.CalendarIntervalNormalization {
 		required = max(required, defines.MORPCVersion115)
 	}
+	if features.ViewMetadataFunctions {
+		required = max(required, defines.MORPCVersion126)
+	}
+	if features.JSONNumericComparisons {
+		required = max(required, defines.MORPCVersion128)
+	}
 	return required
 }
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
+		return defines.MORPCVersion129
+	}
 	if features.JSONScalarLiteralContracts {
 		return defines.MORPCVersion104
 	}
@@ -173,10 +189,22 @@ var errRemoteCapabilityProbeTimeout = moerr.NewInternalError(
 // A false result without an error means support could not be verified;
 // observation failures retain their cause for required gates and send checks.
 func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, minimum int64) (bool, error) {
+	var parent context.Context
+	if proc != nil {
+		parent = proc.Ctx
+	}
+	return remoteWorkersSupportProtocolWithContext(parent, proc, workers, minimum)
+}
+
+func remoteWorkersSupportProtocolWithContext(
+	parent context.Context,
+	proc *process.Process,
+	workers engine.Nodes,
+	minimum int64,
+) (bool, error) {
 	if proc == nil {
 		return false, nil
 	}
-	parent := proc.Ctx
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -310,4 +338,55 @@ func validateTemporalResultProtocol(proc *process.Process, owner any) error {
 		return moerr.NewNotSupportedNoCtx("temporal result contracts require MORPC protocol version 122")
 	}
 	return nil
+}
+
+// AllCNsSupportProtocol verifies a protocol capability against the current
+// coordinator and every CN in the cluster inventory. An incomplete inventory
+// is reported as unsupported so callers keep the predecessor definition.
+func AllCNsSupportProtocol(proc *process.Process, minimum int64) (bool, error) {
+	var parent context.Context
+	if proc != nil {
+		parent = proc.Ctx
+	}
+	return AllCNsSupportProtocolWithContext(parent, proc, minimum)
+}
+
+// AllCNsSupportProtocolWithContext is the context-aware form used by callers
+// whose process is an internal execution pipeline. Such a process can finish
+// or cancel its own pipeline before the caller has finished the control-plane
+// operation that needs to probe peer capabilities.
+func AllCNsSupportProtocolWithContext(
+	parent context.Context,
+	proc *process.Process,
+	minimum int64,
+) (bool, error) {
+	if proc == nil {
+		return false, nil
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	if err := parent.Err(); err != nil {
+		return false, err
+	}
+	version, known := remoteMORPCProtocolVersion(proc.GetService())
+	if !known || version < minimum {
+		return false, nil
+	}
+	cluster, err := clusterservice.GetMOClusterWithContext(parent, proc.GetService())
+	if err != nil {
+		return false, err
+	}
+	workers := make(engine.Nodes, 0)
+	err = clusterservice.GetCNServiceRawWithContext(parent, cluster, clusterservice.NewSelector(), func(cn metadata.CNService) bool {
+		workers = append(workers, engine.Node{Id: cn.ServiceID, Addr: cn.PipelineServiceAddress})
+		return true
+	})
+	if err != nil || len(workers) == 0 {
+		return false, err
+	}
+	if len(workers) == 0 {
+		return false, nil
+	}
+	return remoteWorkersSupportProtocolWithContext(parent, proc, workers, minimum)
 }

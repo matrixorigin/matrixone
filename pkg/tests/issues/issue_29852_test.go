@@ -694,9 +694,15 @@ func TestPartitionReplacementLifecycle(t *testing.T) {
 
 func TestBorrowedCreateAdmissionPreservesCallerWrites(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
-		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
-		defer cancel()
-		ctx = defines.AttachAccountId(ctx, 0)
+		parent := defines.AttachAccountId(t.Context(), 0)
+		ctx, cancel := context.WithTimeout(parent, time.Minute)
+		defer func() { cancel() }()
+		// CTAS, failed MERGE, and each committed/rolled-back MERGE are
+		// independent scenarios, not portions of one shared minute.
+		nextPhase := func() {
+			cancel()
+			ctx, cancel = context.WithTimeout(parent, time.Minute)
+		}
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
 		value, ok := runtime.ServiceRuntime(cn.ServiceID()).GetGlobalVariables(runtime.InternalSQLExecutor)
@@ -765,6 +771,7 @@ func TestBorrowedCreateAdmissionPreservesCallerWrites(t *testing.T) {
 
 		// MERGE creates several staging tables through frontend shared
 		// background execution. Its children must preserve earlier caller work.
+		nextPhase()
 		for _, query := range []string{
 			"create table " + database + ".branch_base(id int primary key, value int unique)",
 			"insert into " + database + ".branch_base values(1,10),(2,20)",
@@ -805,6 +812,7 @@ func TestBorrowedCreateAdmissionPreservesCallerWrites(t *testing.T) {
 		require.NoError(t, err)
 
 		for _, commit := range []bool{false, true} {
+			nextPhase()
 			tx, err := db.BeginTx(ctx, nil)
 			require.NoError(t, err)
 			_, err = tx.ExecContext(ctx, "insert into "+database+".existing values(8,'2023-11-12 10:00:01')")

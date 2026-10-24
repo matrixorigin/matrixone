@@ -221,7 +221,13 @@ func TestPreparedDecimalIntegerConsumerPruning(t *testing.T) {
 			{"signed cast integer", "c = cast(? as signed)", types.T_int64, []string{"16001"}, true, true},
 			{"signed cast unsigned control", "c = cast(? as signed)", types.T_uint64, []string{"18446744073709551615"}, false, false},
 			{"signed cast double control", "c = cast(? as signed)", types.T_float64, []string{"16001.75"}, false, false},
-			{"double cast integer control", "c = cast(? as double)", types.T_int64, []string{"16001"}, false, false},
+			{"double cast integer", "c = cast(? as double)", types.T_int64, []string{"16001"}, true, false},
+			{"double cast integer range", "c >= cast(? as double)", types.T_int64, []string{"-16001"}, true, false},
+			{"double cast unsigned commuted", "cast(? as double) <= c", types.T_uint64, []string{"16001"}, true, false},
+			{"double cast injective chain", "c = cast(cast(? as signed) as double)", types.T_int64, []string{"16001"}, true, false},
+			{"double cast wide integer", "c = cast(? as double)", types.T_int64, []string{"1152921504606846976"}, false, false},
+			{"double cast float32 control", "c = cast(cast(? as float) as double)", types.T_int64, []string{"16001"}, false, false},
+			{"double cast rounded control", "c = cast(? as double(5,0))", types.T_int64, []string{"16001"}, false, false},
 			{"abs double cast integer control", "c = abs(cast(? as double))", types.T_int64, []string{"-16001"}, false, false},
 			{"double cast collision", "c = cast(? as double)", types.T_int64, []string{"9007199254740992"}, false, false},
 		} {
@@ -252,6 +258,11 @@ func TestPreparedDecimalIntegerConsumerPruning(t *testing.T) {
 				t.Cleanup(stmt.Free)
 				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
 				require.NoError(t, err)
+				if tc.native && strings.Contains(tc.name, "double cast") || tc.name == "double cast wide integer" || tc.name == "double cast collision" {
+					require.NotEmpty(t, bound.DecimalFloatProofs)
+					require.False(t, bound.ValueDependent, "both proved classes can occupy the single cache slot")
+					require.True(t, MatchPreparedDecimalFloatProofs(bound.DecimalFloatProofs, bindings, values))
+				}
 				if tc.guarded {
 					require.False(t, bound.ValueDependent, "safe admitted domains remain reusable")
 					require.NotEmpty(t, bound.DiagnosticCandidates)

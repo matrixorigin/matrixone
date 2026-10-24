@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -77,12 +78,8 @@ type completedCloseService struct {
 func (s *completedCloseService) CloseComplete() bool { return s.complete }
 
 func TestClusterAdmissionAtStart(t *testing.T) {
-	// Isolate process-scoped admission from the package's long-lived base fixture.
-	if os.Getenv("MO_EMBED_ADMISSION_HELPER") != "1" {
-		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestClusterAdmissionAtStart$")
-		cmd.Env = append(os.Environ(), "MO_EMBED_ADMISSION_HELPER=1", "TMPDIR="+t.TempDir())
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "%s", out)
+	// Isolate process-scoped admission from other test processes.
+	if runInIsolatedClusterAdmissionProcess(t, "^TestClusterAdmissionAtStart$") {
 		return
 	}
 	newFixture := func(t *testing.T) (*cluster, *int) {
@@ -170,6 +167,41 @@ func TestClusterAdmissionAtStart(t *testing.T) {
 			})
 		}
 	}
+	// Synthetic rollback belongs to the same private admission namespace. It
+	// must not queue behind real clusters or need a second helper process.
+	t.Run("completed-error-rollback", func(t *testing.T) {
+		t.Setenv(clusteradmission.ProcessPoolSizeEnv, "2")
+		failure := errors.New("startup and withdrawal failed")
+		svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
+		c, _ := newFixture(t)
+		c.startFn = func(op *operator) error { op.reset.svc = svc; return failure }
+		require.ErrorIs(t, c.Start(), failure)
+		require.Nil(t, c.testAdmission)
+		require.False(t, c.services[0].needsCleanup())
+		require.Equal(t, int32(1), svc.closeCount.Load())
+
+		next, starts := newFixture(t)
+		require.NoError(t, next.Start(), "completed rollback must admit the next owner")
+		require.Equal(t, 1, *starts)
+	})
+
+}
+
+func runInIsolatedClusterAdmissionProcess(t *testing.T, runPattern string) bool {
+	t.Helper()
+	if os.Getenv("MO_EMBED_ADMISSION_HELPER") == "1" {
+		return false
+	}
+	args := []string{"-test.run=" + runPattern}
+	// Keep subprocess counters in the directory collected by go test.
+	if coverageDir := flag.Lookup("test.gocoverdir"); coverageDir != nil && coverageDir.Value.String() != "" {
+		args = append(args, "-test.gocoverdir="+coverageDir.Value.String())
+	}
+	cmd := exec.CommandContext(t.Context(), os.Args[0], args...)
+	cmd.Env = append(os.Environ(), "MO_EMBED_ADMISSION_HELPER=1", "TMPDIR="+t.TempDir())
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	return true
 }
 
 func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
@@ -269,23 +301,6 @@ func TestOperatorStartPreservesIncompleteOwnership(t *testing.T) {
 	require.NoError(t, op.Close())
 	require.False(t, op.needsCleanup())
 	require.Nil(t, commonruntime.ServiceRuntime(op.sid))
-}
-
-func TestClusterStartRollbackCompletedErrorReleasesAdmission(t *testing.T) {
-	t.Setenv(clusteradmission.ProcessPoolSizeEnv, "2")
-	failure := errors.New("startup and withdrawal failed")
-	svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
-	op := &operator{serviceType: metadata.ServiceType_CN}
-	c := &cluster{services: []*operator{op}}
-	WithTesting()(c)
-	// The synthetic failure must remain reachable beside the shared base.
-	WithConcurrentTestClusters()(c)
-	c.startFn = func(op *operator) error { op.reset.svc = svc; return failure }
-	t.Cleanup(func() { require.NoError(t, c.Close()) })
-	require.ErrorIs(t, c.Start(), failure)
-	require.Nil(t, c.testAdmission)
-	require.False(t, op.needsCleanup())
-	require.Equal(t, int32(1), svc.closeCount.Load())
 }
 
 func (s *closeTrackingFileService) Close(context.Context) {
@@ -931,6 +946,11 @@ func TestClusterRejectsNegativeCNCounts(t *testing.T) {
 }
 
 func TestClusterAdmissionCoversFullLifecycle(t *testing.T) {
+	// The child process initializes the global admission manager with a private
+	// TMPDIR, so unrelated test processes cannot hold this synthetic lifecycle.
+	if runInIsolatedClusterAdmissionProcess(t, "^TestClusterAdmissionCoversFullLifecycle$") {
+		return
+	}
 	for _, poolSize := range []string{"1", "2"} {
 		t.Run("pool="+poolSize, func(t *testing.T) {
 			t.Setenv(clusteradmission.ProcessPoolSizeEnv, poolSize)
@@ -950,8 +970,6 @@ func testClusterAdmissionLifecycle(t *testing.T) {
 		portLeaseNext: portLease.base,
 	}
 	c.options.testing = true
-	// This synthetic cluster has no services. Allow it to exercise admission
-	// lifecycle while the package's shared base cluster may be alive.
 	c.options.allowConcurrentTestClusters = true
 	t.Cleanup(func() {
 		require.NoError(t, c.Close())

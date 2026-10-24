@@ -182,7 +182,6 @@ type spillRunReader struct {
 	keyBatch    *batch.Batch
 	orderCols   []*vector.Vector
 	rowIdx      int64
-	heapIdx     int
 	fixedWidth  bool
 	rowBytes    int
 	avgRowBytes int
@@ -358,10 +357,6 @@ func (ctr *container) clearAllocationAccount(
 	return nil
 }
 
-func (mergeOrder *MergeOrder) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (mergeOrder *MergeOrder) cleanBatchAndCol(proc *process.Process) {
 	mp := proc.Mp()
 	ctr := &mergeOrder.ctr
@@ -528,7 +523,6 @@ func (r *spillRunReader) close(proc *process.Process) {
 	}
 	r.reader = nil
 	r.rowIdx = 0
-	r.heapIdx = -1
 	r.fixedWidth = false
 	r.rowBytes = 0
 	r.avgRowBytes = 0

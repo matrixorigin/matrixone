@@ -4475,8 +4475,8 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	oldMetadata := [][]byte{[]byte("old column payload")}
 	oldDiagnostics := []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}}
-	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, oldMetadata)
-	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, oldMetadata),
+	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, nil, oldMetadata)
+	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, nil, oldMetadata),
 		"reinstalling the live compile must not retire it")
 
 	for _, compileErr := range []error{assert.AnError, context.Canceled} {
@@ -4957,6 +4957,27 @@ func TestResolveVariableIsBinHonorsStoredProcedureScope(t *testing.T) {
 	kind, err = ses.txnCompileCtx.ResolveVariablePrepareParamKind("missing_user_var", false, false)
 	require.NoError(t, err)
 	require.Equal(t, vector.PrepareParamNone, kind)
+
+	t.Run("system variables keep their namespace", func(t *testing.T) {
+		for _, local := range []interface{}{nil, int64(0), int64(1)} {
+			scopes[1]["mo_pk_check_by_cn"] = local
+			value, err := ses.txnCompileCtx.ResolveVariable("MO_PK_CHECK_BY_CN", false, false)
+			require.NoError(t, err)
+			require.Equal(t, local, value, "ordinary local resolution stays intact")
+			for _, enabled := range []int8{0, 1} {
+				require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "mo_pk_check_by_cn", enabled))
+				value, err := ses.txnCompileCtx.ResolveVariable("MO_PK_CHECK_BY_CN", true, false)
+				require.NoError(t, err)
+				require.Equal(t, enabled, value, "system reads use the current owning session")
+			}
+		}
+		scopes[1]["autocommit"] = nil
+		want, err := ses.GetGlobalSysVar("autocommit")
+		require.NoError(t, err)
+		value, err := ses.txnCompileCtx.ResolveVariable("AUTOCOMMIT", true, true)
+		require.NoError(t, err)
+		require.Equal(t, want, value, "system global reads also bypass procedure locals")
+	})
 }
 
 func TestBuildExecuteUserParamsHonorsStoredProcedureScope(t *testing.T) {

@@ -502,13 +502,6 @@ func (op *PartitionMultiUpdate) writerID(target *partitionUpdateTarget, physical
 	return op.nextWriterID
 }
 
-func (op *PartitionMultiUpdate) ExecProjection(
-	proc *process.Process,
-	input *batch.Batch,
-) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (op *PartitionMultiUpdate) Free(
 	proc *process.Process,
 	pipelineFailed bool,

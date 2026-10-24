@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // 等值 JOIN 的资格集合可以去重，但最终输出不能去重。这个上下文只证明
@@ -42,8 +42,12 @@ func (builder *QueryBuilder) buildVectorEquiJoinContext(proj *plan.Node) *vector
 	if sort == nil || len(sort.OrderBy) != 1 || sort.Limit == nil || isDescendingVectorSort(sort.OrderBy[0].Flag) {
 		return nil
 	}
-	if sort.RankOption != nil && sort.RankOption.Mode != "" && sort.RankOption.Mode != "pre" {
-		return nil
+	if sort.RankOption != nil {
+		switch sort.RankOption.Mode {
+		case "", "pre", "iterative":
+		default:
+			return nil
+		}
 	}
 	join, child := builder.resolveJoinNodeForVectorSort(sort)
 	if join == nil || join.JoinType != plan.Node_INNER || len(join.Children) != 2 || len(join.OnList) == 0 ||
@@ -53,7 +57,7 @@ func (builder *QueryBuilder) buildVectorEquiJoinContext(proj *plan.Node) *vector
 	if child != nil && (len(child.FilterList) != 0 || child.Limit != nil || child.Offset != nil) {
 		return nil
 	}
-	if !builder.adaptiveIvfReplaySafe(proj.NodeId) {
+	if !builder.adaptiveVectorReplaySafe(proj.NodeId) {
 		return nil
 	}
 	left, right := builder.qry.Nodes[join.Children[0]], builder.qry.Nodes[join.Children[1]]
@@ -79,7 +83,7 @@ func (builder *QueryBuilder) buildVectorEquiJoinContext(proj *plan.Node) *vector
 		for arg, expr := range fn.Args {
 			col := expr.GetCol()
 			if col == nil || col.RelPos != scan.BindingTags[0] || !builder.isNonNullVectorProviderArg(scan, expr) ||
-				!rule.IsConstant(fn.Args[1-arg], false) {
+				!function.IsConstant(fn.Args[1-arg], false) {
 				continue
 			}
 			// NULL 查询向量的排序不能等同于空 ANN 结果。没有非 NULL 证明的

@@ -23,9 +23,11 @@ import (
 	"slices"
 	"strings"
 
+	"encoding/base64"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -300,6 +302,15 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 		resultSize = max(resultSize, int(attr.ColFieldIndex)+1)
 		realCnt++
 	}
+	kafkaJSON := r.param != nil && r.param.KafkaScan != nil
+	if kafkaJSON {
+		// The JSON object carries the declared data columns even when the scan
+		// projects only an early field or synthetic message metadata.
+		if r.param.ColumnListLen < 0 || r.param.ColumnListLen > int32(plan.TableColumnCountLimit) {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"invalid Kafka data column count %d", r.param.ColumnListLen)
+		}
+	}
 	res := make([]csvparser.Field, resultSize)
 	if r.prevStr != "" {
 		str = r.prevStr + str
@@ -319,7 +330,14 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 	if !ok || !g.Obj {
 		return nil, moerr.NewInvalidInput(ctx, "not a object")
 	}
-	if len(g.Keys) < realCnt {
+	requiredKeys := realCnt
+	if kafkaJSON {
+		requiredKeys = max(requiredKeys, int(r.param.ColumnListLen))
+	}
+	if len(g.Keys) < requiredKeys {
+		if kafkaJSON {
+			return nil, moerr.NewInvalidInput(ctx, "kafka json object has fewer fields than input columns")
+		}
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo)
 	}
 	for idx, attr := range attrs {
@@ -348,11 +366,11 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 			continue
 		}
 
-		val, err := jsonLineScalarText(ctx, valN, types.T(tp))
+		val, err := jsonLineScalarText(ctx, valN, types.T(tp), r.legacyJSONBinary())
 		if err != nil {
 			return nil, err
 		}
-		res[attr.ColFieldIndex] = csvparser.Field{Val: val, IsNull: val == JsonNull}
+		res[attr.ColFieldIndex] = csvparser.Field{Val: val}
 	}
 	return res, nil
 }
@@ -408,21 +426,53 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 			continue
 		}
 
-		val, err := jsonLineScalarText(ctx, valN, types.T(tp))
+		val, err := jsonLineScalarText(ctx, valN, types.T(tp), r.legacyJSONBinary())
 		if err != nil {
 			return nil, err
 		}
-		res = append(res, csvparser.Field{Val: val, IsNull: val == JsonNull})
+		res = append(res, csvparser.Field{Val: val})
 	}
 	return res, nil
+}
+
+func (r *CsvReader) legacyJSONBinary() bool {
+	return r.param != nil && r.param.Extern != nil && r.param.Extern.JsonBinary == plan.JSONBinaryLegacyBase64
 }
 
 // jsonLineScalarText preserves numeric array boundaries for vector columns.
 // Node.String uses Go slice formatting, whose spaces are removed by the vector
 // parser. Keep the original numeric lexemes to avoid intermediate rounding.
-func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T) (string, error) {
+func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T, legacyBinary bool) (string, error) {
 	group, ok := node.V.(*bytejson.Group)
 	if !typ.IsArrayRelate() || !ok || group.Obj {
+		//#30635: JSONLINE OUTFILE writes binary columns wrapped as
+		// {"$binary":"<base64>"} objects so the loader can tell MO-encoded
+		// binary payloads apart from plain-text JSON strings. Only the
+		// explicit wrapper is decoded; bare strings pass through byte-exact
+		// (legacy plain-text path), even when they happen to be valid
+		// base64 such as hand-written {"raw":"test"} files.
+		if (typ == types.T_binary || typ == types.T_varbinary || typ == types.T_blob) &&
+			ok && group.Obj && len(group.Keys) == 1 && group.Keys[0] == JsonBinaryKey {
+			if enc, sok := group.Values[0].V.(string); sok {
+				decoded, derr := base64.StdEncoding.DecodeString(enc)
+				if derr != nil {
+					return "", moerr.NewInvalidInputf(ctx,
+						"invalid base64 payload in \"%s\" value of a binary column", JsonBinaryKey)
+				}
+				return string(decoded), nil
+			}
+		}
+		if legacyBinary && (typ == types.T_binary || typ == types.T_varbinary || typ == types.T_blob) {
+			encoded, ok := node.V.(string)
+			if !ok {
+				return "", moerr.NewInvalidInput(ctx, "legacy JSONLINE binary value must be a base64 string or a $binary wrapper")
+			}
+			decoded, err := base64.StdEncoding.DecodeString(encoded)
+			if err != nil {
+				return "", moerr.NewInvalidInput(ctx, "invalid base64 payload in legacy JSONLINE binary column")
+			}
+			return string(decoded), nil
+		}
 		return fmt.Sprint(node), nil
 	}
 	var text strings.Builder

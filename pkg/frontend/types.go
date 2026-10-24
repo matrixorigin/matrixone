@@ -432,6 +432,7 @@ type PrepareStmt struct {
 	runtimeSpecializationKey    string
 	runtimePlan                 *plan.Plan
 	runtimeDiagnosticCandidates []*plan.Expr
+	runtimeDecimalFloatProofs   []plan2.PreparedDecimalFloatProof
 	runtimeColDefData           [][]byte
 	runtimeCompile              *compile.Compile
 
@@ -845,6 +846,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	runtimePlan *plan.Plan,
 	runtimeCompile *compile.Compile,
 	diagnosticCandidates []*plan.Expr,
+	decimalFloatProofs []plan2.PreparedDecimalFloatProof,
 	colDefData [][]byte,
 ) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
@@ -859,6 +861,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
 	prepareStmt.runtimeDiagnosticCandidates = diagnosticCandidates
+	prepareStmt.runtimeDecimalFloatProofs = decimalFloatProofs
 	prepareStmt.runtimeColDefData = colDefData
 	prepareStmt.runtimeCompile = runtimeCompile
 	if oldRuntimeCompile == runtimeCompile {
@@ -875,6 +878,7 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 	prepareStmt.runtimeSpecializationKey = ""
 	prepareStmt.runtimePlan = nil
 	prepareStmt.runtimeDiagnosticCandidates = nil
+	prepareStmt.runtimeDecimalFloatProofs = nil
 	prepareStmt.runtimeColDefData = nil
 	prepareStmt.runtimeCompile = nil
 	prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
@@ -1941,9 +1945,9 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 			return err
 		}
 	}
-	// These values shape bound defaults or constant-folded expressions.
+	// These values shape bound defaults, constant-folded expressions or LOAD validation.
 	// Compare converted values so equivalent SET spellings retain warm plans.
-	planDependencyVariable := name == "sql_mode" || name == "lc_time_names" || name == "explicit_defaults_for_timestamp"
+	planDependencyVariable := name == "sql_mode" || name == "lc_time_names" || name == "explicit_defaults_for_timestamp" || name == "mo_pk_check_by_cn"
 	var oldPlanDependency interface{}
 	if planDependencyVariable {
 		oldValue, getErr := ses.GetSessionSysVar(name)

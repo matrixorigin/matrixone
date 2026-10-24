@@ -41,6 +41,17 @@ esac
 EOF
 chmod +x "$work/bin/go"
 
+# The GPU files below model Linux amd64 independently of the test host.
+cat >"$work/bin/uname" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+    -s|'') echo Linux ;;
+    -m) echo x86_64 ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod +x "$work/bin/uname"
+
 real_git=$(command -v git)
 cat >"$work/bin/git" <<'EOF'
 #!/bin/sh
