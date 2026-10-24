@@ -621,16 +621,23 @@ func runIssue30949PublicationSnapshotLifecycle(t *testing.T, c embed.Cluster) {
 			i30949PubAccount, i30949SubAccount)); got != 0 {
 			t.Errorf("teardown postcondition: %d account rows left", got)
 		}
+		// The SQL pools close before the final error report: a failed
+		// teardown statement ends this cleanup with FailNow via require,
+		// and closes placed after it would never run, stranding the
+		// client handles for the rest of the package run.
+		for _, handle := range []struct {
+			name string
+			db   *sql.DB
+		}{
+			{"sys", f.sys},
+			{"pub", f.pub},
+			{"sub", f.sub},
+		} {
+			if err := handle.db.Close(); err != nil {
+				teardownErrs = append(teardownErrs, fmt.Errorf("close %s handle: %w", handle.name, err))
+			}
+		}
 		require.NoError(t, errors.Join(teardownErrs...), "catalog teardown reported failures")
-		if err := f.sys.Close(); err != nil {
-			t.Errorf("close sys handle: %v", err)
-		}
-		if err := f.pub.Close(); err != nil {
-			t.Errorf("close pub handle: %v", err)
-		}
-		if err := f.sub.Close(); err != nil {
-			t.Errorf("close sub handle: %v", err)
-		}
 	})
 
 	f.sys.SetMaxOpenConns(4)

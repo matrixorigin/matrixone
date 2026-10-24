@@ -1,10 +1,10 @@
 # Subscription Table Routing for Table Snapshots and DATA BRANCH Reads
 
-- Status: Proposed — awaiting independent design approval
+- Status: Approved — independent design-only review of v7 passed (§11)
 - Owning issue: [#30949](https://github.com/matrixorigin/matrixone/issues/30949)
-- Implementation PR: TBD
-- Version: 7
-- Last updated: 2026-10-23
+- Implementation PR: [#31039](https://github.com/matrixorigin/matrixone/pull/31039)
+- Version: 8 (v7 plus the approval record; no design change)
+- Last updated: 2026-10-24
 - Review history: v1 rejected with three P2 findings (design review of
   SHA256 7cc79677cae28691f2e0ef38b9a89d02e3f7f98aa56ffc091f4fca0218190a34):
   (1) the relation-level routing did not carry the physical account through
@@ -91,6 +91,17 @@
   admissible only under whole-database coverage; a table-limited
   publication whose authorized name no longer resolves fails closed,
   retaining owner cleanup (§1 C10, §3 I7, §4.5, §8, §9, §10).
+  v7 approved with no findings (independent design-only review of
+  SHA256 d7e04d7dc200bd5d3f44fc68e615d46a46b09ab9a93503cfedceb391ab80f176,
+  bit-identical to the archived copy
+  `state/artifacts/issue-30949/20261023-subscription-table-branch-snapshot-routing.v7.md`;
+  decision artifact
+  `state/artifacts/issue-30949/pre-pr-review-1792751823194.json`,
+  `approved=true`, `findings=[]`). v8 records that approval here and in
+  §11 and links the implementation PR; no problem statement, invariant,
+  contract decision, or validation plan changes, so the v7 approval
+  applies to v8 (§2 review order: the design-first phase stays distinct
+  from the implementation review, which proceeded after the PASS).
 
 ## 1. Problem and evidence
 
@@ -1439,9 +1450,11 @@ the privilege probe
 Trigger: authorization/tenant-isolation boundary change across snapshot
 lifecycle, DATA BRANCH execution, and publication metadata ownership
 Design: docs/design/20261023-subscription-table-branch-snapshot-routing.md
-version 7 (revision for the v6 P2 finding), pending independent
-approval
-Blocking findings: pending review
+version 8 — v7 (revision for the v6 P2 finding) was the reviewed and
+approved revision; v8 changes only the document header and this review
+record
+Blocking findings: none (v1–v6 findings closed in the decision log
+entries above; the independent review of v7 returned no findings)
 Decision log: v1 → keep. B chosen over A/C additionally because C2
 publisher recording was disproved for foreign sources (owner = P_src).
 v2 adds: three-identity model (S/P_pub/P_src); operand descriptor identity
@@ -1520,6 +1533,23 @@ asserted byte-identical, the authorized replacement's post-drop
 rejection with owner cleanup retained, whole-database fallback
 controls, and COPY ALTER resolvable-name controls; counterexample list
 gains (m); §10 discloses the name-absent boundary.
-Decision: PENDING
-Implementation deviations: none yet
+Decision: PASS (design-only). The independent pre-implementation
+review of v7, SHA256
+d7e04d7dc200bd5d3f44fc68e615d46a46b09ab9a93503cfedceb391ab80f176 —
+bit-identical to the archived copy
+state/artifacts/issue-30949/20261023-subscription-table-branch-snapshot-routing.v7.md —
+approved the design with no findings; the decision artifact is
+state/artifacts/issue-30949/pre-pr-review-1792751823194.json
+(approved=true, findings=[]). v8 records this outcome without altering
+any design content, so the approval carries over; per the repository
+contract this PASS authorizes implementation review only, never a
+commit, push, or merge.
+Implementation deviations: none recorded. The implementation-stage
+pre-PR review
+(state/artifacts/issue-30949/pre-pr-review-1792834036353.json,
+approved=true) verified the delivered code against v7's archived copy
+and decisions, reported no design deviations, and left two non-blocking
+advisory findings (a same-name cross-account BVT collision case and a
+barrier-release hardening of the concurrent-rebind UT; the latter is
+fixed in the implementation PR).
 ```

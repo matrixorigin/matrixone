@@ -1610,7 +1610,11 @@ func TestDoCreateSnapshotPublicationRebind(t *testing.T) {
 
 		held := make(chan struct{})
 		release := make(chan struct{})
+		done := make(chan struct{})
+		const barrierTimeout = 30 * time.Second
 		var blockOnce sync.Once
+		var releaseOnce sync.Once
+		releaseBarrier := func() { releaseOnce.Do(func() { close(release) }) }
 		f1.fake.hook = func(stepIndex int, relationName string) error {
 			if stepIndex == 1 {
 				// The alias key (recorded step 0) is held when the D step runs.
@@ -1624,19 +1628,42 @@ func TestDoCreateSnapshotPublicationRebind(t *testing.T) {
 
 		stmt := snapshotCreateTableStatement("sp_sub_t1", pubCreateAliasDb+"."+pubCreateTable, "", "")
 		var err1 error
-		done := make(chan struct{})
+		// Release the barrier and join the worker no matter which assertion
+		// below fails, so a failed second create or assertion cannot strand
+		// the parked worker and its fixture until the package timeout.
+		t.Cleanup(func() {
+			releaseBarrier()
+			select {
+			case <-done:
+			case <-time.After(barrierTimeout):
+				t.Error("the first create did not finish after the barrier release")
+			}
+		})
 		go func() {
 			defer close(done)
 			err1 = doCreateSnapshot(f1.ctx, f1.ses, stmt)
 		}()
-		<-held
+
+		// The barrier wait observes an early worker return and a deadline so
+		// a regression fails here instead of hanging on <-held.
+		select {
+		case <-held:
+		case <-done:
+			t.Fatalf("the first create returned before holding the alias key: %v", err1)
+		case <-time.After(barrierTimeout):
+			t.Fatal("timed out waiting for the first create to hold the alias key")
+		}
 
 		require.NoError(t, doCreateSnapshot(f2.ctx, f2.ses, stmt),
 			"the concurrent create against the rebound binding commits")
 		requireCommittedSnapshotRow(t, f2.bh)
 		f1.bh.sql2result[f1.subsSQL()] = pubCreateSubRows(pubCreatePhysName, "pub2")
-		close(release)
-		<-done
+		releaseBarrier()
+		select {
+		case <-done:
+		case <-time.After(barrierTimeout):
+			t.Fatal("timed out waiting for the first create to finish after the barrier release")
+		}
 
 		requireRetryClassError(t, err1)
 		requireNoSnapshotWrite(t, f1.bh)
