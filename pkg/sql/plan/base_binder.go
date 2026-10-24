@@ -11660,6 +11660,18 @@ func (b *baseBinder) bindInetNtoaBinaryLiteral(astExpr *tree.NumVal, typ Type) (
 
 func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 
+// GetProcess exposes the compile session's process to the window-function
+// binder surface so constant-expression folding uses the same deterministic
+// evaluation engine (proc, mpool, sql_mode) as the rest of binding. The
+// builder-less stub contexts used by unit tests report no process and the
+// callers fall back to a bare-literal check.
+func (b *baseBinder) GetProcess() *process.Process {
+	if b == nil || b.builder == nil || b.builder.compCtx == nil {
+		return nil
+	}
+	return b.builder.compCtx.GetProcess()
+}
+
 // --- util functions ----
 
 // isBitwiseAggregateConversionInput selects only MySQL numeric-evaluation

@@ -95,11 +95,41 @@ func GetFunctionIsWinValueFunByName(name string) bool {
 	return f.isWindowValue()
 }
 
+// GetFunctionIsWinIndicatorFunByName reports whether name is one of the
+// technical-indicator window kernels (issue #29949): WIN_VALUE-class
+// registrations that the window operator evaluates through the indicator
+// state machine instead of the value/aggregate paths. They are never
+// aggregates and never carry aggexec kernels.
+func GetFunctionIsWinIndicatorFunByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	return exists && GetFunctionIsWinIndicatorFunById(fid)
+}
+
+// GetFunctionIsWinIndicatorFunById is the ID-set membership of the indicator
+// kernel family, shared by the executor dispatch, the frame-ignoring window
+// binding and the binder's section-4 surface validation.
+func GetFunctionIsWinIndicatorFunById(fid int32) bool {
+	switch fid {
+	case SMA, WMA, TRIMA, EMA, WILDER, KAMA, DEMA, TEMA, T3, MMAXDRAWDOWN, CUMPOSITIVESTREAK:
+		return true
+	}
+	return false
+}
+
 // GetFunctionIgnoresWindowFrameByName reports whether a window function
 // operates on partition-relative row positions instead of the current frame.
 func GetFunctionIgnoresWindowFrameByName(name string) bool {
 	fid, exists := getFunctionIdByNameWithoutErr(name)
-	return exists && (fid == LAG || fid == LEAD)
+	if !exists {
+		return false
+	}
+	if fid == LAG || fid == LEAD {
+		return true
+	}
+	// The indicator kernels define extent through the period parameter;
+	// a frame-less OVER clause binds with the default synthetic frame and
+	// explicit frames are rejected by the window binder.
+	return GetFunctionIsWinIndicatorFunById(fid)
 }
 
 func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
@@ -801,6 +831,14 @@ func DeduceNotNullableForBinding(ctx context.Context, overloadID int64, args []*
 func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr) bool {
 	fid, oid := DecodeOverloadID(overloadID)
 	switch fid {
+	case SMA, WMA, TRIMA, EMA, WILDER, KAMA, DEMA, TEMA, T3, MMAXDRAWDOWN:
+		// Indicator kernels emit leading warmup NULLs (issue #29949,
+		// design section 4); never proven not-nullable regardless of
+		// argument nullability.
+		return false
+	case CUMPOSITIVESTREAK:
+		// Dense output: NULL observations emit 0, never NULL.
+		return true
 	case EXTRACT:
 		// Numeric EXTRACT synthesizes NULL for invalid text/fields and zero
 		// calendar weeks. Released overloads 0..4 retain their physical ABI.
