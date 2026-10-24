@@ -99,21 +99,7 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					execSQLRequire(t, ctx, db1, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 					holder, err := db0.BeginTx(ctx, nil)
 					require.NoError(t, err)
-					operationCtx, stop := context.WithTimeout(ctx, 20*time.Second)
-					defer stop()
-					var done chan error
-					finished := false
-					defer func() {
-						stop()
-						_ = holder.Rollback()
-						if done != nil && !finished {
-							select {
-							case <-done:
-							case <-ctx.Done():
-								t.Error("CREATE did not terminate")
-							}
-						}
-					}()
+					defer holder.Rollback()
 					query := "alter table " + database + "." + parent + " modify column v bigint"
 					if dropped {
 						query = "drop table " + database + "." + parent
@@ -130,7 +116,22 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 						}
 					})
 					defer restore()
-					done = make(chan error, 1)
+					// Start the operation budget after preparing its blocker and session.
+					operationCtx, stop := context.WithTimeout(ctx, 20*time.Second)
+					defer stop()
+					done := make(chan error, 1)
+					finished := false
+					defer func() {
+						stop()
+						_ = holder.Rollback()
+						if !finished {
+							select {
+							case <-done:
+							case <-ctx.Done():
+								t.Error("CREATE did not terminate")
+							}
+						}
+					}()
 					go func() {
 						_, err := db1.ExecContext(operationCtx, "create table "+database+"."+child+"(id int primary key,pid int,foreign key(pid) references "+database+"."+parent+"(id))")
 						done <- err
@@ -280,21 +281,7 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				"select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_feature_registry'").Scan(&registryID))
 			holder, err := db0.BeginTx(ctx, nil)
 			require.NoError(t, err)
-			truncateCtx, stop := context.WithTimeout(ctx, 15*time.Second)
-			defer stop()
-			var done chan error
-			finished := false
-			defer func() {
-				stop()
-				_ = holder.Rollback()
-				if done != nil && !finished {
-					select {
-					case <-done:
-					case <-ctx.Done():
-						t.Error("tenant TRUNCATE did not terminate during cleanup")
-					}
-				}
-			}()
+			defer holder.Rollback()
 			_, err = holder.ExecContext(ctx, "drop table "+guard+".t")
 			require.NoError(t, err)
 			queued := make(chan struct{}, 1)
@@ -307,7 +294,22 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				}
 			})
 			defer restore()
-			done = make(chan error, 1)
+			// Start the operation budget after preparing its blocker and session.
+			truncateCtx, stop := context.WithTimeout(ctx, 15*time.Second)
+			defer stop()
+			done := make(chan error, 1)
+			finished := false
+			defer func() {
+				stop()
+				_ = holder.Rollback()
+				if !finished {
+					select {
+					case <-done:
+					case <-ctx.Done():
+						t.Error("tenant TRUNCATE did not terminate during cleanup")
+					}
+				}
+			}()
 			go func() {
 				_, err := tenant.ExecContext(truncateCtx, "truncate table scoped.renamed")
 				done <- err
@@ -455,8 +457,6 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				conn, err := db1.Conn(ctx)
 				require.NoError(t, err)
 				defer conn.Close()
-				truncateCtx, truncateCancel := context.WithTimeout(ctx, 15*time.Second)
-				defer truncateCancel()
 				if terminal == "timeout" {
 					_, err = conn.ExecContext(ctx, "set session lock_wait_timeout=1")
 					require.NoError(t, err)
@@ -473,19 +473,7 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				require.NoError(t, err)
 				holder, err := db0.BeginTx(ctx, nil)
 				require.NoError(t, err)
-				var done chan error
-				finished := false
-				defer func() {
-					truncateCancel()
-					_ = holder.Rollback()
-					if done != nil && !finished {
-						select {
-						case <-done:
-						case <-ctx.Done():
-							t.Error("TRUNCATE did not terminate during cleanup")
-						}
-					}
-				}()
+				defer holder.Rollback()
 				_, err = holder.ExecContext(ctx, "alter table "+solo+".w modify column i bigint")
 				require.NoError(t, err)
 				queued := make(chan struct{}, 1)
@@ -498,7 +486,22 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					}
 				})
 				defer restoreGateHook()
-				done = make(chan error, 1)
+				// Start the operation budget after preparing its blocker and session.
+				truncateCtx, truncateCancel := context.WithTimeout(ctx, 15*time.Second)
+				defer truncateCancel()
+				done := make(chan error, 1)
+				finished := false
+				defer func() {
+					truncateCancel()
+					_ = holder.Rollback()
+					if !finished {
+						select {
+						case <-done:
+						case <-ctx.Done():
+							t.Error("TRUNCATE did not terminate during cleanup")
+						}
+					}
+				}()
 				go func() {
 					_, err := conn.ExecContext(truncateCtx, "truncate table "+solo+".v")
 					done <- err
@@ -637,26 +640,12 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				execSQLRequire(t, ctx, db0, "create table "+solo+".fk_guard(i int)")
 				holder, err := db0.BeginTx(ctx, nil)
 				require.NoError(t, err)
-				operationCtx, cancelOperation := context.WithTimeout(ctx, 15*time.Second)
-				defer cancelOperation()
-				var done chan error
-				finished := false
-				defer func() {
-					cancelOperation()
-					_ = holder.Rollback()
-					if done != nil && !finished {
-						select {
-						case <-done:
-						case <-ctx.Done():
-							t.Error("FK CREATE did not terminate")
-						}
-					}
-				}()
+				defer holder.Rollback()
 				_, err = holder.ExecContext(ctx, "drop table "+solo+".fk_guard")
 				require.NoError(t, err)
 				conn, err := db1.Conn(ctx)
 				require.NoError(t, err)
-				defer func() { cancelOperation(); _ = conn.Close() }()
+				defer conn.Close()
 				if forward {
 					_, err = conn.ExecContext(ctx, "set foreign_key_checks=0")
 					require.NoError(t, err)
@@ -671,7 +660,22 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					}
 				})
 				defer restore()
-				done = make(chan error, 1)
+				// Start the operation budget after preparing its blocker and session.
+				operationCtx, cancelOperation := context.WithTimeout(ctx, 15*time.Second)
+				defer cancelOperation()
+				done := make(chan error, 1)
+				finished := false
+				defer func() {
+					cancelOperation()
+					_ = holder.Rollback()
+					if !finished {
+						select {
+						case <-done:
+						case <-ctx.Done():
+							t.Error("FK CREATE did not terminate")
+						}
+					}
+				}()
 				go func() {
 					_, err := conn.ExecContext(operationCtx, "create table "+solo+"."+child+"(id int primary key,pid int,constraint fk_p foreign key(pid) references "+solo+"."+parent+"(id))")
 					done <- err

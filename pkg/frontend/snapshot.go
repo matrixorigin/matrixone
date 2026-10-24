@@ -16,6 +16,8 @@ package frontend
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -971,6 +973,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	// collect views and tables during table restoration
 	viewMap := make(map[string]*tableInfo)
+	databaseRecreated := false
 
 	switch stmt.Level {
 	case tree.RESTORELEVELACCOUNT:
@@ -992,7 +995,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	case tree.RESTORELEVELDATABASE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
 
-		if err = restoreToDatabase(ctx,
+		if databaseRecreated, err = restoreToDatabase(ctx,
 			ses.GetService(),
 			bh,
 			snapshotName,
@@ -1049,6 +1052,15 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			ctx, ses, bh, snapshotName, viewMap, toAccountId, sortedView, false,
 		); err != nil {
 			return
+		}
+	}
+
+	// A successful worker may deliberately skip a database (e.g. external
+	// foreign keys). Its live publications were not removed and must not replay.
+	if databaseRecreated {
+		if err = recreatePublicationsAfterDbRestoreTS(
+			ctx, ses.GetService(), bh, stmt.Level, dbName, restoreAccount, toAccountId, snapshot.ts, publicationOmittedViews(viewMap)); err != nil {
+			return stats, err
 		}
 	}
 
@@ -1388,7 +1400,7 @@ func restoreToAccount(
 
 	// restore dbs
 	for _, dbName := range restoreDBNames {
-		if err = restoreToDatabase(ctx,
+		if _, err = restoreToDatabase(ctx,
 			sid,
 			bh,
 			snapshotName,
@@ -1454,7 +1466,7 @@ func restoreToDatabase(
 	isRestoreCluster bool,
 	subDbToRestore map[string]*subDbRestoreRecord,
 	source *partialRestoreSource,
-) (err error) {
+) (databaseRecreated bool, err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore db: %v, restore timestamp: %d", snapshotName, dbName, snapshotTs))
 	return restoreToDatabaseOrTable(ctx,
 		sid,
@@ -1486,7 +1498,7 @@ func restoreToTable(
 	source *partialRestoreSource,
 ) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore table: %v, restore timestamp: %d", snapshotName, tblName, snapshotTs))
-	return restoreToDatabaseOrTable(ctx,
+	_, err = restoreToDatabaseOrTable(ctx,
 		sid,
 		bh,
 		snapshotName,
@@ -1499,6 +1511,7 @@ func restoreToTable(
 		restoreAccount,
 		false,
 		nil, source)
+	return err
 }
 
 func restoreToDatabaseOrTable(
@@ -1516,7 +1529,7 @@ func restoreToDatabaseOrTable(
 	isRestoreCluster bool,
 	subDbToRestore map[string]*subDbRestoreRecord,
 	source *partialRestoreSource,
-) (err error) {
+) (databaseRecreated bool, err error) {
 	if needSkipDb(dbName) {
 		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v", snapshotName, dbName))
 		return
@@ -1545,7 +1558,7 @@ func restoreToDatabaseOrTable(
 		return
 	}
 	if isSubDb && restoreToTbl {
-		return moerr.NewInternalError(ctx, "can't restore to table for sub db")
+		return false, moerr.NewInternalError(ctx, "can't restore to table for sub db")
 	}
 
 	if isRestoreCluster && isSubDb {
@@ -1568,7 +1581,7 @@ func restoreToDatabaseOrTable(
 		var isMasterDb bool
 		isMasterDb, err = checkDatabaseIsMaster(toCtx, sid, bh, snapshotName, dbName)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if isMasterDb {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore master db: %v, which has been referenced by foreign keys", snapshotName, dbName))
@@ -1592,7 +1605,7 @@ func restoreToDatabaseOrTable(
 		var isPubExist bool
 		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if !isPubExist {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, dbName))
@@ -1604,7 +1617,7 @@ func restoreToDatabaseOrTable(
 		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
-
+		databaseRecreated = !restoreToTbl
 		return
 	} else {
 		createDbSql = appendDatabaseDefaultsSQL(createDatabaseIfNotExistsSQL(dbName), definition.defaults)
@@ -1613,6 +1626,7 @@ func restoreToDatabaseOrTable(
 		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
+		databaseRecreated = !restoreToTbl
 	}
 
 	tempSnap := &plan.Snapshot{
@@ -1633,9 +1647,9 @@ func restoreToDatabaseOrTable(
 	// if restore to table, expect only one table here
 	if restoreToTbl {
 		if len(tableInfos) == 0 {
-			return moerr.NewInternalErrorf(ctx, "table %s not exists at snapshot %s", tblName, snapshotName)
+			return false, moerr.NewInternalErrorf(ctx, "table %s not exists at snapshot %s", tblName, snapshotName)
 		} else if len(tableInfos) != 1 {
-			return moerr.NewInternalErrorf(ctx, "find %v tableInfos by name %s at snapshot %s, expect only 1", len(tableInfos), tblName, snapshotName)
+			return false, moerr.NewInternalErrorf(ctx, "find %v tableInfos by name %s at snapshot %s, expect only 1", len(tableInfos), tblName, snapshotName)
 		}
 	}
 
@@ -1650,7 +1664,7 @@ func restoreToDatabaseOrTable(
 		// external table data is stored outside MO and cannot be restored by clone.
 		if shouldSkipRestoreTableInBulk(tblInfo) {
 			if restoreToTbl {
-				return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
+				return false, newExternalTableRestoreError(ctx, tblInfo, "snapshot")
 			}
 			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore external table: %v.%v", snapshotName, tblInfo.dbName, tblInfo.tblName))
 			continue
@@ -1671,6 +1685,7 @@ func restoreToDatabaseOrTable(
 			return
 		}
 	}
+
 	return
 }
 
@@ -1871,6 +1886,7 @@ func restoreViews(
 				// Skip it regardless of skipIfDependencyMissing -- RESTORE ACCOUNT passes
 				// false, so gating on that flag would not help the case that matters.
 				if isUnservableViewError(err) {
+					tblInfo.unservable = true
 					getLogger(ses.GetService()).Warn(fmt.Sprintf(
 						"[%s] skip restore view %v.%v: its definition can never run (%v); "+
 							"the view is NOT present in the restored account",
@@ -3042,22 +3058,6 @@ func getCreateTableSql(
 	return colsList[0][0], nil
 }
 
-//func getAccountIdBySnapshot(
-//	ctx context.Context,
-//	bh BackgroundExec,
-//	accountName string,
-//	snapshot string,
-//) (uint32, error) {
-//
-//	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-//	sql := fmt.Sprintf(
-//		"select account_id from mo_catalog.mo_account {SNAPSHOT = %s} where account_name = %s",
-//		snapshot, accountName,
-//	)
-//
-//	return getAccountIdHelper(ctx, bh, sql, accountName)
-//}
-
 func getAccountIdByTS(
 	ctx context.Context,
 	bh BackgroundExec,
@@ -3741,7 +3741,9 @@ func createDroppedAccount(ctx context.Context, ses *Session, bh BackgroundExec, 
 	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to re-create dropped account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 	createAccountSql := makeCreateAccountSqlByAccountRecord(account)
-	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to create account: %v, create account sql: %s", snapshotName, account.accountName, createAccountSql))
+	// #30752: never log the bootstrap statement; it embeds the one-shot temp
+	// password and would leave a live credential in the log files.
+	getLogger(ses.GetService()).Debug(fmt.Sprintf("[%s] start to create account: %v, account id: %d", snapshotName, account.accountName, account.accountId))
 
 	var ast []tree.Statement
 	ast, err = mysql.Parse(ctx, createAccountSql, 1)
@@ -3994,6 +3996,31 @@ func getRestoreAcurrentExistsAccount(
 	return
 }
 
+// newSnapshotRestoreTempPassword returns a CSPRNG-generated one-shot
+// password for the account bootstrap performed inside the snapshot/PITR
+// restore pipeline. The catalog (mo_account) stores no password material, so
+// a dropped account is first re-created with this temporary password and the
+// real credentials land later when the snapshot's mo_user rows are restored.
+// #30752: the previous constant "111" was the shipped factory default of
+// every MatrixOne instance, making the restored account loginable with a
+// widely-known credential for the whole restore window — and leaving a
+// permanent backdoor admin whenever the restore failed after the account
+// creation step. The random value is never logged, never returned to any
+// client, and never leaves the pipeline in plaintext.
+// snapshotRestoreRandRead exists so tests can exercise the entropy-failure
+// branch; in production it is always crypto/rand.Read.
+var snapshotRestoreRandRead = cryptorand.Read
+
+func newSnapshotRestoreTempPassword() (string, error) {
+	var buf [24]byte
+	if _, err := snapshotRestoreRandRead(buf[:]); err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("generate snapshot restore temp password: %v", err)
+	}
+	// 48 lowercase hex characters: safe to embed in a single-quoted SQL
+	// literal, and 192 bits of entropy make it unguessable.
+	return hex.EncodeToString(buf[:]), nil
+}
+
 func makeCreateAccountSqlByAccountRecord(record accountRecord) string {
 	baseSQL := fmt.Sprintf(
 		"create account IF NOT EXISTS %s ADMIN_NAME '%s' IDENTIFIED BY '%s'",
@@ -4065,7 +4092,12 @@ func getPastExistsAccounts(
 				return nil, err
 			}
 
-			account.pwd = "111"
+			// #30752: no password material exists in mo_account to restore
+			// from; give every account its own unguessable bootstrap password
+			// instead of the hardcoded factory default.
+			if account.pwd, err = newSnapshotRestoreTempPassword(); err != nil {
+				return nil, err
+			}
 
 			accounts = append(accounts, account)
 		}
@@ -4243,24 +4275,12 @@ func createPubs(
 			return err
 		}
 		toCtx := defines.AttachAccount(ctx, identity.accountID, identity.userID, identity.roleID)
-		getLogger(sid).Debug(fmt.Sprintf("[%s] create pub: create pub sql: %s", snapshotName, pubInfo.GetCreateSql()))
-		var ast []tree.Statement
-		ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1)
-		if err != nil {
-			return
-		}
+		getLogger(sid).Debug(fmt.Sprintf("[%s] recreate publication %s for database %s", snapshotName, pubInfo.PubName, pubInfo.DbName))
 
 		// The CREATE statement carries the stable database name. createPublication
 		// resolves it inside the target tenant and persists the current database
 		// ID, so the historical PubInfo.DbId must not be replayed.
-		var lowerCaseTableNames int64
-		if publicationCreateValidatesTableScope(ast[0].(*tree.CreatePublication)) {
-			if lowerCaseTableNames, err = publicationBackgroundLowerCaseTableNames(ctx, bh); err != nil {
-				return
-			}
-		}
-		err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication), lowerCaseTableNames)
-		freeStatements(ast)
+		err = createPublicationFromRestoreInfo(toCtx, bh, pubInfo, snapshotTs, nil)
 		if err != nil {
 			return
 		}
@@ -4447,7 +4467,10 @@ func getAccountRecordByTs(ctx context.Context, ses *Session, bh BackgroundExec, 
 		if account.comments, err = erArray[0].GetString(ctx, 0, 3); err != nil {
 			return &accountRecord{}, err
 		}
-		account.pwd = "111"
+		// #30752: unguessable per-restore bootstrap password, never "111".
+		if account.pwd, err = newSnapshotRestoreTempPassword(); err != nil {
+			return &accountRecord{}, err
+		}
 		return &account, nil
 	}
 

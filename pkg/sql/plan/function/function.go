@@ -581,6 +581,9 @@ func getFunctionByName(
 	if r.fid == UNIX_TIMESTAMP && LegacyUnixTimestampDatetime(ctx) {
 		check = fixedTypeMatch(f.Overloads[:4], args)
 	}
+	if legacy, ok := legacyIncompleteTemporalCheck(ctx, r.fid, f.Overloads, args); ok {
+		check = legacy
+	}
 	if r.fid == INTEGER_DIV && LegacyDecimalIntegerDiv(ctx) {
 		check = legacyIntegerDivCheck(args)
 	}
@@ -831,6 +834,17 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 		// Calendar calculations reject zero dates; FROM_DAYS rejects values
 		// above the representable calendar even when the input is NOT NULL.
 		return false
+	case TO_DAYS, TO_SECONDS:
+		// String calendar totals reject incomplete dates even when the input
+		// column is NOT NULL. Preserve the legacy typed overload's contract.
+		if oid == 1 {
+			return false
+		}
+	case DATEDIFF:
+		// Either string operand can be rejected and synthesize NULL.
+		if oid >= 1 && oid <= 3 {
+			return false
+		}
 	case DATE:
 		// Typed zero dates can become NULL under NO_ZERO_DATE, and string
 		// conversions synthesize NULL for malformed input.

@@ -80,68 +80,6 @@ func (p *PtrLen) Free(mp *MPool) {
 	p.len = 0
 }
 
-func PtrLenToSlice[T any](p *PtrLen) []T {
-	var v T
-	n := int(p.len) / int(unsafe.Sizeof(v))
-	return unsafe.Slice((*T)(unsafe.Pointer(p.ptr)), n)
-}
-
-func AppendFixed[T any](mp *MPool, p *PtrLen, v T) error {
-	bs := p.ToByteSlice()
-	oldNb := len(bs)
-	nb := oldNb + int(unsafe.Sizeof(v))
-	bs, err := mp.ReallocZero(bs, int(nb), true)
-	if err != nil {
-		return err
-	}
-	copy(bs[oldNb:], util.UnsafeToBytes(&v))
-	p.FromByteSlice(bs)
-	return nil
-}
-
-func AppendFixedList[T comparable](mp *MPool, p *PtrLen, vs []T, distinct bool) error {
-	if len(vs) == 0 {
-		return nil
-	}
-
-	bs := p.ToByteSlice()
-	oldNb := len(bs)
-	var nb int
-	var flags []bool
-
-	if distinct {
-		cnt := 0
-		flags = make([]bool, len(vs))
-		for i, v := range vs {
-			flags[i] = PtrLenFindFixed(p, v) == -1
-			if flags[i] {
-				cnt++
-			}
-		}
-		nb = oldNb + int(unsafe.Sizeof(vs[0]))*cnt
-	} else {
-		nb = oldNb + int(unsafe.Sizeof(vs[0]))*len(vs)
-	}
-
-	bs, err := mp.ReallocZero(bs, int(nb), true)
-	if err != nil {
-		return err
-	}
-
-	if distinct {
-		for i, v := range vs {
-			if flags[i] {
-				copy(bs[oldNb:], util.UnsafeToBytes(&v))
-				oldNb += int(unsafe.Sizeof(vs[0]))
-			}
-		}
-	} else {
-		copy(bs[oldNb:], util.UnsafeSliceToBytes(vs))
-	}
-	p.FromByteSlice(bs)
-	return nil
-}
-
 func (p *PtrLen) AppendRawBytes(mp *MPool, bs []byte) error {
 	if len(bs) == 0 {
 		return nil
@@ -213,16 +151,6 @@ func (p *PtrLen) AppendBytesList(mp *MPool, other *PtrLen, distinct bool) error 
 	}
 	p.FromByteSlice(pbs)
 	return nil
-}
-
-func PtrLenFindFixed[T comparable](p *PtrLen, v T) int {
-	ts := PtrLenToSlice[T](p)
-	for i, t := range ts {
-		if t == v {
-			return i
-		}
-	}
-	return -1
 }
 
 func decodeI32(v []byte) int32 {

@@ -38,7 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_incr"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_moserver"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_query"
@@ -561,7 +560,7 @@ func Test_service_handleFileServiceCacheEvictRequest(t *testing.T) {
 func Test_service_handleReloadAutoIncrementCache(t *testing.T) {
 
 	ctl := gomock.NewController(t)
-	incSvc := mock_incr.NewMockAutoIncrementService(ctl)
+	incSvc := mock_frontend.NewMockAutoIncrementService(ctl)
 	incSvc.EXPECT().Reload(gomock.Any(), gomock.Any()).AnyTimes()
 
 	ctx := context.Background()

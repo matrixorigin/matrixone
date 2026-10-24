@@ -98,6 +98,23 @@ Revision log:
   byte-preserved in the commit that first delivered this document
   (`60d88ff6adb4ae6ea9e1ba0946ee82bc61f26ea7`, inside PR #31000), so the
   reviewed content stays verifiable against the recorded hash.
+- Post-merge annotation (2026-10-24; documentation change only, not a
+  design revision): D10's protocol capability slot is re-minted from the
+  drafted `MORPCVersion130` to the delivered `MORPCVersion131`. Upstream
+  main merged #30311 (`5a813a324d`, incomplete temporal string overloads)
+  before this branch, independently claiming `MORPCVersion130` and bumping
+  the sentinel to 130, which raised the merge conflict in
+  `pkg/defines/const.go`. The resolution keeps upstream's temporal 130
+  and mints this aggregate's gate at the next free slot 131, moving
+  `MORPCLatestVersion` to 131 with it. D10's reviewed decision is that
+  remote dispatch is gated by the capability version minted for THIS
+  aggregate, whichever slot is free when it merges, enforced through the
+  same three verified layers against the actual destination — no decision,
+  invariant, layering or validation plan changed; only the concrete slot
+  number moved. The regression matrix now explicitly covers a worker
+  advertising only the temporal 130 as below this aggregate's gate. The
+  approved revision-5 bytes remain byte-preserved at the introducing
+  commit recorded above.
 
 ## Status
 
@@ -410,8 +427,11 @@ Decision log (inline references D1–D12 resolve here):
 - D9: rejected in sliding time-window contexts, consistent with
   `percentile_cont` / `percentile_disc`.
 - D10 (revision 3): mixed-version remote execution is gated by the protocol
-  capability version introduced for this aggregate (a `MORPCVersion130`-style
-  constant after `MORPCLatestVersion` 129), enforced against the ACTUAL
+  capability version minted for this aggregate (now the `MORPCVersion131`
+  constant in `pkg/defines/const.go` — the aggregate's originally drafted slot,
+  `MORPCVersion130`, was claimed first by upstream main's incomplete-temporal
+  rework #30311, so the delivered gate is re-minted at the next free slot; see
+  the post-merge annotation in the revision log), enforced against the ACTUAL
   destination in three verified layers — (1) at compile time, a
   `hasQuantileExactWeighted(node)` plan predicate paired with
   `AllCNsSupportProtocol(proc, <gate>)` fast-fails remote distribution when
@@ -615,9 +635,12 @@ First owner of each boundary (all in the assigned worktree):
    argument type per argument expression for multi-argument window
    aggregates.
 7. Mixed-version dispatch gate (`pkg/defines`, `pkg/sql/compile`): new
-   protocol capability constant `MORPCVersion130` after the incumbent
-   `MORPCLatestVersion` 129 (`pkg/defines/const.go`, bumping the
-   latest-version sentinel), then decision D10's three enforcement layers:
+   protocol capability constant `MORPCVersion131` minted for this aggregate as
+   the next free slot (`pkg/defines/const.go`, bumping the
+   latest-version sentinel to 131; the drafted slot 130 was claimed first
+   by upstream main's #30311 temporal rework, so the delivered constant moved
+   to 131 — recorded in the revision log's post-merge annotation), then
+   decision D10's three enforcement layers:
    (a) a `hasQuantileExactWeighted(node)` plan predicate added to
    `canCompileShuffleGroup`'s capability family and the remote-compile
    exclusion sites that already consult `hasOrderedSetPercentile`

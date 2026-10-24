@@ -156,8 +156,8 @@ func quantileExactWeightedPipelineAggs(t *testing.T) []aggexec.AggFuncExecExpres
 func TestQuantileExactWeightedRemoteDispatchGate(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
-	client.version = defines.MORPCVersion130
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion131)
+	client.version = defines.MORPCVersion131
 
 	aggs := quantileExactWeightedPipelineAggs(t)
 	g := group.NewArgument()
@@ -173,7 +173,7 @@ func TestQuantileExactWeightedRemoteDispatchGate(t *testing.T) {
 	minimum := int64(0)
 	data, err := encodeRemoteScopeWithProtocol(scope, c.proc, &minimum)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion130, minimum,
+	require.Equal(t, defines.MORPCVersion131, minimum,
 		"the weighted aggregate must raise the destination floor to its gate version")
 	decodedPipeline := new(pipeline.Pipeline)
 	require.NoError(t, decodedPipeline.Unmarshal(data))
@@ -190,7 +190,7 @@ func TestQuantileExactWeightedRemoteDispatchGate(t *testing.T) {
 	// a below-gate coordinator cannot dispatch the aggregate at all.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
 	require.ErrorContains(t, validateRemoteAggregateProtocol(c.proc, aggs),
-		"quantileExactWeighted remote execution requires MORPC protocol version 130")
+		"quantileExactWeighted remote execution requires MORPC protocol version 131")
 
 	// Layer 1: the compile-time inventory fast-fail. With a pre-gate CN in the
 	// fake inventory the weighted aggregate is not remotely distributable, so
@@ -213,12 +213,23 @@ func TestQuantileExactWeightedRemoteDispatchGate(t *testing.T) {
 	require.False(t, c.canCompileShuffleGroup(node))
 	require.True(t, c.hasUnsupportedRemoteGroupWire(node))
 
-	client.version = defines.MORPCVersion130
+	client.version = defines.MORPCVersion131
 	require.False(t, c.supportsQuantileExactWeightedDispatch(),
 		"a pre-gate coordinator must still block distribution")
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
+	// The re-minted slot: upstream main claimed MORPCVersion130 for the
+	// incomplete temporal string overloads (#30311) before this aggregate's
+	// gate merged, so a worker advertising only the temporal capability is
+	// below this aggregate's gate and must fail closed at the inventory check.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion131)
 	client.version = defines.MORPCVersion130
+	require.False(t, c.supportsQuantileExactWeightedDispatch(),
+		"a worker carrying only MORPCVersion130 stays below the aggregate's gate")
+	require.False(t, c.canCompileShuffleGroup(node))
+	require.True(t, c.hasUnsupportedRemoteGroupWire(node))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion131)
+	client.version = defines.MORPCVersion131
 	require.True(t, c.supportsQuantileExactWeightedDispatch())
 	require.True(t, c.canCompileShuffleGroup(node))
 	require.False(t, c.hasUnsupportedRemoteGroupWire(node))
@@ -252,7 +263,8 @@ func TestQuantileExactWeightedStreamConfirmationCoversGateVersion(t *testing.T) 
 		version int64
 		wantErr bool
 	}{
-		{name: "worker at gate", version: defines.MORPCVersion130},
+		{name: "worker at gate", version: defines.MORPCVersion131},
+		{name: "worker at temporal gate, below aggregate gate", version: defines.MORPCVersion130, wantErr: true},
 		{name: "worker below gate", version: defines.MORPCVersion129, wantErr: true},
 		{name: "unknown capability", version: 0, wantErr: true},
 	} {
@@ -266,7 +278,7 @@ func TestQuantileExactWeightedStreamConfirmationCoversGateVersion(t *testing.T) 
 			sender := &messageSenderOnClient{
 				ctx: context.Background(), streamSender: stream, receiveCh: receiveCh,
 			}
-			err := sender.confirmProtocolOnStream(defines.MORPCVersion130)
+			err := sender.confirmProtocolOnStream(defines.MORPCVersion131)
 			if tc.wantErr {
 				require.Error(t, err)
 			} else {
@@ -276,7 +288,7 @@ func TestQuantileExactWeightedStreamConfirmationCoversGateVersion(t *testing.T) 
 				"the confirmation must run before any pipeline payload")
 			request := stream.sent[0].(*pipeline.Message)
 			require.Equal(t, pipeline.Method_PipelineProtocolCheck, request.GetCmd())
-			require.Equal(t, defines.MORPCVersion130, request.GetProtocolVersion())
+			require.Equal(t, defines.MORPCVersion131, request.GetProtocolVersion())
 		})
 	}
 }
