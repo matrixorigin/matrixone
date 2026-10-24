@@ -1222,75 +1222,7 @@ func doCmdFieldList(reqCtx context.Context, ses *Session, _ *InternalCmdFieldLis
 		return moerr.NewNoDB(reqCtx)
 	}
 
-	//Get table infos for the database from the cube
-	//case 1: there are no table infos for the db
-	//case 2: db changed
-	//NOTE: it costs too much time.
-	//It just reduces the information in the auto-completion (auto-rehash) of the mysql client.
-	//var attrs []ColumnInfo
-	//
-	//if tableInfos == nil || db != dbName {
-	//	txnHandler := ses.GetTxnHandler()
-	//	eng := ses.GetStorage()
-	//	db, err := eng.Database(reqCtx, dbName, txnHandler.GetTxn())
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	names, err := db.Relations(reqCtx)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	for _, name := range names {
-	//		table, err := db.Relation(reqCtx, name)
-	//		if err != nil {
-	//			return err
-	//		}
-	//
-	//		defs, err := table.TableDefs(reqCtx)
-	//		if err != nil {
-	//			return err
-	//		}
-	//		for _, def := range defs {
-	//			if attr, ok := def.(*engine.AttributeDef); ok {
-	//				attrs = append(attrs, &engineColumnInfo{
-	//					name: attr.Attr.Name,
-	//					typ:  attr.Attr.Type,
-	//				})
-	//			}
-	//		}
-	//	}
-	//
-	//	if tableInfos == nil {
-	//		tableInfos = make(map[string][]ColumnInfo)
-	//	}
-	//	tableInfos[tableName] = attrs
-	//}
-	//
-	//cols, ok := tableInfos[tableName]
-	//if !ok {
-	//	//just give the empty info when there is no such table.
-	//	attrs = make([]ColumnInfo, 0)
-	//} else {
-	//	attrs = cols
-	//}
-	//
-	//for _, c := range attrs {
-	//	col := new(MysqlColumn)
-	//	col.SetName(c.GetName())
-	//	err = convertEngineTypeToMysqlType(c.GetType(), col)
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	/*
-	//		mysql CMD_FIELD_LIST response: send the column definition per column
-	//	*/
-	//	err = proto.SendColumnDefinitionPacket(col, int(COM_FIELD_LIST))
-	//	if err != nil {
-	//		return err
-	//	}
-	//}
+	// Return an empty field list to avoid catalog scans for client auto-completion.
 	return nil
 }
 
@@ -3769,6 +3701,10 @@ func handleSwitchRole(ses FeSession, execCtx *ExecCtx, sr *tree.SetRole) error {
 	return doSwitchRole(execCtx.reqCtx, ses.(*Session), sr)
 }
 
+func handleSetDefaultRole(ses FeSession, execCtx *ExecCtx, sdr *tree.SetDefaultRole) error {
+	return doSetDefaultRole(execCtx.reqCtx, ses.(*Session), sdr)
+}
+
 func doKill(ses *Session, execCtx *ExecCtx, k *tree.Kill) error {
 	killConnection := !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection
 	return killSession(execCtx.reqCtx, ses, k.ConnectionId, killConnection, k.StmtOption.StatementId)
@@ -5933,11 +5869,6 @@ func executeStmtWithIncrStmt(ses FeSession,
 			panic("need txn handler 3")
 		}
 
-		//!!!NOTE!!!: it does not work
-		//_, txnOp = ses.GetTxnHandler().GetTxn()
-		//if txnOp != nil {
-		//	err = rollbackLastStmt(execCtx, txnOp, err)
-		//}
 	}()
 
 	err = dispatchStmt(ses, statsArr, execCtx)

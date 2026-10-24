@@ -2756,6 +2756,8 @@ func InitInfileParam(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			// Parsed and validated by initJSONBinaryOption after format resolution.
 		case ExternalWriteFilePatternKey, CSVCommentKey:
 			// write_file_pattern is write-only; comment is read at parse time. Both
 			// are kept in Option and consumed elsewhere, ignored here.
@@ -2778,7 +2780,7 @@ func InitInfileParam(param *tree.ExternParam) error {
 	if err := validateArrowContainerOption(param); err != nil {
 		return err
 	}
-	return nil
+	return initJSONBinaryOption(param)
 }
 
 func InitS3Param(param *tree.ExternParam) error {
@@ -2831,6 +2833,8 @@ func InitS3Param(param *tree.ExternParam) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			// Parsed and validated by initJSONBinaryOption after format resolution.
 		case ExternalWriteFilePatternKey, CSVCommentKey:
 			// write_file_pattern is write-only; comment is read at parse time. Both
 			// are kept in Option and consumed elsewhere, ignored here.
@@ -2850,6 +2854,45 @@ func InitS3Param(param *tree.ExternParam) error {
 	if err := validateArrowContainerOption(param); err != nil {
 		return err
 	}
+	return initJSONBinaryOption(param)
+}
+
+// JSONBinaryOptionKey explicitly identifies pre-wrapper MatrixOne JSONLINE
+// archives. Bare strings are otherwise ambiguous and must remain plain text.
+const JSONBinaryOptionKey = "json_binary"
+
+const JSONBinaryLegacyBase64 = "legacy_base64"
+
+func initJSONBinaryOption(param *tree.ExternParam) error {
+	mode, format := param.JsonBinary, param.Format
+	seen := false
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		switch strings.ToLower(param.Option[i]) {
+		case "format":
+			format = strings.ToLower(param.Option[i+1])
+		case "jsondata":
+			format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			if seen {
+				return moerr.NewBadConfig(param.Ctx, "duplicate json_binary option")
+			}
+			seen = true
+			mode = strings.ToLower(strings.TrimSpace(param.Option[i+1]))
+		}
+	}
+	if !seen && mode == "" {
+		return nil
+	}
+	if mode != JSONBinaryLegacyBase64 {
+		return moerr.NewBadConfigf(param.Ctx, "unsupported json_binary '%s'; use 'legacy_base64' for old MatrixOne JSONLINE archives", mode)
+	}
+	if format != tree.JSONLINE {
+		return moerr.NewBadConfig(param.Ctx, "json_binary requires format='jsonline'")
+	}
+	if _, writable := GetWriteFilePattern(param); writable {
+		return moerr.NewBadConfig(param.Ctx, "json_binary is only supported on read-only JSONLINE inputs")
+	}
+	param.JsonBinary = mode
 	return nil
 }
 
@@ -3009,6 +3052,8 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 			}
 			param.JsonData = jsondata
 			param.Format = tree.JSONLINE
+		case JSONBinaryOptionKey:
+			// Parsed and validated by initJSONBinaryOption after format resolution.
 		case ExternalWriteFilePatternKey, CSVCommentKey:
 			// write_file_pattern is write-only; comment is read at parse time. Both
 			// are kept in Option and consumed elsewhere, ignored here.
@@ -3030,8 +3075,7 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 		return err
 	}
 
-	return nil
-
+	return initJSONBinaryOption(param)
 }
 
 func InitInfileOrStageParam(param *tree.ExternParam, proc *process.Process) error {
@@ -3276,44 +3320,6 @@ func AssignAuxIdForExpr(expr *plan.Expr, start int32) int32 {
 
 	return vertexCnt
 }
-
-func ResetAuxIdForExpr(expr *plan.Expr) {
-	expr.AuxId = 0
-
-	if f, ok := expr.Expr.(*plan.Expr_F); ok {
-		for _, child := range f.F.Args {
-			ResetAuxIdForExpr(child)
-		}
-	}
-}
-
-// func SubstitueParam(expr *plan.Expr, proc *process.Process) *plan.Expr {
-// 	switch t := expr.Expr.(type) {
-// 	case *plan.Expr_F:
-// 		for _, arg := range t.F.Args {
-// 			SubstitueParam(arg, proc)
-// 		}
-// 	case *plan.Expr_P:
-// 		vec, _ := proc.GetPrepareParamsAt(int(t.P.Pos))
-// 		c := rule.GetConstantValue(vec, false)
-// 		ec := &plan.Expr_C{
-// 			C: c,
-// 		}
-// 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
-// 		expr.Expr = ec
-// 	case *plan.Expr_V:
-// 		val, _ := proc.GetResolveVariableFunc()(t.V.Name, t.V.System, t.V.Global)
-// 		typ := types.New(types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale)
-// 		vec, _ := util.GenVectorByVarValue(proc, typ, val)
-// 		c := rule.GetConstantValue(vec, false)
-// 		ec := &plan.Expr_C{
-// 			C: c,
-// 		}
-// 		expr.Typ = &plan.Type{Id: int32(vec.GetType().Oid), Scale: vec.GetType().Scale, Width: vec.GetType().Width}
-// 		expr.Expr = ec
-// 	}
-// 	return expr
-// }
 
 func ExprType2Type(typ *plan.Type) types.Type {
 	return types.MustTypeFromPlan(*typ)
@@ -8669,31 +8675,6 @@ func getConstantBytes(vec *vector.Vector, transAll bool, row uint64) (ret []byte
 
 	return
 }
-
-//func getOffsetFromUTC() string {
-//	now := time.Now()
-//	_, localOffset := now.Zone()
-//	return offsetToString(localOffset)
-//}
-//
-//func offsetToString(offset int) string {
-//	hours := offset / 3600
-//	minutes := (offset % 3600) / 60
-//	if hours < 0 {
-//		return fmt.Sprintf("-%02d:%02d", -hours, -minutes)
-//	}
-//	return fmt.Sprintf("+%02d:%02d", hours, minutes)
-//}
-
-// do not lock table if lock no rows now.
-// if need to lock table, uncomment these codes
-// func getLockTableAtTheEnd(tableDef *TableDef) bool {
-// if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName || //fake pk, skip
-// 	tableDef.Partition != nil { // unsupport partition table
-// 	return false
-// }
-// return !strings.HasPrefix(tableDef.Name, catalog.IndexTableNamePrefix)
-// }
 
 // DbNameOfObjRef return subscription name of ObjectRef if exists, to avoid the mismatching of account id and db name
 func DbNameOfObjRef(objRef *ObjectRef) string {

@@ -6499,6 +6499,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.AlterUser:
 		typs = append(typs, PrivilegeTypeAlterUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership*/)
 		canExecInPasswordExpired = true
+	case *tree.SetDefaultRole:
+		typs = append(typs, PrivilegeTypeAlterUser, PrivilegeTypeAccountAll)
 	case *tree.CreateRole:
 		typs = append(typs, PrivilegeTypeCreateRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.DropRole:
@@ -6854,7 +6856,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindNone
 		canExecInRestricted = true
-	case *tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
+	case *tree.SetRole, *tree.SetPassword:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar, *tree.Deallocate, *tree.Reset:
@@ -8857,6 +8859,15 @@ func authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(ctx con
 	priv := ses.GetPrivilege()
 	if priv.objectType() != objectTypeAccount && priv.objectType() != objectTypeDatabase { // do nothing
 		return true, stats, nil
+	}
+	if st, isSetDefaultRole := stmt.(*tree.SetDefaultRole); isSetDefaultRole && ses.GetFromRealUser() {
+		self, selfErr := setDefaultRoleTargetsAreCurrentUser(ctx, ses, st)
+		if selfErr != nil {
+			return false, stats, selfErr
+		}
+		if self {
+			return true, stats, nil
+		}
 	}
 	if !checkProtectedDatabaseWriteByPrivilege(ctx, ses, priv) {
 		return false, stats, nil

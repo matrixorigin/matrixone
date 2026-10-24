@@ -1082,6 +1082,8 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 					ctx.WriteString("'format'='" + node.Param.Option[i+1] + "'")
 				case "jsondata":
 					ctx.WriteString("'jsondata'='" + node.Param.Option[i+1] + "'")
+				case "json_binary":
+					ctx.WriteString("'json_binary'='" + node.Param.Option[i+1] + "'")
 				}
 				if i != len(node.Param.Option)-2 {
 					ctx.WriteString(", ")

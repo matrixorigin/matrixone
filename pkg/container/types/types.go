@@ -479,12 +479,6 @@ func (b *Blockid) Unmarshal(data []byte) error {
 	return nil
 }
 
-// Fixed bytes.   Decimal64/128 and Varlena are not included because they
-// has special meanings.  In general you cannot compare them as bytes.
-type FixedBytes interface {
-	TS | Rowid
-}
-
 type Ints interface {
 	int8 | int16 | int32 | int64
 }
