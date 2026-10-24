@@ -811,7 +811,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	if owner, ok := tcc.GetSession().(process.TemporaryTableDDL); ok && useSessionTemporary {
 		ownedTemporary = owner.OwnsTemporaryTable(dbName, tableName)
 	}
-	if !plan2.TemporaryTableAccessAllowed(tcc.GetContext(), tcc.GetSession(), dbName, tableName, tableDef, isTmpTable) {
+	if !plan2.TemporaryTableAccessAllowed(tcc.GetContext(), tcc.GetSession(), dbName, tableName, tableDef, table.GetExtraInfo(), isTmpTable) {
 		return nil, nil, nil
 	}
 	tableDef.IsTemporary = isTmpTable || ownedTemporary
@@ -896,7 +896,7 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	if err := tcc.recoverLegacyTinyText(ctx, ref.SchemaName, tableDef, subMeta, snapshot); err != nil {
 		return nil, nil, err
 	}
-	if !plan2.TemporaryTableAccessAllowed(tcc.GetContext(), tcc.GetSession(), ref.SchemaName, tblName, tableDef, isTmpTable) {
+	if !plan2.TemporaryTableAccessAllowed(tcc.GetContext(), tcc.GetSession(), ref.SchemaName, tblName, tableDef, table.GetExtraInfo(), isTmpTable) {
 		return nil, nil, moerr.NewNoSuchTable(ctx, ref.SchemaName, tblName)
 	}
 	if tableDef.IsTemporary {

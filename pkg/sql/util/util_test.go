@@ -73,6 +73,7 @@ func TestBuildTableScanTemporaryFilter(t *testing.T) {
 	sql := tree.String(filter, dialect.MYSQL)
 	require.Contains(t, sql, "relkind = temporary_table")
 	require.Contains(t, sql, "mo_is_legacy_temporary_table")
+	require.Contains(t, sql, "regexp_like(relname")
 	require.Contains(t, sql, "startswith(relname, __mo_tmp_00112233445566778899aabbccddeeff_)")
 	require.Nil(t, BuildTableScanTemporaryFilter(""))
 }

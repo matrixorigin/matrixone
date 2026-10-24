@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -38,24 +39,29 @@ var _ process.TemporaryTableDDL = (*temporaryAccessTestSession)(nil)
 
 func TestTemporaryTableAccessAllowed(t *testing.T) {
 	physical := defines.GenTempTableName(uuid.MustParse("00112233-4455-6677-8899-aabbccddeeff"), "db", "t")
+	foreignPhysical := defines.GenTempTableName(uuid.MustParse("ffeeddcc-bbaa-9988-7766-554433221100"), "db", "t")
 	session := &temporaryAccessTestSession{physical: physical}
 	tests := []struct {
 		name          string
 		ctx           context.Context
 		tableDef      *TableDef
 		physical      string
+		extraInfo     *api.SchemaExtra
 		aliasResolved bool
 		want          bool
 	}{
 		{name: "owner root", tableDef: &TableDef{TableType: catalog.SystemTemporaryTable}, physical: physical, want: true},
 		{name: "foreign root", tableDef: &TableDef{TableType: catalog.SystemTemporaryTable}, physical: physical + "_other", want: false},
-		{name: "ordinary prefix remains visible", tableDef: &TableDef{TableType: catalog.SystemOrdinaryRel}, physical: physical + "_ordinary", want: true},
+		{name: "ordinary prefix remains visible", tableDef: &TableDef{TableType: catalog.SystemOrdinaryRel, Createsql: "CREATE TABLE __mo_tmp_00112233445566778899aabbccddeeff_db_ordinary(id int)"}, physical: defines.GenTempTableName(uuid.MustParse("00112233-4455-6677-8899-aabbccddeeff"), "db", "ordinary"), want: true},
+		{name: "legacy ordinary temporary root", tableDef: &TableDef{TableType: catalog.SystemOrdinaryRel, Createsql: "CREATE TEMPORARY TABLE t(id int)"}, physical: foreignPhysical, want: false},
+		{name: "legacy renamed permanent root", tableDef: &TableDef{TableType: catalog.SystemOrdinaryRel, Createsql: "CREATE TEMPORARY TABLE t(id int)"}, physical: foreignPhysical, extraInfo: &api.SchemaExtra{OldName: "permanent_t"}, want: true},
+		{name: "legacy derived relation", tableDef: &TableDef{TableType: catalog.SystemIndexRel}, physical: foreignPhysical + "_index", want: false},
 		{name: "staging alias", tableDef: &TableDef{TableType: catalog.SystemTemporaryTable}, physical: physical + "_staged", aliasResolved: true, want: true},
 		{name: "trusted cleanup", ctx: defines.AttachTemporaryTableAccess(context.Background()), tableDef: &TableDef{TableType: catalog.SystemTemporaryTable}, physical: physical + "_other", want: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.want, TemporaryTableAccessAllowed(test.ctx, session, "db", test.physical, test.tableDef, test.aliasResolved))
+			require.Equal(t, test.want, TemporaryTableAccessAllowed(test.ctx, session, "db", test.physical, test.tableDef, test.extraInfo, test.aliasResolved))
 		})
 	}
 }
