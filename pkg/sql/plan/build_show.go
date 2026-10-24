@@ -791,6 +791,15 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		likeExpr := stmt.Like
 		likeExpr.Left = tree.NewUnresolvedColName("attname")
 		result, err = returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+	} else if stmt.ColName != nil {
+		// DESCRIBE tbl col_name is SHOW COLUMNS FROM tbl LIKE 'col_name' in MySQL.
+		pattern := stmt.ColName.ColName()
+		if origin, ok := colNameToOriginName[pattern]; ok {
+			pattern = origin
+		}
+		likeExpr := tree.NewComparisonExpr(tree.LIKE, tree.NewUnresolvedColName("attname"),
+			tree.NewNumVal(pattern, pattern, false, tree.P_char))
+		result, err = returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
 	} else {
 		result, err = returnByRewriteSQL(ctx, sql, ddlType)
 	}
