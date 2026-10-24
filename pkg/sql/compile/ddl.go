@@ -3246,6 +3246,12 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
 		}
+		// Index backfill runs internal SQL before the new index aliases are
+		// published. Keep the authenticated owner for both root and index
+		// resolution, as ALTER TABLE already does for its nested SQL.
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, session)
+		defer func() { c.proc.Ctx = originalCtx }()
 		if realName, ok := session.GetTempTable(qry.Database, qry.Table); ok {
 			qry.Table = realName
 			qry.TableDef.Name = realName
