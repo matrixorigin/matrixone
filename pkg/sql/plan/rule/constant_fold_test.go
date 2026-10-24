@@ -93,7 +93,7 @@ func TestConstantFoldRuleNeverExecutesTypedRoutineCall(t *testing.T) {
 		}},
 	}
 
-	require.False(t, IsConstant(expr, false))
+	require.False(t, function.IsConstant(expr, false))
 	require.Same(t, expr, NewConstantFold(false).constantFold(expr, testutil.NewProcess(t)))
 }
 
