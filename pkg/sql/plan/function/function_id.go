@@ -798,6 +798,15 @@ const (
 	// function `mo_view_check_option`
 	MO_VIEW_CHECK_OPTION = 604
 
+	// Local sliding-window ranks (issue #29947): argument-windowed frame-local
+	// competition rank, registered as value-window functions. Renumbered
+	// 605/606/607 -> 616/617/618 when main's technical-indicator kernels
+	// (#31017) claimed 605..615; ids are referenced by name everywhere, so
+	// renumbering is safe, and the ranks stay below the sentinel.
+	MRANK   = 616
+	CUMRANK = 617
+	TMRANK  = 618
+
 	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
 	// (549->554->556); referenced by name only, so renumbering is safe.
 	ONNX_RUN = 556
@@ -912,7 +921,10 @@ const (
 	// Internal LOAD IGNORE predicate; gated by cluster protocol 125.
 	LOAD_FK_IGNORE_CHECK = 602
 
-	FUNCTION_END_NUMBER = 616
+	// 616/617/618 hold the local sliding-window ranks (MRANK/CUMRANK/TMRANK)
+	// renumbered above main's 605..615 indicator block; keep
+	// FUNCTION_END_NUMBER one past the highest allocated function id.
+	FUNCTION_END_NUMBER = 619
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1023,6 +1035,9 @@ var functionIdRegister = map[string]int32{
 	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
 	"mo_view_definition":           MO_VIEW_DEFINITION,
 	"mo_view_check_option":         MO_VIEW_CHECK_OPTION,
+	"mrank":                        MRANK,
+	"cumrank":                      CUMRANK,
+	"tmrank":                       TMRANK,
 	"max_by":                       MAX_BY,
 	"max_by_non_null":              MAX_BY_NON_NULL,
 	"percentile_cont":              PERCENTILE_CONT,
