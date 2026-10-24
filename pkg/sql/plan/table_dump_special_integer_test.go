@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -660,4 +661,45 @@ func TestTableDumpRejectsMixedTemporalNullability(t *testing.T) {
 	_, err = AnalyzeTableDumpBindings(ctx, target, forged)
 	require.ErrorContains(t, err, "cannot verify bound generated")
 	require.True(t, proto.Equal(before, forged))
+}
+
+// Captured by binding on pinned official main through a source overlay, not by
+// lowering the new binary's negotiated protocol version or using its binder.
+func TestTableDumpPreIncompleteTemporalStringBindings(t *testing.T) {
+	data, err := os.ReadFile("testdata/incomplete_temporal_main125.json")
+	require.NoError(t, err)
+	var fixture struct {
+		Revision     string            `json:"revision"`
+		RegistryBlob string            `json:"registry_blob"`
+		Tables       map[string][]byte `json:"tables"`
+	}
+	require.NoError(t, json.Unmarshal(data, &fixture))
+	require.Equal(t, "838cc78aa1efe46693876a48c05c202979047b7b", fixture.Revision)
+	require.Equal(t, "319670c77ec7d2312d7149e9b041a8813980a00a", fixture.RegistryBlob)
+	require.Len(t, fixture.Tables, 4)
+	for name, raw := range fixture.Tables {
+		t.Run(name, func(t *testing.T) {
+			pattern := "%Y-%m-%d"
+			if name != "date_format" {
+				pattern = "%" + strings.TrimPrefix(name, "date_format_")
+			}
+			var source planpb.TableDef
+			require.NoError(t, proto.Unmarshal(raw, &source))
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t(a varchar(32) not null,g varchar(64) generated always as (date_format(a,'"+pattern+"')) stored)", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			target := built.GetDdl().GetCreateTable().GetTableDef()
+			before := proto.Clone(target)
+			_, err = AnalyzeTableDumpBindings(ctx, target, &source)
+			require.NoError(t, err)
+			forged := proto.Clone(&source).(*planpb.TableDef)
+			forged.Cols[1].GeneratedCol.Expr.Typ.Width++
+			_, err = AnalyzeTableDumpBindings(ctx, target, forged)
+			require.ErrorContains(t, err, "cannot verify bound generated")
+			require.True(t, proto.Equal(before, target), "historical verification cannot mutate current schema")
+		})
+	}
 }

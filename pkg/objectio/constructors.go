@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"go.uber.org/zap"
 )
 
@@ -219,27 +218,6 @@ func columnCacheConstructorFactory(size int64, algo uint8) CacheConstructor {
 		data []byte,
 		allocator fileservice.CacheDataAllocator,
 	) (fscache.Data, error) {
-		var decodedBytes int64
-		succeeded := false
-		defer func() {
-			perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
-				codec := &c.FileService.ColumnConstruction.Other
-				switch algo {
-				case compress.None:
-					codec = &c.FileService.ColumnConstruction.Uncompressed
-				case compress.Lz4:
-					codec = &c.FileService.ColumnConstruction.LZ4
-				case compress.Lz4Chunked:
-					codec = &c.FileService.ColumnConstruction.Chunked
-				}
-				codec.Calls.Add(1)
-				if succeeded {
-					codec.Bytes.Add(decodedBytes)
-				} else {
-					codec.Errors.Add(1)
-				}
-			})
-		}()
 		cacheData, err := construct(ctx, reader, data, allocator)
 		if err != nil {
 			return nil, err
@@ -251,8 +229,6 @@ func columnCacheConstructorFactory(size int64, algo uint8) CacheConstructor {
 			}
 			return nil, err
 		}
-		decodedBytes = validated.Size()
-		succeeded = true
 		return validated, nil
 	}
 }
@@ -328,11 +304,6 @@ func decode(buf []byte, trusted bool) (any, error) {
 		return nil, err
 	}
 	return v, nil
-}
-
-// NOTE: hack way to get vector
-func MustVectorTo(toVec *vector.Vector, buf []byte) (err error) {
-	return mustVectorTo(toVec, buf, false)
 }
 
 // MustVectorToCached binds cache-backed column data to toVec. Only data with

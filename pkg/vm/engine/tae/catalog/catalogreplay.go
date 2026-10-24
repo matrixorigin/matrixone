@@ -125,13 +125,6 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 
 func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *TableNode], _ wal.ReplayObserver) {
 	catalog.OnReplayTableID(cmd.ID.TableID)
-	// prepareTS := cmd.GetTs()
-	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-	// 	if observer != nil {
-	// 		observer.OnStaleIndex(idx)
-	// 	}
-	// 	return
-	// }
 	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
 	if err != nil {
 		panic(err)
