@@ -1,6 +1,6 @@
 # Retire unconsumed mocks and helper closures
 
-Version 1, 2026-10-24. Owner: engineering-quality issue #29249.
+Version 2, 2026-10-24. Owner: engineering-quality issue #29249.
 Implementation: [PR #31011](https://github.com/matrixorigin/matrixone/pull/31011).
 Frozen base: `2b94111625d746d048468ccc214c6b27fc23bd0d`.
 
@@ -44,15 +44,20 @@ be removed through a name-count heuristic.
 
 Compare regenerated retained mock methods after local parameter/import alias
 normalization. Review type aliases and equivalent variadic append separately.
-Preserve all active test functions, assertions and fixtures. Remove only helpers
-with no test caller. No new runtime, race, persistence or performance claims are
+Preserve live-path tests, assertions and fixtures. Retire the isolated
+`TestEngineColumnInfo` getter self-test together with its disconnected
+`ColumnInfo` / `engineColumnInfo` declarations and compile-time assertion.
+Its two assertions exercise only the retired member getters; it has no SQL or
+protocol oracle to migrate. Existing MysqlColumn/protocol result-metadata tests
+remain unchanged. Other removed test helpers have no caller. No new runtime, race, persistence or performance claims are
 introduced. Native/compiler and incremental vet/configured lint validate the
 changed package and consumer closure. Tests are not executed under this task's
 current instructions; record that limitation explicitly.
 
 ## Design review decision
 
-Separate in-session design review, before helper implementation: **GO** for the
+Separate in-session design review, before helper implementation, with the getter-self-test closure reviewed
+before its own edit: **GO** for the
 bounded retirement above. The size gate is met by non-generated source deletion;
 no major subsystem boundary is restructured. The critical invariants are zero
 incoming live references, unchanged live ownership/ABI/formats, preserved mock
