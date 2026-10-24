@@ -2357,6 +2357,21 @@ func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
 	planStatsVersions []map[optimizerStatsTableKey]uint64,
 	versions ...int64,
 ) {
+	ses.cachePlanWithSnapshotsAndStatsVersionsAndFingerprints(
+		sql, stmts, plans, planSnapshotTS, planStatsVersions,
+		make([]string, len(plans)), make([]bool, len(plans)), versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshotsAndStatsVersionsAndFingerprints(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	planStatsVersions []map[optimizerStatsTableKey]uint64,
+	statementFingerprints []string,
+	statementFingerprintAttempted []bool,
+	versions ...int64,
+) {
 	if len(sql) == 0 {
 		return
 	}
@@ -2377,8 +2392,9 @@ func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
 	}
-	ses.planCache.cacheWithPlanSnapshotsAndStatsVersions(
-		sql, stmts, plans, planSnapshotTS, planStatsVersions, protocolVersion)
+	ses.planCache.cacheWithPlanSnapshotsAndStatsVersionsAndFingerprints(
+		sql, stmts, plans, planSnapshotTS, planStatsVersions,
+		statementFingerprints, statementFingerprintAttempted, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {
@@ -3157,6 +3173,26 @@ func (ses *Session) getPrepareStmt(ctx context.Context, name string, allowInvali
 
 func (ses *Session) getPrepareStmtAllowInvalidated(ctx context.Context, name string) (*PrepareStmt, error) {
 	return ses.getPrepareStmt(ctx, name, true)
+}
+
+// getPrepareStmtIfPresent looks up an optional prepared statement without
+// logging when it is absent. Callers that only capture a construction-time
+// snapshot must not report an execution error before the statement runs.
+func (ses *Session) getPrepareStmtIfPresent(name string) (*PrepareStmt, bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	prepareStmt, ok := ses.prepareStmts[strings.ToLower(name)]
+	return prepareStmt, ok
+}
+
+func (ses *Session) GetPrepareStmts() []*PrepareStmt {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ret := make([]*PrepareStmt, 0, len(ses.prepareStmts))
+	for _, stmt := range ses.prepareStmts {
+		ret = append(ret, stmt)
+	}
+	return ret
 }
 
 func (ses *Session) getPrepareStmtsForMigration() ([]*PrepareStmt, bool) {

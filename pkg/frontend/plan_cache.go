@@ -23,14 +23,16 @@ import (
 )
 
 type cachedPlan struct {
-	sql               string
-	stmts             []tree.Statement
-	plans             []*plan.Plan
-	planSnapshotTS    []timestamp.Timestamp
-	protocolVersion   int64
-	statsVersions     map[optimizerStatsTableKey]uint64
-	planStatsVersions []map[optimizerStatsTableKey]uint64
-	invalid           bool
+	sql                           string
+	stmts                         []tree.Statement
+	plans                         []*plan.Plan
+	planSnapshotTS                []timestamp.Timestamp
+	protocolVersion               int64
+	statsVersions                 map[optimizerStatsTableKey]uint64
+	planStatsVersions             []map[optimizerStatsTableKey]uint64
+	statementFingerprints         []string
+	statementFingerprintAttempted []bool
+	invalid                       bool
 }
 
 // planCache uses LRU to cache plan for the same sql
@@ -72,6 +74,21 @@ func (pc *planCache) cacheWithPlanSnapshotsAndStatsVersions(
 	planStatsVersions []map[optimizerStatsTableKey]uint64,
 	versions ...int64,
 ) {
+	pc.cacheWithPlanSnapshotsAndStatsVersionsAndFingerprints(
+		sql, stmts, plans, planSnapshotTS, planStatsVersions,
+		make([]string, len(plans)), make([]bool, len(plans)), versions...)
+}
+
+func (pc *planCache) cacheWithPlanSnapshotsAndStatsVersionsAndFingerprints(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	planStatsVersions []map[optimizerStatsTableKey]uint64,
+	statementFingerprints []string,
+	statementFingerprintAttempted []bool,
+	versions ...int64,
+) {
 	protocolVersion := currentProtocolVersion(nil)
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
@@ -81,7 +98,8 @@ func (pc *planCache) cacheWithPlanSnapshotsAndStatsVersions(
 		pc.lruList = list.New()
 	}
 	if len(stmts) != len(plans) || len(planSnapshotTS) != len(plans) ||
-		len(planStatsVersions) != len(plans) {
+		len(planStatsVersions) != len(plans) || len(statementFingerprints) != len(plans) ||
+		len(statementFingerprintAttempted) != len(plans) {
 		freeStmts(stmts)
 		return
 	}
@@ -100,25 +118,29 @@ func (pc *planCache) cacheWithPlanSnapshotsAndStatsVersions(
 	if element, ok := pc.cachePool[sql]; ok {
 		freeStmts(element.Value.(*cachedPlan).stmts)
 		element.Value = &cachedPlan{
-			sql:               sql,
-			stmts:             stmts,
-			plans:             plans,
-			planSnapshotTS:    planSnapshotTS,
-			protocolVersion:   protocolVersion,
-			statsVersions:     statsVersions,
-			planStatsVersions: clonePlanStatsVersions(planStatsVersions),
+			sql:                           sql,
+			stmts:                         stmts,
+			plans:                         plans,
+			planSnapshotTS:                planSnapshotTS,
+			statementFingerprints:         append([]string(nil), statementFingerprints...),
+			statementFingerprintAttempted: append([]bool(nil), statementFingerprintAttempted...),
+			protocolVersion:               protocolVersion,
+			statsVersions:                 statsVersions,
+			planStatsVersions:             clonePlanStatsVersions(planStatsVersions),
 		}
 		pc.lruList.MoveToFront(element)
 		return
 	}
 	element := pc.lruList.PushFront(&cachedPlan{
-		sql:               sql,
-		stmts:             stmts,
-		plans:             plans,
-		planSnapshotTS:    planSnapshotTS,
-		protocolVersion:   protocolVersion,
-		statsVersions:     statsVersions,
-		planStatsVersions: clonePlanStatsVersions(planStatsVersions),
+		sql:                           sql,
+		stmts:                         stmts,
+		plans:                         plans,
+		planSnapshotTS:                planSnapshotTS,
+		statementFingerprints:         append([]string(nil), statementFingerprints...),
+		statementFingerprintAttempted: append([]bool(nil), statementFingerprintAttempted...),
+		protocolVersion:               protocolVersion,
+		statsVersions:                 statsVersions,
+		planStatsVersions:             clonePlanStatsVersions(planStatsVersions),
 	})
 	pc.cachePool[sql] = element
 	if pc.lruList.Len() > pc.capacity {
