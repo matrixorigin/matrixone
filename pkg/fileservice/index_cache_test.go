@@ -608,3 +608,40 @@ func TestGetIndexFileCacheFromFileServices(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, written)
 }
+
+func TestIndexFileCachePutMovesTempFile(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	c := newTestIndexFileCache(t, dir, 1<<30)
+
+	f, remove, err := c.CreateTempFile()
+	require.NoError(t, err)
+	defer remove()
+	require.True(t, strings.HasPrefix(f.Name(), dir))
+	data := bytes.Repeat([]byte("m"), 70000)
+	_, err = f.Write(data)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	written, err := c.Put(ctx, "moved", []IndexCacheFile{
+		{Name: "data", Path: f.Name()},
+		indexCacheBytes("manifest", []byte("m")),
+	})
+	require.NoError(t, err)
+	require.True(t, written)
+	_, err = os.Stat(f.Name())
+	require.True(t, os.IsNotExist(err), "the temp file is moved, not copied")
+	remove()
+	_, temps, _ := listCacheDirs(t, dir)
+	require.Empty(t, temps)
+
+	files, err := c.Open(ctx, "moved", "data")
+	require.NoError(t, err)
+	defer closeFiles(files)
+	require.Equal(t, data, readAllFile(t, files[0]))
+
+	_, err = c.Put(ctx, "missing", []IndexCacheFile{{Name: "data", Path: filepath.Join(dir, "absent")}})
+	require.Error(t, err, "a missing source file is the caller's error")
+	_, err = c.Put(ctx, "both", []IndexCacheFile{{Name: "data", Path: "x", Open: indexCacheBytes("d", nil).Open}})
+	require.Error(t, err)
+}

@@ -75,10 +75,13 @@ type IndexFileCache struct {
 	rebuildPolicy Policy
 }
 
-// IndexCacheFile is one file of an entry written by IndexFileCache.Put.
+// IndexCacheFile is one file of an entry written by IndexFileCache.Put. Its content
+// comes from Open, or from Path: a local file that Put moves into the entry, created by
+// CreateTempFile so it is on the cache's filesystem.
 type IndexCacheFile struct {
 	Name string
 	Open func(ctx context.Context) (io.ReadCloser, error)
+	Path string
 }
 
 // NewIndexFileCache returns an index file cache rooted at path.
@@ -106,6 +109,11 @@ func newIndexFileCache(
 		return nil, err
 	}
 	return &IndexFileCache{disk: disk, rebuildPolicy: rebuildPolicy}, nil
+}
+
+// Path returns the cache directory.
+func (c *IndexFileCache) Path() string {
+	return c.disk.path
 }
 
 // RebuildPolicy is the cache policy for reading chunk rows when an entry is rebuilt.
@@ -136,6 +144,21 @@ func GetIndexFileCache(fs FileService) *IndexFileCache {
 // Close stops the cache. Entries stay on disk.
 func (c *IndexFileCache) Close(ctx context.Context) {
 	c.disk.Close(ctx)
+}
+
+// CreateTempFile creates a file on the cache's filesystem, for Put to move into an
+// entry. remove deletes whatever is left of it; call it after Put.
+func (c *IndexFileCache) CreateTempFile() (f *os.File, remove func(), err error) {
+	dir, err := c.disk.createCacheTempDir(c.disk.path)
+	if err != nil {
+		return nil, nil, err
+	}
+	f, err = os.Create(filepath.Join(dir, "data"))
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, nil, err
+	}
+	return f, func() { _ = os.RemoveAll(dir) }, nil
 }
 
 // Put publishes entry name with files. It returns false, with no error, when the entry
@@ -225,6 +248,9 @@ func checkCacheDirFiles(files []IndexCacheFile) error {
 		if err := checkCacheDirFileName(f.Name); err != nil {
 			return err
 		}
+		if (f.Open == nil) == (f.Path == "") {
+			return moerr.NewInvalidInputNoCtxf("index cache file %q needs exactly one of Open or Path", f.Name)
+		}
 		if _, ok := seen[f.Name]; ok {
 			return moerr.NewInvalidInputNoCtxf("duplicate index cache file name %q", f.Name)
 		}
@@ -272,7 +298,12 @@ func (d *DiskCache) putDir(ctx context.Context, diskPath string, files []IndexCa
 
 	var size int64
 	for _, f := range files {
-		n, err := d.writeCacheDirFile(ctx, filepath.Join(tmp, f.Name), f.Open)
+		var n int64
+		if f.Path != "" {
+			n, err = d.moveCacheDirFile(ctx, f.Path, filepath.Join(tmp, f.Name))
+		} else {
+			n, err = d.writeCacheDirFile(ctx, filepath.Join(tmp, f.Name), f.Open)
+		}
 		if err != nil {
 			return false, err
 		}
@@ -360,6 +391,33 @@ func (d *DiskCache) writeCacheDirFile(
 		return 0, err
 	}
 	fadviseDontNeed(f, 0, 0)
+	stat, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return fileSize(stat), nil
+}
+
+// moveCacheDirFile moves a caller's file into an entry being written, copying it when it
+// is on another filesystem.
+func (d *DiskCache) moveCacheDirFile(ctx context.Context, from, to string) (int64, error) {
+	if err := os.Rename(from, to); err != nil {
+		var linkErr *os.LinkError
+		if !errors.As(err, &linkErr) || os.IsNotExist(err) {
+			return 0, &diskCacheSourceError{err: err}
+		}
+		return d.writeCacheDirFile(ctx, to, func(context.Context) (io.ReadCloser, error) {
+			return os.Open(from)
+		})
+	}
+	f, err := os.Open(to)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	if err := d.fileSync(f); err != nil {
+		return 0, err
+	}
 	stat, err := f.Stat()
 	if err != nil {
 		return 0, err
