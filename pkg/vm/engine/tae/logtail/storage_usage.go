@@ -203,12 +203,6 @@ func WithLazyThreshold(lazy int) StorageUsageCacheOption {
 	})
 }
 
-func WithLessFunc(less func(a UsageData, b UsageData) bool) StorageUsageCacheOption {
-	return StorageUsageCacheOption(func(c *StorageUsageCache) {
-		c.lessFunc = less
-	})
-}
-
 func NewStorageUsageCache(opts ...StorageUsageCacheOption) *StorageUsageCache {
 	cache := new(StorageUsageCache)
 

@@ -1067,16 +1067,8 @@ func NewInfo(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInfo, msg)
 }
 
-func NewLoadInfo(ctx context.Context, rec, del, skip, warn, writeTimeOut uint64) *Error {
-	return newError(ctx, ErrLoadInfo, rec, del, skip, warn, writeTimeOut)
-}
-
 func NewWarn(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrWarn, msg)
-}
-
-func NewBadS3Config(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrBadS3Config, msg)
 }
 
 func NewInternalErrorf(ctx context.Context, format string, args ...any) *Error {
@@ -1086,10 +1078,6 @@ func NewInternalErrorf(ctx context.Context, format string, args ...any) *Error {
 
 func NewInternalError(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrInternal, msg)
-}
-
-func NewUpgrateError(ctx context.Context, dbName string, table string, tenant string, tenantId uint32, errmsg string) *Error {
-	return newError(ctx, ErrUpgrateError, dbName, table, tenant, tenantId, errmsg)
 }
 
 func NewNYIf(ctx context.Context, format string, args ...any) *Error {
@@ -1107,10 +1095,6 @@ func NewNotSupportedf(ctx context.Context, format string, args ...any) *Error {
 
 func NewNotSupported(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrNotSupported, msg)
-}
-
-func NewRemoteDispatchNotRegistered(ctx context.Context, uuid string) *Error {
-	return newError(ctx, ErrRemoteDispatchNotRegistered, uuid)
 }
 
 func NewOOM(ctx context.Context) *Error {
@@ -1145,10 +1129,6 @@ func NewQueryTimeout(ctx context.Context) *Error {
 
 func NewDivByZero(ctx context.Context) *Error {
 	return newError(ctx, ErrDivByZero)
-}
-
-func NewRegexpIllegalArgument(ctx context.Context) *Error {
-	return newError(ctx, ErrRegexpIllegalArgument)
 }
 
 func NewOutOfRangef(ctx context.Context, typ string, format string, args ...any) *Error {
@@ -1241,14 +1221,6 @@ func NewFtMatchingKeyNotFound(ctx context.Context) *Error {
 
 func NewWrongArguments(ctx context.Context, function string) *Error {
 	return newError(ctx, ErrWrongArguments, function)
-}
-
-func NewWrongParamCountToNativeFct(ctx context.Context, function string) *Error {
-	return newError(ctx, ErrWrongParamCountToNativeFct, function)
-}
-
-func NewAESInvalidIV(ctx context.Context, function string, minLength int) *Error {
-	return newError(ctx, ErrAESInvalidIV, function, minLength)
 }
 
 func NewUserLockWrongName(ctx context.Context, name string) *Error {
@@ -1349,10 +1321,6 @@ func NewMultiUpdateKeyConflict(ctx context.Context, first, second string) *Error
 	return newError(ctx, ErrMultiUpdateKeyConflict, first, second)
 }
 
-func NewEmptyVector(ctx context.Context) *Error {
-	return newError(ctx, ErrEmptyVector)
-}
-
 func NewFileNotFound(ctx context.Context, f string) *Error {
 	return newError(ctx, ErrFileNotFound, f)
 }
@@ -1367,10 +1335,6 @@ func NewResultFileNotFound(ctx context.Context, f string) *Error {
 
 func NewNoConfig(ctx context.Context, f string) *Error {
 	return newError(ctx, ErrNoConfig, f)
-}
-
-func NewFileAlreadyExists(ctx context.Context, f string) *Error {
-	return newError(ctx, ErrFileAlreadyExists, f)
 }
 
 func NewDBAlreadyExists(ctx context.Context, db string) *Error {
@@ -1389,18 +1353,6 @@ func NewEmptyRange(ctx context.Context, f string) *Error {
 	return newError(ctx, ErrEmptyRange, f)
 }
 
-func NewSizeNotMatch(ctx context.Context, f string) *Error {
-	return newError(ctx, ErrSizeNotMatch, f)
-}
-
-func NewNoProgress(ctx context.Context, f string) *Error {
-	return newError(ctx, ErrNoProgress, f)
-}
-
-func NewInvalidPath(ctx context.Context, f string) *Error {
-	return newError(ctx, ErrInvalidPath, f)
-}
-
 func NewInvalidStatef(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrInvalidState, msg)
@@ -1412,10 +1364,6 @@ func NewInvalidState(ctx context.Context, msg string) *Error {
 
 func NewInvalidTask(ctx context.Context, runner string, id uint64) *Error {
 	return newError(ctx, ErrInvalidTask, runner, id)
-}
-
-func NewInvalidServiceIndex(ctx context.Context, idx int) *Error {
-	return newError(ctx, ErrInvalidServiceIndex, idx)
 }
 
 func NewLogServiceNotReady(ctx context.Context) *Error {
@@ -1432,20 +1380,8 @@ func NewNoDB(ctx context.Context) *Error {
 	return newError(noReportCtx, ErrNoDB)
 }
 
-func NewNoWorkingStore(ctx context.Context) *Error {
-	return newError(ctx, ErrNoWorkingStore)
-}
-
 func NewNoService(ctx context.Context, name string) *Error {
 	return newError(ctx, ErrNoService, name)
-}
-
-func NewDupServiceName(ctx context.Context, name string) *Error {
-	return newError(ctx, ErrDupServiceName, name)
-}
-
-func NewWrongService(ctx context.Context, exp, got string) *Error {
-	return newError(ctx, ErrWrongService, exp, got)
 }
 
 func NewNoHAKeeper(ctx context.Context) *Error {
@@ -1570,14 +1506,6 @@ func NewTxnWriteConflict(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrTxnWriteConflict, msg)
 }
 
-func NewMissingTxn(ctx context.Context) *Error {
-	return newError(ctx, ErrMissingTxn)
-}
-
-func NewUnresolvedConflict(ctx context.Context) *Error {
-	return newError(ctx, ErrUnresolvedConflict)
-}
-
 func NewTxnErrorf(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrTxnError, msg)
@@ -1592,16 +1520,8 @@ func NewTAEErrorf(ctx context.Context, format string, args ...any) *Error {
 	return newError(ctx, ErrTAEError, msg)
 }
 
-func NewTAEError(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrTAEError, msg)
-}
-
 func NewTNShardNotFound(ctx context.Context, uuid string, id uint64) *Error {
 	return newError(ctx, ErrTNShardNotFound, uuid, id)
-}
-
-func NewShardNotReported(ctx context.Context, uuid string, id uint64) *Error {
-	return newError(ctx, ErrShardNotReported, uuid, id)
 }
 
 func NewDragonboatTimeoutf(ctx context.Context, format string, args ...any) *Error {
@@ -1618,16 +1538,8 @@ func NewDragonboatTimeoutTooSmallf(ctx context.Context, format string, args ...a
 	return newError(ctx, ErrDragonboatTimeoutTooSmall, msg)
 }
 
-func NewDragonboatTimeoutTooSmall(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrDragonboatTimeoutTooSmall, msg)
-}
-
 func NewDragonboatInvalidDeadlinef(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
-	return newError(ctx, ErrDragonboatInvalidDeadline, msg)
-}
-
-func NewDragonboatInvalidDeadline(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrDragonboatInvalidDeadline, msg)
 }
 
@@ -1636,16 +1548,8 @@ func NewDragonboatRejectedf(ctx context.Context, format string, args ...any) *Er
 	return newError(ctx, ErrDragonboatRejected, msg)
 }
 
-func NewDragonboatRejected(ctx context.Context, msg string, args ...any) *Error {
-	return newError(ctx, ErrDragonboatRejected, msg)
-}
-
 func NewDragonboatInvalidPayloadSizef(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
-	return newError(ctx, ErrDragonboatInvalidPayloadSize, msg)
-}
-
-func NewDragonboatInvalidPayloadSize(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrDragonboatInvalidPayloadSize, msg)
 }
 
@@ -1654,15 +1558,8 @@ func NewDragonboatShardNotReadyf(ctx context.Context, format string, args ...any
 	return newError(ctx, ErrDragonboatShardNotReady, msg)
 }
 
-func NewDragonboatShardNotReady(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrDragonboatShardNotReady, msg)
-}
-
 func NewDragonboatSystemClosedf(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
-	return newError(ctx, ErrDragonboatSystemClosed, msg)
-}
-func NewDragonboatSystemClosed(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrDragonboatSystemClosed, msg)
 }
 
@@ -1670,16 +1567,9 @@ func NewDragonboatInvalidRangef(ctx context.Context, format string, args ...any)
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrDragonboatInvalidRange, msg)
 }
-func NewDragonboatInvalidRange(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrDragonboatInvalidRange, msg)
-}
 
 func NewDragonboatShardNotFoundf(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
-	return newError(ctx, ErrDragonboatShardNotFound, msg)
-}
-
-func NewDragonboatShardNotFound(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrDragonboatShardNotFound, msg)
 }
 
@@ -1696,16 +1586,8 @@ func NewErrDropNonExistsDB(ctx context.Context, name string) *Error {
 	return newError(ctx, ErrDropNonExistsDB, name)
 }
 
-func NewTAERead(ctx context.Context) *Error {
-	return newError(ctx, ErrTAERead)
-}
-
 func NewRpcError(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrRpcError, msg)
-}
-
-func NewWaitTxn(ctx context.Context) *Error {
-	return newError(ctx, ErrWaitTxn)
 }
 
 func NewTxnNotFound(ctx context.Context) *Error {
@@ -1716,16 +1598,8 @@ func NewTxnNotActive(ctx context.Context, st string) *Error {
 	return newError(ctx, ErrTxnNotActive, st)
 }
 
-func NewTAEWrite(ctx context.Context) *Error {
-	return newError(ctx, ErrTAEWrite)
-}
-
 func NewTAECommitf(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
-	return newError(ctx, ErrTAECommit, msg)
-}
-
-func NewTAECommit(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrTAECommit, msg)
 }
 
@@ -1734,25 +1608,9 @@ func NewTAERollbackf(ctx context.Context, format string, args ...any) *Error {
 	return newError(ctx, ErrTAERollback, msg)
 }
 
-func NewTAERollback(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrTAERollback, msg)
-}
-
 func NewTAEPreparef(ctx context.Context, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrTAEPrepare, msg)
-}
-
-func NewTAEPrepare(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrTAEPrepare, msg)
-}
-
-func NewTAEPossibleDuplicate(ctx context.Context) *Error {
-	return newError(ctx, ErrTAEPossibleDuplicate)
-}
-
-func NewTxnRWConflict(ctx context.Context) *Error {
-	return newError(ctx, ErrTxnRWConflict)
 }
 
 func NewTxnWWConflict(
@@ -1762,14 +1620,6 @@ func NewTxnWWConflict(
 	e := newError(ctx, ErrTxnWWConflict)
 	e.detail = fmt.Sprintf("tableID: %d, %s", tableID, s)
 	return e
-}
-
-func NewNotFound(ctx context.Context) *Error {
-	return newError(ctx, ErrNotFound)
-}
-
-func NewDuplicate(ctx context.Context) *Error {
-	return newError(ctx, ErrDuplicate)
 }
 
 func NewDuplicateEntry(ctx context.Context, entry string, key string) *Error {
@@ -1839,28 +1689,8 @@ func NewRoleGrantedToSelf(ctx context.Context, from, to string) *Error {
 	return newError(ctx, ErrRoleGrantedToSelf, from, to)
 }
 
-func NewTxnInternal(ctx context.Context) *Error {
-	return newError(ctx, ErrTxnInternal)
-}
-
-func NewTxnReadConflict(ctx context.Context, msg string) *Error {
-	return newError(ctx, ErrTxnReadConflict, msg)
-}
-
-func NewPrimaryKeyDuplicated(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrPrimaryKeyDuplicated, k)
-}
-
 func NewDuplicateKey(ctx context.Context, k string) *Error {
 	return newError(ctx, ErrDuplicateKey, k)
-}
-
-func NewAppendableObjectNotFound(ctx context.Context) *Error {
-	return newError(ctx, ErrAppendableObjectNotFound)
-}
-
-func NewAppendableBlockNotFound(ctx context.Context) *Error {
-	return newError(ctx, ErrAppendableBlockNotFound)
 }
 
 func NewTxnNeedRetry(ctx context.Context) *Error {
@@ -1871,24 +1701,12 @@ func NewTxnNeedRetryWithDefChanged(ctx context.Context) *Error {
 	return newError(ctx, ErrTxnNeedRetryWithDefChanged)
 }
 
-func NewTxnCannotRetry(ctx context.Context) *Error {
-	return newError(ctx, ErrTxnCannotRetry)
-}
-
 func NewDeadLockDetected(ctx context.Context) *Error {
 	return newError(ctx, ErrDeadLockDetected)
 }
 
-func NewDeadlockCheckBusy(ctx context.Context) *Error {
-	return newError(ctx, ErrDeadlockCheckBusy)
-}
-
 func NewCannotCommitOrphan(ctx context.Context) *Error {
 	return newError(ctx, ErrCannotCommitOrphan)
-}
-
-func NewCannotCommitOnInvalidCN(ctx context.Context) *Error {
-	return newError(ctx, ErrCannotCommitOnInvalidCN)
 }
 
 func NewLockTableBindChanged(ctx context.Context) *Error {
@@ -1903,99 +1721,12 @@ func NewLockConflict(ctx context.Context) *Error {
 	return newError(ctx, ErrLockConflict)
 }
 
-func NewRemoteLockWaitTimeout(ctx context.Context) *Error {
-	return newError(ctx, ErrRemoteLockWaitTimeout)
-}
-
 func NewLockWaitTimeout(ctx context.Context) *Error {
 	return newError(ctx, ErrLockWaitTimeout)
 }
 
-func NewPartitionFunctionIsNotAllowed(ctx context.Context) *Error {
-	return newError(ctx, ErrPartitionFunctionIsNotAllowed)
-}
-
-func NewWrongExprInPartitionFunc(ctx context.Context) *Error {
-	return newError(ctx, ErrWrongExprInPartitionFunc)
-}
-
-func NewMultipleDefConstInListPart(ctx context.Context) *Error {
-	return newError(ctx, ErrMultipleDefConstInListPart)
-}
-
-func NewPartitionConstDomain(ctx context.Context) *Error {
-	return newError(ctx, ErrPartitionConstDomain)
-}
-
-func NewFieldNotFoundPart(ctx context.Context) *Error {
-	return newError(ctx, ErrFieldNotFoundPart)
-}
-func NewPartitionsMustBeDefined(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrPartitionsMustBeDefined, k)
-}
-
-func NewWrongTypeColumnValue(ctx context.Context) *Error {
-	return newError(ctx, ErrWrongTypeColumnValue)
-}
-
-func NewValuesIsNotIntType(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrValuesIsNotIntType, k)
-}
-
-func NewErrPartitionColumnList(ctx context.Context) *Error {
-	return newError(ctx, ErrPartitionColumnList)
-}
-
-func NewSameNamePartition(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrSameNamePartition, k)
-}
-
-func NewSameNamePartitionField(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrSameNamePartitionField, k)
-}
-
-func NewErrMaxvalueInValuesIn(ctx context.Context) *Error {
-	return newError(ctx, ErrMaxvalueInValuesIn)
-}
-
-func NewErrRowSinglePartitionField(ctx context.Context) *Error {
-	return newError(ctx, ErrRowSinglePartitionField)
-}
-
-func NewErrTooManyPartitionFuncFields(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrTooManyPartitionFuncFields, k)
-}
-
-func NewErrTooManyPartitions(ctx context.Context) *Error {
-	return newError(ctx, ErrTooManyPartitions)
-}
-
-func NewPartitionFuncNotAllowed(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrPartitionFuncNotAllowed, k)
-}
-
-func NewFieldTypeNotAllowedAsPartitionField(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrFieldTypeNotAllowedAsPartitionField, k)
-}
-
 func NewPartitionNoTemporary(ctx context.Context) *Error {
 	return newError(ctx, ErrPartitionNoTemporary)
-}
-
-func NewBlobFieldInPartFunc(ctx context.Context) *Error {
-	return newError(ctx, ErrBlobFieldInPartFunc)
-}
-
-func NewUniqueKeyNeedAllFieldsInPf(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrUniqueKeyNeedAllFieldsInPf, k)
-}
-
-func NewErrPartitionMaxvalue(ctx context.Context) *Error {
-	return newError(ctx, ErrPartitionMaxvalue)
-}
-
-func NewErrRangeNotIncreasing(ctx context.Context) *Error {
-	return newError(ctx, ErrRangeNotIncreasing)
 }
 
 func NewErrForeignKeyOnPartitioned(ctx context.Context) *Error {
@@ -2045,10 +1776,6 @@ func NewErrMultiplePriKey(ctx context.Context) *Error {
 	return newError(ctx, ErrMultiplePriKey)
 }
 
-func NewErrTooManyKeys(ctx context.Context, k any) *Error {
-	return newError(ctx, ErrTooManyKeys, k)
-}
-
 func NewErrTooManyKeyParts(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrTooManyKeyParts, k)
 }
@@ -2077,10 +1804,6 @@ func NewErrDropIndexNeededInForeignKey(ctx context.Context, args1 any) *Error {
 	return newError(ctx, ErrDropIndexNeededInForeignKey, args1)
 }
 
-func NewErrFKIncompatibleColumns(ctx context.Context, oriColName any, refColName any, fkName any) *Error {
-	return newError(ctx, ErrFKIncompatibleColumns, oriColName, refColName, fkName)
-}
-
 func NewErrForeignKeyColumnCannotChangeChild(ctx context.Context, args1 any, args2 any, args3 any) *Error {
 	return newError(ctx, ErrForeignKeyColumnCannotChangeChild, args1, args2, args3)
 }
@@ -2105,10 +1828,6 @@ func NewErrFkColumnCannotDrop(ctx context.Context, colName any, fKName any) *Err
 	return newError(ctx, ErrFkColumnCannotDrop, colName, fKName)
 }
 
-func NewErrDependentByPartitionFunction(ctx context.Context, colName any) *Error {
-	return newError(ctx, ErrDependentByPartitionFunction, colName)
-}
-
 func NewErrDependentByCheckConstraint(ctx context.Context, checkName any, colName any) *Error {
 	return newError(ctx, ErrDependentByCheckConstraint, checkName, colName)
 }
@@ -2119,26 +1838,6 @@ func NewErrAlterOperationNotSupportedReasonFkRename(ctx context.Context) *Error 
 
 func NewErrPrimaryCantHaveNull(ctx context.Context) *Error {
 	return newError(ctx, ErrPrimaryCantHaveNull)
-}
-
-func NewErrPartitionMgmtOnNonpartitioned(ctx context.Context) *Error {
-	return newError(ctx, ErrPartitionMgmtOnNonpartitioned)
-}
-
-func NewErrUnsupportedOption(ctx context.Context, option string) *Error {
-	return newError(ctx, ErrUnsupportedOption, option)
-}
-
-func NewErrInvalidValue(ctx context.Context, option string, value string) *Error {
-	return newError(ctx, ErrInvalidValue, option, value)
-}
-
-func NewErrLackOption(ctx context.Context, option string) *Error {
-	return newError(ctx, ErrLackOption, option)
-}
-
-func NewErrDuplicateConnector(ctx context.Context, tableName string) *Error {
-	return newError(ctx, ErrDuplicateConnector, tableName)
 }
 
 func NewErrUnsupportedDataType(ctx context.Context, typ any) *Error {
@@ -2191,14 +1890,6 @@ func NewErrDuplicateKeyName(ctx context.Context, fkName any) *Error {
 
 func NewErrFKNoReferencedRow2(ctx context.Context) *Error {
 	return newError(ctx, ErrFKNoReferencedRow2)
-}
-
-func NewErrBlobCantHaveDefault(ctx context.Context, arg any) *Error {
-	return newError(ctx, ErrBlobCantHaveDefault, arg)
-}
-
-func NewCantCompileForPrepare(ctx context.Context) *Error {
-	return newError(ctx, ErrCantCompileForPrepare)
 }
 
 func NewTableMustHaveVisibleColumn(ctx context.Context) *Error {
