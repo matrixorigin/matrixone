@@ -76,6 +76,8 @@ func jsonStringConsumerUnaryDomainTypeMatch(overloads []overload, inputs []types
 	return jsonStringConsumerTypeMatch(overloads, inputs, stringDomainFixedTypeMatch)
 }
 
+// These JSON signatures require a full stopped-cluster binary upgrade.
+// Dispatch to a pre-upgrade CN and binary rollback are not supported.
 func jsonStringConsumerTypeMatch(
 	overloads []overload,
 	inputs []types.Type,
