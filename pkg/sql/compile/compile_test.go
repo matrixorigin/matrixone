@@ -4118,6 +4118,7 @@ func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 	stats.BlockNumber = 1_000
 	stats.NdvMap["l_returnflag"] = 3
 	stats.NdvMap["l_orderkey"] = 1_500_000
+	stats.NdvMap["l_suppkey"] = 10_000
 	cache := plan2.NewStatsCache()
 	cache.Set(tableDef.TblId, stats)
 	compilerCtx := &distinctPreAggregationCompilerContext{
@@ -4134,6 +4135,8 @@ func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 	}{
 		{name: "grouped fallback", sql: "select l_returnflag, count(distinct l_orderkey) from lineitem group by l_returnflag", ndv: 1_500_000},
 		{name: "large global key", sql: "select count(distinct l_orderkey) from lineitem", ndv: 5_000_000, wantOmit: true},
+		{name: "grouped tuple", sql: "select l_returnflag, count(distinct l_suppkey,l_orderkey) from lineitem group by l_returnflag", ndv: 1_500_000},
+		{name: "global tuple spelling", sql: "select count(distinct (l_orderkey,l_suppkey)) from lineitem", ndv: 1_500_000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stats.NdvMap["l_orderkey"] = tc.ndv
@@ -4165,7 +4168,6 @@ func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 			t.Fatal("finalized SQL plan did not retain the local-pair compile contract")
 		})
 	}
-
 }
 
 func newCompileForShuffleGroupTest(t *testing.T) *Compile {
