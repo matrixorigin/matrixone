@@ -133,7 +133,7 @@ func TestDoComQueryParseErrorRedactsMongoDBSelector(t *testing.T) {
 	require.Error(t, err)
 	assertMongoDBSelectorIsRedacted(t, ses.GetSqlOfStmt())
 	assertMongoDBSelectorIsAbsent(t, err.Error())
-	redactedErr := redactStatementErrorForLogging(err, sql).Error()
+	redactedErr := redactStatementErrorForLogging(err, sql, "").Error()
 	require.Contains(t, redactedErr, "<redacted MongoDB __mo_query statement>")
 	assertMongoDBSelectorIsAbsent(t, redactedErr)
 }
@@ -12743,4 +12743,137 @@ func TestPreparedCTASCompileRetryPreservesNamesAndParameters(t *testing.T) {
 		// Specialization retains each supplied value, rather than freezing the first retry.
 		require.Contains(t, got.GetDdl().Query.String(), fmt.Sprintf("sval:%q", fmt.Sprint(value)))
 	}
+}
+
+func TestRedactStatementErrorForLoggingMasksSecrets(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+
+	// a malformed stage statement: the secrets are already cut out of the
+	// parse error near-fragment at the lexer level (#30747/#30746)
+	sql := `create stage bad credentials={'aws_secret_key'='XYZCANARY',`
+	err := doComQuery(ses, execCtx, &UserInput{sql: sql})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "XYZCANARY")
+	require.NotContains(t, ses.GetSqlOfStmt(), "XYZCANARY")
+
+	// the redaction hook leaves both masked and mundane diagnostics stable
+	redacted := redactStatementErrorForLogging(err, sql, "").Error()
+	require.NotContains(t, redacted, "XYZCANARY")
+
+	mundane := moerr.NewParseErrorNoCtx("SQL parser error: plain syntax issue")
+	require.Same(t, mundane, redactStatementErrorForLogging(mundane, "select 1", ""))
+}
+
+// The diagnostic copy must mask an identified-by password inside the
+// serialized near echo, even though the client-visible echo keeps it readable
+// by convention; a naive whole-message token scan cannot see the password
+// because the echo is one outer double-quoted string (#30747 review).
+func TestRedactStatementErrorForLoggingMasksSerializedNearPassword(t *testing.T) {
+	sql := `create accout a1 ADMIN_NAME 'admin' IDENTIFIED BY 'PWN123456';`
+	_, parseErr := mysql.ParseOne(context.Background(), sql, 1)
+	require.Error(t, parseErr)
+	// raw client-side error keeps the identified-by literal (convention)
+	require.Contains(t, parseErr.Error(), "PWN123456")
+	// diagnostic copy masks it inside the near fragment
+	redacted := redactStatementErrorForLogging(parseErr, sql, "").Error()
+	require.NotContains(t, redacted, "PWN123456")
+	require.Contains(t, redacted, "IDENTIFIED BY '******'")
+}
+
+// A stage credential map written with JSON-style colons instead of '=' fails
+// parsing INSIDE the map; the near echo begins mid-map at a raw separator and
+// replays no keyword. The diagnostic must still scrub every value (#30746).
+func TestRedactStatementErrorForLoggingMasksMidMapCredentialTail(t *testing.T) {
+	sql := "create stage diag_midmap url='s3,endpoint=x' credentials={'access_key_id':'AKIAMIDMAP','secret_key':'midmapsecret'}"
+	_, parseErr := mysql.ParseOne(context.Background(), sql, 1)
+	require.Error(t, parseErr)
+	require.Contains(t, parseErr.Error(), "near \"", "test premise: the echo carries the mid-map tail")
+	redacted := redactStatementErrorForLogging(parseErr, sql, "").Error()
+	require.NotContains(t, redacted, "AKIAMIDMAP")
+	require.NotContains(t, redacted, "midmapsecret")
+	// equals-form maps keep working through the same mid-map fallback
+	sqlEq := "create stage diag_midmap2 url='s3,endpoint=x' credentials={'access_key_id'='AKIAMIDMAP2','secret_key'='midmapsecret2'}"
+	_, parseErr2 := mysql.ParseOne(context.Background(), sqlEq, 1)
+	if parseErr2 != nil { // '=' maps may parse; if they fail the echo is scrubbed too
+		require.NotContains(t, redactStatementErrorForLogging(parseErr2, sqlEq, "").Error(), "AKIAMIDMAP2")
+	}
+}
+
+// The COM_QUERY debug trace logs raw request text before any downstream
+// masking hook ran; the helper must mask first, then abbreviate, so no
+// partial secret can survive in the log either. (#30747 review)
+func TestMaskQueryForDebugTrace(t *testing.T) {
+	q := `create stage s url='file:///x' credentials={'aws_secret_key'='TRACECANARY42', 'aws_region'='us-east-1'}`
+	out := maskQueryForDebugTrace(q, 40, "")
+	require.NotContains(t, out, "TRACECANARY42")
+	require.LessOrEqual(t, len(out), 43, "maxLen plus ellipsis")
+	out = maskQueryForDebugTrace(q, -1, "")
+	require.NotContains(t, out, "TRACECANARY42")
+	require.Contains(t, out, "'******'")
+}
+
+// #30747 review: a PREPARE wraps its statement in one string literal, so
+// neither the record redaction nor the debug trace can see credentials inside
+// it with an outer token scan alone — the masker descends into the literal at
+// its owning boundary.
+func TestRedactStatementTextForLoggingDescendsIntoPrepareString(t *testing.T) {
+	sql := `prepare p from "create stage s url='file:///x' credentials={'aws_key'='PREPARE_CANARY'}"`
+	redacted := redactStatementTextForLogging(nil, sql, "")
+	require.NotContains(t, redacted, "PREPARE_CANARY")
+	require.Contains(t, redacted, `credentials={'aws_key'='******'}`)
+
+	// the debug-trace helper scrubs the same prepare payload
+	out := maskQueryForDebugTrace(sql, -1, "")
+	require.NotContains(t, out, "PREPARE_CANARY")
+}
+
+// #30747 review: NO_BACKSLASH_ESCAPES changes where the first credential
+// value terminates; the redaction boundary must evaluate tokens under the
+// session's effective lexical mode instead of the default one.
+func TestRedactStatementTextForLoggingNoBackslashEscapes(t *testing.T) {
+	sql := `create stage s credentials={'aws_key'='foo\','secret_key'='CANARY_BETA'}`
+	redacted := redactStatementTextForLogging(nil, sql, "NO_BACKSLASH_ESCAPES")
+	require.NotContains(t, redacted, "CANARY")
+	require.Contains(t, redacted, `'secret_key'='******'`)
+}
+
+// #30747 review: the tree formatter redacts stage credential VALUES at
+// origin (matching the access-key and IDENTIFIED BY format rules), so any
+// diagnostic echo of the formatted statement — prepare plan-build errors
+// among them — arrives already scrubbed.
+func TestStageCredentialsFormatRedactsValues(t *testing.T) {
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"create stage s5 url='file:///x' credentials={'aws_key'='FORMAT_CANARY'}", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	rendered := tree.String(stmt, dialect.MYSQL)
+	require.NotContains(t, rendered, "FORMAT_CANARY")
+	require.Contains(t, rendered, "'aws_key'='******'")
+}
+
+// #30747 review round 4: the debug trace receives the WHOLE multi-statement
+// request text; a leading `SET sql_mode='NO_BACKSLASH_ESCAPES'` re-tunes the
+// lexical mode for the statements that follow it, and masking every
+// statement under the request's INITIAL mode leaves a backslash-bearing
+// credential visible in the trace.
+func TestMaskQueryForDebugTraceStagedSQLMode(t *testing.T) {
+	q := `set sql_mode='NO_BACKSLASH_ESCAPES'; create stage s credentials={'aws_key'='a\', url='STAGED_DBG_CANARY'}`
+	out := maskQueryForDebugTrace(q, -1, "")
+	require.NotContains(t, out, "STAGED_DBG_CANARY")
+	require.Contains(t, out, "url='******'")
+
+	// same shape through the abbreviation boundary
+	out = maskQueryForDebugTrace(q, 400, "")
+	require.NotContains(t, out, "STAGED_DBG_CANARY")
+
+	// a single statement still masks under the session mode directly
+	out = maskQueryForDebugTrace(
+		`create stage s credentials={'aws_key'='a\', url='STAGED_DBG_CANARY2'}`, -1,
+		"NO_BACKSLASH_ESCAPES")
+	require.NotContains(t, out, "STAGED_DBG_CANARY2")
 }

@@ -76,14 +76,23 @@ var stripContents = map[string]int8{
 }
 
 var HandleSqlForRecord = func(sql string) []string {
+	return HandleSqlForRecordWithSQLMode(sql, "")
+}
+
+// HandleSqlForRecordWithSQLMode is HandleSqlForRecord whose credential masking
+// runs under the effective lexical SQL mode: backslash-escape handling decides
+// where string tokens — and therefore credential values — begin and end, so
+// the record mask must mirror the session parser (#30747 review).
+func HandleSqlForRecordWithSQLMode(sql string, sqlMode string) []string {
 	split := SplitSqlBySemicolon(sql)
+	flags := mysql.ParseSQLModeFlags(sqlMode)
 	for i := range split {
-		split[i] = handleSQLForRecordFragment(split[i])
+		split[i] = handleSQLForRecordFragment(split[i], flags)
 	}
 	return split
 }
 
-func handleSQLForRecordFragment(sql string) string {
+func handleSQLForRecordFragment(sql string, flags mysql.SQLModeFlags) string {
 	stripScanner := mysql.NewScanner(dialect.MYSQL, sql)
 	defer mysql.PutScanner(stripScanner)
 	//strip needed comment "/*XXX*/"
@@ -117,56 +126,35 @@ func handleSQLForRecordFragment(sql string) string {
 		sql = strings.TrimSpace(builder.String())
 	}
 
-	// Hide secret key for sql,
-	// for example:
-	// before: create account nihao admin_name 'admin' identified with '123'
-	// after: create account nihao admin_name 'admin' identified with '******'
-
-	// Slice indexes helps to get the final ranges from sql,
-	// for example:
-	// Secret keys' indexes ranges in sql are:
-	// 1, 2, 3, 3
-	// These mean [1, 2] and [3, 3] in sql are secret keys
-	// And if len(sql) is 10, then we get slice indexes:
-	// -1, 1, 2, 3, 3, 10
-	// These mean we need to get (-1, 1), (2, 3), (3, 10) from sql
-	scanner := mysql.NewScanner(dialect.MYSQL, sql)
-	defer mysql.PutScanner(scanner)
-	previousToken := 0
-	indexes := []int{-1}
-	eq := int('=')
-	for scanner.Pos < len(sql) {
-		typ, s := scanSQLToken(scanner, &previousToken)
-		if typ == mysql.IDENTIFIED {
-			typ, _ = scanSQLToken(scanner, &previousToken)
-			if typ == mysql.BY || typ == mysql.WITH {
-				typ, s = scanSQLToken(scanner, &previousToken)
-				if typ != mysql.RANDOM {
-					indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
-				}
-			}
-		} else if strings.ToLower(s) == "access_key_id" || strings.ToLower(s) == "secret_access_key" {
-			typ, _ = scanSQLToken(scanner, &previousToken)
-			if typ == eq {
-				_, s = scanSQLToken(scanner, &previousToken)
-				indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
-			}
-		}
-	}
-	indexes = append(indexes, len(sql))
-
-	if len(indexes) > 2 {
-		var builder strings.Builder
-		for j := 0; j < len(indexes); j += 2 {
-			builder.WriteString(sql[indexes[j]+1 : indexes[j+1]])
-			if j < len(indexes)-2 {
-				builder.WriteString("******")
-			}
-		}
-		sql = builder.String()
-	}
+	sql = MaskSensitiveLiteralsForLoggingWithSQLMode(sql, flags)
 	sql = strings.TrimSpace(sql)
 	return sql
+}
+
+// MaskSensitiveLiteralsForLogging replaces credential-bearing literals in a
+// SQL fragment with `******`. It wraps the dialect-level implementation
+// (mysql.MaskSensitiveSqlLiterals), which covers:
+//
+//   - `identified by|with '<password>'` (users/accounts), the historical rule
+//   - `access_key_id = '<key>'` / `secret_access_key = '<key>'` (external
+//     storage options), the historical rule
+//   - every value inside a `CREDENTIALS = {...}` option map (#30747: stage
+//     CREATE/ALTER persist cloud keys, secrets and tokens verbatim otherwise)
+//
+// The replacement is textual and quote-preserving, so callers that only keep
+// the masked text (statement records, diagnostics) see the familiar
+// `identified by '******'` shape. The function is idempotent: masking
+// already-masked text produces the same text.
+func MaskSensitiveLiteralsForLogging(sql string) string {
+	return mysql.MaskSensitiveSqlLiterals(sql)
+}
+
+// MaskSensitiveLiteralsForLoggingWithSQLMode is MaskSensitiveLiteralsForLogging
+// under the effective lexical SQL mode of the session that produced the text:
+// backslash-escape handling changes where string tokens — and therefore
+// credential values — begin and end (#30747 review).
+func MaskSensitiveLiteralsForLoggingWithSQLMode(sql string, mode mysql.SQLModeFlags) string {
+	return mysql.MaskSensitiveSqlLiteralsWithSQLMode(sql, mode)
 }
 
 // scanSQLToken preserves qualified identifier context across raw token scans.
@@ -834,7 +822,7 @@ func HandleSqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, s
 	}
 	records := make([]string, len(fragments))
 	for i, fragment := range fragments {
-		records[i] = strings.Join(HandleSqlForRecord(fragment), ";")
+		records[i] = strings.Join(HandleSqlForRecordWithSQLMode(fragment, sqlMode), ";")
 	}
 	return records, nil
 }

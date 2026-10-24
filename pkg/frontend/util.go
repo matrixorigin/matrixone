@@ -2561,7 +2561,7 @@ func (ui *UserInput) parseErrorRecords(ses FeSession) ([]string, []string) {
 	source := constant.ExternSql
 	previousToken := 0
 	appendRecord := func(end int) {
-		records = append(records, strings.Join(parsers.HandleSqlForRecord(sql[start:end]), ";"))
+		records = append(records, strings.Join(parsers.HandleSqlForRecordWithSQLMode(sql[start:end], sessionSQLModeForParser(ses)), ";"))
 		sources = append(sources, source)
 	}
 	for {

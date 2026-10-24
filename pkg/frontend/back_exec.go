@@ -516,7 +516,7 @@ func doComQueryInBack(
 		}
 	}()
 
-	sqlRecord := parsers.HandleSqlForRecord(input.getSql())
+	sqlRecord := parsers.HandleSqlForRecordWithSQLMode(input.getSql(), sessionSQLModeForParser(backSes))
 
 	for i, cw := range cws {
 		backSes.mrs = &MysqlResultSet{}

@@ -271,7 +271,12 @@ func (node *StageCredentials) Format(ctx *FmtCtx) {
 		for i := 0; i < len(node.Credentials)-1; i += 2 {
 			ctx.WriteString(fmt.Sprintf("'%s'", node.Credentials[i]))
 			ctx.WriteString("=")
-			ctx.WriteString(fmt.Sprintf("'%s'", node.Credentials[i+1]))
+			// Credential VALUES carry cloud secrets: the formatted form feeds
+			// diagnostics and prepared-statement echoes, so it is redacted the
+			// same way sibling formatters treat access keys and IDENTIFIED BY
+			// (#30747 review). Persistence never flows through Format
+			// (formatCredentials reads the struct fields directly).
+			ctx.WriteString("'******'")
 			if i != len(node.Credentials)-2 {
 				ctx.WriteString(",")
 			}
