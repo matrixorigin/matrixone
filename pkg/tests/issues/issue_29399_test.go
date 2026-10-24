@@ -35,220 +35,241 @@ import (
 
 func TestIssue29399TableRestoreRetainsDatabaseOwnership(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
-		ctx, cancel := context.WithTimeout(t.Context(), 240*time.Second)
-		defer cancel()
-		cn, err := c.GetCNService(0)
-		require.NoError(t, err)
-		open := func(user string) *sql.DB {
-			db, err := sql.Open("mysql", fmt.Sprintf("%s:111@tcp(127.0.0.1:%d)/", user, cn.GetServiceConfig().CN.Frontend.Port))
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, db.Close()) })
-			return db
-		}
-		sys := open("dump")
-		const account = "issue_29399_owner_scope"
-		execSQLRequire(t, ctx, sys, "create account "+account+" admin_name 'admin' identified by '111'")
-		admin := open(account + "#admin#accountadmin")
-		defer func() {
-			cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		t.Run("scenario", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 240*time.Second)
 			defer cancel()
-			execSQLRequire(t, cleanup, admin, "drop snapshot if exists issue_29399_owner_scope_s")
-			execSQLRequire(t, cleanup, admin, "drop pitr if exists issue_29399_owner_scope_p")
-			execSQLRequire(t, cleanup, sys, "drop account if exists "+account)
-		}()
-		for _, stmt := range []string{
-			"create role builder", "create user db_creator identified by '111' default role builder",
-			"grant builder to db_creator", "grant connect, create database on account * to builder",
-			"grant create table, create view on database * to builder",
-			"grant select on table *.* to builder",
-			"create pitr issue_29399_owner_scope_p for account range 1 'h'",
-		} {
-			execSQLRequire(t, ctx, admin, stmt)
-		}
-		creator := open(account + "#db_creator#builder")
-		execSQLRequire(t, ctx, creator, "create database app")
-		execSQLRequire(t, ctx, creator, "create table app.owned(id int)")
-		for _, stmt := range []string{
-			"create table app.t(id int)", "insert into app.t values (1)",
-			"insert into app.owned values (3)",
-			"create database recreated", "create table recreated.t(id int)", "insert into recreated.t values (7)",
-			"create database role_owned", "create table role_owned.t(id int)", "insert into role_owned.t values (5)",
-			"create role external_owner", "grant external_owner to admin",
-			"grant connect on account * to external_owner", "grant create table, create view on database role_owned to external_owner",
-			"grant select on table *.* to external_owner",
-		} {
-			execSQLRequire(t, ctx, admin, stmt)
-		}
-		execSQLRequire(t, ctx, creator, "create external table recreated.ext(id int) infile{'filepath'='/tmp/issue29399-unused.csv','format'='csv'} fields terminated by ','")
-		externalOwner := open(account + "#admin#external_owner")
-		execSQLRequire(t, ctx, externalOwner, "create external table role_owned.ext(id int) infile{'filepath'='/tmp/issue29399-unused.csv','format'='csv'} fields terminated by ','")
-		// The stored MATCH views become unservable only after their index is
-		// removed. They must be skipped without pinning their deleted principals.
-		for _, stmt := range []string{
-			"set experimental_fulltext_index=1", "set ft_relevancy_algorithm='TF-IDF'",
-			"create table recreated.docs(id int primary key, body text)",
-			"insert into recreated.docs values (1, 'apple banana'), (2, 'apple cherry'), (3, 'banana cherry')",
-			"create fulltext index ft_body on recreated.docs(body)",
-		} {
-			execSQLRequire(t, ctx, admin, stmt)
-		}
-		for _, db := range []*sql.DB{creator, externalOwner} {
-			execSQLRequire(t, ctx, db, "set experimental_fulltext_index=1")
-			execSQLRequire(t, ctx, db, "set ft_relevancy_algorithm='TF-IDF'")
-		}
-		execSQLRequire(t, ctx, creator, "create view recreated.v_ft as select id from recreated.docs where match(body) against('apple')")
-		execSQLRequire(t, ctx, externalOwner, "create view role_owned.v_ft as select id from recreated.docs where match(body) against('apple')")
-		execSQLRequire(t, ctx, creator, "create view app.owned_view as select 3 as id")
-		var matches int
-		require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from recreated.v_ft").Scan(&matches))
-		require.Equal(t, 2, matches)
-		execSQLRequire(t, ctx, admin, "drop index ft_body on recreated.docs")
-		execSQLRequire(t, ctx, admin, "create snapshot issue_29399_owner_scope_s for account")
-		// PITR accepts second-resolution timestamps. This delay crosses that
-		// public precision boundary; it does not schedule competing operations.
-		var slept int
-		require.NoError(t, admin.QueryRowContext(ctx, "select sleep(1)").Scan(&slept))
-		var at string
-		require.NoError(t, admin.QueryRowContext(ctx, "select date_format(current_timestamp(6), '%Y-%m-%d %H:%i:%s')").Scan(&at))
-		var id, owner, user uint64
-		require.NoError(t, admin.QueryRowContext(ctx, "select dat_id, owner, creator from mo_catalog.mo_database where datname='app'").Scan(&id, &owner, &user))
-		var userCatalog, roleCatalog uint64
-		require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_user'").Scan(&userCatalog))
-		require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_role'").Scan(&roleCatalog))
-		execSQLRequire(t, ctx, admin, "drop user db_creator")
-		execSQLRequire(t, ctx, admin, "drop role external_owner")
-		// Each database isolates one missing principal of an external table:
-		// recreated has a missing creator; role_owned has a missing owner only.
-		for _, target := range []struct {
-			database string
-			value    int
-		}{{"recreated", 7}, {"role_owned", 5}} {
-			database := target.database
-			execSQLRequire(t, ctx, admin, "drop table "+database+".ext")
-			execSQLRequire(t, ctx, admin, "create table "+database+".ext(id int)")
-			execSQLRequire(t, ctx, admin, "insert into "+database+".ext values(42)")
-			execSQLRequire(t, ctx, admin, "update "+database+".t set id=9")
-			var before uint64
-			identitySQL := "select rel_id from mo_catalog.mo_tables where reldatabase='" + database + "' and relname='ext'"
-			require.NoError(t, admin.QueryRowContext(ctx, identitySQL).Scan(&before))
-			for _, restore := range []string{
-				"restore table " + database + ".ext {snapshot='issue_29399_owner_scope_s'}",
-				"restore database " + database + " table ext from pitr issue_29399_owner_scope_p '" + at + "'",
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+			open := func(user string) *sql.DB {
+				db, err := sql.Open("mysql", fmt.Sprintf("%s:111@tcp(127.0.0.1:%d)/", user, cn.GetServiceConfig().CN.Frontend.Port))
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, db.Close()) })
+				return db
+			}
+			sys := open("dump")
+			const account = "issue_29399_owner_scope"
+			execSQLRequire(t, ctx, sys, "create account "+account+" admin_name 'admin' identified by '111'")
+			// Register before tenant pools, so LIFO closes them before account DROP.
+			t.Cleanup(func() {
+				statement := "drop account if exists " + account
+				cleanup, cancel := context.WithTimeout(context.Background(), testutils.SQLCleanupTimeout(statement))
+				defer cancel()
+				execSQLRequire(t, cleanup, sys, statement)
+				verify, stop := context.WithTimeout(context.Background(), 30*time.Second)
+				defer stop()
+				var remaining int
+				require.NoError(t, sys.QueryRowContext(verify,
+					"select count(*) from mo_catalog.mo_account where account_name=?", account).Scan(&remaining))
+				require.Zero(t, remaining)
+			})
+			admin := open(account + "#admin#accountadmin")
+			defer func() {
+				for _, statement := range []string{
+					"drop snapshot if exists issue_29399_owner_scope_s",
+					"drop pitr if exists issue_29399_owner_scope_p",
+				} {
+					cleanup, cancel := context.WithTimeout(context.Background(), testutils.SQLCleanupTimeout(statement))
+					_, err := admin.ExecContext(cleanup, statement)
+					cancel()
+					if err != nil {
+						t.Errorf("cleanup %q: %v", statement, err)
+					}
+				}
+			}()
+			for _, stmt := range []string{
+				"create role builder", "create user db_creator identified by '111' default role builder",
+				"grant builder to db_creator", "grant connect, create database on account * to builder",
+				"grant create table, create view on database * to builder",
+				"grant select on table *.* to builder",
+				"create pitr issue_29399_owner_scope_p for account range 1 'h'",
 			} {
-				_, err := admin.ExecContext(ctx, restore)
-				require.ErrorContains(t, err, "external table "+database+".ext cannot be restored")
-				var after uint64
+				execSQLRequire(t, ctx, admin, stmt)
+			}
+			creator := open(account + "#db_creator#builder")
+			execSQLRequire(t, ctx, creator, "create database app")
+			execSQLRequire(t, ctx, creator, "create table app.owned(id int)")
+			for _, stmt := range []string{
+				"create table app.t(id int)", "insert into app.t values (1)",
+				"insert into app.owned values (3)",
+				"create database recreated", "create table recreated.t(id int)", "insert into recreated.t values (7)",
+				"create database role_owned", "create table role_owned.t(id int)", "insert into role_owned.t values (5)",
+				"create role external_owner", "grant external_owner to admin",
+				"grant connect on account * to external_owner", "grant create table, create view on database role_owned to external_owner",
+				"grant select on table *.* to external_owner",
+			} {
+				execSQLRequire(t, ctx, admin, stmt)
+			}
+			execSQLRequire(t, ctx, creator, "create external table recreated.ext(id int) infile{'filepath'='/tmp/issue29399-unused.csv','format'='csv'} fields terminated by ','")
+			externalOwner := open(account + "#admin#external_owner")
+			execSQLRequire(t, ctx, externalOwner, "create external table role_owned.ext(id int) infile{'filepath'='/tmp/issue29399-unused.csv','format'='csv'} fields terminated by ','")
+			// The stored MATCH views become unservable only after their index is
+			// removed. They must be skipped without pinning their deleted principals.
+			for _, stmt := range []string{
+				"set experimental_fulltext_index=1", "set ft_relevancy_algorithm='TF-IDF'",
+				"create table recreated.docs(id int primary key, body text)",
+				"insert into recreated.docs values (1, 'apple banana'), (2, 'apple cherry'), (3, 'banana cherry')",
+				"create fulltext index ft_body on recreated.docs(body)",
+			} {
+				execSQLRequire(t, ctx, admin, stmt)
+			}
+			for _, db := range []*sql.DB{creator, externalOwner} {
+				execSQLRequire(t, ctx, db, "set experimental_fulltext_index=1")
+				execSQLRequire(t, ctx, db, "set ft_relevancy_algorithm='TF-IDF'")
+			}
+			execSQLRequire(t, ctx, creator, "create view recreated.v_ft as select id from recreated.docs where match(body) against('apple')")
+			execSQLRequire(t, ctx, externalOwner, "create view role_owned.v_ft as select id from recreated.docs where match(body) against('apple')")
+			execSQLRequire(t, ctx, creator, "create view app.owned_view as select 3 as id")
+			var matches int
+			require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from recreated.v_ft").Scan(&matches))
+			require.Equal(t, 2, matches)
+			execSQLRequire(t, ctx, admin, "drop index ft_body on recreated.docs")
+			execSQLRequire(t, ctx, admin, "create snapshot issue_29399_owner_scope_s for account")
+			// PITR accepts second-resolution timestamps. This delay crosses that
+			// public precision boundary; it does not schedule competing operations.
+			var slept int
+			require.NoError(t, admin.QueryRowContext(ctx, "select sleep(1)").Scan(&slept))
+			var at string
+			require.NoError(t, admin.QueryRowContext(ctx, "select date_format(current_timestamp(6), '%Y-%m-%d %H:%i:%s')").Scan(&at))
+			var id, owner, user uint64
+			require.NoError(t, admin.QueryRowContext(ctx, "select dat_id, owner, creator from mo_catalog.mo_database where datname='app'").Scan(&id, &owner, &user))
+			var userCatalog, roleCatalog uint64
+			require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_user'").Scan(&userCatalog))
+			require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_role'").Scan(&roleCatalog))
+			execSQLRequire(t, ctx, admin, "drop user db_creator")
+			execSQLRequire(t, ctx, admin, "drop role external_owner")
+			// Each database isolates one missing principal of an external table:
+			// recreated has a missing creator; role_owned has a missing owner only.
+			for _, target := range []struct {
+				database string
+				value    int
+			}{{"recreated", 7}, {"role_owned", 5}} {
+				database := target.database
+				execSQLRequire(t, ctx, admin, "drop table "+database+".ext")
+				execSQLRequire(t, ctx, admin, "create table "+database+".ext(id int)")
+				execSQLRequire(t, ctx, admin, "insert into "+database+".ext values(42)")
+				execSQLRequire(t, ctx, admin, "update "+database+".t set id=9")
+				var before uint64
+				identitySQL := "select rel_id from mo_catalog.mo_tables where reldatabase='" + database + "' and relname='ext'"
+				require.NoError(t, admin.QueryRowContext(ctx, identitySQL).Scan(&before))
+				for _, restore := range []string{
+					"restore table " + database + ".ext {snapshot='issue_29399_owner_scope_s'}",
+					"restore database " + database + " table ext from pitr issue_29399_owner_scope_p '" + at + "'",
+				} {
+					_, err := admin.ExecContext(ctx, restore)
+					require.ErrorContains(t, err, "external table "+database+".ext cannot be restored")
+					var after uint64
+					var value int
+					require.NoError(t, admin.QueryRowContext(ctx, identitySQL).Scan(&after))
+					require.Equal(t, before, after)
+					require.NoError(t, admin.QueryRowContext(ctx, "select id from "+database+".ext").Scan(&value))
+					require.Equal(t, 42, value)
+					require.NoError(t, admin.QueryRowContext(ctx, "select id from "+database+".t").Scan(&value))
+					require.Equal(t, 9, value)
+				}
+				execSQLRequire(t, ctx, admin, "drop view "+database+".v_ft")
+				execSQLRequire(t, ctx, admin, "create view "+database+".v_ft as select 42 as id")
+				viewIdentitySQL := "select rel_id, rel_createsql from mo_catalog.mo_tables where reldatabase='" + database + "' and relname='v_ft'"
+				var viewID uint64
+				var viewSQL string
+				require.NoError(t, admin.QueryRowContext(ctx, viewIdentitySQL).Scan(&viewID, &viewSQL))
+				for _, restore := range []string{
+					"restore table " + database + ".v_ft {snapshot='issue_29399_owner_scope_s'}",
+					"restore database " + database + " table v_ft from pitr issue_29399_owner_scope_p '" + at + "'",
+				} {
+					execSQLRequire(t, ctx, admin, restore)
+					var currentID uint64
+					var currentSQL string
+					var value int
+					require.NoError(t, admin.QueryRowContext(ctx, viewIdentitySQL).Scan(&currentID, &currentSQL))
+					require.Equal(t, viewID, currentID)
+					require.Equal(t, viewSQL, currentSQL)
+					require.NoError(t, admin.QueryRowContext(ctx, "select id from "+database+".v_ft").Scan(&value))
+					require.Equal(t, 42, value)
+				}
+				for _, restore := range []string{
+					"restore database " + database + " {snapshot='issue_29399_owner_scope_s'}",
+					"restore database " + database + " from pitr issue_29399_owner_scope_p '" + at + "'",
+				} {
+					execSQLRequire(t, ctx, admin, "update "+database+".t set id=9")
+					execSQLRequire(t, ctx, admin, restore)
+					var value, externalTables int
+					require.NoError(t, admin.QueryRowContext(ctx, "select id from "+database+".t").Scan(&value))
+					require.Equal(t, target.value, value)
+					require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='"+database+"' and relname in ('ext','v_ft')").Scan(&externalTables))
+					require.Zero(t, externalTables)
+				}
+			}
+			var currentUserCatalog, currentRoleCatalog uint64
+			require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_user'").Scan(&currentUserCatalog))
+			require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_role'").Scan(&currentRoleCatalog))
+			require.Equal(t, userCatalog, currentUserCatalog)
+			require.Equal(t, roleCatalog, currentRoleCatalog)
+
+			for _, restore := range []string{
+				"restore table app.t {snapshot='issue_29399_owner_scope_s'}",
+				"restore database app table t from pitr issue_29399_owner_scope_p '" + at + "'",
+			} {
+				execSQLRequire(t, ctx, admin, "update app.t set id=2")
+				execSQLRequire(t, ctx, admin, restore)
 				var value int
-				require.NoError(t, admin.QueryRowContext(ctx, identitySQL).Scan(&after))
-				require.Equal(t, before, after)
-				require.NoError(t, admin.QueryRowContext(ctx, "select id from "+database+".ext").Scan(&value))
-				require.Equal(t, 42, value)
-				require.NoError(t, admin.QueryRowContext(ctx, "select id from "+database+".t").Scan(&value))
+				require.NoError(t, admin.QueryRowContext(ctx, "select id from app.t").Scan(&value))
+				require.Equal(t, 1, value)
+				var currentID, currentOwner, currentUser uint64
+				require.NoError(t, admin.QueryRowContext(ctx, "select dat_id, owner, creator from mo_catalog.mo_database where datname='app'").Scan(&currentID, &currentOwner, &currentUser))
+				require.Equal(t, []uint64{id, owner, user}, []uint64{currentID, currentOwner, currentUser})
+			}
+			// Retaining the DB does not exempt a recreated table's own principal.
+			execSQLRequire(t, ctx, admin, "update app.owned set id=9")
+			var beforeTable uint64
+			require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='app' and relname='owned'").Scan(&beforeTable))
+			for _, restore := range []string{
+				"restore table app.owned {snapshot='issue_29399_owner_scope_s'}",
+				"restore database app table owned from pitr issue_29399_owner_scope_p '" + at + "'",
+			} {
+				_, err = admin.ExecContext(ctx, restore)
+				require.ErrorContains(t, err, "creator no longer exists")
+				var afterTable uint64
+				var value int
+				require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='app' and relname='owned'").Scan(&afterTable))
+				require.Equal(t, beforeTable, afterTable, "rejected restore must fail before DROP")
+				require.NoError(t, admin.QueryRowContext(ctx, "select id from app.owned").Scan(&value))
 				require.Equal(t, 9, value)
 			}
-			execSQLRequire(t, ctx, admin, "drop view "+database+".v_ft")
-			execSQLRequire(t, ctx, admin, "create view "+database+".v_ft as select 42 as id")
-			viewIdentitySQL := "select rel_id, rel_createsql from mo_catalog.mo_tables where reldatabase='" + database + "' and relname='v_ft'"
-			var viewID uint64
-			var viewSQL string
-			require.NoError(t, admin.QueryRowContext(ctx, viewIdentitySQL).Scan(&viewID, &viewSQL))
+			// A servable view still requires its historical creator before DROP.
+			execSQLRequire(t, ctx, admin, "drop view app.owned_view")
+			execSQLRequire(t, ctx, admin, "create view app.owned_view as select 42 as id")
+			var viewBefore uint64
+			const viewIDSQL = "select rel_id from mo_catalog.mo_tables where reldatabase='app' and relname='owned_view'"
+			require.NoError(t, admin.QueryRowContext(ctx, viewIDSQL).Scan(&viewBefore))
 			for _, restore := range []string{
-				"restore table " + database + ".v_ft {snapshot='issue_29399_owner_scope_s'}",
-				"restore database " + database + " table v_ft from pitr issue_29399_owner_scope_p '" + at + "'",
+				"restore table app.owned_view {snapshot='issue_29399_owner_scope_s'}",
+				"restore database app table owned_view from pitr issue_29399_owner_scope_p '" + at + "'",
 			} {
-				execSQLRequire(t, ctx, admin, restore)
-				var currentID uint64
-				var currentSQL string
+				_, err = admin.ExecContext(ctx, restore)
+				require.ErrorContains(t, err, "creator no longer exists")
+				var after uint64
 				var value int
-				require.NoError(t, admin.QueryRowContext(ctx, viewIdentitySQL).Scan(&currentID, &currentSQL))
-				require.Equal(t, viewID, currentID)
-				require.Equal(t, viewSQL, currentSQL)
-				require.NoError(t, admin.QueryRowContext(ctx, "select id from "+database+".v_ft").Scan(&value))
+				require.NoError(t, admin.QueryRowContext(ctx, viewIDSQL).Scan(&after))
+				require.Equal(t, viewBefore, after)
+				require.NoError(t, admin.QueryRowContext(ctx, "select id from app.owned_view").Scan(&value))
 				require.Equal(t, 42, value)
 			}
-			for _, restore := range []string{
-				"restore database " + database + " {snapshot='issue_29399_owner_scope_s'}",
-				"restore database " + database + " from pitr issue_29399_owner_scope_p '" + at + "'",
-			} {
-				execSQLRequire(t, ctx, admin, "update "+database+".t set id=9")
-				execSQLRequire(t, ctx, admin, restore)
-				var value, externalTables int
-				require.NoError(t, admin.QueryRowContext(ctx, "select id from "+database+".t").Scan(&value))
-				require.Equal(t, target.value, value)
-				require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='"+database+"' and relname in ('ext','v_ft')").Scan(&externalTables))
-				require.Zero(t, externalTables)
-			}
-		}
-		var currentUserCatalog, currentRoleCatalog uint64
-		require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_user'").Scan(&currentUserCatalog))
-		require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_role'").Scan(&currentRoleCatalog))
-		require.Equal(t, userCatalog, currentUserCatalog)
-		require.Equal(t, roleCatalog, currentRoleCatalog)
-
-		for _, restore := range []string{
-			"restore table app.t {snapshot='issue_29399_owner_scope_s'}",
-			"restore database app table t from pitr issue_29399_owner_scope_p '" + at + "'",
-		} {
-			execSQLRequire(t, ctx, admin, "update app.t set id=2")
-			execSQLRequire(t, ctx, admin, restore)
-			var value int
-			require.NoError(t, admin.QueryRowContext(ctx, "select id from app.t").Scan(&value))
-			require.Equal(t, 1, value)
-			var currentID, currentOwner, currentUser uint64
-			require.NoError(t, admin.QueryRowContext(ctx, "select dat_id, owner, creator from mo_catalog.mo_database where datname='app'").Scan(&currentID, &currentOwner, &currentUser))
-			require.Equal(t, []uint64{id, owner, user}, []uint64{currentID, currentOwner, currentUser})
-		}
-		// Retaining the DB does not exempt a recreated table's own principal.
-		execSQLRequire(t, ctx, admin, "update app.owned set id=9")
-		var beforeTable uint64
-		require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='app' and relname='owned'").Scan(&beforeTable))
-		for _, restore := range []string{
-			"restore table app.owned {snapshot='issue_29399_owner_scope_s'}",
-			"restore database app table owned from pitr issue_29399_owner_scope_p '" + at + "'",
-		} {
-			_, err = admin.ExecContext(ctx, restore)
+			// A genuinely missing database still needs its historical identities.
+			execSQLRequire(t, ctx, admin, "drop database app")
+			_, err = admin.ExecContext(ctx, "restore table app.t {snapshot='issue_29399_owner_scope_s'}")
 			require.ErrorContains(t, err, "creator no longer exists")
-			var afterTable uint64
+			var databases int
+			require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_database where datname='app'").Scan(&databases))
+			require.Zero(t, databases)
+			execSQLRequire(t, ctx, admin, "drop database recreated")
+			execSQLRequire(t, ctx, admin, "restore table recreated.t {snapshot='issue_29399_owner_scope_s'}")
 			var value int
-			require.NoError(t, admin.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where reldatabase='app' and relname='owned'").Scan(&afterTable))
-			require.Equal(t, beforeTable, afterTable, "rejected restore must fail before DROP")
-			require.NoError(t, admin.QueryRowContext(ctx, "select id from app.owned").Scan(&value))
-			require.Equal(t, 9, value)
-		}
-		// A servable view still requires its historical creator before DROP.
-		execSQLRequire(t, ctx, admin, "drop view app.owned_view")
-		execSQLRequire(t, ctx, admin, "create view app.owned_view as select 42 as id")
-		var viewBefore uint64
-		const viewIDSQL = "select rel_id from mo_catalog.mo_tables where reldatabase='app' and relname='owned_view'"
-		require.NoError(t, admin.QueryRowContext(ctx, viewIDSQL).Scan(&viewBefore))
-		for _, restore := range []string{
-			"restore table app.owned_view {snapshot='issue_29399_owner_scope_s'}",
-			"restore database app table owned_view from pitr issue_29399_owner_scope_p '" + at + "'",
-		} {
-			_, err = admin.ExecContext(ctx, restore)
-			require.ErrorContains(t, err, "creator no longer exists")
-			var after uint64
-			var value int
-			require.NoError(t, admin.QueryRowContext(ctx, viewIDSQL).Scan(&after))
-			require.Equal(t, viewBefore, after)
-			require.NoError(t, admin.QueryRowContext(ctx, "select id from app.owned_view").Scan(&value))
-			require.Equal(t, 42, value)
-		}
-		// A genuinely missing database still needs its historical identities.
-		execSQLRequire(t, ctx, admin, "drop database app")
-		_, err = admin.ExecContext(ctx, "restore table app.t {snapshot='issue_29399_owner_scope_s'}")
-		require.ErrorContains(t, err, "creator no longer exists")
-		var databases int
-		require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_database where datname='app'").Scan(&databases))
-		require.Zero(t, databases)
-		execSQLRequire(t, ctx, admin, "drop database recreated")
-		execSQLRequire(t, ctx, admin, "restore table recreated.t {snapshot='issue_29399_owner_scope_s'}")
-		var value int
-		require.NoError(t, admin.QueryRowContext(ctx, "select id from recreated.t").Scan(&value))
-		require.Equal(t, 7, value)
-		var correctOwners int
-		require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_database d join mo_catalog.mo_user u on d.creator=u.user_id join mo_catalog.mo_role r on d.owner=r.role_id where d.datname='recreated' and u.user_name='admin' and r.role_name='accountadmin'").Scan(&correctOwners))
-		require.Equal(t, 1, correctOwners)
+			require.NoError(t, admin.QueryRowContext(ctx, "select id from recreated.t").Scan(&value))
+			require.Equal(t, 7, value)
+			var correctOwners int
+			require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_database d join mo_catalog.mo_user u on d.creator=u.user_id join mo_catalog.mo_role r on d.owner=r.role_id where d.datname='recreated' and u.user_name='admin' and r.role_name='accountadmin'").Scan(&correctOwners))
+			require.Equal(t, 1, correctOwners)
+		})
 	})
 }
 
