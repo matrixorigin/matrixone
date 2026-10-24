@@ -270,6 +270,10 @@ func decimalComparisonSource(input types.Type) types.Type {
 // one coefficient scale. Use the original exact domains: an intermediate cast
 // may have the physical type's default precision rather than the source's.
 func alignDecimalComparisonTypes(targets, inputs []types.Type) (bool, bool) {
+	return alignDecimalComparisonTypesMode(targets, inputs, false)
+}
+
+func alignDecimalComparisonTypesMode(targets, inputs []types.Type, legacy bool) (bool, bool) {
 	target := targets[0]
 	aligned := true
 	for _, typ := range targets {
@@ -278,9 +282,14 @@ func alignDecimalComparisonTypes(targets, inputs []types.Type) (bool, bool) {
 		}
 	}
 
+	if aligned && legacy {
+		return false, true
+	}
 	sources := make([]types.Type, len(inputs))
 	for i, input := range inputs {
-		input = decimalComparisonSource(input)
+		if !legacy {
+			input = decimalComparisonSource(input)
+		}
 		if targets[i].Oid.TypeLen() > target.Oid.TypeLen() {
 			target = targets[i]
 		}

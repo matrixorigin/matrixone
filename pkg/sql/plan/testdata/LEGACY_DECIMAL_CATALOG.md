@@ -93,3 +93,37 @@ and Decimal128(19,0) recovery afterward, full signed-domain and fresh-binding
 equivalence, all four open/closed endpoint modes, NULL propagation, unchanged
 explicit CAST behavior, catalog immutability, and idempotence. The fourth
 argument is a UINT8 boundary flag, not a numeric operand to widen.
+
+## Historical DUMP/LOAD payloads
+
+`legacy_decimal_dump_63a964a82f.json` contains ten complete CREATE statements,
+their original protobuf definitions, and their original bound-expression
+payloads and SHA-256 digests. Both the real planner and the frontend
+`tableDumpBoundExpressions` writer ran at the same exact base above, without
+compatibility binding modes. The file SHA-256 is
+`4249df125dc66afba314d361dfd7bf9d28d0f246236940e9aa630ce3feffbfe2`.
+
+Each table has a `MONTHNAME('2024-01-01')` default. The base analyzer verified
+that all ten require bound payloads; these are not v1 dumps artificially
+promoted by the new reader. The expressions cover CHECK, equality, signed,
+unsigned, BIT, generated columns, nested arithmetic, multiplication, integer
+division, and an explicit-CAST control. The `mixed` case supplies two numeric
+predicates so the reader can reject a forged partial old/new-era combination.
+
+To regenerate, read the SQL fields, parse and plan each at the exact base using
+the procedure above, and marshal its complete TableDef. In a temporary
+package-frontend test at that base, call `tableDumpBoundExpressions` for each
+definition and record its payload and digest. Serialize the four fields `sql`,
+`table_def`, `bound_expressions`, and `expression_hash` with `json.MarshalIndent`
+and a final newline.
+Do not replace the frozen payloads with outputs from the compatibility binder.
+
+Frontend regressions compare the current writer's bytes with the real old
+writer's bytes, then verify those old bytes through the LOAD readers. Checksums,
+schema hashes, declarations, complete SQL-origin witnesses, and source/target
+immutability remain enforced, including forged payloads with recomputed hashes.
+The SQL integration regression retains the native rowid transport skeleton,
+installs the frozen CHECK/generated expression via a valid metadata manifest,
+and exercises actual DUMP/LOAD with physical rows and subsequent INSERT/UPDATE.
+It proves current execution around genuine historical metadata, not a deployed
+old-server or live binary upgrade.
