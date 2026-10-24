@@ -69,7 +69,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.LeastGreatestCollationSemantics, defines.MORPCVersion117,
 			"collation-aware LEAST/GREATEST requires a versioned remote destination",
 			"remote destination does not support collation-aware LEAST/GREATEST (MORPC version %d)"},
-		{features.SetOperationFloatKeys, defines.MORPCVersion130,
+		{features.SetOperationFloatKeys, defines.MORPCVersion131,
 			"set-operation float keys require a versioned remote destination",
 			"remote destination does not support set-operation float keys (MORPC version %d)"},
 		{features.CalendarIntervalNormalization, defines.MORPCVersion115,
