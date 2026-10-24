@@ -475,9 +475,11 @@ func indexCacheConfig(t *testing.T, capacity int64) CacheConfig {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "disk-cache")
 	c := toml.ByteSize(capacity)
+	share := 0.3
 	return CacheConfig{
 		DiskPath:              &path,
 		DiskCapacity:          &c,
+		IndexFileDiskShare:    &share,
 		IndexFileCacheEnabled: true,
 	}
 }
@@ -518,6 +520,7 @@ func TestIndexFileCacheSplitsDiskCapacity(t *testing.T) {
 func TestIndexFileCacheDisabledKeepsDiskCapacity(t *testing.T) {
 	zero := 0.0
 	for name, mutate := range map[string]func(*CacheConfig){
+		"default share":                func(c *CacheConfig) { c.IndexFileDiskShare = nil },
 		"not enabled for this service": func(c *CacheConfig) { c.IndexFileCacheEnabled = false },
 		"share 0":                      func(c *CacheConfig) { c.IndexFileDiskShare = &zero },
 	} {

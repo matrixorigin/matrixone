@@ -590,6 +590,12 @@ func TestCreateFileServiceEnablesIndexFileCacheOnlyForCNShared(t *testing.T) {
 }
 
 func TestCNSharedFileServiceHasIndexFileCache(t *testing.T) {
+	for _, share := range []string{"", "index-file-disk-share = 0.3"} {
+		testCNSharedFileServiceIndexFileCache(t, share, share != "")
+	}
+}
+
+func testCNSharedFileServiceIndexFileCache(t *testing.T, shareSetting string, configured bool) {
 	dir := t.TempDir()
 	cfgFile := filepath.Join(dir, "cn.toml")
 	require.NoError(t, os.WriteFile(cfgFile, []byte(fmt.Sprintf(`
@@ -608,12 +614,13 @@ data-dir = %[3]q
 
 [fileservice.cache]
 disk-capacity = "1GB"
-`, dir, filepath.Join(dir, "local2"), filepath.Join(dir, "shared2"))), 0644))
+%[4]s
+`, dir, filepath.Join(dir, "local2"), filepath.Join(dir, "shared2"), shareSetting)), 0644))
 
 	for _, tc := range []struct {
 		serviceType metadata.ServiceType
 		want        bool
-	}{{metadata.ServiceType_CN, true}, {metadata.ServiceType_TN, false}} {
+	}{{metadata.ServiceType_CN, configured}, {metadata.ServiceType_TN, false}} {
 		cfg := NewConfig()
 		require.NoError(t, parseConfigFromFile(cfgFile, cfg))
 		require.NoError(t, cfg.setDefaultValue())

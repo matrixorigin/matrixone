@@ -41,8 +41,8 @@ var cacheDirTrashSeq atomic.Uint64
 
 const (
 	// DefaultIndexFileDiskShare is the default share of the disk cache capacity given to
-	// the index-file cache.
-	DefaultIndexFileDiskShare = 0.3
+	// the index-file cache: none until an index reads through it.
+	DefaultIndexFileDiskShare = 0.0
 
 	IndexFileRebuildCacheRead      = "read"
 	IndexFileRebuildCacheNone      = "none"
