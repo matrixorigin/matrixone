@@ -20,6 +20,8 @@ import (
 	"encoding/binary"
 	"math"
 	"math/big"
+	"math/rand"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	mosort "github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/stretchr/testify/require"
 )
@@ -786,41 +789,100 @@ func (c *causeAtNthCheck) Err() error {
 	return c.Context.Err()
 }
 
-// fillWeightedThreeGroups fills three single-pair groups, so
-// FlushWithContext's synchronous check order is deterministic: chunk entry;
-// then per group: row entry, retained-args restore, post-sort, mid-scan.
-func fillWeightedThreeGroups(
+// fillWeightedLargeGroupInputs builds the shared inputs of the large-group
+// cancellation witness: 4096 descending values of weight 1, so a group's
+// finalization performs a real multi-row restore, sort and cumulative scan
+// (the descending order forces the sort's element work).
+func fillWeightedLargeGroupInputs(
+	t *testing.T, mp *mpool.MPool,
+) (*vector.Vector, *vector.Vector) {
+	t.Helper()
+	values := vector.NewVec(types.T_float64.ToType())
+	weights := vector.NewVec(types.T_float64.ToType())
+	for i := 0; i < 4096; i++ {
+		require.NoError(t, vector.AppendFixed(values, float64(4096-i), false, mp))
+		require.NoError(t, vector.AppendFixed(weights, 1.0, false, mp))
+	}
+	return values, weights
+}
+
+// fillWeightedFollowUpGroup adds a one-row second group (value 4, weight 3)
+// so a later case can cancel between groups after the large group's row is
+// already appended to the result.
+func fillWeightedFollowUpGroup(
 	t *testing.T, mp *mpool.MPool, exec *quantileExactWeightedExec,
 ) {
 	t.Helper()
-	groupValues := [][]float64{{2}, {4}, {1}}
-	groupWeights := [][]float64{{2}, {3}, {1}}
-	for g := range groupValues {
-		values := vector.NewVec(types.T_float64.ToType())
-		weights := vector.NewVec(types.T_float64.ToType())
-		require.NoError(t, vector.AppendFixed(values, groupValues[g][0], false, mp))
-		require.NoError(t, vector.AppendFixed(weights, groupWeights[g][0], false, mp))
-		require.NoError(t, exec.BulkFill(g, []*vector.Vector{values, weights}))
-		values.Free(mp)
-		weights.Free(mp)
-	}
+	require.NoError(t, exec.GroupGrow(1))
+	smallValues := singleRowVec(t, mp, types.T_float64.ToType(), 4.0)
+	defer smallValues.Free(mp)
+	smallWeights := singleRowVec(t, mp, types.T_float64.ToType(), 3.0)
+	defer smallWeights.Free(mp)
+	require.NoError(t, exec.BulkFill(1, []*vector.Vector{smallValues, smallWeights}))
 }
 
-// TestQuantileExactWeightedCancellation witnesses decision D12's cancellation
-// points at every documented stage of finalization, not only at entry: the
-// cancelled cause surfaces from the exact flip point, the error return frees
-// all scratch and every partially built result, the allocation account is
-// back to the baseline after executor Free, and a subsequent fresh execution
-// still produces the correct weighted result.
+// TestQuantileExactWeightedCancellation witnesses decision D12's
+// cancellation points inside actual multi-row finalization work (the review
+// regression for cancelling while a large group or window partition is being
+// finalized): every case cancels the context at the n-th finalization check
+// of a 4096-row group — mid-restore, at the sort's entry, deep inside the
+// sort's element work, or mid cumulative scan — the cancelled cause must
+// surface at exactly that check, and all scratch plus partially built
+// results must be released. The check sequence of the 4096-row group is
+// deterministic (fixed data drives a fixed heap-sort swap sequence), and the
+// warmup run learns the total T: checks 1-2 are the chunk and group-row
+// entries, 3-6 the restore cadence at rows 0/1024/2048/3072, 7 the sort's
+// entry, 8..T-4 the sort's bounded swap checkpoints, and T-3..T the scan's
+// four checkpoints (level 0.99 crosses at the 4056th cumulative weight).
 func TestQuantileExactWeightedCancellation(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 
 	cancelCause := moerr.NewInvalidInputNoCtx("quantile test deadline")
+	values, weights := fillWeightedLargeGroupInputs(t, mp)
+	defer values.Free(mp)
+	defer weights.Free(mp)
+	baseline := mp.CurrNB()
 
-	// Deterministic check order for the three-group input: 1 = chunk entry;
-	// 2/3/4/5 = group 0's row entry, restore, post-sort, mid-scan; 6 = group
-	// 1's row entry (group 0's answer is already appended to the result).
+	// countFinalizationChecks runs the successful finalization under a
+	// counting context and returns how many checks it performed.
+	countFinalizationChecks := func(withFollowUpGroup bool) int32 {
+		exec := makeWeightedExecForTest(t, mp, false,
+			types.T_float64.ToType(), types.T_float64.ToType(), "0.99")
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{values, weights}))
+		if withFollowUpGroup {
+			fillWeightedFollowUpGroup(t, mp, exec)
+		}
+		counting := &causeAtNthCheck{
+			Context: context.Background(), n: int32(math.MaxInt32)}
+		results, err := exec.FlushWithContext(counting)
+		require.NoError(t, err)
+		// 4096 unit weights give W=4096 and k=ceil(0.99*4096)=4056, so the
+		// ascending values select 4056; the second group's W=3 selects 4.
+		require.Equal(t, 4056.0,
+			vector.GetFixedAtNoTypeCheck[float64](results[0], 0))
+		if withFollowUpGroup {
+			require.Equal(t, 4.0,
+				vector.GetFixedAtNoTypeCheck[float64](results[0], 1))
+		}
+		for _, result := range results {
+			result.Free(mp)
+		}
+		exec.Free()
+		require.Equal(t, baseline, mp.CurrNB())
+		return counting.checks
+	}
+
+	totalChecks := countFinalizationChecks(false)
+	require.Greater(t, totalChecks, int32(10),
+		"the large group's sort must run bounded checkpoints past its entry")
+	// The last four checks (T-3..T) belong to the cumulative scan, so T-5 is
+	// the sort's final in-work checkpoint.
+	deepSortFlip := totalChecks - 5
+	require.Greater(t, deepSortFlip, int32(7),
+		"the flip point must be inside the sort's element work")
+
 	for _, tc := range []struct {
 		name    string
 		flipAt  int32
@@ -828,19 +890,21 @@ func TestQuantileExactWeightedCancellation(t *testing.T) {
 	}{
 		{"before finalization starts", 1,
 			"the chunk-entry check aborts before any allocation"},
-		{"mid finalization after the sort", 4,
-			"the chunk result vector, the restored pair and the selector scratch exist"},
-		{"mid scan while accumulating weights", 5,
-			"the selector and converted-weight scratch exist"},
-		{"between groups after partial output", 6,
-			"group 0's selected value is already appended to the result"},
+		{"mid restore after 2048 retained rows", 5,
+			"the restored value rows and converted-weight scratch exist"},
+		{"at the sort's entry", 7,
+			"the large group's sort has not performed element work yet"},
+		{"deep inside the sort's element work", deepSortFlip,
+			"the selector scratch exists mid-sort with swaps already applied"},
+		{"mid scan accumulating sorted weights", totalChecks - 1,
+			"the sort finished; the scan holds converted weights"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, int64(0), mp.CurrNB())
+			require.Equal(t, baseline, mp.CurrNB())
 			exec := makeWeightedExecForTest(t, mp, false,
-				types.T_float64.ToType(), types.T_float64.ToType(), "0.5")
-			require.NoError(t, exec.GroupGrow(3))
-			fillWeightedThreeGroups(t, mp, exec)
+				types.T_float64.ToType(), types.T_float64.ToType(), "0.99")
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{values, weights}))
 
 			ctx := &causeAtNthCheck{
 				Context: context.Background(), n: tc.flipAt, cause: cancelCause}
@@ -851,23 +915,53 @@ func TestQuantileExactWeightedCancellation(t *testing.T) {
 			require.EqualValues(t, tc.flipAt, ctx.checks, tc.details+
 				"; finalization must abort on its first cancelled check")
 			exec.Free()
-			require.Equal(t, int64(0), mp.CurrNB(),
+			require.Equal(t, baseline, mp.CurrNB(),
 				"a cancelled finalization must not leak scratch or result memory")
-
-			fresh := makeWeightedExecForTest(t, mp, false,
-				types.T_float64.ToType(), types.T_float64.ToType(), "0.5")
-			require.NoError(t, fresh.GroupGrow(1))
-			fv, fw := buildWeightedFixtureVecs(t, mp)
-			defer fv.Free(mp)
-			defer fw.Free(mp)
-			require.NoError(t, fresh.BulkFill(0, []*vector.Vector{fv, fw}))
-			freshResults, err := fresh.Flush()
-			require.NoError(t, err)
-			require.Equal(t, 2.0, vector.GetFixedAtNoTypeCheck[float64](freshResults[0], 0))
-			freshResults[0].Free(mp)
-			fresh.Free()
 		})
 	}
+
+	// The same witness across the group boundary: cancelling at the second
+	// group's row entry aborts after the large group's selected value was
+	// already appended to the chunk result.
+	t.Run("between groups after partial output", func(t *testing.T) {
+		require.Equal(t, baseline, mp.CurrNB())
+		twoGroupChecks := countFinalizationChecks(true)
+		afterFirstGroup := totalChecks + 1
+		require.Greater(t, int32(afterFirstGroup), totalChecks)
+		require.LessOrEqual(t, int32(afterFirstGroup), twoGroupChecks,
+			"the flip must stay inside the two-group finalization")
+		exec := makeWeightedExecForTest(t, mp, false,
+			types.T_float64.ToType(), types.T_float64.ToType(), "0.99")
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{values, weights}))
+		fillWeightedFollowUpGroup(t, mp, exec)
+
+		ctx := &causeAtNthCheck{
+			Context: context.Background(), n: afterFirstGroup, cause: cancelCause}
+		results, err := exec.FlushWithContext(ctx)
+		require.Error(t, err,
+			"group 0's selected value is already appended to the result")
+		require.ErrorIs(t, err, cancelCause)
+		require.Nil(t, results, "the error return must free all built results")
+		require.EqualValues(t, afterFirstGroup, ctx.checks)
+		exec.Free()
+		require.Equal(t, baseline, mp.CurrNB(),
+			"a cancelled finalization must not leak scratch or result memory")
+	})
+
+	// A subsequent fresh execution on a fresh executor observes no residue.
+	fresh := makeWeightedExecForTest(t, mp, false,
+		types.T_float64.ToType(), types.T_float64.ToType(), "0.5")
+	require.NoError(t, fresh.GroupGrow(1))
+	fv, fw := buildWeightedFixtureVecs(t, mp)
+	defer fv.Free(mp)
+	defer fw.Free(mp)
+	require.NoError(t, fresh.BulkFill(0, []*vector.Vector{fv, fw}))
+	freshResults, err := fresh.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 2.0, vector.GetFixedAtNoTypeCheck[float64](freshResults[0], 0))
+	freshResults[0].Free(mp)
+	fresh.Free()
 }
 
 // TestQuantileExactWeightedFinalizationReportsNoErrorsOnValidPayloads is the
@@ -1063,4 +1157,473 @@ func TestQuantileExactWeightedDispatchAndConfigGuards(t *testing.T) {
 func nilCheckTypes(exec AggFuncExec) []types.Type {
 	args, _ := exec.TypesInfo()
 	return args
+}
+
+// TestQuantileSortSelectorsInterruptsInsideElementWork pins decision D12's
+// in-sort cancellation on the executor's sort helper: an already-cancelled
+// context stops the sort before its first element move (a plain SortByVectors
+// would run the whole sort first), and the bounded swap checkpoint stops a
+// real sort mid-work with genuine element swaps already applied. Ordering
+// correctness under a live context is covered by
+// TestQuantileSortSelectorsMatchesSortByVectors.
+func TestQuantileSortSelectorsInterruptsInsideElementWork(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	const rows = 1 << 16
+	values := vector.NewVec(types.T_int64.ToType())
+	defer values.Free(mp)
+	for i := 0; i < rows; i++ {
+		require.NoError(t, vector.AppendFixed(values, int64(rows-i), false, mp))
+	}
+	identity := func() []int64 {
+		selectors := make([]int64, rows)
+		for i := range selectors {
+			selectors[i] = int64(i)
+		}
+		return selectors
+	}
+	// Descending values mean a completed ascending sort is exactly the
+	// reversed selector sequence.
+	reversed := make([]int64, rows)
+	for i := range reversed {
+		reversed[i] = int64(rows - 1 - i)
+	}
+
+	// A pre-cancelled context surfaces at the sort's entry checkpoint
+	// before any selector moves.
+	cancelCause := moerr.NewInvalidInputNoCtx("sort deadline")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(cancelCause)
+	selectors := identity()
+	err := quantileSortSelectors(ctx, values, selectors)
+	require.ErrorIs(t, err, cancelCause)
+	require.Equal(t, identity(), selectors,
+		"a cancelled context must stop the sort before its first element move")
+
+	// The second checkpoint fires after exactly quantileSortCheckSteps
+	// swaps, so the aborted sort has done real work yet has not finished.
+	counting := &causeAtNthCheck{
+		Context: context.Background(), n: 2, cause: cancelCause}
+	selectors = identity()
+	err = quantileSortSelectors(counting, values, selectors)
+	require.ErrorIs(t, err, cancelCause)
+	require.EqualValues(t, 2, counting.checks)
+	require.NotEqual(t, identity(), selectors,
+		"the mid-sort checkpoint must fire after real element swaps")
+	require.NotEqual(t, reversed, selectors,
+		"the aborted sort must not read like a completed sort")
+}
+
+// TestQuantileSortSelectorsMatchesSortByVectors proves the context-aware
+// sort produces the identical row ordering the repository's selector-sort
+// authority (SortByVectors over one vector) produces for every supported
+// value type, including edge values (NaN and ±Inf payloads, -0.0/+0.0,
+// width extremes and duplicates), so the cancellation-aware finalization
+// never changes which value a finalized group selects.
+func TestQuantileSortSelectorsMatchesSortByVectors(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	rng := rand.New(rand.NewSource(29944))
+
+	// Each case returns a value vector whose rows mix typed extremes with
+	// seeded duplicates.
+	decimal128Type := types.New(types.T_decimal128, 37, 4)
+	builders := []struct {
+		name string
+		env  func(t *testing.T) *vector.Vector
+	}{
+		{"int8", func(t *testing.T) *vector.Vector {
+			vec := vector.NewVec(types.T_int8.ToType())
+			for i := 0; i < 517; i++ {
+				value := int8(rng.Intn(251) - 125)
+				if i == 0 {
+					value = math.MinInt8
+				} else if i == 1 {
+					value = math.MaxInt8
+				}
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			return vec
+		}},
+		{"int16", func(t *testing.T) *vector.Vector {
+			vec := vector.NewVec(types.T_int16.ToType())
+			for i := 0; i < 517; i++ {
+				var value int16
+				switch {
+				case i == 0:
+					value = math.MinInt16
+				case i == 1:
+					value = math.MaxInt16
+				default:
+					value = int16(rng.Intn(65536) - 32768)
+				}
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			return vec
+		}},
+		{"int32", func(t *testing.T) *vector.Vector {
+			vec := vector.NewVec(types.T_int32.ToType())
+			for i := 0; i < 517; i++ {
+				value := int32(rng.Int31())
+				if i&7 == 0 {
+					value = int32(rng.Int31n(97) - 48)
+				}
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			return vec
+		}},
+		{"int64", func(t *testing.T) *vector.Vector {
+			vec := vector.NewVec(types.T_int64.ToType())
+			for i := 0; i < 517; i++ {
+				value := rng.Int63()
+				if i == 0 {
+					value = math.MinInt64
+				} else if i == 1 {
+					value = math.MaxInt64
+				} else if i&7 == 0 {
+					value = rng.Int63n(97) - 48
+				}
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			return vec
+		}},
+		{"uint8", func(t *testing.T) *vector.Vector {
+			vec := vector.NewVec(types.T_uint8.ToType())
+			for i := 0; i < 517; i++ {
+				value := uint8(rng.Intn(256))
+				if i == 0 {
+					value = math.MaxUint8
+				}
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			return vec
+		}},
+		{"uint16", func(t *testing.T) *vector.Vector {
+			vec := vector.NewVec(types.T_uint16.ToType())
+			for i := 0; i < 517; i++ {
+				value := uint16(rng.Intn(65536))
+				if i == 0 {
+					value = math.MaxUint16
+				}
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			return vec
+		}},
+		{"uint32", func(t *testing.T) *vector.Vector {
+			vec := vector.NewVec(types.T_uint32.ToType())
+			for i := 0; i < 517; i++ {
+				value := uint32(rng.Int31())
+				if i == 0 {
+					value = math.MaxUint32
+				}
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			return vec
+		}},
+		{"uint64 and bit rows", func(t *testing.T) *vector.Vector {
+			vec := vector.NewVec(types.T_uint64.ToType())
+			for i := 0; i < 517; i++ {
+				value := rng.Uint64()
+				if i == 0 {
+					value = math.MaxUint64
+				} else if i&15 == 0 {
+					value = rng.Uint64() & 0xff
+				}
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			return vec
+		}},
+		{"float32", func(t *testing.T) *vector.Vector {
+			vec := vector.NewVec(types.T_float32.ToType())
+			for _, value := range []float32{
+				float32(math.NaN()), float32(math.Inf(-1)),
+				float32(math.Inf(1)), -0.0, 0.0,
+				float32(math.NaN()), -0.0,
+			} {
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			for i := 0; i < 510; i++ {
+				require.NoError(t, vector.AppendFixed(vec,
+					float32(rng.NormFloat64())*1e6, false, mp))
+			}
+			return vec
+		}},
+		{"float64", func(t *testing.T) *vector.Vector {
+			vec := vector.NewVec(types.T_float64.ToType())
+			for _, value := range []float64{
+				math.NaN(), math.Inf(-1), math.Inf(1),
+				math.Float64frombits(0xfff8000000000001), // NaN with a high payload
+				-0.0, 0.0, -0.0, math.NaN(),
+			} {
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			for i := 0; i < 509; i++ {
+				require.NoError(t, vector.AppendFixed(vec,
+					rng.NormFloat64()*1e20, false, mp))
+			}
+			return vec
+		}},
+		{"decimal64", func(t *testing.T) *vector.Vector {
+			typ := types.New(types.T_decimal64, 10, 2)
+			vec := vector.NewVec(typ)
+			for _, text := range []string{
+				"-99999999.99", "-1.25", "0.00", "0.00", "0.01", "1.25",
+				"1.25", "99999999.99",
+			} {
+				value, err := types.ParseDecimal64(text, 10, 2)
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			for i := 0; i < 508; i++ {
+				value, err := types.ParseDecimal64(
+					strconv.FormatInt(rng.Int63n(10000000)-5000000, 10)+".99",
+					10, 2)
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			return vec
+		}},
+		{"decimal128", func(t *testing.T) *vector.Vector {
+			vec := vector.NewVec(decimal128Type)
+			for _, text := range []string{
+				"-999999999999999999999999999999.9999",
+				"-1.5", "0", "0.0000", "0", "-1.5",
+				"999999999999999999999999999999.9999",
+			} {
+				value, err := types.ParseDecimal128(text, 37, 4)
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			for i := 0; i < 510; i++ {
+				value := types.Decimal128FromInt64(rng.Int63n(1<<40) - 1<<39)
+				require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+			}
+			return vec
+		}},
+	}
+
+	for _, builder := range builders {
+		t.Run(builder.name, func(t *testing.T) {
+			values := builder.env(t)
+			defer values.Free(mp)
+			rows := values.Length()
+			mine := make([]int64, rows)
+			repo := make([]int64, rows)
+			for i := range mine {
+				mine[i], repo[i] = int64(i), int64(i)
+			}
+			require.NoError(t,
+				quantileSortSelectors(context.Background(), values, mine))
+			mosort.SortByVectors(repo, []*vector.Vector{values},
+				[]bool{false}, []bool{false})
+			less := quantileValueLessFunc(values)
+			require.NotNil(t, less, "the type must be sortable")
+			for k := 1; k < rows; k++ {
+				require.False(t, less(mine[k], mine[k-1]),
+					"the executor sort must be ascending")
+				require.False(t, less(repo[k], repo[k-1]),
+					"the reference sort must be ascending")
+			}
+			// Both sequences order the same multiset, so corresponding
+			// positions hold the same value up to equal-comparing ties
+			// (NaN payloads, -0.0/+0.0, or duplicate rows).
+			for k := 0; k < rows; k++ {
+				require.True(t, !less(mine[k], repo[k]) && !less(repo[k], mine[k]),
+					"row %d disagrees with the repository sort", k)
+			}
+		})
+	}
+}
+
+// peakScratchController observes every physical capacity acquisition the
+// aggregate makes through its allocation account. Once armed it measures
+// the temporary footprint finalization adds above the armed baseline (the
+// retained state was already accounted before arming), recording the
+// peak; with enforce enabled it denies any acquisition that would exceed
+// the armed budget, turning the measured budget into an admission witness
+// for large groups.
+type peakScratchController struct {
+	armed   bool
+	budget  uint64
+	enforce bool
+	denied  bool
+	window  uint64
+	peak    uint64
+}
+
+func (c *peakScratchController) arm(budget uint64, enforce bool) {
+	c.armed = true
+	c.budget = budget
+	c.enforce = enforce
+	c.denied = false
+	c.window = 0
+	c.peak = 0
+}
+
+func (c *peakScratchController) disarm() { c.armed = false }
+
+func (c *peakScratchController) AcquireAllocationCapacity(size uint64) error {
+	if !c.armed {
+		return nil
+	}
+	if c.enforce && c.window+size > c.budget {
+		c.denied = true
+		return mpool.ErrAllocationAccountCapacity
+	}
+	c.window += size
+	if c.peak < c.window {
+		c.peak = c.window
+	}
+	return nil
+}
+
+func (c *peakScratchController) ReleaseAllocationCapacity(size uint64) {
+	if !c.armed {
+		return
+	}
+	if c.window < size {
+		c.window = 0
+		return
+	}
+	c.window -= size
+}
+
+// TestQuantileExactWeightedFinalizeScratchHonorsDesignBudget proves decision
+// D12's resource model on large real groups with the review's witness
+// arithmetic: per-group finalization holds at most the restored value rows
+// plus the 8-byte-per-row sort selectors and converted collapse weights —
+// (valueWidth + 16) × N bytes plus the result-vector and bitmap tail — and
+// never a second pair-payload copy (which would add weightWidth × N). A
+// measured run bounds the peak and proves the three buffers really are
+// simultaneous; an admission run then finalizes the same large group under
+// an account that denies any byte beyond that budget, and the finalization
+// still succeeds. Window partitions finalize through the same executor
+// path, so the same budget governs them.
+func TestQuantileExactWeightedFinalizeScratchHonorsDesignBudget(t *testing.T) {
+	decimalValues := types.New(types.T_decimal128, 37, 0)
+	decimalWeights := types.New(types.T_decimal128, 38, 0)
+	for _, tc := range []struct {
+		name       string
+		valueType  types.Type
+		weightType types.Type
+	}{
+		{"int64 values, uint64 weights",
+			types.T_int64.ToType(), types.T_uint64.ToType()},
+		{"int64 values, decimal128 weights",
+			types.T_int64.ToType(), decimalWeights},
+		{"decimal128 values, decimal128 weights",
+			decimalValues, decimalWeights},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const rows = 8192
+			// Structural tail: the restored rows' null bitmap, the per-chunk
+			// result vector and allocation headers.
+			budget := uint64((tc.valueType.TypeSize()+16)*rows) + 8<<10
+
+			run := func(enforce bool) (*peakScratchController, error) {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				controller := &peakScratchController{}
+				registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+				require.NoError(t, err)
+				account, err := registry.OpenWithController(128<<20, controller)
+				require.NoError(t, err)
+				allocation, err := NewAllocationAccount(account,
+					mpool.AllocationOwnerGroup, AllocationAccountSites{
+						VectorData: 1, VectorArea: 2, VectorNulls: 3,
+						VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6})
+				require.NoError(t, err)
+				exec, err := MakeGroupAgg(mp, AggIdOfQuantileExactWeighted, false,
+					allocation, EncodeQuantileExactWeightedConfig([]byte("0.5")),
+					tc.valueType, tc.weightType)
+				require.NoError(t, err)
+				SyncAggregatorsToChunkSize([]AggFuncExec{exec}, AggBatchSize)
+				require.NoError(t, exec.GroupGrow(1))
+
+				// values 1..rows in descending input order, weight 1 each.
+				valueVec := vector.NewVec(tc.valueType)
+				weightVec := vector.NewVec(tc.weightType)
+				switch tc.valueType.Oid {
+				case types.T_int64:
+					vals := make([]int64, rows)
+					for i := range vals {
+						vals[i] = int64(rows - i)
+					}
+					require.NoError(t, vector.AppendFixedList(
+						valueVec, vals, nil, mp))
+				case types.T_decimal128:
+					vals := make([]types.Decimal128, rows)
+					for i := range vals {
+						vals[i] = types.Decimal128FromInt64(int64(rows - i))
+					}
+					require.NoError(t, vector.AppendFixedList(
+						valueVec, vals, nil, mp))
+				}
+				switch tc.weightType.Oid {
+				case types.T_uint64:
+					weights := make([]uint64, rows)
+					for i := range weights {
+						weights[i] = 1
+					}
+					require.NoError(t, vector.AppendFixedList(
+						weightVec, weights, nil, mp))
+				case types.T_decimal128:
+					weights := make([]types.Decimal128, rows)
+					for i := range weights {
+						weights[i] = types.Decimal128FromInt64(1)
+					}
+					require.NoError(t, vector.AppendFixedList(
+						weightVec, weights, nil, mp))
+				}
+				require.NoError(t, exec.BulkFill(
+					0, []*vector.Vector{valueVec, weightVec}))
+				valueVec.Free(mp)
+				weightVec.Free(mp)
+
+				controller.arm(budget, enforce)
+				results, flushErr := exec.Flush()
+				controller.disarm()
+				if flushErr == nil {
+					// W=rows with weight 1 each and k=rows/2 select the
+					// 4096th smallest of the values 1..rows.
+					switch tc.valueType.Oid {
+					case types.T_int64:
+						require.Equal(t, int64(rows>>1),
+							vector.GetFixedAtNoTypeCheck[int64](results[0], 0))
+					case types.T_decimal128:
+						selected := vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 0)
+						require.Equal(t, uint64(rows>>1), selected.B0_63)
+						require.Zero(t, selected.B64_127)
+					}
+				}
+				for _, result := range results {
+					result.Free(mp)
+				}
+				exec.Free()
+				require.NoError(t, exec.ClearAllocationAccount(allocation))
+				require.Zero(t, account.Snapshot().Used)
+				account.Seal()
+				_, err = registry.Finalize(account)
+				require.NoError(t, err)
+				require.Zero(t, mp.CurrNB())
+				return controller, flushErr
+			}
+
+			measured, err := run(false)
+			require.NoError(t, err)
+			require.False(t, measured.denied)
+			require.GreaterOrEqual(t, measured.peak,
+				uint64((tc.valueType.TypeSize()+16)*rows))
+			require.LessOrEqual(t, measured.peak, budget,
+				"finalization must not hold a second pair-payload copy")
+
+			admitted, err := run(true)
+			require.NoError(t, err,
+				"the design budget must admit a large group's finalization")
+			require.False(t, admitted.denied,
+				"the enforced budget witnessed a request beyond the design model")
+		})
+	}
 }

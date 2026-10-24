@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	mosort "github.com/matrixorigin/matrixone/pkg/sort"
 )
 
 // quantileExactWeightedExec is the exact weighted percentile aggregate
@@ -35,10 +34,14 @@ import (
 // arena, so the framework's DISTINCT, merge, interim-wire and spill protocols
 // round-trip the payload without aggregate-specific serialization (design
 // decision D11). The level reaches the executor as configuration. Finalize
-// sorts one group's values, converts every stored weight exactly once, sums
-// with an overflow check, computes k = ceil(level * W) once with math/big and
+// restores one group's typed values while converting every stored weight
+// exactly once in the same arena scan, sums with an overflow check, computes
+// k = ceil(level * W) once with math/big and
 // returns the smallest present value whose cumulative weight reaches k (no
-// interpolation; the result type is the value's own type).
+// interpolation; the result type is the value's own type). The sort and the
+// cumulative scan carry their own bounded cancellation checkpoints (decision
+// D12), so cancelling a large group or window partition's finalization
+// surfaces without running the sort or scan to completion.
 type quantileExactWeightedExec struct {
 	aggExec
 	level      *big.Rat
@@ -330,18 +333,19 @@ func (exec *quantileExactWeightedExec) FlushWithContext(
 
 // appendGroupResult finalizes one non-empty group and appends its selected
 // value (or NULL) to the chunk's result vector. It owns the group's restored
-// typed pair vectors and releases them on every return; the completed result
-// vector belongs to FlushWithContext's caller-owned contract.
+// value rows and the converted-weight collapse scratch (both freed on every
+// return); the completed result vector belongs to FlushWithContext's
+// caller-owned contract.
 func (exec *quantileExactWeightedExec) appendGroupResult(
 	ctx context.Context, result *vector.Vector, state *aggState, row uint16,
 ) error {
-	values, weights, err := exec.restorePair(ctx, state, row)
+	values, rowWeights, total, err := exec.restorePairs(ctx, state, row)
 	if err != nil {
 		return err
 	}
 	defer values.Free(exec.mp)
-	defer weights.Free(exec.mp)
-	resultRow, err := exec.weightedResultRow(ctx, values, weights)
+	defer mpool.FreeSlice(exec.mp, rowWeights)
+	resultRow, err := exec.weightedResultRow(ctx, values, rowWeights, total)
 	if err != nil {
 		return err
 	}
@@ -351,14 +355,101 @@ func (exec *quantileExactWeightedExec) appendGroupResult(
 	return result.UnionOne(values, resultRow, exec.mp)
 }
 
-// weightedResultRow returns the physical row of the selected value, or -1 when
-// the group retained no pair. It owns the two allocation-accounted scratch
-// slices (sorted selectors, converted weights) and frees both on every return;
-// the passed value and weight vectors stay owned by the caller.
+// restorePairs materializes one group's typed values from the saved-argument
+// arena and converts every retained weight exactly once during the same
+// single scan, accumulating the group's exact total W. The typed weight
+// COLUMN is never materialized a second time (decision D12's resource model):
+// per-group temporary data is the restored value rows plus the 8-byte-per-
+// row sort selectors and converted collapse weights, never a second copy of
+// the pair payload. Cancellation is checked at a bounded row cadence so a
+// cancelled context aborts the scan of a large group without finishing it.
+func (exec *quantileExactWeightedExec) restorePairs(
+	ctx context.Context, state *aggState, row uint16,
+) (*vector.Vector, []uint64, uint64, error) {
+	count := int(state.argCnt[row])
+	values, err := exec.newFinalVector(exec.argTypes[0])
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	rowWeights, err := makeAccountedScratch[uint64](
+		exec.allocation, exec.mp, count)
+	if err != nil {
+		values.Free(exec.mp)
+		return nil, nil, 0, err
+	}
+	freeBoth := func() {
+		values.Free(exec.mp)
+		mpool.FreeSlice(exec.mp, rowWeights)
+	}
+	if err = values.PreExtend(count, exec.mp); err != nil {
+		freeBoth()
+		return nil, nil, 0, err
+	}
+	values.SetLength(count)
+	var total uint64
+	index := 0
+	err = state.iterWithValue(row, func(key, value []byte) error {
+		if index&1023 == 0 {
+			if err := context.Cause(ctx); err != nil {
+				return err
+			}
+		}
+		payload := aggPayloadFromKeyValue(&exec.aggInfo, key, value)
+		valueBytes, weightBytes, err := parseQuantileExactWeightedPair(
+			payload,
+			exec.argTypes[0].TypeSize(),
+			exec.argTypes[1].TypeSize(),
+		)
+		if err != nil {
+			return err
+		}
+		if index >= count {
+			return moerr.NewInternalErrorNoCtx(
+				"quantileExactWeighted retained argument count mismatch")
+		}
+		if err := values.SetRawBytesAt(index, valueBytes, exec.mp); err != nil {
+			return err
+		}
+		weight, err := quantileExactWeightedWeightBytes(exec.argTypes[1], weightBytes)
+		if err != nil {
+			return err
+		}
+		summed := total + weight
+		if summed < total {
+			return moerr.NewInvalidInputNoCtx(
+				"quantileExactWeighted: total weight exceeds the uint64 range")
+		}
+		total = summed
+		rowWeights[index] = weight
+		index++
+		return nil
+	})
+	if err == nil && index != count {
+		err = moerr.NewInternalErrorNoCtx(
+			"quantileExactWeighted retained argument count mismatch")
+	}
+	if err != nil {
+		freeBoth()
+		return nil, nil, 0, err
+	}
+	return values, rowWeights, total, nil
+}
+
+// weightedResultRow returns the physical row of the selected value, or -1
+// when the group retained no pair. The sort renames the group's rows into
+// ascending value order through quantileSortSelectors, whose heap steps carry
+// the cancellation checkpoints decision D12 requires inside sorting, and the
+// cumulative scan checks cancellation at the same bounded row cadence. It owns
+// the allocation-accounted sort selector scratch and frees it on every
+// return; the restored values and converted weights stay owned by the caller.
 func (exec *quantileExactWeightedExec) weightedResultRow(
-	ctx context.Context, values, weights *vector.Vector,
+	ctx context.Context, values *vector.Vector,
+	rowWeights []uint64, total uint64,
 ) (int64, error) {
-	count := values.Length()
+	count := len(rowWeights)
+	if count == 0 {
+		return -1, nil
+	}
 	selectors, err := makeAccountedScratch[int64](
 		exec.allocation, exec.mp, count)
 	if err != nil {
@@ -368,43 +459,8 @@ func (exec *quantileExactWeightedExec) weightedResultRow(
 	for i := range selectors {
 		selectors[i] = int64(i)
 	}
-	mosort.SortByVectors(
-		selectors,
-		[]*vector.Vector{values},
-		[]bool{false},
-		[]bool{false},
-	)
-	if err := context.Cause(ctx); err != nil {
+	if err := quantileSortSelectors(ctx, values, selectors); err != nil {
 		return 0, err
-	}
-	// Convert every stored weight exactly once, in sorted order, while the
-	// exact total W and the selection threshold k = ceil(level * W) are
-	// accumulated (both scratch slices are freed on every return below).
-	rowWeights, err := makeAccountedScratch[uint64](
-		exec.allocation, exec.mp, count)
-	if err != nil {
-		return 0, err
-	}
-	defer mpool.FreeSlice(exec.mp, rowWeights)
-	var total uint64
-	for i := 0; i < count; i++ {
-		if i&1023 == 0 {
-			if err := context.Cause(ctx); err != nil {
-				return 0, err
-			}
-		}
-		weight, err := quantileExactWeightedWeightBytes(
-			exec.argTypes[1], weights.GetRawBytesAt(int(selectors[i])))
-		if err != nil {
-			return 0, err
-		}
-		rowWeights[i] = weight
-		summed := total + weight
-		if summed < total {
-			return 0, moerr.NewInvalidInputNoCtx(
-				"quantileExactWeighted: total weight exceeds the uint64 range")
-		}
-		total = summed
 	}
 	threshold, err := exec.weightedThreshold(total)
 	if err != nil {
@@ -412,12 +468,141 @@ func (exec *quantileExactWeightedExec) weightedResultRow(
 	}
 	var cumulative uint64
 	for i := 0; i < count; i++ {
-		cumulative += rowWeights[i]
+		if i&1023 == 0 {
+			if err := context.Cause(ctx); err != nil {
+				return 0, err
+			}
+		}
+		cumulative += rowWeights[selectors[i]]
 		if cumulative >= threshold {
 			return selectors[i], nil
 		}
 	}
 	return selectors[0], nil
+}
+
+// quantileValueLessFunc returns the ascending SQL-order comparison between
+// two rows of the group's restored value vector: the same total order
+// SortByVectors applies to these value types (integers by width, floats
+// through the deterministic NaN/-0 total order, decimals through their own
+// Lt), so a finalized group's order equals a plain SortByVectors result.
+func quantileValueLessFunc(
+	values *vector.Vector,
+) func(i, j int64) bool {
+	switch values.GetType().Oid {
+	case types.T_bit:
+		col := vector.MustFixedColNoTypeCheck[uint64](values)
+		return func(i, j int64) bool { return col[i] < col[j] }
+	case types.T_int8:
+		col := vector.MustFixedColNoTypeCheck[int8](values)
+		return func(i, j int64) bool { return col[i] < col[j] }
+	case types.T_int16:
+		col := vector.MustFixedColNoTypeCheck[int16](values)
+		return func(i, j int64) bool { return col[i] < col[j] }
+	case types.T_int32:
+		col := vector.MustFixedColNoTypeCheck[int32](values)
+		return func(i, j int64) bool { return col[i] < col[j] }
+	case types.T_int64:
+		col := vector.MustFixedColNoTypeCheck[int64](values)
+		return func(i, j int64) bool { return col[i] < col[j] }
+	case types.T_uint8:
+		col := vector.MustFixedColNoTypeCheck[uint8](values)
+		return func(i, j int64) bool { return col[i] < col[j] }
+	case types.T_uint16:
+		col := vector.MustFixedColNoTypeCheck[uint16](values)
+		return func(i, j int64) bool { return col[i] < col[j] }
+	case types.T_uint32:
+		col := vector.MustFixedColNoTypeCheck[uint32](values)
+		return func(i, j int64) bool { return col[i] < col[j] }
+	case types.T_uint64:
+		col := vector.MustFixedColNoTypeCheck[uint64](values)
+		return func(i, j int64) bool { return col[i] < col[j] }
+	case types.T_float32:
+		col := vector.MustFixedColNoTypeCheck[float32](values)
+		return func(i, j int64) bool {
+			return types.Float32OrderAscCompare(col[i], col[j]) < 0
+		}
+	case types.T_float64:
+		col := vector.MustFixedColNoTypeCheck[float64](values)
+		return func(i, j int64) bool {
+			return types.Float64OrderAscCompare(col[i], col[j]) < 0
+		}
+	case types.T_decimal64:
+		col := vector.MustFixedColNoTypeCheck[types.Decimal64](values)
+		return func(i, j int64) bool { return col[i].Lt(col[j]) }
+	case types.T_decimal128:
+		col := vector.MustFixedColNoTypeCheck[types.Decimal128](values)
+		return func(i, j int64) bool { return col[i].Lt(col[j]) }
+	}
+	return nil
+}
+
+// quantileSortCheckSteps bounds the work performed between cancellation
+// checks inside the sort, mirroring the per-1024-row cadence of the restore
+// and cumulative scans.
+const quantileSortCheckSteps = 1024
+
+// quantileSortSelectors orders selectors ascending by the typed values they
+// index, following pkg/sort's own heapsort shape (max-heap build, then root
+// extraction). Every quantileSortCheckSteps elementary swaps it re-checks
+// the context, so finalizing a large group or window partition surfaces an
+// already-cancelled context at a bounded work cadence without running the
+// sort to completion (decision D12's in-sort cancellation points), while the
+// ordering stays identical to SortByVectors over the same single vector.
+func quantileSortSelectors(
+	ctx context.Context, values *vector.Vector, selectors []int64,
+) error {
+	count := len(selectors)
+	if count < 2 {
+		return nil
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	less := quantileValueLessFunc(values)
+	if less == nil {
+		return moerr.NewInternalErrorNoCtxf(
+			"quantileExactWeighted cannot sort %s values", values.GetType().Oid)
+	}
+	var swapSteps int
+	siftDown := func(root, end int) error {
+		for {
+			child := 2*root + 1
+			if child >= end {
+				return nil
+			}
+			// Advance to the greater child, exactly as pkg/sort's own
+			// heapsort does, so the root carries the greatest value.
+			if child+1 < end && less(selectors[child], selectors[child+1]) {
+				child++
+			}
+			if !less(selectors[root], selectors[child]) {
+				return nil
+			}
+			selectors[root], selectors[child] = selectors[child], selectors[root]
+			root = child
+			swapSteps++
+			if swapSteps%quantileSortCheckSteps == 0 {
+				if err := context.Cause(ctx); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	// Build the max-heap (greatest value at the root), then extract the root
+	// into the tail so the selectors converge to ascending value order.
+	for i := (count - 1) / 2; i >= 0; i-- {
+		if err := siftDown(i, count); err != nil {
+			return err
+		}
+	}
+	for i := count - 1; i > 0; i-- {
+		selectors[0], selectors[i] = selectors[i], selectors[0]
+		if err := siftDown(0, i); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // weightedThreshold computes k = ceil(level * W) exactly once per group with
@@ -449,77 +634,6 @@ func (exec *quantileExactWeightedExec) newFinalVector(
 		return exec.allocation.newVector(typ)
 	}
 	return vector.NewOffHeapVecWithType(typ), nil
-}
-
-// restorePair materializes one group's typed (value, weight) rows as vectors
-// from the saved-argument arena. DISTINCT rows read the retained raw
-// representative exactly like every other value-producing saved-argument
-// aggregate, so Float and DECIMAL members survive canonicalization.
-func (exec *quantileExactWeightedExec) restorePair(
-	ctx context.Context, state *aggState, row uint16,
-) (*vector.Vector, *vector.Vector, error) {
-	values, err := exec.newFinalVector(exec.argTypes[0])
-	if err != nil {
-		return nil, nil, err
-	}
-	weights, err := exec.newFinalVector(exec.argTypes[1])
-	if err != nil {
-		values.Free(exec.mp)
-		return nil, nil, err
-	}
-	freeBoth := func() {
-		values.Free(exec.mp)
-		weights.Free(exec.mp)
-	}
-	count := int(state.argCnt[row])
-	if err = values.PreExtend(count, exec.mp); err != nil {
-		freeBoth()
-		return nil, nil, err
-	}
-	if err = weights.PreExtend(count, exec.mp); err != nil {
-		freeBoth()
-		return nil, nil, err
-	}
-	values.SetLength(count)
-	weights.SetLength(count)
-	index := 0
-	err = state.iterWithValue(row, func(key, value []byte) error {
-		if index&1023 == 0 {
-			if err := context.Cause(ctx); err != nil {
-				return err
-			}
-		}
-		payload := aggPayloadFromKeyValue(&exec.aggInfo, key, value)
-		valueBytes, weightBytes, err := parseQuantileExactWeightedPair(
-			payload,
-			exec.argTypes[0].TypeSize(),
-			exec.argTypes[1].TypeSize(),
-		)
-		if err != nil {
-			return err
-		}
-		if index >= count {
-			return moerr.NewInternalErrorNoCtx(
-				"quantileExactWeighted retained argument count mismatch")
-		}
-		if err := values.SetRawBytesAt(index, valueBytes, exec.mp); err != nil {
-			return err
-		}
-		if err := weights.SetRawBytesAt(index, weightBytes, exec.mp); err != nil {
-			return err
-		}
-		index++
-		return nil
-	})
-	if err == nil && index != count {
-		err = moerr.NewInternalErrorNoCtx(
-			"quantileExactWeighted retained argument count mismatch")
-	}
-	if err != nil {
-		freeBoth()
-		return nil, nil, err
-	}
-	return values, weights, nil
 }
 
 // parseQuantileExactWeightedPair splits one retained multi-argument member,

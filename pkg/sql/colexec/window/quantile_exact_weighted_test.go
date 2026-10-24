@@ -271,3 +271,57 @@ func TestWindowQuantileExactWeightedDistinctWindowAggregates(t *testing.T) {
 		runWindow(false, "0.5", makeFiniteCumulativeFrame(2)),
 		"the plain sliding-frame aggregate must keep every duplicate pair")
 }
+
+// TestWindowQuantileExactWeightedLargePartitionHonorsCancellation proves the
+// cancellation surface through the window's full-partition path with real
+// multi-row work: with the context cancelled before the partition's 40000
+// rows are finalized, the operator returns the standard cancellation error
+// through vm.Exec instead of completing the partition and broadcasting its
+// result. The finalization's own mid-work cancellation points (restore,
+// sort and cumulative scan) are pinned deterministically by the
+// executor-level regression in pkg/sql/colexec/aggexec.
+func TestWindowQuantileExactWeightedLargePartitionHonorsCancellation(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	const rows = 40000
+	values := make([]int32, rows)
+	weights := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(rows - i) // descending input forces real sort work
+		weights[i] = 1
+	}
+	bat := makeWeightedPartition(t, proc.Mp(), values, weights, 3)
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	spec := makeAggWindowSpec("quantileExactWeighted")
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newQuantileExactWeightedWindowAggExpr(t, false, "0.5"),
+		},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	// The operator consumes proc.Ctx at finalization time
+	// (aggexec.FlushWithContext), so a context cancelled after preparation
+	// aborts the partition execution before any result row is broadcast.
+	proc.Ctx = cancelCtx
+	_, err := vm.Exec(arg, proc)
+	require.Error(t, err,
+		"a cancelled context must abort the partition finalize")
+	require.ErrorIs(t, err, context.Canceled)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+}
