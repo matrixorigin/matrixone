@@ -733,6 +733,31 @@ func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
 	return result, true
 }
 
+// Fixed-width binary branches must share one padded representation before a
+// set operation compares or materializes their rows. A nonpositive width
+// denotes an unspecified bound, so it must remain unbounded rather than
+// inheriting a fixed width from another branch.
+func setOperationPureBinaryCommonType(source []types.Type) (types.Type, bool) {
+	if len(source) == 0 || source[0].Oid != types.T_binary {
+		return types.Type{}, false
+	}
+	result := source[0]
+	for _, typ := range source[1:] {
+		if typ.Oid != types.T_binary {
+			return types.Type{}, false
+		}
+	}
+	for _, typ := range source {
+		if typ.Width <= 0 {
+			return types.New(types.T_blob, types.MaxLongTextLen, 0), true
+		}
+		if typ.Width > result.Width {
+			result.Width = typ.Width
+		}
+	}
+	return result, true
+}
+
 // A winning text collation needs a text result type even when the safe common
 // byte bound was first chosen in the binary domain. In particular, BLOB's
 // result decoding does not preserve UTF-8 text for prepared parameters.
@@ -4297,6 +4322,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 	}
+	builder.finalizeCTEIdentity()
 	if builder.qry.Correlation != nil {
 		return builder.createDependentQuery()
 	}
@@ -4767,9 +4793,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		if len(tmpArgsType) > 0 {
 			var targetType plan.Type
 			var targetArgType types.Type
+			pureBinaryType, pureFixedBinary := setOperationPureBinaryCommonType(tmpArgsType)
 			mixedTextBinaryType, mixedTextBinary := function.MixedTextBinaryCommonType(tmpArgsType)
 			if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
 				targetArgType = pureCharType
+			} else if pureFixedBinary {
+				targetArgType = pureBinaryType
 			} else if mixedTextBinary {
 				targetArgType = mixedTextBinaryType
 			} else {
@@ -4807,6 +4836,20 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					}
 				} else {
 					targetArgType = argsCastType[0]
+				}
+			}
+			// A temporal branch converted to text can occupy more characters
+			// than a leading string literal. Widen the common type before the
+			// branch casts so the time component is not discarded.
+			if targetArgType.Oid == types.T_char || targetArgType.Oid == types.T_varchar {
+				for _, typ := range tmpArgsType {
+					switch typ.Oid {
+					case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+						if width, known := function.StringResultByteBound(typ); known &&
+							width > uint64(targetArgType.Width) && width <= uint64(types.MaxVarcharLen) {
+							targetArgType.Width = int32(width)
+						}
+					}
 				}
 			}
 			allCharInputs := len(tmpArgsType) > 0
@@ -4863,7 +4906,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						targetArgType.Width = typ.Width
 					}
 				}
-			} else if !mixedTextBinary &&
+			} else if !pureFixedBinary && !mixedTextBinary &&
 				(targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary) {
 				targetArgType = types.T_blob.ToType()
 			}
@@ -5737,9 +5780,16 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	left *tree.SelectStatement,
 	stmts []tree.SelectStatement,
 	distinct bool,
-) (nodeID int32, err error) {
+) (nodeID int32, outputCtx *BindContext, err error) {
+	// Recursive binding wires and coerces existing feedback nodes.
+	builder.stableCTERoots = nil
+	builder.cteRecursiveBindingDepth++
+	defer func() {
+		builder.cteRecursiveBindingDepth--
+		builder.stableCTERoots = nil
+	}()
 	if len(s.OrderBy) > 0 {
-		return 0, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
+		return 0, nil, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
 	}
 	if builder.isForUpdate {
 		// The outer SELECT is FOR UPDATE but the recursive CTE body emits a
@@ -5747,7 +5797,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		// SourceStep, so the outer LOCK_OP would never reach the underlying
 		// base tables -- the query would silently take no lock. Reject this
 		// up front instead of letting the user think rows are locked.
-		return 0, moerr.NewNotSupported(builder.GetContext(), "SELECT ... FOR UPDATE on a recursive CTE")
+		return 0, nil, moerr.NewNotSupported(builder.GetContext(), "SELECT ... FOR UPDATE on a recursive CTE")
 	}
 	//1. bind initial statement
 	targets := ctx.numericTableProjectionTypes[numericProjectionTableKey(ctx, table)]
@@ -5787,8 +5837,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		}
 	}
 	// recursive statement
-	recursiveLastNodeID := initLastNodeID
-	initSourceStep := int32(len(builder.qry.Steps))
+	initSourceStep := builder.appendStep(initLastNodeID)
 	recursiveSteps := make([]int32, len(stmts))
 	recursiveNodeIDs := make([]int32, len(stmts))
 
@@ -5806,10 +5855,8 @@ func (builder *QueryBuilder) bindRecursiveCte(
 			return
 		}
 		//3.1 add recursive cte Node
-		_ = builder.appendStep(recursiveLastNodeID)
 		recScanId := appendRecursiveScanNode(builder, subCtx, initSourceStep, subCtx.sinkTag)
 		recursiveNodeIDs[i] = recScanId
-		recursiveSteps[i] = int32(len(builder.qry.Steps))
 
 		subCtx.recordCteInBinding(table,
 			CteBindState{
@@ -5817,6 +5864,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 				cte:           cteRef,
 				recScanNodeId: recScanId})
 
+		var recursiveLastNodeID int32
 		recursiveLastNodeID, err = builder.bindSelect(&tree.Select{Select: r}, subCtx, false)
 		if err != nil {
 			return
@@ -5849,7 +5897,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		// Coerce every recursive member to the initial projection types.
 		n := builder.qry.Nodes[builder.qry.Nodes[recursiveLastNodeID].Children[0]]
 		if len(projects) != len(n.ProjectList) {
-			return 0, moerr.NewParseErrorf(builder.GetContext(), "recursive cte %s projection error", table)
+			return 0, nil, moerr.NewParseErrorf(builder.GetContext(), "recursive cte %s projection error", table)
 		}
 		for i := range n.ProjectList {
 			projTyp := projects[i].GetTyp()
@@ -5876,12 +5924,15 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		cols := cteRef.ast.Name.Cols
 
 		if len(cols) > len(subCtx.headings) {
-			return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols))
+			return 0, nil, moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols))
 		}
 
 		for i, col := range cols {
 			subCtx.setHeading(i, string(col), headingProvenance{})
 		}
+		// Binding a member can publish other CTEs. Record this sink
+		// only when it is appended, after those producers.
+		recursiveSteps[i] = builder.appendStep(recursiveLastNodeID)
 	}
 	// Record every column explicitly, including incompatible columns as nil.
 	// The nil entry is a suppression sentinel: without it, the final binding
@@ -5897,11 +5948,10 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	// union all statement
 	offsetExpr, limitExpr, _, err := builder.bindLimit(initCtx, s.Limit, nil)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 
 	//4. add CTE Scan Node
-	_ = builder.appendStep(recursiveLastNodeID)
 	recursiveNotNullable := builder.deriveRecursiveCTENullability(
 		projects,
 		initLastNodeID,
@@ -5909,11 +5959,15 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		recursiveNodeIDs,
 	)
 	nodeID = appendCTEScanNode(builder, ctx, initSourceStep, initCtx.sinkTag)
+	if builder.recursiveCTEOwners == nil {
+		builder.recursiveCTEOwners = make(map[int32]*CTERef)
+	}
+	builder.recursiveCTEOwners[nodeID] = cteRef
 	builder.qry.Nodes[nodeID].RecursiveUnionDistinct = distinct
 	setMaterializedProjectionNullability(builder.qry.Nodes[nodeID], recursiveNotNullable)
 	builder.qry.Nodes[nodeID].Limit, err = recursiveCTEPrefixLimit(builder.GetContext(), limitExpr, offsetExpr)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	//4.1 make recursive parts as the source step of the CTE Scan Node besides initSourceStep of initial statement
 	for i := 0; i < len(recursiveSteps); i++ {
@@ -5944,6 +5998,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	// Skipped result rows must still reach the recursive member through the
 	// shared sink. Apply OFFSET only on this non-feedback consumer.
 	builder.qry.Nodes[nodeID].Offset = offsetExpr
+	outputCtx = initCtx
 	return
 }
 
@@ -5982,6 +6037,14 @@ func (builder *QueryBuilder) bindCte(
 	cteRef *CTERef,
 	table string,
 ) (nodeID int32, err error) {
+	publications := builder.boundCTEs[cteRef]
+	bound := publications[nil]
+	if bound == nil {
+		bound = publications[ctx.queryBlockOwner]
+	}
+	if bound != nil {
+		return builder.bindCTEReader(ctx, cteRef, bound)
+	}
 	viewCount := len(cteRef.declarationCtx.views)
 	var s *tree.Select
 	switch stmt := cteRef.ast.Stmt.(type) {
@@ -5994,6 +6057,7 @@ func (builder *QueryBuilder) bindCte(
 		return
 	}
 
+	var outputCtx *BindContext
 	var left *tree.SelectStatement
 	var stmts []tree.SelectStatement
 	var distinct bool
@@ -6004,17 +6068,42 @@ func (builder *QueryBuilder) bindCte(
 	isR := len(stmts) > 0
 
 	if isR && !cteRef.isRecursive {
-		err = moerr.NewParseErrorf(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
+		return 0, moerr.NewParseErrorf(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
 	} else if !isR {
 		nodeID, err = builder.bindNoRecursiveCte(ctx, s, cteRef, table)
 		if err != nil {
 			return 0, err
 		}
+		outputCtx = builder.ctxByNode[nodeID]
 	} else {
-		nodeID, err = builder.bindRecursiveCte(ctx, s, cteRef, table, left, stmts, distinct)
+		// Keep the recursive body's internal binding out of the consumer context.
+		recursiveCtx := NewBindContext(builder, ctx)
+		recursiveCtx.numericTableProjectionTypes = ctx.numericTableProjectionTypes
+		recursiveCtx.numericTableProjectionAmbiguous = ctx.numericTableProjectionAmbiguous
+		nodeID, outputCtx, err = builder.bindRecursiveCte(recursiveCtx, s, cteRef, table, left, stmts, distinct)
 		if err != nil {
 			return 0, err
 		}
+	}
+	evaluation := builder.classifyCTEEvaluation(nodeID, make(map[int32]bool))
+	if isR || evaluation.needsPublication {
+		if !isR {
+			nodeID, err = builder.appendMySQLSpecialTypeBoundary(nodeID, outputCtx, outputCtx.outputColumnProvenanceForBoundary())
+			if err != nil {
+				return 0, err
+			}
+		}
+		bound := builder.publishBoundCTE(ctx, cteRef, nodeID, outputCtx, isR, evaluation)
+		bound.views = append([]string(nil), cteRef.declarationCtx.views[viewCount:]...)
+		return builder.bindCTEReader(ctx, cteRef, bound)
+	}
+	// Only completed ordinary CTE roots are memoized; recursive and dependent
+	// graphs may still acquire new feedback or substituted expressions.
+	if !evaluation.mutableDependency && builder.cteRecursiveBindingDepth == 0 && !outputCtx.isCorrelated && builder.qry.Correlation == nil {
+		if builder.stableCTERoots == nil {
+			builder.stableCTERoots = make(map[int32]bool)
+		}
+		builder.stableCTERoots[nodeID] = true
 	}
 	if builder.localCTERoots == nil {
 		builder.localCTERoots = make(map[int32]bool)
@@ -6062,6 +6151,9 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	if isRoot {
+		defer func() { builder.stableCTERoots = nil }()
+	}
 	leaveBinding, bindErr := enterViewSchemaBinding(builder.GetContext())
 	if bindErr != nil {
 		return 0, bindErr
@@ -14324,6 +14416,40 @@ func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *Bind
 		ApplyType: applyType,
 	}, ctx)
 	return nodeID, nil
+}
+
+// tableFunctionHasStableIntrinsicValues describes the scan itself, excluding
+// argument and child evaluations. Optional CTE reuse has a separate, narrower
+// admission contract. Unknown and externally backed scans remain conservative.
+func tableFunctionHasStableIntrinsicValues(node *plan.Node) bool {
+	if statementStableFunctionScan(node) {
+		return true
+	}
+	if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN || node.TableDef == nil || node.TableDef.TblFunc == nil {
+		return false
+	}
+	args := node.TblFuncExprList
+	switch node.TableDef.TblFunc.Name {
+	case "generate_series":
+		return len(args) >= 1 && len(args) <= 3
+	case "unnest":
+		return len(args) >= 1 && len(args) <= 3 && args[0] != nil &&
+			(types.T(args[0].Typ.Id) == types.T_json || types.T(args[0].Typ.Id) == types.T_varchar)
+	case "json_table":
+		if len(args) != 1 || args[0] == nil {
+			return false
+		}
+		// JSON/text is parsed locally. DATALINK opens an external reader;
+		// unresolved domains must not inherit the local-input proof.
+		switch types.T(args[0].Typ.Id) {
+		case types.T_json, types.T_char, types.T_varchar, types.T_text:
+			return true
+		case types.T_any:
+			// The executor handles NULL before dispatching on the source type.
+			return isNullLiteralExpr(args[0])
+		}
+	}
+	return false
 }
 
 func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext, input *tableFunctionInput) (int32, error) {
