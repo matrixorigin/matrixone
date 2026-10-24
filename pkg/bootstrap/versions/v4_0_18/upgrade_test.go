@@ -61,7 +61,7 @@ func TestPythonRevisionRepairRejectsOldProtocolBeforeCatalogAccess(t *testing.T)
 				return repairStringResult(t, response), nil
 			}, nil)
 			err := Handler.HandleTenantUpgrade(context.Background(), 7, txn)
-			require.ErrorContains(t, err, "upgrade requires all CNs to support protocol version 127")
+			require.ErrorContains(t, err, "upgrade requires all CNs to support protocol version 130")
 			require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, statements)
 		})
 	}
