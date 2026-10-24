@@ -137,6 +137,7 @@ func (c *viewSchemaCompiler) SetContext(ctx context.Context) {
 // resolution. The bool-only legacy probe can both lose storage errors and
 // switch back to the subscriber before binding a qualified nested View.
 func (c *viewSchemaCompiler) CheckViewDatabase(name string, snapshot *Snapshot) (bool, error) {
+	c.state.request.benchmark.resolveDatabase()
 	_, err := c.CompilerContext.GetDatabaseId(name, snapshot)
 	if moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
 		return false, nil
@@ -151,6 +152,7 @@ func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot) 
 	if c.state.planning && c.state.depth == 0 {
 		return c.resolveRoot(database, name, snapshot)
 	}
+	c.state.request.benchmark.resolve()
 	obj, def, err := c.CompilerContext.Resolve(database, name, snapshot)
 	if err != nil {
 		return nil, nil, err
@@ -161,6 +163,7 @@ func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot) 
 // resolveRoot distinguishes the subscriber entry-point name from names inside
 // persisted publisher SQL. Both paths retain the same admission and capture.
 func (c *viewSchemaCompiler) resolveRoot(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	c.state.request.benchmark.resolve()
 	root, ok := c.CompilerContext.(interface {
 		ResolveViewSchemaRoot(string, string, *Snapshot) (*ObjectRef, *TableDef, error)
 	})
@@ -184,6 +187,7 @@ func (c *viewSchemaCompiler) ResolveById(id uint64, snapshot *Snapshot) (*Object
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
 	}
+	c.state.request.benchmark.resolve()
 	obj, def, err := c.CompilerContext.ResolveById(id, snapshot)
 	if err != nil {
 		return nil, nil, err
@@ -377,6 +381,7 @@ func (s *viewSchemaDerivation) describe(database, name string, snapshot *Snapsho
 	}
 	s.lower = parsed.ctx.lowerCaseTableNames
 	s.memoEligible = transparentViewProjection(parsed.selectStmt) && obj.PubInfo == nil && s.compiler.GetQueryingSubscription() == nil
+	s.request.benchmark.bind()
 	inferred, err := inferViewColumns(parsed.ctx, parsed.selectStmt, parsed.columnNames, parsed.database, parsed.name, false)
 	if err != nil {
 		return nil, &viewSchemaDefinitionError{err}
@@ -480,6 +485,7 @@ func (c *viewSchemaCompiler) ResolveIndexTableByRef(ref *ObjectRef, name string,
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
 	}
+	c.state.request.benchmark.resolve()
 	obj, def, err := c.CompilerContext.ResolveIndexTableByRef(ref, name, snapshot)
 	if err != nil {
 		return nil, nil, err
@@ -493,6 +499,7 @@ func (c *viewSchemaCompiler) ResolveSubscriptionTableById(id uint64, sub *Subscr
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
 	}
+	c.state.request.benchmark.resolve()
 	obj, def, err := c.CompilerContext.ResolveSubscriptionTableById(id, sub)
 	if err != nil {
 		return nil, nil, err

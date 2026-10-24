@@ -83,11 +83,13 @@ UT_HELPER_TERM_GRACE_TICKS=${UT_HELPER_TERM_GRACE_TICKS:-"60"}
 # Keep an explicit caller cap for engine admission. Default the subsequent
 # heavy/plan wave to three only after the exclusive engine budget is resolved.
 HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-}
-PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
 # Keep plan race processes bounded because each shard owns a race-instrumented
 # test process and its package resources. The default stays serial on the
 # constrained CI runner; stronger runners can opt into two independent shards.
 PLAN_RACE_PARALLEL=${PLAN_RACE_PARALLEL:-"1"}
+# Use one generation per requested process instead of repeated serial startup
+# and inventory filtering. An explicit shard count can still bound generations.
+PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"${PLAN_RACE_PARALLEL}"}
 # Only the audited independent plan subtests opt into this process-local
 # parallelism. Keep the cap at three: plan shards still share the heavy-wave
 # budget and the constrained CI runner has a 16 GiB cgroup limit.
@@ -1736,6 +1738,12 @@ function run_plan_race_shards(){
         checkpoint_ut_event "finish" "plan" "${plan_package}" "2" "phase=discover"
         restore_ut_term_trap "${previous_term_trap}"
         return 2
+    fi
+    if (( PLAN_RACE_SHARDS == 1 )); then
+        # This inventory is the complete package, including fuzz seeds and
+        # examples. No root filter is needed; listing every name can exceed
+        # the OS argument limit on a large package even with one process.
+        shard_patterns[0]='^(Test|Fuzz|Example)'
     fi
     logger "INF" "Run ${test_count} tests in ${plan_package} across ${PLAN_RACE_SHARDS} fresh race-detector processes with process parallelism ${PLAN_RACE_PARALLEL} and test parallelism ${PLAN_TEST_PARALLEL}"
     for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
