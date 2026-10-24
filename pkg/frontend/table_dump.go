@@ -452,12 +452,13 @@ func tableDumpManifestCreateSQL(
 	if def == nil {
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
 	}
-	needsLegacyCollationRebuild := tableDumpHasLegacyTextMetadata(def)
-	needsLegacyBlobRebuild := tableDumpHasLegacyUnboundedBlob(def)
-	if (!sqlplan.LegacyTinyTextCreateSQLNeedsRebuild(def) && !needsLegacyCollationRebuild && !needsLegacyBlobRebuild) ||
-		!canReconstructTableSchema(def) {
+	// Createsql is historical CREATE provenance: ALTER can change the expanded
+	// definition without rewriting it. Use the same current-schema owner as
+	// tableSchemaHash so replaying this manifest cannot resurrect old policies.
+	if !canReconstructTableSchema(def) {
 		return def.Createsql, nil
 	}
+	needsLegacyCollationRebuild := tableDumpHasLegacyTextMetadata(def)
 	clone := sqlplan.CloneTableDefForPlan(def, true)
 	if err := sqlplan.RecoverLegacyTinyText(ctx, clone, resolve); err != nil {
 		return "", moerr.NewInternalErrorNoCtxf("cannot normalize table schema: %v", err)
@@ -476,15 +477,6 @@ func tableDumpManifestCreateSQL(
 		return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
 	}
 	return canonical, nil
-}
-
-func tableDumpHasLegacyUnboundedBlob(def *plan.TableDef) bool {
-	for _, col := range def.Cols {
-		if col != nil && types.T(col.Typ.Id) == types.T_blob && col.Typ.Width == 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func tableDumpHasLegacyTextMetadata(def *plan.TableDef) bool {

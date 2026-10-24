@@ -1,0 +1,101 @@
+{
+  "reviewed_head": "13780b807a0a92fa1580edbeac04656132c95199",
+  "merged_main": "0594cdb955d39afbdd417a1b398534f6d5284d02",
+  "production_baseline": "f91bd4f58286a7c977aa9458f03bee69ab247ac0",
+  "source_sha256": {
+    "pkg/frontend/table_dump.go": "e894d93799159bff0a38a5b53c7be6d597060e4a186578bda2ffcd7622a62b78",
+    "pkg/frontend/table_dump_test.go": "fbf318cc6b8edea67dbc1c3b2c8dc787b92894f9f5f187a1cd3fe54b8ef4844f",
+    "pkg/tests/sqlintegration/ttl_dump_test.go": "11c4d57335264fa9174b9d640e2aedcfb2b921e81a15fb70719631f7fe31c7ea",
+    "pkg/sql/parsers/dialect/mysql/mysql_sql.go": "e8ca0d5d7be8582656de1e46846a050ba323907d1a84242424cad3794e346541",
+    "pkg/sql/parsers/dialect/mysql/mysql_sql.y": "c6f6f4dd7f27d0fb1359dad01dfc142a341c86c399964dd01717fd84a448b6fc",
+    "pkg/sql/compile/ddl.go": "c0fb9827ba87ca6ebaee8d7bd7f6e3e8e94060ace07fe22dd8d06af3df71a374",
+    "pkg/sql/plan/build_ddl.go": "7563c04a93ef7c92a735ec140c9f453ac5a8e75df51cb836eb68fda4540306b9",
+    "pkg/sql/plan/build_alter_table.go": "281c0b83e8ba698822be10f0e37ba4ea68bbfb834ea97c16e06df06de6359a11",
+    "test/manual/ttl/verify.sh": "266f326bb380c52c4108d0f490da9b5244840c3a97b9001a625a346170cca848",
+    "docs/design/20261013-table-ttl.en.md": "f35da00f2bcac696582b484c943d3bac2ae82a937ce1983af9bfc03f6889dfdb",
+    "docs/design/20261013-table-ttl.md": "f84e703bc922338dcbde3d9207b915d6f67155b8184418a64c60c425af4e96aa"
+  },
+  "suites": {
+    "frontend": {
+      "counts": {
+        "pass_entries": 121,
+        "pass_roots": 49
+      },
+      "packages": [
+        {
+          "Package": "github.com/matrixorigin/matrixone/pkg/frontend",
+          "Action": "pass",
+          "Elapsed": 0.436
+        }
+      ],
+      "exit": 0
+    },
+    "consumers": {
+      "counts": {
+        "pass_entries": 21476,
+        "pass_roots": 4368,
+        "skip_entries": 2
+      },
+      "packages": [
+        {
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql",
+          "Action": "pass",
+          "Elapsed": 0.673
+        },
+        {
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/ttl",
+          "Action": "pass",
+          "Elapsed": 0.516
+        },
+        {
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/plan",
+          "Action": "pass",
+          "Elapsed": 23.262
+        }
+      ],
+      "exit": 0
+    },
+    "native": {
+      "counts": {
+        "pass_entries": 78,
+        "pass_roots": 15
+      },
+      "packages": [
+        {
+          "Package": "github.com/matrixorigin/matrixone/pkg/cnservice",
+          "Action": "pass",
+          "Elapsed": 0.081
+        },
+        {
+          "Package": "github.com/matrixorigin/matrixone/pkg/tests/sqlintegration",
+          "Action": "pass",
+          "Elapsed": 78.46
+        }
+      ],
+      "exit": 0
+    }
+  },
+  "negative_control": {
+    "exit": 1,
+    "expected_failed_cases": 6,
+    "raw_sha256": "aec9265fce1583f2a0bf3738cf8fd3eda8dae6bb3595bcdfcff11ba56717a255"
+  },
+  "raw_log_sha256": {
+    "oct23-frontend.jsonl": "0b0f3a2fa4e3de34fbdedec56ee04a91920f1dd761f715bfef00e86b19217be9",
+    "oct23-consumers.jsonl": "e1956b61d39aaf6f3ec2867bfb05b7a6c5a551fc33732124f0eacf432403181b",
+    "oct23-native.jsonl": "3f2c8b1d866f6724b9bbb407e49e7ae2f8b835593b6b5f4e1279220d1b8f936d"
+  },
+  "retained_log_sha256": {
+    "err-check.txt": "91e3f2c30b346ccb75767ee833eb95db7d9dad7509829c2e58a99107a0ba75c5",
+    "before.txt": "26c1b0b552f51346dc44fd0c8fa19611300c5c0996652cc2cc16f9b625591a3f",
+    "lint.txt": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47",
+    "test-events.jsonl": "25324c874fe8557c72760ac506c561f3670625e5099f3e971526e735e3c25fbe",
+    "focused-after.txt": "b1ee1a5ccbbe6e4d2ae546fc504b614066dcb124927ce820cdb186e579298e63"
+  },
+  "focused_after_exit": 0,
+  "parser_generation_exit": 0,
+  "lint_exit": 0,
+  "err_check_exit": 0,
+  "script_syntax_exit": 0,
+  "diff_check_exit": 0
+}

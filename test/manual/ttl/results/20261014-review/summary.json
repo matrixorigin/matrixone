@@ -1,0 +1,198 @@
+{
+  "implementation_commit": "17df01f0a983d578a1f6dce764729cad5deb0793",
+  "review_input_commit": "b65fa0d0b98bbc0b69931e5882a54b75cf547ff4",
+  "base": "a53390c57de48ac280249ff0e88831e502e20fb0",
+  "design_first_checkpoints": [
+    "3f029bdbdc",
+    "92a3bce30f"
+  ],
+  "design_review": "author self-review PASS on exact document blobs; external maintainer re-approval outstanding",
+  "environment": {
+    "go": "go version go1.27.1 linux/amd64",
+    "os": "Linux",
+    "arch": "x86_64",
+    "native_artifact_sha256": "83d14fc0b467779bd4a9c6e6c7dcc440b6a787e1a9702577ed0f71e94e1ec00d"
+  },
+  "source_sha256": {
+    "docs/design/20261013-table-ttl.en.md": "44c4d4d7b6d169b59eace2e167af45ee7fa5b5aa3af636cb9df5b1693199e62a",
+    "docs/design/20261013-table-ttl.md": "1b8cc571d15883b93df6e915995bc6520ee65ef48a69675a5bdcd7f3365735df",
+    "docs/design/20261014-table-ttl-design-review.md": "5a0d913be24d84684859fb9e8e83ca89b7c6503b2c0f99fcde8703152d9429c0",
+    "pkg/sql/ttl/discovery.go": "95c759987ce8fe9f2154c5b0b0a258d6c0f63c2bbb1350d3da61a8e63c9a088b",
+    "pkg/sql/ttl/discovery_cancel_test.go": "bd26d976a7e56fe86778692fc28b395e52e670c6c7c85b849f2716cb1d2827a4",
+    "pkg/sql/ttl/discovery_test.go": "471e545f2a4203b1a378697408d3844b9facc46648279228228242ac2b978719",
+    "pkg/sql/ttl/policy.go": "ee2c29f8c294e5365906f9c847e87f7efa492d6f8375f2de4e85d5cefb0a513a",
+    "pkg/sql/ttl/worker.go": "0de3c1ca7783cde8c62046bdbee90f931989596cdc16963be662bf29ef1744f5",
+    "pkg/tests/sqlintegration/ttl_test.go": "4dbccd8a2f0988b7a20b9d7a526bcb0a90f1f1d0c6aa92cab231dc5402ee9426",
+    "test/manual/ttl/verify.sh": "86a5e5aa06a0410609a43f1300cf3d61bf1c423575a68f74498fa681d2523de7"
+  },
+  "results": {
+    "review-unit-final": {
+      "terminal": "pass",
+      "test_entries": 78,
+      "top_level_tests": 25,
+      "packages": [
+        {
+          "Time": "2026-10-14T11:37:21.126638702Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/ttl",
+          "Elapsed": 0.558
+        }
+      ],
+      "raw_log_sha256": "85c19cf1e4844c58af7e37b6019dcc6fd8a387183a61d2fffeeeca4b2ddbddb9"
+    },
+    "review-race-final": {
+      "terminal": "pass",
+      "test_entries": 78,
+      "top_level_tests": 25,
+      "packages": [
+        {
+          "Time": "2026-10-14T11:37:15.670523801Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/ttl",
+          "Elapsed": 1.853
+        }
+      ],
+      "raw_log_sha256": "871d51b2e700e807de48c6acfd97c856f34fd0a3da0388973c9693dc94e6dae4"
+    },
+    "review-consumers": {
+      "terminal": "pass",
+      "test_entries": 16732,
+      "top_level_tests": 3920,
+      "packages": [
+        {
+          "Time": "2026-10-14T11:13:37.097590673Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql",
+          "Elapsed": 0.306
+        },
+        {
+          "Time": "2026-10-14T11:14:14.03503079Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/plan",
+          "Elapsed": 23.791
+        }
+      ],
+      "raw_log_sha256": "ab0cc097e0137ede80675cb88513c162279f32710d14c35ee0d1832c0b1de00b"
+    },
+    "review-integration-final": {
+      "terminal": "pass",
+      "test_entries": 34,
+      "top_level_tests": 9,
+      "packages": [
+        {
+          "Time": "2026-10-14T11:32:01.735310963Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/tests/sqlintegration",
+          "Elapsed": 30.104
+        }
+      ],
+      "raw_log_sha256": "7bff0b38a3205601912c22bac6ea6d5cf3697613ad90f5f2241cb50c2508fc92"
+    },
+    "review-registration": {
+      "terminal": "pass",
+      "test_entries": 3,
+      "top_level_tests": 3,
+      "packages": [
+        {
+          "Time": "2026-10-14T11:21:34.722558108Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/cnservice",
+          "Elapsed": 0.16
+        }
+      ],
+      "raw_log_sha256": "0902e8d4fdc9b0e299245cb5f600421f5774c5a951646e5c046b610d67ba002c"
+    }
+  },
+  "scope_limits": [
+    "single real CN/TN/LogService fixture; no multi-CN fault, throughput or whole-process RSS claim",
+    "bounded TTL output/candidate/diagnostic ownership; native engine resources remain under existing controls",
+    "task cursor is in memory and resets at executor replacement/restart"
+  ],
+  "race_stress": [
+    {
+      "name": "TestTTLDiscoveryCanceledHandoff",
+      "race_elapsed_seconds": 0,
+      "repetitions": 100,
+      "passed_top_level": 100,
+      "raw_log_sha256": "816931c1f0f55b77117646c8271485e4176ec353c494e029fe061a74fce194c6"
+    },
+    {
+      "name": "TestTTLDiscoveryCancelPageHandoff",
+      "race_elapsed_seconds": 0,
+      "repetitions": 100,
+      "passed_top_level": 100,
+      "raw_log_sha256": "32c99aa8e7938c80917708618f3bbd78915b73605279c836d90315c6e8453e56"
+    },
+    {
+      "name": "TestTTLDiscoveryDecodeCancellation",
+      "race_elapsed_seconds": 0,
+      "repetitions": 100,
+      "passed_top_level": 100,
+      "raw_log_sha256": "b923e07f2e19b1035ba838ef50009cf4cda98b75f8c7685f4079450f97b4a662"
+    },
+    {
+      "name": "TestTTLTaskContinuationFenceAndWrap",
+      "race_elapsed_seconds": 0.01,
+      "repetitions": 100,
+      "passed_top_level": 100,
+      "raw_log_sha256": "49674fe2b33c776ef19bdcca109eea06c387532080d7c260f959a9279bfb8912"
+    },
+    {
+      "name": "TestTTLRunDoesNotSkipUnattemptedCandidates",
+      "race_elapsed_seconds": 0,
+      "repetitions": 100,
+      "passed_top_level": 100,
+      "raw_log_sha256": "c6bf2f68077482e78671afa86cbd9c680b30427099c156808032bb082b38830d"
+    },
+    {
+      "name": "TestTTLTaskAdmissionCancelAndReuse",
+      "race_elapsed_seconds": 0,
+      "repetitions": 100,
+      "passed_top_level": 100,
+      "raw_log_sha256": "914fd5005b98b045d87fe8dfcffe77f6082a8e5428775342416892116d35aac0"
+    },
+    {
+      "name": "TestTTLTaskNonTTLWindowsAdvance",
+      "race_elapsed_seconds": 0.02,
+      "repetitions": 100,
+      "passed_top_level": 100,
+      "raw_log_sha256": "238163f7c60617acc7819eafa8df71e6a4b2125df2a78215c6c033d07f862d70"
+    },
+    {
+      "name": "TestTTLRevalidationRejectsUncreditedMetadataGrowth",
+      "race_elapsed_seconds": 0,
+      "repetitions": 100,
+      "passed_top_level": 100,
+      "raw_log_sha256": "679be0355dc43a02382b42c8437531213134b77f082732ab742d4d1934dce719"
+    }
+  ],
+  "negative_control": {
+    "commit": "b65fa0d",
+    "test": "TestTTLDiscoveryCanceledHandoff",
+    "result": "expected failure, both 32/64-row cases return nil error on old code",
+    "raw_log_sha256": "4f4e52e70eda77fe63c336e949cae04277438641b3c33e609ed5a1c2e0669b49"
+  },
+  "fuzz": {
+    "seconds": 15,
+    "executions": 59535,
+    "terminal": "pass"
+  },
+  "static": {
+    "lint_version": "2.14.0",
+    "selected_packages": [
+      "pkg/sql/ttl",
+      "pkg/tests/sqlintegration"
+    ],
+    "lint_log": "0 issues.",
+    "vet_packages": [
+      "pkg/sql/ttl",
+      "pkg/sql/plan",
+      "pkg/cnservice",
+      "pkg/tests/sqlintegration"
+    ],
+    "vet": "pass",
+    "repository_err_check": "pass",
+    "diff_check": "pass",
+    "verification_script_syntax": "pass"
+  }
+}

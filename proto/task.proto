@@ -84,6 +84,8 @@ option (gogoproto.protosizer_all) = true;
    SQLTask = 12;
    // Periodically reclaims expired DATA BRANCH ALTER lineage.
    DataBranchLineageGC = 13;
+   // Bounded transactional expiration of table TTL policies.
+   TableTTL = 17;
    // CDC initial snapshot with persisted stable-epoch retry semantics. Keeping
    // a distinct code prevents older CNs from claiming protocol-marked tasks.
    InitCdcStableEpoch = 14;

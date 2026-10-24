@@ -478,6 +478,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <jsonTableResponse> json_table_response json_table_on_empty json_table_on_error
 %type <str> json_table_path_opt
 %nonassoc EMPTY
+%nonassoc LOWER_THAN_TTL
+%nonassoc <str> TTL
 %left <str> UNION EXCEPT INTERSECT MINUS
 %nonassoc LOWER_THAN_ORDER
 %nonassoc ORDER
@@ -1145,6 +1147,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 // Explicit MySQL default for value-window null treatment.
 %token <str> RESPECT
 %left <str> MEMBER
+%type <boolVal> ttl_delete_opt
 %token <str> AUTO_ID_CACHE
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
@@ -4501,7 +4504,16 @@ PartitionNameList:
 	}
 
 alter_option:
-    ADD table_elem_2
+    MODIFY TTL ident '+' INTERVAL INTEGRAL time_unit ttl_delete_opt
+    { $$ = &tree.TableOptionTTL{Column: tree.Identifier($3.Compare()), Amount: integralToUint64($6), Unit: $7} }
+|   MODIFY TTL column_type column_attribute_list_opt column_position
+    {
+        def := tree.NewColumnTableDef(tree.NewUnresolvedColName("ttl"), $3, $4)
+        $$ = tree.NewAlterTableModifyColumnClause(tree.AlterTableModifyColumn, def, $5)
+    }
+|   REMOVE TTL
+    { $$ = &tree.TableOptionTTL{Remove: true} }
+|   ADD table_elem_2
     {
         var def = $2
         opt := tree.NewAlterOptionAdd(def)
@@ -4677,6 +4689,7 @@ with_type:
 |   WITH
 
 column_keyword_opt:
+    %prec LOWER_THAN_TTL
     {
 	$$ = ""
     }
@@ -11511,6 +11524,10 @@ partition_option_list:
 partition_table_option:
     table_option
     {
+        if _, ok := $1.(*tree.TableOptionTTL); ok {
+            yylex.Error("TTL is a table option, not a partition or subpartition option")
+            goto ret1
+        }
         if option, ok := $1.(*tree.TableOptionAutoIDCache); ok {
             option.Free()
             yylex.Error("AUTO_ID_CACHE is a table option, not a partition or subpartition option")
@@ -11905,8 +11922,16 @@ table_option_list:
         $$ = append($1, $2)
     }
 
+ttl_delete_opt:
+    { $$ = false }
+|   DELETE { $$ = true }
+
 table_option:
-    AUTOEXTEND_SIZE equal_opt INTEGRAL
+    TTL ident '+' INTERVAL INTEGRAL time_unit ttl_delete_opt
+    {
+        $$ = &tree.TableOptionTTL{Column: tree.Identifier($2.Compare()), Amount: integralToUint64($5), Unit: $6}
+    }
+|   AUTOEXTEND_SIZE equal_opt INTEGRAL
     {
         $$ = tree.NewTableOptionAUTOEXTEND_SIZE(integralToUint64($3))
     }
@@ -16487,7 +16512,8 @@ equal_opt:
 //|   MYSQL_COMPATIBILITY_MODE
 
 non_reserved_keyword:
-    ACCOUNT
+    TTL
+|   ACCOUNT
 |   JSON_TABLE_PATH
 |   JSON_TABLE_NESTED
 |   JSON_TABLE_ORDINALITY

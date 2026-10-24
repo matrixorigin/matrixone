@@ -1,0 +1,12 @@
+using platform-matched CGo artifacts (libmo.so) from primary worktree: /workspace/matrixone
+WARNING: sonic/ast only supports (go1.17~1.26 and amd64 CPU) or (go1.20~1.26 and arm64 CPU), but your environment is not suitable and will fallback to encoding/json
+fuzz: elapsed: 0s, gathering baseline coverage: 0/38 completed
+fuzz: elapsed: 1s, gathering baseline coverage: 38/38 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 9297 (3099/sec), new interesting: 4 (total: 42)
+fuzz: elapsed: 6s, execs: 21531 (4078/sec), new interesting: 8 (total: 46)
+fuzz: elapsed: 9s, execs: 33367 (3945/sec), new interesting: 12 (total: 50)
+fuzz: elapsed: 12s, execs: 44177 (3603/sec), new interesting: 14 (total: 52)
+fuzz: elapsed: 15s, execs: 59535 (5120/sec), new interesting: 21 (total: 59)
+fuzz: elapsed: 15s, execs: 59535 (0/sec), new interesting: 21 (total: 59)
+PASS
+ok  	github.com/matrixorigin/matrixone/pkg/sql/ttl	15.462s

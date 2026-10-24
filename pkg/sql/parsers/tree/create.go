@@ -1180,6 +1180,8 @@ func (node *CreateTable) reset() {
 				opt.Free()
 			case *TableOptionAutoIncrement:
 				opt.Free()
+			case *TableOptionTTL:
+				opt.Free()
 			case *TableOptionComment:
 				opt.Free()
 			case *TableOptionAvgRowLength:
@@ -3983,6 +3985,8 @@ func (node *Partition) reset() {
 				opt.Free()
 			case *TableOptionAutoIncrement:
 				opt.Free()
+			case *TableOptionTTL:
+				opt.Free()
 			case *TableOptionComment:
 				opt.Free()
 			case *TableOptionAvgRowLength:
@@ -4117,6 +4121,8 @@ func (node *SubPartition) reset() {
 			case *TableOptionAUTOEXTEND_SIZE:
 				opt.Free()
 			case *TableOptionAutoIncrement:
+				opt.Free()
+			case *TableOptionTTL:
 				opt.Free()
 			case *TableOptionComment:
 				opt.Free()

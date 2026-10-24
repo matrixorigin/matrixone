@@ -728,6 +728,8 @@ func (node *AlterTable) reset() {
 				opt.Free()
 			case *TableOptionAutoIncrement:
 				opt.Free()
+			case *TableOptionTTL:
+				opt.Free()
 			case *TableOptionComment:
 				opt.Free()
 			case *TableOptionAvgRowLength:

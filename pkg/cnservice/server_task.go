@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/proxy"
 	"github.com/matrixorigin/matrixone/pkg/publication"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/ttl"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
@@ -399,32 +400,39 @@ func (s *service) registerExecutorsLocked() {
 		task.TaskCode_DataBranchLineageGC,
 		compile.DataBranchLineageGCExecutor(s.sqlExecutor),
 	)
-	// Register outside task.Lock and the heartbeat/startup command paths. The
-	// stopper owns both retries and cancellation before task storage is closed.
-	if err := s.stopper.RunNamedTask("register lineage GC cron", func(ctx context.Context) {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		s.registerLineageGCCron(ctx, ts, ticker.C)
-	}); err != nil {
-		if !s.viewMetadataGenerationRevoked.Load() {
-			s.logger.Error("failed to start lineage GC cron registration", zap.Error(err))
+	s.task.runner.RegisterExecutor(task.TaskCode_TableTTL, ttl.TaskExecutor(s.sqlExecutor))
+	// Each independent cron owns its registration retry through the CN stopper.
+	// A blocked or failing registration must not prevent another cron starting.
+	for _, cron := range []struct {
+		metadata task.TaskMetadata
+		expr     string
+	}{
+		{databranchutils.LineageGCTaskMetadata(), databranchutils.LineageGCTaskCronExpr},
+		{ttl.TaskMetadata(), ttl.CronExpr},
+	} {
+		if err := s.stopper.RunNamedTask("register "+cron.metadata.ID+" cron", func(ctx context.Context) {
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+			s.registerCron(ctx, ts, cron.metadata, cron.expr, ticker.C)
+		}); err != nil && !s.viewMetadataGenerationRevoked.Load() {
+			s.logger.Error("failed to start cron registration", zap.String("task", cron.metadata.ID), zap.Error(err))
 		}
 	}
 }
 
-func (s *service) registerLineageGCCron(ctx context.Context, ts taskservice.TaskService, retry <-chan time.Time) {
+func (s *service) registerCron(ctx context.Context, ts taskservice.TaskService, metadata task.TaskMetadata, expression string, retry <-chan time.Time) {
 	for {
 		if ctx.Err() != nil || !s.task.runnerReady.Load() || s.viewMetadataGenerationRevoked.Load() {
 			return
 		}
 		attempt, cancel := context.WithTimeout(ctx, 30*time.Second)
 		attempt = defines.AttachAccount(attempt, catalog.System_Account, catalog.System_User, catalog.System_Role)
-		err := ts.CreateCronTask(attempt, databranchutils.LineageGCTaskMetadata(), databranchutils.LineageGCTaskCronExpr)
+		err := ts.CreateCronTask(attempt, metadata, expression)
 		cancel()
 		if err == nil || ctx.Err() != nil {
 			return
 		}
-		s.logger.Warn("failed to register lineage GC cron; retrying", zap.Error(err))
+		s.logger.Warn("failed to register cron; retrying", zap.String("task", metadata.ID), zap.Error(err))
 		select {
 		case <-ctx.Done():
 			return
