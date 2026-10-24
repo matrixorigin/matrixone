@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -789,7 +790,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	if owner, ok := tcc.GetSession().(process.TemporaryTableDDL); ok && useSessionTemporary {
 		ownedTemporary = owner.OwnsTemporaryTable(dbName, tableName)
 	}
-	if !plan2.TemporaryTableAccessAllowed(tcc.GetContext(), tcc.GetSession(), dbName, tableName, tableDef, table.GetExtraInfo(), isTmpTable) {
+	var extraInfo *api.SchemaExtra
+	if tableDef.TableType == catalog.SystemOrdinaryRel && defines.IsTempTableName(tableName) {
+		extraInfo = table.GetExtraInfo()
+	}
+	if !plan2.TemporaryTableAccessAllowed(tcc.GetContext(), tcc.GetSession(), dbName, tableName, tableDef, extraInfo, isTmpTable) {
 		return nil, nil, nil
 	}
 	tableDef.IsTemporary = isTmpTable || ownedTemporary
@@ -874,7 +879,11 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	if err := tcc.recoverLegacyTinyText(ctx, ref.SchemaName, tableDef, subMeta, snapshot); err != nil {
 		return nil, nil, err
 	}
-	if !plan2.TemporaryTableAccessAllowed(tcc.GetContext(), tcc.GetSession(), ref.SchemaName, tblName, tableDef, table.GetExtraInfo(), isTmpTable) {
+	var extraInfo *api.SchemaExtra
+	if tableDef.TableType == catalog.SystemOrdinaryRel && defines.IsTempTableName(tblName) {
+		extraInfo = table.GetExtraInfo()
+	}
+	if !plan2.TemporaryTableAccessAllowed(tcc.GetContext(), tcc.GetSession(), ref.SchemaName, tblName, tableDef, extraInfo, isTmpTable) {
 		return nil, nil, moerr.NewNoSuchTable(ctx, ref.SchemaName, tblName)
 	}
 	if tableDef.IsTemporary {
