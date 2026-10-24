@@ -1,0 +1,11 @@
+logservices = [
+    "/etc/mo-conf/log.toml",
+]
+
+tnservices = [
+    "/etc/mo-conf/tn.toml",
+]
+
+cnservices = [
+    "/etc/mo-conf/cn.toml",
+]
