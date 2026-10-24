@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -78,6 +79,37 @@ func (ses *Session) PublishTemporaryTable(db, alias, physical string) {
 	ses.tempTableVersion++
 }
 
+// ForgetMissingTemporaryTable is irreversible logical cleanup, not retirement
+// of a live generation. A stale lookup cannot remove a replacement alias.
+func (ses *Session) ForgetMissingTemporaryTable(db, alias, physical string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	key := defines.TempTableAliasKey(db, alias)
+	if current, ok := ses.tempTables[key]; !ok || current != physical {
+		return
+	}
+	ses.forgetTemporaryTableUndoLocked(key)
+	delete(ses.tempTables, key)
+	delete(ses.tempTablesRev, physical)
+	delete(ses.tempTableIdentities, key)
+	ses.tempTableVersion++
+}
+
+// Only a canonical generated root establishes ownership of an inferred child
+// namespace. A legacy root shares its prefix with every table in the database.
+func (ses *Session) temporaryGenerationPrefix(db, alias, physical string) string {
+	base := defines.GenTempTableName(ses.GetSessId(), db, "")
+	if !strings.HasPrefix(physical, base) || !strings.HasSuffix(physical, "_"+alias) {
+		return ""
+	}
+	generation := strings.TrimSuffix(strings.TrimPrefix(physical, base), "_"+alias)
+	id, err := uuid.Parse(generation)
+	if err != nil || id.String() != generation || physical != defines.GenTempTableName(ses.GetSessId(), db, generation+"_"+alias) {
+		return ""
+	}
+	return base + generation + "_"
+}
+
 func (ses *Session) RetireTemporaryTable(db, alias, physical string, indexes []string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -96,12 +128,7 @@ func (ses *Session) RetireTemporaryTable(db, alias, physical string, indexes []s
 	for _, name := range indexes {
 		remove(name)
 	}
-	// A missing root relation has no table definition from which to recover
-	// index names. Temporary root and index relations share the generated
-	// session/database/generation prefix, so retire any remaining children of
-	// this root when the caller has no index list.
-	if len(indexes) == 0 && physical != "" && strings.HasSuffix(physical, alias) {
-		prefix := strings.TrimSuffix(physical, alias)
+	if prefix := ses.temporaryGenerationPrefix(db, alias, physical); len(indexes) == 0 && prefix != "" {
 		for name, key := range ses.tempTablesRev {
 			if !strings.HasPrefix(name, prefix) {
 				continue

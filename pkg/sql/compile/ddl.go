@@ -4850,27 +4850,15 @@ func (s *Scope) dropTableSingleResolved(
 	}
 	// A temporary alias is user-visible state even when its physical relation
 	// has already disappeared (for example, after another session drops the
-	// backing database). Retire it through the same owner/staging path as a
-	// healthy temporary drop, while preserving transaction rollback semantics.
+	// backing database). Forget only its logical ownership. Enqueuing a physical
+	// DROP here could delete a replacement that reuses a legacy physical name.
 	retireMissingTemporary := func() {
 		if !isTemp {
 			return
 		}
-		if owner, ok := sessionTemporaryDDLOwner(c); ok {
-			if temporaryRetire != nil {
-				temporaryRetire.add(owner, dbName, originTableName, tblName, nil)
-			} else {
-				owner.RetireTemporaryTable(dbName, originTableName, tblName, nil)
-			}
-			return
-		}
 		if session := c.proc.GetSession(); session != nil {
-			// Executor/internal transactions do not use the staged owner above.
-			// If the concrete session owns temporary-table reclamation, retire
-			// directly: the physical identity is already confirmed dead, so a
-			// rollback must not restore an unusable alias.
-			if owner, ok := session.(process.TemporaryTableDDL); ok {
-				owner.RetireTemporaryTable(dbName, originTableName, tblName, nil)
+			if owner, ok := session.(process.MissingTemporaryTableForgetter); ok {
+				owner.ForgetMissingTemporaryTable(dbName, originTableName, tblName)
 				return
 			}
 			session.RemoveTempTableByRealName(tblName)
