@@ -5,6 +5,7 @@
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
 - Revision 31 integration baseline: official main `67c91c5bdf6c669f63331778634215f7aa3e8f58`
+- Revision 32 integration baseline: official main `ac13078b9872fe9ca84e0eeb4d1571312f99382a`
 - Revision 30 integration baseline: official main `d4bda99eee3dd0964e8e1ec1f66d5e3e0fb19e14`
 - Revision 29 integration baseline: official main `a4de4ed1381780d02fa7f440ce7c4f9e01269674`
 - Revision 28 integration baseline: official main `fdcb37a5212a4bbc82fd958e6f54f195081bb56b`
@@ -1514,6 +1515,17 @@ advertisement exposes unknown-function execution on old workers. A set-specific
 physical key plus explicit capability admission avoids changing shared scalar or
 GROUP BY equality and avoids a new set executor; the bounded scalar composition has explicit typed marker fields.
 
+## Revision 32 protocol allocation
+
+The current official main assigns MORPC v130 to incomplete temporal string
+overloads and their rejection diagnostics. This capability therefore uses the
+immediate next version, MORPC v131, for signed-zero set keys and bounded local
+scalar-set reaggregation. Placement, send, receive-before-decode,
+executor/Prepare, and persisted-expression gates all use v131; a worker at the
+immediate predecessor v130 must reject these markers before decoding. The
+implementation and protocol tests were updated together, while historical
+receipts below retain their original version numbers and source provenance.
+
 ## Compatibility, rollout and rollback
 
 The accepted rollout scope is the automatically selected, resource-bounded local
@@ -1523,67 +1535,67 @@ and coordinator-only scope when deploying; broader distributed execution and
 universal latency or process-RSS guarantees remain unqualified.
 
 Official main at this revision allocates MORPC127 to IndexSearchScan internal
-search knobs and MORPC128 to category-preserving mixed JSON/numeric comparisons and MORPC129 to selected JSON ELT/opaque text expression execution,
+search knobs, MORPC128 to category-preserving mixed JSON/numeric comparisons, MORPC129 to selected JSON ELT/opaque text expression execution, and MORPC130 to incomplete temporal string overloads and rejection diagnostics.
 while function602/MORPC125 remains LOAD IGNORE foreign-key rejection diagnostics. VIEWS metadata retains functions603/604 and floor126.
 TIMESTAMPADD SECOND retains function601 and floor124. This PR's single
 unpublished set-key/scalar-marker capability uses function605, sentinel606 and
-MORPC **130**. The feature walker recognizes encoded function identity 605 without
+MORPC **131**. The feature walker recognizes encoded function identity 605 without
 depending on its display name. It sees hidden physical equality lists, grouping
 keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar composition adds no separate function identity. It adds
 `plan.Node.scalar_set_reaggregation` field 96 and
 `pipeline.Instruction.scalar_set_reaggregation` field 65. Marker-only integer
-fallbacks require 130 too. Senders and receivers reject marked remote scopes at
+fallbacks require 131 too. Senders and receivers reject marked remote scopes at
 all versions, before operator decoding, because a remote attempt cannot share
 the coordinator's work/account lease. Local scope validation rejects remote
 nodes, DOP above one, and marker placement outside WINDOW/LEFT JOIN. Official main
 retains SELECT division diagnostics at 116, conditional on execution/session
-policy. Set keys require 130 regardless of that policy; a combined expression
-requires 130. Division diagnostics remain outside persisted-expression admission. Official main
+policy. Set keys require 131 regardless of that policy; a combined expression
+requires 131. Division diagnostics remain outside persisted-expression admission. Official main
 adds collation-aware LEAST/GREATEST at 117; that independent feature remains
-admitted at 117, and a combined expression with a set key requires 130.
+admitted at 117, and a combined expression with a set key requires 131.
 The released table-collation function retains identity 600 and floor 118;
 table-only expressions remain admitted at 118, while a combined expression
-with a set key requires 130.
+with a set key requires 131.
 
 LOAD IGNORE alone retains its released function602 and floor125. It is recognized
-independently of set keys: LOAD plus a set key or scalar marker requires130.
+independently of set keys: LOAD plus a set key or scalar marker requires 131.
 The released LOAD binding/native, placement/send/destination/receive and retained
 plan rollback checks remain in force; temporal CTAS checks keep their125 fast
 path only after the retained requirement has been checked. Set-key/marker
-admission has its independent130 owner. Earlier unpublished set-key602/603 payloads
+admission has its independent 131 owner. Earlier unpublished set-key602/603 payloads
 are historical artifacts, not aliases to the released LOAD602, VIEWS603/604 or
 new set-key605 identities; this revision neither remaps nor replays them.
 
 TIMESTAMPADD SECOND normalization alone retains function 601 and floor 124.
-A combination with set keys or scalar markers requires 130; the actual-stream
+A combination with set keys or scalar markers requires 131; the actual-stream
 handshake carries the maximum of these independently detected requirements.
 
 Unsigned DECIMAL DIV alone retains its released floor 121. Combining DIV with a
-set key or local scalar marker requires 130; a marker still prohibits remote
+set key or local scalar marker requires 131; a marker still prohibits remote
 execution at every version. Historical DIV overload zero keeps its prior
 compatibility contract.
 
-Placement requires workers advertising 130 or newer; missing or old capabilities
+Placement requires workers advertising 131 or newer; missing or old capabilities
 fall back to one CN on the capable coordinator. Sending rechecks actual pipeline
 destinations, including changes after placement. The receiver rejects a pipeline
 containing these expressions before operator decoding when its local floor is
-missing or below 130. Operator expression construction checks the same floor
+missing or below 131. Operator expression construction checks the same floor
 before allocating an executor. Persisted-expression read and authoring admission
-also require 130. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
+also require 131. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
 
 Prepared specialization regenerates membership keys from the resolved output
 domain before capability detection: integer -> float -> integer must acquire and
-then release the 130 requirement. A prepare-time ANY type is not capability proof.
-A new binary configured at immediate predecessor floor 129 rejects these
+then release the 131 requirement. A prepare-time ANY type is not capability proof.
+A new binary configured at immediate predecessor floor 130 rejects these
 expressions before execution. An actual old binary lacks the new guard: new
 senders must exclude it, and durable authoring must not publish an expression
-under a floor below 130. Lowering a new binary's floor does not rewrite existing
+under a floor below 131. Lowering a new binary's floor does not rewrite existing
 catalog expressions or teach an old binary identity 605.
 
 VIEWS metadata alone requires126, including its actual-stream handshake. Combining
-VIEWS metadata with a set key or scalar marker requires130. Literal IDs603/604
+VIEWS metadata with a set key or scalar marker requires 131. Literal IDs603/604
 remain VIEWS functions; they are never recognized as set keys. Fresh605 FLOAT/DOUBLE
-wire fixtures are checked against actual official-main129 source, where the key
+wire fixtures are checked against actual official-main130 source, where the key
 is absent but both VIEWS functions, LOAD602 and TIMESTAMPADD601 remain available.
 
 Before downgrading/restoring a backup onto old binaries, inventory affected
@@ -1602,7 +1614,7 @@ this document and immediate-predecessor rollback tests together. Other open PRs
 using the same candidate do not reserve it.
 
 Dependent-only queries retain their independently released protocol 119.
-Mixed dependent/scalar-set queries require the set-key floor 130 as well as
+Mixed dependent/scalar-set queries require the set-key floor 131 as well as
 coordinator-local DOP 1 placement. The final scope graph, including detached
 producer scopes, is validated before any execution. The statement attempt
 acquires one scalar-set CN permit and one bounded participating account; all
