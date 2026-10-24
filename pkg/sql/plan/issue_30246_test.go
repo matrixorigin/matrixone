@@ -252,11 +252,17 @@ func TestIssue30246OverlappingCascadeAndSetNullOrderInvariant(t *testing.T) {
 
 		deletes[i], inserts[i] = dmlTargetMultisets(query)
 	}
-	// Compare the action repertoire on the shared child table: sibling action
-	// steps for the parent's own delete may legitimately arrive through
-	// different write routes (MULTI_UPDATE for the direct statement), but the
-	// child-table referential actions must be identical for both declaration
-	// orders.
+	// Compare the action repertoire on the shared child table. The write
+	// routes legitimately differ by declaration order (#30246 review round 2):
+	// a CASCADE registration carries the full delete plan, so a later SET NULL
+	// shares its physical delete through the merged union (one delete
+	// context); a SET NULL registration is UPDATE-driven, so a later CASCADE
+	// must keep the streams disjoint and build its own physical delete
+	// (tombstoned set-null image plus dedicated cascade delete). What must be
+	// invariant is that every order deletes the child rows through at least
+	// one physical delete and re-inserts the SET NULL image identically; the
+	// presence of index-maintenance and descendant deletes in both orders is
+	// pinned by TestIssue30246MixedActionCascadeMaintenanceBothOrders.
 	empDeletes := func(xs []string) int {
 		n := 0
 		for _, x := range xs {
@@ -266,9 +272,10 @@ func TestIssue30246OverlappingCascadeAndSetNullOrderInvariant(t *testing.T) {
 		}
 		return n
 	}
-	require.Equal(t, empDeletes(deletes[0]), empDeletes(deletes[1]),
-		"declaration order must not change the child-side delete actions")
-	require.Greater(t, empDeletes(deletes[0]), 0)
+	for i := range orders {
+		require.Greater(t, empDeletes(deletes[i]), 0,
+			"order %d must physically delete affected child rows", i)
+	}
 	empInserts := func(xs []string) int {
 		n := 0
 		for _, x := range xs {

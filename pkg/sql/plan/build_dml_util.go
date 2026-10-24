@@ -1888,13 +1888,21 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 					// shared tagged action stream; keep its existing tagged layout.
 					upPlanCtx.isConditionalFkSetNullAction = true
 					upPlanCtx.isPostCreateQueryFkSetNullAction = localCombined
+					_, hadRegisteredDeleteSource := builder.deleteNode[childTableDef.TblId]
 					resetReferentialDeleteSource()
 					err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
 					putDmlPlanCtx(upPlanCtx)
 					if err != nil {
 						return err
 					}
-					setNullDeleteSourcePending = delCtx.skipTargetDelete
+					// A combined SET NULL action registers the child table through its
+					// UPDATE-driven plan, which carries no delete-side index maintenance
+					// or descendant referential expansion. When this action owns the
+					// registration, a later CASCADE must not merge into it - rewiring
+					// existing scans cannot supply actions that were never built; the
+					// CASCADE branch keeps the streams disjoint and performs the full
+					// delete-plan build (#30246 review round 2).
+					setNullDeleteSourcePending = delCtx.skipTargetDelete || !hadRegisteredDeleteSource
 				}
 			}
 
@@ -2399,6 +2407,7 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						for _, childColID := range fk.Cols {
 							upPlanCtx.fkSetNullColumns[childId2name[childColID]] = struct{}{}
 						}
+						_, hadRegisteredDeleteSource := builder.deleteNode[childTableDef.TblId]
 						resetReferentialDeleteSource()
 
 						err = buildUpdatePlans(ctx, builder, bindCtx, upPlanCtx, false)
@@ -2406,7 +2415,11 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 						if err != nil {
 							return err
 						}
-						setNullDeleteSourcePending = delCtx.skipTargetDelete
+						// A single SET NULL action carries the same registration hazard
+						// as the combined path above: its UPDATE-driven plan owns no
+						// delete-side maintenance, so a following CASCADE builds the full
+						// delete plan instead of merging (#30246 review round 2).
+						setNullDeleteSourcePending = delCtx.skipTargetDelete || !hadRegisteredDeleteSource
 
 					case plan.ForeignKeyDef_CASCADE:
 						// A self-reference is expanded to its complete descendant set by

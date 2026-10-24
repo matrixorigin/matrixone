@@ -65,6 +65,64 @@ delete from p4 where id = 2;
 select count(*) as c4_rows_final from c4;
 select count(*) as g4_rows_final from g4;
 
+-- review round 2: ON DELETE SET NULL declared BEFORE ON DELETE CASCADE to the
+-- same parent. The SET NULL action registers the shared child through its
+-- UPDATE-driven plan, which carries no delete-side maintenance; the CASCADE
+-- that follows must still build its full delete plan — hidden unique-index
+-- maintenance and the grandchild cascade — or the delete commits invalid
+-- state (stale unique entries, orphaned grandchild rows)
+create table p5 (id int primary key);
+create table c5 (id int primary key, a int, b int, u int,
+    unique key uk_c5 (u),
+    constraint fk_setnull_b foreign key (b) references p5(id) on delete set null,
+    constraint fk_cascade_a foreign key (a) references p5(id) on delete cascade);
+insert into p5 values (1), (2);
+insert into c5 values (10, 1, 1, 100), (12, 2, 1, 120);
+delete from p5 where id = 1;
+-- row 10 is cascade-deleted through a; row 12 keeps u=120 with b set to NULL
+select id, a, b, u from c5 order by id;
+-- the cascade must have retired row 10's unique entry: reusing u=100 succeeds
+insert into c5 values (11, 2, 2, 100);
+select id, a, b, u from c5 order by id;
+
+-- grandchild variant: the cascade must also retire the grandchild rows of the
+-- cascade-deleted child while rows of the set-null-only child survive
+create table p6 (id int primary key);
+create table c6 (id int primary key, a int, b int,
+    constraint fk_setnull_b6 foreign key (b) references p6(id) on delete set null,
+    constraint fk_cascade_a6 foreign key (a) references p6(id) on delete cascade);
+create table g6 (id int primary key, cid int,
+    key k_cid6 (cid),
+    constraint fk_gc6 foreign key (cid) references c6(id) on delete cascade);
+insert into p6 values (1), (2);
+insert into c6 values (10, 1, 1), (12, 2, 1);
+insert into g6 values (1000, 10), (1012, 12);
+delete from p6 where id = 1;
+select id, a, b from c6 order by id;
+select id, cid from g6 order by id;
+
+-- CASCADE declared first keeps the same outcomes (its registration already
+-- carries the full delete plan, shared through the merged stream)
+create table p7 (id int primary key);
+create table c7 (id int primary key, a int, b int, u int,
+    unique key uk_c7 (u),
+    constraint fk_cascade_a7 foreign key (a) references p7(id) on delete cascade,
+    constraint fk_setnull_b7 foreign key (b) references p7(id) on delete set null);
+insert into p7 values (1), (2);
+insert into c7 values (10, 1, 1, 100), (12, 2, 1, 120);
+delete from p7 where id = 1;
+select id, a, b, u from c7 order by id;
+insert into c7 values (11, 2, 2, 100);
+select id, a, b, u from c7 order by id;
+
+drop table g6;
+drop table c6;
+drop table p6;
+drop table c5;
+drop table p5;
+drop table c7;
+drop table p7;
+
 drop table g4;
 drop table c4;
 drop table p4;
