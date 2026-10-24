@@ -45,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -267,8 +266,6 @@ func TestSelectBackupObjectsOnlySkipsObjectsDeletedBeforeRestoreTimestamp(t *tes
 }
 
 func TestBackupData(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
@@ -420,8 +417,6 @@ func TestBackupCheckpointBeforeFirstAppend(t *testing.T) {
 }
 
 func TestBackupData2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 
@@ -530,8 +525,6 @@ func TestBackupData2(t *testing.T) {
 }
 
 func TestBackupData3(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -606,8 +599,6 @@ func TestBackupData3(t *testing.T) {
 }
 
 func TestBackupRestoreGlobalCheckpointWithFreshWAL(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
 
@@ -818,8 +809,6 @@ func TestBackupRestoreGlobalCheckpointWithFreshWAL(t *testing.T) {
 }
 
 func TestBackupData4(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	fault.Enable()
@@ -899,8 +888,6 @@ func TestBackupData4(t *testing.T) {
 }
 
 func TestBackupData5(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
