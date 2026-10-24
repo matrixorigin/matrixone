@@ -1,0 +1,286 @@
+# github.com/matrixorigin/matrixone/pkg/sql/plan.test
+ld: warning: duplicate -rpath '/private/tmp/mo-issue30995/cgo/../thirdparties/install/lib' ignored
+ld: warning: ignoring duplicate libraries: '-lm', '-lroaring', '-lusearch_c'
+ld: warning: search path '/opt/homebrew/opt/libpqxx/lib/' not found
+WARNING: sonic/ast only supports (go1.17~1.26 and amd64 CPU) or (go1.20~1.26 and arm64 CPU), but your environment is not suitable and will fallback to encoding/json
+2026/10/24 08:44:25.926284 +0800 INFO system/system.go:586 call runtime.GOMAXPROCS(10): 10, keep: 10
+=== RUN   TestOptimizeSingleCountDistinctBuildsLocalPreDedupPath
+--- PASS: TestOptimizeSingleCountDistinctBuildsLocalPreDedupPath (0.00s)
+=== RUN   TestOptimizePadSpaceCountDistinctBuildsLocalPreDedupPath
+--- PASS: TestOptimizePadSpaceCountDistinctBuildsLocalPreDedupPath (0.00s)
+=== RUN   TestDistinctKeyPreAggregationRequiresEveryGroupingKeyNDV
+=== RUN   TestDistinctKeyPreAggregationRequiresEveryGroupingKeyNDV/missing_component_disables_path
+=== RUN   TestDistinctKeyPreAggregationRequiresEveryGroupingKeyNDV/NaN_component_disables_path
+=== RUN   TestDistinctKeyPreAggregationRequiresEveryGroupingKeyNDV/infinite_component_disables_path
+=== RUN   TestDistinctKeyPreAggregationRequiresEveryGroupingKeyNDV/known_low-NDV_components_enable_path
+--- PASS: TestDistinctKeyPreAggregationRequiresEveryGroupingKeyNDV (0.00s)
+    --- PASS: TestDistinctKeyPreAggregationRequiresEveryGroupingKeyNDV/missing_component_disables_path (0.00s)
+    --- PASS: TestDistinctKeyPreAggregationRequiresEveryGroupingKeyNDV/NaN_component_disables_path (0.00s)
+    --- PASS: TestDistinctKeyPreAggregationRequiresEveryGroupingKeyNDV/infinite_component_disables_path (0.00s)
+    --- PASS: TestDistinctKeyPreAggregationRequiresEveryGroupingKeyNDV/known_low-NDV_components_enable_path (0.00s)
+=== RUN   TestOptimizeSingleCountDistinctPathSelectionAndFallbacks
+=== RUN   TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/few_final_owners
+=== RUN   TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/global_aggregate
+=== RUN   TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/worker-local_duplicate_adversary
+=== RUN   TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/path_A_boundary
+=== RUN   TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/small_distinct_state
+=== RUN   TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/missing_distinct_statistics
+=== RUN   TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/low_distinct_ratio
+=== RUN   TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/unsupported_shuffle_key
+=== RUN   TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/expression_key
+=== RUN   TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/inactive_grouping_set
+--- PASS: TestOptimizeSingleCountDistinctPathSelectionAndFallbacks (0.00s)
+    --- PASS: TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/few_final_owners (0.00s)
+    --- PASS: TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/global_aggregate (0.00s)
+    --- PASS: TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/worker-local_duplicate_adversary (0.00s)
+    --- PASS: TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/path_A_boundary (0.00s)
+    --- PASS: TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/small_distinct_state (0.00s)
+    --- PASS: TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/missing_distinct_statistics (0.00s)
+    --- PASS: TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/low_distinct_ratio (0.00s)
+    --- PASS: TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/unsupported_shuffle_key (0.00s)
+    --- PASS: TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/expression_key (0.00s)
+    --- PASS: TestOptimizeSingleCountDistinctPathSelectionAndFallbacks/inactive_grouping_set (0.00s)
+=== RUN   TestOptimizeDistinctKeyPathLeavesMixedAggregatesUnchanged
+--- PASS: TestOptimizeDistinctKeyPathLeavesMixedAggregatesUnchanged (0.00s)
+=== RUN   TestOptimizeSingleSumDistinctKeepsExistingLogicalRewriteOnly
+--- PASS: TestOptimizeSingleSumDistinctKeepsExistingLogicalRewriteOnly (0.00s)
+=== RUN   TestOptimizeSingleAvgDistinctBuildsLogicalRewrite
+--- PASS: TestOptimizeSingleAvgDistinctBuildsLogicalRewrite (0.00s)
+=== RUN   TestOptimizeAvgDistinctKeepsConservativeFallbacks
+=== RUN   TestOptimizeAvgDistinctKeepsConservativeFallbacks/mixed_aggregates
+=== RUN   TestOptimizeAvgDistinctKeepsConservativeFallbacks/grouping_set
+--- PASS: TestOptimizeAvgDistinctKeepsConservativeFallbacks (0.00s)
+    --- PASS: TestOptimizeAvgDistinctKeepsConservativeFallbacks/mixed_aggregates (0.00s)
+    --- PASS: TestOptimizeAvgDistinctKeepsConservativeFallbacks/grouping_set (0.00s)
+=== RUN   TestTupleCountDistinctKeepsCompleteKeysAndSelectsExchangeComponent
+=== RUN   TestTupleCountDistinctKeepsCompleteKeysAndSelectsExchangeComponent/nullable=false/reverse=false
+=== RUN   TestTupleCountDistinctKeepsCompleteKeysAndSelectsExchangeComponent/nullable=false/reverse=true
+=== RUN   TestTupleCountDistinctKeepsCompleteKeysAndSelectsExchangeComponent/nullable=true/reverse=false
+=== RUN   TestTupleCountDistinctKeepsCompleteKeysAndSelectsExchangeComponent/nullable=true/reverse=true
+--- PASS: TestTupleCountDistinctKeepsCompleteKeysAndSelectsExchangeComponent (0.00s)
+    --- PASS: TestTupleCountDistinctKeepsCompleteKeysAndSelectsExchangeComponent/nullable=false/reverse=false (0.00s)
+    --- PASS: TestTupleCountDistinctKeepsCompleteKeysAndSelectsExchangeComponent/nullable=false/reverse=true (0.00s)
+    --- PASS: TestTupleCountDistinctKeepsCompleteKeysAndSelectsExchangeComponent/nullable=true/reverse=false (0.00s)
+    --- PASS: TestTupleCountDistinctKeepsCompleteKeysAndSelectsExchangeComponent/nullable=true/reverse=true (0.00s)
+=== RUN   TestTupleCountDistinctRetainsConservativeFallbacks
+=== RUN   TestTupleCountDistinctRetainsConservativeFallbacks/low_ndv
+=== RUN   TestTupleCountDistinctRetainsConservativeFallbacks/missing_ndv
+=== RUN   TestTupleCountDistinctRetainsConservativeFallbacks/small_input
+=== RUN   TestTupleCountDistinctRetainsConservativeFallbacks/nan_ndv
+=== RUN   TestTupleCountDistinctRetainsConservativeFallbacks/infinite_ndv
+=== RUN   TestTupleCountDistinctRetainsConservativeFallbacks/unsupported_type
+=== RUN   TestTupleCountDistinctRetainsConservativeFallbacks/expression
+=== RUN   TestTupleCountDistinctRetainsConservativeFallbacks/rollup
+=== RUN   TestTupleCountDistinctRetainsConservativeFallbacks/mixed
+=== RUN   TestTupleCountDistinctRetainsConservativeFallbacks/high_group_ndv
+=== RUN   TestTupleCountDistinctRetainsConservativeFallbacks/unknown_provenance
+--- PASS: TestTupleCountDistinctRetainsConservativeFallbacks (0.00s)
+    --- PASS: TestTupleCountDistinctRetainsConservativeFallbacks/low_ndv (0.00s)
+    --- PASS: TestTupleCountDistinctRetainsConservativeFallbacks/missing_ndv (0.00s)
+    --- PASS: TestTupleCountDistinctRetainsConservativeFallbacks/small_input (0.00s)
+    --- PASS: TestTupleCountDistinctRetainsConservativeFallbacks/nan_ndv (0.00s)
+    --- PASS: TestTupleCountDistinctRetainsConservativeFallbacks/infinite_ndv (0.00s)
+    --- PASS: TestTupleCountDistinctRetainsConservativeFallbacks/unsupported_type (0.00s)
+    --- PASS: TestTupleCountDistinctRetainsConservativeFallbacks/expression (0.00s)
+    --- PASS: TestTupleCountDistinctRetainsConservativeFallbacks/rollup (0.00s)
+    --- PASS: TestTupleCountDistinctRetainsConservativeFallbacks/mixed (0.00s)
+    --- PASS: TestTupleCountDistinctRetainsConservativeFallbacks/high_group_ndv (0.00s)
+    --- PASS: TestTupleCountDistinctRetainsConservativeFallbacks/unknown_provenance (0.00s)
+=== RUN   TestTupleCountDistinctUsesAllColumnKeyContract
+--- PASS: TestTupleCountDistinctUsesAllColumnKeyContract (0.00s)
+=== RUN   TestTupleCountDistinctCanonicalizesCharBeforeExchange
+--- PASS: TestTupleCountDistinctCanonicalizesCharBeforeExchange (0.00s)
+=== RUN   TestTupleCountDistinctProvesNullabilityThroughOuterJoin
+--- PASS: TestTupleCountDistinctProvesNullabilityThroughOuterJoin (0.00s)
+PASS
+ok  	github.com/matrixorigin/matrixone/pkg/sql/plan	2.935s
+# github.com/matrixorigin/matrixone/pkg/sql/compile.test
+ld: warning: duplicate -rpath '/private/tmp/mo-issue30995/cgo/../thirdparties/install/lib' ignored
+ld: warning: ignoring duplicate libraries: '-lm', '-lroaring', '-lusearch_c'
+ld: warning: search path '/opt/homebrew/opt/libpqxx/lib/' not found
+WARNING: sonic/ast only supports (go1.17~1.26 and amd64 CPU) or (go1.20~1.26 and arm64 CPU), but your environment is not suitable and will fallback to encoding/json
+2026/10/24 08:45:20.836687 +0800 INFO system/system.go:586 call runtime.GOMAXPROCS(10): 10, keep: 10
+2026/10/24 08:45:20.859493 +0800 INFO tasks/cancelablejob.go:161 cancelablejob.start.cron.job {"name": "CronJob[streamReaderGC-01a16b5e-8c5b-774b-84f6-fa765d46d225-2m0s]", "interval": "2m0s"}
+=== RUN   TestCompileLocalPreAggregationKeepsEveryInputScope
+--- PASS: TestCompileLocalPreAggregationKeepsEveryInputScope (0.00s)
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/packed_local_shuffle
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/parallel_local_sources
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/local_dispatch_fallback
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/distributed_targets
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/remote_source_to_local_target
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/single_owner
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/shuffle_reuse
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/metadata_partial_results
+=== RUN   TestCompileLocalPreAggregationPhysicalSelection/parent_coordinator_projection
+--- PASS: TestCompileLocalPreAggregationPhysicalSelection (0.04s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/packed_local_shuffle (0.00s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/parallel_local_sources (0.01s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/local_dispatch_fallback (0.00s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/distributed_targets (0.01s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/remote_source_to_local_target (0.00s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/single_owner (0.00s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/shuffle_reuse (0.00s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/metadata_partial_results (0.00s)
+    --- PASS: TestCompileLocalPreAggregationPhysicalSelection/parent_coordinator_projection (0.00s)
+=== RUN   TestLocalPreAggregationOmissionGuards
+=== RUN   TestLocalPreAggregationOmissionGuards/inclusive_size_and_ratio
+=== RUN   TestLocalPreAggregationOmissionGuards/below_size
+=== RUN   TestLocalPreAggregationOmissionGuards/below_ratio
+=== RUN   TestLocalPreAggregationOmissionGuards/missing_input_stats
+=== RUN   TestLocalPreAggregationOmissionGuards/missing_group_stats
+=== RUN   TestLocalPreAggregationOmissionGuards/zero_input
+=== RUN   TestLocalPreAggregationOmissionGuards/unknown_groups
+=== RUN   TestLocalPreAggregationOmissionGuards/NaN_groups
+=== RUN   TestLocalPreAggregationOmissionGuards/infinite_input
+=== RUN   TestLocalPreAggregationOmissionGuards/inconsistent_cardinality
+=== RUN   TestLocalPreAggregationOmissionGuards/computed_key
+=== RUN   TestLocalPreAggregationOmissionGuards/PAD_SPACE_key
+=== RUN   TestLocalPreAggregationOmissionGuards/multiple_keys
+=== RUN   TestLocalPreAggregationOmissionGuards/physical_key_transform
+=== RUN   TestLocalPreAggregationOmissionGuards/final_key_transform
+=== RUN   TestLocalPreAggregationOmissionGuards/local_shuffle
+=== RUN   TestLocalPreAggregationOmissionGuards/transformed_output
+=== RUN   TestLocalPreAggregationOmissionGuards/order
+=== RUN   TestLocalPreAggregationOmissionGuards/limit
+=== RUN   TestLocalPreAggregationOmissionGuards/filter
+=== RUN   TestLocalPreAggregationOmissionGuards/runtime_filter
+=== RUN   TestLocalPreAggregationOmissionGuards/parent_filter
+=== RUN   TestLocalPreAggregationOmissionGuards/raw_grouping_expansion
+=== RUN   TestLocalPreAggregationOmissionGuards/physical_equality_transform
+=== RUN   TestLocalPreAggregationOmissionGuards/grouping_option
+=== RUN   TestLocalPreAggregationOmissionGuards/invalid_input_key
+=== RUN   TestLocalPreAggregationOmissionGuards/input_type_mismatch
+=== RUN   TestLocalPreAggregationOmissionGuards/unsupported_key
+=== RUN   TestLocalPreAggregationOmissionGuards/unknown_placement
+--- PASS: TestLocalPreAggregationOmissionGuards (0.04s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/inclusive_size_and_ratio (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/below_size (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/below_ratio (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/missing_input_stats (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/missing_group_stats (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/zero_input (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/unknown_groups (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/NaN_groups (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/infinite_input (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/inconsistent_cardinality (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/computed_key (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/PAD_SPACE_key (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/multiple_keys (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/physical_key_transform (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/final_key_transform (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/local_shuffle (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/transformed_output (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/order (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/limit (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/filter (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/runtime_filter (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/parent_filter (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/raw_grouping_expansion (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/physical_equality_transform (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/grouping_option (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/invalid_input_key (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/input_type_mismatch (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/unsupported_key (0.00s)
+    --- PASS: TestLocalPreAggregationOmissionGuards/unknown_placement (0.00s)
+=== RUN   TestLocalPreAggregationOmissionProjectsRawKey
+--- PASS: TestLocalPreAggregationOmissionProjectsRawKey (0.00s)
+=== RUN   TestLocalPreAggregationCompileShapeIsReachableFromSQL
+=== RUN   TestLocalPreAggregationCompileShapeIsReachableFromSQL/grouped_fallback
+=== RUN   TestLocalPreAggregationCompileShapeIsReachableFromSQL/large_global_key
+=== RUN   TestLocalPreAggregationCompileShapeIsReachableFromSQL/grouped_tuple
+=== RUN   TestLocalPreAggregationCompileShapeIsReachableFromSQL/global_tuple_spelling
+--- PASS: TestLocalPreAggregationCompileShapeIsReachableFromSQL (0.02s)
+    --- PASS: TestLocalPreAggregationCompileShapeIsReachableFromSQL/grouped_fallback (0.00s)
+    --- PASS: TestLocalPreAggregationCompileShapeIsReachableFromSQL/large_global_key (0.00s)
+    --- PASS: TestLocalPreAggregationCompileShapeIsReachableFromSQL/grouped_tuple (0.00s)
+    --- PASS: TestLocalPreAggregationCompileShapeIsReachableFromSQL/global_tuple_spelling (0.00s)
+=== RUN   TestPadSpaceRemoteProtocolValidation
+=== RUN   TestPadSpaceRemoteProtocolValidation/comparison_cast_in_projection
+=== RUN   TestPadSpaceRemoteProtocolValidation/set_operation_physical_key
+--- PASS: TestPadSpaceRemoteProtocolValidation (0.00s)
+    --- PASS: TestPadSpaceRemoteProtocolValidation/comparison_cast_in_projection (0.00s)
+    --- PASS: TestPadSpaceRemoteProtocolValidation/set_operation_physical_key (0.00s)
+PASS
+ok  	github.com/matrixorigin/matrixone/pkg/sql/compile	2.767s
+# github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service.test
+ld: warning: duplicate -rpath '/private/tmp/mo-issue30995/cgo/../thirdparties/install/lib' ignored
+ld: warning: ignoring duplicate libraries: '-lm', '-lroaring', '-lusearch_c'
+ld: warning: search path '/opt/homebrew/opt/libpqxx/lib/' not found
+WARNING: sonic/ast only supports (go1.17~1.26 and amd64 CPU) or (go1.20~1.26 and arm64 CPU), but your environment is not suitable and will fallback to encoding/json
+2026/10/24 08:45:27.028670 +0800 INFO system/system.go:586 call runtime.GOMAXPROCS(10): 10, keep: 10
+=== RUN   TestReadBarrierResponseFollowsEarlierLogtailUpdate
+2026/10/24 08:45:27.052440 +0800 DEBUG tn-service.logtail-server max data chunk size for segment {"uuid": "", "server-id": "01a16b5e-a48c-7683-afc4-8fdbe0fd0244", "value": 992}
+2026/10/24 08:45:27.052600 +0800 INFO tn-service.logtail-server start logtail service {"uuid": "", "server-id": "01a16b5e-a48c-7683-afc4-8fdbe0fd0244"}
+2026/10/24 08:45:27.052880 +0800 INFO tn-service.logtail-server logtail.service.init.waterline {"uuid": "", "server-id": "01a16b5e-a48c-7683-afc4-8fdbe0fd0244", "ts": ""}
+2026/10/24 08:45:27.052954 +0800 INFO tn-service.logtail-server initialize new session for morpc stream {"uuid": "", "server-id": "01a16b5e-a48c-7683-afc4-8fdbe0fd0244", "stream-id": 1, "remote": "mock"}
+2026/10/24 08:45:27.053014 +0800 INFO tn-service.logtail-server send subscription response {"uuid": "", "server-id": "01a16b5e-a48c-7683-afc4-8fdbe0fd0244", "stream-id": 1, "remote": "mock", "table": "db_id:1 tb_id:2 partition_id:3 ", "To": ""}
+2026/10/24 08:45:27.053592 +0800 INFO tn-service.logtail-server close logtail service {"uuid": "", "server-id": "01a16b5e-a48c-7683-afc4-8fdbe0fd0244"}
+2026/10/24 08:45:27.053630 +0800 ERROR tn-service.logtail-server stop session error handler {"uuid": "", "server-id": "01a16b5e-a48c-7683-afc4-8fdbe0fd0244", "error": "context canceled"}
+2026/10/24 08:45:27.053632 +0800 ERROR tn-service.logtail-server stop subscription handler {"uuid": "", "server-id": "01a16b5e-a48c-7683-afc4-8fdbe0fd0244", "error": "context canceled"}
+2026/10/24 08:45:27.053656 +0800 ERROR tn-service.logtail-server stop session sender {"uuid": "", "server-id": "01a16b5e-a48c-7683-afc4-8fdbe0fd0244", "stream-id": 1, "remote": "mock", "error": "context canceled"}
+2026/10/24 08:45:27.053688 +0800 ERROR tn-service.logtail-server stop logtail pull worker {"uuid": "", "server-id": "01a16b5e-a48c-7683-afc4-8fdbe0fd0244", "error": "context canceled"}
+2026/10/24 08:45:27.053723 +0800 INFO tn-service.logtail-server clean session for morpc stream {"uuid": "", "server-id": "01a16b5e-a48c-7683-afc4-8fdbe0fd0244", "stream-id": 1, "remote": "mock"}
+--- PASS: TestReadBarrierResponseFollowsEarlierLogtailUpdate (0.00s)
+=== RUN   TestReadBarrierServerAdmissionHonorsCancellation
+2026/10/24 08:45:27.054118 +0800 DEBUG tn-service.logtail-server max data chunk size for segment {"uuid": "", "server-id": "01a16b5e-a48e-71a5-bc4c-0a4d5c6b284d", "value": 992}
+2026/10/24 08:45:27.054151 +0800 INFO tn-service.logtail-server start logtail service {"uuid": "", "server-id": "01a16b5e-a48e-71a5-bc4c-0a4d5c6b284d"}
+2026/10/24 08:45:27.054210 +0800 INFO tn-service.logtail-server logtail.service.init.waterline {"uuid": "", "server-id": "01a16b5e-a48e-71a5-bc4c-0a4d5c6b284d", "ts": ""}
+2026/10/24 08:45:27.054264 +0800 INFO tn-service.logtail-server close logtail service {"uuid": "", "server-id": "01a16b5e-a48e-71a5-bc4c-0a4d5c6b284d"}
+2026/10/24 08:45:27.054290 +0800 ERROR tn-service.logtail-server stop session error handler {"uuid": "", "server-id": "01a16b5e-a48e-71a5-bc4c-0a4d5c6b284d", "error": "context canceled"}
+2026/10/24 08:45:27.054310 +0800 ERROR tn-service.logtail-server stop subscription handler {"uuid": "", "server-id": "01a16b5e-a48e-71a5-bc4c-0a4d5c6b284d", "error": "context canceled"}
+2026/10/24 08:45:27.054331 +0800 ERROR tn-service.logtail-server stop logtail pull worker {"uuid": "", "server-id": "01a16b5e-a48e-71a5-bc4c-0a4d5c6b284d", "error": "context canceled"}
+--- PASS: TestReadBarrierServerAdmissionHonorsCancellation (0.00s)
+=== RUN   TestReadBarrierForcesFilteredProgressBeforeResponse
+2026/10/24 08:45:27.054660 +0800 DEBUG tn-service.logtail-server max data chunk size for segment {"uuid": "", "server-id": "01a16b5e-a48e-79db-a8fe-7c07cb7efd05", "value": 992}
+2026/10/24 08:45:27.054693 +0800 INFO tn-service.logtail-server start logtail service {"uuid": "", "server-id": "01a16b5e-a48e-79db-a8fe-7c07cb7efd05"}
+2026/10/24 08:45:27.054742 +0800 INFO tn-service.logtail-server logtail.service.init.waterline {"uuid": "", "server-id": "01a16b5e-a48e-79db-a8fe-7c07cb7efd05", "ts": ""}
+2026/10/24 08:45:27.054799 +0800 INFO tn-service.logtail-server initialize new session for morpc stream {"uuid": "", "server-id": "01a16b5e-a48e-79db-a8fe-7c07cb7efd05", "stream-id": 1, "remote": "mock"}
+2026/10/24 08:45:27.054829 +0800 INFO tn-service.logtail-server send subscription response {"uuid": "", "server-id": "01a16b5e-a48e-79db-a8fe-7c07cb7efd05", "stream-id": 1, "remote": "mock", "table": "db_id:1 tb_id:2 partition_id:3 ", "To": ""}
+2026/10/24 08:45:27.054977 +0800 DEBUG tn-service.logtail-server table not subscribed, filter out {"uuid": "", "server-id": "01a16b5e-a48e-79db-a8fe-7c07cb7efd05", "stream-id": 1, "remote": "mock", "id": "9-9", "checkpoint": "checkpoint"}
+2026/10/24 08:45:27.055178 +0800 INFO tn-service.logtail-server close logtail service {"uuid": "", "server-id": "01a16b5e-a48e-79db-a8fe-7c07cb7efd05"}
+2026/10/24 08:45:27.055271 +0800 ERROR tn-service.logtail-server stop logtail pull worker {"uuid": "", "server-id": "01a16b5e-a48e-79db-a8fe-7c07cb7efd05", "error": "context canceled"}
+2026/10/24 08:45:27.055270 +0800 ERROR tn-service.logtail-server stop subscription handler {"uuid": "", "server-id": "01a16b5e-a48e-79db-a8fe-7c07cb7efd05", "error": "context canceled"}
+2026/10/24 08:45:27.055280 +0800 ERROR tn-service.logtail-server stop session error handler {"uuid": "", "server-id": "01a16b5e-a48e-79db-a8fe-7c07cb7efd05", "error": "context canceled"}
+2026/10/24 08:45:27.055316 +0800 INFO tn-service.logtail-server clean session for morpc stream {"uuid": "", "server-id": "01a16b5e-a48e-79db-a8fe-7c07cb7efd05", "stream-id": 1, "remote": "mock"}
+2026/10/24 08:45:27.055290 +0800 ERROR tn-service.logtail-server stop session sender {"uuid": "", "server-id": "01a16b5e-a48e-79db-a8fe-7c07cb7efd05", "stream-id": 1, "remote": "mock", "error": "context canceled"}
+--- PASS: TestReadBarrierForcesFilteredProgressBeforeResponse (0.00s)
+=== RUN   TestReadBarrierDoesNotRegressNewerSessionProgress
+=== RUN   TestReadBarrierDoesNotRegressNewerSessionProgress/update/older-barrier
+2026/10/24 08:45:27.056247 +0800 DEBUG tn-service.logtail-server max data chunk size for segment {"uuid": "", "server-id": "01a16b5e-a490-7392-9cbc-27e8721601b3", "value": 992}
+2026/10/24 08:45:27.056313 +0800 INFO tn-service.logtail-server initialize new session for morpc stream {"uuid": "", "server-id": "01a16b5e-a490-7392-9cbc-27e8721601b3", "stream-id": 1, "remote": "mock"}
+2026/10/24 08:45:27.056352 +0800 INFO tn-service.logtail-server send subscription response {"uuid": "", "server-id": "01a16b5e-a490-7392-9cbc-27e8721601b3", "stream-id": 1, "remote": "mock", "table": "db_id:1 tb_id:2 partition_id:3 ", "To": ""}
+2026/10/24 08:45:27.056559 +0800 INFO tn-service.logtail-server close logtail service {"uuid": "", "server-id": "01a16b5e-a490-7392-9cbc-27e8721601b3"}
+2026/10/24 08:45:27.056585 +0800 INFO tn-service.logtail-server clean session for morpc stream {"uuid": "", "server-id": "01a16b5e-a490-7392-9cbc-27e8721601b3", "stream-id": 1, "remote": "mock"}
+2026/10/24 08:45:27.056601 +0800 ERROR tn-service.logtail-server stop session sender {"uuid": "", "server-id": "01a16b5e-a490-7392-9cbc-27e8721601b3", "stream-id": 1, "remote": "mock", "error": "context canceled"}
+=== RUN   TestReadBarrierDoesNotRegressNewerSessionProgress/subscription/older-barrier
+2026/10/24 08:45:27.056905 +0800 DEBUG tn-service.logtail-server max data chunk size for segment {"uuid": "", "server-id": "01a16b5e-a490-7da0-9b1f-42a30b59f0aa", "value": 992}
+2026/10/24 08:45:27.056972 +0800 INFO tn-service.logtail-server initialize new session for morpc stream {"uuid": "", "server-id": "01a16b5e-a490-7da0-9b1f-42a30b59f0aa", "stream-id": 1, "remote": "mock"}
+2026/10/24 08:45:27.056998 +0800 INFO tn-service.logtail-server send subscription response {"uuid": "", "server-id": "01a16b5e-a490-7da0-9b1f-42a30b59f0aa", "stream-id": 1, "remote": "mock", "table": "db_id:1 tb_id:2 partition_id:3 ", "To": ""}
+2026/10/24 08:45:27.057120 +0800 INFO tn-service.logtail-server send subscription response {"uuid": "", "server-id": "01a16b5e-a490-7da0-9b1f-42a30b59f0aa", "stream-id": 1, "remote": "mock", "table": "db_id:1 tb_id:4 partition_id:3 ", "To": "PhysicalTime:40 "}
+2026/10/24 08:45:27.057242 +0800 INFO tn-service.logtail-server close logtail service {"uuid": "", "server-id": "01a16b5e-a490-7da0-9b1f-42a30b59f0aa"}
+2026/10/24 08:45:27.057394 +0800 INFO tn-service.logtail-server clean session for morpc stream {"uuid": "", "server-id": "01a16b5e-a490-7da0-9b1f-42a30b59f0aa", "stream-id": 1, "remote": "mock"}
+2026/10/24 08:45:27.057433 +0800 ERROR tn-service.logtail-server stop session sender {"uuid": "", "server-id": "01a16b5e-a490-7da0-9b1f-42a30b59f0aa", "stream-id": 1, "remote": "mock", "error": "context canceled"}
+=== RUN   TestReadBarrierDoesNotRegressNewerSessionProgress/subscription/equal-barrier
+2026/10/24 08:45:27.058191 +0800 DEBUG tn-service.logtail-server max data chunk size for segment {"uuid": "", "server-id": "01a16b5e-a492-72c3-833e-62af1f419dd4", "value": 992}
+2026/10/24 08:45:27.058254 +0800 INFO tn-service.logtail-server initialize new session for morpc stream {"uuid": "", "server-id": "01a16b5e-a492-72c3-833e-62af1f419dd4", "stream-id": 1, "remote": "mock"}
+2026/10/24 08:45:27.058289 +0800 INFO tn-service.logtail-server send subscription response {"uuid": "", "server-id": "01a16b5e-a492-72c3-833e-62af1f419dd4", "stream-id": 1, "remote": "mock", "table": "db_id:1 tb_id:2 partition_id:3 ", "To": ""}
+2026/10/24 08:45:27.058405 +0800 INFO tn-service.logtail-server send subscription response {"uuid": "", "server-id": "01a16b5e-a492-72c3-833e-62af1f419dd4", "stream-id": 1, "remote": "mock", "table": "db_id:1 tb_id:4 partition_id:3 ", "To": "PhysicalTime:40 "}
+2026/10/24 08:45:27.058501 +0800 INFO tn-service.logtail-server close logtail service {"uuid": "", "server-id": "01a16b5e-a492-72c3-833e-62af1f419dd4"}
+2026/10/24 08:45:27.058520 +0800 INFO tn-service.logtail-server clean session for morpc stream {"uuid": "", "server-id": "01a16b5e-a492-72c3-833e-62af1f419dd4", "stream-id": 1, "remote": "mock"}
+2026/10/24 08:45:27.058535 +0800 ERROR tn-service.logtail-server stop session sender {"uuid": "", "server-id": "01a16b5e-a492-72c3-833e-62af1f419dd4", "stream-id": 1, "remote": "mock", "error": "context canceled"}
+=== RUN   TestReadBarrierDoesNotRegressNewerSessionProgress/subscription/newer-barrier
+2026/10/24 08:45:27.058805 +0800 DEBUG tn-service.logtail-server max data chunk size for segment {"uuid": "", "server-id": "01a16b5e-a492-7c1d-bcb2-9f29e79a7e88", "value": 992}
+2026/10/24 08:45:27.058876 +0800 INFO tn-service.logtail-server initialize new session for morpc stream {"uuid": "", "server-id": "01a16b5e-a492-7c1d-bcb2-9f29e79a7e88", "stream-id": 1, "remote": "mock"}
+2026/10/24 08:45:27.058908 +0800 INFO tn-service.logtail-server send subscription response {"uuid": "", "server-id": "01a16b5e-a492-7c1d-bcb2-9f29e79a7e88", "stream-id": 1, "remote": "mock", "table": "db_id:1 tb_id:2 partition_id:3 ", "To": ""}
+2026/10/24 08:45:27.059152 +0800 INFO tn-service.logtail-server send subscription response {"uuid": "", "server-id": "01a16b5e-a492-7c1d-bcb2-9f29e79a7e88", "stream-id": 1, "remote": "mock", "table": "db_id:1 tb_id:4 partition_id:3 ", "To": "PhysicalTime:40 "}
+2026/10/24 08:45:27.059253 +0800 INFO tn-service.logtail-server close logtail service {"uuid": "", "server-id": "01a16b5e-a492-7c1d-bcb2-9f29e79a7e88"}
+2026/10/24 08:45:27.059349 +0800 INFO tn-service.logtail-server clean session for morpc stream {"uuid": "", "server-id": "01a16b5e-a492-7c1d-bcb2-9f29e79a7e88", "stream-id": 1, "remote": "mock"}
+2026/10/24 08:45:27.059383 +0800 ERROR tn-service.logtail-server stop session sender {"uuid": "", "server-id": "01a16b5e-a492-7c1d-bcb2-9f29e79a7e88", "stream-id": 1, "remote": "mock", "error": "context canceled"}
+--- PASS: TestReadBarrierDoesNotRegressNewerSessionProgress (0.00s)
+    --- PASS: TestReadBarrierDoesNotRegressNewerSessionProgress/update/older-barrier (0.00s)
+    --- PASS: TestReadBarrierDoesNotRegressNewerSessionProgress/subscription/older-barrier (0.00s)
+    --- PASS: TestReadBarrierDoesNotRegressNewerSessionProgress/subscription/equal-barrier (0.00s)
+    --- PASS: TestReadBarrierDoesNotRegressNewerSessionProgress/subscription/newer-barrier (0.00s)
+PASS
+ok  	github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail/service	1.988s
