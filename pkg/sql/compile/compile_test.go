@@ -3264,6 +3264,86 @@ func TestCompilePartitionTopNGatedByProtocolVersion(t *testing.T) {
 	require.False(t, c.supportsRemotePartitionTopN(), "rollback must select the legacy partition path")
 }
 
+func TestMultiSourceISCPGatedByProtocolVersion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	service := proc.GetService()
+	rt := runtime.ServiceRuntime(service)
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
+	require.False(t, supportsMultiSourceISCP(service))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion43)
+	require.False(t, supportsMultiSourceISCP(service))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion56)
+	require.False(t, supportsMultiSourceISCP(service))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion63)
+	require.False(t, supportsMultiSourceISCP(service),
+		"the MV capability must not reuse a previously published protocol")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion64)
+	require.False(t, supportsMultiSourceISCP(service),
+		"MV capability must not reuse the typed BIN/CONV protocol")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+	require.False(t, supportsMultiSourceISCP(service))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion99)
+	require.False(t, supportsMultiSourceISCP(service), "the MV capability must be newer than the current predecessor")
+	for _, version := range []int64{defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122} {
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+		require.False(t, supportsMultiSourceISCP(service))
+	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion123)
+	require.False(t, supportsMultiSourceISCP(service), "row-lock protocol is not the MV capability")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion124)
+	require.False(t, supportsMultiSourceISCP(service), "fractional TIMESTAMPADD protocol is not the MV capability")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion125)
+	require.False(t, supportsMultiSourceISCP(service), "LOAD IGNORE FK protocol is not the MV capability")
+	for _, version := range []int64{defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128} {
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+		require.False(t, supportsMultiSourceISCP(service), "protocol %d is not the MV capability", version)
+	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion130)
+	require.True(t, supportsMultiSourceISCP(service))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
+	require.False(t, supportsMultiSourceISCP(service),
+		"rollback must reject multi-source jobs before contacting old CNs")
+}
+
+func TestMaterializedViewCapabilityAndReadValidationGuards(t *testing.T) {
+	c := NewMockCompile(t)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	// A compile without a query plan is a valid path for utility/internal
+	// statements and must not attempt MV catalog validation.
+	require.NoError(t, c.validateMaterializedViewReads())
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
+	require.NoError(t, c.validateMaterializedViewReads())
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+	require.Error(t, requireMaterializedViewCapability(c))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion99)
+	require.Error(t, requireMaterializedViewCapability(c))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion106)
+	require.Error(t, requireMaterializedViewCapability(c))
+	for _, version := range []int64{defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122} {
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+		require.Error(t, requireMaterializedViewCapability(c))
+	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion123)
+	require.Error(t, requireMaterializedViewCapability(c))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion124)
+	require.Error(t, requireMaterializedViewCapability(c))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion125)
+	require.Error(t, requireMaterializedViewCapability(c))
+	for _, version := range []int64{defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128} {
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+		require.Error(t, requireMaterializedViewCapability(c))
+	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion130)
+	require.NoError(t, requireMaterializedViewCapability(c))
+}
+
 func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
 	newNode := func() *plan.Node {
 		return &plan.Node{

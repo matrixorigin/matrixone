@@ -61,6 +61,22 @@ deallocate prepare wait_leaf_ft2;
 execute wait_leaf_hnsw;
 deallocate prepare wait_leaf_hnsw;
 
+-- The hidden-table markers prove restore initialization, but the branch UPDATE
+-- and INSERT can still be waiting in CDC. Wait until both index jobs have
+-- durably consumed a range beyond those commits before querying either index.
+-- An early MATCH can cache an empty fulltext2 result on its CN.
+set @leaf_dml_done_ns = cast(unix_timestamp(now(6)) * 1000000000 as unsigned);
+set @leaf_cdc_ready_sql = concat(
+  'select count(*) = 2 and coalesce(min(cast(substring_index(watermark, ''-'', 1) as unsigned)), 0) >= ',
+  @leaf_dml_done_ns, ' as ready from mo_catalog.mo_iscp_log',
+  ' where table_id = ', @leaf_id, ' and drop_at is null',
+  ' and job_name in (''index_ft'', ''index_hv'')'
+);
+prepare wait_leaf_cdc from @leaf_cdc_ready_sql;
+-- @wait_expect(2, 90)
+execute wait_leaf_cdc;
+deallocate prepare wait_leaf_cdc;
+
 -- Neither restore job may retain the permanent scheduler error caused by a
 -- shared Init iteration. The hidden-table waits above are the readiness guard
 -- before proving the optimizer paths.

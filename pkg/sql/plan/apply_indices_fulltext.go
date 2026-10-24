@@ -1419,6 +1419,23 @@ func isProjIndexPosition(projids []int32, i int32) bool {
 	return false
 }
 
+// fulltext2ProjectedScore reports whether an ORDER BY column is the score
+// output of a PROJECT. ColPos on the ORDER BY expression is an output
+// position, not the input score position; resolving it through ProjectList
+// keeps the early candidate cutoff tied to the actual fulltext2 score.
+func fulltext2ProjectedScore(project *plan.Node, orderExpr *plan.Expr, scoreTag int32) bool {
+	if project == nil || len(project.BindingTags) != 1 || orderExpr == nil {
+		return false
+	}
+	keyCol := orderExpr.GetCol()
+	if keyCol == nil || keyCol.RelPos != project.BindingTags[0] || keyCol.ColPos < 0 ||
+		int(keyCol.ColPos) >= len(project.ProjectList) {
+		return false
+	}
+	scoreCol := project.ProjectList[keyCol.ColPos].GetCol()
+	return scoreCol != nil && scoreCol.RelPos == scoreTag && scoreCol.ColPos == 1
+}
+
 // coveredFulltext2ScoreLimit is called only after exact predicate and projection
 // coverage has been proved. OFFSET remains on the outer sort; the search keeps
 // LIMIT+OFFSET score-ranked candidates, including legal arbitrary cutoff ties.
@@ -1457,6 +1474,65 @@ func (builder *QueryBuilder) pushCoveredFulltext2ScoreLimitFromSort(sortNode *pl
 	bound, ok := buildCandidateLimit(sortNode.Limit, sortNode.Offset)
 	if !ok || !fulltext2ScoreDescending(sortNode.OrderBy[0]) {
 		return
+	}
+	// A covered rewrite can leave the explicit score sort directly above the
+	// search scan. In that shape the projection that originally sat between
+	// the sort and scan has already been bypassed, so the chained-shape check
+	// below cannot see the equivalent score key. The direct shape is safe only
+	// when the sort key is the search scan's score column and the scan has no
+	// competing pagination or residual filter.
+	if len(sortNode.Children) == 1 {
+		search := builder.qry.Nodes[sortNode.Children[0]]
+		if search.NodeType == plan.Node_INDEX_SEARCH_SCAN &&
+			search.IndexSearchScan != nil &&
+			search.IndexSearchScan.GetIndex() != nil &&
+			catalog.IsFullText2IndexAlgo(search.IndexSearchScan.GetIndex().GetIndexAlgo()) &&
+			search.IndexSearchScan.CandidateLimit == nil &&
+			search.Limit == nil && search.Offset == nil && search.RankOption == nil &&
+			len(search.FilterList) == 0 {
+			keyCol := sortNode.OrderBy[0].Expr.GetCol()
+			if len(search.BindingTags) == 1 && keyCol != nil &&
+				keyCol.RelPos == search.BindingTags[0] && keyCol.ColPos == 1 {
+				search.IndexSearchScan.CandidateLimit = bound
+				return
+			}
+		}
+	}
+	// During the post-order index walk the parent SORT can still point at the
+	// rewritten PROJECT while that PROJECT already points directly at the
+	// covered search scan. This is the same safe score-only shape with one
+	// projection node left in between.
+	if len(sortNode.Children) == 1 {
+		project := builder.qry.Nodes[sortNode.Children[0]]
+		if project.NodeType == plan.Node_PROJECT &&
+			len(project.Children) == 1 && len(project.FilterList) == 0 &&
+			project.Limit == nil && project.Offset == nil && project.RankOption == nil {
+			search := builder.qry.Nodes[project.Children[0]]
+			if search.NodeType == plan.Node_INDEX_SEARCH_SCAN &&
+				search.IndexSearchScan != nil &&
+				search.IndexSearchScan.GetIndex() != nil &&
+				catalog.IsFullText2IndexAlgo(search.IndexSearchScan.GetIndex().GetIndexAlgo()) &&
+				search.IndexSearchScan.CandidateLimit == nil &&
+				search.Limit == nil && search.Offset == nil && search.RankOption == nil &&
+				len(search.FilterList) == 0 {
+				if len(search.BindingTags) == 1 &&
+					fulltext2ProjectedScore(project, sortNode.OrderBy[0].Expr, search.BindingTags[0]) {
+					allFromSearch := true
+					for _, expr := range project.ProjectList {
+						col := expr.GetCol()
+						if col == nil || col.RelPos != search.BindingTags[0] {
+							allFromSearch = false
+							break
+						}
+					}
+					if !allFromSearch {
+						return
+					}
+					search.IndexSearchScan.CandidateLimit = bound
+					return
+				}
+			}
+		}
 	}
 	keyCol := sortNode.OrderBy[0].Expr.GetCol()
 	project := builder.qry.Nodes[sortNode.Children[0]]

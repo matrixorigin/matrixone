@@ -52,6 +52,18 @@ execute wait_leaf_hnsw;
 ➤ ready[-7,1,0]  𝄀
 1
 deallocate prepare wait_leaf_hnsw;
+set @leaf_dml_done_ns = cast(unix_timestamp(now(6)) * 1000000000 as unsigned);
+set @leaf_cdc_ready_sql = concat(
+'select count(*) = 2 and coalesce(min(cast(substring_index(watermark, ''-'', 1) as unsigned)), 0) >= ',
+@leaf_dml_done_ns, ' as ready from mo_catalog.mo_iscp_log',
+' where table_id = ', @leaf_id, ' and drop_at is null',
+' and job_name in (''index_ft'', ''index_hv'')'
+);
+prepare wait_leaf_cdc from @leaf_cdc_ready_sql;
+execute wait_leaf_cdc;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_leaf_cdc;
 select count(*) from mo_catalog.mo_iscp_log
 where table_id = @leaf_id and drop_at is null
 and job_name in ('index_ft', 'index_hv')

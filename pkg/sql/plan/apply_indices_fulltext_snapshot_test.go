@@ -258,6 +258,7 @@ func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 		from       string
 		residual   string
 		wrap       bool
+		swapSelect bool
 		wantLimit  uint64
 	}{
 		{name: "implicit score order", pagination: "LIMIT 2", wantLimit: 2},
@@ -268,6 +269,7 @@ func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 		{name: "nested score page", orderBy: "sc DESC", pagination: "LIMIT 2 OFFSET 1", wrap: true, wantLimit: 3},
 		{name: "ascending score", orderBy: "sc ASC", pagination: "LIMIT 2"},
 		{name: "different sort", orderBy: "id DESC", pagination: "LIMIT 2"},
+		{name: "different sort with score first", orderBy: "id DESC", pagination: "LIMIT 2", swapSelect: true},
 		{name: "score with second key", orderBy: "sc DESC, id", pagination: "LIMIT 2"},
 		{name: "score expression", orderBy: "sc + 1 DESC", pagination: "LIMIT 2"},
 		{name: "no limit", orderBy: "sc DESC"},
@@ -285,7 +287,11 @@ func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 			if from == "" {
 				from = "ft"
 			}
-			statement := `SELECT ` + tc.prefix + `ft.id, MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) AS sc
+			selectList := `ft.id, MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) AS sc`
+			if tc.swapSelect {
+				selectList = `MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) AS sc, ft.id`
+			}
+			statement := `SELECT ` + tc.prefix + selectList + `
 				FROM ` + from + ` WHERE MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE)
 				AND base_id IS NULL` + tc.residual
 			if tc.orderBy != "" {
@@ -432,6 +438,31 @@ func TestCoveredFulltext2ScoreLimitSortBarriers(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestCoveredFulltext2DirectSortRequiresScoreBinding(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_float32)}
+	search := &plan.Node{
+		NodeType:    plan.Node_INDEX_SEARCH_SCAN,
+		BindingTags: []int32{1},
+		IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexFullText2Algo.ToString()},
+		},
+	}
+	b := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{search}}}
+	outer := &plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{0},
+		OrderBy:  []*plan.OrderBySpec{{Expr: GetColExpr(typ, 99, 1), Flag: plan.OrderBySpec_DESC}},
+		Limit:    makePlan2Uint64ConstExprWithType(2),
+	}
+	b.pushCoveredFulltext2ScoreLimitFromSort(outer)
+	require.Nil(t, search.IndexSearchScan.CandidateLimit,
+		"a matching ColPos from another binding must not authorize score cutoff")
+
+	outer.OrderBy[0].Expr = GetColExpr(typ, 1, 1)
+	b.pushCoveredFulltext2ScoreLimitFromSort(outer)
+	require.NotNil(t, search.IndexSearchScan.CandidateLimit)
 }
 
 // findCoveredFulltext2Scan returns the single fulltext2 index search scan appended by the

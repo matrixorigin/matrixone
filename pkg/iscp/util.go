@@ -189,6 +189,13 @@ func extractRowFromVector(ctx context.Context, vec *vector.Vector, i int, row []
 			scale := vec.GetType().Scale
 			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, rowIndex).Format(scale)
 		}
+	case types.T_decimal256:
+		if repr == ReprNative {
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal256](vec, rowIndex)
+		} else {
+			scale := vec.GetType().Scale
+			row[i] = vector.GetFixedAtWithTypeCheck[types.Decimal256](vec, rowIndex).Format(scale)
+		}
 	case types.T_uuid:
 		if repr == ReprNative {
 			row[i] = vector.GetFixedAtWithTypeCheck[types.Uuid](vec, rowIndex)
@@ -336,34 +343,95 @@ func convertColIntoSql(
 		sqlBuff = appendString(sqlBuff, value.String())
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_datetime:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Datetime:
+			value = v.String2(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected datetime value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_time:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Time:
+			value = v.String2(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected time value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_timestamp:
-		value := data.(string)
-		ts, err := types.ParseTimestamp(time.UTC, value, typ.Scale)
-		if err != nil {
-			return nil, err
+		var ts types.Timestamp
+		switch v := data.(type) {
+		case string:
+			parsed, err := types.ParseTimestamp(time.UTC, v, typ.Scale)
+			if err != nil {
+				return nil, err
+			}
+			ts = parsed
+		case types.Timestamp:
+			ts = v
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected timestamp value type %T", data)
 		}
 		sqlBuff = appendTimestampSQL(sqlBuff, ts, typ.Scale)
 	case types.T_decimal64:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Decimal64:
+			value = v.Format(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected decimal64 value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_decimal128:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Decimal128:
+			value = v.Format(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected decimal128 value type %T", data)
+		}
+		sqlBuff = appendByte(sqlBuff, '\'')
+		sqlBuff = appendString(sqlBuff, value)
+		sqlBuff = appendByte(sqlBuff, '\'')
+	case types.T_decimal256:
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Decimal256:
+			value = v.Format(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected decimal256 value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_uuid:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Uuid:
+			value = v.String()
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected uuid value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')

@@ -1598,7 +1598,10 @@ func restoreToDatabaseOrTableWithPitr(
 		}
 
 		// skip view
-		if tblInfo.typ == view {
+		if isMaterializedViewState(tblInfo) {
+			continue
+		}
+		if isViewLike(tblInfo) {
 			viewMap[key] = tblInfo
 			continue
 		}
@@ -1749,6 +1752,9 @@ func getTableInfoWithPitr(
 					},
 				)
 			}
+			if sql, ok := materializedViewCreateSQL(tblInfo); ok {
+				return sql, nil
+			}
 			return getCreateTableSqlWithTs(ctx, bh, ts, tblInfo.dbName, tblInfo.tblName)
 		},
 	)
@@ -1783,6 +1789,14 @@ func showFullTablesWitsTs(
 			relKind: cols[2],
 			viewDef: cols[3],
 		}
+	}
+	classifyMaterializedViewInfos(ans)
+
+	if err := annotateMaterializedViewStates(ans, dbName, ts, accountId,
+		func(query string, indices ...uint64) ([][]string, error) {
+			return getStringColsList(ctx, bh, query, indices...)
+		}); err != nil {
+		return nil, err
 	}
 	getLogger(sid).Info(fmt.Sprintf("[%s] show full table `%s.%s`, get table number `%d`", pitrName, dbName, tblName, len(ans)))
 	return ans, nil
@@ -1952,6 +1966,7 @@ func restoreViewsWithPitr(
 		if err != nil {
 			return err
 		}
+		materializedDeps := restoreMaterializedViewDependencies(stmts, viewEntry.dbName, viewMap)
 
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
@@ -1962,6 +1977,7 @@ func restoreViewsWithPitr(
 			if err != nil {
 				return err
 			}
+			materializedDeps = restoreMaterializedViewDependencies(stmts, viewEntry.dbName, viewMap)
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
 			freeStatements(stmts)
 			if err != nil {
@@ -1987,6 +2003,9 @@ func restoreViewsWithPitr(
 			}
 			g.addEdge(depView, key)
 		}
+		for _, dep := range materializedDeps {
+			g.addEdge(dep, key)
+		}
 	}
 
 	// topsort
@@ -2010,7 +2029,7 @@ func restoreViewsWithPitr(
 				continue
 			}
 
-			if err = bh.Exec(ctx, dropViewIfExistsSQL(tblInfo.tblName)); err != nil {
+			if err = bh.Exec(ctx, dropRestoreViewIfExistsSQL(tblInfo)); err != nil {
 				return err
 			}
 

@@ -60,7 +60,7 @@ func IsPrepareStatement(stmt tree.Statement) bool {
 func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable,
-		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.RenameTable,
+		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.RefreshMaterializedView, *tree.AlterTable, *tree.RenameTable,
 		*tree.CreateDatabase, *tree.AlterDatabase, *tree.DropDatabase, *tree.CreateSequence, *tree.DropSequence,
 		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable,
 		*tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog:
@@ -224,7 +224,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 
 	switch st := stmt.(type) {
 	//ddl statement
-	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.AlterTable,
+	case *tree.CreateTable, *tree.CreateIndex, *tree.CreateView, *tree.AlterView, *tree.RefreshMaterializedView, *tree.AlterTable,
 		*tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog:
 		// CTAS is allowed in explicit transactions now because its internal
 		// INSERT ... SELECT is executed in the same txn as CREATE TABLE.

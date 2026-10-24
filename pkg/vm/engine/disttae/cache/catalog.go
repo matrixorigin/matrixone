@@ -28,6 +28,7 @@ import (
 	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1083,7 +1084,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 
 	// IsTemporary is session state, not a projection of the durable marker.
 	// The compiler sets it only after resolving a session's temporary alias.
-	return &plan.TableDef{
+	result := &plan.TableDef{
 		TblId:            tblItem.Id,
 		Name:             tblItem.Name,
 		DbName:           tblItem.DatabaseName,
@@ -1110,7 +1111,9 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		KeyFormat:        tblItem.ExtraInfo.GetKeyFormat(),
 		Checks:           tblItem.ExtraInfo.GetChecks(),
 		LogicalId:        tblItem.LogicalId,
-	}, tableDef
+	}
+	mvdefinition.PlannerKind(result)
+	return result, tableDef
 }
 
 // ReplayClusterKey copies one schema under the same publication guard as column
