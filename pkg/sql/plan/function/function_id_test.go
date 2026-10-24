@@ -858,7 +858,7 @@ var predefinedFunids = map[int]int{
 	INTERNAL_TABLE_COLLATION:     600,
 	TIMESTAMPADD_SECOND_INTERVAL: 601,
 	LOAD_FK_IGNORE_CHECK:         602,
-SMA:                          605,
+	SMA:                          605,
 	WMA:                          606,
 	TRIMA:                        607,
 	EMA:                          608,
@@ -870,7 +870,7 @@ SMA:                          605,
 	MMAXDRAWDOWN:                 614,
 	CUMPOSITIVESTREAK:            615,
 	SET_OPERATION_FLOAT_KEY:      616,
-	FUNCTION_END_NUMBER:          617
+	FUNCTION_END_NUMBER:          617,
 }
 
 func Test_funids(t *testing.T) {
