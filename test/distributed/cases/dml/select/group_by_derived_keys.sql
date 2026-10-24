@@ -37,4 +37,24 @@ select b,b+1,count(*) from t group by b,b+1 having count(*)>100;
 select x,1/x,count(*) from t group by x,1/x order by x;
 show warnings;
 
+
+-- Mixed physical equality keeps the ordinary keys and PAD SPACE partition.
+create table mixed_keys(k int, a varchar(8), z varchar(8));
+insert into mixed_keys values (1,'a','same'),(1,'a ','same'),(1,null,'same'),(2,'b','other'),(2,'b','other');
+select k,count(*) n from
+(select k,coalesce(cast(a as char(8)),cast(a as varchar(8))) v,z from mixed_keys group by k,v,z) g
+group by k order by k;
+select count(*) n from
+(select distinct k,coalesce(cast(a as char(8)),cast(a as varchar(8))) v,z from mixed_keys) g;
+select k,sum(n) n,sum(d) d from
+(select k,coalesce(cast(a as char(8)),cast(a as varchar(8))) v,z,count(*) n,count(distinct a) d from mixed_keys group by k,v,z) g
+group by k order by k;
+select k,count(*) n from mixed_keys group by rollup(k) order by k;
+prepare mixed_key_param from 'select count(*) n from (select distinct k,coalesce(cast(a as char(8)),cast(? as varchar(8))) v,z from mixed_keys) g';
+set @fallback=null;
+execute mixed_key_param using @fallback;
+set @fallback='a';
+execute mixed_key_param using @fallback;
+deallocate prepare mixed_key_param;
+
 drop database group_by_derived_keys;

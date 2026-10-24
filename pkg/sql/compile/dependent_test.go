@@ -120,9 +120,10 @@ func TestDependentUnionEqualityKeys(t *testing.T) {
 				defer distinct.Release()
 				defer distinct.GetChildren(0).(*unionall.UnionAll).Release()
 				if physical {
-					require.Len(t, distinct.GroupBy, 2)
-					require.Equal(t, []int32{1}, distinct.GroupByHashKey)
-					require.True(t, proto.Equal(n.PhysicalEqualityKeyList[0], distinct.GroupBy[1]))
+					require.Len(t, distinct.GroupBy, 1)
+					require.Empty(t, distinct.GroupByHashKey)
+					require.True(t, proto.Equal(n.PhysicalEqualityKeyList[0], distinct.GroupBy[0]))
+					require.Len(t, n.PhysicalEqualityKeyList, 1, "set tuple remains complete")
 					require.Len(t, distinct.ProjectList, 1)
 					require.Zero(t, distinct.ProjectList[0].GetCol().ColPos)
 				} else {
@@ -133,6 +134,28 @@ func TestDependentUnionEqualityKeys(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestDependentUnionMixedEqualityKeys(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	typ := types.T_varchar.ToType().PlanType()
+	visible := []*plan.Expr{plan2.GetColExpr(typ, 0, 0), plan2.GetColExpr(typ, 0, 1)}
+	physical := plan2.DeepCopyExprList(visible)
+	physical[1].Typ.PadSpace = true
+	n := &plan.Node{NodeType: plan.Node_UNION, ProjectList: visible, PhysicalEqualityKeyList: physical}
+	factory, _, err := (&Compile{proc: proc}).compileDependentKernel(n, []*plan.Node{{}, {}})
+	require.NoError(t, err)
+	op, err := factory(proc, nil)
+	require.NoError(t, err)
+	distinct := op.(*group.Group)
+	defer distinct.Release()
+	defer distinct.GetChildren(0).(*unionall.UnionAll).Release()
+	require.Len(t, distinct.GroupBy, 3)
+	require.Equal(t, []int32{0, 2}, distinct.GroupByHashKey)
+	require.Len(t, distinct.ProjectList, 2)
+	require.Len(t, n.PhysicalEqualityKeyList, 2)
+	require.True(t, proto.Equal(physical[1], distinct.GroupBy[2]))
 }
 
 func TestDependentNativeStages(t *testing.T) {
