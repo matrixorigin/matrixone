@@ -63,4 +63,83 @@ drop table child_notnull;
 drop table child_ok;
 drop table child_ok2;
 drop table parent;
+set foreign_key_checks = 0;
+create table fwd_child (
+id int primary key,
+pid int not null,
+key idx_pid (pid),
+constraint fk_fwd foreign key (pid) references fwd_parent (id) on delete set null
+);
+set foreign_key_checks = 1;
+create table fwd_parent (id int primary key);
+Column 'pid' cannot be NOT NULL: needed in a foreign key constraint 'fk_fwd' SET NULL
+set foreign_key_checks = 0;
+create table fwd_child_ok (
+id int primary key,
+pid int,
+key idx_pid (pid),
+constraint fk_fwd_ok foreign key (pid) references fwd_parent (id) on delete set null
+);
+drop table fwd_child;
+create table fwd_parent (id int primary key);
+set foreign_key_checks = 1;
+select count(*) as fk_count from information_schema.table_constraints where constraint_schema = 'fk_issue_30282' and constraint_type = 'FOREIGN KEY';
+fk_count
+1
+create table alt_parent (id int primary key);
+create table alt_child (
+id int primary key,
+pid int,
+key idx_pid (pid),
+constraint fk_alt_setnull foreign key (pid) references alt_parent (id) on delete set null
+);
+alter table alt_child modify pid int not null;
+Column 'pid' cannot be NOT NULL: needed in a foreign key constraint 'fk_alt_setnull' SET NULL
+alter table alt_child change pid pid int not null;
+Column 'pid' cannot be NOT NULL: needed in a foreign key constraint 'fk_alt_setnull' SET NULL
+create table alt_child_np (
+id int,
+pid int,
+key idx_pid (pid),
+constraint fk_alt_np foreign key (pid) references alt_parent (id) on delete set null
+);
+alter table alt_child_np add primary key (pid);
+Column 'pid' cannot be NOT NULL: needed in a foreign key constraint 'fk_alt_np' SET NULL
+alter table alt_child drop foreign key fk_alt_setnull;
+alter table alt_child modify pid int not null;
+select count(*) as non_null_pid from information_schema.columns where table_schema = 'fk_issue_30282' and table_name = 'alt_child' and column_name = 'pid' and is_nullable = 'NO';
+non_null_pid
+1
+alter table alt_child_np drop foreign key fk_alt_np;
+alter table alt_child_np add primary key (pid);
+select count(*) as np_fk_count from information_schema.table_constraints where constraint_schema = 'fk_issue_30282' and table_name = 'alt_child_np' and constraint_type = 'FOREIGN KEY';
+np_fk_count
+0
+create table alt_child_c (
+id int primary key,
+pid int,
+key idx_pid (pid),
+constraint fk_alt_c foreign key (pid) references alt_parent (id) on delete cascade
+);
+alter table alt_child_c modify pid int not null;
+select count(*) as c_non_null_pid from information_schema.columns where table_schema = 'fk_issue_30282' and table_name = 'alt_child_c' and column_name = 'pid' and is_nullable = 'NO';
+c_non_null_pid
+1
+create table alt_child_n (
+id int primary key,
+pid int,
+key idx_pid (pid),
+constraint fk_alt_n foreign key (pid) references alt_parent (id) on delete set null
+);
+alter table alt_child_n modify pid int;
+select count(*) as n_nullable_pid from information_schema.columns where table_schema = 'fk_issue_30282' and table_name = 'alt_child_n' and column_name = 'pid' and is_nullable = 'YES';
+n_nullable_pid
+1
+drop table fwd_child_ok;
+drop table fwd_parent;
+drop table alt_child;
+drop table alt_child_np;
+drop table alt_child_c;
+drop table alt_child_n;
+drop table alt_parent;
 drop database fk_issue_30282;

@@ -578,6 +578,12 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 	); err != nil {
 		return nil, err
 	}
+	// A surviving SET NULL constraint must remain executable over the final
+	// schema: reject an ALTER that tightens its child column to NOT NULL
+	// (#30282 review).
+	if err = checkAlterSurvivingFkSetNull(cctx, tableName, droppedFkNames(validAlterSpecs), tableDef, copyTableDef); err != nil {
+		return nil, err
+	}
 	for _, check := range pendingChecks {
 		if err = appendCheckDef(cctx, copyTableDef, check.ConstraintSymbol, check.Expr, -1); err != nil {
 			return nil, err
@@ -1345,6 +1351,24 @@ func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, sch
 		copyTableName:   copyTableDef.Name,
 		changColDefMap:  changTblColIdMap,
 	}
+}
+
+// droppedFkNames collects the FOREIGN KEY constraints the statement drops, so
+// surviving-constraint validation does not raise error 1830 for a definition
+// this same ALTER is removing anyway.
+func droppedFkNames(specs []tree.AlterTableOption) map[string]bool {
+	var out map[string]bool
+	for _, spec := range specs {
+		drop, ok := spec.(*tree.AlterOptionDrop)
+		if !ok || drop.Typ != tree.AlterTableDropForeignKey {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]bool)
+		}
+		out[strings.ToLower(string(drop.Name))] = true
+	}
+	return out
 }
 
 func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, error) {

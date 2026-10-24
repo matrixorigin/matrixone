@@ -70,4 +70,90 @@ drop table child_notnull;
 drop table child_ok;
 drop table child_ok2;
 drop table parent;
+
+-- review: an unresolved (forward-referenced) child declaring ON DELETE SET NULL
+-- over a NOT NULL column under foreign_key_checks=0 must fail when the parent
+-- creation binds the pair (MySQL error 1830)
+set foreign_key_checks = 0;
+create table fwd_child (
+    id int primary key,
+    pid int not null,
+    key idx_pid (pid),
+    constraint fk_fwd foreign key (pid) references fwd_parent (id) on delete set null
+);
+set foreign_key_checks = 1;
+create table fwd_parent (id int primary key);
+
+-- same flow over a NULLABLE column stays legal
+set foreign_key_checks = 0;
+create table fwd_child_ok (
+    id int primary key,
+    pid int,
+    key idx_pid (pid),
+    constraint fk_fwd_ok foreign key (pid) references fwd_parent (id) on delete set null
+);
+-- drop the rejected child, then the parent creation succeeds and binds fwd_child_ok
+drop table fwd_child;
+create table fwd_parent (id int primary key);
+set foreign_key_checks = 1;
+select count(*) as fk_count from information_schema.table_constraints where constraint_schema = 'fk_issue_30282' and constraint_type = 'FOREIGN KEY';
+
+-- review: ALTER tightening the child column under a SURVIVING ON DELETE
+-- SET NULL constraint must be rejected in every form (MySQL error 1830)
+create table alt_parent (id int primary key);
+create table alt_child (
+    id int primary key,
+    pid int,
+    key idx_pid (pid),
+    constraint fk_alt_setnull foreign key (pid) references alt_parent (id) on delete set null
+);
+alter table alt_child modify pid int not null;
+alter table alt_child change pid pid int not null;
+
+-- same via ADD PRIMARY KEY on a table without an explicit primary key
+create table alt_child_np (
+    id int,
+    pid int,
+    key idx_pid (pid),
+    constraint fk_alt_np foreign key (pid) references alt_parent (id) on delete set null
+);
+alter table alt_child_np add primary key (pid);
+
+-- dropping the constraint unblocks the tightening
+alter table alt_child drop foreign key fk_alt_setnull;
+alter table alt_child modify pid int not null;
+select count(*) as non_null_pid from information_schema.columns where table_schema = 'fk_issue_30282' and table_name = 'alt_child' and column_name = 'pid' and is_nullable = 'NO';
+
+-- dropping the constraint first unblocks ADD PRIMARY KEY as well
+alter table alt_child_np drop foreign key fk_alt_np;
+alter table alt_child_np add primary key (pid);
+select count(*) as np_fk_count from information_schema.table_constraints where constraint_schema = 'fk_issue_30282' and table_name = 'alt_child_np' and constraint_type = 'FOREIGN KEY';
+
+-- CASCADE over the same column stays legal when tightening
+create table alt_child_c (
+    id int primary key,
+    pid int,
+    key idx_pid (pid),
+    constraint fk_alt_c foreign key (pid) references alt_parent (id) on delete cascade
+);
+alter table alt_child_c modify pid int not null;
+select count(*) as c_non_null_pid from information_schema.columns where table_schema = 'fk_issue_30282' and table_name = 'alt_child_c' and column_name = 'pid' and is_nullable = 'NO';
+
+-- nullable-preserving MODIFY stays legal
+create table alt_child_n (
+    id int primary key,
+    pid int,
+    key idx_pid (pid),
+    constraint fk_alt_n foreign key (pid) references alt_parent (id) on delete set null
+);
+alter table alt_child_n modify pid int;
+select count(*) as n_nullable_pid from information_schema.columns where table_schema = 'fk_issue_30282' and table_name = 'alt_child_n' and column_name = 'pid' and is_nullable = 'YES';
+
+drop table fwd_child_ok;
+drop table fwd_parent;
+drop table alt_child;
+drop table alt_child_np;
+drop table alt_child_c;
+drop table alt_child_n;
+drop table alt_parent;
 drop database fk_issue_30282;

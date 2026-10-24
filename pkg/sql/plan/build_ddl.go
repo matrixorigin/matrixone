@@ -8118,20 +8118,80 @@ func checkFkSetNullColumnsRequireNullable(gctx context.Context, tableCols []*pla
 			// The accurate "column does not exist" error is raised elsewhere.
 			continue
 		}
-		// Default.NullAbility is the authoritative flag: it carries both the
-		// explicit NOT NULL attribute and the primary-key implied NOT NULL.
-		// NotNull/Typ.NotNullable cover catalog-loaded definitions whose
-		// Default slot may be unset.
-		notNull := col.NotNull || col.Typ.NotNullable
-		if col.Default != nil {
-			notNull = notNull || !col.Default.NullAbility
-		}
-		if notNull {
+		// fkColumnNotNullable documents the predicate origin (explicit NOT
+		// NULL attribute, primary-key implication and catalog-loaded flag).
+		if fkColumnNotNullable(col) {
 			name := col.Name
 			if col.OriginName != "" {
 				name = col.OriginName
 			}
 			return moerr.NewErrFkColumnNotNull(gctx, name, fkDef.Name)
+		}
+	}
+	return nil
+}
+
+// fkColumnNotNullable is the shared nullability predicate used by the FK
+// SET NULL validation: Default.NullAbility is the authoritative flag (it
+// carries both the explicit NOT NULL attribute and the primary-key implied
+// NOT NULL), while NotNull/Typ.NotNullable cover catalog-loaded definitions
+// whose Default slot may be unset.
+func fkColumnNotNullable(col *plan.ColDef) bool {
+	notNull := col.NotNull || col.Typ.NotNullable
+	if col.Default != nil {
+		notNull = notNull || !col.Default.NullAbility
+	}
+	return notNull
+}
+
+// checkAlterSurvivingFkSetNull rejects an ALTER that makes a child column of
+// a SURVIVING SET NULL foreign key NOT NULL — MODIFY/CHANGE ... NOT NULL or
+// ADD PRIMARY KEY would leave the constraint impossible to execute (MySQL
+// error 1830, #30282 review). Only columns whose NOT NULL status is newly
+// introduced by this ALTER are tightened; columns that were already NOT NULL
+// keep their previously validated constraint, constraints dropped by the
+// same statement are ignored, and the historical-restore replay keeps the
+// legacy layout buildable.
+func checkAlterSurvivingFkSetNull(cctx CompilerContext, tableName string, droppedFks map[string]bool, oldDef, newDef *plan.TableDef) error {
+	if ddlReplayForTable(cctx.GetContext(), tableName) != nil {
+		// historical-restore exception
+		return nil
+	}
+	if len(newDef.Fkeys) == 0 {
+		return nil
+	}
+	oldNotNull := make(map[string]bool, len(oldDef.Cols))
+	for _, col := range oldDef.Cols {
+		if fkColumnNotNullable(col) {
+			oldNotNull[strings.ToLower(col.Name)] = true
+		}
+	}
+	id2col := make(map[uint64]*plan.ColDef, len(newDef.Cols))
+	for _, col := range newDef.Cols {
+		id2col[col.ColId] = col
+	}
+	for _, fk := range newDef.Fkeys {
+		if fk == nil ||
+			(fk.OnDelete != plan.ForeignKeyDef_SET_NULL &&
+				fk.OnUpdate != plan.ForeignKeyDef_SET_NULL) {
+			continue
+		}
+		if droppedFks[strings.ToLower(fk.Name)] {
+			continue
+		}
+		for _, id := range fk.Cols {
+			col, ok := id2col[id]
+			if !ok || col == nil {
+				continue
+			}
+			if !fkColumnNotNullable(col) || oldNotNull[strings.ToLower(col.Name)] {
+				continue
+			}
+			name := col.Name
+			if col.OriginName != "" {
+				name = col.OriginName
+			}
+			return moerr.NewErrFkColumnNotNull(cctx.GetContext(), name, fk.Name)
 		}
 	}
 	return nil
@@ -8258,6 +8318,13 @@ func BindForwardForeignKey(ctx context.Context, constraintName string,
 
 	// 3. check fk valid or not
 	if err := checkForeignKeyColumns(ctx, &fkData, parentTableDef); err != nil {
+		return nil, err
+	}
+	// #30282 forward-binding parity: an unresolved declaration admitted under
+	// foreign_key_checks=0 over a NOT NULL child column must not bind when the
+	// parent table is created either (MySQL error 1830); a SET NULL action
+	// could never write NULL there.
+	if err := checkFkSetNullColumnsRequireNullable(ctx, childTableDef.Cols, fkData.Def, fkData.Cols.Cols); err != nil {
 		return nil, err
 	}
 	return &fkData, nil
