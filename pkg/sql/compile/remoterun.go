@@ -161,8 +161,17 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if requiredProtocol != nil && (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion122)
 	}
+	if requiredProtocol != nil && features.TimestampAddSecondIntervals {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion124)
+	}
 	if requiredProtocol != nil && features.LoadFKIgnoreCheck {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion125)
+	}
+	if requiredProtocol != nil && features.ViewMetadataFunctions {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion126)
+	}
+	if requiredProtocol != nil && features.SetOperationFloatKeys {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion131)
 	}
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
@@ -975,6 +984,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		in.SpillMem = t.SpillThreshold
 	case *loopjoin.LoopJoin:
+		in.ScalarSetReaggregation = t.ScalarSetReaggregation
 		relList, colList := getRelColList(t.ResultCols)
 		in.LoopJoin = &pipeline.LoopJoin{
 			JoinType:   t.JoinType,
@@ -1612,6 +1622,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.LoopJoin:
 		t := opr.GetLoopJoin()
 		arg := loopjoin.NewArgument()
+		arg.ScalarSetReaggregation = opr.ScalarSetReaggregation
 		arg.ResultCols = convertToResultPos(t.RelList, t.ColList)
 		arg.LeftTypes = convertToTypes(t.LeftTypes)
 		arg.RightTypes = convertToTypes(t.RightTypes)
@@ -2359,7 +2370,13 @@ func validateRemoteExpressionPipelineProtocol(
 	if err != nil {
 		return err
 	}
-	return validateRemoteExpressionFeatures(proc, features)
+	if err := validateRemoteExpressionFeatures(proc, features); err != nil {
+		return err
+	}
+	if features.ScalarSetReaggregation {
+		return moerr.NewNotSupportedNoCtx("bounded scalar set reaggregation requires coordinator-local execution")
+	}
+	return nil
 }
 
 // The sender reuses analysis of its current pipeline; the receiver computes
@@ -2408,6 +2425,12 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.LeastGreatestCollationSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
 		return moerr.NewNotSupportedNoCtx("collation-aware LEAST/GREATEST requires MORPC protocol version 117")
+	}
+	if features.SetOperationFloatKeys && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion131) {
+		return moerr.NewNotSupportedNoCtx("set-operation float keys require MORPC protocol version 131")
+	}
+	if features.ScalarSetReaggregation && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion131) {
+		return moerr.NewNotSupportedNoCtx("bounded scalar set reaggregation requires MORPC protocol version 131")
 	}
 	if features.CalendarIntervalNormalization && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion115) {
 		return moerr.NewNotSupportedNoCtx("calendar interval normalization requires MORPC protocol version 115")

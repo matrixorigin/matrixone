@@ -24,11 +24,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -306,6 +308,19 @@ func NewExpressionExecutorWithAllocation(
 	return &memoRootExpressionExecutor{executor: executor, states: buildCtx.states}, nil
 }
 
+// Retained and directly constructed expressions recheck the current rollout
+// floor before allocating native state, including dependent expression programs.
+func validateSetOperationFloatKeyProtocol(proc *process.Process, overloadID int64) error {
+	if int32(overloadID>>32) != function.SET_OPERATION_FLOAT_KEY {
+		return nil
+	}
+	version, known := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	if floor, ok := version.(int64); !known || !ok || floor < defines.MORPCVersion131 {
+		return moerr.NewNotSupportedNoCtx("set-operation float keys require MORPC protocol version 131")
+	}
+	return nil
+}
+
 func newExpressionExecutorWithAllocation(
 	proc *process.Process,
 	planExpr *plan.Expr,
@@ -472,6 +487,9 @@ func newExpressionExecutorWithAllocation(
 			if typ.Oid != want {
 				return nil, moerr.NewNotSupportedNoCtx("TIMESTAMP result vector contract mismatch requires rebinding")
 			}
+		}
+		if err := validateSetOperationFloatKeyProtocol(proc, overloadID); err != nil {
+			return nil, err
 		}
 		overload, err := function.GetFunctionById(proc.Ctx, overloadID)
 		if err != nil {

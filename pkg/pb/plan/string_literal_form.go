@@ -399,6 +399,7 @@ const (
 // over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
 // IncompleteTemporalStrings requires MORPC v130 for raw-calendar string
 // overloads and incomplete-input rejection diagnostics.
+// SetOperationFloatKeys requires MORPC v131 for append-only function ID 616.
 type RemoteExpressionFeatures struct {
 	JSONStringConsumerOverload    bool
 	JSONOpaqueTextContracts       bool
@@ -406,6 +407,8 @@ type RemoteExpressionFeatures struct {
 	JSONNumericComparisons        bool
 	DependentPrograms             bool
 	CalendarIntervalNormalization bool
+	SetOperationFloatKeys         bool
+	ScalarSetReaggregation        bool
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
 	// execution-only floor; persisted expression contracts remain unchanged.
 	ScalarDivision bool
@@ -457,7 +460,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.ScalarSetReaggregation || features.SetOperationFloatKeys || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -934,7 +937,7 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 // can retain precise diagnostics, while sharing one owner walk so adding one
 // feature cannot accidentally replace another feature's compatibility gate.
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
-	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
+	err = walkExpressionOwners(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
 			features.DependentPrograms = features.DependentPrograms || current.GetDependent() != nil || current.GetSlot() != nil
 			if literal := current.GetLit(); literal != nil && !literal.Isnull && current.Typ.Id == planJSONTypeID {
@@ -965,6 +968,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				if (id == 104 || id == 122) && overload == 4 { // GREATEST/LEAST collation-aware ordering
 					features.LeastGreatestCollationSemantics = true
+				}
+				if id == 616 { // SET_OPERATION_FLOAT_KEY; append-only execution identity
+					features.SetOperationFloatKeys = true
 				}
 				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
 					features.CalendarIntervalNormalization = true
@@ -1225,6 +1231,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			return nil
 		})
+	}, func(owner any) error {
+		if marked, ok := owner.(interface{ GetScalarSetReaggregation() bool }); ok && marked.GetScalarSetReaggregation() {
+			features.ScalarSetReaggregation = true
+		}
+		return nil
 	})
 	return
 }
@@ -1706,6 +1717,10 @@ func validateStringLiteralFormsInOwner(owner any) error {
 }
 
 func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
+	return walkExpressionOwners(owner, visitor, nil)
+}
+
+func walkExpressionOwners(owner any, visitor func(*Expr) error, ownerVisitor func(any) error) error {
 	seen := make(map[uintptr]struct{})
 	var walk func(reflect.Value) error
 	walk = func(value reflect.Value) error {
@@ -1721,6 +1736,11 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 		if value.Kind() == reflect.Pointer {
 			if value.IsNil() {
 				return nil
+			}
+			if ownerVisitor != nil && value.CanInterface() {
+				if err := ownerVisitor(value.Interface()); err != nil {
+					return err
+				}
 			}
 			if expr, ok := value.Interface().(*Expr); ok {
 				return visitor(expr)

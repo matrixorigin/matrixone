@@ -563,6 +563,12 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 	t.Run("IntersectAll", func(t *testing.T) {
 		keyExpr := plan.MakePlan2Int64ConstExprWithType(7)
 		original := &intersectall.IntersectAll{KeyExprs: []*planpb.Expr{keyExpr}}
+		for _, oid := range []types.T{types.T_float32, types.T_float64} {
+			col := plan.GetColExpr(planpb.Type{Id: int32(oid), Scale: 2}, 0, int32(len(original.KeyExprs)))
+			key, err := plan.BindFuncExprImplByPlanExpr(t.Context(), "set_operation_float_key", []*planpb.Expr{col})
+			require.NoError(t, err)
+			original.KeyExprs = append(original.KeyExprs, key)
+		}
 		restored := roundTrip(t, original)
 		defer restored.Release()
 		require.IsType(t, &intersectall.IntersectAll{}, restored)
@@ -573,6 +579,12 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 	t.Run("MinusAll", func(t *testing.T) {
 		keyExpr := plan.MakePlan2Int64ConstExprWithType(8)
 		original := &minusall.MinusAll{KeyExprs: []*planpb.Expr{keyExpr}}
+		for _, oid := range []types.T{types.T_float32, types.T_float64} {
+			col := plan.GetColExpr(planpb.Type{Id: int32(oid), Scale: 2}, 0, int32(len(original.KeyExprs)))
+			key, err := plan.BindFuncExprImplByPlanExpr(t.Context(), "set_operation_float_key", []*planpb.Expr{col})
+			require.NoError(t, err)
+			original.KeyExprs = append(original.KeyExprs, key)
+		}
 		restored := roundTrip(t, original)
 		defer restored.Release()
 		require.IsType(t, &minusall.MinusAll{}, restored)

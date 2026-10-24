@@ -25,7 +25,7 @@ func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
 	for _, tc := range []struct {
 		id   int64
 		want bool
-	}{{590, false}, {591, false}, {592, false}, {593, false}, {594, false}, {595, false}, {596, false}, {597, false}, {598, false}, {599, false}, {600, false}, {601, false}, {602, false}, {603, true}, {604, true}, {605, false}} {
+	}{{590, false}, {591, false}, {592, false}, {593, false}, {594, false}, {595, false}, {596, false}, {597, false}, {598, false}, {599, false}, {600, false}, {601, false}, {602, false}, {603, true}, {604, true}, {605, false}, {606, false}, {616, false}, {617, false}} {
 		t.Run(fmt.Sprintf("function_%d", tc.id), func(t *testing.T) {
 			// Identity, not the spelling or the surrounding expression shape,
 			// controls the floor. A subquery child exercises nested detection.
@@ -39,7 +39,8 @@ func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
 			require.Equal(t, tc.id == 600, features.TableCollationFunction)
 			require.Equal(t, tc.id == 601, features.TimestampAddSecondIntervals)
 			require.Equal(t, tc.id == 602, features.LoadFKIgnoreCheck)
-			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600 || tc.id == 601 || tc.id == 602, features.Any())
+			require.Equal(t, tc.id == 616, features.SetOperationFloatKeys)
+			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600 || tc.id == 601 || tc.id == 602 || tc.id == 616, features.Any())
 		})
 	}
 	for name, expr := range map[string]*Expr{
@@ -70,6 +71,32 @@ func TestValidateStringLiteralFormsAfterWireDecode(t *testing.T) {
 	encoded, err = generated.MarshalBinary()
 	require.NoError(t, err)
 	require.ErrorContains(t, (&GeneratedCol{}).UnmarshalBinary(encoded), "invalid string literal form 99")
+}
+
+func nestedUnaryExpr(depth int) *Expr {
+	expr := &Expr{Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: "x"}}}}
+	for i := 0; i < depth; i++ {
+		expr = &Expr{Typ: Type{Id: 61}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "identity"}, Args: []*Expr{expr},
+		}}}
+	}
+	return expr
+}
+
+func BenchmarkExprUnmarshalNested(b *testing.B) {
+	encoded, err := nestedUnaryExpr(1024).Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportMetric(float64(len(encoded)), "wire-bytes")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var decoded Expr
+		if err := decoded.Unmarshal(encoded); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 func TestValidateStringLiteralFormsTraversesSubqueryChild(t *testing.T) {
@@ -1285,4 +1312,37 @@ func TestCalendarIntervalFeatureRoundTrip(t *testing.T) {
 		}
 	}
 	require.True(t, RemoteExpressionFeatures{CalendarIntervalNormalization: true}.Any())
+}
+
+func TestSetOperationFloatKeyFeatureRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		id       int64
+		overload int64
+		want     bool
+	}{
+		{616, 0, true}, {616, 1, true},
+		{603, 0, false}, {604, 0, false}, // released VIEWS functions
+		{602, 0, false}, // released LOAD_FK_IGNORE_CHECK
+		{601, 0, false}, // upstream TIMESTAMPADD_SECOND_INTERVAL
+		{600, 0, false}, // upstream INTERNAL_TABLE_COLLATION
+		{599, 0, false}, // upstream CHECK_ASYNC_DATALINK_SOURCE
+		{598, 0, false},
+	} {
+		expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: tc.id<<32 | tc.overload, ObjName: "set_operation_float_key"}}}}
+		owner := &Node{PhysicalEqualityKeyList: []*Expr{expr}}
+		data, err := owner.Marshal()
+		require.NoError(t, err)
+		var decoded Node
+		require.NoError(t, decoded.Unmarshal(data))
+		features, err := RequiredRemoteExpressionFeatures(&decoded)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, features.SetOperationFloatKeys)
+		require.Equal(t, tc.id == 601, features.TimestampAddSecondIntervals)
+		require.Equal(t, tc.id == 602, features.LoadFKIgnoreCheck)
+		require.Equal(t, tc.id == 603 || tc.id == 604, features.ViewMetadataFunctions)
+		if tc.want {
+			require.True(t, features.Any())
+		}
+	}
+	require.True(t, RemoteExpressionFeatures{SetOperationFloatKeys: true}.Any())
 }

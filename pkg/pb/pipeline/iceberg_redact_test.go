@@ -27,6 +27,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/gogo/protobuf/protoc-gen-gogo/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/testutil"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func TestIcebergRedactionDisablesGeneratedStringers(t *testing.T) {
@@ -422,4 +423,64 @@ func assertRedactedString(t *testing.T, got string, forbidden ...string) {
 
 func containsRedactionMarker(got string) bool {
 	return testutil.HasIcebergRedactionMarker(got)
+}
+
+func TestPipelineDescriptorMergedScalarAndLockContracts(t *testing.T) {
+	want := map[string]map[string]int32{
+		"Instruction":    {"scalar_set_reaggregation": 65},
+		"DedupJoin":      {"dedup_key_exprs": 30},
+		"RightDedupJoin": {"dedup_key_exprs": 18},
+		"HashBuild":      {"dedup_key_exprs": 20},
+		"LockTarget":     {"no_wait": 13, "skip_locked": 14},
+	}
+	for _, message := range decodePipelineFileDescriptor(t).GetMessageType() {
+		fields, ok := want[message.GetName()]
+		if !ok {
+			continue
+		}
+		for _, field := range message.GetField() {
+			if number, exists := fields[field.GetName()]; exists {
+				if field.GetNumber() != number {
+					t.Fatalf("%s.%s = %d, want %d", message.GetName(), field.GetName(), field.GetNumber(), number)
+				}
+				delete(fields, field.GetName())
+			}
+		}
+		if len(fields) != 0 {
+			t.Fatalf("missing %s fields: %v", message.GetName(), fields)
+		}
+		delete(want, message.GetName())
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing merged messages: %v", want)
+	}
+}
+
+func TestMergedDiagnosticPipelineExpressionAdmission(t *testing.T) {
+	// Keep this wire fixture aligned with SET_OPERATION_FLOAT_KEY in the function registry.
+	expr := &planpb.Expr{Typ: planpb.Type{Id: 28}, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: 616 << 32}}}}
+	for _, instruction := range []*Instruction{
+		{ScalarSetReaggregation: true, DedupJoin: &DedupJoin{DedupKeyExprs: []*planpb.Expr{expr}}},
+		{ScalarSetReaggregation: true, RightDedupJoin: &RightDedupJoin{DedupKeyExprs: []*planpb.Expr{expr}}},
+		{ScalarSetReaggregation: true, HashBuild: &HashBuild{DedupKeyExprs: []*planpb.Expr{expr}}},
+	} {
+		data, err := instruction.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded Instruction
+		if err := decoded.Unmarshal(data); err != nil {
+			t.Fatal(err)
+		}
+		if !proto.Equal(instruction, &decoded) {
+			t.Fatal("diagnostic expressions and scalar marker must coexist on wire")
+		}
+		features, err := planpb.RequiredRemoteExpressionFeatures(&decoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !features.SetOperationFloatKeys || !features.ScalarSetReaggregation {
+			t.Fatalf("missing merged expression admission: %+v", features)
+		}
+	}
 }

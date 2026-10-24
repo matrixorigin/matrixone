@@ -2171,6 +2171,36 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			aliasDemand[alias.ref] = colRefCnt[alias.ref] > 0
 		}
 
+		var aliasesByGroup map[int32][][2]int32
+		if aliases := builder.scalarReaggAliases[nodeID]; len(aliases) > 0 {
+			aliasesByGroup = make(map[int32][][2]int32, len(aliases))
+			for _, alias := range aliases {
+				aliasesByGroup[alias.groupPos] = append(aliasesByGroup[alias.groupPos], alias.ref)
+			}
+		}
+		// Generated scalar reaggregations carry visible outer outputs beside an
+		// explicit occurrence hash key. A discarded passthrough must not demand
+		// its scan input (notably invalid, unused external CSV fields). Preserve
+		// slot numbers for membership/cardinality consumers with a typed NULL.
+		// Without explicit keys every group is a key and must remain evaluated.
+		if len(node.GroupByHashKey) > 0 {
+			for pos, aliases := range aliasesByGroup {
+				if slices.Contains(node.GroupByHashKey, pos) || colRefCnt[[2]int32{groupTag, pos}] > 0 {
+					continue
+				}
+				needed := false
+				for _, ref := range aliases {
+					needed = needed || aliasDemand[ref]
+				}
+				if !needed {
+					expr := makePlan2NullConstExprWithType()
+					expr.Typ = node.GroupBy[pos].Typ
+					expr.Typ.NotNullable = false
+					node.GroupBy[pos] = expr
+				}
+			}
+		}
+
 		neededAggCount := int32(0)
 		firstNeededAgg := int32(-1)
 		for i, expr := range node.AggList {
@@ -2256,13 +2286,6 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		remapInfo.tip = "GroupBy"
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
-		var aliasesByGroup map[int32][][2]int32
-		if aliases := builder.scalarReaggAliases[nodeID]; len(aliases) > 0 {
-			aliasesByGroup = make(map[int32][][2]int32, len(aliases))
-			for _, alias := range aliases {
-				aliasesByGroup[alias.groupPos] = append(aliasesByGroup[alias.groupPos], alias.ref)
-			}
-		}
 		for idx, expr := range node.GroupBy {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx
@@ -4612,12 +4635,15 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 
 	var selectStmts []tree.Statement
 	var unionTypes []plan.Node_NodeType
+	initialStepCount := len(builder.qry.Steps)
 
 	// get Union selectStmts
 	err := getUnionSelects(builder.GetContext(), stmt, &selectStmts, &unionTypes)
 	if err != nil {
 		return 0, err
 	}
+	identicalUnion := len(selectStmts) == 2 && len(unionTypes) == 1 && unionTypes[0] == plan.Node_UNION &&
+		tree.String(selectStmts[0], dialect.MYSQL) == tree.String(selectStmts[1], dialect.MYSQL)
 
 	if len(selectStmts) == 1 {
 		var nodeID int32
@@ -5014,7 +5040,56 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		return projectList
 	}
 	getSetOperationKeyList := func(projectList []*plan.Expr) ([]*plan.Expr, error) {
-		return builder.buildPadSpacePhysicalKeyList(projectList, setOperationKeyRequired)
+		return buildSetOperationPhysicalKeys(builder.GetContext(), projectList, setOperationKeyRequired)
+	}
+	// Preserve the single-arm DISTINCT path only after proving that its
+	// equality domain and evaluations match UNION. In particular, float and
+	// parameter-dependent outputs must retain their typed set membership keys.
+	// Identical SQL text does not imply identical parameter slots, even when
+	// parameters appear only in WHERE and the visible type remains fixed.
+	canCollapseIdenticalUnion := identicalUnion && !builder.isReusablePlan() && len(builder.qry.Steps) == initialStepCount
+	// Preserve the established single evaluation of identical bounded arms.
+	// A singleton needs no duplicate elimination, including for floating values:
+	// retain its representative and let its aggregate/pagination owner decorrelate
+	// it directly. Unordered LIMIT chooses one legal row, as on the old path;
+	// this is arm reuse, not a claim that its input ordering is deterministic.
+	canReuseSingletonUnion := canCollapseIdenticalUnion
+	if canReuseSingletonUnion {
+		seen := make(map[int32]bool)
+		for _, id := range nodes {
+			canReuseSingletonUnion = canReuseSingletonUnion && builder.setArmHasSingletonBoundary(id) &&
+				builder.subtreeIsDeterministic(id, seen, false)
+		}
+	}
+	// A multirow boundary needs set equality after its own grouping/pagination.
+	// Reuse one effect-free arm, but keep every distinct floating member.
+	canReuseBoundaryUnion := canCollapseIdenticalUnion
+	if canReuseBoundaryUnion {
+		seen := make(map[int32]bool)
+		for _, id := range nodes {
+			canReuseBoundaryUnion = canReuseBoundaryUnion && builder.setArmHasReuseBoundary(id) &&
+				builder.subtreeIsDeterministic(id, seen, false)
+			for _, expr := range builder.qry.Nodes[id].ProjectList {
+				canReuseBoundaryUnion = canReuseBoundaryUnion && types.T(expr.Typ.Id) != types.T_any
+			}
+		}
+	}
+	if canCollapseIdenticalUnion {
+		seen := make(map[int32]bool)
+		for _, id := range nodes {
+			canCollapseIdenticalUnion = canCollapseIdenticalUnion && builder.subtreeIsDeterministic(id, seen, false)
+			for _, expr := range builder.qry.Nodes[id].ProjectList {
+				oid := types.T(expr.Typ.Id)
+				if oid == types.T_any || oid == types.T_float32 || oid == types.T_float64 {
+					canCollapseIdenticalUnion = false
+				}
+			}
+		}
+		for id := range seen {
+			if builder.qry.Nodes[id].Limit != nil || builder.qry.Nodes[id].Offset != nil {
+				canCollapseIdenticalUnion = false
+			}
+		}
 	}
 	appendSetOperationNode := func(
 		nodeType plan.Node_NodeType,
@@ -5022,6 +5097,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		tag, thisTag int32,
 	) (int32, error) {
 		projectList := getProjectList(nodeType, leftNodeID, rightNodeID, tag, thisTag)
+		if canReuseSingletonUnion && nodeType == plan.Node_UNION {
+			return builder.appendNode(&plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{leftNodeID},
+				BindingTags: []int32{thisTag}, ProjectList: projectList,
+			}, ctx), nil
+		}
 		var keyList []*plan.Expr
 		var err error
 		switch nodeType {
@@ -5030,6 +5111,37 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			if err != nil {
 				return 0, err
 			}
+		}
+		if canReuseBoundaryUnion && nodeType == plan.Node_UNION {
+			// DISTINCT lowering removes its immediate PROJECT. Forward through a
+			// fresh, limit-free project so the arm's LIMIT/OFFSET stays below it.
+			forwardTag := builder.genNewBindTag()
+			forward := builder.appendNode(&plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{leftNodeID},
+				BindingTags: []int32{forwardTag}, ProjectList: projectList,
+			}, ctx)
+			child := builder.appendNode(&plan.Node{
+				NodeType: plan.Node_DISTINCT, Children: []int32{forward},
+				PhysicalEqualityKeyList: keyList,
+			}, ctx)
+			outputs := make([]*plan.Expr, len(projectList))
+			for i, expr := range projectList {
+				outputs[i] = GetColExpr(expr.Typ, forwardTag, int32(i))
+			}
+			return builder.appendNode(&plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{child},
+				BindingTags: []int32{thisTag}, ProjectList: outputs,
+			}, ctx), nil
+		}
+		if canCollapseIdenticalUnion && nodeType == plan.Node_UNION && len(keyList) == 0 {
+			child, err := builder.appendDistinctNode(ctx, leftNodeID)
+			if err != nil {
+				return 0, err
+			}
+			return builder.appendNode(&plan.Node{
+				NodeType: plan.Node_PROJECT, Children: []int32{child},
+				BindingTags: []int32{thisTag}, ProjectList: projectList,
+			}, ctx), nil
 		}
 		return builder.appendNode(&plan.Node{
 			NodeType:                nodeType,

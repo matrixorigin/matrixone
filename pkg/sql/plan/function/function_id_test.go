@@ -869,7 +869,8 @@ var predefinedFunids = map[int]int{
 	T3:                           613,
 	MMAXDRAWDOWN:                 614,
 	CUMPOSITIVESTREAK:            615,
-	FUNCTION_END_NUMBER:          616,
+	SET_OPERATION_FLOAT_KEY:      616,
+	FUNCTION_END_NUMBER:          617,
 }
 
 func Test_funids(t *testing.T) {

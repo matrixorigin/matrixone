@@ -17,6 +17,7 @@ package dependent
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -130,6 +131,19 @@ func (j *JoinKernel) pair(p *process.Process, left *batch.Batch, lrow int, right
 		j.consumed = false
 	}
 	if j.frame == nil {
+		if join, ok := j.Join.(*loopjoin.LoopJoin); ok && join.ScalarSetReaggregation {
+			if err, canceled := vm.CancelCheck(p); canceled {
+				return nil, err
+			}
+			if join.ScalarSetLease == nil {
+				return nil, mpool.ErrAllocationAccountInvariant
+			}
+			// A suspended frame owns this candidate until its result is consumed.
+			// Resuming it must not charge the same pair again.
+			if err := join.ScalarSetLease.ChargeCandidatePairs(1); err != nil {
+				return nil, err
+			}
+		}
 		var err error
 		j.frame, err = j.Condition.NewFrame(p, []colexec.DependentInput{{Batch: left, Row: lrow}, {Batch: right, Row: rrow}}, j.factory, j.allocation)
 		if err != nil {
