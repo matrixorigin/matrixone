@@ -479,7 +479,7 @@ Project  𝄀
               Block Filter Cond: t2.c4 in ([1 2 3 4 5 6 7 8 9]), t2.c1 BETWEEN 1 AND 10000  𝄀
               Runtime Filter Probe: t2.c1  𝄀
         ->  Index Table Scan on t2.t2i2 [ForceOneCN]  𝄀
-              Filter Cond: prefix_in(__mo_index_idx_col), serial_extract(__mo_index_idx_col, 2, INT)) BETWEEN 1 AND 10000  𝄀
+              Filter Cond: prefix_in(__mo_index_idx_col), __mo_index_pri_col BETWEEN 1 AND 10000  𝄀
               Block Filter Cond: prefix_in(__mo_index_idx_col)
 select * from t2 where c4 in (1,2,3,4,5,6,7,8,9) and c1 between 1 and 10000;
 ➤ c1[4,32,0]  ¦  c2[4,32,0]  ¦  c3[4,32,0]  ¦  c4[4,32,0]  ¦  c5[4,32,0]  𝄀

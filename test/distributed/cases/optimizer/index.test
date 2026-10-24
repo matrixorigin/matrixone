@@ -129,6 +129,13 @@ INSERT INTO t14 (pseudo,pseudo1,same) VALUES ('joce', 'testtt', 1),('joce', 'tse
 -- @separator:table
 explain SELECT pseudo1 FROM t14 WHERE pseudo='joce';
 SELECT pseudo1 FROM t14 WHERE pseudo='joce';
+
+-- Exact CHAR rechecks reject escaped-NUL prefix peers.
+INSERT INTO t14(pseudo,pseudo1,same) VALUES(concat('joce',char(0),'x'),'nul_peer',1);
+SELECT pseudo1 FROM t14 WHERE pseudo='joce' ORDER BY pseudo1;
+SELECT pseudo1 FROM t14 FORCE INDEX(pseudo) WHERE pseudo='joce' ORDER BY pseudo1;
+SELECT pseudo1 FROM t14 IGNORE INDEX(pseudo) WHERE pseudo='joce' ORDER BY pseudo1;
+SELECT pseudo1 FROM t14 FORCE INDEX(pseudo) WHERE pseudo=concat('joce',char(0),'x');
 drop table t1;
 create table t1(a bigint, b bigint default null, c int, primary key(a), key(b));
 insert into t1(a,b,c) select result,result%10, result from generate_series(1,3000000)g;

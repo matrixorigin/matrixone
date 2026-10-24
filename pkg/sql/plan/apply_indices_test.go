@@ -3892,7 +3892,7 @@ func TestTryIndexOnlyScanKeepsResidualFilterForSerialFullNullSemantics(t *testin
 	}
 }
 
-func TestTryIndexOnlyScanSkipsResidualFilterForNonNullSerialFullLiterals(t *testing.T) {
+func TestTryIndexOnlyScanRetainsExactResidualForByteStringLiterals(t *testing.T) {
 	tests := []struct {
 		name       string
 		makeFilter func(relPos int32) *planpb.Expr
@@ -3960,8 +3960,11 @@ func TestTryIndexOnlyScanSkipsResidualFilterForNonNullSerialFullLiterals(t *test
 			require.NotEqual(t, int32(-1), idxNodeID)
 
 			idxNode := builder.qry.Nodes[idxNodeID]
-			require.Len(t, idxNode.FilterList, 1)
+			require.Len(t, idxNode.FilterList, 2)
+			require.Equal(t, float64(1), idxNode.FilterList[1].Selectivity)
 			require.Equal(t, tt.lookupFunc, idxNode.FilterList[0].GetF().Func.ObjName)
+			// Non-NULL strings can have an escaped-NUL prefix peer too.
+			require.Equal(t, "serial_extract", wrappedSerialFuncName(t, idxNode.FilterList[1].GetF().Args[0]))
 		})
 	}
 }
