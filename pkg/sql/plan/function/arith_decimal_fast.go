@@ -2886,11 +2886,7 @@ func decimal256OperandRange(typ types.Type) decimalOperandRange {
 // d256Mul is the batch kernel for Decimal256 multiplication.
 // Inlines the schoolbook 4×4 Mul256 cross-product to avoid
 // per-element method calls (Mul256 cost 1230 >> inlining budget 80).
-func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
-	return d256MulWithRangeProof(v1, v2, rs, scale1, scale2, rsnull, decimalRangeUnknown, decimalRangeUnknown)
-}
-
-func d256MulWithRangeProof(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls,
+func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls,
 	leftRange, rightRange decimalOperandRange) error {
 	desiredScale := int32(12)
 	if scale1 > desiredScale {

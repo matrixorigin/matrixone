@@ -1,0 +1,16 @@
+Overview:
+	MemoryUsage:78193032B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0
+	S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 
+	CPU Usage: 
+		- Total CPU Time: 179156249ns 
+		- CPU Time Detail: Parse(67708)+BuildPlan(285292)+Compile(838708)+PhyExec(178659829)+PrepareRun(328207)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(1023495)-IOMerge(0)
+		- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]
+Physical Plan Deployment:
+Scope 1 (Magic: Remote, addr:127.0.0.1:54200, mcpu: 1, Receiver: []) PrepareTimeConsumed: 299416ns
+  DataSource: qa30995.nn[a b]
+  Pipeline: └── output(idx:-1, isFirst:false, isLast:false)
+                └── projection(idx:4, isFirst:true, isLast:true)
+                    └── group(idx:3, isFirst:true, isLast:true)
+                        └── group(idx:2, isFirst:true, isLast:true)
+                            └── group(idx:1, isFirst:true, isLast:true)
+                                └── tablescan(idx:0, isFirst:true, isLast:true)
