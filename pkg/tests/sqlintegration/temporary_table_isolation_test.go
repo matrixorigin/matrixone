@@ -101,5 +101,80 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 		require.NoError(t, attacker.QueryRowContext(ctx,
 			"select count(*) from mo_catalog.mo_tables where reldatabase=? and relname=?", schema, permanent).Scan(&visible))
 		require.Equal(t, 1, visible)
+
+		t.Run("create_index_keeps_owner", func(t *testing.T) {
+			_, err := owner.ExecContext(ctx, "create index idx_v on victim_t(v)")
+			require.NoError(t, err)
+			var value string
+			require.NoError(t, owner.QueryRowContext(ctx, "select v from victim_t where v='recreated'").Scan(&value))
+			require.Equal(t, "recreated", value)
+			_, err = owner.ExecContext(ctx, "drop index idx_v on victim_t")
+			require.NoError(t, err)
+			_, err = owner.ExecContext(ctx, "create unique index uk_v on victim_t(v)")
+			require.NoError(t, err)
+			var indexPhysical string
+			require.NoError(t, owner.QueryRowContext(ctx, "select relname from mo_catalog.mo_tables where reldatabase=? and relname like '%mo_index%'", schema).Scan(&indexPhysical))
+			_, err = attacker.ExecContext(ctx, "select * from `"+schema+"`.`"+indexPhysical+"`")
+			var sqlErr *mysql.MySQLError
+			require.ErrorAs(t, err, &sqlErr)
+			require.EqualValues(t, 1146, sqlErr.Number, "internal backfill must not grant another session access")
+			_, err = owner.ExecContext(ctx, "insert into victim_t values(3, 'recreated')")
+			require.ErrorAs(t, err, &sqlErr)
+			require.EqualValues(t, 1062, sqlErr.Number)
+		})
+
+		t.Run("clone_preserves_allocator", func(t *testing.T) {
+			_, err := owner.ExecContext(ctx, "create table clone_source(id bigint auto_increment primary key, v int) auto_increment=10")
+			require.NoError(t, err)
+			_, err = owner.ExecContext(ctx, "insert into clone_source(v) values(1), (2)")
+			require.NoError(t, err)
+			_, err = owner.ExecContext(ctx, "create temporary table clone_target clone clone_source")
+			require.NoError(t, err)
+			_, err = owner.ExecContext(ctx, "insert into clone_target(v) values(3)")
+			require.NoError(t, err)
+			var id int
+			require.NoError(t, owner.QueryRowContext(ctx, "select id from clone_target where v=3").Scan(&id))
+			require.Equal(t, 12, id)
+		})
+
+		t.Run("procedure_temporary_lifecycle", func(t *testing.T) {
+			_, err := owner.ExecContext(ctx, "create procedure temp_lifecycle() 'begin create temporary table proc_t(id int); insert into proc_t values(1); drop table proc_t; end'")
+			require.NoError(t, err)
+			_, err = owner.ExecContext(ctx, "call temp_lifecycle()")
+			require.NoError(t, err)
+			_, err = owner.ExecContext(ctx, "call temp_lifecycle()")
+			require.NoError(t, err, "procedure must release its temporary alias")
+		})
+
+		t.Run("drop_database_removes_temporary_catalog", func(t *testing.T) {
+			const dropped = "tmp_iso_drop"
+			_, err := owner.ExecContext(ctx, "create database "+dropped)
+			require.NoError(t, err)
+			t.Cleanup(func() { cleanupSQLIntegration(t, cn, "drop database if exists "+dropped) })
+			_, err = owner.ExecContext(ctx, "create temporary table "+dropped+".t(id int, v int)")
+			require.NoError(t, err)
+			_, err = attacker.ExecContext(ctx, "create temporary table "+dropped+".other_session(id int)")
+			require.NoError(t, err)
+			var databaseID uint64
+			require.NoError(t, owner.QueryRowContext(ctx, "select dat_id from mo_catalog.mo_database where datname=?", dropped).Scan(&databaseID))
+			_, err = owner.ExecContext(ctx, "begin")
+			require.NoError(t, err)
+			defer func() { _, _ = owner.ExecContext(context.WithoutCancel(ctx), "rollback") }()
+			_, err = owner.ExecContext(ctx, "drop database "+dropped)
+			require.NoError(t, err)
+			_, err = owner.ExecContext(ctx, "rollback")
+			require.NoError(t, err)
+			_, err = owner.ExecContext(ctx, "insert into "+dropped+".t values(1, 2)")
+			require.NoError(t, err, "rollback must retain the temporary root")
+			_, err = attacker.ExecContext(ctx, "insert into "+dropped+".other_session values(1)")
+			require.NoError(t, err, "rollback must retain another session's temporary root")
+			_, err = owner.ExecContext(ctx, "drop database "+dropped)
+			require.NoError(t, err)
+			var remaining int
+			require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase_id=?", databaseID).Scan(&remaining))
+			require.Zero(t, remaining)
+			require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_columns where att_database_id=?", databaseID).Scan(&remaining))
+			require.Zero(t, remaining)
+		})
 	})
 }
