@@ -73,8 +73,10 @@ func TemporaryTableAccessAllowed(
 	marker := "_" + catalog.IndexTableNamePrefix
 	for offset := strings.Index(physical, marker); offset >= 0; {
 		root := physical[:offset]
-		if root != "" && owner.OwnsTemporaryTable(database, root) {
-			return true
+		if root != "" {
+			if owner.OwnsTemporaryTable(database, root) {
+				return true
+			}
 		}
 		next := offset + len(marker)
 		if next >= len(physical) {

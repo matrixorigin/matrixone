@@ -2093,6 +2093,8 @@ func TestSessionTemporaryDDLLifetime(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, "public-generation", name)
 		require.True(t, ses.OwnsTemporaryTable("db", name))
+		ses.PublishTemporaryTable("db", "generated", "public-generation_t")
+		require.True(t, ses.OwnsTemporaryTable("db", "public-generation"))
 		require.False(t, ses.OwnsTemporaryTable("other-db", name))
 		require.False(t, ses.OwnsTemporaryTable("db", "__mo_tmp_unowned"))
 		_, ok = ses.GetTempTable("db", "internal")
