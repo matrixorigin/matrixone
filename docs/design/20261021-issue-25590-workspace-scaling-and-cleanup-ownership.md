@@ -3090,3 +3090,112 @@ the obligation conservation law, the boundary classification, the
 admission bound, the lossless handoffs and the per-batch liveness of the
 drain ladder are all unchanged. No r11- or r12-approved decision is
 altered, so the deviation rule opens no design re-review.
+
+## 10 design review record - round 38 (implementation follow-up): the queue settle retires the recording transaction's recorded-name copy too
+
+The 2026-10-24 review against head `a28099178d` accepted the round-37
+repairs and blocked on one remaining incompleteness of the recorded-name
+lifetime the round-37 settle introduced: the retire it added ran ONLY in
+the gcFiles pool worker, so every ownership path that moves a RECORDED
+name to the engine's lossless queue left the transaction's
+recordedUnpublishedObjectNames member alive after the queue deleted the
+file — exactly the history-growth invariant round 37 documented for the
+pool path ("the copy holds a member for exactly as long as the name's
+obligation is LIVE") but never implemented on the queue's own settle:
+
+1. the statement rollback (`RollbackLastStatement ->
+   gcObjsByIdxRangeToOwner -> gcFilesToOwner`): the review's probe drove
+   the production WriteFile/RollbackLastStatement/drain loop on an OPEN
+   explicit transaction under admission limit 2 and measured 32 failed
+   statements leaving queued=0, live=1, inFlight=0 while the recorded
+   set carried all 32 retired names plus the one live member — memory no
+   admission bound ever counts, with the terminal release again copying
+   and scanning the whole failed-statement history;
+2. the `gcFiles` pool-submit-failure tail (the round-13 lossless
+   handoff): names a recording transaction still records transfer to
+   the queue with no gcFiles worker behind them, so the pool worker's
+   round-37 retire never runs for that class either.
+
+The fix stays inside the r11/r12-approved decision set and the round-37
+settle contract verbatim: a settle ends the file's ownership, ending the
+obligation also retires the transaction's recorded-name copy, and the
+retire fires exactly when the delete proves the file gone — never at
+the handoff, where late producer handoffs (the retain funnels, the
+quiesced handoff, the remote adoption) must keep finding the LIVE
+member's skip protection while the file still exists.
+
+- The two recorded-name queue handoffs (`gcFilesToOwner`, the gcFiles
+  submit-failure tail) register the recording transaction per
+  transferred name in the engine's queue side map (`recordedOwners`),
+  INSIDE the same queue-mutex section as the enqueue, so a queued
+  recorded name can never sit between the handoff and its settle
+  without the worker that can retire its copy. The entry lives exactly
+  as long as the name's queue membership — bounded by the queue's own
+  admission bound — and an owner-less enqueue (orphan funnels, writer
+  tails, tests) never clears an existing entry.
+- The once-drain's single-pass compaction pops each retired name's
+  registry entry in the same pass and returns the per-owner done
+  batches; the retire then runs AFTER the queue mutex, through the
+  recorded-name guard alone with NO transaction lock — the same
+  worker-decoupling rule the round-37 gcFiles settle follows (a GC
+  worker behind any transaction's lock would rebuild the ants
+  worker-wait chain round 13 removed). Close's detached final tail, the
+  GC scheduler tick and the asynchronous ladder share this unit, so
+  every drain path now retires the copy.
+- Protection semantics are unchanged on both sides of the settle:
+  while the file exists the member still answers every funnel, handoff
+  and adoption probe with the skip; after the drain's batch delete the
+  name's lifecycle is over exactly as after a pool settle, and a fresh
+  producer event on the settled name is bookable again (the queue's
+  tolerated no-op delete retires its cleanup).
+
+Proof (commands run with the repository CGo wrapper
+`.agents/skills/mo-dev/scripts/mo-cgo-test` on this tree):
+
+- Red on parent `a28099178d`, green after the fix, same tests, both new
+  regressions dedicated to the reviewer's shape:
+  `TestIssue25590RollbackHandoffRetiresRecordedNamesAtQueueSettle`
+  drives the production record → statement-rollback → queue-handoff →
+  drain loop on one OPEN transaction with a standing prior recorded
+  write and a pinned admission bound of 2 — pre-fix it failed in round
+  0 with the recorded set holding the rolled-back statement's name next
+  to the live prior member while the queue was already empty and the
+  file already deleted; post-fix each round returns the recorded set to
+  exactly the live prior member, the late-handoff probes keep skipping
+  the member while the file exists (adoption books no in-flight unit,
+  the retain funnels take it nowhere), and a fresh producer event on
+  the just-settled name re-enters the orphan machinery and drains
+  through the tolerated no-op delete.
+  `TestIssue25590PoolHandoffTailRetiresRecordedNamesAtQueueSettle`
+  pins the second handoff class: a released GC pool refuses the gcFiles
+  submission, the whole unsent batch tail — a name the transaction
+  still records — queues with the retire registered, and the drain's
+  settle retires that member with the same rule while the prior
+  recorded member stays untouched. It failed pre-fix on the same
+  recorded-set assertion and passes post-fix.
+- Related behavior re-run green with the change: the full disttae
+  `TestIssue25590|TestGCFiles` family — including the r37 drain
+  siblings (`DrainRetirementCostStaysLinear` with its 48 MiB linear
+  budget, `DrainRetiresEachBatchInOnePass`, `DrainKeepsConcurrentArrivals`),
+  the recorded-set boundary tests (`RecordedBeforeBoundaryKeepsObjectOutofQueue`,
+  `UnrecordedRetainedNameDrainsAtBoundary`, the r33/r34 recorded-set
+  assertions), the compaction suites, the rollback-recycle regression
+  and the Close-budget tests — the linear drain budget is untouched by
+  the registry pops (one nil-map lookup per retired name, one lazily
+  allocated per-owner map only when a queued recorded name exists).
+- `go vet` over the changed closure exits 0; `gofmt -l` clean; the
+  focused regressions including the r38 pair pass under `-race` (the
+  drain's retire exercises the recorded-name guard from the drain
+  worker against transaction-side merges under the transaction lock).
+
+Decision: round 38 is recorded as an implementation correction that
+completes the round-37 settle contract on the queue's own settle path —
+the obligation conservation law, the boundary classification, the
+admission bound, the lossless handoffs and the per-batch liveness of
+the drain ladder are all unchanged, and the recorded-copy lifetime
+follows the round-37 review's own documented line with no new state
+machine, storage call, hot-path scan or lock-order change (the registry
+is engine-queue state guarded by the queue's existing mutex; the retire
+is the existing round-37 helper on its existing guard). No r11- or
+r12-approved decision is altered, so the deviation rule opens no
+design re-review.

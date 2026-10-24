@@ -500,7 +500,12 @@ type Transaction struct {
 	// creation, a staged record's back-out retracts exactly its own
 	// admissions, and the GC settle that retires a deleted object's
 	// ledger membership retires this copy in the same worker step
-	// (issue #25590 round-37 review) — so a long transaction that
+	// (issue #25590 round-37 review; round-38 review, finding 1 closed
+	// the gap on the queue's own settle: the recorded-name handoffs —
+	// the statement rollback's gcFilesToOwner transfer and the gcFiles
+	// pool-failure tail — register the recording transaction per queued
+	// name, and the drain's batch delete retires the members exactly
+	// when the file is provably gone) — so a long transaction that
 	// repeatedly spills and fully deletes objects keeps the set
 	// proportional to the LIVE working set rather than the full spill
 	// history, and the terminal paths retire exactly the members whose
@@ -1353,7 +1358,14 @@ func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
 			// shutdown tail drains what storage already accepts
 			// before its deadline and the queue's own machinery keeps
 			// the rest owned, exactly like a handoff at finalization.
-			e.enqueueUnpublishedPending(names[start:])
+			//
+			// round-38 (issue #25590 review of 2026-10-24, finding 1):
+			// the tail still moves names the recording transaction
+			// records, and the pool worker's settle above never ran for
+			// them — so the transfer registers THIS transaction as the
+			// names' recorded-copy owner and the queue drain's settle
+			// retires the members with the same rule.
+			e.enqueueUnpublishedPendingFrom(txn, names[start:])
 			logutil.Warn(
 				"GC-WORKSPACE-FILES-HANDOFF",
 				zap.Int("names", len(names)-start),
@@ -1512,7 +1524,17 @@ func gcFilesToOwner(txn *Transaction, scope cloneGCScope, names ...string) error
 	logutil.Info("GC-WORKSPACE-FILES-OWNER",
 		zap.Strings("names", filtered),
 		zap.String("txn-info", txn.op.Txn().DebugString()))
-	e.enqueueUnpublishedPending(filtered)
+	// round-38 (issue #25590 review of 2026-10-24, finding 1): the
+	// moved names are members of THIS transaction's recorded set — the
+	// rolled-back statement recorded them — and no gcFiles worker will
+	// ever run for them, so the transfer registers the transaction as
+	// the names' recorded-copy owner in the same queue-mutex section as
+	// the enqueue. The drain's settle then retires the members exactly
+	// when the batch delete proves each file gone: the member keeps
+	// protecting the still-existing file against late producer
+	// handoffs, and the open transaction keeps its recorded set at the
+	// LIVE obligations instead of its failed-statement history.
+	e.enqueueUnpublishedPendingFrom(txn, filtered)
 	return nil
 }
 
