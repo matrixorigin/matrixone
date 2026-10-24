@@ -12,9 +12,9 @@ offset `o` lives in the chunk `o / chunk size`. Every byte moves through SQL:
 
 - **Reading** runs a `SELECT` over all chunks of the file and materializes the whole file
   (a spill file that is then mapped, or the heap) before the search can use any of it.
-  The query planner, executor and result batches see chunk rows, not a file: no read can
-  fetch only the chunks it needs, and nothing below the index cache can be reused
-  between loads.
+  The query planner, executor and result batches see chunk rows, not a file, and
+  nothing below the index cache is reused between loads: every load reads every chunk
+  through SQL again.
 - **Writing** builds `INSERT` statements over the chunks (bound parameters or hex
   literals), parses, plans and executes them. The write is slow, and the bytes just
   written are not available to the next read: the writing CN loads the file again
@@ -48,40 +48,54 @@ The CDC tail (`tag` 1) is not one immutable file: it grows by appended frames, e
 with its own metadata row. The unit of identity and versioning for the tail is the
 frame (its starting chunk and its checksum), not the whole tail.
 
-### Reading
+### The unit is the whole file (decision)
 
-- A read runs under the caller's transaction and snapshot and sees exactly the rows a
-  SQL `SELECT` would see at that snapshot, including historical (snapshot) reads.
-- It reads the chunk rows through the storage engine's relation readers with a
-  primary-key filter on the file. No SQL is parsed, planned or executed.
-- A range read fetches only the chunks covering the range. A whole-file read is a range
-  read of the whole file.
-- A missing or duplicated chunk is an error, never a short or padded file.
-- A whole-file read verifies the content checksum, as the current loaders do.
+Decided by @cpegeric, 2026-10-24. The layer reads and writes whole files, named. A reader
+needs only the file name; it never addresses chunks or byte ranges. The chunks are an
+internal detail of how a file is stored.
 
-### Caching
+### File names
 
-- Chunks are cached individually, keyed by the table, file identity, chunk number and
-  file version (content checksum). A cached chunk is served only to a read of the same
-  version, so a rewritten file (same `index_id`, new content) never serves old bytes and
-  no invalidation is needed.
-- The cache is the fileservice memory and disk cache, so its size is the configured
-  cache capacity, not the index size, and it competes with table data under the same
-  eviction policy. This is how index I/O shares memory with SQL instead of claiming it.
-- The cache holds bytes only. What a search keeps resident (a loaded graph, a GPU index,
-  mapped postings) stays under the existing index-cache governor.
+A file name is derived from the file identity and its version: the index table,
+`index_id`, `tag` and the checksum in the metadata row the loader already reads. A name
+is never reused for different content, so a rewritten file has a new name and nothing is
+invalidated.
 
 ### Writing
 
-- A write produces chunk batches and writes them through the storage engine's relation
-  write path in the caller's transaction. No SQL is parsed, planned or executed. Commit
-  and abort are atomic with the metadata row, exactly as with today's `INSERT`.
-- Large writes spill to storage objects through the existing transaction workspace
-  mechanism.
-- Chunks written are also placed in the cache under the version they will be read as,
-  so the writing CN reads them warm. Because the key is the content checksum, a chunk
-  cached by a transaction that later aborts can only ever be served for identical
-  content, and is otherwise evicted unused.
+- The writer takes the whole file as a stream. It writes the chunk rows through the
+  storage engine's relation write path in the caller's transaction (no SQL is parsed,
+  planned or executed) and, from the same bytes, the file into the CN's disk cache. Commit
+  and abort of the rows are atomic with the metadata row, exactly as with today's
+  `INSERT`. Large writes spill to storage objects through the existing transaction
+  workspace mechanism.
+- The file goes to the disk cache only, never the memory cache. The writing CN reads it
+  warm from local disk.
+- A file cached by a transaction that aborts is never named by a committed metadata row,
+  so no reader reaches it; it is evicted unused.
+
+### Reading
+
+- A read by name returns the local file from the disk cache when present.
+- On a miss, the layer rebuilds the file from its chunk rows through the storage engine's
+  relation readers, under the caller's transaction and snapshot (no SQL), verifies it,
+  places it in the disk cache, and returns it. It sees exactly the rows a SQL `SELECT`
+  would see at that snapshot, including historical (snapshot) reads.
+- A missing or duplicated chunk is an error, never a short or padded file.
+- Each CN fills its own disk cache from the rows on first read.
+
+### Integrity (decision)
+
+No new checksum is added. A base file is verified against the whole-file checksum in its
+metadata row; a CDC tail frame carries a checksum in its own footer. Because reads are
+whole files, these cover every read.
+
+### Memory
+
+The layer uses no memory cache: file bytes live in the disk cache, sized and evicted by
+its configured capacity. What a search keeps resident (a loaded graph, a GPU index,
+mapped postings) stays under the existing index-cache governor. This is how index I/O
+shares the CN with SQL instead of claiming its memory.
 
 ### Interoperability and compatibility (decision)
 
@@ -92,40 +106,40 @@ gate, and each algorithm can switch its readers and writers independently.
 
 ## Scope and non-goals
 
-- In scope: the logical file layer (identity, read, range read, cache, write) and its
-  contract. Algorithms adopt it one at a time.
+- In scope: the logical file layer (naming, whole-file write and read, disk cache) and
+  its contract. Algorithms adopt it one at a time, FULLTEXT2 first (decision,
+  @cpegeric, 2026-10-24): its base segments and its CDC tail frames.
 - Not in scope: the incremental-update algorithm itself (the next PR); a new on-disk
   format; changes to what clone, restore or backup copy; IVFFLAT, which stores no
   chunks; GPU residency.
-- A consumer that needs one contiguous mapped file (for example a library that maps the
-  whole index) still materializes the whole file, but through the cache instead of SQL.
-  Range reads benefit consumers that address blocks: FULLTEXT2 postings and CDC tail
-  frames.
+- Range reads of a file. Consumers map or load whole files today, and the disk cache
+  serves the whole file.
 
 ## Open questions
 
-1. **Chunk-level integrity.** The checksum covers the whole file, so a range read has no
-   integrity check of its own. Options: rely on the storage engine's own object
-   checksums, or add a per-chunk checksum (a schema change, which this design avoids).
-2. **When a written chunk enters the cache.** The content checksum is known only once
-   the whole file is written. Either buffer the keys until the file is complete, or key
-   the write-through by a provisional version and re-key at completion.
-3. **Adoption order.** Proposed: FULLTEXT2 tails and CAGRA/IVF-PQ CDC frames first (small,
-   frequent files), then base files.
+1. **Mapping a cached file.** FULLTEXT2 maps whole files. The disk cache exposes no local
+   path for an entry today, and it must not evict (or count as free) a file that is still
+   mapped. The layer needs a way to hold a cached file open for the life of the mapping.
+2. **CDC tail as files.** The tail grows by appended frames. Each frame becomes its own
+   named file; whether a reader opens frames individually or the layer presents the tail
+   as an ordered list of frame files is to be decided with the incremental-update design.
 
 ## Validation
 
 Every statement in "Contract" is checked by a test that would fail if it were false:
 
-- the bytes read through the layer equal the bytes read through SQL, for every algorithm,
+- the bytes read through the layer equal the bytes read through SQL, for each adopting
+  algorithm,
   at the current snapshot and at a historical snapshot;
 - a file written through the layer is read back identically through SQL, and the
   reverse;
-- a range read returns the requested bytes and reads only the covering chunks;
+- a read on a disk-cache miss rebuilds the file from the rows, and a second read is served
+  from the disk cache without reading the rows;
 - a missing or duplicated chunk fails the read;
-- an aborted write leaves no rows and no served cache entry;
+- an aborted write leaves no rows, and no reader reaches its cached file;
 - a rewritten file never serves its previous content;
+- a corrupted cached file or chunk fails verification instead of being served;
 - clone, restore and snapshot reads of an index written through the layer behave as
   before;
-- cache residency stays within the configured fileservice capacity under a load larger
-  than it.
+- writes and reads use no memory cache, and disk-cache use stays within its configured
+  capacity under a load larger than it.
