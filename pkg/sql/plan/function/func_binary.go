@@ -2399,6 +2399,9 @@ func dateStringInterval(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		text := functionUtil.QuickBytesToStr(dateStr)
 		dt, err := doDateStringInterval(text, interval, iTyp, subtract)
 		if err != nil {
+			if _, partial := parseIncompleteCalendar(text); partial {
+				appendIncompleteCalendarWarning(proc, text)
+			}
 			if !handleTemporalArithmeticError(proc, err) {
 				return err
 			}
@@ -4622,7 +4625,20 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	locale := temporalLocaleForProcess(proc)
 
-	dates := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	var dates vector.FunctionParameterWrapper[types.Datetime]
+	var stringsInput vector.FunctionParameterWrapper[types.Varlena]
+	if ivecs[0].GetType().Oid == types.T_datetime {
+		dates = vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
+	} else {
+		stringsInput = vector.GenerateFunctionStrParameter(ivecs[0])
+	}
+	truncateFractional := false
+	if stringsInput != nil {
+		truncateFractional, err = process.ResolveTimeTruncateFractional(proc)
+		if err != nil {
+			return err
+		}
+	}
 	formats := vector.GenerateFunctionStrParameter(ivecs[1])
 	constantFormat := ivecs[1].IsConst()
 	var constFmt string
@@ -4639,14 +4655,21 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if functionRowSkipped(selectList, i) {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		d, null1 := dates.GetValue(i)
+		var d types.Datetime
+		var value []byte
+		var null1 bool
+		if dates != nil {
+			d, null1 = dates.GetValue(i)
+		} else {
+			value, null1 = stringsInput.GetStrValue(i)
+		}
 		fmt := constFmt
 		null2 := constNull
 		if !constantFormat {
@@ -4654,18 +4677,55 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			fmt = functionUtil.QuickBytesToStr(fmtBytes)
 			null2 = null
 		}
-		if null1 || null2 || len(fmt) == 0 {
+		if null1 || null2 || len(fmt) == 0 || (stringsInput != nil && len(value) == 0) {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
+			var raw *incompleteCalendar
+			if stringsInput != nil {
+				text := functionUtil.QuickBytesToStr(value)
+				if truncateFractional {
+					text = truncateTemporalFractionForParse(text, 6)
+				}
+				if calendar, partial := parseIncompleteCalendar(text); partial {
+					raw = &calendar
+				} else {
+					d, err = types.ParseDatetime(text, 6)
+					if err != nil {
+						// Keep the normal string-to-datetime expression cast policy:
+						// malformed values are NULL without statement diagnostics.
+						if isTemporalLexicalConversionError(err) {
+							if err = rs.AppendBytes(nil, true); err != nil {
+								return err
+							}
+							continue
+						}
+						return err
+					}
+					if d == types.ZeroDatetime {
+						nullify, modeErr := explicitZeroTemporalCastReturnsNull(proc)
+						if modeErr != nil {
+							return modeErr
+						}
+						if nullify {
+							if err = rs.AppendBytes(nil, true); err != nil {
+								return err
+							}
+							continue
+						}
+					}
+				}
+			}
 			buf.Reset()
 			var isNull bool
 			operator := constOperator
 			if !constantFormat {
 				operator = dateFormatOperator(fmt)
 			}
-			if locale.name != "en_US" {
+			if raw != nil {
+				isNull, err = datetimeFormatCalendar(locale, proc.Ctx, d, fmt, &buf, raw)
+			} else if locale.name != "en_US" {
 				isNull, err = datetimeFormatWithLocale(locale, proc.Ctx, d, fmt, &buf)
 			} else {
 				isNull, err = operator(proc.Ctx, d, fmt, &buf)
@@ -4912,10 +4972,20 @@ func datetimeFormat(ctx context.Context, datetime types.Datetime, format string,
 }
 
 func datetimeFormatWithLocale(locale *temporalLocale, ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer) (bool, error) {
+	return datetimeFormatCalendar(locale, ctx, datetime, format, buf, nil)
+}
+
+func datetimeFormatCalendar(locale *temporalLocale, ctx context.Context, datetime types.Datetime, format string, buf *bytes.Buffer, raw *incompleteCalendar) (bool, error) {
 	inPatternMatch := false
 	for _, b := range format {
 		if inPatternMatch {
-			isNull, err := makeDateFormatWithLocale(locale, ctx, datetime, b, buf)
+			var isNull bool
+			var err error
+			if raw != nil {
+				isNull, err = raw.formatDirective(locale, b, buf)
+			} else {
+				isNull, err = makeDateFormatWithLocale(locale, ctx, datetime, b, buf)
+			}
 			if err != nil {
 				return false, err
 			}

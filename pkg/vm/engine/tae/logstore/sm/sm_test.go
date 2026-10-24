@@ -20,13 +20,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestLoop1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	q1 := make(chan any, 100)
 	fn := func(batch []any, q chan any) {
 		for _, item := range batch {
@@ -190,9 +188,6 @@ func BenchmarkSafeQueueEnqueue(b *testing.B) {
 func TestNewNonBlockingQueue(t *testing.T) {
 	wait := sync.WaitGroup{}
 	wait.Add(1)
-	defer func() {
-		testutils.AfterTest(t)
-	}()
 
 	queueSize := 10
 	batchSize := 0

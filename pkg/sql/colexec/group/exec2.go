@@ -645,7 +645,13 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := min(count-i, hashmap.UnitLimit)
 			var preview groupInsertPreview
-			var aggregateGroupScratch [hashmap.UnitLimit]uint64
+			// Only dynamic grouping needs to mask synthetic rows. Passing this
+			// scratch to aggregate interfaces makes it escape, so ordinary GROUP
+			// BY must not allocate a row-sized array for every input chunk.
+			var aggregateGroupScratch []uint64
+			if group.DynamicGrouping {
+				aggregateGroupScratch = make([]uint64, n)
+			}
 			for {
 				err = nil
 				if !evaluated {

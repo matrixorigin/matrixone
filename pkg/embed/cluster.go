@@ -87,7 +87,6 @@ type cluster struct {
 	options struct {
 		dataPath                    string
 		cn                          int
-		withProxy                   bool
 		preStart                    func(ServiceOperator)
 		testing                     bool
 		testTCPOnly                 bool

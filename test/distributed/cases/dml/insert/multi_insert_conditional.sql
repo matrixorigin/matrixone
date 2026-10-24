@@ -209,7 +209,7 @@ insert first
 select id, s from esrc;
 select * from e1 order by id;
 select * from e2 order by id;
--- the same predicate still errors when it IS reached (no row matches earlier)
+-- the same predicate no longer errors when reached: explicit CAST of 'bad' yields 0 + a truncated warning (#30417), so the s='1' row lands in e2
 delete from e1; delete from e2;
 insert first
   when id = 99 then into e1 (id) values (id)
@@ -217,8 +217,9 @@ insert first
 select id, s from esrc;
 select count(*) from e1;
 select count(*) from e2;
--- A later WHEN subquery executes only for unclaimed rows. Here id=0
--- reaches the bad cast, so the entire statement must roll back.
+-- A later WHEN subquery executes only for unclaimed rows. The bad cast in it
+-- now yields 0 + a truncated warning (#30417) instead of an error, so the
+-- statement commits and id=1 lands in e1.
 create table bad (s varchar(16));
 insert into bad values ('bad');
 insert first
@@ -233,7 +234,7 @@ insert first
 select id, s from esrc;
 select count(*) from e1;
 select count(*) from e2;
--- The selected ELSE row reaches its bad cast; earlier branch writes roll back.
+-- The selected ELSE row reaches its bad cast; explicit CAST yields 0 + a truncated warning (#30417), so both rows commit (id=0 lands in e2).
 delete from e1; delete from e2;
 insert first
   when id = 1 then into e1 (id) values (id)
@@ -254,7 +255,8 @@ select id, s from esrc;
 select count(*) from e1;
 select count(*) from e2;
 
--- INSERT ALL has no first-match rule, so every WHEN applies and the error surfaces
+-- INSERT ALL has no first-match rule, so every WHEN applies; the cast no longer errors (#30417: 0 + a truncated warning), so the statement now fails on a duplicate primary key. With e2 cleared first, only the e1 insert can collide (key 1), so the reported entry is the same under any branch order.
+delete from e2;
 insert all
   when id = 1 then into e1 (id) values (id)
   when cast(s as signed) = 1 then into e2 (id) values (id)

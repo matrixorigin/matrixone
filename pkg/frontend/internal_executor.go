@@ -244,12 +244,6 @@ func (ie *internalExecutor) ApplySessionOverride(opts ie.SessionOverrideOptions)
 	ie.baseSessOpts = opts
 }
 
-// func showCaller() {
-// 	pc, _, _, _ := runtime.Caller(1)
-// 	callFunc := runtime.FuncForPC(pc)
-// 	logutil.Infof("[Metric] called: %s", callFunc.Name())
-// }
-
 var _ MysqlRrWr = &internalProtocol{}
 
 type internalProtocol struct {
