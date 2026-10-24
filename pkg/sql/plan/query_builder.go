@@ -733,6 +733,31 @@ func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
 	return result, true
 }
 
+// Fixed-width binary branches must share one padded representation before a
+// set operation compares or materializes their rows. A nonpositive width
+// denotes an unspecified bound, so it must remain unbounded rather than
+// inheriting a fixed width from another branch.
+func setOperationPureBinaryCommonType(source []types.Type) (types.Type, bool) {
+	if len(source) == 0 || source[0].Oid != types.T_binary {
+		return types.Type{}, false
+	}
+	result := source[0]
+	for _, typ := range source[1:] {
+		if typ.Oid != types.T_binary {
+			return types.Type{}, false
+		}
+	}
+	for _, typ := range source {
+		if typ.Width <= 0 {
+			return types.New(types.T_blob, types.MaxLongTextLen, 0), true
+		}
+		if typ.Width > result.Width {
+			result.Width = typ.Width
+		}
+	}
+	return result, true
+}
+
 // A winning text collation needs a text result type even when the safe common
 // byte bound was first chosen in the binary domain. In particular, BLOB's
 // result decoding does not preserve UTF-8 text for prepared parameters.
@@ -4760,9 +4785,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		if len(tmpArgsType) > 0 {
 			var targetType plan.Type
 			var targetArgType types.Type
+			pureBinaryType, pureFixedBinary := setOperationPureBinaryCommonType(tmpArgsType)
 			mixedTextBinaryType, mixedTextBinary := function.MixedTextBinaryCommonType(tmpArgsType)
 			if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
 				targetArgType = pureCharType
+			} else if pureFixedBinary {
+				targetArgType = pureBinaryType
 			} else if mixedTextBinary {
 				targetArgType = mixedTextBinaryType
 			} else {
@@ -4800,6 +4828,20 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					}
 				} else {
 					targetArgType = argsCastType[0]
+				}
+			}
+			// A temporal branch converted to text can occupy more characters
+			// than a leading string literal. Widen the common type before the
+			// branch casts so the time component is not discarded.
+			if targetArgType.Oid == types.T_char || targetArgType.Oid == types.T_varchar {
+				for _, typ := range tmpArgsType {
+					switch typ.Oid {
+					case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+						if width, known := function.StringResultByteBound(typ); known &&
+							width > uint64(targetArgType.Width) && width <= uint64(types.MaxVarcharLen) {
+							targetArgType.Width = int32(width)
+						}
+					}
 				}
 			}
 			allCharInputs := len(tmpArgsType) > 0
@@ -4856,7 +4898,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						targetArgType.Width = typ.Width
 					}
 				}
-			} else if !mixedTextBinary &&
+			} else if !pureFixedBinary && !mixedTextBinary &&
 				(targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary) {
 				targetArgType = types.T_blob.ToType()
 			}
