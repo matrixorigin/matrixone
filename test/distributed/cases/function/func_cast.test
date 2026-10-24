@@ -85,6 +85,18 @@ select @@warning_count;
 select cast(d as decimal(5,2)) as d from cast_range_warning_rows where id > 1 order by id;
 show warnings;
 select @@warning_count;
+# Runtime lexical integer casts warn; filtered invalid rows stay silent.
+delete from cast_range_warning_rows;
+insert into cast_range_warning_rows(id, s) values (1, 'abc'), (2, '42'), (3, null);
+select cast(s as signed) as lexical_signed from cast_range_warning_rows order by id;
+show warnings;
+select @@warning_count;
+select cast(s as unsigned) as lexical_unsigned from cast_range_warning_rows order by id;
+show warnings;
+select @@warning_count;
+select cast(s as signed) as lexical_signed, cast(s as unsigned) as lexical_unsigned from cast_range_warning_rows where id > 1 order by id;
+show warnings;
+select @@warning_count;
 drop table cast_range_warning_rows;
 
 # Every EXECUTE owns fresh diagnostics, including reuse after a silent boundary.

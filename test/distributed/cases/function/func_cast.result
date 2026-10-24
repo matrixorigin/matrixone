@@ -205,6 +205,39 @@ show warnings;
 select @@warning_count;
 ➤ @@warning_count[-1,16383,0]  𝄀
 0
+delete from cast_range_warning_rows;
+insert into cast_range_warning_rows(id, s) values (1, 'abc'), (2, '42'), (3, null);
+select cast(s as signed) as lexical_signed from cast_range_warning_rows order by id;
+➤ lexical_signed[-5,64,0]  𝄀
+0  𝄀
+42  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: 'abc'
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+select cast(s as unsigned) as lexical_unsigned from cast_range_warning_rows order by id;
+➤ lexical_unsigned[-5,64,0]  𝄀
+0  𝄀
+42  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: 'abc'
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+select cast(s as signed) as lexical_signed, cast(s as unsigned) as lexical_unsigned from cast_range_warning_rows where id > 1 order by id;
+➤ lexical_signed[-5,64,0]  ¦  lexical_unsigned[-5,64,0]  𝄀
+42  ¦  42  𝄀
+null  ¦  null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+0
 drop table cast_range_warning_rows;
 prepare cast_range_signed from 'select cast(? as signed) as s';
 set @cast_range_value = '9223372036854775808';

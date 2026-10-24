@@ -1145,6 +1145,10 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 		}
 		if route == regexpRouteWideLines {
 			if subjectNull {
+				// A present pattern must be valid even when its subject is NULL.
+				if _, err := op.regMap.getWideLineMatcher(patternString, pureMatchType, binary); err != nil {
+					return err
+				}
 				if err := rs.Append(false, true); err != nil {
 					return err
 				}

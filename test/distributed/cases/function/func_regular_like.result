@@ -19,6 +19,18 @@ NULL
 SELECT REGEXP_LIKE(NULL, NULL);
 regexp_like(null, null)
 NULL
+select regexp_like(cast(NULL as varbinary(20)), cast(concat('^', char(92), 'x{100}') as varbinary(20)), 'm');
+invalid input: binary regular expressions only support byte escapes up to \x{FF}
+select regexp_like(cast(NULL as varbinary(20)), cast(concat('^', char(92), 'x{100}') as varbinary(20)), 'mu');
+invalid input: binary regular expressions only support byte escapes up to \x{FF}
+select regexp_like(cast(NULL as varbinary(20)), cast(_binary'^a' as varbinary(2)), 'm') as valid_binary_null;
+valid_binary_null
+NULL
+select regexp_instr(concat('a', convert(char(13) using utf8mb4)), '($)+', 1, 2, 0, 'm') as terminal_at,
+length(regexp_substr(concat('a', convert(char(13) using utf8mb4)), '($)+', 1, 2, 'm')) as terminal_len,
+hex(regexp_replace(concat('a', convert(char(13) using utf8mb4)), '($)+', 'X', 1, 0, 'm')) as terminal_replaced;
+terminal_at    terminal_len    terminal_replaced
+3    0    61580D58
 drop table if exists t1;
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");

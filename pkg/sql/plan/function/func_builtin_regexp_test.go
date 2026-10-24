@@ -1871,6 +1871,30 @@ func Test_BuiltIn_RegexpValidatesPresentArgumentsBeforeNullableResult(t *testing
 		})
 	}
 
+	for _, matchType := range []string{"m", "mu"} {
+		t.Run("binary_pattern_null_subject/"+matchType, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc, []FunctionTestInput{
+				nullText,
+				NewFunctionTestInput(text, []string{`^\x{100}`}, nil),
+				NewFunctionTestInput(text, []string{matchType}, nil),
+			}, NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil), newOpBuiltInRegexp().builtInRegexpLike)
+			defer tcc.Free()
+			require.NoError(t, tcc.parameters[1].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+			_, err := tcc.DebugRun()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "binary")
+		})
+	}
+	t.Run("valid_binary_pattern_null_subject", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc, []FunctionTestInput{
+			nullText, NewFunctionTestInput(text, []string{`^a`}, nil),
+			NewFunctionTestInput(text, []string{"m"}, nil),
+		}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true}), newOpBuiltInRegexp().builtInRegexpLike)
+		require.NoError(t, tcc.parameters[1].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+		ok, info := tcc.RunAndFree()
+		require.True(t, ok, info)
+	})
+
 	nullMatchType := NewFunctionTestInput(text, []string{""}, []bool{true})
 	for _, tc := range []struct {
 		name       string

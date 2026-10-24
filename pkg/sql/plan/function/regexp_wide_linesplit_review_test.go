@@ -191,9 +191,18 @@ func TestReviewWideLineTerminalDollar(t *testing.T) {
 		{"crlf_keeps_lf_contract", "a\r\n", false, "aX\r\nX"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := op.regMap.regularReplaceWithMatchType(`$`, tc.subject, "X", 1, 0, tc.binary, "m")
-			require.NoError(t, err)
-			require.Equal(t, tc.want, got)
+			for _, pattern := range []string{`$`, `($)+`, `($){1,2}`} {
+				got, err := op.regMap.regularReplaceWithMatchType(pattern, tc.subject, "X", 1, 0, tc.binary, "m")
+				require.NoError(t, err, pattern)
+				require.Equal(t, tc.want, got, pattern)
+				at, err := op.regMap.regularInstrWithMatchType(pattern, tc.subject, 1, 2, 0, tc.binary, "m")
+				require.NoError(t, err, pattern)
+				require.Equal(t, regexpSubjectLength(tc.subject, tc.binary)+1, at, pattern)
+				matched, value, err := op.regMap.regularSubstrWithMatchType(pattern, tc.subject, 1, 2, tc.binary, "m")
+				require.NoError(t, err, pattern)
+				require.True(t, matched, pattern)
+				require.Empty(t, value, pattern)
+			}
 		})
 	}
 	// The caret stays suppressed on the same terminal segment.
@@ -203,8 +212,12 @@ func TestReviewWideLineTerminalDollar(t *testing.T) {
 	liked, err := op.regMap.regularLikeWithMode(`^$`, "a\r", "m", false)
 	require.NoError(t, err)
 	require.False(t, liked)
+	// A mandatory repetition of a forbidden caret still cannot match there.
+	at, err := op.regMap.regularInstrWithMatchType(`(^)+`, "a\r", 1, 2, 0, false, "m")
+	require.NoError(t, err)
+	require.Zero(t, at)
 	// INSTR sees the terminal '$' match as the second occurrence.
-	at, err := op.regMap.regularInstrWithMatchType(`$`, "a\r", 1, 1, 0, false, "m")
+	at, err = op.regMap.regularInstrWithMatchType(`$`, "a\r", 1, 1, 0, false, "m")
 	require.NoError(t, err)
 	require.Equal(t, int64(2), at)
 	at, err = op.regMap.regularInstrWithMatchType(`$`, "a\r", 1, 2, 0, false, "m")

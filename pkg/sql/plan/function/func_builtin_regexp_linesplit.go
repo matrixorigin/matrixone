@@ -255,7 +255,7 @@ func regexpSyntaxCaretSuppressedEmptyMatch(re *syntax.Regexp) bool {
 			return true
 		}
 		return regexpSyntaxCaretSuppressedEmptyMatch(re.Sub[0])
-	case syntax.OpCapture:
+	case syntax.OpCapture, syntax.OpPlus:
 		return regexpSyntaxCaretSuppressedEmptyMatch(re.Sub[0])
 	default:
 		// Literals, character classes and dot need input bytes.
