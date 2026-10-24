@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
 
@@ -38,11 +39,40 @@ const (
 
 var cacheDirTrashSeq atomic.Uint64
 
+const (
+	// DefaultIndexFileDiskShare is the default share of the disk cache capacity given to
+	// the index-file cache.
+	DefaultIndexFileDiskShare = 0.3
+
+	IndexFileRebuildCacheRead      = "read"
+	IndexFileRebuildCacheNone      = "none"
+	IndexFileRebuildCacheReadWrite = "read-write"
+
+	// IndexFileRebuildPolicyDefault reads cached chunk data without filling the caches.
+	IndexFileRebuildPolicyDefault Policy = SkipMemoryCacheWrites | SkipDiskCacheWrites
+)
+
+// ParseIndexFileRebuildCache maps an index-file-rebuild-cache setting to a cache policy.
+func ParseIndexFileRebuildCache(s string) (Policy, error) {
+	switch s {
+	case "", IndexFileRebuildCacheRead:
+		return IndexFileRebuildPolicyDefault, nil
+	case IndexFileRebuildCacheNone:
+		return SkipAllCache, nil
+	case IndexFileRebuildCacheReadWrite:
+		return 0, nil
+	}
+	return 0, moerr.NewInvalidInputNoCtxf(
+		"invalid index-file-rebuild-cache %q, want %q, %q or %q",
+		s, IndexFileRebuildCacheRead, IndexFileRebuildCacheNone, IndexFileRebuildCacheReadWrite)
+}
+
 // IndexFileCache keeps whole index files on local disk. An entry is a directory of named
 // files that is published, evicted and deleted as a unit. Capacity, eviction, per-path
 // coordination and reuse after restart are those of DiskCache.
 type IndexFileCache struct {
-	disk *DiskCache
+	disk          *DiskCache
+	rebuildPolicy Policy
 }
 
 // IndexCacheFile is one file of an entry written by IndexFileCache.Put.
@@ -58,11 +88,49 @@ func NewIndexFileCache(
 	capacity fscache.CapacityFunc,
 	name string,
 ) (*IndexFileCache, error) {
-	disk, err := newDiskCache(ctx, path, capacity, nil, true, nil, name, "", true)
+	return newIndexFileCache(ctx, path, capacity, name, "", 0, IndexFileRebuildPolicyDefault)
+}
+
+func newIndexFileCache(
+	ctx context.Context,
+	path string,
+	capacity fscache.CapacityFunc,
+	name string,
+	metricScope string,
+	sizeHintShare float64,
+	rebuildPolicy Policy,
+) (*IndexFileCache, error) {
+	disk, err := newDiskCache(ctx, path, capacity, nil, true, nil, name, metricScope,
+		diskCacheOptions{dirEntries: true, sizeHintShare: sizeHintShare})
 	if err != nil {
 		return nil, err
 	}
-	return &IndexFileCache{disk: disk}, nil
+	return &IndexFileCache{disk: disk, rebuildPolicy: rebuildPolicy}, nil
+}
+
+// RebuildPolicy is the cache policy for reading chunk rows when an entry is rebuilt.
+func (c *IndexFileCache) RebuildPolicy() Policy {
+	return c.rebuildPolicy
+}
+
+// IndexFileCacheProvider is a file service that owns an index-file cache.
+type IndexFileCacheProvider interface {
+	IndexFileCache() *IndexFileCache
+}
+
+// GetIndexFileCache returns the index-file cache of fs's SHARED file service, or nil.
+func GetIndexFileCache(fs FileService) *IndexFileCache {
+	if fs == nil {
+		return nil
+	}
+	shared, err := Get[FileService](fs, defines.SharedFileServiceName)
+	if err != nil {
+		return nil
+	}
+	if p, ok := shared.(IndexFileCacheProvider); ok {
+		return p.IndexFileCache()
+	}
+	return nil
 }
 
 // Close stops the cache. Entries stay on disk.
