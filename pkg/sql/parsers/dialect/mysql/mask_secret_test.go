@@ -16,7 +16,9 @@ package mysql
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
@@ -247,6 +249,101 @@ func TestMaskPreparedSqlLiterals(t *testing.T) {
 		`prepare p from "create stage s url='file:///x' credentials={'aws_key'='PREPARE_CANARY'}"`,
 		CredentialStateNone)
 	require.NotContains(t, got, "PREPARE_CANARY")
+}
+
+// #30747 review: executable comments deliver their CONTENTS as tokens, so
+// trivia resolution must descend into them; otherwise a credential wrapped
+// in /*! ... */ survives in statement records and debug traces.
+func TestMaskExecutableCommentSecrets(t *testing.T) {
+	cases := []struct {
+		sql    string
+		canary string
+	}{
+		{`create user u identified by /*! 'EXEC_CANARY_A' */`, "EXEC_CANARY_A"},
+		{`create stage s credentials={'aws_key'='AK1', 'aws_secret'=/*! 'EXEC_CANARY_B' */}`, "EXEC_CANARY_B"},
+		{`create stage s credentials={'aws_key'='AK1', 'aws_secret'=/*!12345 'EXEC_CANARY_C' */}`, "EXEC_CANARY_C"},
+		{`select access_key_id = /*! 'EXEC_CANARY_D' */`, "EXEC_CANARY_D"},
+	}
+	for _, c := range cases {
+		got := MaskSensitiveSqlLiterals(c.sql)
+		require.NotContains(t, got, c.canary, c.sql)
+		require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent: "+c.sql)
+	}
+	// the comment wrapper and quote delimiters are preserved around the mask
+	require.Contains(t,
+		MaskSensitiveSqlLiterals(`create stage s credentials={'aws_key'=/*! 'EXEC_CANARY_E' */}`),
+		`/*! '******' */`)
+}
+
+// #30747 review: a PREPARE body is SQL of its own — mask its DECODED payload
+// (doubled quotes, backslash escapes, dollar-quoting) and rebuild a valid
+// literal, instead of scanning the encoded source text.
+func TestMaskPreparedSqlLiteralsEncodedBodies(t *testing.T) {
+	cases := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{"doubled quotes",
+			`prepare p from 'create stage s url=''file:///x'' credentials={''aws_key''=''ENC_CANARY_A''}'`,
+			`prepare p from 'create stage s url=''file:///x'' credentials={''aws_key''=''******''}'`},
+		{"double-quoted body",
+			`prepare p from "create stage s url='file:///x' credentials={'aws_key'='ENC_CANARY_B'}"`,
+			`prepare p from "create stage s url='file:///x' credentials={'aws_key'='******'}"`},
+		{"backslash-escaped body",
+			`prepare p from 'create stage s url=\'file:///x\' credentials={\'aws_key\'=\'ENC_CANARY_C\'}'`,
+			`prepare p from 'create stage s url=''file:///x'' credentials={''aws_key''=''******''}'`},
+		{"dollar-quoted body",
+			`prepare p from $pq$create stage s url='file:///x' credentials={'aws_key'='ENC_CANARY_D'}$pq$`,
+			`prepare p from $pq$create stage s url='file:///x' credentials={'aws_key'='******'}$pq$`},
+	}
+	for _, c := range cases {
+		got := MaskSensitiveSqlLiterals(c.sql)
+		require.Equal(t, c.want, got, c.name)
+		require.NotContains(t, got, "ENC_CANARY", c.name)
+		require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent: "+c.name)
+	}
+	// the re-encoded literal must still parse as a prepare statement
+	_, err := ParseOne(context.Background(),
+		`prepare p from 'create stage s url=''file:///x'' credentials={''aws_key''=''******''}'`, 1)
+	require.NoError(t, err)
+}
+
+// #30747 review: the COM_QUERY debug trace carries the whole multi-statement
+// request; every statement-initial PREPARE must be descended, not only the
+// leading one.
+func TestMaskPreparedSqlLiteralsMultiStatement(t *testing.T) {
+	sql := `select 1; prepare p from 'create stage s url=''file:///x'' credentials={''aws_key''=''MULTI_CANARY_A''}'; select 2`
+	got := MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "MULTI_CANARY_A")
+	require.Contains(t, got, `credentials={''aws_key''=''******''}'`)
+	require.Contains(t, got, "select 2")
+
+	// two prepare statements in one request: both descended
+	sql = `prepare p1 from 'create stage s credentials={''aws_key''=''MULTI_CANARY_B''}'; prepare p2 from 'create stage s credentials={''aws_key''=''MULTI_CANARY_C''}'`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "MULTI_CANARY_B")
+	require.NotContains(t, got, "MULTI_CANARY_C")
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+
+	// a PREPARE keyword that is NOT at a statement start is left alone:
+	// EXECUTE names the earlier prepared statement
+	sql = `select 1; execute p1`
+	require.Equal(t, sql, MaskSensitiveSqlLiterals(sql))
+}
+
+// #30747 review: each malformed unquoted value run is consumed once; a long
+// run of repeated a= segments must stay linear instead of re-scanning the
+// suffix once per token. (Bound is generous: the previous quadratic form
+// needed ~seconds here, the linear form is sub-millisecond.)
+func TestMaskUnquotedCredentialValueRunLinear(t *testing.T) {
+	repeat := strings.Repeat("a=", 1<<18)
+	sql := `create stage s credentials={'aws_key'=` + repeat + `'LINEAR_CANARY'}`
+	start := time.Now()
+	got := MaskSensitiveSqlLiterals(sql)
+	elapsed := time.Since(start)
+	require.NotContains(t, got, "LINEAR_CANARY")
+	require.Less(t, elapsed, 2*time.Second, "malformed unquoted run must be consumed once")
 }
 
 // #30747 review: parser reuse must not inherit the previous statement's
