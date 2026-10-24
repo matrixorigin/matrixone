@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -430,7 +431,11 @@ func (w exportStatusColumns) GetColumns(context.Context) ([]interface{}, error) 
 
 func TestExportStatementLifecycle(t *testing.T) {
 	for _, format := range []string{"csv", "jsonline"} {
-		for _, mode := range []string{"success", "runner-error", "cancel", "header-error"} {
+		modes := []string{"success", "runner-error", "cancel", "header-error"}
+		if format == "jsonline" {
+			modes = append(modes, "duplicate-columns")
+		}
+		for _, mode := range modes {
 			t.Run(format+"/"+mode, func(t *testing.T) {
 				ses := newValidateSession(t)
 				ses.pool = ses.proc.Mp()
@@ -443,6 +448,8 @@ func TestExportStatementLifecycle(t *testing.T) {
 					cfg.MaxFileSize = 1
 					cfg.ExportFormat = "csv"
 				}
+				ses.tStmt = motrace.NewStatementInfo()
+				ses.tStmt.SetOutfileReceipt(motrace.StatementOutfileReceipt{Target: cfg.FilePath, Format: format})
 				ses.InitExportConfig(cfg)
 				ep := ses.GetExportConfig()
 				ctx, cancel := context.WithCancel(context.Background())
@@ -456,7 +463,11 @@ func TestExportStatementLifecycle(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, ses.pool))
 				source.SetRowCount(1)
 				injected := errors.New("runner failed")
-				execCtx := &ExecCtx{reqCtx: ctx, ses: ses, stmt: &tree.Select{}, cw: exportStatusColumns{columns: []interface{}{col}}}
+				columns := []interface{}{col}
+				if mode == "duplicate-columns" {
+					columns = append(columns, col)
+				}
+				execCtx := &ExecCtx{reqCtx: ctx, ses: ses, stmt: &tree.Select{}, cw: exportStatusColumns{columns: columns}}
 				execCtx.runner = exportStatusRunner{run: func() error {
 					if err := ep.Write(execCtx, nil, source); err != nil {
 						return err
@@ -486,6 +497,20 @@ func TestExportStatementLifecycle(t *testing.T) {
 					require.ErrorIs(t, err, context.Canceled)
 				case "header-error":
 					require.ErrorContains(t, err, "header line size")
+				case "duplicate-columns":
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+					require.ErrorContains(t, err, "duplicate column names")
+				}
+				var fields struct {
+					Outfile motrace.StatementOutfileReceipt `json:"outfile"`
+				}
+				require.NoError(t, json.Unmarshal(ses.tStmt.ExecPlan2Json(ctx), &fields))
+				require.Equal(t, mode == "success", fields.Outfile.Complete)
+				if mode == "success" {
+					actual, readErr := os.ReadFile(cfg.FilePath)
+					require.NoError(t, readErr)
+					require.EqualValues(t, len(actual), fields.Outfile.BytesWritten)
+					require.EqualValues(t, 1, fields.Outfile.RowsWritten)
 				}
 				source.Clean(ses.pool)
 				require.Zero(t, ses.pool.CurrNB())
@@ -495,6 +520,84 @@ func TestExportStatementLifecycle(t *testing.T) {
 				require.Nil(t, ep.mrs)
 			})
 		}
+	}
+}
+
+// A panic must abort publication before joining converters, preserve completed
+// splits, and reach the outer statement recovery with its original identity.
+func TestExportStatementPanicAbortsAndKeepsReceiptIncomplete(t *testing.T) {
+	for _, blocked := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no-worker", true: "blocked-conversion"}[blocked], func(t *testing.T) {
+			ses := newValidateSession(t)
+			ses.pool = ses.proc.Mp()
+			pu := getPu(ses.GetService())
+			original := pu.FileService
+			t.Cleanup(func() { pu.FileService = original })
+			synctest.Test(t, func(t *testing.T) {
+				completed := make(map[string][]byte)
+				fs := &exportLifecycleFS{write: func(_ context.Context, v fileservice.IOVector) error {
+					data, err := io.ReadAll(v.Entries[0].ReaderForWrite)
+					if err == nil {
+						completed[v.FilePath] = data
+					}
+					return err
+				}}
+				pu.FileService = fs
+				cfg := newDiffCSVUserConfig()
+				cfg.FilePath = "SHARED:/panic.csv"
+				cfg.SplitSize = 2
+				ses.SetMysqlResultSet(&MysqlResultSet{})
+				ses.tStmt = motrace.NewStatementInfo()
+				ses.tStmt.SetOutfileReceipt(motrace.StatementOutfileReceipt{Target: cfg.FilePath, Format: "csv"})
+				ses.InitExportConfig(cfg)
+				ep := ses.GetExportConfig()
+				defer ep.Close()
+				column := &MysqlColumn{}
+				column.SetName("value")
+				column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+				source := batch.NewOffHeapWithSize(1)
+				defer source.Clean(ses.pool)
+				source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, ses.pool))
+				source.SetRowCount(1)
+				injected := moerr.NewInvalidInputNoCtx("runner panic")
+				execCtx := &ExecCtx{reqCtx: t.Context(), ses: ses, stmt: &tree.Select{}, cw: exportStatusColumns{columns: []interface{}{column}}}
+				execCtx.runner = exportStatusRunner{run: func() error {
+					require.NoError(t, writeExportBatchToFile(ep, &BatchByte{
+						writeByte: []byte("a\nb\n"), rowEnds: []int{2, 4}, rowCount: 2,
+					}))
+					if blocked {
+						ep.ByteChan = make(chan *BatchByte)
+						copied, err := cloneExportWorkerBatch(source, ses.pool)
+						require.NoError(t, err)
+						ep.workers.Add(1)
+						go func() {
+							defer ep.workers.Done()
+							constructByte(ep.ctx, ses, copied, 1, ep.ByteChan, ep)
+						}()
+						synctest.Wait() // converter is blocked publishing to the abandoned consumer.
+					}
+					panic(injected)
+				}}
+				require.PanicsWithValue(t, injected, func() { _ = executeStatusStmt(ses, execCtx) })
+				var fields struct {
+					Outfile motrace.StatementOutfileReceipt `json:"outfile"`
+				}
+				require.NoError(t, json.Unmarshal(ses.tStmt.ExecPlan2Json(t.Context()), &fields))
+				require.False(t, fields.Outfile.Complete)
+				require.EqualValues(t, 2, fields.Outfile.BytesWritten)
+				require.EqualValues(t, 1, fields.Outfile.RowsWritten)
+				require.Equal(t, []byte("a\n"), completed[cfg.FilePath])
+				require.NotContains(t, completed, cfg.FilePath+".1")
+				require.Nil(t, ep.AsyncGroup)
+				require.Nil(t, ep.AsyncWriter)
+				require.Nil(t, ep.ByteChan)
+				require.Nil(t, ep.ctx)
+				source.Clean(ses.pool)
+				require.Zero(t, ses.pool.CurrNB())
+				require.False(t, fs.closed.Load(), "shared file service is borrowed")
+			})
+		})
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,6 +43,17 @@ func TestTopLevelOutfileReceiptAndCredentialRedaction(t *testing.T) {
 	require.NotContains(t, redacted, "token")
 	require.Contains(t, redacted, receipt.Target)
 	require.Equal(t, 2, strings.Count(redacted, receipt.Target), "both the projected literal and OUTFILE target must be redacted")
+
+	ses := &Session{prepareStmts: map[string]*PrepareStmt{"audit": {Sql: sql, PrepareStmt: stmt}}}
+	const env = "execute audit"
+	for _, limit := range []int{0, 4, len(env), len(env) + 3, len(env) + 4, len(env) + 8, -1} {
+		got := makeExecuteSql(t.Context(), ses, &tree.Select{}, true, "audit", env, limit)
+		require.NotContains(t, got, "out_secret", "limit=%d", limit)
+		if limit == -1 {
+			require.Contains(t, got, receipt.Target)
+		}
+	}
+	require.Equal(t, sql, ses.prepareStmts["audit"].Sql, "diagnostics do not mutate execution SQL")
 }
 
 func TestOutfileTargetRetainsFileServiceAcceptedNames(t *testing.T) {
@@ -57,6 +69,8 @@ func TestOutfileTargetRetainsFileServiceAcceptedNames(t *testing.T) {
 		"stage://stage/data%s.csv",
 		"stage://stage/report%e.csv",
 		"stage://stage/report%2b.csv",
+		"stage://stage/报告.csv",
+		"stage://stage/%E6%8A%A5%E5%91%8A.csv",
 	}
 	for _, target := range targets {
 		t.Run(target, func(t *testing.T) {
@@ -89,6 +103,12 @@ func TestOutfileTargetRetainsFileServiceAcceptedNames(t *testing.T) {
 }
 
 func TestOutfileTargetRedactionPreservesCredentialBoundaries(t *testing.T) {
+	for _, path := range []string{"报告.csv", "%E6%8A%A5%E5%91%8A.csv"} {
+		safe := sanitizeOutfileTarget("stage://user:secret@stage/" + path + "?token=secret#private")
+		require.Equal(t, "stage://stage/"+path, safe.target)
+		require.True(t, safe.redacted)
+		require.False(t, safe.invalid)
+	}
 	userinfo := sanitizeOutfileTarget("stage://user:secret@stage/private.csv")
 	require.Equal(t, "stage://stage/private.csv", userinfo.target)
 	require.True(t, userinfo.redacted)

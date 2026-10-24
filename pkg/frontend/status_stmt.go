@@ -115,14 +115,25 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		}
 		if ep.needExportToFile() {
 			defer func() {
-				err = ep.finish(err)
+				// The producer may panic before the ordered drain. Abort first so
+				// abandoned conversion publication cannot block worker cleanup.
+				// The outer statement owner still handles the original panic.
+				panicked := recover()
+				cause := err
+				if panicked != nil {
+					cause = moerr.ConvertPanicError(execCtx.reqCtx, panicked)
+				}
+				err = ep.finish(cause)
 				if ep.auditEnabled && ses.tStmt != nil {
 					ses.tStmt.UpdateOutfileReceipt(
 						outfileFormat(ep.userConfig),
 						ep.auditBytesWritten,
 						ep.auditRowsWritten,
-						err == nil,
+						panicked == nil && err == nil,
 					)
+				}
+				if panicked != nil {
+					panic(panicked)
 				}
 			}()
 			columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)

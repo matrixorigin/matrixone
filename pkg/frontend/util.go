@@ -1477,7 +1477,6 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binE
 	if limit == 0 || limit < -1 {
 		return ""
 	}
-	preparedSQL := redactStatementTextForLogging(prepared.PrepareStmt, strings.TrimSpace(prepared.Sql))
 	var bb strings.Builder
 	appendPart := func(part string) bool {
 		if limit > 0 && len(part) > limit-bb.Len() {
@@ -1492,7 +1491,13 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binE
 		return true
 	}
 	finish := func() string { return commonutil.Abbreviate(bb.String(), limit) }
-	if !appendPart(envStmt) || !appendPart(" // ") || !appendPart(preparedSQL) || !appendPart(" ; ") {
+	if !appendPart(envStmt) || !appendPart(" // ") {
+		return finish()
+	}
+	// Only scan the saved SQL when its diagnostic can be retained. Redact
+	// before clipping so a later privacy marker cannot expose an earlier prefix.
+	preparedSQL := redactStatementTextForLogging(prepared.PrepareStmt, strings.TrimSpace(prepared.Sql))
+	if !appendPart(preparedSQL) || !appendPart(" ; ") {
 		return finish()
 	}
 	if len(variables) != 0 {

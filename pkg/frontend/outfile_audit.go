@@ -100,21 +100,18 @@ func sanitizeOutfileTarget(raw string) safeOutfileTarget {
 			return result
 		}
 		if parsed.User != nil {
-			parsed.User = nil
+			authorityStart := strings.Index(raw, "://") + 3
+			authorityEnd := len(raw)
+			if end := strings.IndexAny(raw[authorityStart:], "/?#"); end >= 0 {
+				authorityEnd = authorityStart + end
+			}
+			userinfoEnd := strings.LastIndexByte(raw[authorityStart:authorityEnd], '@')
+			safe = raw[:authorityStart] + raw[authorityStart+userinfoEnd+1:]
 			result.redacted = true
 		}
-		if parsed.RawQuery != "" || parsed.ForceQuery {
-			parsed.RawQuery = ""
-			parsed.ForceQuery = false
-			result.redacted = true
-		}
-		if parsed.Fragment != "" || parsed.RawFragment != "" {
-			parsed.Fragment = ""
-			parsed.RawFragment = ""
-			result.redacted = true
-		}
-		safe = parsed.String()
-		safe = strings.ReplaceAll(safe, "%25", "%")
+		// Keep the original path bytes: URL.String escapes Unicode and would
+		// conflate a Unicode key with a different literal-percent sink key.
+		// Query and fragment removal below also operates on the raw spelling.
 	} else if parsed, err := fileservice.ParseETLService(raw); err == nil {
 		serviceUserInfo = strings.Contains(parsed.Service, "@")
 		if parsed.Service != "" && len(parsed.ServiceArguments) != 0 {
@@ -160,8 +157,8 @@ func sanitizeOutfileTarget(raw string) safeOutfileTarget {
 }
 
 // escapeOutfileFormatSpecifiers protects printf-style filename templates and
-// literal percent bytes from url.Parse. Callers restore the escaped percent
-// after parsing so sink-valid filenames retain their original identity.
+// literal percent bytes from url.Parse. This is only a parsing copy; the audit
+// target retains the original bytes so distinct sink keys stay distinct.
 func escapeOutfileFormatSpecifiers(raw string) string {
 	return strings.ReplaceAll(raw, "%", "%25")
 }
