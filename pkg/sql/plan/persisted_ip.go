@@ -177,6 +177,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.ViewMetadataFunctions {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion126)
 	}
+	if features.IncompleteTemporalStrings {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion130)
+	}
 	return requiredVersion, nil
 }
 
