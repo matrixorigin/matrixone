@@ -32,7 +32,10 @@ func Test_BuiltIn_MoShowVisibleBinColumnDefault(t *testing.T) {
 		want   string
 		null   bool
 	}{
+		{origin: "", null: true},
 		{origin: "null", null: true},
+		{origin: "NuLl", null: true},
+		{origin: "'NULL'", want: "NULL"},
 		{origin: "NULL", null: true},
 		{origin: "'n'", want: "n"},
 		{origin: "''", want: ""},
@@ -40,6 +43,13 @@ func Test_BuiltIn_MoShowVisibleBinColumnDefault(t *testing.T) {
 		{origin: `'a\\b'`, want: `a\b`},
 		{origin: `'a\%b'`, want: `a\%b`},
 		{origin: "'2024-01-01'", want: "2024-01-01"},
+		{origin: `'a\nb\tc\r\0\b\Z'`, want: "a\nb\tc\r\x00\b\x1a"},
+		{origin: `'a\_b'`, want: `a\_b`},
+		{origin: `'a\qb'`, want: "aqb"},
+		{origin: `'tail\\'`, want: `tail\`},
+		{origin: `'tail\'`, want: `'tail\'`},
+		{origin: `'unterminated`, want: `'unterminated`},
+		{origin: "'a' + 'b'", want: "'a' + 'b'"},
 		{origin: "9", want: "9"},
 		{origin: "current_timestamp()", want: "current_timestamp()"},
 		{origin: "(json_array())", want: "(json_array())"},
@@ -47,7 +57,7 @@ func Test_BuiltIn_MoShowVisibleBinColumnDefault(t *testing.T) {
 		{origin: "'a' 'b'", want: "'a' 'b'"},
 	} {
 		t.Run(tc.origin, func(t *testing.T) {
-			defBytes, err := types.Encode(&plan.Default{OriginString: tc.origin})
+			defBytes, err := types.Encode(&plan.Default{OriginString: tc.origin, NullAbility: true})
 			require.NoError(t, err)
 			input := tcTemp{
 				info: "show visible bin column default",
@@ -61,5 +71,31 @@ func Test_BuiltIn_MoShowVisibleBinColumnDefault(t *testing.T) {
 			succeed, info := tcc.RunAndFree()
 			require.True(t, succeed, input.info, info)
 		})
+	}
+}
+
+func TestMoShowVisibleBinDefaultModesRemainSeparate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defBytes, err := types.Encode(&plan.Default{OriginString: "'n'"})
+	require.NoError(t, err)
+	updateBytes, err := types.Encode(&plan.OnUpdate{OriginString: "'n'"})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		mode    uint8
+		payload []byte
+		want    string
+	}{
+		{onUpdateExpr, updateBytes, "'n'"},
+		{defaultExpr, defBytes, "n"},
+		{defExprInShowColumns, defBytes, "n"},
+	} {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{string(tc.payload)}, nil),
+			NewFunctionTestInput(types.T_uint8.ToType(), []uint8{tc.mode}, nil),
+		}
+		expected := NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil)
+		testCase := NewFunctionTestCase(proc, inputs, expected, builtInMoShowVisibleBin)
+		succeed, info := testCase.RunAndFree()
+		require.True(t, succeed, info)
 	}
 }
