@@ -619,3 +619,21 @@ The current official main retains MORPC 127 for IndexSearchScan internal_topk/ma
 Catalog revision publication and reads, prepared-plan reuse, evaluator Prepare, remote sender/receiver, and GetPythonUdfStatus reject predecessor 129 and mixed 130/129 CNs before Python mutation or execution. Rolling the active floor from 130 to 129 disables Python while retaining the three official main capabilities. Combined pipelines negotiate the maximum required floor through the existing stream protocol; no new round trip or lifecycle owner is introduced.
 
 The merged plan descriptor and parser artifacts preserve both the official main schema additions and the Python routine fields. Focused protocol, queryservice, UDF and generated-plan tests pass; full planner/frontend execution remains dependent on the repository native CGo facility. Independent Architecture and SQL/Planner approval remains pending and is not substituted by this maintenance rebase.
+
+
+## r29 — 2026-10-25 official-main protocol preservation
+
+Governing artifact: `python_udf_current_stage.md` r29. Official main
+`6fb6531432aaec8c1fbd98a30364941559e0e1d6` allocates MORPC 130 to incomplete
+temporal strings. Python uses MORPC 131, exactly main latest + 1. Catalog
+4.0.18 scheduling and repair, revision publication/read, prepared reuse, physical
+Prepare, destination admission, execution-stream negotiation and receiver checks,
+and GetPythonUdfStatus use this floor. Immediate predecessor 130 rejects Python;
+rolling the active floor from 131 to 130 disables Python before side effects.
+Main's JSON 128/129 gates, temporal 130 gates and vector session-knob propagation
+are preserved. Combined payloads negotiate the maximum capability on the bound
+execution stream. This allocation changes no lifecycle owner or round trip.
+
+Independent Architecture and SQL/Planner approval remains pending. This addendum
+records the rebase and mechanical allocation; it does not supply independent
+approval or extend the accepted development scope.
