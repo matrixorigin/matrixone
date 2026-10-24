@@ -280,6 +280,29 @@ select id, t3(x, 2) over (partition by g order by id) from ind_kernels_series or
 31  ¦  null  𝄀
 32  ¦  null  𝄀
 33  ¦  null
+drop table if exists ind_kernels_chain;
+create table ind_kernels_chain(id int primary key, x double);
+insert into ind_kernels_chain values (1,100),(2,120),(3,90),(4,110),(5,80),(6,70),(7,95),(8,85);
+select id, x, tema(x, 3) over (order by id) from ind_kernels_chain order by id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  tema(x, 3) over (order by id)[8,53,31]  𝄀
+1  ¦  100.0  ¦  null  𝄀
+2  ¦  120.0  ¦  null  𝄀
+3  ¦  90.0  ¦  null  𝄀
+4  ¦  110.0  ¦  null  𝄀
+5  ¦  80.0  ¦  null  𝄀
+6  ¦  70.0  ¦  null  𝄀
+7  ¦  95.0  ¦  89.537037037037  𝄀
+8  ¦  85.0  ¦  86.40046296296299
+select id, x, t3(x, 2) over (order by id) from ind_kernels_chain order by id;
+➤ id[4,32,0]  ¦  x[8,53,31]  ¦  t3(x, 2) over (order by id)[8,53,31]  𝄀
+1  ¦  100.0  ¦  null  𝄀
+2  ¦  120.0  ¦  null  𝄀
+3  ¦  90.0  ¦  null  𝄀
+4  ¦  110.0  ¦  null  𝄀
+5  ¦  80.0  ¦  null  𝄀
+6  ¦  70.0  ¦  null  𝄀
+7  ¦  95.0  ¦  85.0000447086318  𝄀
+8  ¦  85.0  ¦  86.16157157614865
 select id, cumPositiveStreak(xi) over (partition by g order by id) from ind_kernels_series order by g, id;
 ➤ id[4,32,0]  ¦  cumPositiveStreak(xi) over (partition by g order by id)[-5,64,0]  𝄀
 1  ¦  1  𝄀
@@ -418,6 +441,31 @@ select case_id, ord, mmaxDrawdown(v, 3) over (partition by case_id order by ord)
 7  ¦  3  ¦  null  𝄀
 8  ¦  1  ¦  null  𝄀
 8  ¦  2  ¦  null  𝄀
+8  ¦  3  ¦  null  𝄀
+8  ¦  4  ¦  0.0  𝄀
+9  ¦  1  ¦  null  𝄀
+9  ¦  2  ¦  null  𝄀
+9  ¦  3  ¦  0.0  𝄀
+9  ¦  4  ¦  0.050000000000000044
+select case_id, ord, mmaxDrawdown(v, 2) over (partition by case_id order by ord) from ind_kernels_dd order by case_id, ord;
+➤ case_id[4,32,0]  ¦  ord[4,32,0]  ¦  mmaxDrawdown(v, 2) over (partition by case_id order by ord)[8,53,31]  𝄀
+1  ¦  1  ¦  null  𝄀
+1  ¦  2  ¦  1.0  𝄀
+2  ¦  1  ¦  null  𝄀
+2  ¦  2  ¦  1.2  𝄀
+3  ¦  1  ¦  null  𝄀
+3  ¦  2  ¦  11.0  𝄀
+4  ¦  1  ¦  null  𝄀
+4  ¦  2  ¦  null  𝄀
+5  ¦  1  ¦  null  𝄀
+5  ¦  2  ¦  null  𝄀
+6  ¦  1  ¦  null  𝄀
+6  ¦  2  ¦  null  𝄀
+7  ¦  1  ¦  null  𝄀
+7  ¦  2  ¦  0.09999999999999998  𝄀
+7  ¦  3  ¦  null  𝄀
+8  ¦  1  ¦  null  𝄀
+8  ¦  2  ¦  0.09999999999999998  𝄀
 8  ¦  3  ¦  null  𝄀
 8  ¦  4  ¦  0.0  𝄀
 9  ¦  1  ¦  null  𝄀

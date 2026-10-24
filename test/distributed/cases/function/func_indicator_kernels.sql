@@ -73,6 +73,17 @@ select id, dema(x, 3) over (partition by g order by id) from ind_kernels_series 
 select id, tema(x, 3) over (partition by g order by id) from ind_kernels_series order by g, id;
 select id, t3(x, 2) over (partition by g order by id) from ind_kernels_series order by g, id;
 
+-- chain warmup through a defined value: with the six-row partitions above,
+-- tema(x, 3) (first defined at m = 3n-2 = 7 values) and t3(x, 2) (m = 6n-5
+-- = 7) stay all-warmup NULLs by construction, so a dedicated eight-row
+-- series (the issue price fixture extended) pins each chain's first
+-- defined value and its subsequent update through SQL.
+drop table if exists ind_kernels_chain;
+create table ind_kernels_chain(id int primary key, x double);
+insert into ind_kernels_chain values (1,100),(2,120),(3,90),(4,110),(5,80),(6,70),(7,95),(8,85);
+select id, x, tema(x, 3) over (order by id) from ind_kernels_chain order by id;
+select id, x, t3(x, 2) over (order by id) from ind_kernels_chain order by id;
+
 -- integer input and integer/double boundaries
 select id, cumPositiveStreak(xi) over (partition by g order by id) from ind_kernels_series order by g, id;
 select id, cumPositiveStreak(x) over (partition by g order by id) from ind_kernels_series order by g, id;
@@ -103,6 +114,12 @@ insert into ind_kernels_dd values (1,1,100),(1,2,0),(2,1,100),(2,2,-20),(3,1,1),
  (7,1,100),(7,2,90),(7,3,NULL),(8,1,100),(8,2,90),(8,3,NULL),(8,4,95),
  (9,1,NULL),(9,2,NULL),(9,3,100),(9,4,95);
 select case_id, ord, mmaxDrawdown(v, 3) over (partition by case_id order by ord) from ind_kernels_dd order by case_id, ord;
+-- period 2 leaves the two-row value-domain cases warm only in their first
+-- row, so the defined ratios of design section 9 - [100,0] -> 1,
+-- [100,-20] -> 1.2, [1,-10] -> 11 - are asserted at the trough row (the
+-- all-warmup NULL bits of the short cases and the period-3 NULL-axis
+-- profiles stay pinned by the pass above).
+select case_id, ord, mmaxDrawdown(v, 2) over (partition by case_id order by ord) from ind_kernels_dd order by case_id, ord;
 -- singleton frames (n = 1): NULL on nonpositive peaks and NULL values
 select case_id, ord, mmaxDrawdown(v, 1) over (partition by case_id order by ord) from ind_kernels_dd where case_id in (4,5,6,9) order by case_id, ord;
 -- small-magnitude KAMA transitions (monotone and nonflat-to-flat) through SQL
