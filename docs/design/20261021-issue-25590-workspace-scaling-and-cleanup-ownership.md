@@ -3272,3 +3272,78 @@ intake-build identifier under r12's own recorded renumbering rule, not
 an r11/r12 decision change; the deviation rule opens no design
 re-review, and the renumbered head is covered by the re-run unit
 families above plus the pending review of the new head.
+## 10 design review record - round 40 (implementation follow-up): a terminal transaction detaches its queued recorded-owner entries
+
+The 2026-10-24 review against head `967e0ace23` (the reviewer's merge of
+main onto `9ab37e4fa9`, byte-identical on every PR-owned file) accepted
+the round-38 registry's settle design and blocked on its TERMINAL
+lifetime: nothing but a successful drain delete ever popped a
+`recordedOwners` entry. A transaction that terminated while a storage
+outage parked its handed-off names in the queue therefore stayed
+strongly reachable from the engine through every queued name - each
+surviving entry retained the whole completed Transaction
+(statement-offset history, the writes backing slice, the process
+reference), even though the only work the entry could still do -
+retiring a recorded-name copy - had ended the moment the terminal
+release dropped that copy. Repeated terminal transactions during one
+outage accumulate the full retained graphs, and the admitted-name
+limit bounds names, never transaction graphs.
+
+The review named both fix shapes; the fix is the second, the
+per-terminal detach:
+
+- The terminal release that drops the recorded-name set
+  (`releaseRecordedUnpublishedObjectsLocked`, the shared terminal of
+  Rollback, FinalizeCommit, FinalizeCommitWithUnknownResult and the
+  transferred remote-fragment settlement) detaches the expired
+  transaction's still-registered owner entries through the SAME live
+  obligation list the release already copies. The pop is conditional
+  per name: only an entry this transaction owns pops - a name two
+  transactions recorded keeps the LAST handoff's owner exactly as the
+  round-38 registration rule pinned it, and an entry the drain's settle
+  already popped is a no-op. The pass is bounded by the release's own
+  live-set bound (the names the admission bound ever counted this
+  transaction), and it runs under the queue mutex alone - no new lock,
+  no worker on any transaction lock, no new state.
+- The cleanup obligation is untouched: the queued name and its file
+  stay under the engine's ownership exactly as before; the release, the
+  ledger accounting and every handoff are the same units round 38
+  reviewed. After the detach, the registry's per-name entry count and
+  the queue's names stay in lockstep on both boundary sides: the
+  drain settle pops entry and queue member together, and every
+  terminal pops its own entries with the copy the terminal drops.
+- The registry/set invariant closes on every mutation path: the record
+  choke only adds members; the drain's settle pops entry and member
+  together; the staged-record retraction removes only freshly created
+  replacement names no handoff can have registered (the round-20
+  contract); and the terminal release now detaches exactly the names
+  it drops, so no mutation can leave an entry behind that the
+  release's name list would miss.
+- While the transaction stays OPEN, the round-38 contract is unchanged:
+  the registry entry keeps pointing at the live transaction, the
+  drain's settle retires its copy through it, and the member keeps
+  protecting the still-existing file against late producer handoffs.
+  The completed transaction's graph is unreachable from the engine
+  once the frontend drops its last reference - exactly the lifetime
+  every other terminal path (pending list, reservations, workspace)
+  already has.
+
+The two new red/green regressions pin the reviewer's two terminal
+lifetimes on one shared contract - the full Rollback terminal and the
+commit-after-statement-rollback terminal - each with the OPEN-transaction
+window asserted first (the round-38 entry exists and points at the live
+transaction), the terminal under a persistent delete outage, the
+obligation preserved (queued names and files intact), the detach
+asserted (no entry retains the dead transaction), and the recovery leg
+(the drain settles the backlog alone, queue and registry empty, ledger
+zero).
+
+Decision: round 40 is recorded as an implementation correction that
+closes the round-38 registry's terminal lifetime - the obligation
+conservation law, the boundary classification, the admission bound, the
+lossless handoffs and the drain ladder are unchanged; the detach adds
+no new state (it consumes the release's existing list), no lock-order
+change (queue mutex under the transaction lock, the established
+enqueue order), and no hot-path scan (the release already scans the
+admission-bounded live set). No r11- or r12-approved decision is
+altered, so the deviation rule opens no design re-review.

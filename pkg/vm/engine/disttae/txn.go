@@ -1457,12 +1457,14 @@ type unpublishedPendingQueue struct {
 	// gcFilesToOwner transfer and the gcFiles pool-failure tail, the
 	// only two producers that enqueue names a recording transaction
 	// still records. The entry lives exactly as long as the name's
-	// queue membership: the once-drain pops it in the same compaction
-	// pass that retires the name, and then retires the owning
+	// queue membership OWNERSHIP: the once-drain pops it in the same
+	// compaction pass that retires the name and retires the owning
 	// transaction's recorded-name copy in the same worker step — with
-	// no transaction lock, exactly the round-37 gcFiles rule — so the
-	// copy tracks LIVE obligations through the queue settle too, never
-	// the failed-statement history an open transaction accumulated.
+	// no transaction lock, exactly the round-37 gcFiles rule — and the
+	// TERMINAL that drops the recorded-name copy detaches the expired
+	// transaction's entries with it, so an outage parking the queue
+	// can never retain a completed transaction's graph behind a name
+	// waiting for its delete (issue #25590 round-40 review, finding 1).
 	// Owner-less queued names (orphan funnels, writer tails, test
 	// enqueues) simply carry no entry. A duplicate delivery while the
 	// name is still queued refreshes the owner — the retire semantic is
@@ -1803,6 +1805,40 @@ func (e *Engine) releaseUnpublishedPendingPublished(names []string) {
 				delete(e.unpublishedPending.ownedNames, n)
 				e.unpublishedPending.live--
 			}
+		}
+	}
+	e.unpublishedPending.mu.Unlock()
+}
+
+// detachTerminalRecordedUnpublishedObjectOwners ends the recorded-owner
+// registrations of a TERMINAL transaction (issue #25590 round-40
+// review, finding 1): the release that dropped the recorded-name copy
+// has just ended every obligation the entries could still retire, so no
+// queued name may keep the completed transaction strongly reachable
+// until the drain happens to delete its file - an outage parking the
+// queue would otherwise retain the whole terminated graph
+// (statement-offset history, the writes backing slice and the process
+// reference) behind every name it handed off, memory the admitted-name
+// bound does not count. The pop is conditional per name: only an entry
+// THIS transaction owns detaches - a name two transactions recorded
+// keeps the LAST handoff's owner exactly as the round-38 registration
+// rule pinned it, and an entry the drain's settle already popped is a
+// no-op. The pass is bounded by the release's own live-set bound (the
+// names the admission bound ever counted this transaction, the same
+// list the release already copies) and runs under the queue mutex
+// alone, the established txn.Lock -> queue.mu order every enqueue path
+// shares - no new lock, state or hot-path scan.
+func (e *Engine) detachTerminalRecordedUnpublishedObjectOwners(
+	txn *Transaction, names []string,
+) {
+	if len(names) == 0 {
+		return
+	}
+	e.unpublishedPending.mu.Lock()
+	for _, n := range names {
+		if owner, ok := e.unpublishedPending.recordedOwners[n]; ok &&
+			owner == txn {
+			delete(e.unpublishedPending.recordedOwners, n)
 		}
 	}
 	e.unpublishedPending.mu.Unlock()
@@ -3771,7 +3807,12 @@ func (txn *Transaction) retireSettledRecordedUnpublishedObjectNames(
 // as data) and the CCPR rollback (whose shared files deliberately stay
 // on storage under the txn cache's ownership) are the two terminal paths
 // that retire without the queue; the ordinary rollback's transfers
-// already moved every member. Callers hold the transaction lock.
+// already moved every member. The release also detaches the queue's
+// recorded-owner registrations that point at this terminal transaction —
+// with the copy gone, the entries can never retire anything again, and a
+// queued obligation must not retain the completed transaction's graph
+// (issue #25590 round-40 review, finding 1). Callers hold the
+// transaction lock.
 func (txn *Transaction) releaseRecordedUnpublishedObjectsLocked() {
 	txn.recordedUnpublishedObjectNamesMu.Lock()
 	if len(txn.recordedUnpublishedObjectNames) == 0 {
@@ -3786,6 +3827,15 @@ func (txn *Transaction) releaseRecordedUnpublishedObjectsLocked() {
 	txn.recordedUnpublishedObjectNamesMu.Unlock()
 	if txn.engine != nil {
 		txn.engine.releaseUnpublishedPendingPublished(names)
+		// round-40 (issue #25590 review of 2026-10-24, finding 1):
+		// the release just ended the recorded-name copy of every
+		// registered owner entry this transaction still had, so the
+		// terminal also detaches those queue-side entries - a queued
+		// cleanup obligation may not retain the completed transaction's
+		// graph until the drain happens to delete its file (the
+		// identity-conditioned pop keeps the LAST handoff's owner for a
+		// name another transaction recorded).
+		txn.engine.detachTerminalRecordedUnpublishedObjectOwners(txn, names)
 	}
 }
 
