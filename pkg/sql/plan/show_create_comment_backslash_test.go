@@ -67,8 +67,10 @@ func TestShowCreateTableCommentBackslashRoundTrip(t *testing.T) {
 				return p.GetDdl().GetCreateTable().GetTableDef()
 			}
 			sourceDef := build(tc.sourceSQL)
-			showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, sourceDef, nil, false, nil)
+			showSQL, rewritten, err := ConstructCreateTableSQL(&mock.ctxt, sourceDef, nil, false, nil)
 			require.NoError(t, err)
+			require.NotNil(t, rewritten)
+			t.Cleanup(rewritten.Free)
 			replayedDef := build(showSQL)
 
 			require.Equal(t, sourceDef.Cols[0].Comment, replayedDef.Cols[0].Comment, showSQL)
