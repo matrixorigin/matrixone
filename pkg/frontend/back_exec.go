@@ -79,6 +79,13 @@ func (back *backExec) Service() string {
 	return back.backSes.GetService()
 }
 
+func (back *backExec) getTxn() TxnOperator {
+	if back == nil || back.backSes == nil || back.backSes.GetTxnHandler() == nil {
+		return nil
+	}
+	return back.backSes.GetTxnHandler().GetTxn()
+}
+
 func (back *backExec) GetLastAffectedRows() int64 {
 	return back.backSes.lastAffectedRows
 }
@@ -1770,6 +1777,18 @@ func (backSes *backSession) ForgetMissingTemporaryTable(dbName, alias, physical 
 }
 
 var _ process.MissingTemporaryTableForgetter = (*backSession)(nil)
+
+// OwnsTemporaryTable forwards physical ownership checks to the interactive
+// session. Background executors resolve the same temporary index relations as
+// their caller, so the shared temporary-table access gate must see the caller's
+// ownership map rather than treating the executor wrapper as a foreign session.
+func (backSes *backSession) OwnsTemporaryTable(dbName, physical string) bool {
+	if backSes == nil {
+		return false
+	}
+	owner := upstreamUserSession(backSes)
+	return owner != nil && owner.OwnsTemporaryTable(dbName, physical)
+}
 
 func (backSes *backSession) AddTempTable(dbName, alias, realName string) {
 	if backSes == nil {
