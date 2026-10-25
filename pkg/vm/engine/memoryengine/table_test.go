@@ -43,8 +43,13 @@ func Test_TableReader(t *testing.T) {
 }
 
 func TestTable_Reset(t *testing.T) {
-	table := new(Table)
+	oldOp, oldCloseFn := client.NewTestTxnOperator(context.TODO())
+	defer oldCloseFn()
+	table := &Table{txnOperator: oldOp}
 	newOp, closeFn := client.NewTestTxnOperator(context.TODO())
 	defer closeFn()
 	assert.NoError(t, table.Reset(newOp))
+	assert.Same(t, newOp, table.txnOperator)
+	assert.Error(t, table.Reset(nil))
+	assert.Same(t, newOp, table.txnOperator)
 }

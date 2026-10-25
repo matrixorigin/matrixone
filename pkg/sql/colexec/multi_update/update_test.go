@@ -17,6 +17,10 @@ package multi_update
 import (
 	"bytes"
 	"context"
+	"errors"
+	"github.com/golang/mock/gomock"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -227,4 +231,59 @@ func prepareTestUpdateMultiUpdateCtx(hasUniqueKey bool, hasSecondaryKey bool) []
 	}
 
 	return updateCtxs
+}
+
+// Relation-ID lookup retains an exclusive handle just like ordinary DML sources.
+func TestMultiUpdatePrepareRebindsCachedSource(t *testing.T) {
+	for _, resetErr := range []error{nil, errors.New("reset source")} {
+		name := "success"
+		if resetErr != nil {
+			name = "reset_error"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			op := &MultiUpdate{Action: UpdateWriteTable}
+			defer op.Free(proc, resetErr != nil, resetErr)
+			op.ctr.sources = make(map[uint64]engine.Relation)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			factory := &cachedSourceFactory{Relation: rel, handle: rel}
+			op.Engine = eng
+			op.MultiUpdateCtx = []*MultiUpdateCtx{{TableDef: &plan.TableDef{Name: "t", TblId: 42}}}
+			op.ctr.updateCtxInfos = map[string]*updateCtxInfo{"t": {Source: rel}}
+			eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(42)).Return("db", "t", factory, nil).Times(1)
+			if resetErr == nil {
+				rel.EXPECT().Reset(proc.GetTxnOperator()).Return(nil).Times(2)
+			} else {
+				rel.EXPECT().Reset(proc.GetTxnOperator()).Return(resetErr).Times(1)
+			}
+			source, err := op.getSourceByID(42, proc)
+			require.NoError(t, err)
+			require.Same(t, rel, source)
+			require.Equal(t, 1, factory.calls)
+			err = op.Prepare(proc)
+			if resetErr != nil {
+				require.ErrorIs(t, err, resetErr)
+			} else {
+				require.NoError(t, err)
+			}
+			source, err = op.getSourceByID(42, proc)
+			require.NoError(t, err)
+			require.Same(t, rel, source)
+			require.Equal(t, 1, factory.calls)
+		})
+	}
+}
+
+type cachedSourceFactory struct {
+	engine.Relation
+	handle engine.Relation
+	calls  int
+}
+
+func (f *cachedSourceFactory) NewRelationHandle() engine.Relation {
+	f.calls++
+	return f.handle
 }
