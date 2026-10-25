@@ -5,12 +5,12 @@ import os
 import time
 
 import pytest
+from mysql_fault_proxy import FaultProxy
 from sqlalchemy import event
+from test_adversarial import hard_client, trial
 
 from matrixone import Client
 from matrixone.analytics import AnalyticsCleanupError, AnalyticsCommitUnknownError
-from mysql_fault_proxy import FaultProxy
-from test_adversarial import hard_client, trial
 
 pa = pytest.importorskip("pyarrow", minversion="18.0.0")
 
@@ -36,7 +36,13 @@ def test_relation_create_lost_commit_acknowledgement(trial):
         finally:
             client.disconnect()
     catalog = {row[0] for row in trial.client.execute('SHOW TABLES').rows}
-    assert not set(caught.value.attempted_tables) & catalog
+    database = trial.client.execute('SELECT DATABASE()').rows[0][0]
+
+    def quoted(value):
+        return '`' + value.replace('`', '``') + '`'
+
+    identities = {quoted(database) + '.' + quoted(table) for table in catalog}
+    assert not set(caught.value.attempted_tables) & identities
     assert unrelated in catalog
 
 
@@ -45,6 +51,7 @@ def test_relation_name_collision_preserves_existing_table(trial, monkeypatch):
     from types import SimpleNamespace
 
     import pyarrow.parquet as pq
+
     import matrixone.analytics as module
 
     identifier = uuid.uuid4()

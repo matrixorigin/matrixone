@@ -23,6 +23,7 @@ pq = pytest.importorskip("pyarrow.parquet")
 
 def test_arrow18_json_inference_is_bounded(monkeypatch):
     import pyarrow.json as json
+
     from matrixone.analytics import _infer_schema
 
     monkeypatch.delattr(json, "open_json", raising=False)
@@ -48,6 +49,7 @@ def test_arrow18_json_inference_is_bounded(monkeypatch):
 
 def test_arrow18_json_oversize_record_rejected(monkeypatch, tmp_path):
     import pyarrow.json as json
+
     from matrixone.analytics import _infer_schema
 
     monkeypatch.delattr(json, "open_json", raising=False)
@@ -137,17 +139,17 @@ def test_file_query_duckdb_oracle(analytics, tmp_path, format):
     if format == "parquet":
         path = tmp_path / "a.parquet"
         pq.write_table(pa.Table.from_pylist(rows), path)
-        oracle = duckdb.sql("SELECT count(*), sum(amount) FROM read_parquet(?)", params=[str(path)]).fetchone()
+        oracle = duckdb.sql("SELECT count(*), sum(amount) FROM read_parquet(?)", params=[str(path)]).fetchall()[0]
     elif format == "csv":
         path = tmp_path / "a.csv"
         path.write_text('id,name,amount\n1,"甲,乙",1.5\n2,"a""b",2.5\n')
-        oracle = duckdb.sql("SELECT count(*), sum(amount) FROM read_csv(?)", params=[str(path)]).fetchone()
+        oracle = duckdb.sql("SELECT count(*), sum(amount) FROM read_csv(?)", params=[str(path)]).fetchall()[0]
     else:
         import json
 
         path = tmp_path / "a.jsonl"
         path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
-        oracle = duckdb.sql("SELECT count(*), sum(amount) FROM read_json(?)", params=[str(path)]).fetchone()
+        oracle = duckdb.sql("SELECT count(*), sum(amount) FROM read_json(?)", params=[str(path)]).fetchall()[0]
     with analytics.read_files(str(path), format=format) as relation:
         with relation.query("SELECT count(*) AS n, sum(amount) AS total FROM " + relation.sql + " AS f") as result:
             assert tuple(result.to_arrow().to_pylist()[0].values()) == oracle
@@ -379,8 +381,11 @@ def test_dictionary_and_timezone_normalization(analytics, tmp_path):
 
 def test_protocol_time_duration_and_boolean(analytics):
     table = _query(analytics, "SELECT CAST('-25:00:00' AS TIME) AS span, CAST(1 AS BOOL) AS ok")
-    assert table.schema.types == [pa.duration("us"), pa.bool_()]
-    assert table.to_pylist() == [{"span": timedelta(hours=-25), "ok": True}]
+    # This CAST expression is advertised as TINYINT by the MySQL protocol.
+    assert table.schema.types == [pa.duration("us"), pa.int8()]
+    assert table.to_pylist() == [{"span": timedelta(hours=-25), "ok": 1}]
+    explicit = _query(analytics, "SELECT CAST(1 AS BOOL) AS ok", schema=pa.schema([("ok", pa.bool_())]))
+    assert explicit.to_pylist() == [{"ok": True}]
     with pytest.raises(ValueError, match="clock day"):
         _query(analytics, "SELECT CAST('-25:00:00' AS TIME) AS span", schema=pa.schema([("span", pa.time64("us"))]))
 

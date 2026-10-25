@@ -23,6 +23,7 @@ import pyarrow as pa
 from sqlalchemy import event
 
 from matrixone import Client
+from matrixone.analytics import _identifier
 
 
 def client(port=6001):
@@ -186,6 +187,20 @@ def summary(table):
         c.disconnect()
 
 
+def cleanup_external_tables(c, tables):
+    """Reconcile only the exact identities recorded by the crashed child."""
+    identities = [tuple(identity) for identity in tables]
+    for database, table in identities:
+        _identifier(database)
+        assert table.startswith('mo_py_files_') and len(table) == 44
+        assert all(char in '0123456789abcdef' for char in table[12:])
+    for database in {identity[0] for identity in identities}:
+        remaining = {row[0] for row in c.execute('SHOW TABLES FROM ' + _identifier(database)).rows}
+        assert {table for db, table in identities if db == database}.issubset(remaining)
+    for database, table in identities:
+        c.execute('DROP TABLE ' + _identifier(database) + '.' + _identifier(table))
+
+
 def main(args):
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
@@ -199,17 +214,19 @@ def main(args):
             directory = work / mode
             directory.mkdir(exist_ok=True)
             table = 'chaos_' + uuid.uuid4().hex
-            tables.append(table)
             c = client()
-            c.execute('CREATE TABLE ' + table + '(id BIGINT PRIMARY KEY,payload TEXT)')
-            c.execute("INSERT INTO " + table + " VALUES (-1,'sentinel')")
-            rows = 1000000 if mode == 'active_load' else 10000
-            if mode == 'streaming':
-                rows = 200000
-                c.analytics.upload_arrow(
-                    table, pa.table({'id': range(rows), 'payload': ['x' * 256] * rows}), directory, create=False
-                )
-            c.disconnect()
+            try:
+                c.execute('CREATE TABLE ' + table + '(id BIGINT PRIMARY KEY,payload TEXT)')
+                tables.append(table)
+                c.execute("INSERT INTO " + table + " VALUES (-1,'sentinel')")
+                rows = 1000000 if mode == 'active_load' else 10000
+                if mode == 'streaming':
+                    rows = 200000
+                    c.analytics.upload_arrow(
+                        table, pa.table({'id': range(rows), 'payload': ['x' * 256] * rows}), directory, create=False
+                    )
+            finally:
+                c.disconnect()
             sink = open(directory / 'child.log', 'wb')
             process = subprocess.Popen(
                 [
@@ -266,12 +283,10 @@ def main(args):
                     assert info['error'], info
             if mode == 'client_external':
                 c = client()
-                remaining = {r[0] for r in c.execute('SHOW TABLES').rows}
-                assert set(barrier['tables']).issubset(remaining)
-                for name in barrier['tables']:
-                    assert name.startswith('mo_py_files_') and len(name) == 44
-                    c.execute('DROP TABLE `' + name + '`')
-                c.disconnect()
+                try:
+                    cleanup_external_tables(c, barrier['tables'])
+                finally:
+                    c.disconnect()
             expected = rows + 1 if mode in ['postcommit', 'streaming'] else 1
             end = time.monotonic() + 10
             while True:

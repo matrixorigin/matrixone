@@ -121,6 +121,10 @@ def _table_name(name):
     return ".".join(_identifier(p) for p in parts)
 
 
+def _qualified_table(database, table):
+    return _identifier(database) + "." + _identifier(table)
+
+
 def _driver_identifier(name):
     # exec_driver_sql supplies an empty parameter tuple even for DDL. Literal
     # percent signs in identifiers must survive PyMySQL's printf interpolation.
@@ -138,11 +142,11 @@ def _validate_schema(schema):
         _sql_type(field.type)
 
 
-def _sql_type(dtype, external=False):
+def _sql_type(dtype):
     pa = _arrow()
     t = pa.types
     if t.is_dictionary(dtype):
-        return _sql_type(dtype.value_type, external)
+        return _sql_type(dtype.value_type)
     if t.is_boolean(dtype):
         return "BOOL"
     if t.is_integer(dtype):
@@ -168,10 +172,9 @@ def _sql_type(dtype, external=False):
     raise TypeError("Unsupported Arrow type %s; supply a supported explicit schema" % dtype)
 
 
-def _ddl_columns(schema, external=False):
+def _ddl_columns(schema):
     return ", ".join(
-        "%s %s%s" % (_driver_identifier(f.name), _sql_type(f.type, external), "" if f.nullable else " NOT NULL")
-        for f in schema
+        "%s %s%s" % (_driver_identifier(f.name), _sql_type(f.type), "" if f.nullable else " NOT NULL") for f in schema
     )
 
 
@@ -487,8 +490,10 @@ class FileRelation:
         self._validate_sources()
         if sql is None and schema is None:
             schema = self.schema
-        return self._manager.query(
-            sql or "SELECT * FROM " + self._sql + " AS files", params, schema, batch_size, network_timeout
+        if network_timeout is None:
+            network_timeout = getattr(self._manager.client, "query_timeout", 300)
+        return ArrowStream(
+            self._engine, sql or "SELECT * FROM " + self._sql + " AS files", params, schema, batch_size, network_timeout
         )
 
     def import_into(self, table):
@@ -496,7 +501,7 @@ class FileRelation:
         if self._closed:
             raise RuntimeError("File relation is closed")
         self._validate_sources()
-        with _write_transaction(self._manager.engine) as conn:
+        with _write_transaction(self._engine) as conn:
             result = conn.exec_driver_sql(
                 (
                     "INSERT INTO %s (%s) SELECT * FROM %s AS files"
@@ -510,13 +515,14 @@ class FileRelation:
             return
         # Remove only owned objects. Retain failed drops for a retry.
         first_error = None
-        for table in list(reversed(self._tables)):
+        for identity in reversed(self._tables[:]):
             try:
                 with self._engine.begin() as conn:
-                    conn.exec_driver_sql("DROP TABLE IF EXISTS " + _identifier(table))
-                self._tables.remove(table)
+                    conn.exec_driver_sql("DROP TABLE IF EXISTS " + _qualified_table(*identity).replace("%", "%%"))
+                self._tables.remove(identity)
             except Exception as exc:
-                first_error = first_error or exc
+                if first_error is None:
+                    first_error = exc
         self._closed = not self._tables
         if first_error is not None:
             raise first_error
@@ -525,13 +531,20 @@ class FileRelation:
         return self
 
     def __exit__(self, exc_type, exc, traceback):
+        if exc is None:
+            self.close()
+        else:
+            self._close_after_error(exc)
+
+    def _close_after_error(self, primary):
         try:
             self.close()
-        except Exception as cleanup_error:
-            if exc is None:
-                raise
-            # Preserve the actual query error while retaining cleanup evidence.
-            self._manager.client.logger.warning("External table cleanup failed: %s" % cleanup_error)
+        except BaseException as cleanup_error:
+            primary.cleanup_error = cleanup_error
+            try:
+                self._manager.client.logger.warning("External table cleanup failed: %s" % cleanup_error)
+            except BaseException:
+                pass  # Diagnostics cannot replace the selected primary failure.
 
 
 class AnalyticsManager:
@@ -653,19 +666,24 @@ class AnalyticsManager:
                 params = [os.fspath(server_path), format]
                 if format == "jsonline":
                     options += ", 'jsondata'='object'"
-                ddl = "CREATE EXTERNAL TABLE %s (%s) INFILE {%s}" % (
-                    _identifier(table),
-                    _ddl_columns(physical, external=True),
-                    options,
-                )
+                columns = _ddl_columns(physical)
+                suffix = ""
                 if format == "csv":
-                    ddl += " FIELDS TERMINATED BY %s ENCLOSED BY %s IGNORE 1 LINES"
+                    suffix = " FIELDS TERMINATED BY %s ENCLOSED BY %s IGNORE 1 LINES"
                     params.extend([delimiter, '"'])
                 # Reserve the cleanup owner before CREATE/COMMIT can have an
                 # uncertain outcome. A failed construction returns no relation.
+                identity = None
                 try:
-                    with self.engine.begin() as conn:
-                        tables.append(table)
+                    with relation._engine.begin() as conn:
+                        identity = (conn.exec_driver_sql("SELECT DATABASE()").scalar(), table)
+                        qualified = _qualified_table(*identity)
+                        ddl = (
+                            "CREATE EXTERNAL TABLE %s (%s) INFILE {%s}"
+                            % (qualified.replace("%", "%%"), columns, options)
+                            + suffix
+                        )
+                        tables.append(identity)
                         conn.exec_driver_sql(ddl, tuple(params))
                 except Exception as error:
                     from sqlalchemy.exc import DBAPIError
@@ -677,9 +695,9 @@ class AnalyticsManager:
                         and not error.connection_invalidated
                         and getattr(error.orig, 'args', ())
                         and error.orig.args[0] == 1050
-                        and table in tables
+                        and identity in tables
                     ):
-                        tables.remove(table)
+                        tables.remove(identity)
                     raise
                 projections = []
                 for f in merged:
@@ -706,21 +724,14 @@ class AnalyticsManager:
                     # UNION's common-type rules own promotion; missing columns are
                     # typed by the other branches. No lossy client-side conversion.
                     projections.append(value + " AS " + _identifier(f.name))
-                selects.append("SELECT %s FROM %s" % (", ".join(projections), _identifier(table)))
+                selects.append("SELECT %s FROM %s" % (", ".join(projections), qualified))
             relation._sql = "(" + " UNION ALL ".join(selects) + ")"
             return relation
         except BaseException as primary:
-            primary.attempted_tables = tuple(tables)
+            primary.attempted_tables = tuple(_qualified_table(*identity) for identity in tables)
             primary.file_relation = relation
-            try:
-                relation.close()
-            except BaseException as cleanup_error:
-                primary.cleanup_error = cleanup_error
-                try:
-                    self.client.logger.warning("External table cleanup failed for %s: %s" % (tables, cleanup_error))
-                except Exception:
-                    pass  # Recovery evidence and the primary failure take precedence.
-            primary.owned_tables = tuple(tables)
+            relation._close_after_error(primary)
+            primary.owned_tables = tuple(_qualified_table(*identity) for identity in tables)
             raise
 
     def upload_arrow(

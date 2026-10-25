@@ -170,8 +170,9 @@ def test_random_mixed_roundtrip(trial, seed):
 @pytest.mark.parametrize("format", ["parquet", "csv", "jsonline"])
 @pytest.mark.parametrize("seed", range(8))
 def test_file_differential(trial, format, seed):
-    import duckdb
     import json
+
+    import duckdb
 
     rng = random.Random(seed)
     values = [{"id": i, "grp": rng.choice(["中文", "x", "z"]), "v": rng.randrange(-100000, 100000)} for i in range(113)]
@@ -341,11 +342,11 @@ def test_boolean_to_integer_is_lossless(trial):
 
 def test_small_pool_exhaustion_recovers(trial):
     c = Client(
-        host="127.0.0.1",
-        port=6001,
-        user="root",
-        password="111",
-        database="mo_analytics_test",
+        host=os.environ.get("MO_HOST", "127.0.0.1"),
+        port=int(os.environ.get('MO_PORT', '6001')),
+        user=os.environ.get("MO_USER", "root"),
+        password=os.environ.get("MO_PASSWORD", "111"),
+        database=os.environ.get("MO_DATABASE", "mo_analytics_test"),
         pool_size=1,
         max_overflow=0,
         pool_timeout=0.2,

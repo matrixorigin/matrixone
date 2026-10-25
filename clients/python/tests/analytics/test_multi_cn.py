@@ -6,9 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
 import pytest
+from test_adversarial import hard_client, trial
 
 from matrixone import Client
-from test_adversarial import hard_client, trial
 
 pa = pytest.importorskip('pyarrow', minversion='18.0.0')
 pq = pytest.importorskip('pyarrow.parquet')

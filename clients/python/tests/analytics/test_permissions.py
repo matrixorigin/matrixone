@@ -5,9 +5,9 @@ import os
 import uuid
 
 import pytest
+from test_adversarial import hard_client
 
 from matrixone import Client
-from test_adversarial import hard_client
 
 pa = pytest.importorskip('pyarrow', minversion='18.0.0')
 pq = pytest.importorskip('pyarrow.parquet')
@@ -58,21 +58,29 @@ def tenants(hard_client):
 
 def test_arrow_tables_are_account_isolated(tenants, tmp_path):
     names, (a, b) = tenants
-    a.analytics.upload_arrow('same_name', pa.table({'id': [1]}), tmp_path)
-    b.analytics.upload_arrow('same_name', pa.table({'id': [2]}), tmp_path)
+    for c, value in [(a, 1), (b, 2)]:
+        c.execute('CREATE TABLE same_name (id BIGINT)')
+        c.execute('INSERT INTO same_name VALUES (' + str(value) + ')')
+        # Local-file LOAD is reserved to the system account, including append.
+        with pytest.raises(Exception):
+            c.analytics.upload_arrow('same_name', pa.table({'id': [3]}), tmp_path, create=False)
     for c, expected in [(a, 1), (b, 2)]:
         with c.analytics.query('SELECT * FROM same_name') as out:
             assert out.to_arrow()['id'].to_pylist() == [expected]
     assert a._engine.pool.checkedout() == 0 and b._engine.pool.checkedout() == 0
 
 
-def test_external_catalog_is_account_isolated(tenants, tmp_path):
+def test_external_catalog_is_account_isolated(tenants, hard_client, tmp_path):
     _, (a, b) = tenants
     p = tmp_path / 'input.parquet'
     pq.write_table(pa.table({'id': [1]}), p)
     with a.analytics.read_parquet(p) as rel:
         with pytest.raises(Exception):
             b.analytics.query('SELECT * FROM ' + rel.sql + ' AS f')
+        # CREATE records metadata, but tenant scans cannot access local SQL paths.
+        with pytest.raises(Exception, match='only the sys account moadmin role'):
+            rel.query()
+    with hard_client.analytics.read_parquet(p) as rel:
         with rel.query() as out:
             assert out.to_arrow()['id'].to_pylist() == [1]
     assert not [r for r in a.execute('SHOW TABLES').rows if r[0].startswith('mo_py_files_')]
@@ -80,7 +88,8 @@ def test_external_catalog_is_account_isolated(tenants, tmp_path):
 
 def test_read_only_user_cannot_create_or_append(tenants, tmp_path):
     names, (admin, _) = tenants
-    admin.analytics.upload_arrow('protected', pa.table({'id': [1]}), tmp_path)
+    admin.execute('CREATE TABLE protected (id BIGINT)')
+    admin.execute('INSERT INTO protected VALUES (1)')
     admin.execute('CREATE ROLE reader')
     admin.execute('GRANT SELECT ON TABLE analytics_tenant.protected TO reader')
     admin.execute("CREATE USER viewer IDENTIFIED BY '111' DEFAULT ROLE reader")

@@ -5,7 +5,6 @@ import os
 import uuid
 
 import pytest
-
 from test_adversarial import hard_client, trial
 
 pa = pytest.importorskip('pyarrow', minversion='18.0.0')
