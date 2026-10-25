@@ -207,7 +207,7 @@ func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
 	dispatch.ctr.remoteToIdx = make(map[uuid.UUID]int)
 	needRegister := dispatch.ctr.remoteInfo == nil
 	if needRegister {
-		dispatch.ctr.remoteInfo = make(chan *process.WrapCs)
+		dispatch.ctr.remoteInfo = make(chan *process.WrapCs, dispatch.ctr.remoteRegsCnt)
 	}
 	registered := make([]uuid.UUID, 0, len(dispatch.RemoteRegs))
 	for i, rr := range dispatch.RemoteRegs {
@@ -217,6 +217,8 @@ func (dispatch *Dispatch) prepareRemote(proc *process.Process) error {
 		if needRegister {
 			if err := colexec.Get().PutProcIntoUuidMap(rr.Uuid, proc, dispatch.ctr.remoteInfo); err != nil {
 				rollbackRemoteReceiverRegistrations(registered)
+				// Keep already published receivers owned until Reset reports the error.
+				dispatch.drainRemoteReceivers()
 				dispatch.ctr.remoteInfo = nil
 				return err
 			}

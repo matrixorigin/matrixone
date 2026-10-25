@@ -112,6 +112,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.minio
+    platform: linux/amd64
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -140,6 +141,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.mc
+    platform: linux/amd64
     depends_on:
       minio:
         condition: service_healthy
@@ -147,11 +149,10 @@ services:
       - launch
       - launch-multi-cn
     entrypoint: >
-      /bin/sh -c "
+      /bin/sh -ec "
       /usr/bin/mc alias set myminio http://minio:9000 minio minio123;
-      /usr/bin/mc mb myminio/mo-test;
+      /usr/bin/mc mb --ignore-existing myminio/mo-test;
       /usr/bin/mc anonymous set public myminio/mo-test;
-      exit 0;
       "
     networks:
       monet:

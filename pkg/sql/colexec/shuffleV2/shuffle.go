@@ -141,22 +141,28 @@ func (shuffle *ShuffleV2) Call(proc *process.Process) (vm.CallResult, error) {
 
 // evalAndShuffle evaluates the ShuffleExpr on the batch, computes shuffle bucket assignments,
 // and either returns the batch directly (single bucket) or splits it into the shuffle pool.
-// The original batch is NOT modified — the expression result is used only for hashing.
+// The original batch vectors are not modified; the expression result is only used for routing.
 func (shuffle *ShuffleV2) evalAndShuffle(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
-	if shuffle.ShuffleType != int32(plan.ShuffleType_Hash) {
-		panic("evalAndShuffle in ShuffleV2 only supports hash shuffle type")
-	}
 	vec, err := shuffle.ctr.exprExec.Eval(proc, []*batch.Batch{bat}, nil)
 	if err != nil {
 		return nil, err
 	}
+	if shuffle.ShuffleType == int32(plan.ShuffleType_Range) {
+		return rangeShuffleByVector(shuffle, bat, vec, proc)
+	}
 
 	if vec.IsConstNull() {
 		bat.ShuffleIDX = 0
+		if bat.ShuffleIDX != shuffle.CurrentShuffleIdx {
+			return nil, shuffle.ctr.shufflePool.putAllBatchIntoPoolByShuffleIdx(bat, proc, bat.ShuffleIDX)
+		}
 		return bat, nil
 	}
 	if vec.IsConst() {
 		bat.ShuffleIDX = int32(shuffleConstVecByHash(shuffle.BucketNum, vec))
+		if bat.ShuffleIDX != shuffle.CurrentShuffleIdx {
+			return nil, shuffle.ctr.shufflePool.putAllBatchIntoPoolByShuffleIdx(bat, proc, bat.ShuffleIDX)
+		}
 		return bat, nil
 	}
 
@@ -174,6 +180,9 @@ func (shuffle *ShuffleV2) evalAndShuffle(bat *batch.Batch, proc *process.Process
 		}
 		if len(sels[i]) == bat.RowCount() {
 			bat.ShuffleIDX = int32(i)
+			if bat.ShuffleIDX != shuffle.CurrentShuffleIdx {
+				return nil, shuffle.ctr.shufflePool.putAllBatchIntoPoolByShuffleIdx(bat, proc, bat.ShuffleIDX)
+			}
 			return bat, nil
 		}
 	}
@@ -383,9 +392,8 @@ func hashShuffle(ap *ShuffleV2, bat *batch.Batch, proc *process.Process) (*batch
 	return nil, err
 }
 
-func allBatchInOneRange(ap *ShuffleV2, bat *batch.Batch) (bool, uint64) {
+func allVectorInOneRange(ap *ShuffleV2, groupByVec *vector.Vector) (bool, uint64) {
 	bucketNum := uint64(ap.BucketNum)
-	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	if groupByVec.IsConstNull() {
 		return true, 0
 	}
@@ -482,10 +490,9 @@ func allBatchInOneRange(ap *ShuffleV2, bat *batch.Batch) (bool, uint64) {
 	}
 }
 
-func getShuffledSelsByRangeWithoutNull(ap *ShuffleV2, bat *batch.Batch) [][]int32 {
+func getShuffledSelsByRangeWithoutNull(ap *ShuffleV2, groupByVec *vector.Vector) [][]int32 {
 	sels := ap.clearSels()
 	bucketNum := uint64(ap.BucketNum)
-	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		groupByCol := vector.MustFixedColNoTypeCheck[int64](groupByVec)
@@ -602,10 +609,9 @@ func getShuffledSelsByRangeWithoutNull(ap *ShuffleV2, bat *batch.Batch) [][]int3
 	return sels
 }
 
-func getShuffledSelsByRangeWithNull(ap *ShuffleV2, bat *batch.Batch) [][]int32 {
+func getShuffledSelsByRangeWithNull(ap *ShuffleV2, groupByVec *vector.Vector) [][]int32 {
 	sels := ap.clearSels()
 	bucketNum := uint64(ap.BucketNum)
-	groupByVec := bat.Vecs[ap.ShuffleColIdx]
 	switch groupByVec.GetType().Oid {
 	case types.T_int64:
 		groupByCol := vector.MustFixedColNoTypeCheck[int64](groupByVec)
@@ -678,7 +684,7 @@ func getShuffledSelsByRangeWithNull(ap *ShuffleV2, bat *batch.Batch) [][]int32 {
 			for row, v := range groupByCol {
 				var regIndex uint64 = 0
 				if !groupByVec.IsNull(uint64(row)) {
-					regIndex = plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
+					regIndex = plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
 				}
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}
@@ -771,9 +777,12 @@ func getShuffledSelsByRangeWithNull(ap *ShuffleV2, bat *batch.Batch) [][]int32 {
 }
 
 func rangeShuffle(ap *ShuffleV2, bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
-	groupByVec := bat.Vecs[ap.ShuffleColIdx]
+	return rangeShuffleByVector(ap, bat, bat.Vecs[ap.ShuffleColIdx], proc)
+}
+
+func rangeShuffleByVector(ap *ShuffleV2, bat *batch.Batch, groupByVec *vector.Vector, proc *process.Process) (*batch.Batch, error) {
 	if groupByVec.GetSorted() || groupByVec.IsConst() {
-		ok, regIndex := allBatchInOneRange(ap, bat)
+		ok, regIndex := allVectorInOneRange(ap, groupByVec)
 		if ok {
 			bat.ShuffleIDX = int32(regIndex)
 			if bat.ShuffleIDX == ap.CurrentShuffleIdx {
@@ -785,9 +794,9 @@ func rangeShuffle(ap *ShuffleV2, bat *batch.Batch, proc *process.Process) (*batc
 	}
 	var sels [][]int32
 	if groupByVec.HasNull() {
-		sels = getShuffledSelsByRangeWithNull(ap, bat)
+		sels = getShuffledSelsByRangeWithNull(ap, groupByVec)
 	} else {
-		sels = getShuffledSelsByRangeWithoutNull(ap, bat)
+		sels = getShuffledSelsByRangeWithoutNull(ap, groupByVec)
 	}
 	for i := range sels {
 		if len(sels[i]) > 0 && len(sels[i]) != bat.RowCount() {

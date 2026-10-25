@@ -165,12 +165,31 @@ func publishTerminalSignalsToLocalRegs(proc *process.Process, localRegs []*proce
 	return allEnded
 }
 
+// drainRemoteReceivers is called only after registration cleanup has sealed
+// publication. The finite queue may contain receivers not consumed by Call.
+func (dispatch *Dispatch) drainRemoteReceivers() {
+	for {
+		select {
+		case receiver := <-dispatch.ctr.remoteInfo:
+			dispatch.ctr.remoteReceivers = append(dispatch.ctr.remoteReceivers, receiver)
+		default:
+			return
+		}
+	}
+}
+
 func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	terminalSignal := process.BuildCleanupSignal(pipelineFailed, err)
 	terminalErr := terminalSignal.TerminalErr()
 
 	if dispatch.ctr != nil {
 		if dispatch.ctr.isRemote {
+			uuids := make([]uuid.UUID, 0, len(dispatch.RemoteRegs))
+			for i := range dispatch.RemoteRegs {
+				uuids = append(uuids, dispatch.RemoteRegs[i].Uuid)
+			}
+			colexec.Get().DeleteUuids(uuids)
+			dispatch.drainRemoteReceivers()
 			for _, r := range dispatch.ctr.remoteReceivers {
 				if r == nil || r.Err == nil {
 					process.WarnPipelineCleanupf(
@@ -195,11 +214,6 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 				}
 			}
 
-			uuids := make([]uuid.UUID, 0, len(dispatch.RemoteRegs))
-			for i := range dispatch.RemoteRegs {
-				uuids = append(uuids, dispatch.RemoteRegs[i].Uuid)
-			}
-			colexec.Get().DeleteUuids(uuids)
 		}
 	}
 
