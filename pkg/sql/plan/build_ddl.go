@@ -2854,7 +2854,7 @@ func buildCreateTable(
 			cloneStmt,
 			recoveredLegacyChecks,
 			sub,
-			false,
+			false, *parserSQLModeFromContext(ctx),
 		)
 		if err != nil {
 			return nil, err

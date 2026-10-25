@@ -156,7 +156,7 @@ func TestQuotedDefaultDumpRoundTrip(t *testing.T) {
 		// Capture actual SHOW output, rename only its table header, then replay it
 		// twice in each reader mode. Explicit bytes catch progressively doubled
 		// quotes and backslashes even if both parser and formatter agree internally.
-		values := []string{"it's", "x" + string(rune(96)) + "y", "q\"r", "", "  ", "a\\b", "a\\'b"}
+		values := []string{"it's", "x" + string(rune(96)) + "y", "q\"r", "", "  ", "a\\b", "a\\'b", "a\nb", "tail\\"}
 		declarations := make([]string, 0, len(values))
 		names := make([]string, 0, len(values))
 		projections := make([]string, 0, len(values))
@@ -170,6 +170,39 @@ func TestQuotedDefaultDumpRoundTrip(t *testing.T) {
 		exec(t, "set sql_mode=DEFAULT")
 		create(t, "seed", "(id int,"+strings.Join(declarations, ",")+",n int default 7,z int default null,dt date default '2024-01-01',e varchar(32) default (concat('it''s','!')),ts timestamp default current_timestamp)")
 		for modeIndex, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+
+			t.Run("alter_"+mode, func(t *testing.T) {
+				exec(t, "set sql_mode='"+mode+"'")
+				target := fmt.Sprintf("alter_mode_%d", modeIndex)
+				exec(t, "create table "+target+" like seed")
+				exec(t, "insert into "+target+"(id) values(1)")
+				literal := `'a\\b'`
+				if strings.Contains(mode, "NO_BACKSLASH_ESCAPES") {
+					literal = `'a\b'`
+				}
+				exec(t, "alter table "+target+" add added varchar(32) default "+literal+", algorithm=copy")
+				exec(t, "insert into "+target+"(id) values(2)")
+				scalar(t, "select hex(added) from "+target+" where id=2", "615C62")
+				// A genuinely changed default cannot be masked by retained-expression replay.
+				changed := `'c\\d'`
+				if strings.Contains(mode, "NO_BACKSLASH_ESCAPES") {
+					changed = `'c\d'`
+				}
+				exec(t, "alter table "+target+" modify added varchar(32) default "+changed+", algorithm=copy")
+				exec(t, "alter table "+target+" convert to character set utf8mb4 collate utf8mb4_bin")
+				exec(t, "insert into "+target+"(id) values(3)")
+				exec(t, "set sql_mode=''")
+				scalar(t, "select hex(added) from "+target+" where id=2", "615C62")
+				scalar(t, "select hex(added) from "+target+" where id=3", "635C64")
+				scalar(t, "select hex(column_default) from information_schema.columns where table_schema='"+schema+"' and table_name='"+target+"' and column_name='added'", "635C64")
+				for i, value := range values {
+					scalar(t, "select hex("+names[i]+") from "+target+" where id=3", strings.ToUpper(hex.EncodeToString([]byte(value))))
+				}
+				scalar(t, "select concat(n,':',z is null,':',dt,':',e,':',ts is not null) from "+target+" where id=3", "7:1:2024-01-01:it's!:1")
+				_, err := conn.ExecContext(ctx, "alter table "+target+" add added int")
+				require.Error(t, err)
+				scalar(t, "select hex(added) from "+target+" where id=3", "635C64")
+			})
 			t.Run("show_"+mode, func(t *testing.T) {
 				exec(t, "set sql_mode='"+mode+"'")
 				source := "seed"

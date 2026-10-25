@@ -91,3 +91,39 @@ func TestDefaultWithoutBackslashEscapesRejectsInvalidScalar(t *testing.T) {
 		})
 	}
 }
+
+func TestAlterCopyDefaultUsesInternalParserMode(t *testing.T) {
+	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+		t.Run(mode, func(t *testing.T) {
+			mock := newCheckAlterOptimizer(t, `create table mode_copy(id int primary key, v varchar(32) default 'old')`)
+			source := mock.ctxt.tables["mode_copy"]
+			before := proto.Clone(source)
+			mock.ctxt.SetSqlModeOverride(mode)
+			literal := `'a\\b'`
+			if strings.Contains(mode, "NO_BACKSLASH_ESCAPES") {
+				literal = `'a\b'`
+			}
+			for _, clause := range []string{"add added varchar(32) default " + literal, "modify v varchar(32) default " + literal} {
+				stmt, err := mysql.ParseOneWithSQLMode(t.Context(), "alter table mode_copy "+clause+", algorithm=copy", 1, mode)
+				require.NoError(t, err)
+				built, err := BuildPlan(&mock.ctxt, stmt, false)
+				stmt.Free()
+				require.NoError(t, err)
+				alter := built.GetDdl().GetAlterTable()
+				// Match the ordinary-mode parser used by the internal SQL executor.
+				replay, err := mysql.ParseOne(t.Context(), alter.CreateTmpTableSql, 1)
+				require.NoError(t, err, alter.CreateTmpTableSql)
+				rebuilt, err := BuildPlan(&mock.ctxt, replay, false)
+				replay.Free()
+				require.NoError(t, err)
+				for _, col := range alter.CopyTableDef.Cols {
+					after := FindColumn(rebuilt.GetDdl().GetCreateTable().TableDef.Cols, col.Name)
+					require.NotNil(t, after, col.Name)
+					require.Equal(t, col.Default.OriginString, after.Default.OriginString, col.Name)
+					require.True(t, proto.Equal(col.Default.Expr, after.Default.Expr), col.Name)
+				}
+				require.True(t, proto.Equal(before, source), "COPY planning must not rewrite source defaults")
+			}
+		})
+	}
+}

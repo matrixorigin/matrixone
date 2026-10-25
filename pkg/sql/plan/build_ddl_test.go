@@ -4462,7 +4462,7 @@ func TestConstructCreateTableSQLSubscriptionCloneMapsPublisherForeignKeyToTarget
 
 	createSQL, statement, err := constructCreateTableSQL(
 		ctx, child, nil, true, cloneStmt, true, subscription,
-		false,
+		false, "",
 	)
 	require.NoError(t, err)
 	defer statement.Free()

@@ -53,13 +53,15 @@ func ConstructCreateTableSQL(
 	// reconcile index visibility before calling here. Subscription-aware clone
 	// planning additionally passes its scoped publisher identity explicitly.
 	var sourceSubscription *SubscriptionMeta
+	sqlMode := ""
 	if ctx != nil {
+		sqlMode = *parserSQLModeFromContext(ctx)
 		sourceSubscription = ctx.GetQueryingSubscription()
 	}
 	return constructCreateTableSQL(
 		ctx, tableDef, snapshot, useDbName, cloneStmt, true,
 		sourceSubscription,
-		false,
+		false, sqlMode,
 	)
 }
 
@@ -67,7 +69,7 @@ func ConstructCreateTableSQL(
 // by persisted DUMP TABLE schema fingerprints. This text is a hash input only;
 // executable DDL must use ConstructCreateTableSQL instead.
 func ConstructCreateTableSQLForTableDumpHash(tableDef *plan.TableDef) (string, error) {
-	sql, _, err := constructCreateTableSQL(nil, tableDef, nil, false, nil, true, nil, true)
+	sql, _, err := constructCreateTableSQL(nil, tableDef, nil, false, nil, true, nil, true, "")
 	return sql, err
 }
 
@@ -89,6 +91,7 @@ func constructCreateTableSQL(
 	includeChecks bool,
 	sourceSubscription *SubscriptionMeta,
 	legacyDumpDefaults bool,
+	sqlMode string,
 ) (string, tree.Statement, error) {
 	// Replaying native metadata through a legacy SQL alias would change its
 	// semantics. Until activation, reject rather than emit a lossy dump.
@@ -97,10 +100,7 @@ func constructCreateTableSQL(
 	}
 	var err error
 	var createStr string
-	sqlMode := ""
-	if ctx != nil {
-		sqlMode = *parserSQLModeFromContext(ctx)
-	}
+	noBackslashEscapes := mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes)
 	rewritePairs := make([]struct {
 		display string
 		rewrite string
@@ -236,7 +236,7 @@ func constructCreateTableSQL(
 				defaultSQL := strings.TrimSpace(col.Default.OriginString)
 				if legacyDumpDefaults {
 					defaultSQL = formatTableDumpHashDefault(col.Default.OriginString, col.Default.Expr)
-				} else if mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) && strings.Contains(defaultSQL, "\\") {
+				} else if noBackslashEscapes && strings.Contains(defaultSQL, "\\") {
 					defaultSQL, err = formatDefaultWithoutBackslashEscapes(defaultSQL)
 					if err != nil {
 						return "", nil, err
