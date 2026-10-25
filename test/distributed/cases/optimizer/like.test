@@ -25,4 +25,11 @@ select count(*) from t1 where c2 like '1_2%3';
 -- @separator:table
 explain select * from t1 where c2 like '123';
 select * from t1 where c2 like '123';
+
+-- Exact LIKE rechecks reject escaped-NUL prefix peers.
+INSERT INTO t1 VALUES(100001,concat('123',char(0),'x'),0);
+SELECT c1 FROM t1 WHERE c2 LIKE '123' ORDER BY c1;
+SELECT c1 FROM t1 FORCE INDEX(c2) WHERE c2 LIKE '123' ORDER BY c1;
+SELECT c1 FROM t1 IGNORE INDEX(c2) WHERE c2 LIKE '123' ORDER BY c1;
+SELECT c1 FROM t1 FORCE INDEX(c2) WHERE c2=concat('123',char(0),'x');
 drop database if exists d1;
