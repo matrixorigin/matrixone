@@ -893,6 +893,9 @@ func (group *Group) callSortRollup(proc *process.Process) (vm.CallResult, error)
 		if err != nil {
 			return vm.CancelResult, err
 		}
+		if result.Status == vm.ExecYield {
+			return result, nil
+		}
 		if result.Batch == nil {
 			group.ctr.inputDone = true
 			// Children can cancel the process while returning EOF, after this

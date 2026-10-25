@@ -1724,6 +1724,76 @@ func TestSortRollupEmptyInputAndNullRow(t *testing.T) {
 	}
 }
 
+type sortRollupYieldInput struct {
+	*colexec.MockOperator
+	yieldNext bool
+}
+
+func (input *sortRollupYieldInput) Call(proc *process.Process) (vm.CallResult, error) {
+	if input.yieldNext {
+		input.yieldNext = false
+		return vm.CallResult{Status: vm.ExecYield}, nil
+	}
+	input.yieldNext = true
+	return input.MockOperator.Call(proc)
+}
+
+func TestSortRollupPropagatesChildYield(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	child := &sortRollupYieldInput{MockOperator: colexec.NewMockOperator(), yieldNext: true}
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{countStarAgg()})
+	g.SortRollup = true
+	g.AppendChild(child)
+	t.Cleanup(func() {
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	// Sorted batches, with a continuation yield before each batch and EOF.
+	// The last yield also exercises preservation of buffered detail output.
+	for _, key := range []int32{1, 2} {
+		input := batch.NewWithSize(1)
+		input.Vecs[0] = testutil.MakeInt32Vector([]int32{key}, nil, proc.Mp())
+		input.SetRowCount(1)
+		child.WithBatchs([]*batch.Batch{input})
+	}
+	require.NoError(t, g.Prepare(proc))
+	yields := 0
+	actual := make(map[int32]int64)
+	var total int64
+	for calls := 0; ; calls++ {
+		require.Less(t, calls, 8, "yielding child must eventually reach EOF")
+		result, err := vm.Exec(g, proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecYield {
+			yields++
+			require.Nil(t, result.Batch)
+			require.False(t, g.ctr.inputDone, "yield is not EOF")
+			continue
+		}
+		if result.Batch == nil {
+			break
+		}
+		keys := vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])
+		counts := vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[1])
+		for row := 0; row < result.Batch.RowCount(); row++ {
+			if result.Batch.Vecs[0].GetGrouping().Contains(uint64(row)) {
+				require.Zero(t, total, "grand total must be published exactly once")
+				total = counts[row]
+			} else {
+				_, duplicate := actual[keys[row]]
+				require.False(t, duplicate)
+				actual[keys[row]] = counts[row]
+			}
+		}
+	}
+	require.Equal(t, 3, yields)
+	require.Equal(t, map[int32]int64{1: 1, 2: 1}, actual)
+	require.Equal(t, int64(2), total)
+}
+
 func TestSortRollupDoesNotPublishAfterEOFCancellation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	baseCtx := proc.Ctx
