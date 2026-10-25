@@ -190,6 +190,68 @@ fields terminated by ',' enclosed by '' escaped by '#' lines terminated by '\n';
 select id, hex(s) as hs from rtcr_hash;
 ➤ id[4,32,0]  ¦  hs[12,160,0]  𝄀
 1  ¦  610D
+create table rl (id int, s varchar(20));
+insert into rl values (1,'banana'),(2,'apple');
+select id, s from rl order by id
+into outfile 'stage://outfile_fields_lines_stage/esc_n_bad.csv'
+fields terminated by ',' enclosed by '' escaped by 'n' header 'false';
+not supported: select into outfile (csv): a value containing 'n' cannot round-trip with FIELDS ESCAPED BY 'n': LOAD translates the doubled escape back to a control character
+select count(*) from stage_list('stage://outfile_fields_lines_stage/esc_n_bad.csv');
+➤ count(*)[-5,64,0]  𝄀
+0
+select id, s from rl where id = 2
+into outfile 'stage://outfile_fields_lines_stage/esc_n_ok.csv'
+fields terminated by ',' enclosed by '' escaped by 'n' header 'false';
+select load_file(cast('stage://outfile_fields_lines_stage/esc_n_ok.csv' as datalink));
+➤ load_file(cast(stage://outfile_fields_lines_stage/esc_n_ok.csv as datalink))[-1,16383,0]  𝄀
+2,apple
+
+create table rl_back (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/esc_n_ok.csv' into table rl_back
+fields terminated by ',' enclosed by '' escaped by 'n' lines terminated by '\n';
+select * from rl_back;
+➤ id[4,32,0]  ¦  s[12,20,0]  𝄀
+2  ¦  apple
+create table rn (id int, s varchar(20));
+insert into rn values (1,'Nyx'),(2,null);
+select id, s from rn order by id
+into outfile 'stage://outfile_fields_lines_stage/esc_N_null.csv'
+fields terminated by ',' enclosed by '' escaped by 'N' header 'false';
+not supported: select into outfile (csv): a NULL value cannot round-trip with FIELDS ESCAPED BY 'N'
+select count(*) from stage_list('stage://outfile_fields_lines_stage/esc_N_null.csv');
+➤ count(*)[-5,64,0]  𝄀
+0
+select id, s from rn where id = 1
+into outfile 'stage://outfile_fields_lines_stage/esc_N_ok.csv'
+fields terminated by ',' enclosed by '' escaped by 'N' header 'false';
+file esc_N_ok.csv already exists
+select load_file(cast('stage://outfile_fields_lines_stage/esc_N_ok.csv' as datalink));
+➤ load_file(cast(stage://outfile_fields_lines_stage/esc_N_ok.csv as datalink))[-1,16383,0]  𝄀
+2,apple
+
+create table rn_back (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/esc_N_ok.csv' into table rn_back
+fields terminated by ',' enclosed by '' escaped by 'N' lines terminated by '\n';
+select * from rn_back;
+➤ id[4,32,0]  ¦  s[12,20,0]  𝄀
+2  ¦  apple
+select id, s from rtcr
+into outfile 'stage://outfile_fields_lines_stage/cr_pipe.csv'
+fields terminated by ',' enclosed by '' escaped by '' lines terminated by '|' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/cr_pipe.csv' as datalink)));
+➤ hex(load_file(cast(stage://outfile_fields_lines_stage/cr_pipe.csv as datalink)))[-1,16383,0]  𝄀
+312C610D7C
+create table rtcr_pipe (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/cr_pipe.csv' into table rtcr_pipe
+fields terminated by ',' enclosed by '' escaped by '' lines terminated by '|';
+select id, hex(s) as hs from rtcr_pipe;
+➤ id[4,32,0]  ¦  hs[12,160,0]  𝄀
+1  ¦  610D
+drop table rtcr_pipe;
+drop table rn_back;
+drop table rn;
+drop table rl_back;
+drop table rl;
 drop table rtcr_hash;
 drop table rtcr_first;
 drop table rtcr;

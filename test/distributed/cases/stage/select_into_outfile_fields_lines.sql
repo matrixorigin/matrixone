@@ -146,6 +146,60 @@ create table rtcr_hash (id int, s varchar(20));
 load data infile 'stage://outfile_fields_lines_stage/cr_hash.csv' into table rtcr_hash
 fields terminated by ',' enclosed by '' escaped by '#' lines terminated by '\n';
 select id, hex(s) as hs from rtcr_hash;
+
+-- Escape byte collision with LOAD's translated escape letters ('0','b','n',
+-- 'r','t','Z'): the writer doubles the letter, but LOAD decodes the pair as a
+-- control character, so a value containing the escape byte can never
+-- round-trip and the export is rejected before a file is written.
+create table rl (id int, s varchar(20));
+insert into rl values (1,'banana'),(2,'apple');
+select id, s from rl order by id
+into outfile 'stage://outfile_fields_lines_stage/esc_n_bad.csv'
+fields terminated by ',' enclosed by '' escaped by 'n' header 'false';
+select count(*) from stage_list('stage://outfile_fields_lines_stage/esc_n_bad.csv');
+-- Letter-free values under the same clause round-trip:
+select id, s from rl where id = 2
+into outfile 'stage://outfile_fields_lines_stage/esc_n_ok.csv'
+fields terminated by ',' enclosed by '' escaped by 'n' header 'false';
+select load_file(cast('stage://outfile_fields_lines_stage/esc_n_ok.csv' as datalink));
+create table rl_back (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/esc_n_ok.csv' into table rl_back
+fields terminated by ',' enclosed by '' escaped by 'n' lines terminated by '\n';
+select * from rl_back;
+
+-- ESCAPED BY 'N' collides with the NULL marker: LOAD consumes the byte after
+-- the marker as escape content and merges records, so NULL exports are
+-- rejected under that clause. Literal values containing N round-trip (NN->N).
+create table rn (id int, s varchar(20));
+insert into rn values (1,'Nyx'),(2,null);
+select id, s from rn order by id
+into outfile 'stage://outfile_fields_lines_stage/esc_N_null.csv'
+fields terminated by ',' enclosed by '' escaped by 'N' header 'false';
+select count(*) from stage_list('stage://outfile_fields_lines_stage/esc_N_null.csv');
+select id, s from rn where id = 1
+into outfile 'stage://outfile_fields_lines_stage/esc_N_ok.csv'
+fields terminated by ',' enclosed by '' escaped by 'N' header 'false';
+select load_file(cast('stage://outfile_fields_lines_stage/esc_N_ok.csv' as datalink));
+create table rn_back (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/esc_N_ok.csv' into table rn_back
+fields terminated by ',' enclosed by '' escaped by 'N' lines terminated by '\n';
+select * from rn_back;
+
+-- The last-column CR strip only applies when LOAD's normalized terminator is
+-- '\n'. With LINES TERMINATED BY '|' the same CR-final value round-trips.
+select id, s from rtcr
+into outfile 'stage://outfile_fields_lines_stage/cr_pipe.csv'
+fields terminated by ',' enclosed by '' escaped by '' lines terminated by '|' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/cr_pipe.csv' as datalink)));
+create table rtcr_pipe (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/cr_pipe.csv' into table rtcr_pipe
+fields terminated by ',' enclosed by '' escaped by '' lines terminated by '|';
+select id, hex(s) as hs from rtcr_pipe;
+drop table rtcr_pipe;
+drop table rn_back;
+drop table rn;
+drop table rl_back;
+drop table rl;
 drop table rtcr_hash;
 drop table rtcr_first;
 drop table rtcr;

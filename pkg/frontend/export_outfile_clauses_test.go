@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -508,6 +509,32 @@ func TestOutfileTrailingCRLastColumnRejectedWithoutEscape(t *testing.T) {
 		require.NoError(t, formatOutputString(newGuardCfg(0, 0), []byte("a\r"), []byte(","), 0, false, false, &buf))
 		require.Equal(t, "a\r,", buf.String())
 	})
+	t.Run("non-newline terminator keeps the CR", func(t *testing.T) {
+		// LOAD only strips the trailing CR when its normalized terminator is
+		// '\n'; with LINES TERMINATED BY '|' the same value round-trips.
+		ep := newOutfileExportConfig(tree.NewFields(",", false, 0, 0), nil, "|")
+		ep.ctx = context.Background()
+		var buf bytes.Buffer
+		require.NoError(t, formatOutputString(ep, []byte("1"), []byte(","), 0, false, false, &buf))
+		require.NoError(t, formatOutputString(ep, []byte("a\r"), []byte("|"), 0, false, true, &buf))
+		require.Equal(t, "1,a\r|", buf.String())
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEscapedBy: "", LinesTerminatedBy: "|",
+			Null: []string{`\N`},
+		}, bytes.NewReader(buf.Bytes()), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, "a\r", row[1].Val)
+	})
+	t.Run("crlf terminator normalizes to newline and still strips", func(t *testing.T) {
+		// LOAD maps TERMINATED BY '\r\n' to '\n' before deciding on the CR
+		// strip, so the guard must apply there as well.
+		ep := newOutfileExportConfig(tree.NewFields(",", false, 0, 0), nil, "\r\n")
+		ep.ctx = context.Background()
+		var buf bytes.Buffer
+		require.ErrorContains(t, formatOutputString(ep, []byte("a\r"), []byte("\r\n"), 0, false, true, &buf), wantErr)
+	})
 	t.Run("custom escape protects the CR", func(t *testing.T) {
 		ep := newGuardCfg('#', 0)
 		var buf bytes.Buffer
@@ -746,7 +773,6 @@ func TestConstructByteVectorTypesErrorPlumbing(t *testing.T) {
 		require.ErrorContains(t, result.err, "cannot round-trip unless FIELDS ESCAPED BY is the default")
 		require.Empty(t, result.writeByte)
 	})
-
 	t.Run("result-set writer covers time, uuid and enum columns", func(t *testing.T) {
 		ep := &ExportConfig{
 			userConfig: &tree.ExportParam{
@@ -774,5 +800,139 @@ func TestConstructByteVectorTypesErrorPlumbing(t *testing.T) {
 		defer func() { Write = old }()
 		require.NoError(t, exportDataFromResultSetToCSVFile(ep))
 		require.True(t, bytes.HasSuffix(out.Bytes(), []byte("\n")))
+	})
+}
+
+// TestOutfileTranslatedEscapeByteValueRejected covers the escape-letter
+// collision: LOAD's unescape translates the second byte of an escape pair
+// from a fixed letter table ({0,b,n,r,t,Z} -> control character) whatever
+// the configured escape byte is, so when the escape byte IS one of those
+// letters a value containing it can never round-trip (the doubled byte
+// decodes to a control character). The writer must reject it; values
+// without the letter, NULLs, and letter values under a non-letter escape
+// are unaffected.
+func TestOutfileTranslatedEscapeByteValueRejected(t *testing.T) {
+	newGuardCfg := func(escaped, enclosed byte) *ExportConfig {
+		ep := newOutfileExportConfig(tree.NewFields(",", false, enclosed, escaped), nil, "\n")
+		ep.ctx = context.Background()
+		return ep
+	}
+	// The reviewer's probe: escape 'n' would export 'banana' as 'bannanna',
+	// which LOAD decodes to "ba\na\na" (hex 62610A610A61). Document the
+	// reader corruption the writer is now obliged to prevent.
+	parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+		FieldsTerminatedBy: ",", FieldsEscapedBy: "n", LinesTerminatedBy: "\n",
+		Null: []string{`\N`},
+	}, bytes.NewReader([]byte("bannanna\n")), csvparser.ReadBlockSize, false)
+	require.NoError(t, err)
+	row, err := parser.Read(nil)
+	require.NoError(t, err)
+	require.Equal(t, "ba\na\na", row[0].Val, "LOAD translates every nn pair to LF")
+
+	for _, letter := range []byte{'0', 'b', 'n', 'r', 't', 'Z'} {
+		t.Run(fmt.Sprintf("letter %c", letter), func(t *testing.T) {
+			var buf bytes.Buffer
+			withLetter := []byte{'x', letter, 'y'}
+			wantErr := fmt.Sprintf("cannot round-trip with FIELDS ESCAPED BY '%c'", letter)
+			// Bare and enclosed values are rejected alike: escapes are
+			// decoded inside quotes too.
+			require.ErrorContains(t, formatOutputString(newGuardCfg(letter, 0), withLetter, []byte("\n"), 0, false, true, &buf), wantErr)
+			buf.Reset()
+			require.ErrorContains(t, formatOutputString(newGuardCfg(letter, '"'), withLetter, []byte("\n"), '"', true, true, &buf), wantErr)
+			// A value free of the escape letter exports and round-trips.
+			buf.Reset()
+			require.NoError(t, formatOutputString(newGuardCfg(letter, 0), []byte("safe"), []byte("\n"), 0, false, true, &buf))
+			require.Equal(t, "safe\n", buf.String())
+		})
+	}
+
+	t.Run("NULL unaffected under a letter escape", func(t *testing.T) {
+		// The \N marker contains no lowercase translated letter; only the
+		// uppercase-N escape collides with it (covered separately).
+		ep := newGuardCfg('n', 0)
+		var buf bytes.Buffer
+		require.NoError(t, formatOutputNull(ep, []byte("\n"), 0, &buf))
+		require.Equal(t, "\\N\n", buf.String())
+	})
+
+	t.Run("batch writer aborts on a letter-valued row", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Zero(t, mp.CurrNB()) }()
+		bat := newIdNameBatch(t, mp, "banana")
+		defer bat.Clean(mp)
+		ep := selectIntoOutfileConfig(",", 0, 'n', "", "\n")
+		ep.ctx = context.Background()
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+		result := <-ch
+		require.ErrorContains(t, result.err, "cannot round-trip with FIELDS ESCAPED BY 'n'")
+	})
+}
+
+// TestOutfileNullWithEscapeNRejected: the NULL marker always ends in 'N'.
+// With FIELDS ESCAPED BY 'N' LOAD's reader consumes the byte after the
+// marker (the separator or terminator) as escape content, merging fields
+// or records, so a NULL cannot round-trip under that clause and the writer
+// must reject it. Values, including ones containing 'N', still round-trip:
+// the doubled NN decodes back to a literal N.
+func TestOutfileNullWithEscapeNRejected(t *testing.T) {
+	newGuardCfg := func(escaped, enclosed byte) *ExportConfig {
+		ep := newOutfileExportConfig(tree.NewFields(",", false, enclosed, escaped), nil, "\n")
+		ep.ctx = context.Background()
+		return ep
+	}
+	const wantErr = "a NULL value cannot round-trip with FIELDS ESCAPED BY 'N'"
+
+	t.Run("NULL write rejected", func(t *testing.T) {
+		var buf bytes.Buffer
+		require.ErrorContains(t, formatOutputNull(newGuardCfg('N', 0), []byte("\n"), 0, &buf), wantErr)
+	})
+
+	t.Run("batch writer aborts on a NULL row", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Zero(t, mp.CurrNB()) }()
+		bat := newIdNameBatch(t, mp, nil)
+		defer bat.Clean(mp)
+		ep := selectIntoOutfileConfig(",", 0, 'N', "", "\n")
+		ep.ctx = context.Background()
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+		result := <-ch
+		require.ErrorContains(t, result.err, wantErr)
+	})
+
+	t.Run("result-set writer aborts on a NULL row", func(t *testing.T) {
+		ep := selectIntoOutfileConfig(",", 0, 'N', "", "\n")
+		ep.ctx = context.Background()
+		ep.mrs.Data = [][]any{{int32(1), nil}}
+		require.ErrorContains(t, exportDataFromResultSetToCSVFile(ep), wantErr)
+	})
+
+	t.Run("values containing N still round-trip", func(t *testing.T) {
+		ep := newGuardCfg('N', 0)
+		var buf bytes.Buffer
+		require.NoError(t, formatOutputString(ep, []byte("Nyx"), []byte("\n"), 0, false, true, &buf))
+		require.Equal(t, "NNyx\n", buf.String())
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEscapedBy: "N", LinesTerminatedBy: "\n",
+			Null: []string{`\N`},
+		}, bytes.NewReader(buf.Bytes()), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, "Nyx", row[0].Val)
+	})
+
+	t.Run("document the reader merge the writer now prevents", func(t *testing.T) {
+		// The reviewer's probe: a `1,\N` NULL record under escape 'N' merges
+		// with the next record instead of reading as two columns.
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEscapedBy: "N", LinesTerminatedBy: "\n",
+			Null: []string{`\N`},
+		}, bytes.NewReader([]byte("1,\\N\n2,tail\n")), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.NotEqual(t, 2, len(row), "the NULL marker swallows the terminator and merges records")
 	})
 }

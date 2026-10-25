@@ -278,28 +278,44 @@ func getExportFilePath(filename string, fileCnt uint) string {
 	return fmt.Sprintf("%s.%d", filename, fileCnt)
 }
 
-// checkCSVValueRoundTrip rejects the two value shapes LOAD can no longer tell
+// checkCSVValueRoundTrip rejects the value shapes LOAD can no longer tell
 // apart from framing once the escape byte is not the historical backslash:
 //
 //   - A field of exactly `\N` matches LOAD's NULL token list (always ['\N'])
 //     after unescaping, even inside quotes (quotedNullIsText is false), so a
 //     literal \N string would silently come back as SQL NULL whenever
 //     FIELDS ESCAPED BY is set to a custom or empty byte.
+//   - LOAD's unescape translates the second byte of an escape pair from a
+//     fixed letter table ({'0','b','n','r','t','Z'} -> control character,
+//     everything else literal), whatever the configured escape byte is. When
+//     the escape byte itself is one of those letters, the writer's doubling
+//     (e.g. 'banana' with ESCAPED BY 'n' -> 'bannanna') decodes to a control
+//     character instead of the letter: no encoding of such a value exists,
+//     so it must be rejected. 'N' is exempt here (N+N stays literal N); it
+//     breaks only the NULL marker, which formatOutputNull guards.
 //   - With escaping disabled, the reader strips a trailing CR from the last
-//     column's record under '\n' termination (csv_parser.go). That strip runs
-//     on the record buffer AFTER quotes are removed, so an enclosure does
-//     not protect the CR; only an escape byte (which rewrites it to a
-//     two-byte sequence the reader translates back) does.
+//     column's record when its (CRLF-normalized) terminator is '\n'
+//     (csv_parser.go). That strip runs on the record buffer AFTER quotes are
+//     removed, so an enclosure does not protect the CR; only an escape byte
+//     (which rewrites it to a two-byte sequence the reader translates back)
+//     does. Other terminators never trigger the strip.
 //
-// Both checks mirror the externalwrite writer's guards, so exporting with
-// the new clauses produces either a file that reads back exactly or an
-// upfront error — never silent corruption.
+// All three checks make the export produce either a file that reads back
+// exactly or an upfront error — never silent corruption.
 func checkCSVValueRoundTrip(oq *ExportConfig, tmp []byte, last bool) error {
-	if oq.escapeChar() != '\\' && bytes.Equal(tmp, []byte(`\N`)) {
-		return moerr.NewNotSupported(oq.ctx,
-			"select into outfile (csv): a value of exactly \\N cannot round-trip unless FIELDS ESCAPED BY is the default '\\\\'")
+	esc := oq.escapeChar()
+	if esc != '\\' {
+		if bytes.Equal(tmp, []byte(`\N`)) {
+			return moerr.NewNotSupported(oq.ctx,
+				"select into outfile (csv): a value of exactly \\N cannot round-trip unless FIELDS ESCAPED BY is the default '\\\\'")
+		}
+		if isAmbiguousCSVEscape(esc) && esc != 'N' && bytes.IndexByte(tmp, esc) >= 0 {
+			return moerr.NewNotSupportedf(oq.ctx,
+				"select into outfile (csv): a value containing '%c' cannot round-trip with FIELDS ESCAPED BY '%c': LOAD translates the doubled escape back to a control character", esc, esc)
+		}
 	}
-	if last && oq.escapeChar() == 0 && bytes.HasSuffix(tmp, []byte{'\r'}) {
+	_, lineTerm, _, _ := oq.csvBoundaryBytes()
+	if last && esc == 0 && lineTerm == '\n' && bytes.HasSuffix(tmp, []byte{'\r'}) {
 		return moerr.NewNotSupported(oq.ctx,
 			"select into outfile (csv): with FIELDS ESCAPED BY '' a value ending in CR in the last column cannot round-trip")
 	}
@@ -337,6 +353,14 @@ var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byt
 // prefix would otherwise become a separator or opening enclosure. Keep this
 // check off the ordinary non-NULL raw writer path.
 func formatOutputNull(oq *ExportConfig, symbol []byte, enclosed byte, buffer *bytes.Buffer) error {
+	// The NULL marker always ends in 'N'. With FIELDS ESCAPED BY 'N' the
+	// reader consumes the byte after the marker (separator or terminator)
+	// as escape content, merging fields/records — no safe encoding exists,
+	// so reject before writing a corrupt file.
+	if oq.escapeChar() == 'N' {
+		return moerr.NewNotSupported(oq.ctx,
+			"select into outfile (csv): a NULL value cannot round-trip with FIELDS ESCAPED BY 'N'")
+	}
 	flag := false
 	if enclosed != 0 && oq.escapeChar() != 0 {
 		field, line, _, _ := oq.csvBoundaryBytes()
@@ -637,7 +661,9 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 		}
 		for j, vec := range bat.Vecs {
 			if vec.GetNulls().Contains(uint64(i)) {
-				formatOutputNull(ep, symbol[j], closeby, buffer)
+				if fmtErr == nil {
+					fmtErr = formatOutputNull(ep, symbol[j], closeby, buffer)
+				}
 				continue
 			}
 			switch vec.GetType().Oid { //get col
