@@ -15,12 +15,14 @@
 package merge_test
 
 import (
+	"context"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -77,15 +80,20 @@ func TestMaterializedSinkScanConsumersAdvanceIndependently(t *testing.T) {
 	// The second consumer completes before the first consumer starts. Streaming
 	// fan-out cannot make progress in this topology once its bounded spool fills.
 	for _, reader := range []*merge.Merge{readers[1], readers[0]} {
+		var previous *batch.Batch
 		for i := range inputs {
 			result, err := reader.Call(proc)
 			require.NoError(t, err)
+			if previous != nil {
+				require.Nil(t, previous.Vecs, "previous batch must be reclaimed before advancing")
+			}
 			require.Equal(t, int64(i), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[0], 0))
-			result.Batch.Clean(proc.Mp())
+			previous = result.Batch
 		}
 		result, err := reader.Call(proc)
 		require.NoError(t, err)
 		require.Equal(t, vm.ExecStop, result.Status)
+		require.Nil(t, previous.Vecs, "EOF must reclaim the last batch")
 		reader.Reset(proc, false, nil)
 	}
 
@@ -139,7 +147,6 @@ func TestMaterializedSinkScanConcurrentProductionReaders(t *testing.T) {
 					return
 				}
 				got := vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[0], 0)
-				result.Batch.Clean(proc.Mp())
 				if got != int64(i) {
 					errCh <- moerr.NewInternalErrorNoCtxf("unexpected value %d at %d", got, i)
 					return
@@ -213,10 +220,11 @@ func TestMaterializedSinkScanReadersObserveProducerErrorAfterBufferedData(t *tes
 		result, err = reader.Call(proc)
 		require.NoError(t, err)
 		require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[0], 0))
-		result.Batch.Clean(proc.Mp())
+		returned := result.Batch
 		result, err = reader.Call(proc)
 		require.ErrorIs(t, err, want)
 		require.Nil(t, result.Batch)
+		require.Nil(t, returned.Vecs, "producer error must reclaim the previous batch")
 
 		reader.Reset(proc, true, err)
 		reader.Release()
@@ -224,6 +232,154 @@ func TestMaterializedSinkScanReadersObserveProducerErrorAfterBufferedData(t *tes
 
 	require.Equal(t, inputMemory, proc.Mp().CurrNB())
 	input.Clean(proc.Mp())
+}
+
+func TestMaterializedSinkScanBatchLifecycle(t *testing.T) {
+	for _, terminal := range []string{"reset", "free", "reset_then_free", "free_then_reset", "prepare", "consumer_clean", "cancel"} {
+		t.Run(terminal, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			source := materialized.NewSource(1)
+			t.Cleanup(source.Close)
+			input := batch.NewWithSize(1)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(42), false, proc.Mp()))
+			input.SetRowCount(1)
+			inputMemory := proc.Mp().CurrNB()
+
+			reader := merge.NewArgument()
+			reader.MaterializedSource = source
+			t.Cleanup(func() {
+				reader.Free(proc, false, nil)
+				reader.Release()
+			})
+			// Reuse the same source and operator to prove reader release and
+			// position/current-batch state do not leak into the next generation.
+			for generation := 0; generation < 2; generation++ {
+				require.NoError(t, source.Begin(proc.Mp()))
+				require.NoError(t, source.Append(input))
+				if terminal != "cancel" {
+					source.Finish(nil)
+				}
+				require.NoError(t, reader.Prepare(proc))
+				result, err := reader.Call(proc)
+				require.NoError(t, err)
+				require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[0], 0))
+				returned := result.Batch
+
+				switch terminal {
+				case "reset":
+					reader.Reset(proc, true, moerr.NewInternalErrorNoCtx("downstream failed"))
+				case "free":
+					reader.Free(proc, false, nil)
+				case "reset_then_free":
+					reader.Reset(proc, false, nil)
+					reader.Reset(proc, false, nil)
+					reader.Free(proc, false, nil)
+				case "free_then_reset":
+					reader.Free(proc, false, nil)
+					reader.Free(proc, false, nil)
+					reader.Reset(proc, false, nil)
+				case "prepare":
+					require.NoError(t, reader.Prepare(proc))
+					require.Nil(t, returned.Vecs)
+					result, err = reader.Call(proc)
+					require.NoError(t, err)
+					require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[0], 0))
+					reader.Reset(proc, false, nil)
+				case "consumer_clean":
+					returned.Clean(proc.Mp())
+					reader.Free(proc, false, nil)
+				case "cancel":
+					originalCtx := proc.Ctx
+					ctx, cancel := context.WithCancelCause(originalCtx)
+					want := moerr.NewInternalErrorNoCtx("materialized reader cancelled")
+					cancel(want)
+					proc.Ctx = ctx
+					result, err = reader.Call(proc)
+					proc.Ctx = originalCtx
+					require.ErrorIs(t, err, want)
+					require.Nil(t, result.Batch)
+					require.Nil(t, returned.Vecs, "cancellation must reclaim the previous batch")
+					source.Finish(want)
+					reader.Reset(proc, true, err)
+				}
+				require.Nil(t, returned.Vecs)
+				require.Equal(t, inputMemory, proc.Mp().CurrNB())
+			}
+		})
+	}
+}
+
+func TestMaterializedSinkScanProjectionCompletesAllocationAccount(t *testing.T) {
+	registry, err := mpool.NewAllocationAccountRegistry(2, 32)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	// Fixture-local owner/site IDs test preserved allocation ownership through
+	// Source.Dup; physical-operator attribution is covered by the SQL witness.
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 102, 103, 104, 105)
+	require.NoError(t, err)
+	proc := testutil.NewProcess(t)
+	source := materialized.NewSource(2)
+	t.Cleanup(source.Close)
+	require.NoError(t, source.Begin(proc.Mp()))
+	input := batch.NewOffHeapWithSize(1)
+	t.Cleanup(func() { input.Clean(proc.Mp()) })
+	input.Vecs[0], err = vector.NewOffHeapVecWithTypeAndAllocation(types.T_int64.ToType(), selection)
+	require.NoError(t, err)
+	for _, value := range []int64{11, 22} {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
+	}
+	input.SetRowCount(2)
+	require.NoError(t, source.Append(input))
+	input.Clean(proc.Mp())
+	source.Finish(nil)
+
+	for readerID := 0; readerID < 2; readerID++ {
+		reader := merge.NewArgument()
+		reader.MaterializedSource = source
+		reader.MaterializedReaderID = readerID
+		project := projection.NewArgument()
+		t.Cleanup(func() {
+			project.Free(proc, false, nil)
+			reader.Free(proc, false, nil)
+			project.Release()
+			reader.Release()
+		})
+		require.NoError(t, reader.Prepare(proc))
+		project.ProjectList = []*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		}}
+		project.AppendChild(reader)
+		require.NoError(t, project.Prepare(proc))
+		result, err := project.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, 2, result.Batch.RowCount())
+		require.Equal(t, []int64{11, 22}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0]))
+		// Projection borrows the source vector; its own cleanup does not own
+		// this allocation. EOF must reclaim the Merge-owned input copy.
+		result, err = project.Call(proc)
+		require.NoError(t, err)
+		require.Nil(t, result.Batch)
+		require.Equal(t, vm.ExecStop, result.Status)
+		project.Reset(proc, false, nil)
+		reader.Reset(proc, false, nil)
+		project.Free(proc, false, nil)
+		reader.Free(proc, false, nil)
+	}
+
+	snapshot, first, err := registry.CompleteTerminal(account)
+	require.NoError(t, err)
+	require.True(t, first)
+	require.Zero(t, snapshot.Used)
+	require.Zero(t, snapshot.LiveAllocations)
+	require.False(t, registry.AdmissionSuspended())
+	next, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	_, _, err = registry.CompleteTerminal(next)
+	require.NoError(t, err)
 }
 
 func TestMaterializedSinkScanOwnsBatchesThroughMergeOrderSpill(t *testing.T) {
