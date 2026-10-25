@@ -544,11 +544,13 @@ const quantileSortCheckSteps = 1024
 
 // quantileSortSelectors orders selectors ascending by the typed values they
 // index, following pkg/sort's own heapsort shape (max-heap build, then root
-// extraction). Every quantileSortCheckSteps elementary swaps it re-checks
-// the context, so finalizing a large group or window partition surfaces an
-// already-cancelled context at a bounded work cadence without running the
-// sort to completion (decision D12's in-sort cancellation points), while the
-// ordering stays identical to SortByVectors over the same single vector.
+// extraction). Every quantileSortCheckSteps elementary work steps — heap
+// iterations, including sift-down iterations that only compare and the root
+// extraction swaps — it re-checks the context, so finalizing a large group or
+// window partition surfaces an already-cancelled context at a bounded work
+// cadence without running the sort to completion (decision D12's in-sort
+// cancellation points), while the ordering stays identical to SortByVectors
+// over the same single vector.
 func quantileSortSelectors(
 	ctx context.Context, values *vector.Vector, selectors []int64,
 ) error {
@@ -564,9 +566,19 @@ func quantileSortSelectors(
 		return moerr.NewInternalErrorNoCtxf(
 			"quantileExactWeighted cannot sort %s values", values.GetType().Oid)
 	}
-	var swapSteps int
+	// workSteps counts every elementary heap step, not only swaps: an
+	// equal-valued group compares without swapping at every sift-down, so a
+	// swap-counted checkpoint would never fire and the sort would run to
+	// completion before an already-cancelled context surfaced.
+	var workSteps int
 	siftDown := func(root, end int) error {
 		for {
+			workSteps++
+			if workSteps%quantileSortCheckSteps == 0 {
+				if err := context.Cause(ctx); err != nil {
+					return err
+				}
+			}
 			child := 2*root + 1
 			if child >= end {
 				return nil
@@ -581,12 +593,6 @@ func quantileSortSelectors(
 			}
 			selectors[root], selectors[child] = selectors[child], selectors[root]
 			root = child
-			swapSteps++
-			if swapSteps%quantileSortCheckSteps == 0 {
-				if err := context.Cause(ctx); err != nil {
-					return err
-				}
-			}
 		}
 	}
 	// Build the max-heap (greatest value at the root), then extract the root
@@ -597,6 +603,12 @@ func quantileSortSelectors(
 		}
 	}
 	for i := count - 1; i > 0; i-- {
+		workSteps++
+		if workSteps%quantileSortCheckSteps == 0 {
+			if err := context.Cause(ctx); err != nil {
+				return err
+			}
+		}
 		selectors[0], selectors[i] = selectors[i], selectors[0]
 		if err := siftDown(0, i); err != nil {
 			return err

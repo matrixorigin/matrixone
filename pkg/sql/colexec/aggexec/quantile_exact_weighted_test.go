@@ -806,6 +806,24 @@ func fillWeightedLargeGroupInputs(
 	return values, weights
 }
 
+// fillWeightedEqualGroupInputs builds the equal-key variant of the
+// large-group cancellation witness: 4096 identical values of weight 1. A
+// group's finalization still performs the real multi-row restore, sort and
+// cumulative scan, but every sift-down comparison compares without swapping,
+// so only a checkpoint cadence that counts no-swap work fires inside it.
+func fillWeightedEqualGroupInputs(
+	t *testing.T, mp *mpool.MPool,
+) (*vector.Vector, *vector.Vector) {
+	t.Helper()
+	values := vector.NewVec(types.T_float64.ToType())
+	weights := vector.NewVec(types.T_float64.ToType())
+	for i := 0; i < 4096; i++ {
+		require.NoError(t, vector.AppendFixed(values, 42.0, false, mp))
+		require.NoError(t, vector.AppendFixed(weights, 1.0, false, mp))
+	}
+	return values, weights
+}
+
 // fillWeightedFollowUpGroup adds a one-row second group (value 4, weight 3)
 // so a later case can cancel between groups after the large group's row is
 // already appended to the result.
@@ -829,10 +847,11 @@ func fillWeightedFollowUpGroup(
 // sort's element work, or mid cumulative scan — the cancelled cause must
 // surface at exactly that check, and all scratch plus partially built
 // results must be released. The check sequence of the 4096-row group is
-// deterministic (fixed data drives a fixed heap-sort swap sequence), and the
+// deterministic (fixed data drives a fixed sequence of elementary heap
+// steps, including no-swap comparisons), and the
 // warmup run learns the total T: checks 1-2 are the chunk and group-row
 // entries, 3-6 the restore cadence at rows 0/1024/2048/3072, 7 the sort's
-// entry, 8..T-4 the sort's bounded swap checkpoints, and T-3..T the scan's
+// entry, 8..T-4 the sort's bounded work checkpoints, and T-3..T the scan's
 // four checkpoints (level 0.99 crosses at the 4056th cumulative weight).
 func TestQuantileExactWeightedCancellation(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -960,6 +979,97 @@ func TestQuantileExactWeightedCancellation(t *testing.T) {
 	freshResults, err := fresh.Flush()
 	require.NoError(t, err)
 	require.Equal(t, 2.0, vector.GetFixedAtNoTypeCheck[float64](freshResults[0], 0))
+	freshResults[0].Free(mp)
+	fresh.Free()
+}
+
+// TestQuantileExactWeightedEqualValuedCancellation is the executor-level
+// equal-key cancellation regression of the review probe ("cancel the
+// finalization of a large equal-valued aggregate or window partition"): a
+// 4096-row group of identical values makes the finalization sort compare
+// without swapping at every sift-down, and window partitions finalize
+// through this same FlushWithContext path. The warmup gate proves the sort's
+// no-swap work produces real checkpoints; cancelling at the sort's first
+// in-work checkpoint — the exact spot where the old swap-counted cadence fell
+// silent and ran the sort to completion — and deep inside its element work
+// must surface the cancelled cause at the first flipped check and free
+// every scratch buffer and partially built result.
+func TestQuantileExactWeightedEqualValuedCancellation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	cancelCause := moerr.NewInvalidInputNoCtx("equal-valued test deadline")
+	values, weights := fillWeightedEqualGroupInputs(t, mp)
+	defer values.Free(mp)
+	defer weights.Free(mp)
+	baseline := mp.CurrNB()
+
+	// The counting warmup learns the total T of the successful equal-key
+	// finalization and proves the group selects its shared value.
+	exec := makeWeightedExecForTest(t, mp, false,
+		types.T_float64.ToType(), types.T_float64.ToType(), "0.99")
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values, weights}))
+	counting := &causeAtNthCheck{
+		Context: context.Background(), n: int32(math.MaxInt32)}
+	results, err := exec.FlushWithContext(counting)
+	require.NoError(t, err)
+	require.Equal(t, 42.0,
+		vector.GetFixedAtNoTypeCheck[float64](results[0], 0),
+		"4096 equal values select that value at any weighted threshold")
+	for _, result := range results {
+		result.Free(mp)
+	}
+	exec.Free()
+	require.Equal(t, baseline, mp.CurrNB())
+	totalChecks := counting.checks
+	// Checks 1-2 are the chunk/group-row entries, 3-6 the restore cadence
+	// and 7 the sort's entry — the sequence any 4096-row group shares — and
+	// the scan contributes the final four, so this floor forces real in-sort
+	// checkpoints between check 7 and the scan (the old swap-counted cadence
+	// produced none for equal keys).
+	require.Greater(t, totalChecks, int32(15),
+		"equal-valued element work must run bounded in-sort checkpoints")
+
+	// Check 8 is the sort's first in-work checkpoint; T-5 sits deep inside
+	// the sort's element work, before the scan's final four checkpoints.
+	for _, tc := range []struct {
+		name   string
+		flipAt int32
+	}{
+		{"at the sort's first in-work checkpoint", 8},
+		{"deep inside the sort's element work", totalChecks - 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, baseline, mp.CurrNB())
+			exec := makeWeightedExecForTest(t, mp, false,
+				types.T_float64.ToType(), types.T_float64.ToType(), "0.99")
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{values, weights}))
+
+			ctx := &causeAtNthCheck{
+				Context: context.Background(), n: tc.flipAt, cause: cancelCause}
+			results, err := exec.FlushWithContext(ctx)
+			require.Error(t, err,
+				"equal-valued element work must honor cancellation checkpoints")
+			require.ErrorIs(t, err, cancelCause)
+			require.Nil(t, results, "the error return must free all built results")
+			require.EqualValues(t, tc.flipAt, ctx.checks,
+				"finalization must abort on its first cancelled check")
+			exec.Free()
+			require.Equal(t, baseline, mp.CurrNB(),
+				"a cancelled finalization must not leak scratch or result memory")
+		})
+	}
+
+	// A fresh executor over the same equal-valued group observes no residue.
+	fresh := makeWeightedExecForTest(t, mp, false,
+		types.T_float64.ToType(), types.T_float64.ToType(), "0.5")
+	require.NoError(t, fresh.GroupGrow(1))
+	require.NoError(t, fresh.BulkFill(0, []*vector.Vector{values, weights}))
+	freshResults, err := fresh.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 42.0, vector.GetFixedAtNoTypeCheck[float64](freshResults[0], 0))
 	freshResults[0].Free(mp)
 	fresh.Free()
 }
@@ -1201,17 +1311,107 @@ func TestQuantileSortSelectorsInterruptsInsideElementWork(t *testing.T) {
 	require.Equal(t, identity(), selectors,
 		"a cancelled context must stop the sort before its first element move")
 
-	// The second checkpoint fires after exactly quantileSortCheckSteps
-	// swaps, so the aborted sort has done real work yet has not finished.
+	// The checkpoint cadence counts every elementary heap step, so with
+	// descending values the first in-sort checkpoints fire during the heap
+	// build, which compares without swapping. A counting warmup learns the
+	// total T of the completed sort, and flipping at T/2+1 aborts deep
+	// inside the extraction phase: real element moves have happened yet the
+	// completed order was never reached.
 	counting := &causeAtNthCheck{
-		Context: context.Background(), n: 2, cause: cancelCause}
+		Context: context.Background(), n: int32(math.MaxInt32)}
 	selectors = identity()
-	err = quantileSortSelectors(counting, values, selectors)
+	require.NoError(t, quantileSortSelectors(counting, values, selectors))
+	require.Equal(t, reversed, selectors,
+		"a completed sort over descending values selects the reversed order")
+	totalChecks := counting.checks
+	require.Greater(t, totalChecks, int32(4),
+		"descending element work must produce bounded in-sort checkpoints")
+	deepFlip := totalChecks/2 + 1
+	require.Less(t, deepFlip, totalChecks)
+
+	deep := &causeAtNthCheck{
+		Context: context.Background(), n: deepFlip, cause: cancelCause}
+	selectors = identity()
+	err = quantileSortSelectors(deep, values, selectors)
 	require.ErrorIs(t, err, cancelCause)
-	require.EqualValues(t, 2, counting.checks)
+	require.EqualValues(t, deepFlip, deep.checks,
+		"the sort must abort on its first cancelled check")
 	require.NotEqual(t, identity(), selectors,
 		"the mid-sort checkpoint must fire after real element swaps")
 	require.NotEqual(t, reversed, selectors,
+		"the aborted sort must not read like a completed sort")
+}
+
+// TestQuantileSortSelectorsInterruptsEqualValuedWork is the equal-key
+// cancellation regression of the review probe: with 65,536 identical values
+// every sift-down comparison returns without a swap and root-extraction
+// swaps were uncounted as well, so the old checkpoint cadence counted only
+// element swaps and never fired — the sort performed all 65,536 root
+// extractions and returned nil while the context was already cancelled. The
+// cadence now counts every elementary heap iteration: an already-cancelled
+// context surfaces at the first in-sort checkpoint, before any element
+// move, and a later flip aborts the extraction phase mid-work instead of
+// completing it.
+func TestQuantileSortSelectorsInterruptsEqualValuedWork(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	const rows = 1 << 16
+	values := vector.NewVec(types.T_int64.ToType())
+	defer values.Free(mp)
+	for i := 0; i < rows; i++ {
+		require.NoError(t, vector.AppendFixed(values, int64(29944), false, mp))
+	}
+	identity := func() []int64 {
+		selectors := make([]int64, rows)
+		for i := range selectors {
+			selectors[i] = int64(i)
+		}
+		return selectors
+	}
+	cancelCause := moerr.NewInvalidInputNoCtx("equal-valued sort deadline")
+
+	// The counting warmup completes the sort with a live context, learning
+	// both the total checkpoint count of the equal-key work and the
+	// completed permutation of the deterministic heap sequence.
+	counting := &causeAtNthCheck{
+		Context: context.Background(), n: int32(math.MaxInt32)}
+	finished := identity()
+	require.NoError(t, quantileSortSelectors(counting, values, finished))
+	totalChecks := counting.checks
+	require.Greater(t, totalChecks, int32(10),
+		"equal-valued element work must produce bounded in-sort checkpoints")
+
+	// Flipping at the first in-sort checkpoint aborts during the heap build,
+	// which for equal keys compares without swapping — the exact spot where
+	// the swap-counted cadence fell silent and ran the full 65,536-move sort
+	// to completion under an already-cancelled context.
+	early := &causeAtNthCheck{
+		Context: context.Background(), n: 2, cause: cancelCause}
+	selectors := identity()
+	err := quantileSortSelectors(early, values, selectors)
+	require.ErrorIs(t, err, cancelCause,
+		"an already-cancelled context must surface at the first in-sort checkpoint")
+	require.EqualValues(t, 2, early.checks,
+		"the sort must abort on its first cancelled check")
+	require.Equal(t, identity(), selectors,
+		"equal-valued heap builds compare without swapping, so the abort precedes every element move")
+
+	// Flipping deep inside the extraction phase aborts mid-work: real
+	// root-extraction moves have happened, yet the permutation is neither
+	// the identity nor the completed order.
+	deepFlip := totalChecks/2 + 1
+	require.Less(t, deepFlip, totalChecks)
+	deep := &causeAtNthCheck{
+		Context: context.Background(), n: deepFlip, cause: cancelCause}
+	selectors = identity()
+	err = quantileSortSelectors(deep, values, selectors)
+	require.ErrorIs(t, err, cancelCause)
+	require.EqualValues(t, deepFlip, deep.checks,
+		"the sort must abort on its first cancelled check")
+	require.NotEqual(t, identity(), selectors,
+		"the flip point sits inside the extraction phase, after real element moves")
+	require.NotEqual(t, finished, selectors,
 		"the aborted sort must not read like a completed sort")
 }
 
