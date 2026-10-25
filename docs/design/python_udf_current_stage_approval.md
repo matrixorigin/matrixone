@@ -637,3 +637,23 @@ execution stream. This allocation changes no lifecycle owner or round trip.
 Independent Architecture and SQL/Planner approval remains pending. This addendum
 records the rebase and mechanical allocation; it does not supply independent
 approval or extend the accepted development scope.
+
+
+## r30 — 2026-10-25 official-main weighted aggregate protocol preservation
+
+Governing artifact: `python_udf_current_stage.md` r30. Official main
+`9a7e12a93328a69bac7261beedc88930b7984a10` assigns MORPC 131 to exact
+weighted percentile aggregate dispatch. That published capability and its sender,
+placement and stream gates remain at 131. Python and shared routine revision
+repair use MORPC 132, exactly main latest + 1. Catalog 4.0.18 scheduling,
+Prepare and prepared reuse, publication/read, destination admission, receiver
+checks, execution-stream negotiation and GetPythonUdfStatus share this floor.
+The immediate predecessor 131 rejects Python before side effects while retaining
+weighted aggregate dispatch; rolling the active floor from 132 to 131 disables
+Python. Combined pipelines require the maximum capability of their contents.
+
+The maintenance rebase also retains upstream temporary-table ownership repairs,
+SHOW metadata typing and quoting, session timestamp precision, and weighted
+prepared percentile handling. It introduces no new runtime owner or round trip.
+Independent Architecture and SQL/Planner approval of r30 remains pending; this
+mechanical allocation does not supply that approval or extend development scope.
