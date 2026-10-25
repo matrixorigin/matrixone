@@ -255,7 +255,7 @@ class MatrixOneSQLBuilder:
         """Add WHERE condition with OR logic"""
         if conditions:
             combined = " OR ".join(f"({cond})" for cond in conditions)
-            return self.where(combined)
+            return self.where(f"({combined})")
         return self
 
     # GROUP BY clause methods
