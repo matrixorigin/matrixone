@@ -2747,7 +2747,8 @@ func TestInactiveAfterCannotConnect(t *testing.T) {
 	app := newTestApp(t, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
 		return conn.Write(msg, goetty.WriteOptions{Flush: true})
 	})
-	assert.NoError(t, app.Start())
+	require.NoError(t, app.Start())
+	t.Cleanup(func() { require.NoError(t, app.Stop()) })
 
 	testBackendSendWithoutServer(t,
 		testAddr,
@@ -2756,23 +2757,23 @@ func TestInactiveAfterCannotConnect(t *testing.T) {
 			defer cancel()
 			req := newTestMessage(1)
 			f, err := b.Send(ctx, req)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			defer f.Close()
 
 			resp, err := f.Get()
-			assert.NoError(t, err)
-			assert.Equal(t, req, resp)
+			require.NoError(t, err)
+			require.Equal(t, req, resp)
+			require.False(t, b.LastActiveTime().IsZero())
 
-			assert.NoError(t, app.Stop())
-			var v time.Time
-			for {
-				if b.LastActiveTime() == v {
-					break
-				}
-				time.Sleep(time.Millisecond * 100)
-			}
+			require.NoError(t, app.Stop())
+			require.Eventually(t, func() bool {
+				return b.LastActiveTime().IsZero()
+			}, 20*time.Second, 10*time.Millisecond,
+				"a failed reconnect must clear the backend's activity")
 		},
-		WithBackendConnectTimeout(time.Millisecond*100))
+		// The failure under test is reconnecting after the listener stops, not
+		// timing out the initial successful connection on a busy CI runner.
+		WithBackendConnectTimeout(10*time.Second))
 }
 
 func TestTCPProxyExample(t *testing.T) {
@@ -3269,6 +3270,7 @@ func testBackendSendWithAddr(t *testing.T, addr string,
 func testBackendSendWithoutServer(t *testing.T, addr string,
 	testFunc func(b *remoteBackend),
 	options ...BackendOption) {
+	t.Helper()
 
 	options = append(
 		options,
@@ -3276,7 +3278,7 @@ func testBackendSendWithoutServer(t *testing.T, addr string,
 		WithBackendBufferSize(1),
 		WithBackendLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel).With(zap.String("testcase", t.Name()))))
 	rb, err := NewRemoteBackend(addr, newTestCodec(), options...)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	b := rb.(*remoteBackend)
 	defer func() {

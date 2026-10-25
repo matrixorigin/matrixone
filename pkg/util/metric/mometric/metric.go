@@ -487,13 +487,6 @@ var SqlStatementCUTable = &table.Table{
 	SupportConstAccess: true,
 }
 
-// GetAllTables
-//
-// Deprecated: use table.GetAllTables() instead.
-func GetAllTables() []*table.Table {
-	return []*table.Table{SingleMetricTable, SqlStatementCUTable}
-}
-
 func NewMetricView(tbl string, opts ...table.ViewOption) *table.View {
 	view := &table.View{
 		Database:    MetricDBConst,

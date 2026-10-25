@@ -45,7 +45,6 @@ const (
 func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
-			defer testutils.AfterTest(t)()
 			ctx := context.Background()
 
 			dir := testutils.InitTestEnv(ModuleName, t)
@@ -138,7 +137,6 @@ func TestWriter_WriteBlockAndZoneMap(t *testing.T) {
 func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
-			defer testutils.AfterTest(t)()
 			ctx := context.Background()
 
 			dir := testutils.InitTestEnv(ModuleName, t)
@@ -226,7 +224,6 @@ func TestWriter_WriteBlockAfterAlter(t *testing.T) {
 func TestWriter_WriteBlockAndBF(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
-			defer testutils.AfterTest(t)()
 			ctx := context.Background()
 
 			dir := testutils.InitTestEnv(ModuleName, t)

@@ -87,4 +87,43 @@ prepare metadata_limit_reuse from 'select column_name from information_schema.co
 execute metadata_limit_reuse using @metadata_schema, @metadata_table, @metadata_column;
 execute metadata_limit_reuse using @metadata_schema, @metadata_table, @metadata_column;
 deallocate prepare metadata_limit_reuse;
+
+-- Literal defaults are values; expressions retain their SQL representation.
+set @column_default_sql_mode = @@session.sql_mode;
+set sql_mode = '';
+create table information_schema_data_type_case.default_probe (
+    missing varchar(32),
+    explicit_null varchar(32) default null,
+    empty_value varchar(32) default '',
+    quoted_null varchar(32) default 'NULL',
+    quote_value varchar(32) default 'it''s',
+    slash_value varchar(32) default 'a\\b',
+    newline_value varchar(32) default 'a\nb',
+    pattern_value varchar(32) default 'a\%b',
+    numeric_value int default 9,
+    date_value date default '2024-01-01',
+    expression_value json default (json_array())
+);
+select column_name, hex(column_default) as default_hex,
+       column_default is null as default_is_null
+from information_schema.columns
+where table_schema = 'information_schema_data_type_case' and table_name = 'default_probe'
+order by ordinal_position;
+
+-- Stored escaping is independent of the reader's current SQL mode.
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+select column_name, hex(column_default) as default_hex,
+       column_default is null as default_is_null
+from information_schema.columns
+where table_schema = 'information_schema_data_type_case' and table_name = 'default_probe'
+order by ordinal_position;
+alter table information_schema_data_type_case.default_probe
+    add mode_value varchar(32) default 'a\b';
+set sql_mode = '';
+select column_name, hex(column_default) as default_hex,
+       column_default is null as default_is_null
+from information_schema.columns
+where table_schema = 'information_schema_data_type_case' and table_name = 'default_probe'
+  and column_name = 'mode_value';
+set sql_mode = @column_default_sql_mode;
 drop database information_schema_data_type_case;

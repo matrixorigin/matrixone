@@ -46,6 +46,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -560,6 +562,29 @@ func geometryShowColumnType(typ *types.Type) string {
 	return ts
 }
 
+// columnDefaultValue renders a stored default for information_schema.COLUMNS:
+// DEFAULT NULL is SQL NULL and a string literal is its value, like MySQL.
+// Other defaults keep their origin text.
+func columnDefaultValue(origin string) []byte {
+	if origin == "" || strings.EqualFold(origin, "null") {
+		return nil
+	}
+	n := len(origin)
+	if n < 2 || origin[0] != '\'' || origin[n-1] != '\'' {
+		return functionUtil.QuickStrToBytes(origin)
+	}
+	// OriginString uses the persisted formatter's escapes, independently of
+	// the querying session's SQL mode. Keep lexical decoding with its owner.
+	scanner := mysql.NewScanner(dialect.MYSQL, origin)
+	defer mysql.PutScanner(scanner)
+	token, value := scanner.Scan()
+	if token != mysql.STRING || scanner.Pos != n {
+		return functionUtil.QuickStrToBytes(origin)
+	}
+	// A decoded empty literal is a non-NULL value, unlike an absent default.
+	return []byte(value)
+}
+
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[1])
@@ -591,7 +616,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			return functionUtil.QuickStrToBytes(def.OriginString), nil
+			return columnDefaultValue(def.OriginString), nil
 		}
 	case typNormal:
 		f = func(s []byte) ([]byte, error) {
@@ -1207,13 +1232,75 @@ func concatStringValue(source types.T, value []byte) ([]byte, error) {
 func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	ps := make([]vector.FunctionParameterWrapper[types.Varlena], len(parameters))
+	direct := !rs.GetResultVector().IsConst()
 	for i := range ps {
 		ps[i] = vector.GenerateFunctionStrParameter(parameters[i])
+		// JSON conversion can fail before a later NULL argument is visited.
+		// Keep that left-to-right behavior on the existing conversion path.
+		direct = direct && parameters[i].GetType().Oid != types.T_json
 	}
+	allocationLimit := mpool.MaxAllocationSize()
+	var inline [types.VarlenaInlineSize]byte
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if direct {
+			var size int64
+			isNull, tooLarge := false, false
+			for _, p := range ps {
+				value, null := p.GetStrValue(i)
+				if null {
+					isNull = true
+					break
+				}
+				if int64(len(value)) > allocationLimit-size {
+					tooLarge = true
+				} else if !tooLarge {
+					size += int64(len(value))
+				}
+			}
+			if isNull {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			// Check both the row length and cumulative area before arithmetic in
+			// the writer. A later NULL above still takes precedence over size.
+			if tooLarge || (size > types.VarlenaInlineSize &&
+				size > allocationLimit-int64(len(rs.GetResultVector().GetArea()))) {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			if size <= types.VarlenaInlineSize {
+				// Reuse bounded scratch for inline values. Passing a descriptor
+				// through the writer callback would allocate it on every row.
+				dst := inline[:int(size)]
+				offset := 0
+				for _, p := range ps {
+					value, _ := p.GetStrValue(i)
+					offset += copy(dst[offset:], value)
+				}
+				if err := rs.AppendBytes(dst, false); err != nil {
+					return err
+				}
+				continue
+			}
+			// Inputs remain owned by the child expressions. The synchronous
+			// writer reserves the result's storage before copying into it, so
+			// no intermediate concatenation escapes mpool admission.
+			if err := rs.AppendBytesWithWriter(int(size), func(dst []byte) error {
+				offset := 0
+				for _, p := range ps {
+					value, _ := p.GetStrValue(i)
+					offset += copy(dst[offset:], value)
+				}
+				return nil
+			}); err != nil {
 				return err
 			}
 			continue
@@ -2918,6 +3005,53 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	return nil
 }
 
+// DATETIME is a wall-clock value. Convert it directly using the session time
+// zone so a DST gap follows UNIX_TIMESTAMP's normalization policy instead of
+// the strict DATETIME-to-TIMESTAMP assignment cast.
+func builtInUnixTimestampDatetime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
+	zone := proc.GetSessionInfo().TimeZone
+	if result.GetResultVector().GetType().Oid == types.T_decimal128 {
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		for i := uint64(0); i < uint64(length); i++ {
+			value, null := p1.GetValue(i)
+			if null || value == types.ZeroDatetime {
+				if err := rs.Append(types.Decimal128{}, true); err != nil {
+					return err
+				}
+				continue
+			}
+			unixMicro := int64(value.ToTimestamp(zone)) - int64(types.UnixToTimestamp(0))
+			if unixMicro < 0 {
+				unixMicro = 0
+			}
+			if err := rs.Append(types.Decimal128{B0_63: uint64(unixMicro)}, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, null := p1.GetValue(i)
+		if null || value == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		unix := value.ToTimestamp(zone).Unix()
+		if unix < 0 {
+			unix = 0
+		}
+		if err := rs.Append(unix, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func parseTimestampForUnix(loc *time.Location, s string) (types.Timestamp, bool) {
 	ts, err := types.ParseTimestamp(loc, s, 6)
 	if err != nil {
@@ -4597,18 +4731,6 @@ func builtInToSeconds(parameters []*vector.Vector, result vector.FunctionResultW
 		rs.Append(DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetimeValue)+ADZeroSeconds, false)
 	}
 	return nil
-}
-
-// CalcToSeconds: CalcToDays is used to return a day number (the number of days since year 0)
-func CalcToSeconds(ctx context.Context, datetimes []types.Datetime, ns *nulls.Nulls) ([]int64, error) {
-	res := make([]int64, len(datetimes))
-	for idx, datetime := range datetimes {
-		if nulls.Contains(ns, uint64(idx)) {
-			continue
-		}
-		res[idx] = DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, datetime) + ADZeroSeconds
-	}
-	return res, nil
 }
 
 func builtInSin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

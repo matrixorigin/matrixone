@@ -118,6 +118,9 @@ class TestPitrManagerSQLGeneration(unittest.TestCase):
 
         expected_sql = "SHOW PITR WHERE pitr_name = 'test_pitr'"
         self.client.execute.assert_called_with(expected_sql)
+        self.assertIsNone(pitr.account_name)
+        self.assertIsNone(pitr.database_name)
+        self.assertIsNone(pitr.table_name)
         self.assertEqual(pitr.name, "test_pitr")
 
     def test_alter_pitr_sql(self):
@@ -263,6 +266,9 @@ class TestAsyncPitrManagerSQLGeneration(unittest.IsolatedAsyncioTestCase):
 
         expected_sql = "SHOW PITR WHERE pitr_name = 'test_pitr'"
         self.client.execute.assert_called_with(expected_sql)
+        self.assertIsNone(pitr.account_name)
+        self.assertIsNone(pitr.database_name)
+        self.assertIsNone(pitr.table_name)
 
     async def test_async_alter_pitr_sql(self):
         """Test async ALTER PITR SQL (should match sync)"""

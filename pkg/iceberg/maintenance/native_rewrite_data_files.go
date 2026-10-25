@@ -284,7 +284,7 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 			preservedManifestFiles(preservedDataManifests)...,
 		),
 		Summary: map[string]string{
-			"operation":           string(OperationRewriteDataFiles),
+			"operation":           "replace",
 			"engine":              "matrixone",
 			"idempotency-key":     firstNonEmptyString(req.IdempotencyKey, req.JobID),
 			"base-snapshot":       strconv.FormatInt(snapshot.SnapshotID, 10),
@@ -1075,7 +1075,7 @@ func buildRewriteDataFilesCommitAttempt(req RewriteDataFilesMaterializeRequest, 
 	if summary == nil {
 		summary = make(map[string]string)
 	}
-	summary["operation"] = string(OperationRewriteDataFiles)
+	summary["operation"] = "replace"
 	summary["engine"] = "matrixone"
 	summary["idempotency-key"] = req.IdempotencyKey
 	summary["base-snapshot"] = strconv.FormatInt(req.Snapshot.SnapshotID, 10)

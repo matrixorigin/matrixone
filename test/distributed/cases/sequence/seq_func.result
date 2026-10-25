@@ -29,12 +29,18 @@ create sequence s3 increment by 3 start with 10;
 select setval('s3', 20, false);
 setval(s3, 20, false)
 20
+select last_seq_num, is_called from s3;
+last_seq_num	is_called
+20	1
 select nextval('s3');
 nextval(s3)
 23
 select setval('s3', 50, true);
 setval(s3, 50, true)
 50
+select last_seq_num, is_called from s3;
+last_seq_num	is_called
+50	1
 select nextval('s3');
 nextval(s3)
 53
@@ -44,13 +50,29 @@ create sequence s4 increment by 3 start with 10;
 select setval('s4', 60, true);
 setval(s4, 60, true)
 60
+select last_seq_num, is_called from s4;
+last_seq_num	is_called
+60	0
 select nextval('s4');
 nextval(s4)
 60
 select setval('s4', 70, true);
 setval(s4, 70, true)
 70
+select last_seq_num, is_called from s4;
+last_seq_num	is_called
+70	1
 select nextval('s4');
 nextval(s4)
 73
+select setval('s4', 80, false);
+setval(s4, 80, false)
+80
+select last_seq_num, is_called from s4;
+last_seq_num	is_called
+80	1
+select nextval('s4');
+nextval(s4)
+83
 drop sequence if exists s4;
+drop sequence if exists s1;

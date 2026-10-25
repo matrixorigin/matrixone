@@ -1,0 +1,106 @@
+drop database if exists i30615_dump;
+create database i30615_dump;
+use i30615_dump;
+SET foreign_key_checks=0;
+CREATE TABLE b (id INT PRIMARY KEY, a_id INT, CONSTRAINT fk_b FOREIGN KEY (a_id) REFERENCES a(id) ON DELETE RESTRICT ON UPDATE RESTRICT);
+INSERT INTO b VALUES (2,1);
+CREATE TABLE a (id INT PRIMARY KEY, b_id INT, CONSTRAINT fk_a FOREIGN KEY (b_id) REFERENCES b(id) ON DELETE RESTRICT ON UPDATE RESTRICT);
+INSERT INTO a VALUES (1,2);
+SET foreign_key_checks=1;
+update i30615_dump.b set id=3 where id=2;
+Cannot delete or update a parent row: a foreign key constraint fails
+update i30615_dump.a set id=7 where id=1;
+Cannot delete or update a parent row: a foreign key constraint fails
+delete from i30615_dump.b where id=2;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+delete from i30615_dump.a where id=1;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+insert into i30615_dump.a values (9,999);
+Cannot add or update a child row: a foreign key constraint fails
+insert into i30615_dump.b values (8,888);
+Cannot add or update a child row: a foreign key constraint fails
+select * from i30615_dump.a order by id;
+id	b_id
+1	2
+select * from i30615_dump.b order by id;
+id	a_id
+2	1
+select count(*) from i30615_dump.a a left join i30615_dump.b b on a.b_id=b.id where a.b_id is not null and b.id is null;
+count(*)
+0
+select count(*) from i30615_dump.b b left join i30615_dump.a a on b.a_id=a.id where b.a_id is not null and a.id is null;
+count(*)
+0
+drop database if exists i30615_sf;
+create database i30615_sf;
+use i30615_sf;
+SET foreign_key_checks=0;
+CREATE TABLE b (id INT PRIMARY KEY, a_id INT, CONSTRAINT fk_b FOREIGN KEY (a_id) REFERENCES a(id) ON DELETE RESTRICT ON UPDATE RESTRICT);
+CREATE TABLE a (id INT PRIMARY KEY, b_id INT, CONSTRAINT fk_a FOREIGN KEY (b_id) REFERENCES b(id) ON DELETE RESTRICT ON UPDATE RESTRICT);
+INSERT INTO b VALUES (2,null);
+INSERT INTO a VALUES (1,2);
+UPDATE b SET a_id=1 WHERE id=2;
+SET foreign_key_checks=1;
+update i30615_sf.b set id=3 where id=2;
+Cannot delete or update a parent row: a foreign key constraint fails
+update i30615_sf.a set id=7 where id=1;
+Cannot delete or update a parent row: a foreign key constraint fails
+delete from i30615_sf.b where id=2;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+select * from i30615_sf.a order by id;
+id	b_id
+1	2
+select * from i30615_sf.b order by id;
+id	a_id
+2	1
+drop database if exists i30615_bind;
+create database i30615_bind;
+use i30615_bind;
+SET foreign_key_checks=0;
+CREATE TABLE b (id INT PRIMARY KEY, a_id INT, CONSTRAINT fk_b FOREIGN KEY (a_id) REFERENCES a(id) ON DELETE RESTRICT ON UPDATE RESTRICT);
+SET foreign_key_checks=1;
+CREATE TABLE a (id INT PRIMARY KEY, b_id INT, CONSTRAINT fk_a FOREIGN KEY (b_id) REFERENCES b(id) ON DELETE RESTRICT ON UPDATE RESTRICT);
+INSERT INTO b VALUES (2,null);
+INSERT INTO a VALUES (1,2);
+UPDATE b SET a_id=1 WHERE id=2;
+update i30615_bind.b set id=3 where id=2;
+Cannot delete or update a parent row: a foreign key constraint fails
+update i30615_bind.a set id=7 where id=1;
+Cannot delete or update a parent row: a foreign key constraint fails
+delete from i30615_bind.b where id=2;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+delete from i30615_bind.a where id=1;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+insert into i30615_bind.a values (9,999);
+Cannot add or update a child row: a foreign key constraint fails
+select * from i30615_bind.a order by id;
+id	b_id
+1	2
+select * from i30615_bind.b order by id;
+id	a_id
+2	1
+drop database if exists i30615_pair;
+create database i30615_pair;
+use i30615_pair;
+SET foreign_key_checks=0;
+CREATE TABLE p (id INT PRIMARY KEY);
+CREATE TABLE c (id INT PRIMARY KEY, pid INT, CONSTRAINT fk_pc FOREIGN KEY (pid) REFERENCES p(id) ON DELETE RESTRICT ON UPDATE RESTRICT);
+INSERT INTO p VALUES (1);
+INSERT INTO c VALUES (1,1);
+SET foreign_key_checks=1;
+update i30615_pair.p set id=5 where id=1;
+Cannot delete or update a parent row: a foreign key constraint fails
+delete from i30615_pair.p where id=1;
+internal error: Cannot delete or update a parent row: a foreign key constraint fails
+insert into i30615_pair.c values (2,9);
+Cannot add or update a child row: a foreign key constraint fails
+select * from i30615_pair.p order by id;
+id
+1
+select * from i30615_pair.c order by id;
+id	pid
+1	1
+drop database i30615_dump;
+drop database i30615_sf;
+drop database i30615_bind;
+drop database i30615_pair;

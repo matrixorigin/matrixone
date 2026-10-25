@@ -17,11 +17,13 @@ package plan
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
@@ -202,6 +204,65 @@ func TestViewMetadataBranchesShareWorkAndReleaseCancellation(t *testing.T) {
 	_, err := DescribeViewMetadata(r.Context(), "tpch", "current_v", nil)
 	require.ErrorIs(t, err, ErrViewSchemaLimit)
 	require.Zero(t, f.generation.Used())
+}
+
+// collectNodeScanTables returns the lowercased names of every physical table
+// scanned by the query, so tests can distinguish the logical description path
+// from a persisted-column fallback.
+func collectNodeScanTables(query *Query) map[string]bool {
+	tables := make(map[string]bool)
+	if query == nil {
+		return tables
+	}
+	for _, node := range query.Nodes {
+		if node == nil || node.NodeType != planpb.Node_TABLE_SCAN || node.TableDef == nil {
+			continue
+		}
+		tables[strings.ToLower(node.TableDef.Name)] = true
+	}
+	return tables
+}
+
+// The SHOW rewrite must never fall back to the persisted View column snapshot:
+// user Views are described into a statement-local row source, while ordinary
+// tables keep their physical mo_catalog.mo_columns read. Losing either side
+// breaks the S2/S4 authority boundary documented for #30668.
+func TestShowColumnsSplitsPhysicalAndLogicalAuthority(t *testing.T) {
+	f := newViewSchemaTestFixture(t)
+	f.addView(t, "current_v", "select n_nationkey from nation")
+	r := NewViewMetadataRequest(t.Context(), f.provider)
+	defer r.Close()
+	ctx := &viewMetadataTestCompiler{viewSchemaTestCompiler: f.compiler, ctx: r.Context()}
+
+	for _, stmt := range []string{
+		"describe current_v",
+		"show columns from current_v",
+		"show full columns from current_v",
+		"show column_number from current_v",
+	} {
+		t.Run(stmt, func(t *testing.T) {
+			p, err := buildViewMetadataConsumerPlan(t, ctx, stmt, false)
+			require.NoError(t, err, stmt)
+			require.False(t, collectNodeScanTables(p.GetQuery())["mo_columns"],
+				stmt+": a described View must not scan the persisted column snapshot")
+		})
+	}
+	// Ordinary tables keep reading the physical catalog. The plain mock is used
+	// here on purpose: the authority split must not depend on an active derived
+	// metadata request.
+	for _, stmt := range []string{
+		"describe nation",
+		"show columns from nation",
+		"show full columns from nation",
+		"show column_number from nation",
+	} {
+		t.Run(stmt, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, stmt)
+			require.NoError(t, err, stmt)
+			require.True(t, collectNodeScanTables(p.GetQuery())["mo_columns"],
+				stmt+": ordinary tables keep their physical mo_columns read")
+		})
+	}
 }
 
 func TestViewMetadataCandidateFailureProvenance(t *testing.T) {

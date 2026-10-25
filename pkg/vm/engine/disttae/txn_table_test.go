@@ -807,26 +807,6 @@ func TestPKCheckHistoricalSnapshotFallbackIsTerminal(t *testing.T) {
 // 	ctx := context.Background()
 // 	mp := mpool.MustNewZero()
 
-// 	getRowIDsBatch := func(table *txnTable) *batch.Batch {
-// 		bat := batch.New(false, []string{catalog.Row_ID})
-// 		vec := vector.NewVec(types.T_Rowid.ToType())
-// 		iter := table.localState.NewRowsIter(
-// 			types.TimestampToTS(table.nextLocalTS()),
-// 			nil,
-// 			false,
-// 		)
-// 		l := 0
-// 		for iter.Next() {
-// 			entry := iter.Entry()
-// 			vector.AppendFixed(vec, entry.RowID, false, mp)
-// 			l++
-// 		}
-// 		iter.Close()
-// 		bat.SetVector(0, vec)
-// 		bat.SetZs(l, mp)
-// 		return bat
-// 	}
-
 // 	table := newTxnTableForTest(mp)
 
 // 	// insert
