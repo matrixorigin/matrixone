@@ -124,6 +124,20 @@ datetime(6)  ¦  6
 SELECT CAST(v AS CHAR) AS v FROM date_day_copy;
 ➤ v[12,65535,0]  𝄀
 2024-02-29 23:30:00.999999
+DROP TABLE date_day_copy;
+SET @d = CAST(CONCAT(CHAR(9), '20240228233000.999999', CHAR(9)) AS CHAR);
+EXECUTE p_date_day USING @d, @n;
+SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'date_day_copy';
+➤ column_type[12,65535,0]  ¦  datetime_precision[-5,64,0]  𝄀
+datetime(6)  ¦  6
+SELECT CAST(v AS CHAR) AS v FROM date_day_copy;
+➤ v[12,65535,0]  𝄀
+2024-02-29 23:30:00.999999
+PREPARE p_compact FROM 'SELECT CAST(DATE_ADD(?, INTERVAL 1 DAY) AS CHAR) AS added, CAST(DATE_SUB(?, INTERVAL 1 MONTH) AS CHAR) AS subtracted';
+EXECUTE p_compact USING @d, @d;
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+2024-02-29 23:30:00.999999  ¦  2024-01-28 23:30:00.999999
+DEALLOCATE PREPARE p_compact;
 DEALLOCATE PREPARE p_date_day;
 PREPARE p_day_select FROM 'SELECT DATE_ADD(?, INTERVAL 1 DAY) AS v';
 SET @d = '2024-02-28';

@@ -91,6 +91,15 @@ SET @n = CAST(1 AS DECIMAL(2,1));
 EXECUTE p_date_day USING @d, @n;
 SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'date_day_copy';
 SELECT CAST(v AS CHAR) AS v FROM date_day_copy;
+-- Formatting must use the same whitespace normalization as the temporal parser.
+DROP TABLE date_day_copy;
+SET @d = CAST(CONCAT(CHAR(9), '20240228233000.999999', CHAR(9)) AS CHAR);
+EXECUTE p_date_day USING @d, @n;
+SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'date_day_copy';
+SELECT CAST(v AS CHAR) AS v FROM date_day_copy;
+PREPARE p_compact FROM 'SELECT CAST(DATE_ADD(?, INTERVAL 1 DAY) AS CHAR) AS added, CAST(DATE_SUB(?, INTERVAL 1 MONTH) AS CHAR) AS subtracted';
+EXECUTE p_compact USING @d, @d;
+DEALLOCATE PREPARE p_compact;
 DEALLOCATE PREPARE p_date_day;
 
 -- SELECT retains a widened family for this handle; a fresh handle starts at DATE.

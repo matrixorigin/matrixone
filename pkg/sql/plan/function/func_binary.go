@@ -2713,6 +2713,8 @@ func dateStringInterval(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			}
 			continue
 		}
+		// Match ParseDatetime normalization after success; diagnostics above use the raw input.
+		text = strings.TrimSpace(text)
 		// Compact 14-digit calendars carry a clock even without separators.
 		hasTimePart := strings.ContainsAny(text, " :T") || len(text) >= 14 && isAllDigits(text[:14])
 		var formatted string
