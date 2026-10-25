@@ -198,6 +198,11 @@ func (c *Compile) collectMemoryManifests(target int64) (map[string]*memoryCNMani
 			return nil, nil, err
 		}
 	}
+	for _, entry := range manifests {
+		if !c.memoryPipelineChannelsFit(entry.manifest, func(scope *Scope) bool { return locations[scope] == entry.addr }) {
+			return nil, nil, nil
+		}
+	}
 	return manifests, locations, nil
 }
 
@@ -255,7 +260,7 @@ func (c *Compile) memoryCapabilities(ctx context.Context, entries []*memoryCNMan
 			return false, errors.New("empty memory capability response")
 		}
 		err = response.UnwrapError()
-		capable := response.GetProtocolVersion != nil && response.GetProtocolVersion.MemoryAdmission && response.GetProtocolVersion.MemoryAdmissionVersion >= query.MemoryAdmissionProtocolVersion
+		capable := response.GetProtocolVersion != nil && response.GetProtocolVersion.MemoryAdmission && response.GetProtocolVersion.MemoryAdmissionVersion == query.MemoryAdmissionProtocolVersion
 		if capable {
 			entry.processID = response.GetProtocolVersion.MemoryAdmissionProcessId
 			// Earlier admission-capable peers lack physical resource identity.

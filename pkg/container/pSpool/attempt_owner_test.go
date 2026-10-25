@@ -4,6 +4,7 @@ package pSpool
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -44,7 +45,7 @@ func TestSpoolAttemptOwnerReclaimsMissingEndAfterReadersStop(t *testing.T) {
 			require.False(t, done)
 			borrowed, err := sp.ReceiveBatch(0)
 			require.NoError(t, err)
-			sp.ForceCleanup()
+			sp.ForceCleanupAfterTerminalSignal()
 			require.Positive(t, mp.AllocatedBytes(), "normal cleanup must preserve borrowed/queued frames")
 			require.Equal(t, []int64{11, 12}, vector.MustFixedColNoTypeCheck[int64](borrowed.Vecs[0]))
 			// The test now stops all readers without consuming End, matching the
@@ -93,8 +94,87 @@ func TestSpoolCopyFailureReturnsMessageAndCacheSlots(t *testing.T) {
 	got, err = sp.ReceiveBatch(0)
 	require.NoError(t, err)
 	require.Nil(t, got)
-	sp.Close()
+	sp.ForceCleanupAfterTerminalSignal()
 	require.Equal(t, baseline, mp.AllocatedBytes())
 	sp.CloseAfterReadersStopped()
 	require.Equal(t, baseline, mp.AllocatedBytes())
+}
+
+// Cache cleanup may run while a terminal receiver still retains data. Its Once
+// cannot also guard the joined-attempt slot destructor.
+func TestSpoolFinalDestructorAfterCacheCleanup(t *testing.T) {
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(srcMP) })
+	src := spoolOwnerInput(t, srcMP, 1)
+	for _, receivers := range []uint32{1, 2} {
+		t.Run(fmt.Sprintf("receivers_%d", receivers), func(t *testing.T) {
+			mp := mpool.MustNewZeroNoFixed()
+			t.Cleanup(func() { require.Zero(t, mp.AllocatedBytes()); mpool.DeleteMPool(mp) })
+			sp := InitMyPipelineSpool(mp, receivers)
+			t.Cleanup(sp.CloseAfterReadersStopped)
+			_, err := sp.SendBatch(context.Background(), SendToAllLocal, src, nil)
+			require.NoError(t, err)
+			held, err := sp.ReceiveBatch(0)
+			require.NoError(t, err)
+			sp.ForceCleanupAfterTerminalSignal()
+			require.True(t, sp.cleanupDone)
+			require.Equal(t, []int64{11, 12}, vector.MustFixedColNoTypeCheck[int64](held.Vecs[0]))
+			// No readers can run beyond this explicit fixture boundary.
+			sp.CloseAfterReadersStopped()
+			require.Zero(t, mp.AllocatedBytes())
+			for _, slot := range sp.shardPool {
+				require.Nil(t, slot.dataContent)
+			}
+			for _, receiver := range sp.rs {
+				require.False(t, receiver.hasLastPop)
+			}
+			sp.ReleaseCurrent(0)
+			sp.Abort(nil)
+			sp.CloseAfterReadersStopped()
+			require.Zero(t, mp.AllocatedBytes())
+		})
+	}
+}
+
+func TestSpoolAbortReusesAdmittedBookkeeping(t *testing.T) {
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(srcMP) })
+	src := spoolOwnerInput(t, srcMP, 1)
+	for _, receivers := range []uint32{1, 3} {
+		t.Run(fmt.Sprintf("receivers_%d", receivers), func(t *testing.T) {
+			mp := mpool.MustNewZeroNoFixed()
+			t.Cleanup(func() { require.Zero(t, mp.AllocatedBytes()); mpool.DeleteMPool(mp) })
+			sp := InitMyPipelineSpool(mp, receivers)
+			t.Cleanup(sp.CloseAfterReadersStopped)
+			refs, scratch := &sp.shardRefs[0], &sp.abortCurrentRefs[0]
+			require.Len(t, sp.shardRefs, len(sp.shardPool))
+			require.Len(t, sp.abortCurrentRefs, len(sp.shardPool))
+			_, err := sp.SendBatch(context.Background(), SendToAllLocal, src, nil)
+			require.NoError(t, err)
+			held, err := sp.ReceiveBatch(0)
+			require.NoError(t, err)
+			sp.Abort(context.Canceled)
+			require.Same(t, refs, &sp.shardRefs[0])
+			require.Same(t, scratch, &sp.abortCurrentRefs[0])
+			require.Equal(t, int32(1), sp.abortCurrentRefs[0]+sp.abortCurrentRefs[1])
+			require.Equal(t, []int64{11, 12}, vector.MustFixedColNoTypeCheck[int64](held.Vecs[0]))
+			require.Zero(t, testing.AllocsPerRun(1, func() { sp.Abort(context.Canceled) }))
+			sp.ReleaseCurrent(0)
+			require.Zero(t, mp.AllocatedBytes())
+		})
+	}
+}
+
+func TestSpoolFirstAbortAllocatesNoScratch(t *testing.T) {
+	for _, receivers := range []uint32{1, 3} {
+		mp := mpool.MustNewZeroNoFixed()
+		spools := []*PipelineSpool{InitMyPipelineSpool(mp, receivers), InitMyPipelineSpool(mp, receivers)}
+		next := 0
+		// AllocsPerRun warms up once and then measures the other spool's first Abort.
+		require.Zero(t, testing.AllocsPerRun(1, func() { spools[next].Abort(nil); next++ }))
+		for _, sp := range spools {
+			sp.CloseAfterReadersStopped()
+		}
+		mpool.DeleteMPool(mp)
+	}
 }

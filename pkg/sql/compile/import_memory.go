@@ -107,6 +107,9 @@ func (c *Compile) localMemoryManifest(unit int64) (MemoryManifest, error) {
 		manifest.Stages = append(manifest.Stages, memoryProducerStages(producers, ids[op], uint32(parallel))...)
 		return nil
 	})
+	if err == nil && !c.memoryPipelineChannelsFit(manifest, func(scope *Scope) bool { return scope.ipAddrMatch(c.addr) }) {
+		return MemoryManifest{}, nil
+	}
 	return manifest, err
 }
 
@@ -233,12 +236,9 @@ func (c *Compile) endImportMemory() {
 	if c.importMemory == nil {
 		return
 	}
-	// runOnce and the remote scope runner have joined local scopes, their
-	// pipeline cleanup and IO owners. A timed-out End wait must not orphan a
-	// native spool clone after this attempt returns its complete I promise.
-	for base := range c.importMemoryBases {
-		base.ClosePipelineSpoolsAfterReadersStopped()
-	}
+	// The joined owner drains every receiver edge (including direct remote
+	// notifications), then destroys slots, before returning its complete promise.
+	c.closePipelineSpoolsAfterReadersStopped()
 	for base, previous := range c.importMemoryBases {
 		if base.ImportMemory == c.importMemory {
 			base.ImportMemory = previous

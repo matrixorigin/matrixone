@@ -3,5 +3,7 @@
 package query
 
 // MemoryAdmissionProtocolVersion includes complete producer and expression
-// capacity contracts. Bool-only peers cannot reconstruct those promises.
-const MemoryAdmissionProtocolVersion uint32 = 2
+// capacity contracts plus durable pipeline/receiver and preallocated Abort metadata.
+// Only an exact match may admit a controlled graph; older and unknown future
+// contracts are not interchangeable capacity proofs.
+const MemoryAdmissionProtocolVersion uint32 = 3

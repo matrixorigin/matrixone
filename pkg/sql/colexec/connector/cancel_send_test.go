@@ -75,7 +75,7 @@ func TestConnectorCancelsQueuedDataWhenReceiverNeverStarts(t *testing.T) {
 		if resetJoined != nil {
 			select {
 			case <-resetJoined:
-			case <-time.After(process.PipelineSignalSendTimeout + time.Second):
+			case <-time.After(time.Second):
 				t.Error("Reset failed to join; cannot destroy its spool")
 				return
 			}
@@ -96,13 +96,12 @@ func TestConnectorCancelsQueuedDataWhenReceiverNeverStarts(t *testing.T) {
 	cancel(cause)
 	select {
 	case got := <-results:
-		require.ErrorIs(t, got.err, cause)
-		require.Nil(t, got.result.Batch)
+		require.NoError(t, got.err, "receiver closure is a control stop; Reset owns the durable terminal cause")
+		require.Equal(t, vm.ExecStop, got.result.Status)
 	case <-time.After(time.Second):
 		t.Fatal("unbuffered data publication ignored cancellation")
 	}
 	<-joined
-	require.True(t, sp.PublicationFailed())
 	require.Positive(t, mp.AllocatedBytes()-baseline)
 
 	receiver := process.InitPipelineSignalReceiver(baseCtx, []*process.WaitRegister{reg})
@@ -111,43 +110,35 @@ func TestConnectorCancelsQueuedDataWhenReceiverNeverStarts(t *testing.T) {
 	started := time.Now()
 	go func() {
 		defer close(resetDone)
-		op.Reset(proc, true, cause) // The production send/close timeouts remain 30s.
+		op.Reset(proc, true, cause)
 	}()
 	drained := receiver.WaitingEndWithTimeout(time.Second)
-	if !drained {
-		t.Error("real Reset did not deliver End: an orphaned frame consumed its terminal token")
-		// Failure-only fixture rescue for the old Reset witness: all readers
-		// have stopped, and the old Reset has queued an unnotified End. Read
-		// that End to join Reset safely. It is not counted as a passing drain.
-		end, err := sp.ReceiveBatch(0)
-		require.Nil(t, end)
-		require.ErrorIs(t, err, cause)
-	}
+
 	select {
 	case <-resetDone:
 	case <-time.After(time.Second):
 		t.Fatal("Reset entered its default 30s acknowledgement wait")
 	}
 	require.True(t, drained)
+	require.ErrorIs(t, reg.Err(), cause, "Reset preserves the failed-start cause durably")
 	require.Zero(t, receiver.State().Alive)
 	require.Less(t, time.Since(started), time.Second)
-	require.Same(t, sp, op.cleanupSpool)
+	require.Nil(t, op.cleanupSpool, "failed typed terminal aborts unborrowed data")
 	op.CleanupDeferredSpool()
-	require.Positive(t, mp.AllocatedBytes()-baseline, "ordinary cleanup must retain the unpublished frame")
+	require.Equal(t, baseline, mp.AllocatedBytes(), "DiscardUnsent and Abort retire unpublished data before root release")
 	proc.Base.ClosePipelineSpoolsAfterReadersStopped()
 	require.Equal(t, baseline, mp.AllocatedBytes())
 	proc.Base.ClosePipelineSpoolsAfterReadersStopped()
 	require.Equal(t, baseline, mp.AllocatedBytes(), "joined destruction is idempotent")
 
 	// Reuse the actual Connector after its failed generation. A new spool
-	// must return to the ordinary ordered data/End/ack protocol.
+	// must return to the ordinary ordered data/typed-End protocol.
 	proc.Ctx = context.Background()
 	proc.ReplaceTopCtx(proc.Ctx)
 	op.Reg = &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 1)}
 	op.SetChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{source}), 0)
 	require.NoError(t, op.Prepare(proc))
 	require.NotSame(t, sp, op.ctr.sp)
-	require.False(t, op.ctr.sp.PublicationFailed())
 	_, err := op.Call(proc)
 	require.NoError(t, err)
 	nextReceiver := process.InitPipelineSignalReceiver(proc.Ctx, []*process.WaitRegister{op.Reg})
@@ -167,6 +158,7 @@ func TestConnectorCancelsQueuedDataWhenReceiverNeverStarts(t *testing.T) {
 		t.Fatal("normal reused spool did not acknowledge End")
 	}
 	require.Zero(t, nextReceiver.State().Alive)
-	require.Nil(t, op.cleanupSpool, "successful generation must keep spool End/ack cleanup")
+	require.NotNil(t, op.cleanupSpool, "typed End defers cache cleanup")
+	op.CleanupDeferredSpool()
 	require.Equal(t, baseline, mp.AllocatedBytes())
 }

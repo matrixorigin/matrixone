@@ -18,7 +18,7 @@ import (
 // is quadratic in fanout, not one batch buffer per receiver. Batch data/areas,
 // dynamic Vecs/Attrs and per-cache byte-slice lists are charged separately.
 func MemoryMetadataBound(receivers uint32) (int64, bool) {
-	if receivers == 0 {
+	if receivers == 0 || receivers > math.MaxInt32 {
 		return 0, false
 	}
 	slots := max(uint64(2), uint64(receivers))
@@ -64,8 +64,9 @@ func MemoryMetadataBound(receivers uint32) (int64, bool) {
 		scanned  bool
 	}{
 		{slots, uint64(unsafe.Sizeof(pipelineSpoolMessage{})), true},
-		{slots, uint64(unsafe.Sizeof(bool(false))), false}, // doRefCheck.
-		{slots, uint64(unsafe.Sizeof(bool(false))), false}, // occupied, first Send.
+		{slots, uint64(unsafe.Sizeof(bool(false))), false},    // doRefCheck.
+		{slots, uint64(unsafe.Sizeof(atomic.Int32{})), false}, // Late shared borrower release after Abort.
+		{slots, uint64(unsafe.Sizeof(int32(0))), false},       // Abort scratch, allocated before execution.
 		{uint64(receivers), uint64(unsafe.Sizeof(receiver{})), true},
 		{slots, uint64(unsafe.Sizeof(readyToUseItem{})), true},
 		{slots, uint64(unsafe.Sizeof(oneBatchMemoryCache{})), true},
@@ -73,9 +74,6 @@ func MemoryMetadataBound(receivers uint32) (int64, bool) {
 		if !add(array.n, array.width, array.scanned) {
 			return 0, false
 		}
-	}
-	if receivers > 1 && !add(slots, uint64(unsafe.Sizeof(atomic.Int32{})), false) {
-		return 0, false
 	}
 	// Batch objects and queues are allocated separately inside initialization,
 	// so round one allocation before multiplying by their instance count.
