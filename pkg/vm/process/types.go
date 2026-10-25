@@ -199,7 +199,7 @@ type Session interface {
 type TemporaryTableDDL interface {
 	CheckTemporaryTableCapacity(context.Context) error
 	OwnsTemporaryTable(database, physicalName string) bool
-	PublishTemporaryTable(database, alias, physicalName string)
+	PublishTemporaryTable(database, alias, physicalName string, indexes map[string]string)
 	RetireTemporaryTable(database, alias, physicalName string, indexNames []string)
 }
 
