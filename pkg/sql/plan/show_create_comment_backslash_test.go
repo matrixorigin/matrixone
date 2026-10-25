@@ -41,6 +41,19 @@ func TestShowCreateTableCommentBackslashRoundTrip(t *testing.T) {
 			mode:      "NO_BACKSLASH_ESCAPES",
 			sourceSQL: `create table comment_bs (a int comment 'C:\dir\new it''s', b int) comment 'x\ty''z'`,
 		},
+		{
+			name:      "trailing slash and adjacent quote",
+			sourceSQL: `create table comment_bs (a int comment 'tail\\', b int) comment '\\''quoted'`,
+		},
+		{
+			name:      "control bytes",
+			sourceSQL: `create table comment_bs (a int comment 'a\nb\tc\0d\r', b int) comment 'x\ny\0z'`,
+		},
+		{
+			name:      "combined mode",
+			mode:      "ANSI_QUOTES,NO_BACKSLASH_ESCAPES",
+			sourceSQL: `create table comment_bs (a int comment 'tail\', b int) comment '\''quoted'`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
