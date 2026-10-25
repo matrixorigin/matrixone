@@ -99,3 +99,45 @@ func TestMoShowVisibleBinDefaultModesRemainSeparate(t *testing.T) {
 		require.True(t, succeed, info)
 	}
 }
+
+// SHOW COLUMNS / DESC Default must expose the default value like MySQL
+// (decoded literal), not a re-escaped SQL fragment. OriginString is already a
+// SQL literal, so mode 4 must not apply formatStr (which doubled quotes).
+func Test_BuiltIn_MoShowVisibleBinShowColumnsDefault(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		origin string
+		want   string
+		null   bool
+	}{
+		{origin: "", null: true},
+		{origin: "null", null: true},
+		{origin: "NULL", null: true},
+		{origin: "'n'", want: "n"},
+		{origin: "''", want: ""},
+		{origin: "'it''s'", want: "it's"},
+		{origin: "'x`y'", want: "x`y"},
+		{origin: `'a\\b'`, want: `a\b`},
+		{origin: "'NULL'", want: "NULL"},
+		{origin: "9", want: "9"},
+		{origin: "current_timestamp()", want: "current_timestamp()"},
+		{origin: "(json_array())", want: "(json_array())"},
+		{origin: "('x')", want: "('x')"},
+	} {
+		t.Run(tc.origin, func(t *testing.T) {
+			defBytes, err := types.Encode(&plan.Default{OriginString: tc.origin, NullAbility: true})
+			require.NoError(t, err)
+			input := tcTemp{
+				info: "show visible bin show columns default",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{string(defBytes)}, nil),
+					NewFunctionTestInput(types.T_uint8.ToType(), []uint8{defExprInShowColumns}, nil),
+				},
+				expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{tc.null}),
+			}
+			tcc := NewFunctionTestCase(proc, input.inputs, input.expect, builtInMoShowVisibleBin)
+			succeed, info := tcc.RunAndFree()
+			require.True(t, succeed, input.info, info)
+		})
+	}
+}
