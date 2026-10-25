@@ -243,6 +243,11 @@ _NATIVE_TOKEN_CASES = [
     ("SELECT $txt$O'Reilly$txt$, :v", {'v': 7}, ("O'Reilly", 7)),
     ('SELECT $9$? /* :ignored */$9$, ?', (7,), ('? /* :ignored */', 7)),
     ('SELECT 1 AS name$tag$, ?', (7,), (1, 7)),
+    ('SELECT /*!50000$$?$$*/, ?', (7,), ('?', 7)),
+    ('SELECT 1.0$$?$$, ?', (7,), (Decimal('1.0'), 7)),
+    ('SELECT .1$tag$? :ignored$tag$, :v', {'v': 7}, (Decimal('0.1'), 7)),
+    ('SELECT 1e+2$$?$$, ?', (7,), (100, 7)),
+    ('SELECT 1.2e3$$?$$, ?', (7,), (1200, 7)),
 ]
 
 

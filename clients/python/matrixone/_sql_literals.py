@@ -20,6 +20,9 @@ _NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 # Native unquoted identifiers allow digits, dollar signs and BMP characters.
 _WORD = re.compile(r'[A-Za-z0-9_$\u0080-\uffff]+')
 _DOLLAR_TAG = re.compile(r'\$[A-Za-z0-9_\u0080-\uffff]*\$')
+# Decimal points and signed exponents end numeric tokens before identifiers.
+# Native integer/unsigned-exponent tokens can instead promote to identifiers.
+_NUMBER = re.compile(r'(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE](?:[+-][0-9]*|[0-9]+))?|[0-9]+[eE][+-][0-9]*')
 
 
 def _json_scalar(value):
@@ -157,6 +160,12 @@ def substitute_parameters(sql, params, *, sql_mode=''):
             # delimiter/version bytes, but scan their SQL like the outer SQL.
             output.append('/*!')
             i += 3
+            if i < len(sql) and '0' <= sql[i] <= '9':
+                version = sql[i : i + 5]
+                if len(version) != 5 or any(ch < '0' or ch > '9' for ch in version):
+                    raise ValueError('Invalid SQL executable-comment version')
+                output.append(version)
+                i += 5
             continue
         if char == '/' and sql.startswith('/*', i):
             end = sql.find('*/', i + 2)
@@ -182,6 +191,12 @@ def substitute_parameters(sql, params, *, sql_mode=''):
             output.append(sql_literal(value))
             i += 1 if char == '?' else 2
             continue
+        if char == '.' or '0' <= char <= '9':
+            number = _NUMBER.match(sql, i)
+            if number:
+                output.append(number.group())
+                i = number.end()
+                continue
         # Consume identifiers as tokens, so name$tag$ never starts a string.
         word = _WORD.match(sql, i)
         if word:
