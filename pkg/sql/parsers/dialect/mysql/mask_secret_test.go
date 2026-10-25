@@ -867,3 +867,45 @@ func TestMaskSensitiveMalformedQuotedMap(t *testing.T) {
 	require.NotContains(t, got, "MALFORMED_QUOTE_CANARY")
 	require.Equal(t, got, MaskSensitiveSqlLiterals(got))
 }
+
+// #30747 review round 9, F2: a malformed credential map can be built from
+// individually valid tokens — the closing brace lands INSIDE a mispaired
+// string (`('foo\','secret_key'='X')} -- '`), so no LEX_ERROR ever fires and
+// the old fallback never ran. The scan ending INSIDE the credential state
+// machine (map never structurally closed) is itself the taint signal and
+// must trigger the conservative union fallback over the whole fragment.
+func TestMaskMalformedUnclosedMapTaintsStatement(t *testing.T) {
+	sql := `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='R9_MALFORMED_CANARY'} -- '`
+	got := MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R9_MALFORMED_CANARY")
+	require.Contains(t, got, "******")
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+
+	// variant: brace inside a dashed-comment string tail
+	sql = `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='R9_TAINT2'} # nonsense`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R9_TAINT2")
+
+	// no taint for structurally complete maps + trailing comment: `}` is a
+	// real token there, so the credential state resolves cleanly (the value
+	// itself is always masked by the normal map rule)
+	sql = `create stage s url='file:///x' credentials={'k'='v'} -- trailing note`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.Contains(t, got, "-- trailing note")
+	require.Contains(t, got, `'k'='******'}`)
+}
+
+// #30747 review round 9, F3: after an UNEVALUABLE sql_mode assignment the
+// tail is processed per statement under conservative masking, and a LATER
+// evaluable transition re-pins the effective mode — a constant-mode union
+// over the remainder cannot see that re-pinning and leaks the third
+// statement's credential.
+func TestMaskUnknownTailTransitionRePins(t *testing.T) {
+	sql := `set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); ` +
+		`create stage s1 url='file:///x' credentials={'k'='foo\','k2'='first'}; ` +
+		`set sql_mode=''; ` +
+		`create stage s2 url='file:///x' credentials={'k'='prefix\'R9_TRACE_TRANSITION_CANARY'}`
+	got := MaskSensitiveSqlLiteralsPerStatement(sql, 0)
+	require.NotContains(t, got, "R9_TRACE_TRANSITION_CANARY")
+	require.Contains(t, got, `credentials={'k'='******'}`, "re-pinned mode-0 masking for s2")
+}

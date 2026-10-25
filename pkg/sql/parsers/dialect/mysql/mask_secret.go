@@ -318,6 +318,19 @@ func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool
 		}
 	}
 
+	// Structural taint without any lexical error (#30747 review): a malformed
+	// map can still be made of individually valid tokens — `{'k'='foo\',`
+	// `'secret_key'='X'} -- '` — because the map's closing brace lands INSIDE
+	// a mispaired string, so the credential context never resolves. When the
+	// scan ends INSIDE the credential state machine (and it started outside
+	// one, so the context was armed here rather than inherited from a parse-
+	// error tail), the statement kept an open sensitive map: treat it like a
+	// malformed map so the conservative union fallback covers the whole
+	// fragment.
+	if initial == CredentialStateNone && credState != CredentialStateNone {
+		malformedMap = true
+	}
+
 	return spans, rawEdits, malformedMap
 }
 
@@ -362,10 +375,11 @@ func spliceCredentialMasks(sql string, spans [][2]int, rawEdits []credentialRawE
 // under the mode in effect at its start, and only SESSION-scope assignments
 // retune that tracking (`@sql_mode`, GLOBAL/PERSIST and @@global forms leave
 // the session alone). When a sql_mode assignment cannot be evaluated
-// faithfully (expression, DEFAULT, list values), the REST of the request is
-// kept whole and masked under EVERY lexical variant of the last known mode:
-// after an unknown transition even `;` splitting would be context-losing —
-// and masking is idempotent, so over-masking is the conservative direction.
+// faithfully (expression, DEFAULT, list values), the statements it governs
+// are conservatively masked under EVERY lexical variant of the last known
+// mode (#30747 review: unknown spans stay per-statement, so a LATER
+// evaluable transition still re-pins the mode — and masking is idempotent,
+// so over-masking is the conservative direction).
 func MaskSensitiveSqlLiteralsPerStatement(sql string, initial SQLModeFlags) string {
 	// Byte-level gates: a mode transition needs a top-level statement
 	// separator AND a sql_mode assignment. Without a raw ';' there is no
@@ -383,63 +397,99 @@ func MaskSensitiveSqlLiteralsPerStatement(sql string, initial SQLModeFlags) stri
 		return sql
 	}
 
-	type stmtSpan struct {
-		start, end int
-		mode       SQLModeFlags
-		known      bool
+	var builder strings.Builder
+	builder.Grow(len(sql))
+	for _, sp := range StatementSQLModes(sql, initial) {
+		piece := sql[sp.Start:sp.End]
+		if sp.Known {
+			piece = maskSensitiveSqlLiteralsScoped(piece, CredentialStateNone, true, sp.Mode)
+		} else {
+			piece = maskPieceUnderAllLexicalVariants(piece, sp.Mode)
+		}
+		builder.WriteString(piece)
 	}
-	var spans []stmtSpan
+	return builder.String()
+}
+
+// StatementSQLModeSpan is one statement's raw byte span [Start,End) of a
+// multi-statement request, together with the effective lexical SQL mode for
+// that statement as tracked from the request's initial session mode.
+type StatementSQLModeSpan struct {
+	Start, End int
+	Mode       SQLModeFlags
+	// Known is false when the effective mode is uncertain because an
+	// unevaluable sql_mode assignment (expression RHS, DEFAULT, a
+	// session-rejected value) governs this span.
+	Known bool
+	// SemiTerminated reports that the span ENDED at a detected `;` boundary
+	// (a trailing `;` inside a comment or string is content, not a boundary).
+	SemiTerminated bool
+}
+
+// StatementSQLModes splits a WHOLE multi-statement request into statement
+// spans under effective-mode tracking, so splitter and masker share ONE
+// boundary decision (#30747 review: two independent mode-sensitive passes —
+// one splitting under the default mode, one masking under the effective
+// mode — cut inside a credential literal and the tail lost its map context).
+// Session-scope `SET sql_mode` transitions re-pin the mode for following
+// statements, INCLUDING inside an unknown tail: after an unevaluable
+// assignment subsequent statements stay Known=false (conservatively union-
+// masked by the caller) until the next evaluable assignment re-pins the
+// mode. A `;` is a boundary only at BRACE DEPTH ZERO, so a semicolon that
+// sits inside a credentials map can never shear the map context off the
+// remainder.
+func StatementSQLModes(sql string, initial SQLModeFlags) []StatementSQLModeSpan {
+	if len(sql) == 0 {
+		return []StatementSQLModeSpan{{Start: 0, End: 0, Mode: initial, Known: true}}
+	}
+	if strings.IndexByte(sql, ';') < 0 {
+		return []StatementSQLModeSpan{{Start: 0, End: len(sql), Mode: initial, Known: true}}
+	}
+	var spans []StatementSQLModeSpan
 	mode := initial
 	known := true
 	stmtStart := 0
 	for stmtStart < len(sql) {
-		scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
-		scanner.Pos = stmtStart
-		previousToken := 0
-		stmtEnd := len(sql)
+		var stmtEnd int
+		semiTerminated := false
 		var typList []int
 		var valList []string
-		firstToken := true
-		collectTokens := false
-		for scanner.Pos < len(sql) {
-			typ, s := scanSensitiveToken(scanner, &previousToken)
-			if typ == EofChar() {
-				break
-			}
-			if firstToken {
-				firstToken = false
-				collectTokens = typ == SET
-			}
-			// Only a SET-initial statement can assign the session mode. Other
-			// statements need boundary discovery, not a retained token inventory.
-			if collectTokens {
-				typList = append(typList, typ)
-				valList = append(valList, s)
-			}
-			if typ == int(';') {
-				stmtEnd = scanner.Pos
-				break
+		if known {
+			stmtEnd, semiTerminated, typList, valList = splitOneStatement(sql, stmtStart, mode)
+		} else {
+			// UNKNOWN stretch: any constant guess about the lexical mode can
+			// pair quotes differently and swallow a following `;` (and even
+			// the next re-pinning SET) inside a string. Split at the
+			// SHORTEST boundary any lexical variant finds; every piece is
+			// then masked under every variant (over-masking is safe), so a
+			// boundary too early can only add context, never lose it
+			// (#30747 review: a transition INSIDE an unknown tail must still
+			// be found, while a credential's own `;` stays protected at
+			// brace depth > 0 in every variant).
+			stmtEnd = len(sql)
+			base := mode &^ SQLModeFlags(SQLModeNoBackslashEscapes|SQLModeANSIQuotes)
+			for variant := 0; variant < 4; variant++ {
+				v := base
+				if variant&1 != 0 {
+					v |= SQLModeFlags(SQLModeNoBackslashEscapes)
+				}
+				if variant&2 != 0 {
+					v |= SQLModeFlags(SQLModeANSIQuotes)
+				}
+				end, isSemi, tl, vl := splitOneStatement(sql, stmtStart, v)
+				if end < stmtEnd {
+					stmtEnd, semiTerminated, typList, valList = end, isSemi, tl, vl
+				}
 			}
 		}
-		PutScanner(scanner)
-		spans = append(spans, stmtSpan{stmtStart, stmtEnd, mode, known})
+		spans = append(spans, StatementSQLModeSpan{stmtStart, stmtEnd, mode, known, semiTerminated})
 		if newMode, ok, touched := setStatementSQLModeChange(typList, valList); touched {
-			// A SET in this statement governs the FOLLOWING statements.
+			// A SET in this statement governs the FOLLOWING statements; an
+			// evaluable one re-pins even after an unknown stretch.
 			if ok {
 				mode, known = newMode, true
 			} else {
-				// The effective mode for the REST of the request cannot be
-				// determined (expression RHS, DEFAULT, a session-rejected
-				// value). Then even SPLITTING further under the stale mode is
-				// unsound: a semicolon inside a credential literal of the
-				// unknown mode would fake a statement boundary whose context
-				// no per-variant mask can recover (#30747 review). Stop
-				// splitting and keep the remainder as ONE span masked under
-				// every lexical variant of the last known mode.
-				if stmtEnd < len(sql) {
-					spans = append(spans, stmtSpan{stmtEnd, len(sql), mode, false})
-				}
-				break
+				known = false
 			}
 		}
 		if stmtEnd <= stmtStart {
@@ -447,19 +497,61 @@ func MaskSensitiveSqlLiteralsPerStatement(sql string, initial SQLModeFlags) stri
 		}
 		stmtStart = stmtEnd
 	}
+	return spans
+}
 
-	var builder strings.Builder
-	builder.Grow(len(sql))
-	for _, sp := range spans {
-		piece := sql[sp.start:sp.end]
-		if sp.known {
-			piece = maskSensitiveSqlLiteralsScoped(piece, CredentialStateNone, true, sp.mode)
-		} else {
-			piece = maskPieceUnderAllLexicalVariants(piece, sp.mode)
+// splitOneStatement scans from start under mode and returns the end of the
+// first statement: the `;` at BRACE DEPTH ZERO (a credential map's embedded
+// `;` must not shear map context off the remainder), or end-of-input. The
+// token inventory of a SET-initial statement is returned for transition
+// detection; other statements need boundary discovery only.
+func splitOneStatement(sql string, start int, mode SQLModeFlags) (int, bool, []int, []string) {
+	scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
+	defer PutScanner(scanner)
+	scanner.Pos = start
+	previousToken := 0
+	braceDepth := 0
+	var typList []int
+	var valList []string
+	firstToken := true
+	collectTokens := false
+	for scanner.Pos < len(sql) {
+		typ, s := scanSensitiveToken(scanner, &previousToken)
+		if typ == EofChar() {
+			break
 		}
-		builder.WriteString(piece)
+		if firstToken {
+			firstToken = false
+			collectTokens = typ == SET
+		}
+		if collectTokens {
+			typList = append(typList, typ)
+			valList = append(valList, s)
+		}
+		switch typ {
+		case int('{'):
+			braceDepth++
+		case int('}'):
+			if braceDepth > 0 {
+				braceDepth--
+			}
+		case int(';'):
+			if braceDepth == 0 {
+				return scanner.Pos, true, typList, valList
+			}
+		}
 	}
-	return builder.String()
+	return len(sql), false, typList, valList
+}
+
+// MaskSensitiveSqlLiteralsUnderAllLexicalVariants masks credential literals
+// in sql when the effective lexical SQL mode CANNOT be inferred (an
+// unevaluable sql_mode assignment governs the span, #30747 review): it
+// unions — in original coordinates — the mask regions every lexical variant
+// of lastKnown marks, so no separator one mode hides inside a string token
+// of another can smuggle a credential through.
+func MaskSensitiveSqlLiteralsUnderAllLexicalVariants(sql string, lastKnown SQLModeFlags) string {
+	return maskPieceUnderAllLexicalVariants(sql, lastKnown)
 }
 
 // maskPieceUnderAllLexicalVariants is the conservative fallback for a

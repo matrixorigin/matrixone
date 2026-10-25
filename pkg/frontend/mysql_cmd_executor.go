@@ -71,6 +71,7 @@ import (
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -415,6 +416,25 @@ func redactStatementErrorForLogging(err error, text string, sqlMode string) erro
 type plainMaskedParseError string
 
 func (e plainMaskedParseError) Error() string { return string(e) }
+
+// reportParseErrorForClient normalizes a non-moerr parse failure for the two
+// audiences that consume it. moerr.NewParseError(ctx, ...) would push the
+// client-visible near-text into the error pipeline (error log + error_info)
+// as well; on a credential-bearing statement that echo carries secrets
+// (#30747). Report the redacted diagnostic copy with context instead, and
+// hand the client an error with the SAME conventional echo that never
+// touches the error pipeline (no-report context — the NoCtx constructors
+// still report through the ambient context). When the diagnostic copy is
+// identical to the client text, telemetry keeps its previous shape (only the
+// error-code envelope is added, as before).
+func reportParseErrorForClient(ctx context.Context, parseErr, diagnosticErr error) error {
+	if _, ok := parseErr.(*moerr.Error); ok {
+		return parseErr
+	}
+	noReport := errutil.ContextWithNoReport(ctx, true)
+	errutil.WithContext(ctx, moerr.NewParseError(noReport, diagnosticErr.Error()))
+	return moerr.NewParseError(noReport, parseErr.Error())
+}
 
 // maskQueryForDebugTrace prepares raw COM_QUERY text for the "query trace"
 // debug log: credential literals are masked FIRST (so no partial secret can
@@ -6550,8 +6570,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 		if sqlmongodb.RedactSQLForDiagnostics(errorInput.getSql()) != errorInput.getSql() {
 			parseErr = diagnosticErr
-		} else if _, ok := parseErr.(*moerr.Error); !ok {
-			parseErr = moerr.NewParseError(execCtx.reqCtx, parseErr.Error())
+		} else {
+			parseErr = reportParseErrorForClient(execCtx.reqCtx, parseErr, diagnosticErr)
 		}
 		// Keep the terminal error log on the same diagnostic boundary as
 		// RecordParseErrorStatement. Parse failures have no AST, so use the raw

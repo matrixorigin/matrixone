@@ -75,6 +75,7 @@ import (
 	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
@@ -12946,4 +12947,95 @@ func TestExecRequestSQLModeOperandTrace(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "NO_BACKSLASH_ESCAPES", mode)
 	}
+}
+
+// #30747 review round 9: the three named sinks — the by-statement record
+// text used for session state and telemetry, the client-visible parse-error
+// echo, and the debug trace — must all hide a semicolon-bearing credential
+// under NO_BACKSLASH_ESCAPES and a structurally-unclosed malformed map.
+func TestRound9CredentialBoundariesAcrossSinks(t *testing.T) {
+	// F1 shape: semicolon inside a credential under NBE
+	req := `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix;R9_X_CANARY'}`
+	records, err := sqlForRecordByStatementWithSQLMode(context.Background(), req, "NO_BACKSLASH_ESCAPES")
+	require.NoError(t, err)
+	for _, rec := range records {
+		require.NotContains(t, rec, "R9_X_CANARY")
+	}
+	out := maskQueryForDebugTrace(req, -1, "NO_BACKSLASH_ESCAPES")
+	require.NotContains(t, out, "R9_X_CANARY")
+	_, parseErr := mysql.ParseOneWithSQLMode(context.Background(), req, 1, "NO_BACKSLASH_ESCAPES")
+	if parseErr != nil {
+		require.NotContains(t, redactStatementErrorForLogging(parseErr, req, "NO_BACKSLASH_ESCAPES").Error(), "R9_X_CANARY")
+	}
+
+	// F2 shape: structurally unclosed map made of valid tokens
+	req2 := `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='R9_Y_CANARY'} -- '`
+	records, err = sqlForRecordByStatementWithSQLMode(context.Background(), req2, "")
+	if err == nil {
+		for _, rec := range records {
+			require.NotContains(t, rec, "R9_Y_CANARY")
+		}
+	}
+	out = maskQueryForDebugTrace(req2, -1, "")
+	require.NotContains(t, out, "R9_Y_CANARY")
+	_, parseErr = mysql.ParseOneWithSQLMode(context.Background(), req2, 1, "")
+	if parseErr != nil {
+		require.NotContains(t, redactStatementErrorForLogging(parseErr, req2, "").Error(), "R9_Y_CANARY")
+	}
+}
+
+// #30747 review round 9: a non-moerr parse failure is reported to the error
+// pipeline (error log + error_info) when it is wrapped for the client. The
+// pipeline copy must be the redacted diagnostic, while the client keeps the
+// conventional echo — a credential in the near-text must never reach error
+// telemetry.
+func TestReportParseErrorForClientKeepsPipelineRedacted(t *testing.T) {
+	prev := errutil.GetReportErrorFunc()
+	var mu sync.Mutex
+	var reported []string
+	errutil.SetErrorReporter(func(_ context.Context, err error, _ int) {
+		mu.Lock()
+		reported = append(reported, err.Error())
+		mu.Unlock()
+	})
+	defer errutil.SetErrorReporter(prev)
+	resetReported := func() {
+		mu.Lock()
+		reported = nil
+		mu.Unlock()
+	}
+
+	req := `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='R9_Z_CANARY'} -- '`
+	_, parseErr := mysql.ParseOneWithSQLMode(context.Background(), req, 1, "")
+	require.Error(t, parseErr)
+	diagnosticErr := redactStatementErrorForLogging(parseErr, req, "")
+	require.NotContains(t, diagnosticErr.Error(), "R9_Z_CANARY")
+
+	resetReported()
+	clientErr := reportParseErrorForClient(context.Background(), parseErr, diagnosticErr)
+	require.Error(t, clientErr)
+	// client-visible text keeps the conventional echo, unchanged from before
+	// (expectation built as plain text: moerr constructors themselves report
+	// through the ambient context inside the test harness)
+	require.Equal(t, "SQL parser error: "+parseErr.Error(), clientErr.Error())
+	// exactly one pipeline report and it is the redacted diagnostic copy
+	require.Len(t, reported, 1)
+	require.NotContains(t, reported[0], "R9_Z_CANARY")
+	require.Contains(t, reported[0], "syntax error")
+
+	// mundane parse failures keep their previous telemetry verbatim
+	// ("create stage" alone is a PositionedErr with no credentials involved)
+	_, mundaneErr := mysql.ParseOneWithSQLMode(context.Background(), "create stage", 1, "")
+	require.Error(t, mundaneErr)
+	resetReported()
+	mundaneClient := reportParseErrorForClient(context.Background(), mundaneErr, mundaneErr)
+	require.Len(t, reported, 1)
+	require.Contains(t, reported[0], mundaneErr.Error())
+	require.Equal(t, "SQL parser error: "+mundaneErr.Error(), mundaneClient.Error())
+
+	// moerr-typed failures were already reported at construction: pass through
+	passthrough := moerr.NewParseErrorNoCtx("typed")
+	resetReported()
+	require.Same(t, passthrough, reportParseErrorForClient(context.Background(), passthrough, passthrough))
+	require.Empty(t, reported)
 }

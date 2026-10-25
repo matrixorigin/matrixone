@@ -84,15 +84,48 @@ var HandleSqlForRecord = func(sql string) []string {
 // where string tokens — and therefore credential values — begin and end, so
 // the record mask must mirror the session parser (#30747 review).
 func HandleSqlForRecordWithSQLMode(sql string, sqlMode string) []string {
-	split := SplitSqlBySemicolon(sql)
 	flags := mysql.ParseSQLModeFlags(sqlMode)
-	for i := range split {
-		split[i] = handleSQLForRecordFragment(split[i], flags)
+	// Split with the SAME effective-mode tracking the per-statement masker
+	// uses: a default-mode semicolon scan can cut inside a credential literal
+	// whose quoting is only well-formed under the session mode, and the tail
+	// fragment then loses its map context before masking (#30747 review).
+	spans := mysql.StatementSQLModes(sql, flags)
+	type recordPiece struct {
+		text  string
+		mode  mysql.SQLModeFlags
+		known bool
+	}
+	pieces := make([]recordPiece, 0, len(spans))
+	for _, span := range spans {
+		if span.End <= span.Start {
+			continue
+		}
+		piece := strings.TrimSpace(sql[span.Start:span.End])
+		if span.SemiTerminated && strings.HasSuffix(piece, ";") {
+			// StatementSQLModes keeps the boundary ';' in the span; the
+			// record pieces deliberately exclude it (SplitSqlBySemicolon
+			// did). A `;` inside a comment or string is content and stays.
+			piece = strings.TrimSpace(piece[:len(piece)-1])
+		}
+		// SplitSqlBySemicolon drops a trailing whitespace-only tail that
+		// follows the last ';'-terminated statement (" ;   ;  " -> ["",""]);
+		// emptiness is judged on the RAW piece, before comment stripping.
+		if piece == "" && !span.SemiTerminated && len(pieces) > 0 {
+			continue
+		}
+		pieces = append(pieces, recordPiece{piece, span.Mode, span.Known})
+	}
+	if len(pieces) == 0 {
+		return []string{""}
+	}
+	split := make([]string, len(pieces))
+	for i, piece := range pieces {
+		split[i] = handleSQLForRecordFragment(piece.text, piece.mode, piece.known)
 	}
 	return split
 }
 
-func handleSQLForRecordFragment(sql string, flags mysql.SQLModeFlags) string {
+func handleSQLForRecordFragment(sql string, flags mysql.SQLModeFlags, modeKnown bool) string {
 	stripScanner := mysql.NewScanner(dialect.MYSQL, sql)
 	defer mysql.PutScanner(stripScanner)
 	//strip needed comment "/*XXX*/"
@@ -126,7 +159,14 @@ func handleSQLForRecordFragment(sql string, flags mysql.SQLModeFlags) string {
 		sql = strings.TrimSpace(builder.String())
 	}
 
-	sql = MaskSensitiveLiteralsForLoggingWithSQLMode(sql, flags)
+	if modeKnown {
+		sql = MaskSensitiveLiteralsForLoggingWithSQLMode(sql, flags)
+	} else {
+		// The statement's effective mode could not be inferred (unevaluable
+		// sql_mode assignment earlier in the request): conservatively mask
+		// the union of what every lexical variant sees (#30747 review).
+		sql = mysql.MaskSensitiveSqlLiteralsUnderAllLexicalVariants(sql, flags)
+	}
 	sql = strings.TrimSpace(sql)
 	return sql
 }

@@ -1055,3 +1055,24 @@ func TestEquivalentRewriteValuesAreValidatedBeforeKeySelection(t *testing.T) {
 	require.Len(t, chain, 1)
 	require.Contains(t, tree.String(chain[0].Stmt, dialect.MYSQL), "id = 1")
 }
+
+// #30747 review round 9, F1: a credential whose quoting is only well-formed
+// under NO_BACKSLASH_ESCAPES contains a top-level `;` token under DEFAULT
+// lexing. Splitting records under the default mode cut inside the map and
+// the tail lost its credential context, retaining the secret. The record
+// splitter must use the same effective-mode tracking as the masker.
+func TestHandleSqlForRecordWithSQLModeSemicolonInCredential(t *testing.T) {
+	req := `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix;R9_FINAL_CANARY'}`
+	records := HandleSqlForRecordWithSQLMode(req, "NO_BACKSLASH_ESCAPES")
+	require.Equal(t, 1, len(records))
+	require.NotContains(t, records[0], "R9_FINAL_CANARY")
+	require.Contains(t, records[0], `'k'='******','secret_key'='******'`)
+
+	// multi-statement shape: every record text hides the canary too
+	multi := req + "; select 2"
+	records = HandleSqlForRecordWithSQLMode(multi, "NO_BACKSLASH_ESCAPES")
+	require.Equal(t, 2, len(records))
+	for _, rec := range records {
+		require.NotContains(t, rec, "R9_FINAL_CANARY")
+	}
+}
