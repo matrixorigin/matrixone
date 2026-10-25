@@ -608,7 +608,6 @@ message Pipeline {
   repeated int32 nil_batch_cnt = 13;
 
   repeated UuidToRegIdx uuids_to_reg_idx = 14;
-  string memory_token = 15;
 }
 
 message WrapNode {

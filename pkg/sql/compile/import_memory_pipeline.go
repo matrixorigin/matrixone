@@ -16,7 +16,7 @@ import (
 // count. ParallelRun only duplicates each scope by its effective Mcpu. All
 // compiler channel constructors use 1, 10, shuffleChannelBufferSize, Mcpu or
 // len(scopes); hence this checked product covers the final, duplicated graph.
-// No new wire field is necessary: both peers use the complete existing DAG.
+// The manifest already describes the complete local DAG.
 func memoryPipelineChannelCapacity(manifest MemoryManifest) (uint64, bool) {
 	parallel := uint64(max(1, manifest.Parallel))
 	for _, stage := range manifest.Stages {
@@ -31,8 +31,8 @@ func memoryPipelineChannelCapacity(manifest MemoryManifest) (uint64, bool) {
 	return capacity, ok
 }
 
-// This is checked before any Open as well as while reconstructing the remote
-// promise. The fixed metadata cannot be made safe by reducing the byte unit.
+// Check metadata before admission. Fixed metadata cannot be made safe by
+// reducing the byte unit.
 func memoryPipelineMetadataFits(manifest MemoryManifest, capacity uint64) bool {
 	edge, ok := process.PipelineEdgeMetadataBound(capacity)
 	if !ok {
@@ -76,8 +76,8 @@ func memoryPipelineMetadataFits(manifest MemoryManifest, capacity uint64) bool {
 }
 
 // Validate embedding/custom channel layouts too. Unknown topology stays legacy
-// before Open; admission is never repaired by a later runtime allocation.
-func (c *Compile) memoryPipelineChannelsFit(manifest MemoryManifest, owns func(*Scope) bool) bool {
+// before admission; a later runtime allocation cannot repair the bound.
+func (c *Compile) memoryPipelineChannelsFit(manifest MemoryManifest) bool {
 	parallel := max(1, manifest.Parallel)
 	for _, stage := range manifest.Stages {
 		parallel = max(parallel, int(stage.Count))
@@ -94,35 +94,33 @@ func (c *Compile) memoryPipelineChannelsFit(manifest MemoryManifest, owns func(*
 		if scope == nil {
 			return true
 		}
-		if owns(scope) {
-			if max(1, scope.NodeInfo.Mcpu) > parallel {
-				return false
-			}
-			if scope.Proc != nil {
-				for _, reg := range scope.Proc.Reg.MergeReceivers {
-					if !validReg(reg) {
-						return false
-					}
+		if max(1, scope.NodeInfo.Mcpu) > parallel {
+			return false
+		}
+		if scope.Proc != nil {
+			for _, reg := range scope.Proc.Reg.MergeReceivers {
+				if !validReg(reg) {
+					return false
 				}
 			}
-			err := vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
-				switch value := op.(type) {
-				case *connector.Connector:
-					if !validReg(value.Reg) {
+		}
+		err := vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			switch value := op.(type) {
+			case *connector.Connector:
+				if !validReg(value.Reg) {
+					ok = false
+				}
+			case *dispatch.Dispatch:
+				for _, reg := range value.LocalRegs {
+					if !validReg(reg) {
 						ok = false
 					}
-				case *dispatch.Dispatch:
-					for _, reg := range value.LocalRegs {
-						if !validReg(reg) {
-							ok = false
-						}
-					}
 				}
-				return nil
-			})
-			if err != nil || !ok {
-				return false
 			}
+			return nil
+		})
+		if err != nil || !ok {
+			return false
 		}
 		for _, child := range scope.PreScopes {
 			if !walk(child) {

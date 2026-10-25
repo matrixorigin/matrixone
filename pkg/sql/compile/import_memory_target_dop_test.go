@@ -8,31 +8,14 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
-	"github.com/golang/mock/gomock"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,7 +65,7 @@ func TestImportMemoryTargetImpossiblePrefersDOPBeforeFittingSmallerUnit(t *testi
 	require.Less(t, old.UnitBytes(), specs[0].UnitBytes, "this is not the already-covered all-minima-impossible case")
 	old.Close()
 	m.reserveCalls = 0
-	err = c.admitImportMemory(context.Background(), m)
+	err = c.beginStatementImportMemory(context.Background(), m)
 	var retry *importDOPRetryError
 	require.ErrorAs(t, err, &retry)
 	require.Equal(t, 1, retry.next)
@@ -116,9 +99,9 @@ func TestImportMemoryTargetLimitBoundaryAndUnknownProvider(t *testing.T) {
 				available = min(total, limit)
 			}
 			m := &staticTargetAdmission{compilerMemoryAdmission: &compilerMemoryAdmission{real: rscthrottler.NewMemThrottler(t.Name(), .9), available: available}, limit: limit}
-			err = c.admitImportMemory(context.Background(), m)
+			err = c.beginStatementImportMemory(context.Background(), m)
 			if test.retry {
-				require.Equal(t, 1, MemoryRetryParallel(err))
+				require.Equal(t, 1, memoryRetryParallel(err))
 				require.Zero(t, m.reserveCalls)
 			} else {
 				require.NoError(t, err)
@@ -140,7 +123,7 @@ func TestImportMemoryTargetStaticFitKeepsActiveOwnerSmallerCandidate(t *testing.
 	m := &staticTargetAdmission{compilerMemoryAdmission: &compilerMemoryAdmission{
 		real: rscthrottler.NewMemThrottler(t.Name(), .9), available: available, owners: true,
 	}, limit: target}
-	require.NoError(t, c.admitImportMemory(context.Background(), m))
+	require.NoError(t, c.beginStatementImportMemory(context.Background(), m))
 	require.Equal(t, 1, m.reserveCalls)
 	require.Equal(t, len(specs), len(m.selected), "transient owner pressure must keep all candidate units")
 	require.Less(t, c.proc.Base.ImportMemory.UnitBytes, int64(64<<20))
@@ -152,9 +135,9 @@ func TestImportMemoryTargetRefreshCancellationWinsOverRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	m := &staticTargetAdmission{compilerMemoryAdmission: &compilerMemoryAdmission{}, limit: 1, onHeadroom: cancel}
-	err := c.admitImportMemory(ctx, m)
+	err := c.beginStatementImportMemory(ctx, m)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Zero(t, MemoryRetryParallel(err))
+	require.Zero(t, memoryRetryParallel(err))
 	require.Zero(t, m.reserveCalls)
 	require.Nil(t, c.proc.Base.ImportMemory)
 }
@@ -169,78 +152,17 @@ func TestImportMemoryTargetTotalSaturatesInsteadOfWrapping(t *testing.T) {
 }
 
 func TestImportMemoryPublicNarrowTargetFitPreservesPlanAndDOP(t *testing.T) {
-	previousRuntime := moruntime.ServiceRuntime("")
-	rt := moruntime.DefaultRuntime()
-	moruntime.SetupServiceBasedRuntime("", rt)
-	t.Cleanup(func() { moruntime.SetupServiceBasedRuntime("", previousRuntime) })
-	catalog.SetupDefines("")
-	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(string) (executor.Result, error) { return executor.Result{}, nil }))
-	client, err := cnclient.NewPipelineClient("", "test", &cnclient.PipelineConfig{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	setupMemoryLoadRuntime(t)
 	file := filepath.Join(t.TempDir(), "narrow.csv")
 	require.NoError(t, os.WriteFile(file, []byte("1|2|3|4\n"), 0600))
-	proc := testutil.NewProcess(t)
-	proc.GetSessionInfo().Buf = buffer.New()
-	t.Cleanup(func() { proc.Free(); proc.GetSessionInfo().Buf.Free() })
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "STRICT_TRANS_TABLES", nil })
-	ctrl := gomock.NewController(t)
-	txnClient, txnOp := newTestTxnClientAndOp(ctrl)
-	txnClient.(*mock_frontend.MockTxnClient).EXPECT().RefreshExpressionEnabled().Return(false).AnyTimes()
-	proc.Base.TxnClient = txnClient
-	// This public control represents an ordinary autocommit statement. The
-	// shared helper's zero options deliberately remain conservative for D34.
-	proc.Base.TxnOperator = &importMemoryTxnOptions{TxnOperator: txnOp, options: txn.TxnOptions{Autocommit: true}}
-	lockConfig := lockservice.Config{ServiceID: t.Name()}
-	lockConfig.Validate()
-	lockConfig.ServiceID = ""
-	lockSvc := mock_lock.NewMockLockService(ctrl)
-	lockSvc.EXPECT().GetConfig().Return(lockConfig).AnyTimes()
-	proc.Base.LockService = lockSvc
-	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
-	proc.Ctx = ctx
-	proc.ReplaceTopCtx(ctx)
-	base := plan2.NewEmptyCompilerContext()
-	base.SetContext(ctx)
-	base.DatabaseExistsFunc = func(string, *plan.Snapshot) bool { return true }
-	base.GetDatabaseIdFunc = func(string, *plan.Snapshot) (uint64, error) { return 1, nil }
-	cc := &memoryLoadCatalog{MockCompilerContext: base, proc: proc, tables: make(map[string]*plan.TableDef)}
-	statements, err := mysql.Parse(ctx, "create table memory_narrow_load (id bigint primary key, a bigint, b bigint, c bigint)", 1)
-	require.NoError(t, err)
-	create, err := plan2.BuildPlan(cc, statements[0], false)
-	require.NoError(t, err)
-	def := create.GetDdl().GetCreateTable().TableDef
-	def.TblId, def.DbName, def.TableType = 91000, "test", catalog.SystemOrdinaryRel
-	def.Cols = append(def.Cols, plan2.MakeRowIdColDef())
-	def.Name2ColIndex = make(map[string]int32)
-	for i, col := range def.Cols {
-		def.Name2ColIndex[col.Name] = int32(i)
-	}
-	cc.tables[strings.ToLower(def.Name)] = def
-	mockEngine := mock_frontend.NewMockEngine(ctrl)
-	db := mock_frontend.NewMockDatabase(ctrl)
-	rel := mock_frontend.NewMockRelation(ctrl)
-	mockEngine.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(db, nil).AnyTimes()
-	const addr = "127.0.0.1:6001"
-	mockEngine.EXPECT().Nodes(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(engine.Nodes{{Id: "test", Addr: addr, Mcpu: 4}}, nil).AnyTimes()
-	mockEngine.EXPECT().GetMessageCenter().Return(nil).AnyTimes()
-	db.EXPECT().GetDatabaseId(gomock.Any()).Return("1").AnyTimes()
-	rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
-	rel.EXPECT().CopyTableDef(gomock.Any()).DoAndReturn(func(context.Context) *plan.TableDef { return plan2.DeepCopyTableDef(def, true) }).AnyTimes()
-	rel.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
-	db.EXPECT().Relation(gomock.Any(), def.Name, gomock.Any()).Return(rel, nil).AnyTimes()
+	cc, ctrl := newMemoryLoadCatalog(t, true)
+	// This public control represents an ordinary autocommit statement.
+	cc.proc.Base.TxnOperator = &importMemoryTxnOptions{TxnOperator: cc.proc.Base.TxnOperator, options: txn.TxnOptions{Autocommit: true}}
 	// LOCAL/FALSE uses its real public planner fallback; no stats, write flags,
 	// source schema or threshold are injected to obtain the physical graph.
 	sql := fmt.Sprintf("load data local infile '%s' into table memory_narrow_load fields terminated by '|' parallel 'false'", file)
-	statements, err = mysql.Parse(ctx, sql, 1)
-	require.NoError(t, err)
-	pn, err := plan2.BuildPlan(cc, statements[0], false)
-	require.NoError(t, err)
-	c := NewCompile(addr, "test", sql, "", "", mockEngine, proc, statements[0], false, nil, time.Now())
-	t.Cleanup(c.Release)
-	t.Cleanup(c.endImportMemory)
-	c.ncpu = 4
-	require.NoError(t, c.Compile(ctx, pn, testPrint))
+	c := compileMemoryLoad(t, cc, ctrl, "create table memory_narrow_load (id bigint primary key, a bigint, b bigint, c bigint)", sql, 4)
+	ctx := c.proc.Ctx
 	require.True(t, c.supportsBoundedImportKeys())
 	before, err := c.localMemoryManifest(64 << 20)
 	require.NoError(t, err)
@@ -278,7 +200,7 @@ func TestImportMemoryPublicNarrowTargetFitPreservesPlanAndDOP(t *testing.T) {
 		walk(scope)
 	}
 	if writers != 4 || fanout != 4 {
-		for i, node := range pn.GetQuery().Nodes {
+		for i, node := range c.pn.GetQuery().Nodes {
 			t.Logf("public node%d type=%v stats=%+v", i, node.NodeType, node.Stats)
 		}
 	}

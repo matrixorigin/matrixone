@@ -7,16 +7,15 @@
 package compile
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestBroadcastSpillTopologyCodec(t *testing.T) {
@@ -56,26 +55,6 @@ func TestBroadcastSpillTopologyCodec(t *testing.T) {
 	build := operator.(*hashbuild.HashBuild)
 	require.True(t, build.CanSpill)
 	build.Release()
-}
-
-func TestStatementMemoryTokenScopeCodec(t *testing.T) {
-	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-	defer proc.Free()
-	original := newScope(Remote)
-	defer original.release()
-	original.Proc = proc
-	original.NodeInfo.Mcpu = 1
-	original.MemoryToken = "opaque-admitted-generation"
-	context := &scopeContext{id: 7, regs: make(map[*process.WaitRegister]int32)}
-	context.root = context
-	encoded, _, err := generatePipeline(original, context, 1)
-	require.NoError(t, err)
-	wire, err := encoded.Marshal()
-	require.NoError(t, err)
-	decoded, err := decodeScope(wire, proc, true, nil)
-	require.NoError(t, err)
-	defer decoded.release()
-	require.Equal(t, original.MemoryToken, decoded.MemoryToken)
 }
 
 func TestBroadcastSpillAdmissionGateCanRecoverNextAttempt(t *testing.T) {

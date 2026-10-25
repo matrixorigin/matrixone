@@ -9,16 +9,17 @@ package message
 import (
 	"bytes"
 	"context"
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"io"
 	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/stretchr/testify/require"
 )
@@ -183,7 +184,6 @@ func TestJoinSpillMemoryUsesActualReferences(t *testing.T) {
 
 func TestJoinSpillGroupAndBoardRetireMapOnce(t *testing.T) {
 	board := NewMessageBoard()
-	require.NoError(t, board.RetainStatementMemory())
 	group, err := board.BroadcastSpillGroup(71, []uint32{1})
 	require.NoError(t, err)
 	epoch := group.Epoch()
@@ -198,7 +198,7 @@ func TestJoinSpillGroupAndBoardRetireMapOnce(t *testing.T) {
 	jm.Free()
 	group.FinishParticipant(epoch, uint64(1)<<32)
 	require.Equal(t, int64(1), released.Load())
-	board.ReleaseStatementMemory()
+	board.Reset()
 	board.Reset()
 	require.Equal(t, int64(1), released.Load(), "group root, queued message, and repeated board cleanup share one release")
 }

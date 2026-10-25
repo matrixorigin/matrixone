@@ -243,7 +243,7 @@ func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
 }
 
 func (c *Compile) clear() {
-	defer func() { c.endImportMemory(); c.importMemoryRemote = false }()
+	defer c.endImportMemory()
 	if c.anal != nil {
 		c.anal.release()
 	}

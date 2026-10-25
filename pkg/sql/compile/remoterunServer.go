@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -95,11 +94,7 @@ func CnServerMessageHandler(
 		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
 		panic("cn server receive a message with unexpected type")
 	}
-	if msg.Cmd == pipeline.Method_StopSending && bytes.HasPrefix(msg.Data, []byte(MemoryControlMagic)) {
-		if handled, controlErr := handleMemoryControl(ctx, lockService.GetConfig().ServiceID, msg, cs, messageAcquirer); handled {
-			return controlErr
-		}
-	}
+
 	if msg.DebugMsg != "" {
 		logutil.Infof("%s, goRoutineId=%d", msg.GetDebugMsg(), goroutine.GetRoutineId())
 	}
@@ -209,19 +204,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
-		runCompile.importMemoryRemote = true
-		if s.MemoryToken != "" {
-			shared, detach, attachErr := AttachStatementMemory(runCompile.proc.GetService(), s.MemoryToken, runCompile.proc.GetMessageBoard(), runCompile.proc.Cancel)
-			if attachErr != nil {
-				return attachErr
-			}
-			runCompile.attachImportMemory(shared)
-			runCompile.importMemoryDetach = detach
-		} else {
-			// Older coordinators do not own a complete CN working-set ticket.
-			// Keep their existing in-memory broadcast ownership and semantics.
-			disableUncontrolledBroadcastSpill(s)
-		}
 		runCompile.beginSpillEpochs()
 
 		if err := registerRemoteDispatchReceivers(s, runCompile.proc); err != nil {

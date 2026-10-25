@@ -55,72 +55,81 @@ func outputMemoryBatch(t testing.TB, proc *process.Process, rows int, constant b
 // The same shared/constant projections reach each output branch. No physical
 // vector-size oracle is used: duplicate logical references count independently.
 func TestJoinOutputBudgetScope(t *testing.T) {
+	// Exercise each emitter in both budget modes. Flag combinations use the
+	// matched emitter: the other emitters do not branch on spill or shuffle.
 	for _, controlled := range []bool{false, true} {
-		for _, spilled := range []bool{false, true} {
-			for _, shuffle := range []bool{false, true} {
-				for _, branch := range []string{"matched", "unmatched", "empty", "finalize", "skew-finalize"} {
-					t.Run(fmt.Sprintf("controlled=%t/spilled=%t/shuffle=%t/%s", controlled, spilled, shuffle, branch), func(t *testing.T) {
-						proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
-						t.Cleanup(proc.Free)
-						if controlled {
-							proc.Base.ImportMemory = &process.ImportMemory{UnitBytes: 1}
-						}
-						left, right := outputMemoryBatch(t, proc, 3, true), outputMemoryBatch(t, proc, 3, false)
-						join := outputMemoryJoin()
-						join.IsShuffle = shuffle
-						require.NoError(t, join.Prepare(proc))
-						t.Cleanup(func() { join.Free(proc, false, nil) })
-						require.Equal(t, controlled, join.ctr.outputTarget > 0)
-						join.ctr.spillGeneration = spilled
-						join.ctr.leftBat, join.ctr.rightBats = left, []*batch.Batch{right}
-						join.resetResultBat()
-						result := vm.NewCallResult()
-						wantBytes := int64(3 * (types.VarlenaSize + 40))
-						switch branch {
-						case "matched":
-							require.NoError(t, join.ctr.appendOneMatch(join, proc, 0, 0, 0))
-						case "unmatched":
-							require.NoError(t, join.ctr.appendOneNotMatch(join, proc, 0))
-							wantBytes = int64(3*types.VarlenaSize + 40)
-						case "empty":
-							require.NoError(t, join.ctr.emptyProbe(join, proc, &result))
-							wantBytes = int64(3*types.VarlenaSize + 40)
-							if controlled {
-								require.Equal(t, 1, result.Batch.RowCount())
-							} else {
-								require.Equal(t, 3, result.Batch.RowCount())
-								require.Equal(t, 40, len(result.Batch.Vecs[0].GetArea()), "ordinary empty build retains the bulk shared-value copy")
-							}
-						case "finalize":
-							var matched bitmap.Bitmap
-							matched.InitWithSize(3)
-							matched.AddRange(0, 3)
-							join.ctr.rightMatchedIter = matched.Iterator()
-							require.NoError(t, join.ctr.finalize(join, proc, &result))
-							wantBytes = int64(3*types.VarlenaSize + 80)
-							if controlled {
-								require.Equal(t, 1, result.Batch.RowCount())
-							} else {
-								require.Equal(t, 3, result.Batch.RowCount())
-							}
-						case "skew-finalize":
-							require.NoError(t, join.appendSkewBuildRow(proc, 0))
-							wantBytes = int64(3*types.VarlenaSize + 80)
-						}
-						if controlled {
-							require.Equal(t, wantBytes, join.ctr.outputBytes)
-							require.True(t, join.ctr.outputFull())
-						} else {
-							require.Zero(t, join.ctr.outputBytes, "ordinary output has no byte accounting consumer, including spilled shuffle")
-							require.False(t, join.ctr.outputFull())
-						}
-					})
+		for _, test := range []struct {
+			branch           string
+			spilled, shuffle bool
+		}{
+			{branch: "matched"},
+			{branch: "unmatched"},
+			{branch: "empty"},
+			{branch: "finalize"},
+			{branch: "skew-finalize"},
+			{branch: "matched", spilled: true},
+			{branch: "matched", shuffle: true},
+			{branch: "matched", spilled: true, shuffle: true},
+		} {
+			t.Run(fmt.Sprintf("controlled=%t/spilled=%t/shuffle=%t/%s", controlled, test.spilled, test.shuffle, test.branch), func(t *testing.T) {
+				proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+				t.Cleanup(proc.Free)
+				if controlled {
+					proc.Base.ImportMemory = &process.ImportMemory{UnitBytes: 1}
 				}
-			}
+				left, right := outputMemoryBatch(t, proc, 3, true), outputMemoryBatch(t, proc, 3, false)
+				join := outputMemoryJoin()
+				join.IsShuffle = test.shuffle
+				require.NoError(t, join.Prepare(proc))
+				t.Cleanup(func() { join.Free(proc, false, nil) })
+				require.Equal(t, controlled, join.ctr.outputTarget > 0)
+				join.ctr.spillGeneration = test.spilled
+				join.ctr.leftBat, join.ctr.rightBats = left, []*batch.Batch{right}
+				join.resetResultBat()
+				result := vm.NewCallResult()
+				wantBytes := int64(3 * (types.VarlenaSize + 40))
+				switch test.branch {
+				case "matched":
+					require.NoError(t, join.ctr.appendOneMatch(join, proc, 0, 0, 0))
+				case "unmatched":
+					require.NoError(t, join.ctr.appendOneNotMatch(join, proc, 0))
+					wantBytes = int64(3*types.VarlenaSize + 40)
+				case "empty":
+					require.NoError(t, join.ctr.emptyProbe(join, proc, &result))
+					wantBytes = int64(3*types.VarlenaSize + 40)
+					if controlled {
+						require.Equal(t, 1, result.Batch.RowCount())
+					} else {
+						require.Equal(t, 3, result.Batch.RowCount())
+						require.Equal(t, 40, len(result.Batch.Vecs[0].GetArea()), "ordinary empty build retains the bulk shared-value copy")
+					}
+				case "finalize":
+					var matched bitmap.Bitmap
+					matched.InitWithSize(3)
+					matched.AddRange(0, 3)
+					join.ctr.rightMatchedIter = matched.Iterator()
+					require.NoError(t, join.ctr.finalize(join, proc, &result))
+					wantBytes = int64(3*types.VarlenaSize + 80)
+					if controlled {
+						require.Equal(t, 1, result.Batch.RowCount())
+					} else {
+						require.Equal(t, 3, result.Batch.RowCount())
+					}
+				case "skew-finalize":
+					require.NoError(t, join.appendSkewBuildRow(proc, 0))
+					wantBytes = int64(3*types.VarlenaSize + 80)
+				}
+				if controlled {
+					require.Equal(t, wantBytes, join.ctr.outputBytes)
+					require.True(t, join.ctr.outputFull())
+				} else {
+					require.Zero(t, join.ctr.outputBytes, "ordinary output has no byte accounting consumer, including spilled shuffle")
+					require.False(t, join.ctr.outputFull())
+				}
+			})
 		}
 	}
 }
-
 func TestJoinOutputRequiresPositiveUnitAndResetsMode(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	t.Cleanup(proc.Free)

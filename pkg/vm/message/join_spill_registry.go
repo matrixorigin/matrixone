@@ -56,7 +56,7 @@ func (m *MessageBoard) retainSpillBoardOnReset() bool {
 
 func (m *MessageBoard) releaseSpillBoard() {
 	m.spillMu.Lock()
-	ready := m.spillResetRequested && m.memoryRoots == 0
+	ready := m.spillResetRequested
 	for _, group := range m.spillGroups {
 		ready = ready && group.terminal()
 	}

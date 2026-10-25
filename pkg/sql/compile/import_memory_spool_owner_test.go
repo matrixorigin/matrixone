@@ -6,11 +6,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
-	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -19,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestImportMemoryRetiresAbandonedSpoolsBeforeDetaching(t *testing.T) {
+func TestImportMemoryRetiresAbandonedSpoolsAndTicket(t *testing.T) {
 	c := memoryCompileFixture(t, 1)
 	source := batch.NewWithSize(1)
 	t.Cleanup(func() { source.Clean(c.proc.Mp()) })
@@ -27,21 +29,18 @@ func TestImportMemoryRetiresAbandonedSpoolsBeforeDetaching(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(19), false, c.proc.Mp()))
 	source.SetRowCount(1)
 	baseline := c.proc.Mp().AllocatedBytes()
-	c.attachImportMemory(&process.ImportMemory{UnitBytes: 64})
+	ticket := installSpoolTestMemory(t, c)
 	sp := pSpool.InitMyPipelineSpool(c.proc.Mp(), 1)
 	t.Cleanup(sp.CloseAfterReadersStopped)
 	c.proc.RegisterPipelineSpool(sp)
 	_, err := sp.SendBatch(context.Background(), 0, source, nil)
 	require.NoError(t, err)
 	require.Greater(t, c.proc.Mp().AllocatedBytes(), baseline)
-	detached := false
-	c.importMemoryDetach = func() {
-		detached = true
-		require.Equal(t, baseline, c.proc.Mp().AllocatedBytes(), "no abandoned native clone may outlive the complete producer promise")
-	}
 	// The attempt has joined all senders/readers without receiving End.
 	c.endImportMemory()
-	require.True(t, detached)
+	_, err = ticket.AcquireInput(context.Background(), 0)
+	require.ErrorIs(t, err, rscthrottler.ErrWorkingSetClosed)
+	require.Equal(t, baseline, c.proc.Mp().AllocatedBytes(), "no abandoned native clone outlives retirement")
 	require.Nil(t, c.proc.Base.ImportMemory)
 	c.endImportMemory()
 	require.Equal(t, baseline, c.proc.Mp().AllocatedBytes())
@@ -77,9 +76,9 @@ func TestJoinedLegacySpoolCleanupPreservesUnownedControlledBase(t *testing.T) {
 	require.Equal(t, baseline, c.proc.Mp().AllocatedBytes())
 }
 
-// A receive-only CN can hold a direct remote frame without a local sending
-// spool. Its edge must be drained before the attached ticket detaches.
-func TestImportMemoryRetiresDirectRemoteEdgeBeforeDetaching(t *testing.T) {
+// An owned edge can accept a direct frame without a sending spool. Joined
+// retirement must drain that frame and preserve its terminal error.
+func TestImportMemoryRetiresDirectEdgeAndTicket(t *testing.T) {
 	c := memoryCompileFixture(t, 1)
 	source := batch.NewWithSize(1)
 	t.Cleanup(func() { source.Clean(c.proc.Mp()) })
@@ -87,7 +86,7 @@ func TestImportMemoryRetiresDirectRemoteEdgeBeforeDetaching(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(41), false, c.proc.Mp()))
 	source.SetRowCount(1)
 	baseline := c.proc.Mp().AllocatedBytes()
-	c.attachImportMemory(&process.ImportMemory{UnitBytes: 64})
+	ticket := installSpoolTestMemory(t, c)
 	edge := process.NewPipelineEdge(1, 1)
 	c.proc.Reg.MergeReceivers = []*process.WaitRegister{edge}
 	direct, err := source.Dup(c.proc.Mp())
@@ -97,8 +96,10 @@ func TestImportMemoryRetiresDirectRemoteEdgeBeforeDetaching(t *testing.T) {
 	_, ok := edge.PublishTerminal(process.NewErrorSignal(cause))
 	require.True(t, ok)
 	require.Greater(t, c.proc.Mp().AllocatedBytes(), baseline)
-	c.importMemoryDetach = func() { require.Equal(t, baseline, c.proc.Mp().AllocatedBytes()); require.Empty(t, edge.Ch2) }
 	c.endImportMemory()
+	_, err = ticket.AcquireInput(context.Background(), 0)
+	require.ErrorIs(t, err, rscthrottler.ErrWorkingSetClosed)
+	require.Empty(t, edge.Ch2)
 	require.ErrorIs(t, edge.Err(), cause, "drain must retain the settled terminal cause")
 	c.endImportMemory()
 	require.Equal(t, baseline, c.proc.Mp().AllocatedBytes())
@@ -124,7 +125,7 @@ func TestImportMemorySavedCurrentSurvivesCleanupPanicUntilJoinedRetirement(t *te
 			root.AppendChild(panicOp)
 			root.AppendChild(receiver)
 			c.scopes = []*Scope{{Proc: c.proc, RootOp: root}}
-			c.attachImportMemory(&process.ImportMemory{UnitBytes: 64})
+			ticket := installSpoolTestMemory(t, c)
 			var sp *pSpool.PipelineSpool
 			send := func() {
 				if spooled {
@@ -151,15 +152,16 @@ func TestImportMemorySavedCurrentSurvivesCleanupPanicUntilJoinedRetirement(t *te
 			require.ErrorIs(t, cleanupScopePipeline(pipeline.NewMerge(root), c.proc, false, primary), primary)
 			require.Equal(t, int64(43), vector.MustFixedColNoTypeCheck[int64](held.Batch.Vecs[0])[0], "the aborted cleanup never reached the receiver")
 			require.Greater(t, c.proc.Mp().AllocatedBytes(), baseline)
-			c.importMemoryDetach = func() { require.Equal(t, baseline, c.proc.Mp().AllocatedBytes()) }
 			c.endImportMemory()
+			_, err = ticket.AcquireInput(context.Background(), 0)
+			require.ErrorIs(t, err, rscthrottler.ErrWorkingSetClosed)
 			require.Empty(t, edge.Ch2)
 			require.Equal(t, baseline, c.proc.Mp().AllocatedBytes())
 			// A fresh prepared generation registers its own current owner. Old cleanup
 			// has neither a stale current batch nor a callback into this generation.
 			c.proc.BuildPipelineContext(context.Background())
 			edge.ResetTerminalStateForReuse()
-			c.attachImportMemory(&process.ImportMemory{UnitBytes: 64})
+			ticket = installSpoolTestMemory(t, c)
 			require.NoError(t, receiver.Prepare(c.proc))
 			spooled = false
 			send()
@@ -167,8 +169,21 @@ func TestImportMemorySavedCurrentSurvivesCleanupPanicUntilJoinedRetirement(t *te
 			require.NoError(t, err)
 			require.Equal(t, int64(43), vector.MustFixedColNoTypeCheck[int64](held.Batch.Vecs[0])[0])
 			c.endImportMemory()
+			_, err = ticket.AcquireInput(context.Background(), 0)
+			require.ErrorIs(t, err, rscthrottler.ErrWorkingSetClosed)
 			c.endImportMemory()
 			require.Equal(t, baseline, c.proc.Mp().AllocatedBytes())
 		})
 	}
+}
+
+// Use a real local root: its closure is observable through lease admission.
+func installSpoolTestMemory(t *testing.T, c *Compile) *rscthrottler.WorkingSet {
+	t.Helper()
+	throttler := rscthrottler.NewMemThrottler(t.Name(), .9, rscthrottler.WithConstLimit(1<<40))
+	ticket, err := rscthrottler.ReserveWorkingSet(context.Background(), throttler, rscthrottler.WorkingSetSpec{UnitBytes: 64, Inputs: []rscthrottler.InputSlotSpec{{Count: 1, Bytes: 64}}, IOBytes: 64})
+	require.NoError(t, err)
+	t.Cleanup(ticket.Close)
+	c.installImportMemory(&process.ImportMemory{UnitBytes: 64, WorkingSet: ticket})
+	return ticket
 }

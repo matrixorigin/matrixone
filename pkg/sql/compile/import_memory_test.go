@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -31,9 +30,18 @@ func memorySourceScope(addr string, parallel int, fields int32) *Scope {
 	return &Scope{NodeInfo: engine.Node{Addr: addr, Mcpu: parallel}, RootOp: op}
 }
 
+func (c *Compile) importMemoryLayout(unit int64) (*process.ImportMemory, rscthrottler.WorkingSetSpec, bool, error) {
+	manifest, err := c.localMemoryManifest(unit)
+	if err != nil {
+		return nil, rscthrottler.WorkingSetSpec{}, false, err
+	}
+	return memoryManifestLayout(manifest, unit)
+}
+
 func TestImportMemoryLayoutCountsLocalParallelStages(t *testing.T) {
-	local := "127.0.0.1:6001"
-	c := &Compile{addr: local, scopes: []*Scope{memorySourceScope(local, 3, 27), memorySourceScope("127.0.0.2:6001", 100, 1)}}
+	c := memoryCompileFixture(t, 3)
+	c.scopes = []*Scope{memorySourceScope(c.addr, 3, 27)}
+	c.scopes[0].Proc = c.proc
 	meta, spec, controlled, err := c.importMemoryLayout(64 << 20)
 	require.NoError(t, err)
 	require.True(t, controlled)
@@ -44,10 +52,32 @@ func TestImportMemoryLayoutCountsLocalParallelStages(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, expected, meta.SourceBytes, "sparse CSV field indexes must be admitted before parser allocation")
 	require.Equal(t, expected, spec.Inputs[0].Bytes)
-	c.scopes = c.scopes[1:]
+	remote := memorySourceScope("127.0.0.2:6001", 100, 1)
+	remote.Magic, remote.Proc = Remote, c.proc
+	c.scopes = append(c.scopes, remote)
 	_, _, controlled, err = c.importMemoryLayout(64 << 20)
 	require.NoError(t, err)
-	require.False(t, controlled, "a CN must not reserve another CN's input slots")
+	require.False(t, controlled, "a remote scope keeps the complete graph on its legacy path")
+}
+
+func TestImportMemoryLayoutCountsAllLocalSources(t *testing.T) {
+	c := memoryCompileFixture(t, 8)
+	c.scopes = []*Scope{memorySourceScope(c.addr, 3, 1), memorySourceScope(c.addr, 5, 4)}
+	for _, scope := range c.scopes {
+		scope.Proc = c.proc
+	}
+	_, spec, controlled, err := c.importMemoryLayout(32 << 20)
+	require.NoError(t, err)
+	require.True(t, controlled)
+	require.Equal(t, uint32(8), spec.Inputs[0].Count, "reserve every physical source copy before execution")
+}
+
+func memoryRetryParallel(err error) int {
+	var retry *importDOPRetryError
+	if errors.As(err, &retry) {
+		return retry.next
+	}
+	return 0
 }
 
 type compilerMemoryAdmission struct {
@@ -162,7 +192,7 @@ func (m *compilerCandidatesAdmission) ReserveWorkingSetCandidates(ctx context.Co
 func TestImportMemoryCandidateCapabilityUsesRealConsumer(t *testing.T) {
 	c := memoryCompileFixture(t, 1)
 	m := &compilerCandidatesAdmission{compilerMemoryAdmission: &compilerMemoryAdmission{real: rscthrottler.NewMemThrottler("compiler-candidates-real", .9)}}
-	require.NoError(t, c.admitImportMemory(context.Background(), m))
+	require.NoError(t, c.beginStatementImportMemory(context.Background(), m))
 	require.Equal(t, 1, m.candidateCalls)
 	require.Zero(t, m.tries, "the real candidate capability enters one FIFO node instead of probing through the older single-spec mock API")
 	require.Equal(t, int64(64<<20), c.proc.Base.ImportMemory.UnitBytes)
@@ -173,7 +203,7 @@ func TestImportMemoryCandidateCapabilityUsesRealConsumer(t *testing.T) {
 	c.ncpu = 2
 	c.scopes[0].NodeInfo.Mcpu = 2
 	var retry *importDOPRetryError
-	require.ErrorAs(t, c.admitImportMemory(context.Background(), m), &retry)
+	require.ErrorAs(t, c.beginStatementImportMemory(context.Background(), m), &retry)
 	require.Equal(t, 1, retry.next, "typed ownerless failure requests a real graph recompile rather than waiting forever")
 }
 
@@ -211,14 +241,14 @@ func TestImportMemoryAdmissionShrinksBeforeWaiting(t *testing.T) {
 	require.NoError(t, err)
 	budget := (workingLayoutTotal(large) + workingLayoutTotal(small)) / 2
 	m := &compilerMemoryAdmission{real: rscthrottler.NewMemThrottler("compiler-memory-test", .9), available: budget}
-	require.NoError(t, c.admitImportMemory(context.Background(), m))
+	require.NoError(t, c.beginStatementImportMemory(context.Background(), m))
 	require.Equal(t, int64(32<<20), c.proc.Base.ImportMemory.UnitBytes)
 	require.GreaterOrEqual(t, m.tries, 2)
 	require.Zero(t, m.waits, "without another owner, waiting cannot reduce this query's layout")
 	c.endImportMemory()
 	require.Nil(t, c.proc.Base.ImportMemory)
 	// Prepared/retry reuse creates a fresh root instead of retaining old credits.
-	require.NoError(t, c.admitImportMemory(context.Background(), m))
+	require.NoError(t, c.beginStatementImportMemory(context.Background(), m))
 	require.NotNil(t, c.proc.Base.ImportMemory)
 }
 
@@ -233,7 +263,7 @@ func TestImportMemoryAdmissionRequiresDOPRecompile(t *testing.T) {
 	require.NoError(t, err)
 	budget := (workingLayoutTotal(minimum) + workingLayoutTotal(single)) / 2
 	m := &compilerMemoryAdmission{available: budget}
-	err = c.admitImportMemory(context.Background(), m)
+	err = c.beginStatementImportMemory(context.Background(), m)
 	var next *importDOPRetryError
 	require.ErrorAs(t, err, &next)
 	require.Equal(t, 8, next.next)
@@ -281,7 +311,21 @@ func TestImportMemoryRecompileRebuildsParallelGraph(t *testing.T) {
 	require.NoError(t, original.Compile(ctx, fixture.pn, testPrint))
 	maxParallel := func(c *Compile) int {
 		maximum := 0
-		require.NoError(t, c.walkLocalImportOperators(func(_ vm.Operator, n int) error { maximum = max(maximum, n); return nil }))
+		var walk func(*Scope)
+		walk = func(scope *Scope) {
+			if scope == nil {
+				return
+			}
+			if scope.RootOp != nil {
+				maximum = max(maximum, max(1, scope.NodeInfo.Mcpu))
+			}
+			for _, child := range scope.PreScopes {
+				walk(child)
+			}
+		}
+		for _, scope := range c.scopes {
+			walk(scope)
+		}
 		return maximum
 	}
 	require.Greater(t, maxParallel(original), 1)

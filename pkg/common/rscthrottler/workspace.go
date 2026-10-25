@@ -87,9 +87,7 @@ type WorkingSet struct {
 	inputUsed     []uint32
 	inputWait     []chan struct{}
 	closed        bool
-	refs          int
 	inputRefs     int
-	retainedRefs  int
 	ioRefs        int
 	inputReleased bool
 	ioReleased    bool
@@ -156,15 +154,6 @@ func (w *WorkingSet) UnitBytes() int64 { return w.spec.UnitBytes }
 
 func (w *WorkingSet) IOBytes() int64 { return w.spec.IOBytes }
 
-func (w *WorkingSet) InputIndex(name string) (int, bool) {
-	for i, slot := range w.spec.Inputs {
-		if slot.Name == name {
-			return i, true
-		}
-	}
-	return 0, false
-}
-
 func (w *WorkingSet) AcquireInput(ctx context.Context, index int) (*InputLease, error) {
 	if index < 0 || index >= len(w.spec.Inputs) {
 		return nil, errors.New("invalid memory input slot")
@@ -185,7 +174,6 @@ func (w *WorkingSet) AcquireInput(ctx context.Context, index int) (*InputLease, 
 		}
 		if w.inputUsed[index] < w.spec.Inputs[index].Count {
 			w.inputUsed[index]++
-			w.refs++
 			w.inputRefs++
 			c.mu.Unlock()
 			return &InputLease{ticket: w, index: index}, nil
@@ -215,7 +203,7 @@ func (l *InputLease) Release() {
 	w.inputRefs--
 	close(w.inputWait[l.index])
 	w.inputWait[l.index] = make(chan struct{})
-	w.releaseRefLocked()
+	w.releasePromisesLocked()
 	c.mu.Unlock()
 }
 
@@ -233,7 +221,6 @@ func (w *WorkingSet) AcquireIO(ctx context.Context, need int64) (*WorkspaceLease
 		c.mu.Unlock()
 		return nil, ErrWorkingSetClosed
 	}
-	w.refs++
 	w.ioRefs++
 	c.ioQueue = append(c.ioQueue, n)
 	if c.queued != nil {
@@ -250,7 +237,7 @@ func (w *WorkingSet) AcquireIO(ctx context.Context, need int64) (*WorkspaceLease
 		if err != nil {
 			c.removeIOLocked(n)
 			w.ioRefs--
-			w.releaseRefLocked()
+			w.releasePromisesLocked()
 			c.mu.Unlock()
 			return nil, err
 		}
@@ -304,36 +291,9 @@ func (l *WorkspaceLease) Release() {
 	c.mu.Lock()
 	c.ioBusy = false
 	w.ioRefs--
-	w.releaseRefLocked()
+	w.releasePromisesLocked()
 	c.notifyIOLocked()
 	c.mu.Unlock()
-}
-
-// Retain holds both input and IO promises for a scope attached to an admitted
-// statement, including the interval before its operators acquire their leases.
-// The returned release is idempotent and may run after Close.
-func (w *WorkingSet) Retain() (func(), error) {
-	if w == nil {
-		return nil, ErrWorkingSetClosed
-	}
-	c := w.coordinator
-	c.mu.Lock()
-	if w.closed {
-		c.mu.Unlock()
-		return nil, ErrWorkingSetClosed
-	}
-	w.refs++
-	w.retainedRefs++
-	c.mu.Unlock()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			c.mu.Lock()
-			w.retainedRefs--
-			w.releaseRefLocked()
-			c.mu.Unlock()
-		})
-	}, nil
 }
 
 func (w *WorkingSet) Close() {
@@ -345,19 +305,18 @@ func (w *WorkingSet) Close() {
 	if !w.closed {
 		w.closed = true
 		close(w.closing)
-		w.releaseRefLocked()
+		w.releasePromisesLocked()
 	}
 	c.mu.Unlock()
 }
 
-func (w *WorkingSet) releaseRefLocked() {
-	w.refs--
+func (w *WorkingSet) releasePromisesLocked() {
 	c := w.coordinator
-	if w.closed && w.inputRefs == 0 && w.retainedRefs == 0 && !w.inputReleased {
+	if w.closed && w.inputRefs == 0 && !w.inputReleased {
 		w.inputReleased = true
 		c.inputPromise.Add(-w.inputBytes)
 	}
-	if w.closed && w.ioRefs == 0 && w.retainedRefs == 0 && !w.ioReleased {
+	if w.closed && w.ioRefs == 0 && !w.ioReleased {
 		w.ioReleased = true
 		var maximum int64
 		for ticket := range c.tickets {
@@ -367,7 +326,7 @@ func (w *WorkingSet) releaseRefLocked() {
 		}
 		c.workspacePromise.Store(maximum)
 	}
-	if w.refs == 0 {
+	if w.inputReleased && w.ioReleased {
 		delete(c.tickets, w)
 	}
 	c.notifyAdmissionLocked()

@@ -13,9 +13,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -47,30 +53,6 @@ func addMemorySlots(count *uint32, parallel, multiplier int) error {
 	return nil
 }
 
-func (c *Compile) walkLocalImportOperators(visit func(vm.Operator, int) error) error {
-	var walk func(*Scope) error
-	walk = func(scope *Scope) error {
-		if scope == nil {
-			return nil
-		}
-		for _, child := range scope.PreScopes {
-			if err := walk(child); err != nil {
-				return err
-			}
-		}
-		if !scope.ipAddrMatch(c.addr) {
-			return nil
-		}
-		return vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error { return visit(op, max(1, scope.NodeInfo.Mcpu)) })
-	}
-	for _, scope := range c.scopes {
-		if err := walk(scope); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // importMemoryNoWait is an origin policy: transactions that are not known to
 // be autocommit can retain previous statements' workspace and locks. Waiting
 // for those resources before this statement returns could wait on itself.
@@ -83,42 +65,185 @@ func (c *Compile) importMemoryNoWait() bool {
 	return options.ByBegin || !options.Autocommit
 }
 
-// localMemoryManifest uses actual planned copies, with no source allocation.
-func (c *Compile) localMemoryManifest(unit int64) (MemoryManifest, error) {
-	producers, ids, supported, err := c.memoryProducers()
-	if err != nil {
-		return MemoryManifest{}, err
-	}
-	if !supported {
-		return MemoryManifest{}, nil
-	}
-	manifest := MemoryManifest{TargetUnit: unit, Parallel: c.ncpu, NoWait: c.importMemoryNoWait(), Version: query.MemoryAdmissionProtocolVersion, Producers: producers}
-	err = c.walkLocalImportOperators(func(op vm.Operator, parallel int) error {
-		if uint64(parallel) > math.MaxUint32 {
-			return errors.New("too many import working slots")
+func memoryStage(op vm.Operator, count int) (MemoryStageDescriptor, bool, error) {
+	stage := MemoryStageDescriptor{Count: uint32(count)}
+	switch value := op.(type) {
+	case *external.External:
+		if !value.UsesMemoryInput() {
+			return stage, false, nil
 		}
-		stage, controlled, err := memoryStage(op, parallel)
-		if err != nil {
-			return err
+		stage.Role = MemoryStageCSV
+		stage.Schema, _ = value.MemoryInputSchema()
+		stage.RetainedFields = max(0, int(value.Es.ColumnListLen)+2)
+		for _, attr := range value.Es.Attrs {
+			stage.RetainedFields = max(stage.RetainedFields, int(attr.ColFieldIndex)+1)
 		}
-		if controlled {
-			manifest.Stages = append(manifest.Stages, stage)
+	case *multi_update.MultiUpdate:
+		if value.Action != multi_update.UpdateWriteS3 {
+			return stage, false, nil
 		}
-		manifest.Stages = append(manifest.Stages, memoryProducerStages(producers, ids[op], uint32(parallel))...)
-		return nil
-	})
-	if err == nil && !c.memoryPipelineChannelsFit(manifest, func(scope *Scope) bool { return scope.ipAddrMatch(c.addr) }) {
-		return MemoryManifest{}, nil
+		stage.Role = MemoryStageOutput
+		stage.InsertOnly = multi_update.InsertOnlyOutput(value.MultiUpdateCtx)
+		stage.TableCount = len(value.MultiUpdateCtx)
+		for _, table := range value.MultiUpdateCtx {
+			stage.Projections = append(stage.Projections, tableMemorySchema(table.TableDef))
+		}
+	case *insert.Insert:
+		if !value.ToWriteS3 || value.InsertCtx == nil {
+			return stage, false, nil
+		}
+		stage.Role = MemoryStageOutput
+		stage.InsertOnly = true
+		stage.TableCount = 1
+		stage.Schema = tableMemorySchema(value.InsertCtx.TableDef)
+	case *hashjoin.HashJoin:
+		stage.Role = MemoryStageJoin
+		stage.LeftTypes = value.LeftTypes
+		stage.RightTypes = value.RightTypes
+		stage.ResultCols = value.ResultCols
+		if value.NonEqCond != nil {
+			var err error
+			stage.NonEqExpression, err = value.NonEqCond.Marshal()
+			if err != nil {
+				return stage, false, err
+			}
+		}
+		stage.KeyExpressions = make([][][]byte, len(value.EqConds))
+		for side, expressions := range value.EqConds {
+			for _, expr := range expressions {
+				if expr == nil {
+					return stage, false, errors.New("nil join memory expression")
+				}
+				encoded, err := expr.Marshal()
+				if err != nil {
+					return stage, false, err
+				}
+				stage.KeyExpressions[side] = append(stage.KeyExpressions[side], encoded)
+			}
+		}
+	default:
+		return stage, false, nil
 	}
-	return manifest, err
+	return stage, true, nil
 }
 
-func (c *Compile) importMemoryLayout(unit int64) (*process.ImportMemory, rscthrottler.WorkingSetSpec, bool, error) {
-	manifest, err := c.localMemoryManifest(unit)
-	if err != nil {
-		return nil, rscthrottler.WorkingSetSpec{}, false, err
+// localMemoryManifest describes the complete eligible execution graph. The
+// producer walk rejects remote placement/receivers before constructing it.
+func (c *Compile) localMemoryManifest(unit int64) (MemoryManifest, error) {
+	producers, ids, supported, err := c.memoryProducers()
+	if err != nil || !supported {
+		return MemoryManifest{}, err
 	}
-	return memoryManifestLayout(manifest, unit)
+	manifest := MemoryManifest{TargetUnit: unit, Parallel: c.ncpu, NoWait: c.importMemoryNoWait(), Producers: producers}
+	var walk func(*Scope) error
+	walk = func(scope *Scope) error {
+		if scope == nil {
+			return nil
+		}
+		if err := vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			count := max(1, scope.NodeInfo.Mcpu)
+			if uint64(count) > uint64(^uint32(0)) {
+				return errors.New("import parallelism overflows manifest")
+			}
+			stage, controlled, err := memoryStage(op, count)
+			if err != nil {
+				return err
+			}
+			if controlled {
+				manifest.Stages = append(manifest.Stages, stage)
+			}
+			manifest.Stages = append(manifest.Stages, memoryProducerStages(producers, ids[op], uint32(count))...)
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, child := range scope.PreScopes {
+			if err := walk(child); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, scope := range c.scopes {
+		if err := walk(scope); err != nil {
+			return MemoryManifest{}, err
+		}
+	}
+	if !c.memoryPipelineChannelsFit(manifest) {
+		return MemoryManifest{}, nil
+	}
+	return manifest, nil
+}
+
+func (c *Compile) beginStatementImportMemory(ctx context.Context, throttler rscthrottler.RSCThrottler) error {
+	if c.isPrepare || c.importMemoryPrepared || !c.supportsBoundedImportKeys() {
+		return nil
+	}
+	manifest, err := c.localMemoryManifest(rscthrottler.BatchBytes(throttler))
+	if err != nil {
+		return err
+	}
+	hasSource := false
+	for _, stage := range manifest.Stages {
+		hasSource = hasSource || stage.Role == MemoryStageCSV && stage.Count > 0
+	}
+	if !hasSource {
+		return nil
+	}
+	memory, err := admitMemoryManifest(ctx, throttler, manifest)
+	if err == nil && memory != nil {
+		c.installImportMemory(memory)
+	}
+	return err
+}
+
+// Keep the complete statement on its existing path when any producer lacks a
+// bounded lifetime contract. Partition wrappers hide independent writers, memory
+// tables return retained raw data, and derived PreInsert columns still evaluate
+// an entire batch without a separate input/scratch promise.
+func (c *Compile) supportsBoundedImportKeys() bool {
+	supported := true
+	var walk func(*Scope)
+	walk = func(scope *Scope) {
+		if scope == nil || !supported {
+			return
+		}
+		vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			switch value := op.(type) {
+			case *insert.PartitionInsert, *multi_update.PartitionMultiUpdate:
+				supported = false
+			case *insert.Insert:
+				if value.ToWriteS3 && value.InsertCtx != nil {
+					_, memoryTable := value.InsertCtx.Engine.(*memoryengine.BindedEngine)
+					supported = supported && !memoryTable
+				}
+			case *preinsert.PreInsert:
+				supported = supported && value.CompPkeyExpr == nil && value.ClusterByExpr == nil
+			case *hashbuild.HashBuild:
+				supported = supported && hashbuild.SupportsBoundedSpillKeys(value.Conditions)
+			case *hashjoin.HashJoin:
+				if value.NonEqCond != nil {
+					supported = supported && hashbuild.SupportsBoundedSpillKeys([]*plan.Expr{value.NonEqCond})
+				}
+				supported = supported && len(value.EqConds) == 2
+				for _, side := range value.EqConds {
+					supported = supported && hashbuild.SupportsBoundedSpillKeys(side)
+				}
+			}
+			return nil
+		})
+		for _, child := range scope.PreScopes {
+			walk(child)
+		}
+	}
+	for _, scope := range c.scopes {
+		walk(scope)
+	}
+	if !supported {
+		return false
+	}
+	_, _, supported, err := c.memoryProducers()
+	return supported && err == nil
 }
 
 func workingLayoutTotal(spec rscthrottler.WorkingSetSpec) int64 {
@@ -170,21 +295,6 @@ func (c *Compile) beginImportMemory() error {
 	return c.beginStatementImportMemory(ctx, throttler)
 }
 
-func (c *Compile) admitImportMemory(ctx context.Context, throttler rscthrottler.RSCThrottler) error {
-	manifest, err := c.localMemoryManifest(rscthrottler.BatchBytes(throttler))
-	if err != nil {
-		return err
-	}
-	memory, err := admitMemoryManifest(ctx, throttler, manifest)
-	if err != nil {
-		return err
-	}
-	if memory != nil {
-		c.installImportMemory(memory)
-	}
-	return nil
-}
-
 func (c *Compile) installImportMemory(memory *process.ImportMemory) {
 	c.importMemory = memory
 	c.importMemoryBases = make(map[*process.BaseProcess]*process.ImportMemory)
@@ -199,15 +309,12 @@ func (c *Compile) installImportMemory(memory *process.ImportMemory) {
 		proc.Base.ImportMemory = memory
 	}
 	set(c.proc)
-	locations := c.memoryExecutionLocations()
 	var walk func(*Scope)
 	walk = func(scope *Scope) {
 		if scope == nil {
 			return
 		}
-		if locations[scope] == c.addr {
-			set(scope.Proc)
-		}
+		set(scope.Proc)
 		for _, child := range scope.PreScopes {
 			walk(child)
 		}
@@ -217,22 +324,7 @@ func (c *Compile) installImportMemory(memory *process.ImportMemory) {
 	}
 }
 
-// attachImportMemory binds a control-owned complete CN ticket. Scope cleanup
-// restores the process views and detaches; it never closes the control root.
-func (c *Compile) attachImportMemory(memory *process.ImportMemory) {
-	if memory == nil {
-		return
-	}
-	c.installImportMemory(memory)
-	c.importMemoryBorrowed = true
-}
-
 func (c *Compile) endImportMemory() {
-	c.clearImportMemoryTokens()
-	defer func() {
-		closeMemoryControls(c.importMemoryControls, nil)
-		c.importMemoryControls = nil
-	}()
 	if c.importMemory == nil {
 		return
 	}
@@ -244,14 +336,7 @@ func (c *Compile) endImportMemory() {
 			base.ImportMemory = previous
 		}
 	}
-	if c.importMemoryDetach != nil {
-		c.importMemoryDetach()
-		c.importMemoryDetach = nil
-	}
-	if !c.importMemoryBorrowed {
-		c.importMemory.WorkingSet.Close()
-	}
-	c.importMemoryBorrowed = false
+	c.importMemory.WorkingSet.Close()
 	c.importMemory = nil
 	c.importMemoryBases = nil
 }

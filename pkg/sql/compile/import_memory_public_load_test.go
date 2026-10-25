@@ -54,17 +54,7 @@ func (c *memoryLoadCatalog) ResolveIndexTableByRef(ref *plan.ObjectRef, name str
 }
 
 func TestImportMemoryPublicIndexedLoadCompileIsControlled(t *testing.T) {
-	previousRuntime := moruntime.ServiceRuntime("")
-	rt := moruntime.DefaultRuntime()
-	moruntime.SetupServiceBasedRuntime("", rt)
-	t.Cleanup(func() { moruntime.SetupServiceBasedRuntime("", previousRuntime) })
-	catalog.SetupDefines("")
-	// CREATE asks the internal executor whether catalog FK metadata refers to
-	// this new table. Reuse the planner's empty-catalog executor seam.
-	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(string) (executor.Result, error) { return executor.Result{}, nil }))
-	client, err := cnclient.NewPipelineClient("", "test", &cnclient.PipelineConfig{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	setupMemoryLoadRuntime(t)
 	// The modern planner chooses S3 from actual estimated cardinality, not the
 	// legacy LoadWriteS3 flag. One MiB of short, legal rows is sufficient to
 	// cross that public threshold. Only planning samples the file; no engine
@@ -88,71 +78,10 @@ func TestImportMemoryPublicIndexedLoadCompileIsControlled(t *testing.T) {
 		{name: "varlen-key-json-vector-two-fulltext", ddl: "create table memory_indexed_load (id varchar(255) not null primary key, question text, payload json, keywords text, embedding vecf64(1024), access_text varchar(511), identity_text varchar(512), deleted int, created_at timestamp default current_timestamp(), updated_at timestamp default current_timestamp() on update current_timestamp(), fulltext key ft_question(question) with parser ngram, fulltext key ft_keywords(keywords) with parser ngram, key ix_access_identity(access_text, identity_text))", file: wideFile, defaultLock: true, headroom: 22 << 30},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			proc.GetSessionInfo().Buf = buffer.New()
-			t.Cleanup(func() { proc.Free(); proc.GetSessionInfo().Buf.Free() })
-			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "STRICT_TRANS_TABLES", nil })
-			ctrl := gomock.NewController(t)
-			if fixture.defaultLock {
-				lockConfig := lockservice.Config{ServiceID: t.Name()}
-				lockConfig.Validate()
-				// Retain the existing isolated runtime namespace. Only the
-				// service identity changes; all real default capacity fields stay.
-				lockConfig.ServiceID = ""
-				lockSvc := mock_lock.NewMockLockService(ctrl)
-				lockSvc.EXPECT().GetConfig().Return(lockConfig).AnyTimes()
-				proc.Base.LockService = lockSvc
-			}
-			txnClient, txnOp := newTestTxnClientAndOp(ctrl)
-			txnClient.(*mock_frontend.MockTxnClient).EXPECT().RefreshExpressionEnabled().Return(false).AnyTimes()
-			proc.Base.TxnClient, proc.Base.TxnOperator = txnClient, txnOp
-			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
-			proc.Ctx = ctx
-			proc.ReplaceTopCtx(ctx)
-			base := plan2.NewEmptyCompilerContext()
-			base.SetContext(ctx)
-			base.DatabaseExistsFunc = func(string, *plan.Snapshot) bool { return true }
-			base.GetDatabaseIdFunc = func(string, *plan.Snapshot) (uint64, error) { return 1, nil }
-			cc := &memoryLoadCatalog{MockCompilerContext: base, proc: proc, tables: make(map[string]*plan.TableDef)}
-			statements, err := mysql.Parse(ctx, fixture.ddl, 1)
-			require.NoError(t, err)
-			create, err := plan2.BuildPlan(cc, statements[0], false)
-			require.NoError(t, err)
-			ct := create.GetDdl().GetCreateTable()
-			require.NotNil(t, ct)
-			all := append([]*plan.TableDef{ct.TableDef}, ct.IndexTables...)
-			mockEngine := mock_frontend.NewMockEngine(ctrl)
-			db := mock_frontend.NewMockDatabase(ctrl)
-			mockEngine.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(db, nil).AnyTimes()
-			const addr = "127.0.0.1:6001"
-			mockEngine.EXPECT().Nodes(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(engine.Nodes{{Id: "test", Addr: addr, Mcpu: 1}}, nil).AnyTimes()
-			mockEngine.EXPECT().GetMessageCenter().Return(nil).AnyTimes()
-			db.EXPECT().GetDatabaseId(gomock.Any()).Return("1").AnyTimes()
-			for i, def := range all {
-				def.TblId = uint64(90000 + i)
-				def.DbName = "test"
-				def.TableType = catalog.SystemOrdinaryRel
-				def.Cols = append(def.Cols, plan2.MakeRowIdColDef())
-				def.Name2ColIndex = make(map[string]int32)
-				for j, col := range def.Cols {
-					def.Name2ColIndex[col.Name] = int32(j)
-				}
-				cc.tables[strings.ToLower(def.Name)] = def
-				rel := mock_frontend.NewMockRelation(ctrl)
-				rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
-				rel.EXPECT().CopyTableDef(gomock.Any()).DoAndReturn(func(context.Context) *plan.TableDef { return plan2.DeepCopyTableDef(def, true) }).AnyTimes()
-				rel.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
-				db.EXPECT().Relation(gomock.Any(), def.Name, gomock.Any()).Return(rel, nil).AnyTimes()
-			}
+			cc, ctrl := newMemoryLoadCatalog(t, fixture.defaultLock)
 			sql := fmt.Sprintf("load data infile '%s' into table memory_indexed_load fields terminated by '|' parallel 'true'", fixture.file)
-			statements, err = mysql.Parse(ctx, sql, 1)
-			require.NoError(t, err)
-			pn, err := plan2.BuildPlan(cc, statements[0], false)
-			require.NoError(t, err)
-			c := NewCompile(addr, "test", sql, "", "", mockEngine, proc, statements[0], false, nil, time.Now())
-			t.Cleanup(c.Release)
-			c.ncpu = 1
-			require.NoError(t, c.Compile(ctx, pn, testPrint))
+			c := compileMemoryLoad(t, cc, ctrl, fixture.ddl, sql, 1)
+			proc, ctx := c.proc, c.proc.Ctx
 			var writeS3, flush int
 			var walk func(*Scope)
 			walk = func(scope *Scope) {
@@ -188,4 +117,96 @@ func TestImportMemoryPublicIndexedLoadCompileIsControlled(t *testing.T) {
 			require.Nil(t, proc.Base.ImportMemory)
 		})
 	}
+}
+
+// Public LOAD controls share catalog/engine setup while keeping their SQL,
+// transaction policy, topology and admission oracles in the individual tests.
+func setupMemoryLoadRuntime(t *testing.T) {
+	t.Helper()
+	previousRuntime := moruntime.ServiceRuntime("")
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime("", rt)
+	t.Cleanup(func() { moruntime.SetupServiceBasedRuntime("", previousRuntime) })
+	catalog.SetupDefines("")
+	// CREATE asks the internal executor whether catalog FK metadata refers to
+	// this new table. Reuse the planner's empty-catalog executor seam.
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, executor.NewMemExecutor(func(string) (executor.Result, error) { return executor.Result{}, nil }))
+	client, err := cnclient.NewPipelineClient("", "test", &cnclient.PipelineConfig{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+}
+
+func newMemoryLoadCatalog(t *testing.T, defaultLock bool) (*memoryLoadCatalog, *gomock.Controller) {
+	t.Helper()
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().Buf = buffer.New()
+	t.Cleanup(func() { proc.Free(); proc.GetSessionInfo().Buf.Free() })
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return "STRICT_TRANS_TABLES", nil })
+	ctrl := gomock.NewController(t)
+	if defaultLock {
+		lockConfig := lockservice.Config{ServiceID: t.Name()}
+		lockConfig.Validate()
+		// Retain the existing isolated runtime namespace. Only the
+		// service identity changes; all real default capacity fields stay.
+		lockConfig.ServiceID = ""
+		lockSvc := mock_lock.NewMockLockService(ctrl)
+		lockSvc.EXPECT().GetConfig().Return(lockConfig).AnyTimes()
+		proc.Base.LockService = lockSvc
+	}
+	txnClient, txnOp := newTestTxnClientAndOp(ctrl)
+	txnClient.(*mock_frontend.MockTxnClient).EXPECT().RefreshExpressionEnabled().Return(false).AnyTimes()
+	proc.Base.TxnClient, proc.Base.TxnOperator = txnClient, txnOp
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+	base := plan2.NewEmptyCompilerContext()
+	base.SetContext(ctx)
+	base.DatabaseExistsFunc = func(string, *plan.Snapshot) bool { return true }
+	base.GetDatabaseIdFunc = func(string, *plan.Snapshot) (uint64, error) { return 1, nil }
+	cc := &memoryLoadCatalog{MockCompilerContext: base, proc: proc, tables: make(map[string]*plan.TableDef)}
+	return cc, ctrl
+}
+
+func compileMemoryLoad(t *testing.T, cc *memoryLoadCatalog, ctrl *gomock.Controller, ddl, sql string, parallel int) *Compile {
+	t.Helper()
+	proc, ctx := cc.proc, cc.proc.Ctx
+	statements, err := mysql.Parse(ctx, ddl, 1)
+	require.NoError(t, err)
+	create, err := plan2.BuildPlan(cc, statements[0], false)
+	require.NoError(t, err)
+	ct := create.GetDdl().GetCreateTable()
+	require.NotNil(t, ct)
+	all := append([]*plan.TableDef{ct.TableDef}, ct.IndexTables...)
+	mockEngine := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	mockEngine.EXPECT().Database(gomock.Any(), "test", gomock.Any()).Return(db, nil).AnyTimes()
+	const addr = "127.0.0.1:6001"
+	mockEngine.EXPECT().Nodes(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(engine.Nodes{{Id: "test", Addr: addr, Mcpu: parallel}}, nil).AnyTimes()
+	mockEngine.EXPECT().GetMessageCenter().Return(nil).AnyTimes()
+	db.EXPECT().GetDatabaseId(gomock.Any()).Return("1").AnyTimes()
+	for i, def := range all {
+		def.TblId = uint64(90000 + i)
+		def.DbName, def.TableType = "test", catalog.SystemOrdinaryRel
+		def.Cols = append(def.Cols, plan2.MakeRowIdColDef())
+		def.Name2ColIndex = make(map[string]int32)
+		for j, col := range def.Cols {
+			def.Name2ColIndex[col.Name] = int32(j)
+		}
+		cc.tables[strings.ToLower(def.Name)] = def
+		rel := mock_frontend.NewMockRelation(ctrl)
+		rel.EXPECT().GetTableDef(gomock.Any()).Return(def).AnyTimes()
+		rel.EXPECT().CopyTableDef(gomock.Any()).DoAndReturn(func(context.Context) *plan.TableDef { return plan2.DeepCopyTableDef(def, true) }).AnyTimes()
+		rel.EXPECT().GetTableID(gomock.Any()).Return(def.TblId).AnyTimes()
+		db.EXPECT().Relation(gomock.Any(), def.Name, gomock.Any()).Return(rel, nil).AnyTimes()
+	}
+	statements, err = mysql.Parse(ctx, sql, 1)
+	require.NoError(t, err)
+	pn, err := plan2.BuildPlan(cc, statements[0], false)
+	require.NoError(t, err)
+	c := NewCompile(addr, "test", sql, "", "", mockEngine, proc, statements[0], false, nil, time.Now())
+	t.Cleanup(c.Release)
+	t.Cleanup(c.endImportMemory)
+	c.ncpu = parallel
+	require.NoError(t, c.Compile(ctx, pn, testPrint))
+	return c
 }

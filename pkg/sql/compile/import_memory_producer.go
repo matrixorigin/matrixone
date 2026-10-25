@@ -38,30 +38,30 @@ import (
 )
 
 // MemoryProducerDescriptor is a topologically ordered, immutable allocation
-// proof. Inputs refer only to earlier entries, including producers on other
-// CNs. A receiver can reconstruct the bound without readers or executors.
+// proof for an eligible local graph. Inputs refer only to earlier entries, so
+// bounds can be computed before readers or executors allocate.
 type MemoryProducerDescriptor struct {
-	Kind        string                    `json:"kind"`
-	Inputs      []uint32                  `json:"inputs,omitempty"`
-	Schema      []types.Type              `json:"schema,omitempty"`
-	Expressions [][]byte                  `json:"expressions,omitempty"`
-	Project     bool                      `json:"project,omitempty"`
-	ResultCols  []colexec.ResultPos       `json:"result_cols,omitempty"`
-	Function    *MemoryFunctionDescriptor `json:"function,omitempty"`
-	Copies      uint32                    `json:"copies,omitempty"`
-	Receivers   uint32                    `json:"receivers,omitempty"`
-	OwnedCols   []int32                   `json:"owned_cols,omitempty"`
-	LockTargets []lockop.MemoryTarget     `json:"lock_targets,omitempty"`
-	TableCount  int                       `json:"table_count,omitempty"`
-	ColumnCount int                       `json:"column_count,omitempty"`
-	InsertOnly  bool                      `json:"insert_only,omitempty"`
+	Kind        string
+	Inputs      []uint32
+	Schema      []types.Type
+	Expressions [][]byte
+	Project     bool
+	ResultCols  []colexec.ResultPos
+	Function    *MemoryFunctionDescriptor
+	Copies      uint32
+	Receivers   uint32
+	OwnedCols   []int32
+	LockTargets []lockop.MemoryTarget
+	TableCount  int
+	ColumnCount int
+	InsertOnly  bool
 }
 
 type MemoryFunctionDescriptor struct {
-	Name   string         `json:"name"`
-	Params []byte         `json:"params,omitempty"`
-	Args   [][]byte       `json:"args"`
-	Rets   []*plan.ColDef `json:"rets"`
+	Name   string
+	Params []byte
+	Args   [][]byte
+	Rets   []*plan.ColDef
 }
 
 // Row/Batch and Columns bound compact referenced storage (fixed headers plus

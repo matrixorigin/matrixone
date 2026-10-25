@@ -12,35 +12,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
 
-// beginSpillEpochs prepares the complete per-CN scope identities before remote
-// encoding. The query's MessageBoard owns the execution epoch; individual RPCs
-// must never reset a group used by another RPC. Prepare binds the local board.
+// beginSpillEpochs binds broadcast spill only for a complete admitted local
+// graph. Remote and other uncontrolled attempts keep their legacy behavior.
 func (c *Compile) beginSpillEpochs() {
-	if c.importMemory == nil && len(c.importMemoryControls) == 0 {
+	if c.importMemory == nil {
 		for _, scope := range c.scopes {
 			disableUncontrolledBroadcastSpill(scope)
 		}
 		return
 	}
-	type key struct {
-		addr string
-		tag  int32
-	}
-	locations := c.memoryExecutionLocations()
-	probes := make(map[key][]*hashjoin.HashJoin)
-	builds := make(map[key][]*hashbuild.HashBuild)
+	probes := make(map[int32][]*hashjoin.HashJoin)
+	builds := make(map[int32][]*hashbuild.HashBuild)
 	var walk func(*Scope)
 	walk = func(scope *Scope) {
 		vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
-			addr := locations[scope]
 			switch join := op.(type) {
 			case *hashjoin.HashJoin:
 				if !join.IsShuffle {
-					probes[key{addr, join.JoinMapTag}] = append(probes[key{addr, join.JoinMapTag}], join)
+					probes[join.JoinMapTag] = append(probes[join.JoinMapTag], join)
 				}
 			case *hashbuild.HashBuild:
 				if !join.IsShuffle && join.CanSpill {
-					builds[key{addr, join.JoinMapTag}] = append(builds[key{addr, join.JoinMapTag}], join)
+					builds[join.JoinMapTag] = append(builds[join.JoinMapTag], join)
 				}
 			}
 			return nil
@@ -53,8 +46,7 @@ func (c *Compile) beginSpillEpochs() {
 		walk(scope)
 	}
 	for group, joins := range probes {
-		// Deserialized topology is authoritative and includes other RPC scopes which
-		// are absent from this Compile. Missing topology on old wire stays disabled.
+		// Preserve topology retained from an earlier compiled attempt.
 		if len(joins[0].SpillExpectedScopes) > 0 {
 			continue
 		}

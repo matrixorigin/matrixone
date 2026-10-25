@@ -62,13 +62,6 @@ type PipelineClient interface {
 	Close() error
 }
 
-// ControlStreamClient is optional so existing PipelineClient mocks remain
-// compatible. Control roots hold a backend until statement END and must use a
-// pool independent of the execution streams needed to reach that END.
-type ControlStreamClient interface {
-	NewControlStream(ctx context.Context, backend string) (morpc.Stream, error)
-}
-
 func AcquireMessage() *pipeline.Message {
 	return messagePool.Get().(*pipeline.Message)
 }

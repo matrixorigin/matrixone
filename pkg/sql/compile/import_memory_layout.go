@@ -3,9 +3,7 @@
 package compile
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -14,7 +12,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
@@ -22,50 +19,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const MemoryControlMagic = "MO-MEMORY-ADMISSION-1\n"
 const (
-	MemoryControlOpen    = "open"
-	MemoryControlTryOpen = "try-open"
-	MemoryControlCommit  = "commit"
-	MemoryControlEnd     = "end"
-	MemoryControlAbort   = "abort"
-	MemoryStageCSV       = "csv"
-	MemoryStageOutput    = "output"
-	MemoryStageJoin      = "join"
-	MemoryStageProducer  = "producer"
+	MemoryStageCSV      = "csv"
+	MemoryStageOutput   = "output"
+	MemoryStageJoin     = "join"
+	MemoryStageProducer = "producer"
 )
 
-// MemoryManifest describes the entire physical DAG on one CN. It is sent before
-// any execution RPC. Origin manifests use IncomingUnit=0: execution cannot
-// produce frames until all CNs commit min(admitted units). A nonzero value is
-// reserved for an already materialized input and never supplied by this origin.
+// MemoryManifest describes the complete eligible local graph before allocation.
 type MemoryManifest struct {
-	Version      uint32                     `json:"version,omitempty"`
-	Producers    []MemoryProducerDescriptor `json:"producers,omitempty"`
-	TargetUnit   int64                      `json:"target_unit"`
-	IncomingUnit int64                      `json:"incoming_unit"`
-	Parallel     int                        `json:"parallel"`
-	// NoWait comes from origin transaction options, including for remote CNs.
+	Producers  []MemoryProducerDescriptor
+	TargetUnit int64
+	Parallel   int
+	// NoWait comes from the transaction options.
 	// It forbids admission FIFO/full-reclaim waiting, not ordinary sampling,
 	// short mutex acquisition or the existing best-effort RSS scavenger.
-	NoWait bool                    `json:"no_wait,omitempty"`
-	Stages []MemoryStageDescriptor `json:"stages"`
+	NoWait bool
+	Stages []MemoryStageDescriptor
 }
 
 type MemoryStageDescriptor struct {
-	Producer        uint32              `json:"producer,omitempty"`
-	Role            string              `json:"role"`
-	Count           uint32              `json:"count"`
-	Schema          []types.Type        `json:"schema,omitempty"`
-	Projections     [][]types.Type      `json:"projections,omitempty"`
-	RetainedFields  int                 `json:"retained_fields,omitempty"`
-	TableCount      int                 `json:"table_count,omitempty"`
-	InsertOnly      bool                `json:"insert_only,omitempty"`
-	LeftTypes       []types.Type        `json:"left_types,omitempty"`
-	RightTypes      []types.Type        `json:"right_types,omitempty"`
-	NonEqExpression []byte              `json:"non_eq_expression,omitempty"`
-	KeyExpressions  [][][]byte          `json:"key_expressions,omitempty"`
-	ResultCols      []colexec.ResultPos `json:"result_cols,omitempty"`
+	Producer        uint32
+	Role            string
+	Count           uint32
+	Schema          []types.Type
+	Projections     [][]types.Type
+	RetainedFields  int
+	TableCount      int
+	InsertOnly      bool
+	LeftTypes       []types.Type
+	RightTypes      []types.Type
+	NonEqExpression []byte
+	KeyExpressions  [][][]byte
+	ResultCols      []colexec.ResultPos
 }
 
 // A legal expression shape can exceed vector allocation capacity at a large
@@ -74,62 +60,8 @@ type memoryEnvelopeCapacityError struct{ message string }
 
 func (e *memoryEnvelopeCapacityError) Error() string { return e.message }
 
-type MemoryControlRequest struct {
-	Action            string          `json:"action"`
-	Token             string          `json:"token,omitempty"`
-	Manifest          *MemoryManifest `json:"manifest,omitempty"`
-	UnitBytes         int64           `json:"unit_bytes,omitempty"`
-	ExpectedProcessID string          `json:"expected_process_id,omitempty"`
-}
-
-type MemoryControlResponse struct {
-	Token         string                                `json:"token,omitempty"`
-	UnitBytes     int64                                 `json:"unit_bytes,omitempty"`
-	RetryParallel int                                   `json:"retry_parallel,omitempty"`
-	Error         string                                `json:"error,omitempty"`
-	Capacity      *rscthrottler.WorkingSetCapacityError `json:"capacity,omitempty"`
-}
-
-func EncodeMemoryControlRequest(request MemoryControlRequest) ([]byte, error) {
-	data, err := json.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-	return append([]byte(MemoryControlMagic), data...), nil
-}
-func DecodeMemoryControlRequest(data []byte) (MemoryControlRequest, bool, error) {
-	var request MemoryControlRequest
-	if !bytes.HasPrefix(data, []byte(MemoryControlMagic)) {
-		return request, false, nil
-	}
-	err := json.Unmarshal(data[len(MemoryControlMagic):], &request)
-	return request, true, err
-}
-func EncodeMemoryControlResponse(response MemoryControlResponse) ([]byte, error) {
-	data, err := json.Marshal(response)
-	if err != nil {
-		return nil, err
-	}
-	return append([]byte(MemoryControlMagic), data...), nil
-}
-func DecodeMemoryControlResponse(data []byte) (MemoryControlResponse, error) {
-	var response MemoryControlResponse
-	if !bytes.HasPrefix(data, []byte(MemoryControlMagic)) {
-		return response, errors.New("invalid memory control response")
-	}
-	err := json.Unmarshal(data[len(MemoryControlMagic):], &response)
-	return response, err
-}
-func MemoryRetryParallel(err error) int {
-	var retry *importDOPRetryError
-	if errors.As(err, &retry) {
-		return retry.next
-	}
-	return 0
-}
-
-// memoryManifestLayout is pure: a receiver needs no transaction, readers,
-// execution locks, or operator Prepare to reconstruct its complete promise.
+// memoryManifestLayout computes the complete promise before readers, execution
+// locks or operator Prepare allocate their working storage.
 func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportMemory, rscthrottler.WorkingSetSpec, bool, error) {
 	meta := &process.ImportMemory{UnitBytes: unit}
 	spec := rscthrottler.WorkingSetSpec{UnitBytes: unit, Inputs: []rscthrottler.InputSlotSpec{{Name: "csv"}, {Name: "output"}, {Name: "join-input"}}}
@@ -137,9 +69,6 @@ func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportM
 	var maxRow int64
 	var producerBounds []memoryProducerBound
 	if len(manifest.Producers) > 0 {
-		if manifest.Version != query.MemoryAdmissionProtocolVersion {
-			return nil, spec, false, errors.New("unsupported producer manifest version")
-		}
 		var err error
 		producerBounds, err = memoryProducerBounds(manifest.Producers, unit)
 		if err != nil {
@@ -229,7 +158,7 @@ func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportM
 					return nil, spec, false, errors.New("invalid join memory projection")
 				}
 			}
-			capacity, ok := join.InputEnvelope(max(unit, manifest.IncomingUnit, maxRow))
+			capacity, ok := join.InputEnvelope(max(unit, maxRow))
 			if !ok {
 				return nil, spec, false, &memoryEnvelopeCapacityError{"join input working envelope overflows"}
 			}
@@ -305,10 +234,6 @@ func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportM
 		}
 	}
 	return meta, spec, true, nil
-}
-
-func AdmitMemoryManifest(ctx context.Context, throttler rscthrottler.RSCThrottler, manifest MemoryManifest) (*process.ImportMemory, error) {
-	return admitMemoryManifest(ctx, throttler, manifest)
 }
 
 // memoryManifestCandidates owns all precomputed envelopes before a request

@@ -13,10 +13,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 )
 
-func SourceEnvelope(schema []types.Type, unit int64) (int64, error) {
-	return SourceEnvelopeForFields(schema, unit, len(schema)+2)
-}
-
 // SourceEnvelopeForFields describes allocations that can coexist while one CSV
 // row is converted. The row limit is the existing configured entry limit, not
 // a customer-specific threshold. retainedFields must match CSVParser.RetainFields.

@@ -157,8 +157,6 @@ type Col struct {
 // Scope is the output of the compile process.
 // Each sql will be compiled to one or more execution unit scopes.
 type Scope struct {
-	// MemoryToken refers to the already admitted complete CN statement layout.
-	MemoryToken string
 	// Magic specifies the type of Scope.
 	// 0 -  execution unit for reading data.
 	// 1 -  execution unit for processing intermediate results.
@@ -277,13 +275,9 @@ type Compile struct {
 	e engine.Engine
 
 	// proc stores the execution context.
-	proc                 *process.Process
-	importMemory         *process.ImportMemory
-	importMemoryBases    map[*process.BaseProcess]*process.ImportMemory
-	importMemoryBorrowed bool
-	importMemoryDetach   func()
-	importMemoryControls []*statementMemoryControl
-	importMemoryRemote   bool
+	proc              *process.Process
+	importMemory      *process.ImportMemory
+	importMemoryBases map[*process.BaseProcess]*process.ImportMemory
 	// Retry attempts have normal pool ownership while preserving the prepared
 	// statement's memory eligibility across the entire execution.
 	importMemoryPrepared bool

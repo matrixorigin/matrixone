@@ -155,15 +155,6 @@ message GetProtocolVersionRequest {
 message GetProtocolVersionResponse {
   // ProtocolVersion is the version of the protocol
   int64 Version = 1;
-  // Optional capability; absent in old CNs. Probe before opening a statement
-  // memory-control stream, since legacy StopSending has no reply.
-  bool memory_admission = 2;
-  // All CN services in one process share physical memory admission. This
-  // incarnation identity orders that resource and detects endpoint restarts.
-  string memory_admission_process_id = 3;
-  // Complete producer/expression capacity contracts require version 2.
-  // Absent in bool-only responses; probe before opening a control stream.
-  uint32 memory_admission_version = 4;
 }
 
 message SetProtocolVersionRequest {

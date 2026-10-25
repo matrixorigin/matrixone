@@ -16,7 +16,6 @@ package cnclient
 
 import (
 	"context"
-	"errors"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -54,7 +53,6 @@ type pipelineClient struct {
 	localServiceAddress string
 	config              *PipelineConfig
 	client              morpc.RPCClient
-	controlClient       morpc.RPCClient
 }
 
 func NewPipelineClient(
@@ -76,32 +74,30 @@ func NewPipelineClient(
 		func() morpc.Message { return AcquireMessage() },
 		morpc.WithCodecMaxBodySize(int(cfg.RPC.MaxMessageSize)),
 	)
-	newFactory := func() morpc.BackendFactory {
-		return morpc.NewGoettyBasedBackendFactory(
-			codec,
-			morpc.WithBackendGoettyOptions(
-				goetty.WithSessionRWBUfferSize(
-					cfg.ReadBufferSize,
-					cfg.WriteBufferSize,
-				),
-				goetty.WithSessionReleaseMsgFunc(
-					func(v any) {
-						m := v.(morpc.RPCMessage)
-						if !m.InternalMessage() {
-							ReleaseMessage(m.Message.(*pipeline.Message))
-						}
-					},
-				),
+	factory := morpc.NewGoettyBasedBackendFactory(
+		codec,
+		morpc.WithBackendGoettyOptions(
+			goetty.WithSessionRWBUfferSize(
+				cfg.ReadBufferSize,
+				cfg.WriteBufferSize,
 			),
-			morpc.WithBackendReadTimeout(defaultRPCTimeout),
-			morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),
-			morpc.WithBackendLogger(logger),
-		)
-	}
+			goetty.WithSessionReleaseMsgFunc(
+				func(v any) {
+					m := v.(morpc.RPCMessage)
+					if !m.InternalMessage() {
+						ReleaseMessage(m.Message.(*pipeline.Message))
+					}
+				},
+			),
+		),
+		morpc.WithBackendReadTimeout(defaultRPCTimeout),
+		morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),
+		morpc.WithBackendLogger(logger),
+	)
 
 	cli, err := morpc.NewClient(
 		"pipeline-client",
-		newFactory(),
+		factory,
 		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
 		morpc.WithClientLogger(logger),
 	)
@@ -109,15 +105,7 @@ func NewPipelineClient(
 		return nil, err
 	}
 
-	control, err := morpc.NewClient(
-		"pipeline-control-client", newFactory(),
-		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
-		morpc.WithClientLogger(logger),
-	)
-	if err != nil {
-		return nil, errors.Join(err, cli.Close())
-	}
-	c.client, c.controlClient = cli, control
+	c.client = cli
 	return c, nil
 }
 
@@ -125,18 +113,10 @@ func (c *pipelineClient) NewStream(ctx context.Context, backend string) (morpc.S
 	return c.client.NewStream(ctx, backend, true)
 }
 
-func (c *pipelineClient) NewControlStream(ctx context.Context, backend string) (morpc.Stream, error) {
-	return c.controlClient.NewStream(ctx, backend, true)
-}
-
 func (c *pipelineClient) Raw() morpc.RPCClient {
 	return c.client
 }
 
 func (c *pipelineClient) Close() error {
-	var controlErr error
-	if c.controlClient != nil {
-		controlErr = c.controlClient.Close()
-	}
-	return errors.Join(controlErr, c.client.Close())
+	return c.client.Close()
 }

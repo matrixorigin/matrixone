@@ -84,8 +84,6 @@ type MessageBoard struct {
 	spillMu             sync.Mutex
 	spillGroups         map[int32]*JoinSpillGroup
 	spillResetRequested bool
-	memoryRoots         int
-	memoryRootClosed    bool
 }
 
 func NewMessageBoard() *MessageBoard {
@@ -145,7 +143,7 @@ func (m *MessageBoard) BeforeRunonce() {
 
 func (m *MessageBoard) Reset() *MessageBoard {
 	if m.multiCN {
-		if m.retainMemoryBoardOnReset() || m.retainSpillBoardOnReset() {
+		if m.retainSpillBoardOnReset() {
 			return NewMessageBoard()
 		}
 		m.messageCenter.RwMutex.Lock()

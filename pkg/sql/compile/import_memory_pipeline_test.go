@@ -6,7 +6,6 @@ import (
 	"math"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -113,7 +112,6 @@ func TestImportPipelineMetadataCoversDispatchReceiverFanout(t *testing.T) {
 	manifest, err = c.localMemoryManifest(64)
 	require.NoError(t, err)
 	require.NotEmpty(t, manifest.Producers)
-	require.Equal(t, query.MemoryAdmissionProtocolVersion, manifest.Version)
 	_, _, controlled, err := memoryManifestLayout(manifest, 64)
 	require.NoError(t, err)
 	require.True(t, controlled)

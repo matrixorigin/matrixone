@@ -425,7 +425,7 @@ func TryReserveWorkingSet(ctx context.Context, t RSCThrottler, spec WorkingSetSp
 
 func newWorkingSet(c *memoryCoordinator, spec WorkingSetSpec, input int64) *WorkingSet {
 	spec.Inputs = append([]InputSlotSpec(nil), spec.Inputs...)
-	w := &WorkingSet{coordinator: c, spec: spec, inputBytes: input, inputUsed: make([]uint32, len(spec.Inputs)), inputWait: make([]chan struct{}, len(spec.Inputs)), refs: 1, closing: make(chan struct{})}
+	w := &WorkingSet{coordinator: c, spec: spec, inputBytes: input, inputUsed: make([]uint32, len(spec.Inputs)), inputWait: make([]chan struct{}, len(spec.Inputs)), closing: make(chan struct{})}
 	for i := range w.inputWait {
 		w.inputWait[i] = make(chan struct{})
 	}

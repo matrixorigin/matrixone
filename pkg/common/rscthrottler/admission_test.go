@@ -373,36 +373,6 @@ func TestMemoryAdmissionProcessSampleCoalescing(t *testing.T) {
 	require.Equal(t, int32(2), samples.Load(), "reclaim invalidates the snapshot before admission rechecks")
 }
 
-func TestWorkingSetRetainedScopePreservesBothPromises(t *testing.T) {
-	m, c, _ := admissionFixture(t, 1000, 900, 100)
-	w, err := m.ReserveWorkingSet(context.Background(), WorkingSetSpec{UnitBytes: 32, Inputs: []InputSlotSpec{{Name: "csv", Count: 1, Bytes: 100}}, IOBytes: 200})
-	require.NoError(t, err)
-	t.Cleanup(w.Close)
-	releaseA, err := w.Retain()
-	require.NoError(t, err)
-	t.Cleanup(releaseA)
-	releaseB, err := w.Retain()
-	require.NoError(t, err)
-	t.Cleanup(releaseB)
-	w.Close()
-	require.Equal(t, int64(100), c.inputPromise.Load(), "an attached scope may not have prepared its source yet")
-	require.Equal(t, int64(200), c.workspacePromise.Load())
-	_, err = w.Retain()
-	require.ErrorIs(t, err, ErrWorkingSetClosed)
-	_, err = w.AcquireInput(context.Background(), 0)
-	require.ErrorIs(t, err, ErrWorkingSetClosed)
-	releaseA()
-	require.Equal(t, int64(100), c.inputPromise.Load())
-	var group sync.WaitGroup
-	for i := 0; i < 16; i++ {
-		group.Add(1)
-		go func() { defer group.Done(); releaseB() }()
-	}
-	group.Wait()
-	require.Zero(t, c.inputPromise.Load())
-	require.Zero(t, c.workspacePromise.Load())
-}
-
 func TestMemorySampleFailureCannotEscapeContainerLimit(t *testing.T) {
 	m, c, _ := admissionFixture(t, 51200, 40000, 0)
 	sample := memorySample{rss: 100, current: 2100, limit: 2200, total: 51200}

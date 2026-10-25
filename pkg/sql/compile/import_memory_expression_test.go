@@ -14,14 +14,11 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
@@ -116,16 +113,12 @@ func memoryCSVProjection(t *testing.T, selectList string, typ plan.Type) (*Compi
 }
 
 func TestImportMemoryPublicCSVProjectionAdmission(t *testing.T) {
-	var expanding []string
-	for i := 0; i < 16; i++ {
-		expanding = append(expanding, fmt.Sprintf("repeat(v,%d) AS expanded_%d", 65535-i, i))
-	}
 	for _, test := range []struct {
 		name, expression string
 		typ              plan.Type
 		bounded          bool
 	}{
-		{name: "unknown-varlen-expansion", expression: strings.Join(expanding, ","), typ: plan.Type{Id: int32(types.T_varchar), Width: 1}},
+		{name: "unknown-varlen-expansion", expression: "v,repeat(v,65535)", typ: plan.Type{Id: int32(types.T_varchar), Width: 1}},
 		{name: "borrowed-column", expression: "v", typ: plan.Type{Id: int32(types.T_varchar), Width: 64}, bounded: true},
 		{name: "fixed-width-arithmetic", expression: "v + 1", typ: plan.Type{Id: int32(types.T_int64)}, bounded: true},
 		{name: "bounded-serialization", expression: "serial(v,v)", typ: plan.Type{Id: int32(types.T_varchar), Width: 64}, bounded: true},
@@ -134,7 +127,7 @@ func TestImportMemoryPublicCSVProjectionAdmission(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			c, op := memoryCSVProjection(t, test.expression, test.typ)
 			if !test.bounded {
-				require.Len(t, op.ProjectList, 16)
+				require.Len(t, op.ProjectList, 2)
 			}
 			sentinel := errors.New("eligible statement reached admission")
 			m := &compilerMemoryAdmission{failure: sentinel}
@@ -148,7 +141,6 @@ func TestImportMemoryPublicCSVProjectionAdmission(t *testing.T) {
 			}
 			require.Nil(t, c.importMemory)
 			require.Nil(t, c.proc.Base.ImportMemory)
-			require.Empty(t, c.importMemoryControls)
 		})
 	}
 }
@@ -253,23 +245,13 @@ func TestImportMemoryDefaultTokenizerProducerEligibility(t *testing.T) {
 	}
 }
 
-func TestImportMemoryProducerManifestRoundTripAndValidation(t *testing.T) {
+func TestImportMemoryProducerManifestValidation(t *testing.T) {
 	c, _ := memoryCSVProjection(t, "serial(v,v)", plan.Type{Id: int32(types.T_varchar), Width: 64})
 	manifest, err := c.localMemoryManifest(1024)
 	require.NoError(t, err)
-	require.Equal(t, query.MemoryAdmissionProtocolVersion, manifest.Version)
-	wire, err := EncodeMemoryControlRequest(MemoryControlRequest{Action: MemoryControlOpen, Manifest: &manifest})
-	require.NoError(t, err)
-	decoded, matched, err := DecodeMemoryControlRequest(wire)
-	require.NoError(t, err)
-	require.True(t, matched)
 	_, local, controlled, err := memoryManifestLayout(manifest, 1024)
 	require.NoError(t, err)
 	require.True(t, controlled)
-	_, remote, controlled, err := memoryManifestLayout(*decoded.Manifest, 1024)
-	require.NoError(t, err)
-	require.True(t, controlled)
-	require.Equal(t, local, remote)
 	require.Greater(t, len(local.Inputs), 3, "expression output and intermediate storage needs its own root I promise")
 	for _, descs := range [][]MemoryProducerDescriptor{
 		{{Kind: "expression", Inputs: []uint32{0}}},
@@ -283,29 +265,6 @@ func TestImportMemoryProducerManifestRoundTripAndValidation(t *testing.T) {
 	manifest.Stages = append(manifest.Stages, MemoryStageDescriptor{Role: MemoryStageProducer, Count: 1, Producer: math.MaxUint32})
 	_, _, _, err = memoryManifestLayout(manifest, 1024)
 	require.ErrorContains(t, err, "invalid producer stage")
-}
-
-func TestImportMemoryOldBoolPeerAndManifestAreRejectedBeforeOpen(t *testing.T) {
-	c := memoryCompileFixture(t, 1)
-	for _, version := range []uint32{0, 1, 2, query.MemoryAdmissionProtocolVersion, 4} {
-		client := &memoryCapabilityClient{send: func(addr string, _ *query.Request) (*query.Response, error) {
-			return &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{MemoryAdmission: true, MemoryAdmissionProcessId: addr, MemoryAdmissionVersion: version}}, nil
-		}}
-		c.proc.Base.QueryClient = client
-		capable, err := c.memoryCapabilities(context.Background(), []*memoryCNManifest{{queryAddr: "A"}, {queryAddr: "B"}})
-		require.NoError(t, err)
-		require.Equal(t, version == query.MemoryAdmissionProtocolVersion, capable)
-		require.Equal(t, 2, client.releases)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	session := &memoryControlSession{ctx: ctx, replies: make(chan *pipeline.Message, 1)}
-	wire, err := EncodeMemoryControlRequest(MemoryControlRequest{Action: MemoryControlOpen, Manifest: &MemoryManifest{Version: 0}})
-	require.NoError(t, err)
-	handled, err := handleMemoryControl(ctx, "no-runtime-for-old-manifest", &pipeline.Message{Id: 19, Cmd: pipeline.Method_StopSending, Data: wire}, session, func() morpc.Message { return &pipeline.Message{} })
-	require.True(t, handled)
-	require.NoError(t, err)
-	require.Contains(t, receiveMemoryControl(t, session).Error, "manifest version")
 }
 
 func TestImportMemoryUnprovenEdgesAndRetainingOperatorsStayLegacy(t *testing.T) {
@@ -738,7 +697,6 @@ func TestImportMemorySyntheticPathDeclinesBeforeOpen(t *testing.T) {
 	m := &compilerMemoryAdmission{failure: errors.New("unproven path must not reach Open")}
 	require.NoError(t, c.beginStatementImportMemory(context.Background(), m))
 	require.Zero(t, m.tries)
-	require.Empty(t, c.importMemoryControls)
 	require.Nil(t, c.importMemory)
 	source.Es.Attrs[0].ColName = "id"
 	source.Es.Cols[0].Typ = plan.Type{Id: int32(types.T_int64)}
@@ -786,7 +744,6 @@ func TestImportMemoryUnprovenJSONLineDeclinesBeforeOpen(t *testing.T) {
 	m := &compilerMemoryAdmission{failure: errors.New("legal JSONLINE must retain legacy before opening a ticket")}
 	require.NoError(t, c.beginStatementImportMemory(context.Background(), m))
 	require.Zero(t, m.tries)
-	require.Empty(t, c.importMemoryControls)
 	require.Nil(t, c.importMemory)
 	require.Equal(t, tree.JSONLINE, source.Es.Extern.Format, "eligibility does not rewrite the reader or SQL format")
 }

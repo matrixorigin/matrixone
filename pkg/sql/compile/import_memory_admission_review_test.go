@@ -93,7 +93,7 @@ func TestImportMemoryAdmissionCanRequireTwoDOPRecompiles(t *testing.T) {
 	for _, parallel := range []int{4, 2} {
 		c := memoryCompileFixture(t, parallel)
 		m := &compilerMemoryAdmission{available: budget}
-		err := c.admitImportMemory(context.Background(), m)
+		err := c.beginStatementImportMemory(context.Background(), m)
 		var retry *importDOPRetryError
 		require.ErrorAs(t, err, &retry)
 		require.Equal(t, parallel/2, retry.next)
