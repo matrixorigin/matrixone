@@ -571,6 +571,14 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	closeby := ep.userConfig.Fields.EnclosedBy.Value
 	flag := ep.ColumnFlag
 
+	// LINES STARTING BY prefixes every data record (and only data records:
+	// the CSV header stays unprefixed so the reader's startingBy line filter
+	// skips it, mirroring the externalwrite writer and LOAD's readRecord).
+	var startingBy []byte
+	if l := ep.userConfig.Lines; l != nil && l.StartingBy != "" {
+		startingBy = []byte(l.StartingBy)
+	}
+
 	buffer := &bytes.Buffer{}
 
 	rowCount := bat.RowCount()
@@ -579,6 +587,9 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 		rowEnds = make([]int, 0, rowCount)
 	}
 	for i := 0; i < rowCount; i++ {
+		if len(startingBy) > 0 {
+			buffer.Write(startingBy)
+		}
 		for j, vec := range bat.Vecs {
 			if vec.GetNulls().Contains(uint64(i)) {
 				formatOutputNull(ep, symbol[j], closeby, buffer)
@@ -839,6 +850,19 @@ func (ec *ExportConfig) validateCSVFraming(ctx context.Context) error {
 		return moerr.NewInvalidInput(ctx,
 			"CSV ENCLOSED BY must not be the first byte of a field or line terminator or another recognized newline byte")
 	}
+	// Mirror the LOAD parser's config check: a prefix containing the record
+	// terminator makes record boundaries ambiguous (csvparser normalizes CRLF
+	// to LF the same way). Written output would never read back, so reject
+	// before opening the file.
+	if l := ec.userConfig.Lines; l != nil && l.StartingBy != "" && l.TerminatedBy != nil {
+		terminator := l.TerminatedBy.Value
+		if terminator == "\r\n" {
+			terminator = "\n"
+		}
+		if terminator != "" && strings.Contains(l.StartingBy, terminator) {
+			return moerr.NewInvalidInputNoCtx(fmt.Sprintf("STARTING BY '%s' cannot contain LINES TERMINATED BY '%s'", l.StartingBy, terminator))
+		}
+	}
 	if ec.escapeChar() == 0 {
 		return nil
 	}
@@ -929,6 +953,12 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 	flag := oq.ColumnFlag
 
 	buffer := &bytes.Buffer{}
+
+	// One call builds one record; prefix it with LINES STARTING BY exactly as
+	// the batch writer (constructByte) does.
+	if l := oq.userConfig.Lines; l != nil && l.StartingBy != "" {
+		buffer.WriteString(l.StartingBy)
+	}
 
 	for i := uint64(0); i < oq.mrs.GetColumnCount(); i++ {
 
