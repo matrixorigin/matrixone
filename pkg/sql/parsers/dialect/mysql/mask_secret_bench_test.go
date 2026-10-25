@@ -107,3 +107,35 @@ func BenchmarkMaskRequestSQLMode(b *testing.B) {
 		})
 	}
 }
+
+// #30747 review round 11 scaling probe: an unevaluable sql_mode assignment
+// followed by N plain SELECTs and one credential-bearing statement. The
+// unknown-mode statement walk must stay linear in N (the round-10 design
+// was quadratic: ~1.09 s at N=2048).
+func benchUnknownModeRequest(n int) string {
+	var b strings.Builder
+	b.WriteString("SET sql_mode=concat('',''); ")
+	for i := 0; i < n; i++ {
+		b.WriteString("SELECT 1; ")
+	}
+	b.WriteString("create stage s url='file:///x' credentials={'aws_key_id'='AKIAIOSFODNN7EXAMPLE','aws_secret_key'='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'}")
+	return b.String()
+}
+
+func BenchmarkMaskUnknownModeScale(b *testing.B) {
+	for _, n := range []int{128, 2048} {
+		sql := benchUnknownModeRequest(n)
+		b.Run(fmt.Sprintf("perstatement/%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				MaskSensitiveSqlLiteralsPerStatement(sql, 0)
+			}
+		})
+		b.Run(fmt.Sprintf("statementmodes/%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				StatementSQLModes(sql, 0)
+			}
+		})
+	}
+}

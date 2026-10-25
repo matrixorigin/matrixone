@@ -13114,3 +13114,94 @@ func TestExecRequestUnknownModeBraceBoundaryTrace(t *testing.T) {
 	require.Equal(t, mysql.MaskSensitiveSqlLiteralsPerStatement(query, mysql.ParseSQLModeFlags("")), logged)
 	require.NotContains(t, logged, "REVIEW_BRACE_CANARY")
 }
+
+// #30747 review round 11, battery: the full malformed-map family from rounds
+// 9/10/11 — EOF-taint, valid-tokens-junk-tail, mis-paired-quote-with-};,
+// near-tail, unknown-mode transition — under both relevant modes, asserting
+// EVERY production sink in ONE pass: client parse-error echo, retained
+// statement text (doComQuery/GetSqlOfStmt), the full observed log stream
+// (debug/status sinks), and the error pipeline (error log + error_info via
+// the registered reporter). Zero canary in any cell.
+func TestRound11MalformedMapFamilyAllSinks(t *testing.T) {
+	canaries := []string{
+		"B1CANARY", "B2CANARY", "B3CANARY", "B4CANARY", "B5CANARY", "B6CANARY", "B7CANARY",
+	}
+	shapes := []struct {
+		name    string
+		sqlMode string // "" = default session mode
+		query   string
+	}{
+		{"r9-eof-taint", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='B1CANARY'} -- '`},
+		{"r10-unknown-brace", "", `set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix};B2CANARY'}`},
+		{"r11-known-brace-comment", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix};B3CANARY'} -- '`},
+		{"r11-near-tail", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='B4CANARY'} -- '`},
+		{"r9-nbe-single", "NO_BACKSLASH_ESCAPES", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix;B5CANARY'}`},
+		{"r10-record-semicolon", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix;B6CANARY'} -- '`},
+		{"r9-transition-repin", "", `set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); create stage s1 url='file:///x' credentials={'k'='foo\','k2'='first'}; set sql_mode=''; create stage s2 url='file:///x' credentials={'k'='prefix\'B7CANARY'}`},
+	}
+	for _, shape := range shapes {
+		t.Run(shape.name, func(t *testing.T) {
+			ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+			ctrl := gomock.NewController(t)
+			previousPU := getPuIfPresent("")
+			defer setPu("", previousPU)
+
+			// capture the error pipeline (terminal ERROR log + error_info)
+			prev := errutil.GetReportErrorFunc()
+			var mu sync.Mutex
+			var reported []string
+			errutil.SetErrorReporter(func(_ context.Context, err error, _ int) {
+				mu.Lock()
+				reported = append(reported, err.Error())
+				mu.Unlock()
+			})
+			defer errutil.SetErrorReporter(prev)
+
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.ruleCache = map[string]string{}
+			getPu("").SV.LengthOfQueryPrinted = 400
+			observed, logs := newObservedProtocolSession()
+			ses.logger, ses.logLevel = observed.logger, observed.logLevel
+			ses.loggerOnce.Do(func() {})
+			if shape.sqlMode != "" {
+				require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", shape.sqlMode))
+			}
+
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			// doComQuery itself drives both the record path and the client
+			// error echo for this battery's (mostly invalid) diagnostics.
+			comErr := doComQuery(ses, execCtx, &UserInput{sql: shape.query})
+			if comErr != nil && comErr.Error() != "" {
+				for _, canary := range canaries {
+					require.NotContains(t, comErr.Error(), canary, "client error echo")
+				}
+			}
+			for _, canary := range canaries {
+				require.NotContains(t, ses.GetSqlOfStmt(), canary, "retained statement text")
+			}
+			// the entire observed log stream of this session: debug trace,
+			// status lines, error fields — concatenate and assert clean.
+			for _, entry := range logs.All() {
+				entryText := entry.Message
+				for key, value := range entry.ContextMap() {
+					if s, ok := value.(string); ok {
+						entryText += " " + key + "=" + s
+					}
+				}
+				for _, canary := range canaries {
+					require.NotContains(t, entryText, canary, "observed log entry %q", entry.Message)
+				}
+			}
+			mu.Lock()
+			reportedCopy := append([]string(nil), reported...)
+			mu.Unlock()
+			for _, line := range reportedCopy {
+				for _, canary := range canaries {
+					require.NotContains(t, line, canary, "error pipeline report")
+				}
+			}
+		})
+	}
+}

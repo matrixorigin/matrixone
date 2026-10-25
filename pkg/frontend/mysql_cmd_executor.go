@@ -350,10 +350,12 @@ func redactStatementTextForLogging(statement tree.Statement, text string, sqlMod
 	// recorder (identified by, access keys, CREDENTIALS option maps). The
 	// successful-statement path already applies them upstream; the failed-parse
 	// diagnostic path passes raw, AST-less text here, and they must apply too
-	// before any truncation keeps a partial secret (#30747). The session's
-	// effective lexical mode decides where string tokens — and therefore
-	// secrets — begin and end (#30747 review). Idempotent.
-	text = parsers.MaskSensitiveLiteralsForLoggingWithSQLMode(text, mysql.ParseSQLModeFlags(sqlMode))
+	// before any truncation keeps a partial secret (#30747). Multi-statement
+	// requests need the per-statement mode walker (a single-mode scoped pass
+	// can starve a credential of the variant that pairs its quotes after a
+	// sql_mode transition, #30747 review round 11); per-statement masking
+	// falls back to the same scoped rules for one-shot text. Idempotent.
+	text = mysql.MaskSensitiveSqlLiteralsPerStatement(text, mysql.ParseSQLModeFlags(sqlMode))
 
 	switch stmt := statement.(type) {
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,

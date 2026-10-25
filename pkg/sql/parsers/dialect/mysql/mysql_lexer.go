@@ -299,6 +299,12 @@ type Lexer struct {
 	// was consumed. If the error position equals it, the near echo starts AT
 	// the secret value itself and must be masked in pending-value state.
 	credentialsValuePos int
+	// credentialsPhase/credentialsValid are the structural key=value ledger
+	// for credentialsState==3 (#30747 review round 11): a quoted STRING can
+	// mis-pair and leave the map's closing brace arriving at junk, and that
+	// brace must NOT clear credential context.
+	credentialsPhase int
+	credentialsValid bool
 }
 
 // reservedKeywordsAfterAS lists tokens that represent reserved keywords
@@ -425,6 +431,10 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	// Track the CREDENTIALS option-map context so the error diagnostic can
 	// keep masking credential values even when the echo tail starts inside
 	// the map — including right at a value token (state 4). (#30747/#30746)
+	// Round 11: the tracker carries the same structural ledger as the
+	// masking state machine — a `}` closes the context ONLY at the end of
+	// a structurally validated key=value chain, so a mis-paired quote can
+	// never let a junk-chain brace drop the credential context early.
 	switch {
 	case l.credentialsState == 1 && typ == int('='):
 		l.credentialsState = 2
@@ -432,10 +442,18 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		// a doubled separator (CREDENTIALS = = {...}) keeps the pending map
 		// context instead of dropping it (#30747 review)
 	case l.credentialsState == 2 && typ == int('{'):
-		l.credentialsState = 3
+		l.credentialsState, l.credentialsPhase, l.credentialsValid = 3, mapPhaseExpectKey, true
 	case l.credentialsState == 3 && typ == int('}'):
-		l.credentialsState = 0
+		if l.credentialsValid && (l.credentialsPhase == mapPhaseExpectKey || l.credentialsPhase == mapPhaseExpectCommaOrClose) {
+			l.credentialsState = 0
+		} else {
+			l.credentialsValid = false
+			l.credentialsPhase = mapPhaseJunk
+		}
 	case l.credentialsState == 3 && typ == int('='):
+		if l.credentialsPhase != mapPhaseExpectSep {
+			l.credentialsValid = false
+		}
 		l.credentialsState = 4
 	case l.credentialsState == 4 && typ == int('='):
 		// doubled '=' still precedes the value
@@ -443,9 +461,22 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		// the value itself arrived; back to plain in-map, but remember where
 		// it started so the error echo recognizes a value-position failure.
 		l.credentialsValuePos = l.scanner.PrePos
-		l.credentialsState = 3
+		l.credentialsState, l.credentialsPhase = 3, mapPhaseExpectCommaOrClose
+	case l.credentialsState == 3 && typ == int(','):
+		if l.credentialsPhase != mapPhaseExpectCommaOrClose {
+			l.credentialsValid = false
+		}
+		l.credentialsPhase = mapPhaseExpectKey
 	case l.credentialsState == 3:
-		// stay inside the map until the closing brace
+		// any other token inside the map: advance the key=value ledger.
+		if l.credentialsPhase == mapPhaseExpectKey {
+			l.credentialsPhase = mapPhaseExpectSep
+		} else {
+			// separator missing where due, or junk between a value and the
+			// map close (mis-paired STRING quoting the `=`, bare-IDENT key)
+			l.credentialsValid = false
+			l.credentialsPhase = mapPhaseJunk
+		}
 	case typ == CREDENTIALS:
 		l.credentialsState = 1
 	case typ == int(';'):
@@ -691,7 +722,18 @@ func (l *Lexer) Error(err string) {
 		// secret itself.
 		nearState = CredentialStateInMapAfterEq
 	}
+	nearBeforeMask := near
 	near = MaskStageCredentialLiteralsWithInitialStateAndSQLMode(near, nearState, l.sqlMode)
+	if nearState != CredentialStateNone && near == nearBeforeMask {
+		// The tracker places the failure inside a credential map, yet the
+		// scrub found no credential value to mask: a mis-paired quotation
+		// retokenizes the tail into a structure whose credentials cannot be
+		// localized from the fragment alone (#30747 review round 11).
+		// Redact the whole tail rather than publish a suffix whose secret
+		// stays verbatim. The identified-by echo policy is unaffected —
+		// that context never arms this tracker.
+		near = "******"
+	}
 	near = commonutil.Abbreviate(near, -1)
 	l.scanner.LastError = PositionedErr{Err: errMsg, Line: l.scanner.Line, Col: l.scanner.Col, Near: near, LenStr: lenStr}
 }

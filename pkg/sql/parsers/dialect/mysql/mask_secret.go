@@ -21,6 +21,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
+// Map-chain validation phases inside a credential map (#30747 review round
+// 11). A mis-paired quote elsewhere in the request can leave `secret_key`
+// as a bare IDENT, let a mis-paired `=` STRING consume the separator, and
+// expose the map's own `}` as a raw token; taking that brace as a valid
+// close would drop the credential context for everything behind it. The
+// phase ledger tracks whether what has been scanned so far is a complete
+// well-formed key=value chain; a closing brace is honored ONLY at a chain
+// boundary of a chain that stayed well-formed.
+const (
+	mapPhaseExpectKey          = iota // pair start; `}` here means empty map
+	mapPhaseExpectSep                 // key seen, expecting = (or :)
+	mapPhaseExpectCommaOrClose        // value done; `}` here is a valid close
+	mapPhaseJunk                      // chain broken; stays until valid close
+)
+
 // CredentialMapState names the scanner-visible progress through a
 // `CREDENTIALS = { 'key' = 'value', ... }` option map. It is used to mask a
 // fragment (typically the parse-error "near" tail) that begins MID-map: the
@@ -160,6 +175,11 @@ func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool
 	rbrace := int('}')
 	credState := initial
 	coveredUntil := -1
+	// Map-chain ledger: honored only when the brace context began INSIDE
+	// this scan; an inherited InMap state (parse-error tail) has no chain
+	// memory, so its close is trusted exactly as before.
+	mapPhase := mapPhaseJunk
+	mapValid := false
 	var spans [][2]int
 	// A statement-initial PREPARE wraps its statement in one string token;
 	// the credential rules cannot see inside it, so the descent into the
@@ -221,6 +241,7 @@ func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool
 			case CredentialStateAfterMapEq:
 				if typ == lbrace {
 					credState = CredentialStateInMap
+					mapPhase, mapValid = mapPhaseExpectKey, true
 					continue
 				}
 				if isMapSep(typ, effStart) {
@@ -232,11 +253,45 @@ func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool
 				continue
 			case CredentialStateInMap:
 				if typ == rbrace {
-					credState = CredentialStateNone
+					if mapValid && (mapPhase == mapPhaseExpectKey || mapPhase == mapPhaseExpectCommaOrClose) {
+						// The ONLY close that ends credential context: a
+						// structurally validated chain (#30747 review round
+						// 11). A brace arriving anywhere else — mis-paired
+						// quote left the chain at junk — keeps the map
+						// armed, and the EOF taint handles the tail.
+						credState = CredentialStateNone
+						continue
+					}
+					mapValid = false
+					malformedMap = true
 					continue
 				}
 				if isMapSep(typ, effStart) {
+					if mapPhase != mapPhaseExpectSep {
+						mapValid = false
+					}
 					credState = CredentialStateInMapAfterEq
+					continue
+				}
+				if typ == int(',') {
+					// A comma resumes a pair only after a completed value.
+					if mapPhase != mapPhaseExpectCommaOrClose {
+						mapValid = false
+					}
+					mapPhase = mapPhaseExpectKey
+					continue
+				}
+				switch mapPhase {
+				case mapPhaseExpectKey:
+					mapPhase = mapPhaseExpectSep
+				case mapPhaseExpectSep:
+					// no separator where one was due (a second key token,
+					// a mis-paired STRING quoting the `=`, ...)
+					mapValid = false
+					mapPhase = mapPhaseJunk
+				default:
+					mapValid = false
+					mapPhase = mapPhaseJunk
 				}
 				continue
 			case CredentialStateInMapAfterEq:
@@ -258,6 +313,7 @@ func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool
 					// left of `credentials =`): open the map instead of
 					// treating the brace as a value.
 					credState = CredentialStateInMap
+					mapPhase, mapValid = mapPhaseExpectKey, true
 					continue
 				}
 				if typ == STRING || sql[effStart] == '\'' || sql[effStart] == '"' ||
@@ -287,6 +343,7 @@ func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool
 					}
 				}
 				credState = CredentialStateInMap
+				mapPhase = mapPhaseExpectCommaOrClose
 				continue
 			}
 		}
@@ -448,54 +505,85 @@ func StatementSQLModes(sql string, initial SQLModeFlags) []StatementSQLModeSpan 
 	var spans []StatementSQLModeSpan
 	mode := initial
 	known := true
+
+	// ONE-TIME preprocessing per lexical variant (#30747 review rounds
+	// 10/11): each variant scans the request ONCE from a forward-only
+	// cursor, so the whole walk costs O(4x len(sql)) — never a rescan of
+	// every remaining suffix — even for a long unknown-mode tail
+	// (round-11 finding: the per-statement rescans were quadratic). A `;`
+	// candidate is accepted only OUTSIDE the union of credential spans
+	// every variant marks: a `;` covered by the union is credential
+	// content under some admitted mode, not a statement terminator, in
+	// known AND unknown stretches alike — a mis-paired fake close can
+	// never shear a credential off its context (round-11 brace finding).
+	lexical := [4]SQLModeFlags{}
+	base := initial &^ SQLModeFlags(SQLModeNoBackslashEscapes|SQLModeANSIQuotes)
+	for variant := 0; variant < 4; variant++ {
+		lexical[variant] = base
+		if variant&1 != 0 {
+			lexical[variant] |= SQLModeFlags(SQLModeNoBackslashEscapes)
+		}
+		if variant&2 != 0 {
+			lexical[variant] |= SQLModeFlags(SQLModeANSIQuotes)
+		}
+	}
+	var unionSpans [][2]int
+	for variant := 0; variant < 4; variant++ {
+		if hasCredentialActionableKeyword(sql, true, lexical[variant]) {
+			unionSpans = unionCredentialSpansUnderAllLexicalVariants(sql, 0, initial)
+			break
+		}
+	}
+	var covered func(int) bool
+	if len(unionSpans) > 0 {
+		covered = func(pos int) bool { return boundaryInsideSpans(unionSpans, pos) }
+	}
+	var cursors [4]variantSemiCursor
+	cursorOf := func(variant int) *variantSemiCursor {
+		cursors[variant].init(sql, lexical[variant])
+		return &cursors[variant]
+	}
+	defer func() {
+		for variant := 0; variant < 4; variant++ {
+			cursors[variant].release()
+		}
+	}()
+	variantOf := func(m SQLModeFlags) int {
+		idx := 0
+		if m.Has(SQLModeNoBackslashEscapes) {
+			idx |= 1
+		}
+		if m.Has(SQLModeANSIQuotes) {
+			idx |= 2
+		}
+		return idx
+	}
+
 	stmtStart := 0
 	for stmtStart < len(sql) {
 		var stmtEnd int
 		semiTerminated := false
-		var typList []int
-		var valList []string
+		bestVariant := -1
 		if known {
-			stmtEnd, semiTerminated, typList, valList = splitOneStatement(sql, stmtStart, mode)
+			bestVariant = variantOf(mode)
+			end, ok := cursorOf(bestVariant).nextAfter(sql, stmtStart, covered)
+			if ok {
+				stmtEnd, semiTerminated = end, true
+			} else {
+				stmtEnd = len(sql)
+			}
 		} else {
-			// UNKNOWN stretch (#30747 review round 10): boundary choice and
-			// credential-span choice must never disagree across lexical
-			// variants. Compute the UNION of credential-shaped spans every
-			// variant of the last known mode marks: a `;` covered by the
-			// union lies inside a credential under some admitted mode and
-			// is NOT a statement terminator (the round-9 "shortest
-			// boundary" rule could sever exactly such a credential). The
-			// boundary is the earliest `;` any variant finds OUTSIDE the
-			// union; if no variant has one, the tail is one span. Pieces
-			// are union-masked afterwards, so a boundary too LATE is safe
-			// and a genuine re-pinning SET between braces stays visible.
 			stmtEnd = len(sql)
-			blocked := unionCredentialSpansUnderAllLexicalVariants(sql, stmtStart, mode)
-			base := mode &^ SQLModeFlags(SQLModeNoBackslashEscapes|SQLModeANSIQuotes)
 			for variant := 0; variant < 4; variant++ {
-				v := base
-				if variant&1 != 0 {
-					v |= SQLModeFlags(SQLModeNoBackslashEscapes)
-				}
-				if variant&2 != 0 {
-					v |= SQLModeFlags(SQLModeANSIQuotes)
-				}
-				// Walk this variant's `;` candidates, skipping any the
-				// cross-variant union marks as credential-internal.
-				// SET-initial statements (whose token inventory backs
-				// transition detection) never carry credential braces,
-				// so their first candidate is never blocked.
-				for cur := stmtStart; cur < len(sql); {
-					end, isSemi, tl, vl := splitOneStatement(sql, cur, v)
-					if isSemi && boundaryInsideSpans(blocked, end-1) {
-						cur = end
-						continue
-					}
-					if end < stmtEnd {
-						stmtEnd, semiTerminated, typList, valList = end, isSemi, tl, vl
-					}
-					break
+				if end, ok := cursorOf(variant).nextAfter(sql, stmtStart, covered); ok && end < stmtEnd {
+					stmtEnd, semiTerminated, bestVariant = end, true, variant
 				}
 			}
+		}
+		var typList []int
+		var valList []string
+		if bestVariant >= 0 && stmtEnd > stmtStart {
+			typList, valList = statementSQLModeInventory(sql, stmtStart, stmtEnd, lexical[bestVariant])
 		}
 		spans = append(spans, StatementSQLModeSpan{stmtStart, stmtEnd, mode, known, semiTerminated})
 		if newMode, ok, touched := setStatementSQLModeChange(typList, valList); touched {
@@ -513,6 +601,103 @@ func StatementSQLModes(sql string, initial SQLModeFlags) []StatementSQLModeSpan 
 		stmtStart = stmtEnd
 	}
 	return spans
+}
+
+// statementSQLModeInventory re-scans one already-delimited span for the
+// token inventory behind SET-transition detection. Only a span whose FIRST
+// token can be the SET keyword needs the list — every other statement's
+// inventory is provably discarded by transition detection, so plain spans
+// cost no second scan at all (keeps an N-thousand-statement unknown tail
+// strictly two passes per variant).
+func statementSQLModeInventory(sql string, start, end int, mode SQLModeFlags) ([]int, []string) {
+	if start >= end || !spanStartsWithSet(sql, start, end) {
+		return nil, nil
+	}
+	_, _, typList, valList := splitOneStatement(sql[start:end], 0, mode)
+	return typList, valList
+}
+
+// spanStartsWithSet reports whether the span's first token reads as the word
+// SET (byte check only; the token-level re-scan in statementSQLModeInventory
+// keeps authority over transition semantics).
+func spanStartsWithSet(sql string, start, end int) bool {
+	for start < end && (sql[start] == ' ' || sql[start] == '\t' || sql[start] == '\n' || sql[start] == '\r') {
+		start++
+	}
+	if end-start < 4 {
+		return false
+	}
+	if !((sql[start] == 's' || sql[start] == 'S') && (sql[start+1] == 'e' || sql[start+1] == 'E') && (sql[start+2] == 't' || sql[start+2] == 'T')) {
+		return false
+	}
+	c := sql[start+3]
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ';' || c == '(' || c == '/' || c == '='
+}
+
+// variantSemiCursor is a forward-only scanner over one lexical variant for
+// StatementSQLModes: it reports top-level `;` ends (brace depth zero — the
+// round-5 adversarial-shape shielding) without ever restarting, so per-
+// variant boundary collection over a request is one O(n) pass. Statement
+// starts only move forward, and candidates the cross-variant credential
+// union covers are consumed and dropped in place.
+type variantSemiCursor struct {
+	scanner       *Scanner
+	previousToken int
+	depth         int
+	nextEnd       int
+	hasNext       bool
+}
+
+func (c *variantSemiCursor) init(sql string, mode SQLModeFlags) {
+	if c.scanner == nil {
+		c.scanner = NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
+	}
+}
+
+func (c *variantSemiCursor) release() {
+	if c.scanner != nil {
+		PutScanner(c.scanner)
+		c.scanner = nil
+	}
+}
+
+// fill advances the shared scanner until the next `;` token at brace depth
+// zero; false at end of input.
+func (c *variantSemiCursor) fill(sql string) bool {
+	for c.scanner.Pos < len(sql) {
+		typ, _ := scanSensitiveToken(c.scanner, &c.previousToken)
+		if typ == EofChar() {
+			return false
+		}
+		switch typ {
+		case int('{'):
+			c.depth++
+		case int('}'):
+			if c.depth > 0 {
+				c.depth--
+			}
+		case int(';'):
+			if c.depth == 0 {
+				c.nextEnd, c.hasNext = c.scanner.Pos, true
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// nextAfter returns the smallest top-level `;` end strictly greater than
+// start that the coverage gate accepts; ok=false at end of input.
+func (c *variantSemiCursor) nextAfter(sql string, start int, covered func(int) bool) (int, bool) {
+	for c.hasNext || c.fill(sql) {
+		end := c.nextEnd
+		c.hasNext = false
+		if end <= start || (covered != nil && covered(end-1)) {
+			continue
+		}
+		return end, true
+	}
+	return 0, false
 }
 
 // splitOneStatement scans from start under mode and returns the end of the
