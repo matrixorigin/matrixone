@@ -14,6 +14,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -41,11 +42,12 @@ type sessionTemporaryDDLTestOwner struct {
 	trackingTempTableSession
 	published []string
 	retired   []string
+	forgotten []string
 }
 
 func (s *sessionTemporaryDDLTestOwner) OwnsTemporaryTable(db, physical string) bool {
 	for key, name := range s.tables {
-		if name == physical && strings.HasPrefix(key, db+".") {
+		if name == physical && strings.HasPrefix(key, strings.TrimSuffix(defines.TempTableAliasKey(db, ""), "0:")) {
 			return true
 		}
 	}
@@ -59,6 +61,13 @@ func (s *sessionTemporaryDDLTestOwner) PublishTemporaryTable(db, alias, name str
 func (s *sessionTemporaryDDLTestOwner) RetireTemporaryTable(db, alias, name string, _ []string) {
 	s.retired = append(s.retired, name)
 	if current, ok := s.GetTempTable(db, alias); ok && current == name {
+		s.RemoveTempTable(db, alias)
+	}
+}
+
+func (s *sessionTemporaryDDLTestOwner) ForgetMissingTemporaryTable(db, alias, name string) {
+	if current, ok := s.GetTempTable(db, alias); ok && current == name {
+		s.forgotten = append(s.forgotten, name)
 		s.RemoveTempTable(db, alias)
 	}
 }
@@ -465,7 +474,7 @@ func TestTemporaryDropTransactionOwnershipAndFailure(t *testing.T) {
 		{name: "executor delete failure preserves alias", executorTxn: true, deleteErr: assert.AnError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: map[string]string{catalog.MO_CATALOG + ".t": "physical"}}}
+			owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: map[string]string{defines.TempTableAliasKey(catalog.MO_CATALOG, "t"): "physical"}}}
 			proc := testutil.NewProcess(t)
 			proc.Base.IsFrontend = true
 			proc.Session = owner
@@ -502,6 +511,100 @@ func TestTemporaryDropTransactionOwnershipAndFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTemporaryDropForgetsAliasWhenPhysicalRelationIsMissing(t *testing.T) {
+	for _, version := range []int64{defines.MORPCVersion54, defines.MORPCVersion55} {
+		for _, executorTxn := range []bool{false, true} {
+			for _, missingDatabase := range []bool{false, true} {
+				for _, ifExists := range []bool{true, false} {
+					t.Run(fmt.Sprintf("version_%d/executor_%t/database_missing_%t/if_exists_%t", version, executorTxn, missingDatabase, ifExists), func(t *testing.T) {
+						owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{
+							tables: map[string]string{defines.TempTableAliasKey("test", "t"): "missing-physical"},
+						}}
+						proc := testutil.NewProcess(t)
+						proc.Base.IsFrontend = true
+						proc.Session = owner
+						rt := moruntime.ServiceRuntime(proc.GetService())
+						previous, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+						rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+						t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous) })
+
+						eng := newStubEngine()
+						eng.dbs["test"] = newStubDatabase("test")
+						if missingDatabase {
+							eng.dbErr = moerr.NewBadDBNoCtx("test")
+						}
+						q := &plan.DropTable{
+							Database: "test", Table: "t", IfExists: ifExists,
+							TableDef: &plan.TableDef{IsTemporary: true, Name: "t"},
+						}
+						pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+							Definition: &plan.DataDefinition_DropTable{DropTable: q},
+						}}}
+						c := NewCompile("cn", "test", "", "", "", eng, proc, nil, false, nil, time.Now())
+						defer c.Release()
+						c.pn = pn
+						c.disableLock, c.ignorePublish = true, true
+						c.temporaryDDLInExecutorTxn = executorTxn
+
+						err := (&Scope{Plan: pn}).DropTable(c)
+						if ifExists {
+							require.NoError(t, err)
+						} else {
+							wantCode := moerr.ErrNoSuchTable
+							if missingDatabase {
+								wantCode = moerr.ErrBadDB
+							}
+							require.True(t, moerr.IsMoErrCode(err, wantCode), "%v", err)
+						}
+						_, exists := owner.GetTempTable("test", "t")
+						require.False(t, exists)
+						require.Equal(t, []string{"missing-physical"}, owner.forgotten)
+						require.Empty(t, owner.retired)
+
+						owner.AddTempTable("test", "t", "missing-physical")
+						replacement, exists := owner.GetTempTable("test", "t")
+						require.True(t, exists)
+						require.Equal(t, "missing-physical", replacement)
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestTemporaryDropKeepsAliasOnUnknownDatabaseError(t *testing.T) {
+	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{
+		tables: map[string]string{defines.TempTableAliasKey("test", "t"): "physical"},
+	}}
+	proc := testutil.NewProcess(t)
+	proc.Base.IsFrontend = true
+	proc.Session = owner
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion55)
+	t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous) })
+
+	eng := newStubEngine()
+	eng.dbErr = assert.AnError
+	q := &plan.DropTable{
+		Database: "test", Table: "t", IfExists: true,
+		TableDef: &plan.TableDef{IsTemporary: true, Name: "t"},
+	}
+	pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+		Definition: &plan.DataDefinition_DropTable{DropTable: q},
+	}}}
+	c := NewCompile("cn", "test", "", "", "", eng, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	c.pn = pn
+	c.disableLock, c.ignorePublish = true, true
+
+	require.NoError(t, (&Scope{Plan: pn}).DropTable(c))
+	physical, exists := owner.GetTempTable("test", "t")
+	require.True(t, exists)
+	require.Equal(t, "physical", physical)
+	require.Empty(t, owner.retired)
 }
 
 func TestSessionTemporaryDDLRollout(t *testing.T) {
@@ -554,4 +657,41 @@ func TestTemporaryDDLGenerationPreservesIndexIdentity(t *testing.T) {
 	first := s.TemporaryTableName("db", "t")
 	s.generation = uuid.NewString()
 	require.NotEqual(t, first, s.TemporaryTableName("db", "t"))
+	root := s.TemporaryTableName("db", "root")
+	proc := testutil.NewProcess(t)
+	index := temporaryIndexTableName(proc, "db", "root", root, "idx")
+	require.Equal(t, strings.TrimSuffix(root, "root")+"idx", index)
+}
+
+func TestCreateIndexTemporaryNameUsesRootGeneration(t *testing.T) {
+	base := &trackingTempTableSession{tables: make(map[string]string)}
+	stage := &temporaryDDLSession{Session: base, sessionID: uuid.New(), generation: "root-generation", aliases: make(map[string]string)}
+	root := stage.TemporaryTableName("db", "root")
+	stage.AddTempTable("db", "root", root)
+
+	q := &plan.CreateIndex{
+		Database: "db",
+		Table:    "root",
+		TableDef: &plan.TableDef{Name: "root", IsTemporary: true},
+		Index: &plan.CreateTable{
+			TableDef:    &plan.TableDef{},
+			IndexTables: []*plan.TableDef{{Name: "idx"}},
+		},
+	}
+	pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+		Definition: &plan.DataDefinition_CreateIndex{CreateIndex: q},
+	}}}
+	proc := testutil.NewProcess(t)
+	proc.Session = stage
+	eng := newStubEngine()
+	c := NewCompile("cn", "db", "", "", "", eng, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	c.pn = pn
+	stop := gostub.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error {
+		return assert.AnError
+	})
+	defer stop.Reset()
+
+	require.ErrorIs(t, (&Scope{Plan: pn}).CreateIndex(c), assert.AnError)
+	require.Equal(t, strings.TrimSuffix(root, "root")+"idx", q.Index.IndexTables[0].Name)
 }

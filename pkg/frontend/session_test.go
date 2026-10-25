@@ -23,6 +23,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
@@ -1561,6 +1562,165 @@ func TestSessionTempTableMap(t *testing.T) {
 	assert.Equal(t, uint64(4), ses.GetTempTableVersion())
 	ses.RemoveTempTable("db1", "alias")
 	assert.Equal(t, uint64(5), ses.GetTempTableVersion())
+}
+
+func TestSessionTempTableMapKeepsDottedIdentitiesDistinct(t *testing.T) {
+	ses := &Session{
+		tempTables:    make(map[string]string),
+		tempTablesRev: make(map[string]string),
+	}
+
+	ses.AddTempTable("x", "y.t", "physical-one")
+	ses.AddTempTable("x.y", "t", "physical-two")
+
+	name, ok := ses.GetTempTable("x", "y.t")
+	require.True(t, ok)
+	require.Equal(t, "physical-one", name)
+	name, ok = ses.GetTempTable("x.y", "t")
+	require.True(t, ok)
+	require.Equal(t, "physical-two", name)
+
+	ses.RemoveTempTableByRealName("physical-one")
+	_, ok = ses.GetTempTable("x", "y.t")
+	require.False(t, ok)
+	name, ok = ses.GetTempTable("x.y", "t")
+	require.True(t, ok)
+	require.Equal(t, "physical-two", name)
+
+	ses.RemoveTempTable("x.y", "t")
+	_, ok = ses.GetTempTable("x.y", "t")
+	require.False(t, ok)
+	require.Empty(t, ses.tempTablesRev)
+}
+
+func TestRetireTemporaryTableRemovesUnknownIndexAliases(t *testing.T) {
+	for _, generated := range []bool{true, false} {
+		t.Run(fmt.Sprint(generated), func(t *testing.T) {
+			ses := &Session{}
+			prefix := ""
+			if generated {
+				prefix = uuid.NewString() + "_"
+			}
+			root := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"root")
+			index := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"index")
+			siblingIndex := defines.GenTempTableName(ses.GetSessId(), "db", uuid.NewString()+"_other_index")
+			ses.PublishTemporaryTable("db", "root", root)
+			ses.AddTempIndexTable("db", "index", index)
+			ses.AddTempIndexTable("db", "other_index", siblingIndex)
+			sibling := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"sibling")
+			ses.PublishTemporaryTable("db", "sibling", sibling)
+			ses.addTempIndexTable("other_db", "index", index+"_other", "txn", "stmt")
+			ses.RetireTemporaryTable("db", "root", root, nil)
+			_, ok := ses.GetTempTable("db", "root")
+			require.False(t, ok)
+			_, ok = ses.GetTempTable("db", "index")
+			require.Equal(t, !generated, ok)
+			name, ok := ses.GetTempTable("db", "sibling")
+			require.True(t, ok)
+			require.Equal(t, sibling, name)
+			name, ok = ses.GetTempTable("db", "other_index")
+			require.True(t, ok)
+			require.Equal(t, siblingIndex, name)
+			ses.rollbackTempTableTransaction("txn")
+			_, ok = ses.GetTempTable("other_db", "index")
+			require.False(t, ok, "unrelated child rollback history must survive")
+		})
+	}
+}
+
+func TestForgetMissingTemporaryTableCleansOwnedChildren(t *testing.T) {
+	for _, generated := range []bool{true, false} {
+		t.Run(fmt.Sprint(generated), func(t *testing.T) {
+			ses := &Session{}
+			prefix := ""
+			if generated {
+				prefix = uuid.NewString() + "_"
+			}
+			root := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"root")
+			child := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"child")
+			sibling := defines.GenTempTableName(ses.GetSessId(), "db", uuid.NewString()+"_sibling")
+			ses.PublishTemporaryTable("db", "root", root)
+			ses.AddTempIndexTable("db", "child", child)
+			// A journal containing a removal could otherwise resurrect the dead child.
+			ses.removeTempTable("db", "child", "txn", "remove")
+			ses.addTempIndexTable("db", "child", child, "txn", "create")
+			ses.PublishTemporaryTable("db", "user", defines.GenTempTableName(ses.GetSessId(), "db", prefix+"user"))
+			ses.addTempIndexTable("db", "sibling", sibling, "txn", "other")
+			ses.addTempIndexTable("other_db", "foreign", child+"_foreign", "txn", "other")
+			ses.ForgetMissingTemporaryTable("db", "root", root)
+			_, ok := ses.GetTempTable("db", "root")
+			require.False(t, ok)
+			_, ok = ses.GetTempTable("db", "child")
+			require.Equal(t, !generated, ok)
+			expected := 4
+			if generated {
+				expected--
+			}
+			require.Len(t, ses.tempTables, expected)
+			require.Len(t, ses.tempTablesRev, len(ses.tempTables))
+			require.Len(t, ses.tempTableIdentities, len(ses.tempTables))
+			require.Empty(t, ses.retiredTempTables)
+			ses.rollbackTempTableStatement("txn", "create")
+			ses.rollbackTempTableStatement("txn", "remove")
+			ses.rollbackTempTableTransaction("txn")
+			_, ok = ses.GetTempTable("db", "child")
+			require.Equal(t, !generated, ok, "rollback cannot resurrect confirmed-dead child")
+			_, ok = ses.GetTempTable("db", "sibling")
+			require.False(t, ok, "unrelated rollback history must remain intact")
+			_, ok = ses.GetTempTable("other_db", "foreign")
+			require.False(t, ok)
+			_, ok = ses.GetTempTable("db", "user")
+			require.True(t, ok, "prefix cannot authorize cleanup of a user table")
+		})
+	}
+	// Admission depends on reclaiming every child, not just the root.
+	ses := &Session{}
+	generation := uuid.NewString() + "_"
+	root := defines.GenTempTableName(ses.GetSessId(), "db", generation+"root")
+	ses.PublishTemporaryTable("db", "root", root)
+	for i := 0; i < maxSessionTemporaryTableGenerations-1; i++ {
+		alias := fmt.Sprint("index", i)
+		ses.AddTempIndexTable("db", alias, defines.GenTempTableName(ses.GetSessId(), "db", generation+alias))
+	}
+	require.Error(t, ses.CheckTemporaryTableCapacity(context.Background()))
+	// Stale lookup of a different generation must leave the whole family alone.
+	ses.ForgetMissingTemporaryTable("db", "root", root+"_old")
+	require.Len(t, ses.tempTables, maxSessionTemporaryTableGenerations)
+	ses.ForgetMissingTemporaryTable("db", "root", root)
+	require.Empty(t, ses.tempTables)
+	require.Empty(t, ses.tempTablesRev)
+	require.Empty(t, ses.tempTableIdentities)
+	require.Empty(t, ses.retiredTempTables)
+	require.NoError(t, ses.CheckTemporaryTableCapacity(context.Background()))
+}
+
+func TestForgetMissingTemporaryTableDoesNotRetireReusedName(t *testing.T) {
+	ses := &Session{tempTables: make(map[string]string), tempTablesRev: make(map[string]string)}
+	physical := defines.GenTempTableName(ses.GetSessId(), "db", "t")
+	ses.AddTempTable("db", "t", physical)
+	ses.removeTempTable("db", "t", "txn", "remove")
+	ses.addTempTable("db", "t", physical, "txn", "create")
+	ses.ForgetMissingTemporaryTable("db", "t", physical)
+	ses.rollbackTempTableTransaction("txn")
+	_, ok := ses.GetTempTable("db", "t")
+	require.False(t, ok, "rollback cannot restore confirmed dead ownership")
+	ses.addTempTable("db", "t", physical, "newtxn", "recreate")
+	ses.commitTempTableTransaction("newtxn")
+	ses.cleanupRetiredTempTables(context.Background())
+	name, ok := ses.GetTempTable("db", "t")
+	require.True(t, ok)
+	require.Equal(t, physical, name)
+	require.Empty(t, ses.retiredTempTables, "commit must not DROP a reused physical identity")
+	// A lookup of the previous generation cannot erase replacement or its undo.
+	ses.addTempTable("db", "t", "replacement", "txn2", "replace")
+	ses.ForgetMissingTemporaryTable("db", "t", physical)
+	name, ok = ses.GetTempTable("db", "t")
+	require.True(t, ok)
+	require.Equal(t, "replacement", name)
+	ses.rollbackTempTableTransaction("txn2")
+	name, ok = ses.GetTempTable("db", "t")
+	require.True(t, ok)
+	require.Equal(t, physical, name)
 }
 
 func TestSessionTempTableMigrationSnapshot(t *testing.T) {

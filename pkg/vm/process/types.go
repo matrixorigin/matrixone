@@ -203,6 +203,13 @@ type TemporaryTableDDL interface {
 	RetireTemporaryTable(database, alias, physicalName string, indexNames []string)
 }
 
+// MissingTemporaryTableForgetter removes logical ownership after an authoritative
+// lookup proves the physical table absent. It must not schedule physical DROP:
+// legacy temporary names can be reused by the next CREATE in the same transaction.
+type MissingTemporaryTableForgetter interface {
+	ForgetMissingTemporaryTable(database, alias, physicalName string)
+}
+
 // ForeignConn is a connection to a foreign data source (Elasticsearch, an
 // external SQL database, ...) cached on an interactive session for esql_tvf /
 // sql_tvf. The session owns its lifetime and closes it when the session ends.

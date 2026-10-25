@@ -425,7 +425,7 @@ func TestPreparedWindowRangeFrameMarkers(t *testing.T) {
 	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
 	require.NoError(t, err)
 	window := firstWindowSpec(t, queryPlan)
-	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int32, 1)
+	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int64, 1)
 	require.Equal(t, planpb.FrameBound_CURRENT_ROW, window.Frame.End.Type)
 	require.Nil(t, window.Frame.End.Val)
 }
@@ -443,8 +443,8 @@ func TestPreparedWindowRangeFrameMarkersInBothBounds(t *testing.T) {
 	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], true)
 	require.NoError(t, err)
 	window := firstWindowSpec(t, queryPlan)
-	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int32, 1)
-	requirePreparedWindowFrameParam(t, window.Frame.End.Val, types.T_int32, 2)
+	requirePreparedWindowFrameParam(t, window.Frame.Start.Val, types.T_int64, 1)
+	requirePreparedWindowFrameParam(t, window.Frame.End.Val, types.T_int64, 2)
 }
 
 func TestPreparedWindowRangeFrameMarkerRequiresNumericOrder(t *testing.T) {
@@ -2111,6 +2111,26 @@ func TestNtileRequiresRowIndependentBuckets(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+		})
+	}
+}
+
+func TestRangeFrameBoundTypeWidening(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		orderType types.T
+		boundType types.T
+	}{
+		{name: "tinyint", orderType: types.T_int8, boundType: types.T_int64},
+		{name: "smallint", orderType: types.T_int16, boundType: types.T_int64},
+		{name: "int", orderType: types.T_int32, boundType: types.T_int64},
+		{name: "bigint", orderType: types.T_int64, boundType: types.T_int64},
+		{name: "uint", orderType: types.T_uint32, boundType: types.T_uint32},
+		{name: "decimal", orderType: types.T_decimal64, boundType: types.T_decimal64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := rangeFrameBoundType(tc.orderType.ToType().PlanType())
+			require.Equal(t, int32(tc.boundType), got.Id)
 		})
 	}
 }
