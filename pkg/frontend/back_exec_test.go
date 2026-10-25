@@ -66,6 +66,22 @@ func TestBindBackExecSession(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestBackSessionForgetsMissingTemporaryTable(t *testing.T) {
+	var absent *backSession
+	absent.ForgetMissingTemporaryTable("db", "t", "physical")
+	(&backSession{}).ForgetMissingTemporaryTable("db", "t", "physical")
+	ses := &Session{}
+	ses.PublishTemporaryTable("db", "t", "physical")
+	parent := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
+	parent.ForgetMissingTemporaryTable("db", "t", "old")
+	_, ok := ses.GetTempTable("db", "t")
+	require.True(t, ok, "stale observation must not erase replacement")
+	parent.ForgetMissingTemporaryTable("db", "t", "physical")
+	_, ok = ses.GetTempTable("db", "t")
+	require.False(t, ok)
+	require.Empty(t, ses.retiredTempTables)
+}
+
 func TestBackSessionInheritsForeignKeyChecks(t *testing.T) {
 	ctx := context.Background()
 	ses := newFeatureLimitTestSession(t)
