@@ -313,6 +313,40 @@ func TestJqFramesMultipleResultsAndPreservesLargeIntegers(t *testing.T) {
 	requireJqResult(t, result, []string{""}, []bool{true})
 }
 
+func TestJqRejectsOutOfRangeNumbersBeforeDuplicateKeysOverwriteThem(t *testing.T) {
+	require.False(t, jqJSONNumberOutOfFloat64Range([]byte(`{"text":"1e1000"}`)))
+	require.False(t, jqJSONNumberOutOfFloat64Range([]byte(`{"text":"\"1e1000"}`)))
+	require.False(t, jqJSONNumberOutOfFloat64Range([]byte(`{"text":"\\1e1000"}`)))
+
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name string
+		json string
+		want string
+	}{
+		{name: "positive", json: `{"n":1e1000,"n":1}`, want: "json: cannot unmarshal number 1e1000 into Go struct field .n of type float64"},
+		{name: "negative", json: `{"n":-1e1000,"n":1}`, want: "json: cannot unmarshal number -1e1000 into Go struct field .n of type float64"},
+		{name: "nested object", json: `{"outer":{"n":1e1000,"n":1}}`, want: "json: cannot unmarshal number 1e1000 into Go struct field .outer.n of type float64"},
+		{name: "nested array", json: `{"outer":[{"n":-1e1000,"n":1}]}`, want: "json: cannot unmarshal number -1e1000 into Go struct field .outer.0.n of type float64"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := evalJqForTest(t, proc, newOpBuiltInJq(), []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{test.json}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"."}, nil),
+			}, nil, false)
+			require.EqualError(t, err, test.want)
+
+			result, err := evalJqForTest(t, proc, newOpBuiltInJq(), []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{test.json}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"."}, nil),
+			}, nil, true)
+			require.NoError(t, err)
+			requireJqResult(t, result, []string{""}, []bool{true})
+		})
+	}
+}
+
 func TestJsonRowPropagatesResultAllocationFailureAndResetsEncoder(t *testing.T) {
 	for _, masked := range []bool{false, true} {
 		t.Run(strconv.FormatBool(masked), func(t *testing.T) {

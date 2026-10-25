@@ -260,7 +260,7 @@ func (op *opBuiltInJq) jqImpl(jsonStr []byte, code *gojq.Code) error {
 		}
 		return err
 	}
-	if jqNumberOutOfFloat64Range(jv) {
+	if jqJSONNumberOutOfFloat64Range(jsonStr) {
 		// Keep json.Unmarshal's historical range error while retaining the
 		// original json.Number values for integers that float64 can represent.
 		var validated any
@@ -293,22 +293,41 @@ func (op *opBuiltInJq) jqImpl(jsonStr []byte, code *gojq.Code) error {
 	return nil
 }
 
-func jqNumberOutOfFloat64Range(v any) bool {
-	switch v := v.(type) {
-	case json.Number:
-		_, err := v.Float64()
-		return err != nil
-	case []any:
-		for _, item := range v {
-			if jqNumberOutOfFloat64Range(item) {
-				return true
+func jqJSONNumberOutOfFloat64Range(data []byte) bool {
+	// The decoder above has already validated the JSON grammar. Scan the source
+	// so duplicate object keys cannot discard an out-of-range number before it
+	// is checked, while avoiding a second decoded object tree on the common path.
+	for i := 0; i < len(data); {
+		if data[i] == '"' {
+			i++
+			for i < len(data) {
+				if data[i] == '\\' {
+					i += 2
+					continue
+				}
+				if data[i] == '"' {
+					i++
+					break
+				}
+				i++
 			}
+			continue
 		}
-	case map[string]any:
-		for _, item := range v {
-			if jqNumberOutOfFloat64Range(item) {
-				return true
+		if data[i] != '-' && (data[i] < '0' || data[i] > '9') {
+			i++
+			continue
+		}
+
+		start := i
+		for i < len(data) {
+			b := data[i]
+			if (b < '0' || b > '9') && b != '-' && b != '+' && b != '.' && b != 'e' && b != 'E' {
+				break
 			}
+			i++
+		}
+		if _, err := strconv.ParseFloat(string(data[start:i]), 64); err != nil {
+			return true
 		}
 	}
 	return false
