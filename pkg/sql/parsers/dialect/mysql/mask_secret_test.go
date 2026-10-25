@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -452,10 +453,13 @@ func TestMaskMalformedRunsAtEOFAndInCommentStayLinear(t *testing.T) {
 func TestMaskPerStatementSQLMode(t *testing.T) {
 	stage := ` create stage s credentials={'aws_key'='a\', url='STAGED_CANARY_A'}`
 
-	// the reviewer repro: WITHOUT the transition the initial-mode masking
-	// leaves the second value visible; per-statement masking hides it.
-	require.Contains(t,
-		maskSensitiveSqlLiteralsScoped(stage, CredentialStateNone, true, 0), "STAGED_CANARY_A")
+	// The wrong mode now conservatively masks the malformed map instead of
+	// leaking its tail. Accurate mode tracking still matters: the valid map
+	// must preserve its key structure rather than use that lossy fallback.
+	wrongMode := maskSensitiveSqlLiteralsScoped(stage, CredentialStateNone, true, 0)
+	require.NotContains(t, wrongMode, "STAGED_CANARY_A")
+	require.NotEqual(t, wrongMode, maskSensitiveSqlLiteralsScoped(stage, CredentialStateNone, true,
+		SQLModeFlags(SQLModeNoBackslashEscapes)))
 	sql := `set sql_mode='NO_BACKSLASH_ESCAPES';` + stage
 	got := MaskSensitiveSqlLiteralsPerStatement(sql, 0)
 	require.NotContains(t, got, "STAGED_CANARY_A")
@@ -758,4 +762,108 @@ func TestMaskPerStatementSQLModeSQLModeUserVarTargets(t *testing.T) {
 		require.Contains(t, got, `'aws_key'='******'secret_key'`,
 			"transition applied for %q", prefix)
 	}
+}
+
+func TestMaskPerStatementSQLModeAssignmentTargets(t *testing.T) {
+	stage := ` create stage s url='file:///x' credentials={'k'='foo\','secret_key'='SCOPE_COMPARISON_CANARY'}`
+	for _, test := range []struct {
+		name, prefix string
+		transition   bool
+	}{
+		{"session operand", `set @x=@@session.sql_mode='';`, false},
+		{"unqualified operand", `set @x=@@sql_mode='';`, false},
+		{"local operand", `set @x=@@local.sql_mode='';`, false},
+		{"colon assignment", `set @x:=@@session.sql_mode='';`, false},
+		{"nested comma", `set @x=if(1,@@session.sql_mode='',0);`, false},
+		{"nested coalesce", `set @x=coalesce(NULL,@@local.sql_mode='');`, false},
+		{"later user assignment", `set @x=1,@y=@@sql_mode='';`, false},
+		{"real target after nested comma", `set @x=if(1,@@sql_mode='',0),sql_mode='';`, true},
+		{"real target before operand", `set sql_mode='',@x=@@session.sql_mode='';`, true},
+		{"quoted real target", "set `sql_mode`='';", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOneWithSQLMode(t.Context(), test.prefix, 1, "NO_BACKSLASH_ESCAPES")
+			require.NoError(t, err)
+			defer stmt.Free()
+			set, ok := stmt.(*tree.SetVar)
+			require.True(t, ok)
+			actualTransition := false
+			for _, assignment := range set.Assignments {
+				actualTransition = actualTransition || assignment.System && !assignment.Global && strings.EqualFold(assignment.Name, "sql_mode")
+			}
+			require.Equal(t, test.transition, actualTransition, "independent parser assignment oracle")
+			mode := SQLModeFlags(SQLModeNoBackslashEscapes)
+			if actualTransition {
+				mode = 0
+			}
+			want := test.prefix + MaskSensitiveSqlLiteralsWithSQLMode(stage, mode)
+			got := MaskSensitiveSqlLiteralsPerStatement(test.prefix+stage, SQLModeFlags(SQLModeNoBackslashEscapes))
+			require.Equal(t, want, got)
+			require.NotContains(t, got, "SCOPE_COMPARISON_CANARY")
+			require.Equal(t, got, MaskSensitiveSqlLiteralsPerStatement(got, SQLModeFlags(SQLModeNoBackslashEscapes)))
+		})
+	}
+	// A later literal must not turn an earlier unevaluable assignment into a
+	// known transition: that earlier assignment can fail before it is applied.
+	for _, prefix := range []string{
+		`set sql_mode=concat('NO_BACKSLASH','_ESCAPES'),sql_mode='';`,
+		`set sql_mode=concat('NO_BACKSLASH','_ESCAPES'),@x=if(1,@@sql_mode='',0);`,
+	} {
+		got := MaskSensitiveSqlLiteralsPerStatement(prefix+stage, SQLModeFlags(SQLModeNoBackslashEscapes))
+		require.NotContains(t, got, "SCOPE_COMPARISON_CANARY")
+	}
+}
+
+func TestMaskPerStatementSQLModeInertData(t *testing.T) {
+	for _, value := range []string{"ordinary note", "sql_mode note", "sql_mode settings", "SET sql_mode note"} {
+		sql := "insert into docs(id,note) values " + strings.TrimSuffix(strings.Repeat("(1,'"+value+"'),", 1000), ",") + ";"
+		t.Run(value, func(t *testing.T) {
+			require.Equal(t, sql, MaskSensitiveSqlLiteralsPerStatement(sql, 0))
+			require.Zero(t, testing.AllocsPerRun(10, func() {
+				MaskSensitiveSqlLiteralsPerStatement(sql, 0)
+			}), "inert data must not retain a request-wide token inventory")
+		})
+	}
+	for _, sql := range []string{
+		`/*! set sql_mode='NO_BACKSLASH_ESCAPES' */; create stage s credentials={'k'='foo\','secret_key'='EXEC_SET_CANARY'}`,
+		`select 'SET sql_mode'; set sql_mode='NO_BACKSLASH_ESCAPES'; create stage s credentials={'k'='foo\','secret_key'='EXEC_SET_CANARY'}`,
+	} {
+		require.NotContains(t, MaskSensitiveSqlLiteralsPerStatement(sql, 0), "EXEC_SET_CANARY", "real SET statements still reach mode inference")
+	}
+}
+
+func TestMaskSensitiveMalformedQuotedMap(t *testing.T) {
+	const stage = `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='MALFORMED_QUOTE_CANARY'}`
+	sql := stage
+	got := MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "MALFORMED_QUOTE_CANARY")
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got))
+	// The parser's stage-only echo policy remains separate from record
+	// masking, even when a broken map requires conservative span union.
+	sql = `create user u identified by 'VISIBLE_PASSWORD'; ` + sql
+	got = MaskStageCredentialLiteralsWithInitialState(sql, CredentialStateNone)
+	require.NotContains(t, got, "MALFORMED_QUOTE_CANARY")
+	require.Contains(t, got, "VISIBLE_PASSWORD")
+	require.Equal(t, got, MaskStageCredentialLiteralsWithInitialState(got, CredentialStateNone))
+	fragment := `'foo\','secret_key'='MALFORMED_QUOTE_CANARY'}`
+	got = MaskStageCredentialLiteralsWithInitialState(fragment, CredentialStateInMapAfterEq)
+	require.NotContains(t, got, "MALFORMED_QUOTE_CANARY", "a diagnostic tail must retain its initial map context in fallback")
+	// Each level needs conservative map masking, but must reuse its already
+	// redacted PREPARE child rather than recursively expand four variants.
+	// Use escaped ordinary literals: the scanner does not support a dollar
+	// delimiter inside another dollar-quoted literal, even with distinct tags.
+	nested := stage
+	for depth := 0; depth < 8; depth++ {
+		encoded := strings.ReplaceAll(strings.ReplaceAll(nested, `\`, `\\`), `'`, `''`)
+		nested = "prepare p from '" + encoded + "'; " + stage
+	}
+	_, edits, malformed := collectCredentialMasks(nested, CredentialStateNone, true, 0, true)
+	require.True(t, malformed)
+	require.NotEmpty(t, edits, "normal collection must descend into PREPARE")
+	_, edits, malformed = collectCredentialMasks(nested, CredentialStateNone, true, 0, false)
+	require.True(t, malformed)
+	require.Empty(t, edits, "fallback collection must not re-expand an already masked subtree")
+	got = MaskSensitiveSqlLiterals(nested)
+	require.NotContains(t, got, "MALFORMED_QUOTE_CANARY")
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got))
 }

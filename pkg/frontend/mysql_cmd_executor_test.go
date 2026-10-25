@@ -12877,3 +12877,73 @@ func TestMaskQueryForDebugTraceStagedSQLMode(t *testing.T) {
 		"NO_BACKSLASH_ESCAPES")
 	require.NotContains(t, out, "STAGED_DBG_CANARY2")
 }
+
+func TestMaskQueryForDebugTraceSQLModeOperands(t *testing.T) {
+	const mode = "NO_BACKSLASH_ESCAPES"
+	const stage = ` create stage s url='file:///x' credentials={'k'='foo\','secret_key'='TRACE_OPERAND_CANARY'}`
+	for _, prefix := range []string{
+		`set @x=@@session.sql_mode='';`,
+		`set @x=@@sql_mode='';`,
+		`set @x=@@local.sql_mode='';`,
+		`set @x=if(1,@@session.sql_mode='',0);`,
+		`set @x=1,@y=coalesce(NULL,@@local.sql_mode='');`,
+	} {
+		t.Run(prefix, func(t *testing.T) {
+			stmt, err := mysql.ParseOneWithSQLMode(t.Context(), prefix, 1, mode)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.False(t, isSessionSQLModeSet(stmt), "production staging must agree this is not a mode assignment")
+			want := prefix + mysql.MaskSensitiveSqlLiteralsWithSQLMode(stage, mysql.ParseSQLModeFlags(mode))
+			for _, limit := range []int{-1, 400} {
+				got := maskQueryForDebugTrace(prefix+stage, limit, mode)
+				require.Equal(t, want, got)
+				require.NotContains(t, got, "TRACE_OPERAND_CANARY")
+			}
+		})
+	}
+}
+
+func TestExecRequestSQLModeOperandTrace(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	previousPU := getPuIfPresent("")
+	defer setPu("", previousPU)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	// Pair the fixture's catalog-version proof with an already loaded empty
+	// policy, so request admission does not need a catalog engine.
+	ses.ruleCache = map[string]string{}
+	getPu("").SV.LengthOfQueryPrinted = 400
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "NO_BACKSLASH_ESCAPES"))
+	observed, logs := newObservedProtocolSession()
+	ses.logger, ses.logLevel = observed.logger, observed.logLevel
+	ses.loggerOnce.Do(func() {})
+	// The trace is emitted before planning. Stop at the existing wrapper seam
+	// so this protocol-boundary test needs neither an engine nor a cluster.
+	stop := moerr.NewInvalidInputNoCtx("stop after query trace")
+	planCalls := 0
+	stubs := gostub.Stub(&GetComputationWrapper, func(*ExecCtx, string, string, engine.Engine, *process.Process, *Session) ([]ComputationWrapper, error) {
+		planCalls++
+		return nil, stop
+	})
+	defer stubs.Reset()
+	for i, target := range []string{"@@sql_mode", "@@session.sql_mode", "@@local.sql_mode"} {
+		query := `set @x=` + target + `=''; create stage s url='file:///x' credentials={'k'='foo\','secret_key'='COM_QUERY_SCOPE_CANARY'}`
+		resp, err := ExecRequest(ses, newTestExecCtx(ctx, ctrl), &Request{cmd: COM_QUERY, data: []byte(query)})
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, ErrorResponse, resp.category)
+		responseErr, ok := resp.data.(error)
+		require.True(t, ok)
+		require.ErrorContains(t, responseErr, "stop after query trace")
+		require.Equal(t, i+1, planCalls, "request must reach the injected planning boundary")
+		entries := logs.FilterMessage("query trace").All()
+		require.Len(t, entries, i+1, "the actual debug sink must receive each request once")
+		logged := entries[len(entries)-1].ContextMap()["query"]
+		require.Equal(t, mysql.MaskSensitiveSqlLiteralsPerStatement(query, mysql.ParseSQLModeFlags("NO_BACKSLASH_ESCAPES")), logged)
+		require.NotContains(t, logged, "COM_QUERY_SCOPE_CANARY")
+		mode, err := ses.GetSessionSysVar("sql_mode")
+		require.NoError(t, err)
+		require.Equal(t, "NO_BACKSLASH_ESCAPES", mode)
+	}
+}

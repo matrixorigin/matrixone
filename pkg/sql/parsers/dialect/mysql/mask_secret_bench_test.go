@@ -92,3 +92,18 @@ func BenchmarkMaskPrepareStage(b *testing.B) {
 		MaskSensitiveSqlLiterals(benchPrepareStage)
 	}
 }
+
+var benchMaskedRequest string
+
+func BenchmarkMaskRequestSQLMode(b *testing.B) {
+	for _, value := range []string{"ordinary note", "sql_mode note", "SET sql_mode note"} {
+		sql := "insert into docs(id,note) values " + strings.TrimSuffix(strings.Repeat("(1,'"+value+"'),", 1000), ",") + ";"
+		b.Run(value, func(b *testing.B) {
+			b.SetBytes(int64(len(sql)))
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				benchMaskedRequest = MaskSensitiveSqlLiteralsPerStatement(sql, 0)
+			}
+		})
+	}
+}

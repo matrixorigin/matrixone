@@ -118,7 +118,13 @@ func maskSensitiveSqlLiteralsScoped(sql string, initial CredentialMapState, mask
 	if initial == CredentialStateNone && !hasCredentialActionableKeyword(sql, maskAll, mode) {
 		return sql
 	}
-	spans, rawEdits := collectCredentialMasks(sql, initial, maskAll, mode)
+	spans, rawEdits, malformedMap := collectCredentialMasks(sql, initial, maskAll, mode, true)
+	if malformedMap {
+		// A broken quoted value can turn the following key/separator into
+		// literal data before the scanner reports an error. Keep the original
+		// bytes and reuse conservative span union rather than publish that tail.
+		return maskPieceUnderAllLexicalVariantsScoped(sql, mode, maskAll, initial, rawEdits, false)
+	}
 	return spliceCredentialMasks(sql, spans, rawEdits)
 }
 
@@ -137,7 +143,7 @@ type credentialRawEdit struct {
 // regions several lexical modes see in the very same bytes — a chained
 // re-mask would destroy structural separators one mode hides inside a
 // string token of the other (#30747 review).
-func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool, mode SQLModeFlags) ([][2]int, []credentialRawEdit) {
+func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool, mode SQLModeFlags, descendPrepare bool) ([][2]int, []credentialRawEdit, bool) {
 	scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
 	defer PutScanner(scanner)
 	previousToken := 0
@@ -163,6 +169,7 @@ func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool
 	// alongside the credential spans below.
 	var rawEdits []credentialRawEdit
 	statementStart := true
+	malformedMap := false
 
 	for scanner.Pos < len(sql) {
 		tokStart := scanner.Pos
@@ -174,10 +181,13 @@ func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool
 		// contents as tokens, so maskTokenStart descends into them
 		// (#30747 review: `identified by /*! 'x' */`).
 		effStart := maskTokenStart(sql, tokStart)
+		if typ == LEX_ERROR && credState != CredentialStateNone && !isMapSep(typ, effStart) {
+			malformedMap = true
+		}
 		if typ == int(';') {
 			statementStart = true
 		} else {
-			if initial == CredentialStateNone && typ == PREPARE && statementStart && tokStart >= coveredUntil {
+			if descendPrepare && initial == CredentialStateNone && typ == PREPARE && statementStart && tokStart >= coveredUntil {
 				// Consumes the `<name> FROM '<sql>'` tail; the decoded
 				// payload is masked by a recursive scoped pass.
 				if rs, re, text, ok := maskOnePrepareLiteral(sql, scanner, &previousToken, maskAll, mode); ok {
@@ -308,7 +318,7 @@ func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool
 		}
 	}
 
-	return spans, rawEdits
+	return spans, rawEdits, malformedMap
 }
 
 // spliceCredentialMasks applies the collected spans (as `******`) and
@@ -366,6 +376,12 @@ func MaskSensitiveSqlLiteralsPerStatement(sql string, initial SQLModeFlags) stri
 	if strings.IndexByte(sql, ';') < 0 || !containsFoldASCII(sql, "sql_mode") {
 		return maskSensitiveSqlLiteralsScoped(sql, CredentialStateNone, true, initial)
 	}
+	// Probe credential rules and executable SET together. If neither can
+	// occur, the request is already safe: do not tokenize/retain inert bulk
+	// data, or scan it a second time just because it mentions sql_mode.
+	if !hasMaskingKeyword(sql, true, true, initial) {
+		return sql
+	}
 
 	type stmtSpan struct {
 		start, end int
@@ -383,13 +399,23 @@ func MaskSensitiveSqlLiteralsPerStatement(sql string, initial SQLModeFlags) stri
 		stmtEnd := len(sql)
 		var typList []int
 		var valList []string
+		firstToken := true
+		collectTokens := false
 		for scanner.Pos < len(sql) {
 			typ, s := scanSensitiveToken(scanner, &previousToken)
 			if typ == EofChar() {
 				break
 			}
-			typList = append(typList, typ)
-			valList = append(valList, s)
+			if firstToken {
+				firstToken = false
+				collectTokens = typ == SET
+			}
+			// Only a SET-initial statement can assign the session mode. Other
+			// statements need boundary discovery, not a retained token inventory.
+			if collectTokens {
+				typList = append(typList, typ)
+				valList = append(valList, s)
+			}
 			if typ == int(';') {
 				stmtEnd = scanner.Pos
 				break
@@ -447,6 +473,10 @@ func MaskSensitiveSqlLiteralsPerStatement(sql string, initial SQLModeFlags) stri
 // Only NO_BACKSLASH_ESCAPES and ANSI_QUOTES change where string tokens
 // begin and end; over-masking is the safe direction here.
 func maskPieceUnderAllLexicalVariants(piece string, lastKnown SQLModeFlags) string {
+	return maskPieceUnderAllLexicalVariantsScoped(piece, lastKnown, true, CredentialStateNone, nil, true)
+}
+
+func maskPieceUnderAllLexicalVariantsScoped(piece string, lastKnown SQLModeFlags, maskAll bool, initial CredentialMapState, preparedEdits []credentialRawEdit, descendPrepare bool) string {
 	base := lastKnown &^ SQLModeFlags(SQLModeNoBackslashEscapes|SQLModeANSIQuotes)
 	type maskItem struct {
 		start, end int
@@ -454,6 +484,13 @@ func maskPieceUnderAllLexicalVariants(piece string, lastKnown SQLModeFlags) stri
 		isRaw      bool
 	}
 	var items []maskItem
+	// A known-mode malformed-map fallback already masked each PREPARE child
+	// during its first collection. Reuse those edits instead of expanding the
+	// same subtree four times at every nesting level. Unknown-mode requests
+	// still need the separate per-variant descents (preparedEdits=nil).
+	for _, r := range preparedEdits {
+		items = append(items, maskItem{r.start, r.end, r.text, true})
+	}
 	for variant := 0; variant < 4; variant++ {
 		m := base
 		if variant&1 != 0 {
@@ -462,10 +499,10 @@ func maskPieceUnderAllLexicalVariants(piece string, lastKnown SQLModeFlags) stri
 		if variant&2 != 0 {
 			m |= SQLModeFlags(SQLModeANSIQuotes)
 		}
-		if !hasCredentialActionableKeyword(piece, true, m) {
+		if initial == CredentialStateNone && !hasCredentialActionableKeyword(piece, maskAll, m) {
 			continue
 		}
-		spans, rawEdits := collectCredentialMasks(piece, CredentialStateNone, true, m)
+		spans, rawEdits, _ := collectCredentialMasks(piece, initial, maskAll, m, descendPrepare)
 		for _, s := range spans {
 			items = append(items, maskItem{s[0], s[1], "******", false})
 		}
@@ -532,7 +569,40 @@ func setStatementSQLModeChange(typList []int, valList []string) (SQLModeFlags, b
 	var mode SQLModeFlags
 	touched := false
 	ok := true
-	for i := 0; i < len(typList); i++ {
+	for start := 1; start < len(typList); {
+		// Assignment-list commas are separators only outside expressions.
+		// In particular, a system variable inside IF/COALESCE is an operand,
+		// never the target of a new SET item.
+		end, depth := start, 0
+		for end < len(typList) {
+			typ := typList[end]
+			if typ == int(';') || typ == int(',') && depth == 0 {
+				break
+			}
+			switch typ {
+			case int('('):
+				depth++
+			case int(')'):
+				if depth > 0 {
+					depth--
+				}
+			}
+			end++
+		}
+		i := start
+		start = end + 1
+		if i == end {
+			continue
+		}
+		switch typList[i] {
+		case GLOBAL, PERSIST:
+			continue
+		case SESSION, LOCAL:
+			i++
+		}
+		if i+2 >= end || (typList[i+1] != int('=') && typList[i+1] != ASSIGNMENT) {
+			continue
+		}
 		// Only genuine SYSTEM-variable targets count (isSessionSQLModeSet
 		// semantics, #30747 review): a `@session.sql_mode` is a USER variable
 		// (an AT_ID token, System=false) however it is spelled, and a quoted
@@ -552,33 +622,14 @@ func setStatementSQLModeChange(typList []int, valList []string) (SQLModeFlags, b
 		if !isSysTarget {
 			continue
 		}
-		if i > 0 {
-			switch strings.ToLower(valList[i-1]) {
-			case "global", "persist", "persist_only":
-				continue
-			}
-		}
-		// Next token must be an assignment operator: the parser accepts both
-		// `=` and `:=` for SET assignments.
-		if i+1 >= len(typList) || (typList[i+1] != int('=') && typList[i+1] != ASSIGNMENT) {
-			continue
-		}
-		// Collect the value tokens up to the next top-level separator.
-		j := i + 2
-		var value []string
-		var valueTyps []int
-		for j < len(typList) && typList[j] != int(',') && typList[j] != int(';') {
-			value = append(value, valList[j])
-			valueTyps = append(valueTyps, typList[j])
-			j++
-		}
 		touched = true
-		if len(value) == 1 && valueTyps[0] == STRING {
-			// Quoted value: the scanner already decoded it.
-			mode, ok = sqlModeValueFlags(value[0])
-		} else if len(value) == 1 && valueTyps[0] != STRING && value[0] != "" {
-			// Bare single-word value (e.g. SET sql_mode = ANSI_QUOTES).
-			mode, ok = sqlModeValueFlags(value[0])
+		if end == i+3 && (typList[i+2] == STRING || valList[i+2] != "") {
+			// A single literal or bare mode name is evaluable. Never turn a
+			// previous unknown assignment back into known: it could fail before
+			// a later literal assignment runs, leaving the original mode intact.
+			var valueOK bool
+			mode, valueOK = sqlModeValueFlags(valList[i+2])
+			ok = ok && valueOK
 		} else {
 			// DEFAULT, empty list, or an expression (concat, function call):
 			// we cannot evaluate it the way the session would.
@@ -772,6 +823,14 @@ func hasFoldWordAt(sql string, pos int, needle string) bool {
 // skipped; executable `/*! ... */` comments are scanned through, since the
 // scanner yields their contents as tokens.
 func hasCredentialActionableKeyword(sql string, maskAll bool, mode SQLModeFlags) bool {
+	return hasMaskingKeyword(sql, maskAll, false, mode)
+}
+
+// hasMaskingKeyword shares scanner-compatible, allocation-free lexical
+// skipping between credential admission and the request's SET-mode probe.
+// includeSQLModeSet additionally admits executable SET words;
+// SET/sql_mode inside inert string data must not trigger token retention.
+func hasMaskingKeyword(sql string, maskAll bool, includeSQLModeSet bool, mode SQLModeFlags) bool {
 	i := 0
 	n := len(sql)
 	for i < n {
@@ -896,6 +955,9 @@ func hasCredentialActionableKeyword(sql string, maskAll bool, mode SQLModeFlags)
 				}
 			}
 			word := sql[i:j]
+			if includeSQLModeSet && len(word) == len("set") && hasFoldWordAt(word, 0, "set") {
+				return true
+			}
 			if hasFoldWordAt(word, 0, "credentials") && len(word) == len("credentials") ||
 				maskAll && len(word) == len("identified") && hasFoldWordAt(word, 0, "identified") ||
 				len(word) == len("prepare") && hasFoldWordAt(word, 0, "prepare") ||
