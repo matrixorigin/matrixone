@@ -3013,14 +3013,6 @@ func constructTableClone(
 		return metaCopy, nil
 	}
 
-	// Allocator and MAX queries run during compilation, before RestoreTable
-	// lends the session for execution. Preserve the source owner's identity
-	// here as well, including when the source is temporary and the destination
-	// is permanent. Leave ordinary temporary-table authorization in force.
-	originalCtx := c.proc.Ctx
-	c.proc.Ctx = attachInternalExecutorSession(originalCtx, c.proc.GetSession())
-	defer func() { c.proc.Ctx = originalCtx }()
-
 	if clonePlan.SrcObjDef != nil && clonePlan.SrcObjDef.PubInfo != nil {
 		account = uint32(clonePlan.SrcObjDef.PubInfo.TenantId)
 	} else if clonePlan.ScanSnapshot != nil {
@@ -3034,6 +3026,18 @@ func constructTableClone(
 			return nil, err
 		}
 	}
+
+	// Allocator queries run before RestoreTable. Lend the source owner's
+	// session only within its account; publication/snapshot account switches
+	// must not resolve the source through the caller's temporary aliases.
+	originalCtx := c.proc.Ctx
+	if caller, callerErr := defines.GetAccountId(originalCtx); callerErr == nil && caller == account {
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, c.proc.GetSession())
+	} else {
+		// An inherited session must be masked, even if this process has none.
+		c.proc.Ctx = process.ContextWithInternalExecutorSession(originalCtx, nil)
+	}
+	defer func() { c.proc.Ctx = originalCtx }()
 
 	if mainHasAutoIncr {
 		if err := c.proc.Ctx.Err(); err != nil {

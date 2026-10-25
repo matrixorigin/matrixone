@@ -244,6 +244,83 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 			require.Equal(t, 12, id)
 		})
 
+		t.Run("clone_subscription_preserves_source_account", func(t *testing.T) {
+			exec := func(conn *sql.Conn, statement string) {
+				t.Helper()
+				_, err := conn.ExecContext(ctx, statement)
+				require.NoError(t, err, statement)
+			}
+			const (
+				account     = "tmp_clone_subscriber"
+				publisherDB = "tmp_clone_publisher"
+				publication = "tmp_clone_publication"
+			)
+			defer func() {
+				cleanupSQLIntegration(t, cn,
+					"drop account if exists "+account,
+					"drop publication if exists "+publication,
+					"drop database if exists "+publisherDB)
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				var remaining int
+				require.NoError(t, owner.QueryRowContext(cleanupCtx,
+					"select count(*) from mo_catalog.mo_account where account_name=?", account).Scan(&remaining))
+				require.Zero(t, remaining, "subscriber account must not leak into the shared fixture")
+			}()
+			exec(owner, "create account "+account+" admin_name 'root' identified by '111'")
+			exec(owner, "create database "+publisherDB)
+			exec(owner, "create table "+publisherDB+".src(id bigint auto_increment primary key, v int)")
+			exec(owner, "insert into "+publisherDB+".src values(7,11)")
+			exec(owner, "create publication "+publication+" database "+publisherDB+" account "+account)
+
+			tenantDB, err := sql.Open("mysql", fmt.Sprintf(account+"#root#accountadmin:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			defer tenantDB.Close()
+			tenantDB.SetMaxOpenConns(1)
+			subscriber, err := tenantDB.Conn(ctx)
+			require.NoError(t, err)
+			defer subscriber.Close()
+			execSubscriber := func(statement string) {
+				t.Helper()
+				_, err := subscriber.ExecContext(ctx, statement)
+				require.NoError(t, err, statement)
+			}
+			execSubscriber("create database " + publisherDB)
+			execSubscriber("create database subscribed from sys publication " + publication)
+			cloneAndCheck := func(target string, temporary bool) {
+				t.Helper()
+				qualifier := ""
+				if temporary {
+					qualifier = "temporary "
+				}
+				execSubscriber("create " + qualifier + "table " + publisherDB + "." + target + " clone subscribed.src")
+				var copied, next int
+				require.NoError(t, subscriber.QueryRowContext(ctx, "select v from "+publisherDB+"."+target+" where id=7").Scan(&copied))
+				require.Equal(t, 11, copied)
+				execSubscriber("insert into " + publisherDB + "." + target + "(v) values(12)")
+				require.NoError(t, subscriber.QueryRowContext(ctx, "select id from "+publisherDB+"."+target+" where v=12").Scan(&next))
+				require.Equal(t, 8, next)
+			}
+			cloneAndCheck("control", false)
+			execSubscriber("create temporary table " + publisherDB + ".src(id bigint auto_increment primary key, v int)")
+			execSubscriber("insert into " + publisherDB + ".src values(99,22)")
+			var published, local int
+			require.NoError(t, subscriber.QueryRowContext(ctx, "select v from subscribed.src where id=7").Scan(&published))
+			require.Equal(t, 11, published)
+			require.NoError(t, subscriber.QueryRowContext(ctx, "select v from "+publisherDB+".src where id=99").Scan(&local))
+			require.Equal(t, 22, local)
+			cloneAndCheck("target", false)
+			cloneAndCheck("temporary_target", true)
+			// The same non-system account still owns its local temporary source.
+			execSubscriber("create temporary table " + publisherDB + ".owner_target clone " + publisherDB + ".src")
+			require.NoError(t, subscriber.QueryRowContext(ctx, "select v from "+publisherDB+".owner_target where id=99").Scan(&local))
+			require.Equal(t, 22, local)
+			execSubscriber("insert into " + publisherDB + ".owner_target(v) values(23)")
+			var localNext int
+			require.NoError(t, subscriber.QueryRowContext(ctx, "select id from "+publisherDB+".owner_target where v=23").Scan(&localNext))
+			require.Equal(t, 100, localNext)
+		})
+
 		t.Run("fulltext_search_keeps_owner", func(t *testing.T) {
 			_, err := owner.ExecContext(ctx, "create temporary table search_t(id int primary key, title varchar(50), body varchar(100))")
 			require.NoError(t, err)
