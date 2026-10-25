@@ -30,8 +30,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
@@ -953,10 +954,66 @@ func dropTornTailRecord(segName string, content []byte) []byte {
 }
 
 // sqlFlushSpoolContent is the replay flush, indirection allows unit tests to
-// stub the destination. It performs the very same LOAD DATA INLINE the
-// exporter's SQL path issues for one CSV content block.
+// stub the destination. It performs the very same LOAD DATA INLINE (same SQL
+// text, same quoting, same connection pool) the exporter's SQL path issues
+// for one CSV content block — see etl.SQLFlusher.FlushBuffer, duplicated
+// here to keep this package importable from the etl package's tests (import
+// cycle otherwise).
 var sqlFlushSpoolContent = func(ctx context.Context, content []byte) error {
-	_, err := etl.NewSQLFlusher(SingleStatementTable).FlushBuffer(bytes.NewBuffer(content))
+	return flushStatementInfoCSV(ctx, SingleStatementTable, content)
+}
+
+// flushStatementInfoCSV loads one CSV content block into the table via LOAD
+// DATA INLINE, mirroring etl.SQLFlusher.FlushBuffer byte for byte.
+func flushStatementInfoCSV(ctx context.Context, tbl *table.Table, src []byte) error {
+	forceNewConn := !db_holder.DBConnErrCount.Check()
+	conn, err := db_holder.GetOrInitDBConn(forceNewConn, true)
+	if err != nil {
+		v2.TraceMOLoggerErrorConnDBCounter.Inc()
+		_ = db_holder.DBConnErrCount.Count()
+		return err
+	}
+	if err = conn.Ping(); err != nil {
+		v2.TraceMOLoggerErrorPingDBCounter.Inc()
+		_ = db_holder.DBConnErrCount.Count()
+		return err
+	}
+
+	extraEscapes := 0
+	for _, c := range src {
+		if c == '\\' || c == '\'' {
+			extraEscapes++
+		}
+	}
+	database, tableName := tbl.GetDatabase(), tbl.GetName()
+	var loadSQL strings.Builder
+	loadSQL.Grow(len("LOAD DATA INLINE FORMAT='csv', DATA='' INTO TABLE . FIELDS TERMINATED BY ','") +
+		len(src) + extraEscapes + len(database) + len(tableName))
+	loadSQL.WriteString("LOAD DATA INLINE FORMAT='csv', DATA='")
+	for _, c := range src {
+		// \ -> \\, ' -> '' (see etl.SQLFlusher.FlushBuffer)
+		if c == '\\' || c == '\'' {
+			loadSQL.WriteByte(c)
+		}
+		loadSQL.WriteByte(c)
+	}
+	loadSQL.WriteString("' INTO TABLE ")
+	loadSQL.WriteString(database)
+	loadSQL.WriteByte('.')
+	loadSQL.WriteString(tableName)
+	loadSQL.WriteString(" FIELDS TERMINATED BY ','")
+	loadSQLStr := loadSQL.String()
+	v2.TraceMOLoggerExportSqlHistogram.Observe(float64(len(loadSQLStr)))
+
+	_, err = conn.Exec(loadSQLStr)
+	if len(loadSQLStr) > 10*mpool.MB {
+		logutil.Info("generate req sql", zap.String("type", tableName), zap.Int("csv", len(src)), zap.Int("sql", len(loadSQLStr)))
+	}
+	if err != nil {
+		_ = db_holder.DBConnErrCount.Count()
+	} else {
+		db_holder.DBConnErrCount.Reset()
+	}
 	return err
 }
 
