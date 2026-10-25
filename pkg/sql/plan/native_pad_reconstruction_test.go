@@ -11,6 +11,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -88,6 +89,58 @@ func TestNativePADStandaloneViewRejectsLostProvenance(t *testing.T) {
 			_, _, err = ConstructCreateTableSQL(nil, table, nil, false, nil)
 			require.ErrorContains(t, err, "standalone SQL", source.query)
 		}
+	}
+}
+
+func TestNativePADShowViewPreservesTextAndAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		query   string
+		native  bool
+		inspect bool
+	}{
+		{"legacy", `'C:\\new'`, false, false},
+		{"uca", `'C:\\new' collate utf8mb4_unicode_ci`, false, false},
+		{"native_public", `'C:\\new' collate utf8mb4_bin`, true, false},
+		{"native_inspection", `'C:\\new' collate utf8mb4_bin`, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, build := nativePADDDLContext(t)
+			created, err := build("create view v as select " + tc.query + ` as p, 'it''s' as q, "dq""x" as r`)
+			require.NoError(t, err)
+			view := created.GetDdl().GetCreateView().TableDef
+			view.TableType = catalog.SystemViewRel
+			ctx.tables["v"] = view
+			ctx.objects["v"] = &ObjectRef{ObjName: "v", SchemaName: "tpch"}
+			before := proto.Clone(view)
+			var stored ViewData
+			require.NoError(t, json.Unmarshal([]byte(view.ViewSql.View), &stored))
+			if tc.inspect {
+				ctx.SetContext(WithRestoreSchemaInspection(ctx.GetContext()))
+			}
+			parent := ctx.GetContext()
+			shown, err := build("show create view v")
+			if tc.native && !tc.inspect {
+				require.ErrorContains(t, err, "standalone SQL")
+				require.Nil(t, shown)
+			} else {
+				require.NoError(t, err)
+				query := shown.GetQuery()
+				require.NotNil(t, query)
+				root := query.Nodes[query.Steps[len(query.Steps)-1]]
+				require.Len(t, root.ProjectList, 4)
+				require.Equal(t, "v", root.ProjectList[0].GetLit().GetSval())
+				require.Equal(t, stored.Stmt, root.ProjectList[1].GetLit().GetSval())
+			}
+			require.Equal(t, before, view)
+			require.Same(t, parent, ctx.GetContext())
+			if tc.native {
+				rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion131)
+				_, err = build("show create view v")
+				require.ErrorContains(t, err, "132", "even inspection must pass the source read gate")
+			}
+		})
 	}
 }
 

@@ -235,7 +235,6 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	if err := RequireCatalogCollations(ctx.GetContext(), ctx.GetProcess(), tableDef); err != nil {
 		return nil, err
 	}
-	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`, 'utf8mb4' as `character_set_client`, 'utf8mb4_general_ci' as `collation_connection`"
 	var viewStr string
 	if tableDef.TableType == catalog.SystemViewRel {
 		viewStr = tableDef.ViewSql.View
@@ -253,13 +252,20 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 		}
 	}
 
-	// FixMe  We need a better escape function
-	stmtStr := strings.ReplaceAll(viewData.Stmt, "\"", "\\\"")
-	sqlStr = fmt.Sprintf(sqlStr, tblName, fmt.Sprint(stmtStr))
+	sqlStr := showCreateViewSQL(tblName, viewData.Stmt)
 
 	// logutil.Info(sqlStr)
 
 	return returnByRewriteSQL(ctx, sqlStr, plan.DataDefinition_SHOW_CREATETABLE)
+}
+
+// showCreateViewSQL returns the rewrite query for SHOW CREATE VIEW. The view
+// name and its stored definition are quoted as SQL string literals so that
+// the result is the stored text byte for byte, backslashes included.
+func showCreateViewSQL(viewName, viewStmt string) string {
+	return fmt.Sprintf(
+		"select %s as `View`, %s as `Create View`, 'utf8mb4' as `character_set_client`, 'utf8mb4_general_ci' as `collation_connection`",
+		formatStrLit(viewName), formatStrLit(viewStmt))
 }
 
 func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, error) {
