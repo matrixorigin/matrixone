@@ -6674,7 +6674,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				seconds = float64(value)
 			}
 			if seconds > 0 {
-				proc.Base.UnixTime = int64(seconds * float64(time.Second))
+				proc.Base.UnixTime = sessionTimestampToUnixNano(seconds)
 			}
 		}
 		if ses.proc != nil {
@@ -6815,6 +6815,20 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		cacheKey, stmts, plans, planSnapshotTS, planStatsVersions, cacheProtocolVersion)
 
 	return nil
+}
+
+// sessionTimestampToUnixNano converts a validated timestamp system variable.
+// Round only the fractional seconds: multiplying the full epoch by 1e9 can
+// round just below a microsecond boundary before temporal functions truncate it.
+func sessionTimestampToUnixNano(seconds float64) int64 {
+	whole, fraction := math.Modf(seconds)
+	fractionMicros := min(int64(math.RoundToEven(fraction*1e6)), 999999)
+	// Like MySQL, cap the rounded fraction rather than carrying into a new second.
+	unixMicros := int64(whole)*1e6 + fractionMicros
+	// The accepted DOUBLE upper endpoint can round above MaxInt64 nanoseconds.
+	// Keep the last complete microsecond representable by the statement clock.
+	unixMicros = min(unixMicros, math.MaxInt64/int64(time.Microsecond))
+	return unixMicros * int64(time.Microsecond)
 }
 
 // sqlForRecordByStatement keeps the sanitized per-statement text aligned with
