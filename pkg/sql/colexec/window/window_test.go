@@ -4558,6 +4558,69 @@ func TestBuildRangeIntervalSignedBoundaries(t *testing.T) {
 	})
 }
 
+func wideSignedRangeOffset(value int64) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_I64Val{I64Val: value},
+	}}}
+}
+
+func testBuildRangeIntervalWideSignedBounds[T types.OrderedT](
+	t *testing.T, mp *mpool.MPool, oid types.T, values []T, offset int64,
+) {
+	t.Helper()
+	for _, desc := range []bool{false, true} {
+		ordered := values
+		if desc {
+			ordered = append([]T(nil), values...)
+			for left, right := 0, len(ordered)-1; left < right; left, right = left+1, right-1 {
+				ordered[left], ordered[right] = ordered[right], ordered[left]
+			}
+		}
+		vec := makeFixedVec(t, mp, oid, ordered)
+		func() {
+			defer vec.Free(mp)
+			ctr := &container{
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+				desc:      []bool{desc},
+			}
+			preceding := &plan.FrameClause{
+				Type:  plan.FrameClause_RANGE,
+				Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: wideSignedRangeOffset(offset)},
+				End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+			}
+			following := &plan.FrameClause{
+				Type:  plan.FrameClause_RANGE,
+				Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+				End:   &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, Val: wideSignedRangeOffset(offset)},
+			}
+			for row := range ordered {
+				start, end, err := ctr.buildRangeInterval(row, 0, len(ordered), preceding)
+				require.NoError(t, err)
+				require.Equal(t, 0, start)
+				require.Equal(t, row+1, end)
+				start, end, err = ctr.buildRangeInterval(row, 0, len(ordered), following)
+				require.NoError(t, err)
+				require.Equal(t, row, start)
+				require.Equal(t, len(ordered), end)
+			}
+		}()
+	}
+}
+
+func TestBuildRangeIntervalWideSignedBounds(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+	t.Run("int8", func(t *testing.T) {
+		testBuildRangeIntervalWideSignedBounds(t, mp, types.T_int8, []int8{1, 2, 3}, 200)
+	})
+	t.Run("int16", func(t *testing.T) {
+		testBuildRangeIntervalWideSignedBounds(t, mp, types.T_int16, []int16{1, 2, 3}, 70000)
+	})
+	t.Run("int32", func(t *testing.T) {
+		testBuildRangeIntervalWideSignedBounds(t, mp, types.T_int32, []int32{1, 2, 3}, int64(math.MaxInt32)+1)
+	})
+}
+
 // TestSearchLeftRightAllFloatTypes covers float32/64.
 func TestSearchLeftRightAllFloatTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
