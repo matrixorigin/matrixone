@@ -227,14 +227,6 @@ func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_P:
 		pos := int(exprImpl.P.Pos)
 		rule.params[pos] = 0
-		/*
-			if e.Typ.Id == int32(types.T_any) && e.Typ.NotNullable {
-				// is not null, use string
-				rule.mapTypes[pos] = int32(types.T_varchar)
-			} else {
-				rule.mapTypes[pos] = e.Typ.Id
-			}
-		*/
 		return e, nil
 	case *plan.Expr_List:
 		for i := range exprImpl.List.List {
@@ -3204,7 +3196,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 							param.SourceType.Oid == types.T_float64)
 				}
 			}
-			if functionName == "timestamp" && len(originalArgs) == 1 && temporalDirectMarker(originalArgs[i]) {
+			if (functionName == "timestamp" && len(originalArgs) == 1 && temporalDirectMarker(originalArgs[i])) ||
+				((functionName == "date_add" || functionName == "date_sub") && i == 0 &&
+					rawPreparedCalendarMarker(originalArgs[i])) {
 				var known bool
 				rewrittenArg, known, err = rule.preparedRuntimeSourceExpr(paramPos, false)
 				if err != nil {
@@ -3228,6 +3222,30 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				needResetFunction = true
 				compareArgTypes = true
 				rule.specialized = true
+			} else if hasParamPos && !isExplicitPreparedCast(arg) && functionName == "tmrank" && i == 1 &&
+				len(originalArgs) == 3 {
+				// tmrank's retained width marker (issue #29947, decision D19):
+				// SQL EXECUTE transports most markers as TEXT, which would
+				// collapse the width's source domain (window text grammar for
+				// strings, MySQL nearest-integer for numerics). Route the count
+				// slot through the same source-domain reconstruction owner raw
+				// frame bounds use, so cached plan restoration still interprets
+				// the next value in the original unit.
+				source, known, sourceErr := rule.preparedRuntimeSourceExpr(paramPos, true)
+				if sourceErr != nil {
+					return nil, sourceErr
+				}
+				if known {
+					rewrittenArg = source
+					needResetFunction = true
+					compareArgTypes = true
+					rule.specialized = true
+				} else {
+					rewrittenArg, err = rule.ApplyExpr(arg)
+					if err != nil {
+						return nil, err
+					}
+				}
 			} else if hasParamPos && !isExplicitPreparedCast(arg) &&
 				((functionName == "json_arrayagg" && i == 0) ||
 					(functionName == "json_objectagg" && i == 1)) {

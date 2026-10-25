@@ -370,10 +370,20 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 			// this also closes reuse after an interrupted or failed generation.
 			ctr.freeRunningAgg()
 			ctr.freeOrderedSetPartitionResults(proc.Mp())
+			// The civil-order index describes this generation's row range; the
+			// next generation reuses the accumulated batch's storage vectors,
+			// so an entry kept across generations could answer a cache lookup
+			// with the previous partition's stale spans. Clear it here, with
+			// the other generation-scoped state.
+			ctr.clearCivilOrder()
+			ctr.freeIndicatorState(proc.Mp())
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
 			if err = ctr.validateLagLeadOffsets(0, window, proc); err != nil {
+				return result, err
+			}
+			if err = ctr.validateIndicatorPeriods(0, window, proc); err != nil {
 				return result, err
 			}
 			for i := range window.Aggs {
@@ -490,6 +500,12 @@ func (ctr *container) processFuncRange(
 		err error
 	)
 	switch {
+	case function.GetFunctionIsWinIndicatorFunByName(funcName):
+		// Technical-indicator kernels (issue #29949) are per-partition
+		// sequential-state machines: they borrow the value-function
+		// materialization and emit from a cached, incrementally advanced
+		// prefix (docs/design/technical_indicator_window_kernels.md 5.2).
+		vec, err = ctr.processIndicatorFuncRange(idx, ap, proc, outputStart, outputEnd)
 	case function.GetFunctionIsWinValueFunByName(funcName):
 		// Value window functions use direct source-row lookup and therefore can
 		// materialize only the rows requested by this output chunk.
@@ -1653,6 +1669,176 @@ func (ctr *container) processValueFuncRange(
 				if err := localResult.UnionOne(srcVec, int64(targetRow), proc.Mp()); err != nil {
 					return nil, err
 				}
+			}
+		}
+
+	case "mrank":
+		// 1-based ascending competition rank of the current non-NULL value
+		// among the last N physical rows of the row's partition (#29947).
+		if len(ctr.aggVecs[idx].Vec) < 2 {
+			return nil, moerr.NewInternalErrorNoCtxf("mrank requires a row count argument")
+		}
+		nVec := ctr.aggVecs[idx].Vec[1]
+		for j := outputStart; j < outputEnd; j++ {
+			if err = checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
+			}
+			nRow := localRankRow(nVec, j)
+			if nVec.Length() == 0 || nVec.IsNull(uint64(nRow)) {
+				return nil, moerr.NewInvalidInput(proc.Ctx, "mrank row count must be a non-NULL integer")
+			}
+			// A constant width slot evaluates to a one-physical-row vector:
+			// read through the row mapping, never the logical row index. The
+			// width validates in its source integer domain: an unsigned
+			// magnitude above MaxInt64 is a valid positive width that simply
+			// covers the partition prefix (clamped below), not an error.
+			width, widthOk := localRankWidthFromVec(nVec, nRow)
+			if !widthOk {
+				return nil, moerr.NewInvalidInput(proc.Ctx, "mrank row count must be positive")
+			}
+			if width > math.MaxInt64 {
+				width = math.MaxInt64
+			}
+			if localRankValueIsNull(srcVec, j) {
+				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			start, _ := 0, n
+			if ctr.ps != nil {
+				start, _ = buildPartitionInterval(ctr.ps, j, n)
+			}
+			frameStart := j - int(width-1)
+			if frameStart < start {
+				frameStart = start
+			}
+			count, err := countLessInRankRange(proc, srcVec, frameStart, j+1, j)
+			if err != nil {
+				return nil, err
+			}
+			if err := vector.AppendAny(localResult, count+1, false, proc.Mp()); err != nil {
+				return nil, err
+			}
+		}
+
+	case "cumrank":
+		// Cumulative competition rank from the partition start through the
+		// current row (#29947).
+		for j := outputStart; j < outputEnd; j++ {
+			if err = checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
+			}
+			if localRankValueIsNull(srcVec, j) {
+				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			start, _ := 0, n
+			if ctr.ps != nil {
+				start, _ = buildPartitionInterval(ctr.ps, j, n)
+			}
+			count, err := countLessInRankRange(proc, srcVec, start, j+1, j)
+			if err != nil {
+				return nil, err
+			}
+			if err := vector.AppendAny(localResult, count+1, false, proc.Mp()); err != nil {
+				return nil, err
+			}
+		}
+
+	case "tmrank":
+		// Time-bounded trailing competition rank over RANGE-interval
+		// membership within the row's partition (#29947). The width is the
+		// published (count, unit) pair the D18 adapter materializes per
+		// execution; a null-marked normalized count is the D15 NULL-arithmetic
+		// window whose membership the shared resolver computes key-
+		// dependently (D17). Membership resolves at partition-stable bounds
+		// through the ordinary RANGE machinery (one civil-order index per
+		// partition), and the trailing intersection below confines every
+		// resolved span to rows at or before the current row, unlike a
+		// complete RANGE CURRENT ROW.
+		if len(ctr.aggVecs[idx].Vec) < 3 {
+			return nil, moerr.NewInternalErrorNoCtxf("tmrank requires a value and an INTERVAL width")
+		}
+		fn := w.WindowFunc.GetF()
+		if len(fn.Args) != 3 {
+			return nil, moerr.NewInternalErrorNoCtxf("tmrank requires a value and an INTERVAL width")
+		}
+		materialized, materializeErr := MaterializeLocalRankWindowInterval(proc, fn.Args[1], fn.Args[2])
+		if materializeErr != nil {
+			return nil, materializeErr
+		}
+		rowFrame := tmRankFrame(materialized)
+		for j := outputStart; j < outputEnd; j++ {
+			if err = checkCanceled(proc, j-outputStart); err != nil {
+				return nil, err
+			}
+			start, end := 0, n
+			if ctr.ps != nil {
+				start, end = buildPartitionInterval(ctr.ps, j, n)
+			}
+			// Membership resolves at PARTITION-STABLE bounds, the same call
+			// shape every ordinary RANGE aggregate uses: the civil-order
+			// index's cache key includes the row-range end, so a per-row end
+			// would rebuild the whole-prefix index once per row. The trailing
+			// cutoff below intersects every resolved span with k <= j after
+			// the resolution, so no row after the current row ever ranks.
+			frameEnd := j + 1
+			left, right, selection, err := ctr.buildIntervalRows(proc, j, start, end, rowFrame)
+			if err != nil {
+				return nil, err
+			}
+			if localRankValueIsNull(srcVec, j) {
+				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			var count uint64
+			if selection != nil {
+				for _, span := range selection.spans {
+					// The fold machinery resolves in civil order and can emit
+					// spans containing later peers of an equal instant; clip
+					// every span to the trailing cutoff before counting.
+					if span.start >= frameEnd || span.end <= start {
+						continue
+					}
+					spanEnd := span.end
+					if spanEnd > frameEnd {
+						spanEnd = frameEnd
+					}
+					c, cErr := countLessInRankRange(proc, srcVec, span.start, spanEnd, j)
+					if cErr != nil {
+						return nil, cErr
+					}
+					count += c
+				}
+			} else {
+				if left < start {
+					left = start
+				}
+				if right > frameEnd {
+					right = frameEnd
+				}
+				if left >= right {
+					// Empty frame: the shared resolver's non-NULL-key
+					// NULL-arithmetic branch (an empty window mirrors the
+					// aggregate-over-empty-frame semantics with a NULL rank).
+					if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+						return nil, err
+					}
+					continue
+				}
+				c, cErr := countLessInRankRange(proc, srcVec, left, right, j)
+				if cErr != nil {
+					return nil, cErr
+				}
+				count = c
+			}
+			if err := vector.AppendAny(localResult, count+1, false, proc.Mp()); err != nil {
+				return nil, err
 			}
 		}
 
