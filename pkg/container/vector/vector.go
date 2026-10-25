@@ -8706,11 +8706,15 @@ func (v *Vector) unionBatch(
 		// the parent's complete area, so copying w.area merely because the window's
 		// offset is zero can amplify one logical range into a copy of every sibling
 		// range. Derive the live payload span from the selected descriptors first.
-		if flags == nil {
+		if flags == nil || preflighted && addCnt == cnt {
 			oldLen := v.length
+			areaBytes := -1
+			if preflighted {
+				areaBytes = selectedAreaBytes
+			}
 			var fast bool
 			fast, err = v.unionBatchContiguousVarlenRange(
-				w, vCol, wCol, int(offset), cnt, mp)
+				w, vCol, wCol, int(offset), cnt, areaBytes, mp)
 			if err != nil {
 				return err
 			}
@@ -9427,7 +9431,7 @@ func byteSlicesOverlap(left, right []byte) bool {
 func (v *Vector) unionBatchContiguousVarlenRange(
 	w *Vector,
 	vCol, wCol []types.Varlena,
-	offset, cnt int,
+	offset, cnt, admittedAreaBytes int,
 	mp *mpool.MPool,
 ) (bool, error) {
 	hasNull := !w.nsp.EmptyByFlag()
@@ -9438,7 +9442,8 @@ func (v *Vector) unionBatchContiguousVarlenRange(
 	// whole vector. SetLength and aliasing operations clear areaDisjoint; a
 	// borrowed Window is identified by cantFreeArea and must scan its descriptors
 	// because it retains the parent's complete area.
-	if offset == 0 && cnt == w.length && w.areaDisjoint && !w.cantFreeArea {
+	if offset == 0 && cnt == w.length && w.areaDisjoint && !w.cantFreeArea &&
+		(admittedAreaBytes < 0 || len(w.area) == admittedAreaBytes) {
 		areaEnd = len(w.area)
 		hasArea = areaEnd > 0
 	} else {
@@ -9467,6 +9472,13 @@ func (v *Vector) unionBatchContiguousVarlenRange(
 		}
 	}
 
+	// A preflighted publication may only copy the exact live payload admitted
+	// before commit. NULL mutations can leave dead bytes even in disjoint area.
+	payloadBytes := areaEnd - areaStart
+	if admittedAreaBytes >= 0 && (payloadBytes != admittedAreaBytes ||
+		payloadBytes > cap(v.area)-len(v.area)) {
+		return false, nil
+	}
 	oldLen := v.length
 	baseOff := len(v.area)
 	if hasArea {

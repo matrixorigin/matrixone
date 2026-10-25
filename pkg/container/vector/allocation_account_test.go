@@ -1983,8 +1983,8 @@ func TestSelectedBatchBinaryStringPreflightClosesExactCapacity(t *testing.T) {
 		state := newTestVectorAllocationAccount(t, limit, 16)
 		mp := mpool.MustNewZero()
 		source := NewVec(types.T_text.ToType())
-		require.NoError(t, AppendBytes(source, []byte("binary"), false, mp))
-		require.NoError(t, AppendBytes(source, []byte("text"), false, mp))
+		require.NoError(t, AppendBytes(source, bytes.Repeat([]byte("binary"), 32), false, mp))
+		require.NoError(t, AppendBytes(source, bytes.Repeat([]byte("text"), 32), false, mp))
 		require.NoError(t,
 			source.SetBinaryStringRowsWithMP([]bool{true, false}, mp))
 		destination := newAccountedTestVector(t, types.T_text.ToType(), state.selection)
