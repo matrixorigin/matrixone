@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -429,6 +431,58 @@ func TestPreparedCalendarUnitWithCountMarker(t *testing.T) {
 					}()
 				}
 			}
+		})
+	}
+}
+
+func TestPreparedCalendarNullCountDoesNotReport(t *testing.T) {
+	for _, unit := range []string{"day", "month"} {
+		t.Run(unit, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			// Supply the session defaults missing from the mock so variable
+			// lookup errors cannot pollute the diagnostic-side-effect oracle.
+			defaults := mock.ctxt
+			mock.ctxt.ResolveVariableFunc = func(name string, system, global bool) (any, error) {
+				switch name {
+				case "agg_spill_mem", "join_spill_mem", "max_dop":
+					return int64(0), nil
+				default:
+					return defaults.ResolveVariable(name, system, global)
+				}
+			}
+			proc := mock.ctxt.GetProcess()
+			stmt, err := mysql.ParseOne(context.Background(), "select date_add(?, interval ? "+unit+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			params := vector.NewVec(types.T_text.ToType())
+			defer params.Free(proc.Mp())
+			defer proc.SetPrepareParams(nil)
+			require.NoError(t, vector.AppendBytes(params, []byte("review-canary-invalid-date"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(params, nil, true, proc.Mp()))
+			proc.SetPrepareParams(params)
+			bindings := []PreparedSourceBinding{
+				{Position: 0, Type: types.T_varchar.ToType()},
+				{Position: 1, Type: types.T_int64.ToType()},
+			}
+			values := []any{
+				ParamValue{Value: "review-canary-invalid-date", SourceType: types.T_varchar.ToType(), HasSourceType: true},
+				ParamValue{SourceType: types.T_int64.ToType(), HasSourceType: true},
+			}
+			var reports atomic.Int32
+			func() {
+				previous := errutil.GetReportErrorFunc()
+				errutil.SetErrorReporter(func(context.Context, error, int) { reports.Add(1) })
+				defer errutil.SetErrorReporter(previous)
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt, bindings, values)
+				require.NoError(t, err)
+				query := bound.Plan.GetQuery()
+				expr := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
+				result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+				require.NoError(t, err)
+				defer free()
+				require.True(t, result.IsNull(0))
+			}()
+			require.Zero(t, reports.Load(), "NULL interval skips conversion, including diagnostic side effects")
 		})
 	}
 }

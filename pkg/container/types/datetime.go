@@ -16,6 +16,7 @@ package types
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -218,8 +219,26 @@ const (
 // them. Invalid complete calendars and clocks have unknown shape.
 func ClassifyTemporalString(s string) TemporalStringKind {
 	kind := TemporalStringUnknown
-	_, _ = parseDatetime(defaultParseContext, s, 6, &kind)
+	_, _ = parseDatetime(defaultParseContext, s, 6, &kind, true)
 	return kind
+}
+
+// Observation failures are discarded by the classifier. Constructing a moerr
+// would already notify the server reporter, even when the caller ignores it.
+var errInvalidTemporal = errors.New("invalid temporal value")
+
+func temporalInvalidInput(ctx context.Context, s string, observe bool) error {
+	if observe {
+		return errInvalidTemporal
+	}
+	return moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+}
+
+func temporalInvalidArg(ctx context.Context, arg, s string, observe bool) error {
+	if observe {
+		return errInvalidTemporal
+	}
+	return moerr.NewInvalidArg(parseErrorContext(ctx), arg, s)
 }
 
 // ParseDatetime will parse a string to be a Datetime
@@ -243,10 +262,10 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 
 // ParseDatetimeWithContext parses with the caller's error reporting context.
 func ParseDatetimeWithContext(ctx context.Context, s string, scale int32) (Datetime, error) {
-	return parseDatetime(ctx, s, scale, nil)
+	return parseDatetime(ctx, s, scale, nil, false)
 }
 
-func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStringKind) (Datetime, error) {
+func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStringKind, observe bool) (Datetime, error) {
 	s = strings.TrimSpace(s)
 	if isZeroDatetimeString(s) {
 		if kind != nil {
@@ -261,18 +280,18 @@ func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStr
 		dtSepIdx = strings.IndexAny(s, " T")
 	}
 	if len(s) < 14 && dtSepIdx < 0 {
-		if d, err := ParseDateCastWithContext(ctx, s); err == nil {
+		if d, err := parseDateCast(ctx, s, observe); err == nil {
 			if kind != nil {
 				*kind = TemporalStringDate
 			}
 			return d.ToDatetime(), nil
 		}
 		if kind != nil {
-			if y, m, d, _, err := parseDateCastComponentsWithContext(ctx, strings.TrimSpace(s)); err == nil && observedCalendarFields(y, m, d) {
+			if y, m, d, _, err := parseDateCastComponentsObserved(ctx, strings.TrimSpace(s), observe); err == nil && observedCalendarFields(y, m, d) {
 				*kind = TemporalStringDate
 			}
 		}
-		return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+		return -1, temporalInvalidInput(ctx, s, observe)
 	}
 	var year int32
 	var month, day, hour, minute, second uint8
@@ -291,64 +310,64 @@ func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStr
 			var num int64
 			num, err = strconv.ParseInt(s[0:4], 10, 32)
 			if err != nil {
-				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			year = int32(num)
 			unum, err = strconv.ParseUint(s[5:7], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			month = uint8(unum)
 			unum, err = strconv.ParseUint(s[8:10], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			day = uint8(unum)
 			unum, err = strconv.ParseUint(s[11:13], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			hour = uint8(unum)
 			unum, err = strconv.ParseUint(s[14:16], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			minute = uint8(unum)
 			unum, err = strconv.ParseUint(s[17:19], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			second = uint8(unum)
 			if len(s) == 19 {
 				// nothing
 			} else if s[19] == '.' {
-				msec, carry, err = getMsecWithContext(ctx, s[20:], scale)
+				msec, carry, err = parseMsec(ctx, s[20:], scale, observe)
 				if err != nil {
-					return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+					return -1, temporalInvalidInput(ctx, s, observe)
 				}
 			} else {
-				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 		} else {
 			// Share the DATE grammar for short years and separated calendar
 			// fields. Adding a clock must not change the date's interpretation.
 			if dtSepIdx == len(s)-1 {
-				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
-			date, dateErr := ParseDateCastWithContext(ctx, s[:dtSepIdx])
+			date, dateErr := parseDateCast(ctx, s[:dtSepIdx], observe)
 			if dateErr != nil || date == ZeroDate {
 				if kind != nil {
 					// The value parser exits before clock parsing for incomplete
 					// dates. Observe components and a valid surrogate clock only
 					// for classification; ordinary conversion keeps its error.
-					y, m, d, _, componentErr := parseDateCastComponentsWithContext(ctx, strings.TrimSpace(s[:dtSepIdx]))
+					y, m, d, _, componentErr := parseDateCastComponentsObserved(ctx, strings.TrimSpace(s[:dtSepIdx]), observe)
 					if componentErr == nil && observedCalendarFields(y, m, d) {
-						if _, clockErr := parseDatetime(ctx, "2000-01-01 "+s[dtSepIdx+1:], scale, nil); clockErr == nil {
+						if _, clockErr := parseDatetime(ctx, "2000-01-01 "+s[dtSepIdx+1:], scale, nil, observe); clockErr == nil {
 							*kind = TemporalStringDatetime
 						}
 					}
 				}
-				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			year, month, day, _ = date.Calendar(true)
 			timeStr := s[dtSepIdx+1:]
@@ -361,14 +380,14 @@ func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStr
 			}
 			c1 := strings.IndexByte(hmsStr, ':')
 			if c1 < 0 {
-				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			c2 := c1 + 1 + strings.IndexByte(hmsStr[c1+1:], ':')
 			var secStr string
 			if c2 <= c1 {
 				// only h:mm — treat seconds as "00"
 				if len(hmsStr)-c1-1 == 0 {
-					return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+					return -1, temporalInvalidInput(ctx, s, observe)
 				}
 				secStr = "00"
 			} else {
@@ -379,7 +398,7 @@ func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStr
 			}
 			unum, err = strconv.ParseUint(hmsStr[:c1], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			hour = uint8(unum)
 			end := c2
@@ -388,27 +407,27 @@ func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStr
 			}
 			unum, err = strconv.ParseUint(hmsStr[c1+1:end], 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			minute = uint8(unum)
 			unum, err = strconv.ParseUint(secStr, 10, 8)
 			if err != nil {
-				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 			second = uint8(unum)
 			if dotIdx >= 0 {
 				if dotIdx == len(timeStr)-1 {
-					return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+					return -1, temporalInvalidInput(ctx, s, observe)
 				}
-				msec, carry, err = getMsecWithContext(ctx, timeStr[dotIdx+1:], scale)
+				msec, carry, err = parseMsec(ctx, timeStr[dotIdx+1:], scale, observe)
 				if err != nil {
-					return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+					return -1, temporalInvalidInput(ctx, s, observe)
 				}
 			}
 		}
 	} else {
 		if !isAllDigit(s[:14]) {
-			return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+			return -1, temporalInvalidInput(ctx, s, observe)
 		}
 		year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 		month = (s[4]-'0')*10 + (s[5] - '0')
@@ -419,12 +438,12 @@ func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStr
 		if len(s) > 14 {
 			if len(s) > 15 && s[14] == '.' {
 				msecStr := s[15:]
-				msec, carry, err = getMsecWithContext(ctx, msecStr, scale)
+				msec, carry, err = parseMsec(ctx, msecStr, scale, observe)
 				if err != nil {
-					return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+					return -1, temporalInvalidInput(ctx, s, observe)
 				}
 			} else {
-				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+				return -1, temporalInvalidInput(ctx, s, observe)
 			}
 		}
 	}
@@ -432,12 +451,12 @@ func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStr
 		if kind != nil && ValidTimeInDay(hour, minute, second) && observedCalendarFields(year, month, day) {
 			*kind = TemporalStringDatetime
 		}
-		return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+		return -1, temporalInvalidInput(ctx, s, observe)
 	}
 	result := DatetimeFromClock(year, month, day, hour, minute, second+uint8(carry), msec)
 	y, m, d, _ := result.ToDate().Calendar(true)
 	if !ValidDate(y, m, d) {
-		return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
+		return -1, temporalInvalidInput(ctx, s, observe)
 	}
 	if kind != nil {
 		*kind = TemporalStringDatetime
