@@ -54,6 +54,8 @@ Preserve declared/protocol scalar types and NULLs, reject requested lossy conver
 
 ## Implementation and validation
 
-The implementation PR is linked from the parent and sub-feature issues. Design review and merge acceptance are pending.
+Implementation: https://github.com/matrixorigin/matrixone/pull/30054
 
-Local measured 1M-row streaming peaked at 161.68 MiB RSS from a 153.28 MiB baseline. This is a reproducible workload measurement, not a fixed memory bound for every query. The same constrained buffered control exceeded its 30-second deadline; it was terminated, not falsely reported as a returned MemoryError.
+Design decision: **accepted for implementation**, review `PR30054-DESIGN-2026-10-25` by `gpt-6.1-sol` with `xhigh` reasoning. This approval covers the four analytics designs together; implementation acceptance remains subject to their validation criteria. The PR must link the exact committed design revision. Shared alternatives, budgets, security and delivery decisions are in [the reviewed contract](analytics-file-lifecycle.md#reviewed-design-and-delivery-contract).
+
+Historical local measured 1M-row streaming peaked at 161.68 MiB RSS from a 153.28 MiB baseline. This is a reproducible workload measurement, not a fixed memory bound for every query. The same historical constrained buffered control exceeded its 30-second deadline; it was terminated, not falsely reported as a returned MemoryError.

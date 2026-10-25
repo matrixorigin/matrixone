@@ -33,7 +33,7 @@ Native file scans truncate nanosecond timestamps/time, so reject those metadata 
 
 Create one uniquely named ordinary external table per source file using bound path/format parameters, then produce a parenthesized `UNION ALL` with aligned projections and typed missing fields. Native MatrixOne executes the query; DuckDB is only a test oracle. These are not connection-private temporary tables or new native SQL table functions.
 
-Reserve each generated name before CREATE, including its transaction's COMMIT. A lost acknowledgement must leave a cleanup owner even when construction never returns a relation. See [the lifecycle design](analytics-file-lifecycle.md) for scoped cleanup, uncertain outcomes and recovery evidence on the original exception.
+On each actual CREATE connection, capture and validate its current database, then reserve that immutable `(database, generated table)` identity before CREATE, including its transaction's COMMIT. Qualify CREATE and every SELECT with separately quoted database/table identifiers; a changed pooled default database must not retarget an owned source. A lost acknowledgement must leave a cleanup owner even when construction never returns a relation. See [the lifecycle design](analytics-file-lifecycle.md) for scoped cleanup, uncertain outcomes and recovery evidence on the original exception.
 
 ### Validation and consistency
 
@@ -65,6 +65,8 @@ Initial-block inference can miss later type changes; callers can provide an expl
 
 ## Implementation and validation
 
-The implementation PR is linked from the parent and sub-feature issues. Design review and merge acceptance are pending.
+Implementation: https://github.com/matrixorigin/matrixone/pull/30054
+
+Design decision: **accepted for implementation**, review `PR30054-DESIGN-2026-10-25` by `gpt-6.1-sol` with `xhigh` reasoning. This approval covers the four analytics designs together; implementation acceptance remains subject to their validation criteria. The PR must link the exact committed design revision. Shared alternatives, budgets, security and delivery decisions are in [the reviewed contract](analytics-file-lifecycle.md#reviewed-design-and-delivery-contract).
 
 Tests reside in `clients/python/tests/analytics/`; the PR includes design documents, commands and recorded local evidence. Local S3 emulation is not cloud-provider certification.

@@ -60,7 +60,9 @@ All supported scalar edge cases round-trip, precision loss fails, late failures 
 
 ## Implementation and validation
 
-The implementation PR is linked from the parent and sub-feature issues. Design review and merge acceptance are pending.
+Implementation: https://github.com/matrixorigin/matrixone/pull/30054
+
+Design decision: **accepted for implementation**, review `PR30054-DESIGN-2026-10-25` by `gpt-6.1-sol` with `xhigh` reasoning. This approval covers the four analytics designs together; implementation acceptance remains subject to their validation criteria. The PR must link the exact committed design revision. Shared alternatives, budgets, security and delivery decisions are in [the reviewed contract](analytics-file-lifecycle.md#reviewed-design-and-delivery-contract).
 
 Native Arrow LOAD must be enabled/available. Local validation used a current-source server; support is not inferred from the server's advertised version. Published-release and production-cloud certification are not claimed.
 
