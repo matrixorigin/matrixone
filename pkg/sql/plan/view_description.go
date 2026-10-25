@@ -72,6 +72,11 @@ func (c *viewDescriptionDependencyContext) record(obj *ObjectRef, def *TableDef,
 	c.refs = appendPrepareSchemas(c.refs, ref)
 }
 
+// ResolveWithoutTemporaryAlias is a DDL operation; this context binds only View metadata.
+func (c *viewDescriptionDependencyContext) ResolveWithoutTemporaryAlias(string, string, *Snapshot) (*ObjectRef, *TableDef, error) {
+	return nil, nil, moerr.NewNotSupported(c.GetContext(), "DDL relation resolution while binding View metadata")
+}
+
 func (c *viewDescriptionDependencyContext) Resolve(db, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	obj, def, err := c.CompilerContext.Resolve(db, name, snapshot)
 	if err == nil && obj != nil && def != nil {

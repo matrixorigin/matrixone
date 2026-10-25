@@ -379,6 +379,22 @@ func (mr *MockCompilerContext2MockRecorder) Resolve(schemaName, tableName, snaps
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Resolve", reflect.TypeOf((*MockCompilerContext2)(nil).Resolve), schemaName, tableName, snapshot)
 }
 
+// ResolveWithoutTemporaryAlias mocks base method.
+func (m *MockCompilerContext2) ResolveWithoutTemporaryAlias(schemaName, tableName string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResolveWithoutTemporaryAlias", schemaName, tableName, snapshot)
+	ret0, _ := ret[0].(*ObjectRef)
+	ret1, _ := ret[1].(*TableDef)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// ResolveWithoutTemporaryAlias indicates an expected call of ResolveWithoutTemporaryAlias.
+func (mr *MockCompilerContext2MockRecorder) ResolveWithoutTemporaryAlias(schemaName, tableName, snapshot interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResolveWithoutTemporaryAlias", reflect.TypeOf((*MockCompilerContext2)(nil).ResolveWithoutTemporaryAlias), schemaName, tableName, snapshot)
+}
+
 // ResolveAccountIds mocks base method.
 func (m *MockCompilerContext2) ResolveAccountIds(accountNames []string) ([]uint32, error) {
 	m.ctrl.T.Helper()
