@@ -16,10 +16,12 @@ package shuffle
 
 import (
 	"bytes"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -307,6 +309,79 @@ func TestShuffle(t *testing.T) {
 		// second run
 		runShuffleCase(t, tc, false)
 		tc.proc.Free()
+	}
+}
+
+func TestRangeShuffleUint64NullParity(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values []uint64
+		ranges []uint64
+		want   [][]int32
+	}{
+		{
+			name: "minmax",
+			values: []uint64{0, 249999, 250000, 250001, 499999, 500000, 500001, 749999,
+				750000, 750001, 999999, 1000000, math.MaxInt64, 1 << 63, math.MaxUint64, 0},
+			want: [][]int32{{0, 1, 15}, {2, 3, 4}, {5, 6, 7}, {8, 9, 10, 11, 12, 13, 14}},
+		},
+		{
+			name:   "explicit_ranges",
+			values: []uint64{math.MaxInt64, 1 << 63, math.MaxUint64 - 1, math.MaxUint64, 0},
+			ranges: []uint64{math.MaxInt64, 1 << 63, math.MaxUint64 - 1},
+			want:   [][]int32{{0, 4}, {1}, {2}, {3}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZeroNoFixed()
+			defer mpool.DeleteMPool(mp)
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_uint64.ToType())
+			defer bat.Clean(mp)
+			for _, v := range tc.values {
+				require.NoError(t, vector.AppendFixed(bat.Vecs[0], v, false, mp))
+			}
+			bat.SetRowCount(len(tc.values))
+			arg := &Shuffle{BucketNum: 4, ShuffleColMin: 0, ShuffleColMax: 1000000,
+				ShuffleRangeUint64: tc.ranges}
+			arg.ctr.sels = make([][]int32, arg.BucketNum)
+			assertSelections := func(t *testing.T, want, got [][]int32) {
+				t.Helper()
+				require.Len(t, got, len(want))
+				for bucket, rows := range want {
+					require.Len(t, got[bucket], len(rows), "bucket %d", bucket)
+					for i, row := range rows {
+						require.Equal(t, row, got[bucket][i], "bucket %d", bucket)
+					}
+				}
+			}
+			// Reuse the same selection buffers as batch nullness changes.
+			for _, phase := range []string{"mixed_null", "no_null", "all_null", "no_null_again"} {
+				t.Run(phase, func(t *testing.T) {
+					bat.Vecs[0].GetNulls().Clear()
+					want := tc.want
+					switch phase {
+					case "mixed_null":
+						bat.Vecs[0].GetNulls().Add(uint64(len(tc.values) - 1))
+					case "all_null":
+						want = make([][]int32, arg.BucketNum)
+						for row := range tc.values {
+							bat.Vecs[0].GetNulls().Add(uint64(row))
+							want[0] = append(want[0], int32(row))
+						}
+					}
+					if bat.Vecs[0].HasNull() {
+						assertSelections(t, want, getShuffledSelsByRangeWithNull(arg, bat))
+					} else {
+						assertSelections(t, want, getShuffledSelsByRangeWithoutNull(arg, bat))
+					}
+					exprSels := make([][]int32, arg.BucketNum)
+					rangeShuffleVec(arg, exprSels, bat.Vecs[0])
+					assertSelections(t, want, exprSels)
+				})
+			}
+		})
 	}
 }
 
