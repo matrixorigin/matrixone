@@ -68,6 +68,7 @@ select count(*) from dump_wrong;
 0
 remove files from stage if exists 'stage://comment_bs_dump_stage/metadata/*';
 drop stage comment_bs_dump_stage;
+set @comment_bs_saved_mode = @@sql_mode;
 set sql_mode = 'NO_BACKSLASH_ESCAPES';
 create table t3 (a int comment 'L:\dir\new') comment 'L:\ty';
 show create table t3;
@@ -89,7 +90,7 @@ select hex(table_comment) from information_schema.tables
 where table_schema = 'comment_bs_rt' and table_name = 't4';
 ➤ hex(table_comment)[-1,16383,0]  𝄀
 4C3A5C7479
-set sql_mode = '';
+set sql_mode = @comment_bs_saved_mode;
 create table t5 (a int comment 'plain text') comment 'plain table';
 show create table t5;
 ➤ Table[12,2,0]  ¦  Create Table[12,87,0]  𝄀

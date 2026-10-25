@@ -49,7 +49,11 @@ remove files from stage if exists 'stage://comment_bs_dump_stage/metadata/*';
 drop stage comment_bs_dump_stage;
 
 -- under NO_BACKSLASH_ESCAPES a backslash is an ordinary character: the comment
--- renders verbatim and replays unchanged
+-- renders verbatim and replays unchanged. The runner reuses one session for all
+-- scripts, so save the incoming sql_mode here and restore it below: later BVT
+-- files depend on the default mode (correlated columns in HAVING are only
+-- planned under ONLY_FULL_GROUP_BY compat).
+set @comment_bs_saved_mode = @@sql_mode;
 set sql_mode = 'NO_BACKSLASH_ESCAPES';
 create table t3 (a int comment 'L:\dir\new') comment 'L:\ty';
 show create table t3;
@@ -59,7 +63,7 @@ select column_name, hex(column_comment) from information_schema.columns
 where table_schema = 'comment_bs_rt' and table_name = 't4' order by column_name;
 select hex(table_comment) from information_schema.tables
 where table_schema = 'comment_bs_rt' and table_name = 't4';
-set sql_mode = '';
+set sql_mode = @comment_bs_saved_mode;
 
 -- columns and tables without backslashes keep their plain rendering
 create table t5 (a int comment 'plain text') comment 'plain table';
