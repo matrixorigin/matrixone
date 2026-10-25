@@ -83,4 +83,27 @@ select truncate(a*a,-30)*truncate(a*a,-30) as truncated_product from round_coeff
 NULL  𝄀
 0  𝄀
 0
+create table directed_coefficients(a decimal(15,0), b decimal(10,0));
+insert into directed_coefficients values (999999999999999,1000000000),(null,1000000000);
+select ceil(a*a,-35)*b as ceiling_product, ceiling(a*a,-35)*b as alias_product, floor(-(a*a),-35)*b as floor_product from directed_coefficients order by a;
+➤ ceiling_product[3,46,0]  ¦  alias_product[3,46,0]  ¦  floor_product[3,46,0]  𝄀
+NULL  ¦  NULL  ¦  NULL  𝄀
+100000000000000000000000000000000000000000000  ¦  100000000000000000000000000000000000000000000  ¦  -100000000000000000000000000000000000000000000
+prepare directed_precision from 'select ceil(a*a,?)*b as ceiling_product, floor(-(a*a),?)*b as floor_product from directed_coefficients order by a';
+set @rounding_position=-35;
+execute directed_precision using @rounding_position, @rounding_position;
+➤ ceiling_product[3,48,0]  ¦  floor_product[3,48,0]  𝄀
+NULL  ¦  NULL  𝄀
+100000000000000000000000000000000000000000000  ¦  -100000000000000000000000000000000000000000000
+set @rounding_position=-30;
+execute directed_precision using @rounding_position, @rounding_position;
+➤ ceiling_product[3,48,0]  ¦  floor_product[3,48,0]  𝄀
+NULL  ¦  NULL  𝄀
+1000000000000000000000000000000000000000  ¦  -1000000000000000000000000000000000000000
+set @rounding_position=-35;
+execute directed_precision using @rounding_position, @rounding_position;
+➤ ceiling_product[3,48,0]  ¦  floor_product[3,48,0]  𝄀
+NULL  ¦  NULL  𝄀
+100000000000000000000000000000000000000000000  ¦  -100000000000000000000000000000000000000000000
+deallocate prepare directed_precision;
 drop database decimal_intermediate_precision;

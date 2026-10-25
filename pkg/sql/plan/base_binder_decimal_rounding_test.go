@@ -16,6 +16,8 @@ package plan
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -70,6 +72,13 @@ func TestDecimalRoundingReturnMetadata(t *testing.T) {
 		{name: "ceil keeps input when digits exceeds scale", function: "ceil", input: types.New(types.T_decimal64, 10, 4), digits: ptrTo(int64(8)), want: types.New(types.T_decimal64, 10, 4)},
 		{name: "ceil decimal256", function: "ceil", input: types.New(types.T_decimal256, 50, 10), want: types.New(types.T_decimal256, 41, 0)},
 		{name: "floor decimal256", function: "floor", input: types.New(types.T_decimal256, 50, 10), want: types.New(types.T_decimal256, 41, 0)},
+		{name: "round coarse position needs only carry", function: "round", input: types.New(types.T_decimal128, 30, 0), digits: ptrTo(int64(-35)), want: types.New(types.T_decimal128, 31, 0)},
+		{name: "ceil past input precision", function: "ceil", input: types.New(types.T_decimal128, 30, 0), digits: ptrTo(int64(-35)), want: types.New(types.T_decimal128, 36, 0)},
+		{name: "ceiling past input precision", function: "ceiling", input: types.New(types.T_decimal128, 30, 0), digits: ptrTo(int64(-35)), want: types.New(types.T_decimal128, 36, 0)},
+		{name: "floor past input precision", function: "floor", input: types.New(types.T_decimal128, 30, 0), digits: ptrTo(int64(-35)), want: types.New(types.T_decimal128, 36, 0)},
+		{name: "ceil decimal64 coarse position", function: "ceil", input: types.New(types.T_decimal64, 9, 0), digits: ptrTo(int64(-15)), want: types.New(types.T_decimal64, 16, 0)},
+		{name: "floor decimal256 coarse position", function: "floor", input: types.New(types.T_decimal256, 40, 0), digits: ptrTo(int64(-50)), want: types.New(types.T_decimal256, 51, 0)},
+		{name: "ceil extreme negative digits", function: "ceil", input: types.New(types.T_decimal128, 30, 0), digits: ptrTo(int64(math.MinInt64)), want: types.New(types.T_decimal128, 38, 0)},
 		{name: "ceil decimal64 max precision with negative digits", function: "ceil", input: types.New(types.T_decimal64, 18, 0), digits: ptrTo(int64(-1)), want: types.New(types.T_decimal64, 18, 0)},
 		{name: "ceiling decimal128 max precision with negative digits", function: "ceiling", input: types.New(types.T_decimal128, 38, 0), digits: ptrTo(int64(-1)), want: types.New(types.T_decimal128, 38, 0)},
 		{name: "floor decimal256 max precision with negative digits", function: "floor", input: types.New(types.T_decimal256, 65, 0), digits: ptrTo(int64(-1)), want: types.New(types.T_decimal256, 65, 0)},
@@ -131,6 +140,8 @@ func TestDecimalRoundingVariableDigitsReserveCarry(t *testing.T) {
 			want := int32(31)
 			if name == "truncate" {
 				want = 30
+			} else if name == "ceil" || name == "floor" {
+				want = 38
 			}
 			require.Equal(t, want, got.Typ.Width)
 			require.Equal(t, int32(2), got.Typ.Scale)
@@ -174,5 +185,73 @@ func TestDecimalRoundCarryFeedsArithmetic(t *testing.T) {
 			require.True(t, result.IsNull(2))
 			require.Equal(t, int32(62), product.Typ.Width)
 		})
+	}
+}
+
+// A directed rounding quantum can exceed the input domain, unlike ROUND's
+// nearest-value carry. Exercise the real consumer with independent exact values.
+func TestDecimalDirectedRoundingPositionFeedsArithmetic(t *testing.T) {
+	for _, name := range []string{"ceil", "floor"} {
+		for _, variable := range []bool{false, true} {
+			for _, tc := range []struct {
+				digits   int64
+				exponent int
+				rejected bool
+			}{
+				{-29, 30, false}, {-30, 30, false}, {-31, 31, false}, {-35, 35, false}, {-37, 37, false}, {-38, 0, true},
+			} {
+				t.Run(fmt.Sprintf("%s/variable_%t/digits_%d", name, variable, tc.digits), func(t *testing.T) {
+					proc := newPlanTestProcess(t)
+					valueType := types.New(types.T_decimal128, 30, 0)
+					factorType := types.New(types.T_decimal64, 10, 0)
+					input := batch.NewWithSize(3)
+					t.Cleanup(func() { input.Clean(proc.Mp()) })
+					input.Vecs[0] = vector.NewVec(valueType)
+					input.Vecs[1] = vector.NewVec(factorType)
+					digitsVector, err := vector.NewConstFixed(types.T_int64.ToType(), tc.digits, 4, proc.Mp())
+					require.NoError(t, err)
+					input.Vecs[2] = digitsVector
+					for i, text := range []string{strings.Repeat("9", 30), "-" + strings.Repeat("9", 30), "0", "0"} {
+						value, err := types.ParseDecimal128(text, 30, 0)
+						require.NoError(t, err)
+						require.NoError(t, vector.AppendFixed(input.Vecs[0], value, i == 3, proc.Mp()))
+						require.NoError(t, vector.AppendFixed(input.Vecs[1], types.Decimal64(1000000000), false, proc.Mp()))
+					}
+					input.SetRowCount(4)
+					digits := makePlan2Int64ConstExprWithType(tc.digits)
+					if variable {
+						digits = decimalArithmeticTestColumn(types.T_int64.ToType(), 2)
+					}
+					rounded, err := BindFuncExprImplByPlanExpr(t.Context(), name, []*planpb.Expr{decimalArithmeticTestColumn(valueType, 0), digits})
+					require.NoError(t, err)
+					product, err := BindFuncExprImplByPlanExpr(t.Context(), "*", []*planpb.Expr{rounded, decimalArithmeticTestColumn(factorType, 1)})
+					require.NoError(t, err)
+					executor, err := colexec.NewExpressionExecutor(proc, product)
+					require.NoError(t, err)
+					t.Cleanup(executor.Free)
+					result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+					if tc.rejected {
+						require.ErrorContains(t, err, name+"(decimal128")
+						return
+					}
+					require.NoError(t, err)
+					positive, negative := "1"+strings.Repeat("0", tc.exponent+9), "0"
+					if name == "floor" {
+						positive, negative = "0", "-1"+strings.Repeat("0", tc.exponent+9)
+					}
+					if tc.digits == -29 {
+						if name == "ceil" {
+							negative = "-9" + strings.Repeat("0", 38)
+						} else {
+							positive = "9" + strings.Repeat("0", 38)
+						}
+					}
+					for row, want := range []string{positive, negative, "0"} {
+						require.Equal(t, want, vector.GetFixedAtWithTypeCheck[types.Decimal256](result, row).Format(0))
+					}
+					require.True(t, result.IsNull(3))
+				})
+			}
+		}
 	}
 }

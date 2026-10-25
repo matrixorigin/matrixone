@@ -9343,11 +9343,13 @@ func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []
 	integerDigits := input.Width - input.Scale
 	if len(args) == 2 && args[1].GetLit() == nil {
 		switch name {
-		case "round", "ceil", "ceiling", "floor":
-			// Runtime digits retain the input scale, but rounding can grow
-			// its coefficient by one digit. Downstream arithmetic needs that
-			// bound even though no constant-scale refinement is possible.
+		case "round":
+			// Nearest rounding can grow the coefficient by one digit.
 			returnType.Width = min(input.Width+1, maxDecimalPrecisionForRounding(input.Oid))
+		case "ceil", "ceiling", "floor":
+			// Directed rounding can reach any supported position. Until the
+			// runtime constant is known, retain the full family bound and scale.
+			returnType.Width = maxDecimalPrecisionForRounding(input.Oid)
 		}
 		return
 	}
@@ -9380,6 +9382,13 @@ func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []
 			resultScale = int32(digits)
 		}
 		precision := integerDigits + resultScale + 1 // reserve a carry digit
+		if digits < 0 {
+			// CEIL(1, -35) is 10^35 regardless of the input precision.
+			// Bound the position before negating, including INT64_MIN. The
+			// existing execution guards still reject unsupported positions.
+			position := max(digits, -int64(maxDecimalPrecisionForRounding(input.Oid)))
+			precision = max(precision, 1-int32(position))
+		}
 		if precision < 1 {
 			precision = 1
 		}

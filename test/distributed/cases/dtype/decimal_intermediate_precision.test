@@ -54,4 +54,21 @@ select round(a*a,-30)*round(a*a,-30) as rounded_product from round_coefficients 
 select round(a*a,d)*round(a*a,d) as dynamic_product from round_coefficients order by a;
 -- @metacmp(true)
 select truncate(a*a,-30)*truncate(a*a,-30) as truncated_product from round_coefficients order by a;
+-- Directed rounding must include its negative position, including prepared rebinding.
+create table directed_coefficients(a decimal(15,0), b decimal(10,0));
+insert into directed_coefficients values (999999999999999,1000000000),(null,1000000000);
+-- @metacmp(true)
+select ceil(a*a,-35)*b as ceiling_product, ceiling(a*a,-35)*b as alias_product, floor(-(a*a),-35)*b as floor_product from directed_coefficients order by a;
+-- Prepared runtime positions keep the full decimal-family bound across EXECUTEs.
+prepare directed_precision from 'select ceil(a*a,?)*b as ceiling_product, floor(-(a*a),?)*b as floor_product from directed_coefficients order by a';
+set @rounding_position=-35;
+-- @metacmp(true)
+execute directed_precision using @rounding_position, @rounding_position;
+set @rounding_position=-30;
+-- @metacmp(true)
+execute directed_precision using @rounding_position, @rounding_position;
+set @rounding_position=-35;
+-- @metacmp(true)
+execute directed_precision using @rounding_position, @rounding_position;
+deallocate prepare directed_precision;
 drop database decimal_intermediate_precision;
