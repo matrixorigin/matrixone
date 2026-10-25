@@ -1,10 +1,11 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 34
+- Revision: 35
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
 - Revision 31 integration baseline: official main `67c91c5bdf6c669f63331778634215f7aa3e8f58`
+- Revision 35 integration baseline: official main `83fa4d7d74b014286b60adfd2f9857b4d43d978e`
 - Revision 34 integration baseline: official main `9a7e12a93328a69bac7261beedc88930b7984a10`
 - Revision 33 integration baseline: official main `ac4ec315877cfc95fc5464bd81b081489f75f747`
 - Revision 32 integration baseline: official main `ac13078b9872fe9ca84e0eeb4d1571312f99382a`
@@ -1557,6 +1558,22 @@ activation scope or capacity claim; the accepted RFC13 design and bounded local
 scalar policy remain unchanged. Historical receipts keep their recorded source
 identities. Fresh integration checks are recorded separately in
 `validation/20261025_set_key_weighted_percentile_integration.json`.
+
+## Revision 35 SHOW CREATE VIEW maintenance integration
+
+Official main `83fa4d7d74b014286b60adfd2f9857b4d43d978e` fixes quoting of
+stored view definitions through the existing SQL string-literal formatter.
+Replaying this PR preserves all56 patch bodies unchanged and brings that
+rendering fix and its unit/BVT cases into the integrated source. Set membership,
+correlation/cardinality, prepared specialization and bounded scalar ownership
+are unchanged. Main latest remains131; this PR retains exactly one capability
+at132, set-key function620 and sentinel621. The immediate-predecessor131
+rejection and independent weighted-percentile131/619 contracts remain intact.
+
+Fresh planner and public signed-zero integration evidence is recorded in
+`validation/20261025_show_create_view_maintenance_integration.json`.
+RFC34's protocol/resource evidence remains scoped to its exact source inputs;
+this maintenance update adds no capacity, performance or mixed-binary claim.
 
 ## Compatibility, rollout and rollback
 
