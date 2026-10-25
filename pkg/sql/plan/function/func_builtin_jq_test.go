@@ -253,6 +253,100 @@ func TestJqVarlenaProducerMatrix(t *testing.T) {
 	})
 }
 
+func TestJqFramesMultipleResultsAndPreservesLargeIntegers(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	op := newOpBuiltInJq()
+
+	tests := []struct {
+		name  string
+		json  string
+		query string
+		want  string
+		isTry bool
+	}{
+		{name: "zero results", json: `[]`, query: `.[]`, want: ""},
+		{name: "safe integer boundary", json: `9007199254740991`, query: `.`, want: `9007199254740991`},
+		{name: "positive integer beyond boundary", json: `9007199254740993`, query: `.`, want: `9007199254740993`},
+		{name: "negative integer beyond boundary", json: `-9007199254740993`, query: `.`, want: `-9007199254740993`},
+		{
+			name:  "multiple results",
+			json:  `[1, -9007199254740993, 9007199254740993]`,
+			query: `.[]`,
+			want:  "1\n-9007199254740993\n9007199254740993",
+		},
+		{
+			name:  "try multiple results",
+			json:  `[1, 2, 3]`,
+			query: `.[]`,
+			want:  "1\n2\n3",
+			isTry: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{test.json}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{test.query}, nil),
+			}, nil, test.isTry)
+			require.NoError(t, err)
+			requireJqResult(t, result, []string{test.want}, []bool{false})
+		})
+	}
+
+	_, err := evalJqForTest(t, proc, op, []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"."}, nil),
+	}, nil, false)
+	require.EqualError(t, err, "unexpected end of JSON input")
+
+	_, err = evalJqForTest(t, proc, op, []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"1e1000"}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"."}, nil),
+	}, nil, false)
+	require.EqualError(t, err, "json: cannot unmarshal number 1e1000 into Go value of type float64")
+
+	result, err := evalJqForTest(t, proc, op, []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{`{"value":-1e1000}`}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{".value"}, nil),
+	}, nil, true)
+	require.NoError(t, err)
+	requireJqResult(t, result, []string{""}, []bool{true})
+}
+
+func TestJqRejectsOutOfRangeNumbersBeforeDuplicateKeysOverwriteThem(t *testing.T) {
+	require.False(t, jqJSONNumberOutOfFloat64Range([]byte(`{"text":"1e1000"}`)))
+	require.False(t, jqJSONNumberOutOfFloat64Range([]byte(`{"text":"\"1e1000"}`)))
+	require.False(t, jqJSONNumberOutOfFloat64Range([]byte(`{"text":"\\1e1000"}`)))
+
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name string
+		json string
+		want string
+	}{
+		{name: "positive", json: `{"n":1e1000,"n":1}`, want: "json: cannot unmarshal number 1e1000 into Go struct field .n of type float64"},
+		{name: "negative", json: `{"n":-1e1000,"n":1}`, want: "json: cannot unmarshal number -1e1000 into Go struct field .n of type float64"},
+		{name: "nested object", json: `{"outer":{"n":1e1000,"n":1}}`, want: "json: cannot unmarshal number 1e1000 into Go struct field .outer.n of type float64"},
+		{name: "nested array", json: `{"outer":[{"n":-1e1000,"n":1}]}`, want: "json: cannot unmarshal number -1e1000 into Go struct field .outer.0.n of type float64"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := evalJqForTest(t, proc, newOpBuiltInJq(), []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{test.json}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"."}, nil),
+			}, nil, false)
+			require.EqualError(t, err, test.want)
+
+			result, err := evalJqForTest(t, proc, newOpBuiltInJq(), []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{test.json}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"."}, nil),
+			}, nil, true)
+			require.NoError(t, err)
+			requireJqResult(t, result, []string{""}, []bool{true})
+		})
+	}
+}
+
 func TestJsonRowPropagatesResultAllocationFailureAndResetsEncoder(t *testing.T) {
 	for _, masked := range []bool{false, true} {
 		t.Run(strconv.FormatBool(masked), func(t *testing.T) {

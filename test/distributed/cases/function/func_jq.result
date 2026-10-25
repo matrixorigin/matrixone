@@ -27,7 +27,7 @@ jq({"id": "sample", "10": {"b": 42}}, {(.id): .["10"].b})
 {"sample":42}
 select jq('[{"id":1},{"id":2},{"id":3}]', '.[] | .id');
 jq([{"id":1},{"id":2},{"id":3}], .[] | .id)
-123
+1\n2\n3
 select jq('{"a":1, "b":2}', '.a += 1 | .b *= 2');
 jq({"a":1, "b":2}, .a += 1 | .b *= 2)
 {"a":2,"b":4}
@@ -35,7 +35,7 @@ select jq('{"a":1} [2] 3', '. as {$a} ?// [$a] ?// $a | $a');
 invalid character '[' after top-level value
 select jq('{"foo": 4722366482869645213696}', '.foo');
 jq({"foo": 4722366482869645213696}, .foo)
-4.722366482869645e+21
+4722366482869645213696
 select jq('1', 'def fact($n): if $n < 1 then 1 else $n * fact($n - 1) end; fact(50)');
 jq(1, def fact($n): if $n < 1 then 1 else $n * fact($n - 1) end; fact(50))
 30414093201713378043612608166064768844377641568960512000000000000
@@ -84,22 +84,22 @@ jq(["a", "b", "c", "d", "e"], .[-2:])
 ["d","e"]
 select jq('["a", "b", "c", "d", "e"]', '.[]');
 jq(["a", "b", "c", "d", "e"], .[])
-"a""b""c""d""e"
+"a"\n"b"\n"c"\n"d"\n"e"
 select jq('[]', '.[]');
 jq([], .[])
 
 select jq('{"foo": ["a", "b", "c", "d", "e"]}', '.foo[]');
 jq({"foo": ["a", "b", "c", "d", "e"]}, .foo[])
-"a""b""c""d""e"
+"a"\n"b"\n"c"\n"d"\n"e"
 select jq('{"a":1, "b":2}', '.[]');
 jq({"a":1, "b":2}, .[])
-12
+1\n2
 select jq('{"a":1, "b":2}', '.a, .b');
 jq({"a":1, "b":2}, .a, .b)
-12
+1\n2
 select jq('["a", "b", "c", "d", "e"]', '.[4,2]');
 jq(["a", "b", "c", "d", "e"], .[4,2])
-"e""c"
+"e"\n"c"
 select jq('{"a": 1, "b": [2, 3]}', '[.a, .b[]]');
 jq({"a": 1, "b": [2, 3]}, [.a, .b[]])
 [1,2,3]
@@ -111,7 +111,7 @@ jq({"a":1, "b":2}, {aa: .a, bb: .b})
 {"aa":1,"bb":2}
 select jq('{"user":"stedolan","titles":["JQ Primer", "More JQ"]}', '{user, title: .titles[]}');
 jq({"user":"stedolan","titles":["JQ Primer", "More JQ"]}, {user, title: .titles[]})
-{"title":"JQ Primer","user":"stedolan"}{"title":"More JQ","user":"stedolan"}
+{"title":"JQ Primer","user":"stedolan"}\n{"title":"More JQ","user":"stedolan"}
 select jq('[[{"a":1}]]', '.. | .a');
 expected an object but got: array ([[{"a":1}]])
 select jq('{"a":1, "b":2}', '.a + .b');
@@ -149,7 +149,7 @@ jq([1, 2, 3], reduce .[] as $item (0; + $item))
 3
 select jq('[1, 2, 3]', 'foreach .[] as $item(0; . + $item; [$item, . * 2])');
 jq([1, 2, 3], foreach .[] as $item(0; . + $item; [$item, . * 2]))
-[1,2][2,6][3,12]
+[1,2]\n[2,6]\n[3,12]
 create table jqt(id int, data varchar(255), jq varchar(255));
 insert into jqt values
 (1, '{"foo": 128}', '.foo'),
@@ -201,7 +201,7 @@ id    try_jq(data, .)
 8    [{"id":1},{"id":2},{"id":3}]
 9    {"a":1,"b":2}
 10    null
-11    {"foo":4.722366482869645e+21}
+11    {"foo":4722366482869645213696}
 12    1
 100    [1,2,3]
 101    [1,2,3]
@@ -284,10 +284,10 @@ id    try_jq(data, jq)
 5    null
 6    null
 7    {"sample":42}
-8    123
+8    1\n2\n3
 9    {"a":2,"b":4}
 10    null
-11    4.722366482869645e+21
+11    4722366482869645213696
 12    30414093201713378043612608166064768844377641568960512000000000000
 100    null
 101    null
