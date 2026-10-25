@@ -8523,7 +8523,8 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 					nulls.Add(&v.nsp, uint64(oldLen+i))
 					continue
 				}
-				copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+				dstOffset, srcOffset := (oldLen+i)*tlen, int(sel)*tlen
+				copy(v.data[dstOffset:dstOffset+tlen], w.data[srcOffset:srcOffset+tlen])
 			}
 		} else {
 			switch tlen {
@@ -8550,9 +8551,7 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 					v.data[(oldLen + i)] = w.data[int(sel)]
 				}
 			default:
-				for i, sel := range sels {
-					copy(v.data[(oldLen+i)*tlen:(oldLen+i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
-				}
+				unionWideFixedSelected(v, w, oldLen, sels, tlen)
 			}
 		}
 	}
@@ -8564,6 +8563,42 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		return err
 	}
 	return nil
+}
+
+// unionWideFixedSelected handles widths that otherwise require a dynamic copy
+// per row. Keep the existing scalar paths in unionT for narrow values.
+func unionWideFixedSelected[S int32 | int64](v, w *Vector, oldLen int, sels []S, width int) {
+	// Bound the byte ranges before constructing typed views. The backing
+	// allocation can contain padding, especially for 12/20/24-byte values.
+	source := w.data[:w.length*width]
+	target := v.data[oldLen*width : (oldLen+len(sels))*width]
+	switch width {
+	case 12:
+		unionFixedSelected[types.TS](target, source, sels)
+	case 16:
+		unionFixedSelected[types.Decimal128](target, source, sels)
+	case 20:
+		unionFixedSelected[types.Blockid](target, source, sels)
+	case 24:
+		unionFixedSelected[types.Rowid](target, source, sels)
+	case 32:
+		unionFixedSelected[types.Decimal256](target, source, sels)
+	default:
+		for i, sel := range sels {
+			copy(target[i*width:(i+1)*width], source[int(sel)*width:(int(sel)+1)*width])
+		}
+	}
+}
+
+// unionFixedSelected copies physical values only. unionT owns capacity,
+// logical length and metadata; the representative type has the selected width,
+// but need not be the vector's logical SQL type (e.g. UUID and Decimal128).
+func unionFixedSelected[T types.FixedSizeT, S int32 | int64](target, source []byte, sels []S) {
+	var value T
+	width := int(unsafe.Sizeof(value))
+	src := util.UnsafeSlice[T](unsafe.Pointer(unsafe.SliceData(source)), len(source)/width)
+	dst := util.UnsafeSlice[T](unsafe.Pointer(unsafe.SliceData(target)), len(sels))
+	shuffle.FixedLengthShuffle(src, dst, sels)
 }
 
 func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp *mpool.MPool) error {
