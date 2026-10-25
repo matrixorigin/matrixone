@@ -684,7 +684,7 @@ func getShuffledSelsByRangeWithNull(ap *ShuffleV2, groupByVec *vector.Vector) []
 			for row, v := range groupByCol {
 				var regIndex uint64 = 0
 				if !groupByVec.IsNull(uint64(row)) {
-					regIndex = plan2.GetRangeShuffleIndexSignedMinMax(ap.ShuffleColMin, ap.ShuffleColMax, int64(v), bucketNum)
+					regIndex = plan2.GetRangeShuffleIndexUnsignedMinMax(uint64(ap.ShuffleColMin), uint64(ap.ShuffleColMax), v, bucketNum)
 				}
 				sels[regIndex] = append(sels[regIndex], int32(row))
 			}

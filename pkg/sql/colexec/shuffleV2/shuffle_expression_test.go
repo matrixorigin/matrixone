@@ -41,6 +41,7 @@ func TestShuffleExpressionRangeRouting(t *testing.T) {
 	}{
 		{"signed_min_max", types.T_int64, []any{int64(0), int64(2), int64(10), int64(11), int64(20), int64(21), int64(30), int64(41)}, nil, nil},
 		{"signed_nonuniform", types.T_int64, []any{int64(-11), int64(-10), int64(-1), int64(0), int64(1), int64(20), int64(21), int64(100)}, []int64{-10, 0, 20}, nil},
+		{"unsigned_min_max", types.T_uint64, []any{uint64(0), uint64(2), uint64(10), uint64(11), uint64(20), uint64(21), uint64(1) << 63, ^uint64(0)}, nil, nil},
 		{"unsigned_nonuniform", types.T_uint64, []any{uint64(0), uint64(2), uint64(3), uint64(8), uint64(9), uint64(32), uint64(33), uint64(100)}, nil, []uint64{2, 8, 32}},
 		{"varchar_inline", types.T_varchar, []any{[]byte("a"), []byte("b"), []byte("c"), []byte("d"), []byte("e"), []byte("y"), []byte("z"), []byte("zz")}, nil, []uint64{uint64('b') << 56, uint64('d') << 56, uint64('y') << 56}},
 		{"varchar_area", types.T_varchar, []any{[]byte("a0000000" + strings.Repeat("x", 40)), []byte("b0000000" + strings.Repeat("x", 40)), []byte("c0000000" + strings.Repeat("x", 40)), []byte("d0000000" + strings.Repeat("x", 40)), []byte("e0000000" + strings.Repeat("x", 40)), []byte("y0000000" + strings.Repeat("x", 40)), []byte("z0000000" + strings.Repeat("x", 40)), []byte("zz000000" + strings.Repeat("x", 40))}, nil, []uint64{binary.BigEndian.Uint64([]byte("b0000000")), binary.BigEndian.Uint64([]byte("d0000000")), binary.BigEndian.Uint64([]byte("y0000000"))}},
