@@ -454,25 +454,202 @@ func TestStatementInfoSpoolAckSegmentLeavesNoMarker(t *testing.T) {
 	}
 }
 
-func TestStatementInfoSpoolAckSettlesEarlierSegments(t *testing.T) {
+// TestLaterCompletionPreservesPendingEarlierBatch is the round-1 review
+// probe: with multiple doExport workers a later batch can commit while an
+// earlier one is still in flight. The later ack must NOT settle the earlier
+// segment — deleting it would turn its records into a permanent loss on the
+// next kill. ackSegment settles only the segment whose own batch committed.
+func TestLaterCompletionPreservesPendingEarlierBatch(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 	line := encodeStatementInfoCSVLine(ctx, []string{"s1-r1"})
-	// zero ack lag: a covered segment is removed immediately.
+	// zero ack lag: a settled segment is removed immediately, so every
+	// keep/remove observation below comes from the ack rule alone.
 	s := openTestSpool(t, dir, 0, 0, 0)
 	defer s.close()
 	s.appendRecord(line)
-	seg1 := s.sealForExport() // sealed; its batch fired empty — never wrapped
+	seg1 := s.sealForExport()
 	require.NotNil(t, seg1)
 	s.appendRecord(line)
 	seg2 := s.sealForExport()
 	require.NotNil(t, seg2)
-	// the successful export of seg2's batch settles the earlier segment,
-	// too — the pipeline drains in order (see ackSegment).
+
+	// only the second batch commits (out-of-order completion): BOTH files
+	// must stay on disk — seg1's batch is still in flight, and seg2's
+	// removal head-of-line blocks on the unsettled seg1.
 	s.ackSegment(seg2.seq)
 	files := spoolDirFiles(t, dir)
+	assert.Contains(t, files, seg1.name)
+	assert.Contains(t, files, seg2.name)
+	s.mux.Lock()
+	assert.False(t, s.sealed[seg1.seq].done)
+	assert.True(t, s.sealed[seg2.seq].done)
+	s.mux.Unlock()
+
+	// ordered-completion control: once seg1's own batch commits, both
+	// segments are settled and removed.
+	s.ackSegment(seg1.seq)
+	files = spoolDirFiles(t, dir)
 	assert.NotContains(t, files, seg1.name)
 	assert.NotContains(t, files, seg2.name)
+}
+
+// TestStatementInfoSpoolAckOutOfOrderFuzz exercises multi-worker completion
+// in an adversarial order: even segments commit first, odd ones later. No
+// even ack may remove an unsettled odd segment or itself before it.
+func TestStatementInfoSpoolAckOutOfOrderFuzz(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	line := encodeStatementInfoCSVLine(ctx, []string{"s1-r1"})
+	s := openTestSpool(t, dir, 0, 0, 0)
+	defer s.close()
+
+	segs := make([]*spoolSegment, 0, 6)
+	for i := 0; i < 6; i++ {
+		s.appendRecord(line)
+		seg := s.sealForExport()
+		require.NotNil(t, seg)
+		segs = append(segs, seg)
+	}
+	acks := []int{1, 3, 5, 0, 2, 4} // 2nd, 4th, 6th, then 1st, 3rd, 5th
+	acked := make(map[int]bool, len(segs))
+	for step, idx := range acks {
+		s.ackSegment(segs[idx].seq)
+		acked[idx] = true
+		// while any earlier segment is unsettled, nothing may be removed:
+		// in-order removal stops at the first gap.
+		files := spoolDirFiles(t, dir)
+		firstPending := -1
+		for i := range segs {
+			if !acked[i] {
+				firstPending = i
+				break
+			}
+		}
+		for i, seg := range segs {
+			if firstPending >= 0 && i >= firstPending {
+				assert.Contains(t, files, seg.name, "step %d", step)
+			} else {
+				assert.NotContains(t, files, seg.name, "step %d", step)
+			}
+		}
+	}
+	files := spoolDirFiles(t, dir)
+	for _, seg := range segs {
+		assert.NotContains(t, files, seg.name) // the empty active segment may stay
+	}
+}
+
+// TestStatementInfoSpoolAckUnknownSegmentSettlesNothing guards the stray-ack
+// path: an ack for a segment the spool does not know (duplicate completion,
+// already removed) must never settle another segment.
+func TestStatementInfoSpoolAckUnknownSegmentSettlesNothing(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	line := encodeStatementInfoCSVLine(ctx, []string{"s1-r1"})
+	s := openTestSpool(t, dir, 0, 0, 0)
+	defer s.close()
+	s.appendRecord(line)
+	seg := s.sealForExport()
+	require.NotNil(t, seg)
+
+	s.ackSegment(seg.seq + 100)
+	assert.Contains(t, spoolDirFiles(t, dir), seg.name)
+	s.mux.Lock()
+	assert.False(t, s.sealed[seg.seq].done)
+	s.mux.Unlock()
+}
+
+// TestStatementInfoSpoolNoBatchGapSegment covers the pipeline-gap lifecycle
+// under the per-segment ack rule: a segment sealed at a tick whose drain
+// produced no batch gets no ack ever; it becomes removable only through the
+// ack-lag guard (a later committed batch, or the duration fallback), never
+// through a bare ack of another segment's seq.
+func TestStatementInfoSpoolNoBatchGapSegment(t *testing.T) {
+	t.Run("removed by a later committed batch inside the lag", func(t *testing.T) {
+		dir := t.TempDir()
+		ctx := context.Background()
+		line := encodeStatementInfoCSVLine(ctx, []string{"r"})
+		s := openTestSpool(t, dir, 0, 1, time.Hour)
+		defer s.close()
+
+		// tick 1: records on disk, but the buffer drained empty.
+		s.appendRecord(line)
+		gapBuf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: nil}, spool: s}
+		require.Nil(t, gapBuf.GetBatch(ctx, new(bytes.Buffer)))
+		s.mux.Lock()
+		require.Len(t, s.sealed, 1)
+		var gapSeg *spoolSegment
+		for _, seg := range s.sealed {
+			gapSeg = seg
+		}
+		s.mux.Unlock()
+		require.NotNil(t, gapSeg)
+		assert.True(t, gapSeg.noBatch)
+		assert.False(t, gapSeg.done)
+		assert.Contains(t, spoolDirFiles(t, dir), gapSeg.name)
+
+		// an ack of a random later seq must not remove it.
+		s.ackSegment(gapSeg.seq + 50)
+		assert.Contains(t, spoolDirFiles(t, dir), gapSeg.name)
+
+		// tick 2: a real batch for the next segment; its commit covers the
+		// gap records (they shipped inside it) and satisfies the lag guard.
+		s.appendRecord(line)
+		realBuf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
+		req := realBuf.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
+		_, err := req.Handle()
+		require.NoError(t, err)
+		assert.NotContains(t, spoolDirFiles(t, dir), gapSeg.name)
+	})
+
+	t.Run("duration fallback covers a cluster gone quiet", func(t *testing.T) {
+		dir := t.TempDir()
+		ctx := context.Background()
+		line := encodeStatementInfoCSVLine(ctx, []string{"r"})
+		base := time.Now()
+		current, clock := spoolTestClock(base)
+		s := openTestSpool(t, dir, 0, 1, 30*time.Second)
+		s.now = clock
+		defer s.close()
+
+		s.appendRecord(line)
+		gapBuf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: nil}, spool: s}
+		require.Nil(t, gapBuf.GetBatch(ctx, new(bytes.Buffer)))
+		require.Len(t, spoolDirFiles(t, dir), 2) // gap segment + new active
+
+		// no newer batch ever commits; only time passing may remove it.
+		*current = base.Add(31 * time.Second)
+		s.mux.Lock()
+		s.collectRemovableLocked()
+		s.mux.Unlock()
+		assert.Len(t, spoolDirFiles(t, dir), 1) // only the active one remains
+	})
+
+	t.Run("a noBatch neighbor does not count toward the lag guard", func(t *testing.T) {
+		dir := t.TempDir()
+		ctx := context.Background()
+		line := encodeStatementInfoCSVLine(ctx, []string{"r"})
+		s := openTestSpool(t, dir, 0, 1, time.Hour)
+		defer s.close()
+
+		// tick 1: a regular batch, acked.
+		s.appendRecord(line)
+		realBuf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
+		req := realBuf.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
+		_, err := req.Handle()
+		require.NoError(t, err)
+		seg1 := req.seg
+		// tick 2: a gap segment (never acked).
+		s.appendRecord(line)
+		gapBuf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: nil}, spool: s}
+		require.Nil(t, gapBuf.GetBatch(ctx, new(bytes.Buffer)))
+
+		// seg1 is acked, but the only newer segment is a noBatch one: seg1
+		// must stay — the noBatch neighbor proves nothing about the gap
+		// records' carrier batch.
+		assert.Contains(t, spoolDirFiles(t, dir), seg1.name)
+	})
 }
 
 func TestStatementInfoSpoolReplayDropsTornTail(t *testing.T) {
@@ -502,12 +679,140 @@ func TestStatementInfoSpoolReplayDropsTornTail(t *testing.T) {
 	assert.NotContains(t, spoolDirFiles(t, dir), spoolSegmentFileName(1))
 }
 
-func TestDropTornTailRecord(t *testing.T) {
-	assert.Equal(t, []byte("a\nb\n"), dropTornTailRecord("x", []byte("a\nb\n")))
-	assert.Equal(t, []byte("a\n"), dropTornTailRecord("x", []byte("a\nb")))
-	assert.Empty(t, dropTornTailRecord("x", []byte("no-newline-torn")))
-	assert.Empty(t, dropTornTailRecord("x", nil))
-	assert.Empty(t, dropTornTailRecord("x", []byte{}))
+// TestLastCompleteCSVRecordEnd pins the quote-aware boundary scan: a
+// newline inside a quoted field is not a record boundary, so torn-tail
+// recovery must stop at the end of the last COMPLETE record.
+func TestLastCompleteCSVRecordEnd(t *testing.T) {
+	cases := []struct {
+		name  string
+		in    string
+		end   int // expected offset just past the last complete record
+		clean bool
+	}{
+		{"empty", "", 0, true},
+		{"single complete", "a,b\n", 4, true},
+		{"two complete", "a,b\nc,d\n", 8, true},
+		{"simple torn", "a,b\nc,d", 4, false},
+		{"torn without any newline", "no-newline-torn", 0, false},
+		{"quoted newline inside a complete record", "a,\"x\ny\"\n", 8, true},
+		{"quoted CRLF record", "a,\"x\r\ny\"\r\n", 10, true},
+		// the round-1 probe shape: the newline inside the unterminated
+		// quoted field must NOT be treated as a boundary.
+		{"torn mid quoted multiline field", "a,b\n\"partial\nrecord", 4, false},
+		{"escaped quotes then boundary", "\"a\"\"b\",c\n", 9, true},
+		{"quote mid-field is literal", "ab\"c,d\ne,f\n", 11, true},
+		{"torn inside escaped quote pair", "\"a\"\"b\",c\n\"tor\"\"n", 9, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			end, clean := lastCompleteCSVRecordEnd([]byte(tc.in))
+			assert.Equal(t, tc.end, end)
+			assert.Equal(t, tc.clean, clean)
+			if tc.end > 0 {
+				assert.Equal(t, byte('\n'), tc.in[tc.end-1])
+			}
+		})
+	}
+}
+
+// TestRecoverSpoolSegmentContent pins the crash-content split: the complete
+// prefix passes, the torn tail is dropped (never fsync-confirmed), and a
+// mid-file malformed record is poison, not a tail.
+func TestRecoverSpoolSegmentContent(t *testing.T) {
+	t.Run("clean passes unchanged", func(t *testing.T) {
+		content, poison := recoverSpoolSegmentContent("x", []byte("a,b\nc,d\n"))
+		assert.False(t, poison)
+		assert.Equal(t, []byte("a,b\nc,d\n"), content)
+	})
+
+	t.Run("the complete prefix of a torn file replays cleanly", func(t *testing.T) {
+		content, poison := recoverSpoolSegmentContent("x", []byte("a,b\nc,d"))
+		assert.False(t, poison)
+		assert.Equal(t, []byte("a,b\n"), content)
+	})
+
+	// the round-1 probe: a crash leaves a partial CSV record containing a
+	// newline inside a quoted field. Recovery must keep the complete row,
+	// and the remaining prefix must parse under the destination's CSV rules.
+	t.Run("torn multiline quoted field preserves the complete prefix", func(t *testing.T) {
+		row := encodeStatementInfoCSVLine(context.Background(), []string{"id-1", "insert into t values (1)"})
+		raw := append(append([]byte(nil), row...), []byte("\"id-2\",\"insert\nSELECT partial")...)
+		content, poison := recoverSpoolSegmentContent("x", raw)
+		assert.False(t, poison)
+		assert.Equal(t, row, content)
+		require.NoError(t, validateSpoolCSVContent(content))
+		r := csv.NewReader(bytes.NewReader(content))
+		rows, err := r.ReadAll()
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		assert.Equal(t, "id-1", rows[0][0])
+	})
+
+	t.Run("control: single-line torn tail", func(t *testing.T) {
+		content, poison := recoverSpoolSegmentContent("x", []byte("a,b\n\"part"))
+		assert.False(t, poison)
+		assert.Equal(t, []byte("a,b\n"), content)
+	})
+
+	t.Run("mid-file malformed record is poison", func(t *testing.T) {
+		// a bare quote inside a quoted field: encoding/csv rejects it, and
+		// no torn append can produce it (tears only strip the tail).
+		content, poison := recoverSpoolSegmentContent("x", []byte("a,b\n\"bad\"quote,c\nd,e\n"))
+		assert.True(t, poison)
+		assert.Nil(t, content)
+	})
+
+	t.Run("empty and fully torn stay harmless", func(t *testing.T) {
+		content, poison := recoverSpoolSegmentContent("x", nil)
+		assert.False(t, poison)
+		assert.Empty(t, content)
+		content, poison = recoverSpoolSegmentContent("x", []byte("\"unterminated-from-the-start"))
+		assert.False(t, poison)
+		assert.Empty(t, content) // whole file was one torn record
+	})
+}
+
+// TestStatementInfoSpoolReplayPoisonSkippedNotBlocking proves a quarantined
+// segment can never head-of-line block the replay of later segments.
+func TestStatementInfoSpoolReplayPoisonSkippedNotBlocking(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	line2 := encodeStatementInfoCSVLine(ctx, []string{"healthy-2"})
+	// plant two orphans by hand: segment 1 is poison mid-file, segment 2 is
+	// healthy.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, spoolSegmentFileName(1)),
+		[]byte("a,b\n\"bad\"quote,c\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, spoolSegmentFileName(2)), line2, 0644))
+
+	stub := stubSpoolSQLFlush(t)
+	s := openTestSpool(t, dir, 0, 1, time.Minute)
+	defer s.close()
+	require.Len(t, s.orphans, 2)
+
+	s.replayOnce(ctx)
+	// both orphans left the queue; only the healthy segment was flushed.
+	assert.False(t, s.hasPendingOrphans())
+	assert.Equal(t, line2, stub.bytes())
+	// the poison segment is quarantined on disk (operator forensics), not
+	// replayed, not blocking, not silently deleted.
+	files := spoolDirFiles(t, dir)
+	assert.NotContains(t, files, spoolSegmentFileName(1))
+	assert.Contains(t, files, spoolSegmentFileName(1)+spoolPoisonFileSuffix)
+
+	// a later pass is a no-op: the quarantine never re-enters the queue.
+	flushed := stub.calls()
+	s.replayOnce(ctx)
+	assert.Equal(t, flushed, stub.calls())
+	// and a re-booted spool does not even see the quarantined file (the one
+	// orphan it inherits is the first spool's own empty active segment).
+	s.close()
+	s2 := openTestSpool(t, dir, 0, 1, time.Minute)
+	defer s2.close()
+	require.Len(t, s2.orphans, 1)
+	assert.Equal(t, uint64(3), s2.orphans[0].seq)
+	for _, o := range s2.orphans {
+		assert.NotContains(t, o.name, spoolPoisonFileSuffix)
+	}
 }
 
 func TestStatementInfoSpoolStrayAckMarkerPurged(t *testing.T) {
@@ -626,11 +931,23 @@ func TestSpooledItemBufferGetBatchLifecycle(t *testing.T) {
 	assert.True(t, seg2.failed)
 	assert.Contains(t, spoolDirFiles(t, dir), seg2.name)
 
-	// a non-request batch shape keeps the segment pending instead of acking
+	// a non-request batch shape can never produce an ack for the segment:
+	// it is flagged noBatch and follows the ack-lag guard for removal.
 	s.appendRecord(line)
 	inner3 := &spoolFakeBuffer{batch: "not-a-write-request"}
 	buf3 := &spooledItemBuffer{Buffer: inner3, spool: s}
 	assert.Equal(t, "not-a-write-request", buf3.GetBatch(ctx, new(bytes.Buffer)))
+	s.mux.Lock()
+	var seg3 *spoolSegment
+	for _, seg := range s.sealed {
+		if seg.seq != req.seg.seq && seg.seq != req2.seg.seq {
+			seg3 = seg
+		}
+	}
+	s.mux.Unlock()
+	require.NotNil(t, seg3)
+	assert.True(t, seg3.noBatch)
+	assert.False(t, seg3.done)
 }
 
 // spoolFakeBuffer is a minimal Buffer implementation for the wrapper tests.
@@ -925,4 +1242,404 @@ func spoolStaleFile(s *statementInfoSpool) {
 	if s.fg.f != nil {
 		_ = s.fg.f.Close()
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Group-commit fsync protocol: an append must never report success before an
+// fsync of the file holding its record confirmed it (round-1 review repair).
+// ---------------------------------------------------------------------------
+
+// spoolCountingFile wraps a real segment file, counting Sync calls and
+// optionally failing them.
+type spoolCountingFile struct {
+	*os.File
+	mux   sync.Mutex
+	syncs int
+	fail  error
+}
+
+func (f *spoolCountingFile) Sync() error {
+	f.mux.Lock()
+	f.syncs++
+	f.mux.Unlock()
+	if f.fail != nil {
+		return f.fail
+	}
+	return f.File.Sync()
+}
+
+func (f *spoolCountingFile) syncCount() int {
+	f.mux.Lock()
+	defer f.mux.Unlock()
+	return f.syncs
+}
+
+// spoolFileFactoryStub wraps every segment file the spool opens with a
+// spoolCountingFile, keyed by segment seq.
+type spoolFileFactoryStub struct {
+	mux      sync.Mutex
+	files    map[uint64]*spoolCountingFile
+	failSync error
+}
+
+func stubSpoolFileFactory(t *testing.T) *spoolFileFactoryStub {
+	t.Helper()
+	st := &spoolFileFactoryStub{files: make(map[uint64]*spoolCountingFile)}
+	old := openSpoolSegmentFile
+	openSpoolSegmentFile = func(dir string, seq uint64) (spoolSyncFile, int64, error) {
+		f, size, err := openSegmentFile(dir, seq)
+		if err != nil {
+			return nil, 0, err
+		}
+		st.mux.Lock()
+		w := &spoolCountingFile{File: f, fail: st.failSync}
+		st.files[seq] = w
+		st.mux.Unlock()
+		return w, size, nil
+	}
+	t.Cleanup(func() { openSpoolSegmentFile = old })
+	return st
+}
+
+func (st *spoolFileFactoryStub) file(seq uint64) *spoolCountingFile {
+	st.mux.Lock()
+	defer st.mux.Unlock()
+	return st.files[seq]
+}
+
+// spoolGateFile is a memory-backed spoolSyncFile whose FIRST Sync blocks on a
+// gate, for deterministic concurrency tests of the group-commit protocol.
+type spoolGateFile struct {
+	mux         sync.Mutex
+	buf         []byte
+	writes      int
+	syncs       int
+	blockFirst  bool
+	gate        chan struct{} // released to unblock the first Sync
+	enteredSync chan struct{} // closed when the first Sync starts
+	secondWrite chan struct{} // closed when the second Write lands
+	thirdWrite  chan struct{} // closed when the third Write lands
+	onceEntered sync.Once
+}
+
+func (f *spoolGateFile) Write(p []byte) (int, error) {
+	f.mux.Lock()
+	f.buf = append(f.buf, p...)
+	f.writes++
+	w := f.writes
+	f.mux.Unlock()
+	if w == 2 && f.secondWrite != nil {
+		close(f.secondWrite)
+	}
+	if w == 3 && f.thirdWrite != nil {
+		close(f.thirdWrite)
+	}
+	return len(p), nil
+}
+
+func (f *spoolGateFile) Sync() error {
+	f.mux.Lock()
+	f.syncs++
+	n := f.syncs
+	f.mux.Unlock()
+	if n == 1 {
+		f.onceEntered.Do(func() {
+			if f.enteredSync != nil {
+				close(f.enteredSync)
+			}
+		})
+		if f.blockFirst {
+			<-f.gate
+		}
+	}
+	return nil
+}
+
+func (f *spoolGateFile) Close() error { return nil }
+
+func (f *spoolGateFile) counters() (writes, syncs int) {
+	f.mux.Lock()
+	defer f.mux.Unlock()
+	return f.writes, f.syncs
+}
+
+// TestSpoolFsyncGroupAppendSurfacesSyncError is the round-1 probe shape: an
+// append whose fsync fails must surface the error AT THE APPEND, before any
+// seal — never report success over a record that only sits in the page cache.
+func TestSpoolFsyncGroupAppendSurfacesSyncError(t *testing.T) {
+	newGroupWith := func(f spoolSyncFile) *spoolFsyncGroup {
+		g := &spoolFsyncGroup{}
+		g.init()
+		g.mu.Lock()
+		g.adoptLocked(f, 0)
+		g.mu.Unlock()
+		return g
+	}
+
+	// Sync-failing file: the first append of a fresh file must attempt the
+	// fsync (round-1 defect: the wait loop compared equal zeros and skipped
+	// it entirely) and must surface its error.
+	fb := &spoolMemFile{fail: io.ErrClosedPipe}
+	g := newGroupWith(fb)
+	_, err := g.append([]byte("x\n"))
+	require.Error(t, err)
+	assert.Equal(t, 1, fb.syncCount())
+	// the next append retries the fsync and surfaces the error again
+	_, err = g.append([]byte("y\n"))
+	require.Error(t, err)
+	assert.Equal(t, 2, fb.syncCount())
+
+	// healthy control: exactly one confirmed fsync per lonely append.
+	hb := &spoolMemFile{}
+	g2 := newGroupWith(hb)
+	_, err = g2.append([]byte("x\n"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, hb.syncCount())
+}
+
+// spoolMemFile is a memory-backed spoolSyncFile with an optional Sync error.
+type spoolMemFile struct {
+	mux   sync.Mutex
+	buf   []byte
+	syncs int
+	fail  error
+}
+
+func (f *spoolMemFile) Write(p []byte) (int, error) {
+	f.mux.Lock()
+	defer f.mux.Unlock()
+	f.buf = append(f.buf, p...)
+	return len(p), nil
+}
+
+func (f *spoolMemFile) Sync() error {
+	f.mux.Lock()
+	defer f.mux.Unlock()
+	f.syncs++
+	return f.fail
+}
+
+func (f *spoolMemFile) Close() error { return nil }
+
+func (f *spoolMemFile) syncCount() int {
+	f.mux.Lock()
+	defer f.mux.Unlock()
+	return f.syncs
+}
+
+// TestSpoolFsyncGroupAppendSyncFailsOnRealPipe keeps the real-fd fidelity of
+// the probe: Sync on a pipe fd fails with EINVAL, and append surfaces it.
+func TestSpoolFsyncGroupAppendSyncFailsOnRealPipe(t *testing.T) {
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	defer func() {
+		_ = r.Close()
+		_ = w.Close()
+	}()
+	go func() { _, _ = io.Copy(io.Discard, r) }()
+
+	g := &spoolFsyncGroup{}
+	g.init()
+	g.mu.Lock()
+	g.adoptLocked(w, 0)
+	g.mu.Unlock()
+	_, err = g.append([]byte("x\n"))
+	require.Error(t, err)
+}
+
+// TestSpoolFsyncGroupCommitSharesSync queues three records behind one
+// in-flight Sync: exactly one more Sync confirms the whole queue — the
+// group-commit amortization the protocol exists for.
+func TestSpoolFsyncGroupCommitSharesSync(t *testing.T) {
+	f := &spoolGateFile{
+		blockFirst: true,
+		gate:       make(chan struct{}),
+		thirdWrite: make(chan struct{}),
+	}
+	// the first Sync unblocks once all three appends have landed, so the
+	// leader's generation snapshot can only cover the first record; the
+	// queued two must then share exactly one following Sync.
+	go func() {
+		<-f.thirdWrite
+		close(f.gate)
+	}()
+
+	g := &spoolFsyncGroup{}
+	g.init()
+	g.mu.Lock()
+	g.adoptLocked(f, 0)
+	g.mu.Unlock()
+
+	var wg sync.WaitGroup
+	errs := make([]error, 3)
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = g.append([]byte("x\n"))
+		}(i)
+	}
+	wg.Wait()
+	for i := range errs {
+		require.NoError(t, errs[i])
+	}
+	writes, syncs := f.counters()
+	assert.Equal(t, 3, writes)
+	assert.Equal(t, 2, syncs) // in-flight leader + one Sync for the queue
+	g.mu.Lock()
+	assert.Equal(t, g.fileSize, g.confirmedWidth)
+	g.mu.Unlock()
+}
+
+// TestSpoolFsyncGroupWaiterAcrossSealSucceeds: an appender whose fsync
+// confirmation is delivered by the rotation's seal Sync (sealGen bump) must
+// return success, not hang behind the fresh file and not double-fsync.
+func TestSpoolFsyncGroupWaiterAcrossSealSucceeds(t *testing.T) {
+	f := &spoolGateFile{
+		blockFirst:  true,
+		gate:        make(chan struct{}),
+		enteredSync: make(chan struct{}),
+		secondWrite: make(chan struct{}),
+	}
+	g := &spoolFsyncGroup{}
+	g.init()
+	g.mu.Lock()
+	g.adoptLocked(f, 0)
+	g.mu.Unlock()
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(1)
+	go func() { // appender A: writes, then blocks inside the first Sync
+		defer wg.Done()
+		_, errs[0] = g.append([]byte("a\n"))
+	}()
+	<-f.enteredSync
+	wg.Add(1)
+	go func() { // appender B: writes during A's Sync, then waits
+		defer wg.Done()
+		_, errs[1] = g.append([]byte("b\n"))
+	}()
+	<-f.secondWrite
+
+	// the rotation's seal waits out A's in-flight Sync, then confirms the
+	// whole file once; both appenders must return success through it.
+	sealDone := make(chan error, 1)
+	go func() {
+		g.mu.Lock()
+		_, err := g.sealFileLocked()
+		g.mu.Unlock()
+		sealDone <- err
+	}()
+	close(f.gate)
+	wg.Wait()
+	require.NoError(t, errs[0])
+	require.NoError(t, errs[1])
+	require.NoError(t, <-sealDone)
+	_, syncs := f.counters()
+	// A's in-flight Sync + the seal Sync; B may additionally lead one Sync
+	// if it wins the mutex between A's completion and the seal — all shapes
+	// are correct, only the appenders' success and the single seal matter.
+	assert.GreaterOrEqual(t, syncs, 2)
+	assert.LessOrEqual(t, syncs, 3)
+	g.mu.Lock()
+	assert.Nil(t, g.f)
+	assert.Equal(t, uint64(1), g.sealGen)
+	g.mu.Unlock()
+}
+
+// TestSpoolFsyncGroupFreshFileRequiresNewSync: confirmation is per file — the
+// first append after every rotation must pay a fresh fsync on the new file;
+// the previous file's history can never cover it.
+func TestSpoolFsyncGroupFreshFileRequiresNewSync(t *testing.T) {
+	f1 := &spoolMemFile{}
+	f2 := &spoolMemFile{}
+	g := &spoolFsyncGroup{}
+	g.init()
+	g.mu.Lock()
+	g.adoptLocked(f1, 0)
+	g.mu.Unlock()
+
+	_, err := g.append([]byte("a\n"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, f1.syncCount())
+
+	g.mu.Lock()
+	_, err = g.sealFileLocked()
+	require.NoError(t, err)
+	g.adoptLocked(f2, 0)
+	g.mu.Unlock()
+
+	// a fresh file starts with nothing confirmed: the append fsyncs again.
+	_, err = g.append([]byte("b\n"))
+	require.NoError(t, err)
+	assert.Equal(t, 1, f2.syncCount())
+	assert.Equal(t, 2, f1.syncCount()) // append + seal; untouched afterwards
+}
+
+// TestStatementInfoSpoolAppendFsyncBeforeAck is the spool-level
+// Sync-injection proof the durability contract holds end to end: the record
+// is on disk (fsync completed) BEFORE the export batch is even generated —
+// the export ack then only manages retirement, never durability.
+func TestStatementInfoSpoolAppendFsyncBeforeAck(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	st := stubSpoolFileFactory(t)
+	s := openTestSpool(t, dir, 0, 1, time.Hour)
+	defer s.close()
+
+	line := encodeStatementInfoCSVLine(ctx, []string{"durable-1"})
+	s.appendRecord(line)
+
+	// BEFORE any seal/export tick the append already paid its fsync — the
+	// exact step the round-1 defect skipped (records sat un-fsynced until
+	// seal or close).
+	f1 := st.file(1)
+	require.NotNil(t, f1)
+	assert.Equal(t, 1, f1.syncCount())
+	// and the bytes are really in the file, not only in the page cache
+	// pipeline assumption: reading the handle back shows the full record.
+	assert.Equal(t, line, readSpoolFile(t, dir, 1))
+
+	// export: seal adds one more sync to the old file, adopts a fresh one.
+	buf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
+	req := buf.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
+	_, err := req.Handle()
+	require.NoError(t, err)
+	assert.Equal(t, 2, f1.syncCount()) // +1 from the rotation seal
+	f2 := st.file(2)
+	require.NotNil(t, f2)
+	assert.Equal(t, 0, f2.syncCount()) // fresh file: nothing confirmed yet
+	s.mux.Lock()
+	assert.True(t, s.sealed[req.seg.seq].done)
+	s.mux.Unlock()
+
+	// the rotation reset is real: the next append fsyncs the fresh file.
+	s.appendRecord(line)
+	assert.Equal(t, 1, f2.syncCount())
+}
+
+// TestStatementInfoSpoolAppendSyncFailureDegrades: a broken spool disk must
+// degrade appends to the pre-spool memory-only behavior without panicking,
+// with the quota rolled back and the loss metered through the error path.
+func TestStatementInfoSpoolAppendSyncFailureDegrades(t *testing.T) {
+	dir := t.TempDir()
+	st := stubSpoolFileFactory(t)
+	st.failSync = io.ErrClosedPipe
+	s := openTestSpool(t, dir, 0, 1, time.Hour)
+	defer s.close()
+
+	line := encodeStatementInfoCSVLine(context.Background(), []string{"r"})
+	s.appendRecord(line)
+	assert.Equal(t, int64(0), s.totalSize)      // quota rolled back
+	assert.Equal(t, int64(0), s.droppedRecords) // I/O error, not a capacity drop
+	s.appendRecord(line)                        // second failure stays silent (rate-limited) and harmless
+	assert.Equal(t, int64(0), s.totalSize)
+	// close over a file whose Sync failed must not panic either.
+	s.close()
+	assert.True(t, s.closed)
+	// still counted so the failure is observable.
+	f1 := st.file(1)
+	require.NotNil(t, f1)
+	assert.GreaterOrEqual(t, f1.syncCount(), 3) // two appends + the close seal
 }
