@@ -16,7 +16,6 @@ package types
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -161,7 +160,7 @@ func IsCalendarStringCandidate(s string) bool {
 		// Eight digits can be a compact DATE or a zero-padded TIME. Keep
 		// accepted compact dates (including the zero-date sentinel) as dates;
 		// an impossible leading-zero calendar belongs to the TIME grammar.
-		_, err := ParseDateCastWithContext(ctx, s)
+		_, err := ParseDateCast(s)
 		return err == nil
 	}
 	return true
@@ -223,9 +222,10 @@ func ClassifyTemporalString(s string) TemporalStringKind {
 	return kind
 }
 
-// Observation failures are discarded by the classifier. Constructing a moerr
-// would already notify the server reporter, even when the caller ignores it.
-var errInvalidTemporal = errors.New("invalid temporal value")
+// Observation failures are discarded by the classifier. Ordinary constructors
+// notify the server reporter; reuse a no-report sentinel without per-observation
+// error allocation.
+var errInvalidTemporal = moerr.NewInvalidInput(moerr.NoReportContext(), "invalid temporal value")
 
 func temporalInvalidInput(ctx context.Context, s string, observe bool) error {
 	if observe {
