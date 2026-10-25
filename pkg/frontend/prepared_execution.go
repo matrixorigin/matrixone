@@ -220,13 +220,13 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 // retains the previous effective domain; a valid non-NULL source replaces it,
 // including decimal/string transitions. This state belongs to the statement,
 // and is committed before SQL evaluation (an arithmetic error does not undo it).
-func (stmt *PrepareStmt) rememberIntegerArithmeticBindings(p *plan2.Plan, bindings []plan2.PreparedSourceBinding, values []any) {
+func (prepareStmt *PrepareStmt) rememberIntegerArithmeticBindings(p *plan2.Plan, bindings []plan2.PreparedSourceBinding, values []any) {
 	defaults := plan2.IntegerPrecisionParameterBindings(p)
 	if len(defaults) == 0 {
 		return
 	}
-	if len(stmt.integerArithmeticBindings) != len(bindings) {
-		stmt.integerArithmeticBindings = make([]plan2.PreparedSourceBinding, len(bindings))
+	if len(prepareStmt.integerArithmeticBindings) != len(bindings) {
+		prepareStmt.integerArithmeticBindings = make([]plan2.PreparedSourceBinding, len(bindings))
 	}
 	for _, initial := range defaults {
 		pos := int(initial.Position)
@@ -238,13 +238,13 @@ func (stmt *PrepareStmt) rememberIntegerArithmeticBindings(p *plan2.Plan, bindin
 			value = param.Value
 		}
 		if value == nil {
-			previous := stmt.integerArithmeticBindings[pos]
+			previous := prepareStmt.integerArithmeticBindings[pos]
 			if previous.Type.Oid == types.T_any {
 				previous = initial
 			}
 			bindings[pos] = previous
 		} else {
-			stmt.integerArithmeticBindings[pos] = bindings[pos]
+			prepareStmt.integerArithmeticBindings[pos] = bindings[pos]
 		}
 	}
 }
