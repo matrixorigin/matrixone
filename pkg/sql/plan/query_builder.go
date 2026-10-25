@@ -6228,6 +6228,11 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	// This source was introduced solely to evaluate windows after grouping.
+	// Its AST identity, not its SQL alias, owns metadata transparency.
+	if ctx.parent != nil && ctx.parent.integerPrecisionGeneratedSource == stmt {
+		ctx.integerPrecisionTransparentBoundary = true
+	}
 	defer func() {
 		if err == nil && isRoot && builder.integerPrecision != nil {
 			builder.captureIntegerPrecisionOutputs(ctx)
@@ -8180,6 +8185,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 		RankOption: astRankOption,
 	}
 	if ctx != nil {
+		ctx.integerPrecisionGeneratedSource = derived
 		// The rewritten projection is bound immediately below this call. Reset
 		// any metadata left by a previous bind of the same context so an ordinal
 		// cannot accidentally describe a later, unrelated select list.
@@ -14256,7 +14262,10 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				if subCtx.integerPrecision != nil && subCtx.integerPrecision != builder.integerPrecision {
 					id = builder.integerPrecision.importID(subCtx.integerPrecision.graph, id)
 				}
-				outputColumnProvenance[i].IntegerPrecisionID = builder.integerPrecision.reference(id)
+				if !subCtx.integerPrecisionTransparentBoundary {
+					id = builder.integerPrecision.reference(id)
+				}
+				outputColumnProvenance[i].IntegerPrecisionID = id
 			}
 
 			if outputColumnProvenance[i].CTASDefaultPolicy == CTASDefaultInheritSource {

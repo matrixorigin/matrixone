@@ -154,34 +154,57 @@ func TestIntegerArithmeticWidth(t *testing.T) {
 		})
 		t.Run("grouping rewrite preserves CTAS roots", func(t *testing.T) {
 			for groupIndex, group := range []string{"%s", "%s with rollup", "cube(%s)", "grouping sets ((%s),())"} {
-				for expressionIndex, tc := range []struct{ expr, from, typ, negative, positive string }{
-					{"b*b*b", "t", "int", "-2097152", "1000000"},
-					{"b*b*b+1", "t", "int", "-2097151", "1000001"},
-					{"case when b>0 then b*b*b else b*b*b+1 end", "t", "int", "-2097151", "1000000"},
-					{"x", "(select b*b*b as x from t) s", "bigint", "-2097152", "1000000"},
+				for windowIndex, window := range []struct{ projection, order string }{
+					{"", ""}, {",row_number() over () as rn", ""}, {"", " order by row_number() over ()"},
 				} {
-					table := fmt.Sprintf("grouped_%d_%d", groupIndex, expressionIndex)
-					key := "b"
-					if tc.expr == "x" {
-						key = "x"
+					for expressionIndex, tc := range []struct{ expr, from, typ, negative, positive string }{
+						{"b*b*b", "t", "int", "-2097152", "1000000"},
+						{"b*b*b+1", "t", "int", "-2097151", "1000001"},
+						{"case when b>0 then b*b*b else b*b*b+1 end", "t", "int", "-2097151", "1000000"},
+						{"x", "(select b*b*b as x from t) s", "bigint", "-2097152", "1000000"},
+					} {
+						table := fmt.Sprintf("grouped_%d_%d_%d", groupIndex, windowIndex, expressionIndex)
+						key := "b"
+						if tc.expr == "x" {
+							key = "x"
+						}
+						by := fmt.Sprintf(group, key)
+						exec("create table " + table + " as select " + tc.expr + " as x" + window.projection + " from " + tc.from + " group by " + by + window.order)
+						var typ string
+						require.NoError(t, conn.QueryRowContext(ctx, "select column_type from information_schema.columns where table_schema=? and table_name=? and column_name='x'", schema, table).Scan(&typ))
+						require.Equal(t, tc.typ, typ, table)
+						want := [][]string{{tc.negative}, {tc.positive}}
+						if groupIndex > 0 {
+							want = append([][]string{{"NULL"}}, want...)
+						}
+						wireType := "INT"
+						if tc.typ == "bigint" {
+							wireType = "BIGINT"
+						}
+						query(t, "select x from "+table+" order by x", []string{wireType}, want)
+						if window.projection != "" {
+							count := len(want)
+							query(t, "select count(distinct rn),min(rn),max(rn),sum(rn) from "+table, nil, [][]string{{fmt.Sprint(count), "1", fmt.Sprint(count), fmt.Sprint(count * (count + 1) / 2)}})
+						}
 					}
-					by := fmt.Sprintf(group, key)
-					exec("create table " + table + " as select " + tc.expr + " as x from " + tc.from + " group by " + by)
-					var typ string
-					require.NoError(t, conn.QueryRowContext(ctx, "select column_type from information_schema.columns where table_schema=? and table_name=?", schema, table).Scan(&typ))
-					require.Equal(t, tc.typ, typ, table)
-					want := [][]string{{tc.negative}, {tc.positive}}
-					if groupIndex > 0 {
-						want = append([][]string{{"NULL"}}, want...)
-					}
-					wireType := "INT"
-					if tc.typ == "bigint" {
-						wireType = "BIGINT"
-					}
-					query(t, "select x from "+table+" order by x", []string{wireType}, want)
 				}
 			}
+			source := "select b*b*b as x,row_number() over () as rn from t group by b with rollup"
+			exec("create view window_grouped as " + source)
+			for index, selectSQL := range []string{
+				"select x from (" + source + ") __mo_rollup_window",
+				"with grouped as (" + source + ") select x from grouped",
+				"select x from window_grouped",
+			} {
+				table := fmt.Sprintf("grouped_real_ref_%d", index)
+				exec("create table " + table + " as " + selectSQL)
+				var typ string
+				require.NoError(t, conn.QueryRowContext(ctx, "select column_type from information_schema.columns where table_schema=? and table_name=? and column_name='x'", schema, table).Scan(&typ))
+				require.Equal(t, "bigint", typ, selectSQL)
+				query(t, "select x from "+table+" order by x", []string{"BIGINT"}, [][]string{{"NULL"}, {"-2097152"}, {"1000000"}})
+			}
 		})
+
 		exec("create table c(b tinyint,m mediumint,u mediumint unsigned)")
 		exec("insert into c values(1,100,100),(0,200,200)")
 		t.Run("CASE alias and reference schemas", func(t *testing.T) {

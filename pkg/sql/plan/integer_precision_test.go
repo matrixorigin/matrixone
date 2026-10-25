@@ -247,46 +247,77 @@ func TestIntegerPrecisionCollapsedUnionIsReference(t *testing.T) {
 
 func TestIntegerPrecisionGroupingSchemaRoots(t *testing.T) {
 	for _, grouping := range []string{"attr_seqnum", "attr_seqnum with rollup", "cube(attr_seqnum)", "grouping sets ((attr_seqnum),())", "grouping sets ((),(attr_seqnum))"} {
-		for _, tc := range []struct {
-			expr, from string
-			length     uint32
-			root       pb.IntegerPrecisionOutput_RootClass
-			target     types.T
-		}{
-			{"attr_seqnum*attr_seqnum*attr_seqnum", "mo_catalog.mo_columns", 10, pb.IntegerPrecisionOutput_DIRECT_FUNCTION, types.T_int32},
-			{"attr_seqnum*attr_seqnum*attr_seqnum+1", "mo_catalog.mo_columns", 11, pb.IntegerPrecisionOutput_DIRECT_FUNCTION, types.T_int32},
-			{"case when attr_seqnum>0 then attr_seqnum*attr_seqnum*attr_seqnum else attr_seqnum*attr_seqnum*attr_seqnum+1 end", "mo_catalog.mo_columns", 11, pb.IntegerPrecisionOutput_DIRECT_FUNCTION, types.T_int32},
-			{"x", "(select attr_seqnum,attr_seqnum*attr_seqnum*attr_seqnum x from mo_catalog.mo_columns) s", 10, pb.IntegerPrecisionOutput_SQL_REFERENCE, types.T_int64},
+		for _, window := range []struct{ name, projection, order string }{
+			{"no window", "", ""},
+			{"window output", ",row_number() over () as rn", ""},
+			{"window order", "", " order by row_number() over ()"},
 		} {
-			t.Run(grouping+"/"+tc.expr, func(t *testing.T) {
-				query := "create table integer_grouped as select " + tc.expr + " as result,attr_seqnum as raw,2 as literal from " + tc.from + " group by " + strings.ReplaceAll(grouping, "attr_seqnum", "attr_seqnum,x")
-				if tc.expr != "x" {
-					query = "create table integer_grouped as select " + tc.expr + " as result,attr_seqnum as raw,2 as literal from " + tc.from + " group by " + grouping
-				}
-				stmt, err := mysql.ParseOne(t.Context(), query, 1)
-				require.NoError(t, err)
-				defer stmt.Free()
-				p, err := BuildPlan(NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext(), stmt, false)
-				require.NoError(t, err, query)
-				ddl := p.GetDdl()
-				selectStmt, err := mysql.ParseOne(t.Context(), strings.TrimPrefix(query, "create table integer_grouped as "), 1)
-				require.NoError(t, err)
-				defer selectStmt.Free()
-				selectPlan, err := BuildPlan(NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext(), selectStmt, false)
-				require.NoError(t, err)
-				q := selectPlan.GetQuery()
-				require.NoError(t, q.ValidateIntegerPrecision())
-				require.Equal(t, []string{"result", "raw", "literal"}, q.Headings)
-				require.Equal(t, tc.root, q.IntegerPrecision.Outputs[0].RootClass)
-				require.Equal(t, tc.length, uint32(evaluateIntegerPrecision(q.IntegerPrecision)[q.IntegerPrecision.Outputs[0].Node-1].DisplayLength()))
-				require.Equal(t, int32(tc.target), ddl.GetCreateTable().TableDef.Cols[0].Typ.Id)
-				rawRoot := pb.IntegerPrecisionOutput_DECLARED_SOURCE
-				if tc.expr == "x" {
-					rawRoot = pb.IntegerPrecisionOutput_SQL_REFERENCE
-				}
-				require.Equal(t, rawRoot, q.IntegerPrecision.Outputs[1].RootClass)
-				require.Equal(t, pb.IntegerPrecisionOutput_SQL_LITERAL, q.IntegerPrecision.Outputs[2].RootClass)
-			})
+			for _, tc := range []struct {
+				expr, from string
+				length     uint32
+				root       pb.IntegerPrecisionOutput_RootClass
+				target     types.T
+			}{
+				{"attr_seqnum*attr_seqnum*attr_seqnum", "mo_catalog.mo_columns", 10, pb.IntegerPrecisionOutput_DIRECT_FUNCTION, types.T_int32},
+				{"attr_seqnum*attr_seqnum*attr_seqnum+1", "mo_catalog.mo_columns", 11, pb.IntegerPrecisionOutput_DIRECT_FUNCTION, types.T_int32},
+				{"case when attr_seqnum>0 then attr_seqnum*attr_seqnum*attr_seqnum else attr_seqnum*attr_seqnum*attr_seqnum+1 end", "mo_catalog.mo_columns", 11, pb.IntegerPrecisionOutput_DIRECT_FUNCTION, types.T_int32},
+				{"x", "(select attr_seqnum,attr_seqnum*attr_seqnum*attr_seqnum x from mo_catalog.mo_columns) s", 10, pb.IntegerPrecisionOutput_SQL_REFERENCE, types.T_int64},
+			} {
+				t.Run(grouping+"/"+window.name+"/"+tc.expr, func(t *testing.T) {
+					by := grouping
+					if tc.expr == "x" {
+						by = strings.ReplaceAll(by, "attr_seqnum", "attr_seqnum,x")
+					}
+					selectSQL := "select " + tc.expr + " as result,attr_seqnum as raw,2 as literal" + window.projection + " from " + tc.from + " group by " + by + window.order
+					ctasStmt, err := mysql.ParseOne(t.Context(), "create table integer_grouped as "+selectSQL, 1)
+					require.NoError(t, err)
+					defer ctasStmt.Free()
+					ctas, err := BuildPlan(NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext(), ctasStmt, false)
+					require.NoError(t, err, selectSQL)
+					selectStmt, err := mysql.ParseOne(t.Context(), selectSQL, 1)
+					require.NoError(t, err)
+					defer selectStmt.Free()
+					selectPlan, err := BuildPlan(NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext(), selectStmt, false)
+					require.NoError(t, err)
+					q := selectPlan.GetQuery()
+					require.NoError(t, q.ValidateIntegerPrecision())
+					headings := []string{"result", "raw", "literal"}
+					if window.projection != "" {
+						headings = append(headings, "rn")
+					}
+					require.Equal(t, headings, q.Headings)
+					require.Len(t, q.IntegerPrecision.Outputs, len(headings))
+					require.Equal(t, tc.root, q.IntegerPrecision.Outputs[0].RootClass)
+					require.Equal(t, tc.length, uint32(evaluateIntegerPrecision(q.IntegerPrecision)[q.IntegerPrecision.Outputs[0].Node-1].DisplayLength()))
+					require.Equal(t, int32(tc.target), ctas.GetDdl().GetCreateTable().TableDef.Cols[0].Typ.Id)
+					rawRoot := pb.IntegerPrecisionOutput_DECLARED_SOURCE
+					if tc.expr == "x" {
+						rawRoot = pb.IntegerPrecisionOutput_SQL_REFERENCE
+					}
+					require.Equal(t, rawRoot, q.IntegerPrecision.Outputs[1].RootClass)
+					require.Equal(t, pb.IntegerPrecisionOutput_SQL_LITERAL, q.IntegerPrecision.Outputs[2].RootClass)
+				})
+			}
 		}
+	}
+}
+
+func TestIntegerPrecisionWindowGroupingActualReferences(t *testing.T) {
+	source := "select attr_seqnum*attr_seqnum*attr_seqnum as x,row_number() over () as rn from mo_catalog.mo_columns group by attr_seqnum with rollup"
+	for _, query := range []string{
+		"select x from (" + source + ") __mo_rollup_window",
+		"with grouped as (" + source + ") select x from grouped",
+	} {
+		t.Run(query, func(t *testing.T) {
+			p, err := runOneExprStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
+			require.NoError(t, err)
+			q := p.GetQuery()
+			require.NotNil(t, q.IntegerPrecision)
+			require.Equal(t, pb.IntegerPrecisionOutput_SQL_REFERENCE, q.IntegerPrecision.Outputs[0].RootClass)
+			require.Equal(t, uint64(10), evaluateIntegerPrecision(q.IntegerPrecision)[q.IntegerPrecision.Outputs[0].Node-1].DisplayLength())
+			ctas, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "create table integer_window_reference as "+query)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_int64), ctas.GetDdl().GetCreateTable().TableDef.Cols[0].Typ.Id)
+		})
 	}
 }
