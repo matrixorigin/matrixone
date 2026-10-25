@@ -195,6 +195,34 @@ create table rtcr_pipe (id int, s varchar(20));
 load data infile 'stage://outfile_fields_lines_stage/cr_pipe.csv' into table rtcr_pipe
 fields terminated by ',' enclosed by '' escaped by '' lines terminated by '|';
 select id, hex(s) as hs from rtcr_pipe;
+
+-- The header/prefix collision check covers the complete header record,
+-- terminator included: with column X and TERMINATED BY '||' the emitted
+-- header is 'X||', which prefix 'X|' matches; LOAD would mangle the first
+-- value. HEADER 'false' remains the escape hatch and round-trips.
+select 'one' as X into outfile 'stage://outfile_fields_lines_stage/hdr_term.csv'
+lines starting by 'X|' terminated by '||';
+select count(*) from stage_list('stage://outfile_fields_lines_stage/hdr_term.csv');
+select 'one' as X into outfile 'stage://outfile_fields_lines_stage/hdr_term_nohead.csv'
+lines starting by 'X|' terminated by '||' header 'false';
+select load_file(cast('stage://outfile_fields_lines_stage/hdr_term_nohead.csv' as datalink));
+create table ht_back (s varchar(10));
+load data infile 'stage://outfile_fields_lines_stage/hdr_term_nohead.csv' into table ht_back
+fields terminated by ',' lines starting by 'X|' terminated by '||' (s);
+select * from ht_back;
+drop table ht_back;
+
+-- The last-column CR strip keys on LOAD's complete normalized terminator:
+-- '\n|' is not LF, so the same CR-final value round-trips here.
+select id, s from rtcr
+into outfile 'stage://outfile_fields_lines_stage/cr_npipe.csv'
+fields terminated by ',' enclosed by '' escaped by '' lines terminated by '\n|' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/cr_npipe.csv' as datalink)));
+create table rtcr_npipe (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/cr_npipe.csv' into table rtcr_npipe
+fields terminated by ',' enclosed by '' escaped by '' lines terminated by '\n|';
+select id, hex(s) as hs from rtcr_npipe;
+drop table rtcr_npipe;
 drop table rtcr_pipe;
 drop table rn_back;
 drop table rn;

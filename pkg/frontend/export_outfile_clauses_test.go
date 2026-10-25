@@ -364,6 +364,56 @@ func TestOutfileHeaderPrefixCollisionRejected(t *testing.T) {
 		require.NoError(t, validateOutfileHeaderPrefix(ep.ctx, ep, &MysqlResultSet{}))
 		require.NoError(t, validateOutfileHeaderPrefix(ep.ctx, ep, nil))
 	})
+
+	t.Run("prefix occurring only in the header's terminator", func(t *testing.T) {
+		// LOAD scans each raw record including the terminator, so a column
+		// 'X' under TERMINATED BY '||' emits header 'X||', which prefix 'X|'
+		// matches even though no column name contains it.
+		ep := selectIntoOutfileConfig(",", '"', '\\', "X|", "||")
+		ep.userConfig.Header = true
+		ep.ctx = context.Background()
+		mrs := &MysqlResultSet{}
+		col := &MysqlColumn{}
+		col.SetName("X")
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(col)
+		err := validateOutfileHeaderPrefix(ep.ctx, ep, mrs)
+		require.ErrorContains(t, err, "LINES STARTING BY 'X|' occurs in the CSV header")
+	})
+
+	t.Run("prefix absent from the complete header passes", func(t *testing.T) {
+		ep := selectIntoOutfileConfig(",", '"', '\\', "Y|", "||")
+		ep.userConfig.Header = true
+		ep.ctx = context.Background()
+		mrs := &MysqlResultSet{}
+		col := &MysqlColumn{}
+		col.SetName("X")
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(col)
+		require.NoError(t, validateOutfileHeaderPrefix(ep.ctx, ep, mrs))
+	})
+
+	t.Run("document the reader corruption behind the check", func(t *testing.T) {
+		// The reviewer's probe: file "X||X|\"one\"||X|\"two\"||" with prefix
+		// 'X|' and terminator '||' must not parse as the two clean values;
+		// the header record collides and the first value mangles.
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEnclosedBy: `"`, FieldsEscapedBy: "\\",
+			LinesTerminatedBy: "||", LinesStartingBy: "X|", Null: []string{`\N`},
+		}, bytes.NewReader([]byte("X||X|\"one\"||X|\"two\"||")), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		var vals []string
+		for len(vals) < 2 {
+			row, err := parser.Read(nil)
+			if err != nil {
+				// The mangled record may surface as a parse error instead of
+				// wrong values; either way the clean pair is gone.
+				break
+			}
+			vals = append(vals, row[0].Val)
+		}
+		require.NotEqual(t, []string{"one", "two"}, vals)
+	})
 }
 
 // TestOutfileExactBackslashNRejectedWithCustomEscape guards the LOAD-side
@@ -534,6 +584,25 @@ func TestOutfileTrailingCRLastColumnRejectedWithoutEscape(t *testing.T) {
 		ep.ctx = context.Background()
 		var buf bytes.Buffer
 		require.ErrorContains(t, formatOutputString(ep, []byte("a\r"), []byte("\r\n"), 0, false, true, &buf), wantErr)
+	})
+	t.Run("multi-byte terminator starting with LF keeps the CR", func(t *testing.T) {
+		// LOAD compares its complete normalized terminator with LF:
+		// TERMINATED BY '\n|' disables the CR strip, so the guard must not
+		// fire even though the terminator's first byte is LF.
+		ep := newOutfileExportConfig(tree.NewFields(",", false, 0, 0), nil, "\n|")
+		ep.ctx = context.Background()
+		var buf bytes.Buffer
+		require.NoError(t, formatOutputString(ep, []byte("1"), []byte(","), 0, false, false, &buf))
+		require.NoError(t, formatOutputString(ep, []byte("a\r"), []byte("\n|"), 0, false, true, &buf))
+		require.Equal(t, "1,a\r\n|", buf.String())
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEscapedBy: "", LinesTerminatedBy: "\n|",
+			Null: []string{`\N`},
+		}, bytes.NewReader(buf.Bytes()), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, "a\r", row[1].Val, "LOAD keeps the CR under a non-LF terminator")
 	})
 	t.Run("custom escape protects the CR", func(t *testing.T) {
 		ep := newGuardCfg('#', 0)

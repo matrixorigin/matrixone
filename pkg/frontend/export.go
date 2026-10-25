@@ -314,12 +314,28 @@ func checkCSVValueRoundTrip(oq *ExportConfig, tmp []byte, last bool) error {
 				"select into outfile (csv): a value containing '%c' cannot round-trip with FIELDS ESCAPED BY '%c': LOAD translates the doubled escape back to a control character", esc, esc)
 		}
 	}
-	_, lineTerm, _, _ := oq.csvBoundaryBytes()
-	if last && esc == 0 && lineTerm == '\n' && bytes.HasSuffix(tmp, []byte{'\r'}) {
+	if last && esc == 0 && oq.readerStripsTrailingCR() && bytes.HasSuffix(tmp, []byte{'\r'}) {
 		return moerr.NewNotSupported(oq.ctx,
 			"select into outfile (csv): with FIELDS ESCAPED BY '' a value ending in CR in the last column cannot round-trip")
 	}
 	return nil
+}
+
+// readerStripsTrailingCR reports whether LOAD's parser drops a record's
+// trailing CR for this configuration. The parser compares its COMPLETE
+// normalized line terminator with LF (only "\r\n" normalizes), so a
+// multi-byte terminator like '\n|' disables the strip even though its
+// first byte is LF (csv_parser.go terminator normalization, record CR
+// strip).
+func (ec *ExportConfig) readerStripsTrailingCR() bool {
+	term := "\n"
+	if l := ec.userConfig.Lines; l != nil && l.TerminatedBy != nil {
+		term = l.TerminatedBy.Value
+	}
+	if term == "\r\n" {
+		term = "\n"
+	}
+	return term == "\n"
 }
 
 var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byte, flag bool, last bool, buffer *bytes.Buffer) error {
@@ -969,12 +985,21 @@ func validateOutfileHeaderPrefix(ctx context.Context, ep *ExportConfig, mrs *Mys
 	if n == 0 {
 		return nil
 	}
+	// LOAD's startingBy filter scans each raw record INCLUDING its line
+	// terminator, so validate against the complete emitted header record,
+	// not just the joined column names: with terminator '||' a column 'X'
+	// emits the header 'X||', which 'X|' matches (readUntilTerminator).
 	var header strings.Builder
 	for i := 0; i < n-1; i++ {
 		header.WriteString(mrs.Columns[i].Name())
 		header.WriteString(ep.userConfig.Fields.Terminated.Value)
 	}
 	header.WriteString(mrs.Columns[n-1].Name())
+	lineTerm := "\n"
+	if l.TerminatedBy != nil && l.TerminatedBy.Value != "" {
+		lineTerm = l.TerminatedBy.Value
+	}
+	header.WriteString(lineTerm)
 	if strings.Contains(header.String(), l.StartingBy) {
 		return moerr.NewInvalidInputf(ctx,
 			"LINES STARTING BY '%s' occurs in the CSV header: LOAD would import the remainder of the header as data; set HEADER 'false' or choose a prefix that does not occur in the header",
