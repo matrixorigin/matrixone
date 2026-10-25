@@ -15,9 +15,12 @@ package frontend
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -56,7 +59,7 @@ func (ses *Session) forgetTemporaryTableUndoLocked(key string) {
 func (ses *Session) PublishTemporaryTable(db, alias, physical string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	key := db + "." + alias
+	key := defines.TempTableAliasKey(db, alias)
 	ses.forgetTemporaryTableUndoLocked(key)
 	if ses.tempTables == nil {
 		ses.tempTables = make(map[string]string)
@@ -76,23 +79,73 @@ func (ses *Session) PublishTemporaryTable(db, alias, physical string) {
 	ses.tempTableVersion++
 }
 
+// ForgetMissingTemporaryTable is irreversible logical cleanup, not retirement
+// of a live generation. A stale lookup cannot remove a replacement alias.
+func (ses *Session) ForgetMissingTemporaryTable(db, alias, physical string) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	key := defines.TempTableAliasKey(db, alias)
+	if current, ok := ses.tempTables[key]; !ok || current != physical {
+		return
+	}
+	ses.forgetTemporaryTableAliasLocked(physical)
+	ses.forgetTemporaryTableChildrenLocked(db, alias, physical)
+}
+
+// Caller holds ses.mu. Logical cleanup also removes undo that could otherwise
+// resurrect an alias whose physical table is known to be gone.
+func (ses *Session) forgetTemporaryTableAliasLocked(physical string) {
+	key, exists := ses.tempTablesRev[physical]
+	if !exists {
+		return
+	}
+	ses.forgetTemporaryTableUndoLocked(key)
+	delete(ses.tempTables, key)
+	delete(ses.tempTablesRev, physical)
+	delete(ses.tempTableIdentities, key)
+	ses.tempTableVersion++
+}
+
+func (ses *Session) forgetTemporaryTableChildrenLocked(db, alias, physical string) {
+	prefix := ses.temporaryGenerationPrefix(db, alias, physical)
+	if prefix == "" {
+		return
+	}
+	for name, key := range ses.tempTablesRev {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		identity := ses.tempTableIdentityLocked(key)
+		if identity.dbName == db && identity.internal && name != physical {
+			ses.forgetTemporaryTableAliasLocked(name)
+		}
+	}
+}
+
+// Only a canonical generated root establishes ownership of an inferred child
+// namespace. A legacy root shares its prefix with every table in the database.
+func (ses *Session) temporaryGenerationPrefix(db, alias, physical string) string {
+	base := defines.GenTempTableName(ses.GetSessId(), db, "")
+	if !strings.HasPrefix(physical, base) || !strings.HasSuffix(physical, "_"+alias) {
+		return ""
+	}
+	generation := strings.TrimSuffix(strings.TrimPrefix(physical, base), "_"+alias)
+	id, err := uuid.Parse(generation)
+	if err != nil || id.String() != generation || physical != defines.GenTempTableName(ses.GetSessId(), db, generation+"_"+alias) {
+		return ""
+	}
+	return base + generation + "_"
+}
+
 func (ses *Session) RetireTemporaryTable(db, alias, physical string, indexes []string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	remove := func(name string) {
-		key, exists := ses.tempTablesRev[name]
-		if !exists {
-			return
-		}
-		ses.forgetTemporaryTableUndoLocked(key)
-		delete(ses.tempTables, key)
-		delete(ses.tempTablesRev, name)
-		delete(ses.tempTableIdentities, key)
-		ses.tempTableVersion++
-	}
-	remove(physical)
+	ses.forgetTemporaryTableAliasLocked(physical)
 	for _, name := range indexes {
-		remove(name)
+		ses.forgetTemporaryTableAliasLocked(name)
+	}
+	if len(indexes) == 0 {
+		ses.forgetTemporaryTableChildrenLocked(db, alias, physical)
 	}
 	if ses.retiredTempTables == nil {
 		ses.retiredTempTables = make(map[string]sessionTempTable)
@@ -138,3 +191,5 @@ func (ses *Session) cleanupRetiredTempTables(ctx context.Context) {
 }
 
 var _ process.TemporaryTableDDL = (*Session)(nil)
+
+var _ process.MissingTemporaryTableForgetter = (*Session)(nil)

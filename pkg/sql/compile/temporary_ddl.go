@@ -62,16 +62,20 @@ func (s *temporaryDDLSession) TemporaryTableName(db, alias string) string {
 	return defines.GenTempTableName(s.sessionID, db, s.generation+"_"+alias)
 }
 func (s *temporaryDDLSession) GetTempTable(db, alias string) (string, bool) {
-	if name, ok := s.aliases[db+"."+alias]; ok {
+	if name, ok := s.aliases[defines.TempTableAliasKey(db, alias)]; ok {
 		return name, true
 	}
 	return s.Session.GetTempTable(db, alias)
 }
-func (s *temporaryDDLSession) AddTempTable(db, alias, name string) { s.aliases[db+"."+alias] = name }
+func (s *temporaryDDLSession) AddTempTable(db, alias, name string) {
+	s.aliases[defines.TempTableAliasKey(db, alias)] = name
+}
 func (s *temporaryDDLSession) AddTempIndexTable(db, alias, name string) {
 	s.AddTempTable(db, alias, name)
 }
-func (s *temporaryDDLSession) RemoveTempTable(db, alias string) { delete(s.aliases, db+"."+alias) }
+func (s *temporaryDDLSession) RemoveTempTable(db, alias string) {
+	delete(s.aliases, defines.TempTableAliasKey(db, alias))
+}
 func (s *temporaryDDLSession) RemoveTempTableByRealName(name string) {
 	for alias, physical := range s.aliases {
 		if physical == name {
@@ -151,6 +155,9 @@ func (s *Scope) createSessionTemporaryTable(c *Compile, owner process.TemporaryT
 		}()
 		schemaDB, err := c.e.Database(c.proc.Ctx, db, tx.Txn())
 		if err != nil {
+			if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+				return moerr.NewNotSupported(c.proc.Ctx, "temporary table in an uncommitted database generation")
+			}
 			return err
 		}
 		if schemaDB.GetDatabaseId(c.proc.Ctx) != parentID {
