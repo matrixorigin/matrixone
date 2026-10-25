@@ -6105,18 +6105,23 @@ func issue25590AssertLiveMapSize(t *testing.T, txn *Transaction, want int, msgAn
 }
 
 // issue25590RecordedSnapshot copies the transaction's recorded-name set
-// under the recorded-name guard: the round-37 gcFiles settle retires
-// settled members from its pool worker without the transaction lock, so
-// every assertion on the set reads the same guarded copy the production
-// settle path owns (issue #25590 round-37 review).
+// under the recorded-name holder's guard: the round-37 gcFiles settle and
+// the round-41 independently owned holder retire settled members from
+// pool workers without the transaction lock, so every assertion on the
+// set reads the same guarded copy the production settle path owns
+// (issue #25590 round-37 review).
 func issue25590RecordedSnapshot(txn *Transaction) map[string]struct{} {
-	txn.recordedUnpublishedObjectNamesMu.Lock()
-	defer txn.recordedUnpublishedObjectNamesMu.Unlock()
-	if txn.recordedUnpublishedObjectNames == nil {
+	r := txn.recordedUnpublishedObjects
+	if r == nil {
 		return nil
 	}
-	names := make(map[string]struct{}, len(txn.recordedUnpublishedObjectNames))
-	for n := range txn.recordedUnpublishedObjectNames {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.names == nil {
+		return nil
+	}
+	names := make(map[string]struct{}, len(r.names))
+	for n := range r.names {
 		names[n] = struct{}{}
 	}
 	return names
@@ -6124,9 +6129,13 @@ func issue25590RecordedSnapshot(txn *Transaction) map[string]struct{} {
 
 // issue25590RecordedLen is the counting twin of issue25590RecordedSnapshot.
 func issue25590RecordedLen(txn *Transaction) int {
-	txn.recordedUnpublishedObjectNamesMu.Lock()
-	defer txn.recordedUnpublishedObjectNamesMu.Unlock()
-	return len(txn.recordedUnpublishedObjectNames)
+	r := txn.recordedUnpublishedObjects
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.names)
 }
 
 // TestIssue25590TwoDirtyObjectCompactionIsAtomicAcrossReplacements pins

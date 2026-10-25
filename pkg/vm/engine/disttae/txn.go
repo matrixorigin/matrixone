@@ -3495,11 +3495,7 @@ func (txn *Transaction) retractUnpublishedRecordAdmissionLocked(st *stagedWorksp
 	if st == nil || len(st.admittedNames) == 0 {
 		return
 	}
-	txn.recordedUnpublishedObjectNamesMu.Lock()
-	for _, n := range st.admittedNames {
-		delete(txn.recordedUnpublishedObjectNames, n)
-	}
-	txn.recordedUnpublishedObjectNamesMu.Unlock()
+	txn.recordedUnpublishedObjects.retract(st.admittedNames)
 }
 
 func (txn *Transaction) writeFileLockedWithAutoIncrEpochKnown(
@@ -3748,15 +3744,20 @@ func (txn *Transaction) registerUnpublishedObjectRecordLocked(
 // handoff already moves the members, and stale members that intermediate
 // transfers retired earlier simply no-op on release.
 func (txn *Transaction) mergeRecordedUnpublishedObjectNames(names []string) {
-	txn.recordedUnpublishedObjectNamesMu.Lock()
-	defer txn.recordedUnpublishedObjectNamesMu.Unlock()
-	if txn.recordedUnpublishedObjectNames == nil {
-		txn.recordedUnpublishedObjectNames = make(
-			map[string]struct{}, len(names))
+	if len(names) == 0 {
+		return
 	}
-	for _, n := range names {
-		txn.recordedUnpublishedObjectNames[n] = struct{}{}
+	if txn.recordedUnpublishedObjects == nil {
+		// Only workspaces built outside NewTxnWorkSpace reach here —
+		// production installs the holder at construction. The lazy
+		// install runs on the transaction's own goroutine (the record
+		// choke holds the transaction lock), before any producer can
+		// hand a member to the gcFiles worker or the queue drain, so
+		// the holder pointer reads on every later path stay ordered
+		// behind this write (issue #25590 round-41 review).
+		txn.recordedUnpublishedObjects = &txnRecordedUnpublished{}
 	}
+	txn.recordedUnpublishedObjects.merge(names)
 }
 
 // hasRecordedUnpublishedObjectName reports whether the name's record landed
@@ -3767,38 +3768,32 @@ func (txn *Transaction) mergeRecordedUnpublishedObjectNames(names []string) {
 // settle that can retire the copy without the transaction lock
 // (issue #25590 round-37 review).
 func (txn *Transaction) hasRecordedUnpublishedObjectName(name string) bool {
-	txn.recordedUnpublishedObjectNamesMu.Lock()
-	defer txn.recordedUnpublishedObjectNamesMu.Unlock()
-	_, ok := txn.recordedUnpublishedObjectNames[name]
-	return ok
+	return txn.recordedUnpublishedObjects.has(name)
 }
 
 // retireSettledRecordedUnpublishedObjectNames retires the transaction's
 // recorded-name copy of names whose cleanup ownership JUST ENDED: the
-// gcFiles pool worker calls it for exactly the batch whose ledger
-// membership the settle above retired, and the queue drain calls it for
-// exactly the batch whose names its delete retired — the two settle
-// owners of this copy (issue #25590 round-37 review, finding 1; round-38
-// review, finding 1) — so the copy keeps tracking the LIVE obligations
-// of a long transaction instead of its whole spill history. Both
-// callers hold NO transaction lock, so the prune takes the recorded-name
-// guard instead — a GC worker behind any transaction's lock would put
-// pool callers through ants' worker wait again, the exact
-// admission-chain the round-13 decoupling removed. Names never recorded
-// simply no-op, and a member that a concurrent choke re-registered
-// after its settle follows the new record's own lifecycle like every
-// fresh recording.
+// gcFiles pool worker calls it through the INDEPENDENTLY OWNED holder
+// (round-41) for exactly the batch whose ledger membership the settle
+// above retired, and the queue drain calls it for exactly the batch whose
+// names its delete retired — the two settle owners of this copy (issue
+// #25590 round-37 review, finding 1; round-38 review, finding 1) — so
+// the copy keeps tracking the LIVE obligations of a long transaction
+// instead of its whole spill history. Both callers hold NO transaction
+// lock, so the prune takes the recorded-name guard instead — a GC worker
+// behind any transaction's lock would put pool callers through ants'
+// worker wait again, the exact admission-chain the round-13 decoupling
+// removed. Names never recorded simply no-op, and a member that a
+// concurrent choke re-registered after its settle follows the new
+// record's own lifecycle like every fresh recording; a terminal that
+// already dropped the copy finds an empty holder and retires nothing.
 func (txn *Transaction) retireSettledRecordedUnpublishedObjectNames(
 	names []string,
 ) {
 	if len(names) == 0 {
 		return
 	}
-	txn.recordedUnpublishedObjectNamesMu.Lock()
-	defer txn.recordedUnpublishedObjectNamesMu.Unlock()
-	for _, n := range names {
-		delete(txn.recordedUnpublishedObjectNames, n)
-	}
+	txn.recordedUnpublishedObjects.retireSettled(names)
 }
 
 // releaseRecordedUnpublishedObjectsLocked retires the still-owned ledger
@@ -3811,20 +3806,16 @@ func (txn *Transaction) retireSettledRecordedUnpublishedObjectNames(
 // recorded-owner registrations that point at this terminal transaction —
 // with the copy gone, the entries can never retire anything again, and a
 // queued obligation must not retain the completed transaction's graph
-// (issue #25590 round-40 review, finding 1). Callers hold the
-// transaction lock.
+// (issue #25590 round-40 review, finding 1). Dropping the copy keeps
+// the holder — a GC worker still parked on this transaction's accepted
+// batch may retire against it — but empties it, so the worker's late
+// prune retires nothing (issue #25590 round-41 review, finding 1).
+// Callers hold the transaction lock.
 func (txn *Transaction) releaseRecordedUnpublishedObjectsLocked() {
-	txn.recordedUnpublishedObjectNamesMu.Lock()
-	if len(txn.recordedUnpublishedObjectNames) == 0 {
-		txn.recordedUnpublishedObjectNamesMu.Unlock()
+	names, took := txn.recordedUnpublishedObjects.takeAll()
+	if !took {
 		return
 	}
-	names := make([]string, 0, len(txn.recordedUnpublishedObjectNames))
-	for n := range txn.recordedUnpublishedObjectNames {
-		names = append(names, n)
-	}
-	txn.recordedUnpublishedObjectNames = nil
-	txn.recordedUnpublishedObjectNamesMu.Unlock()
 	if txn.engine != nil {
 		txn.engine.releaseUnpublishedPendingPublished(names)
 		// round-40 (issue #25590 review of 2026-10-24, finding 1):

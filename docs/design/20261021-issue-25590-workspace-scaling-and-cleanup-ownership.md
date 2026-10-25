@@ -3347,3 +3347,81 @@ change (queue mutex under the transaction lock, the established
 enqueue order), and no hot-path scan (the release already scans the
 admission-bounded live set). No r11- or r12-approved decision is
 altered, so the deviation rule opens no design re-review.
+
+## 10 design review record - round 41 (implementation follow-up): the accepted GC worker settle state is independently owned
+
+The 2026-10-25 review against head `9f0c4e2ce7` accepted the round-40
+terminal detach and blocked on the last transaction-lifetime owner in
+the cleanup path: the settle callback that gcFiles installs on
+ACCEPTED pool jobs. The round-37 settle step captured the whole
+`*Transaction` for its two post-delete steps - the engine ledger
+settle and the transaction's recorded-name retire - while the base
+callback it replaced captured only the storage and the filenames.
+Compaction (`compactDeletionOnObjsLocked -> GCObjsByStats`) and
+dropped-table cleanup (`GCObjsByIdxRange`) submit these jobs on an
+OPEN transaction's behalf; stalled storage parks the accepted
+worker's delete, and `FinalizeCommit` - which never joins in-flight
+GC jobs - then completes the transaction. The parked callback keeps
+retaining the completed Transaction's entire graph (statement-offset
+history, the writes backing slice, the process reference), memory the
+five-worker pool bound never counts: the pool bounds the NUMBER of
+parked jobs, not the retained graph size, so repeated failed
+compaction during one storage outage accumulates completed-transaction
+graphs without bound. The round-40 detach cannot see this reference -
+it pops queue-side recorded-owner entries only.
+
+The review's requested shape is implemented verbatim - an
+independently owned lightweight retirement state:
+
+- The recorded-name copy's guard and map move into a separately
+  allocated holder, `txnRecordedUnpublished`, installed at transaction
+  construction (the record choke keeps a lazy install for workspaces
+  built outside `NewTxnWorkSpace`, always on the transaction's own
+  goroutine before any member can reach a worker). The transaction's
+  accessor methods delegate; every settle/retire/release semantic of
+  rounds 37, 38 and 40 is unchanged, including the round-13 rule that
+  no GC or drain worker ever waits on a transaction lock (the holder
+  carries its own guard; lock order stays
+  `txn.Lock -> txnRecordedUnpublished.mu`).
+- The accepted callback captures the ENGINE, the file service and the
+  recorded-name holder - never the transaction. A worker stalled
+  on storage parks exactly the admission-bounded recorded set plus its
+  guard; the moment the submitting transaction's terminal releases the
+  copy (an empty holder touches nothing), the completed transaction's
+  graph is owned solely by whoever constructed it, the same lifetime
+  the queue path (rounds 38/40), the pending list, the reservations and
+  the workspace already have.
+- The cleanup obligation is untouched: the parked worker still owns
+  its batch's deletion and settle exactly as round 18/37 pinned; after
+  the outage the recovered worker deletes the file, settles the
+  ledger membership and retires through the (empty) holder - a
+  no-op - so no new state machine, wait, storage call or hot-path scan
+  exists. The submit-failure tail and the queue handoffs keep the
+  round-38 registration and the round-40 detach untouched.
+
+The new regression pins the reviewer's exact lifetime:
+`TestIssue25590AcceptedGCWorkerStallDoesNotRetainCompletedTransaction`
+drives the production `GCObjsByStats` front door with a REAL pool,
+parks the accepted worker inside a blocked delete, asserts the
+pre-settle window (the recorded member keeps the name's lifecycle, the
+file stays, the ledger stays live), completes the transaction through
+the production `FinalizeCommit`, drops the probe's own reference and
+requires the weak reference to die across bounded full-GC cycles while
+the worker stays parked (red on the parent tree: the weak pointer
+survives 24 GC cycles through the accepted callback; green after the
+fix), then releases the stall and requires the recovered worker alone
+to delete the file and close the queue, the registry and the ledger
+empty. The probe's operator records no expectation returning the
+transaction, so the gomock controller's permanent roots cannot mask
+the measured retention.
+
+Decision: round 41 is recorded as an implementation correction that
+closes the accepted-worker half of the round-37 settle state's
+lifetime - the obligation conservation law, the boundary
+classification, the admission bound, the lossless handoffs and the
+drain ladder are unchanged; the holder moves existing state out of the
+transaction (no new obligation state, no new lock, the same
+guard-only prune the round-13 decoupling requires), and production
+transactions pay one small allocation at construction. No r11- or
+r12-approved decision is altered, so the deviation rule opens no
+design re-review.

@@ -404,6 +404,109 @@ type statementTransferState struct {
 	pendingTransfer bool
 }
 
+// txnRecordedUnpublished is the independently allocated holder of a
+// transaction's recorded-name copy of the storage-object names its
+// recorded workspace entries created — every name a ROLLBACK could owe
+// the engine's cleanup queue. The guarding mutex and the live-name map
+// live in THIS small object, never inline in the transaction, so a
+// cleanup job the GC pool already accepted can capture the holder — plus
+// the engine — as the whole settle state of its parked callback: a
+// worker stalled inside its delete then parks at most this
+// admission-bounded set, never the completed transaction's entire graph
+// (statement-offset history, writes backing slice and process
+// reference) after the transaction's terminal ended every obligation
+// (issue #25590 round-41 review, finding 1). Every section is short and
+// never reaches back out to the transaction lock or the engine queue;
+// lock order stays txn.Lock -> txnRecordedUnpublished.mu. Production
+// transactions install the holder at construction; the transaction's
+// own record choke can install it lazily for workspaces built outside
+// NewTxnWorkSpace, always on the transaction's own goroutine before any
+// producer can hand a member to a worker.
+type txnRecordedUnpublished struct {
+	mu    sync.Mutex
+	names map[string]struct{}
+}
+
+// merge adds names to the recorded copy, admitting each name exactly
+// once like the record choke that calls it.
+func (r *txnRecordedUnpublished) merge(names []string) {
+	if r == nil || len(names) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.names == nil {
+		r.names = make(map[string]struct{}, len(names))
+	}
+	for _, n := range names {
+		r.names[n] = struct{}{}
+	}
+}
+
+// has reports whether the record's lifecycle still owns the name — the
+// read the retain funnels, the pending-cleanup handoff and the remote
+// adoption gate on.
+func (r *txnRecordedUnpublished) has(name string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.names[name]
+	return ok
+}
+
+// retract removes exactly the staged record's own admissions — the
+// back-out whose staged records were never published.
+func (r *txnRecordedUnpublished) retract(names []string) {
+	if r == nil || len(names) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, n := range names {
+		delete(r.names, n)
+	}
+}
+
+// retireSettled retires the members whose cleanup ownership JUST ENDED:
+// the gcFiles pool worker and the queue drain call it for exactly the
+// batch whose proof of deletion they just produced, never with the
+// transaction lock. Names never recorded, and a released holder, simply
+// no-op.
+func (r *txnRecordedUnpublished) retireSettled(names []string) {
+	if r == nil || len(names) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, n := range names {
+		delete(r.names, n)
+	}
+}
+
+// takeAll drops the holder's whole copy and returns exactly the members
+// it still tracked: the terminal release then retires those members'
+// ledger ownership, and every state that still points at them — the
+// queue's recorded-owner registrations included — detaches. An empty or
+// absent holder takes nothing, preserving the release's early return.
+func (r *txnRecordedUnpublished) takeAll() (names []string, took bool) {
+	if r == nil {
+		return nil, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.names) == 0 {
+		return nil, false
+	}
+	names = make([]string, 0, len(r.names))
+	for n := range r.names {
+		names = append(names, n)
+	}
+	r.names = nil
+	return names, true
+}
+
 // Transaction represents a transaction
 type Transaction struct {
 	catalogVisibilityRevision atomic.Uint64
@@ -520,17 +623,21 @@ type Transaction struct {
 	// moved them, the drain deleted them — simply no-op on release
 	// (issue #25590 round-18 review).
 	//
-	// round-37: the map has its own small guard for the same reason the
-	// reservation map gained one in round 19 — the gcFiles pool worker
-	// that settles a deleted object's names holds NO transaction lock,
-	// and taking the transaction lock there would put a GC worker behind
-	// any transaction's lock while pool callers park in ants' worker
-	// wait, exactly the admission-chain the round-13 decoupling removed.
-	// Every section is short and never reaches back out to the
-	// transaction lock or the engine queue; lock order stays
-	// txn.Lock -> recordedUnpublishedObjectNamesMu.
-	recordedUnpublishedObjectNamesMu sync.Mutex
-	recordedUnpublishedObjectNames   map[string]struct{}
+	// round-37 gave the copy its own small guard instead of the
+	// transaction lock for the same reason the reservation map gained
+	// one in round 19 — the gcFiles pool worker that settles a deleted
+	// object's names holds NO transaction lock, and taking the
+	// transaction lock there would put a GC worker behind any
+	// transaction's lock while pool callers park in ants' worker wait,
+	// exactly the admission-chain the round-13 decoupling removed.
+	// round-41 moved the guard and the map into an INDEPENDENTLY
+	// ALLOCATED holder (txnRecordedUnpublished) the gcFiles worker
+	// captures together with the engine instead of the transaction, so
+	// a cleanup job the pool already accepted parks at most this
+	// admission-bounded set — never the completed transaction's whole
+	// graph — on stalled storage; lock order stays
+	// txn.Lock -> recordedUnpublishedObjects.mu.
+	recordedUnpublishedObjects *txnRecordedUnpublished
 
 	// pendingObjectCleanup holds the storage-object names this transaction
 	// owns as unrecorded cleanup obligations — files persisted by a failed
@@ -888,6 +995,10 @@ func NewTxnWorkSpace(eng *Engine, proc *process.Process) *Transaction {
 		},
 		cnObjsSummary:   map[types.Objectid]Summary{},
 		batchSelectList: make(map[*batch.Batch][]int64),
+		// The recorded-name holder installs at construction (round-41):
+		// a GC job the pool accepts captures it — never the
+		// transaction — as the settle state of its parked callback.
+		recordedUnpublishedObjects:                &txnRecordedUnpublished{},
 		cn_flushed_s3_tombstone_object_stats_list: new(sync.Map),
 
 		commitWorkspaceThreshold: eng.config.commitWorkspaceThreshold,
@@ -1318,6 +1429,21 @@ func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
 
 	logutil.Info("GC-WORKSPACE-FILES", zap.Strings("names", names),
 		zap.String("txn-info", txn.op.Txn().DebugString()))
+	// Round-41 (issue #25590 review of 2026-10-25, finding 1): the
+	// accepted worker's settle state is INDEPENDENTLY OWNED — the
+	// engine, the file service and the transaction's recorded-name
+	// holder, never the transaction itself. Compaction
+	// (compactDeletionOnObjsLocked -> GCObjsByStats) and dropped-table
+	// cleanup (GCObjsByIdxRange) submit these jobs on an OPEN
+	// transaction's behalf, and FinalizeCommit never joins them, so a
+	// callback holding the transaction would park the whole completed
+	// graph — statement-offset history, the writes backing slice and the
+	// process reference — inside the pool for as long as stalled storage
+	// holds the worker. The holder is read on the submitting transaction
+	// goroutine (installed before any name this batch could settle was
+	// recorded), so the closure inherits a plain holder pointer through
+	// the pool submission's own synchronization.
+	recordedSets := txn.recordedUnpublishedObjects
 	for start := 0; start < len(names); start += GCBatchOfFileCount {
 		end := min(start+GCBatchOfFileCount, len(names))
 		batch := append([]string(nil), names[start:end]...)
@@ -1333,7 +1459,7 @@ func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
 			// its ledger membership retires here and the capacity the
 			// names held at creation returns to the bound (issue #25590
 			// round-18 review).
-			txn.engine.settleUnpublishedPendingDeleted(batch)
+			e.settleUnpublishedPendingDeleted(batch)
 			// round-37 (issue #25590 review of 2026-10-24, finding 1):
 			// ending the obligation also retires the TRANSACTION's
 			// recorded-name copy of the same names. The settle above ends
@@ -1346,8 +1472,11 @@ func gcFiles(txn *Transaction, scope cloneGCScope, names ...string) error {
 			// release copying and scanning it all. The prune runs under
 			// the recorded-name guard only — NOT the transaction lock: a
 			// GC worker behind any transaction's lock would chain pool
-			// callers through ants' worker wait again.
-			txn.retireSettledRecordedUnpublishedObjectNames(batch)
+			// callers through ants' worker wait again. Round-41 kept the
+			// prune reachable WITHOUT the transaction: the holder carries
+			// the member, so a stalled worker parks exactly this
+			// bounded set and the recorded copy still retires.
+			recordedSets.retireSettled(batch)
 		}); err != nil {
 			// A pool released between admission and submit — most
 			// commonly Engine.Close racing a capacity-parked GC caller
