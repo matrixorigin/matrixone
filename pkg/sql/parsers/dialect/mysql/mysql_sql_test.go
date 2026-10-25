@@ -1112,6 +1112,57 @@ func TestConvertUsingDeparseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNumericExponentStatementBoundaries(t *testing.T) {
+	ctx := context.Background()
+	const sql = "select 1; select 1.5Efoo"
+	stmts, err := Parse(ctx, sql, 1)
+	for _, stmt := range stmts {
+		t.Cleanup(stmt.Free)
+	}
+	require.Error(t, err)
+	require.Empty(t, stmts)
+	fragments, err := SplitSqlByStatementFragmentsWithSQLMode(ctx, sql, 1, "")
+	require.Error(t, err)
+	require.Empty(t, fragments)
+
+	parser := &MySQLParser{}
+	stmt, first, next, err := parser.ParseFirstStatementWithSQLMode(ctx, SQLContinuation{SQL: sql}, 1, "")
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.Equal(t, "select 1;", first)
+	require.Equal(t, "select 1", tree.String(stmt, dialect.MYSQL))
+	stmt, _, _, err = parser.ParseFirstStatementWithSQLMode(ctx, next, 1, "")
+	if stmt != nil {
+		t.Cleanup(stmt.Free)
+	}
+	require.Error(t, err)
+	require.Nil(t, stmt)
+	positioned, ok := err.(PositionedErr)
+	require.True(t, ok)
+	require.Contains(t, positioned.Near, "1.5Efoo")
+
+	stmts, err = parser.Parse(ctx, "select 1.5e", 1)
+	for _, stmt := range stmts {
+		t.Cleanup(stmt.Free)
+	}
+	require.Error(t, err)
+	require.Empty(t, stmts)
+	stmts, err = parser.Parse(ctx, "select 1.5e1foo", 1)
+	require.NoError(t, err)
+	defer func() {
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+	}()
+	require.Len(t, stmts, 1)
+	expr := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0]
+	require.Equal(t, "foo", expr.As.Origin())
+	require.IsType(t, &tree.NumVal{}, expr.Expr)
+	value, exact := expr.Expr.(*tree.NumVal).Float64()
+	require.True(t, exact)
+	require.Equal(t, float64(15), value)
+}
+
 func TestParseFirstWithSQLMode(t *testing.T) {
 	ctx := context.Background()
 	parser := &MySQLParser{}
