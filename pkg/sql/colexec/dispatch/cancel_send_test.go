@@ -64,7 +64,6 @@ func TestLocalDispatchDataSendsObserveCancellation(t *testing.T) {
 				op.FuncId = ShuffleToAllFunc
 			}
 			require.NoError(t, op.Prepare(proc))
-			sp := op.ctr.sp
 			result := make(chan error, 1)
 			joined := make(chan struct{})
 			var resetJoined <-chan struct{}
@@ -79,7 +78,7 @@ func TestLocalDispatchDataSendsObserveCancellation(t *testing.T) {
 				if resetJoined != nil {
 					select {
 					case <-resetJoined:
-					case <-time.After(process.PipelineSignalSendTimeout + time.Second):
+					case <-time.After(time.Second):
 						t.Error("Reset failed to join; cannot destroy its spool")
 						return
 					}
@@ -112,12 +111,15 @@ func TestLocalDispatchDataSendsObserveCancellation(t *testing.T) {
 			cancel(cause)
 			select {
 			case err := <-result:
-				require.ErrorIs(t, err, cause)
+				if mode == "all" || mode == "any" {
+					require.NoError(t, err)
+				} else {
+					require.ErrorIs(t, err, context.Canceled)
+				}
 			case <-time.After(time.Second):
 				t.Fatal("data publication ignored cancellation")
 			}
 			<-joined
-			require.True(t, sp.PublicationFailed())
 			receiver := process.InitPipelineSignalReceiver(baseCtx, []*process.WaitRegister{reg})
 			resetDone := make(chan struct{})
 			resetJoined = resetDone
@@ -127,26 +129,19 @@ func TestLocalDispatchDataSendsObserveCancellation(t *testing.T) {
 				op.Reset(proc, true, cause)
 			}()
 			drained := receiver.WaitingEndWithTimeout(time.Second)
-			if !drained {
-				t.Error("real Reset lost End behind its unpublished data frame")
-				// Failure-only rescue of the old Reset: the real receiver has
-				// stopped; consume its unnotified spool End to join cleanup.
-				// This does not turn the failed outer drain into a pass.
-				end, err := sp.ReceiveBatch(0)
-				require.Nil(t, end)
-				require.ErrorIs(t, err, cause)
-			}
+
 			select {
 			case <-resetDone:
 			case <-time.After(time.Second):
 				t.Fatal("Reset entered its default 30s acknowledgement wait")
 			}
 			require.True(t, drained)
+			require.ErrorIs(t, reg.Err(), cause, "Reset preserves the failed-start cause durably")
 			require.Zero(t, receiver.State().Alive)
 			require.Less(t, time.Since(started), time.Second)
-			require.Same(t, sp, op.cleanupSpool)
+			require.Nil(t, op.cleanupSpool, "error terminal aborts pending refs")
 			op.CleanupDeferredSpool()
-			require.Positive(t, mp.AllocatedBytes()-baseline, "unpublished refs survive ordinary cleanup")
+			require.Equal(t, baseline, mp.AllocatedBytes(), "unnotified references are discarded before root release")
 			proc.Base.ClosePipelineSpoolsAfterReadersStopped()
 			require.Equal(t, baseline, mp.AllocatedBytes())
 			proc.Base.ClosePipelineSpoolsAfterReadersStopped()
@@ -172,7 +167,6 @@ func TestLocalBroadcastFailedPublicationPreservesBorrowedFrameThroughReset(t *te
 	}
 	op := &Dispatch{FuncId: SendToAllLocalFunc, LocalRegs: regs}
 	require.NoError(t, op.Prepare(proc))
-	sp := op.ctr.sp
 	receiveCtx, stopReceive := context.WithTimeout(context.Background(), time.Second)
 	t.Cleanup(stopReceive)
 	first := process.InitPipelineSignalReceiver(receiveCtx, regs[:1])
@@ -191,7 +185,7 @@ func TestLocalBroadcastFailedPublicationPreservesBorrowedFrameThroughReset(t *te
 		if resetJoined != nil {
 			select {
 			case <-resetJoined:
-			case <-time.After(process.PipelineSignalSendTimeout + time.Second):
+			case <-time.After(time.Second):
 				t.Error("broadcast Reset failed to join")
 				return
 			}
@@ -211,12 +205,11 @@ func TestLocalBroadcastFailedPublicationPreservesBorrowedFrameThroughReset(t *te
 	cancel(cause)
 	select {
 	case err := <-result:
-		require.ErrorIs(t, err, cause)
+		require.NoError(t, err, "partial broadcast closure is a control stop; Reset publishes its durable error")
 	case <-time.After(time.Second):
 		t.Fatal("partial broadcast publication ignored cancellation")
 	}
 	<-joined
-	require.True(t, sp.PublicationFailed())
 	resetDone := make(chan struct{})
 	resetJoined = resetDone
 	started := time.Now()
@@ -225,38 +218,27 @@ func TestLocalBroadcastFailedPublicationPreservesBorrowedFrameThroughReset(t *te
 		op.Reset(proc, true, cause)
 	}()
 	secondDrained := second.WaitingEndWithTimeout(time.Second)
-	if !secondDrained {
-		t.Error("second receiver consumed orphaned data instead of Reset End")
-		// Failure-only old-Reset rescue, after this real receiver stopped.
-		end, endErr := sp.ReceiveBatch(1)
-		require.Nil(t, end)
-		require.ErrorIs(t, endErr, cause)
-	}
+
 	select {
 	case <-resetDone:
 	case <-time.After(time.Second):
-		// An old Reset also needs the successful first reader to acknowledge
-		// its spool End. This rescue is outside the passing-path oracle.
-		t.Error("Reset waited for acknowledgements despite failed publication")
-		first.WaitingEndWithTimeout(time.Second)
-		select {
-		case <-resetDone:
-		case <-time.After(time.Second):
-			t.Fatal("broadcast Reset did not join after failure rescue")
-		}
+		t.Fatal("Reset did not return after durable terminal publication")
 	}
 	require.True(t, secondDrained)
+	for _, reg := range regs {
+		require.ErrorIs(t, reg.Err(), cause)
+	}
 	require.Zero(t, second.State().Alive)
 	require.Less(t, time.Since(started), time.Second)
-	require.Same(t, sp, op.cleanupSpool)
+	require.Nil(t, op.cleanupSpool, "error terminal aborts pending refs")
 	op.CleanupDeferredSpool()
-	// First has not released its data yet. Reset/ForceCleanup must preserve
-	// both this borrowed vector and the missing recipient's reference.
+	// First has not released its data yet. Reset/Abort must preserve its
+	// borrowed vector after DiscardUnsent rolls back the missing recipient.
 	require.Equal(t, []int64{29}, vector.MustFixedColNoTypeCheck[int64](borrowed.Vecs[0]))
 	require.Positive(t, mp.AllocatedBytes()-baseline)
 	require.True(t, first.WaitingEndWithTimeout(time.Second))
 	require.Zero(t, first.State().Alive)
-	require.Positive(t, mp.AllocatedBytes()-baseline, "unpublished broadcast ref remains until joined destruction")
+	require.Equal(t, baseline, mp.AllocatedBytes(), "the last notified borrower releases the shared data after rollback")
 	proc.Base.ClosePipelineSpoolsAfterReadersStopped()
 	require.Equal(t, baseline, mp.AllocatedBytes())
 	proc.Base.ClosePipelineSpoolsAfterReadersStopped()

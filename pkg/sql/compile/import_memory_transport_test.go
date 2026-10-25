@@ -13,10 +13,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -64,7 +62,7 @@ func TestStatementMemoryRealControlTransport(t *testing.T) {
 			// sweep; the independent owner must survive until that real event.
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			t.Cleanup(cancel)
-			manifest := MemoryManifest{Version: query.MemoryAdmissionProtocolVersion, TargetUnit: 1 << 20, Parallel: 1, NoWait: test.noWait, Stages: []MemoryStageDescriptor{{Role: MemoryStageOutput, Count: 1, Schema: []types.Type{types.T_int64.ToType()}, TableCount: 1}}}
+			manifest := memoryControlFixtureManifest(test.noWait)
 			handle, err := openRemoteMemory(ctx, service, addr, manifest, runtime.ProcessInstanceID())
 			require.NoError(t, err)
 			t.Cleanup(func() { handle.close(context.Canceled) })

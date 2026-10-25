@@ -53,7 +53,7 @@ func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 	if memory := proc.Base.ImportMemory; memory != nil {
 		ctr.sp.SetCacheMemoryLimit(memory.UnitBytes)
 	}
-	proc.RegisterPipelineSpool(ctr.sp)
+	proc.RegisterPipelineSpool(ctr.sp, dispatch.LocalRegs...)
 
 	switch dispatch.FuncId {
 	case SendToAllFunc:

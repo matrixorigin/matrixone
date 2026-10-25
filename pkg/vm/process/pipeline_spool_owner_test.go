@@ -60,3 +60,46 @@ func TestPipelineSpoolAttemptRegistryOwnsOnlyItsGeneration(t *testing.T) {
 	legacy.CloseAfterReadersStopped()
 	require.Zero(t, mp.AllocatedBytes())
 }
+
+func TestPipelineAttemptDrainsEdgesBeforeFinalSlots(t *testing.T) {
+	srcMP := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(srcMP) })
+	source := batch.NewWithSize(1)
+	t.Cleanup(func() { source.Clean(srcMP) })
+	source.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(7), false, srcMP))
+	source.SetRowCount(1)
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { require.Zero(t, mp.AllocatedBytes()); mpool.DeleteMPool(mp) })
+	proc := &Process{Base: &BaseProcess{}}
+	t.Cleanup(proc.Base.ClosePipelineSpoolsAfterReadersStopped)
+	for range 2 {
+		edge := NewPipelineEdge(1, 1)
+		sp := pSpool.InitMyPipelineSpool(mp, 1)
+		proc.RegisterPipelineSpool(sp, edge)
+		_, err := sp.SendBatch(context.Background(), 0, source, nil)
+		require.NoError(t, err)
+		require.True(t, edge.SendData(context.Background(), sp, 0))
+		_, ok := edge.PublishTerminal(NewEndSignal()) // Ch2 is full; Done is durable.
+		require.True(t, ok)
+		sp.ForceCleanupAfterTerminalSignal()
+		proc.Base.ClosePipelineSpoolsAfterReadersStopped()
+		require.Empty(t, edge.Ch2)
+		require.Empty(t, proc.Base.pipelineSpools.edges)
+		require.Empty(t, proc.Base.pipelineSpools.spools)
+		require.Zero(t, mp.AllocatedBytes())
+		select {
+		case <-edge.Done():
+		default:
+			t.Fatal("cleanup must preserve terminal state")
+		}
+		edge.ResetTerminalStateForReuse()
+		select {
+		case <-edge.Done():
+			t.Fatal("new generation retained old Done")
+		default:
+		}
+		// A later reuse drain must not reference a destroyed spool slot.
+		edge.DrainForCleanup()
+	}
+}

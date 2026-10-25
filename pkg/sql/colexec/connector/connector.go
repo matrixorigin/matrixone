@@ -36,7 +36,7 @@ func (connector *Connector) Prepare(proc *process.Process) error {
 		if memory := proc.Base.ImportMemory; memory != nil {
 			connector.ctr.sp.SetCacheMemoryLimit(memory.UnitBytes)
 		}
-		proc.RegisterPipelineSpool(connector.ctr.sp)
+		proc.RegisterPipelineSpool(connector.ctr.sp, connector.Reg)
 	}
 
 	if connector.OpAnalyzer == nil {

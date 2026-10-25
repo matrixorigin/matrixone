@@ -192,7 +192,7 @@ func (ps *PipelineSpool) forceCleanup() {
 
 // CloseAfterReadersStopped is the final destructor for a controlled query
 // attempt. Its caller MUST have joined every sender and receiver, including
-// pipeline cleanup, before calling. Unlike ForceCleanup it can then discard
+// pipeline cleanup, before calling. Unlike cache cleanup it can then discard
 // abandoned queued/current frames even when cancellation lost an End marker.
 // It must never be called merely because a cleanup wait timed out.
 func (ps *PipelineSpool) CloseAfterReadersStopped() {
@@ -301,7 +301,6 @@ func (ps *PipelineSpool) releaseSlotLocked(idx uint32) {
 }
 
 func (ps *PipelineSpool) abortLocked() {
-
 	// Abort has two cleanup classes:
 	//   - slots already handed to receivers are kept until ReleaseCurrent drops
 	//     their ref count;

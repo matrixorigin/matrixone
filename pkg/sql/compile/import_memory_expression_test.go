@@ -287,14 +287,14 @@ func TestImportMemoryProducerManifestRoundTripAndValidation(t *testing.T) {
 
 func TestImportMemoryOldBoolPeerAndManifestAreRejectedBeforeOpen(t *testing.T) {
 	c := memoryCompileFixture(t, 1)
-	for _, version := range []uint32{0, 1, query.MemoryAdmissionProtocolVersion} {
+	for _, version := range []uint32{0, 1, 2, query.MemoryAdmissionProtocolVersion, 4} {
 		client := &memoryCapabilityClient{send: func(addr string, _ *query.Request) (*query.Response, error) {
 			return &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{MemoryAdmission: true, MemoryAdmissionProcessId: addr, MemoryAdmissionVersion: version}}, nil
 		}}
 		c.proc.Base.QueryClient = client
 		capable, err := c.memoryCapabilities(context.Background(), []*memoryCNManifest{{queryAddr: "A"}, {queryAddr: "B"}})
 		require.NoError(t, err)
-		require.Equal(t, version >= query.MemoryAdmissionProtocolVersion, capable)
+		require.Equal(t, version == query.MemoryAdmissionProtocolVersion, capable)
 		require.Equal(t, 2, client.releases)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -378,7 +378,7 @@ func TestImportMemoryMergeBlockUsesFinalOutputFramePromise(t *testing.T) {
 	table := &plan.TableDef{Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}}}}
 	writer := &insert.Insert{ToWriteS3: true, InsertCtx: &insert.InsertCtx{TableDef: table}}
 	writer.AppendChild(c.scopes[0].RootOp)
-	spool := &connector.Connector{}
+	spool := &connector.Connector{Reg: process.NewPipelineEdge(1, 1)}
 	spool.AppendChild(writer)
 	consumer := &mergeblock.MergeBlock{}
 	consumer.AppendChild(spool)
@@ -419,7 +419,7 @@ func TestImportMemoryFlushS3InfoUsesModernFrameProvenance(t *testing.T) {
 	ctxs := []*multi_update.MultiUpdateCtx{{TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}}}}}}
 	writer := &multi_update.MultiUpdate{Action: multi_update.UpdateWriteS3, MultiUpdateCtx: ctxs}
 	writer.AppendChild(c.scopes[0].RootOp)
-	spool := &connector.Connector{}
+	spool := &connector.Connector{Reg: process.NewPipelineEdge(1, 1)}
 	spool.AppendChild(writer)
 	flush := &multi_update.MultiUpdate{Action: multi_update.UpdateFlushS3Info, MultiUpdateCtx: ctxs}
 	flush.AppendChild(spool)

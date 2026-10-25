@@ -224,13 +224,16 @@ func handleMemoryControl(ctx context.Context, serviceID string, msg *pipeline.Me
 		return fail(decodeErr)
 	}
 	if request.Action == MemoryControlOpen || request.Action == MemoryControlTryOpen {
-		if request.Manifest != nil && request.Manifest.NoWait != (request.Action == MemoryControlTryOpen) {
-			return fail(errors.New("memory control open wait policy mismatch"))
-		}
-		if request.Manifest != nil && request.Manifest.Version != query.MemoryAdmissionProtocolVersion {
+		if request.Manifest == nil || request.Manifest.Version != query.MemoryAdmissionProtocolVersion {
 			return fail(errors.New("unsupported memory manifest version"))
 		}
-		if request.Manifest == nil || request.Token != "" || cs.SessionCtx().Done() == nil {
+		if len(request.Manifest.Producers) == 0 {
+			return fail(errors.New("incomplete memory producer manifest"))
+		}
+		if request.Manifest.NoWait != (request.Action == MemoryControlTryOpen) {
+			return fail(errors.New("memory control open wait policy mismatch"))
+		}
+		if request.Token != "" || cs.SessionCtx().Done() == nil {
 			return fail(errors.New("invalid memory control open"))
 		}
 		if request.ExpectedProcessID != runtime.ProcessInstanceID() {
