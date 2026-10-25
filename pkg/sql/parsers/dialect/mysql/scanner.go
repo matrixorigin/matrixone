@@ -894,6 +894,11 @@ exponent:
 			token = FLOAT
 			s.inc()
 		} else {
+			if !canPromoteToIdentifier {
+				// A dotted mantissa cannot leave an invalid exponent as an alias.
+				s.inc()
+				return LEX_ERROR, s.buf[start:s.Pos]
+			}
 			goto exit
 		}
 		s.scanMantissa(10)
