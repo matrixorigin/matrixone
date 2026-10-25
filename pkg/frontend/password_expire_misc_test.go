@@ -39,30 +39,25 @@ import (
 
 // TestConvertMiscOptToExpiredTime covers the translation of the PASSWORD
 // EXPIRE misc options of CREATE/ALTER USER into the raw mo_user.expired_time
-// SQL value.
+// SQL expression. Every non-NULL form must be a session-local now()
+// (current_timestamp based) so the stored expiration instant is independent
+// of the writing session's time zone.
 func TestConvertMiscOptToExpiredTime(t *testing.T) {
-	// PASSWORD EXPIRE: expires right now.
+	// PASSWORD EXPIRE: expires right now, in UTC.
 	v, ok := convertMiscOptToExpiredTime(&tree.UserMiscOptionPasswordExpireNone{})
 	require.True(t, ok)
-	require.True(t, strings.HasPrefix(v, `"`) && strings.HasSuffix(v, `"`), "expect quoted timestamp, got %q", v)
-	ts := strings.Trim(v, `"`)
-	parsed, err := time.ParseInLocation("2006-01-02 15:04:05", ts, time.UTC)
-	require.NoError(t, err)
-	require.False(t, parsed.After(time.Now().UTC()), "PASSWORD EXPIRE must expire immediately")
+	require.Equal(t, "current_timestamp()", v)
 
-	// PASSWORD EXPIRE INTERVAL n DAY: expires n days later.
+	// PASSWORD EXPIRE INTERVAL n DAY: expires n days later, in UTC.
 	v, ok = convertMiscOptToExpiredTime(&tree.UserMiscOptionPasswordExpireInterval{Value: 3})
 	require.True(t, ok)
-	ts = strings.Trim(v, `"`)
-	parsed, err = time.ParseInLocation("2006-01-02 15:04:05", ts, time.UTC)
-	require.NoError(t, err)
-	require.True(t, parsed.After(time.Now().UTC().AddDate(0, 0, 2)), "INTERVAL 3 DAY must not expire within 2 days")
-	require.True(t, parsed.Before(time.Now().UTC().AddDate(0, 0, 3).Add(time.Hour)), "INTERVAL 3 DAY must expire in about 3 days")
+	require.Equal(t, "current_timestamp() + interval 3 day", v)
 
-	// PASSWORD EXPIRE NEVER: far-future sentinel.
+	// PASSWORD EXPIRE NEVER: far-future UTC marker.
 	v, ok = convertMiscOptToExpiredTime(&tree.UserMiscOptionPasswordExpireNever{})
 	require.True(t, ok)
-	require.Equal(t, `"`+passwordExpireNeverTime+`"`, v)
+	require.Equal(t, passwordExpireNeverTimeSql, v)
+	require.Contains(t, v, "current_timestamp()")
 
 	// PASSWORD EXPIRE DEFAULT: NULL, follow the global default lifetime.
 	v, ok = convertMiscOptToExpiredTime(&tree.UserMiscOptionPasswordExpireDefault{})
@@ -81,27 +76,13 @@ func TestConvertMiscOptToExpiredTime(t *testing.T) {
 	require.False(t, ok)
 }
 
-// TestCheckPasswordExpiredAt covers the login-time evaluation of the explicit
-// mo_user.expired_time instant, including the PASSWORD EXPIRE NEVER sentinel.
-func TestCheckPasswordExpiredAt(t *testing.T) {
-	// An instant in the past: the password has expired.
-	expired, err := checkPasswordExpiredAt("2000-01-01 00:00:00")
-	require.NoError(t, err)
-	require.True(t, expired)
-
-	// An instant in the future: not expired yet.
-	expired, err = checkPasswordExpiredAt(time.Now().UTC().AddDate(0, 0, 1).Format("2006-01-02 15:04:05"))
-	require.NoError(t, err)
-	require.False(t, expired)
-
-	// The PASSWORD EXPIRE NEVER sentinel never elapses.
-	expired, err = checkPasswordExpiredAt(passwordExpireNeverTime)
-	require.NoError(t, err)
-	require.False(t, expired)
-
-	// Garbage values are rejected instead of being read as "not expired".
-	_, err = checkPasswordExpiredAt("not-a-timestamp")
-	require.Error(t, err)
+// TestPasswordExpireNeverHorizon: the NEVER write form must always land
+// strictly beyond the preserve horizon used by updatePasswordOfUserFormat,
+// otherwise a password change would clear explicit NEVER accounts.
+func TestPasswordExpireNeverHorizon(t *testing.T) {
+	require.Equal(t, "current_timestamp() + interval 90000 day", passwordExpireNeverTimeSql)
+	require.Equal(t, "current_timestamp() + interval 40000 day", passwordExpireNeverHorizonSql)
+	require.Contains(t, updatePasswordOfUserFormat, "expired_time > "+passwordExpireNeverHorizonSql)
 }
 
 // TestPasswordExpiredErrorMysqlCode: the sandbox error must surface to the
@@ -478,7 +459,10 @@ func TestInitUserPasswordExpireAndLock(t *testing.T) {
 			}
 		}
 		require.NotEmpty(t, insert, "expected the mo_user insert to be executed")
-		require.Contains(t, insert, passwordExpireNeverTime)
+		// The never-expire marker is written as a UTC server-side expression
+		// so that the stored instant is independent of the writing session's
+		// time zone.
+		require.Contains(t, insert, passwordExpireNeverTimeSql)
 	})
 }
 
@@ -488,7 +472,8 @@ func TestInitUserPasswordExpireAndLock(t *testing.T) {
 func TestPasswordChangeKeepsExpireNeverSentinel(t *testing.T) {
 	sql, err := getSqlForUpdatePasswordOfUser(context.TODO(), "*abc", "u1")
 	require.NoError(t, err)
-	require.Contains(t, sql, "expired_time = if(expired_time = '"+passwordExpireNeverTime+"', expired_time, null)")
+	require.Contains(t, sql,
+		"expired_time = if(expired_time > "+passwordExpireNeverHorizonSql+", expired_time, null)")
 	require.NotContains(t, sql, "expired_time = null where")
 }
 
@@ -504,9 +489,11 @@ func TestLoginAttemptsCounterSqls(t *testing.T) {
 }
 
 // newMrsForLockInfoOfUser builds the mocked catalog row for the login-time
-// lock-info query (status, login_attempts, lock_time, expired_time). Pass a
-// nil expiredTime for the NULL "follow the default policy" marker.
-func newMrsForLockInfoOfUser(status string, loginAttempts uint64, lockTime string, expiredTime interface{}) *MysqlResultSet {
+// lock-info query (status, login_attempts, lock_time, expired_time is not
+// null, expired_time <= current_timestamp()). The last two columns are the
+// server-computed UTC booleans; pass hasExplicitExpire=0 for the NULL
+// "follow the default policy" marker.
+func newMrsForLockInfoOfUser(status string, loginAttempts uint64, lockTime string, hasExplicitExpire, expireReached uint64) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
 	col1 := &MysqlColumn{}
@@ -522,14 +509,19 @@ func newMrsForLockInfoOfUser(status string, loginAttempts uint64, lockTime strin
 	col3.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 
 	col4 := &MysqlColumn{}
-	col4.SetName("expired_time")
-	col4.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col4.SetName("expired_time is not null")
+	col4.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col5 := &MysqlColumn{}
+	col5.SetName("expired_time <= current_timestamp()")
+	col5.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	mrs.AddColumn(col1)
 	mrs.AddColumn(col2)
 	mrs.AddColumn(col3)
 	mrs.AddColumn(col4)
-	mrs.AddRow([]interface{}{status, loginAttempts, lockTime, expiredTime})
+	mrs.AddColumn(col5)
+	mrs.AddRow([]interface{}{status, loginAttempts, lockTime, hasExplicitExpire, expireReached})
 	return mrs
 }
 
@@ -667,7 +659,7 @@ func TestAuthenticateUserExpiryAndAttempts(t *testing.T) {
 	t.Run("expired account enters the password-expired sandbox", func(t *testing.T) {
 		ses, bh := newTestSession(t)
 		bh.sql2result[getLockInfoOfUserSql(userName)] =
-			newMrsForLockInfoOfUser(userStatusUnlock, 0, "2020-01-01 00:00:00", "2000-01-01 00:00:00")
+			newMrsForLockInfoOfUser(userStatusUnlock, 0, "2020-01-01 00:00:00", 1, 1)
 
 		err := authenticate(t, ses, true)
 		require.NoError(t, err)
@@ -678,8 +670,7 @@ func TestAuthenticateUserExpiryAndAttempts(t *testing.T) {
 	t.Run("future expiration does not enter the sandbox", func(t *testing.T) {
 		ses, bh := newTestSession(t)
 		bh.sql2result[getLockInfoOfUserSql(userName)] =
-			newMrsForLockInfoOfUser(userStatusUnlock, 0, "2020-01-01 00:00:00",
-				time.Now().UTC().AddDate(0, 0, 5).Format("2006-01-02 15:04:05"))
+			newMrsForLockInfoOfUser(userStatusUnlock, 0, "2020-01-01 00:00:00", 1, 0)
 
 		err := authenticate(t, ses, true)
 		require.NoError(t, err)
@@ -689,7 +680,7 @@ func TestAuthenticateUserExpiryAndAttempts(t *testing.T) {
 	t.Run("expire-never sentinel does not enter the sandbox", func(t *testing.T) {
 		ses, bh := newTestSession(t)
 		bh.sql2result[getLockInfoOfUserSql(userName)] =
-			newMrsForLockInfoOfUser(userStatusUnlock, 0, "2020-01-01 00:00:00", passwordExpireNeverTime)
+			newMrsForLockInfoOfUser(userStatusUnlock, 0, "2020-01-01 00:00:00", 1, 0)
 
 		err := authenticate(t, ses, true)
 		require.NoError(t, err)
@@ -699,7 +690,7 @@ func TestAuthenticateUserExpiryAndAttempts(t *testing.T) {
 	t.Run("successful login resets stale login attempts", func(t *testing.T) {
 		ses, bh := newTestSession(t)
 		bh.sql2result[getLockInfoOfUserSql(userName)] =
-			newMrsForLockInfoOfUser(userStatusUnlock, 3, "2020-01-01 00:00:00", nil)
+			newMrsForLockInfoOfUser(userStatusUnlock, 3, "2020-01-01 00:00:00", 0, 0)
 
 		err := authenticate(t, ses, true)
 		require.NoError(t, err)
@@ -711,7 +702,7 @@ func TestAuthenticateUserExpiryAndAttempts(t *testing.T) {
 	t.Run("failed login increments login attempts when lockout is disabled", func(t *testing.T) {
 		ses, bh := newTestSession(t)
 		bh.sql2result[getLockInfoOfUserSql(userName)] =
-			newMrsForLockInfoOfUser(userStatusUnlock, 0, "2020-01-01 00:00:00", nil)
+			newMrsForLockInfoOfUser(userStatusUnlock, 0, "2020-01-01 00:00:00", 0, 0)
 
 		err := authenticate(t, ses, false)
 		require.ErrorContains(t, err, "check password failed")
@@ -723,7 +714,7 @@ func TestAuthenticateUserExpiryAndAttempts(t *testing.T) {
 	t.Run("permanently locked account is rejected before password check", func(t *testing.T) {
 		ses, bh := newTestSession(t)
 		bh.sql2result[getLockInfoOfUserSql(userName)] =
-			newMrsForLockInfoOfUser(userStatusLockForever, 0, "2020-01-01 00:00:00", nil)
+			newMrsForLockInfoOfUser(userStatusLockForever, 0, "2020-01-01 00:00:00", 0, 0)
 
 		err := authenticate(t, ses, false)
 		require.ErrorContains(t, err, "user is locked, please ask the administrator to unlock")
@@ -755,6 +746,16 @@ func TestHandleSetPassword(t *testing.T) {
 
 		rm, _ := NewRoutineManager(ctx, "")
 		ses.rm = rm
+
+		// root is a special user on a live server; register it the same way
+		// here so cross-user SET PASSWORD passes the shadow ALTER USER
+		// privilege determination like production root does.
+		SetSpecialUser(rootName, []byte("111"))
+		t.Cleanup(func() {
+			specialUsers.Lock()
+			delete(specialUsers.users, rootName)
+			specialUsers.Unlock()
+		})
 
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
@@ -837,3 +838,147 @@ func TestHandleSetPassword(t *testing.T) {
 }
 
 const tNameHint = "expiry-attempts"
+
+// TestRedactSetPasswordForLogging: the clear-text password of SET PASSWORD
+// must never reach statement logging, both on the AST path (RecordStatement)
+// and on the AST-less parse-failure log path.
+func TestRedactSetPasswordForLogging(t *testing.T) {
+	raw := "set password for u1@'%' = 'super-secret-value'"
+	stmt := &tree.SetPassword{
+		User:     &tree.User{Username: "u1", Hostname: "%"},
+		Password: "super-secret-value",
+	}
+	redacted := redactStatementTextForLogging(stmt, raw)
+	require.NotContains(t, redacted, "super-secret-value")
+	require.Contains(t, redacted, "******")
+	require.Contains(t, redacted, "set password for")
+
+	// AST-less path (the terminal log of a parse failure): the SET PASSWORD
+	// literal is masked lexically.
+	redacted = redactStatementTextForLogging(nil, "SET PASSWORD = 'super-secret-value'")
+	require.NotContains(t, redacted, "super-secret-value")
+	require.Contains(t, redacted, "******")
+
+	redacted = redactStatementTextForLogging(nil, "  set\n  password = 'super-secret-value'")
+	require.NotContains(t, redacted, "super-secret-value")
+
+	// Unrelated statements pass through untouched.
+	ordinary := "select 1"
+	require.Equal(t, ordinary, redactStatementTextForLogging(nil, ordinary))
+}
+
+// TestHandleSetPasswordRequiresAlterUserPrivilege: SET PASSWORD FOR other
+// user is gated by the exact ALTER USER privilege determination (a session
+// whose role does not hold ALTER USER gets denied) and must not touch the
+// victim's password.
+func TestHandleSetPasswordRequiresAlterUserPrivilege(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ses := newSes(nil, ctrl)
+	// A non-admin caller in a non-sys tenant: the privilege graph resolves
+	// zero ALTER USER grants for it from the (empty) catalog.
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        "acc1",
+		User:          "attacker",
+		DefaultRole:   publicRoleName,
+		TenantID:      1001,
+		UserID:        42,
+		DefaultRoleID: publicRoleID,
+	})
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	// The attacker holds no roles: the privilege catalog reads resolve to
+	// empty grants, so the shadow ALTER USER determination must deny.
+	bh.sql2result[getSqlForRoleIdOfUserId(42)] = newMrsForRoleIdOfUserId(nil)
+	bh.sql2result[getSqlForCheckUserGrant(int64(publicRoleID), 42)] = newMrsForCheckUserGrant(nil)
+	for _, priv := range []PrivilegeType{PrivilegeTypeAlterUser, PrivilegeTypeAccountAll} {
+		for _, withSysScope := range []bool{false, true} {
+			bh.sql2result[getSqlForCheckRoleHasAccountLevelForStarWithSysScope(
+				int64(publicRoleID), priv, withSysScope)] = newMrsForCheckRoleHasPrivilege(nil)
+		}
+	}
+
+	execCtx := &ExecCtx{reqCtx: ctx}
+	st := &tree.SetPassword{
+		User:     &tree.User{Username: "victim", Hostname: "%"},
+		Password: "NewPass567",
+	}
+	err := handleSetPassword(ses, execCtx, st)
+	if err == nil || !strings.Contains(err.Error(), "do not have privilege") {
+		t.Fatalf("unexpected err %v; executed sqls: %v", err, bh.executedSQLs)
+	}
+
+	// The victim's password must not be touched at all.
+	sql, err2 := getSqlForUpdatePasswordOfUser(context.TODO(), HashPassWord("NewPass567"), "victim")
+	require.NoError(t, err2)
+	require.NotContains(t, bh.executedSQLs, sql)
+}
+
+// TestDoAlterUserCommitFailureKeepsSandbox: the expired-password sandbox of
+// the session is released only after the password change commits. A commit
+// failure rolls the change back, so the session must stay sand-boxed.
+func TestDoAlterUserCommitFailureKeepsSandbox(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	ses := newSes(nil, ctrl)
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	bh.sql2result["begin;"] = nil
+	bh.sql2result["commit;"] = nil
+	bh.sql2result["rollback;"] = nil
+	bh.sql2err["commit;"] = moerr.NewInternalErrorNoCtx("injected commit failure")
+
+	sql, err := getSqlForPasswordOfUser(context.TODO(), rootName)
+	require.NoError(t, err)
+	bh.sql2result[sql] = newMrsForPasswordOfUser([][]interface{}{{0, "111", 0}})
+
+	sql, err = getSqlForCheckUserHasRole(context.TODO(), rootName, moAdminRoleID)
+	require.NoError(t, err)
+	bh.sql2result[sql] = newMrsForSqlForCheckUserHasRole([][]interface{}{{0, 0}})
+
+	ses.rt = &Routine{}
+	ses.getRoutine().setExpired(true)
+
+	au := &alterUser{
+		IfExists: false,
+		Users: []*user{{
+			Username:  rootName,
+			Hostname:  "%",
+			AuthExist: true,
+			IdentTyp:  tree.AccountIdentifiedByPassword,
+			IdentStr:  "NewPass567",
+		}},
+	}
+	err = doAlterUser(ctx, ses, au)
+	require.Error(t, err)
+	require.True(t, ses.getRoutine().isExpired(),
+		"a rolled-back password change must not release the expired-password sandbox")
+}

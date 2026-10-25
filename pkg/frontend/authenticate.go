@@ -553,14 +553,20 @@ const (
 	// when there is no explicit per-user expiration: the account then follows
 	// the global default_password_lifetime policy.
 	passwordExpireDefaultTime = "NULL"
-	// passwordExpireNeverTime is the sentinel timestamp persisted in
-	// mo_user.expired_time by PASSWORD EXPIRE NEVER. The column is a plain
-	// timestamp without extra lifetime flags, so "never expires" is encoded
-	// as an expiration instant in the far future. An explicit (non-NULL)
-	// expired_time always takes precedence over default_password_lifetime,
-	// which is exactly the MySQL semantics of a per-user PASSWORD EXPIRE NEVER
-	// (it also disables the default lifetime policy for that account).
-	passwordExpireNeverTime = "9999-12-31 23:59:59"
+	// PASSWORD EXPIRE NEVER is persisted through this session-local now()
+	// form. mo_user.expired_time is a plain timestamp column, so every
+	// write uses current_timestamp() (never utc_timestamp()): a session-local
+	// DATETIME round-trips into TIMESTAMP as exactly the same instant in
+	// every session time zone, while a UTC DATETIME is re-interpreted in the
+	// writing session's time zone and lands shifted by that offset.
+	passwordExpireNeverTimeSql = "current_timestamp() + interval 90000 day"
+	// passwordExpireNeverHorizonSql is the horizon used to keep the
+	// never-expire marker across password changes: an explicit expiration
+	// beyond it is preserved instead of being cleared (see
+	// updatePasswordOfUserFormat). The preserve horizon (~109 years) sits
+	// deliberately below the NEVER write (~246 years) and far above every
+	// realistic PASSWORD EXPIRE INTERVAL.
+	passwordExpireNeverHorizonSql = "current_timestamp() + interval 40000 day"
 
 	defaultPasswordEnv = "DEFAULT_PASSWORD"
 
@@ -1325,7 +1331,12 @@ const (
 
 	getPasswordOfUserFormat = `select user_id, authentication_string, default_role from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
-	getLockInfoOfUserFormat = `select status, login_attempts, lock_time, expired_time from mo_catalog.mo_user where user_name = "%s" order by user_id;`
+	// The two trailing booleans are evaluated in UTC at the server, so the
+	// login-time expiry decision is independent of any session time zone:
+	//   3: has an explicit expiration (expired_time is not null)
+	//   4: that explicit expiration has been reached
+	//     (expired_time <= current_timestamp())
+	getLockInfoOfUserFormat = `select status, login_attempts, lock_time, expired_time is not null, expired_time <= current_timestamp() from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
 	getExpiredTimeOfUserFormat = `select password_last_changed from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
@@ -1337,9 +1348,9 @@ const (
 	// MySQL clears the password_expired flag of the account once the password
 	// is reset, so expired_time is reset to NULL (fall back to the global
 	// default_password_lifetime policy) together with password_last_changed.
-	// The one exception is the PASSWORD EXPIRE NEVER sentinel: in MySQL the
-	// never-expire lifetime survives a password change, so it is kept here.
-	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" , password_last_changed = utc_timestamp(), expired_time = if(expired_time = '` + passwordExpireNeverTime + `', expired_time, null) where user_name = "%s" order by user_id;`
+	// The one exception is the never-expire marker: in MySQL the never-expire
+	// lifetime survives a password change, so it is kept here.
+	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" , password_last_changed = current_timestamp(), expired_time = if(expired_time > ` + passwordExpireNeverHorizonSql + `, expired_time, null) where user_name = "%s" order by user_id;`
 
 	updateExpiredTimeOfUserFormat = `update mo_catalog.mo_user set expired_time = %s where user_name = "%s" order by user_id;`
 
@@ -1868,28 +1879,37 @@ func getSqlForUpdateExpiredTimeOfUser(expiredTime string, user string) string {
 }
 
 // convertMiscOptToExpiredTime translates a PASSWORD EXPIRE misc option of
-// CREATE/ALTER USER into the raw SQL value assigned to mo_user.expired_time.
-// The returned value is either NULL (follow the global default lifetime
-// policy) or a quoted UTC timestamp literal. It reports false when opt is not
-// a password-expire option.
-//   - PASSWORD EXPIRE        : the password expires right now.
-//   - PASSWORD EXPIRE INTERVAL n DAY : the password expires in n days.
-//   - PASSWORD EXPIRE NEVER  : expiration is pushed to the far-future
-//     sentinel passwordExpireNeverTime, i.e. the explicit expired_time always
+// CREATE/ALTER USER into the raw SQL expression assigned to
+// mo_user.expired_time. The expression is either NULL (follow the global
+// default lifetime policy) or a session-local now() form. It reports false
+// when opt is not a password-expire option.
+//
+// mo_user.expired_time is a TIMESTAMP column, so every write uses
+// current_timestamp(): a session-local DATETIME round-trips into TIMESTAMP
+// as exactly the same instant in every session time zone, while
+// utc_timestamp() would be re-interpreted in the writing session's time zone
+// and land shifted by that offset. Likewise the login-time read compares
+// with current_timestamp() (see getLockInfoOfUserSql), so the expiry
+// decision is independent of both the writing and the reading session's
+// time zone. Embedding a client-side wall clock as a string literal would
+// shift the same way through the string-to-TIMESTAMP cast.
+//   - PASSWORD EXPIRE        : current_timestamp() — expires right now.
+//   - PASSWORD EXPIRE INTERVAL n DAY : current_timestamp() + n days.
+//   - PASSWORD EXPIRE NEVER  : passwordExpireNeverTimeSql, i.e.
+//     current_timestamp() pushed ~246 years out — "never" in every time
+//     zone, while still being stored as an absolute instant. It also always
 //     wins over default_password_lifetime, matching MySQL (a per-account
 //     lifetime of 0 disables the default policy for that account).
 //   - PASSWORD EXPIRE DEFAULT: NULL, the account follows the global
 //     default_password_lifetime policy.
 func convertMiscOptToExpiredTime(opt tree.UserMiscOption) (string, bool) {
-	now := time.Now().UTC()
-	format := "2006-01-02 15:04:05"
 	switch o := opt.(type) {
 	case *tree.UserMiscOptionPasswordExpireNone:
-		return "\"" + now.Format(format) + "\"", true
+		return "current_timestamp()", true
 	case *tree.UserMiscOptionPasswordExpireInterval:
-		return "\"" + now.AddDate(0, 0, int(o.Value)).Format(format) + "\"", true
+		return fmt.Sprintf("current_timestamp() + interval %d day", o.Value), true
 	case *tree.UserMiscOptionPasswordExpireNever:
-		return "\"" + passwordExpireNeverTime + "\"", true
+		return passwordExpireNeverTimeSql, true
 	case *tree.UserMiscOptionPasswordExpireDefault:
 		return passwordExpireDefaultTime, true
 	}
@@ -3282,6 +3302,19 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	bh := ses.GetBackgroundExec(ctx)
 	defer bh.Close()
 
+	// passwordUpdated tracks whether the password of the session user was
+	// changed below. The deferred release of the expired-password sandbox is
+	// registered before the finishTxn defer so that it runs after it: the
+	// sandbox is left only when the password change has actually been
+	// committed. A rolled-back change keeps the session sand-boxed.
+	passwordUpdated := false
+	defer func() {
+		if err == nil && passwordUpdated && userName == currentUser &&
+			ses.getRoutine() != nil && ses.getRoutine().isExpired() {
+			ses.getRoutine().setExpired(false)
+		}
+	}()
+
 	// put it into the single transaction
 	err = bh.Exec(ctx, "begin")
 	defer func() {
@@ -3405,12 +3438,11 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 				return err
 			}
 		}
-		// the password update cleared the explicit password expiration; when
-		// the session user just changed its own password, release the
-		// expired-password sandbox of the session right away.
-		if userName == currentUser && ses.getRoutine() != nil && ses.getRoutine().isExpired() {
-			ses.getRoutine().setExpired(false)
-		}
+		// The password update cleared the explicit password expiration.
+		// Arm the post-commit release of the expired-password sandbox: the
+		// deferred handler above unlocks the session only after the change
+		// has been committed.
+		passwordUpdated = true
 	} else {
 		if doLockOrUnlock == expirePassword {
 			sql = getSqlForUpdateExpiredTimeOfUser(expiredTime, userName)

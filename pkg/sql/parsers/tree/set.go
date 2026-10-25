@@ -197,8 +197,9 @@ func (node *SetPassword) Format(ctx *FmtCtx) {
 		ctx.WriteString(" for ")
 		node.User.Format(ctx)
 	}
-	ctx.WriteString(" = ")
-	ctx.WriteString(node.Password)
+	// Never render the clear-text password into logs, traces or statement
+	// strings: always mask it like the IDENTIFIED BY secrets.
+	ctx.WriteString(" = '******'")
 }
 
 func NewSetPassword(u *User, p string) *SetPassword {

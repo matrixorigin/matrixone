@@ -396,6 +396,24 @@ func TestHandleSqlForRecord(t *testing.T) {
 		input := first + "'first-test-value'; CREATE USER u IDENTIFIED BY 'password-test-value'; " + last + "'last-test-value'"
 		require.Equal(t, []string{first + "'******'", "CREATE USER u IDENTIFIED BY '******'", last + "'******'"}, HandleSqlForRecord(input))
 	})
+	t.Run("set password literal is masked", func(t *testing.T) {
+		require.Equal(t, []string{"SET PASSWORD = '******'"},
+			HandleSqlForRecord("SET PASSWORD = 'set-password-test-value'"))
+		require.Equal(t, []string{"SET PASSWORD FOR u1 = '******'"},
+			HandleSqlForRecord("SET PASSWORD FOR u1 = 'set-password-test-value'"))
+		require.Equal(t, []string{"SET PASSWORD FOR 'u1'@'%' = '******'"},
+			HandleSqlForRecord("SET PASSWORD FOR 'u1'@'%' = 'set-password-test-value'"))
+		require.Equal(t, []string{"set password = '******'", "SET PASSWORD FOR u1 = '******'"},
+			HandleSqlForRecord("set password = 'first-test-value'; SET PASSWORD FOR u1 = 'second-test-value'"))
+	})
+	t.Run("password keyword without set is not masked", func(t *testing.T) {
+		// ALTER USER ... PASSWORD EXPIRE has no secret literal to mask.
+		require.Equal(t, []string{"ALTER USER u1 PASSWORD EXPIRE INTERVAL 3 DAY"},
+			HandleSqlForRecord("ALTER USER u1 PASSWORD EXPIRE INTERVAL 3 DAY"))
+		// 'set password' inside a string literal is not a statement shape.
+		require.Equal(t, []string{"SELECT 'set password = x'"},
+			HandleSqlForRecord("SELECT 'set password = x'"))
+	})
 	// Test remove /* cloud_user */ prefix
 	var ret []string
 	ret = HandleSqlForRecord(" ;   ;  ")

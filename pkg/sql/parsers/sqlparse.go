@@ -135,6 +135,10 @@ func handleSQLForRecordFragment(sql string) string {
 	previousToken := 0
 	indexes := []int{-1}
 	eq := int('=')
+	// sawSet / sawSetPassword track the SET PASSWORD [FOR user] = 'secret'
+	// shape so its literal can be masked like the IDENTIFIED BY secrets.
+	sawSet := false
+	sawSetPassword := false
 	for scanner.Pos < len(sql) {
 		typ, s := scanSQLToken(scanner, &previousToken)
 		if typ == mysql.IDENTIFIED {
@@ -151,6 +155,16 @@ func handleSQLForRecordFragment(sql string) string {
 				_, s = scanSQLToken(scanner, &previousToken)
 				indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
 			}
+		} else if sawSetPassword && typ == eq {
+			// SET PASSWORD [= 'secret' | FOR user = 'secret']: mask the
+			// password literal right after the '='.
+			_, s = scanSQLToken(scanner, &previousToken)
+			indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
+			sawSet, sawSetPassword = false, false
+		} else if sawSet && typ == mysql.PASSWORD {
+			sawSetPassword = true
+		} else if typ == mysql.SET {
+			sawSet = true
 		}
 	}
 	indexes = append(indexes, len(sql))

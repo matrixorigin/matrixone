@@ -3438,8 +3438,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		needCheckLock        bool
 		maxLoginAttempts     int64
 		needCheckHost        bool
-		expiredTime          string
-		passwordExpired      bool
+		explicitExpired      bool
 	)
 
 	//Get tenant info
@@ -3683,7 +3682,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	statusColIdx := uint64(0)
 	loginAttemptsColIdx := uint64(1)
 	lockTimeColIdx := uint64(2)
-	expiredTimeColIdx := uint64(3)
+	hasExplicitExpireColIdx := uint64(3)
+	expiredColIdx := uint64(4)
 	userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userLockInfoSql)
 	if err != nil {
 		return nil, err
@@ -3703,18 +3703,22 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 
-	// expired_time is NULL when the account follows the global
-	// default_password_lifetime policy; otherwise it is the explicit
-	// instant at which the password expires (PASSWORD EXPIRE family).
-	expiredTimeIsNull, err := userRsset[0].ColumnIsNull(tenantCtx, 0, expiredTimeColIdx)
+	// The two remaining columns are already evaluated at the server (see
+	// getLockInfoOfUserSql): the TIMESTAMP column and current_timestamp()
+	// share the session-local TIMESTAMP convention, so the expiry decision
+	// below is independent of the session time zone. A NULL expired_time
+	// (follow the global default_password_lifetime policy) reports 0 on
+	// both.
+	hasExplicitExpired, err := userRsset[0].GetUint64(tenantCtx, 0, hasExplicitExpireColIdx)
 	if err != nil {
 		return nil, err
 	}
-	if !expiredTimeIsNull {
-		expiredTime, err = userRsset[0].GetString(tenantCtx, 0, expiredTimeColIdx)
-		if err != nil {
-			return nil, err
+	if hasExplicitExpired != 0 {
+		expireReached, err2 := userRsset[0].GetUint64(tenantCtx, 0, expiredColIdx)
+		if err2 != nil {
+			return nil, err2
 		}
+		explicitExpired = expireReached != 0
 	}
 
 	if userStatus == userStatusLockForever {
@@ -3748,17 +3752,15 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 				return nil, err
 			}
 
-			if !expiredTimeIsNull {
+			if hasExplicitExpired != 0 {
 				// An explicit expired_time (PASSWORD EXPIRE family) always
-				// takes precedence over the default_password_lifetime policy:
-				// the password is expired once now() >= expired_time. Note the
-				// far-future sentinel persisted by PASSWORD EXPIRE NEVER just
-				// means "never expired" here.
-				passwordExpired, err = checkPasswordExpiredAt(expiredTime)
-				if err != nil {
-					return nil, err
-				}
-				if passwordExpired {
+				// takes precedence over the default_password_lifetime
+				// policy: the password is expired once now() >=
+				// expired_time, evaluated at the server on TIMESTAMP
+				// semantics (independent of the session time zone).
+				// The far-future marker persisted by PASSWORD EXPIRE
+				// NEVER simply never elapses.
+				if explicitExpired {
 					ses.getRoutine().setExpired(true)
 				}
 			} else if defPwdLife > 0 {
@@ -4935,18 +4937,6 @@ func whetherNeedCheckExpired(ctx context.Context, ses *Session) (int, error) {
 		return 0, err
 	}
 	return defaultPasswordLifetime, nil
-}
-
-// checkPasswordExpiredAt reports whether the explicit expiration instant
-// (mo_user.expired_time) has been reached. The far-future sentinel persisted
-// by PASSWORD EXPIRE NEVER simply never elapses.
-func checkPasswordExpiredAt(expiredTime string) (bool, error) {
-	expireAt, err := time.ParseInLocation("2006-01-02 15:04:05", expiredTime, time.UTC)
-	if err != nil {
-		return false, err
-	}
-	now := time.Now().UTC()
-	return !expireAt.After(now), nil
 }
 
 func checkPasswordExpired(defPwdLifeTime int, lastChangedTime string) (bool, error) {

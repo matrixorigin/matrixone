@@ -347,6 +347,10 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 	}
 
 	switch stmt := statement.(type) {
+	case *tree.SetPassword:
+		// The raw text carries the clear-text password; the AST render masks
+		// it (SetPassword.Format prints '******').
+		return tree.String(statement, dialect.MYSQL)
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
 		*tree.CreateMongoDBConnection, *tree.AlterMongoDBConnection:
 		return tree.String(statement, dialect.MYSQL)
@@ -361,8 +365,25 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 		}
 		return text
 	default:
+		// Parse-failure logs arrive without an AST. A SET PASSWORD-shaped
+		// text still carries the clear-text password: mask the literal
+		// lexically (same scanner masking as HandleSqlForRecord) before the
+		// raw text can reach any log.
+		if isSetPasswordText(text) {
+			return strings.Join(parsers.HandleSqlForRecord(text), ";")
+		}
 		return text
 	}
+}
+
+// isSetPasswordText reports whether the statement text is a SET PASSWORD
+// statement. It is a lexical guard for log paths that have no parsed AST;
+// the masking itself happens in parsers.HandleSqlForRecord.
+func isSetPasswordText(text string) bool {
+	fields := strings.Fields(text)
+	return len(fields) >= 2 &&
+		strings.EqualFold(fields[0], "set") &&
+		strings.EqualFold(fields[1], "password")
 }
 
 // redactStatementErrorForLogging replaces a parser echo of __mo_query before it
@@ -3582,15 +3603,34 @@ func handleAlterUser(ses FeSession, execCtx *ExecCtx, st *tree.AlterUser) error 
 // and history included). Changing the password also clears the explicit
 // password expiration of the account (except PASSWORD EXPIRE NEVER) and,
 // when the current session user changes its own password, releases the
-// expired-password sandbox of the session.
+// expired-password sandbox of the session once the change commits (see
+// doAlterUser).
 func handleSetPassword(ses FeSession, execCtx *ExecCtx, st *tree.SetPassword) error {
 	tenant := ses.GetTenantInfo()
 
 	userName := tenant.GetUser()
 	hostName := rootHost
 	if st.User != nil {
-		userName = st.User.Username
+		var err error
+		userName, err = normalizeName(execCtx.reqCtx, st.User.Username)
+		if err != nil {
+			return err
+		}
 		hostName = st.User.Hostname
+	}
+
+	// Changing another account's password is the ALTER USER privilege: run
+	// the exact privilege determination of ALTER USER on the session. MySQL
+	// lets every account change its own password without any grant, so the
+	// self-change path is intentionally not gated.
+	if userName != tenant.GetUser() {
+		s := ses.(*Session)
+		saved := s.GetPrivilege()
+		_, gateErr := authenticateUserCanExecuteStatement(execCtx.reqCtx, s, &tree.AlterUser{})
+		s.SetPrivilege(saved)
+		if gateErr != nil {
+			return gateErr
+		}
 	}
 
 	au := &alterUser{
@@ -3603,18 +3643,7 @@ func handleSetPassword(ses FeSession, execCtx *ExecCtx, st *tree.SetPassword) er
 			IdentStr:  st.Password,
 		}},
 	}
-	if err := doAlterUser(execCtx.reqCtx, ses.(*Session), au); err != nil {
-		return err
-	}
-
-	// A user that resets its own password leaves the expired-password
-	// sandbox of the current session right away, like MySQL does.
-	if userName == tenant.GetUser() {
-		if s, ok := ses.(*Session); ok && s.getRoutine() != nil && s.getRoutine().isExpired() {
-			s.getRoutine().setExpired(false)
-		}
-	}
-	return nil
+	return doAlterUser(execCtx.reqCtx, ses.(*Session), au)
 }
 
 // handleCreateRole creates the new role
