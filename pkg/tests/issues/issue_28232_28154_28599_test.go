@@ -138,6 +138,23 @@ func TestIssueTemporalCompatibility(t *testing.T) {
 				require.NoError(t, conn.QueryRowContext(ctx, q).Scan(&text), q)
 				require.Equal(t, "2024-01-01 00:00:00.123456", text, q)
 			}
+			for _, fraction := range []string{
+				"000001", "123456", "125000", "250000", "375000",
+				"500000", "625000", "750000", "875000", "999999",
+			} {
+				t.Run("fraction_"+fraction, func(t *testing.T) {
+					exec(t, "set session timestamp=1704067200."+fraction)
+					var configuredText, now, currentTimestamp string
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"select cast(@@session.timestamp as decimal(20,6)), cast(now(6) as char), cast(current_timestamp(6) as char)").
+						Scan(&configuredText, &now, &currentTimestamp))
+					require.Equal(t, "1704067200."+fraction, configuredText)
+					require.Equal(t, "2024-01-01 00:00:00."+fraction, now)
+					require.Equal(t, now, currentTimestamp)
+				})
+			}
+			// Keep the original control before checking warm prepared-handle reuse.
+			exec(t, "set session timestamp=1704067200.123456")
 			require.NoError(t, conn.QueryRowContext(ctx, "select unix_timestamp()").Scan(&count))
 			require.Equal(t, 1704067200, count)
 			require.NoError(t, conn.QueryRowContext(ctx, "select year(sysdate())").Scan(&count))
@@ -149,17 +166,47 @@ func TestIssueTemporalCompatibility(t *testing.T) {
 				require.NoError(t, stmt.QueryRowContext(ctx).Scan(&text))
 				require.Equal(t, "2024-01-01 00:00:00.123456", text)
 			}
+			for _, fraction := range []string{"125000", "625000", "125000"} {
+				exec(t, "set session timestamp=1704067200."+fraction)
+				require.NoError(t, stmt.QueryRowContext(ctx).Scan(&text))
+				require.Equal(t, "2024-01-01 00:00:00."+fraction, text)
+			}
+			exec(t, "set @qa_temporal_sql_mode=@@session.sql_mode")
+			defer exec(t, "set session sql_mode=@qa_temporal_sql_mode")
+			for _, mode := range []string{"", "TIME_TRUNCATE_FRACTIONAL"} {
+				exec(t, "set session sql_mode='"+mode+"'")
+				var seconds, milliseconds, microseconds string
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select cast(now() as char), cast(now(3) as char), cast(now(6) as char)").
+					Scan(&seconds, &milliseconds, &microseconds))
+				require.Equal(t, "2024-01-01 00:00:00", seconds)
+				require.Equal(t, "2024-01-01 00:00:00.125", milliseconds)
+				require.Equal(t, "2024-01-01 00:00:00.125000", microseconds)
+			}
+			exec(t, "set session sql_mode=@qa_temporal_sql_mode")
+			_, e = conn.ExecContext(ctx, "set session timestamp=-1")
+			require.Error(t, e)
+			require.NoError(t, stmt.QueryRowContext(ctx).Scan(&text))
+			require.Equal(t, "2024-01-01 00:00:00.125000", text, "rejected SET must retain the override")
 			exec(t, "create table override_t(id int primary key, created_at timestamp(6) default current_timestamp(6), updated_at timestamp(6) default current_timestamp(6) on update current_timestamp(6))")
 			exec(t, "insert into override_t(id) values(1)")
 			require.NoError(t, conn.QueryRowContext(ctx, "select cast(created_at as char) from override_t where id=1").Scan(&text))
-			require.Equal(t, "2024-01-01 00:00:00.123456", text)
-			exec(t, "set session timestamp=1704067260.5")
+			require.Equal(t, "2024-01-01 00:00:00.125000", text)
+			exec(t, "set session timestamp=1704067260.25")
 			exec(t, "update override_t set id=2 where id=1")
 			require.NoError(t, conn.QueryRowContext(ctx, "select cast(updated_at as char) from override_t where id=2").Scan(&text))
-			require.Equal(t, "2024-01-01 00:01:00.500000", text)
-			exec(t, "set session timestamp=0")
-			require.NoError(t, conn.QueryRowContext(ctx, "select year(now())").Scan(&count))
-			require.NotEqual(t, 2024, count)
+			require.Equal(t, "2024-01-01 00:01:00.250000", text)
+			exec(t, "set session timestamp=0.0000001")
+			require.NoError(t, stmt.QueryRowContext(ctx).Scan(&text))
+			require.Equal(t, "1970-01-01 00:00:00.000000", text, "a positive override rounded to epoch zero is not a reset")
+			for _, reset := range []string{"0", "DEFAULT"} {
+				exec(t, "set session timestamp=1704067200.125")
+				before := time.Now().Unix()
+				exec(t, "set session timestamp="+reset)
+				require.NoError(t, conn.QueryRowContext(ctx, "select unix_timestamp()").Scan(&count))
+				require.GreaterOrEqual(t, int64(count), before)
+				require.LessOrEqual(t, int64(count), time.Now().Unix())
+			}
 		})
 
 		exec(t, "drop database qa_temporal_transfer")

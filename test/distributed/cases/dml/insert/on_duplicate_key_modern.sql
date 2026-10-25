@@ -467,6 +467,8 @@ drop table if exists t_odku_mfk_child;
 drop table if exists t_odku_mfk_p1;
 drop table if exists t_odku_mfk_p2;
 
+-- Seed historical timestamps to distinguish no-op preservation from a real
+-- update without relying on wall-clock sleeps or timestamp precision.
 -- ODKU no-op on a table with an implicit ON UPDATE CURRENT_TIMESTAMP column:
 -- the auto-update column must not defeat physical no-op detection or advance.
 -- Under mo-tester's CLIENT_FOUND_ROWS connection the logical affected count is
@@ -477,9 +479,8 @@ create table t_odku_onupdate (
   v int,
   updated_at timestamp default current_timestamp on update current_timestamp
 );
-insert into t_odku_onupdate(id, v) values (1, 10);
+insert into t_odku_onupdate(id, v, updated_at) values (1, 10, '2000-01-01 00:00:00');
 set @ts0 = (select updated_at from t_odku_onupdate where id = 1);
-select sleep(2);
 insert into t_odku_onupdate(id, v) values (1, 10) on duplicate key update v = v;
 select updated_at = @ts0 as ts_unchanged from t_odku_onupdate where id = 1;
 -- a real change must count as delete+insert (2) and advance the timestamp
@@ -550,9 +551,8 @@ create table t_odku_onupdate_gen (
   updated_at timestamp default current_timestamp on update current_timestamp,
   g timestamp as (updated_at) stored
 );
-insert into t_odku_onupdate_gen(id, v) values (1, 10);
+insert into t_odku_onupdate_gen(id, v, updated_at) values (1, 10, '2000-01-01 00:00:00');
 set @g0 = (select g from t_odku_onupdate_gen where id = 1);
-select sleep(2);
 insert into t_odku_onupdate_gen(id, v) values (1, 10) on duplicate key update v = v;
 select updated_at = @g0 as ts_unchanged, g = @g0 as g_unchanged from t_odku_onupdate_gen where id = 1;
 insert into t_odku_onupdate_gen(id, v) values (1, 99) on duplicate key update v = values(v);
@@ -590,9 +590,8 @@ create table t_odku_sec_uk (
   v int,
   updated_at timestamp default current_timestamp on update current_timestamp
 );
-insert into t_odku_sec_uk(id, u, v) values (1, 10, 5);
+insert into t_odku_sec_uk(id, u, v, updated_at) values (1, 10, 5, '2000-01-01 00:00:00');
 set @ts_sec = (select updated_at from t_odku_sec_uk where u = 10);
-select sleep(2);
 insert into t_odku_sec_uk(id, u, v) values (2, 10, 99) on duplicate key update v = v;
 select id, u, v, updated_at = @ts_sec as ts_unchanged from t_odku_sec_uk order by id;
 insert into t_odku_sec_uk(id, u, v) values (3, 10, 5) on duplicate key update v = v + 1;

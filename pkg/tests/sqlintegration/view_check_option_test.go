@@ -130,9 +130,21 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 					source := fmt.Sprintf("%s.name_const_source_%d", schema, index)
 					execSQLRequire(t, ctx, db, "create view "+source+" as "+tc.selectSQL)
 					read := func(view string) [3]string {
+						t.Helper()
+						valueRows, err := db.QueryContext(ctx, "select *, charset(c), collation(c) from "+view)
+						require.NoError(t, err)
+						defer valueRows.Close()
+						valueNames, err := valueRows.Columns()
+						require.NoError(t, err)
+						require.Len(t, valueNames, 3)
+						require.Equal(t, "c", valueNames[0])
+						require.True(t, valueRows.Next(), "view %s: %v", view, valueRows.Err())
 						var values [3]string
-						require.NoError(t, db.QueryRowContext(ctx,
-							"select c, charset(c), collation(c) from "+view).Scan(&values[0], &values[1], &values[2]))
+						require.NoError(t, valueRows.Scan(&values[0], &values[1], &values[2]))
+						require.False(t, valueRows.Next(), "view must return exactly one row: %s", view)
+						require.NoError(t, valueRows.Err())
+						// Keep the independent empty-result metadata path. The data
+						// result above also checks its actual wire column shape.
 						rows, err := db.QueryContext(ctx, "select * from "+view+" limit 0")
 						require.NoError(t, err)
 						defer rows.Close()
