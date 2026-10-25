@@ -71,6 +71,15 @@ const (
 	DomainMax      Domain = 4096
 )
 
+// triggerSelectors describes optional ECHO configuration entries. The map owner
+// reads their arguments together with the target entry, without triggering them.
+type triggerSelectors struct {
+	intName     string
+	intValue    int64
+	stringName  string
+	stringValue string
+}
+
 // faultEntry describes how we shall fail
 type faultEntry struct {
 	cmd              int          // command
@@ -82,6 +91,7 @@ type faultEntry struct {
 	iarg             int64  // int arg
 	sarg             string // string arg
 	constant         bool
+	selectors        *triggerSelectors
 
 	nWaiters int
 	waiters  []chan struct{}
@@ -139,6 +149,12 @@ func (fm *faultMap) run() {
 				fm.chOut <- nil
 			}
 		case TRIGGER:
+			// Match and consume the target frequency in one owner operation.
+			// A caller cannot pass old selectors and claim a newly installed WAIT.
+			if !fm.matchesSelectors(e.selectors) {
+				fm.chOut <- nil
+				continue
+			}
 			var out *faultEntry
 			if v, ok := fm.faultPoints[e.name]; ok {
 				count := v.cnt.Add(1)
@@ -160,6 +176,25 @@ func (fm *faultMap) run() {
 			fm.chOut <- nil
 		}
 	}
+}
+
+func (fm *faultMap) matchesSelectors(selectors *triggerSelectors) bool {
+	if selectors == nil {
+		return true
+	}
+	if selectors.intName != "" {
+		if entry := fm.faultPoints[selectors.intName]; entry != nil &&
+			(entry.action != ECHO || entry.iarg != selectors.intValue) {
+			return false
+		}
+	}
+	if selectors.stringName != "" {
+		if entry := fm.faultPoints[selectors.stringName]; entry != nil &&
+			(entry.action != ECHO || entry.sarg != selectors.stringValue) {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *faultEntry) do() (int64, string) {
@@ -369,19 +404,32 @@ func TriggerFault(name string) (iret int64, sret string, exist bool) {
 	return TriggerFaultInDomain(DomainDefault, name)
 }
 
+// TriggerFaultWithSelectors atomically matches optional ECHO selector arguments
+// before consuming the target's trigger frequency. Missing selectors impose no
+// restriction; non-ECHO selectors reject the trigger. Selectors are configuration
+// reads: their actions and frequencies are not executed or consumed.
+func TriggerFaultWithSelectors(name, intSelector string, iarg int64, stringSelector, sarg string) (int64, string, bool) {
+	if !Status() {
+		return 0, "", false
+	}
+	return triggerFaultInDomain(context.Background(), DomainDefault, name, false, &triggerSelectors{
+		intName: intSelector, intValue: iarg, stringName: stringSelector, stringValue: sarg,
+	})
+}
+
 func TriggerFaultWithContext(ctx context.Context, name string) (iret int64, sret string, exist bool) {
 	return TriggerFaultInDomainWithContext(ctx, DomainDefault, name)
 }
 
 func TriggerFaultInDomain(domain Domain, name string) (iret int64, sret string, exist bool) {
-	return triggerFaultInDomain(context.Background(), domain, name, false)
+	return triggerFaultInDomain(context.Background(), domain, name, false, nil)
 }
 
 func TriggerFaultInDomainWithContext(ctx context.Context, domain Domain, name string) (iret int64, sret string, exist bool) {
-	return triggerFaultInDomain(ctx, domain, name, true)
+	return triggerFaultInDomain(ctx, domain, name, true, nil)
 }
 
-func triggerFaultInDomain(ctx context.Context, domain Domain, name string, useCtx bool) (iret int64, sret string, exist bool) {
+func triggerFaultInDomain(ctx context.Context, domain Domain, name string, useCtx bool, selectors *triggerSelectors) (iret int64, sret string, exist bool) {
 	fm := enabled[domain].Load()
 	if fm == nil {
 		return
@@ -389,6 +437,7 @@ func triggerFaultInDomain(ctx context.Context, domain Domain, name string, useCt
 	var msg faultEntry
 	msg.cmd = TRIGGER
 	msg.name = name
+	msg.selectors = selectors
 
 	select {
 	case fm.chIn <- &msg:

@@ -1390,6 +1390,14 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					def.IsTemporary = true
 					indexNameMap[orig] = def.Name
 				}
+				stage := &temporaryDDLSession{Session: session, sessionID: c.proc.GetSessionInfo().SessionId,
+					aliases: make(map[temporaryTableAlias]string, len(indexNameMap))}
+				for alias, name := range indexNameMap {
+					stage.AddTempIndexTable(tmpDb, alias, name)
+				}
+				originalCtx := c.proc.Ctx
+				c.proc.Ctx = attachInternalExecutorSession(originalCtx, stage)
+				defer func() { c.proc.Ctx = originalCtx }()
 				for _, idx := range indexTableDef.Indexes {
 					if renamed, ok := indexNameMap[idx.IndexTableName]; ok {
 						idx.IndexTableName = renamed
@@ -1478,6 +1486,11 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				}
 			}
 			oTableDef.Indexes = append(oTableDef.Indexes, indexTableDef.Indexes...)
+			if isTemp {
+				for _, def := range indexInfo.IndexTables {
+					addTemporaryIndexAlias(c.proc.GetSession(), dbName, def.Name, def.Name)
+				}
+			}
 		case *plan.AlterTable_Action_AlterIndex:
 			hasUpdateConstraints = true
 			tableAlterIndex := act.AlterIndex
@@ -1995,6 +2008,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
 		}
+		// Index initialization SQL runs before the staged aliases are
+		// published. Lend the schema transaction's owner to nested execution.
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, session)
+		defer func() { c.proc.Ctx = originalCtx }()
 		if _, exists := session.GetTempTable(dbName, aliasName); exists {
 			if qry.GetIfNotExists() {
 				return nil
@@ -2191,12 +2209,16 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	}
 
 	rollbackTempAlias := false
+	tempIndexAliases := make(map[string]string)
 	if isTemp && session != nil {
 		session.AddTempTable(dbName, aliasName, tblName)
 		rollbackTempAlias = true
 		defer func() {
 			if rollbackTempAlias {
 				session.RemoveTempTable(dbName, aliasName)
+				for indexAlias := range tempIndexAliases {
+					session.RemoveTempTable(dbName, indexAlias)
+				}
 			}
 		}()
 	}
@@ -2462,6 +2484,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 				zap.Error(err),
 			)
 			return err
+		}
+
+		if isTemp && session != nil {
+			addTemporaryIndexAlias(session, dbName, def.Name, def.Name)
+			tempIndexAliases[def.Name] = def.Name
 		}
 
 		err = maybeCreateAutoIncrement(
@@ -3321,6 +3348,9 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
 		}
+		// Index backfill runs internal SQL before the new index aliases are
+		// published. Keep the authenticated owner for both root and index
+		// resolution, as ALTER TABLE already does for its nested SQL.
 		rootAlias := qry.Table
 		rootPhysical := ""
 		if realName, ok := session.GetTempTable(qry.Database, rootAlias); ok {
@@ -3343,6 +3373,14 @@ func (s *Scope) CreateIndex(c *Compile) error {
 				idx.IndexTableName = renamed
 			}
 		}
+		stage := &temporaryDDLSession{Session: session, sessionID: c.proc.GetSessionInfo().SessionId,
+			aliases: make(map[temporaryTableAlias]string, len(indexNameMap))}
+		for alias, name := range indexNameMap {
+			stage.AddTempIndexTable(qry.Database, alias, name)
+		}
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, stage)
+		defer func() { c.proc.Ctx = originalCtx }()
 		tempIndexNameMap = indexNameMap
 		tempTableSession = session
 	}
@@ -5602,6 +5640,11 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table clone")
 		}
+		// Seed deletion and index restore SQL must use the destination's
+		// authenticated owner, just like the preceding CREATE phase.
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, session)
+		defer func() { c.proc.Ctx = originalCtx }()
 		physicalName, ok := session.GetTempTable(dbName, tblName)
 		if !ok {
 			return moerr.NewInternalErrorf(c.proc.Ctx,

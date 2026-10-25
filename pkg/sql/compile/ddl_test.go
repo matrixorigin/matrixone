@@ -1667,8 +1667,10 @@ func TestScopeRestoreTemporaryCloneValidatesPhysicalDestination(t *testing.T) {
 			test.setup(proc, eng)
 			c := NewCompile("test", "test", "create temporary table temporary_table clone src", "", "", eng, proc, nil, false, nil, time.Now())
 
+			originalCtx := proc.Ctx
 			err := (&Scope{}).RestoreTable(c, newClonePlan())
 			require.ErrorContains(t, err, test.wantErr)
+			require.Same(t, originalCtx, proc.Ctx, "failed restore must not retain the borrowed session context")
 		})
 	}
 }

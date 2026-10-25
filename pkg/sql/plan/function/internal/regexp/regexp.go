@@ -212,6 +212,12 @@ func compile(expr string, mode syntax.Flags, longest bool) (*Regexp, error) {
 	}
 	regexp.mpool = i
 
+	// Finish all ordinary metadata and one-pass compilation before annotating
+	// the shared program for the bounded backtracking executor.
+	if regexp.onepass == nil && regexp.maxBitStateLen > 0 {
+		markEndTextRepeats(prog)
+	}
+
 	return regexp, nil
 }
 

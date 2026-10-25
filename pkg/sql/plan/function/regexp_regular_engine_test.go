@@ -90,6 +90,25 @@ func BenchmarkRegexpPredicateModes(b *testing.B) {
 	}
 }
 
+func BenchmarkRegexpTerminalPrefixRejection(b *testing.B) {
+	for _, pattern := range []string{`a.*b`, `a.*\z`} {
+		b.Run(pattern, func(b *testing.B) {
+			proc := testutil.NewProcess(b)
+			subjects := make([]string, 256)
+			want := make([]int64, len(subjects))
+			for i := range subjects {
+				subjects[i] = strings.Repeat("b", 300)
+			}
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), subjects, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{pattern}, nil),
+			}, NewFunctionTestResult(types.T_int64.ToType(), false, want, nil), newOpBuiltInRegexp().builtInRegexpInstr)
+			defer fc.Free()
+			fc.Benchmark(b)
+		})
+	}
+}
+
 // Consuming across a wide boundary must retain captures, whole-subject anchors
 // and occurrence offsets in every SQL regexp operation, even beyond ICU limits.
 func TestRegexpRegularCrossLineOperations(t *testing.T) {

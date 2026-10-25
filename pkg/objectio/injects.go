@@ -458,13 +458,9 @@ func PrintFlushEntryInjected() (string, bool) {
 }
 
 func CommitWaitInjected(tenantID uint32, txnID string) (string, bool) {
-	if target, _, selected := fault.TriggerFault(FJ_CommitWaitTargetTenant); selected && uint32(target) != tenantID {
-		return "", false
-	}
-	if _, target, selected := fault.TriggerFault(FJ_CommitWaitTargetTxn); selected && target != txnID {
-		return "", false
-	}
-	_, sarg, injected := fault.TriggerFault(FJ_CommitWait)
+	_, sarg, injected := fault.TriggerFaultWithSelectors(
+		FJ_CommitWait, FJ_CommitWaitTargetTenant, int64(tenantID), FJ_CommitWaitTargetTxn, txnID,
+	)
 	return sarg, injected
 }
 
