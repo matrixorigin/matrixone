@@ -90,7 +90,9 @@ func (builder *QueryBuilder) createDependentQuery() (*Query, error) {
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
 	for i, root := range q.Steps {
-		builder.rewriteDistinctToAGG(root)
+		if err := builder.rewriteDistinctToAGG(root); err != nil {
+			return nil, err
+		}
 		for j := range q.Nodes[root].ProjectList {
 			colRefBool[[2]int32{int32(i), int32(j)}] = true
 		}
