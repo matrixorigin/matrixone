@@ -32,7 +32,7 @@ import (
 )
 
 func TestTableMetaReaderRecordsCloneObjectOwnership(t *testing.T) {
-	tbl := newTxnTableForTest()
+	tbl := newTxnTableForTest(t)
 	txn := tbl.getTxn()
 	txn.BindTxnOp(tbl.db.op)
 	txn.engine.cloneTxnCache = newCloneTxnCache()

@@ -102,23 +102,19 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 	}
 	if len(lockOp.ctr.relations) == 0 {
 		lockOp.ctr.relations = make([]engine.Relation, len(lockOp.targets))
-		for i, target := range lockOp.targets {
-			if target.objRef != nil {
-				rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, lockOp.engine, target.objRef)
-				if err != nil {
-					return err
-				}
-				lockOp.ctr.relations[i] = rel
-			}
+	}
+	for i, target := range lockOp.targets {
+		if target.objRef == nil {
+			continue
 		}
-	} else {
-		for i, target := range lockOp.targets {
-			if target.objRef != nil {
-				err := lockOp.ctr.relations[i].Reset(proc.GetTxnOperator())
-				if err != nil {
-					return err
-				}
+		if lockOp.ctr.relations[i] == nil {
+			rel, err := colexec.GetRelAndPartitionRelsByObjRef(proc.Ctx, proc, lockOp.engine, target.objRef)
+			if err != nil {
+				return err
 			}
+			lockOp.ctr.relations[i] = rel
+		} else if err := lockOp.ctr.relations[i].Reset(proc.GetTxnOperator()); err != nil {
+			return err
 		}
 	}
 	if lockOp.ctr.parker == nil {
