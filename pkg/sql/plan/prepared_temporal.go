@@ -45,21 +45,21 @@ func WithPreparedTemporalTypes(ctx context.Context, snapshot *PreparedTemporalTy
 	return context.WithValue(ctx, preparedTemporalTypesKey{}, snapshot)
 }
 
-func (s *preparedSourceBindingState) widenTemporal(position int) {
-	if position < 0 || position >= len(s.bindings) || s.temporalTypes.widened(position) {
+func (state *preparedSourceBindingState) widenTemporal(position int) {
+	if position < 0 || position >= len(state.bindings) || state.temporalTypes.widened(position) {
 		return
 	}
-	if !s.temporalTypesDirty {
-		next := &PreparedTemporalTypes{datetime: make([]bool, len(s.bindings))}
-		if s.temporalTypes != nil {
-			copy(next.datetime, s.temporalTypes.datetime)
-			next.revision = s.temporalTypes.revision
+	if !state.temporalTypesDirty {
+		next := &PreparedTemporalTypes{datetime: make([]bool, len(state.bindings))}
+		if state.temporalTypes != nil {
+			copy(next.datetime, state.temporalTypes.datetime)
+			next.revision = state.temporalTypes.revision
 		}
-		s.temporalTypes = next
-		s.temporalTypesDirty = true
+		state.temporalTypes = next
+		state.temporalTypesDirty = true
 	}
-	s.temporalTypes.datetime[position] = true
-	s.temporalTypes.revision++
+	state.temporalTypes.datetime[position] = true
+	state.temporalTypes.revision++
 }
 
 func temporalParamValue(value any) any {
