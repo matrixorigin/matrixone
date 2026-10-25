@@ -74,5 +74,10 @@ set @narrow_id=1;
 execute narrow_stmt using @narrow_id;
 deallocate prepare narrow_stmt;
 
+-- Lexical integer precision must not change numeric-to-text assignment.
+create table literal_texts(id int primary key,b binary(4),v varchar(4),j json);
+insert into literal_texts values(1,0002,0002,0002),(2,'0002','0002','"0002"');
+select id,hex(b) as b,v,j from literal_texts order by id;
+
 set session sql_mode = @mixed_unsigned_saved_sql_mode;
 drop database mixed_unsigned_arithmetic_28581;

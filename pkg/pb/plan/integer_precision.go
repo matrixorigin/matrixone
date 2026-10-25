@@ -15,8 +15,9 @@
 package plan
 
 import (
-	"fmt"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // ValidateIntegerPrecision is an admission check, including after plan RPC
@@ -27,7 +28,9 @@ func (q *Query) ValidateIntegerPrecision() error {
 		return nil
 	}
 	g := q.IntegerPrecision
-	bad := func(reason string) error { return fmt.Errorf("invalid integer precision graph: %s", reason) }
+	bad := func(reason string) error {
+		return moerr.NewInvalidInputNoCtxf("invalid integer precision graph: %s", reason)
+	}
 	if g.SourceBudget < 65 || g.SourceBudget > math.MaxUint32-2 {
 		return bad("source budget")
 	}

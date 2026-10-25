@@ -17,6 +17,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,11 +53,15 @@ func TestIntegerPrecisionAdmission(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			q := validIntegerPrecisionQuery()
 			change(q)
-			require.Error(t, q.ValidateIntegerPrecision())
+			err := q.ValidateIntegerPrecision()
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "unexpected admission error: %v", err)
+			require.ErrorContains(t, err, "invalid integer precision graph: ")
 			data, err := q.Marshal()
 			require.NoError(t, err)
 			var decoded Query
-			require.Error(t, decoded.Unmarshal(data), "RPC admission must reject before result metadata access")
+			err = decoded.Unmarshal(data)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "RPC admission must reject before result metadata access: %v", err)
+			require.ErrorContains(t, err, "invalid integer precision graph: ")
 		})
 	}
 	require.NoError(t, (&Query{}).ValidateIntegerPrecision(), "absent old-plan metadata")
