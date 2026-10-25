@@ -1,0 +1,11 @@
+drop database if exists show_create_view_escape;
+create database show_create_view_escape;
+use show_create_view_escape;
+create view v1 as select 'C:\\new' as p, 'it''s' as q, "dq""x" as r;
+select hex(p), q, r from v1;
+➤ hex(p)[12,48,0]  ¦  q[12,4,0]  ¦  r[12,4,0]  𝄀
+433A5C6E6577  ¦  it's  ¦  dq"x
+show create view v1;
+➤ View[12,2,0]  ¦  Create View[12,68,0]  ¦  character_set_client[12,7,0]  ¦  collation_connection[12,18,0]  𝄀
+v1  ¦  create view v1 as select 'C:\\new' as p, 'it''s' as q, "dq""x" as r;  ¦  utf8mb4  ¦  utf8mb4_general_ci
+drop database show_create_view_escape;

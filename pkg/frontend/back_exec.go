@@ -1758,6 +1758,31 @@ func (backSes *backSession) GetTempTable(dbName, alias string) (string, bool) {
 	return backSes.upstream.GetTempTable(dbName, alias)
 }
 
+// Forgetting confirmed-dead ownership is irreversible, including in a failed
+// stored-procedure statement. Do not journal it as a normal temporary DROP.
+func (backSes *backSession) ForgetMissingTemporaryTable(dbName, alias, physical string) {
+	if backSes == nil {
+		return
+	}
+	if owner := upstreamUserSession(backSes); owner != nil {
+		owner.ForgetMissingTemporaryTable(dbName, alias, physical)
+	}
+}
+
+var _ process.MissingTemporaryTableForgetter = (*backSession)(nil)
+
+// OwnsTemporaryTable forwards physical ownership checks to the interactive
+// session. Background executors resolve the same temporary index relations as
+// their caller, so the shared temporary-table access gate must see the caller's
+// ownership map rather than treating the executor wrapper as a foreign session.
+func (backSes *backSession) OwnsTemporaryTable(dbName, physical string) bool {
+	if backSes == nil {
+		return false
+	}
+	owner := upstreamUserSession(backSes)
+	return owner != nil && owner.OwnsTemporaryTable(dbName, physical)
+}
+
 func (backSes *backSession) AddTempTable(dbName, alias, realName string) {
 	if backSes == nil {
 		return
