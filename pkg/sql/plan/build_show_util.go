@@ -221,7 +221,7 @@ func constructCreateTableSQL(
 					buf.WriteString(" DEFAULT NULL")
 				}
 			} else if len(col.Default.OriginString) > 0 {
-				buf.WriteString(" DEFAULT " + formatDefaultExpr(col.Default.OriginString, col.Default.Expr))
+				buf.WriteString(" DEFAULT " + formatDefaultExpr(col.Default.OriginString))
 			}
 
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
@@ -1681,18 +1681,12 @@ func formatStr(str string) string {
 	return strings.Replace(tmp, "'", "''", -1)
 }
 
-// formatDefaultExpr escapes literal defaults for the generated CREATE TABLE
-// statement. Non-literal defaults already contain SQL syntax in OriginString,
-// so escaping their quotes as string contents would corrupt the expression.
-func formatDefaultExpr(expr string, defaultExpr *plan.Expr) string {
-	trimmed := strings.TrimSpace(expr)
-	if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
-		return trimmed
-	}
-	if defaultExpr != nil && defaultExpr.GetLit() == nil {
-		return expr
-	}
-	return formatStr(expr)
+// formatDefaultExpr renders a column default for the generated CREATE TABLE
+// statement. OriginString is already SQL text (string literals are formatted
+// with their quotes escaped), so it is emitted as is; escaping it again would
+// change the default each time the statement is replayed.
+func formatDefaultExpr(expr string) string {
+	return strings.TrimSpace(expr)
 }
 
 func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {
