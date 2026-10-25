@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -442,8 +443,14 @@ func TestApplyAppendLockedPadsMissingColumnsForUpgradedSchema(t *testing.T) {
 		containers.Options{Allocator: common.DefaultAllocator},
 	)
 	defer bat.Close()
-	for _, vec := range bat.Vecs {
-		vec.Append(nil, true)
+	for row := range 129 {
+		for col, vec := range bat.Vecs {
+			if col == 0 {
+				vec.Append(int32(row), false)
+			} else {
+				vec.Append(nil, true)
+			}
+		}
 	}
 
 	from, err := mnode.ApplyAppendLocked(bat)
@@ -455,7 +462,10 @@ func TestApplyAppendLockedPadsMissingColumnsForUpgradedSchema(t *testing.T) {
 	}
 	addedVec := mnode.data.GetVectorByName("added_flag")
 	require.Equal(t, bat.Length(), addedVec.Length())
-	require.True(t, addedVec.IsNull(0))
+	for row := range bat.Length() {
+		require.True(t, addedVec.IsNull(row))
+		require.Equal(t, int32(row), mnode.data.Vecs[0].Get(row))
+	}
 
 	pool := containers.NewVectorPool("upgrade-compat", 4, containers.WithMPool(common.DefaultAllocator))
 	require.NotPanics(t, func() {
@@ -767,6 +777,66 @@ func BenchmarkReserveRows(b *testing.B) {
 				node.ReserveRowsLocked(rows)
 				node.data.Close()
 			}
+		})
+	}
+}
+
+func TestReplayAppendPayloadPreservesLegacyLogicalID(t *testing.T) {
+	for _, tableID := range []uint64{pkgcatalog.MO_TABLES_ID, 1001} {
+		t.Run(fmt.Sprintf("table=%d", tableID), func(t *testing.T) {
+			table := catalog.MockStaloneTableEntry(tableID, catalog.SystemTableSchema.Clone())
+			oid := objectio.NewObjectid()
+			stats := objectio.NewObjectStatsWithObjectID(&oid, true, false, false)
+			meta := catalog.MockObjectEntry(table, stats, false, nil, types.BuildTS(1, 0))
+			obj := newAObject(meta, nil, false)
+			t.Cleanup(func() { obj.node.Load().Unref() })
+			makeBatch := func(id uint64, logical any, includeLogical bool) *containers.Batch {
+				bat := containers.NewBatch()
+				t.Cleanup(bat.Close)
+				ids := containers.MakeVector(types.T_uint64.ToType(), common.DefaultAllocator)
+				ids.Append(id, false)
+				bat.AddVector(pkgcatalog.SystemRelAttr_ID, ids)
+				if includeLogical {
+					logicalIDs := containers.MakeVector(types.T_uint64.ToType(), common.DefaultAllocator)
+					logicalIDs.Append(logical, logical == nil)
+					bat.AddVector(pkgcatalog.SystemRelAttr_LogicalID, logicalIDs)
+				}
+				return bat
+			}
+			n := obj.PinNode()
+			defer n.Unref()
+			// The existing append path is the compatibility control.
+			_, err := n.MustMNode().ApplyAppendLocked(makeBatch(11, nil, false))
+			require.NoError(t, err)
+			logical := n.MustMNode().data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID)
+			if tableID == pkgcatalog.MO_TABLES_ID {
+				require.Equal(t, uint64(11), logical.Get(0))
+			} else {
+				require.True(t, logical.IsNull(0))
+			}
+			// A later modern payload must survive an earlier legacy replay.
+			require.NoError(t, obj.OnReplayAppendPayload(makeBatch(9, uint64(90), true), 4))
+			require.NoError(t, obj.OnReplayAppendPayload(makeBatch(7, nil, false), 2))
+			require.Equal(t, uint64(90), logical.Get(4))
+			if tableID == pkgcatalog.MO_TABLES_ID {
+				require.False(t, logical.IsNull(2), "legacy system-table replay must derive logical ID from rel_id")
+				require.Equal(t, uint64(7), logical.Get(2))
+			} else {
+				require.True(t, logical.IsNull(2), "user columns with catalog names do not enable compatibility rewriting")
+			}
+			for _, row := range []int{1, 3} {
+				require.True(t, logical.IsNull(row), "unwritten physical holes stay NULL")
+			}
+			appender := newAppender(obj)
+			require.NoError(t, appender.ApplyAppendAt(makeBatch(8, nil, false), 2, nil))
+			if tableID == pkgcatalog.MO_TABLES_ID {
+				require.Equal(t, uint64(8), logical.Get(2))
+			}
+			// An explicit NULL is supplied data, not an absent legacy column.
+			require.NoError(t, appender.ApplyAppendAt(makeBatch(10, nil, true), 2, nil))
+			require.True(t, logical.IsNull(2))
+			require.Equal(t, uint64(90), logical.Get(4))
+			require.Equal(t, 5, logical.Length())
 		})
 	}
 }

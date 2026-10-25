@@ -16,7 +16,6 @@ package tables
 
 import (
 	"context"
-	"slices"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -303,13 +302,8 @@ func (node *memoryNode) ApplyAppendLocked(
 		destVec := node.data.Vecs[def.Idx]
 		destVec.Extend(bat.Vecs[srcPos])
 	}
-	// RelLogicalID COMPAT
-	if node.object.meta.Load().GetTable().ID == 2 && len(node.data.Vecs) > 10 /*not tombstone*/ {
-		in_logical_idx := slices.Index(bat.Attrs, pkgcatalog.SystemRelAttr_LogicalID)
-		if in_logical_idx == -1 {
-			desc := node.data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID)
-			desc.Extend(bat.GetVectorByName(pkgcatalog.SystemRelAttr_ID))
-		}
+	if logicalID := node.legacyLogicalID(bat); logicalID != nil {
+		node.data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID).Extend(logicalID)
 	}
 	// Upgrade compat: replayed WAL batches may be encoded with an older schema
 	// and omit columns introduced later. Pad those missing columns with NULLs
@@ -329,7 +323,27 @@ func (node *memoryNode) ApplyAppendAtLocked(bat *containers.Batch, offset uint32
 			destVec.CopyFrom(bat.Vecs[srcPos], int(offset)+row, row)
 		}
 	}
+	if logicalID := node.legacyLogicalID(bat); logicalID != nil {
+		destVec := data.GetVectorByName(pkgcatalog.SystemRelAttr_LogicalID)
+		for row := range bat.Length() {
+			destVec.CopyFrom(logicalID, int(offset)+row, row)
+		}
+	}
 	return nil
+}
+
+// legacyLogicalID preserves the pre-logical-ID mo_tables WAL contract for
+// both sequential and positional installation. An explicit column, even NULL,
+// is authoritative; only an absent legacy column is derived from rel_id.
+func (node *memoryNode) legacyLogicalID(bat *containers.Batch) containers.Vector {
+	if node.writeSchema.GetColIdx(pkgcatalog.SystemRelAttr_LogicalID) < 0 ||
+		node.object.meta.Load().GetTable().ID != pkgcatalog.MO_TABLES_ID {
+		return nil
+	}
+	if _, supplied := bat.Nameidx[pkgcatalog.SystemRelAttr_LogicalID]; supplied {
+		return nil
+	}
+	return bat.GetVectorByName(pkgcatalog.SystemRelAttr_ID)
 }
 
 func (node *memoryNode) ReserveRowsLocked(rows uint32) {
