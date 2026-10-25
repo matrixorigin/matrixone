@@ -866,7 +866,7 @@ func ReadSizeBytesToBuf(r io.Reader, buf []byte, offset int32) (int32, []byte, e
 		return 0, buf, err
 	}
 	if offset < 0 || int64(offset) > int64(len(buf)) || int64(offset)+int64(sz) > int64(^uint32(0)>>1) {
-		return 0, buf, fmt.Errorf("invalid encoded buffer offset %d and size %d", offset, sz)
+		return 0, buf, moerr.NewInternalErrorNoCtxf("invalid encoded buffer offset %d and size %d", offset, sz)
 	}
 
 	if sz+offset <= int32(cap(buf)) {

@@ -298,6 +298,9 @@ func (writer *s3WriterDelegate) closeInsertSinkers(mp *mpool.MPool) (err error) 
 
 func (writer *s3WriterDelegate) ensureOutputSlot(proc *process.Process) error {
 	if writer.outputLease != nil || proc.Base.ImportMemory == nil {
+		if writer.outputLease != nil && !InsertOnlyOutput(writer.updateCtxs) {
+			writer.outputFrameLimit = writer.outputLease.Capacity() / 4
+		}
 		return nil
 	}
 	lease, err := proc.Base.ImportMemory.AcquireOutput(proc.Ctx)
@@ -305,7 +308,7 @@ func (writer *s3WriterDelegate) ensureOutputSlot(proc *process.Process) error {
 		return err
 	}
 	if lease == nil {
-		return fmt.Errorf("admitted multi-update has no output slot")
+		return moerr.NewInternalErrorNoCtx("admitted multi-update has no output slot")
 	}
 	limit := lease.Capacity() / 4
 	if InsertOnlyOutput(writer.updateCtxs) {
@@ -431,7 +434,7 @@ func (writer *s3WriterDelegate) reconcileMemory() {
 	writer.reconcileMemoryLocked()
 }
 
-var errBorrowedSpill = errors.New("use admitted IO workspace")
+var errBorrowedSpill = moerr.NewInternalErrorNoCtx("use admitted IO workspace")
 
 func (writer *s3WriterDelegate) acquireMemory(proc *process.Process, analyzer process.Analyzer, size int64, recompute func() int64) error {
 	if err := context.Cause(proc.Ctx); err != nil {
@@ -1288,7 +1291,7 @@ func (writer *s3WriterDelegate) spoolFrame(proc *process.Process, action actionT
 
 func (writer *s3WriterDelegate) checkMetadataFrameSize(n int64) error {
 	if n < 0 || writer.outputLease != nil && n > writer.outputFrameLimit {
-		return fmt.Errorf("import metadata frame exceeds admitted output capacity: %d bytes", n)
+		return moerr.NewInternalErrorNoCtxf("import metadata frame exceeds admitted output capacity: %d bytes", n)
 	}
 	return nil
 }
@@ -1369,7 +1372,7 @@ func (writer *s3WriterDelegate) readMetadataFrame(proc *process.Process) error {
 		writer.metadataRead = offset + int64(n)
 		action := actionType(head[8])
 		if action != actionDelete && action != actionInsert {
-			return fmt.Errorf("invalid import metadata action %d", action)
+			return moerr.NewInternalErrorNoCtxf("invalid import metadata action %d", action)
 		}
 		if writer.metadataPass == 0 && action != actionDelete || writer.metadataPass == 1 && action != actionInsert {
 			continue

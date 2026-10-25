@@ -1,5 +1,17 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package compile
 
 import (
@@ -8,7 +20,9 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -16,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -45,12 +60,13 @@ type MemoryStageDescriptor struct {
 	Schema          []types.Type
 	Projections     [][]types.Type
 	RetainedFields  int
+	RecordBytes     int64
 	TableCount      int
 	InsertOnly      bool
 	LeftTypes       []types.Type
 	RightTypes      []types.Type
-	NonEqExpression []byte
-	KeyExpressions  [][][]byte
+	NonEqExpression *plan.Expr
+	KeyExpressions  [][]*plan.Expr
 	ResultCols      []colexec.ResultPos
 }
 
@@ -96,12 +112,18 @@ func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportM
 			schemas = append(append([][]types.Type(nil), schemas...), stage.LeftTypes, stage.RightTypes)
 		}
 		projections = append(projections, schemas...)
-		for _, schema := range schemas {
-			row, err := external.MaxRowBytes(schema)
-			if err != nil {
-				return nil, spec, false, err
+		// A complete producer graph already bounds every physical row,
+		// including expression expansion. Schema-only manifests need the
+		// conservative fallback; reapplying it to proven inputs loses their
+		// smaller record bound.
+		if len(producerBounds) == 0 {
+			for _, schema := range schemas {
+				row, err := external.MaxRowBytes(schema, stage.RecordBytes)
+				if err != nil {
+					return nil, spec, false, err
+				}
+				maxRow = max(maxRow, row)
 			}
-			maxRow = max(maxRow, row)
 		}
 	}
 	controlled := false
@@ -113,7 +135,7 @@ func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportM
 		controlled = true
 		switch stage.Role {
 		case MemoryStageCSV:
-			capacity, err := external.SourceEnvelopeForFields(stage.Schema, unit, stage.RetainedFields)
+			capacity, err := external.SourceEnvelopeForFields(stage.Schema, unit, stage.RecordBytes, stage.RetainedFields)
 			if err != nil {
 				return nil, spec, false, err
 			}
@@ -137,25 +159,10 @@ func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportM
 				return nil, spec, false, err
 			}
 		case MemoryStageJoin:
-			join := hashjoin.HashJoin{LeftTypes: stage.LeftTypes, RightTypes: stage.RightTypes, ResultCols: stage.ResultCols, EqConds: make([][]*plan.Expr, len(stage.KeyExpressions))}
-			for side, expressions := range stage.KeyExpressions {
-				for _, encoded := range expressions {
-					expr := new(plan.Expr)
-					if err := expr.Unmarshal(encoded); err != nil {
-						return nil, spec, false, err
-					}
-					join.EqConds[side] = append(join.EqConds[side], expr)
-				}
-			}
-			if len(stage.NonEqExpression) > 0 {
-				join.NonEqCond = new(plan.Expr)
-				if err := join.NonEqCond.Unmarshal(stage.NonEqExpression); err != nil {
-					return nil, spec, false, err
-				}
-			}
+			join := hashjoin.HashJoin{LeftTypes: stage.LeftTypes, RightTypes: stage.RightTypes, ResultCols: stage.ResultCols, EqConds: stage.KeyExpressions, NonEqCond: stage.NonEqExpression}
 			for _, col := range stage.ResultCols {
 				if col.Rel < 0 || col.Rel > 1 || col.Pos < 0 || col.Rel == 0 && int(col.Pos) >= len(stage.LeftTypes) || col.Rel == 1 && int(col.Pos) >= len(stage.RightTypes) {
-					return nil, spec, false, errors.New("invalid join memory projection")
+					return nil, spec, false, moerr.NewInternalErrorNoCtx("invalid join memory projection")
 				}
 			}
 			capacity, ok := join.InputEnvelope(max(unit, maxRow))
@@ -176,11 +183,11 @@ func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportM
 			}
 		case MemoryStageProducer:
 			if uint64(stage.Producer) >= uint64(len(producerBounds)) {
-				return nil, spec, false, errors.New("invalid producer stage index")
+				return nil, spec, false, moerr.NewInternalErrorNoCtx("invalid producer stage index")
 			}
 			producerStages = append(producerStages, stage)
 		default:
-			return nil, spec, false, fmt.Errorf("unknown memory stage %q", stage.Role)
+			return nil, spec, false, moerr.NewInternalErrorNoCtxf("unknown memory stage %q", stage.Role)
 		}
 	}
 	if !controlled {
@@ -211,22 +218,22 @@ func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportM
 	}
 	channelCapacity, valid := memoryPipelineChannelCapacity(manifest)
 	if !valid {
-		return nil, spec, false, errors.New("pipeline metadata capacity overflows")
+		return nil, spec, false, moerr.NewInternalErrorNoCtx("pipeline metadata capacity overflows")
 	}
 	edgeMetadata, valid := process.PipelineEdgeMetadataBound(channelCapacity)
 	if !valid {
-		return nil, spec, false, errors.New("pipeline edge metadata overflows")
+		return nil, spec, false, moerr.NewInternalErrorNoCtx("pipeline edge metadata overflows")
 	}
 	for _, stage := range producerStages {
 		capacity := producerBounds[stage.Producer].Scratch
 		if producer := manifest.Producers[stage.Producer]; producer.Receivers > 0 {
 			edges, ok := memoryProduct(edgeMetadata, int64(producer.Receivers))
 			if !ok {
-				return nil, spec, false, errors.New("pipeline receiver metadata overflows")
+				return nil, spec, false, moerr.NewInternalErrorNoCtx("pipeline receiver metadata overflows")
 			}
 			capacity, ok = memorySum(capacity, edges)
 			if !ok {
-				return nil, spec, false, errors.New("pipeline metadata promise overflows")
+				return nil, spec, false, moerr.NewInternalErrorNoCtx("pipeline metadata promise overflows")
 			}
 		}
 		if capacity > 0 {
@@ -248,7 +255,11 @@ func memoryManifestCandidates(manifest MemoryManifest, target int64) ([]rscthrot
 	metas := make(map[int64]*process.ImportMemory)
 	var capacityErr error
 	for unit := target; ; unit = max(1, unit/2) {
-		meta, spec, controlled, err := memoryManifestLayout(manifest, unit)
+		// A row inside this batch must already fit its complete reservation.
+		// Scale the record proof with smaller candidates instead of admitting a
+		// large batch with only one read block and growing it under pressure.
+		recordBytes := min(max(unit, int64(csvparser.ReadBlockSize)), int64(config.LargestEntryLimit))
+		meta, spec, controlled, err := memoryManifestLayout(memoryRecordManifest(manifest, recordBytes), unit)
 		if err != nil {
 			var capacity *memoryEnvelopeCapacityError
 			if !errors.As(err, &capacity) {
@@ -266,6 +277,7 @@ func memoryManifestCandidates(manifest MemoryManifest, target int64) ([]rscthrot
 				}
 			}
 			if !equivalent {
+				meta.RecordBytes = recordBytes
 				specs = append(specs, spec)
 				metas[unit] = meta
 			}
@@ -280,20 +292,73 @@ func memoryManifestCandidates(manifest MemoryManifest, target int64) ([]rscthrot
 	return specs, metas, nil
 }
 
-func admitMemoryManifest(ctx context.Context, throttler rscthrottler.RSCThrottler, manifest MemoryManifest) (*process.ImportMemory, error) {
+// memoryRecordManifest tightens only the raw-record proof. Topology, counts and
+// batch units remain unchanged, and the source manifest stays immutable.
+func memoryRecordManifest(manifest MemoryManifest, bytes int64) MemoryManifest {
+	bound := func(limit int64) int64 {
+		if limit <= 0 {
+			limit = int64(config.LargestEntryLimit)
+		}
+		return min(bytes, limit)
+	}
+	manifest.Stages = slices.Clone(manifest.Stages)
+	for i := range manifest.Stages {
+		manifest.Stages[i].RecordBytes = bound(manifest.Stages[i].RecordBytes)
+	}
+	manifest.Producers = slices.Clone(manifest.Producers)
+	for i := range manifest.Producers {
+		if manifest.Producers[i].Kind == "csv" {
+			manifest.Producers[i].RecordBytes = bound(manifest.Producers[i].RecordBytes)
+		}
+	}
+	return manifest
+}
+
+// Freeze the finite growth choices before execution mutates operator trees.
+// Runtime retains specifications only; ordinary rows never enter the owner.
+func bindMemoryRecordGrowth(meta *process.ImportMemory, manifest MemoryManifest) {
+	type step struct {
+		bytes int64
+		spec  rscthrottler.WorkingSetSpec
+		err   error
+	}
+	limit := int64(config.LargestEntryLimit)
+	var steps []step
+	for bytes := meta.RecordBytes; bytes < limit; {
+		bytes += min(bytes, limit-bytes)
+		_, spec, _, err := memoryManifestLayout(memoryRecordManifest(manifest, bytes), meta.UnitBytes)
+		steps = append(steps, step{bytes, spec, err})
+	}
+	meta.GrowRecord = func(ctx context.Context, need int64) (int64, error) {
+		for _, step := range steps {
+			if need <= step.bytes {
+				if step.err != nil {
+					return 0, step.err
+				}
+				return step.bytes, meta.WorkingSet.TryGrow(ctx, step.spec)
+			}
+		}
+		return 0, moerr.NewInternalErrorNoCtx("CSV record exceeds the configured entry limit")
+	}
+}
+
+func admitMemoryManifest(ctx context.Context, throttler rscthrottler.WorkingSetThrottler, manifest MemoryManifest) (*process.ImportMemory, error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
 	target := min(manifest.TargetUnit, rscthrottler.BatchBytes(throttler))
 	if target <= 0 {
-		return nil, errors.New("no legal import batch unit")
+		return nil, moerr.NewInternalErrorNoCtx("no legal import batch unit")
+	}
+	if config.LargestEntryLimit <= 0 {
+		return nil, moerr.NewInternalErrorNoCtx("no legal CSV record budget")
 	}
 	specs, metas, err := memoryManifestCandidates(manifest, target)
 	if err != nil || len(specs) == 0 {
 		return nil, err
 	}
 	if manifest.Parallel > 1 {
-		headroom := rscthrottler.WorkingSetHeadroom(throttler)
+		headroom := throttler.WorkingSetHeadroom()
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
 		}
@@ -305,17 +370,12 @@ func admitMemoryManifest(ctx context.Context, throttler rscthrottler.RSCThrottle
 		}
 	}
 	var working *rscthrottler.WorkingSet
-	final, untilFit := throttler.(rscthrottler.WorkingSetCandidatesUntilFitThrottler)
 	if manifest.NoWait {
 		working, err = tryMemoryCandidates(ctx, throttler, specs)
-	} else if manifest.Parallel <= 1 && untilFit {
-		working, err = final.ReserveWorkingSetCandidatesUntilFit(ctx, specs)
-	} else if _, capable := throttler.(rscthrottler.WorkingSetCandidatesThrottler); capable {
-		working, err = rscthrottler.ReserveWorkingSetCandidates(ctx, throttler, specs)
+	} else if manifest.Parallel <= 1 {
+		working, err = throttler.ReserveWorkingSetCandidatesUntilFit(ctx, specs)
 	} else {
-		// Older test/embedding providers retain their single-spec API. The real CN
-		// uses the FIFO candidate capability, which reselects after every release.
-		working, err = reserveLegacyMemoryCandidates(ctx, throttler, specs)
+		working, err = throttler.ReserveWorkingSetCandidates(ctx, specs)
 	}
 	if err != nil {
 		var capacity *rscthrottler.WorkingSetCapacityError
@@ -326,20 +386,21 @@ func admitMemoryManifest(ctx context.Context, throttler rscthrottler.RSCThrottle
 	}
 	meta := metas[working.UnitBytes()]
 	meta.WorkingSet = working
+	bindMemoryRecordGrowth(meta, manifest)
 	return meta, nil
 }
 
 // tryMemoryCandidates never joins an admission queue or full recovery. A
 // transaction may own the very workspace/locks that a queued request needs
 // released. Try still preserves the existing FIFO and complete I/W accounting.
-func tryMemoryCandidates(ctx context.Context, throttler rscthrottler.RSCThrottler, specs []rscthrottler.WorkingSetSpec) (*rscthrottler.WorkingSet, error) {
+func tryMemoryCandidates(ctx context.Context, throttler rscthrottler.WorkingSetThrottler, specs []rscthrottler.WorkingSetSpec) (*rscthrottler.WorkingSet, error) {
 	if len(specs) == 0 {
-		return nil, errors.New("no legal import working layout")
+		return nil, moerr.NewInternalErrorNoCtx("no legal import working layout")
 	}
 	minimum := workingLayoutTotal(specs[0])
 	for _, spec := range specs {
 		minimum = min(minimum, workingLayoutTotal(spec))
-		working, granted, err := rscthrottler.TryReserveWorkingSet(ctx, throttler, spec)
+		working, granted, err := throttler.TryReserveWorkingSet(ctx, spec)
 		if cause := context.Cause(ctx); cause != nil {
 			if working != nil {
 				working.Close()
@@ -354,38 +415,11 @@ func tryMemoryCandidates(ctx context.Context, throttler rscthrottler.RSCThrottle
 			return working, nil
 		}
 	}
-	headroom := rscthrottler.WorkingSetHeadroom(throttler)
+	headroom := throttler.WorkingSetHeadroom()
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
 	// FIFO contention can also deny a try even with Available >= Minimum.
 	// This reports immediate admission failure, not permanent impossibility.
 	return nil, &rscthrottler.WorkingSetCapacityError{Minimum: minimum, Available: headroom.Available}
-}
-
-func reserveLegacyMemoryCandidates(ctx context.Context, throttler rscthrottler.RSCThrottler, specs []rscthrottler.WorkingSetSpec) (*rscthrottler.WorkingSet, error) {
-	for reclaimed := false; ; reclaimed = true {
-		for _, spec := range specs {
-			working, granted, err := rscthrottler.TryReserveWorkingSet(ctx, throttler, spec)
-			var tooLarge *rscthrottler.RequestTooLargeError
-			if err != nil && !errors.As(err, &tooLarge) {
-				return nil, err
-			}
-			if granted {
-				return working, nil
-			}
-			if err == nil && rscthrottler.WorkingSetHeadroom(throttler).HasOwners {
-				return rscthrottler.ReserveWorkingSet(ctx, throttler, spec)
-			}
-		}
-		if reclaimed {
-			headroom := rscthrottler.WorkingSetHeadroom(throttler)
-			return nil, &rscthrottler.WorkingSetCapacityError{Minimum: workingLayoutTotal(specs[len(specs)-1]), Available: headroom.Available}
-		}
-		if err := rscthrottler.ReclaimForWorkingSet(ctx, throttler); err != nil {
-			return nil, err
-		}
-		// Reclaim changed the physical state: retry the largest candidate rather
-		// than retaining the tiny unit considered under the previous pressure.
-	}
 }

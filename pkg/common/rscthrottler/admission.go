@@ -16,12 +16,12 @@ package rscthrottler
 
 import (
 	"context"
-	"errors"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -321,7 +321,7 @@ func (m *memThrottler) acquireLocked(ask int64) (int64, bool) {
 
 func (m *memThrottler) AcquireContext(ctx context.Context, ask int64) error {
 	if ask < 0 {
-		return errors.New("negative memory request")
+		return moerr.NewInternalErrorNoCtx("negative memory request")
 	}
 	if err := context.Cause(ctx); err != nil {
 		return err
@@ -365,7 +365,7 @@ func (m *memThrottler) AcquireContext(ctx context.Context, ask int64) error {
 
 func workingSetBytes(spec WorkingSetSpec) (int64, error) {
 	if spec.UnitBytes <= 0 || spec.IOBytes < 0 {
-		return 0, errors.New("invalid memory working set size")
+		return 0, moerr.NewInternalErrorNoCtx("invalid memory working set size")
 	}
 	var input int64
 	for _, slot := range spec.Inputs {
@@ -373,32 +373,24 @@ func workingSetBytes(spec WorkingSetSpec) (int64, error) {
 			continue
 		}
 		if slot.Count == 0 || slot.Bytes <= 0 || slot.Bytes > math.MaxInt64/int64(slot.Count) {
-			return 0, errors.New("invalid memory input slot size")
+			return 0, moerr.NewInternalErrorNoCtx("invalid memory input slot size")
 		}
 		bytes := slot.Bytes * int64(slot.Count)
 		if input > math.MaxInt64-bytes {
-			return 0, errors.New("memory input slots overflow")
+			return 0, moerr.NewInternalErrorNoCtx("memory input slots overflow")
 		}
 		input += bytes
 	}
 	if input > math.MaxInt64-spec.IOBytes {
-		return 0, errors.New("memory working set overflow")
+		return 0, moerr.NewInternalErrorNoCtx("memory working set overflow")
 	}
 	return input, nil
 }
 
+// WorkingSetHeadroomSnapshot contains only the compiler's admission inputs.
+// Ticket and IO ownership remain private to the coordinator.
 type WorkingSetHeadroomSnapshot struct {
-	Limit, PhysicalUsed, Data, Input, Workspace, Available int64
-	HasOwners                                              bool
-}
-
-func WorkingSetHeadroom(t RSCThrottler) WorkingSetHeadroomSnapshot {
-	if m, ok := t.(interface {
-		WorkingSetHeadroom() WorkingSetHeadroomSnapshot
-	}); ok {
-		return m.WorkingSetHeadroom()
-	}
-	return WorkingSetHeadroomSnapshot{Available: t.Available(), HasOwners: true}
+	Limit, Available int64
 }
 
 func (m *memThrottler) WorkingSetHeadroom() WorkingSetHeadroomSnapshot {
@@ -406,26 +398,18 @@ func (m *memThrottler) WorkingSetHeadroom() WorkingSetHeadroomSnapshot {
 	c := m.memoryCoordinator()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s := WorkingSetHeadroomSnapshot{Limit: int64(m.actualTotalMemory.Load()), PhysicalUsed: m.physicalUsed(), Data: c.dataReserved.Load(), Input: c.inputPromise.Load(), Workspace: c.workspacePromise.Load(), HasOwners: len(c.tickets) > 0 || c.dataReserved.Load() > 0 || c.ioBusy}
-	s.Available = max(0, s.Limit-s.PhysicalUsed-s.Data-s.Input-s.Workspace)
+	s := WorkingSetHeadroomSnapshot{Limit: int64(m.actualTotalMemory.Load())}
+	s.Available = max(0, s.Limit-m.physicalUsed()-c.dataReserved.Load()-c.inputPromise.Load()-c.workspacePromise.Load())
 	if m.sampleInvalid.Load() {
 		s.Available = 0
 	}
 	return s
 }
 
-func TryReserveWorkingSet(ctx context.Context, t RSCThrottler, spec WorkingSetSpec) (*WorkingSet, bool, error) {
-	if m, ok := t.(interface {
-		TryReserveWorkingSet(context.Context, WorkingSetSpec) (*WorkingSet, bool, error)
-	}); ok {
-		return m.TryReserveWorkingSet(ctx, spec)
-	}
-	return nil, false, errors.New("memory throttler does not support working sets")
-}
-
-func newWorkingSet(c *memoryCoordinator, spec WorkingSetSpec, input int64) *WorkingSet {
+func newWorkingSet(m *memThrottler, spec WorkingSetSpec, input int64) *WorkingSet {
 	spec.Inputs = append([]InputSlotSpec(nil), spec.Inputs...)
-	w := &WorkingSet{coordinator: c, spec: spec, inputBytes: input, inputUsed: make([]uint32, len(spec.Inputs)), inputWait: make([]chan struct{}, len(spec.Inputs)), closing: make(chan struct{})}
+	w := &WorkingSet{coordinator: m.memoryCoordinator(), throttler: m, inputBytes: input, inputUsed: make([]uint32, len(spec.Inputs)), inputWait: make([]chan struct{}, len(spec.Inputs)), closing: make(chan struct{})}
+	w.spec.Store(&spec)
 	for i := range w.inputWait {
 		w.inputWait[i] = make(chan struct{})
 	}
@@ -455,23 +439,16 @@ func (m *memThrottler) TryReserveWorkingSet(ctx context.Context, spec WorkingSet
 	if len(c.queue) > 0 || !m.physicalFits(delta) {
 		return nil, false, nil
 	}
-	w := newWorkingSet(c, spec, input)
+	w := newWorkingSet(m, spec, input)
 	c.inputPromise.Add(input)
 	c.workspacePromise.Store(max(c.workspacePromise.Load(), spec.IOBytes))
 	c.tickets[w] = struct{}{}
 	return w, true, nil
 }
 
-// ReclaimForWorkingSet is used once before declaring a minimum layout unable
-// to fit a process with no active owners. Cancellation does not wait for IO.
-func ReclaimForWorkingSet(ctx context.Context, t RSCThrottler) error {
-	if m, ok := t.(interface{ ReclaimForWorkingSet(context.Context) error }); ok {
-		return m.ReclaimForWorkingSet(ctx)
-	}
-	return errors.New("memory throttler does not support working sets")
-}
-
-func (m *memThrottler) ReclaimForWorkingSet(ctx context.Context) error {
+// reclaimForWorkingSet coalesces recovery before a smaller graph or final wait.
+// Cancellation does not wait for IO.
+func (m *memThrottler) reclaimForWorkingSet(ctx context.Context) error {
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
@@ -518,25 +495,13 @@ func (m *memThrottler) ReclaimForWorkingSet(ctx context.Context) error {
 	}
 }
 
-func (m *memThrottler) ReserveWorkingSet(ctx context.Context, spec WorkingSetSpec) (*WorkingSet, error) {
-	return m.reserveWorkingSetCandidates(ctx, []WorkingSetSpec{spec}, workingSetSingleSpec)
-}
-
 func (m *memThrottler) ReserveWorkingSetCandidates(ctx context.Context, specs []WorkingSetSpec) (*WorkingSet, error) {
-	return m.reserveWorkingSetCandidates(ctx, specs, workingSetCandidatesRetry)
+	return m.reserveWorkingSetCandidates(ctx, specs, true)
 }
 
 func (m *memThrottler) ReserveWorkingSetCandidatesUntilFit(ctx context.Context, specs []WorkingSetSpec) (*WorkingSet, error) {
-	return m.reserveWorkingSetCandidates(ctx, specs, workingSetCandidatesUntilFit)
+	return m.reserveWorkingSetCandidates(ctx, specs, false)
 }
-
-type workingSetAdmissionMode uint8
-
-const (
-	workingSetSingleSpec workingSetAdmissionMode = iota
-	workingSetCandidatesRetry
-	workingSetCandidatesUntilFit
-)
 
 type workingSetCandidate struct {
 	spec  WorkingSetSpec
@@ -545,9 +510,9 @@ type workingSetCandidate struct {
 
 // One FIFO node owns the entire choice. Candidate construction is outside the
 // mutex; fitting and publication use the current shared W maximum under it.
-func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []WorkingSetSpec, mode workingSetAdmissionMode) (*WorkingSet, error) {
+func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []WorkingSetSpec, retryDOP bool) (*WorkingSet, error) {
 	if len(specs) == 0 {
-		return nil, errors.New("empty memory working-set candidates")
+		return nil, moerr.NewInternalErrorNoCtx("empty memory working-set candidates")
 	}
 	candidates := make([]workingSetCandidate, len(specs))
 	for i, spec := range specs {
@@ -556,7 +521,7 @@ func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []
 			return nil, err
 		}
 		if i > 0 && spec.UnitBytes >= specs[i-1].UnitBytes {
-			return nil, errors.New("working-set candidates must have descending units")
+			return nil, moerr.NewInternalErrorNoCtx("working-set candidates must have descending units")
 		}
 		spec.Inputs = append([]InputSlotSpec(nil), spec.Inputs...)
 		candidates[i] = workingSetCandidate{spec: spec, input: input}
@@ -566,12 +531,8 @@ func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []
 	}
 	m.Refresh()
 	maximum := int64(m.actualTotalMemory.Load())
-	candidateRequest := mode != workingSetSingleSpec
-	if !candidateRequest && maximum > 0 && candidates[0].input+candidates[0].spec.IOBytes > maximum {
-		return nil, &RequestTooLargeError{candidates[0].input + candidates[0].spec.IOBytes, maximum}
-	}
 	firstFeasible := 0
-	if candidateRequest && maximum > 0 {
+	if maximum > 0 {
 		minimum := int64(math.MaxInt64)
 		firstFeasible = len(candidates)
 		for i, candidate := range candidates {
@@ -618,10 +579,10 @@ func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []
 			// statically possible candidate one recovery attempt. Keep this FIFO
 			// node while recovery runs; the next iteration rechecks cancellation,
 			// other-pool owners, physical usage and the shared workspace promise.
-			recoverFirst := candidateRequest && !hasOwners && !reclaimed && selected > firstFeasible
+			recoverFirst := !hasOwners && !reclaimed && selected > firstFeasible
 			if selected >= 0 && !recoverFirst {
 				candidate := candidates[selected]
-				w := newWorkingSet(c, candidate.spec, candidate.input)
+				w := newWorkingSet(m, candidate.spec, candidate.input)
 				c.inputPromise.Add(candidate.input)
 				c.workspacePromise.Store(max(c.workspacePromise.Load(), candidate.spec.IOBytes))
 				c.tickets[w] = struct{}{}
@@ -629,12 +590,12 @@ func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []
 				c.mu.Unlock()
 				return w, nil
 			}
-			if candidateRequest && !hasOwners {
+			if !hasOwners {
 				if !reclaimed {
 					// The queued node stays in place while this existing process-wide full
 					// reclaim runs. New requests cannot bypass it or consume its progress.
 					c.mu.Unlock()
-					err := m.ReclaimForWorkingSet(ctx)
+					err := m.reclaimForWorkingSet(ctx)
 					c.mu.Lock()
 					if err != nil {
 						c.removeAdmissionLocked(n)
@@ -644,7 +605,7 @@ func (m *memThrottler) reserveWorkingSetCandidates(ctx context.Context, specs []
 					reclaimed = true
 					continue
 				}
-				if mode == workingSetCandidatesRetry {
+				if retryDOP {
 					available := max(0, int64(m.actualTotalMemory.Load())-m.physicalUsed()-c.inputPromise.Load()-c.workspacePromise.Load()-max(c.dataReserved.Load(), m.reserved.Load()))
 					if m.sampleInvalid.Load() {
 						available = 0

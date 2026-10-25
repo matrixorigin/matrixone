@@ -16,11 +16,12 @@ package rscthrottler
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // ContextThrottler is the optional blocking capability. Callers must retire
@@ -49,22 +50,20 @@ func (e *WorkingSetCapacityError) Error() string {
 	return fmt.Sprintf("import minimum working layout needs %d bytes, available %d", e.Minimum, e.Available)
 }
 
-// WorkingSetCandidatesThrottler is optional: existing single-spec callers and
-// mocks retain their original interface and waiting contract.
-type WorkingSetCandidatesThrottler interface {
+// WorkingSetThrottler is the complete local import-admission contract. All CN
+// instances provide it; there are no unreleased older-capability providers.
+// Retry-capable candidates may request a smaller graph; final candidates wait
+// for transient pressure. Explicit transactions use Try without entering FIFO.
+type WorkingSetThrottler interface {
+	RSCThrottler
+	ContextThrottler
+	WorkingSetHeadroom() WorkingSetHeadroomSnapshot
+	TryReserveWorkingSet(context.Context, WorkingSetSpec) (*WorkingSet, bool, error)
 	ReserveWorkingSetCandidates(context.Context, []WorkingSetSpec) (*WorkingSet, error)
-}
-
-// WorkingSetCandidatesUntilFitThrottler is the optional final-graph capability.
-// Dynamic process pressure waits in one FIFO node until a candidate fits or the
-// caller cancels. A minimum larger than the entire process limit still fails.
-// The older candidate API remains available to callers that can retry a smaller
-// execution graph after an ownerless pressure response.
-type WorkingSetCandidatesUntilFitThrottler interface {
 	ReserveWorkingSetCandidatesUntilFit(context.Context, []WorkingSetSpec) (*WorkingSet, error)
 }
 
-var ErrWorkingSetClosed = errors.New("memory working set closed")
+var ErrWorkingSetClosed = moerr.NewInternalErrorNoCtx("memory working set closed")
 
 type InputSlotSpec struct {
 	Name  string
@@ -82,7 +81,8 @@ type WorkingSetSpec struct {
 // Input credits and the single process IO slot cannot borrow from each other.
 type WorkingSet struct {
 	coordinator   *memoryCoordinator
-	spec          WorkingSetSpec
+	throttler     *memThrottler
+	spec          atomic.Pointer[WorkingSetSpec]
 	inputBytes    int64
 	inputUsed     []uint32
 	inputWait     []chan struct{}
@@ -131,35 +131,71 @@ func AcquireContext(ctx context.Context, t RSCThrottler, ask int64) error {
 	if _, ok := t.Acquire(ask); ok {
 		return nil
 	}
-	return errors.New("memory throttler does not support cancellable admission")
+	return moerr.NewInternalErrorNoCtx("memory throttler does not support cancellable admission")
 }
 
-func ReserveWorkingSet(ctx context.Context, t RSCThrottler, spec WorkingSetSpec) (*WorkingSet, error) {
-	if c, ok := t.(interface {
-		ReserveWorkingSet(context.Context, WorkingSetSpec) (*WorkingSet, error)
-	}); ok {
-		return c.ReserveWorkingSet(ctx, spec)
+func (w *WorkingSet) UnitBytes() int64 { return w.spec.Load().UnitBytes }
+
+func (w *WorkingSet) IOBytes() int64 { return w.spec.Load().IOBytes }
+
+func (w *WorkingSet) InputCapacity(index int) int64 { return w.spec.Load().Inputs[index].Bytes }
+
+// TryGrow extends an executing owner's promises without waiting on resources
+// held by its downstream consumers. Shape and unit stay fixed; concurrent older
+// requests cannot shrink capacities. Publication follows the complete grant.
+func (w *WorkingSet) TryGrow(ctx context.Context, next WorkingSetSpec) error {
+	if _, err := workingSetBytes(next); err != nil {
+		return err
 	}
-	return nil, errors.New("memory throttler does not support working sets")
-}
-
-func ReserveWorkingSetCandidates(ctx context.Context, t RSCThrottler, specs []WorkingSetSpec) (*WorkingSet, error) {
-	if c, ok := t.(WorkingSetCandidatesThrottler); ok {
-		return c.ReserveWorkingSetCandidates(ctx, specs)
+	if err := context.Cause(ctx); err != nil {
+		return err
 	}
-	return nil, errors.New("memory throttler does not support working-set candidates")
+	w.throttler.Refresh()
+	c := w.coordinator
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if w.closed {
+		return ErrWorkingSetClosed
+	}
+	previous := w.spec.Load()
+	if next.UnitBytes != previous.UnitBytes || len(next.Inputs) != len(previous.Inputs) {
+		return moerr.NewInternalErrorNoCtx("memory working set growth changes layout")
+	}
+	next.Inputs = append([]InputSlotSpec(nil), next.Inputs...)
+	for i, slot := range previous.Inputs {
+		if next.Inputs[i].Name != slot.Name || next.Inputs[i].Count != slot.Count {
+			return moerr.NewInternalErrorNoCtx("memory working set growth changes input owners")
+		}
+		next.Inputs[i].Bytes = max(next.Inputs[i].Bytes, slot.Bytes)
+	}
+	next.IOBytes = max(next.IOBytes, previous.IOBytes)
+	input, err := workingSetBytes(next)
+	if err != nil {
+		return err
+	}
+	delta := input - w.inputBytes + max(0, next.IOBytes-c.workspacePromise.Load())
+	// An already admitted owner has priority over new admission. Queuing here
+	// could wait on the very writer that is pulling this owner's next row.
+	if delta > 0 && !w.throttler.physicalFits(delta) {
+		return moerr.NewInternalErrorNoCtxf("import record growth cannot reserve %d additional bytes", delta)
+	}
+	c.inputPromise.Add(input - w.inputBytes)
+	c.workspacePromise.Store(max(c.workspacePromise.Load(), next.IOBytes))
+	w.inputBytes = input
+	w.spec.Store(&next)
+	return nil
 }
-
-func (w *WorkingSet) UnitBytes() int64 { return w.spec.UnitBytes }
-
-func (w *WorkingSet) IOBytes() int64 { return w.spec.IOBytes }
 
 func (w *WorkingSet) AcquireInput(ctx context.Context, index int) (*InputLease, error) {
-	if index < 0 || index >= len(w.spec.Inputs) {
-		return nil, errors.New("invalid memory input slot")
+	spec := w.spec.Load()
+	if index < 0 || index >= len(spec.Inputs) {
+		return nil, moerr.NewInternalErrorNoCtx("invalid memory input slot")
 	}
-	if w.spec.Inputs[index].Count == 0 {
-		return nil, errors.New("memory input slot is disabled")
+	if spec.Inputs[index].Count == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("memory input slot is disabled")
 	}
 	c := w.coordinator
 	for {
@@ -172,7 +208,7 @@ func (w *WorkingSet) AcquireInput(ctx context.Context, index int) (*InputLease, 
 			c.mu.Unlock()
 			return nil, ErrWorkingSetClosed
 		}
-		if w.inputUsed[index] < w.spec.Inputs[index].Count {
+		if w.inputUsed[index] < spec.Inputs[index].Count {
 			w.inputUsed[index]++
 			w.inputRefs++
 			c.mu.Unlock()
@@ -190,7 +226,7 @@ func (w *WorkingSet) AcquireInput(ctx context.Context, index int) (*InputLease, 
 	}
 }
 
-func (l *InputLease) Capacity() int64 { return l.ticket.spec.Inputs[l.index].Bytes }
+func (l *InputLease) Capacity() int64 { return l.ticket.InputCapacity(l.index) }
 
 func (l *InputLease) Release() {
 	if l == nil || !l.released.CompareAndSwap(false, true) {
@@ -209,10 +245,10 @@ func (l *InputLease) Release() {
 
 func (w *WorkingSet) AcquireIO(ctx context.Context, need int64) (*WorkspaceLease, error) {
 	if need < 0 {
-		return nil, errors.New("negative IO workspace size")
+		return nil, moerr.NewInternalErrorNoCtx("negative IO workspace size")
 	}
-	if need > w.spec.IOBytes {
-		return nil, &RequestTooLargeError{need, w.spec.IOBytes}
+	if capacity := w.IOBytes(); need > capacity {
+		return nil, &RequestTooLargeError{need, capacity}
 	}
 	c := w.coordinator
 	n := &ioWaiter{ticket: w, wake: make(chan struct{}, 1)}
@@ -248,7 +284,7 @@ func (w *WorkingSet) AcquireIO(ctx context.Context, need int64) (*WorkspaceLease
 				c.ioQueue = nil
 			}
 			c.mu.Unlock()
-			return &WorkspaceLease{ticket: w, bytes: w.spec.IOBytes, valid: true}, nil
+			return &WorkspaceLease{ticket: w, bytes: w.IOBytes(), valid: true}, nil
 		}
 		c.mu.Unlock()
 		select {
@@ -321,7 +357,7 @@ func (w *WorkingSet) releasePromisesLocked() {
 		var maximum int64
 		for ticket := range c.tickets {
 			if !ticket.ioReleased {
-				maximum = max(maximum, ticket.spec.IOBytes)
+				maximum = max(maximum, ticket.IOBytes())
 			}
 		}
 		c.workspacePromise.Store(maximum)

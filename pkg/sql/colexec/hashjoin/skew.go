@@ -1,8 +1,16 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-// http://www.apache.org/licenses/LICENSE-2.0
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package hashjoin
 
@@ -134,7 +142,6 @@ func (r *spillBucketReader) resetBorrowedFd(fd *os.File) {
 func (hashJoin *HashJoin) startSkew(proc *process.Process, bucket spillBucket) error {
 	skew := &skewJoin{build: bucket.buildFd, probe: bucket.probeFd, inputBytes: 64 << 20}
 	if proc.Base.ImportMemory != nil {
-		skew.inputBytes = proc.Base.ImportMemory.JoinInputBytes
 		if hashJoin.ctr.joinInputLeases[0] == nil {
 			for i := range skew.inputLeases {
 				lease, err := proc.Base.ImportMemory.AcquireJoinInput(proc.Ctx)
@@ -217,6 +224,10 @@ func (skew *skewJoin) close(proc *process.Process) {
 func (hashJoin *HashJoin) loadSkewChunk(proc *process.Process) error {
 	ctr := &hashJoin.ctr
 	skew := ctr.skew
+	inputBytes := skew.inputBytes
+	if proc.Base.ImportMemory != nil {
+		inputBytes = proc.Base.ImportMemory.JoinInputCapacity()
+	}
 	ctr.cleanHashMap()
 	ctr.itr = nil
 	ctr.rightRowsMatched = nil
@@ -293,12 +304,12 @@ func (hashJoin *HashJoin) loadSkewChunk(proc *process.Process) error {
 			hash, ok = checkedEnvelopeAdd(hash, expressionBytes)
 		}
 		ok = ok && keyOK && payloadOK
-		fits := ok && growth <= limit-current && current+growth+hash <= skew.inputBytes
+		fits := ok && growth <= limit-current && current+growth+hash <= inputBytes
 		if !fits && builder.InputBatchRowCount > 0 {
 			view.Clean(proc.Mp())
 			break
 		}
-		if !ok || current+growth+hash > skew.inputBytes {
+		if !ok || current+growth+hash > inputBytes {
 			view.Clean(proc.Mp())
 			return moerr.NewInternalError(proc.Ctx, "single join row exceeds admitted spill working set")
 		}

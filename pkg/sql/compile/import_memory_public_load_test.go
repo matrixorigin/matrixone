@@ -1,5 +1,17 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package compile
 
 import (
@@ -18,11 +30,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -68,20 +82,42 @@ func TestImportMemoryPublicIndexedLoadCompileIsControlled(t *testing.T) {
 		fmt.Fprintf(&wideCSV, "%d|\\N|\\N|\\N|\\N|\\N|\\N|\\N|\\N|\\N\n", id)
 	}
 	require.NoError(t, os.WriteFile(wideFile, []byte(wideCSV.String()), 0600))
+	jsonFile := filepath.Join(t.TempDir(), "small-json.csv")
+	jsonRow := "0|\\N|v|{}\n"
+	require.NoError(t, os.WriteFile(jsonFile, []byte(strings.Repeat(jsonRow, (1<<20)/len(jsonRow)+1)), 0600))
+	largeJSONFile := filepath.Join(t.TempDir(), "large-json.csv")
+	require.NoError(t, os.WriteFile(largeJSONFile, []byte(strings.Repeat(jsonRow, (12<<20)/len(jsonRow)+1)), 0600))
+	const jsonDDL = "create table memory_indexed_load (id bigint auto_increment primary key, code varchar(64), v varchar(128), body json)"
 	for _, fixture := range []struct {
 		name, ddl, file string
+		local           bool
 		defaultLock     bool
 		headroom        int64
+		physical        int64
+		noWait          bool
 	}{
 		{name: "true", ddl: "create table memory_indexed_load (id bigint auto_increment primary key, code varchar(64), v varchar(128), body text, unique key uq(code), key ix(v), fulltext key ft(body) with parser ngram)", file: file},
+		{name: "small-json-wait", ddl: "create table memory_indexed_load (id bigint auto_increment primary key, code varchar(64), v varchar(128), body json)", file: jsonFile, physical: 4 << 30},
+		{name: "small-json-no-wait", ddl: "create table memory_indexed_load (id bigint auto_increment primary key, code varchar(64), v varchar(128), body json)", file: jsonFile, physical: 4 << 30, noWait: true},
+		{name: "local-json-wait", ddl: jsonDDL, file: jsonFile, local: true, physical: 4 << 30},
+		{name: "local-json-no-wait", ddl: jsonDDL, file: jsonFile, local: true, physical: 4 << 30, noWait: true},
+		{name: "large-json-wait", ddl: jsonDDL, file: largeJSONFile, physical: 4 << 30},
+		{name: "large-json-no-wait", ddl: jsonDDL, file: largeJSONFile, physical: 4 << 30, noWait: true},
+		{name: "large-text-control", ddl: strings.Replace(jsonDDL, "body json", "body text", 1), file: largeJSONFile, physical: 4 << 30},
 		{name: "false", ddl: "create table memory_indexed_load (id bigint auto_increment primary key, v varchar(128), body text, other text, key ix(v), fulltext key ft(body) with parser ngram, fulltext key ft2(other) with parser ngram)", file: file},
 		{name: "varlen-key-json-vector-two-fulltext", ddl: "create table memory_indexed_load (id varchar(255) not null primary key, question text, payload json, keywords text, embedding vecf64(1024), access_text varchar(511), identity_text varchar(512), deleted int, created_at timestamp default current_timestamp(), updated_at timestamp default current_timestamp() on update current_timestamp(), fulltext key ft_question(question) with parser ngram, fulltext key ft_keywords(keywords) with parser ngram, key ix_access_identity(access_text, identity_text))", file: wideFile, defaultLock: true, headroom: 22 << 30},
 	} {
 		t.Run(fixture.name, func(t *testing.T) {
 			cc, ctrl := newMemoryLoadCatalog(t, fixture.defaultLock)
 			sql := fmt.Sprintf("load data infile '%s' into table memory_indexed_load fields terminated by '|' parallel 'true'", fixture.file)
+			if fixture.local {
+				sql = strings.Replace(sql, "data infile", "data local infile", 1)
+			}
 			c := compileMemoryLoad(t, cc, ctrl, fixture.ddl, sql, 1)
 			proc, ctx := c.proc, c.proc.Ctx
+			if fixture.physical > 0 {
+				proc.Base.TxnOperator = &importMemoryTxnOptions{TxnOperator: proc.GetTxnOperator(), options: txn.TxnOptions{Autocommit: true, ByBegin: fixture.noWait}}
+			}
 			var writeS3, flush int
 			var walk func(*Scope)
 			walk = func(scope *Scope) {
@@ -105,14 +141,21 @@ func TestImportMemoryPublicIndexedLoadCompileIsControlled(t *testing.T) {
 			}
 			require.Positive(t, writeS3)
 			require.Positive(t, flush)
-			m := &compilerMemoryAdmission{real: rscthrottler.NewMemThrottler(t.Name(), .9), available: math.MaxInt64}
+			m := &compilerMemoryAdmission{real: newCompilerMemoryThrottler(t.Name(), .9), available: math.MaxInt64}
 			if fixture.headroom > 0 {
 				m.available = fixture.headroom
-				m.real = rscthrottler.NewMemThrottler(t.Name(), .9, rscthrottler.WithConstLimit(fixture.headroom))
+				m.real = newCompilerMemoryThrottler(t.Name(), .9, rscthrottler.WithConstLimit(fixture.headroom))
+			}
+			if fixture.physical > 0 {
+				m.available = fixture.physical
+				m.realCandidates = true
+				m.real = newCompilerMemoryThrottler(t.Name(), 1, rscthrottler.WithConstLimit(fixture.physical), rscthrottler.WithMemorySampleForTesting(fixture.physical, 0))
 			}
 			require.NoError(t, c.beginStatementImportMemory(ctx, m))
 			require.NotNil(t, c.importMemory, "the real public indexed LOAD DAG must retain a complete ticket through every gate")
 			require.NotNil(t, c.importMemory.WorkingSet)
+			require.GreaterOrEqual(t, c.importMemory.RecordBytes, min(c.importMemory.UnitBytes, int64(config.LargestEntryLimit)),
+				"a record inside the admitted batch unit must not require a later growth grant")
 			c.endImportMemory()
 			require.Nil(t, proc.Base.ImportMemory)
 		})

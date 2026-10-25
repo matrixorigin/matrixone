@@ -1,12 +1,23 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package ioutil
 
 import (
-	"fmt"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,6 +40,17 @@ func byteWindowEnd(data *batch.Batch, start, maxRows int, base, limit int64) int
 		return n
 	}
 	lo := start + 1
+	// Grow the search window geometrically. A small byte window must not
+	// repeatedly scan the whole remaining batch, while a fitting batch takes
+	// only a linear total scan instead of a near-full scan per midpoint.
+	for lo < hi {
+		end := lo + min(lo-start, hi-lo)
+		if size(end) > limit {
+			hi = end - 1
+			break
+		}
+		lo = end
+	}
 	for lo < hi {
 		mid := lo + (hi-lo+1)/2
 		if size(mid) <= limit {
@@ -121,7 +143,7 @@ func warmArenaBytes(payload, columns int64) int64 {
 // the same byte unit; a legal singleton can exceed that target.
 func IOEnvelope(projections [][]types.Type, unit, maxRowBytes int64) (int64, error) {
 	if unit <= 0 || maxRowBytes < 0 {
-		return 0, fmt.Errorf("invalid IO memory envelope")
+		return 0, moerr.NewInternalErrorNoCtx("invalid IO memory envelope")
 	}
 	payload := max(unit, maxRowBytes)
 	var columns int64
@@ -129,7 +151,7 @@ func IOEnvelope(projections [][]types.Type, unit, maxRowBytes int64) (int64, err
 		columns = max(columns, int64(len(schema)))
 	}
 	if payload > int64(math.MaxInt)/4 || columns > math.MaxInt64/(objectio.BlockMaxRows*128) {
-		return 0, fmt.Errorf("IO memory envelope overflow")
+		return 0, moerr.NewInternalErrorNoCtx("IO memory envelope overflow")
 	}
 	// Per-frame column headers, null masks and block/bloom/hash metadata. The
 	// bloom builder's row-index/hash arrays are bounded by one object block.
@@ -140,7 +162,7 @@ func IOEnvelope(projections [][]types.Type, unit, maxRowBytes int64) (int64, err
 	var total int64
 	for _, part := range parts {
 		if part < 0 || total > math.MaxInt64-part {
-			return 0, fmt.Errorf("IO memory envelope overflow")
+			return 0, moerr.NewInternalErrorNoCtx("IO memory envelope overflow")
 		}
 		total += part
 	}

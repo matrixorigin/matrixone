@@ -720,7 +720,51 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 }
 
 func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
-	return v.MarshalBinaryTo(buf)
+
+	// write class
+	buf.WriteByte(uint8(v.class))
+
+	// write type
+	data := types.EncodeType(&v.typ)
+	buf.Write(data)
+
+	// write length
+	length := uint32(v.length)
+	buf.Write(types.EncodeUint32(&length))
+
+	// write dataLen, data
+	dataLen := uint32(v.typ.TypeSize())
+	if !v.IsConst() {
+		dataLen *= uint32(v.length)
+	} else if v.IsConstNull() {
+		dataLen = 0
+	}
+	buf.Write(types.EncodeUint32(&dataLen))
+	if dataLen > 0 {
+		buf.Write(v.data[:dataLen])
+	}
+
+	// write areaLen, area
+	areaLen := uint32(len(v.area))
+	buf.Write(types.EncodeUint32(&areaLen))
+	if areaLen > 0 {
+		buf.Write(v.area)
+	}
+
+	// write nspLen, nsp
+	nspData, err := v.nsp.Show()
+	if err != nil {
+		return err
+	}
+	nspLen := uint32(len(nspData))
+	buf.Write(types.EncodeUint32(&nspLen))
+	if nspLen > 0 {
+		buf.Write(nspData)
+	}
+
+	buf.Write(types.EncodeBool(&v.sorted))
+
+	return nil
 }
 
 // MarshalBinarySize is the byte length of the existing vector encoding. It
@@ -742,6 +786,9 @@ func (v *Vector) MarshalBinarySize() int64 {
 // MarshalBinaryTo writes the same format as MarshalBinary without constructing
 // another copy of the whole vector. A short write is an error.
 func (v *Vector) MarshalBinaryTo(w io.Writer) error {
+	if buffer, ok := w.(*bytes.Buffer); ok {
+		return v.MarshalBinaryWithBuffer(buffer)
+	}
 	write := func(p []byte) error {
 		n, err := w.Write(p)
 		if err == nil && n != len(p) {
@@ -920,7 +967,7 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 		return err
 	}
 	if v.length < 0 || v.typ.Size < 0 {
-		return fmt.Errorf("invalid encoded vector length %d or type size %d", v.length, v.typ.Size)
+		return moerr.NewInternalErrorNoCtxf("invalid encoded vector length %d or type size %d", v.length, v.typ.Size)
 	}
 
 	// read data
@@ -941,7 +988,7 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 		}
 	}
 	if expected != int64(dataLen) {
-		return fmt.Errorf("encoded vector data length %d does not match required %d", dataLen, expected)
+		return moerr.NewInternalErrorNoCtxf("encoded vector data length %d does not match required %d", dataLen, expected)
 	}
 
 	// read area
@@ -967,13 +1014,13 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 		// Bitmap.Unmarshal has a fixed count/bit-length/data-length header.
 		// Check its nested length before slicing or exposing it to the bitmap.
 		if nspLen < 24 {
-			return fmt.Errorf("invalid encoded null bitmap header length %d", nspLen)
+			return moerr.NewInternalErrorNoCtxf("invalid encoded null bitmap header length %d", nspLen)
 		}
 		count := types.DecodeInt64(nspBuf[:8])
 		bits := types.DecodeUint64(nspBuf[8:16])
 		bytes := types.DecodeUint64(nspBuf[16:24])
 		if count < 0 || uint64(count) > bits || bytes%8 != 0 || bytes > uint64(nspLen-24) {
-			return fmt.Errorf("invalid encoded null bitmap size %d", bytes)
+			return moerr.NewInternalErrorNoCtxf("invalid encoded null bitmap size %d", bytes)
 		}
 		if err = v.nsp.Read(nspBuf); err != nil {
 			return err
@@ -2930,10 +2977,12 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		vCol = toSliceOfLengthNoTypeCheck[types.Varlena](v, v.length+addCnt)
 		ToSliceNoTypeCheck(w, &wCol)
 
-		// Copying physical area preserves aliases in flat vectors. Do so only
-		// when it costs no more than the selected rows' referenced payload;
-		// windows into oversized dead area still take the compacting path.
-		if flags == nil && w.UnionBatchAreaBytes(int(offset), int(offset)+cnt) == int64(len(w.area)) {
+		// Copying physical area preserves aliases in flat vectors.
+		// A whole owned vector can reuse already charged destination backing
+		// without a payload scan. Windows and copies requiring new area still
+		// compare referenced bytes so dead source area cannot inflate growth.
+		reuseWholeArea := offset == 0 && cnt == w.length && !w.cantFreeArea && len(w.area) <= cap(v.area)-len(v.area)
+		if flags == nil && (reuseWholeArea || w.UnionBatchAreaBytes(int(offset), int(offset)+cnt) == int64(len(w.area))) {
 			oldLen := v.length
 			baseOff := len(v.area)
 			if len(w.area) > 0 {
@@ -2950,18 +2999,17 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				}
 			}
 			// one memmove of the header array; inline varlenas carry their bytes here.
-			copy(vCol[oldLen:oldLen+cnt], wCol[int(offset):int(offset)+cnt])
+			appended := vCol[oldLen : oldLen+cnt]
+			copy(appended, wCol[int(offset):int(offset)+cnt])
 			// non-inline headers hold an offset into w.area; rebase into v.area. An
 			// inline varlena has s[0] <= 23 (its length byte), never the 0xffffffff
 			// big-header sentinel, so the check is exact.
 			if baseOff != 0 && len(w.area) > 0 {
-				p := unsafe.Pointer(&vCol[oldLen])
-				for i := 0; i < cnt; i++ {
-					s := (*[6]uint32)(p)
+				for i := range appended {
+					s := (*[6]uint32)(unsafe.Pointer(&appended[i]))
 					if s[0] == types.VarlenaBigHdr {
 						s[1] += uint32(baseOff)
 					}
-					p = unsafe.Add(p, types.VarlenaSize)
 				}
 			}
 			// propagate grouping bits (value is still real for these rows).

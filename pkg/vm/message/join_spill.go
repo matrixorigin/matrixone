@@ -3,17 +3,24 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-// http://www.apache.org/licenses/LICENSE-2.0
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package message
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"io"
 	"os"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // JoinSpillSource owns immutable anonymous files. Readers use independent offsets;
@@ -40,10 +47,10 @@ func (s *JoinSpillSource) Reader(bucket int) (*JoinSpillReader, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.retired {
-		return nil, errors.New("join spill source is retired")
+		return nil, moerr.NewInternalErrorNoCtx("join spill source is retired")
 	}
 	if bucket < 0 || bucket >= len(s.files) {
-		return nil, errors.New("invalid join spill bucket")
+		return nil, moerr.NewInternalErrorNoCtx("invalid join spill bucket")
 	}
 	f := s.files[bucket]
 	if f == nil {
@@ -98,7 +105,7 @@ func (s *JoinSpillSource) TakeFiles() ([]*os.File, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.retired || s.refs != 1 {
-		return nil, errors.New("join spill source is not exclusively owned")
+		return nil, moerr.NewInternalErrorNoCtx("join spill source is not exclusively owned")
 	}
 	files := s.files
 	s.files, s.refs, s.retired = nil, 0, true
@@ -179,17 +186,17 @@ func (g *JoinSpillGroup) SealActual(epoch uint64, ids []uint64) error {
 	order := append([]uint64(nil), ids...)
 	for _, id := range ids {
 		if _, exists := expected[id]; exists {
-			return errors.New("duplicate broadcast spill participant")
+			return moerr.NewInternalErrorNoCtx("duplicate broadcast spill participant")
 		}
 		expected[id] = struct{}{}
 	}
 	if len(ids) == 0 {
-		return errors.New("empty broadcast spill topology")
+		return moerr.NewInternalErrorNoCtx("empty broadcast spill topology")
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if epoch != g.epoch || g.phase != joinSpillCollecting {
-		return errors.New("broadcast spill generation is unavailable")
+		return moerr.NewInternalErrorNoCtx("broadcast spill generation is unavailable")
 	}
 	if g.expected != nil {
 		if len(g.order) == len(ids) {
@@ -201,7 +208,7 @@ func (g *JoinSpillGroup) SealActual(epoch uint64, ids []uint64) error {
 				return nil
 			}
 		}
-		return errors.New("broadcast spill topology already sealed")
+		return moerr.NewInternalErrorNoCtx("broadcast spill topology already sealed")
 	}
 	g.expected, g.order = expected, order
 	g.registered = make(map[uint64][]*os.File, len(ids))
@@ -228,7 +235,7 @@ func (g *JoinSpillGroup) PublishBuild(files []*os.File) error {
 	if g.phase != joinSpillCollecting || g.source != nil {
 		g.mu.Unlock()
 		source.Close()
-		return errors.New("broadcast spill generation is unavailable")
+		return moerr.NewInternalErrorNoCtx("broadcast spill generation is unavailable")
 	}
 	g.source, g.spilled = source, true
 	g.mu.Unlock()
@@ -265,13 +272,13 @@ func (g *JoinSpillGroup) Register(epoch uint64, id uint64, files []*os.File) (*J
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if epoch != g.epoch || g.phase != joinSpillCollecting || g.source == nil {
-		return nil, errors.New("broadcast spill generation is unavailable")
+		return nil, moerr.NewInternalErrorNoCtx("broadcast spill generation is unavailable")
 	}
 	if _, ok := g.expected[id]; !ok {
-		return nil, fmt.Errorf("unexpected broadcast spill participant %d", id)
+		return nil, moerr.NewInternalErrorNoCtxf("unexpected broadcast spill participant %d", id)
 	}
 	if _, ok := g.registered[id]; ok {
-		return nil, fmt.Errorf("duplicate broadcast spill participant %d", id)
+		return nil, moerr.NewInternalErrorNoCtxf("duplicate broadcast spill participant %d", id)
 	}
 	g.registered[id] = files
 	if len(g.registered) != len(g.expected) || len(g.sealedScopes) != len(g.expectedScopes) {
@@ -374,24 +381,24 @@ func (g *JoinSpillGroup) SealScope(epoch uint64, scope uint32, parallelIDs []int
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if epoch != g.epoch || g.phase != joinSpillCollecting {
-		return errors.New("broadcast spill generation is unavailable")
+		return moerr.NewInternalErrorNoCtx("broadcast spill generation is unavailable")
 	}
 	if _, ok := g.expectedScopes[scope]; !ok {
-		return errors.New("unexpected broadcast spill scope")
+		return moerr.NewInternalErrorNoCtx("unexpected broadcast spill scope")
 	}
 	if _, ok := g.sealedScopes[scope]; ok {
 		return nil
 	}
 	if len(parallelIDs) == 0 {
-		return errors.New("empty actual broadcast spill scope")
+		return moerr.NewInternalErrorNoCtx("empty actual broadcast spill scope")
 	}
 	for _, id := range parallelIDs {
 		if id < 0 {
-			return errors.New("negative broadcast spill parallel ID")
+			return moerr.NewInternalErrorNoCtx("negative broadcast spill parallel ID")
 		}
 		participant := uint64(scope)<<32 | uint64(uint32(id))
 		if _, ok := g.expected[participant]; ok {
-			return errors.New("duplicate broadcast spill parallel ID")
+			return moerr.NewInternalErrorNoCtx("duplicate broadcast spill parallel ID")
 		}
 		g.expected[participant] = struct{}{}
 		g.order = append(g.order, participant)
@@ -436,7 +443,7 @@ func (g *JoinSpillGroup) PublishMemory(jm *JoinMap) error {
 		if jm != nil {
 			jm.Free()
 		}
-		return errors.New("broadcast generation is unavailable")
+		return moerr.NewInternalErrorNoCtx("broadcast generation is unavailable")
 	}
 	g.memoryMap = jm
 	g.mu.Unlock()

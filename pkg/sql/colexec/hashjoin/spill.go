@@ -97,7 +97,7 @@ func (r *spillBucketReader) readBatch(proc *process.Process, reuseBat *batch.Bat
 	batchSize := types.DecodeInt64(r.buf)
 	frameLimit := int64(1 << 40)
 	if proc.Base.ImportMemory != nil {
-		frameLimit = proc.Base.ImportMemory.JoinInputBytes
+		frameLimit = proc.Base.ImportMemory.JoinInputCapacity()
 	}
 	if cnt <= 0 || cnt > 8192 || batchSize <= 0 || batchSize > frameLimit {
 		return nil, moerr.NewInternalError(proc.Ctx, "invalid spill frame length")

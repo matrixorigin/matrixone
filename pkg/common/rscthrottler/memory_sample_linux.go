@@ -1,12 +1,23 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //go:build linux
 
 package rscthrottler
 
 import (
 	"errors"
-	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -16,6 +27,7 @@ import (
 	"github.com/containerd/cgroups/v3"
 	"github.com/containerd/cgroups/v3/cgroup1"
 	"github.com/containerd/cgroups/v3/cgroup2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func readCgroupMemory() (limit, current, inactive int64, err error) {
@@ -24,7 +36,7 @@ func readCgroupMemory() (limit, current, inactive int64, err error) {
 		if _, statErr := os.Stat("/sys/fs/cgroup"); errors.Is(statErr, os.ErrNotExist) {
 			return 0, 0, 0, errNoMemoryController
 		}
-		return 0, 0, 0, errors.New("cannot determine cgroup mount state")
+		return 0, 0, 0, moerr.NewInternalErrorNoCtx("cannot determine cgroup mount state")
 	}
 	if mode == cgroups.Unified {
 		_, group, e := cgroups.ParseCgroupFileUnified("/proc/self/cgroup")
@@ -76,7 +88,7 @@ func readLegacyMemory(group string, mount memoryCgroupMount, path cgroup1.Path, 
 		return 0, 0, 0, e
 	}
 	if mount.mountpoint != mountpoint {
-		return 0, 0, 0, errors.New("memory cgroup mount does not match selected controller")
+		return 0, 0, 0, moerr.NewInternalErrorNoCtx("memory cgroup mount does not match selected controller")
 	}
 	directory, e := resolveMemoryCgroupPath(group, mount)
 	if e != nil {
@@ -109,10 +121,10 @@ func readLegacyMemory(group string, mount memoryCgroupMount, path cgroup1.Path, 
 	}
 	m := stats.GetMemory()
 	if m == nil {
-		return 0, 0, 0, errors.New("incomplete cgroup memory accounting")
+		return 0, 0, 0, moerr.NewInternalErrorNoCtx("incomplete cgroup memory accounting")
 	}
 	if m.GetUsage() == nil || m.GetUsage().GetUsage() == 0 {
-		return 0, 0, 0, errors.New("incomplete cgroup memory usage")
+		return 0, 0, 0, moerr.NewInternalErrorNoCtx("incomplete cgroup memory usage")
 	}
 	inactive = max(0, memoryInt(m.GetTotalInactiveFile())-memoryInt(m.GetTotalDirty()))
 	inactive = max(0, inactive-memoryInt(m.GetTotalWriteback()))
@@ -121,11 +133,11 @@ func readLegacyMemory(group string, mount memoryCgroupMount, path cgroup1.Path, 
 
 func legacyMemoryControllerPath(subsystems []cgroup1.Subsystem) (string, error) {
 	if len(subsystems) != 1 || subsystems[0].Name() != cgroup1.Memory {
-		return "", errors.New("invalid memory cgroup hierarchy")
+		return "", moerr.NewInternalErrorNoCtx("invalid memory cgroup hierarchy")
 	}
 	controller, ok := subsystems[0].(interface{ Path(string) string })
 	if !ok {
-		return "", errors.New("memory cgroup controller has no path")
+		return "", moerr.NewInternalErrorNoCtx("memory cgroup controller has no path")
 	}
 	return controller.Path("/"), nil
 }
@@ -178,7 +190,7 @@ func readUnifiedMemory(path string) (limit, current, inactive int64, err error) 
 	current = memoryInt(n)
 	fields := strings.Fields(string(data[2]))
 	if len(fields) == 0 || len(fields)%2 != 0 {
-		return 0, 0, 0, fmt.Errorf("incomplete cgroup memory.stat")
+		return 0, 0, 0, moerr.NewInternalErrorNoCtx("incomplete cgroup memory.stat")
 	}
 	values := make(map[string]int64)
 	for i := 0; i < len(fields); i += 2 {

@@ -1,8 +1,16 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-// http://www.apache.org/licenses/LICENSE-2.0
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package hashjoin
 
@@ -205,7 +213,7 @@ func TestBroadcastParticipantPrepareFailure(t *testing.T) {
 	defer proc.Free()
 	proc.SetMessageBoard(message.NewMessageBoard())
 	budget := rscthrottler.NewMemThrottler(t.Name(), .9, rscthrottler.WithConstLimit(1<<30))
-	working, err := rscthrottler.ReserveWorkingSet(proc.Ctx, budget, rscthrottler.WorkingSetSpec{UnitBytes: 1, Inputs: []rscthrottler.InputSlotSpec{{Name: "source"}, {Name: "output", Count: 1, Bytes: 1}, {Name: "join", Count: 2, Bytes: 1}}, IOBytes: 1})
+	working, err := budget.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(proc.Ctx, []rscthrottler.WorkingSetSpec{{UnitBytes: 1, Inputs: []rscthrottler.InputSlotSpec{{Name: "source"}, {Name: "output", Count: 1, Bytes: 1}, {Name: "join", Count: 2, Bytes: 1}}, IOBytes: 1}})
 	require.NoError(t, err)
 	working.Close() // deterministic failure of the first actual Prepare lease
 	proc.Base.ImportMemory = &process.ImportMemory{WorkingSet: working, UnitBytes: 1}

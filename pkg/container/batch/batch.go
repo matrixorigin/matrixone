@@ -112,12 +112,54 @@ func (bat *Batch) MarshalBinary() ([]byte, error) {
 }
 
 func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, error) {
+	// reset the buffer if caller wants to.
 	if reset {
 		w.Reset()
 	}
-	if err := bat.MarshalBinaryTo(w); err != nil {
-		return nil, err
+
+	// row count.
+	rl := int64(bat.rowCount)
+	w.Write(types.EncodeInt64(&rl))
+
+	// Vecs
+	l := int32(len(bat.Vecs))
+	w.Write(types.EncodeInt32(&l))
+	for i := 0; i < int(l); i++ {
+		var size uint32
+		if bat.Vecs[i].MarshalBinarySize() > int64(^uint32(0)) {
+			return nil, moerr.NewInternalErrorNoCtx("vector encoding exceeds frame size")
+		}
+		offset := w.Len()
+		w.Write(types.EncodeUint32(&size))
+		err := bat.Vecs[i].MarshalBinaryWithBuffer(w)
+		if err != nil {
+			return nil, err
+		}
+		size = uint32(w.Len() - offset - 4)
+		buf := w.Bytes()
+		copy(buf[offset:], types.EncodeUint32(&size))
 	}
+
+	// Attrs
+	l = int32(len(bat.Attrs))
+	w.Write(types.EncodeInt32(&l))
+	for i := 0; i < int(l); i++ {
+		size := int32(len(bat.Attrs[i]))
+		w.Write(types.EncodeInt32(&size))
+		n, _ := w.WriteString(bat.Attrs[i])
+		if int32(n) != size {
+			panic("unexpected length for string")
+		}
+	}
+
+	// ExtraBuf
+	extraSize := uint32(len(bat.ExtraBuf))
+	w.Write(types.EncodeUint32(&extraSize))
+	w.Write(bat.ExtraBuf)
+
+	w.Write(types.EncodeInt32(&bat.Recursive))
+	w.Write(types.EncodeInt32(&bat.ShuffleIDX))
+
 	return w.Bytes(), nil
 }
 
@@ -136,6 +178,10 @@ func (bat *Batch) MarshalBinarySize() int64 {
 // MarshalBinaryTo streams the existing batch encoding. Lengths are computed
 // from the source, so even a non-seekable writer needs no whole-batch buffer.
 func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
+	if buffer, ok := w.(*bytes.Buffer); ok {
+		_, err := bat.MarshalBinaryWithBuffer(buffer, false)
+		return err
+	}
 	write := func(p []byte) error {
 		n, err := w.Write(p)
 		if err == nil && n != len(p) {
@@ -154,7 +200,7 @@ func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
 	for _, v := range bat.Vecs {
 		size64 := v.MarshalBinarySize()
 		if size64 > int64(^uint32(0)) {
-			return fmt.Errorf("vector encoding exceeds frame size: %d", size64)
+			return moerr.NewInternalErrorNoCtxf("vector encoding exceeds frame size: %d", size64)
 		}
 		size := uint32(size64)
 		if err := write(types.EncodeUint32(&size)); err != nil {

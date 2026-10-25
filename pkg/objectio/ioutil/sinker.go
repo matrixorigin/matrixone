@@ -23,6 +23,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -524,7 +525,7 @@ func (sinker *Sinker) RetainedBitmapBytes() int64 {
 // is acquired, and the input remains borrowed until this method returns.
 func (sinker *Sinker) WriteBorrowedToFile(ctx context.Context, data *batch.Batch, lease *rscthrottler.WorkspaceLease) error {
 	if lease == nil {
-		return fmt.Errorf("borrowed spill requires IO workspace")
+		return moerr.NewInternalErrorNoCtx("borrowed spill requires IO workspace")
 	}
 	var payload int64
 	schema := make([]types.Type, len(data.Vecs))

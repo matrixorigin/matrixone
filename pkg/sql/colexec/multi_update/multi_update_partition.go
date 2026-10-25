@@ -350,7 +350,6 @@ func (op *PartitionMultiUpdate) Reset(
 ) {
 	op.raw.Reset(proc, pipelineFailed, err)
 	op.freePartitionWriters(proc)
-	op.affectedRows = 0
 }
 
 // The wrapper owns writers in both Build and Eval. A partial execution must

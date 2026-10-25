@@ -1,29 +1,85 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package external
 
 import (
-	"fmt"
 	"math"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/crt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 )
 
+// MemoryRecordBytes bounds a record by its input, when that input has a known
+// uncompressed size. LOCAL streams and compressed files retain the configured
+// limit. CsvReader enforces the same bound before growing its record buffer,
+// including when a file changes after planning.
+func (external *External) MemoryRecordBytes() int64 {
+	param, ok := external.memoryInputParam()
+	if !ok {
+		return int64(config.LargestEntryLimit)
+	}
+	return csvRecordBytes(&external.Es.ExParamConst, param)
+}
+
+func csvRecordBytes(source *ExParamConst, param *tree.ExternParam) int64 {
+	limit := int64(config.LargestEntryLimit)
+	if param.Local {
+		return limit
+	}
+	if param.ScanType == tree.INLINE {
+		if crt.GetCompressType(param.CompressType, param.Filepath) != tree.NOCOMPRESS {
+			return limit
+		}
+		return min(limit, max(1, int64(len(param.Data))))
+	}
+	if len(source.FileList) == 0 || len(source.FileList) != len(source.FileSize) {
+		return limit
+	}
+	var size int64
+	for i, path := range source.FileList {
+		if source.FileSize[i] < 0 || crt.GetCompressType(param.CompressType, path) != tree.NOCOMPRESS {
+			return limit
+		}
+		size = max(size, source.FileSize[i])
+	}
+	return min(limit, max(1, size))
+}
+
+func recordByteLimit(inputBytes int64) int64 {
+	if inputBytes <= 0 {
+		return int64(config.LargestEntryLimit)
+	}
+	return min(inputBytes, int64(config.LargestEntryLimit))
+}
+
 // SourceEnvelopeForFields describes allocations that can coexist while one CSV
-// row is converted. The row limit is the existing configured entry limit, not
-// a customer-specific threshold. retainedFields must match CSVParser.RetainFields.
+// row is converted. recordBytes is a proven input bound, capped by the configured
+// entry limit; zero keeps that limit. retainedFields matches CSVParser.RetainFields.
 // The factors below are allocation-table bounds, not runtime tuning controls:
 // append old+new (3), byte parser scratch (10), and JSON tree nodes (64).
-func SourceEnvelopeForFields(schema []types.Type, unit int64, retainedFields int) (int64, error) {
+func SourceEnvelopeForFields(schema []types.Type, unit, recordBytes int64, retainedFields int) (int64, error) {
 	if unit <= 0 || retainedFields < 0 || config.LargestEntryLimit <= 0 {
-		return 0, fmt.Errorf("invalid CSV memory envelope")
+		return 0, moerr.NewInternalErrorNoCtx("invalid CSV memory envelope")
 	}
-	limit := int64(config.LargestEntryLimit)
-	row, err := MaxRowBytes(schema)
+	limit := recordByteLimit(recordBytes)
+	row, err := MaxRowBytes(schema, limit)
 	if err != nil {
 		return 0, err
 	}
@@ -47,23 +103,23 @@ func SourceEnvelopeForFields(schema []types.Type, unit int64, retainedFields int
 	var total int64
 	for _, part := range parts {
 		if part < 0 || total > math.MaxInt64-part {
-			return 0, fmt.Errorf("CSV memory envelope overflow")
+			return 0, moerr.NewInternalErrorNoCtx("CSV memory envelope overflow")
 		}
 		total += part
 	}
 	return total, nil
 }
 
-// MaxRowBytes is the typed payload bound for one configured raw record.
-func MaxRowBytes(schema []types.Type) (int64, error) {
-	limit := int64(config.LargestEntryLimit)
+// MaxRowBytes is the typed payload bound for one bounded raw record.
+func MaxRowBytes(schema []types.Type, recordBytes int64) (int64, error) {
+	limit := recordByteLimit(recordBytes)
 	if limit <= 0 {
-		return 0, fmt.Errorf("invalid CSV raw record limit")
+		return 0, moerr.NewInternalErrorNoCtx("invalid CSV raw record limit")
 	}
 	var fixed, factor int64
 	for _, typ := range schema {
 		if int64(typ.TypeSize()) > math.MaxInt64-fixed {
-			return 0, fmt.Errorf("CSV row memory envelope overflow")
+			return 0, moerr.NewInternalErrorNoCtx("CSV row memory envelope overflow")
 		}
 		fixed += int64(typ.TypeSize())
 		switch typ.Oid {
@@ -80,7 +136,7 @@ func MaxRowBytes(schema []types.Type) (int64, error) {
 		}
 	}
 	if factor > 0 && limit > (math.MaxInt64-fixed)/factor {
-		return 0, fmt.Errorf("CSV row memory envelope overflow")
+		return 0, moerr.NewInternalErrorNoCtx("CSV row memory envelope overflow")
 	}
 	return fixed + factor*limit, nil
 }

@@ -125,13 +125,55 @@ func MergeSortBatches(
 	)
 	size := len(batches)
 	buffer.CleanOnlyData()
+	areas := make([]int, len(buffer.Vecs))
+	var varlenCols []int
+	for col, vec := range buffer.Vecs {
+		if vec.GetType().IsVarlen() {
+			varlenCols = append(varlenCols, col)
+		}
+	}
+	// Bitmap-bearing sources retain the exact null/grouping growth forecast.
+	var hasBitmaps bool
+	for _, b := range batches {
+		for _, vec := range b.Vecs {
+			hasBitmaps = hasBitmaps || !vec.GetNulls().EmptyByFlag() || !vec.GetGrouping().EmptyByFlag()
+		}
+	}
+	allocated, dataRows := 0, 0
+	refreshCapacity := func() {
+		allocated, dataRows = buffer.Allocated(), objectio.BlockMaxRows
+		for _, vec := range buffer.Vecs {
+			width := vec.GetType().TypeSize()
+			if width <= 0 {
+				dataRows = 0
+				break
+			}
+			dataRows = min(dataRows, cap(vec.GetData())/width)
+		}
+	}
+	refreshCapacity()
 	for size > 0 {
 		batchIndex, rowIndex, size = merge.getNextPos()
-		var growth int64
-		for i, v := range buffer.Vecs {
-			growth += v.AppendWindowAllocation(batches[batchIndex].Vecs[i], rowIndex, rowIndex+1)
+		mayGrow := lens >= dataRows
+		for _, col := range varlenCols {
+			src := batches[batchIndex].Vecs[col]
+			area := 0
+			if !src.IsNull(uint64(rowIndex)) {
+				if n := len(src.GetBytesAt(rowIndex)); n > types.VarlenaInlineSize {
+					area = n
+				}
+			}
+			areas[col] = area
+			backing := buffer.Vecs[col].GetArea()
+			mayGrow = mayGrow || area > cap(backing)-len(backing)
 		}
-		if lens > 0 && int64(buffer.Allocated())+growth > byteLimit {
+		var growth int64
+		if mayGrow || hasBitmaps {
+			for i, v := range buffer.Vecs {
+				growth += v.AppendWindowAllocation(batches[batchIndex].Vecs[i], rowIndex, rowIndex+1)
+			}
+		}
+		if lens > 0 && int64(allocated)+growth > byteLimit {
 			buffer.SetRowCount(lens)
 			var err error
 			buffer, err = sinker(buffer)
@@ -139,20 +181,26 @@ func MergeSortBatches(
 				return buffer, err
 			}
 			lens = 0
+			refreshCapacity()
+			mayGrow = true
 		}
-		if lens == 0 && int64(buffer.Allocated()) > byteLimit {
+		if lens == 0 && int64(allocated) > byteLimit {
 			buffer.FreeColumns(mp)
+			mayGrow = true
 		}
 		for i := range buffer.Vecs {
-			src := batches[batchIndex].Vecs[i]
-			area := src.WindowSize(rowIndex, rowIndex+1) - int64(src.GetType().TypeSize())
-			if err := buffer.Vecs[i].PreExtendWithArea(1, int(area), mp); err != nil {
-				return buffer, err
+			if mayGrow {
+				if err := buffer.Vecs[i].PreExtendWithArea(1, areas[i], mp); err != nil {
+					return buffer, err
+				}
 			}
 			err := buffer.Vecs[i].UnionOne(batches[batchIndex].Vecs[i], int64(rowIndex), mp)
 			if err != nil {
 				return buffer, err
 			}
+		}
+		if mayGrow {
+			refreshCapacity()
 		}
 		// all data in batches[batchIndex] are used. Clean it.
 		if putBack != nil && rowIndex+1 == batches[batchIndex].RowCount() {
@@ -166,6 +214,7 @@ func MergeSortBatches(
 			if buffer, err = sinker(buffer); err != nil {
 				return buffer, err
 			}
+			refreshCapacity()
 		}
 	}
 	if lens > 0 {

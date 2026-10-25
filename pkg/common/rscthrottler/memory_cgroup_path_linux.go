@@ -1,5 +1,17 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 //go:build linux
 
 package rscthrottler
@@ -7,8 +19,6 @@ package rscthrottler
 import (
 	"bufio"
 	"bytes"
-	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,6 +26,8 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type memoryCgroupMount struct{ root, mountpoint string }
@@ -55,7 +67,7 @@ func parseMemoryCgroupMountID(reader io.Reader) (uint64, error) {
 			continue
 		}
 		if found || len(fields) != 2 {
-			return 0, errors.New("invalid or duplicate fdinfo mount ID")
+			return 0, moerr.NewInternalErrorNoCtx("invalid or duplicate fdinfo mount ID")
 		}
 		var err error
 		id, err = memoryMountNumber(fields[1])
@@ -68,7 +80,7 @@ func parseMemoryCgroupMountID(reader io.Reader) (uint64, error) {
 		return 0, err
 	}
 	if !found {
-		return 0, errors.New("fdinfo mount ID not found")
+		return 0, moerr.NewInternalErrorNoCtx("fdinfo mount ID not found")
 	}
 	return id, nil
 }
@@ -76,12 +88,12 @@ func parseMemoryCgroupMountID(reader io.Reader) (uint64, error) {
 func memoryMountNumber(value string) (uint64, error) {
 	for _, digit := range value {
 		if digit < '0' || digit > '9' {
-			return 0, errors.New("invalid memory cgroup mount ID")
+			return 0, moerr.NewInternalErrorNoCtx("invalid memory cgroup mount ID")
 		}
 	}
 	id, err := strconv.ParseUint(value, 10, 64)
 	if err != nil || id == 0 {
-		return 0, errors.New("invalid memory cgroup mount ID")
+		return 0, moerr.NewInternalErrorNoCtx("invalid memory cgroup mount ID")
 	}
 	return id, nil
 }
@@ -91,7 +103,7 @@ func memoryMountNumber(value string) (uint64, error) {
 // hide an older record; only the opened directory establishes the visible one.
 func parseMemoryCgroupMount(reader io.Reader, mountID uint64, fsType, controller, expectedMountpoint string) (memoryCgroupMount, error) {
 	if mountID == 0 || expectedMountpoint == "" {
-		return memoryCgroupMount{}, errors.New("missing memory cgroup mount identity")
+		return memoryCgroupMount{}, moerr.NewInternalErrorNoCtx("missing memory cgroup mount identity")
 	}
 	var mount memoryCgroupMount
 	var selectedType, selectedOptions string
@@ -100,11 +112,11 @@ func parseMemoryCgroupMount(reader io.Reader, mountID uint64, fsType, controller
 	for scanner.Scan() {
 		parts := strings.SplitN(scanner.Text(), " - ", 2)
 		if len(parts) != 2 {
-			return memoryCgroupMount{}, errors.New("invalid cgroup mountinfo record")
+			return memoryCgroupMount{}, moerr.NewInternalErrorNoCtx("invalid cgroup mountinfo record")
 		}
 		left, right := strings.Fields(parts[0]), strings.Fields(parts[1])
 		if len(left) < 6 || len(right) < 3 {
-			return memoryCgroupMount{}, errors.New("incomplete cgroup mountinfo record")
+			return memoryCgroupMount{}, moerr.NewInternalErrorNoCtx("incomplete cgroup mountinfo record")
 		}
 		id, err := memoryMountNumber(left[0])
 		if err != nil {
@@ -114,7 +126,7 @@ func parseMemoryCgroupMount(reader io.Reader, mountID uint64, fsType, controller
 			continue
 		}
 		if found {
-			return memoryCgroupMount{}, errors.New("duplicate memory cgroup mountinfo ID")
+			return memoryCgroupMount{}, moerr.NewInternalErrorNoCtx("duplicate memory cgroup mountinfo ID")
 		}
 		found = true
 		mount = memoryCgroupMount{root: unescapeMemoryMountPath(left[3]), mountpoint: unescapeMemoryMountPath(left[4])}
@@ -124,10 +136,10 @@ func parseMemoryCgroupMount(reader io.Reader, mountID uint64, fsType, controller
 		return memoryCgroupMount{}, err
 	}
 	if !found {
-		return memoryCgroupMount{}, errors.New("selected memory cgroup mount not found")
+		return memoryCgroupMount{}, moerr.NewInternalErrorNoCtx("selected memory cgroup mount not found")
 	}
 	if mount.mountpoint != expectedMountpoint || selectedType != fsType {
-		return memoryCgroupMount{}, errors.New("memory cgroup mount identity mismatch")
+		return memoryCgroupMount{}, moerr.NewInternalErrorNoCtx("memory cgroup mount identity mismatch")
 	}
 	if controller != "" {
 		for _, option := range strings.Split(selectedOptions, ",") {
@@ -135,7 +147,7 @@ func parseMemoryCgroupMount(reader io.Reader, mountID uint64, fsType, controller
 				return mount, nil
 			}
 		}
-		return memoryCgroupMount{}, errors.New("selected cgroup mount lacks memory controller")
+		return memoryCgroupMount{}, moerr.NewInternalErrorNoCtx("selected cgroup mount lacks memory controller")
 	}
 	return mount, nil
 }
@@ -150,7 +162,7 @@ func unescapeMemoryMountPath(path string) string {
 func resolveMemoryCgroupPath(groupPath string, mount memoryCgroupMount) (string, error) {
 	for _, path := range []string{groupPath, mount.root, mount.mountpoint} {
 		if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-			return "", fmt.Errorf("invalid memory cgroup path %q", path)
+			return "", moerr.NewInternalErrorNoCtxf("invalid memory cgroup path %q", path)
 		}
 	}
 	relative, err := filepath.Rel(mount.root, groupPath)
@@ -158,7 +170,7 @@ func resolveMemoryCgroupPath(groupPath string, mount memoryCgroupMount) (string,
 		return "", err
 	}
 	if relative == ".." || strings.HasPrefix(relative, "../") {
-		return "", errors.New("current process is outside the memory cgroup mount root")
+		return "", moerr.NewInternalErrorNoCtx("current process is outside the memory cgroup mount root")
 	}
 	return filepath.Join(mount.mountpoint, relative), nil
 }

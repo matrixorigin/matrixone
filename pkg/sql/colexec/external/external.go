@@ -1017,6 +1017,12 @@ func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalPar
 	if catalog.ContainExternalHidenCol(colName) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
 	}
+	// Capacity forecasting also reads fields before getOneRowData applies the
+	// strict-row policy. A missing field contributes no payload; validation and
+	// permissive NULL filling remain with that owner.
+	if fieldIdx < 0 || int64(fieldIdx) >= int64(len(line)) {
+		return csvparser.Field{IsNull: true}
+	}
 	return line[fieldIdx]
 }
 

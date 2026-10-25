@@ -19,11 +19,12 @@ import (
 	"math"
 	"os"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/shirou/gopsutil/v3/process"
 )
 
-var errNoMemoryController = errors.New("cgroup memory controller is not available")
+var errNoMemoryController = moerr.NewInternalErrorNoCtx("cgroup memory controller is not available")
 
 type memorySample struct {
 	rss            int64
@@ -37,7 +38,12 @@ type memorySample struct {
 	err            error
 }
 
-func memoryInt(n uint64) int64 { return int64(min(n, uint64(math.MaxInt64))) }
+func memoryInt(n uint64) int64 {
+	if n > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(n)
+}
 
 func readProcessMemory() memorySample {
 	s := memorySample{rss: -1, total: memoryInt(objectio.TotalMem())}

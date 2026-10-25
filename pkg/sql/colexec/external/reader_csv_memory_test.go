@@ -1,6 +1,17 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package external
 
 import (
@@ -11,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -22,6 +34,60 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCSVShortRowPreservesStrictAndLocalPolicy(t *testing.T) {
+	for _, mode := range []struct {
+		name          string
+		strict, local bool
+	}{
+		{"strict", true, false}, {"permissive", false, false}, {"local", true, true},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			param := &ExternalParam{ExParamConst: ExParamConst{
+				Ctx: proc.Ctx, ColumnListLen: 2, StrictSqlMode: mode.strict,
+				Attrs:  []plan.ExternAttr{{ColName: "a", ColIndex: 0, ColFieldIndex: 0}, {ColName: "b", ColIndex: 1, ColFieldIndex: 1}},
+				Cols:   []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_varchar)}}, {Typ: plan.Type{Id: int32(types.T_varchar)}}},
+				Extern: &tree.ExternParam{ExParamConst: tree.ExParamConst{Format: tree.CSV, Tail: &tree.TailParameter{}}, ExParam: tree.ExParam{Local: mode.local}},
+			}}
+			p, err := newCSVParserFromReader(param.Extern, strings.NewReader("one\n"))
+			require.NoError(t, err)
+			r := &CsvReader{param: param, plh: &ParseLineHandler{csvReader: p}, reader: io.NopCloser(strings.NewReader(""))}
+			defer r.Close()
+			bat := batch.NewWithSize(2)
+			for i := range bat.Vecs {
+				bat.Vecs[i] = vector.NewVec(types.T_varchar.ToType())
+			}
+			defer bat.Clean(proc.Mp())
+			_, err = r.makeBatchRows(proc, bat)
+			if mode.strict && !mode.local {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, bat.RowCount())
+			require.Equal(t, "one", string(bat.Vecs[0].GetBytesAt(0)))
+			require.True(t, bat.Vecs[1].GetNulls().Contains(0))
+		})
+	}
+}
+
+func TestCSVRecordBoundUsesOnlyKnownUncompressedInput(t *testing.T) {
+	source := ExParamConst{FileList: []string{"a.csv", "b.csv"}, FileSize: []int64{64, 128}}
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INFILE}}
+	require.Equal(t, int64(128), csvRecordBytes(&source, param))
+	source.FileList[1] = "b.csv.gz"
+	require.Equal(t, int64(config.LargestEntryLimit), csvRecordBytes(&source, param))
+	param.Local = true
+	param.ScanType = tree.INLINE
+	param.Data = "one\n"
+	require.Equal(t, int64(config.LargestEntryLimit), csvRecordBytes(&source, param))
+	param.Local = false
+	require.Equal(t, int64(4), csvRecordBytes(&source, param))
+	param.CompressType = tree.GZIP
+	require.Equal(t, int64(config.LargestEntryLimit), csvRecordBytes(&source, param))
+}
 
 type inputOwnerExecutor struct {
 	colexec.ExpressionExecutor
@@ -37,9 +103,9 @@ func TestCSVResetDestroysProjectionBeforeReturningInputSlot(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
 	owner := rscthrottler.NewMemThrottler("external-reset-owner", 1, rscthrottler.WithConstLimit(1<<30))
-	ws, err := rscthrottler.ReserveWorkingSet(proc.Ctx, owner, rscthrottler.WorkingSetSpec{
+	ws, err := owner.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(proc.Ctx, []rscthrottler.WorkingSetSpec{{
 		UnitBytes: 1 << 20, Inputs: []rscthrottler.InputSlotSpec{{Name: "csv", Count: 1, Bytes: 1 << 20}}, IOBytes: 1,
-	})
+	}})
 	require.NoError(t, err)
 	defer ws.Close()
 	lease, err := ws.AcquireInput(proc.Ctx, 0)
@@ -155,6 +221,9 @@ func TestCSVAdmittedUnitControlsRawAndTypedBatches(t *testing.T) {
 		{name: "raw_ignored_fields", payloads: []string{
 			strings.Repeat("x", 300), strings.Repeat("y", 300), strings.Repeat("z", 1500), "ab", "cd",
 		}, ignored: true, wantOversized: true},
+		{name: "capacity_reuse_then_area_growth", payloads: []string{
+			"a", "b", "c", "d", strings.Repeat("e", 300), "f", "g", "h",
+		}, payloadType: types.T_varchar.ToType()},
 		{name: "typed_singleton", payloads: []string{
 			strings.Repeat("x", 2048), "short", strings.Repeat("y", 200), "tiny",
 		}, payloadType: types.T_text.ToType(), wantOversized: true},
@@ -163,12 +232,19 @@ func TestCSVAdmittedUnitControlsRawAndTypedBatches(t *testing.T) {
 			proc := testutil.NewProc(t)
 			defer proc.Free()
 			owner := rscthrottler.NewMemThrottler("csv-admitted-unit", 1, rscthrottler.WithConstLimit(1<<30))
-			ws, err := rscthrottler.ReserveWorkingSet(proc.Ctx, owner, rscthrottler.WorkingSetSpec{
+			ws, err := owner.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(proc.Ctx, []rscthrottler.WorkingSetSpec{{
 				UnitBytes: unit, Inputs: []rscthrottler.InputSlotSpec{{Name: "csv", Count: 1, Bytes: 1 << 20}}, IOBytes: 1,
-			})
+			}})
 			require.NoError(t, err)
 			defer ws.Close()
-			proc.Base.ImportMemory = &process.ImportMemory{WorkingSet: ws, UnitBytes: ws.UnitBytes(), SourceBytes: 1 << 20, IOBytes: 1}
+			growths := 0
+			proc.Base.ImportMemory = &process.ImportMemory{WorkingSet: ws, UnitBytes: ws.UnitBytes(), SourceBytes: 1 << 20, IOBytes: 1, RecordBytes: 1024,
+				GrowRecord: func(ctx context.Context, need int64) (int64, error) {
+					growths++
+					return 4096, ws.TryGrow(ctx, rscthrottler.WorkingSetSpec{UnitBytes: unit,
+						Inputs: []rscthrottler.InputSlotSpec{{Name: "csv", Count: 1, Bytes: 2 << 20}}, IOBytes: 1})
+				},
+			}
 			proc.Base.Lim.MaxMsgSize = 128 << 20
 			proc.Base.Lim.BatchSize = 64 << 20
 			param := &ExternalParam{ExParamConst: ExParamConst{
@@ -235,6 +311,7 @@ func TestCSVAdmittedUnitControlsRawAndTypedBatches(t *testing.T) {
 			}
 			require.Equal(t, expected, got)
 			require.Equal(t, tc.wantOversized, sawOversized)
+			require.Equal(t, tc.wantOversized, growths > 0, "reader must grow admission for a wider raw record")
 			e.Free(proc, false, nil)
 			require.Zero(t, proc.Mp().AllocatedBytes())
 			lease, err := ws.AcquireInput(proc.Ctx, 0)

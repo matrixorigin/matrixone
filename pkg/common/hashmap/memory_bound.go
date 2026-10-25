@@ -1,8 +1,16 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-// http://www.apache.org/licenses/LICENSE-2.0
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package hashmap
 
@@ -25,7 +33,9 @@ func BuildMemoryBound(rows uint64, stringKeys bool, maxKeyUnitBytes int64, needS
 		if maxKeyUnitBytes > (math.MaxInt64-int64(UnitLimit)*64-MaxStrIteratorCapacity)/4 {
 			return 0, false
 		}
-		iterator = int64(UnitLimit)*(24+8+8+24) + max(int64(MaxStrIteratorCapacity), maxKeyUnitBytes*4)
+		// Small reusable history can coexist with new encoding growth. Larger
+		// history uses the exact preallocation/pruning path before encoding.
+		iterator = int64(UnitLimit)*(24+8+8+24) + MaxStrIteratorCapacity + maxKeyUnitBytes*4
 	}
 	metadata := int64(unsafe.Sizeof(StrHashMap{})) + 2*int64(unsafe.Sizeof(strHashmapIterator{}))
 	if peak > math.MaxInt64-metadata {

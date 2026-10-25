@@ -128,7 +128,7 @@ func TestMemoryAdmissionRequestLimits(t *testing.T) {
 	require.False(t, ok)
 	m.Release(-1)
 	require.Nil(t, c.workerStop, "invalid requests cannot start a worker")
-	w, err := m.ReserveWorkingSet(context.Background(), WorkingSetSpec{UnitBytes: 1, Inputs: []InputSlotSpec{{Name: "disabled"}}, IOBytes: 1})
+	w, err := m.ReserveWorkingSetCandidatesUntilFit(context.Background(), []WorkingSetSpec{{UnitBytes: 1, Inputs: []InputSlotSpec{{Name: "disabled"}}, IOBytes: 1}})
 	require.NoError(t, err)
 	t.Cleanup(w.Close)
 	_, err = w.AcquireInput(context.Background(), 0)
@@ -136,9 +136,89 @@ func TestMemoryAdmissionRequestLimits(t *testing.T) {
 	require.Zero(t, c.inputPromise.Load())
 }
 
+func TestWorkingSetGrowthPreservesOwnersAndDenial(t *testing.T) {
+	m, c, _ := admissionFixture(t, 1000, 900, 0)
+	spec := WorkingSetSpec{UnitBytes: 32, Inputs: []InputSlotSpec{{Name: "csv", Count: 1, Bytes: 100}}, IOBytes: 200}
+	w, ok, err := m.TryReserveWorkingSet(context.Background(), spec)
+	require.NoError(t, err)
+	require.True(t, ok)
+	t.Cleanup(w.Close)
+	input, err := w.AcquireInput(context.Background(), 0)
+	require.NoError(t, err)
+	t.Cleanup(input.Release)
+	io, err := w.AcquireIO(context.Background(), 200)
+	require.NoError(t, err)
+	t.Cleanup(io.Release)
+	spec.IOBytes = 300
+	other, ok, err := m.TryReserveWorkingSet(context.Background(), spec)
+	require.NoError(t, err)
+	require.True(t, ok)
+	t.Cleanup(other.Close)
+	spec.IOBytes = 250
+	require.NoError(t, w.TryGrow(context.Background(), spec), "shared W already covers this increase")
+	require.Equal(t, int64(250), w.IOBytes())
+	spec.Inputs[0].Bytes = 150
+	require.NoError(t, w.TryGrow(context.Background(), spec))
+	require.Equal(t, int64(150), input.Capacity())
+	require.Equal(t, int64(250), c.inputPromise.Load())
+	require.Equal(t, int64(300), c.workspacePromise.Load())
+	require.Equal(t, int64(200), io.Capacity(), "active jobs keep their granted snapshot")
+	spec.Inputs[0].Bytes, spec.IOBytes = 700, 600
+	require.ErrorContains(t, w.TryGrow(context.Background(), spec), "cannot reserve")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, w.TryGrow(ctx, spec), context.Canceled)
+	require.Equal(t, int64(150), input.Capacity(), "denial and cancellation publish no partial grant")
+	require.Equal(t, int64(250), w.IOBytes())
+	w.Close()
+	require.ErrorIs(t, w.TryGrow(context.Background(), spec), ErrWorkingSetClosed)
+	require.Equal(t, int64(250), c.inputPromise.Load(), "active input remains charged after close")
+	input.Release()
+	require.Equal(t, int64(100), c.inputPromise.Load())
+	io.Release()
+	other.Close()
+}
+
+func TestWorkingSetConcurrentGrowthAndClose(t *testing.T) {
+	m, c, _ := admissionFixture(t, 2000, 1800, 0)
+	spec := func(bytes int64) WorkingSetSpec {
+		return WorkingSetSpec{UnitBytes: 32, Inputs: []InputSlotSpec{{Name: "csv", Count: 1, Bytes: bytes}}, IOBytes: bytes}
+	}
+	w, ok, err := m.TryReserveWorkingSet(context.Background(), spec(100))
+	require.NoError(t, err)
+	require.True(t, ok)
+	t.Cleanup(w.Close)
+	input, err := w.AcquireInput(context.Background(), 0)
+	require.NoError(t, err)
+	t.Cleanup(input.Release)
+	start, done := make(chan struct{}), make(chan error, 2)
+	for _, size := range []int64{200, 400} {
+		go func() {
+			<-start
+			done <- w.TryGrow(context.Background(), spec(size))
+		}()
+	}
+	close(start)
+	require.NoError(t, await(t, done))
+	require.NoError(t, await(t, done))
+	require.Equal(t, int64(400), input.Capacity(), "a stale smaller request cannot shrink a grant")
+	start = make(chan struct{})
+	go func() { <-start; done <- w.TryGrow(context.Background(), spec(500)) }()
+	go func() { <-start; w.Close(); done <- nil }()
+	close(start)
+	for range 2 {
+		err = await(t, done)
+		require.True(t, err == nil || errors.Is(err, ErrWorkingSetClosed))
+	}
+	require.Equal(t, input.Capacity(), c.inputPromise.Load())
+	require.Zero(t, c.workspacePromise.Load())
+	require.ErrorIs(t, w.TryGrow(context.Background(), spec(600)), ErrWorkingSetClosed)
+	input.Release()
+}
+
 func TestWorkingSetDataFullIOProgressAndTransfer(t *testing.T) {
 	m, c, queued := admissionFixture(t, 1000, 900, 100)
-	w, err := m.ReserveWorkingSet(context.Background(), WorkingSetSpec{UnitBytes: 32, Inputs: []InputSlotSpec{{Name: "csv", Count: 1, Bytes: 100}}, IOBytes: 200})
+	w, err := m.ReserveWorkingSetCandidatesUntilFit(context.Background(), []WorkingSetSpec{{UnitBytes: 32, Inputs: []InputSlotSpec{{Name: "csv", Count: 1, Bytes: 100}}, IOBytes: 200}})
 	require.NoError(t, err)
 	t.Cleanup(w.Close)
 	require.Equal(t, "working-set", await(t, queued))
@@ -175,11 +255,11 @@ func TestWorkingSetDataFullIOProgressAndTransfer(t *testing.T) {
 
 func TestWorkingSetQueueCancelAndMaxPromise(t *testing.T) {
 	m, c, queued := admissionFixture(t, 2000, 1800, 0)
-	one, err := m.ReserveWorkingSet(context.Background(), WorkingSetSpec{UnitBytes: 16, Inputs: []InputSlotSpec{{Count: 2, Bytes: 100}}, IOBytes: 100})
+	one, err := m.ReserveWorkingSetCandidatesUntilFit(context.Background(), []WorkingSetSpec{{UnitBytes: 16, Inputs: []InputSlotSpec{{Count: 2, Bytes: 100}}, IOBytes: 100}})
 	require.NoError(t, err)
 	t.Cleanup(one.Close)
 	await(t, queued)
-	two, err := m.ReserveWorkingSet(context.Background(), WorkingSetSpec{UnitBytes: 16, IOBytes: 200})
+	two, err := m.ReserveWorkingSetCandidatesUntilFit(context.Background(), []WorkingSetSpec{{UnitBytes: 16, IOBytes: 200}})
 	require.NoError(t, err)
 	t.Cleanup(two.Close)
 	await(t, queued)
@@ -240,7 +320,7 @@ func TestWorkingSetAtomicRejectionAndCgroupAccounting(t *testing.T) {
 	t.Cleanup(cancel)
 	result := make(chan error, 1)
 	go func() {
-		w, e := m.ReserveWorkingSet(ctx, WorkingSetSpec{UnitBytes: 10, Inputs: []InputSlotSpec{{Count: 1, Bytes: 60}}, IOBytes: 60})
+		w, e := m.ReserveWorkingSetCandidatesUntilFit(ctx, []WorkingSetSpec{{UnitBytes: 10, Inputs: []InputSlotSpec{{Count: 1, Bytes: 60}}, IOBytes: 60}})
 		if w != nil {
 			w.Close()
 		}
@@ -253,14 +333,16 @@ func TestWorkingSetAtomicRejectionAndCgroupAccounting(t *testing.T) {
 	require.ErrorIs(t, await(t, result), context.Canceled)
 	_, err := workingSetBytes(WorkingSetSpec{UnitBytes: 1, Inputs: []InputSlotSpec{{Count: 2, Bytes: math.MaxInt64}}})
 	require.Error(t, err)
-	_, err = m.ReserveWorkingSet(context.Background(), WorkingSetSpec{UnitBytes: 1, IOBytes: 1001})
-	var large *RequestTooLargeError
-	require.True(t, errors.As(err, &large))
+	_, err = m.ReserveWorkingSetCandidatesUntilFit(context.Background(), []WorkingSetSpec{{UnitBytes: 1, IOBytes: 1001}})
+	var capacity *WorkingSetCapacityError
+	require.ErrorAs(t, err, &capacity)
+	require.Equal(t, int64(1001), capacity.Minimum)
+	require.Equal(t, int64(1000), capacity.Available)
 }
 
 func TestWorkingSetConcurrentTransferClose(t *testing.T) {
 	m, c, _ := admissionFixture(t, 1000, 900, 0)
-	w, err := m.ReserveWorkingSet(context.Background(), WorkingSetSpec{UnitBytes: 16, Inputs: []InputSlotSpec{{Count: 1, Bytes: 100}}, IOBytes: 200})
+	w, err := m.ReserveWorkingSetCandidatesUntilFit(context.Background(), []WorkingSetSpec{{UnitBytes: 16, Inputs: []InputSlotSpec{{Count: 1, Bytes: 100}}, IOBytes: 200}})
 	require.NoError(t, err)
 	t.Cleanup(w.Close)
 	input, err := w.AcquireInput(context.Background(), 0)
@@ -320,14 +402,14 @@ func TestWorkingSetTryHeadroomAndRecoveryCancellation(t *testing.T) {
 	t.Cleanup(first.Close)
 	headroom := m.WorkingSetHeadroom()
 	require.Equal(t, int64(600), headroom.Available)
-	require.True(t, headroom.HasOwners)
+	require.Len(t, c.tickets, 1)
 	second, ok, err := m.TryReserveWorkingSet(context.Background(), WorkingSetSpec{UnitBytes: 16, Inputs: []InputSlotSpec{{Count: 1, Bytes: 700}}, IOBytes: 200})
 	require.NoError(t, err)
 	require.False(t, ok)
 	require.Nil(t, second)
 	require.Equal(t, int64(100), c.inputPromise.Load(), "a failed try cannot publish part of its declaration")
 	first.Close()
-	require.False(t, m.WorkingSetHeadroom().HasOwners)
+	require.Empty(t, c.tickets)
 	started, finish := make(chan struct{}), make(chan struct{})
 	t.Cleanup(func() {
 		select {
@@ -340,7 +422,7 @@ func TestWorkingSetTryHeadroomAndRecoveryCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	result := make(chan error, 1)
-	go func() { result <- m.ReclaimForWorkingSet(ctx) }()
+	go func() { result <- m.reclaimForWorkingSet(ctx) }()
 	await(t, started)
 	c.fullMu.Lock()
 	done := c.fullDone
@@ -439,4 +521,60 @@ func TestMemoryControllerAbsenceOnlyFallsBackBeforeFirstObservation(t *testing.T
 			}
 		})
 	}
+}
+
+func TestSharedPoolsExcludePendingGrantsWithoutImport(t *testing.T) {
+	m, c, _ := admissionFixture(t, 1000, 900, 100)
+	peer := &memThrottler{coordinator: c, limitRate: .9}
+	peer.fillDefaults()
+	peer.options.constLimit = 900
+	peer.limit.Store(900)
+	peer.actualTotalMemory.Store(1000)
+	peer.rss.Store(100)
+	peer.lastRefresh.Store(time.Now().UnixNano())
+	t.Cleanup(func() { m.Release(m.reserved.Load()); peer.Release(peer.reserved.Load()) })
+	_, granted := m.Acquire(600)
+	require.True(t, granted)
+	require.Empty(t, c.tickets)
+	require.GreaterOrEqual(t, peer.Available(), int64(350), "the local quota alone permits this request")
+	_, granted = peer.Acquire(350)
+	require.False(t, granted, "100 RSS + 600 pending + 350 pending exceeds the process limit before RSS catches up")
+	m.Release(600)
+	_, granted = peer.Acquire(350)
+	require.True(t, granted)
+	peer.Release(350)
+
+	working, err := m.ReserveWorkingSetCandidatesUntilFit(context.Background(), []WorkingSetSpec{{UnitBytes: 1, Inputs: []InputSlotSpec{{Count: 1, Bytes: 200}}, IOBytes: 100}})
+	require.NoError(t, err)
+	t.Cleanup(working.Close)
+	_, granted = peer.Acquire(601)
+	require.False(t, granted, "a different default pool must also preserve live input/IO promises")
+	_, granted = peer.Acquire(600)
+	require.True(t, granted)
+}
+
+func TestSharedPoolsConcurrentGrantsHaveOnePhysicalOwner(t *testing.T) {
+	m, c, _ := admissionFixture(t, 1000, 900, 100)
+	peer := &memThrottler{coordinator: c, limitRate: .9}
+	peer.fillDefaults()
+	peer.options.constLimit = 900
+	peer.limit.Store(900)
+	peer.actualTotalMemory.Store(1000)
+	peer.rss.Store(100)
+	peer.lastRefresh.Store(time.Now().UnixNano())
+	t.Cleanup(func() { m.Release(m.reserved.Load()); peer.Release(peer.reserved.Load()) })
+	start := make(chan struct{})
+	grants := make(chan bool, 2)
+	for _, pool := range []*memThrottler{m, peer} {
+		go func() { <-start; _, granted := pool.Acquire(500); grants <- granted }()
+	}
+	close(start)
+	count := 0
+	for range 2 {
+		if await(t, grants) {
+			count++
+		}
+	}
+	require.Equal(t, 1, count, "the two independently legal quotas cannot both spend the same physical headroom")
+	require.Equal(t, int64(500), c.dataReserved.Load())
 }

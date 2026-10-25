@@ -94,7 +94,6 @@ func CnServerMessageHandler(
 		logutil.Errorf("cn server should receive *pipeline.Message, but get %v", message)
 		panic("cn server receive a message with unexpected type")
 	}
-
 	if msg.DebugMsg != "" {
 		logutil.Infof("%s, goRoutineId=%d", msg.GetDebugMsg(), goroutine.GetRoutineId())
 	}
@@ -139,7 +138,7 @@ func (receiver *messageReceiverOnServer) waitUntilDisconnectedOrCancelled() {
 	}
 }
 
-func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
+func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
@@ -174,7 +173,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			return errBuildCompile
 		}
 		defer func() {
-			runCompile.endSpillEpochs(err != nil)
 			runCompile.closePipelineSpoolsAfterReadersStopped()
 			runCompile.endImportMemory()
 			runCompile.clear()
@@ -204,7 +202,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
-		runCompile.beginSpillEpochs()
 
 		if err := registerRemoteDispatchReceivers(s, runCompile.proc); err != nil {
 			return err

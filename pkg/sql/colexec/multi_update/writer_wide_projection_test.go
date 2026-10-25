@@ -1,6 +1,17 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package multi_update
 
 import (
@@ -31,8 +42,8 @@ func TestCommittedDeleteWorkspaceSerializesWideProjections(t *testing.T) {
 	outputBytes, err := OutputEnvelope(unit, width+types.RowidSize+types.VarlenaSize, 2)
 	require.NoError(t, err)
 	owner := rscthrottler.NewMemThrottler("wide-delete-working-set", 1, rscthrottler.WithConstLimit(1<<30))
-	ws, err := rscthrottler.ReserveWorkingSet(proc.Ctx, owner, rscthrottler.WorkingSetSpec{UnitBytes: unit,
-		Inputs: []rscthrottler.InputSlotSpec{{Name: "csv", Count: 1, Bytes: 4 * width}, {Name: "output", Count: 1, Bytes: outputBytes}}, IOBytes: ioBytes})
+	ws, err := owner.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(proc.Ctx, []rscthrottler.WorkingSetSpec{{UnitBytes: unit,
+		Inputs: []rscthrottler.InputSlotSpec{{Name: "csv", Count: 1, Bytes: 4 * width}, {Name: "output", Count: 1, Bytes: outputBytes}}, IOBytes: ioBytes}})
 	require.NoError(t, err)
 	t.Cleanup(ws.Close)
 	proc.Base.ImportMemory = &process.ImportMemory{WorkingSet: ws, UnitBytes: unit, SourceBytes: 4 * width, OutputBytes: outputBytes, IOBytes: ioBytes}

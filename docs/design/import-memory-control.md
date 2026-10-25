@@ -1,7 +1,7 @@
 # Bounded import working sets and pipeline retirement
 
 This design applies to the import-memory changes on `4.1.6-hotfix`.
-Owner: aptend. Implementation context: [PR #31113](https://github.com/matrixorigin/matrixone/pull/31113).
+Owner: aptend. Implementation context: [PR #31166](https://github.com/matrixorigin/matrixone/pull/31166).
 The original implementation and design are preserved at
 [`ef64eb8bea`](https://github.com/matrixorigin/matrixone/tree/ef64eb8bea866b2c5fe457593bd434d573c6ef5f).
 This revision preserves the active allocation, admission and retirement contracts
@@ -55,8 +55,11 @@ serialized JSON contract or incoming remote batch unit.
 The removed capability, token and control interfaces were introduced only in this
 unreleased change. Restore the target branch's query protocol and pipeline client
 instead of retaining speculative compatibility with intermediate experimental
-peers. Keep existing HashBuild/HashJoin spill topology fields and their codec
-tests; those have a separate ownership and compatibility purpose.
+peers. Broadcast spill topology stays in local operator templates and their shared
+process owner. Eligible imports never cross a CN boundary, so no new pipeline
+protobuf fields or remote spill admission capability is needed. Remote encoding
+keeps the released target protocol; local topology/reuse tests prove that separate
+in-process contract.
 
 ## Allocation and admission
 
@@ -116,6 +119,48 @@ record limits and a pending crossing row without reusing its parser storage.
 Bound sparse retained fields, parser scratch, fixed headers, variable payload,
 conversion scratch and allocation growth separately. Compact column bounds count
 inline values through their headers and do not double count inline payload.
+Separate the maximum legal record from the currently admitted record budget.
+Reserve records through the candidate batch unit, with the existing CSV read
+block as the minimum and the legal bound as the maximum, including LOCAL. The
+candidate's row budget shrinks together with its batch unit. Reserving only one
+read block while admitting a much larger batch can leave no room for an ordinary
+row inside that batch once execution starts; such a row must already be covered.
+A known uncompressed input can tighten the legal bound; its total size must not
+force every short row to reserve the maximum.
+Before extending record storage beyond its budget, the parser grows the complete
+statement's I/W reservation, including producer, conversion and join promises.
+Precompute geometric record budgets at the selected immutable batch unit before
+execution; retain only these bounded specifications, not mutable operator trees.
+The configured entry limit and stale-file bound remain enforced independently.
+
+Growth is monotonic and atomic at the existing coordinator. Existing leases
+remain charged; new capacities become visible only after the additional promise
+fits physical headroom. A smaller concurrent request cannot shrink the ticket.
+An executing reader must not queue behind resources held by its own downstream
+writer: growth either succeeds immediately or returns a memory error before
+expanding record or conversion storage. Cancellation, denial and closure publish
+no partial increase. This can
+reject a genuinely wider row under pressure; it never reads or converts that row
+using unreserved storage. Root/last-lease cleanup retires the enlarged promise
+once. Active IO jobs keep their original capacity; later jobs use the larger one.
+
+This reuses the existing controller and entry limit, with no new worker or tuning
+parameter. Merely lowering the JSON expansion factors would lose the allocation
+proof; pre-scanning files would add IO and cannot handle LOCAL streams. The
+selected approach adds one integer comparison to existing parser size checks;
+only a new record high-water mark invokes reservation, at most logarithmically
+many times per parser. Validate short LOCAL/large-file controls, wider records,
+denial before growth, concurrent growth/close, and final promise retirement.
+
+Capacity forecasts run before a possible allocation. During one CSV fill or
+merge output, derive the data-row capacity frontier from the actual backing and
+reuse it while data and variable-length area still fit. Refresh after growth,
+buffer replacement or oversized-buffer cleanup; do not retain it across calls.
+Bitmap-bearing merge inputs keep exact bitmap growth prediction. Single-row
+variable payload is calculated once and reused by extension. These shortcuts
+preserve the same byte boundary and singleton exception. Writer window selection
+grows its search prefix geometrically before refining the crossing boundary, so
+small byte windows do not repeatedly scan the remaining input batch.
 
 Writer bounds include all index projections, old/new vector backing, bitmaps,
 delete preparation, dedup state and output metadata. Committed-delete work stays
@@ -183,6 +228,55 @@ metadata are included in admission. An unsupported final topology falls back
 before admission rather than repairing its bound through later allocation.
 
 ## Validation and delivery
+
+### Ordinary execution and local planning costs
+
+The normal `bytes.Buffer` encoding API keeps its direct, allocation-free scalar
+writes. Bounded spill files use the streaming writer API. Both must emit the
+same persistent format, with independent compatibility tests. Making ordinary
+buffer callers use the generic writer adds per-vector escaping scalars and is
+not an acceptable cost for enabling bounded spill IO.
+
+Reject a graph without a controlled CSV source before expression or producer
+analysis. For a candidate import, build the producer proof once, including its
+operator/key eligibility checks. The proof refers to immutable local expression
+trees during pre-execution planning; it must not marshal those trees and decode
+them again for each candidate byte unit. The bound calculators never mutate the
+trees, and execution starts only after this local planning lifetime ends.
+
+Keep only the admission modes exercised by execution: immediate try for explicit
+transactions, retry-capable candidates before DOP recompilation, and cancellable
+final-pressure waiting. A one-candidate request uses that same final policy; it
+does not need a separate historical waiting mode. Compiler headroom exposes only
+the limit and available bytes it consumes. Coordinator ownership remains private;
+compiler mocks must not invent owner-state dimensions that execution never reads.
+
+Copy-growth and hash-map admission apply to builds with an import-memory view.
+An ordinary shuffle build keeps its existing post-copy row/byte threshold and
+does not acquire import data credits or evaluate an import hash-map forecast.
+Its spill algorithm and result semantics remain available. An uncontrolled
+broadcast build keeps its existing in-memory path. No spill threshold changes.
+
+All memory pools remain visible to the process accounting owner. Their grants
+and import admission serialize at that owner. Keep the aggregate physical guard
+even without an import ticket: independently valid pool quotas can grant more
+pending memory than the process limit before RSS reflects any allocation. For
+example, 100 units of RSS plus pending grants of 600 and 350 exceed a 1000-unit
+limit even though each pool's local 900-unit quota permits its request. Merely
+restricting this guard to import tickets would reopen that overcommit. The CN S3
+pool also retains native/cache recovery. No stale RSS credit is restored.
+Narrow ordinary execution cost by removing import build forecasting and grants
+from ordinary shuffle joins, rather than weakening shared memory exclusion.
+
+Alternatives considered are retaining all generic writer/provider paths, which
+preserves measured ordinary-path cost and unused branches, and disabling shared
+accounting/spill bounds, which removes safety under concurrent grants or large
+dedup builds. Preserve the active ownership and byte bounds while narrowing their
+consumer boundary. Do not add a new worker, cache, configuration or workload
+specific threshold. Validate normal buffer allocation and encoding, no-source
+early rejection, unchanged local expressions, both admission wait policies,
+ordinary shuffle threshold behavior, controlled pre-copy denial and cross-pool
+promise exclusion separately.
 
 Map each remaining test to a distinct invariant, reachable path, varied dimension
 and independent oracle. Use the production manifest/admission path in compiler

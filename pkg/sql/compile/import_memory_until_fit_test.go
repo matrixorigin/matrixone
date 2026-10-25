@@ -1,40 +1,35 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package compile
 
 import (
 	"context"
 	"fmt"
-	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/stretchr/testify/require"
 )
 
-type compilerUntilFitAdmission struct {
-	*compilerCandidatesAdmission
-	finalCalls int
-	finalSpecs []rscthrottler.WorkingSetSpec
-	finalErr   error
-}
-
-func (m *compilerUntilFitAdmission) ReserveWorkingSetCandidatesUntilFit(ctx context.Context, specs []rscthrottler.WorkingSetSpec) (*rscthrottler.WorkingSet, error) {
-	m.finalCalls++
-	m.finalSpecs = specs
-	if m.finalErr != nil {
-		return nil, m.finalErr
-	}
-	return m.real.(rscthrottler.WorkingSetCandidatesUntilFitThrottler).ReserveWorkingSetCandidatesUntilFit(ctx, specs)
-}
-
 func TestImportMemoryFinalGraphUsesUntilFitRealConsumer(t *testing.T) {
 	for _, parallel := range []int{1, 2} {
 		t.Run(fmt.Sprintf("dop-%d", parallel), func(t *testing.T) {
 			c := memoryCompileFixture(t, parallel)
-			m := &compilerUntilFitAdmission{compilerCandidatesAdmission: &compilerCandidatesAdmission{compilerMemoryAdmission: &compilerMemoryAdmission{
-				real: rscthrottler.NewMemThrottler(t.Name(), .9),
-			}}}
+			m := &compilerMemoryAdmission{
+				real: newCompilerMemoryThrottler(t.Name(), .9), realCandidates: true,
+			}
 			require.NoError(t, c.beginStatementImportMemory(context.Background(), m))
 			var specs []rscthrottler.WorkingSetSpec
 			if parallel == 1 {
@@ -47,6 +42,9 @@ func TestImportMemoryFinalGraphUsesUntilFitRealConsumer(t *testing.T) {
 				specs = m.candidates
 			}
 			require.Greater(t, len(specs), 1, "the caller must keep all candidate units, including during final waiting")
+			require.LessOrEqual(t, len(specs), 27)
+			require.Zero(t, m.tries, "candidate admission enters one real FIFO request")
+			require.Equal(t, int64(64<<20), c.proc.Base.ImportMemory.UnitBytes)
 			require.Equal(t, int64(64<<20), specs[0].UnitBytes)
 			require.Equal(t, c.proc.Base.ImportMemory.UnitBytes, c.proc.Base.ImportMemory.WorkingSet.UnitBytes())
 		})
@@ -56,9 +54,9 @@ func TestImportMemoryFinalGraphUsesUntilFitRealConsumer(t *testing.T) {
 func TestImportMemoryUntilFitDoesNotReplaceHigherDOPRetry(t *testing.T) {
 	c := memoryCompileFixture(t, 2)
 	pressure := &rscthrottler.WorkingSetCapacityError{Minimum: 300, Available: 200}
-	m := &compilerUntilFitAdmission{compilerCandidatesAdmission: &compilerCandidatesAdmission{
-		compilerMemoryAdmission: &compilerMemoryAdmission{}, candidateErr: pressure,
-	}}
+	m := &compilerMemoryAdmission{
+		candidateErr: pressure, realCandidates: true,
+	}
 	err := c.beginStatementImportMemory(context.Background(), m)
 	var retry *importDOPRetryError
 	require.ErrorAs(t, err, &retry)
@@ -70,7 +68,7 @@ func TestImportMemoryUntilFitDoesNotReplaceHigherDOPRetry(t *testing.T) {
 
 func TestImportMemoryUntilFitCancellationIsNotCapacityOrDOPRetry(t *testing.T) {
 	c := memoryCompileFixture(t, 1)
-	m := &compilerUntilFitAdmission{compilerCandidatesAdmission: &compilerCandidatesAdmission{compilerMemoryAdmission: &compilerMemoryAdmission{}}, finalErr: context.Canceled}
+	m := &compilerMemoryAdmission{finalErr: context.Canceled, realCandidates: true}
 	err := c.beginStatementImportMemory(context.Background(), m)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Zero(t, memoryRetryParallel(err))
@@ -82,36 +80,11 @@ func TestImportMemoryUntilFitCancellationIsNotCapacityOrDOPRetry(t *testing.T) {
 func TestImportMemoryUntilFitStaticCapacityIsTerminal(t *testing.T) {
 	c := memoryCompileFixture(t, 1)
 	capacity := &rscthrottler.WorkingSetCapacityError{Minimum: 1001, Available: 1000}
-	m := &compilerUntilFitAdmission{compilerCandidatesAdmission: &compilerCandidatesAdmission{compilerMemoryAdmission: &compilerMemoryAdmission{}}, finalErr: capacity}
+	m := &compilerMemoryAdmission{finalErr: capacity, realCandidates: true}
 	err := c.beginStatementImportMemory(context.Background(), m)
 	require.ErrorIs(t, err, capacity)
 	require.Zero(t, memoryRetryParallel(err), "a statically impossible final graph has no smaller DOP")
 	require.Equal(t, 1, m.finalCalls)
 	require.Zero(t, m.candidateCalls)
 	require.Nil(t, c.proc.Base.ImportMemory)
-}
-
-func TestImportMemoryUntilFitKeepsOlderProviderContracts(t *testing.T) {
-	for _, capable := range []bool{false, true} {
-		t.Run(map[bool]string{false: "legacy_single_spec", true: "legacy_candidates"}[capable], func(t *testing.T) {
-			c := memoryCompileFixture(t, 1)
-			old := &compilerMemoryAdmission{real: rscthrottler.NewMemThrottler(t.Name(), .9), available: math.MaxInt64}
-			var provider rscthrottler.RSCThrottler = old
-			candidates := &compilerCandidatesAdmission{compilerMemoryAdmission: old}
-			if capable {
-				provider = candidates
-			}
-			_, untilFit := provider.(rscthrottler.WorkingSetCandidatesUntilFitThrottler)
-			require.False(t, untilFit)
-			require.NoError(t, c.beginStatementImportMemory(context.Background(), provider))
-			if capable {
-				require.Equal(t, 1, candidates.candidateCalls)
-				require.Greater(t, len(candidates.candidates), 1)
-				require.Zero(t, old.tries)
-			} else {
-				require.Equal(t, 1, old.tries)
-				require.Zero(t, old.waits)
-			}
-		})
-	}
 }

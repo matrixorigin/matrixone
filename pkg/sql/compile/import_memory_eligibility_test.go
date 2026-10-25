@@ -1,5 +1,17 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package compile
 
 import (
@@ -10,12 +22,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -42,21 +54,10 @@ func TestImportMemoryRemoteTransportKeepsWholeStatementLegacy(t *testing.T) {
 	c.endImportMemory()
 }
 
-func TestImportMemoryNonCSVStatementsKeepExistingMemoryPaths(t *testing.T) {
-	for _, op := range []vm.Operator{&hashjoin.HashJoin{LeftTypes: []types.Type{types.T_text.ToType()}, RightTypes: []types.Type{types.T_text.ToType()}}, &multi_update.MultiUpdate{}} {
-		t.Run(fmt.Sprint(op.OpType()), func(t *testing.T) {
-			c := memoryCompileFixture(t, 1)
-			c.scopes[0].RootOp = op
-			m := &compilerMemoryAdmission{available: 0}
-			require.NoError(t, c.beginStatementImportMemory(context.Background(), m))
-			require.Nil(t, c.importMemory)
-			require.Zero(t, m.tries, "ordinary scan rows have no CSV record bound or source byte slicing")
-		})
-	}
-}
-
 func TestImportMemoryUnsupportedImportWritersKeepWholeStatementLegacy(t *testing.T) {
 	cases := map[string]vm.Operator{
+		"table-insert":            &insert.Insert{InsertCtx: &insert.InsertCtx{Engine: &memoryengine.BindedEngine{}}},
+		"table-multi-update":      &multi_update.MultiUpdate{Action: multi_update.UpdateWriteTable},
 		"partition-insert":        insert.NewPartitionInsert(&insert.Insert{ToWriteS3: true}, 1),
 		"partition-multi-update":  multi_update.NewPartitionMultiUpdate(&multi_update.MultiUpdate{Action: multi_update.UpdateWriteS3}, 1),
 		"memory-table-raw-output": &insert.Insert{ToWriteS3: true, InsertCtx: &insert.InsertCtx{Engine: &memoryengine.BindedEngine{}}},
@@ -71,7 +72,7 @@ func TestImportMemoryUnsupportedImportWritersKeepWholeStatementLegacy(t *testing
 			m := &compilerMemoryAdmission{failure: errors.New("admission must not be attempted")}
 			require.NoError(t, c.beginStatementImportMemory(context.Background(), m), "unsupported nested writers must select legacy before any admission")
 			require.Zero(t, m.tries)
-			require.Zero(t, m.waits)
+
 			require.Nil(t, c.importMemory)
 			require.Nil(t, c.proc.Base.ImportMemory)
 		})
@@ -103,22 +104,6 @@ func TestImportMemoryPlainInsertRemainsControlledOnlyWithBoundedSource(t *testin
 			require.Nil(t, c.importMemory)
 		})
 	}
-}
-
-func TestImportMemoryWriterEligibilityDoesNotExtendToUnrelatedOperators(t *testing.T) {
-	col := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
-	serial := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varbinary)}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "serial"}, Args: []*plan.Expr{col, col}}}}
-	for _, op := range []vm.Operator{
-		&insert.Insert{InsertCtx: &insert.InsertCtx{Engine: &memoryengine.BindedEngine{}}},
-		&multi_update.MultiUpdate{Action: multi_update.UpdateWriteTable},
-	} {
-		c := memoryCompileFixture(t, 1)
-		c.scopes = append(c.scopes, &Scope{RootOp: op})
-		require.False(t, c.supportsBoundedImportKeys(), "direct engine/transaction workspace writes have no complete retained-data promise")
-	}
-	c := memoryCompileFixture(t, 1)
-	c.scopes = append(c.scopes, &Scope{RootOp: &projection.Projection{ProjectList: []*plan.Expr{serial}}})
-	require.True(t, c.supportsBoundedImportKeys(), "bounded Project serial retains its independent supported contract")
 }
 
 func TestImportMemoryUnknownVarlenKeysKeepWholeLoadLegacy(t *testing.T) {
@@ -154,13 +139,17 @@ func TestImportMemoryManifestPreservesBoundedKeyExpressionTrees(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, controlled)
 	manifest := MemoryManifest{TargetUnit: 1 << 20, Parallel: 2, Stages: []MemoryStageDescriptor{stage}}
+	before, err := serial.Marshal()
+	require.NoError(t, err)
 	local, spec, controlled, err := memoryManifestLayout(manifest, 1<<20)
 	require.NoError(t, err)
 	require.True(t, controlled)
 	require.GreaterOrEqual(t, local.IOBytes, local.JoinInputBytes, "key evaluation and frame compaction need a pre-reserved workspace")
 	require.Equal(t, uint32(4), spec.Inputs[2].Count, "both join inputs have a slot for each physical copy")
-	expression := new(plan.Expr)
-	require.NoError(t, expression.Unmarshal(manifest.Stages[0].KeyExpressions[1][0]))
+	expression := manifest.Stages[0].KeyExpressions[1][0]
+	after, err := serial.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, before, after, "bound calculation must not mutate the local plan")
 	require.Equal(t, "serial_full", expression.GetF().Func.ObjName)
 	require.Len(t, expression.GetF().Args, 2, "repeated source columns must survive manifest construction for memory amplification accounting")
 }
@@ -186,4 +175,32 @@ func TestImportMemoryCapacityEnvelopeShrinksBeforeAdmission(t *testing.T) {
 	require.ErrorIs(t, err, reached)
 	require.Equal(t, int64(32<<20), provider.lastUnit)
 	require.Equal(t, 1, provider.tries, "no resources are requested until the envelope can be computed")
+}
+
+// OpType inspection marks entry to producer analysis. Ordinary source discovery
+// only follows the operator tree, so it must leave this counter untouched.
+type importSourceGateOperator struct {
+	vm.Operator
+	inspections int
+}
+
+func (op *importSourceGateOperator) OpType() vm.OpType {
+	op.inspections++
+	return vm.Output
+}
+
+func TestImportMemoryNoSourceLeavesBeforeProducerAnalysis(t *testing.T) {
+	c := memoryCompileFixture(t, 1)
+	source := c.scopes[0].RootOp
+	op := &importSourceGateOperator{Operator: colexec.NewMockOperator()}
+	c.scopes[0].RootOp = op
+	failure := errors.New("controlled source reached admission")
+	budget := &compilerMemoryAdmission{failure: failure}
+	require.NoError(t, c.beginStatementImportMemory(context.Background(), budget))
+	require.Zero(t, op.inspections)
+	require.Zero(t, budget.tries)
+	op.GetOperatorBase().AppendChild(source)
+	require.ErrorIs(t, c.beginStatementImportMemory(context.Background(), budget), failure)
+	require.Positive(t, op.inspections, "a candidate import still needs the complete producer proof")
+	require.Equal(t, 1, budget.tries)
 }

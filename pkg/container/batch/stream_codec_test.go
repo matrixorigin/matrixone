@@ -1,80 +1,33 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package batch
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
-	"io"
-	"strings"
-	"testing"
 )
-
-// Frozen encoder from source 3c7eb8de7f: the compatibility oracle deliberately
-// does not call either new streaming implementation.
-func legacyVectorBytes(v *vector.Vector) []byte {
-	var w bytes.Buffer
-	class := byte(vector.FLAT)
-	if v.IsConst() {
-		class = byte(vector.CONSTANT)
-	}
-	w.WriteByte(class)
-	w.Write(types.EncodeType(v.GetType()))
-	rows := uint32(v.Length())
-	w.Write(types.EncodeUint32(&rows))
-	length := uint32(v.GetType().TypeSize())
-	if !v.IsConst() {
-		length *= rows
-	} else if v.IsConstNull() {
-		length = 0
-	}
-	w.Write(types.EncodeUint32(&length))
-	if length > 0 {
-		w.Write(v.GetData()[:length])
-	}
-	area := uint32(len(v.GetArea()))
-	w.Write(types.EncodeUint32(&area))
-	w.Write(v.GetArea())
-	nulls, err := v.GetNulls().Show()
-	if err != nil {
-		panic(err)
-	}
-	n := uint32(len(nulls))
-	w.Write(types.EncodeUint32(&n))
-	w.Write(nulls)
-	sorted := v.GetSorted()
-	w.Write(types.EncodeBool(&sorted))
-	return w.Bytes()
-}
-func legacyBatchBytes(b *Batch) []byte {
-	var w bytes.Buffer
-	rows := int64(b.RowCount())
-	w.Write(types.EncodeInt64(&rows))
-	count := int32(len(b.Vecs))
-	w.Write(types.EncodeInt32(&count))
-	for _, v := range b.Vecs {
-		p := legacyVectorBytes(v)
-		size := uint32(len(p))
-		w.Write(types.EncodeUint32(&size))
-		w.Write(p)
-	}
-	count = int32(len(b.Attrs))
-	w.Write(types.EncodeInt32(&count))
-	for _, a := range b.Attrs {
-		n := int32(len(a))
-		w.Write(types.EncodeInt32(&n))
-		w.WriteString(a)
-	}
-	_ = types.WriteSizeBytes(b.ExtraBuf, &w)
-	w.Write(types.EncodeInt32(&b.Recursive))
-	w.Write(types.EncodeInt32(&b.ShuffleIDX))
-	return w.Bytes()
-}
 
 type shortCodecWriter struct{}
 
@@ -113,14 +66,31 @@ func TestStreamCodecCompatibilityAndFailures(t *testing.T) {
 	require.NoError(t, err)
 	cases[1].Vecs[1] = vector.NewConstNull(types.T_int64.ToType(), 5, m)
 	cases[1].SetRowCount(5)
-	for _, bat := range cases {
-		expected := legacyBatchBytes(bat)
-		var actual bytes.Buffer
-		require.NoError(t, bat.MarshalBinaryTo(&actual))
-		require.Equal(t, expected, actual.Bytes())
-		require.Equal(t, int64(len(expected)), bat.MarshalBinarySize())
-		require.ErrorIs(t, bat.MarshalBinaryTo(shortCodecWriter{}), io.ErrShortWrite)
-		boom := errors.New("write failed")
-		require.ErrorIs(t, bat.MarshalBinaryTo(&failingCodecWriter{left: 64, err: boom}), boom)
+	// Frozen source3c7eb8de7f encoder outputs, captured before consolidation.
+	// They cover every field without maintaining a second encoder in tests.
+	goldens := []struct {
+		size   int64
+		sha256 string
+	}{
+		{131323, "d3034c6d0aabdd24ed56214b0f3d78325bce842497ccd1e7f3c5045a21c23fb9"},
+		{180, "c099d7641f251e480978aea19d04c735d9e6fc2f50ab6366f698217deb418ef7"},
+	}
+	for i, bat := range cases {
+		t.Run(fmt.Sprintf("rows-%d", bat.RowCount()), func(t *testing.T) {
+			for _, streaming := range []bool{false, true} {
+				var actual bytes.Buffer
+				var writer io.Writer = &actual
+				if streaming {
+					writer = struct{ io.Writer }{&actual}
+				}
+				require.NoError(t, bat.MarshalBinaryTo(writer))
+				require.Equal(t, goldens[i].sha256, fmt.Sprintf("%x", sha256.Sum256(actual.Bytes())), "streaming=%t", streaming)
+				require.Equal(t, goldens[i].size, int64(actual.Len()))
+			}
+			require.Equal(t, goldens[i].size, bat.MarshalBinarySize())
+			require.ErrorIs(t, bat.MarshalBinaryTo(shortCodecWriter{}), io.ErrShortWrite)
+			boom := errors.New("write failed")
+			require.ErrorIs(t, bat.MarshalBinaryTo(&failingCodecWriter{left: 64, err: boom}), boom)
+		})
 	}
 }

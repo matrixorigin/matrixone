@@ -1,8 +1,16 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-// http://www.apache.org/licenses/LICENSE-2.0
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package hashjoin
 
@@ -273,7 +281,7 @@ func TestControlledJoinResetRetiresCapacityBeforeNextPrepare(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 	budget := rscthrottler.NewMemThrottler(t.Name(), .9, rscthrottler.WithConstLimit(1<<30))
-	working, err := rscthrottler.ReserveWorkingSet(proc.Ctx, budget, rscthrottler.WorkingSetSpec{UnitBytes: 1 << 20, Inputs: []rscthrottler.InputSlotSpec{{Name: "source", Count: 1, Bytes: 1}, {Name: "output", Count: 1, Bytes: 1 << 20}, {Name: "join", Count: 2, Bytes: 8 << 20}}, IOBytes: 8 << 20})
+	working, err := budget.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(proc.Ctx, []rscthrottler.WorkingSetSpec{{UnitBytes: 1 << 20, Inputs: []rscthrottler.InputSlotSpec{{Name: "source", Count: 1, Bytes: 1}, {Name: "output", Count: 1, Bytes: 1 << 20}, {Name: "join", Count: 2, Bytes: 8 << 20}}, IOBytes: 8 << 20}})
 	require.NoError(t, err)
 	defer working.Close()
 	proc.Base.ImportMemory = &process.ImportMemory{WorkingSet: working, UnitBytes: 1 << 20, JoinInputBytes: 8 << 20, OutputBytes: 1 << 20, IOBytes: 8 << 20}

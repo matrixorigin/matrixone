@@ -1,5 +1,17 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package compile
 
 import (
@@ -410,8 +422,7 @@ func TestImportMemoryFlushS3InfoUsesModernFrameProvenance(t *testing.T) {
 
 func TestImportMemoryZeroWidthProducersPreserveLogicalRows(t *testing.T) {
 	literal := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}}}
-	encoded, err := encodeMemoryExpressions([]*plan.Expr{literal})
-	require.NoError(t, err)
+	encoded := []*plan.Expr{literal}
 	for _, source := range []MemoryProducerDescriptor{{Kind: "csv"}, {Kind: "csv", Schema: []types.Type{types.T_int64.ToType()}}} {
 		descs := []MemoryProducerDescriptor{source, {Kind: "expression", Inputs: []uint32{0}, Expressions: encoded, Project: true}}
 		bounds, err := memoryProducerBounds(descs, 1)
@@ -427,11 +438,10 @@ func TestImportMemoryZeroWidthProducersPreserveLogicalRows(t *testing.T) {
 	bounds, err := memoryProducerBounds(join, 1)
 	require.NoError(t, err)
 	require.Equal(t, 8192, bounds[3].Rows)
-	args, err := encodeMemoryExpressions([]*plan.Expr{
+	args := []*plan.Expr{
 		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
 		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
-	})
-	require.NoError(t, err)
+	}
 	applyDescs := []MemoryProducerDescriptor{{Kind: "csv", Schema: []types.Type{types.T_int64.ToType(), types.T_text.ToType()}}, {Kind: "apply", Inputs: []uint32{0}, Function: &MemoryFunctionDescriptor{Name: "fulltext_index_tokenize", Args: args}}, {Kind: "expression", Inputs: []uint32{1}, Expressions: encoded, Project: true}}
 	bounds, err = memoryProducerBounds(applyDescs, 1)
 	require.NoError(t, err)
@@ -451,14 +461,12 @@ func TestImportMemoryExpressionProducerValidatesNestedColumnIndexes(t *testing.T
 		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 7}}},
 		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
 	}}}}
-	encoded, err := encodeMemoryExpressions([]*plan.Expr{bad})
-	require.NoError(t, err)
-	_, err = memoryProducerBounds([]MemoryProducerDescriptor{{Kind: "scan", Schema: []types.Type{types.T_int64.ToType()}}, {Kind: "expression", Inputs: []uint32{0}, Expressions: encoded, Project: true}}, 1024)
+	encoded := []*plan.Expr{bad}
+	_, err := memoryProducerBounds([]MemoryProducerDescriptor{{Kind: "scan", Schema: []types.Type{types.T_int64.ToType()}}, {Kind: "expression", Inputs: []uint32{0}, Expressions: encoded, Project: true}}, 1024)
 	require.Error(t, err)
 	bad.GetF().Args[0].GetCol().ColPos = 0
 	bad.GetF().Args[0].GetCol().RelPos = 17
-	encoded, err = encodeMemoryExpressions([]*plan.Expr{bad})
-	require.NoError(t, err)
+	encoded = []*plan.Expr{bad}
 	_, err = memoryProducerBounds([]MemoryProducerDescriptor{{Kind: "scan", Schema: []types.Type{types.T_int64.ToType()}}, {Kind: "expression", Inputs: []uint32{0}, Expressions: encoded, Project: true}}, 1024)
 	require.NoError(t, err, "the real single-batch evaluator normalizes nonzero relation tags")
 }
@@ -528,11 +536,10 @@ func TestImportMemorySpoolPromiseIncludesQuadraticQueueMetadata(t *testing.T) {
 }
 
 func TestImportMemoryApplyProjectionPreservesRuntimeBindingTags(t *testing.T) {
-	args, err := encodeMemoryExpressions([]*plan.Expr{
+	args := []*plan.Expr{
 		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
 		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
-	})
-	require.NoError(t, err)
+	}
 	descs := []MemoryProducerDescriptor{
 		{Kind: "csv", Schema: []types.Type{types.T_int64.ToType(), types.T_text.ToType()}},
 		{Kind: "apply", Inputs: []uint32{0}, Function: &MemoryFunctionDescriptor{Name: "fulltext_index_tokenize", Args: args}, ResultCols: []colexec.ResultPos{{Rel: 1, Pos: 0}, {Rel: 1, Pos: 1}, {Rel: 1, Pos: 2}}},
@@ -575,8 +582,7 @@ func TestImportMemoryExpressionUsesLogicalReferencedColumns(t *testing.T) {
 	input := memoryProducerBound{Rows: 32, Row: (1 << 20) + 64, Batch: (32 << 20) + 64*32,
 		Columns: []table_function.MemoryColumnBound{{Type: key, RowBytes: 64, BatchBytes: 64 * 32}, {Type: types.T_json.ToType(), RowBytes: 1 << 20, BatchBytes: 32 << 20}}}
 	expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "serial_full"}, Args: []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}}}}}
-	encoded, err := encodeMemoryExpressions([]*plan.Expr{expr})
-	require.NoError(t, err)
+	encoded := []*plan.Expr{expr}
 	bound, ok := expressionProducerBound(input, encoded, true)
 	require.True(t, ok)
 	require.Less(t, bound.Row, int64(512), "serial reads the bounded key; JSON and allocation-class rounding are not logical result payload")
@@ -589,8 +595,7 @@ func TestImportMemoryExpressionUsesLogicalReferencedColumns(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, bound, unchanged, "an unreferenced JSON column cannot grow serial output or scratch")
 	literal := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}}}
-	encoded, err = encodeMemoryExpressions([]*plan.Expr{literal})
-	require.NoError(t, err)
+	encoded = []*plan.Expr{literal}
 	fixed, ok := expressionProducerBound(input, encoded, true)
 	require.True(t, ok)
 	require.Equal(t, int64(8), fixed.Row)
@@ -732,7 +737,7 @@ func TestImportMemoryUsesPhysicalParallelInputSchema(t *testing.T) {
 	meta, _, controlled, err := memoryManifestLayout(manifest, 1024)
 	require.NoError(t, err)
 	require.True(t, controlled)
-	expected, err := external.SourceEnvelopeForFields(csvStage.Schema, 1024, csvStage.RetainedFields)
+	expected, err := external.SourceEnvelopeForFields(csvStage.Schema, 1024, csvStage.RecordBytes, csvStage.RetainedFields)
 	require.NoError(t, err)
 	require.Equal(t, expected, meta.SourceBytes, "source I and producer lineage must describe the same physical VARCHAR backing")
 }

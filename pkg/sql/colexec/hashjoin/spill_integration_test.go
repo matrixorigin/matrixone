@@ -431,7 +431,7 @@ func TestReSpillBucketDepthLimit(t *testing.T) {
 	envelope, ok := hashJoin.InputEnvelope(1 << 20)
 	require.True(t, ok)
 	budget := rscthrottler.NewMemThrottler(t.Name(), .9, rscthrottler.WithConstLimit(1<<30))
-	working, err := rscthrottler.ReserveWorkingSet(proc.Ctx, budget, rscthrottler.WorkingSetSpec{UnitBytes: 1 << 20, Inputs: []rscthrottler.InputSlotSpec{{Name: "source", Count: 1, Bytes: 1}, {Name: "output", Count: 1, Bytes: 4 << 20}, {Name: "join", Count: 2, Bytes: envelope}}, IOBytes: envelope})
+	working, err := budget.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(proc.Ctx, []rscthrottler.WorkingSetSpec{{UnitBytes: 1 << 20, Inputs: []rscthrottler.InputSlotSpec{{Name: "source", Count: 1, Bytes: 1}, {Name: "output", Count: 1, Bytes: 4 << 20}, {Name: "join", Count: 2, Bytes: envelope}}, IOBytes: envelope}})
 	require.NoError(t, err)
 	defer working.Close()
 	proc.Base.ImportMemory = &process.ImportMemory{WorkingSet: working, UnitBytes: 1 << 20, JoinInputBytes: envelope, OutputBytes: 4 << 20, IOBytes: envelope}

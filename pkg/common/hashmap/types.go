@@ -102,6 +102,9 @@ type strHashmapIterator struct {
 	mp     *StrHashMap
 	keys   [][]byte
 	values []uint64
+	// Updated in the existing reset/encode loops; avoids rescanning all keys
+	// to decide whether ordinary small buffers need pruning.
+	keyCapacity int
 	// zValues, 0 indicates the presence null, 1 indicates the absence of a null
 	zValues       []int64
 	strHashStates [][3]uint64

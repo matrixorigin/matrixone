@@ -1,27 +1,35 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package compile
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -47,7 +55,7 @@ func addMemorySlots(count *uint32, parallel, multiplier int) error {
 		parallel = 1
 	}
 	if uint64(parallel)*uint64(multiplier) > uint64(math.MaxUint32-*count) {
-		return errors.New("too many import working slots")
+		return moerr.NewInternalErrorNoCtx("too many import working slots")
 	}
 	*count += uint32(parallel * multiplier)
 	return nil
@@ -74,6 +82,7 @@ func memoryStage(op vm.Operator, count int) (MemoryStageDescriptor, bool, error)
 		}
 		stage.Role = MemoryStageCSV
 		stage.Schema, _ = value.MemoryInputSchema()
+		stage.RecordBytes = value.MemoryRecordBytes()
 		stage.RetainedFields = max(0, int(value.Es.ColumnListLen)+2)
 		for _, attr := range value.Es.Attrs {
 			stage.RetainedFields = max(stage.RetainedFields, int(attr.ColFieldIndex)+1)
@@ -101,26 +110,8 @@ func memoryStage(op vm.Operator, count int) (MemoryStageDescriptor, bool, error)
 		stage.LeftTypes = value.LeftTypes
 		stage.RightTypes = value.RightTypes
 		stage.ResultCols = value.ResultCols
-		if value.NonEqCond != nil {
-			var err error
-			stage.NonEqExpression, err = value.NonEqCond.Marshal()
-			if err != nil {
-				return stage, false, err
-			}
-		}
-		stage.KeyExpressions = make([][][]byte, len(value.EqConds))
-		for side, expressions := range value.EqConds {
-			for _, expr := range expressions {
-				if expr == nil {
-					return stage, false, errors.New("nil join memory expression")
-				}
-				encoded, err := expr.Marshal()
-				if err != nil {
-					return stage, false, err
-				}
-				stage.KeyExpressions[side] = append(stage.KeyExpressions[side], encoded)
-			}
-		}
+		stage.NonEqExpression = value.NonEqCond
+		stage.KeyExpressions = value.EqConds
 	default:
 		return stage, false, nil
 	}
@@ -143,7 +134,7 @@ func (c *Compile) localMemoryManifest(unit int64) (MemoryManifest, error) {
 		if err := vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
 			count := max(1, scope.NodeInfo.Mcpu)
 			if uint64(count) > uint64(^uint32(0)) {
-				return errors.New("import parallelism overflows manifest")
+				return moerr.NewInternalErrorNoCtx("import parallelism overflows manifest")
 			}
 			stage, controlled, err := memoryStage(op, count)
 			if err != nil {
@@ -175,8 +166,8 @@ func (c *Compile) localMemoryManifest(unit int64) (MemoryManifest, error) {
 	return manifest, nil
 }
 
-func (c *Compile) beginStatementImportMemory(ctx context.Context, throttler rscthrottler.RSCThrottler) error {
-	if c.isPrepare || c.importMemoryPrepared || !c.supportsBoundedImportKeys() {
+func (c *Compile) beginStatementImportMemory(ctx context.Context, throttler rscthrottler.WorkingSetThrottler) error {
+	if c.isPrepare || c.importMemoryPrepared || !c.hasBoundedImportSource() {
 		return nil
 	}
 	manifest, err := c.localMemoryManifest(rscthrottler.BatchBytes(throttler))
@@ -197,53 +188,37 @@ func (c *Compile) beginStatementImportMemory(ctx context.Context, throttler rsct
 	return err
 }
 
-// Keep the complete statement on its existing path when any producer lacks a
-// bounded lifetime contract. Partition wrappers hide independent writers, memory
-// tables return retained raw data, and derived PreInsert columns still evaluate
-// an entire batch without a separate input/scratch promise.
-func (c *Compile) supportsBoundedImportKeys() bool {
-	supported := true
-	var walk func(*Scope)
-	walk = func(scope *Scope) {
-		if scope == nil || !supported {
-			return
+// hasBoundedImportSource is deliberately cheaper than producer/expression
+// analysis. Ordinary queries must leave before constructing an import proof.
+func (c *Compile) hasBoundedImportSource() bool {
+	var walk func(*Scope) bool
+	walk = func(scope *Scope) bool {
+		if scope == nil {
+			return false
 		}
-		vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
-			switch value := op.(type) {
-			case *insert.PartitionInsert, *multi_update.PartitionMultiUpdate:
-				supported = false
-			case *insert.Insert:
-				if value.ToWriteS3 && value.InsertCtx != nil {
-					_, memoryTable := value.InsertCtx.Engine.(*memoryengine.BindedEngine)
-					supported = supported && !memoryTable
-				}
-			case *preinsert.PreInsert:
-				supported = supported && value.CompPkeyExpr == nil && value.ClusterByExpr == nil
-			case *hashbuild.HashBuild:
-				supported = supported && hashbuild.SupportsBoundedSpillKeys(value.Conditions)
-			case *hashjoin.HashJoin:
-				if value.NonEqCond != nil {
-					supported = supported && hashbuild.SupportsBoundedSpillKeys([]*plan.Expr{value.NonEqCond})
-				}
-				supported = supported && len(value.EqConds) == 2
-				for _, side := range value.EqConds {
-					supported = supported && hashbuild.SupportsBoundedSpillKeys(side)
-				}
+		found := false
+		_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			if source, ok := op.(*external.External); ok && source.UsesMemoryInput() {
+				found = true
 			}
 			return nil
 		})
-		for _, child := range scope.PreScopes {
-			walk(child)
+		if found {
+			return true
 		}
-	}
-	for _, scope := range c.scopes {
-		walk(scope)
-	}
-	if !supported {
+		for _, child := range scope.PreScopes {
+			if walk(child) {
+				return true
+			}
+		}
 		return false
 	}
-	_, _, supported, err := c.memoryProducers()
-	return supported && err == nil
+	for _, scope := range c.scopes {
+		if walk(scope) {
+			return true
+		}
+	}
+	return false
 }
 
 func workingLayoutTotal(spec rscthrottler.WorkingSetSpec) int64 {
@@ -278,11 +253,8 @@ func (c *Compile) beginImportMemory() error {
 	if !ok {
 		return nil
 	}
-	throttler, ok := value.(rscthrottler.RSCThrottler)
+	throttler, ok := value.(rscthrottler.WorkingSetThrottler)
 	if !ok {
-		return nil
-	}
-	if _, ok = throttler.(rscthrottler.ContextThrottler); !ok {
 		return nil
 	}
 	ctx := c.proc.Ctx

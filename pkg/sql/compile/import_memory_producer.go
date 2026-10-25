@@ -1,12 +1,24 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package compile
 
 import (
-	"errors"
 	"fmt"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -34,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -44,7 +57,8 @@ type MemoryProducerDescriptor struct {
 	Kind        string
 	Inputs      []uint32
 	Schema      []types.Type
-	Expressions [][]byte
+	RecordBytes int64
+	Expressions []*plan.Expr
 	Project     bool
 	ResultCols  []colexec.ResultPos
 	Function    *MemoryFunctionDescriptor
@@ -60,7 +74,7 @@ type MemoryProducerDescriptor struct {
 type MemoryFunctionDescriptor struct {
 	Name   string
 	Params []byte
-	Args   [][]byte
+	Args   []*plan.Expr
 	Rets   []*plan.ColDef
 }
 
@@ -90,32 +104,6 @@ func memoryProduct(a, b int64) (int64, bool) {
 		return 0, false
 	}
 	return a * b, true
-}
-
-func encodeMemoryExpressions(exprs []*plan.Expr) ([][]byte, error) {
-	result := make([][]byte, len(exprs))
-	for i, expr := range exprs {
-		if expr == nil {
-			return nil, errors.New("nil producer expression")
-		}
-		var err error
-		result[i], err = expr.Marshal()
-		if err != nil {
-			return nil, err
-		}
-	}
-	return result, nil
-}
-
-func decodeMemoryExpressions(encoded [][]byte) ([]*plan.Expr, error) {
-	result := make([]*plan.Expr, len(encoded))
-	for i, data := range encoded {
-		result[i] = new(plan.Expr)
-		if err := result[i].Unmarshal(data); err != nil {
-			return nil, err
-		}
-	}
-	return result, nil
 }
 
 // The second list contains filters/scratch whose result does not replace the
@@ -167,6 +155,8 @@ func finiteScanSchema(schema []types.Type) bool {
 
 func memoryProducerKind(op vm.Operator) (string, bool) {
 	switch value := op.(type) {
+	case *insert.PartitionInsert, *multi_update.PartitionMultiUpdate:
+		return "", false
 	case *external.External:
 		return "csv", value.UsesMemoryInput()
 	case *table_scan.TableScan:
@@ -176,12 +166,21 @@ func memoryProducerKind(op vm.Operator) (string, bool) {
 		}
 		return "scan", finiteScanSchema(schema)
 	case *hashjoin.HashJoin:
+		if len(value.EqConds) != 2 || value.NonEqCond != nil && !hashbuild.SupportsBoundedSpillKeys([]*plan.Expr{value.NonEqCond}) {
+			return "", false
+		}
+		for _, side := range value.EqConds {
+			if !hashbuild.SupportsBoundedSpillKeys(side) {
+				return "", false
+			}
+		}
 		return "join", true
 	case *hashbuild.HashBuild:
-		return "empty", true
+		return "empty", hashbuild.SupportsBoundedSpillKeys(value.Conditions)
 	case *insert.Insert:
 		if value.ToWriteS3 && value.InsertCtx != nil {
-			return "insert-meta", true
+			_, memoryTable := value.InsertCtx.Engine.(*memoryengine.BindedEngine)
+			return "insert-meta", !memoryTable
 		}
 		return "", false
 	case *multi_update.MultiUpdate:
@@ -209,7 +208,7 @@ func memoryProducerKind(op vm.Operator) (string, bool) {
 		}
 		return "", false
 	case *preinsert.PreInsert:
-		return "preinsert", !value.IsOldUpdate
+		return "preinsert", !value.IsOldUpdate && value.CompPkeyExpr == nil && value.ClusterByExpr == nil
 	case *lockop.LockOp:
 		_, ok := value.MemoryTargets()
 		return "lock", ok
@@ -371,6 +370,7 @@ func (c *Compile) memoryProducers() ([]MemoryProducerDescriptor, map[vm.Operator
 			switch value := op.(type) {
 			case *external.External:
 				desc.Schema, _ = value.MemoryInputSchema()
+				desc.RecordBytes = value.MemoryRecordBytes()
 			case *table_scan.TableScan:
 				for _, typ := range value.Types {
 					desc.Schema = append(desc.Schema, plan2.MakeTypeByPlan2Type(typ))
@@ -412,11 +412,7 @@ func (c *Compile) memoryProducers() ([]MemoryProducerDescriptor, map[vm.Operator
 				}
 			case *apply.Apply:
 				tf := value.TableFunction
-				args, err := encodeMemoryExpressions(tf.Args)
-				if err != nil {
-					return 0, false, err
-				}
-				desc.Function = &MemoryFunctionDescriptor{Name: tf.FuncName, Params: append([]byte(nil), tf.Params...), Args: args, Rets: tf.Rets}
+				desc.Function = &MemoryFunctionDescriptor{Name: tf.FuncName, Params: tf.Params, Args: tf.Args, Rets: tf.Rets}
 				desc.ResultCols = value.Result
 			}
 			if join, ok := op.(*hashjoin.HashJoin); ok && len(desc.Inputs) == 1 {
@@ -454,11 +450,7 @@ func (c *Compile) memoryProducers() ([]MemoryProducerDescriptor, map[vm.Operator
 				if !hashbuild.SupportsBoundedSpillKeys(list.exprs) {
 					return 0, false, nil
 				}
-				encoded, err := encodeMemoryExpressions(list.exprs)
-				if err != nil {
-					return 0, false, err
-				}
-				result = append(result, MemoryProducerDescriptor{Kind: "expression", Inputs: []uint32{id}, Expressions: encoded, Project: list.project})
+				result = append(result, MemoryProducerDescriptor{Kind: "expression", Inputs: []uint32{id}, Expressions: list.exprs, Project: list.project})
 				id = uint32(len(result) - 1)
 			}
 			ids[op] = id
@@ -520,9 +512,8 @@ func memoryMetadataProducer(descs []MemoryProducerDescriptor, id uint32, kind st
 	}
 }
 
-func expressionProducerBound(input memoryProducerBound, encoded [][]byte, project bool) (memoryProducerBound, bool) {
-	exprs, err := decodeMemoryExpressions(encoded)
-	if err != nil || !hashbuild.SupportsBoundedSpillKeys(exprs) {
+func expressionProducerBound(input memoryProducerBound, exprs []*plan.Expr, project bool) (memoryProducerBound, bool) {
+	if !hashbuild.SupportsBoundedSpillKeys(exprs) {
 		return memoryProducerBound{}, false
 	}
 	var validColumns func(*plan.Expr) bool
@@ -656,7 +647,7 @@ func memoryProducerBounds(descs []MemoryProducerDescriptor, unit int64) ([]memor
 
 func memoryProducerBoundsWithFrame(descs []MemoryProducerDescriptor, unit, frameLimit int64) ([]memoryProducerBound, error) {
 	if unit <= 0 {
-		return nil, errors.New("invalid producer unit")
+		return nil, moerr.NewInternalErrorNoCtx("invalid producer unit")
 	}
 	result := make([]memoryProducerBound, len(descs))
 	for i, desc := range descs {
@@ -664,7 +655,7 @@ func memoryProducerBoundsWithFrame(descs []MemoryProducerDescriptor, unit, frame
 		input := memoryProducerBound{Metadata: len(desc.Inputs) > 0}
 		for _, id := range desc.Inputs {
 			if uint64(id) >= uint64(i) {
-				return nil, errors.New("producer graph is not topologically ordered")
+				return nil, moerr.NewInternalErrorNoCtx("producer graph is not topologically ordered")
 			}
 			child := result[id]
 			if child.Batch > 0 || child.Rows > 0 {
@@ -716,7 +707,7 @@ func memoryProducerBoundsWithFrame(descs []MemoryProducerDescriptor, unit, frame
 			}
 		case "merge-meta":
 			if !input.Metadata || input.MetadataKind != "insert" {
-				return nil, errors.New("unproven merge-block metadata source")
+				return nil, moerr.NewInternalErrorNoCtx("unproven merge-block metadata source")
 			}
 			meta, valid := mergeblock.MetadataOutputBound(input.Batch)
 			if !valid {
@@ -726,7 +717,7 @@ func memoryProducerBoundsWithFrame(descs []MemoryProducerDescriptor, unit, frame
 			bound.Scratch = meta.ScratchBytes
 		case "multi-meta", "flush-meta":
 			if desc.Kind == "flush-meta" && (!input.Metadata || input.MetadataKind != "multi") {
-				return nil, errors.New("unproven multi-update metadata source")
+				return nil, moerr.NewInternalErrorNoCtx("unproven multi-update metadata source")
 			}
 			protocolLimit := frameLimit
 			if desc.Kind == "flush-meta" {
@@ -756,7 +747,7 @@ func memoryProducerBoundsWithFrame(descs []MemoryProducerDescriptor, unit, frame
 					target.Type.Oid != input.Columns[target.PrimaryColumn].Type.Oid ||
 					target.RefreshColumn < -1 || int(target.RefreshColumn) >= len(input.Columns) ||
 					target.RefreshColumn >= 0 && input.Columns[target.RefreshColumn].Type.Oid != types.T_TS {
-					return nil, fmt.Errorf("producer %d lock target %+v is incompatible with input columns %+v", i, target, input.Columns)
+					return nil, moerr.NewInternalErrorNoCtxf("producer %d lock target %+v is incompatible with input columns %+v", i, target, input.Columns)
 				}
 			}
 			columns := make([]lockop.ColumnMemoryBound, len(input.Columns))
@@ -766,7 +757,7 @@ func memoryProducerBoundsWithFrame(descs []MemoryProducerDescriptor, unit, frame
 			bound.Scratch, ok = lockop.MemoryBoundForColumns(desc.LockTargets, columns, input.Rows)
 		case "spool":
 			if desc.Receivers == 0 || desc.Copies != max(uint32(2), desc.Receivers) {
-				return nil, errors.New("invalid spool slot count")
+				return nil, moerr.NewInternalErrorNoCtx("invalid spool slot count")
 			}
 			// Returned cache IDs retain at most unit bytes. During a clone the
 			// leftover cache and full old/new vector storage coexist. Aggregate
@@ -798,7 +789,7 @@ func memoryProducerBoundsWithFrame(descs []MemoryProducerDescriptor, unit, frame
 			owned := make(map[int32]bool, len(desc.OwnedCols))
 			for _, col := range desc.OwnedCols {
 				if col < 0 || int(col) >= len(input.Columns) {
-					return nil, errors.New("invalid preinsert owned column")
+					return nil, moerr.NewInternalErrorNoCtx("invalid preinsert owned column")
 				}
 				owned[col] = true
 			}
@@ -821,9 +812,13 @@ func memoryProducerBoundsWithFrame(descs []MemoryProducerDescriptor, unit, frame
 			}
 		case "csv", "scan":
 			if desc.Kind == "scan" && !finiteScanSchema(desc.Schema) {
-				return nil, errors.New("unbounded scan schema")
+				return nil, moerr.NewInternalErrorNoCtx("unbounded scan schema")
 			}
 			bound = memoryProducerBound{Rows: colexec.DefaultBatchSize}
+			recordBytes := int64(config.LargestEntryLimit)
+			if desc.RecordBytes > 0 {
+				recordBytes = min(recordBytes, desc.RecordBytes)
+			}
 			for _, typ := range desc.Schema {
 				row := int64(typ.TypeSize())
 				if row <= 0 {
@@ -840,7 +835,7 @@ func memoryProducerBoundsWithFrame(descs []MemoryProducerDescriptor, unit, frame
 					case types.T_json:
 						factor = 16
 					}
-					payload, valid := memoryProduct(int64(config.LargestEntryLimit), factor)
+					payload, valid := memoryProduct(recordBytes, factor)
 					if !valid {
 						ok = false
 						break
@@ -871,7 +866,7 @@ func memoryProducerBoundsWithFrame(descs []MemoryProducerDescriptor, unit, frame
 			if desc.Kind == "csv" {
 				// reader_csv tests typed capacities before appending a second row.
 				// Only a singleton may exceed unit; raw limit bounds that singleton.
-				row, err := external.MaxRowBytes(desc.Schema)
+				row, err := external.MaxRowBytes(desc.Schema, recordBytes)
 				if err != nil {
 					return nil, err
 				}
@@ -985,13 +980,10 @@ func memoryProducerBoundsWithFrame(descs []MemoryProducerDescriptor, unit, frame
 				break
 			}
 			fn := desc.Function
-			args, err := decodeMemoryExpressions(fn.Args)
-			if err != nil {
-				return nil, err
-			}
+			args := fn.Args
 			argBound, valid := expressionProducerBound(input, fn.Args, true)
 			if !valid {
-				return nil, fmt.Errorf("apply producer %d argument contract failed: input rows=%d columns=%d expressions=%v", i, input.Rows, len(input.Columns), args)
+				return nil, moerr.NewInternalErrorNoCtxf("apply producer %d argument contract failed: input rows=%d columns=%d expressions=%v", i, input.Rows, len(input.Columns), args)
 			}
 			tf := table_function.TableFunction{FuncName: fn.Name, Params: fn.Params, Args: args, Rets: fn.Rets}
 			f, valid := tf.MemoryBound(argBound.Columns, argBound.Row, unit)
@@ -1012,7 +1004,7 @@ func memoryProducerBoundsWithFrame(descs []MemoryProducerDescriptor, unit, frame
 					cols = input.Columns
 				}
 				if pos.Pos < 0 || int(pos.Pos) >= len(cols) {
-					return nil, fmt.Errorf("apply producer %d invalid output column: relation=%d position=%d columns=%d", i, pos.Rel, pos.Pos, len(cols))
+					return nil, moerr.NewInternalErrorNoCtxf("apply producer %d invalid output column: relation=%d position=%d columns=%d", i, pos.Rel, pos.Pos, len(cols))
 				}
 				col := cols[pos.Pos]
 				col.BatchBytes, ok = memoryProduct(col.RowBytes, int64(bound.Rows))
@@ -1072,7 +1064,7 @@ func memoryProducerBoundsWithFrame(descs []MemoryProducerDescriptor, unit, frame
 			}
 			bound.Scratch, ok = memorySum(bound.Scratch, 4*4*colexec.DefaultBatchSize+16384)
 		default:
-			return nil, errors.New("unknown memory producer")
+			return nil, moerr.NewInternalErrorNoCtx("unknown memory producer")
 		}
 		if !ok || bound.Batch < 0 || bound.Row < 0 || bound.Scratch < 0 {
 			return nil, &memoryEnvelopeCapacityError{fmt.Sprintf("producer %d (%s) allocation contract overflows or has invalid input: rows=%d batch=%d row=%d columns=%d", i, desc.Kind, input.Rows, input.Batch, input.Row, len(input.Columns))}

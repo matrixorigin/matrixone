@@ -1,5 +1,17 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package compile
 
 import (
@@ -34,7 +46,7 @@ func (m *staticTargetAdmission) WorkingSetHeadroom() rscthrottler.WorkingSetHead
 	if m.onHeadroom != nil {
 		m.onHeadroom()
 	}
-	return rscthrottler.WorkingSetHeadroomSnapshot{Limit: m.limit, Available: m.available, HasOwners: m.owners}
+	return rscthrottler.WorkingSetHeadroomSnapshot{Limit: m.limit, Available: m.available}
 }
 
 func (m *staticTargetAdmission) ReserveWorkingSetCandidates(ctx context.Context, specs []rscthrottler.WorkingSetSpec) (*rscthrottler.WorkingSet, error) {
@@ -42,7 +54,7 @@ func (m *staticTargetAdmission) ReserveWorkingSetCandidates(ctx context.Context,
 	m.selected = specs
 	for _, spec := range specs {
 		if workingLayoutTotal(spec) <= m.available {
-			return rscthrottler.ReserveWorkingSet(ctx, m.real, spec)
+			return m.real.ReserveWorkingSetCandidatesUntilFit(ctx, []rscthrottler.WorkingSetSpec{spec})
 		}
 	}
 	return nil, &rscthrottler.WorkingSetCapacityError{Minimum: workingLayoutTotal(specs[len(specs)-1]), Available: m.available}
@@ -58,7 +70,7 @@ func TestImportMemoryTargetImpossiblePrefersDOPBeforeFittingSmallerUnit(t *testi
 	target, minimum := workingLayoutTotal(specs[0]), workingLayoutTotal(specs[len(specs)-1])
 	require.Greater(t, target, minimum)
 	budget := minimum + (target-minimum)/2
-	m := &staticTargetAdmission{compilerMemoryAdmission: &compilerMemoryAdmission{real: rscthrottler.NewMemThrottler(t.Name(), .9), available: budget}, limit: budget}
+	m := &staticTargetAdmission{compilerMemoryAdmission: &compilerMemoryAdmission{real: newCompilerMemoryThrottler(t.Name(), .9), available: budget}, limit: budget}
 	old, err := m.ReserveWorkingSetCandidates(context.Background(), specs)
 	require.NoError(t, err)
 	t.Cleanup(old.Close)
@@ -98,7 +110,7 @@ func TestImportMemoryTargetLimitBoundaryAndUnknownProvider(t *testing.T) {
 				limit = total + test.delta
 				available = min(total, limit)
 			}
-			m := &staticTargetAdmission{compilerMemoryAdmission: &compilerMemoryAdmission{real: rscthrottler.NewMemThrottler(t.Name(), .9), available: available}, limit: limit}
+			m := &staticTargetAdmission{compilerMemoryAdmission: &compilerMemoryAdmission{real: newCompilerMemoryThrottler(t.Name(), .9), available: available}, limit: limit}
 			err = c.beginStatementImportMemory(context.Background(), m)
 			if test.retry {
 				require.Equal(t, 1, memoryRetryParallel(err))
@@ -112,7 +124,7 @@ func TestImportMemoryTargetLimitBoundaryAndUnknownProvider(t *testing.T) {
 	}
 }
 
-func TestImportMemoryTargetStaticFitKeepsActiveOwnerSmallerCandidate(t *testing.T) {
+func TestImportMemoryTargetStaticFitKeepsSmallerCandidateUnderPressure(t *testing.T) {
 	c := memoryCompileFixture(t, 2)
 	manifest, err := c.localMemoryManifest(64 << 20)
 	require.NoError(t, err)
@@ -121,7 +133,7 @@ func TestImportMemoryTargetStaticFitKeepsActiveOwnerSmallerCandidate(t *testing.
 	target, minimum := workingLayoutTotal(specs[0]), workingLayoutTotal(specs[len(specs)-1])
 	available := minimum + (target-minimum)/2
 	m := &staticTargetAdmission{compilerMemoryAdmission: &compilerMemoryAdmission{
-		real: rscthrottler.NewMemThrottler(t.Name(), .9), available: available, owners: true,
+		real: newCompilerMemoryThrottler(t.Name(), .9), available: available,
 	}, limit: target}
 	require.NoError(t, c.beginStatementImportMemory(context.Background(), m))
 	require.Equal(t, 1, m.reserveCalls)
@@ -211,7 +223,7 @@ func TestImportMemoryPublicNarrowTargetFitPreservesPlanAndDOP(t *testing.T) {
 	require.NotEmpty(t, specs)
 	require.LessOrEqual(t, workingLayoutTotal(specs[0]), int64(22<<30))
 	m := &staticTargetAdmission{compilerMemoryAdmission: &compilerMemoryAdmission{
-		real: rscthrottler.NewMemThrottler(t.Name(), .9), available: 22 << 30,
+		real: newCompilerMemoryThrottler(t.Name(), .9), available: 22 << 30,
 	}, limit: 22 << 30}
 	require.NoError(t, c.beginStatementImportMemory(ctx, m))
 	require.NotNil(t, c.importMemory)
@@ -221,4 +233,8 @@ func TestImportMemoryPublicNarrowTargetFitPreservesPlanAndDOP(t *testing.T) {
 	after, err := c.localMemoryManifest(64 << 20)
 	require.NoError(t, err)
 	require.Equal(t, before, after, "a statically fitting public narrow LOAD keeps its full physical DAG")
+}
+
+func (m *staticTargetAdmission) ReserveWorkingSetCandidatesUntilFit(ctx context.Context, specs []rscthrottler.WorkingSetSpec) (*rscthrottler.WorkingSet, error) {
+	return m.ReserveWorkingSetCandidates(ctx, specs)
 }

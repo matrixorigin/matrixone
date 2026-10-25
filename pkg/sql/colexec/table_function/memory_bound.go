@@ -1,5 +1,17 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package table_function
 
 import (
@@ -84,18 +96,18 @@ func MemoryBatchVectorCapacity(typ types.Type, rowBytes, batchBytes int64, rows 
 // SupportsMemoryBound is owned by the function implementation, not by a SQL
 // compiler switch on index or parser names. Datalink fetches and the other
 // parsers have independent allocation graphs and retain their legacy path.
-func (tf *TableFunction) SupportsMemoryBound() bool {
-	if tf == nil || tf.FuncName != "fulltext_index_tokenize" || len(tf.Args) < 2 {
+func (tableFunction *TableFunction) SupportsMemoryBound() bool {
+	if tableFunction == nil || tableFunction.FuncName != "fulltext_index_tokenize" || len(tableFunction.Args) < 2 {
 		return false
 	}
 	var param fulltext.FullTextParserParam
-	if len(tf.Params) > 0 && json.Unmarshal(tf.Params, &param) != nil {
+	if len(tableFunction.Params) > 0 && json.Unmarshal(tableFunction.Params, &param) != nil {
 		return false
 	}
 	if param.Parser != "" && param.Parser != "default" && param.Parser != "ngram" {
 		return false
 	}
-	for i, arg := range tf.Args {
+	for i, arg := range tableFunction.Args {
 		if arg == nil || types.T(arg.Typ.Id) == types.T_datalink {
 			return false
 		}
@@ -116,8 +128,8 @@ func (tf *TableFunction) SupportsMemoryBound() bool {
 // token is at most MAX_TOKEN_SIZE bytes. Apply's output is charged by its caller
 // using the real Result positions; unrelated source columns are never copied
 // into this function's allocation table.
-func (tf *TableFunction) MemoryBound(args []MemoryColumnBound, argumentRowBytes, unit int64) (FunctionMemoryBound, bool) {
-	if unit <= 0 || !tf.SupportsMemoryBound() || len(args) != len(tf.Args) {
+func (tableFunction *TableFunction) MemoryBound(args []MemoryColumnBound, argumentRowBytes, unit int64) (FunctionMemoryBound, bool) {
+	if unit <= 0 || !tableFunction.SupportsMemoryBound() || len(args) != len(tableFunction.Args) {
 		return FunctionMemoryBound{}, false
 	}
 	var content int64
@@ -208,9 +220,9 @@ func (tf *TableFunction) MemoryBound(args []MemoryColumnBound, argumentRowBytes,
 // fit the common byte unit, except for a single legal wide row. It is called
 // only after ArgsEval and before starting this document; no partial TVF batch is
 // dropped or replayed.
-func (tf *TableFunction) SetMemoryOutputLimit(unit int64, input *batch.Batch, row int, result []colexec.ResultPos) {
-	tf.memoryOutputRows = 0
-	if unit <= 0 || !tf.SupportsMemoryBound() || len(tf.ctr.argVecs) == 0 {
+func (tableFunction *TableFunction) SetMemoryOutputLimit(unit int64, input *batch.Batch, row int, result []colexec.ResultPos) {
+	tableFunction.memoryOutputRows = 0
+	if unit <= 0 || !tableFunction.SupportsMemoryBound() || len(tableFunction.ctr.argVecs) == 0 {
 		return
 	}
 	vectorRow := func(bat *batch.Batch, pos int) int64 {
@@ -221,7 +233,7 @@ func (tf *TableFunction) SetMemoryOutputLimit(unit int64, input *batch.Batch, ro
 		}
 		return n
 	}
-	id := tf.ctr.argVecs[0]
+	id := tableFunction.ctr.argVecs[0]
 	idBytes := int64(id.GetType().TypeSize())
 	if id.GetType().IsVarlen() && !id.IsNull(uint64(row)) {
 		idBytes += int64(len(id.GetBytesAt(row)))
@@ -236,5 +248,5 @@ func (tf *TableFunction) SetMemoryOutputLimit(unit int64, input *batch.Batch, ro
 			projectedRow += functionRows[pos.Pos]
 		}
 	}
-	tf.memoryOutputRows = int(max(int64(1), min(int64(colexec.DefaultBatchSize), unit/max(int64(1), functionRow, projectedRow))))
+	tableFunction.memoryOutputRows = int(max(int64(1), min(int64(colexec.DefaultBatchSize), unit/max(int64(1), functionRow, projectedRow))))
 }

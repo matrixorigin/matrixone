@@ -1,6 +1,17 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package vector
 
 import (
@@ -93,9 +104,51 @@ func TestMemoryWindowReferencedArea(t *testing.T) {
 
 }
 
+func TestUnionWholeVectorReusesChargedArea(t *testing.T) {
+	mp := mpool.MustNewZero()
+	src, dst := NewVec(types.T_varchar.ToType()), NewVec(types.T_varchar.ToType())
+	defer src.Free(mp)
+	defer dst.Free(mp)
+	require.NoError(t, AppendBytesList(src, [][]byte{[]byte(strings.Repeat("dead", 1024)), []byte(strings.Repeat("v", 32)), nil}, []bool{false, false, true}, mp))
+	col := MustFixedColWithTypeCheck[types.Varlena](src)
+	col[0] = col[1] // An owned vector can contain aliases and dead physical area.
+	src.GetGrouping().Add(1, 100)
+	require.NoError(t, AppendBytes(dst, []byte(strings.Repeat("reserve", 1024)), false, mp))
+	dst.CleanOnlyData()
+	require.NoError(t, AppendBytes(dst, []byte(strings.Repeat("p", 32)), false, mp))
+	bound := dst.AppendWindowAllocation(src, 0, 3)
+	before := mp.AllocatedBytes()
+	require.NoError(t, dst.UnionBatch(src, 0, 3, nil, mp))
+	require.LessOrEqual(t, mp.AllocatedBytes()-before, bound)
+	require.Equal(t, 4, dst.Length())
+	require.Equal(t, strings.Repeat("p", 32), string(dst.GetBytesAt(0)))
+	for _, row := range []int{1, 2} {
+		require.Equal(t, strings.Repeat("v", 32), string(dst.GetBytesAt(row)))
+	}
+	require.True(t, dst.GetNulls().Contains(3))
+	require.True(t, dst.GetGrouping().Contains(2))
+	require.False(t, dst.GetGrouping().Contains(101))
+}
+
 func TestUnionWindowPreservesSharedOffsetsAndSelectedBits(t *testing.T) {
 	m := mpool.MustNew("shared-window-memory")
 	defer mpool.DeleteMPool(m)
+	t.Run("partial-copy-at-capacity", func(t *testing.T) {
+		src, dst := NewVec(types.T_varchar.ToType()), NewVec(types.T_varchar.ToType())
+		defer src.Free(m)
+		defer dst.Free(m)
+		values := []string{"inline", strings.Repeat("a", 32), strings.Repeat("b", 32), strings.Repeat("c", 32)}
+		for _, value := range values {
+			require.NoError(t, AppendBytes(src, []byte(value), false, m))
+		}
+		require.NoError(t, AppendBytes(dst, []byte(strings.Repeat("p", 32)), false, m))
+		require.NoError(t, dst.UnionBatch(src, 1, 3, nil, m))
+		require.Equal(t, 4, dst.Length())
+		require.Equal(t, strings.Repeat("p", 32), string(dst.GetBytesAt(0)))
+		for row := 1; row < 4; row++ {
+			require.Equal(t, values[row], string(dst.GetBytesAt(row)))
+		}
+	})
 	constant, err := NewConstBytes(types.T_varchar.ToType(), []byte(strings.Repeat("s", 256)), 130, m)
 	require.NoError(t, err)
 	defer constant.Free(m)

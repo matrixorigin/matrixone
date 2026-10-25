@@ -1,13 +1,23 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package insert
 
 import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"os"
@@ -15,6 +25,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -101,14 +112,14 @@ func newControlledS3(proc *process.Process, owner *Insert, fs fileservice.FileSe
 	memory := proc.Base.ImportMemory
 	unit := min(memory.UnitBytes, rscthrottler.BatchBytes(throttler))
 	if unit <= 0 {
-		return nil, fmt.Errorf("invalid admitted insert unit %d", unit)
+		return nil, moerr.NewInternalErrorNoCtxf("invalid admitted insert unit %d", unit)
 	}
 	lease, err := memory.AcquireOutput(proc.Ctx)
 	if err != nil {
 		return nil, err
 	}
 	if lease == nil {
-		return nil, fmt.Errorf("admitted insert has no output slot")
+		return nil, moerr.NewInternalErrorNoCtx("admitted insert has no output slot")
 	}
 	return &controlledS3{owner: owner, fs: fs, memory: memory, throttler: throttler,
 		unit: unit, outputSlot: lease, dataMP: mpool.MustNew("insert-data"), outputMP: mpool.MustNew("insert-output")}, nil
@@ -206,7 +217,7 @@ func insertWindowEnd(bat *batch.Batch, start int, unit int64) int {
 func (s *controlledS3) append(proc *process.Process, analyzer process.Analyzer, input *batch.Batch) error {
 	count := len(s.owner.InsertCtx.Attrs)
 	if count == 0 || count > len(input.Vecs) {
-		return fmt.Errorf("invalid admitted insert projection width %d", count)
+		return moerr.NewInternalErrorNoCtxf("invalid admitted insert projection width %d", count)
 	}
 	cols := make([]int, count)
 	for i := range cols {
@@ -311,7 +322,7 @@ func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) (err error) {
 	var blocks int64
 	for i := range stats {
 		if blocks > math.MaxInt64-int64(stats[i].BlkCnt()) {
-			return fmt.Errorf("insert block metadata count overflow")
+			return moerr.NewInternalErrorNoCtx("insert block metadata count overflow")
 		}
 		blocks += int64(stats[i].BlkCnt())
 	}
@@ -322,11 +333,11 @@ func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) (err error) {
 	// Fixed encoding/footer and vector headers have ample room in the output
 	// envelope's fixed overhead. Check the variable payload before allocation.
 	if blocks > math.MaxInt64/int64(objectio.BlockInfoSize+24) || int64(len(stats)) > math.MaxInt64/int64(objectio.ObjectStatsLen+24) {
-		return fmt.Errorf("insert block metadata size overflow")
+		return moerr.NewInternalErrorNoCtx("insert block metadata size overflow")
 	}
 	bound := blocks*int64(objectio.BlockInfoSize+24) + int64(len(stats))*int64(objectio.ObjectStatsLen+24)
 	if bound < 0 || bound > frameLimit-4096 {
-		return fmt.Errorf("insert metadata exceeds admitted frame capacity: %d", bound)
+		return moerr.NewInternalErrorNoCtxf("insert metadata exceeds admitted frame capacity: %d", bound)
 	}
 	if s.output != nil {
 		s.output.Clean(s.outputMP)
@@ -341,12 +352,12 @@ func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) (err error) {
 	var allocation int64
 	for i, count := range counts {
 		if count > int64(math.MaxInt)/widths[i] {
-			return fmt.Errorf("insert metadata allocation overflow")
+			return moerr.NewInternalErrorNoCtx("insert metadata allocation overflow")
 		}
 		allocation += s.output.Vecs[i].AppendAllocation(int(count), int(count*widths[i]))
 	}
 	if allocation > s.outputSlot.Capacity()-s.outputMP.AllocatedBytes() {
-		return fmt.Errorf("insert metadata allocation exceeds admitted output capacity")
+		return moerr.NewInternalErrorNoCtx("insert metadata allocation exceeds admitted output capacity")
 	}
 	for i, count := range counts {
 		if err = s.output.Vecs[i].PreExtendWithArea(int(count), int(count*widths[i]), s.outputMP); err != nil {
@@ -358,7 +369,7 @@ func (s *controlledS3) spoolStats(stats []objectio.ObjectStats) (err error) {
 	}
 	n := s.output.MarshalBinarySize()
 	if n < 0 || n > frameLimit {
-		return fmt.Errorf("insert metadata frame exceeds admitted output capacity: %d", n)
+		return moerr.NewInternalErrorNoCtxf("insert metadata frame exceeds admitted output capacity: %d", n)
 	}
 	if s.spool == nil {
 		s.spool, err = os.CreateTemp("", "mo-insert-*.spool")
@@ -416,7 +427,7 @@ func (s *controlledS3) next() (*batch.Batch, error) {
 		return nil, err
 	}
 	if n > uint64(s.written-s.read-8) || n > uint64(frameLimit) {
-		return nil, fmt.Errorf("invalid insert metadata frame size %d", n)
+		return nil, moerr.NewInternalErrorNoCtxf("invalid insert metadata frame size %d", n)
 	}
 	r := io.NewSectionReader(s.spool, s.read+8, int64(n))
 	s.output = batch.NewOffHeapEmpty()
@@ -424,12 +435,12 @@ func (s *controlledS3) next() (*batch.Batch, error) {
 		return nil, err
 	}
 	if remaining, _ := r.Seek(0, io.SeekCurrent); remaining != int64(n) {
-		return nil, fmt.Errorf("unconsumed insert metadata frame bytes")
+		return nil, moerr.NewInternalErrorNoCtx("unconsumed insert metadata frame bytes")
 	}
 	if len(s.output.Vecs) != 2 || len(s.output.Attrs) != 2 ||
 		s.output.Attrs[0] != catalog.BlockMeta_BlockInfo || s.output.Attrs[1] != catalog.ObjectMeta_ObjectStats ||
 		s.output.RowCount() != s.output.Vecs[0].Length() {
-		return nil, fmt.Errorf("invalid insert metadata frame schema")
+		return nil, moerr.NewInternalErrorNoCtx("invalid insert metadata frame schema")
 	}
 	s.read += 8 + int64(n)
 	return s.output, nil

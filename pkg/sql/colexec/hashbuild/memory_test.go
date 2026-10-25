@@ -1,8 +1,22 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package hashbuild
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -15,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 type observedBuildBudget struct {
@@ -41,6 +54,7 @@ func TestBuildReservesBeforeCopyAndHashAllocation(t *testing.T) {
 			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
 			proc.SetMessageBoard(message.NewMessageBoard())
+			proc.Base.ImportMemory = &process.ImportMemory{UnitBytes: 64 << 20}
 			source := batch.NewOffHeapWithSize(1)
 			source.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
 			source.SetRowCount(2)
@@ -141,14 +155,17 @@ func TestLegacyExpressionBuildSpillsOnlyUnderPressure(t *testing.T) {
 			build.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
 			require.NoError(t, build.Prepare(proc))
 			defer build.Free(proc, false, nil)
-			budget := &observedBuildBudget{acquire: func(int64) bool { return mode != "copy-budget-denied" }}
+			calls := 0
+			budget := &observedBuildBudget{acquire: func(int64) bool { calls++; return mode != "copy-budget-denied" }}
 			build.ctr.memoryThrottler = budget
 			_, err = build.Call(proc)
 			require.NoError(t, err)
 			jm, err := message.ReceiveJoinMap(702, true, 0, proc.GetMessageBoard(), proc.Ctx)
 			require.NoError(t, err)
 			require.NotNil(t, jm)
-			require.Equal(t, mode != "memory-available", jm.IsSpilled())
+			require.Equal(t, mode == "threshold-reached", jm.IsSpilled())
+			require.Zero(t, calls, "ordinary shuffle must not acquire import credits")
+			require.Zero(t, budget.held, "ordinary builds do not consume import credits")
 			if !jm.IsSpilled() {
 				require.Equal(t, int64(1), jm.GetRowCount())
 				require.Equal(t, int64(-7), vector.GetFixedAtNoTypeCheck[int64](jm.GetBatches()[0].Vecs[0], 0))

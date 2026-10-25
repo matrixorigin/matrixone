@@ -1,6 +1,17 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package lockop
 
 import (
@@ -17,13 +28,13 @@ import (
 )
 
 // MemoryTarget is the immutable allocation-relevant part of a lock target. It
-// can be serialized in a CN admission manifest and evaluated before Prepare.
+// is evaluated locally before Prepare.
 type MemoryTarget struct {
-	PrimaryColumn  int32      `json:"primary_column"`
-	RefreshColumn  int32      `json:"refresh_column"`
-	Type           types.Type `json:"type"`
-	LockTable      bool       `json:"lock_table,omitempty"`
-	LockTableAtEnd bool       `json:"lock_table_at_end,omitempty"`
+	PrimaryColumn  int32
+	RefreshColumn  int32
+	Type           types.Type
+	LockTable      bool
+	LockTableAtEnd bool
 }
 
 func boundedLockType(typ types.Type) bool {
@@ -42,13 +53,13 @@ func boundedLockType(typ types.Type) bool {
 // MemoryTargets conservatively includes refresh storage when no execution
 // client is available. MemoryTargetsForRefresh accepts the actual immutable
 // client feature used by performLock.
-func (op *LockOp) MemoryTargets() ([]MemoryTarget, bool) {
-	return op.MemoryTargetsForRefresh(true)
+func (lockOp *LockOp) MemoryTargets() ([]MemoryTarget, bool) {
+	return lockOp.MemoryTargetsForRefresh(true)
 }
 
-func (op *LockOp) MemoryTargetsForRefresh(refreshEnabled bool) ([]MemoryTarget, bool) {
-	targets := make([]MemoryTarget, 0, len(op.targets))
-	for _, target := range op.targets {
+func (lockOp *LockOp) MemoryTargetsForRefresh(refreshEnabled bool) ([]MemoryTarget, bool) {
+	targets := make([]MemoryTarget, 0, len(lockOp.targets))
+	for _, target := range lockOp.targets {
 		// Arbitrary lock-row expressions or filters need their own allocation
 		// contract. Prepare installs only GetFetchRowsFunc for these types.
 		if target.lockRows != nil || target.filter != nil || target.primaryColumnIndexInBatch < 0 ||
@@ -296,8 +307,8 @@ func memoryBound(targets []MemoryTarget, inputBatchBytes, inputRowBytes int64, r
 	return lockMemoryAdd(size, metadata)
 }
 
-func (op *LockOp) MemoryBound(inputBatchBytes, inputRowBytes int64, rows int) (int64, bool) {
-	targets, ok := op.MemoryTargets()
+func (lockOp *LockOp) MemoryBound(inputBatchBytes, inputRowBytes int64, rows int) (int64, bool) {
+	targets, ok := lockOp.MemoryTargets()
 	if !ok {
 		return 0, false
 	}

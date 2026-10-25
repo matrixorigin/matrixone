@@ -255,9 +255,6 @@ message HashJoin {
   repeated plan.Type right_types = 13 [(gogoproto.nullable) = false];
   int32 join_map_tag = 14;
   repeated plan.RuntimeFilterSpec runtime_filter_build_list = 15;
-  uint32 spill_scope_id = 16;
-  repeated uint32 spill_expected_scopes = 17;
-  int64 spill_threshold = 18;
 }
 
 message LoopJoin {
@@ -417,9 +414,6 @@ message HashBuild {
   bool dedup_build_keep_last = 16;
   int32 dedup_delete_marker_col_idx = 17;
   repeated int32 dedup_delete_keep_col_idx_list = 18;
-  repeated uint32 spill_expected_scopes = 19;
-  bool can_spill = 20;
-  int64 spill_threshold = 21;
 }
 
 message Indexbuild {

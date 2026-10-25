@@ -1,11 +1,23 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package colexec
 
 import (
-	"fmt"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
@@ -19,12 +31,12 @@ import (
 // headers and the fixed BlockInfo/ObjectStats payloads.
 func InsertMetadataOutputEnvelope(unit int64, tableCount int) (int64, error) {
 	if unit <= 0 || tableCount < 0 {
-		return 0, fmt.Errorf("invalid insert metadata envelope")
+		return 0, moerr.NewInternalErrorNoCtx("invalid insert metadata envelope")
 	}
 	// Compute floor(2*unit/BlockMaxRows) without overflowing 2*unit.
 	blocks := 2*(unit/objectio.BlockMaxRows) + 2*(unit%objectio.BlockMaxRows)/objectio.BlockMaxRows
 	if int64(tableCount) > (math.MaxInt64-blocks-2)/4 {
-		return 0, fmt.Errorf("insert metadata block count overflows")
+		return 0, moerr.NewInternalErrorNoCtx("insert metadata block count overflows")
 	}
 	blocks += 4*int64(tableCount) + 2
 	entry := int64(objectio.BlockInfoSize + objectio.ObjectStatsLen + 4*64)
@@ -32,7 +44,7 @@ func InsertMetadataOutputEnvelope(unit int64, tableCount int) (int64, error) {
 	// overhead. The data unit only derives item count; it is not itself a
 	// metadata payload or a reason to copy a raw JSON singleton into I.
 	if blocks > (math.MaxInt64-(1<<20))/(4*entry) {
-		return 0, fmt.Errorf("insert metadata envelope overflows")
+		return 0, moerr.NewInternalErrorNoCtx("insert metadata envelope overflows")
 	}
 	return 4*blocks*entry + (1 << 20), nil
 }

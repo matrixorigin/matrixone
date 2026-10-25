@@ -171,9 +171,18 @@ func updateHashTableRows(hashMap HashMap, vs []uint64, zvs []int64) {
 }
 
 // prepareKeyBuffers prevents a batch iterator from retaining 256 independent
-// historical wide-key peaks. The exact encoded row size is reserved once before
-// per-column encoding, so append cannot create an unaccounted resize cascade.
+// historical wide-key peaks. Small buffers reuse the existing encoding loop;
+// larger history is pruned and preallocated to the current encoded row sizes.
 func (itr *strHashmapIterator) prepareKeyBuffers(vecs []*vector.Vector, start, count int) {
+	if itr.keyCapacity <= MaxStrIteratorCapacity {
+		capacity := itr.keyCapacity
+		for row := 0; row < count; row++ {
+			capacity -= cap(itr.keys[row])
+			itr.keys[row] = itr.keys[row][:0]
+		}
+		itr.keyCapacity = capacity
+		return
+	}
 	var sizes [UnitLimit]int
 	total := 0
 	for _, vec := range vecs {
@@ -209,6 +218,7 @@ func (itr *strHashmapIterator) prepareKeyBuffers(vecs []*vector.Vector, start, c
 			itr.keys[row] = nil
 		}
 	}
+	itr.keyCapacity = 0
 	for row := range itr.keys {
 		if row >= count {
 			itr.keys[row] = nil

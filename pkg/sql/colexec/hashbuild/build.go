@@ -189,6 +189,12 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		ctr.freeSpillExprExecs()
 	}()
 
+	// Only admitted builds own copy/hash-map promises. Ordinary shuffle builds
+	// keep their released post-copy threshold policy and existing spill path.
+	accountBatches := proc.Base.ImportMemory != nil && ctr.spillAllowed && hashBuild.NeedHashMap
+	if accountBatches {
+		ctr.hashmapBuilder.Batches.TrackAllocation()
+	}
 	beginSpill := func(stage, reason string, ask int64) error {
 		spillMode = true
 		if _, err := ctr.initSpillExprExecs(proc, hashBuild.Conditions); err != nil {
@@ -203,9 +209,13 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		if ctr.memoryThrottler != nil {
 			available = ctr.memoryThrottler.Available()
 		}
+		retained := ctr.hashmapBuilder.Batches.MemSize
+		if accountBatches {
+			retained = ctr.hashmapBuilder.Batches.RetainedBytes()
+		}
 		logutil.Infof("entering spill mode, uid: %s, stage: %s, reason: %s, ask: %d, threshold: %d, input_rows: %d, retained: %d, reserved: %d, has_throttler: %t, available: %d",
 			ctr.spillUUID, stage, reason, ask, ctr.spillThreshold, ctr.hashmapBuilder.InputBatchRowCount,
-			ctr.hashmapBuilder.Batches.RetainedBytes(), ctr.memoryReserved, ctr.memoryThrottler != nil, available)
+			retained, ctr.memoryReserved, ctr.memoryThrottler != nil, available)
 		spillFiles = make([]*os.File, spillNumBuckets)
 		spillBuffers = ctr.acquireSpillBuffers(proc)
 		for _, bat := range ctr.hashmapBuilder.Batches.Buf {
@@ -216,13 +226,6 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		ctr.hashmapBuilder.Batches.Clean(proc.Mp())
 		ctr.releaseMemory(ctr.memoryReserved)
 		return nil
-	}
-	// Ordinary broadcast builds have no consumer for copy forecasts or retained
-	// allocation accounting. Shuffle/import spill budgets remain active even
-	// when the execution has no import-memory view.
-	accountBatches := ctr.spillAllowed && hashBuild.NeedHashMap
-	if accountBatches {
-		ctr.hashmapBuilder.Batches.TrackAllocation()
 	}
 	for {
 		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, analyzer)
@@ -254,10 +257,15 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				return err
 			}
 			ctr.reconcileBatches()
+			if !accountBatches && hashBuild.shouldSpillBatches() {
+				if err := beginSpill("after-copy", "threshold", 0); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	needUniqueVec := !hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec != nil && hashBuild.RuntimeFilterSpec.Expr != nil
-	if !spillMode && ctr.spillAllowed && hashBuild.NeedHashMap && ctr.hashmapBuilder.InputBatchRowCount > 0 {
+	if !spillMode && accountBatches && ctr.hashmapBuilder.InputBatchRowCount > 0 {
 		bound, ok := ctr.hashmapBuilder.BuildMemoryBound(hashBuild.Conditions, hashBuild.NeedAllocateSels, needUniqueVec)
 		// The import controller admits only key expressions with a capacity
 		// contract. Ordinary joins retain their existing expression behavior;

@@ -1,6 +1,17 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package multi_update
 
 import (
@@ -51,11 +62,11 @@ func TestMetadataSpoolRejectsFrameBeyondAdmittedOutput(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
 	owner := rscthrottler.NewMemThrottler("metadata-frame-bound", 1, rscthrottler.WithConstLimit(1<<30))
-	ws, err := rscthrottler.ReserveWorkingSet(proc.Ctx, owner, rscthrottler.WorkingSetSpec{
+	ws, err := owner.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(proc.Ctx, []rscthrottler.WorkingSetSpec{{
 		UnitBytes: 1 << 20,
 		Inputs:    []rscthrottler.InputSlotSpec{{Name: "csv", Count: 0, Bytes: 0}, {Name: "output", Count: 1, Bytes: 8 << 20}},
 		IOBytes:   1,
-	})
+	}})
 	require.NoError(t, err)
 	defer ws.Close()
 	proc.Base.ImportMemory = &process.ImportMemory{WorkingSet: ws, UnitBytes: 1 << 20, OutputBytes: 8 << 20}
@@ -85,7 +96,7 @@ func TestS3WriterZeroDataCreditsSpillsUsingWorkspace(t *testing.T) {
 	defer cancel()
 	proc.Ctx = ctx
 	owner := rscthrottler.NewMemThrottler("writer-working-set", 1, rscthrottler.WithConstLimit(8<<30))
-	ws, err := rscthrottler.ReserveWorkingSet(ctx, owner, rscthrottler.WorkingSetSpec{UnitBytes: 1 << 20, Inputs: []rscthrottler.InputSlotSpec{{Name: "csv", Count: 1, Bytes: 8 << 20}, {Name: "output", Count: 1, Bytes: 8 << 20}}, IOBytes: 128 << 20})
+	ws, err := owner.(rscthrottler.WorkingSetThrottler).ReserveWorkingSetCandidatesUntilFit(ctx, []rscthrottler.WorkingSetSpec{{UnitBytes: 1 << 20, Inputs: []rscthrottler.InputSlotSpec{{Name: "csv", Count: 1, Bytes: 8 << 20}, {Name: "output", Count: 1, Bytes: 8 << 20}}, IOBytes: 128 << 20}})
 	require.NoError(t, err)
 	defer ws.Close()
 	proc.Base.ImportMemory = &process.ImportMemory{WorkingSet: ws, UnitBytes: 1 << 20, SourceBytes: 8 << 20, OutputBytes: 8 << 20, IOBytes: 128 << 20}

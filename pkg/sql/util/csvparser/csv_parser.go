@@ -122,6 +122,8 @@ type CSVParser struct {
 	recordLimit   int
 	recordStart   int64
 	readingRecord bool
+	recordBudget  int64
+	growRecord    func(int64) (int64, error)
 
 	// fieldIndexes is an index of fields inside recordBuffer.
 	// The width field ends at offset fieldIndexes[i] in recordBuffer.
@@ -573,13 +575,37 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 	}
 }
 
+// LimitRecordBytes tightens the configured record limit to the admitted input
+// bound. Call before Read; a stale file size must fail before buffer growth.
+func (parser *CSVParser) LimitRecordBytes(limit int64) {
+	if limit > 0 && parser.recordLimit > 0 && limit < int64(parser.recordLimit) {
+		parser.recordLimit = int(limit)
+	}
+}
+
+// SetRecordBudget installs an already reserved budget and its growth owner.
+// The legal record limit remains independent; a grant must precede allocation.
+func (parser *CSVParser) SetRecordBudget(bytes int64, grow func(int64) (int64, error)) {
+	parser.recordBudget, parser.growRecord = bytes, grow
+}
+
 func (parser *CSVParser) checkRecordSize(extra int) error {
 	consumed := int64(extra)
 	if parser.readingRecord {
 		consumed += parser.pos - parser.recordStart
 	}
 	if parser.recordLimit > 0 && consumed > int64(parser.recordLimit) {
-		return moerr.NewInternalErrorNoCtx("size of row cannot exceed the max value of txn-entry-size-limit")
+		return moerr.NewInternalErrorNoCtx("size of row exceeds the admitted input bound or txn-entry-size-limit")
+	}
+	if parser.growRecord != nil && consumed > parser.recordBudget {
+		budget, err := parser.growRecord(consumed)
+		if err != nil {
+			return err
+		}
+		if budget < consumed {
+			return moerr.NewInternalErrorNoCtx("CSV record growth grant is too small")
+		}
+		parser.recordBudget = budget
 	}
 	return nil
 }
@@ -668,14 +694,14 @@ outside:
 			firstToken = csvTokenNewLine
 		} else {
 			parser.skipBytes(1)
-			if firstByte != '\n' {
-				if err = parser.checkRecordSize(0); err != nil {
-					return err
-				}
-			}
 			firstToken, err = parser.readUnquoteToken(firstByte)
 			if err != nil {
 				return err
+			}
+			if firstToken != csvTokenNewLine {
+				if err = parser.checkRecordSize(0); err != nil {
+					return err
+				}
 			}
 		}
 
@@ -757,6 +783,9 @@ func (parser *CSVParser) readQuotedField() error {
 		if err != nil {
 			return err
 		}
+		if err = parser.checkRecordSize(0); err != nil {
+			return err
+		}
 
 		switch token {
 		case csvTokenDelimiter:
@@ -766,6 +795,9 @@ func (parser *CSVParser) readQuotedField() error {
 				return err
 			}
 			if doubledDelimiter {
+				if err = parser.checkRecordSize(0); err != nil {
+					return err
+				}
 				// consume the double quotation mark and continue
 				parser.recordBuffer = append(parser.recordBuffer, parser.quote...)
 			} else if parser.unescapedQuote {

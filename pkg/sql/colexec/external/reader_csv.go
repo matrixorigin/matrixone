@@ -104,6 +104,15 @@ func (r *CsvReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty
 		retainedFields = max(retainedFields, int(attr.ColFieldIndex)+1)
 	}
 	csvParser.RetainFields(retainedFields)
+	if proc.Base.ImportMemory != nil {
+		csvParser.LimitRecordBytes(csvRecordBytes(&param.ExParamConst, param.Extern))
+		memory := proc.Base.ImportMemory
+		if memory.GrowRecord != nil {
+			csvParser.SetRecordBudget(memory.RecordBytes, func(need int64) (int64, error) {
+				return memory.GrowRecord(proc.Ctx, need)
+			})
+		}
+	}
 	r.plh = &ParseLineHandler{csvReader: csvParser}
 	return false, nil
 }
@@ -159,6 +168,21 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 	if bat.RowCount() == 0 && uint64(bat.Allocated()) > unit {
 		bat.FreeColumns(proc.Mp())
 	}
+	// Backing capacity is unchanged between growths. Derive this frontier
+	// afresh for every fill so Reset/reuse cannot retain stale capacity.
+	allocated, dataRows := 0, 0
+	refreshCapacity := func() {
+		allocated, dataRows = bat.Allocated(), OneBatchMaxRow
+		for _, vec := range bat.Vecs {
+			width := vec.GetType().TypeSize()
+			if width <= 0 {
+				dataRows = 0
+				break
+			}
+			dataRows = min(dataRows, cap(vec.GetData())/width)
+		}
+	}
+	refreshCapacity()
 
 	for i := 0; i < OneBatchMaxRow; i++ {
 		select {
@@ -231,10 +255,14 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 		// append. A resize's old allocation remains live while N is allocated.
 		// A single row may exceed the target; largest-entry-limit remains the
 		// existing support boundary, rather than introducing a new row limit.
-		r.rowArea = csvRowAreas(r.rowArea, row, param, bat)
-		peak := int64(bat.Allocated())
-		for j, vec := range bat.Vecs {
-			peak += vec.AppendAllocation(1, r.rowArea[j])
+		var areaGrowth bool
+		r.rowArea, areaGrowth = csvRowAreas(r.rowArea, row, param, bat)
+		mayGrow := bat.Vecs[0].Length() >= dataRows || areaGrowth
+		peak := int64(allocated)
+		if mayGrow {
+			for j, vec := range bat.Vecs {
+				peak += vec.AppendAllocation(1, r.rowArea[j])
+			}
 		}
 		if bat.Vecs[0].Length() > 0 && (curBatchSize+rawBytes > unit || uint64(peak) > unit) {
 			r.pending = row
@@ -248,8 +276,11 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 			return false, err
 		}
 		curBatchSize += rawBytes
+		if mayGrow {
+			refreshCapacity()
+		}
 
-		if curBatchSize >= unit || uint64(bat.Allocated()) >= unit {
+		if curBatchSize >= unit || uint64(allocated) >= unit {
 			break
 		}
 	}
@@ -271,13 +302,14 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 // AppendAllocation. Array literals can expand from one digit to eight bytes;
 // JSON's type tags, offsets and number representation are conservatively
 // bounded here rather than treating its raw text size as its binary size.
-func csvRowAreas(dst []int, row []csvparser.Field, param *ExternalParam, bat *batch.Batch) []int {
+func csvRowAreas(dst []int, row []csvparser.Field, param *ExternalParam, bat *batch.Batch) ([]int, bool) {
 	if cap(dst) < len(bat.Vecs) {
 		dst = make([]int, len(bat.Vecs))
 	} else {
 		dst = dst[:len(bat.Vecs)]
 		clear(dst)
 	}
+	var mayGrow bool
 	for _, attr := range param.Attrs {
 		if attr.ColIndex < 0 || int(attr.ColIndex) >= len(bat.Vecs) {
 			continue
@@ -311,9 +343,11 @@ func csvRowAreas(dst []int, row []csvparser.Field, param *ExternalParam, bat *ba
 		}
 		if n > types.VarlenaInlineSize {
 			dst[attr.ColIndex] = n
+			backing := vec.GetArea()
+			mayGrow = mayGrow || n > cap(backing)-len(backing)
 		}
 	}
-	return dst
+	return dst, mayGrow
 }
 
 // transJson2Lines converts JSON string to CSV fields.
