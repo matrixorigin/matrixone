@@ -144,21 +144,21 @@ def substitute_parameters(sql, params, *, sql_mode=''):
             continue
         if (
             char == '#'
-            or sql.startswith('//', i)
-            or (sql.startswith('--', i) and (i + 2 == len(sql) or sql[i + 2].isspace()))
+            or (char == '/' and sql.startswith('//', i))
+            or (char == '-' and sql.startswith('--', i) and (i + 2 == len(sql) or sql[i + 2].isspace()))
         ):
             end = sql.find('\n', i)
             end = len(sql) if end < 0 else end
             output.append(sql[i:end])
             i = end
             continue
-        if sql.startswith('/*!', i):
+        if char == '/' and sql.startswith('/*!', i):
             # MatrixOne executes MySQL version-comment bodies. Preserve the
             # delimiter/version bytes, but scan their SQL like the outer SQL.
             output.append('/*!')
             i += 3
             continue
-        if sql.startswith('/*', i):
+        if char == '/' and sql.startswith('/*', i):
             end = sql.find('*/', i + 2)
             end = len(sql) if end < 0 else end + 2
             output.append(sql[i:end])
@@ -174,7 +174,7 @@ def substitute_parameters(sql, params, *, sql_mode=''):
                 used.add(key)
                 i = match.end()
                 continue
-        if not named and (char == '?' or sql.startswith('%s', i)):
+        if not named and (char == '?' or (char == '%' and sql.startswith('%s', i))):
             try:
                 value = next(values)
             except StopIteration as error:
