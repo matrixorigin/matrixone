@@ -3641,13 +3641,13 @@ var (
 			input: "set default role none to u1, u2, u3",
 		}, {
 			input:  "set password = password('ppp')",
-			output: "set password = ppp",
+			output: "set password = '******'",
 		}, {
 			input:  "set password for u1@h1 = password('ppp')",
-			output: "set password for u1@h1 = ppp",
+			output: "set password for u1@h1 = '******'",
 		}, {
 			input:  "set password for u1@h1 = 'ppp'",
-			output: "set password for u1@h1 = ppp",
+			output: "set password for u1@h1 = '******'",
 		}, {
 			input:  "set @a = 0, @b = 1",
 			output: "set a = 0, b = 1",
