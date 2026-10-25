@@ -38,11 +38,19 @@ import (
 func TestDecimalHistoricalDumpRoundtrip(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "sql", "plan", "testdata", "legacy_decimal_dump_63a964a82f.json"))
 	require.NoError(t, err)
-	var fixtures map[string]struct {
+	type frozenDefinition struct {
 		SQL      string `json:"sql"`
 		TableDef []byte `json:"table_def"`
 	}
+	var fixtures map[string]frozenDefinition
 	require.NoError(t, json.Unmarshal(data, &fixtures))
+	data, err = os.ReadFile(filepath.Join("..", "..", "sql", "plan", "testdata", "legacy_decimal_mixed_range_63a964a82f.json"))
+	require.NoError(t, err)
+	var ranges map[string]frozenDefinition
+	require.NoError(t, json.Unmarshal(data, &ranges))
+	for name, fixture := range ranges {
+		fixtures["between_"+name] = fixture
+	}
 	runSQLIntegration(t, func(c embed.Cluster) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
@@ -50,7 +58,7 @@ func TestDecimalHistoricalDumpRoundtrip(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 		const schema = "decimal_dump_contract"
-		for _, name := range []string{"check", "generated"} {
+		for _, name := range []string{"check", "generated", "between_signed_small", "between_small_signed", "between_check_signed_small"} {
 			t.Run(name, func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
 				defer cancel()
@@ -92,7 +100,7 @@ func TestDecimalHistoricalDumpRoundtrip(t *testing.T) {
 				require.NoError(t, json.Unmarshal(manifest["bound_expressions"], &payload))
 				var transport pb.TableDef
 				require.NoError(t, transport.Unmarshal(payload))
-				if name == "check" {
+				if len(old.Checks) > 0 {
 					require.Equal(t, old.Checks[0].OriginSql, transport.Checks[0].OriginSql)
 					transport.Checks[0].Check = old.Checks[0].Check
 				} else {
@@ -121,7 +129,7 @@ func TestDecimalHistoricalDumpRoundtrip(t *testing.T) {
 				require.NoError(t, json.Unmarshal(exported["bound_expressions"], &payload))
 				var published pb.TableDef
 				require.NoError(t, published.Unmarshal(payload))
-				if name == "check" {
+				if len(old.Checks) > 0 {
 					require.True(t, proto.Equal(old.Checks[0].Check, published.Checks[0].Check))
 				} else {
 					require.True(t, proto.Equal(old.Cols[2].GeneratedCol.Expr, published.Cols[2].GeneratedCol.Expr))
@@ -130,7 +138,7 @@ func TestDecimalHistoricalDumpRoundtrip(t *testing.T) {
 				exec("insert into " + table("target") + "(i,tm) values(1000000000000000001,'00:00:00')")
 				exec("update " + table("target") + " set i=i+1")
 				predicate := " where i>=1000000000000000001 and m='January'"
-				if name == "generated" {
+				if len(old.Checks) == 0 {
 					predicate += " and g=true"
 				}
 				count("select count(*) from "+table("target")+predicate, 2)
@@ -140,7 +148,7 @@ func TestDecimalHistoricalDumpRoundtrip(t *testing.T) {
 				require.ErrorContains(t, err, "beyond the range")
 				require.ErrorContains(t, err, "(18,0)")
 				count("select count(*) from "+narrow, 0)
-				if name == "check" {
+				if len(old.Checks) > 0 {
 					transport.Checks[0].Check = &pb.Expr{Typ: transport.Checks[0].Check.Typ, Expr: &pb.Expr_Lit{Lit: &pb.Literal{Value: &pb.Literal_Bval{Bval: true}}}}
 				} else {
 					transport.Cols[2].GeneratedCol.Expr = &pb.Expr{Typ: transport.Cols[2].Typ, Expr: &pb.Expr_Lit{Lit: &pb.Literal{Value: &pb.Literal_Bval{Bval: true}}}}
@@ -149,12 +157,16 @@ func TestDecimalHistoricalDumpRoundtrip(t *testing.T) {
 				_, err = conn.ExecContext(ctx, "load table "+table("reject")+" from '"+seedPath+"'")
 				require.ErrorContains(t, err, "cannot verify bound")
 				count("select count(*) from "+table("reject"), 0)
-				if name == "check" {
-					_, err = conn.ExecContext(ctx, "insert into "+table("reject")+"(i,tm) values(-1,'00:00:00')")
+				outside := "'00:00:00'"
+				if strings.HasPrefix(name, "between_") {
+					outside = "'00:00:03'"
+				}
+				if len(old.Checks) > 0 {
+					_, err = conn.ExecContext(ctx, "insert into "+table("reject")+"(i,tm) values(-1,"+outside+")")
 					require.ErrorContains(t, err, "violated", "failed LOAD must retain the original CHECK")
 					count("select count(*) from "+table("reject"), 0)
 				} else {
-					exec("insert into " + table("reject") + "(i,tm) values(-1,'00:00:00')")
+					exec("insert into " + table("reject") + "(i,tm) values(-1," + outside + ")")
 					count("select count(*) from "+table("reject")+" where g=false", 1)
 				}
 			})

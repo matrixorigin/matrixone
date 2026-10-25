@@ -38,9 +38,6 @@ func legacyIntegerDecimalCoercions(ctx context.Context) bool {
 }
 
 func legacyIntegerDecimalCheck(id int32, inputs []types.Type, current checkResult) checkResult {
-	if current.status != succeedWithCast {
-		return current
-	}
 	hasInteger := false
 	for _, input := range inputs {
 		hasInteger = hasInteger || input.IsIntOrUint() || input.Oid == types.T_bit
@@ -49,21 +46,40 @@ func legacyIntegerDecimalCheck(id int32, inputs []types.Type, current checkResul
 		return current
 	}
 	if (id == BETWEEN && len(inputs) == 3) || (id == IN_RANGE && len(inputs) == 4) {
-		_, left, lower := fixedTypeCastRule1(inputs[0], inputs[1])
-		_, right, upper := fixedTypeCastRule1(inputs[0], inputs[2])
+		// Mixed-width bounds can make the current BETWEEN checker fail before
+		// the binder falls back to binary comparisons. Reconstruct the original
+		// range signature independently; that fallback is not the stored tree.
+		if id == IN_RANGE && inputs[3].Oid != types.T_uint8 {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		has0, left, lower := fixedTypeCastRule1(inputs[0], inputs[1])
+		has1, right, upper := fixedTypeCastRule1(inputs[0], inputs[2])
 		if !left.Oid.IsDecimal() || !right.Oid.IsDecimal() {
 			return current
 		}
 		targets := []types.Type{left, lower, upper}
 		if id == IN_RANGE {
-			if _, ok := alignDecimalComparisonTypesMode(targets, inputs[:3], true); !ok {
+			aligned, ok := alignDecimalComparisonTypesMode(targets, inputs[:3], true)
+			if !ok {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
+			has0 = has0 || aligned
 			targets = append(targets, inputs[3])
 		} else if left.Oid != right.Oid || left.Scale != lower.Scale || right.Scale != upper.Scale {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
-		return newCheckResultWithCast(current.idx, targets)
+		if !otherCompareOperatorSupports(targets[0], targets[1]) || !otherCompareOperatorSupports(targets[0], targets[2]) {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		// Both historical range functions have overload 0, including when the
+		// current result is a failure and supplies no usable overload identity.
+		if has0 || has1 {
+			return newCheckResultWithCast(0, targets)
+		}
+		return newCheckResultWithSuccess(0)
+	}
+	if current.status != succeedWithCast {
+		return current
 	}
 	if len(inputs) != 2 {
 		return current

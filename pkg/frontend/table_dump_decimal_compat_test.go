@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -31,16 +32,29 @@ import (
 // Exercise the exact binding/payload boundaries used by handleDumpTable and
 // handleLoadTable. A current CREATE cannot author these historical bindings.
 func TestTableDumpHistoricalDecimalBoundPayload(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "sql", "plan", "testdata", "legacy_decimal_dump_63a964a82f.json"))
-	require.NoError(t, err)
-	var fixtures map[string]struct {
+	type frozenDefinition struct {
 		SQL      string `json:"sql"`
 		TableDef []byte `json:"table_def"`
 		Payload  []byte `json:"bound_expressions"`
 		Digest   string `json:"expression_hash"`
 	}
-	require.NoError(t, json.Unmarshal(data, &fixtures))
-	require.Len(t, fixtures, 10)
+	fixtures := make(map[string]frozenDefinition)
+	for _, input := range []struct {
+		file, prefix string
+		count        int
+	}{
+		{"legacy_decimal_dump_63a964a82f.json", "", 10},
+		{"legacy_decimal_mixed_range_63a964a82f.json", "between_", 6},
+	} {
+		data, err := os.ReadFile(filepath.Join("..", "sql", "plan", "testdata", input.file))
+		require.NoError(t, err)
+		var batch map[string]frozenDefinition
+		require.NoError(t, json.Unmarshal(data, &batch))
+		require.Len(t, batch, input.count)
+		for name, fixture := range batch {
+			fixtures[input.prefix+name] = fixture
+		}
+	}
 	for name, fixture := range fixtures {
 		t.Run(name, func(t *testing.T) {
 			var source pb.TableDef
@@ -53,6 +67,13 @@ func TestTableDumpHistoricalDecimalBoundPayload(t *testing.T) {
 			fresh, err := sqlplan.BuildPlan(compiler, stmt, false)
 			require.NoError(t, err)
 			target := fresh.GetDdl().GetCreateTable().GetTableDef()
+			if strings.HasPrefix(name, "between_") {
+				expr := source.Cols[2].GetGeneratedCol().GetExpr()
+				if len(source.Checks) > 0 {
+					expr = source.Checks[0].Check
+				}
+				require.Equal(t, "between", expr.GetF().GetFunc().GetObjName(), "the genuine old writer must retain BETWEEN, not its comparison fallback")
+			}
 			targetBefore := proto.Clone(target)
 			sourceHash, err := tableSchemaHash(&source)
 			require.NoError(t, err)

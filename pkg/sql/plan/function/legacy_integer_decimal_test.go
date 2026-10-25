@@ -64,3 +64,44 @@ func TestLegacyIntegerDecimalBindingIsVerificationOnly(t *testing.T) {
 	_, err = fc.DebugRun()
 	require.ErrorContains(t, err, "Decimal64(18,0)")
 }
+
+func TestLegacyDecimalRangeIndependentOfCurrentChecker(t *testing.T) {
+	ctx := t.Context()
+	for _, narrow := range []types.T{types.T_int8, types.T_int16, types.T_int32} {
+		for _, bounds := range [][2]types.T{{types.T_int64, narrow}, {narrow, types.T_int64}} {
+			t.Run(bounds[0].String()+"_"+bounds[1].String(), func(t *testing.T) {
+				inputs := []types.Type{types.New(types.T_time, 0, 0), bounds[0].ToType(), bounds[1].ToType()}
+				_, err := GetFunctionByName(ctx, "between", inputs)
+				require.Error(t, err, "ordinary binding needs its binary-comparison fallback")
+				legacy, err := GetFunctionByName(WithLegacyIntegerDecimalCoercions(ctx), "between", inputs)
+				require.NoError(t, err, "historical BETWEEN must resolve independently of current checker success")
+				targets, cast := legacy.ShouldDoImplicitTypeCast()
+				require.True(t, cast)
+				require.Equal(t, []types.Type{types.New(types.T_decimal64, 18, 0), types.New(types.T_decimal64, 18, 0), types.New(types.T_decimal64, 18, 0)}, targets)
+				require.Equal(t, encodeOverloadID(BETWEEN, 0), legacy.GetEncodedOverloadID())
+				_, err = GetFunctionByName(ctx, "between", inputs)
+				require.Error(t, err, "historical verification must not change normal binding")
+			})
+		}
+	}
+}
+
+func TestLegacyDecimalRangeRetainsSignatureValidation(t *testing.T) {
+	ctx := WithLegacyIntegerDecimalCoercions(t.Context())
+	inputs := []types.Type{types.New(types.T_time, 0, 0), types.T_int64.ToType(), types.T_int16.ToType()}
+	for _, invalid := range [][]types.Type{inputs[:2], append(append([]types.Type{}, inputs...), types.T_uint8.ToType()),
+		{inputs[0], inputs[1], types.T_bool.ToType()}} {
+		_, err := GetFunctionByName(ctx, "between", invalid)
+		require.Error(t, err)
+	}
+	for _, flag := range []types.T{types.T_int8, types.T_uint16, types.T_bool} {
+		_, err := GetFunctionByName(ctx, "in_range", append(append([]types.Type{}, inputs...), flag.ToType()))
+		require.Error(t, err, "the boundary flag is not a numeric operand")
+	}
+	legacy, err := GetFunctionByName(ctx, "in_range", append(inputs, types.T_uint8.ToType()))
+	require.NoError(t, err)
+	targets, cast := legacy.ShouldDoImplicitTypeCast()
+	require.True(t, cast)
+	require.Equal(t, types.T_uint8.ToType(), targets[3])
+	require.Equal(t, encodeOverloadID(IN_RANGE, 0), legacy.GetEncodedOverloadID())
+}
