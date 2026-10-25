@@ -5524,6 +5524,13 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		return err
 	}
 
+	// The block-level clone bypasses row-wise foreign-key checks. A historical
+	// clone (restore) must not commit child rows whose parent keys are not
+	// visible in this transaction.
+	if err := validateClonedTableFKIntegrity(c, clonePlan, dbName, tblName); err != nil {
+		return err
+	}
+
 	// 4. group plugin indexes, then re-register each index's CDC startFromNow=true
 	//    with a plugin-provided InitSQL (vector: ALTER REINDEX … FORCE_SYNC;
 	//    fulltext: "" — none). tblId comes from CreateTable's tableDef.
