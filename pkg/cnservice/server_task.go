@@ -368,6 +368,10 @@ func (s *service) registerExecutorsLocked() {
 			s.cfg.UUID,
 			common.ISCPAllocator,
 			s.fileService,
+			iscp.ISCPExecutorOption{
+				SyncTaskInterval:            s.cfg.ISCP.SyncTaskInterval.Duration,
+				IndexFlushWatermarkInterval: s.cfg.ISCP.IndexFlushWatermarkInterval.Duration,
+			},
 		),
 	)
 

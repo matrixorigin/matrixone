@@ -36,7 +36,7 @@ func TestRegexp2PatternRouting(t *testing.T) {
 		{pattern: `\X`, want: true},
 		{pattern: `(?<name>a)`, want: true},
 		{pattern: `[\U00000061]`, want: true},
-		{pattern: `(?x)a b`, want: false},
+		{pattern: `(?x)a b`, want: true},
 		{pattern: `[?=]`, want: false},
 		{pattern: `\Q(?=)\E`, want: false},
 		{pattern: `\+\+`, want: false},
@@ -54,6 +54,7 @@ func TestRegexp2PatternCompatibilityFunctions(t *testing.T) {
 		subject string
 		want    bool
 	}{
+		{name: "free spacing", pattern: `(?x)a b`, subject: "ab", want: true},
 		{name: "positive lookahead", pattern: `a(?=b)`, subject: "ab", want: true},
 		{name: "negative lookahead", pattern: `a(?!c)`, subject: "ab", want: true},
 		{name: "positive lookbehind", pattern: `(?<=a)b`, subject: "ab", want: true},

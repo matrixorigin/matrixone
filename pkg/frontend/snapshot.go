@@ -3058,22 +3058,6 @@ func getCreateTableSql(
 	return colsList[0][0], nil
 }
 
-//func getAccountIdBySnapshot(
-//	ctx context.Context,
-//	bh BackgroundExec,
-//	accountName string,
-//	snapshot string,
-//) (uint32, error) {
-//
-//	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
-//	sql := fmt.Sprintf(
-//		"select account_id from mo_catalog.mo_account {SNAPSHOT = %s} where account_name = %s",
-//		snapshot, accountName,
-//	)
-//
-//	return getAccountIdHelper(ctx, bh, sql, accountName)
-//}
-
 func getAccountIdByTS(
 	ctx context.Context,
 	bh BackgroundExec,
