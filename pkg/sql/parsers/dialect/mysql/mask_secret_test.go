@@ -690,3 +690,72 @@ func TestMaskPrefilterAnsiQuotesIdentifierBackslash(t *testing.T) {
 		`create stage "s\" url='file:///x' credentials={'k'='VISIBLE_MODE0'}`,
 		MaskSensitiveSqlLiterals(`create stage "s\" url='file:///x' credentials={'k'='VISIBLE_MODE0'}`))
 }
+
+// #30747 review round 7, finding 1: a HEX literal spelling of an access-key
+// name decodes to the recognized key (`X'6163636573735f6b65795f6964'` →
+// access_key_id), and introducer-prefixed forms decode the same way; the
+// rule must arm on the HEXNUM token's decoded bytes and the prefilter must
+// admit such literals, otherwise the statement bypasses masking COMPLETELY
+// (base masked both; parity restored here).
+func TestMaskHexEncodedAccessKey(t *testing.T) {
+	// X'6163636573735f6b65795f6964' == "access_key_id"
+	sql := `select X'6163636573735f6b65795f6964'='R7_HEX_A'`
+	got := MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R7_HEX_A")
+	require.Contains(t, got, "******")
+
+	// X'7365637265745f6163636573735f6b6579' == "secret_access_key",
+	// introducer-prefixed
+	sql = `select _utf8mb4 X'7365637265745f6163636573735f6b6579'='R7_HEX_S'`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R7_HEX_S")
+
+	// inside a credential map
+	sql = `create stage s credentials={X'6163636573735f6b65795f6964'='R7_HEX_M'}`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R7_HEX_M")
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+
+	// non-key decodes stay untouched
+	sql = `select X'6162' from t`
+	require.Equal(t, sql, MaskSensitiveSqlLiterals(sql))
+	// odd/invalid hex never crashes nor arms
+	sql = `select X'61626' from t`
+	require.Equal(t, sql, MaskSensitiveSqlLiterals(sql))
+}
+
+// #30747 review round 7, finding 2: a QUALIFIED user variable is still a
+// user variable — `@session.sql_mode` / `@local.sql_mode` scan as AT_ID
+// (System=false) and never retune the session, and a quoted string that
+// contains the name is an assignment VALUE, not a target; only genuine
+// system-variable targets transition (isSessionSQLModeSet semantics).
+func TestMaskPerStatementSQLModeSQLModeUserVarTargets(t *testing.T) {
+	nbe := SQLModeFlags(SQLModeNoBackslashEscapes)
+	stage := ` create stage s credentials={'aws_key'='foo\','secret_key'='R7_SCOPE_CANARY'}`
+
+	for _, prefix := range []string{
+		`set @session.sql_mode='';`,
+		`set @local.sql_mode='';`,
+		`set @x='sql_mode'='';`,
+		`set @x:='sql_mode';`,
+	} {
+		got := MaskSensitiveSqlLiteralsPerStatement(prefix+stage, nbe)
+		require.NotContains(t, got, "R7_SCOPE_CANARY", "prefix %q", prefix)
+		require.Contains(t, got, `'aws_key'='******','secret_key'='******'`,
+			"session mode untouched for %q", prefix)
+	}
+
+	// genuine system targets still transition (mode cleared → mode-0 lexing)
+	for _, prefix := range []string{
+		`set @@sql_mode='';`,
+		`set @@session.sql_mode='';`,
+		`set @@local.sql_mode='';`,
+		`set sql_mode='';`,
+		`set session sql_mode='';`,
+		`set local sql_mode='';`,
+	} {
+		got := MaskSensitiveSqlLiteralsPerStatement(prefix+stage, nbe)
+		require.Contains(t, got, `'aws_key'='******'secret_key'`,
+			"transition applied for %q", prefix)
+	}
+}

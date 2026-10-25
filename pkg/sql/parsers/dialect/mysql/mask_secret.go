@@ -297,7 +297,7 @@ func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool
 						maskTokenStart(sql, valueStart), scanner.Pos)
 				}
 			}
-		} else if strings.ToLower(s) == "access_key_id" || strings.ToLower(s) == "secret_access_key" {
+		} else if accessKeyOptionNameFold(s) {
 			typ, _ = scanSensitiveToken(scanner, &previousToken)
 			if typ == eq {
 				valueStart := scanner.Pos
@@ -514,11 +514,13 @@ func maskPieceUnderAllLexicalVariants(piece string, lastKnown SQLModeFlags) stri
 // SESSION-scope `SET ... sql_mode = <value>` assignment. Only statements
 // that BEGIN with SET are considered, so DML with `SET`-clause looks-alikes
 // (`UPDATE ...`, `INSERT ... SET`) is never misread as a mode switch; and
-// only assignments that retune THIS session's parsing count (#30747 review):
-// a user variable (`SET @sql_mode=...`, an AT_ID token), `SET GLOBAL/PERSIST
-// sql_mode`, and the `@@global.sql_mode` form all leave the current session
-// mode untouched and must not trigger a transition, while the `:=`
-// assignment operator (accepted by the parser like `=`) must. touched
+// only SYSTEM-variable assignment targets that retune THIS session's parsing
+// count (#30747 review): user variables (`SET @sql_mode=...`, and even
+// `@session.sql_mode` — both AT_ID tokens, System=false), `SET GLOBAL/PERSIST
+// sql_mode`, the `@@global.sql_mode` form, and quoted strings that merely
+// CONTAIN the name all leave the current session mode untouched and must not
+// trigger a transition, while the `:=` assignment operator (accepted by the
+// parser like `=`) must. touched
 // reports that a session-scope assignment was present; ok reports that its
 // value was a single literal or word that parses into flags (an expression,
 // DEFAULT, or a multi-token list yields ok=false so the caller can fall back
@@ -531,17 +533,26 @@ func setStatementSQLModeChange(typList []int, valList []string) (SQLModeFlags, b
 	touched := false
 	ok := true
 	for i := 0; i < len(typList); i++ {
-		// The scanner delivers qualified system variables as ONE token
-		// (`@@session.sql_mode` scans as `session.sql_mode`), so the scope is
-		// visible in the value: session/local qualify the bare name; global
-		// (and persist) never retune this session.
+		// Only genuine SYSTEM-variable targets count (isSessionSQLModeSet
+		// semantics, #30747 review): a `@session.sql_mode` is a USER variable
+		// (an AT_ID token, System=false) however it is spelled, and a quoted
+		// string naming sql_mode is an assignment VALUE, not a target.
 		fold := strings.ToLower(valList[i])
-		isSessionQualified := fold == "session.sql_mode" || fold == "local.sql_mode"
-		isBareName := fold == "sql_mode" && typList[i] != AT_ID
-		if !isSessionQualified && !isBareName {
+		var isSysTarget bool
+		if typList[i] == AT_AT_ID {
+			// `@@sql_mode` / `@@session.sql_mode` / `@@local.sql_mode`:
+			// system variable, session scope (@@global. never matches: its
+			// value reads `global.sql_mode`).
+			isSysTarget = fold == "sql_mode" || fold == "session.sql_mode" ||
+				fold == "local.sql_mode"
+		} else if typList[i] != AT_ID && typList[i] != STRING && fold == "sql_mode" {
+			// bare identifier path: `set sql_mode` / `set session sql_mode`
+			isSysTarget = true
+		}
+		if !isSysTarget {
 			continue
 		}
-		if isBareName && i > 0 {
+		if i > 0 {
 			switch strings.ToLower(valList[i-1]) {
 			case "global", "persist", "persist_only":
 				continue
@@ -647,6 +658,58 @@ func containsFoldASCII(sql string, needle string) bool {
 	return false
 }
 
+// accessKeyOptionNameFold reports whether a candidate key token value names
+// one of the external-storage credential keys. Besides the plain decoded
+// name it accepts the HEX literal spelling: the scanner renders X'...' as
+// `0x...` (#30747 review: `X'6163636573735f6b65795f6964'` decodes to
+// access_key_id and still arms the rule).
+func accessKeyOptionNameFold(s string) bool {
+	if len(s) > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') {
+		if decoded, ok := hexDecodeBytes(s[2:]); ok {
+			s = decoded
+		}
+	}
+	return strings.EqualFold(s, "access_key_id") || strings.EqualFold(s, "secret_access_key")
+}
+
+func isIdentifierByte(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
+
+func hexDigitByte(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+// hexDecodeBytes decodes an even-length hex string; ok=false for odd length
+// or non-hex bytes.
+func hexDecodeBytes(s string) (string, bool) {
+	if len(s) == 0 || len(s)%2 != 0 {
+		return "", false
+	}
+	buf := make([]byte, len(s)/2)
+	for i := 0; i < len(buf); i++ {
+		hi, ok1 := hexNibble(s[2*i])
+		lo, ok2 := hexNibble(s[2*i+1])
+		if !ok1 || !ok2 {
+			return "", false
+		}
+		buf[i] = hi<<4 | lo
+	}
+	return string(buf), true
+}
+
+func hexNibble(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
+}
+
 // hasFoldWordAtEscapeTolerant is hasFoldWordAt for a DECODED-body compare:
 // when escapes are active it skips backslash bytes before comparing, since
 // the scanner collapses `\x` escape sequences to the escaped character when
@@ -732,6 +795,25 @@ func hasCredentialActionableKeyword(sql string, maskAll bool, mode SQLModeFlags)
 			// the credentials clause) is skipped (#30747 review).
 			bodyEscapes := delim != '`' && !mode.Has(SQLModeNoBackslashEscapes) &&
 				!(delim == '"' && mode.Has(SQLModeANSIQuotes))
+			// HEX literal (X'...' / x'...', optionally introducer-prefixed):
+			// its decoded bytes may BE an access-key name that arms the rule
+			// (#30747 review), so admit it when the short body decodes to one.
+			if maskAll && delim != '`' && i > 0 && (sql[i-1] == 'X' || sql[i-1] == 'x') &&
+				(i < 2 || !isIdentifierByte(sql[i-2])) {
+				hexEnd := i + 1
+				for hexEnd < n && hexDigitByte(sql[hexEnd]) {
+					hexEnd++
+				}
+				// bounded: key names decode to <= 17 bytes (34 hex digits)
+				if hexEnd < n && sql[hexEnd] == delim && hexEnd-i-1 <= 64 &&
+					(hexEnd-i-1)%2 == 0 {
+					if decoded, ok := hexDecodeBytes(sql[i+1 : hexEnd]); ok &&
+						(strings.EqualFold(decoded, "access_key_id") ||
+							strings.EqualFold(decoded, "secret_access_key")) {
+						return true
+					}
+				}
+			}
 			j := i + 1
 			for j < n {
 				if b := sql[j] | 0x20; maskAll && (b == 'a' || b == 's' ||
