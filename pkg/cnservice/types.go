@@ -201,6 +201,12 @@ type Config struct {
 		HeartbeatTimeout  toml.Duration `toml:"task-heartbeat-timeout"`
 	}
 
+	// ISCP startup cadences. Zero inherits the executor's production default.
+	ISCP struct {
+		SyncTaskInterval            toml.Duration `toml:"sync-task-interval"`
+		IndexFlushWatermarkInterval toml.Duration `toml:"index-flush-watermark-interval"`
+	} `toml:"iscp"`
+
 	// RPC rpc config used to build txn sender
 	RPC rpc.Config `toml:"rpc"`
 
@@ -328,6 +334,12 @@ func (c *Config) Validate() error {
 	}
 	if err := validateCNServiceUUID(c.UUID); err != nil {
 		return err
+	}
+	if c.ISCP.SyncTaskInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("cn.iscp.sync-task-interval must be non-negative")
+	}
+	if c.ISCP.IndexFlushWatermarkInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("cn.iscp.index-flush-watermark-interval must be non-negative")
 	}
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress

@@ -54,12 +54,6 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 	if node.Offset != nil {
 		node.Offset = r.constantFold(node.Offset, proc)
 	}
-	// if n.Interval != nil {
-	// 	n.Interval = r.constantFold(n.Interval, proc)
-	// }
-	// if n.Sliding != nil {
-	// 	n.Sliding = r.constantFold(n.Sliding, proc)
-	// }
 
 	for i := range node.OnList {
 		node.OnList[i] = r.constantFold(node.OnList[i], proc)

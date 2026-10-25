@@ -4326,8 +4326,11 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 	// Same reason as the ALTER ... COPY replica: the recreate goes through regenerated
 	// DDL, which cannot express relkind. It also keeps the table's CHECK constraint
-	// names, so skip the 3822 sibling scan for this internal recreate.
-	createOpts = createOpts.WithKeepRelKind(tableDef.GetTableType()).WithTrustedCheckConstraintNames()
+	// names, so skip the 3822 sibling scan for this internal recreate, and it
+	// reinstalls the unchanged foreign-key layout, so keep it out of
+	// newly-authored-constraint validation (#30282: a legacy SET NULL over a NOT
+	// NULL column must stay truncatable).
+	createOpts = createOpts.WithKeepRelKind(tableDef.GetTableType()).WithTrustedCheckConstraintNames().WithTrustedForeignKeyLayout()
 	if truncate.IsDelete {
 		rows, err := rel.Rows(c.proc.Ctx)
 		if err != nil {

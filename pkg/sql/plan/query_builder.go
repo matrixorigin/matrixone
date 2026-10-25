@@ -733,6 +733,31 @@ func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
 	return result, true
 }
 
+// Fixed-width binary branches must share one padded representation before a
+// set operation compares or materializes their rows. A nonpositive width
+// denotes an unspecified bound, so it must remain unbounded rather than
+// inheriting a fixed width from another branch.
+func setOperationPureBinaryCommonType(source []types.Type) (types.Type, bool) {
+	if len(source) == 0 || source[0].Oid != types.T_binary {
+		return types.Type{}, false
+	}
+	result := source[0]
+	for _, typ := range source[1:] {
+		if typ.Oid != types.T_binary {
+			return types.Type{}, false
+		}
+	}
+	for _, typ := range source {
+		if typ.Width <= 0 {
+			return types.New(types.T_blob, types.MaxLongTextLen, 0), true
+		}
+		if typ.Width > result.Width {
+			result.Width = typ.Width
+		}
+	}
+	return result, true
+}
+
 // A winning text collation needs a text result type even when the safe common
 // byte bound was first chosen in the binary domain. In particular, BLOB's
 // result decoding does not preserve UTF-8 text for prepared parameters.
@@ -3056,14 +3081,6 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			})
 		}
 
-		//for _, expr := range node.AggList {
-		//	increaseRefCnt(expr, -1, colRefCnt)
-		//	err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
-		//	if err != nil {
-		//		return nil, err
-		//	}
-		//}
-
 	case plan.Node_SORT, plan.Node_PARTITION:
 		for _, orderBy := range node.OrderBy {
 			increaseRefCnt(orderBy.Expr, 1, colRefCnt)
@@ -4320,7 +4337,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 		builder.skipStats = builder.canSkipStats()
-		builder.rewriteDistinctToAGG(rootID)
+		if err = builder.rewriteDistinctToAGG(rootID); err != nil {
+			return nil, err
+		}
 		rootID = builder.rewriteEffectlessAggToProject(rootID)
 		rootID, err = builder.optimizeFilters(rootID)
 		if err != nil {
@@ -4439,7 +4458,19 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
+		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true)
+		if needsLate {
+			builder.mergeFiltersOnCompositeKey(rootID, false)
+			builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
+		}
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
+		if needsLate {
+			builder.appendCompoundKeyBlockFilters(rootID)
+			builder.appendCompositePartBlockFilters(compositePartBlockFilters)
+			sortFilterListByStats(builder.GetContext(), rootID, builder)
+			clear(colRefCnt)
+			builder.countColRefs(rootID, colRefCnt)
+		}
 
 		builder.generateRuntimeFilters(rootID)
 		builder.pushdownVectorIndexTopToTableScan(rootID)
@@ -4768,9 +4799,12 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		if len(tmpArgsType) > 0 {
 			var targetType plan.Type
 			var targetArgType types.Type
+			pureBinaryType, pureFixedBinary := setOperationPureBinaryCommonType(tmpArgsType)
 			mixedTextBinaryType, mixedTextBinary := function.MixedTextBinaryCommonType(tmpArgsType)
 			if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
 				targetArgType = pureCharType
+			} else if pureFixedBinary {
+				targetArgType = pureBinaryType
 			} else if mixedTextBinary {
 				targetArgType = mixedTextBinaryType
 			} else {
@@ -4808,6 +4842,20 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					}
 				} else {
 					targetArgType = argsCastType[0]
+				}
+			}
+			// A temporal branch converted to text can occupy more characters
+			// than a leading string literal. Widen the common type before the
+			// branch casts so the time component is not discarded.
+			if targetArgType.Oid == types.T_char || targetArgType.Oid == types.T_varchar {
+				for _, typ := range tmpArgsType {
+					switch typ.Oid {
+					case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+						if width, known := function.StringResultByteBound(typ); known &&
+							width > uint64(targetArgType.Width) && width <= uint64(types.MaxVarcharLen) {
+							targetArgType.Width = int32(width)
+						}
+					}
 				}
 			}
 			allCharInputs := len(tmpArgsType) > 0
@@ -4864,7 +4912,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						targetArgType.Width = typ.Width
 					}
 				}
-			} else if !mixedTextBinary &&
+			} else if !pureFixedBinary && !mixedTextBinary &&
 				(targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary) {
 				targetArgType = types.T_blob.ToType()
 			}
@@ -6629,22 +6677,17 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// All aggregate consumers in this query block are bound now. Compact exact
 	// affine SUM families before aggregate arguments are flattened and the AGG
 	// node fixes their physical slot layout.
-	affineOrderBys := slices.Clone(boundOrderBys)
+	aggregateOrderBys := slices.Clone(boundOrderBys)
 	if boundTimeWindowOrderBy != nil {
-		affineOrderBys = append(affineOrderBys, boundTimeWindowOrderBy)
+		aggregateOrderBys = append(aggregateOrderBys, boundTimeWindowOrderBy)
 	}
-	builder.rewriteAffineSumFamilies(
-		ctx,
-		[][]*plan.Expr{
-			ctx.projects,
-			ctx.windows,
-			ctx.times,
-			boundHavingList,
-			fillVals,
-			fillCols,
-		},
-		affineOrderBys,
-	)
+	aggregateConsumers := [][]*plan.Expr{
+		ctx.projects, ctx.windows, ctx.times, boundHavingList, fillVals, fillCols,
+	}
+	builder.rewriteAffineSumFamilies(ctx, aggregateConsumers, aggregateOrderBys)
+	if astTimeWindow == nil {
+		builder.pruneDerivedGroupBy(ctx, aggregateConsumers, aggregateOrderBys)
+	}
 
 	// GROUP BY expressions are evaluated by the AGG over its input, so
 	// materialize scalar subqueries into that input before fixing the group-key
@@ -11277,15 +11320,14 @@ func (builder *QueryBuilder) appendAggNode(
 		if err != nil {
 			return
 		}
-		if len(physicalKeys) > 0 {
-			visibleCount := len(groupBy)
-			groupBy = append(slices.Clone(groupBy), physicalKeys...)
-			groupByHashKey = make([]int32, visibleCount)
-			for i := range groupByHashKey {
-				groupByHashKey[i] = int32(visibleCount + i)
-			}
-			if len(groupingFlag) > 0 {
-				groupingFlag = append(slices.Clone(groupingFlag), groupingFlag...)
+		groupBy, groupByHashKey, err = CompactPhysicalGroupKeys(groupBy, physicalKeys)
+		if err != nil {
+			return
+		}
+		if len(groupBy) > len(ctx.groups) && len(groupingFlag) > 0 {
+			groupingFlag = slices.Clone(groupingFlag)
+			for range len(groupBy) - len(ctx.groups) {
+				groupingFlag = append(groupingFlag, true)
 			}
 		}
 	}
@@ -12582,6 +12624,7 @@ func (builder *QueryBuilder) bindView(
 			state.memoFrames = append(state.memoFrames, memoFrame)
 			defer func() { memoFrame.finish(viewCtx, err) }()
 		}
+		state.request.benchmark.bind()
 	}
 
 	isSubscriptionStatistics := isSubscriptionStatisticsView(schema, table, metadataSubscription)

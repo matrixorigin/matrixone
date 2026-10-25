@@ -98,22 +98,6 @@ func installNextChunkIdMock(t *testing.T, proc *process.Process, nextId int64) f
 
 var unhexLitRe2 = regexp.MustCompile(`unhex\('([0-9a-fA-F]*)'\)`)
 
-// extractRecordsFromSql concatenates every unhex blob found in the given
-// SQL statements (in document order) — the bytes the storage layer would
-// see for tag=1 chunks.
-func extractRecordsFromSql(t *testing.T, sqls []string) []byte {
-	t.Helper()
-	var out []byte
-	for _, s := range sqls {
-		for _, m := range unhexLitRe2.FindAllStringSubmatch(s, -1) {
-			b, err := hex.DecodeString(m[1])
-			require.NoError(t, err)
-			out = append(out, b...)
-		}
-	}
-	return out
-}
-
 // chunksFromSql converts the captured sync output into one EventChunk per
 // unhex literal. ChunkIds increment from startId so the test can drive them
 // through ReplayEventLog.
