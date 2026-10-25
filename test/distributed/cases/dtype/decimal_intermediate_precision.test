@@ -40,4 +40,9 @@ set @decimal_precision_runtime = cast(1.25 as decimal(20,2));
 -- @metacmp(true)
 execute precision_multiply using @decimal_precision_runtime;
 deallocate prepare precision_multiply;
+-- A legacy D64 producer can retain a 19-digit coefficient despite width 18.
+create table legacy_coefficients(i bigint);
+insert into legacy_coefficients values (9223372036854775807), (-9223372036854775808), (null);
+-- @metacmp(true)
+select (cast('00:00:00' as time(0)) + i) * (cast('00:00:00' as time(0)) + i) * 3 as carried_product from legacy_coefficients order by i;
 drop database decimal_intermediate_precision;

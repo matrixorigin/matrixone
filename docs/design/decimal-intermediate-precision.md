@@ -18,6 +18,11 @@ aggregate headroom and partial-state layout are not changed by this patch.
 - Decimal128/256 addition/subtraction precision is max(p1-s1,p2-s2)+max(s1,s2)+1.
 - Decimal64 addition/subtraction retains its established 18-digit metadata and
   physical route; this patch does not introduce a carry-promotion policy.
+  That legacy envelope can carry a 19-digit signed coefficient, including
+  TIME + BIGINT and a carry from Decimal64 addition. Downstream inference
+  conservatively treats Decimal64 precision 18 (or unspecified precision) as
+  19 digits. Narrower declared domains remain precise. This avoids introducing
+  expression-provenance state or changing the legacy producer's public type.
 - Multiplication precision is p1+p2; its existing result-scale rule is retained.
 - Physical input coercion preserves each original numeric operand's precision
   and scale rather than substituting the target carrier capacity.

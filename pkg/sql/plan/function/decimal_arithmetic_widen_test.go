@@ -93,7 +93,7 @@ func TestMixedDecimalArithmeticWidensFromOriginalDomains(t *testing.T) {
 			name:       "decimal64 plus decimal128",
 			operator:   "+",
 			inputs:     []types.Type{decimal18, decimal38},
-			wantTarget: []types.Type{types.New(types.T_decimal256, 18, 0), types.New(types.T_decimal256, 38, 0)},
+			wantTarget: []types.Type{types.New(types.T_decimal256, 19, 0), types.New(types.T_decimal256, 38, 0)},
 			wantResult: types.New(types.T_decimal256, 39, 0),
 		},
 		{
@@ -136,8 +136,9 @@ func TestMixedDecimalArithmeticWidensFromOriginalDomains(t *testing.T) {
 
 	resolved, err := GetFunctionByName(context.Background(), "*", []types.Type{decimal20, decimal18})
 	require.NoError(t, err)
-	require.NotEqual(t, types.T_decimal256, resolved.targetTypes[0].Oid)
-	require.Equal(t, types.New(types.T_decimal128, 38, 0), resolved.retType)
+	// The legacy D64(18) envelope can contain a full 19-digit coefficient.
+	require.Equal(t, types.T_decimal256, resolved.targetTypes[0].Oid)
+	require.Equal(t, types.New(types.T_decimal256, 39, 0), resolved.retType)
 }
 
 // Published precision is owned by the common arithmetic wrapper, independently

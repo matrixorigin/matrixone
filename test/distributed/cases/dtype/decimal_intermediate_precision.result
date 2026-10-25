@@ -59,4 +59,11 @@ execute precision_multiply using @decimal_precision_runtime;
 NULL  𝄀
 125.0000
 deallocate prepare precision_multiply;
+create table legacy_coefficients(i bigint);
+insert into legacy_coefficients values (9223372036854775807), (-9223372036854775808), (null);
+select (cast('00:00:00' as time(0)) + i) * (cast('00:00:00' as time(0)) + i) * 3 as carried_product from legacy_coefficients order by i;
+➤ carried_product[3,39,0]  𝄀
+NULL  𝄀
+255211775190703847597530955573826158592  𝄀
+255211775190703847542190723352697503747
 drop database decimal_intermediate_precision;

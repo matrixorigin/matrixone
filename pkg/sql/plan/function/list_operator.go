@@ -138,6 +138,14 @@ func decimalArithmeticDomain(input types.Type) (width, scale int32, ok bool) {
 		if width <= 0 {
 			width = input.Oid.ToType().Width
 		}
+		// The legacy D64 envelope is 18, but arithmetic and temporal
+		// coercions can retain a full signed-int64 coefficient (19 digits).
+		// Without expression provenance this envelope is not a proof of an
+		// 18-digit value. Preserve narrower declared domains, while making
+		// downstream carry/product inference safe for legacy intermediates.
+		if input.Oid == types.T_decimal64 && width == 18 {
+			width = 19
+		}
 		scale = max(input.Scale, int32(0))
 		return width, scale, true
 	}

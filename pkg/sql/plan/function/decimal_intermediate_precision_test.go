@@ -36,6 +36,8 @@ func TestDecimalIntermediatePrecision(t *testing.T) {
 		{"mixed unsigned multiplication", "*", types.T_uint64.ToType(), decimal15, types.New(types.T_decimal128, 35, 2)},
 		{"actual wide multiplication", "*", types.New(types.T_decimal128, 20, 0), types.New(types.T_decimal128, 20, 0), types.New(types.T_decimal256, 40, 0)},
 		{"actual wide addition", "+", types.New(types.T_decimal128, 38, 0), types.New(types.T_decimal128, 38, 0), types.New(types.T_decimal256, 39, 0)},
+		{"legacy full coefficient square", "*", types.New(types.T_decimal64, 18, 0), types.New(types.T_decimal64, 18, 0), types.New(types.T_decimal128, 38, 0)},
+		{"narrow decimal64 square", "*", types.New(types.T_decimal64, 17, 0), types.New(types.T_decimal64, 17, 0), types.New(types.T_decimal128, 34, 0)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resolved, err := GetFunctionByName(context.Background(), tc.op, []types.Type{tc.left, tc.right})
@@ -43,6 +45,27 @@ func TestDecimalIntermediatePrecision(t *testing.T) {
 			require.Equal(t, tc.want, resolved.retType)
 		})
 	}
+}
+
+func TestDecimalLegacyCoefficientDomain(t *testing.T) {
+	for _, scale := range []int32{0, 2, 18} {
+		for _, width := range []int32{0, 18, 19} {
+			p, s, ok := decimalArithmeticDomain(types.New(types.T_decimal64, width, scale))
+			require.True(t, ok)
+			require.Equal(t, int32(19), p)
+			require.Equal(t, scale, s)
+		}
+	}
+	ctx := context.Background()
+	legacy, err := GetFunctionByName(ctx, "+", []types.Type{types.New(types.T_time, 0, 0), types.T_int64.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, types.New(types.T_decimal64, 18, 0), legacy.retType)
+	square, err := GetFunctionByName(ctx, "*", []types.Type{legacy.retType, legacy.retType})
+	require.NoError(t, err)
+	require.Equal(t, types.New(types.T_decimal128, 38, 0), square.retType)
+	product, err := GetFunctionByName(ctx, "*", []types.Type{square.retType, types.New(types.T_decimal64, 1, 0)})
+	require.NoError(t, err)
+	require.Equal(t, types.New(types.T_decimal256, 39, 0), product.retType)
 }
 
 func TestDecimalRevenueIntermediateStays128(t *testing.T) {
