@@ -844,6 +844,9 @@ func ReadSizeBytes(r io.Reader) (int32, []byte, error) {
 	if err != nil {
 		return 0, nil, err
 	}
+	if err = CheckReadSize(r, int64(sz)); err != nil {
+		return 0, nil, err
+	}
 	if sz > 0 {
 		bs := make([]byte, sz)
 		if _, err := io.ReadFull(r, bs); err != nil {
@@ -858,6 +861,12 @@ func ReadSizeBytesToBuf(r io.Reader, buf []byte, offset int32) (int32, []byte, e
 	sz, err := ReadInt32(r)
 	if err != nil || sz == 0 {
 		return 0, buf, err
+	}
+	if err = CheckReadSize(r, int64(sz)); err != nil {
+		return 0, buf, err
+	}
+	if offset < 0 || int64(offset) > int64(len(buf)) || int64(offset)+int64(sz) > int64(^uint32(0)>>1) {
+		return 0, buf, fmt.Errorf("invalid encoded buffer offset %d and size %d", offset, sz)
 	}
 
 	if sz+offset <= int32(cap(buf)) {
@@ -879,15 +888,22 @@ func ReadSizeBytesToBuf(r io.Reader, buf []byte, offset int32) (int32, []byte, e
 func ReadSizeBytesMp(r io.Reader, bs []byte, mp *mpool.MPool, offHeap bool) (int32, []byte, error) {
 	sz, err := ReadInt32(r)
 	if err != nil {
-		return 0, nil, err
+		return 0, bs, err
+	}
+	if err = CheckReadSize(r, int64(sz)); err != nil {
+		return 0, bs, err
 	}
 	if sz > 0 {
-		bs, err = mp.Grow(bs, int(sz), offHeap)
+		grown, growErr := mp.Grow(bs, int(sz), offHeap)
+		err = growErr
 		if err != nil {
-			return 0, nil, err
+			return 0, bs, err
 		}
+		bs = grown
 		if _, err := io.ReadFull(r, bs); err != nil {
-			return 0, nil, err
+			// The old allocation may already have been freed by Grow. Return
+			// the new owner on a short read so the caller can clean it.
+			return sz, bs, err
 		}
 	} else {
 		if bs != nil {

@@ -39,6 +39,7 @@ type HashmapBuilder struct {
 	IntHashMap         *hashmap.IntHashMap
 	StrHashMap         *hashmap.StrHashMap
 	Sels               message.GroupSels
+	keyCols            []*plan.Expr
 	keyWidth           int // keyWidth is the width of hash columns, it determines which hash map to use.
 	Batches            colexec.Batches
 	executors          []colexec.ExpressionExecutor
@@ -87,7 +88,13 @@ func (hb *HashmapBuilder) GetJoinMap(mp *mpool.MPool) *message.JoinMap {
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
-	return message.NewJoinMap(hb.Sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, mp)
+	jm := message.NewJoinMap(hb.Sels, hb.IntHashMap, hb.StrHashMap, hb.DelRows, hb.Batches.Buf, mp)
+	// GetJoinMap is the ownership transfer. An unpublished/error cleanup must
+	// not retain a second owner of the same hashmap/Sels/batches.
+	hb.Sels = message.GroupSels{}
+	hb.IntHashMap, hb.StrHashMap, hb.DelRows = nil, nil, nil
+	hb.Batches.Reset()
+	return jm
 }
 
 func (hb *HashmapBuilder) GetGroupCount() uint64 {
@@ -107,6 +114,7 @@ func (hb *HashmapBuilder) Prepare(
 	proc *process.Process,
 ) error {
 	var err error
+	hb.keyCols = keyCols
 	if len(hb.executors) == 0 {
 		hb.needDupVec = false
 		hb.executors = make([]colexec.ExpressionExecutor, len(keyCols))
@@ -180,15 +188,23 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 }
 
 func (hb *HashmapBuilder) Free(proc *process.Process) {
+	hb.FreeHashMapAndBatches(proc)
 	hb.detachAndPruneCachedIterators()
 	hb.cachedIntIterator = nil
 	hb.cachedStrIterator = nil
-	hb.needDupVec = false
 	hb.Batches.Reset()
 	hb.IntHashMap = nil
 	hb.StrHashMap = nil
 	hb.FreeExecutors()
+	if hb.needDupVec {
+		for _, vec := range hb.curVecs {
+			if vec != nil {
+				vec.Free(proc.Mp())
+			}
+		}
+	}
 	hb.curVecs = nil
+	hb.needDupVec = false
 	for i := range hb.UniqueJoinKeys {
 		if hb.UniqueJoinKeys[i] != nil {
 			hb.UniqueJoinKeys[i].Free(proc.Mp())
@@ -216,6 +232,7 @@ func (hb *HashmapBuilder) FreeHashMapAndBatches(proc *process.Process) {
 		hb.StrHashMap = nil
 	}
 	hb.Batches.Clean(proc.Mp())
+	hb.Sels.Free(proc.Mp())
 }
 
 // evalBatch evaluates join key expressions for one batch, storing results in hb.curVecs.
@@ -454,6 +471,16 @@ func (hb *HashmapBuilder) buildHashmap(
 				hb.UniqueJoinKeys = make([]*vector.Vector, len(hb.executors))
 				for j, vec := range hb.curVecs {
 					hb.UniqueJoinKeys[j] = vector.NewOffHeapVecWithType(*vec.GetType())
+					area := int64(0)
+					if col := hb.keyCols[j].GetCol(); col != nil {
+						for _, bat := range hb.Batches.Buf {
+							source := bat.Vecs[col.ColPos]
+							area += source.WindowSize(0, source.Length()) - int64(source.Length()*source.GetType().TypeSize())
+						}
+					}
+					if err := hb.UniqueJoinKeys[j].PreExtendWithArea(hb.InputBatchRowCount, int(area), proc.Mp()); err != nil {
+						return err
+					}
 				}
 			}
 

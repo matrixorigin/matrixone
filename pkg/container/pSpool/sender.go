@@ -53,7 +53,9 @@ type PipelineSpool struct {
 	aborted   bool
 	abortErr  error
 
-	cleanupOnce sync.Once
+	finalCleanupOnce sync.Once
+	abortCurrentRefs []int32
+	cleanupOnce      sync.Once
 	// cleanupDone means the cache-wide cleanup pass has already run. A typed
 	// terminal receiver can still release its current batch afterward; that late
 	// release must free directly instead of putting memory back into a cache that
@@ -188,6 +190,28 @@ func (ps *PipelineSpool) forceCleanup() {
 	ps.cleanupDone = true
 }
 
+// CloseAfterReadersStopped is the final destructor for a controlled query
+// attempt. Its caller MUST have joined every sender and receiver, including
+// pipeline cleanup, before calling. Unlike ForceCleanup it can then discard
+// abandoned queued/current frames even when cancellation lost an End marker.
+// It must never be called merely because a cleanup wait timed out.
+func (ps *PipelineSpool) CloseAfterReadersStopped() {
+	if ps == nil {
+		return
+	}
+	ps.finalCleanupOnce.Do(func() {
+		ps.mu.Lock()
+		defer ps.mu.Unlock()
+		for i := range ps.shardPool {
+			ps.cleanSlotLocked(uint32(i))
+		}
+		for i := range ps.rs {
+			ps.rs[i].flagLastPopRelease()
+		}
+		ps.cleanupOnce.Do(ps.forceCleanup)
+	})
+}
+
 func (ps *PipelineSpool) getFreeIdFromSharedPool(
 	ctx context.Context) (queryDone bool, id uint32) {
 	if ctx.Err() != nil {
@@ -219,7 +243,7 @@ func (ps *PipelineSpool) updateSpoolMessage(idx uint32, data *batch.Batch, err e
 }
 
 func (ps *PipelineSpool) sendToAll(sharedPoolIndex uint32) {
-	if ps.shardRefs == nil {
+	if len(ps.rs) == 1 {
 		ps.doRefCheck[sharedPoolIndex] = false
 	} else {
 		ps.shardRefs[sharedPoolIndex].Store(int32(len(ps.rs)))
@@ -277,9 +301,6 @@ func (ps *PipelineSpool) releaseSlotLocked(idx uint32) {
 }
 
 func (ps *PipelineSpool) abortLocked() {
-	if ps.shardRefs == nil {
-		ps.shardRefs = make([]atomic.Int32, len(ps.shardPool))
-	}
 
 	// Abort has two cleanup classes:
 	//   - slots already handed to receivers are kept until ReleaseCurrent drops
@@ -291,7 +312,8 @@ func (ps *PipelineSpool) abortLocked() {
 	// cleans byte slices that have already been returned to the spool cache; it
 	// does not own current batches still held by receivers. Those are released
 	// later by releaseCurrentLocked when their last receiver drops the ref.
-	currentRefs := make([]int32, len(ps.shardPool))
+	currentRefs := ps.abortCurrentRefs
+	clear(currentRefs)
 	for i := range ps.rs {
 		if last, hasLast := ps.rs[i].getLastPop(); hasLast {
 			currentRefs[last]++

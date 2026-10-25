@@ -17,6 +17,7 @@ package tokenizer
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func tokenize(input []byte) []Token {
@@ -99,6 +100,82 @@ func TestLatin(t *testing.T) {
 	checkTokenize(t, "Pадіоаматорів", []Token{
 		makeToken("pадіоаматор", 0),
 	})
+}
+
+func TestSimpleTokenizerBoundsNormalizedUTF8Token(t *testing.T) {
+	// This is Go's simple Unicode case mapping, whose UTF-8 encoding expands
+	// from two bytes to three. Eight input runes fit the source prefix but
+	// exceed the fixed 23-byte output store after lowercasing.
+	if got := strings.ToLower("\u023a"); got != "\u2c65" {
+		t.Fatalf("unexpected Unicode mapping: %q", got)
+	}
+	for _, tc := range []struct {
+		name, input, want string
+	}{
+		{"below-limit", strings.Repeat("\u023a", 7), strings.Repeat("\u2c65", 7)},
+		{"first-overflow", strings.Repeat("\u023a", 8), strings.Repeat("\u2c65", 7)},
+		{"source-limit", strings.Repeat("\u023a", 11), strings.Repeat("\u2c65", 7)},
+		{"long-source", strings.Repeat("\u023a", 12), strings.Repeat("\u2c65", 7)},
+		{"exact-mixed-limit", "AB" + strings.Repeat("\u023a", 7), "ab" + strings.Repeat("\u2c65", 7)},
+		{"mixed-overflow", "AB" + strings.Repeat("\u023a", 8), "ab" + strings.Repeat("\u2c65", 7)},
+		{"lowercase-shrinks", strings.Repeat("\u0130", 11), strings.Repeat("i", 11)},
+		{"ascii-prefix", "ABCDefghijklmnopqrstuvwxyz", "abcdefghijklmnopqrstuvw"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			count := 0
+			for tk, err := range NewSimpleTokenizer().Tokenize([]byte(tc.input)) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				count++
+				length := int(tk.TokenBytes[0])
+				if length > MAX_TOKEN_SIZE {
+					t.Fatalf("token advertises %d bytes in a %d-byte store", length, MAX_TOKEN_SIZE)
+				}
+				// Consume the advertised length exactly as fulltext indexing does.
+				word := string(tk.TokenBytes[1 : length+1])
+				if !utf8.ValidString(word) || word != tc.want {
+					t.Fatalf("normalized token %q, want complete UTF-8 prefix %q", word, tc.want)
+				}
+				if tk.TokenPos != 0 || tk.BytePos != 0 {
+					t.Fatalf("unexpected token position: token=%d byte=%d", tk.TokenPos, tk.BytePos)
+				}
+			}
+			if count != 1 {
+				t.Fatalf("got %d tokens, want one normalized Latin token", count)
+			}
+		})
+	}
+
+	// Truncating the stored word must not truncate the source traversal or
+	// shift subsequent CJK ngrams, ASCII tokens, byte offsets or token positions.
+	input := strings.Repeat("\u023a", 8) + "中文 A"
+	want := []Token{makeToken(strings.Repeat("\u2c65", 7), 0), makeToken("中文", 1), makeToken("文", 2), makeToken("a", 3)}
+	bytePos := []int32{0, 16, 19, 23}
+	count := 0
+	for tk, err := range NewSimpleTokenizer().Tokenize([]byte(input)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if count >= len(want) || tk.TokenBytes != want[count].TokenBytes || tk.TokenPos != want[count].TokenPos || tk.BytePos != bytePos[count] {
+			t.Fatalf("token %d: unexpected value/position: %+v", count, tk)
+		}
+		count++
+	}
+	if count != len(want) {
+		t.Fatalf("got %d mixed tokens, want %d", count, len(want))
+	}
+	count = 0
+	for _, err := range NewSimpleTokenizer().Tokenize([]byte(input)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		count++
+		break
+	}
+	if count != 1 {
+		t.Fatalf("early-stop consumer received %d tokens", count)
+	}
 }
 
 func TestCJK(t *testing.T) {

@@ -98,6 +98,7 @@ type container struct {
 
 	flushed        bool
 	s3Writer       *s3WriterDelegate
+	outputWriter   *s3WriterDelegate
 	updateCtxInfos map[string]*updateCtxInfo
 	sources        map[uint64]engine.Relation
 
@@ -151,6 +152,7 @@ func (update *MultiUpdate) Reset(proc *process.Process, pipelineFailed bool, err
 		update.ctr.s3Writer.reset(proc)
 	}
 
+	update.ctr.outputWriter = nil
 	update.ctr.state = vm.Build
 }
 

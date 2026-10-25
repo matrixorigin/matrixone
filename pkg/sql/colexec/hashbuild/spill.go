@@ -21,11 +21,11 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -41,30 +41,11 @@ func (ctr *container) flushBucketBuffer(proc *process.Process, bat *batch.Batch,
 	}
 
 	cnt := int64(bat.RowCount())
-	ctr.spillWriteBuf.Reset()
-	ctr.spillWriteBuf.Write(types.EncodeInt64(&cnt))
-	// Reserve space for batchSize (filled in after marshalling)
-	batchSizePos := ctr.spillWriteBuf.Len()
-	var zero int64
-	ctr.spillWriteBuf.Write(types.EncodeInt64(&zero))
-
-	// Write batch data directly to spillWriteBuf
-	batchStartPos := ctr.spillWriteBuf.Len()
-	bat.MarshalBinaryWithBuffer(&ctr.spillWriteBuf, false)
-	batchSize := int64(ctr.spillWriteBuf.Len() - batchStartPos)
-
-	// Write batchSize at reserved position
-	batchSizeBytes := types.EncodeInt64(&batchSize)
-	copy(ctr.spillWriteBuf.Bytes()[batchSizePos:batchSizePos+len(batchSizeBytes)], batchSizeBytes)
-
-	magic := uint64(spillMagic)
-	ctr.spillWriteBuf.Write(types.EncodeUint64(&magic))
-
-	written, err := file.Write(ctr.spillWriteBuf.Bytes())
+	written, err := message.WriteJoinSpillFrame(file, bat)
 	if err != nil {
 		return 0, err
 	}
-	analyzer.Spill(int64(written))
+	analyzer.Spill(written)
 	analyzer.SpillRows(cnt)
 
 	return cnt, nil
@@ -104,9 +85,28 @@ func (ctr *container) ensureSpillFile(proc *process.Process, files []*os.File, b
 }
 
 func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*batch.Batch, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {
+	return message.ForEachJoinSpillWindow(bat, spillBatchBytes(proc), func(window *batch.Batch) error {
+		return ctr.appendBuildWindowToSpillFiles(proc, window, files, buffers, executors, analyzer)
+	})
+}
+func (ctr *container) appendBuildWindowToSpillFiles(proc *process.Process, bat *batch.Batch, files []*os.File, buffers []*batch.Batch, executors []colexec.ExpressionExecutor, analyzer process.Analyzer) error {
+
 	if bat.RowCount() == 0 {
 		return nil
 	}
+	if proc.Base.ImportMemory != nil {
+		lease, err := proc.Base.ImportMemory.AcquireIO(proc.Ctx)
+		if err != nil {
+			return err
+		}
+		defer lease.Release()
+	}
+	defer func() {
+		ctr.spillHashValues = nil
+		ctr.spillBucketRowIds = nil
+		ctr.spillNonEmptyBuckets = nil
+		ctr.spillKeyVecs = nil
+	}()
 
 	// Evaluate hash keys using pre-initialized executors (reuse cached slice)
 	if cap(ctr.spillKeyVecs) < len(executors) {
@@ -114,6 +114,14 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 	}
 	keyVecs := ctr.spillKeyVecs[:len(executors)]
 	for i, exec := range executors {
+		if exec == nil {
+			var err error
+			exec, err = colexec.NewExpressionExecutor(proc, ctr.spillExprPlans[i])
+			if err != nil {
+				return err
+			}
+			defer exec.Free()
+		}
 		vec, err := exec.Eval(proc, []*batch.Batch{bat}, nil)
 		if err != nil {
 			return err
@@ -155,39 +163,18 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 		}
 	}
 
-	// Add rows to buffers and flush when needed
+	// One active compact bucket bounds aggregate capacity across all buckets.
 	for _, bucketId := range ctr.spillNonEmptyBuckets {
-		sels := bucketRowIds[bucketId]
-
-		buf := buffers[bucketId]
-		if buf == nil {
-			buf = batch.NewOffHeapWithSize(len(bat.Vecs))
-			for i, vec := range bat.Vecs {
-				typ := *vec.GetType()
-				buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
-				buf.Vecs[i].PreExtend(spillBufferSize, proc.Mp())
-			}
-			buffers[bucketId] = buf
-		}
-
-		// Append rows to buffer
-		for i, vec := range bat.Vecs {
-			if err := buf.Vecs[i].UnionInt32(vec, sels, proc.Mp()); err != nil {
-				return err
-			}
-		}
-		buf.SetRowCount(buf.RowCount() + len(sels))
-
-		// Flush if buffer is full
-		if buf.RowCount() >= spillBufferSize {
+		err := message.WriteJoinSpillRows(proc.Mp(), bat, bucketRowIds[bucketId], spillBatchBytes(proc), func(compact *batch.Batch) error {
 			file, err := ctr.ensureSpillFile(proc, files, bucketId)
 			if err != nil {
 				return err
 			}
-			if _, err := ctr.flushBucketBuffer(proc, buf, file, analyzer); err != nil {
-				return err
-			}
-			buf.CleanOnlyData()
+			_, err = ctr.flushBucketBuffer(proc, compact, file, analyzer)
+			return err
+		})
+		if err != nil {
+			return err
 		}
 	}
 
@@ -197,22 +184,31 @@ func (ctr *container) appendBuildBatchToSpillFiles(proc *process.Process, bat *b
 // initSpillExprExecs initializes or validates spill expression executors.
 // Returns the executors slice ready for use. Called once when entering spill mode.
 func (ctr *container) initSpillExprExecs(proc *process.Process, conditions []*plan.Expr) ([]colexec.ExpressionExecutor, error) {
+	ctr.spillExprPlans = conditions
 	if len(ctr.spillExprExecs) != len(conditions) {
 		// Clean up old executors if count changed
 		ctr.freeSpillExprExecs()
 		ctr.spillExprExecs = make([]colexec.ExpressionExecutor, len(conditions))
 		for i, expr := range conditions {
+			// Function/constant executors may retain result or folded storage.
+			// Their whole lifetime belongs to the current IO workspace.
+			if expr.GetCol() == nil {
+				continue
+			}
 			var err error
 			if ctr.spillExprExecs[i], err = colexec.NewExpressionExecutor(proc, expr); err != nil {
 				// Clean up what we already created
 				for j := 0; j < i; j++ {
-					ctr.spillExprExecs[j].Free()
+					if ctr.spillExprExecs[j] != nil {
+						ctr.spillExprExecs[j].Free()
+					}
 				}
 				ctr.spillExprExecs = nil
 				return nil, err
 			}
 		}
 	}
+	ctr.spillExprPlans = conditions
 	return ctr.spillExprExecs, nil
 }
 
@@ -224,6 +220,7 @@ func (ctr *container) freeSpillExprExecs() {
 		}
 	}
 	ctr.spillExprExecs = nil
+	ctr.spillExprPlans = nil
 }
 
 // acquireSpillBuffers returns a slice of spillNumBuckets buffers, reusing from pool if available.
@@ -271,7 +268,7 @@ func (ctr *container) rowCnt() int64 {
 }
 
 func (hashBuild *HashBuild) shouldSpillBatches() bool {
-	if !hashBuild.CanSpill || !hashBuild.IsShuffle || !hashBuild.NeedHashMap {
+	if !hashBuild.CanSpill || !hashBuild.NeedHashMap || !hashBuild.IsShuffle && len(hashBuild.SpillExpectedScopes) == 0 {
 		return false
 	}
 	ctr := &hashBuild.ctr

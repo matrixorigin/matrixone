@@ -142,6 +142,8 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 		op.CanSpill = t.CanSpill
 		op.Conditions = t.Conditions
 		op.JoinMapTag = t.JoinMapTag
+		op.SpillExpectedScopes = t.SpillExpectedScopes
+		op.SpillGroup, op.SpillEpoch = t.SpillGroup, t.SpillEpoch
 		op.JoinMapRefCnt = t.JoinMapRefCnt
 		if t.IsShuffle && t.ShuffleIdx == -1 { // shuffleV2
 			op.ShuffleIdx = int32(index)
@@ -179,6 +181,8 @@ func dupOperator(sourceOp vm.Operator, index int, maxParallel int) vm.Operator {
 	case vm.HashJoin:
 		t := sourceOp.(*hashjoin.HashJoin)
 		op := hashjoin.NewArgument()
+		op.SpillScopeID, op.SpillExpectedScopes = t.SpillScopeID, t.SpillExpectedScopes
+		op.SpillGroup, op.SpillEpoch, op.SpillParticipantID = t.SpillGroup, t.SpillEpoch, uint64(t.SpillScopeID)<<32|uint64(index)
 		op.JoinType = t.JoinType
 		op.IsRightJoin = t.IsRightJoin
 		op.NonEqCond = t.NonEqCond
@@ -1828,6 +1832,7 @@ func constructBroadcastHashBuild(op vm.Operator, proc *process.Process, mcpu int
 	switch op.OpType() {
 	case vm.HashJoin:
 		arg := op.(*hashjoin.HashJoin)
+		ret.SpillThreshold = arg.SpillThreshold
 		ret.NeedHashMap = true
 		ret.Conditions = rewriteJoinExprToHashBuildExpr(arg.EqConds[1])
 

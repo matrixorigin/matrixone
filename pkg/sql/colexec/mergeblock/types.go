@@ -220,10 +220,14 @@ func splitObjectStats(mergeBlock *MergeBlock, proc *process.Process,
 			analyzer.AddS3RequestCount(crs)
 			analyzer.AddDiskIO(crs)
 
-			vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool())
+			if err := vector.AppendBytes(destVec, objStats.Marshal(), false, proc.GetMPool()); err != nil {
+				return err
+			}
 		} else {
 			// not comes from old version cn
-			vector.AppendBytes(destVec, statsVec.GetBytesAt(statsIdx), false, proc.GetMPool())
+			if err := vector.AppendBytes(destVec, statsVec.GetBytesAt(statsIdx), false, proc.GetMPool()); err != nil {
+				return err
+			}
 			objDataMeta.BlockHeader().SetBlockID(&blkInfo.BlockID)
 			statsIdx++
 		}
@@ -264,7 +268,9 @@ func (mergeBlock *MergeBlock) Split(proc *process.Process, bat *batch.Batch, ana
 			} else {
 				dest = mergeBlock.container.mp[0].Vecs[0]
 			}
-			vector.AppendBytes(dest, blkInfosVec.GetBytesAt(i), false, proc.GetMPool())
+			if err := vector.AppendBytes(dest, blkInfosVec.GetBytesAt(i), false, proc.GetMPool()); err != nil {
+				return err
+			}
 
 			hasObject = true
 

@@ -35,6 +35,7 @@ var _ vm.Operator = new(Insert)
 // )
 
 type container struct {
+	controlled          *controlledS3
 	state               vm.CtrState
 	s3Writer            *colexec.CNS3Writer
 	partitionS3Writers  []*colexec.CNS3Writer // The array is aligned with the partition number array
@@ -112,6 +113,10 @@ type InsertCtx struct {
 }
 
 func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if insert.ctr.controlled != nil {
+		_ = insert.ctr.controlled.close()
+		insert.ctr.controlled = nil
+	}
 	//@todo need add Reset method for s3Writer
 	if insert.ctr.s3Writer != nil {
 		insert.ctr.s3Writer.Close()
@@ -142,6 +147,10 @@ func (insert *Insert) Reset(proc *process.Process, pipelineFailed bool, err erro
 // The Argument for insert data directly to s3 can not be free when this function called as some datastructure still needed.
 // therefore, those argument in remote CN will be free in connector operator, and local argument will be free in mergeBlock operator
 func (insert *Insert) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if insert.ctr.controlled != nil {
+		_ = insert.ctr.controlled.close()
+		insert.ctr.controlled = nil
+	}
 	if insert.ctr.s3Writer != nil {
 		insert.ctr.s3Writer.Close()
 		insert.ctr.s3Writer = nil
