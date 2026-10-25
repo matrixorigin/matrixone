@@ -79,6 +79,14 @@ type container struct {
 
 	prepareParamKind aggexec.PrepareParamKindStates
 
+	// indicatorEvals caches one technical-indicator evaluation state per
+	// window expression (issue #29949). Each cached prefix belongs to
+	// exactly one materialized generation and is freed at every eval
+	// entry, at Window.Reset and at Window.Free - the three lifecycle
+	// reset points of docs/design/technical_indicator_window_kernels.md
+	// section 5.2.
+	indicatorEvals []*indicatorEvaluator
+
 	emitOffset int
 	rBat       *batch.Batch
 
@@ -194,6 +202,7 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
 	ctr.freeOrderedSetPartitionResults(proc.Mp())
+	ctr.freeIndicatorState(proc.Mp())
 	if ctr.hasAccountedBufferedData() {
 		// AppendWithCopy and Dup preserve a source vector's allocation
 		// selection. Release inherited backing at the prepared-statement
@@ -216,6 +225,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr.freeAggFun()
 	ctr.freeRunningAgg()
 	ctr.freeOrderedSetPartitionResults(proc.Mp())
+	ctr.freeIndicatorState(proc.Mp())
 	ctr.freeBatch(proc.Mp())
 	ctr.freeExes()
 	ctr.freeVector(proc.Mp())

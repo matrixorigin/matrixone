@@ -66,7 +66,7 @@ func nativePADPublicationProcess(t *testing.T) *process.Process {
 				rt.CompareAndDeleteGlobalVariables(key, value)
 			}
 		})
-		rt.SetGlobalVariables(key, defines.MORPCVersion130)
+		rt.SetGlobalVariables(key, defines.MORPCVersion132)
 	}
 	return proc
 }

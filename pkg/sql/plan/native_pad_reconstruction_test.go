@@ -162,14 +162,14 @@ func TestNativePADStandaloneRestoreInspectionIsNotAuthority(t *testing.T) {
 	}
 	_, err = build("create table other (s varchar(8) collate utf8mb4_general_ci)")
 	require.Error(t, err, "inspection must not grant native authoring")
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion130)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion132)
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion120)
 	for _, sql := range []string{"show create table n", "show create view v"} {
 		_, err = build(sql)
 		require.Error(t, err, "inspection must not bypass complete-source read admission")
 		require.Same(t, inspection, ctx.GetContext())
 	}
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion130)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion132)
 	ctx.SetContext(parent)
 	_, err = build("show create view v")
 	require.ErrorContains(t, err, "standalone SQL", "private inspection must not leak to the caller")
@@ -218,7 +218,7 @@ func TestNativePADStandaloneMalformedViewProvenance(t *testing.T) {
 		`{`,
 		`{"Stmt":"select 1","collation_binding_revision":2,"required_protocol_version":124}`,
 		`{"Stmt":"select 1","required_protocol_version":-1}`,
-		`{"Stmt":"select 1","required_protocol_version":130}`,
+		`{"Stmt":"select 1","required_protocol_version":132}`,
 	} {
 		require.Error(t, RequireLegacySQLMetadata(t.Context(), &TableDef{ViewSql: &ViewDef{View: view}}), view)
 	}

@@ -140,7 +140,7 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 		required = max(required, defines.MORPCVersion118)
 	}
 	if features.NativePADCollation {
-		required = max(required, defines.MORPCVersion130)
+		required = max(required, defines.MORPCVersion132)
 	}
 	if features.CalendarIntervalNormalization {
 		required = max(required, defines.MORPCVersion115)
@@ -150,6 +150,9 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	}
 	if features.JSONNumericComparisons {
 		required = max(required, defines.MORPCVersion128)
+	}
+	if features.IncompleteTemporalStrings {
+		required = max(required, defines.MORPCVersion130)
 	}
 	return required
 }

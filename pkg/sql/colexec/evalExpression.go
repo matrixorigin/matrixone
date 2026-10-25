@@ -508,7 +508,7 @@ func newExpressionExecutorWithAllocation(
 			executor.rowScopedDiagnostics = overload.HasRowScopedDiagnostics()
 			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
-			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
+			executor.evalFn, executor.resetFn, executor.freeFn, _ = overload.GetExecuteMethod()
 		}
 		if err = executor.init(proc, len(t.F.Args), typ, selection); err != nil {
 			executor.Free()

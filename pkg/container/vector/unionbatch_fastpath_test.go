@@ -731,3 +731,137 @@ func TestUnionPregrowSkipsNullRows(t *testing.T) {
 	w.Free(mp)
 	v.Free(mp)
 }
+
+func TestPreflightedSelectedVarlenRanges(t *testing.T) {
+	for _, kind := range []string{"all", "mixed", "offset", "window", "reordered", "null-dead-payload", "empty"} {
+		t.Run(kind, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			src := NewVec(types.T_varchar.ToType())
+			t.Cleanup(func() { src.Free(mp) })
+			for i := 0; i < 8; i++ {
+				size := 64 + i
+				if i == 1 {
+					size = types.VarlenaInlineSize
+				}
+				if i == 2 {
+					size = types.VarlenaInlineSize + 1
+				}
+				if i == 3 {
+					size = 0
+				}
+				if kind == "null-dead-payload" && i == 0 {
+					size = 128 * 1024
+				}
+				value := make([]byte, size)
+				for j := range value {
+					value[j] = byte('a' + i)
+				}
+				require.NoError(t, AppendBytes(src, value, i == 6, mp))
+			}
+			if kind == "null-dead-payload" {
+				nulls.Add(&src.nsp, 0)
+			}
+			if kind == "reordered" {
+				col := MustFixedColNoTypeCheck[types.Varlena](src)
+				col[2], col[4] = col[4], col[2]
+			}
+			nulls.Add(&src.gsp, 3)
+			require.NoError(t, src.SetStringSource(types.StringSourceLiteral))
+			input := src
+			offset, count := 0, 8
+			if kind == "offset" || kind == "reordered" {
+				offset, count = 1, 5
+			}
+			if kind == "window" {
+				var err error
+				input, err = src.Window(2, 6)
+				require.NoError(t, err)
+				count = 4
+				t.Cleanup(func() { input.Free(mp) })
+			}
+			if kind == "empty" {
+				count = 0
+			}
+			flags := make([]uint8, count)
+			for i := range flags {
+				flags[i] = 1
+			}
+			if kind == "mixed" {
+				flags[1] = 0
+			}
+			state := newTestVectorAllocationAccount(t, 64*1024, 32)
+			t.Cleanup(func() { finalizeTestVectorAllocationAccount(t, state) })
+			dst := newAccountedTestVector(t, types.T_varchar.ToType(), state.selection)
+			t.Cleanup(func() { dst.Free(mp) })
+			require.NoError(t, AppendBytes(dst, []byte("prefix"), false, mp))
+			require.NoError(t, dst.SetStringSource(types.StringSourceExpression))
+			selected := 0
+			liveBytes := 0
+			for i, f := range flags {
+				if f == 0 {
+					continue
+				}
+				selected++
+				if !input.IsNull(uint64(offset+i)) && len(input.GetBytesAt(offset+i)) > types.VarlenaInlineSize {
+					liveBytes += len(input.GetBytesAt(offset + i))
+				}
+			}
+			require.NoError(t, dst.PreExtendSelectedBatch(input, offset, count, flags, 1+selected, mp))
+			admitted := state.account.Snapshot().Used
+			require.NoError(t, dst.UnionBatchPreflighted(input, int64(offset), count, flags, mp))
+			require.Equal(t, admitted, state.account.Snapshot().Used, "publication cannot allocate")
+			require.Len(t, dst.GetArea(), liveBytes, "only admitted live bytes may be copied")
+			next := 1
+			for i, f := range flags {
+				if f == 0 {
+					continue
+				}
+				row := offset + i
+				require.Equal(t, input.IsNull(uint64(row)), dst.IsNull(uint64(next)))
+				require.Equal(t, input.GetGrouping().Contains(uint64(row)), dst.GetGrouping().Contains(uint64(next)))
+				if !input.IsNull(uint64(row)) {
+					require.Equal(t, input.GetBytesAt(row), dst.GetBytesAt(next))
+				}
+				require.Equal(t, types.StringSourceLiteral, dst.GetStringSourceAt(next))
+				next++
+			}
+			require.Equal(t, types.StringSourceExpression, dst.GetStringSourceAt(0))
+		})
+	}
+}
+
+func BenchmarkPreflightedVarlenSelection(b *testing.B) {
+	for _, stride := range []int{1, 2} {
+		b.Run(fmt.Sprintf("select-every-%d", stride), func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			src := NewVec(types.T_varchar.ToType())
+			dst := NewVec(types.T_varchar.ToType())
+			const rows = 256
+			flags := make([]uint8, rows)
+			selected := 0
+			for i := 0; i < rows; i++ {
+				require.NoError(b, AppendBytes(src, []byte(fmt.Sprintf("%0128d", i)), false, mp))
+				if i%stride == 0 {
+					flags[i] = 1
+					selected++
+				}
+			}
+			b.SetBytes(int64(selected * 128))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := dst.PreExtendSelectedBatch(src, 0, rows, flags, selected, mp); err != nil {
+					b.Fatal(err)
+				}
+				if err := dst.UnionBatchPreflighted(src, 0, rows, flags, mp); err != nil {
+					b.Fatal(err)
+				}
+				dst.CleanOnlyData()
+			}
+			b.StopTimer()
+			dst.Free(mp)
+			src.Free(mp)
+			require.Zero(b, mp.CurrNB())
+		})
+	}
+}

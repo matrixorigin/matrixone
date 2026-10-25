@@ -3089,14 +3089,6 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			})
 		}
 
-		//for _, expr := range node.AggList {
-		//	increaseRefCnt(expr, -1, colRefCnt)
-		//	err = builder.remapColRefForExpr(expr, childRemapping.globalToLocal)
-		//	if err != nil {
-		//		return nil, err
-		//	}
-		//}
-
 	case plan.Node_SORT, plan.Node_PARTITION:
 		for _, orderBy := range node.OrderBy {
 			increaseRefCnt(orderBy.Expr, 1, colRefCnt)
@@ -4353,7 +4345,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 		builder.skipStats = builder.canSkipStats()
-		builder.rewriteDistinctToAGG(rootID)
+		if err = builder.rewriteDistinctToAGG(rootID); err != nil {
+			return nil, err
+		}
 		rootID = builder.rewriteEffectlessAggToProject(rootID)
 		rootID, err = builder.optimizeFilters(rootID)
 		if err != nil {
@@ -4472,7 +4466,19 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
+		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true)
+		if needsLate {
+			builder.mergeFiltersOnCompositeKey(rootID, false)
+			builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
+		}
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
+		if needsLate {
+			builder.appendCompoundKeyBlockFilters(rootID)
+			builder.appendCompositePartBlockFilters(compositePartBlockFilters)
+			sortFilterListByStats(builder.GetContext(), rootID, builder)
+			clear(colRefCnt)
+			builder.countColRefs(rootID, colRefCnt)
+		}
 
 		builder.generateRuntimeFilters(rootID)
 		builder.pushdownVectorIndexTopToTableScan(rootID)
@@ -5611,6 +5617,7 @@ const NameMedian = "median"
 const NameApproxPercentile = "approx_percentile"
 const NamePercentileCont = "percentile_cont"
 const NamePercentileDisc = "percentile_disc"
+const NameQuantileExactWeighted = "quantileExactWeighted"
 
 func (builder *QueryBuilder) bindNoRecursiveCte(
 	ctx *BindContext,
@@ -6683,22 +6690,17 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// All aggregate consumers in this query block are bound now. Compact exact
 	// affine SUM families before aggregate arguments are flattened and the AGG
 	// node fixes their physical slot layout.
-	affineOrderBys := slices.Clone(boundOrderBys)
+	aggregateOrderBys := slices.Clone(boundOrderBys)
 	if boundTimeWindowOrderBy != nil {
-		affineOrderBys = append(affineOrderBys, boundTimeWindowOrderBy)
+		aggregateOrderBys = append(aggregateOrderBys, boundTimeWindowOrderBy)
 	}
-	builder.rewriteAffineSumFamilies(
-		ctx,
-		[][]*plan.Expr{
-			ctx.projects,
-			ctx.windows,
-			ctx.times,
-			boundHavingList,
-			fillVals,
-			fillCols,
-		},
-		affineOrderBys,
-	)
+	aggregateConsumers := [][]*plan.Expr{
+		ctx.projects, ctx.windows, ctx.times, boundHavingList, fillVals, fillCols,
+	}
+	builder.rewriteAffineSumFamilies(ctx, aggregateConsumers, aggregateOrderBys)
+	if astTimeWindow == nil {
+		builder.pruneDerivedGroupBy(ctx, aggregateConsumers, aggregateOrderBys)
+	}
 
 	// GROUP BY expressions are evaluated by the AGG over its input, so
 	// materialize scalar subqueries into that input before fixing the group-key
@@ -11331,15 +11333,14 @@ func (builder *QueryBuilder) appendAggNode(
 		if err != nil {
 			return
 		}
-		if len(physicalKeys) > 0 {
-			visibleCount := len(groupBy)
-			groupBy = append(slices.Clone(groupBy), physicalKeys...)
-			groupByHashKey = make([]int32, visibleCount)
-			for i := range groupByHashKey {
-				groupByHashKey[i] = int32(visibleCount + i)
-			}
-			if len(groupingFlag) > 0 {
-				groupingFlag = append(slices.Clone(groupingFlag), groupingFlag...)
+		groupBy, groupByHashKey, err = CompactPhysicalGroupKeys(groupBy, physicalKeys)
+		if err != nil {
+			return
+		}
+		if len(groupBy) > len(ctx.groups) && len(groupingFlag) > 0 {
+			groupingFlag = slices.Clone(groupingFlag)
+			for range len(groupBy) - len(ctx.groups) {
+				groupingFlag = append(groupingFlag, true)
 			}
 		}
 	}
@@ -12560,7 +12561,7 @@ func (builder *QueryBuilder) bindView(
 		return 0, err
 	}
 	if requirement := viewCtx.ctasNativeCollationProtocolRequirement; viewData.CollationBindingRevision == 1 && requirement != nil {
-		*requirement = max(*requirement, defines.MORPCVersion130)
+		*requirement = max(*requirement, defines.MORPCVersion132)
 	}
 	restoreCollationBinding, err := enterPersistedCollationBinding(builder.compCtx, viewData.CollationBindingRevision)
 	if err != nil {
@@ -12648,6 +12649,7 @@ func (builder *QueryBuilder) bindView(
 			state.memoFrames = append(state.memoFrames, memoFrame)
 			defer func() { memoFrame.finish(viewCtx, err) }()
 		}
+		state.request.benchmark.bind()
 	}
 
 	isSubscriptionStatistics := isSubscriptionStatisticsView(schema, table, metadataSubscription)

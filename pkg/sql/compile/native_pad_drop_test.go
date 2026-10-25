@@ -27,8 +27,8 @@ import (
 func TestNativePADDropRechecksResolvedCatalog(t *testing.T) {
 	c, _ := expressionProtocolTestCompile(t)
 	c.disableLock, c.ignorePublish = true, true
-	restoreRuntimeVariableForTest(t, c.proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion130)
-	table := &planpb.TableDef{Name: "v", ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view v as select 'A' collate utf8mb4_general_ci='a' as b","collation_binding_revision":1,"required_protocol_version":130}`}, Cols: []*planpb.ColDef{{Name: "b", Typ: types.T_bool.ToType().PlanType()}}}
+	restoreRuntimeVariableForTest(t, c.proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion132)
+	table := &planpb.TableDef{Name: "v", ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view v as select 'A' collate utf8mb4_general_ci='a' as b","collation_binding_revision":1,"required_protocol_version":132}`}, Cols: []*planpb.ColDef{{Name: "b", Typ: types.T_bool.ToType().PlanType()}}}
 	ctrl := gomock.NewController(t)
 	db := mock_frontend.NewMockDatabase(ctrl)
 	rel := mock_frontend.NewMockRelation(ctrl)
@@ -46,7 +46,7 @@ func TestNativePADDropRechecksResolvedCatalog(t *testing.T) {
 	admitted := true
 	drop := &planpb.DropTable{Database: "db", Table: "v", IsView: true, TableDef: table}
 	err := (&Scope{}).dropTableSingleResolved(c, drop, &admitted, true, db, rel, nil, nil, nil, false)
-	require.ErrorContains(t, err, "protocol version 130")
+	require.ErrorContains(t, err, "protocol version 132")
 	require.True(t, resolved)
 	require.False(t, published)
 }
@@ -54,7 +54,7 @@ func TestNativePADDropRechecksResolvedCatalog(t *testing.T) {
 func TestNativePADDropWriteGateBeforeSideEffects(t *testing.T) {
 	for _, table := range []*planpb.TableDef{
 		{Name: "n", Cols: []*planpb.ColDef{{Name: "s", Typ: planpb.Type{Id: int32(types.T_varchar), Charset: 3, CollationVersion: 1}}}},
-		{Name: "v", ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view v as select 'A' collate utf8mb4_general_ci='a' as b","collation_binding_revision":1,"required_protocol_version":130}`}, Cols: []*planpb.ColDef{{Name: "b", Typ: types.T_bool.ToType().PlanType()}}},
+		{Name: "v", ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view v as select 'A' collate utf8mb4_general_ci='a' as b","collation_binding_revision":1,"required_protocol_version":132}`}, Cols: []*planpb.ColDef{{Name: "b", Typ: types.T_bool.ToType().PlanType()}}},
 	} {
 		t.Run(table.Name, func(t *testing.T) {
 			c, _ := expressionProtocolTestCompile(t)
@@ -62,13 +62,13 @@ func TestNativePADDropWriteGateBeforeSideEffects(t *testing.T) {
 			restoreRuntimeVariableForTest(t, c.proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion120)
 			drop := &planpb.DropTable{Table: table.Name, TableDef: table, IsView: table.ViewSql != nil}
 			scope := &Scope{Proc: c.proc, Plan: &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{Definition: &planpb.DataDefinition_DropTable{DropTable: drop}}}}}
-			require.NotPanics(t, func() { require.ErrorContains(t, scope.DropTable(c), "protocol version 130") })
+			require.NotPanics(t, func() { require.ErrorContains(t, scope.DropTable(c), "protocol version 132") })
 			// Multi DROP bypasses the scalar fast path; each member must still
 			// reject before its own storage/lifecycle effects.
 			scope.Plan.GetDdl().Definition = &planpb.DataDefinition_DropTable{DropTable: &planpb.DropTable{Tables: []*planpb.DropTable{
 				drop, {Table: "legacy", TableDef: &planpb.TableDef{Name: "legacy"}},
 			}}}
-			require.NotPanics(t, func() { require.ErrorContains(t, scope.DropTable(c), "protocol version 130") })
+			require.NotPanics(t, func() { require.ErrorContains(t, scope.DropTable(c), "protocol version 132") })
 		})
 	}
 }

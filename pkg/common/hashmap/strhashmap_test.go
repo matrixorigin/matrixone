@@ -399,29 +399,39 @@ func TestStrHashMapUnicodeKeysUseOneNonCollidingDomain(t *testing.T) {
 }
 
 func TestStrHashMapVersionedCollation(t *testing.T) {
-	for _, charset := range []uint8{types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
+	for _, charset := range []uint8{types.CharsetUTF8, types.CharsetUTF8MB4Bin, types.CharsetUTF8MB4UnicodeCI} {
 		for _, revision := range []uint8{0, 1} {
-			func() {
-				mp := mpool.MustNewZero()
-				defer func() { require.Zero(t, mp.CurrNB()) }()
-				typ := types.NewWithCharset(types.T_varchar, 16, 0, charset)
-				typ.CollationVersion = revision
-				vec := vector.NewVec(typ)
-				defer vec.Free(mp)
-				require.NoError(t, vector.AppendStringList(vec, []string{"A", "a", "a "}, nil, mp))
-				hashMap, err := NewStrHashMap(false, mp)
-				require.NoError(t, err)
-				defer hashMap.Free()
-				groups, _, err := hashMap.NewIterator().Insert(0, 3, []*vector.Vector{vec})
-				require.NoError(t, err)
-				want := []uint64{1, 2, 3}
-				if revision == 1 && charset == types.CharsetUTF8 {
-					want = []uint64{1, 1, 1}
-				} else if revision == 1 {
-					want = []uint64{1, 2, 2}
-				}
-				require.Equal(t, want, groups)
-			}()
+			for _, mode := range []string{"ordinary", "nullable", "grouping"} {
+				t.Run(fmt.Sprintf("%d/revision%d/%s", charset, revision, mode), func(t *testing.T) {
+					mp := mpool.MustNewZero()
+					defer func() { require.Zero(t, mp.CurrNB()) }()
+					typ := types.NewWithCharset(types.T_varchar, 16, 0, charset)
+					typ.CollationVersion = revision
+					vec := vector.NewVec(typ)
+					defer vec.Free(mp)
+					require.NoError(t, vector.AppendStringList(vec, []string{"A", "a", "a "}, nil, mp))
+					hashMap, err := NewStrHashMap(mode == "nullable", mp)
+					require.NoError(t, err)
+					defer hashMap.Free()
+					if mode == "grouping" {
+						require.NoError(t, hashMap.SetGroupingAware())
+					}
+					itr := hashMap.NewIterator()
+					groups, _, err := itr.Insert(0, 3, []*vector.Vector{vec})
+					require.NoError(t, err)
+					want := []uint64{1, 2, 3}
+					if revision == 1 && charset != types.CharsetUTF8MB4Bin {
+						want = []uint64{1, 1, 1}
+					} else if revision == 1 {
+						want = []uint64{1, 2, 2}
+					}
+					require.Equal(t, want, groups)
+					groups, _, err = itr.Find(0, 3, []*vector.Vector{vec})
+					require.NoError(t, err)
+					require.Equal(t, want, groups)
+					require.Equal(t, want[2], hashMap.GroupCount())
+				})
+			}
 		}
 	}
 }

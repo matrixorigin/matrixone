@@ -70,7 +70,7 @@ func TestNativePADLegacyProcedureBodyAndCallerArguments(t *testing.T) {
 			ses := newTestSession(t, gomock.NewController(t))
 			t.Cleanup(ses.Close)
 			proc := testutil.NewProcess(t)
-			setProtocolVersionForTest(t, proc.GetService(), defines.MORPCVersion130)
+			setProtocolVersionForTest(t, proc.GetService(), defines.MORPCVersion132)
 			ses.GetTxnCompileCtx().execCtx = &ExecCtx{reqCtx: parent, proc: proc, ses: ses}
 			proc.SetResolveVariableFunc(ses.GetTxnCompileCtx().ResolveVariable)
 			proc.SetResolveVariableIsBinFunc(ses.GetTxnCompileCtx().ResolveVariableIsBin)

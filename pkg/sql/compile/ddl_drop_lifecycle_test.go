@@ -314,7 +314,7 @@ func TestDropTableMixedTemporaryFailureOrder(t *testing.T) {
 			c, eng := newDropDDLCompile(t, ctrl, exec)
 			c.proc.Base.IsFrontend = true
 			c.temporaryDDLInExecutorTxn = tc.executorTxn
-			owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"}}}
+			owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: map[string]string{defines.TempTableAliasKey(catalog.MO_CATALOG, "tmp"): "physical"}}}
 			c.proc.Session = owner
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
 			old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -398,7 +398,7 @@ func TestDropTableMixedTemporaryRCAdmissionFailureOrder(t *testing.T) {
 			c.proc.Base.IsFrontend = true
 			c.temporaryDDLInExecutorTxn = tc.executorTxn
 			owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{
-				tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"},
+				tables: map[string]string{defines.TempTableAliasKey(catalog.MO_CATALOG, "tmp"): "physical"},
 			}}
 			c.proc.Session = owner
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
@@ -466,7 +466,7 @@ func TestDropTableRCStagedTemporaryDuplicateName(t *testing.T) {
 			)
 			c.proc.Base.IsFrontend = true
 			owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{
-				tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"},
+				tables: map[string]string{defines.TempTableAliasKey(catalog.MO_CATALOG, "tmp"): "physical"},
 			}}
 			c.proc.Session = owner
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
@@ -510,7 +510,7 @@ func TestCompileRunDropTableRetryPlanFailurePublishesTemporaryPrefix(t *testing.
 	c.proc.Base.TxnOperator.(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 	c.proc.Base.IsFrontend = true
 	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{
-		tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"},
+		tables: map[string]string{defines.TempTableAliasKey(catalog.MO_CATALOG, "tmp"): "physical"},
 	}}
 	c.proc.Session = owner
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
@@ -552,7 +552,7 @@ func TestCompileRunDropTablePublishesTemporaryOnSuccess(t *testing.T) {
 	)
 	c.proc.Base.IsFrontend = true
 	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{
-		tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"},
+		tables: map[string]string{defines.TempTableAliasKey(catalog.MO_CATALOG, "tmp"): "physical"},
 	}}
 	c.proc.Session = owner
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
@@ -584,7 +584,7 @@ func TestDropDatabaseSelectsParentOwnedTables(t *testing.T) {
 		return executor.Result{}, nil
 	}}
 	c, eng := newDropDDLCompile(t, ctrl, exec)
-	c.proc.Session = &trackingTempTableSession{tables: map[string]string{"db.shadowed": "__mo_tmp_db_shadowed"}}
+	c.proc.Session = &trackingTempTableSession{tables: map[string]string{defines.TempTableAliasKey("db", "shadowed"): "__mo_tmp_db_shadowed"}}
 	c.proc.Ctx = context.WithValue(c.proc.Ctx, defines.IgnoreForeignKey{}, true)
 	c.skipDataBranchReclaim = true
 	stubs := gostub.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
@@ -825,7 +825,7 @@ func TestDropTableTemporaryAndNoopMembersDoNotAdmit(t *testing.T) {
 					ctrl, txn.TxnMode_Pessimistic, txn.TxnIsolation_RC,
 				)
 			}
-			c.proc.Session = &trackingTempTableSession{tables: map[string]string{catalog.MO_CATALOG + ".tmp": "physical"}}
+			c.proc.Session = &trackingTempTableSession{tables: map[string]string{defines.TempTableAliasKey(catalog.MO_CATALOG, "tmp"): "physical"}}
 			db := newStubDatabase(catalog.MO_CATALOG)
 			db.rels["physical"] = &stubRelation{tableDef: &plan.TableDef{IsTemporary: true}}
 			eng.EXPECT().Database(gomock.Any(), catalog.MO_CATALOG, c.proc.GetTxnOperator()).Return(db, nil)

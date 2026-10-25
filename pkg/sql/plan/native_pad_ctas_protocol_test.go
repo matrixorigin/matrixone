@@ -57,13 +57,13 @@ func TestNativePADCTASSourceDependencyDoesNotChangeBinding(t *testing.T) {
 				}
 				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion124)
 				p, err := buildTarget()
-				require.ErrorContains(t, err, "protocol version 130")
+				require.ErrorContains(t, err, "protocol version 132")
 				require.Nil(t, p)
-				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion130)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion132)
 				p, err = buildTarget()
 				require.NoError(t, err)
 				create := p.GetDdl().GetCreateTable()
-				require.Equal(t, defines.MORPCVersion130, create.RequiredProtocolVersion)
+				require.Equal(t, defines.MORPCVersion132, create.RequiredProtocolVersion)
 				require.Zero(t, create.CollationBindingRevision, "来源native类型不是外层显式COLLATE代际")
 				require.Same(t, parent, ctx.GetContext())
 			})
@@ -97,13 +97,13 @@ func TestNativePADCTASKeepsExecutionAndAuthoringIndependent(t *testing.T) {
 					defer stmt.Free()
 					return BuildPlan(ctx, stmt, prepared)
 				}
-				// 执行端已支持130；临时执行时间函数不应提高native作者floor。
+				// 执行端已支持132；临时执行时间函数不应提高native作者floor。
 				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion121)
 				p, err := build()
 				if tc.native {
-					require.ErrorContains(t, err, "protocol version 130")
+					require.ErrorContains(t, err, "protocol version 132")
 					require.Nil(t, p)
-					rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion130)
+					rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion132)
 					p, err = build()
 				}
 				require.NoError(t, err)
@@ -117,7 +117,7 @@ func TestNativePADCTASKeepsExecutionAndAuthoringIndependent(t *testing.T) {
 				wantNative := int64(0)
 				wantRevision := uint32(0)
 				if tc.native {
-					wantNative, wantRevision = defines.MORPCVersion130, 1
+					wantNative, wantRevision = defines.MORPCVersion132, 1
 				}
 				require.Equal(t, wantNative, create.RequiredProtocolVersion)
 				require.Equal(t, wantRevision, create.CollationBindingRevision)

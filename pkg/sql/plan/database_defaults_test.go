@@ -210,7 +210,7 @@ func TestCreateTableInheritsDatabaseDefaults(t *testing.T) {
 			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 			proc := ctx.GetProcess()
 			if tc.authoredNative {
-				databaseDefaultsProtocol(t, defines.MORPCVersion130)
+				databaseDefaultsProtocol(t, defines.MORPCVersion132)
 			}
 			reads := 0
 			ctx.GetDatabaseIdFunc = func(name string, _ *Snapshot) (uint64, error) { require.Equal(t, "target", name); return 42, nil }

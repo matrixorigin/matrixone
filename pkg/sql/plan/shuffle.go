@@ -21,12 +21,14 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -1462,7 +1464,8 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 	// same reduction-factor model: shuffling a large input is justified only when
 	// the retained exact state is itself a material fraction of that input.
 	_, distinctStateShuffle := shouldShuffleDistinctState(node, child, builder)
-	if !standardShuffle && !distinctStateShuffle {
+	spillPressureShuffle := !standardShuffle && !distinctStateShuffle && shouldShuffleGroupState(node, child, builder)
+	if !standardShuffle && !distinctStateShuffle && !spillPressureShuffle {
 		return
 	}
 
@@ -1491,6 +1494,9 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		return
 	}
 	minimumGroupNDV := float64(ShuffleThreshHoldOfNDV)
+	if spillPressureShuffle && !standardShuffle && !distinctStateShuffle {
+		highestNDV = estimateNDVAfterSelection(highestNDV, child.Stats)
+	}
 	if distinctStateShuffle {
 		// Keep enough logical groups to expose useful parallel ownership.
 		// Hash/range shuffle then sends every row for one logical group to exactly
@@ -1514,11 +1520,155 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		determineShuffleType(hashCol, node, builder)
 		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash &&
 			node.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle &&
-			!distinctStateShuffle {
+			!distinctStateShuffle && !spillPressureShuffle {
 			node.Stats.HashmapStats.Shuffle = false
 		}
 	}
 
+}
+
+// shouldShuffleGroupState recognizes replicated fixed-size group state that is
+// expected to spill locally but fit with complete ownership after shuffle. This
+// is a cost estimate, not allocation admission: runtime Group owns that budget.
+// Unknown state layouts retain the existing cardinality-based policy.
+func shouldShuffleGroupState(node, child *plan.Node, builder *QueryBuilder) bool {
+	if builder == nil || builder.qry == nil || node.Stats == nil ||
+		node.Stats.HashmapStats == nil || child.Stats == nil ||
+		IsDefaultStats(node.Stats) || IsDefaultStats(child.Stats) ||
+		len(node.GroupBy) == 0 || hasInactiveGroupingColumn(node.GroupingFlag) ||
+		(len(node.GroupingFlag) != 0 && len(node.GroupingFlag) != len(node.GroupBy)) {
+		return false
+	}
+	// Dynamic grouping expansion has runtime-owned key/state layout.
+	if _, expands := DecodeGroupingSetExpandOption(child.ExtraOptions); expands {
+		return false
+	}
+	rows, groups := child.Stats.Outcnt, node.Stats.HashmapStats.HashmapSize
+	if rows <= 0 || groups <= 0 || math.IsNaN(rows) || math.IsNaN(groups) ||
+		math.IsInf(rows, 0) || math.IsInf(groups, 0) || rows >= math.MaxInt64 || groups >= math.MaxInt64 {
+		return false
+	}
+	cpus := int32(system.GoMaxProcs())
+	if builder.qry.MaxDop > 0 && builder.qry.MaxDop < int64(cpus) {
+		cpus = int32(builder.qry.MaxDop)
+	}
+	workers := calcDOP(cpus, child.Stats, builder.isPrepareStatement)
+	if workers <= 1 {
+		return false
+	}
+	budget := colexec.ResolveSpillThreshold(node.SpillMem)
+	// Group's small thresholds count groups, not bytes (unlike ShouldSpill).
+	if budget < 10000 {
+		return false
+	}
+	groups = min(groups, rows)
+	partial := math.Ceil(min(groups, rows/float64(workers)))
+	partitioned := math.Ceil(groups / float64(workers))
+	if partial <= partitioned {
+		return false
+	}
+
+	payload, known := knownFixedGroupStatePayload(node.GroupBy, node.AggList)
+	if !known {
+		return false
+	}
+
+	keys := node.GroupByHashKey
+	if len(keys) >= len(node.GroupBy) && len(keys) != 0 {
+		return false
+	}
+	keyCount := len(keys)
+	if keyCount == 0 {
+		keyCount = len(node.GroupBy)
+	}
+	// Match Group's codec choice: if any physical key is nullable, every
+	// component includes a NULL marker. Logical dependent outputs still consume
+	// payload above even when they are omitted from the physical equality key.
+	keyWidth := float64(0)
+	nullable := false
+	seen := make(map[int32]struct{}, len(keys))
+	for i := 0; i < keyCount; i++ {
+		idx := int32(i)
+		if len(keys) > 0 {
+			idx = keys[i]
+			if idx < 0 || int(idx) >= len(node.GroupBy) {
+				return false
+			}
+			if _, duplicate := seen[idx]; duplicate {
+				return false
+			}
+			seen[idx] = struct{}{}
+		}
+		expr := node.GroupBy[idx]
+		width, _ := fixedTypeRetainedBytes(types.T(expr.Typ.Id))
+		keyWidth += width
+		nullable = nullable || !expr.Typ.NotNullable
+	}
+	if nullable {
+		keyWidth += float64(keyCount)
+	}
+	estimateCells := hashtable.EstimateStringHashMapSize
+	if keyWidth <= 8 {
+		estimateCells = hashtable.EstimateInt64HashMapSize
+	}
+	retained := func(count float64) float64 {
+		return float64(estimateCells(uint64(count))) + count*payload
+	}
+	return retained(partial) > float64(budget) && retained(partitioned) <= float64(budget)
+}
+
+// knownFixedGroupStatePayload bounds both optional distribution costing and
+// logical key pruning to the same known state and raw input transport domain.
+// Other aggregate layouts remain owned by their executors.
+func knownFixedGroupStatePayload(groups, aggregates []*plan.Expr) (float64, bool) {
+	payload := float64(0)
+	for _, expr := range groups {
+		if expr == nil {
+			return 0, false
+		}
+		width, ok := shuffleGroupInputWidth(expr)
+		if !ok {
+			return 0, false
+		}
+		payload += width
+	}
+	for _, expr := range aggregates {
+		if expr == nil || expr.Typ.Id != int32(types.T_int64) {
+			return 0, false
+		}
+		agg := expr.GetF()
+		if agg == nil || agg.Func == nil || uint64(agg.Func.Obj)&function.Distinct != 0 ||
+			len(agg.Args) != 1 || agg.Args[0] == nil {
+			return 0, false
+		}
+		id, overload := function.DecodeOverloadID(agg.Func.Obj)
+		if (id != function.COUNT && id != function.STARCOUNT) || overload != 0 {
+			return 0, false
+		}
+		if _, knownInput := shuffleGroupInputWidth(agg.Args[0]); !knownInput {
+			return 0, false
+		}
+		// COUNT and STARCOUNT each retain one INT64 vector, without auxiliary state.
+		payload += float64(types.T_int64.TypeLen())
+	}
+
+	return payload, true
+}
+
+// Group evaluates its expressions after shuffle. A fixed-width expression can
+// still read a wide source vector (for example COUNT(length(text_col))). Keep
+// the optional state-only cost model on inputs with known raw transport width.
+func shuffleGroupInputWidth(expr *plan.Expr) (float64, bool) {
+	if expr == nil || expr.PreparedNumeric != nil {
+		return 0, false
+	}
+	if expr.GetCol() == nil {
+		lit := expr.GetLit()
+		if lit == nil || lit.Src != nil {
+			return 0, false
+		}
+	}
+	return fixedTypeRetainedBytes(types.T(expr.Typ.Id))
 }
 
 func countDistinctStateNDV(node *plan.Node, builder *QueryBuilder) float64 {

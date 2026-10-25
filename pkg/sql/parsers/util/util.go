@@ -21,16 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-//func GetUint64(num interface{}) uint64 {
-//	switch v := num.(type) {
-//	case int64:
-//		return uint64(v)
-//	case uint64:
-//		return v
-//	}
-//	return 0
-//}
-
 func GetInt64(num interface{}) (int64, string) {
 	switch v := num.(type) {
 	case int64:

@@ -60,7 +60,7 @@ func TestNativePADViewRestoreBindingGeneration(t *testing.T) {
 				rt.CompareAndDeleteGlobalVariables(key, value)
 			}
 		})
-		rt.SetGlobalVariables(key, defines.MORPCVersion130)
+		rt.SetGlobalVariables(key, defines.MORPCVersion132)
 	}
 	const sql = "create view v as select 'A' collate utf8mb4_general_ci = 'a' as b"
 	for _, source := range []struct {
@@ -71,8 +71,8 @@ func TestNativePADViewRestoreBindingGeneration(t *testing.T) {
 		{0, 0, false},
 		{0, 0, true},
 		{0, defines.MORPCVersion124, true},
-		{0, defines.MORPCVersion130, true},
-		{1, defines.MORPCVersion130, true},
+		{0, defines.MORPCVersion132, true},
+		{1, defines.MORPCVersion132, true},
 	} {
 		revision := source.revision
 		data := plan.ViewData{Stmt: sql, CollationBindingRevision: revision}
@@ -125,7 +125,7 @@ func TestNativePADViewRestoreBindingGeneration(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion120)
 			_, err = buildViewPlanForRestore(compiler, parsed, &tableInfo{viewDef: string(encoded)})
 			parsed.Free()
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion130)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion132)
 			require.ErrorContains(t, err, fmt.Sprintf("protocol version %d", source.floor), "source read admission is independent of target authoring")
 			require.Same(t, parent, compiler.GetContext())
 		}

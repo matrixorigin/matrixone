@@ -73,7 +73,7 @@ func TestNativePADIndependentDDLWriteGates(t *testing.T) {
 					run = func() error { return scope.RestoreTable(c, clone) }
 				}
 			}
-			require.ErrorContains(t, run(), "protocol version 130")
+			require.ErrorContains(t, run(), "protocol version 132")
 		})
 	}
 }
@@ -81,10 +81,10 @@ func TestNativePADIndependentDDLWriteGates(t *testing.T) {
 func TestNativePADDatabaseDropIncludesBoolViews(t *testing.T) {
 	c, _ := expressionProtocolTestCompile(t)
 	restoreRuntimeVariableForTest(t, c.proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion120)
-	table := &planpb.TableDef{Name: "v", ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view v as select 'A' collate utf8mb4_general_ci='a' as b","collation_binding_revision":1,"required_protocol_version":130}`}}
+	table := &planpb.TableDef{Name: "v", ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view v as select 'A' collate utf8mb4_general_ci='a' as b","collation_binding_revision":1,"required_protocol_version":132}`}}
 	ctx := c.proc.Ctx
 	err := c.dropDatabaseRelations(nil, []*planpb.DropTable{{Table: "v", TableDef: table, IsView: true}}, nil, true)
-	require.ErrorContains(t, err, "protocol version 130")
+	require.ErrorContains(t, err, "protocol version 132")
 	require.Same(t, ctx, c.proc.Ctx)
 
 	ctrl := gomock.NewController(t)
@@ -92,7 +92,7 @@ func TestNativePADDatabaseDropIncludesBoolViews(t *testing.T) {
 	db.EXPECT().Relations(gomock.Any()).Return([]string{"v"}, nil)
 	db.EXPECT().Relation(gomock.Any(), "v", gomock.Any()).Return(rel, nil)
 	rel.EXPECT().GetTableDef(gomock.Any()).Return(table)
-	require.ErrorContains(t, c.requireDropDatabaseCollations(db, "db"), "protocol version 130")
+	require.ErrorContains(t, c.requireDropDatabaseCollations(db, "db"), "protocol version 132")
 	require.Same(t, ctx, c.proc.Ctx)
 }
 

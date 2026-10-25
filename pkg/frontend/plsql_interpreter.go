@@ -399,12 +399,6 @@ func (interpreter *Interpreter) ExecuteSp(stmt tree.Statement, dbName string, bg
 		return err
 	}
 
-	// // commit the param flush part of sp
-	// err = interpreter.bh.Exec(interpreter.ctx, "begin;")
-	// if err != nil {
-	// 	return err
-	// }
-
 	err = interpreter.FlushParam()
 	if err != nil {
 		return err

@@ -2,10 +2,10 @@
 
 ## 版本、归属与审批来源
 
-- 设计修订：**r1（2026-10-17）**；公开文档版本：**r1-public.1（2026-10-22）**。本文件是该本地设计的公开转录与实现期记录，不把发布日期冒充设计先行日期，也不把本地r1授权冒充对公开转录的维护者审批。
+- 设计修订：**r1（2026-10-17）**；公开文档版本：**r1-public.2（2026-10-25）**（r1-public.1于2026-10-22公开）。本文件是该本地设计的公开转录与实现期记录，不把发布日期冒充设计先行日期，也不把本地r1授权冒充对公开转录的维护者审批。
 - 所属：[问题 #25096](https://github.com/matrixorigin/matrixone/issues/25096)、[实现 PR #30684](https://github.com/matrixorigin/matrixone/pull/30684)。
 - **本地用户范围授权**：2026-10-17，用户在本地开发会话对r1方案回复“可以”，接受A→B→C分阶段实现、首批native索引拒绝、不切换默认的取舍。该决定在当日工作记录及本地设计中先于实施记录。此处为授权来源的转录，不是新授予的审批。
-- **公开审批状态**：没有可链接的GitHub maintainer设计批准记录，不能从本地用户授权、代理自审、测试成功或本文件推导maintainer已批准。没有可公开核验的原始会话链接或设计批准commit，本文件也不能替代它们。实现PR继续保持Draft，P1要求的公开设计审批仍待维护者明确确认r1，不自行标记已关闭。
+- **公开审批状态**：没有可链接的GitHub maintainer设计批准记录，不能从本地用户授权、代理自审、测试成功或本文件推导maintainer已批准。没有可公开核验的原始会话链接或设计批准commit，本文件也不能替代它们。初次公开时实现PR为Draft；当前保留远端Ready状态，但它不构成设计批准。P1仍待维护者明确确认r1及当前native132集成记录，不自行标记已关闭。
 - 本地授权不授权全局默认切换、native物理索引、在线迁移或整个#25096完成。下文技术范围以r1为准；实现期协议号N由未占用的append-only能力决定，不预占号码。
 
 ## 1. 问题与目标
@@ -108,7 +108,7 @@
 |---|---|---|
 | 2026-10-17 / r1 | 本地用户会话；原话“可以”；当日工作记录在实施前记录 | 允许A→B→C和首批native物理拒绝，不批准默认切换 |
 | 2026-10-22 / r1公开转录 | PR #30684的P1评审要求 | 将设计和授权来源公开；不伪造maintainer或GitHub批准 |
-| 待定 | GitHub维护者设计评审 | P1公开设计审批尚未获得，仍需显式确认r1；保持Draft，不自行关闭该门 |
+| 待定 | GitHub维护者设计评审 | P1公开设计审批尚未获得，仍需显式确认r1及当前native132集成记录；Ready状态不关闭该门 |
 
 ## 10. 2026-10-23兼容集成记录（不改变r1范围）
 
@@ -117,5 +117,13 @@
 合并保留JSON typed MIN/MAX及其extra状态所有权，native blob/text仍使用完整域；共享PK/cluster-key读取准入也必须看完整identity/revision，不能因只检查Unicode ID而重新启用native PAD的raw-key剪枝。没有启用新的native物理key或在线转换。
 
 本轮开始时远端PR已为Ready，冲突修复保留远端状态；Ready状态本身不作为新的设计批准记录，不从状态变化推导维护者已批准r1。
+
+## 11. 2026-10-25兼容集成记录（r1-public.2，不改变r1范围）
+
+上游`main@9a7e12a93328`包含已占用的130=incomplete temporal strings和131=exact weighted percentile dispatch；本PR未发布native能力迁到独立的**132**，JSON129、temporal130、weighted131均保持自己的最低版本。CTAS字段21的132编码为`0x84,0x01`；字段19/20以及旧目录的身份不随之改写。125/129/130等未发布native实验catalog不作为132受支持升级来源，历史验证也不作为本轮验证。
+
+自动合并的raw-string hash快路径必须按完整Type决定是否需要collation key，而非仅按Unicode charset分类；native general-ci/bin不能绕过PAD/case canonicalization。远程编码须将native132计入绑定stream的最低版本，与weighted131等独立能力取max，并保留调用者已给出的更高floor；placement probe不能代替实际stream的版本确认。两项均是既有完整域与独立准入契约的合并修复，不扩大SQL或物理存储范围。
+
+本次CI夹具修复仅将新增DUMP/LOAD正例的两个generated目标列声明改为历史bin别名，保留JSON null、二进制HEX、NOT NULL、恢复后写入/更新及约束检查，不放开native持久计算或standalone SQL export。此前针对native130版本的设计评审请求不自动覆盖132；本版本继续明确等待可追溯的维护者决定，不据CI修复或协议重分配自行关闭P1。
 
 参考规范：[MySQL coercibility](https://dev.mysql.com/doc/refman/8.0/en/charset-collation-coercibility.html)、[binary与_bin](https://dev.mysql.com/doc/refman/8.0/en/charset-binary-collations.html)。严格域兼容与历史MO别名是不同承诺，本设计不把alias宣传成完整MySQL字符集实现。

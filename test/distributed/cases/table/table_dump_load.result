@@ -214,7 +214,7 @@ id int primary key,
 data json not null,
 a bigint not null,
 b bigint default (a+1),
-j longtext collate utf8mb4_bin generated always as (data ->> '$.kind') stored,
+j longtext collate utf32_bin generated always as (data ->> '$.kind') stored,
 g bigint generated always as (a+a) stored,
 constraint ck check(a>=0)
 );
@@ -239,7 +239,7 @@ id int primary key,
 data json not null,
 a bigint not null,
 b bigint default (a+1),
-j longtext collate utf8mb4_bin generated always as (data ->> '$.kind') stored,
+j longtext collate utf32_bin generated always as (data ->> '$.kind') stored,
 g bigint generated always as (a+a) stored,
 constraint ck check(a>=0)
 );

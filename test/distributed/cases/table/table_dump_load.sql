@@ -143,7 +143,7 @@ create table binding_nn_src (
     data json not null,
     a bigint not null,
     b bigint default (a+1),
-    j longtext collate utf8mb4_bin generated always as (data ->> '$.kind') stored,
+    j longtext collate utf32_bin generated always as (data ->> '$.kind') stored,
     g bigint generated always as (a+a) stored,
     constraint ck check(a>=0)
 );
@@ -160,7 +160,7 @@ create table table_dump_load_nn_restore_bvt.binding_nn_dst (
     data json not null,
     a bigint not null,
     b bigint default (a+1),
-    j longtext collate utf8mb4_bin generated always as (data ->> '$.kind') stored,
+    j longtext collate utf32_bin generated always as (data ->> '$.kind') stored,
     g bigint generated always as (a+a) stored,
     constraint ck check(a>=0)
 );

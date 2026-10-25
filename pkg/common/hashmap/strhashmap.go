@@ -145,6 +145,30 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			continue
 		}
 
+		// Raw string keys need no per-row type/collation dispatch. Keep the
+		// exact sizing pass (and allocation admission) before encoding, but
+		// read the physical vector and nullable bitmap only once per column.
+		if isFlatRawStringHashKey(vec) {
+			values, area := vector.MustVarlenaRawData(vec)
+			nsp := vec.GetNulls()
+			hasNulls := nsp.Any()
+			for i := 0; i < count; i++ {
+				row := start + i
+				if hasNulls && nsp.Contains(uint64(row)) {
+					if itr.mp.hasNull {
+						if err := add(i, 1); err != nil {
+							return err
+						}
+					}
+					continue
+				}
+				if err := add(i, prefix+4+len(values[row].GetByteSlice(area))); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+
 		// Most join keys are flat and non-null. Size them from the physical
 		// representation directly, avoiding repeated type/null/const dispatch
 		// before the encoder's required value pass.
@@ -609,6 +633,36 @@ func fillFloat32GroupStr(itr *strHashmapIterator, vec *vector.Vector, n, start i
 	}
 }
 
+// CHAR and every full-Type collation key domain need canonicalization.
+// Const and grouping vectors retain their existing representation/domain handling.
+func isFlatRawStringHashKey(vec *vector.Vector) bool {
+	typ := vec.GetType()
+	return typ.Oid.IsMySQLString() && typ.Oid != types.T_char &&
+		!types.HasCollationKey(*typ) && !vec.IsConst() && !vec.HasGrouping()
+}
+
+func fillFlatRawStringGroupingAwareStr(itr *strHashmapIterator, vec *vector.Vector, n, start int) {
+	values, area := vector.MustVarlenaRawData(vec)
+	nsp := vec.GetNulls()
+	hasNulls := nsp.Any()
+	for i := 0; i < n; i++ {
+		row := start + i
+		if hasNulls && nsp.Contains(uint64(row)) {
+			if itr.mp.hasNull {
+				itr.keys[i] = append(itr.keys[i], byte(1))
+			} else {
+				itr.zValues[i] = 0
+			}
+			continue
+		}
+		value := values[row].GetByteSlice(area)
+		length := uint32(len(value))
+		itr.keys[i] = append(itr.keys[i], byte(0))
+		itr.keys[i] = append(itr.keys[i], util.UnsafeToBytes(&length)...)
+		itr.keys[i] = append(itr.keys[i], value...)
+	}
+}
+
 func fillGroupingAwareStr(
 	itr *strHashmapIterator,
 	vec *vector.Vector,
@@ -616,6 +670,10 @@ func fillGroupingAwareStr(
 	start int,
 ) {
 	keys := itr.keys
+	if isFlatRawStringHashKey(vec) {
+		fillFlatRawStringGroupingAwareStr(itr, vec, n, start)
+		return
+	}
 	// Nullable and grouping-aware maps use a domain byte before every ordinary
 	// value. Most batches contain neither NULL nor GROUPING rows, though. Keep
 	// that common case on flat vector data so the hot path does not probe two
