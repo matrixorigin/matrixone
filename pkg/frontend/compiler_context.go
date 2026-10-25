@@ -717,6 +717,28 @@ func (tcc *TxnCompilerContext) ResolveSubscriptionTableById(tableId uint64, subM
 	return obj, tableDef, nil
 }
 
+// ResolveForDrop also forgets a stale session alias when planning cannot find
+// its physical relation. General resolution must remain free of DDL side effects.
+func (tcc *TxnCompilerContext) ResolveForDrop(dbName, tableName string) (*plan2.ObjectRef, *plan2.TableDef, error) {
+	ses := tcc.GetSession()
+	physical, temporary := ses.GetTempTable(dbName, tableName)
+	obj, def, err := tcc.Resolve(dbName, tableName, nil)
+	missing := func(err error) bool {
+		return moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB)
+	}
+	if temporary && def == nil && (err == nil || missing(err)) {
+		// Resolve can hide a relation for subscription/view scope reasons.
+		// Confirm absence in the session's own database before changing ownership.
+		_, relation, lookupErr := tcc.getRelation(dbName, physical, nil, nil)
+		if (lookupErr == nil && relation == nil) || missing(lookupErr) {
+			if owner, ok := ses.(process.MissingTemporaryTableForgetter); ok {
+				owner.ForgetMissingTemporaryTable(dbName, tableName, physical)
+			}
+		}
+	}
+	return obj, def, err
+}
+
 func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot *plan2.Snapshot) (*plan2.ObjectRef, *plan2.TableDef, error) {
 	start := time.Now()
 	defer func() {
