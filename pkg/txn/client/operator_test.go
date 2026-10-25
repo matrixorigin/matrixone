@@ -62,11 +62,15 @@ type checkLockTableBindLockService struct {
 
 type trackingUnlockLockService struct {
 	lockservice.LockService
-	unlockCount int
-	unlockErr   error
+	unlockCount  int
+	unlockErr    error
+	beforeUnlock func()
 }
 
 func (s *trackingUnlockLockService) Unlock(context.Context, []byte, timestamp.Timestamp, ...lock.ExtraMutation) error {
+	if s.beforeUnlock != nil {
+		s.beforeUnlock()
+	}
 	s.unlockCount++
 	return s.unlockErr
 }
@@ -421,9 +425,54 @@ func TestRollbackWithClosedTxn(t *testing.T) {
 
 func TestRollbackWithNoWrite(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+		id := append([]byte(nil), tc.Txn().ID...)
+		require.False(t, tc.IsAbortedTxnCleanupComplete(id))
 		err := tc.Rollback(ctx)
 		assert.NoError(t, err)
 		assert.Empty(t, ts.getLastRequests())
+		require.True(t, tc.IsAbortedTxnCleanupComplete(id))
+		require.False(t, tc.IsAbortedTxnCleanupComplete(nil))
+		require.False(t, tc.IsAbortedTxnCleanupComplete([]byte("different generation")))
+	})
+}
+
+func TestAbortedTxnCleanupObservationDoesNotWaitForUnlock(t *testing.T) {
+	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
+		id := append([]byte(nil), tc.Txn().ID...)
+		unlockStarted, releaseUnlock, closed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(releaseUnlock) }) }
+		tc.lockService = &trackingUnlockLockService{beforeUnlock: func() {
+			close(unlockStarted)
+			<-releaseUnlock
+		}}
+		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
+		tc.AppendEventCallback(ClosedEvent, TxnEventCallback{Func: func(context.Context, TxnOperator, TxnEvent, any) error {
+			close(closed)
+			return nil
+		}})
+		token := mustEnterRunSQL(t, tc, nil, "fatal borrowed SQL")
+		tc.RollbackAfterRunningSQL(moerr.NewLockConflictNoCtx())
+		tc.ExitRunSqlWithToken(token)
+		defer func() { release(); <-closed }()
+		select {
+		case <-unlockStarted:
+		case <-ctx.Done():
+			t.Fatal("deferred cleanup did not reach unlock", ctx.Err())
+		}
+
+		observed := make(chan bool, 1)
+		probeDone := make(chan struct{})
+		go func() { defer close(probeDone); observed <- tc.IsAbortedTxnCleanupComplete(id) }()
+		defer func() { release(); <-probeDone }()
+		select {
+		case complete := <-observed:
+			require.False(t, complete, "pending unlock cannot authorize replay")
+		case <-ctx.Done():
+			t.Fatal("observation waited for the cleanup owner", ctx.Err())
+		}
+		release()
+		require.Eventually(t, func() bool { return tc.IsAbortedTxnCleanupComplete(id) }, time.Second, time.Millisecond)
 	})
 }
 
@@ -765,6 +814,7 @@ func TestCommitWithNoWrite(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		err := tc.Commit(ctx)
 		assert.NoError(t, err)
+		require.False(t, tc.IsAbortedTxnCleanupComplete(tc.Txn().ID))
 		assert.Empty(t, ts.getLastRequests())
 		assert.Equal(t, txn.TxnStatus_Committed, tc.mu.txn.Status)
 	})
@@ -2856,6 +2906,7 @@ func TestRestartRejectedUntilTerminalOwnerFinishesFinalization(t *testing.T) {
 			t.Fatal("commit did not reach workspace finalization")
 		}
 		require.Equal(t, txnTerminalCallActive, txnTerminalCallState(tc.terminalCall.Load()))
+		require.False(t, tc.IsAbortedTxnCleanupComplete(tc.Txn().ID))
 
 		restartCtx, cancelRestart := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		_, err = client.RestartTxn(restartCtx, tc, timestamp.Timestamp{})
