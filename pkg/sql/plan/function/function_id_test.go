@@ -69,6 +69,7 @@ func TestAggregateExecutorIDs(t *testing.T) {
 		{"approx_percentile", APPROX_PERCENTILE, aggexec.AggIdOfApproxPercentile},
 		{"percentile_cont", PERCENTILE_CONT, aggexec.AggIdOfPercentileCont},
 		{"percentile_disc", PERCENTILE_DISC, aggexec.AggIdOfPercentileDisc},
+		{"quantileExactWeighted", QUANTILE_EXACT_WEIGHTED, aggexec.AggIdOfQuantileExactWeighted},
 	}
 
 	for _, test := range tests {
@@ -872,7 +873,8 @@ var predefinedFunids = map[int]int{
 	MRANK:                        616,
 	CUMRANK:                      617,
 	TMRANK:                       618,
-	FUNCTION_END_NUMBER:          619,
+	QUANTILE_EXACT_WEIGHTED:      619,
+	FUNCTION_END_NUMBER:          620,
 }
 
 func Test_funids(t *testing.T) {
