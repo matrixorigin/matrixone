@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import os,pathlib,subprocess,json,time
-P=pathlib.Path(os.environ.get('BENCH_OUTPUT',str(pathlib.Path(__file__).resolve().parent)))
+P=pathlib.Path(os.environ['BENCH_OUTPUT'])
 P.mkdir(parents=True,exist_ok=True)
 root=pathlib.Path(os.environ['MICRO_BIN_ROOT'])
 # Predeclared: 4 repetitions of B/O/C/C/O/B, 8 samples per binary/control, 200ms/sample.

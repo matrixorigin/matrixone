@@ -2,7 +2,7 @@
 """Sequential MO ABBA / source-built DuckDB, identical local ClickBench projection."""
 import argparse,ctypes as C,decimal,hashlib,json,os,pathlib,signal,subprocess,time
 import pymysql
-P=pathlib.Path(os.environ.get('BENCH_OUTPUT',str(pathlib.Path(__file__).resolve().parent)))
+P=pathlib.Path(os.environ['BENCH_OUTPUT'])
 P.mkdir(parents=True,exist_ok=True)
 ROOT=pathlib.Path(os.environ['BENCH_ROOT'])
 QUERIES={

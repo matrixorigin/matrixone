@@ -108,9 +108,3 @@ with every opcode consumer; the package README records that obligation.
 Final checks include the private matcher and directly affected SQL function
 normal/race tests, incremental static analysis and an independent overall review.
 A repeatable generic regression remains a blocker even with a large Q29 gain.
-
-Design approved before implementation by gpt-6.1-sol/xhigh: original proof in
-commit `b59e94775997`, compile-owner amendment in `8c682a2f87e2`. This document
-consolidates that approved contract. The rejection-path admission amendment was
-approved before repair by gpt-6.1-sol/xhigh, which also performs the final review
-for this repair. The earlier published revision used gpt-6-astra/xhigh review.

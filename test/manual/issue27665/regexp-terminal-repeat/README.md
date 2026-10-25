@@ -2,11 +2,11 @@
 
 Related: [PR #31079](https://github.com/matrixorigin/matrixone/pull/31079), partial improvement for [#27665](https://github.com/matrixorigin/matrixone/issues/27665).
 
-These are manual experiments, not unit-test fixtures. The 2026-10-25 Linux projection was generated locally; it is not the earlier author's unavailable macOS projection. `evidence.json` retains source/binary/data identities, raw samples, query results, plans, validation commands and exclusions. Do not infer performance from the private benchmarks alone.
+These maintained scripts reproduce manual experiments; they are not unit-test fixtures. Set `BENCH_ROOT` and `BENCH_OUTPUT` to directories outside the source checkout. Generated datasets, per-run manifests, logs, results and profiles stay there and are not committed. Share raw evidence through CI artifacts, PR attachments or durable external links when needed. Keep result summaries in the PR concise; private benchmarks alone do not establish public-query performance.
 
 ## Dataset and tools
 
-Use a fresh local directory with at least 10 GB available. The deterministic generator reads only four columns from dispersed row groups in the official [ClickBench Parquet source](https://datasets.clickhouse.com/hits_compatible/hits.parquet). The manifest records the source ETag/length, exact groups and quotas, schema, 10,000,000 output rows and SHA256. The source has signed int64 UserID. The strings retain the original Unicode content. Pin generator dependencies to reproduce the compressed file identity.
+Use a fresh local directory with at least 10 GB available. The deterministic generator reads only four columns from dispersed row groups in the official [ClickBench Parquet source](https://datasets.clickhouse.com/hits_compatible/hits.parquet). The generated manifest records the source ETag/length, exact groups and quotas, schema, 10,000,000 output rows and SHA256. The source has signed int64 UserID. The strings retain the original Unicode content. Pin generator dependencies to reproduce the compressed file identity.
 
 ```sh
 export BENCH_ROOT=/absolute/path/to/fresh/benchmark
@@ -69,20 +69,3 @@ All four MO queries in all four phases have complete EXPLAIN ANALYZE VERBOSE out
 Compile private-package test binaries using the same test source and the overlays above. Set MICRO_BIN_ROOT to a directory containing baseline.test, original.test and candidate.test; adjust CPU 12 in the script if unavailable. `micro-benchmark.py` predeclares four B/O/C/C/O/B cycles, eight samples per variant, 200 ms each, GOMAXPROCS=1 and one pinned CPU. It covers successful/short/dotall loops, prefix rejection in both eligible/ineligible patterns and both string/byte entrypoints, capture/lazy/multiline/nonterminal/mixed-program exclusions, early LF, and failed-start scaling.
 
 Compile `pkg/sql/plan/function` tests with `mo-cgo-test -c` and identical current tests plus baseline/candidate overlays. The vector benchmark `BenchmarkRegexpTerminalPrefixRejection` validates 256 zero results before measuring real REGEXP_INSTR evaluation. Use interleaved variants on the same CPU. A repeatable unrelated-path regression blocks this change even if Q29 improves.
-
-## Recorded Linux result (2026-10-25)
-
-Median seconds, with ten measured samples per MatrixOne variant (two phases × five) and five DuckDB samples:
-
-| Query | Frozen main production | Candidate | Change | Source-built DuckDB |
-|---|---:|---:|---:|---:|
-| Q5 | 0.371544 | 0.370201 | -0.36% | 0.046255 |
-| Q6 | 0.307182 | 0.306432 | -0.24% | 0.044363 |
-| Q21 | 0.376070 | 0.374761 | -0.35% | 0.097756 |
-| Q29 | 5.505865 | 4.541981 | -17.51% | 1.287073 |
-
-Q29 remains 3.53× the DuckDB time, down from 4.28×; this is a partial improvement, not completion of #27665. Sixteen public SQL cases meet explicit value/error expectations in all four phases, including binary invalid UTF-8/NUL, mixed-charset 3995 rejection, NULL, line modes and offsets. Q5/Q6/Q29 parity holds in every sample; Q21's additional deterministic query matches exactly. All sixteen representative MO plans and four DuckDB profiles report zero spill.
-
-Private controls use eight samples per variant. The original ineligible prefix-miss capture-index median is 38.175 ns versus main 35.985 ns (+6.09%); repair is 28.630 ns (-20.44%). MatchString/byte rejection improves 17–19%. Ordinary captured/lazy/multiline/nonterminal/mixed-program controls show no repeatable regression in the complete predeclared samples. Captured-tail early samples were elevated, but later rounds reversed that trend; complete medians are main2259.5 ns, original2294 ns and candidate2241 ns, with overlapping distributions and outliers in each variant. The raw samples are retained rather than discarding those outliers. Successful eligible tail/dotall controls improve about95%; failed-start inputs256/1024/4096 retain approximately linear scaling with a36% reduction.
-
-The vector REGEXP_INSTR rejection medians and raw eight-sample distributions are in `evidence.json` under `vector_summary`; allocations are unchanged. UT/race results, nonempty selections, named tests, source fingerprints and baseline static-analysis diagnostics are under `local_validation`. The failed/preliminary experiments listed under `excluded_preflights` are not counted as acceptance evidence.

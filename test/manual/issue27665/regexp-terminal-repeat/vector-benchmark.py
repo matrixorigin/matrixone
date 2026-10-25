@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import os,pathlib,subprocess,json,time
-P=pathlib.Path(os.environ.get('BENCH_OUTPUT',str(pathlib.Path(__file__).resolve().parent)))
+P=pathlib.Path(os.environ['BENCH_OUTPUT'])
 P.mkdir(parents=True,exist_ok=True)
 root=pathlib.Path(os.environ['MICRO_BIN_ROOT'])
 records=[]

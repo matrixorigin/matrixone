@@ -3,7 +3,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import fsspec,aiohttp
-p=Path(os.environ.get('BENCH_OUTPUT','.'));p.mkdir(parents=True,exist_ok=True)
+p=Path(os.environ['BENCH_OUTPUT']);p.mkdir(parents=True,exist_ok=True)
 root=Path(os.environ['BENCH_ROOT'])/'data';root.mkdir(parents=True,exist_ok=True)
 url='https://datasets.clickhouse.com/hits_compatible/hits.parquet'
 fs=fsspec.filesystem('https',client_kwargs={'timeout':aiohttp.ClientTimeout(total=120,connect=15,sock_read=60),'trust_env':True,'auto_decompress':False,'headers':{'Accept-Encoding':'identity'}})
