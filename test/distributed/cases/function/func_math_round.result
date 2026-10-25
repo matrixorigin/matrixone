@@ -434,7 +434,7 @@ select id,r from round_signed_ctas order by id;
 13  ¦  -130  𝄀
 14  ¦  null
 select round(-11+1,-1) as expression_result,round(cast(-11 as decimal(6,0)),-1) as decimal_control,round(-11e0,-1) as float_control,truncate(-11,-1) as truncate_control;
-➤ expression_result[-5,64,0]  ¦  decimal_control[3,6,0]  ¦  float_control[8,53,31]  ¦  truncate_control[-5,64,0]  𝄀
+➤ expression_result[-5,64,0]  ¦  decimal_control[3,7,0]  ¦  float_control[8,53,31]  ¦  truncate_control[-5,64,0]  𝄀
 -10  ¦  -10  ¦  -10.0  ¦  -10
 prepare round_signed_parameter from 'select round(cast(? as signed),cast(? as signed)) as r';
 set @round_value=-11,@round_digits=-1;

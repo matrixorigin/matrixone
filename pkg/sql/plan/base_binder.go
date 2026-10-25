@@ -9341,6 +9341,16 @@ func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []
 	}
 	input := argsType[0]
 	integerDigits := input.Width - input.Scale
+	if len(args) == 2 && args[1].GetLit() == nil {
+		switch name {
+		case "round", "ceil", "ceiling", "floor":
+			// Runtime digits retain the input scale, but rounding can grow
+			// its coefficient by one digit. Downstream arithmetic needs that
+			// bound even though no constant-scale refinement is possible.
+			returnType.Width = min(input.Width+1, maxDecimalPrecisionForRounding(input.Oid))
+		}
+		return
+	}
 
 	switch name {
 	case "ceil", "ceiling", "floor":
@@ -9397,10 +9407,13 @@ func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []
 			return
 		}
 
-		// Preserve the established conservative width for negative D. MySQL
-		// exposes inconsistent metadata for that case between CTAS and views;
-		// the compatibility contract here is the unambiguous nonnegative case.
+		// Keep the conservative negative-D envelope, but reserve an integer
+		// carry for ROUND: e.g. a precision-30 product can round to 10^30.
+		// TRUNCATE cannot carry. Retain the existing decimal family and cap.
 		if digits < 0 {
+			if name == "round" {
+				returnType.Width = max(input.Width, min(integerDigits+1, maxDecimalPrecisionForRounding(input.Oid)))
+			}
 			returnType.Scale = 0
 			return
 		}

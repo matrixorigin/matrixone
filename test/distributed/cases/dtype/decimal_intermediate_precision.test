@@ -45,4 +45,13 @@ create table legacy_coefficients(i bigint);
 insert into legacy_coefficients values (9223372036854775807), (-9223372036854775808), (null);
 -- @metacmp(true)
 select (cast('00:00:00' as time(0)) + i) * (cast('00:00:00' as time(0)) + i) * 3 as carried_product from legacy_coefficients order by i;
+-- Rounding can carry beyond a narrowed intermediate precision.
+create table round_coefficients(a decimal(15,0), d bigint);
+insert into round_coefficients values (999999999999999, -30), (-999999999999999, -30), (null, -30);
+-- @metacmp(true)
+select round(a*a,-30)*round(a*a,-30) as rounded_product from round_coefficients order by a;
+-- @metacmp(true)
+select round(a*a,d)*round(a*a,d) as dynamic_product from round_coefficients order by a;
+-- @metacmp(true)
+select truncate(a*a,-30)*truncate(a*a,-30) as truncated_product from round_coefficients order by a;
 drop database decimal_intermediate_precision;

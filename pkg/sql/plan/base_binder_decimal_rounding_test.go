@@ -16,10 +16,14 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
@@ -47,6 +51,11 @@ func TestDecimalRoundingReturnMetadata(t *testing.T) {
 		{name: "round decimal128", function: "round", input: types.New(types.T_decimal128, 38, 10), digits: ptrTo(int64(5)), want: types.New(types.T_decimal128, 34, 5)},
 		{name: "round decimal256", function: "round", input: types.New(types.T_decimal256, 50, 10), digits: ptrTo(int64(5)), want: types.New(types.T_decimal256, 46, 5)},
 		{name: "round keeps input when digits exceeds scale", function: "round", input: types.New(types.T_decimal64, 10, 4), digits: ptrTo(int64(8)), want: types.New(types.T_decimal64, 10, 4)},
+		{name: "round negative digits reserves carry", function: "round", input: types.New(types.T_decimal128, 30, 0), digits: ptrTo(int64(-30)), want: types.New(types.T_decimal128, 31, 0)},
+		{name: "round decimal64 negative digits reserves carry", function: "round", input: types.New(types.T_decimal64, 15, 0), digits: ptrTo(int64(-15)), want: types.New(types.T_decimal64, 16, 0)},
+		{name: "round decimal256 negative digits reserves carry", function: "round", input: types.New(types.T_decimal256, 60, 0), digits: ptrTo(int64(-60)), want: types.New(types.T_decimal256, 61, 0)},
+		{name: "round negative digits retains conservative fractional envelope", function: "round", input: types.New(types.T_decimal128, 30, 2), digits: ptrTo(int64(-28)), want: types.New(types.T_decimal128, 30, 0)},
+		{name: "truncate negative digits has no carry", function: "truncate", input: types.New(types.T_decimal128, 30, 0), digits: ptrTo(int64(-30)), want: types.New(types.T_decimal128, 30, 0)},
 		{name: "truncate decimal64", function: "truncate", input: types.New(types.T_decimal64, 10, 4), digits: ptrTo(int64(2)), want: types.New(types.T_decimal64, 8, 2)},
 		{name: "truncate to integer", function: "truncate", input: types.New(types.T_decimal64, 10, 4), digits: ptrTo(int64(0)), want: types.New(types.T_decimal64, 6, 0)},
 		{name: "truncate decimal128", function: "truncate", input: types.New(types.T_decimal128, 38, 10), digits: ptrTo(int64(5)), want: types.New(types.T_decimal128, 33, 5)},
@@ -79,7 +88,7 @@ func TestDecimalRoundingReturnMetadata(t *testing.T) {
 }
 
 func TestCTASDecimalRoundingMetadataAtMaxPrecision(t *testing.T) {
-	for _, function := range []string{"ceil", "ceiling", "floor"} {
+	for _, function := range []string{"ceil", "ceiling", "floor", "round", "truncate"} {
 		t.Run(function, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(
 				t.Context(), dialect.MYSQL,
@@ -107,6 +116,63 @@ func TestCTASDecimalRoundingMetadataAtMaxPrecision(t *testing.T) {
 			defer roundTripStmt.Free()
 			_, err = BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), roundTripStmt, false)
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestDecimalRoundingVariableDigitsReserveCarry(t *testing.T) {
+	for _, name := range []string{"round", "ceil", "floor", "truncate"} {
+		t.Run(name, func(t *testing.T) {
+			input := types.New(types.T_decimal128, 30, 2)
+			got, err := BindFuncExprImplByPlanExpr(t.Context(), name, []*planpb.Expr{
+				decimalArithmeticTestColumn(input, 0), decimalArithmeticTestColumn(types.T_int64.ToType(), 1),
+			})
+			require.NoError(t, err)
+			want := int32(31)
+			if name == "truncate" {
+				want = 30
+			}
+			require.Equal(t, want, got.Typ.Width)
+			require.Equal(t, int32(2), got.Typ.Scale)
+		})
+	}
+}
+
+func TestDecimalRoundCarryFeedsArithmetic(t *testing.T) {
+	for _, variableDigits := range []bool{false, true} {
+		t.Run(map[bool]string{false: "constant_digits", true: "variable_digits"}[variableDigits], func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			inputType := types.New(types.T_decimal64, 15, 0)
+			column := decimalArithmeticTestColumn(inputType, 0)
+			square, err := BindFuncExprImplByPlanExpr(t.Context(), "*", []*planpb.Expr{column, column})
+			require.NoError(t, err)
+			digits := makePlan2Int64ConstExprWithType(-30)
+			if variableDigits {
+				digits = decimalArithmeticTestColumn(types.T_int64.ToType(), 1)
+			}
+			rounded, err := BindFuncExprImplByPlanExpr(t.Context(), "round", []*planpb.Expr{square, digits})
+			require.NoError(t, err)
+			product, err := BindFuncExprImplByPlanExpr(t.Context(), "*", []*planpb.Expr{rounded, rounded})
+			require.NoError(t, err)
+			executor, err := colexec.NewExpressionExecutor(proc, product)
+			require.NoError(t, err)
+			defer executor.Free()
+			input := batch.NewWithSize(2)
+			defer input.Clean(proc.Mp())
+			input.Vecs[0] = vector.NewVec(inputType)
+			input.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+			for i, v := range []int64{999999999999999, -999999999999999, 0} {
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Decimal64(v), i == 2, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(input.Vecs[1], int64(-30), false, proc.Mp()))
+			}
+			input.SetRowCount(3)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			for row := range 2 {
+				require.Equal(t, "1"+strings.Repeat("0", 60), vector.GetFixedAtWithTypeCheck[types.Decimal256](result, row).Format(result.GetType().Scale))
+			}
+			require.True(t, result.IsNull(2))
+			require.Equal(t, int32(62), product.Typ.Width)
 		})
 	}
 }

@@ -66,4 +66,21 @@ select (cast('00:00:00' as time(0)) + i) * (cast('00:00:00' as time(0)) + i) * 3
 NULL  𝄀
 255211775190703847597530955573826158592  𝄀
 255211775190703847542190723352697503747
+create table round_coefficients(a decimal(15,0), d bigint);
+insert into round_coefficients values (999999999999999, -30), (-999999999999999, -30), (null, -30);
+select round(a*a,-30)*round(a*a,-30) as rounded_product from round_coefficients order by a;
+➤ rounded_product[3,62,0]  𝄀
+NULL  𝄀
+1000000000000000000000000000000000000000000000000000000000000  𝄀
+1000000000000000000000000000000000000000000000000000000000000
+select round(a*a,d)*round(a*a,d) as dynamic_product from round_coefficients order by a;
+➤ dynamic_product[3,62,0]  𝄀
+NULL  𝄀
+1000000000000000000000000000000000000000000000000000000000000  𝄀
+1000000000000000000000000000000000000000000000000000000000000
+select truncate(a*a,-30)*truncate(a*a,-30) as truncated_product from round_coefficients order by a;
+➤ truncated_product[3,60,0]  𝄀
+NULL  𝄀
+0  𝄀
+0
 drop database decimal_intermediate_precision;
