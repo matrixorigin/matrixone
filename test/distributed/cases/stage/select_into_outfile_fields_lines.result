@@ -215,26 +215,25 @@ select * from rl_back;
 create table rn (id int, s varchar(20));
 insert into rn values (1,'Nyx'),(2,null);
 select id, s from rn order by id
-into outfile 'stage://outfile_fields_lines_stage/esc_N_null.csv'
+into outfile 'stage://outfile_fields_lines_stage/esc_uppern_null.csv'
 fields terminated by ',' enclosed by '' escaped by 'N' header 'false';
 not supported: select into outfile (csv): a NULL value cannot round-trip with FIELDS ESCAPED BY 'N'
-select count(*) from stage_list('stage://outfile_fields_lines_stage/esc_N_null.csv');
+select count(*) from stage_list('stage://outfile_fields_lines_stage/esc_uppern_null.csv');
 ➤ count(*)[-5,64,0]  𝄀
 0
 select id, s from rn where id = 1
-into outfile 'stage://outfile_fields_lines_stage/esc_N_ok.csv'
+into outfile 'stage://outfile_fields_lines_stage/esc_uppern_ok.csv'
 fields terminated by ',' enclosed by '' escaped by 'N' header 'false';
-file esc_N_ok.csv already exists
-select load_file(cast('stage://outfile_fields_lines_stage/esc_N_ok.csv' as datalink));
-➤ load_file(cast(stage://outfile_fields_lines_stage/esc_N_ok.csv as datalink))[-1,16383,0]  𝄀
-2,apple
+select load_file(cast('stage://outfile_fields_lines_stage/esc_uppern_ok.csv' as datalink));
+➤ load_file(cast(stage://outfile_fields_lines_stage/esc_uppern_ok.csv as datalink))[-1,16383,0]  𝄀
+1,NNyx
 
 create table rn_back (id int, s varchar(20));
-load data infile 'stage://outfile_fields_lines_stage/esc_N_ok.csv' into table rn_back
+load data infile 'stage://outfile_fields_lines_stage/esc_uppern_ok.csv' into table rn_back
 fields terminated by ',' enclosed by '' escaped by 'N' lines terminated by '\n';
 select * from rn_back;
 ➤ id[4,32,0]  ¦  s[12,20,0]  𝄀
-2  ¦  apple
+1  ¦  Nyx
 select id, s from rtcr
 into outfile 'stage://outfile_fields_lines_stage/cr_pipe.csv'
 fields terminated by ',' enclosed by '' escaped by '' lines terminated by '|' header 'false';

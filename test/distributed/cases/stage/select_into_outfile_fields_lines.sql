@@ -173,15 +173,15 @@ select * from rl_back;
 create table rn (id int, s varchar(20));
 insert into rn values (1,'Nyx'),(2,null);
 select id, s from rn order by id
-into outfile 'stage://outfile_fields_lines_stage/esc_N_null.csv'
+into outfile 'stage://outfile_fields_lines_stage/esc_uppern_null.csv'
 fields terminated by ',' enclosed by '' escaped by 'N' header 'false';
-select count(*) from stage_list('stage://outfile_fields_lines_stage/esc_N_null.csv');
+select count(*) from stage_list('stage://outfile_fields_lines_stage/esc_uppern_null.csv');
 select id, s from rn where id = 1
-into outfile 'stage://outfile_fields_lines_stage/esc_N_ok.csv'
+into outfile 'stage://outfile_fields_lines_stage/esc_uppern_ok.csv'
 fields terminated by ',' enclosed by '' escaped by 'N' header 'false';
-select load_file(cast('stage://outfile_fields_lines_stage/esc_N_ok.csv' as datalink));
+select load_file(cast('stage://outfile_fields_lines_stage/esc_uppern_ok.csv' as datalink));
 create table rn_back (id int, s varchar(20));
-load data infile 'stage://outfile_fields_lines_stage/esc_N_ok.csv' into table rn_back
+load data infile 'stage://outfile_fields_lines_stage/esc_uppern_ok.csv' into table rn_back
 fields terminated by ',' enclosed by '' escaped by 'N' lines terminated by '\n';
 select * from rn_back;
 
