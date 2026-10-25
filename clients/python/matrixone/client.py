@@ -878,7 +878,9 @@ class Client(BaseMatrixOneClient):
         """Escapes a string value for SQL queries."""
         return f"'{value}'"
 
-    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
+    def _build_login_info(
+        self, user: str, account: Optional[str] = None, role: Optional[str] = None
+    ) -> tuple[str, dict]:
         """
         Build final login info based on user parameter and optional account/role
 
@@ -1025,6 +1027,17 @@ class Client(BaseMatrixOneClient):
             self.logger.log_query(sql, execution_time, success=False, log_mode=log_mode)
             self.logger.log_error(e, context=context)
             raise _classify_db_error(e, sql) from None
+
+    @property
+    def analytics(self):
+        """Optional file-query and Arrow APIs; requires the ``analytics`` extra.
+
+        Use ``with client.analytics.query(sql) as batches`` for bounded result
+        reads and ``read_parquet/read_csv/read_json`` for managed external scans.
+        """
+        from .analytics import AnalyticsManager
+
+        return AnalyticsManager(self)
 
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None) -> "ResultSet":
         """
@@ -1405,7 +1418,9 @@ class Client(BaseMatrixOneClient):
             # Log error FIRST, before any error processing
             # Wrap in try-except to ensure logging failure doesn't hide the real error
             try:
-                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                sql_display = (
+                    sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                )
                 self.logger.log_query(sql_display, execution_time, success=False)
                 self.logger.log_error(e, context="Query execution")
             except Exception as log_err:
@@ -2534,7 +2549,9 @@ class Client(BaseMatrixOneClient):
                             _exec_sql(fulltext_sql)
                             self.logger.info(f"✓ Created fulltext index '{index.name}'")
                         except Exception as e:
-                            self.logger.warning(f"Failed to create fulltext index {index.name}: {redact_error(e, password)}")
+                            self.logger.warning(
+                                f"Failed to create fulltext index {index.name}: {redact_error(e, password)}"
+                            )
                     elif isinstance(index, VectorIndex):
                         # Create vector index using custom method
                         try:
@@ -2542,7 +2559,9 @@ class Client(BaseMatrixOneClient):
                             _exec_sql(vector_sql)
                             self.logger.info(f"✓ Created vector index '{index.name}'")
                         except Exception as e:
-                            self.logger.warning(f"Failed to create vector index {index.name}: {redact_error(e, password)}")
+                            self.logger.warning(
+                                f"Failed to create vector index {index.name}: {redact_error(e, password)}"
+                            )
                     else:
                         # Create regular index using manual SQL to avoid dialect issues
                         try:
