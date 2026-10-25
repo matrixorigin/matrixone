@@ -722,16 +722,17 @@ func (l *Lexer) Error(err string) {
 		// secret itself.
 		nearState = CredentialStateInMapAfterEq
 	}
-	nearBeforeMask := near
-	near = MaskStageCredentialLiteralsWithInitialStateAndSQLMode(near, nearState, l.sqlMode)
-	if nearState != CredentialStateNone && near == nearBeforeMask {
-		// The tracker places the failure inside a credential map, yet the
-		// scrub found no credential value to mask: a mis-paired quotation
-		// retokenizes the tail into a structure whose credentials cannot be
-		// localized from the fragment alone (#30747 review round 11).
-		// Redact the whole tail rather than publish a suffix whose secret
-		// stays verbatim. The identified-by echo policy is unaffected —
-		// that context never arms this tracker.
+	if nearState == CredentialStateNone {
+		near = MaskStageCredentialLiteralsWithInitialStateAndSQLMode(near, nearState, l.sqlMode)
+	} else {
+		// The tracker places the failure inside a credential map: redact
+		// the WHOLE tail. A partial fragment scrub is never proof of
+		// protection (#30747 review rounds 11/12): a mis-paired quotation
+		// retokenizes the tail so the credentials inside cannot be
+		// localized from the fragment alone, and scrubbing only a suffix
+		// (an embedded '=') leaves the credential prefix standing. The
+		// identified-by echo policy is unaffected — that context never
+		// arms this tracker.
 		near = "******"
 	}
 	near = commonutil.Abbreviate(near, -1)

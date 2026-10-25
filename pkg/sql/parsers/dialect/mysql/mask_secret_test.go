@@ -941,3 +941,56 @@ func TestMaskUnknownModeBraceBoundaryPreservesCredential(t *testing.T) {
 	require.NotContains(t, MaskSensitiveSqlLiteralsPerStatement(balanced, 0), "plain")
 	require.Contains(t, MaskSensitiveSqlLiteralsPerStatement(balanced, 0), "aws_secret_key")
 }
+
+// #30747 review round 12, P1: transition admission must tokenize trivia the
+// way the scanner does. A leading-comment SET is still SET-initial — with
+// an early exit on the first byte the `SET sql_mode='ANSI_QUOTES'` was
+// invisible and the following stage was masked under the wrong mode.
+func TestCommentTriviaModeTransitionAdmission(t *testing.T) {
+	for _, prefix := range []string{
+		"/* application */ ",
+		"-- application\n",
+		"# application\n",
+		"/* x */ /* y */\n",
+	} {
+		sql := prefix + `SET sql_mode='ANSI_QUOTES'; create stage "s\" url='file:///x' credentials={'k'='REVIEW_COMMENT_CANARY'}`
+		spans := StatementSQLModes(sql, 0)
+		require.Len(t, spans, 2, prefix)
+		require.True(t, spans[0].SemiTerminated, prefix)
+		require.Equal(t, SQLModeFlags(SQLModeANSIQuotes), spans[1].Mode&SQLModeFlags(SQLModeANSIQuotes), prefix)
+		require.True(t, spans[1].Known, prefix)
+		out := MaskSensitiveSqlLiteralsPerStatement(sql, 0)
+		require.NotContains(t, out, "REVIEW_COMMENT_CANARY", prefix)
+		require.Contains(t, out, "credentials=", prefix)
+	}
+	// Executable comments deliver their CONTENT as tokens: a SET inside
+	// /*! ... */ is itself the first statement and still re-pins the mode.
+	exec := `/*! SET sql_mode='ANSI_QUOTES' */; create stage "s\" url='file:///x' credentials={'k'='REVIEW_COMMENT_CANARY'}`
+	execSpans := StatementSQLModes(exec, 0)
+	require.Len(t, execSpans, 2)
+	require.True(t, execSpans[0].SemiTerminated)
+	require.NotZero(t, execSpans[1].Mode&SQLModeFlags(SQLModeANSIQuotes), "SET inside an executable comment re-pins the mode")
+	require.NotContains(t, MaskSensitiveSqlLiteralsPerStatement(exec, 0), "REVIEW_COMMENT_CANARY")
+}
+
+// #30747 review round 12, P1: variant cursors must synchronize with the
+// statement walk, not reinterpret consumed prefix bytes. From an
+// ANSI_QUOTES start the production parser consumes all five statements of
+// this chain; the walker must produce the same shape, per-statement modes
+// included. (The same chain read from default mode is mode-inconsistent —
+// production fails at the very first alias — so no shape is asserted there.)
+func TestStatementSQLModesKeepsEffectiveModeChain(t *testing.T) {
+	sql := `SELECT 1 AS "a\"; SET sql_mode=''; SELECT 1; SET sql_mode='ANSI_QUOTES'; ` +
+		`create stage "s\" url='file:///x' credentials={'k'='REVIEW_CURSOR_CANARY'}`
+	spans := StatementSQLModes(sql, SQLModeFlags(SQLModeANSIQuotes))
+	require.Len(t, spans, 5, "production consumes five statements; the walker must agree")
+	require.True(t, spans[1].SemiTerminated)
+	require.True(t, spans[2].SemiTerminated)
+	require.True(t, spans[3].SemiTerminated)
+	require.False(t, spans[4].SemiTerminated)
+	require.True(t, spans[4].Known)
+	require.NotZero(t, spans[4].Mode&SQLModeFlags(SQLModeANSIQuotes), "stage statement runs under the re-pinned ANSI_QUOTES")
+	out := MaskSensitiveSqlLiteralsPerStatement(sql, SQLModeFlags(SQLModeANSIQuotes))
+	require.NotContains(t, out, "REVIEW_CURSOR_CANARY")
+	require.Contains(t, out, `credentials={'k'='******'}`)
+}

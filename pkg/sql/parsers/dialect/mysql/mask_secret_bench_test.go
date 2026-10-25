@@ -139,3 +139,28 @@ func BenchmarkMaskUnknownModeScale(b *testing.B) {
 		})
 	}
 }
+
+// #30747 review round 12 boundary membership: many VALID credential-keyword
+// statements after a known-mode transition. Span-union membership must stay
+// sub-linear per boundary (merged intervals + binary search), not walk the
+// raw union from the head for every candidate.
+func benchBoundarySearchRequest(n int) string {
+	var b strings.Builder
+	b.WriteString("SET sql_mode=''; ")
+	for i := 0; i < n; i++ {
+		b.WriteString("SELECT 'access_key_id'='value'; ")
+	}
+	return b.String()
+}
+
+func BenchmarkMaskBoundarySearch(b *testing.B) {
+	for _, n := range []int{2048, 32768} {
+		sql := benchBoundarySearchRequest(n)
+		b.Run(fmt.Sprintf("perstatement/%d", n), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				MaskSensitiveSqlLiteralsPerStatement(sql, 0)
+			}
+		})
+	}
+}

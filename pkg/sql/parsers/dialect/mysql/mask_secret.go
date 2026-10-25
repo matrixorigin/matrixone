@@ -617,13 +617,16 @@ func statementSQLModeInventory(sql string, start, end int, mode SQLModeFlags) ([
 	return typList, valList
 }
 
-// spanStartsWithSet reports whether the span's first token reads as the word
-// SET (byte check only; the token-level re-scan in statementSQLModeInventory
-// keeps authority over transition semantics).
+// spanStartsWithSet reports whether the span's first REAL token reads as the
+// word SET (byte check only; the token-level re-scan in
+// statementSQLModeInventory keeps authority over transition semantics).
+// Trivia is skipped EXACTLY the way the scanner treats it (#30747 review
+// round 12): plain /* */ comments, `-- `/EOL and `#` line comments are
+// trivia, while an executable /*! ... */ comment delivers its CONTENT as
+// tokens — a leading-comment SET must count as SET-initial for transition
+// admission.
 func spanStartsWithSet(sql string, start, end int) bool {
-	for start < end && (sql[start] == ' ' || sql[start] == '\t' || sql[start] == '\n' || sql[start] == '\r') {
-		start++
-	}
+	start = skipPreTokenTrivia(sql, start, end)
 	if end-start < 4 {
 		return false
 	}
@@ -631,7 +634,49 @@ func spanStartsWithSet(sql string, start, end int) bool {
 		return false
 	}
 	c := sql[start+3]
-	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ';' || c == '(' || c == '/' || c == '='
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ';' || c == '(' || c == '/' || c == '=' || c == '*'
+}
+
+// skipPreTokenTrivia advances past the trivia a scanner consumes before the
+// first real token of a statement. Plain comments never return content;
+// executable comments return their content, so only the opener (with its
+// optional version digits) counts as trivia there.
+func skipPreTokenTrivia(sql string, start, end int) int {
+	for start < end {
+		for start < end && (sql[start] == ' ' || sql[start] == '\t' || sql[start] == '\n' || sql[start] == '\r') {
+			start++
+		}
+		switch {
+		case strings.HasPrefix(sql[start:], "/*!"):
+			// executable (version) comment: its content are real tokens;
+			// skip only the marker and an optional version number.
+			start += 3
+			for start < end && sql[start] >= '0' && sql[start] <= '9' {
+				start++
+			}
+		case strings.HasPrefix(sql[start:], "/*"):
+			close := strings.Index(sql[start+2:], "*/")
+			if close < 0 {
+				return end
+			}
+			start += 2 + close + 2
+		case strings.HasPrefix(sql[start:], "#"):
+			nl := strings.IndexByte(sql[start:], '\n')
+			if nl < 0 {
+				return end
+			}
+			start += nl + 1
+		case strings.HasPrefix(sql[start:], "-- ") || strings.HasPrefix(sql[start:], "--\t") || strings.HasPrefix(sql[start:], "--\n") || strings.HasPrefix(sql[start:], "--\r"):
+			nl := strings.IndexByte(sql[start:], '\n')
+			if nl < 0 {
+				return end
+			}
+			start += nl + 1
+		default:
+			return start
+		}
+	}
+	return start
 }
 
 // variantSemiCursor is a forward-only scanner over one lexical variant for
@@ -640,12 +685,21 @@ func spanStartsWithSet(sql string, start, end int) bool {
 // variant boundary collection over a request is one O(n) pass. Statement
 // starts only move forward, and candidates the cross-variant credential
 // union covers are consumed and dropped in place.
+//
+// On FIRST use the cursor starts at the statement boundary in effect, not
+// at byte 0 (#30747 review round 12): a constant-mode scan from the request
+// head re-pairs quotes in prefix statements that the production parser
+// consumed under different effective modes (`SELECT 1 AS "a\"; ...` read
+// under default mode swallows later boundaries inside one string), losing
+// whole statements — and their mode transitions. Tokenization synchronized
+// to the boundary walk keeps every statement visible exactly once.
 type variantSemiCursor struct {
 	scanner       *Scanner
 	previousToken int
 	depth         int
 	nextEnd       int
 	hasNext       bool
+	touched       bool
 }
 
 func (c *variantSemiCursor) init(sql string, mode SQLModeFlags) {
@@ -687,8 +741,15 @@ func (c *variantSemiCursor) fill(sql string) bool {
 }
 
 // nextAfter returns the smallest top-level `;` end strictly greater than
-// start that the coverage gate accepts; ok=false at end of input.
+// start that the coverage gate accepts; ok=false at end of input. The first
+// call of this cursor anchors its scan at `start` (the current statement
+// boundary): tokenization must never reinterpret prefix bytes that prior
+// statements consumed under other effective modes.
 func (c *variantSemiCursor) nextAfter(sql string, start int, covered func(int) bool) (int, bool) {
+	if !c.touched {
+		c.scanner.Pos = start
+		c.touched = true
+	}
 	for c.hasNext || c.fill(sql) {
 		end := c.nextEnd
 		c.hasNext = false
@@ -757,7 +818,15 @@ func unionCredentialSpansUnderAllLexicalVariants(sql string, start int, lastKnow
 	base := lastKnown &^ SQLModeFlags(SQLModeNoBackslashEscapes|SQLModeANSIQuotes)
 	tail := sql[start:]
 	var spans [][2]int
-	for variant := 0; variant < 4; variant++ {
+	// Only NO_BACKSLASH_ESCAPES (backslash) and ANSI_QUOTES (double quote)
+	// change how tokens pair. Without EITHER byte in the tail every variant
+	// tokenizes identically, and one collection serves all four (round-12:
+	// credential-dense requests paid the 4x collection for nothing).
+	variantCount := 4
+	if strings.IndexAny(tail, "\\\"") < 0 {
+		variantCount = 1
+	}
+	for variant := 0; variant < variantCount; variant++ {
 		m := base
 		if variant&1 != 0 {
 			m |= SQLModeFlags(SQLModeNoBackslashEscapes)
@@ -777,24 +846,34 @@ func unionCredentialSpansUnderAllLexicalVariants(sql string, start int, lastKnow
 		}
 	}
 	if len(spans) > 1 {
+		// Merge into disjoint sorted intervals ONCE (#30747 review round
+		// 12): thousands of credential-bearing statements make the per-
+		// boundary membership check the dominant cost when it walks the
+		// raw union from the head every time (O(boundaries x spans)).
 		sort.Slice(spans, func(i, j int) bool { return spans[i][0] < spans[j][0] })
+		merged := spans[:0]
+		for _, s := range spans {
+			if n := len(merged); n > 0 && s[0] <= merged[n-1][1] {
+				if s[1] > merged[n-1][1] {
+					merged[n-1][1] = s[1]
+				}
+				continue
+			}
+			if s[1] > s[0] {
+				merged = append(merged, s)
+			}
+		}
+		spans = merged
 	}
 	return spans
 }
 
 // boundaryInsideSpans reports whether byte position pos lies inside any
-// union span. Spans are sorted by start; unions here are tiny (one per
-// credential literal at most per variant).
+// union span. Spans are merged disjoint and sorted by start; membership is
+// a binary search, so long credential-dense requests stay flat.
 func boundaryInsideSpans(spans [][2]int, pos int) bool {
-	for _, s := range spans {
-		if pos < s[0] {
-			return false
-		}
-		if pos < s[1] {
-			return true
-		}
-	}
-	return false
+	i := sort.Search(len(spans), func(i int) bool { return spans[i][1] > pos })
+	return i < len(spans) && spans[i][0] <= pos
 }
 
 // MaskSensitiveSqlLiteralsUnderAllLexicalVariants masks credential literals

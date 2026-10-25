@@ -13115,16 +13115,19 @@ func TestExecRequestUnknownModeBraceBoundaryTrace(t *testing.T) {
 	require.NotContains(t, logged, "REVIEW_BRACE_CANARY")
 }
 
-// #30747 review round 11, battery: the full malformed-map family from rounds
-// 9/10/11 — EOF-taint, valid-tokens-junk-tail, mis-paired-quote-with-};,
-// near-tail, unknown-mode transition — under both relevant modes, asserting
-// EVERY production sink in ONE pass: client parse-error echo, retained
-// statement text (doComQuery/GetSqlOfStmt), the full observed log stream
-// (debug/status sinks), and the error pipeline (error log + error_info via
-// the registered reporter). Zero canary in any cell.
+// #30747 review rounds 11/12, battery: the full malformed-map family from
+// rounds 9/10/11/12 — EOF-taint, valid-tokens-junk-tail, mis-paired-quote
+// with-};, near-tail (incl. embedded '=' and value-before-equals), unknown-
+// mode transitions, comment-prefixed transitions (three trivia flavors) and
+// ANSI_QUOTES-entry cursor chains — asserting EVERY production sink in ONE
+// pass: client parse-error echo, retained statement text
+// (doComQuery/GetSqlOfStmt), the full observed log stream (debug/status
+// sinks), and the error pipeline (error log + error_info via the registered
+// reporter). Zero canary in any cell.
 func TestRound11MalformedMapFamilyAllSinks(t *testing.T) {
 	canaries := []string{
 		"B1CANARY", "B2CANARY", "B3CANARY", "B4CANARY", "B5CANARY", "B6CANARY", "B7CANARY",
+		"C1CANARY", "C2CANARY", "C3CANARY", "C4CANARY", "C5CANARY", "C6CANARY",
 	}
 	shapes := []struct {
 		name    string
@@ -13138,6 +13141,14 @@ func TestRound11MalformedMapFamilyAllSinks(t *testing.T) {
 		{"r9-nbe-single", "NO_BACKSLASH_ESCAPES", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix;B5CANARY'}`},
 		{"r10-record-semicolon", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix;B6CANARY'} -- '`},
 		{"r9-transition-repin", "", `set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); create stage s1 url='file:///x' credentials={'k'='foo\','k2'='first'}; set sql_mode=''; create stage s2 url='file:///x' credentials={'k'='prefix\'B7CANARY'}`},
+		// round 12 tier: comment-prefixed transitions, ANSI-entry cursor
+		// chains, near-tail variants (embedded '=', value-before-equals)
+		{"r12-block-comment-transition", "", `/* application */ SET sql_mode=''; create stage s url='file:///x' credentials={'k'='C1CANARY'}`},
+		{"r12-line-comment-transition", "", "-- application\nSET sql_mode=''; create stage s url='file:///x' credentials={'k'='C2CANARY'}"},
+		{"r12-hash-comment-transition", "", "# application\nSET sql_mode=''; create stage s url='file:///x' credentials={'k'='C3CANARY'}"},
+		{"r12-ansi-entry-cursor-chain", "ANSI_QUOTES", `SELECT 1 AS "a\"; SET sql_mode=''; SELECT 1; SET sql_mode='ANSI_QUOTES'; create stage "s\" url='file:///x' credentials={'k'='C4CANARY'}`},
+		{"r12-near-tail-embedded-eq", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='C5CANARY=tail'} -- '`},
+		{"r12-near-tail-value-before-eq", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='C6CANARY'=''} -- '`},
 	}
 	for _, shape := range shapes {
 		t.Run(shape.name, func(t *testing.T) {
