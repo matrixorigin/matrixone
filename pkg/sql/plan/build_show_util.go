@@ -230,7 +230,7 @@ func constructCreateTableSQL(
 		}
 
 		if col.Comment != "" {
-			buf.WriteString(" COMMENT '" + col.Comment + "'")
+			buf.WriteString(" COMMENT '" + formatStoredComment(col.Comment, sqlMode) + "'")
 		}
 		if mapping, ok := mongoColumns[strings.ToLower(col.Name)]; ok {
 			buf.WriteString(" MONGODB_PATH '")
@@ -674,7 +674,7 @@ func constructCreateTableSQL(
 		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
 			for _, kv := range proDef.Properties.Properties {
 				if kv.Key == catalog.SystemRelAttr_Comment {
-					comment = " COMMENT='" + kv.Value + "'"
+					comment = " COMMENT='" + formatStoredComment(kv.Value, sqlMode) + "'"
 				} else if kv.Key != catalog.SystemRelAttr_Kind &&
 					kv.Key != catalog.SystemRelAttr_CreateSQL &&
 					kv.Key != catalog.PropSchemaExtra {
@@ -1667,6 +1667,17 @@ func formatStrLitForSQLMode(s, sqlMode string) string {
 		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 	}
 	return formatStrLit(s)
+}
+
+// formatStoredComment returns the body of a quoted COMMENT literal for a
+// column or table comment. The parser stores these comments with single
+// quotes already doubled (util.DealCommentString) but backslashes raw, so
+// only backslashes still need escaping for the default SQL mode.
+func formatStoredComment(comment, sqlMode string) string {
+	if mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
+		return comment
+	}
+	return strings.ReplaceAll(comment, `\`, `\\`)
 }
 
 func formatStr(str string) string {
