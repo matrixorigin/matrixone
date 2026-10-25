@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -134,7 +133,6 @@ func TestForceICKPRetryBackoffIsBoundedAndCancelable(t *testing.T) {
 func TestCkpCheck(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
-			defer testutils.AfterTest(t)()
 			r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
 
 			for i := 0; i < 100; i += 10 {
@@ -173,7 +171,6 @@ func TestCkpCheck(t *testing.T) {
 }
 
 func TestGetCheckpoints1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
 
 	// ckp0[0,10]
@@ -251,7 +248,6 @@ func TestGetCheckpoints1(t *testing.T) {
 	assert.True(t, checkpointed.Equal(types.BuildTSForTest(40, 0)))
 }
 func TestGetCheckpoints2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
 
 	// ckp0[0,10]
@@ -357,7 +353,6 @@ func TestGetCheckpoints2(t *testing.T) {
 	assert.True(t, checkpointed.Equal(types.BuildTSForTest(30, 1)))
 }
 func TestICKPSeekLT(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	r := NewRunner(context.Background(), nil, nil, nil, nil, nil)
 
 	// ckp0[0,10]

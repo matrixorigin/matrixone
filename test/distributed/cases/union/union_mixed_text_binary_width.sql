@@ -65,6 +65,15 @@ select hex(d) as bytes
 from (values row(cast('a' as char(1)) collate utf8mb4_unicode_ci),
              row(cast(x'FF' as binary(1)))) as v(d);
 
+-- The short literal and BINARY(100) pair from #30726 must keep both bytes
+-- and the fixed-width padding before and after persistence.
+select hex(b) as bytes, length(b) as width
+from (select 'x' as b union all select cast('ab' as binary(100))) as u
+order by width;
+create table bin_sink (v varbinary(200));
+insert into bin_sink
+select b from (select 'x' as b union all select cast('abcdefgh' as binary(100))) as u;
+select hex(v) as bytes, length(v) as width from bin_sink order by width;
 -- An inner unbounded BLOB must not become CHAR(1) in the outer UNION.
 create table nested_saved as
 select cast('' as char(1)) as v

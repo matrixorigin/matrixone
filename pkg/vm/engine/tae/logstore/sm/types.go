@@ -26,8 +26,6 @@ var (
 	ErrFull  = moerr.NewInternalErrorNoCtx("nonblocking queue is full, dropped item")
 )
 
-type OnFinCB = func()
-type EnqueueOp = func(any) any
 type OnItemsCB = func(...any)
 
 type Closable interface {
@@ -66,11 +64,4 @@ type ContextQueue interface {
 	// Enqueue, but lets request-scoped producers stop waiting for queue capacity
 	// when their caller is canceled.
 	EnqueueWithContext(context.Context, any) (any, error)
-}
-
-type StateMachine interface {
-	Start()
-	Stop()
-	EnqueueReceived(any) (any, error)
-	EnqueueCheckpoint(any) (any, error)
 }
