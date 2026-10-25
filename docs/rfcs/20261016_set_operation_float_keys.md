@@ -1,10 +1,11 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 35
+- Revision: 36
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
 - Revision 31 integration baseline: official main `67c91c5bdf6c669f63331778634215f7aa3e8f58`
+- Revision 36 integration baseline: official main `12eeeb0205b5e87faef48660ddbcd8cb5e18baea`
 - Revision 35 integration baseline: official main `83fa4d7d74b014286b60adfd2f9857b4d43d978e`
 - Revision 34 integration baseline: official main `9a7e12a93328a69bac7261beedc88930b7984a10`
 - Revision 33 integration baseline: official main `ac4ec315877cfc95fc5464bd81b081489f75f747`
@@ -1574,6 +1575,22 @@ Fresh planner and public signed-zero integration evidence is recorded in
 `validation/20261025_show_create_view_maintenance_integration.json`.
 RFC34's protocol/resource evidence remains scoped to its exact source inputs;
 this maintenance update adds no capacity, performance or mixed-binary claim.
+
+## Revision 36 vector and subscription maintenance integration
+
+Official main `12eeeb0205b5e87faef48660ddbcd8cb5e18baea` specializes wide
+fixed-width selection copies, synchronizes index-rebuild test handoffs across
+CNs, and corrects subscription DATA BRANCH/snapshot source routing. All57 PR
+patches replay unchanged. The vector copy retains existing capacity, logical
+length and metadata owners; the full vector/shuffle/hashjoin and public SQL
+integration checks cover the shared execution boundary. Subscription resolver
+checks are supplementary, without a new subscription lifecycle qualification.
+
+Main latest remains131, so the set-key/scalar-marker capability stays132,
+function620 and sentinel621. The admission, persistence and resource owners
+are unchanged. Current integration and reuse boundaries are recorded in
+`validation/20261025_vector_subscription_maintenance_integration.json`.
+Historical throughput, capacity and mixed-binary receipts remain historical.
 
 ## Compatibility, rollout and rollback
 

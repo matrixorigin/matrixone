@@ -1,0 +1,141 @@
+{
+  "Scope": "PR30184 RFC36: integrate official vector selection, subscription routing and index-rebuild test maintenance; preserve set-key132/function620",
+  "RecordedAt": "2026-10-25T11:00:18.740383+00:00",
+  "OriginalRemoteHead": "961b4e07b4413a2dbdc5cd9bbcc02f5c5e991095",
+  "RebasedSnapshot": "fb7b44264ad3a4d340f74dab564f3d2f7f23c671",
+  "OfficialMain": "12eeeb0205b5e87faef48660ddbcd8cb5e18baea",
+  "OfficialLatestMORPC": 131,
+  "SetKeyMORPC": 132,
+  "SetKeyFunctionID": 620,
+  "FunctionSentinel": 621,
+  "RangeDiff": "All57 prior patch bodies replay unchanged. No rebase conflict or production edit beyond upstream integration.",
+  "Fingerprints": {
+    "pkg/container/vector/vector.go": "5884cd9f5be7f859428e344df81564999881e680a0a4ef73e12f6cd3547ad700",
+    "pkg/container/vector/union_fixed_test.go": "3d28da95caf870df9364ca5146ee918d54d5d7f584efd9f887167ea9a8785bc2",
+    "pkg/container/vector/union_fixed_bench_test.go": "8b1477438e44814b240e597e7a5ca72c88e2b0d79924cb7ba04b0360edda6856",
+    "pkg/vectorize/shuffle/shuffle.go": "aa9a33b24b9ecc31a7e333a45b505e26a2f149625af5d0f3d0d2a7e29d8b4982",
+    "pkg/sql/colexec/hashjoin/unique_projection_test.go": "0871de4b3eab80d2361ba029e70d6352ecf4f7f077f26ae64683bb9ceefa802c",
+    "pkg/frontend/data_branch_subscription.go": "16a001bf3d951cd5568d869f5462698a73685f32064f4981ba7c04b53d260b16",
+    "pkg/frontend/data_branch_subscription_test.go": "004eb1c86eb645e7c0a8c13dbec09f8bacd75bde4db31782c58366502dae8637",
+    "pkg/frontend/snapshot_publication.go": "b21893f4d78c6b4980863d602fa7fe6238591f90540dbb3ab0ebbf426eea7c3b",
+    "pkg/frontend/snapshot_publication_test.go": "c91e8f3a464e90709416ffc4981656714b06ecdbc1e1f3f4f3302a7e966198e5",
+    "pkg/frontend/data_branch_owner_scoped_test.go": "4e49ed72e9320c124a7efb0de034bea127c695fe9e140cef633e0066a16571fb",
+    "pkg/defines/const.go": "88fc9c3f3e5828b70213d4669bb54249d2c6731020c8f592fd5fda1660b045b1",
+    "pkg/sql/plan/function/function_id.go": "db37142075bacca2b66505ad92741f5a3cf2885f0b7052110e0b4ce0f11a3b37",
+    "docs/rfcs/20261016_set_operation_float_keys.md": "e87adda36df58c484b020b93dcd9432d1ed2cb1b37928694ebe0ae2bde476eab"
+  },
+  "Validation": [
+    {
+      "Name": "vector",
+      "Command": [
+        ".agents/skills/mo-dev/scripts/mo-cgo-test",
+        "-p=1",
+        "-v",
+        "-vet=all",
+        "-count=1",
+        "-timeout=240s",
+        "./pkg/container/vector",
+        "./pkg/vectorize/shuffle",
+        "./pkg/sql/colexec/hashjoin"
+      ],
+      "ExitCode": 0,
+      "LogSHA256": "691566866ff440ccde8df1df58b1f98f3997493c8c0bc0486939d8ce225a2f32",
+      "RootPasses": 393,
+      "AllPasses": 1632,
+      "Results": [
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/container/vector\t1.353s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin\t4.816s"
+      ]
+    },
+    {
+      "Name": "public-frontend",
+      "Command": [
+        ".agents/skills/mo-dev/scripts/mo-cgo-test",
+        "-p=1",
+        "-v",
+        "-vet=all",
+        "-count=1",
+        "-timeout=240s",
+        "-run",
+        "^(TestClassifySubscriptionOperandCoversVisibilityModel|TestRejectSubscriptionBranchWriteDestinationCoversC5|TestBranchPrivilegeClassificationReportsVisibilityCause|TestBranchIdentityPlanValues|TestReopenDataBranchNodeByIDCandidates|TestResolveSameTransactionDataBranchRelationFailureIntegrity|TestBuildBranchOperandThreadsTheOperandTransaction|TestBranchClassificationUsesPinnedTransactionView|TestSnapshotPublicationBindingResolution|TestDeriveSnapshotPublicationSourceGate|TestSnapshotPublicationCoverageCheck|TestLifecycleAdmissionPlanValues|TestRevalidateSnapshotPublicationBinding|TestRevalidateSnapshotPublicationAliasBinding|TestBindPublicationSnapshotRecordForDropDatabase|TestBindPublicationSnapshotRecordForDropTable|TestBindPublicationSnapshotRecordForDropForeignSource|TestAdmitLifecycleRCSplitKeyOrder|TestDoCreateSnapshotPublicationAdmission|TestDoCreateSnapshotPublicationRebind|TestLockPublicationSnapshotOwnerSequence|TestOwnerScopedChangesHandleReroutesReplayRecovery|TestLCAScanDerivesOwnerContextFromLiveCallerContext|TestSetOperationSignedZero)$",
+        "./pkg/frontend",
+        "./pkg/tests/sqlintegration"
+      ],
+      "ExitCode": 0,
+      "LogSHA256": "bbed971d86bd7297593332185cdfb8121d121024bb86c4221559ce6bfb385924",
+      "RootPasses": 24,
+      "AllPasses": 305,
+      "Results": [
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/frontend\t1.455s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/tests/sqlintegration\t7.705s"
+      ]
+    },
+    {
+      "Name": "race",
+      "Command": [
+        ".agents/skills/mo-dev/scripts/mo-cgo-test",
+        "-p=1",
+        "-race",
+        "-v",
+        "-vet=all",
+        "-count=1",
+        "-timeout=240s",
+        "-run",
+        "^(TestUnionFixedSelection|TestHashJoinUniqueProjectionResumesAndReuses)$",
+        "./pkg/container/vector",
+        "./pkg/sql/colexec/hashjoin"
+      ],
+      "ExitCode": 0,
+      "LogSHA256": "8a8330d16ac31a6a32f1da3bff646644c916005950444c820a1c1f344343d59b",
+      "RootPasses": 2,
+      "AllPasses": 42,
+      "Results": [
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/container/vector\t1.491s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin\t2.084s"
+      ]
+    },
+    {
+      "Name": "lint",
+      "Command": "GOWORK=off CGO_CFLAGS=\"-I$PWD/cgo -I$PWD/thirdparties/install/include\" CGO_LDFLAGS=\"-L$PWD/thirdparties/install/lib\" golangci-lint run --allow-serial-runners --concurrency 2 -c .golangci.yml --new-from-rev up/main ./pkg/container/vector ./pkg/vectorize/shuffle ./pkg/sql/colexec/hashjoin",
+      "ExitCode": 0,
+      "LogSHA256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47",
+      "RootPasses": 0,
+      "AllPasses": 0,
+      "Results": [
+        "0 issues."
+      ]
+    }
+  ],
+  "EvidenceReuse": {
+    "Receipt": "20261025_set_key_weighted_percentile_integration.json",
+    "Verification": "Every recorded code/test/generated fingerprint remains identical; RFC text advances to36. Native/module inputs are identical to original remote head.",
+    "Scope": "Protocol/registry/wire/Prepare/persistence and scalar resource policy owners unchanged. Changed vector/shuffle copying has fresh normal/race/consumer evidence; frontend unit selection is supplementary, not full subscription lifecycle qualification."
+  },
+  "Review": {
+    "ChangeMap": [
+      "R3 shared hot-path integration: vector.unionT retains preflight/capacity/metadata/length/free owners, new wide-value adapter only borrows bounded synchronous typed views and calls shuffle.FixedLengthShuffle. Fresh byte/order/duplicate/NULL/grouping/source-window/self-append/allocation tests, real hashjoin projection/reset and focused race checks cover the shared boundary. No new state, wait, goroutine, allocator or memory limit.",
+      "R1/R2 integration: source-qualified23 frontend resolver/admission roots, plus existing public signed-zero suite. Subscription DATA BRANCH/snapshot work is upstream; PR has no production delta in those frontend owners. Multi-CN index-rebuild change adds committed-logtail barriers to its own test and is outside float set execution.",
+      "R0: RFC36, current PR description and this receipt. All prior PR patches and protocol identities remain unchanged."
+    ],
+    "DesignGate": "Maintenance integration; original accepted RFC13 bounded local scalar architecture is preserved. No new design/capacity approval claim.",
+    "Feedback": "No changed review, inline thread or conversation; existing historical feedback already closed by source/evidence. No duplicate reply or reviewer mutation.",
+    "Result": "PASS: no unresolved maintenance blocker."
+  },
+  "CI": {
+    "RunID": 40184244858,
+    "Attempt": 1,
+    "JobID": 121141900238,
+    "SourceHead": "961b4e07b4413a2dbdc5cd9bbcc02f5c5e991095",
+    "Signature": "Checkout MatrixOne source timed out after5 minutes during exact-head git fetch, before Go/test/coverage phases",
+    "FetchStartUTC": "2026-10-25T10:23:48Z",
+    "TimeoutUTC": "2026-10-25T10:28:47Z",
+    "AdditionalEvidence": "CI action archive acquisition exceeded100-second HTTP timeout and retried. Source was not checked out; missing summary helper is downstream.",
+    "Issue": 31028,
+    "IssueCommentID": 6396782896,
+    "Action": "New official-main integration is delivered through a precise-lease push; do not rerun the old run."
+  },
+  "Limits": [
+    "Darwin/arm64 normal CGo with vet and focused race, not a fresh Linux/coverage verdict.",
+    "No fresh throughput/capacity/RSS, live mixed-binary, subscription topology or index-rebuild qualification. Historical evidence keeps its original scope."
+  ]
+}
