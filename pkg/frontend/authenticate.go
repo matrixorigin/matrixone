@@ -6874,7 +6874,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions, *tree.ShowCcprSubscriptions, *tree.ShowPublicationCoverage,
 		*tree.ShowBackendServers, *tree.ShowStages,
-		*tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask, *tree.ShowRecoveryWindow,
+		*tree.ShowRecoveryWindow,
 		*tree.ShowSQLTasks, *tree.ShowSQLTaskRuns,
 		*tree.CheckTableStmt, *tree.ShowProfileStmt,
 		*tree.CreateExtension, *tree.LoadExtension,
@@ -6889,6 +6889,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		special = specialTagAdmin
 		canExecInRestricted = true
 	case *tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+		canExecInRestricted = true
+	case *tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
@@ -10605,6 +10610,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		case *tree.CreateSQLTask, *tree.AlterSQLTask, *tree.DropSQLTask, *tree.ExecuteSQLTask:
 			yes, err := checkSQLTaskPrivilege()
 			return yes, stats, err
+		case *tree.PauseDaemonTask, *tree.CancelDaemonTask, *tree.ResumeDaemonTask:
+			return tenant.IsAdminRole(), stats, nil
 		case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog,
 			*tree.ShowIcebergCatalogs, *tree.ShowIcebergNamespaces, *tree.ShowIcebergTables:
 			yes, err := checkIcebergCatalogPrivilege()
