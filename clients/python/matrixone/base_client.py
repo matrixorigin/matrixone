@@ -16,9 +16,7 @@
 Base client functionality for MatrixOne clients
 """
 
-from numbers import Number
-
-from numpy import bool_ as numpy_bool
+# No imports needed for this module
 
 
 class BaseMatrixOneClient:

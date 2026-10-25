@@ -13,31 +13,47 @@ import re
 from datetime import date, datetime, time
 from decimal import Decimal
 
+import numpy as np
+from sqlalchemy.dialects.mysql.base import MySQLIdentifierPreparer
+
 _NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
+# Native unquoted identifiers allow digits, dollar signs and BMP characters.
+_WORD = re.compile(r'[A-Za-z0-9_$\u0080-\uffff]+')
+_DOLLAR_TAG = re.compile(r'\$[A-Za-z0-9_\u0080-\uffff]*\$')
+
+
+def _json_scalar(value):
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    raise TypeError('Unsupported JSON parameter type: %s' % type(value).__name__)
+
+
+def connection_sql_mode(connection):
+    # Only raw SQL containing a backslash needs mode discovery. Read from the
+    # connection that will execute it; engine defaults can be stale after SET.
+    if connection.dialect.name == 'sqlite':
+        return 'NO_BACKSLASH_ESCAPES'
+    closes_with_result = getattr(connection, 'should_close_with_result', False)
+    if closes_with_result:
+        connection.should_close_with_result = False
+    try:
+        result = connection.exec_driver_sql('SELECT @@SESSION.sql_mode')
+        try:
+            return result.scalar() or ''
+        finally:
+            result.close()
+    finally:
+        if closes_with_result:
+            connection.should_close_with_result = True
 
 
 _SIMPLE_IDENTIFIER = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
-_RESERVED = {
-    'select',
-    'from',
-    'where',
-    'group',
-    'order',
-    'by',
-    'table',
-    'index',
-    'key',
-    'primary',
-    'insert',
-    'update',
-    'delete',
-    'join',
-    'limit',
-    'values',
-    'into',
-    'null',
-    'default',
-}
+# Reuse the keyword authority of the SDK's MySQL-derived dialect.
+_RESERVED = MySQLIdentifierPreparer.reserved_words
 
 
 def sql_identifier(name, qualified=False):
@@ -58,18 +74,20 @@ def sql_identifier(name, qualified=False):
 def sql_literal(value):
     if value is None:
         return 'NULL'
-    if isinstance(value, bool):
+    if isinstance(value, (bool, np.bool_)):
         return '1' if value else '0'
-    if isinstance(value, (int, float, Decimal)):
-        if isinstance(value, (float, Decimal)) and not math.isfinite(value):
-            raise ValueError('Non-finite SQL numeric parameters are unsupported')
+    if isinstance(value, (int, float, Decimal, np.integer, np.floating)):
+        if isinstance(value, (float, Decimal, np.floating)):
+            finite = np.isfinite(value) if isinstance(value, np.floating) else math.isfinite(value)
+            if not finite:
+                raise ValueError('Non-finite SQL numeric parameters are unsupported')
         return str(value)
     if isinstance(value, (bytes, bytearray, memoryview)):
         return "X'%s'" % bytes(value).hex()
     if isinstance(value, dict):
-        value = json.dumps(value)
+        value = json.dumps(value, default=_json_scalar, allow_nan=False)
     elif isinstance(value, (list, tuple)):
-        value = json.dumps(value, separators=(',', ':'))
+        value = json.dumps(value, separators=(',', ':'), default=_json_scalar, allow_nan=False)
     elif isinstance(value, (date, datetime, time)):
         value = str(value)
     if not isinstance(value, str):
@@ -81,7 +99,7 @@ def sql_literal(value):
     return "'%s'" % value.replace("'", "''")
 
 
-def substitute_parameters(sql, params):
+def substitute_parameters(sql, params, *, sql_mode=''):
     if params is None:
         return sql
     named = isinstance(params, dict)
@@ -89,15 +107,30 @@ def substitute_parameters(sql, params):
         raise TypeError('SQL parameters must be a mapping, tuple or list')
     values = iter(params) if not named else None
     used = set()
+    modes = {mode.strip().upper() for mode in sql_mode.split(',')}
     output = []
     i = 0
     while i < len(sql):
         char = sql[i]
+        if char == '$':
+            opener = _DOLLAR_TAG.match(sql, i)
+            if opener:
+                delimiter = opener.group()
+                end = sql.find('$', opener.end())
+                # MatrixOne ends the body at the first dollar, then validates
+                # its tag. Searching for a later matching delimiter differs.
+                if end < 0 or not sql.startswith(delimiter, end):
+                    raise ValueError('Unterminated or mismatched SQL dollar string')
+                end += len(delimiter)
+                output.append(sql[i:end])
+                i = end
+                continue
         if char in ("'", '"', '`'):
             start, quote = i, char
             i += 1
             while i < len(sql):
-                if sql[i] == '\\':
+                identifier = quote == '`' or (quote == '"' and 'ANSI_QUOTES' in modes)
+                if sql[i] == '\\' and not identifier and 'NO_BACKSLASH_ESCAPES' not in modes:
                     i += 2
                 elif sql[i] == quote:
                     i += 1
@@ -109,11 +142,21 @@ def substitute_parameters(sql, params):
                     i += 1
             output.append(sql[start:i])
             continue
-        if char == '#' or (sql.startswith('--', i) and (i + 2 == len(sql) or sql[i + 2].isspace())):
+        if (
+            char == '#'
+            or sql.startswith('//', i)
+            or (sql.startswith('--', i) and (i + 2 == len(sql) or sql[i + 2].isspace()))
+        ):
             end = sql.find('\n', i)
             end = len(sql) if end < 0 else end
             output.append(sql[i:end])
             i = end
+            continue
+        if sql.startswith('/*!', i):
+            # MatrixOne executes MySQL version-comment bodies. Preserve the
+            # delimiter/version bytes, but scan their SQL like the outer SQL.
+            output.append('/*!')
+            i += 3
             continue
         if sql.startswith('/*', i):
             end = sql.find('*/', i + 2)
@@ -138,6 +181,12 @@ def substitute_parameters(sql, params):
                 raise ValueError('Not enough SQL parameters') from error
             output.append(sql_literal(value))
             i += 1 if char == '?' else 2
+            continue
+        # Consume identifiers as tokens, so name$tag$ never starts a string.
+        word = _WORD.match(sql, i)
+        if word:
+            output.append(word.group())
+            i = word.end()
             continue
         output.append(char)
         i += 1

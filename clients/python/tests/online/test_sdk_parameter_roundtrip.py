@@ -233,3 +233,75 @@ async def test_native_async_mode_follows_unbound_session_hook(client, transforme
         assert routed.sync_engine.pool.checkedout() == 0
     finally:
         await routed.dispose()
+
+
+_NATIVE_TOKEN_CASES = [
+    ('SELECT ? // ? :ignored %s', (7,), (7,)),
+    ('SELECT :v // :ignored', {'v': 7}, (7,)),
+    ('SELECT ? // ?\n, ?', (7, 8), (7, 8)),
+    ("SELECT $$O'Reilly ? :ignored %s$$, ?", (7,), ("O'Reilly ? :ignored %s", 7)),
+    ("SELECT $txt$O'Reilly$txt$, :v", {'v': 7}, ("O'Reilly", 7)),
+    ('SELECT $9$? /* :ignored */$9$, ?', (7,), ('? /* :ignored */', 7)),
+    ('SELECT 1 AS name$tag$, ?', (7,), (1, 7)),
+]
+
+
+@pytest.mark.parametrize('sql,params,expected', _NATIVE_TOKEN_CASES)
+@pytest.mark.parametrize('surface', ['client', 'embedded_session', 'exported_session'])
+def test_native_public_token_boundaries(client, surface, sql, params, expected):
+    from matrixone.client import Session as ClientSession
+    from matrixone.session import Session as ExportedSession
+
+    if surface == 'client':
+        assert client.execute(sql, params).rows == [expected]
+    else:
+        cls = ClientSession if surface == 'embedded_session' else ExportedSession
+        with cls(bind=client._engine, client=client) as session:
+            assert tuple(session.execute(sql, params).one()) == expected
+
+
+@pytest.mark.asyncio
+async def test_async_native_public_token_boundaries(client):
+    c = AsyncClient(logger=Mock())
+    await c.connect(
+        host=os.environ.get('MO_HOST', '127.0.0.1'),
+        port=int(os.environ.get('MO_PORT', '6001')),
+        user=os.environ.get('MO_USER', 'root'),
+        password=os.environ.get('MO_PASSWORD', '111'),
+        database=os.environ.get('MO_DATABASE', 'mo_sdk_regression'),
+        on_connect=[],
+    )
+    try:
+        for sql, params, expected in _NATIVE_TOKEN_CASES:
+            assert (await c.execute(sql, params)).rows == [expected]
+            async with c.session() as session:
+                assert tuple((await session.execute(sql, params)).one()) == expected
+        assert c._engine.sync_engine.pool.checkedout() == 0
+    finally:
+        await c.disconnect()
+
+
+@pytest.mark.parametrize('keyword', ['window', 'integer', 'rows'])
+def test_native_keyword_builders(client, keyword):
+    table = 'sdk_keyword_' + uuid.uuid4().hex[:12]
+    client.execute('CREATE TABLE ' + table + '(`' + keyword + '` INT)')
+    try:
+        client.insert(table, {keyword: 1})
+        client.batch_insert(table, [{keyword: 2}])
+        client.vector_ops.insert(table, {keyword: 3})
+        assert client.execute('SELECT `' + keyword + '` FROM ' + table + ' ORDER BY 1').rows == [(1,), (2,), (3,)]
+    finally:
+        client.execute('DROP TABLE ' + table)
+
+
+@pytest.mark.parametrize('sql', ['SELECT $tag$x$other$', 'SELECT $$unterminated'])
+def test_native_invalid_dollar_controls_and_pool_reuse(client, sql):
+    from matrixone.exceptions import QueryError
+
+    # params=None leaves the malformed SQL to the actual server scanner.
+    with pytest.raises(QueryError):
+        client.execute(sql)
+    with pytest.raises(QueryError, match='SQL dollar string'):
+        client.execute(sql, ())
+    assert client._engine.pool.checkedout() == 0
+    assert client.execute('SELECT ?', (9,)).rows == [(9,)]

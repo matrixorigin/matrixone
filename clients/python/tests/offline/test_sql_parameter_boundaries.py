@@ -4,6 +4,7 @@
 from datetime import date
 from decimal import Decimal
 
+import numpy as np
 import pytest
 
 from matrixone._sql_literals import sql_literal, substitute_parameters
@@ -79,6 +80,35 @@ def test_typed_parameters(value, expected):
     assert sql_literal(value) == expected
 
 
+@pytest.mark.parametrize(
+    'value,expected',
+    [
+        (np.int8(-3), '-3'),
+        (np.int64(2**63 - 1), '9223372036854775807'),
+        (np.uint64(2**64 - 1), '18446744073709551615'),
+        (np.float16(1.25), '1.25'),
+        (np.float32(1.25), '1.25'),
+        (np.float64(1.25), '1.25'),
+        (np.bool_(True), '1'),
+        (np.bool_(False), '0'),
+    ],
+)
+def test_numpy_scalars_preserve_sql_types_across_builders(value, expected):
+    assert sql_literal(value) == expected
+    assert substitute_parameters('SELECT ?', (value,)) == 'SELECT ' + expected
+    builder = BaseMatrixOneClient()
+    expected_insert = 'INSERT INTO t (v) VALUES (' + expected + ')'
+    assert builder._build_insert_sql('t', {'v': value}) == expected_insert
+    assert builder._build_batch_insert_sql('t', [{'v': value}]) == expected_insert
+    assert _VectorManagerBase._build_insert_sql('t', {'v': value}) == expected_insert
+
+
+@pytest.mark.parametrize('value', [np.float16('nan'), np.float32('inf'), np.float64('-inf')])
+def test_nonfinite_numpy_scalars_rejected_before_write(value):
+    with pytest.raises(ValueError, match='Non-finite'):
+        sql_literal(value)
+
+
 @pytest.mark.parametrize('value', [float('nan'), float('inf'), Decimal('NaN'), object()])
 def test_unsupported_parameters_fail(value):
     with pytest.raises((TypeError, ValueError)):
@@ -103,3 +133,45 @@ def test_legacy_identifiers_cannot_change_statement_structure():
     assert builder._build_insert_sql('t', {'select': 1}) == 'INSERT INTO t (`select`) VALUES (1)'
     with pytest.raises(ValueError):
         builder._build_insert_sql('bad\x00name', {'v': 1})
+
+
+@pytest.mark.parametrize(
+    'sql,params,expected',
+    [
+        ('SELECT ? // ? :ignored %s', (7,), 'SELECT 7 // ? :ignored %s'),
+        ('SELECT :v // :ignored', {'v': 7}, 'SELECT 7 // :ignored'),
+        ('SELECT ? // ?\n, ?', (7, 8), 'SELECT 7 // ?\n, 8'),
+        ('SELECT :v // :ignored\n, :next', {'v': 7, 'next': 8}, 'SELECT 7 // :ignored\n, 8'),
+        ("SELECT $$O'Reilly ? :ignored %s$$, ?", (7,), "SELECT $$O'Reilly ? :ignored %s$$, 7"),
+        ("SELECT $txt$O'Reilly$txt$, :v", {'v': 7}, "SELECT $txt$O'Reilly$txt$, 7"),
+        ('SELECT $9$? /* :ignored */$9$, ?', (7,), 'SELECT $9$? /* :ignored */$9$, 7'),
+        ('SELECT $中文$? // :ignored$中文$, :v', {'v': 7}, 'SELECT $中文$? // :ignored$中文$, 7'),
+        ('SELECT $$a\\b$$, ?', (7,), 'SELECT $$a\\b$$, 7'),
+        ('SELECT 1 AS name$tag$, ?', (7,), 'SELECT 1 AS name$tag$, 7'),
+        ('SELECT 1 AS name$$, :v', {'v': 7}, 'SELECT 1 AS name$$, 7'),
+        ('SELECT $name, ?', (7,), 'SELECT $name, 7'),
+        ("SELECT '//', ?", (7,), "SELECT '//', 7"),
+        ('SELECT /*!50000 $$?$$, ? */', (7,), 'SELECT /*!50000 $$?$$, 7 */'),
+    ],
+)
+def test_native_comment_and_dollar_token_boundaries(sql, params, expected):
+    assert substitute_parameters(sql, params) == expected
+
+
+@pytest.mark.parametrize(
+    'sql',
+    ['SELECT $$open, ?', 'SELECT $tag$open$other$, ?', 'SELECT $Tag$x$tag$, ?', 'SELECT $$first$wrong$ trailing$$, ?'],
+)
+def test_invalid_dollar_strings_do_not_search_past_first_dollar(sql):
+    with pytest.raises(ValueError, match='SQL dollar string'):
+        substitute_parameters(sql, (7,))
+
+
+@pytest.mark.parametrize('keyword', ['window', 'WINDOW', 'integer', 'rank', 'rows', 'constraint', 'over'])
+def test_shared_builders_quote_mysql_keywords(keyword):
+    row = {keyword: 7}
+    expected = 'INSERT INTO db.t (`%s`) VALUES (7)' % keyword
+    client = BaseMatrixOneClient()
+    assert client._build_insert_sql('db.t', row) == expected
+    assert client._build_batch_insert_sql('db.t', [row]) == expected
+    assert _VectorManagerBase._build_insert_sql('db.t', row) == expected

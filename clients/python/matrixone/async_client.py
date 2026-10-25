@@ -35,17 +35,13 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from ._utils import discard_unrestored_connection, is_non_transactional_statement
 from .account import AsyncAccountManager
-from .fulltext_manager import AsyncFulltextIndexManager
-from .metadata import AsyncMetadataManager
-from .session import AsyncSession
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .branch import AsyncBranchManager
-from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
-from .load_data import AsyncLoadDataManager
-from .stage import AsyncStageManager
 from .cdc import AsyncCDCManager
 from .clone import BaseCloneManager
+from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import (
     ConnectionError,
     MoCtlError,
@@ -53,11 +49,15 @@ from .exceptions import (
     RestoreError,
     SnapshotError,
 )
+from .fulltext_manager import AsyncFulltextIndexManager
+from .load_data import AsyncLoadDataManager
 from .logger import MatrixOneLogger, create_default_logger
-from ._utils import discard_unrestored_connection, is_non_transactional_statement
+from .metadata import AsyncMetadataManager
 from .pitr import AsyncPitrManager
 from .pubsub import AsyncPubSubManager
+from .session import AsyncSession
 from .snapshot import Snapshot, SnapshotLevel
+from .stage import AsyncStageManager
 
 
 class AsyncResultSet:
@@ -150,11 +150,7 @@ class AsyncSnapshotManager:
         """Get snapshot asynchronously"""
         # Use mo_catalog.mo_snapshots table like sync client
         lookup_name = name
-        if (
-            len(lookup_name) >= 2
-            and lookup_name[0] in ('`', '"')
-            and lookup_name[-1] == lookup_name[0]
-        ):
+        if len(lookup_name) >= 2 and lookup_name[0] in ('`', '"') and lookup_name[-1] == lookup_name[0]:
             quote = lookup_name[0]
             lookup_name = lookup_name[1:-1].replace(quote * 2, quote)
         # Let MatrixOne apply the same Go Unicode tables used by its parser;
@@ -1044,7 +1040,9 @@ class AsyncClient(BaseMatrixOneClient):
 
         return self
 
-    async def _execute_with_logging(self, connection, sql: str, context: str = "Async SQL execution", log_mode: str = None):
+    async def _execute_with_logging(
+        self, connection, sql: str, context: str = "Async SQL execution", log_mode: str = None
+    ):
         """
         Execute SQL asynchronously with proper logging through the client's logger.
 
@@ -1105,6 +1103,7 @@ class AsyncClient(BaseMatrixOneClient):
         reconciled before retrying; cancellation does not prove rollback.
         """
         import asyncio
+
         from ._connection_options import positive_timeout
 
         timeout = positive_timeout(self.query_timeout, 'query_timeout')
@@ -1411,12 +1410,13 @@ class AsyncClient(BaseMatrixOneClient):
                         return async_result
 
             # String SQL - original implementation
-            final_sql = self._substitute_parameters(sql_or_stmt, params)
+            mode_sensitive = params is not None and '\\' in sql_or_stmt
+            final_sql = None if mode_sensitive else self._substitute_parameters(sql_or_stmt, params)
 
             # MERGE/PICK require autocommit outside explicit sessions. Change
             # only this checkout, restoring its baseline before pool reuse.
             # Ordinary SQL retains the engine.begin() transaction path.
-            non_transactional = is_non_transactional_statement(final_sql)
+            non_transactional = is_non_transactional_statement(sql_or_stmt)
             async with self._engine.connect() if non_transactional else self._engine.begin() as conn:
                 restore_autocommit = False
                 prev_autocommit = None
@@ -1426,6 +1426,11 @@ class AsyncClient(BaseMatrixOneClient):
                         prev_autocommit = prev_autocommit.decode()
                 execution_failed = False
                 try:
+                    if mode_sensitive:
+                        from ._sql_literals import connection_sql_mode
+
+                        mode = await conn.run_sync(connection_sql_mode)
+                        final_sql = self._substitute_parameters(sql_or_stmt, params, sql_mode=mode)
                     if non_transactional and str(prev_autocommit).strip().lower() not in ("1", "true", "on"):
                         # Record restoration responsibility BEFORE flipping, so a
                         # SET whose result read dies after the server applied it
@@ -1484,7 +1489,9 @@ class AsyncClient(BaseMatrixOneClient):
             # Log error FIRST, before any error processing
             # Wrap in try-except to ensure logging failure doesn't hide the real error
             try:
-                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                sql_display = (
+                    sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                )
                 self.logger.log_query(sql_display, execution_time, success=False)
                 self.logger.log_error(e, context="Async query execution")
             except Exception as log_err:
@@ -1497,13 +1504,15 @@ class AsyncClient(BaseMatrixOneClient):
 
             raise _classify_db_error(e, sql_or_stmt) from None
 
-    def _substitute_parameters(self, sql: str, params=None) -> str:
+    def _substitute_parameters(self, sql: str, params=None, *, sql_mode='') -> str:
         """Render legacy parameters outside SQL literals, identifiers and comments."""
         from ._sql_literals import substitute_parameters
 
-        return substitute_parameters(sql, params)
+        return substitute_parameters(sql, params, sql_mode=sql_mode)
 
-    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
+    def _build_login_info(
+        self, user: str, account: Optional[str] = None, role: Optional[str] = None
+    ) -> tuple[str, dict]:
         """
         Build final login info based on user parameter and optional account/role
 
@@ -2436,7 +2445,9 @@ class AsyncClient(BaseMatrixOneClient):
         await self.execute(sql)
         return self
 
-    async def create_table_with_index(self, table_name: str, columns: dict, indexes: list = None, **kwargs) -> "AsyncClient":
+    async def create_table_with_index(
+        self, table_name: str, columns: dict, indexes: list = None, **kwargs
+    ) -> "AsyncClient":
         """
             Create a table with indexes asynchronously
 

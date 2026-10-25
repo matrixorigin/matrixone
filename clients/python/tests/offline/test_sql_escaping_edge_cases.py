@@ -466,8 +466,8 @@ class TestSQLEscapingEdgeCases:
             'missing': None,
         }
         assert BaseMatrixOneClient()._build_batch_insert_sql('t', [row]) == (
-            'INSERT INTO t (integer, floating, precise, flag, numpy_flag, text, quoted, json, vector, missing) '
-            'VALUES (7, 1.0, 12345678901234567890.125, True, False, '
+            'INSERT INTO t (`integer`, floating, precise, flag, numpy_flag, text, quoted, json, vector, missing) '
+            'VALUES (7, 1.0, 12345678901234567890.125, 1, 0, '
             "'1.0', 'O''Brien', '{\"name\": \"O''Brien\"}', '[1,2]', NULL)"
         )
 

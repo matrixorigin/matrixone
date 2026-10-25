@@ -20,12 +20,12 @@ shared SQL generation logic to eliminate code duplication.
 """
 
 from __future__ import annotations
+
 from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 if TYPE_CHECKING:
     from .sqlalchemy_ext import VectorOpType
     from .ivf_rank import IVFRankMode
-
 
 from ._utils import get_table_name as _extract_table_name
 from .exceptions import QueryError
@@ -79,7 +79,9 @@ class _VectorManagerBase:
         if op_type is None:
             op_type = VectorOpType.VECTOR_L2_OPS
 
-        index = HnswVectorIndex(name, column, m=m, ef_construction=ef_construction, ef_search=ef_search, op_type=op_type)
+        index = HnswVectorIndex(
+            name, column, m=m, ef_construction=ef_construction, ef_search=ef_search, op_type=op_type
+        )
         return index.create_sql(table_name)
 
     @staticmethod
