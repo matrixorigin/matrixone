@@ -27,8 +27,9 @@ import (
 
 type stubEngine struct {
 	engine.Engine
-	dbs   map[string]*stubDatabase
-	dbErr error
+	dbs        map[string]*stubDatabase
+	dbErr      error
+	databaseFn func(context.Context, string, client.TxnOperator) (engine.Database, error)
 }
 
 func newStubEngine() *stubEngine {
@@ -42,6 +43,9 @@ func newStubEngine() *stubEngine {
 }
 
 func (e *stubEngine) Database(ctx context.Context, name string, op client.TxnOperator) (engine.Database, error) {
+	if e.databaseFn != nil {
+		return e.databaseFn(ctx, name, op)
+	}
 	if e.dbErr != nil {
 		return nil, e.dbErr
 	}

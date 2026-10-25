@@ -166,8 +166,9 @@ const (
 	MORPCVersion128    int64 = 128 // category-preserving mixed JSON/numeric comparisons
 	MORPCVersion129    int64 = 129 // selected JSON ELT and opaque text expression execution
 	MORPCVersion130    int64 = 130 // incomplete temporal string overloads and rejection diagnostics
-	MORPCVersion131    int64 = 131 // first remote fragment workspace adoption intake build (issue #25590); 114-130 were taken on main, admission renumbered from the original 114
-	MORPCLatestVersion       = MORPCVersion131
+	MORPCVersion131    int64 = 131 // exact weighted percentile aggregate remote dispatch
+	MORPCVersion132    int64 = 132 // first remote fragment workspace adoption intake build (issue #25590); 114-131 were taken on main, admission renumbered from the original 114
+	MORPCLatestVersion       = MORPCVersion132
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

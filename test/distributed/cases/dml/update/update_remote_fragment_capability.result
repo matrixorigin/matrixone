@@ -68,7 +68,7 @@ as coordinator_pinned_129;
 begin;
 insert into rfc_sentinel values (1, 'sentinel-p2a');
 update rfc_t set v = v + 1;
-not supported: remote write fragments require coordinator protocol capability 131 or newer (coordinator advertised 129)
+not supported: remote write fragments require coordinator protocol capability 132 or newer (coordinator advertised 129)
 select note from rfc_sentinel where k = 1;
 ➤ note[12,32,0]  𝄀
 sentinel-p2a
@@ -101,7 +101,7 @@ select count(*) from rfc_t where v = 1;
 begin;
 insert into rfc_sentinel values (2, 'sentinel-p2b');
 update rfc_t set v = v + 1;
-not supported: remote write fragments require coordinator protocol capability 131 or newer (coordinator advertised 129)
+not supported: remote write fragments require coordinator protocol capability 132 or newer (coordinator advertised 129)
 rollback;
 select count(*) from rfc_sentinel;
 ➤ count(*)[-5,64,0]  𝄀
@@ -121,7 +121,7 @@ concat((select coord_id from rfc_coord_capture), ':', (select coord_v from rfc_c
 ➤ mo_ctl(cn, SetProtocolVersion, concat((select coord_id from rfc_coord_capture), :, (select coord_v from rfc_coord_capture)))[12,65535,0]  𝄀
 {
   "method": "SETPROTOCOLVERSION",
-  "result": "dd1dccb4-4d3c-41f8-b482-5251dc7a51c1:131"
+  "result": "dd1dccb4-4d3c-41f8-b482-5251dc7a51c1:132"
 }
 
 select (locate(concat((select coord_id from rfc_coord_capture), ':', (select coord_v from rfc_coord_capture)),

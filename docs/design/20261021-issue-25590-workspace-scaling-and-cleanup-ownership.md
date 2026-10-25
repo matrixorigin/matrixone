@@ -3425,3 +3425,87 @@ guard-only prune the round-13 decoupling requires), and production
 transactions pay one small allocation at construction. No r11- or
 r12-approved decision is altered, so the deviation rule opens no
 design re-review.
+
+## 10 design review record - round 42 (merge follow-up): intake-build V_adopt renumbers to MORPCVersion132 after main shipped 131
+
+Context. Main advanced from the PR's merge-followed base `dae02bbaaa`
+to `9a7e12a933` (14 commits) and the PR became CONFLICTING again in
+exactly one git-level place: `pkg/defines/const.go`. Main's #31000
+(`9a7e12a933`, quantileExactWeighted exact weighted percentile) shipped
+`MORPCVersion131` - the number round 39 had renumbered this PR's
+V_adopt to after main's #30311 took 130. Two claims on one protocol
+number is the same external condition that forced r12's and round 39's
+renumberings.
+
+Decision. Keep main's `MORPCVersion131` untouched (main's own quantile
+gate references it through `pkg/sql/compile/remoterun.go`,
+`pkg/sql/compile/compile.go` and its protocol test, files this PR does
+not own) and renumber this PR's first-adoption intake build to
+`MORPCVersion132`; `MORPCLatestVersion` follows, and the const's
+comment now records "114-131 were taken on main, admission renumbered
+from the original 114". This is r12's own renumbering rule applied
+once more under the unchanged r11 D3'' fail-closed contract - an
+externally forced identifier-slot move, not a decision change: the
+refusal still compares only the REQUEST-carried advertisement against
+the intake line, the absent/zero default still fails closed, the
+statement-only-default public failure contract and the
+`mo_rollback_txn_on_error` opt-in are untouched, and the additive
+protobuf keeps field 20 (main touched no `.proto`/`pb` file). The
+mixed-version partition is intact: main's shipped latest (131, the
+quantile build) and every older main build sit below the intake line
+and are refused for remote-write fragments, plain read fragments stay
+ungated, and the merged build (latest 132) satisfies main's >= 131
+quantile gate as well, so the two features compose with no
+interaction.
+
+Resolution form and rename scope. The resolution is a true merge
+commit: no rebase, no history rewrite, no force push - the reviewed
+head `a90f71ed77` remains the first parent alongside main
+`9a7e12a933`, and every previously reviewed ancestor is preserved.
+Renames stay inside this PR's own file set: the intake constant in
+`pkg/sql/compile/remote_object_admission.go`, its r11/r29 unit pins,
+and the D4'' BVT expected outputs that embed the printed text
+("capability 132 or newer (coordinator advertised 129)" and the
+restore echo `:132`); the D4'' case's coordinator pin stays the
+literal 129 - a real pre-adoption main build. The r11 unit's
+"main's shipped latest" role rows re-pin 130 -> 131 (main's new
+shipped latest) with 130 kept as an additional older-main-build row
+in both the threshold and refusal positions, the per-request
+settle's below leg follows the same translation, and the
+advertisement walker pairs the fresh 132 against main's 131.
+
+Validation (repository CGo wrapper `mo-cgo-test`; unchanged-input
+evidence reuse per the validation-evidence contract):
+
+- The compile-package admission family - every `TestIssue25590` root
+  in `pkg/sql/compile`: the r11 threshold/refusal/advertisement/
+  receiver/settle/run-case-contract tests plus the r29 admission
+  matrix, fail-closed metadata modes, receive-loops, the admission
+  registry and the r31 transfer test (12 roots, 40 run entries
+  including subtests, enumerated from a `-v` run) - exits 0 on the
+  merged tree (`ok`, exit 0).
+- `go vet` over `./pkg/defines/` and `./pkg/sql/compile/` (with the
+  repository CGo include paths) exits 0; `gofmt -l` is clean over
+  every changed file. No synchronization-bearing change exists in
+  this round (a constant renumber plus test/literal pins), so the
+  race evidence of rounds 35-41 remains valid; the `-race` evidence
+  is reused unchanged.
+- The merge changes no line in `pkg/vm/engine/disttae`,
+  `pkg/sql/colexec/multi_update`, `pkg/sql/colexec/insert`,
+  `pkg/sql/colexec/deletion`, `pkg/objectio/ioutil` or
+  `pkg/vm/engine/test` (verified by `git diff a90f71ed77 -- <pkg>`:
+  empty for each), so the round-41 green families - the full disttae
+  `TestIssue25590|TestGCFiles` family, the focused `-race` set and
+  the external `pkg/vm/engine/test` engine-level suite on the exact
+  same content - remain valid evidence for the merged tree.
+- The multi-CN D4''/forward-compat BVT legs remain for CI; their
+  expected outcomes were re-derived from the same production format
+  strings the unit family pins, and only the two printed version
+  numbers changed.
+
+Decision: round 42 is an implementation-level reassignment of the
+intake-build identifier under r12's own recorded renumbering rule (as
+round 39 applied it), not an r11/r12 decision change; the deviation
+rule opens no design re-review, and the renumbered merge head is
+covered by the re-run unit families above plus the pending review of
+the new head.
