@@ -23,14 +23,17 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 )
@@ -359,5 +362,417 @@ func TestOutfileHeaderPrefixCollisionRejected(t *testing.T) {
 		ep := newCfg("n", true)
 		require.NoError(t, validateOutfileHeaderPrefix(ep.ctx, ep, &MysqlResultSet{}))
 		require.NoError(t, validateOutfileHeaderPrefix(ep.ctx, ep, nil))
+	})
+}
+
+// TestOutfileExactBackslashNRejectedWithCustomEscape guards the LOAD-side
+// NULL-token trap: LOAD always matches `\N` against its Null token list
+// (even inside quotes, quotedNullIsText is false), so a literal `\N` string
+// only round-trips when the default backslash escape rewrites it to `\\N`.
+// Any other FIELDS ESCAPED BY setting must reject the value up front instead
+// of silently importing it as SQL NULL. Genuine NULLs are unaffected: they
+// are written by formatOutputNull and are meant to reload as NULL.
+func TestOutfileExactBackslashNRejectedWithCustomEscape(t *testing.T) {
+	const wantErr = "cannot round-trip unless FIELDS ESCAPED BY is the default"
+	newGuardCfg := func(escaped, enclosed byte) *ExportConfig {
+		ep := newOutfileExportConfig(tree.NewFields(",", false, enclosed, escaped), nil, "\n")
+		ep.ctx = context.Background()
+		return ep
+	}
+
+	t.Run("custom escape unenclosed", func(t *testing.T) {
+		var buf bytes.Buffer
+		err := formatOutputString(newGuardCfg('#', 0), []byte(`\N`), []byte("\n"), 0, false, true, &buf)
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("custom escape enclosed still rejected", func(t *testing.T) {
+		// LOAD matches the NULL token inside quotes too.
+		var buf bytes.Buffer
+		err := formatOutputString(newGuardCfg('#', '"'), []byte(`\N`), []byte("\n"), '"', true, true, &buf)
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("escaping disabled rejected", func(t *testing.T) {
+		var buf bytes.Buffer
+		err := formatOutputString(newGuardCfg(0, 0), []byte(`\N`), []byte("\n"), 0, false, true, &buf)
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("only the exact token is rejected", func(t *testing.T) {
+		var buf bytes.Buffer
+		require.NoError(t, formatOutputString(newGuardCfg('#', 0), []byte(`\Nx`), []byte("\n"), 0, false, true, &buf))
+		require.NoError(t, formatOutputString(newGuardCfg('#', 0), []byte(`x\N`), []byte("\n"), 0, false, true, &buf))
+		require.NoError(t, formatOutputString(newGuardCfg('#', 0), []byte(`\n`), []byte("\n"), 0, false, true, &buf))
+	})
+
+	t.Run("default escape rewrites the literal and reloads as text", func(t *testing.T) {
+		ep := newGuardCfg('\\', 0)
+		var buf bytes.Buffer
+		require.NoError(t, formatOutputString(ep, []byte(`\N`), []byte("\n"), 0, false, true, &buf))
+		require.Equal(t, `\\N`+"\n", buf.String())
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEscapedBy: "\\", LinesTerminatedBy: "\n",
+			Null: []string{`\N`},
+		}, bytes.NewReader(buf.Bytes()), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Len(t, row, 1)
+		require.False(t, row[0].IsNull, "escaped literal must not collapse into NULL")
+		require.Equal(t, `\N`, row[0].Val)
+	})
+
+	t.Run("genuine NULLs export under a custom escape", func(t *testing.T) {
+		// The NULL marker itself is never a data value, so the guard must not
+		// block it; LOAD reads it back as SQL NULL as intended.
+		ep := newGuardCfg('#', 0)
+		var buf bytes.Buffer
+		require.NoError(t, formatOutputNull(ep, []byte("\n"), 0, &buf))
+		require.Equal(t, "\\N\n", buf.String())
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEscapedBy: "#", LinesTerminatedBy: "\n",
+			Null: []string{`\N`},
+		}, bytes.NewReader(buf.Bytes()), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Len(t, row, 1)
+		require.True(t, row[0].IsNull)
+	})
+
+	t.Run("batch writer rejects literal under custom escape", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Zero(t, mp.CurrNB()) }()
+		bat := newIdNameBatch(t, mp, `\N`)
+		defer bat.Clean(mp)
+		ep := selectIntoOutfileConfig(",", 0, '#', "", "\n")
+		ep.ctx = context.Background()
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+		result := <-ch
+		require.ErrorContains(t, result.err, wantErr)
+	})
+
+	t.Run("batch writer default escape round-trips literal and NULL", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Zero(t, mp.CurrNB()) }()
+		bat := newIdNameBatch(t, mp, `\N`, nil)
+		defer bat.Clean(mp)
+		ep := selectIntoOutfileConfig(",", 0, '\\', "", "\n")
+		ep.ctx = context.Background()
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+		result := <-ch
+		require.NoError(t, result.err)
+		require.Equal(t, "1,\\\\N\n2,\\N\n", string(result.writeByte))
+	})
+}
+
+// TestOutfileTrailingCRLastColumnRejectedWithoutEscape guards the reader-side
+// CR strip: LOAD's parser removes a trailing CR from the last column's record
+// under '\n' termination, and it does so on the record buffer AFTER quotes
+// are removed — so with escaping disabled an enclosure does NOT protect a
+// CR-final value either. The writer must reject it (the externalwrite writer
+// has the same rule); any escape byte protects the value.
+func TestOutfileTrailingCRLastColumnRejectedWithoutEscape(t *testing.T) {
+	const wantErr = "a value ending in CR in the last column cannot round-trip"
+	newGuardCfg := func(escaped, enclosed byte) *ExportConfig {
+		ep := newOutfileExportConfig(tree.NewFields(",", false, enclosed, escaped), nil, "\n")
+		ep.ctx = context.Background()
+		return ep
+	}
+
+	t.Run("last column unenclosed without escape", func(t *testing.T) {
+		var buf bytes.Buffer
+		err := formatOutputString(newGuardCfg(0, 0), []byte("a\r"), []byte("\n"), 0, false, true, &buf)
+		require.ErrorContains(t, err, wantErr)
+	})
+	t.Run("enclosure does not protect the CR", func(t *testing.T) {
+		// The reader's strip runs after unquoting: even a quoted `"a\r"`
+		// record loses its CR, so the writer must reject both spellings.
+		var buf bytes.Buffer
+		require.ErrorContains(t, formatOutputString(newGuardCfg(0, '"'), []byte("a\r"), []byte("\n"), '"', true, true, &buf), wantErr)
+		require.ErrorContains(t, formatOutputString(newGuardCfg(0, '"'), []byte("a\r"), []byte("\n"), '"', false, true, &buf), wantErr)
+
+		// Document the reader behavior that forces the writer's hand.
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEnclosedBy: `"`, FieldsEscapedBy: "",
+			LinesTerminatedBy: "\n", Null: []string{`\N`},
+		}, bytes.NewReader([]byte("\"a\r\"\n")), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, "a", row[0].Val, "LOAD strips the last column's trailing CR even inside quotes")
+	})
+	t.Run("non-last column keeps its CR", func(t *testing.T) {
+		// The field terminator follows, so the reader's CR strip never sees it.
+		var buf bytes.Buffer
+		require.NoError(t, formatOutputString(newGuardCfg(0, 0), []byte("a\r"), []byte(","), 0, false, false, &buf))
+		require.Equal(t, "a\r,", buf.String())
+	})
+	t.Run("custom escape protects the CR", func(t *testing.T) {
+		ep := newGuardCfg('#', 0)
+		var buf bytes.Buffer
+		require.NoError(t, formatOutputString(ep, []byte("a\r"), []byte("\n"), 0, false, true, &buf))
+		require.Equal(t, "a#r\n", buf.String())
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEscapedBy: "#", LinesTerminatedBy: "\n",
+			Null: []string{`\N`},
+		}, bytes.NewReader(buf.Bytes()), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, "a\r", row[0].Val, "escaped CR must reload intact")
+	})
+	t.Run("default escape protects the CR", func(t *testing.T) {
+		ep := newGuardCfg('\\', 0)
+		var buf bytes.Buffer
+		require.NoError(t, formatOutputString(ep, []byte("a\r"), []byte("\n"), 0, false, true, &buf))
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEscapedBy: "\\", LinesTerminatedBy: "\n",
+			Null: []string{`\N`},
+		}, bytes.NewReader(buf.Bytes()), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, "a\r", row[0].Val)
+	})
+
+	t.Run("batch writer rejects CR-final last column without escape", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Zero(t, mp.CurrNB()) }()
+		bat := newIdNameBatch(t, mp, "a\r")
+		defer bat.Clean(mp)
+		ep := selectIntoOutfileConfig(",", 0, 0, "", "\n")
+		ep.ctx = context.Background()
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+		result := <-ch
+		require.ErrorContains(t, result.err, wantErr)
+	})
+
+	t.Run("result-set writer only flags the last column", func(t *testing.T) {
+		ep := selectIntoOutfileConfig(",", 0, 0, "", "\n")
+		ep.ctx = context.Background()
+		mrs := &MysqlResultSet{}
+		for _, name := range []string{"a", "b"} {
+			col := &MysqlColumn{}
+			col.SetName(name)
+			col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+			mrs.AddColumn(col)
+		}
+		ep.mrs = mrs
+		var out bytes.Buffer
+		old := Write
+		Write = func(_ *ExportConfig, b []byte) (int, error) { return out.Write(b) }
+		defer func() { Write = old }()
+
+		// CR in a non-last column followed by a plain last column: allowed.
+		ep.mrs.Data = [][]any{{"a\r", "x"}}
+		require.NoError(t, exportDataFromResultSetToCSVFile(ep))
+		// The very same value in the last column must be rejected.
+		ep.mrs.Data = [][]any{{"x", "a\r"}}
+		require.ErrorContains(t, exportDataFromResultSetToCSVFile(ep), wantErr)
+	})
+}
+
+// TestConstructByteVectorTypesErrorPlumbing sweeps every vector type the CSV
+// batch writer can emit: the mechanical rewrite routing each arm through the
+// first-error closure must keep writing rows unchanged, and a guard failure
+// on any column must abort the batch with that error.
+func TestConstructByteVectorTypesErrorPlumbing(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	t.Run("all vector types convert without error", func(t *testing.T) {
+		jsonBytes, err := types.EncodeJson(bytejson.Null)
+		require.NoError(t, err)
+		fixed := func(typ types.Type, v any) *vector.Vector {
+			vec := vector.NewOffHeapVecWithType(typ)
+			switch val := v.(type) {
+			case bool:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case int8:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case int16:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case int32:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case int64:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case uint8:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case uint16:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case uint32:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case uint64:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case float32:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case float64:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case types.Date:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case types.Datetime:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case types.Time:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case types.Timestamp:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case types.MoYear:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case types.Decimal64:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case types.Decimal128:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case types.Decimal256:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case types.Uuid:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case types.Rowid:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case types.Blockid:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			case types.Enum:
+				require.NoError(t, vector.AppendFixed(vec, val, false, mp))
+			default:
+				t.Fatalf("unhandled fixed type %T", v)
+			}
+			return vec
+		}
+		bytemap := func(typ types.Type, b []byte) *vector.Vector {
+			vec := vector.NewOffHeapVecWithType(typ)
+			require.NoError(t, vector.AppendBytes(vec, b, false, mp))
+			return vec
+		}
+		geomBytes := geo.WriteWKB(geo.Point{X: 1.5, Y: -2.5})
+		bat := &batch.Batch{}
+		bat.Vecs = []*vector.Vector{
+			fixed(types.New(types.T_bool, 0, 0), true),
+			fixed(types.New(types.T_bool, 0, 0), false),
+			fixed(types.New(types.T_int8, 0, 0), int8(-8)),
+			fixed(types.New(types.T_int16, 0, 0), int16(-16)),
+			fixed(types.New(types.T_int32, 0, 0), int32(-32)),
+			fixed(types.New(types.T_int64, 0, 0), int64(-64)),
+			fixed(types.New(types.T_uint8, 0, 0), uint8(8)),
+			fixed(types.New(types.T_uint16, 0, 0), uint16(16)),
+			fixed(types.New(types.T_uint32, 0, 0), uint32(32)),
+			fixed(types.New(types.T_uint64, 0, 0), uint64(64)),
+			// width 0 selects the general float format; a scale selects the fixed one
+			fixed(types.New(types.T_float32, 0, 0), float32(1.5)),
+			fixed(types.New(types.T_float32, 32, 2), float32(1.5)),
+			fixed(types.New(types.T_float64, 0, 0), float64(1.5)),
+			fixed(types.New(types.T_float64, 64, 2), float64(1.5)),
+			fixed(types.New(types.T_bit, 16, 0), uint64(0x1234)),
+			bytemap(types.New(types.T_varchar, 65535, 0), []byte("x,y")),
+			bytemap(types.New(types.T_char, 8, 0), []byte("c")),
+			bytemap(types.New(types.T_blob, 0, 0), []byte{0, 1, 2}),
+			bytemap(types.T_json.ToType(), jsonBytes),
+			bytemap(types.T_geometry.ToType(), geomBytes),
+			bytemap(types.New(types.T_array_float32, 0, 0), types.ArrayToBytes([]float32{1, 2})),
+			bytemap(types.New(types.T_array_float64, 0, 0), types.ArrayToBytes([]float64{1, 2})),
+			bytemap(types.New(types.T_array_bf16, 0, 0), types.ArrayToBytes([]types.BF16{1})),
+			bytemap(types.New(types.T_array_float16, 0, 0), types.ArrayToBytes([]types.Float16{1})),
+			bytemap(types.New(types.T_array_int8, 0, 0), types.ArrayToBytes([]int8{1, 2})),
+			bytemap(types.New(types.T_array_uint8, 0, 0), types.ArrayToBytes([]uint8{1, 2})),
+			fixed(types.New(types.T_date, 0, 0), types.Date(744869)),
+			fixed(types.New(types.T_datetime, 26, 2), types.Datetime(63442272000000)),
+			fixed(types.New(types.T_time, 10, 0), types.Time(37230000000)),
+			fixed(types.New(types.T_timestamp, 26, 0), types.Timestamp(1672531200000000)),
+			fixed(types.New(types.T_year, 0, 0), types.MoYear(2024)),
+			fixed(types.New(types.T_decimal64, 18, 2), types.Decimal64(12345)),
+			fixed(types.New(types.T_decimal128, 38, 2), types.Decimal128{B0_63: 12345}),
+			fixed(types.New(types.T_decimal256, 76, 2), types.Decimal256{B0_63: 1}),
+			fixed(types.T_uuid.ToType(), types.Uuid{1}),
+			fixed(types.T_Rowid.ToType(), types.Rowid{1}),
+			fixed(types.T_Blockid.ToType(), types.Blockid{1}),
+			fixed(types.New(types.T_enum, 0, 0), types.Enum(3)),
+		}
+		defer bat.Clean(mp)
+		bat.SetRowCount(1)
+
+		n := len(bat.Vecs)
+		ep := &ExportConfig{
+			userConfig: &tree.ExportParam{
+				Fields: tree.NewFields(",", false, 0, '\\'),
+				Lines:  tree.NewLines("", "\n"),
+			},
+			ctx:        context.Background(),
+			Symbol:     make([][]byte, n),
+			ColumnFlag: make([]bool, n),
+		}
+		for i := range ep.Symbol {
+			ep.Symbol[i] = []byte{','}
+		}
+		ep.Symbol[n-1] = []byte{'\n'}
+
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp, timeZone: time.UTC}}, bat, 0, ch, ep)
+		result := <-ch
+		require.NoError(t, result.err)
+		require.EqualValues(t, 1, result.rowCount)
+		require.True(t, bytes.HasSuffix(result.writeByte, []byte("\n")))
+		// Every column contributed bytes separated by the field terminator
+		// (array-tostring output contains more commas, hence the lower bound).
+		require.GreaterOrEqual(t, bytes.Count(result.writeByte, []byte{','}), n-1)
+	})
+
+	t.Run("guard failure on a non-last column aborts the batch", func(t *testing.T) {
+		bat := &batch.Batch{}
+		bat.Vecs = []*vector.Vector{
+			vector.NewOffHeapVecWithType(types.New(types.T_int32, 0, 0)),
+			vector.NewOffHeapVecWithType(types.New(types.T_varchar, 65535, 0)),
+			vector.NewOffHeapVecWithType(types.New(types.T_varchar, 65535, 0)),
+		}
+		defer bat.Clean(mp)
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(`\N`), false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[2], []byte("x"), false, mp))
+		bat.SetRowCount(1)
+
+		ep := &ExportConfig{
+			userConfig: &tree.ExportParam{
+				Fields: tree.NewFields(",", false, 0, '#'),
+				Lines:  tree.NewLines("", "\n"),
+			},
+			ctx:        context.Background(),
+			Symbol:     [][]byte{[]byte{','}, []byte{','}, []byte{'\n'}},
+			ColumnFlag: make([]bool, 3),
+		}
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+		result := <-ch
+		// The guard fires on the middle column; the closure must skip the
+		// third column and the batch must surface the first error only.
+		require.ErrorContains(t, result.err, "cannot round-trip unless FIELDS ESCAPED BY is the default")
+		require.Empty(t, result.writeByte)
+	})
+
+	t.Run("result-set writer covers time, uuid and enum columns", func(t *testing.T) {
+		ep := &ExportConfig{
+			userConfig: &tree.ExportParam{
+				Fields: tree.NewFields(",", false, 0, '\\'),
+				Lines:  tree.NewLines("", "\n"),
+			},
+			ctx:        context.Background(),
+			Symbol:     [][]byte{[]byte{','}, []byte{','}, []byte{'\n'}},
+			ColumnFlag: make([]bool, 3),
+			mrs:        &MysqlResultSet{},
+		}
+		for _, c := range []struct {
+			name string
+			typ  defines.MysqlType
+		}{{"t", defines.MYSQL_TYPE_TIME}, {"u", defines.MYSQL_TYPE_UUID}, {"e", defines.MYSQL_TYPE_ENUM}} {
+			col := &MysqlColumn{}
+			col.SetName(c.name)
+			col.SetColumnType(c.typ)
+			ep.mrs.AddColumn(col)
+		}
+		ep.mrs.Data = [][]any{{types.Time(37230000000), "550e8400-e29b-41d4-a716-446655440000", "red"}}
+		var out bytes.Buffer
+		old := Write
+		Write = func(_ *ExportConfig, b []byte) (int, error) { return out.Write(b) }
+		defer func() { Write = old }()
+		require.NoError(t, exportDataFromResultSetToCSVFile(ep))
+		require.True(t, bytes.HasSuffix(out.Bytes(), []byte("\n")))
 	})
 }

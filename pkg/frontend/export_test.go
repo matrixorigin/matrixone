@@ -182,7 +182,7 @@ func Test_formatOutputString(t *testing.T) {
 			mrs: &MysqlResultSet{},
 		}
 		buffer := &bytes.Buffer{}
-		convey.So(formatOutputString(ep, nil, nil, '\n', true, buffer), convey.ShouldBeNil)
+		convey.So(formatOutputString(ep, nil, nil, '\n', true, true, buffer), convey.ShouldBeNil)
 	})
 }
 

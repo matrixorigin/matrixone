@@ -278,7 +278,38 @@ func getExportFilePath(filename string, fileCnt uint) string {
 	return fmt.Sprintf("%s.%d", filename, fileCnt)
 }
 
-var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byte, flag bool, buffer *bytes.Buffer) error {
+// checkCSVValueRoundTrip rejects the two value shapes LOAD can no longer tell
+// apart from framing once the escape byte is not the historical backslash:
+//
+//   - A field of exactly `\N` matches LOAD's NULL token list (always ['\N'])
+//     after unescaping, even inside quotes (quotedNullIsText is false), so a
+//     literal \N string would silently come back as SQL NULL whenever
+//     FIELDS ESCAPED BY is set to a custom or empty byte.
+//   - With escaping disabled, the reader strips a trailing CR from the last
+//     column's record under '\n' termination (csv_parser.go). That strip runs
+//     on the record buffer AFTER quotes are removed, so an enclosure does
+//     not protect the CR; only an escape byte (which rewrites it to a
+//     two-byte sequence the reader translates back) does.
+//
+// Both checks mirror the externalwrite writer's guards, so exporting with
+// the new clauses produces either a file that reads back exactly or an
+// upfront error — never silent corruption.
+func checkCSVValueRoundTrip(oq *ExportConfig, tmp []byte, last bool) error {
+	if oq.escapeChar() != '\\' && bytes.Equal(tmp, []byte(`\N`)) {
+		return moerr.NewNotSupported(oq.ctx,
+			"select into outfile (csv): a value of exactly \\N cannot round-trip unless FIELDS ESCAPED BY is the default '\\\\'")
+	}
+	if last && oq.escapeChar() == 0 && bytes.HasSuffix(tmp, []byte{'\r'}) {
+		return moerr.NewNotSupported(oq.ctx,
+			"select into outfile (csv): with FIELDS ESCAPED BY '' a value ending in CR in the last column cannot round-trip")
+	}
+	return nil
+}
+
+var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byte, flag bool, last bool, buffer *bytes.Buffer) error {
+	if err := checkCSVValueRoundTrip(oq, tmp, last); err != nil {
+		return err
+	}
 	if !flag && enclosed != 0 && oq.escapeChar() != 0 {
 		field, line, _, _ := oq.csvBoundaryBytes()
 		// LOAD translates \n, \0, etc., and recognizes \N as NULL. An
@@ -584,6 +615,17 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 
 	buffer := &bytes.Buffer{}
 
+	// formatOutputString can now reject a value LOAD would no longer read
+	// back losslessly; record the first failure and abort the batch on it
+	// instead of writing a corrupt file.
+	var fmtErr error
+	out := func(tmp, sym []byte, enclosed byte, quote bool, last bool) {
+		if fmtErr != nil {
+			return
+		}
+		fmtErr = formatOutputString(ep, tmp, sym, enclosed, quote, last, buffer)
+	}
+
 	rowCount := bat.RowCount()
 	var rowEnds []int
 	if getEffectiveMaxFileSize(ep) != 0 {
@@ -602,13 +644,13 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 			case types.T_json:
 				val := types.DecodeJson(vec.GetBytesAt(i))
 				value := []byte(val.String())
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_bool:
 				val := vector.GetFixedAtNoTypeCheck[bool](vec, i)
 				if val {
-					formatOutputString(ep, []byte("true"), symbol[j], closeby, flag[j], buffer)
+					out([]byte("true"), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 				} else {
-					formatOutputString(ep, []byte("false"), symbol[j], closeby, flag[j], buffer)
+					out([]byte("false"), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 				}
 			case types.T_bit:
 				val := vector.GetFixedAtNoTypeCheck[uint64](vec, i)
@@ -616,48 +658,48 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				byteLength := (bitLength + 7) / 8
 				b := types.EncodeUint64(&val)[:byteLength]
 				slices.Reverse(b)
-				formatOutputString(ep, b, symbol[j], closeby, flag[j], buffer)
+				out(b, symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_int8:
 				val := vector.GetFixedAtNoTypeCheck[int8](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_int16:
 				val := vector.GetFixedAtNoTypeCheck[int16](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_int32:
 				val := vector.GetFixedAtNoTypeCheck[int32](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_int64:
 				val := vector.GetFixedAtNoTypeCheck[int64](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatInt(int64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_uint8:
 				val := vector.GetFixedAtNoTypeCheck[uint8](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_uint16:
 				val := vector.GetFixedAtNoTypeCheck[uint16](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_uint32:
 				val := vector.GetFixedAtNoTypeCheck[uint32](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_uint64:
 				val := vector.GetFixedAtNoTypeCheck[uint64](vec, i)
-				formatOutputString(ep, []byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], buffer)
+				out([]byte(strconv.FormatUint(uint64(val), 10)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_float32:
 				val := vector.GetFixedAtNoTypeCheck[float32](vec, i)
 				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
-					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j], buffer)
+					out([]byte(strconv.FormatFloat(float64(val), 'f', -1, 32)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 				} else {
-					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], buffer)
+					out([]byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 				}
 			case types.T_float64:
 				val := vector.GetFixedAtNoTypeCheck[float64](vec, i)
 				if vec.GetType().Scale < 0 || vec.GetType().Width == 0 {
-					formatOutputString(ep, []byte(strconv.FormatFloat(val, 'f', -1, 64)), symbol[j], closeby, flag[j], buffer)
+					out([]byte(strconv.FormatFloat(val, 'f', -1, 64)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 				} else {
-					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], buffer)
+					out([]byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 				}
 			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
 				value := vec.GetBytesAt(i)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_geometry, types.T_geometry32:
 				text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(i))
 				if err != nil {
@@ -665,44 +707,44 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 					return
 				}
 				value := []byte(text)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_float32:
 				arrStr := types.BytesToArrayToString[float32](vec.GetBytesAt(i))
 				value := util2.UnsafeStringToBytes(arrStr)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_float64:
 				arrStr := types.BytesToArrayToString[float64](vec.GetBytesAt(i))
 				value := util2.UnsafeStringToBytes(arrStr)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_bf16:
 				arrStr := types.BytesToArrayToString[types.BF16](vec.GetBytesAt(i))
 				value := util2.UnsafeStringToBytes(arrStr)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_float16:
 				arrStr := types.BytesToArrayToString[types.Float16](vec.GetBytesAt(i))
 				value := util2.UnsafeStringToBytes(arrStr)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_int8:
 				arrStr := types.BytesToArrayToString[int8](vec.GetBytesAt(i))
 				value := util2.UnsafeStringToBytes(arrStr)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_array_uint8:
 				// []uint8 aliases []byte; BytesToArrayToString[uint8] renders the values
 				// as an array string ("[1, 2, 3]"), not the raw bytes as a string.
 				arrStr := types.BytesToArrayToString[uint8](vec.GetBytesAt(i))
 				value := util2.UnsafeStringToBytes(arrStr)
-				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
+				out(value, symbol[j], closeby, true, j == len(bat.Vecs)-1)
 			case types.T_date:
 				val := vector.GetFixedAtNoTypeCheck[types.Date](vec, i)
-				formatOutputString(ep, []byte(val.String()), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val.String()), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_datetime:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Datetime](vec, i).String2(scale)
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_time:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Time](vec, i).String2(scale)
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_timestamp:
 				var timeZone *time.Location
 				if ss != nil {
@@ -712,34 +754,34 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				}
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Timestamp](vec, i).String2(timeZone, scale)
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_year:
 				val := vector.GetFixedAtNoTypeCheck[types.MoYear](vec, i).String()
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_decimal64:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, i).Format(scale)
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_decimal128:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, i).Format(scale)
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_decimal256:
 				scale := vec.GetType().Scale
 				val := vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, i).Format(scale)
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_uuid:
 				val := vector.GetFixedAtNoTypeCheck[types.Uuid](vec, i).String()
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_Rowid:
 				val := vector.GetFixedAtNoTypeCheck[types.Rowid](vec, i)
-				formatOutputString(ep, []byte(val.String()), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val.String()), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_Blockid:
 				val := vector.GetFixedAtNoTypeCheck[types.Blockid](vec, i)
-				formatOutputString(ep, []byte(val.String()), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val.String()), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			case types.T_enum:
 				val := vector.GetFixedAtNoTypeCheck[types.Enum](vec, i).String()
-				formatOutputString(ep, []byte(val), symbol[j], closeby, flag[j], buffer)
+				out([]byte(val), symbol[j], closeby, flag[j], j == len(bat.Vecs)-1)
 			default:
 				if ss != nil {
 					ss.Error(ctx,
@@ -757,6 +799,10 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				})
 				return
 			}
+		}
+		if fmtErr != nil {
+			sendExportBatchByte(ctx, ByteChan, &BatchByte{err: fmtErr})
+			return
 		}
 		if rowEnds != nil {
 			rowEnds = append(rowEnds, buffer.Len())
@@ -1024,7 +1070,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_BOOL:
@@ -1032,7 +1078,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_BIT:
@@ -1043,7 +1089,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			byteLength := (mysqlColumn.Length() + 7) / 8
 			encoded := types.EncodeUint64(&value)[:byteLength]
 			slices.Reverse(encoded)
-			if err = formatOutputString(oq, encoded, symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, encoded, symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
@@ -1053,20 +1099,20 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			}
 			if mysqlColumn.ColumnType() == defines.MYSQL_TYPE_YEAR {
 				if value == 0 {
-					if err = formatOutputString(oq, []byte("0000"), symbol[i], closeby, flag[i], buffer); err != nil {
+					if err = formatOutputString(oq, []byte("0000"), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 						return err
 					}
 				} else {
 					var lineStr []byte
 					lineStr = strconv.AppendInt(lineStr, value, 10)
-					if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], buffer); err != nil {
+					if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 						return err
 					}
 				}
 			} else {
 				var lineStr []byte
 				lineStr = strconv.AppendInt(lineStr, value, 10)
-				if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], buffer); err != nil {
+				if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 					return err
 				}
 			}
@@ -1076,7 +1122,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 				return err
 			}
 			lineStr := []byte(fmt.Sprintf("%v", value))
-			if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_LONGLONG:
@@ -1086,7 +1132,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 				} else {
 					var lineStr []byte
 					lineStr = strconv.AppendUint(lineStr, value, 10)
-					if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], buffer); err != nil {
+					if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 						return err
 					}
 				}
@@ -1096,7 +1142,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 				} else {
 					var lineStr []byte
 					lineStr = strconv.AppendInt(lineStr, value, 10)
-					if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], buffer); err != nil {
+					if err = formatOutputString(oq, lineStr, symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 						return err
 					}
 				}
@@ -1131,7 +1177,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 				value = []byte(s)
 			}
 
-			if err = formatOutputString(oq, value.([]byte), symbol[i], closeby, true, buffer); err != nil {
+			if err = formatOutputString(oq, value.([]byte), symbol[i], closeby, true, i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_DATE:
@@ -1139,7 +1185,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value.(types.Date).String()), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value.(types.Date).String()), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_TIME:
@@ -1147,7 +1193,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value.(types.Time).String()), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value.(types.Time).String()), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_DATETIME:
@@ -1155,7 +1201,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value.(string)), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value.(string)), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
@@ -1163,7 +1209,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_JSON:
@@ -1172,7 +1218,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 				return err
 			}
 			jsonStr := value.(bytejson.ByteJson).String()
-			if err = formatOutputString(oq, []byte(jsonStr), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(jsonStr), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_UUID:
@@ -1180,7 +1226,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_ENUM:
@@ -1188,7 +1234,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], buffer); err != nil {
+			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 		default:

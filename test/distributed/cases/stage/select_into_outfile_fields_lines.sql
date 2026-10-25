@@ -77,6 +77,82 @@ fields terminated by ',' lines starting by 'n' terminated by '\n' (s);
 select * from hdr_back;
 drop table hdr_back;
 
+-- A literal '\N' value is LOAD's NULL token even inside quotes
+-- (quotedNullIsText=false). With a non-default FIELDS ESCAPED BY the written
+-- bytes would silently reload as SQL NULL, so the export is rejected up front
+-- and no file may be created. Genuine NULLs are unaffected.
+create table rt (id int, s varchar(20));
+insert into rt values (1,'\\N'),(2,null),(3,'plain');
+select id, s from rt order by id
+into outfile 'stage://outfile_fields_lines_stage/nt_hash.csv'
+fields terminated by ',' enclosed by '' escaped by '#' header 'false';
+select count(*) from stage_list('stage://outfile_fields_lines_stage/nt_hash.csv');
+select id, s from rt where id = 1
+into outfile 'stage://outfile_fields_lines_stage/nt_empty.csv'
+fields terminated by ',' enclosed by '' escaped by '' header 'false';
+select count(*) from stage_list('stage://outfile_fields_lines_stage/nt_empty.csv');
+
+-- The default escape rewrites the literal to \\N, so it round-trips as text
+-- while a real NULL keeps the bare \N marker.
+select id, s from rt order by id
+into outfile 'stage://outfile_fields_lines_stage/nt_default.csv'
+fields terminated by ',' enclosed by '' header 'false';
+select load_file(cast('stage://outfile_fields_lines_stage/nt_default.csv' as datalink));
+create table rt_back (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/nt_default.csv' into table rt_back
+fields terminated by ',' enclosed by '' lines terminated by '\n';
+select id, s, s is null as is_null from rt_back order by id;
+
+-- NULLs also export under a custom escape: the NULL marker is not a value.
+select id, s from rt where id in (2,3) order by id
+into outfile 'stage://outfile_fields_lines_stage/nt_nulls.csv'
+fields terminated by ',' enclosed by '' escaped by '#' header 'false';
+select load_file(cast('stage://outfile_fields_lines_stage/nt_nulls.csv' as datalink));
+create table rt_nulls (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/nt_nulls.csv' into table rt_nulls
+fields terminated by ',' enclosed by '' escaped by '#' lines terminated by '\n';
+select id, s is null as is_null from rt_nulls order by id;
+
+-- With FIELDS ESCAPED BY '' the reader strips a trailing CR of the last
+-- column's record under '\n' termination. The strip runs after unquoting, so
+-- an enclosure does not protect it either: both exports are rejected. Any
+-- escape byte rewrites the CR and round-trips.
+create table rtcr (id int, s varchar(20));
+insert into rtcr values (1,'a\r');
+select id, s from rtcr
+into outfile 'stage://outfile_fields_lines_stage/cr_bare.csv'
+fields terminated by ',' enclosed by '' escaped by '' header 'false';
+select count(*) from stage_list('stage://outfile_fields_lines_stage/cr_bare.csv');
+select id, s from rtcr
+into outfile 'stage://outfile_fields_lines_stage/cr_quoted.csv'
+fields terminated by ',' enclosed by '"' escaped by '' header 'false';
+select count(*) from stage_list('stage://outfile_fields_lines_stage/cr_quoted.csv');
+-- CR in a non-last column is followed by the separator and keeps its byte
+-- (file content pinned via hex: a raw CR would confuse line-based readers):
+select s, id from rtcr
+into outfile 'stage://outfile_fields_lines_stage/cr_first.csv'
+fields terminated by ',' enclosed by '' escaped by '' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/cr_first.csv' as datalink)));
+create table rtcr_first (s varchar(20), id int);
+load data infile 'stage://outfile_fields_lines_stage/cr_first.csv' into table rtcr_first
+fields terminated by ',' enclosed by '' escaped by '' lines terminated by '\n';
+select id, hex(s) as hs from rtcr_first;
+-- A custom escape protects the CR in the last column:
+select id, s from rtcr
+into outfile 'stage://outfile_fields_lines_stage/cr_hash.csv'
+fields terminated by ',' enclosed by '' escaped by '#' header 'false';
+select load_file(cast('stage://outfile_fields_lines_stage/cr_hash.csv' as datalink));
+create table rtcr_hash (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/cr_hash.csv' into table rtcr_hash
+fields terminated by ',' enclosed by '' escaped by '#' lines terminated by '\n';
+select id, hex(s) as hs from rtcr_hash;
+drop table rtcr_hash;
+drop table rtcr_first;
+drop table rtcr;
+drop table rt_nulls;
+drop table rt_back;
+drop table rt;
+
 remove files from stage if exists 'stage://outfile_fields_lines_stage/*.csv';
 select count(*) from stage_list('stage://outfile_fields_lines_stage/');
 drop stage outfile_fields_lines_stage;

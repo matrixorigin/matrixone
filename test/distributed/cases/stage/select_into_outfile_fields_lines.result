@@ -101,6 +101,101 @@ select * from hdr_back;
 ➤ s[12,10,0]  𝄀
 alpha
 drop table hdr_back;
+create table rt (id int, s varchar(20));
+insert into rt values (1,'\\N'),(2,null),(3,'plain');
+select id, s from rt order by id
+into outfile 'stage://outfile_fields_lines_stage/nt_hash.csv'
+fields terminated by ',' enclosed by '' escaped by '#' header 'false';
+not supported: select into outfile (csv): a value of exactly \N cannot round-trip unless FIELDS ESCAPED BY is the default '\\'
+select count(*) from stage_list('stage://outfile_fields_lines_stage/nt_hash.csv');
+➤ count(*)[-5,64,0]  𝄀
+0
+select id, s from rt where id = 1
+into outfile 'stage://outfile_fields_lines_stage/nt_empty.csv'
+fields terminated by ',' enclosed by '' escaped by '' header 'false';
+not supported: select into outfile (csv): a value of exactly \N cannot round-trip unless FIELDS ESCAPED BY is the default '\\'
+select count(*) from stage_list('stage://outfile_fields_lines_stage/nt_empty.csv');
+➤ count(*)[-5,64,0]  𝄀
+0
+select id, s from rt order by id
+into outfile 'stage://outfile_fields_lines_stage/nt_default.csv'
+fields terminated by ',' enclosed by '' header 'false';
+select load_file(cast('stage://outfile_fields_lines_stage/nt_default.csv' as datalink));
+➤ load_file(cast(stage://outfile_fields_lines_stage/nt_default.csv as datalink))[-1,16383,0]  𝄀
+1,\\N
+2,\N
+3,plain
+
+create table rt_back (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/nt_default.csv' into table rt_back
+fields terminated by ',' enclosed by '' lines terminated by '\n';
+select id, s, s is null as is_null from rt_back order by id;
+➤ id[4,32,0]  ¦  s[12,20,0]  ¦  is_null[-6,8,0]  𝄀
+1  ¦  \N  ¦  0  𝄀
+2  ¦  null  ¦  1  𝄀
+3  ¦  plain  ¦  0
+select id, s from rt where id in (2,3) order by id
+into outfile 'stage://outfile_fields_lines_stage/nt_nulls.csv'
+fields terminated by ',' enclosed by '' escaped by '#' header 'false';
+select load_file(cast('stage://outfile_fields_lines_stage/nt_nulls.csv' as datalink));
+➤ load_file(cast(stage://outfile_fields_lines_stage/nt_nulls.csv as datalink))[-1,16383,0]  𝄀
+2,\N
+3,plain
+
+create table rt_nulls (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/nt_nulls.csv' into table rt_nulls
+fields terminated by ',' enclosed by '' escaped by '#' lines terminated by '\n';
+select id, s is null as is_null from rt_nulls order by id;
+➤ id[4,32,0]  ¦  is_null[-6,8,0]  𝄀
+2  ¦  1  𝄀
+3  ¦  0
+create table rtcr (id int, s varchar(20));
+insert into rtcr values (1,'a\r');
+select id, s from rtcr
+into outfile 'stage://outfile_fields_lines_stage/cr_bare.csv'
+fields terminated by ',' enclosed by '' escaped by '' header 'false';
+not supported: select into outfile (csv): with FIELDS ESCAPED BY '' a value ending in CR in the last column cannot round-trip
+select count(*) from stage_list('stage://outfile_fields_lines_stage/cr_bare.csv');
+➤ count(*)[-5,64,0]  𝄀
+0
+select id, s from rtcr
+into outfile 'stage://outfile_fields_lines_stage/cr_quoted.csv'
+fields terminated by ',' enclosed by '"' escaped by '' header 'false';
+not supported: select into outfile (csv): with FIELDS ESCAPED BY '' a value ending in CR in the last column cannot round-trip
+select count(*) from stage_list('stage://outfile_fields_lines_stage/cr_quoted.csv');
+➤ count(*)[-5,64,0]  𝄀
+0
+select s, id from rtcr
+into outfile 'stage://outfile_fields_lines_stage/cr_first.csv'
+fields terminated by ',' enclosed by '' escaped by '' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/cr_first.csv' as datalink)));
+➤ hex(load_file(cast(stage://outfile_fields_lines_stage/cr_first.csv as datalink)))[-1,16383,0]  𝄀
+610D2C310A
+create table rtcr_first (s varchar(20), id int);
+load data infile 'stage://outfile_fields_lines_stage/cr_first.csv' into table rtcr_first
+fields terminated by ',' enclosed by '' escaped by '' lines terminated by '\n';
+select id, hex(s) as hs from rtcr_first;
+➤ id[4,32,0]  ¦  hs[12,160,0]  𝄀
+1  ¦  610D
+select id, s from rtcr
+into outfile 'stage://outfile_fields_lines_stage/cr_hash.csv'
+fields terminated by ',' enclosed by '' escaped by '#' header 'false';
+select load_file(cast('stage://outfile_fields_lines_stage/cr_hash.csv' as datalink));
+➤ load_file(cast(stage://outfile_fields_lines_stage/cr_hash.csv as datalink))[-1,16383,0]  𝄀
+1,a#r
+
+create table rtcr_hash (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/cr_hash.csv' into table rtcr_hash
+fields terminated by ',' enclosed by '' escaped by '#' lines terminated by '\n';
+select id, hex(s) as hs from rtcr_hash;
+➤ id[4,32,0]  ¦  hs[12,160,0]  𝄀
+1  ¦  610D
+drop table rtcr_hash;
+drop table rtcr_first;
+drop table rtcr;
+drop table rt_nulls;
+drop table rt_back;
+drop table rt;
 remove files from stage if exists 'stage://outfile_fields_lines_stage/*.csv';
 select count(*) from stage_list('stage://outfile_fields_lines_stage/');
 ➤ count(*)[-5,64,0]  𝄀
