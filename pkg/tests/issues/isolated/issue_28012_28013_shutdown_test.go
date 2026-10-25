@@ -154,6 +154,13 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	probeCtx, probeCancel := context.WithTimeout(ctx, 10*time.Second)
 	_, probeErr := db.ExecContext(probeCtx, "insert into "+dbName+".probe values (1)")
 	probeCancel()
+	if probeErr != nil {
+		waiters, _, _ := fault.TriggerFault(commitWaiters)
+		var stacks bytes.Buffer
+		_ = pprof.Lookup("goroutine").WriteTo(&stacks, 2)
+		t.Logf("probe failed before shutdown: commit barrier waiters=%d, pool=%+v; goroutines:\n%s",
+			waiters, db.Stats(), stacks.String())
+	}
 	require.NoError(t, probeErr, "another transaction of the same tenant must not claim the commit barrier")
 	waiters, _, triggered := fault.TriggerFault(commitWaiters)
 	require.True(t, triggered)

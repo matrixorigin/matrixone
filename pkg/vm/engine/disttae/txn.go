@@ -54,27 +54,6 @@ import (
 	"go.uber.org/zap"
 )
 
-//func (txn *Transaction) getObjInfos(
-//	ctx context.Context,
-//	tbl *txnTable,
-//) (objs []logtailreplay.ObjectEntry, err error) {
-//	ts := types.TimestampToTS(txn.op.SnapshotTS())
-//	state, err := tbl.getPartitionState(ctx)
-//	if err != nil {
-//		return nil, err
-//	}
-//	iter, err := state.NewObjectsIter(ts)
-//	if err != nil {
-//		return nil, err
-//	}
-//	for iter.Next() {
-//		entry := iter.Entry()
-//		objs = append(objs, entry)
-//	}
-//	iter.Close()
-//	return
-//}
-
 // detecting whether a transaction is a read-only transaction
 func (txn *Transaction) ReadOnly() bool {
 	return txn.readOnly.Load()

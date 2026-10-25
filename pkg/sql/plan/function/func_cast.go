@@ -7373,6 +7373,18 @@ func strToSignedWithProc[T constraints.Signed](
 							continue
 						}
 					}
+					if mode == castModeExplicit && !isBinary && isIntegerLexicalConversionError(err) {
+						// MySQL returns 0 with a truncated-value warning when a
+						// string cannot start a numeric conversion; mirror that
+						// for explicit CAST while keeping strict paths strict
+						// (issue #30417).
+						appendExplicitIntegerCastWarning(proc, s, explicitIntegerCastTruncated)
+						result = T(0)
+						if err = to.Append(result, false); err != nil {
+							return err
+						}
+						continue
+					}
 					// XXX I'm not sure if we should return the int8 / int16 / int64 info. or
 					// just return the int. the old code just return the int. too much bvt result needs to update.
 					if strings.Contains(err.Error(), "value out of range") {
@@ -8434,6 +8446,16 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 						}
 						continue
 					}
+				}
+				if mode == castModeExplicit && !isBinary && isIntegerLexicalConversionError(tErr) {
+					// Mirror MySQL: explicit CAST of a lexically invalid string
+					// returns 0 with a truncated-value warning instead of an
+					// error (issue #30417). Binary-originated text stays strict.
+					appendExplicitIntegerCastWarning(proc, *res, explicitIntegerCastTruncated)
+					if err := to.Append(T(0), false); err != nil {
+						return err
+					}
+					continue
 				}
 				if strings.Contains(tErr.Error(), "value out of range") {
 					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("uint%d", bitSize), "value '%s'", *res)

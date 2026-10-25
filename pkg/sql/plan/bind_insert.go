@@ -5438,13 +5438,6 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		} else if col.Name == catalog.Row_ID {
 			continue
 		} else if col.Name == catalog.CPrimaryKeyColName {
-			//args := make([]*plan.Expr, len(tableDef.Pkey.Names))
-			//
-			//for k, part := range tableDef.Pkey.Names {
-			//	args[k] = DeepCopyExpr(insertColToExpr[part])
-			//}
-			//
-			//compPkeyExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
 			compPkeyExpr = makeCompPkeyExpr(tableDef, tableDef.Name2ColIndex)
 			projList2 = append(projList2, &plan.Expr{
 				Typ: compPkeyExpr.Typ,
@@ -5457,14 +5450,6 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			})
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else if hasCompClusterBy && col.Name == tableDef.ClusterBy.Name {
-			//names := util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
-			//args := make([]*plan.Expr, len(names))
-			//
-			//for k, part := range names {
-			//	args[k] = DeepCopyExpr(insertColToExpr[part])
-			//}
-			//
-			//clusterByExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", args)
 			clusterByExpr = makeClusterByExpr(tableDef, tableDef.Name2ColIndex)
 			projList2 = append(projList2, &plan.Expr{
 				Typ: clusterByExpr.Typ,

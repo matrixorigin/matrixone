@@ -27,6 +27,11 @@ header:
     - '**/goyacc.go'
     - 'pkg/sql/parsers/dialect/postgresql/postgresql_sql.go'
     - 'pkg/sql/parsers/dialect/mysql/mysql_sql.go'
+    # Pinned Go 1.27.1 regexp implementation retains its BSD headers/license.
+    - 'pkg/sql/plan/function/internal/regexp/regexp.go'
+    - 'pkg/sql/plan/function/internal/regexp/exec.go'
+    - 'pkg/sql/plan/function/internal/regexp/backtrack.go'
+    - 'pkg/sql/plan/function/internal/regexp/onepass.go'
     - 'pkg/common/fastrand/'
     - 'pkg/common/arenaskl/'
     - 'pkg/common/malloc/mimalloc/'

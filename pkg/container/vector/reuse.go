@@ -55,14 +55,6 @@ func (v Vector) TypeName() string {
 func NewVecFromReuse() *Vector {
 	//v := reuse.Alloc[Vector](nil)
 	v := new(Vector)
-	// if v.OnUsed {
-	// 	panic("alloc onused vector")
-	// }
-	// if len(v.AllocMsg) > 20 {
-	// 	v.AllocMsg = v.AllocMsg[1:]
-	// }
-	// v.AllocMsg = append(v.AllocMsg, time.Now().String()+" : "+string(debug.Stack()))
-	// v.OnUsed = true
 	return v
 }
 
