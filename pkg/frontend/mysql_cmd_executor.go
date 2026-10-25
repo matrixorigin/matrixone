@@ -396,13 +396,41 @@ func containsPasswordWord(text string) bool {
 	return false
 }
 
-// redactStatementErrorForLogging replaces a parser echo of __mo_query before it
-// reaches a client, statement telemetry, or the terminal statement logger.
+// redactStatementErrorForLogging replaces a parser echo of __mo_query or of
+// masked secret literals before it reaches a client, statement telemetry,
+// or the terminal statement logger.
 func redactStatementErrorForLogging(err error, text string) error {
-	if err == nil || sqlmongodb.RedactSQLForDiagnostics(text) == text {
+	if err == nil {
 		return err
 	}
-	return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
+	if sqlmongodb.RedactSQLForDiagnostics(text) != text {
+		return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
+	}
+	return redactParseErrorSecrets(err, text)
+}
+
+// redactParseErrorSecrets scrubs lexer echoes of masked secret literals out
+// of a parser error message: the `near "..."` tail of a syntax error quotes
+// the raw input, which replays an unterminated or otherwise malformed
+// secret verbatim into the terminal log and statement records.
+func redactParseErrorSecrets(err error, text string) error {
+	if err == nil || !containsPasswordWord(text) {
+		return err
+	}
+	_, secrets := parsers.MaskSecretLiterals(text)
+	msg := err.Error()
+	changed := false
+	for _, secret := range secrets {
+		if secret == "" || !strings.Contains(msg, secret) {
+			continue
+		}
+		msg = strings.ReplaceAll(msg, secret, "******")
+		changed = true
+	}
+	if !changed {
+		return err
+	}
+	return moerr.NewParseErrorNoCtx(msg)
 }
 
 func refreshProcessStmtProfileForPreparedStmt(proc *process.Process, statement tree.Statement) {
@@ -6462,7 +6490,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if recordErr != nil {
 			return recordErr
 		}
-		if sqlmongodb.RedactSQLForDiagnostics(errorInput.getSql()) != errorInput.getSql() {
+		if diagnosticErr != parseErr {
+			// The diagnostic error is the scrubbed form (selector or secret
+			// echoes replaced); the client must not see the original echo
+			// either when the raw text carried the same secret.
 			parseErr = diagnosticErr
 		} else if _, ok := parseErr.(*moerr.Error); !ok {
 			parseErr = moerr.NewParseError(execCtx.reqCtx, parseErr.Error())

@@ -432,6 +432,23 @@ func TestHandleSqlForRecord(t *testing.T) {
 		require.Equal(t, []string{"select 1", "set password = '******' broken"},
 			HandleSqlForRecord("select 1; set password = 'multi-statement-value' broken"))
 	})
+	t.Run("masked secrets are reported for echo scrubbing", func(t *testing.T) {
+		fragments, secrets := MaskSecretLiterals("SET PASSWORD = 'sec''ret-doubled'")
+		require.Len(t, secrets, 1)
+		require.Equal(t, "sec''ret-doubled", secrets[0])
+		require.NotContains(t, strings.Join(fragments, ";"), "ret-doubled")
+
+		fragments, secrets = MaskSecretLiterals("SET PASSWORD = PASSWORD('fn-secret42')")
+		require.Len(t, secrets, 1)
+		require.Equal(t, "fn-secret42", secrets[0])
+		require.NotContains(t, strings.Join(fragments, ";"), "fn-secret42")
+
+		_, secrets = MaskSecretLiterals("SET PASSWORD = 'unter-minated42")
+		require.Contains(t, secrets, "'unter-minated42")
+
+		_, secrets = MaskSecretLiterals("CREATE USER u IDENTIFIED BY 'ident-secret42'")
+		require.Contains(t, secrets, "ident-secret42")
+	})
 	t.Run("password keyword without set is not masked", func(t *testing.T) {
 		// ALTER USER ... PASSWORD EXPIRE has no secret literal to mask.
 		require.Equal(t, []string{"ALTER USER u1 PASSWORD EXPIRE INTERVAL 3 DAY"},

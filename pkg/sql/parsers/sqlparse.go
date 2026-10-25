@@ -76,14 +76,31 @@ var stripContents = map[string]int8{
 }
 
 var HandleSqlForRecord = func(sql string) []string {
+	masked, _ := MaskSecretLiterals(sql)
+	return masked
+}
+
+// MaskSecretLiterals returns the same statement fragments as
+// HandleSqlForRecord plus the raw source text of every masked secret
+// literal, so callers can also scrub lexer echoes of those secrets (for
+// example the `near "..."` tail of a parser error) from diagnostics.
+var MaskSecretLiterals = func(sql string) ([]string, []string) {
 	split := SplitSqlBySemicolon(sql)
+	var secrets []string
 	for i := range split {
-		split[i] = handleSQLForRecordFragment(split[i])
+		var fragmentSecrets []string
+		split[i], fragmentSecrets = handleSQLForRecordFragmentWithSecrets(split[i])
+		secrets = append(secrets, fragmentSecrets...)
 	}
-	return split
+	return split, secrets
 }
 
 func handleSQLForRecordFragment(sql string) string {
+	masked, _ := handleSQLForRecordFragmentWithSecrets(sql)
+	return masked
+}
+
+func handleSQLForRecordFragmentWithSecrets(sql string) (string, []string) {
 	stripScanner := mysql.NewScanner(dialect.MYSQL, sql)
 	defer mysql.PutScanner(stripScanner)
 	//strip needed comment "/*XXX*/"
@@ -135,6 +152,13 @@ func handleSQLForRecordFragment(sql string) string {
 	previousToken := 0
 	indexes := []int{-1}
 	eq := int('=')
+	// secrets collect the raw source text of every masked literal so lexer
+	// echoes of the same secrets can be scrubbed from diagnostics too.
+	var secrets []string
+	mask := func(from, to int) {
+		indexes = append(indexes, from, to)
+		secrets = append(secrets, sql[from:to+1])
+	}
 	// sawSet / sawSetPassword track the SET PASSWORD [FOR user] = 'secret'
 	// shape so its literal can be masked like the IDENTIFIED BY secrets.
 	sawSet := false
@@ -146,14 +170,14 @@ func handleSQLForRecordFragment(sql string) string {
 			if typ == mysql.BY || typ == mysql.WITH {
 				typ, s = scanSQLToken(scanner, &previousToken)
 				if typ != mysql.RANDOM {
-					indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
+					mask(scanner.Pos-len(s)-1, scanner.Pos-2)
 				}
 			}
 		} else if strings.ToLower(s) == "access_key_id" || strings.ToLower(s) == "secret_access_key" {
 			typ, _ = scanSQLToken(scanner, &previousToken)
 			if typ == eq {
 				_, s = scanSQLToken(scanner, &previousToken)
-				indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
+				mask(scanner.Pos-len(s)-1, scanner.Pos-2)
 			}
 		} else if sawSetPassword && typ == eq {
 			// SET PASSWORD [= 'secret' | FOR user = 'secret']: mask the
@@ -178,11 +202,11 @@ func handleSQLForRecordFragment(sql string) string {
 				// keep the quote characters, mask the raw content span
 				// (content is empty for '' — nothing to mask)
 				if start+1 <= scanner.Pos-2 {
-					indexes = append(indexes, start+1, scanner.Pos-2)
+					mask(start+1, scanner.Pos-2)
 				}
 			} else if start < len(sql) {
 				// fail closed: everything after the '=' may carry the secret
-				indexes = append(indexes, start, len(sql)-1)
+				mask(start, len(sql)-1)
 			}
 			sawSet, sawSetPassword = false, false
 		} else if sawSet && typ == mysql.PASSWORD {
@@ -204,7 +228,7 @@ func handleSQLForRecordFragment(sql string) string {
 		sql = builder.String()
 	}
 	sql = strings.TrimSpace(sql)
-	return sql
+	return sql, secrets
 }
 
 // scanSQLToken preserves qualified identifier context across raw token scans.

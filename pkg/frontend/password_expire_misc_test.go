@@ -33,6 +33,8 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
@@ -998,4 +1000,36 @@ func TestDoAlterUserCommitFailureKeepsSandbox(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, ses.getRoutine().isExpired(),
 		"a rolled-back password change must not release the expired-password sandbox")
+}
+
+// TestRedactParseErrorSecrets: a syntax error echo (`near "..."`) must not
+// replay a masked secret into logs, records, or the client error.
+func TestRedactParseErrorSecrets(t *testing.T) {
+	raw := "SET PASSWORD = 'unterminated-secret42"
+	_, err := parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unterminated-secret42", "the parser echo carries the raw secret")
+
+	scrubbed := redactStatementErrorForLogging(err, raw)
+	require.NotContains(t, scrubbed.Error(), "unterminated-secret42")
+	require.Contains(t, scrubbed.Error(), "******")
+
+	// The doubled-quote literal is scrubbed by raw span as well.
+	raw = "SET PASSWORD = 'sec''ret-echo42' broken"
+	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
+	require.Error(t, err)
+	scrubbed = redactStatementErrorForLogging(err, raw)
+	require.NotContains(t, scrubbed.Error(), "ret-echo42")
+
+	// Multi-statement input: the secret sits in the second fragment.
+	raw = "select 1; SET PASSWORD = 'batch-echo42' broken"
+	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
+	require.Error(t, err)
+	scrubbed = redactStatementErrorForLogging(err, raw)
+	require.NotContains(t, scrubbed.Error(), "batch-echo42")
+
+	// No secret shape: the original error passes through untouched.
+	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, "selec from", 1)
+	require.Error(t, err)
+	require.True(t, err == redactStatementErrorForLogging(err, "selec from"))
 }
