@@ -30,6 +30,19 @@ type stubEngine struct {
 	dbs        map[string]*stubDatabase
 	dbErr      error
 	databaseFn func(context.Context, string, client.TxnOperator) (engine.Database, error)
+	relsById   map[uint64]*stubRelation
+	relDbNames map[uint64]string
+	relByIdErr error
+}
+
+func (e *stubEngine) GetRelationById(ctx context.Context, op client.TxnOperator, tableId uint64) (string, string, engine.Relation, error) {
+	if e.relByIdErr != nil {
+		return "", "", nil, e.relByIdErr
+	}
+	if rel, ok := e.relsById[tableId]; ok {
+		return e.relDbNames[tableId], rel.name, rel, nil
+	}
+	return "", "", nil, moerr.NewNoSuchTable(ctx, "", "relation by id")
 }
 
 func newStubEngine() *stubEngine {
@@ -126,6 +139,9 @@ type stubRelation struct {
 	collectTombstonesCall int
 	tableID               uint64
 	tableDef              *plan.TableDef
+	defs                  []engine.TableDef
+	copyDef               *plan.TableDef
+	updateConstraint      func(context.Context, *engine.ConstraintDef) error
 }
 
 func newStubRelation(name string) *stubRelation {
@@ -144,7 +160,18 @@ func (r *stubRelation) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute,
 }
 
 func (r *stubRelation) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
-	return nil, nil
+	return r.defs, nil
+}
+
+func (r *stubRelation) CopyTableDef(ctx context.Context) *plan.TableDef {
+	return r.copyDef
+}
+
+func (r *stubRelation) UpdateConstraint(ctx context.Context, ct *engine.ConstraintDef) error {
+	if r.updateConstraint != nil {
+		return r.updateConstraint(ctx, ct)
+	}
+	return nil
 }
 
 func (r *stubRelation) GetTableDef(ctx context.Context) *plan.TableDef {
