@@ -721,20 +721,27 @@ func hasCredentialActionableKeyword(sql string, maskAll bool, mode SQLModeFlags)
 			// the access-key names matter inside).
 			delim := c
 			// The access-key RULE matches the DECODED string value
-			// (`'access_k\ey_id'` decodes to the key name and DOES arm it,
-			// #30747 review), so the admission check inside a string body is
-			// backslash-tolerant whenever the current mode escapes; quoted
-			// identifiers have no escapes.
-			bodyEscapes := delim != '`' && !mode.Has(SQLModeNoBackslashEscapes)
+			// (`'\access_key_id'` and `'access_k\ey_id'` both decode to the
+			// key name and DO arm it, #30747 review), so the admission check
+			// inside a string body is backslash-tolerant — including at the
+			// very first body byte — whenever the current mode escapes.
+			// Quoted identifiers have NO escapes: under ANSI_QUOTES a double
+			// quote is an identifier quote where a backslash is a literal
+			// byte, so an ident-following quote must not be treated as
+			// escape-swallowed or the whole rest of the statement (including
+			// the credentials clause) is skipped (#30747 review).
+			bodyEscapes := delim != '`' && !mode.Has(SQLModeNoBackslashEscapes) &&
+				!(delim == '"' && mode.Has(SQLModeANSIQuotes))
 			j := i + 1
 			for j < n {
-				if b := sql[j] | 0x20; maskAll && (b == 'a' || b == 's') {
+				if b := sql[j] | 0x20; maskAll && (b == 'a' || b == 's' ||
+					(bodyEscapes && sql[j] == '\\')) {
 					if hasFoldWordAtEscapeTolerant(sql, j, "access_key_id", bodyEscapes) ||
 						hasFoldWordAtEscapeTolerant(sql, j, "secret_access_key", bodyEscapes) {
 						return true
 					}
 				}
-				if delim != '`' && sql[j] == '\\' && !mode.Has(SQLModeNoBackslashEscapes) {
+				if bodyEscapes && sql[j] == '\\' {
 					j += 2
 					continue
 				}

@@ -634,3 +634,59 @@ func TestMaskUnknownModeTransitionKeepsRemainderWhole(t *testing.T) {
 	got = MaskSensitiveSqlLiteralsPerStatement(sql, 0)
 	require.NotContains(t, got, "R5_SPLIT_CANARY")
 }
+
+// #30747 review round 6, finding 1: an ESCAPED INITIAL letter of an S3
+// option name decodes to the recognized credential key (`'\access_key_id'`
+// → access_key_id); the access-key rule matches the decoded value and masks,
+// so the prefilter's in-body check must consult the decoded name starting at
+// the very first body byte — otherwise the statement bypasses masking
+// COMPLETELY (base implementation masked both; parity restored here).
+func TestMaskPrefilterEscapedInitialAccessKey(t *testing.T) {
+	sql := `select '\access_key_id'='R6_ESCAPED_A'`
+	got := MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R6_ESCAPED_A")
+	require.Contains(t, got, `'\access_key_id'='******'`)
+
+	sql = `select '\secret_access_key'='R6_ESCAPED_S'`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R6_ESCAPED_S")
+	require.Contains(t, got, `'\secret_access_key'='******'`)
+
+	// inside a credential map too
+	sql = `create stage s credentials={'\access_key_id'='R6_ESCAPED_M'}`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R6_ESCAPED_M")
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+
+	// NBE parity: `\a` stays two literal bytes, so the decoded value is not
+	// the key name and nothing arms
+	require.Equal(t, `select '\access_key_id'='VISIBLE_NBE'`,
+		MaskSensitiveSqlLiteralsWithSQLMode(`select '\access_key_id'='VISIBLE_NBE'`,
+			SQLModeFlags(SQLModeNoBackslashEscapes)))
+}
+
+// #30747 review round 6, finding 2: under ANSI_QUOTES a double quote is an
+// IDENTIFIER quote with NO backslash escapes — `"s\"` ends right after the
+// backslash. Treating that closing quote as escape-swallowed makes the
+// prefilter skip the entire remainder (including the credentials clause) and
+// return the original SQL; the secret survives recording and debug masking.
+func TestMaskPrefilterAnsiQuotesIdentifierBackslash(t *testing.T) {
+	ansi := SQLModeFlags(SQLModeANSIQuotes)
+	sql := `create stage "s\" url='file:///x' credentials={'k'='R6_ANSI_CANARY'}`
+	got := MaskSensitiveSqlLiteralsWithSQLMode(sql, ansi)
+	require.NotContains(t, got, "R6_ANSI_CANARY")
+	require.Contains(t, got, `'k'='******'`)
+	require.Equal(t, got, MaskSensitiveSqlLiteralsWithSQLMode(got, ansi), "idempotent")
+
+	// the same identifier shape must not swallow the clause in map scans
+	sql = `create stage "s\" url='u' credentials={'access_key_id'='R6_ANSI_MAP', 'r'='R6_ANSI_MAP2'}`
+	got = MaskSensitiveSqlLiteralsWithSQLMode(sql, ansi)
+	require.NotContains(t, got, "R6_ANSI_MAP")
+	require.NotContains(t, got, "R6_ANSI_MAP2")
+
+	// consistent no-op under the default lexical mode: there the whole tail
+	// IS one unterminated double-quoted string — scanner and prefilter agree
+	require.Equal(t,
+		`create stage "s\" url='file:///x' credentials={'k'='VISIBLE_MODE0'}`,
+		MaskSensitiveSqlLiterals(`create stage "s\" url='file:///x' credentials={'k'='VISIBLE_MODE0'}`))
+}
