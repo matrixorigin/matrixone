@@ -595,6 +595,24 @@ var supportedAggInNewFramework = []FuncNew{
 		},
 	},
 
+	// function `QUANTILE_EXACT_WEIGHTED`: exact weighted percentile aggregate.
+	// Exact weighted percentile over (value, weight) rows; the third argument
+	// is stripped into compile-time aggregate configuration.
+	{
+		functionId: QUANTILE_EXACT_WEIGHTED,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    quantileExactWeightedCheck,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    aggexec.QuantileExactWeightedReturnType,
+				aggName:    "quantileExactWeighted",
+			},
+		},
+	},
+
 	// function `BITMAP_CONSTRUCT_AGG`
 	{
 		functionId: BITMAP_CONSTRUCT_AGG,

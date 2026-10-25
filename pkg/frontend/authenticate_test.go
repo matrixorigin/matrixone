@@ -13503,6 +13503,7 @@ type backgroundExecTest struct {
 	sql2result                     map[string]ExecResult
 	resultSets                     []interface{}
 	sql2err                        map[string]error
+	sqlPrefixErr                   map[string]error
 	executedSQLs                   []string
 	beforeExec                     func(string)
 	dropDatabaseIgnoresForeignKeys bool
@@ -13626,6 +13627,7 @@ func (bt *backgroundExecTest) ClearExecResultBatches() {
 func (bt *backgroundExecTest) init() {
 	bt.sql2result = make(map[string]ExecResult)
 	bt.sql2err = make(map[string]error)
+	bt.sqlPrefixErr = make(map[string]error)
 }
 
 func (bt *backgroundExecTest) Close() {
@@ -13658,6 +13660,13 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	}
 	if err, ok := bt.sql2err[s]; ok {
 		return err
+	}
+	// Prefix errors are checked after the exact key so nondeterministic SQL
+	// (an embedded runtime uuid, e.g. mo_snapshots inserts) can be faulted.
+	for prefix, err := range bt.sqlPrefixErr {
+		if strings.HasPrefix(s, prefix) {
+			return err
+		}
 	}
 	return nil
 }
