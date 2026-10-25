@@ -2714,7 +2714,7 @@ func dateStringInterval(ivecs []*vector.Vector, result vector.FunctionResultWrap
 			continue
 		}
 		// Compact 14-digit calendars carry a clock even without separators.
-		hasTimePart := strings.ContainsAny(text, " :") || len(text) >= 14 && isAllDigits(text)
+		hasTimePart := strings.ContainsAny(text, " :T") || len(text) >= 14 && isAllDigits(text[:14])
 		var formatted string
 		if !hasTimePart && !isTimeUnit {
 			formatted = dt.ToDate().String()

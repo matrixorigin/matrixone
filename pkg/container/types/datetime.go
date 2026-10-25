@@ -160,7 +160,7 @@ func IsCalendarStringCandidate(s string) bool {
 		// Eight digits can be a compact DATE or a zero-padded TIME. Keep
 		// accepted compact dates (including the zero-date sentinel) as dates;
 		// an impossible leading-zero calendar belongs to the TIME grammar.
-		_, err := ParseDateCast(s)
+		_, err := ParseDateCastWithContext(ctx, s)
 		return err == nil
 	}
 	return true
@@ -203,6 +203,25 @@ func IsWholeColonClock(s string) bool {
 	return i == len(s)
 }
 
+// TemporalStringKind records recognized calendar syntax without converting a
+// raw string consumer or taking ownership of its SQL diagnostics.
+type TemporalStringKind uint8
+
+const (
+	TemporalStringUnknown TemporalStringKind = iota
+	TemporalStringDate
+	TemporalStringDatetime
+)
+
+// ClassifyTemporalString observes the same grammar as ParseDatetime. Recognized
+// incomplete calendars retain their shape even when value conversion rejects
+// them. Invalid complete calendars and clocks have unknown shape.
+func ClassifyTemporalString(s string) TemporalStringKind {
+	kind := TemporalStringUnknown
+	_, _ = parseDatetime(defaultParseContext, s, 6, &kind)
+	return kind
+}
+
 // ParseDatetime will parse a string to be a Datetime
 // Support Format:
 // 1. all the Date value
@@ -224,8 +243,15 @@ func ParseDatetime(s string, scale int32) (Datetime, error) {
 
 // ParseDatetimeWithContext parses with the caller's error reporting context.
 func ParseDatetimeWithContext(ctx context.Context, s string, scale int32) (Datetime, error) {
+	return parseDatetime(ctx, s, scale, nil)
+}
+
+func parseDatetime(ctx context.Context, s string, scale int32, kind *TemporalStringKind) (Datetime, error) {
 	s = strings.TrimSpace(s)
 	if isZeroDatetimeString(s) {
+		if kind != nil {
+			*kind = zeroDatetimeStringKind(s)
+		}
 		return ZeroDatetime, nil
 	}
 	var dtSepIdx int
@@ -236,7 +262,15 @@ func ParseDatetimeWithContext(ctx context.Context, s string, scale int32) (Datet
 	}
 	if len(s) < 14 && dtSepIdx < 0 {
 		if d, err := ParseDateCastWithContext(ctx, s); err == nil {
+			if kind != nil {
+				*kind = TemporalStringDate
+			}
 			return d.ToDatetime(), nil
+		}
+		if kind != nil {
+			if y, m, d, _, err := parseDateCastComponentsWithContext(ctx, strings.TrimSpace(s)); err == nil && observedCalendarFields(y, m, d) {
+				*kind = TemporalStringDate
+			}
 		}
 		return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 	}
@@ -303,6 +337,17 @@ func ParseDatetimeWithContext(ctx context.Context, s string, scale int32) (Datet
 			}
 			date, dateErr := ParseDateCastWithContext(ctx, s[:dtSepIdx])
 			if dateErr != nil || date == ZeroDate {
+				if kind != nil {
+					// The value parser exits before clock parsing for incomplete
+					// dates. Observe components and a valid surrogate clock only
+					// for classification; ordinary conversion keeps its error.
+					y, m, d, _, componentErr := parseDateCastComponentsWithContext(ctx, strings.TrimSpace(s[:dtSepIdx]))
+					if componentErr == nil && observedCalendarFields(y, m, d) {
+						if _, clockErr := parseDatetime(ctx, "2000-01-01 "+s[dtSepIdx+1:], scale, nil); clockErr == nil {
+							*kind = TemporalStringDatetime
+						}
+					}
+				}
 				return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 			}
 			year, month, day, _ = date.Calendar(true)
@@ -384,6 +429,9 @@ func ParseDatetimeWithContext(ctx context.Context, s string, scale int32) (Datet
 		}
 	}
 	if !ValidDate(year, month, day) || !ValidTimeInDay(hour, minute, second) {
+		if kind != nil && ValidTimeInDay(hour, minute, second) && observedCalendarFields(year, month, day) {
+			*kind = TemporalStringDatetime
+		}
 		return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 	}
 	result := DatetimeFromClock(year, month, day, hour, minute, second+uint8(carry), msec)
@@ -391,28 +439,42 @@ func ParseDatetimeWithContext(ctx context.Context, s string, scale int32) (Datet
 	if !ValidDate(y, m, d) {
 		return -1, moerr.NewInvalidInputf(parseErrorContext(ctx), "invalid datetime value %s", s)
 	}
+	if kind != nil {
+		*kind = TemporalStringDatetime
+	}
 	return result, nil
 }
 
+func observedCalendarFields(year int32, month, day uint8) bool {
+	return year >= 0 && year <= MaxDateYear && month <= MaxMonthInYear && day <= 31 &&
+		(month == 0 || day == 0 || ValidCalendarDate(year, month, day))
+}
+
 func isZeroDatetimeString(s string) bool {
+	return zeroDatetimeStringKind(s) != TemporalStringUnknown
+}
+
+func zeroDatetimeStringKind(s string) TemporalStringKind {
 	base := s
 	if dot := strings.IndexByte(s, '.'); dot >= 0 {
 		base = s[:dot]
 		fraction := s[dot+1:]
 		if fraction == "" || !isAllDigit(fraction) {
-			return false
+			return TemporalStringUnknown
 		}
 		for i := range fraction {
 			if fraction[i] != '0' {
-				return false
+				return TemporalStringUnknown
 			}
 		}
 	}
 	switch base {
-	case "0000-00-00", "00000000", "0000-00-00 00:00:00", "0000-00-00T00:00:00", "00000000000000":
-		return true
+	case "0000-00-00", "00000000":
+		return TemporalStringDate
+	case "0000-00-00 00:00:00", "0000-00-00T00:00:00", "00000000000000":
+		return TemporalStringDatetime
 	default:
-		return false
+		return TemporalStringUnknown
 	}
 }
 

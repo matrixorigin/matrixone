@@ -7526,7 +7526,7 @@ func bindFuncExprImplByPlanExpr(
 		return nil, moerr.NewInvalidInputf(
 			ctx, "function %s is plan-internal and cannot be called directly", name)
 	}
-	preparedCalendarResult := preparedRawCalendarResult(name, args)
+	preparedCalendarResult := preparedRawCalendarResult(ctx, name, args)
 	// Validate before rewriting or converting argument metadata. Checked public
 	// binding must not turn an unknown identity into a MustTypeFromPlan panic.
 	for _, arg := range args {
@@ -7768,6 +7768,12 @@ func bindFuncExprImplByPlanExpr(
 			// before returning to raw arithmetic and the template's result cast.
 			if rawPreparedCalendarMarker(originalBoundExpr.GetF().Args[0]) {
 				source := unwrapPreparedImplicitCast(args[0], true)
+				// Runtime DATE/DATETIME casts materialize a typed source, not
+				// a provisional marker cast. Keep that domain when selecting
+				// the calendar consumer, especially for DATE plus HOUR.
+				if args[0].Typ.Id == int32(types.T_date) || args[0].Typ.Id == int32(types.T_datetime) {
+					source = args[0]
+				}
 				oid := types.T(source.Typ.Id)
 				if oid != types.T_any && !oid.IsMySQLString() {
 					value, e := bindTemporalMarkerConsumer(ctx, source, types.New(types.T_datetime, 6, 6))
@@ -8851,6 +8857,11 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 		returnType.Width = returnType.Scale
+
+	case "from_unixtime":
+		if len(args) == 1 && temporalDirectMarkerArgument(args, originalBoundExpr, 0) {
+			returnType.Width, returnType.Scale = 6, 6
+		}
 
 	case "sec_to_time":
 		returnType.Width = returnType.Scale
@@ -12635,13 +12646,10 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	}
 	markerDate := temporalDirectMarker(dateExpr)
 	if markerDate {
-		target := types.New(types.T_datetime, 6, 6)
-		if timestampAddDateUnit(intervalType) || intervalType == types.Year_Month {
-			target = types.T_date.ToType()
-		}
 		if rawPreparedCalendarMarker(dateExpr) {
 			dateExpr, err = appendCastBeforeExpr(ctx, unwrapPreparedImplicitCast(dateExpr, true), plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen})
 		} else {
+			target := preparedCalendarMarkerResult(ctx, dateExpr, timestampAddDateUnit(intervalType) || intervalType == types.Year_Month)
 			dateExpr, err = bindTemporalMarkerConsumer(ctx, dateExpr, target)
 		}
 		if err != nil {

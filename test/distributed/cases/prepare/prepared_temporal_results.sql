@@ -4,12 +4,21 @@ USE prepared_temporal_results_test;
 SET @temporal_saved_tz = @@session.time_zone;
 SET SESSION time_zone = '+00:00';
 
--- #30192: metadata follows the numeric source on each prepared execution.
+-- #30192: a direct prepared epoch keeps FSP6; ordinary and explicit casts keep their contracts.
 PREPARE p_epoch FROM 'SELECT FROM_UNIXTIME(?) AS v';
 SET @epoch = 1704067200;
 -- @metacmp(true)
 EXECUTE p_epoch USING @epoch;
 SET @epoch = CAST(1704067200.123456 AS DECIMAL(16,6));
+-- @metacmp(true)
+EXECUTE p_epoch USING @epoch;
+SET @epoch = 1704067200;
+-- @metacmp(true)
+EXECUTE p_epoch USING @epoch;
+SET @epoch = NULL;
+-- @metacmp(true)
+EXECUTE p_epoch USING @epoch;
+SET @epoch = -1;
 -- @metacmp(true)
 EXECUTE p_epoch USING @epoch;
 SET @epoch = 1704067200;
@@ -26,6 +35,29 @@ EXECUTE p_epoch_ctas USING @epoch;
 SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'epoch_copy';
 SELECT CAST(v AS CHAR) AS v FROM epoch_copy;
 DEALLOCATE PREPARE p_epoch_ctas;
+
+SET @epoch_int = 1704067200;
+-- Ordinary integer sources and an explicit cast keep FSP0.
+-- @metacmp(true)
+SELECT FROM_UNIXTIME(1704067200) AS literal_epoch, FROM_UNIXTIME(@epoch_int) AS variable_epoch;
+PREPARE p_epoch_explicit FROM 'SELECT FROM_UNIXTIME(CAST(? AS SIGNED)) AS v';
+SET @epoch = 1704067200;
+-- @metacmp(true)
+EXECUTE p_epoch_explicit USING @epoch;
+DEALLOCATE PREPARE p_epoch_explicit;
+PREPARE p_epoch_nested FROM 'SELECT FROM_UNIXTIME(ABS(CAST(? AS SIGNED))) AS v';
+-- @metacmp(true)
+EXECUTE p_epoch_nested USING @epoch;
+DEALLOCATE PREPARE p_epoch_nested;
+PREPARE p_epoch_format FROM 'SELECT FROM_UNIXTIME(?, ''%Y-%m-%d %H:%i:%s.%f'') AS v';
+EXECUTE p_epoch_format USING @epoch;
+DEALLOCATE PREPARE p_epoch_format;
+PREPARE p_epoch_dec3 FROM 'CREATE TABLE epoch_dec3_copy AS SELECT FROM_UNIXTIME(?) AS v';
+SET @epoch = CAST(1704067200.123 AS DECIMAL(13,3));
+EXECUTE p_epoch_dec3 USING @epoch;
+SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'epoch_dec3_copy';
+SELECT CAST(v AS CHAR) AS v FROM epoch_dec3_copy;
+DEALLOCATE PREPARE p_epoch_dec3;
 
 -- #30194: the dynamic first operand is temporal; literal string controls stay strings.
 SET @d = '2024-01-31 12:34:56.123456';
@@ -46,9 +78,44 @@ SET @n = 1;
 EXECUTE p_date_day USING @d, @n;
 SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'date_day_copy';
 SELECT CAST(v AS CHAR) AS v FROM date_day_copy;
+-- CTAS recomputes its family even after an execution with a datetime source.
+DROP TABLE date_day_copy;
+SET @d = '2024-02-28';
+SET @n = '1';
+EXECUTE p_date_day USING @d, @n;
+SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'date_day_copy';
+SELECT CAST(v AS CHAR) AS v FROM date_day_copy;
+DROP TABLE date_day_copy;
+SET @d = '20240228233000.999999';
+SET @n = CAST(1 AS DECIMAL(2,1));
+EXECUTE p_date_day USING @d, @n;
+SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'date_day_copy';
+SELECT CAST(v AS CHAR) AS v FROM date_day_copy;
 DEALLOCATE PREPARE p_date_day;
 
--- Calendar-only result metadata also survives numeric compound counts.
+-- SELECT retains a widened family for this handle; a fresh handle starts at DATE.
+PREPARE p_day_select FROM 'SELECT DATE_ADD(?, INTERVAL 1 DAY) AS v';
+SET @d = '2024-02-28';
+-- @metacmp(true)
+EXECUTE p_day_select USING @d;
+SET @d = '2024-02-28T00:00:00';
+-- @metacmp(true)
+EXECUTE p_day_select USING @d;
+SET @d = '2024-02-28';
+-- @metacmp(true)
+EXECUTE p_day_select USING @d;
+SET @d = NULL;
+-- @metacmp(true)
+EXECUTE p_day_select USING @d;
+DEALLOCATE PREPARE p_day_select;
+PREPARE p_day_select FROM 'SELECT DATE_ADD(?, INTERVAL 1 DAY) AS v';
+SET @d = '2024-02-28';
+-- @metacmp(true)
+EXECUTE p_day_select USING @d;
+DEALLOCATE PREPARE p_day_select;
+SET @d = '2024-01-31 12:34:56.123456';
+
+-- Calendar units retain the dynamic source clock through compound count normalization.
 PREPARE p_year_month FROM 'SELECT DATE_ADD(?, INTERVAL 1 YEAR_MONTH) AS added, DATE_SUB(?, INTERVAL 1 YEAR_MONTH) AS subtracted';
 -- @metacmp(true)
 EXECUTE p_year_month USING @d, @d;

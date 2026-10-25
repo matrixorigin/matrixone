@@ -89,6 +89,8 @@ func preparedUserVariable(ctx context.Context, name string) (preparedUserVariabl
 // value to determine schema/configuration mark the result value-dependent;
 // such a plan must not enter the type-only cache.
 type preparedSourceBindingState struct {
+	temporalTypes        *PreparedTemporalTypes
+	temporalTypesDirty   bool
 	fieldReturnSources   map[*Expr]preparedFieldReturnSource
 	fieldTypes           *preparedFieldTypeBinding
 	bindings             []PreparedSourceBinding
@@ -106,6 +108,7 @@ func withPreparedSourceBindings(ctx context.Context, bindings []PreparedSourceBi
 	}
 	bindings = append([]PreparedSourceBinding(nil), bindings...)
 	state := &preparedSourceBindingState{bindings: bindings, diagnosticFree: true}
+	state.temporalTypes, _ = ctx.Value(preparedTemporalTypesKey{}).(*PreparedTemporalTypes)
 	if len(values) > 0 {
 		state.values = values[0]
 	}
@@ -995,6 +998,7 @@ func preparedCharSourceCast(ctx context.Context, source *Expr, value string) (*E
 // PreparedExecutionPlan carries the immutable logical plan and the original
 // predicate candidates that must be proved again for every cache hit.
 type PreparedExecutionPlan struct {
+	TemporalTypes        *PreparedTemporalTypes
 	Plan                 *Plan
 	FieldTypes           *PreparedFieldTypes
 	DiagnosticCandidates []*Expr
@@ -1061,7 +1065,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		return nil, err
 	}
 	state := preparedBindingState(planning)
-	return &PreparedExecutionPlan{Plan: p, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates, DecimalFloatProofs: state.decimalFloatProofs,
+	return &PreparedExecutionPlan{Plan: p, TemporalTypes: state.temporalTypes, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates, DecimalFloatProofs: state.decimalFloatProofs,
 		DiagnosticFree: state.diagnosticFree, ValueDependent: state.valueDependent}, nil
 }
 

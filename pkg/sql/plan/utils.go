@@ -4237,14 +4237,20 @@ func isPreparedDMLStmt(stmtType plan.Query_StatementType) bool {
 	}
 }
 
-func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
-	writeExprs := make(map[*plan.Expr]struct{})
+// Nonzero types identify destination row images; zero types mark intermediate
+// projections whose generated temporal consumer casts may be re-inferred.
+func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]plan.Type {
+	writeExprs := make(map[*plan.Expr]plan.Type)
 	if query == nil || !isPreparedDMLStmt(query.StmtType) {
 		return writeExprs
 	}
-	add := func(expr *plan.Expr) {
+	add := func(expr *plan.Expr, target bool) {
 		if preparedExprContainsParam(expr) {
-			writeExprs[expr] = struct{}{}
+			if target {
+				writeExprs[expr] = expr.Typ
+			} else if _, exists := writeExprs[expr]; !exists {
+				writeExprs[expr] = plan.Type{}
+			}
 		}
 	}
 
@@ -4255,8 +4261,8 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 	// The final row-image projection and any unary projections below it are the
 	// positional roots consumed by the writer.
 	visited := make(map[int32]struct{})
-	var visitWritePath func(int32)
-	visitWritePath = func(nodeID int32) {
+	var visitWritePath func(int32, bool)
+	visitWritePath = func(nodeID int32, target bool) {
 		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
 			return
 		}
@@ -4270,15 +4276,16 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 		}
 		if node.NodeType == plan.Node_PROJECT {
 			for _, expr := range node.ProjectList {
-				add(expr)
+				add(expr, target)
 			}
+			target = false
 		}
 		if len(node.Children) > 0 {
 			// A DML input can fan out through joins/applies. The final
 			// positional projection is above that fan-out; once below it,
 			// follow only the primary (left) path and leave secondary
 			// subquery/derived-table projections to normal specialization.
-			visitWritePath(node.Children[0])
+			visitWritePath(node.Children[0], target)
 		}
 	}
 	for _, node := range query.Nodes {
@@ -4295,7 +4302,7 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 				input := query.Nodes[childID]
 				if input != nil {
 					for _, expr := range input.ProjectList {
-						add(expr)
+						add(expr, true)
 					}
 				}
 			}
@@ -4305,25 +4312,25 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 		// filter expressions and must remain eligible for specialization.
 		if node.NodeType == plan.Node_INSERT || node.NodeType == plan.Node_MULTI_UPDATE {
 			for _, expr := range node.ProjectList {
-				add(expr)
+				add(expr, true)
 			}
 			for _, childID := range node.Children {
-				visitWritePath(childID)
+				visitWritePath(childID, true)
 			}
 		}
 		for _, expr := range node.OnUpdateExprs {
-			add(expr)
+			add(expr, true)
 		}
 		if node.DedupJoinCtx != nil {
 			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
-				add(expr)
+				add(expr, true)
 			}
 		}
 		if node.RowsetData != nil {
 			for _, col := range node.RowsetData.Cols {
 				for _, row := range col.Data {
 					if row != nil {
-						add(row.Expr)
+						add(row.Expr, true)
 					}
 				}
 			}

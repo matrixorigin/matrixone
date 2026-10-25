@@ -6,7 +6,7 @@ SET SESSION time_zone = '+00:00';
 PREPARE p_epoch FROM 'SELECT FROM_UNIXTIME(?) AS v';
 SET @epoch = 1704067200;
 EXECUTE p_epoch USING @epoch;
-➤ v[93,19,0]  𝄀
+➤ v[93,26,0]  𝄀
 2024-01-01 00:00:00
 SET @epoch = CAST(1704067200.123456 AS DECIMAL(16,6));
 EXECUTE p_epoch USING @epoch;
@@ -14,17 +14,29 @@ EXECUTE p_epoch USING @epoch;
 2024-01-01 00:00:00.123456000
 SET @epoch = 1704067200;
 EXECUTE p_epoch USING @epoch;
-➤ v[93,19,0]  𝄀
+➤ v[93,26,0]  𝄀
+2024-01-01 00:00:00
+SET @epoch = NULL;
+EXECUTE p_epoch USING @epoch;
+➤ v[93,26,0]  𝄀
+null
+SET @epoch = -1;
+EXECUTE p_epoch USING @epoch;
+➤ v[93,26,0]  𝄀
+null
+SET @epoch = 1704067200;
+EXECUTE p_epoch USING @epoch;
+➤ v[93,26,0]  𝄀
 2024-01-01 00:00:00
 DEALLOCATE PREPARE p_epoch;
 PREPARE p_epoch_ctas FROM 'CREATE TABLE epoch_copy AS SELECT FROM_UNIXTIME(?) AS v';
 EXECUTE p_epoch_ctas USING @epoch;
 SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'epoch_copy';
 ➤ column_type[12,65535,0]  ¦  datetime_precision[-5,64,0]  𝄀
-datetime  ¦  0
+datetime(6)  ¦  6
 SELECT CAST(v AS CHAR) AS v FROM epoch_copy;
 ➤ v[12,65535,0]  𝄀
-2024-01-01 00:00:00
+2024-01-01 00:00:00.000000
 DROP TABLE epoch_copy;
 SET @epoch = CAST(1704067200.123456 AS DECIMAL(16,6));
 EXECUTE p_epoch_ctas USING @epoch;
@@ -35,6 +47,36 @@ SELECT CAST(v AS CHAR) AS v FROM epoch_copy;
 ➤ v[12,65535,0]  𝄀
 2024-01-01 00:00:00.123456
 DEALLOCATE PREPARE p_epoch_ctas;
+SET @epoch_int = 1704067200;
+SELECT FROM_UNIXTIME(1704067200) AS literal_epoch, FROM_UNIXTIME(@epoch_int) AS variable_epoch;
+➤ literal_epoch[93,19,0]  ¦  variable_epoch[93,19,0]  𝄀
+2024-01-01 00:00:00  ¦  2024-01-01 00:00:00
+PREPARE p_epoch_explicit FROM 'SELECT FROM_UNIXTIME(CAST(? AS SIGNED)) AS v';
+SET @epoch = 1704067200;
+EXECUTE p_epoch_explicit USING @epoch;
+➤ v[93,19,0]  𝄀
+2024-01-01 00:00:00
+DEALLOCATE PREPARE p_epoch_explicit;
+PREPARE p_epoch_nested FROM 'SELECT FROM_UNIXTIME(ABS(CAST(? AS SIGNED))) AS v';
+EXECUTE p_epoch_nested USING @epoch;
+➤ v[93,19,0]  𝄀
+2024-01-01 00:00:00
+DEALLOCATE PREPARE p_epoch_nested;
+PREPARE p_epoch_format FROM 'SELECT FROM_UNIXTIME(?, ''%Y-%m-%d %H:%i:%s.%f'') AS v';
+EXECUTE p_epoch_format USING @epoch;
+➤ v[12,65535,0]  𝄀
+2024-01-01 00:00:00.000000
+DEALLOCATE PREPARE p_epoch_format;
+PREPARE p_epoch_dec3 FROM 'CREATE TABLE epoch_dec3_copy AS SELECT FROM_UNIXTIME(?) AS v';
+SET @epoch = CAST(1704067200.123 AS DECIMAL(13,3));
+EXECUTE p_epoch_dec3 USING @epoch;
+SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'epoch_dec3_copy';
+➤ column_type[12,65535,0]  ¦  datetime_precision[-5,64,0]  𝄀
+datetime(6)  ¦  6
+SELECT CAST(v AS CHAR) AS v FROM epoch_dec3_copy;
+➤ v[12,65535,0]  𝄀
+2024-01-01 00:00:00.123000
+DEALLOCATE PREPARE p_epoch_dec3;
 SET @d = '2024-01-31 12:34:56.123456';
 PREPARE p_date FROM 'SELECT DATE_ADD(?, INTERVAL 1 HOUR) AS v';
 EXECUTE p_date USING @d;
@@ -58,34 +100,79 @@ SET @n = 1;
 EXECUTE p_date_day USING @d, @n;
 SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'date_day_copy';
 ➤ column_type[12,65535,0]  ¦  datetime_precision[-5,64,0]  𝄀
+datetime(6)  ¦  6
+SELECT CAST(v AS CHAR) AS v FROM date_day_copy;
+➤ v[12,65535,0]  𝄀
+2024-02-01 12:34:56.123456
+DROP TABLE date_day_copy;
+SET @d = '2024-02-28';
+SET @n = '1';
+EXECUTE p_date_day USING @d, @n;
+SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'date_day_copy';
+➤ column_type[12,65535,0]  ¦  datetime_precision[-5,64,0]  𝄀
 date  ¦  null
 SELECT CAST(v AS CHAR) AS v FROM date_day_copy;
 ➤ v[12,65535,0]  𝄀
-2024-02-01
+2024-02-29
+DROP TABLE date_day_copy;
+SET @d = '20240228233000.999999';
+SET @n = CAST(1 AS DECIMAL(2,1));
+EXECUTE p_date_day USING @d, @n;
+SELECT column_type, datetime_precision FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'date_day_copy';
+➤ column_type[12,65535,0]  ¦  datetime_precision[-5,64,0]  𝄀
+datetime(6)  ¦  6
+SELECT CAST(v AS CHAR) AS v FROM date_day_copy;
+➤ v[12,65535,0]  𝄀
+2024-02-29 23:30:00.999999
 DEALLOCATE PREPARE p_date_day;
+PREPARE p_day_select FROM 'SELECT DATE_ADD(?, INTERVAL 1 DAY) AS v';
+SET @d = '2024-02-28';
+EXECUTE p_day_select USING @d;
+➤ v[91,10,0]  𝄀
+2024-02-29
+SET @d = '2024-02-28T00:00:00';
+EXECUTE p_day_select USING @d;
+➤ v[93,26,0]  𝄀
+2024-02-29 00:00:00
+SET @d = '2024-02-28';
+EXECUTE p_day_select USING @d;
+➤ v[93,26,0]  𝄀
+2024-02-29 00:00:00
+SET @d = NULL;
+EXECUTE p_day_select USING @d;
+➤ v[93,26,0]  𝄀
+null
+DEALLOCATE PREPARE p_day_select;
+PREPARE p_day_select FROM 'SELECT DATE_ADD(?, INTERVAL 1 DAY) AS v';
+SET @d = '2024-02-28';
+EXECUTE p_day_select USING @d;
+➤ v[91,10,0]  𝄀
+2024-02-29
+DEALLOCATE PREPARE p_day_select;
+SET @d = '2024-01-31 12:34:56.123456';
 PREPARE p_year_month FROM 'SELECT DATE_ADD(?, INTERVAL 1 YEAR_MONTH) AS added, DATE_SUB(?, INTERVAL 1 YEAR_MONTH) AS subtracted';
 EXECUTE p_year_month USING @d, @d;
-➤ added[91,10,0]  ¦  subtracted[91,10,0]  𝄀
-2024-02-29  ¦  2023-12-31
+➤ added[93,26,0]  ¦  subtracted[93,26,0]  𝄀
+2024-02-29 12:34:56.123456000  ¦  2023-12-31 12:34:56.123456000
 DEALLOCATE PREPARE p_year_month;
 PREPARE p_year_month_ctas FROM 'CREATE TABLE year_month_copy AS SELECT DATE_ADD(?, INTERVAL ? YEAR_MONTH) AS v';
 SET @n = 1;
 EXECUTE p_year_month_ctas USING @d, @n;
 SELECT column_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'year_month_copy';
 ➤ column_type[12,65535,0]  𝄀
-date
+datetime(6)
 SELECT CAST(v AS CHAR) AS v FROM year_month_copy;
 ➤ v[12,65535,0]  𝄀
-2024-02-29
+2024-02-29 12:34:56.123456
 DROP TABLE year_month_copy;
 SET @n = '1';
 EXECUTE p_year_month_ctas USING @d, @n;
 SELECT column_type FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'year_month_copy';
 ➤ column_type[12,65535,0]  𝄀
-date
+datetime(6)
 SELECT CAST(v AS CHAR) AS v FROM year_month_copy;
 ➤ v[12,65535,0]  𝄀
-2024-02-29
+2024-02-29 12:34:56.123456
 DEALLOCATE PREPARE p_year_month_ctas;
 SET @d = '2024-01-31 12:34:56.000001';
 SET @n = 1;

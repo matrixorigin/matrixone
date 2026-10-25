@@ -270,7 +270,9 @@ type ComputationWrapper interface {
 }
 
 type PrepareStmt struct {
-	fieldTypes *plan2.PreparedFieldTypes
+	temporalTypes             *plan2.PreparedTemporalTypes
+	temporalTypesResetPending bool
+	fieldTypes                *plan2.PreparedFieldTypes
 	// A committed type-generation rebuild can fail before execution metadata
 	// publishes its replacement snapshot. Retry must not restore the old facts.
 	fieldTypesResetPending bool
@@ -862,6 +864,8 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 }
 
 func (prepareStmt *PrepareStmt) Close() {
+	prepareStmt.temporalTypes = nil
+	prepareStmt.temporalTypesResetPending = false
 	prepareStmt.fieldTypes = nil
 	prepareStmt.fieldTypesResetPending = false
 	prepareStmt.closeCursor()
