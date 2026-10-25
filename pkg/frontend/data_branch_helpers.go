@@ -237,11 +237,6 @@ func runSqlWithMode(
 		if forceBackExec && realBackExec {
 			bh.ClearExecResultBatches()
 		}
-		// export as CSV need this
-		// bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
-		//for range tblStuff.def.visibleIdxes {
-		//	bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
-		//}
 		if err = bh.Exec(ctx, sql); err != nil {
 			if forceBackExec && realBackExec {
 				bh.ClearExecResultBatches()

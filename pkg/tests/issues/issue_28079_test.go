@@ -62,16 +62,19 @@ func TestIssue28079ConcurrentCreateAccountsShareLifecycleGate(t *testing.T) {
 		const accountB = "issue_28079_account_b"
 		accounts := []string{accountA, accountB}
 		cleanupAccounts := func() error {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
-			defer cleanupCancel()
+			var cleanupErr error
 			for _, account := range accounts {
-				if _, err := db0.ExecContext(
-					cleanupCtx,
-					"drop account if exists `"+account+"`",
-				); err != nil {
-					return fmt.Errorf("drop account %s: %w", account, err)
+				// A failed DROP must neither spend the next account's deadline nor
+				// prevent its cleanup. Keep all failures visible to the caller.
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
+				_, err := db0.ExecContext(cleanupCtx, "drop account if exists `"+account+"`")
+				cleanupCancel()
+				if err != nil {
+					cleanupErr = errors.Join(cleanupErr, fmt.Errorf("drop account %s: %w", account, err))
 				}
 			}
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cleanupCancel()
 			var remaining int
 			if err := db0.QueryRowContext(
 				cleanupCtx,
@@ -79,12 +82,12 @@ func TestIssue28079ConcurrentCreateAccountsShareLifecycleGate(t *testing.T) {
 				accountA,
 				accountB,
 			).Scan(&remaining); err != nil {
-				return fmt.Errorf("verify account cleanup: %w", err)
+				return errors.Join(cleanupErr, fmt.Errorf("verify account cleanup: %w", err))
 			}
 			if remaining != 0 {
-				return fmt.Errorf("account cleanup left %d rows", remaining)
+				return errors.Join(cleanupErr, fmt.Errorf("account cleanup left %d rows", remaining))
 			}
-			return nil
+			return cleanupErr
 		}
 		require.NoError(t, cleanupAccounts())
 		t.Cleanup(func() {
