@@ -297,6 +297,15 @@ type IgnoreForeignKey struct{}
 // recreate), so the schema-wide duplicate-name scan is skipped.
 type TrustedCheckConstraintNames struct{}
 
+// TrustedForeignKeyLayout bridges StatementOption.WithTrustedForeignKeyLayout to
+// the planner's CREATE validation: the statement physically reconstructs an
+// existing table unchanged (TRUNCATE's drop-and-recreate, including the
+// truncate-optimized unfiltered DELETE), so foreign-key layout rules that gate
+// NEWLY authored constraints — like #30282's 1830 for SET NULL over a NOT NULL
+// column — must not reject the historical layout being reinstalled. Never
+// propagate this into user-visible CREATE TABLE planning.
+type TrustedForeignKeyLayout struct{}
+
 type AlterCopyOpt struct{}
 
 // OptimizerHints carries a per-statement optimizer_hints string (same key=value
