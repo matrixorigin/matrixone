@@ -263,3 +263,101 @@ func TestOutfileStartingByContainingTerminatorRejected(t *testing.T) {
 	ep4.userConfig.ExportFormat = "parquet"
 	require.NoError(t, ep4.validateCSVFraming(context.Background()))
 }
+
+// TestOutfileHeaderPrefixCollisionRejected: LOAD's startingBy filter skips a
+// line only when the prefix is absent from it; an unprefixed header whose raw
+// text contains the prefix would come back as a mangled data row (column
+// `name` with STARTING BY 'n' loads an extra "ame" row). The export must
+// reject the configuration before a byte reaches the file.
+func TestOutfileHeaderPrefixCollisionRejected(t *testing.T) {
+	newCfg := func(startingBy string, header bool) *ExportConfig {
+		ep := selectIntoOutfileConfig(",", '"', '\\', startingBy, "\n")
+		ep.userConfig.Outfile = true
+		ep.userConfig.Header = header
+		ep.proc = sysFileAccessTestProcess()
+		ep.ctx = context.Background()
+		return ep
+	}
+	const wantErr = "LINES STARTING BY 'n' occurs in the CSV header"
+
+	t.Run("single column name containing the prefix", func(t *testing.T) {
+		ep := newCfg("n", true)
+		mrs := &MysqlResultSet{}
+		col := &MysqlColumn{}
+		col.SetName("name")
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(col)
+		ep.userConfig.FilePath = filepath.Join(t.TempDir(), "collide.csv")
+		ep.init()
+		defer ep.Close()
+		err := openNewFile(ep.ctx, ep, mrs)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), wantErr)
+		require.NoFileExists(t, ep.userConfig.FilePath, "no file may be opened on framing rejection")
+	})
+
+	t.Run("prefix spanning the field terminator", func(t *testing.T) {
+		// The reader scans the joined line bytes ("idn't,age" contains "n't,");
+		// only checking column names individually would miss this.
+		ep := newCfg("d,s", true)
+		mrs := &MysqlResultSet{}
+		for _, name := range []string{"id", "s"} {
+			col := &MysqlColumn{}
+			col.SetName(name)
+			col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+			mrs.AddColumn(col)
+		}
+		ep.userConfig.FilePath = filepath.Join(t.TempDir(), "collide.csv")
+		ep.init()
+		defer ep.Close()
+		err := openNewFile(ep.ctx, ep, mrs)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "LINES STARTING BY 'd,s' occurs in the CSV header")
+	})
+
+	t.Run("header false is the documented escape hatch", func(t *testing.T) {
+		ep := newCfg("n", false)
+		mrs := &MysqlResultSet{}
+		col := &MysqlColumn{}
+		col.SetName("name")
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(col)
+		ep.userConfig.FilePath = filepath.Join(t.TempDir(), "ok.csv")
+		ep.init()
+		defer ep.Close()
+		require.NoError(t, openNewFile(ep.ctx, ep, mrs))
+		require.NoError(t, Close(ep))
+		content, err := os.ReadFile(ep.userConfig.FilePath)
+		require.NoError(t, err)
+		require.Empty(t, content, "header disabled: only data records will follow")
+	})
+
+	t.Run("prefix absent from the header still exports", func(t *testing.T) {
+		ep := newCfg(">>", true)
+		mrs := &MysqlResultSet{}
+		col := &MysqlColumn{}
+		col.SetName("name")
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		mrs.AddColumn(col)
+		ep.userConfig.FilePath = filepath.Join(t.TempDir(), "ok.csv")
+		ep.init()
+		defer ep.Close()
+		require.NoError(t, openNewFile(ep.ctx, ep, mrs))
+		require.NoError(t, Close(ep))
+		content, err := os.ReadFile(ep.userConfig.FilePath)
+		require.NoError(t, err)
+		require.Equal(t, "name\n", string(content), "unprefixed header keeps the reader-side skip contract")
+	})
+
+	t.Run("non-csv formats ignore the csv header rule", func(t *testing.T) {
+		ep := newCfg("n", true)
+		ep.userConfig.ExportFormat = "parquet"
+		require.NoError(t, validateOutfileHeaderPrefix(ep.ctx, ep, &MysqlResultSet{}))
+	})
+
+	t.Run("empty column list is a no-op", func(t *testing.T) {
+		ep := newCfg("n", true)
+		require.NoError(t, validateOutfileHeaderPrefix(ep.ctx, ep, &MysqlResultSet{}))
+		require.NoError(t, validateOutfileHeaderPrefix(ep.ctx, ep, nil))
+	})
+}

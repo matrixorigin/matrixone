@@ -59,6 +59,24 @@ select id, s from src order by id
 into outfile 'stage://outfile_fields_lines_stage/defaults.csv' header 'false';
 select load_file(cast('stage://outfile_fields_lines_stage/defaults.csv' as datalink));
 
+-- Header/prefix collision (review probe): LOAD's startingBy filter skips a
+-- line only when the prefix is absent from it. A column named `name` with
+-- LINES STARTING BY 'n' would load a mangled "ame" header row, so the export
+-- is rejected before any file is opened. HEADER 'false' is the escape hatch
+-- and round-trips with no ghost row.
+select 'alpha' as name into outfile 'stage://outfile_fields_lines_stage/collide.csv'
+lines starting by 'n';
+select 1 as id, 'alpha' as data into outfile 'stage://outfile_fields_lines_stage/collide2.csv'
+lines starting by 'd,d';
+select 'alpha' as name into outfile 'stage://outfile_fields_lines_stage/tagged.csv'
+lines starting by 'n' header 'false';
+select load_file(cast('stage://outfile_fields_lines_stage/tagged.csv' as datalink));
+create table hdr_back (s varchar(10));
+load data infile 'stage://outfile_fields_lines_stage/tagged.csv' into table hdr_back
+fields terminated by ',' lines starting by 'n' terminated by '\n' (s);
+select * from hdr_back;
+drop table hdr_back;
+
 remove files from stage if exists 'stage://outfile_fields_lines_stage/*.csv';
 select count(*) from stage_list('stage://outfile_fields_lines_stage/');
 drop stage outfile_fields_lines_stage;

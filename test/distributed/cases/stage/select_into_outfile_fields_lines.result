@@ -82,6 +82,25 @@ select load_file(cast('stage://outfile_fields_lines_stage/defaults.csv' as datal
 4,"#hash"
 5,\N
 
+select 'alpha' as name into outfile 'stage://outfile_fields_lines_stage/collide.csv'
+lines starting by 'n';
+invalid input: LINES STARTING BY 'n' occurs in the CSV header: LOAD would import the remainder of the header as data; set HEADER 'false' or choose a prefix that does not occur in the header
+select 1 as id, 'alpha' as data into outfile 'stage://outfile_fields_lines_stage/collide2.csv'
+lines starting by 'd,d';
+invalid input: LINES STARTING BY 'd,d' occurs in the CSV header: LOAD would import the remainder of the header as data; set HEADER 'false' or choose a prefix that does not occur in the header
+select 'alpha' as name into outfile 'stage://outfile_fields_lines_stage/tagged.csv'
+lines starting by 'n' header 'false';
+select load_file(cast('stage://outfile_fields_lines_stage/tagged.csv' as datalink));
+➤ load_file(cast(stage://outfile_fields_lines_stage/tagged.csv as datalink))[-1,16383,0]  𝄀
+n"alpha"
+
+create table hdr_back (s varchar(10));
+load data infile 'stage://outfile_fields_lines_stage/tagged.csv' into table hdr_back
+fields terminated by ',' lines starting by 'n' terminated by '\n' (s);
+select * from hdr_back;
+➤ s[12,10,0]  𝄀
+alpha
+drop table hdr_back;
 remove files from stage if exists 'stage://outfile_fields_lines_stage/*.csv';
 select count(*) from stage_list('stage://outfile_fields_lines_stage/');
 ➤ count(*)[-5,64,0]  𝄀

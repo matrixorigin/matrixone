@@ -158,6 +158,9 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 	if err := ep.validateCSVFraming(ctx); err != nil {
 		return err
 	}
+	if err := validateOutfileHeaderPrefix(ctx, ep, mrs); err != nil {
+		return err
+	}
 	var err error
 	var filePath string
 	ep.CurFileSize = 0
@@ -869,6 +872,41 @@ func (ec *ExportConfig) validateCSVFraming(ctx context.Context) error {
 	if noQuote && (isAmbiguousCSVEscape(field) || isAmbiguousCSVEscape(line) || field == ec.escapeChar() || line == ec.escapeChar() || physicalLine == ec.escapeChar()) {
 		return moerr.NewInvalidInput(ctx,
 			"CSV terminators starting with ESCAPED BY or an ambiguous escape character (0, b, n, r, t, Z, N) require a nonempty ENCLOSED BY")
+	}
+	return nil
+}
+
+// validateOutfileHeaderPrefix applies LOAD's startingBy line filter to the
+// CSV header before the file is opened. The reader keeps any line containing
+// the prefix (dropping everything up to its first occurrence); only lines
+// without it are skipped wholesale. The header line is written unprefixed on
+// purpose below so the filter skips it — but if the raw header text happens
+// to CONTAIN the prefix (for example a column named `name` with
+// LINES STARTING BY 'n'), the filter instead keeps the mangled remainder as
+// a data row. Reject that configuration up front: the alternatives are
+// HEADER 'false' or a prefix that does not occur in the header.
+func validateOutfileHeaderPrefix(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSet) error {
+	if ep.getExportFormat() != "csv" || !ep.userConfig.Header || mrs == nil {
+		return nil
+	}
+	l := ep.userConfig.Lines
+	if l == nil || l.StartingBy == "" {
+		return nil
+	}
+	n := len(mrs.Columns)
+	if n == 0 {
+		return nil
+	}
+	var header strings.Builder
+	for i := 0; i < n-1; i++ {
+		header.WriteString(mrs.Columns[i].Name())
+		header.WriteString(ep.userConfig.Fields.Terminated.Value)
+	}
+	header.WriteString(mrs.Columns[n-1].Name())
+	if strings.Contains(header.String(), l.StartingBy) {
+		return moerr.NewInvalidInputf(ctx,
+			"LINES STARTING BY '%s' occurs in the CSV header: LOAD would import the remainder of the header as data; set HEADER 'false' or choose a prefix that does not occur in the header",
+			l.StartingBy)
 	}
 	return nil
 }
