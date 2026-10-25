@@ -505,3 +505,132 @@ func TestMaskPerStatementSQLMode(t *testing.T) {
 	got = MaskSensitiveSqlLiteralsPerStatement(`set sql_mode='NO_BACKSLASH_ESCAPES';`+stage, 0)
 	require.Equal(t, got, MaskSensitiveSqlLiteralsPerStatement(got, 0), "idempotent")
 }
+
+// #30747 review round 5, finding 1: the byte-level prefilter must admit
+// every occurrence the TOKEN rules can arm — executable-comment contents
+// reach the scanner as tokens (comment `identified by` / `credentials={...}`
+// must not be skipped as ordinary comment text), and the access-key rule
+// matches the DECODED string value (`'access_k\ey_id'` arms the rule, so the
+// prefilter's in-body check must be backslash-tolerant). Both shapes were
+// masked before the prefilter landed; this restores parity.
+func TestMaskPrefilterExecCommentAndDecodedKeyAdmission(t *testing.T) {
+	sql := `create user u /*! identified by 'R5_PASSWORD_CANARY' */`
+	got := MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R5_PASSWORD_CANARY")
+	require.Contains(t, got, `/*! identified by '******' */`)
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+
+	sql = `create stage s url='file:///x' /*! credentials={'aws_key'='R5_COMMENT_CANARY'} */`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R5_COMMENT_CANARY")
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+
+	// decoded key names: the escaped spelling decodes to the access-key name
+	sql = `select 'access_k\ey_id'='R5_ENCODED_CANARY_A'`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R5_ENCODED_CANARY_A")
+	sql = `select 'secret_ac\cess_key'='R5_ENCODED_CANARY_B'`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R5_ENCODED_CANARY_B")
+
+	// under NO_BACKSLASH_ESCAPES the same raw text does NOT decode to the
+	// key name: the rule does not arm and the prefilter must agree
+	for _, s := range []string{
+		`select 'access_k\ey_id'='VISIBLE_NBE'`,
+		`select 'secret_ac\cess_key'='VISIBLE_NBE'`,
+	} {
+		require.Equal(t, s,
+			MaskSensitiveSqlLiteralsWithSQLMode(s, SQLModeFlags(SQLModeNoBackslashEscapes)),
+			"no decoded key under NBE")
+	}
+}
+
+// #30747 review round 5, finding 2: a charset introducer prefixes the
+// literal of a credential value; the first raw byte (`_`) is not a quote, so
+// the value must be classified by the token type, and the span must keep the
+// introducer AND the quotes while masking the content. An unquoted run that
+// classifies by raw byte stops at a comma INSIDE the literal and leaks the
+// suffix.
+func TestMaskIntroducerPrefixedCredentialValue(t *testing.T) {
+	sql := `create stage s credentials={'aws_key'=_utf8mb4'prefix,R5_INTRO_CANARY'}`
+	got := MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R5_INTRO_CANARY")
+	require.Contains(t, got, "_utf8mb4'******'")
+	require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+
+	sql = `create user u identified by _utf8mb4'pw,R5_INTRO_USER'`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R5_INTRO_USER")
+	require.Contains(t, got, "_utf8mb4'******'")
+
+	sql = `select access_key_id=_utf8mb4'x,R5_INTRO_KEY'`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R5_INTRO_KEY")
+	require.Contains(t, got, "_utf8mb4'******'")
+
+	// unterminated introducer literal: content through end-of-input
+	sql = `create stage s credentials={'aws_key'=_utf8mb4'prefix,R5_INTRO_OPEN`
+	got = MaskSensitiveSqlLiterals(sql)
+	require.NotContains(t, got, "R5_INTRO_OPEN")
+}
+
+// #30747 review round 5, finding 3: only SESSION-scope sql_mode assignments
+// retune the current session's lexing — a user variable (`@sql_mode`),
+// GLOBAL/PERSIST scope, and the @@global form must NOT trigger a transition,
+// while the `:=` operator assigns exactly like `=`.
+func TestMaskPerStatementSQLModeScope(t *testing.T) {
+	nbe := SQLModeFlags(SQLModeNoBackslashEscapes)
+	stage := ` create stage s credentials={'aws_key'='foo\','secret_key'='R5_SCOPE_CANARY'}`
+
+	// session-untouched forms: initial NBE keeps applying, and the whole
+	// statement masks cleanly under it
+	for _, prefix := range []string{
+		`set @sql_mode='';`,
+		`set global sql_mode='';`,
+		`set persist sql_mode='';`,
+		`set @@global.sql_mode='';`,
+	} {
+		got := MaskSensitiveSqlLiteralsPerStatement(prefix+stage, nbe)
+		require.NotContains(t, got, "R5_SCOPE_CANARY", "prefix %q", prefix)
+		require.Contains(t, got, `'aws_key'='******','secret_key'='******'`,
+			"NBE-shape masking preserved for %q", prefix)
+	}
+
+	// session forms DO transition (mode cleared to default)
+	for _, prefix := range []string{
+		`set sql_mode='';`,
+		`set session sql_mode='';`,
+		`set @@session.sql_mode='';`,
+		`set @@sql_mode='';`,
+	} {
+		got := MaskSensitiveSqlLiteralsPerStatement(prefix+stage, nbe)
+		require.Contains(t, got, `'aws_key'='******'secret_key'`,
+			"transition applied for %q", prefix)
+	}
+
+	// := is accepted by the parser and must be honored by inference
+	got := MaskSensitiveSqlLiteralsPerStatement(
+		`set sql_mode:='NO_BACKSLASH_ESCAPES'; create stage s credentials={'aws_key'='a\', url='R5_ASSIGN_CANARY'}`, 0)
+	require.NotContains(t, got, "R5_ASSIGN_CANARY")
+	require.Contains(t, got, "url='******'", ":= transition must re-lex the next statement")
+}
+
+// #30747 review round 5, finding 4: after an unevaluable sql_mode
+// assignment the effective mode is unknown; then even `;` SPLITTING under
+// the stale mode is unsound — a semicolon inside a credential literal fakes
+// a boundary and the second piece loses the map context entirely. The
+// remainder of the request stays whole and is masked under every lexical
+// variant of the last known mode.
+func TestMaskUnknownModeTransitionKeepsRemainderWhole(t *testing.T) {
+	// reviewer repro
+	sql := `set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); create stage s url='x' credentials={'aws_key'='foo\','secret_key'='prefix;R5_UNKNOWN_CANARY'}`
+	got := MaskSensitiveSqlLiteralsPerStatement(sql, SQLModeFlags(SQLModeNoBackslashEscapes))
+	require.NotContains(t, got, "R5_UNKNOWN_CANARY")
+
+	// adversarial: under the last-known mode the credential's semicolon IS
+	// a top-level boundary; an unsplit read keeps the map context and masks
+	// both values
+	sql = `set sql_mode=concat('A'); create stage s credentials={'aws_key'='foo';'bar','secret_key'='prefix;R5_SPLIT_CANARY'}`
+	got = MaskSensitiveSqlLiteralsPerStatement(sql, 0)
+	require.NotContains(t, got, "R5_SPLIT_CANARY")
+}

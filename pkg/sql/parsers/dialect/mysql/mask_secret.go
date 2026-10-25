@@ -250,8 +250,15 @@ func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool
 					credState = CredentialStateInMap
 					continue
 				}
-				if sql[effStart] == '\'' || sql[effStart] == '"' ||
+				if typ == STRING || sql[effStart] == '\'' || sql[effStart] == '"' ||
+					(sql[effStart] == '_' && valueDelimiterPos(sql, effStart, scanner.Pos) > effStart) ||
 					(sql[effStart] == '$' && len(dollarQuoteDelimiter(sql, effStart)) > 0) {
+					// Quoted values keep their delimiters — including when a
+					// charset introducer prefixes the literal (`_utf8mb4'...'`):
+					// the token type is authoritative, NOT the first raw byte
+					// (an introducer's `_` must not reroute the value to the
+					// unquoted run that stops at an embedded comma, #30747
+					// review).
 					spans = appendValueMaskSpan(spans, sql, effStart, scanner.Pos)
 				} else {
 					// An UNQUOTED value is already outside the stage map
@@ -342,10 +349,13 @@ func spliceCredentialMasks(sql string, spans [][2]int, rawEdits []credentialRawE
 // INITIAL mode mis-masks what the session actually parses after a mode
 // switch (`set sql_mode='NO_BACKSLASH_ESCAPES'; <stage>` would leave the
 // credential visible, #30747 review). Each statement is tokenized and masked
-// under the mode in effect at its start; when a sql_mode assignment cannot
-// be evaluated faithfully (expression, DEFAULT, list values), the following
-// statements are masked under EVERY lexical variant of the last known mode —
-// masking is idempotent and secret removal is the conservative direction.
+// under the mode in effect at its start, and only SESSION-scope assignments
+// retune that tracking (`@sql_mode`, GLOBAL/PERSIST and @@global forms leave
+// the session alone). When a sql_mode assignment cannot be evaluated
+// faithfully (expression, DEFAULT, list values), the REST of the request is
+// kept whole and masked under EVERY lexical variant of the last known mode:
+// after an unknown transition even `;` splitting would be context-losing —
+// and masking is idempotent, so over-masking is the conservative direction.
 func MaskSensitiveSqlLiteralsPerStatement(sql string, initial SQLModeFlags) string {
 	// Byte-level gates: a mode transition needs a top-level statement
 	// separator AND a sql_mode assignment. Without a raw ';' there is no
@@ -392,7 +402,18 @@ func MaskSensitiveSqlLiteralsPerStatement(sql string, initial SQLModeFlags) stri
 			if ok {
 				mode, known = newMode, true
 			} else {
-				known = false
+				// The effective mode for the REST of the request cannot be
+				// determined (expression RHS, DEFAULT, a session-rejected
+				// value). Then even SPLITTING further under the stale mode is
+				// unsound: a semicolon inside a credential literal of the
+				// unknown mode would fake a statement boundary whose context
+				// no per-variant mask can recover (#30747 review). Stop
+				// splitting and keep the remainder as ONE span masked under
+				// every lexical variant of the last known mode.
+				if stmtEnd < len(sql) {
+					spans = append(spans, stmtSpan{stmtEnd, len(sql), mode, false})
+				}
+				break
 			}
 		}
 		if stmtEnd <= stmtStart {
@@ -490,13 +511,18 @@ func maskPieceUnderAllLexicalVariants(piece string, lastKnown SQLModeFlags) stri
 }
 
 // setStatementSQLModeChange inspects one statement's token sequence for a
-// `SET ... sql_mode = <value>` assignment. Only statements that BEGIN with
-// SET are considered, so DML with `SET`-clause looks-alikes (`UPDATE ...`,
-// `INSERT ... SET`) is never misread as a mode switch. touched reports that
-// such an assignment was present; ok reports that its value was a single
-// literal or word that parses into flags (an expression, DEFAULT, or a
-// multi-token list yields ok=false so the caller can fall back to
-// conservative masking).
+// SESSION-scope `SET ... sql_mode = <value>` assignment. Only statements
+// that BEGIN with SET are considered, so DML with `SET`-clause looks-alikes
+// (`UPDATE ...`, `INSERT ... SET`) is never misread as a mode switch; and
+// only assignments that retune THIS session's parsing count (#30747 review):
+// a user variable (`SET @sql_mode=...`, an AT_ID token), `SET GLOBAL/PERSIST
+// sql_mode`, and the `@@global.sql_mode` form all leave the current session
+// mode untouched and must not trigger a transition, while the `:=`
+// assignment operator (accepted by the parser like `=`) must. touched
+// reports that a session-scope assignment was present; ok reports that its
+// value was a single literal or word that parses into flags (an expression,
+// DEFAULT, or a multi-token list yields ok=false so the caller can fall back
+// to conservative masking).
 func setStatementSQLModeChange(typList []int, valList []string) (SQLModeFlags, bool, bool) {
 	if len(typList) == 0 || typList[0] != SET {
 		return 0, false, false
@@ -506,15 +532,24 @@ func setStatementSQLModeChange(typList []int, valList []string) (SQLModeFlags, b
 	ok := true
 	for i := 0; i < len(typList); i++ {
 		// The scanner delivers qualified system variables as ONE token
-		// (`@@session.sql_mode` scans as `session.sql_mode`), so match the
-		// bare name and the dot-qualified suffix alike.
-		if !strings.EqualFold(valList[i], "sql_mode") &&
-			!strings.HasSuffix(strings.ToLower(valList[i]), ".sql_mode") {
+		// (`@@session.sql_mode` scans as `session.sql_mode`), so the scope is
+		// visible in the value: session/local qualify the bare name; global
+		// (and persist) never retune this session.
+		fold := strings.ToLower(valList[i])
+		isSessionQualified := fold == "session.sql_mode" || fold == "local.sql_mode"
+		isBareName := fold == "sql_mode" && typList[i] != AT_ID
+		if !isSessionQualified && !isBareName {
 			continue
 		}
-		// Next token must be '=': `@@session.sql_mode = '...'` arrives as
-		// several tokens; `<name> := expr` and option lists are ignored.
-		if i+1 >= len(typList) || typList[i+1] != int('=') {
+		if isBareName && i > 0 {
+			switch strings.ToLower(valList[i-1]) {
+			case "global", "persist", "persist_only":
+				continue
+			}
+		}
+		// Next token must be an assignment operator: the parser accepts both
+		// `=` and `:=` for SET assignments.
+		if i+1 >= len(typList) || (typList[i+1] != int('=') && typList[i+1] != ASSIGNMENT) {
 			continue
 		}
 		// Collect the value tokens up to the next top-level separator.
@@ -612,6 +647,36 @@ func containsFoldASCII(sql string, needle string) bool {
 	return false
 }
 
+// hasFoldWordAtEscapeTolerant is hasFoldWordAt for a DECODED-body compare:
+// when escapes are active it skips backslash bytes before comparing, since
+// the scanner collapses `\x` escape sequences to the escaped character when
+// it builds the token value the credential rules match on (#30747 review:
+// the prefilter must never be stricter than the scanner). Skipping admits a
+// superset of the true matches; the token scan decides for real.
+func hasFoldWordAtEscapeTolerant(sql string, pos int, needle string, escapes bool) bool {
+	if !escapes {
+		return hasFoldWordAt(sql, pos, needle)
+	}
+	i := pos
+	for k := 0; k < len(needle); k++ {
+		for i < len(sql) && sql[i] == '\\' {
+			i++
+		}
+		if i >= len(sql) {
+			return false
+		}
+		c := sql[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != needle[k] {
+			return false
+		}
+		i++
+	}
+	return true
+}
+
 // hasFoldWordAt reports whether the bytes at sql[pos:pos+len(needle)] equal
 // needle under ASCII case folding (needle must be lowercase).
 func hasFoldWordAt(sql string, pos int, needle string) bool {
@@ -655,11 +720,17 @@ func hasCredentialActionableKeyword(sql string, maskAll bool, mode SQLModeFlags)
 			// keyword-armed rules treat every such body the same way: only
 			// the access-key names matter inside).
 			delim := c
+			// The access-key RULE matches the DECODED string value
+			// (`'access_k\ey_id'` decodes to the key name and DOES arm it,
+			// #30747 review), so the admission check inside a string body is
+			// backslash-tolerant whenever the current mode escapes; quoted
+			// identifiers have no escapes.
+			bodyEscapes := delim != '`' && !mode.Has(SQLModeNoBackslashEscapes)
 			j := i + 1
 			for j < n {
 				if b := sql[j] | 0x20; maskAll && (b == 'a' || b == 's') {
-					if hasFoldWordAt(sql, j, "access_key_id") ||
-						hasFoldWordAt(sql, j, "secret_access_key") {
+					if hasFoldWordAtEscapeTolerant(sql, j, "access_key_id", bodyEscapes) ||
+						hasFoldWordAtEscapeTolerant(sql, j, "secret_access_key", bodyEscapes) {
 						return true
 					}
 				}
@@ -699,9 +770,12 @@ func hasCredentialActionableKeyword(sql string, maskAll bool, mode SQLModeFlags)
 			if i > n {
 				i = n
 			}
-		case c == '/' && i+1 < n && sql[i+1] == '!':
+		case c == '/' && i+2 < n && sql[i+1] == '*' && sql[i+2] == '!':
 			// Executable comment: its contents reach the scanner as tokens,
-			// so they are scanned through like ordinary code.
+			// so they are scanned through like ordinary code. The predicate
+			// must match all three bytes of `/*!`: a weaker one lets the
+			// block-comment case below swallow the comment body, and
+			// credentials inside it go completely unseen (#30747 review).
 			i += 3
 			for i < n && sql[i] >= '0' && sql[i] <= '9' {
 				i++
@@ -965,42 +1039,80 @@ func appendValueMaskSpan(spans [][2]int, sql string, tokStart, tokEnd int) [][2]
 	if tokStart >= tokEnd {
 		return spans
 	}
-	switch ch := sql[tokStart]; {
+	// A charset introducer (`_utf8mb4'...'`) prefixes the delimiter with
+	// identifier bytes; the introducer stays visible and only the literal
+	// content is masked (#30747 review).
+	vstart := valueDelimiterPos(sql, tokStart, tokEnd)
+	if vstart < 0 {
+		// unquoted (number, identifier or partial token): mask it whole.
+		return append(spans, [2]int{tokStart, tokEnd})
+	}
+	switch ch := sql[vstart]; {
 	case ch == '\'' || ch == '"':
 		// An executable-comment subscan can split a literal that ENDS in
 		// operator bytes (the inserted `******` itself re-scans as `*` math
 		// tokens), truncating the span mid-string and breaking idempotency
 		// (#30747 review). Extend the end to the real closing delimiter
 		// whenever the reported token stopped short of it.
-		if closeRel := strings.IndexByte(sql[tokStart+1:], ch); closeRel >= 0 {
-			if rc := tokStart + 1 + closeRel + 1; rc > tokEnd && rc <= len(sql) {
+		if closeRel := strings.IndexByte(sql[vstart+1:], ch); closeRel >= 0 {
+			if rc := vstart + 1 + closeRel + 1; rc > tokEnd && rc <= len(sql) {
 				tokEnd = rc
 			}
 		}
 		// closed quote: keep both delimiters; unterminated: mask everything
 		// after the opening one.
-		if tokEnd-tokStart >= 2 && sql[tokEnd-1] == ch {
-			return append(spans, [2]int{tokStart + 1, tokEnd - 1})
+		if tokEnd-vstart >= 2 && sql[tokEnd-1] == ch {
+			return append(spans, [2]int{vstart + 1, tokEnd - 1})
 		}
-		return append(spans, [2]int{tokStart + 1, tokEnd})
+		return append(spans, [2]int{vstart + 1, tokEnd})
 	case ch == '$':
 		// dollar-quoted string: $tag$content$tag$ (possibly unterminated).
-		if i := strings.IndexByte(sql[tokStart+1:tokEnd], '$'); i >= 0 {
-			tag := sql[tokStart+1 : tokStart+1+i]
+		if i := strings.IndexByte(sql[vstart+1:tokEnd], '$'); i >= 0 {
+			tag := sql[vstart+1 : vstart+1+i]
 			if isDollarQuoteTag(tag) {
-				delim := sql[tokStart : tokStart+2+i]
-				if tokEnd-tokStart >= 2*len(delim) &&
-					strings.HasSuffix(sql[tokStart:tokEnd], delim) {
-					return append(spans, [2]int{tokStart + len(delim), tokEnd - len(delim)})
+				delim := sql[vstart : vstart+2+i]
+				if tokEnd-vstart >= 2*len(delim) &&
+					strings.HasSuffix(sql[vstart:tokEnd], delim) {
+					return append(spans, [2]int{vstart + len(delim), tokEnd - len(delim)})
 				}
-				return append(spans, [2]int{tokStart + len(delim), tokEnd})
+				return append(spans, [2]int{vstart + len(delim), tokEnd})
 			}
 		}
 		return append(spans, [2]int{tokStart, tokEnd})
 	default:
-		// unquoted (number, identifier or partial token): mask it whole.
+		// unreachable: valueDelimiterPos only returns a quote or dollar
+		// start; kept whole for safety.
 		return append(spans, [2]int{tokStart, tokEnd})
 	}
+}
+
+// valueDelimiterPos returns where the value's opening delimiter starts: at
+// tokStart for a plain literal, or after a charset introducer prefix
+// (`_utf8mb4` / `_latin1` / `_binary` ..., i.e. '_' plus identifier bytes)
+// directly followed by a quote or dollar-quote delimiter (#30747 review).
+// Returns -1 when the token carries no literal delimiter.
+func valueDelimiterPos(sql string, tokStart, tokEnd int) int {
+	if tokStart >= tokEnd {
+		return -1
+	}
+	if sql[tokStart] == '_' {
+		j := tokStart + 1
+		for j < tokEnd && (sql[j] == '_' || (sql[j] >= 'a' && sql[j] <= 'z') ||
+			(sql[j] >= 'A' && sql[j] <= 'Z') || (sql[j] >= '0' && sql[j] <= '9')) {
+			j++
+		}
+		if j > tokStart+1 && j < tokEnd &&
+			(sql[j] == '\'' || sql[j] == '"' ||
+				(sql[j] == '$' && len(dollarQuoteDelimiter(sql, j)) > 0)) {
+			return j
+		}
+		return -1
+	}
+	if c := sql[tokStart]; c == '\'' || c == '"' ||
+		(c == '$' && len(dollarQuoteDelimiter(sql, tokStart)) > 0) {
+		return tokStart
+	}
+	return -1
 }
 
 // isDollarQuoteTag accepts the tag characters the scanner allows between the
