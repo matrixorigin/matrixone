@@ -1576,9 +1576,11 @@ static-check: config err-check
 # Both analyzers consume the same package list and their failures stay fatal.
 static-check-analysis: err-check
 	@set -e; packages='./...'; \
-	if [ "$${GITHUB_ACTIONS:-}" = true ] && command -v node >/dev/null 2>&1; then \
+	if [ "$${GITHUB_ACTIONS:-}" = true ]; then \
+		command -v node >/dev/null 2>&1 || { echo 'SCA requires Node on PATH in CI; install Node before static-check-analysis' >&2; exit 1; }; \
 		packages=$$($(CGO_OPTS) node .github/ci/static-analysis.cjs); \
 	else \
+		echo "SCA selection: full graph (local invocation)" >&2; \
 		$(MAKE) --no-print-directory config; \
 	fi; \
 	$(MAKE) --no-print-directory static-check-selected STATIC_CHECK_PACKAGES="$$packages"
