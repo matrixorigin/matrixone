@@ -41,8 +41,9 @@ func TestBuiltInDatabaseNullWithoutDefaultDatabase(t *testing.T) {
 			proc.Base.SessionInfo.Database = c.database
 			tcc := NewFunctionTestCase(proc, []FunctionTestInput{},
 				NewFunctionTestResult(types.T_varchar.ToType(), false,
-					[]string{c.want}, []bool{c.isNull}),
+					[]string{c.want, c.want}, []bool{c.isNull, c.isNull}),
 				builtInDatabase)
+			tcc.fnLength = 2
 			ok, info := tcc.RunAndFree()
 			require.True(t, ok, info)
 		})
