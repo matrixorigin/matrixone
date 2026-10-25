@@ -815,6 +815,39 @@ func matchTableDumpSessions(want *planpb.Expr, zone *time.Location, locale strin
 	return false, nil
 }
 
+// tableDumpDDLColumnScope recreates CREATE's pre-catalog column declarations.
+// The returned witness owns its changed columns; persisted declarations stay exact.
+func tableDumpDDLColumnScope(target *planpb.TableDef) *planpb.TableDef {
+	var ddlScope *planpb.TableDef
+	for i, col := range target.Cols {
+		if col == nil || !col.Typ.NotNullable {
+			continue
+		}
+		if ddlScope == nil {
+			scope := *target
+			scope.Cols = append([]*planpb.ColDef(nil), target.Cols...)
+			ddlScope = &scope
+		}
+		copy := *col
+		copy.Typ.NotNullable = false
+		ddlScope.Cols[i] = &copy
+	}
+	return ddlScope
+}
+
+func tableDumpBindingScope(target, ddlScope *planpb.TableDef, item tableDumpExpression, mode tableDumpBindingMode) (*planpb.TableDef, tableDumpExpression, tableDumpBindingMode) {
+	if mode&tableDumpBindingDDLColumnScope == 0 {
+		return target, item, mode
+	}
+	mode &^= tableDumpBindingDDLColumnScope
+	if item.col != nil {
+		col := *item.col
+		col.Typ.NotNullable = false
+		item.col = &col
+	}
+	return ddlScope, item, mode
+}
+
 func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target, supplied *planpb.TableDef, candidateVisitLimit int) (bool, error) {
 	if ctx == nil || target == nil {
 		return false, moerr.NewInvalidInputNoCtx("table dump binding context is unavailable")
@@ -834,20 +867,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 	// NotNullable from Default.NullAbility. ALTER can bind against the catalog
 	// scope instead. Keep both complete witnesses; never discard nullability
 	// from supplied expressions or change the target's stored declarations.
-	var ddlScope *planpb.TableDef
-	for i, col := range target.Cols {
-		if col == nil || !col.Typ.NotNullable {
-			continue
-		}
-		if ddlScope == nil {
-			scope := *target
-			scope.Cols = append([]*planpb.ColDef(nil), target.Cols...)
-			ddlScope = &scope
-		}
-		copy := *col
-		copy.Typ.NotNullable = false
-		ddlScope.Cols[i] = &copy
-	}
+	ddlScope := tableDumpDDLColumnScope(target)
 	parent := ctx.GetProcess()
 	if parent == nil {
 		return false, moerr.NewInternalError(ctx.GetContext(), "table dump expression binding requires a process")
@@ -979,17 +999,8 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				}
 				proc.GetSessionInfo().TimeZone = tz
 				proc.GetSessionInfo().LCTimeNames = lc
-				scope, declaration := target, item
-				if mode&tableDumpBindingDDLColumnScope != 0 {
-					scope = ddlScope
-					mode &^= tableDumpBindingDDLColumnScope
-					if item.col != nil {
-						col := *item.col
-						col.Typ.NotNullable = false
-						declaration.col = &col
-					}
-				}
-				result, err := bindTableDumpExpression(ctx, scope, declaration, ast, increment, mode, &dependency)
+				scope, declaration, bindingMode := tableDumpBindingScope(target, ddlScope, item, mode)
+				result, err := bindTableDumpExpression(ctx, scope, declaration, ast, increment, bindingMode, &dependency)
 				if fatal = ctx.GetContext().Err(); fatal != nil {
 					return nil, fatal
 				}

@@ -231,6 +231,7 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 	if budget.text > tableDumpMaxExpressionText {
 		return nil, moerr.NewInvalidInputNoCtx("catalog expression text exceeds limit")
 	}
+	ddlScope := tableDumpDDLColumnScope(def)
 	for _, parserMode := range tableDumpParserModesForOrigin(item.origin) {
 		if err := ctx.GetContext().Err(); err != nil {
 			return nil, err
@@ -261,8 +262,9 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 					return nil, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
 				}
 				proc.GetSessionInfo().TimeZone, proc.GetSessionInfo().LCTimeNames = tz, lc
-				dependency = tableDumpDefaultSession{budget: budget}
-				bound, bindErr := bindTableDumpExpression(ctx, def, item, ast, search.increment, search.mode, &dependency)
+				dependency = tableDumpDefaultSession{budget: budget, captureUnfolded: item.kind == "default"}
+				scope, declaration, bindingMode := tableDumpBindingScope(def, ddlScope, item, search.mode)
+				bound, bindErr := bindTableDumpExpression(ctx, scope, declaration, ast, search.increment, bindingMode, &dependency)
 				var proofLimit *floatStringProofBudgetError
 				if errors.As(bindErr, &proofLimit) {
 					return nil, bindErr
@@ -279,6 +281,10 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 				}
 				return false
 			}
+			finish := func(search tableDumpSessionCandidate, old *planpb.Expr) (*planpb.Expr, error) {
+				scope, declaration, bindingMode := tableDumpBindingScope(def, ddlScope, item, search.mode)
+				return finishLegacyFloatStringExpression(ctx, scope, declaration, ast, search.increment, bindingMode, old, visit.nodes, budget)
+			}
 			var sessions []tableDumpSessionCandidate
 			maxIncrement := int64(0)
 			if visit.hasDivision {
@@ -288,6 +294,11 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 				modes := []tableDumpBindingMode{tableDumpBindingLegacyFloat}
 				if visit.hasSpecial {
 					modes = append(modes, tableDumpBindingLegacyFloat|tableDumpBindingLegacySpecial)
+				}
+				if ddlScope != nil && visit.hasColumn {
+					for _, mode := range append([]tableDumpBindingMode(nil), modes...) {
+						modes = append(modes, mode|tableDumpBindingDDLColumnScope)
+					}
 				}
 				for _, mode := range modes {
 					formats := []tableDumpBindingMode{mode}
@@ -309,9 +320,16 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 							foldingEraAdded = true
 						}
 						if match(search, bound) {
-							return finishLegacyFloatStringExpression(ctx, def, item, ast, increment, mode, matched, visit.nodes, budget)
+							return finish(search, matched)
 						}
 						if item.kind == "default" && (dependency.folded || bound == nil && (dependency.timeZone || dependency.locale)) {
+							possible, err := legacyFloatSessionCandidateMayMatch(ctx.GetContext(), item.expr, bound, dependency.unfolded, budget)
+							if err != nil {
+								return nil, err
+							}
+							if !possible {
+								continue
+							}
 							search.dependency = tableDumpDefaultSession{timeZone: dependency.timeZone, locale: dependency.locale, folded: dependency.folded}
 							sessions = append(sessions, search)
 						}
@@ -322,13 +340,58 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 			if err != nil || !found {
 				return nil, err
 			}
-			return finishLegacyFloatStringExpression(ctx, def, item, ast, witness.increment, witness.mode, matched, visit.nodes, budget)
+			return finish(witness, matched)
 		}()
 		if result != nil || err != nil {
 			return result, err
 		}
 	}
 	return nil, ctx.GetContext().Err()
+}
+
+// legacyFloatSessionCandidateMayMatch only rejects impossible session probes.
+// A session-independent source subtree cannot acquire a different precision,
+// type or folded value under another timezone/locale. Ambiguous alignment is
+// retained for the full origin proof; this check never authorizes a repair.
+func legacyFloatSessionCandidateMayMatch(ctx context.Context, stored, folded, source *planpb.Expr, budget *tableDumpBindingBudget) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if stored == nil || folded == nil || source == nil {
+		return true, nil
+	}
+	if err := chargeFloatStringRebind(source, budget); err != nil {
+		return false, err
+	}
+	zone, locale := tableDumpDefaultDependencies(source)
+	if !zone && !locale {
+		for _, expr := range []*planpb.Expr{stored, folded} {
+			if err := chargeFloatStringRebind(expr, budget); err != nil {
+				return false, err
+			}
+		}
+		return sameLegacyFloatOrigin(stored, folded), nil
+	}
+	if a, b, c := stored.GetF(), folded.GetF(), source.GetF(); a != nil && b != nil && c != nil &&
+		a.Func != nil && b.Func != nil && c.Func != nil && a.Func.Obj == b.Func.Obj && b.Func.Obj == c.Func.Obj &&
+		len(a.Args) == len(b.Args) && len(b.Args) == len(c.Args) {
+		for i := range a.Args {
+			possible, err := legacyFloatSessionCandidateMayMatch(ctx, a.Args[i], b.Args[i], c.Args[i], budget)
+			if err != nil || !possible {
+				return possible, err
+			}
+		}
+	}
+	if a, b, c := stored.GetList(), folded.GetList(), source.GetList(); a != nil && b != nil && c != nil &&
+		len(a.List) == len(b.List) && len(b.List) == len(c.List) {
+		for i := range a.List {
+			possible, err := legacyFloatSessionCandidateMayMatch(ctx, a.List[i], b.List[i], c.List[i], budget)
+			if err != nil || !possible {
+				return possible, err
+			}
+		}
+	}
+	return true, ctx.Err()
 }
 
 func finishLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, old *planpb.Expr, nodes int, budget *tableDumpBindingBudget) (*planpb.Expr, error) {
