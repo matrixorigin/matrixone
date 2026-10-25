@@ -25,18 +25,33 @@ target/control comparison.
 
 `pkg/vectorize/shuffle.FixedLengthShuffle` already owns the typed data-only
 selection loop. Reuse it for `unionT`, admitting both int32 and int64 indices
-through a type parameter. A small private vector adapter presents the source
-and appended destination ranges using the existing slice-cast utility.
-Dispatch once by physical width, including 12/16/20/24/32-byte fixed types.
-Keep the current dynamic copy fallback for other widths.
+through a type parameter. A small private vector adapter bounds the source
+and appended destination byte ranges with Go slicing, then presents typed
+views using the existing `util.UnsafeSlice` utility. Views have explicit row
+counts; allocation padding is not exposed as additional source rows.
+Retain the existing 1/2/4/8-byte scalar paths. Dispatch wider physical
+widths in a separate private helper and reuse the typed loop for
+12/16/20/24/32-byte values. Keep the current dynamic copy fallback for other
+widths. This confines the added dispatch and typed-view setup to the values
+that currently pay per-row dynamic copy costs.
 
 Compared alternatives:
+
+* Routing all widths through typed views improved bulk narrow copying, but
+  independently repeated controls showed a 3–8% slowdown for single narrow
+  values. Reject that expansion; it is not required to eliminate wide-value
+  dynamic copies.
 
 * Adding five more handwritten loops removes wide copies but duplicates the
   existing selection kernel and type-width loops.
 * A multi-source gather API could batch scattered build projections, but adds
   admission and metadata integration before proving this simpler shared cost.
 * Regrouping matches and restoring order adds copies and temporary memory.
+
+The nullable fixed path retains its skip-NULL loop and dynamic value copy.
+Bound its appended destination range once before that loop, avoiding repeated
+prefix-offset calculations per selected value. NULL bitmap ownership and
+untouched NULL payload bytes remain unchanged.
 
 Typed physical copying is independent of query identity, data distribution,
 and selection length. Existing NULL, constant and varlen paths remain the
