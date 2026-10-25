@@ -1020,7 +1020,7 @@ func bindWindowSpec(
 		if len(w.OrderBy) == 0 {
 			break
 		}
-		typ = &w.OrderBy[0].Expr.Typ
+		typ = rangeFrameBoundType(w.OrderBy[0].Expr.Typ)
 		t := types.Type{Oid: types.T(typ.Id)}
 		if consumerSpecific && !function.GetFunctionIsWinOrderFunByName(funcName) && isNRange(ws.Frame) && !t.IsNumericOrTemporal() {
 			return nil, moerr.NewParseError(b.GetContext(), "Window '<unnamed window>' with RANGE frame requires ORDER BY expression of numeric or temporal type")
@@ -1079,8 +1079,25 @@ func bindWindowSpec(
 	return w, nil
 }
 
+// rangeFrameBoundType returns the arithmetic domain used to fold and carry a
+// numeric RANGE offset. Narrow signed ORDER BY columns must not narrow the
+// offset itself: key +/- offset is evaluated in the signed 64-bit domain and
+// the window executor maps results outside the physical key domain to an
+// insertion boundary.
+func rangeFrameBoundType(orderType plan.Type) *plan.Type {
+	switch types.T(orderType.Id) {
+	case types.T_int8, types.T_int16, types.T_int32:
+		typ := types.T_int64.ToType().PlanType()
+		return &typ
+	default:
+		typ := orderType
+		return &typ
+	}
+}
+
 func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
+	if astExpr.Type == tree.FUNC_TYPE_DISTINCT &&
+		!strings.EqualFold(funcName, NameQuantileExactWeighted) {
 		return nil, moerr.NewNYI(b.GetContext(), "DISTINCT in window function")
 	}
 
@@ -1129,6 +1146,15 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	windowFunc, err := b.bindPreparedNumericFuncExpr(funcName, windowArgs, depth)
 	if err != nil {
 		return nil, err
+	}
+	// quantileExactWeighted is the one DISTINCT window aggregate: the
+	// design contract admits the combination, and constructWindow reads
+	// the distinct bit out of the bound function exactly like the group
+	// aggregate path (having_binder.go) records it.
+	if astExpr.Type == tree.FUNC_TYPE_DISTINCT {
+		if f := windowFunc.GetF(); f != nil {
+			f.Func.Obj = int64(uint64(f.Func.Obj) | function.Distinct)
+		}
 	}
 	if function.GetFunctionIsWinIndicatorFunByName(funcName) {
 		// Section-4 SQL surface of the technical-indicator kernels

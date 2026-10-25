@@ -710,7 +710,8 @@ func orderedSetWindowAggregate(name string) bool {
 	return strings.EqualFold(name, "median") ||
 		strings.EqualFold(name, "approx_percentile") ||
 		strings.EqualFold(name, "percentile_cont") ||
-		strings.EqualFold(name, "percentile_disc")
+		strings.EqualFold(name, "percentile_disc") ||
+		strings.EqualFold(name, "quantileExactWeighted")
 }
 
 func fullPartitionWindowFrame(frame *plan.FrameClause) bool {
@@ -3026,12 +3027,15 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 		if expr == nil {
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int8], cmpl)
 		} else {
-			c := int8(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I8Val).I8Val)
-			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			c, err := signedRangeOffsetValue(expr)
+			if err != nil {
+				return left, err
+			}
+			bound, aboveDomain, ok := signedNarrowRangeBound(int64(col[rowIdx]), c, -128, 127, !plus)
 			if !ok {
 				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
-			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int8], cmpl)
+			left = genericSearchLeft(start, end-1, col, int8(bound), genericEqual[int8], cmpl)
 		}
 	case types.T_int16:
 		col := vector.MustFixedColNoTypeCheck[int16](vec)
@@ -3042,12 +3046,15 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 		if expr == nil {
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int16], cmpl)
 		} else {
-			c := int16(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I16Val).I16Val)
-			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			c, err := signedRangeOffsetValue(expr)
+			if err != nil {
+				return left, err
+			}
+			bound, aboveDomain, ok := signedNarrowRangeBound(int64(col[rowIdx]), c, -32768, 32767, !plus)
 			if !ok {
 				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
-			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int16], cmpl)
+			left = genericSearchLeft(start, end-1, col, int16(bound), genericEqual[int16], cmpl)
 		}
 	case types.T_int32:
 		col := vector.MustFixedColNoTypeCheck[int32](vec)
@@ -3058,12 +3065,15 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 		if expr == nil {
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[int32], cmpl)
 		} else {
-			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I32Val).I32Val
-			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, !plus)
+			c, err := signedRangeOffsetValue(expr)
+			if err != nil {
+				return left, err
+			}
+			bound, aboveDomain, ok := signedNarrowRangeBound(int64(col[rowIdx]), c, int64(math.MinInt32), int64(math.MaxInt32), !plus)
 			if !ok {
 				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
-			left = genericSearchLeft(start, end-1, col, bound, genericEqual[int32], cmpl)
+			left = genericSearchLeft(start, end-1, col, int32(bound), genericEqual[int32], cmpl)
 		}
 	case types.T_int64:
 		col := vector.MustFixedColNoTypeCheck[int64](vec)
@@ -3546,12 +3556,15 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 		if expr == nil {
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int8])
 		} else {
-			c := int8(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I8Val).I8Val)
-			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			c, err := signedRangeOffsetValue(expr)
+			if err != nil {
+				return right, err
+			}
+			bound, aboveDomain, ok := signedNarrowRangeBound(int64(col[rowIdx]), c, -128, 127, sub)
 			if !ok {
 				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
-			right = genericSearchRight(start, end-1, col, bound, genericEqual[int8], cmpl)
+			right = genericSearchRight(start, end-1, col, int8(bound), genericEqual[int8], cmpl)
 		}
 	case types.T_int16:
 		col := vector.MustFixedColNoTypeCheck[int16](vec)
@@ -3562,12 +3575,15 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 		if expr == nil {
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int16])
 		} else {
-			c := int16(expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I16Val).I16Val)
-			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			c, err := signedRangeOffsetValue(expr)
+			if err != nil {
+				return right, err
+			}
+			bound, aboveDomain, ok := signedNarrowRangeBound(int64(col[rowIdx]), c, -32768, 32767, sub)
 			if !ok {
 				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
-			right = genericSearchRight(start, end-1, col, bound, genericEqual[int16], cmpl)
+			right = genericSearchRight(start, end-1, col, int16(bound), genericEqual[int16], cmpl)
 		}
 	case types.T_int32:
 		col := vector.MustFixedColNoTypeCheck[int32](vec)
@@ -3578,12 +3594,15 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 		if expr == nil {
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[int32])
 		} else {
-			c := expr.Expr.(*plan.Expr_Lit).Lit.Value.(*plan.Literal_I32Val).I32Val
-			bound, aboveDomain, ok := signedRangeBound(col[rowIdx], c, sub)
+			c, err := signedRangeOffsetValue(expr)
+			if err != nil {
+				return right, err
+			}
+			bound, aboveDomain, ok := signedNarrowRangeBound(int64(col[rowIdx]), c, int64(math.MinInt32), int64(math.MaxInt32), sub)
 			if !ok {
 				return outOfDomainRangeBoundary(start, end, aboveDomain, desc), nil
 			}
-			right = genericSearchRight(start, end-1, col, bound, genericEqual[int32], cmpl)
+			right = genericSearchRight(start, end-1, col, int32(bound), genericEqual[int32], cmpl)
 		}
 	case types.T_int64:
 		col := vector.MustFixedColNoTypeCheck[int64](vec)
@@ -3914,6 +3933,28 @@ type signedRangeInteger interface {
 	~int8 | ~int16 | ~int32 | ~int64
 }
 
+// signedRangeOffset accepts both the widened literal emitted for narrow
+// signed keys and literals from plans produced before RANGE bounds used the
+// int64 arithmetic domain.
+func signedRangeOffsetValue(expr *plan.Expr) (int64, error) {
+	lit, ok := expr.Expr.(*plan.Expr_Lit)
+	if !ok || lit.Lit == nil {
+		return 0, moerr.NewInternalErrorNoCtx("invalid signed RANGE bound literal")
+	}
+	switch value := lit.Lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		return int64(value.I8Val), nil
+	case *plan.Literal_I16Val:
+		return int64(value.I16Val), nil
+	case *plan.Literal_I32Val:
+		return int64(value.I32Val), nil
+	case *plan.Literal_I64Val:
+		return value.I64Val, nil
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("unsupported signed RANGE bound literal %T", lit.Lit.Value)
+	}
+}
+
 // signedRangeBound computes a finite RANGE search key without allowing signed
 // arithmetic to wrap into the opposite end of the type domain. aboveDomain
 // distinguishes overflow above the maximum from underflow below the minimum.
@@ -3929,6 +3970,22 @@ func signedRangeBound[T signedRangeInteger](value, offset T, subtract bool) (bou
 	bound = value + offset
 	if (offset > 0 && bound < value) || (offset < 0 && bound > value) {
 		return 0, offset > 0, false
+	}
+	return bound, false, true
+}
+
+// signedNarrowRangeBound computes in int64 and only returns a narrow value
+// after proving it belongs to the physical ORDER BY type's domain.
+func signedNarrowRangeBound(value, offset, minValue, maxValue int64, subtract bool) (int64, bool, bool) {
+	bound, aboveDomain, ok := signedRangeBound(value, offset, subtract)
+	if !ok {
+		return 0, aboveDomain, false
+	}
+	if bound < minValue {
+		return 0, false, false
+	}
+	if bound > maxValue {
+		return 0, true, false
 	}
 	return bound, false, true
 }

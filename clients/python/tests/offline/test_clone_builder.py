@@ -1,6 +1,10 @@
 """Offline tests for clone statement builders."""
 
 import pytest
+from sqlalchemy import Column, Integer, MetaData, UniqueConstraint
+from sqlalchemy.orm import declarative_base
+from sqlalchemy.schema import BLANK_SCHEMA
+from matrixone.branch_builder import create_table_branch, delete_table_branch
 from matrixone.clone_builder import (
     clone_table,
     clone_database,
@@ -26,6 +30,28 @@ class NoTableModel:
 
 
 class TestCloneTable:
+
+    @pytest.mark.parametrize('schema_style', ['dict', 'tuple', 'metadata', 'blank', 'none'])
+    def test_mapped_table_schema(self, schema_style):
+        base = declarative_base(metadata=MetaData(schema='mydb' if schema_style in ('metadata', 'blank') else None))
+        table_args = {
+            'dict': {'schema': 'mydb'},
+            'tuple': (UniqueConstraint('id'), {'schema': 'mydb'}),
+            'metadata': {},
+            'blank': {'schema': BLANK_SCHEMA},
+            'none': {},
+        }[schema_style]
+
+        class Model(base):
+            __tablename__ = 'mapped_table'
+            __table_args__ = table_args
+            id = Column(Integer, primary_key=True)
+
+        name = 'mapped_table' if schema_style in ('blank', 'none') else 'mydb.mapped_table'
+        assert clone_table('copy').from_table(Model).compile() == f'CREATE TABLE copy CLONE {name}'
+        assert clone_table(Model).from_table('source').compile() == f'CREATE TABLE {name} CLONE source'
+        assert create_table_branch(Model).from_table(Model).compile() == f'data branch create table {name} from {name}'
+        assert delete_table_branch(Model).compile() == f'data branch delete table {name}'
 
     def test_basic(self):
         sql = clone_table('tgt').from_table('src').compile()
