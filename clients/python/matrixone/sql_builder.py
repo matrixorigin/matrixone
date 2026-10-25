@@ -119,12 +119,20 @@ class MatrixOneSQLBuilder:
         return self
 
     def values(self, **kwargs) -> "MatrixOneSQLBuilder":
-        """Add values for INSERT"""
+        """Add an INSERT row, rejecting fields outside the established columns.
+
+        The first row (or insert_values()) establishes the columns. Missing
+        fields remain NULL; unexpected fields raise instead of losing data.
+        """
         if self._query_type != "INSERT":
             raise ValueError("values() can only be used with INSERT operations")
 
         if not self._insert_columns:
             self._insert_columns = list(kwargs.keys())
+
+        unexpected = sorted(set(kwargs) - set(self._insert_columns))
+        if unexpected:
+            raise ValueError(f"unexpected INSERT columns: {', '.join(unexpected)}")
 
         values_row = []
         for col in self._insert_columns:
