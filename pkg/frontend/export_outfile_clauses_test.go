@@ -1005,3 +1005,188 @@ func TestOutfileNullWithEscapeNRejected(t *testing.T) {
 		require.NotEqual(t, 2, len(row), "the NULL marker swallows the terminator and merges records")
 	})
 }
+
+// TestOutfileBareNullLiteralEscapesLetterBytes pins the literal word NULL
+// written bare (no enclosure): the writer prefixes the first N to stop LOAD
+// reading SQL NULL and must also encode occurrences of the configured escape
+// byte inside the word. Otherwise LOAD strips them away ('UNULL' reads as
+// 'NLL', 'LNULL' as 'NUL').
+func TestOutfileBareNullLiteralEscapesLetterBytes(t *testing.T) {
+	cases := []struct {
+		name     string
+		escape   byte
+		expected string
+	}{
+		{"escape U", 'U', "UNUULL"},
+		{"escape L", 'L', "LNULLLL"},
+		{"escape N", 'N', "NNNULL"},
+		{"legacy backslash", '\\', `\NULL`},
+		{"escape hash", '#', "#NULL"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ep := newOutfileExportConfig(tree.NewFields(",", false, 0, c.escape), nil, "\n")
+			got := addEscapeToString(ep, []byte("NULL"), 0)
+			require.Equal(t, c.expected, string(got))
+
+			// The written bytes read back through LOAD's parser as the
+			// literal word, not SQL NULL and not a shortened word.
+			parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+				FieldsTerminatedBy: ",", FieldsEscapedBy: string(c.escape), LinesTerminatedBy: "\n",
+				Null: []string{`\N`},
+			}, bytes.NewReader([]byte(c.expected+"\n")), csvparser.ReadBlockSize, false)
+			require.NoError(t, err)
+			row, err := parser.Read(nil)
+			require.NoError(t, err)
+			require.Len(t, row, 1)
+			require.Equal(t, "NULL", row[0].Val)
+			require.False(t, row[0].IsNull)
+
+			// The guard lives in addEscapeToString, reached through the
+			// string formatter used by both CSV row writers.
+			var buf bytes.Buffer
+			require.NoError(t, formatOutputString(ep, []byte("NULL"), []byte("\n"), 0, false, true, &buf))
+			require.Equal(t, c.expected+"\n", buf.String())
+		})
+	}
+
+	t.Run("document why inner escape bytes are encoded", func(t *testing.T) {
+		// The reviewer's probes against the first-N-only shortcut: LOAD's
+		// unescape collapses the escape byte inside the word.
+		for _, probe := range []struct {
+			data, escape, want string
+		}{
+			{"UNULL\n", "U", "NLL"},
+			{"LNULL\n", "L", "NUL"},
+		} {
+			parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+				FieldsTerminatedBy: ",", FieldsEscapedBy: probe.escape, LinesTerminatedBy: "\n",
+				Null: []string{`\N`},
+			}, bytes.NewReader([]byte(probe.data)), csvparser.ReadBlockSize, false)
+			require.NoError(t, err)
+			row, err := parser.Read(nil)
+			require.NoError(t, err)
+			require.Len(t, row, 1)
+			require.Equal(t, probe.want, row[0].Val)
+		}
+	})
+}
+
+// TestOutfileNewlineEscapeByteRequiresEnclosure rejects a bare CR or LF
+// ESCAPED BY when LOAD's parser still recognizes newlines as record
+// boundaries (empty/LF/CRLF terminators): csvparser consumes the newline
+// BEFORE applying the escape byte, so an escaped separator lands after the
+// record the escape byte itself ended. Enclosed output keeps both bytes
+// inside quotes, and non-newline terminators disable newline recognition.
+func TestOutfileNewlineEscapeByteRequiresEnclosure(t *testing.T) {
+	const (
+		newRuleMsg = "CSV FIELDS ESCAPED BY must not be CR or LF without a nonempty ENCLOSED BY"
+		oldRuleMsg = "require a nonempty ENCLOSED BY"
+	)
+	t.Run("rejected without enclosure", func(t *testing.T) {
+		for _, c := range []struct {
+			name    string
+			escape  byte
+			line    string
+			message string
+		}{
+			// CR escape with the default or empty terminator only trips
+			// the new rule: no configured terminator byte equals CR.
+			{"CR escape LF term", '\r', "\n", newRuleMsg},
+			{"CR escape empty term", '\r', "", newRuleMsg},
+			// The remaining newline-mode cells are already caught by the
+			// earlier terminator/escape collision rule; assert the shared
+			// trailer so either rejection ordering satisfies the test.
+			{"CR escape CRLF term", '\r', "\r\n", oldRuleMsg},
+			{"LF escape LF term", '\n', "\n", oldRuleMsg},
+			{"LF escape CRLF term", '\n', "\r\n", oldRuleMsg},
+			{"LF escape empty term", '\n', "", oldRuleMsg},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				ep := newOutfileExportConfig(tree.NewFields(",", false, 0, c.escape), nil, c.line)
+				require.ErrorContains(t, ep.validateCSVFraming(context.Background()), c.message)
+			})
+		}
+	})
+
+	t.Run("allowed configurations", func(t *testing.T) {
+		for _, c := range []struct {
+			name    string
+			escape  byte
+			enclose byte
+			line    string
+		}{
+			// A non-newline terminator makes LOAD stop treating CR/LF as
+			// record boundaries, so the escape byte survives.
+			{"CR escape pipe term", '\r', 0, "|"},
+			{"LF escape pipe term", '\n', 0, "|"},
+			// Enclosure keeps the escape byte and the newline inside
+			// quotes where both stay literal.
+			{"CR escape enclosed LF", '\r', '"', "\n"},
+			{"LF escape enclosed LF", '\n', '"', "\n"},
+			{"CR escape enclosed CRLF", '\r', '"', "\r\n"},
+			{"CR escape enclosed pipe", '\r', '"', "|"},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				ep := newOutfileExportConfig(tree.NewFields(",", false, c.enclose, c.escape), nil, c.line)
+				require.NoError(t, ep.validateCSVFraming(context.Background()))
+			})
+		}
+	})
+
+	t.Run("terminator normalization in the reader model", func(t *testing.T) {
+		// validateCSVFraming's earlier collision rule intercepts CR/LF
+		// escapes before this helper sees a CRLF terminator, so exercise
+		// the normalization directly.
+		for _, c := range []struct {
+			name string
+			ep   *ExportConfig
+			want bool
+		}{
+			{"CRLF normalizes to LF", selectIntoOutfileConfig(",", 0, '\\', "", "\r\n"), true},
+			{"LF", selectIntoOutfileConfig(",", 0, '\\', "", "\n"), true},
+			{"empty terminator", selectIntoOutfileConfig(",", 0, '\\', "", ""), true},
+			{"pipe disables newline recognition", selectIntoOutfileConfig(",", 0, '\\', "", "|"), false},
+			{"LF-prefixed composite disables it", selectIntoOutfileConfig(",", 0, '\\', "", "\n|"), false},
+			{"nil lines defaults to LF", &ExportConfig{userConfig: &tree.ExportParam{Fields: tree.NewFields(",", false, 0, '\\')}}, true},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				require.Equal(t, c.want, c.ep.readerRecognizesNewlineBoundaries())
+			})
+		}
+	})
+
+	t.Run("document the reader corruption the rule prevents", func(t *testing.T) {
+		// The reviewer's probe: escape CR ends the record at the byte
+		// meant to escape the comma, so 'a\r,b' reads back as 'a'.
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEscapedBy: "\r", LinesTerminatedBy: "\n",
+			LinesStartingBy: "p:", Null: []string{`\N`},
+		}, bytes.NewReader([]byte("p:1,a\r,b\np:2,cd\n")), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Len(t, row, 2)
+		require.Equal(t, "a", row[1].Val, "the escape byte swallows the rest of the value")
+	})
+
+	t.Run("document enclosed and non-newline round-trips", func(t *testing.T) {
+		enclosed, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEscapedBy: "\r", FieldsEnclosedBy: `"`,
+			LinesTerminatedBy: "\n", LinesStartingBy: "p:", Null: []string{`\N`},
+		}, bytes.NewReader([]byte("p:1,\"a\r,b\"\np:2,cd\n")), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := enclosed.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, "a,b", row[1].Val)
+
+		pipe, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEscapedBy: "\r", LinesTerminatedBy: "|",
+			LinesStartingBy: "p:", Null: []string{`\N`},
+		}, bytes.NewReader([]byte("p:1,a\r,b|p:2,cd|")), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err = pipe.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, "a,b", row[1].Val)
+	})
+}

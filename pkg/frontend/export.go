@@ -338,6 +338,21 @@ func (ec *ExportConfig) readerStripsTrailingCR() bool {
 	return term == "\n"
 }
 
+// readerRecognizesNewlineBoundaries reports whether LOAD's parser treats CR
+// and LF as record boundaries for this configuration: whenever its
+// normalized terminator is empty or exactly LF (csvparser tryReadNewLine
+// accepts both bytes in those modes regardless of ESCAPED BY).
+func (ec *ExportConfig) readerRecognizesNewlineBoundaries() bool {
+	term := "\n"
+	if l := ec.userConfig.Lines; l != nil && l.TerminatedBy != nil {
+		term = l.TerminatedBy.Value
+	}
+	if term == "\r\n" {
+		term = "\n"
+	}
+	return term == "" || term == "\n"
+}
+
 var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byte, flag bool, last bool, buffer *bytes.Buffer) error {
 	if err := checkCSVValueRoundTrip(oq, tmp, last); err != nil {
 		return err
@@ -961,6 +976,16 @@ func (ec *ExportConfig) validateCSVFraming(ctx context.Context) error {
 		return moerr.NewInvalidInput(ctx,
 			"CSV terminators starting with ESCAPED BY or an ambiguous escape character (0, b, n, r, t, Z, N) require a nonempty ENCLOSED BY")
 	}
+	// LOAD recognizes CR (and LF) as a record boundary whenever its
+	// normalized terminator is a newline — BEFORE applying any escape byte
+	// (csvparser tryReadNewLine). A newline byte can therefore never serve
+	// as ESCAPED BY for unenclosed output: an escaped separator would land
+	// after the record the escape byte itself just ended. Enclosed output
+	// keeps both bytes inside quotes and stays safe.
+	if esc := ec.escapeChar(); noQuote && (esc == '\r' || esc == '\n') && ec.readerRecognizesNewlineBoundaries() {
+		return moerr.NewInvalidInput(ctx,
+			"CSV FIELDS ESCAPED BY must not be CR or LF without a nonempty ENCLOSED BY: LOAD treats both bytes as record boundaries before applying escapes")
+	}
 	return nil
 }
 
@@ -1028,10 +1053,17 @@ func addEscapeToString(ep *ExportConfig, s []byte, enclosed byte) []byte {
 	}
 	if escape != 0 && enclosed == 0 && bytes.Equal(s, []byte("NULL")) {
 		// LOAD's default enclosure mode treats bare NULL as SQL NULL. Escape
-		// its first N (not a translated escape) to retain literal text/BIT bytes.
-		result := make([]byte, len(s)+1)
-		result[0] = escape
-		copy(result[1:], s)
+		// its first N (not a translated escape) to retain literal text/BIT
+		// bytes, and encode any configured-escape occurrences inside the word
+		// (e.g. the U in ESCAPED BY 'U') so the remaining letters stay literal
+		// too: otherwise LOAD would collapse them away ('UNULL' -> 'NLL').
+		result := []byte{escape}
+		for _, b := range s {
+			if b == escape {
+				result = append(result, escape)
+			}
+			result = append(result, b)
+		}
 		return result
 	}
 	field, line, quote, defaultLine := ep.csvBoundaryBytes()

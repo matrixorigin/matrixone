@@ -235,6 +235,46 @@ drop table rt_nulls;
 drop table rt_back;
 drop table rt;
 
+-- A bare literal NULL word must survive when the configured ESCAPED BY byte
+-- occurs inside it: prefixing only the first N would still let LOAD collapse
+-- the inner escape bytes ('UNULL' reads as 'NLL', 'LNULL' as 'NUL'). The
+-- writer encodes every occurrence, so LOAD returns the literal text NULL,
+-- not SQL NULL and not a shortened word.
+select 'NULL' as s into outfile 'stage://outfile_fields_lines_stage/null_esc_u.csv'
+fields terminated by ',' enclosed by '' escaped by 'U' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/null_esc_u.csv' as datalink)));
+create table null_esc_back (s varchar(10));
+load data infile 'stage://outfile_fields_lines_stage/null_esc_u.csv' into table null_esc_back
+fields terminated by ',' enclosed by '' escaped by 'U' (s);
+select s, s is null as isn from null_esc_back;
+
+select 'NULL' as s into outfile 'stage://outfile_fields_lines_stage/null_esc_l.csv'
+fields terminated by ',' enclosed by '' escaped by 'L' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/null_esc_l.csv' as datalink)));
+delete from null_esc_back;
+load data infile 'stage://outfile_fields_lines_stage/null_esc_l.csv' into table null_esc_back
+fields terminated by ',' enclosed by '' escaped by 'L' (s);
+select s, s is null as isn from null_esc_back;
+drop table null_esc_back;
+
+-- A bare CR or LF ESCAPED BY cannot protect separators while LOAD's parser
+-- still treats newlines as record boundaries (it consumes the newline before
+-- applying the escape byte), so the export is rejected before opening the
+-- file. A nonempty ENCLOSED BY keeps both bytes inside quotes and round-trips.
+select id, s from src where id = 2
+into outfile 'stage://outfile_fields_lines_stage/esc_cr_bad.csv'
+fields terminated by ',' enclosed by '' escaped by '\r' lines starting by 'p:' header 'false';
+select count(*) from stage_list('stage://outfile_fields_lines_stage/esc_cr_bad.csv');
+select id, s from src where id = 2
+into outfile 'stage://outfile_fields_lines_stage/esc_cr_ok.csv'
+fields terminated by ',' enclosed by '"' escaped by '\r' lines starting by 'p:' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/esc_cr_ok.csv' as datalink)));
+create table esc_cr_back (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/esc_cr_ok.csv' into table esc_cr_back
+fields terminated by ',' enclosed by '"' escaped by '\r' lines starting by 'p:';
+select id, hex(s) as hs from esc_cr_back;
+drop table esc_cr_back;
+
 remove files from stage if exists 'stage://outfile_fields_lines_stage/*.csv';
 select count(*) from stage_list('stage://outfile_fields_lines_stage/');
 drop stage outfile_fields_lines_stage;
