@@ -125,11 +125,18 @@ func newLazyFlag(r1, r2 rune) lazyFlag {
 	return lazyFlag(uint64(r1)<<32 | uint64(uint32(r2)))
 }
 
+// crlfBetween reports whether the position described by the flag sits between
+// CR and LF, the interior of one atomic line terminator. A line-anchored
+// search never starts there in the wide line modes.
+func crlfBetween(f lazyFlag) bool {
+	return rune(f>>32) == '\r' && rune(f) == '\n'
+}
+
 func (f lazyFlag) match(op syntax.EmptyOp, mode LineMode) bool {
 	if mode != UnixLines && op&(syntax.EmptyBeginLine|syntax.EmptyEndLine) != 0 {
 		r1, r2 := rune(f>>32), rune(f)
 		if op&syntax.EmptyBeginLine != 0 {
-			if !(r1 < 0 || r1 == '\n' || r2 >= 0 && mode.isWideTerminator(r1) && !(r1 == '\r' && r2 == '\n')) {
+			if !(r1 < 0 || r1 == '\n' || r2 >= 0 && mode.isWideTerminator(r1)) {
 				return false
 			}
 			op &^= syntax.EmptyBeginLine
@@ -231,10 +238,14 @@ func (m *machine) match(i input, pos int) bool {
 			}
 		}
 		if !m.matched {
-			if len(m.matchcap) > 0 {
-				m.matchcap[0] = pos
+			// A masked line-anchored search never starts at a CRLF interior.
+			// flag can be stale after a prefix jump, so test a fresh context.
+			if !m.re.lineMask || !crlfBetween(i.context(pos)) {
+				if len(m.matchcap) > 0 {
+					m.matchcap[0] = pos
+				}
+				m.add(runq, uint32(m.p.Start), pos, m.matchcap, &flag, nil)
 			}
-			m.add(runq, uint32(m.p.Start), pos, m.matchcap, &flag, nil)
 		}
 		flag = newLazyFlag(r, r1)
 		m.step(runq, nextq, pos, pos+width, r, &flag)

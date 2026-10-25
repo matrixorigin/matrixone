@@ -78,6 +78,7 @@ import (
 // except for configuration methods, such as [Regexp.Longest].
 type Regexp struct {
 	lineMode       LineMode     // immutable MatrixOne line-assertion policy
+	lineMask       bool         // suppress match starts at a CRLF interior (line-anchored, non-exempt)
 	expr           string       // as passed to Compile
 	prog           *syntax.Prog // compiled program
 	onepass        *onePassProg // onepass program or nil
