@@ -1,6 +1,6 @@
 # Classify terminal-any loops once at compilation
 
-Tracking: [#27665](https://github.com/matrixorigin/matrixone/issues/27665).
+Tracking: [#27665](https://github.com/matrixorigin/matrixone/issues/27665); implementation [#31079](https://github.com/matrixorigin/matrixone/pull/31079).
 
 ## Problem and ownership
 
