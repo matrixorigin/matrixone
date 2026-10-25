@@ -17,6 +17,8 @@ package plan
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -103,6 +105,152 @@ func TestTransparentMySQLSpecialValueProof(t *testing.T) {
 			require.Empty(t, b.setBitmapByDisplayNode)
 		})
 	}
+	for _, tc := range []struct {
+		name             string
+		kind             planpb.Node_JoinType
+		leftOnly, reject bool
+	}{
+		{"inner", planpb.Node_INNER, false, false},
+		{"left", planpb.Node_LEFT, false, false},
+		{"right", planpb.Node_RIGHT, false, false},
+		{"full", planpb.Node_OUTER, false, false},
+		{"single", planpb.Node_SINGLE, false, false},
+		{"asof", planpb.Node_ASOF, false, false},
+		{"asof-left", planpb.Node_ASOF_LEFT, false, false},
+		{"semi", planpb.Node_SEMI, true, false},
+		{"anti", planpb.Node_ANTI, true, false},
+		{"mark", planpb.Node_MARK, true, false},
+		{"index", planpb.Node_INDEX, true, false},
+		{"dedup", planpb.Node_DEDUP, false, true},
+		{"l2", planpb.Node_L2, false, true},
+	} {
+		for side := 0; side < 2; side++ {
+			for _, rightFlag := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/source-%d/right-flag-%v", tc.name, side, rightFlag), func(t *testing.T) {
+					b := newBuilder()
+					b.qry.Nodes[1].ProjectList[0].Typ.NotNullable = true
+					b.qry.Nodes[1].ProjectList[0].GetF().Args[1].Typ.NotNullable = true
+					b.qry.Nodes[2].ProjectList[0].Typ.NotNullable = true
+					children := []int32{0, 3}
+					if side == 1 {
+						children[0], children[1] = children[1], children[0]
+					}
+					b.qry.Nodes = append(b.qry.Nodes,
+						&planpb.Node{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{13}},
+						&planpb.Node{NodeType: planpb.Node_JOIN, JoinType: tc.kind, Children: children, IsRightJoin: rightFlag})
+					b.tag2NodeID[13] = 3
+					b.qry.Nodes[1].Children = []int32{4}
+					before, err := b.qry.Marshal()
+					require.NoError(t, err)
+					value, ok := b.materializeTransparentMySQLSpecialAssignmentValue(expr)
+					want := !tc.reject && (!tc.leftOnly || side == 0)
+					require.Equal(t, want, ok)
+					if !want {
+						after, err := b.qry.Marshal()
+						require.NoError(t, err)
+						require.Equal(t, before, after)
+						require.Empty(t, b.setBitmapByDisplayNode)
+						return
+					}
+					nullable := tc.kind == planpb.Node_OUTER || (tc.kind == planpb.Node_RIGHT && side == 0) ||
+						((tc.kind == planpb.Node_LEFT || tc.kind == planpb.Node_SINGLE || tc.kind == planpb.Node_ASOF_LEFT) && side == 1)
+					require.Equal(t, !nullable, value.Typ.NotNullable)
+					require.Equal(t, storage.Enumvalues, value.Typ.Enumvalues)
+					for range 2 {
+						reused, ok := b.materializeTransparentMySQLSpecialAssignmentValue(expr)
+						require.True(t, ok)
+						require.Equal(t, value, reused)
+					}
+					require.Len(t, b.setBitmapByDisplayNode, 2)
+					for _, id := range []int{1, 2} {
+						require.Len(t, b.qry.Nodes[id].ProjectList, 2)
+					}
+					require.Empty(t, b.qry.Nodes[4].ProjectList, "JOIN forwards the source; it needs no synthetic output")
+				})
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		change func(*QueryBuilder)
+		want   bool
+	}{
+		{"off-path aggregate", func(b *QueryBuilder) {
+			b.qry.Nodes = append(b.qry.Nodes, &planpb.Node{NodeType: planpb.Node_AGG, Children: []int32{3}})
+			b.qry.Nodes[4].Children[1] = 5
+		}, true},
+		{"source aggregate", func(b *QueryBuilder) {
+			b.qry.Nodes = append(b.qry.Nodes, &planpb.Node{NodeType: planpb.Node_AGG, Children: []int32{0}})
+			b.qry.Nodes[4].Children[0] = 5
+		}, false},
+		{"source distinct", func(b *QueryBuilder) {
+			b.qry.Nodes = append(b.qry.Nodes, &planpb.Node{NodeType: planpb.Node_DISTINCT, Children: []int32{0}})
+			b.qry.Nodes[4].Children[0] = 5
+		}, false},
+		{"source no longer projected", func(b *QueryBuilder) {
+			b.qry.Nodes = append(b.qry.Nodes, &planpb.Node{NodeType: planpb.Node_PROJECT, BindingTags: []int32{14}, Children: []int32{0}, ProjectList: []*Expr{makePlan2Int64ConstExprWithType(1)}})
+			b.qry.Nodes[4].Children[0] = 5
+		}, false},
+		{"cyclic input", func(b *QueryBuilder) {
+			b.qry.Nodes = append(b.qry.Nodes, &planpb.Node{NodeType: planpb.Node_FILTER, Children: []int32{5}})
+			b.qry.Nodes[4].Children[0] = 5
+		}, false},
+		{"nil input", func(b *QueryBuilder) { b.qry.Nodes[0] = nil }, false},
+		{"out-of-range input", func(b *QueryBuilder) { b.qry.Nodes[4].Children[0] = 99 }, false},
+		{"ambiguous source output", func(b *QueryBuilder) { b.qry.Nodes[4].Children[1] = 0 }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newBuilder()
+			b.qry.Nodes = append(b.qry.Nodes,
+				&planpb.Node{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{13}},
+				&planpb.Node{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER, Children: []int32{0, 3}})
+			b.tag2NodeID[13] = 3
+			b.qry.Nodes[1].Children = []int32{4}
+			tc.change(b)
+			before, err := json.Marshal(b.qry)
+			require.NoError(t, err)
+			_, ok := b.materializeTransparentMySQLSpecialAssignmentValue(expr)
+			require.Equal(t, tc.want, ok)
+			if !tc.want {
+				after, err := json.Marshal(b.qry)
+				require.NoError(t, err)
+				require.Equal(t, before, after)
+				require.Empty(t, b.setBitmapByDisplayNode)
+			}
+		})
+	}
+	for _, literal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("native-adapter/literal=%v", literal), func(t *testing.T) {
+			b := newBuilder()
+			b.qry.Nodes = append(b.qry.Nodes,
+				&planpb.Node{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{13}},
+				&planpb.Node{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_LEFT, Children: []int32{0, 3}})
+			b.tag2NodeID[13] = 3
+			b.qry.Nodes[1].Children = []int32{4}
+			nativeType := storage
+			nativeType.NotNullable = true
+			value := &Expr{Typ: nativeType, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: 1}}}}
+			if !literal {
+				var err error
+				value, err = BindFuncExprImplByPlanExpr(t.Context(), "if", []*Expr{MakePlan2BoolConstExprWithType(true), GetColExpr(nativeType, 10, 0), GetColExpr(nativeType, 13, 0)})
+				require.NoError(t, err)
+			}
+			displayed, err := makeEnumOrSetDisplayValue(t.Context(), value)
+			require.NoError(t, err)
+			b.qry.Nodes[1].ProjectList[0] = displayed
+			raw, ok := b.materializeTransparentMySQLSpecialAssignmentValue(expr)
+			require.True(t, ok)
+			require.Equal(t, storage.Enumvalues, raw.Typ.Enumvalues)
+			producer := b.qry.Nodes[1].ProjectList[1]
+			if literal {
+				require.Equal(t, uint64(1), producer.GetLit().GetU64Val())
+			} else {
+				require.Equal(t, "if", producer.GetF().Func.ObjName)
+				require.False(t, producer.GetF().Args[2].Typ.NotNullable, "null-extended leaf must not retain NOT NULL")
+			}
+		})
+	}
+
 }
 
 func newMySQLSpecialOrderMock(t testing.TB) *MockOptimizer {

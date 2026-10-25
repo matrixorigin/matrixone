@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -1717,8 +1718,8 @@ func (builder *QueryBuilder) isProjectedNullValueAtNode(
 }
 
 // materializeTransparentMySQLSpecialValue carries storage identity only through
-// row-preserving projections. Prove the relational path before changing any
-// projection: following tags alone can jump below an untagged DISTINCT or LIMIT.
+// transparent projections. Prove the selected source's output path before
+// changing any projection: a tag lookup alone can cross a schema boundary.
 func (builder *QueryBuilder) materializeTransparentMySQLSpecialValue(expr *Expr) (*Expr, bool) {
 	value, ok := builder.materializeTransparentMySQLSpecialAssignmentValue(expr)
 	if ok && isSetPlanType(&value.Typ) {
@@ -1751,7 +1752,7 @@ func (builder *QueryBuilder) proveTransparentMySQLSpecialValue(expr *Expr, visit
 	}
 	node := builder.qry.Nodes[nodeID]
 	key := [2]int32{nodeID, col.ColPos}
-	if visiting[key] || node.NodeType != plan.Node_PROJECT || col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+	if node == nil || visiting[key] || node.NodeType != plan.Node_PROJECT || col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
 		return false
 	}
 	if int(nodeID) < len(builder.ctxByNode) {
@@ -1760,7 +1761,17 @@ func (builder *QueryBuilder) proveTransparentMySQLSpecialValue(expr *Expr, visit
 			return false
 		}
 	}
-	if !builder.mysqlSpecialRowPreservingInput(nodeID, make(map[int32]bool)) {
+	if len(node.Children) != 1 {
+		return false
+	}
+	source := node.ProjectList[col.ColPos]
+	if raw, ok := storedMySQLSpecialDomainExpr(source); ok {
+		if !isEnumOrSetPlanType(&raw.Typ) {
+			return false
+		}
+		source = raw
+	}
+	if _, ok := builder.mysqlSpecialInputExpression(node.Children[0], source, false); !ok {
 		return false
 	}
 	visiting[key] = true
@@ -1768,26 +1779,127 @@ func (builder *QueryBuilder) proveTransparentMySQLSpecialValue(expr *Expr, visit
 	return builder.proveTransparentMySQLSpecialValue(node.ProjectList[col.ColPos], visiting)
 }
 
-func (builder *QueryBuilder) mysqlSpecialRowPreservingInput(nodeID int32, visiting map[int32]bool) bool {
-	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || visiting[nodeID] {
-		return false
+// mysqlSpecialInputExpression checks every referenced output in the selected
+// projection's actual input. A raw adapter may contain a native IF or a literal;
+// keep its evaluation above the same join, without duplicating its producer.
+// Proof is read-only; relaxNullability is used only on the materializer's private
+// expression copy, after all visibility checks have succeeded.
+func (builder *QueryBuilder) mysqlSpecialInputExpression(input int32, expr *Expr, relaxNullability bool) (bool, bool) {
+	memo := make(map[[2]int32]mysqlSpecialSourceVisibility)
+	var visit func(*Expr) (bool, bool)
+	visit = func(expr *Expr) (bool, bool) {
+		if expr == nil {
+			return false, false
+		}
+		switch e := expr.Expr.(type) {
+		case *plan.Expr_Col:
+			if e.Col == nil {
+				return false, false
+			}
+			owner, ok := builder.tag2NodeID[e.Col.RelPos]
+			if !ok || e.Col.ColPos < 0 || owner < 0 || int(owner) >= len(builder.qry.Nodes) ||
+				builder.qry.Nodes[owner] == nil || !slices.Contains(builder.qry.Nodes[owner].BindingTags, e.Col.RelPos) {
+				return false, false
+			}
+			if node := builder.qry.Nodes[owner]; node.NodeType == plan.Node_PROJECT && int(e.Col.ColPos) >= len(node.ProjectList) {
+				return false, false
+			}
+			result := builder.mysqlSpecialVisibleSource(input, owner, memo)
+			if relaxNullability && result.nullable {
+				expr.Typ.NotNullable = false
+			}
+			return result.nullable, result.visible
+		case *plan.Expr_F, *plan.Expr_List:
+			var children []*Expr
+			if function := expr.GetF(); function != nil {
+				children = function.Args
+			} else if list := expr.GetList(); list != nil {
+				children = list.List
+			} else {
+				return false, false
+			}
+			nullable := false
+			for _, child := range children {
+				childNullable, ok := visit(child)
+				if !ok {
+					return false, false
+				}
+				nullable = nullable || childNullable
+			}
+			if relaxNullability && nullable {
+				expr.Typ.NotNullable = false
+			}
+			return nullable, true
+		case *plan.Expr_Lit, *plan.Expr_T, *plan.Expr_P, *plan.Expr_V:
+			return false, true
+		default:
+			return false, false
+		}
+	}
+	return visit(expr)
+}
+
+type mysqlSpecialSourceVisibility struct {
+	visible  bool
+	nullable bool
+}
+
+// mysqlSpecialVisibleSource applies to logical binding plans, before join child
+// swapping and column remapping. IsRightJoin does not change child order here.
+func (builder *QueryBuilder) mysqlSpecialVisibleSource(
+	nodeID, sourceID int32, memo map[[2]int32]mysqlSpecialSourceVisibility,
+) mysqlSpecialSourceVisibility {
+	key := [2]int32{nodeID, sourceID}
+	if result, ok := memo[key]; ok {
+		return result
+	}
+	// A provisional failure also stops cycles; completed DAG paths are memoized.
+	memo[key] = mysqlSpecialSourceVisibility{}
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || builder.qry.Nodes[nodeID] == nil {
+		return mysqlSpecialSourceVisibility{}
 	}
 	node := builder.qry.Nodes[nodeID]
-	// Selection and ordering retain each surviving row's storage identity.
-	// Carry hidden values through this same subtree; never move its selection.
-	switch node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_VALUE_SCAN:
-		return true
-	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT:
-		if len(node.Children) != 1 {
-			return false
+	result := mysqlSpecialSourceVisibility{}
+	if nodeID == sourceID {
+		result.visible = true // consume this published output, never its hidden input
+	} else {
+		switch node.NodeType {
+		case plan.Node_FILTER, plan.Node_SORT:
+			if len(node.Children) == 1 {
+				result = builder.mysqlSpecialVisibleSource(node.Children[0], sourceID, memo)
+			}
+		case plan.Node_JOIN:
+			if len(node.Children) != 2 {
+				break
+			}
+			children := node.Children
+			switch node.JoinType {
+			case plan.Node_INNER, plan.Node_LEFT, plan.Node_RIGHT, plan.Node_OUTER,
+				plan.Node_SINGLE, plan.Node_ASOF, plan.Node_ASOF_LEFT:
+			case plan.Node_SEMI, plan.Node_ANTI, plan.Node_MARK, plan.Node_INDEX:
+				children = children[:1]
+			default:
+				return result
+			}
+			for i, child := range children {
+				found := builder.mysqlSpecialVisibleSource(child, sourceID, memo)
+				if !found.visible {
+					continue
+				}
+				if result.visible {
+					return mysqlSpecialSourceVisibility{}
+				}
+				result = found
+				if node.JoinType == plan.Node_SINGLE {
+					result.nullable = result.nullable || i == 1
+				} else {
+					result.nullable = result.nullable || nodeNullExtendsChild(node, i)
+				}
+			}
 		}
-		visiting[nodeID] = true
-		defer delete(visiting, nodeID)
-		return builder.mysqlSpecialRowPreservingInput(node.Children[0], visiting)
-	default:
-		return false
 	}
+	memo[key] = result
+	return result
 }
 
 func (builder *QueryBuilder) materializeTransparentMySQLSpecialValueImpl(expr *Expr) *Expr {
@@ -1804,7 +1916,16 @@ func (builder *QueryBuilder) materializeTransparentMySQLSpecialValueImpl(expr *E
 	// metadata. Recover the proven source domain through the same input chain;
 	// reuse its physical slot regardless of which consumer arrived first.
 	raw := builder.materializeTransparentMySQLSpecialValueImpl(node.ProjectList[col.ColPos])
+	if nullable, _ := builder.mysqlSpecialInputExpression(node.Children[0], raw, true); nullable {
+		raw.Typ.NotNullable = false
+	}
+	raw.Typ.NotNullable = raw.Typ.NotNullable && node.ProjectList[col.ColPos].Typ.NotNullable
 	if pos, ok := builder.setBitmapByDisplayNode[key]; ok {
+		// Numeric consumers may have populated this slot first. NULL-extension
+		// may only relax its contract; consumer-specific member metadata stays
+		// on the returned reference rather than rewriting the shared producer.
+		builder.mysqlSpecialInputExpression(node.Children[0], node.ProjectList[pos], true)
+		node.ProjectList[pos].Typ.NotNullable = node.ProjectList[pos].Typ.NotNullable && raw.Typ.NotNullable
 		return GetColExpr(raw.Typ, col.RelPos, pos)
 	}
 	pos := int32(len(node.ProjectList))

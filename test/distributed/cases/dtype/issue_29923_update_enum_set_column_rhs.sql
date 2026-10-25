@@ -49,3 +49,27 @@ drop table t29923_dup;
 
 drop table t29923_src;
 drop table t29923_dst;
+
+-- A JOIN inside the derived source must retain storage, including distinct
+-- empty/error members; outer extension must contribute NULL instead of zero.
+drop table if exists t29923_identity_peer;
+drop table if exists t29923_identity_src;
+drop table if exists t29923_identity_dst;
+create table t29923_identity_src(id int primary key,e enum('','red'),s set('','a'));
+create table t29923_identity_dst(id int primary key,e enum('','red'),s set('','a'));
+create table t29923_identity_peer(id int primary key);
+insert ignore into t29923_identity_src values(1,'invalid',0);
+insert into t29923_identity_src values(2,'',1),(3,NULL,NULL);
+insert into t29923_identity_dst values(1,'red','a'),(2,'red','a'),(3,'red','a'),(4,'red','a');
+insert into t29923_identity_peer values(1),(2),(3),(4);
+update t29923_identity_dst d join
+  (select a.id,a.e,a.s from t29923_identity_src a join t29923_identity_peer p on a.id=p.id) x
+  on d.id=x.id set d.e=x.e,d.s=x.s;
+select id,cast(e as unsigned) e_idx,cast(s as unsigned) s_bits from t29923_identity_dst order by id;
+update t29923_identity_dst d join
+  (select p.id,a.e,a.s from t29923_identity_peer p left join t29923_identity_src a on a.id=p.id) x
+  on d.id=x.id set d.e=x.e,d.s=x.s;
+select id,cast(e as unsigned) e_idx,cast(s as unsigned) s_bits from t29923_identity_dst order by id;
+drop table t29923_identity_peer;
+drop table t29923_identity_src;
+drop table t29923_identity_dst;

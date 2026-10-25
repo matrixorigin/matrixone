@@ -96,6 +96,48 @@ func TestSpecialTypeUpdateAssignments(t *testing.T) {
 				require.Equal(t, tc.want, got)
 			})
 		}
+		t.Run("derived-join-storage-identity", func(t *testing.T) {
+			for _, typ := range []struct{ name, definition, values string }{
+				{"enum", "enum('','red')", "(1,'invalid'),(2,''),(3,'red'),(4,NULL)"},
+				{"set", "set('','red')", "(1,0),(2,1),(3,2),(4,NULL)"},
+			} {
+				t.Run(typ.name, func(t *testing.T) {
+					exec(t, "drop table if exists dst")
+					exec(t, "drop table if exists src")
+					exec(t, "drop table if exists peer")
+					exec(t, "create table src(id int primary key,v "+typ.definition+")")
+					exec(t, "create table dst(id int primary key,v "+typ.definition+")")
+					exec(t, "create table peer(id int primary key)")
+					exec(t, "insert ignore into src values"+typ.values)
+					exec(t, "insert into dst values(1,'red'),(2,'red'),(3,'red'),(4,'red'),(5,'red')")
+					exec(t, "insert into peer values(1),(2),(3),(4),(5)")
+					asofPeer := "(select id,1 k,cast(concat('2026-01-0',id) as date) ts from peer) p"
+					asofSource := "(select id,v,1 k,cast(concat('2026-01-0',id) as date) ts from src) a"
+					for _, tc := range []struct{ name, source, want string }{
+						{"asof", "select p.id,a.v from " + asofPeer + " asof join " + asofSource + " on p.k=a.k and p.ts>=a.ts", "1:0,2:1,3:2,4:NULL,5:NULL"},
+						{"asof-left", "select p.id,a.v from " + asofPeer + " asof left join " + asofSource + " on p.k=a.k and p.ts>a.ts", "1:NULL,2:0,3:1,4:2,5:NULL"},
+						{"inner", "select a.id,a.v from src a join peer p on a.id=p.id", "1:0,2:1,3:2,4:NULL,5:2"},
+						{"source-right", "select a.id,a.v from peer p join src a on a.id=p.id", "1:0,2:1,3:2,4:NULL,5:2"},
+						{"cross", "select a.id,a.v from src a cross join (select 1 n) p", "1:0,2:1,3:2,4:NULL,5:2"},
+						{"limit", "select a.id,a.v from src a join peer p on a.id=p.id order by a.id limit 2", "1:0,2:1,3:2,4:2,5:2"},
+						{"offset", "select a.id,a.v from src a join peer p on a.id=p.id order by a.id limit 1 offset 1", "1:2,2:1,3:2,4:2,5:2"},
+						{"nested", "select a.id,a.v from (select a.id,a.v from src a join peer p on a.id=p.id) a join peer p2 on a.id=p2.id", "1:0,2:1,3:2,4:NULL,5:2"},
+						{"grouped-peer", "select a.id,a.v from src a join (select id,count(*) n from peer group by id) p on a.id=p.id", "1:0,2:1,3:2,4:NULL,5:2"},
+						{"left-null-extension", "select p.id,a.v from peer p left join src a on a.id=p.id", "1:0,2:1,3:2,4:NULL,5:NULL"},
+						{"right-null-extension", "select p.id,a.v from src a right join peer p on a.id=p.id", "1:0,2:1,3:2,4:NULL,5:NULL"},
+						{"full-null-extension", "select coalesce(a.id,p.id) id,a.v from src a full outer join peer p on a.id=p.id", "1:0,2:1,3:2,4:NULL,5:NULL"},
+					} {
+						t.Run(tc.name, func(t *testing.T) {
+							exec(t, "update dst set v='red'")
+							exec(t, "update dst d join ("+tc.source+") s on d.id=s.id set d.v=s.v")
+							var got string
+							require.NoError(t, conn.QueryRowContext(ctx, "select group_concat(concat(id,':',coalesce(cast(cast(v as unsigned) as char),'NULL')) order by id) from dst").Scan(&got))
+							require.Equal(t, tc.want, got)
+						})
+					}
+				})
+			}
+		})
 		for _, tc := range []struct{ name, definition, want string }{
 			{"cross-domain-enum-zero-with-empty", "enum('','blue','red')", "1:0,2:3,3:NULL"},
 			{"cross-domain-enum-zero-without-empty", "enum('blue','red')", "1:0,2:2,3:NULL"},

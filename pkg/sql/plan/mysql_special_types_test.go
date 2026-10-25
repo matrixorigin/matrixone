@@ -1160,12 +1160,13 @@ func TestSpecialAssignmentStorageAndGuardExecution(t *testing.T) {
 }
 
 func TestSpecialAssignmentStorageCachePreservesDomain(t *testing.T) {
-	for _, limited := range []bool{false, true} {
+	for _, shape := range []struct{ limited, joined bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+		limited, joined := shape.limited, shape.joined
 		for _, numericFirst := range []bool{true, false} {
-			t.Run(map[bool]string{true: "numeric-first", false: "assignment-first"}[numericFirst]+"/limited="+strconv.FormatBool(limited), func(t *testing.T) {
+			t.Run(map[bool]string{true: "numeric-first", false: "assignment-first"}[numericFirst]+"/limited="+strconv.FormatBool(limited)+"/joined="+strconv.FormatBool(joined), func(t *testing.T) {
 				mock := newMySQLSpecialOrderMock(t)
 				builder := NewQueryBuilder(plan.Query_SELECT, &mock.ctxt, false, true)
-				typ := plan.Type{Id: int32(types.T_uint64), Enumvalues: ",a,b"}
+				typ := plan.Type{Id: int32(types.T_uint64), Enumvalues: ",a,b", NotNullable: true}
 				raw := GetColExpr(typ, 10, 0)
 				display, err := makeEnumOrSetDisplayValue(context.Background(), raw)
 				require.NoError(t, err)
@@ -1177,6 +1178,13 @@ func TestSpecialAssignmentStorageCachePreservesDomain(t *testing.T) {
 				if limited {
 					builder.qry.Nodes[1].Limit = makePlan2Int64ConstExprWithType(2)
 					builder.qry.Nodes[2].Offset = makePlan2Int64ConstExprWithType(1)
+				}
+				if joined {
+					builder.qry.Nodes = append(builder.qry.Nodes,
+						&plan.Node{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{40}},
+						&plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_LEFT, Children: []int32{3, 0}})
+					builder.qry.Nodes[1].Children = []int32{4}
+					builder.tag2NodeID[40] = 3
 				}
 				builder.tag2NodeID[10] = 0
 				builder.tag2NodeID[20] = 1
@@ -1191,6 +1199,10 @@ func TestSpecialAssignmentStorageCachePreservesDomain(t *testing.T) {
 					v, ok := builder.materializeTransparentMySQLSpecialAssignmentValue(source)
 					require.True(t, ok)
 					require.Equal(t, typ.Enumvalues, v.Typ.Enumvalues)
+					if joined {
+						require.False(t, v.Typ.NotNullable)
+						require.False(t, builder.qry.Nodes[1].ProjectList[1].Typ.NotNullable)
+					}
 				}
 				if numericFirst {
 					numeric()
