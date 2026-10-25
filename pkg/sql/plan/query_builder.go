@@ -4456,7 +4456,19 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		if err != nil {
 			return nil, err
 		}
+		compositePartBlockFilters, needsLate := builder.collectCompositePartBlockFilters(rootID, true)
+		if needsLate {
+			builder.mergeFiltersOnCompositeKey(rootID, false)
+			builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
+		}
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
+		if needsLate {
+			builder.appendCompoundKeyBlockFilters(rootID)
+			builder.appendCompositePartBlockFilters(compositePartBlockFilters)
+			sortFilterListByStats(builder.GetContext(), rootID, builder)
+			clear(colRefCnt)
+			builder.countColRefs(rootID, colRefCnt)
+		}
 
 		builder.generateRuntimeFilters(rootID)
 		builder.pushdownVectorIndexTopToTableScan(rootID)
@@ -6663,22 +6675,17 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// All aggregate consumers in this query block are bound now. Compact exact
 	// affine SUM families before aggregate arguments are flattened and the AGG
 	// node fixes their physical slot layout.
-	affineOrderBys := slices.Clone(boundOrderBys)
+	aggregateOrderBys := slices.Clone(boundOrderBys)
 	if boundTimeWindowOrderBy != nil {
-		affineOrderBys = append(affineOrderBys, boundTimeWindowOrderBy)
+		aggregateOrderBys = append(aggregateOrderBys, boundTimeWindowOrderBy)
 	}
-	builder.rewriteAffineSumFamilies(
-		ctx,
-		[][]*plan.Expr{
-			ctx.projects,
-			ctx.windows,
-			ctx.times,
-			boundHavingList,
-			fillVals,
-			fillCols,
-		},
-		affineOrderBys,
-	)
+	aggregateConsumers := [][]*plan.Expr{
+		ctx.projects, ctx.windows, ctx.times, boundHavingList, fillVals, fillCols,
+	}
+	builder.rewriteAffineSumFamilies(ctx, aggregateConsumers, aggregateOrderBys)
+	if astTimeWindow == nil {
+		builder.pruneDerivedGroupBy(ctx, aggregateConsumers, aggregateOrderBys)
+	}
 
 	// GROUP BY expressions are evaluated by the AGG over its input, so
 	// materialize scalar subqueries into that input before fixing the group-key
