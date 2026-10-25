@@ -175,9 +175,16 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   }
   for (const command of Object.keys(tools)) fs.symlinkSync(path.join(bin, command), path.join(noNode, command));
   const missingNode = run({ PATH: noNode });
-  assert.notEqual(missingNode.result.status, 0);
-  assert.match(missingNode.result.stderr, /SCA requires Node on PATH in CI/);
-  assert.deepEqual(missingNode.commands, [], 'missing infrastructure must launch neither analyzer');
+  assert.equal(missingNode.result.status, 0, missingNode.result.stderr);
+  assert.match(missingNode.result.stderr, /full graph \(Node unavailable on PATH in CI\)/);
+  assert.equal(missingNode.commands.length, 2);
+  assert.ok(missingNode.commands.every(command => command.endsWith('./...')));
+  const missingNodeVetFailure = run({ PATH: noNode, FAIL_VET: '7' });
+  assert.notEqual(missingNodeVetFailure.result.status, 0);
+  assert.equal(missingNodeVetFailure.commands.length, 1);
+  const missingNodeLintFailure = run({ PATH: noNode, FAIL_LINT: '9' });
+  assert.notEqual(missingNodeLintFailure.result.status, 0);
+  assert.equal(missingNodeLintFailure.commands.length, 2);
   const local = run({ PATH: noNode, GITHUB_ACTIONS: 'false' });
   assert.equal(local.result.status, 0, local.result.stderr);
   assert.match(local.result.stderr, /full graph \(local invocation\)/);
@@ -186,4 +193,7 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   const invalid = run();
   assert.notEqual(invalid.result.status, 0);
   assert.equal(invalid.commands.length, 0);
+  const missingNodeInvalid = run({ PATH: noNode });
+  assert.notEqual(missingNodeInvalid.result.status, 0);
+  assert.equal(missingNodeInvalid.commands.length, 0, 'full graph validation must precede either analyzer');
 });

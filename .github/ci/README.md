@@ -36,10 +36,12 @@ Changes to analyzer versions/rules require reviewing this package-local contract
 ## Full checks and rollout
 
 - `make static-check` remains the complete local/release gate.
-- `make static-check-analysis` remains full outside GitHub Actions. PR CI requires
-  Node on PATH; the SCA job exposes its existing runner-provided Node 24 runtime on PATH,
-  without downloading another SDK. A missing runtime fails
-  before either analyzer rather than silently performing a full scan.
+- `make static-check-analysis` remains full outside GitHub Actions. CI without
+  Node on PATH also runs complete graph validation and both analyzers, with an
+  explicit fallback reason. This supports older CI during rollout.
+- The SCA job can expose its existing runner-provided Node 24 runtime on PATH
+  without downloading another SDK, enabling incremental analysis. Once Node is
+  available, selector errors remain fatal.
 - Selection and conservative fallback reasons are printed on stderr; stdout
   from the selector contains only package arguments.
 - `SCA_FULL=1 make static-check-analysis` forces complete PR analysis.
