@@ -3,8 +3,10 @@
 
 import os
 import uuid
+from datetime import date, timedelta
 from decimal import Decimal
 from unittest.mock import Mock
+from uuid import UUID
 
 import numpy as np
 import pytest
@@ -147,8 +149,10 @@ async def test_async_native_vectors_and_sql_mode(client):
             assert (await session.execute('SELECT /*!50000 ? */', (9,))).scalar() == 9
             await session.execute("SET sql_mode = ''")
     finally:
-        await c.disconnect()
-        client.execute('DROP TABLE ' + table)
+        try:
+            await c.disconnect()
+        finally:
+            client.execute('DROP TABLE ' + table)
 
 
 @pytest.mark.parametrize('exported', [False, True])
@@ -310,3 +314,82 @@ def test_native_invalid_dollar_controls_and_pool_reuse(client, sql):
         client.execute(sql, ())
     assert client._engine.pool.checkedout() == 0
     assert client.execute('SELECT ?', (9,)).rows == [(9,)]
+
+
+@pytest.mark.asyncio
+async def test_native_decoded_time_and_uuid_share_all_insert_paths(client):
+    from sqlalchemy import event
+
+    from matrixone.exceptions import QueryError
+
+    table = 'sdk_scalars_' + uuid.uuid4().hex[:12]
+    token = UUID('12345678-1234-5678-1234-567812345678')
+    day = date(2026, 10, 25)
+    c = AsyncClient(logger=Mock())
+    client.execute('CREATE TABLE ' + table + '(id INT PRIMARY KEY, duration TIME(6), token UUID, day DATE)')
+    try:
+        client.execute(
+            'INSERT INTO ' + table + " VALUES (0, '1:02:03', '12345678-1234-5678-1234-567812345678', '2026-10-25')"
+        )
+        duration = client.execute('SELECT duration FROM ' + table + ' WHERE id=0').rows[0][0]
+        assert isinstance(duration, timedelta) and duration == timedelta(seconds=3723)
+        await c.connect(
+            host=os.environ.get('MO_HOST', '127.0.0.1'),
+            port=int(os.environ.get('MO_PORT', '6001')),
+            user=os.environ.get('MO_USER', 'root'),
+            password=os.environ.get('MO_PASSWORD', '111'),
+            database=os.environ.get('MO_DATABASE', 'mo_sdk_regression'),
+            on_connect=[],
+        )
+        inserts = []
+
+        def observe(conn, cursor, sql, *args):
+            if sql.upper().startswith('INSERT'):
+                inserts.append(sql)
+
+        event.listen(client._engine, 'before_cursor_execute', observe)
+        event.listen(c._engine.sync_engine, 'before_cursor_execute', observe)
+        ident = 0
+        for actor in [client, c]:
+            for vector in [False, True]:
+                target = actor.vector_ops if vector else actor
+                for batch in [False, True]:
+                    ident += 1
+                    row = {'id': ident, 'duration': duration, 'token': token, 'day': day}
+                    method = target.batch_insert if batch else target.insert
+                    result = method(table, [row] if batch else row)
+                    if actor is c:
+                        await result
+                    assert client.execute(
+                        'SELECT duration,CAST(token AS CHAR),day FROM ' + table + ' WHERE id=?', (ident,)
+                    ).rows == [(duration, str(token), day)], (actor.__class__.__name__, vector, batch)
+
+                    inserts.clear()
+                    invalid = dict(row, id=1000 + ident, token=object())
+                    with pytest.raises(QueryError if vector else TypeError, match='Unsupported SQL parameter type'):
+                        result = method(table, [dict(row, id=2000 + ident), invalid] if batch else invalid)
+                        if actor is c:
+                            await result
+                    # Both batch rows fit the first vector chunk; later-chunk
+                    # rollback remains covered by the transaction tests.
+                    assert inserts == []
+                    assert client._engine.pool.checkedout() == c._engine.sync_engine.pool.checkedout() == 0
+
+        for value in [
+            timedelta(),
+            timedelta(microseconds=-1),
+            timedelta(minutes=-30),
+            timedelta(hours=26, seconds=3, microseconds=4),
+        ]:
+            ident += 1
+            client.insert(table, {'id': ident, 'duration': value, 'token': token, 'day': day})
+            assert client.execute('SELECT duration FROM ' + table + ' WHERE id=?', (ident,)).rows == [(value,)]
+        with pytest.raises(QueryError):
+            client.insert(table, {'id': 9999, 'duration': timedelta.max, 'token': token, 'day': day})
+        assert client.execute('SELECT count(*) FROM ' + table).rows == [(ident + 1,)]
+        assert client._engine.pool.checkedout() == c._engine.sync_engine.pool.checkedout() == 0
+    finally:
+        try:
+            await c.disconnect()
+        finally:
+            client.execute('DROP TABLE ' + table)

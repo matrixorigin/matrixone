@@ -1,8 +1,9 @@
 # Copyright 2026 Matrix Origin
 # Licensed under the Apache License, Version 2.0.
 
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal
+from uuid import UUID
 
 import numpy as np
 import pytest
@@ -182,3 +183,40 @@ def test_shared_builders_quote_mysql_keywords(keyword):
     assert client._build_insert_sql('db.t', row) == expected
     assert client._build_batch_insert_sql('db.t', [row]) == expected
     assert _VectorManagerBase._build_insert_sql('db.t', row) == expected
+
+
+@pytest.mark.parametrize(
+    'value,expected',
+    [
+        (timedelta(), "'0:00:00'"),
+        (timedelta(hours=1, minutes=2, seconds=3), "'1:02:03'"),
+        (timedelta(microseconds=-1), "'-0:00:00.000001'"),
+        (timedelta(minutes=-30), "'-0:30:00'"),
+        (timedelta(hours=26, seconds=3, microseconds=4), "'26:00:03.000004'"),
+        (-timedelta(hours=26, seconds=3, microseconds=4), "'-26:00:03.000004'"),
+        (timedelta.min, "'-23999999976:00:00'"),
+        (timedelta.max, "'23999999999:59:59.999999'"),
+        (UUID('12345678-1234-5678-1234-567812345678'), "'12345678-1234-5678-1234-567812345678'"),
+        (datetime(2026, 10, 25, 1, 2, 3), "'2026-10-25 01:02:03'"),
+    ],
+)
+def test_duration_and_uuid_scalar_literals(value, expected):
+    assert sql_literal(value) == expected
+
+
+@pytest.mark.parametrize('value', [timedelta(seconds=3723), UUID(int=1)])
+def test_duration_and_uuid_share_parameter_and_builder_encoding(value):
+    literal = "'1:02:03'" if isinstance(value, timedelta) else "'00000000-0000-0000-0000-000000000001'"
+    assert substitute_parameters('SELECT ?, :ignored', (value,)) == 'SELECT ' + literal + ', :ignored'
+    assert substitute_parameters('SELECT :v', {'v': value}) == 'SELECT ' + literal
+    expected = 'INSERT INTO t (v) VALUES (' + literal + ')'
+    client = BaseMatrixOneClient()
+    assert client._build_insert_sql('t', {'v': value}) == expected
+    assert client._build_batch_insert_sql('t', [{'v': value}]) == expected
+    assert _VectorManagerBase._build_insert_sql('t', {'v': value}) == expected
+
+
+@pytest.mark.parametrize('value', [timedelta(seconds=1), UUID(int=1)])
+def test_duration_and_uuid_do_not_expand_json_allowlist(value):
+    with pytest.raises(TypeError, match='Unsupported JSON parameter type'):
+        sql_literal({'nested': value})

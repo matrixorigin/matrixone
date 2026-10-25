@@ -10,8 +10,9 @@ complete SQL string, so substitutions must respect SQL lexical boundaries.
 import json
 import math
 import re
-from datetime import date, datetime, time
+from datetime import date, time, timedelta
 from decimal import Decimal
+from uuid import UUID
 
 import numpy as np
 from sqlalchemy.dialects.mysql.base import MySQLIdentifierPreparer
@@ -87,11 +88,22 @@ def sql_literal(value):
         return str(value)
     if isinstance(value, (bytes, bytearray, memoryview)):
         return "X'%s'" % bytes(value).hex()
-    if isinstance(value, dict):
+    if isinstance(value, timedelta):
+        # Use signed microseconds: normalized negative days and fractions must
+        # not become complemented fields, rounded floats, or wrapped hours.
+        total_us = (value.days * 86400 + value.seconds) * 1_000_000 + value.microseconds
+        sign = '-' if total_us < 0 else ''
+        seconds, micros = divmod(abs(total_us), 1_000_000)
+        hours, seconds = divmod(seconds, 3600)
+        minutes, seconds = divmod(seconds, 60)
+        value = f'{sign}{hours}:{minutes:02d}:{seconds:02d}'
+        if micros:
+            value += f'.{micros:06d}'
+    elif isinstance(value, dict):
         value = json.dumps(value, default=_json_scalar, allow_nan=False)
     elif isinstance(value, (list, tuple)):
         value = json.dumps(value, separators=(',', ':'), default=_json_scalar, allow_nan=False)
-    elif isinstance(value, (date, datetime, time)):
+    elif isinstance(value, (date, time, UUID)):
         value = str(value)
     if not isinstance(value, str):
         raise TypeError('Unsupported SQL parameter type: %s' % type(value).__name__)
