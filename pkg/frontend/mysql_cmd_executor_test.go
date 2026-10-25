@@ -11457,7 +11457,11 @@ func Test_handleShowTableStatus(t *testing.T) {
 		dbName string,
 	) (*Session, *ExecCtx, *tree.ShowTableStatus) {
 		relation := mock_frontend.NewMockRelation(ctrl)
-		relation.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{TableType: tableType}).AnyTimes()
+		tableDef := &plan.TableDef{TableType: tableType}
+		if tableName == "a'b" {
+			tableDef.Indexes = []*plan.IndexDef{{IndexTableName: catalog.SecondaryIndexTableNamePrefix + "quoted"}}
+		}
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(tableDef).AnyTimes()
 
 		database := mock_frontend.NewMockDatabase(ctrl)
 		database.EXPECT().IsSubscription(gomock.Any()).Return(false).AnyTimes()
@@ -11502,6 +11506,45 @@ func Test_handleShowTableStatus(t *testing.T) {
 		proto.SetSession(ses)
 		return ses, newTestExecCtx(reqCtx, ctrl), &tree.ShowTableStatus{DbName: dbName}
 	}
+
+	convey.Convey("handleShowTableStatus escapes quoted table names", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses, ec, shv := newShowTableStatusFixture(
+			ctx, ctrl, catalog.SystemOrdinaryRel, "a'b", uint32(moAdminRoleID),
+			&TenantInfo{Tenant: "acc_quote", TenantID: 1, User: "admin", DefaultRole: accountAdminRoleName, DefaultRoleID: moAdminRoleID},
+			"quoted_db",
+		)
+		statsRet := mock_frontend.NewMockExecResult(ctrl)
+		statsRet.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		statsRet.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("a'b", nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(2), nil).AnyTimes()
+		statsRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(2)).Return(int64(128), nil).AnyTimes()
+		indexRet := mock_frontend.NewMockExecResult(ctrl)
+		indexRet.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+		indexRet.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return(catalog.SecondaryIndexTableNamePrefix+"quoted", nil).AnyTimes()
+		indexRet.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(1)).Return(int64(64), nil).AnyTimes()
+
+		var statsSQL, indexSQL string
+		execStub := gostub.Stub(&ExeSqlInBgSes, func(reqCtx context.Context, bh BackgroundExec, sql string) ([]ExecResult, error) {
+			switch {
+			case strings.Contains(sql, "mo_table_rows(db, tbl)"):
+				statsSQL = sql
+				return []ExecResult{statsRet}, nil
+			case strings.Contains(sql, "mo_table_size(db, tbl)"):
+				indexSQL = sql
+				return []ExecResult{indexRet}, nil
+			default:
+				return nil, moerr.NewInternalErrorf(reqCtx, "unexpected sql in test: %s", sql)
+			}
+		})
+		defer execStub.Reset()
+
+		require.NoError(t, handleShowTableStatus(ses, ec, shv))
+		require.Contains(t, statsSQL, "row('quoted_db', 'a''b')")
+		require.Contains(t, indexSQL, "row('quoted_db', '"+catalog.SecondaryIndexTableNamePrefix+"quoted')")
+	})
 
 	convey.Convey("handleShowTableStatus succ", t, func() {
 		ctrl := gomock.NewController(t)
