@@ -68,6 +68,17 @@ ends the search at EOF. Total suffix scanning is therefore O(input bytes), with
 no repeated whole-suffix scans and no new per-row allocation. Resetting the
 witness at search entry prevents state from leaking across pooled reuse.
 
+Search admission precedes VM reset: an unanchored search first locates its
+required literal prefix. An absent prefix returns the pooled state without
+initializing unread captures, visited bits, jobs or the LF witness. An admitted
+search resets exactly once. Later prefix lookups start after the current rune
+at the loop tail, retaining the original next-candidate order without scanning
+the first prefix twice. A matched nonempty prefix proves the current position
+is before EOF, so this step has positive width. Anchored searches reset before
+their existing first try. The witness follows the cached inputs in the state
+layout, preserving their original offsets. Prefix rejection never reads stale
+VM state, and every executed generation starts with a fresh witness.
+
 ## Cost and alternatives
 
 Classification walks the existing program once per successful compile/cache
@@ -100,5 +111,6 @@ A repeatable generic regression remains a blocker even with a large Q29 gain.
 
 Design approved before implementation by gpt-6.1-sol/xhigh: original proof in
 commit `b59e94775997`, compile-owner amendment in `8c682a2f87e2`. This document
-consolidates that approved contract. Final review uses gpt-6-astra/xhigh under
-the user's explicit model selection.
+consolidates that approved contract. The rejection-path admission amendment was
+approved before repair by gpt-6.1-sol/xhigh, which also performs the final review
+for this repair. The earlier published revision used gpt-6-astra/xhigh review.

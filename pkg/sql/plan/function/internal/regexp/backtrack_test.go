@@ -170,12 +170,43 @@ func TestTerminalRepeatExecutorBoundary(t *testing.T) {
 	}
 }
 
+func TestBitStatePrefixAdmission(t *testing.T) {
+	for _, pattern := range []string{`ab.*b`, `ab.*\z`, `ab.*?b`, `ab.*b|ab.*\z`} {
+		t.Run(pattern, func(t *testing.T) {
+			re := MustCompile(pattern)
+			if re.onepass != nil || re.maxBitStateLen == 0 || re.prefix == "" {
+				t.Fatal("expected a required-prefix bitstate search")
+			}
+			for _, longest := range []bool{false, true} {
+				re.longest = longest
+				nfa := *re
+				nfa.maxBitStateLen = 0
+				// Alternate admission/rejection after successful and failed LF
+				// scans. Prefix rejection must not read stale pooled VM state.
+				for _, s := range []string{"ab\nxab", "", "abbb", "bbb", "xxab\nxxabbb", "ab\n", "雪ab\xffb", "ab"} {
+					for start := 0; start <= len(s); start++ {
+						if got, want := re.FindStringSubmatchIndexAt(s, start), nfa.FindStringSubmatchIndexAt(s, start); !reflect.DeepEqual(got, want) {
+							t.Fatalf("string=%q start=%d longest=%t: got %v want %v", s, start, longest, got, want)
+						}
+						got := re.find(nil, []byte(s), "", start, re.prog.NumCap, nil)
+						want := nfa.find(nil, []byte(s), "", start, nfa.prog.NumCap, nil)
+						if !reflect.DeepEqual(got, want) {
+							t.Fatalf("bytes=%q start=%d longest=%t: got %v want %v", s, start, longest, got, want)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkTerminalRepeat(b *testing.B) {
 	for _, tc := range []struct{ name, pattern, subject string }{
 		{"tail", `(a|ab).*\z`, "ab" + strings.Repeat("xyz", 100)},
 		{"dotall", `(?s)(a|ab).*\z`, "ab\n" + strings.Repeat("xyz", 100)},
 		{"short", `(a|ab).*\z`, "ab"},
 		{"prefix_failure", `a.*\z`, strings.Repeat("b", 300)},
+		{"prefix_failure_ineligible", `a.*b`, strings.Repeat("b", 300)},
 		{"early_lf", `a.*\z`, "a\n" + strings.Repeat("b", 4096)},
 		{"captured_tail", `(a.*)\z`, "a" + strings.Repeat("xyz", 100)},
 		{"lazy_tail", `a.*?\z`, "a" + strings.Repeat("xyz", 100)},
@@ -198,6 +229,26 @@ func BenchmarkTerminalRepeat(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				re.FindStringSubmatchIndex(s)
+			}
+		})
+	}
+}
+
+func BenchmarkBitStatePrefixRejection(b *testing.B) {
+	for _, pattern := range []string{`a.*\z`, `a.*b`} {
+		re := MustCompile(pattern)
+		s := strings.Repeat("b", 300)
+		b.Run(pattern+"/string", func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				re.MatchString(s)
+			}
+		})
+		b.Run(pattern+"/bytes", func(b *testing.B) {
+			subject := []byte(s)
+			b.ReportAllocs()
+			for b.Loop() {
+				re.Match(subject)
 			}
 		})
 	}

@@ -42,9 +42,9 @@ type bitState struct {
 	matchcap []int
 	jobs     []job
 	visited  []uint32
-	failedNL int // Furthest LF found by a terminal repeat, or -1.
 
-	inputs inputs
+	inputs   inputs
+	failedNL int // Furthest LF found by a terminal repeat, or -1.
 }
 
 var bitStatePool sync.Pool
@@ -368,10 +368,10 @@ func (re *Regexp) backtrack(ib []byte, is string, pos int, ncap int, dstCap []in
 
 	b := newBitState()
 	i, end := b.inputs.init(nil, ib, is)
-	b.reset(re.prog, end, ncap)
 
 	// Anchored search must start at the beginning of the input
 	if startCond&syntax.EmptyBeginText != 0 {
+		b.reset(re.prog, end, ncap)
 		if len(b.cap) > 0 {
 			b.cap[0] = pos
 		}
@@ -380,6 +380,18 @@ func (re *Regexp) backtrack(ib []byte, is string, pos int, ncap int, dstCap []in
 			return nil
 		}
 	} else {
+		// Reject an absent required prefix before initializing VM state. The
+		// witness and visited set are initialized once, then shared by every
+		// subsequent candidate start in this search.
+		if len(re.prefix) > 0 {
+			advance := i.index(re, pos)
+			if advance < 0 {
+				freeBitState(b)
+				return nil
+			}
+			pos += advance
+		}
+		b.reset(re.prog, end, ncap)
 
 		// Unanchored search, starting from each possible text position.
 		// Notice that we have to try the empty string at the end of
@@ -389,16 +401,6 @@ func (re *Regexp) backtrack(ib []byte, is string, pos int, ncap int, dstCap []in
 		// so no work is duplicated and it ends up still being linear.
 		width := -1
 		for ; pos <= end && width != 0; pos += width {
-			if len(re.prefix) > 0 {
-				// Match requires literal prefix; fast search for it.
-				advance := i.index(re, pos)
-				if advance < 0 {
-					freeBitState(b)
-					return nil
-				}
-				pos += advance
-			}
-
 			if len(b.cap) > 0 {
 				b.cap[0] = pos
 			}
@@ -407,6 +409,16 @@ func (re *Regexp) backtrack(ib []byte, is string, pos int, ncap int, dstCap []in
 				goto Match
 			}
 			_, width = i.step(pos)
+			if len(re.prefix) > 0 {
+				// A nonempty prefix matched at pos, so pos < end and width > 0.
+				// Find the next candidate after this rune; the loop adds width.
+				advance := i.index(re, pos+width)
+				if advance < 0 {
+					freeBitState(b)
+					return nil
+				}
+				pos += advance
+			}
 		}
 		freeBitState(b)
 		return nil
