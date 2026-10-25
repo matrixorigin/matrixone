@@ -1,19 +1,28 @@
--- SHOW CREATE TABLE must keep backslashes in column and table comments (#31068).
+-- SHOW CREATE TABLE must keep backslashes in column and table comments (#31068):
+-- replaying its output has to store the same comments it displays.
 drop database if exists comment_bs_rt;
 create database comment_bs_rt;
 use comment_bs_rt;
+
+-- default sql_mode: the source literals use MySQL backslash escapes
 create table t1 (a int comment 'C:\\dir\\new', b int comment 'it''s') comment 'x\\ty';
 show create table t1;
-select column_name, hex(column_comment) from information_schema.columns where table_schema = 'comment_bs_rt' and table_name = 't1' and column_name = 'a';
-select hex(table_comment) from information_schema.tables where table_schema = 'comment_bs_rt' and table_name = 't1';
--- replay the SHOW CREATE TABLE output
+-- storage decodes the escapes: column a keeps C:\dir\new, the table keeps x\ty
+select column_name, hex(column_comment) from information_schema.columns
+where table_schema = 'comment_bs_rt' and table_name = 't1' order by column_name;
+select hex(table_comment) from information_schema.tables
+where table_schema = 'comment_bs_rt' and table_name = 't1';
+
+-- replay the SHOW CREATE TABLE output: the replayed table must store identical comments
 create table t2 (
-  `a` int DEFAULT NULL COMMENT 'C:\\dir\\new',
-  `b` int DEFAULT NULL COMMENT 'it''s'
+`a` int DEFAULT NULL COMMENT 'C:\\dir\\new',
+`b` int DEFAULT NULL COMMENT 'it''s'
 ) COMMENT='x\\ty';
 show create table t2;
-select column_name, hex(column_comment) from information_schema.columns where table_schema = 'comment_bs_rt' and table_name = 't2' and column_name = 'a';
-select hex(table_comment) from information_schema.tables where table_schema = 'comment_bs_rt' and table_name = 't2';
+select column_name, hex(column_comment) from information_schema.columns
+where table_schema = 'comment_bs_rt' and table_name = 't2' order by column_name;
+select hex(table_comment) from information_schema.tables
+where table_schema = 'comment_bs_rt' and table_name = 't2';
 -- A real full archive produced by main 12eeeb0205 before this fix. Its
 -- manifest, hashes and two-row main/index object files are unmodified.
 drop stage if exists comment_bs_legacy_stage;
@@ -38,4 +47,21 @@ load table dump_wrong from 'stage://comment_bs_dump_stage/metadata';
 select count(*) from dump_wrong;
 remove files from stage if exists 'stage://comment_bs_dump_stage/metadata/*';
 drop stage comment_bs_dump_stage;
-drop database comment_bs_rt;
+
+-- under NO_BACKSLASH_ESCAPES a backslash is an ordinary character: the comment
+-- renders verbatim and replays unchanged
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+create table t3 (a int comment 'L:\dir\new') comment 'L:\ty';
+show create table t3;
+create table t4 (`a` int DEFAULT NULL COMMENT 'L:\dir\new') COMMENT='L:\ty';
+show create table t4;
+select column_name, hex(column_comment) from information_schema.columns
+where table_schema = 'comment_bs_rt' and table_name = 't4' order by column_name;
+select hex(table_comment) from information_schema.tables
+where table_schema = 'comment_bs_rt' and table_name = 't4';
+set sql_mode = '';
+
+-- columns and tables without backslashes keep their plain rendering
+create table t5 (a int comment 'plain text') comment 'plain table';
+show create table t5;
+drop database if exists comment_bs_rt;
