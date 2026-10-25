@@ -157,17 +157,32 @@ func handleSQLForRecordFragment(sql string) string {
 			}
 		} else if sawSetPassword && typ == eq {
 			// SET PASSWORD [= 'secret' | FOR user = 'secret']: mask the
-			// password literal right after the '='. MySQL also accepts
-			// the PASSWORD('secret') function form, whose secret is the
-			// call argument rather than the token after '='.
-			token, s := scanSQLToken(scanner, &previousToken)
+			// password literal after the '='. MySQL also accepts the
+			// PASSWORD('secret') function form, whose secret is the call
+			// argument rather than the token after '='. Mask by raw source
+			// span so escaped or doubled quotes stay aligned with the token
+			// text; an unterminated or lex-error literal fails closed and
+			// masks everything to the end of the fragment.
+			start := scanner.Pos
+			token, _ := scanSQLToken(scanner, &previousToken)
 			if token == mysql.PASSWORD {
 				if open, _ := scanSQLToken(scanner, &previousToken); open == int('(') {
-					token, s = scanSQLToken(scanner, &previousToken)
+					start = scanner.Pos
+					token, _ = scanSQLToken(scanner, &previousToken)
 				}
 			}
-			if token == mysql.STRING {
-				indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
+			for start < len(sql) && (sql[start] == ' ' || sql[start] == '\t' || sql[start] == '\n' || sql[start] == '\r') {
+				start++
+			}
+			if token == mysql.STRING && start < len(sql) && (sql[start] == '\'' || sql[start] == '"') {
+				// keep the quote characters, mask the raw content span
+				// (content is empty for '' — nothing to mask)
+				if start+1 <= scanner.Pos-2 {
+					indexes = append(indexes, start+1, scanner.Pos-2)
+				}
+			} else if start < len(sql) {
+				// fail closed: everything after the '=' may carry the secret
+				indexes = append(indexes, start, len(sql)-1)
 			}
 			sawSet, sawSetPassword = false, false
 		} else if sawSet && typ == mysql.PASSWORD {

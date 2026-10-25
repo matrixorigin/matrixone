@@ -419,6 +419,18 @@ func TestHandleSqlForRecord(t *testing.T) {
 			HandleSqlForRecord("/* trace */ SET PASSWORD = 'set-password-test-value' broken"))
 		require.Equal(t, []string{"SET PASSWORD = PASSWORD('******') unexpected id"},
 			HandleSqlForRecord("SET PASSWORD = PASSWORD('set-password-test-value') unexpected id"))
+		// Doubled-quote secrets mask by raw span, not decoded length.
+		require.Equal(t, []string{"SET PASSWORD = '******'"},
+			HandleSqlForRecord("SET PASSWORD = 'sec''ret-doubled'"))
+		// An unterminated literal fails closed: mask to the end.
+		require.Equal(t, []string{"SET PASSWORD = ******"},
+			HandleSqlForRecord("SET PASSWORD = 'unter-minated"))
+		// Empty password literal carries no secret and stays as-is.
+		require.Equal(t, []string{"SET PASSWORD = ''"},
+			HandleSqlForRecord("SET PASSWORD = ''"))
+		// Only the password fragment is masked in a multi-statement text.
+		require.Equal(t, []string{"select 1", "set password = '******' broken"},
+			HandleSqlForRecord("select 1; set password = 'multi-statement-value' broken"))
 	})
 	t.Run("password keyword without set is not masked", func(t *testing.T) {
 		// ALTER USER ... PASSWORD EXPIRE has no secret literal to mask.

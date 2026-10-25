@@ -365,31 +365,35 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 		}
 		return text
 	default:
-		// Parse-failure logs arrive without an AST. A SET PASSWORD-shaped
-		// text still carries the clear-text password: mask the literal
-		// lexically (same scanner masking as HandleSqlForRecord) before the
-		// raw text can reach any log.
-		if isSetPasswordText(text) {
+		// AST-less paths (parse-failure terminal logs and completed
+		// diagnostic payloads) must not leak any statement fragment: mask
+		// every supported secret shape over the whole input, including
+		// fragments of multi-statement texts. The fold scan keeps ordinary
+		// texts on a zero-allocation pass-through.
+		if containsPasswordWord(text) {
 			return strings.Join(parsers.HandleSqlForRecord(text), ";")
 		}
 		return text
 	}
 }
 
-// isSetPasswordText reports whether the statement text is a SET PASSWORD
-// statement. It is a lexical guard for log paths that have no parsed AST;
-// the masking itself happens in parsers.HandleSqlForRecord. Token
-// classification (not whitespace heuristics) handles comments and compact
-// forms like "SET PASSWORD='x'" alike, and never allocates per word.
-func isSetPasswordText(text string) bool {
-	scanner := mysql.NewScanner(dialect.MYSQL, text)
-	defer mysql.PutScanner(scanner)
-	first, _ := scanner.Scan()
-	if first != mysql.SET {
-		return false
+// containsPasswordWord reports whether text contains the word "password"
+// (ASCII case-insensitive) without allocating. It is the cheap pre-check
+// before the full fragment masking of redactStatementTextForLogging.
+func containsPasswordWord(text string) bool {
+	const needle = "password"
+	for i := 0; i+len(needle) <= len(text); i++ {
+		j := 0
+		for ; j < len(needle); j++ {
+			if text[i+j]|0x20 != needle[j] {
+				break
+			}
+		}
+		if j == len(needle) {
+			return true
+		}
 	}
-	second, _ := scanner.Scan()
-	return second == mysql.PASSWORD
+	return false
 }
 
 // redactStatementErrorForLogging replaces a parser echo of __mo_query before it

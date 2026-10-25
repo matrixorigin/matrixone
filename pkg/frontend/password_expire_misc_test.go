@@ -863,11 +863,21 @@ func TestRedactSetPasswordForLogging(t *testing.T) {
 		"/* trace */ SET PASSWORD = 'super-secret-value' broken",
 		"SET PASSWORD = PASSWORD('super-secret-value') unexpected id",
 		"SET PASSWORD FOR u1 = PASSWORD('super-secret-value') trailing",
+		// the secret may sit in a later fragment of a multi-statement text
+		"select 1; SET PASSWORD = 'super-secret-value' broken",
+		"; SET PASSWORD = 'super-secret-value' broken",
+		// unterminated literal must fail closed
+		"SET PASSWORD = 'super-secret-value",
 	} {
 		redacted = redactStatementTextForLogging(nil, broken)
 		require.NotContains(t, redacted, "super-secret-value", broken)
-		require.Contains(t, redacted, "******", broken)
 	}
+
+	// Doubled-quote literals mask by raw span: no part of the secret survives.
+	redacted = redactStatementTextForLogging(nil, "SET PASSWORD = 'sec''ret-part42' broken")
+	require.NotContains(t, redacted, "sec''ret-part42")
+	require.NotContains(t, redacted, "ret-part42")
+	require.Contains(t, redacted, "******")
 
 	// Unrelated statements pass through untouched.
 	ordinary := "select 1"
