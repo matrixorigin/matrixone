@@ -291,7 +291,7 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 			got := c.GetPlan()
 			switch mode {
 			case "unsupported_enum", "unsupported_enum_ctas", "unsupported_enum_temporary_ctas":
-				require.ErrorContains(t, err, "version 123")
+				require.ErrorContains(t, err, "version 132")
 				require.NotErrorIs(t, err, eng.dbErr)
 				require.Zero(t, builds)
 				require.Zero(t, advances)

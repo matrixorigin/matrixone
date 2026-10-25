@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -172,6 +173,19 @@ func TestEnumSourceAssignmentExecutionStream(t *testing.T) {
 	enumExpr := enumSourceAssignmentTestExpr(t, c.proc.Ctx)
 	temporal, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "timestamp", []*planpb.Expr{{Typ: types.T_datetime.ToTypeWithScale(3).PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}})
 	require.NoError(t, err)
+	jsonColumn := &planpb.Expr{Typ: types.T_json.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	jsonComparison, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "=", []*planpb.Expr{jsonColumn, {Typ: types.T_int64.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}})
+	require.NoError(t, err)
+	jsonFeatures, err := planpb.RequiredRemoteExpressionFeatures(jsonComparison)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion128, remoteExpressionProtocolVersion(jsonFeatures))
+	jsonELT, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "elt", []*planpb.Expr{plan2.MakePlan2Int64ConstExprWithType(1), jsonColumn})
+	require.NoError(t, err)
+	incompleteWeek, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "week", []*planpb.Expr{
+		{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}},
+		plan2.MakePlan2Int64ConstExprWithType(3),
+	})
+	require.NoError(t, err)
 	legacy := plan2.DeepCopyExpr(enumExpr)
 	legacy.GetF().Func.Obj = function.EncodeOverloadID(function.CAST_VALUE_TO_INDEX, 0)
 	legacy.GetF().Args = legacy.GetF().Args[:2]
@@ -188,6 +202,13 @@ func TestEnumSourceAssignmentExecutionStream(t *testing.T) {
 		{"enum and temporal", []*planpb.Expr{enumExpr, temporal}, defines.MORPCVersion132},
 		{"temporal", []*planpb.Expr{temporal}, defines.MORPCVersion122},
 		{"legacy", []*planpb.Expr{legacy}, 0},
+		// Main fences JSON comparisons at placement/destination/receiver; retain its stream policy.
+		{"JSON comparison", []*planpb.Expr{jsonComparison}, 0},
+		{"enum and JSON comparison", []*planpb.Expr{enumExpr, jsonComparison}, defines.MORPCVersion132},
+		{"JSON ELT", []*planpb.Expr{jsonELT}, defines.MORPCVersion129},
+		{"enum and JSON ELT", []*planpb.Expr{enumExpr, jsonELT}, defines.MORPCVersion132},
+		{"incomplete temporal", []*planpb.Expr{incompleteWeek}, defines.MORPCVersion130},
+		{"enum and incomplete temporal", []*planpb.Expr{enumExpr, incompleteWeek}, defines.MORPCVersion132},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			op.ProjectList = tc.exprs
@@ -199,6 +220,23 @@ func TestEnumSourceAssignmentExecutionStream(t *testing.T) {
 				enumRequirement = required
 			}
 		})
+	}
+	g := group.NewArgument()
+	defer g.Release()
+	g.NeedEval, g.Aggs = true, quantileExactWeightedPipelineAggs(t)
+	scope.PreScopes = []*Scope{{Magic: Remote, Proc: c.proc, NodeInfo: scope.NodeInfo, RootOp: g}}
+	for _, tc := range []struct {
+		expr *planpb.Expr
+		want int64
+	}{{legacy, defines.MORPCVersion131}, {enumExpr, defines.MORPCVersion132}} {
+		op.ProjectList = []*planpb.Expr{tc.expr}
+		var required int64
+		data, err := encodeRemoteScopeWithProtocol(scope, c.proc, &required)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, required)
+		var encoded pipeline.Pipeline
+		require.NoError(t, encoded.Unmarshal(data))
+		require.True(t, pipelineContainsQuantileExactWeighted(&encoded))
 	}
 	require.Equal(t, client.calls, client.releases)
 	require.Equal(t, defines.MORPCVersion132, enumRequirement)

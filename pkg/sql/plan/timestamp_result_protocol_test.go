@@ -202,9 +202,9 @@ func TestCTASPopulationProtocolSurvivesQueryReleaseAndFolding(t *testing.T) {
 		version   int64
 	}{
 		{"column", "create table db.t as select timestamp(granted_time) from mo_catalog.mo_role_privs", defines.MORPCVersion122},
-		{"enum", "create table db.t as select cast(cast_value_to_index('blue,red','red,blue',cast_value_to_index('red,blue','red')) as unsigned) v", defines.MORPCVersion123},
-		{"enum_temporary", "create temporary table db.t as select cast(cast_value_to_index('blue,red','red,blue',cast_value_to_index('red,blue','red')) as unsigned) v", defines.MORPCVersion123},
-		{"enum_mixed_folded", "create table db.t as select cast(cast_value_to_index('blue,red','red,blue',cast_value_to_index('red,blue','red')) as unsigned) v, timestamp('2024-02-29') ts", defines.MORPCVersion123},
+		{"enum", "create table db.t as select cast(cast_value_to_index('blue,red','red,blue',cast_value_to_index('red,blue','red')) as unsigned) v", defines.MORPCVersion132},
+		{"enum_temporary", "create temporary table db.t as select cast(cast_value_to_index('blue,red','red,blue',cast_value_to_index('red,blue','red')) as unsigned) v", defines.MORPCVersion132},
+		{"enum_mixed_folded", "create table db.t as select cast(cast_value_to_index('blue,red','red,blue',cast_value_to_index('red,blue','red')) as unsigned) v, timestamp('2024-02-29') ts", defines.MORPCVersion132},
 		{"folded", "create table db.t as select timestamp('2024-02-29 12:34:56.123')", defines.MORPCVersion122},
 		{"nested", "create table db.t as select v from (select timestamp('2024-02-29 12:34:56.123') v) s", defines.MORPCVersion122},
 		{"temporary", "create temporary table db.t as select timestamp(granted_time) from mo_catalog.mo_role_privs", defines.MORPCVersion122},

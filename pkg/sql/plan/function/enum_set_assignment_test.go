@@ -32,7 +32,6 @@ func TestEnumSetAssignmentModes(t *testing.T) {
 	for _, mode := range []string{"strict", "nonstrict", "ignore"} {
 		t.Run(mode, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			defer proc.Free()
 			proc.Base.IsFrontend = true
 			proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) {
 				if mode == "nonstrict" {
@@ -107,7 +106,6 @@ func TestEnumSetAssignmentPolicySources(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			defer proc.Free()
 			proc.Base.IsFrontend = tc.frontend
 			proc.GetSessionInfo().SqlMode = tc.snapshot
 			if tc.resolver {
@@ -133,7 +131,6 @@ func TestEnumSetAssignmentPolicySources(t *testing.T) {
 	for _, callProc := range []*process.Process{nil, {}} {
 		proc := testutil.NewProcess(t)
 		func() {
-			defer proc.Free()
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"a"}, nil), NewFunctionTestInput(types.T_varchar.ToType(), []string{"bad"}, nil)}, NewFunctionTestResult(types.T_enum.ToType(), true, nil, nil), CastValueToIndex)
 			defer fc.Free()
 			require.NoError(t, fc.result.PreExtendAndReset(1))
@@ -158,7 +155,6 @@ func TestEnumSetAssignmentMasksAndFailures(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			defer proc.Free()
 			sink := &arithmeticWarningSink{limit: 1}
 			proc.WarningSink = sink
 			inputs := func(values any) []FunctionTestInput {
@@ -240,7 +236,6 @@ func TestEnumSetAssignmentMasksAndFailures(t *testing.T) {
 	for _, allSkipped := range []bool{false, true} {
 		proc := testutil.NewProcess(t)
 		func() {
-			defer proc.Free()
 			invalid := strings.Repeat("x,", types.MaxEnumLen)
 			nulls := make([]bool, 64)
 			for i := range nulls {
@@ -278,7 +273,6 @@ func TestEnumSetWarningRetentionAndFullBitmap(t *testing.T) {
 	for _, limit := range []int{0, 1, 3} {
 		t.Run(fmt.Sprint(limit), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			defer proc.Free()
 			proc.GetSessionInfo().SqlMode = process.EmptySqlModeSentinel
 			sink := &arithmeticWarningSink{limit: limit}
 			proc.WarningSink = sink
@@ -340,7 +334,6 @@ func TestEnumSetTypedSourceAssignmentModes(t *testing.T) {
 	for _, mode := range []string{"strict", "nonstrict", "ignore"} {
 		t.Run(mode, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			defer proc.Free()
 			proc.Base.IsFrontend = true
 			proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) {
 				if mode == "nonstrict" {
@@ -402,7 +395,6 @@ func TestEnumSetTypedSourceLazyDecode(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
-			defer proc.Free()
 			proc.GetSessionInfo().SqlMode = process.EmptySqlModeSentinel
 			sink := &arithmeticWarningSink{limit: 1}
 			proc.WarningSink = sink
