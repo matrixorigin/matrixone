@@ -3564,3 +3564,127 @@ obligation, the settle order, the ownership rules and every
 production line are unchanged, so the r11/r12 decision set is
 untouched and no design re-review is opened; the pushed head is
 covered by the re-run unit families above plus CI.
+
+## 10 design review record - round 44 (review follow-up): the non-retaining-fragment intake refusal retains the received names on the recording side
+
+Context. The local reviewer's round-44 review (PR #30988, head
+`0bd06b03f6e4b643a72f7f1e01a7e32f9ceb876c`, 2026-10-25 14:57:51Z)
+requested changes with one P2 finding at `pkg/vm/engine/disttae/`
+`txn.go:3595` (`AdoptRemoteTransferredObjectNames`'s reservation
+refusal): during a rolling upgrade an OLD fragment persists an object
+and relays valid metadata to a NEW coordinator whose
+unpublished-object ledger is saturated; `reserveUnpublishedPendingObject`
+refuses, the intake returns without retaining the received name, the
+receive loop cleans and discards the batch, and the object is left
+without an enumerable cleanup owner - the coordinator cannot delete it
+at rollback, the legacy fragment never learns anything but
+cancellation, and repeated failures strand one more object per attempt
+behind the bound. The finding was re-verified against the tree before
+this revision: the premise chain is base behavior (the parent build's
+writers relay persisted-object metadata through the run stream
+buffers - the five-vector batch-to-wire layout, `AllocCNS3ResultBat`,
+the tombstone-stats record batch; frozen base `9a7e12a933` has neither
+the writer retention (`retainUnrecordedSinkObjects`), the fragment
+terminal (`FinalizeRemoteFragmentWorkspace`) nor the settlement call
+(`settleRemoteFragmentWorkspaceAfterDrain`), and its
+`handlePipelineProtocolCheck` answers with its own `MOProtocolVersion`
+global, which the base build defaults to `MORPCLatestVersion = 131`),
+and the documented mixed-rollout residual in r10/D4'' covered only the
+fragment's UNRECEIVED tail. The review named the exact boundary the
+round-22 H2 decision glossed: "the fragment's failure-side settlement
+keeps a reachable local owner" is true only for a fragment at the
+first adoption build - a non-retaining fragment keeps nothing, and the
+received names then exist nowhere after the discarded batch. The
+finding is valid and in scope; the review offered two admissible
+repairs and this revision takes the first.
+
+Decision (r13 intake fork). The recorded round-21 G2 principle -
+"the only alternative to counting an already-physical object is
+dropping its last cleanup owner", applied at the record choke's
+admission refusal - is extended one boundary earlier: the intake
+adopts received names through the SAME per-object reservation for
+every fragment, and when the reservation is refused the intake takes
+the recording side's OWN ownership exactly when no other owner can
+exist. The capability is a wire fact: `remoteRun` confirms the
+receiver's protocol on the stream that will carry the pipeline
+whenever the dispatched scope's own tree registers a
+remote-persistence producer in a metadata-bearing mode - the same
+`scopeRemoteObjectAdmission` walk the intake itself uses - in
+addition to every existing expression floor, and the confirmation
+returns the RECEIVER's advertised version to the sender. A fragment at
+`coordinatorIntakeAdoptionVersion` (132) is a retaining fragment: its
+refused batches book nothing, byte-identical to the reviewed round-22
+H2 semantics (LEG D of the r22 corpus keeps pinning it). A fragment
+below the line - including the zero default of a stream that never
+confirmed, fail closed - is non-retaining: its refused batch's
+received names (the refused name plus every unprocessed name of the
+same received tail, blank slots skipped) are retained fail-open as
+definite orphans on the recording transaction at the refusal itself,
+gain owned-ledger membership through the same
+`retainUnpublishedPendingNames` fail-open path every other
+already-physical object uses, and transfer to the engine's lossless
+queue at the recording transaction's next quiesced boundary - the
+failed statement's rollback or the terminal - where the drain deletes
+them physically. Processed names of the same batch keep their
+reservations and the round-33 statement-boundary recycler, unchanged.
+CCPR keeps its shared-file exemption exactly like the record choke.
+The admission bound itself is untouched: the refusal still fails the
+run for every fragment version, keeps every leaseholder's ownership
+untouched, and re-opens only when the drain retires work; the retained
+names are dead obligations - the rejection deterministically fails
+the run - so the queue's lossless drain is their terminal and their
+capacity retires with their deletions, the r12 equilibrium.
+
+Rejected alternative. Refusing incompatible execution before
+persistence (fail-closed dispatch of persistence-producing DML to a
+below-adoption fragment) would also close the hole, but it rescinds
+the r11 leg P3' contract the round-27 review demanded and its
+two-binary leg proved - mixed new-coordinator/old-fragment DML
+commits and reads back when capacity is available - and converts the
+r12 matrix's intact cell into a stateful availability regression whose
+error surface depends on the ledger's saturation state. It also
+leaves the H2 refusing transport's error semantics - which the review
+confirmed as the supported mixed-direction failure - with no
+recording-side backstop while the refusal path remains reachable for
+every mixed window. The retained legacy failure path is the smaller
+change: no wire contract, no mixed-availability regression, one new
+call-side fork on a fact the stream already exchanges.
+
+Validation. The focused disttae case
+`TestIssue25590NonRetainingFragmentIntakeRefusalRetainsReceivedNames`
+reproduces the finding RED against the pre-fix refusal semantics
+through the same entry point (the non-retaining intake temporarily
+delegating to the capable body): with the recording engine's bound
+pinned at one saturated unit, a two-tombstone legacy relay batch [name,
+blank, name] refuses with the admission error and books nothing, the
+fragment engine's queue never sees either name (the legacy fragment
+retains nothing), the recording transaction's rollback queues nothing,
+and the drain leaves BOTH `StatFile` checks succeeding at an empty
+ledger - the review's exact stranded-object signature. GREEN: the
+retaining fork retains the refused name and the unprocessed tail
+(blank skipped), the fragment leg stays empty-legged, the recording
+terminal queues both names and the recording engine's drain deletes
+both physical files, the capable control at the same saturated bound
+still books nothing, and the recording ledger ends exactly empty. The
+compile plane pins the fork's contracts: the r44 threshold rows (131
+below, 132 and later above, zero fails closed), the confirm gate's
+requirement for every producer scope with no floor (and no new
+requirement for plain scopes), the version fork's selection in both
+directions at and below the bound through the exported intake
+contract, the receive loop's carriage of the confirmed advertisement
+into the intake at the refusal boundary (refused stream at 131 retains
+through the loop, at 132 books nothing, no ACK in either direction),
+and the confirmation's return of the receiver's advertised version
+with the pre-existing floor-refusal behavior intact. The existing
+families that pin the capable-fragment semantics - LEG D's fragment
+terminal, the r29 transport legs, the r11 threshold pins, the r22
+corpus - rerun unchanged; the fresh head's CI re-evaluates the
+packages as before.
+
+Decision: round 44 closes a missing instance of the recorded r21 G2
+fail-open principle at the intake boundary and threads the capability
+fact the transport already exchanges; no invariant, bound, wire field
+or mixed-matrix cell of the r11/r12 decision set changes (the
+capable-fragment refusal still books nothing, the legal mixed cell
+still runs, the refusal still fails the run), so no design re-review
+is opened and the implementation proceeds under this record.

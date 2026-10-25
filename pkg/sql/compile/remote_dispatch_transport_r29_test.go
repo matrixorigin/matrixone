@@ -315,7 +315,7 @@ func TestIssue25590DispatcherIntakeModeMatrixR29(t *testing.T) {
 		if l.pre != nil {
 			s.PreScopes = append(s.PreScopes, l.pre()...)
 		}
-		require.NoError(t, AdoptRemoteRunIntakeMetadata(s, bat),
+		require.NoError(t, AdoptRemoteRunIntakeMetadata(s, bat, coordinatorIntakeAdoptionVersion),
 			l.why+": the intake must not error on this stream")
 		err := r29ProbeAdoption(t, ws, "probe-"+l.probe)
 		if l.adopt {
@@ -575,7 +575,7 @@ func TestIssue25590DispatcherFailClosedMetadataModesR29(t *testing.T) {
 			defer restore()
 			bat := malformed(t, s.Proc.Mp())
 			defer bat.Clean(s.Proc.Mp())
-			err := AdoptRemoteRunIntakeMetadata(r29ProducerScope(s, root), bat)
+			err := AdoptRemoteRunIntakeMetadata(r29ProducerScope(s, root), bat, coordinatorIntakeAdoptionVersion)
 			require.Error(t, err,
 				"a metadata-mode stream that cannot prove its tail rejects fail-closed")
 		})
@@ -587,7 +587,7 @@ func TestIssue25590DispatcherFailClosedMetadataModesR29(t *testing.T) {
 			defer restore()
 			bat := malformed(t, s.Proc.Mp())
 			defer bat.Clean(s.Proc.Mp())
-			require.NoError(t, AdoptRemoteRunIntakeMetadata(r29ProducerScope(s, root), bat),
+			require.NoError(t, AdoptRemoteRunIntakeMetadata(r29ProducerScope(s, root), bat, coordinatorIntakeAdoptionVersion),
 				"an ordinary-mode stream's rows are ordinary data: no recognizer may reject them")
 		})
 	}

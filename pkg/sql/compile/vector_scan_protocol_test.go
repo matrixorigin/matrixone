@@ -68,7 +68,7 @@ func TestRemotePipelineProtocolCheckOnExecutionStream(t *testing.T) {
 				sender := &messageSenderOnClient{
 					ctx: context.Background(), streamSender: stream, receiveCh: receiveCh,
 				}
-				err := sender.confirmProtocolOnStream(minimum)
+				_, err := sender.confirmProtocolOnStream(minimum)
 				if tc.wantErr {
 					require.Error(t, err)
 				} else {
@@ -304,7 +304,8 @@ func TestRequiredIVFProtocolCoversEveryPartitionAndNestedFragment(t *testing.T) 
 	ch := make(chan morpc.Message, 1)
 	ch <- &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion106}
 	sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: ch}
-	require.Error(t, sender.confirmProtocolOnStream(vectorscan.IndexSearchScanProtocolVersion))
+	_, confirmErr := sender.confirmProtocolOnStream(vectorscan.IndexSearchScanProtocolVersion)
+	require.Error(t, confirmErr)
 	require.Equal(t, 1, stream.sentCnt)
 }
 
@@ -461,7 +462,8 @@ func TestSearchKnobScopeRefusesPriorEpochDestination(t *testing.T) {
 	receiveCh <- &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck,
 		Sid: pipeline.Status_Last, ProtocolVersion: prior}
 	sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: receiveCh}
-	require.Error(t, sender.confirmProtocolOnStream(required))
+	_, confirmErr := sender.confirmProtocolOnStream(required)
+	require.Error(t, confirmErr)
 
 	// A receiver at the prior epoch refuses the knob scope it decodes.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, prior)
@@ -481,5 +483,6 @@ func TestSearchKnobScopeRefusesPriorEpochDestination(t *testing.T) {
 	t.Cleanup(decoded.release)
 	receiveCh <- &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck,
 		Sid: pipeline.Status_Last, ProtocolVersion: prior}
-	require.NoError(t, sender.confirmProtocolOnStream(required))
+	_, confirmErr = sender.confirmProtocolOnStream(required)
+	require.NoError(t, confirmErr)
 }

@@ -159,6 +159,41 @@ func requestAdoptsIntakeAdmission(advertised int64) bool {
 	return advertised >= coordinatorIntakeAdoptionVersion
 }
 
+// fragmentRetainsRefusedIntakeObjects reports whether a REMOTE
+// FRAGMENT's confirmed receiver advertisement reaches the first
+// admission build (issue #25590 round-44 review): that build mints BOTH
+// directions of the ownership contract — its coordinator's intake
+// adopts received relay batches AND its fragment writers retain their
+// persisted names plus the failure-side terminal that deletes them when
+// a run is refused — so the intake refusal of a run on such a fragment
+// may book nothing and still leave every object owned. A fragment below
+// the line (including the absent/zero value of a stream that never
+// confirmed) is a non-retaining fragment: its build has neither piece
+// of the failure-side machinery, and the recording workspace must
+// itself retain the names of a refused batch. The zero default of an
+// unconfirmed stream reads fails closed toward recording-side
+// retention.
+func fragmentRetainsRefusedIntakeObjects(advertised int64) bool {
+	return requestAdoptsIntakeAdmission(advertised)
+}
+
+// remoteRunRequiresFragmentProtocolConfirm reports whether remoteRun
+// must confirm the fragment-side protocol on the stream that will
+// carry the pipeline (issue #25590 round-44 review): every run whose
+// encoded scope needs a protocol floor already confirms, and every
+// fragment whose own operator tree registers a remote-persistence
+// producer must confirm TOO, because its relay batches may reach a
+// recording engine whose admission bound refuses them — the confirmed
+// receiver version decides whose owner the refusal leaves. Plain
+// query fragments with no floor keep the pre-existing behavior: no
+// confirm, no intake adoption, no change to read traffic.
+func remoteRunRequiresFragmentProtocolConfirm(requiredProtocol int64, s *Scope) bool {
+	if requiredProtocol > 0 {
+		return true
+	}
+	return scopeRemoteObjectAdmission(s).any()
+}
+
 // refuseRemoteWriteFromIncapableCoordinator implements the D3' rule: a
 // run whose decoded scope registers a persistence producer executes
 // only when the request's advertised coordinator capability meets

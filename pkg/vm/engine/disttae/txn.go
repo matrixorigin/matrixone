@@ -1247,6 +1247,19 @@ func (txn *Transaction) pendingObjectCleanupNames() []string {
 	return names
 }
 
+// PendingObjectCleanupNamesForTest exposes the recording transaction's
+// retained cleanup names to an external-package intake regression
+// driver (issue #25590 round-44 review): the compile-side transport
+// tests pin WHICH intake branch a confirmed fragment version selected —
+// a refusal on a retaining fragment must book nothing, a refusal on a
+// non-retaining fragment must retain the received names — without
+// reaching into workspace internals. Production code never calls this.
+func (txn *Transaction) PendingObjectCleanupNamesForTest() []string {
+	txn.Lock()
+	defer txn.Unlock()
+	return txn.pendingObjectCleanupNames()
+}
+
 // handoffPendingObjectCleanup moves every boundary-eligible retained name
 // to the engine's lossless queue at a QUIESCED boundary. Callers HOLD the
 // transaction's lock — the wrapper's contract since round 12: the
@@ -3564,22 +3577,56 @@ func (txn *Transaction) hasUnpublishedDumpReservation(name string) bool {
 }
 
 // AdoptRemoteTransferredObjectNames adopts the storage-object names a
-// remote fragment relayed to this recording workspace (issue #25590
-// round-22 review, finding H1): the coordinator's transport client calls
-// this at its intake — BEFORE forwarding the batch into the local
-// pipeline and BEFORE the ack returns to the fragment — so an
+// capable remote fragment relayed to this recording workspace (issue
+// #25590 round-22 review, finding H1): the coordinator's transport
+// client calls this at its intake — BEFORE forwarding the batch into
+// the local pipeline and BEFORE the ack returns to the fragment — so an
 // enumerable cleanup owner exists on the recording side from the moment
 // the bytes leave the wire, earlier than the fragment's own terminal
 // settlement. Every name is admitted through the SAME per-object
 // reservation the writers use (finding H2): the engine's bound either
 // counts the obligation now and the record choke converts it as a
 // reserved name later, or the refusal propagates the error — the
-// transport fails the run, the fragment's terminal keeps a reachable
-// local owner, and the recording side books nothing. A name whose
-// record already landed keeps its record's own lifecycle; a repeated
-// adoption is a no-op.
+// transport fails the run, and the fragment's own failure-side
+// settlement — retention plus the non-transferred terminal rollback —
+// keeps every still-local name reachable and deletes it (the recording
+// side books nothing). A name whose record already landed keeps its
+// record's own lifecycle; a repeated adoption is a no-op.
 func (txn *Transaction) AdoptRemoteTransferredObjectNames(names []string) error {
-	for _, name := range names {
+	return txn.adoptRemoteTransferredObjectNames(names, true)
+}
+
+// AdoptRemoteTransferredObjectNamesFromNonRetainingFragment adopts the
+// storage-object names a NON-RETAINING remote fragment relayed to this
+// recording workspace (issue #25590 round-44 review): a legacy fragment
+// build — one below the first admission build — has neither the
+// failure-side writer retention nor the remote settlement terminal, so
+// when this workspace's admission bound refuses a name, NO receiver of
+// the batch can ever own its already persisted object afterwards: the
+// refusal's error fails the run, but the legacy fragment learns it only
+// as cancellation and books nothing itself. The received names are
+// therefore retained fail-open on the recording side at the very
+// refusal boundary — exactly the round-21 G2 refusal-retain decision of
+// the record choke, applied at the earlier intake boundary — so every
+// name this batch carried keeps an enumerated cleanup owner: processed
+// names keep their reservations (the failed statement's rollback
+// boundary recycles them as definite orphans, round-33 finding 2), and
+// the refused name plus every unprocessed name of the same batch join
+// the transaction's definite-orphan pending cleanup with owned-ledger
+// membership, transfer to the engine's lossless queue at the next
+// quiesced boundary, and delete physically through its drain. CCPR
+// transactions keep their shared-file exemption (the txn cache owns the
+// share domain) exactly like the record choke's refusal retain.
+func (txn *Transaction) AdoptRemoteTransferredObjectNamesFromNonRetainingFragment(
+	names []string,
+) error {
+	return txn.adoptRemoteTransferredObjectNames(names, false)
+}
+
+func (txn *Transaction) adoptRemoteTransferredObjectNames(
+	names []string, capableFragment bool,
+) error {
+	for i, name := range names {
 		if name == "" {
 			continue
 		}
@@ -3593,6 +3640,27 @@ func (txn *Transaction) AdoptRemoteTransferredObjectNames(names []string) error 
 			continue
 		}
 		if err := txn.engine.reserveUnpublishedPendingObject(name); err != nil {
+			if !capableFragment && !txn.isCCPRTxn {
+				// The round-44 legacy refusal retain: the names in this
+				// received batch's unprocessed tail (the refused one
+				// included) have no other cleanup owner anywhere — a
+				// non-retaining fragment never retains them and nothing
+				// else has seen them — so the recording transaction
+				// becomes their owner right here, fail-open, before the
+				// error fails the run and the batch is discarded. Empty
+				// names carry no object and never join the cleanup book.
+				tail := names[i:]
+				retained := make([]string, 0, len(tail))
+				for _, n := range tail {
+					if n != "" {
+						retained = append(retained, n)
+					}
+				}
+				txn.Lock()
+				txn.retainDefiniteOrphansLocked(retained,
+					"intake refused at the admission bound: the recording side fail-open-retains a non-retaining fragment's received names so the already persisted files never lose their cleanup owner (issue #25590 round-44 review)")
+				txn.Unlock()
+			}
 			return err
 		}
 		txn.noteUnpublishedDumpReservation(name)

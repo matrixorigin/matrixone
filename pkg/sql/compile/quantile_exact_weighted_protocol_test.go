@@ -278,7 +278,7 @@ func TestQuantileExactWeightedStreamConfirmationCoversGateVersion(t *testing.T) 
 			sender := &messageSenderOnClient{
 				ctx: context.Background(), streamSender: stream, receiveCh: receiveCh,
 			}
-			err := sender.confirmProtocolOnStream(defines.MORPCVersion131)
+			_, err := sender.confirmProtocolOnStream(defines.MORPCVersion131)
 			if tc.wantErr {
 				require.Error(t, err)
 			} else {
