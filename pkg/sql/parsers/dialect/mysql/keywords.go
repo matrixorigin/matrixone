@@ -612,6 +612,7 @@ func init() {
 		"approx_count":               APPROX_COUNT,
 		"approx_count_distinct":      APPROX_COUNT_DISTINCT,
 		"approx_percentile":          APPROX_PERCENTILE,
+		"quantileexactweighted":      QUANTILE_EXACT_WEIGHTED,
 		"percentile_cont":            PERCENTILE_CONT,
 		"percentile_disc":            PERCENTILE_DISC,
 		"curdate":                    CURDATE,
