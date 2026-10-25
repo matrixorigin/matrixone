@@ -1,132 +1,131 @@
-# Terminal repeated-any loop execution
+# Classify terminal-any loops once at compilation
 
-Status: **APPROVED for implementation, v1, 2026-10-25**; empirical acceptance
-remains mandatory. Gate: actual **gpt-6.1-sol / xhigh**, explicitly selected via
-`collaboration.spawn_agent`; session `/root/clickbench_followup_design_20261025`.
-Reviewed production: `69bbcae88174a017ffa1a8c9f60e8e307d6c41cf`, clean branch
-`codex/regexp-terminal-repeat-20261025` in
-`/private/tmp/mo-clickbench-followup-20261025`. Tracking issue: [#27665](https://github.com/matrixorigin/matrixone/issues/27665).
-Implementation: the PR containing this document. Final gate:
-**gpt-6-astra / xhigh**, user override. Rejected mixed-copy work stays closed.
+Status: **APPROVED amendment v2, 2026-10-25**. Actual model/effort:
+**gpt-6.1-sol / xhigh**, explicitly selected `collaboration.spawn_agent` runtime;
+session `/root/clickbench_followup_design_20261025`. Final independent review
+remains **gpt-6-astra / xhigh** under the user's override.
 
-The shared matcher hot path/complexity contract triggers mo-dev's design gate.
-Version this approved content under `docs/design/` before production edits and
-link its exact revision from the implementation PR. This agent inspected source
-and existing artifacts only; no production/test edits or build/test execution.
+This amends the execution-placement restriction in the v1 design committed at
+[b59e94775997](https://github.com/matrixorigin/matrixone/blob/b59e94775997700e405df5072392902de54f367c/docs/design/20261025-regexp-terminal-repeat.md), based on production main
+`69bbcae88174a017ffa1a8c9f60e8e307d6c41cf`. Reviewed worktree:
+`/private/tmp/mo-clickbench-followup-20261025`, branch
+`codex/regexp-terminal-repeat-20261025`, v1 implementation plus exit-first
+runtime-classification experiment. Its `backtrack.go` SHA256 was
+`3935e8d677e8c67bf06297b0ffb2592cd1dd7522f42f6f15ec93f60c0b220a01`;
+`regexp.go` was unchanged, SHA256
+`31f70f8b84237cdb84ebfbbfec251743bcf3cadc52bc036bf6beeea02f7c5b71`.
+Version this amendment before the amended production edits. This agent ran no
+build/tests and changed only this external design artifact.
 
-## Evidence and selected owner
+Tracking issue: [#27665](https://github.com/matrixorigin/matrixone/issues/27665).
+Implementation: the PR containing this document.
 
-The user requires 10M non-spill performance, prioritized by MatrixOne/local-source
-DuckDB gaps. The existing official dispersed 10M/18-column screen selected Q29
-by its largest absolute gap; its initial 5.219/0.753-second ratio was compiler
-contaminated and is **not** an accepted stable comparison. A fresh MO baseline
-is 2.194 seconds median, five runs 2.07–2.37. DuckDB's profiled execution reports
-zero temp/spill and 1.298 seconds with profiling; that time is not interchangeable
-with its screen median. Final paired measurements must establish the real gap.
-Q29's ten keys/counts/MIN match DuckDB exactly; AVG matches at MO's four decimals.
+## Reason and invariant
 
-Profile (`profile10m-main-q29-cpu.pprof`) proves replacement 53.55% cumulative and bitstate
-37.63%. `tryBacktrack` is 11.18/32.85 sampled seconds (34.03%); terminal AnyNotNL
-step/check alone is at least 1.99 seconds (6.1%), with shared Alt/dispatch/visited
-cost in addition. Host-capture Rune step/match is 0.39/1.11 seconds. The saved
-`regexp-program.txt` proves the terminal loop below. This is meaningful direct
-work removal to prototype, not an elapsed-speedup promise. Screen/ranking,
-profile/source listings and corrected result records remain the evidence.
+V1 removes real tail work and has preliminary 10M non-spill Q29 gain, but its
+topology checks execute at every ordinary Alt. Astra found a repeatable generic
+`a.*b` regression. Reordering checks does not close it: the fixed-iteration
+child-CPU controls in `regex-v2-cpu-controls.json` still show nonterminal +5.3%
+and multiline +7.8%, independently visible in wall time. Case-specific gain
+does not justify taxing unrelated patterns. Correctness/race results do not
+answer this performance defect.
 
-## Contract and minimal algorithm
+Keep v1's exact language/capture/line-policy/offset/output invariants and
+monotone `failedNL` proof. Add this invariant: an ineligible instruction follows
+the original ordinary Alt path with **no terminal-loop classification, metadata
+lookup, added load or guard in that path**. Classify immutable program topology
+at its first owner, once before the compiled Regexp is published.
 
-The existing private pinned-Go matcher owns execution. Preserve default matches,
-captures/priorities, original-context offsets, SQL binary encoding, wide-line
-assertions and linear per-search complexity. SQL mask/NULL/error order, template
-parsing, occurrence iteration, output bounds and result ownership remain with
-their existing owners. No query/schema/pattern/replacement literals are guards.
+## Selected change and complete consumer closure
 
-Add a shortcut at the existing bitstate `InstAlt` boundary for exactly this
-compiled topology, using trusted compiler-produced instruction references:
+Use the existing `syntax.InstAltMatch` optimization tag in the existing program;
+do not add a Regexp flag, per-PC side table, opcode or duplicate VM.
 
-1. Greedy Alt.Out is InstRuneAny or InstRuneAnyNotNL, whose Out is that same Alt.
-2. Alt.Arg is exactly InstEmptyWidth(EmptyEndText), whose Out is InstMatch.
-3. No capture, Nop, other assertion or branch intervenes in either path.
+1. After ordinary compilation has completed one-pass construction, start/prefix
+   information, bitstate-size limit and other metadata, but before returning the
+   Regexp, run one bounded program walk **only if onepass is nil and the existing
+   maxBitStateLen is positive**. Thus only programs eligible for the current
+   bounded bitstate executor are classified.
+2. Mark only original InstAlt instructions satisfying the unchanged v1 proof:
+   greedy Out is InstRuneAny/InstRuneAnyNotNL, that rune's Out returns to this
+   PC, and Arg is exactly EmptyWidth(EmptyEndText) followed directly by Match.
+   Change only that Alt's Op to InstAltMatch. Preserve PCs, Out/Arg edges, rune
+   data, capture counts, instruction count and every other instruction.
+3. Restore the ordinary bitstate InstAlt body to its original code. Move the
+   terminal operation to the existing InstAltMatch owner. Discriminate its new
+   compiler-marked EndText variant there; keep the existing upstream variant's
+   handling unchanged. Trust the compiler's complete eligibility proof rather
+   than rechecking it at execution. A cheap variant discriminator is paid only
+   by InstAltMatch, never by ordinary Alt.
+4. Keep LF witness/scan execution in one small private bitState helper called
+   only for the marked variant. It retains existing no-allocation input access,
+   failure/job restoration and normal EndText/Match publication. No inlining
+   directives are required by design; measure code-layout effects instead of
+   assuming source restoration alone proves equal runtime cost.
 
-Apply it on the initial `arg=false` greedy-arm visit; retain the existing
-`arg=true` deferred-exit continuation unchanged.
+This is a local bytecode annotation, not a new language primitive. Existing NFA
+`machine.add` handles InstAlt and InstAltMatch in the **same switch case**, with
+the same ordered Out then Arg expansion, so long inputs and RuneReader preserve
+the original program language, capture priority and bounds. The bytecode has
+identical edges and no new epsilon transitions. The one-pass compiler makes a
+separate onePassProg before annotation; programs with a non-nil one-pass result
+are never annotated. Its specialized InstAltMatch meaning is therefore untouched.
 
-String/byte bitstate only; reader, NFA/one-pass dispatch and implementations
-remain unchanged. Do not mutate the program, add an opcode/compiler pass or
-reinterpret existing InstAltMatch. Lazy loops, captured bodies, other repeated
-classes, multiline-dollar exits and equivalent-but-more-complex shapes fall
-back to the current VM.
+All consumers were mapped: bitstate push/visited indexes use unchanged PCs;
+backtrack executes the tagged variant; NFA consumes the same ordered graph;
+one-pass is excluded; prefix/start/capacity metadata is already derived;
+remaining Regexp methods use unchanged counts/source text. CompileWithLineMode
+publishes its existing immutable policy afterward. Copy may share the immutable
+program as before. No execution mutates the program or carries witness state in
+the Regexp, so cached/concurrent reuse remains safe.
 
-Any can jump immediately to the existing EndText instruction at `b.end`.
-AnyNotNL can do so iff its suffix has no LF byte. Add one integer `failedNL` to
-pooled bitState, reset to -1 for **every complete bitstate search**. At an eligible
-AnyNotNL loop: if pos <= failedNL, fail only this current branch through the
-existing job loop; otherwise strings/bytes IndexByte the suffix for its first
-LF. On LF, store its absolute byte index and fail the branch; without LF, jump
-to EndText at EOF. Preserve all pre-existing outer jobs/capture restoration.
-Use cached string/byte input without allocation or an input-interface expansion.
-No whole-input pre-scan, AST retention, compiled-pattern cache or new SQL path.
+The existing v1 witness still resets to -1 once per complete bitstate search.
+Failed LF scans start after the previous witness; successful EndText/Match at EOF
+ends even Longest execution. No topology scan, full-subject pre-scan, extra row
+allocation or change to error/NULL/replacement/output admission is introduced.
 
-Proof of semantics: the loop has no observable internal captures, and EOF is its
-unique accepting exit. Smaller exits all fail EndText. Jumping therefore retains
-outer capture choices, unset groups, priorities and offsets. Execute the normal
-EndText/Match publication rather than synthesizing a match. Match explicitly
-returns at pos == b.end even under Longest, after recording captures; ncap == 0
-also returns. Thus a successful scan ends this search and needs no Longest guard.
-An LF witness proves failure for every position at/before that byte, independent
-of PC; returning to the existing job loop preserves other possible matches.
+## Cost, ownership and alternatives
 
-Proof of work bound: every failed scan starts strictly after the previous
-witnessed LF and stops at a later LF, so scanned intervals are disjoint across
-all tryBacktrack invocations/unanchored starts. The one successful scan ends the
-search. Added scanning is O(input bytes) total, O(1) scratch, zero allocation;
-resetting the witness per tryBacktrack or uncached repeated scans is forbidden.
-Early LF stops immediately, avoiding an unrelated long tail. UTF-8 LF is exactly
-byte 0x0A, including invalid UTF-8 decoding; every other decoded rune is accepted
-by AnyNotNL. CR/NEL/LS/PS still obey ordinary consuming-dot semantics in all line
-modes. EndLine is ineligible, preserving scoped/wide assertion policy.
-
-The existing pool owns/recycles the one input-local scalar and clears subject
-references as before; no new retained collection, resource owner, account or
-lifetime. SQL/storage/spill/wire/configuration/mixed-version contracts do not
-change; rollback is a revert. Document the local delta in the private-package
-README; preserve BSD headers and the hashes identifying pinned upstream source.
-
-## Alternatives and verification
+The compiler owns the program until publication; annotation mutates its existing
+instruction storage in O(P) work, bounded by the executor's existing maximum
+program size (currently 500), once per successful compile/cache miss. It adds
+zero retained bytes, slices, maps, keys or allocations. The existing combined
+100-entry regexp cache and its eviction/ownership stay unchanged. Per-input
+failedNL remains the one scalar already approved in v1, owned/reset by bitState.
+No SQL, wire, persistence, configuration, spill or account contract changes.
+Rollback is a revert. Document this local compiler/tag delta in the README and
+versioned design; retain upstream provenance hashes and BSD headers. A future
+Go update must reconcile **both** this producer and all tagged-op consumers.
 
 | Alternative | Decision |
 |---|---|
-| Constant replacement-template reuse | Parsing is not the primary sampled cost; adds template/key/error-order ownership. DuckDB still validates rewrite strings per row. Do not bundle. |
-| Force one-pass/NFA | One-pass ambiguity constraints preserve captures; forcing it is unsafe, while NFA retains per-rune work. No dispatch-change evidence. |
-| Whole-input last-LF scan | Linear but can scan a huge unrelated tail after an early LF. The monotone witness is equally bounded and stops early. |
-| General repeat optimizer/native RE2 | Unnecessary proof/maintenance/lifetime surface; the current matcher owner can remove the measured work locally. |
-| Q5 hash work | Smaller screened absolute gap; quadratic pending-hash premise disproved by bounded 512-entry scratch. Separate future target. |
+| Regexp eligibility bool or one target PC | Still loads/tests metadata at every ordinary Alt, and a PC restricts multiple eligible loops. Does not structurally close the measured defect. |
+| Dense/sparse per-PC metadata | Extra retained state/allocation and a lookup/guard on the ordinary path for information already representable by its instruction Op. |
+| New opcode | Requires new consumer cases where existing AltMatch already provides the dispatch boundary; avoid duplicate protocol. |
+| Duplicate optimized/unoptimized VM | Avoids checks but duplicates matcher semantics and upstream maintenance. Disproportionate and not approved. |
+| Existing AltMatch annotation | Selected: first-owner classification, unchanged ordinary dispatch, no added state, explicit executor closure. |
 
-Reuse the current private matcher and function fixtures, extending tables for
-distinct missing oracles. No new embedded service/framework or timing assertions
-in UT. No new BVT is required solely for unchanged internal semantics; execute
-existing regex public coverage plus the small integration controls below.
+## Validation and acceptance of the amendment
 
-| Risk | Cheapest required evidence |
+Reuse valid v1 semantics evidence, but the new producer/consumer path needs the
+following discriminating checks. No extra service/profile discovery is needed.
+
+| Risk | Required evidence |
 |---|---|
-| Eligibility/capture priority | Compiled topology controls plus default differential Match/Find/Submatch/All/Replace against pinned stdlib. Generic eligible families beyond URL patterns, prefix alternatives/captures, unset groups, empty tail, Longest/POSIX; lazy/captured-loop/multiline-dollar exclusions. |
-| Newline/rune/policy drift | LF first/middle/last, CR/CRLF/NEL/LS/PS, multibyte and invalid UTF-8, string/bytes, all line modes and scoped dotall/multiline. Include original-context nonzero offsets. |
-| Complexity or stale witness | Ambiguous/unanchored prefixes and multiple LF-separated segments, failed branch then other match, reset with another input and concurrent/pool reuse. White-box proof of witness monotonicity/reset; scaling benchmarks challenge quadratic work without UT wall-time assertions. |
-| Executor boundary | Bitstate just below and unchanged NFA just above its actual threshold, plus one-pass/RuneReader controls, using existing all-executor tests. |
-| SQL/output boundary | Small capture-replacement/occurrence/start cases and binary NUL/invalid UTF-8/folding; reuse NULL/mask/invalid-pattern/template precedence and exact output-limit tests. No selected match must still avoid invalid-template evaluation. |
-| Resource/spill | No new matcher allocations; retained output/account bounds unchanged. Reuse unchanged generic Group invariants and a small regex-group spill parity control if needed; spill timing is not performance acceptance. |
-| Leverage/regressions | Matcher/vector-regexp benchmarks: eligible tails, short/failing prefixes, early LF plus long tail, ambiguous LF retries, dotall, excluded cases. Accepted public proof is 10M non-spill Q29 plus neighboring screened controls. |
+| Wrong annotation | Typed program checks: exact eligible loops tagged; lazy/captured/nonterminal/multiline/other-assertion controls unchanged; mixed program has tagged and ordinary loops; graph/counts/PCs unchanged. One-pass and too-large programs stay unannotated. |
+| Executor semantic divergence | Existing default/Longest/POSIX/capture differential tests, bitstate/NFA threshold and RuneReader controls **on a tagged program**, wide modes and binary/offset tests. NFA is an independent unchanged execution oracle for the annotation's optimized bitstate behavior. |
+| Immutability/lifetime | Existing copy/cache/concurrent reuse and failedNL reset controls; focused race mode. Verify program annotation occurs only before publication. No metadata accounting test is needed because no allocation/owner is added. |
+| Generic performance regression | First rerun fixed-iteration child-CPU plus wall ABBA for nonterminal, multiline, captured/lazy tails, and an ordinary loop in a program that also contains an eligible tail. Require no repeatable regression outside measurement noise. Source-path restoration alone is insufficient. |
+| Preserved leverage | Eligible/dotall/short/prefix-failure/early-LF/failed-start micro controls, then fresh 10M non-spill public Q29 and neighboring controls with exact results and host/memory/spill records. V1 public timings do not prove amended performance. |
 
-Require reproducible 10M non-spill end-to-end Q29 gain outside paired-run spread,
-identical baseline/candidate results and no repeatable neighboring regression.
-Use bounded warmed paired/ABBA runs, identical source/data/config, no positive
-SpillRows, memory records and host-load samples. Four workers/4 GiB engine or
-statement budgets remain; Go's soft limit is not an equivalent process cap.
-Micro-only gains and contaminated ratios do not pass. Do not rescue failed
-acceptance by expanding into caching, growth or hash work.
+Parent implements and measures the generic controls **before** spending on the
+public 10M round. A repeatable generic regression remains a blocker even with a
+large Q29 gain. If code layout still matters, adjust only the marked-case/helper
+placement and measure; do not introduce a parallel VM or unrelated optimization.
+Refresh affected private-matcher/function normal/race and incremental static
+scope after the final diff, reusing unchanged valid evidence explicitly. Feed
+this amendment and new results to the active Astra review.
 
-Parent owns final incremental static scope, focused/owning normal and affected
-race checks, public evidence and Astra/xhigh review. Expected owning production
-package is internal/regexp; SQL function is a directly affected real consumer.
-Material deviations, especially broader exit paths or new persistent metadata,
-require design amendment. **Decision: PASS; no unresolved design blocker.**
+Decision: **PASS for this exact annotation/dispatch amendment**. V1's runtime
+classification placement is superseded; its eligibility, semantics, resource,
+SQL compatibility and 10M non-spill public-gain gates remain mandatory.
