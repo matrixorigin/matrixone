@@ -224,6 +224,25 @@ func TestPreparedTemporalWriteConsumers(t *testing.T) {
 	}
 }
 
+func TestPreparedSharedProjectionKeepsWriterDestination(t *testing.T) {
+	source := &Expr{Typ: planpb.Type{Id: int32(types.T_date)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	destination := DeepCopyExpr(source)
+	destination.Typ = planpb.Type{Id: int32(types.T_datetime), Width: 6, Scale: 6}
+	// The first writer sees source only below its final projection. The second
+	// writer consumes the shared source projection directly, so a traversal
+	// must promote that existing entry to an authoritative destination type.
+	query := &planpb.Query{StmtType: planpb.Query_INSERT, Steps: []int32{3, 4}, Nodes: []*planpb.Node{
+		{NodeType: planpb.Node_VALUE_SCAN},
+		{NodeType: planpb.Node_PROJECT, Children: []int32{0}, ProjectList: []*Expr{source}},
+		{NodeType: planpb.Node_PROJECT, Children: []int32{1}, ProjectList: []*Expr{destination}},
+		{NodeType: planpb.Node_INSERT, Children: []int32{2}},
+		{NodeType: planpb.Node_INSERT, Children: []int32{1}},
+	}}
+	targets := preparedDMLWriteExpressions(query)
+	require.Equal(t, source.Typ, targets[source])
+	require.Equal(t, destination.Typ, targets[destination])
+}
+
 func TestPreparedCalendarSelectHistory(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	ctx := &mock.ctxt

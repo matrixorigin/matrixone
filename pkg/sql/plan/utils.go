@@ -4260,16 +4260,18 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]plan.Type {
 	// outside the preservation set so their marker comparisons can be rebound.
 	// The final row-image projection and any unary projections below it are the
 	// positional roots consumed by the writer.
-	visited := make(map[int32]struct{})
+	visited := make(map[int32]bool)
 	var visitWritePath func(int32, bool)
 	visitWritePath = func(nodeID int32, target bool) {
 		if nodeID < 0 || int(nodeID) >= len(query.Nodes) {
 			return
 		}
-		if _, ok := visited[nodeID]; ok {
+		if wasTarget, ok := visited[nodeID]; ok && (wasTarget || !target) {
 			return
 		}
-		visited[nodeID] = struct{}{}
+		// A shared source can later be another writer's final row image.
+		// Revisit once to promote its destination contract, never downgrade it.
+		visited[nodeID] = target
 		node := query.Nodes[nodeID]
 		if node == nil {
 			return
