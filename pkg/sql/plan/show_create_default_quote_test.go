@@ -18,7 +18,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 )
 
 // SHOW CREATE TABLE must print a string default so that replaying the
@@ -35,8 +38,11 @@ func TestShowCreateTableStringDefaultRoundTrip(t *testing.T) {
 	sourceDef, err := buildTestCreateTableStmt(mock, sourceSQL)
 	require.NoError(t, err)
 
-	showSQL, _, err := ConstructCreateTableSQL(&mock.ctxt, sourceDef, nil, false, nil)
+	showSQL, parsed, err := ConstructCreateTableSQL(&mock.ctxt, sourceDef, nil, false, nil)
 	require.NoError(t, err)
+	if parsed != nil {
+		parsed.Free()
+	}
 	for _, want := range []string{
 		"`a` varchar(10) DEFAULT 'it''s'",
 		"`b` varchar(10) DEFAULT 'x`y'",
@@ -47,9 +53,41 @@ func TestShowCreateTableStringDefaultRoundTrip(t *testing.T) {
 		require.True(t, strings.Contains(showSQL, want), "missing %q in\n%s", want, showSQL)
 	}
 
-	replayedDef, err := buildTestCreateTableStmt(mock, showSQL)
-	require.NoError(t, err)
-	for i, col := range sourceDef.Cols {
-		require.Equal(t, col.Default.OriginString, replayedDef.Cols[i].Default.OriginString, col.Name)
+	before := proto.Clone(sourceDef)
+	for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+		t.Run(mode, func(t *testing.T) {
+			mock.ctxt.SetSqlModeOverride(mode)
+			current := sourceDef
+			for generation := 0; generation < 2; generation++ {
+				ddl, parsed, err := ConstructCreateTableSQL(&mock.ctxt, current, nil, false, nil)
+				require.NoError(t, err)
+				if parsed != nil {
+					parsed.Free()
+				}
+				stmt, err := mysql.ParseOneWithSQLMode(t.Context(), ddl, 1, mode)
+				require.NoError(t, err)
+				rebuilt, err := BuildPlan(&mock.ctxt, stmt, false)
+				stmt.Free()
+				require.NoError(t, err)
+				next := rebuilt.GetDdl().GetCreateTable().GetTableDef()
+				for i, col := range sourceDef.Cols {
+					require.Equal(t, col.Default.OriginString, next.Cols[i].Default.OriginString, col.Name)
+					require.True(t, proto.Equal(col.Default.Expr, next.Cols[i].Default.Expr), col.Name)
+				}
+				current = next
+			}
+			_, err := ConstructCreateTableSQLForTableDumpHash(sourceDef)
+			require.NoError(t, err)
+			require.True(t, proto.Equal(before, sourceDef), "rendering must not mutate shared metadata")
+		})
+	}
+}
+
+func TestDefaultWithoutBackslashEscapesRejectsInvalidScalar(t *testing.T) {
+	for _, origin := range []string{"'unterminated", "'a\\b', 2", "'a\\b' as alias", "'a\\b' from t", "'a\\b' where true", "'a\\b' limit 1"} {
+		t.Run(origin, func(t *testing.T) {
+			_, err := formatDefaultWithoutBackslashEscapes(origin)
+			require.Error(t, err)
+		})
 	}
 }

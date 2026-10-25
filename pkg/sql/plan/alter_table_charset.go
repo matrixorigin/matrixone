@@ -99,7 +99,7 @@ func applyAlterTableCharsetDefault(ctx CompilerContext, table *plan.TableDef, op
 // only the Type tag. COPY owns row validation, index rebuild, publication and
 // failure cleanup. The parsed replay schema and its added attributes stay local.
 func convertAlterTableCharacterColumns(ctx CompilerContext, alter *plan.AlterTable, state *AlterTableContext, conversion *plan.DatabaseDefaults) error {
-	_, parsed, err := constructCreateTableSQL(ctx, alter.CopyTableDef, nil, true, nil, true, nil)
+	_, parsed, err := constructCreateTableSQL(ctx, alter.CopyTableDef, nil, true, nil, true, nil, false)
 	if err != nil {
 		return err
 	}

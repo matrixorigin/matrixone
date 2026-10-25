@@ -2854,6 +2854,7 @@ func buildCreateTable(
 			cloneStmt,
 			recoveredLegacyChecks,
 			sub,
+			false,
 		)
 		if err != nil {
 			return nil, err

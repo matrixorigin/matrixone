@@ -279,7 +279,7 @@ func TestFunctionalIndexDDL(t *testing.T) {
 			bad = DeepCopyTableDef(table, true)
 			bad.Indexes = nil
 			require.Error(t, validateFunctionalTable(t.Context(), bad), "backing columns must have an owner")
-			ddl, _, err := constructCreateTableSQL(ctx, table, nil, false, nil, false, nil)
+			ddl, _, err := constructCreateTableSQL(ctx, table, nil, false, nil, false, nil, false)
 			require.NoError(t, err)
 			require.NotContains(t, ddl, functionalColumnPrefix)
 			rebuilt, err := build(ddl)
@@ -402,7 +402,7 @@ func TestFunctionalIndexOriginStringQuotesLiterals(t *testing.T) {
 			require.Equal(t, tc.want, owner.GeneratedCol.OriginString)
 			require.Equal(t, tc.value, functionalIndexLiteralValue(owner.GeneratedCol.Expr))
 
-			ddl, _, err := constructCreateTableSQL(ctx, table, nil, false, nil, false, nil)
+			ddl, _, err := constructCreateTableSQL(ctx, table, nil, false, nil, false, nil, false)
 			require.NoError(t, err)
 			rebuilt := build(ddl)
 			rebuiltOwner := functionalIndexColumn(rebuilt, rebuilt.Indexes[0])

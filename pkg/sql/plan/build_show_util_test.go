@@ -290,6 +290,7 @@ func TestCreateAndAlterCopyTablePreserveIndexVisibility(t *testing.T) {
 
 	got, _, err := constructCreateTableSQL(
 		&mock.ctxt, tableDef, nil, true, nil, true, nil,
+		false,
 	)
 	require.NoError(t, err)
 	require.Contains(t, got, "UNIQUE KEY `uq_invisible` (`b`) INVISIBLE")
