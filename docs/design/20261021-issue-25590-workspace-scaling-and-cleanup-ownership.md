@@ -3509,3 +3509,58 @@ round 39 applied it), not an r11/r12 decision change; the deviation
 rule opens no design re-review, and the renumbered merge head is
 covered by the re-run unit families above plus the pending review of
 the new head.
+
+## 10 design review record - round 43 (CI regression follow-up): the round-41 recovery oracle observes the completed unlink, not the recorded attempt
+
+Pull-request CI run 40176540982 attempt 3 (UT on Ubuntu/x86, head
+89e6c5810a, UT_PARALLEL=8) is the first attempt whose pre-build lanes
+survived the tracked #27066/#28411 checkout failures, so the full UT
+suite ran on this head for the first time. Exactly one case failed:
+`TestIssue25590AcceptedGCWorkerStallDoesNotRetainCompletedTransaction`
+at `txn_issue25590_r41_test.go:280` through `issue25590RequireGone`
+(`txn_issue25590_test.go:1679`), stat'ing the stalled object's file
+alive (err nil) where not-found was required.
+
+Cause. The round-41 recovery leg observed the failFS wrapper's
+`deletedSnapshot` and then immediately stat'ed the file - but the
+wrapper records a delete call the moment it leaves the parking
+barrier, BEFORE the underlying unlink runs, so a recorded name is an
+in-flight attempt: under the UT lane's parallel load the poller can
+win the barrier-to-unlink scheduling window and stat a file the
+recovered worker has not physically removed yet. The production settle
+order (delete, ledger settle, retire) is untouched - the recovered
+file deletion is a bounded storage operation on the UT's real
+`t.TempDir` LocalFS, so the disappearance follows deterministically
+once the worker schedules - and every sibling oracle in the corpus
+either runs a synchronous `DrainUnpublishedPendingForTest` pass or
+polls the stat not-found condition first, so the race is pinned to
+this one observation (the wrapper's `deleted`-attempt recording is
+kept for the drain legs whose asserts read completed batches through
+synchronous drains).
+
+Regression. The recovery leg now waits for the completed unlink - a
+bounded stat not-found poll, the same shape the corpus' other
+recovered-worker legs use - and keeps `issue25590RequireGone` as the
+pinned terminal assertion; the failFS wrapper, `deleteCallCount` and
+`deletedSnapshot` semantics are unchanged. No production line
+changes.
+
+Proof. A forced barrier-to-unlink delay (a temporary 500 ms sleep in
+the wrapper between the recording and the underlying unlink) makes
+the pre-fix oracle fail deterministically with the CI job's exact
+trace (same case, same r41 assertion line, same helper, `expecting
+file not found, got %v, <nil>` - exit 1), and the corrected oracle
+passes 3/3 under the same forced window (exit 0). On the final tree:
+the focused case is green under `-race -count=20` (exit 0), the full
+`pkg/vm/engine/disttae` package - the lane CI failed - is green
+(exit 0, 61.7s), `go vet` over the package and `gofmt -l` are clean.
+The BVT legs and the remaining CI lanes are re-evaluated by the fresh
+run of the pushed head.
+
+Decision: round 43 is an implementation-level correction of the
+round-41 regression's own observation point (which event grounds the
+recovery-leg oracle), inside the round-41 approved contract: the
+obligation, the settle order, the ownership rules and every
+production line are unchanged, so the r11/r12 decision set is
+untouched and no design re-review is opened; the pushed head is
+covered by the re-run unit families above plus CI.

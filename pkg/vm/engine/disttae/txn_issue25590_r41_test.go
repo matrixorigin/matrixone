@@ -47,12 +47,12 @@ package disttae
 import (
 	"context"
 	"runtime"
-	"slices"
 	"testing"
 	"time"
 	"weak"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -273,10 +273,18 @@ func TestIssue25590AcceptedGCWorkerStallDoesNotRetainCompletedTransaction(t *tes
 	// recorded-name retire (which finds the terminal already emptied the
 	// holder) - with the transaction long gone.
 	releaseStall()
+	// The failFS records a delete call the moment it passes the parking
+	// barrier, BEFORE the underlying unlink runs, so a recorded name is
+	// an in-flight attempt, not a completed deletion: the completion is
+	// the file's disappearance itself (CI run 40176540982 attempt 3
+	// stat'ed the file alive inside exactly this window), and only that
+	// terminal state grounds the gone-check and the empty-ledger
+	// assertions below.
 	require.Eventually(t, func() bool {
-		return slices.Contains(failFS.deletedSnapshot(), name)
+		_, statErr := failFS.StatFile(ctx, name)
+		return moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound)
 	}, 10*time.Second, 10*time.Millisecond,
-		"the recovered worker physically deleted the stalled batch")
+		"the recovered worker completes the stalled batch's file deletion")
 	issue25590RequireGone(t, failFS, name,
 		"the recovered worker deleted the stalled object's file")
 	queued, live, inFlight = e.InspectUnpublishedPendingForTest()
