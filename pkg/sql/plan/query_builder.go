@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -13780,6 +13781,18 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 				currentAccountID, dbName, tableName, midNode.GetTableDef().GetTableType(),
 			)
 			if dbName == catalog.MO_CATALOG && tableName == catalog.MO_TABLES {
+				proc := builder.compCtx.GetProcess()
+				if proc != nil && proc.GetSessionInfo() != nil &&
+					!defines.HasTemporaryTableAccess(builder.GetContext()) {
+					tempFilter := util.BuildTableScanTemporaryFilter(proc.GetSessionInfo().SessionId.String())
+					if tempFilter != nil {
+						if accountFilter == nil {
+							accountFilter = tempFilter
+						} else {
+							accountFilter = tree.NewAndExpr(accountFilter, tempFilter)
+						}
+					}
+				}
 				subFilter, filterErr := builder.currentSubscriptionMoTablesFilter()
 				if filterErr != nil {
 					return 0, "", filterErr

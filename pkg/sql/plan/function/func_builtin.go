@@ -1927,9 +1927,11 @@ func builtInPurgeLog(parameters []*vector.Vector, result vector.FunctionResultWr
 func builtInDatabase(_ []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
+	// MySQL: DATABASE() / SCHEMA() return NULL when there is no default database.
+	db := proc.GetSessionInfo().GetDatabase()
+	isNull := len(db) == 0
 	for i := uint64(0); i < uint64(length); i++ {
-		db := proc.GetSessionInfo().GetDatabase()
-		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(db), false); err != nil {
+		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(db), isNull); err != nil {
 			return err
 		}
 	}
