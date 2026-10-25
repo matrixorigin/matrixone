@@ -95,11 +95,6 @@ var MaskSecretLiterals = func(sql string) ([]string, []string) {
 	return split, secrets
 }
 
-func handleSQLForRecordFragment(sql string) string {
-	masked, _ := handleSQLForRecordFragmentWithSecrets(sql)
-	return masked
-}
-
 func handleSQLForRecordFragmentWithSecrets(sql string) (string, []string) {
 	stripScanner := mysql.NewScanner(dialect.MYSQL, sql)
 	defer mysql.PutScanner(stripScanner)
