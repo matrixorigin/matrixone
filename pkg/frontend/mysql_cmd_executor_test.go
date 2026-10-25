@@ -13039,3 +13039,78 @@ func TestReportParseErrorForClientKeepsPipelineRedacted(t *testing.T) {
 	require.Same(t, passthrough, reportParseErrorForClient(context.Background(), passthrough, passthrough))
 	require.Empty(t, reported)
 }
+
+// #30747 review round 10, P1: verbatim mo-bot probes through the production
+// entrypoints they name — parseErrorRecords feeding RecordParseErrorStatement
+// and doComQuery's retained statement text. Masking must run on the WHOLE
+// malformed text BEFORE diagnostic fragments are cut, otherwise the default
+// mode mis-pairs the quotes and surfaces a fake top-level `;` inside the
+// credential; the suffix would then lose its `credentials=` context.
+func TestRound10MalformedMapParseErrorRecords(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	req := `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix;REVIEW_RECORD_CANARY'} -- '`
+	// the review's TestReviewMalformedMapParseErrorRecords shape: one redacted
+	// record, suffix context preserved by construction
+	records, _ := (&UserInput{sql: req}).parseErrorRecords(ses)
+	require.Len(t, records, 1)
+	require.NotContains(t, records[0], "REVIEW_RECORD_CANARY")
+	require.Contains(t, records[0], "credentials=")
+
+	// the review's TestReviewDoComQueryMalformedMap shape: the retained
+	// statement text never collapses to the raw suffix
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	err := doComQuery(ses, execCtx, &UserInput{sql: req})
+	require.Error(t, err)
+	require.NotContains(t, ses.GetSqlOfStmt(), "REVIEW_RECORD_CANARY")
+	require.NotEqual(t, "REVIEW_RECORD_CANARY'} -- '", ses.GetSqlOfStmt())
+	require.Contains(t, ses.GetSqlOfStmt(), "credentials=")
+}
+
+// #30747 review round 10, P2: verbatim mo-bot probe through the actual
+// COM_QUERY debug sink at print limit 400 (ExecRequest), mirroring the
+// review's TestReviewExecRequestUnknownModeTrace. An unknown-mode transition
+// tail must never split inside a credential under ANY lexical variant.
+func TestExecRequestUnknownModeBraceBoundaryTrace(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	previousPU := getPuIfPresent("")
+	defer setPu("", previousPU)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	// Pair the fixture's catalog-version proof with an already loaded empty
+	// policy, so request admission does not need a catalog engine.
+	ses.ruleCache = map[string]string{}
+	getPu("").SV.LengthOfQueryPrinted = 400
+	observed, logs := newObservedProtocolSession()
+	ses.logger, ses.logLevel = observed.logger, observed.logLevel
+	ses.loggerOnce.Do(func() {})
+	// The trace is emitted before planning. Stop at the existing wrapper seam
+	// so this protocol-boundary test needs neither an engine nor a cluster.
+	stop := moerr.NewInvalidInputNoCtx("stop after query trace")
+	planCalls := 0
+	stubs := gostub.Stub(&GetComputationWrapper, func(*ExecCtx, string, string, engine.Engine, *process.Process, *Session) ([]ComputationWrapper, error) {
+		planCalls++
+		return nil, stop
+	})
+	defer stubs.Reset()
+	// the review's probe, verbatim
+	query := `set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix};REVIEW_BRACE_CANARY'}`
+	resp, err := ExecRequest(ses, newTestExecCtx(ctx, ctrl), &Request{cmd: COM_QUERY, data: []byte(query)})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+	responseErr, ok := resp.data.(error)
+	require.True(t, ok)
+	require.ErrorContains(t, responseErr, "stop after query trace")
+	require.Equal(t, 1, planCalls, "request must reach the injected planning boundary")
+	entries := logs.FilterMessage("query trace").All()
+	require.Len(t, entries, 1, "the actual debug sink must receive the request once")
+	logged := entries[0].ContextMap()["query"]
+	require.Equal(t, mysql.MaskSensitiveSqlLiteralsPerStatement(query, mysql.ParseSQLModeFlags("")), logged)
+	require.NotContains(t, logged, "REVIEW_BRACE_CANARY")
+}

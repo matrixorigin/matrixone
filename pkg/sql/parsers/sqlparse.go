@@ -84,6 +84,17 @@ var HandleSqlForRecord = func(sql string) []string {
 // where string tokens — and therefore credential values — begin and end, so
 // the record mask must mirror the session parser (#30747 review).
 func HandleSqlForRecordWithSQLMode(sql string, sqlMode string) []string {
+	records, _ := HandleSqlForRecordSpansWithSQLMode(sql, sqlMode)
+	return records
+}
+
+// HandleSqlForRecordSpansWithSQLMode splits sql into record texts exactly
+// like HandleSqlForRecordWithSQLMode and additionally returns the statement
+// spans the texts were cut from, so callers that need per-record metadata
+// (comment-driven provenance, parse-error diagnostics) can stay aligned with
+// the SAME credential-safe boundaries (#30747 review round 10). len(records)
+// == len(spans) always; records[i] was produced from sql[spans[i]].
+func HandleSqlForRecordSpansWithSQLMode(sql string, sqlMode string) ([]string, []mysql.StatementSQLModeSpan) {
 	flags := mysql.ParseSQLModeFlags(sqlMode)
 	// Split with the SAME effective-mode tracking the per-statement masker
 	// uses: a default-mode semicolon scan can cut inside a credential literal
@@ -91,9 +102,8 @@ func HandleSqlForRecordWithSQLMode(sql string, sqlMode string) []string {
 	// fragment then loses its map context before masking (#30747 review).
 	spans := mysql.StatementSQLModes(sql, flags)
 	type recordPiece struct {
-		text  string
-		mode  mysql.SQLModeFlags
-		known bool
+		text string
+		span mysql.StatementSQLModeSpan
 	}
 	pieces := make([]recordPiece, 0, len(spans))
 	for _, span := range spans {
@@ -113,16 +123,18 @@ func HandleSqlForRecordWithSQLMode(sql string, sqlMode string) []string {
 		if piece == "" && !span.SemiTerminated && len(pieces) > 0 {
 			continue
 		}
-		pieces = append(pieces, recordPiece{piece, span.Mode, span.Known})
+		pieces = append(pieces, recordPiece{piece, span})
 	}
 	if len(pieces) == 0 {
-		return []string{""}
+		return []string{""}, nil
 	}
-	split := make([]string, len(pieces))
+	records := make([]string, len(pieces))
+	kept := make([]mysql.StatementSQLModeSpan, len(pieces))
 	for i, piece := range pieces {
-		split[i] = handleSQLForRecordFragment(piece.text, piece.mode, piece.known)
+		records[i] = handleSQLForRecordFragment(piece.text, piece.span.Mode, piece.span.Known)
+		kept[i] = piece.span
 	}
-	return split
+	return records, kept
 }
 
 func handleSQLForRecordFragment(sql string, flags mysql.SQLModeFlags, modeKnown bool) string {

@@ -909,3 +909,35 @@ func TestMaskUnknownTailTransitionRePins(t *testing.T) {
 	require.NotContains(t, got, "R9_TRACE_TRANSITION_CANARY")
 	require.Contains(t, got, `credentials={'k'='******'}`, "re-pinned mode-0 masking for s2")
 }
+
+// #30747 review round 10, P2 (the review's TestReviewUnknownModeBraceBoundary
+// probe, verbatim): in an unknown-mode tail, a `;` that ANY lexical variant
+// places inside a credential span must NOT terminate the statement. The
+// round-9 "shortest boundary" rule picked exactly such a `;`: another
+// variant reads `prefix}` inside a valid string, so the default-mode
+// mis-pairing cannot be trusted as a terminator either. The conservative
+// boundary is nowhere in the ambiguous tail; the credential keeps its
+// `credentials=` context and is union-masked whole.
+func TestMaskUnknownModeBraceBoundaryPreservesCredential(t *testing.T) {
+	sql := `set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); ` +
+		`create stage s url='file:///x' credentials={'k'='foo\','secret_key'='prefix};REVIEW_BRACE_CANARY'}`
+	got := MaskSensitiveSqlLiteralsPerStatement(sql, 0)
+	require.NotContains(t, got, "REVIEW_BRACE_CANARY")
+	require.Contains(t, got, "credentials=", "credential context must survive boundary selection")
+	require.Contains(t, got, `secret_key`, "structural text outside spans is untouched")
+	spans := StatementSQLModes(sql, 0)
+	require.Len(t, spans, 2, "the ambiguous tail is one conservative span")
+	require.True(t, spans[0].Known)
+	require.False(t, spans[1].SemiTerminated)
+	require.Equal(t, len(sql), spans[1].End)
+	// A `;` genuinely OUTSIDE every variant's credential spans still
+	// terminates: the credential map closes cleanly in all four modes, so
+	// the boundary after it survives and the following statement is split.
+	balanced := `set sql_mode=concat('NO_BACKSLASH','_ESCAPES'); ` +
+		`create stage s url='file:///x' credentials={'aws_secret_key'='plain'}; select 1`
+	balSpans := StatementSQLModes(balanced, 0)
+	require.Len(t, balSpans, 3)
+	require.True(t, balSpans[1].SemiTerminated)
+	require.NotContains(t, MaskSensitiveSqlLiteralsPerStatement(balanced, 0), "plain")
+	require.Contains(t, MaskSensitiveSqlLiteralsPerStatement(balanced, 0), "aws_secret_key")
+}

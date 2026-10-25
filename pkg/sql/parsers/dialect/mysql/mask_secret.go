@@ -457,16 +457,19 @@ func StatementSQLModes(sql string, initial SQLModeFlags) []StatementSQLModeSpan 
 		if known {
 			stmtEnd, semiTerminated, typList, valList = splitOneStatement(sql, stmtStart, mode)
 		} else {
-			// UNKNOWN stretch: any constant guess about the lexical mode can
-			// pair quotes differently and swallow a following `;` (and even
-			// the next re-pinning SET) inside a string. Split at the
-			// SHORTEST boundary any lexical variant finds; every piece is
-			// then masked under every variant (over-masking is safe), so a
-			// boundary too early can only add context, never lose it
-			// (#30747 review: a transition INSIDE an unknown tail must still
-			// be found, while a credential's own `;` stays protected at
-			// brace depth > 0 in every variant).
+			// UNKNOWN stretch (#30747 review round 10): boundary choice and
+			// credential-span choice must never disagree across lexical
+			// variants. Compute the UNION of credential-shaped spans every
+			// variant of the last known mode marks: a `;` covered by the
+			// union lies inside a credential under some admitted mode and
+			// is NOT a statement terminator (the round-9 "shortest
+			// boundary" rule could sever exactly such a credential). The
+			// boundary is the earliest `;` any variant finds OUTSIDE the
+			// union; if no variant has one, the tail is one span. Pieces
+			// are union-masked afterwards, so a boundary too LATE is safe
+			// and a genuine re-pinning SET between braces stays visible.
 			stmtEnd = len(sql)
+			blocked := unionCredentialSpansUnderAllLexicalVariants(sql, stmtStart, mode)
 			base := mode &^ SQLModeFlags(SQLModeNoBackslashEscapes|SQLModeANSIQuotes)
 			for variant := 0; variant < 4; variant++ {
 				v := base
@@ -476,9 +479,21 @@ func StatementSQLModes(sql string, initial SQLModeFlags) []StatementSQLModeSpan 
 				if variant&2 != 0 {
 					v |= SQLModeFlags(SQLModeANSIQuotes)
 				}
-				end, isSemi, tl, vl := splitOneStatement(sql, stmtStart, v)
-				if end < stmtEnd {
-					stmtEnd, semiTerminated, typList, valList = end, isSemi, tl, vl
+				// Walk this variant's `;` candidates, skipping any the
+				// cross-variant union marks as credential-internal.
+				// SET-initial statements (whose token inventory backs
+				// transition detection) never carry credential braces,
+				// so their first candidate is never blocked.
+				for cur := stmtStart; cur < len(sql); {
+					end, isSemi, tl, vl := splitOneStatement(sql, cur, v)
+					if isSemi && boundaryInsideSpans(blocked, end-1) {
+						cur = end
+						continue
+					}
+					if end < stmtEnd {
+						stmtEnd, semiTerminated, typList, valList = end, isSemi, tl, vl
+					}
+					break
 				}
 			}
 		}
@@ -542,6 +557,59 @@ func splitOneStatement(sql string, start int, mode SQLModeFlags) (int, bool, []i
 		}
 	}
 	return len(sql), false, typList, valList
+}
+
+// unionCredentialSpansUnderAllLexicalVariants returns the union — in
+// original sql coordinates — of the credential spans every lexical variant
+// of lastKnown marks in sql[start:] (#30747 review round 10). The union is
+// the boundary gate for an unknown-mode stretch: a `;` inside it belongs to
+// a credential under at least one admitted mode and must not terminate a
+// statement; a map one variant cannot parse survives through some other
+// variant's spans, so coverage never depends on all four agreeing.
+// Variants without an actionable credential keyword are skipped, exactly
+// like the masking pass itself.
+func unionCredentialSpansUnderAllLexicalVariants(sql string, start int, lastKnown SQLModeFlags) [][2]int {
+	base := lastKnown &^ SQLModeFlags(SQLModeNoBackslashEscapes|SQLModeANSIQuotes)
+	tail := sql[start:]
+	var spans [][2]int
+	for variant := 0; variant < 4; variant++ {
+		m := base
+		if variant&1 != 0 {
+			m |= SQLModeFlags(SQLModeNoBackslashEscapes)
+		}
+		if variant&2 != 0 {
+			m |= SQLModeFlags(SQLModeANSIQuotes)
+		}
+		if !hasCredentialActionableKeyword(tail, true, m) {
+			continue
+		}
+		variantSpans, rawEdits, _ := collectCredentialMasks(tail, CredentialStateNone, true, m, true)
+		for _, s := range variantSpans {
+			spans = append(spans, [2]int{s[0] + start, s[1] + start})
+		}
+		for _, r := range rawEdits {
+			spans = append(spans, [2]int{r.start + start, r.end + start})
+		}
+	}
+	if len(spans) > 1 {
+		sort.Slice(spans, func(i, j int) bool { return spans[i][0] < spans[j][0] })
+	}
+	return spans
+}
+
+// boundaryInsideSpans reports whether byte position pos lies inside any
+// union span. Spans are sorted by start; unions here are tiny (one per
+// credential literal at most per variant).
+func boundaryInsideSpans(spans [][2]int, pos int) bool {
+	for _, s := range spans {
+		if pos < s[0] {
+			return false
+		}
+		if pos < s[1] {
+			return true
+		}
+	}
+	return false
 }
 
 // MaskSensitiveSqlLiteralsUnderAllLexicalVariants masks credential literals
