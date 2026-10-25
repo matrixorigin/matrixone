@@ -735,7 +735,7 @@ func TestConstructByteVectorTypesErrorPlumbing(t *testing.T) {
 				Lines:  tree.NewLines("", "\n"),
 			},
 			ctx:        context.Background(),
-			Symbol:     [][]byte{[]byte{','}, []byte{','}, []byte{'\n'}},
+			Symbol:     [][]byte{{','}, {','}, {'\n'}},
 			ColumnFlag: make([]bool, 3),
 		}
 		ch := make(chan *BatchByte, 1)
@@ -754,7 +754,7 @@ func TestConstructByteVectorTypesErrorPlumbing(t *testing.T) {
 				Lines:  tree.NewLines("", "\n"),
 			},
 			ctx:        context.Background(),
-			Symbol:     [][]byte{[]byte{','}, []byte{','}, []byte{'\n'}},
+			Symbol:     [][]byte{{','}, {','}, {'\n'}},
 			ColumnFlag: make([]bool, 3),
 			mrs:        &MysqlResultSet{},
 		}
