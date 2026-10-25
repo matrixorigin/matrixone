@@ -1,0 +1,43 @@
+drop database if exists func_db_no_default;
+create database func_db_no_default;
+use func_db_no_default;
+select database(), schema(), database() is null;
+➤ database()[12,65535,0]  ¦  schema()[12,65535,0]  ¦  database() is null[-6,8,0]  𝄀
+func_db_no_default  ¦  func_db_no_default  ¦  0
+prepare s1 from 'select database(), schema()';
+execute s1;
+➤ database()[12,65535,0]  ¦  schema()[12,65535,0]  𝄀
+func_db_no_default  ¦  func_db_no_default
+drop database func_db_no_default;
+select database(), schema(), database() is null, schema() is null;
+➤ database()[12,65535,0]  ¦  schema()[12,65535,0]  ¦  database() is null[-6,8,0]  ¦  schema() is null[-6,8,0]  𝄀
+null  ¦  null  ¦  1  ¦  1
+select ifnull(database(), '(none)'), coalesce(schema(), '(none)');
+➤ ifnull(database(), (none))[12,65535,0]  ¦  coalesce(schema(), (none))[12,65535,0]  𝄀
+(none)  ¦  (none)
+select concat('db=', database()), length(database());
+➤ concat(db=, database())[-1,16383,0]  ¦  length(database())[-5,64,0]  𝄀
+null  ¦  null
+execute s1;
+➤ database()[12,65535,0]  ¦  schema()[12,65535,0]  𝄀
+null  ¦  null
+create database func_db_no_default;
+create table func_db_no_default.ctas_database as select database() as d, schema() as s;
+select d is null, s is null from func_db_no_default.ctas_database;
+➤ d is null[-6,8,0]  ¦  s is null[-6,8,0]  𝄀
+1  ¦  1
+select column_name, is_nullable from information_schema.columns
+where table_schema = 'func_db_no_default' and table_name = 'ctas_database'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  is_nullable[12,3,0]  𝄀
+d  ¦  YES  𝄀
+s  ¦  YES
+use func_db_no_default;
+select database(), database() is null;
+➤ database()[12,65535,0]  ¦  database() is null[-6,8,0]  𝄀
+func_db_no_default  ¦  0
+execute s1;
+➤ database()[12,65535,0]  ¦  schema()[12,65535,0]  𝄀
+func_db_no_default  ¦  func_db_no_default
+deallocate prepare s1;
+drop database func_db_no_default;
