@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -39,33 +40,28 @@ func (child *terminalDispatchChild) Call(*process.Process) (vm.CallResult, error
 }
 
 func TestDispatchEmptyInputRemoteLifecycle(t *testing.T) {
-	for _, mode := range []string{"attach", "already_attached", "local_only", "cancel", "timeout", "child_error"} {
+	for _, mode := range []string{"queued", "prepared", "local_only", "cancel", "nonempty_timeout", "child_error", "late_lookup", "mixed", "registration_rollback"} {
 		t.Run(mode, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				previous := colexec.Get()
 				colexec.Set(nil)
 				defer colexec.Set(previous)
-				_ = colexec.NewServer(nil)
+				colexec.NewServer(nil)
 				ctx, cancel := context.WithCancelCause(context.Background())
 				defer cancel(nil)
 				mp := mpool.MustNewZeroNoFixed()
 				defer mpool.DeleteMPool(mp)
 				proc := &process.Process{Ctx: ctx, Cancel: cancel, Base: &process.BaseProcess{}}
 				proc.SetMPool(mp)
-
 				child := &terminalDispatchChild{ValueScan: value_scan.NewArgument()}
 				defer child.Release()
 				require.NoError(t, child.Prepare(proc))
 				defer child.Free(proc, false, nil)
-				if mode == "child_error" {
-					child.err = moerr.NewInternalErrorNoCtx("child failed before its first batch")
-				}
-
 				d := NewArgument()
 				defer d.Release()
 				d.FuncId = SendToAllFunc
 				d.AppendChild(child)
-				peers := make([]*process.WrapCs, 0, 2)
+				var peers []*process.WrapCs
 				if mode == "local_only" {
 					d.FuncId = SendToAllLocalFunc
 					d.LocalRegs = []*process.WaitRegister{process.NewPipelineEdge(1, 1)}
@@ -76,10 +72,8 @@ func TestDispatchEmptyInputRemoteLifecycle(t *testing.T) {
 						peers = append(peers, &process.WrapCs{Uid: uid, Err: make(chan error, 1)})
 					}
 				}
-				// 即使断言提前退出，也先取消并等待 Call，再回收本代资源。
 				defer func() {
 					cancel(nil)
-					synctest.Wait()
 					if d.ctr != nil {
 						d.Reset(proc, true, context.Canceled)
 					}
@@ -90,73 +84,56 @@ func TestDispatchEmptyInputRemoteLifecycle(t *testing.T) {
 				}()
 				require.NoError(t, d.RegisterRemoteReceivers(proc))
 				require.NoError(t, d.Prepare(proc))
-				var notify chan *process.WrapCs
-				for _, peer := range peers {
-					owner, ch, found := colexec.Get().GetProcByUuid(peer.Uid, false)
-					require.True(t, found)
-					require.Same(t, proc, owner)
-					notify = ch
+				accepted := len(peers)
+				if mode == "late_lookup" {
+					accepted = 0
+				} else if mode == "mixed" || mode == "cancel" || mode == "nonempty_timeout" {
+					accepted = 1
 				}
-				if mode == "already_attached" {
-					go func() {
-						for _, peer := range peers {
-							notify <- peer
-						}
-					}()
+				for _, peer := range peers[:accepted] {
+					owner, found, _, err := colexec.Get().AttachRemoteReceiver(peer.Uid, peer)
+					require.NoError(t, err)
+					require.True(t, found)
+					require.NotNil(t, owner)
+				}
+				if mode == "prepared" {
 					_, err := d.waitRemoteRegsReady(proc)
 					require.NoError(t, err)
+					require.Len(t, d.ctr.remoteReceivers, 2)
 				}
-
-				type outcome struct {
-					result vm.CallResult
-					err    error
-				}
-				done := make(chan outcome, 1)
-				go func() {
-					result, err := d.Call(proc)
-					done <- outcome{result: result, err: err}
-				}()
-				synctest.Wait()
 				var terminalErr error
-				accepted := len(peers)
 				switch mode {
-				case "attach", "cancel", "timeout":
-					select {
-					case <-done:
-						t.Fatal("empty dispatch completed before its receivers attached")
-					default:
-					}
-					notify <- peers[0]
-					synctest.Wait()
-					require.Len(t, d.ctr.remoteReceivers, 1)
-					if mode == "attach" {
-						notify <- peers[1]
-					} else {
-						accepted = 1
-						if mode == "cancel" {
-							terminalErr = moerr.NewInternalErrorNoCtx("cancel during receiver attachment")
-							cancel(terminalErr)
-						}
-					}
+				case "cancel":
+					terminalErr = moerr.NewInternalErrorNoCtx("cancel after receiver publication")
+					cancel(terminalErr)
 				case "child_error":
-					accepted = 0
+					child.err = moerr.NewInternalErrorNoCtx("child failed before first batch")
 					terminalErr = child.err
+				case "registration_rollback":
+					// 部分注册失败也须把已经发布的 receiver 交给 Reset，不能随队列丢弃。
+					ids := []uuid.UUID{peers[0].Uid, peers[1].Uid}
+					rollbackRemoteReceiverRegistrations(ids)
+					d.drainRemoteReceivers()
+					d.ctr.remoteInfo = nil
+					terminalErr = moerr.NewInternalErrorNoCtx("registration failed")
 				}
-				got := <-done // timeout 分支由 synctest 推进已有计时器，不做真实等待。
-				if mode == "timeout" {
-					require.ErrorContains(t, got.err, "remote receiver not ready")
-					terminalErr = got.err
-				} else if mode == "child_error" {
-					require.ErrorIs(t, got.err, child.err)
+				if mode == "nonempty_timeout" {
+					_, err := d.waitRemoteRegsReady(proc)
+					require.ErrorContains(t, err, "remote receiver not ready")
+					terminalErr = err
+					require.Len(t, d.ctr.remoteReceivers, 1)
 				} else {
-					require.NoError(t, got.err)
-					require.Equal(t, vm.ExecStop, got.result.Status)
-					require.True(t, d.ctr.prepared)
-				}
-				require.Nil(t, got.result.Batch)
-				require.Len(t, d.ctr.remoteReceivers, accepted)
-				if mode == "cancel" {
-					require.ErrorIs(t, context.Cause(proc.Ctx), terminalErr)
+					result, err := d.Call(proc)
+					if child.err != nil {
+						require.ErrorIs(t, err, child.err)
+					} else if mode == "cancel" {
+						require.ErrorIs(t, err, context.Canceled)
+						require.ErrorIs(t, context.Cause(ctx), terminalErr)
+					} else {
+						require.NoError(t, err)
+						require.Equal(t, vm.ExecStop, result.Status)
+					}
+					require.Nil(t, result.Batch)
 				}
 				for _, peer := range peers {
 					require.Empty(t, peer.Err, "Call must not publish terminal notifications")
@@ -167,13 +144,24 @@ func TestDispatchEmptyInputRemoteLifecycle(t *testing.T) {
 						require.Len(t, peer.Err, 1)
 						require.ErrorIs(t, <-peer.Err, terminalErr)
 					} else {
+						time.Sleep(2 * waitRemoteRegTimeout) // 虚拟时间跨过旧 EOS 超时，late lookup 仍正常完成。
+						owner, found, _, err := colexec.Get().AttachRemoteReceiver(peer.Uid, peer)
+						require.NoError(t, err)
+						require.True(t, found)
+						require.Nil(t, owner)
 						require.Empty(t, peer.Err)
 					}
-					owner, _, _ := colexec.Get().GetProcByUuid(peer.Uid, false)
+					owner, _, found := colexec.Get().GetProcByUuid(peer.Uid, false)
+					require.False(t, found)
 					require.Nil(t, owner)
 				}
+				// 重复 Reset 不得再发送终态或移除下一代注册。
+				d.Reset(proc, false, nil)
+				for _, peer := range peers {
+					require.Empty(t, peer.Err)
+				}
 				d.CleanupDeferredSpool()
-				require.Zero(t, proc.Mp().CurrNB())
+				require.Zero(t, mp.CurrNB())
 			})
 		})
 	}

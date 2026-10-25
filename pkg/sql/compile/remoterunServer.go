@@ -142,11 +142,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
-		dispatchProc, dispatchNotifyCh, err := receiver.GetProcByUuid(receiver.messageUuid)
-		if err != nil || dispatchProc == nil {
-			return err
-		}
-
 		infoToDispatchOperator := &process.WrapCs{
 			ReceiverDone: false,
 			MsgId:        receiver.messageId,
@@ -156,25 +151,18 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		}
 		colexec.Get().RecordDispatchPipeline(receiver.clientSession, receiver.messageId, infoToDispatchOperator)
 
-		succeed := false
-		select {
-		case dispatchNotifyCh <- infoToDispatchOperator:
-			succeed = true
-		case <-receiver.connectionCtx.Done():
-			dispatchProc.Cancel(moerr.NewInternalError(receiver.messageCtx, "remote receiver connection closed"))
-		case <-dispatchProc.Ctx.Done():
-		}
-
-		if !succeed {
-			return nil
+		cancel, err := receiver.attachRemoteReceiver(infoToDispatchOperator)
+		if err != nil || cancel == nil {
+			colexec.Get().RemoveRelatedPipeline(receiver.clientSession, receiver.messageId)
+			return err
 		}
 
 		select {
 		case <-receiver.connectionCtx.Done():
-			dispatchProc.Cancel(moerr.NewInternalError(receiver.messageCtx, "remote receiver connection closed"))
+			cancel(moerr.NewInternalError(receiver.messageCtx, "remote receiver connection closed"))
 
-		// there is no need to check the dispatchProc.Ctx.Done() here.
-		// because we need to receive the error from dispatchProc.DispatchNotifyCh.
+		// Query cancellation completes through Dispatch.Reset. Wait for its
+		// terminal error instead of returning early on the producer context.
 		case err = <-infoToDispatchOperator.Err:
 		}
 		return err
@@ -240,27 +228,40 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 	return nil
 }
 
-func registerRemoteDispatchReceivers(s *Scope, proc *process.Process) error {
-	if s == nil {
-		return nil
-	}
-	if s.RootOp != nil {
+func registerRemoteDispatchReceivers(s *Scope, proc *process.Process) (err error) {
+	// A failed registration returns before any pipeline runs its cleanup.
+	// Retire every published dispatch, including the partially registered one.
+	var registered []*dispatch.Dispatch
+	defer func() {
+		if err != nil {
+			for _, d := range registered {
+				d.Reset(proc, true, err)
+			}
+		}
+	}()
+	var register func(*Scope) error
+	register = func(s *Scope) error {
+		if s == nil {
+			return nil
+		}
 		if err := vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
 			d, ok := op.(*dispatch.Dispatch)
-			if !ok {
+			if !ok || len(d.RemoteRegs) == 0 {
 				return nil
 			}
+			registered = append(registered, d)
 			return d.RegisterRemoteReceivers(proc)
 		}); err != nil {
 			return err
 		}
-	}
-	for _, pre := range s.PreScopes {
-		if err := registerRemoteDispatchReceivers(pre, proc); err != nil {
-			return err
+		for _, pre := range s.PreScopes {
+			if err := register(pre); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
-	return nil
+	return register(s)
 }
 
 const (
@@ -559,30 +560,31 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (processHelper, er
 	return result, nil
 }
 
-// waitRegistrationTimeout bounds how long we wait for the dispatch operator
-// to register itself via PutProcIntoUuidMap. Under normal operation this
-// happens within seconds. A 5-minute timeout detects a fundamentally broken
-// remote CN (crash, network partition) without the false positives of a short
-// timeout, while avoiding the 24h hang of the unbounded RPC stream lifetime.
+// waitRegistrationTimeout bounds how long a notification waits for the dispatch
+// operator to publish its UUID. This preserves the existing missing-producer
+// bound instead of waiting for the 24h RPC stream lifetime. It does not limit
+// how late a notification can consume a completed registration: that lookup
+// immediately observes the completion tombstone.
 const waitRegistrationTimeout = 30 * time.Second
 
-func (receiver *messageReceiverOnServer) GetProcByUuid(uid uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, error) {
+func (receiver *messageReceiverOnServer) attachRemoteReceiver(info *process.WrapCs) (context.CancelCauseFunc, error) {
+	uid := info.Uid
 	deadline := time.NewTimer(waitRegistrationTimeout)
 	defer deadline.Stop()
 
 	for {
-		dispatchProc, notifyChannel, ok, changed := colexec.Get().GetProcByUuidOrWait(uid)
+		cancel, ok, changed, err := colexec.Get().AttachRemoteReceiver(uid, info)
 		if ok {
-			return dispatchProc, notifyChannel, nil
+			return cancel, err
 		}
 
 		select {
 		case <-receiver.connectionCtx.Done():
 			colexec.Get().GetProcByUuid(uid, true)
-			return nil, nil, nil
+			return nil, nil
 		case <-deadline.C:
 			colexec.Get().GetProcByUuid(uid, true)
-			return nil, nil, moerr.NewInternalErrorf(receiver.messageCtx,
+			return nil, moerr.NewInternalErrorf(receiver.messageCtx,
 				"dispatch process not registered within %s, remote CN may have failed", waitRegistrationTimeout)
 		case <-changed:
 		}

@@ -559,7 +559,7 @@ func Test_decodeBatch(t *testing.T) {
 	require.Nil(t, err)
 }
 
-func Test_GetProcByUuid(t *testing.T) {
+func Test_AttachRemoteReceiver(t *testing.T) {
 	_ = colexec.NewServer(nil)
 
 	{
@@ -580,10 +580,9 @@ func Test_GetProcByUuid(t *testing.T) {
 		colexec.Get().DeleteUuids([]uuid.UUID{uid})
 
 		// get a nil p and c.
-		p, c, err := receiver.GetProcByUuid(uid)
-		require.Nil(t, err)
-		require.Nil(t, p)
-		require.Nil(t, c)
+		cancel, err := receiver.attachRemoteReceiver(&process.WrapCs{Uid: uid})
+		require.NoError(t, err)
+		require.Nil(t, cancel)
 
 		colexec.Get().DeleteUuids([]uuid.UUID{uid})
 	}
@@ -597,9 +596,9 @@ func Test_GetProcByUuid(t *testing.T) {
 			connectionCtx: cctx,
 		}
 		ccancel()
-		p, _, err := receiver.GetProcByUuid(uuid.UUID{})
-		require.Nil(t, err)
-		require.Nil(t, p)
+		cancel, err := receiver.attachRemoteReceiver(&process.WrapCs{})
+		require.NoError(t, err)
+		require.Nil(t, cancel)
 
 		// two action to delete the uuid can make sure the producer and consumer flag uuid done.
 		colexec.Get().DeleteUuids([]uuid.UUID{{}})
@@ -615,14 +614,20 @@ func Test_GetProcByUuid(t *testing.T) {
 			connectionCtx: context.TODO(),
 		}
 
-		p0 := &process.Process{}
-		c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
+		ctx, cancelQuery := context.WithCancelCause(context.Background())
+		defer cancelQuery(nil)
+		p0 := &process.Process{Ctx: ctx, Cancel: cancelQuery}
+		c0 := make(process.RemotePipelineInformationChannel, 1)
 		require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
 
-		p, c, err := receiver.GetProcByUuid(uid)
-		require.Nil(t, err)
-		require.Equal(t, p0, p)
-		require.Equal(t, c0, c)
+		info := &process.WrapCs{Uid: uid}
+		cancel, err := receiver.attachRemoteReceiver(info)
+		require.NoError(t, err)
+		require.NotNil(t, cancel)
+		require.Same(t, info, <-c0)
+		cause := moerr.NewInternalErrorNoCtx("notification connection closed")
+		cancel(cause)
+		require.ErrorIs(t, context.Cause(ctx), cause)
 
 		colexec.Get().DeleteUuids([]uuid.UUID{uid})
 		colexec.Get().DeleteUuids([]uuid.UUID{uid})
@@ -639,49 +644,42 @@ func Test_GetProcByUuid(t *testing.T) {
 	}
 }
 
-func Test_GetProcByUuid_ConcurrentWake(t *testing.T) {
-	_ = colexec.NewServer(nil)
-
-	uid, err := uuid.NewV7()
-	require.Nil(t, err)
-
-	receiver := &messageReceiverOnServer{
-		connectionCtx: context.TODO(),
-		messageCtx:    context.TODO(),
-	}
-
-	// Start GetProcByUuid in a goroutine BEFORE PutProcIntoUuidMap.
-	// This tests the wait-then-wake path: the receiver must block on the
-	// changed channel and wake exactly once when the UUID is inserted.
-	type result struct {
-		proc *process.Process
-		ch   process.RemotePipelineInformationChannel
-		err  error
-	}
-	done := make(chan result, 1)
-	go func() {
-		p, c, e := receiver.GetProcByUuid(uid)
-		done <- result{p, c, e}
-	}()
-
-	// Give the goroutine time to enter the wait.
-	time.Sleep(10 * time.Millisecond)
-
-	p0 := &process.Process{}
-	c0 := process.RemotePipelineInformationChannel(make(chan *process.WrapCs))
-	require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
-
-	select {
-	case r := <-done:
-		require.Nil(t, r.err)
-		require.Equal(t, p0, r.proc)
-		require.Equal(t, c0, r.ch)
-	case <-time.After(3 * time.Second):
-		t.Fatal("GetProcByUuid did not wake after PutProcIntoUuidMap")
-	}
-
-	colexec.Get().DeleteUuids([]uuid.UUID{uid})
-	colexec.Get().DeleteUuids([]uuid.UUID{uid})
+func Test_AttachRemoteReceiver_ConcurrentWake(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		previous := colexec.Get()
+		colexec.Set(nil)
+		defer colexec.Set(previous)
+		colexec.NewServer(nil)
+		ctx, cancelQuery := context.WithCancelCause(context.Background())
+		defer cancelQuery(nil)
+		uid := uuid.New()
+		receiver := &messageReceiverOnServer{connectionCtx: ctx, messageCtx: ctx}
+		info := &process.WrapCs{Uid: uid}
+		type result struct {
+			cancel context.CancelCauseFunc
+			err    error
+		}
+		done := make(chan result, 1)
+		go func() {
+			cancel, err := receiver.attachRemoteReceiver(info)
+			done <- result{cancel, err}
+		}()
+		synctest.Wait()
+		require.Empty(t, done)
+		p0 := &process.Process{Ctx: ctx, Cancel: cancelQuery}
+		c0 := make(process.RemotePipelineInformationChannel, 1)
+		require.NoError(t, colexec.Get().PutProcIntoUuidMap(uid, p0, c0))
+		defer colexec.Get().DeleteUuids([]uuid.UUID{uid})
+		synctest.Wait()
+		require.Len(t, done, 1)
+		r := <-done
+		require.NoError(t, r.err)
+		require.NotNil(t, r.cancel)
+		require.Same(t, info, <-c0)
+		cause := moerr.NewInternalErrorNoCtx("notification connection closed")
+		r.cancel(cause)
+		require.ErrorIs(t, context.Cause(ctx), cause)
+	})
 }
 
 var _ morpc.Stream = &fakeStreamSender{}

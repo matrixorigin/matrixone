@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"context"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -86,18 +87,29 @@ func (srv *Server) getProcByUuidLocked(u uuid.UUID, forcedDelete bool) (*process
 	return result1, result2, true
 }
 
-// GetProcByUuidOrWait atomically looks up a uuid and, if not found, returns
-// a channel that will be closed on the next map insertion. This avoids a race
-// where an insert between a failed lookup and a separate WaitForChange call
-// would be missed.
-func (srv *Server) GetProcByUuidOrWait(u uuid.UUID) (*process.Process, process.RemotePipelineInformationChannel, bool, <-chan struct{}) {
+// AttachRemoteReceiver atomically claims a registration and publishes its receiver.
+// DeleteUuids uses the same lock: after it returns, no notifier can enqueue into
+// the retired dispatch. An unclaimed completion remains available to a late lookup.
+// The queue has one slot per registered UUID, so publication must never block.
+func (srv *Server) AttachRemoteReceiver(u uuid.UUID, receiver *process.WrapCs) (context.CancelCauseFunc, bool, <-chan struct{}, error) {
 	srv.uuidCsChanMap.Lock()
 	defer srv.uuidCsChanMap.Unlock()
-	proc, ch, ok := srv.getProcByUuidLocked(u, false)
-	if ok {
-		return proc, ch, true, nil
+	entry, ok := srv.uuidCsChanMap.mp[u]
+	if !ok {
+		return nil, false, srv.uuidCsChanMap.changed, nil
 	}
-	return nil, nil, false, srv.uuidCsChanMap.changed
+	if entry.proc == nil {
+		delete(srv.uuidCsChanMap.mp, u)
+		return nil, true, nil, nil
+	}
+	cancel := entry.proc.Cancel
+	select {
+	case entry.ch <- receiver:
+		srv.uuidCsChanMap.mp[u] = uuidProcMapItem{}
+		return cancel, true, nil, nil
+	default:
+		return nil, true, nil, moerr.NewInternalErrorNoCtx("remote receiver notification queue is full")
+	}
 }
 
 func (srv *Server) PutProcIntoUuidMap(u uuid.UUID, p *process.Process, ch process.RemotePipelineInformationChannel) error {
