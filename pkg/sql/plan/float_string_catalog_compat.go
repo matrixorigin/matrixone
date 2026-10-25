@@ -17,7 +17,9 @@ package plan
 import (
 	"context"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"slices"
+	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,6 +42,12 @@ func MigrateLegacyFloatStringTableDef(ctx CompilerContext, def *planpb.TableDef)
 		return err
 	}
 	var budget *tableDumpBindingBudget
+	var proofProc *process.Process
+	defer func() {
+		if proofProc != nil {
+			proofProc.Free()
+		}
+	}()
 	for item := range persistedTableExpressions(def) {
 		if err := ctx.GetContext().Err(); err != nil {
 			return err
@@ -49,6 +57,11 @@ func MigrateLegacyFloatStringTableDef(ctx CompilerContext, def *planpb.TableDef)
 		}
 		if budget == nil {
 			budget = &tableDumpBindingBudget{}
+			if ctx.GetProcess() == nil {
+				return moerr.NewInternalError(ctx.GetContext(), "catalog expression binding requires a process")
+			}
+			proofProc = newTableDumpProofProcess(ctx)
+			ctx = tableDumpBindContext{CompilerContext: ctx, ctx: ctx.GetContext(), proc: proofProc}
 		}
 		rebound, err := rebindLegacyFloatStringExpression(ctx, def, item, budget)
 		if err != nil {
@@ -218,133 +231,185 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 	if budget.text > tableDumpMaxExpressionText {
 		return nil, moerr.NewInvalidInputNoCtx("catalog expression text exceeds limit")
 	}
-	for _, mode := range tableDumpParserModes() {
+	for _, parserMode := range tableDumpParserModesForOrigin(item.origin) {
 		if err := ctx.GetContext().Err(); err != nil {
 			return nil, err
 		}
-		stmt, ast, visit, err := parseTableDumpExpression(ctx.GetContext(), item.origin, mode)
+		stmt, ast, visit, err := parseTableDumpExpression(ctx.GetContext(), item.origin, parserMode)
 		if err != nil {
 			continue
 		}
-		budget.nodes += visit.nodes
-		if budget.nodes > tableDumpMaxExpressionNodes {
-			stmt.Free()
-			return nil, moerr.NewInvalidInputNoCtx("catalog expression AST exceeds limit")
-		}
-		maxIncrement := int64(0)
-		if visit.hasDivision {
-			maxIncrement = 30
-		}
-		for increment := int64(0); increment <= maxIncrement; increment++ {
-			for _, legacySpecial := range []bool{false, true} {
+		result, err := func() (*planpb.Expr, error) {
+			defer stmt.Free()
+			budget.nodes += visit.nodes
+			if budget.nodes > tableDumpMaxExpressionNodes {
+				return nil, moerr.NewInvalidInputNoCtx("catalog expression AST exceeds limit")
+			}
+			proc := ctx.GetProcess()
+			zone, locale := proc.GetSessionInfo().TimeZone, function.TemporalLocaleNameForProcess(proc)
+			originalLocale := proc.GetSessionInfo().LCTimeNames
+			defer func() { proc.GetSessionInfo().TimeZone = zone; proc.GetSessionInfo().LCTimeNames = originalLocale }()
+			var matched *planpb.Expr
+			var witness tableDumpSessionCandidate
+			var dependency tableDumpDefaultSession
+			bind := func(search tableDumpSessionCandidate, tz *time.Location, lc string) (*planpb.Expr, error) {
 				if err := ctx.GetContext().Err(); err != nil {
-					stmt.Free()
 					return nil, err
 				}
-				if legacySpecial && !visit.hasSpecial {
-					continue
+				budget.visits += visit.nodes
+				if budget.visits > tableDumpMaxCandidateVisits {
+					return nil, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
 				}
-				for _, legacyFormatting := range []bool{false, true} {
-					if legacyFormatting && item.kind != "default" {
-						continue
-					}
-					proofCtx := ctx
-					if legacyFormatting {
-						proofCtx = tableDumpBindContext{CompilerContext: ctx, ctx: function.WithLegacyFloatStringFormatting(ctx.GetContext()), proc: ctx.GetProcess()}
-					}
-					budget.visits += visit.nodes
-					if budget.visits > tableDumpMaxCandidateVisits {
-						stmt.Free()
-						return nil, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
-					}
-					old, err := bindFloatTableDumpExpression(proofCtx, def, item, ast, increment, legacySpecial, true)
-					if err != nil || !sameLegacyFloatOrigin(item.expr, old) {
-						continue
-					}
-					expected := DeepCopyExpr(old)
-					rebindCtx := function.WithDivPrecisionIncrement(proofCtx.GetContext(), int32(increment))
-					if legacySpecial {
-						rebindCtx = function.WithLegacySpecialConsumers(rebindCtx)
-					}
-					changed, err := widenVerifiedFloatStringExpr(rebindCtx, expected, budget)
-					if err != nil {
-						stmt.Free()
-						if errors.Is(err, errLegacyFloatStringRebind) {
-							return nil, nil
-						}
-						return nil, err
-					}
-					if !changed {
-						stmt.Free()
-						return nil, nil
-					}
-					// Widening can newly require an assignment wrapper when the old
-					// root exactly matched the declared column type. Existing wrappers
-					// keep their declared type and must not be duplicated.
-					if (item.kind == "generated" || item.kind == "default") && isSameColumnType(old.Typ, item.col.Typ) &&
-						!isSameColumnType(expected.Typ, item.col.Typ) {
-						expected, err = makePlan2AssignmentCastExpr(rebindCtx, expected, item.col.Typ)
-						if err != nil {
-							stmt.Free()
-							return nil, err
-						}
-					}
+				proc.GetSessionInfo().TimeZone, proc.GetSessionInfo().LCTimeNames = tz, lc
+				dependency = tableDumpDefaultSession{budget: budget}
+				bound, bindErr := bindTableDumpExpression(ctx, def, item, ast, search.increment, search.mode, &dependency)
+				var proofLimit *floatStringProofBudgetError
+				if errors.As(bindErr, &proofLimit) {
+					return nil, bindErr
+				}
+				if err := ctx.GetContext().Err(); err != nil {
+					return nil, err
+				}
+				return bound, nil
+			}
+			match := func(search tableDumpSessionCandidate, bound *planpb.Expr) bool {
+				if bound != nil && sameLegacyFloatOrigin(item.expr, bound) {
+					matched, witness = bound, search
+					return true
+				}
+				return false
+			}
+			var sessions []tableDumpSessionCandidate
+			maxIncrement := int64(0)
+			if visit.hasDivision {
+				maxIncrement = 30
+			}
+			for increment := int64(0); increment <= maxIncrement; increment++ {
+				modes := []tableDumpBindingMode{tableDumpBindingLegacyFloat}
+				if visit.hasSpecial {
+					modes = append(modes, tableDumpBindingLegacyFloat|tableDumpBindingLegacySpecial)
+				}
+				for _, mode := range modes {
+					formats := []tableDumpBindingMode{mode}
 					if item.kind == "default" {
-						// DEFAULT binding folds constant coercions inside row-dependent
-						// expressions too. Replay that owner after reconciling casts;
-						// already-folded literal roots never enter this migration.
-						if err := chargeFloatStringRebind(expected, budget); err != nil {
-							stmt.Free()
-							return nil, err
-						}
-						expected, err = ConstantFold(batch.EmptyForConstFoldBatch, expected, floatStringProofProcess(rebindCtx, ctx.GetProcess()), false, true)
+						formats = append(formats, mode|tableDumpBindingLegacyFloatFormatting)
+					}
+					foldingEraAdded := false
+					for modeIndex := 0; modeIndex < len(formats); modeIndex++ {
+						mode := formats[modeIndex]
+						search := tableDumpSessionCandidate{increment: increment, mode: mode}
+						bound, err := bind(search, zone, locale)
 						if err != nil {
-							stmt.Free()
 							return nil, err
 						}
-					}
-					budget.visits += visit.nodes
-					if budget.visits > tableDumpMaxCandidateVisits {
-						stmt.Free()
-						return nil, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
-					}
-					mode := tableDumpBindingCurrent
-					if legacySpecial {
-						mode = tableDumpBindingLegacySpecial
-					}
-					if item.kind == "default" {
-						mode |= tableDumpBindingFrozenFloatDefaults
-						budget.visits += visit.nodes
-						if budget.visits > tableDumpMaxCandidateVisits {
-							stmt.Free()
-							return nil, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
+						if item.kind == "default" && dependency.opaqueJSONFolding && !foldingEraAdded {
+							for _, era := range append([]tableDumpBindingMode(nil), formats...) {
+								formats = append(formats, era|tableDumpBindingPreJSONFolding)
+							}
+							foldingEraAdded = true
+						}
+						if match(search, bound) {
+							return finishLegacyFloatStringExpression(ctx, def, item, ast, increment, mode, matched, visit.nodes, budget)
+						}
+						if item.kind == "default" && (dependency.folded || bound == nil && (dependency.timeZone || dependency.locale)) {
+							search.dependency = tableDumpDefaultSession{timeZone: dependency.timeZone, locale: dependency.locale, folded: dependency.folded}
+							sessions = append(sessions, search)
 						}
 					}
-					current, err := bindTableDumpExpression(proofCtx, def, item, ast, increment, mode, &tableDumpDefaultSession{budget: budget})
-					stmt.Free()
-					if err != nil {
-						var limit *floatStringProofBudgetError
-						if ctx.GetContext().Err() != nil {
-							return nil, ctx.GetContext().Err()
-						}
-						if errors.As(err, &limit) {
-							return nil, err
-						}
-						return nil, nil
-					}
-					if !sameTableDumpBoundExpression(expected, current) {
-						return nil, nil
-					}
-					if err := ctx.GetContext().Err(); err != nil {
-						return nil, err
-					}
-					return current, nil
 				}
 			}
+			found, err := matchTableDumpSessions(item.expr, zone, locale, newTableDumpTimeZones(time.LoadLocation), sessions, bind, match)
+			if err != nil || !found {
+				return nil, err
+			}
+			return finishLegacyFloatStringExpression(ctx, def, item, ast, witness.increment, witness.mode, matched, visit.nodes, budget)
+		}()
+		if result != nil || err != nil {
+			return result, err
 		}
-		stmt.Free()
 	}
 	return nil, ctx.GetContext().Err()
+}
+
+func finishLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, old *planpb.Expr, nodes int, budget *tableDumpBindingBudget) (*planpb.Expr, error) {
+	proofCtx := ctx
+	if mode&tableDumpBindingPreJSONFolding != 0 {
+		proofCtx = tableDumpBindContext{CompilerContext: ctx, ctx: context.WithValue(ctx.GetContext(), historicalFloatDefaultFoldingKey{}, true), proc: ctx.GetProcess()}
+	}
+	legacySpecial := mode&tableDumpBindingLegacySpecial != 0
+	if mode&tableDumpBindingLegacyFloatFormatting != 0 {
+		proofCtx = tableDumpBindContext{CompilerContext: ctx, ctx: function.WithLegacyFloatStringFormatting(proofCtx.GetContext()), proc: ctx.GetProcess()}
+	}
+	expected := DeepCopyExpr(old)
+	rebindCtx := function.WithDivPrecisionIncrement(proofCtx.GetContext(), int32(increment))
+	if legacySpecial {
+		rebindCtx = function.WithLegacySpecialConsumers(rebindCtx)
+	}
+	changed, err := widenVerifiedFloatStringExpr(rebindCtx, expected, budget)
+	if err != nil {
+		if errors.Is(err, errLegacyFloatStringRebind) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !changed {
+		return nil, nil
+	}
+	// Widening can newly require an assignment wrapper when the old
+	// root exactly matched the declared column type. Existing wrappers
+	// keep their declared type and must not be duplicated.
+	if (item.kind == "generated" || item.kind == "default") && isSameColumnType(old.Typ, item.col.Typ) &&
+		!isSameColumnType(expected.Typ, item.col.Typ) {
+		expected, err = makePlan2AssignmentCastExpr(rebindCtx, expected, item.col.Typ)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if item.kind == "default" {
+		// DEFAULT binding folds constant coercions inside row-dependent
+		// expressions too. Replay that owner after reconciling casts;
+		// already-folded literal roots never enter this migration.
+		if err := chargeFloatStringRebind(expected, budget); err != nil {
+			return nil, err
+		}
+		expected, err = ConstantFold(batch.EmptyForConstFoldBatch, expected, floatStringProofProcess(rebindCtx, ctx.GetProcess()), false, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+	budget.visits += nodes
+	if budget.visits > tableDumpMaxCandidateVisits {
+		return nil, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
+	}
+	mode &= tableDumpBindingPreJSONFolding
+	if legacySpecial {
+		mode |= tableDumpBindingLegacySpecial
+	}
+	if item.kind == "default" {
+		mode |= tableDumpBindingFrozenFloatDefaults
+		budget.visits += nodes
+		if budget.visits > tableDumpMaxCandidateVisits {
+			return nil, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
+		}
+	}
+	current, err := bindTableDumpExpression(proofCtx, def, item, ast, increment, mode, &tableDumpDefaultSession{budget: budget})
+	if err != nil {
+		var limit *floatStringProofBudgetError
+		if ctx.GetContext().Err() != nil {
+			return nil, ctx.GetContext().Err()
+		}
+		if errors.As(err, &limit) {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if !sameTableDumpBoundExpression(expected, current) {
+		return nil, nil
+	}
+	if err := ctx.GetContext().Err(); err != nil {
+		return nil, err
+	}
+	return current, nil
 }
 
 // An unsupported local reconstruction rejects the whole candidate, including
@@ -369,7 +434,7 @@ func rebindFloatStringFunction(ctx context.Context, original *planpb.Expr, args 
 			}
 		}
 	}
-	bound, err := bindFuncExprImplByPlanExpr(ctx, fn.Func.ObjName, args, true, nil, nil, true)
+	bound, err := bindFuncExprImplByPlanExpr(ctx, nil, fn.Func.ObjName, args, true, nil, nil, true)
 	if err != nil {
 		return nil, err
 	}
@@ -407,7 +472,7 @@ func rebindFloatStringInComparison(ctx context.Context, original *planpb.Expr, a
 		return nil, errLegacyFloatStringRebind
 	}
 	list := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_tuple)}, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: args[1:]}}}
-	return bindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{args[0], list}, true, nil, nil, true)
+	return bindFuncExprImplByPlanExpr(ctx, nil, name, []*planpb.Expr{args[0], list}, true, nil, nil, true)
 }
 
 // chargeFloatStringRebind bounds subtree copies and binder passes, including
@@ -618,11 +683,23 @@ func widenVerifiedFloatStringExpr(ctx context.Context, expr *planpb.Expr, budget
 // floatStringProofProcess changes only the borrowed evaluator's context and
 // diagnostics. No context mode is installed on the caller or persisted tree;
 // ordinary execution always uses current formatting. The child owns no Base.
+// Historical folding is a private catalog proof era, independent of float
+// notation and cast width. Live expressions retain current admission identities.
+type historicalFloatDefaultFoldingKey struct{}
+
+func historicalFloatDefaultFolding(ctx context.Context) bool {
+	legacy, _ := ctx.Value(historicalFloatDefaultFoldingKey{}).(bool)
+	return legacy
+}
+
 func floatStringProofProcess(ctx context.Context, proc *process.Process) *process.Process {
 	child := proc.NewNoContextChildProc(0)
 	child.Ctx = proc.Ctx
 	if function.LegacyFloatStringFormatting(ctx) {
 		child.Ctx = function.WithLegacyFloatStringFormatting(child.Ctx)
+	}
+	if historicalFloatDefaultFolding(ctx) {
+		child.Ctx = context.WithValue(child.Ctx, historicalFloatDefaultFoldingKey{}, true)
 	}
 	child.WarningSink = &process.WarningProbe{}
 	return child

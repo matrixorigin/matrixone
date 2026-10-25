@@ -1995,7 +1995,7 @@ func constantFoldWithPreparedExactSource(
 	if !spatialChecked || !jsonFeatureChecked {
 		features, featureErr := plan.RequiredRemoteExpressionFeatures(expr)
 		if featureErr != nil || (!spatialChecked && features.SpatialDistanceSemantics) ||
-			(!jsonFeatureChecked && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts)) {
+			(!jsonFeatureChecked && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts && !historicalFloatDefaultFolding(proc.Ctx))) {
 			return expr, nil
 		}
 		spatialChecked, jsonFeatureChecked = true, true

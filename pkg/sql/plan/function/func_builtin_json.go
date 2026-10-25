@@ -2532,7 +2532,7 @@ func (op *opBuiltInJsonObject) convertKeyToAny(
 		// MySQL member-name conversion uses the JSON argument's val_str,
 		// including JSON quotes/escapes, not JSON_UNQUOTE. Keep SQL scalar
 		// key conversion below separate from this already-JSON domain.
-		visible, err := concatStringValue(types.T_json, v.GetBytesAt(row))
+		visible, err := concatStringValue(proc.Ctx, types.T_json, v.GetBytesAt(row))
 		return string(visible), err
 	case types.T_char, types.T_varchar, types.T_text:
 		// Prepared key text keeps the previous kind-only conversion. Concrete
