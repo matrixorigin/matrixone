@@ -77,8 +77,9 @@ The shared revision catalog is additive to the existing SQL UDF contract.
 During a rolling tenant upgrade, SQL UDF writers continue using the legacy
 `mo_user_defined_function` row while `mo_function_revisions` is absent. The
 revision-aware writer and reader contract is admitted only at the active service-runtime
-MORPC protocol floor `131` (official main `latest + 1` for this PR). Below that floor, a new
-binary creates ordinary SQL UDFs in the legacy row only, and readers explicitly
+MORPC protocol floor `132` (official main `latest + 1` for this PR). The immediate
+predecessor, 131, rejects Python execution and shared revision publication. Below
+that floor, a new binary creates ordinary SQL UDFs in the legacy row only, and readers explicitly
 use that row so an old writer and a new reader observe the same body. Replacing
 a function that already has a non-zero shared revision head is rejected below
 the floor; this prevents a legacy-only write from leaving a stale immutable
@@ -108,7 +109,7 @@ rechecks every CN before catalog access on login compensation or direct replay; 
 
 Python DDL probes the required tenant schema and refuses admission until it is
 present. Shared revision publication and Python reads require active protocol
-131. That value is rollout state in the service runtime, not a computed live
+132. That value is rollout state in the service runtime, not a computed live
 cluster minimum. Cached/prepared Python plans and new or reused physical
 evaluators check it again before catalog reads, input evaluation or worker calls.
 Below the floor, revision-bearing SQL plans invalidate and rebind to the legacy
