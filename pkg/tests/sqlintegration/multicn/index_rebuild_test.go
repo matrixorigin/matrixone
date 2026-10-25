@@ -25,6 +25,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -39,7 +40,7 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
 	}
 	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 	defer cancel()
 	cn, err := cluster.GetCNService(0)
 	require.NoError(t, err)
@@ -97,6 +98,23 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 		_, err := conn.ExecContext(ctx, statement)
 		require.NoError(t, err, statement)
 	}
+	// A committed write advances its own CN, not a different session's snapshot.
+	// Wait only at committed handoffs; transaction-local index assertions below
+	// must still work without publishing the writer's pending changes.
+	waitCrossCN := func(t *testing.T, writerIndex, readerIndex int) {
+		t.Helper()
+		writer, err := cluster.GetCNService(writerIndex)
+		require.NoError(t, err)
+		reader, err := cluster.GetCNService(readerIndex)
+		require.NoError(t, err)
+		frontier := writer.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+		require.False(t, frontier.IsEmpty(), "writer must publish a commit timestamp")
+		waitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+		defer stop()
+		snapshot, err := reader.RawService().(cnservice.Service).GetTxnClient().WaitLogTailAppliedAt(waitCtx, frontier)
+		require.NoError(t, err)
+		require.True(t, frontier.Less(snapshot), "reader must advance past the writer's commit")
+	}
 	query := func(t *testing.T, statement string) []string {
 		t.Helper()
 		rows, err := conn.QueryContext(ctx, statement)
@@ -139,6 +157,7 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 	for _, table := range []string{"docs", "vectors"} {
 		exec(t, "select mo_ctl('dn','flush','"+schema+"."+table+"')")
 	}
+	waitCrossCN(t, 0, 1)
 	for _, statement := range []string{"use " + schema, "set experimental_fulltext2_index=1", "set experimental_hnsw_index=1"} {
 		_, err = conns[1].ExecContext(ctx, statement)
 		require.NoError(t, err)
@@ -234,6 +253,7 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 						exec(t, statement)
 					}
 					exec(t, "select mo_ctl('dn','flush','"+schema+"."+tc.table+"')")
+					waitCrossCN(t, 0, 1)
 					want = tc.wantAfterDML
 				}
 			}
@@ -253,6 +273,7 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 			if flush {
 				exec(t, "select mo_ctl('dn','flush','"+schema+"."+table+"')")
 			}
+			waitCrossCN(t, 0, 1)
 			// Both ingress CNs use the same original object: at least one has
 			// a remote object owner. Rollback keeps it intact for the next CN.
 			for i, coordinator := range conns {
@@ -299,6 +320,7 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 						require.Len(t, query(t, "show columns from "+table), 2)
 					} else {
 						exec(t, "commit")
+						waitCrossCN(t, 1, 0)
 						conn = conns[0]
 						require.Equal(t, []string{"1\tNULL", "2\tNULL", "3\tNULL"}, query(t, "select id,note from "+table+" order by id"))
 						require.Equal(t, []string{"1"}, query(t, search))

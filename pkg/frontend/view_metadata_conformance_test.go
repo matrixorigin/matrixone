@@ -220,7 +220,7 @@ func testNativeViewMetadataSameSnapshot(t *testing.T, ctx context.Context, compi
 			query := fmt.Sprintf("select column_name, lower(column_type), column_default from information_schema.columns where table_schema='%s' and table_name='conformance_root' order by ordinal_position", database)
 			rows, err := frontend.ReadNativeViewMetadataSQLForTest(request.Context(), compiler, query)
 			require.NoError(t, err)
-			require.Equal(t, [][]string{{"id", "int", "7"}, {"label", fmt.Sprintf("varchar(%d)", width), "'" + defaultValue + "'"}}, rows)
+			require.Equal(t, [][]string{{"id", "int", "7"}, {"label", fmt.Sprintf("varchar(%d)", width), defaultValue}}, rows)
 			require.Positive(t, bound, "必须实际调用 opt-in provider，不能只测已有默认路径")
 			request.Close()
 		}()

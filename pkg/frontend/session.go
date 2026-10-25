@@ -786,7 +786,7 @@ func (ses *Session) addTempTableWithIdentity(
 ) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	key := dbName + "." + alias
+	key := defines.TempTableAliasKey(dbName, alias)
 	if ses.tempTableIdentities == nil {
 		ses.tempTableIdentities = make(map[string]tempTableIdentity)
 	}
@@ -868,7 +868,7 @@ func (ses *Session) snapshotTempTablesForMigration(ctx context.Context) ([]*quer
 func (ses *Session) GetTempTable(dbName, alias string) (string, bool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	val, ok := ses.tempTables[dbName+"."+alias]
+	val, ok := ses.tempTables[defines.TempTableAliasKey(dbName, alias)]
 	return val, ok
 }
 
@@ -930,7 +930,7 @@ func (ses *Session) removeTempTablesByDatabase(dbName, txnKey, stmtKey string) {
 func (ses *Session) removeTempTable(dbName, alias, txnKey, stmtKey string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	key := dbName + "." + alias
+	key := defines.TempTableAliasKey(dbName, alias)
 	if realName, ok := ses.tempTables[key]; ok {
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
 		delete(ses.tempTables, key)
@@ -2153,8 +2153,15 @@ func dropSessionTempTables(
 				WithRoleID(tenant.GetDefaultRoleID()),
 		)
 	}
+	ctx = defines.AttachTemporaryTableAccess(ctx)
 	var cleanupErr error
 	for _, tbl := range tempTables {
+		// Hidden indexes are destroyed by their root's DROP. Independently
+		// dropping one first (or after a failed root DROP) corrupts the root's
+		// remaining index metadata and prevents a later cleanup retry.
+		if tbl.identity.internal {
+			continue
+		}
 		dropSQL := "DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent(tbl.dbName, tbl.realName)
 		res, err := exec.Exec(ctx, dropSQL, opts)
 		if err != nil {
@@ -3217,17 +3224,6 @@ func (ses *Session) RemoveAllPrepareStmts() {
 
 // GetUserDefinedVar gets value of the config
 func (ses *Session) GetConfig(ctx context.Context, varName, dbName, tblName string) (any, error) {
-	// if val, ok := ses.configs[dbName+"-"+varName]; ok {
-	// 	return val, nil
-	// }
-	// if varName == "unique_check_on_autoincr" {
-	// 	ret, err := GetUniqueCheckOnAutoIncr(ctx, ses, dbName)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	ses.configs[dbName+"-"+varName] = ret
-	// 	return ret, nil
-	// }
 	return nil, moerr.NewInternalError(ctx, errorConfigDoesNotExist())
 }
 
@@ -4327,34 +4323,6 @@ func (ses *Session) closeForReset(ctx context.Context) error {
 }
 
 func commitAfterMigrate(ses *Session, err error) error {
-	//if ses == nil {
-	//	logutil.Error("session is nil")
-	//	return moerr.NewInternalErrorNoCtx("session is nil")
-	//}
-	//txnHandler := ses.GetTxnHandler()
-	//if txnHandler == nil {
-	//	logutil.Error("txn handler is nil")
-	//	return moerr.NewInternalErrorNoCtx("txn handler is nil")
-	//}
-	//if txnHandler.GetSession() == nil {
-	//	logutil.Error("ses in txn handler is nil")
-	//	return moerr.NewInternalErrorNoCtx("ses in txn handler is nil")
-	//}
-	//defer func() {
-	//	txnHandler.ClearServerStatus(SERVER_STATUS_IN_TRANS)
-	//	txnHandler.ClearOptionBits(OPTION_BEGIN)
-	//}()
-	//if err != nil {
-	//	if rErr := txnHandler.RollbackTxn(); rErr != nil {
-	//		logutil.Errorf("failed to rollback txn: %v", rErr)
-	//	}
-	//	return err
-	//} else {
-	//	if cErr := txnHandler.CommitTxn(); cErr != nil {
-	//		logutil.Errorf("failed to commit txn: %v", cErr)
-	//		return cErr
-	//	}
-	//}
 	return nil
 }
 

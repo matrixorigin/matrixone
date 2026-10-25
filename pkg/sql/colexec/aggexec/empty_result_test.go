@@ -31,7 +31,9 @@ func TestGetEmptyResultKind(t *testing.T) {
 			ids: []int64{
 				AggIdOfAny, AggIdOfAvg, AggIdOfGroupConcat, AggIdOfJsonArrayAgg,
 				AggIdOfJsonObjectAgg, AggIdOfMax, AggIdOfMaxBy, AggIdOfMaxByNonNull,
-				AggIdOfMedian, AggIdOfMin, AggIdOfApproxPercentile, AggIdOfStdDevPop,
+				AggIdOfMedian, AggIdOfMin, AggIdOfApproxPercentile,
+				AggIdOfPercentileCont, AggIdOfPercentileDisc,
+				AggIdOfQuantileExactWeighted, AggIdOfStdDevPop,
 				AggIdOfStdDevSample, AggIdOfSum, AggIdOfVarPop, AggIdOfVarSample,
 			},
 			want: EmptyResultNull,

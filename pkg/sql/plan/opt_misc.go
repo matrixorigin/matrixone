@@ -1152,41 +1152,45 @@ func checkExprInTags(expr *plan.Expr, tags []int32) bool {
 	return false
 }
 
-func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
+func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) error {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			builder.rewriteDistinctToAGG(child)
+			if err := builder.rewriteDistinctToAGG(child); err != nil {
+				return err
+			}
 		}
 	}
 	if node.NodeType != plan.Node_DISTINCT {
-		return
+		return nil
 	}
 	project := builder.qry.Nodes[node.Children[0]]
 	if project.NodeType != plan.Node_PROJECT {
-		return
+		return nil
 	}
 	if builder.qry.Nodes[project.Children[0]].NodeType == plan.Node_VALUE_SCAN {
-		return
+		return nil
 	}
 
+	groupBy, hashKeys, err := CompactPhysicalGroupKeys(project.ProjectList, node.PhysicalEqualityKeyList)
+	if err != nil {
+		return err
+	}
 	node.NodeType = plan.Node_AGG
-	node.GroupBy = project.ProjectList
+	node.GroupBy, node.GroupByHashKey = groupBy, hashKeys
 	if len(node.PhysicalEqualityKeyList) > 0 {
-		visibleCount := len(node.GroupBy)
+		visibleCount := len(project.ProjectList)
 		node.ProjectList = make([]*plan.Expr, visibleCount)
 		for i, expr := range project.ProjectList {
 			node.ProjectList[i] = GetColExpr(expr.Typ, -1, int32(i))
 		}
-		for i, key := range node.PhysicalEqualityKeyList {
-			node.GroupBy = append(node.GroupBy, DeepCopyExpr(key))
-			node.GroupByHashKey = append(node.GroupByHashKey, int32(visibleCount+i))
-		}
 	}
+	node.PhysicalEqualityKeyList = nil
 	node.BindingTags = project.BindingTags
 	node.BindingTags = append(node.BindingTags, builder.genNewBindTag())
 	node.Children[0] = project.Children[0]
 	node.SpillMem = builder.aggSpillMem
+	return nil
 }
 
 // reuse removeSimpleProjections to delete this plan node
@@ -2482,8 +2486,8 @@ func (builder *QueryBuilder) optimizeFilters(rootID int32) (int32, error) {
 	}
 	ReCalcNodeStats(rootID, builder, true, true, true)
 	builder.rewriteInDomainNotInFilters(rootID)
-	compositePartBlockFilters := builder.collectCompositePartBlockFilters(rootID)
-	builder.mergeFiltersOnCompositeKey(rootID)
+	compositePartBlockFilters, _ := builder.collectCompositePartBlockFilters(rootID, false)
+	builder.mergeFiltersOnCompositeKey(rootID, true)
 	builder.retainConsumedCompositePartBlockFilters(compositePartBlockFilters)
 	foldTableScanFilters(builder.compCtx.GetProcess(), builder.qry, rootID, true)
 	builder.optimizeDateFormatExpr(rootID)

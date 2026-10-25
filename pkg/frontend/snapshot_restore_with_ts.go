@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -530,7 +531,46 @@ func restoreDatabaseFromTS(
 			return
 		}
 	}
+
 	return
+}
+
+// recreatePublicationsAfterDbRestoreTS belongs to the top-level RESTORE
+// DATABASE operation, after its tables, foreign keys and views are restored.
+// The database workers are also used by account/cluster restores: replaying
+// there would change account semantics and duplicate the cluster's final
+// publication phase, which must precede subscription/catalog identity replay.
+// Table restores retain their publications; cross-account restores must not
+// recreate publications in the unchanged source account.
+func recreatePublicationsAfterDbRestoreTS(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	level tree.RestoreLevel,
+	dbName string,
+	restoreAccount uint32,
+	toAccountId uint32,
+	snapshotTs int64,
+	omittedViews map[restoreObjectName]struct{},
+) (err error) {
+	if level != tree.RESTORELEVELDATABASE {
+		return nil
+	}
+	if restoreAccount != toAccountId {
+		getLogger(sid).Info(fmt.Sprintf(
+			"[%d:%d] skip recreate publications of db: %v, the restore crosses accounts %d -> %d",
+			restoreAccount, snapshotTs, dbName, restoreAccount, toAccountId))
+		return nil
+	}
+	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to recreate publications of db: %v",
+		restoreAccount, snapshotTs, dbName))
+	return createPubByPitr(
+		ctx, sid, bh,
+		fmt.Sprintf("snapshot restore %s, ts %d", dbName, snapshotTs),
+		dbName,
+		restoreAccount,
+		snapshotTs,
+		omittedViews)
 }
 
 func getCreateDatabaseSqlFromTS(ctx context.Context,

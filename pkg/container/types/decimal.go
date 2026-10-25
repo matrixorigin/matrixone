@@ -1941,6 +1941,19 @@ func Decimal128FromCoefficient(digits []byte) (Decimal128, error) {
 	if len(digits) > 38 {
 		return Decimal128{}, moerr.NewInvalidInputNoCtx("invalid Decimal128 coefficient")
 	}
+	if len(digits) <= 18 {
+		// An unsigned coefficient below 10^18 fits in the low word without
+		// overflow. Token syntax, sign, scale and precision remain the callers'
+		// responsibility; retain this helper's digit validation and error.
+		var value uint64
+		for _, digit := range digits {
+			if digit < '0' || digit > '9' {
+				return Decimal128{}, moerr.NewInvalidInputNoCtx("invalid Decimal128 coefficient")
+			}
+			value = value*10 + uint64(digit-'0')
+		}
+		return Decimal128{B0_63: value}, nil
+	}
 	var value Decimal128
 	for _, digit := range digits {
 		if digit < '0' || digit > '9' {

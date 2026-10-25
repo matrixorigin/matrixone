@@ -38,21 +38,6 @@ const (
 	fixBufferSize = 1024 * 1024
 )
 
-type SessionConn interface {
-	ID() uint64
-	RawConn() net.Conn
-	UseConn(net.Conn)
-	Disconnect() error
-	Close() error
-	Read() ([]byte, error)
-	Append(...byte) error
-	BeginPacket() error
-	FinishedPacket() error
-	Flush() error
-	Write([]byte) error
-	RemoteAddress() string
-}
-
 var _ Allocator = new(BufferAllocator)
 
 type BufferAllocator struct {

@@ -171,6 +171,230 @@ alter table drop_columns drop column a, drop check ck_sum;
 select * from drop_columns order by id;
 id    b
 1    1
+create table dc_single(id int primary key,v int,constraint ck_dcs check(v>0));
+insert into dc_single values (1,10);
+alter table dc_single drop column v;
+select column_name from information_schema.columns
+where table_schema=database() and table_name='dc_single' order by ordinal_position;
+column_name
+id
+select constraint_name from information_schema.table_constraints
+where table_schema=database() and table_name='dc_single' and constraint_type='CHECK';
+constraint_name
+select * from dc_single;
+id
+1
+create table dc_none(id int primary key,v int,w int,constraint ck_dcn check(w>0));
+insert into dc_none values (1,10,20);
+alter table dc_none drop column v;
+select constraint_name,check_clause from information_schema.check_constraints
+where constraint_schema=database() and constraint_name='ck_dcn' order by constraint_name;
+constraint_name    check_clause
+ck_dcn    `w` > 0
+insert into dc_none values (2,-1);
+constraint violation: Check constraint 'ck_dcn' is violated
+insert into dc_none values (2,30);
+select * from dc_none order by id;
+id    w
+1    20
+2    30
+create table dc_multi(id int primary key,a int,b int,c int,constraint ck_dcm_ab check(a+b>0),constraint ck_dcm_c check(c>0));
+insert into dc_multi values (1,1,1,1);
+alter table dc_multi drop column b;
+Check constraint 'ck_dcm_ab' uses column 'b', hence column cannot be dropped or renamed.
+select column_name from information_schema.columns
+where table_schema=database() and table_name='dc_multi' order by ordinal_position;
+column_name
+id
+a
+b
+c
+select constraint_name,check_clause from information_schema.check_constraints
+where constraint_schema=database() and constraint_name like 'ck_dcm%' order by constraint_name;
+constraint_name    check_clause
+ck_dcm_ab    `a` + `b` > 0
+ck_dcm_c    `c` > 0
+insert into dc_multi values (2,-1,0,1);
+constraint violation: Check constraint 'ck_dcm_ab' is violated
+insert into dc_multi values (2,1,0,1);
+select count(*) from dc_multi;
+count(*)
+2
+alter table dc_multi drop check ck_dcm_ab, drop column b;
+select column_name from information_schema.columns
+where table_schema=database() and table_name='dc_multi' order by ordinal_position;
+column_name
+id
+a
+c
+select constraint_name,check_clause from information_schema.check_constraints
+where constraint_schema=database() and constraint_name like 'ck_dcm%' order by constraint_name;
+constraint_name    check_clause
+ck_dcm_c    `c` > 0
+insert into dc_multi values (3,1,-2);
+constraint violation: Check constraint 'ck_dcm_c' is violated
+insert into dc_multi values (3,1,2);
+select * from dc_multi order by id;
+id    a    c
+1    1    1
+2    1    1
+3    1    2
+create table dc_replace(id int primary key,v int,w int,constraint ck_dcmn check(v>0));
+insert into dc_replace values (1,10,20);
+alter table dc_replace drop column v, add constraint ck_dcmn check(w>0);
+select column_name from information_schema.columns
+where table_schema=database() and table_name='dc_replace' order by ordinal_position;
+column_name
+id
+w
+select constraint_name,check_clause from information_schema.check_constraints
+where constraint_schema=database() and constraint_name='ck_dcmn';
+constraint_name    check_clause
+ck_dcmn    `w` > 0
+insert into dc_replace values (2,-5);
+constraint violation: Check constraint 'ck_dcmn' is violated
+insert into dc_replace values (2,30);
+select * from dc_replace order by id;
+id    w
+1    20
+2    30
+create table dc_readd(id int primary key,v int,constraint ck_dcr check(v>0));
+insert into dc_readd values (1,10);
+alter table dc_readd drop column v,add column v int default -1;
+select constraint_name from information_schema.table_constraints
+where table_schema=database() and table_name='dc_readd' and constraint_type='CHECK';
+constraint_name
+insert into dc_readd values (2,default);
+insert into dc_readd values (3,-5);
+select * from dc_readd order by id;
+id    v
+1    -1
+2    -1
+3    -5
+create table dc_atomic(id int primary key,v int,w int generated always as (v+1) stored,constraint ck_dca check(v>0));
+insert into dc_atomic(id,v) values (1,10);
+alter table dc_atomic drop column v;
+invalid input: Cannot modify column 'v': generated column 'w' depends on it
+select column_name from information_schema.columns
+where table_schema=database() and table_name='dc_atomic' order by ordinal_position;
+column_name
+id
+v
+w
+select constraint_name from information_schema.table_constraints
+where table_schema=database() and table_name='dc_atomic' and constraint_type='CHECK';
+constraint_name
+ck_dca
+select * from dc_atomic;
+id    v    w
+1    10    11
+create table dc_identity(id int primary key,v int,constraint ck_dci check(v>0));
+insert into dc_identity values (1,10);
+alter table dc_identity rename column v to x, add column v int, drop column v;
+select column_name from information_schema.columns
+where table_schema=database() and table_name='dc_identity' order by ordinal_position;
+column_name
+id
+x
+select constraint_name,check_clause from information_schema.check_constraints
+where constraint_schema=database() and constraint_name='ck_dci';
+constraint_name    check_clause
+ck_dci    `x` > 0
+insert into dc_identity values (2,-1);
+constraint violation: Check constraint 'ck_dci' is violated
+insert into dc_identity values (2,1);
+select * from dc_identity order by id;
+id    x
+1    10
+2    1
+create table dc_generic(id int primary key,v int,constraint ck_dcg check(v>0));
+insert into dc_generic values (1,10);
+alter table dc_generic drop constraint ck_dcg, drop column v;
+select column_name from information_schema.columns
+where table_schema=database() and table_name='dc_generic' order by ordinal_position;
+column_name
+id
+select * from dc_generic;
+id
+1
+create table dc_generic2(id int primary key,v int,constraint ck_dcg2 check(v>0));
+insert into dc_generic2 values (1,10);
+alter table dc_generic2 drop column v, drop constraint ck_dcg2;
+select column_name from information_schema.columns
+where table_schema=database() and table_name='dc_generic2' order by ordinal_position;
+column_name
+id
+select * from dc_generic2;
+id
+1
+create table dc_rebind(id int primary key,v int,w int,constraint ck_dcr check(v>0));
+insert into dc_rebind values (1,10,-1);
+alter table dc_rebind drop column v, add column v int default 1, add constraint ck_dcr check(w>0);
+constraint violation: Check constraint 'ck_dcr' is violated
+select column_name from information_schema.columns
+where table_schema=database() and table_name='dc_rebind' order by ordinal_position;
+column_name
+id
+v
+w
+select constraint_name,check_clause from information_schema.check_constraints
+where constraint_schema=database() and constraint_name='ck_dcr';
+constraint_name    check_clause
+ck_dcr    `v` > 0
+select * from dc_rebind;
+id    v    w
+1    10    -1
+create table dc_rebind2(id int primary key,v int,w int,constraint ck_dcr2 check(v>0));
+insert into dc_rebind2 values (1,10,5);
+alter table dc_rebind2 drop column v, add column v int default 1, add constraint ck_dcr2 check(w>0);
+select constraint_name,check_clause from information_schema.check_constraints
+where constraint_schema=database() and constraint_name='ck_dcr2';
+constraint_name    check_clause
+ck_dcr2    `w` > 0
+insert into dc_rebind2 values (2,-5,9);
+constraint violation: Check constraint 'ck_dcr2' is violated
+insert into dc_rebind2 values (2,5,-9);
+select * from dc_rebind2 order by id;
+id    w    v
+1    5    1
+2    5    -9
+set @saved_dcp = @@div_precision_increment;
+set div_precision_increment = 10;
+create table dc_prec(id int primary key,a decimal(10,2),b decimal(10,2),v int,constraint ck_dcp check(a/b>0.3333333));
+insert into dc_prec values (1,1,3,0);
+create table dc_prec2(id int primary key,a decimal(10,2),b decimal(10,2),v int,constraint ck_dcp2 check(a/b>0.3333333));
+set div_precision_increment = 0;
+alter table dc_prec rename column a to x, drop column v;
+select constraint_name,check_clause from information_schema.check_constraints
+where constraint_schema=database() and constraint_name='ck_dcp';
+constraint_name    check_clause
+ck_dcp    `x` / `b` > 0.3333333
+insert into dc_prec values (2,1,3);
+insert into dc_prec values (3,1,4);
+constraint violation: Check constraint 'ck_dcp' is violated
+select * from dc_prec order by id;
+id    x    b
+1    1.00    3.00
+2    1.00    3.00
+alter table dc_prec2 rename column a to x, drop column v;
+insert into dc_prec2 values (1,1,3);
+select * from dc_prec2;
+id    x    b
+1    1.00    3.00
+set div_precision_increment = @saved_dcp;
+drop table dc_prec;
+drop table dc_prec2;
+drop table dc_single;
+drop table dc_none;
+drop table dc_multi;
+drop table dc_replace;
+drop table dc_readd;
+drop table dc_atomic;
+drop table dc_identity;
+drop table dc_generic;
+drop table dc_generic2;
+drop table dc_rebind;
+drop table dc_rebind2;
 create table runs(id int primary key,status varchar(20));
 insert into runs values (1,'RUNNING');
 alter table runs add check(status in ('SCHEDULED','FAILED','FINISHED','RUNNING','KILLED'));

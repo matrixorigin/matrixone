@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -1622,7 +1621,7 @@ func restoreToDatabaseOrTableWithPitr(
 	// restore publication record
 	if !restoreToTbl {
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create pub: %v", pitrName, dbName))
-		if err = createPubByPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts); err != nil {
+		if err = createPubByPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts, nil); err != nil {
 			return
 		}
 	}
@@ -2624,7 +2623,8 @@ func createPubByPitr(
 	pitrName,
 	dbName string,
 	toAccountId uint32,
-	ts int64) (err error) {
+	ts int64,
+	omittedViews map[restoreObjectName]struct{}) (err error) {
 	// read pub info from mo_pubs
 	sql := getPubInfoWithPitr(ts, toAccountId, dbName)
 	getLogger(sid).Info(fmt.Sprintf("[%s] create pub: get pub info sql: %s", pitrName, sql))
@@ -2644,30 +2644,13 @@ func createPubByPitr(
 	}
 
 	// restore pub to toAccount
-	var ast []tree.Statement
-	defer func() {
-		for _, s := range ast {
-			s.Free()
-		}
-	}()
-
 	for _, pubInfo := range pubInfos {
 		// mo_pubs stores the role in owner and the user in creator.  AttachAccount
 		// takes the user before the role, so keep the historical publication
 		// identities in their respective context slots while replaying the CREATE.
 		toCtx := defines.AttachAccount(ctx, toAccountId, pubInfo.Creator, pubInfo.Owner)
-		if ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1); err != nil {
-			return
-		}
-
-		getLogger(sid).Info(fmt.Sprintf("[%s] create pub: create pub sql: %s", pitrName, pubInfo.GetCreateSql()))
-		var lowerCaseTableNames int64
-		if publicationCreateValidatesTableScope(ast[0].(*tree.CreatePublication)) {
-			if lowerCaseTableNames, err = publicationBackgroundLowerCaseTableNames(ctx, bh); err != nil {
-				return
-			}
-		}
-		if err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication), lowerCaseTableNames); err != nil {
+		getLogger(sid).Info(fmt.Sprintf("[%s] recreate publication %s for database %s", pitrName, pubInfo.PubName, pubInfo.DbName))
+		if err = createPublicationFromRestoreInfo(toCtx, bh, pubInfo, ts, omittedViews); err != nil {
 			return
 		}
 	}

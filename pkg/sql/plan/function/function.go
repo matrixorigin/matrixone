@@ -95,11 +95,41 @@ func GetFunctionIsWinValueFunByName(name string) bool {
 	return f.isWindowValue()
 }
 
+// GetFunctionIsWinIndicatorFunByName reports whether name is one of the
+// technical-indicator window kernels (issue #29949): WIN_VALUE-class
+// registrations that the window operator evaluates through the indicator
+// state machine instead of the value/aggregate paths. They are never
+// aggregates and never carry aggexec kernels.
+func GetFunctionIsWinIndicatorFunByName(name string) bool {
+	fid, exists := getFunctionIdByNameWithoutErr(name)
+	return exists && GetFunctionIsWinIndicatorFunById(fid)
+}
+
+// GetFunctionIsWinIndicatorFunById is the ID-set membership of the indicator
+// kernel family, shared by the executor dispatch, the frame-ignoring window
+// binding and the binder's section-4 surface validation.
+func GetFunctionIsWinIndicatorFunById(fid int32) bool {
+	switch fid {
+	case SMA, WMA, TRIMA, EMA, WILDER, KAMA, DEMA, TEMA, T3, MMAXDRAWDOWN, CUMPOSITIVESTREAK:
+		return true
+	}
+	return false
+}
+
 // GetFunctionIgnoresWindowFrameByName reports whether a window function
 // operates on partition-relative row positions instead of the current frame.
 func GetFunctionIgnoresWindowFrameByName(name string) bool {
 	fid, exists := getFunctionIdByNameWithoutErr(name)
-	return exists && (fid == LAG || fid == LEAD)
+	if !exists {
+		return false
+	}
+	if fid == LAG || fid == LEAD {
+		return true
+	}
+	// The indicator kernels define extent through the period parameter;
+	// a frame-less OVER clause binds with the default synthetic frame and
+	// explicit frames are rejected by the window binder.
+	return GetFunctionIsWinIndicatorFunById(fid)
 }
 
 func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
@@ -113,6 +143,17 @@ func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 		}
 	}
 	return false
+}
+
+// GetFunctionValueUnstableByID reports the resolved function's own instability
+// within one execution. Callers must inspect its arguments separately.
+// Execution stability does not relax folding or diagnostic-count restrictions.
+func GetFunctionValueUnstableByID(overloadID int64) (unstable, known bool) {
+	ov, known := GetFunctionByIdWithoutError(overloadID)
+	if !known {
+		return false, false
+	}
+	return ov.IsVolatile() && !ov.executionStable, true
 }
 
 // provenPureValueFunctions lists every SQL builtin registration that is
@@ -570,6 +611,9 @@ func getFunctionByName(
 	if r.fid == UNIX_TIMESTAMP && LegacyUnixTimestampDatetime(ctx) {
 		check = fixedTypeMatch(f.Overloads[:4], args)
 	}
+	if legacy, ok := legacyIncompleteTemporalCheck(ctx, r.fid, f.Overloads, args); ok {
+		check = legacy
+	}
 	if r.fid == INTEGER_DIV && LegacyDecimalIntegerDiv(ctx) {
 		check = legacyIntegerDivCheck(args)
 	}
@@ -804,6 +848,14 @@ func DeduceNotNullableForBinding(ctx context.Context, overloadID int64, args []*
 func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr) bool {
 	fid, oid := DecodeOverloadID(overloadID)
 	switch fid {
+	case SMA, WMA, TRIMA, EMA, WILDER, KAMA, DEMA, TEMA, T3, MMAXDRAWDOWN:
+		// Indicator kernels emit leading warmup NULLs (issue #29949,
+		// design section 4); never proven not-nullable regardless of
+		// argument nullability.
+		return false
+	case CUMPOSITIVESTREAK:
+		// Dense output: NULL observations emit 0, never NULL.
+		return true
 	case EXTRACT:
 		// Numeric EXTRACT synthesizes NULL for invalid text/fields and zero
 		// calendar weeks. Released overloads 0..4 retain their physical ABI.
@@ -820,6 +872,17 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 		// Calendar calculations reject zero dates; FROM_DAYS rejects values
 		// above the representable calendar even when the input is NOT NULL.
 		return false
+	case TO_DAYS, TO_SECONDS:
+		// String calendar totals reject incomplete dates even when the input
+		// column is NOT NULL. Preserve the legacy typed overload's contract.
+		if oid == 1 {
+			return false
+		}
+	case DATEDIFF:
+		// Either string operand can be rejected and synthesize NULL.
+		if oid >= 1 && oid <= 3 {
+			return false
+		}
 	case DATE:
 		// Typed zero dates can become NULL under NO_ZERO_DATE, and string
 		// conversions synthesize NULL for malformed input.
@@ -1170,8 +1233,13 @@ type overload struct {
 	// TODO: there is not a good place to use that in plan now. the attribute is not effective.
 	cannotParallel bool
 
-	// Volatile overloads can return different values for the same inputs.
+	// Legacy volatile policy also protects execution-time diagnostics and session
+	// settings from folding. It need not imply different values on replay.
 	volatile bool
+	// A positive proof of repeatable values for fixed arguments and execution
+	// context. Folding and diagnostic-count restrictions remain in force.
+	// Unannotated volatile overloads retain conservative identity requirements.
+	executionStable bool
 	// Deterministic values may still emit diagnostics once per evaluated row.
 	// Folding or changing their evaluation count would lose those effects.
 	rowScopedDiagnostics bool
@@ -1179,8 +1247,8 @@ type overload struct {
 	realTimeRelated bool
 }
 
-// IsVolatile reports value instability, independently of diagnostic effects.
-// Use this for deterministic-expression admission, such as generated columns.
+// IsVolatile retains the legacy conservative evaluation policy. For value
+// repeatability within one execution, use GetFunctionValueUnstableByID.
 func (ov *overload) IsVolatile() bool {
 	return ov.volatile
 }
