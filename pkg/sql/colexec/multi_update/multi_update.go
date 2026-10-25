@@ -45,9 +45,14 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 	} else {
 		update.OpAnalyzer.Reset()
 	}
-
 	if update.ctr.sources == nil {
 		update.ctr.sources = make(map[uint64]engine.Relation)
+	} else {
+		for _, source := range update.ctr.sources {
+			if err := source.Reset(proc.GetTxnOperator()); err != nil {
+				return err
+			}
+		}
 	}
 
 	if update.ctr.updateCtxInfos == nil {
@@ -75,7 +80,6 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 			update.ctr.updateCtxInfos[updateCtx.TableDef.Name] = info
 		}
 	}
-
 	for _, updateCtx := range update.MultiUpdateCtx {
 		info := update.ctr.updateCtxInfos[updateCtx.TableDef.Name]
 		if update.Action != UpdateWriteS3 {
@@ -85,11 +89,8 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 					return err
 				}
 				info.Source = rel
-			} else {
-				err := info.Source.Reset(proc.GetTxnOperator())
-				if err != nil {
-					return err
-				}
+			} else if err := info.Source.Reset(proc.GetTxnOperator()); err != nil {
+				return err
 			}
 		}
 	}
@@ -494,6 +495,7 @@ func (update *MultiUpdate) getSourceByID(
 		return nil, err
 	}
 
+	r = engine.NewRelationHandle(r)
 	update.ctr.sources[id] = r
 	return r, nil
 }

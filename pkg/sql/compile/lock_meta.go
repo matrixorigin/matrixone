@@ -60,14 +60,7 @@ func (l *LockMeta) clear(proc *process.Process) {
 	for k := range l.metaTables {
 		delete(l.metaTables, k)
 	}
-	if l.lockDbExe != nil {
-		l.lockDbExe.Free()
-		l.lockDbExe = nil
-	}
-	if l.lockTableExe != nil {
-		l.lockTableExe.Free()
-		l.lockTableExe = nil
-	}
+	l.clearInitializedState()
 	for _, vec := range l.lockMetaVecs {
 		vec.Free(proc.Mp())
 	}
@@ -210,11 +203,17 @@ func (l *LockMeta) lockMetaRows(e engine.Engine, proc *process.Process, rel engi
 }
 
 func (l *LockMeta) initLockExe(e engine.Engine, proc *process.Process) error {
-	if l.lockTableExe != nil {
-		l.table_rel.Reset(proc.GetTxnOperator())
-		l.database_rel.Reset(proc.GetTxnOperator())
-		return nil
+	if l.lockDbExe != nil && l.lockTableExe != nil &&
+		l.database_rel != nil && l.table_rel != nil {
+		if err := l.table_rel.Reset(proc.GetTxnOperator()); err != nil {
+			return err
+		}
+		return l.database_rel.Reset(proc.GetTxnOperator())
 	}
+	// Publish the executors and relation handles only after the whole
+	// initialization succeeds. A retry after a partial engine/catalog failure
+	// must rebuild missing state instead of resetting nil relations.
+	l.clearInitializedState()
 
 	accountTyp := types.T_uint32.ToType()
 	accountIdExpr := &plan.Expr{
@@ -250,21 +249,30 @@ func (l *LockMeta) initLockExe(e engine.Engine, proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	exec, err := colexec.NewExpressionExecutor(proc, lockDbExpr)
+	lockDbExe, err := colexec.NewExpressionExecutor(proc, lockDbExpr)
 	if err != nil {
 		return err
 	}
-	l.lockDbExe = exec
+	var lockTableExe colexec.ExpressionExecutor
+	initialized := false
+	defer func() {
+		if initialized {
+			return
+		}
+		lockDbExe.Free()
+		if lockTableExe != nil {
+			lockTableExe.Free()
+		}
+	}()
 
 	lockTblxpr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, function.SerialFunctionName, []*plan.Expr{accountIdExpr, dbNameExpr, tblNameExpr})
 	if err != nil {
 		return err
 	}
-	exec, err = colexec.NewExpressionExecutor(proc, lockTblxpr)
+	lockTableExe, err = colexec.NewExpressionExecutor(proc, lockTblxpr)
 	if err != nil {
 		return err
 	}
-	l.lockTableExe = exec
 
 	dbSource, err := e.Database(proc.Ctx, catalog.MO_CATALOG, proc.GetTxnOperator())
 	if err != nil {
@@ -274,15 +282,42 @@ func (l *LockMeta) initLockExe(e engine.Engine, proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	l.database_table_id = rel.GetTableID(proc.Ctx)
-	l.database_rel = rel
+	if rel == nil {
+		return moerr.NewNoSuchTable(proc.Ctx, catalog.MO_CATALOG, catalog.MO_DATABASE)
+	}
+	databaseRel := engine.NewRelationHandle(rel)
 
 	rel, err = dbSource.Relation(proc.Ctx, catalog.MO_TABLES, nil)
 	if err != nil {
 		return err
 	}
-	l.table_table_id = rel.GetTableID(proc.Ctx)
-	l.table_rel = rel
+	if rel == nil {
+		return moerr.NewNoSuchTable(proc.Ctx, catalog.MO_CATALOG, catalog.MO_TABLES)
+	}
+	tableRel := engine.NewRelationHandle(rel)
+	databaseTableID := databaseRel.GetTableID(proc.Ctx)
+	tableTableID := tableRel.GetTableID(proc.Ctx)
+
+	l.lockDbExe = lockDbExe
+	l.lockTableExe = lockTableExe
+	l.database_table_id = databaseTableID
+	l.database_rel = databaseRel
+	l.table_table_id = tableTableID
+	l.table_rel = tableRel
+	initialized = true
 
 	return nil
+}
+
+func (l *LockMeta) clearInitializedState() {
+	if l.lockDbExe != nil {
+		l.lockDbExe.Free()
+		l.lockDbExe = nil
+	}
+	if l.lockTableExe != nil {
+		l.lockTableExe.Free()
+		l.lockTableExe = nil
+	}
+	l.database_rel = nil
+	l.table_rel = nil
 }

@@ -32,7 +32,7 @@ func TestPartitionDeleteCallDoesNotMutateSharedObjectRef(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	proc, eng := prepareDeletionTest(t, ctrl, false)
+	proc, eng, _ := prepareDeletionTest(t, ctrl, false)
 
 	raw := &Deletion{
 		DeleteCtx: &DeleteCtx{
