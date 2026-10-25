@@ -382,7 +382,7 @@ func TestFindInSetInternalArityIsPlannerOnly(t *testing.T) {
 	_, err := BindFuncExprImplByPlanExpr(ctx, "find_in_set", internalArgs)
 	require.Error(t, err)
 
-	bound, err := bindFuncExprImplByPlanExpr(ctx, "find_in_set", internalArgs, true, nil, nil, true, nil)
+	bound, err := bindFuncExprImplByPlanExpr(ctx, nil, "find_in_set", internalArgs, true, nil, nil, true, nil)
 	require.NoError(t, err)
 	require.Len(t, bound.GetF().GetArgs(), 3)
 
