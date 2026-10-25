@@ -394,6 +394,15 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 		return nil, err
 	}
 
+	// Exact weighted percentiles are rejected in time-window contexts, the
+	// same contract the ordered-set percentile aggregates keep (decision D9
+	// of the exact weighted percentile design).
+	if b.ctx != nil && b.ctx.timeTag > 0 &&
+		strings.EqualFold(funcName, NameQuantileExactWeighted) {
+		return nil, moerr.NewNotSupported(b.GetContext(),
+			"exact weighted percentile aggregates in time windows")
+	}
+
 	b.insideAgg = true
 	var expr *plan.Expr
 	var err error

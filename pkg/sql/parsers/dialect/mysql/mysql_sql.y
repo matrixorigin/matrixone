@@ -669,7 +669,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 // Built-in function
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT SERIAL_EXTRACT
-%token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
+%token <str> APPROX_PERCENTILE QUANTILE_EXACT_WEIGHTED CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> CLUSTER_CENTERS KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
@@ -14139,6 +14139,17 @@ function_call_aggregate:
             WithinGroup: $5 != nil,
         }
     }
+|   QUANTILE_EXACT_WEIGHTED '(' func_type_opt expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $4,
+            Type: $3,
+            WindowSpec: $6,
+        }
+    }
 |  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt kmeans_opt ')' window_spec_opt
       {
   	    name := tree.NewUnresolvedColName($1)
@@ -17117,6 +17128,7 @@ not_keyword:
 |   APPROX_COUNT
 |   APPROX_COUNT_DISTINCT
 |   APPROX_PERCENTILE
+|   QUANTILE_EXACT_WEIGHTED
 |   CURDATE
 |   CURTIME
 |   DATE_ADD
