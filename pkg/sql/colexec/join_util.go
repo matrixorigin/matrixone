@@ -29,6 +29,11 @@ import (
 type Batches struct {
 	Buf     []*batch.Batch
 	MemSize int64
+
+	// Allocation tracking is enabled only by an owner with a retained-byte
+	// budget. Mutations through this type then account only the touched batch.
+	trackAllocation bool
+	retainedBytes   int64
 }
 
 func (bs *Batches) RowCount() int {
@@ -45,6 +50,7 @@ func (bs *Batches) Clean(mp *mpool.MPool) {
 	}
 	bs.Buf = nil
 	bs.MemSize = 0
+	bs.retainedBytes = 0
 }
 
 func (bs *Batches) CleanOnlyData() {
@@ -53,21 +59,27 @@ func (bs *Batches) CleanOnlyData() {
 	}
 	bs.Buf = nil
 	bs.MemSize = 0
+	bs.retainedBytes = 0
 }
 func (bs *Batches) Reset() {
+	bs.trackAllocation = false
 	if bs.Buf != nil {
 		bs.Buf = nil
 	}
 	bs.MemSize = 0
+	bs.retainedBytes = 0
 }
 
 // copy from input batch into batches
 // the batches structure hold data in fix size 8192 rows, and continue to append from next batch
 // if error return , the batches will clean itself
 func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err error) {
+	oldCapacity := cap(bs.Buf)
 	defer func() {
 		if err != nil {
 			bs.Clean(proc.Mp())
+		} else if bs.trackAllocation {
+			bs.retainedBytes += int64(cap(bs.Buf)-oldCapacity) * int64(unsafe.Sizeof((*batch.Batch)(nil)))
 		}
 	}()
 
@@ -82,6 +94,9 @@ func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err
 			return err
 		}
 		bs.MemSize += int64(tmp.Size())
+		if bs.trackAllocation {
+			bs.retainedBytes += batchAllocated(tmp)
+		}
 		bs.Buf = append(bs.Buf, tmp)
 		lenBuf := len(bs.Buf)
 		if lenBuf > 1 && bs.Buf[lenBuf-2].RowCount() != DefaultBatchSize {
@@ -97,8 +112,12 @@ func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err
 
 	for offset < length {
 		lenBuf := len(bs.Buf)
+		previous := int64(0)
 		if lenBuf > 0 && bs.Buf[lenBuf-1].RowCount() != DefaultBatchSize {
 			tmp = bs.Buf[lenBuf-1]
+			if bs.trackAllocation {
+				previous = batchAllocated(tmp)
+			}
 		} else {
 			preAllocSize := min(length-offset, DefaultBatchSize)
 			tmp, err = proc.NewBatchFromSrc(src, preAllocSize)
@@ -113,6 +132,9 @@ func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err
 		}
 		if tmp.RowCount() == DefaultBatchSize {
 			bs.MemSize += int64(tmp.Size())
+		}
+		if bs.trackAllocation {
+			bs.retainedBytes += batchAllocated(tmp) - previous
 		}
 		offset += appendRows
 	}
@@ -162,6 +184,9 @@ func (bs *Batches) Shrink(ignoreRow *bitmap.Bitmap, proc *process.Process) error
 
 	bs.Clean(proc.Mp())
 	bs.Buf = newBuf
+	if bs.trackAllocation {
+		bs.retainedBytes = bs.Allocated()
+	}
 
 	return nil
 }
@@ -200,10 +225,32 @@ func appendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int,
 func (bs *Batches) Allocated() int64 {
 	total := int64(cap(bs.Buf)) * int64(unsafe.Sizeof((*batch.Batch)(nil)))
 	for _, bat := range bs.Buf {
-		total += batchAllocationMetadata(bat)
-		for _, vec := range bat.Vecs {
-			total += int64(vec.Allocated() + nulls.Allocated(vec.GetNulls()) + nulls.Allocated(vec.GetGrouping()))
-		}
+		total += batchAllocated(bat)
+	}
+	return total
+}
+
+// TrackAllocation starts retained-byte accounting at the budget owner. Buf and
+// its vectors must subsequently be mutated through Batches until transfer/reset.
+func (bs *Batches) TrackAllocation() {
+	if !bs.trackAllocation {
+		bs.retainedBytes = bs.Allocated()
+		bs.trackAllocation = true
+	}
+}
+
+// RetainedBytes is constant time; Allocated remains the independent full recount.
+func (bs *Batches) RetainedBytes() int64 {
+	if !bs.trackAllocation {
+		panic("batch allocation tracking is not enabled")
+	}
+	return bs.retainedBytes
+}
+
+func batchAllocated(bat *batch.Batch) int64 {
+	total := batchAllocationMetadata(bat)
+	for _, vec := range bat.Vecs {
+		total += int64(vec.Allocated() + nulls.Allocated(vec.GetNulls()) + nulls.Allocated(vec.GetGrouping()))
 	}
 	return total
 }

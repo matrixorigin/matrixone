@@ -1,7 +1,7 @@
 {
   "id": "D36",
-  "revision": 3,
-  "status": "DESIGN_REVIEW_PENDING_REV3",
+  "revision": 4,
+  "status": "ARCHITECTURE_APPROVED_WITH_EXPLICIT_USER_BASELINE_POLICY",
   "created_utc": "2026-10-23T15:54:23.138922+00:00",
   "scope": "Rebase the complete existing import-memory fix series onto the explicitly requested release v4.1.6-hotfix-20261021 and reconcile official pipeline completion with import ownership; remove verified ordinary SELECT accounting hot-path regressions.",
   "owner": "root; pipeline integration worker and performance worker to be assigned exclusive files; independent design reviewer required before production resolution",
@@ -128,7 +128,7 @@
     },
     {
       "contract": "TPCH performance",
-      "evidence": "Same declared legacy3CN resource/cache/harness/loader setup as tag ed9;100G/1T raw q1..q22 after warmup with actual plans and elapsed cycles. Investigate any material delta; if old historical noise cannot resolve causality, obtain a contemporaneous pinned-ed9 control before acceptance. No regression is pre-accepted as a memory tradeoff."
+      "evidence": "Same declared legacy3CN resource/cache/harness/loader as the already completed official ed9 reference run39559943872; newcandidate100G/1T raw q1..q22 after warmup with plans/cycle totals. Reuse existing ed9 raw per explicit user decision; do not rerun that baseline. Investigate observed regression without claiming unmeasured causality or accepting it as a memory tradeoff."
     },
     {
       "contract": "Final delivery",
@@ -163,7 +163,7 @@
       "decision_point": "Source complexity correction is allowed; no claim of timing causality without profile or controlled discriminating evidence."
     }
   ],
-  "updated_utc": "2026-10-23T16:22:29.025820+00:00",
+  "updated_utc": "2026-10-23T16:59:37.630127+00:00",
   "supersession": {
     "scope": "D36 replaces rev19 D27/D28 legacy nil acknowledgement/destructor instructions only where they conflict with official tag PipelineEdge typed terminal lifecycle. All other I/W/D/DAG/wire/native rules stay inherited.",
     "delivery": "After approval, commit this delta and an explicit revision20 reference in the design document. Do not leave contradictory legacy cleanup instructions normative."
@@ -258,14 +258,14 @@
     },
     "B4": {
       "statistic": "Primary: median over measured full cycles of sum(q1..q22 execution milliseconds); exclude one warmup.100G3 cycles and1T2 as existing runner. Secondary: per-query median/min/max and raw cycle vectors; never substitute sum(query medians) for median(cycle sum). Publish every sample.",
-      "noise_and_target": "Goal is no slowdown of primary medians against a matched contemporaneous pinned-tag control. A slower candidate median cannot be stamped no-regression. Disjoint cycle ranges or all measured samples of a hot query above baseline range are deterministic flags of an observed material regression, not a p-value. Overlapping ranges require a noise assessment rather than best-run selection.",
-      "fresh_control_trigger": "Already triggered here: old2ca has slower100G/1T primary medians and Q9+54.2% despite largely identical EXPLAIN. Obtain a contemporary v4.1.6-hotfix-20261021(ed9) legacy3CN control with exact same harness, loader, CPU/memory/cache/merge policy and single-workload selection for the new candidate; oldstock3c7 run is not this control.",
-      "bounded_repeat_policy": "If the first contemporary pair remains ambiguous due crossing ranges or recorded infrastructure disturbance, one predeclared additional baseline/candidate pair may be taken, retaining all original results and comparing pooled samples. Do not discard failures, choose the fastest run, tune limits or repeat indefinitely to obtain a pass. An unresolved slower result remains a delivery blocker to investigate.",
+      "noise_and_target": "Goal is no slowdown of measured primary medians against the existing verified matching-deployment official ed9 reference. A slower newcandidate median cannot be stamped no-regression; retain all raw sample ranges/query medians and investigate. Historical physical host conditions are not proved identical.",
+      "bounded_repeat_policy": "Do not rerun the baseline or choose best samples. Preserve all candidate results and investigate ambiguous/slower results with source/profile evidence; rerun a changed candidate only for an explained fix or authorized transient failure. No repeated baseline is required or automatically dispatched.",
       "profile_evidence": "Use identical query-scoped selectors/time windows and record whether CPU/alloc/block profiles contain data. Current candidate/reference Q9 profiles are available; attribution must use disjoint caller buckets and not sum overlapping inclusive functions or convert CPU seconds into elapsed seconds.",
       "import_acceptance": "Same22GiB/no-swap/4CPU and original39-input fixedorder/script/SQL:5 new uninterrupted rounds195 successes, zero client SQL/count retries/OOM/restarts, post125, all six owners/tasks zero after connection close and samePID alive. Record every round/table elapsed, CPU usage, IO bytes/calls, peakRSS/cgroup/effective pressure and actual fragment/flush counts. Do not introduce forcedGC/wait/changed profile overhead.",
       "import_performance_target": "Compare new5-round wall-time median/CPUperGiB/IOcall and write-byte ratios with old2ca archived light-monitor5-round values only when initial state and observation are comparable. Otherwise mark historical timing as reference and run the smallest matched public import control on isolated fresh stores; target no new median/CPUperGiB regression and no increased fragmentation/IO calls from the integration. Do not label a slower unexplained import result acceptable merely because it completes.",
       "accounting_complexity_target": "Normal SELECT output has no import-sizing callbacks; active build accounting work is amortized O(new batch columns/rows), not O(all historical batches per append). Deterministic callback/work counters and exact byte oracles prove this independently of wall-clock variance.",
-      "delivery": "Every target gets a final measured table. Pending/noisy/unmatched evidence is explicit and cannot close the no-regression gate."
+      "delivery": "Every target gets a final measured table. Pending/noisy/unmatched evidence is explicit and cannot close the no-regression gate.",
+      "baseline_reuse_policy": "Explicit user instruction supersedes the assistant-proposed contemporary-control gate: reuse complete historical official ed9 run39559943872 only; no additional hotfix1021 TKE run."
     },
     "B5": {
       "problem": "Old v2 server silently ignores new merge.Receivers/typed edge/Abort bookkeeping costs but can still accept the same v2 manifest. Schema unchanged does not imply semantic capacity compatibility.",
@@ -284,5 +284,35 @@
       ],
       "scope": "Internal unreleased import-memory protocol; no SQL syntax/catalog/data-format change and no version-number production tuning knob."
     }
+  },
+  "user_baseline_policy": {
+    "owner": "user",
+    "recorded_utc": "2026-10-23T16:59:37.630127+00:00",
+    "instruction": "hotfix1021 的就不给 tke 了，之前不是有吗",
+    "decision": "Reuse the existing complete same-deployment hotfix1021 reference. Do not dispatch or rerun the released hotfix baseline; only run the new combined candidate.",
+    "baseline_tag": "v4.1.6-hotfix-20261021",
+    "baseline_commit": "ed9d8aacc74448ed0deffd93925c049f9686f151",
+    "baseline_run_id": 39559943872,
+    "baseline_job_id": 119096996259,
+    "baseline_url": "https://github.com/matrixorigin/mo-nightly-regression/actions/runs/39559943872/job/119096996259",
+    "baseline_raw_record": "tpch-final-comparison/reference-ed9/tpch-job.log",
+    "baseline_raw_sha256": "70b54104ea32d286b3094a45fb57247a3634e8b00a01289a21b4ff9f67529de9",
+    "basis": "Already verified same legacy3CN resources/cache, exact same harness and loader;330 raw samples with complete22-query cycles and warmup exclusion independently reconciled.",
+    "canceled_duplicate_run": 39990090323,
+    "canceled_duplicate_record": "hotfix20261021-integration/tke-release-control/canceled-at-user-request.json",
+    "duplicate_cancellation": "verified completed/cancelled with jobs[]; no cluster created",
+    "unchanged_requirements": [
+      "New combined-source owning/race/static and exact nativebinary.",
+      "Five uninterrupted39-table imports under22GiB/no swap, no forcedGC/restart/wait/retry, strictpost125.",
+      "New candidate legacy3CN TKE100G/1T raw/plans with matching declared resources/cache/harness/loader.",
+      "Investigate any slower result; do not label memory tradeoffs or noise as proved causes without evidence."
+    ],
+    "limitations": "Reference is historical matching deployment, not a contemporaneous same-host paired experiment. Do not claim strict causal attribution or invent a fresh control requirement against the explicit user instruction."
+  },
+  "architecture_review": {
+    "revision": 3,
+    "reviewed_sha256": "f13bbfcf88b05c999d306aedc3646809d022f908cbcf3735c383655fb793caf4",
+    "decision": "PASS",
+    "scope": "Architecture/lifecycle/version3/metadata/cost contracts unchanged. Revision4 only applies the user-owned baseline validation policy."
   }
 }

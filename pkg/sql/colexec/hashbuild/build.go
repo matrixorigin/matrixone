@@ -189,7 +189,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		ctr.freeSpillExprExecs()
 	}()
 
-	beginSpill := func() error {
+	beginSpill := func(stage, reason string, ask int64) error {
 		spillMode = true
 		if _, err := ctr.initSpillExprExecs(proc, hashBuild.Conditions); err != nil {
 			return err
@@ -199,7 +199,13 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 			return err
 		}
 		ctr.spillUUID = uid.String()
-		logutil.Infof("entering spill mode, uid: %s", ctr.spillUUID)
+		available := int64(-1)
+		if ctr.memoryThrottler != nil {
+			available = ctr.memoryThrottler.Available()
+		}
+		logutil.Infof("entering spill mode, uid: %s, stage: %s, reason: %s, ask: %d, threshold: %d, input_rows: %d, retained: %d, reserved: %d, has_throttler: %t, available: %d",
+			ctr.spillUUID, stage, reason, ask, ctr.spillThreshold, ctr.hashmapBuilder.InputBatchRowCount,
+			ctr.hashmapBuilder.Batches.RetainedBytes(), ctr.memoryReserved, ctr.memoryThrottler != nil, available)
 		spillFiles = make([]*os.File, spillNumBuckets)
 		spillBuffers = ctr.acquireSpillBuffers(proc)
 		for _, bat := range ctr.hashmapBuilder.Batches.Buf {
@@ -210,6 +216,13 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		ctr.hashmapBuilder.Batches.Clean(proc.Mp())
 		ctr.releaseMemory(ctr.memoryReserved)
 		return nil
+	}
+	// Ordinary broadcast builds have no consumer for copy forecasts or retained
+	// allocation accounting. Shuffle/import spill budgets remain active even
+	// when the execution has no import-memory view.
+	accountBatches := ctr.spillAllowed && hashBuild.NeedHashMap
+	if accountBatches {
+		ctr.hashmapBuilder.Batches.TrackAllocation()
 	}
 	for {
 		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, analyzer)
@@ -224,10 +237,10 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		}
 		analyzer.Alloc(int64(result.Batch.Size()))
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
-		if !spillMode {
+		if !spillMode && accountBatches {
 			growth := ctr.hashmapBuilder.Batches.AppendAllocation(result.Batch)
-			if hashBuild.shouldSpillBeforeCopy(result.Batch, growth) {
-				if err := beginSpill(); err != nil {
+			if spill, reason := hashBuild.shouldSpillBeforeCopy(result.Batch, growth); spill {
+				if err := beginSpill("before-copy", reason, growth); err != nil {
 					return err
 				}
 			}
@@ -250,7 +263,11 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		// contract. Ordinary joins retain their existing expression behavior;
 		// an unknown import bound alone is not evidence of memory pressure.
 		if !ok && proc.Base.ImportMemory != nil || ok && !ctr.acquireMemory(bound) {
-			if err := beginSpill(); err != nil {
+			stage, reason := "build-hashmap", "reservation-denied"
+			if !ok {
+				stage, reason = "unsupported-controlled-bound", "unsupported-bound"
+			}
+			if err := beginSpill(stage, reason, bound); err != nil {
 				return err
 			}
 		}

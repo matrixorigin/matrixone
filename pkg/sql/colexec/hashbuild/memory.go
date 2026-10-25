@@ -60,24 +60,29 @@ func (ctr *container) releaseMemory(bytes int64) {
 }
 
 func (ctr *container) reconcileBatches() {
-	ctr.releaseMemory(ctr.memoryReserved - ctr.hashmapBuilder.Batches.Allocated())
+	if ctr.memoryReserved > 0 {
+		ctr.releaseMemory(ctr.memoryReserved - ctr.hashmapBuilder.Batches.RetainedBytes())
+	}
 }
 
-func (hashBuild *HashBuild) shouldSpillBeforeCopy(bat *batch.Batch, growth int64) bool {
+func (hashBuild *HashBuild) shouldSpillBeforeCopy(bat *batch.Batch, growth int64) (bool, string) {
 	if !hashBuild.ctr.spillAllowed || !hashBuild.NeedHashMap {
-		return false
+		return false, ""
 	}
 	ctr := &hashBuild.ctr
 	if ctr.spillThreshold > 0 {
 		if ctr.spillThreshold <= 100000 {
 			if int64(ctr.hashmapBuilder.Batches.RowCount()+bat.RowCount()) >= ctr.spillThreshold {
-				return true
+				return true, "row-threshold"
 			}
-		} else if growth > ctr.spillThreshold-ctr.hashmapBuilder.Batches.Allocated() {
-			return true
+		} else if growth > ctr.spillThreshold-ctr.hashmapBuilder.Batches.RetainedBytes() {
+			return true, "byte-threshold"
 		}
 	}
-	return !ctr.acquireMemory(growth)
+	if !ctr.acquireMemory(growth) {
+		return true, "reservation-denied"
+	}
+	return false, ""
 }
 
 // BuildMemoryBound obtains encoded-key bounds from actual column values. An
@@ -101,22 +106,29 @@ func (hb *HashmapBuilder) BuildMemoryBound(conditions []*plan.Expr, needSels, ne
 					return 0, false
 				}
 				vec := bat.Vecs[position]
-				for row := start; row < end; row++ {
-					index := row
-					if vec.IsConst() {
-						index = 0
-					}
+				if !vec.GetType().IsVarlen() {
 					bytes := int64(vec.GetType().TypeSize() + 1)
-					if vec.GetType().IsVarlen() {
-						bytes = 3
-						if !vec.IsConstNull() && !vec.GetNulls().Contains(uint64(index)) {
-							bytes += int64(len(vec.GetBytesAt(index)))
-						}
-					}
-					if window > math.MaxInt64-bytes {
+					rows := int64(end - start)
+					if bytes > 0 && rows > (math.MaxInt64-window)/bytes {
 						return 0, false
 					}
-					window += bytes
+					window += rows * bytes
+				} else {
+					constant, constantNull := vec.IsConst(), vec.IsConstNull()
+					for row := start; row < end; row++ {
+						index := row
+						if constant {
+							index = 0
+						}
+						bytes := int64(3)
+						if !constantNull && !vec.GetNulls().Contains(uint64(index)) {
+							bytes += int64(len(vec.GetBytesAt(index)))
+						}
+						if window > math.MaxInt64-bytes {
+							return 0, false
+						}
+						window += bytes
+					}
 				}
 				if needUnique {
 					payload := vec.WindowSize(start, end)
