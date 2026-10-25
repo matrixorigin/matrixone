@@ -131,6 +131,7 @@ func encodeProcessInfo(
 
 func appendWriteBackOperator(c *Compile, s *Scope) *Scope {
 	rs := c.newMergeScope([]*Scope{s})
+	rs.MemoryToken = s.MemoryToken
 	op := output.NewArgument().
 		WithFunc(c.fill)
 	op.SetIdx(-1)
@@ -165,6 +166,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	// Magic and IsEnd
 	p.PipelineType = pipeline.Pipeline_PipelineType(s.Magic)
 	p.PipelineId = ctx.id
+	p.MemoryToken = s.MemoryToken
 	p.IsEnd = s.IsEnd
 	p.IsLoad = s.IsLoad
 	p.UuidsToRegIdx = convertScopeRemoteReceivInfo(s)
@@ -325,6 +327,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 
 	s = newScope(magicType(p.GetPipelineType()))
+	s.MemoryToken = p.MemoryToken
 	s.IsEnd = p.IsEnd
 	s.IsLoad = p.IsLoad
 	s.IsRemote = isRemote
@@ -557,6 +560,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *hashjoin.HashJoin:
 		relList, colList := getRelColList(t.ResultCols)
 		in.HashJoin = &pipeline.HashJoin{
+			SpillScopeId:           t.SpillScopeID,
+			SpillExpectedScopes:    t.SpillExpectedScopes,
+			SpillThreshold:         t.SpillThreshold,
 			JoinType:               t.JoinType,
 			IsRightJoin:            t.IsRightJoin,
 			HashOnPk:               t.HashOnPK,
@@ -704,6 +710,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.UnionAll = &pipeline.UnionAll{}
 	case *hashbuild.HashBuild:
 		in.HashBuild = &pipeline.HashBuild{
+			SpillExpectedScopes:       t.SpillExpectedScopes,
+			CanSpill:                  t.CanSpill,
+			SpillThreshold:            t.SpillThreshold,
 			NeedHashMap:               t.NeedHashMap,
 			HashOnPk:                  t.HashOnPK,
 			NeedBatches:               t.NeedBatches,
@@ -1017,6 +1026,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.HashJoin:
 		t := opr.GetHashJoin()
 		arg := hashjoin.NewArgument()
+		arg.SpillScopeID = t.SpillScopeId
+		arg.SpillExpectedScopes = t.SpillExpectedScopes
+		arg.SpillThreshold = t.SpillThreshold
 		arg.JoinType = t.JoinType
 		arg.IsRightJoin = t.IsRightJoin
 		arg.ResultCols = convertToResultPos(t.RelList, t.ColList)
@@ -1185,6 +1197,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.HashBuild:
 		arg := hashbuild.NewArgument()
 		t := opr.GetHashBuild()
+		arg.SpillExpectedScopes = t.SpillExpectedScopes
+		arg.SpillThreshold = t.SpillThreshold
+		arg.CanSpill = t.CanSpill && (t.IsShuffle || len(t.SpillExpectedScopes) > 0)
 		arg.NeedHashMap = t.NeedHashMap
 		arg.HashOnPK = t.HashOnPk
 		arg.NeedBatches = t.NeedBatches

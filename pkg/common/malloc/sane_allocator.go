@@ -26,8 +26,21 @@ import (
 
 /*
 #include <stdlib.h>
+#if defined(__linux__) && defined(__GLIBC__)
+#include <malloc.h>
+static int mo_simple_c_allocator_trim(void) { return malloc_trim(0); }
+#else
+static int mo_simple_c_allocator_trim(void) { return 0; }
+#endif
 */
 import "C"
+
+// ReleaseUnusedMemory asks libc to return free native pages to the OS.
+// It preserves live allocations and is a no-op without malloc_trim support.
+// Use this under RSS pressure rather than on every allocation/free.
+func ReleaseUnusedMemory() bool {
+	return C.mo_simple_c_allocator_trim() != 0
+}
 
 type SimpleCAllocator struct {
 	allocateBytesCounter   prometheus.Counter

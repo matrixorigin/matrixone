@@ -178,13 +178,16 @@ func (proc *Process) NewBatchFromSrc(src *batch.Batch, preAllocSize int) (*batch
 	bat.Recursive = src.Recursive
 	for i := range bat.Vecs {
 		v := vector.NewOffHeapVecWithType(*src.Vecs[i].GetType())
+		// Publish ownership before allocation: a later column can fail after
+		// earlier vectors (or this vector's storage) have been initialized.
+		bat.Vecs[i] = v
 		if v.Capacity() < preAllocSize {
 			err := v.PreExtend(preAllocSize, proc.Mp())
 			if err != nil {
+				bat.Clean(proc.Mp())
 				return nil, err
 			}
 		}
-		bat.Vecs[i] = v
 	}
 	return bat, nil
 }

@@ -16,7 +16,6 @@ package hashbuild
 
 import (
 	"bytes"
-	"io"
 	"os"
 
 	"github.com/google/uuid"
@@ -41,6 +40,14 @@ func (hashBuild *HashBuild) OpType() vm.OpType {
 }
 
 func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
+	hashBuild.ctr.spillAllowed = hashBuild.CanSpill && hashBuild.NeedHashMap && (hashBuild.IsShuffle || len(hashBuild.SpillExpectedScopes) > 0)
+	if !hashBuild.IsShuffle && hashBuild.ctr.spillAllowed {
+		group, err := proc.GetMessageBoard().BroadcastSpillGroup(hashBuild.JoinMapTag, hashBuild.SpillExpectedScopes)
+		if err != nil {
+			return err
+		}
+		hashBuild.SpillGroup, hashBuild.SpillEpoch = group, group.Epoch()
+	}
 	if hashBuild.OpAnalyzer == nil {
 		hashBuild.OpAnalyzer = process.NewAnalyzer(hashBuild.GetIdx(), hashBuild.IsFirst, hashBuild.IsLast, "hash build")
 	} else {
@@ -48,6 +55,7 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	}
 
 	hashBuild.ctr.setSpillThreshold(hashBuild.SpillThreshold)
+	hashBuild.initMemoryBudget(proc)
 
 	if !hashBuild.NeedHashMap {
 		return nil
@@ -105,17 +113,44 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 					// In spill mode: send empty JoinMap with spill fds, no batches
 					jm = message.NewJoinMap(message.GroupSels{}, nil, nil, nil, nil, proc.Mp())
 					jm.Spilled = true
-					jm.SpillBuildFds = ctr.spilledFds
-					ctr.spilledFds = nil // ownership transferred
+					if hashBuild.SpillGroup != nil {
+						files := ctr.spilledFds
+						ctr.spilledFds = nil
+						if err := hashBuild.SpillGroup.PublishBuild(files); err != nil {
+							return result, err
+						}
+					} else {
+						jm.SpillBuildFds = ctr.spilledFds
+						ctr.spilledFds = nil
+					}
 				} else {
 					// Normal mode: send hashmap and batches
 					jm = ctr.hashmapBuilder.GetJoinMap(proc.Mp())
+					reserved, throttler := ctr.memoryReserved, ctr.memoryThrottler
+					ctr.memoryReserved = 0
+					if throttler != nil && reserved > 0 {
+						jm.SetMemoryRelease(func() { throttler.Release(reserved) })
+					}
 					jm.SetPushedRuntimeFilterIn(ctr.runtimeFilterIn)
 				}
 				jm.SetRowCount(int64(ctr.hashmapBuilder.InputBatchRowCount))
-				jm.IncRef(hashBuild.JoinMapRefCnt)
+				if hashBuild.SpillGroup != nil {
+					jm.IncRef(1)
+					if !spillMode {
+						if err := hashBuild.SpillGroup.PublishMemory(jm); err != nil {
+							return result, err
+						}
+					}
+				} else {
+					jm.IncRef(hashBuild.JoinMapRefCnt)
+				}
 			}
 
+			if jm == nil && hashBuild.SpillGroup != nil {
+				if err := hashBuild.SpillGroup.PublishMemory(nil); err != nil {
+					return result, err
+				}
+			}
 			message.SendMessage(message.JoinMapMsg{
 				JoinMapPtr: jm,
 				IsShuffle:  hashBuild.IsShuffle,
@@ -154,6 +189,28 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		ctr.freeSpillExprExecs()
 	}()
 
+	beginSpill := func() error {
+		spillMode = true
+		if _, err := ctr.initSpillExprExecs(proc, hashBuild.Conditions); err != nil {
+			return err
+		}
+		uid, err := uuid.NewV7()
+		if err != nil {
+			return err
+		}
+		ctr.spillUUID = uid.String()
+		logutil.Infof("entering spill mode, uid: %s", ctr.spillUUID)
+		spillFiles = make([]*os.File, spillNumBuckets)
+		spillBuffers = ctr.acquireSpillBuffers(proc)
+		for _, bat := range ctr.hashmapBuilder.Batches.Buf {
+			if err := ctr.appendBuildBatchToSpillFiles(proc, bat, spillFiles, spillBuffers, ctr.spillExprExecs, analyzer); err != nil {
+				return err
+			}
+		}
+		ctr.hashmapBuilder.Batches.Clean(proc.Mp())
+		ctr.releaseMemory(ctr.memoryReserved)
+		return nil
+	}
 	for {
 		result, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, analyzer)
 		if err != nil {
@@ -165,54 +222,37 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 		if result.Batch.IsEmpty() {
 			continue
 		}
-
 		analyzer.Alloc(int64(result.Batch.Size()))
 		ctr.hashmapBuilder.InputBatchRowCount += result.Batch.RowCount()
-
-		// If in spill mode, spill this batch directly to open files
+		if !spillMode {
+			growth := ctr.hashmapBuilder.Batches.AppendAllocation(result.Batch)
+			if hashBuild.shouldSpillBeforeCopy(result.Batch, growth) {
+				if err := beginSpill(); err != nil {
+					return err
+				}
+			}
+		}
 		if spillMode {
-			err := ctr.appendBuildBatchToSpillFiles(proc, result.Batch, spillFiles, spillBuffers, ctr.spillExprExecs, analyzer)
-			if err != nil {
+			if err := ctr.appendBuildBatchToSpillFiles(proc, result.Batch, spillFiles, spillBuffers, ctr.spillExprExecs, analyzer); err != nil {
 				return err
 			}
-			continue
-		}
-
-		// Store original batch
-		err = ctr.hashmapBuilder.Batches.CopyIntoBatches(result.Batch, proc)
-		if err != nil {
-			return err
-		}
-
-		// Check if we should enter spill mode based on batch memory size
-		if hashBuild.shouldSpillBatches() {
-			spillMode = true
-			// Initialize spill executors once for reuse across all batches
-			if ctr.spillExprExecs == nil {
-				if _, err := ctr.initSpillExprExecs(proc, hashBuild.Conditions); err != nil {
-					return err
-				}
-			}
-			// Generate unique prefix for anonymous file paths
-			uid, err := uuid.NewV7()
-			if err != nil {
+		} else {
+			if err := ctr.hashmapBuilder.Batches.CopyIntoBatches(result.Batch, proc); err != nil {
 				return err
 			}
-			ctr.spillUUID = uid.String()
-			logutil.Infof("entering spill mode, uid: %s", ctr.spillUUID)
-
-			spillFiles = make([]*os.File, spillNumBuckets)
-			spillBuffers = ctr.acquireSpillBuffers(proc)
-
-			// Spill all batches collected so far
-			for _, bat := range ctr.hashmapBuilder.Batches.Buf {
-				err := ctr.appendBuildBatchToSpillFiles(proc, bat, spillFiles, spillBuffers, ctr.spillExprExecs, analyzer)
-				if err != nil {
-					return err
-				}
+			ctr.reconcileBatches()
+		}
+	}
+	needUniqueVec := !hashBuild.IsShuffle && hashBuild.RuntimeFilterSpec != nil && hashBuild.RuntimeFilterSpec.Expr != nil
+	if !spillMode && ctr.spillAllowed && hashBuild.NeedHashMap && ctr.hashmapBuilder.InputBatchRowCount > 0 {
+		bound, ok := ctr.hashmapBuilder.BuildMemoryBound(hashBuild.Conditions, hashBuild.NeedAllocateSels, needUniqueVec)
+		// The import controller admits only key expressions with a capacity
+		// contract. Ordinary joins retain their existing expression behavior;
+		// an unknown import bound alone is not evidence of memory pressure.
+		if !ok && proc.Base.ImportMemory != nil || ok && !ctr.acquireMemory(bound) {
+			if err := beginSpill(); err != nil {
+				return err
 			}
-			// Clear batches to save memory
-			ctr.hashmapBuilder.Batches.Clean(proc.Mp())
 		}
 	}
 
@@ -229,14 +269,7 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 				}
 			}
 		}
-		// Seek all files to beginning for reading by hashjoin
-		for _, f := range spillFiles {
-			if f != nil {
-				if _, err := f.Seek(0, io.SeekStart); err != nil {
-					return err
-				}
-			}
-		}
+
 		// Transfer ownership to container; nil local slice so defer won't close
 		ctr.spilledFds = spillFiles
 		spillFiles = nil
@@ -244,11 +277,6 @@ func (hashBuild *HashBuild) build(proc *process.Process, analyzer process.Analyz
 
 	// If we never entered spill mode, build the hashmap
 	if !spillMode && hashBuild.NeedHashMap {
-		needUniqueVec := true
-		if hashBuild.IsShuffle || hashBuild.RuntimeFilterSpec == nil || hashBuild.RuntimeFilterSpec.Expr == nil {
-			needUniqueVec = false
-		}
-
 		err := ctr.hashmapBuilder.BuildHashmap(hashBuild.HashOnPK, hashBuild.NeedAllocateSels, needUniqueVec, proc)
 		if err != nil {
 			return err
@@ -285,6 +313,12 @@ func calculateBloomFilterProbability(rowCount int) float64 {
 
 func (hashBuild *HashBuild) handleRuntimeFilter(proc *process.Process) error {
 	ctr := &hashBuild.ctr
+	if len(ctr.spilledFds) > 0 || hashBuild.SpillGroup != nil && hashBuild.SpillGroup.IsSpilled() {
+		if hashBuild.RuntimeFilterSpec != nil {
+			message.SendRuntimeFilter(message.RuntimeFilterMessage{Tag: hashBuild.RuntimeFilterSpec.Tag, Typ: message.RuntimeFilter_PASS}, hashBuild.RuntimeFilterSpec, proc.GetMessageBoard())
+		}
+		return nil
+	}
 	if hashBuild.IsShuffle {
 		//only support runtime filter pass for now in shuffle join
 		var runtimeFilter message.RuntimeFilterMessage

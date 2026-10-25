@@ -15,6 +15,7 @@
 package hashjoin
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -137,32 +138,32 @@ func TestLazySpillFileCreation(t *testing.T) {
 	err = ctr.appendProbeBatchToSpillFiles(proc, bat, writers, buffers, analyzer, 0)
 	require.NoError(t, err)
 
-	// Find which buckets got data
-	var populatedBucket int
-	populated := false
-	for i := range buffers {
-		if buffers[i] != nil && buffers[i].RowCount() > 0 {
-			populated = true
-			populatedBucket = i
-			break
+	// Scatter flushes its single active compact buffer immediately. The durable
+	// oracle is decoded rows; untouched buckets must still have no file.
+	writtenFiles, decodedRows := 0, 0
+	for i := range writers {
+		require.Nil(t, buffers[i], "scatter must not retain one full buffer per bucket")
+		if writers[i].file == nil {
+			continue
 		}
-	}
-	require.True(t, populated, "at least one bucket should have data")
-
-	// Flush the populated bucket's buffer (should create the file lazily)
-	writer := &writers[populatedBucket]
-	require.NotNil(t, buffers[populatedBucket], "buffer should exist before flush")
-	cnt, err := ctr.flushBucketBuffer(proc, buffers[populatedBucket], writer, analyzer)
-	require.NoError(t, err)
-	require.Greater(t, cnt, int64(0))
-	require.NotNil(t, writer.file, "file should be created on first flush")
-
-	// Untouched buckets should still have nil files
-	for i := range buffers {
-		if buffers[i] == nil || buffers[i].RowCount() == 0 {
-			require.Nil(t, writers[i].file, "untouched bucket %d should still have nil file", i)
+		writtenFiles++
+		reader := &spillBucketReader{}
+		reader.resetForFd(writers[i].handOffFd())
+		decoded := batch.NewOffHeapWithSize(0)
+		for {
+			got, err := reader.readBatch(proc, decoded)
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+			decodedRows += got.RowCount()
 		}
+		decoded.Clean(proc.Mp())
+		reader.close()
 	}
+	require.Equal(t, 3, decodedRows)
+	require.Greater(t, writtenFiles, 0)
+	require.LessOrEqual(t, writtenFiles, 3)
 
 	// Clean up
 	for i := range writers {
@@ -551,25 +552,25 @@ func TestReaderCorruptedMagic(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write valid batch first
-	ctr := &container{}
+	var spillWriteBuf bytes.Buffer
 	bat := batch.NewOffHeapWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
 	bat.SetRowCount(1)
 
 	// Write with wrong magic
 	cnt := int64(1)
-	ctr.spillWriteBuf.Reset()
-	ctr.spillWriteBuf.Write(types.EncodeInt64(&cnt))
-	batchSizePos := ctr.spillWriteBuf.Len()
-	ctr.spillWriteBuf.Write(types.EncodeInt64(new(int64)))
-	batchStartPos := ctr.spillWriteBuf.Len()
-	bat.MarshalBinaryWithBuffer(&ctr.spillWriteBuf, false)
-	batchSize := int64(ctr.spillWriteBuf.Len() - batchStartPos)
+	spillWriteBuf.Reset()
+	spillWriteBuf.Write(types.EncodeInt64(&cnt))
+	batchSizePos := spillWriteBuf.Len()
+	spillWriteBuf.Write(types.EncodeInt64(new(int64)))
+	batchStartPos := spillWriteBuf.Len()
+	bat.MarshalBinaryWithBuffer(&spillWriteBuf, false)
+	batchSize := int64(spillWriteBuf.Len() - batchStartPos)
 	batchSizeBytes := types.EncodeInt64(&batchSize)
-	copy(ctr.spillWriteBuf.Bytes()[batchSizePos:batchSizePos+len(batchSizeBytes)], batchSizeBytes)
+	copy(spillWriteBuf.Bytes()[batchSizePos:batchSizePos+len(batchSizeBytes)], batchSizeBytes)
 	wrongMagic := uint64(0xBADBADBAD)
-	ctr.spillWriteBuf.Write(types.EncodeUint64(&wrongMagic))
-	_, _ = file.Write(ctr.spillWriteBuf.Bytes())
+	spillWriteBuf.Write(types.EncodeUint64(&wrongMagic))
+	_, _ = file.Write(spillWriteBuf.Bytes())
 	file.Close()
 
 	reader := &spillBucketReader{}
@@ -599,25 +600,25 @@ func TestReaderRowCountMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	// Write batch with wrong count
-	ctr := &container{}
+	var spillWriteBuf bytes.Buffer
 	bat := batch.NewOffHeapWithSize(1)
 	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
 	bat.SetRowCount(2)
 
 	// Manually write with wrong count
 	wrongCnt := int64(5) // claim 5 rows but only have 2
-	ctr.spillWriteBuf.Reset()
-	ctr.spillWriteBuf.Write(types.EncodeInt64(&wrongCnt))
-	batchSizePos := ctr.spillWriteBuf.Len()
-	ctr.spillWriteBuf.Write(types.EncodeInt64(new(int64)))
-	batchStartPos := ctr.spillWriteBuf.Len()
-	bat.MarshalBinaryWithBuffer(&ctr.spillWriteBuf, false)
-	batchSize := int64(ctr.spillWriteBuf.Len() - batchStartPos)
+	spillWriteBuf.Reset()
+	spillWriteBuf.Write(types.EncodeInt64(&wrongCnt))
+	batchSizePos := spillWriteBuf.Len()
+	spillWriteBuf.Write(types.EncodeInt64(new(int64)))
+	batchStartPos := spillWriteBuf.Len()
+	bat.MarshalBinaryWithBuffer(&spillWriteBuf, false)
+	batchSize := int64(spillWriteBuf.Len() - batchStartPos)
 	batchSizeBytes := types.EncodeInt64(&batchSize)
-	copy(ctr.spillWriteBuf.Bytes()[batchSizePos:batchSizePos+len(batchSizeBytes)], batchSizeBytes)
+	copy(spillWriteBuf.Bytes()[batchSizePos:batchSizePos+len(batchSizeBytes)], batchSizeBytes)
 	magic := uint64(spillMagic)
-	ctr.spillWriteBuf.Write(types.EncodeUint64(&magic))
-	_, _ = file.Write(ctr.spillWriteBuf.Bytes())
+	spillWriteBuf.Write(types.EncodeUint64(&magic))
+	_, _ = file.Write(spillWriteBuf.Bytes())
 	file.Close()
 
 	reader := &spillBucketReader{}
@@ -1219,7 +1220,7 @@ func TestCleanSpillBufferPoolWithData(t *testing.T) {
 	require.Nil(t, ctr.spillProbeSubBufs)
 }
 
-func TestHandOffFdSeeksToStart(t *testing.T) {
+func TestHandOffFdUsesIndependentReadOffset(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
 
@@ -1245,18 +1246,26 @@ func TestHandOffFdSeeksToStart(t *testing.T) {
 	pos, _ := sw.file.Seek(0, io.SeekCurrent)
 	require.Greater(t, pos, int64(0))
 
-	// handOffFd should seek back to 0
+	// Ownership handoff preserves the writer offset. Readers use ReadAt.
 	fd := sw.handOffFd()
 	require.NotNil(t, fd)
 
+	writerOffset := pos
+	reader := &spillBucketReader{}
+	reader.resetForFd(fd)
+	decoded, err := reader.readBatch(proc, batch.NewOffHeapWithSize(0))
+	require.NoError(t, err)
+	require.Equal(t, []int32{10, 20, 30}, vector.MustFixedColNoTypeCheck[int32](decoded.Vecs[0]))
+	decoded.Clean(proc.Mp())
 	pos, _ = fd.Seek(0, io.SeekCurrent)
-	require.Equal(t, int64(0), pos)
+	require.Equal(t, writerOffset, pos, "independent reader cannot mutate the underlying FD offset")
 
 	// Writer should be nil after handoff
 	require.Nil(t, sw.file)
 	require.False(t, sw.created())
 
-	fd.Close()
+	reader.close()
+	bat.Clean(proc.Mp())
 }
 
 func TestResetForFdReusesBuffer(t *testing.T) {

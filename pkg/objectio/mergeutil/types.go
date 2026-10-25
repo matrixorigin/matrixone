@@ -37,7 +37,12 @@ func MergeSortBatches(
 	sinker SinkerT,
 	mp *mpool.MPool,
 	putBack func(int),
+	byteLimits ...int64,
 ) (*batch.Batch, error) {
+	byteLimit := int64(64 << 20)
+	if len(byteLimits) > 0 && byteLimits[0] > 0 {
+		byteLimit = byteLimits[0]
+	}
 	var merge mergeInterface
 	nulls := make([]*nulls.Nulls, len(batches))
 	for i, b := range batches {
@@ -120,12 +125,30 @@ func MergeSortBatches(
 	)
 	size := len(batches)
 	buffer.CleanOnlyData()
-	if err := buffer.PreExtend(mp, objectio.BlockMaxRows); err != nil {
-		return buffer, err
-	}
 	for size > 0 {
 		batchIndex, rowIndex, size = merge.getNextPos()
+		var growth int64
+		for i, v := range buffer.Vecs {
+			growth += v.AppendWindowAllocation(batches[batchIndex].Vecs[i], rowIndex, rowIndex+1)
+		}
+		if lens > 0 && int64(buffer.Allocated())+growth > byteLimit {
+			buffer.SetRowCount(lens)
+			var err error
+			buffer, err = sinker(buffer)
+			if err != nil {
+				return buffer, err
+			}
+			lens = 0
+		}
+		if lens == 0 && int64(buffer.Allocated()) > byteLimit {
+			buffer.FreeColumns(mp)
+		}
 		for i := range buffer.Vecs {
+			src := batches[batchIndex].Vecs[i]
+			area := src.WindowSize(rowIndex, rowIndex+1) - int64(src.GetType().TypeSize())
+			if err := buffer.Vecs[i].PreExtendWithArea(1, int(area), mp); err != nil {
+				return buffer, err
+			}
 			err := buffer.Vecs[i].UnionOne(batches[batchIndex].Vecs[i], int64(rowIndex), mp)
 			if err != nil {
 				return buffer, err
@@ -141,9 +164,6 @@ func MergeSortBatches(
 			buffer.SetRowCount(objectio.BlockMaxRows)
 			var err error
 			if buffer, err = sinker(buffer); err != nil {
-				return buffer, err
-			}
-			if err = buffer.PreExtend(mp, objectio.BlockMaxRows); err != nil {
 				return buffer, err
 			}
 		}

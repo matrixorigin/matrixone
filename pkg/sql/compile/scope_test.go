@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/require"
@@ -2184,4 +2185,142 @@ func TestScopeReleaseDiscardsLateQueuedBatches(t *testing.T) {
 	require.Positive(t, mp.CurrNB())
 	s.release()
 	require.Zero(t, mp.CurrNB(), "ordinary query release must also discard late data")
+}
+
+func TestScopeBroadcastActualOwnership(t *testing.T) {
+	for _, parallel := range []int{1, 2} {
+		t.Run(fmt.Sprintf("mcpu=%d", parallel), func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			proc.SetMessageBoard(message.NewMessageBoard())
+			scope := newScope(Normal)
+			defer scope.release()
+			scope.Proc = proc.NewContextChildProc(0)
+			scope.NodeInfo.Mcpu = parallel
+			join := hashjoin.NewArgument()
+			join.JoinMapTag, join.SpillScopeID, join.SpillExpectedScopes = 96, 1, []uint32{1}
+			scope.RootOp = join
+			_, actuals := newParallelScope(scope)
+			group := join.SpillGroup
+			file, err := os.CreateTemp(t.TempDir(), "actual")
+			require.NoError(t, err)
+			defer file.Close()
+			require.NoError(t, group.PublishBuild([]*os.File{file}))
+			if parallel == 1 {
+				require.Empty(t, actuals)
+				// The original becomes the actual and may fail before Prepare.
+				join.Free(scope.Proc, true, errors.New("actual never prepared"))
+			} else {
+				// The unused compiler template has no execution claim.
+				join.Reset(proc, false, nil)
+				join.Free(proc, false, nil)
+				_, err = file.Stat()
+				require.NoError(t, err, "template cleanup cannot abort published actuals")
+				actuals[0].RootOp.Free(actuals[0].Proc, true, errors.New("actual never prepared"))
+			}
+			_, err = file.Stat()
+			require.Error(t, err, "actual that never reached Prepare still retires the group")
+		})
+	}
+}
+
+type scopeBroadcastFailPrepare struct{ *colexec.MockOperator }
+
+func (op *scopeBroadcastFailPrepare) Prepare(*process.Process) error {
+	return errors.New("child Prepare failed before HashJoin")
+}
+
+func TestScopeBroadcastRunArmsBeforePrepare(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.SetMessageBoard(message.NewMessageBoard())
+	join := &hashjoin.HashJoin{JoinMapTag: 97, SpillScopeID: 1, SpillExpectedScopes: []uint32{1}}
+	join.AppendChild(&scopeBroadcastFailPrepare{MockOperator: colexec.NewMockOperator()})
+	scope := &Scope{RootOp: join, Proc: proc.NewContextChildProc(0)}
+	group, err := proc.GetMessageBoard().BroadcastSpillGroup(97, []uint32{1})
+	require.NoError(t, err)
+	file, err := os.CreateTemp(t.TempDir(), "before-prepare")
+	require.NoError(t, err)
+	defer file.Close()
+	require.NoError(t, group.PublishBuild([]*os.File{file}))
+	err = scope.Run(&Compile{proc: proc})
+	require.ErrorContains(t, err, "child Prepare failed")
+	require.Nil(t, join.OpAnalyzer, "HashJoin.Prepare was never reached")
+	_, err = file.Stat()
+	require.Error(t, err, "Run claims the actual before any child Prepare failure")
+}
+
+func TestScopeBroadcastConstructionFailure(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.SetMessageBoard(message.NewMessageBoard())
+	// A topology construction error occurs after obtaining the nonowning group
+	// handle and before publishing any actual. The failed scope must abort it.
+	join := &hashjoin.HashJoin{JoinMapTag: 98, SpillScopeID: 1, SpillExpectedScopes: []uint32{2}}
+	scope := &Scope{RootOp: join, Proc: proc.NewContextChildProc(0), IsLoad: true}
+	scope.NodeInfo.Mcpu = 1
+	group, err := proc.GetMessageBoard().BroadcastSpillGroup(98, []uint32{2})
+	require.NoError(t, err)
+	file, err := os.CreateTemp(t.TempDir(), "failed-construction")
+	require.NoError(t, err)
+	defer file.Close()
+	require.NoError(t, group.PublishBuild([]*os.File{file}))
+	err = scope.ParallelRun(&Compile{proc: proc})
+	require.Error(t, err)
+	_, err = file.Stat()
+	require.Error(t, err, "failed-scope authority cannot depend on template Free")
+}
+
+func TestScopeBroadcastSchedulerFailureBeforeRun(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.SetMessageBoard(message.NewMessageBoard())
+	join := &hashjoin.HashJoin{JoinMapTag: 99, SpillScopeID: 1, SpillExpectedScopes: []uint32{1}}
+	scope := &Scope{Magic: Normal, RootOp: join, Proc: proc.NewContextChildProc(0)}
+	group, err := proc.GetMessageBoard().BroadcastSpillGroup(99, []uint32{1})
+	require.NoError(t, err)
+	file, err := os.CreateTemp(t.TempDir(), "scheduler")
+	require.NoError(t, err)
+	defer file.Close()
+	require.NoError(t, group.PublishBuild([]*os.File{file}))
+	cleanPipelineWitchStartFail(scope, errors.New("scheduler submission failed"), false)
+	require.Nil(t, join.OpAnalyzer, "actual never reached Prepare")
+	_, err = file.Stat()
+	require.Error(t, err, "scheduler failure still terminates expected actual ownership")
+}
+
+type scopeBroadcastReaderFailure struct {
+	engine.Relation
+	calls int
+}
+
+func (r *scopeBroadcastReaderFailure) BuildReaders(context.Context, any, *plan.Expr, engine.RelData, int, int, bool, engine.TombstoneApplyPolicy, engine.FilterHint) ([]engine.Reader, error) {
+	r.calls++
+	return nil, errors.New("injected BuildReaders failure")
+}
+
+func TestScopeBroadcastReaderFailureBeforeBinding(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.SetMessageBoard(message.NewMessageBoard())
+	join := &hashjoin.HashJoin{JoinMapTag: 100, SpillScopeID: 1, SpillExpectedScopes: []uint32{1}}
+	join.AppendChild(&table_scan.TableScan{})
+	relation := &scopeBroadcastReaderFailure{}
+	scope := &Scope{RootOp: join, Proc: proc.NewContextChildProc(0), DataSource: &Source{Rel: relation, FilterList: []*plan.Expr{plan2.MakeFalseExpr()}}}
+	scope.NodeInfo.Mcpu = 2
+	group, err := proc.GetMessageBoard().BroadcastSpillGroup(100, []uint32{1})
+	require.NoError(t, err)
+	file, err := os.CreateTemp(t.TempDir(), "reader-before-binding")
+	require.NoError(t, err)
+	defer file.Close()
+	require.NoError(t, group.PublishBuild([]*os.File{file}))
+	require.Nil(t, join.SpillGroup)
+	err = scope.ParallelRun(&Compile{proc: proc})
+	require.ErrorContains(t, err, "injected BuildReaders failure")
+	require.Equal(t, 1, relation.calls, "actual buildScanParallelRun must enter BuildReaders")
+	require.Nil(t, join.OpAnalyzer, "neither actual construction nor HashJoin.Prepare ran")
+	_, err = file.Stat()
+	require.Error(t, err, "failed scope binds and retires another RPC's published group")
+	_, err = group.Register(group.Epoch(), uint64(1)<<32, nil)
+	require.Error(t, err, "late participant sees terminal failure")
 }

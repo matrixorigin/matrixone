@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -425,6 +426,15 @@ func TestReSpillBucketDepthLimit(t *testing.T) {
 		HashOnPK: false,
 	}
 
+	hashJoin.LeftTypes = []types.Type{types.T_int32.ToType()}
+	hashJoin.RightTypes = []types.Type{types.T_int32.ToType()}
+	envelope, ok := hashJoin.InputEnvelope(1 << 20)
+	require.True(t, ok)
+	budget := rscthrottler.NewMemThrottler(t.Name(), .9, rscthrottler.WithConstLimit(1<<30))
+	working, err := rscthrottler.ReserveWorkingSet(proc.Ctx, budget, rscthrottler.WorkingSetSpec{UnitBytes: 1 << 20, Inputs: []rscthrottler.InputSlotSpec{{Name: "source", Count: 1, Bytes: 1}, {Name: "output", Count: 1, Bytes: 4 << 20}, {Name: "join", Count: 2, Bytes: envelope}}, IOBytes: envelope})
+	require.NoError(t, err)
+	defer working.Close()
+	proc.Base.ImportMemory = &process.ImportMemory{WorkingSet: working, UnitBytes: 1 << 20, JoinInputBytes: envelope, OutputBytes: 4 << 20, IOBytes: envelope}
 	// Bucket at max depth
 	bucket := spillBucket{
 		buildFd: buildFd,
@@ -433,15 +443,19 @@ func TestReSpillBucketDepthLimit(t *testing.T) {
 	}
 
 	// Set low threshold - but should NOT re-spill because we're at max depth
-	hashJoin.ctr.spillThreshold = 1000
+	hashJoin.ctr.spillThreshold = 2
 
 	// Call rebuildHashmapForBucket
 	jm, _, err := hashJoin.rebuildHashmapForBucket(proc, bucket, analyzer)
 	require.NoError(t, err)
-	require.NotNil(t, jm, "should return JoinMap even if memory exceeds threshold at max depth")
-	require.Equal(t, 0, len(hashJoin.ctr.spillQueue), "should not create sub-buckets at max depth")
-
-	jm.Free()
+	require.Nil(t, jm, "max-depth bucket must not be reloaded without a bound")
+	require.NotNil(t, hashJoin.ctr.skew)
+	require.NotNil(t, hashJoin.ctr.skew.inputLeases[0])
+	require.NotNil(t, hashJoin.ctr.skew.inputLeases[1])
+	require.NoError(t, hashJoin.loadSkewChunk(proc))
+	require.Equal(t, int64(1), hashJoin.ctr.rightRowCnt)
+	require.Empty(t, hashJoin.ctr.spillQueue)
+	hashJoin.Free(proc, false, nil)
 }
 
 // TestMultiLevelSpillIntegration tests the full multi-level spill flow
@@ -514,6 +528,9 @@ func TestMultiLevelSpillIntegration(t *testing.T) {
 		},
 		HashOnPK: false,
 	}
+
+	require.NoError(t, hashJoin.Prepare(proc))
+	defer hashJoin.Free(proc, false, nil)
 
 	bucket := spillBucket{
 		buildFd: buildFd,
