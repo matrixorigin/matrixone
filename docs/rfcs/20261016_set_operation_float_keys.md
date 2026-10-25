@@ -1,10 +1,11 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 33
+- Revision: 34
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
 - Revision 31 integration baseline: official main `67c91c5bdf6c669f63331778634215f7aa3e8f58`
+- Revision 34 integration baseline: official main `9a7e12a93328a69bac7261beedc88930b7984a10`
 - Revision 33 integration baseline: official main `ac4ec315877cfc95fc5464bd81b081489f75f747`
 - Revision 32 integration baseline: official main `ac13078b9872fe9ca84e0eeb4d1571312f99382a`
 - Revision 30 integration baseline: official main `d4bda99eee3dd0964e8e1ec1f66d5e3e0fb19e14`
@@ -1538,6 +1539,25 @@ receive-before-decode, executor/Prepare and persisted-expression admission retai
 that floor, including immediate-predecessor130 rollback rejection. Historical
 receipts are not rewritten or promoted to fresh performance evidence.
 
+## Revision 34 integration after weighted-percentile allocation
+
+Official main `9a7e12a93328a69bac7261beedc88930b7984a10` now owns MORPC131
+and function619 for quantileExactWeighted. This revision preserves that released
+capability and assigns the single unpublished set-key/scalar-marker capability
+MORPC132, function620 and sentinel621. The dependency-free walker excludes
+weighted-percentile619 and the released local ranks616/617/618 from set-key
+recognition. Placement, actual destination/stream, receive-before-decode,
+executor/Prepare, retained CTAS and persisted-expression owners all advance
+with the immediate-predecessor131 rejection tests. The weighted-percentile gate
+remains131, including when tested beside a set-key requirement of132.
+
+The rebase preserves main's compact physical aggregate keys, preflighted vector
+copying and widened numeric window frames. It adds no resource owner, wait,
+activation scope or capacity claim; the accepted RFC13 design and bounded local
+scalar policy remain unchanged. Historical receipts keep their recorded source
+identities. Fresh integration checks are recorded separately in
+`validation/20261025_set_key_weighted_percentile_integration.json`.
+
 ## Compatibility, rollout and rollback
 
 The accepted rollout scope is the automatically selected, resource-bounded local
@@ -1547,69 +1567,69 @@ and coordinator-only scope when deploying; broader distributed execution and
 universal latency or process-RSS guarantees remain unqualified.
 
 Official main at this revision allocates MORPC127 to IndexSearchScan internal
-search knobs, MORPC128 to category-preserving mixed JSON/numeric comparisons, MORPC129 to selected JSON ELT/opaque text expression execution, and MORPC130 to incomplete temporal string overloads and rejection diagnostics,
+search knobs, MORPC128 to category-preserving mixed JSON/numeric comparisons, MORPC129 to selected JSON ELT/opaque text expression execution, and MORPC130 to incomplete temporal string overloads and rejection diagnostics, and MORPC131 to weighted-percentile dispatch,
 while function602/MORPC125 remains LOAD IGNORE foreign-key rejection diagnostics. VIEWS metadata retains functions603/604 and floor126.
 TIMESTAMPADD SECOND retains function601 and floor124. This PR's single
-unpublished set-key/scalar-marker capability uses function619, sentinel620 and
-MORPC **131**. The feature walker recognizes encoded function identity 619 without
+unpublished set-key/scalar-marker capability uses function620, sentinel621 and
+MORPC **132**. The feature walker recognizes encoded function identity 620 without
 depending on its display name. It sees hidden physical equality lists, grouping
 keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar composition adds no separate function identity. It adds
 `plan.Node.scalar_set_reaggregation` field 96 and
 `pipeline.Instruction.scalar_set_reaggregation` field 65. Marker-only integer
-fallbacks require 131 too. Senders and receivers reject marked remote scopes at
+fallbacks require 132 too. Senders and receivers reject marked remote scopes at
 all versions, before operator decoding, because a remote attempt cannot share
 the coordinator's work/account lease. Local scope validation rejects remote
 nodes, DOP above one, and marker placement outside WINDOW/LEFT JOIN. Official main
 retains SELECT division diagnostics at 116, conditional on execution/session
-policy. Set keys require 131 regardless of that policy; a combined expression
-requires 131. Division diagnostics remain outside persisted-expression admission. Official main
+policy. Set keys require 132 regardless of that policy; a combined expression
+requires 132. Division diagnostics remain outside persisted-expression admission. Official main
 adds collation-aware LEAST/GREATEST at 117; that independent feature remains
-admitted at 117, and a combined expression with a set key requires 131.
+admitted at 117, and a combined expression with a set key requires 132.
 The released table-collation function retains identity 600 and floor 118;
 table-only expressions remain admitted at 118, while a combined expression
-with a set key requires 131.
+with a set key requires 132.
 
 LOAD IGNORE alone retains its released function602 and floor125. It is recognized
-independently of set keys: LOAD plus a set key or scalar marker requires 131.
+independently of set keys: LOAD plus a set key or scalar marker requires 132.
 The released LOAD binding/native, placement/send/destination/receive and retained
 plan rollback checks remain in force; temporal CTAS checks keep their125 fast
 path only after the retained requirement has been checked. Set-key/marker
-admission has its independent 131 owner. Earlier unpublished set-key602/603 payloads
+admission has its independent 132 owner. Earlier unpublished set-key602/603 payloads
 are historical artifacts, not aliases to the released LOAD602, VIEWS603/604 or
-new set-key619 identities; this revision neither remaps nor replays them.
+new set-key620 identities; this revision neither remaps nor replays them.
 
 TIMESTAMPADD SECOND normalization alone retains function 601 and floor 124.
-A combination with set keys or scalar markers requires 131; the actual-stream
+A combination with set keys or scalar markers requires 132; the actual-stream
 handshake carries the maximum of these independently detected requirements.
 
 Unsigned DECIMAL DIV alone retains its released floor 121. Combining DIV with a
-set key or local scalar marker requires 131; a marker still prohibits remote
+set key or local scalar marker requires 132; a marker still prohibits remote
 execution at every version. Historical DIV overload zero keeps its prior
 compatibility contract.
 
-Placement requires workers advertising 131 or newer; missing or old capabilities
+Placement requires workers advertising 132 or newer; missing or old capabilities
 fall back to one CN on the capable coordinator. Sending rechecks actual pipeline
 destinations, including changes after placement. The receiver rejects a pipeline
 containing these expressions before operator decoding when its local floor is
-missing or below 131. Operator expression construction checks the same floor
+missing or below 132. Operator expression construction checks the same floor
 before allocating an executor. Persisted-expression read and authoring admission
-also require 131. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
+also require 132. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
 
 Prepared specialization regenerates membership keys from the resolved output
 domain before capability detection: integer -> float -> integer must acquire and
-then release the 131 requirement. A prepare-time ANY type is not capability proof.
-A new binary configured at immediate predecessor floor 130 rejects these
+then release the 132 requirement. A prepare-time ANY type is not capability proof.
+A new binary configured at immediate predecessor floor 131 rejects these
 expressions before execution. An actual old binary lacks the new guard: new
 senders must exclude it, and durable authoring must not publish an expression
-under a floor below 131. Lowering a new binary's floor does not rewrite existing
-catalog expressions or teach an old binary identity 619.
+under a floor below 132. Lowering a new binary's floor does not rewrite existing
+catalog expressions or teach an old binary identity 620.
 
 VIEWS metadata alone requires126, including its actual-stream handshake. Combining
-VIEWS metadata with a set key or scalar marker requires 131. Literal IDs603/604
-remain VIEWS functions; they are never recognized as set keys. Official main now assigns functions616/617/618 to MRANK/CUMRANK/TMRANK.
-The literal-wire feature tests exclude all three released ranks from set-key
-admission and recognize fresh619 FLOAT/DOUBLE keys. Source inspection of the
-revision-33 baseline confirms that identity619 is absent, while both VIEWS
+VIEWS metadata with a set key or scalar marker requires 132. Literal IDs603/604
+remain VIEWS functions; they are never recognized as set keys. Official main assigns functions616/617/618 to MRANK/CUMRANK/TMRANK and619 to quantileExactWeighted.
+The literal-wire feature tests exclude all three released ranks and the weighted percentile from set-key
+admission and recognize fresh620 FLOAT/DOUBLE keys. Source inspection of the
+revision-34 baseline confirms that identity620 is absent, while both VIEWS
 functions, LOAD602 and TIMESTAMPADD601 remain available.
 
 Before downgrading/restoring a backup onto old binaries, inventory affected
@@ -1628,7 +1648,7 @@ this document and immediate-predecessor rollback tests together. Other open PRs
 using the same candidate do not reserve it.
 
 Dependent-only queries retain their independently released protocol 119.
-Mixed dependent/scalar-set queries require the set-key floor 131 as well as
+Mixed dependent/scalar-set queries require the set-key floor 132 as well as
 coordinator-local DOP 1 placement. The final scope graph, including detached
 producer scopes, is validated before any execution. The statement attempt
 acquires one scalar-set CN permit and one bounded participating account; all

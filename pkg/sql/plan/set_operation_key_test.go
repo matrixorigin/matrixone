@@ -543,7 +543,7 @@ func TestScalarSetRetainsCardinalityOwner(t *testing.T) {
 			}
 			floor, err := RequiredPersistedExpressionProtocolVersion(p.GetQuery())
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion131, floor)
+			require.Equal(t, defines.MORPCVersion132, floor)
 		})
 	}
 }
@@ -597,7 +597,7 @@ func TestSetOperationFloatKeyPersistedAdmission(t *testing.T) {
 	owner := &planpb.Query{Nodes: []*planpb.Node{{PhysicalEqualityKeyList: []*planpb.Expr{expr}}}}
 	floor, err := RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion131, floor)
+	require.Equal(t, defines.MORPCVersion132, floor)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolFloor, moruntime.PersistedExpressionProtocolAuthoringFloor} {
 		original, present := rt.GetGlobalVariables(key)
@@ -609,15 +609,15 @@ func TestSetOperationFloatKeyPersistedAdmission(t *testing.T) {
 			}
 		})
 	}
-	for _, version := range []int64{defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131} {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion131)
+	for _, version := range []int64{defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion132)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, version)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, version)
 		readErr := RequirePersistedExpressionProtocol(proc.Ctx, proc, owner)
 		writeErr := RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner)
-		if version < defines.MORPCVersion131 {
-			require.ErrorContains(t, readErr, "131")
-			require.ErrorContains(t, writeErr, "131")
+		if version < defines.MORPCVersion132 {
+			require.ErrorContains(t, readErr, "132")
+			require.ErrorContains(t, writeErr, "132")
 		} else {
 			require.NoError(t, readErr)
 			require.NoError(t, writeErr)
@@ -683,13 +683,27 @@ func TestIdenticalBoundaryUnionUsesPartitionedSetKeys(t *testing.T) {
 			if node.NodeType != planpb.Node_AGG || len(node.GroupByHashKey) == 0 {
 				continue
 			}
-			key := node.GroupBy[node.GroupByHashKey[0]]
-			if key.GetF() == nil || key.GetF().Func.ObjName != "set_operation_float_key" {
+			// CompactPhysicalGroupKeys keeps hash slots ascending; the unchanged
+			// correlation column may precede the appended membership key.
+			keySlot := int32(-1)
+			for _, slot := range node.GroupByHashKey {
+				key := node.GroupBy[slot]
+				if key.GetF() != nil && key.GetF().Func.ObjName == "set_operation_float_key" {
+					keySlot = slot
+					break
+				}
+			}
+			if keySlot < 0 {
 				continue
 			}
 			foundKeys = true
 			require.Len(t, node.GroupByHashKey, 2, "visible membership plus correlation partition")
-			identity := node.GroupBy[node.GroupByHashKey[1]]
+			require.Less(t, node.GroupByHashKey[0], node.GroupByHashKey[1], "executor hash slots are ordered")
+			identitySlot := node.GroupByHashKey[0]
+			if identitySlot == keySlot {
+				identitySlot = node.GroupByHashKey[1]
+			}
+			identity := node.GroupBy[identitySlot]
 			require.Equal(t, int32(types.T_float64), identity.Typ.Id)
 			require.NotNil(t, identity.GetCol(), "hidden float identity retains scalar equality")
 		}

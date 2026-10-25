@@ -39,8 +39,8 @@ func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
 			require.Equal(t, tc.id == 600, features.TableCollationFunction)
 			require.Equal(t, tc.id == 601, features.TimestampAddSecondIntervals)
 			require.Equal(t, tc.id == 602, features.LoadFKIgnoreCheck)
-			require.Equal(t, tc.id == 619, features.SetOperationFloatKeys)
-			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600 || tc.id == 601 || tc.id == 602 || tc.id == 619, features.Any())
+			require.Equal(t, tc.id == 620, features.SetOperationFloatKeys)
+			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600 || tc.id == 601 || tc.id == 602 || tc.id == 620, features.Any())
 		})
 	}
 	for name, expr := range map[string]*Expr{
@@ -1320,9 +1320,10 @@ func TestSetOperationFloatKeyFeatureRoundTrip(t *testing.T) {
 		overload int64
 		want     bool
 	}{
-		{619, 0, true}, {619, 1, true},
+		{620, 0, true}, {620, 1, true},
 		{616, 0, false}, {617, 0, false}, {618, 0, false}, // released local ranks
-		{620, 0, false},                  // registry sentinel
+		{619, 0, false},                  // released weighted percentile
+		{621, 0, false},                  // registry sentinel
 		{603, 0, false}, {604, 0, false}, // released VIEWS functions
 		{602, 0, false}, // released LOAD_FK_IGNORE_CHECK
 		{601, 0, false}, // upstream TIMESTAMPADD_SECOND_INTERVAL
