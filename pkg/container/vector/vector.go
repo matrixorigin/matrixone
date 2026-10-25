@@ -3506,14 +3506,19 @@ func (v *Vector) preflightBinaryStringAppend(
 	}
 	needsRows := states > 1
 	if !needsRows {
-		hasDestinationValue := v.length > v.nsp.GetBitmap().CountRange(0, uint64(v.length))
+		// Keep the borrowed-validity materialization boundary before growth.
+		destinationNulls := v.nsp.GetBitmap()
 		destination := types.RuntimeStringInherit
 		if v.binaryString {
 			destination = types.RuntimeStringBinary
 		}
-		needsRows = hasDestinationValue &&
-			(summary.inherit && destination != types.RuntimeStringInherit ||
-				summary.text || summary.binary && destination != types.RuntimeStringBinary)
+		needsRows = summary.inherit && destination != types.RuntimeStringInherit ||
+			summary.text || summary.binary && destination != types.RuntimeStringBinary
+		if needsRows {
+			// Matching scalar domains cannot require row metadata, regardless
+			// of the destination's NULLs. Inspect its prefix only on a conflict.
+			needsRows = v.length > destinationNulls.CountRange(0, uint64(v.length))
+		}
 	}
 	if needsRows {
 		return v.ensureBinaryStringCapacity(finalLength, mp)
