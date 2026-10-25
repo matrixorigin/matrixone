@@ -1,8 +1,8 @@
 # Issue #30812: crash-durable statement_info audit spool
 - Status: in progress
-Revision 2, 2026-10-25. Owner: observability (motrace).
+Revision 3, 2026-10-25. Owner: observability (motrace).
 Tracking: [issue #30812](https://github.com/matrixorigin/matrixone/issues/30812); implementation [PR #31130](https://github.com/matrixorigin/matrixone/pull/31130) (the PR links this RFC revision).
-Revision 2 incorporates the round-1 implementation-review repairs: per-file fsync confirmation (no generation counters), per-segment export acknowledgements (no sequence-order settle), and quote-aware torn-tail recovery with poison quarantine. Revision 1 described the pre-review implementation and is superseded.
+Revision 3 replaces segment-oriented retirement with record→batch ownership tracking and a contiguous-commit export watermark (round-2 review: a batch's acknowledgement cannot cover records sealed into the same segment but owned by a later, still-pending batch), converts spool quota to charge-on-write (round-2 review: a failed Sync must not uncharge bytes that are on disk), and counts quarantined poison files in startup size accounting (round-2 review: the cap must survive restarts). Revision 2 (per-file fsync confirmation, per-segment acks, quote-aware torn-tail/poison — kept) superseded Revision 1 (pre-review implementation).
 
 ## Gate, classification and review record
 
@@ -12,11 +12,13 @@ This design document is the mandatory design-first artifact. The change is label
 Change scope: whole feature — statement_info crash-durable spool (issue #30812, PR #31130)
 Trigger: ≥500 production lines; persistent state; recovery protocol; background workers; hot-path impact; config semantics
 Design: docs/rfcs/20261025_statement_info_crash_durable_spool.md, status in progress, revision linked from PR body
-Blocking findings: none open after revision 2 repairs (F1 fsync protocol, F2 ack protocol, F4 torn-tail/poison)
+Blocking findings: none open after revision 3 repairs (rev2: F1 fsync protocol, F2 ack protocol, F4 torn-tail/poison;
+                    rev3: batch/segment misalignment → ownership watermark; quota charge-on-write; poison boot accounting)
 Decision log: at-least-once ceiling (no dedup key); rejected durable ack markers on the regular path (evidence below);
-              in-memory acks + ack-lag horizon; poison = quarantine, never delete, never block replay
+              in-memory acks + ack-lag horizon; parenting records to batch ids, contiguous-commit watermark;
+              poison = quarantine, never delete, never block replay, counted against the cap at every boot
 Decision: PENDING — design phase of PR #31130, recorded approval required before implementation sign-off
-Implementation deviations: revision 2 repairs pending design re-approval
+Implementation deviations: revision 3 repairs pending design re-approval
 ```
 
 ## Problem, evidence and invariants
@@ -43,7 +45,7 @@ Alternatives compared against the status quo:
 - **(B) Persisted ack markers on the regular export path** (durably mark each spool segment exported when its batch commits, matching the replay-side tombstones). **Rejected with evidence:** on the graceful/`777000x` verification legs an export batch was observed to commit while earlier spooled records were still draining through the collector (2s+ gap between the batch's commit and the record's availability). Persisting the ack before the ack-lag horizon lets a kill in that window turn *committed-but-unexported* records into replay-skipped, permanently lost rows. In-memory acks + horizon keep the worst case a bounded duplicate, never a silent loss. (Replay-side tombstones stay: they guard the kill-between-replay-commit-and-removal window, which has no such tradeoff.)
 - **(C) Status quo (accept the loss):** the documented audit surface cannot attribute committed DML after abrupt CN exit — the exact defect reported in the issue.
 
-Selected: node-local WAL-style spool with per-record group-commit fsync, per-batch segment retirement, boot replay through the SQL path only.
+Selected: node-local WAL-style spool with per-record group-commit fsync, record-ownership watermark retirement, boot replay through the SQL path only.
 
 ## Logical architecture
 
@@ -56,21 +58,25 @@ Selected: node-local WAL-style spool with per-record group-commit fsync, per-bat
 1. Under `mu`: write the line (single `Write`; a crash can only tear the tail), snapshot its end offset.
 2. Wait until `confirmedWidth ≥ end`. The appender that finds no Sync in flight becomes the leader: snapshot `target = fileSize`, drop `mu`, `Sync()`, and on success raise `confirmedWidth` to `target` — **not** to a possibly newer `fileSize` (a write racing the Sync is not covered by it). Followers share the leader's Sync (group commit; under burst load the queued records are confirmed by exactly one following Sync).
 3. A waiter whose `sealGen` changed while waiting returns success: the rotation's seal Sync already confirmed its write on that file.
-4. A Sync failure is surfaced at the append (pre-seal), one error consumed per waiter; `appendRecord` downgrades that record to the pre-spool memory-only behavior, rolls back the size quota, logs rate-limited (1/min), meters `spool_total{action="error"}`. The statement path is never broken.
+4. A Sync failure settles its generation and is surfaced at the append (pre-seal), one error consumed per waiter; `appendRecord` downgrades that record to the pre-spool memory-only behavior and logs rate-limited (1/min), meters `spool_total{action="error"}`. The statement path is never broken. Quota keeps charging the written bytes (charge-on-write; see §Resource bounds).
 
 `sealFileLocked()` (rotation, shutdown): waits out an in-flight Sync, performs its own Sync covering the whole file, bumps `sealGen`, broadcasts, closes, resets per-file state. First append after boot and after every rotation therefore always pays a fresh fsync on the new file.
 
-### Segment retirement (repair F2)
+### Record ownership and the export watermark (repairs F2, batch/segment misalignment)
 
-One segment file == one export batch: `spooledItemBuffer.GetBatch` rotates the active segment BEFORE the buffer drain generates the batch, and wraps the batch in `spoolBatchRequest`, so any kill after rotation keeps the batch's full record set durable on disk. Rotation over an empty segment produces no segment.
+Rotation still happens at `GetBatch`: `spooledItemBuffer.GetBatch` rotates the active segment BEFORE the buffer drain generates the batch and wraps the batch in `spoolBatchRequest`, so a kill after rotation keeps everything reported so far durable on disk. Rotation over an empty segment produces no segment. **But rotation boundaries carry no ownership meaning**: `bufferHolder.getGenerateReq` detaches a buffer BEFORE asynchronous generation, so `GetBatch` (and with it the seal) runs arbitrarily later than the records' arrival. A sealed segment holds the detached buffer's records AND records already appended for the next, still-pending batch — revision 2's per-segment ack ("segment == its batch") therefore still loses those next-batch records when a later batch satisfies the lag (round-2 probe: batches A and C commit while B stays pending ⇒ the segment holding B's records was deleted). Retirement must follow the exported *records*, never sequence numbers, newer-batch counts, or elapsed time.
 
-Revision 1 settled every sealed `seq ≤ acked` ("pipeline drains in order"). That assumption is false: `MOCollector` runs `calculateDefaultWorker(NumCPU)` `doExport` workers over one `awakeBatch` channel, so with ≥2 exporters consecutive batches can complete out of order (finding F2: acking segment 2 deleted segment 1 while its batch was in flight → permanent loss on a following kill). Final protocol:
+Revision 3 protocol — every record is parented to exactly one batch, and only committed parenthood retires bytes:
 
-- `ackSegment(seq)` settles **only** the segment whose own batch committed (in-memory). Unknown seqs (duplicate completion) settle nothing.
-- Removal is **in-order head-of-line** over the sealed map: remove the head while it is settled and passes the ack-lag guard; stop at the first unsettled (or failed) segment. A segment waiting for its own ack thus head-of-line blocks newer removals; the spool size bound keeps this finite, and a stuck export is observable through the bound's drop metric/log.
-- **Ack-lag guard** (unchanged semantics): removable when `ackLagSegments` newer batches committed (newer segments whose own batch acked — noBatch neighbors do not count), or the segment is older than `ackLagDuration` (aggregation window + export interval + margin, default ≈35s, wired as `1 + window/interval` + duration).
-- **Gap segments (`noBatch`):** if the drain produced no batch (buffer empty: records were in flight between the spool append and the collector, or the batch shape was non-export), no request exists for the segment and no ack can ever arrive. The segment is flagged `noBatch`; its records ship inside a later batch within one aggregation window, so it becomes removable through the ack-lag guard alone. Failed segments are never removed in-run (restart replay owns them).
-- Acks stay **in-memory and behind the horizon**: persisting them earlier re-opens rejected alternative (B). Kill cost = re-export of at most the batches committed inside the horizon (observed live: exactly one most-recent batch; `COUNT=100 / COUNT(DISTINCT statement)=50` for one 50-row round — the documented duplicate window; statement_info has no dedup key, so at-least-once is the ceiling).
+- Each appended record takes a spool record sequence; `spoolStatementInfo` stamps it onto the `StatementInfo` before the collector hand-off (write happens-before the queue transfer, same goroutine).
+- Each collector buffer instance for the pipe (one future batch) allocates a batch id `K` from a spool-local monotonic counter on its first `Add` (empty buffers never consume ids, so no ghost id can stall the watermark). `spooledItemBuffer.Add` parents the record: `(recordSeq → K)` folds into the owning segment's counters — `taggedCount++`, `maxTag = max(maxTag, K)`. Tags and acks share one id space, so coverage is exact regardless of generation/detach reordering: record exported ⟺ its owning batch committed.
+- On batch commit `spoolBatchRequest.Handle` calls `ackBatch(K)`: the committed-id set gains `K` and the export **watermark `W`** advances to the highest id with every id ≤ it committed (contiguous completion — C committing while B is pending does NOT advance past B). A failed `Handle` changes nothing: the stall itself retains every segment owning uncommitted records, for restart replay.
+- Segment removal (in-order head-of-line over the sealed ranges) requires ALL of:
+  1. `W ≥ seg.maxTag` — every record parented into this file belongs to a committed batch. (A record with tag > W still owns durable bytes here; deleting would repeat revision-1's loss.)
+  2. `fullyTagged` (`taggedCount == recordCount`) **or** age ≥ `ackLagDuration` — distinguishes real stragglers (records queued between report and `Add`; bounded by queue residence, far below the duration) from the pre-existing collector-overload drop class (never Added; acknowledged lossy, released only by the duration leg).
+  3. the ack-horizon (unchanged): `ackLagSegments` newer settled segments **or** age ≥ `ackLagDuration` — keeps the duplicate window bounded.
+- All lifecycle state is memory-only: a kill loses `W`, the committed set and the per-segment counters; every segment still on disk then replays at-least-once. A segment on disk at kill-time is exactly one whose records committed inside the horizon (or not at all) ⟹ the duplicate window is unchanged from revision 2 (observed live: `COUNT=100 / COUNT(DISTINCT statement)=50` for one 50-row round — the horizon batches, never a third copy).
+- The ownership seam is narrow: one uint64 field on `StatementInfo` (never serialized/compared), one `Add` hook on the existing wrapper. The collector, aggregator and `ContentWriter` keep their semantics.
 
 ### Boot replay, torn-tail and poison (repair F4)
 
@@ -83,11 +89,11 @@ Recovery of crashed content is **quote-aware**, because a CSV field may itself c
 
 ### State machine (per segment)
 
-`active` → (rotation) → `sealed pending` → (own batch commits) → `done` → (ack-lag guard) → removed; `sealed pending` → (no batch) → `noBatch` → (guard only) → removed; → (export error) → `failed` (restart replay); active/pending at shutdown or kill → boot `orphan` → (SQL commit → tombstone → removed) / (kill mid-removal with tombstone) → `exportedPendingRemove` → removed without re-export / (poison) → `.poison` quarantine.
+`active` → (rotation) → `sealed` → (all records parented, `W ≥ maxTag`, horizon passed) → removed; an export stall or a kill/shutdown with an under-covered segment → boot `orphan` → (SQL commit → tombstone → removed) / (kill mid-removal with tombstone) → `exportedPendingRemove` → removed without re-export / (poison) → `.poison` quarantine (retained, counted against the cap at every boot, never replayed).
 
 ### Resource and operational bounds
 
-- Disk: `statement-info-spool-max-size` (default 1 GiB) across segments, tombstones (empty) and poison files; overage drops NEW spool records (statement pipeline unchanged), metered + rate-limited log. One segment ≈ one export batch (≈ buffer threshold or 15s of traffic).
+- Disk: `statement-info-spool-max-size` (default 1 GiB) across all files the directory holds — segments, tombstones (empty) and quarantined poison files; overage drops NEW spool records (statement pipeline unchanged), metered + rate-limited log. One segment ≈ one export cycle (≈ buffer threshold or 15s of traffic). **Charge-on-write accounting:** the append path reserves the record's bytes before writing and converts the reservation into charged bytes as the `Write` lands — an fsync failure keeps the charge (the bytes exist on disk; only bytes never written release the reservation), and startup accounting walks EVERY file in the directory (`.poison` included, excluded only from replay), so the bound holds across I/O errors and restarts alike (round-2 reviews: a Sync failure used to uncharge on-disk bytes; quarantined bytes used to vanish from accounting at boot).
 - I/O: worst case one fsync per statement, amortized across concurrent statements by group commit; one fsync-batch per rotation; replay adds one fsync+dirsync per segment tombstone.
 - Goroutines: replay loop + janitor (10s) only; both stop at `Shutdown`.
 - Memory: appends use a pooled 1 KiB scratch buffer per record render; no per-record heap state.
@@ -123,15 +129,14 @@ Cheapest deterministic check per invariant (fault injection, fake clocks, in-mem
 | append never returns un-fsynced (incl. first append after boot/rotation) | `TestSpoolFsyncGroupAppendSurfacesSyncError` (Sync-failing file, error surfaces pre-seal), `TestSpoolFsyncGroupAppendSyncFailsOnRealPipe` (EINVAL real fd), `TestSpoolFsyncGroupFreshFileRequiresNewSync`, `TestStatementInfoSpoolAppendFsyncBeforeAck` (Sync counted before seal AND before ack) |
 | group commit amortizes + racing write not covered by in-flight Sync | `TestSpoolFsyncGroupCommitSharesSync` (3 records, exactly 2 Syncs) |
 | waiter across seal succeeds once, via seal Sync | `TestSpoolFsyncGroupWaiterAcrossSealSucceeds` (gated Sync, channels) |
-| spool error path degrades, no panic, quota rollback | `TestStatementInfoSpoolAppendSyncFailureDegrades`, `TestStatementInfoSpoolErrorPaths` |
-| retirement follows own batch's commit, out-of-order safe | `TestLaterCompletionPreservesPendingEarlierBatch` (ack seg2 ⇒ seg1 file stays), `TestStatementInfoSpoolAckOutOfOrderFuzz` (evens then odds), `TestStatementInfoSpoolAckUnknownSegmentSettlesNothing` |
-| noBatch gap lifecycle | `TestStatementInfoSpoolNoBatchGapSegment` (later-commit removal, duration fallback, noBatch-neighbor non-count), `TestStatementInfoSpoolPipelineGapReplayed` (crash ⇒ replay lands the record) |
-| failed export keeps segment; ack can't remove failed | `TestStatementInfoSpoolFailedExportKeepsSegment` |
+| spool error path degrades, no panic, written bytes stay charged | `TestStatementInfoSpoolAppendSyncFailureDegrades` (Sync failure: recorded charge retained, rate-limit, no panic; quota control still bounded), `TestSyncErrorMustNotUnchargeWrittenBytes` (round-2 probe: repeated Sync failure over a real file, disk usage tracks accounting), `TestStatementInfoSpoolErrorPaths` |
+| retirement follows exported records; misalignment cannot lose a pending batch | `TestBatchCommitMustCoverEverySpoolRecord` (round-2 probe verbatim: A=true, B=false, C=true ⇒ the A/B file survives), `TestStatementInfoSpoolWatermarkOutOfOrderFuzz`, `TestStatementInfoSpoolAckUnknownBatchSettlesNothing`, `TestStatementInfoSpoolPipelineGapReplayed` (crash ⇒ replay lands the record) |
+| failed/stalled batch retains everything it owns | `TestStatementInfoSpoolStalledWatermarkKeepsSegments` (failure ⇒ no watermark progress ⇒ files stay for restart replay) |
 | torn tail at real CSV boundaries | `TestLastCompleteCSVRecordEnd` (12-case table), `TestRecoverSpoolSegmentContent` (multiline quoted probe + parse-cleanliness), `TestStatementInfoSpoolReplayDropsTornTail` |
-| poison quarantined, never blocks replay | `TestStatementInfoSpoolReplayPoisonSkippedNotBlocking` |
+| poison quarantined, never blocks replay, counted at every boot | `TestStatementInfoSpoolReplayPoisonSkippedNotBlocking`, `TestPoisonBytesSurviveQuotaRestart` (round-2 probe verbatim: 90 poison bytes +100-byte cap ⇒ only 10 free) |
 | replay semantics: order, retry, tombstone, no-dup, no CSV fallback | `TestStatementInfoSpoolCrashRecoveryReplay`, `…ReplayFailureKeepsSegment`, `…ExportedPendingRemove`, `…AckMarkerPreventsReplayDup`, `…StartReplayRetryLoop`, `TestWriteSpoolContent` |
 | bounds/janitor/lifecycle | `TestStatementInfoSpoolMaxSizeBound`, janitor/removal subtests, `TestStatementInfoSpoolDoubleClose`, lifecycle suite, `BenchmarkStatementInfoSpoolRecord` |
-| end-to-end (live, exact PR-head binary, sha256 recorded) | 2-CN rig: 3× kill −9 rounds ×50 INSERTs FINAL 50/50 + 45s recheck; graceful restart ⇒ pipeline-gap recovery; post-flush ⇒ nothing re-inserted; failed-DML control ⇒ audited incl. `Failed`; dup shape `COUNT==DISTINCT` outside horizon; spool on/off perf |
+| end-to-end (live, exact PR-head binary, sha256 recorded) | 2-CN rig: 3× kill −9 rounds ×50 INSERTs FINAL 50/50 + 45s recheck; graceful restart ⇒ pipeline-gap recovery; post-flush ⇒ nothing re-inserted; inside-horizon kill ⇒ bounded dup; concurrent-burst kill leg (8 sessions × 25, kill mid-burst ⇒ `COUNT ≤ 2× DISTINCT`, `DISTINCT == committed`); failed-DML control; spool on/off perf |
 
 Coverage gate for the package stays >75%; `gofmt`/`go vet`/staticcheck U1000 clean.
 
@@ -148,7 +153,8 @@ Open questions (non-blocking): whether poison files should expire automatically 
 - At-least-once ceiling accepted: `statement_info` has no PK/dedup key; exactly-once would require schema change + dedup — rejected as disproportionate for an audit surface.
 - Durable ack markers on the regular export path REJECTED (alternative B) with live evidence (grace/777000x legs: batch commit preceding still-draining records by 2s+); replay-side tombstones kept (no such tradeoff there).
 - In-memory acks + derived ack-lag horizon (segments + duration) accepted; kill cost = bounded duplicate window, observed live as one most-recent batch.
-- Per-segment acks + in-order head-of-line removal over out-of-order completion (revision 2, review F2).
+- Per-segment acks + in-order head-of-line removal over out-of-order completion (revision 2, review F2), SUPERSEDED in revision 3: even per-segment ownership was wrong — seal boundaries drift from batch boundaries (detached-buffer generation). Retirement now follows record→batch parenthood + contiguous-commit watermark (round-2 review); the horizon/dup window is unchanged, and batch failure/stall retains everything owned for restart replay with no explicit failed-flag.
 - Per-file byte-width fsync confirmation over generation counters (revision 2, review F1).
+- Charge-on-write quota accounting: written bytes stay charged across fsync failures; quarantined poison bytes counted at every boot (revision 3, round-2 reviews).
 - Quote-aware CSV record recovery + poison quarantine (revision 2, review F4; fail-loud, never auto-delete, never block replay).
 - Import-cycle constraint: the replay SQL flush duplicates `etl.SQLFlusher.FlushBuffer`'s SQL byte-for-byte on the `db_holder` pool instead of importing `etl` (`etl`'s tests import `motrace`; the import must not exist in either direction for test builds). Kept under a comment with the identity contract; a follow-up extraction shared by both is welcome but not blocking.

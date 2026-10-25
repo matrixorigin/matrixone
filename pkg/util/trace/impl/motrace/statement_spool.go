@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -61,23 +63,30 @@ import (
 //     per-file byte width, so the first append after boot and after every
 //     rotation always pays for a fresh fsync). From this point the record
 //     survives a process kill.
-//   - The spool is a sequence of segment files. The statement exporter rotates
-//     the active segment whenever an export batch is generated (one batch ==
-//     one segment of spooled records). When an export batch is durably
-//     committed its segment is acked in memory; a segment becomes removable
-//     once it settled AND the ack-lag guard cleared it.
-//   - Retirement follows the confirmed completion of the segment's own
-//     records, never sequence numbers: MOCollector runs multiple doExport
-//     workers, so batch completion order is not guaranteed. ackSegment(seq)
-//     settles only that segment's batch; removal walks the sealed segments in
-//     order and stops at the first unsettled one (a segment awaiting its own
-//     ack, or a failed one, head-of-line blocks newer removals — bounded by
-//     the spool size cap).
-//   - A segment sealed at an export tick whose buffer drain produced no batch
-//     holds records that were in flight between the spool append and the
-//     collector. No export request exists for it (flagged noBatch); its
-//     records ship inside a later batch within one aggregation window, so it
-//     becomes removable through the ack-lag guard alone.
+//   - The spool is a sequence of segment files rotated at every export batch
+//     generation. Rotation boundaries carry no ownership meaning: the
+//     exporter detaches a buffer before generating asynchronously, so a
+//     sealed segment holds the detached buffer's records AND records already
+//     appended for the next, still-pending batch. Retirement therefore
+//     follows the exported records, never segment/batch sequence numbers:
+//   - Every appended record takes a spool record sequence, stamped onto the
+//     StatementInfo before the collector hand-off. Each collector buffer
+//     instance (one future export batch) allocates a batch id on its first
+//     Add; the Add hook parents the record to that batch (folded into the
+//     owning segment's taggedCount/maxTag). On batch commit the spool
+//     advances an export watermark W — the highest batch id with every id
+//     below it committed (MOCollector runs multiple doExport workers:
+//     completion order is not guaranteed; a later commit must not advance
+//     past a pending one). A failed batch advances nothing: the stall
+//     retains every segment owning uncommitted records, for restart replay.
+//   - A sealed segment is removable (in order, head-of-line) once the
+//     watermark covers the highest batch id owning any of its records
+//     (W >= maxTag), its records are fully parented (or it aged past the
+//     ack-lag horizon, which bounds stragglers to the pre-existing
+//     collector-drop loss class), and the ack-lag horizon passed. A kill
+//     loses the in-memory watermark, so everything still on disk replays
+//     at-least-once: the duplicate window is exactly the batches committed
+//     inside the horizon.
 //   - At process start, every spool segment still on disk is replayed through
 //     the SQL export path (the same LOAD DATA INLINE destination the exporter
 //     uses) and removed only after the replayed content is committed at the
@@ -91,32 +100,36 @@ import (
 //     surviving prefix is fully parsed before loading; a segment whose
 //     complete prefix does not parse is quarantined (<name>.spool.poison)
 //     and skipped without blocking the replay of later segments.
-//   - The size of the spool directory is bounded; once the bound is exceeded
-//     newly reported records are dropped from the spool (the in-memory
-//     pipeline keeps its old behavior) and the loss is logged and metered.
+//   - The size of the spool directory is bounded and charged on write: a
+//     record's bytes are reserved before the append and stay charged once
+//     written — a failed fsync must not uncharge bytes that sit on disk —
+//     and startup accounting walks every file (quarantined poison included).
+//     Once the bound is exceeded newly reported records are dropped from
+//     the spool (the in-memory pipeline keeps its old behavior) and the
+//     loss is logged and metered.
 //
 // Failure semantics (explicitly documented):
 //   - At-least-once: a record that reached the spool is eventually exported,
 //     even across an abrupt process exit, as long as the local spool directory
 //     survives (same-node restart; a replacement node without the directory
 //     cannot replay it).
-//   - Duplicates stay bounded: a process kill loses the in-memory ack state,
-//     so on restart the replay re-exports every segment that was acked but
-//     not yet removed when the process died. With the ack-lag guard that is
-//     at most the export batches committed inside the last ack-lag horizon
-//     (aggregation window + export interval + margin, typically one or two
-//     batches). Their rows are re-inserted; statement_info has no dedup key,
-//     so at-least-once is the strongest guarantee achievable here. The
-//     horizon never resurrects older batches: acked segments older than the
-//     horizon are removed in run, so nothing remains to replay.
-//   - A segment is acked only when its own export batch is confirmed
-//     committed; the ack is then guarded by the ack lag (see ackLagSegments)
-//     before the segment is removed, which also covers records that were
-//     still draining through the collector pipeline when their batch fired:
-//     such a late record is replayed from its own, still un-removed segment
-//     (or from the noBatch segment holding it). No ack state is persisted
-//     ahead of that guard, so a kill can never turn an un-exported record
-//     into a permanently lost one.
+//   - Duplicates stay bounded: a process kill loses the in-memory watermark
+//     and tag state, so on restart the replay re-exports every segment that
+//     was covered but not yet removed when the process died. With the
+//     ack-lag guard that is at most the export batches committed inside the
+//     last ack-lag horizon (aggregation window + export interval + margin,
+//     typically one or two batches). Their rows are re-inserted;
+//     statement_info has no dedup key, so at-least-once is the strongest
+//     guarantee achievable here. The horizon never resurrects older
+//     batches: covered-and-aged segments are removed in run, so nothing
+//     remains to replay.
+//   - A segment is removed only when the export watermark passed every batch
+//     id parented into it (contiguous completion — a pending batch blocks
+//     the watermark, so its records keep their durable copy); the ack-lag
+//     guard then delays removal, which also covers records that were still
+//     draining through the collector queue when their segment was sealed.
+//     No ack state is persisted ahead of that guard, so a kill can never
+//     turn an un-exported record into a permanently lost one.
 //   - A poison segment (mid-file CSV corruption, never producible by a torn
 //     append) is quarantined for forensics and keeps occupying the size
 //     bound; its records are lost. This is a deliberate fail-loud choice.
@@ -156,11 +169,27 @@ type statementInfoSpool struct {
 	// fg groups concurrent appends around shared fsyncs; it owns the active
 	// file handle.
 	fg *spoolFsyncGroup
-	// sealed holds rotated segments that still wait for their export ack,
-	// keyed by seq, oldest first.
-	sealed    map[uint64]*spoolSegment
-	nextSeq   uint64
-	totalSize int64
+	// sealed holds rotated segments that still wait for export coverage,
+	// keyed by seq. sealedOrder mirrors the map, sorted ascending, so
+	// segmentOfLocked can binary-search a record sequence to its segment.
+	sealed      map[uint64]*spoolSegment
+	sealedOrder []*spoolSegment
+	nextSeq     uint64
+	totalSize   int64
+
+	// nextRecordSeq is the spool record sequence assigned to the NEXT
+	// successfully appended record (starts at 1; 0 means "not spooled" on
+	// StatementInfo.spoolSeq).
+	nextRecordSeq uint64
+	// nextBatchID allocates export-batch ids; a collector buffer instance
+	// takes one on its first Add (empty buffers never consume ids, so no
+	// ghost id can stall the watermark).
+	nextBatchID uint64
+	// committed holds recently committed batch ids; watermark is the
+	// highest id with every id <= it committed (contiguous completion).
+	// Both are in-memory only, intentionally lost on kill (see header).
+	committed map[uint64]bool
+	watermark uint64
 
 	// orphan segments recovered from the previous process run, replayed in
 	// sequence order.
@@ -353,18 +382,21 @@ type spoolSegment struct {
 	name   string
 	size   int64
 	sealed time.Time
-	done   bool
-	// failed marks a segment whose export failed at least once. It is kept
-	// for the restart replay, same as a never-acked segment.
-	failed bool
-	// noBatch marks a segment sealed at an export tick whose buffer drain
-	// produced no batch (GetBatch returned nil or a non-export shape): the
-	// segment has records on disk but no export request exists for it, so no
-	// ack can ever arrive. Its records demonstrably ship inside a later
-	// batch (they were in flight between the spool append and the
-	// collector, and ship within one aggregation window), so the segment
-	// becomes removable through the ack-lag guard alone.
-	noBatch bool
+
+	// recBase is the spool record sequence of this segment's first record;
+	// the segment covers [recBase, recBase+recordCount). Rotation never
+	// reorders records, so sealed segments sort by recBase.
+	recBase uint64
+	// recordCount counts the records appended into this segment.
+	recordCount int64
+	// taggedCount counts how many of those records have been parented to
+	// an export batch at the collector buffer's Add hook. taggedCount ==
+	// recordCount means the segment is fully parented.
+	taggedCount int64
+	// maxTag is the highest batch id parented into this segment. The
+	// segment's records are all exported once watermark >= maxTag.
+	maxTag uint64
+
 	// exportedPendingRemove is set once the segment's content has been
 	// confirmed exported — either by a replay in this process run, or by an
 	// earlier run which left a replay tombstone next to the segment file
@@ -383,7 +415,7 @@ func spoolSegmentFileName(seq uint64) string {
 // destination, that the file content above it must not be re-exported. A
 // kill between the replay commit and the segment removal would otherwise
 // re-insert the batch on the next boot. Ack state of the regular export
-// path is intentionally NOT persisted (see ackSegment).
+// path is intentionally NOT persisted (see ackBatch and the file header).
 const spoolAckFileSuffix = ".acked"
 
 func spoolAckFileName(segName string) string {
@@ -466,6 +498,9 @@ func newStatementInfoSpool(dir string, maxSize int64, ackLagSegments uint64, ack
 		now:                 time.Now,
 		fg:                  &spoolFsyncGroup{},
 		sealed:              make(map[uint64]*spoolSegment),
+		committed:           make(map[uint64]bool),
+		nextRecordSeq:       1,
+		nextBatchID:         1,
 		replayStop:          make(chan struct{}),
 		replayDone:          make(chan struct{}),
 		janitorStop:         make(chan struct{}),
@@ -489,12 +524,19 @@ func newStatementInfoSpool(dir string, maxSize int64, ackLagSegments uint64, ack
 		if e.IsDir() {
 			continue
 		}
-		seq, ok := parseSpoolSegmentFileName(e.Name())
-		if !ok {
-			continue
-		}
 		info, err := e.Info()
 		if err != nil {
+			continue
+		}
+		// Quarantined poison files are deliberately RETAINED at quarantine,
+		// so they must stay charged against the bound at every boot — they
+		// are excluded from replay, never from accounting.
+		if strings.HasSuffix(e.Name(), spoolPoisonFileSuffix) {
+			s.totalSize += info.Size()
+			continue
+		}
+		seq, ok := parseSpoolSegmentFileName(e.Name())
+		if !ok {
 			continue
 		}
 		orphan := &spoolSegment{
@@ -575,32 +617,41 @@ func (s *statementInfoSpool) openActiveLocked() error {
 	s.fg.adoptLocked(f, size)
 	s.fg.mu.Unlock()
 	s.active = &spoolSegment{
-		seq:    s.nextSeq,
-		name:   spoolSegmentFileName(s.nextSeq),
-		size:   size,
-		sealed: s.now(),
+		seq:     s.nextSeq,
+		name:    spoolSegmentFileName(s.nextSeq),
+		size:    size,
+		sealed:  s.now(),
+		recBase: s.nextRecordSeq,
 	}
 	s.nextSeq++
 	return nil
 }
 
-// appendRecord makes one already-encoded record line durable.
+// appendRecord makes one already-encoded record line durable and returns its
+// spool record sequence (0 when the record was not spooled: spool closed,
+// full, or the append failed). The sequence parents the record to its export
+// batch later, at the collector buffer's Add hook.
 //
 // The write is a single Write call, so process termination can only leave
 // whole lines behind. The fsync per call bounds the loss window of a process
 // kill to "the statement whose report is in flight right now" and keeps the
 // audit-durability contract independent of OS page-cache behavior.
 //
+// Quota is charged on write: the record's bytes are reserved up front, and
+// only bytes never written release the reservation — a failed fsync must not
+// uncharge bytes that sit on disk, or a persistently failing disk would let
+// the directory outgrow its bound.
+//
 // On any failure the record falls back to the pre-spool (in-memory only)
 // behavior; the failure must never break the statement path.
-func (s *statementInfoSpool) appendRecord(line []byte) {
+func (s *statementInfoSpool) appendRecord(line []byte) uint64 {
 	if len(line) == 0 {
-		return
+		return 0
 	}
 	s.mux.Lock()
 	if s.closed {
 		s.mux.Unlock()
-		return
+		return 0
 	}
 	if s.totalSize+int64(len(line)) > s.maxSize {
 		s.droppedRecords++
@@ -614,35 +665,45 @@ func (s *statementInfoSpool) appendRecord(line []byte) {
 				zap.Int64("spool max size", s.maxSize))
 		}
 		s.mux.Unlock()
-		return
+		return 0
 	}
 	if s.active == nil {
 		if err := s.openActiveLocked(); err != nil {
 			s.mux.Unlock()
 			v2.TraceMOLoggerSpoolErrorCounter.Inc()
 			s.logErrRateLimited("statement_info spool open active segment failed", err)
-			return
+			return 0
 		}
 	}
-	// reserve the quota before the (possibly shared) fsync wait so concurrent
-	// appenders observe a tight bound; undo on failure.
+	// reserve quota, consume a record sequence, and count the ledger record
+	// atomically, so two concurrent appenders can never share a sequence
+	// (tagging is keyed on it).
 	s.totalSize += int64(len(line))
+	seq := s.nextRecordSeq
+	s.nextRecordSeq++
+	s.active.recordCount++
 	s.mux.Unlock()
 
 	n, err := s.fg.append(line)
 	if err != nil {
 		s.mux.Lock()
-		s.totalSize -= int64(len(line))
+		// charge-on-write: only bytes never written release the reservation;
+		// a failed fsync must not uncharge bytes that sit on disk. The
+		// sequence stays consumed and the ledger record stays counted even
+		// though it can never be parented (no stamp reaches the collector):
+		// the segment clears through the age leg of the ack-lag horizon,
+		// which is the documented fate of a broken-disk window.
+		s.totalSize -= int64(len(line) - n)
 		if s.totalSize < 0 {
 			s.totalSize = 0
 		}
 		s.mux.Unlock()
 		v2.TraceMOLoggerSpoolErrorCounter.Inc()
 		s.logErrRateLimited("statement_info spool append record failed", err)
-		return
+		return 0
 	}
-	_ = n
 	v2.TraceMOLoggerSpoolWriteCounter.Inc()
+	return seq
 }
 
 // logErrRateLimited logs an I/O error at most once a minute: a broken spool
@@ -655,12 +716,13 @@ func (s *statementInfoSpool) logErrRateLimited(msg string, err error) {
 	}
 }
 
-// sealForExport rotates the active segment: the current active segment becomes
-// a sealed segment that maps 1:1 with the export batch being generated, and a
-// fresh active segment is opened. Returns the sealed segment; nil if the
-// active segment holds no record. The file swap is atomic against appends,
-// so a record can neither land in a sealed file after its batch was captured
-// nor fall between two files.
+// sealForExport rotates the active segment: the current active segment
+// becomes sealed and a fresh active segment is opened. Returns the sealed
+// segment; nil if the active segment holds no record. The file swap is atomic
+// against appends, so a record can neither land in a sealed file after the
+// rotation nor fall between two files. Rotation boundaries carry no ownership
+// meaning (see the file header): which export batch owns a record is decided
+// by the collector buffer it lands in, tracked via tagRecord.
 func (s *statementInfoSpool) sealForExport() *spoolSegment {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -694,16 +756,21 @@ func (s *statementInfoSpool) sealForExport() *spoolSegment {
 	seg.size = size
 	seg.sealed = s.now()
 	s.sealed[seg.seq] = seg
+	idx := sort.Search(len(s.sealedOrder), func(i int) bool { return s.sealedOrder[i].seq >= seg.seq })
+	s.sealedOrder = append(s.sealedOrder, nil)
+	copy(s.sealedOrder[idx+1:], s.sealedOrder[idx:])
+	s.sealedOrder[idx] = seg
 	if openErr != nil {
 		// the next append reopens lazily; meanwhile the rotated segment is
 		// on disk and tracked, so no record is stranded.
 		s.active = nil
 	} else {
 		s.active = &spoolSegment{
-			seq:    s.nextSeq,
-			name:   spoolSegmentFileName(s.nextSeq),
-			size:   nextSize,
-			sealed: s.now(),
+			seq:     s.nextSeq,
+			name:    spoolSegmentFileName(s.nextSeq),
+			size:    nextSize,
+			sealed:  s.now(),
+			recBase: s.nextRecordSeq,
 		}
 	}
 	s.nextSeq++
@@ -712,65 +779,105 @@ func (s *statementInfoSpool) sealForExport() *spoolSegment {
 	return seg
 }
 
-// ackSegment marks the export batch of one segment as committed, then removes
-// every segment that is safely covered. Also see markExportFailed for the
-// failure case.
-//
-// The ack settles ONLY the segment whose own batch committed: MOCollector
-// runs multiple doExport workers, so the completion order of consecutive
-// batches is not guaranteed — settling every older segment here could remove
-// a segment whose own batch is still in flight, turning its records into a
-// permanent loss on a following kill.
-//
-// The ack is deliberately in-memory only: persisting it ahead of the ack lag
-// would let a kill between the batch commit and the lag horizon turn records
-// that were still draining through the collector pipeline into un-replayed,
-// permanently lost rows (see the file header). The kill costs at most the
-// re-export of the batches inside the horizon.
-func (s *statementInfoSpool) ackSegment(seq uint64) {
+// nextBatch allocates an export-batch id. Ids are the watermark space: tags
+// (record -> batch ownership) and acks (batch commits) share it, so coverage
+// stays exact no matter how generation and export completion reorder.
+func (s *statementInfoSpool) nextBatch() uint64 {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	if seg, ok := s.sealed[seq]; ok && seg != nil {
-		seg.done = true
-	} else {
-		// Either a duplicate Handle completion or the segment was already
-		// removed; both are benign, but neither may settle another segment.
-		logutil.Debug("statement_info spool ack for unknown segment", zap.Uint64("seq", seq))
+	id := s.nextBatchID
+	s.nextBatchID++
+	return id
+}
+
+// segmentOfLocked finds the segment covering one spool record sequence:
+// the active segment if the record may still be there, else the sealed
+// segment whose [recBase, recBase+recordCount) range holds it. Records whose
+// segment has already been removed have no owner to update (their durable
+// copy is gone either way: exported, or in the documented loss class).
+func (s *statementInfoSpool) segmentOfLocked(recSeq uint64) *spoolSegment {
+	if s.active != nil && recSeq >= s.active.recBase {
+		return s.active
+	}
+	idx := sort.Search(len(s.sealedOrder), func(i int) bool {
+		seg := s.sealedOrder[i]
+		return recSeq < seg.recBase+uint64(seg.recordCount)
+	})
+	if idx < len(s.sealedOrder) {
+		seg := s.sealedOrder[idx]
+		if recSeq >= seg.recBase {
+			return seg
+		}
+	}
+	return nil
+}
+
+// tagRecord parents one spooled record to its export batch: the record is
+// exported exactly when that batch commits (see the watermark protocol in the
+// file header). Called from the collector buffer's Add hook, before the item
+// is rendered and freed.
+func (s *statementInfoSpool) tagRecord(recSeq, batchID uint64) {
+	if recSeq == 0 || batchID == 0 {
+		return
+	}
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	seg := s.segmentOfLocked(recSeq)
+	if seg == nil {
+		return
+	}
+	seg.taggedCount++
+	if batchID > seg.maxTag {
+		seg.maxTag = batchID
+	}
+}
+
+// ackBatch records one export batch's commit and advances the export
+// watermark to the highest batch id with every id below it committed.
+// Completion order across MOCollector's doExport workers is not guaranteed:
+// a commit must never pass a pending batch, or the still-pending batch's
+// records could lose their durable copy while unexported. On success the
+// covered segments are re-examined for removal. A failed Handle never calls
+// this: the stall itself retains everything the batch owned.
+func (s *statementInfoSpool) ackBatch(batchID uint64) {
+	if batchID == 0 {
+		return
+	}
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	if s.committed[batchID] {
+		return
+	}
+	s.committed[batchID] = true
+	for s.committed[s.watermark+1] {
+		s.watermark++
+		delete(s.committed, s.watermark)
 	}
 	s.collectRemovableLocked()
 }
 
-// markNoBatch flags a sealed segment whose export tick produced no batch for
-// it: no request was generated, so no ackSegment will ever reference it. Its
-// removal relies on the ack-lag guard alone (see collectRemovableLocked).
-func (s *statementInfoSpool) markNoBatch(seq uint64) {
-	s.mux.Lock()
-	defer s.mux.Unlock()
-	if seg, ok := s.sealed[seq]; ok && seg != nil {
-		seg.noBatch = true
+// segmentExportCoveredLocked reports whether every record parented into the
+// segment is covered by a committed batch: the watermark passed the segment's
+// highest owning batch id. A segment whose records are not all parented yet
+// (still queued between report and collector Add) is only covered once it
+// aged past the ack-lag horizon — the bound that separates real stragglers
+// from the pre-existing collector-overload drop class (never Added).
+func (s *statementInfoSpool) segmentExportCoveredLocked(seg *spoolSegment, now time.Time) bool {
+	if seg.maxTag > s.watermark {
+		return false
 	}
+	if seg.taggedCount < seg.recordCount && s.ackLagDuration > 0 && now.Sub(seg.sealed) < s.ackLagDuration {
+		return false
+	}
+	return true
 }
 
-// markExportFailed keeps the segment; its content is replayed after restart,
-// or by the periodic retry. The exporter itself already logged the failure.
-func (s *statementInfoSpool) markExportFailed(seq uint64) {
-	s.mux.Lock()
-	defer s.mux.Unlock()
-	if seg, ok := s.sealed[seq]; ok && seg != nil {
-		seg.failed = true
-		v2.TraceMOLoggerSpoolErrorCounter.Inc()
-		logutil.Warn("statement_info spool keeps segment after export failure, wait for replay",
-			zap.Uint64("seq", seq))
-	}
-}
-
-// collectRemovableLocked removes the head of the sealed list while every
-// segment in it (a) settled — its own export batch committed (done) or it
-// never had one (noBatch) — (b) is not failed, and (c) clears the ack-lag
-// guard: followed by ackLagSegments newer acked segments or older than
-// ackLagDuration. Removal stays in sequence order: a segment waiting for its
-// own ack (or a failed one) head-of-line blocks all newer removals until it
-// settles or the process restarts, which the spool size bound keeps finite.
+// collectRemovableLocked removes the head of the sealed list while every head
+// segment (a) is export-covered (see segmentExportCoveredLocked) and (b)
+// clears the ack-lag guard: followed by ackLagSegments newer covered
+// segments, or older than ackLagDuration. Removal stays in sequence order;
+// an under-covered head head-of-line blocks newer removals, which the spool
+// size bound keeps finite.
 func (s *statementInfoSpool) collectRemovableLocked() {
 	now := s.now()
 	seqs := make([]uint64, 0, len(s.sealed))
@@ -780,12 +887,12 @@ func (s *statementInfoSpool) collectRemovableLocked() {
 	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
 	for _, seq := range seqs {
 		seg := s.sealed[seq]
-		if seg == nil || seg.failed {
+		if seg == nil {
 			return
 		}
-		if !seg.done && !seg.noBatch {
-			// still waiting for its own batch's ack: a gap stops the
-			// cleanup, later segments wait for the next round.
+		if !s.segmentExportCoveredLocked(seg, now) {
+			// still owned by an uncommitted batch (or too fresh to tell): a
+			// gap stops the cleanup, later segments wait for the next round.
 			return
 		}
 		if !s.lagSatisfiedLocked(seqs, seq, now) {
@@ -795,14 +902,9 @@ func (s *statementInfoSpool) collectRemovableLocked() {
 	}
 }
 
-// lagSatisfiedLocked checks the aggregation lag guard for one settled
-// segment: ackLagDuration reached, or ackLagSegments newer batches have
-// committed. A noBatch segment relies on this guard alone: its records were
-// in flight between the spool append and the collector when the export tick
-// generated no batch for them, and they ship inside a later batch within one
-// aggregation window — which the newer-acked count (or the duration fallback
-// of a cluster gone quiet) waits out. Only acked (done) newer segments count
-// toward the guard: a noBatch neighbor proves nothing about a batch commit.
+// lagSatisfiedLocked checks the ack-lag guard for one covered segment:
+// ackLagDuration reached, or ackLagSegments newer export-covered segments
+// exist.
 func (s *statementInfoSpool) lagSatisfiedLocked(seqs []uint64, seq uint64, now time.Time) bool {
 	seg := s.sealed[seq]
 	if seg == nil {
@@ -811,14 +913,14 @@ func (s *statementInfoSpool) lagSatisfiedLocked(seqs []uint64, seq uint64, now t
 	if s.ackLagDuration > 0 && now.Sub(seg.sealed) >= s.ackLagDuration {
 		return true
 	}
-	// count newer segments whose own batch committed
+	// count newer segments whose records are all covered
 	var newerAcked uint64
 	for _, newer := range seqs {
 		if newer <= seq {
 			continue
 		}
 		other := s.sealed[newer]
-		if other == nil || !other.done || other.failed {
+		if other == nil || !s.segmentExportCoveredLocked(other, now) {
 			break
 		}
 		newerAcked++
@@ -844,6 +946,10 @@ func (s *statementInfoSpool) removeSegmentLocked(seg *spoolSegment) {
 		s.totalSize = 0
 	}
 	delete(s.sealed, seg.seq)
+	idx := sort.Search(len(s.sealedOrder), func(i int) bool { return s.sealedOrder[i].seq >= seg.seq })
+	if idx < len(s.sealedOrder) && s.sealedOrder[idx].seq == seg.seq {
+		s.sealedOrder = append(s.sealedOrder[:idx], s.sealedOrder[idx+1:]...)
+	}
 }
 
 // removeSpoolAckFile deletes the ack marker of one segment, if present.
@@ -1026,7 +1132,7 @@ func (s *statementInfoSpool) startJanitorOnly() {
 }
 
 // close stops the background loops and closes the active file. Already
-// exported content was removed by ackSegment; the un-exported remainder stays
+// exported-and-collected content was removed in run; the remainder stays
 // on disk and is replayed by the next boot, so a graceful shutdown racing an
 // in-flight report does not lose the record either.
 func (s *statementInfoSpool) close() {
@@ -1267,14 +1373,25 @@ func encodeStatementInfoCSVLine(ctx context.Context, fields []string) []byte {
 	return out
 }
 
-// spoolBatchRequest wraps the export request generated from one buffer flush
-// so the fate of the export controls the fate of the spool segment holding
-// the same records. It implements table.WriteRequest: the wrapped request is
-// executed; the segment is marked exported only on success.
-type spoolBatchRequest struct {
+// spoolBatchAck tracks one export batch's commit across its possibly
+// multiple load requests (table.ExportRequests splits by account). The
+// batch's id is fed to the export watermark only when EVERY request of the
+// batch committed; any failure stalls the watermark — which retains every
+// record the batch owned, for restart replay.
+type spoolBatchAck struct {
 	spool *statementInfoSpool
-	seg   *spoolSegment
-	req   table.WriteRequest
+	tag   uint64
+	total int32
+	done  atomic.Int32
+	err   atomic.Int32
+}
+
+// spoolBatchRequest wraps one load request of an export batch. It implements
+// table.WriteRequest: the wrapped request is executed; the batch id acks when
+// all of the batch's requests succeeded.
+type spoolBatchRequest struct {
+	shared *spoolBatchAck
+	req    table.WriteRequest
 }
 
 var _ table.WriteRequest = (*spoolBatchRequest)(nil)
@@ -1282,44 +1399,69 @@ var _ table.WriteRequest = (*spoolBatchRequest)(nil)
 func (r *spoolBatchRequest) Handle() (n int, err error) {
 	n, err = r.req.Handle()
 	if err != nil {
-		r.spool.markExportFailed(r.seg.seq)
-	} else {
-		r.spool.ackSegment(r.seg.seq)
+		r.shared.err.Add(1)
+	} else if r.shared.done.Add(1) == r.shared.total && r.shared.err.Load() == 0 {
+		r.shared.spool.ackBatch(r.shared.tag)
 	}
 	return n, err
 }
 
-// spooledItemBuffer decorates the statement_info item buffer with the
-// rotation of the spool at every export batch generation.
+// spooledItemBuffer decorates the statement_info item buffer with the spool
+// lifecycle: rotation at every export batch generation, and the record->batch
+// parenting at every Add.
 type spooledItemBuffer struct {
 	Buffer
 	spool *statementInfoSpool
+	// batchID is this buffer instance's (== one future batch's) id in the
+	// watermark space, allocated on the first Add: an empty buffer never
+	// consumes an id, so no ghost id can stall the watermark. Adds to one
+	// buffer instance are serialized by the collector's holder.
+	batchID uint64
 }
 
 var _ Buffer = (*spooledItemBuffer)(nil)
 
-// GetBatch rotates the spool then delegates the batch generation. The sealed
-// segment wraps the generated batch; the export commits the batch only after
-// the segment was rotated away, so any kill after the rotation keeps the full
-// record set of the batch durable. When the drain produces no batch for the
-// fresh segment (nil, or a non-export shape) the segment is flagged noBatch:
-// no ack will ever reference it, and its removal follows the ack-lag guard
-// while its records ship inside a later batch (see spoolSegment.noBatch).
+// Add parents the incoming record to this buffer's batch BEFORE the inner
+// Add renders and frees the item: a record is exported exactly when its
+// batch commits, and the owning segment's retirement needs the parenthood
+// (see the watermark protocol in the file header).
+func (b *spooledItemBuffer) Add(item bp.HasName) {
+	if si, ok := item.(*StatementInfo); ok && si.spoolSeq != 0 {
+		if b.batchID == 0 {
+			b.batchID = b.spool.nextBatch()
+		}
+		b.spool.tagRecord(si.spoolSeq, b.batchID)
+	}
+	b.Buffer.Add(item)
+}
+
+// GetBatch rotates the spool then delegates the batch generation. The export
+// commits the batch only after the rotation, so any kill after it keeps
+// everything reported so far durable. The generated request(s) are wrapped so
+// the batch id acks on commit (with table.ExportRequests, after ALL of the
+// batch's requests committed); a drain producing no batch wraps nothing.
 func (b *spooledItemBuffer) GetBatch(ctx context.Context, buf *bytes.Buffer) any {
-	seg := b.spool.sealForExport()
+	b.spool.sealForExport()
 	batch := b.Buffer.GetBatch(ctx, buf)
-	if seg == nil {
+	switch req := batch.(type) {
+	case table.WriteRequest:
+		if b.batchID == 0 {
+			return batch
+		}
+		return &spoolBatchRequest{shared: &spoolBatchAck{spool: b.spool, tag: b.batchID, total: 1}, req: req}
+	case table.ExportRequests:
+		if b.batchID == 0 || len(req) == 0 {
+			return batch
+		}
+		shared := &spoolBatchAck{spool: b.spool, tag: b.batchID, total: int32(len(req))}
+		out := make(table.ExportRequests, len(req))
+		for i, r := range req {
+			out[i] = &spoolBatchRequest{shared: shared, req: r}
+		}
+		return out
+	default:
 		return batch
 	}
-	if batch == nil {
-		b.spool.markNoBatch(seg.seq)
-		return nil
-	}
-	if req, ok := batch.(table.WriteRequest); ok {
-		return &spoolBatchRequest{spool: b.spool, seg: seg, req: req}
-	}
-	b.spool.markNoBatch(seg.seq)
-	return batch
 }
 
 // spoolStatementInfo renders the StatementInfo record's final row and makes it
@@ -1354,5 +1496,9 @@ func spoolStatementInfo(ctx context.Context, s *StatementInfo) {
 	snapshot.FillRow(ctx, row)
 	fields := row.ToStrings()
 	row.Free()
-	spool.appendRecord(encodeStatementInfoCSVLine(ctx, fields))
+	// Stamp the spool sequence onto the ORIGINAL record before it is handed
+	// to the collector: the buffer's Add hook parents the record to its
+	// export batch through it (see StatementInfo.spoolSeq). A 0 result means
+	// the record never entered the spool ledger; it stays batch-only.
+	s.spoolSeq = spool.appendRecord(encodeStatementInfoCSVLine(ctx, fields))
 }

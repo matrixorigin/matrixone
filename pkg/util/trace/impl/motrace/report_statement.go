@@ -229,6 +229,15 @@ type StatementInfo struct {
 
 	ConnType statistic.ConnType `json:"-"` // see frontend.RecordStatement
 
+	// spoolSeq carries the record's crash-durable spool sequence (see
+	// statementInfoSpool): stamped by spoolStatementInfo right before the
+	// record is handed to the collector; the statement_info buffer's Add
+	// hook reads it to parent the record to its export batch (the export
+	// watermark protocol). 0 = not spooled. Written once on the report
+	// goroutine before the collector hand-off, read after the queue
+	// hand-off — never serialized, never compared.
+	spoolSeq uint64
+
 	// flow ctrl
 	// #		|case 1 |case 2 |case 3 |case 4|
 	// end		| false | false | true  | true |  (set true at EndStatement)

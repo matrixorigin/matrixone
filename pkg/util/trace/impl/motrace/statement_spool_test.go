@@ -257,60 +257,61 @@ func TestStatementInfoSpoolMaxSizeBound(t *testing.T) {
 	assert.Equal(t, line, readSpoolFile(t, dir, 1))
 }
 
-func TestStatementInfoSpoolAckLifecycle(t *testing.T) {
+// TestStatementInfoSpoolWatermarkLifecycle mirrors the pre-watermark lag
+// semantics through record->batch parenthood: coverage comes from committed
+// batches (contiguous watermark), and the ack-lag guard (segments or time)
+// still delays removal.
+func TestStatementInfoSpoolWatermarkLifecycle(t *testing.T) {
 	dir := t.TempDir()
+	ctx := context.Background()
 	base := time.Now()
 	current, clock := spoolTestClock(base)
 	s := openTestSpool(t, dir, 0, 1, 30*time.Second)
 	s.now = clock
 	defer s.close()
 
-	line := encodeStatementInfoCSVLine(context.Background(), []string{"r"})
-	s.appendRecord(line)
-	seg1 := s.sealForExport()
-	require.NotNil(t, seg1)
-	s.appendRecord(line)
-	seg2 := s.sealForExport()
-	require.NotNil(t, seg2)
+	line := encodeStatementInfoCSVLine(ctx, []string{"r"})
+	mkBatch := func() (*spoolBatchRequest, uint64) {
+		seq := s.appendRecord(line)
+		require.NotZero(t, seq)
+		buf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
+		buf.Add(&StatementInfo{spoolSeq: seq})
+		return buf.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest), buf.batchID
+	}
+	reqA, tagA := mkBatch() // seals segment 1 (its GetBatch rotated)
+	reqB, tagB := mkBatch() // seals segment 2
+	require.NotNil(t, reqA)
+	require.NotNil(t, reqB)
+	require.Equal(t, tagA+1, tagB)
+	files := spoolDirFiles(t, dir)
+	require.Len(t, files, 3) // seg1, seg2, fresh active
+	seg1Name, seg2Name := files[0], files[1]
 
-	// ack the first one: with ackLagSegments=1 it must wait for a newer ack.
-	s.ackSegment(seg1.seq)
-	assert.Contains(t, spoolDirFiles(t, dir), seg1.name)
+	// commit batch A: segment 1 is covered (W=1) but the lag guard wants one
+	// newer covered segment (segment 2 needs W>=2): it must stay.
+	_, err := reqA.Handle()
+	require.NoError(t, err)
+	s.mux.Lock()
+	assert.Equal(t, uint64(1), s.watermark)
+	s.mux.Unlock()
+	assert.Contains(t, spoolDirFiles(t, dir), seg1Name)
+	assert.Contains(t, spoolDirFiles(t, dir), seg2Name)
 
-	// ack the second one: now both lag conditions hold for seg1
-	s.ackSegment(seg2.seq)
-	assert.NotContains(t, spoolDirFiles(t, dir), seg1.name)
-	// seg2 has no newer acked segment, and no time passed: stays
-	assert.Contains(t, spoolDirFiles(t, dir), seg2.name)
+	// commit batch B: the watermark passes segment 2, the lag for seg1 is
+	// satisfied, seg1 is removed; seg2 has no newer covered segment and no
+	// time passed: stays.
+	_, err = reqB.Handle()
+	require.NoError(t, err)
+	assert.NotContains(t, spoolDirFiles(t, dir), seg1Name)
+	assert.Contains(t, spoolDirFiles(t, dir), seg2Name)
 
-	// time-based lag fallback: after ackLagDuration it can be removed.
+	// time-based lag fallback: after ackLagDuration seg2 can be removed.
 	*current = base.Add(31 * time.Second)
 	s.mux.Lock()
 	s.collectRemovableLocked()
 	s.mux.Unlock()
-	assert.NotContains(t, spoolDirFiles(t, dir), seg2.name)
+	assert.NotContains(t, spoolDirFiles(t, dir), seg2Name)
 	assert.Equal(t, int64(0), s.totalSize)
-}
-
-func TestStatementInfoSpoolFailedExportKeepsSegment(t *testing.T) {
-	dir := t.TempDir()
-	s := openTestSpool(t, dir, 0, 1, time.Second)
-	defer s.close()
-
-	line := encodeStatementInfoCSVLine(context.Background(), []string{"r"})
-	s.appendRecord(line)
-	seg := s.sealForExport()
-	require.NotNil(t, seg)
-	s.markExportFailed(seg.seq)
-
-	s.mux.Lock()
-	s.collectRemovableLocked()
-	s.mux.Unlock()
-	assert.Contains(t, spoolDirFiles(t, dir), seg.name)
-
-	// even a later ack cannot remove a segment that failed once
-	s.ackSegment(seg.seq)
-	assert.Contains(t, spoolDirFiles(t, dir), seg.name)
 }
 
 func TestStatementInfoSpoolCrashRecoveryReplay(t *testing.T) {
@@ -435,221 +436,22 @@ func TestStatementInfoSpoolAckMarkerPreventsReplayDup(t *testing.T) {
 	assert.NotContains(t, files, marker)
 }
 
-func TestStatementInfoSpoolAckSegmentLeavesNoMarker(t *testing.T) {
+func TestStatementInfoSpoolAckBatchLeavesNoMarker(t *testing.T) {
 	dir := t.TempDir()
-	ctx := context.Background()
-	line := encodeStatementInfoCSVLine(ctx, []string{"s1-r1"})
 	// the ack of the regular export path is in-memory only and stays behind
-	// the pipeline lag: no marker is written for it (see ackSegment), so a
+	// the pipeline lag: no marker is written for it (see ackBatch), so a
 	// kill inside the ack-lag horizon re-exports the batch instead of
 	// losing records that were still draining through the collector.
 	s := openTestSpool(t, dir, 0, 1, time.Hour)
 	defer s.close()
+	line := encodeStatementInfoCSVLine(context.Background(), []string{"s1-r1"})
 	s.appendRecord(line)
 	seg := s.sealForExport()
 	require.NotNil(t, seg)
-	s.ackSegment(seg.seq)
+	s.ackBatch(42)
 	for _, f := range spoolDirFiles(t, dir) {
 		assert.NotEqual(t, spoolAckFileName(seg.name), f)
 	}
-}
-
-// TestLaterCompletionPreservesPendingEarlierBatch is the round-1 review
-// probe: with multiple doExport workers a later batch can commit while an
-// earlier one is still in flight. The later ack must NOT settle the earlier
-// segment — deleting it would turn its records into a permanent loss on the
-// next kill. ackSegment settles only the segment whose own batch committed.
-func TestLaterCompletionPreservesPendingEarlierBatch(t *testing.T) {
-	dir := t.TempDir()
-	ctx := context.Background()
-	line := encodeStatementInfoCSVLine(ctx, []string{"s1-r1"})
-	// zero ack lag: a settled segment is removed immediately, so every
-	// keep/remove observation below comes from the ack rule alone.
-	s := openTestSpool(t, dir, 0, 0, 0)
-	defer s.close()
-	s.appendRecord(line)
-	seg1 := s.sealForExport()
-	require.NotNil(t, seg1)
-	s.appendRecord(line)
-	seg2 := s.sealForExport()
-	require.NotNil(t, seg2)
-
-	// only the second batch commits (out-of-order completion): BOTH files
-	// must stay on disk — seg1's batch is still in flight, and seg2's
-	// removal head-of-line blocks on the unsettled seg1.
-	s.ackSegment(seg2.seq)
-	files := spoolDirFiles(t, dir)
-	assert.Contains(t, files, seg1.name)
-	assert.Contains(t, files, seg2.name)
-	s.mux.Lock()
-	assert.False(t, s.sealed[seg1.seq].done)
-	assert.True(t, s.sealed[seg2.seq].done)
-	s.mux.Unlock()
-
-	// ordered-completion control: once seg1's own batch commits, both
-	// segments are settled and removed.
-	s.ackSegment(seg1.seq)
-	files = spoolDirFiles(t, dir)
-	assert.NotContains(t, files, seg1.name)
-	assert.NotContains(t, files, seg2.name)
-}
-
-// TestStatementInfoSpoolAckOutOfOrderFuzz exercises multi-worker completion
-// in an adversarial order: even segments commit first, odd ones later. No
-// even ack may remove an unsettled odd segment or itself before it.
-func TestStatementInfoSpoolAckOutOfOrderFuzz(t *testing.T) {
-	dir := t.TempDir()
-	ctx := context.Background()
-	line := encodeStatementInfoCSVLine(ctx, []string{"s1-r1"})
-	s := openTestSpool(t, dir, 0, 0, 0)
-	defer s.close()
-
-	segs := make([]*spoolSegment, 0, 6)
-	for i := 0; i < 6; i++ {
-		s.appendRecord(line)
-		seg := s.sealForExport()
-		require.NotNil(t, seg)
-		segs = append(segs, seg)
-	}
-	acks := []int{1, 3, 5, 0, 2, 4} // 2nd, 4th, 6th, then 1st, 3rd, 5th
-	acked := make(map[int]bool, len(segs))
-	for step, idx := range acks {
-		s.ackSegment(segs[idx].seq)
-		acked[idx] = true
-		// while any earlier segment is unsettled, nothing may be removed:
-		// in-order removal stops at the first gap.
-		files := spoolDirFiles(t, dir)
-		firstPending := -1
-		for i := range segs {
-			if !acked[i] {
-				firstPending = i
-				break
-			}
-		}
-		for i, seg := range segs {
-			if firstPending >= 0 && i >= firstPending {
-				assert.Contains(t, files, seg.name, "step %d", step)
-			} else {
-				assert.NotContains(t, files, seg.name, "step %d", step)
-			}
-		}
-	}
-	files := spoolDirFiles(t, dir)
-	for _, seg := range segs {
-		assert.NotContains(t, files, seg.name) // the empty active segment may stay
-	}
-}
-
-// TestStatementInfoSpoolAckUnknownSegmentSettlesNothing guards the stray-ack
-// path: an ack for a segment the spool does not know (duplicate completion,
-// already removed) must never settle another segment.
-func TestStatementInfoSpoolAckUnknownSegmentSettlesNothing(t *testing.T) {
-	dir := t.TempDir()
-	ctx := context.Background()
-	line := encodeStatementInfoCSVLine(ctx, []string{"s1-r1"})
-	s := openTestSpool(t, dir, 0, 0, 0)
-	defer s.close()
-	s.appendRecord(line)
-	seg := s.sealForExport()
-	require.NotNil(t, seg)
-
-	s.ackSegment(seg.seq + 100)
-	assert.Contains(t, spoolDirFiles(t, dir), seg.name)
-	s.mux.Lock()
-	assert.False(t, s.sealed[seg.seq].done)
-	s.mux.Unlock()
-}
-
-// TestStatementInfoSpoolNoBatchGapSegment covers the pipeline-gap lifecycle
-// under the per-segment ack rule: a segment sealed at a tick whose drain
-// produced no batch gets no ack ever; it becomes removable only through the
-// ack-lag guard (a later committed batch, or the duration fallback), never
-// through a bare ack of another segment's seq.
-func TestStatementInfoSpoolNoBatchGapSegment(t *testing.T) {
-	t.Run("removed by a later committed batch inside the lag", func(t *testing.T) {
-		dir := t.TempDir()
-		ctx := context.Background()
-		line := encodeStatementInfoCSVLine(ctx, []string{"r"})
-		s := openTestSpool(t, dir, 0, 1, time.Hour)
-		defer s.close()
-
-		// tick 1: records on disk, but the buffer drained empty.
-		s.appendRecord(line)
-		gapBuf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: nil}, spool: s}
-		require.Nil(t, gapBuf.GetBatch(ctx, new(bytes.Buffer)))
-		s.mux.Lock()
-		require.Len(t, s.sealed, 1)
-		var gapSeg *spoolSegment
-		for _, seg := range s.sealed {
-			gapSeg = seg
-		}
-		s.mux.Unlock()
-		require.NotNil(t, gapSeg)
-		assert.True(t, gapSeg.noBatch)
-		assert.False(t, gapSeg.done)
-		assert.Contains(t, spoolDirFiles(t, dir), gapSeg.name)
-
-		// an ack of a random later seq must not remove it.
-		s.ackSegment(gapSeg.seq + 50)
-		assert.Contains(t, spoolDirFiles(t, dir), gapSeg.name)
-
-		// tick 2: a real batch for the next segment; its commit covers the
-		// gap records (they shipped inside it) and satisfies the lag guard.
-		s.appendRecord(line)
-		realBuf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
-		req := realBuf.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
-		_, err := req.Handle()
-		require.NoError(t, err)
-		assert.NotContains(t, spoolDirFiles(t, dir), gapSeg.name)
-	})
-
-	t.Run("duration fallback covers a cluster gone quiet", func(t *testing.T) {
-		dir := t.TempDir()
-		ctx := context.Background()
-		line := encodeStatementInfoCSVLine(ctx, []string{"r"})
-		base := time.Now()
-		current, clock := spoolTestClock(base)
-		s := openTestSpool(t, dir, 0, 1, 30*time.Second)
-		s.now = clock
-		defer s.close()
-
-		s.appendRecord(line)
-		gapBuf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: nil}, spool: s}
-		require.Nil(t, gapBuf.GetBatch(ctx, new(bytes.Buffer)))
-		require.Len(t, spoolDirFiles(t, dir), 2) // gap segment + new active
-
-		// no newer batch ever commits; only time passing may remove it.
-		*current = base.Add(31 * time.Second)
-		s.mux.Lock()
-		s.collectRemovableLocked()
-		s.mux.Unlock()
-		assert.Len(t, spoolDirFiles(t, dir), 1) // only the active one remains
-	})
-
-	t.Run("a noBatch neighbor does not count toward the lag guard", func(t *testing.T) {
-		dir := t.TempDir()
-		ctx := context.Background()
-		line := encodeStatementInfoCSVLine(ctx, []string{"r"})
-		s := openTestSpool(t, dir, 0, 1, time.Hour)
-		defer s.close()
-
-		// tick 1: a regular batch, acked.
-		s.appendRecord(line)
-		realBuf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
-		req := realBuf.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
-		_, err := req.Handle()
-		require.NoError(t, err)
-		seg1 := req.seg
-		// tick 2: a gap segment (never acked).
-		s.appendRecord(line)
-		gapBuf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: nil}, spool: s}
-		require.Nil(t, gapBuf.GetBatch(ctx, new(bytes.Buffer)))
-
-		// seg1 is acked, but the only newer segment is a noBatch one: seg1
-		// must stay — the noBatch neighbor proves nothing about the gap
-		// records' carrier batch.
-		assert.Contains(t, spoolDirFiles(t, dir), seg1.name)
-	})
 }
 
 func TestStatementInfoSpoolReplayDropsTornTail(t *testing.T) {
@@ -887,67 +689,115 @@ func TestEncodeStatementInfoCSVLine(t *testing.T) {
 	assert.Equal(t, expect.Bytes(), encodeStatementInfoCSVLine(ctx, fields))
 }
 
-func TestSpooledItemBufferGetBatchLifecycle(t *testing.T) {
-	dir := t.TempDir()
+// TestSpooledItemBufferWire covers the statement_info buffer decoration:
+// Add parents records to the instance's batch id, GetBatch wraps the
+// generated request(s) with the ack tracker, and only a fully committed
+// batch advances the export watermark.
+func TestSpooledItemBufferWire(t *testing.T) {
 	ctx := context.Background()
-	s := openTestSpool(t, dir, 0, 1, time.Minute)
-	defer s.close()
+	line := encodeStatementInfoCSVLine(ctx, []string{"r"})
 
-	line := encodeStatementInfoCSVLine(ctx, []string{"r1"})
-	s.appendRecord(line)
+	t.Run("single request: commit acks, watermark advances, retirement waits for lag", func(t *testing.T) {
+		dir := t.TempDir()
+		s := openTestSpool(t, dir, 0, 1, time.Hour)
+		defer s.close()
+		seq := s.appendRecord(line)
+		require.NotZero(t, seq)
+		buf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
+		buf.Add(&StatementInfo{spoolSeq: seq})
+		require.NotZero(t, buf.batchID)
 
-	// fake inner buffer returning a capturing WriteRequest
-	inner := &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}
-	buf := &spooledItemBuffer{Buffer: inner, spool: s}
-	batch := buf.GetBatch(ctx, new(bytes.Buffer))
-	require.IsType(t, &spoolBatchRequest{}, batch)
-	req := batch.(*spoolBatchRequest)
-	require.True(t, inner.getBatchCalled)
-	// rotation happened before the batch is executed
-	require.Len(t, s.sealed, 1)
-
-	// export success marks the segment done; with ackLagSegments=1 and no
-	// newer batch it is kept on disk but flagged.
-	_, err := req.Handle()
-	require.NoError(t, err)
-	s.mux.Lock()
-	seg := s.sealed[req.seg.seq]
-	s.mux.Unlock()
-	require.NotNil(t, seg)
-	assert.True(t, seg.done)
-	assert.Contains(t, spoolDirFiles(t, dir), seg.name)
-
-	// failure keeps the segment flagged failed for restart replay
-	s.appendRecord(line)
-	inner2 := &spoolFakeBuffer{batch: &spoolFakeWriteRequest{err: io.ErrClosedPipe}}
-	buf2 := &spooledItemBuffer{Buffer: inner2, spool: s}
-	req2 := buf2.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
-	_, err = req2.Handle()
-	require.Error(t, err)
-	s.mux.Lock()
-	seg2 := s.sealed[req2.seg.seq]
-	s.mux.Unlock()
-	require.NotNil(t, seg2)
-	assert.True(t, seg2.failed)
-	assert.Contains(t, spoolDirFiles(t, dir), seg2.name)
-
-	// a non-request batch shape can never produce an ack for the segment:
-	// it is flagged noBatch and follows the ack-lag guard for removal.
-	s.appendRecord(line)
-	inner3 := &spoolFakeBuffer{batch: "not-a-write-request"}
-	buf3 := &spooledItemBuffer{Buffer: inner3, spool: s}
-	assert.Equal(t, "not-a-write-request", buf3.GetBatch(ctx, new(bytes.Buffer)))
-	s.mux.Lock()
-	var seg3 *spoolSegment
-	for _, seg := range s.sealed {
-		if seg.seq != req.seg.seq && seg.seq != req2.seg.seq {
-			seg3 = seg
+		batch := buf.GetBatch(ctx, new(bytes.Buffer))
+		req, ok := batch.(*spoolBatchRequest)
+		require.True(t, ok)
+		_, err := req.Handle()
+		require.NoError(t, err)
+		s.mux.Lock()
+		assert.Equal(t, buf.batchID, s.watermark)
+		require.Len(t, s.sealed, 1)
+		var seg *spoolSegment
+		for _, g := range s.sealed {
+			seg = g
 		}
-	}
-	s.mux.Unlock()
-	require.NotNil(t, seg3)
-	assert.True(t, seg3.noBatch)
-	assert.False(t, seg3.done)
+		s.mux.Unlock()
+		// covered (tagged 1/1, W >= maxTag) but the lag guard keeps it
+		assert.True(t, s.segmentExportCoveredLocked(seg, s.now()))
+		assert.Contains(t, spoolDirFiles(t, dir), seg.name)
+	})
+
+	t.Run("failure stalls the watermark, everything stays for replay", func(t *testing.T) {
+		dir := t.TempDir()
+		s := openTestSpool(t, dir, 0, 1, time.Hour)
+		defer s.close()
+		seq := s.appendRecord(line)
+		buf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{err: io.ErrClosedPipe}}, spool: s}
+		buf.Add(&StatementInfo{spoolSeq: seq})
+		req := buf.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
+		_, err := req.Handle()
+		require.Error(t, err)
+		s.mux.Lock()
+		assert.Equal(t, uint64(0), s.watermark)
+		s.mux.Unlock()
+		assert.Len(t, spoolDirFiles(t, dir), 2) // sealed segment + fresh active
+	})
+
+	t.Run("export requests ack only after ALL requests of the batch commit", func(t *testing.T) {
+		dir := t.TempDir()
+		s := openTestSpool(t, dir, 0, 1, time.Hour)
+		defer s.close()
+		seq := s.appendRecord(line)
+		inner := &spoolFakeBuffer{batch: table.ExportRequests{&spoolFakeWriteRequest{}, &spoolFakeWriteRequest{}}}
+		buf := &spooledItemBuffer{Buffer: inner, spool: s}
+		buf.Add(&StatementInfo{spoolSeq: seq})
+		batch := buf.GetBatch(ctx, new(bytes.Buffer))
+		reqs, ok := batch.(table.ExportRequests)
+		require.True(t, ok)
+		require.Len(t, reqs, 2)
+		_, err := reqs[0].Handle()
+		require.NoError(t, err)
+		s.mux.Lock()
+		assert.Equal(t, uint64(0), s.watermark) // half the batch is not a commit
+		s.mux.Unlock()
+		_, err = reqs[1].Handle()
+		require.NoError(t, err)
+		s.mux.Lock()
+		assert.Equal(t, buf.batchID, s.watermark)
+		s.mux.Unlock()
+	})
+
+	t.Run("one failed request of a split batch poisons the commit", func(t *testing.T) {
+		dir := t.TempDir()
+		s := openTestSpool(t, dir, 0, 1, time.Hour)
+		defer s.close()
+		seq := s.appendRecord(line)
+		inner := &spoolFakeBuffer{batch: table.ExportRequests{&spoolFakeWriteRequest{}, &spoolFakeWriteRequest{err: io.ErrClosedPipe}}}
+		buf := &spooledItemBuffer{Buffer: inner, spool: s}
+		buf.Add(&StatementInfo{spoolSeq: seq})
+		reqs := buf.GetBatch(ctx, new(bytes.Buffer)).(table.ExportRequests)
+		_, err := reqs[0].Handle()
+		require.NoError(t, err)
+		_, err = reqs[1].Handle()
+		require.Error(t, err)
+		s.mux.Lock()
+		assert.Equal(t, uint64(0), s.watermark)
+		s.mux.Unlock()
+	})
+
+	t.Run("unspooled items consume no batch id, non-request batches pass through", func(t *testing.T) {
+		dir := t.TempDir()
+		s := openTestSpool(t, dir, 0, 1, time.Hour)
+		defer s.close()
+		s.appendRecord(line)
+		buf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: "not-a-write-request"}, spool: s}
+		buf.Add(&StatementInfo{}) // spoolSeq 0: never parented
+		assert.Zero(t, buf.batchID)
+		assert.Equal(t, "not-a-write-request", buf.GetBatch(ctx, new(bytes.Buffer)))
+		s.mux.Lock()
+		assert.Equal(t, uint64(0), s.watermark)
+		next := s.nextBatchID
+		s.mux.Unlock()
+		assert.Equal(t, uint64(1), next) // no id ever allocated
+	})
 }
 
 // spoolFakeBuffer is a minimal Buffer implementation for the wrapper tests.
@@ -1189,8 +1039,8 @@ func TestStatementInfoSpoolErrorPaths(t *testing.T) {
 		require.NoError(t, os.Mkdir(path, 0755))
 		require.NoError(t, os.WriteFile(filepath.Join(path, "blocker"), []byte("x"), 0644))
 		defer func() { _ = os.RemoveAll(path) }()
-		s.ackSegment(seg.seq) // removal fails loudly, segment stays known
-		s.mux.Lock()
+		s.mux.Lock() // removal fails loudly, segment stays known
+		s.collectRemovableLocked()
 		_, stillSealed := s.sealed[seg.seq]
 		s.mux.Unlock()
 		assert.True(t, stillSealed)
@@ -1211,7 +1061,8 @@ func TestStatementInfoSpoolErrorPaths(t *testing.T) {
 		s.appendRecord(line)
 		seg := s.sealForExport()
 		require.NotNil(t, seg)
-		s.ackSegment(seg.seq)
+		// untagged segment, zero lag duration: covered immediately (see
+		// segmentExportCoveredLocked), the janitor collects it on its own.
 		require.Eventually(t, func() bool {
 			files := spoolDirFiles(t, dir)
 			for _, name := range files {
@@ -1589,7 +1440,8 @@ func TestStatementInfoSpoolAppendFsyncBeforeAck(t *testing.T) {
 	defer s.close()
 
 	line := encodeStatementInfoCSVLine(ctx, []string{"durable-1"})
-	s.appendRecord(line)
+	seq := s.appendRecord(line)
+	require.NotZero(t, seq)
 
 	// BEFORE any seal/export tick the append already paid its fsync — the
 	// exact step the round-1 defect skipped (records sat un-fsynced until
@@ -1601,8 +1453,11 @@ func TestStatementInfoSpoolAppendFsyncBeforeAck(t *testing.T) {
 	// pipeline assumption: reading the handle back shows the full record.
 	assert.Equal(t, line, readSpoolFile(t, dir, 1))
 
-	// export: seal adds one more sync to the old file, adopts a fresh one.
+	// export: seal adds one more sync to the old file, adopts a fresh one;
+	// the batch commit then advances the watermark (retirement, not
+	// durability — that was proven above).
 	buf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
+	buf.Add(&StatementInfo{spoolSeq: seq})
 	req := buf.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
 	_, err := req.Handle()
 	require.NoError(t, err)
@@ -1611,7 +1466,7 @@ func TestStatementInfoSpoolAppendFsyncBeforeAck(t *testing.T) {
 	require.NotNil(t, f2)
 	assert.Equal(t, 0, f2.syncCount()) // fresh file: nothing confirmed yet
 	s.mux.Lock()
-	assert.True(t, s.sealed[req.seg.seq].done)
+	assert.Equal(t, buf.batchID, s.watermark)
 	s.mux.Unlock()
 
 	// the rotation reset is real: the next append fsyncs the fresh file.
@@ -1631,10 +1486,11 @@ func TestStatementInfoSpoolAppendSyncFailureDegrades(t *testing.T) {
 
 	line := encodeStatementInfoCSVLine(context.Background(), []string{"r"})
 	s.appendRecord(line)
-	assert.Equal(t, int64(0), s.totalSize)      // quota rolled back
+	s.appendRecord(line)
+	// charge-on-write: a failed fsync must not uncharge bytes that sit on
+	// disk; both records' bytes stay charged (see TestSyncErrorMustNotUnchargeWrittenBytes).
+	assert.Equal(t, 2*int64(len(line)), s.totalSize)
 	assert.Equal(t, int64(0), s.droppedRecords) // I/O error, not a capacity drop
-	s.appendRecord(line)                        // second failure stays silent (rate-limited) and harmless
-	assert.Equal(t, int64(0), s.totalSize)
 	// close over a file whose Sync failed must not panic either.
 	s.close()
 	assert.True(t, s.closed)
@@ -1642,4 +1498,265 @@ func TestStatementInfoSpoolAppendSyncFailureDegrades(t *testing.T) {
 	f1 := st.file(1)
 	require.NotNil(t, f1)
 	assert.GreaterOrEqual(t, f1.syncCount(), 3) // two appends + the close seal
+}
+
+// ---------------------------------------------------------------------------
+// Round-2 review probes: segment/batch misalignment, charge-on-write quota,
+// poison boot accounting.
+// ---------------------------------------------------------------------------
+
+// TestBatchCommitMustCoverEverySpoolRecord is the round-2 review probe.
+// Buffer A is detached before B is reported; A's asynchronous GetBatch only
+// seals the spool AFTER B's append — so the sealed file contains A and B,
+// but only A's batch commits, and a later batch C commits while B remains
+// pending. Retirement must NOT delete the file holding B's durable copy.
+func TestBatchCommitMustCoverEverySpoolRecord(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	// zero lag: removal is a pure function of coverage (the lag+horizon
+	// delay is exercised by TestStatementInfoSpoolWatermarkLifecycle).
+	s := openTestSpool(t, dir, 0, 0, 0)
+	defer s.close()
+	line := encodeStatementInfoCSVLine(ctx, []string{"r"})
+
+	// A's records land; B's record lands BEFORE A's generation runs —
+	// A's seal will capture all three into one file (the misalignment).
+	seqA1 := s.appendRecord(line)
+	seqA2 := s.appendRecord(line)
+	seqB := s.appendRecord(line)
+	require.NotZero(t, seqA1)
+	require.NotZero(t, seqA2)
+	require.NotZero(t, seqB)
+
+	// batch A buffers records 1,2; its GetBatch seals segment 1 = {A1,A2,B}.
+	bufA := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
+	bufA.Add(&StatementInfo{spoolSeq: seqA1})
+	bufA.Add(&StatementInfo{spoolSeq: seqA2})
+	reqA := bufA.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
+	require.NotNil(t, reqA)
+	s.mux.Lock()
+	require.Len(t, s.sealed, 1)
+	segAB := s.sealedOrder[0]
+	require.Equal(t, int64(3), segAB.recordCount)
+	require.Equal(t, int64(2), segAB.taggedCount) // B not parented yet
+	s.mux.Unlock()
+
+	// B's buffer parents its record to batch 2 — but B's batch stays
+	// pending forever (its request never even generates in this leg).
+	bufB := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
+	bufB.Add(&StatementInfo{spoolSeq: seqB})
+	s.mux.Lock()
+	require.Equal(t, int64(3), segAB.taggedCount)
+	require.Equal(t, bufB.batchID, segAB.maxTag)
+	s.mux.Unlock()
+
+	// C's record lands in the fresh active segment; C's GetBatch seals it.
+	seqC := s.appendRecord(line)
+	require.NotZero(t, seqC)
+	bufC := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
+	bufC.Add(&StatementInfo{spoolSeq: seqC})
+	reqC := bufC.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
+	require.NotNil(t, reqC)
+
+	// A commits; C commits — the round-2 defect deleted the A/B file here.
+	_, err := reqA.Handle()
+	require.NoError(t, err)
+	_, err = reqC.Handle()
+	require.NoError(t, err)
+	s.mux.Lock()
+	// contiguous completion: B (tag 2) pending pins the watermark at 1,
+	// even though C (tag 3) committed.
+	assert.Equal(t, uint64(1), s.watermark)
+	s.mux.Unlock()
+	files := spoolDirFiles(t, dir)
+	assert.Contains(t, files, segAB.name, "the file holding B's records must survive while B is pending")
+	require.Len(t, s.sealedOrder, 2)
+	segC := s.sealedOrder[1]
+	assert.Contains(t, files, segC.name)
+
+	// aligned control: once B commits, contiguous coverage retires both.
+	reqB := bufB.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
+	_, err = reqB.Handle()
+	require.NoError(t, err)
+	s.mux.Lock()
+	assert.Equal(t, uint64(3), s.watermark)
+	s.mux.Unlock()
+	files = spoolDirFiles(t, dir)
+	assert.NotContains(t, files, segAB.name)
+	assert.NotContains(t, files, segC.name)
+}
+
+// TestStatementInfoSpoolWatermarkOutOfOrderFuzz acks batches in an
+// adversarial order; every segment must survive until the watermark truly
+// covers its highest owning batch, and removal afterwards follows the
+// in-order head.
+func TestStatementInfoSpoolWatermarkOutOfOrderFuzz(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	// zero lag: removal is a pure function of coverage.
+	s := openTestSpool(t, dir, 0, 0, 0)
+	defer s.close()
+	line := encodeStatementInfoCSVLine(ctx, []string{"r"})
+
+	const batches = 6
+	reqs := make([]*spoolBatchRequest, batches)
+	segs := make([]*spoolSegment, 0, batches)
+	for i := 0; i < batches; i++ {
+		seq := s.appendRecord(line)
+		require.NotZero(t, seq)
+		buf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
+		buf.Add(&StatementInfo{spoolSeq: seq})
+		reqs[i] = buf.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
+		require.NotNil(t, reqs[i])
+		s.mux.Lock()
+		segs = append(segs, s.sealedOrder[len(s.sealedOrder)-1])
+		s.mux.Unlock()
+	}
+	// commit 2,4,6 then 1,3,5; the watermark pins after the first wave at 1.
+	committed := make(map[int]bool)
+	watermark := func() uint64 {
+		w := uint64(0)
+		for committed[int(w)] {
+			w++
+		}
+		return w
+	}
+	for _, idx := range []int{1, 3, 5, 0, 2, 4} {
+		_, err := reqs[idx].Handle()
+		require.NoError(t, err)
+		committed[idx] = true
+		w := watermark()
+		s.mux.Lock()
+		assert.Equal(t, w, s.watermark)
+		s.mux.Unlock()
+		files := spoolDirFiles(t, dir)
+		for i, seg := range segs {
+			// segment i covers batch i+1: removable only when w <= i
+			// (batch ids are 1-based) AND all earlier segments gone.
+			removable := uint64(i+1) <= w
+			if removable {
+				// in-order: only if every earlier is also removable
+				for j := 0; j < i; j++ {
+					if uint64(j+1) > w {
+						removable = false
+						break
+					}
+				}
+			}
+			if removable {
+				assert.NotContains(t, files, seg.name, "after committing %d (w=%d)", idx+1, w)
+			} else {
+				assert.Contains(t, files, seg.name, "after committing %d (w=%d)", idx+1, w)
+			}
+		}
+	}
+}
+
+// TestStatementInfoSpoolAckUnknownBatchSettlesNothing: a stray ack (duplicate
+// completion, unknown id) must never advance the watermark.
+func TestStatementInfoSpoolAckUnknownBatchSettlesNothing(t *testing.T) {
+	dir := t.TempDir()
+	s := openTestSpool(t, dir, 0, 0, time.Hour)
+	defer s.close()
+	s.appendRecord(encodeStatementInfoCSVLine(context.Background(), []string{"r"}))
+	seg := s.sealForExport()
+	require.NotNil(t, seg)
+
+	s.ackBatch(999)
+	s.mux.Lock()
+	assert.Equal(t, uint64(0), s.watermark)
+	s.mux.Unlock()
+	assert.Contains(t, spoolDirFiles(t, dir), seg.name)
+
+	// re-acking the same real id is a no-op, not a second advance; the
+	// never-parented segment stays uncovered regardless (age < horizon).
+	s.ackBatch(1)
+	s.ackBatch(1)
+	s.mux.Lock()
+	assert.Equal(t, uint64(1), s.watermark)
+	s.mux.Unlock()
+	assert.Contains(t, spoolDirFiles(t, dir), seg.name)
+}
+
+// TestSyncErrorMustNotUnchargeWrittenBytes is the round-2 review probe:
+// writes succeed but Sync fails repeatedly — the written bytes stay on disk
+// and must stay charged against the spool bound. (The pre-repair accounting
+// released the whole reservation on a Sync error.)
+func TestSyncErrorMustNotUnchargeWrittenBytes(t *testing.T) {
+	ctx := context.Background()
+	line := encodeStatementInfoCSVLine(ctx, []string{"0123456789"}) // 11 bytes
+
+	t.Run("sync errors keep the charge and the bound still bites", func(t *testing.T) {
+		dir := t.TempDir()
+		st := stubSpoolFileFactory(t)
+		st.failSync = io.ErrClosedPipe
+		s := openTestSpool(t, dir, 32, 1, time.Minute)
+		defer s.close()
+
+		s.appendRecord(line)
+		assert.Equal(t, int64(len(line)), s.totalSize)
+		s.appendRecord(line)
+		assert.Equal(t, 2*int64(len(line)), s.totalSize)
+		// third goes over 32: dropped by quota, not by disk — exact accounting.
+		s.appendRecord(line)
+		assert.Equal(t, 2*int64(len(line)), s.totalSize)
+		assert.Equal(t, int64(1), s.droppedRecords)
+		// ten more appends: everything beyond the quota keeps dropping, the
+		// accounting never drifts from the bytes on disk.
+		for i := 0; i < 7; i++ {
+			s.appendRecord(line)
+		}
+		assert.Equal(t, 2*int64(len(line)), s.totalSize)
+		assert.Equal(t, 2*int64(len(line)), int64(len(readSpoolFile(t, dir, 1))))
+	})
+
+	t.Run("healthy quota control", func(t *testing.T) {
+		dir := t.TempDir()
+		stubSpoolFileFactory(t)
+		s := openTestSpool(t, dir, 32, 1, time.Minute)
+		defer s.close()
+		_ = ctx
+		s.appendRecord(line)
+		s.appendRecord(line)
+		s.appendRecord(line) // over the 32-byte bound: capacity drop
+		assert.Equal(t, 2*int64(len(line)), s.totalSize)
+		assert.Equal(t, int64(1), s.droppedRecords)
+		assert.Equal(t, 2*int64(len(line)), int64(len(readSpoolFile(t, dir, 1))))
+	})
+}
+
+// TestPoisonBytesSurviveQuotaRestart is the round-2 review probe: quarantined
+// poison files are counted in the startup accounting while staying excluded
+// from replay — the bound must survive restarts.
+func TestPoisonBytesSurviveQuotaRestart(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	// 90 quarantined bytes + a 10-byte orphan (ordinary accounting control).
+	require.NoError(t, os.WriteFile(filepath.Join(dir, spoolSegmentFileName(1)+spoolPoisonFileSuffix),
+		make([]byte, 90), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, spoolSegmentFileName(2)),
+		make([]byte, 10), 0644))
+
+	s := openTestSpool(t, dir, 100, 1, time.Minute)
+	defer s.close()
+	assert.Equal(t, int64(100), s.totalSize) // 90 poison + 10 orphan
+	// poison is excluded from replay
+	assert.Len(t, s.orphans, 1)
+	// any append exceeds the bound and drops, exactly as the bound intends
+	line := encodeStatementInfoCSVLine(ctx, []string{"r"})
+	require.Greater(t, s.totalSize+int64(len(line)), int64(100))
+	s.appendRecord(line)
+	assert.Equal(t, int64(100), s.totalSize)
+	assert.Equal(t, int64(1), s.droppedRecords)
+
+	// a larger bound frees exactly the accounted headroom
+	dir2 := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir2, spoolSegmentFileName(1)+spoolPoisonFileSuffix),
+		make([]byte, 90), 0644))
+	s2 := openTestSpool(t, dir2, 100, 1, time.Minute)
+	defer s2.close()
+	assert.Equal(t, int64(90), s2.totalSize)
+	s2.appendRecord(line) // fits only because accounting is exact
+	assert.Equal(t, int64(90)+int64(len(line)), s2.totalSize)
+	assert.Equal(t, int64(0), s2.droppedRecords)
 }
