@@ -4697,7 +4697,22 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			nodeID, err = builder.bindSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
 		}
 		if err == nil {
+			// Identical UNION branches can collapse to one DISTINCT SELECT,
+			// but its SQL result still crosses a set-operation boundary.
+			var integerIDs []uint32
+			if builder.integerPrecision != nil {
+				integerIDs = make([]uint32, len(ctx.headings))
+				for i := range integerIDs {
+					integerIDs[i] = ctx.outputColumnProvenanceForProject(int32(i)).IntegerPrecisionID
+				}
+			}
 			ctx.clearOutputColumnProvenance()
+			for i, id := range integerIDs {
+				if !shareGroupingInput {
+					id = builder.integerPrecision.reference(id)
+				}
+				ctx.setOutputColumnProvenance(int32(i), OutputColumnProvenance{State: ProvenanceNone, IntegerPrecisionID: id})
+			}
 		}
 		return nodeID, err
 	}
@@ -4724,11 +4739,15 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			subCtx.preserveOrderSemanticKeys = true
 		}
 		savedIsForUpdate := builder.isForUpdate
+		// Keep isRoot's binding semantics, but do not publish a branch's
+		// temporary headings as extra visible Query outputs.
+		savedHeadings := builder.qry.Headings
 		if slt, ok := sltStmt.(*tree.Select); ok {
 			nodeID, err = builder.bindSelect(slt, subCtx, isRoot)
 		} else {
 			nodeID, err = builder.bindSelect(&tree.Select{Select: sltStmt}, subCtx, isRoot)
 		}
+		builder.qry.Headings = savedHeadings
 		builder.isForUpdate = savedIsForUpdate
 		if err != nil {
 			return 0, err
@@ -5169,16 +5188,22 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			if !types.T(output.Typ.Id).IsInteger() {
 				continue
 			}
-			var inputs []uint32
-			for branchIdx := range subCtxList {
-				if !setBranchPureNull[branchIdx][colIdx] {
-					inputs = append(inputs, integerBranches[branchIdx][colIdx])
+			id := integerBranches[0][colIdx]
+			if !shareGroupingInput {
+				var inputs []uint32
+				for branchIdx := range subCtxList {
+					if !setBranchPureNull[branchIdx][colIdx] {
+						inputs = append(inputs, integerBranches[branchIdx][colIdx])
+					}
 				}
+				g.captureFunction("case", inputs, output)
+				id = g.reference(g.ids[output])
 			}
-			g.captureFunction("case", inputs, output)
-			if id := g.ids[output]; id != 0 {
-				// The set output is an actual SQL reference, not a CASE root.
-				id = g.reference(id)
+			// Grouping branches bind the same SQL projection. Their UNION is
+			// an execution rewrite: preserve that projection's source recipe
+			// and root class, including literal/declared/reference roots.
+			// Only a user-written set operation introduces a new SQL reference.
+			if id != 0 {
 				g.ids[output] = id
 				ctx.setOutputColumnProvenance(int32(colIdx), OutputColumnProvenance{State: ProvenanceNone, IntegerPrecisionID: id})
 			}

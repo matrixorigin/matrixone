@@ -106,6 +106,82 @@ func TestIntegerArithmeticWidth(t *testing.T) {
 
 			query(t, "select (b+b)*(b+b) from t order by id", []string{"BIGINT"}, [][]string{{"40000"}, {"65536"}})
 		})
+		t.Run("top level set outputs", func(t *testing.T) {
+			for _, tc := range []struct {
+				op   string
+				want [][]string
+			}{
+				{"union all", [][]string{{"10000", "1"}, {"10000", "1"}, {"16384", "1"}}},
+				{"union", [][]string{{"10000", "1"}, {"16384", "1"}}},
+				{"intersect", [][]string{{"10000", "1"}}},
+				{"except", [][]string{{"16384", "1"}}},
+			} {
+				q := "select b*b as x,1 as y from t " + tc.op + " select 10000 as other,1 as ignored order by x"
+				for _, prepared := range []bool{false, true} {
+					func() {
+						var stmt *sql.Stmt
+						var rows *sql.Rows
+						var err error
+						if prepared {
+							stmt, err = conn.PrepareContext(ctx, q)
+							require.NoError(t, err)
+							defer stmt.Close()
+							rows, err = stmt.QueryContext(ctx)
+						} else {
+							rows, err = conn.QueryContext(ctx, q)
+						}
+						require.NoError(t, err, q)
+						defer rows.Close()
+						columns, err := rows.Columns()
+						require.NoError(t, err)
+						require.Equal(t, []string{"x", "y"}, columns)
+						check(t, rows, []string{"BIGINT", "BIGINT"}, tc.want)
+						require.NoError(t, rows.Err())
+					}()
+				}
+			}
+			stmt, err := conn.PrepareContext(ctx, "select ?*b as x,1 as y from t where id=1 union all select ?*b,1 from t where id=2 order by x")
+			require.NoError(t, err)
+			defer stmt.Close()
+			rows, err := stmt.QueryContext(ctx, int64(2), int64(3))
+			require.NoError(t, err)
+			defer rows.Close()
+			columns, err := rows.Columns()
+			require.NoError(t, err)
+			require.Equal(t, []string{"x", "y"}, columns)
+			check(t, rows, []string{"BIGINT", "BIGINT"}, [][]string{{"-384", "1"}, {"200", "1"}})
+			require.NoError(t, rows.Err())
+		})
+		t.Run("grouping rewrite preserves CTAS roots", func(t *testing.T) {
+			for groupIndex, group := range []string{"%s", "%s with rollup", "cube(%s)", "grouping sets ((%s),())"} {
+				for expressionIndex, tc := range []struct{ expr, from, typ, negative, positive string }{
+					{"b*b*b", "t", "int", "-2097152", "1000000"},
+					{"b*b*b+1", "t", "int", "-2097151", "1000001"},
+					{"case when b>0 then b*b*b else b*b*b+1 end", "t", "int", "-2097151", "1000000"},
+					{"x", "(select b*b*b as x from t) s", "bigint", "-2097152", "1000000"},
+				} {
+					table := fmt.Sprintf("grouped_%d_%d", groupIndex, expressionIndex)
+					key := "b"
+					if tc.expr == "x" {
+						key = "x"
+					}
+					by := fmt.Sprintf(group, key)
+					exec("create table " + table + " as select " + tc.expr + " as x from " + tc.from + " group by " + by)
+					var typ string
+					require.NoError(t, conn.QueryRowContext(ctx, "select column_type from information_schema.columns where table_schema=? and table_name=?", schema, table).Scan(&typ))
+					require.Equal(t, tc.typ, typ, table)
+					want := [][]string{{tc.negative}, {tc.positive}}
+					if groupIndex > 0 {
+						want = append([][]string{{"NULL"}}, want...)
+					}
+					wireType := "INT"
+					if tc.typ == "bigint" {
+						wireType = "BIGINT"
+					}
+					query(t, "select x from "+table+" order by x", []string{wireType}, want)
+				}
+			}
+		})
 		exec("create table c(b tinyint,m mediumint,u mediumint unsigned)")
 		exec("insert into c values(1,100,100),(0,200,200)")
 		t.Run("CASE alias and reference schemas", func(t *testing.T) {

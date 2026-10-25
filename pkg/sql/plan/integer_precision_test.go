@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -184,4 +185,108 @@ func TestIntegerPrecisionParameterOwnershipStopsAtCast(t *testing.T) {
 	bindings := IntegerPrecisionParameterBindings(p)
 	require.Len(t, bindings, 1, "the independent cast marker does not own arithmetic history")
 	require.Zero(t, bindings[0].Position)
+}
+
+func TestIntegerPrecisionSetOperationOutputs(t *testing.T) {
+	for _, operator := range []string{"union all", "union", "intersect", "intersect all", "except", "except all"} {
+		for _, prepare := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/prepare=%v", operator, prepare), func(t *testing.T) {
+				for _, query := range []string{
+					"select 2*3 as x,8 as y " + operator + " select 4*5 as other,9 as ignored",
+					"select x,y from (select 2*3 as x,8 as y " + operator + " select 4*5,9) s",
+					"(select 2*3 as x,8 as y " + operator + " select 4*5,9) union all select 6*7,10",
+				} {
+					stmt, err := mysql.ParseOne(t.Context(), query, 1)
+					require.NoError(t, err)
+					func() {
+						defer stmt.Free()
+						p, err := BuildPlan(NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext(), stmt, prepare)
+						require.NoError(t, err, query)
+						q := p.GetQuery()
+						require.Equal(t, []string{"x", "y"}, q.Headings)
+						require.NoError(t, q.ValidateIntegerPrecision())
+						require.Len(t, q.IntegerPrecision.Outputs, 2)
+						require.Len(t, GetResultColumnsFromPlan(p), 2)
+						require.Equal(t, pb.IntegerPrecisionOutput_SQL_REFERENCE, q.IntegerPrecision.Outputs[0].RootClass)
+						wire, err := q.Marshal()
+						require.NoError(t, err)
+						require.NoError(t, new(pb.Query).Unmarshal(wire))
+					}()
+				}
+			})
+		}
+	}
+	t.Run("prepared markers", func(t *testing.T) {
+		stmt, err := mysql.ParseOne(t.Context(), "select ?*2 as x union all select ?*3", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		p, err := BuildPlan(NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext(), stmt, true)
+		require.NoError(t, err)
+		require.Equal(t, []string{"x"}, p.GetQuery().Headings)
+		require.Len(t, GetResultColumnsFromPlan(p), 1)
+	})
+}
+
+func TestIntegerPrecisionCollapsedUnionIsReference(t *testing.T) {
+	projection := "select attr_seqnum*attr_seqnum*attr_seqnum as x from mo_catalog.mo_columns"
+	p, err := runOneExprStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, projection+" union "+projection)
+	require.NoError(t, err)
+	q := p.GetQuery()
+	require.Equal(t, []string{"x"}, q.Headings)
+	require.NoError(t, q.ValidateIntegerPrecision())
+	require.NotNil(t, q.IntegerPrecision)
+	require.Equal(t, pb.IntegerPrecisionOutput_SQL_REFERENCE, q.IntegerPrecision.Outputs[0].RootClass)
+	ctas, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "create table collapsed_integer as "+projection+" union "+projection)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_int64), ctas.GetDdl().GetCreateTable().TableDef.Cols[0].Typ.Id, "deduplication cannot turn a SQL reference into a direct CTAS root")
+	raw, err := runOneExprStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select 1 as x union all select 2")
+	require.NoError(t, err)
+	require.Equal(t, []string{"x"}, raw.GetQuery().Headings)
+	require.Nil(t, raw.GetQuery().IntegerPrecision)
+}
+
+func TestIntegerPrecisionGroupingSchemaRoots(t *testing.T) {
+	for _, grouping := range []string{"attr_seqnum", "attr_seqnum with rollup", "cube(attr_seqnum)", "grouping sets ((attr_seqnum),())", "grouping sets ((),(attr_seqnum))"} {
+		for _, tc := range []struct {
+			expr, from string
+			length     uint32
+			root       pb.IntegerPrecisionOutput_RootClass
+			target     types.T
+		}{
+			{"attr_seqnum*attr_seqnum*attr_seqnum", "mo_catalog.mo_columns", 10, pb.IntegerPrecisionOutput_DIRECT_FUNCTION, types.T_int32},
+			{"attr_seqnum*attr_seqnum*attr_seqnum+1", "mo_catalog.mo_columns", 11, pb.IntegerPrecisionOutput_DIRECT_FUNCTION, types.T_int32},
+			{"case when attr_seqnum>0 then attr_seqnum*attr_seqnum*attr_seqnum else attr_seqnum*attr_seqnum*attr_seqnum+1 end", "mo_catalog.mo_columns", 11, pb.IntegerPrecisionOutput_DIRECT_FUNCTION, types.T_int32},
+			{"x", "(select attr_seqnum,attr_seqnum*attr_seqnum*attr_seqnum x from mo_catalog.mo_columns) s", 10, pb.IntegerPrecisionOutput_SQL_REFERENCE, types.T_int64},
+		} {
+			t.Run(grouping+"/"+tc.expr, func(t *testing.T) {
+				query := "create table integer_grouped as select " + tc.expr + " as result,attr_seqnum as raw,2 as literal from " + tc.from + " group by " + strings.ReplaceAll(grouping, "attr_seqnum", "attr_seqnum,x")
+				if tc.expr != "x" {
+					query = "create table integer_grouped as select " + tc.expr + " as result,attr_seqnum as raw,2 as literal from " + tc.from + " group by " + grouping
+				}
+				stmt, err := mysql.ParseOne(t.Context(), query, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				p, err := BuildPlan(NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext(), stmt, false)
+				require.NoError(t, err, query)
+				ddl := p.GetDdl()
+				selectStmt, err := mysql.ParseOne(t.Context(), strings.TrimPrefix(query, "create table integer_grouped as "), 1)
+				require.NoError(t, err)
+				defer selectStmt.Free()
+				selectPlan, err := BuildPlan(NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext(), selectStmt, false)
+				require.NoError(t, err)
+				q := selectPlan.GetQuery()
+				require.NoError(t, q.ValidateIntegerPrecision())
+				require.Equal(t, []string{"result", "raw", "literal"}, q.Headings)
+				require.Equal(t, tc.root, q.IntegerPrecision.Outputs[0].RootClass)
+				require.Equal(t, tc.length, uint32(evaluateIntegerPrecision(q.IntegerPrecision)[q.IntegerPrecision.Outputs[0].Node-1].DisplayLength()))
+				require.Equal(t, int32(tc.target), ddl.GetCreateTable().TableDef.Cols[0].Typ.Id)
+				rawRoot := pb.IntegerPrecisionOutput_DECLARED_SOURCE
+				if tc.expr == "x" {
+					rawRoot = pb.IntegerPrecisionOutput_SQL_REFERENCE
+				}
+				require.Equal(t, rawRoot, q.IntegerPrecision.Outputs[1].RootClass)
+				require.Equal(t, pb.IntegerPrecisionOutput_SQL_LITERAL, q.IntegerPrecision.Outputs[2].RootClass)
+			})
+		}
+	}
 }
