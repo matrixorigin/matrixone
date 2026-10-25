@@ -487,6 +487,55 @@ func (s *StatementInfo) CloneWithoutExecPlan() *StatementInfo {
 	return stmt
 }
 
+// cloneForSpool returns a flat (heap) copy of the statement's export state
+// for the statement_info spool. The copy is not pooled and does not share
+// ownerships: the source keeps its ExecPlan; the snapshot borrows the ExecPlan
+// read-only and the already marshaled plan json, so the plan is marshaled at
+// most once per statement. Callers must hold s.mux (or own s exclusively).
+func (s *StatementInfo) cloneForSpool(ctx context.Context) *StatementInfo {
+	// Materialize the plan json once: the snapshot and the later in-memory
+	// export share it. On a statement without plan this returns noExecPlan
+	// without caching side effects beyond jsonByte.
+	jsonByte := s.ExecPlan2Json(ctx)
+	snapshot := &StatementInfo{
+		StatementID:          s.StatementID,
+		TransactionID:        s.TransactionID,
+		SessionID:            s.SessionID,
+		ConnectionId:         s.ConnectionId,
+		Account:              s.Account,
+		AccountID:            s.AccountID,
+		User:                 s.User,
+		Host:                 s.Host,
+		RoleId:               s.RoleId,
+		Database:             s.Database,
+		Statement:            s.Statement,
+		StatementFingerprint: s.StatementFingerprint,
+		StatementTag:         s.StatementTag,
+		SqlSourceType:        s.SqlSourceType,
+		RequestAt:            s.RequestAt,
+		StatementType:        s.StatementType,
+		QueryType:            s.QueryType,
+		Status:               s.Status,
+		Error:                s.Error,
+		ResponseAt:           s.ResponseAt,
+		Duration:             s.Duration,
+		RowsRead:             s.RowsRead,
+		BytesScan:            s.BytesScan,
+		AggrCount:            s.AggrCount,
+		AggrMemoryTime:       s.AggrMemoryTime,
+		ResultCount:          s.ResultCount,
+		ConnType:             s.ConnType,
+		jsonByte:             jsonByte,
+		statsArray:           s.statsArray,
+		stated:               s.stated,
+		cuStated:             s.cuStated,
+		resourceSummary:      s.resourceSummary,
+		resourceStated:       s.resourceStated,
+		disableAgg:           s.disableAgg,
+	}
+	return snapshot
+}
+
 func (s *StatementInfo) GetTable() *table.Table { return SingleStatementTable }
 
 func (s *StatementInfo) FillRow(ctx context.Context, row *table.Row) {
@@ -960,6 +1009,12 @@ var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	}
 
 	s.reported = true
+	// Make the record crash-durable before handing it to the in-memory
+	// collector: after this point an abrupt process exit cannot silently
+	// lose the audit record any more (see statement_spool.go). Spooling must
+	// never break the statement path; any failure downgrades to the previous
+	// in-memory-only behavior.
+	spoolStatementInfo(ctx, s)
 	return GetGlobalBatchProcessor().Collect(ctx, s)
 DiscardAndFreeL:
 	s.freeNoLocked()

@@ -103,6 +103,10 @@ var (
 	// defaultTraceExportInterval default: 15 sec.
 	defaultTraceExportInterval = 15
 
+	// defaultStatementInfoSpoolMaxSize bounds the disk usage of the
+	// crash-durable statement_info spool. default: 1 GB.
+	defaultStatementInfoSpoolMaxSize = 1 << 30
+
 	// defaultMetricExportInterval default: 15 sec.
 	defaultMetricExportInterval = 15
 
@@ -1048,6 +1052,21 @@ type ObservabilityParameters struct {
 	// If false, LongQueryTime is NO less than SelectAggThreshold
 	DisableStmtAggregation bool `toml:"disable-stmt-aggregation"`
 
+	// DisableStatementInfoSpool default: false. If true, statement_info records
+	// are only staged in memory (pre-#30812 behavior) instead of being appended
+	// to the crash-durable statement_info spool before the collector hand-off.
+	DisableStatementInfoSpool bool `toml:"disable-statement-info-spool"`
+
+	// StatementInfoSpoolDir holds the directory of the crash-durable
+	// statement_info spool. Empty means "<service data-dir>/statement_info_spool".
+	// The spool is node-local: a restart on another node cannot replay it.
+	StatementInfoSpoolDir string `toml:"statement-info-spool-dir"`
+
+	// StatementInfoSpoolMaxSize bounds the total disk usage of the
+	// crash-durable statement_info spool, default 1GB. Once exceeded, newly
+	// reported records stay memory-only (previous behavior), counted and logged.
+	StatementInfoSpoolMaxSize toml.ByteSize `toml:"statement-info-spool-max-size"`
+
 	// Seconds to aggregate the statements
 	AggregationWindow toml.Duration `toml:"aggregation-window"`
 
@@ -1131,6 +1150,9 @@ func NewObservabilityParameters() *ObservabilityParameters {
 		SkipRunningStmt:                    defaultSkipRunningStmt,
 		DisableSqlWriter:                   false,
 		DisableStmtAggregation:             false,
+		DisableStatementInfoSpool:          false,
+		StatementInfoSpoolDir:              "",
+		StatementInfoSpoolMaxSize:          toml.ByteSize(defaultStatementInfoSpoolMaxSize),
 		AggregationWindow:                  toml.Duration{},
 		SelectAggThreshold:                 toml.Duration{},
 		EnableStmtMerge:                    false,
@@ -1171,6 +1193,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.TraceExportInterval <= 0 {
 		op.TraceExportInterval = defaultTraceExportInterval
+	}
+
+	if op.StatementInfoSpoolMaxSize <= 0 {
+		op.StatementInfoSpoolMaxSize = toml.ByteSize(defaultStatementInfoSpoolMaxSize)
 	}
 
 	if op.MetricExportInterval <= 0 {

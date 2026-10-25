@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	goruntime "runtime"
 	"sync"
 	"syscall"
@@ -797,6 +798,12 @@ func initTraceMetric(ctx context.Context, st metadata.ServiceType, cfg *Config, 
 	var err error
 	var initWG sync.WaitGroup
 	SV := cfg.getObservabilityConfig()
+	if SV.StatementInfoSpoolDir == "" && cfg.DataDir != "" {
+		// default anchor of the crash-durable statement_info spool: the
+		// service-local data dir. The spool is node-local on purpose: replay
+		// only makes sense on the same node's disk after a restart.
+		SV.StatementInfoSpoolDir = filepath.Join(cfg.DataDir, "statement_info_spool")
+	}
 
 	nodeRole := st.String()
 	if *launchFile != "" {

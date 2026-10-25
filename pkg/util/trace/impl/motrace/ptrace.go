@@ -27,11 +27,16 @@ var _ trace.TracerProvider = &MOTracerProvider{}
 
 type MOTracerProvider struct {
 	tracerProviderConfig
+
+	// stmtInfoSpool is the crash-durable spool staging statement_info records
+	// between report and export. nil when disabled or not yet initialized.
+	// Set once by initExporter and only read afterwards; Shutdown closes it.
+	stmtInfoSpool *statementInfoSpool
 }
 
 func defaultMOTracerProvider() *MOTracerProvider {
 	pTracer := &MOTracerProvider{
-		tracerProviderConfig{
+		tracerProviderConfig: tracerProviderConfig{
 			enable:         false,
 			resource:       trace.NewResource(),
 			idGenerator:    moIDGenerator{},

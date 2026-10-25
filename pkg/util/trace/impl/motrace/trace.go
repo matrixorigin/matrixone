@@ -41,6 +41,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
+	"go.uber.org/zap"
 )
 
 var gTracerProvider atomic.Value
@@ -77,6 +79,9 @@ func InitWithConfig(ctx context.Context, SV *config.ObservabilityParameters, opt
 		WithSkipRunningStmt(SV.SkipRunningStmt),
 		WithSQLWriterDisable(SV.DisableSqlWriter),
 		WithAggregatorDisable(SV.DisableStmtAggregation),
+		WithStatementInfoSpoolDisable(SV.DisableStatementInfoSpool),
+		WithStatementInfoSpoolDir(SV.StatementInfoSpoolDir),
+		WithStatementInfoSpoolMaxSize(int64(SV.StatementInfoSpoolMaxSize)),
 		WithAggregatorWindow(SV.AggregationWindow.Duration),
 		WithSelectThreshold(SV.SelectAggThreshold.Duration),
 		WithStmtMergeEnable(SV.EnableStmtMerge),
@@ -160,6 +165,45 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 	if !p.Start() {
 		return moerr.NewInternalError(ctx, "trace exporter already started")
 	}
+	if err := initStatementInfoSpool(ctx, config); err != nil {
+		// a broken spool must not block the node: degrade to the previous
+		// in-memory-only staging, the failure is loud in the log.
+		logutil.Error("init statement_info spool failed, continue without crash-durable audit",
+			zap.Error(err))
+	}
+	return nil
+}
+
+// initStatementInfoSpool opens the crash-durable statement_info spool and
+// starts the boot replay of records left behind by an earlier process run.
+func initStatementInfoSpool(ctx context.Context, config *tracerProviderConfig) error {
+	if config.disableStmtInfoSpool || config.stmtInfoSpoolDir == "" {
+		return nil
+	}
+	// Aggregation may hold a record for up to one aggregation window past its
+	// own export batch; delay the spool segment removal by that window.
+	var ackLagSegments uint64 = 1
+	if config.aggregationWindow > 0 && config.exportInterval > 0 {
+		ackLagSegments = 1 + uint64(config.aggregationWindow/config.exportInterval)
+	}
+	ackLagDuration := config.exportInterval + config.aggregationWindow + 15*time.Second
+	spool, err := newStatementInfoSpool(config.stmtInfoSpoolDir, config.stmtInfoSpoolMaxSize, ackLagSegments, ackLagDuration)
+	if err != nil {
+		return err
+	}
+	GetTracerProvider().stmtInfoSpool = spool
+	if config.writerFactory == nil {
+		// no exporter configured: replay keeps pending, the janitor still
+		// manages the sealed-segment lifecycle.
+		logutil.Warn("statement_info spool has no writer factory, replay kept pending",
+			zap.String("dir", config.stmtInfoSpoolDir))
+		spool.startJanitorOnly()
+		return nil
+	}
+	spool.startReplay(ctx)
+	logutil.Info("statement_info spool initialized",
+		zap.String("dir", config.stmtInfoSpoolDir),
+		zap.Int64("maxSize", spool.maxSize))
 	return nil
 }
 
@@ -236,6 +280,12 @@ func Shutdown(ctx context.Context) error {
 	// explicitly now that the span pipeline no longer exists.
 	if err := stopBatchProcessor(shutdownCtx, GetTracerProvider().batchProcessor); err != nil {
 		return moerr.AttachCause(shutdownCtx, err)
+	}
+	// stop the spool after the exporter flushed: every record the exporter
+	// committed is now confirmed, the unflushed remainder stays on disk for
+	// the next boot's replay.
+	if spool := GetTracerProvider().stmtInfoSpool; spool != nil {
+		spool.close()
 	}
 	logutil.Info("trace.shutdown.complete")
 	return nil
