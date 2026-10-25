@@ -44,6 +44,7 @@ type tableCloneRecordingExecutor struct {
 	sql    string
 	sqls   []string
 	opts   executor.Options
+	ctx    context.Context
 }
 
 func (e *tableCloneRecordingExecutor) Exec(
@@ -57,6 +58,7 @@ func (e *tableCloneRecordingExecutor) Exec(
 	e.sql = sql
 	e.sqls = append(e.sqls, sql)
 	e.opts = opts
+	e.ctx = ctx
 	if e.run != nil {
 		return e.run(sql)
 	}
@@ -141,6 +143,49 @@ func TestConstructTableCloneUsesPhysicalTemporaryDestination(t *testing.T) {
 		defines.GenTempTableName(proc.Base.SessionInfo.SessionId, "clone_db", "temp_dst"),
 		tc.Ctx.DstTblName,
 	)
+}
+
+func TestConstructTableCloneLendsSessionForAllocatorReads(t *testing.T) {
+	for _, failRead := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "max read failure"}[failRead], func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			owner := &trackingTempTableSession{tables: map[string]string{"db.src": "physical_src"}}
+			proc.Session = owner
+			originalCtx := proc.Ctx
+			wantErr := errors.New("max read failed")
+			exec := &tableCloneRecordingExecutor{}
+			exec.run = func(sql string) (executor.Result, error) {
+				require.Same(t, owner, getInternalExecutorSession(exec.ctx))
+				require.False(t, defines.HasTemporaryTableAccess(exec.ctx), "clone must retain ordinary ownership checks")
+				if strings.Contains(sql, "mo_catalog.mo_increment_columns") {
+					return newTableCloneOffsetResult(t, proc.Mp(), 0, 7), nil
+				}
+				if failRead {
+					return executor.Result{}, wantErr
+				}
+				return newTableCloneResult(t, proc.Mp(), 7), nil
+			}
+			runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(runtime.InternalSQLExecutor, exec)
+			src := &plan.TableDef{TblId: 7, DbName: "db", Name: "physical_src", Cols: []*plan.ColDef{{
+				Name: "id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true},
+			}}}
+			tc, err := constructTableClone(&Compile{proc: proc, pn: &plan.Plan{}}, &plan.CloneTable{
+				SrcTableDef: src, SrcObjDef: &plan.ObjectRef{}, CreateTable: cloneCreatePlan(src),
+			})
+			if tc != nil {
+				t.Cleanup(tc.Release)
+			}
+			require.Same(t, originalCtx, proc.Ctx, "session lending must end on every exit")
+			require.Nil(t, getInternalExecutorSession(originalCtx))
+			require.Len(t, exec.sqls, 2)
+			if failRead {
+				require.ErrorIs(t, err, wantErr)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, uint64(7), tc.Ctx.SrcAutoIncrMaxValues["id"])
+			}
+		})
+	}
 }
 
 func TestConstructTableCloneUsesCopiedStateForFreshClone(t *testing.T) {

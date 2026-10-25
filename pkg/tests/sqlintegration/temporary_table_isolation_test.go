@@ -187,6 +187,50 @@ func TestTemporaryTablePhysicalNameIsSessionScoped(t *testing.T) {
 		})
 
 		t.Run("clone_preserves_allocator", func(t *testing.T) {
+			for _, sourceKind := range []string{"permanent", "temporary"} {
+				t.Run(sourceKind, func(t *testing.T) {
+					exec := func(t *testing.T, statement string) {
+						t.Helper()
+						_, err := owner.ExecContext(ctx, statement)
+						require.NoError(t, err, statement)
+					}
+					qualifier := ""
+					if sourceKind == "temporary" {
+						qualifier = "temporary "
+					}
+					exec(t, "create "+qualifier+"table owned_clone_source(id bigint auto_increment primary key, v int)")
+					defer exec(t, "drop table owned_clone_source")
+					exec(t, "insert into owned_clone_source values(7, 11)")
+					if sourceKind == "temporary" {
+						var physical string
+						require.NoError(t, owner.QueryRowContext(ctx,
+							"select relname from mo_catalog.mo_tables where reldatabase=? and relname like '%_owned_clone_source'", schema).Scan(&physical))
+						// Clone's source discovery reports missing tables as a
+						// parser error before reaching allocator compilation.
+						_, err := attacker.ExecContext(ctx, "create temporary table stolen_clone clone `"+schema+"`.`"+physical+"`")
+						var sqlErr *mysql.MySQLError
+						require.ErrorAs(t, err, &sqlErr)
+						require.EqualValues(t, 1064, sqlErr.Number)
+					}
+					for _, destinationKind := range []string{"temporary", "permanent"} {
+						t.Run(destinationKind+"_destination", func(t *testing.T) {
+							qualifier := ""
+							if destinationKind == "temporary" {
+								qualifier = "temporary "
+							}
+							_, err := owner.ExecContext(ctx, "create "+qualifier+"table owned_clone_target clone owned_clone_source")
+							require.NoError(t, err)
+							defer exec(t, "drop table owned_clone_target")
+							exec(t, "insert into owned_clone_target(v) values(12)")
+							var id, copied int
+							require.NoError(t, owner.QueryRowContext(ctx, "select v from owned_clone_target where id=7").Scan(&copied))
+							require.Equal(t, 11, copied)
+							require.NoError(t, owner.QueryRowContext(ctx, "select id from owned_clone_target where v=12").Scan(&id))
+							require.Equal(t, 8, id)
+						})
+					}
+				})
+			}
 			_, err := owner.ExecContext(ctx, "create table clone_source(id bigint auto_increment primary key, v int) auto_increment=10")
 			require.NoError(t, err)
 			_, err = owner.ExecContext(ctx, "insert into clone_source(v) values(1), (2)")

@@ -1343,7 +1343,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					indexNameMap[orig] = def.Name
 				}
 				stage := &temporaryDDLSession{Session: session, sessionID: c.proc.GetSessionInfo().SessionId,
-					aliases: make(map[string]string, len(indexNameMap))}
+					aliases: make(map[temporaryTableAlias]string, len(indexNameMap))}
 				for alias, name := range indexNameMap {
 					stage.AddTempIndexTable(tmpDb, alias, name)
 				}
@@ -3313,7 +3313,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 			}
 		}
 		stage := &temporaryDDLSession{Session: session, sessionID: c.proc.GetSessionInfo().SessionId,
-			aliases: make(map[string]string, len(indexNameMap))}
+			aliases: make(map[temporaryTableAlias]string, len(indexNameMap))}
 		for alias, name := range indexNameMap {
 			stage.AddTempIndexTable(qry.Database, alias, name)
 		}

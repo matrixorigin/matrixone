@@ -668,7 +668,7 @@ func TestTemporaryDDLGenerationPreservesIndexIdentity(t *testing.T) {
 
 func TestCreateIndexTemporaryNameUsesRootGeneration(t *testing.T) {
 	base := &trackingTempTableSession{tables: make(map[string]string)}
-	stage := &temporaryDDLSession{Session: base, sessionID: uuid.New(), generation: "root-generation", aliases: make(map[string]string)}
+	stage := &temporaryDDLSession{Session: base, sessionID: uuid.New(), generation: "root-generation", aliases: make(map[temporaryTableAlias]string)}
 	root := stage.TemporaryTableName("db", "root")
 	stage.AddTempTable("db", "root", root)
 
@@ -703,7 +703,7 @@ func TestTemporaryDDLSessionOwnsStagedRoot(t *testing.T) {
 	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: make(map[string]string)}}
 	stage := &temporaryDDLSession{
 		Session: owner,
-		aliases: map[string]string{"db.t": "staged_t"},
+		aliases: map[temporaryTableAlias]string{{"db", "t"}: "staged_t"},
 	}
 	require.True(t, stage.OwnsTemporaryTable("db", "staged_t"))
 	require.False(t, stage.OwnsTemporaryTable("db", "staged"))
@@ -715,4 +715,16 @@ func TestTemporaryDDLSessionOwnsStagedRoot(t *testing.T) {
 	require.False(t, stage.OwnsTemporaryTable("other-db", "staged_t"))
 	owner.AddTempTable("db", "published", "published-root")
 	require.True(t, stage.OwnsTemporaryTable("db", "published-root"))
+	stage.AddTempTable("a.b", "c", "dotted_root")
+	stage.AddTempIndexTable("a.b", "idx.c", "dotted_index")
+	stage.AddTempTable("a", "b.c", "other_root")
+	require.True(t, stage.OwnsTemporaryTable("a.b", "dotted_root"))
+	require.False(t, stage.OwnsTemporaryTable("a", "dotted_root"))
+	require.Equal(t, []string{"dotted_index"}, stage.indexNames("a.b", "c"))
+	stage.RemoveTempTable("a.b", "c")
+	_, exists := stage.GetTempTable("a.b", "c")
+	require.False(t, exists)
+	name, exists := stage.GetTempTable("a", "b.c")
+	require.True(t, exists)
+	require.Equal(t, "other_root", name)
 }

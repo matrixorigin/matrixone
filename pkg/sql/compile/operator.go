@@ -3013,6 +3013,14 @@ func constructTableClone(
 		return metaCopy, nil
 	}
 
+	// Allocator and MAX queries run during compilation, before RestoreTable
+	// lends the session for execution. Preserve the source owner's identity
+	// here as well, including when the source is temporary and the destination
+	// is permanent. Leave ordinary temporary-table authorization in force.
+	originalCtx := c.proc.Ctx
+	c.proc.Ctx = attachInternalExecutorSession(originalCtx, c.proc.GetSession())
+	defer func() { c.proc.Ctx = originalCtx }()
+
 	if clonePlan.SrcObjDef != nil && clonePlan.SrcObjDef.PubInfo != nil {
 		account = uint32(clonePlan.SrcObjDef.PubInfo.TenantId)
 	} else if clonePlan.ScanSnapshot != nil {

@@ -1592,6 +1592,25 @@ func TestSessionTempTableMapKeepsDottedIdentitiesDistinct(t *testing.T) {
 	_, ok = ses.GetTempTable("x.y", "t")
 	require.False(t, ok)
 	require.Empty(t, ses.tempTablesRev)
+
+	// Publishing a committed schema must preserve the same dotted identities,
+	// including hidden index ownership and retirement.
+	ses.PublishTemporaryTable("x", "y.t", "root-one", map[string]string{"y.i": "index-one"})
+	ses.PublishTemporaryTable("x.y", "t", "root-two", map[string]string{"i": "index-two"})
+	for _, tc := range []struct{ db, alias, physical string }{
+		{"x", "y.t", "root-one"}, {"x.y", "t", "root-two"},
+		{"x", "y.i", "index-one"}, {"x.y", "i", "index-two"},
+	} {
+		name, ok := ses.GetTempTable(tc.db, tc.alias)
+		require.True(t, ok)
+		require.Equal(t, tc.physical, name)
+		require.True(t, ses.OwnsTemporaryTable(tc.db, tc.physical))
+	}
+	require.False(t, ses.OwnsTemporaryTable("x.y", "index-one"))
+	ses.RetireTemporaryTable("x", "y.t", "root-one", []string{"index-one"})
+	require.False(t, ses.OwnsTemporaryTable("x", "index-one"))
+	require.True(t, ses.OwnsTemporaryTable("x.y", "root-two"))
+	require.True(t, ses.OwnsTemporaryTable("x.y", "index-two"))
 }
 
 func TestRetireTemporaryTableRemovesUnknownIndexAliases(t *testing.T) {
@@ -1605,11 +1624,11 @@ func TestRetireTemporaryTableRemovesUnknownIndexAliases(t *testing.T) {
 			root := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"root")
 			index := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"index")
 			siblingIndex := defines.GenTempTableName(ses.GetSessId(), "db", uuid.NewString()+"_other_index")
-			ses.PublishTemporaryTable("db", "root", root)
+			ses.PublishTemporaryTable("db", "root", root, nil)
 			ses.AddTempIndexTable("db", "index", index)
 			ses.AddTempIndexTable("db", "other_index", siblingIndex)
 			sibling := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"sibling")
-			ses.PublishTemporaryTable("db", "sibling", sibling)
+			ses.PublishTemporaryTable("db", "sibling", sibling, nil)
 			ses.addTempIndexTable("other_db", "index", index+"_other", "txn", "stmt")
 			ses.RetireTemporaryTable("db", "root", root, nil)
 			_, ok := ses.GetTempTable("db", "root")
@@ -1640,12 +1659,12 @@ func TestForgetMissingTemporaryTableCleansOwnedChildren(t *testing.T) {
 			root := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"root")
 			child := defines.GenTempTableName(ses.GetSessId(), "db", prefix+"child")
 			sibling := defines.GenTempTableName(ses.GetSessId(), "db", uuid.NewString()+"_sibling")
-			ses.PublishTemporaryTable("db", "root", root)
+			ses.PublishTemporaryTable("db", "root", root, nil)
 			ses.AddTempIndexTable("db", "child", child)
 			// A journal containing a removal could otherwise resurrect the dead child.
 			ses.removeTempTable("db", "child", "txn", "remove")
 			ses.addTempIndexTable("db", "child", child, "txn", "create")
-			ses.PublishTemporaryTable("db", "user", defines.GenTempTableName(ses.GetSessId(), "db", prefix+"user"))
+			ses.PublishTemporaryTable("db", "user", defines.GenTempTableName(ses.GetSessId(), "db", prefix+"user"), nil)
 			ses.addTempIndexTable("db", "sibling", sibling, "txn", "other")
 			ses.addTempIndexTable("other_db", "foreign", child+"_foreign", "txn", "other")
 			ses.ForgetMissingTemporaryTable("db", "root", root)
@@ -1674,23 +1693,25 @@ func TestForgetMissingTemporaryTableCleansOwnedChildren(t *testing.T) {
 			require.True(t, ok, "prefix cannot authorize cleanup of a user table")
 		})
 	}
-	// Admission depends on reclaiming every child, not just the root.
+	// Admission counts root generations. Reclaim the missing root and its
+	// hidden child while leaving every other admitted generation intact.
 	ses := &Session{}
 	generation := uuid.NewString() + "_"
 	root := defines.GenTempTableName(ses.GetSessId(), "db", generation+"root")
-	ses.PublishTemporaryTable("db", "root", root)
+	ses.PublishTemporaryTable("db", "root", root, nil)
+	ses.AddTempIndexTable("db", "index", defines.GenTempTableName(ses.GetSessId(), "db", generation+"index"))
 	for i := 0; i < maxSessionTemporaryTableGenerations-1; i++ {
-		alias := fmt.Sprint("index", i)
-		ses.AddTempIndexTable("db", alias, defines.GenTempTableName(ses.GetSessId(), "db", generation+alias))
+		alias := fmt.Sprint("other", i)
+		ses.PublishTemporaryTable("db", alias, defines.GenTempTableName(ses.GetSessId(), "db", generation+alias), nil)
 	}
 	require.Error(t, ses.CheckTemporaryTableCapacity(context.Background()))
 	// Stale lookup of a different generation must leave the whole family alone.
 	ses.ForgetMissingTemporaryTable("db", "root", root+"_old")
-	require.Len(t, ses.tempTables, maxSessionTemporaryTableGenerations)
+	require.Len(t, ses.tempTables, maxSessionTemporaryTableGenerations+1)
 	ses.ForgetMissingTemporaryTable("db", "root", root)
-	require.Empty(t, ses.tempTables)
-	require.Empty(t, ses.tempTablesRev)
-	require.Empty(t, ses.tempTableIdentities)
+	require.Len(t, ses.tempTables, maxSessionTemporaryTableGenerations-1)
+	require.Len(t, ses.tempTablesRev, len(ses.tempTables))
+	require.Len(t, ses.tempTableIdentities, len(ses.tempTables))
 	require.Empty(t, ses.retiredTempTables)
 	require.NoError(t, ses.CheckTemporaryTableCapacity(context.Background()))
 }

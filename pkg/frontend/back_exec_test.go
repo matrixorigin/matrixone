@@ -73,7 +73,7 @@ func TestBackSessionForgetsMissingTemporaryTable(t *testing.T) {
 	absent.ForgetMissingTemporaryTable("db", "t", "physical")
 	(&backSession{}).ForgetMissingTemporaryTable("db", "t", "physical")
 	ses := &Session{}
-	ses.PublishTemporaryTable("db", "t", "physical")
+	ses.PublishTemporaryTable("db", "t", "physical", nil)
 	parent := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
 	parent.ForgetMissingTemporaryTable("db", "t", "old")
 	_, ok := ses.GetTempTable("db", "t")
