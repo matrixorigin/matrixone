@@ -55,6 +55,14 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err != nil {
 			return
 		}
+	case *tree.SetPassword:
+		ses.EnterFPrint(FPAlterUser)
+		defer ses.ExitFPrint(FPAlterUser)
+		ses.InvalidatePrivilegeCache()
+		err = handleSetPassword(ses, execCtx, st)
+		if err != nil {
+			return
+		}
 	case *tree.Use:
 		ses.EnterFPrint(FPUse)
 		defer ses.ExitFPrint(FPUse)

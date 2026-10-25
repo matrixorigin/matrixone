@@ -549,6 +549,19 @@ const (
 	userStatusUnlock      = "unlock"
 	userStatusLockForever = "forbid" // only varchar(8) for status. so use "forbid" not "lock forever"
 
+	// passwordExpireDefaultTime is the raw SQL value of mo_user.expired_time
+	// when there is no explicit per-user expiration: the account then follows
+	// the global default_password_lifetime policy.
+	passwordExpireDefaultTime = "NULL"
+	// passwordExpireNeverTime is the sentinel timestamp persisted in
+	// mo_user.expired_time by PASSWORD EXPIRE NEVER. The column is a plain
+	// timestamp without extra lifetime flags, so "never expires" is encoded
+	// as an expiration instant in the far future. An explicit (non-NULL)
+	// expired_time always takes precedence over default_password_lifetime,
+	// which is exactly the MySQL semantics of a per-user PASSWORD EXPIRE NEVER
+	// (it also disables the default lifetime policy for that account).
+	passwordExpireNeverTime = "9999-12-31 23:59:59"
+
 	defaultPasswordEnv = "DEFAULT_PASSWORD"
 
 	rootID            = 0
@@ -1312,7 +1325,7 @@ const (
 
 	getPasswordOfUserFormat = `select user_id, authentication_string, default_role from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
-	getLockInfoOfUserFormat = `select status, login_attempts, lock_time from mo_catalog.mo_user where user_name = "%s" order by user_id;`
+	getLockInfoOfUserFormat = `select status, login_attempts, lock_time, expired_time from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
 	getExpiredTimeOfUserFormat = `select password_last_changed from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
@@ -1320,11 +1333,21 @@ const (
 
 	updatePasswordHistoryOfUserFormat = `update mo_catalog.mo_user set password_history = '%s' where user_name = "%s";`
 
-	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" , password_last_changed = utc_timestamp() where user_name = "%s" order by user_id;`
+	// Any successful password change clears the explicit password expiration:
+	// MySQL clears the password_expired flag of the account once the password
+	// is reset, so expired_time is reset to NULL (fall back to the global
+	// default_password_lifetime policy) together with password_last_changed.
+	// The one exception is the PASSWORD EXPIRE NEVER sentinel: in MySQL the
+	// never-expire lifetime survives a password change, so it is kept here.
+	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" , password_last_changed = utc_timestamp(), expired_time = if(expired_time = '` + passwordExpireNeverTime + `', expired_time, null) where user_name = "%s" order by user_id;`
+
+	updateExpiredTimeOfUserFormat = `update mo_catalog.mo_user set expired_time = %s where user_name = "%s" order by user_id;`
 
 	updateStatusUnlockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = 0 where user_name = "%s" order by user_id;`
 
 	updateLoginAttemptsOfUserFormat = `update mo_catalog.mo_user set login_attempts = login_attempts + 1  where user_name = "%s";`
+
+	updateResetLoginAttemptsOfUserFormat = `update mo_catalog.mo_user set login_attempts = 0 where user_name = "%s";`
 
 	updateLockTimeOfUserFormat = `update mo_catalog.mo_user set lock_time = utc_timestamp() where user_name = "%s";`
 
@@ -1834,6 +1857,43 @@ func getSqlForUpdateUnlcokStatusOfUser(status, user string) string {
 
 func getSqlForUpdateLoginAttemptsOfUser(user string) string {
 	return fmt.Sprintf(updateLoginAttemptsOfUserFormat, user)
+}
+
+func getSqlForUpdateResetLoginAttemptsOfUser(user string) string {
+	return fmt.Sprintf(updateResetLoginAttemptsOfUserFormat, user)
+}
+
+func getSqlForUpdateExpiredTimeOfUser(expiredTime string, user string) string {
+	return fmt.Sprintf(updateExpiredTimeOfUserFormat, expiredTime, user)
+}
+
+// convertMiscOptToExpiredTime translates a PASSWORD EXPIRE misc option of
+// CREATE/ALTER USER into the raw SQL value assigned to mo_user.expired_time.
+// The returned value is either NULL (follow the global default lifetime
+// policy) or a quoted UTC timestamp literal. It reports false when opt is not
+// a password-expire option.
+//   - PASSWORD EXPIRE        : the password expires right now.
+//   - PASSWORD EXPIRE INTERVAL n DAY : the password expires in n days.
+//   - PASSWORD EXPIRE NEVER  : expiration is pushed to the far-future
+//     sentinel passwordExpireNeverTime, i.e. the explicit expired_time always
+//     wins over default_password_lifetime, matching MySQL (a per-account
+//     lifetime of 0 disables the default policy for that account).
+//   - PASSWORD EXPIRE DEFAULT: NULL, the account follows the global
+//     default_password_lifetime policy.
+func convertMiscOptToExpiredTime(opt tree.UserMiscOption) (string, bool) {
+	now := time.Now().UTC()
+	format := "2006-01-02 15:04:05"
+	switch o := opt.(type) {
+	case *tree.UserMiscOptionPasswordExpireNone:
+		return "\"" + now.Format(format) + "\"", true
+	case *tree.UserMiscOptionPasswordExpireInterval:
+		return "\"" + now.AddDate(0, 0, int(o.Value)).Format(format) + "\"", true
+	case *tree.UserMiscOptionPasswordExpireNever:
+		return "\"" + passwordExpireNeverTime + "\"", true
+	case *tree.UserMiscOptionPasswordExpireDefault:
+		return passwordExpireDefaultTime, true
+	}
+	return passwordExpireDefaultTime, false
 }
 
 func getSqlForUpdateLockTimeOfUser(user string) string {
@@ -3162,6 +3222,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	const (
 		lockUser lockOrUnlockUser = iota
 		unlockUser
+		expirePassword
 		noneLockOrUnlockUser
 	)
 
@@ -3175,6 +3236,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		userName         string
 	)
 	doLockOrUnlock := noneLockOrUnlockUser
+	expiredTime := passwordExpireDefaultTime
 	account := ses.GetTenantInfo()
 	currentUser := account.GetUser()
 
@@ -3200,6 +3262,16 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 				return moerr.NewInternalError(ctx, msg)
 			}
 			doLockOrUnlock = lockUser
+		} else if expireValue, ok := convertMiscOptToExpiredTime(au.MiscOpt); ok {
+			// PASSWORD EXPIRE (NONE / INTERVAL n DAY / NEVER / DEFAULT):
+			// persist the new expiration into mo_user.expired_time. The next
+			// login sandboxes the session once expired_time is reached.
+			if user.IdentStr != "" {
+				msg := "not support identified with password expire operation, use `alter user xx password expire` instead"
+				return moerr.NewInternalError(ctx, msg)
+			}
+			expiredTime = expireValue
+			doLockOrUnlock = expirePassword
 		} else {
 			miscOptStr := tree.String(au.MiscOpt, dialect.MYSQL)
 			msg := fmt.Sprintf("not support operation: %s", miscOptStr)
@@ -3333,8 +3405,16 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 				return err
 			}
 		}
+		// the password update cleared the explicit password expiration; when
+		// the session user just changed its own password, release the
+		// expired-password sandbox of the session right away.
+		if userName == currentUser && ses.getRoutine() != nil && ses.getRoutine().isExpired() {
+			ses.getRoutine().setExpired(false)
+		}
 	} else {
-		if doLockOrUnlock == lockUser {
+		if doLockOrUnlock == expirePassword {
+			sql = getSqlForUpdateExpiredTimeOfUser(expiredTime, userName)
+		} else if doLockOrUnlock == lockUser {
 			sql = getSqlForUpdateStatusLockOfUserForever(userStatusLockForever, userName)
 		} else {
 			sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
@@ -6856,9 +6936,15 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindNone
 		canExecInRestricted = true
-	case *tree.SetRole, *tree.SetPassword:
+	case *tree.SetRole:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *tree.SetPassword:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+		// SET PASSWORD is the only way out of the expired-password sandbox
+		// (MySQL allows it for accounts whose password has expired).
+		canExecInPasswordExpired = true
 	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar, *tree.Deallocate, *tree.Reset:
 		objType = objectTypeNone
 		kind = privilegeKindNone
@@ -11480,11 +11566,20 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 		}
 	}
 
-	// TODO: get password_option or lock_option. there is no field in mo_user to store it.
+	// consume the password expire / lock option of CREATE USER:
+	//   - ACCOUNT LOCK creates an account that refuses to log in until an
+	//     administrator unlocks it (status forbid, the same permanent lock
+	//     that ALTER USER ... LOCK produces and the login path rejects).
+	//   - PASSWORD EXPIRE (NONE/INTERVAL n DAY/NEVER/DEFAULT) is persisted
+	//     into mo_user.expired_time; the login path sandboxes the session
+	//     once expired_time is reached.
 	status = userStatusUnlock
+	expiredTime := passwordExpireDefaultTime
 	if cu.MiscOpt != nil {
 		if _, ok := cu.MiscOpt.(*tree.UserMiscOptionAccountLock); ok {
-			status = userStatusLock
+			status = userStatusLockForever
+		} else if expireValue, ok := convertMiscOptToExpiredTime(cu.MiscOpt); ok {
+			expiredTime = expireValue
 		}
 	}
 
@@ -11599,7 +11694,7 @@ func InitUser(ctx context.Context, ses *Session, tenant *TenantInfo, cu *createU
 			host = rootHost
 		}
 		initMoUser1 := fmt.Sprintf(initMoUserWithoutIDFormat, host, user.Username, encryption, status,
-			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, string(passwordHistory), rootLoginType,
+			types.CurrentTimestamp().String2(time.UTC, 0), expiredTime, string(passwordHistory), rootLoginType,
 			tenant.GetUserID(), tenant.GetDefaultRoleID(), newRoleId)
 
 		bh.ClearExecResultSet()

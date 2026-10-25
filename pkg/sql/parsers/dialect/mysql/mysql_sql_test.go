@@ -5623,6 +5623,42 @@ var (
 			output: "alter user user1 unlock",
 		},
 		{
+			input:  "alter user user1 account lock",
+			output: "alter user user1 lock",
+		},
+		{
+			input:  "alter user user1 account unlock",
+			output: "alter user user1 unlock",
+		},
+		{
+			input:  "alter user user1 password expire",
+			output: "alter user user1 password expire",
+		},
+		{
+			input:  "alter user user1 password expire interval 5 day",
+			output: "alter user user1 password expire interval 5 day",
+		},
+		{
+			input:  "alter user user1 password expire never",
+			output: "alter user user1 password expire never",
+		},
+		{
+			input:  "alter user user1 password expire default",
+			output: "alter user user1 password expire default",
+		},
+		{
+			input:  "create user user1 identified by 'x' account lock",
+			output: "create user user1 identified by '******' lock",
+		},
+		{
+			input:  "create user user1 identified by 'x' account unlock",
+			output: "create user user1 identified by '******' unlock",
+		},
+		{
+			input:  "create user user1 identified by 'x' password expire",
+			output: "create user user1 identified by '******' password expire",
+		},
+		{
 			input:  "savepoint abc",
 			output: "savepoint abc",
 		},

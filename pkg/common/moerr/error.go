@@ -446,6 +446,12 @@ const (
 	// Group 16: CCPR
 	ErrCCPRReadOnly uint16 = 22401
 
+	// Group 17: account security
+	// ErrPasswordExpired is raised when a statement is executed while the
+	// session is in the expired-password sandbox (mo_user.expired_time
+	// reached). It maps to MySQL ER_MUST_CHANGE_PASSWORD_LOGIN (1862).
+	ErrPasswordExpired uint16 = 22501
+
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
 )
@@ -769,6 +775,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 
 	// Group 16: CCPR
 	ErrCCPRReadOnly: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "ccpr shared object is read-only"},
+
+	// Group 17: account security
+	ErrPasswordExpired: {ER_MUST_CHANGE_PASSWORD_LOGIN, []string{MySQLDefaultSqlState}, "Your password has expired. To log in you must change it using a client that supports expired passwords."},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -1923,6 +1932,10 @@ func NewErrTooBigPrecision(ctx context.Context, precision int64, funcName string
 
 func NewCCPRReadOnly(ctx context.Context) *Error {
 	return newError(ctx, ErrCCPRReadOnly)
+}
+
+func NewPasswordExpired(ctx context.Context) *Error {
+	return newError(ctx, ErrPasswordExpired)
 }
 
 var contextFunc atomic.Value

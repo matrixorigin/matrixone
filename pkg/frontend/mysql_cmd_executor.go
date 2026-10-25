@@ -3576,6 +3576,47 @@ func handleAlterUser(ses FeSession, execCtx *ExecCtx, st *tree.AlterUser) error 
 	return doAlterUser(execCtx.reqCtx, ses.(*Session), au)
 }
 
+// handleSetPassword implements SET PASSWORD [= 'literal'] and
+// SET PASSWORD FOR user = 'literal' by lowering the statement onto the
+// ALTER USER ... IDENTIFIED BY pipeline (password validation, reuse policy
+// and history included). Changing the password also clears the explicit
+// password expiration of the account (except PASSWORD EXPIRE NEVER) and,
+// when the current session user changes its own password, releases the
+// expired-password sandbox of the session.
+func handleSetPassword(ses FeSession, execCtx *ExecCtx, st *tree.SetPassword) error {
+	tenant := ses.GetTenantInfo()
+
+	userName := tenant.GetUser()
+	hostName := rootHost
+	if st.User != nil {
+		userName = st.User.Username
+		hostName = st.User.Hostname
+	}
+
+	au := &alterUser{
+		IfExists: false,
+		Users: []*user{{
+			Username:  userName,
+			Hostname:  hostName,
+			AuthExist: true,
+			IdentTyp:  tree.AccountIdentifiedByPassword,
+			IdentStr:  st.Password,
+		}},
+	}
+	if err := doAlterUser(execCtx.reqCtx, ses.(*Session), au); err != nil {
+		return err
+	}
+
+	// A user that resets its own password leaves the expired-password
+	// sandbox of the current session right away, like MySQL does.
+	if userName == tenant.GetUser() {
+		if s, ok := ses.(*Session); ok && s.getRoutine() != nil && s.getRoutine().isExpired() {
+			s.getRoutine().setExpired(false)
+		}
+	}
+	return nil
+}
+
 // handleCreateRole creates the new role
 func handleCreateRole(ses FeSession, execCtx *ExecCtx, cr *tree.CreateRole) error {
 	tenant := ses.GetTenantInfo()
@@ -5118,9 +5159,13 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 			return stats, moerr.NewInternalError(reqCtx, "do not have enough storage to execute the statement")
 		}
 
-		// can or not execute in password expired status
+		// can or not execute in password expired status.
+		// The account is in the expired-password sandbox (mo_user.expired_time
+		// reached): every statement except SET PASSWORD and ALTER USER (the
+		// ways to reset the password) is rejected with MySQL
+		// ER_MUST_CHANGE_PASSWORD_LOGIN (1862).
 		if ses.getRoutine() != nil && ses.getRoutine().isExpired() && !ses.GetPrivilege().canExecInPasswordExpired {
-			return stats, moerr.NewInternalError(reqCtx, "password has expired, please change the password")
+			return stats, moerr.NewPasswordExpired(reqCtx)
 		}
 		if call, isCall := stmt.(*tree.CallStmt); isCall {
 			if isCDCTargetGuardCapabilityCall(call) {

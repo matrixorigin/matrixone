@@ -3431,6 +3431,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		needCheckLock        bool
 		maxLoginAttempts     int64
 		needCheckHost        bool
+		expiredTime          string
+		passwordExpired      bool
 	)
 
 	//Get tenant info
@@ -3674,6 +3676,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	statusColIdx := uint64(0)
 	loginAttemptsColIdx := uint64(1)
 	lockTimeColIdx := uint64(2)
+	expiredTimeColIdx := uint64(3)
 	userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userLockInfoSql)
 	if err != nil {
 		return nil, err
@@ -3691,6 +3694,20 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	lockTime, err = userRsset[0].GetString(tenantCtx, 0, lockTimeColIdx)
 	if err != nil {
 		return nil, err
+	}
+
+	// expired_time is NULL when the account follows the global
+	// default_password_lifetime policy; otherwise it is the explicit
+	// instant at which the password expires (PASSWORD EXPIRE family).
+	expiredTimeIsNull, err := userRsset[0].ColumnIsNull(tenantCtx, 0, expiredTimeColIdx)
+	if err != nil {
+		return nil, err
+	}
+	if !expiredTimeIsNull {
+		expiredTime, err = userRsset[0].GetString(tenantCtx, 0, expiredTimeColIdx)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if userStatus == userStatusLockForever {
@@ -3724,7 +3741,20 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 				return nil, err
 			}
 
-			if defPwdLife > 0 {
+			if !expiredTimeIsNull {
+				// An explicit expired_time (PASSWORD EXPIRE family) always
+				// takes precedence over the default_password_lifetime policy:
+				// the password is expired once now() >= expired_time. Note the
+				// far-future sentinel persisted by PASSWORD EXPIRE NEVER just
+				// means "never expired" here.
+				passwordExpired, err = checkPasswordExpiredAt(expiredTime)
+				if err != nil {
+					return nil, err
+				}
+				if passwordExpired {
+					ses.getRoutine().setExpired(true)
+				}
+			} else if defPwdLife > 0 {
 				userExpiredSql := getExpiredTimeOfUserSql(tenant.GetUser())
 				userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userExpiredSql)
 				if err != nil {
@@ -3748,12 +3778,26 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 				if err = setUserUnlock(tenantCtx, tenant.GetUser(), bh); err != nil {
 					return nil, err
 				}
+			} else if userStatus == userStatusUnlock && loginAttempts > 0 {
+				// a successful login clears the failed-login counter
+				if err = resetLoginAttempts(tenantCtx, tenant.GetUser(), bh); err != nil {
+					return nil, err
+				}
 			}
 		}
 
 	} else {
-		if !isSuperUser(tenant.GetUser()) && needCheckLock {
-			if userStatus != userStatusLock {
+		if !isSuperUser(tenant.GetUser()) {
+			// track every failed password check in mo_user.login_attempts.
+			// The counter is pure bookkeeping; the temporary account lockout
+			// policy only applies when the connection control variables are on.
+			if !needCheckLock {
+				if userStatus != userStatusLock {
+					if err = increaseLoginAttempts(tenantCtx, tenant.GetUser(), bh); err != nil {
+						return nil, err
+					}
+				}
+			} else if userStatus != userStatusLock {
 				loginAttempts++
 				if maxLoginAttempts, err = getLoginAttempts(tenantCtx, ses); err != nil {
 					return nil, err
@@ -4886,6 +4930,18 @@ func whetherNeedCheckExpired(ctx context.Context, ses *Session) (int, error) {
 	return defaultPasswordLifetime, nil
 }
 
+// checkPasswordExpiredAt reports whether the explicit expiration instant
+// (mo_user.expired_time) has been reached. The far-future sentinel persisted
+// by PASSWORD EXPIRE NEVER simply never elapses.
+func checkPasswordExpiredAt(expiredTime string) (bool, error) {
+	expireAt, err := time.ParseInLocation("2006-01-02 15:04:05", expiredTime, time.UTC)
+	if err != nil {
+		return false, err
+	}
+	now := time.Now().UTC()
+	return !expireAt.After(now), nil
+}
+
 func checkPasswordExpired(defPwdLifeTime int, lastChangedTime string) (bool, error) {
 	var (
 		err         error
@@ -5005,6 +5061,21 @@ func setUserUnlock(ctx context.Context, userName string, bh BackgroundExec) erro
 		err error
 	)
 	sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// resetLoginAttempts clears the failed-login counter after a successful
+// login of an unlocked user.
+func resetLoginAttempts(ctx context.Context, userName string, bh BackgroundExec) error {
+	var (
+		sql string
+		err error
+	)
+	sql = getSqlForUpdateResetLoginAttemptsOfUser(userName)
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return err
