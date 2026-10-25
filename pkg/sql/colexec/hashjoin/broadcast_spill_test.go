@@ -63,9 +63,9 @@ func TestBroadcastSpillSingleFinalizer(t *testing.T) {
 					defer arg.Free(proc, false, nil)
 				}
 				require.NoError(t, joins[0].SealSpillScope(proc, []int32{0, 1}))
+				proc.Base.ImportMemory = &process.ImportMemory{UnitBytes: 1, JoinInputBytes: 8 << 20}
 				for _, arg := range joins {
 					require.NoError(t, arg.Prepare(proc))
-					arg.ctr.outputTarget = 1
 				}
 				build := &hashbuild.HashBuild{NeedHashMap: true, NeedBatches: true, NeedAllocateSels: true, CanSpill: true, Conditions: joins[0].EqConds[1], JoinMapTag: 81, JoinMapRefCnt: 2, SpillThreshold: 2, SpillExpectedScopes: []uint32{1}}
 				resetHashBuildChildrenWithBatch(build, rightBat)

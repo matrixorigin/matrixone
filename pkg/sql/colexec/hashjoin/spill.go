@@ -500,6 +500,10 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 		return nil, false, prepErr
 	}
 
+	if !legacyMaxDepth {
+		builder.Batches.TrackAllocation()
+	}
+
 	// Stream batches from build file — reuse the cached reader (and its 4 MiB buffer).
 	if ctr.spillBuildReader == nil {
 		ctr.spillBuildReader = &spillBucketReader{}
@@ -528,32 +532,38 @@ func (hashJoin *HashJoin) rebuildHashmapForBucket(proc *process.Process, bucket 
 			return nil, false, batErr
 		}
 
-		growth := builder.Batches.AppendAllocation(bat)
-		threshold := false
-		if ctr.spillThreshold > 0 && ctr.spillThreshold <= 100000 {
-			threshold = int64(builder.InputBatchRowCount+bat.RowCount()) >= ctr.spillThreshold
-		} else if ctr.spillThreshold > 100000 {
-			threshold = growth > ctr.spillThreshold-builder.Batches.Allocated()
-		}
-		if !legacyMaxDepth && (threshold || !acquire(growth)) {
-			_, spillErr := hashJoin.reSpillBucket(proc, bucket, builder, reader, nextDepth, analyzer, bat)
-			cleanupBuilder()
-			return nil, true, spillErr
+		if !legacyMaxDepth {
+			growth := builder.Batches.AppendAllocation(bat)
+			threshold := false
+			if ctr.spillThreshold > 0 && ctr.spillThreshold <= 100000 {
+				threshold = int64(builder.InputBatchRowCount+bat.RowCount()) >= ctr.spillThreshold
+			} else if ctr.spillThreshold > 100000 {
+				threshold = growth > ctr.spillThreshold-builder.Batches.RetainedBytes()
+			}
+			if threshold || !acquire(growth) {
+				_, spillErr := hashJoin.reSpillBucket(proc, bucket, builder, reader, nextDepth, analyzer, bat)
+				cleanupBuilder()
+				return nil, true, spillErr
+			}
 		}
 		if copyErr := builder.Batches.CopyIntoBatches(bat, proc); copyErr != nil {
 			cleanupBuilder()
 			return nil, false, copyErr
 		}
 		builder.InputBatchRowCount += bat.RowCount()
-		release(reserved - builder.Batches.Allocated())
+		if reserved > 0 {
+			release(reserved - builder.Batches.RetainedBytes())
+		}
 
 	}
 
-	bound, ok := builder.BuildMemoryBound(hashJoin.EqConds[1], !hashJoin.HashOnPK, false)
-	if !legacyMaxDepth && (!ok && proc.Base.ImportMemory != nil || ok && !acquire(bound)) {
-		_, spillErr := hashJoin.reSpillBucket(proc, bucket, builder, reader, nextDepth, analyzer)
-		cleanupBuilder()
-		return nil, true, spillErr
+	if !legacyMaxDepth {
+		bound, ok := builder.BuildMemoryBound(hashJoin.EqConds[1], !hashJoin.HashOnPK, false)
+		if !ok && proc.Base.ImportMemory != nil || ok && !acquire(bound) {
+			_, spillErr := hashJoin.reSpillBucket(proc, bucket, builder, reader, nextDepth, analyzer)
+			cleanupBuilder()
+			return nil, true, spillErr
+		}
 	}
 	// Build hashmap
 	if buildErr := builder.BuildHashmap(hashJoin.HashOnPK, !hashJoin.HashOnPK, false, proc); buildErr != nil {

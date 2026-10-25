@@ -78,7 +78,7 @@ func (v *Vector) UnionBatchAreaBytes(start, end int) int64 {
 	if start < 0 || end < start || end > v.length {
 		panic("invalid vector memory window")
 	}
-	if start == end || !v.typ.IsVarlen() || v.IsConstNull() {
+	if start == end || !v.typ.IsVarlen() || v.IsConstNull() || len(v.area) == 0 {
 		return 0
 	}
 	if v.IsConst() {

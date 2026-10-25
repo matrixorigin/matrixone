@@ -240,3 +240,44 @@ func TestAppendAllocationIncludesFullNewStorage(t *testing.T) {
 	require.Equal(t, int64(v.Allocated()), peak)
 	require.Equal(t, int64(v.Allocated()-old), m.AllocatedBytes()-before)
 }
+
+// No physical area exists in these valid vectors, so every copied window needs
+// zero area. Null/grouping propagation remains a separate copy obligation.
+func TestUnionBatchAreaBytesInlineVariants(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	flat := NewVec(types.T_varchar.ToType())
+	t.Cleanup(func() { flat.Free(mp) })
+	require.NoError(t, AppendBytesList(flat, [][]byte{[]byte("a"), nil, []byte("c")}, []bool{false, true, false}, mp))
+	flat.GetGrouping().Add(2)
+	constant, err := NewConstBytes(types.T_varchar.ToType(), []byte("inline"), 3, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() { constant.Free(mp) })
+	constant.GetGrouping().Add(1)
+	null := NewConstNull(types.T_varchar.ToType(), 3, mp)
+	t.Cleanup(func() { null.Free(mp) })
+	for _, src := range []*Vector{flat, constant, null} {
+		window, err := src.Window(1, 3)
+		require.NoError(t, err)
+		func() {
+			defer window.Free(mp)
+			require.Empty(t, window.GetArea())
+			require.Zero(t, window.UnionBatchAreaBytes(0, 2))
+			dst, reference := NewVec(types.T_varchar.ToType()), NewVec(types.T_varchar.ToType())
+			defer dst.Free(mp)
+			defer reference.Free(mp)
+			require.NoError(t, dst.UnionBatch(window, 0, 2, nil, mp))
+			for row := range 2 {
+				require.NoError(t, reference.UnionOne(window, int64(row), mp))
+			}
+			require.Equal(t, reference.GetArea(), dst.GetArea())
+			for row := range 2 {
+				require.Equal(t, reference.IsNull(uint64(row)), dst.IsNull(uint64(row)))
+				require.Equal(t, reference.GetGrouping().Contains(uint64(row)), dst.GetGrouping().Contains(uint64(row)))
+				if !dst.IsNull(uint64(row)) {
+					require.Equal(t, reference.GetBytesAt(row), dst.GetBytesAt(row))
+				}
+			}
+		}()
+	}
+}
