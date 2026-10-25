@@ -1026,6 +1026,17 @@ class Client(BaseMatrixOneClient):
             self.logger.log_error(e, context=context)
             raise _classify_db_error(e, sql) from None
 
+    @property
+    def analytics(self):
+        """Optional file-query and Arrow APIs; requires the ``analytics`` extra.
+
+        Use ``with client.analytics.query(sql) as batches`` for bounded result
+        reads and ``read_parquet/read_csv/read_json`` for managed external scans.
+        """
+        from .analytics import AnalyticsManager
+
+        return AnalyticsManager(self)
+
     def execute(self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None) -> "ResultSet":
         """
         Execute SQL query or SQLAlchemy statement without transaction isolation.
