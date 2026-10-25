@@ -23,6 +23,7 @@ package table_function
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"time"
 
@@ -130,7 +131,15 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 		// A per-build-unique id prefix (index table + build ts) keeps concurrent /
 		// repeated builds from colliding on sub-index ids (mirrors bm25 / HNSW).
 		u.ts = time.Now().UnixMicro()
-		u.uid = fmt.Sprintf("%s:%d", u.tblcfg.IndexTable, u.ts)
+		indexIdentity := u.tblcfg.IndexTable
+		// Session generations can make a hidden relation name much longer than
+		// a user identifier. Segment IDs are opaque varchar(128) keys; bound
+		// their prefix while retaining the complete physical identity. Reserve
+		// room for the timestamp and segment ordinal (up to 20 digits each).
+		if len(indexIdentity) > 64 {
+			indexIdentity = fmt.Sprintf("%x", sha256.Sum256([]byte(indexIdentity)))
+		}
+		u.uid = fmt.Sprintf("%s:%d", indexIdentity, u.ts)
 		u.cur = fulltext2.NewBuilder(u.uid, u.pkType, u.bopts...)
 		u.batch = tf.createResultBatch()
 		u.inited = true
