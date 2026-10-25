@@ -8518,14 +8518,13 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	} else {
 		tlen := v.GetType().TypeSize()
 		if !w.nsp.EmptyByFlag() {
-			// Compute the appended byte range once; row offsets are relative to it.
-			target := v.data[oldLen*tlen : v.length*tlen]
 			for i, sel := range sels {
 				if w.nsp.Contains(uint64(sel)) {
 					nulls.Add(&v.nsp, uint64(oldLen+i))
 					continue
 				}
-				copy(target[i*tlen:(i+1)*tlen], w.data[int(sel)*tlen:(int(sel)+1)*tlen])
+				dstOffset, srcOffset := (oldLen+i)*tlen, int(sel)*tlen
+				copy(v.data[dstOffset:dstOffset+tlen], w.data[srcOffset:srcOffset+tlen])
 			}
 		} else {
 			switch tlen {

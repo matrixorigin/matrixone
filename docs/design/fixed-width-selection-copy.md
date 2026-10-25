@@ -49,9 +49,11 @@ Compared alternatives:
 * Regrouping matches and restoring order adds copies and temporary memory.
 
 The nullable fixed path retains its skip-NULL loop and dynamic value copy.
-Bound its appended destination range once before that loop, avoiding repeated
-prefix-offset calculations per selected value. NULL bitmap ownership and
-untouched NULL payload bytes remain unchanged.
+Compute each selected source/destination offset once and derive the end from
+the width, avoiding duplicate multiplications per selected value. Keep those
+offsets local to the non-NULL copy; a pre-sliced destination carried across
+the loop increased register spills and measured time. NULL bitmap ownership
+and untouched NULL payload bytes remain unchanged.
 
 Typed physical copying is independent of query identity, data distribution,
 and selection length. Existing NULL, constant and varlen paths remain the
