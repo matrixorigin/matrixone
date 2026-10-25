@@ -1,6 +1,15 @@
 # REGEXP Multiline Wide Line Terminators (MySQL Compatibility)
 
-Status: Design Rev 10, 2026-10-25; pending design review. Rev 1 (sha256
+Status: Design Rev 11, 2026-10-26; design review PASSED. The distinct
+design-stage review of Rev 10 (sha256
+5dcab7b28d863dbec65e003b5db3503fdbc3ee1c1374d4622e9ae737bf3315b4) closed
+with decision PASS on 2026-10-25 under the independent local design
+reviewer; the complete decision chain is recorded in the Design review
+record section below. Rev 11 is a status-record-only revision: outside
+this Status paragraph, the new Design review record section and the
+Rev 11 change-log entry, it is identical to Rev 10, so every approved
+invariant, decision, rejected alternative and validation plan item is
+unchanged and the PASS applies to the implemented revision. Rev 1 (sha256
 67bf2ac81e3dd4cce57dc602e429857adc207ab4501a1bd06262e54b8cdd4ed9), Rev 2
 (sha256 6e81eb6a9fb6ed0b54877c7bbafeae73fc1164053a887b08488163eace2f9865),
 Rev 3 (sha256 c72a777d0ef29f97698b6c91f7e95d61839be39900ac2929030a44964d58771d),
@@ -10,7 +19,8 @@ Rev 6 (sha256 ecd1994ce9dbf4d33c045349cb5b46866fbe44b3b586218b02ee807342adc97b),
 Rev 7 (sha256 c9dcd248b54203856b592edac1044c428cffe76a00d200dc9e7addda003afbe2),
 Rev 8 (sha256 c293bc6b93114b6939a8341e4e8bac6bb8896dfc58cea71c71f49f8ec763ddc9)
 and Rev 9 (sha256 0b4241c39a43daf99b7422a4690e48c3aa97d2ab7ae5ff84b02fd721e216486f)
-each received REQUEST_CHANGES; all findings are verified below and addressed.
+each received design-stage REQUEST_CHANGES; all findings are verified below
+and addressed.
 Earlier rounds (condensed): Rev 2 split the CRLF truth table per assertion
 (caret holds between CR and LF mid-match; only dollar excludes that interior)
 and removed binary byte 0x85 as a NEL terminator (MySQL presents binary
@@ -335,6 +345,56 @@ Base: `origin/main` `6fb6531432aaec8c1fbd98a30364941559e0e1d6`
 (worktree HEAD == origin/main tip; contains PR #30646's merge commit
 c3e962df0a7efd7202ab9cbc37ce739f7c8a883a). Pinned Go toolchain: 1.27.1
 (`go.mod`), which matches the private engine source.
+
+## Design review record
+
+The repository design-first review contract
+(`.agents/skills/mo-dev/references/feature-design-review.md`) requires a
+traceable reviewed revision and approval decision for this change. The
+design-first phase was distinct and complete BEFORE implementation
+review began; each decision is keyed to the reviewed revision's SHA-256,
+so every decision verified the exact document at rest rather than moving
+text. Recorded per the contract's compact review record:
+
+- Change scope: the whole feature - private RE2 wide line mode
+  (`pkg/sql/plan/function/internal/regexp`), maintained regexp2 line
+  modes (`internal/regexp2`), the shared classifier
+  (`internal/regexpclass`) and the SQL translation layer
+  (`func_builtin_regexp.go`, `regexp_icu.go`), with the carried decision
+  delta in `docs/design/20261024-regexp-wide-line-assertions.md`.
+- Trigger: size (3,458 lines of non-vendored classifier/engine production
+  code across 5 owning components) AND complexity (SQL compatibility
+  contract with MySQL/ICU line semantics on a SQL hot path; a maintained
+  private engine subsystem shared by two engines).
+- Design: this document. Rev 1-9 (2026-10-24..2026-10-25): design-stage
+  REQUEST_CHANGES; every finding was verified against primary sources and
+  live ICU 77.1 measurement and addressed in the revision recorded in the
+  change log (Rev 2..Rev 10 entries). Rev 10 (sha256
+  `5dcab7b28d863dbec65e003b5db3503fdbc3ee1c1374d4622e9ae737bf3315b4`):
+  design-stage PASS on 2026-10-25, independent local design reviewer, no
+  remaining blocking finding.
+- Blocking findings: none remaining.
+- Decision log: the per-revision findings and resolutions are the change
+  log below; accepted tradeoffs are the rejected alternatives (2a..2k) in
+  Standards, precedent, and alternatives.
+- Decision: PASS.
+- Implementation deviations: none. The implementation-stage independent
+  local reviews re-verified the invariant map against the implemented
+  code in every round and retained the Rev 10 design PASS unchanged,
+  ending in implementation approval with two non-blocking P3 findings;
+  both are addressed at the delivered head (the vendored-copy
+  synchronization procedure and maintained-change inventory in
+  `internal/regexp2/README.md` + `PROVENANCE`, and the unseen-spelling
+  cache-bound assertions in
+  `internal/regexpclass/review_fixes_round9_test.go`).
+- Rev 11 (this revision): publishes the PASS inside the document in
+  response to the external review on PR #31125 finding the Status header
+  still read "pending design review" and the PR carried no traceable
+  approval record. No design content changed - every Rev 10 statement is
+  retained verbatim outside the Status paragraph, this section and the
+  Rev 11 change-log entry, so the Rev 10 PASS applies unchanged. This
+  revision's own sha256 is pinned in the PR body and the review reply, by
+  the same hash-pinning convention that pinned Rev 10's.
 
 ## Problem and evidence
 
@@ -2873,3 +2933,15 @@ environmental prerequisite (reused: same base, toolchain and target).
   Trace). Warm build evidence reused unchanged per the
   validation-evidence contract (warm-build-rev6.log, exit 0; inputs
   unchanged: same base, toolchain and make cgo target).
+- Rev 11 (2026-10-26): reconcile the publication gap raised by the
+  external review on PR #31125 (mo-bot-local design-gate audit): the
+  design-stage review of Rev 10 had closed with decision PASS on
+  2026-10-25, but the Status header still read "pending design review"
+  and the PR carried no traceable approval record. Record the complete
+  decision chain in the new Design review record section and update the
+  Status header. Status-record-only revision: no other text changed and
+  every Rev 10 (sha256
+  `5dcab7b28d863dbec65e003b5db3503fdbc3ee1c1374d4622e9ae737bf3315b4`)
+  statement is retained verbatim, so the Rev 10 PASS applies unchanged.
+  This revision's sha256 is pinned in the PR body and the review reply,
+  by the established hash-pinning convention.
