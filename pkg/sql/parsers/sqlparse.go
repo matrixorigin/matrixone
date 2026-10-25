@@ -157,9 +157,18 @@ func handleSQLForRecordFragment(sql string) string {
 			}
 		} else if sawSetPassword && typ == eq {
 			// SET PASSWORD [= 'secret' | FOR user = 'secret']: mask the
-			// password literal right after the '='.
-			_, s = scanSQLToken(scanner, &previousToken)
-			indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
+			// password literal right after the '='. MySQL also accepts
+			// the PASSWORD('secret') function form, whose secret is the
+			// call argument rather than the token after '='.
+			token, s := scanSQLToken(scanner, &previousToken)
+			if token == mysql.PASSWORD {
+				if open, _ := scanSQLToken(scanner, &previousToken); open == int('(') {
+					token, s = scanSQLToken(scanner, &previousToken)
+				}
+			}
+			if token == mysql.STRING {
+				indexes = append(indexes, scanner.Pos-len(s)-1, scanner.Pos-2)
+			}
 			sawSet, sawSetPassword = false, false
 		} else if sawSet && typ == mysql.PASSWORD {
 			sawSetPassword = true

@@ -854,13 +854,20 @@ func TestRedactSetPasswordForLogging(t *testing.T) {
 	require.Contains(t, redacted, "set password for")
 
 	// AST-less path (the terminal log of a parse failure): the SET PASSWORD
-	// literal is masked lexically.
-	redacted = redactStatementTextForLogging(nil, "SET PASSWORD = 'super-secret-value'")
-	require.NotContains(t, redacted, "super-secret-value")
-	require.Contains(t, redacted, "******")
-
-	redacted = redactStatementTextForLogging(nil, "  set\n  password = 'super-secret-value'")
-	require.NotContains(t, redacted, "super-secret-value")
+	// literal is masked lexically. Compact punctuation, leading comments and
+	// the MySQL PASSWORD('secret') function form must not bypass the guard.
+	for _, broken := range []string{
+		"SET PASSWORD = 'super-secret-value'",
+		"  set\n  password = 'super-secret-value'",
+		"SET PASSWORD='super-secret-value' broken",
+		"/* trace */ SET PASSWORD = 'super-secret-value' broken",
+		"SET PASSWORD = PASSWORD('super-secret-value') unexpected id",
+		"SET PASSWORD FOR u1 = PASSWORD('super-secret-value') trailing",
+	} {
+		redacted = redactStatementTextForLogging(nil, broken)
+		require.NotContains(t, redacted, "super-secret-value", broken)
+		require.Contains(t, redacted, "******", broken)
+	}
 
 	// Unrelated statements pass through untouched.
 	ordinary := "select 1"

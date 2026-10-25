@@ -405,6 +405,20 @@ func TestHandleSqlForRecord(t *testing.T) {
 			HandleSqlForRecord("SET PASSWORD FOR 'u1'@'%' = 'set-password-test-value'"))
 		require.Equal(t, []string{"set password = '******'", "SET PASSWORD FOR u1 = '******'"},
 			HandleSqlForRecord("set password = 'first-test-value'; SET PASSWORD FOR u1 = 'second-test-value'"))
+		// MySQL PASSWORD('secret') function form: the secret is the call
+		// argument, not the token after '='.
+		require.Equal(t, []string{"SET PASSWORD = PASSWORD('******')"},
+			HandleSqlForRecord("SET PASSWORD = PASSWORD('set-password-test-value')"))
+		require.Equal(t, []string{"SET PASSWORD FOR u1 = PASSWORD('******')"},
+			HandleSqlForRecord("SET PASSWORD FOR u1 = PASSWORD('set-password-test-value')"))
+		// Compact punctuation and comments do not defeat the masking, and a
+		// trailing syntax error still gets its secret masked.
+		require.Equal(t, []string{"SET PASSWORD='******' broken"},
+			HandleSqlForRecord("SET PASSWORD='set-password-test-value' broken"))
+		require.Equal(t, []string{"/* trace */ SET PASSWORD = '******' broken"},
+			HandleSqlForRecord("/* trace */ SET PASSWORD = 'set-password-test-value' broken"))
+		require.Equal(t, []string{"SET PASSWORD = PASSWORD('******') unexpected id"},
+			HandleSqlForRecord("SET PASSWORD = PASSWORD('set-password-test-value') unexpected id"))
 	})
 	t.Run("password keyword without set is not masked", func(t *testing.T) {
 		// ALTER USER ... PASSWORD EXPIRE has no secret literal to mask.

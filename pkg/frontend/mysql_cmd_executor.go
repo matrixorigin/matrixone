@@ -378,12 +378,18 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 
 // isSetPasswordText reports whether the statement text is a SET PASSWORD
 // statement. It is a lexical guard for log paths that have no parsed AST;
-// the masking itself happens in parsers.HandleSqlForRecord.
+// the masking itself happens in parsers.HandleSqlForRecord. Token
+// classification (not whitespace heuristics) handles comments and compact
+// forms like "SET PASSWORD='x'" alike, and never allocates per word.
 func isSetPasswordText(text string) bool {
-	fields := strings.Fields(text)
-	return len(fields) >= 2 &&
-		strings.EqualFold(fields[0], "set") &&
-		strings.EqualFold(fields[1], "password")
+	scanner := mysql.NewScanner(dialect.MYSQL, text)
+	defer mysql.PutScanner(scanner)
+	first, _ := scanner.Scan()
+	if first != mysql.SET {
+		return false
+	}
+	second, _ := scanner.Scan()
+	return second == mysql.PASSWORD
 }
 
 // redactStatementErrorForLogging replaces a parser echo of __mo_query before it
