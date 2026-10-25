@@ -2263,9 +2263,11 @@ func TestMergeGroupUsesReducedHashKey(t *testing.T) {
 	defer proc.Free()
 
 	makeInput := func(payload int32) *batch.Batch {
-		input := batch.NewWithSize(2)
+		input := batch.NewWithSize(4)
 		input.Vecs[0] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
 		input.Vecs[1] = testutil.MakeInt32Vector([]int32{payload}, nil, proc.Mp())
+		input.Vecs[2] = testutil.MakeInt32Vector([]int32{2}, nil, proc.Mp())
+		input.Vecs[3] = testutil.MakeInt32Vector([]int32{3}, nil, proc.Mp())
 		input.SetRowCount(1)
 		return input
 	}
@@ -2274,10 +2276,10 @@ func TestMergeGroupUsesReducedHashKey(t *testing.T) {
 	for _, payload := range []int32{10, 11} {
 		input := makeInput(payload)
 		partial := newGroupOp(proc,
-			[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32)},
+			[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32), colExpr(2, types.T_int32), colExpr(3, types.T_int32)},
 			[]aggexec.AggFuncExecExpression{countStarAgg()})
 		partial.NeedEval = false
-		partial.GroupByHashKey = []int32{0}
+		partial.GroupByHashKey = []int32{0, 2, 3}
 		partial.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
 		require.NoError(t, partial.Prepare(proc))
 		outputs := collectBatches(t, partial, proc)
@@ -2288,7 +2290,7 @@ func TestMergeGroupUsesReducedHashKey(t *testing.T) {
 	}
 
 	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
-	merge.GroupByHashKey = []int32{0}
+	merge.GroupByHashKey = []int32{0, 2, 3}
 	merge.AppendChild(colexec.NewMockOperator().WithBatchs(partials))
 	require.NoError(t, merge.Prepare(proc))
 	finals := collectBatches(t, merge, proc)
@@ -2296,7 +2298,7 @@ func TestMergeGroupUsesReducedHashKey(t *testing.T) {
 	require.Equal(t, 1, finals[0].RowCount())
 	require.Equal(t, int32(1), vector.MustFixedColNoTypeCheck[int32](finals[0].Vecs[0])[0])
 	require.Equal(t, int32(10), vector.MustFixedColNoTypeCheck[int32](finals[0].Vecs[1])[0])
-	require.Equal(t, int64(2), vector.MustFixedColNoTypeCheck[int64](finals[0].Vecs[2])[0])
+	require.Equal(t, int64(2), vector.MustFixedColNoTypeCheck[int64](finals[0].Vecs[4])[0])
 	merge.Free(proc, false, nil)
 	for _, partial := range partials {
 		partial.Clean(proc.Mp())
@@ -2360,15 +2362,17 @@ func TestGroupSpillReloadUsesReducedHashKey(t *testing.T) {
 		keys[i], keys[i+groups] = int32(i), int32(i)
 		payloads[i], payloads[i+groups] = int32(i), int32(i+groups)
 	}
-	input := batch.NewWithSize(2)
+	input := batch.NewWithSize(4)
 	input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
 	input.Vecs[1] = testutil.MakeInt32Vector(payloads, nil, proc.Mp())
+	input.Vecs[2] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+	input.Vecs[3] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
 	input.SetRowCount(len(keys))
 
 	g := newGroupOp(proc,
-		[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32)},
+		[]*plan.Expr{colExpr(0, types.T_int32), colExpr(1, types.T_int32), colExpr(2, types.T_int32), colExpr(3, types.T_int32)},
 		[]aggexec.AggFuncExecExpression{countStarAgg()})
-	g.GroupByHashKey = []int32{0}
+	g.GroupByHashKey = []int32{0, 2, 3}
 	g.SpillMem = 64
 	g.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
 	require.NoError(t, g.Prepare(proc))
@@ -2381,7 +2385,7 @@ func TestGroupSpillReloadUsesReducedHashKey(t *testing.T) {
 			break
 		}
 		rows += result.Batch.RowCount()
-		for _, count := range vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[2]) {
+		for _, count := range vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[4]) {
 			require.Equal(t, int64(2), count)
 		}
 	}

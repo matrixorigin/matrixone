@@ -46,6 +46,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
@@ -560,6 +562,29 @@ func geometryShowColumnType(typ *types.Type) string {
 	return ts
 }
 
+// columnDefaultValue renders a stored default for information_schema.COLUMNS:
+// DEFAULT NULL is SQL NULL and a string literal is its value, like MySQL.
+// Other defaults keep their origin text.
+func columnDefaultValue(origin string) []byte {
+	if origin == "" || strings.EqualFold(origin, "null") {
+		return nil
+	}
+	n := len(origin)
+	if n < 2 || origin[0] != '\'' || origin[n-1] != '\'' {
+		return functionUtil.QuickStrToBytes(origin)
+	}
+	// OriginString uses the persisted formatter's escapes, independently of
+	// the querying session's SQL mode. Keep lexical decoding with its owner.
+	scanner := mysql.NewScanner(dialect.MYSQL, origin)
+	defer mysql.PutScanner(scanner)
+	token, value := scanner.Scan()
+	if token != mysql.STRING || scanner.Pos != n {
+		return functionUtil.QuickStrToBytes(origin)
+	}
+	// A decoded empty literal is a non-NULL value, unlike an absent default.
+	return []byte(value)
+}
+
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[1])
@@ -591,7 +616,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			return functionUtil.QuickStrToBytes(def.OriginString), nil
+			return columnDefaultValue(def.OriginString), nil
 		}
 	case typNormal:
 		f = func(s []byte) ([]byte, error) {
