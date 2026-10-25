@@ -740,20 +740,42 @@ func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.AppendChild(op)
 
+	t.Cleanup(func() {
+		arg.Free(proc, true, nil)
+		op.Free(proc, true, nil)
+		mp := proc.Mp()
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	})
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerMin, 1, 2, 3, 4)
+	require.NoError(t, err)
+	for col, vec := range bat.Vecs {
+		copied, err := vec.DupOffHeapWithAllocation(proc.Mp(), selection)
+		require.NoError(t, err)
+		bat.Vecs[col] = copied
+		vec.Free(proc.Mp())
+	}
+
 	require.NoError(t, arg.Prepare(proc))
-	_, err := vm.Exec(arg, proc)
+	_, err = vm.Exec(arg, proc)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "key cannot be NULL")
 	// Aggregators were allocated during the failed eval and would leak without the fix.
 	require.NotNil(t, arg.ctr.batAggs)
 
+	op.Free(proc, true, err)
+	require.Positive(t, account.Snapshot().Used)
 	arg.Reset(proc, true, err)
 	require.Nil(t, arg.ctr.batAggs, "Reset must release window aggregators after an error")
 
-	arg.Free(proc, true, err)
-	op.Free(proc, true, err)
-	proc.Free()
-	require.Equal(t, int64(0), proc.Mp().CurrNB(), "no mpool leak on the json_objectagg error path")
+	terminal, _, terminalErr := registry.CompleteTerminal(account)
+	require.NoError(t, terminalErr)
+	require.Zero(t, terminal.Used)
+	require.Zero(t, terminal.LiveAllocations)
 }
 
 // TestWindowAggResultAcrossChunks verifies that the aggregate executor's
