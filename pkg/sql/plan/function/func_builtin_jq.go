@@ -256,7 +256,7 @@ func (op *opBuiltInJq) jqImpl(jsonStr []byte, code *gojq.Code) error {
 			return syntaxErr
 		}
 		if err == nil {
-			return fmt.Errorf("multiple top-level JSON values")
+			return moerr.NewInvalidInputNoCtx("multiple top-level JSON values")
 		}
 		return err
 	}
