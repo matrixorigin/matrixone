@@ -17,6 +17,7 @@ package tables
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -648,49 +649,67 @@ func TestAppendableDuplicatedRowsTimestampWindow(t *testing.T) {
 }
 
 func TestApplyAppendAtLockedOutOfOrder(t *testing.T) {
-	schema := catalog.MockSchema(2, 0)
-	mnode := &memoryNode{writeSchema: schema}
-
-	makeBatch := func(value int32) *containers.Batch {
-		bat := containers.BuildBatch(
-			schema.AllNames(), schema.AllTypes(),
-			containers.Options{Allocator: common.DefaultAllocator},
-		)
-		for i, vec := range bat.Vecs {
-			if i == 0 {
-				vec.Append(value, false)
-			} else {
-				vec.Append(nil, true)
+	for _, tc := range []struct {
+		name   string
+		typ    types.Type
+		values []any
+	}{
+		{"fixed", types.T_int32.ToType(), []any{int32(1), int32(2), int32(3)}},
+		{"varlen", types.T_varchar.ToType(), []any{[]byte(""), nil, []byte(strings.Repeat("later payload ", 20))}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			schema := catalog.MockSchema(2, 0)
+			schema.ColDefs[0].Type = tc.typ
+			mnode := &memoryNode{writeSchema: schema}
+			makeBatch := func(value any) *containers.Batch {
+				bat := containers.BuildBatch(schema.AllNames(), schema.AllTypes(), containers.Options{Allocator: common.DefaultAllocator})
+				t.Cleanup(bat.Close)
+				for i, vec := range bat.Vecs {
+					if i == 0 {
+						vec.Append(value, value == nil)
+					} else {
+						vec.Append(nil, true)
+					}
+				}
+				return bat
 			}
-		}
-		return bat
+			// A replay may install payload before a reservation materializes.
+			require.NoError(t, mnode.ApplyAppendAtLocked(makeBatch(tc.values[2]), 2))
+			defer mnode.data.Close()
+			// A delayed earlier owner must not shrink or clear the later payload.
+			mnode.ReserveRowsLocked(1)
+			require.Equal(t, tc.values[2], mnode.data.Vecs[0].Get(2))
+			mnode.ReserveRowsLocked(4)   // Scalar growth remains unchanged.
+			mnode.ReserveRowsLocked(129) // Bulk NULLs cross bitmap word boundaries.
+			mnode.ReserveRowsLocked(129) // Repeated materialization is a no-op.
+			for _, vec := range mnode.data.Vecs {
+				require.Equal(t, 129, vec.Length())
+				for row := 3; row < 129; row++ {
+					require.True(t, vec.IsNull(row), "aborted trailing range retains a physical hole at %d", row)
+				}
+			}
+			for row := 0; row < 2; row++ {
+				require.NoError(t, mnode.ApplyAppendAtLocked(makeBatch(tc.values[row]), uint32(row)))
+			}
+			vec := mnode.data.Vecs[0]
+			for row, value := range tc.values {
+				if value == nil {
+					require.True(t, vec.IsNull(row))
+				} else {
+					require.False(t, vec.IsNull(row))
+					require.Equal(t, value, vec.Get(row))
+				}
+			}
+			// Transfer reapply replaces the same destination without moving rows.
+			replacement := makeBatch(tc.values[2])
+			for range 2 {
+				require.NoError(t, mnode.ApplyAppendAtLocked(replacement, 0))
+				require.Equal(t, tc.values[2], vec.Get(0))
+				require.Equal(t, tc.values[2], vec.Get(2))
+				require.Equal(t, 129, vec.Length())
+			}
+		})
 	}
-
-	later := makeBatch(3)
-	defer later.Close()
-	require.NoError(t, mnode.ApplyAppendAtLocked(later, 2))
-	defer mnode.data.Close()
-	// An earlier owner may materialize after the later payload. Reserving a
-	// shorter prefix must not clear that payload, including varlen/null data.
-	mnode.ReserveRowsLocked(1)
-	require.Equal(t, int32(3), mnode.data.Vecs[0].Get(2))
-	mnode.ReserveRowsLocked(4)
-	for _, vec := range mnode.data.Vecs {
-		require.Equal(t, 4, vec.Length())
-		require.True(t, vec.IsNull(3), "a failed trailing owner retains a physical hole")
-	}
-	first := makeBatch(1)
-	defer first.Close()
-	require.NoError(t, mnode.ApplyAppendAtLocked(first, 0))
-	second := makeBatch(2)
-	defer second.Close()
-	require.NoError(t, mnode.ApplyAppendAtLocked(second, 1))
-
-	vec := mnode.data.Vecs[0]
-	require.Equal(t, 4, vec.Length())
-	require.Equal(t, int32(1), vec.Get(0))
-	require.Equal(t, int32(2), vec.Get(1))
-	require.Equal(t, int32(3), vec.Get(2))
 }
 
 func TestFrozenAppenderRejectionDoesNotWaitForSealing(t *testing.T) {
@@ -736,4 +755,18 @@ func TestFrozenAppenderRejectionDoesNotWaitForSealing(t *testing.T) {
 	obj.SealAppend()
 	_, finalized = obj.GetAppendMaxCommitTS()
 	require.True(t, finalized)
+}
+
+func BenchmarkReserveRows(b *testing.B) {
+	for _, rows := range []uint32{1, 2, 8, 64, 1024, 8192} {
+		b.Run(fmt.Sprintf("rows=%d", rows), func(b *testing.B) {
+			schema := catalog.MockSchema(2, 0)
+			b.ReportAllocs()
+			for b.Loop() {
+				node := &memoryNode{writeSchema: schema}
+				node.ReserveRowsLocked(rows)
+				node.data.Close()
+			}
+		})
+	}
 }

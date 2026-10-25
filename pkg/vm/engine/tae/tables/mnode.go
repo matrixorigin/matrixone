@@ -314,24 +314,14 @@ func (node *memoryNode) ApplyAppendLocked(
 	// Upgrade compat: replayed WAL batches may be encoded with an older schema
 	// and omit columns introduced later. Pad those missing columns with NULLs
 	// for the appended rows so every in-memory vector stays aligned.
-	expectedLen := from + rows
-	for _, destVec := range node.data.Vecs {
-		for destVec.Length() < expectedLen {
-			destVec.Append(nil, true)
-		}
-	}
+	node.ReserveRowsLocked(uint32(from + rows))
 	return
 }
 
 func (node *memoryNode) ApplyAppendAtLocked(bat *containers.Batch, offset uint32) (err error) {
 	schema := node.writeSchema
 	data := node.mustData()
-	end := int(offset) + bat.Length()
-	for _, destVec := range data.Vecs {
-		for destVec.Length() < end {
-			destVec.Append(nil, true)
-		}
-	}
+	node.ReserveRowsLocked(offset + uint32(bat.Length()))
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
 		destVec := data.Vecs[def.Idx]
@@ -345,8 +335,15 @@ func (node *memoryNode) ApplyAppendAtLocked(bat *containers.Batch, offset uint32
 func (node *memoryNode) ReserveRowsLocked(rows uint32) {
 	data := node.mustData()
 	for _, vec := range data.Vecs {
-		for vec.Length() < int(rows) {
+		missing := int(rows) - vec.Length()
+		if missing == 1 {
 			vec.Append(nil, true)
+		} else if missing > 1 {
+			// Memory-node vectors own their mutable backing. Reuse vector's
+			// bulk growth and metadata accounting without a temporary vector.
+			if err := vector.AppendMultiFixed(vec.GetDownstreamVector(), 0, true, missing, vec.GetAllocator()); err != nil {
+				panic(err)
+			}
 		}
 	}
 }
