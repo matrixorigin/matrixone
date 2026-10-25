@@ -382,6 +382,7 @@ type ViewData struct {
 }
 
 type QueryBuilder struct {
+	integerPrecision      *integerPrecisionBuilder
 	correlationRouteNodes map[int32]bool
 	dependentRelations    map[int32]bool
 	preparedBindingProof  *bool
@@ -868,6 +869,7 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
+	integerPrecision     *integerPrecisionBuilder
 	existentialBlock     uint64
 	subqueryNestingDepth uint32
 

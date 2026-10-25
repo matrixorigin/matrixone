@@ -81,5 +81,30 @@ execute explicit_unsigned_stmt using @explicit_unsigned_a, @explicit_unsigned_b;
 q
 3
 deallocate prepare explicit_unsigned_stmt;
+create table narrow_values(id int primary key,b tinyint,s smallint,i int,u tinyint unsigned);
+insert into narrow_values values(1,100,30000,2147483647,200),(2,-128,NULL,NULL,NULL);
+select id,b+b as bp,b*b as bs,s*s as ss,i*i as ii,u*u as uu from narrow_values order by id;
+id	bp	bs	ss	ii	uu
+1	200	10000	900000000	4611686014132420609	40000
+2	-256	16384	NULL	NULL	NULL
+select sum(b*b) as total from narrow_values;
+total
+26384
+create table narrow_result as select b*b as bb,i*i as ii from narrow_values;
+select column_name,column_type from information_schema.columns where table_schema='mixed_unsigned_arithmetic_28581' and table_name='narrow_result' order by ordinal_position;
+column_name	column_type
+bb	int
+ii	bigint
+select bb,ii from narrow_result order by bb;
+bb	ii
+10000	4611686014132420609
+16384	NULL
+prepare narrow_stmt from 'select b*b as square from narrow_values where id=?';
+set @narrow_id=1;
+execute narrow_stmt using @narrow_id;
+square
+10000
+deallocate prepare narrow_stmt;
+
 set session sql_mode = @mixed_unsigned_saved_sql_mode;
 drop database mixed_unsigned_arithmetic_28581;
