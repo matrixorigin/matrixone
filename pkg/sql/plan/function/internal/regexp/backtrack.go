@@ -15,7 +15,9 @@
 package regexp
 
 import (
+	"bytes"
 	"regexp/syntax"
+	"strings"
 	"sync"
 )
 
@@ -40,6 +42,7 @@ type bitState struct {
 	matchcap []int
 	jobs     []job
 	visited  []uint32
+	failedNL int // Furthest LF found by a terminal repeat, or -1.
 
 	inputs inputs
 }
@@ -74,11 +77,33 @@ func shouldBacktrack(prog *syntax.Prog) bool {
 	return len(prog.Inst) <= maxBacktrackProg
 }
 
+// markEndTextRepeats classifies capture-free greedy loops once, before the
+// compiled program is published. The NFA treats Alt and AltMatch identically;
+// the backtracker can skip these loops directly to their only accepting exit.
+func markEndTextRepeats(prog *syntax.Prog) {
+	for pc := range prog.Inst {
+		inst := &prog.Inst[pc]
+		if inst.Op != syntax.InstAlt {
+			continue
+		}
+		exit := &prog.Inst[inst.Arg]
+		if exit.Op != syntax.InstEmptyWidth || syntax.EmptyOp(exit.Arg) != syntax.EmptyEndText ||
+			prog.Inst[exit.Out].Op != syntax.InstMatch {
+			continue
+		}
+		run := &prog.Inst[inst.Out]
+		if (run.Op == syntax.InstRuneAny || run.Op == syntax.InstRuneAnyNotNL) && run.Out == uint32(pc) {
+			inst.Op = syntax.InstAltMatch
+		}
+	}
+}
+
 // reset resets the state of the backtracker.
 // end is the end position in the input.
 // ncap is the number of captures.
 func (b *bitState) reset(prog *syntax.Prog, end int, ncap int) {
 	b.end = end
+	b.failedNL = -1
 
 	if cap(b.jobs) == 0 {
 		b.jobs = make([]job, 0, 256)
@@ -132,6 +157,26 @@ func (b *bitState) push(re *Regexp, pc uint32, pos int, arg bool) {
 	if re.prog.Inst[pc].Op != syntax.InstFail && (arg || b.shouldVisit(pc, pos)) {
 		b.jobs = append(b.jobs, job{pc: pc, arg: arg, pos: pos})
 	}
+}
+
+// terminalSuffixHasNL is used only by a repeat whose successful scan ends the
+// search at EOF. Failed scans start after the previous LF, so their intervals
+// are disjoint across backtracking and unanchored start positions.
+func (b *bitState) terminalSuffixHasNL(pos int) bool {
+	if pos <= b.failedNL {
+		return true
+	}
+	var nl int
+	if b.inputs.bytes.str != nil {
+		nl = bytes.IndexByte(b.inputs.bytes.str[pos:], '\n')
+	} else {
+		nl = strings.IndexByte(b.inputs.string.str[pos:], '\n')
+	}
+	if nl < 0 {
+		return false
+	}
+	b.failedNL = pos + nl
+	return true
 }
 
 // tryBacktrack runs a backtracking search starting at pos.
@@ -189,6 +234,15 @@ func (re *Regexp) tryBacktrack(b *bitState, i input, pc uint32, pos int) bool {
 			}
 
 		case syntax.InstAltMatch:
+			// markEndTextRepeats proves this variant can only accept at EOF.
+			if re.prog.Inst[inst.Arg].Op == syntax.InstEmptyWidth {
+				if re.prog.Inst[inst.Out].Op == syntax.InstRuneAnyNotNL && b.terminalSuffixHasNL(pos) {
+					continue
+				}
+				pc = inst.Arg
+				pos = b.end
+				goto CheckAndLoop
+			}
 			// One opcode consumes runes; the other leads to match.
 			switch re.prog.Inst[inst.Out].Op {
 			case syntax.InstRune, syntax.InstRune1, syntax.InstRuneAny, syntax.InstRuneAnyNotNL:
