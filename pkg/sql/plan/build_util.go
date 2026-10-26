@@ -2565,6 +2565,13 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 		case *plan.Expr_Lit:
 			switch value := ex.Lit.Value.(type) {
 			case *plan.Literal_I64Val:
+				// In a comparison TRUE/FALSE are the integers 1/0 (MySQL), so
+				// only 0 and 1 are the same value as a BOOL: `b = 2` must not
+				// become `b = true`. Other literals keep the integer path,
+				// which compares CAST(b AS BIGINT) with the literal.
+				if !isLogic && value.I64Val != 0 && value.I64Val != 1 {
+					continue
+				}
 				if value.I64Val == 0 {
 					ex.Lit.Value = &plan.Literal_Bval{Bval: false}
 				} else {
