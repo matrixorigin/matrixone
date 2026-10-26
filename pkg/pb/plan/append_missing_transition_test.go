@@ -28,7 +28,7 @@ func falseAdded(seq uint32) *plan.ColDef {
 
 func TestAppendMissingExtensionIsImmutable(t *testing.T) {
 	initial := birthState()
-	types := make([]plan.Type, 3)
+	types := make([]plan.Type, 3, 4)
 	added := falseAdded(3)
 	require.NoError(t, plan.ValidateAppendMissingExtension(nil, initial, 3, 0, types, added))
 	next := plan.CloneAppendMissingState(initial)
