@@ -36,10 +36,20 @@ Changes to analyzer versions/rules require reviewing this package-local contract
 ## Full checks and rollout
 
 - `make static-check` remains the complete local/release gate.
-- `make static-check-analysis` remains full outside GitHub Actions or without Node.
+- `make static-check-analysis` remains full outside GitHub Actions. CI without
+  Node on PATH also runs complete graph validation and both analyzers, with an
+  explicit fallback reason. This supports older CI during rollout.
+- The SCA job can expose its existing runner-provided Node 24 runtime on PATH
+  without downloading another SDK, enabling incremental analysis. Once Node is
+  available, selector errors remain fatal.
+- Selection and conservative fallback reasons are printed on stderr; stdout
+  from the selector contains only package arguments.
 - `SCA_FULL=1 make static-check-analysis` forces complete PR analysis.
 - `make static-check-golangci` still populates the complete trusted analysis cache.
-- Existing license selection and the final required-check gate remain unchanged.
+- License exemptions require the frozen checkout and PR head/base to match
+  before and after file pagination, plus the validated configuration/tool recipe.
+  Unavailable or changed inputs retain complete checks. The final required-check
+  gate remains unchanged.
 
 The first optimization keeps complete complementary BVT groups. General SQL
 selection is deliberately deferred: existing logging verifiers consume other

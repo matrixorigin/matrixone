@@ -1509,8 +1509,8 @@ func TestDataBranchOutputWriteDeleteRowSQLFull(t *testing.T) {
 	require.Equal(t,
 		"delete from `db1`.`t1` where serial(`f32`) = serial(bit_cast(unhex('0100c07f') as float)) and "+
 			"serial(`f64`) = serial(bit_cast(unhex('010000000000f87f') as double)) and `nullable` is null and "+
-			"serial(`pos_inf`) = serial(cast('+Inf' as float)) and "+
-			"serial(`neg_inf`) = serial(cast('-Inf' as double)) limit 1;\n",
+			"serial(`pos_inf`) = serial(bit_cast(unhex('0000807f') as float)) and "+
+			"serial(`neg_inf`) = serial(bit_cast(unhex('000000000000f0ff') as double)) limit 1;\n",
 		buf.String(),
 	)
 }

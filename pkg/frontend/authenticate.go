@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -4128,17 +4129,12 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 		handler.backSes.txnCompileCtx.dbName = catalog.MO_CATALOG
 	}
 
-	var sql, db, table string
-	var erArray []ExecResult
-	var databases map[string]int8
-	var dbSql, prefix string
-	var sqlsForDropDatabases = make([]string, 0, 5)
-
-	var deleteCtx context.Context
 	var accountId int64
 	var version uint64
 	var hasAccount = true
-	clusterTables := make(map[string]int)
+	var targetAccountID int64
+	var targetResolved bool
+	var retry bool
 
 	da.Name, err = normalizeName(ctx, da.Name)
 	if err != nil {
@@ -4150,6 +4146,8 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	}
 
 	checkAccount := func(accountName string) (accountId int64, version uint64, ok bool, err error) {
+		var sql string
+		var erArray []ExecResult
 		if sql, err = getSqlForCheckTenant(ctx, accountName); err != nil {
 			return
 		}
@@ -4177,14 +4175,40 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	}
 
 	dropAccountFunc := func() (rtnErr error) {
+		var sql, db, table string
+		var erArray []ExecResult
+		var databases map[string]int8
+		var dbSql, prefix string
+		var deleteCtx context.Context
+		sqlsForDropDatabases := make([]string, 0, 5)
+		clusterTables := make(map[string]int)
+		accountId, version, hasAccount = 0, 0, false
+		retry = false
 		// If already in a transaction (e.g., restore scenario), don't create a new one
 		if !inTxn {
 			rtnErr = bh.Exec(ctx, "begin;")
 			if rtnErr != nil {
 				return rtnErr
 			}
+			txnOp := backgroundExecTxnOperator(bh)
+			var txnID []byte
+			if txnOp != nil {
+				txnID = slices.Clone(txnOp.Txn().ID)
+			}
 			defer func() {
-				rtnErr = finishTxn(ctx, bh, rtnErr)
+				if rtnErr == nil {
+					// Commit errors, including an unknown outcome, are never replayed.
+					rtnErr = finishTxn(ctx, bh, nil)
+					return
+				}
+				cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+				defer cancel()
+				rtnErr = finishTxn(cleanupCtx, bh, rtnErr)
+				// A fatal statement can already have rolled back and invalidated
+				// the frontend handle. A subsequent no-op ROLLBACK is not proof.
+				outcome, ok := txnOp.(client.AbortedTxnCleanupObserver)
+				retry = retry && moerr.IsMoErrCode(rtnErr, moerr.ErrLockConflict) &&
+					ok && outcome.IsAbortedTxnCleanupComplete(txnID)
 			}()
 			// Standalone DROP ACCOUNT owns this transaction and must enter the
 			// lineage-owner lifecycle before locking mo_account or deleting any
@@ -4219,6 +4243,11 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 			return
 		}
+
+		if targetResolved && accountId != targetAccountID {
+			return moerr.NewInternalErrorf(ctx, "account %s was replaced during DROP ACCOUNT", da.Name)
+		}
+		targetAccountID, targetResolved = accountId, true
 
 		// Retire SQL tasks before dropping tenant-owned catalog objects. This is
 		// part of the account-drop transaction, so a later failure restores the
@@ -4319,6 +4348,7 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, sql)
 			rtnErr = bh.Exec(deleteCtx, sql)
 			if rtnErr != nil {
+				retry = !inTxn && moerr.IsMoErrCode(rtnErr, moerr.ErrLockConflict)
 				return rtnErr
 			}
 		}
@@ -4514,9 +4544,28 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 	// disable foreign key checks
 	ctx = context.WithValue(ctx, defines.DisableFkCheck{}, true)
 
-	err = dropAccountFunc()
-	if err != nil {
-		return err
+	// Lifecycle admission must fail fast while this transaction holds other
+	// catalog locks. Only its owner may release them and replay the whole drop.
+	const maxAttempts = 5
+	for attempt := 0; ; attempt++ {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		err = dropAccountFunc()
+		if err == nil {
+			break
+		}
+		if !retry || attempt+1 == maxAttempts {
+			return err
+		}
+		bh.ClearExecResultSet()
+		timer := time.NewTimer(25 * time.Millisecond << attempt)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 
 	if !hasAccount {

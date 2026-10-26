@@ -345,6 +345,9 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 	if diagnostic := sqlmongodb.RedactSQLForDiagnostics(text); diagnostic != text {
 		return diagnostic
 	}
+	if diagnostic := redactOutfileStatementText(statement, text); diagnostic != text {
+		return diagnostic
+	}
 
 	switch stmt := statement.(type) {
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
@@ -3433,7 +3436,6 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 }
 
 func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, proc *process.Process) error {
-	var err error
 	drop := &dropAccount{
 		IfExists: da.IfExists,
 	}
@@ -3452,14 +3454,6 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 		&BackgroundExecOption{forcePessimisticRC: true},
 	)
 	defer bh.Close()
-
-	err = bh.Exec(execCtx.reqCtx, "begin;")
-	defer func() {
-		err = finishTxn(execCtx.reqCtx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
 
 	return doDropAccount(execCtx.reqCtx, bh, ses.(*Session), drop)
 }
@@ -4262,26 +4256,32 @@ func buildPlanWithPrepareMode(
 			return ret, err
 		}
 
-		// Default handling of various statements
-		switch stmt := stmt.(type) {
-		case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
-			*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
-			*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
-			*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
-			*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
-			opt := plan2.NewBaseOptimizer(ctx)
-			optimized, err := opt.Optimize(stmt, isPrepareStmt)
-			if err != nil {
-				return nil, err
-			}
+		// The integration-only route exercises the same PREPARE/rebuild owner.
+		// Ordinary builds inline a constant false and have no activation switch.
+		var validationSelected bool
+		ret, validationSelected, err = buildViewSchemaValidationPlan(reqCtx, ses, ctx, stmt, isPrepareStmt)
+		if !validationSelected {
+			// Default handling of various statements
+			switch stmt := stmt.(type) {
+			case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
+				*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
+				*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
+				*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
+				*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+				opt := plan2.NewBaseOptimizer(ctx)
+				optimized, err := opt.Optimize(stmt, isPrepareStmt)
+				if err != nil {
+					return nil, err
+				}
 
-			ret = &plan2.Plan{
-				Plan: &plan2.Plan_Query{
-					Query: optimized,
-				},
+				ret = &plan2.Plan{
+					Plan: &plan2.Plan_Query{
+						Query: optimized,
+					},
+				}
+			default:
+				ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
 			}
-		default:
-			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
 		}
 
 		if ret != nil {
@@ -6551,6 +6551,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, currentSQLRecord, sqlType, singleStatement)
 		if err2 != nil {
 			return err2
+		}
+		if receipt, ok := makeOutfileReceipt(diagnosticStmt); ok && ses.tStmt != nil {
+			ses.tStmt.SetOutfileReceipt(*receipt)
 		}
 		// Commit only after the current statement has passed local admission and
 		// has a current statement identity. Authorization and plan construction
