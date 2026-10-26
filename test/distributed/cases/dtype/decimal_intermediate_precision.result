@@ -113,11 +113,11 @@ select (c*(cast('00:00:00' as time(0))+i))*z as chained_product from checked_car
 NULL  𝄀
 -16602069666338596288379303336614035456000000000000000000  𝄀
 16602069666338596286579303336614035474000000000000000000
-select c*null as null_product, cast(c as decimal(38,0))+null as null_sum, cast(c as decimal(38,0))-null as null_difference from checked_carriers order by i;
-➤ null_product[3,38,0]  ¦  null_sum[3,38,0]  ¦  null_difference[3,38,0]  𝄀
-NULL  ¦  NULL  ¦  NULL  𝄀
-NULL  ¦  NULL  ¦  NULL  𝄀
-NULL  ¦  NULL  ¦  NULL
+select c*null as null_product, cast(c as decimal(38,0))+null as null_sum, cast(c as decimal(38,0))-null as null_difference from checked_carriers;
+➤ null_product[0,2147483647,0]  ¦  null_sum[0,2147483647,0]  ¦  null_difference[0,2147483647,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null  𝄀
+null  ¦  null  ¦  null
 select c*cast(null as decimal(20,0)) as typed_null_product from checked_carriers order by i;
 ➤ typed_null_product[3,40,0]  𝄀
 NULL  𝄀
