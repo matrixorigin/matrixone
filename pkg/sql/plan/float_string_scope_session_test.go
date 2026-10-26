@@ -188,6 +188,8 @@ func TestLegacyFloatSessionCandidatePruning(t *testing.T) {
 	// children: differing values remain candidates, never false negatives.
 	stored := makePlan2StringConstExprWithType("January", false)
 	folded := makePlan2StringConstExprWithType("Januar", false)
+	// ConstantFold preserves the source's bound type, not the rendered length.
+	folded.Typ = stored.Typ
 	ambiguous := &planpb.Expr{Typ: stored.Typ, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "monthname"}, Args: []*planpb.Expr{makePlan2DateConstExprWithType(0)}}}}
 	possible, err = legacyFloatSessionCandidateMayMatch(compiler.GetContext(), stored, folded, ambiguous, &tableDumpBindingBudget{})
 	require.NoError(t, err)
@@ -198,4 +200,54 @@ func TestLegacyFloatSessionCandidatePruning(t *testing.T) {
 	cancel()
 	_, err = legacyFloatSessionCandidateMayMatch(canceled, item.expr, bound, dependency.unfolded, &tableDumpBindingBudget{})
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestLegacyFloatNestedPrecisionSessionBudget(t *testing.T) {
+	const division = "cast(1 as decimal(10,0))/cast(7 as decimal(10,0))"
+	for _, tc := range []struct {
+		name, input, expression, sessionSuffix, extra string
+		precision                                     int32
+	}{
+		{"nested30", "double", "concat(from_unixtime(0)," + division + ")", "1970-01-01 08:00:00", "", 30},
+		{"nested4", "double", "concat(from_unixtime(0)," + division + ")", "1970-01-01 08:00:00", "", 4},
+		{"deeper30", "double", "concat(concat(from_unixtime(0)," + division + "),'!')", "1970-01-01 08:00:00", "!", 30},
+		{"scope_locale30", "double not null", "concat(date_format(from_unixtime(0),'%M %H')," + division + ")", "Januar 08", "", 30},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			compiler, source := legacyFloatScopeTable(t, "create table t(a "+tc.input+",g varchar(200) default(concat(a,"+tc.expression+")))", tc.precision)
+			before := proto.Clone(source)
+			execution := CloneTableDefForPlan(source, true)
+			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
+			fraction := "0.1429"
+			if tc.precision == 30 {
+				fraction = "0.142857142857142857142857142857"
+			}
+			require.Equal(t, "-0.0000000000000012345678901234568"+tc.sessionSuffix+fraction+tc.extra, executeLegacyFloatScope(t, compiler, execution))
+			require.True(t, proto.Equal(before, source))
+			migrated := proto.Clone(execution)
+			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
+			require.True(t, proto.Equal(migrated, execution))
+			require.Same(t, time.UTC, compiler.GetProcess().GetSessionInfo().TimeZone)
+			require.Equal(t, "en_US", compiler.GetProcess().GetSessionInfo().LCTimeNames)
+			if tc.name == "nested30" {
+				// The wrong precision collapses the nested CONCAT into one
+				// literal, but its bound width still proves it impossible.
+				col := tableDumpDDLColumn(t, source, "g")
+				item := tableDumpExpression{kind: "default", name: col.Name, col: col, expr: col.Default.Expr, origin: col.Default.OriginString}
+				stmt, ast, _, err := parseTableDumpExpression(compiler.GetContext(), item.origin, "")
+				require.NoError(t, err)
+				defer stmt.Free()
+				for _, increment := range []int64{0, 30} {
+					dependency := &tableDumpDefaultSession{captureUnfolded: true}
+					bound, err := bindTableDumpExpression(compiler, source, item, ast, increment, tableDumpBindingLegacyFloat|tableDumpBindingLegacyFloatFormatting, dependency)
+					require.NoError(t, err)
+					original := proto.Clone(bound)
+					possible, err := legacyFloatSessionCandidateMayMatch(compiler.GetContext(), item.expr, bound, dependency.unfolded, &tableDumpBindingBudget{})
+					require.NoError(t, err)
+					require.Equal(t, increment == 30, possible, "matching precision stays eligible despite different folded session values")
+					require.True(t, proto.Equal(original, bound))
+				}
+			}
+		})
+	}
 }

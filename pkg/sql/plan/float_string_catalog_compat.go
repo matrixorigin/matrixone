@@ -369,6 +369,13 @@ func legacyFloatSessionCandidateMayMatch(ctx context.Context, stored, folded, so
 	if err := chargeFloatStringRebind(source, budget); err != nil {
 		return false, err
 	}
+	// Session folding can hide an independent precision witness inside one
+	// literal. Its bound type shape survives folding and cannot be repaired by
+	// another timezone/locale, even when the three trees no longer align below
+	// this node. Leave value and provenance checks to the complete origin proof.
+	if stored.Typ.Id != folded.Typ.Id || stored.Typ.Width != folded.Typ.Width || stored.Typ.Scale != folded.Typ.Scale {
+		return false, nil
+	}
 	zone, locale := tableDumpDefaultDependencies(source)
 	if !zone && !locale {
 		for _, expr := range []*planpb.Expr{stored, folded} {
