@@ -2153,8 +2153,15 @@ func dropSessionTempTables(
 				WithRoleID(tenant.GetDefaultRoleID()),
 		)
 	}
+	ctx = defines.AttachTemporaryTableAccess(ctx)
 	var cleanupErr error
 	for _, tbl := range tempTables {
+		// Hidden indexes are destroyed by their root's DROP. Independently
+		// dropping one first (or after a failed root DROP) corrupts the root's
+		// remaining index metadata and prevents a later cleanup retry.
+		if tbl.identity.internal {
+			continue
+		}
 		dropSQL := "DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent(tbl.dbName, tbl.realName)
 		res, err := exec.Exec(ctx, dropSQL, opts)
 		if err != nil {
@@ -2742,7 +2749,8 @@ func (ses *Session) AppendData(row []interface{}) {
 func (ses *Session) InitExportConfig(ep *tree.ExportParam) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.ep = &ExportConfig{userConfig: ep, service: ses.service, proc: ses.proc}
+	auditEnabled := ses.tStmt != nil && ses.tStmt.HasOutfileReceipt()
+	ses.ep = &ExportConfig{userConfig: ep, service: ses.service, proc: ses.proc, auditEnabled: auditEnabled}
 }
 
 func (ses *Session) GetExportConfig() *ExportConfig {

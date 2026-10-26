@@ -1,0 +1,38 @@
+drop database if exists show_create_default_quote;
+create database show_create_default_quote;
+use show_create_default_quote;
+create table t1 (id int, a varchar(10) default 'it''s', b varchar(10) default 'x`y', c varchar(10) default "q""r", d varchar(10) default '');
+show create table t1;
+➤ Table[12,2,0]  ¦  Create Table[12,176,0]  𝄀
+t1  ¦  CREATE TABLE `t1` (
+  `id` int DEFAULT NULL,
+  `a` varchar(10) DEFAULT 'it''s',
+  `b` varchar(10) DEFAULT 'x`y',
+  `c` varchar(10) DEFAULT 'q"r',
+  `d` varchar(10) DEFAULT ''
+)
+insert into t1(id) values (1);
+select id, a, b, c, d from t1;
+➤ id[4,32,0]  ¦  a[12,10,0]  ¦  b[12,10,0]  ¦  c[12,10,0]  ¦  d[12,10,0]  𝄀
+1  ¦  it's  ¦  x`y  ¦  q"r  ¦  
+create table t2 (
+`id` int DEFAULT NULL,
+`a` varchar(10) DEFAULT 'it''s',
+`b` varchar(10) DEFAULT 'x`y',
+`c` varchar(10) DEFAULT 'q"r',
+`d` varchar(10) DEFAULT ''
+);
+show create table t2;
+➤ Table[12,2,0]  ¦  Create Table[12,176,0]  𝄀
+t2  ¦  CREATE TABLE `t2` (
+  `id` int DEFAULT NULL,
+  `a` varchar(10) DEFAULT 'it''s',
+  `b` varchar(10) DEFAULT 'x`y',
+  `c` varchar(10) DEFAULT 'q"r',
+  `d` varchar(10) DEFAULT ''
+)
+insert into t2(id) values (2);
+select id, a, b, c, d from t2;
+➤ id[4,32,0]  ¦  a[12,10,0]  ¦  b[12,10,0]  ¦  c[12,10,0]  ¦  d[12,10,0]  𝄀
+2  ¦  it's  ¦  x`y  ¦  q"r  ¦  
+drop database show_create_default_quote;

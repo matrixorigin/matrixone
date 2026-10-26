@@ -6493,6 +6493,7 @@ func canPreserveParallelUnionAllBranches(node *plan.Node) bool {
 
 func (c *Compile) canCompileParallelUnionAllAggregate(node *plan.Node) bool {
 	return !hasOrderedGroupConcat(node) && !hasOrderedSetPercentile(node) &&
+		!hasQuantileExactWeighted(node) &&
 		!c.hasUnsupportedRemoteGroupWire(node) &&
 		!plan2.RequiresSingleStageDistinctAgg(node)
 }
@@ -8205,6 +8206,7 @@ func (c *Compile) compileGroupWithoutShuffle(
 	distinctRequiresSingleStage bool,
 ) []*Scope {
 	if hasOrderedGroupConcat(node) || hasOrderedSetPercentile(node) ||
+		hasQuantileExactWeighted(node) ||
 		c.hasUnsupportedRemoteGroupWire(node) {
 		return c.compileOrderedAggregateSingleStage(node, ss, ns)
 	}
@@ -8222,14 +8224,18 @@ func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
 		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
 		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
 		(hasLegacyFloatDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
-		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates())
+		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates()) ||
+		(hasQuantileExactWeighted(node) && !c.supportsQuantileExactWeightedDispatch())
 }
 
+// Local reduction may replace a complete child only when the parent establishes
+// its own distribution. A reuse consumer must preserve the complete child.
 func isLocalPreAggregationGroup(parent, child *plan.Node) bool {
 	if parent == nil || child == nil ||
 		parent.NodeType != plan.Node_AGG || child.NodeType != plan.Node_AGG ||
 		parent.Stats == nil || parent.Stats.HashmapStats == nil ||
 		!parent.Stats.HashmapStats.Shuffle ||
+		parent.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Normal ||
 		len(parent.AggList) != 0 || len(child.AggList) != 0 ||
 		len(parent.GroupBy) == 0 || len(parent.GroupBy) != len(child.GroupBy) ||
 		len(parent.GroupingFlag) != 0 || len(child.GroupingFlag) != 0 ||
@@ -8338,7 +8344,6 @@ func (c *Compile) canOmitLocalPreAggregation(
 		local.ExtraOptions != "" || len(local.PhysicalEqualityKeyList) != 0 ||
 		input.Stats == nil || len(ss) == 0 ||
 		parent.Stats.Dop <= 1 || !c.canCompileShuffleGroup(parent) ||
-		parent.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Normal ||
 		parent.Stats.HashmapStats.ShuffleColIdx != 0 {
 		return false
 	}
@@ -8485,6 +8490,21 @@ func hasOrderedSetPercentile(node *plan.Node) bool {
 			case plan2.NamePercentileCont, plan2.NamePercentileDisc:
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// hasQuantileExactWeighted reports whether this aggregate node evaluates the
+// exact weighted percentile aggregate anywhere in its list.
+func hasQuantileExactWeighted(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil &&
+			strings.EqualFold(fn.Func.ObjName, plan2.NameQuantileExactWeighted) {
+			return true
 		}
 	}
 	return false
@@ -9146,6 +9166,7 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		node.Stats.HashmapStats.Shuffle &&
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
 		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
+		(!hasQuantileExactWeighted(node) || c.supportsQuantileExactWeightedDispatch()) &&
 		(!hasApproxPercentile(node) || c.supportsRemoteApproxPercentile()) &&
 		(!hasHLLAggregate(node) || c.supportsRemoteHLL()) &&
 		(canonicalHLLAddRequiredVersion(node) <= c.remoteProtocolVersion()) &&
@@ -9154,6 +9175,35 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
 		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum())
+}
+
+// supportsQuantileExactWeightedDispatch is the compile-time fast-fail layer of
+// the design's D10 mixed-version gate: the exact weighted percentile aggregate
+// is distributed only when the coordinator AND every CN in the cluster
+// inventory advertise the protocol capability (an incomplete inventory counts
+// as unsupported). The destination is additionally verified by the
+// requiredProtocol floor raised during remote-scope encoding and confirmed on
+// the live stream before the pipeline is delivered.
+func (c *Compile) supportsQuantileExactWeightedDispatch() bool {
+	supported, err := AllCNsSupportProtocol(c.proc, defines.MORPCVersion131)
+	return err == nil && supported
+}
+
+// supportsRemoteQuantileExactWeighted supplies only the coordinator-side
+// self-gate and its coherent not-supported message; destination capability is
+// verified by AllCNsSupportProtocol, the encoded requiredProtocol floor and
+// the send-time stream confirmation.
+func supportsRemoteQuantileExactWeighted(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion131
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
