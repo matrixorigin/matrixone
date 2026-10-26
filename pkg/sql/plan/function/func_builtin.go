@@ -562,9 +562,9 @@ func geometryShowColumnType(typ *types.Type) string {
 	return ts
 }
 
-// columnDefaultValue renders a stored default for information_schema.COLUMNS:
-// DEFAULT NULL is SQL NULL and a string literal is its value, like MySQL.
-// Other defaults keep their origin text.
+// columnDefaultValue renders a stored default for information_schema.COLUMNS
+// and SHOW COLUMNS / DESC: DEFAULT NULL is SQL NULL and a string literal is
+// its value, like MySQL. Other defaults keep their origin text.
 func columnDefaultValue(origin string) []byte {
 	if origin == "" || strings.EqualFold(origin, "null") {
 		return nil
@@ -659,39 +659,16 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			return functionUtil.QuickStrToBytes(ret), nil
 		}
 	case defExprInShowColumns:
-		formatStr := func(str string) string {
-			tmp := strings.Replace(str, "`", "``", -1)
-			strLen := len(tmp)
-			if strLen < 2 {
-				return tmp
-			}
-			if tmp == "''" {
-				return ""
-			}
-			if tmp[0] == '\'' && tmp[strLen-1] == '\'' {
-				return strings.Replace(tmp[1:strLen-1], "'", "''", -1)
-			}
-			return strings.Replace(tmp, "'", "''", -1)
-		}
+		// Same display as information_schema.COLUMNS.COLUMN_DEFAULT: decode a
+		// string literal via the MySQL scanner. OriginString is already SQL text,
+		// so re-escaping (the old formatStr) doubled quotes/backticks.
 		f = func(s []byte) ([]byte, error) {
 			def := new(plan.Default)
 			err := types.Decode(s, def)
 			if err != nil {
 				return nil, err
 			}
-			if strings.EqualFold(def.OriginString, "null") || len(def.OriginString) == 0 {
-				return nil, nil
-			}
-			trimmed := strings.TrimSpace(def.OriginString)
-			if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
-				return functionUtil.QuickStrToBytes(trimmed), nil
-			}
-
-			fStr := formatStr(def.OriginString)
-			if len(fStr) == 0 {
-				return []byte{}, nil
-			}
-			return functionUtil.QuickStrToBytes(fStr), nil
+			return columnDefaultValue(def.OriginString), nil
 		}
 	case generatedExprOrigin:
 		f = func(s []byte) ([]byte, error) {
