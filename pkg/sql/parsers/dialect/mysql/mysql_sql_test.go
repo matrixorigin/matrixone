@@ -7361,3 +7361,27 @@ func TestAlterAddParenthesizedColumns(t *testing.T) {
 		stmt.Free()
 	}
 }
+
+func TestExtensionAndLoadStatementMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		sql, name, query string
+		output           tree.OutputType
+		location         tree.ExecLocation
+	}{
+		{"load some_ext", "Load Extension", tree.QueryTypeOth, tree.OUTPUT_UNDEFINED, tree.EXEC_IN_FRONTEND},
+		{"create extension pg as myext file '/missing.so'", "Create Extension", tree.QueryTypeDDL, tree.OUTPUT_UNDEFINED, tree.EXEC_IN_FRONTEND},
+		{"select 1", "Select", tree.QueryTypeDQL, tree.OUTPUT_RESULT_ROW, tree.EXEC_IN_ENGINE},
+		{"create database metadata_control", "Create Database", tree.QueryTypeDDL, tree.OUTPUT_STATUS, tree.EXEC_IN_ENGINE},
+		{"load data infile '/missing.csv' into table t", "Load", tree.QueryTypeDML, tree.OUTPUT_STATUS, tree.EXEC_IN_ENGINE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, tc.name, stmt.GetStatementType())
+			require.Equal(t, tc.query, stmt.GetQueryType())
+			require.Equal(t, tc.output, stmt.StmtKind().OutputType())
+			require.Equal(t, tc.location, stmt.StmtKind().ExecLocation())
+		})
+	}
+}

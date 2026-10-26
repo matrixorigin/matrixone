@@ -600,6 +600,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 		}
 		e.link.Delete(n)
 		delete(e.entries, table.ID)
+		table.retireAObjectMetrics()
 	}
 	return
 }
