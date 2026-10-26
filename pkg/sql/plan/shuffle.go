@@ -1405,9 +1405,10 @@ func dontShuffle(node *plan.Node, builder *QueryBuilder) bool {
 }
 
 // to determine if groupby need to go shuffle
-func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
-	// do not shuffle by default
+func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder, afterRemap bool) {
+	// Reprove every decision when planning is repeated or references are remapped.
 	node.Stats.HashmapStats.ShuffleColIdx = -1
+	node.Stats.HashmapStats.Shuffle = false
 
 	if node.NodeType != plan.Node_AGG {
 		return
@@ -1418,7 +1419,6 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 	if builder != nil {
 		if _, ok := builder.distinctKeyLocalPreAggs[node]; ok {
 			resetShuffleStrategy(node.Stats.HashmapStats)
-			node.Stats.HashmapStats.Shuffle = false
 			return
 		}
 		if idx, ok := builder.distinctKeyShuffleCols[node]; ok &&
@@ -1434,7 +1434,6 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 	// front of that single owner adds hashing and dispatch without exposing any
 	// parallel aggregate owner, so it is never a useful group-shuffle topology.
 	if RequiresSingleStageDistinctAgg(node) {
-		node.Stats.HashmapStats.Shuffle = false
 		return
 	}
 
@@ -1445,12 +1444,33 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 	// cheaper than merging partial groups.
 	if _, splitCoarse := builder.splitGroupingSetCoarseAggs[node]; splitCoarse {
 		resetShuffleStrategy(node.Stats.HashmapStats)
-		node.Stats.HashmapStats.Shuffle = false
 		return
 	}
 	child := builder.qry.Nodes[node.Children[0]]
 
-	// for now, if agg children is agg or filter, do not allow shuffle
+	// Reusing an aggregate owner adds no exchange. Prove key lineage before
+	// applying the admission costs for establishing a new distribution.
+	if child.NodeType == plan.Node_AGG {
+		for i, expr := range node.GroupBy {
+			if i < len(node.GroupingFlag) && !node.GroupingFlag[i] {
+				continue
+			}
+			col, _ := GetHashColumn(expr)
+			if owner, ok := reusableShuffleChild(col, node, builder, afterRemap); ok {
+				if isStringAggregateShuffleKey(node, col) && owner.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Range {
+					continue
+				}
+				node.Stats.HashmapStats.ShuffleColIdx = int32(i)
+				node.Stats.HashmapStats.Shuffle = true
+				reuseShuffleStrategy(node.Stats.HashmapStats, owner)
+				return
+			}
+		}
+		// Keep local reduction before MergeGroup when the keys differ. Marginal
+		// NDV does not bound the unreduced rows assigned to a hot group.
+		return
+	}
+
 	if dontShuffle(child, builder) {
 		return
 	}
@@ -1517,7 +1537,7 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 	case types.T_int64, types.T_int32, types.T_int16, types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
 		node.Stats.HashmapStats.ShuffleColIdx = int32(idx)
 		node.Stats.HashmapStats.Shuffle = true
-		determineShuffleType(hashCol, node, builder)
+		determineShuffleTypeWithColRefMode(hashCol, node, builder, afterRemap)
 		if node.Stats.HashmapStats.ShuffleType == plan.ShuffleType_Hash &&
 			node.Stats.HashmapStats.HashmapSize < threshHoldForHashShuffle &&
 			!distinctStateShuffle && !spillPressureShuffle {
@@ -1848,7 +1868,7 @@ func determineShuffleMethodWithColRefMode(nodeID int32, builder *QueryBuilder, a
 	}
 	switch node.NodeType {
 	case plan.Node_AGG:
-		determineShuffleForGroupBy(node, builder)
+		determineShuffleForGroupBy(node, builder, afterRemap)
 	case plan.Node_TABLE_SCAN:
 		determineShuffleForScan(node, builder)
 	case plan.Node_JOIN:
