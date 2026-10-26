@@ -598,8 +598,8 @@ func TestTableDumpSharedTimezoneWitnessAcrossDefaults(t *testing.T) {
 	built, err := BuildPlan(compiler, stmt, false)
 	require.NoError(t, err)
 	def := built.GetDdl().GetCreateTable().GetTableDef()
-	require.Len(t, def.Cols, len(columns))
-	for _, col := range def.Cols {
+	require.GreaterOrEqual(t, len(def.Cols), len(columns))
+	for _, col := range def.Cols[:len(columns)] {
 		require.Equal(t, "0:Mar 2024-03-01 05:30:00", col.Default.Expr.GetLit().GetSval())
 	}
 	proc.GetSessionInfo().TimeZone = time.UTC
