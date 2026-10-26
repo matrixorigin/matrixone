@@ -114,7 +114,7 @@ func TestCalculateCUMem(t *testing.T) {
 				cfg:        &dummyOBConfig,
 			},
 			// want: 1.201028143901687e+06,
-			want: 1.2010281439016873e+06,
+			want: 1.2010281439016876e+06,
 		},
 		{
 			name: "default_cfg",
@@ -153,7 +153,7 @@ func TestCalculateCUMemDecimal(t *testing.T) {
 				durationNS: 309319808921,
 				cfg:        &dummyOBConfig,
 			},
-			want: 1.2010281439016873e+06,
+			want: 1.2010281439016876e+06,
 		},
 		{
 			name: "5,733(G-byte)*86400(sec)",
@@ -163,7 +163,7 @@ func TestCalculateCUMemDecimal(t *testing.T) {
 				cfg:        &dummyOBConfig,
 			},
 			//    3,354,742,523.444667
-			want: 3.354742523444667e+09,
+			want: 3.354742523444668e+09,
 		},
 		{
 			name: "128(GB)*7*86400(sec)",
@@ -173,7 +173,7 @@ func TestCalculateCUMemDecimal(t *testing.T) {
 				cfg:        &dummyOBConfig,
 			},
 			//  562,886,586.3021176
-			want: 5.628865863021175e+08,
+			want: 5.628865863021176e+08,
 		},
 		{
 			name: "573384797164(byte)*1e9(ns)",
@@ -336,5 +336,21 @@ func TestCalculateCUIODelete_IOList(t *testing.T) {
 			gotListCU := CalculateCUIOList(tt.args.listCnt, tt.args.cfg)
 			assert.Equalf(t, tt.wantListCU, gotListCU, "CalculateCUIOList(%v, %v)", tt.args.listCnt, tt.args.cfg)
 		})
+	}
+}
+
+// Prices are rounded from their shortest decimal spelling before CU arithmetic.
+// Keep these independent decimal oracles beside the final float CU assertions.
+func TestConvertFloat64ToDecimal128Price(t *testing.T) {
+	for _, tc := range []struct {
+		value float64
+		want  string
+	}{
+		{6.79e-24, "0.00000000000000000000000679"},
+		{1.0026988039e-6, "0.00000100269880390000000000"},
+	} {
+		got, err := convertFloat64ToDecimal128Price(tc.value)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got.Format(Decimal128ScalePrice))
 	}
 }

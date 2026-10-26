@@ -199,7 +199,7 @@ INSERT INTO t1 VALUES(1,0,0),(1,2,0),(1,0,3),(1,2,3);
 SELECT if(c = 0, if(b = 0, a, a / b), if(b = 0, a / c, a / b / c)) FROM t1;
 DROP TABLE t1;
 
--- IF condition numeric-token semantics. The result file is generated after the implementation lands.
+-- IF condition numeric-token semantics in MySQL mode.
 -- @bvt:issue
 SET SESSION sql_mode = '';
 SELECT IF(NULL, 'T', 'F') AS if_null_false;
@@ -209,8 +209,8 @@ SELECT IF('+0x10', 'T', 'F') AS if_hex_positive_true;
 SELECT IF('-0x10', 'T', 'F') AS if_hex_negative_true;
 SELECT IF('0b1010', 'T', 'F') AS if_binary_prefix_true;
 SELECT IF('0o17', 'T', 'F') AS if_octal_prefix_true;
-SELECT IF('NaN', 'T', 'F') AS if_nan_true;
-SELECT IF('Inf', 'T', 'F') AS if_inf_true;
+SELECT IF('NaN', 'T', 'F') AS if_nan_false;
+SELECT IF('Inf', 'T', 'F') AS if_inf_false;
 
 -- Numeric conditions use nonzero truth semantics, including DECIMAL and BIT.
 SELECT IF(CAST(0 AS DOUBLE), 'T', 'F') AS if_double_zero_false;

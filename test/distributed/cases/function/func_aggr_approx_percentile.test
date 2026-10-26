@@ -53,12 +53,12 @@ drop table t_approx_decimal38_38;
 
 drop table if exists t_approx_float_infinity;
 create table t_approx_float_infinity (v double);
-insert into t_approx_float_infinity values (cast('Inf' as double));
-select approx_percentile(v, 0) = cast('Inf' as double) as p0_is_pos_inf, approx_percentile(v, 0.5) = cast('Inf' as double) as p50_is_pos_inf, approx_percentile(v, 1) = cast('Inf' as double) as p100_is_pos_inf from t_approx_float_infinity;
+insert into t_approx_float_infinity values (bit_cast(unhex('000000000000f07f') as double));
+select approx_percentile(v, 0) = bit_cast(unhex('000000000000f07f') as double) as p0_is_pos_inf, approx_percentile(v, 0.5) = bit_cast(unhex('000000000000f07f') as double) as p50_is_pos_inf, approx_percentile(v, 1) = bit_cast(unhex('000000000000f07f') as double) as p100_is_pos_inf from t_approx_float_infinity;
 truncate table t_approx_float_infinity;
-insert into t_approx_float_infinity values (cast('-Inf' as double));
-select approx_percentile(v, 0) = cast('-Inf' as double) as p0_is_neg_inf, approx_percentile(v, 0.5) = cast('-Inf' as double) as p50_is_neg_inf, approx_percentile(v, 1) = cast('-Inf' as double) as p100_is_neg_inf from t_approx_float_infinity;
+insert into t_approx_float_infinity values (bit_cast(unhex('000000000000f0ff') as double));
+select approx_percentile(v, 0) = bit_cast(unhex('000000000000f0ff') as double) as p0_is_neg_inf, approx_percentile(v, 0.5) = bit_cast(unhex('000000000000f0ff') as double) as p50_is_neg_inf, approx_percentile(v, 1) = bit_cast(unhex('000000000000f0ff') as double) as p100_is_neg_inf from t_approx_float_infinity;
 truncate table t_approx_float_infinity;
-insert into t_approx_float_infinity values (cast('-Inf' as double)), (cast('Inf' as double));
-select approx_percentile(v, 0) = cast('-Inf' as double) as p0_is_neg_inf, approx_percentile(v, 1) = cast('Inf' as double) as p100_is_pos_inf from t_approx_float_infinity;
+insert into t_approx_float_infinity values (bit_cast(unhex('000000000000f0ff') as double)), (bit_cast(unhex('000000000000f07f') as double));
+select approx_percentile(v, 0) = bit_cast(unhex('000000000000f0ff') as double) as p0_is_neg_inf, approx_percentile(v, 1) = bit_cast(unhex('000000000000f07f') as double) as p100_is_pos_inf from t_approx_float_infinity;
 drop table t_approx_float_infinity;
