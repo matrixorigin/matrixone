@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r30-2026-10-25`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r31-2026-10-26`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -657,3 +657,24 @@ SHOW metadata typing and quoting, session timestamp precision, and weighted
 prepared percentile handling. It introduces no new runtime owner or round trip.
 Independent Architecture and SQL/Planner approval of r30 remains pending; this
 mechanical allocation does not supply that approval or extend development scope.
+
+
+## r31 — 2026-10-26 official-main float conversion protocol preservation
+
+Governing artifact: `python_udf_current_stage.md` r31. Official main
+`861a2c4cb68961d8b6b01f18e0aa6ac52a3a505f` assigns MORPC 132 to decimal
+rounding and strict textual float conversions. That published capability retains
+132 across detection, destination admission, execution streams and receivers.
+Python execution and shared routine revision repair move to MORPC 133, exactly
+main latest + 1. Catalog 4.0.18, Prepare and prepared reuse, revision publication
+and reads, remote sender/receiver admission and GetPythonUdfStatus share 133.
+Query method 47 and protobuf field identities are unchanged.
+
+The immediate predecessor 132 rejects Python and shared revision publication,
+including rollback from 133, while retaining upstream float conversions and
+weighted aggregates. Combined pipelines negotiate the maximum capability.
+The rebase preserves upstream statement DML classification, diagnostic-bearing
+float folding, view restore creation context and Prepare hooks, outfile audit
+receipts and ISCP lifecycle/timing changes. No new runtime owner is introduced.
+Independent Architecture and SQL/Planner approval of r31 remains pending; this
+mechanical allocation does not supply approval or expand the development scope.
