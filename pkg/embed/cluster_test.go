@@ -1056,7 +1056,13 @@ func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 						wantFetch = time.Second
 					}
 					require.Equal(t, wantFetch, cfg.CN.TaskRunner.FetchInterval.Duration)
-					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.TaskRunner.FetchInterval.Duration = 17 * time.Second })
+					require.Equal(t, wantFetch, cfg.CN.ISCP.SyncTaskInterval.Duration)
+					require.Equal(t, wantFetch, cfg.CN.ISCP.IndexFlushWatermarkInterval.Duration)
+					svc.Adjust(func(cfg *ServiceConfig) {
+						cfg.CN.TaskRunner.FetchInterval.Duration = 17 * time.Second
+						cfg.CN.ISCP.SyncTaskInterval.Duration = 17 * time.Millisecond
+						cfg.CN.ISCP.IndexFlushWatermarkInterval.Duration = 23 * time.Millisecond
+					})
 					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.LockService.KeepBindDuration.Duration = 350 * time.Millisecond })
 				}
 				if svc.ServiceType() == metadata.ServiceType_LOG {
@@ -1102,6 +1108,8 @@ func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 				require.Equal(t, 8192, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
 				require.Equal(t, 350*time.Millisecond, cn.GetServiceConfig().CN.LockService.KeepBindDuration.Duration)
 				require.Equal(t, 17*time.Second, cn.GetServiceConfig().CN.TaskRunner.FetchInterval.Duration)
+				require.Equal(t, 17*time.Millisecond, cn.GetServiceConfig().CN.ISCP.SyncTaskInterval.Duration)
+				require.Equal(t, 23*time.Millisecond, cn.GetServiceConfig().CN.ISCP.IndexFlushWatermarkInterval.Duration)
 			}
 		})
 	}
