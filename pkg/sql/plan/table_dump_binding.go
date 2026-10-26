@@ -817,7 +817,8 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				folded, stored bool
 			}
 			var sessions []sessionCandidate
-			for increment := int64(0); increment <= maxIncrement && !matched; increment++ {
+			matchedPriorWitness := matched
+			for increment := int64(0); increment <= maxIncrement && !matchedPriorWitness; increment++ {
 				if err := ctx.GetContext().Err(); err != nil {
 					stmt.Free()
 					return false, err
