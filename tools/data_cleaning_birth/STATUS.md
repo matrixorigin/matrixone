@@ -163,5 +163,33 @@ required for documentation or Ready status alone. Actual path-changing integrati
 deltas require proportionate correctness/performance qualification.
 
 QA required: yes (persistent state, historical views, clone and recovery).
-Current integrated-head tests, tagged Linux qualification and CI remain pending
-until their exact receipts are recorded; earlier tests are not relabelled.
+Integrated-head Linux qualification, official BVT and CI have separate bound
+receipts; none is implied by these historical results or by a local test.
+Consult the current PR checks and validation record for their exact identities.
+
+
+## Integration repair and local qualification — 2026-10-26
+
+Product repair `109332183a97a3f89bcf9328bac9efd376364a6c` follows the pinned
+integration above. An independent no-context design/review loop found and closed
+public metadata gaps: absent historical false was counted as NULL by
+`metadata_scan`, and `mo_table_col_min/max` omitted its logical bounds. Both
+now use the existing proved-object/immutable-fill rule; physically present NULLs
+win, object metadata remains borrowed, and aggregate zone maps own their bytes.
+No new history state, cache or execution path is introduced.
+
+The existing embedded SQL fixture covers old persistent false plus new physical
+true/NULL before COPY exit, unchanged relation/version identity, COPY controls,
+and subsequent NULL ADD exit. COPY may publish a conservative boolean upper
+bound; metadata min/max are compared with the persisted bounds rather than
+assuming exact row extrema. The canonical customer BVT extends those public
+metadata entry points. Temporary diagnostic logging is absent from the product.
+
+Local ordinary admission/compile/catalog packages passed 1,619 root tests.
+Focused tagged tests cover the merged cluster-key/captured-write and COMMENT
+contracts, plus proof-error and CREATE INDEX exit repairs. The final tagged
+SQL qualification covers the false history, mixed objects, public ordinals,
+clone/merge, cancellation, rollback, restart/checkpoint and ordinary COPY
+controls. These local results do not certify external launcher deployment,
+current-head CI, production QA or mixed versions. Those remain separate gates;
+the source integration has no newly measured full-workflow performance claim.
