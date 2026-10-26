@@ -68,9 +68,10 @@ func TestLeaseAcquisitionErrors(t *testing.T) {
 		require.False(t, locked)
 	}
 	blocker := filepath.Join(a.Directory, fmt.Sprintf("%d.lock", MinPort))
-	require.NoError(t, os.Mkdir(blocker, 0755))
+	// A directory can be flocked on macOS; a missing target parent cannot be opened.
+	require.NoError(t, os.Symlink(filepath.Join(a.Directory, "missing", "lock"), blocker))
 	lease, locked, err := a.TryAcquire(MinPort)
-	require.Error(t, err)
+	require.ErrorIs(t, err, os.ErrNotExist)
 	require.Nil(t, lease)
 	require.False(t, locked)
 	require.NoError(t, os.Remove(blocker))
