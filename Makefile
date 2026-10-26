@@ -1572,13 +1572,18 @@ static-check: config err-check
 	$(STATIC_CHECK_GOLANGCI)
 
 # PR CI selects complete affected packages using the verified Go test/import
-# graph. Local use (including hosts without Node) retains the full checks.
+# graph. Local use and CI hosts without Node retain the full checks.
 # Both analyzers consume the same package list and their failures stay fatal.
 static-check-analysis: err-check
 	@set -e; packages='./...'; \
 	if [ "$${GITHUB_ACTIONS:-}" = true ] && command -v node >/dev/null 2>&1; then \
 		packages=$$($(CGO_OPTS) node .github/ci/static-analysis.cjs); \
 	else \
+		if [ "$${GITHUB_ACTIONS:-}" = true ]; then \
+			echo "SCA selection: full graph (Node unavailable on PATH in CI)" >&2; \
+		else \
+			echo "SCA selection: full graph (local invocation)" >&2; \
+		fi; \
 		$(MAKE) --no-print-directory config; \
 	fi; \
 	$(MAKE) --no-print-directory static-check-selected STATIC_CHECK_PACKAGES="$$packages"
