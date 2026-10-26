@@ -16,6 +16,8 @@
 MatrixOne Async ORM - SQLAlchemy-like interface for MatrixOne database (Async)
 """
 
+from __future__ import annotations
+
 from typing import Any, List, Optional, TypeVar
 
 from .orm import BaseMatrixOneQuery, _count_sql, _first_query
@@ -30,17 +32,27 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
         super().__init__(model_class, client, transaction_wrapper, snapshot)
         self.database = database
 
-    def _build_sql(self) -> tuple[str, List[Any]]:
-        """Build SQL query with database prefix support"""
-        # Add database prefix if provided
-        original_table_name = self._table_name
-        if self.database:
-            self._table_name = f"{self.database}.{original_table_name}"
+    def _qualified_table_name(self):
+        table = super()._qualified_table_name()
+        if not self.database:
+            return table
+        from ._sql_literals import sql_identifier
 
-        try:
-            return super()._build_sql()
-        finally:
-            self._table_name = original_table_name
+        if any((cte.get('name') if isinstance(cte, dict) else cte.name) == table for cte in self._ctes):
+            return table  # A CTE is a statement-local relation, not a schema table.
+        if not table:
+            return table
+        mapped_table = getattr(self.model_class, '__table__', None)
+        if mapped_table is not None:
+            if mapped_table.schema and mapped_table.schema != self.database:
+                raise ValueError('Explicit database conflicts with mapped table schema')
+            return sql_identifier(self.database) + '.' + sql_identifier(mapped_table.name)
+        parts = table.split('.')
+        if len(parts) > 1:
+            if len(parts) != 2 or parts[0] != self.database:
+                raise ValueError('Explicit database conflicts with qualified table name')
+            return sql_identifier(table, qualified=True)
+        return sql_identifier(self.database) + '.' + sql_identifier(table)
 
     async def _execute(self, sql, params=None):
         """Execute SQL using either transaction wrapper or client asynchronously"""
@@ -50,50 +62,8 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
             return await self.client.execute(sql, params)
 
     async def all(self) -> List:
-        """Execute query and return all results - SQLAlchemy style"""
         sql, params = self._build_sql()
-        result = await self._execute(sql, params)
-
-        # Handle both AsyncResultSet and SQLAlchemy CursorResult
-        if hasattr(result, 'rows'):
-            # AsyncResultSet from client.execute()
-            rows = result.rows
-        else:
-            # SQLAlchemy CursorResult from session.execute()
-            rows = result.fetchall()
-
-        models = []
-        for row in rows:
-            # Check if this is an aggregate query (has custom select columns)
-            if self._select_columns:
-                # For aggregate queries, return raw row data as a simple object
-                select_cols = self._extract_select_columns()
-                row_data = self._create_row_data(row, select_cols)
-                models.append(row_data)
-            else:
-                # Regular model query
-                if self._is_sqlalchemy_model:
-                    # For SQLAlchemy models, create instance directly
-                    row_dict = {}
-                    for i, col_name in enumerate(self._columns.keys()):
-                        if i < len(row):
-                            row_dict[col_name] = row[i]
-
-                    # Create SQLAlchemy model instance
-                    model = self.model_class(**row_dict)
-                    models.append(model)
-                else:
-                    # For non-SQLAlchemy models, create instance directly
-                    row_dict = {}
-                    for i, col_name in enumerate(self._columns.keys()):
-                        if i < len(row):
-                            row_dict[col_name] = row[i]
-
-                    # Create model instance
-                    model = self.model_class(**row_dict)
-                    models.append(model)
-
-        return models
+        return self._materialize(await self._execute(sql, params))
 
     async def first(self) -> Optional:
         """Execute query and return first result - SQLAlchemy style"""
