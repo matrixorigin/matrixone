@@ -3163,6 +3163,9 @@ func initFixed3() {
 		{
 			from: types.T_bit,
 			toList: []toRule{
+				// MySQL treats BIT as a number in a boolean context, so the
+				// logical operators (AND/OR/XOR/NOT) may cast it to BOOL.
+				{toType: types.T_bool, preferLevel: 2},
 				{toType: types.T_int64, preferLevel: 2},
 				{toType: types.T_uint64, preferLevel: 1},
 			},
