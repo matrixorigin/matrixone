@@ -254,17 +254,8 @@ type spoolFsyncGroup struct {
 	// only to the fileSize snapshot taken BEFORE the Sync started: a write
 	// racing an in-flight Sync is not covered by that Sync.
 	confirmedWidth int64
-	// syncing marks one appender leading a sync cycle.
+	// syncing marks one appender leading a Sync.
 	syncing bool
-	// writesSinceSync counts appends since the last completed cycle's
-	// snapshot; the leader closes over it to size the cycle's group.
-	writesSinceSync int
-	// linger is the adaptive gather window for the NEXT cycle: a crowded
-	// cycle (group >= 2) keeps the window open so bursts share one fsync; a
-	// solo cycle closes it to zero, so a lightly loaded single client pays
-	// exactly the pre-linger cost. It is never larger than
-	// spoolFsyncLingerDefault (bounded linger, no indefinite waiting).
-	linger time.Duration
 	// sealGen is bumped by sealFileLocked after its final Sync confirmed the
 	// whole file, right before closing it. An append waiter whose sealGen
 	// changed under it returns success: the seal Sync covered its write.
@@ -279,18 +270,6 @@ func (g *spoolFsyncGroup) init() {
 	g.cond.L = &g.mu
 }
 
-// spoolFsyncLingerDefault bounds the group-commit gather window: a leader
-// whose previous cycle confirmed a crowded group first holds its Sync back
-// by this much, so a burst of statements shares one fsync (the classic
-// group-commit trade: up to linger of added latency per statement against a
-// ceiling-lifting factor of ~group size). Bounded: no cycle ever lingers
-// longer.
-var spoolFsyncLingerDefault = time.Millisecond
-
-// spoolFsyncSleep lets tests replace the gather-window sleep with a
-// deterministic barrier.
-var spoolFsyncSleep = time.Sleep
-
 // adoptLocked makes f the group's current file. Content already present in f
 // (a re-opened segment) was confirmed by its previous writer, so the
 // confirmed width starts at the file's size: only NEW bytes must be fsynced.
@@ -299,7 +278,6 @@ func (g *spoolFsyncGroup) adoptLocked(f spoolSyncFile, size int64) {
 	g.f = f
 	g.fileSize = size
 	g.confirmedWidth = size
-	g.writesSinceSync = 0
 }
 
 // append writes line to the current file and blocks until an fsync of that
@@ -317,7 +295,6 @@ func (g *spoolFsyncGroup) append(line []byte) (int, error) {
 		return n, err
 	}
 	g.fileSize += int64(n)
-	g.writesSinceSync++
 	end := g.fileSize
 	for g.confirmedWidth < end {
 		if g.terminate || g.sealGen != myGen {
@@ -326,35 +303,16 @@ func (g *spoolFsyncGroup) append(line []byte) (int, error) {
 			break
 		}
 		if !g.syncing {
-			// lead the cycle: if the previous cycle was crowded, first hold
-			// the Sync back by the bounded gather window so this burst
-			// shares one fsync; a solo previous cycle skips the window, so
-			// an idle client pays nothing extra.
-			g.syncing = true
-			if linger := g.linger; linger > 0 {
-				g.mu.Unlock()
-				spoolFsyncSleep(linger)
-				g.mu.Lock()
-			}
-			// it confirms everything written up to target. A write landing
-			// while the Sync runs is NOT covered by it and keeps
-			// confirmedWidth behind fileSize.
+			// lead the fsync: it confirms everything written up to target.
+			// A write landing while the Sync runs is NOT covered by it and
+			// keeps confirmedWidth behind fileSize.
 			target := g.fileSize
 			f := g.f
+			g.syncing = true
 			g.mu.Unlock()
 			syncErr := f.Sync()
 			g.mu.Lock()
 			g.syncing = false
-			// adapt the gather window from the cycle just closed: arrivals
-			// during the window AND during the Sync itself mean a crowded
-			// pipeline — keep the window open; idleness closes it.
-			group := g.writesSinceSync
-			g.writesSinceSync = 0
-			if group >= 2 {
-				g.linger = spoolFsyncLingerDefault
-			} else {
-				g.linger = 0
-			}
 			if syncErr != nil && g.syncErr == nil {
 				g.syncErr = syncErr
 			}
