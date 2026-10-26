@@ -74,6 +74,18 @@ rollback or absence of durable effects. Sync driver timeouts remain per query.
 Native clone source visibility is release-dependent; integration tests compare
 with an equivalent independent native transaction before asserting rollback.
 
+## Local admission and buffered consumption
+
+Explicit configuration key presence takes precedence before environment lookup
+or conversion, including zero, False, empty strings and None. Unoverridden
+numeric environment settings still convert or fail visibly. All configuration
+outputs share this owner and preserve their existing kwargs/tuple translations.
+
+Both buffered result wrappers validate integer-index batch sizes before moving
+their cursor. Negative sizes raise ValueError and preserve remaining rows.
+Noninteger sizes retain TypeError, while bool and NumPy integer inputs retain
+Python's integer-index semantics. No network or server cursor is involved.
+
 ## Qualification
 
 The required runner selects nonempty offline or explicit server contracts,

@@ -18,6 +18,8 @@ MatrixOne Async Client - Asynchronous implementation
 
 from __future__ import annotations
 
+import operator
+
 try:
     import aiomysql
 except ImportError:
@@ -87,6 +89,9 @@ class AsyncResultSet:
 
     def fetchmany(self, size: int = 1) -> List[Tuple]:
         """Fetch many rows"""
+        size = operator.index(size)
+        if size < 0:
+            raise ValueError('size must be non-negative')
         start = self._cursor
         end = min(start + size, len(self.rows))
         rows = self.rows[start:end]

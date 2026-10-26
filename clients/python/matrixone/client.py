@@ -18,6 +18,8 @@ MatrixOne Client - Basic implementation
 
 from __future__ import annotations
 
+import operator
+
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
@@ -3081,6 +3083,9 @@ class ResultSet:
 
     def fetchmany(self, size: int = 1) -> List[Tuple[Any, ...]]:
         """Fetch many rows"""
+        size = operator.index(size)
+        if size < 0:
+            raise ValueError('size must be non-negative')
         start = self._cursor
         end = min(start + size, len(self.rows))
         rows = self.rows[start:end]
