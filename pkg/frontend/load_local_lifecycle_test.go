@@ -149,6 +149,12 @@ func (w *interruptibleLoadLocalWriter) ClearLoadLocalIOInterrupt() {
 	w.ioses.ClearLoadLocalIOInterrupt()
 }
 
+// LoadLocalFramingBroken surfaces the real connection's lost-packet-boundary
+// state so the drain tests assert the retire decision taken on it.
+func (w *interruptibleLoadLocalWriter) LoadLocalFramingBroken() bool {
+	return w.ioses.LoadLocalFramingBroken()
+}
+
 func (w *interruptibleLoadLocalWriter) Disconnect() error {
 	w.disconnects.Add(1)
 	return w.ioses.Disconnect()
@@ -1025,6 +1031,357 @@ func TestLoadLocalInterruptCoversDeadlineArmWindow(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, []byte{'q'}, payload)
 			require.NoError(t, <-written)
+		})
+	}
+}
+
+// A cancellation that lands while the upload packet reader is mid-frame —
+// part of the header or part of the payload already consumed — leaves the
+// connection's packet boundary unknown. The owner must retire that
+// connection: every byte after it still belongs to the interrupted frame and
+// must never be re-framed as an upload EOF (which would authorize reuse) nor
+// decoded as the next command. The watcher gate fixes the order deterministically:
+// the socket interrupt executes strictly before the masquerade tail is offered,
+// so the offered bytes can only be consumed by a drain that forgot the partial
+// frame — never by the interrupted read itself.
+func TestProcessLoadLocalBrokenFrameCancelRetiresConn(t *testing.T) {
+	for _, name := range []string{"partial header", "partial payload"} {
+		t.Run(name, func(t *testing.T) {
+			ses, protocol, client := newInterruptibleLoadLocal(t)
+			protocol.interruptEntered = make(chan struct{}, 1)
+			protocol.interruptGate = make(chan struct{})
+			protocol.interruptApplied = make(chan struct{}, 1)
+			releaseInterruptGate := protocol.releaseInterruptGate
+			t.Cleanup(releaseInterruptGate)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			ec := newTestExecCtx(ctx, gomock.NewController(t))
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "test.csv"}}
+			reader, writer := io.Pipe()
+			t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
+			done := make(chan error, 1)
+			go func() { done <- processLoadLocal(ctx, ses, ec, param, writer, reader) }()
+			select {
+			case <-protocol.reading:
+			case <-time.After(5 * time.Second):
+				t.Fatal("upload did not enter network read")
+			}
+			// net.Pipe writes return only after those bytes have been consumed:
+			// the owner is now parked INSIDE one upload frame.
+			if name == "partial header" {
+				_, err := client.Write([]byte{1, 0}) // 2 of 4 header bytes
+				require.NoError(t, err)
+			} else {
+				// Full header (8-byte payload announced) plus 2 payload bytes:
+				// 6 more payload bytes were still owed when the interrupt hit.
+				_, err := client.Write([]byte{8, 0, 0, 1, 's', 'e'})
+				require.NoError(t, err)
+			}
+			cancel()
+			select {
+			case <-protocol.interruptEntered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("watcher never reached its socket interrupt")
+			}
+			releaseInterruptGate()
+			select {
+			case <-protocol.interruptApplied:
+			case <-time.After(5 * time.Second):
+				t.Fatal("watcher interrupt did not execute")
+			}
+			// The socket interrupt has executed: the interrupted read failed
+			// mid-frame and NO server read is in flight. Offer the masquerade
+			// tail: an EMPTY upload packet (the protocol EOF marker) that a
+			// boundary-forgetting drain accepts as EOF to justify reuse. Its
+			// write result is deliberately not asserted: a retired connection
+			// fails it, a desynced drain consumes it.
+			_, _ = client.Write([]byte{0, 0, 0, 5})
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(5 * time.Second):
+				t.Fatal("cancelled upload did not terminate")
+			}
+			require.EqualValues(t, 1, protocol.disconnects.Load(),
+				"an upload interrupted mid-frame must retire the connection: its packet boundary is unknown")
+			require.EqualValues(t, 1, protocol.frees.Load())
+			// File bytes must never surface as the payload of a later packet:
+			// offer what a reused connection would decode as the next command.
+			written := make(chan error, 1)
+			go func() {
+				_, err := client.Write([]byte{0x0b, 0, 0, 0, 0x03, 's', 'e', 'l', 'e', 'c', 't', ' ', '1', '2', '3'})
+				written <- err
+			}()
+			payload, err := protocol.ioses.ReadLoadLocalPacketWithTimeout(300*time.Millisecond, time.Time{})
+			require.Error(t, err, "a retired connection must not decode further client bytes")
+			require.Empty(t, payload, "upload file bytes must never be decoded as a command packet")
+			select {
+			case err := <-written:
+				require.Error(t, err, "client writes must fail once the connection is retired")
+			case <-time.After(5 * time.Second):
+				t.Fatal("client write did not settle")
+			}
+		})
+	}
+}
+
+// The lost-boundary contract must hold through the production chain, not just
+// the test stroke: MysqlResp -> *MysqlProtocolImpl -> *Conn. Drive a partial
+// frame through the real proxy chain — a header or payload prefix consumed by
+// a read that then dies — and pin that the protocol reports the lost boundary
+// and the drain refuses to resync WITHOUT consuming even an offered fake EOF;
+// the offered tail settles only when the connection is retired. The
+// safe-boundary reuse happy path through the same chain stays pinned by
+// TestProductionMysqlRrWrDrainsFiniteUpload.
+func TestDrainRefusesBrokenFrameThroughProductionChain(t *testing.T) {
+	for _, name := range []string{"partial header", "partial payload"} {
+		t.Run(name, func(t *testing.T) {
+			server, client := net.Pipe()
+			t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+			require.NoError(t, client.SetDeadline(time.Now().Add(5*time.Second)))
+			sv := &config.FrontendParameters{}
+			sv.SetDefaultValues()
+			allocator := NewLeakCheckAllocator()
+			conn, err := NewIOSessionWithOptions(server, config.NewParameterUnit(sv, nil, nil, nil), "",
+				WithIOSessionAllocator(allocator))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.NoError(t, conn.Close())
+				require.True(t, allocator.CheckBalance(), "connection/upload buffers must be released")
+			})
+			protocol := &MysqlProtocolImpl{tcpConn: conn}
+			ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(protocol)}}
+			ec := newTestExecCtx(context.Background(), gomock.NewController(t))
+
+			// Offer only a frame prefix; the read consumes it and dies on the
+			// per-read timeout with the frame unfinished, like a cancellation
+			// interrupt landing mid-frame.
+			written := make(chan error, 1)
+			if name == "partial header" {
+				go func() { _, err := client.Write([]byte{8, 0}); written <- err }()
+			} else {
+				go func() { _, err := client.Write([]byte{8, 0, 0, 1, 's', 'e'}); written <- err }()
+			}
+			_, err = protocol.ReadLoadLocalPacketWithTimeout(200*time.Millisecond, time.Time{})
+			require.Error(t, err, "the unfinished frame must fail, not linger")
+			require.NoError(t, <-written)
+			require.True(t, protocol.LoadLocalFramingBroken(),
+				"a read failed mid-frame must mark the packet boundary as lost")
+
+			// Offer the fake EOF tail BEFORE the drain runs: if any drain byte
+			// were re-framed as the protocol EOF marker, this write would
+			// complete and the drain would report a resync.
+			tail := make(chan error, 1)
+			go func() { _, err := client.Write([]byte{0, 0, 0, 5}); tail <- err }()
+			drained := make(chan bool, 1)
+			go func() { drained <- drainLoadLocalUpload(ses, ec, protocol) }()
+			select {
+			case eof := <-drained:
+				require.False(t, eof, "a lost packet boundary must retire the connection, not drain it")
+			case <-time.After(5 * time.Second):
+				t.Fatal("drain parked on a connection whose boundary is unknown")
+			}
+			select {
+			case <-tail:
+				t.Fatal("drain consumed file bytes after the frame boundary was lost")
+			default:
+			}
+			require.NoError(t, protocol.Disconnect())
+			require.Error(t, <-tail, "the offered tail must die with the retired connection")
+		})
+	}
+}
+
+// scriptedTimeoutError is the net.Error read failure a deadline/interrupt
+// produces; it deliberately satisfies net.Error so production timeout
+// classification keeps treating it like a real expiry.
+type scriptedTimeoutError struct{}
+
+func (e scriptedTimeoutError) Error() string   { return "scripted partial read expiry" }
+func (e scriptedTimeoutError) Timeout() bool   { return true }
+func (e scriptedTimeoutError) Temporary() bool { return true }
+
+// dataErrConn scripts the first len(script) underlying Conn.Read calls and
+// passes everything else through to the wrapped connection. A scripted read
+// returns its staged bytes AND its error in the SAME call — an explicitly
+// legal io.Reader/net.Conn shape (n > 0, err != nil), e.g. bytes copied out
+// before a deadline fires — which a byte counter that only adds the count on
+// success silently drops. The staging is at the transport edge only; the
+// framing reader, interrupt/drain admission and retire decision above it are
+// the real production chain.
+type dataErrConn struct {
+	net.Conn
+	script []scriptedRead
+	next   atomic.Int32
+}
+
+type scriptedRead struct {
+	prefix  []byte
+	err     error
+	release chan struct{} // non-nil: the scripted read parks until closed
+}
+
+func (c *dataErrConn) Read(p []byte) (int, error) {
+	i := int(c.next.Add(1)) - 1
+	if i < len(c.script) {
+		s := c.script[i]
+		if s.release != nil {
+			<-s.release
+		}
+		return copy(p, s.prefix), s.err
+	}
+	return c.Conn.Read(p)
+}
+
+// A cancellation interrupt can fire while a single underlying Read delivers
+// bytes AND its error in one call (n > 0, err != nil): those bytes were still
+// consumed off the wire, so the frame boundary is already lost. Byte
+// accounting that only credits fully successful reads undercounts to zero on
+// the first header read and lets a drain re-frame file bytes as the upload
+// EOF. Both stages of one frame are pinned — partial header (the
+// discriminating case: no earlier stage can rescue the count) and a clean
+// header followed by a data+error payload read (payload-stage accounting
+// control) — through the real processLoadLocal owner and its watcher.
+func TestProcessLoadLocalDataPlusErrorCancelRetiresConn(t *testing.T) {
+	for _, name := range []string{"partial header", "clean header, partial payload"} {
+		t.Run(name, func(t *testing.T) {
+			ses, protocol, client := newInterruptibleLoadLocal(t)
+			protocol.interruptEntered = make(chan struct{}, 1)
+			protocol.interruptGate = make(chan struct{})
+			protocol.interruptApplied = make(chan struct{}, 1)
+			releaseInterruptGate := protocol.releaseInterruptGate
+			t.Cleanup(releaseInterruptGate)
+			scriptRelease := make(chan struct{})
+			// Idempotent, early-registered release: a Fatal/require failure
+			// anywhere below must not strand the reader parked inside
+			// dataErrConn's scripted wait — closing the underlying net.Conn
+			// does NOT unblock that channel wait. Registered after (i.e.
+			// running before, LIFO) the connection-closing cleanups of
+			// newInterruptibleLoadLocal, the released reader settles while the
+			// socket and pipe still exist. The normal path uses the same
+			// action, so success and failure share one release order.
+			var scriptReleaseOnce sync.Once
+			releaseScriptRead := func() {
+				scriptReleaseOnce.Do(func() { close(scriptRelease) })
+			}
+			t.Cleanup(releaseScriptRead)
+			var script []scriptedRead
+			if name == "partial header" {
+				// Single underlying read answers the 4-byte header request
+				// with 2 bytes AND the expiry error in one call.
+				script = []scriptedRead{
+					{prefix: []byte{1, 0}, err: scriptedTimeoutError{}, release: scriptRelease},
+				}
+			} else {
+				// Clean header, then ONE payload read delivers 2 of 8 payload
+				// bytes together with the expiry error.
+				script = []scriptedRead{
+					{prefix: []byte{8, 0, 0, 1}},
+					{prefix: []byte{'s', 'e'}, err: scriptedTimeoutError{}, release: scriptRelease},
+				}
+			}
+			scripted := &dataErrConn{Conn: protocol.ioses.conn, script: script}
+			protocol.ioses.UseConn(scripted)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			ec := newTestExecCtx(ctx, gomock.NewController(t))
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "test.csv"}}
+			reader, writer := io.Pipe()
+			t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
+			done := make(chan error, 1)
+			// ownerExited is the cleanup-owned shutdown witness: it closes when
+			// the owner goroutine returns and is never drained by the normal
+			// case, so a body that received done — or died before it — can
+			// never mask a still-running owner (or its internal watcher).
+			ownerExited := make(chan struct{})
+			go func() {
+				defer close(ownerExited)
+				done <- processLoadLocal(ctx, ses, ec, param, writer, reader)
+			}()
+			// Failure-safe owner join, registered immediately at launch so it
+			// is armed before every wait/assert below (running FIRST, LIFO,
+			// before the pipe/cancel/gate cleanups above and the connection/
+			// allocator cleanups inside newInterruptibleLoadLocal). Ordered
+			// teardown: cancel the ctx, idempotently release both gates, fail
+			// the real pipe/socket I/O from the test side only (reader/writer/
+			// client ends — no Conn buffer is touched before the join), THEN
+			// boundedly wait for the owner. The owner joins its internal
+			// watcher before returning (its joinWatcher defer), so owner exit
+			// also proves watcher exit; only afterwards may the helper's
+			// Conn.Close/CheckBalance run. A join timeout fails the test
+			// loudly — never inferred away from a closed channel or a
+			// buffered done.
+			t.Cleanup(func() {
+				cancel()
+				releaseInterruptGate()
+				releaseScriptRead()
+				_ = reader.Close()
+				_ = writer.Close()
+				_ = client.Close()
+				select {
+				case <-ownerExited:
+				case <-time.After(5 * time.Second):
+					t.Errorf("processLoadLocal owner did not exit within 5s during cleanup")
+				}
+			})
+			select {
+			case <-protocol.reading:
+			case <-time.After(5 * time.Second):
+				t.Fatal("upload did not enter network read")
+			}
+			cancel()
+			select {
+			case <-protocol.interruptEntered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("watcher never reached its socket interrupt")
+			}
+			releaseInterruptGate()
+			select {
+			case <-protocol.interruptApplied:
+			case <-time.After(5 * time.Second):
+				t.Fatal("watcher interrupt did not execute")
+			}
+			// The interrupt has executed; only now does the stalled read
+			// deliver its data+error pair, so no other read can absorb the
+			// staged bytes: consumed-upon-error is the only path that can
+			// observe them. The normal path takes the same idempotent release
+			// the failure-safe cleanup holds.
+			releaseScriptRead()
+			// Offer the masquerade tail (its result is deliberately not
+			// asserted: a retired connection fails it, a desynced drain
+			// consumes it).
+			_, _ = client.Write([]byte{0, 0, 0, 5})
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(5 * time.Second):
+				t.Fatal("cancelled upload did not terminate")
+			}
+			require.EqualValues(t, 1, protocol.disconnects.Load(),
+				"bytes delivered with the read error were consumed: the boundary is unknown and the connection must retire")
+			require.True(t, protocol.LoadLocalFramingBroken(),
+				"a data+error read must count its delivered bytes toward the broken frame")
+			// The state is sticky: neither interrupt clearing nor connection
+			// teardown revives a lost boundary; only a fresh connection is clean.
+			protocol.ClearLoadLocalIOInterrupt()
+			require.True(t, protocol.LoadLocalFramingBroken(),
+				"ClearLoadLocalIOInterrupt must not revive a lost packet boundary")
+			require.EqualValues(t, 1, protocol.frees.Load())
+			// File bytes must never surface as the payload of a later packet.
+			written := make(chan error, 1)
+			go func() {
+				_, err := client.Write([]byte{0x0b, 0, 0, 0, 0x03, 's', 'e', 'l', 'e', 'c', 't', ' ', '1', '2', '3'})
+				written <- err
+			}()
+			payload, err := protocol.ioses.ReadLoadLocalPacketWithTimeout(300*time.Millisecond, time.Time{})
+			require.Error(t, err, "a retired connection must not decode further client bytes")
+			require.Empty(t, payload, "upload file bytes must never be decoded as a command packet")
+			select {
+			case err := <-written:
+				require.Error(t, err, "client writes must fail once the connection is retired")
+			case <-time.After(5 * time.Second):
+				t.Fatal("client write did not settle")
+			}
 		})
 	}
 }

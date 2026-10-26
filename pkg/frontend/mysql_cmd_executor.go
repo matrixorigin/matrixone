@@ -5386,6 +5386,14 @@ var (
 type loadLocalDrainCapable interface {
 	InterruptLoadLocalIO()
 	ClearLoadLocalIOInterrupt()
+	// LoadLocalFramingBroken reports that an upload read failed mid-frame
+	// (partial header, a header whose payload was never read, or a partial
+	// payload), so the connection's packet boundary is unknown: the bytes a
+	// drain would re-frame as the next packet still belong to the interrupted
+	// frame. The drain must then refuse to resync — accepting a re-framed
+	// empty packet as the upload EOF would leave the true frame remainder to
+	// be decoded as commands — and the caller retires the connection.
+	LoadLocalFramingBroken() bool
 	ReadLoadLocalPacketWithTimeout(time.Duration, time.Time) ([]byte, error)
 }
 
@@ -5468,7 +5476,10 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 		return
 	}
 	// The client has accepted the upload; a later cancellation or failure
-	// drains its finite remainder before the command boundary is answered.
+	// drains its finite remainder before the command boundary is answered —
+	// provided the upload can still be re-framed at a known packet boundary:
+	// if the upload read died mid-frame, the boundary is unknown and the
+	// connection is retired instead (see loadLocalDrainCapable/drain).
 	requestAccepted := true
 	// drainOnExit requests the bounded post-failure drain below for an ordinary
 	// (non-cancellation) error, so the SQL error — not 2013 — answers the
@@ -5611,6 +5622,17 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 // within its budgets. The empty upload packet is the protocol EOF marker (see
 // readThenWrite).
 func drainLoadLocalUpload(ses FeSession, execCtx *ExecCtx, drainer loadLocalDrainCapable) bool {
+	// A read interrupted mid-frame (partial header, a complete header whose
+	// payload was never read, or a partial payload) consumed bytes without
+	// reaching the frame end: the next byte on the wire is NOT a packet
+	// boundary, so a fresh packet read here could re-frame file bytes as an
+	// empty upload packet (a fake EOF authorizing reuse) and leave the true
+	// remainder to be decoded as commands. Only a clean boundary may drain;
+	// an unknown one retires the connection.
+	if drainer.LoadLocalFramingBroken() {
+		ses.Errorf(execCtx.reqCtx, "load local upload interrupted mid-packet: packet boundary unknown, retiring connection")
+		return false
+	}
 	deadline := time.Now().Add(loadLocalDrainMaxWait)
 	var drainedBytes int64
 	for {

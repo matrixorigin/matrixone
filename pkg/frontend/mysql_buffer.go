@@ -230,6 +230,17 @@ type Conn struct {
 	// owner clears it, after the watcher is joined, before draining or
 	// reusing the socket.
 	loadLocalIOInterrupt atomic.Bool
+	// loadLocalFrameBroken records that a load-local packet read failed after
+	// consuming only part of a frame (a partial header, a complete header
+	// whose payload was never read, or a partial payload). From that failure
+	// on, the first byte of what looks like the next packet still belongs to
+	// the interrupted frame: the packet boundary of the connection is unknown
+	// and file bytes can re-frame as an empty upload packet (a fake EOF) or a
+	// later command. The flag is deliberately sticky — no interrupt clear and
+	// no later successful read may revive a boundary that was already lost —
+	// so it can never again authorize connection reuse; the upload owner must
+	// retire the connection instead of draining it.
+	loadLocalFrameBroken atomic.Bool
 	// loadLocalMu serializes deadline installs with InterruptLoadLocalIO and
 	// ClearLoadLocalIOInterrupt: a deadline is chosen and armed atomically
 	// w.r.t. the cancellation watcher, so an interrupt landing inside the
@@ -488,6 +499,11 @@ func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
 // absolute point, so one stalling header or payload cannot outlive the drain.
 func (c *Conn) ReadLoadLocalPacketWithTimeout(timeout time.Duration, deadline time.Time) (_ []byte, err error) {
 	var packetLength int
+	// consumed counts the bytes of THIS frame already taken off the wire. An
+	// error after any of them (partial header, a complete header whose payload
+	// was never read, or a partial payload) means the next unread byte is not
+	// a packet boundary: the interrupted frame's remainder still owns it.
+	var consumed int
 	defer func() {
 		if rErr := recover(); rErr != nil {
 			_, ok := rErr.(*moerr.Error)
@@ -498,10 +514,15 @@ func (c *Conn) ReadLoadLocalPacketWithTimeout(timeout time.Duration, deadline ti
 			}
 		}
 		if err != nil {
+			if consumed > 0 {
+				c.loadLocalFrameBroken.Store(true)
+			}
 			c.FreeLoadLocal()
 		}
 	}()
-	err = c.ReadNBytesIntoBufWithTimeout(c.header[:], HeaderLengthOfTheProtocol, timeout, deadline)
+	var n int
+	n, err = c.ReadNBytesIntoBufWithTimeout(c.header[:], HeaderLengthOfTheProtocol, timeout, deadline)
+	consumed += n
 	if err != nil {
 		return
 	}
@@ -525,27 +546,46 @@ func (c *Conn) ReadLoadLocalPacketWithTimeout(timeout time.Duration, deadline ti
 		}
 	}
 
-	err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, packetLength, timeout, deadline)
+	n, err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, packetLength, timeout, deadline)
+	consumed += n
 	if err != nil {
 		return
 	}
 	return c.loadLocalBuf.data[:packetLength], err
 }
 
-// ReadNBytesIntoBufWithTimeout reads specified bytes from the network with a timeout.
-// This is used for LOAD DATA LOCAL operations.
-func (c *Conn) ReadNBytesIntoBufWithTimeout(buf []byte, n int, timeout time.Duration, deadline time.Time) error {
+// ReadNBytesIntoBufWithTimeout reads n bytes from the network into buf with a
+// timeout. This is used for LOAD DATA LOCAL packet framing, so it also reports
+// how many bytes were consumed before a failure: a caller that loses bytes
+// mid-frame no longer sits on a packet boundary. Bytes and error can arrive in
+// the SAME underlying read (the io.Reader/net.Conn contract allows n > 0 with
+// err != nil — e.g. bytes copied out before a deadline fires), so the count is
+// credited before the error is checked; dropping those bytes would pretend the
+// frame was never entered.
+func (c *Conn) ReadNBytesIntoBufWithTimeout(buf []byte, n int, timeout time.Duration, deadline time.Time) (int, error) {
 	var err error
 	var read int
 	var readLength int
 	for readLength < n {
 		read, err = c.ReadFromConnWithTimeout(buf[readLength:n], timeout, deadline)
-		if err != nil {
-			return err
-		}
 		readLength += read
+		if err != nil {
+			return readLength, err
+		}
 	}
-	return err
+	return readLength, nil
+}
+
+// LoadLocalFramingBroken reports whether a load-local packet read on this
+// connection failed after consuming only part of a frame (a partial header, a
+// complete header whose payload was never read, or a partial payload). Once
+// true, the packet boundary is permanently unknown: any later file byte can
+// re-frame as an empty upload packet (a fake EOF) or a subsequent command, so
+// the upload owner must retire the connection instead of draining or reusing
+// it. The flag is sticky by design — ClearLoadLocalIOInterrupt lifts only the
+// I/O interrupt, never the framing state.
+func (c *Conn) LoadLocalFramingBroken() bool {
+	return c.loadLocalFrameBroken.Load()
 }
 
 func (c *Conn) FreeLoadLocal() {
