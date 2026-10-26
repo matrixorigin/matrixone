@@ -205,6 +205,14 @@ func TestDropAccountDuringAsyncIndexInit(t *testing.T) {
 	}
 	_, err = conn.ExecContext(ctx, "create database init_clone clone init_source")
 	require.NoError(t, err)
+	var atomicInitJobs int
+	require.NoError(t, admins[0].QueryRowContext(ctx, `
+		select count(*) from mo_catalog.mo_iscp_log
+		where account_id = ? and drop_at is null
+		  and coalesce(json_unquote(json_extract(job_spec, '$.InitSQL')), '') != ''
+		  and cast(coalesce(json_unquote(json_extract(job_status, '$.LifecycleVersion')), '0') as unsigned) >= 1`,
+		accountID).Scan(&atomicInitJobs))
+	require.Equal(t, 1, atomicInitJobs, "fresh clone registration must persist atomic initialization provenance")
 	var initializerCN int
 	select {
 	case initializerCN = <-blocked:
