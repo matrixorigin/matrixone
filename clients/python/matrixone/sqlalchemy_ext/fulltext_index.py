@@ -641,7 +641,7 @@ class FulltextSearchBuilder:
             builder.order_by("score DESC")
 
         # Add LIMIT/OFFSET clause
-        if self.limit_value:
+        if self.limit_value is not None:
             builder.limit(self.limit_value)
             if self.offset_value:
                 builder.offset(self.offset_value)
