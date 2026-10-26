@@ -112,12 +112,15 @@ class BasePubSubManager:
         """Get the executor for SQL execution (session or client)"""
         return self.executor if self.executor else self._client
 
+    def _publication_accounts(self, account):
+        return 'ALL' if account.strip().lower() == 'all' else self._client._escape_identifier(account)
+
     def _build_create_database_publication_sql(self, name: str, database: str, account: str) -> str:
         """Build CREATE PUBLICATION DATABASE SQL"""
         return (
             f"CREATE PUBLICATION {self._client._escape_identifier(name)} "
             f"DATABASE {self._client._escape_identifier(database)} "
-            f"ACCOUNT {self._client._escape_identifier(account)}"
+            f"ACCOUNT {self._publication_accounts(account)}"
         )
 
     def _build_create_table_publication_sql(self, name: str, database: str, table: str, account: str) -> str:
@@ -126,7 +129,7 @@ class BasePubSubManager:
             f"CREATE PUBLICATION {self._client._escape_identifier(name)} "
             f"DATABASE {self._client._escape_identifier(database)} "
             f"TABLE {self._client._escape_identifier(table)} "
-            f"ACCOUNT {self._client._escape_identifier(account)}"
+            f"ACCOUNT {self._publication_accounts(account)}"
         )
 
     def _build_alter_publication_sql(
@@ -140,7 +143,7 @@ class BasePubSubManager:
         parts = [f"ALTER PUBLICATION {self._client._escape_identifier(name)}"]
 
         if account:
-            parts.append(f"ACCOUNT {self._client._escape_identifier(account)}")
+            parts.append(f"ACCOUNT {self._publication_accounts(account)}")
         if database:
             parts.append(f"DATABASE {self._client._escape_identifier(database)}")
         if table:
@@ -148,7 +151,9 @@ class BasePubSubManager:
 
         return " ".join(parts)
 
-    def _build_create_subscription_sql(self, subscription_name: str, publication_name: str, publisher_account: str) -> str:
+    def _build_create_subscription_sql(
+        self, subscription_name: str, publication_name: str, publisher_account: str
+    ) -> str:
         """Build CREATE DATABASE (subscription) SQL"""
         return (
             f"CREATE DATABASE {self._client._escape_identifier(subscription_name)} "
@@ -292,10 +297,12 @@ class PubSubManager(BasePubSubManager):
             if result is None:
                 raise PubSubError(f"Failed to create database publication '{name}'")
 
-            return self.get_publication(name)
-
         except Exception as e:
-            raise PubSubError(f"Failed to create database publication '{name}': {e}") from None
+            raise PubSubError(f"Failed to create database publication '{name}': {e}") from e
+        try:
+            return self.get_publication(name)
+        except Exception as e:
+            raise PubSubError(f"Publication CREATE acknowledged for '{name}'; metadata readback failed: {e}") from e
 
     def create_table_publication(self, name: str, database: str, table: str, account: str) -> Publication:
         """Create table-level publication"""
@@ -305,10 +312,12 @@ class PubSubManager(BasePubSubManager):
             if result is None:
                 raise PubSubError(f"Failed to create table publication '{name}'")
 
-            return self.get_publication(name)
-
         except Exception as e:
-            raise PubSubError(f"Failed to create table publication '{name}': {e}") from None
+            raise PubSubError(f"Failed to create table publication '{name}': {e}") from e
+        try:
+            return self.get_publication(name)
+        except Exception as e:
+            raise PubSubError(f"Publication CREATE acknowledged for '{name}'; metadata readback failed: {e}") from e
 
     def get_publication(self, name: str) -> Publication:
         """Get publication by name"""
@@ -322,7 +331,7 @@ class PubSubManager(BasePubSubManager):
 
             # Find publication with matching name
             for row in result.rows:
-                if row[0] == name:
+                if row[0].lower() == name.lower():
                     return self._row_to_publication(row)
 
             raise PubSubError(f"Publication '{name}' not found")
@@ -399,7 +408,9 @@ class PubSubManager(BasePubSubManager):
         except Exception as e:
             raise PubSubError(f"Failed to show create publication '{name}': {e}") from None
 
-    def create_subscription(self, subscription_name: str, publication_name: str, publisher_account: str) -> Subscription:
+    def create_subscription(
+        self, subscription_name: str, publication_name: str, publisher_account: str
+    ) -> Subscription:
         """Create subscription"""
         try:
             sql = self._build_create_subscription_sql(subscription_name, publication_name, publisher_account)
@@ -478,10 +489,12 @@ class AsyncPubSubManager(BasePubSubManager):
             if result is None:
                 raise PubSubError(f"Failed to create database publication '{name}'")
 
-            return await self.get_publication(name)
-
         except Exception as e:
-            raise PubSubError(f"Failed to create database publication '{name}': {e}")
+            raise PubSubError(f"Failed to create database publication '{name}': {e}") from e
+        try:
+            return await self.get_publication(name)
+        except Exception as e:
+            raise PubSubError(f"Publication CREATE acknowledged for '{name}'; metadata readback failed: {e}") from e
 
     async def create_table_publication(self, name: str, database: str, table: str, account: str) -> Publication:
         """Create table-level publication asynchronously"""
@@ -491,10 +504,12 @@ class AsyncPubSubManager(BasePubSubManager):
             if result is None:
                 raise PubSubError(f"Failed to create table publication '{name}'")
 
-            return await self.get_publication(name)
-
         except Exception as e:
-            raise PubSubError(f"Failed to create table publication '{name}': {e}")
+            raise PubSubError(f"Failed to create table publication '{name}': {e}") from e
+        try:
+            return await self.get_publication(name)
+        except Exception as e:
+            raise PubSubError(f"Publication CREATE acknowledged for '{name}'; metadata readback failed: {e}") from e
 
     async def get_publication(self, name: str) -> Publication:
         """Get publication by name asynchronously"""
@@ -508,7 +523,7 @@ class AsyncPubSubManager(BasePubSubManager):
 
             # Find publication with matching name
             for row in result.rows:
-                if row[0] == name:
+                if row[0].lower() == name.lower():
                     return self._row_to_publication(row)
 
             raise PubSubError(f"Publication '{name}' not found")
@@ -516,7 +531,9 @@ class AsyncPubSubManager(BasePubSubManager):
         except Exception as e:
             raise PubSubError(f"Failed to get publication '{name}': {e}")
 
-    async def list_publications(self, account: Optional[str] = None, database: Optional[str] = None) -> List[Publication]:
+    async def list_publications(
+        self, account: Optional[str] = None, database: Optional[str] = None
+    ) -> List[Publication]:
         """List publications with optional filters asynchronously"""
         try:
             sql = "SHOW PUBLICATIONS"

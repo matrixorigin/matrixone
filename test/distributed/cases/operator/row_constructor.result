@@ -409,65 +409,54 @@ drop table if exists row03;
 create table row03(col1 int unsigned,col2 bigint,col3 decimal(20,10),col4 double);
 insert into row03 values(1,39438432094940434,838209302.34094043234,3239283092.23830922);
 insert into row03 values(2,37394,-93298439024,4830403434.4329043);
+invalid input: -93298439024 beyond the range, can't be converted to Decimal128(20,10).
 insert into row03 values(3,null,null,null);
 select (col1,col2,col3) > (-1,32893,32932) from row03;
 (col1, col2, col3) > (-1, 32893, 32932)
 1
 1
-1
 select (col1,col2,col3) < (col1,col2,12345678989) from row03;
 (col1, col2, col3) < (col1, col2, 12345678989)
-1
 1
 null
 select (col1,col2,100) >= (col1,col2,50) from row03;
 (col1, col2, 100) >= (col1, col2, 50)
 1
-1
 null
 select (col1,col2,col3) <= (col1,col2,col3) from row03;
 (col1, col2, col3) <= (col1, col2, col3)
-1
 1
 null
 select (col1,col2,col3) <> (1,39438432094940434,838209302.34094043234) from row03;
 (col1, col2, col3) != (1, 39438432094940434, 838209302.34094043234)
 1
 1
-1
 select (col1,col2,col3) != (1,39438432094940434,838209302.34094043234) from row03;
 (col1, col2, col3) != (1, 39438432094940434, 838209302.34094043234)
-1
 1
 1
 select (col1 * col2,col2,col3) > (-1,32893,32932) from row03;
 (col1 * col2, col2, col3) > (-1, 32893, 32932)
 1
-1
 null
 select (col1,col2 - 10000,col3) < (col1,col2,12345678989) from row03;
 (col1, col2 - 10000, col3) < (col1, col2, 12345678989)
-1
 1
 null
 select (col1,col2 + 182901.213123,100) >= (col1,col2,50) from row03;
 (col1, col2 + 182901.213123, 100) >= (col1, col2, 50)
 1
-1
 null
 select (col1,col2,col3 / 45) <= (col1,col2,col3) from row03;
 (col1, col2, col3 / 45) <= (col1, col2, col3)
 1
-0
 null
 select (col1,col2,col3) <> (1,39438432094940434 + col1,838209302.34094043234) from row03;
 (col1, col2, col3) != (1, 39438432094940434 + col1, 838209302.34094043234)
 1
 1
-1
 select (col1,col2,col3) != (1,39438432094940434 % 20,838209302.34094043234) from row03;
 (col1, col2, col3) != (1, 39438432094940434 % 20, 838209302.34094043234)
-1
 1
 1
 drop table row03;

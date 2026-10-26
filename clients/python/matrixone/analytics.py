@@ -17,7 +17,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from .exceptions import MatrixOneError
 
@@ -297,6 +297,31 @@ def _protocol_schema(cursor):
     return schema
 
 
+def _server_file_source(path):
+    """Return matching external-scan and bounded DATALINK identities."""
+    path = os.fspath(path)
+    if not isinstance(path, str) or not path or "\x00" in path:
+        raise ValueError("Server file paths must be nonempty strings without NUL")
+    if path.startswith("/"):
+        scan_path, file_path = path, path
+        uri = "file://" + quote(file_path, safe="/")
+    else:
+        parts = urlsplit(path)
+        if parts.query or parts.fragment or "?" in path or "#" in path:
+            raise ValueError("Server file URIs must not contain query or fragment components")
+        file_path = unquote(parts.path)
+        if parts.scheme == "file" and not parts.netloc and file_path.startswith("/"):
+            scan_path = file_path
+            uri = "file://" + quote(file_path, safe="/")
+        elif parts.scheme == "stage" and parts.netloc and not any(c in parts.netloc for c in "@:%\\"):
+            scan_path = uri = urlunsplit(("stage", parts.netloc, quote(file_path, safe="/"), "", ""))
+        else:
+            raise ValueError("Server files require an absolute local path, file:/// URI or stage:// URI")
+    if not file_path or "\x00" in file_path or any(c in file_path for c in "*?[]\\"):
+        raise ValueError("Explicit server file paths cannot contain glob metacharacters or backslash")
+    return scan_path, uri + "?offset=0&size=1"
+
+
 class ArrowStream:
     """Context-managed batch iterator. Early close discards its pool connection.
 
@@ -304,7 +329,9 @@ class ArrowStream:
     usual batch memory footprint. The caller must close a partially read stream.
     """
 
-    def __init__(self, engine, sql, params=None, schema=None, batch_size=65536, network_timeout=None):
+    def __init__(
+        self, engine, sql, params=None, schema=None, batch_size=65536, network_timeout=None, _source_check=None
+    ):
         if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size <= 0:
             raise ValueError("batch_size must be a positive integer")
         if engine.dialect.driver != "pymysql":
@@ -327,6 +354,7 @@ class ArrowStream:
         self._complete = False
         self._closed = False
         self.batch_size = batch_size
+        self._source_check = _source_check
         try:
             from pymysql.cursors import SSCursor
 
@@ -338,6 +366,7 @@ class ArrowStream:
                 if "STRICT_ALL_TABLES" not in modes:
                     modes.append("STRICT_ALL_TABLES")
                 session_cursor.execute("SET sql_mode = %s", (",".join(modes),))
+            self._check_sources()
             self._cursor = self._raw.cursor(SSCursor)
             self._cursor.execute(sql, params)
             if self._cursor.description is None:
@@ -346,9 +375,29 @@ class ArrowStream:
             self.schema = schema if schema is not None else self._source_schema
             if [n.casefold() for n in self.schema.names] != [d[0].casefold() for d in self._cursor.description]:
                 raise ValueError("Explicit schema names/order must match query columns")
-        except BaseException:
-            self.close()
+        except BaseException as primary:
+            self._close_after_error(primary)
             raise
+
+    def _check_sources(self):
+        if self._source_check is not None:
+            cursor = self._raw.cursor()
+            try:
+                self._source_check(cursor.execute)
+            except BaseException as primary:
+                try:
+                    cursor.close()
+                except BaseException as cleanup_error:
+                    primary.cursor_cleanup_error = cleanup_error
+                raise
+            else:
+                cursor.close()
+
+    def _close_after_error(self, primary):
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            primary.cleanup_error = cleanup_error
 
     def __iter__(self):
         return self
@@ -360,6 +409,7 @@ class ArrowStream:
             rows = self._cursor.fetchmany(self.batch_size)
             if not rows:
                 self._complete = True
+                self._check_sources()
                 self.close()
                 raise StopIteration
             pa = _arrow()
@@ -407,8 +457,8 @@ class ArrowStream:
             return pa.RecordBatch.from_arrays(arrays, schema=self.schema)
         except StopIteration:
             raise
-        except BaseException:
-            self.close()
+        except BaseException as primary:
+            self._close_after_error(primary)
             raise
 
     def to_arrow(self):
@@ -463,7 +513,7 @@ class FileRelation:
     The caller needs CREATE/DROP rights. A process crash can leave catalog entries.
     """
 
-    def __init__(self, manager, schema, sql, tables, source_checks=None):
+    def __init__(self, manager, schema, sql, tables, source_checks=None, server_sources=()):
         self._manager = manager
         self._engine = manager.engine
         self.schema = schema
@@ -471,16 +521,29 @@ class FileRelation:
         self._tables = tables
         self._closed = False
         self._source_checks = source_checks or []
+        self._server_sources = tuple(server_sources)
 
     def _validate_sources(self):
         for check in self._source_checks:
             check()
+
+    def _validate_server_sources(self, execute):
+        for source in self._server_sources:
+            # NULL is an existing empty file. Missing/permission errors must propagate.
+            result = execute("SELECT length(load_file(CAST(%s AS DATALINK)))", (source,))
+            # SQLAlchemy owns a CursorResult; the raw DBAPI adapter returns a row count.
+            close = getattr(result, "close", None)
+            if close is not None:
+                close()
 
     @property
     def sql(self):
         if self._closed:
             raise RuntimeError("File relation is closed")
         self._validate_sources()
+        if self._server_sources:
+            with self._engine.connect() as conn:
+                self._validate_server_sources(conn.exec_driver_sql)
         return self._sql
 
     def query(self, sql=None, params=None, schema=None, batch_size=65536, network_timeout=None):
@@ -493,7 +556,13 @@ class FileRelation:
         if network_timeout is None:
             network_timeout = getattr(self._manager.client, "query_timeout", 300)
         return ArrowStream(
-            self._engine, sql or "SELECT * FROM " + self._sql + " AS files", params, schema, batch_size, network_timeout
+            self._engine,
+            sql or "SELECT * FROM " + self._sql + " AS files",
+            params,
+            schema,
+            batch_size,
+            network_timeout,
+            _source_check=self._validate_server_sources,
         )
 
     def import_into(self, table):
@@ -502,12 +571,14 @@ class FileRelation:
             raise RuntimeError("File relation is closed")
         self._validate_sources()
         with _write_transaction(self._engine) as conn:
+            self._validate_server_sources(conn.exec_driver_sql)
             result = conn.exec_driver_sql(
                 (
                     "INSERT INTO %s (%s) SELECT * FROM %s AS files"
                     % (_table_name(table), ", ".join(map(_identifier, self.schema.names)), self._sql)
                 ).replace("%", "%%")
             )
+            self._validate_server_sources(conn.exec_driver_sql)
             return result.rowcount
 
     def close(self):
@@ -622,6 +693,8 @@ class AnalyticsManager:
         server_paths = files if server_paths is None else list(server_paths)
         if len(server_paths) != len(files):
             raise ValueError("server_paths must match the expanded file list")
+        server_sources = tuple(_server_file_source(path) for path in server_paths)
+        server_paths = [source[0] for source in server_sources]
 
         schemas, partitions = [], []
         for path in files:
@@ -647,18 +720,18 @@ class AnalyticsManager:
         tables, selects = [], []
         checks = []
         for path, (physical, _) in zip(files, schemas):
-            expected = _infer_schema(path, format, delimiter, filesystem) if format != "csv" else physical
+            expected = _infer_schema(path, format, delimiter, filesystem)
 
             def check(path=path, expected=expected):
+                actual = _infer_schema(path, format, delimiter, filesystem)
+                if not actual.equals(expected, check_metadata=False):
+                    raise ValueError("Source schema changed after relation creation: %s" % path)
                 if format == "csv":
                     _validate_source_columns(path, format, delimiter, filesystem, expected)
-                else:
-                    actual = _infer_schema(path, format, delimiter, filesystem)
-                    if not actual.equals(expected, check_metadata=False):
-                        raise ValueError("Source schema changed after relation creation: %s" % path)
 
             checks.append(check)
-        relation = FileRelation(self, merged, "", tables, checks)
+        relation = FileRelation(self, merged, "", tables, checks, (source[1] for source in server_sources))
+        sources_checked = False
         try:
             for path, server_path, (physical, logical), part in zip(files, server_paths, schemas, partitions):
                 table = "mo_py_files_" + uuid.uuid4().hex
@@ -676,6 +749,9 @@ class AnalyticsManager:
                 identity = None
                 try:
                     with relation._engine.begin() as conn:
+                        if not sources_checked:
+                            relation._validate_server_sources(conn.exec_driver_sql)
+                            sources_checked = True
                         identity = (conn.exec_driver_sql("SELECT DATABASE()").scalar(), table)
                         qualified = _qualified_table(*identity)
                         ddl = (
