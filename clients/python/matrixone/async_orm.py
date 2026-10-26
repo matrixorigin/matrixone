@@ -16,6 +16,8 @@
 MatrixOne Async ORM - SQLAlchemy-like interface for MatrixOne database (Async)
 """
 
+from __future__ import annotations
+
 from typing import Any, List, Optional, TypeVar
 
 from .orm import BaseMatrixOneQuery, _count_sql, _first_query
@@ -50,50 +52,8 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
             return await self.client.execute(sql, params)
 
     async def all(self) -> List:
-        """Execute query and return all results - SQLAlchemy style"""
         sql, params = self._build_sql()
-        result = await self._execute(sql, params)
-
-        # Handle both AsyncResultSet and SQLAlchemy CursorResult
-        if hasattr(result, 'rows'):
-            # AsyncResultSet from client.execute()
-            rows = result.rows
-        else:
-            # SQLAlchemy CursorResult from session.execute()
-            rows = result.fetchall()
-
-        models = []
-        for row in rows:
-            # Check if this is an aggregate query (has custom select columns)
-            if self._select_columns:
-                # For aggregate queries, return raw row data as a simple object
-                select_cols = self._extract_select_columns()
-                row_data = self._create_row_data(row, select_cols)
-                models.append(row_data)
-            else:
-                # Regular model query
-                if self._is_sqlalchemy_model:
-                    # For SQLAlchemy models, create instance directly
-                    row_dict = {}
-                    for i, col_name in enumerate(self._columns.keys()):
-                        if i < len(row):
-                            row_dict[col_name] = row[i]
-
-                    # Create SQLAlchemy model instance
-                    model = self.model_class(**row_dict)
-                    models.append(model)
-                else:
-                    # For non-SQLAlchemy models, create instance directly
-                    row_dict = {}
-                    for i, col_name in enumerate(self._columns.keys()):
-                        if i < len(row):
-                            row_dict[col_name] = row[i]
-
-                    # Create model instance
-                    model = self.model_class(**row_dict)
-                    models.append(model)
-
-        return models
+        return self._materialize(await self._execute(sql, params))
 
     async def first(self) -> Optional:
         """Execute query and return first result - SQLAlchemy style"""

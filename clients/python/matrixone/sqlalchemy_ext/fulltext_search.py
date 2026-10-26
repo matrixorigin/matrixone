@@ -78,6 +78,7 @@ Both are optional (don't filter documents) but affect ranking differently.
 
 from __future__ import annotations
 
+from .._sql_literals import fulltext_term_token
 from typing import TYPE_CHECKING, Any, List, Optional
 
 from sqlalchemy import Boolean
@@ -621,7 +622,7 @@ class FulltextQueryBuilder:
             select_parts = ["*"]
 
         if include_score:
-            score_expr = f"MATCH({columns_str}) AGAINST('{query_string}' IN {mode}) AS score"
+            score_expr = f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN {mode}) AS score"
             select_parts.append(score_expr)
 
         select_clause = f"SELECT {', '.join(select_parts)}"
@@ -633,7 +634,7 @@ class FulltextQueryBuilder:
         where_parts = []
 
         # Add fulltext search condition
-        fulltext_condition = f"MATCH({columns_str}) AGAINST('{query_string}' IN {mode})"
+        fulltext_condition = f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN {mode})"
         where_parts.append(fulltext_condition)
 
         # Add additional WHERE conditions
@@ -866,13 +867,13 @@ class FulltextFilter(ColumnElement):
             raise ValueError("Query cannot be empty")
 
         if self.mode == FulltextSearchMode.NATURAL_LANGUAGE:
-            return f"MATCH({columns_str}) AGAINST('{query_string}')"
+            return f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)})"
         elif self.mode == FulltextSearchMode.BOOLEAN:
-            return f"MATCH({columns_str}) AGAINST('{query_string}' IN BOOLEAN MODE)"
+            return f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN BOOLEAN MODE)"
         elif self.mode == FulltextSearchMode.QUERY_EXPANSION:
-            return f"MATCH({columns_str}) AGAINST('{query_string}' WITH QUERY EXPANSION)"
+            return f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} WITH QUERY EXPANSION)"
         else:
-            return f"MATCH({columns_str}) AGAINST('{query_string}')"
+            return f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)})"
 
     def label(self, name: str):
         """Create a labeled version for use in SELECT clauses.
@@ -1248,7 +1249,7 @@ class FulltextSearchBuilder:
         self._table_name: Optional[str] = None
         self._columns: List[str] = []
         self._search_mode = FulltextSearchMode.NATURAL_LANGUAGE
-        self._algorithm = FulltextSearchAlgorithm.BM25
+        self._algorithm = None
         self._query_obj = FulltextQueryBuilder()
         self._include_score = False
         self._where_conditions: List[str] = []
@@ -1335,7 +1336,10 @@ class FulltextSearchBuilder:
             # Use TF-IDF algorithm
             .with_algorithm(FulltextSearchAlgorithm.TF_IDF)
         """
-        self._algorithm = algorithm
+        normalized = str(algorithm).upper()
+        if normalized not in ('BM25', 'TF-IDF'):
+            raise ValueError('Fulltext algorithm must be BM25 or TF-IDF')
+        self._algorithm = normalized
         return self
 
     def query(self, query_string: str) -> "FulltextSearchBuilder":
@@ -1564,7 +1568,9 @@ class FulltextSearchBuilder:
         select_parts = self._select_columns.copy()
         if self._include_score:
             columns_str = ", ".join(self._columns)
-            select_parts.append(f"MATCH({columns_str}) AGAINST('{query_string}' IN {self._search_mode}) AS score")
+            select_parts.append(
+                f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN {self._search_mode}) AS score"
+            )
 
         select_clause = f"SELECT {', '.join(select_parts)}"
 
@@ -1576,7 +1582,7 @@ class FulltextSearchBuilder:
 
         # Add fulltext search condition
         columns_str = ", ".join(self._columns)
-        fulltext_condition = f"MATCH({columns_str}) AGAINST('{query_string}' IN {self._search_mode})"
+        fulltext_condition = f"MATCH({columns_str}) AGAINST({fulltext_term_token(query_string)} IN {self._search_mode})"
         where_parts.append(fulltext_condition)
 
         # Add additional WHERE conditions
@@ -1613,7 +1619,21 @@ class FulltextSearchBuilder:
             Query results
         """
         sql = self._build_sql()
-        return self.client.execute(sql)
+        if self._algorithm is None:
+            return self.client.execute(sql)
+        import inspect
+        from .._scoped_query import execute_fulltext, execute_fulltext_async
+
+        if inspect.iscoroutinefunction(self.client.execute):
+            import asyncio
+            from .._connection_options import positive_timeout
+
+            owner = getattr(self.client, 'client', None) or self.client
+            return asyncio.wait_for(
+                execute_fulltext_async(self.client, sql, self._algorithm),
+                positive_timeout(owner.query_timeout, 'query_timeout'),
+            )
+        return execute_fulltext(self.client, sql, self._algorithm)
 
     def explain(self) -> str:
         """

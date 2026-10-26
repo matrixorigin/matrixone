@@ -647,15 +647,14 @@ class AnalyticsManager:
         tables, selects = [], []
         checks = []
         for path, (physical, _) in zip(files, schemas):
-            expected = _infer_schema(path, format, delimiter, filesystem) if format != "csv" else physical
+            expected = _infer_schema(path, format, delimiter, filesystem)
 
             def check(path=path, expected=expected):
+                actual = _infer_schema(path, format, delimiter, filesystem)
+                if not actual.equals(expected, check_metadata=False):
+                    raise ValueError("Source schema changed after relation creation: %s" % path)
                 if format == "csv":
                     _validate_source_columns(path, format, delimiter, filesystem, expected)
-                else:
-                    actual = _infer_schema(path, format, delimiter, filesystem)
-                    if not actual.equals(expected, check_metadata=False):
-                        raise ValueError("Source schema changed after relation creation: %s" % path)
 
             checks.append(check)
         relation = FileRelation(self, merged, "", tables, checks)

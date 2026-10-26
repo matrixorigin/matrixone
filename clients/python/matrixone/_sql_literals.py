@@ -228,3 +228,30 @@ def substitute_parameters(sql, params, *, sql_mode=''):
         else:
             raise ValueError('Too many SQL parameters')
     return ''.join(output)
+
+
+def sql_string_token(value):
+    """Render a grammar STRING, rejecting SQL-mode-dependent escapes.
+
+    LOAD's STRING positions cannot use CAST/hex or dollar-quoted expressions.
+    Inline data containing backslashes must use a caller-owned input file;
+    paths/options themselves must not contain backslashes or NUL bytes.
+    """
+    if not isinstance(value, str) or '\x00' in value or '\\' in value:
+        raise ValueError('LOAD string tokens require text without NUL or backslashes; use a file for such inline data')
+    return "'" + value.replace("'", "''") + "'"
+
+
+def fulltext_term_token(value):
+    """Render AGAINST's STRING grammar, independent of sql_mode.
+
+    NUL and combined backslash/dollar input cannot be represented safely by
+    the supported server lexer and are rejected before query execution.
+    """
+    if not isinstance(value, str):
+        raise TypeError('Fulltext search term must be a string')
+    if '\x00' in value or ('\\' in value and '$' in value):
+        raise ValueError('Fulltext terms cannot contain NUL or both backslash and dollar')
+    if '\\' in value:
+        return '$sdk$' + value + '$sdk$'
+    return sql_string_token(value)

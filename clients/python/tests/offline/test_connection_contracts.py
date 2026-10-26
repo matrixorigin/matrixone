@@ -157,6 +157,7 @@ def test_driver_receives_sync_timeout_and_charset(monkeypatch):
         'connect_timeout': 12,
         'read_timeout': 7,
         'write_timeout': 7,
+        'local_infile': False,
         'charset': 'utf8mb4',
         'ssl_disabled': True,
     }
@@ -213,14 +214,8 @@ def test_failed_manager_init_reports_no_success(monkeypatch):
         client.connect(database='test', on_connect=[])
     assert not client.connected()
     engine.dispose.assert_called_once()
-    assert not any(
-        call.kwargs.get('success') is True
-        for call in client.logger.log_connection.call_args_list
-    )
-    assert any(
-        call.kwargs.get('success') is False
-        for call in client.logger.log_connection.call_args_list
-    )
+    assert not any(call.kwargs.get('success') is True for call in client.logger.log_connection.call_args_list)
+    assert any(call.kwargs.get('success') is False for call in client.logger.log_connection.call_args_list)
 
 
 def test_unhandled_hook_wrapper_failure_reports_no_success(monkeypatch):
@@ -233,17 +228,14 @@ def test_unhandled_hook_wrapper_failure_reports_no_success(monkeypatch):
     monkeypatch.setattr(client, '_initialize_managers', lambda: None)
     monkeypatch.setattr(
         client,
-        '_execute_connection_hook_immediately',
+        '_setup_connection_hook',
         Mock(side_effect=RuntimeError('hook failed')),
     )
     with pytest.raises(ConnectionError, match='hook failed'):
         client.connect(database='test', on_connect=[object()])
     assert not client.connected()
     engine.dispose.assert_called_once()
-    assert not any(
-        call.kwargs.get('success') is True
-        for call in client.logger.log_connection.call_args_list
-    )
+    assert not any(call.kwargs.get('success') is True for call in client.logger.log_connection.call_args_list)
 
 
 @pytest.mark.asyncio
@@ -271,22 +263,16 @@ async def test_async_unhandled_hook_wrapper_failure_reports_no_success(monkeypat
 
     from matrixone.connection_hooks import ConnectionAction
 
-    async def failing_hook(*args, **kwargs):
+    def failing_hook(*args, **kwargs):
         raise RuntimeError('async hook failed')
 
-    monkeypatch.setattr(client, '_execute_connection_hook_immediately', failing_hook)
+    monkeypatch.setattr(client, '_setup_connection_hook', failing_hook)
     with pytest.raises(ConnectionError, match='async hook failed'):
         await client.connect(database='test', on_connect=[ConnectionAction.ENABLE_ALL])
     assert not client.connected()
     engine.dispose.assert_awaited_once()
-    assert not any(
-        call.kwargs.get('success') is True
-        for call in client.logger.log_connection.call_args_list
-    )
-    assert any(
-        call.kwargs.get('success') is False
-        for call in client.logger.log_connection.call_args_list
-    )
+    assert not any(call.kwargs.get('success') is True for call in client.logger.log_connection.call_args_list)
+    assert any(call.kwargs.get('success') is False for call in client.logger.log_connection.call_args_list)
 
 
 # ─── #30062 follow-up: create_table diagnostics must not carry the password ──
