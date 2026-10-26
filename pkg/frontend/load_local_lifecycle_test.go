@@ -19,6 +19,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,11 +44,25 @@ type interruptibleLoadLocalWriter struct {
 	frees        atomic.Int32
 	blockRequest bool
 	// interruptGate deterministically parks the cancellation watcher between
-	// CloseWithError and InterruptLoadLocalIO, with interruptEntered signaling
-	// the park: the test alone decides when the socket interrupt is allowed to
-	// land, exposing owner/watcher ordering windows without sleeps.
+	// CloseWithError and InterruptLoadLocalIO. interruptEntered signals the
+	// park, interruptApplied is CLOSED after the real interrupt executed, and
+	// gateReleased guards the single release. An owner read that arrives while
+	// the gate is still held (i.e. it raced ahead of the watcher) releases the
+	// interrupt itself and waits for it — the live-failure order — so RED vs
+	// GREEN outcomes are scheduling-independent.
 	interruptEntered chan struct{}
 	interruptGate    chan struct{}
+	interruptApplied chan struct{}
+	gateReleased     atomic.Bool
+	// watcherParked marks that InterruptLoadLocalIO is actually held in the
+	// gate; only then may a racing owner read release and await it (plain
+	// upload traffic far earlier must pass through untouched).
+	watcherParked atomic.Bool
+	appliedOnce   sync.Once
+	// windowHit fires the first time an owner action (clear or network read)
+	// arrives while the watcher still holds the interrupt: the observable
+	// marker that the owner raced ahead of the cancellation watcher.
+	windowHit chan struct{}
 }
 
 func (w *interruptibleLoadLocalWriter) WriteLocalInfileRequest(string) error {
@@ -64,6 +79,7 @@ func (w *interruptibleLoadLocalWriter) ReadLoadLocalPacket() ([]byte, error) {
 	case w.reading <- struct{}{}:
 	default:
 	}
+	w.awaitPendingInterruptBeforeRead()
 	return w.ioses.ReadLoadLocalPacket()
 }
 
@@ -72,6 +88,7 @@ func (w *interruptibleLoadLocalWriter) ReadLoadLocalPacketWithTimeout(timeout ti
 	case w.reading <- struct{}{}:
 	default:
 	}
+	w.awaitPendingInterruptBeforeRead()
 	return w.ioses.ReadLoadLocalPacketWithTimeout(timeout, deadline)
 }
 
@@ -80,15 +97,55 @@ func (w *interruptibleLoadLocalWriter) InterruptLoadLocalIO() {
 	if w.interruptGate != nil {
 		// Deterministic hold: the watcher already retired the pipe (so the
 		// owner's pipe write failed) but has not touched the socket yet. The
-		// test releases the gate to land the interrupt in the exact window it
-		// wants to pin.
+		// release decides which window the interrupt lands in.
 		w.interruptEntered <- struct{}{}
+		w.watcherParked.Store(true)
 		<-w.interruptGate
+		w.ioses.InterruptLoadLocalIO()
+		w.appliedOnce.Do(func() { close(w.interruptApplied) })
+		return
 	}
 	w.ioses.InterruptLoadLocalIO()
 }
 
+// releaseInterruptGate closes the watcher's gate exactly once; it is the only
+// way the parked InterruptLoadLocalIO may proceed to touch the socket.
+func (w *interruptibleLoadLocalWriter) releaseInterruptGate() {
+	if w.interruptGate != nil && w.gateReleased.CompareAndSwap(false, true) {
+		close(w.interruptGate)
+	}
+}
+
+// noteOwnerActionWhileWatcherPending observes an owner action (interrupt
+// clear or network read) that arrived while the cancellation watcher still
+// holds the socket interrupt. That very order — owner ahead of the watcher —
+// is the #30640 ordering race: signal windowHit, release the interrupt itself,
+// and block the action until the interrupt has executed, so the caller resumes
+// in exactly the live-failure order, scheduling-free.
+func (w *interruptibleLoadLocalWriter) noteOwnerActionWhileWatcherPending() {
+	if w.interruptGate == nil || w.gateReleased.Load() || !w.watcherParked.Load() {
+		return
+	}
+	if w.windowHit != nil {
+		select {
+		case w.windowHit <- struct{}{}:
+		default:
+		}
+	}
+	w.releaseInterruptGate()
+	<-w.interruptApplied
+}
+
+// awaitPendingInterruptBeforeRead catches a broken owner whose next action is
+// a network read; the clear path below catches a clear-first order.
+func (w *interruptibleLoadLocalWriter) awaitPendingInterruptBeforeRead() {
+	w.noteOwnerActionWhileWatcherPending()
+}
+
 func (w *interruptibleLoadLocalWriter) ClearLoadLocalIOInterrupt() {
+	// An owner that clears a still-pending watcher interrupt is exactly the
+	// missing join: forced into the live-failure order here.
+	w.noteOwnerActionWhileWatcherPending()
 	w.ioses.ClearLoadLocalIOInterrupt()
 }
 
@@ -646,9 +703,10 @@ func TestProductionMysqlRrWrDrainsFiniteUpload(t *testing.T) {
 // promptly; with the per-read-only check a 16MiB payload could hang for days.
 func TestDrainAbsoluteDeadlineBoundsMidPacketTrickle(t *testing.T) {
 	oldReadTimeout, oldMaxWait := loadLocalDrainReadTimeout, loadLocalDrainMaxWait
+	// Cleanup-based restore: it must also run when an assertion Fatals.
+	t.Cleanup(func() { loadLocalDrainReadTimeout, loadLocalDrainMaxWait = oldReadTimeout, oldMaxWait })
 	loadLocalDrainReadTimeout = time.Second
 	loadLocalDrainMaxWait = 300 * time.Millisecond
-	defer func() { loadLocalDrainReadTimeout, loadLocalDrainMaxWait = oldReadTimeout, oldMaxWait }()
 
 	server, client := net.Pipe()
 	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
@@ -754,6 +812,15 @@ func TestProcessLoadLocalJoinsWatcherBeforeDrainInterrupt(t *testing.T) {
 	ses, protocol, client := newInterruptibleLoadLocal(t)
 	protocol.interruptEntered = make(chan struct{}, 1)
 	protocol.interruptGate = make(chan struct{})
+	protocol.interruptApplied = make(chan struct{}, 1)
+	protocol.windowHit = make(chan struct{}, 1)
+	// One-shot release, registered immediately so a Fatal-path also unblocks
+	// the parked watcher. Registered after (i.e. running before, LIFO) the
+	// connection-closing cleanups of newInterruptibleLoadLocal, the resumed
+	// watcher can finish its interrupt while the socket is still alive and the
+	// owner can finish joining it; every goroutine this test starts exits.
+	releaseInterruptGate := protocol.releaseInterruptGate
+	t.Cleanup(releaseInterruptGate)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	ec := newTestExecCtx(ctx, gomock.NewController(t))
@@ -785,7 +852,30 @@ func TestProcessLoadLocalJoinsWatcherBeforeDrainInterrupt(t *testing.T) {
 	// Allow the interrupt. Lift-then-drain would now be retired by it; the
 	// fixed owner waits for it first, then lifts once and drains the finite
 	// tail to the protocol EOF.
-	close(protocol.interruptGate)
+	// Owner/watcher order oracle: if ANY owner action (clear or network read)
+	// arrives while the watcher still holds the interrupt, the stroke fires
+	// windowHit, releases the interrupt itself, and runs that action only
+	// after the interrupt executed — the exact live-failure order. Silence
+	// here is the fixed behaviour: the owner is parked in its watcher join, so
+	// the test releases the gate (a bounded negative proof, not a race).
+	select {
+	case <-protocol.windowHit:
+	case <-time.After(3 * time.Second):
+		releaseInterruptGate()
+	}
+	select {
+	case <-protocol.interruptApplied:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher interrupt did not execute")
+	}
+	// A broken owner has already returned here: the interrupt that landed on
+	// its premature action killed the drain and the upload was reported over
+	// a widowed connection. Detect that immediately, else feed the tail.
+	select {
+	case err := <-done:
+		t.Fatalf("upload returned before the finite tail passed (interrupt hit the owner action): %v", err)
+	default:
+	}
 	_, err = client.Write([]byte{1, 0, 0, 2, 'y'})
 	require.NoError(t, err)
 	_, err = client.Write([]byte{0, 0, 0, 3})
@@ -799,6 +889,12 @@ func TestProcessLoadLocalJoinsWatcherBeforeDrainInterrupt(t *testing.T) {
 	require.EqualValues(t, 1, protocol.interrupts.Load())
 	require.Zero(t, protocol.disconnects.Load())
 	require.EqualValues(t, 1, protocol.frees.Load())
+	// Ordered-closure oracle: no owner action ever raced a held watcher.
+	select {
+	case <-protocol.windowHit:
+		t.Fatal("owner touched the interrupt plan before the watcher was joined")
+	default:
+	}
 	// The drained connection serves the next command.
 	written := make(chan error, 1)
 	go func() { _, err := client.Write([]byte{1, 0, 0, 0, 'q'}); written <- err }()
@@ -864,6 +960,13 @@ func TestLoadLocalInterruptCoversDeadlineArmWindow(t *testing.T) {
 				require.NoError(t, conn.Close())
 				require.True(t, allocator.CheckBalance(), "connection/upload buffers must be released")
 			})
+			// One-shot arm-gate release: a Fatal before the happy-path release
+			// must not leave the gated deadline-arm goroutine parked. Registered
+			// after (so running before, LIFO) the conn/client closing cleanups,
+			// the resumed arm still sees a live socket.
+			var releaseArmOnce sync.Once
+			releaseArmGate := func() { releaseArmOnce.Do(func() { close(gated.release) }) }
+			t.Cleanup(releaseArmGate)
 			// The consuming reads pair these net.Pipe writes in order: a plain
 			// header read consumes nothing upfront, a partial header read one
 			// short header, and a partial payload read a header plus half the
@@ -892,8 +995,18 @@ func TestLoadLocalInterruptCoversDeadlineArmWindow(t *testing.T) {
 			// Fire the watcher strictly inside the arm: without the mutex the
 			// install following the release would overwrite the interrupt's
 			// expiry and pin the silent read for 24h (test timeout).
-			go conn.InterruptLoadLocalIO()
-			close(gated.release)
+			interruptDone := make(chan struct{}, 1)
+			go func() { conn.InterruptLoadLocalIO(); interruptDone <- struct{}{} }()
+			releaseArmGate()
+			// The interrupt must actually EXECUTE: its expiry is the causal
+			// reason the armed read below may die. An interrupt that fires
+			// "eventually, sometime" cannot explain this read's outcome, so the
+			// barrier binds the claim instead of assuming goroutine order.
+			select {
+			case <-interruptDone:
+			case <-time.After(5 * time.Second):
+				t.Fatal("cancellation interrupt never executed")
+			}
 			select {
 			case err := <-done:
 				require.Error(t, err)
