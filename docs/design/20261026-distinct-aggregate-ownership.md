@@ -17,12 +17,13 @@ This reuses the same ownership model as grouping-set materialization.
 `reusableShuffleChild` before applying new-exchange costs. Retained active
 keys reuse the established distribution even when their NDV is too small to
 justify a fresh exchange. Non-mergeable DISTINCT, grouping-set and lossy
-string-range guards remain in force. This does not broaden join reuse.
+string-range guards remain in force. This does not broaden join reuse. Each planning pass clears stale decisions
+and uses its actual column-reference mode when proving ownership.
 
 For incompatible aggregate keys, retain local partial aggregation followed by
 MergeGroup. Do not exchange the preceding aggregate's rows before local
-reduction solely because its output NDV is large. The existing `dontShuffle`
-barrier covers this case; compatible reuse is its explicit earlier exception.
+reduction solely because its output NDV is large. The aggregate-specific admission boundary covers this case after attempting
+compatible reuse. The shared join/aggregate `dontShuffle` policy is unchanged.
 A future parallel final merge needs a cost and partial-state transport contract,
 not a threshold that assumes uniform state per final group.
 
@@ -50,8 +51,3 @@ numeric ownership, uniform and dominant groups, and correlated composite keys
 at one and four workers. Results use independent oracles; comparisons use the
 same data and resource budgets. No Q14 speedup is claimed for this retained
 patch.
-
-Design review revision 2: existing owner and lifecycle boundaries inspected.
-Self-review approves this bounded candidate for validation; delivery still
-requires the owning tests, incremental static checks and performance controls.
-No independent review is claimed.
