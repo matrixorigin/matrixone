@@ -200,8 +200,12 @@ func handleSQLForRecordFragmentWithSecrets(sql string) (string, []string) {
 					mask(start+1, scanner.Pos-2)
 				}
 			} else if start < len(sql) {
-				// fail closed: everything after the '=' may carry the secret
+				// fail closed: everything after the '=' may carry the
+				// secret. Stop scanning: no later span may overlap this
+				// remainder (overlapping spans would make the builder slice
+				// out of order).
 				mask(start, len(sql)-1)
+				break
 			}
 			sawSet, sawSetPassword = false, false
 		} else if sawSet && typ == mysql.PASSWORD {

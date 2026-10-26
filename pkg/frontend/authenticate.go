@@ -1338,7 +1338,13 @@ const (
 	//     (expired_time <= current_timestamp())
 	getLockInfoOfUserFormat = `select status, login_attempts, lock_time, expired_time is not null, expired_time <= current_timestamp() from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
-	getExpiredTimeOfUserFormat = `select password_last_changed from mo_catalog.mo_user where user_name = "%s" order by user_id;`
+	// The default-password-lifetime check is evaluated at the server so the
+	// comparison uses TIMESTAMP semantics: password_last_changed and
+	// current_timestamp() share the session-local convention in every time
+	// zone, while a string read-out plus a UTC reparse in Go would shift the
+	// expiration by the session zone offset. Strict "<" mirrors
+	// lastChanged + N days < now.
+	getExpiredTimeOfUserFormat = `select password_last_changed is not null and password_last_changed < current_timestamp() - interval %d day from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
 	getPasswordHistotyOfUsrFormat = `select password_history from mo_catalog.mo_user where user_name = "%s";`
 
@@ -1846,8 +1852,11 @@ func getLockInfoOfUserSql(user string) string {
 	return fmt.Sprintf(getLockInfoOfUserFormat, user)
 }
 
-func getExpiredTimeOfUserSql(user string) string {
-	return fmt.Sprintf(getExpiredTimeOfUserFormat, user)
+// getExpiredTimeOfUserSql reports, at the server, whether the account that
+// follows the global default lifetime (expired_time IS NULL) has reached
+// the defPwdLife-day password age.
+func getExpiredTimeOfUserSql(user string, defPwdLife int) string {
+	return fmt.Sprintf(getExpiredTimeOfUserFormat, defPwdLife, user)
 }
 
 func getSqlForUpdatePasswordHistoryOfUser(passwordHistory, user string) string {

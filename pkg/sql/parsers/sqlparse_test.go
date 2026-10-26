@@ -431,6 +431,10 @@ func TestHandleSqlForRecord(t *testing.T) {
 		// Only the password fragment is masked in a multi-statement text.
 		require.Equal(t, []string{"select 1", "set password = '******' broken"},
 			HandleSqlForRecord("select 1; set password = 'multi-statement-value' broken"))
+		// A comment before an unterminated literal fails closed over the
+		// whole remainder; no later span may overlap it (no panic).
+		require.Equal(t, []string{"SET PASSWORD = ******"},
+			HandleSqlForRecord("SET PASSWORD = /* annotation */ 'commented-tail42' identified by 'other-value42'"))
 	})
 	t.Run("masked secrets are reported for echo scrubbing", func(t *testing.T) {
 		fragments, secrets := MaskSecretLiterals("SET PASSWORD = 'sec''ret-doubled'")

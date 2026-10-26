@@ -1376,21 +1376,20 @@ func TestCheckPasswordExpired(t *testing.T) {
 	}
 	ses.SetTenantInfo(tenant)
 
-	// password never expires
-	expired, err := checkPasswordExpired(0, "2022-01-01 00:00:00")
-	assert.NoError(t, err)
-	assert.False(t, expired)
-
-	// password not expires
+	// The default-lifetime decision is evaluated at the server on TIMESTAMP
+	// semantics: the produced SQL compares password_last_changed with
+	// current_timestamp() - interval N day in the session-local convention,
+	// which is exact in every session time zone.
 	ses.gSysVars.Set(DefaultPasswordLifetime, int64(30))
-	expired, err = checkPasswordExpired(30, time.Now().AddDate(0, 0, -10).Format("2006-01-02 15:04:05"))
-	assert.NoError(t, err)
-	assert.False(t, expired)
+	expired30 := getExpiredTimeOfUserSql("u1", 30)
+	assert.Contains(t, expired30, "password_last_changed is not null")
+	assert.Contains(t, expired30, "password_last_changed < current_timestamp() - interval 30 day")
+	assert.Contains(t, expired30, `user_name = "u1"`)
 
-	// password not expires
-	expired, err = checkPasswordExpired(30, time.Now().AddDate(0, 0, -31).Format("2006-01-02 15:04:05"))
-	assert.NoError(t, err)
-	assert.True(t, expired)
+	// the produced SQL is valid MySQL grammar
+	rpLife, errLife := mysql.Parse(ctx, expired30, 1)
+	defer rpLife[0].Free()
+	assert.NoError(t, errLife)
 
 	// exexpir can not execute stmt
 	ses.setRoutine(&Routine{})
@@ -1410,11 +1409,6 @@ func TestCheckPasswordExpired(t *testing.T) {
 	_, err = authenticateUserCanExecuteStatement(ctx, ses, rp[0])
 	assert.Error(t, err)
 
-	// getPasswordLifetime error
-	ses.gSysVars.Set(DefaultPasswordLifetime, int64(-1))
-	_, err = checkPasswordExpired(1, "1")
-	assert.Error(t, err)
-	assert.True(t, expired)
 }
 
 func Test_CheckLockTimeExpired(t *testing.T) {

@@ -3429,7 +3429,6 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		psw                  []byte
 		accountVersion       uint64
 		createVersion        string
-		lastChangedTime      string
 		defPwdLife           int
 		userStatus           string
 		loginAttempts        uint64
@@ -3745,8 +3744,6 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		ses.Debug(tenantCtx, "check password succeeded")
 		if !isSuperUser(tenant.GetUser()) {
 			// check password expired
-			var expired bool
-
 			defPwdLife, err = whetherNeedCheckExpired(tenantCtx, ses)
 			if err != nil {
 				return nil, err
@@ -3764,20 +3761,20 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 					ses.getRoutine().setExpired(true)
 				}
 			} else if defPwdLife > 0 {
-				userExpiredSql := getExpiredTimeOfUserSql(tenant.GetUser())
+				// The default-lifetime decision is evaluated at the
+				// server on TIMESTAMP semantics (see
+				// getExpiredTimeOfUserSql), so it is independent of
+				// the background session's time zone.
+				userExpiredSql := getExpiredTimeOfUserSql(tenant.GetUser(), defPwdLife)
 				userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userExpiredSql)
 				if err != nil {
 					return nil, err
 				}
-				lastChangedTime, err = userRsset[0].GetString(tenantCtx, 0, 0)
-				if err != nil {
-					return nil, err
+				expiredReached, reachErr := userRsset[0].GetUint64(tenantCtx, 0, 0)
+				if reachErr != nil {
+					return nil, reachErr
 				}
-				expired, err = checkPasswordExpired(defPwdLife, lastChangedTime)
-				if err != nil {
-					return nil, err
-				}
-				if expired {
+				if expiredReached != 0 {
 					ses.getRoutine().setExpired(true)
 				}
 			}
@@ -4937,31 +4934,6 @@ func whetherNeedCheckExpired(ctx context.Context, ses *Session) (int, error) {
 		return 0, err
 	}
 	return defaultPasswordLifetime, nil
-}
-
-func checkPasswordExpired(defPwdLifeTime int, lastChangedTime string) (bool, error) {
-	var (
-		err         error
-		lastChanged time.Time
-	)
-
-	if defPwdLifeTime <= 0 {
-		return false, nil
-	}
-
-	// get the last password change time as utc time
-	lastChanged, err = time.ParseInLocation("2006-01-02 15:04:05", lastChangedTime, time.UTC)
-	if err != nil {
-		return false, err
-	}
-
-	// get the current time as utc time
-	now := time.Now().UTC()
-	if lastChanged.AddDate(0, 0, defPwdLifeTime).Before(now) {
-		return true, nil
-	}
-
-	return false, nil
 }
 
 func getPasswordLifetime(ctx context.Context, ses *Session) (int, error) {

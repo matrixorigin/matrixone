@@ -527,6 +527,27 @@ func newMrsForLockInfoOfUser(status string, loginAttempts uint64, lockTime strin
 	return mrs
 }
 
+// newMrsForSystemVariablesWithLifetime adds a default_password_lifetime row
+// to the account sysvar fixture, driving the login flow through the same
+// catalog read production uses.
+func newMrsForSystemVariablesWithLifetime(days string) *MysqlResultSet {
+	mrs := newMrsForSystemVariables()
+	mrs.AddRow([]interface{}{"default_password_lifetime", days})
+	return mrs
+}
+
+// newMrsForDefaultLifetimeExpired builds the single boolean column of the
+// server-side default-password-lifetime check.
+func newMrsForDefaultLifetimeExpired(expired uint64) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+	col := &MysqlColumn{}
+	col.SetName("default lifetime expired")
+	col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	mrs.AddColumn(col)
+	mrs.AddRow([]interface{}{expired})
+	return mrs
+}
+
 func newMrsForSystemVariables() *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 	col1 := &MysqlColumn{}
@@ -711,6 +732,35 @@ func TestAuthenticateUserExpiryAndAttempts(t *testing.T) {
 		require.True(t, isAuthenticationRejected(err))
 		require.Contains(t, bh.executedSQLs, getSqlForUpdateLoginAttemptsOfUser(userName))
 		require.NotContains(t, bh.executedSQLs, getSqlForUpdateStatusLockOfUser(userStatusLock, userName))
+	})
+
+	t.Run("default lifetime reached enters the sandbox", func(t *testing.T) {
+		ses, bh := newTestSession(t)
+		bh.sql2result[getLockInfoOfUserSql(userName)] =
+			newMrsForLockInfoOfUser(userStatusUnlock, 0, "2020-01-01 00:00:00", 0, 0)
+		bh.sql2result[getSqlForGetSystemVariablesWithAccount(uint64(sysAccountID))] =
+			newMrsForSystemVariablesWithLifetime("1")
+		bh.sql2result[getExpiredTimeOfUserSql(userName, 1)] =
+			newMrsForDefaultLifetimeExpired(1)
+
+		err := authenticate(t, ses, true)
+		require.NoError(t, err)
+		require.True(t, ses.getRoutine().isExpired(),
+			"server-side default-lifetime boolean must sandbox the session")
+	})
+
+	t.Run("default lifetime not reached does not sandbox", func(t *testing.T) {
+		ses, bh := newTestSession(t)
+		bh.sql2result[getLockInfoOfUserSql(userName)] =
+			newMrsForLockInfoOfUser(userStatusUnlock, 0, "2020-01-01 00:00:00", 0, 0)
+		bh.sql2result[getSqlForGetSystemVariablesWithAccount(uint64(sysAccountID))] =
+			newMrsForSystemVariablesWithLifetime("30")
+		bh.sql2result[getExpiredTimeOfUserSql(userName, 30)] =
+			newMrsForDefaultLifetimeExpired(0)
+
+		err := authenticate(t, ses, true)
+		require.NoError(t, err)
+		require.False(t, ses.getRoutine().isExpired())
 	})
 
 	t.Run("permanently locked account is rejected before password check", func(t *testing.T) {
@@ -1027,6 +1077,25 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	require.Error(t, err)
 	scrubbed = redactStatementErrorForLogging(err, raw)
 	require.NotContains(t, scrubbed.Error(), "batch-echo42")
+
+	// A comment between '=' and the literal is skipped by the lexer echo, so
+	// the masked span (which contains the comment) cannot match verbatim:
+	// the echo must still be scrubbed wholesale.
+	raw = "SET PASSWORD = /* annotation */ 'comment-secret42"
+	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
+	require.Error(t, err)
+	scrubbed = redactStatementErrorForLogging(err, raw)
+	require.NotContains(t, scrubbed.Error(), "comment-secret42")
+	require.Contains(t, scrubbed.Error(), "******")
+
+	// A literal longer than the lexer echo limit is echoed truncated; the
+	// partial echo must still be scrubbed.
+	longSecret := strings.Repeat("a1b2c3d4", 200)
+	raw = "SET PASSWORD = '" + longSecret + " broken"
+	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
+	require.Error(t, err)
+	scrubbed = redactStatementErrorForLogging(err, raw)
+	require.NotContains(t, scrubbed.Error(), longSecret[:64])
 
 	// No secret shape: the original error passes through untouched.
 	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, "selec from", 1)
