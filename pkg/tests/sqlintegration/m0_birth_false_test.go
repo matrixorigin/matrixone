@@ -211,7 +211,7 @@ func TestM0BirthFalseSQL(t *testing.T) {
 		t.Logf("BIRTH_CONTENT_ORACLE rows=5 sha256=%x", sha256.Sum256([]byte(ordinaryContents)))
 		m0Exec(t, ctx, db, "create table "+schema+".before_add clone "+table+" {snapshot='m0_birth_false_before'}")
 		require.Equal(t, 2, m0Count(t, ctx, db, "select count(*) from "+schema+".before_add"))
-		_, err = db.QueryContext(ctx, "select cleaned from "+schema+".before_add")
+		_, err = db.ExecContext(ctx, "select cleaned from "+schema+".before_add")
 		require.Error(t, err)
 		m0Exec(t, ctx, db, "create snapshot m0_birth_false_history for table "+schema+" customer")
 		m0Exec(t, ctx, db, "create table "+schema+".child clone "+table)
@@ -228,10 +228,7 @@ func TestM0BirthFalseSQL(t *testing.T) {
 		m0Exec(t, ctx, db, "alter table "+schema+".child add column child_only boolean default false")
 		m0Exec(t, ctx, db, "update "+schema+".child set child_only=true where c_id=3")
 		require.Equal(t, 1, m0Count(t, ctx, db, "select count(*) from "+schema+".child where child_only=true"))
-		parentRows, parentErr := db.QueryContext(ctx, "select child_only from "+table)
-		if parentRows != nil {
-			parentRows.Close()
-		}
+		_, parentErr := db.ExecContext(ctx, "select child_only from "+table)
 		require.Error(t, parentErr)
 		m0RunL0Merge(t, ctx, db, schema+".child")
 		require.Equal(t, 1, m0Count(t, ctx, db, "select count(*) from "+schema+".child where cleaned is null"))

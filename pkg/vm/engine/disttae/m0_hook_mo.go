@@ -89,7 +89,7 @@ func proveM0ReadObject(
 	if table == nil {
 		return false, objectio.M0ObjectProof{}, nil
 	}
-	candidate := table != nil && (table.AppendMissingState != nil || catalog.M0PlanLooksLikeAppendDomain(table))
+	candidate := table.AppendMissingState != nil || catalog.M0PlanLooksLikeAppendDomain(table)
 	next := uint32(len(table.Cols) - 1)
 	layout, err := catalog.M0AppendLayoutFromPlan(table, next)
 	if err != nil {

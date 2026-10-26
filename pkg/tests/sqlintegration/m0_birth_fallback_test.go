@@ -149,10 +149,7 @@ func TestM0BirthFalseTransactionFallback(t *testing.T) {
 		require.Equal(t, beforeVersion, afterVersion)
 		require.Equal(t, 3, m0Count(t, ctx, fresh, "select count(*) from "+table))
 		require.Equal(t, 3, m0Count(t, ctx, fresh, "select count(*) from "+table+" where committed_flag=false"))
-		rows, err := fresh.QueryContext(ctx, "select transaction_flag from "+table)
-		if rows != nil {
-			rows.Close()
-		}
+		_, err = fresh.ExecContext(ctx, "select transaction_flag from "+table)
 		require.Error(t, err)
 	})
 }
