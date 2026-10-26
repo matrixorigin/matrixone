@@ -109,13 +109,9 @@ class TestJoinMethods(unittest.TestCase):
         self.assertIn("addresses", self.query._joins[0])
 
     def test_join_without_onclause(self):
-        """Test join without onclause (should still work)"""
-        self.query.join(Address)
-
-        self.assertEqual(len(self.query._joins), 1)
-        self.assertTrue(self.query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("addresses", self.query._joins[0])
-        self.assertNotIn("ON", self.query._joins[0])
+        with self.assertRaisesRegex(ValueError, 'foreign key'):
+            self.query.join(Address)
+        self.assertEqual(self.query._joins, [])
 
     def test_join_with_isouter_true(self):
         """Test join with isouter=True creates LEFT OUTER JOIN"""
@@ -277,5 +273,7 @@ if __name__ == '__main__':
     print(f"Tests run: {result.testsRun}")
     print(f"Failures: {len(result.failures)}")
     print(f"Errors: {len(result.errors)}")
-    print(f"Success rate: {((result.testsRun - len(result.failures) - len(result.errors)) / result.testsRun * 100):.1f}%")
+    print(
+        f"Success rate: {((result.testsRun - len(result.failures) - len(result.errors)) / result.testsRun * 100):.1f}%"
+    )
     print(f"{'='*50}")
