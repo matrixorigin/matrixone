@@ -138,9 +138,6 @@ func CompileDependentExpressions(ctx context.Context, roots []*plan.Expr) (*Depe
 				overloadID := f.Func.Obj
 				stringToNumericCast := !overload.CannotFold() && isStringToNumericCast(top.expr, false)
 				instruction.native = func(proc *process.Process, allocation *vector.AllocationAccountSelection, args []ExpressionExecutor) (ExpressionExecutor, error) {
-					if err := validateSetOperationFloatKeyProtocol(proc, overloadID); err != nil {
-						return nil, err
-					}
 					executor := NewFunctionExpressionExecutor()
 					executor.overloadID = overloadID
 					executor.fid = fid

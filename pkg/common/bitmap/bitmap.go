@@ -266,15 +266,6 @@ func (n *Bitmap) ReleaseExternalStorage() []uint64 {
 	return storage
 }
 
-// StorageCapacity returns retained words for both owned and external storage,
-// without changing the logical bitmap or its ownership.
-func (n *Bitmap) StorageCapacity() int {
-	if n == nil {
-		return 0
-	}
-	return cap(n.data)
-}
-
 func (n *Bitmap) ExternalStorageCapacity() int {
 	if n == nil || !n.HasExternalStorage() {
 		return 0

@@ -1763,16 +1763,13 @@ func genAsSelectCols(
 	); err != nil {
 		return nil, nil, 0, err
 	}
-	if !isPrepareStmt {
+	if !isPrepareStmt && executionProtocol == 0 {
 		features, featureErr := plan.RequiredRemoteExpressionFeatures(query)
 		if featureErr != nil {
 			return nil, nil, 0, featureErr
 		}
 		if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
-			executionProtocol = max(executionProtocol, defines.MORPCVersion122)
-		}
-		if features.SetOperationFloatKeys || features.ScalarSetReaggregation {
-			executionProtocol = max(executionProtocol, defines.MORPCVersion132)
+			executionProtocol = defines.MORPCVersion122
 		}
 	}
 	return cols, query, executionProtocol, nil
@@ -2191,8 +2188,16 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		defer ctx.SetBuildingAlterView(false, "", "")
 	}
 
+	creationContext, err := restoredViewCreationContext(ctx, createView.Database, string(viewName))
+	if err != nil {
+		return nil, err
+	}
 	tableDef, err := genViewTableDef(
-		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), stmt.CheckOption, true)
+		creationContext, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), stmt.CheckOption, true)
+	if err != nil {
+		return nil, err
+	}
+	tableDef.ViewSql.View, err = preserveRestoredViewDefinition(ctx.GetContext(), createView.Database, string(viewName), tableDef.ViewSql.View)
 	if err != nil {
 		return nil, err
 	}

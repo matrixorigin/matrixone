@@ -773,22 +773,3 @@ func BenchmarkAllocationAccountCompleteTerminalParallel(b *testing.B) {
 		}
 	})
 }
-
-func TestRetainedMemoryReservationAdmission(t *testing.T) {
-	r, err := NewAllocationAccountRegistry(1, 1)
-	require.NoError(t, err)
-	a, err := r.Open(128)
-	require.NoError(t, err)
-	held, err := a.ReserveRetainedMemory(128, AllocationOwnerWindow)
-	require.NoError(t, err)
-	_, err = a.ReserveRetainedMemory(1, AllocationOwnerWindow)
-	require.ErrorIs(t, err, ErrAllocationAccountCapacity)
-	require.Equal(t, uint64(128), a.Snapshot().Used)
-	held.Release()
-	held.Release()
-	require.Zero(t, a.Snapshot().Used)
-	_, _, err = r.CompleteTerminal(a)
-	require.NoError(t, err)
-	_, err = a.ReserveRetainedMemory(1, AllocationOwnerWindow)
-	require.ErrorIs(t, err, ErrAllocationAccountSealed)
-}

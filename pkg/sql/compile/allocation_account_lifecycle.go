@@ -21,8 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -91,11 +89,10 @@ func hasAllocationAccountActivator(
 // MessageBoard pointer is captured at open so prepared/retry Reset cannot make
 // terminal cleanup drain a newer board.
 type statementAllocationAttempt struct {
-	scalarSetLease *process.ScalarSetExecutionLease
-	registry       *mpool.AllocationAccountRegistry
-	account        *mpool.AllocationAccount
-	board          *message.MessageBoard
-	exporter       func(mpool.AllocationAccountTerminalSnapshot)
+	registry *mpool.AllocationAccountRegistry
+	account  *mpool.AllocationAccount
+	board    *message.MessageBoard
+	exporter func(mpool.AllocationAccountTerminalSnapshot)
 
 	ownersMu sync.Mutex
 	owners   []executionAllocationAccountOwner
@@ -139,24 +136,6 @@ func (c *Compile) beginAllocationAccountAttempt() (
 	if controller == nil {
 		return nil, mpool.ErrAllocationAccountInvariant
 	}
-	var scalarSetLease *process.ScalarSetExecutionLease
-	if queryUsesScalarSetReaggregation(c.pn.GetQuery()) {
-		budget, budgetErr := c.proc.GetExecutionResourceBudget()
-		if budgetErr != nil {
-			return nil, budgetErr
-		}
-		scalarSetLease, err = budget.AcquireScalarSetExecution()
-		if err != nil {
-			return nil, err
-		}
-	}
-	leasePublished := false
-	accountOpened := false
-	defer func() {
-		if !leasePublished && !accountOpened {
-			scalarSetLease.Close()
-		}
-	}()
 	account, err := c.allocationAccountRegistry.OpenWithController(
 		c.allocationAccountLimit,
 		controller,
@@ -164,8 +143,7 @@ func (c *Compile) beginAllocationAccountAttempt() (
 	if err != nil {
 		return nil, err
 	}
-	accountOpened = true
-	owners, err = configureAllocationAccountOwners(owners, account, scalarSetLease)
+	owners, err = configureAllocationAccountOwners(owners, account)
 	if err != nil {
 		var snapshot mpool.AllocationAccountTerminalSnapshot
 		var first bool
@@ -175,9 +153,6 @@ func (c *Compile) beginAllocationAccountAttempt() (
 				CompleteTerminalWithError(account, err)
 			return terminalErr
 		})
-		if drainedScalarSetAccount(account, snapshot) {
-			scalarSetLease.Close()
-		}
 		if first {
 			finalizeErr = joinAllocationLifecycleErrors(
 				finalizeErr,
@@ -193,19 +168,17 @@ func (c *Compile) beginAllocationAccountAttempt() (
 		return nil, err
 	}
 	attempt := &statementAllocationAttempt{
-		scalarSetLease: scalarSetLease,
-		registry:       c.allocationAccountRegistry,
-		account:        account,
-		board:          c.MessageBoard,
-		exporter:       c.allocationTerminalExporter,
-		owners:         owners,
-		ownerSet:       make(map[executionAllocationAccountOwner]struct{}, len(owners)),
+		registry: c.allocationAccountRegistry,
+		account:  account,
+		board:    c.MessageBoard,
+		exporter: c.allocationTerminalExporter,
+		owners:   owners,
+		ownerSet: make(map[executionAllocationAccountOwner]struct{}, len(owners)),
 	}
 	for _, owner := range owners {
 		attempt.ownerSet[owner] = struct{}{}
 	}
 	c.allocationAttempt = attempt
-	leasePublished = true
 	return attempt, nil
 }
 
@@ -232,7 +205,7 @@ func (a *statementAllocationAttempt) attachRuntimeOwners(scopes []*Scope) error 
 			newOwners = append(newOwners, owner)
 		}
 	}
-	configured, err := configureAllocationAccountOwners(newOwners, a.account, a.scalarSetLease)
+	configured, err := configureAllocationAccountOwners(newOwners, a.account)
 	if err != nil {
 		return err
 	}
@@ -263,7 +236,6 @@ func (c *Compile) attachRuntimeAllocationOwners(scopes []*Scope) error {
 func configureAllocationAccountOwners(
 	owners []executionAllocationAccountOwner,
 	account *mpool.AllocationAccount,
-	scalarLeases ...*process.ScalarSetExecutionLease,
 ) ([]executionAllocationAccountOwner, error) {
 	configured := make([]executionAllocationAccountOwner, 0, len(owners))
 	rollback := func(cause error) error {
@@ -279,32 +251,6 @@ func configureAllocationAccountOwners(
 	}
 	for _, owner := range owners {
 		if err := allocationLifecycleCall(func() error {
-			if op, ok := owner.(*dependent.Operator); ok && op.ScalarSetReaggregation {
-				if len(scalarLeases) != 1 || scalarLeases[0] == nil {
-					return mpool.ErrAllocationAccountInvariant
-				}
-				if op.ScalarSetLease != nil && op.ScalarSetLease != scalarLeases[0] {
-					return mpool.ErrAllocationAccountMismatch
-				}
-				if err := op.SetAllocationAccount(account); err != nil {
-					return err
-				}
-				op.ScalarSetLease = scalarLeases[0]
-				return nil
-			}
-			if join, ok := owner.(*loopjoin.LoopJoin); ok && join.ScalarSetReaggregation {
-				if len(scalarLeases) != 1 || scalarLeases[0] == nil {
-					return mpool.ErrAllocationAccountInvariant
-				}
-				if join.ScalarSetLease != nil && join.ScalarSetLease != scalarLeases[0] {
-					return mpool.ErrAllocationAccountMismatch
-				}
-				if err := join.SetAllocationAccount(account); err != nil {
-					return err
-				}
-				join.ScalarSetLease = scalarLeases[0]
-				return nil
-			}
 			return owner.SetAllocationAccount(account)
 		}); err != nil {
 			return nil, rollback(err)
@@ -389,9 +335,6 @@ func (c *Compile) ensureAllocationAccountLifecycle(
 		return err
 	}
 	limit := budget.Snapshot().Cap
-	if queryUsesScalarSetReaggregation(c.pn.GetQuery()) {
-		limit = min(limit, process.ScalarSetMemoryLimit)
-	}
 	if limit == 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
@@ -496,9 +439,6 @@ func (a *statementAllocationAttempt) completeTerminal() (
 				}),
 			)
 		}
-		if drainedScalarSetAccount(a.account, a.snapshot) {
-			a.scalarSetLease.Close()
-		}
 	})
 	return a.snapshot, a.completeErr
 }
@@ -521,9 +461,4 @@ func (c *Compile) copyAllocationAccountLifecycleTo(dst *Compile) {
 	dst.allocationAccountLimit = c.allocationAccountLimit
 	dst.allocationTerminalExporter = c.allocationTerminalExporter
 	dst.allocationControllerProvider = c.allocationControllerProvider
-}
-
-// A zero-value snapshot after a recovered panic is not evidence of drainage.
-func drainedScalarSetAccount(account *mpool.AllocationAccount, snapshot mpool.AllocationAccountTerminalSnapshot) bool {
-	return account != nil && snapshot.Handle == account.Handle() && snapshot.Handle != 0 && snapshot.Sealed && snapshot.State == mpool.AllocationAccountTerminalValid && snapshot.Used == 0
 }

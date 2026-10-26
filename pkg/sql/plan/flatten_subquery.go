@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"math"
 
-	"github.com/gogo/protobuf/proto"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -613,13 +611,9 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	// decorrelation. An independent aggregate elsewhere in the subquery must
 	// not turn a previously supported scalar expression into NYI.
 	var crossedAggregate bool
-	scalarSet := subquery.Typ == plan.SubqueryRef_SCALAR && builder.scalarSetNeedsReaggregation(subID)
-	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true, scalarSet || subquery.Typ == plan.SubqueryRef_EXISTS || subquery.Typ == plan.SubqueryRef_NOT_EXISTS || subquery.Typ == plan.SubqueryRef_IN || subquery.Typ == plan.SubqueryRef_NOT_IN, &crossedAggregate)
+	subID, preds, err := builder.pullupCorrelatedPredicates(subID, subCtx, subquery.Typ, true, &crossedAggregate)
 	if err != nil {
 		return 0, nil, err
-	}
-	if scalarSet {
-		return builder.flattenScalarSetAfterCorrelation(nodeID, subID, subCtx, preds, ctx, subquery)
 	}
 	wrappedAggregate := subquery.Typ == plan.SubqueryRef_SCALAR && crossedAggregate &&
 		(aggregateSpineCandidate || preserveAggregateSpine || len(subCtx.aggregates) == 0 && aggregateSuppression == aggregateSpineUnsuppressed)
@@ -3426,7 +3420,7 @@ func (builder *QueryBuilder) scalarProjectionAliases(childID int32, expr *plan.E
 				return aliases
 			}
 			childID = child.Children[0]
-		case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_FUNCTION_SCAN, plan.Node_EXTERNAL_SCAN:
+		case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN:
 			if len(child.BindingTags) == 1 && child.TableDef != nil &&
 				col.RelPos == child.BindingTags[0] && col.ColPos >= 0 &&
 				int(col.ColPos) < len(child.TableDef.Cols) {
@@ -3442,8 +3436,6 @@ func (builder *QueryBuilder) scalarProjectionAliases(childID int32, expr *plan.E
 
 // collectScalarOuterOutputs walks only output boundaries. Descending through
 // an AGG or PROJECT would admit columns that the next JOIN cannot read.
-// FUNCTION_SCAN likewise owns its schema; its children produce arguments, not
-// additional columns visible above the scan.
 func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCols int32, ctx *BindContext) ([]scalarOuterOutput, bool) {
 	var outputs []scalarOuterOutput
 	seen := make(map[[2]int32]bool)
@@ -3467,7 +3459,7 @@ func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCol
 		}
 		node := builder.qry.Nodes[id]
 		switch node.NodeType {
-		case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_FUNCTION_SCAN, plan.Node_EXTERNAL_SCAN:
+		case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN:
 			if len(node.BindingTags) != 1 || node.TableDef == nil {
 				return false
 			}
@@ -3489,26 +3481,7 @@ func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCol
 				return false
 			}
 			groupCount := len(node.GroupBy)
-			if aliases, synthetic := builder.scalarReaggAliases[id]; synthetic && outerTag < 0 {
-				// The scalar set path gives each stream a fresh identity. Preserve
-				// actual group outputs and their logical aliases without assuming
-				// that a base-table binding owns the first group columns.
-				for i, expr := range node.GroupBy {
-					var refs [][2]int32
-					for _, alias := range aliases {
-						if alias.groupPos == int32(i) {
-							refs = append(refs, alias.ref)
-						}
-					}
-					ref := [2]int32{node.BindingTags[0], int32(i)}
-					if len(refs) > 0 {
-						// JOIN/WINDOW forward the selected logical alias. Use that
-						// same identity when a later scalar consumes this output.
-						ref, refs = refs[0], append(refs[1:], ref)
-					}
-					add(ref, expr.Typ, refs...)
-				}
-			} else if aliases, synthetic := builder.scalarReaggAliases[id]; synthetic {
+			if aliases, synthetic := builder.scalarReaggAliases[id]; synthetic {
 				if node.BindingTags[0] != outerTag || groupCount < int(baseCols) {
 					return false
 				}
@@ -3531,27 +3504,6 @@ func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCol
 				add([2]int32{node.BindingTags[1], int32(i)}, expr.Typ)
 			}
 			return true
-		case plan.Node_APPLY:
-			if outerTag >= 0 || len(node.Children) != 2 ||
-				(node.ApplyType != plan.Node_CROSSAPPLY && node.ApplyType != plan.Node_OUTERAPPLY) {
-				return false
-			}
-			rightID := node.Children[1]
-			if rightID < 0 || int(rightID) >= len(builder.qry.Nodes) ||
-				builder.qry.Nodes[rightID].NodeType != plan.Node_FUNCTION_SCAN || !visit(node.Children[0]) {
-				return false
-			}
-			// APPLY forwards both inputs, but the function's argument children
-			// are not outputs. OUTERAPPLY can synthesize a NULL right row.
-			rightStart := len(outputs)
-			if !visit(rightID) {
-				return false
-			}
-			for i := rightStart; i < len(outputs); i++ {
-				outputs[i].typ = outputTypeAfterNullExtension(node, 1, outputs[i].typ)
-			}
-			return true
-
 		case plan.Node_JOIN:
 			if len(node.Children) != 2 || !visit(node.Children[0]) {
 				return false
@@ -3559,8 +3511,6 @@ func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCol
 			switch node.JoinType {
 			case plan.Node_LEFT, plan.Node_SINGLE, plan.Node_INNER:
 				return visit(node.Children[1])
-			case plan.Node_RIGHT, plan.Node_OUTER:
-				return outerTag < 0 && visit(node.Children[1])
 			case plan.Node_SEMI, plan.Node_ANTI:
 				return true
 			case plan.Node_MARK:
@@ -3575,24 +3525,6 @@ func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCol
 			default:
 				return false
 			}
-		case plan.Node_WINDOW:
-			if outerTag >= 0 || len(node.Children) != 1 || len(node.BindingTags) != 1 || !visit(node.Children[0]) {
-				return false
-			}
-			for i, expr := range node.WinSpecList {
-				add([2]int32{node.BindingTags[0], node.WindowIdx + int32(i)}, expr.Typ)
-			}
-			return true
-		case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL:
-			if outerTag >= 0 || len(node.BindingTags) != 1 {
-				return false
-			}
-			for i, expr := range node.ProjectList {
-				add([2]int32{node.BindingTags[0], int32(i)}, expr.Typ)
-			}
-			return true
-		case plan.Node_DISTINCT, plan.Node_PARTITION:
-			return outerTag < 0 && len(node.Children) == 1 && visit(node.Children[0])
 		case plan.Node_FILTER, plan.Node_SORT:
 			return len(node.Children) == 1 && visit(node.Children[0])
 		default:
@@ -4457,121 +4389,29 @@ func correlatedWindowIdentityKey(expr *plan.Expr) (*plan.Expr, bool) {
 	return nil, false
 }
 
-// correlatedSetIdentityPredicate rebinds a branch's exported correlation
-// slot without changing its comparison or outer identity. Range partitions
-// are only safe for direct existential consumers, and must have an exact
-// integer domain (float canonicalization can merge unequal representations).
-func correlatedSetIdentityPredicate(expr *plan.Expr, childTag, setTag, pos int32, allowRange bool) (*plan.Expr, bool) {
-	f := expr.GetF()
-	if f == nil || f.Func == nil || len(f.Args) != 2 {
-		return nil, false
-	}
-	if f.Func.ObjName != "=" {
-		if !allowRange {
-			return nil, false
-		}
-		switch f.Func.ObjName {
-		case "<", "<=", ">", ">=", "<>":
-		default:
-			return nil, false
-		}
-	}
-	inner, outer := f.Args[0], f.Args[1]
-	if inner.GetCorr() != nil {
-		inner, outer = outer, inner
-	}
-	col, corr := inner.GetCol(), outer.GetCorr()
-	if col == nil || corr == nil || corr.Depth != 1 || col.RelPos != childTag || col.ColPos != pos {
-		return nil, false
-	}
-	if f.Func.ObjName != "=" && !types.T(inner.Typ.Id).IsInteger() {
-		return nil, false
-	}
-	out := DeepCopyExpr(expr)
-	out.Ndv, out.Selectivity = 0, 0
-	for _, arg := range out.GetF().Args {
-		arg.Ndv, arg.Selectivity = 0, 0
-		if arg.GetCol() != nil {
-			arg.Expr = &plan.Expr_Col{Col: &plan.ColRef{RelPos: setTag, ColPos: pos}}
-		}
-	}
-	return out, true
-}
-
-// rebindBagSetPredicates matches complete branch predicates rather
-// than assuming one hidden column per conjunct. UNION ALL retains every
-// candidate, so no hidden representation is normalized before the predicate.
-func rebindBagSetPredicates(preds []*plan.Expr, childTag, setTag int32, visible, width int) ([]*plan.Expr, bool) {
-	out := DeepCopyExprList(preds)
-	valid := true
-	for _, pred := range out {
-		// Branch-local computed values stay in their original producers.
-		// Reject volatile evaluations that would move past concatenation.
-		if ContainsVolatileFunction(pred) {
-			return nil, false
-		}
-		_ = plan.VisitExprTree(pred, func(expr *plan.Expr) error {
-			expr.Ndv, expr.Selectivity = 0, 0
-			expr.Typ.Table = ""
-			if col := expr.GetCol(); col != nil {
-				if col.RelPos != childTag || int(col.ColPos) < visible || int(col.ColPos) >= visible+width {
-					valid = false
-				} else {
-					expr.Expr = &plan.Expr_Col{Col: &plan.ColRef{RelPos: setTag, ColPos: col.ColPos}}
-				}
-			}
-			if corr := expr.GetCorr(); corr != nil && corr.Depth != 1 {
-				valid = false
-			}
-			if expr.GetSub() != nil || expr.GetW() != nil {
-				valid = false
-			}
-			return nil
-		})
-	}
-	return out, valid
-}
-
 func (builder *QueryBuilder) pullupCorrelatedPredicates(
 	nodeID int32,
 	ctx *BindContext,
 	subqueryType plan.SubqueryRef_Type,
 	isSubqueryRoot bool,
-	pullupSetAsBag bool,
 	crossedAggregate *bool,
 ) (int32, []*plan.Expr, error) {
 	node := builder.qry.Nodes[nodeID]
-	originalNodeType := node.NodeType
-	// Bag-input consumers defer or ignore duplicate elimination only through transparent
-	// consumers. Keep pagination's isSubqueryRoot proof separate: aggregates,
-	// filters and other consumers can observe row multiplicity or boundaries.
-	pullupSetAsBag = pullupSetAsBag && node.Limit == nil && node.Offset == nil
-	switch node.NodeType {
-	case plan.Node_PROJECT, plan.Node_SORT, plan.Node_UNION, plan.Node_UNION_ALL:
-	default:
-		pullupSetAsBag = false
-	}
-	if pullupSetAsBag && node.NodeType == plan.Node_UNION {
-		node.NodeType = plan.Node_UNION_ALL
-		node.PhysicalEqualityKeyList = nil
-	}
 
 	var preds []*plan.Expr
 	var err error
 
 	var subPreds []*plan.Expr
-	childPreds := make([][]*plan.Expr, len(node.Children))
 	for i, childID := range node.Children {
 		childIsSubqueryRoot := isSubqueryRoot && len(node.Children) == 1 &&
 			node.Limit == nil && node.Offset == nil &&
 			(node.NodeType == plan.Node_PROJECT || node.NodeType == plan.Node_SORT)
 		node.Children[i], subPreds, err = builder.pullupCorrelatedPredicates(
-			childID, ctx, subqueryType, childIsSubqueryRoot, pullupSetAsBag, crossedAggregate)
+			childID, ctx, subqueryType, childIsSubqueryRoot, crossedAggregate)
 		if err != nil {
 			return 0, nil, err
 		}
 
-		childPreds[i] = subPreds
 		preds = append(preds, subPreds...)
 	}
 
@@ -4589,20 +4429,6 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 		projectTag := node.BindingTags[0]
 		for _, pred := range preds {
 			builder.pullupThroughProj(ctx, node, projectTag, pred)
-		}
-
-	case plan.Node_DISTINCT:
-		if len(node.PhysicalEqualityKeyList) > 0 && len(node.Children) == 1 {
-			child := builder.qry.Nodes[node.Children[0]]
-			// Pull-up adds correlation outputs to the forwarding PROJECT. They
-			// partition membership per outer key and must participate in hashing.
-			// Use scalar equality for identities, even when an identity is FLOAT.
-			if child.NodeType == plan.Node_PROJECT {
-				for len(node.PhysicalEqualityKeyList) < len(child.ProjectList) {
-					pos := len(node.PhysicalEqualityKeyList)
-					node.PhysicalEqualityKeyList = append(node.PhysicalEqualityKeyList, DeepCopyExpr(child.ProjectList[pos]))
-				}
-			}
 		}
 
 	case plan.Node_WINDOW:
@@ -4647,85 +4473,40 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 			}
 		}
 
-	case plan.Node_UNION, plan.Node_UNION_ALL:
-		errPrefix := "correlated UNION"
-		if originalNodeType == plan.Node_UNION_ALL {
-			errPrefix = "correlated local CTE: UNION ALL"
-		}
-		if len(node.Children) != 2 || len(node.BindingTags) != 1 {
-			return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" without matching row identities")
-		}
-		left, right := builder.qry.Nodes[node.Children[0]], builder.qry.Nodes[node.Children[1]]
-		pos := len(node.ProjectList)
-		if pullupSetAsBag {
-			width := len(left.ProjectList) - pos
-			if width < 0 || len(right.ProjectList) != pos+width || len(left.BindingTags) != 1 || len(right.BindingTags) != 1 {
-				return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" without matching row identities")
-			}
-			for i := range width {
-				if !isSameColumnType(left.ProjectList[pos+i].Typ, right.ProjectList[pos+i].Typ) {
-					return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" branch identity types differ")
-				}
-			}
-			lp, lok := rebindBagSetPredicates(childPreds[0], left.BindingTags[0], node.BindingTags[0], pos, width)
-			rp, rok := rebindBagSetPredicates(childPreds[1], right.BindingTags[0], node.BindingTags[0], pos, width)
-			if !lok || !rok || len(lp) != len(rp) {
-				return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" branch predicates differ")
-			}
-			for i := range lp {
-				if !proto.Equal(lp[i], rp[i]) {
-					return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" branch predicates differ")
-				}
-			}
-			for i := range width {
-				node.ProjectList = append(node.ProjectList, GetColExpr(left.ProjectList[pos+i].Typ, left.BindingTags[0], int32(pos+i)))
-			}
-			preds = lp
+	case plan.Node_UNION_ALL:
+		left := builder.qry.Nodes[node.Children[0]]
+		right := builder.qry.Nodes[node.Children[1]]
+		pos := int32(len(node.ProjectList))
+		if len(left.ProjectList) == int(pos) && len(right.ProjectList) == int(pos) {
 			break
 		}
-		if len(left.ProjectList) == pos && len(right.ProjectList) == pos {
-			break
+		// The two arms must export the same hidden identity slot as well as
+		// their user columns. Collapse their matching correlation predicates
+		// into a single predicate on the union's new output slot.
+		if len(node.Children) != 2 || len(preds) != 2 || len(node.BindingTags) != 1 {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: UNION ALL without matching row identities")
 		}
-		width := len(left.ProjectList) - pos
-		if width <= 0 || len(right.ProjectList) != pos+width || len(childPreds[0]) != width || len(childPreds[1]) != width || len(left.BindingTags) != 1 || len(right.BindingTags) != 1 {
-			return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" without matching row identities")
+		leftKey, leftOK := correlatedWindowIdentityKey(preds[0])
+		rightKey, rightOK := correlatedWindowIdentityKey(preds[1])
+		leftCorr, leftCorrOK := correlatedIdentityOuterKey(preds[0])
+		rightCorr, rightCorrOK := correlatedIdentityOuterKey(preds[1])
+		if !leftOK || !rightOK || !leftCorrOK || !rightCorrOK ||
+			leftCorr.RelPos != rightCorr.RelPos || leftCorr.ColPos != rightCorr.ColPos ||
+			leftKey.GetCol() == nil || rightKey.GetCol() == nil ||
+			int(leftKey.GetCol().ColPos) != int(pos) || int(rightKey.GetCol().ColPos) != int(pos) ||
+			len(left.ProjectList) != int(pos)+1 || len(right.ProjectList) != int(pos)+1 ||
+			!isSameColumnType(leftKey.Typ, rightKey.Typ) {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "correlated local CTE: UNION ALL branch identities differ")
 		}
-		// Equality identities partition scalar/membership inputs. Range
-		// identities can produce several copies of one visible set member;
-		// admit them only where those copies cannot change existence.
-		allowRange := isSubqueryRoot && node.Limit == nil && node.Offset == nil &&
-			(subqueryType == plan.SubqueryRef_EXISTS || subqueryType == plan.SubqueryRef_NOT_EXISTS)
-		rebound := make([]*plan.Expr, width)
-		for i := range width {
-			typ := left.ProjectList[pos+i].Typ
-			if !isSameColumnType(typ, right.ProjectList[pos+i].Typ) || (node.NodeType == plan.Node_UNION && types.T(typ.Id) == types.T_any) {
-				return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" branch identities differ or have unresolved types")
-			}
-			lp, lok := correlatedSetIdentityPredicate(childPreds[0][i], left.BindingTags[0], node.BindingTags[0], int32(pos+i), allowRange)
-			rp, rok := correlatedSetIdentityPredicate(childPreds[1][i], right.BindingTags[0], node.BindingTags[0], int32(pos+i), allowRange)
-			if !lok || !rok || !proto.Equal(lp, rp) {
-				return 0, nil, moerr.NewNYI(builder.GetContext(), errPrefix+" branch identities differ or have unresolved types")
-			}
-			rebound[i] = lp
-		}
-		if node.NodeType == plan.Node_UNION && len(node.PhysicalEqualityKeyList) != 0 && len(node.PhysicalEqualityKeyList) != pos {
-			return 0, nil, moerr.NewInternalError(builder.GetContext(), "correlated UNION equality key width mismatch")
-		}
-		for i := range width {
-			typ := left.ProjectList[pos+i].Typ
-			node.ProjectList = append(node.ProjectList, GetColExpr(typ, left.BindingTags[0], int32(pos+i)))
-			if node.NodeType == plan.Node_UNION {
-				// Hidden float identities retain scalar equality through
-				// prepared specialization; visible float keys remain set keys.
-				if len(node.PhysicalEqualityKeyList) == 0 && types.T(typ.Id).IsFloat() {
-					node.PhysicalEqualityKeyList = DeepCopyExprList(node.ProjectList[:pos+i])
-				}
-				if len(node.PhysicalEqualityKeyList) != 0 {
-					node.PhysicalEqualityKeyList = append(node.PhysicalEqualityKeyList, DeepCopyExpr(node.ProjectList[pos+i]))
-				}
+		node.ProjectList = append(node.ProjectList, GetColExpr(leftKey.Typ, left.BindingTags[0], pos))
+		key := GetColExpr(leftKey.Typ, node.BindingTags[0], pos)
+		pred := DeepCopyExpr(preds[0])
+		for _, arg := range pred.GetF().Args {
+			if arg.GetCol() != nil {
+				*arg = *key
 			}
 		}
-		preds = rebound
+		preds = []*plan.Expr{pred}
 
 	case plan.Node_FILTER:
 		var newFilterList []*plan.Expr

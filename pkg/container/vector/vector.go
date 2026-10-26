@@ -121,8 +121,6 @@ type Vector struct {
 	// cantFree bits remain only as the legacy-alias compatibility marker.
 	dataLease BufferLease
 	areaLease BufferLease
-	// Full source capacity retained by legacy views, including offset prefixes.
-	borrowedBackingBytes uint64
 
 	sorted bool // for some optimization
 
@@ -334,17 +332,27 @@ func (v *Vector) Capacity() int {
 // Allocated returns the total allocated memory size of the vector.
 // it can be used to estimate the memory usage of the vector.
 func (v *Vector) Allocated() int {
-	return cap(v.data) + cap(v.area) + v.allocatedMetadataBytes() +
+	binaryStringBytes := 0
+	if v.binaryStringRows != nil {
+		binaryStringBytes = v.binaryStringRows.Size()
+		if capacity := v.binaryStringRows.ExternalStorageCapacity(); capacity > 0 {
+			binaryStringBytes = 8 * capacity
+		}
+	}
+	if v.textStringRows != nil {
+		textStringBytes := v.textStringRows.Size()
+		if capacity := v.textStringRows.ExternalStorageCapacity(); capacity > 0 {
+			textStringBytes = 8 * capacity
+		}
+		binaryStringBytes += textStringBytes
+	}
+	return cap(v.data) +
+		cap(v.area) +
+		cap(v.prepareParamKinds)*int(unsafe.Sizeof(PrepareParamKind(0))) +
+		cap(v.stringSources)*int(unsafe.Sizeof(types.StringSource(0))) +
+		binaryStringBytes +
 		8*v.nsp.GetBitmap().ExternalStorageCapacity() +
 		8*v.gsp.GetBitmap().ExternalStorageCapacity()
-}
-
-// allocatedMetadataBytes excludes payload and validity storage. Unlike legacy
-// bitmap access, this measurement does not materialize borrowed validity.
-func (v *Vector) allocatedMetadataBytes() int {
-	return cap(v.prepareParamKinds)*int(unsafe.Sizeof(PrepareParamKind(0))) +
-		cap(v.stringSources)*int(unsafe.Sizeof(types.StringSource(0))) +
-		8*v.binaryStringRows.StorageCapacity() + 8*v.textStringRows.StorageCapacity()
 }
 
 func (v *Vector) SetLength(n int) {
@@ -4432,7 +4440,6 @@ func (v *Vector) Free(mp *mpool.MPool) {
 	v.cantFreeArea = false
 	v.dataLease = nil
 	v.areaLease = nil
-	v.borrowedBackingBytes = 0
 
 	v.nsp.Reset()
 	v.gsp.Reset()
@@ -4974,7 +4981,6 @@ func (v *Vector) unmarshalBinary(data []byte, validateValues bool) error {
 	v.length = layout.length
 	v.data = layout.data
 	v.area = layout.area
-	v.borrowedBackingBytes = uint64(cap(data))
 	v.nsp = decodedNulls
 	v.gsp.Reset()
 	v.sorted = layout.sorted
@@ -10572,7 +10578,6 @@ func (v *Vector) window(
 	w.class = v.class
 	w.length = end - start
 	w.sorted = v.sorted
-	w.borrowedBackingBytes = v.retainedPayloadBytes()
 	if err := v.copyBinaryStringWindowTo(w, start, end, mp); err != nil {
 		w.Free(mp)
 		return nil, err

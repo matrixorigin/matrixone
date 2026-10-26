@@ -874,8 +874,7 @@ var predefinedFunids = map[int]int{
 	CUMRANK:                      617,
 	TMRANK:                       618,
 	QUANTILE_EXACT_WEIGHTED:      619,
-	SET_OPERATION_FLOAT_KEY:      620,
-	FUNCTION_END_NUMBER:          621,
+	FUNCTION_END_NUMBER:          620,
 }
 
 func Test_funids(t *testing.T) {

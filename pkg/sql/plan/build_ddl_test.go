@@ -1150,7 +1150,6 @@ func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testin
 		name        string
 		sql         string
 		contains    string
-		definition  string
 		checkOption string
 		replay      bool
 		replayCols  []string
@@ -1208,12 +1207,9 @@ func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testin
 			replayCols: []string{"view_name"},
 		},
 		{
-			name:     "explicit view columns cover parenthesized union output",
-			sql:      "CREATE VIEW v (view_name, region_name) AS (SELECT n_name, n_regionkey FROM nation UNION SELECT n_name, n_regionkey FROM nation);",
-			contains: "as `__mo_view_definition`(`view_name`, `region_name`)",
-			// Bind both retained UNION arms without injecting an optimizer-only
-			// DISTINCT into the parser-derived metadata.
-			definition: "select `__mo_view_definition`.`view_name` as `view_name`, `__mo_view_definition`.`region_name` as `region_name` from ((select `nation`.`n_name`, `nation`.`n_regionkey` from `nation` union select `nation`.`n_name`, `nation`.`n_regionkey` from `nation`)) as `__mo_view_definition`(`view_name`, `region_name`)",
+			name:       "explicit view columns cover parenthesized union output",
+			sql:        "CREATE VIEW v (view_name, region_name) AS (SELECT n_name, n_regionkey FROM nation UNION SELECT n_name, n_regionkey FROM nation);",
+			contains:   "as `__mo_view_definition`(`view_name`, `region_name`)",
 			replay:     true,
 			replayCols: []string{"view_name", "region_name"},
 		},
@@ -1234,9 +1230,6 @@ func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testin
 			var data ViewData
 			require.NoError(t, json.Unmarshal([]byte(built.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
 			require.NotEmpty(t, data.Definition)
-			if test.definition != "" {
-				require.Equal(t, test.definition, data.Definition)
-			}
 			assert.Contains(t, strings.ToLower(data.Definition), test.contains)
 			assert.NotContains(t, strings.ToLower(data.Definition), "create")
 			assert.NotContains(t, strings.ToLower(data.Definition), "check option")

@@ -28,20 +28,12 @@ import (
 type Operator struct {
 	affectedRows uint64
 	vm.OperatorBase
-	Template *Template
-	// ScalarSetReaggregation marks the planner's correlated scalar-UNION
-	// fallback: matched members are deduplicated per outer-row occurrence before
-	// restoring scalar cardinality. It requires the attempt-wide work lease.
-	ScalarSetReaggregation bool
-	// ScalarSetLease shares candidate-pair accounting with the marked parent
-	// operators. It is borrowed from the statement attempt; dynamic invocations
-	// never acquire or release a CN permit of their own.
-	ScalarSetLease *process.ScalarSetExecutionLease
-	account        *mpool.AllocationAccount
-	allocation     *vector.AllocationAccountSelection
-	execution      *Execution
-	terminalErr    error
-	done           bool
+	Template    *Template
+	account     *mpool.AllocationAccount
+	allocation  *vector.AllocationAccountSelection
+	execution   *Execution
+	terminalErr error
+	done        bool
 }
 
 var _ vm.Operator = (*Operator)(nil)
@@ -77,7 +69,7 @@ func (o *Operator) ClearAllocationAccount(account *mpool.AllocationAccount) erro
 	if o.execution != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	o.account, o.allocation, o.ScalarSetLease = nil, nil, nil
+	o.account, o.allocation = nil, nil
 	return o.terminalErr
 }
 func (o *Operator) Prepare(proc *process.Process) error {
@@ -86,9 +78,6 @@ func (o *Operator) Prepare(proc *process.Process) error {
 	}
 	if o.Template == nil || o.allocation == nil || o.execution != nil {
 		return moerr.NewInternalErrorNoCtx("invalid dependent operator generation")
-	}
-	if o.ScalarSetReaggregation && o.ScalarSetLease == nil {
-		return mpool.ErrAllocationAccountInvariant
 	}
 	if o.OpAnalyzer == nil {
 		o.OpAnalyzer = process.NewAnalyzer(o.GetIdx(), o.IsFirst, o.IsLast, "dependent")
@@ -99,9 +88,6 @@ func (o *Operator) Prepare(proc *process.Process) error {
 	o.done = false
 	o.affectedRows = 0
 	o.execution, err = o.Template.NewExecution(proc, o.allocation, o.account)
-	if err == nil {
-		o.execution.scalarSetLease = o.ScalarSetLease
-	}
 	return err
 }
 func (o *Operator) Call(proc *process.Process) (vm.CallResult, error) {

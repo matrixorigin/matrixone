@@ -1669,12 +1669,24 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 	// right is not UNION always
 	switch rightStmt := stmt.Right.(type) {
 	case *tree.SelectClause:
-		// Set membership can differ from ordinary SELECT DISTINCT (for example,
-		// FLOAT signed zero). Retain both arms until their equality keys are bound.
+		if stmt.Type == tree.UNION && !stmt.All {
+			rightStr := tree.String(rightStmt, dialect.MYSQL)
+			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
+				return nil
+			}
+		}
+
 		*selects = append(*selects, rightStmt)
 	case *tree.ValuesClause:
 		*selects = append(*selects, rightStmt)
 	case *tree.ParenSelect:
+		if stmt.Type == tree.UNION && !stmt.All {
+			rightStr := tree.String(rightStmt.Select, dialect.MYSQL)
+			if len(*selects) == 1 && tree.String((*selects)[0], dialect.MYSQL) == rightStr {
+				return nil
+			}
+		}
+
 		*selects = append(*selects, rightStmt.Select)
 	default:
 		return moerr.NewParseErrorf(ctx, "unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
@@ -8020,6 +8032,7 @@ func refreshPreparedSetOperationPhysicalKeys(
 		return nil
 	}
 	required := make([]bool, len(node.ProjectList))
+	anyRequired := false
 	for colPos, output := range node.ProjectList {
 		if output == nil || (types.T(output.Typ.Id) != types.T_varchar && types.T(output.Typ.Id) != types.T_text) {
 			continue
@@ -8039,25 +8052,24 @@ func refreshPreparedSetOperationPhysicalKeys(
 			hasPromotedChar = hasPromotedChar || hasPadSpaceStringProvenance(expr)
 		}
 		required[colPos] = hasPromotedChar || hasChar && hasVariableString
+		anyRequired = anyRequired || required[colPos]
 	}
-	keys, err := buildSetOperationPhysicalKeys(ctx, node.ProjectList, required)
-	if err != nil {
-		return err
+	if !anyRequired {
+		node.PhysicalEqualityKeyList = nil
+		return nil
 	}
-	// Visible float set keys are always function expressions. A pre-existing
-	// raw float key at the same output slot encodes a schema-stable hidden
-	// correlation identity, whose equality must remain scalar. Inspect its old
-	// type: a visible ANY/integer slot specializing to float must get a set key.
-	if len(node.PhysicalEqualityKeyList) == len(node.ProjectList) && len(keys) != 0 {
-		for i, oldKey := range node.PhysicalEqualityKeyList {
-			if oldKey == nil || (types.T(oldKey.Typ.Id) != types.T_float32 && types.T(oldKey.Typ.Id) != types.T_float64) {
-				continue
-			}
-			oldCol, outputCol := oldKey.GetCol(), node.ProjectList[i].GetCol()
-			outputType := types.T(node.ProjectList[i].Typ.Id)
-			if oldCol != nil && outputCol != nil && oldCol.RelPos == outputCol.RelPos && oldCol.ColPos == outputCol.ColPos &&
-				(outputType == types.T_float32 || outputType == types.T_float64) {
-				keys[i] = DeepCopyExpr(node.ProjectList[i])
+	keys := make([]*plan.Expr, len(node.ProjectList))
+	for colPos, expr := range node.ProjectList {
+		if expr == nil {
+			return moerr.NewInternalErrorf(ctx,
+				"prepared set-operation output has a nil projection at column %d", colPos)
+		}
+		keys[colPos] = DeepCopyExpr(expr)
+		if required[colPos] {
+			var err error
+			keys[colPos], err = appendSetOperationCastBeforeExpr(ctx, keys[colPos], keys[colPos].Typ)
+			if err != nil {
+				return err
 			}
 		}
 	}

@@ -139,9 +139,6 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	if features.TableCollationFunction {
 		required = max(required, defines.MORPCVersion118)
 	}
-	if features.SetOperationFloatKeys || features.ScalarSetReaggregation {
-		required = max(required, defines.MORPCVersion132)
-	}
 	if features.CalendarIntervalNormalization {
 		required = max(required, defines.MORPCVersion115)
 	}
