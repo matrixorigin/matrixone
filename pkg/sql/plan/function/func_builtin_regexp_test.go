@@ -2783,10 +2783,16 @@ func TestRegexpWideMultilineReviewFindings(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "a\r\nQ\rc", rep, "replace preserves CRLF bytes")
 
-	// NEL interior line (text) and the binary byte-0x85 variant.
+	// Wide-terminator interior lines in the text alphabet.
 	require.True(t, like("^b$", "a\u0085b", "m", false), "NEL interior line")
+	require.True(t, like("^b$", "a\vb", "m", false), "VT interior line")
+	require.True(t, like("^b$", "a\fb", "m", false), "FF interior line")
 	require.False(t, like("^b$", "a\x85", "m", true), "binary trailing NEL")
-	require.True(t, like("^b$", "a\x85b", "m", true), "binary NEL interior line")
+	// Binary lines break only on the ASCII controls CR, VT and FF; byte
+	// 0x85 never terminates a line in the binary alphabet (#30210).
+	require.False(t, like("^b$", "a\x85b", "m", true), "binary NEL interior line")
+	require.True(t, like("^b$", "a\vb", "m", true), "binary VT interior line")
+	require.True(t, like("^b$", "a\fb", "m", true), "binary FF interior line")
 
 	// A terminator-matching pattern over the size cap fails explicitly when a
 	// wide terminator is genuinely present in the subject.
