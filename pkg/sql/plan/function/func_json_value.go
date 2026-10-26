@@ -657,7 +657,7 @@ func parseJSONValueInt64(e jsonValueExtracted, _ types.Type) (int64, error) {
 		return 0, err
 	}
 	if !jsonValueNumericExactAtScale(numericText, 0) {
-		return 0, moerr.NewDataTruncatedNoCtxf("SIGNED", "value %q loses fractional precision", e.text)
+		return 0, moerr.NewDataTruncatedf(moerr.Context(), "SIGNED", "value %q loses fractional precision", e.text)
 	}
 	switch e.value.Type {
 	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64, bytejson.TpCodeDecimal:
@@ -724,7 +724,7 @@ func parseJSONValueUint64(e jsonValueExtracted, _ types.Type) (uint64, error) {
 		return 0, err
 	}
 	if !jsonValueNumericExactAtScale(numericText, 0) {
-		return 0, moerr.NewDataTruncatedNoCtxf("UNSIGNED", "value %q loses fractional precision", e.text)
+		return 0, moerr.NewDataTruncatedf(moerr.Context(), "UNSIGNED", "value %q loses fractional precision", e.text)
 	}
 	switch e.value.Type {
 	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64, bytejson.TpCodeDecimal:
@@ -788,7 +788,7 @@ func parseJSONValueDecimal64(e jsonValueExtracted, target types.Type) (types.Dec
 		return 0, err
 	}
 	if !jsonValueNumericExactAtScale(s, target.Scale) {
-		return 0, moerr.NewDataTruncatedNoCtxf("DECIMAL", "value %q loses fractional precision at scale %d", s, target.Scale)
+		return 0, moerr.NewDataTruncatedf(moerr.Context(), "DECIMAL", "value %q loses fractional precision at scale %d", s, target.Scale)
 	}
 	return types.ParseDecimal64(s, target.Width, target.Scale)
 }
@@ -799,7 +799,7 @@ func parseJSONValueDecimal128(e jsonValueExtracted, target types.Type) (types.De
 		return types.Decimal128{}, err
 	}
 	if !jsonValueNumericExactAtScale(s, target.Scale) {
-		return types.Decimal128{}, moerr.NewDataTruncatedNoCtxf("DECIMAL", "value %q loses fractional precision at scale %d", s, target.Scale)
+		return types.Decimal128{}, moerr.NewDataTruncatedf(moerr.Context(), "DECIMAL", "value %q loses fractional precision at scale %d", s, target.Scale)
 	}
 	return types.ParseDecimal128(s, target.Width, target.Scale)
 }
@@ -810,7 +810,7 @@ func parseJSONValueDecimal256(e jsonValueExtracted, target types.Type) (types.De
 		return types.Decimal256{}, err
 	}
 	if !jsonValueNumericExactAtScale(s, target.Scale) {
-		return types.Decimal256{}, moerr.NewDataTruncatedNoCtxf("DECIMAL", "value %q loses fractional precision at scale %d", s, target.Scale)
+		return types.Decimal256{}, moerr.NewDataTruncatedf(moerr.Context(), "DECIMAL", "value %q loses fractional precision at scale %d", s, target.Scale)
 	}
 	return types.ParseDecimal256(s, target.Width, target.Scale)
 }
@@ -860,7 +860,7 @@ func parseJSONValueTime(e jsonValueExtracted, target types.Type) (types.Time, er
 		return 0, err
 	}
 	if !jsonValueFractionalPrecisionExact(s, target.Scale) {
-		return 0, moerr.NewDataTruncatedNoCtxf("TIME", "value %q loses fractional precision at scale %d", s, target.Scale)
+		return 0, moerr.NewDataTruncatedf(moerr.Context(), "TIME", "value %q loses fractional precision at scale %d", s, target.Scale)
 	}
 	if err := rejectJSONValueZeroDatetime(s); err != nil {
 		return 0, err
@@ -874,7 +874,7 @@ func parseJSONValueDatetime(e jsonValueExtracted, target types.Type) (types.Date
 		return 0, err
 	}
 	if !jsonValueFractionalPrecisionExact(s, target.Scale) {
-		return 0, moerr.NewDataTruncatedNoCtxf("DATETIME", "value %q loses fractional precision at scale %d", s, target.Scale)
+		return 0, moerr.NewDataTruncatedf(moerr.Context(), "DATETIME", "value %q loses fractional precision at scale %d", s, target.Scale)
 	}
 	value, err := types.ParseDatetime(s, target.Scale)
 	if err != nil {

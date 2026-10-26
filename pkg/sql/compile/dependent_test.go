@@ -120,9 +120,10 @@ func TestDependentUnionEqualityKeys(t *testing.T) {
 				defer distinct.Release()
 				defer distinct.GetChildren(0).(*unionall.UnionAll).Release()
 				if physical {
-					require.Len(t, distinct.GroupBy, 2)
-					require.Equal(t, []int32{1}, distinct.GroupByHashKey)
-					require.True(t, proto.Equal(n.PhysicalEqualityKeyList[0], distinct.GroupBy[1]))
+					require.Len(t, distinct.GroupBy, 1)
+					require.Empty(t, distinct.GroupByHashKey)
+					require.True(t, proto.Equal(n.PhysicalEqualityKeyList[0], distinct.GroupBy[0]))
+					require.Len(t, n.PhysicalEqualityKeyList, 1, "set tuple remains complete")
 					require.Len(t, distinct.ProjectList, 1)
 					require.Zero(t, distinct.ProjectList[0].GetCol().ColPos)
 				} else {
@@ -133,6 +134,28 @@ func TestDependentUnionEqualityKeys(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestDependentUnionMixedEqualityKeys(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	typ := types.T_varchar.ToType().PlanType()
+	visible := []*plan.Expr{plan2.GetColExpr(typ, 0, 0), plan2.GetColExpr(typ, 0, 1)}
+	physical := plan2.DeepCopyExprList(visible)
+	physical[1].Typ.PadSpace = true
+	n := &plan.Node{NodeType: plan.Node_UNION, ProjectList: visible, PhysicalEqualityKeyList: physical}
+	factory, _, err := (&Compile{proc: proc}).compileDependentKernel(n, []*plan.Node{{}, {}})
+	require.NoError(t, err)
+	op, err := factory(proc, nil)
+	require.NoError(t, err)
+	distinct := op.(*group.Group)
+	defer distinct.Release()
+	defer distinct.GetChildren(0).(*unionall.UnionAll).Release()
+	require.Len(t, distinct.GroupBy, 3)
+	require.Equal(t, []int32{0, 2}, distinct.GroupByHashKey)
+	require.Len(t, distinct.ProjectList, 2)
+	require.Len(t, n.PhysicalEqualityKeyList, 2)
+	require.True(t, proto.Equal(physical[1], distinct.GroupBy[2]))
 }
 
 func TestDependentNativeStages(t *testing.T) {
@@ -181,6 +204,8 @@ func TestDependentNativeStages(t *testing.T) {
 		{"cte_capture_two_ancestors", `SELECT (SELECT (WITH x AS (SELECT n1.N_NATIONKEY+n2.N_NATIONKEY k) SELECT (SELECT k FROM x)) FROM NATION n2 WHERE n2.N_NATIONKEY=2) FROM NATION n1`, []string{"3", "4", "5"}},
 		{"cte_capture_definition_chain", `SELECT (WITH x AS (SELECT n2.N_NATIONKEY+n1.N_NATIONKEY k FROM NATION n2),y AS (SELECT k+1 j FROM x) SELECT (SELECT MIN(j) FROM y)) FROM NATION n1`, []string{"3", "4", "5"}},
 		{"recursive_cte_two_programs", `SELECT (WITH RECURSIVE x(k) AS (SELECT (SELECT n1.N_NATIONKEY) UNION ALL SELECT k+1 FROM x WHERE k<3) SELECT (SELECT MIN(k) FROM x)+(SELECT MAX(k) FROM x)) FROM NATION n1`, []string{"4", "5", "6"}},
+		{"recursive_cte_wrapper_two_programs", `SELECT (WITH RECURSIVE x(k) AS (SELECT (SELECT n1.N_NATIONKEY) UNION ALL SELECT k+1 FROM x WHERE k<3),y(j) AS (SELECT k+1 FROM x) SELECT (SELECT MIN(j) FROM y)+(SELECT MAX(j) FROM y)) FROM NATION n1`, []string{"6", "7", "8"}},
+		{"recursive_cte_stable_predecessor", `SELECT (WITH RECURSIVE base(k) AS (SELECT 1 UNION ALL SELECT k+1 FROM base WHERE k<2),r(n) AS (SELECT (SELECT n1.N_NATIONKEY) FROM base UNION ALL SELECT n-1 FROM r,base WHERE base.k=1 AND n>1) SELECT COUNT(*) FROM r) FROM NATION n1`, []string{"2", "4", "6"}},
 		{"cross_apply", `SELECT (SELECT COUNT(g.result) FROM NATION n2 CROSS APPLY generate_series(n2.N_NATIONKEY,3) g WHERE n2.N_NATIONKEY=(SELECT n1.N_NATIONKEY)) FROM NATION n1`, []string{"3", "2", "1"}},
 		{"outer_apply", `SELECT (SELECT 10*COUNT(*)+COUNT(g.result) FROM NATION n2 OUTER APPLY generate_series(n2.N_NATIONKEY,0,1) g WHERE n2.N_NATIONKEY=(SELECT n1.N_NATIONKEY)) FROM NATION n1`, []string{"10", "10", "10"}},
 		{"sample_argument", `SELECT (SELECT SUM(x.k) FROM (SELECT SAMPLE((SELECT n1.N_NATIONKEY),100 PERCENT) k FROM NATION n2) x) FROM NATION n1`, []string{"3", "6", "9"}},

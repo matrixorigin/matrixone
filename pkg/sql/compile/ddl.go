@@ -1345,6 +1345,14 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					def.IsTemporary = true
 					indexNameMap[orig] = def.Name
 				}
+				stage := &temporaryDDLSession{Session: session, sessionID: c.proc.GetSessionInfo().SessionId,
+					aliases: make(map[temporaryTableAlias]string, len(indexNameMap))}
+				for alias, name := range indexNameMap {
+					stage.AddTempIndexTable(tmpDb, alias, name)
+				}
+				originalCtx := c.proc.Ctx
+				c.proc.Ctx = attachInternalExecutorSession(originalCtx, stage)
+				defer func() { c.proc.Ctx = originalCtx }()
 				for _, idx := range indexTableDef.Indexes {
 					if renamed, ok := indexNameMap[idx.IndexTableName]; ok {
 						idx.IndexTableName = renamed
@@ -1433,6 +1441,11 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				}
 			}
 			oTableDef.Indexes = append(oTableDef.Indexes, indexTableDef.Indexes...)
+			if isTemp {
+				for _, def := range indexInfo.IndexTables {
+					addTemporaryIndexAlias(c.proc.GetSession(), dbName, def.Name, def.Name)
+				}
+			}
 		case *plan.AlterTable_Action_AlterIndex:
 			hasUpdateConstraints = true
 			tableAlterIndex := act.AlterIndex
@@ -1944,6 +1957,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
 		}
+		// Index initialization SQL runs before the staged aliases are
+		// published. Lend the schema transaction's owner to nested execution.
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, session)
+		defer func() { c.proc.Ctx = originalCtx }()
 		if _, exists := session.GetTempTable(dbName, aliasName); exists {
 			if qry.GetIfNotExists() {
 				return nil
@@ -2140,12 +2158,16 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	}
 
 	rollbackTempAlias := false
+	tempIndexAliases := make(map[string]string)
 	if isTemp && session != nil {
 		session.AddTempTable(dbName, aliasName, tblName)
 		rollbackTempAlias = true
 		defer func() {
 			if rollbackTempAlias {
 				session.RemoveTempTable(dbName, aliasName)
+				for indexAlias := range tempIndexAliases {
+					session.RemoveTempTable(dbName, indexAlias)
+				}
 			}
 		}()
 	}
@@ -2411,6 +2433,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 				zap.Error(err),
 			)
 			return err
+		}
+
+		if isTemp && session != nil {
+			addTemporaryIndexAlias(session, dbName, def.Name, def.Name)
+			tempIndexAliases[def.Name] = def.Name
 		}
 
 		err = maybeCreateAutoIncrement(
@@ -2742,6 +2769,20 @@ func physicalTemporaryTableName(proc *process.Process, dbName, alias string) str
 		return names.TemporaryTableName(dbName, alias)
 	}
 	return defines.GenTempTableName(proc.Base.SessionInfo.SessionId, dbName, alias)
+}
+
+// temporaryIndexTableName keeps independently-created temporary indexes in
+// the same generated namespace as their root table. Session temporary DDL
+// roots include a generation component; reusing the root prefix lets missing
+// relation retirement discover those index aliases without a table definition.
+func temporaryIndexTableName(proc *process.Process, dbName, rootAlias, rootPhysical, alias string) string {
+	if rootPhysical != "" && strings.HasSuffix(rootPhysical, rootAlias) {
+		prefix := strings.TrimSuffix(rootPhysical, rootAlias)
+		if strings.HasPrefix(prefix, defines.TempTableNamePrefix) {
+			return prefix + alias
+		}
+	}
+	return physicalTemporaryTableName(proc, dbName, alias)
 }
 
 func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel engine.Relation, qry *plan.CreateTable) error {
@@ -3252,7 +3293,13 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
 		}
-		if realName, ok := session.GetTempTable(qry.Database, qry.Table); ok {
+		// Index backfill runs internal SQL before the new index aliases are
+		// published. Keep the authenticated owner for both root and index
+		// resolution, as ALTER TABLE already does for its nested SQL.
+		rootAlias := qry.Table
+		rootPhysical := ""
+		if realName, ok := session.GetTempTable(qry.Database, rootAlias); ok {
+			rootPhysical = realName
 			qry.Table = realName
 			qry.TableDef.Name = realName
 		}
@@ -3260,7 +3307,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		for _, def := range qry.Index.IndexTables {
 			orig := def.Name
 			if !defines.IsTempTableName(orig) {
-				def.Name = defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, qry.Database, orig)
+				def.Name = temporaryIndexTableName(c.proc, qry.Database, rootAlias, rootPhysical, orig)
 			}
 			def.TableType = catalog.SystemTemporaryTable
 			def.IsTemporary = true
@@ -3271,6 +3318,14 @@ func (s *Scope) CreateIndex(c *Compile) error {
 				idx.IndexTableName = renamed
 			}
 		}
+		stage := &temporaryDDLSession{Session: session, sessionID: c.proc.GetSessionInfo().SessionId,
+			aliases: make(map[temporaryTableAlias]string, len(indexNameMap))}
+		for alias, name := range indexNameMap {
+			stage.AddTempIndexTable(qry.Database, alias, name)
+		}
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, stage)
+		defer func() { c.proc.Ctx = originalCtx }()
 		tempIndexNameMap = indexNameMap
 		tempTableSession = session
 	}
@@ -4321,8 +4376,11 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	}
 	// Same reason as the ALTER ... COPY replica: the recreate goes through regenerated
 	// DDL, which cannot express relkind. It also keeps the table's CHECK constraint
-	// names, so skip the 3822 sibling scan for this internal recreate.
-	createOpts = createOpts.WithKeepRelKind(tableDef.GetTableType()).WithTrustedCheckConstraintNames()
+	// names, so skip the 3822 sibling scan for this internal recreate, and it
+	// reinstalls the unchanged foreign-key layout, so keep it out of
+	// newly-authored-constraint validation (#30282: a legacy SET NULL over a NOT
+	// NULL column must stay truncatable).
+	createOpts = createOpts.WithKeepRelKind(tableDef.GetTableType()).WithTrustedCheckConstraintNames().WithTrustedForeignKeyLayout()
 	if truncate.IsDelete {
 		rows, err := rel.Rows(c.proc.Ctx)
 		if err != nil {
@@ -4623,12 +4681,12 @@ type temporaryDropRetirement struct {
 }
 
 func (s *temporaryDropRetireStage) contains(db, alias string) bool {
-	_, ok := s.aliases[db+"."+alias]
+	_, ok := s.aliases[defines.TempTableAliasKey(db, alias)]
 	return ok
 }
 
 func (s *temporaryDropRetireStage) add(owner process.TemporaryTableDDL, db, alias, physical string, indexes []string) {
-	key := db + "." + alias
+	key := defines.TempTableAliasKey(db, alias)
 	if s.contains(db, alias) {
 		return
 	}
@@ -4843,6 +4901,22 @@ func (s *Scope) dropTableSingleResolved(
 			}
 		}
 	}
+	// A temporary alias is user-visible state even when its physical relation
+	// has already disappeared (for example, after another session drops the
+	// backing database). Forget only its logical ownership. Enqueuing a physical
+	// DROP here could delete a replacement that reuses a legacy physical name.
+	retireMissingTemporary := func() {
+		if !isTemp {
+			return
+		}
+		if session := c.proc.GetSession(); session != nil {
+			if owner, ok := session.(process.MissingTemporaryTableForgetter); ok {
+				owner.ForgetMissingTemporaryTable(dbName, originTableName, tblName)
+				return
+			}
+			session.RemoveTempTableByRealName(tblName)
+		}
+	}
 
 	// A plan built for a temporary table must not delete a same-named
 	// permanent table if the session alias disappears before execution.
@@ -4884,6 +4958,10 @@ func (s *Scope) dropTableSingleResolved(
 	if dbSource == nil {
 		dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 		if err != nil {
+			if isTemp && (moerr.IsMoErrCode(err, moerr.OkExpectedEOB) ||
+				moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
+				retireMissingTemporary()
+			}
 			if qry.GetIfExists() {
 				return nil
 			}
@@ -4893,6 +4971,9 @@ func (s *Scope) dropTableSingleResolved(
 
 	if rel == nil {
 		if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
+			if isTemp && moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				retireMissingTemporary()
+			}
 			if qry.GetIfExists() {
 				return nil
 			}
@@ -5447,6 +5528,11 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table clone")
 		}
+		// Seed deletion and index restore SQL must use the destination's
+		// authenticated owner, just like the preceding CREATE phase.
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, session)
+		defer func() { c.proc.Ctx = originalCtx }()
 		physicalName, ok := session.GetTempTable(dbName, tblName)
 		if !ok {
 			return moerr.NewInternalErrorf(c.proc.Ctx,
@@ -5490,6 +5576,13 @@ func (s *Scope) RestoreTable(c *Compile, clonePlan *plan.CloneTable) error {
 	// 3. clone main table + index hidden tables (append onto empty).
 	logutil.Infof("[RestoreTable] clone (s.Run): %s.%s", dbName, tblName)
 	if err := s.Run(c); err != nil {
+		return err
+	}
+
+	// The block-level clone bypasses row-wise foreign-key checks. A historical
+	// clone (restore) must not commit child rows whose parent keys are not
+	// visible in this transaction.
+	if err := validateClonedTableFKIntegrity(c, clonePlan, dbName, tblName); err != nil {
 		return err
 	}
 

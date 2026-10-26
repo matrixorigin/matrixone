@@ -203,10 +203,10 @@ func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, err
 	return features.BoundedConditionalStringDomains, err
 }
 
-// RequiresMORPCVersion130JSONValueContract reports whether an owner contains
+// RequiresMORPCVersion132JSONValueContract reports whether an owner contains
 // the planner-only seven-argument JSON_VALUE overload. The overload carries
 // target and response semantics that older receivers cannot dispatch.
-func RequiresMORPCVersion130JSONValueContract(owner any) (bool, error) {
+func RequiresMORPCVersion132JSONValueContract(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.JSONValueContract, err
 }
@@ -371,7 +371,7 @@ const (
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
-// JSONValueContract provisionally requires MORPC v129 on this isolated branch;
+// JSONValueContract provisionally requires MORPC v132 on this isolated branch;
 // revalidate its allocation at the authoritative main merge. The independently
 // gated main capabilities retain their existing MORPC v111-v128 allocations.
 // DecimalLiteralSemantics requires MORPC v89 because plain DECIMAL256
@@ -410,6 +410,8 @@ const (
 // TIMESTAMP identities; released unary identities retain TIMESTAMP vectors.
 // DynamicTimeResultContracts uses the same epoch for prepared TIME results
 // over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
+// IncompleteTemporalStrings requires MORPC v130 for raw-calendar string
+// overloads and incomplete-input rejection diagnostics.
 type RemoteExpressionFeatures struct {
 	JSONStringConsumerOverload    bool
 	JSONOpaqueTextContracts       bool
@@ -459,6 +461,7 @@ type RemoteExpressionFeatures struct {
 	DateNumericResultContracts              bool
 	TimestampDatetimeResultContracts        bool
 	DynamicTimeResultContracts              bool
+	IncompleteTemporalStrings               bool
 	DecimalStatisticalResultContracts       bool
 	TableCollationFunction                  bool
 	InvalidDecimalStatisticalResultContract bool
@@ -499,6 +502,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.MediumIntAssignmentBounds ||
 		features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts ||
 		features.DateNumericResultContracts ||
+		features.IncompleteTemporalStrings ||
 		features.DecimalStatisticalResultContracts ||
 		features.TableCollationFunction ||
 		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
@@ -1057,10 +1061,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					features.TemporalResultContracts = true
 				}
 				if current.Typ.Id == planInt32TypeID &&
-					((id == 216 && overload >= 0 && overload <= 3) || (id == 206 && overload == 0)) {
+					((id == 216 && overload >= 0 && overload <= 5) || (id == 206 && overload == 0)) {
 					features.DateNumericResultContracts = true
 				}
-				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
+				if id == 216 && (overload == 0 || overload == 1 || overload == 4) { // one-arg WEEK: DATE/DATETIME/VARCHAR
 					features.WeekSessionDefault = true
 				}
 				timestamp, dynamicTime := TemporalResultContractFeatures(current)
@@ -1072,6 +1076,19 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 						want = planDatetimeTypeID
 					}
 					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || current.Typ.Id != want
+				}
+				// New string identities cannot execute on pre-v127 workers.
+				// Released LAST_DAY and DATE_ADD/SUB string identities also
+				// need the new incomplete-calendar warning contract.
+				if (id == 251 && overload == 2) || // DATE_FORMAT
+					(id == 93 && overload >= 1 && overload <= 3) || // DATEDIFF
+					((id == 222 || id == 223) && overload == 1) || // TO_DAYS/TO_SECONDS
+					(id == 216 && (overload == 4 || overload == 5)) || // WEEK
+					(id == 360 && overload == 3) || // DAYOFWEEK
+					(id == 201 && (overload == 0 || overload == 1)) || // LAST_DAY
+					(id == 224 && (overload == 2 || overload == 3 || overload == 6)) || // DATE_ADD
+					(id == 225 && (overload == 2 || overload == 3 || overload == 5)) { // DATE_SUB
+					features.IncompleteTemporalStrings = true
 				}
 				// Released overloads retain their physical vector ABI. The new
 				// numeric EXTRACT and string ADDTIME/SUBTIME results use appended

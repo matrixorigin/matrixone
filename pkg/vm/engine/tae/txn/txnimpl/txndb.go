@@ -139,17 +139,6 @@ func (db *txnDB) AddDataFiles(
 	return table.AddDataFiles(ctx, stats)
 }
 
-// func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {
-// 	changed, nid, nrow, err := table.TransferDeleteIntent(id, row)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	if !changed {
-// 		return table.RangeDelete(id, row, row, dt)
-// 	}
-// 	return table.RangeDelete(nid, nrow, nrow, dt)
-// }
-
 func (db *txnDB) RangeDelete(
 	id *common.ID, start, end uint32,
 	pkVec containers.Vector, dt handle.DeleteType,

@@ -2088,40 +2088,6 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(ctx context.Context, dat
 	return true, info, nil
 }
 
-/*
-//the server does something after receiving a handshake response41 from the client
-//like check user and password
-//and other things
-func (mp *MysqlProtocolImpl) handleClientResponse41(resp41 response41) error {
-	//to do something else
-	//logutil.Infof("capabilities 0x%x\n", resp41.capabilities)
-	//logutil.Infof("maxPacketSize %d\n", resp41.maxPacketSize)
-	//logutil.Infof("collationID %d\n", resp41.collationID)
-	//logutil.Infof("username %s\n", resp41.username)
-	//logutil.Infof("authResponse: \n")
-	//update the capabilities with client's capabilities
-	mp.capability = DefaultCapability & resp41.capabilities
-
-	//character set
-	if nameAndCharset, ok := lookupSupportedProtocolCollation(int(resp41.collationID)); !ok {
-		return moerr.NewInternalError(requestCtx, "get collationName and charset failed")
-	} else {
-		mp.collationID = int(resp41.collationID)
-		mp.collationName = nameAndCharset.collationName
-		mp.charset = nameAndCharset.charset
-	}
-
-	mp.maxClientPacketSize = resp41.maxPacketSize
-	mp.username = resp41.username
-	mp.database = resp41.database
-
-	//logutil.Infof("collationID %d collatonName %s charset %s \n", mp.collationID, mp.collationName, mp.charset)
-	//logutil.Infof("database %s \n", resp41.database)
-	//logutil.Infof("clientPluginName %s \n", resp41.clientPluginName)
-	return nil
-}
-*/
-
 // the server analyses handshake response320 info from the old client
 // return true - analysed successfully / false - failed ; response320 ; error
 func (mp *MysqlProtocolImpl) analyseHandshakeResponse320(ctx context.Context, data []byte) (bool, response320, error) {
@@ -2179,37 +2145,6 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse320(ctx context.Context, da
 
 	return true, info, nil
 }
-
-/*
-//the server does something after receiving a handshake response320 from the client
-//like check user and password
-//and other things
-func (mp *MysqlProtocolImpl) handleClientResponse320(resp320 response320) error {
-	//to do something else
-	//logutil.Infof("capabilities 0x%x\n", resp320.capabilities)
-	//logutil.Infof("maxPacketSize %d\n", resp320.maxPacketSize)
-	//logutil.Infof("username %s\n", resp320.username)
-	//logutil.Infof("authResponse: \n")
-
-	//update the capabilities with client's capabilities
-	mp.capability = DefaultCapability & resp320.capabilities
-
-	//if the client does not notice its default charset, the server gives a default charset.
-	//Run the sql in mysql 8.0.23 to get the charset
-	//the sql: select * from information_schema.collations where collation_name = 'utf8mb4_general_ci';
-	mp.collationID = int(Utf8mb4CollationID)
-	mp.collationName = "utf8mb4_general_ci"
-	mp.charset = "utf8mb4"
-
-	mp.maxClientPacketSize = resp320.maxPacketSize
-	mp.username = resp320.username
-	mp.database = resp320.database
-
-	//logutil.Infof("collationID %d collatonName %s charset %s \n", mp.collationID, mp.collationName, mp.charset)
-	//logutil.Infof("database %s \n", resp320.database)
-	return nil
-}
-*/
 
 // the server makes a AuthSwitchRequest that asks the client to authenticate the data with new method
 func (mp *MysqlProtocolImpl) makeAuthSwitchRequestPayload(authMethodName string) []byte {

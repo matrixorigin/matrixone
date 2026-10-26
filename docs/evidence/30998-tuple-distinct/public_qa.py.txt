@@ -1,0 +1,44 @@
+from harness import *
+from collections import defaultdict
+out=root/'public-qa';out.mkdir(exist_ok=True)
+db='qa30995';records=[]
+def check(s,label,sql,want,optimized=None):
+ r=run(s,sql,want)
+ s.execute('EXPLAIN PHYPLAN VERBOSE '+sql);plan='\n'.join(str(x[0]) for x in s.fetchall());(out/(label+'-physical.txt')).write_text(plan)
+ if optimized is not None:
+  # A rewritten COUNT has ordinary count states above complete tuple Groups.
+  assert ('shuffle(' in plan)==optimized,(label,plan)
+ records.append({'label':label,'sql':sql,'result':r,'shuffle':'shuffle(' in plan})
+ (out/'results.json').write_text(json.dumps(records,indent=2,default=str))
+ print('QA_CELL',label,r['seconds'],flush=True)
+with Service('candidate','public-qa') as svc:
+ s=svc.s;s.execute('SET SESSION max_dop=8');s.execute('CREATE DATABASE IF NOT EXISTS '+db)
+ s.execute('SHOW TABLES FROM '+db);present={x[0] for x in s.fetchall()}
+ if 'nn' not in present:
+  s.execute(f'CREATE TABLE {db}.nn(g INT NOT NULL,a BIGINT NOT NULL,b BIGINT NOT NULL,s VARCHAR(32) NOT NULL,c CHAR(32) NOT NULL)')
+  s.execute(f"INSERT INTO {db}.nn SELECT a%4,a,a%7,cast(a as varchar),concat(cast(a as varchar),case when k%2=0 then ' ' else '  ' end) FROM (SELECT k,k%333337 a FROM qa30982_history_20261024.natural_unique5m WHERE k<1000000) x")
+ if 'nullable' not in present:
+  s.execute(f'CREATE TABLE {db}.nullable(g INT NOT NULL,a BIGINT,b BIGINT)')
+  s.execute(f'INSERT INTO {db}.nullable SELECT case when k%11=0 then 4 else k%4 end,case when k%11=0 or k%7=0 then NULL else k%333337 end,case when k%13=0 then NULL else k end FROM qa30982_history_20261024.natural_unique5m WHERE k<1000000')
+ for table in ['nn','nullable']:
+  s.execute(f"SELECT mo_ctl('dn','flush','{db}.{table}')");s.fetchall()
+  s.execute("SELECT table_cnt,block_number,ndv_map FROM table_stats(%s,'refresh','full') t",(db+'.'+table,));stats=s.fetchall();assert stats[0][0]==1000000; (out/(table+'-stats.json')).write_text(json.dumps(stats,default=str,indent=2))
+ for dop in [1,8]:
+  s.execute(f'SET SESSION max_dop={dop}')
+  for args in ['b,a','a,b','(b,a)','s,b','c,b']:
+   check(s,f'nn-{dop}-'+args.replace(',','_').replace('(','').replace(')',''),f'SELECT COUNT(DISTINCT {args}) FROM {db}.nn',((333337,),),dop>1)
+  check(s,f'grouped-{dop}',f'SELECT g,COUNT(DISTINCT b,a) FROM {db}.nn GROUP BY g ORDER BY g',tuple((g,(333337+3-g)//4) for g in range(4)),dop>1)
+  groups=defaultdict(set)
+  for k in range(1000000):
+   g=4 if k%11==0 else k%4
+   groups[g]
+   if k%11 and k%7 and k%13:groups[g].add((k%333337,k))
+  check(s,f'nullable-{dop}',f'SELECT g,COUNT(DISTINCT a,b) FROM {db}.nullable GROUP BY g ORDER BY g',tuple((g,len(v)) for g,v in sorted(groups.items())),False)
+  check(s,f'invalid-{dop}',f'SELECT COUNT(DISTINCT a,b) FROM {db}.nullable WHERE g=4',((0,),))
+  check(s,f'empty-{dop}',f'SELECT COUNT(DISTINCT a,b) FROM {db}.nullable WHERE g=99',((0,),))
+  check(s,f'empty-grouped-{dop}',f'SELECT g,COUNT(DISTINCT a,b) FROM {db}.nullable WHERE g=99 GROUP BY g',())
+ s.execute('SET SESSION max_dop=8');s.execute('SET SESSION agg_spill_mem=8388608')
+ check(s,'forced-spill',f'SELECT COUNT(DISTINCT b,a) FROM {db}.nn',((333337,),),True)
+ s.execute(f'EXPLAIN ANALYZE SELECT COUNT(DISTINCT b,a) FROM {db}.nn');raw='\n'.join(str(x[0]) for x in s.fetchall());(out/'forced-spill-analyze.txt').write_text(raw)
+ assert re.search(r'SpillRows=[1-9][0-9]*',raw),raw
+print('PUBLIC_QA_PASS',len(records),flush=True)

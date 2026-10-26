@@ -148,12 +148,15 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	if features.JSONNumericComparisons {
 		required = max(required, defines.MORPCVersion128)
 	}
+	if features.IncompleteTemporalStrings {
+		required = max(required, defines.MORPCVersion130)
+	}
 	return required
 }
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	if features.JSONValueContract {
-		return defines.MORPCVersion130
+		return defines.MORPCVersion132
 	}
 	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
 		return defines.MORPCVersion129

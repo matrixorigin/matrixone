@@ -79,6 +79,13 @@ func (back *backExec) Service() string {
 	return back.backSes.GetService()
 }
 
+func (back *backExec) getTxn() TxnOperator {
+	if back == nil || back.backSes == nil || back.backSes.GetTxnHandler() == nil {
+		return nil
+	}
+	return back.backSes.GetTxnHandler().GetTxn()
+}
+
 func (back *backExec) GetLastAffectedRows() int64 {
 	return back.backSes.lastAffectedRows
 }
@@ -222,25 +229,6 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 	if len(statements) > 1 {
 		return moerr.NewInternalErrorf(ctx, "Exec() can run one statement at one time. but get '%d' statements now, sql = %s", len(statements), sql)
 	}
-	// uncomment this to enable backExec export data to CSV file.
-	//
-	//if st, ok := statements[0].(*tree.Select); ok && st != nil && st.Ep != nil {
-	//	back.backSes.ep = &ExportConfig{
-	//		userConfig: st.Ep,
-	//		service:    back.Service(),
-	//	}
-	//
-	//	back.backSes.ep.init()
-	//	back.backSes.ep.DefaultBufSize = getPu(back.backSes.GetService()).SV.ExportDataDefaultFlushSize
-	//	initExportFileParam(back.backSes.ep, back.backSes.mrs)
-	//	if err = openNewFile(ctx, back.backSes.ep, back.backSes.mrs); err != nil {
-	//		return err
-	//	}
-	//
-	//	defer func() {
-	//		retErr = errors.Join(retErr, Close(back.backSes.ep))
-	//	}()
-	//}
 
 	//share txn can not run transaction statement
 	if back.backSes.GetTxnHandler().IsShareTxn() {
@@ -1000,27 +988,6 @@ func backSesOutputCallback(handle FeSession, execCtx *ExecCtx, dataSet *batch.Ba
 	if execCtx != nil && isPerformStatement(execCtx.stmt) {
 		return nil
 	}
-
-	// uncomment this to enable backExec export data to CSV file.
-	//back := handle.(*backSession)
-	//if back.ep != nil {
-	//	back.ep.Index.Add(1)
-	//	copied, err := dataSet.Dup(execCtx.ses.GetMemPool())
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	constructByte(execCtx.reqCtx, execCtx.ses, copied, back.ep.Index.Load(), back.ep.ByteChan, back.ep)
-	//
-	//	if err = exportDataFromBatchToCSVFile(back.ep); err != nil {
-	//		execCtx.ses.Error(execCtx.reqCtx,
-	//			"Error occurred while exporting to CSV file",
-	//			zap.Error(err))
-	//		return err
-	//	}
-	//
-	//	return nil
-	//}
 
 	return fakeDataSetFetcher2(handle, execCtx, dataSet, nil)
 }
@@ -1796,6 +1763,31 @@ func (backSes *backSession) GetTempTable(dbName, alias string) (string, bool) {
 		return "", false
 	}
 	return backSes.upstream.GetTempTable(dbName, alias)
+}
+
+// Forgetting confirmed-dead ownership is irreversible, including in a failed
+// stored-procedure statement. Do not journal it as a normal temporary DROP.
+func (backSes *backSession) ForgetMissingTemporaryTable(dbName, alias, physical string) {
+	if backSes == nil {
+		return
+	}
+	if owner := upstreamUserSession(backSes); owner != nil {
+		owner.ForgetMissingTemporaryTable(dbName, alias, physical)
+	}
+}
+
+var _ process.MissingTemporaryTableForgetter = (*backSession)(nil)
+
+// OwnsTemporaryTable forwards physical ownership checks to the interactive
+// session. Background executors resolve the same temporary index relations as
+// their caller, so the shared temporary-table access gate must see the caller's
+// ownership map rather than treating the executor wrapper as a foreign session.
+func (backSes *backSession) OwnsTemporaryTable(dbName, physical string) bool {
+	if backSes == nil {
+		return false
+	}
+	owner := upstreamUserSession(backSes)
+	return owner != nil && owner.OwnsTemporaryTable(dbName, physical)
 }
 
 func (backSes *backSession) AddTempTable(dbName, alias, realName string) {

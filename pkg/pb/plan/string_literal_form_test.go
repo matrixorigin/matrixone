@@ -600,7 +600,7 @@ func TestRequiredRemoteExpressionFeaturesBoundedConditionalStringDomains(t *test
 		"the existing character overload remains wire-compatible")
 }
 
-func TestRequiresMORPCVersion130JSONValueContract(t *testing.T) {
+func TestRequiresMORPCVersion132JSONValueContract(t *testing.T) {
 	text := func(value string) *Expr {
 		return &Expr{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: value}}}}
 	}
@@ -619,11 +619,11 @@ func TestRequiresMORPCVersion130JSONValueContract(t *testing.T) {
 		Args: []*Expr{text(`{"a":1}`), text("$.a")},
 	}}}
 
-	required, err := RequiresMORPCVersion130JSONValueContract(jsonValueContract)
+	required, err := RequiresMORPCVersion132JSONValueContract(jsonValueContract)
 	require.NoError(t, err)
 	require.True(t, required)
 
-	required, err = RequiresMORPCVersion130JSONValueContract(legacy)
+	required, err = RequiresMORPCVersion132JSONValueContract(legacy)
 	require.NoError(t, err)
 	require.False(t, required)
 
@@ -653,7 +653,7 @@ func TestRequiresMORPCVersion130JSONValueContract(t *testing.T) {
 			decoded := &Plan{}
 			require.NoError(t, decoded.Unmarshal(encoded))
 			for _, value := range []any{scan, node, query, owner, decoded} {
-				required, err := RequiresMORPCVersion130JSONValueContract(value)
+				required, err := RequiresMORPCVersion132JSONValueContract(value)
 				require.NoError(t, err)
 				require.Equal(t, tc.want, required)
 				features, err := RequiredRemoteExpressionFeatures(value)
@@ -1183,10 +1183,11 @@ func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {
 	}{
 		{"week date", 216, 0, 22, true}, {"week datetime", 216, 1, 22, true},
 		{"week date mode", 216, 2, 22, true}, {"week datetime mode", 216, 3, 22, true},
+		{"week string", 216, 4, 22, true}, {"week string mode", 216, 5, 22, true},
 		{"dayofyear", 206, 0, 22, true},
 		{"legacy week", 216, 2, 25, false}, {"legacy dayofyear", 206, 0, 26, false},
 		{"weekofyear control", 217, 0, 23, false}, {"other int function", 218, 0, 22, false},
-		{"unknown overload", 216, 4, 22, false},
+		{"unknown overload", 216, 6, 22, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expr := &Expr{Typ: Type{Id: tc.result}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(tc.id)<<32 | int64(tc.overload)}}}}
@@ -1200,7 +1201,42 @@ func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {
 			if tc.want {
 				require.True(t, features.Any())
 			}
-			require.Equal(t, tc.id == 216 && tc.overload < 2, features.WeekSessionDefault)
+			require.Equal(t, tc.id == 216 && (tc.overload < 2 || tc.overload == 4), features.WeekSessionDefault)
+		})
+	}
+}
+
+func TestIncompleteTemporalStringFeaturesRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		id, overload int32
+		want         bool
+	}{
+		{"date_format string", 251, 2, true}, {"datediff strings", 93, 1, true},
+		{"datediff left string", 93, 2, true}, {"datediff right string", 93, 3, true},
+		{"to_days string", 222, 1, true}, {"to_seconds string", 223, 1, true},
+		{"week string", 216, 4, true}, {"week string mode", 216, 5, true},
+		{"dayofweek string", 360, 3, true},
+		{"last_day varchar", 201, 0, true}, {"last_day char", 201, 1, true},
+		{"date_add varchar", 224, 2, true}, {"date_add char", 224, 3, true}, {"date_add text", 224, 6, true},
+		{"date_sub varchar", 225, 2, true}, {"date_sub char", 225, 3, true}, {"date_sub text", 225, 5, true},
+		{"date_format typed", 251, 0, false}, {"date_format time", 251, 1, false},
+		{"datediff typed", 93, 0, false}, {"to_days typed", 222, 0, false}, {"to_seconds typed", 223, 0, false},
+		{"week typed", 216, 2, false}, {"week unknown", 216, 6, false}, {"dayofweek typed", 360, 0, false},
+		{"last_day date", 201, 2, false}, {"last_day datetime", 201, 3, false},
+		{"date_add time", 224, 5, false}, {"date_sub time", 225, 6, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := &Expr{Typ: Type{Id: planInt32TypeID}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(tc.id)<<32 | int64(tc.overload)}}}}
+			data, err := expr.Marshal()
+			require.NoError(t, err)
+			decoded := &Expr{}
+			require.NoError(t, decoded.Unmarshal(data))
+			owner := &TableDef{Cols: []*ColDef{{GeneratedCol: &GeneratedCol{Expr: decoded}}}}
+			features, err := RequiredRemoteExpressionFeatures(owner)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.IncompleteTemporalStrings)
+			require.True(t, (RemoteExpressionFeatures{IncompleteTemporalStrings: true}).Any())
 		})
 	}
 }

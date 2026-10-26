@@ -230,7 +230,7 @@ func TestJSONValueResponseAndWarningBoundaries(t *testing.T) {
 	appendJSONValueWarning(nil, errors.New("ignored"), false)
 	appendJSONValueWarning(proc, errors.New("invalid json"), false)
 	appendJSONValueWarning(proc, moerr.NewOutOfRangeNoCtxf("DOUBLE", "value"), true)
-	appendJSONValueWarning(proc, moerr.NewDataTruncatedNoCtxf("DOUBLE", "value"), true)
+	appendJSONValueWarning(proc, moerr.NewDataTruncatedf(moerr.Context(), "DOUBLE", "value"), true)
 	appendJSONValueWarning(proc, errors.New("conversion"), true)
 	require.Len(t, session.warnings, 4)
 	require.Equal(t, moerr.ER_INVALID_JSON_TEXT, session.warnings[0].code)

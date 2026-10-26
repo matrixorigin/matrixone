@@ -655,8 +655,8 @@ func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
 		{name: "numeric prefix rollback", from: defines.MORPCVersion30, to: defines.MORPCVersion25},
 		{name: "main row-lock upgrade", from: defines.MORPCVersion122, to: defines.MORPCVersion123},
 		{name: "main row-lock rollback", from: defines.MORPCVersion123, to: defines.MORPCVersion122},
-		{name: "JSON_VALUE upgrade", from: defines.MORPCVersion129, to: defines.MORPCVersion130},
-		{name: "JSON_VALUE rollback", from: defines.MORPCVersion130, to: defines.MORPCVersion129},
+		{name: "JSON_VALUE upgrade", from: defines.MORPCVersion131, to: defines.MORPCVersion132},
+		{name: "JSON_VALUE rollback", from: defines.MORPCVersion132, to: defines.MORPCVersion131},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)

@@ -665,6 +665,38 @@ printf '%s\n' "${shard_patterns[@]}"`, "bash", inventory).CombinedOutput()
 	if err != nil {
 		t.Fatalf("partition real inventory: %v\n%s", err, patterns)
 	}
+	planCapture := filepath.Join(root, "plan-selectors")
+	// Reuse the real binary for discovery. Capture the runner's selector, then
+	// execute it below with the same native consumer as the partitioned control.
+	mock := `#!/bin/bash
+case "$1" in
+ version) exit 0 ;;
+ list) printf '%s\t%s\n' "$PLAN_SOURCE_DIR" example/inventory ;;
+ test)
+  while [[ "$1" != -o ]]; do shift; done
+  cp "$PLAN_INVENTORY_BINARY" "$2"
+  ;;
+ tool)
+  [[ "$2" == test2json && "$PWD" -ef "$PLAN_SOURCE_DIR" ]] || exit 94
+  for arg in "$@"; do
+   case "$arg" in -test.run=*) printf '%s\n' "${arg#*=}" >> "$PLAN_CAPTURE" ;; esac
+  done
+  ;;
+ *) exit 95 ;;
+esac
+`
+	if out, err := scheduleHarnessWithMock(t, "source ./run_ut.sh UT\nrun_plan_race_shards example/inventory", mock,
+		"PLAN_SOURCE_DIR="+root, "PLAN_INVENTORY_BINARY="+binary, "PLAN_CAPTURE="+planCapture); err != nil {
+		t.Fatalf("capture whole-package selector: %v\n%s", err, out)
+	}
+	planData, err := os.ReadFile(planCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planSelectors := strings.Split(strings.TrimSpace(string(planData)), "\n")
+	if len(planSelectors) != 1 || planSelectors[0] == "" {
+		t.Fatalf("default plan execution must own one complete package: %q", planData)
+	}
 	run := func(record string, selectors []string) map[string]int {
 		t.Helper()
 		for _, selector := range selectors {
@@ -686,9 +718,10 @@ printf '%s\n' "${shard_patterns[@]}"`, "bash", inventory).CombinedOutput()
 	}
 	control := run(filepath.Join(root, "control"), []string{".*"})
 	batched := run(filepath.Join(root, "batched"), strings.Split(strings.TrimSpace(string(patterns)), "\n"))
+	wholePlan := run(filepath.Join(root, "whole-plan"), planSelectors)
 	want := map[string]int{"one": 1, "round": 20, "seed:a": 1, "seed:b": 1, "seed:c": 1, "example": 1, "parallel": 4}
-	if !reflect.DeepEqual(control, want) || !reflect.DeepEqual(batched, control) {
-		t.Fatalf("runtime coverage/stress changed: control=%v batched=%v want=%v", control, batched, want)
+	if !reflect.DeepEqual(control, want) || !reflect.DeepEqual(batched, control) || !reflect.DeepEqual(wholePlan, control) {
+		t.Fatalf("runtime coverage/stress changed: control=%v batched=%v plan=%v want=%v", control, batched, wholePlan, want)
 	}
 }
 

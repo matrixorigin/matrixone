@@ -20,12 +20,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestTree(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	tree := NewTree()
 	obj2 := objectio.NewObjectid()
 	tree.AddObject(1, 2, &obj2, false)
@@ -44,7 +42,6 @@ func TestTree(t *testing.T) {
 }
 
 func TestTableRecord_ReadOldVersion(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	var w bytes.Buffer
 	dbid := uint64(1)
 	tableid := uint64(1)

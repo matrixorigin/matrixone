@@ -25,13 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/stretchr/testify/require"
 )
 
 func TestMalformedDatabaseCatalogEntryRollsBackEarlierDDL(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
 	defer h.HandleClose(ctx)

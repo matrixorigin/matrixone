@@ -3576,15 +3576,15 @@ func requireJSONValueContractProtocol(ctx context.Context, proc *process.Process
 	if rt == nil {
 		return moerr.NewNotSupported(
 			ctx,
-			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 130",
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 132",
 		)
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion130 {
+	if !ok || !valid || version < defines.MORPCVersion132 {
 		return moerr.NewNotSupported(
 			ctx,
-			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 130",
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 132",
 		)
 	}
 	return nil
@@ -3604,7 +3604,7 @@ func (b *baseBinder) bindJsonValueExpr(astExpr *tree.FuncExpr, depth int32) (*Ex
 			}
 			args[i] = bound
 		}
-		return bindFuncExprImplByPlanExpr(b.GetContext(), "json_value", args, false, nil, nil, false)
+		return bindFuncExprImplByPlanExpr(b.GetContext(), nil, "json_value", args, false, nil, nil, false)
 	}
 	target := types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
 	if spec.Returning != nil {
@@ -4482,6 +4482,12 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	astArgs []tree.Expr,
 	depth int32,
 ) (*plan.Expr, error) {
+	// MRANK's width is the only multi-argument NTILE-role contract: the
+	// integer context applies to the WIDTH marker (arg index 1), never to the
+	// value argument, so route around the single-argument generic body below.
+	if strings.EqualFold(name, "mrank") {
+		return b.bindPreparedMrankWidthExpr(astArgs, depth)
+	}
 	target, ok := preparedNumericFunctionTarget(name, len(astArgs))
 	if b.builder == nil || !b.builder.isPrepareStatement || !ok {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
@@ -4530,6 +4536,45 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	}
 	return bindBoundFuncExprAndConstFoldWithObserver(
 		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+		b.observeExpressionProtocol,
+	)
+}
+
+// bindPreparedMrankWidthExpr gives MRANK's WIDTH argument the same deferred
+// marker typing NTILE's bucket count uses (issue #29947 design §3.1: N is
+// "any integer-typed expression ... as with NTILE's bucket count"). A bare
+// prepared marker publishes TEXT transport, which fails the catalog's
+// integer-domain check at PREPARE time, so bind the marker under the int64
+// context - the plan publishes cast(ParamRef -> int64) exactly as a prepared
+// ntile does, and the EXECUTE fill lands in the retention cast. The value
+// argument always binds through the ordinary path. Only a BARE (possibly
+// parenthesized) width marker routes here: constant, column, arithmetic and
+// explicit-cast widths (for example CAST(? AS UNSIGNED), whose prepared plan
+// keeps the unsigned domain) stay on the ordinary overload check, preserving
+// the documented bind rejection of non-integer ordinary widths and every
+// existing unsigned boundary surface. Invalid EXECUTE values are rejected at
+// execution time by the operator's own named width check (N >= 1, non-NULL)
+// per §3.1.
+func (b *baseBinder) bindPreparedMrankWidthExpr(astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	if b.builder == nil || !b.builder.isPrepareStatement || len(astArgs) != 2 {
+		return b.bindFuncExprImplByAstExpr("mrank", astArgs, depth)
+	}
+	if _, direct := unwrapParenExpr(astArgs[1]).(*tree.ParamExpr); !direct {
+		return b.bindFuncExprImplByAstExpr("mrank", astArgs, depth)
+	}
+	typ := types.T_int64.ToType()
+	target := makePlan2Type(&typ)
+	value, err := b.impl.BindExpr(astArgs[0], depth, false)
+	if err != nil {
+		return nil, err
+	}
+	width, err := b.bindNumericExprWithContext(astArgs[1], depth, &target)
+	if err != nil {
+		return nil, err
+	}
+	return bindBoundFuncExprAndConstFoldWithObserver(
+		b.GetContext(), b.builder.compCtx.GetProcess(), "mrank",
+		[]*Expr{value, width},
 		b.observeExpressionProtocol,
 	)
 }
@@ -5267,7 +5312,14 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// The builtin binder also uses ErrNotSupported for its interval
 		// no-escape postcondition. Preserve that boundary error instead of
 		// misinterpreting it as an unknown builtin and falling through to UDF
-		// resolution.
+		// resolution. tmrank's conversion case consumes T_interval arguments
+		// itself and owns their refusal diagnostics (including the shared
+		// admission boundary's control-function message), so its own errors —
+		// not the standalone-interval postcondition's — surface verbatim, and
+		// no UDF lookup rewrites them.
+		if name == "tmrank" {
+			return nil, err
+		}
 		if intervalErr := rejectBoundIntervalFunctionArgs(b.GetContext(), name, args); intervalErr != nil {
 			return nil, intervalErr
 		}
@@ -5275,7 +5327,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		// first look for builtin func
 		builtinExpr, err := bindFuncExprImplByPlanExpr(
-			b.GetContext(), name, args, false, nil, nil, findInSetInternalArgs)
+			b.GetContext(), nil, name, args, false, nil, nil, findInSetInternalArgs)
 		if err == nil {
 			if isNullIf {
 				b.rememberPreparedFieldNullIfDomain(builtinExpr, args)
@@ -5289,6 +5341,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return builtinExpr, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
+			return nil, err
+		}
+		// tmrank's conversion case consumes T_interval arguments itself and
+		// owns their refusal diagnostics (issue #29947): surface them verbatim
+		// instead of rewriting a consumed pair into the standalone-interval
+		// postcondition's message or consulting UDF resolution.
+		if name == "tmrank" {
 			return nil, err
 		}
 		if intervalErr := rejectBoundIntervalFunctionArgs(b.GetContext(), name, args); intervalErr != nil {
@@ -6065,7 +6124,7 @@ func bindFuncExprAndConstFoldInternal(
 	// covering every other function of the definition.
 	foldGeometrySRIDConstArg(proc, name, args)
 	retExpr, err := bindFuncExprImplByPlanExpr(
-		ctx, name, args, descendFunctions, nil, nil, allowInternalFunctionArgs)
+		ctx, proc, name, args, descendFunctions, nil, nil, allowInternalFunctionArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -6381,6 +6440,23 @@ func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Exp
 	return nil
 }
 
+// validateQuantileExactWeightedArgs enforces the flat three-argument contract
+// of quantileExactWeighted: [value, weight, level]. The level is stripped into
+// execution-invariant aggregate configuration exactly like the ordered-set
+// percentiles' percentile argument; the value and weight remain row arguments.
+func validateQuantileExactWeightedArgs(ctx context.Context, name string, args []*Expr) error {
+	if len(args) != 3 {
+		return moerr.NewInvalidInputf(ctx,
+			"%s requires a value, a weight, and a level argument", name)
+	}
+	level := args[2]
+	if level == nil || isNullExpr(level) || !IsPercentileConfigExpr(level) {
+		return moerr.NewInvalidInputf(ctx,
+			"level argument of %s must be a non-null constant or parameter in [0,1]", name)
+	}
+	return nil
+}
+
 // IsPercentileConfigExpr reports whether expr can be evaluated without an
 // input row and is safe to use as execution-invariant percentile
 // configuration. Existing foldable constants remain supported. Prepared
@@ -6436,6 +6512,22 @@ func isPreparedPercentileExpr(expr *Expr) bool {
 // numeric expression types so exact DECIMAL configuration reaches range
 // validation and the rational percentile codec without FLOAT64 rounding.
 func normalizePercentileParam(ctx context.Context, name string, args []*Expr) error {
+	if strings.EqualFold(name, NameQuantileExactWeighted) {
+		if len(args) != 3 || !isPreparedPercentileExpr(args[2]) ||
+			function.IsConstant(args[2], false) {
+			return nil
+		}
+		if percentileParamTypeSupported(name, makeTypeByPlan2Expr(args[2])) {
+			return nil
+		}
+		floatType := types.T_float64.ToType()
+		level, err := appendCastBeforeExpr(ctx, args[2], makePlan2Type(&floatType))
+		if err != nil {
+			return err
+		}
+		args[2] = level
+		return nil
+	}
 	if (name != NameApproxPercentile && name != NamePercentileCont && name != NamePercentileDisc) ||
 		len(args) != 2 || !isPreparedPercentileExpr(args[1]) || function.IsConstant(args[1], false) {
 		return nil
@@ -7711,7 +7803,7 @@ func preparedRegexpResultStringOperandCount(name string, arity int) int {
 }
 
 func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) (*plan.Expr, error) {
-	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil, nil, false)
+	return bindFuncExprImplByPlanExpr(ctx, nil, name, args, true, nil, nil, false)
 }
 
 func preparedBetweenHasMixedNumericText(ctx context.Context, args []*Expr) bool {
@@ -7768,11 +7860,12 @@ func bindPreparedFuncExprImplByPlanExpr(
 		stringDomainModes = make([]function.StringDomainCheckMode, len(args))
 	}
 	return bindFuncExprImplByPlanExpr(
-		ctx, name, args, true, stringDomainModes, originalBoundExpr, true)
+		ctx, nil, name, args, true, stringDomainModes, originalBoundExpr, true)
 }
 
 func bindFuncExprImplByPlanExpr(
 	ctx context.Context,
+	proc *process.Process,
 	name string,
 	args []*Expr,
 	descendFunctions bool,
@@ -7781,6 +7874,7 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
+	preparedCalendarResult := preparedRawCalendarResult(name, args)
 	// Validate before rewriting or converting argument metadata. Checked public
 	// binding must not turn an unknown identity into a MustTypeFromPlan panic.
 	for _, arg := range args {
@@ -7857,6 +7951,11 @@ func bindFuncExprImplByPlanExpr(
 	}
 	if name == NamePercentileCont || name == NamePercentileDisc {
 		if err = validateOrderedPercentileArgs(ctx, name, args); err != nil {
+			return nil, err
+		}
+	}
+	if strings.EqualFold(name, NameQuantileExactWeighted) {
+		if err = validateQuantileExactWeightedArgs(ctx, name, args); err != nil {
 			return nil, err
 		}
 	}
@@ -8012,6 +8111,23 @@ func bindFuncExprImplByPlanExpr(
 		}
 	case "date_add", "date_sub":
 		if preparedDateFunctionArgs(originalBoundExpr, name, args) {
+			// A template's raw marker may specialize to an epoch number or a
+			// typed calendar. Preserve main's TIMESTAMP source interpretation
+			// before returning to raw arithmetic and the template's result cast.
+			if rawPreparedCalendarMarker(originalBoundExpr.GetF().Args[0]) {
+				source := unwrapPreparedImplicitCast(args[0], true)
+				oid := types.T(source.Typ.Id)
+				if oid != types.T_any && !oid.IsMySQLString() {
+					value, e := bindTemporalMarkerConsumer(ctx, source, types.New(types.T_datetime, 6, 6))
+					if e != nil {
+						return nil, e
+					}
+					args[0], e = appendCastBeforeExpr(ctx, value, plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen})
+					if e != nil {
+						return nil, e
+					}
+				}
+			}
 			args[2] = DeepCopyExpr(originalBoundExpr.GetF().Args[2])
 			if args[0].Typ.Id == int32(types.T_time) && types.T(args[1].Typ.Id).IsInteger() {
 				unit, _ := dateFunctionUnitFromPlanExpr(args[2])
@@ -8065,6 +8181,29 @@ func bindFuncExprImplByPlanExpr(
 		} else if len(args) > 1 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function needs zero or one arg", len(args))
 		}
+	case "tmrank":
+		// tmrank's public form is tmrank(v, INTERVAL n unit). Consume the raw
+		// T_interval argument HERE -- before overload resolution and before
+		// the publish-time standalone-interval postcondition -- and publish
+		// the internal (v, count, unit) shape the catalog registers, exactly
+		// as date_add publishes its converted overload (issue #29947).
+		// Rebinding of the saved internal form (prepared re-binding and
+		// projection refresh, both allowInternalFunctionArgs) passes through
+		// so the registered overload re-resolves with refreshed types; the
+		// grammar makes direct three-argument spellings unreachable from user
+		// SQL, and ordinary binding still rejects them here.
+		if allowInternalFunctionArgs && len(args) == 3 {
+			break
+		}
+		if len(args) != 2 || args[1] == nil ||
+			args[1].Typ.Id != int32(types.T_interval) {
+			return nil, moerr.NewInvalidArg(ctx, "tmrank function needs one value argument and one INTERVAL width", len(args))
+		}
+		countSlot, unitSlot, convErr := bindTmRankWidthArgument(ctx, proc, args[1], "tmrank")
+		if convErr != nil {
+			return nil, convErr
+		}
+		args = []*Expr{args[0], countSlot, unitSlot}
 	case "mo_win_truncate":
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg(ctx, "truncate function need two args", len(args))
@@ -8678,7 +8817,7 @@ func bindFuncExprImplByPlanExpr(
 		returnType.Width = scale
 	}
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
-	adjustDateFormatMetadata(name, args, &returnType)
+	adjustDateFormatMetadata(ctx, name, args, &returnType)
 
 	// Optimization: avoid casting columns in comparisons to preserve index usage
 	switch name {
@@ -9381,6 +9520,11 @@ func bindFuncExprImplByPlanExpr(
 			},
 		},
 		Typ: Typ,
+	}
+	if preparedCalendarResult != nil {
+		// Keep raw components until arithmetic owns its row diagnostics, then
+		// preserve the prepared consumer's independently inferred result type.
+		return appendCastBeforeExpr(ctx, result, makePlan2Type(preparedCalendarResult))
 	}
 	return result, nil
 }
@@ -10528,7 +10672,7 @@ func adjustControlFlowTemporalMetadata(argTypes []types.Type, valueIndexes []int
 // MatrixOne's temporal domain can produce longer values. Dynamic patterns
 // retain the overload's conservative VARCHAR capacity because their output
 // bound is not known at bind time.
-func adjustDateFormatMetadata(name string, args []*Expr, returnType *types.Type) {
+func adjustDateFormatMetadata(ctx context.Context, name string, args []*Expr, returnType *types.Type) {
 	if (name != "date_format" && name != "time_format") ||
 		len(args) != 2 || returnType.Oid != types.T_varchar {
 		return
@@ -10541,10 +10685,14 @@ func adjustDateFormatMetadata(name string, args []*Expr, returnType *types.Type)
 	if !ok {
 		return
 	}
-	returnType.Width = mysqlDateFormatWidth(name, value.Sval)
+	returnType.Width = mysqlDateFormatWidthForCalendar(name, value.Sval, !function.LegacyIncompleteTemporalStrings(ctx))
 }
 
 func mysqlDateFormatWidth(name, format string) int32 {
+	return mysqlDateFormatWidthForCalendar(name, format, true)
+}
+
+func mysqlDateFormatWidthForCalendar(name, format string, rawCalendar bool) int32 {
 	width := int64(0)
 	add := func(value int64) {
 		width = min(width+value, int64(types.MaxVarcharLen))
@@ -10566,8 +10714,16 @@ func mysqlDateFormatWidth(name, format string) int32 {
 		switch format[i] {
 		case 'M', 'W':
 			add(64)
-		case 'D', 'Y', 'x', 'X':
+		case 'D', 'Y':
 			add(4)
+		case 'x', 'X':
+			if isTimeFormat || !rawCalendar {
+				add(4)
+			} else {
+				// Raw calendar week-years can wrap zero to uint32 max.
+				// The formatter's four-digit padding is only a minimum.
+				add(10)
+			}
 		case 'a', 'b':
 			add(32)
 		case 'j':
@@ -10580,7 +10736,13 @@ func mysqlDateFormatWidth(name, format string) int32 {
 				// sentinel, which is wider than an ordinary two-digit week.
 				add(9)
 			}
-		case 'v', 'y', 'm', 'd', 'h', 'I', 'i', 'l', 'p', 'S', 's', 'c', 'e':
+		case 'v':
+			if isTimeFormat || !rawCalendar {
+				add(2)
+			} else {
+				add(9)
+			}
+		case 'y', 'm', 'd', 'h', 'I', 'i', 'l', 'p', 'S', 's', 'c', 'e':
 			add(2)
 		case 'k', 'H':
 			if isTimeFormat {
@@ -12079,6 +12241,18 @@ func (b *baseBinder) bindInetNtoaBinaryLiteral(astExpr *tree.NumVal, typ Type) (
 
 func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 
+// GetProcess exposes the compile session's process to the window-function
+// binder surface so constant-expression folding uses the same deterministic
+// evaluation engine (proc, mpool, sql_mode) as the rest of binding. The
+// builder-less stub contexts used by unit tests report no process and the
+// callers fall back to a bare-literal check.
+func (b *baseBinder) GetProcess() *process.Process {
+	if b == nil || b.builder == nil || b.builder.compCtx == nil {
+		return nil
+	}
+	return b.builder.compCtx.GetProcess()
+}
+
 // --- util functions ----
 
 // isBitwiseAggregateConversionInput selects only MySQL numeric-evaluation
@@ -12739,7 +12913,11 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 		if timestampAddDateUnit(intervalType) || intervalType == types.Year_Month {
 			target = types.T_date.ToType()
 		}
-		dateExpr, err = bindTemporalMarkerConsumer(ctx, dateExpr, target)
+		if rawPreparedCalendarMarker(dateExpr) {
+			dateExpr, err = appendCastBeforeExpr(ctx, unwrapPreparedImplicitCast(dateExpr, true), plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen})
+		} else {
+			dateExpr, err = bindTemporalMarkerConsumer(ctx, dateExpr, target)
+		}
 		if err != nil {
 			return nil, err
 		}
