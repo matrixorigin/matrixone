@@ -1,9 +1,10 @@
-# Restricted DEFAULT false candidate: Draft publication
+# Restricted DEFAULT false candidate: integration and acceptance
 
 This is an independent follow-up to [#30816](https://github.com/matrixorigin/matrixone/pull/30816),
 related to [#30518](https://github.com/matrixorigin/matrixone/issues/30518).
-Keep this change Draft / do-not-merge until the dependency, compatibility,
-current-head CI, review and acceptance gates are resolved.
+Ready-for-review requires the final integration and validation gates below.
+Merge remains blocked on the prerequisite, maintainer review and compatibility
+acceptance; Ready does not remove `do-not-merge/wip` or grant production use.
 This document describes the DEFAULT false extension; inherited M0 status notes
 describe the prerequisite NULL-suffix candidate and are not this extension's
 validation record.
@@ -18,13 +19,16 @@ validation record.
 - D3-to-C3 binary diff SHA-256:
   `41364e814f9ac0091ad5c12a65a6db375a30733a7181a812a57e3e96c5746aa5`.
 
-The publication commit adds this document and corrects gofmt indentation in
-`m0_default_copy_test.go`, without changing test logic. It does not rebuild or
-change the measured product. The independent branch preserves candidate history and
-does not update #30816. Until that dependency merges, the PR against main also
-contains prerequisite M0 changes; they must not be attributed to this extension.
-Main has advanced independently. Any later integration requires delta review
-and revalidation of affected evidence, not relabelling these binaries.
+The original publication preserved C3 product identity. The 2026-10-26 integration
+merges prerequisite `4c9092203a49f5bba5fcd8e1d2f2a8c6bd0c4982` and pinned main
+`5fe08a3307e246e1ab9951ab690b50557af0f509`, retaining both cluster-key replay and
+captured write-schema semantics. Scan proof errors and standalone CREATE INDEX
+COPY exit are repaired. Ordinary COPY avoids unnecessary target schema reads;
+nil catalog extra metadata and standard admission error handling are corrected.
+The independent branch does not update #30816. Its unmerged changes remain in
+the main-based diff and must not be attributed to the false extension. Integrated
+source validation is recorded separately from the measured D3/C3 binaries.
+See [the versioned design](DESIGN.md) and [distinct design decision](DESIGN_REVIEW.md).
 
 ## Supported behavior
 
@@ -43,7 +47,7 @@ NULL, win over synthesized values. Only a proved complete old physical prefix
 may receive a typed missing suffix; malformed layouts fail closed.
 
 Readers, writers, clone, merge, rollback and recovery preserve the state. Later
-unsupported legal DDL uses a standard COPY exit in the same user transaction:
+unsupported legal DDL on false-history tables uses a standard COPY exit in the same user transaction:
 read with the old fill semantics, materialize a complete ordinary target and
 clear the target append state, while preserving old snapshots and child clones.
 No general expression/type expansion or new concurrency/merge policy is included.
@@ -129,16 +133,35 @@ Evidence archive SHA-256:
 - Matched-DML exploration (331 verified files):
   `8841f1424d94797a9499b4835425ef3be4f35d5f5c7a36eb3a156a5fafa4acdf`.
 
-## Remaining gates at publication preparation
+## Completed formal screening and full pilot (frozen D3/C3)
 
-The formal two-fixture / three-pair screen is in progress in a separate execution
-session and is not counted as completed acceptance here. Its failed resource-
-attribution pair is retained and excluded as a pair; it is not spliced into
-valid samples. A full 10-worker x 20-step first/warm pilot is not yet accepted.
-No new experiment or compilation was started for this Draft publication.
+The sealed formal screen has twelve valid arms, three pairs for each cleaned
+2,940,000-row UPDATE/DELETE fixture. Median original-chain speedups are 3.626x
+and 3.631x; frozen content, mechanism, read, continuation, cumulative CPU/write
+and lifecycle gates pass. An invalid first DELETE pair was retained and replaced
+as a whole under the one-retry environment rule. These zero-match fixtures do
+not represent actual DML writes; the separate 60,000-row checks above do.
 
-Before Ready: resolve prerequisite integration; review any resulting semantic
-delta; complete applicable ordinary and guarded-mode CI/BVT; close the formal
-performance decision and deployment/compatibility contract with maintainers.
-QA is required for persistent metadata, clone and recovery semantics. This Draft
-is not QA acceptance, production enablement or permission to merge.
+One full SF100 data_cleaning pair (10 workers x 20 steps) completed:
+
+| Phase | D3 seconds | C3 seconds | Speedup | Business MO CPU D3 -> C3 seconds |
+| --- | ---: | ---: | ---: | ---: |
+| process-first-run | 112.61 | 24.51 | 4.59x | 876.50 -> 169.38 |
+| warm | 113.44 | 23.82 | 4.76x | 882.85 -> 168.47 |
+
+Each round completed all 200 steps, zero unexpected SQL errors, evaluation
+checks and bounded sanity. Actual branch graphs, inherited widths and cross-read
+counts differ, limiting strict causal attribution. These are one-pair results,
+not stability or significance evidence. The fixed 60-second tails are not
+natural drain; successful LocalFS-call bytes are not object payload/device I/O.
+Long-term maintenance debt, every-branch full contents, mixed-version/old-binary
+access and paper-performance recovery are not established.
+
+The formal protocol/analysis and full pilot are preserved independently; the
+current integrated source is not the measured C3 binary. No new SF100 run is
+required for documentation or Ready status alone. Actual path-changing integration
+deltas require proportionate correctness/performance qualification.
+
+QA required: yes (persistent state, historical views, clone and recovery).
+Current integrated-head tests, tagged Linux qualification and CI remain pending
+until their exact receipts are recorded; earlier tests are not relabelled.

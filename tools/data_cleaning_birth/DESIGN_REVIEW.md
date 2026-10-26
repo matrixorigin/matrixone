@@ -5,10 +5,10 @@ There are no design blockers in the reviewed revision. This is an independent
 model design review, not maintainer approval, implementation approval or
 production qualification. It does not dismiss the formal review on #30816.
 
-Reviewed document: [DESIGN.md at the frozen revision](https://github.com/VioletQwQ-0/matrixone/blob/97c156b2208d2b024e4c059510eee92109c24758/tools/data_cleaning_birth/DESIGN.md).
+Reviewed document: [DESIGN.md at the frozen revision](https://github.com/VioletQwQ-0/matrixone/blob/75927cb378956258e049b3e0316b59a5496aeb10/tools/data_cleaning_birth/DESIGN.md).
 
-- Exact commit: `97c156b2208d2b024e4c059510eee92109c24758`.
-- Document SHA256: `ecc6bc4d6dcfe4ac06d232f0d7d342c326c5d06e1d4bbd3355d6b5b5e783ddfe`.
+- Exact commit: `75927cb378956258e049b3e0316b59a5496aeb10`.
+- Document SHA256: `2a2f7cd2604ebc4df226a08893dbc329bc6e9d3d80d0fa78f1a8a8eb0612c443`.
 - Independent reviewer: Codex agent `01a17636-3af5-7ea3-af44-54b32c4f8374`,
   started without parent context, instructed not to delegate or modify code.
 - Classification: feature/R3; the complete #30816 + #30958 series crosses
@@ -24,10 +24,17 @@ requiring separate validation; bounded history/proof/replay costs; and explicit
 isolation, permission and old-binary limitations. No second storage authority,
 publication state machine or deferred materialization executor was needed.
 
-The approval requires the documented admission/exit invariant to hold for both
-NULL and false histories. A later transition must preserve the append invariant
-or use COPY; an unsupported explicit algorithm must reject. Implementation review
-must verify this rather than silently narrow the design to false descriptors.
+R2 explicitly distinguishes the existing NULL-only experimental domain from
+false descriptors. Unsupported later DDL on the NULL-only domain rejects before
+mutation, preserving `next=b+v`; no general NULL-domain COPY exit is introduced.
+False descriptors extend history for qualifying ADD, and other legal default-
+algorithm transitions use the existing transactional COPY exit. Unsupported
+explicit INPLACE rejects. Ordinary builds retain legal COPY behavior.
+
+The same independent reviewer re-read the frozen R2 Git object and approved this
+clarification without design blockers. R1 at `97c156b2208d2b024e4c059510eee92109c24758`
+is retained in history; its broad admission/exit wording is superseded by this
+explicit R2 decision, not by an unreviewed implementation change.
 
 Non-blocking rollout risks remain assigned: authors must measure ordinary and
 tagged hot-path costs and preserve source-bound evidence; maintainers and QA must
