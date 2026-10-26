@@ -23,21 +23,30 @@ import (
 // consumes expressions. Otherwise a later error can leave a partially consumed
 // AST whose first nil expression makes InitNullMap skip validation on retry.
 // Keep this LOAD-only: external tables also use InitNullMap.
-func validateLoadSetAssignments(param *tree.ExternParam, ctx CompilerContext) error {
+func validateLoadSetAssignments(param *tree.ExternParam, ctx CompilerContext, tableDef *TableDef) error {
 	if param == nil || param.Tail == nil {
 		return nil
 	}
 	for _, assignment := range param.Tail.Assignments {
-		if assignment != nil && assignment.Expr == nil {
-			// A nil expression marks an already normalized assignment.
-			continue
-		}
 		unsupported := func() error {
 			return moerr.NewNotSupported(ctx.GetContext(),
 				"LOAD DATA SET only supports NULLIF(column, literal) or NULLIF(@variable, literal)")
 		}
 		if assignment == nil {
 			return unsupported()
+		}
+		for _, target := range assignment.Names {
+			if target == nil {
+				return unsupported()
+			}
+			column := FindColumn(tableDef.Cols, target.ColName())
+			if column == nil || column.Hidden {
+				return moerr.NewBadFieldError(ctx.GetContext(), target.ColName(), tableDef.Name)
+			}
+		}
+		if assignment.Expr == nil {
+			// Normalization consumes the expression, but retains its target.
+			continue
 		}
 		expr, collated := loadNullIfFunction(assignment.Expr)
 		if expr == nil {

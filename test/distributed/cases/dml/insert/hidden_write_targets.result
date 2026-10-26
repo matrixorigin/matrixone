@@ -1,0 +1,68 @@
+drop database if exists hidden_write_targets;
+create database hidden_write_targets;
+use hidden_write_targets;
+create table composite_key(a int,b int,v int,primary key(a,b),key idx_v(v));
+insert into composite_key values(1,10,7);
+insert into composite_key(__mo_cpkey_col,a,b,v) values(unhex('0001'),1,99,8);
+Unknown column '__mo_cpkey_col' in 'composite_key'
+insert into composite_key(a,b,v,__mo_cpkey_col) select 1,99,8,unhex('0001');
+Unknown column '__mo_cpkey_col' in 'composite_key'
+replace into composite_key(a,b,v,__mo_cpkey_col) values(1,99,8,unhex('0001'));
+Unknown column '__mo_cpkey_col' in 'composite_key'
+insert ignore into composite_key(a,b,__mo_cpkey_col) values(1,99,default);
+Unknown column '__mo_cpkey_col' in 'composite_key'
+update composite_key set v=999,__mo_cpkey_col=unhex('0001') where a=1 and b=10;
+internal error: column '__mo_cpkey_col' not found in table
+insert into composite_key values(1,10,999) on duplicate key update __mo_cpkey_col=default;
+invalid input: column '__mo_cpkey_col' does not exist
+prepare hidden_target from 'insert into composite_key(a,b,v,__mo_cpkey_col) values(?,?,?,?)';
+Unknown column '__mo_cpkey_col' in 'composite_key'
+select a,b,v,__mo_cpkey_col=serial(a,b) as key_matches from composite_key order by a,b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  v[4,32,0]  ¦  key_matches[-6,8,0]  𝄀
+1  ¦  10  ¦  7  ¦  1
+insert into composite_key(a,b,v) select 2,20,8;
+update composite_key set b=11 where a=1 and b=10;
+insert into composite_key values(1,11,9) on duplicate key update v=values(v);
+replace into composite_key values(2,20,10);
+create index idx_b on composite_key(b);
+select a,b,v,__mo_cpkey_col=serial(a,b) as key_matches from composite_key order by a,b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  v[4,32,0]  ¦  key_matches[-6,8,0]  𝄀
+1  ¦  11  ¦  9  ¦  1  𝄀
+2  ¦  20  ¦  10  ¦  1
+select a,b,v from composite_key force index(idx_v) where v=10;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20  ¦  10
+select a,b,v from composite_key force index(idx_b) where b=11;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  11  ¦  9
+insert into composite_key values(1,11,100);
+Duplicate entry '(1,11)' for key '(a,b)'
+select count(*) as rows_after_duplicate from composite_key;
+➤ rows_after_duplicate[-5,64,0]  𝄀
+2
+create table no_key(a int);
+insert into no_key values(1);
+insert into no_key(a,__mo_fake_pk_col) values(2,777);
+Unknown column '__mo_fake_pk_col' in 'no_key'
+update no_key set a=999,__mo_fake_pk_col=777 where a=1;
+internal error: column '__mo_fake_pk_col' not found in table
+insert into no_key values(2) on duplicate key update __mo_fake_pk_col=default;
+invalid input: column '__mo_fake_pk_col' does not exist
+load data inline format='csv',data='2,777\n' into table no_key fields terminated by ',' (a,__mo_fake_pk_col);
+internal error: column '__mo_fake_pk_col' does not exist
+load data inline format='csv',data='2,777\n' into table no_key fields terminated by ',' (a,@v) set a=nullif(a,0),__mo_fake_pk_col=nullif(@v,0);
+Unknown column '__mo_fake_pk_col' in 'no_key'
+select a from no_key order by a;
+➤ a[4,32,0]  𝄀
+1
+insert into no_key values(2) on duplicate key update a=values(a);
+load data inline format='csv',data='3\n' into table no_key;
+select a from no_key order by a;
+➤ a[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select count(distinct __mo_fake_pk_col)=count(*) as unique_generated_keys from no_key;
+➤ unique_generated_keys[-6,8,0]  𝄀
+1
+drop database hidden_write_targets;

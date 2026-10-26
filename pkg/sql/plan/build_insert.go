@@ -338,8 +338,8 @@ func appendExternalInsertPlanWithExtraOptions(builder *QueryBuilder, bindCtx *Bi
 
 // getInsertColsFromStmt retrieves the list of column names to be inserted into a table
 // based on the given INSERT statement and table definition.
-// If the INSERT statement does not specify the columns, all columns except the fake primary key column
-// will be included in the list.
+// The legacy planner supplies a filtered schema; its implicit list omits the
+// fake primary key retained for automatic generation.
 // If the INSERT statement specifies the columns, it validates the column names against the table definition
 // and returns an error if any of the column names are invalid.
 // The function returns the list of insert columns and an error, if any.
@@ -359,7 +359,8 @@ func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *Tab
 	} else {
 		for _, column := range stmt.Columns {
 			colName := strings.ToLower(string(column))
-			if _, ok := colToIdx[colName]; !ok {
+			idx, ok := colToIdx[colName]
+			if !ok || tableDef.Cols[idx].Hidden {
 				return nil, moerr.NewBadFieldError(ctx, colName, tableDef.Name)
 			}
 			insertColsName = append(insertColsName, colName)

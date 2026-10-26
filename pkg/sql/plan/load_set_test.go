@@ -85,7 +85,7 @@ func TestLoadSetCollatedNullIfValidation(t *testing.T) {
 			load := statement.(*tree.Load)
 			original := tree.String(load, dialect.MYSQL)
 			for range 2 {
-				err := validateLoadSetAssignments(load.Param, ctx)
+				err := validateLoadSetAssignments(load.Param, ctx, ctx.tables["nation"])
 				if tc.wantError {
 					require.ErrorContains(t, err, "COLLATE on column NULLIF")
 				} else {
@@ -106,7 +106,7 @@ func TestLoadSetSupportedNullIfRebind(t *testing.T) {
 	defer statement.Free()
 	param := statement.(*tree.Load).Param
 	for range 2 {
-		require.NoError(t, validateLoadSetAssignments(param, ctx))
+		require.NoError(t, validateLoadSetAssignments(param, ctx, ctx.tables["nation"]))
 		require.NoError(t, InitNullMap(param, ctx))
 		require.Equal(t, map[string][]string{"n_name": {"NULL", ""}}, param.NullMap)
 	}
@@ -115,7 +115,7 @@ func TestLoadSetSupportedNullIfRebind(t *testing.T) {
 	param.Tail.Assignments = append(param.Tail.Assignments, &tree.UpdateExpr{
 		Expr: tree.NewNumVal("x", "x", false, tree.P_char),
 	})
-	require.True(t, moerr.IsMoErrCode(validateLoadSetAssignments(param, ctx), moerr.ErrNotSupported))
+	require.True(t, moerr.IsMoErrCode(validateLoadSetAssignments(param, ctx, ctx.tables["nation"]), moerr.ErrNotSupported))
 }
 
 func testLoadSetRejectedWithoutMutation(t *testing.T, assignments string, code uint16) {
