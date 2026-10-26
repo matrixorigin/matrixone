@@ -119,10 +119,11 @@ all once the rows are flushed to storage objects.
   whole workspace for internal SQL that opens no statement). The relation
   readers read the stored objects through the fileservice, as any scan does.
 - How a rebuild uses the existing memory and table-data disk caches is a CN configuration
-  setting (decision, @cpegeric, 2026-10-24): read without filling them (default), bypass
-  them, or read and fill them like an ordinary scan. The default reuses chunk data that is
-  already cached without storing it a second time beside the assembled file, which goes
-  to the index-file cache in every mode.
+  setting (decision, @cpegeric, 2026-10-26): read and fill them like an ordinary scan
+  (default, today's behavior), read without filling them, or bypass them. The default
+  keeps today's caching of chunk data, so when the index-file cache is disabled, too
+  small or full to hold a file, reads still benefit from the memory and disk caches as
+  before. The assembled file goes to the index-file cache in every mode.
 - A missing or duplicated chunk is an error, never a short or padded file.
 - Each CN fills its own disk cache from the rows on first read.
 
@@ -183,9 +184,11 @@ private temporary directory instead, with no reuse between loads.
 - The index-file cache directory must not be, contain or lie inside the table-data cache
   directory; such a configuration is rejected at startup. Each cache's restart scan removes
   files it does not own.
-- The cache is best effort. A failure to write the cache (disk full, a file larger than
-  the cache) never fails the transaction or the query: the rows are the truth, and the
-  reader gets its file from a private temporary file removed when it is closed.
+- The cache is best effort. A failure to write the cache (disk full while staging or
+  publishing a file, a file larger than the cache) never fails the transaction or the
+  query: the rows are the truth, and the reader or writer continues with a private
+  temporary file removed when it is closed. A writer keeps the bytes it already took
+  from its source, so a source that cannot be re-read is not lost.
 
 Rejected alternative: placing index files in the shared table-data cache under a reserved
 namespace. It needs no new capacity setting, but a large index load and hot table blocks
@@ -198,7 +201,9 @@ eviction mechanism and rules unchanged; index files get no pinning or other spec
 treatment.
 
 - Eviction follows the existing policy against the cache's capacity, including eviction
-  when the disk is full, and removes the evicted file.
+  when the disk is full, and removes the evicted file. Removing an entry leaves nothing
+  of it on disk, so the files and directories the cache keeps are bounded by its live
+  entries.
 - A reader never blocks eviction. It only waits for an in-progress write or eviction of
   the same file, then opens it. A file evicted while a reader holds it open or mapped stays
   readable through that handle; its space is freed when the last handle closes.
@@ -229,9 +234,10 @@ again.
 
 ### Memory
 
-The layer never stores file bytes in the memory cache: file bytes live in the index-file
-disk cache, sized and evicted by its configured capacity. A miss rebuild may read chunk
-data already in the memory cache, under the rebuild setting above. What a search keeps
+The index-file cache is a layer on top of the existing memory and disk caches, not a
+replacement: the assembled file lives in the index-file disk cache, sized and evicted
+by its configured capacity, while the chunk data a rebuild reads goes through the
+memory and disk caches as today, under the rebuild setting above. What a search keeps
 resident (a loaded graph, a GPU index, mapped postings) stays under the existing
 index-cache governor. This is how index I/O
 shares the CN with SQL instead of claiming its memory.
@@ -269,7 +275,9 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
   an extension of the file's, chunks beyond the file and neighbouring ranges are excluded,
   for rows in memory and rows flushed to storage objects;
 - a missing, duplicated, wrongly sized or corrupted chunk fails the read, and nothing is
-  cached;
+  cached; a cache disk that fails while staging a file does not fail the read or the
+  write, keeps the bytes already read from the source, and caches nothing, while a source
+  error still fails the write;
 - a corrupted cached file is detected on the first open in the process and rebuilt; an
   entry missing a file is replaced;
 - writing chunk rows that already exist fails with a duplicate-key error, as an `INSERT`
@@ -281,8 +289,8 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
 - concurrent readers missing the same file rebuild it once; a cancelled waiter does not
   hold the lock;
 - an entry is never visible before it is complete, its files come from one version, and it
-  is evicted and deleted as a unit; concurrent puts, opens, deletes and evictions leave the
-  directory and the cache index in agreement;
+  is evicted and deleted as a unit, leaving no directory of its own behind; concurrent
+  puts, opens, deletes and evictions leave the directory and the cache index in agreement;
 - two cache instances sharing a directory never serve a partial entry, and exactly one
   publishes an entry both write;
 - cached entries are reused after a restart, and leftover temporary and trash directories
@@ -290,6 +298,8 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
 - the configured share splits the disk capacity and a runtime resize; with the default share
   no index-file cache exists and the table-data cache keeps its full capacity; only a CN's
   SHARED file service gets the cache; an overlapping directory and an invalid share or
-  rebuild setting are rejected; each rebuild setting maps to its cache policy;
+  rebuild setting are rejected; each rebuild setting maps to its cache policy, and a
+  rebuild in the `read` or `none` setting starts no full-file prefetch through the storage
+  engine's reader while the default setting does;
 - a CN without an index-file cache still serves reads, rebuilding each load from the rows;
 - a table-data disk cache never treats a directory as a cache entry.

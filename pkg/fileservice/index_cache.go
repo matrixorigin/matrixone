@@ -16,9 +16,12 @@ package fileservice
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -49,23 +52,24 @@ const (
 	IndexFileRebuildCacheNone      = "none"
 	IndexFileRebuildCacheReadWrite = "read-write"
 
-	// IndexFileRebuildPolicyDefault reads cached chunk data without filling the caches.
-	IndexFileRebuildPolicyDefault Policy = SkipMemoryCacheWrites | SkipDiskCacheWrites
+	// IndexFileRebuildPolicyDefault reads and fills the memory and disk caches like an
+	// ordinary scan.
+	IndexFileRebuildPolicyDefault Policy = 0
 )
 
 // ParseIndexFileRebuildCache maps an index-file-rebuild-cache setting to a cache policy.
 func ParseIndexFileRebuildCache(s string) (Policy, error) {
 	switch s {
-	case "", IndexFileRebuildCacheRead:
+	case "", IndexFileRebuildCacheReadWrite:
 		return IndexFileRebuildPolicyDefault, nil
+	case IndexFileRebuildCacheRead:
+		return SkipMemoryCacheWrites | SkipDiskCacheWrites | SkipFullFilePreloads, nil
 	case IndexFileRebuildCacheNone:
-		return SkipAllCache, nil
-	case IndexFileRebuildCacheReadWrite:
-		return 0, nil
+		return SkipAllCache | SkipFullFilePreloads, nil
 	}
 	return 0, moerr.NewInvalidInputNoCtxf(
 		"invalid index-file-rebuild-cache %q, want %q, %q or %q",
-		s, IndexFileRebuildCacheRead, IndexFileRebuildCacheNone, IndexFileRebuildCacheReadWrite)
+		s, IndexFileRebuildCacheReadWrite, IndexFileRebuildCacheRead, IndexFileRebuildCacheNone)
 }
 
 // IndexFileCache keeps whole index files on local disk. An entry is a directory of named
@@ -85,14 +89,16 @@ type IndexCacheFile struct {
 	Path string
 }
 
-// NewIndexFileCache returns an index file cache rooted at path.
+// NewIndexFileCache returns an index file cache rooted at path whose rebuilds read with
+// rebuildPolicy.
 func NewIndexFileCache(
 	ctx context.Context,
 	path string,
 	capacity fscache.CapacityFunc,
 	name string,
+	rebuildPolicy Policy,
 ) (*IndexFileCache, error) {
-	return newIndexFileCache(ctx, path, capacity, name, "", 0, IndexFileRebuildPolicyDefault)
+	return newIndexFileCache(ctx, path, capacity, name, "", 0, rebuildPolicy)
 }
 
 func newIndexFileCache(
@@ -230,7 +236,20 @@ func (d *DiskCache) pathForDir(name string) (string, error) {
 			return "", moerr.NewInvalidInputNoCtxf("invalid index cache entry name %q", name)
 		}
 	}
-	return filepath.Join(d.path, diskCacheShard(clean), toOSPath(clean)+cacheDirSuffix), nil
+	return filepath.Join(d.path, diskCacheShard(clean), cacheDirName(clean)), nil
+}
+
+const maxCacheDirNameLen = 200
+
+// cacheDirName flattens an entry name into one directory name, so removing an entry
+// leaves no directory of its own behind.
+func cacheDirName(clean string) string {
+	name := url.PathEscape(clean)
+	if len(name) > maxCacheDirNameLen {
+		sum := sha256.Sum256([]byte(clean))
+		name = "%sha256-" + hex.EncodeToString(sum[:])
+	}
+	return name + cacheDirSuffix
 }
 
 func checkCacheDirFileName(name string) error {

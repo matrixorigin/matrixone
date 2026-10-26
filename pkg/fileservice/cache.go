@@ -54,7 +54,7 @@ type CacheConfig struct {
 	// IndexFileDiskPath is the index-file cache directory. Default DiskPath + "-index-file".
 	IndexFileDiskPath *string `toml:"index-file-disk-path"`
 	// IndexFileRebuildCache is how an index-file rebuild uses the memory and disk caches:
-	// "read" (default), "none" or "read-write".
+	// "read-write" (default), "read" or "none".
 	IndexFileRebuildCache string `toml:"index-file-rebuild-cache"`
 	// IndexFileCacheEnabled is set by the service launcher for a CN's SHARED file service.
 	IndexFileCacheEnabled bool `toml:"-" json:"-"`

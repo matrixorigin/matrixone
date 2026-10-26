@@ -199,6 +199,9 @@ func rebuildCached(ctx context.Context, env *Env, rel engine.Relation, ref *Ref,
 	crc, err := rebuildInto(ctx, env, rel, ref, tmp)
 	if err != nil {
 		_ = tmp.Close()
+		if isStagingError(err) {
+			return rebuildTemp(ctx, env, rel, ref)
+		}
 		return nil, err
 	}
 	written, err := env.Cache.Put(ctx, name, []fileservice.IndexCacheFile{
@@ -260,7 +263,11 @@ func rebuildInto(ctx context.Context, env *Env, rel engine.Relation, ref *Ref, f
 	if err := verify(f, ref.Size, ref.Checksum); err != nil {
 		return 0, err
 	}
-	return fileCRC(f, ref.Size)
+	crc, err := fileCRC(f, ref.Size)
+	if err != nil {
+		return 0, &stagingError{err}
+	}
+	return crc, nil
 }
 
 var rebuildLocks = keyedLocks{m: make(map[string]*keyedLock)}
