@@ -138,6 +138,14 @@ func (b *HavingBinder) resolvesAggregateAliases() bool {
 		(b.builder.mysqlFullGroupByCompat || b.builder.mysqlCompatible)
 }
 
+// walkGroupingSetOrderByExpr visits the expression-bearing fields used by
+// generated grouping-set ORDER BY branches. Keep this wrapper separate so the
+// HAVING binder can stop at a subquery or aggregate without duplicating the
+// reflection-based AST traversal.
+func walkGroupingSetOrderByExpr(expr tree.Expr, visit func(tree.Expr) bool) {
+	walkASTExpressions(expr, visit)
+}
+
 // Alias deferral leaves bare names intact until HAVING can choose between a
 // group and a projected alias. A FULL JOIN USING name represents COALESCE of
 // both inputs, including when it is part of a larger grouping expression.
