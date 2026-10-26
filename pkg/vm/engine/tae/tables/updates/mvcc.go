@@ -142,8 +142,15 @@ func (n *AppendMVCCHandle) MarkAppendHistoryIncomplete() {
 // maximum committed timestamp. It must be called while holding the handle's
 // write lock. Publication is deferred while any transaction is still active.
 func (n *AppendMVCCHandle) SealLocked() {
-	n.sealed = true
+	n.MarkSealedLocked()
 	n.tryFinalizeCommitLocked()
+}
+
+// MarkSealedLocked closes the set without scanning AppendNodes. The final
+// reservation's transaction is still active, so its commit or rollback will
+// perform the first possible max-commit publication outside freezelock.
+func (n *AppendMVCCHandle) MarkSealedLocked() {
+	n.sealed = true
 }
 
 // Seal permanently closes the AppendNode set. It never waits for an append

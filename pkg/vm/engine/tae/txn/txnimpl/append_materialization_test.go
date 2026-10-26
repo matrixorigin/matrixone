@@ -90,11 +90,14 @@ func (a *materializationAppender) LockFreeze() {
 	}
 	a.ObjectAppender.LockFreeze()
 }
-func (a *materializationAppender) PrepareAppend(merge bool, rows uint32, txn txnif.AsyncTxn) (txnif.AppendNode, bool, uint32, error) {
+func (a *materializationAppender) PrepareAppend(ctx context.Context, merge bool, rows uint32, txn txnif.AsyncTxn) (txnif.AppendNode, bool, uint32, error) {
+	if a.factory.beforeFreeze != nil {
+		a.factory.beforeFreeze(a.ObjectAppender, a.tombstone)
+	}
 	if a.factory.beforePrepare != nil {
 		a.factory.beforePrepare(a.ObjectAppender, a.tombstone)
 	}
-	return a.ObjectAppender.PrepareAppend(merge, rows, txn)
+	return a.ObjectAppender.PrepareAppend(ctx, merge, rows, txn)
 }
 func (a *materializationAppender) ReserveAppend(offset, rows uint32) {
 	if a.factory.before != nil {

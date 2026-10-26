@@ -39,7 +39,7 @@ type ObjectAppender interface {
 	UnlockFreeze()
 	CheckFreeze() bool
 	IsSameColumns(otherSchema any /*avoid import cycle*/) bool
-	PrepareAppend(isMergeCompact bool, rows uint32,
+	PrepareAppend(ctx context.Context, isMergeCompact bool, rows uint32,
 		txn txnif.AsyncTxn) (
 		node txnif.AppendNode, created bool, n uint32, err error)
 	ReserveAppend(offset, rows uint32)

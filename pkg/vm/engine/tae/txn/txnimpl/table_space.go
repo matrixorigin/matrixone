@@ -262,35 +262,28 @@ func (space *tableSpace) prepareApplyANode(ctx context.Context, node *anode, sta
 		// protect the subsequent reservation, not this table-wide mutex.
 		tableData.ApplyHandle(tableHandle, space.isTombstone)
 		tableData.UnlockAppend()
-		appender.LockFreeze()
 		if err = ctx.Err(); err != nil {
-			appender.UnlockFreeze()
 			appender.Close()
 			return err
 		}
-		// no one can touch freeze for now, check it
-		if appender.CheckFreeze() {
-			// freezed, try to find another ablock
-			appender.UnlockFreeze()
-			// Unref the appender, otherwise it can't be PrepareCompact(ed) successfully
-			appender.Close()
-			continue
-		}
-
-		// hold freezelock to attach AppendNode
-		//PrepareAppend: It is very important that appending a AppendNode into
-		// block's MVCCHandle before applying data into block.
+		// The object MVCC writer lock atomically registers the AppendNode and
+		// its row range. It also serializes sealing, so no object admission lock
+		// is held while waiting for commit writers or constructing the node.
 		anode, created, toAppend, err := appender.PrepareAppend(
+			ctx,
 			node.isMergeCompact,
 			node.Rows()-appended,
 			space.table.store.txn)
 		if err != nil {
-			appender.UnlockFreeze()
 			appender.Close()
 			return err
 		}
+		if toAppend == 0 {
+			// Another writer sealed this candidate after GetAppender selected it.
+			appender.Close()
+			continue
+		}
 		destOff := anode.GetMaxRow() - toAppend
-		appender.UnlockFreeze()
 		// Materialize the reserved range without holding the table allocator
 		// locks. The appender reference pins the object until this range has an
 		// append context; rollback must retain physical rows even if applying

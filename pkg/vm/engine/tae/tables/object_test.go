@@ -279,7 +279,7 @@ func TestPrepareAppendSealsFullObjectAndPublishesCommitBound(t *testing.T) {
 	}
 
 	appender.LockFreeze()
-	appendNode, created, rows, err := appender.PrepareAppend(false, 2, txn)
+	appendNode, created, rows, err := appender.PrepareAppend(context.Background(), false, 2, txn)
 	appender.UnlockFreeze()
 	require.NoError(t, err)
 	require.True(t, created)
@@ -831,6 +831,78 @@ func TestFrozenAppenderRejectionDoesNotWaitForSealing(t *testing.T) {
 	obj.SealAppend()
 	_, finalized = obj.GetAppendMaxCommitTS()
 	require.True(t, finalized)
+}
+
+func TestSealAppendDoesNotHoldFreezeLockWhileMVCCWaits(t *testing.T) {
+	schema := catalog.MockSchema(1, 0)
+	c := catalog.MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(schema, nil, nil)
+	require.NoError(t, err)
+	id := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&id, true, false, false)
+	entry, err := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
+	require.NoError(t, err)
+	obj := newAObject(entry, nil, false)
+	defer obj.node.Load().Unref()
+
+	// Prevent MVCC sealing from proceeding. Admission and sealing share this
+	// lock, so frozen must not publish before the outstanding writer finishes.
+	obj.appendMVCC.LockForCommit()
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			obj.appendMVCC.UnlockForCommit()
+		}
+	}
+	sealed := make(chan struct{})
+	started := make(chan struct{})
+	var admitted chan struct{}
+	defer func() {
+		release()
+		select {
+		case <-sealed:
+		case <-time.After(5 * time.Second):
+			t.Error("sealing goroutine did not exit")
+		}
+		if admitted != nil {
+			select {
+			case <-admitted:
+			case <-time.After(5 * time.Second):
+				t.Error("freezelock probe did not exit")
+			}
+		}
+	}()
+	go func() {
+		close(started)
+		obj.SealAppend()
+		close(sealed)
+	}()
+	<-started
+	admitted = make(chan struct{})
+	go func() {
+		obj.freezelock.Lock()
+		obj.freezelock.Unlock()
+		close(admitted)
+	}()
+	select {
+	case <-admitted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("freezelock blocked while MVCC sealing waited")
+	}
+	require.False(t, obj.frozen.Load(), "seal must not publish before the MVCC writer exits")
+	release()
+	select {
+	case <-sealed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sealing did not finish after the MVCC writer released")
+	}
+	_, finalized := obj.GetAppendMaxCommitTS()
+	require.True(t, finalized)
+	require.True(t, obj.frozen.Load())
 }
 
 func BenchmarkReserveRows(b *testing.B) {

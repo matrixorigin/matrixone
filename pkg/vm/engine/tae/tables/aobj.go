@@ -87,10 +87,14 @@ func (obj *aobject) FreezeAppend() {
 // legacy FreezeAppend flag, sealing also enables a stable max-commit
 // timestamp once all already attached append transactions finish.
 func (obj *aobject) SealAppend() {
-	obj.freezelock.Lock()
-	defer obj.freezelock.Unlock()
+	// AppendNode registration and sealing share the MVCC writer admission.
+	// Publishing frozen and sealed under one lock keeps a reservation from
+	// landing between the two transitions.
+	obj.appendMVCC.LockForAppend()
 	obj.frozen.Store(true)
-	obj.appendMVCC.Seal()
+	obj.appendMVCC.SealLocked()
+	obj.appendMVCC.UnlockForAppend()
+	obj.appendMVCC.NotifyFinalizedMax()
 }
 
 func (obj *aobject) GetAppendMaxCommitTS() (types.TS, bool) {

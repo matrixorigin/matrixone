@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"context"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -70,6 +71,7 @@ func (appender *objectAppender) IsSameColumns(other any) bool {
 }
 
 func (appender *objectAppender) PrepareAppend(
+	ctx context.Context,
 	isMergeCompact bool,
 	rows uint32,
 	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
@@ -85,7 +87,13 @@ func (appender *objectAppender) PrepareAppend(
 			appender.obj.appendMVCC.NotifyFinalizedMax()
 		}
 	}()
+	if err = ctx.Err(); err != nil {
+		return
+	}
 	start := appender.obj.reserved.Load()
+	if appender.obj.frozen.Load() {
+		return
+	}
 	left := blockMaxRows - start
 	if left == 0 {
 		appender.obj.frozen.Store(true)
@@ -108,11 +116,11 @@ func (appender *objectAppender) PrepareAppend(
 	reserved := start + n
 	appender.obj.reserved.Store(reserved)
 	if reserved == blockMaxRows {
-		// The caller holds freezelock while allocating rows. Seal under the
-		// same MVCC write lock as the final AppendNode insertion, so no later
-		// allocator can race final max-commit publication.
+		// Seal under the same MVCC write lock as the final AppendNode
+		// insertion. This transaction is still active, so max-commit
+		// publication waits for its commit or rollback.
 		appender.obj.frozen.Store(true)
-		appender.obj.appendMVCC.SealLocked()
+		appender.obj.appendMVCC.MarkSealedLocked()
 		sealed = true
 	}
 	return
