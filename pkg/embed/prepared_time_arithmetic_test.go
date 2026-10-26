@@ -17,13 +17,12 @@ package embed
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/go-sql-driver/mysql"
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -121,11 +120,11 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 			require.NoError(t, err, statement)
 			assertPreparedTimeResult(t, rows, want, wantNull, 38, scale)
 		}
-		queryDecimal64Text := func(statement, want string) {
+		queryIntegerTimeText := func(statement, want string, precision int64) {
 			t.Helper()
 			rows, err := conn.QueryContext(ctx, statement)
 			require.NoError(t, err, statement)
-			assertPreparedTimeResult(t, rows, want, false, 18, 0)
+			assertPreparedTimeResult(t, rows, want, false, precision, 0)
 		}
 		for _, temporal := range []struct {
 			literal, want string
@@ -152,34 +151,26 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 							return conn.QueryContext(ctx, "execute fallback_time_abs using @fallback_time_abs_value")
 						}
 					}
-					// Query may expose an execution error immediately or through Rows.Err.
-					queryError := func(query func() (*sql.Rows, error)) error {
-						rows, err := query()
-						if err != nil {
-							return err
-						}
-						defer rows.Close()
-						require.False(t, rows.Next(), "overflow must not produce a row")
-						return rows.Err()
-					}
 					for _, value := range []any{int64(10), nil, int64(10), int64(9223372036854775807), int64(10)} {
 						if value == int64(9223372036854775807) {
-							wantErr := queryError(func() (*sql.Rows, error) {
-								return conn.QueryContext(ctx,
-									strings.ReplaceAll(expression, "?", "cast(9223372036854775807 as signed)"))
-							})
-							gotErr := queryError(func() (*sql.Rows, error) { return query(value) })
-							var wantMySQL, gotMySQL *mysql.MySQLError
-							require.True(t, errors.As(wantErr, &wantMySQL), "%v", wantErr)
-							require.True(t, errors.As(gotErr, &gotMySQL), "%v", gotErr)
-							require.Equal(t, wantMySQL.Number, gotMySQL.Number)
+							want := "9223372036854775808"
+							if temporal.scale == 6 {
+								want = "9223372036854806212.123456"
+							}
+							rows, err := conn.QueryContext(ctx,
+								strings.ReplaceAll(expression, "?", "cast(9223372036854775807 as signed)"))
+							require.NoError(t, err)
+							assertPreparedTimeResult(t, rows, want, false, 38, temporal.scale)
+							rows, err = query(value)
+							require.NoError(t, err)
+							assertPreparedTimeResult(t, rows, want, false, 38, temporal.scale)
 							continue
 						}
 						func() {
 							rows, err := query(value)
 							require.NoError(t, err)
 							if value != nil {
-								assertPreparedTimeResult(t, rows, temporal.want, false, 18, temporal.scale)
+								assertPreparedTimeResult(t, rows, temporal.want, false, 38, temporal.scale)
 								return
 							}
 							defer rows.Close()
@@ -291,7 +282,11 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 			statementName := "issue28963_time_sql_" + tc.name
 			exec("prepare " + statementName + " from 'select cast(''00:00:01'' as time(0)) " + tc.op + " ? as result'")
 			exec("set @issue28963_time_value = cast(10 as signed)")
-			queryDecimal64Text("execute "+statementName+" using @issue28963_time_value", tc.want)
+			precision := int64(38)
+			if tc.op == "%" {
+				precision = 19
+			}
+			queryIntegerTimeText("execute "+statementName+" using @issue28963_time_value", tc.want, precision)
 			exec("deallocate prepare " + statementName)
 		}
 
@@ -365,13 +360,17 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 			{name: "mod", op: "%", want: "1"},
 		} {
 			t.Run("binary/"+tc.name, func(t *testing.T) {
+				precision := int64(38)
+				if tc.op == "%" {
+					precision = 19
+				}
 				statement := "select cast('00:00:01' as time(0)) " + tc.op + " ? as result"
 				stmt, err := conn.PrepareContext(ctx, statement)
 				require.NoError(t, err)
 				defer stmt.Close()
 				rows, err := stmt.QueryContext(ctx, int64(10))
 				require.NoError(t, err)
-				assertPreparedTimeResult(t, rows, tc.want, false, 18, 0)
+				assertPreparedTimeResult(t, rows, tc.want, false, precision, 0)
 			})
 		}
 
@@ -383,20 +382,11 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 
 			rows, err := stmt.QueryContext(ctx, int64(10))
 			require.NoError(t, err)
-			assertPreparedTimeResult(t, rows, "30415.123456", false, 18, 6)
+			assertPreparedTimeResult(t, rows, "30415.123456", false, 38, 6)
 
 			rows, err = stmt.QueryContext(ctx, int64(9223372036854775807))
-			if err == nil {
-				defer rows.Close()
-				if rows.Next() {
-					var value any
-					err = rows.Scan(&value)
-				}
-				if err == nil {
-					err = rows.Err()
-				}
-			}
-			require.Error(t, err)
+			require.NoError(t, err)
+			assertPreparedTimeResult(t, rows, "9223372036854806212.123456", false, 38, 6)
 		})
 
 		for _, tc := range []struct {
@@ -409,18 +399,22 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 			{name: "mod", op: "%", want: "0"},
 		} {
 			t.Run("binary/nested/"+tc.name, func(t *testing.T) {
+				precision := int64(38)
+				if tc.op == "%" {
+					precision = 19
+				}
 				statement := "select cast('00:00:01' as time(0)) " + tc.op +
 					" (? " + tc.op + " ?) as result"
 				ordinaryRows, err := conn.QueryContext(ctx,
 					"select cast('00:00:01' as time(0)) "+tc.op+" (1 "+tc.op+" 2) as result")
 				require.NoError(t, err)
-				assertPreparedTimeResult(t, ordinaryRows, tc.want, false, 18, 0)
+				assertPreparedTimeResult(t, ordinaryRows, tc.want, false, precision, 0)
 				stmt, err := conn.PrepareContext(ctx, statement)
 				require.NoError(t, err)
 				defer stmt.Close()
 				rows, err := stmt.QueryContext(ctx, int64(1), int64(2))
 				require.NoError(t, err)
-				assertPreparedTimeResult(t, rows, tc.want, false, 18, 0)
+				assertPreparedTimeResult(t, rows, tc.want, false, precision, 0)
 
 				// The concrete integer sibling supplies NULL's numeric domain.
 				// Compare metadata with the ordinary typed expression instead of
@@ -428,13 +422,13 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 				control, err := conn.QueryContext(ctx, "select cast('00:00:01' as time(0)) "+tc.op+
 					" (cast(null as signed) "+tc.op+" cast(2 as signed)) as result")
 				require.NoError(t, err)
-				var precision, scale int64
+				var nullPrecision, scale int64
 				func() {
 					defer control.Close()
 					columns, err := control.ColumnTypes()
 					require.NoError(t, err)
 					var ok bool
-					precision, scale, ok = columns[0].DecimalSize()
+					nullPrecision, scale, ok = columns[0].DecimalSize()
 					require.True(t, ok)
 					require.Equal(t, "DECIMAL", columns[0].DatabaseTypeName())
 					require.True(t, control.Next())
@@ -446,7 +440,7 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 				}()
 				nullRows, err := stmt.QueryContext(ctx, nil, int64(2))
 				require.NoError(t, err)
-				assertPreparedTimeResult(t, nullRows, "", true, precision, scale)
+				assertPreparedTimeResult(t, nullRows, "", true, nullPrecision, scale)
 			})
 		}
 
