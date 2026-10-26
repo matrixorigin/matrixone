@@ -29,11 +29,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func legacyFloatScopeTable(t *testing.T, sql string, precision int32) (*MockCompilerContext, *planpb.TableDef) {
+func legacyFloatScopeTable(t *testing.T, sql string, precision int32, creationZones ...*time.Location) (*MockCompilerContext, *planpb.TableDef) {
 	t.Helper()
 	compiler := floatCatalogCompiler(t)
 	proc := compiler.GetProcess()
 	proc.GetSessionInfo().TimeZone = time.FixedZone("creation", 8*3600)
+	if len(creationZones) != 0 {
+		proc.GetSessionInfo().TimeZone = creationZones[0]
+	}
 	proc.GetSessionInfo().LCTimeNames = "de_DE"
 	creation := function.WithDivPrecisionIncrement(function.WithLegacyFloatStringFormatting(function.WithLegacyFloatStringBounds(compiler.GetContext())), precision)
 	compiler.SetContext(creation)
@@ -54,6 +57,88 @@ func legacyFloatScopeTable(t *testing.T, sql string, precision int32) (*MockComp
 	proc.GetSessionInfo().TimeZone = time.UTC
 	proc.GetSessionInfo().LCTimeNames = "en_US"
 	return compiler, catalog
+}
+
+func TestLegacyFloatOpaqueSessionWitnesses(t *testing.T) {
+	const division = "cast(1 as decimal(10,0))/cast(7 as decimal(10,0))"
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name, input, expression, suffix string
+		precision                       int32
+		zone                            *time.Location
+		sameZone                        bool
+	}{
+		{"quarter_hour", "double", "cast(concat(from_unixtime(0)," + division + ") as char(100))", "1970-01-01 05:45:00", 30, time.FixedZone("creation", 5*3600+45*60), false},
+		{"precision4", "double", "cast(concat(from_unixtime(0)," + division + ") as char(100))", "1970-01-01 08:00:00", 4, time.FixedZone("creation", 8*3600), false},
+		{"same_zone", "double", "cast(concat(from_unixtime(0)," + division + ") as char(100))", "1970-01-01 08:00:00", 30, time.FixedZone("creation", 8*3600), true},
+		{"scope_locale", "double not null", "cast(concat(date_format(from_unixtime(0),'%M %H')," + division + ") as char(100))", "Januar 08", 30, time.FixedZone("creation", 8*3600), false},
+		// Different winter/summer offsets require the named-rule fallback;
+		// no fixed numeric offset can reproduce both frozen timestamps.
+		{"named_rules", "double", "cast(concat(from_unixtime(1704067200),from_unixtime(1719792000)," + division + ") as char(100))", "2024-01-01 01:00:002024-07-01 02:00:00", 30, berlin, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			compiler, source := legacyFloatScopeTable(t, "create table t(a "+tc.input+",g varchar(200) default(concat(a,"+tc.expression+")))", tc.precision, tc.zone)
+			if tc.sameZone {
+				compiler.GetProcess().GetSessionInfo().TimeZone = tc.zone
+			}
+			readingZone := compiler.GetProcess().GetSessionInfo().TimeZone
+			before := proto.Clone(source)
+			execution := CloneTableDefForPlan(source, true)
+			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
+			fraction := "0.142857142857142857142857142857"
+			if tc.precision == 4 {
+				fraction = "0.1429"
+			}
+			require.Equal(t, "-0.0000000000000012345678901234568"+tc.suffix+fraction, executeLegacyFloatScope(t, compiler, execution))
+			require.True(t, proto.Equal(before, source))
+			migrated := proto.Clone(execution)
+			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
+			require.True(t, proto.Equal(migrated, execution))
+			require.Same(t, readingZone, compiler.GetProcess().GetSessionInfo().TimeZone)
+			require.Equal(t, "en_US", compiler.GetProcess().GetSessionInfo().LCTimeNames)
+		})
+	}
+}
+
+func TestLegacyFloatSessionSearchFairness(t *testing.T) {
+	zone := time.FixedZone("reading", 0)
+	witness := time.FixedZone("witness", 3600)
+	zones := func(yield func(*time.Location) bool) {
+		for i := 0; i < 10; i++ {
+			if !yield(witness) {
+				return
+			}
+		}
+	}
+	sessions := []tableDumpSessionCandidate{
+		{increment: 0, dependency: tableDumpDefaultSession{timeZone: true}},
+		{increment: 30, dependency: tableDumpDefaultSession{timeZone: true}},
+	}
+	want := makePlan2StringConstExprWithType("verified witness")
+	calls := 0
+	found, err := matchLegacyFloatSessions(zone, "en_US", zones, sessions,
+		func(search tableDumpSessionCandidate, _ *time.Location, _ string) (*planpb.Expr, error) {
+			calls++
+			require.LessOrEqual(t, calls, 2, "an earlier candidate must not monopolize the search")
+			if search.increment == 30 {
+				return want, nil
+			}
+			return nil, nil
+		}, func(_ tableDumpSessionCandidate, bound *planpb.Expr) bool { return bound == want })
+	require.NoError(t, err)
+	require.True(t, found)
+	calls = 0
+	_, err = matchLegacyFloatSessions(zone, "en_US", zones, sessions,
+		func(tableDumpSessionCandidate, *time.Location, string) (*planpb.Expr, error) {
+			calls++
+			return nil, context.Canceled
+		}, func(tableDumpSessionCandidate, *planpb.Expr) bool {
+			t.Fatal("fatal errors cannot authorize a match")
+			return false
+		})
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 1, calls)
 }
 
 func executeLegacyFloatScope(t *testing.T, compiler *MockCompilerContext, def *planpb.TableDef) string {
@@ -210,6 +295,7 @@ func TestLegacyFloatNestedPrecisionSessionBudget(t *testing.T) {
 	}{
 		{"nested30", "double", "concat(from_unixtime(0)," + division + ")", "1970-01-01 08:00:00", "", 30},
 		{"nested4", "double", "concat(from_unixtime(0)," + division + ")", "1970-01-01 08:00:00", "", 4},
+		{"cast30", "double", "cast(concat(from_unixtime(0)," + division + ") as char(100))", "1970-01-01 08:00:00", "", 30},
 		{"deeper30", "double", "concat(concat(from_unixtime(0)," + division + "),'!')", "1970-01-01 08:00:00", "!", 30},
 		{"scope_locale30", "double not null", "concat(date_format(from_unixtime(0),'%M %H')," + division + ")", "Januar 08", "", 30},
 	} {

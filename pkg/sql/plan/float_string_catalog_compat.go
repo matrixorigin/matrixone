@@ -342,7 +342,7 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 					}
 				}
 			}
-			found, err := matchTableDumpSessions(item.expr, zone, locale, newTableDumpTimeZones(time.LoadLocation), sessions, bind, match)
+			found, err := matchLegacyFloatSessions(zone, locale, newLegacyFloatTimeZones(time.LoadLocation), sessions, bind, match)
 			if err != nil || !found {
 				return nil, err
 			}
@@ -353,6 +353,63 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 		}
 	}
 	return nil, ctx.GetContext().Err()
+}
+
+// Opaque folded constants can make several precision/era candidates equally
+// plausible. Give every candidate a probe in each zone before advancing, rather
+// than letting an impossible early candidate exhaust the complete zone inventory.
+// The existing bind callback still owns cancellation and the shared work limit.
+func matchLegacyFloatSessions(zone *time.Location, locale string, timeZones func(func(*time.Location) bool),
+	sessions []tableDumpSessionCandidate,
+	bind func(tableDumpSessionCandidate, *time.Location, string) (*planpb.Expr, error),
+	match func(tableDumpSessionCandidate, *planpb.Expr) bool) (bool, error) {
+	if len(sessions) == 0 {
+		return false, nil
+	}
+	locales := []string{locale}
+	for _, other := range function.TemporalLocaleNames() {
+		if other != locale {
+			locales = append(locales, other)
+		}
+	}
+	hasTimeZone := false
+	for _, search := range sessions {
+		hasTimeZone = hasTimeZone || search.dependency.timeZone
+	}
+	probe := func(tz *time.Location, otherZone bool) (bool, error) {
+		for _, search := range sessions {
+			if otherZone && !search.dependency.timeZone {
+				continue
+			}
+			for _, lc := range locales {
+				if lc != locale && !search.dependency.locale || !otherZone && lc == locale {
+					continue // The reading session was already bound by every candidate.
+				}
+				bound, err := bind(search, tz, lc)
+				if err != nil {
+					return false, err
+				}
+				if match(search, bound) {
+					return true, nil
+				}
+			}
+		}
+		return false, nil
+	}
+	if found, err := probe(zone, false); found || err != nil {
+		return found, err
+	}
+	if hasTimeZone {
+		for tz := range timeZones {
+			if tz == zone {
+				continue
+			}
+			if found, err := probe(tz, true); found || err != nil {
+				return found, err
+			}
+		}
+	}
+	return false, nil
 }
 
 // legacyFloatSessionCandidateMayMatch only rejects impossible session probes.
