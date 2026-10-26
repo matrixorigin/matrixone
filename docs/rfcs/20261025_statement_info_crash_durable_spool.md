@@ -1,7 +1,8 @@
 # Issue #30812: crash-durable statement_info audit spool
 - Status: in progress
-Revision 5, 2026-10-26. Owner: observability (motrace).
+Revision 6, 2026-10-26. Owner: observability (motrace).
 Tracking: [issue #30812](https://github.com/matrixorigin/matrixone/issues/30812); implementation [PR #31130](https://github.com/matrixorigin/matrixone/pull/31130) (the PR links this RFC revision).
+Revision 6 lands the round-3 review repairs: pooled-buffer batch identity (Reset), aggregation constituent ownership, per-waiter Sync failure publication, torn-tail boundary repair, and durable name publication (directory fsync). The durability contract itself is unchanged; the crash-class contract decision (default page-cache durability vs opt-in power-loss fsync) remains PENDING reviewer assent.
 Revision 5 reverts the revision-4 adaptive gather window after paired before/after sysbench measurement showed it net-negative (revision 4, reverted: adaptive 1 ms linger before crowded leaders' Sync), and records the OLTP scaling law with the honest residual regression bound.
 Revision 3 replaced segment-oriented retirement with record→batch ownership tracking and a contiguous-commit export watermark (round-2 review: a batch's acknowledgement cannot cover records sealed into the same segment but owned by a later, still-pending batch), converted spool quota to charge-on-write (round-2 review: a failed Sync must not uncharge bytes that are on disk), and counts quarantined poison files in startup size accounting (round-2 review: the cap must survive restarts). Revision 2 (per-file fsync confirmation, per-segment acks, quote-aware torn-tail/poison — kept) superseded Revision 1 (pre-review implementation).
 
@@ -13,8 +14,10 @@ This design document is the mandatory design-first artifact. The change is label
 Change scope: whole feature — statement_info crash-durable spool (issue #30812, PR #31130)
 Trigger: ≥500 production lines; persistent state; recovery protocol; background workers; hot-path impact; config semantics
 Design: docs/rfcs/20261025_statement_info_crash_durable_spool.md, status in progress, revision linked from PR body
-Blocking findings: none open after revision 3 repairs (rev2: F1 fsync protocol, F2 ack protocol, F4 torn-tail/poison;
-                    rev3: batch/segment misalignment → ownership watermark; quota charge-on-write; poison boot accounting)
+Blocking findings: none open after round-3 repairs (rev2: F1 fsync protocol, F2 ack protocol, F4 torn-tail/poison;
+                    rev3: batch/segment misalignment → ownership watermark; quota charge-on-write; poison boot accounting;
+                    rev6: buffer reset, aggregation constituents, failure publication, torn tail, dir publication)
+                    open: TPCC no-regression acceptance gate (reviewer decision pending)
 Decision log: at-least-once ceiling (no dedup key); rejected durable ack markers on the regular path (evidence below);
               in-memory acks + ack-lag horizon; parenting records to batch ids, contiguous-commit watermark;
               poison = quarantine, never delete, never block replay, counted against the cap at every boot
@@ -52,14 +55,14 @@ Selected: node-local WAL-style spool with per-record group-commit fsync, record-
 
 ### Durable append / group commit (repair F1)
 
-`spoolFsyncGroup` serializes appends to the active segment file behind a `spoolSyncFile{Write,Sync,Close}` seam (production: `*os.File`; tests: fault-injecting stubs). Confirmation is tracked **per file as a byte width** (`confirmedWidth`), initialized to the file's size at adoption (re-opened content was confirmed by its previous writer), never as a generation counter: the revision-1 protocol compared generations whose zero-equal initial state made the wait loop vanish entirely, so records sat un-fsynced until seal (review finding F1, proven by its probe).
+`spoolFsyncGroup` serializes appends to the active segment file behind a `spoolSyncFile{Write,Truncate,Sync,Close}` seam (production: `*os.File`; tests: fault-injecting stubs). Confirmation is tracked **per file as a byte width** (`confirmedWidth`), initialized to the file's size at adoption (re-opened content was confirmed by its previous writer), never as a generation counter: the revision-1 protocol compared generations whose zero-equal initial state made the wait loop vanish entirely, so records sat un-fsynced until seal (review finding F1, proven by its probe).
 
 `append(line)`:
 
-1. Under `mu`: write the line (single `Write`; a crash can only tear the tail), snapshot its end offset.
+1. Under `mu`: write the line (single `Write`; a crash can only tear the tail), snapshot its end offset. **(rev6)** On `Write` returning `(n>0, err)`, the append truncates back to `fileSize` — which is not yet bumped on a failed write, so it is exactly the last complete boundary — still under `mu`, so no later record can join onto the orphaned fragment (round-3 probe: the `X,C,D` joined-line corruption); the repaired append reports zero kept bytes, so the caller's reservation release matches the physical bytes exactly (no size-accounting desync).
 2. Wait until `confirmedWidth ≥ end`. The appender that finds no Sync in flight becomes the leader: snapshot `target = fileSize`, drop `mu`, `Sync()`, and on success raise `confirmedWidth` to `target` — **not** to a possibly newer `fileSize` (a write racing the Sync is not covered by it). Followers share the leader's Sync (group commit; under burst load the queued records are confirmed by exactly one following Sync).
-3. A waiter whose `sealGen` changed while waiting returns success: the rotation's seal Sync already confirmed its write on that file.
-4. A Sync failure settles its generation and is surfaced at the append (pre-seal), one error consumed per waiter; `appendRecord` downgrades that record to the pre-spool memory-only behavior and logs rate-limited (1/min), meters `spool_total{action="error"}`. The statement path is never broken. Quota keeps charging the written bytes (charge-on-write; see §Resource bounds).
+3. A waiter whose `sealGen` changed while waiting exits through the same settle check: the rotation's seal Sync settled its write on that file (success in `confirmedWidth`, a whole-file failure in `failWidth`).
+4. **(rev6)** A Sync failure is PUBLISHED, not consumed: `failErr`/`failWidth` record the covered byte window and every waiter whose `end ≤ failWidth` exits with that error (round-3 probe: one shared failing Sync over three writers used to let one appender report unconfirmed durability). A waiter exits nil only when a SUCCESSFUL Sync covered its bytes; a later success covering the same window heals an earlier failure (fsync semantics), so success is checked first at exit. `sealFileLocked` publishes whole-file failures identically and `adoptLocked` resets the failure state per adopted file. `appendRecord` downgrades the failed record to the pre-spool memory-only behavior and logs rate-limited (1/min), meters `spool_total{action="error"}`. The statement path is never broken. Quota keeps charging the written bytes (charge-on-write; see §Resource bounds).
 
 `sealFileLocked()` (rotation, shutdown): waits out an in-flight Sync, performs its own Sync covering the whole file, bumps `sealGen`, broadcasts, closes, resets per-file state. First append after boot and after every rotation therefore always pays a fresh fsync on the new file.
 
@@ -78,6 +81,14 @@ Revision 3 protocol — every record is parented to exactly one batch, and only 
   3. the ack-horizon (unchanged): `ackLagSegments` newer settled segments **or** age ≥ `ackLagDuration` — keeps the duplicate window bounded.
 - All lifecycle state is memory-only: a kill loses `W`, the committed set and the per-segment counters; every segment still on disk then replays at-least-once. A segment on disk at kill-time is exactly one whose records committed inside the horizon (or not at all) ⟹ the duplicate window is unchanged from revision 2 (observed live: `COUNT=100 / COUNT(DISTINCT statement)=50` for one 50-row round — the horizon batches, never a third copy).
 - The ownership seam is narrow: one uint64 field on `StatementInfo` (never serialized/compared), one `Add` hook on the existing wrapper. The collector, aggregator and `ContentWriter` keep their semantics.
+
+  **(rev6, round-3 repairs to ownership):**
+  - *Pooled-buffer identity.* The collector pools and resets buffer instances (`bufferHolder.putBuffer` → `Reset`) after the write request was generated but possibly before it committed. `spooledItemBuffer.Reset` now drops the wrapper's batch id without touching the id the already-generated request captured: a reused buffer allocates a FRESH id from `nextBatch()`, so records can never be parented under an already-committed batch (round-3 review: a reused buffer inheriting the committed id would let its segments retire while its own export is still pending).
+  - *Aggregation constituents.* `StatementInfoNew` clones the first statement for the aggregate window and `StatementInfoUpdate` merges the rest — both discarded the raw statements' `spoolSeq` (the clone drops it), leaving merged records parentless to age out by duration. Aggregates now carry `spoolSeqs`, the constituent sequence list: `New` carries the first statement's sequence, `Update` appends every merged statement's sequence (and nested constituents), pooled `free()` resets both, and `spooledItemBuffer.Add` parents EVERY constituent to the aggregate's batch. Positive export completion of that batch is what retires every constituent's durable copy — the ack-lag age leg remains only for records that never acquire parenthood at all (statements filtered/dropped after stamping, the pre-existing documented loss class).
+
+### Durable name publication (repair, round 3)
+
+An fsynced record under a segment name whose directory entry never reached the disk is lost on power loss exactly like an un-fsynced record. Names are therefore published BEFORE the first record under them is acknowledged: a NEWLY created spool directory is published by fsyncing its parent (`MkdirAll` path, creation-only via a pre-Stat); a NEW segment file is published by fsyncing the spool directory itself, through `openSegmentForAppendLocked` — used by the boot open, the lazy re-open AND the eager rotation in `sealForExport` (rotation used to open files directly; the dir-sync probe caught that one path bypassing publication). Publication is creation-only: appends onto an existing segment never pay a directory fsync, and reopening an existing spool directory skips the parent sync while still publishing the fresh segment name. Cost: one directory fsync per segment (batch-scale, off the per-record path).
 
 ### Boot replay, torn-tail and poison (repair F4)
 
@@ -135,6 +146,11 @@ Cheapest deterministic check per invariant (fault injection, fake clocks, in-mem
 | spool error path degrades, no panic, written bytes stay charged | `TestStatementInfoSpoolAppendSyncFailureDegrades` (Sync failure: recorded charge retained, rate-limit, no panic; quota control still bounded), `TestSyncErrorMustNotUnchargeWrittenBytes` (round-2 probe: repeated Sync failure over a real file, disk usage tracks accounting), `TestStatementInfoSpoolErrorPaths` |
 | retirement follows exported records; misalignment cannot lose a pending batch | `TestBatchCommitMustCoverEverySpoolRecord` (round-2 probe verbatim: A=true, B=false, C=true ⇒ the A/B file survives), `TestStatementInfoSpoolWatermarkOutOfOrderFuzz`, `TestStatementInfoSpoolAckUnknownBatchSettlesNothing`, `TestStatementInfoSpoolPipelineGapReplayed` (crash ⇒ replay lands the record) |
 | failed/stalled batch retains everything it owns | `TestStatementInfoSpoolStalledWatermarkKeepsSegments` (failure ⇒ no watermark progress ⇒ files stay for restart replay) |
+| pooled buffer Reset drops the committed id, reuse allocates fresh (round 3) | `TestSpooledItemBufferResetDropsCommittedBatchID` (in-flight request commits its captured id after Reset; reuse gets a new id) |
+| aggregation carries every constituent to positive completion (round 3) | `TestSpooledItemBufferAggregationParentsEveryConstituent` (real `StatementInfoNew`/`Update` path; both seqs tagged, segment survives sweep pre-commit, retires on ack; pool reset leg) |
+| shared failing Sync reaches EVERY covered waiter (round 3) | `TestSpoolFsyncGroupSharedSyncFailureReachesEveryWaiter` (3 writers, gated first Sync success, second failure: both covered waiters exit with the error; healing leg) |
+| partial write restores the last complete boundary (round 3) | `TestSpoolFsyncGroupPartialWriteRestoresBoundary` (X/C/D group-level with injected short write), `TestStatementInfoSpoolPartialWriteKeepsLedgerExact` (real-file: full reservation release, exact bytes, exact ledger) |
+| new names durable before the first ack under them (round 3) | `TestStatementInfoSpoolDurablyPublishesNames` (spool-dir creation publish, per-segment publish exactly once, rotation publish, reopen skip) |
 | torn tail at real CSV boundaries | `TestLastCompleteCSVRecordEnd` (12-case table), `TestRecoverSpoolSegmentContent` (multiline quoted probe + parse-cleanliness), `TestStatementInfoSpoolReplayDropsTornTail` |
 | poison quarantined, never blocks replay, counted at every boot | `TestStatementInfoSpoolReplayPoisonSkippedNotBlocking`, `TestPoisonBytesSurviveQuotaRestart` (round-2 probe verbatim: 90 poison bytes +100-byte cap ⇒ only 10 free) |
 | replay semantics: order, retry, tombstone, no-dup, no CSV fallback | `TestStatementInfoSpoolCrashRecoveryReplay`, `…ReplayFailureKeepsSegment`, `…ExportedPendingRemove`, `…AckMarkerPreventsReplayDup`, `…StartReplayRetryLoop`, `TestWriteSpoolContent` |
