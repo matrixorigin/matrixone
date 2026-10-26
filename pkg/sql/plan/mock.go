@@ -157,6 +157,8 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		return "SORT", nil
 	case "probe_limit":
 		return int64(20), nil
+	case "hnsw_prefilter_exact_threshold":
+		return int64(100000), nil
 	case "div_precision_increment":
 		if isSystemVar {
 			return int64(function.DefaultDivPrecisionIncrement), nil

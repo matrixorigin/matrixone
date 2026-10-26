@@ -462,12 +462,13 @@ func NewHnswSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *pl
 	vectype := tabledef.Cols[vecpos].Typ
 
 	switch vectype.Id {
-	case int32(types.T_array_float32):
+	case int32(types.T_array_float32), int32(types.T_array_float16), int32(types.T_array_bf16),
+		int32(types.T_array_int8), int32(types.T_array_uint8):
 		return NewGenericHnswSqlWriter[float32](algo, jobID, info, tabledef, indexdef)
 	case int32(types.T_array_float64):
 		return NewGenericHnswSqlWriter[float64](algo, jobID, info, tabledef, indexdef)
 	default:
-		return nil, moerr.NewInternalErrorNoCtx("NewHnswSqlWriter: part is not vecf32 or vecf64")
+		return nil, moerr.NewInternalErrorNoCtx("NewHnswSqlWriter: part is not a supported vector type")
 	}
 }
 
@@ -499,7 +500,7 @@ func (w *HnswSqlWriter[T]) Insert(ctx context.Context, row []any) error {
 		return nil
 	}
 
-	v, ok := row[w.partsPos[0]].([]T)
+	v, ok := hnswVector[T](row[w.partsPos[0]])
 	if !ok {
 		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid vector type. not []float32. %v", row[w.partsPos[0]]))
 	}
@@ -527,7 +528,7 @@ func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
 		return nil
 	}
 
-	v, ok := row[w.partsPos[0]].([]T)
+	v, ok := hnswVector[T](row[w.partsPos[0]])
 	if !ok {
 		return moerr.NewInternalError(ctx, fmt.Sprintf("invalid vector type. not []float32. %v", row[w.partsPos[0]]))
 	}
@@ -846,4 +847,17 @@ func (w *IvfflatSqlWriter) toIvfflatUpsert(upsert bool) ([]byte, error) {
 		cnames[1])
 
 	return []byte(sql), nil
+}
+
+// hnswVector returns the vector of a row as []T; a vecf16/vecbf16/vecint8/vecuint8 value is
+// widened to the float32 the writer of such a column uses.
+func hnswVector[T types.RealNumbers](value any) ([]T, bool) {
+	if v, ok := value.([]T); ok {
+		return v, true
+	}
+	if f, ok := hnsw.WidenToFloat32(value); ok {
+		v, ok := any(f).([]T)
+		return v, ok
+	}
+	return nil, false
 }

@@ -4215,6 +4215,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("hnsw_threads_search", 0, 1024, false),
 		Default:           int64(0),
 	},
+	"hnsw_prefilter_exact_threshold": {
+		Name:              "hnsw_prefilter_exact_threshold",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("hnsw_prefilter_exact_threshold", 0, 1000000000, false),
+		Default:           int64(100000),
+	},
 	"hnsw_max_index_capacity": {
 		Name:              "hnsw_max_index_capacity",
 		Scope:             ScopeBoth,

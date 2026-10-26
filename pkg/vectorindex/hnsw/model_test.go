@@ -638,7 +638,7 @@ func TestSearchWithCMembership(t *testing.T) {
 	roaring := build(roaringKeys)
 	defer roaring.Free()
 	require.Equal(t, docfilter.TagCRoaring, roaring.(docfilter.CFilter).CKind())
-	keys, _, err := idx.SearchWithMembership([]float32{0, 0, 0}, 5, roaring)
+	keys, _, err := idx.SearchWithMembership([]float32{0, 0, 0}, 5, roaring, false)
 	require.NoError(t, err)
 	require.Len(t, keys, 5)
 	for _, k := range keys {
@@ -649,7 +649,7 @@ func TestSearchWithCMembership(t *testing.T) {
 	sorted := build([]int64{700 * 100, 1 << 40, 1 << 50})
 	defer sorted.Free()
 	require.Equal(t, docfilter.TagSorted64, sorted.(docfilter.CFilter).CKind())
-	keys, _, err = idx.SearchWithMembership([]float32{0, 0, 0}, 5, sorted)
+	keys, _, err = idx.SearchWithMembership([]float32{0, 0, 0}, 5, sorted, false)
 	require.NoError(t, err)
 	require.Equal(t, []usearch.Key{700 * 100}, keys)
 }

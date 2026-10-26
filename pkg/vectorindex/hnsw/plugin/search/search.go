@@ -76,6 +76,9 @@ func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, detailed bool) ([]strin
 	settings := []string{
 		"ThreadsSearch: " + strconv.FormatInt(int64(opts.ThreadsSearch), 10),
 	}
+	if opts.PrefilterExactThreshold > 0 {
+		settings = append(settings, "PrefilterExactThreshold: "+strconv.FormatInt(opts.PrefilterExactThreshold, 10))
+	}
 	return settings, nil
 }
 
@@ -96,8 +99,8 @@ func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req se
 }
 
 // newAlgo creates the usearch search of one query.
-var newAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) veccache.VectorIndexSearchIf {
-	if idxcfg.Usearch.Quantization == usearch.F64 {
+var newAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, f64 bool) veccache.VectorIndexSearchIf {
+	if f64 {
 		return hnsw.NewHnswSearch[float64](idxcfg, tblcfg)
 	}
 	return hnsw.NewHnswSearch[float32](idxcfg, tblcfg)
@@ -117,6 +120,12 @@ type searcher struct {
 	iterative   bool
 	resultLimit uint64
 	maxLimit    uint64
+	// exactThreshold is the largest membership searched by scanning its vectors.
+	exactThreshold uint64
+	// f64 is set for a float64 query: the base column is vecf64. A vecf16/vecbf16/vecint8/
+	// vecuint8 query of type queryType is widened to float32.
+	f64       bool
+	queryType int32
 	// membership holds the primary keys the search is restricted to, or nil.
 	// emptyMembership is an exact empty key set: the search returns no rows.
 	membership      docfilter.MembershipFilter
@@ -136,7 +145,15 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 	if err != nil {
 		return nil, err
 	}
-	idxcfg.Usearch.Quantization, err = hnsw.QuantizationToUsearch(req.QueryType.Id)
+	quantization, err := hnswplan.Quantization(spec.Index.IndexAlgoParams)
+	if err != nil {
+		return nil, err
+	}
+	idxcfg.Usearch.Quantization, err = hnsw.StorageQuantization(quantization, req.QueryType.Id)
+	if err != nil {
+		return nil, err
+	}
+	queryKind, err := hnsw.QuantizationToUsearch(req.QueryType.Id)
 	if err != nil {
 		return nil, err
 	}
@@ -173,6 +190,11 @@ func newSearcher(proc *process.Process, spec *plan.IndexSearchScan, req searchpl
 		resultLimit: req.ResultLimit,
 		maxLimit:    req.MaxInternalTopK,
 		iterative:   opts.Iterative,
+		f64:         queryKind == usearch.F64,
+		queryType:   req.QueryType.Id,
+	}
+	if opts.PrefilterExactThreshold > 0 {
+		s.exactThreshold = uint64(opts.PrefilterExactThreshold)
 	}
 	if req.HasMembershipFilter {
 		if err := s.setMembership(spec, req.MembershipFilter); err != nil {
@@ -201,7 +223,7 @@ func (s *searcher) Next(ctx context.Context) (planreader.Chunk, bool, error) {
 	var keys []int64
 	var distances []float64
 	var err error
-	if s.idxcfg.Usearch.Quantization == usearch.F64 {
+	if s.f64 {
 		keys, distances, err = search[float64](s)
 	} else {
 		keys, distances, err = search[float32](s)
@@ -222,6 +244,9 @@ func (s *searcher) Close() error {
 
 func search[T types.RealNumbers](s *searcher) ([]int64, []float64, error) {
 	query := types.BytesToArray[T](s.query)
+	if f32, narrow := hnsw.BytesToFloat32(s.queryType, s.query); narrow {
+		query = any(f32).([]T)
+	}
 	if uint(len(query)) != s.idxcfg.Usearch.Dimensions {
 		return nil, nil, moerr.NewInvalidInput(s.proc.Ctx, fmt.Sprintf(
 			"vector ops between different dimensions (%d, %d) is not permitted.", s.idxcfg.Usearch.Dimensions, len(query)))
@@ -240,11 +265,12 @@ func search[T types.RealNumbers](s *searcher) ([]int64, []float64, error) {
 		Membership:      s.membership,
 		MembershipCount: s.membershipCount,
 		Iterative:       s.iterative,
+		ExactThreshold:  s.exactThreshold,
 		ResultLimit:     uint(s.resultLimit),
 		MaxLimit:        uint(s.maxLimit),
 		SearchedBuildTS: &searchedBuildTS,
 	}
-	keys, distances, err := veccache.Cache.Search(sp, cacheKey, newAlgo(s.idxcfg, s.tblcfg), query, rt)
+	keys, distances, err := veccache.Cache.Search(sp, cacheKey, newAlgo(s.idxcfg, s.tblcfg, s.f64), query, rt)
 	if err != nil {
 		return nil, nil, err
 	}

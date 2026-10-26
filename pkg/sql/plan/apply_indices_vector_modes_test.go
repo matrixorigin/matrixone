@@ -142,10 +142,11 @@ func TestHnswIterativeWidens(t *testing.T) {
 		mode      string
 		semi      bool
 		iterative bool
+		exact     int64
 	}{
-		{"pre", true, false},
-		{"iterative", true, true},
-		{"post", false, false},
+		{"pre", true, false, 100000},
+		{"iterative", true, true, 100000},
+		{"post", false, false, 0},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
 			query := hnswAutoPlanFixture(t, `select id from hnsw_auto where category = 1
@@ -155,6 +156,7 @@ func TestHnswIterativeWidens(t *testing.T) {
 			opts, err := hnswplan.DecodeScanOptions(search.IndexSearchScan.AlgoOptions)
 			require.NoError(t, err)
 			require.Equal(t, tc.iterative, opts.Iterative)
+			require.Equal(t, tc.exact, opts.PrefilterExactThreshold, "only a prefiltered search scans a small membership")
 			require.Equal(t, tc.semi, findNodeOfType(query, plan.Node_JOIN) != nil && findSemiJoin(query) != nil)
 		})
 	}

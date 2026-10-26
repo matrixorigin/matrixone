@@ -307,3 +307,5 @@ replace (
 )
 
 replace github.com/shoenig/go-m1cpu => github.com/shoenig/go-m1cpu v0.1.7
+
+replace github.com/unum-cloud/usearch/golang => github.com/cpegeric/usearch/golang v0.0.0-20261026183644-b1f5768c8466

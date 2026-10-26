@@ -291,9 +291,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnswWithColRefCnt(nodeID in
 	}
 	postFilterOverFetch := len(scanNode.FilterList) > 0 && !usePreFilter
 
+	var exactThreshold int64
+	if usePreFilter {
+		if exactThreshold, err = builder.resolveInt64Variable("hnsw_prefilter_exact_threshold", 100000); err != nil {
+			return 0, err
+		}
+	}
 	algoOptions, err := hnswplan.EncodeScanOptions(hnswplan.ScanOptions{
-		ThreadsSearch: hnswCtx.nThread,
-		Iterative:     usePreFilter && vectorRankMode(vecCtx) == "iterative",
+		ThreadsSearch:           hnswCtx.nThread,
+		Iterative:               usePreFilter && vectorRankMode(vecCtx) == "iterative",
+		PrefilterExactThreshold: exactThreshold,
 	})
 	if err != nil {
 		return 0, err

@@ -29,7 +29,7 @@ UNAME_M=$(shell uname -m)
 # this Makefile runs, so under `make -j` it fails a clean build and vanishes
 # before anyone can look -- see the `config` target in ../Makefile.
 USEARCH_DIR=_usearch_build
-USEARCH_TAR=usearch-2.26.5.tar.gz
+USEARCH_TAR=usearch-2.26.5-20261030.tar.gz
 STRINGZILLA_DIR=_stringzilla
 STRINGZILLA_TAR=StringZilla-4.2.1.tar.gz
 SIMSIMD_DIR=_simsimd

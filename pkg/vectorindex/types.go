@@ -189,6 +189,7 @@ type HnswParam struct {
 	EfSearch         string `json:"ef_search"`
 	Async            string `json:"async"`
 	MaxIndexCapacity string `json:"max_index_capacity"`
+	Quantization     string `json:"quantization"`
 }
 
 // IVF specified parameters
@@ -317,10 +318,13 @@ type RuntimeConfig struct {
 	// default) and MaxProbe caps Probe (0 = every list).
 	Membership      docfilter.MembershipFilter
 	MembershipCount uint64
-	Iterative       bool
-	ResultLimit     uint
-	MaxLimit        uint
-	MaxProbe        uint
+	// ExactThreshold, when non-zero, is the largest MembershipCount an HNSW search scans
+	// instead of traversing the graph.
+	ExactThreshold uint64
+	Iterative      bool
+	ResultLimit    uint
+	MaxLimit       uint
+	MaxProbe       uint
 
 	// FilterJSON is a JSON predicate array forwarded verbatim to CGo
 	// (gpu_<idx>_search_with_filter). Empty → unfiltered search path.

@@ -51,7 +51,10 @@ type hnswCreateState struct {
 	param    vectorindex.HnswParam
 	tblcfg   vectorindex.IndexTableConfig
 	idxcfg   vectorindex.IndexConfig
-	offset   int
+	// inputKind is the element type of the base column; idxcfg.Usearch.Quantization is
+	// the element type the index stores.
+	inputKind usearch.Quantization
+	offset    int
 
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
@@ -77,7 +80,7 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 
 	ts := time.Now().UnixMicro()
 	provenance := metadataProvenance(proc, u.tblcfg.DbName, u.tblcfg.MetadataTable)
-	switch u.idxcfg.Usearch.Quantization {
+	switch u.inputKind {
 	case usearch.F32:
 		if u.buildf32 != nil {
 			insertSqls, err := u.buildf32.PreparePersistence(ts, buildSnapshotTS(proc), provenance)
@@ -109,7 +112,7 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 		if err != nil {
 			return err
 		}
-		switch u.idxcfg.Usearch.Quantization {
+		switch u.inputKind {
 		case usearch.F32:
 			if u.buildf32 != nil {
 				if err := u.buildf32.PersistChunks(writer); err != nil {
@@ -276,7 +279,15 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 
 		faVec := tf.ctr.argVecs[2]
 		// quantization
-		u.idxcfg.Usearch.Quantization, err = hnsw.QuantizationToUsearch(int32(faVec.GetType().Oid))
+		u.inputKind, err = hnsw.QuantizationToUsearch(int32(faVec.GetType().Oid))
+		if err != nil {
+			return err
+		}
+		// a vecf16/vecbf16/vecint8/vecuint8 column is built from float32 vectors
+		if u.inputKind != usearch.F64 {
+			u.inputKind = usearch.F32
+		}
+		u.idxcfg.Usearch.Quantization, err = hnsw.StorageQuantization(u.param.Quantization, int32(faVec.GetType().Oid))
 		if err != nil {
 			return err
 		}
@@ -289,11 +300,30 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 
 		uid := fmt.Sprintf("%s:%d:%d", tf.CnAddr, tf.MaxParallel, tf.ParallelID)
 
-		switch u.idxcfg.Usearch.Quantization {
+		// An int8/uint8 index maps every vector with one range: the type range of a
+		// vecint8/vecuint8 column, else trained from a random sample of the column.
+		var bounds hnsw.QuantizeBounds
+		if hnsw.NeedsQuantizeBounds(u.idxcfg.Usearch.Quantization) {
+			bounds = hnsw.BaseBounds(int32(faVec.GetType().Oid))
+			if !bounds.Set {
+				bounds, err = hnsw.SampleQuantizeBounds(sqlexec.NewSqlProcess(proc), u.tblcfg, int(dimension))
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		switch u.inputKind {
 		case usearch.F32:
 			u.buildf32, err = hnsw.NewHnswBuild[float32](sqlexec.NewSqlProcess(proc), uid, tf.MaxParallel, u.idxcfg, u.tblcfg)
+			if err == nil {
+				u.buildf32.SetQuantizeBounds(bounds)
+			}
 		case usearch.F64:
 			u.buildf64, err = hnsw.NewHnswBuild[float64](sqlexec.NewSqlProcess(proc), uid, tf.MaxParallel, u.idxcfg, u.tblcfg)
+			if err == nil {
+				u.buildf64.SetQuantizeBounds(bounds)
+			}
 		}
 		if err != nil {
 			return err
@@ -316,9 +346,12 @@ func (u *hnswCreateState) start(tf *TableFunction, proc *process.Process, nthRow
 		return nil
 	}
 
-	switch u.idxcfg.Usearch.Quantization {
+	switch u.inputKind {
 	case usearch.F32:
-		f32a := types.BytesToArray[float32](faVec.GetBytesAt(nthRow))
+		f32a, narrow := hnsw.BytesToFloat32(int32(faVec.GetType().Oid), faVec.GetBytesAt(nthRow))
+		if !narrow {
+			f32a = types.BytesToArray[float32](faVec.GetBytesAt(nthRow))
+		}
 
 		if uint(len(f32a)) != u.idxcfg.Usearch.Dimensions {
 			return moerr.NewInternalError(proc.Ctx, "vector dimension mismatch")

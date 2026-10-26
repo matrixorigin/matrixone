@@ -136,10 +136,11 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 			return nil, nil, err
 		}
 	}
-	if rt.Membership != nil && rt.Iterative {
+	exact := rt.Membership != nil && rt.ExactThreshold > 0 && rt.MembershipCount <= rt.ExactThreshold
+	if rt.Membership != nil && rt.Iterative && !exact {
 		return s.searchIterative(sqlproc, query, indexCounts, rt)
 	}
-	return s.searchOnce(sqlproc, query, indexCounts, limit, rt.Membership, rt.OrigFuncName)
+	return s.searchOnce(sqlproc, query, indexCounts, limit, rt.Membership, exact, rt.OrigFuncName)
 }
 
 // searchOnce searches every sub-index for its nearest limit keys that membership holds
@@ -150,6 +151,7 @@ func (s *HnswSearch[T]) searchOnce(
 	indexCounts []uint,
 	limit uint,
 	membership docfilter.MembershipFilter,
+	exact bool,
 	origFuncName string,
 ) (keys []int64, distances []float64, err error) {
 	indexLimits, limit := boundedHnswSearchLimits(indexCounts, limit)
@@ -181,7 +183,7 @@ func (s *HnswSearch[T]) searchOnce(
 					return ctx.Err()
 				}
 
-				keys, distances, err2 := subindex[j].SearchWithMembership(query, indexLimits[start+j], membership)
+				keys, distances, err2 := subindex[j].SearchWithMembership(query, indexLimits[start+j], membership, exact)
 				if err2 != nil {
 					return err2
 				}
@@ -315,6 +317,14 @@ func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname strin
 			}
 			if len(bat.Vecs) > 5 {
 				idx.BuildTS = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[5], i)
+			}
+			// quantize_min and quantize_max follow, set only on an int8/uint8 model.
+			if len(bat.Vecs) > 7 && !bat.Vecs[6].IsNull(uint64(i)) && !bat.Vecs[7].IsNull(uint64(i)) {
+				idx.Bounds = QuantizeBounds{
+					Min: vector.GetFixedAtWithTypeCheck[float64](bat.Vecs[6], i),
+					Max: vector.GetFixedAtWithTypeCheck[float64](bat.Vecs[7], i),
+					Set: true,
+				}
 			}
 			indexes = append(indexes, idx)
 		}

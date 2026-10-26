@@ -569,3 +569,17 @@ func TestIvfflatSqlWriterEnumReplay(t *testing.T) {
 		})
 	}
 }
+
+// The hnsw writer of a vecf16/vecbf16/vecint8/vecuint8 column widens its vectors to float32.
+func TestHnswVectorWidensNarrowColumns(t *testing.T) {
+	v, ok := hnswVector[float32]([]int8{-1, 2})
+	require.True(t, ok)
+	require.Equal(t, []float32{-1, 2}, v)
+	v, ok = hnswVector[float32]([]float32{3})
+	require.True(t, ok)
+	require.Equal(t, []float32{3}, v)
+	_, ok = hnswVector[float64]([]int8{1})
+	require.False(t, ok)
+	_, ok = hnswVector[float32]("x")
+	require.False(t, ok)
+}

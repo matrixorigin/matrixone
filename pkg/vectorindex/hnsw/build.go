@@ -21,7 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -51,6 +51,9 @@ type HnswBuild[T types.RealNumbers] struct {
 	// tmpDir is the LOCAL fileservice scratch volume, resolved once here because
 	// getIndexForAdd creates models with no SqlProcess in scope.
 	tmpDir string
+
+	// bounds is the range an int8/uint8 build maps every vector with, set before any Add.
+	bounds QuantizeBounds
 }
 
 // recordWorkerErr stores the first worker error and wakes any blocked producer /
@@ -192,6 +195,18 @@ func (h *HnswBuild[T]) Destroy() error {
 }
 
 func (h *HnswBuild[T]) Add(key int64, vec []T) error {
+	if NeedsQuantizeBounds(h.cfg.Usearch.Quantization) && !h.bounds.Set {
+		return moerr.NewInternalErrorNoCtx("hnsw int8/uint8 build has no quantization range")
+	}
+	return h.add(key, vec)
+}
+
+// SetQuantizeBounds gives an int8/uint8 build the range it maps every vector with, before any Add.
+func (h *HnswBuild[T]) SetQuantizeBounds(bounds QuantizeBounds) {
+	h.bounds = bounds
+}
+
+func (h *HnswBuild[T]) add(key int64, vec []T) error {
 	if h.nthread > 1 {
 		// copy the []T slice.
 		item := AddItem[T]{key, append(make([]T, 0, len(vec)), vec...)}
@@ -228,6 +243,7 @@ func (h *HnswBuild[T]) getIndexForAdd() (idx *HnswModel[T], save_idx *HnswModel[
 		if err != nil {
 			return nil, nil, err
 		}
+		idx.Bounds = h.bounds
 		h.indexes = append(h.indexes, idx)
 	} else {
 		// get last index
@@ -243,6 +259,7 @@ func (h *HnswBuild[T]) getIndexForAdd() (idx *HnswModel[T], save_idx *HnswModel[
 			if err != nil {
 				return nil, nil, err
 			}
+			idx.Bounds = h.bounds
 			h.indexes = append(h.indexes, idx)
 			// reset count for next index
 			h.count.Store(0)
@@ -341,13 +358,13 @@ func (h *HnswBuild[T]) PreparePersistence(ts int64, buildTS int64, provenance bo
 		}
 		chksum, fs := idx.Checksum, idx.FileSize
 
-		metas = append(metas, catalog.IndexMetadataRow(provenance, idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
+		metas = append(metas, metadataRow(provenance, idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS, idx.Bounds))
 	}
 
 	if len(metas) == 0 {
 		return nil, nil
 	}
-	metasql := catalog.IndexMetadataInsertSql(h.tblcfg.DbName, h.tblcfg.MetadataTable, provenance, metas)
+	metasql := metadataInsertSql(h.tblcfg.DbName, h.tblcfg.MetadataTable, provenance, h.bounds.Set, metas)
 
 	sqls = append(sqls, metasql)
 	return sqls, nil

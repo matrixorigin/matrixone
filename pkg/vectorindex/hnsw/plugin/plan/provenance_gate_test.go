@@ -90,5 +90,7 @@ func TestCreateIndexWaitsForTheDeploymentBeforeWideningMetadata(t *testing.T) {
 		catalog.Hnsw_TblCol_Metadata_Filesize,
 		catalog.Hnsw_TblCol_Metadata_Nrow,
 		catalog.Hnsw_TblCol_Metadata_Build_Ts,
+		catalog.Hnsw_TblCol_Metadata_Quantize_Min,
+		catalog.Hnsw_TblCol_Metadata_Quantize_Max,
 	}, after, "once every service understands them, new indexes are born wide")
 }

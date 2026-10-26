@@ -544,6 +544,7 @@ func TestApplyIndicesForSortUsingHnswKeepsFiltersOnScan(t *testing.T) {
 	opts, err := hnswplan.DecodeScanOptions(spec.AlgoOptions)
 	require.NoError(t, err)
 	require.Equal(t, int64(4), opts.ThreadsSearch)
+	require.Zero(t, opts.PrefilterExactThreshold, "a post-filtered search has no membership to scan")
 	require.Len(t, scanNode.FilterList, 2)
 }
 

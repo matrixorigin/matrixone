@@ -69,7 +69,12 @@ func (Hooks) BuildSecondaryIndexDefs(
 			return nil, nil, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", indexInfo.KeyParts[0].ColName.ColNameOrigin())
 		}
 		if !catalogplugin.SupportsVectorType(hnswCatalogHooks, types.T(colMap[name].Typ.Id)) {
-			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "HNSW only supports VECF32 and VECF64 column types")
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "HNSW only supports VECF32, VECF64, VECF16, VECBF16, VECINT8 and VECUINT8 column types")
+		}
+		if indexInfo.IndexOption != nil && indexInfo.IndexOption.Quantization != "" {
+			if err := hnswrt.CheckQuantizationBase(indexInfo.IndexOption.Quantization, types.T(colMap[name].Typ.Id)); err != nil {
+				return nil, nil, err
+			}
 		}
 		for _, existedIndex := range existedIndexes {
 			if existedIndex.IndexAlgo == catalog.MoIndexHnswAlgo.ToString() && existedIndex.Parts[0] == name {
@@ -85,7 +90,7 @@ func (Hooks) BuildSecondaryIndexDefs(
 	provenance := planplugin.ClusterHasIndexProvenance(ctx)
 	metadataCols := 4
 	if provenance {
-		metadataCols = 6
+		metadataCols = 8
 	}
 
 	{
@@ -174,6 +179,15 @@ func (Hooks) BuildSecondaryIndexDefs(
 					Scale: 0,
 				},
 				Default: planplugin.ZeroInt64Default(),
+			}
+			// The trained range of an int8/uint8 model; NULL otherwise.
+			for i, name := range []string{catalog.Hnsw_TblCol_Metadata_Quantize_Min, catalog.Hnsw_TblCol_Metadata_Quantize_Max} {
+				tableDefs[0].Cols[6+i] = &plan.ColDef{
+					Name:    name,
+					Alg:     plan.CompressType_Lz4,
+					Typ:     plan.Type{Id: int32(types.T_float64)},
+					Default: &plan.Default{NullAbility: true, Expr: nil, OriginString: ""},
+				}
 			}
 		}
 

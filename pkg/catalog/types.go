@@ -692,6 +692,10 @@ const (
 	Hnsw_TblCol_Metadata_Filesize  = IndexMetadata_TblCol_Filesize
 	Hnsw_TblCol_Metadata_Nrow      = IndexMetadata_TblCol_Nrow
 	Hnsw_TblCol_Metadata_Build_Ts  = IndexMetadata_TblCol_Build_Ts
+	// Hnsw_TblCol_Metadata_Quantize_Min/Max hold the trained [min,max] range an int8/uint8
+	// model maps its vectors with; NULL for every other QUANTIZATION.
+	Hnsw_TblCol_Metadata_Quantize_Min = "quantize_min"
+	Hnsw_TblCol_Metadata_Quantize_Max = "quantize_max"
 
 	/************ Cagra Index *************/
 

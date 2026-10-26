@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -76,6 +75,9 @@ type HnswModel[T types.RealNumbers] struct {
 	// columns -- read as unknown, never as "empty" or "built at the epoch".
 	Nrow    int64
 	BuildTS int64
+
+	// Bounds is the trained range an int8/uint8 model maps its vectors with.
+	Bounds QuantizeBounds
 
 	// for cdc update
 	Dirty atomic.Bool
@@ -383,8 +385,12 @@ func (idx *HnswModel[T]) Add(key int64, vec []T) error {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("usearch dimension not match (expected %d but got %d)", dim, len(vec)))
 	}
 
-	defer runtime.KeepAlive(vec)
-	return idx.Index.AddUnsafe(uint64(key), util.UnsafePointer(&vec[0]))
+	ptr, stored, err := ToStorage(vec, idx.Index.GetConfig().Quantization, idx.Bounds)
+	if err != nil {
+		return err
+	}
+	defer runtime.KeepAlive(stored)
+	return idx.Index.AddUnsafe(uint64(key), ptr)
 }
 
 // add vector without increment the counter.  concurrency add will increment the counter before Add
@@ -412,8 +418,12 @@ func (idx *HnswModel[T]) AddWithoutIncr(key int64, vec []T) error {
 		return moerr.NewInternalErrorNoCtx("usearch dimension not match")
 	}
 
-	defer runtime.KeepAlive(vec)
-	return idx.Index.AddUnsafe(uint64(key), util.UnsafePointer(&vec[0]))
+	ptr, stored, err := ToStorage(vec, idx.Index.GetConfig().Quantization, idx.Bounds)
+	if err != nil {
+		return err
+	}
+	defer runtime.KeepAlive(stored)
+	return idx.Index.AddUnsafe(uint64(key), ptr)
 }
 
 // remove key
@@ -938,12 +948,13 @@ func (idx *HnswModel[T]) Unload() error {
 
 // Call usearch.Search
 func (idx *HnswModel[T]) Search(query []T, limit uint) (keys []usearch.Key, distances []float32, err error) {
-	return idx.SearchWithMembership(query, limit, nil)
+	return idx.SearchWithMembership(query, limit, nil, false)
 }
 
 // SearchWithMembership searches for the nearest limit keys that membership holds; a nil
-// membership searches every key.
-func (idx *HnswModel[T]) SearchWithMembership(query []T, limit uint, membership docfilter.MembershipFilter) (keys []usearch.Key, distances []float32, err error) {
+// membership searches every key. With exact, it scans the vectors membership holds instead
+// of traversing the graph.
+func (idx *HnswModel[T]) SearchWithMembership(query []T, limit uint, membership docfilter.MembershipFilter, exact bool) (keys []usearch.Key, distances []float32, err error) {
 	if idx.Index == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("usearch index is nil")
 	}
@@ -961,16 +972,22 @@ func (idx *HnswModel[T]) SearchWithMembership(query []T, limit uint, membership 
 		return nil, nil, moerr.NewInternalErrorNoCtx("usearch dimension not match")
 	}
 
-	defer runtime.KeepAlive(query)
+	kind := idx.Index.GetConfig().Quantization
+	ptr, stored, err := ToStorage(query, kind, idx.Bounds)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer runtime.KeepAlive(stored)
 	var serr error
 	if membership == nil {
-		keys, distances, serr = idx.Index.SearchUnsafe(util.UnsafePointer(&query[0]), limit)
+		keys, distances, serr = idx.Index.SearchUnsafe(ptr, limit)
 	} else {
-		keys, distances, serr = usearchex.FilteredSearchUnsafeWithMembership(idx.Index, util.UnsafePointer(&query[0]), limit, membership)
+		keys, distances, serr = usearchex.FilteredSearchUnsafeWithMembership(idx.Index, ptr, limit, membership, exact)
 	}
 	if serr != nil {
 		return nil, nil, serr
 	}
+	RescaleDistances(distances, kind, idx.Bounds)
 	if err := metric.CheckFiniteDists(distances, "vector index search"); err != nil {
 		return nil, nil, err
 	}

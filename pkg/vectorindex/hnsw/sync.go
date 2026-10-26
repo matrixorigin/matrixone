@@ -59,6 +59,48 @@ type HnswSync[T types.RealNumbers] struct {
 	// buildTS is the data version the synced generations reflect, supplied by the ISCP
 	// consumer from the iteration it is applying. 0 means unknown.
 	buildTS int64
+
+	// bounds is the range an int8/uint8 index maps its vectors with: the type range of a
+	// vecint8/vecuint8 column (baseBounds), an existing model's, or, for an index built
+	// empty, trained from the first rows it syncs.
+	bounds     QuantizeBounds
+	baseBounds QuantizeBounds
+}
+
+// newModel creates a model for rows that do not fit the existing ones.
+func (s *HnswSync[T]) newModel(maxcap uint) (*HnswModel[T], error) {
+	m, err := NewHnswModelForBuild[T](s.getModelId(), s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap, s.tmpDir)
+	if err != nil {
+		return nil, err
+	}
+	m.Bounds = s.bounds
+	return m, nil
+}
+
+// setupBounds gives an int8/uint8 sync the bounds its new models map their vectors with.
+func (s *HnswSync[T]) setupBounds(cdc *vectorindex.VectorIndexCdc[T]) {
+	if !NeedsQuantizeBounds(s.idxcfg.Usearch.Quantization) || s.bounds.Set {
+		return
+	}
+	if s.baseBounds.Set {
+		s.bounds = s.baseBounds
+		return
+	}
+	for _, m := range s.indexes {
+		if m.Bounds.Set {
+			s.bounds = m.Bounds
+			return
+		}
+	}
+	sample := make([][]T, 0, len(cdc.Data))
+	for _, e := range cdc.Data {
+		if len(e.Vec) > 0 {
+			sample = append(sample, e.Vec)
+		}
+	}
+	if len(sample) > 0 {
+		s.bounds = TrainQuantizeBounds(sample)
+	}
 }
 
 // SetBuildTS records the data version this sync's generations will reflect: the upper bound of
@@ -160,7 +202,7 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 
 	idxcfg.Usearch.Dimensions = uint(dimension)
 
-	idxcfg.Usearch.Quantization, err = QuantizationToUsearch(vectype)
+	idxcfg.Usearch.Quantization, err = StorageQuantization(param.Quantization, vectype)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +251,7 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	// model id for CDC is cdc:1:0:timestamp
 	uid := fmt.Sprintf("%s:%d:%d", "cdc", 1, 0)
 	sync := &HnswSync[T]{indexes: indexes, idxcfg: idxcfg, tblcfg: idxtblcfg, uid: uid, idxname: idxname,
-		tmpDir: syncSpillDir(sqlproc, spillDir)}
+		tmpDir: syncSpillDir(sqlproc, spillDir), baseBounds: BaseBounds(vectype)}
 	// Monotonic metadata timestamp (the cross-CN cache-freshness generation) — strictly greater
 	// than every existing model row, not a bare wall-clock value. See nextTimestamp. (Save
 	// recomputes it just before writing; this initial value keeps the uid:ts model id unique.)
@@ -446,8 +488,7 @@ func (s *HnswSync[T]) setupModel(sqlproc *sqlexec.SqlProcess, maxcap uint) error
 	s.last = (*HnswModel[T])(nil)
 	if len(s.indexes) == 0 {
 		// create a new model and do insert
-		id := s.getModelId()
-		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap, s.tmpDir)
+		newmodel, err := s.newModel(maxcap)
 		if err != nil {
 			return err
 		}
@@ -459,9 +500,8 @@ func (s *HnswSync[T]) setupModel(sqlproc *sqlexec.SqlProcess, maxcap uint) error
 		idxlen := uint(s.last.Len.Load())
 		if idxlen >= s.last.MaxCapacity {
 			//os.Stderr.WriteString(fmt.Sprintf("full len %d, cap %d\n", idxlen, last.MaxCapacity))
-			id := s.getModelId()
 			// model is already full, create a new model for insert
-			newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap, s.tmpDir)
+			newmodel, err := s.newModel(maxcap)
 			if err != nil {
 				return err
 			}
@@ -566,6 +606,8 @@ func (s *HnswSync[T]) Update(sqlproc *sqlexec.SqlProcess, cdc *vectorindex.Vecto
 
 	checkidxElapsed := t.Sub(start)
 
+	s.setupBounds(cdc)
+
 	// setup s.last and s.current model. s.late will point to the last model in metadata and s.current is nil
 	err = s.setupModel(sqlproc, maxcap)
 	if err != nil {
@@ -641,6 +683,7 @@ func (s *HnswSync[T]) nextTimestamp() int64 {
 func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 	s.ts = s.nextTimestamp()
 	provenance := sqlexec.HasProvenanceColumns(sqlproc, s.tblcfg.DbName, s.tblcfg.MetadataTable, catalog.Hnsw_TblCol_Metadata_Build_Ts)
+	quantized := NeedsQuantizeBounds(s.idxcfg.Usearch.Quantization)
 	dirty := make([]*HnswModel[T], 0, len(s.indexes))
 	for _, idx := range s.indexes {
 		if !idx.Dirty.Load() {
@@ -680,11 +723,11 @@ func (s *HnswSync[T]) Save(sqlproc *sqlexec.SqlProcess) error {
 			if idx.FileSize == 0 {
 				continue
 			}
-			metas = append(metas, catalog.IndexMetadataRow(provenance, idx.Id, idx.Checksum, ts, idx.FileSize, idx.Len.Load(), s.buildTS))
+			metas = append(metas, metadataRow(provenance, idx.Id, idx.Checksum, ts, idx.FileSize, idx.Len.Load(), s.buildTS, idx.Bounds))
 			ts++
 		}
 		if len(metas) > 0 {
-			res, err := exec.Exec(catalog.IndexMetadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance, metas), stmt)
+			res, err := exec.Exec(metadataInsertSql(s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance, quantized, metas), stmt)
 			res.Close()
 			return err
 		}
@@ -729,9 +772,8 @@ func (s *HnswSync[T]) getLastModel(sqlproc *sqlexec.SqlProcess, maxcap uint) (*H
 			s.last.Unload()
 		}
 
-		id := s.getModelId()
 		// model is already full, create a new model for insert
-		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap, s.tmpDir)
+		newmodel, err := s.newModel(maxcap)
 		if err != nil {
 			return nil, err
 		}
@@ -750,9 +792,8 @@ func (s *HnswSync[T]) getLastModelAndIncrForSync(sqlproc *sqlexec.SqlProcess, ma
 
 	full := (s.last.Len.Load() >= int64(s.last.MaxCapacity))
 	if full {
-		id := s.getModelId()
 		// model is already full, create a new model for insert
-		newmodel, err := NewHnswModelForBuild[T](id, s.idxcfg, int(s.tblcfg.ThreadsBuild), maxcap, s.tmpDir)
+		newmodel, err := s.newModel(maxcap)
 		if err != nil {
 			return nil, false, err
 		}
