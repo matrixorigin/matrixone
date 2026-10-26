@@ -1374,15 +1374,18 @@ func TestCaseCheckSignedUnsignedIntegerWithNull(t *testing.T) {
 	}
 }
 
-func TestBinaryStringCommonTypeCapsUTF8MB4Width(t *testing.T) {
+func TestBinaryStringCommonTypePreservesUTF8MB4ByteBound(t *testing.T) {
 	tests := []struct {
 		name         string
 		varcharWidth int32
+		wantOID      types.T
 		wantWidth    int32
 	}{
-		{name: "one character", varcharWidth: 1, wantWidth: utf8.UTFMax},
-		{name: "maximum varchar", varcharWidth: types.MaxVarcharLen, wantWidth: types.MaxVarBinaryLen},
-		{name: "unknown varchar", varcharWidth: -1, wantWidth: types.MaxVarBinaryLen},
+		{name: "one character", varcharWidth: 1, wantOID: types.T_varbinary, wantWidth: utf8.UTFMax},
+		{name: "last bounded character width", varcharWidth: types.MaxVarBinaryLen / utf8.UTFMax, wantOID: types.T_varbinary, wantWidth: types.MaxVarBinaryLen / utf8.UTFMax * utf8.UTFMax},
+		{name: "first large character width", varcharWidth: types.MaxVarBinaryLen/utf8.UTFMax + 1, wantOID: types.T_blob},
+		{name: "maximum varchar", varcharWidth: types.MaxVarcharLen, wantOID: types.T_blob},
+		{name: "unknown varchar", varcharWidth: -1, wantOID: types.T_blob},
 	}
 
 	for _, test := range tests {
@@ -1392,7 +1395,7 @@ func TestBinaryStringCommonTypeCapsUTF8MB4Width(t *testing.T) {
 				types.New(types.T_varchar, test.varcharWidth, 0),
 			})
 			require.True(t, ok)
-			require.Equal(t, types.T_varbinary, result.Oid)
+			require.Equal(t, test.wantOID, result.Oid)
 			require.Equal(t, test.wantWidth, result.Width)
 		})
 	}

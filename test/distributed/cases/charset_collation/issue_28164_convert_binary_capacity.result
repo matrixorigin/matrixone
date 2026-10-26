@@ -181,6 +181,42 @@ SELECT id, HEX(g) FROM decimal_generated ORDER BY id;
 2  ¦  302E333333333333333333333333
 SET SESSION div_precision_increment = @binary_convert_saved_increment;
 SET @binary_convert_saved_increment = NULL;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+CREATE TABLE conditional_source (id INT PRIMARY KEY, flag BOOL, c VARCHAR(10000), b BINARY(1));
+INSERT INTO conditional_source VALUES (1, TRUE, REPEAT('😀',10000), X'41');
+SELECT LENGTH(CONCAT(c,c)) AS concat_bytes, LENGTH(IF(flag,CONCAT(c,c),b)) AS if_bytes, LENGTH(CASE WHEN flag THEN CONCAT(c,c) ELSE b END) AS case_bytes FROM conditional_source;
+➤ concat_bytes[-5,64,0]  ¦  if_bytes[-5,64,0]  ¦  case_bytes[-5,64,0]  𝄀
+80000  ¦  80000  ¦  80000
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+SET SESSION sql_mode = '';
+SELECT LENGTH(CONCAT(c,c)) AS concat_bytes, LENGTH(IF(flag,CONCAT(c,c),b)) AS if_bytes, LENGTH(CASE WHEN flag THEN CONCAT(c,c) ELSE b END) AS case_bytes FROM conditional_source;
+➤ concat_bytes[-5,64,0]  ¦  if_bytes[-5,64,0]  ¦  case_bytes[-5,64,0]  𝄀
+80000  ¦  80000  ¦  80000
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+CREATE TABLE conditional_target (v VARBINARY(65535));
+INSERT INTO conditional_target SELECT IF(flag,CONCAT(c,c),b) FROM conditional_source;
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1265  ¦  Data truncated for column 'varbinary' at row 1
+SELECT LENGTH(v) AS stored_bytes, HEX(CAST(RIGHT(v,3) AS BINARY(3))) AS final_bytes FROM conditional_target;
+➤ stored_bytes[-5,64,0]  ¦  final_bytes[12,6,0]  𝄀
+65535  ¦  F09F98
+TRUNCATE TABLE conditional_target;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+INSERT INTO conditional_target SELECT CASE WHEN flag THEN CONCAT(c,c) ELSE b END FROM conditional_source;
+Data truncation: Can't cast column from BLOB type to VARBINARY type because of one or more values in that column. Src length 80000 is larger than Dest length 65535
+SELECT COUNT(*) AS post_reject_rows FROM conditional_target;
+➤ post_reject_rows[-5,64,0]  𝄀
+0
+INSERT IGNORE INTO conditional_target SELECT IF(flag,CONCAT(c,c),b) FROM conditional_source;
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1265  ¦  Data truncated for column 'varbinary' at row 1
+SELECT LENGTH(v) AS stored_bytes, HEX(CAST(RIGHT(v,3) AS BINARY(3))) AS final_bytes FROM conditional_target;
+➤ stored_bytes[-5,64,0]  ¦  final_bytes[12,6,0]  𝄀
+65535  ¦  F09F98
 SET SESSION sql_mode = @binary_convert_saved_mode;
 SET @binary_convert_saved_mode = NULL;
 DROP DATABASE issue_28164_binary_convert;

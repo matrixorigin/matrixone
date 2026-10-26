@@ -105,6 +105,27 @@ UPDATE decimal_generated SET a=2 WHERE id=1;
 SELECT id, HEX(g) FROM decimal_generated ORDER BY id;
 SET SESSION div_precision_increment = @binary_convert_saved_increment;
 SET @binary_convert_saved_increment = NULL;
+-- Conditional expression coercion is not a binary column assignment.
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+CREATE TABLE conditional_source (id INT PRIMARY KEY, flag BOOL, c VARCHAR(10000), b BINARY(1));
+INSERT INTO conditional_source VALUES (1, TRUE, REPEAT('😀',10000), X'41');
+SELECT LENGTH(CONCAT(c,c)) AS concat_bytes, LENGTH(IF(flag,CONCAT(c,c),b)) AS if_bytes, LENGTH(CASE WHEN flag THEN CONCAT(c,c) ELSE b END) AS case_bytes FROM conditional_source;
+SHOW WARNINGS;
+SET SESSION sql_mode = '';
+SELECT LENGTH(CONCAT(c,c)) AS concat_bytes, LENGTH(IF(flag,CONCAT(c,c),b)) AS if_bytes, LENGTH(CASE WHEN flag THEN CONCAT(c,c) ELSE b END) AS case_bytes FROM conditional_source;
+SHOW WARNINGS;
+-- Only the real destination may truncate; raw binary truncation may split UTF-8.
+CREATE TABLE conditional_target (v VARBINARY(65535));
+INSERT INTO conditional_target SELECT IF(flag,CONCAT(c,c),b) FROM conditional_source;
+SHOW WARNINGS;
+SELECT LENGTH(v) AS stored_bytes, HEX(CAST(RIGHT(v,3) AS BINARY(3))) AS final_bytes FROM conditional_target;
+TRUNCATE TABLE conditional_target;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+INSERT INTO conditional_target SELECT CASE WHEN flag THEN CONCAT(c,c) ELSE b END FROM conditional_source;
+SELECT COUNT(*) AS post_reject_rows FROM conditional_target;
+INSERT IGNORE INTO conditional_target SELECT IF(flag,CONCAT(c,c),b) FROM conditional_source;
+SHOW WARNINGS;
+SELECT LENGTH(v) AS stored_bytes, HEX(CAST(RIGHT(v,3) AS BINARY(3))) AS final_bytes FROM conditional_target;
 SET SESSION sql_mode = @binary_convert_saved_mode;
 SET @binary_convert_saved_mode = NULL;
 DROP DATABASE issue_28164_binary_convert;
