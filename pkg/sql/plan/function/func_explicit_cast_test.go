@@ -163,6 +163,69 @@ func TestExplicitCastLexicalIntegerDiagnostics(t *testing.T) {
 	}
 }
 
+// TestExplicitCastLexicalDecimalDiagnostics covers issue #30417: an explicit
+// CAST of lexically invalid or blank text to DECIMAL converts to zero (or keeps
+// a numeric prefix) with MySQL's 1292 truncation warning instead of erroring,
+// while valid values, masked rows and the strict implicit route keep their
+// existing contracts. BINARY sources take the separate packed-bytes path, which
+// is untouched here.
+func TestExplicitCastLexicalDecimalDiagnostics(t *testing.T) {
+	// DECIMAL(40,2) belongs to the decimal256-only range; issue #30417 must
+	// cover all three precisions, not just the sub-64/128 ones.
+	for _, tc := range []struct {
+		oid          types.T
+		width, scale int32
+	}{
+		{types.T_decimal64, 10, 2},
+		{types.T_decimal128, 10, 2},
+		{types.T_decimal256, 40, 2},
+	} {
+		oid := tc.oid
+		for _, sqlMode := range []string{"", "STRICT_TRANS_TABLES"} {
+			t.Run(oid.String()+"/"+sqlMode, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				sink := &numericWarningSession{}
+				proc.WarningSink = sink
+				proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return sqlMode, nil })
+				target := types.New(oid, tc.width, tc.scale)
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc", "", "  ", "123tail", "42", "x9", "bad"}, []bool{false, false, false, false, false, true, false}),
+					NewFunctionTestInput(target, emptyCastTargetValues(target), nil),
+				}, NewFunctionTestResult(target, false, nil, nil), NewExplicitCast).
+					WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, true, true, false}})
+				t.Cleanup(fc.Free)
+				got, err := fc.DebugRun()
+				require.NoError(t, err)
+				for row, want := range []string{"0.00", "0.00", "0.00", "123.00", "42.00"} {
+					require.Equal(t, want, explicitCastDecimalTestValue(got, row))
+				}
+				require.True(t, got.IsNull(5), "NULL input must stay NULL without a warning")
+				require.True(t, got.IsNull(6), "masked row must not be evaluated")
+				require.Equal(t, []numericWarning{
+					{1292, "Truncated incorrect DECIMAL value: 'abc'"},
+					{1292, "Truncated incorrect DECIMAL value: ''"},
+					{1292, "Truncated incorrect DECIMAL value: '  '"},
+					{1292, "Truncated incorrect DECIMAL value: '123tail'"},
+				}, sink.warnings)
+			})
+		}
+		t.Run(oid.String()+"/implicit_stays_strict", func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			sink := &numericWarningSession{}
+			proc.WarningSink = sink
+			target := types.New(oid, tc.width, tc.scale)
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc"}, nil),
+				NewFunctionTestInput(target, emptyCastTargetValues(target), nil),
+			}, NewFunctionTestResult(target, false, nil, nil), NewCast)
+			t.Cleanup(fc.Free)
+			_, err := fc.DebugRun()
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+			require.Empty(t, sink.warnings)
+		})
+	}
+}
+
 func TestExplicitCastNumericDecimalRangeDiagnostics(t *testing.T) {
 	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
 		for _, source := range []struct {
