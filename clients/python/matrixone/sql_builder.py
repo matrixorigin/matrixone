@@ -207,11 +207,15 @@ class MatrixOneSQLBuilder:
         return self
 
     def where_eq(self, column: str, value: Any) -> "MatrixOneSQLBuilder":
-        """Add WHERE column = value"""
+        """Add WHERE column = value, or IS NULL for None."""
+        if value is None:
+            return self.where(f"{column} IS NULL")
         return self.where(f"{column} = ?", value)
 
     def where_ne(self, column: str, value: Any) -> "MatrixOneSQLBuilder":
-        """Add WHERE column != value"""
+        """Add WHERE column != value, or IS NOT NULL for None."""
+        if value is None:
+            return self.where(f"{column} IS NOT NULL")
         return self.where(f"{column} != ?", value)
 
     def where_gt(self, column: str, value: Any) -> "MatrixOneSQLBuilder":
