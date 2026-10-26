@@ -181,6 +181,13 @@ class BaseSnapshotManager:
         )
 
 
+def _snapshot_lookup_name(name):
+    if len(name) >= 2 and name[0] in ('`', '"') and name[-1] == name[0]:
+        quote = name[0]
+        return name[1:-1].replace(quote * 2, quote)
+    return name
+
+
 class SnapshotManager(BaseSnapshotManager):
     """
     Synchronous snapshot management for MatrixOne database operations.
@@ -303,10 +310,12 @@ class SnapshotManager(BaseSnapshotManager):
 
         try:
             self._get_executor().execute(sql)
-            # Get snapshot info
-            return self.get(name)
         except Exception as e:
             raise SnapshotError(f"Failed to create snapshot: {e}") from e
+        try:
+            return self.get(name)
+        except Exception as e:
+            raise SnapshotError(f"Snapshot CREATE acknowledged for '{name}'; metadata readback failed: {e}") from e
 
     def list(self) -> List[Snapshot]:
         """
@@ -320,7 +329,7 @@ class SnapshotManager(BaseSnapshotManager):
 
         try:
             result = self._get_executor().execute(
-                "SELECT sname, ts, level, account_name, database_name, table_name FROM mo_catalog.mo_snapshots"
+                "SELECT sname, ts, level, account_name, database_name, table_name FROM mo_catalog.mo_snapshots ORDER BY ts DESC"
             )
 
             snapshots = []
@@ -351,9 +360,9 @@ class SnapshotManager(BaseSnapshotManager):
                 """
                 SELECT sname, ts, level, account_name, database_name, table_name
                 FROM mo_catalog.mo_snapshots
-                WHERE sname = :name
+                WHERE sname = LOWER(?)
             """,
-                {"name": name},
+                (_snapshot_lookup_name(name),),
             )
 
             row = result.fetchone()
@@ -442,10 +451,12 @@ class AsyncSnapshotManager(BaseSnapshotManager):
 
         try:
             await self._get_executor().execute(sql)
-            # Get snapshot info
-            return await self.get(name)
         except Exception as e:
             raise SnapshotError(f"Failed to create snapshot: {e}") from e
+        try:
+            return await self.get(name)
+        except Exception as e:
+            raise SnapshotError(f"Snapshot CREATE acknowledged for '{name}'; metadata readback failed: {e}") from e
 
     async def list(self) -> List[Snapshot]:
         """
@@ -459,7 +470,7 @@ class AsyncSnapshotManager(BaseSnapshotManager):
 
         try:
             result = await self._get_executor().execute(
-                "SELECT sname, ts, level, account_name, database_name, table_name FROM mo_catalog.mo_snapshots"
+                "SELECT sname, ts, level, account_name, database_name, table_name FROM mo_catalog.mo_snapshots ORDER BY ts DESC"
             )
 
             snapshots = []
@@ -490,9 +501,9 @@ class AsyncSnapshotManager(BaseSnapshotManager):
                 """
                 SELECT sname, ts, level, account_name, database_name, table_name
                 FROM mo_catalog.mo_snapshots
-                WHERE sname = :name
+                WHERE sname = LOWER(?)
             """,
-                {"name": name},
+                (_snapshot_lookup_name(name),),
             )
 
             row = result.fetchone()

@@ -17,7 +17,7 @@ MatrixOne SQLAlchemy dialect support.
 """
 
 import sqlalchemy
-from sqlalchemy.dialects.mysql.base import MySQLDialect, ischema_names as mysql_ischema_names
+from sqlalchemy.dialects.mysql.base import MySQLTypeCompiler, MySQLDialect, ischema_names as mysql_ischema_names
 
 from .vector_type import VectorType, VectorPrecision
 
@@ -41,6 +41,9 @@ _mo_ischema_names = mysql_ischema_names.copy()
 _mo_ischema_names["vecf32"] = _Vecf32Type
 _mo_ischema_names["vecf64"] = _Vecf64Type
 _mo_ischema_names["bool"] = mysql_ischema_names["boolean"]
+# Older servers emit uppercase types when describing views. Keep MySQL's
+# global registry untouched while accepting both server spellings.
+_mo_ischema_names.update({name.upper(): value for name, value in tuple(_mo_ischema_names.items())})
 
 
 class MatrixOneDialect(MySQLDialect):
@@ -198,403 +201,39 @@ class MatrixOneCompiler(MySQLDialect.statement_compiler):
         return super().visit_user_defined_type(type_, **kw)
 
 
-# SQLAlchemy version compatibility
-SA_VERSION = tuple(map(int, sqlalchemy.__version__.split(".")[:2]))
-
-if SA_VERSION >= (2, 0):
-    # SQLAlchemy 2.0+
-    from sqlalchemy.sql.compiler import TypeCompiler
-
-    class MatrixOneTypeCompiler(TypeCompiler):
-        """MatrixOne type compiler for handling vector types."""
-
-        def visit_VECTOR(self, type_, **kw):
-            """Handle VECTOR type compilation."""
-            if hasattr(type_, "get_col_spec"):
-                return type_.get_col_spec()
-            return "VECTOR"
-
-        # Delegate all other types to MySQL type compiler
-        def visit_integer(self, type_, **kw):
-            """Handle INTEGER type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_integer(type_, **kw)
-
-        def visit_string(self, type_, **kw):
-            """Handle STRING type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_string(type_, **kw)
-
-        def visit_text(self, type_, **kw):
-            """Handle TEXT type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_text(type_, **kw)
-
-        def visit_boolean(self, type_, **kw):
-            """Handle BOOLEAN type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_boolean(type_, **kw)
-
-        def visit_float(self, type_, **kw):
-            """Handle FLOAT type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_float(type_, **kw)
-
-        def visit_numeric(self, type_, **kw):
-            """Handle NUMERIC type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_numeric(type_, **kw)
-
-        def visit_DECIMAL(self, type_, **kw):
-            """Handle DECIMAL type compilation for SQLAlchemy 2.0.x."""
-            if (
-                hasattr(type_, 'precision')
-                and hasattr(type_, 'scale')
-                and type_.precision is not None
-                and type_.scale is not None
-            ):
-                return f"DECIMAL({type_.precision}, {type_.scale})"
-            return "DECIMAL"
-
-        def visit_NUMERIC(self, type_, **kw):
-            """Handle NUMERIC type compilation for SQLAlchemy 2.0.x."""
-            if (
-                hasattr(type_, 'precision')
-                and hasattr(type_, 'scale')
-                and type_.precision is not None
-                and type_.scale is not None
-            ):
-                return f"DECIMAL({type_.precision}, {type_.scale})"
-            return "DECIMAL"
-
-        def visit_BIGINT(self, type_, **kw):
-            """Handle BIGINT type compilation for SQLAlchemy 2.0.x."""
-            return "BIGINT"
-
-        def visit_big_integer(self, type_, **kw):
-            """Handle BigInteger type compilation for SQLAlchemy 2.0.x."""
-            return "BIGINT"
-
-        def visit_TIMESTAMP(self, type_, **kw):
-            """Handle TIMESTAMP type compilation for SQLAlchemy 2.0.x."""
-            return "TIMESTAMP"
-
-        def visit_date(self, type_, **kw):
-            """Handle DATE type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_date(type_, **kw)
-
-        def visit_datetime(self, type_, **kw):
-            """Handle DATETIME type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_datetime(type_, **kw)
-
-        def visit_time(self, type_, **kw):
-            """Handle TIME type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_time(type_, **kw)
-
-        def visit_timestamp(self, type_, **kw):
-            """Handle TIMESTAMP type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_TIMESTAMP(type_, **kw)
-
-        def visit_type_decorator(self, type_, **kw):
-            """Handle TypeDecorator type compilation."""
-            # Check if this is a Vectorf32/Vectorf64 type by checking for get_col_spec
-            if hasattr(type_, 'get_col_spec'):
-                return type_.get_col_spec(**kw)
-
-            # For MatrixOne vector types, handle them directly
-            if hasattr(type_, 'type_engine'):
-                actual_type = type_.type_engine(self.dialect)
-                if hasattr(actual_type, '__visit_name__') and actual_type.__visit_name__ == 'VECTOR':
-                    return self.visit_VECTOR(actual_type, **kw)
-
-            # For other types, delegate to MySQL compiler
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_type_decorator(type_, **kw)
-
-        # Additional type methods for comprehensive SQLAlchemy 2.0.x support
-        def visit_small_integer(self, type_, **kw):
-            """Handle SMALLINT type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_small_integer(type_, **kw)
-
-        def visit_CHAR(self, type_, **kw):
-            """Handle CHAR type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_CHAR(type_, **kw)
-
-        def visit_VARCHAR(self, type_, **kw):
-            """Handle VARCHAR type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_VARCHAR(type_, **kw)
-
-        def visit_unicode(self, type_, **kw):
-            """Handle Unicode type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_unicode(type_, **kw)
-
-        def visit_unicode_text(self, type_, **kw):
-            """Handle UnicodeText type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_unicode_text(type_, **kw)
-
-        def visit_large_binary(self, type_, **kw):
-            """Handle LargeBinary type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_large_binary(type_, **kw)
-
-        def visit_binary(self, type_, **kw):
-            """Handle Binary type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_BINARY(type_, **kw)
-
-        def visit_BINARY(self, type_, **kw):
-            """Handle BINARY type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_BINARY(type_, **kw)
-
-        def visit_VARBINARY(self, type_, **kw):
-            """Handle VARBINARY type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_VARBINARY(type_, **kw)
-
-        def visit_BLOB(self, type_, **kw):
-            """Handle BLOB type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_BLOB(type_, **kw)
-
-        def visit_TINYINT(self, type_, **kw):
-            """Handle TINYINT type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_TINYINT(type_, **kw)
-
-        def visit_enum(self, type_, **kw):
-            """Handle Enum type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_enum(type_, **kw)
-
-        def visit_pickle(self, type_, **kw):
-            """Handle PickleType compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_pickle(type_, **kw)
-
-        def visit_interval(self, type_, **kw):
-            """Handle Interval type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_interval(type_, **kw)
-
-        def visit_uuid(self, type_, **kw):
-            """Handle UUID type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_uuid(type_, **kw)
-
-        def visit_JSON(self, type_, **kw):
-            """Handle JSON type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_JSON(type_, **kw)
-
-        def visit_arbitrary_type(self, type_, **kw):
-            """Handle arbitrary type compilation."""
-            from sqlalchemy.dialects.mysql.base import MySQLDialect
-
-            mysql_compiler = MySQLDialect.type_compiler_cls(self.dialect)
-            return mysql_compiler.visit_arbitrary_type(type_, **kw)
-
-else:
-    # SQLAlchemy 1.4.x
-    class MatrixOneTypeCompiler(MySQLDialect.type_compiler):
-        """MatrixOne type compiler for handling vector types."""
-
-        def visit_VECTOR(self, type_, **kw):
-            """Handle VECTOR type compilation."""
-            if hasattr(type_, "get_col_spec"):
-                return type_.get_col_spec()
-            return "VECTOR"
-
-        def visit_timestamp(self, type_, **kw):
-            """Handle TIMESTAMP type compilation for SQLAlchemy 1.4.x."""
-            # In SQLAlchemy 1.4.x, we need to handle TIMESTAMP differently
-            return "TIMESTAMP"
-
-        def visit_DECIMAL(self, type_, **kw):
-            """Handle DECIMAL type compilation for SQLAlchemy 2.0.x."""
-            if (
-                hasattr(type_, 'precision')
-                and hasattr(type_, 'scale')
-                and type_.precision is not None
-                and type_.scale is not None
-            ):
-                return f"DECIMAL({type_.precision}, {type_.scale})"
-            return "DECIMAL"
-
-        def visit_NUMERIC(self, type_, **kw):
-            """Handle NUMERIC type compilation for SQLAlchemy 2.0.x."""
-            if (
-                hasattr(type_, 'precision')
-                and hasattr(type_, 'scale')
-                and type_.precision is not None
-                and type_.scale is not None
-            ):
-                return f"DECIMAL({type_.precision}, {type_.scale})"
-            return "DECIMAL"
-
-        def visit_BIGINT(self, type_, **kw):
-            """Handle BIGINT type compilation for SQLAlchemy 1.4.x."""
-            return "BIGINT"
-
-        def visit_big_integer(self, type_, **kw):
-            """Handle BigInteger type compilation for SQLAlchemy 1.4.x."""
-            return "BIGINT"
-
-        def visit_TIMESTAMP(self, type_, **kw):
-            """Handle TIMESTAMP type compilation for SQLAlchemy 1.4.x."""
-            return "TIMESTAMP"
-
-        # Additional type methods for comprehensive SQLAlchemy 1.4.x support
-        def visit_small_integer(self, type_, **kw):
-            """Handle SMALLINT type compilation."""
-            return "SMALLINT"
-
-        def visit_CHAR(self, type_, **kw):
-            """Handle CHAR type compilation."""
-            if hasattr(type_, 'length') and type_.length:
-                return f"CHAR({type_.length})"
-            return "CHAR"
-
-        def visit_VARCHAR(self, type_, **kw):
-            """Handle VARCHAR type compilation."""
-            if hasattr(type_, 'length') and type_.length:
-                return f"VARCHAR({type_.length})"
-            return "VARCHAR"
-
-        def visit_unicode(self, type_, **kw):
-            """Handle Unicode type compilation."""
-            if hasattr(type_, 'length') and type_.length:
-                return f"VARCHAR({type_.length})"
-            return "VARCHAR"
-
-        def visit_unicode_text(self, type_, **kw):
-            """Handle UnicodeText type compilation."""
-            return "TEXT"
-
-        def visit_large_binary(self, type_, **kw):
-            """Handle LargeBinary type compilation."""
-            return "BLOB"
-
-        def visit_binary(self, type_, **kw):
-            """Handle Binary type compilation."""
-            if hasattr(type_, 'length') and type_.length:
-                return f"BINARY({type_.length})"
-            return "BINARY"
-
-        def visit_BINARY(self, type_, **kw):
-            """Handle BINARY type compilation."""
-            if hasattr(type_, 'length') and type_.length:
-                return f"BINARY({type_.length})"
-            return "BINARY"
-
-        def visit_VARBINARY(self, type_, **kw):
-            """Handle VARBINARY type compilation."""
-            if hasattr(type_, 'length') and type_.length:
-                return f"VARBINARY({type_.length})"
-            return "VARBINARY"
-
-        def visit_BLOB(self, type_, **kw):
-            """Handle BLOB type compilation."""
-            return "BLOB"
-
-        def visit_TINYINT(self, type_, **kw):
-            """Handle TINYINT type compilation."""
-            return "TINYINT"
-
-        def visit_enum(self, type_, **kw):
-            """Handle Enum type compilation."""
-            if hasattr(type_, 'enums') and type_.enums:
-                enum_values = "','".join(type_.enums)
-                return f"ENUM('{enum_values}')"
-            return "ENUM"
-
-        def visit_pickle(self, type_, **kw):
-            """Handle PickleType compilation."""
-            return "BLOB"
-
-        def visit_interval(self, type_, **kw):
-            """Handle Interval type compilation."""
-            return "DATETIME"
-
-        def visit_uuid(self, type_, **kw):
-            """Handle UUID type compilation."""
-            return "CHAR(32)"
-
-        def visit_JSON(self, type_, **kw):
-            """Handle JSON type compilation."""
-            return "JSON"
-
-        def visit_arbitrary_type(self, type_, **kw):
-            """Handle arbitrary type compilation."""
-            return "VARCHAR"
+class MatrixOneTypeCompiler(MySQLTypeCompiler):
+    """Inherit scalar fidelity; specialize only MatrixOne vector types."""
+
+    def visit_VECTOR(self, type_, **kw):
+        return type_.get_col_spec() if hasattr(type_, 'get_col_spec') else 'VECTOR'
 
 
 # Register the dialect
 MatrixOneDialect.statement_compiler = MatrixOneCompiler
 MatrixOneDialect.type_compiler = MatrixOneTypeCompiler
+MatrixOneDialect.type_compiler_cls = MatrixOneTypeCompiler
 
 
 # MatrixOneVectorType removed - use VectorType from vector_type.py instead
+
+
+def adapt_engine_dialect(engine):
+    """Add MatrixOne traits without replacing the driver's initialization owner.
+
+    SQLAlchemy's first-connect closure retains this object, even for a lazy
+    engine. Keep its DBAPI, ping, server state and driver-specific overrides.
+    """
+    dialect = engine.dialect
+    if isinstance(dialect, MatrixOneDialect):
+        return
+    driver_type = type(dialect)
+    dialect.__class__ = type(
+        'MatrixOne_' + driver_type.__name__,
+        (driver_type, MatrixOneDialect),
+        {'supports_statement_cache': True, 'statement_compiler': MatrixOneCompiler},
+    )
+    dialect.ischema_names = dict(dialect.ischema_names, **_mo_ischema_names)
+    compiler = MatrixOneTypeCompiler(dialect)
+    dialect.type_compiler = compiler
+    dialect.type_compiler_instance = compiler
+    engine.clear_compiled_cache()
