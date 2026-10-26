@@ -203,11 +203,9 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 	var nominalPrecision int64
 	for i, domain := range inputs {
 		width, scale, ok := decimalArithmeticDomain(domain)
-		if !ok && domain.Oid == types.T_any {
-			domain = coerced[i]
-			width, scale, ok = decimalArithmeticDomain(domain)
-		}
 		if !ok {
+			// An untyped NULL borrows its peer's cast type, not its numeric
+			// domain. Keep the released carrier for unknown input domains.
 			return nil, false
 		}
 		if isMultiply {

@@ -44,6 +44,8 @@ aggregate headroom and partial-state layout are not changed by this patch.
 - Explicit Decimal256 operands retain that carrier. Unsupported coercion
   domains retain their old physical route. Result precision remains capped by
   the existing physical/public limits.
+  In particular, an untyped NULL borrows a peer's cast type without acquiring
+  that peer's numeric domain. A typed NULL retains its declared domain.
 
 The first owner is operator overload resolution in list_operator.go. Comparison
 coercion remains unchanged. Existing kernels consume the same supported physical

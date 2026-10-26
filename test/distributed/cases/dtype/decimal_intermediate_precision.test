@@ -76,4 +76,10 @@ create table checked_carriers(c decimal(20,0), i bigint, z decimal(17,0));
 insert into checked_carriers values (18000000000000000000,9223372036854775807,99999999999999999),(18000000000000000000,-9223372036854775808,99999999999999999),(18000000000000000000,null,99999999999999999);
 -- @metacmp(true)
 select (c*(cast('00:00:00' as time(0))+i))*z as chained_product from checked_carriers order by i;
+-- An untyped NULL has no numeric domain and retains the released carrier.
+-- @metacmp(true)
+select c*null as null_product, cast(c as decimal(38,0))+null as null_sum, cast(c as decimal(38,0))-null as null_difference from checked_carriers order by i;
+-- A typed NULL retains its declared domain even though its value is NULL.
+-- @metacmp(true)
+select c*cast(null as decimal(20,0)) as typed_null_product from checked_carriers order by i;
 drop database decimal_intermediate_precision;
