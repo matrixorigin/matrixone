@@ -1,12 +1,14 @@
 # SDK follow-up contracts: boolean OR and mapped file availability
 
-Revision 1 — 2026-10-26. Design supplement for PR #31262, issues #31259/#31260
+Revision 2 — 2026-10-26. Design supplement for PR #31262, issues #31259/#31260
 and the failing SDK workflow contract. Actual designer/reviewer:
 `gpt-6.1-sol` with `xhigh` reasoning, session `/root/sdk_quality_design`.
 Implementation input HEAD: `46c106fa153d9fc4cc0ce0767fc1d5119e5491d7`.
 The external task record contains the exact design hash and gate decision.
 The prior three quality designs and complete overall reviews remain authoritative;
-this supplement changes only the boundaries below.
+this supplement changes only the boundaries below. Revision 2 narrows filename
+compatibility after native reserved-character probes; the bounded validation and
+connection ownership mechanisms are unchanged.
 
 ## Evidence and invariants
 
@@ -75,9 +77,11 @@ algorithm/connection lifetime; no new SQL escaping or cache owner is added.
 A small pure normalizer returns each source's canonical external scan path and
 bounded DATALINK URI together. Store immutable source identities in FileRelation.
 Support POSIX absolute file paths, local file:/// URIs and stage:// references.
-Bare file paths retain literal #/% characters; DATALINK encodes path bytes so
-those characters do not become URL query/fragment syntax. A file URI is decoded
-once to its bare absolute scan path and encoded consistently for its probe.
+DATALINK encodes file path bytes so reserved characters do not accidentally become
+URL query/fragment syntax. This preserves intended identity; it does not guarantee
+that every filename is representable by each server/file-service provider. A file
+URI is decoded once to its bare absolute scan path and encoded consistently for
+its probe.
 Stage paths retain the same stage authority and normalized path for scan/probe.
 Never resolve a server-relative path against the client's working directory.
 
@@ -87,8 +91,15 @@ uses Go path.Match: reject decoded path glob metacharacters (* ? [ ]) and backsl
 rather than claiming they are literal filenames. Apply this after local glob
 expansion and URI decoding, so encoded metacharacters cannot bypass it. Local
 input discovery may still expand normal globs; each resulting server mapping
-must meet this explicit-file contract. Validate reserved #/% identity by checking
-both native probe and actual external scan, not just URI serialization.
+must meet this explicit-file contract. Qualify reserved-character identity with
+both native probe and actual external scan, not just URI serialization. On the
+observed 4.2.5 server, local/file-URI percent and apostrophe names are positive
+cases, but hash/space file paths are natively rejected; a Stage percent path can
+resolve to an unreadable directory and errors even when encoded, while Stage
+apostrophe works. These inputs must fail clearly in pre-DDL native validation
+when unsupported, never retry against a stripped, decoded-again or different
+file. No kernel/path-provider workaround or universal reserved-name support is
+promised. Keep static ambiguity rejection distinct from native provider errors.
 
 For each immutable source run a server-native query equivalent to
 `SELECT length(load_file(CAST(%s AS DATALINK)))` with SDK-owned offset=0,size=1.
@@ -146,9 +157,13 @@ rows; first/second/all missing fail without target changes; valid Stage files an
 missing Stage files have the same contract. Delete a mapping after relation
 creation, before stream SELECT, after first yielded batch and after INSERT; use
 deterministic hooks to prove error/completion/rollback behavior and zero checked-
-out resources. Include empty-file existence, reserved #/% names, invalid glob/
-URI query inputs, small pool ownership, missing/permission/cleanup failures and
-successful reuse. Verify file reads remain size=1 with a large-file discriminator
+out resources. Include empty-file existence, qualified local/file-URI percent/
+apostrophe and Stage apostrophe positive names, and native-rejected hash/space/
+Stage-percent negative cases before DDL. Also cover invalid glob/URI query inputs,
+small pool ownership, missing/permission/cleanup failures and successful reuse.
+Check exact file identity for positive names and propagate native failures for
+unsupported names; a positive fixture must not combine known unsupported
+characters and then attribute that provider error to SDK validation. Verify file reads remain size=1 with a large-file discriminator
 or bounded executor contract. Existing Arrow/FileRelation lifecycle tests remain.
 
 ## 3. SDK-only delivery and separate CI configuration
