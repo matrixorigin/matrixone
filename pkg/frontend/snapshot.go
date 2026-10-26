@@ -122,6 +122,7 @@ var (
 		catalog.MO_VIEW_REFRESH:      systemCatalogRestoreSkip,
 
 		"mo_user":                       systemCatalogRestoreCopy,
+		"mo_pwd_ts_convention":          systemCatalogRestoreCopy,
 		"mo_role":                       systemCatalogRestoreCopy,
 		"mo_user_grant":                 systemCatalogRestoreCopy,
 		"mo_role_grant":                 systemCatalogRestoreCopy,

@@ -33,10 +33,12 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 // TestConvertMiscOptToExpiredTime covers the translation of the PASSWORD
@@ -530,6 +532,64 @@ func TestPasswordChangeKeepsExpireNeverSentinel(t *testing.T) {
 	require.Contains(t, sql,
 		"expired_time = if(expired_time > "+passwordExpireNeverHorizonSql+", expired_time, null)")
 	require.NotContains(t, sql, "expired_time = null where")
+}
+
+// TestPwdTsConventionSeedAndReader: the per-tenant convention anchor seed
+// is an idempotent current_timestamp() write, and the login reader splits
+// session-local rows (>= anchor) from legacy rows with the fixed-UTC digit
+// interpretation while a missing marker keeps every row legacy.
+func TestPwdTsConventionSeedAndReader(t *testing.T) {
+	require.Contains(t, InsertMoPwdTsConventionSql, "mo_catalog.mo_pwd_ts_convention")
+	require.Contains(t, InsertMoPwdTsConventionSql, "current_timestamp()")
+	require.Contains(t, InsertMoPwdTsConventionSql, "where not exists")
+	require.Contains(t, InsertMoPwdTsConventionSql, passwordTsConventionSessionLocal)
+	require.Contains(t, MoCatalogMoPwdTsConventionDDL, "anchor timestamp")
+	require.Contains(t, createSqls, MoCatalogMoPwdTsConventionDDL)
+
+	sql := getExpiredTimeOfUserSql("u1", 30)
+	require.Contains(t, sql, "mo_pwd_ts_convention")
+	// three-valued safe: a NULL anchor folds to false and reads as legacy
+	require.Contains(t, sql, `ifnull(password_last_changed >= (select anchor from mo_catalog.mo_pwd_ts_convention where convention = "`+
+		passwordTsConventionSessionLocal+`"), false)`)
+	require.Contains(t, sql, "password_last_changed < current_timestamp() - interval 30 day")
+	require.Contains(t, sql, "cast(password_last_changed as datetime) < utc_timestamp() - interval 30 day")
+	require.Equal(t, 2, strings.Count(sql, "interval 30 day"),
+		"both convention branches carry the lifetime")
+
+	// The convention table is a per-tenant catalog table: account teardown
+	// must not treat it as a shared cluster table and delete by account_id.
+	require.False(t, isClusterTable("mo_catalog", "mo_pwd_ts_convention"),
+		"mo_pwd_ts_convention is a predefined per-tenant table")
+}
+
+// TestCreateTablesInMoCatalogSeedsPwdTsConvention: fresh bootstrap
+// initialisation creates the convention table and stamps the tenant anchor
+// inside the same transaction as the root/dump seeds.
+func TestCreateTablesInMoCatalogSeedsPwdTsConvention(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	op := mock_frontend.NewMockTxnOperator(ctrl)
+	op.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	op.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+
+	executed := make([]string, 0, 16)
+	txnExec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		return executor.Result{}, nil
+	}, op)
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+
+	require.NoError(t, createTablesInMoCatalog(ctx, txnExec, "4.0.17"))
+
+	joined := strings.Join(executed, "\n")
+	require.Contains(t, joined, "create table mo_catalog.mo_pwd_ts_convention",
+		"the per-tenant convention table is created with the catalog tables")
+	require.Contains(t, joined, "insert into mo_catalog.mo_pwd_ts_convention",
+		"the convention anchor is stamped in the bootstrap transaction")
 }
 
 // TestLoginAttemptsCounterSqls covers the bookkeeping SQLs of the failed
@@ -1149,6 +1209,29 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	require.Error(t, err)
 	scrubbed = redactStatementErrorForLogging(err, raw)
 	require.NotContains(t, scrubbed.Error(), longSecret[:64])
+
+	// Composed multi-secret probe: the first password IS the framing
+	// delimiter text, so replacing it verbatim first would destroy the
+	// ` near "` boundary for the tail scrub and leak the second,
+	// unterminated secret. The boundary is located on the RAW error before
+	// any replacement, so the whole echo tail is dropped.
+	raw = "SET PASSWORD = ' near '; SET PASSWORD = /*x*/'ReviewFramingSecret42"
+	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ReviewFramingSecret42")
+	scrubbed = redactStatementErrorForLogging(err, raw)
+	require.NotContains(t, scrubbed.Error(), "ReviewFramingSecret42")
+	require.NotContains(t, scrubbed.Error(), "' near '")
+	require.Contains(t, scrubbed.Error(), ` near "******"`)
+	require.Equal(t, 1, strings.Count(scrubbed.Error(), ` near "`),
+		"the sanitized error keeps exactly one, fixed echo frame")
+
+	// Comment-prefixed control from the same review: still fully masked.
+	raw = "SET PASSWORD = /* annotation */ 'ReviewCommentUnterminated42"
+	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
+	require.Error(t, err)
+	scrubbed = redactStatementErrorForLogging(err, raw)
+	require.NotContains(t, scrubbed.Error(), "ReviewCommentUnterminated42")
 
 	// Attacker-controlled delimiter: the password itself contains
 	// ` near "`, which used to make a delimiter search land inside the

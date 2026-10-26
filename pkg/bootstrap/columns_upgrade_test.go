@@ -39,6 +39,9 @@ func TestColumnsUpgradeReachesExistingTenants(t *testing.T) {
 		tenantVersion := "4.0.16"
 		var queuedVersion, queuedRoute bool
 		var writes []string
+		// the mo_pwd_ts_convention tenant seed starts unseeded and becomes
+		// durable after the seed insert runs.
+		convSeedExists := false
 		failCreate := false
 		injected := errors.New("injected COLUMNS create failure")
 		op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
@@ -55,7 +58,7 @@ func TestColumnsUpgradeReachesExistingTenants(t *testing.T) {
 			case strings.HasPrefix(sql, "select version from mo_version"):
 				return newBootstrapStringResult("4.0.16"), nil
 			case strings.HasPrefix(sql, "insert into mo_version"):
-				require.Contains(t, sql, "'4.0.17', 1, 0")
+				require.Contains(t, sql, "'4.0.17', 3, 0")
 				queuedVersion = true
 			case strings.HasPrefix(sql, "insert into mo_upgrade"):
 				require.Contains(t, sql, "'4.0.16'")
@@ -67,6 +70,14 @@ func TestColumnsUpgradeReachesExistingTenants(t *testing.T) {
 				return newBootstrapStringResult(definition), nil
 			case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
 				return newBootstrapStringResult(`{"result":"cn:118"}`), nil
+			case strings.HasPrefix(sql, "select convention, anchor from mo_catalog.mo_pwd_ts_convention"):
+				if convSeedExists {
+					return newBootstrapStringResult("session_local"), nil
+				}
+				return executor.Result{}, nil
+			case strings.HasPrefix(sql, "insert into mo_catalog.mo_pwd_ts_convention"):
+				convSeedExists = true
+				return executor.Result{AffectedRows: 1}, nil
 			case sql == "DROP VIEW IF EXISTS information_schema.COLUMNS;":
 				writes = append(writes, sql)
 			case sql == sysview.InformationSchemaColumnsDDL:
@@ -94,7 +105,7 @@ func TestColumnsUpgradeReachesExistingTenants(t *testing.T) {
 		require.True(t, queuedRoute, "a completed 4.0.16 cluster must queue the forward repair")
 		require.Equal(t, "4.0.17", final.Version)
 		require.Equal(t, "4.0.16", final.MinUpgradeVersion)
-		require.Equal(t, uint32(1), final.VersionOffset)
+		require.Equal(t, uint32(3), final.VersionOffset)
 		require.Equal(t, defines.MORPCVersion118, final.RequiredProtocolVersion)
 
 		// Model a tenant created by an old CN after batch enumeration: the

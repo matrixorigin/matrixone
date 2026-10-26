@@ -43,6 +43,17 @@ var (
 				default_role int signed
     		)`
 
+	// MoCatalogMoPwdTsConventionDDL records the instant at which a tenant's
+	// mo_user rows started using the session-local current_timestamp()
+	// writer for password_last_changed. Rows written before the anchor come
+	// from the legacy UTC_TIMESTAMP column-default writer and must be read
+	// with the legacy fixed-UTC interpretation (see
+	// getExpiredTimeOfUserFormat).
+	MoCatalogMoPwdTsConventionDDL = `create table mo_catalog.mo_pwd_ts_convention (
+				convention varchar(64) primary key,
+				anchor timestamp
+    		)`
+
 	MoCatalogMoAccountDDL = `create table mo_catalog.mo_account (
 				account_id int signed auto_increment primary key,
 				account_name varchar(300) unique key,

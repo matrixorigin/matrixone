@@ -412,12 +412,13 @@ func redactStatementErrorForLogging(err error, text string) error {
 // redactParseErrorSecrets scrubs lexer echoes of masked secret literals out
 // of a parser error message: the `near "..."` tail of a syntax error quotes
 // the raw input, which replays an unterminated or otherwise malformed
-// secret verbatim into the terminal log and statement records. The echo
-// bytes are attacker-controlled — a password literal may itself contain
-// ` near "`, comments the lexer skips, or a literal longer than the lexer's
-// truncated echo — so a statement that carries a secret span never gets its
-// echo proven clean: the whole echo tail is replaced rather than matched
-// against partial secret windows.
+// secret verbatim into the terminal log and statement records. The echo is
+// cut before any secret replacement runs: a password whose text collides
+// with the framing delimiter (e.g. ` near `) must not be able to destroy
+// the boundary, so the echo tail is located on the RAW error and the whole
+// attacker-controlled remainder is dropped — comments, unterminated
+// fragments and the lexer's truncated >1024-byte echoes are never provably
+// clean.
 func redactParseErrorSecrets(err error, text string) error {
 	if err == nil || !containsPasswordWord(text) {
 		return err
@@ -426,26 +427,30 @@ func redactParseErrorSecrets(err error, text string) error {
 	if len(secrets) == 0 {
 		return err
 	}
-	msg := err.Error()
+	raw := err.Error()
+
+	// Fail closed on the trailing `near "..."` lexer echo of a
+	// SET-PASSWORD-class statement: locate the framing delimiter on the raw
+	// error (the first occurrence precedes the echo), render a fixed
+	// sanitized tail and return without replaying any user bytes.
+	const nearAt = ` near "`
+	if idx := strings.Index(raw, nearAt); idx >= 0 {
+		tail := ` near "******"`
+		if strings.HasSuffix(raw, `";`) {
+			tail = ` near "******";`
+		}
+		return moerr.NewParseErrorNoCtx(raw[:idx] + tail)
+	}
+
+	// No lexer echo frame: scrub any verbatim replay of the masked secret
+	// literals out of the remaining message shapes.
+	msg := raw
 	changed := false
 	for _, secret := range secrets {
 		if secret == "" || !strings.Contains(msg, secret) {
 			continue
 		}
 		msg = strings.ReplaceAll(msg, secret, "******")
-		changed = true
-	}
-
-	// Fail closed on the trailing `near "..."` lexer echo: the framing
-	// delimiter precedes the echo, so the first occurrence always bounds
-	// the attacker-controlled remainder regardless of what the password
-	// literal itself contains.
-	if idx := strings.Index(msg, ` near "`); idx >= 0 {
-		tail := ` near "******"`
-		if strings.HasSuffix(msg, `";`) {
-			tail = ` near "******";`
-		}
-		msg = msg[:idx] + tail
 		changed = true
 	}
 	if !changed {
