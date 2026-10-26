@@ -262,6 +262,8 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 			}
 			values := strings.Fields(string(out))
 			script := `source ./run_ut.sh UT
+# These cases do not override shards: each requested process gets one generation.
+[[ "$PLAN_RACE_SHARDS" == "$PLAN_RACE_PARALLEL" ]] || exit 93
 function logger() { printf '%s\n' "$*" >> "$CASE_DIR/validation-log"; }
 # Stop at the existing post-validation boundary, before cache/native work.
 function mark_ut_stage() {
@@ -567,9 +569,36 @@ func withDelayedHelperCompletion(t *testing.T, script, owner, report, event stri
 	}
 	probe := "delayed_owner=" + owner + "\ndelayed_report=" + report + "\ndelayed_event=" + event + "\n" + `
 [[ "$UT_HELPER_TERM_GRACE_TICKS" == 60 ]] || exit 99
+mkfifo "$CASE_DIR/helper-cancel"
+exec 7<>"$CASE_DIR/helper-cancel"
+# Readiness follows arming. A TERM before read leaves a durable wake token;
+# a TERM during read may interrupt it. Neither path blocks inside the trap.
+function ut_test_arm_cancellation() {
+ ut_test_cancelled=0
+ trap 'trap "" TERM; ut_test_cancelled=1; printf "cancel\n" >&7' TERM
+}
+function ut_test_wait_cancellation() {
+ local token= read_status=0
+ IFS= read -r token <&7 || read_status=$?
+ if (( ut_test_cancelled != 1 || (read_status != 0 && read_status != 143) )); then
+  printf 'helper cancellation wait: status=%s token=%q cancelled=%s\n' "$read_status" "$token" "$ut_test_cancelled" >&2
+  exit 96
+ fi
+}
+function ut_test_read_completion() {
+ local phase=$1 fd=$2 expected=$3 token= read_status=0 self_pid
+ fixture_self_pid self_pid
+ printf 'pid=%s phase=%s tick=%s waiting\n' "$self_pid" "$phase" "${tick:-none}" >>"$CASE_DIR/ut-signal-trace.log"
+ IFS= read -r -t 10 token <&"$fd" || read_status=$?
+ printf 'pid=%s phase=%s tick=%s status=%s token=%q\n' "$self_pid" "$phase" "${tick:-none}" "$read_status" "$token" >>"$CASE_DIR/ut-signal-trace.log"
+ if (( read_status != 0 )) || [[ "$token" != "$expected" ]]; then
+  printf 'helper completion %s: pid=%s status=%s token=%q expected=%q\n' "$phase" "$self_pid" "$read_status" "$token" "$expected" >&2
+  exit 96
+ fi
+}
 function ut_test_publish_completion() {
  printf 'held\n' >&9
- IFS= read -r -t 10 token <&8 && [[ "$token" == release ]] || exit 96
+ ut_test_read_completion release 8 release
  publish_ut_helper_completion 143 || exit 125
  printf 'published\n' >&9
 }
@@ -584,15 +613,15 @@ wait_function=${wait_function/wait_for_ut_process_group/wait_for_ut_observed_gro
 wait_function=${wait_function/"$wait_anchor"/'tick=$((tick + 1)); ut_test_grace_tick "$tick"'}
 eval "$wait_function"
 function ut_test_grace_tick() {
- local token completion="$G_WKSP/$G_TS-owner-complete.$delayed_owner"
+ local completion="$G_WKSP/$G_TS-owner-complete.$delayed_owner"
  if (( $1 == 1 )); then
-  IFS= read -r -t 10 token <&9 && [[ "$token" == held ]] || exit 96
+  ut_test_read_completion held 9 held
   [[ -f "$completion" && ! -s "$completion" && -s "${!delayed_report}" ]] || exit 97
   if [[ -f "$UT_REPORT" ]] && grep -q "^$delayed_event" "$UT_REPORT"; then exit 97; fi
  fi
  if (( $1 == 5 )); then
   printf 'release\n' >&8
-  IFS= read -r -t 10 token <&9 && [[ "$token" == published ]] || exit 96
+  ut_test_read_completion published 9 published
   [[ "$(<"$completion")" == 143 ]] || exit 97
  fi
 }
@@ -619,15 +648,19 @@ mkfifo "$CASE_DIR/engine-ready" "$CASE_DIR/engine-hold"
 exec 8<>"$CASE_DIR/engine-hold"
 exec 9<>"$CASE_DIR/engine-ready"
 function run_engine_race_shards() {
-	trap 'if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi; touch "$CASE_DIR/engine-stopped"; ut_test_publish_completion; exit 143' TERM
+	ut_test_arm_cancellation
 	printf 'engine\n' > "$ENGINE_RACE_REPORT"
 	touch "$CASE_DIR/engine-started"
 	printf 'ready\n' >&9
-	read -r _ <&8
+	ut_test_wait_cancellation
+	if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi
+	touch "$CASE_DIR/engine-stopped"
+	ut_test_publish_completion
+	exit 143
 }
 cleanup() {
 	status=$?
-	exec 8>&- 9>&-
+	exec 7>&- 8>&- 9>&-
 	[[ -e "$CASE_DIR/engine-started" && -e "$CASE_DIR/engine-stopped" ]] || status=90
 	[[ ! -e "$CASE_DIR/report-consumed-early" ]] || status=91
 	[[ -f "$UT_REPORT" ]] || status=92
@@ -1006,6 +1039,7 @@ function logger() { :; }
 trap handle_ut_termination TERM
 function check_cancellation() {
  status=$?
+ exec 7>&-
  if [[ "$status" == 143 ]]; then
   [[ -z "$CURRENT_UT_PID$PLAN_RACE_JOB_PID" ]] || status=94
   if ut_process_group_alive "$writer_pid" || ut_process_group_alive "$plan_pid"; then status=95; fi
@@ -1027,10 +1061,13 @@ start_ut_command heavy 'heavy writer' bash -c '
 '
 writer_pid=$CURRENT_UT_PID
 function run_plan_race_shards() {
- trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; ut_test_publish_completion; exit 143' TERM
+ ut_test_arm_cancellation
  printf 'plan-start\n' > "$PLAN_RACE_REPORT"
  printf 'plan\n' >&9
- IFS= read -r _ <&8
+ ut_test_wait_cancellation
+ printf 'plan-stopped\n' >> "$PLAN_RACE_REPORT"
+ ut_test_publish_completion
+ exit 143
 }
 start_plan_race example/plan
 plan_pid=$PLAN_RACE_JOB_PID

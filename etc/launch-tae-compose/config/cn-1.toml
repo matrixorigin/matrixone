@@ -53,6 +53,11 @@ port-base = 18200
 sql-address = "cn-1:6001"
 service-host = "cn-1"
 
+# Exercise the real periodic index path at BVT cadence.
+[cn.iscp]
+sync-task-interval = "1s"
+index-flush-watermark-interval = "1s"
+
 [cn.Engine]
 type = "distributed-tae"
 

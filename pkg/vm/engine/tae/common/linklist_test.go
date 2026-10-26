@@ -20,12 +20,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestList(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	n0 := NewSLLNode(nil)
 	var mu sync.RWMutex
 	n1 := NewSLLNode(&mu)

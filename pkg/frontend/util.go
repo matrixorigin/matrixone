@@ -2979,20 +2979,6 @@ func tableNameIsLegal(name string) bool {
 	return isLegal(name, createTableSqls)
 }
 
-//func tableNameIsRegexpr(s string) bool {
-//	if len(s) < 2 {
-//		return false
-//	}
-//	if strings.HasPrefix(s, "/") && strings.HasSuffix(s, "/") {
-//		_, err := regexp.Compile(s)
-//		if err != nil {
-//			return false
-//		}
-//		return true
-//	}
-//	return false
-//}
-
 // replaceStr replaces s[start:end] by s2
 func replaceStr(s string, start, end int, s2 string) string {
 	if start >= end || start < 0 || end < 0 {

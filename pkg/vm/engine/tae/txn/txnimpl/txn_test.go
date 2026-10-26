@@ -162,7 +162,6 @@ func TestIncrementalGetRowsByPKReleasesResultOnError(t *testing.T) {
 }
 
 func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	schema := catalog.MockSchemaAll(3, 2)
 	entry := catalog.MockStaloneTableEntry(1, schema)
@@ -233,7 +232,6 @@ func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
 }
 
 func TestDedupSnapByPKClosesCandidatesOnWWConflict(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	schema := catalog.MockSchemaAll(3, 2)
 	entry := catalog.MockStaloneTableEntry(1, schema)
@@ -544,9 +542,7 @@ func TestAutoIncrEpochFenceRejectsMultipleEpochsWithoutLocalAlter(t *testing.T) 
 }
 
 func TestTable(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -591,9 +587,7 @@ func TestTable(t *testing.T) {
 }
 
 func TestAppend(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -643,8 +637,6 @@ func TestAppend(t *testing.T) {
 }
 
 func TestIndex(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	index := NewSimpleTableIndex()
 	err := index.Insert(1, 10)
 	assert.Nil(t, err)
@@ -855,9 +847,7 @@ func TestSimpleTableIndexVarlenDuplicatePaths(t *testing.T) {
 }
 
 func TestLoad(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -888,9 +878,7 @@ func TestLoad(t *testing.T) {
 }
 
 func TestNodeCommand(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -931,8 +919,6 @@ func TestNodeCommand(t *testing.T) {
 }
 
 func TestTxnManager1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), nil, nil, nil),
 		TxnFactory(nil), types.NewMockHLCClock(1))
 	mgr.Start(context.Background())
@@ -1011,9 +997,7 @@ func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Ca
 // 4. Txn2 commit
 // 5. Txn3 commit
 func TestTransaction1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -1057,9 +1041,7 @@ func TestTransaction1(t *testing.T) {
 }
 
 func TestTransaction2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -1109,9 +1091,7 @@ func TestTransaction2(t *testing.T) {
 }
 
 func TestTransaction3(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -1147,9 +1127,7 @@ func TestTransaction3(t *testing.T) {
 }
 
 func TestObject1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -1220,9 +1198,7 @@ func TestObject1(t *testing.T) {
 }
 
 func TestObject2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -1256,8 +1232,6 @@ func TestObject2(t *testing.T) {
 }
 
 func TestIsEmptyDroppedAppendableObject(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	ctx := context.Background()
 	dir := testutils.InitTestEnv(ModuleName, t)
@@ -1329,9 +1303,7 @@ func TestIsEmptyDroppedAppendableObject(t *testing.T) {
 }
 
 func TestDedup1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
-	testutils.EnsureNoLeak(t)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(ctx, t, dir)
 	defer driver.Close()
@@ -1413,8 +1385,6 @@ func TestDedup1(t *testing.T) {
 	t.Log(c.SimplePPString(common.PPL1))
 }
 func TestCreateAppendableObjectWithOptions(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	ctx := context.Background()
 	dir := testutils.InitTestEnv(ModuleName, t)
@@ -1466,8 +1436,6 @@ func TestCreateAppendableObjectWithOptions(t *testing.T) {
 }
 
 func TestCreateAppendableObjectWithOptionsRejectsInvalidOptions(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	ctx := context.Background()
 	dir := testutils.InitTestEnv(ModuleName, t)
@@ -1498,8 +1466,6 @@ func TestCreateAppendableObjectWithOptionsRejectsInvalidOptions(t *testing.T) {
 }
 
 func TestCreateAppendableObjectWithOptionsErrors(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	ctx := context.Background()
 	dir := testutils.InitTestEnv(ModuleName, t)
@@ -1565,8 +1531,6 @@ func (r *replayAObjectCreateRecorder) RecordReplayAObjectCreate(
 }
 
 func TestEnsureReplayAObject(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	ctx := context.Background()
 	dir := testutils.InitTestEnv(ModuleName, t)

@@ -291,7 +291,16 @@ func (s *SqlProcess) executionDatabase(defaultDatabase string) string {
 }
 
 func (s *SqlProcess) executionContext(ctx context.Context) context.Context {
+	if s.Proc != nil {
+		ctx = process.ContextWithInternalExecutorSession(ctx, s.Proc.GetSession())
+	}
 	if id := s.resolveAccountID(); id != nil {
+		accountID, err := s.GetAccountID()
+		if err != nil || accountID != *id {
+			// Publisher/snapshot SQL must not resolve the caller's aliases
+			// in another tenant, including a session inherited in ctx.
+			ctx = process.ContextWithInternalExecutorSession(ctx, nil)
+		}
 		return defines.AttachAccountId(ctx, *id)
 	}
 	return ctx
