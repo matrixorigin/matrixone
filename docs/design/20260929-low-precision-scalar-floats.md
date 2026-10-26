@@ -163,44 +163,16 @@ GPU kernels agree on the encoding.
 
 ## Compatibility and rollout
 
-A binary without these types (the previous release, or main before them) has no size,
-codec or comparator for `T_bf16`, `T_float16`, `T_float8` and `T_float4`.
-It meets them only inside a cluster that mixes it with a newer binary: during a rolling
-upgrade, or after a rollback.
+MatrixOne upgrades by full-cluster shutdown (`.agents/skills/mo-dev/references/upgrade-compatibility.md`):
+every service of a cluster runs the same binary, so these types need no MORPC version and no
+capability check, and no statement is refused or rerouted for an older peer.
 
-There is no fallback. No path converts these types to a type an older binary knows, and
-no statement is rerouted, rewritten or run elsewhere to avoid an older service. A
-statement that would hand these types to an older binary is refused; once every service
-runs `plan.LowPrecisionFloatProtocolVersion` or later, the same statement runs.
-
-- **Version.** `plan.LowPrecisionFloatProtocolVersion` (`pkg/sql/plan`), the single
-  reference to the MORPC version; code, tests and this document use only this name. The
-  deployment state is `MOProtocolVersion`, the lowest version of the live services, together with the HAKeeper persisted-expression authoring
-  floor, checked by `RequirePersistedProtocolVersionForAuthoring` as MEDIUMINT does at 110.
-- **Authoring.** `CREATE TABLE` (columns inferred by `CREATE TABLE ... AS SELECT`
-  included) and `ALTER TABLE ... ADD`, `MODIFY` and `CHANGE COLUMN` whose column type is one
-  of these types are refused below that version. While an older service is live no table
-  with these types exists, so no older binary reads one from the catalog, the log or object storage.
-- **Remote execution.** A pipeline that carries one of these types (a literal, a column
-  reference, a function argument or result, a CAST source or target, a table definition
-  column, a group key or an aggregate argument or result type) is refused for a
-  destination below that version. The version is checked on the destination's query
-  service and again on the execution stream that carries the pipeline, before the
-  pipeline is sent, so a replaced or reused peer below that version receives nothing. The
-  private integer CAST 5..8 sources are one case of this rule.
-- **Persisted expressions.** A view, `DEFAULT`, `ON UPDATE`, generated column or `CHECK`
-  constraint whose expression carries one of these types requires persisted-expression
-  protocol `LowPrecisionFloatProtocolVersion`.
-- **Downgrade.** The upgrade is one-way. Once a table with these types exists, running
-  any service below that version is unsupported: an older binary does not read the data.
-- **Tests.** Every refusal point has a test below that version (refused, nothing created
-  or sent) and one at that version (runs):
-  `TestLowPrecisionFloatCatalogAuthoringProtocolFence` (authoring),
-  `TestLowPrecisionFloatContractRemoteBoundaries` (placement, send, receiver),
-  `TestLowPrecisionFloatContractExecutionStreamCheck` (execution stream: every type, a
-  bound CAST, `vector_matmul` and its aggregate descriptor),
-  `TestLowPrecisionFloatContractFeatures` (remote and persisted floors) and
-  `TestLowPrecisionFloatIntegerArgumentProtocol` (private CAST 5..8).
+- **Persisted state.** The types are additive. Data written before them (catalog rows,
+  objects, WAL, persisted expressions) contains none of their type ids or function ids and
+  reads as before. A table, view or persisted expression that uses them is written by a
+  binary that has them.
+- **Downgrade.** Not supported, as for the whole cluster: an older binary does not read a
+  table or expression that uses these types.
 
 ## Out of scope (separate work)
 

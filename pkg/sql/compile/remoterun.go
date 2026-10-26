@@ -170,11 +170,6 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
 	}
-	// The destination probe uses another connection; remoteRun confirms the
-	// version on the execution stream too.
-	if requiredProtocol != nil && features.LowPrecisionFloatContracts {
-		*requiredProtocol = max(*requiredProtocol, plan2.LowPrecisionFloatProtocolVersion)
-	}
 	if requiredProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion129)
 	}
@@ -2209,9 +2204,6 @@ func collectAggregateDescriptorFeatures(p *pipeline.Pipeline, features *plan.Rem
 			if wire == nil {
 				continue
 			}
-			if wire.Op>>32 == aggexec.AggIdOfVectorMatmul>>32 {
-				features.LowPrecisionFloatContracts = true
-			}
 			agg := aggexec.MakeAggFunctionExpression(wire.Op, wire.Dist, wire.Expr, wire.Config, wire.ConfigType)
 			features.JSONOpaqueTextContracts = features.JSONOpaqueTextContracts || isJSONOpaqueGroupConcatAggregate(agg)
 			if isDecimalStatisticalAggregate(agg) {
@@ -2443,9 +2435,6 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
-	}
-	if features.LowPrecisionFloatContracts && (!hasProtocolVersion || protocolVersion < plan2.LowPrecisionFloatProtocolVersion) {
-		return moerr.NewNotSupportedNoCtxf("bf16/float16/float8/float4/vecf8/vecf4 values and functions require MORPC protocol version %d", plan2.LowPrecisionFloatProtocolVersion)
 	}
 	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion129) {
 		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 129")

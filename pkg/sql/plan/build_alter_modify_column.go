@@ -38,7 +38,7 @@ func updateNewColumnInTableDef(
 	if err != nil {
 		return false, err
 	}
-	if err = requireColumnTypeProtocolForAuthoring(ctx, cctx.GetProcess(), nTy); err != nil {
+	if err = requireMediumIntProtocolForAuthoring(ctx, cctx.GetProcess(), nTy); err != nil {
 		return false, err
 	}
 

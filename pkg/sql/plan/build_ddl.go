@@ -2968,7 +2968,7 @@ func buildCreateTable(
 	// domain; bf16/float16/float8/float4/vecf8/vecf4 OIDs are unknown to them.
 	// Only author the schema after the cluster protocol fence opens.
 	for _, col := range createTable.TableDef.Cols {
-		if err = requireColumnTypeProtocolForAuthoring(
+		if err = requireMediumIntProtocolForAuthoring(
 			ctx.GetContext(), ctx.GetProcess(), col.Typ); err != nil {
 			return nil, err
 		}

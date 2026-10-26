@@ -5936,69 +5936,6 @@ func TestMediumIntCatalogAuthoringProtocolFence(t *testing.T) {
 	require.ErrorContains(t, err, "protocol version 110")
 }
 
-func TestLowPrecisionFloatCatalogAuthoringProtocolFence(t *testing.T) {
-	mock := NewMockOptimizer(false, newPlanTestProcess(t))
-	proc := mock.CurrentContext().GetProcess()
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
-	t.Cleanup(func() {
-		if hadVersion {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
-		} else {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-		if hadFloor {
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldFloor)
-		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
-			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
-		}
-	})
-	fence := fmt.Sprintf("protocol version %d", LowPrecisionFloatProtocolVersion)
-	set := func(version, floor int64) {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
-	}
-
-	for _, typ := range []string{"bf16", "float16", "float8", "float4", "vecf8(32)", "vecf4(32)"} {
-		t.Run(typ, func(t *testing.T) {
-			stmts := []string{
-				"CREATE TABLE lowprec_fence (v " + typ + ")",
-				"ALTER TABLE nation ADD COLUMN v " + typ,
-				"ALTER TABLE nation MODIFY COLUMN n_comment " + typ,
-				"ALTER TABLE nation CHANGE COLUMN n_comment v " + typ,
-			}
-			if !strings.HasPrefix(typ, "vec") {
-				stmts = append(stmts, "CREATE TABLE lowprec_fence AS SELECT CAST(n_nationkey AS "+typ+") v FROM nation")
-			}
-			for _, stmt := range stmts {
-				set(LowPrecisionFloatProtocolVersion-1, LowPrecisionFloatProtocolVersion-1)
-				_, err := runOneStmt(mock, t, stmt)
-				require.ErrorContains(t, err, fence, stmt)
-				set(LowPrecisionFloatProtocolVersion, LowPrecisionFloatProtocolVersion-1)
-				_, err = runOneStmt(mock, t, stmt)
-				require.ErrorContains(t, err, fence, stmt)
-			}
-			set(LowPrecisionFloatProtocolVersion, LowPrecisionFloatProtocolVersion)
-			_, err := runOneStmt(mock, t, stmts[0])
-			require.NoError(t, err)
-			_, err = runOneStmt(mock, t, stmts[1])
-			require.NoError(t, err)
-		})
-	}
-
-	set(LowPrecisionFloatProtocolVersion-1, LowPrecisionFloatProtocolVersion-1)
-	_, err := runOneStmt(mock, t, "CREATE TABLE lowprec_fence (v float, w vecf32(4), x vecbf16(4))")
-	require.NoError(t, err)
-
-	view := "CREATE VIEW lowprec_fence_v AS SELECT CAST(n_nationkey AS bf16) v FROM nation"
-	_, err = runOneStmt(mock, t, view)
-	require.ErrorContains(t, err, fence)
-	set(LowPrecisionFloatProtocolVersion, LowPrecisionFloatProtocolVersion)
-	_, err = runOneStmt(mock, t, view)
-	require.NoError(t, err)
-}
-
 // An inline vector index without options takes the params, or the refusal, of the
 // plugin's ParamsFromTree with an empty option list, as CREATE INDEX does.
 func TestInlineVectorIndexWithoutOptionsUsesParamsFromTree(t *testing.T) {

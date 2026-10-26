@@ -590,28 +590,12 @@ and L2 (the square root) are not provided.
 ## Compatibility and rollout
 
 The rules of the scalar types apply unchanged (see "Compatibility and rollout" in
-`20260929-low-precision-scalar-floats.md`): there is no fallback, a statement that would hand
-an older binary something it cannot decode is refused below
-`plan.LowPrecisionFloatProtocolVersion`, and the upgrade is one-way. Here they cover:
-
-- **Types.** `vecf8` (`T_array_float8`) and `vecf4` (`T_array_float4`): column
-  authoring, expressions in a remote pipeline, and persisted expressions, as for the scalar
-  types. The version-1 cell header describes a cell to a binary that knows these types; it
-  does not make an older binary able to read them.
-- **Functions.** `VECTOR_MATMUL`, `VECBLOCK_JSON` and `VECBLOCK_BINARY`, and the
-  overload slots this design appends to existing functions (`IN`, `NOT IN`, `COALESCE`,
-  `VECTOR_DIMS`, `NORMALIZE_L2`): a pipeline that contains one is refused for a destination
-  below that version, and a persisted expression that contains one requires
-  persisted-expression protocol `LowPrecisionFloatProtocolVersion`.
-- **Aggregate state.** The `vector_matmul` partial state (`AggIdOfVectorMatmul`) moves only
-  between pipelines of binaries at that version or later: a pipeline that would ship it to an
-  older destination is refused by the function rule above, which also matches the lowered
-  aggregate descriptor (`TestLowPrecisionFloatContractVectorMatmulDescriptor`). Its own
-  version byte versions the state among those binaries.
-- **Execution stream.** A pipeline with any of these types or functions confirms the
-  version on the execution stream before it is sent, as for the scalar types
-  (`TestLowPrecisionFloatContractExecutionStreamCheck`).
-- **Tests.** Every refusal point has a test below that version (refused) and one at that version (runs).
+`20260929-low-precision-scalar-floats.md`): upgrade is by full-cluster shutdown, so
+`vecf8`/`vecf4`, `VECTOR_MATMUL`, `VECBLOCK_JSON`, `VECBLOCK_BINARY`, the overload slots this
+design appends to existing functions (`IN`, `NOT IN`, `COALESCE`, `VECTOR_DIMS`,
+`NORMALIZE_L2`) and the `vector_matmul` partial state need no MORPC version or capability
+check. The version byte of the partial state and the version-1 cell header version those
+encodings among binaries that have these types.
 
 ## Phasing
 

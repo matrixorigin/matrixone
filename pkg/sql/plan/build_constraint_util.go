@@ -1489,18 +1489,6 @@ func requireMediumIntProtocolForAuthoring(ctx context.Context, proc *process.Pro
 	return RequirePersistedProtocolVersionForAuthoring(ctx, proc, defines.MORPCVersion110)
 }
 
-// requireColumnTypeProtocolForAuthoring gates catalog column types that older
-// CNs cannot enforce (MEDIUMINT) or decode (bf16/float16/float8/float4/vecf8/vecf4).
-func requireColumnTypeProtocolForAuthoring(ctx context.Context, proc *process.Process, colType Type) error {
-	if err := requireMediumIntProtocolForAuthoring(ctx, proc, colType); err != nil {
-		return err
-	}
-	if proc == nil || !isLowPrecisionFloatContractType(colType.Id) {
-		return nil
-	}
-	return RequirePersistedProtocolVersionForAuthoring(ctx, proc, LowPrecisionFloatProtocolVersion)
-}
-
 // The existing private COPY scope owns the target write. Check final binary
 // values at that assignment boundary, including recomputed generated columns;
 // ordinary DML and explicit CAST retain their released selection policy.
