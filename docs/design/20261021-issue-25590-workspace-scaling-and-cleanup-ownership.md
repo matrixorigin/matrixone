@@ -4576,3 +4576,64 @@ policy text changes: the finite bound, the zero-admission policy, the
 D3' mirror and the P3' rescission are exactly as approved.
 
 
+
+CI ROUND RECORD (2026-10-26, PR-event on head f7932823633; design-record
+follow-up, ordinary-fix scope): matrixone ALL CI run 40257231611 attempt
+1, job 121364104873 ("multi CN e2e BVT Test on Linux/x64(COMPOSE,
+PESSIMISTIC)") failed exactly one row of the new r15 public case
+`update_remote_fragment_capability_receiver_refusal.sql`: row 144,
+`select mo_ctl('dn', 'SetProtocolVersion', '129')` - expected the recorded
+"internal error: no such tn service", actual the SETPROTOCOLVERSION
+success echo; 77/78 rows passed, including every refusal, sentinel,
+restore and probe row. Root cause, verified against the failed job's raw
+log and its uploaded compose service logs: the case's two dn-form rows
+are legitimately outcome-dependent - the CI docker-compose TN (separate
+container, port-base set) publishes a query address, so
+mo_ctl's dn form reaches it (`transferToTN` in pkg/sql/plan/function/
+ctl/cmd_rpc_version.go) and succeeds, while a launch whose TN ships
+without a query address (the round-45 replay's in-process TN, and the
+recorded .result) gets the documented benign refusal; the compose TN's
+uuid is uppercase (713F97B0-...) and the case's uuid walk regexp -
+maintained case-sensitive by MatrixOne's RE2 regexp implementation - never
+matches its pair, which is why the compose run's teardown restore still
+evaluates the empty argument ("cmd invalid, expected version number")
+exactly as recorded, and only the mark row diverged. mo-tester's @ignore:0
+masks result columns of matching structures; it cannot reconcile a
+recorded error against a successful row, so a single-variant error
+record cannot validate a row whose legitimate outcome is
+topology-dependent. The implementation's r45 comment claimed the row was
+"@ignore:0-masked"; that mechanism claim was wrong and is what CI caught.
+Correction (test-expectation mechanics only; binary, provisioning and
+owner-path code untouched; every invariant, decision and validation
+clause of the approved r15 unchanged): the mark row and its teardown
+restore are each validated by a mo-tester @regex pattern naming exactly
+the two legitimate outcomes - `@regex("(no such tn service|
+SETPROTOCOLVERSION)", true)` for the mark,
+`@regex("(cmd invalid, expected version number|SETPROTOCOLVERSION)",
+true)` for the restore - so the case passes on every reachable topology
+and still fails on anything else (transport faults, malformed echoes,
+a wrong version echo would still fail the downstream value-level
+probes). The recorded .result variants remain in force unchanged.
+Validation (this round, all against the same PR-head binary the CI
+build shares, three handler-owned isolated local launches, ports fully
+verified free before each launch and confirmed released after each
+teardown): (1) a compose-shaped launch (separate log/TN/cn1/cn2
+processes, query-addressed uppercase-uuid TN) reproduces the CI failure
+with the UNFIXED file byte-for-byte - row 144 failed with the identical
+expect/actual pair and 77/78 - and passes 78/78 with the corrected file;
+(2) a query-addressed lowercase-uuid TN launch passes 78/78, exercising
+the restore row's success echo (the marked TN is recaptured by uuid and
+restored to its captured advertisement, confirmed by post-run
+GetProtocolVersion showing all three services at 132); (3) the
+round-45 standalone launch shape (in-process TN without query address,
+the recorded expectations' own origin) passes 78/78, exercising both
+recorded error variants. The three launches jointly cover every reachable
+outcome combination of the two pattern-validated rows; the refused
+mass-update error text and receive-log witness behaved identically in
+all three. The compose job's remaining failed-job siblings of the same
+run (the PROXY compose leg still executing at snapshot time) are left to
+the controller's next scan per the loop rules; the two tracked unrelated
+CI blocker classes (checkout/toolchain transport) played no part in this
+failure. The pre-correction document sha256 is
+2a83657cbdd94edf5f8f6639851e918f36f1eb9e310dc05513141a692575f8e2; this
+append is the only design-document change of the round.

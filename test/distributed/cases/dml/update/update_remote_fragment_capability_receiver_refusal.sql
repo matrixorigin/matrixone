@@ -64,9 +64,15 @@
 --       a query address the mark row fails benignly, no pair moves into
 --       the exclusion set, and the receiver set is simply every non-
 --       coordinator pair - both topologies select exactly the CN receivers.
---       The masked rows (uuid-bearing and environment-dependent) are
---       @ignore:0; each pin's real effect is proven behaviorally by the
---       capability probes and the refused/succeed flip.
+--       The uuid-bearing rows are @ignore:0 (masked wherever the service
+--       identity differs); each pin's real effect is proven behaviorally
+--       by the capability probes and the refused/succeed flip. The two
+--       dn-form rows (the TN mark and its teardown restore) are
+--       legitimately outcome-dependent across those topologies - the
+--       SETPROTOCOLVERSION echo on a query-addressed TN, the documented
+--       benign refusal without one - so each is validated by a @regex
+--       pattern naming exactly its two acceptable outcomes; anything
+--       else (a transport fault, a malformed echo) fails the case.
 --   The positional occurrence walk (regexp_substr occurrence 1..16 over the
 --   seeded numbers table) is bookkeeping only (the deterministic order of
 --   the pin/restore lists); pair selection is ALWAYS by uuid identity, so
@@ -138,9 +144,14 @@ from rrf_cn_inventory, h16 n;
 -- still executing DDL/inserts/selects (the D4'' legs run whole scenarios
 -- around a coordinator pinned at 129; every TN-side RPC gate threshold
 -- <= MORPCVersion123 stays enabled there). On a launch whose TN ships
--- without a query address this masked row fails benignly and changes
--- nothing.
--- @ignore:0
+-- without a query address this row fails benignly ("no such tn service")
+-- and changes nothing; on a launch whose TN is query-addressed (the CI
+-- compose topologies: port-base set, standalone-independent TN process)
+-- it succeeds with the SETPROTOCOLVERSION echo. The row's outcome is
+-- therefore topology-dependent, and its expectation is validated by a
+-- pattern accepting exactly those two outcomes and rejecting anything
+-- else.
+-- @regex("(no such tn service|SETPROTOCOLVERSION)", true)
 select mo_ctl('dn', 'SetProtocolVersion', '129');
 create table rrf_marked_inventory as
 select mo_ctl('cn', 'GetProtocolVersion', '') as inv;
@@ -289,7 +300,15 @@ select mo_ctl('cn', 'SetProtocolVersion',
   concat((select group_concat(r_uuid order by pos separator ',')
           from rrf_recv_capture), ':',
          (select min(r_v) from rrf_recv_capture)));
--- @ignore:0
+-- The teardown counterpart of the mark row above, with the same
+-- outcome dependence: when a TN pair was captured and restored, this
+-- returns the SETPROTOCOLVERSION echo (the restored advertisement's
+-- version); when no pair moved - the unquery-addressed launch, or an
+-- inventory whose TN pair never matches the walk regexp - the coalesce
+-- yields the empty argument and the documented benign 'cmd invalid'
+-- refusal fires. Validated by a pattern accepting exactly those two
+-- outcomes and rejecting anything else.
+-- @regex("(cmd invalid, expected version number|SETPROTOCOLVERSION)", true)
 select mo_ctl('dn', 'SetProtocolVersion',
               coalesce((select max(tn_v) from rrf_tn_capture), ''));
 create table rrf_restored_inventory as
