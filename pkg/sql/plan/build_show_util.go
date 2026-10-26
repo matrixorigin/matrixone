@@ -16,6 +16,7 @@ package plan
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -33,6 +34,7 @@ import (
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -51,12 +53,15 @@ func ConstructCreateTableSQL(
 	// reconcile index visibility before calling here. Subscription-aware clone
 	// planning additionally passes its scoped publisher identity explicitly.
 	var sourceSubscription *SubscriptionMeta
+	sqlMode := ""
 	if ctx != nil {
+		sqlMode = *parserSQLModeFromContext(ctx)
 		sourceSubscription = ctx.GetQueryingSubscription()
 	}
 	return constructCreateTableSQL(
 		ctx, tableDef, snapshot, useDbName, cloneStmt, true,
 		sourceSubscription,
+		false, sqlMode,
 	)
 }
 
@@ -77,20 +82,22 @@ func constructCreateTableSQL(
 	cloneStmt *tree.CloneTable,
 	includeChecks bool,
 	sourceSubscription *SubscriptionMeta,
+	legacyDumpDefaults bool,
+	sqlMode string,
 ) (string, tree.Statement, error) {
 	return constructCreateTableSQLWithCommentFormat(
 		ctx, tableDef, snapshot, useDbName, cloneStmt, includeChecks,
-		sourceSubscription, false,
+		sourceSubscription, legacyDumpDefaults, false, sqlMode,
 	)
 }
 
 // ConstructCreateTableSQLForSchemaHash preserves the historical column/table
-// comment representation used by persisted DUMP schema fingerprints. Its output
-// is hash input, not replayable SQL. Ordinary SQL consumers must use
-// ConstructCreateTableSQL, which escapes those comments for replay.
+// comment and string-default representation used by persisted DUMP schema
+// fingerprints. Its output is hash input, not replayable SQL. Ordinary SQL
+// consumers must use ConstructCreateTableSQL, which renders both for replay.
 func ConstructCreateTableSQLForSchemaHash(tableDef *plan.TableDef) (string, error) {
 	sql, _, err := constructCreateTableSQLWithCommentFormat(
-		nil, tableDef, nil, false, nil, true, nil, true,
+		nil, tableDef, nil, false, nil, true, nil, true, true, "",
 	)
 	return sql, err
 }
@@ -103,7 +110,9 @@ func constructCreateTableSQLWithCommentFormat(
 	cloneStmt *tree.CloneTable,
 	includeChecks bool,
 	sourceSubscription *SubscriptionMeta,
+	legacyDumpDefaults bool,
 	legacyStoredComments bool,
+	sqlMode string,
 ) (string, tree.Statement, error) {
 	// Replaying native metadata through a legacy SQL alias would change its
 	// semantics. Until activation, reject rather than emit a lossy dump.
@@ -112,10 +121,7 @@ func constructCreateTableSQLWithCommentFormat(
 	}
 	var err error
 	var createStr string
-	sqlMode := ""
-	if ctx != nil {
-		sqlMode = *parserSQLModeFromContext(ctx)
-	}
+	noBackslashEscapes := mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes)
 	rewritePairs := make([]struct {
 		display string
 		rewrite string
@@ -248,7 +254,16 @@ func constructCreateTableSQLWithCommentFormat(
 					buf.WriteString(" DEFAULT NULL")
 				}
 			} else if len(col.Default.OriginString) > 0 {
-				buf.WriteString(" DEFAULT " + formatDefaultExpr(col.Default.OriginString, col.Default.Expr))
+				defaultSQL := strings.TrimSpace(col.Default.OriginString)
+				if legacyDumpDefaults {
+					defaultSQL = formatTableDumpHashDefault(col.Default.OriginString, col.Default.Expr)
+				} else if noBackslashEscapes && strings.Contains(defaultSQL, "\\") {
+					defaultSQL, err = formatDefaultWithoutBackslashEscapes(defaultSQL)
+					if err != nil {
+						return "", nil, err
+					}
+				}
+				buf.WriteString(" DEFAULT " + defaultSQL)
 			}
 
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
@@ -1727,18 +1742,51 @@ func formatStr(str string) string {
 	return strings.Replace(tmp, "'", "''", -1)
 }
 
-// formatDefaultExpr escapes literal defaults for the generated CREATE TABLE
-// statement. Non-literal defaults already contain SQL syntax in OriginString,
-// so escaping their quotes as string contents would corrupt the expression.
-func formatDefaultExpr(expr string, defaultExpr *plan.Expr) string {
-	trimmed := strings.TrimSpace(expr)
+// Historical archive hashes include this exact policy, including the outer
+// whitespace of nonliteral expressions. Do not use it for replayable DDL.
+func formatTableDumpHashDefault(origin string, expr *plan.Expr) string {
+	trimmed := strings.TrimSpace(origin)
 	if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
 		return trimmed
 	}
-	if defaultExpr != nil && defaultExpr.GetLit() == nil {
-		return expr
+	if expr != nil && expr.GetLit() == nil {
+		return origin
 	}
-	return formatStr(expr)
+	return formatStr(origin)
+}
+
+// Catalog origins use ordinary backslash escaping regardless of the reader's
+// mode. Reformat the scalar AST without evaluating or rebinding its default.
+func formatDefaultWithoutBackslashEscapes(origin string) (string, error) {
+	stmt, err := mysql.ParseOne(context.Background(), "select "+origin, 1)
+	if err != nil {
+		return "", err
+	}
+	defer stmt.Free()
+	selectStmt, ok := stmt.(*tree.Select)
+	if !ok {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	clause, ok := selectStmt.Select.(*tree.SelectClause)
+	if !ok || len(clause.Exprs) != 1 || (clause.Exprs[0].As != nil && !clause.Exprs[0].As.Empty()) ||
+		clause.Where != nil || clause.GroupBy != nil || clause.Having != nil || len(clause.Windows) != 0 ||
+		selectStmt.With != nil || len(selectStmt.OrderBy) != 0 || selectStmt.Limit != nil {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	// A SELECT without FROM has a single implicit empty table name in this AST.
+	if clause.From == nil || len(clause.From.Tables) != 1 {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	table, ok := clause.From.Tables[0].(*tree.AliasedTableExpr)
+	if !ok {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	name, ok := table.Expr.(*tree.TableName)
+	if !ok || name.ObjectName != "" {
+		return "", moerr.NewInternalErrorNoCtx("invalid stored default expression")
+	}
+	return tree.StringWithOpts(clause.Exprs[0].Expr, dialect.MYSQL,
+		tree.WithSingleQuoteString(), tree.WithNoBackslashEscape()), nil
 }
 
 func getTimeStampByTsHint(ctx CompilerContext, AtTsExpr *tree.AtTimeStamp) (snapshot *plan.Snapshot, err error) {

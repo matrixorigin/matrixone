@@ -24,12 +24,89 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
+
+// An index build can still be starting when a different CN drops its metadata.
+// The DROP must finish even if the assigned ISCP executor has not published its
+// runtime yet; the CN fence protects any executor published later.
+func TestIssue29699DropImmediatelyAfterAsyncIndexCreate(t *testing.T) {
+	cluster, err := embed.StartTestCluster(embed.WithCNCount(2))
+	if cluster != nil {
+		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
+	}
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
+	defer cancel()
+	conns := make([]*sql.Conn, 2)
+	for i := range conns {
+		svc, err := cluster.GetCNService(i)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", svc.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, db.Close()) })
+		conns[i], err = db.Conn(ctx)
+		require.NoError(t, err)
+		conn := conns[i]
+		t.Cleanup(func() { require.NoError(t, conn.Close()) })
+		for _, statement := range []string{"set experimental_fulltext2_index=1", "set experimental_ivf_index=1", "set experimental_hnsw_index=1"} {
+			_, err = conn.ExecContext(ctx, statement)
+			require.NoError(t, err, statement)
+		}
+	}
+	writer, err := cluster.GetCNService(0)
+	require.NoError(t, err)
+	reader, err := cluster.GetCNService(1)
+	require.NoError(t, err)
+	waitCrossCN := func() {
+		t.Helper()
+		frontier := writer.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+		waitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+		defer stop()
+		_, err := reader.RawService().(cnservice.Service).GetTxnClient().WaitLogTailAppliedAt(waitCtx, frontier)
+		require.NoError(t, err)
+	}
+	for _, tc := range []struct {
+		name, table, createIndex, drop string
+		keepTable                      bool
+	}{
+		{"drop_index", "docs", "create fulltext2 index ft on docs(body) with parser ngram", "drop index ft on docs", true},
+		{"alter_drop_index", "docs", "create fulltext2 index ft on docs(body) with parser ngram", "alter table docs drop index ft", true},
+		{"drop_table", "vectors", "create index vi using ivfflat on vectors(v) lists = 4 op_type 'vector_l2_ops'", "drop table vectors", false},
+		{"drop_database", "vectors", "create index hx using hnsw on vectors(v) op_type 'vector_l2_ops' m=8 ef_construction=64 ef_search=64", "drop database issue29699_drop_database", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			schema := "issue29699_" + tc.name
+			for _, statement := range []string{
+				"create database " + schema,
+				"use " + schema,
+				"create table docs(id int primary key, body varchar(200))",
+				"insert into docs values(1,'hello world'),(2,'another document')",
+				"create table vectors(id bigint primary key, v vecf64(2))",
+				"insert into vectors values(1,'[1,0]'),(2,'[2,0]'),(3,'[3,0]')",
+				tc.createIndex,
+			} {
+				_, err := conns[0].ExecContext(ctx, statement)
+				require.NoError(t, err, statement)
+			}
+			waitCrossCN()
+			_, err := conns[1].ExecContext(ctx, "use "+schema)
+			require.NoError(t, err)
+			_, err = conns[1].ExecContext(ctx, tc.drop)
+			require.NoError(t, err, tc.drop)
+			if tc.keepTable {
+				var rows int
+				require.NoError(t, conns[1].QueryRowContext(ctx, "select count(*) from docs").Scan(&rows))
+				require.Equal(t, 2, rows)
+			}
+		})
+	}
+}
 
 type observedInternalExecutor struct {
 	executor.SQLExecutor
