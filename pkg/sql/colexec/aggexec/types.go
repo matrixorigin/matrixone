@@ -652,6 +652,9 @@ func makeSpecialAggExec(
 		}
 		exec, err := makeOrderedPercentileExec(mp, id, isDistinct, params[0], orderedPercentileDiscrete)
 		return exec, true, err
+	case AggIdOfQuantileExactWeighted:
+		exec, err := makeQuantileExactWeightedExec(mp, id, isDistinct, params)
+		return exec, true, err
 	case AggIdOfJsonArrayAgg:
 		exec, err := makeJsonArrayAgg(mp, id, isDistinct, params)
 		return exec, true, err

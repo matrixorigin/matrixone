@@ -1504,6 +1504,7 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		fid      int32
 		argCount int
 	}{
+		{name: "no default database", fid: DATABASE, argCount: 0},
 		{name: "division by zero", fid: DIV, argCount: 2},
 		{name: "integer division by zero", fid: INTEGER_DIV, argCount: 2},
 		{name: "modulo by zero", fid: MOD, argCount: 2},
