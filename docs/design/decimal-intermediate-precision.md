@@ -168,3 +168,9 @@ was rejected after independent SF10 confirmation established Q6, Q15 and Q21
 slowdowns; Q1 gains did not override those regressions. This revision removes
 those policy changes and is independently revalidated. No performance
 acceptance is claimed from the rejected candidate.
+
+### Persisted binding witnesses
+
+DUMP/LOAD must select historical precision for decimal-only arithmetic and rounding as well as integer coercions. There are independent released eras: pre-integer-width bindings, strict integer casts with pre-intermediate-precision metadata, and current bindings. Reconstruct complete trees for the first two eras; do not normalize supplied widths or combine partial witnesses. Both historical contexts are confined to origin verification, retain declared CAST/runtime checks, and share the existing cancellation and candidate-node limits. Ordinary integer-only defaults add no precision witness.
+
+Regression fixtures are serialized by an unmodified main planner and self-verified there before testing both DUMP and LOAD here. Include declared-decimal multiplication, nested/negative rounding, strict integer peers, unchanged controls, forged precision rejection and work limits.

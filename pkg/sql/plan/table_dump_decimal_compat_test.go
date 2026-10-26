@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -31,6 +32,7 @@ func TestTableDumpPersistedDecimalBindings(t *testing.T) {
 		"legacy_decimal_catalog_63a964a82f.json",
 		"legacy_decimal_between_63a964a82f.json",
 		"legacy_decimal_in_range_63a964a82f.json",
+		"legacy_decimal_arithmetic_6c1942f3cf.json",
 	} {
 		t.Run(file, func(t *testing.T) {
 			data, err := os.ReadFile("testdata/" + file)
@@ -58,9 +60,40 @@ func TestTableDumpPersistedDecimalBindings(t *testing.T) {
 							require.ErrorContains(t, err, "cannot verify bound check", "normalizing an arbitrary width must not establish trust")
 						}
 					}
+					if name == "check_product" {
+						for _, width := range []int32{31, 37} {
+							forged := DeepCopyTableDef(&source, true)
+							product := forged.Checks[0].Check.GetF().Args[0]
+							require.Equal(t, "*", product.GetF().Func.ObjName)
+							product.Typ.Width = width
+							_, err = AnalyzeTableDumpBindings(compiler, target, forged)
+							require.ErrorContains(t, err, "cannot verify bound check", "a partial precision match must not establish trust")
+						}
+						_, err = analyzeTableDumpBindingsWithCandidateVisitLimit(compiler, &source, &source, 1)
+						require.ErrorContains(t, err, "expression binding exceeds limit")
+					}
 					require.True(t, proto.Equal(before, &source), "verification must preserve catalog bytes")
 				})
 			}
 		})
 	}
+}
+
+func TestTableDumpDecimalPrecisionWitnessExcludesIntegerDefaults(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	def := tableDumpDDLCreate(t, compiler, "create table integer_default(a bigint default 7)")
+	require.False(t, tableDumpHasLegacyDecimalPrecision(def.Cols[0].Default.Expr))
+	// A single literal visits the current and existing temporal-nullability
+	// eras once each. No precision or integer-coercion era is added.
+	_, err := analyzeTableDumpBindingsWithCandidateVisitLimit(compiler, def, def, 2)
+	require.NoError(t, err, "an unaffected default must not spend extra historical-candidate work")
+	_, err = analyzeTableDumpBindingsWithCandidateVisitLimit(compiler, def, def, 1)
+	require.ErrorContains(t, err, "expression binding exceeds limit")
+	require.False(t, tableDumpHasLegacyDecimalPrecision(nil))
+	malformed := &pb.Expr{Expr: &pb.Expr_F{F: &pb.Function{Func: &pb.ObjectRef{ObjName: "*"}, Args: []*pb.Expr{nil, nil}}}}
+	require.False(t, tableDumpHasLegacyDecimalPrecision(malformed))
+	decimal := &pb.Expr{Typ: pb.Type{Id: int32(types.T_decimal64)}}
+	product := &pb.Expr{Expr: &pb.Expr_F{F: &pb.Function{Func: &pb.ObjectRef{ObjName: "*"}, Args: []*pb.Expr{decimal, decimal}}}}
+	require.True(t, tableDumpHasLegacyDecimalPrecision(&pb.Expr{Expr: &pb.Expr_List{List: &pb.ExprList{List: []*pb.Expr{nil, product}}}}))
+	require.True(t, tableDumpHasLegacyDecimalPrecision(&pb.Expr{Expr: &pb.Expr_Lit{Lit: &pb.Literal{Src: product}}}))
 }

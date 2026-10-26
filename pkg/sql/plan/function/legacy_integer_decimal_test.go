@@ -130,3 +130,37 @@ func TestLegacyDecimalArithmeticRetainsHistoricalPrecision(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyDecimalPrecisionKeepsStrictIntegerDomains(t *testing.T) {
+	ctx := t.Context()
+	legacy := WithLegacyDecimalIntermediatePrecision(ctx)
+	require.False(t, LegacyDecimalIntermediatePrecision(nil))
+	require.False(t, LegacyDecimalIntermediatePrecision(ctx))
+	require.True(t, LegacyDecimalIntermediatePrecision(legacy))
+	require.True(t, LegacyDecimalIntermediatePrecision(WithLegacyIntegerDecimalCoercions(ctx)))
+	for _, integer := range []types.T{types.T_int64, types.T_uint64, types.T_bit} {
+		inputs := []types.Type{integer.ToType(), types.New(types.T_decimal64, 15, 2)}
+		current, err := GetFunctionByName(ctx, "*", inputs)
+		require.NoError(t, err)
+		old, err := GetFunctionByName(legacy, "*", inputs)
+		require.NoError(t, err)
+		require.Equal(t, types.New(types.T_decimal128, 38, 2), old.GetReturnType())
+		targets, cast := old.ShouldDoImplicitTypeCast()
+		require.True(t, cast)
+		require.Equal(t, types.T_decimal128, targets[0].Oid)
+		minimum := int32(20)
+		if integer == types.T_int64 {
+			minimum = 19
+		}
+		require.GreaterOrEqual(t, targets[0].Width, minimum)
+		again, err := GetFunctionByName(ctx, "*", inputs)
+		require.NoError(t, err)
+		require.Equal(t, current, again, "historical verification cannot alter ordinary inference")
+	}
+	castInputs := []types.Type{types.T_int64.ToType(), types.New(types.T_decimal64, 18, 0)}
+	current, err := GetFunctionByName(ctx, "cast", castInputs)
+	require.NoError(t, err)
+	old, err := GetFunctionByName(legacy, "cast", castInputs)
+	require.NoError(t, err)
+	require.Equal(t, current, old, "declared assignments keep strict width checks")
+}

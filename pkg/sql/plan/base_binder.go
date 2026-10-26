@@ -8541,7 +8541,7 @@ func bindFuncExprImplByPlanExpr(
 		}
 	}
 
-	refineDecimalRoundingReturnType(name, args, argsType, &returnType)
+	refineDecimalRoundingReturnType(name, args, argsType, &returnType, function.LegacyDecimalIntermediatePrecision(ctx))
 
 	// Geometry constructors with an explicit SRID argument record the SRID in
 	// the result type's Width (geometry cells store bare WKB, so SRID lives in
@@ -9350,13 +9350,13 @@ func sameFunctionArgumentTypes(left, right []types.Type) bool {
 // refineDecimalRoundingReturnType applies the exact-numeric metadata rules
 // which depend on a constant digits argument and therefore cannot be expressed
 // by an overload's type-only return callback.
-func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []types.Type, returnType *types.Type) {
+func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []types.Type, returnType *types.Type, legacyPrecision bool) {
 	if len(argsType) == 0 || !argsType[0].IsDecimal() {
 		return
 	}
 	input := argsType[0]
 	integerDigits := input.Width - input.Scale
-	if len(args) == 2 && args[1].GetLit() == nil {
+	if !legacyPrecision && len(args) == 2 && args[1].GetLit() == nil {
 		switch name {
 		case "round":
 			// Nearest rounding can grow the coefficient by one digit.
@@ -9397,7 +9397,7 @@ func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []
 			resultScale = int32(digits)
 		}
 		precision := integerDigits + resultScale + 1 // reserve a carry digit
-		if digits < 0 {
+		if digits < 0 && !legacyPrecision {
 			// CEIL(1, -35) is 10^35 regardless of the input precision.
 			// Bound the position before negating, including INT64_MIN. The
 			// existing execution guards still reject unsupported positions.
@@ -9435,7 +9435,7 @@ func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []
 		// carry for ROUND: e.g. a precision-30 product can round to 10^30.
 		// TRUNCATE cannot carry. Retain the existing decimal family and cap.
 		if digits < 0 {
-			if name == "round" {
+			if name == "round" && !legacyPrecision {
 				returnType.Width = max(input.Width, min(integerDigits+1, maxDecimalPrecisionForRounding(input.Oid)))
 			}
 			returnType.Scale = 0
