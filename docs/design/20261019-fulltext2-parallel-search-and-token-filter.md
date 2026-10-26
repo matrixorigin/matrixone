@@ -188,18 +188,11 @@ in a single parallel wave only the shared lower bound applies.
 
 ### Activation and compatibility (decision)
 
-Parallel search plumbs the per-index worker count through the index scan options.
-A node that predates the option ignores an unknown scan option and runs its own
-search; a node that understands it honors the resolved value. Because the result
-is identical regardless, a mixed deployment is always correctness-safe — some
-nodes may parallelize while others do not, with no observable difference. The
-planner therefore does **not** honor an explicit operator value until every node
-understands the option (a cluster-wide capability epoch); before that it emits the
-neutral default so no node is handed a value its peers would interpret differently.
-"Neutral default" here is the same unset/`0` the search site resolves to effective
-parallelism — it is not a request for serial execution. (Earlier code comments
-describing the pre-epoch value as "serial" were inaccurate and are corrected to
-this contract.)
+Parallel search plumbs the per-index worker count through the index scan options,
+and every node honors the resolved value. The unset/`0` default resolves to the
+effective parallelism at the search site; it is not a request for serial execution.
+MatrixOne upgrades by full-cluster shutdown, so no node runs without the option and
+no capability gate is needed.
 
 ## Parallel build contract
 
@@ -254,8 +247,7 @@ background work outlives the statement.
 The worker count is the `fulltext2_threads_build` session/global setting (0, the
 default, resolves to the effective parallelism; 1 keeps the serial build), carried in
 the build configuration to the operator that runs the build. Because the produced
-segments are identical at any value, no capability epoch is needed: a node that
-predates the setting ignores it and builds serially, with the same result. Background
+segments are identical at any value, no capability gate is needed. Background
 builds that have no session (scheduled rebuilds) use the default.
 
 ## token_filter analyzer contract
@@ -299,13 +291,10 @@ length for its documents and perturbs the score of **every** query served from t
 affected generation, not only a query that mentions a stopword. The write-side
 invariant is thus a ranking-correctness requirement, not a size optimization.
 
-CREATE of a `token_filter` index is gated on a cluster-wide capability epoch
-**allocated uniquely to this analyzer** (shared with the parallel-search option, which
-ships in the same binary, but distinct from any unrelated capability), so an older
-binary that predates the analyzer advertises a lower epoch and cannot be mistaken for
-a supporting node. No such index can exist until every live node strips identically.
-The gate is a write-side consistency requirement; the read side needs no gate, per the
-results-neutral argument above.
+Every write path strips with the same filter. MatrixOne upgrades by full-cluster
+shutdown, so a non-stripping writer never runs alongside a stripping one and CREATE
+needs no capability gate. The read side needs no gate either, per the results-neutral
+argument above.
 
 ### Maintenance invariant (REINDEX / idxcron)
 
@@ -381,10 +370,9 @@ effect when it executes, never one captured by an earlier plan.
 ### Compatibility (decision)
 
 Because the cutoff changes results, every node that executes a scan for the same
-query must apply the same value. The planner honors a non-zero value only once the
-cluster-wide capability epoch is met; below it, the planner emits the disabled
-value, so a mixed deployment returns the uncut result everywhere rather than a
-cut result on some nodes and an uncut one on others. Nothing is persisted: the
+query must apply the same value. The planner resolves the value once and ships it in
+the scan options, and every node honors it; with full-cluster shutdown upgrade no
+node runs without the option, so no capability gate is needed. Nothing is persisted: the
 setting never changes the index, so it can be turned off, or the feature reverted,
 at any time without migration.
 
@@ -503,24 +491,16 @@ working gojieba deployment always has the file).
 All three features are additive and opt-in. The high-df cutoff persists nothing
 and defaults to off, so enabling, disabling or reverting it never requires a
 migration. Parallelism defaults to the deployment's
-effective parallelism and yields identical results, so it needs no data migration
-and is safe in a mixed deployment; its explicit operator value is withheld until
-the cluster-wide capability epoch is met, and because the result is identical at any
-worker count, a node that later drops below the epoch is still correctness-safe —
+effective parallelism and yields identical results, so it needs no data migration;
 parallel search has no persisted invariant to break.
 
 `token_filter` is different, because its invariant is persisted and write-side.
-It is absent unless requested at CREATE and is gated on the capability epoch, so no
-stop-filtered index exists until every live node can build and maintain it. The epoch
-is a **hard gate with no fallback**, and it is a lifetime requirement, not a one-time
-admission check: because a non-stripping writer corrupts BM25 ranking corpus-wide (see
-the write-side section), every node that could ever build or maintain a `token_filter`
-index — through the CDC tail, a scheduled rebuild, or a merge — must strip for as long
-as the index exists. Downgrading any node below the epoch while a `token_filter` index
-is present is therefore **unsupported**: there is no graceful degradation path, and a
-below-epoch writer re-entering the index's maintenance would silently corrupt its
-scores. This is the standard contract for a persisted, capability-gated on-disk
-feature. Rollback is accordingly a source revert only once no `token_filter` index
+It is absent unless requested at CREATE. Because a non-stripping writer corrupts BM25
+ranking corpus-wide (see the write-side section), every binary that builds or
+maintains a `token_filter` index — through the CDC tail, a scheduled rebuild, or a
+merge — must strip for as long as the index exists. Downgrade to a binary that
+predates the analyzer while a `token_filter` index is present is **unsupported**.
+Rollback is accordingly a source revert only once no `token_filter` index
 exists (drop such indexes first); no catalog, hidden-table, persisted-metadata, or
 protocol migration is introduced, and a plain revert with no such index present is
 safe.
@@ -574,8 +554,8 @@ documents by a stripping writer and a non-stripping writer and reads both: it pr
 the read side is robust for a stopword query (both return empty, because the reader
 strips the query term) and that a non-stripping writer records a different document
 length and so a different BM25 score for an ordinary query — the corpus-wide ranking
-perturbation that makes the write-side epoch a hard, lifetime gate rather than a
-CREATE-time admission check. A BVT exercises the full surface:
+perturbation that makes write-side stripping a lifetime requirement of the index.
+A BVT exercises the full surface:
 the reject paths, the persisted parameter and SHOW CREATE round-trip, the BM25
 stopword behavior (a stopword and an all-stopword query return empty, a mixed query
 equals its content terms), the NL/boolean rejection, and the REINDEX guard. The PR

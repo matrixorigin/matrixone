@@ -98,15 +98,6 @@ func (Hooks) BuildFullTextIndexDefs(
 		}
 	}
 
-	// token_filter (stop) strips tokens at build time, so an index built with it is
-	// unusable by a CN that does not also strip them from the query. Gate CREATE on the
-	// cluster-wide protocol version so no such index exists until every CN understands it.
-	if indexInfo.IndexOption != nil && len(indexInfo.IndexOption.TokenFilters) > 0 &&
-		!planplugin.ClusterSupportsFulltext2Analyzer(ctx) {
-		return nil, nil, moerr.NewNotSupported(ctx.GetContext(),
-			"fulltext2 token_filter requires all CNs to support the token_filter analyzer")
-	}
-
 	// Validate INCLUDE columns (stored as actual values in the segment docmap for
 	// prefilter + coverage). vecColName is "" — fulltext2 has no single indexed vector
 	// column; the plugin's SupportedIncludeColumnTypes() gates the accepted types.
