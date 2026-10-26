@@ -508,7 +508,7 @@ async def test_mapped_schema_is_the_read_and_write_identity(query_client):
     if isinstance(query_client, Client):
         legacy = Query(Mapped, query_client).filter('id=?', 1)
         assert legacy.first().value == 101
-        legacy.update(value=102).execute()
+        Query(Mapped, query_client).filter('id=?', 1).update(value=102).execute()
         assert legacy.first().value == 102
     else:
         q.database = 'alternate'
