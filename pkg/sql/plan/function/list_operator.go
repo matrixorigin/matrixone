@@ -164,13 +164,20 @@ func decimalArithmeticDomain(input types.Type) (width, scale int32, ok bool) {
 
 func decimalMultiplyDomain(input types.Type) (width, scale int32, ok bool) {
 	width, scale, ok = decimalArithmeticDomain(input)
-	if ok && input.Oid == types.T_decimal128 && width == 38 {
+	if ok {
+		width = decimalMultiplyCoefficientWidth(input.Oid, width)
+	}
+	return
+}
+
+func decimalMultiplyCoefficientWidth(oid types.T, width int32) int32 {
+	if oid == types.T_decimal128 && width == 38 {
 		// Released checked D128 arithmetic can retain a full signed
 		// coefficient (39 digits) in its precision-38 carrier envelope.
 		// MUL needs that bound; ADD/SUB already reserve a carry digit.
-		width = 39
+		return 39
 	}
-	return
+	return width
 }
 
 // useDecimal64MultiplyInputs owns the existing signed-integer/D64 eligibility
@@ -205,16 +212,18 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 		if !ok {
 			return nil, false
 		}
-		nominalWidth := widths[i]
-		if domain.Oid.IsDecimal() {
-			nominalWidth = domain.Width
-			if nominalWidth <= 0 {
-				nominalWidth = domain.Oid.ToType().Width
-			}
-		}
-		nominalPrecision += int64(nominalWidth)
 		if operator == "*" {
-			widths[i], scales[i], _ = decimalMultiplyDomain(domain)
+			nominalWidth := widths[i]
+			if domain.Oid.IsDecimal() {
+				nominalWidth = domain.Width
+				if nominalWidth <= 0 {
+					nominalWidth = domain.Oid.ToType().Width
+				}
+			}
+			nominalPrecision += int64(nominalWidth)
+			// Reuse the domain just extracted above. Only MUL needs the
+			// carrier coefficient adjustment and nominal route precision.
+			widths[i] = decimalMultiplyCoefficientWidth(domain.Oid, widths[i])
 		}
 	}
 	precision := int64(widths[0]) + int64(widths[1])
