@@ -13128,6 +13128,7 @@ func TestRound11MalformedMapFamilyAllSinks(t *testing.T) {
 	canaries := []string{
 		"B1CANARY", "B2CANARY", "B3CANARY", "B4CANARY", "B5CANARY", "B6CANARY", "B7CANARY",
 		"C1CANARY", "C2CANARY", "C3CANARY", "C4CANARY", "C5CANARY", "C6CANARY",
+		"D1CANARY", "D2CANARY", "D3CANARY", "D4CANARY", "D5CANARY", "D6PASSWORD",
 	}
 	shapes := []struct {
 		name    string
@@ -13149,6 +13150,15 @@ func TestRound11MalformedMapFamilyAllSinks(t *testing.T) {
 		{"r12-ansi-entry-cursor-chain", "ANSI_QUOTES", `SELECT 1 AS "a\"; SET sql_mode=''; SELECT 1; SET sql_mode='ANSI_QUOTES'; create stage "s\" url='file:///x' credentials={'k'='C4CANARY'}`},
 		{"r12-near-tail-embedded-eq", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='C5CANARY=tail'} -- '`},
 		{"r12-near-tail-value-before-eq", "", `create stage s url='file:///x' credentials={'k'='foo\','secret_key'='C6CANARY'=''} -- '`},
+		// round 13 tier: scanner-rule transition admission, cursor resume
+		// across mode flips, identified-by unterminated tail (client echo
+		// intentionally stays plaintext; every other sink must be clean)
+		{"r13-admission-backtick", "", "SET`sql_mode`='ANSI_QUOTES'; create stage \"s\\\" url='file:///x' credentials={'k'='D1CANARY'}"},
+		{"r13-admission-hash-interstitial", "", "SET # c\nsql_mode='ANSI_QUOTES'; create stage \"s\\\" url='file:///x' credentials={'k'='D2CANARY'}"},
+		{"r13-admission-dash-interstitial", "", "SET -- c\nsql_mode='ANSI_QUOTES'; create stage \"s\\\" url='file:///x' credentials={'k'='D3CANARY'}"},
+		{"r13-admission-slashes", "", "// leading\nSET sql_mode='ANSI_QUOTES'; create stage \"s\\\" url='file:///x' credentials={'k'='D4CANARY'}"},
+		{"r13-cursor-resume-chain", "", `SET sql_mode='ANSI_QUOTES'; SELECT 1 AS "a\"; SET sql_mode=''; SELECT 1; SET sql_mode='ANSI_QUOTES'; create stage "s\" url='file:///x' credentials={'k'='D5CANARY'}`},
+		{"r13-identified-by-unterminated", "", `create user u identified by 'D6PASSWORD`},
 	}
 	for _, shape := range shapes {
 		t.Run(shape.name, func(t *testing.T) {
@@ -13184,7 +13194,12 @@ func TestRound11MalformedMapFamilyAllSinks(t *testing.T) {
 			// doComQuery itself drives both the record path and the client
 			// error echo for this battery's (mostly invalid) diagnostics.
 			comErr := doComQuery(ses, execCtx, &UserInput{sql: shape.query})
-			if comErr != nil && comErr.Error() != "" {
+			if shape.name == "r13-identified-by-unterminated" {
+				// documented compatibility policy: the CLIENT echo keeps the
+				// intentional plaintext; every diagnostic sink stays clean.
+				require.Error(t, comErr)
+				require.Contains(t, comErr.Error(), "D6PASSWORD", "client echo keeps the documented password echo")
+			} else if comErr != nil && comErr.Error() != "" {
 				for _, canary := range canaries {
 					require.NotContains(t, comErr.Error(), canary, "client error echo")
 				}

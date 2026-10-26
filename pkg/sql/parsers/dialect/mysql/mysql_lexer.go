@@ -723,7 +723,27 @@ func (l *Lexer) Error(err string) {
 		nearState = CredentialStateInMapAfterEq
 	}
 	if nearState == CredentialStateNone {
+		nearBeforeMask := near
 		near = MaskStageCredentialLiteralsWithInitialStateAndSQLMode(near, nearState, l.sqlMode)
+		if near == nearBeforeMask {
+			// The byte prefilter tracks the session mode's OWN pairing: an
+			// ANSI-only identifier (` "s\" ` under default) can swallow the
+			// credentials keyword into a misread quoted token and silence
+			// the scrub. The conservative all-variants union covers the
+			// modes the session mode cannot read (#30747 review round 13).
+			// stage-scope union only (maskAll=false): identified-by literals keep
+			// their established plaintext echo convention even here.
+			near = maskPieceUnderAllLexicalVariantsScoped(near, l.sqlMode, false, CredentialStateNone, nil, true)
+		}
+		if near == nearBeforeMask && looksCredentialBearing(near) {
+			// Even the variants cannot prove the echo clean (a keyword
+			// trapped inside a mis-paired string in every admitted mode).
+			// A near tail that literally carries a credential keyword with
+			// no verified masking is redacted wholesale; keyword-free
+			// tails (e.g. the identified-by password echo) keep their
+			// established shape.
+			near = "******"
+		}
 	} else {
 		// The tracker places the failure inside a credential map: redact
 		// the WHOLE tail. A partial fragment scrub is never proof of
@@ -737,6 +757,16 @@ func (l *Lexer) Error(err string) {
 	}
 	near = commonutil.Abbreviate(near, -1)
 	l.scanner.LastError = PositionedErr{Err: errMsg, Line: l.scanner.Line, Col: l.scanner.Col, Near: near, LenStr: lenStr}
+}
+
+// looksCredentialBearing reports cheap byte-level evidence that a near tail
+// mentions a CREDENTIALS option map keyword. IDENTIFIED BY is deliberately
+// NOT a trigger: the near echo's plaintext for it is an established,
+// golden-pinned diagnostic convention (TestParseErrorKeepsIdentifiedByInNearEcho),
+// and its unterminated-tail class is redacted on the diagnostic path with
+// original-source spans instead.
+func looksCredentialBearing(text string) bool {
+	return strings.Contains(strings.ToLower(text), "credentials")
 }
 
 // credentialMapStateForNear maps the lexer's small integer tracker onto the

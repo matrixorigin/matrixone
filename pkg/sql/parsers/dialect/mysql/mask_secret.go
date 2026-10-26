@@ -605,78 +605,34 @@ func StatementSQLModes(sql string, initial SQLModeFlags) []StatementSQLModeSpan 
 
 // statementSQLModeInventory re-scans one already-delimited span for the
 // token inventory behind SET-transition detection. Only a span whose FIRST
-// token can be the SET keyword needs the list — every other statement's
+// token is the SET keyword needs the list — every other statement's
 // inventory is provably discarded by transition detection, so plain spans
-// cost no second scan at all (keeps an N-thousand-statement unknown tail
-// strictly two passes per variant).
+// cost ONE token read instead of a full re-scan. Admission goes through a
+// real scanner token loop (#30747 review round 13): it inherits the exact
+// trivia and keyword rules the parser applies (plain/line/hash comments,
+// /*! content, and backtick or quoted SET targets — `SET `sql_mode` = ...`
+// and `SET -- c\n sql_mode = ...` are admitted exactly like the production
+// parser admits them), instead of an ad-hoc byte whitelist, which rejected
+// valid syntax and stranded the mode transition.
 func statementSQLModeInventory(sql string, start, end int, mode SQLModeFlags) ([]int, []string) {
-	if start >= end || !spanStartsWithSet(sql, start, end) {
+	if start >= end || !spanFirstTokenIsSet(sql, start, mode) {
 		return nil, nil
 	}
 	_, _, typList, valList := splitOneStatement(sql[start:end], 0, mode)
 	return typList, valList
 }
 
-// spanStartsWithSet reports whether the span's first REAL token reads as the
-// word SET (byte check only; the token-level re-scan in
-// statementSQLModeInventory keeps authority over transition semantics).
-// Trivia is skipped EXACTLY the way the scanner treats it (#30747 review
-// round 12): plain /* */ comments, `-- `/EOL and `#` line comments are
-// trivia, while an executable /*! ... */ comment delivers its CONTENT as
-// tokens — a leading-comment SET must count as SET-initial for transition
-// admission.
-func spanStartsWithSet(sql string, start, end int) bool {
-	start = skipPreTokenTrivia(sql, start, end)
-	if end-start < 4 {
-		return false
-	}
-	if !((sql[start] == 's' || sql[start] == 'S') && (sql[start+1] == 'e' || sql[start+1] == 'E') && (sql[start+2] == 't' || sql[start+2] == 'T')) {
-		return false
-	}
-	c := sql[start+3]
-	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ';' || c == '(' || c == '/' || c == '=' || c == '*'
-}
-
-// skipPreTokenTrivia advances past the trivia a scanner consumes before the
-// first real token of a statement. Plain comments never return content;
-// executable comments return their content, so only the opener (with its
-// optional version digits) counts as trivia there.
-func skipPreTokenTrivia(sql string, start, end int) int {
-	for start < end {
-		for start < end && (sql[start] == ' ' || sql[start] == '\t' || sql[start] == '\n' || sql[start] == '\r') {
-			start++
-		}
-		switch {
-		case strings.HasPrefix(sql[start:], "/*!"):
-			// executable (version) comment: its content are real tokens;
-			// skip only the marker and an optional version number.
-			start += 3
-			for start < end && sql[start] >= '0' && sql[start] <= '9' {
-				start++
-			}
-		case strings.HasPrefix(sql[start:], "/*"):
-			close := strings.Index(sql[start+2:], "*/")
-			if close < 0 {
-				return end
-			}
-			start += 2 + close + 2
-		case strings.HasPrefix(sql[start:], "#"):
-			nl := strings.IndexByte(sql[start:], '\n')
-			if nl < 0 {
-				return end
-			}
-			start += nl + 1
-		case strings.HasPrefix(sql[start:], "-- ") || strings.HasPrefix(sql[start:], "--\t") || strings.HasPrefix(sql[start:], "--\n") || strings.HasPrefix(sql[start:], "--\r"):
-			nl := strings.IndexByte(sql[start:], '\n')
-			if nl < 0 {
-				return end
-			}
-			start += nl + 1
-		default:
-			return start
-		}
-	}
-	return start
+// spanFirstTokenIsSet scans one token from the span start under the real
+// scanner rules (trivia skip + token classification) and reports whether it
+// is the SET keyword. One token read plus a pooled scanner; no byte-level
+// second-guessing of the lexer.
+func spanFirstTokenIsSet(sql string, start int, mode SQLModeFlags) bool {
+	scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
+	defer PutScanner(scanner)
+	scanner.Pos = start
+	previousToken := 0
+	typ, _ := scanSensitiveToken(scanner, &previousToken)
+	return typ == SET
 }
 
 // variantSemiCursor is a forward-only scanner over one lexical variant for
@@ -741,13 +697,24 @@ func (c *variantSemiCursor) fill(sql string) bool {
 }
 
 // nextAfter returns the smallest top-level `;` end strictly greater than
-// start that the coverage gate accepts; ok=false at end of input. The first
-// call of this cursor anchors its scan at `start` (the current statement
-// boundary): tokenization must never reinterpret prefix bytes that prior
-// statements consumed under other effective modes.
+// start that the coverage gate accepts; ok=false at end of input. A cursor
+// anchors at the current statement boundary not only on first use but every
+// time its scan position LAGS behind the boundary (#30747 review rounds
+// 12/13): intervening statements were consumed under effective modes this
+// cursor is not, and re-reading their bytes re-pairs quotes (an ANSI-quoted
+// alias read under default swallows later boundaries — and their mode
+// transitions). Resync discards any pending candidate at or behind the
+// boundary and re-anchors depth/token state; scanning stays forward-only
+// and monotonic everywhere else.
 func (c *variantSemiCursor) nextAfter(sql string, start int, covered func(int) bool) (int, bool) {
-	if !c.touched {
+	if c.hasNext && c.nextEnd <= start {
+		c.hasNext = false
+	}
+	if !c.touched || (!c.hasNext && c.scanner.Pos < start) {
 		c.scanner.Pos = start
+		c.depth = 0
+		c.previousToken = 0
+		c.hasNext = false
 		c.touched = true
 	}
 	for c.hasNext || c.fill(sql) {
@@ -866,6 +833,17 @@ func unionCredentialSpansUnderAllLexicalVariants(sql string, start int, lastKnow
 		spans = merged
 	}
 	return spans
+}
+
+// SensitiveLiteralSpansForDiagnostic returns the union of sensitive VALUE
+// spans masking would redact in sql — credential-map values, identified-by
+// values, access-key assignments — in original coordinates, merged disjoint
+// and sorted (#30747 review round 13). The diagnostic path uses it to
+// decide whether an error's near-fragment overlaps any secret the full
+// statement already masks; a fragment that cannot be proven disjoint is
+// redacted wholesale.
+func SensitiveLiteralSpansForDiagnostic(sql string, initial SQLModeFlags) [][2]int {
+	return unionCredentialSpansUnderAllLexicalVariants(sql, 0, initial)
 }
 
 // boundaryInsideSpans reports whether byte position pos lies inside any

@@ -387,6 +387,62 @@ func redactStatementTextForLogging(statement tree.Statement, text string, sqlMod
 // through it — the fragment is extracted, masked on its own, and spliced
 // back. (The client-visible echo keeps the identified-by plaintext by
 // convention; only this diagnostic copy is fully masked.)
+// nearFragmentRegion locates the serialized `near "..."` tail in a parser
+// error message: the region between the quote after " near " and the last
+// quote, with only `;` or a parenthesized length marker allowed after it.
+func nearFragmentRegion(errText string) (int, int, bool) {
+	anchor := strings.Index(errText, " near \"")
+	if anchor < 0 {
+		return 0, 0, false
+	}
+	start := anchor + len(" near \"")
+	end := strings.LastIndex(errText, "\"")
+	if end <= start {
+		return 0, 0, false
+	}
+	tail := errText[end+1:]
+	if tail != "" && !strings.HasPrefix(tail, ";") && !strings.HasPrefix(tail, " (") {
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+// redactOverlappingNearSensitive replaces the error's near tail with
+// "******" whenever the tail overlaps ANY sensitive value span of the
+// ORIGINAL statement (#30747 review round 13). Fragment-level masking is
+// context-blind by construction: an unterminated identified-by password IS
+// the near tail and replays no `identified by` keyword, so keyword-driven
+// fragment passes cannot see it — but the record masker's span union over
+// the full statement knows exactly which bytes are secret. Applied only to
+// the diagnostic path (error telemetry + terminal status log); the client
+// echo never passes through here, so the documented plaintext echo policy
+// is preserved.
+func redactOverlappingNearSensitive(errText, stmtText string, mode mysql.SQLModeFlags) string {
+	if stmtText == "" {
+		return errText
+	}
+	start, end, ok := nearFragmentRegion(errText)
+	if !ok {
+		return errText
+	}
+	fragment := errText[start:end]
+	if fragment == "" {
+		return errText
+	}
+	pos := strings.LastIndex(stmtText, fragment)
+	if pos < 0 {
+		// No verbatim provenance (normalized echo shape): the overlap check
+		// cannot be evaluated; other redaction passes still apply.
+		return errText
+	}
+	for _, span := range mysql.SensitiveLiteralSpansForDiagnostic(stmtText, mode) {
+		if pos < span[1] && span[0] < pos+len(fragment) {
+			return errText[:start] + "******" + errText[end:]
+		}
+	}
+	return errText
+}
+
 func redactStatementErrorForLogging(err error, text string, sqlMode string) error {
 	if err == nil {
 		return err
@@ -397,6 +453,12 @@ func redactStatementErrorForLogging(err error, text string, sqlMode string) erro
 	mode := mysql.ParseSQLModeFlags(sqlMode)
 	errText := err.Error()
 	errText = maskSerializedNearFragment(errText, text, mode)
+	// Only fragments the keyword-driven pass just left UNCHANGED are still
+	// suspect: provenance overlapping any original-statement sensitive span
+	// then redacts wholesale (e.g. an unterminated identified-by password,
+	// #30747 review round 13). A fragment the pass already masked no longer
+	// matches the source verbatim and is left alone.
+	errText = redactOverlappingNearSensitive(errText, text, mode)
 	if masked := parsers.MaskSensitiveLiteralsForLoggingWithSQLMode(errText, mode); masked != err.Error() {
 		// Downstream (RecordParseErrorStatement) wraps the returned error with
 		// moerr.NewParseError, whose template prepends "SQL parser error: ".
