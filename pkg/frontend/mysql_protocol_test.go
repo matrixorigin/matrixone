@@ -852,48 +852,6 @@ func TestReadStringLenEnc(t *testing.T) {
 	}
 }
 
-// can not run this test case in ubuntu+golang1.9， let's add an issue(#4656) for that, I will fixed in someday.
-//func TestMysqlClientProtocol_TlsHandshake(t *testing.T) {
-//	//before anything using the configuration
-//	clientConn, serverConn := net.Pipe()
-//	defer serverConn.Close()
-//	defer clientConn.Close()
-//	registerConn(clientConn)
-//	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-//	_, err := toml.DecodeFile("test/system_vars_config.toml", pu.SV)
-//	if err != nil {
-//		panic(err)
-//	}
-//	pu.SV.EnableTls = true
-//	setGlobalPu(pu)
-//	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-//	rm, err := NewRoutineManager(ctx)
-//	assert.NoError(t, err)
-//	setGlobalRtMgr(rm)
-//
-//	wg := sync.WaitGroup{}
-//	wg.Add(1)
-//
-//	// //running server
-//	go func() {
-//		defer wg.Done()
-//		startInnerServer(serverConn)
-//	}()
-//
-//	// to := NewTimeout(1*time.Minute, false)
-//	// for isClosed() && !to.isTimeout() {
-//	// }
-//
-//	time.Sleep(time.Second * 2)
-//	db := open_tls_db(t, 6001)
-//	closeDbConn(t, db)
-//
-//	time.Sleep(time.Millisecond * 10)
-//	clientConn.Close()
-//	serverConn.Close()
-//	wg.Wait()
-//}
-
 func makeMysqlBoolResultSet() *MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -2073,52 +2031,6 @@ func TestMysqlResultSet(t *testing.T) {
 	wg.Wait()
 }
 
-//func open_tls_db(t *testing.T, port int) *sql.DB {
-//	tlsName := "custom"
-//	rootCertPool := x509.NewCertPool()
-//	pem, err := os.ReadFile("test/ca.pem")
-//	if err != nil {
-//		require.NoError(t, err)
-//	}
-//	if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
-//		log.Fatal("Failed to append PEM.")
-//	}
-//	clientCert := make([]tls.Certificate, 0, 1)
-//	certs, err := tls.LoadX509KeyPair("test/client-cert2.pem", "test/client-key2.pem")
-//	if err != nil {
-//		require.NoError(t, err)
-//	}
-//	clientCert = append(clientCert, certs)
-//	err = mysqlDriver.RegisterTLSConfig(tlsName, &tls.Config{
-//		RootCAs:            rootCertPool,
-//		Certificates:       clientCert,
-//		MinVersion:         tls.VersionTLS12,
-//		InsecureSkipVerify: true,
-//	})
-//	if err != nil {
-//		require.NoError(t, err)
-//	}
-//
-//	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=5s&timeout=5s&writeTimeout=5s&tls=%s", port, tlsName)
-//	db, err := sql.Open("mysql", dsn)
-//	if err != nil {
-//		require.NoError(t, err)
-//	} else {
-//		db.SetConnMaxLifetime(time.Minute * 3)
-//		db.SetMaxOpenConns(1)
-//		db.SetMaxIdleConns(1)
-//		time.Sleep(time.Millisecond * 100)
-//
-//		// ping opens the connection
-//		logutil.Info("start ping")
-//		err = db.Ping()
-//		if err != nil {
-//			require.NoError(t, err)
-//		}
-//	}
-//	return db
-//}
-
 func openDbConn(t *testing.T, port int) (db *sql.DB, err error) {
 	dsn := fmt.Sprintf("dump:111@custom(127.0.0.1:%d)/?readTimeout=30s&timeout=30s&writeTimeout=30s", port)
 	for i := 0; i < 3; i++ {
@@ -2176,21 +2088,6 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 	require.NoError(t, err)
 	require.True(t, len(columns) == len(mrs.Columns))
 
-	//colType, err := rows.ColumnTypes()
-	//require.NoError(t, err)
-	//for i, ct := range colType {
-	//	fmt.Printf("column %d\n",i)
-	//	fmt.Printf("name %v \n",ct.Name())
-	//	l,o := ct.RowCount()
-	//	fmt.Printf("length %v %v \n",l,o)
-	//	p,s,o := ct.DecimalSize()
-	//	fmt.Printf("decimalsize %v %v %v \n",p,s,o)
-	//	fmt.Printf("scantype %v \n",ct.ScanType())
-	//	n,o := ct.Nullable()
-	//	fmt.Printf("nullable %v %v \n",n,o)
-	//	fmt.Printf("databaseTypeName %s \n",ct.DatabaseTypeName())
-	//}
-
 	values := make([][]byte, len(columns))
 
 	// rows.Scan wants '[]interface{}' as an argument, so we must copy the
@@ -2205,16 +2102,6 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 	for rows.Next() {
 		err = rows.Scan(scanArgs...)
 		require.NoError(t, err)
-
-		//fmt.Println(rowIdx)
-		//fmt.Println(mrs.GetRow(rowIdx))
-		//
-		//for i := uint64(0); i < mrs.GetColumnCount(); i++ {
-		//	arg := scanArgs[i]
-		//	val := *(arg.(*[]byte))
-		//	fmt.Printf("%v ",val)
-		//}
-		//fmt.Println()
 
 		if !skipResultsetCheck {
 			for i := uint64(0); i < mrs.GetColumnCount(); i++ {
@@ -2354,42 +2241,6 @@ func Test_writePackets(t *testing.T) {
 		err = proto.writePackets(make([]byte, MaxPayloadSize))
 		convey.So(err, convey.ShouldBeNil)
 	})
-	//convey.Convey("writepackets 16MB failed", t, func() {
-	//
-	//	sv, err := getSystemVariables("test/system_vars_config.toml")
-	//	if err != nil {
-	//		t.Error(err)
-	//	}
-	//
-	//	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	//	pu.SV.SkipCheckUser = true
-	//	setPu("",pu)
-	//	ioses, err := NewIOSession(serverConn, pu)
-	//	if err != nil {
-	//		panic(err)
-	//	}
-	//	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-	//	err = proto.writePackets(make([]byte, MaxPayloadSize))
-	//	convey.So(err, convey.ShouldBeError)
-	//})
-	//
-	//convey.Convey("writepackets 16MB failed 2", t, func() {
-	//	sv, err := getSystemVariables("test/system_vars_config.toml")
-	//	if err != nil {
-	//		t.Error(err)
-	//	}
-	//
-	//	pu := config.NewParameterUnit(sv, nil, nil, nil)
-	//	pu.SV.SkipCheckUser = true
-	//	setPu("",pu)
-	//	ioses, err := NewIOSession(serverConn, pu)
-	//	if err != nil {
-	//		panic(err)
-	//	}
-	//	proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-	//	err = proto.writePackets(make([]byte, MaxPayloadSize))
-	//	convey.So(err, convey.ShouldBeError)
-	//})
 }
 
 func Test_beginPacket(t *testing.T) {

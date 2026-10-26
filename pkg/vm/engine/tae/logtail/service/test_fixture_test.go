@@ -174,22 +174,28 @@ func newUnitLogtailServerWithStart(
 	)
 	require.NoError(t, err)
 	if start {
-		require.NoError(t, server.Start())
-		// The production manager always emits a metadata-only first event to
-		// establish the publisher's ordering barrier. Unit fixtures must honor
-		// the same producer contract before exercising later phases.
-		bootstrapped := make(chan struct{})
-		require.NoError(t, logtailer.notify(
-			timestamp.Timestamp{}, timestamp.Timestamp{}, func() { close(bootstrapped) },
-		))
-		select {
-		case <-bootstrapped:
-		case <-time.After(10 * time.Second):
-			t.Fatal("logtail sender did not consume the bootstrap event")
-		}
+		startUnitLogtailServer(t, server, logtailer)
 	}
+
 	t.Cleanup(func() { require.NoError(t, server.Close()) })
 	return server
+}
+
+func startUnitLogtailServer(t *testing.T, server *LogtailServer, logtailer *controlledLogtailer) {
+	t.Helper()
+	require.NoError(t, server.Start())
+	// The production manager always emits a metadata-only first event to
+	// establish the publisher's ordering barrier. Unit fixtures must honor
+	// the same producer contract before exercising later phases.
+	bootstrapped := make(chan struct{})
+	require.NoError(t, logtailer.notify(
+		timestamp.Timestamp{}, timestamp.Timestamp{}, func() { close(bootstrapped) },
+	))
+	select {
+	case <-bootstrapped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("logtail sender did not consume the bootstrap event")
+	}
 }
 
 func newCaptureStream(session *captureSession) morpcStream {

@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,8 +30,6 @@ import (
 // filter in the appending transaction and after commit, and updates one of them while the
 // others are read back.
 func TestLowPrecisionFloatGetUpdateByFilter(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer db.Close()

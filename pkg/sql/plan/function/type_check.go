@@ -158,11 +158,58 @@ func arithmeticTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 		s2.Oid = types.T_uint64
 	}
 	cast, left, right := fixedTypeCastRule1(s1, s2)
+	left, right = widenArithmeticDecimalIntegerTargets(s1, s2, left, right)
 	if !cast && (promoted1 || promoted2) {
 		// vecf32 op vecf32 has no cast rule; a promoted operand must still be cast.
 		return true, s1, s2
 	}
 	return cast || hasJSON, left, right
+}
+
+// Arithmetic operands need an executable common physical decimal type, but
+// retain their individual scales (unlike comparison coefficient alignment).
+// Only widen an integer's insufficient synthesized target; declared assignment
+// casts and already sufficient arithmetic targets keep their existing domains.
+func widenArithmeticDecimalIntegerTargets(s1, s2, left, right types.Type) (types.Type, types.Type) {
+	if !left.Oid.IsDecimal() || !right.Oid.IsDecimal() {
+		return left, right
+	}
+	targets := [2]types.Type{left, right}
+	widen := false
+	for i, source := range [2]types.Type{s1, s2} {
+		source = decimalComparisonSource(source)
+		if source.IsIntOrUint() && targets[i].Width > 0 {
+			required := integerIntegralWidth(source.Oid) + targets[i].Scale
+			if required > targets[i].Width {
+				targets[i].Width = required
+				widen = true
+			}
+		}
+	}
+	if !widen {
+		return left, right
+	}
+	oid := left.Oid
+	if right.Oid.TypeLen() > oid.TypeLen() {
+		oid = right.Oid
+	}
+	for _, target := range targets {
+		var ok bool
+		oid, ok = decimalTypeForRequiredWidth(oid, target.Width)
+		if !ok {
+			return left, right
+		}
+	}
+	// A promoted pair shares its precision envelope as well as its physical
+	// representation, just like the existing fixed decimal coercions. Keep
+	// the operand scales separate: arithmetic aligns them in its own kernel.
+	width := max(targets[0].Width, targets[1].Width)
+	for i := range targets {
+		targets[i].Oid = oid
+		targets[i].Size = int32(oid.TypeLen())
+		targets[i].Width = width
+	}
+	return targets[0], targets[1]
 }
 
 func temporalArithmeticUsesFloat(left, right types.Type) bool {
@@ -250,6 +297,15 @@ func fixedTypeCastRule2(s1, s2 types.Type) (bool, types.Type, types.Type) {
 		return true, t1, t2
 	}
 	return hasJSON, s1, s2
+}
+
+// Integer division needs the same full integer input domain as +, -, * and %.
+// Keep this separate from /, whose decimal_division rules choose operand
+// precision from the original packed temporal types.
+func integerDivTypeCastRule(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	cast, left, right := fixedTypeCastRule2(s1, s2)
+	left, right = widenArithmeticDecimalIntegerTargets(s1, s2, left, right)
+	return cast, left, right
 }
 
 func numericJSONType(source types.Type) types.Type {
@@ -3290,4 +3346,51 @@ func addFixedImplicitTypeCastRule(fromType types.T, toType types.T, preferLevel 
 	fixedCanImplicitCastRule[fromType].from = fromType
 	fixedCanImplicitCastRule[fromType].toList[toType].canCast = true
 	fixedCanImplicitCastRule[fromType].toList[toType].preferLevel = preferLevel
+}
+
+// Strings must reach their function before calendar conversion can erase zero
+// components. Restrict non-string inputs to released overloads so numeric and
+// typed temporal coercion does not change when adding the string signatures.
+func incompleteCalendarTypeMatch(overloads []overload, inputs []types.Type, legacy int, positions ...int) checkResult {
+	for _, position := range positions {
+		if position < len(inputs) && (inputs[position].Oid.IsMySQLString() || inputs[position].Oid == types.T_any) {
+			r := fixedTypeMatch(overloads[legacy:], inputs)
+			if r.status == succeedMatched || r.status == succeedWithCast {
+				r.idx += legacy
+			}
+			return r
+		}
+	}
+	return fixedTypeMatch(overloads[:legacy], inputs)
+}
+func incompleteDateFormatTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 2, 0)
+}
+func incompleteToDaysTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 1, 0)
+}
+func incompleteToSecondsTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 1, 0)
+}
+func incompleteDayofweekTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 3, 0)
+}
+func incompleteWeekTypeMatch(o []overload, i []types.Type) checkResult {
+	return incompleteCalendarTypeMatch(o, i, 4, 0)
+}
+func incompleteDatediffTypeMatch(o []overload, i []types.Type) checkResult {
+	if len(i) != 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	raw := func(t types.T) bool { return t.IsMySQLString() || t == types.T_any }
+	a, b := raw(i[0].Oid), raw(i[1].Oid)
+	selected := 0
+	if a && b {
+		selected = 1
+	} else if a {
+		selected = 2
+	} else if b {
+		selected = 3
+	}
+	return fixedTypeMatchOnly(o, i, selected)
 }

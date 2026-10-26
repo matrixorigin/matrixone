@@ -5060,6 +5060,110 @@ func TestSetOperationMixedWidthCharUsesCommonPaddedType(t *testing.T) {
 	}
 }
 
+func TestSetOperationMixedWidthBinaryUsesCommonPaddedType(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		kind plan.Node_NodeType
+	}{
+		{"union", "select cast('a' as binary(1)) union select cast('a' as binary(4))", plan.Node_UNION},
+		{"union all", "select cast('a' as binary(1)) union all select cast('a' as binary(4))", plan.Node_UNION_ALL},
+		{"reversed", "select cast('a' as binary(4)) union select cast('a' as binary(1))", plan.Node_UNION},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			var setNode *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == tc.kind {
+					setNode = node
+					break
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Len(t, setNode.ProjectList, 1)
+			require.Equal(t, int32(types.T_binary), setNode.ProjectList[0].Typ.Id)
+			require.Equal(t, int32(4), setNode.ProjectList[0].Typ.Width)
+			for _, childID := range setNode.Children {
+				child := query.Nodes[childID]
+				require.Len(t, child.ProjectList, 1)
+				require.Equal(t, setNode.ProjectList[0].Typ.Id, child.ProjectList[0].Typ.Id)
+				require.Equal(t, setNode.ProjectList[0].Typ.Width, child.ProjectList[0].Typ.Width)
+			}
+		})
+	}
+}
+
+func TestSetOperationUnspecifiedBinaryWidthRemainsUnbounded(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		kind plan.Node_NodeType
+	}{
+		{"unbounded first union all", "select cast('hello-long' as binary) v union all select cast('x' as binary(1))", plan.Node_UNION_ALL},
+		{"unbounded last union all", "select cast('x' as binary(1)) v union all select cast('hello-long' as binary)", plan.Node_UNION_ALL},
+		{"unbounded first distinct", "select cast('hello-long' as binary) v union select cast('x' as binary(1))", plan.Node_UNION},
+		{"unbounded last distinct", "select cast('x' as binary(1)) v union select cast('hello-long' as binary)", plan.Node_UNION},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			var setNode *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == tc.kind {
+					setNode = node
+					break
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Len(t, setNode.ProjectList, 1)
+			require.Equal(t, int32(types.T_blob), setNode.ProjectList[0].Typ.Id)
+			require.Equal(t, int32(types.MaxLongTextLen), setNode.ProjectList[0].Typ.Width)
+			for _, childID := range setNode.Children {
+				child := query.Nodes[childID]
+				require.Len(t, child.ProjectList, 1)
+				require.Equal(t, int32(types.T_blob), child.ProjectList[0].Typ.Id)
+				require.Equal(t, int32(types.MaxLongTextLen), child.ProjectList[0].Typ.Width)
+			}
+		})
+	}
+}
+
+func TestSetOperationTextAndDatetimeKeepsFullTemporalWidth(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{"literal first", "select '2026-01-01' as d union all select cast('2026-02-02 10:20:30' as datetime)"},
+		{"datetime first", "select cast('2026-02-02 10:20:30' as datetime) as d union all select '2026-01-01'"},
+		{"fractional seconds", "select 'x' as d union all select cast('2026-02-02 10:20:30.123456' as datetime(6))"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			var setNode *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_UNION_ALL {
+					setNode = node
+					break
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Len(t, setNode.ProjectList, 1)
+			require.Equal(t, int32(types.T_varchar), setNode.ProjectList[0].Typ.Id)
+			require.GreaterOrEqual(t, setNode.ProjectList[0].Typ.Width, int32(26))
+			for _, childID := range setNode.Children {
+				child := query.Nodes[childID]
+				require.Len(t, child.ProjectList, 1)
+				require.Equal(t, setNode.ProjectList[0].Typ.Width, child.ProjectList[0].Typ.Width)
+			}
+		})
+	}
+}
+
 func TestSetOperationMixedCharVarcharCommonTypeIsOrderIndependent(t *testing.T) {
 	for _, tc := range []struct {
 		name string

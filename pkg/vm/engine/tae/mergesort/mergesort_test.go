@@ -29,13 +29,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/mocks"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSort1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()
 	pool := mocks.GetTestVectorPool()
 
@@ -70,7 +68,6 @@ func TestSort1(t *testing.T) {
 	}
 }
 func TestSort2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()
 	for _, vecType := range vecTypes {
 		vec := containers.MockVector(vecType, 10000, false, nil)
@@ -107,7 +104,6 @@ func TestSortBlockColumns(t *testing.T) {
 }
 
 func TestJSONClusterKeyPreservesPhysicalOrderThroughWriteAndMerge(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	pool := mocks.GetTestVectorPool()
 	rawJSON := func(text string) []byte {
 		bj, err := bytejson.ParseFromString(text)
@@ -155,7 +151,6 @@ func TestJSONClusterKeyPreservesPhysicalOrderThroughWriteAndMerge(t *testing.T) 
 }
 
 func TestJSONClusterKeyPreservesDivergentLegacyArrayOrderThroughWriteAndMerge(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	pool := mocks.GetTestVectorPool()
 	rawJSON := func(text string) []byte {
 		bj, err := bytejson.ParseFromString(text)
@@ -204,7 +199,6 @@ func TestJSONClusterKeyPreservesDivergentLegacyArrayOrderThroughWriteAndMerge(t 
 }
 
 func TestJSONClusterKeyRejectsLegacyRawMergedRunReinterpretation(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	pool := mocks.GetTestVectorPool()
 	rawJSON := func(text string) []byte {
 		bj, err := bytejson.ParseFromString(text)

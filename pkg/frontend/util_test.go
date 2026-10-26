@@ -3605,3 +3605,19 @@ func TestLowPrecFloatFrontendPaths(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkMakeExecuteSqlDiscardedPreparedSQL(b *testing.B) {
+	for _, size := range []int{16, 1 << 20} {
+		b.Run(fmt.Sprint(size), func(b *testing.B) {
+			prepared := &PrepareStmt{Sql: "select '" + strings.Repeat("x", size) + "'"}
+			ses := &Session{prepareStmts: map[string]*PrepareStmt{"audit": prepared}}
+			stmt := &tree.Select{}
+			b.ReportAllocs()
+			for b.Loop() {
+				if got := makeExecuteSql(b.Context(), ses, stmt, true, "audit", "execute audit", 4); got != "exec..." {
+					b.Fatalf("unexpected diagnostic: %q", got)
+				}
+			}
+		})
+	}
+}

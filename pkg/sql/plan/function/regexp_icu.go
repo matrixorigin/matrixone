@@ -25,9 +25,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/clipperhouse/uax29/v2/graphemes"
-	"github.com/dlclark/regexp2"
-	regexp2syntax "github.com/dlclark/regexp2/syntax"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexp2"
+	regexp2syntax "github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexp2/syntax"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexpclass"
 )
 
 // regexp2MatchTimeout bounds the only path in which MatrixOne permits
@@ -94,6 +95,8 @@ type regexp2Matcher struct {
 	rule              string
 	binary            bool
 	hasGrapheme       bool
+	lineMode          regexp2.LineMode
+	lineMask          bool
 	userGroupToEngine []int
 	groupName         map[string]int
 	estimatedBytes    int
@@ -193,7 +196,17 @@ func requiresRegexp2Pattern(pattern string) bool {
 			}
 		}
 		if pattern[i] == '(' {
+			if strings.HasPrefix(pattern[i:], "(?#") {
+				return true
+			}
 			if end, enabled, scoped, ok := regexpInlineFreeSpacing(pattern, i, freeSpacing); ok {
+				// RE2 accepts only these inline options. ICU comments and flags
+				// must be classified before the regular compiler is selected.
+				for _, option := range pattern[i+2 : end] {
+					if !strings.ContainsRune("imsU-:)", option) {
+						return true
+					}
+				}
 				if scoped {
 					freeSpacingStack = append(freeSpacingStack, freeSpacing)
 					freeSpacing = enabled
@@ -551,6 +564,12 @@ func isRegexpPatternWhitespace(ch byte) bool {
 // consumed together so forms such as (?ix:...) do not make a comment scanner
 // lose synchronization. enabled is the x state after applying the header.
 func regexpInlineFreeSpacing(pattern string, start int, current bool) (end int, enabled, scoped, ok bool) {
+	return regexpInlineOption(pattern, start, current, 'x')
+}
+
+// regexpInlineOption reads one flag's state while consuming the complete
+// existing inline-option grammar. Other flags must not split the header.
+func regexpInlineOption(pattern string, start int, current bool, option byte) (end int, enabled, scoped, ok bool) {
 	if start+2 >= len(pattern) || pattern[start] != '(' || pattern[start+1] != '?' {
 		return 0, false, false, false
 	}
@@ -569,10 +588,10 @@ func regexpInlineFreeSpacing(pattern string, start int, current bool) (end int, 
 			off = true
 		case '+':
 			off = false
-		case 'x', 'X':
-			enabled = !off
-			seenOption = true
-		case 'c', 'C', 'd', 'D', 'e', 'E', 'i', 'I', 'm', 'M', 'n', 'N', 's', 'S', 'u', 'U':
+		case 'c', 'C', 'd', 'D', 'e', 'E', 'i', 'I', 'm', 'M', 'n', 'N', 's', 'S', 'u', 'U', 'x', 'X':
+			if pattern[i] == option || pattern[i] == option-('a'-'A') {
+				enabled = !off
+			}
 			seenOption = true
 		default:
 			return 0, false, false, false
@@ -1313,17 +1332,17 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 	pat, pureMatchType string,
 	binary bool,
 ) (*regexp2Matcher, error) {
-	rule := regexpPatternWithPureMatchType(pat, pureMatchType)
 	binaryCaseFold := binary && strings.ContainsRune(pureMatchType, 'i')
-	key := regexpCacheKey{pattern: rule, binary: binary, binaryCaseFold: binaryCaseFold}
+	key := regexpCacheKey{pattern: pat, matchType: pureMatchType, binary: binary, binaryCaseFold: binaryCaseFold}
 	if rs.icu == nil {
 		rs.icu = make(map[regexpCacheKey]*regexp2Matcher, mapSizeForRegexp)
 	}
 	if matcher, ok := rs.icu[key]; ok {
 		return matcher, nil
 	}
-	if len(rule) > regexp2MaxPatternBytes {
-		return nil, regexp2InvalidInputf("regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxPatternBytes)
+	rule, err := regexpPatternWithPureMatchType(pat, pureMatchType, binary)
+	if err != nil {
+		return nil, err
 	}
 	if binary {
 		if err := validateBinaryRegexpPattern(rule); err != nil {
@@ -1334,7 +1353,22 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 		return nil, err
 	}
 	rule = strings.Clone(rule)
-	key.pattern = rule
+	key.pattern = strings.Clone(pat)
+	key.matchType = strings.Clone(pureMatchType)
+	lineMode := regexp2.UnixLines
+	if regexpMatchTypeWideMultiline(pureMatchType) {
+		lineMode = regexp2.WideTextLines
+		if binary {
+			lineMode = regexp2.WideBinaryLines
+		}
+	}
+	// The shared classifier reads the original rule with the flag prefix
+	// before the possessive rewrite obscures its flavor. The binary route
+	// leaves \U escapes to the engine as literal text.
+	classDialect := regexpclass.DialectRegexp2
+	if binary {
+		classDialect = regexpclass.DialectRegexp2Binary
+	}
 	expression, err := translateRegexp2Pattern(rule, binary)
 	if err != nil {
 		return nil, err
@@ -1363,11 +1397,16 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 		return nil, err
 	}
 	defer release()
+	// The cheap size verdicts and the engine's own parse gate ran above, so
+	// classification (which never fails) executes only for admitted
+	// patterns and inside the reserved compilation budget.
+	lineMask := lineMode != regexp2.UnixLines &&
+		regexpclass.Classify(rule, classDialect).SuppressCRLFInterior()
 	userGroupToEngine, groupName, err := regexp2CaptureMapping(pat, tree)
 	if err != nil {
 		return nil, err
 	}
-	_, err = compileRegexp2Expression(expression, userGroupToEngine)
+	_, err = compileRegexp2Expression(expression, userGroupToEngine, lineMode, lineMask)
 	if err != nil {
 		return nil, err
 	}
@@ -1378,6 +1417,8 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 		rule:              rule,
 		binary:            binary,
 		hasGrapheme:       !binary && regexp2PatternHasGrapheme(pat),
+		lineMode:          lineMode,
+		lineMask:          lineMask,
 		userGroupToEngine: userGroupToEngine,
 		groupName:         groupName,
 		estimatedBytes:    estimatedBytes,
@@ -2035,13 +2076,19 @@ func regexp2EvaluationBudget(matcher *regexp2Matcher) int64 {
 	return budget
 }
 
-func compileRegexp2Expression(expression string, userGroupToEngine []int) (*regexp2.Regexp, error) {
+func compileRegexp2Expression(
+	expression string,
+	userGroupToEngine []int,
+	lineMode regexp2.LineMode,
+	lineMask bool,
+) (*regexp2.Regexp, error) {
 	expression = remapRegexp2Backreferences(expression, userGroupToEngine)
 	re, err := regexp2.Compile(expression, regexp2.RE2)
 	if err != nil {
 		return nil, err
 	}
 	re.MatchTimeout = regexp2MatchTimeout
+	re.SetLinePolicy(lineMode, lineMask)
 	return re, nil
 }
 
@@ -2078,7 +2125,7 @@ func (m *regexp2Matcher) forSubject(subject string) (*regexp2Matcher, error) {
 		release()
 		return nil, err
 	}
-	re, err := compileRegexp2Expression(expression, m.userGroupToEngine)
+	re, err := compileRegexp2Expression(expression, m.userGroupToEngine, m.lineMode, m.lineMask)
 	if err != nil {
 		release()
 		return nil, err
@@ -2089,6 +2136,8 @@ func (m *regexp2Matcher) forSubject(subject string) (*regexp2Matcher, error) {
 		rule:              m.rule,
 		binary:            m.binary,
 		hasGrapheme:       false,
+		lineMode:          m.lineMode,
+		lineMask:          m.lineMask,
 		userGroupToEngine: m.userGroupToEngine,
 		groupName:         m.groupName,
 		estimatedBytes:    compiledBytes,

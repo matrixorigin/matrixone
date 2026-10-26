@@ -165,8 +165,11 @@ const (
 	MORPCVersion127    int64 = 127 // IndexSearchScan internal_topk / max_internal_topk search knobs
 	MORPCVersion128    int64 = 128 // category-preserving mixed JSON/numeric comparisons
 	MORPCVersion129    int64 = 129 // selected JSON ELT and opaque text expression execution
-	MORPCVersion130    int64 = 130 // bf16/float16/float8/float4/vecf8/vecf4 types and VECTOR_MATMUL/VECBLOCK functions
-	MORPCLatestVersion       = MORPCVersion130
+	MORPCVersion130    int64 = 130 // incomplete temporal string overloads and rejection diagnostics
+	MORPCVersion131    int64 = 131 // exact weighted percentile aggregate remote dispatch
+	MORPCVersion132    int64 = 132 // decimal float rounding and strict textual float conversions
+	MORPCVersion133    int64 = 133 // bf16/float16/float8/float4/vecf8/vecf4 types and VECTOR_MATMUL/VECBLOCK functions
+	MORPCLatestVersion       = MORPCVersion133
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

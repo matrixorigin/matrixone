@@ -458,6 +458,8 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	nodeID int32, subquery *plan.SubqueryRef, ctx *BindContext,
 	nullResultRejected bool, consumer existentialConsumer, guarded bool,
 ) (int32, *plan.Expr, error) {
+	// Flattening can rewrite a previously classified CTE subtree.
+	builder.stableCTERoots = nil
 	if subquery.Typ == plan.SubqueryRef_SCALAR && subquery.Child == nil && subquery.RowSize > 1 {
 		return 0, nil, moerr.NewInvalidInput(builder.GetContext(), "subquery should return 1 column")
 	}

@@ -261,7 +261,7 @@ func lowPrecTextValue(proc *process.Process, text string, isBinary bool, mode SQ
 	if f, d, err := types.Float32RoundToOddString(text); err == nil {
 		return f, d, nil
 	}
-	if mode == SQLCompatibilityMatrixOne || isExtensionFloatCandidate(text) {
+	if mode == SQLCompatibilityMatrixOne || isRadixFloatCandidate(text) {
 		return 0, 0, moerr.NewInvalidInputNoCtxf("invalid float value %q", text)
 	}
 	var f float32

@@ -64,9 +64,67 @@ func ValidateIntervalFrameBounds(proc *process.Process, pn *plan.Plan) error {
 				}
 			}
 		}
+		// tmrank carries no frame on its window spec (#29947): its width
+		// travels as published (count, unit) function arguments the operator
+		// materializes per execution. Validate them here so an invalid
+		// EXECUTE-d width fails this query even when empty input or a LIMIT 0
+		// shortcut removes the physical window operator; the check borrows the
+		// plan and discards normalized copies (decisions D16/D18).
+		for _, expr := range node.WinSpecList {
+			fn := expr.GetW().GetWindowFunc().GetF()
+			if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "tmrank" || len(fn.Args) != 3 {
+				continue
+			}
+			if _, err := MaterializeLocalRankWindowInterval(proc, fn.Args[1], fn.Args[2]); err != nil {
+				return err
+			}
+		}
 		pending = append(pending, node.Children...)
 	}
 	return nil
+}
+
+// MaterializeLocalRankWindowInterval is the shared-materialization adapter
+// for tmrank's published width representation (decisions D16/D18): it accepts
+// the published (count, unit) pair in either durable form and returns the
+// transient normalized T_interval pair without mutating the plan. A raw pair
+// -- retained marker source or already-substituted literal, both marked by
+// the MySQL-string unit literal -- runs the same raw pipeline prepared frame
+// bounds use (source evaluation, domain dispatch through the window text
+// grammar or MySQL's nearest-integer conversion, NormalizeWindowInterval,
+// overflow checks); a normalized pair (int64 const count, possibly
+// null-marked for the NULL-arithmetic outcome, plus int64 unit code) is
+// validated here with those same magnitude checks before the immutable
+// passthrough, keeping the D16 owner row-independent: an overflowing width
+// fails the query even when empty input or a LIMIT 0 shortcut removes the
+// window operator, while ordinary RANGE frame bounds keep the clamping
+// behavior their recorded results pin. A raw NULL width errors here while a
+// valid normalized NULL-arithmetic count succeeds and flows into the
+// resolver's key-dependent NULL-interval branch.
+func MaterializeLocalRankWindowInterval(proc *process.Process, count, unit *plan.Expr) (*plan.Expr, error) {
+	if count == nil || unit == nil {
+		return nil, moerr.NewInvalidInputNoCtx("invalid tmrank window interval")
+	}
+	// Normalized pair: same shape detection as the shared fast path, with the
+	// tmrank-owned magnitude validation the ordinary bounds deliberately omit.
+	unitLit, unitIsCode := unit.GetLit().Value.(*plan.Literal_I64Val)
+	if unitIsCode && unit.Typ.Id == int32(types.T_int64) && count.Typ.Id == int32(types.T_int64) &&
+		count.GetLit() != nil && unitLit.I64Val > int64(types.IntervalTypeInvalid) && unitLit.I64Val < int64(types.IntervalTypeMax) {
+		if value, ok := count.GetLit().Value.(*plan.Literal_I64Val); ok && !count.GetLit().Isnull {
+			unitType := types.IntervalType(unitLit.I64Val)
+			if err := types.JudgeIntervalNumOverflow(value.I64Val, unitType); err != nil {
+				return nil, err
+			}
+			if !temporalRangeIntervalConversionOK(value.I64Val, unitType) {
+				return nil, moerr.NewOutOfRange(proc.Ctx, "int64", "window interval")
+			}
+		}
+	}
+	pair := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_interval)},
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{count, unit}}},
+	}
+	return materializeWindowInterval(proc, pair)
 }
 
 func materializeWindowInterval(proc *process.Process, expr *plan.Expr) (*plan.Expr, error) {
@@ -89,6 +147,12 @@ func materializeWindowInterval(proc *process.Process, expr *plan.Expr) (*plan.Ex
 			if !ok || value.I64Val < 0 {
 				return invalid()
 			}
+			// The magnitude checks the raw pipeline enforces are deliberately
+			// not applied here: ordinary RANGE frame bounds also publish
+			// normalized pairs, and an oversized ordinary bound keeps its
+			// recorded behavior (clamped during row evaluation). tmrank's
+			// widths validate through MaterializeLocalRankWindowInterval, the
+			// owning local-rank adapter, instead.
 		}
 		return expr, nil
 	}

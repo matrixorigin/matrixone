@@ -169,7 +169,11 @@ func buildPreparedBoundQuery(ctx context.Context, ses FeSession, compiler plan2.
 	var bound *plan2.PreparedExecutionPlan
 	_, err := buildPlanWithStats(planning, ses, compiler, func() (*plan2.Plan, error) {
 		var buildErr error
-		bound, buildErr = plan2.BuildPreparedExecutionPlan(compiler, stmt, bindings, values)
+		var selected bool
+		bound, selected, buildErr = buildViewSchemaValidationPreparedPlan(planning, ses, compiler, stmt, bindings, values)
+		if !selected {
+			bound, buildErr = plan2.BuildPreparedExecutionPlan(compiler, stmt, bindings, values)
+		}
 		if buildErr != nil {
 			return nil, buildErr
 		}

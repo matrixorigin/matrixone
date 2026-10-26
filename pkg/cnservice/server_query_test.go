@@ -20,7 +20,6 @@ import (
 	"math"
 	goruntime "runtime"
 	"runtime/debug"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -38,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
-	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_incr"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_moserver"
 	"github.com/matrixorigin/matrixone/pkg/frontend/test/mock_query"
@@ -151,38 +149,10 @@ func Test_service_handleISCPDrainConsumerRenewFenceOnly(t *testing.T) {
 	require.False(t, exec.IsJobFenced(key))
 }
 
-func Test_service_handleISCPDrainConsumerWaitsForExecutorRuntime(t *testing.T) {
-	oldTimeout := iscpExecutorReadyTimeout
-	iscpExecutorReadyTimeout = time.Second
-	oldLookup := iscpGetExecutorRuntimeFn
-	defer func() {
-		iscpExecutorReadyTimeout = oldTimeout
-		iscpGetExecutorRuntimeFn = oldLookup
-	}()
-
+func Test_service_handleISCPDrainConsumerFencesBeforeExecutorRuntime(t *testing.T) {
 	const runnerCN = "late-runner-cn"
 	key := iscp.NewJobRuntimeKey(1, 42, "index_idx1", 7)
 	defer iscp.RemoveCNJobFence(runnerCN, key)
-	exec := &iscp.ISCPTaskExecutor{}
-	defer iscp.UnregisterExecutorRuntime(runnerCN, exec)
-	firstLookup := make(chan struct{})
-	var once sync.Once
-	iscpGetExecutorRuntimeFn = func(cnUUID string) (*iscp.ISCPTaskExecutor, bool) {
-		missing := false
-		once.Do(func() {
-			missing = true
-			close(firstLookup)
-		})
-		if missing {
-			return nil, false
-		}
-		return iscp.GetExecutorRuntime(cnUUID)
-	}
-	go func() {
-		<-firstLookup
-		iscp.RegisterExecutorRuntime(runnerCN, exec)
-	}()
-
 	s := &service{cfg: &Config{UUID: runnerCN}}
 	resp := &query.Response{}
 	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
@@ -194,26 +164,29 @@ func Test_service_handleISCPDrainConsumerWaitsForExecutorRuntime(t *testing.T) {
 		},
 	}, resp, nil))
 	require.True(t, resp.ISCPDrainConsumerResponse.Success)
+	exec := &iscp.ISCPTaskExecutor{}
+	iscp.RegisterExecutorRuntime(runnerCN, exec)
+	defer iscp.UnregisterExecutorRuntime(runnerCN, exec)
+	require.True(t, exec.IsJobFenced(key), "a later executor must inherit the CN fence")
+	_, admitted := exec.RegisterRunningConsumer(key, key.JobID, 1, nil, nil)
+	require.False(t, admitted, "the later executor must not start the dropped consumer")
 }
 
-func Test_service_handleISCPDrainConsumerReturnsRetryableNotReady(t *testing.T) {
-	oldTimeout := iscpExecutorReadyTimeout
-	iscpExecutorReadyTimeout = time.Millisecond
-	defer func() { iscpExecutorReadyTimeout = oldTimeout }()
-
+func Test_service_handleISCPDrainConsumerMissingRuntimeFenceRollback(t *testing.T) {
 	const runnerCN = "not-ready-runner-cn"
 	key := iscp.NewJobRuntimeKey(0, 42, "index_idx1", 7)
 	defer iscp.RemoveCNJobFence(runnerCN, key)
 	s := &service{cfg: &Config{UUID: runnerCN}}
-	err := s.handleISCPDrainConsumer(context.Background(), &query.Request{
+	resp := &query.Response{}
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
 		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
 			TableID: 42,
 			JobName: "index_idx1",
 			JobID:   7,
 		},
-	}, &query.Response{}, nil)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrRetryForCNRollingRestart))
-	resp := &query.Response{}
+	}, resp, nil))
+	require.True(t, resp.ISCPDrainConsumerResponse.Success)
+	resp = &query.Response{}
 	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
 		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
 			TableID:        key.TableID,
@@ -223,7 +196,7 @@ func Test_service_handleISCPDrainConsumerReturnsRetryableNotReady(t *testing.T) 
 		},
 	}, resp, nil))
 	require.True(t, resp.ISCPDrainConsumerResponse.Success,
-		"the pending CN fence must remain renewable before executor publication")
+		"the CN fence must remain renewable before executor publication")
 	require.True(t, iscp.RenewCNJobFence(runnerCN, key, time.Second))
 
 	resp = &query.Response{}
@@ -236,6 +209,41 @@ func Test_service_handleISCPDrainConsumerReturnsRetryableNotReady(t *testing.T) 
 		},
 	}, resp, nil))
 	require.False(t, iscp.RenewCNJobFence(runnerCN, key, time.Second))
+	exec := &iscp.ISCPTaskExecutor{}
+	iscp.RegisterExecutorRuntime(runnerCN, exec)
+	defer iscp.UnregisterExecutorRuntime(runnerCN, exec)
+	require.False(t, exec.IsJobFenced(key), "rollback must remove the fence before publication")
+}
+
+func Test_service_handleISCPDrainConsumerRuntimeStopsDuringWait(t *testing.T) {
+	oldTimeout, oldLookup := iscpExecutorReadyTimeout, iscpGetExecutorRuntimeFn
+	iscpExecutorReadyTimeout = 20 * time.Millisecond
+	defer func() {
+		iscpExecutorReadyTimeout, iscpGetExecutorRuntimeFn = oldTimeout, oldLookup
+	}()
+	const runnerCN = "stopping-runner-cn"
+	key := iscp.NewJobRuntimeKey(1, 42, "index_idx1", 7)
+	defer iscp.RemoveCNJobFence(runnerCN, key)
+	exec := &iscp.ISCPTaskExecutor{}
+	iscp.RegisterExecutorRuntime(runnerCN, exec)
+	defer iscp.UnregisterExecutorRuntime(runnerCN, exec)
+	lookups := 0
+	iscpGetExecutorRuntimeFn = func(string) (*iscp.ISCPTaskExecutor, bool) {
+		lookups++
+		if lookups == 2 {
+			iscp.UnregisterExecutorRuntime(runnerCN, exec)
+		}
+		return nil, false
+	}
+	s := &service{cfg: &Config{UUID: runnerCN}}
+	resp := &query.Response{}
+	require.NoError(t, s.handleISCPDrainConsumer(context.Background(), &query.Request{
+		ISCPDrainConsumerRequest: &query.ISCPDrainConsumerRequest{
+			AccountID: 1, TableID: 42, JobName: "index_idx1", JobID: 7,
+		},
+	}, resp, nil))
+	require.True(t, resp.ISCPDrainConsumerResponse.Success)
+	require.GreaterOrEqual(t, lookups, 2)
 }
 
 func Test_service_handleISCPDrainConsumerRetriesInjectedStartupGap(t *testing.T) {
@@ -561,7 +569,7 @@ func Test_service_handleFileServiceCacheEvictRequest(t *testing.T) {
 func Test_service_handleReloadAutoIncrementCache(t *testing.T) {
 
 	ctl := gomock.NewController(t)
-	incSvc := mock_incr.NewMockAutoIncrementService(ctl)
+	incSvc := mock_frontend.NewMockAutoIncrementService(ctl)
 	incSvc.EXPECT().Reload(gomock.Any(), gomock.Any()).AnyTimes()
 
 	ctx := context.Background()

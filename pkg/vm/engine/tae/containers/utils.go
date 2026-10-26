@@ -606,54 +606,6 @@ func UpdateValue(col *vector.Vector, row uint32, val any, isNull bool, mp *mpool
 
 // ### Only used in testcases
 
-func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {
-	if cnt == 1 {
-		return []*batch.Batch{bat}
-	}
-	length := bat.Vecs[0].Length()
-	rows := length / cnt
-	if length%cnt == 0 {
-		bats := make([]*batch.Batch, 0, cnt)
-		for i := 0; i < cnt; i++ {
-			newBat := batch.New(bat.Attrs)
-			for j := 0; j < len(bat.Vecs); j++ {
-				window, _ := bat.Vecs[j].CloneWindow(i*rows, (i+1)*rows, nil)
-				newBat.Vecs[j] = window
-			}
-			bats = append(bats, newBat)
-		}
-		return bats
-	}
-	rowArray := make([]int, 0)
-	if length/cnt == 0 {
-		for i := 0; i < length; i++ {
-			rowArray = append(rowArray, 1)
-		}
-	} else {
-		left := length
-		for i := 0; i < cnt; i++ {
-			if left >= rows && i < cnt-1 {
-				rowArray = append(rowArray, rows)
-			} else {
-				rowArray = append(rowArray, left)
-			}
-			left -= rows
-		}
-	}
-	start := 0
-	bats := make([]*batch.Batch, 0, cnt)
-	for _, row := range rowArray {
-		newBat := batch.New(bat.Attrs)
-		for j := 0; j < len(bat.Vecs); j++ {
-			window, _ := bat.Vecs[j].CloneWindow(start, start+row, nil)
-			newBat.Vecs[j] = window
-		}
-		start += row
-		bats = append(bats, newBat)
-	}
-	return bats
-}
-
 func NewNonNullBatchWithSharedMemory(b *batch.Batch, mp *mpool.MPool) *Batch {
 	bat := NewBatch()
 	for i, attr := range b.Attrs {

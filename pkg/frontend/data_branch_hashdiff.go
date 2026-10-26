@@ -268,7 +268,14 @@ func handleDelsOnLCA(
 		return nil, err
 	}
 
-	forceReaderProbe := tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load()
+	// The SQL probe resolves db.table by name under the statement account.
+	// A lineage node owned by another account (design §6.4, e.g. reopened
+	// under a subscription source owner) would resolve that name to a
+	// same-named local decoy or fail outright, so it is always scanned by
+	// id under its own owner identity via the reader fallback.
+	lcaOwnerMismatch := tblStuff.resolvedLCAIdentity(ctx, ses).account != ses.GetAccountId()
+	forceReaderProbe := lcaOwnerMismatch ||
+		(tblStuff.lcaReaderProbeMode != nil && tblStuff.lcaReaderProbeMode.Load())
 	if forceReaderProbe {
 		sqlRet, err = runLCAProbeWithReaderFallback(ctx, ses, tBat, tblStuff, snapshotTS)
 		if err != nil {
@@ -790,8 +797,17 @@ func runLCAProbeWithReaderFallback(
 	}()
 
 	scanStart := time.Now()
+	// Scan under the lineage node's owner identity; the statement context
+	// alone would route the by-id catalog read to the wrong account when the
+	// node lives under another owner (design §6.4). Derive the scan context
+	// from the *current* caller context: the descriptor's captured resolution
+	// context predates the enclosing probe's child cancellation, so attaching
+	// the owner account to it would make cancellation and deadline lossy for
+	// every in-flight catalog and storage read here (identityCtx keeps the
+	// live context when accounts already match).
+	scanCtx := identityCtx(ctx, tblStuff.resolvedLCAIdentity(ctx, ses))
 	err = scanSnapshotRelationByIDWithFallback(
-		ctx,
+		scanCtx,
 		"lca-reader-fallback",
 		ses,
 		tblStuff.lcaRel.GetTableID(ctx),
@@ -3381,6 +3397,7 @@ func hydrateHistoricalDataBranchBatch(
 	ses *Session,
 	projected *batch.Batch,
 	tblStuff tableStuff,
+	endpointIdent branchIdentity,
 	endpointRel engine.Relation,
 	endpointSnapshot types.TS,
 ) (err error) {
@@ -3404,6 +3421,7 @@ func hydrateHistoricalDataBranchBatch(
 	tBat.SetRowCount(projected.RowCount())
 
 	probeStuff := dataBranchHistoricalProbeStuff(ctx, tblStuff, endpointRel)
+	probeStuff.lcaIdent = &endpointIdent
 	probe, err := runLCAProbeWithReaderFallback(
 		ctx, ses, tBat, probeStuff, endpointSnapshot,
 	)
@@ -3416,6 +3434,42 @@ func hydrateHistoricalDataBranchBatch(
 	)
 }
 
+// ownerScopedChangesHandle re-attaches the physical segment owner identity to
+// the live caller context on every Next (design §6). Construction-time
+// identity is not enough: replay runs inside Next, and the engine's lost
+// partition-state recovery reopens the physical table by id through
+// Engine.GetRelationById, which resolves names in the *context's* account.
+// Forwarding the statement context unchanged routes that recovery to the
+// subscriber namespace, where the publisher-owned table cannot resolve.
+// Deriving from the live context (identityCtx) keeps cancellation and every
+// later value attachment intact; for a segment owned by the statement account
+// the derivation is a no-op and local-local diffs pass their context through
+// byte-identical.
+type ownerScopedChangesHandle struct {
+	inner engine.ChangesHandle
+	ident branchIdentity
+}
+
+// scopeChangesHandleToSegmentOwner wraps a segment change handle so every
+// Next runs under the segment's physical owner identity.
+func scopeChangesHandleToSegmentOwner(
+	handle engine.ChangesHandle,
+	ident branchIdentity,
+) engine.ChangesHandle {
+	return &ownerScopedChangesHandle{inner: handle, ident: ident}
+}
+
+func (h *ownerScopedChangesHandle) Next(
+	ctx context.Context,
+	mp *mpool.MPool,
+) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+	return h.inner.Next(identityCtx(ctx, h.ident), mp)
+}
+
+func (h *ownerScopedChangesHandle) Close() error {
+	return h.inner.Close()
+}
+
 type historicalDataBranchChangesHandle struct {
 	inner            engine.ChangesHandle
 	sourceMapping    []int
@@ -3423,7 +3477,10 @@ type historicalDataBranchChangesHandle struct {
 	ses              *Session
 	endpointRel      engine.Relation
 	endpointSnapshot types.TS
-	hydrate          bool
+	// endpointIdent is the physical owner identity endpointRel was opened
+	// under (design §6); hydration probes the endpoint under it.
+	endpointIdent branchIdentity
+	hydrate       bool
 }
 
 func (h *historicalDataBranchChangesHandle) Next(
@@ -3439,7 +3496,7 @@ func (h *historicalDataBranchChangesHandle) Next(
 		return data, tombstone, hint, nil
 	}
 	if err = hydrateHistoricalDataBranchBatch(
-		ctx, h.ses, data, h.tblStuff, h.endpointRel, h.endpointSnapshot,
+		ctx, h.ses, data, h.tblStuff, h.endpointIdent, h.endpointRel, h.endpointSnapshot,
 	); err != nil {
 		data.Clean(mp)
 		if tombstone != nil {

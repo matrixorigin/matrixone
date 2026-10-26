@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bytedance/sonic"
@@ -184,6 +185,30 @@ func TestFulltext2CreateStartFeedsBuilder(t *testing.T) {
 	require.Equal(t, vm.CancelResult, res)
 	st.reset(tf, proc)
 	st.free(tf, proc, false, nil)
+}
+
+func TestFulltext2CreateLongPhysicalIdentity(t *testing.T) {
+	var ids []string
+	for _, suffix := range []string{"first", "second"} {
+		t.Run(suffix, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			cfg, err := sonic.Marshal(fulltext2.TableConfig{DbName: "db", IndexTable: strings.Repeat("long_physical_generation_", 8) + suffix, Parser: fulltext2.ParserNgram})
+			require.NoError(t, err)
+			tf, vecs := ft2CreateArgVecs(t, mp, string(cfg), 1, "apple")
+			defer func() {
+				for _, vec := range vecs {
+					vec.Free(mp)
+				}
+			}()
+			st := &fulltext2CreateState{}
+			defer st.free(tf, proc, false, nil)
+			require.NoError(t, st.start(tf, proc, 0, nil))
+			require.LessOrEqual(t, len(fulltext2.SubIndexId(st.uid, int(^uint(0)>>1))), 128)
+			ids = append(ids, strings.Split(st.uid, ":")[0])
+		})
+	}
+	require.NotEqual(t, ids[0], ids[1], "do not truncate distinct physical identities to a shared prefix")
 }
 
 func TestFulltext2CreatePartialNullKeepsInclude(t *testing.T) {
