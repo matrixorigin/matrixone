@@ -58,7 +58,7 @@ func TestRegexpMultilineSyntaxBoundaries(t *testing.T) {
 
 func TestRegexpMultilineTerminators(t *testing.T) {
 	for _, tc := range []struct{ name, separator string }{
-		{"LF", "\n"}, {"CR", "\r"}, {"CRLF", "\r\n"},
+		{"LF", "\n"}, {"CR", "\r"}, {"CRLF", "\r\n"}, {"VT", "\v"}, {"FF", "\f"},
 		{"NEL", "\u0085"}, {"LS", "\u2028"}, {"PS", "\u2029"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,11 +102,19 @@ func TestRegexpMultilineTerminators(t *testing.T) {
 
 func TestRegexpMultilineBinaryAndPositionControls(t *testing.T) {
 	op := newOpBuiltInRegexp()
-	for _, separator := range []string{"\r", "\x85"} {
+	// The binary matching alphabet terminates lines only on the ASCII
+	// control bytes CR, VT and FF (plus the native LF).
+	for _, separator := range []string{"\r", "\v", "\f"} {
 		got, err := op.regMap.regularLikeWithMode(`^b`, "a"+separator+"b", "m", true)
 		require.NoError(t, err)
 		require.True(t, got)
 		got, err = op.regMap.regularLikeWithMode(`^b`, "a"+separator+"b", "mu", true)
+		require.NoError(t, err)
+		require.False(t, got)
+	}
+	// Byte 0x85 never begins a line in the binary alphabet.
+	for _, mode := range []string{"m", "mi", "mu"} {
+		got, err := op.regMap.regularLikeWithMode(`^b`, "a\x85b", mode, true)
 		require.NoError(t, err)
 		require.False(t, got)
 	}
@@ -136,21 +144,142 @@ func TestRegexpMultilineBinaryAndPositionControls(t *testing.T) {
 	}
 }
 
+// TestRegexpMultilineAdmissionIdentity pins the regexp2 admission contract
+// of issue #30210: the native line policy must leave the compiled program
+// identical in every match_type, and the existing admission verdicts must
+// not move.
+func TestRegexpMultilineAdmissionIdentity(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	require.True(t, requiresRegexp2Pattern(`^b(?=b)`))
+
+	anchorDense := "(?m)"
+	for i := 0; i < 32; i++ {
+		anchorDense += "^$"
+	}
+	anchorDense += "(?=\n)"
+
+	// Mode identity: the compiled program is the user pattern, identical
+	// TrackCount in every mode.
+	for _, pin := range []struct {
+		name, expression string
+		want             int
+	}{
+		{"caret_lookahead", `(?m)^b(?=b)`, 7},
+		{"anchor_dense_32pairs", anchorDense, 7},
+		{"bare_caret", `(?m)^`, 3},
+		{"alternation_caret_or_z", "(?m)(?:^\n|z)", 5},
+	} {
+		_, code, release, err := regexp2PrepareExpression(pin.expression)
+		require.NoError(t, err)
+		got := code.TrackCount
+		release()
+		require.Equal(t, pin.want, got, pin.name)
+	}
+	// Production composition identity: composer plus translator keep the
+	// plain compiled program in wide and Unix multiline modes.
+	for _, pin := range []struct {
+		name, pat, matchType string
+	}{
+		{"production_wideM_caret_lookahead", `^b(?=b)`, "m"},
+		{"production_unixMU_caret_lookahead", `^b(?=b)`, "mu"},
+		{"production_wideM_anchor_dense", anchorDense[len("(?m)"):], "m"},
+	} {
+		rule, err := regexpPatternWithPureMatchType(pin.pat, pin.matchType, false)
+		require.NoError(t, err)
+		expression, err := translateRegexp2Pattern(rule, false)
+		require.NoError(t, err)
+		_, code, release, err := regexp2PrepareExpression(expression)
+		require.NoError(t, err)
+		got := code.TrackCount
+		release()
+		require.Equal(t, 7, got, pin.name)
+	}
+
+	// Admission parity at the subject boundary: 50k and 74k admit with no
+	// error, 150k keeps the existing states error.
+	admittedMid := strings.Repeat("b", 50000)
+	got, err := op.regMap.regularLikeWithMode("^b(?=b)", admittedMid, "m", false)
+	require.NoError(t, err)
+	require.True(t, got, "50k-rune admitted subject")
+	admittedEdge := strings.Repeat("b", 74000)
+	got, err = op.regMap.regularLikeWithMode("^b(?=b)", admittedEdge, "m", false)
+	require.NoError(t, err)
+	require.True(t, got, "74k-rune admitted-edge subject")
+	_, err = op.regMap.regularLikeWithMode("^b(?=b)", strings.Repeat("b", 150000), "m", false)
+	require.Error(t, err, "150k-rune beyond-boundary subject keeps the states error")
+
+	// A wide-terminator-bearing 74k subject keeps the same verdict and the
+	// wide contract at the CR boundary.
+	wide74 := "b\rb" + strings.Repeat("b", 73997)
+	got, err = op.regMap.regularLikeWithMode("^b(?=b)", wide74, "m", false)
+	require.NoError(t, err)
+	require.True(t, got, "74k wide-bearing subject: ICU expects true after the CR terminator")
+
+	// An anchor-dense 30k boundary subject keeps the plain-pattern verdict.
+	denseSubject := "\n" + strings.Repeat("a", 29998) + "\r"
+	_, err = op.regMap.regularLikeWithMode(anchorDense, denseSubject, "m", false)
+	require.NoError(t, err, "anchor-dense 30k subject keeps the plain admission verdict")
+
+	// Global reservation arithmetic is deterministic: overlapping
+	// reservations accumulate, failed ones register nothing, releases
+	// restore the baseline exactly.
+	_, code74, release74, err := regexp2PrepareExpression(`(?m)^b(?=b)`)
+	require.NoError(t, err)
+	defer release74()
+	eval74, err := regexp2EvaluationMemoryBudget(code74, 74000, 0)
+	require.NoError(t, err)
+	baseline := regexp2ActiveSubjectBytes.Load()
+	var held []int64
+	releaseAll := func() {
+		for _, r := range held {
+			regexp2ActiveSubjectBytes.Add(-r)
+		}
+		held = nil
+	}
+	t.Cleanup(releaseAll)
+	acquire := func() (int64, error) {
+		r, err := acquireRegexp2SubjectBudget(0, eval74)
+		if err == nil {
+			held = append(held, r)
+		}
+		return r, err
+	}
+	_, err = acquire()
+	require.NoError(t, err)
+	_, err = acquire()
+	require.NoError(t, err)
+	require.Equal(t, baseline+2*(64<<10+eval74), regexp2ActiveSubjectBytes.Load(), "overlap arithmetic")
+	count := 2
+	for i := 0; i < 64; i++ {
+		if _, err = acquire(); err != nil {
+			break
+		}
+		count++
+	}
+	require.Error(t, err, "global cap must keep rejecting beyond the limit")
+	require.Equal(t, baseline+int64(count)*(64<<10+eval74), regexp2ActiveSubjectBytes.Load(),
+		"failed reservation must not register")
+	regexp2ActiveSubjectBytes.Add(-held[0])
+	regexp2ActiveSubjectBytes.Add(-held[1])
+	held = held[2:]
+	_, err = acquire()
+	require.NoError(t, err, "reservation after releases must be admitted")
+	releaseAll()
+	require.Equal(t, baseline, regexp2ActiveSubjectBytes.Load(), "all reservations drain")
+}
+
 func TestRegexpMultilineExpansionAdmission(t *testing.T) {
 	for _, binary := range []bool{false, true} {
 		rs := newOpBuiltInRegexp().regMap
-		for _, pattern := range []string{`(?=a)` + strings.Repeat("^", 1048560), strings.Repeat("x", regexp2MaxPatternBytes+1)} {
+		// The composer no longer expands anchors; plain-size admission owns
+		// the pattern budget, including the flag prefix.
+		for _, pattern := range []string{strings.Repeat("^", regexp2MaxPatternBytes), strings.Repeat("x", regexp2MaxPatternBytes+1)} {
 			_, err := rs.getRegexp2MatcherWithMatchType(pattern, "m", binary)
 			require.ErrorContains(t, err, "maximum supported size")
 			require.Empty(t, rs.icu)
 			require.Zero(t, rs.icuBytes)
 		}
-		caret := regexpWideMultilineCaret
-		if binary {
-			caret = regexpWideMultilineCaretBinary
-		}
-		count := (regexp2MaxPatternBytes - len("(?m)") - len("(?=a)")) / len(caret)
-		pattern := `(?=a)` + strings.Repeat("^", count)
+		pattern := strings.Repeat("^", regexp2MaxPatternBytes-len("(?m)"))
 		rule, err := regexpPatternWithPureMatchType(pattern, "m", binary)
 		require.NoError(t, err)
 		require.LessOrEqual(t, len(rule), regexp2MaxPatternBytes)

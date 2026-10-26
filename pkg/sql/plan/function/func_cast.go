@@ -686,6 +686,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal64: {
+		types.T_bool,
 		types.T_bit,
 		types.T_float32, types.T_float64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -698,6 +699,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal128: {
+		types.T_bool,
 		types.T_bit,
 		types.T_float32, types.T_float64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -710,6 +712,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal256: {
+		types.T_bool,
 		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -2532,6 +2535,9 @@ func decimal64ToOthers(proc *process.Process,
 	mode castMode, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
 	switch toType.Oid {
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return decimalToBool(source, rs, length)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal64ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
@@ -2625,6 +2631,9 @@ func decimal128ToOthers(proc *process.Process,
 	mode castMode, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
 	switch toType.Oid {
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return decimalToBool(source, rs, length)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal128ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
@@ -2719,6 +2728,9 @@ func decimal256ToOthersWithContext(
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
 	mode castMode, strictStringWidth ...bool) error {
 	switch toType.Oid {
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return decimalToBool(source, rs, length)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal256ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
@@ -2983,10 +2995,10 @@ func strTypeToOthers(proc *process.Process,
 		return strToUnsignedWithProc(ctx, proc, source, rs, 64, length, selectList, mode, explicit, numericPrefix)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 32, length, selectList)
+		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 32, length, selectList, mode)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 64, length, selectList)
+		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 64, length, selectList, mode)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return strToDecimal64(proc, source, rs, length, selectList, mode)
@@ -3868,6 +3880,22 @@ func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 			if err := to.Append(T2(math.Round(float64(v))), false); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// decimalToBool follows MySQL: any non-zero DECIMAL is TRUE, NULL stays NULL.
+// Every DECIMAL width stores zero as all-zero bits, so comparing with the zero
+// value of the type is exact for negative and fractional values alike.
+func decimalToBool[T types.Decimal64 | types.Decimal128 | types.Decimal256](
+	from vector.FunctionParameterWrapper[T],
+	to *vector.FunctionResult[bool], length int) error {
+	var zero T
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := from.GetValue(i)
+		if err := to.Append(!null && v != zero, null); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -7514,7 +7542,7 @@ func ParsePreparedStringToFloat64(s string, matrixOneNative bool) (float64, erro
 }
 
 func parseStringToFloatWithBitSize(s string, bitSize int, mode SQLCompatibilityMode) (float64, error) {
-	if isExtensionFloatCandidate(s) || mode == SQLCompatibilityMatrixOne {
+	if isRadixFloatCandidate(s) || mode == SQLCompatibilityMatrixOne {
 		return parseStrictFloatStringWithBitSize(s, bitSize)
 	}
 
@@ -7866,20 +7894,48 @@ func appendExplicitIntegerCastWarning(proc *process.Process, value string, warni
 	}
 }
 
+// FloatTextTruncated reports MySQL's nonempty textual float truncation fact.
+// Keep ASCII whitespace and radix recognition identical to the value parser.
+// Empty strings retain their existing zero-without-warning policy.
+func FloatTextTruncated(value string) bool {
+	trimmed := trimASCIISpace(value)
+	if trimmed == "" || isRadixFloatCandidate(trimmed) {
+		return false
+	}
+	prefix, _, ok := scanDecimalFloatPrefix(trimmed)
+	return !ok || prefix != trimmed
+}
+
+func diagnoseFloatText(proc *process.Process, ctx context.Context, mode castMode, value string) error {
+	if !FloatTextTruncated(value) {
+		return nil
+	}
+	if mode.isAssignment() {
+		message := fmt.Sprintf("Data truncated for DOUBLE value: '%-.128s'", trimASCIISpace(value))
+		if mode != castModeAssignmentIgnore && !statementIgnore(proc) &&
+			(mode == castModeStrictStringWidth || isStrictSqlMode(proc)) {
+			return moerr.NewAssignmentValueTruncated(ctx, message)
+		}
+		if proc != nil {
+			if sink, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+				sink.AppendWarningDiagnostic(moerr.WARN_DATA_TRUNCATED, message)
+			}
+		}
+		return nil
+	}
+	if proc != nil && proc.IsDMLStatement() && isStrictSqlMode(proc) && !statementIgnore(proc) {
+		return moerr.NewTruncatedWrongValue(ctx, "DOUBLE", trimASCIISpace(value))
+	}
+	appendNumericCoercionWarning(proc, value)
+	return nil
+}
+
 // appendNumericCoercionWarning mirrors MySQL's warning for a non-empty string
 // whose numeric prefix was consumed and whose remaining text was discarded.
 // Empty strings intentionally coerce to zero without a warning.
 func appendNumericCoercionWarning(proc *process.Process, value string) {
-	// Numeric prefix scanning follows MySQL's ASCII whitespace rules. Using
-	// strings.TrimSpace here would disagree with the conversion itself for
-	// inputs such as a leading non-breaking space: the value converts to zero,
-	// but the warning check would reinterpret it as a complete number.
 	trimmed := trimASCIISpace(value)
-	if trimmed == "" || isExtensionFloatCandidate(trimmed) {
-		return
-	}
-	prefix, _, ok := scanDecimalFloatPrefix(trimmed)
-	if ok && prefix == trimmed {
+	if !FloatTextTruncated(trimmed) {
 		return
 	}
 	if proc == nil {
@@ -7948,7 +8004,7 @@ func parseStrictFloatStringWithBitSize(s string, bitSize int) (float64, error) {
 	return value, nil
 }
 
-func isExtensionFloatCandidate(s string) bool {
+func isRadixFloatCandidate(s string) bool {
 	_, body, _, _ := splitCastNumericSign(s)
 	if body == "" {
 		return false
@@ -7959,21 +8015,13 @@ func isExtensionFloatCandidate(s string) bool {
 			return true
 		}
 	}
-	if len(body) >= 3 && strings.EqualFold(body[:3], "nan") {
-		return true
-	}
-	if len(body) >= 3 && strings.EqualFold(body[:3], "inf") {
-		return true
-	}
 	return false
 }
 
 // isAssignmentSpecialNumericSyntax excludes only the extension forms that
 // have an established non-decimal interpretation in the cast parser. Do not
-// reuse isExtensionFloatCandidate here: its prefix-oriented float behavior
-// intentionally recognizes words such as "information" as candidates, while
-// IGNORE integer/decimal assignment must treat those words as ordinary invalid
-// text and adjust them to zero with a warning.
+// reuse the float radix predicate here: integer/decimal IGNORE assignment
+// retains its separate special-token contract.
 func isAssignmentSpecialNumericSyntax(s string) bool {
 	_, body, _, _ := splitCastNumericSign(s)
 	if body == "" {
@@ -8493,7 +8541,12 @@ func strToFloatWithProc[T constraints.Float](
 	mode SQLCompatibilityMode,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList) error {
+	length int, selectList *FunctionSelectList, modes ...castMode) error {
+	cast := castModeNormal
+	if len(modes) > 0 {
+		cast = modes[0]
+	}
+
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
@@ -8539,7 +8592,9 @@ func strToFloatWithProc[T constraints.Float](
 					return tErr
 				}
 				if !isBinary && mode == SQLCompatibilityMySQL {
-					appendNumericCoercionWarning(proc, convertByteSliceToString(v))
+					if err := diagnoseFloatText(proc, ctx, cast, convertByteSliceToString(v)); err != nil {
+						return err
+					}
 				}
 			}
 			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
