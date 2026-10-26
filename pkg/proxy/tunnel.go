@@ -1063,7 +1063,7 @@ func (t *tunnel) admitTransferWithGate(sync bool, prearmed *pipe) (*pipe, bool) 
 	if prearmed != nil && !gateOwned {
 		return nil, false
 	}
-	if csp.mu.paused || scp.mu.paused {
+	if csp.mu.closed || scp.mu.closed || csp.mu.paused || scp.mu.paused {
 		return nil, false
 	}
 	if csp.clientMessageActive.Load() ||
@@ -1230,6 +1230,14 @@ func (t *tunnel) transferSyncWithGate(ctx context.Context, gate *pipe) error {
 		t.logger.Info("tunnel is already in transfer, skip sync transfer")
 		return nil
 	}
+	ctx, cancel := context.WithTimeoutCause(ctx, defaultTransferTimeout, moerr.CauseTransferSync)
+	defer cancel()
+	if gate != nil {
+		if err := gate.waitClientMessageClaim(ctx); err != nil {
+			t.finishTransferAttempt()
+			return moerr.AttachCause(ctx, err)
+		}
+	}
 	// Must check if it is safe to start the transfer.
 	csp, ok := t.admitTransferWithGate(true, gate)
 	if !ok {
@@ -1242,8 +1250,6 @@ func (t *tunnel) transferSyncWithGate(ctx context.Context, gate *pipe) error {
 	start := time.Now()
 	defer t.finishTransfer(start)
 	t.logger.Info("transfer begin")
-	ctx, cancel := context.WithTimeoutCause(ctx, defaultTransferTimeout, moerr.CauseTransferSync)
-	defer cancel()
 	if err := t.doReplaceConnection(ctx, true); err != nil {
 		v2.ProxyTransferFailCounter.Inc()
 		return moerr.AttachCause(ctx, err)
@@ -1424,6 +1430,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 		if e != nil {
 			p.mu.closed = true
 		}
+		p.clientMessageActive.Store(false)
 		p.mu.started = false
 		p.mu.cond.Broadcast()
 	}
@@ -1574,7 +1581,7 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 			return err
 		}
 		if p.name == pipeServerToClient && armSyncTransfer {
-			p.syncTransferArmed = peer.tryArmSyncTransfer()
+			p.syncTransferArmed = peer.tryArmSyncTransfer(false)
 		}
 		if p.testHelper.beforeSend != nil {
 			p.testHelper.beforeSend()
@@ -1596,10 +1603,18 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 
 		handled, err := p.src.sendTo(p.dst)
 		if err != nil {
-			if p.name == pipeClientToServer {
-				p.finishClientMessageClaim()
-			}
+			// finish publishes the terminal pipe state before waking a waiter.
+			// A failed write must not look like a successfully drained claim.
 			return wrapPipeSendError(p.name, err)
+		}
+		if p.name == pipeServerToClient && armSyncTransfer && !p.syncTransferArmed {
+			// A response can finish before the request's Write returns. Flush
+			// the response before reserving the publication gate and waiting;
+			// otherwise the client and request writer could wait on each other.
+			if err := p.src.flushBufDst(); err != nil {
+				return wrapPipeSendError(p.name, err)
+			}
+			p.syncTransferArmed = peer.tryArmSyncTransfer(true)
 		}
 		if p.name == pipeClientToServer {
 			if handled {
@@ -1668,7 +1683,43 @@ func (p *pipe) claimClientMessage(
 }
 
 func (p *pipe) finishClientMessageClaim() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.clientMessageActive.Store(false)
+	p.mu.cond.Broadcast()
+}
+
+// The existing gate prevents a following request from publishing while the
+// preceding request drains. Cancellation and pipe termination both wake cond.
+func (p *pipe) waitClientMessageClaim(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if p.clientMessageActive.Load() {
+		stop := context.AfterFunc(ctx, func() {
+			p.mu.Lock()
+			p.mu.cond.Broadcast()
+			p.mu.Unlock()
+		})
+		defer stop()
+		if onWait := p.testHelper.onSyncTransferWait; onWait != nil {
+			p.mu.Unlock()
+			onWait()
+			p.mu.Lock()
+		}
+		for p.clientMessageActive.Load() && !p.mu.closed && !p.mu.paused && ctx.Err() == nil {
+			p.mu.cond.Wait()
+		}
+	}
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
+	if p.mu.closed {
+		return errPipeClosed
+	}
+	return nil
 }
 
 func (p *pipe) finishSyncTransfer() {
@@ -1680,11 +1731,16 @@ func (p *pipe) finishSyncTransfer() {
 	p.mu.Unlock()
 }
 
-func (p *pipe) tryArmSyncTransfer() bool {
+// Only the post-forwarding boundary may reserve the gate while an earlier
+// request still owns publication. The transfer owner then joins that claim.
+func (p *pipe) tryArmSyncTransfer(afterResponse bool) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.mu.closed || p.mu.paused || p.mu.syncTransferDone != nil ||
-		p.clientMessageActive.Load() {
+		(!afterResponse && p.clientMessageActive.Load()) {
+		return false
+	}
+	if afterResponse && p.tun.hasUntransferableClientState() {
 		return false
 	}
 	p.mu.syncTransferDone = make(chan struct{})
