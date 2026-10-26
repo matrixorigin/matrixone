@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -60,7 +61,10 @@ type Catalog struct {
 	nodesMu   sync.RWMutex
 	gcTS      types.TS
 
-	mergeNotifier MergeNotifierOnCatalog
+	// A nil pointer means that catalog notifications are detached. Use a
+	// pointer to the interface because atomic.Value cannot store nil, while
+	// replay/write-mode transitions intentionally clear the notifier.
+	mergeNotifier atomic.Pointer[MergeNotifierOnCatalog]
 }
 
 func MockCatalog(dataFactory DataFactory) *Catalog {
@@ -307,8 +311,8 @@ func (catalog *Catalog) RemoveDBEntry(database *DBEntry) error {
 		zap.String("db", database.String()),
 	)
 	catalog.Lock()
-	defer catalog.Unlock()
 	if n, ok := catalog.entries[database.ID]; !ok {
+		catalog.Unlock()
 		return moerr.NewBadDBNoCtx(database.GetName())
 	} else {
 		nn := catalog.nameNodes[database.GetFullName()]
@@ -318,6 +322,21 @@ func (catalog *Catalog) RemoveDBEntry(database *DBEntry) error {
 			delete(catalog.nameNodes, database.GetFullName())
 		}
 		delete(catalog.entries, database.ID)
+	}
+	catalog.Unlock()
+
+	// Dropping a database does not mark each child table dropped. Catalog GC
+	// therefore bypasses DBEntry.RemoveEntry for those tables. Retire their
+	// metrics here after detaching the database, without holding the catalog
+	// lock while visiting the child list.
+	database.RLock()
+	tables := make([]*TableEntry, 0, len(database.entries))
+	for _, node := range database.entries {
+		tables = append(tables, node.GetPayload())
+	}
+	database.RUnlock()
+	for _, table := range tables {
+		table.retireAObjectMetrics()
 	}
 	return nil
 }
@@ -428,6 +447,18 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 		err = nil
 	}
 	return err
+}
+
+// MarkRestartSealedObjectBookmarks publishes the restart-time boundary for
+// recovered frozen appendable objects before normal write traffic resumes.
+func (catalog *Catalog) MarkRestartSealedObjectBookmarks(restartTS types.TS) error {
+	processor := &LoopProcessor{
+		TableFn: func(table *TableEntry) error {
+			table.MarkRestartSealedObjectBookmarks(restartTS)
+			return nil
+		},
+	}
+	return catalog.RecurLoop(processor)
 }
 
 //#endregion
