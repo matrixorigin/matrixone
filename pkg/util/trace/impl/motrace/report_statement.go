@@ -82,6 +82,13 @@ func StatementInfoNew(i table.Item, ctx context.Context) table.Item {
 		// copy value
 		stmt := s.CloneWithoutExecPlan() // Get a new statement from the pool
 		stmt.exported = false
+		// constituent ownership: the clone starts a fresh batch linkage; the
+		// record's spool sequence rides the aggregate instead.
+		stmt.spoolSeq = 0
+		stmt.spoolSeqs = stmt.spoolSeqs[:0]
+		if s.spoolSeq != 0 {
+			stmt.spoolSeqs = append(stmt.spoolSeqs, s.spoolSeq)
+		}
 
 		// initialize the AggrCount as 0 here since aggr is not started
 		stmt.AggrCount = 0
@@ -138,6 +145,12 @@ func StatementInfoUpdate(ctx context.Context, existing, new table.Item) {
 	e.AggrCount += 1
 	e.Duration += n.Duration
 	e.ResultCount += n.ResultCount
+	// carry constituent ownership: every merged statement's spool sequence
+	// retires only when THIS aggregated record's export batch commits.
+	if n.spoolSeq != 0 {
+		e.spoolSeqs = append(e.spoolSeqs, n.spoolSeq)
+	}
+	e.spoolSeqs = append(e.spoolSeqs, n.spoolSeqs...)
 	// responseAt is the last response time
 	n.ExecPlan2Stats(context.Background())
 	if err := mergeStats(e, n); err != nil {
@@ -237,6 +250,15 @@ type StatementInfo struct {
 	// goroutine before the collector hand-off, read after the queue
 	// hand-off — never serialized, never compared.
 	spoolSeq uint64
+	// spoolSeqs carries the CONSTITUENT spool sequences of an aggregated
+	// statement: aggregation clones/merges discard spoolSeq (each
+	// constituent keeps its own ownership), so the aggregate item
+	// accumulates every constituent sequence and the buffer's Add hook
+	// parents ALL of them to the aggregate's batch (round-3 review:
+	// unowned constituents silently lost their durability coverage).
+	// Only aggregate items use it; never serialized; pooled objects reset
+	// it in free().
+	spoolSeqs []uint64
 
 	// flow ctrl
 	// #		|case 1 |case 2 |case 3 |case 4|
@@ -437,6 +459,8 @@ func (s *StatementInfo) free() {
 	s.stated = false
 	s.disableAgg = false
 	// clean skipTxn ctrl
+	s.spoolSeq = 0
+	s.spoolSeqs = s.spoolSeqs[:0]
 	s.skipTxnOnce = false
 	s.skipTxnID = nil
 	stmtPool.Put(s)

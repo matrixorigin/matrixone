@@ -224,6 +224,10 @@ const (
 // a Sync-counting/-failing stub in fault-injection tests.
 type spoolSyncFile interface {
 	Write(p []byte) (int, error)
+	// Truncate restores a byte boundary on the current file; the spool uses
+	// it to remove a torn tail left by a partial write before the next
+	// record can join onto the fragment.
+	Truncate(size int64) error
 	Sync() error
 	Close() error
 }
@@ -261,8 +265,15 @@ type spoolFsyncGroup struct {
 	// changed under it returns success: the seal Sync covered its write.
 	sealGen uint64
 
-	// syncErr keeps a pending fsync error to report back to an appender.
-	syncErr   error
+	// failErr/failWidth publish the coverage of a failed Sync: every waiter
+	// whose bytes sit at or below failWidth exits with failErr, so a shared
+	// failing Sync can never let a covered appender report phantom
+	// durability (round-3 review: the error used to be consumed by a single
+	// caller). A LATER successful Sync covering the same bytes heals the
+	// failure (fsync semantics), so success is checked first on exit.
+	failErr   error
+	failWidth int64
+
 	terminate bool
 }
 
@@ -278,6 +289,8 @@ func (g *spoolFsyncGroup) adoptLocked(f spoolSyncFile, size int64) {
 	g.f = f
 	g.fileSize = size
 	g.confirmedWidth = size
+	g.failErr = nil
+	g.failWidth = 0
 }
 
 // append writes line to the current file and blocks until an fsync of that
@@ -292,14 +305,33 @@ func (g *spoolFsyncGroup) append(line []byte) (int, error) {
 	myGen := g.sealGen
 	n, err := g.f.Write(line)
 	if err != nil {
+		if n > 0 {
+			// A partial write left a torn tail without its newline
+			// terminator; the next append would join onto that fragment and
+			// corrupt BOTH records. Restore the last complete boundary right
+			// here, still under the group lock, so no other writer can
+			// interleave between the damage and its repair. fileSize has not
+			// been bumped yet, so it is exactly the clean boundary. The file
+			// is O_APPEND, so the next write lands at the truncated EOF.
+			if terr := g.f.Truncate(g.fileSize); terr != nil {
+				return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+					"statement_info spool: partial write (%d bytes lost: %v) and boundary repair failed: %v",
+					n, err, terr))
+			}
+			// the fragment is gone from disk: report zero kept bytes so the
+			// caller releases the whole reservation.
+			n = 0
+		}
 		return n, err
 	}
 	g.fileSize += int64(n)
 	end := g.fileSize
-	for g.confirmedWidth < end {
+	for g.confirmedWidth < end && g.failWidth < end {
 		if g.terminate || g.sealGen != myGen {
 			// The file I wrote to was sealed (or the group is going down
-			// after sealing it): the seal's final Sync confirmed my write.
+			// after sealing it): the seal's final Sync confirmed my write
+			// (success in confirmedWidth, failure in failWidth — the exit
+			// check below reports both correctly).
 			break
 		}
 		if !g.syncing {
@@ -313,14 +345,15 @@ func (g *spoolFsyncGroup) append(line []byte) (int, error) {
 			syncErr := f.Sync()
 			g.mu.Lock()
 			g.syncing = false
-			if syncErr != nil && g.syncErr == nil {
-				g.syncErr = syncErr
-			}
-			// Settle the generation even on error: the Sync attempt for
-			// these bytes is finished, so waiters must leave the loop and
-			// read the error from syncErr instead of re-leading a failing
-			// disk forever.
-			if target > g.confirmedWidth {
+			if syncErr != nil {
+				// publish the failure to every covered waiter (not one):
+				// the Sync attempt for these bytes is finished, so they
+				// must not keep waiting nor re-lead a failing disk forever.
+				g.failErr = syncErr
+				if target > g.failWidth {
+					g.failWidth = target
+				}
+			} else if target > g.confirmedWidth {
 				g.confirmedWidth = target
 			}
 			g.cond.Broadcast()
@@ -328,8 +361,12 @@ func (g *spoolFsyncGroup) append(line []byte) (int, error) {
 			g.cond.Wait()
 		}
 	}
-	if err := g.syncErr; err != nil {
-		g.syncErr = nil
+	if g.confirmedWidth >= end {
+		return n, nil
+	}
+	// settled by a failed Sync (failure is shared: every covered waiter
+	// surfaces it, none may claim unconfirmed durability)
+	if err := g.failErr; err != nil && end <= g.failWidth {
 		return n, err
 	}
 	return n, nil
@@ -348,14 +385,21 @@ func (g *spoolFsyncGroup) sealFileLocked() (int64, error) {
 		g.cond.Wait()
 	}
 	size := g.fileSize
-	if err := g.f.Sync(); err != nil && g.syncErr == nil {
-		g.syncErr = err
-	} else if err == nil {
+	if err := g.f.Sync(); err != nil {
+		// publish the seal failure to every covered waiter (failWidth covers
+		// the whole file: a seal that could not confirm a byte must not let
+		// that byte's appender report durability).
+		g.failErr = err
+		if size > g.failWidth {
+			g.failWidth = size
+		}
+	} else {
 		g.confirmedWidth = size
 	}
 	// Wake append waiters of this file before the handle goes away: the Sync
-	// above covered their writes, so they must observe the generation bump
-	// and return success (an error is reported through syncErr instead).
+	// above settled their writes, so they must observe the generation bump
+	// and exit through the confirmedWidth/failWidth check (success in
+	// confirmedWidth, a shared failure in failWidth).
 	g.sealGen++
 	g.cond.Broadcast()
 	var closeErr error
@@ -441,6 +485,19 @@ func writeSpoolAckMarker(dir, segName string) error {
 	if closeErr != nil {
 		return moerr.ConvertGoError(context.Background(), closeErr)
 	}
+	return syncSpoolDir(dir)
+}
+
+// syncSpoolDir fsyncs a directory so the file names created in it survive a
+// crash. A newly created segment (or the spool directory itself) must be
+// published this way BEFORE the records under that name are acknowledged:
+// an fsynced segment whose dirent never reached the disk is lost on power
+// loss exactly like an un-fsynced record (round-3 review finding).
+//
+// Fault-injection seam for tests (counts directory syncs).
+var syncSpoolDirFn = syncSpoolDir
+
+func syncSpoolDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
 		return moerr.ConvertGoError(context.Background(), err)
@@ -481,7 +538,19 @@ func newStatementInfoSpool(dir string, maxSize int64, ackLagSegments uint64, ack
 	if maxSize <= 0 {
 		maxSize = defaultStatementInfoSpoolMaxSize
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	// Durably publish a NEWLY created spool directory: fsync the parent so
+	// the directory's own name survives a crash before any record under it
+	// is acknowledged.
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, moerr.ConvertGoError(context.Background(), err)
+		}
+		if err := syncSpoolDirFn(filepath.Dir(dir)); err != nil {
+			return nil, err
+		}
+	} else if err != nil {
+		return nil, moerr.ConvertGoError(context.Background(), err)
+	} else if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, moerr.ConvertGoError(context.Background(), err)
 	}
 	entries, err := os.ReadDir(dir)
@@ -607,9 +676,31 @@ var openSpoolSegmentFile = func(dir string, seq uint64) (spoolSyncFile, int64, e
 	return openSegmentFile(dir, seq)
 }
 
+// openSegmentForAppendLocked opens the segment file for seq, durably
+// publishing its name (directory fsync) when the file is newly created. A
+// segment name must be on disk before the first record written under it is
+// acknowledged, or a power loss can strand an fsynced segment behind a
+// dirent that never persisted (round-3 review finding).
+func (s *statementInfoSpool) openSegmentForAppendLocked(seq uint64) (spoolSyncFile, int64, error) {
+	segPath := filepath.Join(s.dir, spoolSegmentFileName(seq))
+	_, statErr := os.Stat(segPath)
+	created := os.IsNotExist(statErr)
+	f, size, err := openSpoolSegmentFile(s.dir, seq)
+	if err != nil {
+		return nil, 0, err
+	}
+	if created {
+		if err := syncSpoolDirFn(s.dir); err != nil {
+			_ = f.Close()
+			return nil, 0, err
+		}
+	}
+	return f, size, nil
+}
+
 // openActiveLocked creates the next active segment file.
 func (s *statementInfoSpool) openActiveLocked() error {
-	f, size, err := openSpoolSegmentFile(s.dir, s.nextSeq)
+	f, size, err := s.openSegmentForAppendLocked(s.nextSeq)
 	if err != nil {
 		return err
 	}
@@ -742,7 +833,9 @@ func (s *statementInfoSpool) sealForExport() *spoolSegment {
 	var f spoolSyncFile
 	var nextSize int64
 	openErr := error(nil)
-	f, nextSize, openErr = openSpoolSegmentFile(s.dir, s.nextSeq)
+	// rotation also creates a segment: publish its name through the same
+	// creation path as the boot/lazy open.
+	f, nextSize, openErr = s.openSegmentForAppendLocked(s.nextSeq)
 	if openErr != nil {
 		v2.TraceMOLoggerSpoolErrorCounter.Inc()
 		logutil.Error("statement_info spool open new segment failed", zap.Error(openErr))
@@ -1424,15 +1517,36 @@ var _ Buffer = (*spooledItemBuffer)(nil)
 // Add parents the incoming record to this buffer's batch BEFORE the inner
 // Add renders and frees the item: a record is exported exactly when its
 // batch commits, and the owning segment's retirement needs the parenthood
-// (see the watermark protocol in the file header).
+// (see the watermark protocol in the file header). Aggregated statements
+// carry every constituent sequence (StatementInfo.spoolSeqs) — their
+// durable copies retire only when the aggregate's own batch commits.
 func (b *spooledItemBuffer) Add(item bp.HasName) {
-	if si, ok := item.(*StatementInfo); ok && si.spoolSeq != 0 {
-		if b.batchID == 0 {
+	if si, ok := item.(*StatementInfo); ok {
+		if b.batchID == 0 && (si.spoolSeq != 0 || len(si.spoolSeqs) > 0) {
 			b.batchID = b.spool.nextBatch()
 		}
-		b.spool.tagRecord(si.spoolSeq, b.batchID)
+		if b.batchID != 0 {
+			if si.spoolSeq != 0 {
+				b.spool.tagRecord(si.spoolSeq, b.batchID)
+			}
+			for _, seq := range si.spoolSeqs {
+				b.spool.tagRecord(seq, b.batchID)
+			}
+		}
 	}
 	b.Buffer.Add(item)
+}
+
+// Reset implements Buffer: the collector pools and reuses buffer instances
+// (bufferHolder.putBuffer calls Reset before handing the instance back to
+// the next generation). The generation id is per-use: keeping the previous
+// batch's id would parent the NEW records to an already-committed batch,
+// letting their segments retire while their own export is still pending.
+// Request wrappers captured their id at GetBatch time, so clearing it here
+// cannot disturb any in-flight request.
+func (b *spooledItemBuffer) Reset() {
+	b.batchID = 0
+	b.Buffer.Reset()
 }
 
 // GetBatch rotates the spool then delegates the batch generation. The export

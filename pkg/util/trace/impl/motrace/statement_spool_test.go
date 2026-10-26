@@ -1171,6 +1171,8 @@ type spoolGateFile struct {
 	secondWrite chan struct{} // closed when the second Write lands
 	thirdWrite  chan struct{} // closed when the third Write lands
 	onceEntered sync.Once
+	failOn      int   // Sync calls with syncs >= failOn return failErr (0 = never)
+	failErr     error // error returned by failing Syncs
 }
 
 func (f *spoolGateFile) Write(p []byte) (int, error) {
@@ -1203,10 +1205,32 @@ func (f *spoolGateFile) Sync() error {
 			<-f.gate
 		}
 	}
+	f.mux.Lock()
+	failOn, failErr := f.failOn, f.failErr
+	f.mux.Unlock()
+	if failOn > 0 && n >= failOn {
+		return failErr
+	}
 	return nil
 }
 
+func (f *spoolGateFile) setFail(failOn int, err error) {
+	f.mux.Lock()
+	defer f.mux.Unlock()
+	f.failOn = failOn
+	f.failErr = err
+}
+
 func (f *spoolGateFile) Close() error { return nil }
+
+func (f *spoolGateFile) Truncate(size int64) error {
+	f.mux.Lock()
+	defer f.mux.Unlock()
+	if int64(len(f.buf)) > size {
+		f.buf = f.buf[:size]
+	}
+	return nil
+}
 
 func (f *spoolGateFile) counters() (writes, syncs int) {
 	f.mux.Lock()
@@ -1248,19 +1272,48 @@ func TestSpoolFsyncGroupAppendSurfacesSyncError(t *testing.T) {
 	assert.Equal(t, 1, hb.syncCount())
 }
 
-// spoolMemFile is a memory-backed spoolSyncFile with an optional Sync error.
+// spoolMemFile is a memory-backed spoolSyncFile with an optional Sync error
+// and one-shot partial-write injection (partialN/partialErr) for the torn
+// tail repair probe.
 type spoolMemFile struct {
-	mux   sync.Mutex
-	buf   []byte
-	syncs int
-	fail  error
+	mux        sync.Mutex
+	buf        []byte
+	syncs      int
+	fail       error
+	partialN   int   // next Write keeps only this many bytes and fails
+	partialErr error // error paired with the partial write
+	truncs     []int64
 }
 
 func (f *spoolMemFile) Write(p []byte) (int, error) {
 	f.mux.Lock()
 	defer f.mux.Unlock()
+	if f.partialN > 0 {
+		n := f.partialN
+		if n > len(p) {
+			n = len(p)
+		}
+		err := f.partialErr
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+		f.partialN = 0
+		f.partialErr = nil
+		f.buf = append(f.buf, p[:n]...)
+		return n, err
+	}
 	f.buf = append(f.buf, p...)
 	return len(p), nil
+}
+
+func (f *spoolMemFile) Truncate(size int64) error {
+	f.mux.Lock()
+	defer f.mux.Unlock()
+	f.truncs = append(f.truncs, size)
+	if int64(len(f.buf)) > size {
+		f.buf = f.buf[:size]
+	}
+	return nil
 }
 
 func (f *spoolMemFile) Sync() error {
@@ -1759,4 +1812,370 @@ func TestPoisonBytesSurviveQuotaRestart(t *testing.T) {
 	s2.appendRecord(line) // fits only because accounting is exact
 	assert.Equal(t, int64(90)+int64(len(line)), s2.totalSize)
 	assert.Equal(t, int64(0), s2.droppedRecords)
+}
+
+// ---------------------------------------------------------------------------
+// Round-3 review probes: pooled-buffer batch identity, aggregation
+// constituents, shared-sync failure delivery, torn-tail repair, durable name
+// publication.
+// ---------------------------------------------------------------------------
+
+// TestSpooledItemBufferResetDropsCommittedBatchID (round-3, finding 1): the
+// collector pool REUSES buffers (bufferHolder.putBuffer -> Reset) after the
+// write request was generated but possibly before it committed. The Reset
+// must drop the buffer's batch identity WITHOUT touching the id the already
+// generated request captured, and a reused buffer must allocate a fresh id:
+// a reused buffer that still carried the committed id would let the next
+// batch parent its records under an ALREADY committed batch, retiring
+// segments whose export never covered them.
+func TestSpooledItemBufferResetDropsCommittedBatchID(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	s := openTestSpool(t, dir, 0, 0, 0)
+	defer s.close()
+	line := encodeStatementInfoCSVLine(ctx, []string{"r"})
+
+	seqA := s.appendRecord(line)
+	require.NotZero(t, seqA)
+	buf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
+	buf.Add(&StatementInfo{spoolSeq: seqA})
+	idA := buf.batchID
+	require.NotZero(t, idA)
+	reqA := buf.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
+	require.NotNil(t, reqA)
+
+	// pool return while the generated request is still in flight: the
+	// buffer's identity resets, the request keeps what it captured.
+	buf.Reset()
+	require.Zero(t, buf.batchID)
+	_, err := reqA.Handle()
+	require.NoError(t, err)
+	s.mux.Lock()
+	require.Equal(t, idA, s.watermark, "the in-flight request must still commit its captured id after Reset")
+	s.mux.Unlock()
+
+	// reuse: the pooled buffer serves a new batch under a FRESH id.
+	seqB := s.appendRecord(line)
+	require.NotZero(t, seqB)
+	buf.Add(&StatementInfo{spoolSeq: seqB})
+	require.NotZero(t, buf.batchID)
+	require.NotEqual(t, idA, buf.batchID, "a reused buffer must never re-tag records under a committed id")
+	reqB := buf.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
+	_, err = reqB.Handle()
+	require.NoError(t, err)
+	s.mux.Lock()
+	assert.Equal(t, buf.batchID, s.watermark)
+	s.mux.Unlock()
+}
+
+// TestSpooledItemBufferAggregationParentsEveryConstituent (round-3, finding 2):
+// the aggregation window clones the first statement and merges the rest; the
+// spool record of every merged statement must ride the aggregated record to
+// its export batch, so the batch commit is what retires their durable copies
+// (positive export completion), not the ack-lag age.
+func TestSpooledItemBufferAggregationParentsEveryConstituent(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	s := openTestSpool(t, dir, 0, 0, 0)
+	defer s.close()
+	line := encodeStatementInfoCSVLine(ctx, []string{"agg"})
+	ctx = context.WithValue(ctx, DurationKey, 5*time.Second)
+
+	seq1 := s.appendRecord(line)
+	seq2 := s.appendRecord(line)
+	require.NotZero(t, seq1)
+	require.NotZero(t, seq2)
+
+	// real aggregation path: AddItem(raw1) -> StatementInfoNew clones the
+	// grouped record; AddItem(raw2) -> StatementInfoUpdate merges it in.
+	raw1 := &StatementInfo{Statement: []byte("insert into t values (1)"), Status: StatementStatusSuccess, Duration: time.Millisecond}
+	raw1.statsArray.Init()
+	raw1.spoolSeq = seq1
+	grouped := StatementInfoNew(raw1, ctx).(*StatementInfo)
+	require.Zero(t, grouped.spoolSeq)
+	require.Equal(t, []uint64{seq1}, grouped.spoolSeqs, "the clone must carry the first constituent's sequence")
+
+	raw2 := &StatementInfo{Statement: []byte("insert into t values (1)"), Status: StatementStatusSuccess, Duration: time.Millisecond, ResultCount: 1}
+	raw2.statsArray.Init()
+	raw2.spoolSeq = seq2
+	StatementInfoUpdate(ctx, grouped, raw2)
+	require.ElementsMatch(t, []uint64{seq1, seq2}, grouped.spoolSeqs)
+
+	// the aggregated record enters the buffer: BOTH constituents are
+	// parented to the same export batch.
+	buf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
+	buf.Add(grouped)
+	require.NotZero(t, buf.batchID)
+	req := buf.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
+	require.NotNil(t, req)
+	s.mux.Lock()
+	require.Len(t, s.sealedOrder, 1)
+	seg := s.sealedOrder[0]
+	require.Equal(t, int64(2), seg.recordCount)
+	require.Equal(t, int64(2), seg.taggedCount, "every constituent must be parented, not just the first")
+	require.Equal(t, buf.batchID, seg.maxTag)
+	// positive completion required: before the batch commits, the segment
+	// holding the durable copies must survive.
+	s.collectRemovableLocked()
+	s.mux.Unlock()
+	require.Contains(t, spoolDirFiles(t, dir), seg.name)
+
+	// the export batch commits: contiguous coverage retires the segment.
+	_, err := req.Handle()
+	require.NoError(t, err)
+	s.mux.Lock()
+	assert.Equal(t, buf.batchID, s.watermark)
+	s.mux.Unlock()
+	assert.NotContains(t, spoolDirFiles(t, dir), seg.name)
+
+	// pool hygiene: freeing a grouped record must not leak constituent
+	// linkage into the next pooled StatementInfo.
+	grouped.free()
+	pooled := stmtPool.Get().(*StatementInfo)
+	require.Zero(t, pooled.spoolSeq)
+	require.Empty(t, pooled.spoolSeqs)
+	stmtPool.Put(pooled)
+}
+
+// TestSpoolFsyncGroupSharedSyncFailureReachesEveryWaiter (round-3, finding 4):
+// one fsync confirms (or fails) a byte window shared by many concurrent
+// appenders; when that fsync FAILS, every waiter whose bytes sit inside the
+// failed window must observe the error — a failure consumed by a single
+// caller lets the others claim unconfirmed durability.
+func TestSpoolFsyncGroupSharedSyncFailureReachesEveryWaiter(t *testing.T) {
+	f := &spoolGateFile{
+		blockFirst:  true,
+		gate:        make(chan struct{}),
+		enteredSync: make(chan struct{}),
+		secondWrite: make(chan struct{}),
+		thirdWrite:  make(chan struct{}),
+		failOn:      2, // the first (gated) sync succeeds; everything after fails
+		failErr:     io.ErrClosedPipe,
+	}
+	g := &spoolFsyncGroup{}
+	g.init()
+	g.mu.Lock()
+	g.adoptLocked(f, 0)
+	g.mu.Unlock()
+
+	type outcome struct {
+		n   int
+		err error
+	}
+	res := make(chan outcome, 3)
+	appendAsync := func(rec string) {
+		n, err := g.append([]byte(rec))
+		res <- outcome{n, err}
+	}
+
+	go appendAsync("A\n")
+	<-f.enteredSync // A leads the gate-held first fsync
+	go appendAsync("B\n")
+	<-f.secondWrite // B's bytes land while A's fsync is in flight
+	go appendAsync("C\n")
+	<-f.thirdWrite // C joins; both now wait on the in-flight fsync
+	close(f.gate)  // A's fsync SUCCEEDS but covers A only
+
+	oA := <-res // the leader exits first (it completes the wait cycle)
+	require.NoError(t, oA.err, "A's own successful fsync covers its record")
+	// Whoever wakes next re-leads a fsync whose window covers BOTH remaining
+	// waiters; that fsync FAILS and both must see the failure (pre-fix the
+	// error was consumed by exactly one of them).
+	oB := <-res
+	oC := <-res
+	require.ErrorIs(t, oB.err, io.ErrClosedPipe)
+	require.ErrorIs(t, oC.err, io.ErrClosedPipe)
+	w, sc := f.counters()
+	assert.Equal(t, 3, w)
+	assert.Equal(t, 2, sc, "one success covering A, one shared failure covering B and C")
+
+	// healing leg: once the disk recovers, a later successful fsync restores
+	// success for new appends on the same file.
+	f.setFail(0, nil)
+	n, err := g.append([]byte("D\n"))
+	require.NoError(t, err)
+	assert.Equal(t, len("D\n"), n)
+}
+
+// TestSpoolFsyncGroupPartialWriteRestoresBoundary (round-3, finding 5): a
+// short write leaves a fragment without its newline terminator; before any
+// next record can join onto that fragment the group must restore the last
+// complete boundary, so the joined-line corruption of the X/C/D shape is
+// impossible and the segment's byte accounting stays exact.
+func TestSpoolFsyncGroupPartialWriteRestoresBoundary(t *testing.T) {
+	fm := &spoolMemFile{}
+	g := &spoolFsyncGroup{}
+	g.init()
+	g.mu.Lock()
+	g.adoptLocked(fm, 0)
+	g.mu.Unlock()
+
+	n, err := g.append([]byte("X\n"))
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+
+	fm.partialN = 3
+	fm.partialErr = io.ErrClosedPipe
+	_, err = g.append([]byte("CCCCC\n"))
+	require.ErrorIs(t, err, io.ErrClosedPipe)
+	// the fragment is gone: the file is back at the last complete boundary,
+	// and the repair was a single truncate to exactly that boundary.
+	require.Equal(t, []int64{2}, fm.truncs)
+	require.Equal(t, []byte("X\n"), fm.buf)
+
+	n, err = g.append([]byte("D\n"))
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	// no join corruption: D starts a fresh line right after X's terminator.
+	require.Equal(t, []byte("X\nD\n"), fm.buf)
+}
+
+// spoolPartialWriteFile fails exactly one armed Write with a short count,
+// then heals — the real-file twin of spoolMemFile.partialN.
+type spoolPartialWriteFile struct {
+	*os.File
+	mux    sync.Mutex
+	arm    bool
+	keep   int
+	truncs []int64
+}
+
+func (f *spoolPartialWriteFile) Write(p []byte) (int, error) {
+	f.mux.Lock()
+	armed := f.arm
+	if armed {
+		f.arm = false
+	}
+	f.mux.Unlock()
+	if armed {
+		keep := f.keep
+		if keep > len(p) {
+			keep = len(p)
+		}
+		if _, err := f.File.Write(p[:keep]); err != nil {
+			return 0, err
+		}
+		return keep, io.ErrShortWrite
+	}
+	return f.File.Write(p)
+}
+
+func (f *spoolPartialWriteFile) Truncate(size int64) error {
+	f.mux.Lock()
+	f.truncs = append(f.truncs, size)
+	f.mux.Unlock()
+	return f.File.Truncate(size)
+}
+
+// TestStatementInfoSpoolPartialWriteKeepsLedgerExact (round-3, finding 5):
+// at the spool level a repaired partial write releases the entire
+// reservation of the record that did not survive, and the physical file
+// ends up exactly with the surviving records — quota and bytes never
+// desynchronize.
+func TestStatementInfoSpoolPartialWriteKeepsLedgerExact(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	stub := &spoolPartialWriteFile{}
+	old := openSpoolSegmentFile
+	openSpoolSegmentFile = func(dir string, seq uint64) (spoolSyncFile, int64, error) {
+		f, size, err := openSegmentFile(dir, seq)
+		if err != nil {
+			return nil, 0, err
+		}
+		if stub.File == nil {
+			stub.File = f
+			return stub, size, nil
+		}
+		return f, size, nil
+	}
+	t.Cleanup(func() { openSpoolSegmentFile = old })
+
+	s := openTestSpool(t, dir, 0, 0, 0)
+	defer s.close()
+
+	lineX := encodeStatementInfoCSVLine(ctx, []string{"x-survives"})
+	seqX := s.appendRecord(lineX)
+	require.NotZero(t, seqX)
+	require.Equal(t, int64(len(lineX)), s.totalSize)
+
+	stub.arm = true
+	stub.keep = 3
+	lineC := encodeStatementInfoCSVLine(ctx, []string{"cccc-victim"})
+	require.Greater(t, len(lineC), 3)
+	seqC := s.appendRecord(lineC)
+	require.Zero(t, seqC, "the partially written record must not be acknowledged")
+	require.Equal(t, []int64{int64(len(lineX))}, stub.truncs)
+	require.Equal(t, int64(len(lineX)), s.totalSize, "the lost record's whole reservation is released")
+	require.Equal(t, lineX, readSpoolFile(t, dir, 1))
+
+	lineD := encodeStatementInfoCSVLine(ctx, []string{"d-next"})
+	seqD := s.appendRecord(lineD)
+	require.NotZero(t, seqD)
+	want := append(append([]byte{}, lineX...), lineD...)
+	require.Equal(t, want, readSpoolFile(t, dir, 1), "the next record appends at the restored boundary, never joined")
+	require.Equal(t, int64(len(lineX)+len(lineD)), s.totalSize)
+}
+
+// TestStatementInfoSpoolDurablyPublishesNames (round-3, finding 6): an
+// fsynced record under a segment name that never reached the disk is lost on
+// power loss exactly like an un-fsynced record. New segment names and a
+// newly created spool directory must be directory-fsynced BEFORE the first
+// record they can hold is acknowledged.
+func TestStatementInfoSpoolDurablyPublishesNames(t *testing.T) {
+	base := t.TempDir()
+	ctx := context.Background()
+	var mux sync.Mutex
+	var synced []string
+	old := syncSpoolDirFn
+	syncSpoolDirFn = func(d string) error {
+		mux.Lock()
+		synced = append(synced, d)
+		mux.Unlock()
+		return syncSpoolDir(d)
+	}
+	t.Cleanup(func() { syncSpoolDirFn = old })
+	count := func(d string) int {
+		mux.Lock()
+		defer mux.Unlock()
+		c := 0
+		for _, s := range synced {
+			if s == d {
+				c++
+			}
+		}
+		return c
+	}
+
+	// a NEW spool directory: its own name is published in the parent, and
+	// the FIRST segment's name is published in the spool directory itself —
+	// both before the spool acknowledges anything.
+	spoolDir := filepath.Join(base, "audit-spool")
+	s := openTestSpool(t, spoolDir, 0, 0, 0)
+	require.Equal(t, 1, count(filepath.Dir(spoolDir)), "new spool dir name must be published once")
+	require.Equal(t, 1, count(spoolDir), "the first segment name must be published before its first ack")
+
+	// an EXISTING segment name is not re-published per record.
+	line := encodeStatementInfoCSVLine(ctx, []string{"r"})
+	require.NotZero(t, s.appendRecord(line))
+	require.NotZero(t, s.appendRecord(line))
+	require.Equal(t, 1, count(spoolDir), "appends to an existing segment must not pay a directory fsync")
+
+	// the NEXT segment name is published when rotation creates it.
+	buf := &spooledItemBuffer{Buffer: &spoolFakeBuffer{batch: &spoolFakeWriteRequest{}}, spool: s}
+	buf.Add(&StatementInfo{spoolSeq: s.appendRecord(line)})
+	req := buf.GetBatch(ctx, new(bytes.Buffer)).(*spoolBatchRequest)
+	require.NotNil(t, req)
+	require.Equal(t, 2, count(spoolDir), "rotation publishes the fresh segment name")
+	_, err := req.Handle()
+	require.NoError(t, err)
+	s.close()
+
+	// reopen over the EXISTING spool directory: the directory's own name is
+	// already durable; the parent must not be synced again. (A new segment
+	// name still gets its own publication.)
+	require.Equal(t, 1, count(filepath.Dir(spoolDir)))
+	s2 := openTestSpool(t, spoolDir, 0, 0, 0)
+	defer s2.close()
+	require.Equal(t, 1, count(filepath.Dir(spoolDir)), "an existing spool dir needs no parent publication")
+	require.Equal(t, 3, count(spoolDir), "the reopen segment name is still published before its first ack")
 }
