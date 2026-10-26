@@ -3454,7 +3454,8 @@ func (txn *Transaction) publishStagedWorkspaceRecordLocked(s *stagedWorkspaceRec
 			oid := stats.ObjectName().ObjectId()
 			sid := oid.Segment()
 
-			server.PutCnSegment(txn.op.Txn().ID, s.tableId, sid, colexec.TxnWorkspaceUnCommitType)
+			server.PutCnSegment(&txn.workspaceSegments, txn.op.Txn().ID,
+				s.tableId, sid, colexec.TxnWorkspaceUnCommitType)
 			txn.registerCNObjects(*oid, s.accountId, s.databaseId, s.tableId,
 				s.bat, s.databaseName, s.tableName, s.autoIncrEpoch, s.autoIncrEpochKnown)
 		}
@@ -4789,7 +4790,7 @@ func (txn *Transaction) publishStagedRepublicationLocked(
 		stats := objectio.ObjectStats(col[i].GetByteSlice(area))
 		oid := stats.ObjectName().ObjectId()
 		sid := oid.Segment()
-		server.PutCnSegment(txn.op.Txn().ID, r.tableId, sid,
+		server.PutCnSegment(&txn.workspaceSegments, txn.op.Txn().ID, r.tableId, sid,
 			colexec.TxnWorkspaceUnCommitType)
 		txn.registerCNObjects(*oid, r.accountId, r.databaseId, r.tableId,
 			r.bat, r.databaseName, r.tableName, r.autoIncrEpoch,
@@ -5964,7 +5965,14 @@ func (txn *Transaction) delTransaction() {
 	txn.cn_flushed_s3_tombstone_object_stats_list = nil
 	txn.deletedBlocks = nil
 	txn.haveDDL.Store(false)
-	colexec.MustGetServer(txn.engine.service).DeleteTxnSegmentIds(txn.op.Txn().ID)
+	// Retirement removes exactly the segment-map entries THIS workspace
+	// registered (its ledger), never sweeping foreign transactions'
+	// registrations: a read-only fragment's empty ledger never opens the
+	// segment mutex, and a fragment cannot unregister the registrations
+	// another fragment of the same distributed transaction made under
+	// the shared txn ID on this CN (issue #25590 review finding P2).
+	colexec.MustGetServer(txn.engine.service).
+		RetireTxnWorkspaceSegments(&txn.workspaceSegments)
 	txn.cnObjsSummary = nil
 	txn.loadFiles = nil
 	txn.hasS3Op.Store(false)

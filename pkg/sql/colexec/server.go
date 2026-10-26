@@ -266,20 +266,43 @@ func (srv *Server) retainClosedReceiverForWaitersLocked(
 		waiter.ownerCh == item.ownerCh
 }
 
-func (srv *Server) PutCnSegment(txnID []byte, tableId uint64, sid *objectio.Segmentid, segmentType int32) {
+// PutCnSegment registers one workspace segment type for txnID and
+// records the exact map key in the REGISTERING workspace's ledger, so
+// that workspace's terminal can retire exactly what it registered
+// instead of sweeping the whole CN segment map. owned is never nil.
+func (srv *Server) PutCnSegment(
+	owned *TxnWorkspaceSegments,
+	txnID []byte, tableId uint64,
+	sid *objectio.Segmentid, segmentType int32,
+) {
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
-	srv.cnSegmentMap.mp[segmentKey(txnID, tableId, sid)] = segmentType
+	key := segmentKey(txnID, tableId, sid)
+	srv.cnSegmentMap.mp[key] = segmentType
+	if owned.keys == nil {
+		owned.keys = make(map[string]struct{})
+	}
+	owned.keys[key] = struct{}{}
 }
 
-func (srv *Server) DeleteTxnSegmentIds(txnID []byte) {
+// RetireTxnWorkspaceSegments removes exactly the segment-map entries one
+// workspace registered and clears its ledger. A workspace that owns no
+// registration — every ordinary read-only remote fragment among them —
+// returns without opening the segment mutex, so its settlement keeps no
+// coupling to unrelated writers' segment registrations and lookups on
+// this CN (issue #25590 review finding P2). Entries registered by other
+// workspaces stay untouched, including other fragments of the same
+// distributed transaction that share this workspace's txn ID.
+func (srv *Server) RetireTxnWorkspaceSegments(owned *TxnWorkspaceSegments) {
+	if owned == nil || len(owned.keys) == 0 {
+		return
+	}
 	srv.cnSegmentMap.Lock()
 	defer srv.cnSegmentMap.Unlock()
-	for key := range srv.cnSegmentMap.mp {
-		if segmentKeyHasTxn(key, txnID) {
-			delete(srv.cnSegmentMap.mp, key)
-		}
+	for key := range owned.keys {
+		delete(srv.cnSegmentMap.mp, key)
 	}
+	owned.keys = nil
 }
 
 func (srv *Server) GetCnSegmentMap() map[string]int32 {

@@ -256,8 +256,9 @@ func TestDeleteBatchPreservesMixedRowOwnership(t *testing.T) {
 	segment[0] = 2
 	spilled.SetSegment(segment)
 	spilled.SetRowOffset(3)
-	server.PutCnSegment(op.Txn().ID, 42, spilled.BorrowSegmentID(), colexec.TxnWorkspaceUnCommitType)
-	t.Cleanup(func() { server.DeleteTxnSegmentIds(op.Txn().ID) })
+	server.PutCnSegment(&txn.workspaceSegments, op.Txn().ID, 42,
+		spilled.BorrowSegmentID(), colexec.TxnWorkspaceUnCommitType)
+	t.Cleanup(func() { server.RetireTxnWorkspaceSegments(&txn.workspaceSegments) })
 	makeBatch := func(ids ...types.Rowid) *batch.Batch {
 		bat := batch.NewWithSize(1)
 		bat.Attrs = []string{objectio.PhysicalAddr_Attr}

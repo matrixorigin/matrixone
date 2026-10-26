@@ -4739,3 +4739,117 @@ this round is recorded in the round's report: the merged-tree build,
 the renumbered r11/r15/r29/r44 families (nonrace + the r15 lane under
 -race), and the three-topology local replay of the renumbered D4''
 BVT cases against a cluster built from the merged tree.
+
+## 10 design review record - round 49 (implementation follow-up): fragment-settlement segment retirement is owner-scoped and proportional
+
+The request-changes review on head `6352367bfe` (P2 at
+`remoterunServer.go:292`, mo-bot job `0fc71205c535beea09789067`)
+measured an ordinary remote SELECT fragment's settlement performing a
+CN-wide segment-map scan: across 32 fragments, 2.007 µs per fragment
+with zero foreign segments, 448.743 µs with 50,000, and 8.080 ms with
+200,000 — under the shared `cnSegmentMap` mutex that
+`PutCnSegment`/`GetCnSegmentType`/the writer snapshots also take. The
+review asked for either no unregistration for fragments that own no
+registration, or removal proportional to the transaction's own
+registrations.
+
+Trigger analysis (design gate): the r5/r6 terminal settlement the
+approved design owns is unchanged — the same one-of terminal runs, in
+the same order, with the same transferred/non-transferred
+classification and the same lossless queue handoffs. What the review
+found is a resource-ownership and cost defect inside a terminal the
+design already approves: `delTransaction` retired the transaction's
+segment registrations with a whole-map prefix sweep
+(`DeleteTxnSegmentIds`), a method the design's records never relied
+on. No design decision, invariant, boundary or policy text changes:
+this is an ordinary focused defect fix exempt from a design-only
+checkpoint, recorded here as an implementation follow-up.
+
+Confirmed reproduction and root cause: the settlement's
+non-transferred leg (`FinalizeRemoteFragmentWorkspace(_, false)` —
+every ordinary remote SELECT fragment path) runs the full
+mirror-workspace `Rollback`, whose `delTransaction` ended in the
+whole-map sweep. Because `remoterunServer` binds a remote fragment's
+mirror to the SAME user txn operator, the sweep deleted not only the
+CN's every foreign entry at scan cost — it also deleted the segment
+registrations a concurrent write fragment of the SAME live
+transaction had registered on that CN, silently breaking the
+`GetCnSegmentType`/`IsDeletionOnTxnUnCommit` routing of later
+in-transaction deletes for that txn. The defect is therefore both
+cost (CN-wide scan per read fragment) and ownership (a fragment
+retiring state it never owned).
+
+Decision (inside the approved terminal set): every registration now
+records in the REGISTERING workspace its own ledger —
+`colexec.TxnWorkspaceSegments` — and `delTransaction` retires exactly
+that ledger:
+
+- `Server.PutCnSegment(owned *TxnWorkspaceSegments, ...)` appends the
+  exact map key to the ledger under the same segment-map mutex
+  section that performs the put, so the ledger needs no separate
+  synchronization and the key layout stays private to `colexec`.
+- `Server.RetireTxnWorkspaceSegments(owned)` deletes exactly the
+  recorded keys and clears the ledger; a nil ledger or an empty
+  ledger returns BEFORE acquiring the mutex, so a read-only
+  fragment's settlement — the exact class the review measured —
+  never opens the shared mutex and costs O(1) regardless of CN
+  population.
+- The whole-map sweep method (`DeleteTxnSegmentIds`) is deleted; the
+  scan-under-mutex cost class cannot silently return.
+- The two production registrars (`publishStagedWorkspaceRecordLocked`
+  for INSERT publishes and `publishStagedRepublicationLocked` for
+  compaction republications) pass the workspace's own ledger, so
+  exactly the workspace that registered entries retires them — the
+  same-workspace closure that covers every registrable entry (base
+  `28e8760905` had the same single closure:
+  `writeFileLockedWithAutoIncrEpoch`).
+
+Deliberately unchanged, recorded for round completeness:
+
+- A transferred (clean write) fragment settlement still performs no
+  segment retirement at all. Its registrations keep serving the same
+  transaction's reads (`GetCnSegmentType` lookups of later delete
+  fragments on that CN) until the transaction ends; retiring them at
+  the fragment's settlement would break those reads. The lifetime
+  matches base, which registered from remote mirrors through the same
+  write path and ran no mirror terminal at all, so nothing about any
+  recorded obligation changes.
+- The writer snapshots (`GetCnSegmentMap`) keep their existing shape;
+  their input set differs only in that a fragment can no longer
+  remove entries it never owned.
+
+Validation (repository CGo wrapper; commands and logs in the round's
+handler artifacts, `/tmp/issue25590-r49/`):
+
+- Red on the pre-fix head:
+  `TestIssue25590FragmentSettlementRetiresOnlyOwnSegmentRegistrations`
+  registers a write fragment's segment through the REAL publish path
+  (`WriteFile` -> `stageWorkspaceRecordLocked` ->
+  `publishStagedWorkspaceRecordLocked` -> `PutCnSegment`), settles a
+  second mirror workspace bound to the same txn operator through the
+  production settlement leg, and asserts the writer's registration
+  survives. On `6352367bfe` (source-verified swap run) it fails at
+  exactly that assertion (`expected: 1 actual: 0`, "a read-only
+  fragment settlement must not unregister another fragment's segment
+  registration", `ut-disttae-prefix-red.log`, exit 1); on the fixed
+  head it passes, and the writer's own rollback still removes exactly
+  its own registration (no overcorrection into never-removing).
+- Owner-scope UTs: `TestTxnWorkspaceSegmentsRetireExactlyOwnRegistrations`
+  (same-txnID competitor isolation, foreign-transaction isolation,
+  re-registration dedupe, double-terminal idempotence, zero-value
+  retirement) and `TestTxnWorkspaceSegmentsRetireEmptyNeverOpensSegmentMutex`
+  (an empty-ledger retirement completes while the test holds the
+  segment mutex — the removed sweep blocks there).
+- Proportionality: `BenchmarkRetireTxnWorkspaceSegments` across the
+  review's foreign populations shows the read-fragment ledger
+  retirement flat at ~5 ns/op (0/50k/200k foreign segments; the sweep:
+  2.007 µs/448.743 µs/8.080 ms) and a 16-object write fragment's full
+  register+retire cycle at 6.3/8.7/24.1 µs — its own 32 map operations,
+  never the CN's population (`bench-retire.log`, exit 0).
+- Broad runs on the fixed tree: the `TestIssue25590` families of
+  `pkg/sql/compile` (settlement/transport/refusal legs included,
+  `ok 2.252s`) and `pkg/vm/engine/disttae` (`ok 41.422s`), the full
+  `disttae` package (`ok 51.349s`), the full `colexec` package
+  (`ok 2.590s`), the focused three-root set under `-race` ×3 across
+  both packages (`ok 4.528s`/`ok 4.372s`, exit 0), and gofmt/vet/
+  golangci-lint clean on the changed closure.
