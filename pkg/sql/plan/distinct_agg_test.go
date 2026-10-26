@@ -146,9 +146,9 @@ func TestOptimizeSingleCountDistinctBuildsLocalPreDedupPath(t *testing.T) {
 	// final pair stage shuffles despite having an unshuffled Group child.
 	localPair.Stats.HashmapStats.Shuffle = true
 	localPair.Stats.HashmapStats.HashmapSize = 3_000_000
-	determineShuffleForGroupBy(localPair, builder)
+	determineShuffleForGroupBy(localPair, builder, false)
 	require.False(t, localPair.Stats.HashmapStats.Shuffle)
-	determineShuffleForGroupBy(finalPair, builder)
+	determineShuffleForGroupBy(finalPair, builder, false)
 	require.True(t, finalPair.Stats.HashmapStats.Shuffle)
 	require.Equal(t, int32(1), finalPair.Stats.HashmapStats.ShuffleColIdx)
 	require.Equal(t, planpb.ShuffleType_Hash, finalPair.Stats.HashmapStats.ShuffleType)
