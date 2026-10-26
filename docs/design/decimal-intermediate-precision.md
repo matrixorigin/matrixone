@@ -28,7 +28,16 @@ aggregate headroom and partial-state layout are not changed by this patch.
   and scale rather than substituting the target carrier capacity.
 - Signed/unsigned integer domains reserve their full 3..20 decimal digits;
   display width is not a value bound. BIT(64) reserves 20 digits.
-- Results beyond 38 digits continue to use Decimal256.
+- Exact declared domains beyond 38 digits continue to use Decimal256. Preserve
+  the released checked Decimal128 multiplication route when nominal operand
+  precisions fit 38 and only a legacy carrier-capacity interpretation would
+  promote it. Its precision-38 result remains the existing carrier envelope;
+  it must not be mistaken for an exact 38-digit bound in later multiplication.
+- For downstream MUL, Decimal128's legacy precision-38/unspecified envelope
+  admits its full signed 128-bit coefficient (39 digits). ADD/SUB already
+  reserve a carry, which bounds the sum/difference of two such coefficients;
+  they retain their existing metadata rules. Below the carrier ceiling,
+  declared domains remain precise.
 - Keep the existing Decimal64 multiplication kernel for safe signed-integer /
   Decimal64 pairs. Its output is Decimal128; an internal BIGINT cast retains
   its 19-digit logical domain. UINT64 and BIT cannot use the signed coefficient.
@@ -59,6 +68,26 @@ Compare each candidate independently with clean main using local SF10 Q1-Q22,
 spill and swap. Exclude cold warmups and collect profiles separately. Do not
 validate loaded data or query results in TPC-H benchmark scripts. A confirmed
 regression fails acceptance; an unresolved slowdown is not a pass.
+
+## Checked-route cost and downstream bounds
+
+A declared Decimal(20,0) times Decimal(18,0) fits the released checked D128
+route. Treating D64's legacy envelope as 19 digits must not itself insert two
+D256 input conversions and a wide row kernel for that route. Keep coefficient
+bounds separate from route eligibility: infer cast domains conservatively,
+but retain the old checked carrier when nominal precision fits it. A result
+at that carrier ceiling is an envelope, so later MUL reserves its full
+physical bound before selecting a narrower result precision. Checked physical
+overflow behavior remains the released policy for this ambiguous case.
+
+This adds no value prescan, new physical input/output pair, function ID,
+provenance marker or per-row branch. Existing casts and checked kernels remain
+the execution owners. Test both operand orders, scaled/unspecified domains,
+a 39-digit D128 coefficient consumed by later wide arithmetic, and genuine
+wide declared domains. Benchmark the declared 20-by-18 boundary against the
+17/19-digit neighbors at scalar, 256-row and 8192-row sizes, including NULL
+and constant controls. An independent complete performance pass remains
+required; neither an interrupted run nor a predicted loop cost is acceptance.
 
 ## Separate SUM execution work
 
