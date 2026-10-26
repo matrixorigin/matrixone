@@ -1535,8 +1535,10 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return err
 	}
 
-	if err := validateM0CopyExitTarget(qry.TableDef, newRel.CopyTableDef(c.proc.Ctx)); err != nil {
-		return err
+	if qry.TableDef != nil && qry.TableDef.AppendMissingState != nil {
+		if err := validateM0CopyExitTarget(qry.TableDef, newRel.CopyTableDef(c.proc.Ctx)); err != nil {
+			return err
+		}
 	}
 
 	//5. copy the original table data to the temporary replica table

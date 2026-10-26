@@ -1113,7 +1113,7 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		DefaultCharset:     tblItem.ExtraInfo.GetDefaultCharset(),
 		CollationVersion:   tblItem.ExtraInfo.GetCollationVersion(),
 		KeyFormat:          tblItem.ExtraInfo.GetKeyFormat(),
-		AppendMissingState: plan.CloneAppendMissingState(tblItem.ExtraInfo.AppendMissingState),
+		AppendMissingState: plan.CloneAppendMissingState(tblItem.ExtraInfo.GetAppendMissingState()),
 		Checks:             tblItem.ExtraInfo.GetChecks(),
 		LogicalId:          tblItem.LogicalId,
 	}, tableDef

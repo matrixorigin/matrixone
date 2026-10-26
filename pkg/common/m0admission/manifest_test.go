@@ -16,6 +16,7 @@ package m0admission
 
 import (
 	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 	"os"
@@ -151,7 +152,8 @@ func TestBirthAdmissionUnadmittedDataDirectory(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, unix.Setxattr(root, DataXattrName, data, 0))
 	require.NoFileExists(t, filepath.Join(root, MarkerName), "this must prove the actual directory marker, without a run sidecar")
-	require.Error(t, CheckDataDirectory(filepath.Join(root, "new-child")))
+	err = CheckDataDirectory(filepath.Join(root, "new-child"))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "admission failures use the standard error contract")
 	require.NoError(t, unix.Removexattr(root, DataXattrName))
 	require.NoError(t, CheckDataDirectory(filepath.Join(root, "new-child")))
 }

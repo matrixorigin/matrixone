@@ -183,6 +183,7 @@ func TestGetTableDefKeepsTemporarySessionStateContextual(t *testing.T) {
 	require.NotNil(t, tableDef)
 	require.Equal(t, catalog.SystemTemporaryTable, tableDef.TableType)
 	require.False(t, tableDef.IsTemporary)
+	require.Nil(t, tableDef.AppendMissingState, "ordinary catalog entries need no append metadata")
 }
 
 func TestCatalogCacheConcurrentGC(t *testing.T) {

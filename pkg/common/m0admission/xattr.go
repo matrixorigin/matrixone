@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"golang.org/x/sys/unix"
 	"io"
 	"os"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"golang.org/x/sys/unix"
 )
 
 // DataXattrName lives on the actual directory inode, including a separately
@@ -34,7 +35,7 @@ func readDataMarker(path string) (*Marker, error) {
 		return nil, err
 	}
 	if size == 0 || size > 1024 {
-		return nil, fmt.Errorf("M0 admission: invalid data-directory marker size")
+		return nil, moerr.NewInvalidInputNoCtxf("M0 admission: invalid data-directory marker size")
 	}
 	data := make([]byte, size)
 	n, err := unix.Getxattr(path, DataXattrName, data)
@@ -48,7 +49,7 @@ func readDataMarker(path string) (*Marker, error) {
 		return nil, err
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
-		return nil, fmt.Errorf("M0 admission: trailing data-directory marker")
+		return nil, moerr.NewInvalidInputNoCtxf("M0 admission: trailing data-directory marker")
 	}
 	return &marker, nil
 }
