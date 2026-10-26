@@ -851,6 +851,9 @@ func DeduceNotNullableForBinding(ctx context.Context, overloadID int64, args []*
 func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr) bool {
 	fid, oid := DecodeOverloadID(overloadID)
 	switch fid {
+	case DATABASE:
+		// DATABASE and its SCHEMA alias can observe an unset default database.
+		return false
 	case SMA, WMA, TRIMA, EMA, WILDER, KAMA, DEMA, TEMA, T3, MMAXDRAWDOWN:
 		// Indicator kernels emit leading warmup NULLs (issue #29949,
 		// design section 4); never proven not-nullable regardless of

@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -811,6 +812,13 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 	if owner, ok := tcc.GetSession().(process.TemporaryTableDDL); ok && useSessionTemporary {
 		ownedTemporary = owner.OwnsTemporaryTable(dbName, tableName)
 	}
+	var extraInfo *api.SchemaExtra
+	if tableDef.TableType == catalog.SystemOrdinaryRel && defines.IsTempTableName(tableName) {
+		extraInfo = table.GetExtraInfo()
+	}
+	if !plan2.TemporaryTableAccessAllowed(tcc.GetContext(), tcc.GetSession(), dbName, tableName, tableDef, extraInfo, isTmpTable) {
+		return nil, nil, nil
+	}
 	tableDef.IsTemporary = isTmpTable || ownedTemporary
 
 	// convert
@@ -862,10 +870,12 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 
 	// The caller's temporary index names cannot replace a foreign publisher's
 	// physical index relation in a private View read.
+	isTmpTable := false
 	if !tcc.viewSchemaRead || tcc.resolvePhysicalObjectAccount(ref, nil, snapshot) == tcc.GetSession().GetAccountId() {
-		realName, isTmpTable := tcc.GetSession().GetTempTable(ref.SchemaName, tblName)
-		if isTmpTable {
+		realName, ok := tcc.GetSession().GetTempTable(ref.SchemaName, tblName)
+		if ok {
 			tblName = realName
+			isTmpTable = true
 		}
 	}
 
@@ -890,6 +900,13 @@ func (tcc *TxnCompilerContext) ResolveIndexTableByRef(
 	tableDef := plan2.CloneTableDefForPlan(table.GetTableDef(ctx), true)
 	if err := tcc.recoverLegacyTinyText(ctx, ref.SchemaName, tableDef, subMeta, snapshot); err != nil {
 		return nil, nil, err
+	}
+	var extraInfo *api.SchemaExtra
+	if tableDef.TableType == catalog.SystemOrdinaryRel && defines.IsTempTableName(tblName) {
+		extraInfo = table.GetExtraInfo()
+	}
+	if !plan2.TemporaryTableAccessAllowed(tcc.GetContext(), tcc.GetSession(), ref.SchemaName, tblName, tableDef, extraInfo, isTmpTable) {
+		return nil, nil, moerr.NewNoSuchTable(ctx, ref.SchemaName, tblName)
 	}
 	if tableDef.IsTemporary {
 		tableDef.Name = tblName

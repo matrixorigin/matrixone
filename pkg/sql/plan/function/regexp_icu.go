@@ -25,9 +25,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/clipperhouse/uax29/v2/graphemes"
-	"github.com/dlclark/regexp2"
-	regexp2syntax "github.com/dlclark/regexp2/syntax"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexp2"
+	regexp2syntax "github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexp2/syntax"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexpclass"
 )
 
 // regexp2MatchTimeout bounds the only path in which MatrixOne permits
@@ -94,6 +95,8 @@ type regexp2Matcher struct {
 	rule              string
 	binary            bool
 	hasGrapheme       bool
+	lineMode          regexp2.LineMode
+	lineMask          bool
 	userGroupToEngine []int
 	groupName         map[string]int
 	estimatedBytes    int
@@ -1352,6 +1355,20 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 	rule = strings.Clone(rule)
 	key.pattern = strings.Clone(pat)
 	key.matchType = strings.Clone(pureMatchType)
+	lineMode := regexp2.UnixLines
+	if regexpMatchTypeWideMultiline(pureMatchType) {
+		lineMode = regexp2.WideTextLines
+		if binary {
+			lineMode = regexp2.WideBinaryLines
+		}
+	}
+	// The shared classifier reads the original rule with the flag prefix
+	// before the possessive rewrite obscures its flavor. The binary route
+	// leaves \U escapes to the engine as literal text.
+	classDialect := regexpclass.DialectRegexp2
+	if binary {
+		classDialect = regexpclass.DialectRegexp2Binary
+	}
 	expression, err := translateRegexp2Pattern(rule, binary)
 	if err != nil {
 		return nil, err
@@ -1380,11 +1397,16 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 		return nil, err
 	}
 	defer release()
+	// The cheap size verdicts and the engine's own parse gate ran above, so
+	// classification (which never fails) executes only for admitted
+	// patterns and inside the reserved compilation budget.
+	lineMask := lineMode != regexp2.UnixLines &&
+		regexpclass.Classify(rule, classDialect).SuppressCRLFInterior()
 	userGroupToEngine, groupName, err := regexp2CaptureMapping(pat, tree)
 	if err != nil {
 		return nil, err
 	}
-	_, err = compileRegexp2Expression(expression, userGroupToEngine)
+	_, err = compileRegexp2Expression(expression, userGroupToEngine, lineMode, lineMask)
 	if err != nil {
 		return nil, err
 	}
@@ -1395,6 +1417,8 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 		rule:              rule,
 		binary:            binary,
 		hasGrapheme:       !binary && regexp2PatternHasGrapheme(pat),
+		lineMode:          lineMode,
+		lineMask:          lineMask,
 		userGroupToEngine: userGroupToEngine,
 		groupName:         groupName,
 		estimatedBytes:    estimatedBytes,
@@ -2052,13 +2076,19 @@ func regexp2EvaluationBudget(matcher *regexp2Matcher) int64 {
 	return budget
 }
 
-func compileRegexp2Expression(expression string, userGroupToEngine []int) (*regexp2.Regexp, error) {
+func compileRegexp2Expression(
+	expression string,
+	userGroupToEngine []int,
+	lineMode regexp2.LineMode,
+	lineMask bool,
+) (*regexp2.Regexp, error) {
 	expression = remapRegexp2Backreferences(expression, userGroupToEngine)
 	re, err := regexp2.Compile(expression, regexp2.RE2)
 	if err != nil {
 		return nil, err
 	}
 	re.MatchTimeout = regexp2MatchTimeout
+	re.SetLinePolicy(lineMode, lineMask)
 	return re, nil
 }
 
@@ -2095,7 +2125,7 @@ func (m *regexp2Matcher) forSubject(subject string) (*regexp2Matcher, error) {
 		release()
 		return nil, err
 	}
-	re, err := compileRegexp2Expression(expression, m.userGroupToEngine)
+	re, err := compileRegexp2Expression(expression, m.userGroupToEngine, m.lineMode, m.lineMask)
 	if err != nil {
 		release()
 		return nil, err
@@ -2106,6 +2136,8 @@ func (m *regexp2Matcher) forSubject(subject string) (*regexp2Matcher, error) {
 		rule:              m.rule,
 		binary:            m.binary,
 		hasGrapheme:       false,
+		lineMode:          m.lineMode,
+		lineMask:          m.lineMask,
 		userGroupToEngine: m.userGroupToEngine,
 		groupName:         m.groupName,
 		estimatedBytes:    compiledBytes,

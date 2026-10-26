@@ -124,7 +124,8 @@ function verifyResults(scope, needs) {
 
 // Shared by the analyzer and BVT consumers, after checkout. No API pagination,
 // mutable branch comparison, or remembered plan can change the tested revision.
-function immutableChanges({ cwd = process.cwd(), env = process.env, git } = {}) {
+function immutableChanges({ cwd = process.cwd(), env = process.env, git, report = () => {} } = {}) {
+  const full = reason => { report(reason); return null; };
   const fs = require('node:fs');
   const { execFileSync } = require('node:child_process');
   git ||= args => execFileSync('git', args, {
@@ -132,21 +133,21 @@ function immutableChanges({ cwd = process.cwd(), env = process.env, git } = {}) 
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   if (env.GITHUB_ACTIONS !== 'true' || !env.GITHUB_EVENT_PATH ||
-      !['pull_request', 'pull_request_target'].includes(env.GITHUB_EVENT_NAME)) return null;
+      !['pull_request', 'pull_request_target'].includes(env.GITHUB_EVENT_NAME)) return full('immutable PR event unavailable');
   try {
     const pr = JSON.parse(fs.readFileSync(env.GITHUB_EVENT_PATH, 'utf8')).pull_request;
     const base = pr?.base?.sha;
     const head = pr?.head?.sha;
     if (![base, head].every(sha => /^[0-9a-f]{40}$/.test(sha || '')) ||
-        git(['rev-parse', 'HEAD']).trim() !== head) return null;
+        git(['rev-parse', 'HEAD']).trim() !== head) return full('invalid PR revision or checkout head mismatch');
     // Local edits cannot use a committed-input exemption. Include untracked
     // inputs too; ignored native outputs and runner reports are not source.
-    if (git(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none']).trim()) return null;
+    if (git(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none']).trim()) return full('checkout contains uncommitted inputs');
     try {
       git(['cat-file', '-e', `${base}^{commit}`]);
     } catch {
       // Fetch the immutable object only. Do not move a checkout or local ref.
-      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.GITHUB_REPOSITORY || '')) return null;
+      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.GITHUB_REPOSITORY || '')) return full('base unavailable and repository identity invalid');
       git(['fetch', '--no-tags', '--depth=1',
         `https://github.com/${env.GITHUB_REPOSITORY}.git`, base]);
     }
@@ -154,15 +155,15 @@ function immutableChanges({ cwd = process.cwd(), env = process.env, git } = {}) 
     // sides of a rename are roots; do not hide removals behind rename matching.
     const raw = git(['diff', '--no-ext-diff', '--no-renames', '--ignore-submodules=none', '--name-status', '-z', base, head]);
     const fields = raw.split('\0');
-    if (fields.pop() !== '' || fields.length === 0 || fields.length % 2) return null;
+    if (fields.pop() !== '' || fields.length === 0 || fields.length % 2) return full('empty or malformed immutable diff');
     const files = [];
     for (let i = 0; i < fields.length; i += 2) {
-      if (!['A', 'M', 'D', 'T'].includes(fields[i]) || !validPath(fields[i + 1])) return null;
+      if (!['A', 'M', 'D', 'T'].includes(fields[i]) || !validPath(fields[i + 1])) return full('unsupported immutable diff entry');
       files.push({ status: fields[i], filename: fields[i + 1] });
     }
     return files;
   } catch {
-    return null;
+    return full('immutable event, Git status, base fetch or diff unavailable');
   }
 }
 
