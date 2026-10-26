@@ -52,17 +52,29 @@ func virtualExprUsesTimestamp(table *plan.TableDef, expr *plan.Expr, visiting ma
 		col := table.Cols[e.Col.ColPos]
 		return col == nil || types.T(col.Typ.Id) == types.T_timestamp || virtualTimestampColumn(table, e.Col.ColPos, visiting)
 	case *plan.Expr_F:
+		if e.F == nil {
+			return true
+		}
 		for _, arg := range e.F.Args {
 			if virtualExprUsesTimestamp(table, arg, visiting) {
 				return true
 			}
 		}
 	case *plan.Expr_List:
+		if e.List == nil {
+			return true
+		}
 		for _, arg := range e.List.List {
 			if virtualExprUsesTimestamp(table, arg, visiting) {
 				return true
 			}
 		}
+	case *plan.Expr_Lit, *plan.Expr_T:
+		return false
+	default:
+		// An unfamiliar catalog expression must not make a persisted index
+		// appear safe when we cannot inspect all of its inputs.
+		return true
 	}
 	return false
 }
@@ -98,6 +110,9 @@ func expandVirtualTimestampExpr(table *plan.TableDef, expr *plan.Expr, tag, dept
 			e.Col.RelPos = tag
 		}
 	case *plan.Expr_F:
+		if e.F == nil {
+			return nil
+		}
 		for i, arg := range e.F.Args {
 			e.F.Args[i] = expandVirtualTimestampExpr(table, arg, tag, depth, visiting)
 			if e.F.Args[i] == nil {
@@ -105,12 +120,19 @@ func expandVirtualTimestampExpr(table *plan.TableDef, expr *plan.Expr, tag, dept
 			}
 		}
 	case *plan.Expr_List:
+		if e.List == nil {
+			return nil
+		}
 		for i, arg := range e.List.List {
 			e.List.List[i] = expandVirtualTimestampExpr(table, arg, tag, depth, visiting)
 			if e.List.List[i] == nil {
 				return nil
 			}
 		}
+	case *plan.Expr_Lit, *plan.Expr_T:
+		// No row-local references.
+	default:
+		return nil
 	}
 	return expr
 }

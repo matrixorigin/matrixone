@@ -64,6 +64,12 @@ func TestVirtualTimestampColumnUsesReaderTimeZone(t *testing.T) {
 			count("select count(*) from t "+hint+" where d='2024-03-01'", 1)
 			count("select count(*) from t "+hint+" where d='2024-02-29'", 1)
 		}
+		count("select id from t force index for order by (kd) where d='2024-03-01' order by d", 1)
+		count("select count(*) from t outer_t where exists (select 1 from t inner_t where inner_t.id=outer_t.id and outer_t.d='2024-03-01')", 1)
+		exec("create view v as select id,d from t")
+		count("select count(*) from v where d='2024-03-01'", 1)
+		exec("create table copied as select id,d from t where d='2024-03-01'")
+		count("select count(*) from copied where d='2024-03-01'", 1)
 		var got int
 		require.NoError(t, prepared.QueryRowContext(ctx, "2024-03-01").Scan(&got))
 		require.Equal(t, 1, got)
