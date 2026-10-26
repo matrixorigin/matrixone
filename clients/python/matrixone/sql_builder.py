@@ -548,6 +548,10 @@ class MatrixOneSQLBuilder:
             params.extend(self._where_params)
 
         sql = f"UPDATE {self._from_table} SET {set_clause} {where_clause}"
+        if self._order_by_columns:
+            sql += " ORDER BY " + ", ".join(self._order_by_columns)
+        if self._limit_count is not None:
+            sql += f" LIMIT {self._limit_count}"
         return sql, params
 
     def _build_delete(self) -> Tuple[str, List[Any]]:
@@ -560,6 +564,10 @@ class MatrixOneSQLBuilder:
             params.extend(self._where_params)
 
         sql = f"DELETE FROM {self._from_table} {where_clause}"
+        if self._order_by_columns:
+            sql += " ORDER BY " + ", ".join(self._order_by_columns)
+        if self._limit_count is not None:
+            sql += f" LIMIT {self._limit_count}"
         return sql, params
 
     def build_with_parameter_substitution(self) -> str:
