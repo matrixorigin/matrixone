@@ -42,6 +42,12 @@ type interruptibleLoadLocalWriter struct {
 	interrupts   atomic.Int32
 	frees        atomic.Int32
 	blockRequest bool
+	// interruptGate deterministically parks the cancellation watcher between
+	// CloseWithError and InterruptLoadLocalIO, with interruptEntered signaling
+	// the park: the test alone decides when the socket interrupt is allowed to
+	// land, exposing owner/watcher ordering windows without sleeps.
+	interruptEntered chan struct{}
+	interruptGate    chan struct{}
 }
 
 func (w *interruptibleLoadLocalWriter) WriteLocalInfileRequest(string) error {
@@ -61,16 +67,24 @@ func (w *interruptibleLoadLocalWriter) ReadLoadLocalPacket() ([]byte, error) {
 	return w.ioses.ReadLoadLocalPacket()
 }
 
-func (w *interruptibleLoadLocalWriter) ReadLoadLocalPacketWithTimeout(timeout time.Duration) ([]byte, error) {
+func (w *interruptibleLoadLocalWriter) ReadLoadLocalPacketWithTimeout(timeout time.Duration, deadline time.Time) ([]byte, error) {
 	select {
 	case w.reading <- struct{}{}:
 	default:
 	}
-	return w.ioses.ReadLoadLocalPacketWithTimeout(timeout)
+	return w.ioses.ReadLoadLocalPacketWithTimeout(timeout, deadline)
 }
 
 func (w *interruptibleLoadLocalWriter) InterruptLoadLocalIO() {
 	w.interrupts.Add(1)
+	if w.interruptGate != nil {
+		// Deterministic hold: the watcher already retired the pipe (so the
+		// owner's pipe write failed) but has not touched the socket yet. The
+		// test releases the gate to land the interrupt in the exact window it
+		// wants to pin.
+		w.interruptEntered <- struct{}{}
+		<-w.interruptGate
+	}
 	w.ioses.InterruptLoadLocalIO()
 }
 
@@ -570,4 +584,334 @@ func TestExecuteStatusStmtDrainsFiniteLocalUpload(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte{'q'}, payload)
 	require.NoError(t, <-written)
+}
+
+// The production chain of #30640: sessions are answered through
+// MysqlResp -> *MysqlProtocolImpl -> *Conn, and the upload owner asserts the
+// drain contract on that chain — not on a test stroke. The 2013 escaped the
+// earlier suites because only the stroke implemented the interface while the
+// real protocol did not. Wire the real chain end to end: assert the
+// interface, drain a finite upload to its protocol EOF through the protocol,
+// then reuse the same connection for the next command. The compile-time
+// guard next to loadLocalDrainCapable pins the same contract at build time.
+func TestProductionMysqlRrWrDrainsFiniteUpload(t *testing.T) {
+	server, client := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	require.NoError(t, client.SetDeadline(time.Now().Add(5*time.Second)))
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	allocator := NewLeakCheckAllocator()
+	conn, err := NewIOSessionWithOptions(server, config.NewParameterUnit(sv, nil, nil, nil), "",
+		WithIOSessionAllocator(allocator))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, conn.Close())
+		require.True(t, allocator.CheckBalance(), "connection/upload buffers must be released")
+	})
+	protocol := &MysqlProtocolImpl{tcpConn: conn}
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(protocol)}}
+	drainer, ok := ses.GetResponser().MysqlRrWr().(loadLocalDrainCapable)
+	require.True(t, ok, "production MysqlRrWr chain must expose the drain contract")
+
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ec := newTestExecCtx(ctx, ctrl)
+	drained := make(chan bool, 1)
+	go func() { drained <- drainLoadLocalUpload(ses, ec, drainer) }()
+	// Finite client: one data packet, then the empty protocol EOF packet.
+	_, err = client.Write([]byte{1, 0, 0, 1, 'x'})
+	require.NoError(t, err)
+	_, err = client.Write([]byte{0, 0, 0, 2})
+	require.NoError(t, err)
+	select {
+	case eof := <-drained:
+		require.True(t, eof)
+	case <-time.After(5 * time.Second):
+		t.Fatal("real protocol chain did not drain to upload EOF")
+	}
+	conn.FreeLoadLocal()
+	// The drained connection serves the next command.
+	written := make(chan error, 1)
+	go func() { _, err := client.Write([]byte{1, 0, 0, 0, 'q'}); written <- err }()
+	payload, err := protocol.ReadLoadLocalPacket()
+	require.NoError(t, err)
+	require.Equal(t, []byte{'q'}, payload)
+	require.NoError(t, <-written)
+}
+
+// A single stalling packet must not outlive the drain's total budget: the
+// client completes the header (announcing a large payload) and then trickles
+// one byte inside every per-read timeout. The absolute deadline is now
+// installed on every network read, so the drain retires the connection
+// promptly; with the per-read-only check a 16MiB payload could hang for days.
+func TestDrainAbsoluteDeadlineBoundsMidPacketTrickle(t *testing.T) {
+	oldReadTimeout, oldMaxWait := loadLocalDrainReadTimeout, loadLocalDrainMaxWait
+	loadLocalDrainReadTimeout = time.Second
+	loadLocalDrainMaxWait = 300 * time.Millisecond
+	defer func() { loadLocalDrainReadTimeout, loadLocalDrainMaxWait = oldReadTimeout, oldMaxWait }()
+
+	server, client := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	require.NoError(t, client.SetDeadline(time.Now().Add(10*time.Second)))
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	allocator := NewLeakCheckAllocator()
+	conn, err := NewIOSessionWithOptions(server, config.NewParameterUnit(sv, nil, nil, nil), "",
+		WithIOSessionAllocator(allocator))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, conn.Close())
+		require.True(t, allocator.CheckBalance(), "connection/upload buffers must be released")
+	})
+	ses := &Session{feSessionImpl: feSessionImpl{respr: NewMysqlResp(&MysqlProtocolImpl{tcpConn: conn})}}
+	ctrl := gomock.NewController(t)
+	ec := newTestExecCtx(context.Background(), ctrl)
+	quit := make(chan struct{})
+	go func() {
+		// Header announces a 512-byte payload, then trickle a byte at a time
+		// well inside the per-read timeout (30ms << 1s).
+		if _, err := client.Write([]byte{0, 2, 0, 1}); err != nil {
+			return
+		}
+		for i := 0; i < 512; i++ {
+			select {
+			case <-quit:
+				return
+			default:
+			}
+			if _, err := client.Write([]byte{'x'}); err != nil {
+				return
+			}
+			time.Sleep(30 * time.Millisecond)
+		}
+	}()
+	start := time.Now()
+	eof := drainLoadLocalUpload(ses, ec, conn)
+	close(quit)
+	require.False(t, eof, "a trickled mid-packet stream must retire the drain")
+	require.Less(t, time.Since(start), 5*time.Second,
+		"the total drain budget must bound a single stalling packet")
+}
+
+// A cancellation interrupt that lands BEFORE the next packet read installs
+// its own deadline must not be covered by that fresh deadline: without the
+// interrupt flag (#30640), a racing watcher could expire the socket, the
+// owner would then install a long deadline over it, and a trickled partial
+// read would stall the statement for the whole session timeout. The flag
+// makes every later read fail fast until the owner clears it to drain or
+// reuse the connection.
+func TestLoadLocalInterruptSurvivesLateReadArm(t *testing.T) {
+	server, client := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+	require.NoError(t, client.SetDeadline(time.Now().Add(10*time.Second)))
+	sv := &config.FrontendParameters{}
+	sv.SetDefaultValues()
+	allocator := NewLeakCheckAllocator()
+	conn, err := NewIOSessionWithOptions(server, config.NewParameterUnit(sv, nil, nil, nil), "",
+		WithIOSessionAllocator(allocator))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, conn.Close())
+		require.True(t, allocator.CheckBalance(), "connection/upload buffers must be released")
+	})
+	// No read is in flight yet: the watcher wins the race to the socket.
+	conn.InterruptLoadLocalIO()
+	done := make(chan error, 1)
+	go func() {
+		_, err := conn.ReadLoadLocalPacketWithTimeout(24*time.Hour, time.Time{})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.Error(t, err)
+		var netErr net.Error
+		require.ErrorAs(t, err, &netErr)
+		require.True(t, netErr.Timeout(), "interrupted read must fail fast, got %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("read armed after an interrupt ignored the cancellation")
+	}
+	// The owner lifts the interrupt and the connection still serves reads:
+	// a leftover interrupt would poison the next command on a reused session.
+	conn.ClearLoadLocalIOInterrupt()
+	written := make(chan error, 1)
+	go func() { _, err := client.Write([]byte{1, 0, 0, 0, 'q'}); written <- err }()
+	payload, err := conn.ReadLoadLocalPacket()
+	require.NoError(t, err)
+	require.Equal(t, []byte{'q'}, payload)
+	require.NoError(t, <-written)
+}
+
+// A late watcher InterruptLoadLocalIO landing after the owner had lifted the
+// interrupt used to expire the drain's deadline the moment it armed: the 65MiB
+// over-budget upload still became 2013 instead of the resource error (the
+// drain was retired 251µs after the statement error). This reproduces the
+// exact ordering deterministically — the stroke gate parks the watcher between
+// CloseWithError (which unblocks the owner's pipe write) and the socket
+// interrupt — and pins the fixed owner behaviour: it joins the watcher BEFORE
+// lifting the interrupt, so the interrupt lands first, is cleared once, and
+// the finite client tail drains to the protocol EOF.
+func TestProcessLoadLocalJoinsWatcherBeforeDrainInterrupt(t *testing.T) {
+	ses, protocol, client := newInterruptibleLoadLocal(t)
+	protocol.interruptEntered = make(chan struct{}, 1)
+	protocol.interruptGate = make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ec := newTestExecCtx(ctx, gomock.NewController(t))
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "test.csv"}}
+	reader, writer := io.Pipe()
+	t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
+	done := make(chan error, 1)
+	go func() { done <- processLoadLocal(ctx, ses, ec, param, writer, reader) }()
+	// Nobody consumes the pipe: once the owner has read the first uploaded
+	// packet it blocks in writer.Write until the pipe is retired by the
+	// watcher.
+	_, err := client.Write([]byte{1, 0, 0, 1, 'x'})
+	require.NoError(t, err)
+	select {
+	case <-protocol.reading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upload did not enter its first network read")
+	}
+	cancel()
+	// The watcher is now parked between CloseWithError — which already failed
+	// the owner's blocked pipe write — and its socket interrupt. The owner's
+	// very next step is either the (broken) lift-and-arm of the drain or the
+	// (fixed) join of this watcher.
+	select {
+	case <-protocol.interruptEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher never reached its socket interrupt")
+	}
+	// Allow the interrupt. Lift-then-drain would now be retired by it; the
+	// fixed owner waits for it first, then lifts once and drains the finite
+	// tail to the protocol EOF.
+	close(protocol.interruptGate)
+	_, err = client.Write([]byte{1, 0, 0, 2, 'y'})
+	require.NoError(t, err)
+	_, err = client.Write([]byte{0, 0, 0, 3})
+	require.NoError(t, err)
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("late watcher interrupt still retired the finite drain")
+	}
+	require.EqualValues(t, 1, protocol.interrupts.Load())
+	require.Zero(t, protocol.disconnects.Load())
+	require.EqualValues(t, 1, protocol.frees.Load())
+	// The drained connection serves the next command.
+	written := make(chan error, 1)
+	go func() { _, err := client.Write([]byte{1, 0, 0, 0, 'q'}); written <- err }()
+	payload, err := protocol.ioses.ReadLoadLocalPacket()
+	require.NoError(t, err)
+	require.Equal(t, []byte{'q'}, payload)
+	require.NoError(t, <-written)
+}
+
+// gatedReadDeadlineConn forces the old check-then-arm window at the real
+// SetReadDeadline boundary without sleeps: the blockAt-th long future deadline
+// install is held (signalled via entered) until the test releases it, so a
+// cancellation interrupt can be fired strictly between the reader's flag check
+// and the actual deadline install.
+type gatedReadDeadlineConn struct {
+	net.Conn
+	arms    atomic.Int32
+	blockAt int32
+	entered chan struct{}
+	release chan struct{}
+}
+
+// Only a long future read deadline is gated: the watcher's expiry (≈now) and
+// the owner's clear (zero) pass straight through.
+func (g *gatedReadDeadlineConn) SetReadDeadline(t time.Time) error {
+	if !t.IsZero() && time.Until(t) > time.Minute && g.arms.Add(1) == g.blockAt {
+		g.entered <- struct{}{}
+		<-g.release
+	}
+	return g.Conn.SetReadDeadline(t)
+}
+
+// The old deadline-arm window: the reader loaded the interrupt flag, then
+// continued into SetReadDeadline; a cancellation interrupt landing inside that
+// window was overwritten by the install, and the silent read hung for the
+// whole (configurable) session timeout. The gate forces the exact window for
+// a header read, a partial header read, and a partial payload read: the read
+// now unblocks deterministically on the interrupt in every variant, and a
+// cleared connection serves the next read.
+func TestLoadLocalInterruptCoversDeadlineArmWindow(t *testing.T) {
+	for _, name := range []string{"header read", "partial header read", "partial payload read"} {
+		t.Run(name, func(t *testing.T) {
+			var blockAt int32
+			switch name {
+			case "header read":
+				blockAt = 1
+			case "partial header read":
+				blockAt = 2
+			case "partial payload read":
+				blockAt = 3
+			}
+			server, client := net.Pipe()
+			gated := &gatedReadDeadlineConn{Conn: server, blockAt: blockAt, entered: make(chan struct{}, 1), release: make(chan struct{})}
+			t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+			require.NoError(t, client.SetDeadline(time.Now().Add(10*time.Second)))
+			sv := &config.FrontendParameters{}
+			sv.SetDefaultValues()
+			allocator := NewLeakCheckAllocator()
+			conn, err := NewIOSessionWithOptions(gated, config.NewParameterUnit(sv, nil, nil, nil), "",
+				WithIOSessionAllocator(allocator))
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				require.NoError(t, conn.Close())
+				require.True(t, allocator.CheckBalance(), "connection/upload buffers must be released")
+			})
+			// The consuming reads pair these net.Pipe writes in order: a plain
+			// header read consumes nothing upfront, a partial header read one
+			// short header, and a partial payload read a header plus half the
+			// payload — leaving the gated arm (blockAt-th) silent in all three.
+			switch name {
+			case "partial header read":
+				go func() { _, _ = client.Write([]byte{2, 0}) }()
+			case "partial payload read":
+				go func() {
+					if _, err := client.Write([]byte{8, 0, 0, 1}); err != nil {
+						return
+					}
+					_, _ = client.Write([]byte{'a', 'b', 'c'})
+				}()
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := conn.ReadLoadLocalPacketWithTimeout(24*time.Hour, time.Time{})
+				done <- err
+			}()
+			select {
+			case <-gated.entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("deadline arm never reached the network boundary")
+			}
+			// Fire the watcher strictly inside the arm: without the mutex the
+			// install following the release would overwrite the interrupt's
+			// expiry and pin the silent read for 24h (test timeout).
+			go conn.InterruptLoadLocalIO()
+			close(gated.release)
+			select {
+			case err := <-done:
+				require.Error(t, err)
+				var netErr net.Error
+				require.ErrorAs(t, err, &netErr)
+				require.True(t, netErr.Timeout(), "interrupt lost in the arm window, got: %v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("interrupt lost in the arm window: 24h read did not die")
+			}
+			conn.ClearLoadLocalIOInterrupt()
+			// A leftover interrupt would poison the next command on a reused
+			// session; the cleared connection reads normally again.
+			written := make(chan error, 1)
+			go func() { _, err := client.Write([]byte{1, 0, 0, 0, 'q'}); written <- err }()
+			payload, err := conn.ReadLoadLocalPacket()
+			require.NoError(t, err)
+			require.Equal(t, []byte{'q'}, payload)
+			require.NoError(t, <-written)
+		})
+	}
 }

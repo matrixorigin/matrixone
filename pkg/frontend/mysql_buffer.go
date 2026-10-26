@@ -224,7 +224,20 @@ type Conn struct {
 	loadLocalReadTimeout time.Duration
 	// loadLocalWriteTimeout is the timeout for writing data to client during LOAD DATA LOCAL operations
 	loadLocalWriteTimeout time.Duration
-	allocator             *BufferAllocator
+	// loadLocalIOInterrupt records a cancellation watcher interrupt so a
+	// load-local read started after the interrupt re-arms an already-expired
+	// deadline instead of covering it with a fresh long one; only the upload
+	// owner clears it, after the watcher is joined, before draining or
+	// reusing the socket.
+	loadLocalIOInterrupt atomic.Bool
+	// loadLocalMu serializes deadline installs with InterruptLoadLocalIO and
+	// ClearLoadLocalIOInterrupt: a deadline is chosen and armed atomically
+	// w.r.t. the cancellation watcher, so an interrupt landing inside the
+	// old check-then-arm window can never be overwritten again (it either is
+	// already visible when the deadline is chosen, or it expires the armed
+	// deadline right after). The network read itself never runs under it.
+	loadLocalMu sync.Mutex
+	allocator   *BufferAllocator
 	ses                   atomic.Pointer[holder[*Session]]
 	closeFunc             sync.Once
 	service               string
@@ -461,15 +474,19 @@ func (c *Conn) CheckAllowedPacketSize(totalLength int) error {
 	return nil
 }
 
-// ReadLoadLocalPacket just for processLoadLocal, reuse memory, and not merge 16MB packets
+// ReadLoadLocalPacket just for processLoadLocal, reuse memory, and not merge 16MB packets.
+// Reads under the session timeout only: a pending cancellation interrupt still
+// caps the actual network reads, and no absolute deadline applies.
 func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
-	return c.ReadLoadLocalPacketWithTimeout(c.loadLocalReadTimeout)
+	return c.ReadLoadLocalPacketWithTimeout(c.loadLocalReadTimeout, time.Time{})
 }
 
 // ReadLoadLocalPacketWithTimeout reads one client upload packet with an
 // explicit per-read timeout. processLoadLocal's post-cancellation drain uses
-// it to bound each silent read independently of the session setting.
-func (c *Conn) ReadLoadLocalPacketWithTimeout(timeout time.Duration) (_ []byte, err error) {
+// it to bound each silent read independently of the session setting; a nonzero
+// deadline additionally caps every single network read of this packet at that
+// absolute point, so one stalling header or payload cannot outlive the drain.
+func (c *Conn) ReadLoadLocalPacketWithTimeout(timeout time.Duration, deadline time.Time) (_ []byte, err error) {
 	var packetLength int
 	defer func() {
 		if rErr := recover(); rErr != nil {
@@ -484,7 +501,7 @@ func (c *Conn) ReadLoadLocalPacketWithTimeout(timeout time.Duration) (_ []byte, 
 			c.FreeLoadLocal()
 		}
 	}()
-	err = c.ReadNBytesIntoBufWithTimeout(c.header[:], HeaderLengthOfTheProtocol, timeout)
+	err = c.ReadNBytesIntoBufWithTimeout(c.header[:], HeaderLengthOfTheProtocol, timeout, deadline)
 	if err != nil {
 		return
 	}
@@ -508,7 +525,7 @@ func (c *Conn) ReadLoadLocalPacketWithTimeout(timeout time.Duration) (_ []byte, 
 		}
 	}
 
-	err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, packetLength, timeout)
+	err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, packetLength, timeout, deadline)
 	if err != nil {
 		return
 	}
@@ -517,12 +534,12 @@ func (c *Conn) ReadLoadLocalPacketWithTimeout(timeout time.Duration) (_ []byte, 
 
 // ReadNBytesIntoBufWithTimeout reads specified bytes from the network with a timeout.
 // This is used for LOAD DATA LOCAL operations.
-func (c *Conn) ReadNBytesIntoBufWithTimeout(buf []byte, n int, timeout time.Duration) error {
+func (c *Conn) ReadNBytesIntoBufWithTimeout(buf []byte, n int, timeout time.Duration, deadline time.Time) error {
 	var err error
 	var read int
 	var readLength int
 	for readLength < n {
-		read, err = c.ReadFromConnWithTimeout(buf[readLength:n], timeout)
+		read, err = c.ReadFromConnWithTimeout(buf[readLength:n], timeout, deadline)
 		if err != nil {
 			return err
 		}
@@ -762,16 +779,41 @@ func (c *Conn) ReadFromConn(buf []byte) (int, error) {
 
 // ReadFromConnWithTimeout reads from the network with a specific timeout.
 // This is used for LOAD DATA LOCAL operations where we need timeout detection.
-func (c *Conn) ReadFromConnWithTimeout(buf []byte, timeout time.Duration) (int, error) {
+// A nonzero deadline additionally caps this network read at that absolute
+// point (including a partial header or payload read), so one stalling packet
+// cannot outlive a bounded drain; a pending cancellation interrupt wins over
+// both and unblocks the read right away instead of being covered again.
+func (c *Conn) ReadFromConnWithTimeout(buf []byte, timeout time.Duration, deadline time.Time) (int, error) {
 	var err error
 	if timeout > 0 {
-		err = c.conn.SetReadDeadline(time.Now().Add(timeout))
+		// The flag check and the deadline install are one critical section
+		// with the cancellation watcher (and the owner clear): an interrupt
+		// landing between them can no longer be overwritten by this install —
+		// either the flag is already visible when the deadline is chosen, or
+		// the watcher expires the armed deadline right after the lock, and
+		// this read unblocks instead of hanging to the session timeout.
+		c.loadLocalMu.Lock()
+		readDeadline := time.Now().Add(timeout)
+		if !deadline.IsZero() && deadline.Before(readDeadline) {
+			readDeadline = deadline
+		}
+		if c.loadLocalIOInterrupt.Load() {
+			// The watcher expired this connection before the read installed its
+			// own deadline; re-arm an already-expired deadline so the read
+			// still fails fast, then the upload owner decides between drain
+			// and connection retirement.
+			readDeadline = time.Now()
+		}
+		err = c.conn.SetReadDeadline(readDeadline)
+		c.loadLocalMu.Unlock()
 		if err != nil {
 			return 0, err
 		}
 		// Clear the deadline after reading
 		defer func() {
+			c.loadLocalMu.Lock()
 			_ = c.conn.SetReadDeadline(time.Time{})
+			c.loadLocalMu.Unlock()
 		}()
 	}
 	return c.conn.Read(buf)
@@ -1069,9 +1111,16 @@ func (c *Conn) Disconnect() error {
 }
 
 // InterruptLoadLocalIO unblocks any in-flight LOAD LOCAL network read or write
-// by expiring both deadlines, without closing the connection. The owner checks
-// cancellation afterwards and decides between drain and disconnect.
+// by expiring both deadlines, without closing the connection. The interrupt
+// flag outlives the expired deadline: a load-local read started after the
+// interrupt re-arms an already-expired deadline instead of installing a fresh
+// long one, so a cancellation that lands between two reads is not lost. The
+// upload owner checks cancellation afterwards and decides between draining the
+// finite remainder and disconnecting.
 func (c *Conn) InterruptLoadLocalIO() {
+	c.loadLocalMu.Lock()
+	defer c.loadLocalMu.Unlock()
+	c.loadLocalIOInterrupt.Store(true)
 	if c.conn == nil {
 		return
 	}
@@ -1080,10 +1129,15 @@ func (c *Conn) InterruptLoadLocalIO() {
 	_ = c.conn.SetWriteDeadline(now)
 }
 
-// ClearLoadLocalIOInterrupt removes any deadlines left by
-// InterruptLoadLocalIO before a drained connection is reused for the next
-// command. Every timed load-local read already reinstalls its own deadline.
+// ClearLoadLocalIOInterrupt lifts the interrupt flag so the connection can be
+// drained (or later reused for the next command), and removes any deadlines
+// left by InterruptLoadLocalIO. Every timed load-local read already reinstalls
+// its own deadline. Only the upload owner may call this, after the
+// cancellation watcher has been joined.
 func (c *Conn) ClearLoadLocalIOInterrupt() {
+	c.loadLocalMu.Lock()
+	defer c.loadLocalMu.Unlock()
+	c.loadLocalIOInterrupt.Store(false)
 	if c.conn == nil {
 		return
 	}

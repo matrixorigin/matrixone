@@ -525,6 +525,24 @@ func (mp *MysqlProtocolImpl) ReadLoadLocalPacket() ([]byte, error) {
 func (mp *MysqlProtocolImpl) FreeLoadLocal() {
 	mp.tcpConn.FreeLoadLocal()
 }
+
+// InterruptLoadLocalIO, ClearLoadLocalIOInterrupt and
+// ReadLoadLocalPacketWithTimeout wire the LOAD DATA LOCAL drain contract
+// through to the underlying connection. Without them the upload owner sees an
+// opaque MysqlRrWr, falls back to the legacy Disconnect, and a finite client
+// upload interrupted by cancellation or an ordinary statement error loses the
+// connection with 2013 instead of receiving the statement error (#30640).
+func (mp *MysqlProtocolImpl) InterruptLoadLocalIO() {
+	mp.tcpConn.InterruptLoadLocalIO()
+}
+
+func (mp *MysqlProtocolImpl) ClearLoadLocalIOInterrupt() {
+	mp.tcpConn.ClearLoadLocalIOInterrupt()
+}
+
+func (mp *MysqlProtocolImpl) ReadLoadLocalPacketWithTimeout(timeout time.Duration, deadline time.Time) ([]byte, error) {
+	return mp.tcpConn.ReadLoadLocalPacketWithTimeout(timeout, deadline)
+}
 func (mp *MysqlProtocolImpl) Free(buf []byte) {
 	mp.tcpConn.allocator.Free(buf)
 }

@@ -5363,26 +5363,37 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 
 // Bounds for the post-cancellation upload drain. A single read timeout does not
 // bound the drain: a trickling or endless client stream is retired by the total
-// wait and byte budgets instead.
-const (
+// wait and byte budgets instead. The total wait is installed as an absolute
+// deadline on every network read (not just between packets), so one stalling
+// header or payload cannot outlive it. Package variables, not constants, so
+// lifecycle tests can shrink the budgets without long sleeps.
+var (
 	// loadLocalDrainReadTimeout bounds one silent read while draining, so a
 	// stalled client cannot pin the statement goroutine after failure.
 	loadLocalDrainReadTimeout = time.Second
 	// loadLocalDrainMaxWait bounds the whole drain, however many packets arrive.
 	loadLocalDrainMaxWait = 30 * time.Second
 	// loadLocalDrainMaxBytes bounds the payload volume drained from cancel on.
-	loadLocalDrainMaxBytes = 256 * 1024 * 1024
+	loadLocalDrainMaxBytes int64 = 256 * 1024 * 1024
 )
 
 // loadLocalDrainCapable is the narrow slice of the protocol the upload owner
 // needs to interrupt in-flight network I/O and run the post-cancellation
-// drain. *Conn implements it; any other MysqlRrWr keeps the legacy behaviour
-// of retiring the connection immediately on cancellation.
+// drain. *Conn implements it, and *MysqlProtocolImpl proxies the same contract
+// to its *Conn so real sessions drain instead of disconnecting (#30640); any
+// other MysqlRrWr keeps the legacy behaviour of retiring the connection
+// immediately on cancellation.
 type loadLocalDrainCapable interface {
 	InterruptLoadLocalIO()
 	ClearLoadLocalIOInterrupt()
-	ReadLoadLocalPacketWithTimeout(time.Duration) ([]byte, error)
+	ReadLoadLocalPacketWithTimeout(time.Duration, time.Time) ([]byte, error)
 }
+
+// The production protocol behind ses.GetResponser().MysqlRrWr() must satisfy
+// the drain contract: without these proxies the owner falls back to Disconnect
+// and a finite client upload loses its connection instead of receiving the
+// statement error. Fail here, at build time, on any future refactor.
+var _ loadLocalDrainCapable = &MysqlProtocolImpl{}
 
 // An upload either reaches the protocol EOF or retires its connection. Any
 // error or cancellation interrupts the in-flight network I/O, then a bounded
@@ -5425,10 +5436,22 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 		case <-quitC:
 		}
 	}()
+	// joinWatcher makes the one-shot cancellation watcher quiescent before the
+	// owner touches socket deadlines for drain or reuse. The watcher itself
+	// never reads the client and never waits on the upload pipe (its two calls
+	// are non-blocking socket/pipe operations), so joining it is bounded; after
+	// the join it can never again expire a deadline on this connection.
+	watcherJoined := false
+	joinWatcher := func() {
+		if !watcherJoined {
+			watcherJoined = true
+			close(quitC)
+			<-watcherDone
+		}
+	}
 	var reachedEOF bool
 	defer func() {
-		close(quitC)
-		<-watcherDone
+		joinWatcher()
 		if !reachedEOF {
 			disconnect()
 		} else if drainer, ok := mysqlRwer.(loadLocalDrainCapable); ok {
@@ -5561,6 +5584,13 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 	// retiring the connection (see the cleanup defer above).
 	if !reachedEOF && requestAccepted && (ctx.Err() != nil || drainOnExit) {
 		if drainer, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+			// Join the cancellation watcher BEFORE lifting its interrupt: a
+			// watcher's InterruptLoadLocalIO landing after the clear used to
+			// expire the drain's deadline mid-arm and disconnect a finite
+			// client (the renewed #30640 2013). After the join nothing can
+			// touch this connection's deadlines again but the drain itself.
+			joinWatcher()
+			drainer.ClearLoadLocalIOInterrupt()
 			reachedEOF = drainLoadLocalUpload(ses, execCtx, drainer)
 		}
 	}
@@ -5584,7 +5614,10 @@ func drainLoadLocalUpload(ses FeSession, execCtx *ExecCtx, drainer loadLocalDrai
 	deadline := time.Now().Add(loadLocalDrainMaxWait)
 	var drainedBytes int64
 	for {
-		payload, err := drainer.ReadLoadLocalPacketWithTimeout(loadLocalDrainReadTimeout)
+		// The absolute deadline is installed on every network read of this
+		// packet, so a trickled header or payload cannot outlive the drain's
+		// total budget one byte at a time.
+		payload, err := drainer.ReadLoadLocalPacketWithTimeout(loadLocalDrainReadTimeout, deadline)
 		if err == nil && len(payload) == 0 {
 			return true
 		}
