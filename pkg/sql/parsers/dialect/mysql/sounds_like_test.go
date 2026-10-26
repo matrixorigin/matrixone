@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -30,6 +31,11 @@ func TestSoundsLikeSyntaxAndPrecedence(t *testing.T) {
 	}{
 		{`select 'Hello' SoUnDs LiKe 'Hallo' as matched`, `select soundex('Hello') = soundex('Hallo') as matched`},
 		{`select 'Hello' sounds /* predicate */ like 'Hallo'`, `select soundex('Hello') = soundex('Hallo')`},
+		{`select 'Hello' sounds /*! like */ 'Hallo'`, `select soundex('Hello') = soundex('Hallo')`},
+		{`select 'Hello' sounds /*!50000 like */ 'Hallo'`, `select soundex('Hello') = soundex('Hallo')`},
+		{`select 'Hello' /*! sounds */ like 'Hallo'`, `select soundex('Hello') = soundex('Hallo')`},
+		{`select 'Hello' /*!50000 sounds */ like 'Hallo'`, `select soundex('Hello') = soundex('Hallo')`},
+		{`select /*! 'Hello' sounds like 'Hallo' */`, `select soundex('Hello') = soundex('Hallo')`},
 		{`select 1 + 2 sounds like 3 * 4`, `select soundex(1 + 2) = soundex(3 * 4)`},
 		{`select a sounds like b is null`, `select soundex(a) = soundex(b) is null`},
 		{`select a = b sounds like c`, `select a = (soundex(b) = soundex(c))`},
@@ -132,4 +138,16 @@ func TestSoundsLikeHighNotPrecedence(t *testing.T) {
 			require.Equal(t, formatted, tree.StringWithOpts(roundTrip, dialect.MYSQL, tree.WithSingleQuoteString()))
 		})
 	}
+}
+
+func TestSoundsLikeLookaheadDoesNotRecurse(t *testing.T) {
+	scanner := NewScanner(dialect.MYSQL, strings.Repeat("sounds ", 4096)+"like 'halo'")
+	defer PutScanner(scanner)
+	token, value := scanner.Scan()
+	require.Equal(t, ID, token)
+	require.Equal(t, "sounds", value)
+	// The probe above must not advance the original scanner beyond this token.
+	token, value = scanner.Scan()
+	require.Equal(t, ID, token)
+	require.Equal(t, "sounds", value)
 }

@@ -76,6 +76,13 @@ repository Makefile and require zero parser conflicts. If alias ambiguity needs
 precedence annotation, constrain it locally and prove the identifier controls;
 do not reserve SOUNDS or add a legacy keyword-policy exception.
 
+Implementation clarification after D1 review: contextual SOUNDS must inspect
+the next token from the authoritative lexer. Executable `/*! ... */` comments
+emit tokens, so `SOUNDS /*! LIKE */` and `/*! SOUNDS */ LIKE` must produce the
+same AST as `SOUNDS LIKE`. Lookahead must preserve the original scanner state
+and avoid recursive lookahead for repeated SOUNDS identifiers. This clarifies
+the existing parser design without changing AST, types, protocol or persistence.
+
 Data flow is SQL -> keyword scanner -> predicate AST -> existing SOUNDEX binder
 and parameter rebinder -> existing equality evaluator -> frontend result.
 Formatting uses the existing function/comparison formatter, including necessary

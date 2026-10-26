@@ -164,6 +164,9 @@ DEALLOCATE PREPARE soundex_prepared_28912;
 SELECT COALESCE(NULLIF(HEX(SOUNDEX(CAST(UNHEX('C3A9') AS VARBINARY(2)))), ''), '<empty>') AS direct_binary_hex;
 direct_binary_hex
 <empty>
+SELECT 'Hello' SOUNDS /*! LIKE */ 'Hallo' AS comment_like, 'Hello' SOUNDS /*!50000 LIKE */ 'Hallo' AS version_like, 'Hello' /*! SOUNDS */ LIKE 'Hallo' AS comment_sounds;
+comment_like    version_like    comment_sounds
+1    1    1
 SELECT 'Hello' SOUNDS LIKE 'Hallo' AS matched, 'Robert' SOUNDS LIKE 'Rubin' AS different, 'BDFJLMPR' SOUNDS LIKE 'BDFJLMPRB' AS full_code;
 matched    different    full_code
 1    0    0

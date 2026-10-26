@@ -110,6 +110,7 @@ DEALLOCATE PREPARE soundex_prepared_28912;
 SELECT COALESCE(NULLIF(HEX(SOUNDEX(CAST(UNHEX('C3A9') AS VARBINARY(2)))), ''), '<empty>') AS direct_binary_hex;
 
 # SOUNDS LIKE (#23010; SOUNDS LIKE subitem of #24496).
+SELECT 'Hello' SOUNDS /*! LIKE */ 'Hallo' AS comment_like, 'Hello' SOUNDS /*!50000 LIKE */ 'Hallo' AS version_like, 'Hello' /*! SOUNDS */ LIKE 'Hallo' AS comment_sounds;
 # Independent known results, ordinary NULL equality, and full Soundex codes.
 SELECT 'Hello' SOUNDS LIKE 'Hallo' AS matched, 'Robert' SOUNDS LIKE 'Rubin' AS different, 'BDFJLMPR' SOUNDS LIKE 'BDFJLMPRB' AS full_code;
 SELECT NULL SOUNDS LIKE 'Robert' AS left_null, 'Robert' SOUNDS LIKE NULL AS right_null, NULL SOUNDS LIKE NULL AS both_null;

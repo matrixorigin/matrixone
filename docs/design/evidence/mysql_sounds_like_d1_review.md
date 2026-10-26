@@ -26,3 +26,14 @@ independent true/false/NULL SQL oracles; prepared reuse; view export/replay;
 and CTAS. Changes to the approved type, protocol, persistence or other material
 design decisions require another design review. Push, publication, merge,
 deployment and issue closure remain outside the authorized scope.
+
+## Later implementation review finding (separate from D1 approval)
+
+On 2026-10-26 the parent reported independent implementation review
+REQUEST_CHANGES for `56a28a835a85a19a00b5604c7db0e93abd8cb3ec`: raw-text
+comment skipping disagreed with executable-comment tokenization. Frozen-commit
+probes confirmed failures when SOUNDS/LIKE crossed executable-comment boundaries;
+ordinary comments and whole-expression controls passed. The correction must use
+the next authoritative lexer token on a scanner copy, preserve original state,
+avoid recursive lookahead, and repeat parser/build/actual SQL validation.
+This records the finding and required correction, not follow-up approval.

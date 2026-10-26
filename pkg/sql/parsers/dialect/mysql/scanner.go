@@ -58,6 +58,7 @@ type Scanner struct {
 	strBuilder             bytes.Buffer
 	parseControl           *parseControl
 	aliasFollowerLookahead bool
+	soundsPhraseLookahead  bool
 	identifierAfterDot     bool
 }
 
@@ -76,6 +77,7 @@ func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
 	s.sqlMode = 0
 	s.parseControl = nil
 	s.aliasFollowerLookahead = false
+	s.soundsPhraseLookahead = false
 	s.identifierAfterDot = false
 
 	if clearLargeOnly {
@@ -1000,8 +1002,16 @@ func (s *Scanner) scanIdentifierToken(isVariable bool) (int, string) {
 		}
 		// SOUNDS is non-reserved, including as an implicit SELECT alias.
 		// Only the two-word predicate needs the keyword token.
-		if lower == "sounds" && !hasKeywordAt(s.buf, s.skipBlankAndCommentsFrom(s.Pos), "like") {
-			return ID, keywordName
+		if lower == "sounds" {
+			if s.soundsPhraseLookahead {
+				return ID, keywordName
+			}
+			lookahead := *s
+			lookahead.soundsPhraseLookahead = true
+			next, _ := lookahead.Scan()
+			if next != LIKE {
+				return ID, keywordName
+			}
 		}
 		if lower == "offset" && !s.aliasFollowerLookahead && !s.offsetClauseAhead() {
 			return ID, keywordName
