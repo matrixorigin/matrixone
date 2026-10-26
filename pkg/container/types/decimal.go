@@ -1685,7 +1685,6 @@ func Decimal128ToFloat64(x Decimal128, scale int32) float64 {
 }
 
 func Decimal64FromFloat64(x float64, width, scale int32) (y Decimal64, err error) {
-	err = nil
 	if x != x || x+1 == x || width > 18 || width < 1 || scale > width || scale < 0 {
 		err = moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal64: %f(%d,%d)", x, width, scale)
 		return
