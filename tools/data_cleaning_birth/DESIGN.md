@@ -25,6 +25,13 @@ admission. Secondary indexes, references, partition/temporary/cluster layouts,
 backfill expressions, NOT NULL and unsupported properties do not qualify.
 No SQL syntax, public API, scheduler, merge policy or other default type is added.
 
+The inherited NULL-only experimental domain remains restricted: a later
+non-qualifying DDL is rejected before mutation rather than allowed to violate
+next=b+v. General COPY exit is the false-history extension described below;
+this series does not expand the NULL-only prototype's later-DDL support. Ordinary
+builds retain their existing legal COPY behavior. This limitation must remain
+visible during experimental deployment and is not a production SQL promise.
+
 Alternatives are: (1) retain COPY, with simple and established semantics but a
 full rewrite per ADD; (2) reconstruct arbitrary historical schemas from lineage,
 which might support more tables but lacks reliable writer relation identity for
@@ -64,7 +71,7 @@ It must never become a second schema authority.
 
 | Boundary | Owner and required outcome |
 |---|---|
-| Planner admission | Bind column/default, transaction and layout eligibility before choosing an algorithm. Legal ineligible default-algorithm operations choose COPY; unsupported explicit INPLACE rejects. No fallback after mutation. |
+| Planner admission | Bind column/default, transaction and layout eligibility before choosing an algorithm. Ineligible new false ADDs and false-history exits choose COPY for legal default-algorithm operations; unsupported explicit INPLACE rejects. The inherited NULL-only domain rejects unsupported later DDL before mutation. No fallback after mutation. |
 | CN workspace | Resolve the actual relation/snapshot, verify persisted/uncommitted state, construct private definitions/default/history and register one rollback owner. Do not alias old Extra or rowid. |
 | TN publication | Verify expected source version/next seqnum and immutable extension before mutation. One ADD advances one schema version. Column, current default and birth state commit in the existing DDL transaction. |
 | Persistent read | The actual relation and visible schema establish ownership. Full object/block identity, type, header and complete prefix establish legal missing suffix. Present columns, including NULL bitmap, always win. Holes or mismatches return errors. |

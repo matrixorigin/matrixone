@@ -41,15 +41,13 @@ const (
 type dmlSelectInfo struct {
 	typ string
 
-	projectList    []*Expr
-	tblInfo        *dmlTableInfo
-	idx            int32
-	rootId         int32
-	derivedTableId int32
+	projectList []*Expr
+	tblInfo     *dmlTableInfo
+	idx         int32
+	rootId      int32
 
-	onDuplicateIdx      []int32
-	onDuplicateExpr     map[string]*Expr
-	onDuplicateIsIgnore bool
+	onDuplicateIdx  []int32
+	onDuplicateExpr map[string]*Expr
 }
 
 type dmlTableInfo struct {
@@ -836,7 +834,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
-	info.derivedTableId = info.rootId
 	oldProject := append([]*Expr{}, lastNode.ProjectList...)
 
 	insertColToExpr := make(map[string]*Expr)
@@ -935,17 +932,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				materializeCols[int32(colIdx)] = true
 				materializeOrder = append(materializeOrder, int32(colIdx))
 			}
-			// if col.Typ.AutoIncr {
-			// if _, ok := pkCols[col.Name]; ok {
-			// 	uniqueCheckOnAutoIncr, err = builder.compCtx.GetDbLevelConfig(dbName, "unique_check_on_autoincr")
-			// 	if err != nil {
-			// 		return false, nil, err
-			// 	}
-			// 	if uniqueCheckOnAutoIncr == "Error" {
-			// 		return false, nil, moerr.NewInvalidInput(builder.GetContext(), "When unique_check_on_autoincr is set to error, insertion of the specified value into auto-incr pk column is not allowed.")
-			// 	}
-			// }
-			// }
 		} else {
 			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
@@ -989,7 +975,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	info.projectList = make([]*Expr, 0, len(projectList))
-	info.derivedTableId = info.rootId
 	for i, e := range projectList {
 		info.projectList = append(info.projectList, &plan.Expr{
 			Typ: e.Typ,
@@ -1174,7 +1159,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			info.rootId = newRootId
 			info.onDuplicateIdx = idxs
 			info.onDuplicateExpr = updateExprs
-			info.onDuplicateIsIgnore = stmt.IsIgnore()
 
 			// append ProjectNode
 			info.rootId = builder.appendNode(&plan.Node{
@@ -1283,15 +1267,6 @@ func checkNotNull(ctx context.Context, expr *Expr, tableDef *TableDef, col *ColD
 	// if (col.Primary && !col.Typ.AutoIncr) ||
 	// 	(col.Default != nil && !col.Default.NullAbility) {
 	// 	return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", col.Name))
-	// }
-
-	// if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
-	// 	names := tableDef.Pkey.Names
-	// 	for _, name := range names {
-	// 		if name == col.Name {
-	// 			return moerr.NewConstraintViolation(ctx, fmt.Sprintf("Column '%s' cannot be null", name))
-	// 		}
-	// 	}
 	// }
 
 	return nil

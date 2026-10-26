@@ -1,0 +1,8 @@
+from harness import *
+with Service('candidate','outer-join-qa') as svc:
+ s=svc.s;s.execute('SET SESSION max_dop=8')
+ for args in ['l.k,r.a','r.a,l.k']:
+  sql=f'SELECT COUNT(DISTINCT {args}) FROM qa30982_history_20261024.natural_unique5m l LEFT JOIN qa30995.nn r ON l.k=r.a WHERE l.k<1000000'
+  s.execute(sql);got=s.fetchall();print('OUTER_JOIN_RESULT',args,got,flush=True);assert got==((333337,),),(args,got)
+  s.execute('EXPLAIN PHYPLAN VERBOSE '+sql);(root/('outer-'+args.replace(',','_')+'-after-physical.txt')).write_text('\n'.join(str(x[0]) for x in s.fetchall()))
+print('OUTER_JOIN_QA_PASS',flush=True)

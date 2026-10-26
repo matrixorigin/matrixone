@@ -1746,7 +1746,9 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 
 	//6. drop original table.
 	// ISCP: That will also drop ISCP related jobs and pitr of the original table.
-	dropSql := fmt.Sprintf("drop table `%s`.`%s`", dbName, tblName)
+	// Internal SQL must quote identifiers: a legal db/table name may
+	// contain an embedded backtick (issue #30550).
+	dropSql := "drop table " + sqlquote.QualifiedIdent(dbName, tblName)
 	if isTemp {
 		dropSql = "drop temporary table " + sqlquote.QualifiedIdent(dbName, qry.TableDef.Name)
 	}
@@ -3424,7 +3426,9 @@ func cloneUnaffectedIndexes(
 			// clone copies source rows on top of the seed.
 			if cloneBehavior.ContainsDelete(oriIdxTblName.AlgoTableType) {
 				// delete all content but avoid truncate table with WHERE TRUE
-				sql := fmt.Sprintf("DELETE FROM `%s`.`%s` WHERE TRUE", dbName, newIdxTblName.IndexTableName)
+				// Escape identifiers here too: the db name may legally
+				// contain a backtick (same class as issue #30550).
+				sql := fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(dbName, newIdxTblName.IndexTableName))
 				if err := c.runSqlWithOptions(
 					sql,
 					executor.StatementOption{}.WithDisableLock(),

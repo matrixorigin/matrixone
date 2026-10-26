@@ -269,31 +269,6 @@ type ComputationWrapper interface {
 	BinaryExecute() (bool, string) //binary execute for COM_STMT_EXECUTE
 }
 
-type ColumnInfo interface {
-	GetName() string
-
-	GetType() types.T
-}
-
-var _ ColumnInfo = &engineColumnInfo{}
-
-type TableInfo interface {
-	GetColumns()
-}
-
-type engineColumnInfo struct {
-	name string
-	typ  types.Type
-}
-
-func (ec *engineColumnInfo) GetName() string {
-	return ec.name
-}
-
-func (ec *engineColumnInfo) GetType() types.T {
-	return ec.typ.Oid
-}
-
 type PrepareStmt struct {
 	fieldTypes *plan2.PreparedFieldTypes
 	// A committed type-generation rebuild can fail before execution metadata
@@ -432,6 +407,7 @@ type PrepareStmt struct {
 	runtimeSpecializationKey    string
 	runtimePlan                 *plan.Plan
 	runtimeDiagnosticCandidates []*plan.Expr
+	runtimeDecimalFloatProofs   []plan2.PreparedDecimalFloatProof
 	runtimeColDefData           [][]byte
 	runtimeCompile              *compile.Compile
 
@@ -816,12 +792,6 @@ func getStatementType(stmt tree.Statement) tree.StatementType {
 	}
 }
 
-// TableInfoCache tableInfos of a database
-//type TableInfoCache struct {
-//	db         string
-//	tableInfos map[string][]ColumnInfo
-//}
-
 func (prepareStmt *PrepareStmt) releaseRuntimeCompile(runtimeCompile *compile.Compile) {
 	if runtimeCompile == nil || runtimeCompile == prepareStmt.compile {
 		return
@@ -845,6 +815,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	runtimePlan *plan.Plan,
 	runtimeCompile *compile.Compile,
 	diagnosticCandidates []*plan.Expr,
+	decimalFloatProofs []plan2.PreparedDecimalFloatProof,
 	colDefData [][]byte,
 ) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
@@ -859,6 +830,7 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
 	prepareStmt.runtimeDiagnosticCandidates = diagnosticCandidates
+	prepareStmt.runtimeDecimalFloatProofs = decimalFloatProofs
 	prepareStmt.runtimeColDefData = colDefData
 	prepareStmt.runtimeCompile = runtimeCompile
 	if oldRuntimeCompile == runtimeCompile {
@@ -875,6 +847,7 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 	prepareStmt.runtimeSpecializationKey = ""
 	prepareStmt.runtimePlan = nil
 	prepareStmt.runtimeDiagnosticCandidates = nil
+	prepareStmt.runtimeDecimalFloatProofs = nil
 	prepareStmt.runtimeColDefData = nil
 	prepareStmt.runtimeCompile = nil
 	prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
@@ -2308,15 +2281,6 @@ type MysqlRrWr interface {
 	MysqlHelper
 }
 
-// MysqlPayloadWriter make final payload for the packet
-type MysqlPayloadWriter interface {
-	OpenRow() error
-	CloseRow() error
-	OpenPayload() error
-	FillPayload() error
-	ClosePayload(bool) error
-}
-
 // BinaryWriter write batch into fileservice
 type BinaryWriter interface {
 	MediaWriter
@@ -2334,11 +2298,6 @@ type StagedBinaryWriter interface {
 
 // CsvWriter write batch into csv file
 type CsvWriter interface {
-	MediaWriter
-}
-
-// MemWriter write batch into memory pool
-type MemWriter interface {
 	MediaWriter
 }
 

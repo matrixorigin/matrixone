@@ -54,13 +54,7 @@ func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
 		}
 
 		producer := cteRef.occurrences[0]
-		sinkID := appendSinkNodeWithTag(builder, producer.ctx, producerRootID, producer.rootTag)
-		builder.qry.Nodes[sinkID].ExtraOptions = materialized.CTESinkOption
-		if builder.cteSinkNodes == nil {
-			builder.cteSinkNodes = make(map[int32]struct{})
-		}
-		builder.cteSinkNodes[sinkID] = struct{}{}
-		sourceStep := builder.appendStep(sinkID)
+		sourceStep := builder.appendCTEProducer(producerRootID, producer.ctx, producer.rootTag)
 
 		replacements := make(map[int32]int32, len(cteRef.occurrences))
 		for _, occurrence := range cteRef.occurrences {
@@ -76,13 +70,20 @@ func (builder *QueryBuilder) reusableCTEProducer(
 	cteRef *CTERef,
 	rootID int32,
 ) (int32, map[int32]bool, bool) {
-	if cteRef == nil || cteRef.isRecursive || len(cteRef.occurrences) < 2 {
+	if cteRef == nil || cteRef.isRecursive || builder.boundCTEs[cteRef] != nil || len(cteRef.occurrences) < 2 {
 		return 0, nil, false
 	}
 
 	first := cteRef.occurrences[0]
 	allOccurrencesAreCurrentRoleClosures := currentRoleClosureOutput(first.types)
 	for _, occurrence := range cteRef.occurrences {
+		// Scalar reaggregation can forward a private native identity through
+		// an inline occurrence. Its captured visible transport schema cannot
+		// carry that column, so keep every occurrence of this CTE inline.
+		if occurrence.rootID < 0 || int(occurrence.rootID) >= len(builder.qry.Nodes) ||
+			len(builder.qry.Nodes[occurrence.rootID].ProjectList) != len(occurrence.types) {
+			return 0, nil, false
+		}
 		if occurrence.isCorrelated || !sameCTEOutput(first, occurrence) ||
 			!builder.cteSubtreeIsDeterministic(occurrence.rootID, make(map[int32]bool)) {
 			return 0, nil, false

@@ -58,54 +58,6 @@ func FilterRowIdForDel(proc *process.Process, retBat *batch.Batch, srcBat *batch
 	return nil
 }
 
-// FillPartitionBatchForDelete fills the data into the corresponding batch based on the different partitions to which the current `row_id` data belongs.
-func FillPartitionBatchForDelete(proc *process.Process, input *batch.Batch, buffer *batch.Batch, expect int32, rowIdIdx int, partitionIdx int, pkIdx int) error {
-	// Fill the data into the corresponding batch based on the different partitions to which the current `row_id` data
-	rid2pid := vector.MustFixedColWithTypeCheck[int32](input.Vecs[partitionIdx])
-	var err error
-
-	for i, rowid := range vector.MustFixedColWithTypeCheck[types.Rowid](input.Vecs[rowIdIdx]) {
-		if !input.Vecs[rowIdIdx].GetNulls().Contains(uint64(i)) {
-			patition := rid2pid[i]
-			if patition == -1 {
-				return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
-			} else if patition == expect {
-				err = vector.AppendFixed(buffer.Vecs[0], rowid, false, proc.GetMPool())
-				if err != nil {
-					return err
-				}
-				err = buffer.Vecs[1].UnionOne(input.Vecs[pkIdx], int64(i), proc.Mp())
-				if err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	buffer.SetRowCount(buffer.Vecs[0].Length())
-	return nil
-}
-
-// FillPartitionBatchForInsert fills the partition batch for insert operation.
-func FillPartitionBatchForInsert(proc *process.Process, input *batch.Batch, buffer *batch.Batch, expect int32, partitionIdx int) error {
-	rid2pid := vector.MustFixedColWithTypeCheck[int32](input.Vecs[partitionIdx])
-	for i, partition := range rid2pid {
-		if !input.Vecs[partitionIdx].GetNulls().Contains(uint64(i)) {
-			if partition == -1 {
-				return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
-			} else if partition == expect {
-				for j := range buffer.Attrs {
-					if err := buffer.Vecs[j].UnionOne(input.Vecs[j], int64(i), proc.GetMPool()); err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
-	buffer.SetRowCount(buffer.Vecs[0].Length())
-	return nil
-}
-
 func BatchDataNotNullCheck(vecs []*vector.Vector, attrs []string, tableDef *plan.TableDef, ctx context.Context) error {
 	for j, vec := range vecs {
 		if vec == nil {

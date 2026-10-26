@@ -297,8 +297,8 @@ SIRIUS_BUILD_MODE ?= release
 SIRIUS_MERGED_REF ?=
 SIRIUS_PREPARED := $(ROOT_DIR)/.sirius-sdk
 ifeq ($(MO_SIRIUS),1)
-ifneq ($(UNAME_S)/$(UNAME_M),linux/x86_64)
-$(error MO_SIRIUS=1 requires Linux amd64)
+ifeq ($(filter linux/x86_64 linux/aarch64 linux/arm64,$(UNAME_S)/$(UNAME_M)),)
+$(error MO_SIRIUS=1 requires Linux amd64 or arm64)
 endif
 ifeq ($(strip $(SIRIUS_SDK)),)
 $(error MO_SIRIUS=1 requires a generated SIRIUS_SDK directory)
@@ -1541,6 +1541,23 @@ install-static-check-tools:
 	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
+FRONTEND_MOCKGEN = $(CGO_OPTS) CGO_LDFLAGS="-L$(THIRDPARTIES_INSTALL_DIR)/lib -L$(CGO_DIR) -Wl,-rpath,$(CGO_DIR) -Wl,-rpath,$(THIRDPARTIES_INSTALL_DIR)/lib" GOWORK=off $(GOPATH)/bin/mockgen -build_flags="$(GO_MODULE_MODE)"
+
+.PHONY: generate-frontend-mocks
+# Reflection mode selects the interfaces actually used by these shared mocks.
+generate-frontend-mocks: cgo
+	@if [ "$$($(GOPATH)/bin/mockgen -version 2>/dev/null)" != v1.6.0 ]; then \
+		GOBIN="$(GOPATH)/bin" go install github.com/golang/mock/mockgen@v1.6.0; \
+	fi
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/engine_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/vm/engine ChangesHandle,Relation,Reader,Database,Engine
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/txn_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/txn/client TxnClient,TxnOperator,Workspace
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/types_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/frontend ComputationRunner,ComputationWrapper,ExecResult,BackgroundExec
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/incrservice_mock.go -package mock_frontend github.com/matrixorigin/matrixone/pkg/incrservice AutoIncrementService
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_lock/types.go -package mock_lock github.com/matrixorigin/matrixone/pkg/lockservice LockService
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_moserver/server_mock.go -package mock_moserver github.com/matrixorigin/matrixone/pkg/frontend Server
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_shard/types.go -package mock_shard github.com/matrixorigin/matrixone/pkg/shardservice ShardService
+	$(FRONTEND_MOCKGEN) -destination pkg/frontend/test/mock_task/types.go -package mock_task github.com/matrixorigin/matrixone/pkg/taskservice TaskRunner
+
 .PHONY: static-check static-check-analysis static-check-golangci
 GOLANGCI_LINT_CONCURRENCY ?=
 GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
@@ -1555,13 +1572,18 @@ static-check: config err-check
 	$(STATIC_CHECK_GOLANGCI)
 
 # PR CI selects complete affected packages using the verified Go test/import
-# graph. Local use (including hosts without Node) retains the full checks.
+# graph. Local use and CI hosts without Node retain the full checks.
 # Both analyzers consume the same package list and their failures stay fatal.
 static-check-analysis: err-check
 	@set -e; packages='./...'; \
 	if [ "$${GITHUB_ACTIONS:-}" = true ] && command -v node >/dev/null 2>&1; then \
 		packages=$$($(CGO_OPTS) node .github/ci/static-analysis.cjs); \
 	else \
+		if [ "$${GITHUB_ACTIONS:-}" = true ]; then \
+			echo "SCA selection: full graph (Node unavailable on PATH in CI)" >&2; \
+		else \
+			echo "SCA selection: full graph (local invocation)" >&2; \
+		fi; \
 		$(MAKE) --no-print-directory config; \
 	fi; \
 	$(MAKE) --no-print-directory static-check-selected STATIC_CHECK_PACKAGES="$$packages"

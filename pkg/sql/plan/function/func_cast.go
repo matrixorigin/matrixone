@@ -32,6 +32,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -40,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/jsonvalue"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -684,6 +686,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal64: {
+		types.T_bool,
 		types.T_bit,
 		types.T_float32, types.T_float64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -696,6 +699,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal128: {
+		types.T_bool,
 		types.T_bit,
 		types.T_float32, types.T_float64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -708,6 +712,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal256: {
+		types.T_bool,
 		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -1286,10 +1291,30 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 		s := vector.GenerateFunctionFixedTypeParameter[float64](from)
 		err = float64ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
 	case types.T_decimal64:
-		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
+		var s vector.FunctionParameterWrapper[types.Decimal64]
+		if toType.Oid == types.T_decimal64 || toType.Oid == types.T_decimal128 {
+			result.UseOptFunctionParamFrame(1)
+			s = vector.OptGetParamFromWrapper[types.Decimal64](result, 0, from)
+		} else {
+			s = vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
+		}
 		err = decimal64ToOthers(execProc, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
 	case types.T_decimal128:
-		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
+		if toType.Oid == types.T_decimal64 {
+			s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
+			rs := vector.MustFunctionResult[types.Decimal64](result)
+			if length > 1 && from.IsConst() {
+				return decimal128ConstToDecimal64(execProc.Ctx, s, rs, length, selectList)
+			}
+			return decimal128ToDecimal64(execProc.Ctx, s, rs, length, selectList)
+		}
+		var s vector.FunctionParameterWrapper[types.Decimal128]
+		if toType.Oid == types.T_decimal128 {
+			result.UseOptFunctionParamFrame(1)
+			s = vector.OptGetParamFromWrapper[types.Decimal128](result, 0, from)
+		} else {
+			s = vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
+		}
 		err = decimal128ToOthers(execProc, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
 	case types.T_decimal256:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from)
@@ -1344,6 +1369,37 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 	return err
 }
 
+// widenDecimal256Batch writes a same-scale, non-NULL batch directly. Physical
+// widening preserves every coefficient bit, and an equal or wider declared
+// precision needs no per-row validation. Other shapes use the checked path.
+func widenDecimal256Batch(from *vector.Vector, to *vector.FunctionResult[types.Decimal256], target types.Type, length int) bool {
+	source := from.GetType()
+	if length == 0 || source.Scale != target.Scale || source.Width > target.Width || from.IsConst() || !from.GetNulls().EmptyByFlag() {
+		return false
+	}
+	dst := vector.MustFixedColNoTypeCheck[types.Decimal256](to.GetResultVector())
+	_ = dst[length-1]
+	switch source.Oid {
+	case types.T_decimal64:
+		values := vector.MustFixedColNoTypeCheck[types.Decimal64](from)
+		_ = values[length-1]
+		for i := 0; i < length; i++ {
+			sign := uint64(int64(values[i]) >> 63)
+			dst[i] = types.Decimal256{B0_63: uint64(values[i]), B64_127: sign, B128_191: sign, B192_255: sign}
+		}
+	case types.T_decimal128:
+		values := vector.MustFixedColNoTypeCheck[types.Decimal128](from)
+		_ = values[length-1]
+		for i := 0; i < length; i++ {
+			sign := uint64(int64(values[i].B64_127) >> 63)
+			dst[i] = types.Decimal256{B0_63: values[i].B0_63, B64_127: values[i].B64_127, B128_191: sign, B192_255: sign}
+		}
+	default:
+		return false
+	}
+	return true
+}
+
 func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, mode castMode) error {
 	rs := vector.MustFunctionResult[types.Decimal256](result)
 	switch from.GetType().Oid {
@@ -1386,13 +1442,22 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 		s := vector.GenerateFunctionFixedTypeParameter[float64](from)
 		return floatToDecimal256(s, rs, length, selectList)
 	case types.T_decimal64:
-		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
+		if widenDecimal256Batch(from, rs, toType, length) {
+			return nil
+		}
+		rs.UseOptFunctionParamFrame(1)
+		s := vector.OptGetParamFromWrapper[types.Decimal64](rs, 0, from)
 		return decimal64ToDecimal256Array(s, rs, length, selectList)
 	case types.T_decimal128:
-		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from)
+		if widenDecimal256Batch(from, rs, toType, length) {
+			return nil
+		}
+		rs.UseOptFunctionParamFrame(1)
+		s := vector.OptGetParamFromWrapper[types.Decimal128](rs, 0, from)
 		return decimal128ToDecimal256(s, rs, length, selectList)
 	case types.T_decimal256:
-		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from)
+		rs.UseOptFunctionParamFrame(1)
+		s := vector.OptGetParamFromWrapper[types.Decimal256](rs, 0, from)
 		if s.GetType().Scale == toType.Scale && s.GetType().Width <= toType.Width {
 			if err := rs.DupFromParameter(s, length); err != nil {
 				return err
@@ -2470,6 +2535,9 @@ func decimal64ToOthers(proc *process.Process,
 	mode castMode, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
 	switch toType.Oid {
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return decimalToBool(source, rs, length)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal64ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
@@ -2518,6 +2586,17 @@ func decimal64ToOthers(proc *process.Process,
 		return decimal64ToDecimal64(source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
+		if length == 0 {
+			return nil
+		}
+		if length == 1 {
+			if _, isNull := source.GetValue(0); isNull {
+				return rs.Append(types.Decimal128{}, true)
+			}
+		} else if decimalCastAllNull(source.GetSourceVector(), uint64(length)) {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
 		return decimal64ToDecimal128Array(source, rs, length, selectList)
 	case types.T_decimal256:
 		rs := vector.MustFunctionResult[types.Decimal256](result)
@@ -2552,6 +2631,9 @@ func decimal128ToOthers(proc *process.Process,
 	mode castMode, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
 	switch toType.Oid {
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return decimalToBool(source, rs, length)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal128ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
@@ -2646,6 +2728,9 @@ func decimal256ToOthersWithContext(
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
 	mode castMode, strictStringWidth ...bool) error {
 	switch toType.Oid {
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return decimalToBool(source, rs, length)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal256ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
@@ -3795,6 +3880,22 @@ func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 			if err := to.Append(T2(math.Round(float64(v))), false); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// decimalToBool follows MySQL: any non-zero DECIMAL is TRUE, NULL stays NULL.
+// Every DECIMAL width stores zero as all-zero bits, so comparing with the zero
+// value of the type is exact for negative and fractional values alike.
+func decimalToBool[T types.Decimal64 | types.Decimal128 | types.Decimal256](
+	from vector.FunctionParameterWrapper[T],
+	to *vector.FunctionResult[bool], length int) error {
+	var zero T
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := from.GetValue(i)
+		if err := to.Append(!null && v != zero, null); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -6189,15 +6290,42 @@ func decimal128ToFloat[T constraints.Float](
 	return nil
 }
 
+// decimalPhysicalPrecision returns the signed coefficient precision for a decimal OID.
+func decimalPhysicalPrecision(oid types.T) int32 {
+	switch oid {
+	case types.T_decimal64:
+		return 18
+	case types.T_decimal128:
+		return 38
+	case types.T_decimal256:
+		return 76
+	default:
+		return 0
+	}
+}
+
 // canWidenDecimalScale proves that increasing the coefficient's scale cannot
 // exceed either the declared precision or the physical DECIMAL representation.
 // Scale reduction can carry into the integer part, so it stays on the checked path.
+// Source and result types are fixed for a batch; evaluate this before the row loop.
 func canWidenDecimalScale(from, to types.Type) bool {
-	return from.Oid.IsDecimal() && to.Oid.IsDecimal() && from.Oid.TypeLen() <= to.Oid.TypeLen() &&
-		from.Width > 0 && from.Width <= from.Oid.ToType().Width &&
+	sourceLimit, targetLimit := decimalPhysicalPrecision(from.Oid), decimalPhysicalPrecision(to.Oid)
+	return sourceLimit > 0 && targetLimit > 0 && sourceLimit <= targetLimit &&
+		from.Width > 0 && from.Width <= sourceLimit &&
 		from.Scale >= 0 && from.Scale <= from.Width && to.Scale > from.Scale &&
-		to.Width > 0 && to.Width <= to.Oid.ToType().Width && to.Scale <= to.Width &&
+		to.Width > 0 && to.Width <= targetLimit && to.Scale <= to.Width &&
 		to.Width-to.Scale >= from.Width-from.Scale
+}
+
+// decimalCastAllNull checks only the requested row domain. Endpoint checks
+// avoid counting a bitmap when an ordinary or mixed batch has a visible value.
+func decimalCastAllNull(source *vector.Vector, length uint64) bool {
+	if source.IsConstNull() {
+		return true
+	}
+	ns := source.GetNulls()
+	return !ns.EmptyByFlag() && ns.Contains(0) &&
+		(length == 1 || (ns.Contains(length-1) && ns.CountRange(0, length) == int(length)))
 }
 
 func decimal64ToDecimal64(
@@ -6206,10 +6334,36 @@ func decimal64ToDecimal64(
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
-	fromtype := from.GetType()
+	if length == 0 {
+		return nil
+	}
+	if length == 1 {
+		if _, isNull := from.GetValue(0); isNull {
+			return to.Append(dft, true)
+		}
+	}
+	source := from.GetSourceVector()
+	if length > 1 && decimalCastAllNull(source, l) {
+		to.SetNullResult(l)
+		return nil
+	}
+	fromtype := *source.GetType()
 	totype := to.GetType()
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	scaleDelta := totype.Scale - fromtype.Scale
+	values := vector.MustFixedColNoTypeCheck[types.Decimal64](source)
+	constant := source.IsConst()
+	var sourceNulls *bitmap.Bitmap
+	if !constant && !source.GetNulls().EmptyByFlag() {
+		sourceNulls = source.GetNulls().GetBitmap()
+	}
 	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
+		row := i
+		if constant {
+			row = 0
+		}
+		v := values[row]
+		null := sourceNulls != nil && sourceNulls.Contains(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err
@@ -6217,8 +6371,8 @@ func decimal64ToDecimal64(
 		} else {
 			var result types.Decimal64
 			var err error
-			if canWidenDecimalScale(fromtype, totype) {
-				result, err = v.Scale(totype.Scale - fromtype.Scale)
+			if safeGrowth {
+				result, err = v.Scale(scaleDelta)
 			} else {
 				result, err = types.ParseDecimal64(v.Format(fromtype.Scale), totype.Width, totype.Scale)
 			}
@@ -6344,9 +6498,17 @@ func decimal64ToDecimal128Array(
 				}
 			}
 		} else {
+			source := from.GetSourceVector()
+			if source.IsConstNull() {
+				to.SetNullResult(uint64(length))
+				return nil
+			}
+			values := vector.MustFixedColNoTypeCheck[types.Decimal64](source)
+			sourceNulls := source.GetNulls().GetBitmap()
 			var dft types.Decimal128
 			for i := 0; i < length; i++ {
-				v, null := from.GetValue(uint64(i))
+				v := values[i]
+				null := sourceNulls.Contains(uint64(i))
 				if null {
 					if err := to.Append(dft, true); err != nil {
 						return err
@@ -6388,11 +6550,40 @@ func decimal64ToDecimal256Array(
 	to *vector.FunctionResult[types.Decimal256], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
-	fromtype := from.GetType()
-	totype := to.GetType()
 	var dft types.Decimal256
+	if length == 0 {
+		return nil
+	}
+	if length == 1 {
+		if _, isNull := from.GetValue(0); isNull {
+			return to.Append(dft, true)
+		}
+	}
+	source := from.GetSourceVector()
+	if length > 1 && decimalCastAllNull(source, l) {
+		to.SetNullResult(l)
+		return nil
+	}
+	fromtype := *source.GetType()
+	totype := to.GetType()
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	scaleDelta := totype.Scale - fromtype.Scale
+	scaleIn64 := safeGrowth && fromtype.Width+scaleDelta <= types.T_decimal64.ToType().Width
+	scaleIn128 := safeGrowth && !scaleIn64 && fromtype.Width+scaleDelta <= types.T_decimal128.ToType().Width
+	needsCheck := totype.Width < fromtype.Width || totype.Scale != fromtype.Scale
+	values := vector.MustFixedColNoTypeCheck[types.Decimal64](source)
+	constant := source.IsConst()
+	var sourceNulls *bitmap.Bitmap
+	if !constant && !source.GetNulls().EmptyByFlag() {
+		sourceNulls = source.GetNulls().GetBitmap()
+	}
 	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
+		row := i
+		if constant {
+			row = 0
+		}
+		v := values[row]
+		null := sourceNulls != nil && sourceNulls.Contains(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err
@@ -6404,21 +6595,20 @@ func decimal64ToDecimal256Array(
 			fromdec.B64_127 = ^fromdec.B64_127
 		}
 		result := types.Decimal256FromDecimal128(fromdec)
-		if canWidenDecimalScale(fromtype, totype) {
+		if safeGrowth {
 			var scaled types.Decimal256
 			var err error
-			growth := totype.Scale - fromtype.Scale
-			if fromtype.Width+growth <= types.T_decimal64.ToType().Width {
+			if scaleIn64 {
 				var narrow types.Decimal64
-				narrow, err = v.Scale(growth)
+				narrow, err = v.Scale(scaleDelta)
 				wide := types.Decimal128{B0_63: uint64(narrow), B64_127: uint64(int64(narrow) >> 63)}
 				scaled = types.Decimal256FromDecimal128(wide)
-			} else if fromtype.Width+growth <= types.T_decimal128.ToType().Width {
+			} else if scaleIn128 {
 				var narrow types.Decimal128
-				narrow, err = fromdec.Scale(growth)
+				narrow, err = fromdec.Scale(scaleDelta)
 				scaled = types.Decimal256FromDecimal128(narrow)
 			} else {
-				scaled, err = result.Scale(growth)
+				scaled, err = result.Scale(scaleDelta)
 			}
 			if err != nil {
 				return err
@@ -6426,7 +6616,7 @@ func decimal64ToDecimal256Array(
 			if err = to.Append(scaled, false); err != nil {
 				return err
 			}
-		} else if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
+		} else if needsCheck {
 			dec := result.Format(fromtype.Scale)
 			parsed, err := types.ParseDecimal256(dec, totype.Width, totype.Scale)
 			if err != nil {
@@ -6442,15 +6632,56 @@ func decimal64ToDecimal256Array(
 	return nil
 }
 
+// decimal128ConstToDecimal64 evaluates the checked conversion once, then
+// materializes the checked result across the requested rows.
+func decimal128ConstToDecimal64(ctx context.Context, from vector.FunctionParameterWrapper[types.Decimal128], to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
+	if err := decimal128ToDecimal64(ctx, from, to, 1, selectList); err != nil {
+		return err
+	}
+	if from.GetSourceVector().IsConstNull() {
+		to.SetNullResult(uint64(length))
+		return nil
+	}
+	dst := vector.MustFixedColNoTypeCheck[types.Decimal64](to.GetResultVector())
+	value := dst[0]
+	for i := 1; i < length; i++ {
+		dst[i] = value
+	}
+	return nil
+}
+
 func decimal128ToDecimal64(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+	if length == 1 {
+		if _, isNull := from.GetValue(0); isNull {
+			return to.Append(0, true)
+		}
+	} else if decimalCastAllNull(from.GetSourceVector(), uint64(length)) {
+		to.SetNullResult(uint64(length))
+		return nil
+	}
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
 	fromtype := from.GetType()
 	totype := to.GetType()
+	// For valid Decimal64 metadata, prove the scaled signed coefficient fits
+	// before multiplying. Scale reduction uses the same rounding as the legacy
+	// conversion; rejected values retain its exact error conversion below.
+	numeric := totype.Width > 0 && totype.Width <= 18 && totype.Scale >= 0 && totype.Scale <= totype.Width && fromtype.Scale >= 0 && fromtype.Scale <= 38
+	delta := totype.Scale - fromtype.Scale
+	factor, bound := uint64(1), uint64(0)
+	if numeric {
+		if delta > 0 {
+			factor = types.Pow10[delta]
+		}
+		bound = (types.Pow10[totype.Width] - 1) / factor
+	}
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -6458,6 +6689,27 @@ func decimal128ToDecimal64(
 				return err
 			}
 		} else {
+			if numeric {
+				scaled := v
+				if delta < 0 {
+					var err error
+					scaled, err = v.Scale(delta)
+					if err != nil {
+						return err
+					}
+				}
+				coefficient := int64(scaled.B0_63)
+				magnitude := uint64(coefficient)
+				if coefficient < 0 {
+					magnitude = 0 - magnitude
+				}
+				if scaled.B64_127 == uint64(coefficient>>63) && magnitude <= bound {
+					if err := to.Append(types.Decimal64(coefficient*int64(factor)), false); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			var dec string
 			scale := totype.Scale
 			if totype.Scale < fromtype.Scale {
@@ -6487,10 +6739,37 @@ func decimal128ToDecimal128(
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal128
-	fromtype := from.GetType()
+	if length == 0 {
+		return nil
+	}
+	if length == 1 {
+		if _, isNull := from.GetValue(0); isNull {
+			return to.Append(dft, true)
+		}
+	}
+	source := from.GetSourceVector()
+	if length > 1 && decimalCastAllNull(source, l) {
+		to.SetNullResult(l)
+		return nil
+	}
+	fromtype := *source.GetType()
 	totype := to.GetType()
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	scaleDelta := totype.Scale - fromtype.Scale
+	scaleDown := totype.Scale < fromtype.Scale
+	values := vector.MustFixedColNoTypeCheck[types.Decimal128](source)
+	constant := source.IsConst()
+	var sourceNulls *bitmap.Bitmap
+	if !constant && !source.GetNulls().EmptyByFlag() {
+		sourceNulls = source.GetNulls().GetBitmap()
+	}
 	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
+		row := i
+		if constant {
+			row = 0
+		}
+		v := values[row]
+		null := sourceNulls != nil && sourceNulls.Contains(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err
@@ -6498,11 +6777,11 @@ func decimal128ToDecimal128(
 		} else {
 			var result types.Decimal128
 			var err error
-			if canWidenDecimalScale(fromtype, totype) {
-				result, err = v.Scale(totype.Scale - fromtype.Scale)
-			} else if totype.Scale < fromtype.Scale {
+			if safeGrowth {
+				result, err = v.Scale(scaleDelta)
+			} else if scaleDown {
 				var scaled types.Decimal128
-				scaled, err = v.Scale(totype.Scale - fromtype.Scale)
+				scaled, err = v.Scale(scaleDelta)
 				if err == nil {
 					result, err = types.ParseDecimal128(scaled.Format(0), totype.Width, 0)
 				}
@@ -6526,10 +6805,39 @@ func decimal128ToDecimal256(
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal256
-	fromtype := from.GetType()
+	if length == 0 {
+		return nil
+	}
+	if length == 1 {
+		if _, isNull := from.GetValue(0); isNull {
+			return to.Append(dft, true)
+		}
+	}
+	source := from.GetSourceVector()
+	if length > 1 && decimalCastAllNull(source, l) {
+		to.SetNullResult(l)
+		return nil
+	}
+	fromtype := *source.GetType()
 	totype := to.GetType()
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	scaleDelta := totype.Scale - fromtype.Scale
+	scaleIn128 := safeGrowth && fromtype.Width+scaleDelta <= types.T_decimal128.ToType().Width
+	scaleDown := totype.Scale < fromtype.Scale
+	needsCheck := totype.Width < fromtype.Width || totype.Scale != fromtype.Scale
+	values := vector.MustFixedColNoTypeCheck[types.Decimal128](source)
+	constant := source.IsConst()
+	var sourceNulls *bitmap.Bitmap
+	if !constant && !source.GetNulls().EmptyByFlag() {
+		sourceNulls = source.GetNulls().GetBitmap()
+	}
 	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
+		row := i
+		if constant {
+			row = 0
+		}
+		v := values[row]
+		null := sourceNulls != nil && sourceNulls.Contains(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err
@@ -6537,15 +6845,15 @@ func decimal128ToDecimal256(
 			continue
 		}
 		result := types.Decimal256FromDecimal128(v)
-		if canWidenDecimalScale(fromtype, totype) {
+		if safeGrowth {
 			var scaled types.Decimal256
 			var err error
-			if fromtype.Width+totype.Scale-fromtype.Scale <= types.T_decimal128.ToType().Width {
+			if scaleIn128 {
 				var narrow types.Decimal128
-				narrow, err = v.Scale(totype.Scale - fromtype.Scale)
+				narrow, err = v.Scale(scaleDelta)
 				scaled = types.Decimal256FromDecimal128(narrow)
 			} else {
-				scaled, err = result.Scale(totype.Scale - fromtype.Scale)
+				scaled, err = result.Scale(scaleDelta)
 			}
 			if err != nil {
 				return err
@@ -6553,11 +6861,11 @@ func decimal128ToDecimal256(
 			if err = to.Append(scaled, false); err != nil {
 				return err
 			}
-		} else if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
+		} else if needsCheck {
 			var dec string
 			scale := totype.Scale
-			if totype.Scale < fromtype.Scale {
-				scaled, err := v.Scale(totype.Scale - fromtype.Scale)
+			if scaleDown {
+				scaled, err := v.Scale(scaleDelta)
 				if err != nil {
 					return err
 				}
@@ -6661,10 +6969,37 @@ func decimal256ToDecimal256(
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal256
-	fromtype := from.GetType()
+	if length == 0 {
+		return nil
+	}
+	if length == 1 {
+		if _, isNull := from.GetValue(0); isNull {
+			return to.Append(dft, true)
+		}
+	}
+	source := from.GetSourceVector()
+	if length > 1 && decimalCastAllNull(source, l) {
+		to.SetNullResult(l)
+		return nil
+	}
+	fromtype := *source.GetType()
 	totype := to.GetType()
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	scaleDelta := totype.Scale - fromtype.Scale
+	scaleDown := totype.Scale < fromtype.Scale
+	values := vector.MustFixedColNoTypeCheck[types.Decimal256](source)
+	constant := source.IsConst()
+	var sourceNulls *bitmap.Bitmap
+	if !constant && !source.GetNulls().EmptyByFlag() {
+		sourceNulls = source.GetNulls().GetBitmap()
+	}
 	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
+		row := i
+		if constant {
+			row = 0
+		}
+		v := values[row]
+		null := sourceNulls != nil && sourceNulls.Contains(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err
@@ -6673,11 +7008,11 @@ func decimal256ToDecimal256(
 		}
 		var result types.Decimal256
 		var err error
-		if canWidenDecimalScale(fromtype, totype) {
-			result, err = v.Scale(totype.Scale - fromtype.Scale)
-		} else if totype.Scale < fromtype.Scale {
+		if safeGrowth {
+			result, err = v.Scale(scaleDelta)
+		} else if scaleDown {
 			var scaled types.Decimal256
-			scaled, err = v.Scale(totype.Scale - fromtype.Scale)
+			scaled, err = v.Scale(scaleDelta)
 			if err == nil {
 				result, err = types.ParseDecimal256(scaled.Format(0), totype.Width, 0)
 			}
@@ -7065,6 +7400,18 @@ func strToSignedWithProc[T constraints.Signed](
 							}
 							continue
 						}
+					}
+					if mode == castModeExplicit && !isBinary && isIntegerLexicalConversionError(err) {
+						// MySQL returns 0 with a truncated-value warning when a
+						// string cannot start a numeric conversion; mirror that
+						// for explicit CAST while keeping strict paths strict
+						// (issue #30417).
+						appendExplicitIntegerCastWarning(proc, s, explicitIntegerCastTruncated)
+						result = T(0)
+						if err = to.Append(result, false); err != nil {
+							return err
+						}
+						continue
 					}
 					// XXX I'm not sure if we should return the int8 / int16 / int64 info. or
 					// just return the int. the old code just return the int. too much bvt result needs to update.
@@ -8128,6 +8475,16 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 						continue
 					}
 				}
+				if mode == castModeExplicit && !isBinary && isIntegerLexicalConversionError(tErr) {
+					// Mirror MySQL: explicit CAST of a lexically invalid string
+					// returns 0 with a truncated-value warning instead of an
+					// error (issue #30417). Binary-originated text stays strict.
+					appendExplicitIntegerCastWarning(proc, *res, explicitIntegerCastTruncated)
+					if err := to.Append(T(0), false); err != nil {
+						return err
+					}
+					continue
+				}
 				if strings.Contains(tErr.Error(), "value out of range") {
 					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("uint%d", bitSize), "value '%s'", *res)
 				}
@@ -8873,7 +9230,7 @@ func castToJSON(from *vector.Vector, result vector.FunctionResultWrapper, proc *
 		case types.T_char, types.T_varchar, types.T_text:
 			value, err = types.ParseSliceToByteJson(from.GetBytesAt(row))
 		case types.T_binary, types.T_varbinary, types.T_blob:
-			value = newTypedByteJson(bytejson.TpCodeOpaque, string(from.GetBytesAt(row)))
+			value, err = jsonvalue.FromBinary(ctx, jsonSessionProtocolVersion(proc), from.GetType().Oid, from.GetBytesAt(row))
 		case types.T_bool:
 			value, err = bytejson.CreateByteJSON(vector.GetFixedAtNoTypeCheck[bool](from, row))
 		case types.T_bit:

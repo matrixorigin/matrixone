@@ -78,6 +78,33 @@ func constructCreateTableSQL(
 	includeChecks bool,
 	sourceSubscription *SubscriptionMeta,
 ) (string, tree.Statement, error) {
+	return constructCreateTableSQLWithCommentFormat(
+		ctx, tableDef, snapshot, useDbName, cloneStmt, includeChecks,
+		sourceSubscription, false,
+	)
+}
+
+// ConstructCreateTableSQLForSchemaHash preserves the historical column/table
+// comment representation used by persisted DUMP schema fingerprints. Its output
+// is hash input, not replayable SQL. Ordinary SQL consumers must use
+// ConstructCreateTableSQL, which escapes those comments for replay.
+func ConstructCreateTableSQLForSchemaHash(tableDef *plan.TableDef) (string, error) {
+	sql, _, err := constructCreateTableSQLWithCommentFormat(
+		nil, tableDef, nil, false, nil, true, nil, true,
+	)
+	return sql, err
+}
+
+func constructCreateTableSQLWithCommentFormat(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	snapshot *Snapshot,
+	useDbName bool,
+	cloneStmt *tree.CloneTable,
+	includeChecks bool,
+	sourceSubscription *SubscriptionMeta,
+	legacyStoredComments bool,
+) (string, tree.Statement, error) {
 	// Replaying native metadata through a legacy SQL alias would change its
 	// semantics. Until activation, reject rather than emit a lossy dump.
 	if err := plan.RequireLegacyCollations(tableDef); err != nil {
@@ -230,7 +257,11 @@ func constructCreateTableSQL(
 		}
 
 		if col.Comment != "" {
-			buf.WriteString(" COMMENT '" + col.Comment + "'")
+			comment := col.Comment
+			if !legacyStoredComments {
+				comment = formatStoredComment(comment, sqlMode)
+			}
+			buf.WriteString(" COMMENT '" + comment + "'")
 		}
 		if mapping, ok := mongoColumns[strings.ToLower(col.Name)]; ok {
 			buf.WriteString(" MONGODB_PATH '")
@@ -674,7 +705,11 @@ func constructCreateTableSQL(
 		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
 			for _, kv := range proDef.Properties.Properties {
 				if kv.Key == catalog.SystemRelAttr_Comment {
-					comment = " COMMENT=" + sqlquote.String(kv.Value)
+					value := kv.Value
+					if !legacyStoredComments {
+						value = formatStoredComment(value, sqlMode)
+					}
+					comment = " COMMENT='" + value + "'"
 				} else if kv.Key != catalog.SystemRelAttr_Kind &&
 					kv.Key != catalog.SystemRelAttr_CreateSQL &&
 					kv.Key != catalog.PropSchemaExtra {
@@ -1531,6 +1566,7 @@ func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam, sqlMode s
 	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
 	// changes which rows are returned; round-trip it (omitted when unset).
 	appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param), sqlMode)
+	appendInfileOptionForShowCreate(&parts, "JSON_BINARY", param.JsonBinary, sqlMode)
 	appendHivePartitionOptionsForShowCreate(&parts, param, true, sqlMode)
 	return " INFILE{" + strings.Join(parts, ",") + "}"
 }
@@ -1567,6 +1603,7 @@ func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam, sqlMode strin
 	appendExternalOptionForShowCreate(&parts, "compression", param.CompressType, false, sqlMode)
 	appendExternalOptionForShowCreate(&parts, "format", param.Format, false, sqlMode)
 	appendExternalOptionForShowCreate(&parts, "jsondata", param.JsonData, false, sqlMode)
+	appendExternalOptionForShowCreate(&parts, JSONBinaryOptionKey, param.JsonBinary, false, sqlMode)
 	if pattern, ok := GetWriteFilePattern(param); ok {
 		appendExternalOptionForShowCreate(&parts, ExternalWriteFilePatternKey, pattern, false, sqlMode)
 	}
@@ -1665,6 +1702,17 @@ func formatStrLitForSQLMode(s, sqlMode string) string {
 		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 	}
 	return formatStrLit(s)
+}
+
+// formatStoredComment returns the body of a quoted COMMENT literal for a
+// column or table comment. The parser stores these comments with single
+// quotes already doubled (util.DealCommentString) but backslashes raw, so
+// only backslashes still need escaping for the default SQL mode.
+func formatStoredComment(comment, sqlMode string) string {
+	if mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
+		return comment
+	}
+	return strings.ReplaceAll(comment, `\`, `\\`)
 }
 
 func formatStr(str string) string {

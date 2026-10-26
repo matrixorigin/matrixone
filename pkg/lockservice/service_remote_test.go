@@ -2437,9 +2437,10 @@ func TestUnlockWithBindTimeout(t *testing.T) {
 			require.NoError(t, l2.Unlock(ctx, txnID2, timestamp.Timestamp{}))
 			require.True(t, failed.failed.Load(), "injected write failure was not exercised")
 			require.Nil(t, l2.activeTxnHolder.getActiveTxn(txnID2, false, ""))
-			// l2 get the bind
-			l := l2.tableGroups.get(0, table)
-			assert.Equal(t, l2.serviceID, l.getBind().ServiceID)
+			// Cleanup observes the retired generation without creating a new
+			// local owner. Actual acquisition owns replacement allocation.
+			require.Nil(t, l2.tableGroups.get(0, table))
+			require.False(t, alloc.lookupBind(pb.GetBindRequest{Table: table}).Valid)
 		},
 	)
 }

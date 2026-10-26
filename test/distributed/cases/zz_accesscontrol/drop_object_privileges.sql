@@ -86,17 +86,16 @@ from mo_catalog.mo_role_privs
 where role_name = 'drop_object_privileges_role'
   and obj_id = @drop_priv_prepared_id;
 
--- CREATE OR REPLACE VIEW cleans the old logical identity before publishing the replacement.
+-- CREATE OR REPLACE VIEW preserves the logical identity and its exact-view grant.
 use drop_object_privileges_db;
 create or replace view v1 as select 2 as id;
 set @drop_priv_new_v1_id = (select rel_logical_id from mo_catalog.mo_tables
                              where reldatabase = 'drop_object_privileges_db' and relname = 'v1');
-select @drop_priv_new_v1_id <> @drop_priv_v1_id as replaced_view_logical_id_changed;
-select count(*) as replaced_view_old_grants
+select @drop_priv_new_v1_id = @drop_priv_v1_id as replaced_view_logical_id_preserved;
+select count(*) as replaced_view_exact_grants
 from mo_catalog.mo_role_privs
 where role_name = 'drop_object_privileges_role'
   and obj_id = @drop_priv_v1_id;
-grant select on view drop_object_privileges_db.v1 to drop_object_privileges_role;
 
 -- ALTER VIEW preserves the logical object identity and its exact-view grant.
 alter view v1 as select 3 as id;
@@ -133,8 +132,8 @@ from (
 
 drop role drop_object_privileges_role;
 
--- Replacement DDL must qualify its internal DROP with the statement target,
--- not the session's current database, and must quote special identifiers.
+-- Replacement DDL must use the statement target database, independently of
+-- the session's current database, and must quote special identifiers.
 drop database if exists replace_current_db;
 drop database if exists replace_target_db;
 create database replace_current_db;

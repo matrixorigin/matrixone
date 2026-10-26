@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 )
 
 func NewCatalog() *CatalogCache {
@@ -825,6 +826,8 @@ func InitTableItemWithColumns(item *TableItem, cols Columns) {
 }
 
 func (cc *CatalogCache) InsertColumns(bat *batch.Batch) {
+	cc.tableChange.Lock()
+	defer cc.tableChange.Unlock()
 	ParseColumnsBatchAnd(bat, func(mp map[TableItemKey]Columns) {
 		queryKey := new(TableItem)
 		for k, cols := range mp {
@@ -1114,4 +1117,33 @@ func getTableDef(tblItem *TableItem, coldefs []engine.TableDef) (*plan.TableDef,
 		Checks:             tblItem.ExtraInfo.GetChecks(),
 		LogicalId:          tblItem.LogicalId,
 	}, tableDef
+}
+
+// ReplayClusterKey copies one schema under the same publication guard as column
+// initialization. The caller must have applied the catalog through at before
+// dispatching this frame; the cache duration is not that coverage proof.
+func (cc *CatalogCache) ReplayClusterKey(account uint32, dbID, tableID uint64, name string, at timestamp.Timestamp) *readutil.ClusterKeyDescriptor {
+	if cc == nil || at.IsEmpty() {
+		return nil
+	}
+	cc.tableChange.RLock()
+	defer cc.tableChange.RUnlock()
+	probe := &TableItem{AccountId: account, DatabaseId: dbID, Name: name, Ts: at}
+	var result *readutil.ClusterKeyDescriptor
+	cc.tables.data.Ascend(probe, func(item *TableItem) bool {
+		if item.AccountId != account || item.DatabaseId != dbID || item.Name != name {
+			return false
+		}
+		if item.deleted || item.Id != tableID {
+			return false
+		}
+		key, ok := readutil.DeclaredClusterKey(item.TableDef)
+		if ok && key.TableID == tableID && key.Version == item.Version {
+			key.Effective = types.TimestampToTS(item.Ts)
+			key.Through = types.TimestampToTS(at)
+			result = &key
+		}
+		return false
+	})
+	return result
 }
