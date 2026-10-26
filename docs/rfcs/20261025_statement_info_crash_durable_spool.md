@@ -1,7 +1,8 @@
 # Issue #30812: crash-durable statement_info audit spool
 - Status: in progress
-Revision 3, 2026-10-25. Owner: observability (motrace).
+Revision 4, 2026-10-26. Owner: observability (motrace).
 Tracking: [issue #30812](https://github.com/matrixorigin/matrixone/issues/30812); implementation [PR #31130](https://github.com/matrixorigin/matrixone/pull/31130) (the PR links this RFC revision).
+Revision 4 adds the adaptive group-commit gather window (performance review: realistic OLTP load must not materially regress), with the measured scaling law and the predicted ceiling.
 Revision 3 replaces segment-oriented retirement with record→batch ownership tracking and a contiguous-commit export watermark (round-2 review: a batch's acknowledgement cannot cover records sealed into the same segment but owned by a later, still-pending batch), converts spool quota to charge-on-write (round-2 review: a failed Sync must not uncharge bytes that are on disk), and counts quarantined poison files in startup size accounting (round-2 review: the cap must survive restarts). Revision 2 (per-file fsync confirmation, per-segment acks, quote-aware torn-tail/poison — kept) superseded Revision 1 (pre-review implementation).
 
 ## Gate, classification and review record
@@ -12,8 +13,9 @@ This design document is the mandatory design-first artifact. The change is label
 Change scope: whole feature — statement_info crash-durable spool (issue #30812, PR #31130)
 Trigger: ≥500 production lines; persistent state; recovery protocol; background workers; hot-path impact; config semantics
 Design: docs/rfcs/20261025_statement_info_crash_durable_spool.md, status in progress, revision linked from PR body
-Blocking findings: none open after revision 3 repairs (rev2: F1 fsync protocol, F2 ack protocol, F4 torn-tail/poison;
-                    rev3: batch/segment misalignment → ownership watermark; quota charge-on-write; poison boot accounting)
+Blocking findings: none open after revision 4 repairs (rev2: F1 fsync protocol, F2 ack protocol, F4 torn-tail/poison;
+                    rev3: ownership watermark; quota charge-on-write; poison boot accounting;
+                    rev4: adaptive group-commit gather window for the OLTP throughput ceiling)
 Decision log: at-least-once ceiling (no dedup key); rejected durable ack markers on the regular path (evidence below);
               in-memory acks + ack-lag horizon; parenting records to batch ids, contiguous-commit watermark;
               poison = quarantine, never delete, never block replay, counted against the cap at every boot
@@ -49,7 +51,10 @@ Selected: node-local WAL-style spool with per-record group-commit fsync, record-
 
 ## Logical architecture
 
-### Durable append / group commit (repair F1)
+### Durable append / group commit (repairs F1, OLTP ceiling)
+
+**Gather window (revision 4).** A sync cycle is: optional bounded linger → `Sync` → confirm. The leader holds its `Sync` back by the window only when the previous cycle was crowded (group ≥ 2 including arrivals during the in-flight Sync); a solo cycle closes the window to zero, so an idle single client pays exactly the pre-linger cost. The window is hard-bounded by `spoolFsyncLingerDefault` (1 ms). The appended-before-snapshot rule is unchanged (a write racing the Sync is never counted as covered by it), as are settle-on-error, waiter-across-seal, and the append-returns-only-after-covering-fsync contract.
+
 
 `spoolFsyncGroup` serializes appends to the active segment file behind a `spoolSyncFile{Write,Sync,Close}` seam (production: `*os.File`; tests: fault-injecting stubs). Confirmation is tracked **per file as a byte width** (`confirmedWidth`), initialized to the file's size at adoption (re-opened content was confirmed by its previous writer), never as a generation counter: the revision-1 protocol compared generations whose zero-equal initial state made the wait loop vanish entirely, so records sat un-fsynced until seal (review finding F1, proven by its probe).
 
@@ -114,9 +119,11 @@ Recovery of crashed content is **quote-aware**, because a CSV field may itself c
 
 ## Performance and capacity model
 
-Cost added to the report hot path: one row render (shared with export, plan JSON marshaled once and cached — pinned by UT), one CSV encode (~pooled 1 KiB), one `Write` + shared `Sync`. Serial statements pay one fsync each; concurrent statements share fsyncs (group commit — under load the queue behind an in-flight Sync is confirmed by exactly one more Sync; pinned by UT).
+Cost added to the report hot path: one row render (shared with export, plan JSON marshaled once and cached — pinned by UT), one CSV encode (~pooled 1 KiB), one `Write` + shared `Sync`. Serial statements pay one fsync each; concurrent statements share fsyncs (group commit — under load the queue behind an in-flight Sync is confirmed by exactly one more Sync; pinned by UT). With the revision-4 gather window, under sustained concurrency the service ceiling becomes `1/(linger+fsync) × group`, `group ≈ arrival_rate × (linger+fsync)`, converging to arrival-rate (non-capped); the residual cost is up to `linger` added per-statement latency under burst, zero when idle.
 
-> Performance measurements (spool on vs off throughput, 10s each, exact PR-head binary on the 2-CN rig): taken twice — pre-repair numbers measured a build whose first-appends skipped the real fsync path and are retracted; the post-repair numbers are in the PR's round-2 evidence comment. If the on/off delta is material, the group-commit gathering window is the tuning knob and any change will be called out in the PR.
+**Measured scaling law (this rig, shared overlay disk, fsync ≈ 1.125 ms/op):** sysbench `oltp_read_write`, 8×100k rows, 90 s legs, ON verdicts pre-linger: −43% TPS at 16/32 threads (≈349 vs ≈620 avg), −28% at 64 threads, plateau ≈ `fsync_rate × sharing` (≈890 sync/s × ~7); single-client −2.4%. The ceiling scales inversely with the spool volume's fsync latency (≈500 µs ⇒ ~2×, ≈100 µs local-NVMe class ⇒ ~10× pre-linger ON numbers); the gather window multiplies sharing by ~(window+fsync)/fsync.
+
+> Post-linger on/off numbers (same legs, exact head): reported in the PR performance comment alongside the pre-linger table.
 
 Capacity: head-of-line blocked removals (stuck export) grow the directory until the 1 GiB cap, then degrade to memory-only with metric+log — blast radius bounded to audit durability, never to serving SQL.
 
@@ -128,6 +135,7 @@ Cheapest deterministic check per invariant (fault injection, fake clocks, in-mem
 |---|---|
 | append never returns un-fsynced (incl. first append after boot/rotation) | `TestSpoolFsyncGroupAppendSurfacesSyncError` (Sync-failing file, error surfaces pre-seal), `TestSpoolFsyncGroupAppendSyncFailsOnRealPipe` (EINVAL real fd), `TestSpoolFsyncGroupFreshFileRequiresNewSync`, `TestStatementInfoSpoolAppendFsyncBeforeAck` (Sync counted before seal AND before ack) |
 | group commit amortizes + racing write not covered by in-flight Sync | `TestSpoolFsyncGroupCommitSharesSync` (3 records, exactly 2 Syncs) |
+| gather window: burst ⇒ one fsync; solo ⇒ zero linger; bounded; error settles | `TestSpoolFsyncGroupLingerGathersBurst` (5 writers, window open, exactly 1 Sync), `TestSpoolFsyncGroupLingerAdaptive` (crowded opens / solo closes / bounded), `TestSpoolFsyncGroupLingerErrorSettle` |
 | waiter across seal succeeds once, via seal Sync | `TestSpoolFsyncGroupWaiterAcrossSealSucceeds` (gated Sync, channels) |
 | spool error path degrades, no panic, written bytes stay charged | `TestStatementInfoSpoolAppendSyncFailureDegrades` (Sync failure: recorded charge retained, rate-limit, no panic; quota control still bounded), `TestSyncErrorMustNotUnchargeWrittenBytes` (round-2 probe: repeated Sync failure over a real file, disk usage tracks accounting), `TestStatementInfoSpoolErrorPaths` |
 | retirement follows exported records; misalignment cannot lose a pending batch | `TestBatchCommitMustCoverEverySpoolRecord` (round-2 probe verbatim: A=true, B=false, C=true ⇒ the A/B file survives), `TestStatementInfoSpoolWatermarkOutOfOrderFuzz`, `TestStatementInfoSpoolAckUnknownBatchSettlesNothing`, `TestStatementInfoSpoolPipelineGapReplayed` (crash ⇒ replay lands the record) |
@@ -156,5 +164,6 @@ Open questions (non-blocking): whether poison files should expire automatically 
 - Per-segment acks + in-order head-of-line removal over out-of-order completion (revision 2, review F2), SUPERSEDED in revision 3: even per-segment ownership was wrong — seal boundaries drift from batch boundaries (detached-buffer generation). Retirement now follows record→batch parenthood + contiguous-commit watermark (round-2 review); the horizon/dup window is unchanged, and batch failure/stall retains everything owned for restart replay with no explicit failed-flag.
 - Per-file byte-width fsync confirmation over generation counters (revision 2, review F1).
 - Charge-on-write quota accounting: written bytes stay charged across fsync failures; quarantined poison bytes counted at every boot (revision 3, round-2 reviews).
+- Adaptive gather window over a fixed window or a fixed zero (revision 4, performance review): a fixed window would tax idle/single-client append latency for nothing; a zero window leaves the OLTP ceiling at fsync-rate × natural-sharing (measured −43% TPS at 32 threads on slow storage). Solo cycles (group < 2 including arrivals during the in-flight Sync) close the window to zero; crowded cycles keep it at the 1 ms bound. Chosen: adaptive, bounded, no new configuration knob (the spool feature gate already exists).
 - Quote-aware CSV record recovery + poison quarantine (revision 2, review F4; fail-loud, never auto-delete, never block replay).
 - Import-cycle constraint: the replay SQL flush duplicates `etl.SQLFlusher.FlushBuffer`'s SQL byte-for-byte on the `db_holder` pool instead of importing `etl` (`etl`'s tests import `motrace`; the import must not exist in either direction for test builds). Kept under a comment with the identity contract; a follow-up extraction shared by both is welcome but not blocking.
