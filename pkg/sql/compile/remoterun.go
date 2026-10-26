@@ -150,6 +150,9 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if err != nil {
 		return nil, err
 	}
+	if features.FloatConversionSemantics && requiredProtocol != nil {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion132)
+	}
 	// The Query RPC probe and the execution stream can reach different worker
 	// generations. Fence affected payloads on the bound stream as well.
 	if features.IncompleteTemporalStrings && requiredProtocol != nil {
@@ -171,7 +174,7 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion129)
 	}
 	if requiredProtocol != nil && features.CRC32JSONTextBytes {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion132)
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion133)
 	}
 	// Decision D10 of the exact weighted percentile design: the encoded
 	// aggregate travels by encoded ID, so every destination receiving this
@@ -2536,6 +2539,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 			"signed INT ASCII results require MORPC protocol version 65",
 		)
 	}
+	if features.FloatConversionSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion132) {
+		return moerr.NewNotSupportedNoCtx("corrected float conversions require MORPC protocol version 132")
+	}
 	if features.StringNumericResultContracts &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion80) {
 		return moerr.NewNotSupportedNoCtx(
@@ -2580,9 +2586,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 		)
 	}
 	if features.CRC32JSONTextBytes &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion132) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion133) {
 		return moerr.NewNotSupportedNoCtx(
-			"CRC32 JSON text-byte semantics require MORPC protocol version 132",
+			"CRC32 JSON text-byte semantics require MORPC protocol version 133",
 		)
 	}
 	if features.ViewMetadataFunctions && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion126) {

@@ -401,7 +401,7 @@ func sourceDirectTableSelectV1(ctx context.Context, ses *Session, st *PrepareStm
 	if st == nil || ses.GetTenantInfo() == nil || !st.rewritePolicyCaptured || st.rewritePolicyEnabled || st.rewritePolicyInvalidated.Load() ||
 		len(st.remapDb) != 0 || st.needsRebuild || len(st.ParamTypes) != 0 || !st.sqlModeFlagsSet ||
 		st.ddlVersion != ses.getDDLVersion() || st.tempTableVersion != ses.GetTempTableVersion() ||
-		st.protocolVersion != currentProtocolVersion(ses.proc) || st.protocolVersion < defines.MORPCVersion133 ||
+		st.protocolVersion != currentProtocolVersion(ses.proc) || st.protocolVersion < defines.MORPCVersion134 ||
 		ses.GetTxnHandler() == nil || ses.GetTxnHandler().InActiveTxn() ||
 		len(ses.snapshotTempTables()) != 0 || ses.hasForeignConns() {
 		return nil, directMigrationRefusal()
@@ -538,7 +538,7 @@ func preflightDirectTableMigrationV1(ctx context.Context, ses *Session, req *que
 		total += p.ProtoSize()
 		if p.Version != 1 || p.DatabaseID == 0 || p.TableID == 0 || p.ProtoSize() > directMigrationProofLimit ||
 			total > directMigrationBatchLimit || len(st.ParamTypes) != 0 ||
-			st.RequiredProtocolVersion < defines.MORPCVersion133 || st.RequiredProtocolVersion > currentProtocolVersion(ses.proc) ||
+			st.RequiredProtocolVersion < defines.MORPCVersion134 || st.RequiredProtocolVersion > currentProtocolVersion(ses.proc) ||
 			req.DB != p.DatabaseName || ses.GetTenantInfo() == nil || ses.GetTenantInfo().GetTenantID() != p.AccountID {
 			return directMigrationRefusal()
 		}

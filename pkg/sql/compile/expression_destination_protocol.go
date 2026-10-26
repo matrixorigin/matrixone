@@ -39,6 +39,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
+		{features.FloatConversionSemantics, defines.MORPCVersion132,
+			"corrected float conversions require a versioned remote destination",
+			"remote destination does not support corrected float conversions (MORPC version %d)"},
 		{features.LoadFKIgnoreCheck, defines.MORPCVersion125,
 			"LOAD IGNORE foreign-key filtering requires a versioned remote destination",
 			"remote destination does not support LOAD IGNORE foreign-key filtering (MORPC version %d)"},
@@ -96,7 +99,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{(features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) || features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts || features.ExpressionResultMetadataContracts || features.JSONInputContracts || features.YearBitCast || features.JSONScalarLiteralContracts, requiredExpressionContractProtocolVersion(features),
 			"versioned expression semantics require a remote destination",
 			"remote destination does not support versioned expression semantics (MORPC version %d)"},
-		{features.CRC32JSONTextBytes, defines.MORPCVersion132,
+		{features.CRC32JSONTextBytes, defines.MORPCVersion133,
 			"CRC32 JSON text-byte semantics require a versioned remote destination",
 			"remote destination does not support CRC32 JSON text-byte semantics (MORPC version %d)"},
 		{features.StringNumericResultContracts, defines.MORPCVersion80,

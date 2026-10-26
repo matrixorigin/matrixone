@@ -882,7 +882,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 				return err
 			}
 			directProofs[i] = proof
-			requiredVersions[i] = defines.MORPCVersion133
+			requiredVersions[i] = defines.MORPCVersion134
 		}
 		features, err := plan.RequiredRemoteExpressionFeatures(st.PreparePlan)
 		if err != nil {
