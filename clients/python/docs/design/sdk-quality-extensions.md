@@ -1,6 +1,6 @@
 # Python SDK quality: related API and lifecycle corrections
 
-Revision 2 — 2026-10-26. Accepted design supplement to
+Revision 3 — 2026-10-26. Accepted design supplement to
 [sdk-quality-contracts.md](sdk-quality-contracts.md). Owner: Python SDK.
 Implementation: the same `codex/python-sdk-quality-20261026` PR; URL added when
 published. Base remains `b466f4ae9b74813a4ff93eaf43a6c81e6cbb8b0b`; the first
@@ -9,7 +9,8 @@ implementation. This supplement must also be committed before the extension
 implementation. Exact reviewed hashes/decision are recorded externally.
 Revision 1 was committed as `e78ca18589`; revision 2 narrows LOAD grammar-only
 string tokens after a native parser discriminator and does not alter the other
-extension decisions.
+extension decisions. Revision 3 records the reviewed checkout-only hook admission
+owner after exact supported-SQLAlchemy cancellation discriminators.
 
 ## 1. Evidence, scope and first owners
 
@@ -295,13 +296,18 @@ No algorithm cache, background restore or automatic retry is introduced.
 
 ### Hook admission
 
-Attach hooks before the first authentication/readiness query, using one
-SQLAlchemy physical `connect` event. Remove the before_cursor_execute duplicate
-and automatic separate immediate execution. The event already identifies new
-physical connections; it does not require a process-long set of Python object
-IDs. If an adoption path attaches to an already live engine, initialize each
-uninitialized connection at one clearly identified checkout boundary using
-ConnectionRecord-local state tied to the physical generation, never proxy IDs.
+Attach hooks before the first readiness query, using one SQLAlchemy `checkout`
+event and ConnectionRecord-local state tied to the physical generation. Remove
+the before_cursor_execute duplicate and automatic separate immediate execution.
+This covers both new physical connections and adoption of an already live engine
+without a process-long set of Python object IDs.
+
+Overall-review correction: the originally proposed `connect` event strands a
+physical connection when a callback is cancelled on SQLAlchemy 1.4.54/2.0.43.
+At checkout the pool already owns invalidation/checkin on BaseException. Real
+QueuePool tests assert exactly one physical close and zero checked-out resources
+for both new and adopted connections across those versions and 2.1. This owner
+refinement was approved in the second overall review.
 
 Predefined actions use the supplied physical DBAPI connection. For async
 engines the sync SQLAlchemy event uses the supported greenlet/AdaptedConnection
