@@ -3433,7 +3433,6 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 }
 
 func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, proc *process.Process) error {
-	var err error
 	drop := &dropAccount{
 		IfExists: da.IfExists,
 	}
@@ -3452,14 +3451,6 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 		&BackgroundExecOption{forcePessimisticRC: true},
 	)
 	defer bh.Close()
-
-	err = bh.Exec(execCtx.reqCtx, "begin;")
-	defer func() {
-		err = finishTxn(execCtx.reqCtx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
 
 	return doDropAccount(execCtx.reqCtx, bh, ses.(*Session), drop)
 }

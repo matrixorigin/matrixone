@@ -79,6 +79,13 @@ func (back *backExec) Service() string {
 	return back.backSes.GetService()
 }
 
+func (back *backExec) getTxn() TxnOperator {
+	if back == nil || back.backSes == nil || back.backSes.GetTxnHandler() == nil {
+		return nil
+	}
+	return back.backSes.GetTxnHandler().GetTxn()
+}
+
 func (back *backExec) GetLastAffectedRows() int64 {
 	return back.backSes.lastAffectedRows
 }

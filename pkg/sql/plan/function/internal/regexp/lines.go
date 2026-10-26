@@ -14,6 +14,8 @@
 
 package regexp
 
+import "github.com/matrixorigin/matrixone/pkg/sql/plan/function/internal/regexpclass"
+
 // LineMode changes multiline assertions only. Consuming instructions, text
 // anchors, word boundaries and scoped flags keep the pinned Go semantics.
 type LineMode uint8
@@ -22,20 +24,21 @@ const (
 	UnixLines LineMode = iota
 	WideTextLines
 	WideBinaryLines
+	// WideBinaryFoldLines is retained for source compatibility only. Both
+	// binary alphabets share one policy, {CR, VT, FF} plus native LF: byte
+	// 0x85 arrives as U+E085 (or folds to U+2026), which ICU never treats
+	// as a line terminator, while the ASCII bytes pass through unchanged.
 	WideBinaryFoldLines
 )
 
+// isWideTerminator reports the line terminators beyond the native LF, which
+// stays special-cased in lazyFlag.match so CRLF can stay one atomic break.
 func (mode LineMode) isWideTerminator(r rune) bool {
-	if r == '\r' {
+	if r == '\r' || r == '\v' || r == '\f' {
 		return true
 	}
-	switch mode {
-	case WideTextLines:
+	if mode == WideTextLines {
 		return r == 0x85 || r == 0x2028 || r == 0x2029
-	case WideBinaryLines:
-		return r == 0xE085 // byte 0x85 in the SQL binary matching alphabet
-	case WideBinaryFoldLines:
-		return r == 0x2026 // byte 0x85 in the Windows-1252 folding alphabet
 	}
 	return false
 }
@@ -47,6 +50,9 @@ func CompileWithLineMode(expr string, mode LineMode) (*Regexp, error) {
 		return nil, err
 	}
 	re.lineMode = mode
+	if mode != UnixLines {
+		re.lineMask = regexpclass.Classify(expr, regexpclass.DialectRE2).SuppressCRLFInterior()
+	}
 	return re, nil
 }
 

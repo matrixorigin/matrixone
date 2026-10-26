@@ -20,12 +20,12 @@ shared SQL generation logic to eliminate code duplication.
 """
 
 from __future__ import annotations
+
 from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 if TYPE_CHECKING:
     from .sqlalchemy_ext import VectorOpType
     from .ivf_rank import IVFRankMode
-
 
 from ._utils import get_table_name as _extract_table_name
 from .exceptions import QueryError
@@ -79,7 +79,9 @@ class _VectorManagerBase:
         if op_type is None:
             op_type = VectorOpType.VECTOR_L2_OPS
 
-        index = HnswVectorIndex(name, column, m=m, ef_construction=ef_construction, ef_search=ef_search, op_type=op_type)
+        index = HnswVectorIndex(
+            name, column, m=m, ef_construction=ef_construction, ef_search=ef_search, op_type=op_type
+        )
         return index.create_sql(table_name)
 
     @staticmethod
@@ -110,18 +112,9 @@ class _VectorManagerBase:
     @staticmethod
     def _build_insert_sql(table_name: str, data: Dict[str, Any]) -> str:
         """Build SQL for inserting vector data."""
-        columns = ", ".join(data.keys())
-        values = []
-        for v in data.values():
-            if isinstance(v, list):
-                vector_str = "[" + ",".join(str(x) for x in v) + "]"
-                values.append(f"'{vector_str}'")
-            elif isinstance(v, str):
-                values.append(f"'{v}'")
-            else:
-                values.append(str(v))
-        values_str = ", ".join(values)
-        return f"INSERT INTO {table_name} ({columns}) VALUES ({values_str})"
+        from .base_client import BaseMatrixOneClient
+
+        return BaseMatrixOneClient()._build_insert_sql(table_name, data)
 
     @staticmethod
     def _build_similarity_search_sql(
