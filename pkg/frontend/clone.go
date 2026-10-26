@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -1575,12 +1576,16 @@ func rewriteCloneViewInfos(
 		} else if dbName == srcDBName {
 			key = genKey(dstDBName, tblName)
 		}
-		createSQL, err := rewriteCloneCreateSQL(
-			info.createSql,
-			srcDBName,
-			dstDBName,
-			lowerCaseTableNames,
-		)
+		mode, err := viewParserSQLModeForRestore(info.viewDef)
+		if err != nil {
+			return nil, nil, err
+		}
+		ctx := plan.WithRestoredViewDefinition(context.Background(), info.dbName, info.tblName, info.viewDef, info.createSql)
+		lower, err := plan.RestoredViewLowerCaseTableNames(ctx, info.createSql, lowerCaseTableNames)
+		if err != nil {
+			return nil, nil, err
+		}
+		createSQL, err := rewriteCloneCreateSQLWithMode(info.createSql, srcDBName, dstDBName, lower, mode)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1588,21 +1593,56 @@ func rewriteCloneViewInfos(
 		clonedInfo := *info
 		clonedInfo.dbName = dstDBName
 		clonedInfo.createSql = createSQL
+		clonedInfo.viewDef, err = rebindCloneViewCreationDatabase(info.viewDef, srcDBName, dstDBName, lower)
+		if err != nil {
+			return nil, nil, err
+		}
 		rewrittenViewMap[key] = &clonedInfo
 	}
 
 	return rewrittenViewMap, rewrittenViews, nil
 }
 
+// Only the clone owner knows the logical database remapping. A creation database
+// outside that mapping is an external dependency, not the View's target database.
+func rebindCloneViewCreationDatabase(definition, source, target string, lowerCaseTableNames int64) (string, error) {
+	if definition == "" || source == "" || source == target {
+		return definition, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(definition), &fields); err != nil {
+		return "", err
+	}
+	value, present := fields["DefaultDatabase"]
+	if !present {
+		return definition, nil
+	}
+	var database string
+	if err := json.Unmarshal(value, &database); err != nil {
+		return "", err
+	}
+	if tree.NewCStr(database, lowerCaseTableNames).Compare() != tree.NewCStr(source, lowerCaseTableNames).Compare() {
+		return definition, nil
+	}
+	fields["DefaultDatabase"], _ = json.Marshal(target)
+	encoded, err := json.Marshal(fields)
+	return string(encoded), err
+}
+
 func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames int64) (string, error) {
+	return rewriteCloneCreateSQLWithMode(sql, srcDBName, dstDBName, lowerCaseTableNames, "")
+}
+
+func rewriteCloneCreateSQLWithMode(sql, srcDBName, dstDBName string, lowerCaseTableNames int64, sqlMode string) (string, error) {
 	if srcDBName == "" || srcDBName == dstDBName {
 		return sql, nil
 	}
 
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, lowerCaseTableNames)
+	stmt, err := parsers.ParseOneWithSQLMode(context.Background(), dialect.MYSQL, sql, lowerCaseTableNames, sqlMode)
 	if err != nil {
 		return "", err
 	}
+	defer stmt.Free()
 	createView, ok := stmt.(*tree.CreateView)
 	if !ok {
 		return "", moerr.NewInternalErrorNoCtxf("clone view SQL is %T, expected *tree.CreateView", stmt)
@@ -1629,6 +1669,7 @@ func rewriteCloneCreateSQL(sql, srcDBName, dstDBName string, lowerCaseTableNames
 			if parseErr != nil {
 				return "", parseErr
 			}
+			defer localStmt.Free()
 			localCreateView, localOK := localStmt.(*tree.CreateView)
 			if !localOK {
 				return "", moerr.NewInternalErrorNoCtxf(

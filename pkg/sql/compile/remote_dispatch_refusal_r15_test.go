@@ -86,7 +86,7 @@ func TestIssue25590RefuseRemoteWriteToNonRetainingFragmentR15(t *testing.T) {
 		"the designed default disposition is statement-only rollback: ErrNotSupported is outside moerr's whole-transaction rollback list")
 	require.Error(t, refuseRemoteWriteToNonRetainingFragment(ctx, defines.MORPCVersion129, write))
 	require.Error(t, refuseRemoteWriteToNonRetainingFragment(ctx, defines.MORPCVersion130, write))
-	require.Error(t, refuseRemoteWriteToNonRetainingFragment(ctx, defines.MORPCVersion131, write),
+	require.Error(t, refuseRemoteWriteToNonRetainingFragment(ctx, defines.MORPCVersion132, write),
 		"main's shipped latest stays below the first adoption build for dispatch")
 
 	// At or above the first adoption build, the producer-mode run
@@ -102,19 +102,19 @@ func TestIssue25590RefuseRemoteWriteToNonRetainingFragmentR15(t *testing.T) {
 	plain.Action = multi_update.UpdateWriteTable
 	plainWriter.RootOp = plain
 	parent.PreScopes = append(parent.PreScopes, write)
-	require.Error(t, refuseRemoteWriteToNonRetainingFragment(ctx, defines.MORPCVersion131, parent),
+	require.Error(t, refuseRemoteWriteToNonRetainingFragment(ctx, defines.MORPCVersion132, parent),
 		"a nested registered producer keeps the scope a write")
 
 	// A plain-mode multi-update (UpdateWriteTable: the ordinary-rows
 	// shape the relay recognizer must reject too) never consults the
 	// refusal — the mode, not the operator family, is the provenance.
-	require.NoError(t, refuseRemoteWriteToNonRetainingFragment(ctx, defines.MORPCVersion131, plainWriter),
+	require.NoError(t, refuseRemoteWriteToNonRetainingFragment(ctx, defines.MORPCVersion132, plainWriter),
 		"the same operator family in a non-persistence mode is ordinary traffic again")
 
 	// A plain query fragment over any receiver keeps base semantics —
 	// mixed-cluster read traffic never consults the refusal.
 	require.NoError(t, refuseRemoteWriteToNonRetainingFragment(ctx, 0, ordinary))
-	require.NoError(t, refuseRemoteWriteToNonRetainingFragment(ctx, defines.MORPCVersion131, ordinary))
+	require.NoError(t, refuseRemoteWriteToNonRetainingFragment(ctx, defines.MORPCVersion132, ordinary))
 
 	// Empty null input boundary.
 	require.NoError(t, refuseRemoteWriteToNonRetainingFragment(ctx, 0, nil))
@@ -217,11 +217,11 @@ func r15ProducerScope(t *testing.T, c *Compile) *Scope {
 // definite capability error whose default disposition is
 // statement-only rollback, and the public RemoteRun owns cleanup.
 func TestIssue25590RemoteRunRefusesNonRetainingProducerScopeR15(t *testing.T) {
-	for _, advertised := range []int64{0, defines.MORPCVersion129, defines.MORPCVersion131} {
+	for _, advertised := range []int64{0, defines.MORPCVersion129, defines.MORPCVersion132} {
 		t.Run(map[int64]string{
 			0:                       "unconfirmed zero fails closed",
 			defines.MORPCVersion129: "older main build",
-			defines.MORPCVersion131: "shipped latest",
+			defines.MORPCVersion132: "shipped latest",
 		}[advertised], func(t *testing.T) {
 			c, _ := expressionProtocolTestCompile(t)
 			stats := &r15StreamStats{confirmVersion: advertised}
@@ -271,7 +271,7 @@ func TestIssue25590RemoteRunProducerPassesWithCapableReceiverR15(t *testing.T) {
 // design's third round converged on.
 func TestIssue25590LegacyProducerDispatchSustainedZeroAdmissionR15(t *testing.T) {
 	c, _ := expressionProtocolTestCompile(t)
-	stats := &r15StreamStats{confirmVersion: defines.MORPCVersion131}
+	stats := &r15StreamStats{confirmVersion: defines.MORPCVersion132}
 	r15InstallPipelineClient(t, c, stats)
 
 	// The sequential campaign: 32 attempts, the same shape as the

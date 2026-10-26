@@ -73,7 +73,7 @@ select count(*) from rrf_t;
 select count(*) from rrf_t where payload like 'issue25590-payload-%';
 ➤ count(*)[-5,64,0]  𝄀
 4456448
-select (select count(*) from rrf_recv_capture where cast(r_v as unsigned) >= 132)
+select (select count(*) from rrf_recv_capture where cast(r_v as unsigned) >= 133)
 = (select count(*) from rrf_recv_capture) as receivers_captured;
 ➤ receivers_captured[-6,8,0]  𝄀
 1
@@ -109,7 +109,7 @@ from rrf_pinned_inventory, h16 n;
 select (select count(*) from rrf_pinned_pairs x, rrf_coord_capture c
 where x.pair is not null
 and substring(x.pair, 1, 36) <> c.coord_id
-and cast(substring(x.pair, 38) as unsigned) >= 132)
+and cast(substring(x.pair, 38) as unsigned) >= 133)
 as capable_receivers_after_pin;
 ➤ capable_receivers_after_pin[-5,64,0]  𝄀
 0
@@ -121,7 +121,7 @@ from rrf_pinned_inventory pi, rrf_coord_capture c;
 begin;
 insert into rrf_sentinel values (1, 'sentinel-pa');
 update rrf_t set v = v + 1;
-not supported: remote write fragments require receiver protocol capability 132 or newer (receiver advertised 129)
+not supported: remote write fragments require receiver protocol capability 133 or newer (receiver advertised 129)
 select note from rrf_sentinel where k = 1;
 ➤ note[12,32,0]  𝄀
 sentinel-pa
@@ -181,7 +181,7 @@ from rrf_recv_capture), ':',
 ➤ mo_ctl(cn, SetProtocolVersion, concat((select group_concat(r_uuid order by pos separator ,) from rrf_recv_capture), :, (select min(r_v) from rrf_recv_capture)))[12,65535,0]  𝄀
 {
   "method": "SETPROTOCOLVERSION",
-  "result": "dd1dccb5-4d3c-41f8-b482-5251dc7a41bf:132"
+  "result": "dd1dccb5-4d3c-41f8-b482-5251dc7a41bf:133"
 }
 
 select mo_ctl('dn', 'SetProtocolVersion',
@@ -196,7 +196,7 @@ regexp_substr(inv, '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 from rrf_restored_inventory, h16 n;
 select (select count(*) from rrf_restored_pairs x
 where x.pair is not null
-and cast(substring(x.pair, 38) as unsigned) < 132)
+and cast(substring(x.pair, 38) as unsigned) < 133)
 as below_adoption_after_restore;
 ➤ below_adoption_after_restore[-5,64,0]  𝄀
 0

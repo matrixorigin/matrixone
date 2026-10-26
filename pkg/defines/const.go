@@ -167,8 +167,12 @@ const (
 	MORPCVersion129    int64 = 129 // selected JSON ELT and opaque text expression execution
 	MORPCVersion130    int64 = 130 // incomplete temporal string overloads and rejection diagnostics
 	MORPCVersion131    int64 = 131 // exact weighted percentile aggregate remote dispatch
-	MORPCVersion132    int64 = 132 // first remote fragment workspace adoption intake build (issue #25590); 114-131 were taken on main, admission renumbered from the original 114
-	MORPCLatestVersion       = MORPCVersion132
+	MORPCVersion132    int64 = 132 // decimal float rounding and strict textual float conversions
+	// 114-132 were all taken on main by the time this admission shipped (the intake build
+	// was renumbered twice: 114 -> 132 -> 133), so the workspace intake asserts 133: a
+	// current-main receiver advertising 132 still lacks the intake and must be refused.
+	MORPCVersion133    int64 = 133 // first remote fragment workspace adoption intake build (issue #25590)
+	MORPCLatestVersion       = MORPCVersion133
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

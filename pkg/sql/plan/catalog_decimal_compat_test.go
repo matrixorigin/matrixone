@@ -1,0 +1,484 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"math"
+	"os"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
+)
+
+// These TableDefs were bound and protobuf-serialized by the real CREATE TABLE
+// planner at base 63a964a82f, not made by injecting obsolete casts into a new plan.
+func legacyDecimalCatalogFixtures(t *testing.T) map[string][]byte {
+	t.Helper()
+	data, err := os.ReadFile("testdata/legacy_decimal_catalog_63a964a82f.json")
+	require.NoError(t, err)
+	var fixtures map[string][]byte
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 10)
+	return fixtures
+}
+
+func legacyDecimalPredicate(def *pb.TableDef) *pb.Expr {
+	if len(def.Checks) > 0 {
+		return def.Checks[0].Check
+	}
+	return def.Cols[2].GeneratedCol.Expr
+}
+
+func executeLegacyDecimalExpression(t *testing.T, def *pb.TableDef, expression *pb.Expr, value uint64) (*vector.Vector, error) {
+	t.Helper()
+	proc := newPlanTestProcess(t)
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(makeTypeByPlan2Type(def.Cols[0].Typ))
+	input.Vecs[1] = vector.NewVec(makeTypeByPlan2Type(def.Cols[1].Typ))
+	t.Cleanup(func() { input.Clean(proc.Mp()) })
+	if makeTypeByPlan2Type(def.Cols[0].Typ).IsInt() {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(value), false, proc.Mp()))
+	} else {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
+	}
+	require.NoError(t, vector.AppendFixed(input.Vecs[1], types.Time(0), false, proc.Mp()))
+	input.SetRowCount(1)
+	exec, err := colexec.NewExpressionExecutor(proc, expression)
+	require.NoError(t, err)
+	t.Cleanup(exec.Free)
+	result, err := exec.Eval(proc, []*batch.Batch{input}, nil)
+	if err != nil {
+		return nil, err
+	}
+	require.False(t, result.IsNull(0))
+	return result, nil
+}
+
+func executeLegacyDecimalPredicate(t *testing.T, def *pb.TableDef, value uint64) (bool, error) {
+	t.Helper()
+	result, err := executeLegacyDecimalExpression(t, def, legacyDecimalPredicate(def), value)
+	if err != nil {
+		return false, err
+	}
+	return vector.GetFixedAtWithTypeCheck[bool](result, 0), nil
+}
+
+func TestPersistedDecimalCoercionsSurviveCatalogUpgrade(t *testing.T) {
+	fixtures := legacyDecimalCatalogFixtures(t)
+	for _, name := range []string{"signed_compare", "unsigned_compare", "bit_compare", "arithmetic", "fractional_arithmetic", "generated_compare", "ranged_compare"} {
+		t.Run(name, func(t *testing.T) {
+			stored := new(pb.TableDef)
+			require.NoError(t, stored.Unmarshal(fixtures[name]))
+			wire, err := stored.Marshal()
+			require.NoError(t, err)
+			// Lower control works before normalization; the old cast at 10^18
+			// demonstrates why fresh-schema-only testing misses the regression.
+			lower := uint64(999999999999999999)
+			if name == "fractional_arithmetic" {
+				lower = 1
+			}
+			got, err := executeLegacyDecimalPredicate(t, stored, lower)
+			require.NoError(t, err)
+			require.True(t, got)
+			_, err = executeLegacyDecimalPredicate(t, stored, 1000000000000000000)
+			require.Error(t, err)
+			owned := CloneTableDefForPlan(stored, true)
+			proc := newPlanTestProcess(t)
+			require.NoError(t, MigrateLegacyCatalogTableDef(proc.GetTopContext(), proc, owned))
+			for _, value := range []uint64{999999999999999999, 1000000000000000000, math.MaxInt64} {
+				got, err = executeLegacyDecimalPredicate(t, owned, value)
+				require.NoError(t, err, "value=%d", value)
+				require.True(t, got)
+			}
+			if name == "unsigned_compare" || name == "bit_compare" {
+				got, err = executeLegacyDecimalPredicate(t, owned, math.MaxUint64)
+				require.NoError(t, err)
+				require.True(t, got)
+			}
+			first, err := owned.Marshal()
+			require.NoError(t, err)
+			require.NoError(t, MigrateLegacyCatalogTableDef(proc.GetTopContext(), proc, owned))
+			second, err := owned.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, first, second, "normalization must be idempotent")
+			after, err := stored.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, wire, after, "catalog bytes must stay unchanged")
+		})
+	}
+}
+
+func TestPersistedDecimalNormalizationPreservesDeclaredAssignment(t *testing.T) {
+	stored := new(pb.TableDef)
+	require.NoError(t, stored.Unmarshal(legacyDecimalCatalogFixtures(t)["declared_assignment"]))
+	owned := CloneTableDefForPlan(stored, true)
+	require.NoError(t, MigrateLegacyCatalogTableDef(t.Context(), newPlanTestProcess(t), owned))
+	require.Same(t, stored.Cols[2], owned.Cols[2], "a declared assignment is not an operator coercion")
+	result, err := executeLegacyDecimalExpression(t, owned, legacyDecimalPredicate(owned), 999999999999999999)
+	require.NoError(t, err)
+	require.Equal(t, "999999999999999999", formatDecimalResult(result))
+	_, err = executeLegacyDecimalExpression(t, owned, legacyDecimalPredicate(owned), 1000000000000000000)
+	require.Error(t, err, "actual DECIMAL(18,0) assignment must remain checked")
+}
+
+func TestPersistedDecimalNormalizationMatchesFreshBinding(t *testing.T) {
+	stored := new(pb.TableDef)
+	require.NoError(t, stored.Unmarshal(legacyDecimalCatalogFixtures(t)["signed_compare"]))
+	proc := newPlanTestProcess(t)
+	owned := CloneTableDefForPlan(stored, true)
+	require.NoError(t, MigrateLegacyCatalogTableDef(proc.GetTopContext(), proc, owned))
+	stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, "create table legacy_cmp(i bigint, tm time(0), constraint ck check(i > tm))", 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+	fresh, err := BuildPlan(NewMockCompilerContext(false, proc), stmt, false)
+	require.NoError(t, err)
+	def := fresh.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, legacyDecimalPredicate(def), legacyDecimalPredicate(owned))
+	before := def.Checks[0]
+	require.NoError(t, MigrateLegacyCatalogTableDef(proc.GetTopContext(), proc, def))
+	require.Same(t, before, def.Checks[0], "fresh plans must be a no-op")
+	for _, value := range []int64{math.MinInt64, -1000000000000000000, -1, 0, 1, 999999999999999999, 1000000000000000000, math.MaxInt64} {
+		oldResult, err := executeLegacyDecimalPredicate(t, owned, uint64(value))
+		require.NoError(t, err)
+		newResult, err := executeLegacyDecimalPredicate(t, def, uint64(value))
+		require.NoError(t, err)
+		require.Equal(t, value > 0, oldResult)
+		require.Equal(t, newResult, oldResult)
+	}
+}
+
+func TestPersistedDecimalBetweenSurvivesCatalogUpgrade(t *testing.T) {
+	data, err := os.ReadFile("testdata/legacy_decimal_between_63a964a82f.json")
+	require.NoError(t, err)
+	var fixtures map[string][]byte
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 2)
+	for _, name := range []string{"generated_between", "explicit_between"} {
+		t.Run(name, func(t *testing.T) {
+			stored := new(pb.TableDef)
+			require.NoError(t, stored.Unmarshal(fixtures[name]))
+			predicate := legacyDecimalPredicate(stored)
+			require.Equal(t, "between", predicate.GetF().Func.ObjName)
+			require.Len(t, predicate.GetF().Args, 3, "must exercise genuine BETWEEN, not lowered NOT BETWEEN")
+			lower, err := executeLegacyDecimalPredicate(t, stored, 999999999999999999)
+			require.NoError(t, err)
+			require.False(t, lower)
+			upper, err := executeLegacyDecimalPredicate(t, stored, 1000000000000000000)
+			if name == "generated_between" {
+				require.Error(t, err, "the unnormalized legacy implicit cast is too narrow")
+			} else {
+				require.NoError(t, err)
+				require.False(t, upper)
+			}
+			owned := CloneTableDefForPlan(stored, true)
+			proc := newPlanTestProcess(t)
+			require.NoError(t, MigrateLegacyCatalogTableDef(proc.GetTopContext(), proc, owned))
+			if name == "explicit_between" {
+				require.Same(t, stored.Cols[2], owned.Cols[2], "explicit CAST remains unchanged")
+				got, err := executeLegacyDecimalPredicate(t, owned, 1000000000000000000)
+				require.NoError(t, err)
+				require.Equal(t, upper, got)
+				return
+			}
+			stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL,
+				"create table legacy_cmp(i bigint, tm time(0), g bool generated always as (i between cast('00:00:00' as time(0)) and cast('00:00:01' as time(0))) stored)", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			fresh, err := BuildPlan(NewMockCompilerContext(false, proc), stmt, false)
+			require.NoError(t, err)
+			freshDef := fresh.GetDdl().GetCreateTable().GetTableDef()
+			require.Equal(t, legacyDecimalPredicate(freshDef), legacyDecimalPredicate(owned))
+			for _, value := range []int64{math.MinInt64, -1000000000000000000, -1, 0, 1, 2, 999999999999999999, 1000000000000000000, math.MaxInt64} {
+				got, err := executeLegacyDecimalPredicate(t, owned, uint64(value))
+				require.NoError(t, err, "value=%d", value)
+				want, err := executeLegacyDecimalPredicate(t, freshDef, uint64(value))
+				require.NoError(t, err)
+				require.Equal(t, value >= 0 && value <= 1, got)
+				require.Equal(t, want, got)
+			}
+			first, err := owned.Marshal()
+			require.NoError(t, err)
+			require.NoError(t, MigrateLegacyCatalogTableDef(proc.GetTopContext(), proc, owned))
+			second, err := owned.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, first, second)
+			after, err := stored.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, fixtures[name], after, "stored catalog must remain immutable")
+		})
+	}
+}
+
+func TestPersistedDecimalInRangeSurvivesCatalogUpgrade(t *testing.T) {
+	data, err := os.ReadFile("testdata/legacy_decimal_in_range_63a964a82f.json")
+	require.NoError(t, err)
+	var fixtures map[string][]byte
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 5)
+	for mode := range 5 {
+		name, input, flag := fmt.Sprintf("generated_in_range_%d", mode), "i", mode
+		if mode == 4 {
+			name, input, flag = "explicit_in_range", "cast(i as decimal(18,0))", 0
+		}
+		t.Run(name, func(t *testing.T) {
+			stored := new(pb.TableDef)
+			require.NoError(t, stored.Unmarshal(fixtures[name]))
+			predicate := legacyDecimalPredicate(stored)
+			require.Equal(t, "in_range", predicate.GetF().Func.ObjName)
+			require.Len(t, predicate.GetF().Args, 4)
+			if mode < 4 {
+				require.Equal(t, int32(types.T_decimal64), predicate.GetF().Args[0].Typ.Id)
+				require.Equal(t, int32(18), predicate.GetF().Args[0].Typ.Width)
+			}
+			lower, err := executeLegacyDecimalPredicate(t, stored, 999999999999999999)
+			require.NoError(t, err)
+			require.False(t, lower)
+			upper, err := executeLegacyDecimalPredicate(t, stored, 1000000000000000000)
+			if mode < 4 {
+				require.Error(t, err, "the legacy implicit cast loses valid BIGINT values")
+			} else {
+				require.NoError(t, err)
+				require.False(t, upper, "explicit CAST keeps its original clamping semantics")
+			}
+			proc := newPlanTestProcess(t)
+			stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL,
+				fmt.Sprintf("create table legacy_cmp(i bigint, tm time(0), g bool generated always as (in_range(%s,cast('00:00:00' as time(0)),cast('00:00:01' as time(0)),%d)) stored)", input, flag), 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			fresh, err := BuildPlan(NewMockCompilerContext(false, proc), stmt, false)
+			require.NoError(t, err)
+			freshDef := fresh.GetDdl().GetCreateTable().GetTableDef()
+			freshUpper, err := executeLegacyDecimalPredicate(t, freshDef, 1000000000000000000)
+			require.NoError(t, err, "fresh binding is the working control")
+			require.False(t, freshUpper)
+
+			owned := CloneTableDefForPlan(stored, true)
+			require.NoError(t, MigrateLegacyCatalogTableDef(proc.GetTopContext(), proc, owned))
+			migrated := legacyDecimalPredicate(owned)
+			require.Equal(t, predicate.GetF().Args[3], migrated.GetF().Args[3], "endpoint mode is not a numeric operand")
+			if mode == 4 {
+				require.Same(t, stored.Cols[2], owned.Cols[2], "explicit CAST must remain untouched")
+			} else {
+				require.NotSame(t, stored.Cols[2], owned.Cols[2])
+				require.Equal(t, int32(types.T_decimal128), migrated.GetF().Args[0].Typ.Id)
+				require.Equal(t, int32(19), migrated.GetF().Args[0].Typ.Width)
+			}
+			require.Equal(t, legacyDecimalPredicate(freshDef), migrated)
+			for _, value := range []int64{math.MinInt64, -1000000000000000000, -1, 0, 1, 2, 999999999999999999, 1000000000000000000, math.MaxInt64} {
+				t.Run(fmt.Sprint(value), func(t *testing.T) {
+					got, err := executeLegacyDecimalPredicate(t, owned, uint64(value))
+					require.NoError(t, err)
+					want, err := executeLegacyDecimalPredicate(t, freshDef, uint64(value))
+					require.NoError(t, err)
+					require.Equal(t, (value > 0 || value == 0 && flag&1 == 0) && (value < 1 || value == 1 && flag&2 == 0), got)
+					require.Equal(t, want, got)
+				})
+			}
+			t.Run("null", func(t *testing.T) {
+				proc := newPlanTestProcess(t)
+				input := batch.NewWithSize(2)
+				t.Cleanup(func() { input.Clean(proc.Mp()) })
+				input.Vecs[0] = vector.NewConstNull(types.T_int64.ToType(), 1, proc.Mp())
+				input.Vecs[1] = vector.NewConstNull(types.T_time.ToType(), 1, proc.Mp())
+				input.SetRowCount(1)
+				exec, err := colexec.NewExpressionExecutor(proc, migrated)
+				require.NoError(t, err)
+				t.Cleanup(exec.Free)
+				result, err := exec.Eval(proc, []*batch.Batch{input}, nil)
+				require.NoError(t, err)
+				require.True(t, result.IsNull(0))
+			})
+			first, err := owned.Marshal()
+			require.NoError(t, err)
+			require.NoError(t, MigrateLegacyCatalogTableDef(proc.GetTopContext(), proc, owned))
+			second, err := owned.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, first, second, "normalization must be idempotent")
+			after, err := stored.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, fixtures[name], after, "shared catalog bytes must remain immutable")
+		})
+	}
+}
+
+func TestPersistedDecimalNormalizationOwnsOnlyChangedWrappers(t *testing.T) {
+	stored := new(pb.TableDef)
+	require.NoError(t, stored.Unmarshal(legacyDecimalCatalogFixtures(t)["signed_compare"]))
+	expr := stored.Checks[0].Check
+	// Reuse a genuine old bound expression to exercise all resolver wrapper
+	// ownership paths; these wrappers are an aliasing test, not extra DDL fixtures.
+	stored.Cols[0].Default = &pb.Default{Expr: expr, OriginString: "preserve default text", NullAbility: true}
+	stored.Cols[0].OnUpdate = &pb.OnUpdate{Expr: expr, OriginString: "preserve update text"}
+	stored.Cols[0].GeneratedCol = &pb.GeneratedCol{Expr: expr, OriginString: "preserve generated text", IsStored: true}
+	before, err := stored.Marshal()
+	require.NoError(t, err)
+	for i := range 8 {
+		t.Run(fmt.Sprintf("reader_%d", i), func(t *testing.T) {
+			t.Parallel()
+			owned := CloneTableDefForPlan(stored, true)
+			require.NoError(t, MigrateLegacyCatalogTableDef(t.Context(), newPlanTestProcess(t), owned))
+			require.NotSame(t, stored.Checks[0], owned.Checks[0])
+			require.NotSame(t, stored.Cols[0], owned.Cols[0])
+			require.Same(t, stored.Cols[1], owned.Cols[1])
+			require.NotSame(t, stored.Cols[0].Default, owned.Cols[0].Default)
+			require.NotSame(t, stored.Cols[0].OnUpdate, owned.Cols[0].OnUpdate)
+			require.NotSame(t, stored.Cols[0].GeneratedCol, owned.Cols[0].GeneratedCol)
+			// Once expression pointers are restored, every metadata byte agrees.
+			owned.Checks[0].Check = expr
+			owned.Cols[0].Default.Expr = expr
+			owned.Cols[0].OnUpdate.Expr = expr
+			owned.Cols[0].GeneratedCol.Expr = expr
+			after, err := owned.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+			after, err = stored.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, before, after)
+		})
+	}
+}
+
+func unchangedDecimalCatalog(withNullDefaults bool) *pb.TableDef {
+	stored := &pb.TableDef{Cols: make([]*pb.ColDef, 100)}
+	for i := range stored.Cols {
+		col := &pb.ColDef{Name: fmt.Sprintf("c%d", i), Typ: pb.Type{Id: int32(types.T_int64)}}
+		if withNullDefaults {
+			col.Default = &pb.Default{Expr: &pb.Expr{Typ: col.Typ, Expr: &pb.Expr_Lit{Lit: &pb.Literal{Isnull: true}}}}
+		}
+		stored.Cols[i] = col
+	}
+	return stored
+}
+
+func TestPersistedDecimalNormalizationUnchangedAllocations(t *testing.T) {
+	for _, withDefaults := range []bool{false, true} {
+		t.Run(fmt.Sprintf("null_defaults_%v", withDefaults), func(t *testing.T) {
+			stored := unchangedDecimalCatalog(withDefaults)
+			proc := newPlanTestProcess(t)
+			var resolved *pb.TableDef
+			var err error
+			baseline := testing.AllocsPerRun(10, func() {
+				resolved = CloneTableDefForPlan(stored, true)
+				err = MigrateLegacyHexTableDef(proc, resolved)
+			})
+			require.NoError(t, err)
+			actual := testing.AllocsPerRun(10, func() {
+				resolved = CloneTableDefForPlan(stored, true)
+				err = MigrateLegacyCatalogTableDef(t.Context(), proc, resolved)
+			})
+			require.NoError(t, err)
+			require.Equal(t, baseline, actual, "unchanged columns must not allocate additional copies")
+			for i := range stored.Cols {
+				require.Same(t, stored.Cols[i], resolved.Cols[i])
+			}
+		})
+	}
+}
+
+func BenchmarkCatalogDecimalNormalization(b *testing.B) {
+	for _, withDefaults := range []bool{false, true} {
+		for _, migrate := range []bool{false, true} {
+			b.Run(fmt.Sprintf("null_defaults_%v/catalog_%v", withDefaults, migrate), func(b *testing.B) {
+				stored := unchangedDecimalCatalog(withDefaults)
+				proc := testutil.NewProcess(b)
+				b.Cleanup(proc.Free)
+				ctx := b.Context()
+				var resolved *pb.TableDef
+				b.ReportAllocs()
+				for b.Loop() {
+					resolved = CloneTableDefForPlan(stored, true)
+					var err error
+					if migrate {
+						err = MigrateLegacyCatalogTableDef(ctx, proc, resolved)
+					} else {
+						err = MigrateLegacyHexTableDef(proc, resolved)
+					}
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+				require.NotNil(b, resolved)
+			})
+		}
+	}
+}
+
+func TestPersistedDecimalNormalizationCancellation(t *testing.T) {
+	stored := new(pb.TableDef)
+	require.NoError(t, stored.Unmarshal(legacyDecimalCatalogFixtures(t)["signed_compare"]))
+	before, err := stored.Marshal()
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, changed, err := normalizeCatalogDecimalExpr(ctx, stored.Checks[0].Check)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, changed)
+	err = MigrateLegacyCatalogTableDef(ctx, newPlanTestProcess(t), CloneTableDefForPlan(stored, true))
+	require.ErrorIs(t, err, context.Canceled, "current request cancellation must still propagate")
+	after, err := stored.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	require.NoError(t, MigrateLegacyCatalogTableDef(nil, nil, nil))
+}
+
+func TestPersistedDecimalNormalizationPreservesExplicitCasts(t *testing.T) {
+	fixtures := legacyDecimalCatalogFixtures(t)
+	for _, name := range []string{"explicit_decimal", "nested_explicit"} {
+		t.Run(name, func(t *testing.T) {
+			stored := new(pb.TableDef)
+			require.NoError(t, stored.Unmarshal(fixtures[name]))
+			owned := CloneTableDefForPlan(stored, true)
+			require.NoError(t, MigrateLegacyCatalogTableDef(t.Context(), newPlanTestProcess(t), owned))
+			got, err := executeLegacyDecimalPredicate(t, owned, 999999999999999999)
+			require.NoError(t, err)
+			require.True(t, got)
+			// Explicit CAST has its own clipping/warning policy; migration must
+			// retain its target and overload, not turn it into an implicit widen.
+			var findExplicit func(*pb.Expr) *pb.Expr
+			findExplicit = func(expr *pb.Expr) *pb.Expr {
+				if fn := expr.GetF(); fn != nil {
+					if isCastOverload(expr, 1) && expr.Typ.Width == 18 {
+						return expr
+					}
+					for _, arg := range fn.Args {
+						if found := findExplicit(arg); found != nil {
+							return found
+						}
+					}
+				}
+				return nil
+			}
+			before, after := findExplicit(legacyDecimalPredicate(stored)), findExplicit(legacyDecimalPredicate(owned))
+			require.NotNil(t, before)
+			require.NotNil(t, after)
+			require.Equal(t, before.Typ, after.Typ)
+			require.Equal(t, before.GetF().Func, after.GetF().Func)
+			result, err := executeLegacyDecimalExpression(t, owned, after, 1000000000000000000)
+			require.NoError(t, err)
+			require.Equal(t, "999999999999999999", formatDecimalResult(result))
+		})
+	}
+}

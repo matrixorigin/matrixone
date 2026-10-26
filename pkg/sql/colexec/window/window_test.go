@@ -1802,20 +1802,42 @@ func TestWindowJsonObjectAggNullKeyNoLeak(t *testing.T) {
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.AppendChild(op)
 
+	t.Cleanup(func() {
+		arg.Free(proc, true, nil)
+		op.Free(proc, true, nil)
+		mp := proc.Mp()
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	})
+	registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
+	require.NoError(t, err)
+	for col, vec := range bat.Vecs {
+		copied, err := vec.DupOffHeapWithAllocation(proc.Mp(), selection)
+		require.NoError(t, err)
+		bat.Vecs[col] = copied
+		vec.Free(proc.Mp())
+	}
+
 	require.NoError(t, arg.Prepare(proc))
-	_, err := vm.Exec(arg, proc)
+	_, err = vm.Exec(arg, proc)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "key cannot be NULL")
 	// Chunk-local aggregators do not need to survive until pipeline Reset.
 	require.Nil(t, arg.ctr.batAggs)
 
+	op.Free(proc, true, err)
+	require.Positive(t, account.Snapshot().Used)
 	arg.Reset(proc, true, err)
 	require.Nil(t, arg.ctr.batAggs, "Reset must release window aggregators after an error")
 
-	arg.Free(proc, true, err)
-	op.Free(proc, true, err)
-	proc.Free()
-	require.Equal(t, int64(0), proc.Mp().CurrNB(), "no mpool leak on the json_objectagg error path")
+	terminal, _, terminalErr := registry.CompleteTerminal(account)
+	require.NoError(t, terminalErr)
+	require.Zero(t, terminal.Used)
+	require.Zero(t, terminal.LiveAllocations)
 }
 
 func collectFixedWindowColumn[T types.FixedSizeT](
@@ -1839,6 +1861,9 @@ func collectFixedWindowColumn[T types.FixedSizeT](
 
 // TestWindowAggResultAcrossChunks verifies that a cumulative aggregate retains
 // its running state across bounded output batches.
+// TestWindowAggResultAcrossChunks verifies that the aggregate executor's
+// physical result chunks are invisible to the Window operator. CURRENT ROW is
+// deliberately used to keep the test O(n) while crossing AggBatchSize.
 func TestWindowAggResultAcrossChunks(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 	rows := aggexec.AggBatchSize + 17
@@ -3569,66 +3594,6 @@ func TestWindowPartitionTopNReducerUsesSQLOrderForFloatNaNs(t *testing.T) {
 			require.Zero(t, proc.Mp().CurrNB())
 		})
 	}
-}
-
-func TestWindowResetReleasesInheritedAccountedBuffers(t *testing.T) {
-	mp := mpool.MustNewZero()
-	registry, err := mpool.NewAllocationAccountRegistry(1, 8)
-	require.NoError(t, err)
-	account, err := registry.Open(1 << 20)
-	require.NoError(t, err)
-	selection, err := vector.NewAllocationAccountSelection(
-		account, mpool.AllocationOwnerOrder, 1, 2, 3, 4)
-	require.NoError(t, err)
-
-	partitionVec := vector.NewOffHeapVecWithType(types.T_int32.ToType())
-	require.NoError(t, partitionVec.SetAllocationAccount(selection))
-	require.NoError(t, vector.AppendFixed(partitionVec, int32(1), false, mp))
-	orderVec := vector.NewOffHeapVecWithType(types.T_int32.ToType())
-	require.NoError(t, orderVec.SetAllocationAccount(selection))
-	require.NoError(t, vector.AppendFixed(orderVec, int32(10), false, mp))
-	input := batch.NewOffHeapWithSize(2)
-	input.SetVector(0, partitionVec)
-	input.SetVector(1, orderVec)
-	input.SetRowCount(1)
-
-	partitionExpr := newColExpr(0)
-	arg := &Window{
-		WinSpecList: []*plan.Expr{{
-			Expr: &plan.Expr_W{W: &plan.WindowSpec{
-				Name:        "row_number",
-				WindowFunc:  newFunExpr("row_number"),
-				PartitionBy: []*plan.Expr{partitionExpr},
-				OrderBy: []*plan.OrderBySpec{{
-					Expr: newColExpr(1),
-				}},
-			}},
-		}},
-		Aggs: []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
-	}
-	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
-	arg.AppendChild(child)
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
-	require.NoError(t, arg.Prepare(proc))
-	result, err := arg.Call(proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-
-	// Mirror child-first pipeline cleanup. The remaining account usage belongs
-	// to Window's materialized input and expression duplicates.
-	child.Free(proc, false, nil)
-	require.Positive(t, account.Snapshot().Used)
-	arg.Reset(proc, false, nil)
-	require.Zero(t, account.Snapshot().Used)
-
-	require.NoError(t, arg.Prepare(proc))
-	arg.Free(proc, false, nil)
-	snapshot := account.Seal()
-	require.Zero(t, snapshot.Used)
-	_, err = registry.Finalize(account)
-	require.NoError(t, err)
-	proc.Free()
-	require.Zero(t, mp.CurrNB())
 }
 
 func TestWindowOrderHonorsCancellation(t *testing.T) {

@@ -80,7 +80,7 @@ func (r11MockMOCluster) UpdateCN(metadata.CNService)                          {}
 // The adoption-line thresholds, both directions plus the absent/zero
 // fail-closed default (the D3” receiver input contract).
 func TestIssue25590CoordinatorAdmissionThresholdsR11(t *testing.T) {
-	require.Equal(t, defines.MORPCVersion132, coordinatorIntakeAdoptionVersion,
+	require.Equal(t, defines.MORPCVersion133, coordinatorIntakeAdoptionVersion,
 		"V_adopt is the branch's named adoption constant")
 	require.False(t, requestAdoptsIntakeAdmission(0),
 		"an absent/zero advertisement (the older-coordinator default) is incapable")
@@ -88,14 +88,14 @@ func TestIssue25590CoordinatorAdmissionThresholdsR11(t *testing.T) {
 		"an older main build stays below the first adoption build")
 	require.False(t, requestAdoptsIntakeAdmission(defines.MORPCVersion130),
 		"another older main build stays below the first adoption build")
-	require.False(t, requestAdoptsIntakeAdmission(defines.MORPCVersion131),
+	require.False(t, requestAdoptsIntakeAdmission(defines.MORPCVersion132),
 		"main's shipped latest stays below the first adoption build")
 	require.True(t, requestAdoptsIntakeAdmission(coordinatorIntakeAdoptionVersion),
 		"the first adoption build adopts")
 	require.True(t, requestAdoptsIntakeAdmission(coordinatorIntakeAdoptionVersion+7),
 		"every later build adopts")
-	require.Greater(t, defines.MORPCLatestVersion, defines.MORPCVersion131,
-		"the fresh-build advertisement reaches the adoption line")
+	require.Greater(t, defines.MORPCLatestVersion, defines.MORPCVersion132,
+		"the fresh-build advertisement is above main's shipped latest")
 }
 
 // The D3' refusal gate: both directions, the scope boundary, the error
@@ -124,7 +124,7 @@ func TestIssue25590RefuseRemoteWriteFromIncapableCoordinatorR11(t *testing.T) {
 		"an older main build is below the adoption line for writes")
 	require.Error(t, refuseRemoteWriteFromIncapableCoordinator(ctx, defines.MORPCVersion130, []*Scope{write}),
 		"another older main build is below the adoption line for writes")
-	require.Error(t, refuseRemoteWriteFromIncapableCoordinator(ctx, defines.MORPCVersion131, []*Scope{write}),
+	require.Error(t, refuseRemoteWriteFromIncapableCoordinator(ctx, defines.MORPCVersion132, []*Scope{write}),
 		"main's shipped latest is below the adoption line for writes")
 
 	// A producer nested in PreScopes stays a producer for the refusal.
@@ -134,7 +134,7 @@ func TestIssue25590RefuseRemoteWriteFromIncapableCoordinatorR11(t *testing.T) {
 		"a nested registered producer keeps the fragment a write")
 
 	// At or above the adoption build, a producer run executes.
-	require.NoError(t, refuseRemoteWriteFromIncapableCoordinator(ctx, defines.MORPCVersion132, []*Scope{write}))
+	require.NoError(t, refuseRemoteWriteFromIncapableCoordinator(ctx, defines.MORPCVersion133, []*Scope{write}))
 
 	// An ordinary query fragment from a below-advertisement coordinator
 	// still executes — the adoption line never gates read traffic.
@@ -169,10 +169,10 @@ func TestIssue25590ClientStampsAdvertisementFromCoordinatorRuntime(t *testing.T)
 	require.Equal(t, defines.MORPCVersion131, m1.CoordinatorProtocolVersion,
 		"the old-coordinator pin flows into the advertisement")
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion132)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
 	m2 := &pipeline.Message{}
 	sender.setCoordinatorProtocolAdvertisement(m2)
-	require.Equal(t, defines.MORPCVersion132, m2.CoordinatorProtocolVersion,
+	require.Equal(t, defines.MORPCVersion133, m2.CoordinatorProtocolVersion,
 		"a fresh build advertises its own version")
 
 	// The wire carries the additive field: a marshal/unmarshal
@@ -182,7 +182,7 @@ func TestIssue25590ClientStampsAdvertisementFromCoordinatorRuntime(t *testing.T)
 	require.NoError(t, err)
 	decoded := &pipeline.Message{}
 	require.NoError(t, decoded.Unmarshal(wire))
-	require.Equal(t, defines.MORPCVersion132, decoded.GetCoordinatorProtocolVersion())
+	require.Equal(t, defines.MORPCVersion133, decoded.GetCoordinatorProtocolVersion())
 
 	wireZero, err := (&pipeline.Message{}).Marshal()
 	require.NoError(t, err)
@@ -205,7 +205,7 @@ func TestIssue25590ReceiverStoresPerRequestAdvertisementR11(t *testing.T) {
 		"cn-address",
 		&pipeline.Message{
 			Cmd:                        pipeline.Method_PipelineProtocolCheck,
-			CoordinatorProtocolVersion: defines.MORPCVersion132,
+			CoordinatorProtocolVersion: defines.MORPCVersion133,
 		},
 		clientSession,
 		nil,
@@ -220,7 +220,7 @@ func TestIssue25590ReceiverStoresPerRequestAdvertisementR11(t *testing.T) {
 		nil,
 	)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion132, receiver.coordinatorProtocolVersion,
+	require.Equal(t, defines.MORPCVersion133, receiver.coordinatorProtocolVersion,
 		"the receiver stores the request's advertisement")
 
 	receiver2, err := newMessageReceiverOnServer(
@@ -297,11 +297,11 @@ func TestIssue25590SettlementConsultsStoredRequestAdvertisementR11(t *testing.T)
 	}
 
 	// BELOW leg: the stored advertisement of an old coordinator
-	// — 131, main's shipped latest — fail-closes the settle BEFORE
+	// — 132, main's shipped latest — fail-closes the settle BEFORE
 	// the transferred route.
 	runCompileBelow, flowBelow, messageCtxBelow, _ := newFixture(t)
 	receiverBelow := messageReceiverOnServer{
-		coordinatorProtocolVersion: defines.MORPCVersion131,
+		coordinatorProtocolVersion: defines.MORPCVersion132,
 		messageCtx:                 messageCtxBelow,
 		connectionCtx:              context.Background(),
 		streamLifecycle:            &pipelineStreamLifecycle{batchFlow: flowBelow},
@@ -317,7 +317,7 @@ func TestIssue25590SettlementConsultsStoredRequestAdvertisementR11(t *testing.T)
 	// cancelled request context surfaces as the runErr error.
 	runCompileAbove, flowAbove, messageCtxAbove, _ := newFixture(t)
 	receiverAbove := messageReceiverOnServer{
-		coordinatorProtocolVersion: defines.MORPCVersion132,
+		coordinatorProtocolVersion: defines.MORPCVersion133,
 		messageCtx:                 messageCtxAbove,
 		connectionCtx:              context.Background(),
 		streamLifecycle:            &pipelineStreamLifecycle{batchFlow: flowAbove},
@@ -344,7 +344,7 @@ func TestIssue25590RunCaseRefusalInputContractR11(t *testing.T) {
 
 	// The run case passes receiver.getMessageContext() and the STORED
 	// request value; those are the same inputs fixed here.
-	require.NoError(t, refuseRemoteWriteFromIncapableCoordinator(ctx, defines.MORPCVersion132, []*Scope{write}))
+	require.NoError(t, refuseRemoteWriteFromIncapableCoordinator(ctx, defines.MORPCVersion133, []*Scope{write}))
 	err := refuseRemoteWriteFromIncapableCoordinator(ctx, 0, []*Scope{write})
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported),

@@ -970,6 +970,7 @@ type processHelper struct {
 	StmtId                     uuid.UUID
 	statementRuntimeIgnore     bool
 	statementRuntimeSelect     bool
+	statementRuntimeDML        bool
 	planSnapshotTS             timestamp.Timestamp
 	hasPlanSnapshotTS          bool
 	planGenerationReused       bool
@@ -1257,6 +1258,8 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		stmtProfile.SetStatementRuntimeProfile("", "", pHelper.statementRuntimeIgnore)
 		if pHelper.statementRuntimeSelect {
 			stmtProfile.SetStatementRuntimeProfile("Select", "DQL", pHelper.statementRuntimeIgnore)
+		} else if pHelper.statementRuntimeDML {
+			stmtProfile.SetStatementRuntimeProfile("", "DML", pHelper.statementRuntimeIgnore)
 		}
 		proc.Base.StmtProfile = stmtProfile
 	}
@@ -1537,6 +1540,9 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 	if err != nil {
 		return processHelper{}, err
 	}
+	if err := process.ValidateStatementRuntimeClassification(procInfo.StatementRuntimeSelect, procInfo.StatementRuntimeDml); err != nil {
+		return processHelper{}, err
+	}
 	stringShuffleHashAlgorithm, err := process.DecodeStringShuffleHashAlgorithm(
 		procInfo.StringShuffleHashAlgorithm,
 	)
@@ -1553,6 +1559,7 @@ func generateProcessHelper(ctx context.Context, data []byte, cli client.TxnClien
 		affectedRows:               procInfo.AffectedRows,
 		statementRuntimeIgnore:     procInfo.StatementRuntimeIgnore,
 		statementRuntimeSelect:     procInfo.StatementRuntimeSelect,
+		statementRuntimeDML:        procInfo.StatementRuntimeDml,
 		stringShuffleHashAlgorithm: stringShuffleHashAlgorithm,
 		remoteFragmentCounts:       maps.Clone(procInfo.RemoteFragmentCounts),
 	}

@@ -1504,6 +1504,7 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		fid      int32
 		argCount int
 	}{
+		{name: "no default database", fid: DATABASE, argCount: 0},
 		{name: "division by zero", fid: DIV, argCount: 2},
 		{name: "integer division by zero", fid: INTEGER_DIV, argCount: 2},
 		{name: "modulo by zero", fid: MOD, argCount: 2},
@@ -2052,6 +2053,73 @@ func TestIntegerComparisonDomainsAreSymmetricAndExact(t *testing.T) {
 	for _, in := range [][]types.Type{{types.T_int16.ToType(), types.T_uint8.ToType(), types.T_uint16.ToType()}, {types.T_int8.ToType(), types.T_uint64.ToType(), types.T_int64.ToType()}} {
 		_, err := GetFunctionByName(context.Background(), "between", in)
 		require.NoError(t, err)
+	}
+}
+
+func TestTemporalComparisonWidensSynthesizedDecimalDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		left  types.Type
+		right types.Type
+		want  types.Type
+	}{
+		{
+			name:  "bigint then time",
+			left:  types.T_int64.ToType(),
+			right: types.New(types.T_time, 0, 0),
+			want:  types.New(types.T_decimal128, 19, 0),
+		},
+		{
+			name:  "time then bigint",
+			left:  types.New(types.T_time, 0, 0),
+			right: types.T_int64.ToType(),
+			want:  types.New(types.T_decimal128, 19, 0),
+		},
+		{
+			name:  "bigint then fractional time",
+			left:  types.T_int64.ToType(),
+			right: types.New(types.T_time, 0, 6),
+			want:  types.New(types.T_decimal128, 25, 6),
+		},
+		{
+			name:  "uint64 then time",
+			left:  types.T_uint64.ToType(),
+			right: types.New(types.T_time, 0, 0),
+			want:  types.New(types.T_decimal128, 20, 0),
+		},
+		{
+			name:  "bit then time",
+			left:  types.New(types.T_bit, 64, 0),
+			right: types.New(types.T_time, 0, 0),
+			want:  types.New(types.T_decimal128, 20, 0),
+		},
+		{
+			name:  "bit then fractional time",
+			left:  types.New(types.T_bit, 64, 0),
+			right: types.New(types.T_time, 0, 6),
+			want:  types.New(types.T_decimal128, 26, 6),
+		},
+		{
+			name:  "bit then datetime",
+			left:  types.New(types.T_bit, 64, 0),
+			right: types.New(types.T_datetime, 0, 0),
+			want:  types.New(types.T_decimal128, 20, 0),
+		},
+		{
+			name:  "bit then fractional timestamp",
+			left:  types.New(types.T_bit, 64, 0),
+			right: types.New(types.T_timestamp, 0, 6),
+			want:  types.New(types.T_decimal128, 26, 6),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, operands := range [][2]types.Type{{tc.left, tc.right}, {tc.right, tc.left}} {
+				hasCast, left, right := comparisonTypeCastRule(operands[0], operands[1])
+				require.True(t, hasCast)
+				require.Equal(t, tc.want, left)
+				require.Equal(t, tc.want, right)
+			}
+		})
 	}
 }
 

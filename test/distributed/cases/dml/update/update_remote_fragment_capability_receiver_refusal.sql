@@ -14,7 +14,7 @@
 -- version plain/read availability on the same page.
 --
 -- leg P1: with every CN at its fresh build (advertising the first adoption
---   build, 132) the mass remote metadata-producing DML COMMITS and reads
+--   build, 133) the mass remote metadata-producing DML COMMITS and reads
 --   back exactly in a fresh session (the clean sibling and the seed control
 --   for the shape's producer-mode plan).
 -- leg Pa: after pinning every RECEIVER CN advertisement to 129 (a real main
@@ -197,7 +197,7 @@ cross join h68 k;
 analyze table rrf_t;
 select count(*) from rrf_t;
 select count(*) from rrf_t where payload like 'issue25590-payload-%';
-select (select count(*) from rrf_recv_capture where cast(r_v as unsigned) >= 132)
+select (select count(*) from rrf_recv_capture where cast(r_v as unsigned) >= 133)
        = (select count(*) from rrf_recv_capture) as receivers_captured;
 
 -- leg P1: the capability-clean sibling (every receiver at the fresh build;
@@ -228,7 +228,7 @@ from rrf_pinned_inventory, h16 n;
 select (select count(*) from rrf_pinned_pairs x, rrf_coord_capture c
         where x.pair is not null
           and substring(x.pair, 1, 36) <> c.coord_id
-          and cast(substring(x.pair, 38) as unsigned) >= 132)
+          and cast(substring(x.pair, 38) as unsigned) >= 133)
   as capable_receivers_after_pin;
 select (substring(regexp_substr(pi.inv, concat(c.coord_id, ':[0-9]+'), 1, 1),
                   length(c.coord_id) + 2) = c.coord_v) as coordinator_untouched
@@ -320,7 +320,7 @@ select n.n + 1 as pos,
 from rrf_restored_inventory, h16 n;
 select (select count(*) from rrf_restored_pairs x
         where x.pair is not null
-          and cast(substring(x.pair, 38) as unsigned) < 132)
+          and cast(substring(x.pair, 38) as unsigned) < 133)
   as below_adoption_after_restore;
 begin;
 insert into rrf_sentinel values (3, 'sentinel-control');

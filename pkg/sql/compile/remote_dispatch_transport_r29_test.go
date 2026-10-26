@@ -1034,7 +1034,7 @@ func r29SettleFixture(
 
 	flow := newPipelineBatchFlow(pipelineBatchCreditCount, pipelineBatchCreditBytes)
 	receiver := &messageReceiverOnServer{
-		coordinatorProtocolVersion: defines.MORPCVersion132,
+		coordinatorProtocolVersion: defines.MORPCVersion133,
 		messageCtx:                 ctx,
 		connectionCtx:              ctx,
 		streamLifecycle:            &pipelineStreamLifecycle{batchFlow: flow},

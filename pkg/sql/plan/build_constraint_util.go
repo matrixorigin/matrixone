@@ -1299,6 +1299,7 @@ func useSqlModeStringAssignmentCast(targetType Type) bool {
 
 func useSqlModeAssignmentCast(targetType Type) bool {
 	return useSqlModeStringAssignmentCast(targetType) ||
+		targetType.Id == int32(types.T_float32) || targetType.Id == int32(types.T_float64) ||
 		isMediumIntPlanType(targetType) ||
 		targetType.Id == int32(types.T_year) ||
 		targetType.Id == int32(types.T_time)

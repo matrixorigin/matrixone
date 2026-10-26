@@ -4693,3 +4693,49 @@ tree with the repository Makefile's CGO_CFLAGS include set:
 No §1/§5.3/§5.5 decision, invariant, or admission-path behavior
 changes; the gate's own sustainment and counterexample semantics are
 exactly as previously approved and locally re-proven here.
+
+MERGE RENUMBER RECORD (2026-10-26, third intake renumber: 132 -> 133;
+conflict-resolution round on head 7e0a2cc9b8): the final PR-state
+re-fetch showed mergeable=CONFLICTING against origin/main
+(e033d4a587) - a verified-reason base update. The conflict surface is
+the version ladder: main took MORPCVersion132 for
+"decimal float rounding and strict textual float conversions" while
+this branch's r42 renumber had already claimed 132 for the intake
+build, so V_adopt moves to MORPCVersion133 exactly as the r39
+(114->131) and r42 (114->132) renumbers before it. The resolution:
+main's 132 (decimal float) stays untouched; this PR's intake asserts
+133 (MORPCLatestVersion = MORPCVersion133), so a current-main receiver
+advertising 132 still lacks the intake and is refused - the r44
+mixed-version fork keeps its meaning against main's real latest, and
+every pre-merge recorded expectation that named the adoption value is
+renumbered with it. Sweep, complete:
+- production: coordinatorIntakeAdoptionVersion = defines.MORPCVersion133
+  (remote_object_admission.go); every threshold consults that constant,
+  so the refusal/gate sites follow symbolically.
+- fixtures: the r11 thresholds matrix (main's shipped latest probe
+  moves 131->132, adoption pins 132->133; the generic old-coordinator
+  stamp pin stays 131 - a below-adoption old-build value), the r44
+  below-adoption sentinel (131->132, "a 132 stream" - main's shipped
+  latest receiving pre-intake traffic), the r15 ladder (its six
+  "main's shipped latest" sites and the sustained campaign's receiver
+  confirm move to 132; every refusal still asserts: 132 < 133), the
+  r29 receiver-at-adoption construction -> 133.
+- protobuf: pipeline.proto auto-merged; pipeline.pb.go regenerated
+  from the merged .proto with the repository toolchain pin (gen.sh's
+  protoc 3.21.1 + protoc-gen-gogofast + goimports; descriptor 9541
+  bytes), not hand-spliced.
+- BVT: update_remote_fragment_capability.result's two refusal texts
+  and its captured-advertisement restore echo (132->133);
+  update_remote_fragment_capability_receiver_refusal.sql's three
+  adoption probes (>=132/`<132` -> 133) and its .result's matching
+  rows, its refusal text and its restore echo; forward_compat stays
+  version-independent (pins nothing, the coordinator advertises its
+  own build) and is untouched; replace_workspace's 132 sites are row
+  data, not protocol, and stay.
+No design decision, invariant, or policy text changes: V_adopt remains
+"the first build carrying this PR's remote fragment workspace
+intake"; its numeric ground moved with main's ladder. Validation for
+this round is recorded in the round's report: the merged-tree build,
+the renumbered r11/r15/r29/r44 families (nonrace + the r15 lane under
+-race), and the three-topology local replay of the renumbered D4''
+BVT cases against a cluster built from the merged tree.

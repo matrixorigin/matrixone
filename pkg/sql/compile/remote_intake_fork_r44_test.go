@@ -47,7 +47,7 @@ import (
 func TestIssue25590FragmentRetentionThresholdsR44(t *testing.T) {
 	require.False(t, fragmentRetainsRefusedIntakeObjects(0),
 		"an unconfirmed stream reads fails closed toward recording-side retention")
-	require.False(t, fragmentRetainsRefusedIntakeObjects(defines.MORPCVersion131),
+	require.False(t, fragmentRetainsRefusedIntakeObjects(defines.MORPCVersion132),
 		"main's shipped latest does not retain refused runs - the review's legacy fragment")
 	require.True(t, fragmentRetainsRefusedIntakeObjects(coordinatorIntakeAdoptionVersion),
 		"the first admission build owns its refused runs through writer retention and the failure terminal")
@@ -96,7 +96,7 @@ func TestIssue25590RemoteRunConfirmRequirementR44(t *testing.T) {
 
 	require.False(t, remoteRunRequiresFragmentProtocolConfirm(0, plain),
 		"a plain query scope with no floor keeps the pre-existing no-confirm behavior")
-	require.True(t, remoteRunRequiresFragmentProtocolConfirm(defines.MORPCVersion131, plain),
+	require.True(t, remoteRunRequiresFragmentProtocolConfirm(defines.MORPCVersion132, plain),
 		"an expression floor already surges the existing confirm")
 	require.True(t, remoteRunRequiresFragmentProtocolConfirm(0, muS3Scope))
 	require.True(t, remoteRunRequiresFragmentProtocolConfirm(0, insS3Scope))
@@ -140,7 +140,7 @@ func TestIssue25590IntakeForkSelectsFragmentCapabilityR44(t *testing.T) {
 		mu := multi_update.NewArgument()
 		mu.Action = multi_update.UpdateWriteS3
 		s.RootOp = mu
-		require.NoError(t, AdoptRemoteRunIntakeMetadata(s, relay, defines.MORPCVersion131),
+		require.NoError(t, AdoptRemoteRunIntakeMetadata(s, relay, defines.MORPCVersion132),
 			"a legacy fragment with capacity available runs exactly like leg P3' proved - the mixed matrix's intact cell")
 		require.Error(t, r29ProbeAdoption(t, ws, "probe-legacy-below"),
 			"the legacy adoption also consumes the bound's last slot")
@@ -177,7 +177,7 @@ func TestIssue25590IntakeForkSelectsFragmentCapabilityR44(t *testing.T) {
 		mu := multi_update.NewArgument()
 		mu.Action = multi_update.UpdateWriteS3
 		s.RootOp = mu
-		err := AdoptRemoteRunIntakeMetadata(s, relay, defines.MORPCVersion131)
+		err := AdoptRemoteRunIntakeMetadata(s, relay, defines.MORPCVersion132)
 		require.ErrorContains(t, err, "workspace admission paused",
 			"the refusal still fails the run - the admission bound is not weakened for a legacy fragment")
 		require.Equal(t, relayNames, ws.PendingObjectCleanupNamesForTest(),
@@ -190,13 +190,13 @@ func TestIssue25590IntakeForkSelectsFragmentCapabilityR44(t *testing.T) {
 		relay, _ := r29RelayBatch(t, s.Proc.Mp(), 1, true)
 		defer relay.Clean(s.Proc.Mp())
 		s.RootOp = multi_update.NewArgument() // UpdateWriteTable: ordinary rows
-		require.NoError(t, AdoptRemoteRunIntakeMetadata(s, relay, defines.MORPCVersion131),
+		require.NoError(t, AdoptRemoteRunIntakeMetadata(s, relay, defines.MORPCVersion132),
 			"a legacy fragment's ordinary rows reach no recognizer under either fork")
 	})
 }
 
 // The production receive loops carry their stream's confirmed receiver
-// advertisement into the intake at the refusal boundary: a 131 stream's
+// advertisement into the intake at the refusal boundary: a 132 stream's
 // refused relay batch leaves the retained names on the recording
 // workspace, a 132 stream's refused batch books nothing.
 func TestIssue25590ReceiveLoopCarriesFragmentAdvertisementR44(t *testing.T) {
@@ -228,7 +228,7 @@ func TestIssue25590ReceiveLoopCarriesFragmentAdvertisementR44(t *testing.T) {
 		}
 	}
 	t.Run("confirmed below-adoption stream retains", func(t *testing.T) {
-		drive(defines.MORPCVersion131, true)
+		drive(defines.MORPCVersion132, true)
 	})
 	t.Run("confirmed first-admission stream books nothing", func(t *testing.T) {
 		drive(coordinatorIntakeAdoptionVersion, false)
@@ -258,16 +258,16 @@ func TestIssue25590ConfirmReturnsFragmentAdvertisementR44(t *testing.T) {
 			"the floor rides the existing request field")
 		return version, err
 	}
-	version, err := check(0, defines.MORPCVersion131)
+	version, err := check(0, defines.MORPCVersion132)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion131, version,
+	require.Equal(t, defines.MORPCVersion132, version,
 		"the receiver's own advertisement returns to the caller - the intake fork's input")
 
-	version, err = check(defines.MORPCVersion131, coordinatorIntakeAdoptionVersion)
+	version, err = check(defines.MORPCVersion132, coordinatorIntakeAdoptionVersion)
 	require.NoError(t, err)
 	require.Equal(t, coordinatorIntakeAdoptionVersion, version)
 
-	_, err = check(defines.MORPCVersion131, defines.MORPCVersion100)
+	_, err = check(defines.MORPCVersion132, defines.MORPCVersion100)
 	require.Error(t, err,
 		"the floor refusal keeps its pre-round-44 behavior")
 
