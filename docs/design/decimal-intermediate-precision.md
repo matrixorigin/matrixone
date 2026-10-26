@@ -98,37 +98,6 @@ result type, serialized state, wide overflow/cancellation behavior, DISTINCT,
 window and merge contracts. It is independently reviewed and benchmarked rather
 than mixed into this planner experiment.
 
-## Function placement correction
-
-The arithmetic-only candidate independently exposed a Q4 regression of roughly
-2.4–3.4% despite unchanged scan/filter instructions. Its hot selection loop moved
-by 32 bytes. Separate long caller profiles located most extra foreground CPU in
-that loop. An ABBA hardware-counter diagnostic measured front-end no-dispatch
-slots increasing 9.24%, while instructions increased 0.27%, branch misses fell
-0.16%, and instruction-cache misses increased 0.07%. Background merges were
-present in both whole-application profiles. This supports a function-placement
-explanation rather than additional decimal execution; it does not establish
-that a particular cache-line crossing alone caused the slowdown.
-
-Use Go 1.27's documented `-funcalign=64` linker option for amd64 executable
-builds. This keeps an unchanged function's instructions at the same cache-line
-offset when unrelated functions change size. Keep other architectures on their
-existing policy. Include the option consistently in the ordinary, prebuilt
-native, Darwin and musl link paths, retaining their existing native and version
-flags. This changes padding, not arithmetic instructions or native libraries.
-The existing native provenance owner must rebuild if editing the Makefile
-invalidates its source receipt.
-
-The measured clean-main control adds about 3.6 MB of text, so increased code
-footprint and other hot-path placement remain performance risks. Validate this
-linker option alone against the ordinary clean-main build before applying it
-to the precision candidate. Both sides use independent clean checkouts and
-normal native-owner builds, with no decimal patch or source overlays in the
-alignment control. Independently resolve positive timing estimates before
-delivery. Then repeat the complete SF10 and declared-decimal acceptance for
-the actual precision candidate against the ordinary clean-main build. A gain
-from alignment cannot waive a regression in any query or decimal control.
-
 ## Candidate evidence
 
 The first, broader candidate also changed Decimal64 carry/literal coercion. It
