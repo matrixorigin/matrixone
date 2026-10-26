@@ -28,6 +28,7 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -55,6 +56,30 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 		const schema = "timestampadd_dump_contract"
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
 		exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
+		flushForDump := func(t *testing.T, table string) {
+			t.Helper()
+			var response string
+			require.NoError(t, conn.QueryRowContext(ctx, "select mo_ctl('dn','flush',?)", table).Scan(&response))
+			var flushed struct {
+				Method string `json:"method"`
+				Result []struct {
+					ReturnStr string `json:"returnStr"`
+				} `json:"result"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(response), &flushed))
+			require.Equal(t, "Flush", flushed.Method)
+			require.NotEmpty(t, flushed.Result)
+			for _, result := range flushed.Result {
+				require.Equal(t, "OK", result.ReturnStr)
+			}
+			// TN completion does not imply CN has applied the object replacement.
+			// A post-flush frontier keeps DUMP from seeing the old in-memory rows.
+			service := cn.RawService().(cnservice.Service)
+			frontier, _ := service.GetClock().Now()
+			applied, err := service.GetTxnClient().WaitLogTailAppliedAt(ctx, frontier)
+			require.NoError(t, err)
+			require.False(t, applied.Less(frontier))
+		}
 		scalar := func(q, want string) {
 			t.Helper()
 			var got string
@@ -151,9 +176,7 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 		exec("load table " + historicalSource + " from '" + seedPath + "'")
 		exec("insert into " + historicalSource + "(a) values(1.50)")
 		scalar("select cast(g as char) from "+historicalSource, "2024-01-01 00:00:02.000000")
-		var flush string
-		require.NoError(t, conn.QueryRowContext(ctx, "select mo_ctl('dn','flush','"+historicalSource+"')").Scan(&flush))
-		t.Logf("synchronous flush: %s", flush)
+		flushForDump(t, historicalSource)
 		// A rolling deployment may still author at the previous floor. Failure
 		// to bind the current era must preserve the historical binding witness.
 		rt := moruntime.ServiceRuntime(cn.ServiceID())
@@ -309,8 +332,7 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(seedDir, "manifest.json"), encoded, 0600))
 				exec("load table " + sourceName + " from '" + seedDir + "'")
 				exec("insert into " + sourceName + "(a,b) values(5.50,2)")
-				var flush string
-				require.NoError(t, conn.QueryRowContext(ctx, "select mo_ctl('dn','flush','"+sourceName+"')").Scan(&flush))
+				flushForDump(t, sourceName)
 				dataDir := filepath.Join(root, "div-data-"+tc.name)
 				exec("dump table " + sourceName + " to '" + dataDir + "'")
 				exec("load table " + restoredName + " from '" + dataDir + "'")
