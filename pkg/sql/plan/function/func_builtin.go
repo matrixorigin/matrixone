@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -5140,8 +5141,71 @@ func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWra
 }
 
 func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytesByStringDomain(
-		parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	if length <= 1 {
+		return opUnaryBytesToBytesByStringDomain(
+			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	}
+	input := parameters[0]
+	binary, perRow := stringDomainMode(input)
+	if input.IsConst() || result.GetResultVector().IsConst() || input.HasNull() ||
+		binary || perRow || !selectList.ShouldEvalAllRow() || selectList.IgnoreAllRow() {
+		return opUnaryBytesToBytesByStringDomain(
+			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	}
+
+	// Reuse only within this evaluation; power-of-two growth stays below 128KiB total.
+	const maxScratch = 64 << 10
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	param := vector.OptGetBytesParamFromWrapper(rs, 0, input)
+	var inline [types.VarlenaInlineSize]byte
+	scratch := inline[:]
+	for row := uint64(0); row < uint64(length); row++ {
+		value, _ := param.GetStrValue(row)
+		if len(value) > maxScratch {
+			if err := rs.AppendBytes(bytes.ToLower(value), false); err != nil {
+				return err
+			}
+			continue
+		}
+		isASCII, hasUpper := true, false
+		for _, c := range value {
+			if c >= utf8.RuneSelf {
+				isASCII = false
+				break
+			}
+			hasUpper = hasUpper || ('A' <= c && c <= 'Z')
+		}
+
+		var err error
+		switch {
+		case !isASCII:
+			err = rs.AppendBytes(bytes.Map(unicode.ToLower, value), false)
+		case !hasUpper:
+			err = rs.AppendBytes(value, false)
+		default:
+			if len(value) > cap(scratch) {
+				size := 32
+				for size < len(value) {
+					size *= 2
+				}
+				scratch = make([]byte, size)
+			}
+			dst := scratch[:len(value)]
+			for i := range dst {
+				c := value[i]
+				if 'A' <= c && c <= 'Z' {
+					c += 'a' - 'A'
+				}
+				dst[i] = c
+			}
+			err = rs.AppendBytes(dst, false)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return setSelectedStringResultDomain(input, result, proc)
 }
 
 // buildInMOCU extract cu or calculate cu from parameters
