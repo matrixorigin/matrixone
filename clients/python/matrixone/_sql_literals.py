@@ -114,12 +114,16 @@ def sql_literal(value):
     return "'%s'" % value.replace("'", "''")
 
 
-def substitute_parameters(sql, params, *, sql_mode=''):
+def substitute_parameters(sql, params, *, sql_mode='', allow_format_placeholders=True):
     if params is None:
         return sql
     named = isinstance(params, dict)
     if not named and not isinstance(params, (tuple, list)):
         raise TypeError('SQL parameters must be a mapping, tuple or list')
+    # Builder SQL uses qmark parameters; with none present there is no
+    # substitution or parameter-count work, and SQL validation stays server-owned.
+    if not named and not params and not allow_format_placeholders and '?' not in sql:
+        return sql
     values = iter(params) if not named else None
     used = set()
     modes = {mode.strip().upper() for mode in sql_mode.split(',')}
@@ -195,7 +199,7 @@ def substitute_parameters(sql, params, *, sql_mode=''):
                 used.add(key)
                 i = match.end()
                 continue
-        if not named and (char == '?' or (char == '%' and sql.startswith('%s', i))):
+        if not named and (char == '?' or (allow_format_placeholders and char == '%' and sql.startswith('%s', i))):
             try:
                 value = next(values)
             except StopIteration as error:

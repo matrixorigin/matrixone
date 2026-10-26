@@ -393,3 +393,38 @@ async def test_native_decoded_time_and_uuid_share_all_insert_paths(client):
             await c.disconnect()
         finally:
             client.execute('DROP TABLE ' + table)
+
+
+def test_native_builder_qmark_parameters_preserve_modulo_and_typed_literals(client):
+    from matrixone.sql_builder import MatrixOneSQLBuilder
+
+    table = 'sdk_builder_' + uuid.uuid4().hex[:12]
+    client.execute(
+        'CREATE TABLE ' + table + '(value INT, size INT, s INT, marker VARCHAR(10), day DATE, payload VARBINARY(4))'
+    )
+    try:
+        client.execute(
+            'INSERT INTO ' + table + " VALUES (7,3,4,'?','2026-10-26',X'00ff'),(8,4,5,'?','2026-10-26',X'0001')"
+        )
+        for expression, expected in [('value%size', [1, 0]), ('value%s', [3, 3]), ('value % size', [1, 0])]:
+            for bound in [False, True]:
+                builder = MatrixOneSQLBuilder().select(expression).from_table(table).order_by('value')
+                if bound:
+                    builder.where('value = ?', 7)
+                assert client.execute(builder.build_with_parameter_substitution()).rows == [
+                    (value,) for value in (expected[:1] if bound else expected)
+                ]
+        query = (
+            MatrixOneSQLBuilder()
+            .select('value')
+            .from_table(table)
+            .where("marker = '?' /* ? %s */")
+            .where('day = ?', date(2026, 10, 26))
+            .where('payload = ?', b'\x00\xff')
+            .build_with_parameter_substitution()
+        )
+        assert client.execute(query).rows == [(7,)]
+        # Client APIs retain their separate legacy format-placeholder contract.
+        assert client.execute('SELECT %s', (9,)).rows == [(9,)]
+    finally:
+        client.execute('DROP TABLE ' + table)

@@ -569,7 +569,7 @@ class MatrixOneSQLBuilder:
         """
         sql, params = self.build()
 
-        return substitute_parameters(sql, params)
+        return substitute_parameters(sql, params, allow_format_placeholders=False)
 
     # Utility methods
     def clone(self) -> "MatrixOneSQLBuilder":
