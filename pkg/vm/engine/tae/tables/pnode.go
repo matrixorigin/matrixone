@@ -78,7 +78,7 @@ func (node *persistedNode) Contains(
 func (node *persistedNode) GetDuplicatedRows(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	getRowSelection func() (index.RowSelection, error),
+	lower, to types.TS,
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowIDs containers.Vector,

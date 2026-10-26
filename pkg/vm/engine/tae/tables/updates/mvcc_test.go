@@ -286,8 +286,6 @@ func TestAppendMVCCPrepareAndRowOrders(t *testing.T) {
 	assert.Equal(t, txnif.UncommitTS, n1.GetPrepare())
 	assert.Equal(t, txnif.UncommitTS, n2.GetPrepare())
 	assert.Equal(t, txnif.UncommitTS, n3.GetPrepare())
-	_, unpreparedSnapshot := h.GetRowSelectionAfterWithSnapshot(types.TS{}, types.MaxTs())
-	require.NotNil(t, unpreparedSnapshot)
 
 	txn2.PrepareTS = types.BuildTS(2, 0)
 	assert.NoError(t, n2.PrepareCommit())
@@ -295,9 +293,6 @@ func TestAppendMVCCPrepareAndRowOrders(t *testing.T) {
 	assert.NoError(t, n1.PrepareCommit())
 	txn3.PrepareTS = types.BuildTS(4, 0)
 	assert.NoError(t, n3.PrepareCommit())
-	assert.False(t, h.IsPrepareSnapshotCurrent(unpreparedSnapshot))
-	_, preparedSnapshot := h.GetRowSelectionAfterWithSnapshot(types.TS{}, types.MaxTs())
-	assert.True(t, h.IsPrepareSnapshotCurrent(preparedSnapshot))
 	assert.Equal(t, n3.Prepare, h.GetLatestAppendPrepareTSLocked())
 	assert.Same(t, n1, h.rows[0])
 	assert.Same(t, n2, h.rows[1])
@@ -323,8 +318,7 @@ func TestAppendMVCCPrepareAndRowOrders(t *testing.T) {
 	assert.False(t, selection.Holes.Contains(9))
 	assert.False(t, selection.Holes.Contains(20))
 
-	// Removing a node must remove it from the dedup snapshot as well as the
-	// physical-row index.
+	// Removing a node must remove it from the dedup selection.
 	h.DeleteAppendNodeLocked(n2)
 	selection = h.GetRowSelectionAfter(types.BuildTS(1, 0), types.BuildTS(3, 0))
 	assert.Equal(t, uint32(0), selection.MinRow)
@@ -349,7 +343,7 @@ func TestLatestAppendPrepareTSWithOutOfOrderRows(t *testing.T) {
 	require.Equal(t, txnif.UncommitTS, handle.GetLatestAppendPrepareTSLocked())
 }
 
-func TestAppendMVCCPrepareTreeConcurrentReaders(t *testing.T) {
+func TestAppendMVCCRowSelectionConcurrentReaders(t *testing.T) {
 	schema := catalog.MockSchema(1, 0)
 	c := catalog.MockCatalog(nil)
 	defer c.Close()
@@ -365,8 +359,7 @@ func TestAppendMVCCPrepareTreeConcurrentReaders(t *testing.T) {
 	for i := range nodes {
 		txn := mockTxn()
 		nodes[i], _ = h.AddAppendNodeLocked(txn, uint32(i), uint32(i+1))
-		// Reverse PrepareTS order to exercise COW replacement and physical-row
-		// reordering concurrently with lock-free readers.
+		// Reverse PrepareTS order while exercising concurrent locked readers.
 		txn.PrepareTS = types.BuildTS(int64(nodeCount-i), 0)
 	}
 

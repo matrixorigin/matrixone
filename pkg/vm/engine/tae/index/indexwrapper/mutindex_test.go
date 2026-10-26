@@ -92,9 +92,7 @@ func TestGetDuplicatedRowsSkipsIneligibleCandidates(t *testing.T) {
 		nil,
 		&blkID,
 		rowIDs.GetDownstreamVector(),
-		func() (index.RowSelection, error) {
-			return index.RowSelection{MinRow: 0, MaxRow: 3}, nil
-		},
+		func(row uint32) bool { return row < 3 },
 		func(row uint32) error {
 			if row > 0 {
 				return index.ErrNotFound
@@ -117,14 +115,47 @@ func TestGetDuplicatedRowsSkipsIneligibleCandidates(t *testing.T) {
 		nil,
 		&blkID,
 		skippedRowIDs.GetDownstreamVector(),
-		func() (index.RowSelection, error) {
-			return index.RowSelection{MinRow: 0, MaxRow: 3}, nil
-		},
+		func(row uint32) bool { return row < 3 },
 		func(uint32) error { return index.ErrNotFound },
 		common.DefaultAllocator,
 	)
 	require.NoError(t, err)
 	require.True(t, skippedRowIDs.IsNull(0))
+}
+
+func TestGetDuplicatedRowsChecksOnlyMatchingRows(t *testing.T) {
+	idx := NewMutIndex(types.T_int32.ToType())
+	defer idx.Close()
+	indexed := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	defer indexed.Close()
+	indexed.Append(int32(7), false)
+	indexed.Append(int32(9), false)
+	require.NoError(t, idx.BatchUpsert(indexed.GetDownstreamVector(), 0))
+
+	query := containers.MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
+	defer query.Close()
+	query.Append(int32(8), false) // Inside the zonemap, absent from ART.
+	query.Append(int32(9), false)
+	rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+	defer rowIDs.Close()
+	rowIDs.Append(nil, true)
+	rowIDs.Append(nil, true)
+
+	var checked []uint32
+	blockID := types.Blockid{}
+	err := idx.GetDuplicatedRows(
+		context.Background(), query.GetDownstreamVector(), nil, &blockID,
+		rowIDs.GetDownstreamVector(),
+		func(row uint32) bool {
+			checked = append(checked, row)
+			return true
+		},
+		nil, common.DefaultAllocator,
+	)
+	require.NoError(t, err)
+	require.True(t, rowIDs.IsNull(0))
+	require.False(t, rowIDs.IsNull(1))
+	require.Equal(t, []uint32{1}, checked)
 }
 
 func TestGetDuplicatedRowsWindow(t *testing.T) {
@@ -160,9 +191,7 @@ func TestGetDuplicatedRowsWindow(t *testing.T) {
 			defer rows.Free(mp)
 			require.NoError(t, vector.AppendFixed(rows, types.Rowid{}, true, mp))
 			err := idx.GetDuplicatedRows(context.Background(), keys, index.NewZM(types.T_int32, 0), &types.Blockid{}, rows,
-				func() (index.RowSelection, error) {
-					return index.RowSelection{MinRow: uint32(tc.min), MaxRow: uint32(tc.max)}, nil
-				},
+				func(row uint32) bool { return int32(row) >= tc.min && int32(row) < tc.max },
 				func(row uint32) error {
 					if tc.aborted[row] {
 						return index.ErrNotFound

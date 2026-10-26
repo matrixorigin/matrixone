@@ -208,32 +208,19 @@ func (obj *aobject) GetDuplicatedRows(
 	node := obj.PinNode()
 	defer node.Unref()
 	if !node.IsPersisted() {
-		// Build the prepare-range selection from the immutable COW snapshot
-		// before GetDuplicatedRows takes the object lock for ART and conflict
-		// checks. PrePrepare assigns/publishes predecessor PrepareTS values in
-		// the same serialized worker before this read; later active appends are
-		// still handled by the newest-owner conflict check under the lock.
-		// GetRowSelectionAfter keeps the historical (from, to] contract.
-		// The public dedup window is [from, to], as it was when this path
-		// used GetMaxRowByTS, so move the lower endpoint back one timestamp.
+		// The index finds matching rows first. Their AppendNodes are then checked
+		// under the object MVCC read lock, without scanning every append in the
+		// object to construct a prepare-time row selection.
+		// The public dedup window is [from, to]. Use the historical (lower, to]
+		// bound so the lower endpoint remains inclusive.
 		lower := from
 		if !lower.IsEmpty() {
 			lower = lower.Prev()
 		}
-		selection, snapshot := obj.appendMVCC.GetRowSelectionAfterWithSnapshot(lower, to)
-		fn := func() (index.RowSelection, error) {
-			// PrepareCommit also takes the object lock. If it published a new
-			// snapshot between the lock-free traversal above and this callback,
-			// rebuild from the now-stable snapshot while holding the lock.
-			if !obj.appendMVCC.IsPrepareSnapshotCurrent(snapshot) {
-				return obj.appendMVCC.GetRowSelectionAfter(lower, to), nil
-			}
-			return selection, nil
-		}
 		return node.GetDuplicatedRows(
 			ctx,
 			txn,
-			fn,
+			lower, to,
 			keys,
 			keysZM,
 			rowIDs,

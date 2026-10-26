@@ -116,18 +116,27 @@ func (node *memoryNode) getDuplicatedRowsLocked(
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowIDs containers.Vector,
-	getRowSelection func() (index.RowSelection, error),
+	lower, to types.TS,
 	skipFn func(uint32) error,
 	mp *mpool.MPool,
 ) (err error) {
 	blkID := objectio.NewBlockidWithObjectID(node.object.meta.Load().ID(), 0)
+	// ART narrows the work to rows with matching keys. AppendNode Prepare and
+	// its physical row range are stable while the caller holds object.RLock.
+	rowInWindow := func(row uint32) bool {
+		appendnode := node.object.appendMVCC.GetAppendNodeByRowLocked(row)
+		if appendnode == nil || appendnode.IsAborted() {
+			return false
+		}
+		return appendnode.Prepare.GT(&lower) && appendnode.Prepare.LE(&to)
+	}
 	return node.pkIndex.GetDuplicatedRows(
 		ctx,
 		keys.GetDownstreamVector(),
 		keysZM,
 		&blkID,
 		rowIDs.GetDownstreamVector(),
-		getRowSelection,
+		rowInWindow,
 		skipFn,
 		mp)
 }
@@ -365,7 +374,7 @@ func (node *memoryNode) ReserveRowsLocked(rows uint32) {
 func (node *memoryNode) GetDuplicatedRows(
 	ctx context.Context,
 	txn txnif.TxnReader,
-	getRowSelection func() (index.RowSelection, error),
+	lower, to types.TS,
 	keys containers.Vector,
 	keysZM index.ZM,
 	rowIDs containers.Vector,
@@ -374,7 +383,7 @@ func (node *memoryNode) GetDuplicatedRows(
 	node.object.RLock()
 	defer node.object.RUnlock()
 	checkFn := node.checkConflictLocked(txn)
-	err = node.getDuplicatedRowsLocked(ctx, keys, keysZM, rowIDs, getRowSelection, checkFn, mp)
+	err = node.getDuplicatedRowsLocked(ctx, keys, keysZM, rowIDs, lower, to, checkFn, mp)
 
 	return
 }

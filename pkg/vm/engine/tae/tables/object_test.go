@@ -658,6 +658,72 @@ func TestAppendableDuplicatedRowsTimestampWindow(t *testing.T) {
 	}
 }
 
+func TestAppendableDuplicatedRowsChecksMatchingRows(t *testing.T) {
+	schema := catalog.MockSchema(1, 0)
+	table := catalog.MockStaloneTableEntry(1, schema)
+	oid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&oid, true, false, false)
+	meta := catalog.MockObjectEntry(table, stats, false, nil, types.BuildTS(1, 0))
+	mvcc := updates.NewAppendMVCCHandle(meta)
+	base := &baseObject{RWMutex: mvcc.RWMutex, appendMVCC: mvcc}
+	base.meta.Store(meta)
+	node := &memoryNode{object: base, pkIndex: indexwrapper.NewMutIndex(types.T_int8.ToType())}
+	node.OnZeroCB = node.close
+	node.Ref()
+	defer node.Unref()
+	obj := &aobject{baseObject: base}
+	obj.node.Store(NewNode(node))
+
+	// Prepare order differs from physical row order. The last two ART rows
+	// represent an unprepared append and an aborted append.
+	for row, prepareTS := range []int64{30, 10, 20, 0, -1} {
+		txn := updates.MockTxnWithStartTS(types.BuildTS(1, 0))
+		an, _ := mvcc.AddAppendNodeLocked(txn, uint32(row), uint32(row+1))
+		switch {
+		case prepareTS > 0:
+			txn.PrepareTS = types.BuildTS(prepareTS, 0)
+			txn.CommitTS = txn.PrepareTS
+			require.NoError(t, an.PrepareCommit())
+			require.NoError(t, an.ApplyCommit(txn.ID))
+		case prepareTS < 0:
+			an.Aborted = true
+		}
+	}
+	indexed := containers.MakeVector(types.T_int8.ToType(), common.DefaultAllocator)
+	defer indexed.Close()
+	for range 5 {
+		indexed.Append(int8(7), false)
+	}
+	require.NoError(t, node.pkIndex.BatchUpsert(indexed.GetDownstreamVector(), 0))
+	query := containers.MakeVector(types.T_int8.ToType(), common.DefaultAllocator)
+	defer query.Close()
+	query.Append(int8(7), false)
+	reader := txnbase.MockTxnReaderWithStartTS(types.BuildTS(100, 0))
+
+	for _, tc := range []struct {
+		name     string
+		from, to types.TS
+		wantRow  int
+	}{
+		{"newest physical row in window", types.BuildTS(10, 0), types.BuildTS(20, 0), 2},
+		{"older row with later prepare", types.BuildTS(30, 0), types.BuildTS(30, 0), 0},
+		{"all prepared rows", types.TS{}, types.MaxTs(), 2},
+		{"empty window", types.BuildTS(11, 0), types.BuildTS(19, 0), -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+			defer rows.Close()
+			rows.Append(nil, true)
+			require.NoError(t, obj.GetDuplicatedRows(context.Background(), reader, query, nil, tc.from, tc.to, rows, common.DefaultAllocator))
+			require.Equal(t, tc.wantRow < 0, rows.IsNull(0))
+			if tc.wantRow >= 0 {
+				rowID := rows.Get(0).(types.Rowid)
+				require.Equal(t, uint32(tc.wantRow), rowID.GetRowOffset())
+			}
+		})
+	}
+}
+
 func TestApplyAppendAtLockedOutOfOrder(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

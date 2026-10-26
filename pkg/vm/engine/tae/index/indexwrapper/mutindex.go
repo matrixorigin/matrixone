@@ -187,7 +187,7 @@ func (idx *MutIndex) GetDuplicatedRows(
 	keysZM index.ZM,
 	blkID *types.Blockid,
 	rowIDs *vector.Vector,
-	getRowSelectionFn func() (index.RowSelection, error),
+	rowInWindowFn func(row uint32) bool,
 	skipFn func(row uint32) error,
 	mp *mpool.MPool,
 ) (err error) {
@@ -201,10 +201,6 @@ func (idx *MutIndex) GetDuplicatedRows(
 			return
 		}
 	}
-	selection, err := getRowSelectionFn()
-	if err != nil {
-		return
-	}
 	op := func(v []byte, _ bool, offset int) error {
 		if !rowIDs.IsNull(uint64(offset)) {
 			return nil
@@ -213,7 +209,7 @@ func (idx *MutIndex) GetDuplicatedRows(
 		if err == index.ErrNotFound {
 			return nil
 		}
-		// Check the newest valid owner even when it is outside selection.  Rows
+		// Check the newest valid owner even when it is outside the dedup window. Rows
 		// without an eligible append node (aborted, missing, or still
 		// unprepared) are stale/future candidates, so keep walking toward older
 		// owners instead of exposing the skip signal to the caller.
@@ -232,7 +228,7 @@ func (idx *MutIndex) GetDuplicatedRows(
 		var maxRow uint32
 		exist := false
 		for i := len(rows) - 1; i >= 0; i-- {
-			if !selection.Contains(rows[i]) {
+			if !rowInWindowFn(rows[i]) {
 				continue
 			}
 			if skipFn != nil {
