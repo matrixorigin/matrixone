@@ -133,6 +133,19 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		if confirmErr != nil {
 			return sender, confirmErr
 		}
+		// Design r15 (issue #25590 round-45 reviews): a
+		// persistence-producing scope must never reach a below-adoption
+		// receiver — no ledger state can bound what an admitted legacy
+		// run leaves behind, so the enforced finite bound is zero
+		// admitted legacy obligations. Refuse BEFORE sendPipeline so
+		// the old fragment never persists anything; plain scopes never
+		// consult this refusal and capable receivers keep the intake
+		// gate exactly as before.
+		if err := refuseRemoteWriteToNonRetainingFragment(
+			s.Proc.Ctx, sender.confirmedFragmentProtocol, s,
+		); err != nil {
+			return sender, err
+		}
 	}
 
 	debugMsg := ""

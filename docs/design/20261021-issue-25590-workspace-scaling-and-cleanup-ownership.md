@@ -8,8 +8,36 @@
   rounds and the 2026-10-23 implementation-review series ran against the original
   parent `83222fa8371007c7969d3aeca3ab8ced90695f4c`, which main absorbed before the
   rebase.
-- Document version: **r12** (2026-10-23; independent review outcomes r8-r12 recorded
-  2026-10-24 in the closing §10 sections below). Revision r1 was the round-17 design-gate
+- Document version: **r15** (2026-10-26; independent review outcomes r8-r12 recorded
+  2026-10-24 in the closing §10 sections below). Revision r13 (the round-45
+  review's design response) was returned REQUEST_CHANGES with two P2 findings;
+  r14 (its booked-token revision) was returned REQUEST_CHANGES with two P2
+  blockers — the admitted-run tail is still workload-dependent and unbounded
+  (the relay reassembly decodes arbitrarily large batches, so no transported
+  bound exists), and the token plus the first object's per-name reservation
+  double-charge the boundary (a one-object run with one free unit fails
+  permanently, contradicting the recorded unchanged free-capacity claim) —
+  plus a P3 (the planned public case named no admission-control fixture).
+  All three findings were verified against the tree: both capacity-keyed
+  ladders are unenforceable as finite bounds, so r15 takes the reviewers'
+  offered alternative in its enforceable form, the FAIL-CLOSED COMPATIBILITY
+  POLICY: a persistence-producing scope is NEVER dispatched to a below-
+  adoption receiver — the enforced finite bound on admitted legacy tails is
+  ZERO, the refusal is keyed on the confirmed receiver capability (definite
+  not-supported error before sendPipeline, mirroring the existing D3'
+  refusal of the opposite direction), the token machinery is dropped
+  (dissolving the double charge), the saturating-obligation fixture is no
+  longer required on the public plane (the refusal is state-independent,
+  and the public mixed-version case reuses the capability family's existing
+  receiver pins alone), I4/§5.5 return to the pure sum-of-per-engine-limits
+  aggregate under sustained stalled drain, and received batches keep the
+  round-44 fail-open retention as the received-objects backstop with an
+  empty in-tree feed. The r11 P3' commit-readback cell for PERSISTENCE-
+  PRODUCING scopes on below-adoption fragments is superseded by the
+  symmetric capability-refusal contract, recorded with its justification in
+  the Revision r15 section; mixed read legs are unaffected. r15 is the
+  operative revision under re-review at its closing §10 record. Revision
+  r1 was the round-17 design-gate
   artifact; r2 revised §5.1, §5.3, §5.5, §6, §7, §8, §9 and the §10 review record to
   resolve the round-18 pre-PR review's two blocking findings (B6/B7 in §10): capacity
   must be reserved per persisted OBJECT rather than per dump, and every recorded
@@ -66,7 +94,17 @@
   recorded post-merge conflict resolution under that PASS, independently covered
   together with the implementation by the six complete-worktree reviews of
   2026-10-23, the sixth approving with no blocking findings (§10 closing record).
-  Implementation PR: #30988.
+  Implementation PR: #30988. r13 (round 45) — a decision-changing revision on the
+  round-44 receive-side retention policy opened by the round-45 implementation
+  review of 2026-10-25 — was returned REQUEST_CHANGES with two P2 findings, and
+  its booked-token successor r14 was returned REQUEST_CHANGES with two P2
+  blockers plus a P3 (all verified against the tree: no capacity-keyed gate
+  can deliver a finite tail bound or avoid double-charging the boundary, and
+  the public-fixture mechanism was unspecified). r15 — the fail-closed
+  compatibility policy that refuses persistence-producing dispatch to
+  below-adoption receivers outright — is the operative revision at its own
+  closing §10 record and is under re-review; no implementation repair may run
+  ahead of that re-review.
 
 ### Revision r6 (round-22 pre-PR review, findings H1/H2)
 
@@ -187,6 +225,39 @@ change latency, leakage, and shutdown liveness under failure.
   grow another engine's backlog, and under a sustained stalled drain the
   aggregate obligation population across every participating engine stays
   bounded by the sum of their per-engine limits (round-22 finding H2).
+  r13/r14/r15 close the mixed-version hole the round-45 review showed
+  round 44 had reopened, and r15 records the enforceable form after two
+  design re-reviews falsified both capacity-keyed ladders: a below-
+  adoption fragment's writers consult no admission surface anywhere
+  (the parent build predates the ledger), and the relay the coordinator
+  receives decodes arbitrarily large batches (the transport reassembles
+  every WaitingNext frame into one logical batch), so NO recording-
+  ledger state can enforce a finite bound on an admitted legacy run's
+  retained tail, and every admission-then-retain ladder fails either
+  the aggregate clause (r13's non-booking probe: unbounded concurrent
+  admission; r14's token ladder: unbounded per-run tail, plus the
+  token-plus-first-reservation double charge that makes a one-object
+  run with one free unit fail permanently) or ownership itself.
+  r15 therefore adopts the reviewers' offered alternative in its
+  enforceable form: a persistence-producing scope is NEVER dispatched
+  to a below-adoption receiver — a definite not-supported failure at
+  the coordinator's remoteRun BEFORE sendPipeline, keyed on the
+  r44-confirmed receiver capability exactly as the D3' refusal keys
+  the opposite direction — so the enforced finite bound on admitted
+  legacy obligations is ZERO and the aggregate this clause records
+  holds without any legacy term: under a sustained stalled drain the
+  total obligation population across participating engines is exactly
+  the sum of their per-engine limits. Batches that nevertheless reach
+  a recording workspace keep the round-44 fail-open retain as the
+  received-objects backstop — the only alternative to retaining an
+  already-physical object is dropping its last cleanup owner — with an
+  in-tree feed the r15 refusal leaves empty (defense in depth, the
+  same shape this design already records for unreachable robustness
+  paths). The r11 P3' commit-readback cell is superseded for
+  PERSISTENCE-PRODUCING scopes on below-adoption fragments by the
+  symmetric capability-refusal contract (mixed read legs unchanged);
+  the rescission and its three-round justification are recorded in the
+  Revision r15 section.
 - **I5 — adoption precedes remote release, one terminal classification
   per constructed workspace.** Every workspace a statement run constructs
   outside the coordinator's session — the remote-run fragment workspaces
@@ -667,8 +738,62 @@ OBLIGATION NAME the engine retains toward the cleanup queue, in object units:
   already-physical reservation-less class — whose in-tree feed the two
   gates leave empty (every in-tree writer reserves; every relayed name
   adopts) — so on this tree a sustained stalled drain pins the aggregate
-  population at the engine bounds instead of counting refusal rounds up. Two
-  findings of the first r22 validation round refine the implementation within
+  population at the engine bounds instead of counting refusal rounds up.
+  r13/r14/r15 split the relayed class again by fragment capability —
+  the split the round-45 review proved the aggregate sentence needed:
+  a retaining fragment at the first adoption build keeps the failure
+  side of its refused run, so its refusals stay exactly the shape
+  above; a NON-RETAINING fragment has no failure side anywhere, so the
+  same sentence held only while its batches kept arriving behind a
+  free bound — once the recording ledger saturates, the r44 intake
+  retain kept booking each refused batch's received names fail-open,
+  and a sustained deletion failure preserved them queued, one fresh
+  obligation per attempt with no bound on the attempts (round-45 P2:
+  limit 1, one parked reservation, 32 legacy attempts → queued 32).
+  r15 closes the class with the fail-closed compatibility policy after
+  two design re-reviews falsified every capacity-keyed ladder: r13's
+  NON-BOOKING probe admitted barrier-concurrent runs against the same
+  free unit (bounded by nothing); r14's BOOKED TOKEN closed the
+  concurrency race but left the admitted run's tail unbounded — the
+  coordinator receives what the relay reassembles, and the transport
+  merges every `WaitingNext` frame into ONE logical decoded batch
+  (`receiveBatch`'s merge loop; frames are `maxMessageSizeToMoRpc`=64MB
+  chunks of a possibly far larger encoded batch), while the parent
+  build's terminal flush collects the run's whole object set into that
+  one relay (`s3writer_delegate.go flushTailAndWriteToOutput` syncs
+  EVERY sinker and collects every object, `multi_update.go` drains
+  every writer) and the failed batch's tail is retained wholesale —
+  so the retained population after one admission is L−1+K for a K-
+  object run, exactly the reviewer's unbounded-K shape; and the token
+  plus the first object's own per-name reservation double-charged the
+  boundary (with L−1 obligations the booking consumed the last unit
+  and the first name then refused; with L=1 and an empty ledger EVERY
+  non-empty legacy run failed, permanently, retry after drain
+  included). No ledger state can bound K and no retention-side
+  refusal can drop a received name's last owner, so the only
+  enforceable finite bound is ZERO admitted legacy obligations:
+  the coordinator's remoteRun refuses a persistence-producing scope
+  whose stream confirmed a below-adoption receiver
+  (`fragmentRetainsRefusedIntakeObjects` false, including the
+  unconfirmed zero, fail closed) with a definite not-supported error
+  before sendPipeline — the exact mirror of the D3'
+  `refuseRemoteWriteFromIncapableCoordinator` the design already runs
+  on the opposite mismatched direction — a STATE-INDEPENDENT,
+  capability-keyed refusal: plain query scopes are never refused,
+  capable-receiver dispatches are never refused (they keep the intake
+  gate exactly as recorded), same-version execution is unchanged to
+  the byte (no token, no booking, no new capacity check anywhere on
+  that plane), and the decided EMPTY-INPUT producer-mode outcome now
+  joins the same definite refusal (a producer-mode scope's metadata
+  risk is structural in the plan, not in the runtime input — the
+  parent binary decides persistence at data volume, so no
+  pre-execution fact separates will-persist from empty, and the
+  previous saturating-ledger success of empty producers was an
+  accident of the missing gate, not a contract). Batches that
+  nevertheless reach a recording workspace keep the r44 fail-open
+  retain as the received-objects backstop unchanged, with an in-tree
+  feed the r15 refusal leaves empty (defense in depth).
+  Two findings of the first r22 validation round refine the implementation within
   the same decisions: the preparation-failure guard retains EXACTLY the
   record's extracted reservation-less names (the choke's own fresh-name
   filter) rather than the caller's fileName argument — a compaction staged
@@ -862,7 +987,9 @@ released, with nothing refused in between.
 | capacity behind a parked commit (r5) | the parked prepared transaction's own recorded names — one unit each, for its whole prepare/RPC window | commit-terminal classification (§5.3 G3): release at `FinalizeCommit`, owned→queued transfer at `Rollback`, release-without-deletion at unknown |
 | remote fragment owned names and reservations (r5; intake-ordered r6) | each remote run's own fragment footprint, settled exactly once, only after the batch-flow drain proved the coordinator's intake adoption | `FinalizeRemoteFragmentWorkspace` behind the run's drain (§5.3 remote bullet / I5) |
 | relayed names adopted at the recording intake (r6) | the recording engine's remaining capacity — one `reserveUnpublishedPendingObject` unit per adopted name before the first ack | `AdoptRemoteTransferredObjectNames` at the transport client's intake (§5.3 remote bullet, finding H1) |
-| aggregate obligation population across the fragment and recording engines under sustained refusal with deletion stalled (r6) | the SUM of the per-engine admission limits — refusals fail whole runs, the fragment keeps its own units, and the saturated fragment's writers then refuse further spills | the intake admission gate + the transacted reservation surface (§5.3 refusal surface, finding H2) |
+| aggregate obligation population across the fragment and recording engines under sustained refusal with deletion stalled (r6; non-retaining leg r13/r14/r15) | exactly the SUM of the per-engine admission limits — refusals fail whole runs, the fragment keeps its own units, the saturated fragment's writers then refuse further spills, and the mixed-version non-retaining direction contributes ZERO admitted obligations (r15: persistence-producing scopes are refused outright at dispatch to below-adoption receivers, the enforced size-independent finite bound after the r13/r14 ladders were falsified) | the intake admission gate + the transacted reservation surface + the r15 capability-keyed dispatch refusal (§5.3 refusal surface, finding H2; round-45 reviews) |
+| legacy (below-adoption) fragment persistence scopes dispatched from a recording coordinator (r13/r14/r15) | ZERO admitted: remoteRun refuses every producer-mode scope whose confirmed receiver is below the first adoption build (unconfirmed zero fail-closed) with the definite not-supported error before sendPipeline, state-independent of the ledger; plain scopes and capable-receiver dispatches are untouched, same-version execution unchanged to the byte | the r15 dispatch refusal behind the r44 confirmed receiver advertisement, mirroring the D3' refusal of the opposite direction (§5.3 refusal surface; Revision r15) |
+| producer-mode statements (including empty/no-object runtime input) over a below-adoption receiver (r13/r14/r15 decided; r15 form) | refused with the same definite not-supported error as every producer-mode legacy scope — uniform and state-independent: the metadata risk is structural in the plan (parent binaries decide persistence at data volume), the refusal is statement-level leaving the explicit transaction open (statement-only rollback semantics of the D4'' capability family), and the recovery is the capability pin's restore (the same statement commits on a capable receiver), with no dependence on the recording ledger or its drain | the r15 capability-keyed refusal; the public mixed-version capability case (§7 r15 row) pins the empty-input outcome, the earlier-sentinel preservation until explicit ROLLBACK, COMMIT plus fresh-session readback, and the positive-control flip — no admission-limit control is required on the public plane |
 | pool workers engine-wide | 5 | `GCPoolSize` |
 | concurrent drain pipelines | 1 (coalesced) | `drainScheduled` |
 | rounds per drain task | 8 | `unpublishedPendingDrainRounds` |
@@ -1199,6 +1326,71 @@ released, with nothing refused in between.
   fresh-refuse loop's per-round growth), and every probe green on the
   fixed tree with byte-verified restores; the compile-package suites
   cover the moved settlement's drain ordering and the client intake.
+- **r15 — the non-retaining fragment's dispatch-side bound (round-45
+  findings; the r13 and r14 rows were returned REQUEST_CHANGES by the
+  design re-reviews and are superseded by this one).** The validation
+  set covers the enforced zero-admission policy and every oracle the
+  re-reviews named, on the planes that own them. (1) SAME-VERSION
+  capacity legs, unchanged by r15 and re-pinned by the existing
+  families: the per-object reservation surface (the one-object run
+  with exactly one free unit books and completes — the r2/r18/r20
+  per-object reservation regressions), the capable-fragment refusal
+  corpus (`TestIssue25590SustainedTwoEngineRefusalBounded`,
+  `TestIssue25590NonRetainingFragmentIntakeRefusalRetainsReceivedNames`
+  as the received-batch backstop), and the same-version saturation
+  refusals pinned by the workspace BVT families — r15 adds no check,
+  token, booking or probe anywhere on this plane. (2) The MIXED-VERSION
+  gate contract, at the compile plane next to the D3' refusal tests:
+  a producer-mode scope whose stream confirmed a below-adoption
+  receiver (131, and the unconfirmed zero, fail closed) refuses with
+  the definite not-supported error BEFORE sendPipeline; a plain query
+  scope never refuses (no confirm dependency unless a floor
+  requires it); a capable receiver never dispatch-refuses (its runs
+  keep proceeding to the intake gate); the refusal is STATE-INDEPENDENT
+  of the recording ledger. (3) The re-review's concurrency oracle,
+  restated for the policy: BARRIER-CONTROLLED concurrent producer-mode
+  legacy dispatches — ALL of them refuse deterministically, before any
+  fragment persists anything, whatever the ledger's state. (4) The
+  decided EMPTY-INPUT producer-mode outcome: the empty-runtime-input
+  statement over a below-adoption receiver refuses with the same
+  definite error as every producer-mode scope (its metadata risk is
+  structural in the encoded plan), and the statement-level semantics
+  leave the explicit transaction open. (5) The PUBLIC mixed-version
+  capability case, in the r11 D4'' capability family's own harness
+  with EXISTING mechanisms only, answering the re-review's fixture
+  question: pin the non-coordinator receiver CN's advertisement to a
+  below-adoption version through CN-targeted `mo_ctl
+  SetProtocolVersion` (the same knob the family's P2a/P2b legs use on
+  the coordinator), arm `inject_send_pipeline` for the reach witness,
+  then assert the producer-mode DML's definite refusal in both the
+  mass and the empty-input variants — the refused legs assert the
+  ErrNotSupported error text, ZERO pipeline dispatch or persistence on
+  the receiver (the receiver-side log's inject_send_pipeline marker
+  must NOT appear for a refused leg, because the refusal returns
+  before sendPipeline attaches the marker), the preservation of the
+  earlier sentinel writes up to an explicit ROLLBACK, the COMMIT plus
+  fresh-session readback legs, and the positive control — the identical
+  statement committing and reading back once the receiver pin is
+  restored, with the receive-log's inject_send_pipeline marker
+  REQUIRED on that successful control (the proof the restored run
+  really dispatched and executed on the receiver); teardown restores
+  the pin exactly as the family's D4''
+  legs already do. NO admission-limit fixture is required on the
+  public plane: the r15 refusal is capability-keyed and state-
+  independent, so the saturating-obligation machinery the r14 plan
+  needed belongs only to the same-version plane, where the existing
+  Go-only test pin (`PinUnpublishedPendingAdmissionLimitForTest`) and
+  the existing workspace BVT/UT families already pin it — no new
+  production control surface exists in this revision. The executed
+  RED evidence of the original round-45 finding (the disttae-plane
+  sustained probe, worktree
+  `txn_issue25590_r45_sustained_bound_probe_test.go`; total=33
+  against limit=1, control total=1) is preserved as the design-stage
+  observation and becomes, on the fixed tree, the zero-admission
+  regression companion: the dispatched producer-mode legacy scene
+  where the total population stays exactly the parked unit and the
+  shared backend's witness set stays exactly stable across
+  arbitrarily many attempts.
 - **Concurrency.** Race mode over the focused suites (covering the
   queue-mutex transfer window and the triple's lock order) plus the engine
   race suite — zero reports.
@@ -3688,3 +3880,699 @@ or mixed-matrix cell of the r11/r12 decision set changes (the
 capable-fragment refusal still books nothing, the legal mixed cell
 still runs, the refusal still fails the run), so no design re-review
 is opened and the implementation proceeds under this record.
+
+## Revision r13 (round 45): binding a non-retaining fragment's persistence at the coordinator's dispatch boundary
+
+[SUPERSEDED BY r14 — this revision was returned REQUEST_CHANGES by the
+round-45 independent design re-review (two P2 findings verified against
+the tree: the non-booking probe's unenforced bounds, and the false
+"unchanged saturated availability" claim for producer-mode empty-input
+statements). It is retained as the audit record of the re-review round;
+r14 below records the findings verbatim, their verification, and the
+decisions that resolve them, and the operative §1/§5.3/§5.5/§7 text now
+carries r14's shape.]
+
+Context. The local reviewer's round-45 review (PR #30988, head
+`f75ccdfbe3682ec5f804d5449ad1bd22f6b292d1`, 2026-10-25 17:56:33Z)
+requested changes with one P2 finding at `pkg/vm/engine/disttae/`
+`txn.go:3660` (`adoptRemoteTransferredObjectNames`'s non-retaining
+refusal retain): during mixed-version operation with the coordinator's
+cleanup ledger saturated and deletion failing on the shared backend,
+every successive remote write on a protocol-131 fragment still
+dispatches, the batch — already persisted by the fragment — arrives at
+the recording intake, the admission reservation refuses it, and the
+round-44 retain books the received names UNCONDITIONALLY: each refused
+attempt adds one more already-persisted name behind a bound nobody
+releases, the failed statement's rollback queues it, and failed
+deletion preserves it indefinitely, so retained metadata and undeleted
+objects grow with the number of failed attempts — exactly what I4's
+round-6/H2 clause forbids. The finding was verified against the tree
+with an executed reproduction before this revision (design-stage probe
+`pkg/vm/engine/disttae/txn_issue25590_r45_sustained_bound_probe_test.go`,
+worktree, uncommitted; `/tmp/issue25590-r45/` logs): with `limit=1`, one
+parked reservation and every delete shot failing, 32 capable-fragment
+intakes left the recording population at exactly the parked unit (the
+control passes on the current head), while 32 legacy-fragment attempts
+drove the same ledger to queued=32, live=0, inFlight=1 — total 33 against
+a bound of 1, one fresh obligation per attempt.
+
+PARTIAL RESCISSION of the round-44 record (two of its claims).
+
+1. The equilibrium claim — "the retained names are dead obligations —
+   the rejection deterministically fails the run — so the queue's
+   lossless drain is their terminal and their capacity retires with
+   their deletions" — assumed a drain that eventually retires work.
+   Under a sustained deletion failure nothing retires, so every NEW
+   refusal adds fresh capacity: the loop never closes. The claim is
+   withdrawn for the non-retaining fragment class; the aggregate
+   clause of I4 (round-6/H2) owns the decision instead.
+2. The rejected-alternative paragraph evaluated an UNCONDITIONAL
+   fail-closed dispatch refusal of persistence-producing DML to a
+   below-adoption fragment ("its error surface depends on the ledger's
+   saturation state" appearing there as the defect of the rejected
+   variant). That variant stays rejected — it would rescind the r11 leg
+   P3' cell regardless of capacity. But the conflation is withdrawn:
+   every other admission point in this design already is exactly such
+   a saturation-state surface (a writer's reservation refuses the spill
+   at a saturated bound though space might free moments later), and
+   the capacity-GATED dispatch refusal this revision adds is a
+   different decision — open whenever the ledger has space, closed
+   only while it has none — whose error surface is the SAME statement
+   failure round 44's own intake refusal already produced.
+
+Root cause. On this tree every in-tree producer persists behind its own
+per-object reservation surface, so a saturated bound refuses the
+persistence itself and no new obligation can appear behind it; a capable
+(132) fragment owns the failure side of a refused run, so its writers
+retain, its terminal deletes, and the aggregate population stays
+bounded by the two engines' limits. A below-adoption fragment has
+neither piece — the parent build predates both — so the ONLY admission
+boundary its writes meet is the recording coordinator's intake
+reservation, which by design runs AFTER the fragment already
+persisted. Round 44 made that refusal ownership-safe (the r21 G2
+fail-open retain) but put no bound in front of the persistence, and
+the retain cannot refuse to grow without orphaning the very names it
+exists to save. The intake boundary alone therefore cannot bound this
+producer class; the missing bound belongs one boundary earlier, where
+the coordinator decides whether the fragment may persist at all.
+
+Decision (r13). The admission bound returns to the dispatch boundary
+for the one fragment class with no failure-side machinery: `remoteRun`
+refuses a persistence-producing scope — a scope whose own operator
+tree registers a remote-persistence producer in a metadata-bearing
+mode, the same `scopeRemoteObjectAdmission` walk the intake uses —
+WHEN its stream confirmed the receiver below the first admission
+build (`fragmentRetainsRefusedIntakeObjects` false, including the zero
+default of a stream that never confirmed, fail closed) AND the
+recording engine's ledger has no admission space for one fresh
+object. The refusal runs after the round-44 protocol confirm and
+before the pipeline bytes leave, and returns the SAME "workspace
+admission paused" internal error the intake reservation and the
+writers' hook use — so the statement-level outcome under saturation is
+unchanged: the statement failed at the intake before r13 and fails at
+dispatch after it, with the same error text — while the legacy
+fragment persists NOTHING further behind the bound: no relayed batch,
+no received names, no fail-open retain, no queued growth. The engine
+exposes the probe as a non-booking read over the same one
+queue-mutex snapshot every accounting transition shares
+(`queued+owned+inFlight+1 ≤ limit`), so the gate observes no torn
+total and books nothing a concurrent drain might need; recording
+workspaces that are not disttae transactions keep the transport's
+existing fail-open skip shape. The bound r13 restores: a
+non-retaining fragment's run may persist only while the recording
+ledger has free capacity at dispatch; once saturated no further
+attempt creates an obligation, so under a sustained stalled drain the
+aggregate population stays bounded by the sum of the per-engine
+limits plus the dispatch-race window — the batches of runs whose
+dispatch raced the saturating reservation, each batch bounded by its
+run's own writer behavior, each retained and deleted through the r44
+backstop once deletion unblocks. Growth beyond that requires drain
+retirement, which is the bound working.
+
+Availability and compatibility. The r11 leg P3' contract — mixed
+new-coordinator/old-fragment DML commits and reads back — runs while
+capacity is available, and the gate is open whenever the ledger has
+space, so the legal mixed cells of the r12 matrix are untouched; a
+saturated recording ledger already failed the statement at the intake
+under the r44 record ("the refusal still fails the run for every
+fragment version"), and fails identically now, earlier and cheaper.
+Plain query scopes keep base behavior — mixed-cluster read traffic
+never consults the gate, exactly as round 44 scoped the confirm
+requirement to producer scopes. CCPR keeps its recorded shared-file
+exemption unchanged: the gate prevents persistence and books nothing,
+so it is ownership-neutral for the txn cache's share domain. No wire
+field changes: the decision consumes the receiver-advertisement fact
+the r44 confirm already exchanges. Hot-path cost: one extra
+operator-tree walk per dispatched remote-run scope (the intake already
+walks the same tree on the receive path) and one non-booking
+queue-mutex read per gated dispatch — the same order as the
+reservation itself, and only for producer scopes over
+below-adoption receivers.
+
+Rejected alternatives. (a) Unconditional fail-closed dispatch to
+below-adoption fragments — round 44's rejected variant — stays
+rejected (rescinds P3' regardless of capacity). (b) Bounding the
+intake retention itself — refusing to retain the received batch's
+beyond-Nth name once a per-batch or per-transaction cap is met — is
+rejected: every received name's object is already physical, and
+dropping its retain to keep a count small is exactly the r21 G2
+orphan the design forbids; the bound must precede the persistence,
+never the retention. (c) Parking the retained tail on a per-statement
+retry list the failed statement could re-attempt — rejected: the
+statement is gone when the rollback transfers the names, re-attempting
+the intake cannot retroactively bound a population that grows per
+attempt, and it would add a new long-lived stateful surface for no
+bound. (d) Making the ledger's limit per-fragment or per-run —
+rejected: it multiplies the bounded-population accounting surfaces
+and still fails to bound total attempts against the aggregate clause.
+
+Validation (r13; the §7 r13 row). The sustained scene moves to the
+plane that owns the decision (the compile-plane dispatch regression
+named in §7); the delivered regression set is: the sustained dispatch
+bound (refused before pipeline bytes, stable witness set, ledger
+pinned at the parked unit, empty queue, attempt count irrelevant), the
+ungated matrix legs (capable receiver at the same saturated bound;
+free-capacity legacy dispatch — the P3' cell; plain scope pass-through),
+the dispatch-race backstop rerun through
+`TestIssue25590NonRetainingFragmentIntakeRefusalRetainsReceivedNames`
+unchanged, and the engine probe's census-neutral unit contract. RED on
+the unfixed tree is already evidenced by the round-45 review's own
+reproduction and by this revision's executed probe; the implementation
+round's RED runs through the same dispatch-bound entry point. The
+design-stage disttae-plane probe itself is superseded on the fixed
+tree (the intake retain is deliberately still fail-open for received
+batches) and is not part of the delivered test set.
+
+## 10 design review record - round 45 (design-only checkpoint): binding the non-retaining fragment's persistence behind the recording admission bound
+
+Change scope: round-45 review follow-up on PR #30988 head
+`f75ccdfbe3682ec5f804d5449ad1bd22f6b292d1` — sustained
+legacy-fragment intake refusals grow the recording obligation
+population without bound behind a saturated ledger under sustained
+deletion failure (review P2, `txn.go:3660`).
+Trigger: this revision rescinds two claims of a recorded design
+decision (the round-44 receive-side retention policy: its
+capacity-retires-with-deletions equilibrium and its
+rejected-alternative conflation) and adds a capacity-gated refusal at
+the remoteRun dispatch boundary plus a new non-booking engine
+admission probe — material changes to the mixed-version compatibility
+policy and a new admission boundary. Under the feature-design-review
+contract the affected design decisions require re-review before the
+implementation repair may run; this checkpoint requests exactly that
+re-review. No implementation of the repair exists on the tree yet.
+Design: this document, revision r13 (the Revision r13 section and the
+§1/§5.3/§5.5/§7 updates above); exact revision identity is the
+sha256 of this complete file at the checkpoint commit state, recorded
+in the checkpoint handler report; the round-44 claim rescissions are
+inside the Revision r13 section.
+Verified owner paths: `pkg/sql/compile/remoterunClient.go`
+(`remoteRun`'s confirm→sendPipeline sequence and the receive loops'
+`adoptRelayedS3ObjectsAtIntake` fork behind
+`sender.confirmedFragmentProtocol`), `pkg/sql/compile/
+remote_object_admission.go` (`scopeRemoteObjectAdmission`,
+`fragmentRetainsRefusedIntakeObjects`,
+`remoteRunRequiresFragmentProtocolConfirm`), `pkg/vm/engine/disttae/
+txn.go` (`reserveUnpublishedPendingObject`'s one-queue-mutex admission
+gate and `adoptRemoteTransferredObjectNames`'s r44 refusal retain),
+`pkg/vm/engine/disttae/engine.go` (the ledger snapshot helpers) and
+the reproduction probe's executed observation (control green, legacy
+growth red on the current head, `/tmp/issue25590-r45/`).
+Reproduction: `TestIssue25590R45LegacyIntakeSustainedBoundProbe`
+(disttae plane, worktree-only) — limit 1, parked reservation, failing
+delete shots, 32 capable attempts leave total=1 (passes), 32 legacy
+attempts total=33 with the queue holding all 32 still-live witness
+objects (fails the I4 bound; the reviewer's own diagnostics reported
+the same totals through their `TestReviewLegacyIntakeSustainedBound`).
+Cheapest validation plan (per §7's r13 row; all at the dispatch plane
+that owns the new decision): sustained dispatch-bound regression +
+matrix pass-through legs + dispatch-race backstop rerun + probe
+census-neutrality unit contract; disttae focused families and the
+r44/r22 corpora rerun unchanged; gofmt/vet/lint over the changed
+closure; CI re-evaluation on the pushed head (fresh ALL CI run).
+Blocking findings: none recorded by this revision; awaiting the
+independent re-review's findings.
+Decision log: r13's Revision section records the corrected aggregate
+doctrine, the withdrawal of round 44's two claims, the dispatch-gate
+decision, and rejected alternatives (a)-(d).
+Decision: PENDING — round-45 independent design re-review required
+before the implementation repair and its validation ladder run. The
+statuses of the existing implementation and its tests are unchanged
+on the tree; implementation work on this repair has not started.
+
+[OUTCOME, recorded 2026-10-26: the round-45 independent design re-review
+returned REQUEST_CHANGES on r13 with two P2 findings —
+"Enforce an object bound for legacy runs admitted before saturation"
+and "Close the changed SQL refusal contract and its validation plan" —
+both verified against the tree (the concurrent-shared-slot and
+multi-object relay shapes in the parent build's multi_update paths; the
+empty-input no-writer path and the intake's no-names early return) and
+resolved by Revision r14 and its closing record below.]
+
+## Revision r14 (round 45 continued): booked admission tokens for legacy runs, the decided empty-producer contract, and explicit overshoot accounting
+
+[SUPERSEDED BY r15 — this revision was returned REQUEST_CHANGES by the
+second round-45 design re-review: its P2 blockers found the admitted
+run's retained tail still workload-dependent and unbounded (no
+transported bound exists; the relay reassembly decodes arbitrarily
+large batches) and the token plus the first object's per-name
+reservation double-charging the capacity boundary (a one-object run
+with one free unit fails permanently, contradicting this record's
+unchanged free-capacity claim), plus a P3 on the unnamed public
+admission fixture. Retained as the audit record of the re-review
+round; r15 below takes the reviewers' offered compatibility-policy
+alternative.]
+
+Context. The round-45 independent design re-review returned r13
+REQUEST_CHANGES with two P2 findings. Both were verified against the
+tree before this revision, and both resolve by RESTORING what r13's
+mechanism left unenforced rather than by re-arguing the design's
+direction (the re-review accepted the round-45 reproduction, the root
+cause and the pre-persistence bound as the decision space).
+
+Finding 1 (P2) — "Enforce an object bound for legacy runs admitted
+before saturation." The re-review's evidence verified exactly: r13's
+text specified a NON-BOOKING check for one free object and then
+claimed a "bounded dispatch-race window" with no mechanism enforcing
+it, while I4 and §5.5 still promised the sum of engine limits.
+Barrier-concurrent legacy dispatches could all pass the same
+unbooked free unit, and a single legacy run can persist many objects
+before relaying their combined metadata — verified at the parent
+build: base `pkg/sql/colexec/multi_update/s3writer_delegate.go`
+`flushTailAndWriteToOutput` (base lines 811–840) syncs EVERY insert
+sinker and collects every flushed object's stats into one output
+batch, and base `multi_update.go` (lines 222–262) drains every
+flushable writer the same way, so one run's relay batch carries its
+whole object set. The unchanged refusal retain
+(`pkg/vm/engine/disttae/txn.go:3642–3661`, the r44 branch) then
+retains the ENTIRE refused tail fail-open. Neither admitted-run count
+nor per-run tail size had an enforced bound, and §7 started its
+sustained scene already saturated, never exercising the
+counterexamples. RESOLUTION: the gate becomes a BOOKED admission
+token — one in-flight ledger unit per legacy persistence-producing
+dispatch, booked inside the same one queue-mutex bound check every
+other producer passes, living exactly the dispatched run's lifetime
+(released on every remoteRun terminal: clean end, propagated intake
+refusal, transport failure, cancellation; never merged into the name
+sets). Concurrent admitted runs are therefore fail-closed by the
+ledger's remaining units (the shared-slot barrier admits exactly
+one), and once a retained generation keeps the ledger saturated no
+further legacy run can book a token, so it persists nothing. What
+remains impossible — pre-capping a legacy binary's own object count
+— is now ACCOUNTED, not promised: the population under sustained
+stalled deletion is the sum of the per-engine admitted obligations
+plus the admitted tokens plus AT MOST ONE overshoot generation (the
+received tails of the runs holding tokens when saturation hit —
+workload-dependent in size, bounded in run count, non-renewing while
+stalled, lossless-owned, drain-retired on recovery). §1's I4 and
+§5.5's rows carry exactly this accounting, and §7's r14 row adds the
+re-review's demanded legs: the barrier-controlled concurrent
+dispatches sharing the last unit, and the admitted multi-object
+legacy run at limit−1 with deletion stalled and its subsequent
+recovery.
+
+Finding 2 (P2) — "Close the changed SQL refusal contract and its
+validation plan." The re-review's evidence verified exactly:
+`scopeRemoteObjectAdmission` classifies the operator tree by MODE, and
+a producer-mode multi-update with EMPTY runtime input creates no
+writer and relays no metadata (base `multi_update.go:222–254`: with
+no child data the Eval drain finds no flushable writer and ends), so
+the intake's no-names path returns early (`remoterunClient.go`
+`if !matched || len(names) == 0 { return nil }`) — such a statement
+SUCCEEDS today against a saturated recording ledger, and r13's claim
+that saturated statements "already failed identically at the intake"
+was false for this class, making the gate an undocumented availability
+change. RESOLUTION: the change is now decided and documented instead
+of denied. Producer-mode legacy dispatches are token-required
+REGARDLESS of runtime input, because no pre-execution fact separates a
+will-persist scope from an empty one (the parent binary decides
+persistence at data volume), and the empty-input statement is refused
+with the SAME standard retryable admission error every other
+producer-mode statement gets under saturation — the cost sides match
+the design's record refusal doctrine ("a saturated engine therefore
+degrades exactly like a slow GC: bounded memory, bounded blast
+radius, self-healing"): a wrong refusal costs one retryable statement
+after drain retirement, a wrong admission risks the unbounded growth
+the round-45 finding demonstrated. The refusal fails the STATEMENT
+(the admission error's existing statement-level semantics already
+pinned by the update/delete/replace_workspace BVT families), leaving
+the explicit transaction open: earlier writes stay visible and
+committable until an explicit ROLLBACK. The public-path validation
+the re-review demanded is PLANNED in §7's r14 row: a public
+mixed-version saturation/refusal/recovery case in the r11 D4''
+capability family's own harness (CN-targeted `mo_ctl SetProtocolVersion`
+pins, sentinel writes, COMMIT/ROLLBACK readback, positive control),
+pinning the chosen EMPTY-INPUT outcome, the preservation of earlier
+transaction writes before the explicit ROLLBACK, the COMMIT plus
+fresh-session readback after recovery, and the positive control of
+the identical sequence succeeding once capacity reopens.
+
+Availability and compatibility (r14, correcting r13's claim).
+Free-capacity behavior is unchanged: the token books only against
+actual free units, the r11 leg P3' mixed cells read back as before,
+plain query scopes never consult the gate, CCPR keeps its recorded
+exemption, and no wire field changes (the gate consumes the
+receiver-advertisement fact the r44 confirm already exchanges).
+Saturated-recording-ledger behavior over BELOW-ADOPTION receivers is
+CHANGED for producer-mode scopes and that change is now the
+documented contract: every such dispatch — including an empty-input
+producer whose statement previously succeeded against the saturated
+ledger — refuses at dispatch with the standard retryable admission
+error, before the fragment persists anything; the recovery is drain
+retirement reopening capacity (the same self-healing path every
+in-tree producer's own reservation takes under saturation). The
+rejected r13 "unchanged saturated availability" claim, like its
+non-booking window, is withdrawn with the precedence note in the
+superseded r13 section above. Hot-path cost: one extra
+operator-tree walk per dispatched producer scope plus one booked
+queue-mutex section (booking and check share the single queue-mutex
+census) for legacy-receiver dispatches only.
+
+Rejected alternatives. (a) Communicating a pre-declared per-run object
+budget to the fragment — rejected: a below-adoption receiver has no
+budget field or enforcement in its build (the parent predates the
+ledger), so the budget could only produce the same post-persistence
+refusals. (b) An early-stop intake that adopts only a bounded prefix
+of a run's relay — rejected: every already-persisted object beyond the
+prefix loses its only owner at retention time, the r21 G2 orphan the
+design forbids. (c) Mode-snooping deeper into runtime state to admit
+empty-input producers — rejected: at dispatch the coordinator holds
+only the encoded plan, no child cardinality guarantees exist for
+remote scopes (the fragment's filters decide volume), and any
+heuristic would make the refusal boundary state-dependent and
+untestable. (d) Leaving the saturated empty-input success as-is with
+an ungate exception — rejected: it re-opens the exact growth hole for
+producer scopes whose runtime input is non-empty, because the gate
+cannot tell them apart; the deliberate asymmetry is the coverage gap
+the re-review's finding 2 names, and the public case now pins it
+instead of leaving it implicit.
+
+Validation. §7's r14 row enumerates the delivered set: the sustained
+dispatch-bound regression; the barrier-concurrent last-unit leg; the
+admitted multi-object run at limit−1 with stalled deletion and its
+recovery; the token's booking/release unit contract (including the
+empty-input scope's release); the ungated matrix legs (capable
+receiver, free capacity, plain scope); the r44 received-batch
+backstop rerun; and the planned public mixed-version
+saturation/refusal/recovery case in the capability BVT family's
+harness. The disttae-plane sustained probe (the executed RED
+reproduction of the round-45 review finding) remains the
+design-stage evidence; the implementation round's RED runs through
+the same dispatch-bound entry point.
+
+## 10 design review record - round 45 (design-only checkpoint at r14): booked tokens and the decided producer contract
+
+Change scope follows the r13 record — the round-45 review's P2 at
+`txn.go:3660` — plus the two findings of the r13 design re-review
+resolved above.
+Trigger: unchanged from the r13 record (material change to recorded
+design decisions; a new admission boundary at the dispatch plane;
+mixed-version compatibility blast radius), extended by the re-review's
+demands for enforced bounds and public-path coverage of the SQL-visible
+refusal boundary. r13 was returned REQUEST_CHANGES; r14 is the
+operative revision under re-review.
+Design: this document, revision r14; the exact revision identity is
+the sha256 of this complete file at the checkpoint state, recorded in
+the checkpoint handler report. The superseded r13 sections carry
+supersession notes; the operative §1/§5.3/§5.5/§7 text carries r14's
+shape.
+Verified owner paths: the r13 record's paths plus the newly verified
+base-build evidence of the re-review's findings — base
+`pkg/sql/colexec/multi_update/multi_update.go:222–262` (empty-input Eval
+drain finds no flushable writer and ends; the flush drain appends
+every writer's output into one batch), base
+`pkg/sql/colexec/multi_update/s3writer_delegate.go:805–840`
+(`flushTailAndWriteToOutput` syncs every insert sinker and collects
+every flushed object into one combined output), current
+`pkg/sql/compile/remoterunClient.go` (the intake's
+`if !matched || len(names) == 0 { return nil }` early return),
+`pkg/vm/engine/disttae/txn.go:3642–3661` (the refused-tail retain), and
+the public capability harness `test/distributed/cases/dml/update/
+update_remote_fragment_capability.sql` (CN-targeted
+`mo_ctl SetProtocolVersion` pins, sentinel-write preservation across a
+statement refusal until explicit ROLLBACK, COMMIT + fresh-session
+readback, and the positive-control flip — the exact shapes the planned
+public case reuses).
+Reproduction: the executed evidence is reused unchanged (valid
+inputs, valid mode, terminal result preserved — no rerun needed):
+`TestIssue25590R45LegacyIntakeSustainedBoundProbe` at HEAD f75ccdfbe3
+(exit 1, control total=1, legacy leg queued=32 live=0 inFlight=1,
+log `/tmp/issue25590-r45/probe_disttae.log`), plus the design-level
+source verification of both re-review findings recorded above.
+Cheapest validation plan: the §7 r14 row's delivered set, with the
+public mixed-version case planned in the capability family's own
+harness; static gates for the changed closure at the implementation
+turn; fresh CI on the eventual pushed head.
+Blocking findings: none recorded by this revision at this checkpoint;
+the r13 findings are closed above and r14 awaits the independent
+re-review.
+Decision: PENDING — round-45 independent design re-review of r14
+required before any implementation repair or validation-ladder work;
+the existing implementation and tests are preserved unchanged on the
+tree (HEAD f75ccdfbe3682ec5f804d5449ad1bd22f6b292d1, base
+9a7e12a93328a69bac7261beedc88930b7984a10), and no PR-facing change
+was made in this design phase.
+
+[OUTCOME, recorded 2026-10-26: the second round-45 design re-review
+returned r14 REQUEST_CHANGES — P2 "Enforce a finite resource bound on
+admitted legacy tails" (the admitted run's retained population is
+L−1+K with no design bound on K: the transport merges every
+WaitingNext frame into one logical decoded batch, and the parent
+terminal flush relays the whole run's object set, so no transported
+bound exists), P2 "Resolve token and object double charging at the
+capacity boundary" (the run-lifetime token plus the first name's
+per-name reservation double-charges; with L=1 and an empty ledger
+every non-empty legacy run fails permanently), and P3 "Specify how the
+public SQL fixture controls saturation" (only the Go-only
+PinUnpublishedPendingAdmissionLimitForTest exists). All three findings
+were verified against the tree and resolved by Revision r15 below,
+which enforces the size-independent finite bound ZERO: no
+persistence-producing scope is dispatched to a below-adoption
+receiver at all.]
+
+## Revision r15 (round 45, third design round): the fail-closed compatibility policy — zero admitted legacy obligations
+
+Context. The second round-45 design re-review returned r14
+REQUEST_CHANGES with three findings, all verified against the tree
+before this revision. Finding 1 (P2, "Enforce a finite resource bound
+on admitted legacy tails"): the recorded token accounting admits a
+K-object legacy run against L−1 obligations and retains a population
+of L−1+K with no design bound on K — verified structurally, not just
+textually: the coordinator's `receiveBatch` merges every
+`WaitingNext` frame into ONE logical decoded batch (frames are 64MB
+`maxMessageSizeToMoRpc` chunks of an arbitrarily larger encoded
+batch), the parent build's terminal flush collects the run's whole
+object set into that relay (`flushTailAndWriteToOutput` syncs every
+sinker, `multi_update.go` drains every writer), the failed batch's
+tail is retained whole (`txn.go`'s r44 branch), and the fail-open
+membership adds every distinct name without a capacity check
+(`retainUnpublishedPendingNames`) — so no transport frame, batch,
+byte or ledger state bounds what an admitted run can leave behind,
+and "one generation" bounded admission rounds, not resources.
+Finding 2 (P2, "Resolve token and object double charging at the
+capacity boundary"): the run-lifetime token plus the run's first
+relayed name's per-name reservation consume two ledger units for one
+object — with L−1 obligations the booking takes the last unit and the
+first name then refuses; with L=1 and an empty ledger EVERY non-empty
+legacy run fails permanently (full drain and retry repeats the
+failure), contradicting r14's recorded unchanged-free-capacity claim.
+Finding 3 (P3, "Specify how the public SQL fixture controls
+saturation"): the only admission setter is the Go-only
+`PinUnpublishedPendingAdmissionLimitForTest`; the capability SQL
+harness pins protocol advertisements only, and r14's planned public
+case named no mechanism to pin the limit or hold the saturating
+obligation.
+
+Decision. Three rounds of independent review have now demonstrated
+that every capacity-keyed ladder for the below-adoption producer
+class fails a blocking invariant — r44's unconditional retain grows
+per attempt; r13's non-booking probe admits concurrency without
+bound; r14's booked token leaves the admitted tail unbounded and
+double-charges the boundary — and no retention-side variant can drop
+a received name's last owner without the forbidden orphan. The
+reviewers' action texts offer the same alternative at every round:
+the fail-closed compatibility policy. r15 takes it in its enforceable
+form: the coordinator's remoteRun REFUSES a persistence-producing
+scope whose stream confirmed a below-adoption receiver
+(`fragmentRetainsRefusedIntakeObjects` false, the unconfirmed zero
+fail-closed) with a definite not-supported error, after the r44
+protocol confirm and before sendPipeline — the exact mirror of the
+D3' `refuseRemoteWriteFromIncapableCoordinator` this design already
+runs when the COORDINATOR is below-adoption, and the same error
+class, message shape and statement-level semantics the r11 D4''
+legs already pin for that direction. The refusal is STATE- and
+INPUT-INDEPENDENT: plain query scopes never consult it, capable
+receivers keep the intake gate exactly as recorded, same-version
+execution is unchanged to the byte (no token, no booking, no new
+capacity interaction anywhere on that plane — r15's dispatch path
+adds only the producer-scope tree walk the receive path already
+performs and one capability comparison), and the decided empty-input
+producer-mode outcome joins the same definite refusal (the metadata
+risk is structural in the encoded plan; the parent binary decides
+persistence at runtime volume; no pre-execution fact separates
+will-persist from empty, and the empty producer's earlier success
+under saturation was an accident of the missing gate, not a
+contract). The enforced finite bound on admitted legacy obligations
+is ZERO — the size-independent bound finding 1 demands — and I4's
+aggregate returns to its recorded form without any legacy term: under
+a sustained stalled drain the total obligation population across
+participating engines is exactly the sum of their per-engine limits.
+Batches that nevertheless reach a recording workspace keep the r44
+fail-open retain as the received-objects backstop, with an in-tree
+feed the refusal leaves empty (defense in depth, the design's
+established pattern for unreachable robustness paths).
+
+P3' rescission, recorded. Round 44's rejected-alternative paragraph
+protected the r11 leg P3' commit-readback of mixed
+new-coordinator/old-fragment DML. Two design re-reviews have since
+proven the protected cell is unenforceable together with I4: every
+admission ladder that keeps the commit path open also opens a
+resource hole no recording-ledger state can bound. r15 therefore
+supersedes the PERSISTENCE-PRODUCING cell on below-adoption
+fragments with the definite-refusal contract — mixed read legs and
+same-version legs unchanged — and the mixed matrix becomes
+SYMMETRIC with the D3' refusal that already refuses below-adoption
+coordinators: in both mismatch directions, the coordinator that
+cannot close the ownership loop refuses the persistence-producing
+run before it starts, with a definite, state-independent error whose
+statement-level semantics (statement-only rollback; the explicit
+transaction stays open; the D4'' sentinel/COMMIT/ROLLBACK legs)
+the public capability family already pins. The operational
+consequence is an upgrade-order symmetry of the same class the
+adoption line already imposes elsewhere: producer-mode remote DML
+during a mixed window requires the fragment CN at the first
+adoption build. The recovery is the receiver-CN upgrade (or, in the
+test harness, restoring the advertisement pin), not an
+admission-capacity wait — strictly better operability than the
+r13/r14 ladders, whose saturated refusals depended on drain
+retirement.
+
+Rejected alternatives (now the complete ladder). (a) r44's
+unconditional intake retain — grows the retained population per
+attempt under sustained deletion failure (the executed round-45
+reproduction). (b) r13's non-booking probe — admits barrier-concurrent
+runs against one free unit (no enforcement). (c) r14's booked token —
+leaves the admitted tail at L−1+K (no transported bound) and
+double-charges the first object (permanent failure at L=1), per this
+re-review. (d) capacity-credit/transfer token variants (converting
+the token into the first name's unit) — they repair the double
+charge but leave the unbounded tail, finding 1's blocker, standing.
+(e) retention-side object/byte budgets — every budgeted-away name is
+a physical object losing its last reachable owner, the forbidden
+outcome. (f) communicating a per-run budget to the fragment — no wire
+field or enforcement exists on a below-adoption binary. (g) runtime-
+state snooping to admit empty producers — no pre-execution
+cardinality exists for a remote scope and the boundary would become
+untestable. (h) headroom-multiple admission (requiring F > c·L before
+any admission) — K still enters after admission at any headroom,
+still unbounded.
+
+Validation. §7's r15 row enumerates the delivered set: the
+same-version capacity legs (unchanged, re-pinned by the existing
+reservation and refusal families, including the one-object/one-free-
+unit oracles), the mixed-version gate contract at the compile plane
+(definite refusal before sendPipeline for below-adoption confirmed
+receivers incl. the zero; plain and capable legs pass through), the
+barrier-concurrent all-refuse oracle, the decided empty-input
+outcome, the public mixed-version capability case in the D4''
+family's existing harness (receiver CN pin, mass and empty-input
+variants, sentinel preservation until explicit ROLLBACK, COMMIT plus
+fresh-session readback, positive control, reach witness, teardown
+restore) with NO admission-limit fixture required on the public
+plane, and the preserved RED evidence of the original finding.
+
+## 10 design review record - round 45 (design-only checkpoint at r15): zero admitted legacy obligations
+
+Change scope follows the r13/r14 records — the round-45 review's P2
+at `txn.go:3660` — plus the second re-review's three findings
+(two P2, one P3) resolved above.
+Trigger: unchanged across the revision ladder (material change to
+recorded design decisions; a new admission boundary at the dispatch
+plane; mixed-version compatibility blast radius), now including the
+recorded P3' rescission for persistence-producing scopes on
+below-adoption fragments. r13 and r14 were returned REQUEST_CHANGES;
+r15 is the operative revision under re-review.
+Design: this document, revision r15; the exact revision identity is
+the sha256 of this complete file at the checkpoint state, recorded in
+the checkpoint handler report. The superseded r13/r14 sections carry
+supersession notes and recorded OUTCOMEs; the operative §1/§5.3/§5.5
+and §7 text carries r15's shape.
+Verified owner paths: the r13/r14 records' paths plus this round's
+verification — `pkg/sql/compile/remoterunClient.go`
+`receiveBatch`'s WaitingNext merge loop (arbitrarily large decoded
+relays; 64MB `maxMessageSizeToMoRpc` frames), `pkg/sql/compile/
+remoterunServer.go`'s large-batch cutting (Status_WaitingNext/
+Status_Last), `pkg/sql/compile/remote_object_admission.go`
+(`refuseRemoteWriteFromIncapableCoordinator` as the mirrored refusal
+shape; `fragmentRetainsRefusedIntakeObjects`), `pkg/vm/engine/
+disttae/txn.go` (`PinUnpublishedPendingAdmissionLimitForTest` at the
+cited line, the one-queue-mutex bound check, the r44 whole-tail
+retain, the capacity-check-less fail-open membership), and the
+parent build 9a7e12a933's multi_update terminal flush paths.
+Reproduction: the executed evidence is reused unchanged (no rerun,
+valid inputs/mode/terminal result): the disttae-plane sustained
+probe at HEAD f75ccdfbe3682ec5f804d5449ad1bd22f6b292d1 (exit 1,
+control total=1, legacy leg queued=32 live=0 inFlight=1, log
+`/tmp/issue25590-r45/probe_disttae.log`) — the finding that opened
+the round — plus this turn's source verification of the three
+re-review findings recorded above.
+Cheapest validation plan: the §7 r15 row's delivered set (same-plane
+static gates for the changed closure at the implementation turn;
+fresh CI on the eventual pushed head).
+Blocking findings: none recorded by this revision at this checkpoint;
+the two re-reviews' findings are closed above and r15 awaits the
+independent re-review.
+Decision: PENDING — round-45 independent design re-review of r15
+required before any implementation repair or validation-ladder work;
+the existing implementation and tests are preserved unchanged on the
+tree (HEAD f75ccdfbe3682ec5f804d5449ad1bd22f6b292d1, base
+9a7e12a93328a69bac7261beedc88930b7984a10), and no PR-facing change
+was made in this design phase.
+
+OUTCOME (third design round): PASS — the round-45 independent design
+re-review approved r15 at the checkpoint state (sha256
+7458812a7576363e33463924f37d22db2a87784ec2d8e74a22e8e640568a62bf;
+controller artifact
+state/artifacts/issue-25590/pre-pr-review-1792973839074.json) with
+one non-blocking P3: "Clarify which leg requires the pipeline
+receive-log witness — specify that refusal legs assert
+ErrNotSupported and zero pipeline dispatch/persistence; require the
+receive-log marker on the successful control after restoring
+receiver capability." The P3's clarification is folded verbatim
+into the §7 r15 row's public-case clause (the refused mass and
+empty-input legs assert the ErrNotSupported error text and zero
+pipeline dispatch or persistence on the receiver, with the
+receiver-side log's inject_send_pipeline marker ABSENT for a
+refused leg because the refusal returns before sendPipeline
+attaches it, and the marker REQUIRED on the restored-receiver
+positive control). That fold-in is the ONLY post-approval change to
+this document; the operative policy, invariants, decisions and
+validation plan are exactly the approved r15 content. The file's
+sha256 after the fold-in is recorded at the implementation
+checkpoint alongside the approved checkpoint hash documented above;
+implementation proceeds under the approved r15 design with this
+document as its record.
+
+IMPLEMENTATION RECORD (round-45 repair, under the approved r15): the
+r15 dispatch refusal is delivered at `pkg/sql/compile/
+remote_object_admission.go::refuseRemoteWriteToNonRetainingFragment`
+(classification by `scopeRemoteObjectAdmission`; threshold by
+`fragmentRetainsRefusedIntakeObjects`; the definite not-supported
+error mirroring D3') hooked in `pkg/sql/compile/remoterunClient.go`
+inside `remoteRun` after the round-44 confirm and before
+`sendPipeline`, with the same-version plane untouched to the byte.
+Validation delivered per the §7 r15 row: the compile-plane family
+`pkg/sql/compile/remote_dispatch_refusal_r15_test.go` (classification
+matrix; dispatch integration with zero pipeline bytes; the
+32+8-attempt sustained zero-admission companion; the capable-receiver
+positive control with the required payload send), the full
+`TestIssue25590*` families of `pkg/sql/compile` and
+`pkg/vm/engine/disttae` re-run green on the fixed head, and the public
+case `test/distributed/cases/dml/update/
+update_remote_fragment_capability_receiver_refusal.sql` in the D4''
+harness (receiver-CN pins pinned through the documented multi-uuid
+`mo_ctl SetProtocolVersion` form with the coordinator excluded by
+identity and a query-addressed TN excluded through the dn-service
+mark/recapture pair - never positionally; the refused mass leg
+asserting the exact error text with sentinel preservation,
+statement-only rollback, COMMIT and fresh-session readback; the
+positive control restoring every receiver with the receive-log
+`inject_send_pipeline` marker REQUIRED on that leg). ONE
+implementation-round finding, recorded rather than hidden: the §7 row's
+public EMPTY-INPUT REFUSAL variant is empirically unconstructible at
+the SQL plane on this build — three recorded constructions (a
+point-statistics predicate, a recorded-stats/spent-table ghost, and a
+computed-value predicate) all classify below the producer threshold,
+because every runtime-emptiness the planner can statistically see
+narrows the classify-first shape before any remote write fragment
+exists. The decided §5.5 empty-input PRODUCER-MODE outcome therefore
+lives exactly where its premise puts it — the encoded producer plan, a
+dispatch-plane input — and is pinned there by the r15 test file's
+refused scopes, which carry no rows at all; the public case's leg Pb
+was delivered as the honest complement of the boundary (a
+runtime-empty pinned statement executes as the ordinary write it plans
+as, pinning the refusal's narrowness), with the empirical refutations
+kept in the round-45 run logs. No §1/§5.3/§5.5 decision, invariant or
+policy text changes: the finite bound, the zero-admission policy, the
+D3' mirror and the P3' rescission are exactly as approved.
+
+

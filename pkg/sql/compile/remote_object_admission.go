@@ -222,3 +222,51 @@ func refuseRemoteWriteFromIncapableCoordinator(
 	}
 	return nil
 }
+
+// refuseRemoteWriteToNonRetainingFragment implements the design r15
+// rule (issue #25590 round-45 reviews; docs/design
+// ../20261021-issue-25590-workspace-scaling-and-cleanup-ownership.md
+// revision r15): a persistence-producing scope is NEVER dispatched to
+// a below-adoption receiver. The recording coordinator can neither
+// budget a below-adoption fragment's persistence pre-run (its binary
+// decides object counts at runtime data volume, with no admission
+// machinery anywhere on that build) nor bound what an admitted run
+// leaves behind post-run (the relay decodes arbitrarily large batches
+// and the received names' fail-open retention must keep their last
+// cleanup owner), so the only enforceable size-independent finite bound
+// is ZERO admitted legacy obligations. The refusal runs at the
+// coordinator's remoteRun AFTER the round-44 receiver confirm and
+// BEFORE sendPipeline: the old fragment never receives pipeline bytes,
+// never persists anything, and the definite unsupported-capability
+// error takes the statement on the coordinator side — the exact mirror
+// of refuseRemoteWriteFromIncapableCoordinator's D3' refusal of a
+// below-adoption COORDINATOR, making the mixed-version matrix
+// symmetric. Scopes are classified by their operator tree alone
+// (scopeRemoteObjectAdmission — the mode walk the intake uses), so
+// the decided empty/no-object runtime-input outcome is the same
+// definite refusal: a producer-mode plan's metadata risk is
+// structural, no pre-execution fact separates will-persist from
+// empty, and the refusal is STATE-INDEPENDENT of the recording
+// ledger. Plain query fragments (no registered producer) stay
+// pass-through regardless of the receiver's advertisement — read
+// traffic in mixed clusters never consults the refusal — and capable
+// receivers keep the intake admission gate exactly as recorded. The
+// unconfirmed zero of a stream that never confirmed reads fails
+// closed, exactly as the round-44 fork does.
+func refuseRemoteWriteToNonRetainingFragment(
+	ctx context.Context,
+	advertised int64,
+	s *Scope,
+) error {
+	if !scopeRemoteObjectAdmission(s).any() ||
+		fragmentRetainsRefusedIntakeObjects(advertised) {
+		return nil
+	}
+	logutil.Warn(
+		"REMOTE-WRITE-REFUSED-NON-RETAINING-FRAGMENT",
+		zap.Int64("receiver", advertised),
+		zap.Int64("required", coordinatorIntakeAdoptionVersion))
+	return moerr.NewNotSupportedf(ctx,
+		"remote write fragments require receiver protocol capability %d or newer (receiver advertised %d)",
+		coordinatorIntakeAdoptionVersion, advertised)
+}
