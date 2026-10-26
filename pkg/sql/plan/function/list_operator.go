@@ -213,11 +213,12 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 		}
 		if isMultiply {
 			nominalWidth := width
-			if domain.Oid.IsDecimal() {
+			if domain.Oid.IsDecimal() && domain.Width > 0 {
 				nominalWidth = domain.Width
-				if nominalWidth <= 0 {
-					nominalWidth = domain.Oid.ToType().Width
-				}
+			} else if domain.Oid == types.T_decimal64 {
+				// Domain extraction already resolved unspecified capacities.
+				// Only D64's conservative 19 differs from its nominal 18.
+				nominalWidth = 18
 			}
 			nominalPrecision += int64(nominalWidth)
 			// Reuse the domain just extracted above. Only MUL needs the
