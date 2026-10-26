@@ -581,6 +581,8 @@ class Query:
             set_values=set_values,
             where_conditions=self._where_conditions,
             where_params=self._where_params,
+            order_by=self._order_by_columns,
+            limit=self._limit_count,
         )
 
     def delete(self) -> Any:
@@ -597,6 +599,8 @@ class Query:
             table_name=self.model_class._table_name,
             where_conditions=self._where_conditions,
             where_params=self._where_params,
+            order_by=self._order_by_columns,
+            limit=self._limit_count,
         )
 
     def execute(self) -> Any:
@@ -1683,16 +1687,17 @@ class BaseMatrixOneQuery:
                 # SQLAlchemy expression (already compiled to SQL)
                 set_clauses.append(col)
 
-        # Build WHERE clause
-        where_clause = ""
-        if self._where_conditions:
-            where_clause = " WHERE " + " AND ".join(self._where_conditions)
-            params.extend(self._where_params)
+        from .sql_builder import MatrixOneSQLBuilder
 
-        # Build final SQL
-        sql = f"UPDATE {self._table_name} SET {', '.join(set_clauses)}{where_clause}"
-
-        return sql, params
+        builder = MatrixOneSQLBuilder().update(self._table_name)
+        builder._update_set_columns = set_clauses
+        builder._update_set_values = params
+        builder._where_conditions = self._where_conditions.copy()
+        builder._where_params = self._where_params.copy()
+        builder.order_by(*self._order_by_columns)
+        if self._limit_count is not None:
+            builder.limit(self._limit_count)
+        return builder.build()
 
     def delete(self) -> Any:
         """Execute DELETE operation"""
@@ -1708,6 +1713,8 @@ class BaseMatrixOneQuery:
             table_name=self._table_name,
             where_conditions=self._where_conditions,
             where_params=self._where_params,
+            order_by=self._order_by_columns,
+            limit=self._limit_count,
         )
 
 
