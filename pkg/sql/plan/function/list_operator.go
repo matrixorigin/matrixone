@@ -198,22 +198,21 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 	if len(inputs) != 2 || len(coerced) != 2 || !coerced[0].Oid.IsDecimal() || coerced[0].Oid != coerced[1].Oid || (!inputs[0].Oid.IsDecimal() && !inputs[1].Oid.IsDecimal()) {
 		return nil, false
 	}
-	widths := [2]int32{}
-	scales := [2]int32{}
+	targets := [2]types.Type{coerced[0], coerced[1]}
+	isMultiply := operator == "*"
 	var nominalPrecision int64
 	for i := range inputs {
-		var ok bool
 		domain := inputs[i]
-		widths[i], scales[i], ok = decimalArithmeticDomain(domain)
+		width, scale, ok := decimalArithmeticDomain(domain)
 		if !ok && inputs[i].Oid == types.T_any {
 			domain = coerced[i]
-			widths[i], scales[i], ok = decimalArithmeticDomain(domain)
+			width, scale, ok = decimalArithmeticDomain(domain)
 		}
 		if !ok {
 			return nil, false
 		}
-		if operator == "*" {
-			nominalWidth := widths[i]
+		if isMultiply {
+			nominalWidth := width
 			if domain.Oid.IsDecimal() {
 				nominalWidth = domain.Width
 				if nominalWidth <= 0 {
@@ -223,12 +222,14 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 			nominalPrecision += int64(nominalWidth)
 			// Reuse the domain just extracted above. Only MUL needs the
 			// carrier coefficient adjustment and nominal route precision.
-			widths[i] = decimalMultiplyCoefficientWidth(domain.Oid, widths[i])
+			width = decimalMultiplyCoefficientWidth(domain.Oid, width)
 		}
+		targets[i].Width = width
+		targets[i].Scale = scale
 	}
-	precision := int64(widths[0]) + int64(widths[1])
-	if operator != "*" {
-		precision = int64(max(widths[0]-scales[0], widths[1]-scales[1])) + int64(max(scales[0], scales[1])) + 1
+	precision := int64(targets[0].Width) + int64(targets[1].Width)
+	if !isMultiply {
+		precision = int64(max(targets[0].Width-targets[0].Scale, targets[1].Width-targets[1].Scale)) + int64(max(targets[0].Scale, targets[1].Scale)) + 1
 	}
 	oid := coerced[0].Oid
 	// Preserve the released checked D128 route when nominal domains fit it.
@@ -236,10 +237,10 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 	// kernel. The return callback retains the carrier envelope, which later
 	// multiplication interprets with decimalMultiplyDomain rather than as an
 	// exact 38-digit value proof. Existing physical overflow checks still apply.
-	keepCheckedD128 := operator == "*" && oid == types.T_decimal128 && nominalPrecision <= 38
+	keepCheckedD128 := isMultiply && oid == types.T_decimal128 && nominalPrecision <= 38
 	if oid != types.T_decimal256 && precision > 38 && !keepCheckedD128 {
 		oid = types.T_decimal256
-	} else if operator == "*" && oid == types.T_decimal128 && precision <= 38 {
+	} else if isMultiply && oid == types.T_decimal128 && precision <= 38 {
 		// Keep the existing signed-integer/Decimal64 MUL kernel, whose output
 		// is Decimal128. Integer domains retain 19 digits for signed BIGINT;
 		// UINT64/BIT require a wider input coefficient and cannot use it.
@@ -250,13 +251,10 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 			oid = types.T_decimal64
 		}
 	}
-	targets := [2]types.Type{coerced[0], coerced[1]}
 	changed := false
 	for i := range targets {
 		targets[i].Oid = oid
 		targets[i].Size = int32(oid.TypeLen())
-		targets[i].Width = widths[i]
-		targets[i].Scale = scales[i]
 		changed = changed || targets[i] != coerced[i]
 	}
 	if !changed {
