@@ -86,8 +86,8 @@ func TestMixedDecimalArithmeticWidensFromOriginalDomains(t *testing.T) {
 			name:       "decimal38 times unsigned bigint",
 			operator:   "*",
 			inputs:     []types.Type{decimal38, types.T_uint64.ToType()},
-			wantTarget: []types.Type{types.New(types.T_decimal256, 38, 0), types.New(types.T_decimal256, 20, 0)},
-			wantResult: types.New(types.T_decimal256, 58, 0),
+			wantTarget: []types.Type{types.New(types.T_decimal256, 39, 0), types.New(types.T_decimal256, 20, 0)},
+			wantResult: types.New(types.T_decimal256, 59, 0),
 		},
 		{
 			name:       "decimal64 plus decimal128",
@@ -114,15 +114,15 @@ func TestMixedDecimalArithmeticWidensFromOriginalDomains(t *testing.T) {
 			name:       "bit64 times decimal38",
 			operator:   "*",
 			inputs:     []types.Type{types.T_bit.ToType(), decimal38},
-			wantTarget: []types.Type{types.New(types.T_decimal256, 20, 0), types.New(types.T_decimal256, 38, 0)},
-			wantResult: types.New(types.T_decimal256, 58, 0),
+			wantTarget: []types.Type{types.New(types.T_decimal256, 20, 0), types.New(types.T_decimal256, 39, 0)},
+			wantResult: types.New(types.T_decimal256, 59, 0),
 		},
 		{
 			name:       "decimal38 times bit64",
 			operator:   "*",
 			inputs:     []types.Type{decimal38, types.T_bit.ToType()},
-			wantTarget: []types.Type{types.New(types.T_decimal256, 38, 0), types.New(types.T_decimal256, 20, 0)},
-			wantResult: types.New(types.T_decimal256, 58, 0),
+			wantTarget: []types.Type{types.New(types.T_decimal256, 39, 0), types.New(types.T_decimal256, 20, 0)},
+			wantResult: types.New(types.T_decimal256, 59, 0),
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -136,9 +136,10 @@ func TestMixedDecimalArithmeticWidensFromOriginalDomains(t *testing.T) {
 
 	resolved, err := GetFunctionByName(context.Background(), "*", []types.Type{decimal20, decimal18})
 	require.NoError(t, err)
-	// The legacy D64(18) envelope can contain a full 19-digit coefficient.
-	require.Equal(t, types.T_decimal256, resolved.targetTypes[0].Oid)
-	require.Equal(t, types.New(types.T_decimal256, 39, 0), resolved.retType)
+	// Preserve the released checked carrier when nominal precisions fit it;
+	// subsequent MUL treats the precision-38 result as a carrier envelope.
+	require.Equal(t, types.T_decimal128, resolved.targetTypes[0].Oid)
+	require.Equal(t, types.New(types.T_decimal128, 38, 0), resolved.retType)
 }
 
 // Published precision is owned by the common arithmetic wrapper, independently

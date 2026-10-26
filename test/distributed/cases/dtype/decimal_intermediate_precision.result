@@ -62,7 +62,7 @@ deallocate prepare precision_multiply;
 create table legacy_coefficients(i bigint);
 insert into legacy_coefficients values (9223372036854775807), (-9223372036854775808), (null);
 select (cast('00:00:00' as time(0)) + i) * (cast('00:00:00' as time(0)) + i) * 3 as carried_product from legacy_coefficients order by i;
-➤ carried_product[3,39,0]  𝄀
+➤ carried_product[3,40,0]  𝄀
 NULL  𝄀
 255211775190703847597530955573826158592  𝄀
 255211775190703847542190723352697503747
@@ -92,18 +92,25 @@ NULL  ¦  NULL  ¦  NULL  𝄀
 prepare directed_precision from 'select ceil(a*a,?)*b as ceiling_product, floor(-(a*a),?)*b as floor_product from directed_coefficients order by a';
 set @rounding_position=-35;
 execute directed_precision using @rounding_position, @rounding_position;
-➤ ceiling_product[3,48,0]  ¦  floor_product[3,48,0]  𝄀
+➤ ceiling_product[3,49,0]  ¦  floor_product[3,49,0]  𝄀
 NULL  ¦  NULL  𝄀
 100000000000000000000000000000000000000000000  ¦  -100000000000000000000000000000000000000000000
 set @rounding_position=-30;
 execute directed_precision using @rounding_position, @rounding_position;
-➤ ceiling_product[3,48,0]  ¦  floor_product[3,48,0]  𝄀
+➤ ceiling_product[3,49,0]  ¦  floor_product[3,49,0]  𝄀
 NULL  ¦  NULL  𝄀
 1000000000000000000000000000000000000000  ¦  -1000000000000000000000000000000000000000
 set @rounding_position=-35;
 execute directed_precision using @rounding_position, @rounding_position;
-➤ ceiling_product[3,48,0]  ¦  floor_product[3,48,0]  𝄀
+➤ ceiling_product[3,49,0]  ¦  floor_product[3,49,0]  𝄀
 NULL  ¦  NULL  𝄀
 100000000000000000000000000000000000000000000  ¦  -100000000000000000000000000000000000000000000
 deallocate prepare directed_precision;
+create table checked_carriers(c decimal(20,0), i bigint, z decimal(17,0));
+insert into checked_carriers values (18000000000000000000,9223372036854775807,99999999999999999),(18000000000000000000,-9223372036854775808,99999999999999999),(18000000000000000000,null,99999999999999999);
+select (c*(cast('00:00:00' as time(0))+i))*z as chained_product from checked_carriers order by i;
+➤ chained_product[3,56,0]  𝄀
+NULL  𝄀
+-16602069666338596288379303336614035456000000000000000000  𝄀
+16602069666338596286579303336614035474000000000000000000
 drop database decimal_intermediate_precision;

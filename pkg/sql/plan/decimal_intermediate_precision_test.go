@@ -16,6 +16,8 @@ package plan
 
 import (
 	"context"
+	"math"
+	"math/big"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -136,4 +138,45 @@ func TestPreparedDecimalArithmeticRetainsDeclaredRuntimeDomains(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestDecimalCheckedCarrierProductRetainsFollowingDomain(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	leftType, rightType, tailType := types.New(types.T_decimal128, 20, 0), types.New(types.T_decimal64, 18, 0), types.New(types.T_decimal64, 17, 0)
+	first, err := BindFuncExprImplByPlanExpr(t.Context(), "*", []*planpb.Expr{decimalArithmeticTestColumn(leftType, 0), decimalArithmeticTestColumn(rightType, 1)})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_decimal128), first.Typ.Id)
+	require.Equal(t, int32(38), first.Typ.Width)
+	expr, err := BindFuncExprImplByPlanExpr(t.Context(), "*", []*planpb.Expr{first, decimalArithmeticTestColumn(tailType, 2)})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
+	require.Equal(t, int32(56), expr.Typ.Width)
+	input := batch.NewWithSize(3)
+	t.Cleanup(func() { input.Clean(proc.Mp()) })
+	for i, typ := range []types.Type{leftType, rightType, tailType} {
+		input.Vecs[i] = vector.NewVec(typ)
+	}
+	left, err := types.ParseDecimal128("18000000000000000000", 20, 0)
+	require.NoError(t, err)
+	values := []int64{math.MaxInt64, math.MinInt64, 0}
+	for row, v := range values {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], left, false, proc.Mp()))
+		// A released TIME/integer producer can supply this full signed
+		// coefficient in its precision-18 D64 envelope.
+		require.NoError(t, vector.AppendFixed(input.Vecs[1], types.Decimal64(v), row == 2, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(input.Vecs[2], types.Decimal64(99999999999999999), false, proc.Mp()))
+	}
+	input.SetRowCount(3)
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	t.Cleanup(executor.Free)
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	for row := range 2 {
+		want, _ := new(big.Int).SetString("18000000000000000000", 10)
+		want.Mul(want, big.NewInt(values[row]))
+		want.Mul(want, big.NewInt(99999999999999999))
+		require.Equal(t, want.String(), vector.GetFixedAtWithTypeCheck[types.Decimal256](result, row).Format(0))
+	}
+	require.True(t, result.IsNull(2))
 }

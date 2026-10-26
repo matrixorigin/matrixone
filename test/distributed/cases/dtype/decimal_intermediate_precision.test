@@ -71,4 +71,9 @@ set @rounding_position=-35;
 -- @metacmp(true)
 execute directed_precision using @rounding_position, @rounding_position;
 deallocate prepare directed_precision;
+-- A checked D128 product can retain a 39-digit coefficient in its released envelope.
+create table checked_carriers(c decimal(20,0), i bigint, z decimal(17,0));
+insert into checked_carriers values (18000000000000000000,9223372036854775807,99999999999999999),(18000000000000000000,-9223372036854775808,99999999999999999),(18000000000000000000,null,99999999999999999);
+-- @metacmp(true)
+select (c*(cast('00:00:00' as time(0))+i))*z as chained_product from checked_carriers order by i;
 drop database decimal_intermediate_precision;

@@ -65,7 +65,7 @@ func TestDecimalLegacyCoefficientDomain(t *testing.T) {
 	require.Equal(t, types.New(types.T_decimal128, 38, 0), square.retType)
 	product, err := GetFunctionByName(ctx, "*", []types.Type{square.retType, types.New(types.T_decimal64, 1, 0)})
 	require.NoError(t, err)
-	require.Equal(t, types.New(types.T_decimal256, 39, 0), product.retType)
+	require.Equal(t, types.New(types.T_decimal256, 40, 0), product.retType)
 }
 
 func TestDecimalRevenueIntermediateStays128(t *testing.T) {
@@ -109,5 +109,41 @@ func TestDecimalReturnTypeUnknownDomainKeepsCarrierEnvelope(t *testing.T) {
 		inputs := []types.Type{types.New(tc.carrier, 20, 2), types.New(types.T_time, 0, 3)}
 		require.Equal(t, types.New(tc.carrier, tc.width, 3), decimalAddSubReturnType(inputs))
 		require.Equal(t, types.New(tc.carrier, tc.width, 5), decimalMultiplyReturnType(inputs))
+	}
+}
+
+func TestDecimalMixedCarrierMultiplyKeepsCheckedRoute(t *testing.T) {
+	for _, scale := range []int32{0, 2} {
+		for _, width := range []int32{0, 18} {
+			for _, reverse := range []bool{false, true} {
+				args := []types.Type{types.New(types.T_decimal128, 20, scale), types.New(types.T_decimal64, width, scale)}
+				if reverse {
+					args[0], args[1] = args[1], args[0]
+				}
+				resolved, err := GetFunctionByName(t.Context(), "*", args)
+				require.NoError(t, err)
+				require.Equal(t, types.New(types.T_decimal128, 38, 2*scale), resolved.retType)
+				for _, target := range resolved.targetTypes {
+					require.Equal(t, types.T_decimal128, target.Oid)
+				}
+			}
+		}
+	}
+	// An exact declared domain already beyond the D128 ceiling stays wide.
+	for _, args := range [][]types.Type{
+		{types.New(types.T_decimal128, 21, 0), types.New(types.T_decimal64, 18, 0)},
+		{types.New(types.T_decimal128, 20, 0), types.New(types.T_decimal128, 19, 0)},
+	} {
+		resolved, err := GetFunctionByName(t.Context(), "*", args)
+		require.NoError(t, err)
+		require.Equal(t, types.T_decimal256, resolved.retType.Oid)
+	}
+}
+
+func TestDecimal128CarrierEnvelopeBoundsFollowingMultiply(t *testing.T) {
+	for _, width := range []int32{0, 38} {
+		resolved, err := GetFunctionByName(t.Context(), "*", []types.Type{types.New(types.T_decimal128, width, 0), types.New(types.T_decimal64, 17, 0)})
+		require.NoError(t, err)
+		require.Equal(t, types.New(types.T_decimal256, 56, 0), resolved.retType)
 	}
 }

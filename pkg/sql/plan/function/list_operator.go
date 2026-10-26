@@ -162,6 +162,17 @@ func decimalArithmeticDomain(input types.Type) (width, scale int32, ok bool) {
 	return 0, 0, false
 }
 
+func decimalMultiplyDomain(input types.Type) (width, scale int32, ok bool) {
+	width, scale, ok = decimalArithmeticDomain(input)
+	if ok && input.Oid == types.T_decimal128 && width == 38 {
+		// Released checked D128 arithmetic can retain a full signed
+		// coefficient (39 digits) in its precision-38 carrier envelope.
+		// MUL needs that bound; ADD/SUB already reserve a carry digit.
+		width = 39
+	}
+	return
+}
+
 // useDecimal64MultiplyInputs owns the existing signed-integer/D64 eligibility
 // rule for both exact numeric domains and legacy temporal coercions. UINT64
 // and BIT cannot use a signed int64 coefficient.
@@ -182,14 +193,28 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 	}
 	widths := [2]int32{}
 	scales := [2]int32{}
+	var nominalPrecision int64
 	for i := range inputs {
 		var ok bool
-		widths[i], scales[i], ok = decimalArithmeticDomain(inputs[i])
+		domain := inputs[i]
+		widths[i], scales[i], ok = decimalArithmeticDomain(domain)
 		if !ok && inputs[i].Oid == types.T_any {
-			widths[i], scales[i], ok = decimalArithmeticDomain(coerced[i])
+			domain = coerced[i]
+			widths[i], scales[i], ok = decimalArithmeticDomain(domain)
 		}
 		if !ok {
 			return nil, false
+		}
+		nominalWidth := widths[i]
+		if domain.Oid.IsDecimal() {
+			nominalWidth = domain.Width
+			if nominalWidth <= 0 {
+				nominalWidth = domain.Oid.ToType().Width
+			}
+		}
+		nominalPrecision += int64(nominalWidth)
+		if operator == "*" {
+			widths[i], scales[i], _ = decimalMultiplyDomain(domain)
 		}
 	}
 	precision := int64(widths[0]) + int64(widths[1])
@@ -197,7 +222,13 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 		precision = int64(max(widths[0]-scales[0], widths[1]-scales[1])) + int64(max(scales[0], scales[1])) + 1
 	}
 	oid := coerced[0].Oid
-	if oid != types.T_decimal256 && precision > 38 {
+	// Preserve the released checked D128 route when nominal domains fit it.
+	// A legacy capacity envelope alone must not add two D256 casts and a wide
+	// kernel. The return callback retains the carrier envelope, which later
+	// multiplication interprets with decimalMultiplyDomain rather than as an
+	// exact 38-digit value proof. Existing physical overflow checks still apply.
+	keepCheckedD128 := operator == "*" && oid == types.T_decimal128 && nominalPrecision <= 38
+	if oid != types.T_decimal256 && precision > 38 && !keepCheckedD128 {
 		oid = types.T_decimal256
 	} else if operator == "*" && oid == types.T_decimal128 && precision <= 38 {
 		// Keep the existing signed-integer/Decimal64 MUL kernel, whose output
@@ -264,8 +295,8 @@ func decimalMultiplyReturnType(parameters []types.Type) types.Type {
 	if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
 		oid = types.T_decimal256
 	}
-	leftWidth, _, leftOK := decimalArithmeticDomain(parameters[0])
-	rightWidth, _, rightOK := decimalArithmeticDomain(parameters[1])
+	leftWidth, _, leftOK := decimalMultiplyDomain(parameters[0])
+	rightWidth, _, rightOK := decimalMultiplyDomain(parameters[1])
 	if !leftOK || !rightOK {
 		return types.New(oid, min(oid.ToType().Width, int32(65)), scale)
 	}
