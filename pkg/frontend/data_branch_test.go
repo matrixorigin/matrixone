@@ -400,14 +400,14 @@ func TestFormatValIntoString_FloatLiterals(t *testing.T) {
 		{"float32 negative zero", math.Float32frombits(0x80000000), types.T_float32.ToType(), "bit_cast(unhex('00000080') as float)"},
 		{"float32 NaN payload 0", math.Float32frombits(0x7fc00000), types.T_float32.ToType(), "bit_cast(unhex('0000c07f') as float)"},
 		{"float32 NaN payload 1", math.Float32frombits(0x7fc00001), types.T_float32.ToType(), "bit_cast(unhex('0100c07f') as float)"},
-		{"float32 positive infinity", float32(math.Inf(1)), types.T_float32.ToType(), "cast('+Inf' as float)"},
-		{"float32 negative infinity", float32(math.Inf(-1)), types.T_float32.ToType(), "cast('-Inf' as float)"},
+		{"float32 positive infinity", float32(math.Inf(1)), types.T_float32.ToType(), "bit_cast(unhex('0000807f') as float)"},
+		{"float32 negative infinity", float32(math.Inf(-1)), types.T_float32.ToType(), "bit_cast(unhex('000080ff') as float)"},
 		{"float64 finite", 1.25, types.T_float64.ToType(), "1.25"},
 		{"float64 negative zero", math.Float64frombits(0x8000000000000000), types.T_float64.ToType(), "bit_cast(unhex('0000000000000080') as double)"},
 		{"float64 NaN payload 0", math.Float64frombits(0x7ff8000000000000), types.T_float64.ToType(), "bit_cast(unhex('000000000000f87f') as double)"},
 		{"float64 NaN payload 1", math.Float64frombits(0x7ff8000000000001), types.T_float64.ToType(), "bit_cast(unhex('010000000000f87f') as double)"},
-		{"float64 positive infinity", math.Inf(1), types.T_float64.ToType(), "cast('+Inf' as double)"},
-		{"float64 negative infinity", math.Inf(-1), types.T_float64.ToType(), "cast('-Inf' as double)"},
+		{"float64 positive infinity", math.Inf(1), types.T_float64.ToType(), "bit_cast(unhex('000000000000f07f') as double)"},
+		{"float64 negative infinity", math.Inf(-1), types.T_float64.ToType(), "bit_cast(unhex('000000000000f0ff') as double)"},
 	}
 
 	for _, tt := range tests {
@@ -430,7 +430,7 @@ func TestFormatValIntoStringWithFloatCast(t *testing.T) {
 		{"float32 NaN", math.Float32frombits(0x7fc00001), types.T_float32.ToType(), "bit_cast(unhex('0100c07f') as float)"},
 		{"float32 negative zero", math.Float32frombits(0x80000000), types.T_float32.ToType(), "bit_cast(unhex('00000080') as float)"},
 		{"float64 finite", 1.25, types.T_float64.ToType(), "cast(1.25 as double)"},
-		{"float64 infinity", math.Inf(1), types.T_float64.ToType(), "cast('+Inf' as double)"},
+		{"float64 infinity", math.Inf(1), types.T_float64.ToType(), "bit_cast(unhex('000000000000f07f') as double)"},
 		{"float64 negative zero", math.Float64frombits(0x8000000000000000), types.T_float64.ToType(), "bit_cast(unhex('0000000000000080') as double)"},
 		{"non-float unchanged", int64(7), types.T_int64.ToType(), "7"},
 	}

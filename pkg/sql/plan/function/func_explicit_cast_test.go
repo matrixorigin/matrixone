@@ -1167,3 +1167,93 @@ func TestMatrixOneExtendedIntegerTargetsRemainStrict(t *testing.T) {
 		})
 	}
 }
+
+func TestFloatTextCastDiagnostics(t *testing.T) {
+	for _, oid := range []types.T{types.T_float32, types.T_float64} {
+		for _, tc := range []struct {
+			name, statement, sqlMode string
+			ignore                   bool
+			execute                  executeLogicOfOverload
+			code                     uint16
+			fail                     bool
+		}{
+			{"select strict", "Select", "STRICT_TRANS_TABLES", false, NewExplicitCast, 1292, false},
+			{"explicit strict DML", "Insert", "STRICT_TRANS_TABLES", false, NewExplicitCast, 1292, true},
+			{"explicit lenient DML", "Insert", "", false, NewExplicitCast, 1292, false},
+			{"explicit ignore", "Insert", "STRICT_TRANS_TABLES", true, NewExplicitCast, 1292, false},
+			{"assignment strict", "Insert", "STRICT_TRANS_TABLES", false, NewAssignCast, 1265, true},
+			{"assignment lenient", "Insert", "", false, NewAssignCast, 1265, false},
+			{"assignment ignore", "Insert", "STRICT_TRANS_TABLES", true, NewAssignIgnoreCast, 1265, false},
+		} {
+			t.Run(oid.String()+"/"+tc.name, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				proc.SetStmtProfile(&process.StmtProfile{})
+				query := "DML"
+				if tc.statement == "Select" {
+					query = "DQL"
+				}
+				proc.GetStmtProfile().SetStatementRuntimeProfile(tc.statement, query, tc.ignore)
+				proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return tc.sqlMode, nil })
+				sink := &numericWarningSession{}
+				proc.WarningSink = sink
+				target := oid.ToType()
+				var empty any = []float64{}
+				if oid == types.T_float32 {
+					empty = []float32{}
+				}
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.25", "inf", "nan", "information", "12tail", "0x10", ""}, []bool{false, false, false, false, false, false, true}),
+					NewFunctionTestInput(target, empty, nil),
+				}, NewFunctionTestResult(target, false, nil, nil), tc.execute)
+				t.Cleanup(fc.Free)
+				got, err := fc.DebugRun()
+				if tc.fail {
+					var e *moerr.Error
+					require.ErrorAs(t, err, &e)
+					require.Equal(t, tc.code, e.MySQLCode())
+					require.True(t, e.IsRealError())
+					state := "22007"
+					if tc.code == 1265 {
+						state = "01000"
+					}
+					require.Equal(t, state, e.SqlState())
+					require.Empty(t, sink.warnings)
+					return
+				}
+				require.NoError(t, err)
+				for row, want := range []float64{1.25, 0, 0, 0, 12, 16} {
+					var value float64
+					if oid == types.T_float32 {
+						value = float64(vector.GetFixedAtNoTypeCheck[float32](got, row))
+					} else {
+						value = vector.GetFixedAtNoTypeCheck[float64](got, row)
+					}
+					require.Equal(t, want, value)
+				}
+				require.True(t, got.IsNull(6))
+				require.Len(t, sink.warnings, 4)
+				for _, warning := range sink.warnings {
+					require.Equal(t, tc.code, warning.code)
+				}
+			})
+		}
+	}
+}
+
+func TestFloatTextSpecialTokensByCompatibility(t *testing.T) {
+	for _, input := range []string{"inf", "+INF", "-infinity", "NaN", " +nan ", "information", "nanny"} {
+		for _, bits := range []int{32, 64} {
+			value, err := parseStringToFloatWithBitSize(input, bits, SQLCompatibilityMySQL)
+			require.NoError(t, err)
+			require.Zero(t, value)
+			require.True(t, FloatTextTruncated(input))
+		}
+	}
+	for _, input := range []string{"Inf", "-Infinity", "+NaN"} {
+		value, err := parseStringToFloat(input, SQLCompatibilityMatrixOne)
+		require.NoError(t, err)
+		require.True(t, math.IsInf(value, 0) || math.IsNaN(value))
+	}
+	_, err := parseStringToFloat("information", SQLCompatibilityMatrixOne)
+	require.Error(t, err)
+}

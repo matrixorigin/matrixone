@@ -203,10 +203,10 @@ func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, err
 	return features.BoundedConditionalStringDomains, err
 }
 
-// RequiresMORPCVersion132JSONValueContract reports whether an owner contains
+// RequiresMORPCVersion133JSONValueContract reports whether an owner contains
 // the planner-only seven-argument JSON_VALUE overload. The overload carries
 // target and response semantics that older receivers cannot dispatch.
-func RequiresMORPCVersion132JSONValueContract(owner any) (bool, error) {
+func RequiresMORPCVersion133JSONValueContract(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.JSONValueContract, err
 }
@@ -371,9 +371,9 @@ const (
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
-// JSONValueContract provisionally requires MORPC v132 on this isolated branch;
+// JSONValueContract provisionally requires MORPC v133 on this isolated branch;
 // revalidate its allocation at the authoritative main merge. The independently
-// gated main capabilities retain their existing MORPC v111-v128 allocations.
+// gated main capabilities retain their existing MORPC v111-v132 allocations.
 // DecimalLiteralSemantics requires MORPC v89 because plain DECIMAL256
 // literals are normalized and kept exact by the new planner, while older
 // binders can round or reject the same persisted SQL at the Decimal128
@@ -413,6 +413,7 @@ const (
 // IncompleteTemporalStrings requires MORPC v130 for raw-calendar string
 // overloads and incomplete-input rejection diagnostics.
 type RemoteExpressionFeatures struct {
+	FloatConversionSemantics      bool // v132: decimal rounding, MySQL text parsing and DML context
 	JSONStringConsumerOverload    bool
 	JSONOpaqueTextContracts       bool
 	LoadFKIgnoreCheck             bool // v125: LOAD IGNORE FK admission and diagnostics
@@ -471,7 +472,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.FloatConversionSemantics || features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.JSONValueContract ||
@@ -951,6 +952,11 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			// Typed prepared FLOAT parameters still arrive through TEXT transport
+			// and execute a private cast in the parameter executor.
+			if current.GetP() != nil && (current.Typ.Id == 30 || current.Typ.Id == 31) {
+				features.FloatConversionSemantics = true
+			}
 			features.DependentPrograms = features.DependentPrograms || current.GetDependent() != nil || current.GetSlot() != nil
 			if literal := current.GetLit(); literal != nil && !literal.Isnull && current.Typ.Id == planJSONTypeID {
 				_, encodedJSON := literal.Value.(*Literal_Sval)
@@ -967,6 +973,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				features.FloatConversionSemantics = features.FloatConversionSemantics || isFloatConversionContract(current, id)
 				features.JSONStringConsumerOverload = features.JSONStringConsumerOverload || isRemoteJSONStringConsumerOverload(id, overload)
 				features.JSONOpaqueTextContracts = features.JSONOpaqueTextContracts || isJSONOpaqueTextContract(current, fn, id)
 				if id == loadFKIgnoreCheckFunctionID {
@@ -1919,4 +1926,34 @@ func isMixedJSONNumericComparison(fn *Function) bool {
 		left, right = right, left
 	}
 	return right == planJSONTypeID && ((left >= 20 && left <= 23) || (left >= 25 && left <= 28) || (left >= 30 && left <= 34))
+}
+
+// isFloatConversionContract follows stable execution IDs across binding and
+// assignment overloads; printed names and syntax aliases are irrelevant.
+func isFloatConversionContract(expr *Expr, id int32) bool {
+	if id == 585 { // JSON_AGG_TO_DOUBLE shares MySQL text-to-float parsing.
+		return true
+	}
+	if id != 21 && id != 541 && id != 554 && id != 555 && id != 113 {
+		return false
+	}
+	fn := expr.GetF()
+	if len(fn.Args) == 0 || fn.Args[0] == nil {
+		return false
+	}
+	source, target := fn.Args[0].Typ.Id, expr.Typ.Id
+	floatSource := source == 30 || source == 31
+	floatTarget := target == 30 || target == 31
+	if floatTarget || id == 113 {
+		if lit := fn.Args[0].GetLit(); lit != nil && (lit.IsBin || lit.LiteralForm == StringLiteralForm_STRING_LITERAL_HEX || lit.LiteralForm == StringLiteralForm_STRING_LITERAL_BIT) {
+			return false // raw binary payloads retain the released conversion
+		}
+	}
+	// IF/IFF keeps its string condition; both vector and dependent execution
+	// call the float parser directly instead of inserting a CAST node.
+	if id == 113 {
+		return isPlanStringType(source)
+	}
+	return (floatTarget && isPlanStringType(source)) ||
+		((target == 32 || target == 33) && (floatSource || source == planJSONTypeID))
 }

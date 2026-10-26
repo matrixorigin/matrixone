@@ -600,7 +600,7 @@ func TestRequiredRemoteExpressionFeaturesBoundedConditionalStringDomains(t *test
 		"the existing character overload remains wire-compatible")
 }
 
-func TestRequiresMORPCVersion132JSONValueContract(t *testing.T) {
+func TestRequiresMORPCVersion133JSONValueContract(t *testing.T) {
 	text := func(value string) *Expr {
 		return &Expr{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: value}}}}
 	}
@@ -619,11 +619,11 @@ func TestRequiresMORPCVersion132JSONValueContract(t *testing.T) {
 		Args: []*Expr{text(`{"a":1}`), text("$.a")},
 	}}}
 
-	required, err := RequiresMORPCVersion132JSONValueContract(jsonValueContract)
+	required, err := RequiresMORPCVersion133JSONValueContract(jsonValueContract)
 	require.NoError(t, err)
 	require.True(t, required)
 
-	required, err = RequiresMORPCVersion132JSONValueContract(legacy)
+	required, err = RequiresMORPCVersion133JSONValueContract(legacy)
 	require.NoError(t, err)
 	require.False(t, required)
 
@@ -653,7 +653,7 @@ func TestRequiresMORPCVersion132JSONValueContract(t *testing.T) {
 			decoded := &Plan{}
 			require.NoError(t, decoded.Unmarshal(encoded))
 			for _, value := range []any{scan, node, query, owner, decoded} {
-				required, err := RequiresMORPCVersion132JSONValueContract(value)
+				required, err := RequiresMORPCVersion133JSONValueContract(value)
 				require.NoError(t, err)
 				require.Equal(t, tc.want, required)
 				features, err := RequiredRemoteExpressionFeatures(value)

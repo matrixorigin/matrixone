@@ -3,12 +3,13 @@
 Issue: #28037
 
 Base-sync note (2026-10-26): fetched target main at
-`4769417cdce5531c9771644eca49f1e71d8f654c` owns MORPC v130 incomplete
+`861a2c4cb68961d8b6b01f18e0aa6ac52a3a505f` owns MORPC v130 incomplete
 temporal string overloads and v131 exact weighted percentile dispatch, in
-addition to v129 selected JSON ELT and opaque text expression execution.
+addition to v129 selected JSON ELT and opaque text expression execution and
+v132 decimal float rounding and strict textual float conversions.
 Preserve that cumulative prefix. This isolated branch reassigns its previously
-provisional v130 seven-argument JSON_VALUE contract to provisional v132, with
-actual main v131 as its immediate predecessor. Main v130/v131 must not be
+provisional v132 seven-argument JSON_VALUE contract to provisional v133, with
+actual main v132 as its immediate predecessor. Main v130/v131/v132 must not be
 mistaken for JSON_VALUE-capable receivers. This is not a maintainer-approved
 allocation, does not establish
 cross-branch mixed-deployment support, and must be revalidated at the
@@ -77,10 +78,10 @@ values are not automatically recomputed. Upgrade validation covers views,
 generated columns, indexes, values over the 512-character boundary, and the
 explicit rebuild procedure.
 
-### Versioned compatibility decision (candidate revision 10, 2026-10-26)
+### Versioned compatibility decision (candidate revision 11, 2026-10-26)
 
 Status: independent maintainer approval pending. This candidate updates revision
-9 after intervening main allocations, retaining shutdown-upgrade acceptance;
+10 after the landed float allocation, retaining shutdown-upgrade acceptance;
 superseded details remain in PR history rather than this contract.
 Approval must identify
 this revision's immutable commit and an independent approver. Author replies,
@@ -89,8 +90,8 @@ thread resolution and approvals of earlier revisions do not approve this one.
 The pre-conflict revision-9 source was a MORPC v124 candidate for JSON_VALUE
 function ID 462, overload 2, based on
 `7c146f4adbf068dd0c06b377157cfb7d7698b1eb` (v123). This isolated conflict
-repair advances the JSON_VALUE gate to provisional v132 against fetched target
-main `4769417cdce5531c9771644eca49f1e71d8f654c`; revalidate that allocation at
+repair advances the JSON_VALUE gate to provisional v133 against fetched target
+main `861a2c4cb68961d8b6b01f18e0aa6ac52a3a505f`; revalidate that allocation at
 the authoritative main merge.
 It preserves main's
 functional-index metadata and generated-key maintenance capability at v107 and
@@ -115,9 +116,10 @@ foreign-key diagnostics at v125, parser-derived VIEWS definitions at v126,
 IndexSearchScan search knobs at v127, mixed JSON/numeric comparisons at v128,
 and selected JSON ELT / opaque text execution at v129. These independent
 capabilities and their gates remain intact, along with v130 incomplete temporal
-strings and v131 exact weighted percentile dispatch. Main through v131 must still reject
+strings, v131 exact weighted percentile dispatch and v132 decimal/float
+conversion semantics. Main through v132 must still reject
 this candidate's seven-argument JSON_VALUE contract; the cumulative latest
-version on this isolated candidate is provisional v132.
+version on this isolated candidate is provisional v133.
 Algorithm-expression-only owners participate in the
 same expression feature walk; an ordinary projection is not required.
 It is not the final landing
@@ -139,12 +141,12 @@ binaries. The source gates, immediate-predecessor
 tests, final design and earlier-capability preservation tests move together
 after cumulative integration. No independent design approval is carried forward.
 
-The planner requires the deployment-wide MOProtocolVersion to be at least 132
+The planner requires the deployment-wide MOProtocolVersion to be at least 133
 for RETURNING, ON EMPTY or ON ERROR. Bare two-argument calls keep the legacy
 plan and its NULL-document short circuit. In the new clause-bearing contract,
 a non-NULL invalid path is a hard error even when the document is SQL NULL.
 
-Both current sender and receiver validate overload 2 against v132 before remote
+Both current sender and receiver validate overload 2 against v133 before remote
 execution. Those checks do not retrofit an old receiver. The accepted deployment
 scope is a shutdown upgrade: stop all old processes, replace the binaries with
 the final cumulative build, then start and admit the deployment before authoring
@@ -163,7 +165,7 @@ The SQL grammar rejects JSON_VALUE in ON UPDATE; internal owner-walk coverage
 does not imply SQL support for that combination. Prepared execution is tested separately; a session prepared statement is not
 assumed to be a durable catalog object.
 
-Do not admit pre-v132 CNs after committing a v132 durable floor. The existing
+Do not admit pre-v133 CNs after committing a v133 durable floor. The existing
 floor advances monotonically; deleting views/generated expressions or indexes
 does not by itself lower it. In-place rollback below that floor is unsupported
 unless a separately supported, validated floor-lowering procedure exists.
@@ -274,7 +276,7 @@ generic vector ingestion/unmarshal and cannot answer their regression cost.
 The pre-merge v123 candidate passed bounded serial CGo focused tests for the
 MySQL parser, plan protobuf, SQL planner, function lookup and compile packages.
 Those receipts cover that revision's merged grammar and v122 rejection/v123
-admission only; they are historical evidence, not validation of this v132
+admission only; they are historical evidence, not validation of this v133
 main-relative conflict repair. This bounded maintenance candidate does not
 claim full integration, distributed BVT, exact-head CI, deployment QA, or
 shutdown-upgrade evidence.

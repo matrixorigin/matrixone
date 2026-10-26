@@ -1058,6 +1058,8 @@ func TestISCPRecoveryQuarantinesAmbiguousInitStage(t *testing.T) {
 		LSN: 5, LifecycleVersion: atomicInitLifecycleVersion, ErrorMsg: "retry initialization",
 	})
 	require.NoError(t, err)
+	atomicFreshStatus, err := MarshalJobStatus(&JobStatus{LifecycleVersion: atomicInitLifecycleVersion})
+	require.NoError(t, err)
 	encodeJSON := func(value string) []byte {
 		byteJSON, encodeErr := types.ParseStringToByteJson(value)
 		require.NoError(t, encodeErr)
@@ -1090,6 +1092,10 @@ func TestISCPRecoveryQuarantinesAmbiguousInitStage(t *testing.T) {
 		1, 3, "atomic-retryable", 9, ISCPJobState_Completed, "10-0",
 		encodeJSON(spec), encodeJSON(atomicRetryStatus), 0, true,
 	))
+	require.NoError(t, exec.addOrUpdateRecoveredJob(
+		1, 3, "atomic-fresh", 10, ISCPJobState_Completed, "10-0",
+		encodeJSON(spec), encodeJSON(atomicFreshStatus), 0, true,
+	))
 
 	table, ok := exec.getTable(1, 3)
 	require.True(t, ok)
@@ -1105,12 +1111,16 @@ func TestISCPRecoveryQuarantinesAmbiguousInitStage(t *testing.T) {
 	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "error", JobID: 7}].state)
 	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "legacy-retryable", JobID: 8}].state)
 
-	// Only generations carrying durable atomic-protocol evidence remain
-	// schedulable, including a genuine retry after an atomic rollback.
+	// Both a fresh registration and a retry after an atomic rollback carry
+	// durable protocol evidence, so first-start recovery can schedule them.
 	iters, _ := table.getCandidate()
-	require.Len(t, iters, 1)
-	require.Equal(t, []string{"atomic-retryable"}, iters[0].jobNames)
-	require.Equal(t, []int8{JobStage_Init}, iters[0].stages)
+	require.Len(t, iters, 2)
+	var initJobs []string
+	for _, iter := range iters {
+		initJobs = append(initJobs, iter.jobNames...)
+		require.Equal(t, []int8{JobStage_Init}, iter.stages)
+	}
+	require.ElementsMatch(t, []string{"atomic-fresh", "atomic-retryable"}, initJobs)
 }
 
 func TestInitIterationCannotUseCleanTableWatermarkPath(t *testing.T) {

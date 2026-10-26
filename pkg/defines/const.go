@@ -167,8 +167,9 @@ const (
 	MORPCVersion129    int64 = 129 // selected JSON ELT and opaque text expression execution
 	MORPCVersion130    int64 = 130 // incomplete temporal string overloads and rejection diagnostics
 	MORPCVersion131    int64 = 131 // exact weighted percentile aggregate remote dispatch
-	MORPCVersion132    int64 = 132 // seven-argument JSON_VALUE plan contract (provisional allocation)
-	MORPCLatestVersion       = MORPCVersion132
+	MORPCVersion132    int64 = 132 // decimal float rounding and strict textual float conversions
+	MORPCVersion133    int64 = 133 // seven-argument JSON_VALUE plan contract (provisional allocation)
+	MORPCLatestVersion       = MORPCVersion133
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
