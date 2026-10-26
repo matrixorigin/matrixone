@@ -674,6 +674,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 		mode      tableDumpBindingMode
 		zone      *time.Location
 		locale    string
+		origin    string
 	}
 	var lastTimezoneWitness *bindingWitness
 	for i, item := range items {
@@ -797,7 +798,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			if supplied != nil {
 				want = sourceItems[i].expr
 			}
-			if lastTimezoneWitness != nil {
+			if lastTimezoneWitness != nil && item.kind == "default" && item.origin == lastTimezoneWitness.origin {
 				witness := lastTimezoneWitness
 				rebound, err := bind(witness.increment, witness.mode, witness.zone, witness.locale)
 				if fatal != nil {
@@ -982,7 +983,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					if fatal == nil && err == nil && sameTableDumpBoundExpression(want, rebound) {
 						matched = true
 						sensitive = sensitive || search.legacy
-						lastTimezoneWitness = &bindingWitness{search.increment, search.mode, tz, lc}
+						lastTimezoneWitness = &bindingWitness{search.increment, search.mode, tz, lc, item.origin}
 					}
 				}
 				if len(legacySessions) > 0 {
