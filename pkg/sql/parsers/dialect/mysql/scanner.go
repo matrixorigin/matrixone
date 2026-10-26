@@ -998,6 +998,11 @@ func (s *Scanner) scanIdentifierToken(isVariable bool) (int, string) {
 			}
 			return ID, keywordName
 		}
+		// SOUNDS is non-reserved, including as an implicit SELECT alias.
+		// Only the two-word predicate needs the keyword token.
+		if lower == "sounds" && !hasKeywordAt(s.buf, s.skipBlankAndCommentsFrom(s.Pos), "like") {
+			return ID, keywordName
+		}
 		if lower == "offset" && !s.aliasFollowerLookahead && !s.offsetClauseAhead() {
 			return ID, keywordName
 		}

@@ -1147,6 +1147,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> RESPECT
 %left <str> MEMBER
 %token <str> AUTO_ID_CACHE
+// Shift the contextual SOUNDS LIKE phrase before reducing a bare select alias.
+%left <str> SOUNDS
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -15163,6 +15165,20 @@ predicate:
     {
         $$ = tree.NewComparisonExpr(tree.MEMBER_OF, $1, $5)
     }
+|   bit_expr SOUNDS LIKE bit_expr %prec LIKE
+    {
+        left := &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("soundex")),
+            FuncName: tree.NewCStr("soundex", 1),
+            Exprs: tree.Exprs{$1},
+        }
+        right := &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("soundex")),
+            FuncName: tree.NewCStr("soundex", 1),
+            Exprs: tree.Exprs{$4},
+        }
+        $$ = tree.NewComparisonExpr(tree.EQUAL, left, right)
+    }
 |   bit_expr LIKE simple_expr like_escape_opt
     {
         $$ = tree.NewComparisonExprWithEscape(tree.LIKE, $1, $3, $4)
@@ -16859,6 +16875,7 @@ non_reserved_keyword:
 |   SHARE
 |   SIGNED
 |   SMALLINT
+|   SOUNDS
 |   SNAPSHOT
 |   PITR
 |   RECOVERY_WINDOW
