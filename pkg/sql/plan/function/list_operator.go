@@ -236,6 +236,12 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 	// multiplication interprets with decimalMultiplyDomain rather than as an
 	// exact 38-digit value proof. Existing physical overflow checks still apply.
 	keepCheckedD128 := isMultiply && oid == types.T_decimal128 && nominalPrecision <= 38
+	if keepCheckedD128 && precision > 38 {
+		// This route deliberately retains the released carrier envelope.
+		// Keep its released cast domains too: tighter input annotations add
+		// no result precision here and must not change its execution plan.
+		return nil, false
+	}
 	if oid != types.T_decimal256 && precision > 38 && !keepCheckedD128 {
 		oid = types.T_decimal256
 	} else if isMultiply && oid == types.T_decimal128 && precision <= 38 {

@@ -78,7 +78,9 @@ route. Treating D64's legacy envelope as 19 digits must not itself insert two
 D256 input conversions and a wide row kernel for that route. Keep coefficient
 bounds separate from route eligibility: infer cast domains conservatively,
 but retain the old checked carrier when nominal precision fits it. A result
-at that carrier ceiling is an envelope, so later MUL reserves its full
+at that carrier ceiling is an envelope. Retain its released implicit cast
+domains as well; tighter annotations add no result precision at that boundary.
+Later MUL reserves its full
 physical bound before selecting a narrower result precision. Checked physical
 overflow behavior remains the released policy for this ambiguous case.
 

@@ -123,9 +123,11 @@ func TestDecimalMixedCarrierMultiplyKeepsCheckedRoute(t *testing.T) {
 				resolved, err := GetFunctionByName(t.Context(), "*", args)
 				require.NoError(t, err)
 				require.Equal(t, types.New(types.T_decimal128, 38, 2*scale), resolved.retType)
-				for _, target := range resolved.targetTypes {
-					require.Equal(t, types.T_decimal128, target.Oid)
+				wantCasts := []types.Type{types.New(types.T_decimal128, 20, scale), types.New(types.T_decimal128, 38, scale)}
+				if reverse {
+					wantCasts[0], wantCasts[1] = wantCasts[1], wantCasts[0]
 				}
+				require.Equal(t, wantCasts, resolved.targetTypes)
 			}
 		}
 	}

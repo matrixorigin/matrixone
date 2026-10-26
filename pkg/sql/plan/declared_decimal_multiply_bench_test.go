@@ -38,29 +38,16 @@ func BenchmarkDeclaredDecimalMultiply(b *testing.B) {
 	for _, shape := range []string{"nullable", "allnull", "constant"} {
 		benchmarkMultiply(b, [2]int32{20, 18}, 256, shape)
 	}
-	for _, rows := range []int{1, 256, 8192} {
-		benchmarkMultiply(b, [2]int32{20, 0}, rows, "untyped_null")
-	}
 }
 
 func benchmarkMultiply(b *testing.B, widths [2]int32, rows int, shape string) {
-	name := fmt.Sprintf("d%dx%d_rows%d_%s", widths[0], widths[1], rows, shape)
-	columns := 2
-	if shape == "untyped_null" {
-		name = fmt.Sprintf("d%dxNULL_rows%d", widths[0], rows)
-		columns = 1
-	}
-	b.Run(name, func(b *testing.B) {
+	b.Run(fmt.Sprintf("d%dx%d_rows%d_%s", widths[0], widths[1], rows, shape), func(b *testing.B) {
 		mp := mpool.MustNewZero()
 		proc := testutil.NewProcessWithOwnedMPool(b, "", mp)
-		input := batch.NewWithSize(columns)
+		input := batch.NewWithSize(2)
 		b.Cleanup(func() { input.Clean(mp) })
 		args := make([]*pb.Expr, 2)
 		for col, width := range widths {
-			if shape == "untyped_null" && col == 1 {
-				args[col] = &pb.Expr{Typ: pb.Type{Id: int32(types.T_any)}, Expr: &pb.Expr_Lit{Lit: &pb.Literal{Isnull: true}}}
-				continue
-			}
 			oid := types.T_decimal64
 			if width > 18 {
 				oid = types.T_decimal128
