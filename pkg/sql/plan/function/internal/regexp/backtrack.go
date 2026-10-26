@@ -401,12 +401,15 @@ func (re *Regexp) backtrack(ib []byte, is string, pos int, ncap int, dstCap []in
 		// so no work is duplicated and it ends up still being linear.
 		width := -1
 		for ; pos <= end && width != 0; pos += width {
-			if len(b.cap) > 0 {
-				b.cap[0] = pos
-			}
-			if re.tryBacktrack(b, i, uint32(re.prog.Start), pos) {
-				// Match must be leftmost; done.
-				goto Match
+			if !(re.lineMask && crlfBetween(i.context(pos))) {
+				// A masked line-anchored search never starts at a CRLF interior.
+				if len(b.cap) > 0 {
+					b.cap[0] = pos
+				}
+				if re.tryBacktrack(b, i, uint32(re.prog.Start), pos) {
+					// Match must be leftmost; done.
+					goto Match
+				}
 			}
 			_, width = i.step(pos)
 			if len(re.prefix) > 0 {

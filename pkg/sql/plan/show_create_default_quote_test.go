@@ -76,7 +76,7 @@ func TestShowCreateTableStringDefaultRoundTrip(t *testing.T) {
 				}
 				current = next
 			}
-			_, err := ConstructCreateTableSQLForTableDumpHash(sourceDef)
+			_, err := ConstructCreateTableSQLForSchemaHash(sourceDef)
 			require.NoError(t, err)
 			require.True(t, proto.Equal(before, sourceDef), "rendering must not mutate shared metadata")
 		})

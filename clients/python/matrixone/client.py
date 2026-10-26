@@ -25,18 +25,19 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
 
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine, URL
+from sqlalchemy.engine import URL, Engine
 from sqlalchemy.orm import Session as SQLAlchemySession
 
+from ._utils import discard_unrestored_connection, is_non_transactional_statement
 from .account import AccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
+from .branch import BranchManager
+from .cdc import CDCManager
+from .clone import CloneManager
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import ConnectionError, QueryError
-from ._utils import discard_unrestored_connection, is_non_transactional_statement
 from .fulltext_manager import FulltextIndexManager
 from .load_data import LoadDataManager
-from .stage import StageManager
-from .cdc import CDCManager
 from .logger import MatrixOneLogger, create_default_logger
 from .metadata import MetadataManager
 from .moctl import MoCtlManager
@@ -44,9 +45,8 @@ from .pitr import PitrManager
 from .pubsub import PubSubManager
 from .restore import RestoreManager
 from .snapshot import SnapshotManager
-from .clone import CloneManager
-from .branch import BranchManager
 from .sqlalchemy_ext import MatrixOneDialect
+from .stage import StageManager
 from .vector_manager import VectorManager
 from .version import get_version_manager
 
@@ -785,6 +785,7 @@ class Client(BaseMatrixOneClient):
         # Replace the dialect with MatrixOne dialect for proper vector type support
         if self._connection_params.get('ssl_mode') == 'required':
             from sqlalchemy import event
+
             from ._connection_options import connect_required_tls
 
             event.listen(engine, 'do_connect', connect_required_tls)
@@ -878,7 +879,9 @@ class Client(BaseMatrixOneClient):
         """Escapes a string value for SQL queries."""
         return f"'{value}'"
 
-    def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
+    def _build_login_info(
+        self, user: str, account: Optional[str] = None, role: Optional[str] = None
+    ) -> tuple[str, dict]:
         """
         Build final login info based on user parameter and optional account/role
 
@@ -1341,12 +1344,13 @@ class Client(BaseMatrixOneClient):
                         return result_set
 
             # String SQL - original implementation
-            final_sql = self._substitute_parameters(sql_or_stmt, params)
+            mode_sensitive = params is not None and '\\' in sql_or_stmt
+            final_sql = None if mode_sensitive else self._substitute_parameters(sql_or_stmt, params)
 
             # MERGE/PICK require autocommit outside explicit sessions. Change
             # only this checkout, restoring its baseline before pool reuse.
             # Ordinary SQL retains the engine.begin() transaction path.
-            non_transactional = is_non_transactional_statement(final_sql)
+            non_transactional = is_non_transactional_statement(sql_or_stmt)
             with self._engine.connect() if non_transactional else self._engine.begin() as conn:
                 restore_autocommit = False
                 prev_autocommit = None
@@ -1356,6 +1360,11 @@ class Client(BaseMatrixOneClient):
                         prev_autocommit = prev_autocommit.decode()
                 execution_failed = False
                 try:
+                    if mode_sensitive:
+                        from ._sql_literals import connection_sql_mode
+
+                        mode = connection_sql_mode(conn)
+                        final_sql = self._substitute_parameters(sql_or_stmt, params, sql_mode=mode)
                     if non_transactional and str(prev_autocommit).strip().lower() not in ("1", "true", "on"):
                         # Record restoration responsibility BEFORE flipping, so a
                         # SET whose result read dies after the server applied it
@@ -1372,7 +1381,7 @@ class Client(BaseMatrixOneClient):
                         # Fallback for testing or older SQLAlchemy versions
                         from sqlalchemy import text
 
-                        result = conn.execute(text(final_sql))
+                        result = conn.execute(text(final_sql.replace(':', r'\:')))
                 except BaseException:
                     execution_failed = True
                     raise
@@ -1416,7 +1425,9 @@ class Client(BaseMatrixOneClient):
             # Log error FIRST, before any error processing
             # Wrap in try-except to ensure logging failure doesn't hide the real error
             try:
-                sql_display = sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                sql_display = (
+                    sql_or_stmt if isinstance(sql_or_stmt, str) else f"<SQLAlchemy {type(sql_or_stmt).__name__}>"
+                )
                 self.logger.log_query(sql_display, execution_time, success=False)
                 self.logger.log_error(e, context="Query execution")
             except Exception as log_err:
@@ -1557,66 +1568,11 @@ class Client(BaseMatrixOneClient):
         executor = ClientExecutor(self)
         return executor.batch_insert(table_name, data_list)
 
-    def _substitute_parameters(self, sql: str, params=None) -> str:
-        """
-        Substitute ? placeholders or named parameters with actual values since MatrixOne
-        doesn't support prepared statements
+    def _substitute_parameters(self, sql: str, params=None, *, sql_mode='') -> str:
+        """Render legacy parameters outside SQL literals, identifiers and comments."""
+        from ._sql_literals import substitute_parameters
 
-        Args::
-
-            sql: SQL query string with ? placeholders or named parameters (:name)
-            params: Tuple of parameter values or dict of named parameters
-
-        Returns::
-
-            SQL string with parameters substituted
-        """
-        if not params:
-            return sql
-
-        final_sql = sql
-
-        # Handle named parameters (dict)
-        if isinstance(params, dict):
-            for key, value in params.items():
-                placeholder = f":{key}"
-                if placeholder in final_sql:
-                    if isinstance(value, str):
-                        # Escape single quotes in string values
-                        escaped_value = value.replace("'", "''")
-                        final_sql = final_sql.replace(placeholder, f"'{escaped_value}'")
-                    elif value is None:
-                        final_sql = final_sql.replace(placeholder, "NULL")
-                    else:
-                        final_sql = final_sql.replace(placeholder, str(value))
-        # Handle positional parameters (tuple/list)
-        elif isinstance(params, (tuple, list)):
-            for param in params:
-                # Skip empty lists that might come from CTE queries
-                if isinstance(param, list) and len(param) == 0:
-                    continue
-                elif isinstance(param, str):
-                    # Escape single quotes in string values
-                    escaped_param = param.replace("'", "''")
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", f"'{escaped_param}'", 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", f"'{escaped_param}'", 1)
-                elif param is None:
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", "NULL", 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", "NULL", 1)
-                else:
-                    # Handle both ? and %s placeholders
-                    if "?" in final_sql:
-                        final_sql = final_sql.replace("?", str(param), 1)
-                    elif "%s" in final_sql:
-                        final_sql = final_sql.replace("%s", str(param), 1)
-
-        return final_sql
+        return substitute_parameters(sql, params, sql_mode=sql_mode)
 
     def get_sqlalchemy_engine(self) -> Engine:
         """
@@ -2545,7 +2501,9 @@ class Client(BaseMatrixOneClient):
                             _exec_sql(fulltext_sql)
                             self.logger.info(f"✓ Created fulltext index '{index.name}'")
                         except Exception as e:
-                            self.logger.warning(f"Failed to create fulltext index {index.name}: {redact_error(e, password)}")
+                            self.logger.warning(
+                                f"Failed to create fulltext index {index.name}: {redact_error(e, password)}"
+                            )
                     elif isinstance(index, VectorIndex):
                         # Create vector index using custom method
                         try:
@@ -2553,7 +2511,9 @@ class Client(BaseMatrixOneClient):
                             _exec_sql(vector_sql)
                             self.logger.info(f"✓ Created vector index '{index.name}'")
                         except Exception as e:
-                            self.logger.warning(f"Failed to create vector index {index.name}: {redact_error(e, password)}")
+                            self.logger.warning(
+                                f"Failed to create vector index {index.name}: {redact_error(e, password)}"
+                            )
                     else:
                         # Create regular index using manual SQL to avoid dialect issues
                         try:
@@ -3341,10 +3301,8 @@ class SnapshotClient:
 
         snapshot_sql = re.sub(pattern, replace_func, sql, count=1)
 
-        # Handle parameter substitution for MatrixOne compatibility
-        final_sql = self.client._substitute_parameters(snapshot_sql, params)
-
-        return self.client.execute(final_sql)
+        # The execution connection owns mode-sensitive parameter rendering.
+        return self.client.execute(snapshot_sql, params)
 
 
 class Session(SQLAlchemySession):
@@ -3490,12 +3448,11 @@ class Session(SQLAlchemySession):
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                final_sql = self.client._substitute_parameters(sql_or_stmt, params)
                 original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
-                result = execute_session_sql(super().execute, final_sql, **kwargs)
+                result = execute_session_sql(super().execute, sql_or_stmt, client=self.client, params=params, **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)

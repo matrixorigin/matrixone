@@ -65,14 +65,6 @@ func ConstructCreateTableSQL(
 	)
 }
 
-// ConstructCreateTableSQLForTableDumpHash preserves the default rendering used
-// by persisted DUMP TABLE schema fingerprints. This text is a hash input only;
-// executable DDL must use ConstructCreateTableSQL instead.
-func ConstructCreateTableSQLForTableDumpHash(tableDef *plan.TableDef) (string, error) {
-	sql, _, err := constructCreateTableSQL(nil, tableDef, nil, false, nil, true, nil, true, "")
-	return sql, err
-}
-
 func createTableIndexVisible(indexDef *plan.IndexDef) bool {
 	if visible, isSet := catalog.GetIndexVisibility(indexDef); isSet {
 		return visible
@@ -91,6 +83,35 @@ func constructCreateTableSQL(
 	includeChecks bool,
 	sourceSubscription *SubscriptionMeta,
 	legacyDumpDefaults bool,
+	sqlMode string,
+) (string, tree.Statement, error) {
+	return constructCreateTableSQLWithCommentFormat(
+		ctx, tableDef, snapshot, useDbName, cloneStmt, includeChecks,
+		sourceSubscription, legacyDumpDefaults, false, sqlMode,
+	)
+}
+
+// ConstructCreateTableSQLForSchemaHash preserves the historical column/table
+// comment and string-default representation used by persisted DUMP schema
+// fingerprints. Its output is hash input, not replayable SQL. Ordinary SQL
+// consumers must use ConstructCreateTableSQL, which renders both for replay.
+func ConstructCreateTableSQLForSchemaHash(tableDef *plan.TableDef) (string, error) {
+	sql, _, err := constructCreateTableSQLWithCommentFormat(
+		nil, tableDef, nil, false, nil, true, nil, true, true, "",
+	)
+	return sql, err
+}
+
+func constructCreateTableSQLWithCommentFormat(
+	ctx CompilerContext,
+	tableDef *plan.TableDef,
+	snapshot *Snapshot,
+	useDbName bool,
+	cloneStmt *tree.CloneTable,
+	includeChecks bool,
+	sourceSubscription *SubscriptionMeta,
+	legacyDumpDefaults bool,
+	legacyStoredComments bool,
 	sqlMode string,
 ) (string, tree.Statement, error) {
 	// Replaying native metadata through a legacy SQL alias would change its
@@ -251,7 +272,11 @@ func constructCreateTableSQL(
 		}
 
 		if col.Comment != "" {
-			buf.WriteString(" COMMENT '" + col.Comment + "'")
+			comment := col.Comment
+			if !legacyStoredComments {
+				comment = formatStoredComment(comment, sqlMode)
+			}
+			buf.WriteString(" COMMENT '" + comment + "'")
 		}
 		if mapping, ok := mongoColumns[strings.ToLower(col.Name)]; ok {
 			buf.WriteString(" MONGODB_PATH '")
@@ -695,7 +720,11 @@ func constructCreateTableSQL(
 		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
 			for _, kv := range proDef.Properties.Properties {
 				if kv.Key == catalog.SystemRelAttr_Comment {
-					comment = " COMMENT='" + kv.Value + "'"
+					value := kv.Value
+					if !legacyStoredComments {
+						value = formatStoredComment(value, sqlMode)
+					}
+					comment = " COMMENT='" + value + "'"
 				} else if kv.Key != catalog.SystemRelAttr_Kind &&
 					kv.Key != catalog.SystemRelAttr_CreateSQL &&
 					kv.Key != catalog.PropSchemaExtra {
@@ -1688,6 +1717,17 @@ func formatStrLitForSQLMode(s, sqlMode string) string {
 		return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 	}
 	return formatStrLit(s)
+}
+
+// formatStoredComment returns the body of a quoted COMMENT literal for a
+// column or table comment. The parser stores these comments with single
+// quotes already doubled (util.DealCommentString) but backslashes raw, so
+// only backslashes still need escaping for the default SQL mode.
+func formatStoredComment(comment, sqlMode string) string {
+	if mysql.ParseSQLModeFlags(sqlMode).Has(mysql.SQLModeNoBackslashEscapes) {
+		return comment
+	}
+	return strings.ReplaceAll(comment, `\`, `\\`)
 }
 
 func formatStr(str string) string {

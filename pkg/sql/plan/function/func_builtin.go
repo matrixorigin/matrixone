@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -562,9 +563,9 @@ func geometryShowColumnType(typ *types.Type) string {
 	return ts
 }
 
-// columnDefaultValue renders a stored default for information_schema.COLUMNS:
-// DEFAULT NULL is SQL NULL and a string literal is its value, like MySQL.
-// Other defaults keep their origin text.
+// columnDefaultValue renders a stored default for information_schema.COLUMNS
+// and SHOW COLUMNS / DESC: DEFAULT NULL is SQL NULL and a string literal is
+// its value, like MySQL. Other defaults keep their origin text.
 func columnDefaultValue(origin string) []byte {
 	if origin == "" || strings.EqualFold(origin, "null") {
 		return nil
@@ -659,39 +660,16 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			return functionUtil.QuickStrToBytes(ret), nil
 		}
 	case defExprInShowColumns:
-		formatStr := func(str string) string {
-			tmp := strings.Replace(str, "`", "``", -1)
-			strLen := len(tmp)
-			if strLen < 2 {
-				return tmp
-			}
-			if tmp == "''" {
-				return ""
-			}
-			if tmp[0] == '\'' && tmp[strLen-1] == '\'' {
-				return strings.Replace(tmp[1:strLen-1], "'", "''", -1)
-			}
-			return strings.Replace(tmp, "'", "''", -1)
-		}
+		// Same display as information_schema.COLUMNS.COLUMN_DEFAULT: decode a
+		// string literal via the MySQL scanner. OriginString is already SQL text,
+		// so re-escaping (the old formatStr) doubled quotes/backticks.
 		f = func(s []byte) ([]byte, error) {
 			def := new(plan.Default)
 			err := types.Decode(s, def)
 			if err != nil {
 				return nil, err
 			}
-			if strings.EqualFold(def.OriginString, "null") || len(def.OriginString) == 0 {
-				return nil, nil
-			}
-			trimmed := strings.TrimSpace(def.OriginString)
-			if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
-				return functionUtil.QuickStrToBytes(trimmed), nil
-			}
-
-			fStr := formatStr(def.OriginString)
-			if len(fStr) == 0 {
-				return []byte{}, nil
-			}
-			return functionUtil.QuickStrToBytes(fStr), nil
+			return columnDefaultValue(def.OriginString), nil
 		}
 	case generatedExprOrigin:
 		f = func(s []byte) ([]byte, error) {
@@ -5163,8 +5141,71 @@ func builtInToUpper(parameters []*vector.Vector, result vector.FunctionResultWra
 }
 
 func builtInToLower(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytesByStringDomain(
-		parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	if length <= 1 {
+		return opUnaryBytesToBytesByStringDomain(
+			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	}
+	input := parameters[0]
+	binary, perRow := stringDomainMode(input)
+	if input.IsConst() || result.GetResultVector().IsConst() || input.HasNull() ||
+		binary || perRow || !selectList.ShouldEvalAllRow() || selectList.IgnoreAllRow() {
+		return opUnaryBytesToBytesByStringDomain(
+			parameters, result, proc, length, bytes.ToLower, func(value []byte) []byte { return value }, selectList)
+	}
+
+	// Reuse only within this evaluation; power-of-two growth stays below 128KiB total.
+	const maxScratch = 64 << 10
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	param := vector.OptGetBytesParamFromWrapper(rs, 0, input)
+	var inline [types.VarlenaInlineSize]byte
+	scratch := inline[:]
+	for row := uint64(0); row < uint64(length); row++ {
+		value, _ := param.GetStrValue(row)
+		if len(value) > maxScratch {
+			if err := rs.AppendBytes(bytes.ToLower(value), false); err != nil {
+				return err
+			}
+			continue
+		}
+		isASCII, hasUpper := true, false
+		for _, c := range value {
+			if c >= utf8.RuneSelf {
+				isASCII = false
+				break
+			}
+			hasUpper = hasUpper || ('A' <= c && c <= 'Z')
+		}
+
+		var err error
+		switch {
+		case !isASCII:
+			err = rs.AppendBytes(bytes.Map(unicode.ToLower, value), false)
+		case !hasUpper:
+			err = rs.AppendBytes(value, false)
+		default:
+			if len(value) > cap(scratch) {
+				size := 32
+				for size < len(value) {
+					size *= 2
+				}
+				scratch = make([]byte, size)
+			}
+			dst := scratch[:len(value)]
+			for i := range dst {
+				c := value[i]
+				if 'A' <= c && c <= 'Z' {
+					c += 'a' - 'A'
+				}
+				dst[i] = c
+			}
+			err = rs.AppendBytes(dst, false)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return setSelectedStringResultDomain(input, result, proc)
 }
 
 // buildInMOCU extract cu or calculate cu from parameters

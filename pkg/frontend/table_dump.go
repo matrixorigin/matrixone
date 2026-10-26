@@ -359,7 +359,9 @@ func tableSchemaHashWithOptions(
 		clone.Name = "__table_dump_target__"
 		clone.DbName = ""
 		clone.Createsql = ""
-		canonical, err := sqlplan.ConstructCreateTableSQLForTableDumpHash(&clone)
+		// This is persisted fingerprint input, not the replayable manifest DDL.
+		// Keep the historical comment and default bytes so existing archives remain loadable.
+		canonical, err := sqlplan.ConstructCreateTableSQLForSchemaHash(&clone)
 		if err != nil {
 			return "", moerr.NewInternalErrorNoCtxf("cannot reconstruct table schema: %v", err)
 		}

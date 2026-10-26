@@ -16,9 +16,7 @@
 Base client functionality for MatrixOne clients
 """
 
-from numbers import Number
-
-from numpy import bool_ as numpy_bool
+# No imports needed for this module
 
 
 class BaseMatrixOneClient:
@@ -69,89 +67,30 @@ class BaseMatrixOneClient:
 
             SQL INSERT statement string
         """
-        import json
+        from ._sql_literals import sql_identifier, sql_literal
 
-        columns = list(data.keys())
-        values = list(data.values())
-
-        # Convert values to appropriate SQL format
-        formatted_values = []
-        for value in values:
-            if value is None:
-                formatted_values.append("NULL")
-            elif isinstance(value, dict):
-                # JSON type: serialize dict to JSON string
-                json_str = json.dumps(value)
-                formatted_values.append(f"'{json_str}'")
-            elif isinstance(value, list):
-                # Vector type: format as [1,2,3]
-                formatted_values.append("'" + "[" + ",".join(map(str, value)) + "]" + "'")
-            else:
-                formatted_values.append(f"'{str(value)}'")
-
-        columns_str = ", ".join(columns)
-        values_str = ", ".join(formatted_values)
-
-        return f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_str})"
+        columns = list(data)
+        return "INSERT INTO %s (%s) VALUES (%s)" % (
+            sql_identifier(table_name, qualified=True),
+            ", ".join(sql_identifier(column) for column in columns),
+            ", ".join(sql_literal(data[column]) for column in columns),
+        )
 
     def _build_batch_insert_sql(self, table_name: str, data_list: list) -> str:
-        """
-        Build batch INSERT SQL statement from list of data dictionaries.
-
-        Args:
-
-            table_name: Name of the table
-            data_list: List of data dictionaries to insert
-
-        Returns:
-
-            SQL batch INSERT statement string
-
-        Numeric and boolean values retain their SQL type. Pass a string when
-        textual storage is intended.
-        """
-        import json
+        """Build checked literal values for the legacy batch SQL interface."""
+        from ._sql_literals import sql_identifier, sql_literal
 
         if not data_list:
             return ""
-
-        # Get columns from first record
-        columns = list(data_list[0].keys())
-        columns_str = ", ".join(columns)
-
-        # Build VALUES clause
-        values_list = []
-        for data in data_list:
-            formatted_values = []
-            for col in columns:
-                value = data[col]
-                if value is None:
-                    formatted_values.append("NULL")
-                elif isinstance(value, str):
-                    escaped_value = str(value).replace("'", "''")
-                    formatted_values.append(f"'{escaped_value}'")
-                elif isinstance(value, (int, float)):
-                    formatted_values.append(str(value))
-                elif isinstance(value, dict):
-                    # JSON type: serialize dict to JSON string
-                    json_str = json.dumps(value)
-                    # Escape single quotes in JSON string to prevent SQL injection
-                    escaped_json = json_str.replace("'", "''")
-                    formatted_values.append(f"'{escaped_json}'")
-                elif isinstance(value, list):
-                    # Vector type: format as [1,2,3]
-                    formatted_values.append("'" + "[" + ",".join(map(str, value)) + "]" + "'")
-                elif isinstance(value, (Number, numpy_bool)):
-                    formatted_values.append(str(value))
-                else:
-                    # Escape single quotes in string values to prevent SQL injection
-                    escaped_value = str(value).replace("'", "''")
-                    formatted_values.append(f"'{escaped_value}'")
-            values_str = "(" + ", ".join(formatted_values) + ")"
-            values_list.append(values_str)
-
-        values_clause = ", ".join(values_list)
-        return f"INSERT INTO {table_name} ({columns_str}) VALUES {values_clause}"
+        columns = list(data_list[0])
+        if any(set(row) != set(columns) for row in data_list):
+            raise ValueError("Batch records must have identical column sets")
+        values = ["(" + ", ".join(sql_literal(row[column]) for column in columns) + ")" for row in data_list]
+        return "INSERT INTO %s (%s) VALUES %s" % (
+            sql_identifier(table_name, qualified=True),
+            ", ".join(sql_identifier(column) for column in columns),
+            ", ".join(values),
+        )
 
 
 class BaseMatrixOneExecutor:
