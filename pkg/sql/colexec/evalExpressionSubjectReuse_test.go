@@ -415,6 +415,181 @@ func TestORLikeSubjectReuseSubjectBounds(t *testing.T) {
 	}
 }
 
+func TestORLikeSubjectReuseCoalesceStringDomains(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		oid    types.T
+		legacy bool
+	}{
+		{"varchar", types.T_varchar, false},
+		{"canonical_char", types.T_char, false},
+		{"legacy_char", types.T_char, true},
+		{"text", types.T_text, false},
+		{"blob", types.T_blob, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			oid := test.oid
+			proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+			checkExpressionStorageAfterCleanup(t, proc)
+			column := orLikeTestColumn(0)
+			column.Typ = oid.ToType().PlanType()
+			coalesce := bindTestFunction(t, proc, "coalesce", column, proto.Clone(column).(*plan.Expr))
+			if test.legacy {
+				// Exercise the still-registered CHAR kernel, rather than pretending
+				// that the current public binder selects this retained identity.
+				coalesce.GetF().Func.Obj = function.EncodeOverloadID(function.COALESCE, 1)
+				coalesce.Typ = types.T_char.ToType().PlanType()
+			}
+			_, ordinal := function.DecodeOverloadID(coalesce.GetF().Func.Obj)
+			t.Logf("registered %s COALESCE ordinal: %d", oid, ordinal)
+			expression := orLikeTestExpression(t, proc, bindTestFunction(t, proc, "lower", coalesce), 3)
+			raw, err := NewExpressionExecutor(proc, expression)
+			require.NoError(t, err)
+			executor := raw
+			t.Cleanup(func() { executor.Free() })
+			calls := 0
+			for _, leaf := range raw.(*FunctionExpressionExecutor).parameterExecutor {
+				lower := leaf.(*FunctionExpressionExecutor).parameterExecutor[0].(*FunctionExpressionExecutor)
+				eval := lower.evalFn
+				lower.evalFn = func(parameters []*vector.Vector, result vector.FunctionResultWrapper, p *process.Process, length int, selection *function.FunctionSelectList) error {
+					calls++
+					return eval(parameters, result, p, length, selection)
+				}
+			}
+			executor = ReuseFilterExpressionExecutor(expression, raw, orLikeMinFirstBatchRows)
+			_, shared := executor.(*memoRootExpressionExecutor)
+			require.Equal(t, oid != types.T_blob, shared, "only registered text-family COALESCE overloads qualify")
+			input := batch.NewWithSize(1)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			input.Vecs[0] = vector.NewVec(oid.ToType())
+			values := []string{"ERROR", "ordinary", "TİMEOUT", "RETRY", ""}
+			if oid == types.T_blob {
+				// LOWER preserves bytes in the binary domain. Keep the fallback
+				// control's match oracle independent of Unicode text folding.
+				values = []string{"error", "ordinary", "timeout", "retry", ""}
+			}
+			for row, value := range values {
+				require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(value), row == 4, proc.Mp()))
+			}
+			input.SetRowCount(len(values))
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			wantCalls := 1
+			if !shared {
+				wantCalls = 3
+			}
+			require.Equal(t, wantCalls, calls)
+			for row, want := range []bool{true, false, true, true} {
+				require.False(t, result.IsNull(uint64(row)))
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[bool](result, row))
+			}
+			require.True(t, result.IsNull(4))
+		})
+	}
+}
+
+func TestORLikeSubjectReuseRejectsMislabeledCoalesce(t *testing.T) {
+	for _, oid := range []types.T{types.T_blob, types.T_decimal64} {
+		t.Run(oid.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+			checkExpressionStorageAfterCleanup(t, proc)
+			column := orLikeTestColumn(0)
+			coalesce := bindTestFunction(t, proc, "coalesce", column, proto.Clone(column).(*plan.Expr))
+			registered, err := function.GetFunctionByName(proc.Ctx, "coalesce", []types.Type{oid.ToType(), oid.ToType()})
+			require.NoError(t, err)
+			coalesce.GetF().Func.Obj = registered.GetEncodedOverloadID()
+			expression := orLikeTestExpression(t, proc, bindTestFunction(t, proc, "lower", coalesce), 3)
+			raw, err := NewExpressionExecutor(proc, expression)
+			require.NoError(t, err)
+			t.Cleanup(raw.Free)
+			// The synthetic identity/type mismatch proves defensive admission only;
+			// never execute a numeric kernel with these string vectors.
+			require.Same(t, raw, ReuseFilterExpressionExecutor(expression, raw, orLikeMinFirstBatchRows))
+		})
+	}
+}
+
+func TestORLikeSubjectReusePreservesLazyFolding(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		make   func(testing.TB, *process.Process, *plan.Expr) *plan.Expr
+		shared bool
+		folded bool
+	}{
+		{"constant_prefix", func(t testing.TB, p *process.Process, col *plan.Expr) *plan.Expr {
+			return bindTestFunction(t, p, "coalesce", orLikeTestLiteral("error"), col)
+		}, false, true},
+		{"null_then_constant", func(t testing.TB, p *process.Process, col *plan.Expr) *plan.Expr {
+			null := orLikeTestLiteral("")
+			null.GetLit().Isnull = true
+			return bindTestFunction(t, p, "coalesce", null, orLikeTestLiteral("error"), col)
+		}, false, true},
+		{"constant_function_prefix", func(t testing.TB, p *process.Process, col *plan.Expr) *plan.Expr {
+			return bindTestFunction(t, p, "coalesce", bindTestFunction(t, p, "lower", orLikeTestLiteral("ERROR")), col)
+		}, false, true},
+		{"outer_lower", func(t testing.TB, p *process.Process, col *plan.Expr) *plan.Expr {
+			return bindTestFunction(t, p, "lower", bindTestFunction(t, p, "coalesce", orLikeTestLiteral("ERROR"), col))
+		}, false, true},
+		{"outer_concat", func(t testing.TB, p *process.Process, col *plan.Expr) *plan.Expr {
+			return bindTestFunction(t, p, "concat", bindTestFunction(t, p, "coalesce", orLikeTestLiteral("error"), col), orLikeTestLiteral(" "))
+		}, false, true},
+		{"nested_constant_prefix", func(t testing.TB, p *process.Process, col *plan.Expr) *plan.Expr {
+			inner := bindTestFunction(t, p, "coalesce", orLikeTestLiteral("error"), col)
+			return bindTestFunction(t, p, "coalesce", inner, proto.Clone(col).(*plan.Expr))
+		}, false, true},
+		{"live_first", func(t testing.TB, p *process.Process, col *plan.Expr) *plan.Expr {
+			return bindTestFunction(t, p, "coalesce", col, orLikeTestLiteral("ordinary"))
+		}, true, false},
+		{"null_then_live", func(t testing.TB, p *process.Process, col *plan.Expr) *plan.Expr {
+			null := orLikeTestLiteral("")
+			null.GetLit().Isnull = true
+			return bindTestFunction(t, p, "coalesce", null, col, orLikeTestLiteral("ordinary"))
+		}, true, false},
+		{"constant_function_null_prefix", func(t testing.TB, p *process.Process, col *plan.Expr) *plan.Expr {
+			null := orLikeTestLiteral("")
+			null.GetLit().Isnull = true
+			return bindTestFunction(t, p, "coalesce", bindTestFunction(t, p, "lower", null), col)
+		}, false, false},
+		{"constant_branch_and_live_sibling", func(t testing.TB, p *process.Process, col *plan.Expr) *plan.Expr {
+			return bindTestFunction(t, p, "concat", bindTestFunction(t, p, "coalesce", orLikeTestLiteral(""), col), proto.Clone(col).(*plan.Expr))
+		}, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+			checkExpressionStorageAfterCleanup(t, proc)
+			expression := orLikeTestExpression(t, proc, test.make(t, proc, orLikeTestColumn(0)), 3)
+			generic, err := NewExpressionExecutor(proc, expression)
+			require.NoError(t, err)
+			t.Cleanup(generic.Free)
+			raw, err := NewExpressionExecutor(proc, expression)
+			require.NoError(t, err)
+			executor := raw
+			t.Cleanup(func() { executor.Free() })
+			executor = ReuseFilterExpressionExecutor(expression, raw, orLikeMinFirstBatchRows)
+			input := orLikeTestBatch(t, proc, []string{"error", "ordinary", "timeout", "retry"}, nil)
+			for invocation := 0; invocation < 2; invocation++ {
+				control, err := generic.Eval(proc, []*batch.Batch{input}, nil)
+				require.NoError(t, err)
+				require.Equal(t, test.folded, control.IsConst(), "generic folding is the independent constness oracle")
+				result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+				require.NoError(t, err)
+				require.Equal(t, control.IsConst(), result.IsConst(), "sharing must preserve the existing const-bool path")
+				for row := 0; row < input.RowCount(); row++ {
+					require.False(t, result.IsNull(uint64(row)))
+					want := test.folded || row != 1
+					require.Equal(t, want, vector.GetFixedAtNoTypeCheck[bool](control, row))
+					require.Equal(t, want, vector.GetFixedAtNoTypeCheck[bool](result, row))
+				}
+			}
+			_, shared := executor.(*memoRootExpressionExecutor)
+			require.Equal(t, test.shared, shared)
+			if !shared {
+				require.Same(t, raw, executor)
+			}
+		})
+	}
+}
+
 func orLikeTestWideSubject(t testing.TB, proc *process.Process, nodes int) *plan.Expr {
 	arguments := []*plan.Expr{orLikeTestColumn(0)}
 	for len(arguments) < nodes-1 {

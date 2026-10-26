@@ -165,8 +165,8 @@ func (d *orLikeSubjectDiscovery) collect(expression *plan.Expr, executor Express
 	if !d.takeNode() || !orLikeStringLiteral(arguments[1], fn.parameterExecutor[1], false, literalBytes) {
 		return false
 	}
-	nodes, column := 0, false
-	if !d.subject(arguments[0], fn.parameterExecutor[0], 1, &nodes, literalBytes, &column, group.first) || !column || arguments[0].GetF() == nil {
+	nodes, rowDependent := 0, false
+	if !d.subject(arguments[0], fn.parameterExecutor[0], 1, &nodes, literalBytes, &rowDependent, group.first) || !rowDependent || arguments[0].GetF() == nil {
 		return false
 	}
 	// Size is safe only after the executable tree and hidden literal sources
@@ -264,7 +264,7 @@ func orLikeNullSubstitutionMetadata(expression *plan.Expr) bool {
 		proto.Equal(metadata, &plan.PreparedNumericMetadata{IfnullCommonValue: true})
 }
 
-func (d *orLikeSubjectDiscovery) subject(expression *plan.Expr, executor ExpressionExecutor, depth int, nodes, literalBytes *int, column *bool, expected *plan.Expr) bool {
+func (d *orLikeSubjectDiscovery) subject(expression *plan.Expr, executor ExpressionExecutor, depth int, nodes, literalBytes *int, rowDependent *bool, expected *plan.Expr) bool {
 	if !d.takeNode() || depth > orLikeMaxSubjectDepth || *nodes == orLikeMaxSubjectNodes ||
 		!orLikeStringType(expression) || expression.AuxId < 0 || !orLikeNullSubstitutionMetadata(expression) {
 		return false
@@ -272,7 +272,7 @@ func (d *orLikeSubjectDiscovery) subject(expression *plan.Expr, executor Express
 	*nodes++
 	if reference := expression.GetCol(); reference != nil {
 		_, ok := executor.(*ColumnExpressionExecutor)
-		*column = true
+		*rowDependent = true
 		if !ok || reference.RelPos < 0 || reference.ColPos < 0 {
 			return false
 		}
@@ -311,7 +311,17 @@ func (d *orLikeSubjectDiscovery) subject(expression *plan.Expr, executor Express
 			return false
 		}
 	case function.COALESCE:
-		if (overload != 0 && overload != 1 && overload != 22) || len(arguments) < 2 || len(arguments) > orLikeMaxTerms {
+		if len(arguments) < 2 || len(arguments) > orLikeMaxTerms {
+			return false
+		}
+		// Encoded overload IDs use registry positions, not the overloadId field.
+		// Read the actual signature, including retained noncanonical overloads.
+		registered, ok := function.GetFunctionByIdWithoutError(fn.overloadID)
+		if !ok {
+			return false
+		}
+		argumentType, ok := registered.GetArgumentType(0)
+		if !ok || (argumentType != types.T_char && argumentType != types.T_varchar && argumentType != types.T_text) {
 			return false
 		}
 	case function.CASE, function.IFF:
@@ -329,11 +339,11 @@ func (d *orLikeSubjectDiscovery) subject(expression *plan.Expr, executor Express
 		*nodes++
 		conditionColumn := arguments[0].GetF().Args[0]
 		previousColumn := orLikeExpectedArgument(orLikeExpectedArgument(expected, 0), 0)
-		if conditionColumn.GetCol() == nil || !d.subject(conditionColumn, condition.parameterExecutor[0], depth+2, nodes, literalBytes, column, previousColumn) {
+		if conditionColumn.GetCol() == nil || !d.subject(conditionColumn, condition.parameterExecutor[0], depth+2, nodes, literalBytes, rowDependent, previousColumn) {
 			return false
 		}
 		for i := 1; i < 3; i++ {
-			if !d.subject(arguments[i], fn.parameterExecutor[i], depth+1, nodes, literalBytes, column, orLikeExpectedArgument(expected, i)) {
+			if !d.subject(arguments[i], fn.parameterExecutor[i], depth+1, nodes, literalBytes, rowDependent, orLikeExpectedArgument(expected, i)) {
 				return false
 			}
 		}
@@ -342,9 +352,19 @@ func (d *orLikeSubjectDiscovery) subject(expression *plan.Expr, executor Express
 	default:
 		return false
 	}
+	coalesceValueSeen := false
 	for i, argument := range arguments {
-		if !d.subject(argument, fn.parameterExecutor[i], depth+1, nodes, literalBytes, column, orLikeExpectedArgument(expected, i)) {
+		argumentRowDependent := false
+		if !d.subject(argument, fn.parameterExecutor[i], depth+1, nodes, literalBytes, &argumentRowDependent, orLikeExpectedArgument(expected, i)) {
 			return false
+		}
+		// Generic LOWER/CONCAT folding requires every argument to fold. COALESCE
+		// can stop before a later column, so only its first value proves that the
+		// existing folder must reach a row-dependent argument. Skip explicit NULL
+		// literals only; admission never evaluates a constant function for NULL.
+		if fn.fid != function.COALESCE || !coalesceValueSeen {
+			*rowDependent = *rowDependent || argumentRowDependent
+			coalesceValueSeen = argument.GetLit() == nil || !argument.GetLit().Isnull
 		}
 	}
 	return true
