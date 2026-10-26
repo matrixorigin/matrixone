@@ -232,6 +232,7 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 		return nil, moerr.NewInvalidInputNoCtx("catalog expression text exceeds limit")
 	}
 	ddlScope := tableDumpDDLColumnScope(def)
+	integerDecimal := tableDumpHasIntegerDecimalCoercion(item.expr)
 	for _, parserMode := range tableDumpParserModesForOrigin(item.origin) {
 		if err := ctx.GetContext().Err(); err != nil {
 			return nil, err
@@ -298,6 +299,11 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 				if ddlScope != nil && visit.hasColumn {
 					for _, mode := range append([]tableDumpBindingMode(nil), modes...) {
 						modes = append(modes, mode|tableDumpBindingDDLColumnScope)
+					}
+				}
+				if integerDecimal {
+					for _, mode := range append([]tableDumpBindingMode(nil), modes...) {
+						modes = append(modes, mode|tableDumpBindingPreIntegerDecimal)
 					}
 				}
 				for _, mode := range modes {
@@ -405,6 +411,9 @@ func finishLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 	}
 	expected := DeepCopyExpr(old)
 	rebindCtx := function.WithDivPrecisionIncrement(proofCtx.GetContext(), int32(increment))
+	if mode&tableDumpBindingPreIntegerDecimal != 0 {
+		rebindCtx = function.WithLegacyIntegerDecimalCoercions(rebindCtx)
+	}
 	if legacySpecial {
 		rebindCtx = function.WithLegacySpecialConsumers(rebindCtx)
 	}
@@ -444,7 +453,7 @@ func finishLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 	if budget.visits > tableDumpMaxCandidateVisits {
 		return nil, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
 	}
-	mode &= tableDumpBindingPreJSONFolding
+	mode &= tableDumpBindingPreJSONFolding | tableDumpBindingPreIntegerDecimal
 	if legacySpecial {
 		mode |= tableDumpBindingLegacySpecial
 	}

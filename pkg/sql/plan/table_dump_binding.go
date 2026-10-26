@@ -327,6 +327,30 @@ func tableDumpHasIntegerDecimalCoercion(expr *planpb.Expr) bool {
 	return false
 }
 
+// Decimal repair can replace the old integer -> decimal cast with an exact
+// integer operand. Only a separately bound float DEFAULT will use this hint to
+// reconstruct that historical era; the hint never proves a payload valid.
+func tableDumpHasIntegerNumericOperand(expr *planpb.Expr) bool {
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		if catalogDecimalOperator(fn.Func.ObjName, len(fn.Args)) {
+			for _, arg := range fn.Args {
+				if arg != nil && (makeTypeByPlan2Type(arg.Typ).IsIntOrUint() || types.T(arg.Typ.Id) == types.T_bit) {
+					return true
+				}
+			}
+		}
+		for _, arg := range fn.Args {
+			if tableDumpHasIntegerNumericOperand(arg) {
+				return true
+			}
+		}
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return tableDumpHasIntegerNumericOperand(lit.Src)
+	}
+	return false
+}
+
 // Float compatibility uses the same complete-era binder as DUMP/LOAD.
 func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, legacy bool, legacyFloat ...bool) (*planpb.Expr, error) {
 	mode := tableDumpBindingCurrent
@@ -888,8 +912,10 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			return false, moerr.NewInvalidInputNoCtx("table dump expression declaration does not match target")
 		}
 		integerDecimal := tableDumpHasIntegerDecimalCoercion(item.expr)
+		normalizedDecimal := item.kind == "default" && tableDumpHasIntegerNumericOperand(item.expr)
 		if supplied != nil {
 			integerDecimal = integerDecimal || tableDumpHasIntegerDecimalCoercion(sourceItems[i].expr)
+			normalizedDecimal = normalizedDecimal || item.kind == "default" && tableDumpHasIntegerNumericOperand(sourceItems[i].expr)
 		}
 		if len(item.origin) == 0 {
 			return false, moerr.NewInvalidInputNoCtx("persisted table expression has no SQL origin")
@@ -1019,6 +1045,32 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			if supplied != nil {
 				want = sourceItems[i].expr
 			}
+			matchCandidate := func(mode tableDumpBindingMode, candidate *planpb.Expr) (bool, error) {
+				if sameTableDumpBoundExpression(want, candidate) ||
+					mode&tableDumpBindingLegacyFloat != 0 && sameHistoricalFloatBoundExpression(want, candidate) {
+					return true, nil
+				}
+				if !integerDecimal || mode&tableDumpBindingFrozenFloatDefaults == 0 || candidate == nil {
+					return false, nil
+				}
+				// ALTER can persist the execution-owned float -> decimal repair.
+				// Reconstruct that complete state from a trusted SQL-bound tree;
+				// never normalize the supplied payload into validity. Charge each
+				// subtree before the normalizer's possible ancestor deep copies.
+				if err := planpb.VisitExprTree(candidate, func(expr *planpb.Expr) error {
+					return chargeFloatStringRebind(expr, budget)
+				}); err != nil {
+					return false, err
+				}
+				if budget.visits > candidateVisitLimit {
+					return false, moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
+				}
+				normalized, changed, err := normalizeCatalogDecimalExpr(ctx.GetContext(), candidate)
+				if err != nil {
+					return false, ctx.GetContext().Err()
+				}
+				return changed && sameTableDumpBoundExpression(want, normalized), nil
+			}
 			eras := append([]tableDumpBindingMode(nil), modes...)
 			if hasLegacyFloatStringCast(want) {
 				for _, era := range eras {
@@ -1043,6 +1095,18 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					}
 					dependency = tableDumpDefaultSession{}
 					candidate, err := bind(increment, mode, zone, locale)
+					if normalizedDecimal && dependency.floatFormatting && !integerDecimal {
+						// A persisted ALTER may already have removed the old casts.
+						// Expand once, only after the independent SQL binding confirms
+						// the float DEFAULT dependency, before taking folding eras.
+						integerDecimal = true
+						for _, era := range append([]tableDumpBindingMode(nil), eras...) {
+							eras = append(eras, era|tableDumpBindingPreIntegerDecimal)
+						}
+						for _, era := range append([]tableDumpBindingMode(nil), modes...) {
+							modes = append(modes, era|tableDumpBindingPreIntegerDecimal)
+						}
+					}
 					if mode == tableDumpBindingCurrent && dependency.observed {
 						needsIncompleteEra = dependency.incompleteTemporal
 					}
@@ -1083,9 +1147,13 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					} else if !sameTableDumpBoundExpression(first, candidate) {
 						sensitive = true
 					}
-					matched = matched || sameTableDumpBoundExpression(want, candidate)
-					if !matched && mode&tableDumpBindingLegacyFloat != 0 {
-						matched = sameHistoricalFloatBoundExpression(want, candidate)
+					if !matched {
+						var matchErr error
+						matched, matchErr = matchCandidate(mode, candidate)
+						if matchErr != nil {
+							stmt.Free()
+							return false, matchErr
+						}
 					}
 
 					if item.kind == "default" {
@@ -1108,13 +1176,21 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			if !matched {
 				matched, err = matchTableDumpSessions(want, zone, locale, timeZones, sessions,
 					func(search tableDumpSessionCandidate, tz *time.Location, lc string) (*planpb.Expr, error) {
+						if fatal != nil {
+							return nil, fatal
+						}
 						dependency = search.dependency
 						result, _ := bind(search.increment, search.mode, tz, lc)
 						return result, fatal
 					},
 					func(search tableDumpSessionCandidate, rebound *planpb.Expr) bool {
-						return sameTableDumpBoundExpression(want, rebound) || search.mode&tableDumpBindingLegacyFloat != 0 && sameHistoricalFloatBoundExpression(want, rebound)
+						var result bool
+						result, fatal = matchCandidate(search.mode, rebound)
+						return result
 					})
+				if err == nil {
+					err = fatal
+				}
 				if err != nil {
 					stmt.Free()
 					return false, err
