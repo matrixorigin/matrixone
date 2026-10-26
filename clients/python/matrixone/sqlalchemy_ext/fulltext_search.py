@@ -78,6 +78,8 @@ Both are optional (don't filter documents) but affect ranking differently.
 
 from __future__ import annotations
 
+import re
+
 from .._sql_literals import fulltext_term_token
 from typing import TYPE_CHECKING, Any, List, Optional
 
@@ -540,14 +542,32 @@ class FulltextQueryBuilder:
         return self
 
     def group(self, *builders: "FulltextQueryBuilder") -> "FulltextQueryBuilder":
-        """Add nested query builders as groups (OR semantics)."""
+        """Require any supported positive branch; reject unrepresentable boolean branches."""
+        if not builders:
+            raise ValueError("group() requires at least one positive branch")
+        combined = FulltextGroup("and")
         for builder in builders:
-            # Convert builder to group and add to main group
-            group = FulltextGroup("or")
-            # Add all elements from the builder's main group
-            group.elements.extend(builder.main_group.elements)
-            group.groups.extend(builder.main_group.groups)
-            self.main_group.groups.append(group)
+            if not isinstance(builder, FulltextQueryBuilder):
+                raise TypeError("group() expects FulltextQueryBuilder branches")
+            branch = builder.main_group
+            elements = branch.elements
+            required = [element for element in elements if element.operator == "+"]
+            if (
+                not elements
+                or branch.groups
+                or (required and len(elements) != 1)
+                or any(
+                    element.operator not in ("", "+")
+                    or element.weight_modifier
+                    or not isinstance(element.content, str)
+                    or re.fullmatch(r"\w+\*?", element.content) is None
+                    for element in elements
+                )
+            ):
+                raise ValueError("group() supports positive atoms or flat optional OR branches only")
+            combined.elements.extend(FulltextElement(element.content) for element in elements)
+        # Validate every branch before mutation, and keep no references to mutable children.
+        self.main_group.groups.append(combined)
         return self
 
     def build(self) -> str:
@@ -831,6 +851,13 @@ class FulltextFilter(ColumnElement):
 
     def group(self, *filters: "FulltextFilter") -> "FulltextFilter":
         """Add nested query groups (OR semantics)."""
+        if self.mode != FulltextSearchMode.BOOLEAN:
+            raise ValueError("group() requires BOOLEAN mode")
+        for child in filters:
+            if not isinstance(child, FulltextFilter):
+                raise TypeError("group() expects FulltextFilter branches")
+            if child.mode != self.mode or child.columns != self.columns:
+                raise ValueError("group() branches must use the same columns and BOOLEAN mode")
         builders = [f.query_builder for f in filters]
         self.query_builder.group(*builders)
         return self

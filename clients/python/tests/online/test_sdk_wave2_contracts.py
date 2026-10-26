@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
+from pymysql.err import OperationalError as DriverOperationalError
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import declarative_base
 
 from matrixone import Client, AsyncClient
@@ -442,3 +444,214 @@ async def test_metadata_after_add_column_and_clone(client, async_client, server,
     finally:
         client.execute('DROP TABLE IF EXISTS ' + clone)
         client.execute('DROP TABLE ' + table)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+async def test_fulltext_group_has_exact_or_membership(client, async_client, kind):
+    from matrixone.sqlalchemy_ext.fulltext_search import boolean_match
+
+    c = client if kind == 'sync' else async_client
+    table = name('group_or_')
+    client.execute('SET experimental_fulltext_index=1')
+    client.execute(f'CREATE TABLE {table}(id INT PRIMARY KEY,body TEXT)')
+    client.execute(
+        f"INSERT INTO {table} VALUES(1,'alpha match'),(2,'beta match'),(3,'alpha beta match'),"
+        "(4,'other match'),(5,NULL),(6,'alpha outside')"
+    )
+    client.execute(f'CREATE FULLTEXT INDEX ft ON {table}(body)')
+    try:
+        for method in ['must', 'encourage']:
+            for with_parent in [False, True]:
+                q = boolean_match('body')
+                if with_parent:
+                    q.must('match')
+                q.group(getattr(boolean_match('body'), method)('alpha'), getattr(boolean_match('body'), method)('beta'))
+                expected = [(1,), (2,), (3,)] if with_parent else [(1,), (2,), (3,), (6,)]
+                token = '+match +(alpha beta)' if with_parent else '+(alpha beta)'
+                native = await resolve(
+                    c.execute(
+                        f"SELECT id FROM {table} WHERE MATCH(body) AGAINST(? IN BOOLEAN MODE) ORDER BY id", (token,)
+                    )
+                )
+                direct = await resolve(c.execute(f'SELECT id FROM {table} WHERE {q.compile()} ORDER BY id'))
+                orm = await resolve(c.query(table).select('id').filter(q).order_by('id').all())
+                assert native.rows == direct.rows == expected
+                assert [row.id for row in orm] == [row[0] for row in expected]
+        assert (await resolve(c.execute('SELECT 42'))).scalar() == 42
+    finally:
+        client.execute('DROP TABLE ' + table)
+
+
+@pytest.mark.parametrize('mapping', ['local', 'file-uri', 'stage'])
+def test_mapped_file_presence_and_complete_import(single_file_client, tmp_path, mapping):
+    client = single_file_client
+    import shutil
+    from urllib.parse import quote
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    suffix = name('mapped_')
+    root = Path(os.environ['MO_SDK_EXPORT_LOCAL_DIR'])
+    remote = os.environ['MO_SDK_EXPORT_DIR'].rstrip('/')
+    paths = [tmp_path / 'a.parquet', tmp_path / 'b.parquet']
+    staged = [root / (suffix + f"_{i}'" + ('%' if mapping != 'stage' else '') + '.parquet') for i in range(2)]
+    target = suffix + '_target'
+    stage = suffix + '_stage'
+    for i, (local, shared) in enumerate(zip(paths, staged), 1):
+        pq.write_table(pa.table({'id': [i], 'label': [str(i)]}), local)
+        shutil.copyfile(local, shared)
+    if mapping == 'stage':
+        client.stage.create(stage, 'file://' + remote + '/')
+
+    def server_path(shared):
+        if mapping == 'local':
+            return remote + '/' + shared.name
+        if mapping == 'file-uri':
+            return 'file://' + quote(remote + '/' + shared.name, safe='/')
+        return 'stage://' + stage + '/' + quote(shared.name, safe='/')
+
+    mapped = [server_path(path) for path in staged]
+    client.execute(f'CREATE TABLE {target}(id BIGINT PRIMARY KEY,label TEXT)')
+    try:
+        with client.analytics.read_parquet(paths, server_paths=mapped) as rel:
+            with rel.query() as stream:
+                assert sorted(stream.to_arrow().to_pylist(), key=lambda row: row['id']) == [
+                    {'id': 1, 'label': '1'},
+                    {'id': 2, 'label': '2'},
+                ]
+            assert rel.import_into(target) == 2
+        assert client.execute(f'SELECT * FROM {target} ORDER BY id').rows == [(1, '1'), (2, '2')]
+        client.execute('DELETE FROM ' + target)
+        for missing in [0, 1]:
+            absent = list(mapped)
+            absent[missing] = server_path(root / (suffix + '_absent.parquet'))
+            with pytest.raises((DBAPIError, DriverOperationalError)) as caught:
+                client.analytics.read_parquet(paths, server_paths=absent)
+            assert 'not found' in str(caught.value).lower() or 'not exist' in str(caught.value).lower()
+            assert client.execute('SELECT COUNT(*) FROM ' + target).scalar() == 0
+        with client.analytics.read_parquet(paths, server_paths=mapped) as rel:
+            staged[1].unlink()
+            for action in [lambda: rel.sql, rel.query, lambda: rel.import_into(target)]:
+                with pytest.raises((DBAPIError, DriverOperationalError)) as caught:
+                    action()
+                assert 'not found' in str(caught.value).lower() or 'not exist' in str(caught.value).lower()
+            assert client.execute('SELECT COUNT(*) FROM ' + target).scalar() == 0
+        assert client._engine.pool.checkedout() == 0
+        assert client.execute('SELECT 42').scalar() == 42
+        assert not [r[0] for r in client.execute('SHOW TABLES').rows if r[0].startswith('mo_py_files_')]
+    finally:
+        client.execute('DROP TABLE ' + target)
+        if mapping == 'stage':
+            client.stage.drop(stage, if_exists=True)
+        for shared in staged:
+            shared.unlink(missing_ok=True)
+
+
+def test_file_disappears_at_stream_eof_and_before_commit(single_file_client, tmp_path, monkeypatch):
+    client = single_file_client
+    import shutil
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from sqlalchemy.engine import Connection
+
+    suffix = name('late_file_')
+    source = tmp_path / 'source.parquet'
+    shared = Path(os.environ['MO_SDK_EXPORT_LOCAL_DIR']) / (suffix + '.parquet')
+    mapped = os.environ['MO_SDK_EXPORT_DIR'].rstrip('/') + '/' + shared.name
+    pq.write_table(pa.table({'id': [1, 2]}), source)
+    shutil.copyfile(source, shared)
+    client.execute(f'CREATE TABLE {suffix}(id BIGINT PRIMARY KEY)')
+    try:
+        with client.analytics.read_parquet(source, server_paths=[mapped]) as rel:
+            with rel.query(batch_size=1) as stream:
+                assert next(stream).column(0).to_pylist() == [1]
+                shared.unlink()
+                with pytest.raises((DBAPIError, DriverOperationalError), match='not found|not exist'):
+                    stream.to_arrow()
+            assert client._engine.pool.checkedout() == 0
+            shutil.copyfile(source, shared)
+            original = Connection.exec_driver_sql
+
+            def execute(conn, sql, *args, **kwargs):
+                result = original(conn, sql, *args, **kwargs)
+                if sql.startswith('INSERT INTO `' + suffix + '`'):
+                    shared.unlink()
+                return result
+
+            with monkeypatch.context() as patch:
+                patch.setattr(Connection, 'exec_driver_sql', execute)
+                with pytest.raises((DBAPIError, DriverOperationalError), match='not found|not exist'):
+                    rel.import_into(suffix)
+            assert client.execute('SELECT COUNT(*) FROM ' + suffix).scalar() == 0
+            assert client._engine.pool.checkedout() == 0
+            shutil.copyfile(source, shared)
+            assert rel.import_into(suffix) == 2
+            assert client.execute('SELECT * FROM ' + suffix + ' ORDER BY id').rows == [(1,), (2,)]
+    finally:
+        client.execute('DROP TABLE ' + suffix)
+        shared.unlink(missing_ok=True)
+
+
+@pytest.fixture
+def single_file_client(server):
+    c = Client(pool_size=1, max_overflow=0, pool_timeout=1, sql_log_mode='off')
+    c.connect(**server)
+    try:
+        yield c
+        assert c._engine.pool.checkedout() == 0
+    finally:
+        c.disconnect()
+
+
+def test_empty_mapped_json_file_is_not_missing(single_file_client, tmp_path):
+    import pyarrow as pa
+
+    client = single_file_client
+    source = tmp_path / 'source.jsonl'
+    source.write_text('{"id":1}\n')
+    shared = Path(os.environ['MO_SDK_EXPORT_LOCAL_DIR']) / (name('empty_') + '.jsonl')
+    shared.write_bytes(b'')
+    mapped = os.environ['MO_SDK_EXPORT_DIR'].rstrip('/') + '/' + shared.name
+    try:
+        with client.analytics.read_json(source, server_paths=[mapped], schema=pa.schema([('id', pa.int64())])) as rel:
+            with rel.query() as stream:
+                assert stream.to_arrow().to_pylist() == []
+        assert client.execute('SELECT 42').scalar() == 42
+    finally:
+        shared.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize('mapping', ['local-hash', 'stage-percent'])
+def test_unrepresentable_native_filename_rejects_without_ddl(single_file_client, tmp_path, mapping):
+    from urllib.parse import quote
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    client = single_file_client
+    source = tmp_path / 'source.parquet'
+    pq.write_table(pa.table({'id': [1]}), source)
+    suffix = name('reserved_')
+    shared = Path(os.environ['MO_SDK_EXPORT_LOCAL_DIR']) / (
+        suffix + ('#' if mapping == 'local-hash' else '%') + '.parquet'
+    )
+    shared.write_bytes(source.read_bytes())
+    stage = suffix + '_stage'
+    remote = os.environ['MO_SDK_EXPORT_DIR'].rstrip('/')
+    if mapping == 'stage-percent':
+        client.stage.create(stage, 'file://' + remote + '/')
+    mapped = (
+        remote + '/' + shared.name
+        if mapping == 'local-hash'
+        else 'stage://' + stage + '/' + quote(shared.name, safe='/')
+    )
+    try:
+        with pytest.raises((DBAPIError, DriverOperationalError)):
+            client.analytics.read_parquet(source, server_paths=[mapped])
+        assert not [r[0] for r in client.execute('SHOW TABLES').rows if r[0].startswith('mo_py_files_')]
+        assert client.execute('SELECT 42').scalar() == 42
+        assert client._engine.pool.checkedout() == 0
+    finally:
+        if mapping == 'stage-percent':
+            client.stage.drop(stage, if_exists=True)
+        shared.unlink(missing_ok=True)

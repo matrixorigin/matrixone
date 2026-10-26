@@ -48,7 +48,7 @@ def main():
             'tests/online/test_sdk_wave2_contracts.py',
         ]
     else:
-        selection = ['tests/offline', 'tests/contracts']
+        selection = ['tests/offline']
     versions = {}
     for package in ('matrixone-python-sdk', 'SQLAlchemy', 'PyMySQL', 'aiomysql', 'pytest', 'pyarrow'):
         try:

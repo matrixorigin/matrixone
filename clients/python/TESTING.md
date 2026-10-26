@@ -16,8 +16,8 @@ identify a dirty checkout.
 
 ## Dependency and server dimensions
 
-`tox` selects SQLAlchemy 1.4, 2.0 and 2.1 independently. CI additionally pins
-2.0.43 for the aiomysql pre-ping regression. Python 3.8/3.9 core wheel-import
+`tox` selects SQLAlchemy 1.4, 2.0 and 2.1 independently. Exact 2.0.43 is also
+validated for the aiomysql pre-ping regression. Python 3.8/3.9 core wheel-import
 checks exclude Arrow; analytics requires its separate optional dependency and
 supported Python version. Installing the core SDK must not require PyArrow.
 
@@ -124,3 +124,40 @@ file snapshot; changes after validation or beyond that block are not ruled out.
 Stage CREATE returns observed catalog state even for IF NOT EXISTS. Missing
 ALTER IF EXISTS returns None. Catalog lookup errors after acknowledged Stage or
 PITR writes retain their error category and state the readback failure.
+
+
+## Grouped fulltext and mapped source availability
+
+`boolean_match('body').group(a, b)` requires either supported positive branch.
+Each child can be one required atom or a flat optional OR of plain word/prefix
+atoms. Children must use the same columns and BOOLEAN mode. Conjunctions,
+exclusions, phrases, weights and nested/raw boolean syntax inside a child raise
+before changing the parent; existing explicit `FulltextGroup` methods retain
+their separate behavior.
+
+File relations validate every explicit mapped server file through a bounded
+DATALINK read (one byte per source), at construction, before scanning/importing,
+and at completed stream EOF or before import commit. Checks reuse the active
+stream/write connection; missing sources raise and a failed import rolls back.
+Existing empty files remain distinct from missing files. Local schema checks
+also remain in place. Server DATALINK read permission is required.
+
+Mappings accept absolute local paths, local `file:///` URIs and `stage://` URIs.
+Relative paths, URI query/fragment components and literal glob metacharacters
+are rejected. Native filename restrictions still apply: for example 4.2.5
+rejects hash/space names, and its Stage resolver cannot represent percent names.
+These failures propagate; the SDK never strips a filename or tries another file.
+
+These are availability observations, not immutable file snapshots. Replacing a
+file or removing and restoring it between checks is not detected. A stream can
+already have yielded partial batches before a final validation error; callers
+must observe successful exhaustion before treating its dataset as complete.
+Early close does not certify completion. SQL text obtained from `.sql` does not
+pin files or validate a later independently executed statement.
+
+All SDK contract tests live under `tests/offline/contracts`, so the existing
+trusted SDK workflow's `pytest tests/offline tests/analytics` selects them.
+The local runner rejects skips and empty selections for the required offline
+and server contracts. SDK workflow enhancements and non-SDK workflow routing
+are delivered separately from SDK production changes; their configuration only
+controls `pull_request_target` once present in the trusted base.
