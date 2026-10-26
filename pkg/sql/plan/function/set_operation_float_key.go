@@ -22,6 +22,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// MySQL 8.0.46 distinguishes opposite signed zeros in duplicate-eliminating
+// FLOAT/DOUBLE set operations (issue #30155), while scalar equality still
+// equates them. Normalize only the hidden membership key for that contract;
+// shared scalar/grouping keys and the visible input value remain unchanged.
 // Set membership refines the ordinary SQL equality key only for stored signed
 // zero. Keep NaN and scale-normalized nonzero peers in their existing domain.
 // In particular, a tiny negative FLOAT rounded to zero must not acquire the

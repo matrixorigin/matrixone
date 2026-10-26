@@ -3,7 +3,8 @@
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Accepted architecture: revision 13; this edit condenses the revision 36 record.
-- Implementation snapshot: `5d4a6a0983218167aa0746623f410c19df8d2fe9`
+- Historical implementation snapshot: `5d4a6a0983218167aa0746623f410c19df8d2fe9`
+- Current official baseline: `5fe08a3307e246e1ab9951ab690b50557af0f509`
 
 # FLOAT/DOUBLE set membership
 
@@ -28,6 +29,19 @@ criteria. A smaller safe implementation may replace a mechanism; dropping a
 demonstrated regression test is not a scope reduction.
 
 ## Set-only keys and planning
+
+### Why retain the zero sign here?
+
+The reason is the operation-specific compatibility contract in #30155, not a
+general rule that IEEE signed zeros compare unequal. Its MySQL 8.0.46 controls
+show scalar `-0e0 = 0e0` is true while opposite-zero UNION/INTERSECT/EXCEPT counts
+are 2/0/1. Normalizing both signs to the same *membership* key would reproduce
+the reported 1/1/0 bug. A comparison key can still be normalized: this one must
+retain the zero-sign distinction required by set membership. It does not alter
+the original value or prescribe equality for scalar expressions, joins,
+GROUP BY or aggregates. In particular, #27425's aggregate normalization remains
+in place. Changing the requested MySQL compatibility target would require a
+separate explicit scope decision.
 
 `set_operation_float_key` produces a UINT64 equality key after the common
 set-operation type is resolved. It preserves raw negative-zero bits; other
@@ -86,6 +100,13 @@ LEFT/LoopJoin, aggregation and SINGLE operators own their buffers and cleanup;
 the marked WINDOW streams IDs instead of materializing the whole outer input.
 Prepared attempts and resets obtain fresh IDs and leases.
 
+`ScalarSetReaggregation` identifies this specific scalar-UNION composition; it
+does not enable a general scalar comparison mode. In the dependent operator,
+the flag requires `ScalarSetLease`, the shared execution-attempt work budget.
+That borrowed lease charges nested candidate matching to the same bounded
+attempt and prevents each invocation from receiving a fresh budget or CN
+permit. Lease release belongs to the statement attempt's cleanup owner.
+
 ## Resource boundaries and failure paths
 
 All marked stages, including nested dependent execution, share one statement
@@ -114,7 +135,7 @@ claimed.
 
 ## Protocol and persistence
 
-At the implementation snapshot, set keys use function **620** (FLOAT/DOUBLE
+On top of the current baseline, this PR assigns function **620** (FLOAT/DOUBLE
 overloads), registry sentinel **621**, and MORPC **132**. The scalar marker uses
 Node field **96** and Instruction field **65**. Existing function/field identities
 are unchanged; historical unpublished IDs are not aliases for current IDs.

@@ -29,15 +29,19 @@ type Operator struct {
 	affectedRows uint64
 	vm.OperatorBase
 	Template *Template
-	// Borrowed from the statement attempt; dynamic invocations never acquire or
-	// release a CN permit of their own.
+	// ScalarSetReaggregation marks the planner's correlated scalar-UNION
+	// fallback: matched members are deduplicated per outer-row occurrence before
+	// restoring scalar cardinality. It requires the attempt-wide work lease.
 	ScalarSetReaggregation bool
-	ScalarSetLease         *process.ScalarSetExecutionLease
-	account                *mpool.AllocationAccount
-	allocation             *vector.AllocationAccountSelection
-	execution              *Execution
-	terminalErr            error
-	done                   bool
+	// ScalarSetLease shares candidate-pair accounting with the marked parent
+	// operators. It is borrowed from the statement attempt; dynamic invocations
+	// never acquire or release a CN permit of their own.
+	ScalarSetLease *process.ScalarSetExecutionLease
+	account        *mpool.AllocationAccount
+	allocation     *vector.AllocationAccountSelection
+	execution      *Execution
+	terminalErr    error
+	done           bool
 }
 
 var _ vm.Operator = (*Operator)(nil)
