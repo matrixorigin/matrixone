@@ -43,18 +43,30 @@ var (
 func mixedStringNumericToVarchar(source []types.Type) (types.Type, bool) {
 	hasString := false
 	hasNumeric := false
+	hasBool := false
+	hasBinary := false
 	for _, t := range source {
 		if t.Oid.IsMySQLString() {
 			hasString = true
+			switch t.Oid {
+			case types.T_binary, types.T_varbinary, types.T_blob:
+				hasBinary = true
+			}
 		}
 		if t.Oid.IsInteger() || t.Oid.IsFloat() || t.Oid.IsDecimal() {
 			hasNumeric = true
 		}
-		if hasString && hasNumeric {
-			retType := types.T_varchar.ToType()
-			retType.Width = types.MaxVarBinaryLen
-			return commonConditionalStringType(retType, source), true
+		if t.Oid == types.T_bool {
+			hasBool = true
 		}
+	}
+	// MySQL keeps TRUE/FALSE as the integers 1/0 here, so a BOOL branch next
+	// to a text branch also yields a string ('1'/'0') instead of casting the
+	// text to BOOL. Binary/BLOB branches keep their own resolution.
+	if hasString && (hasNumeric || (hasBool && !hasBinary)) {
+		retType := types.T_varchar.ToType()
+		retType.Width = types.MaxVarBinaryLen
+		return commonConditionalStringType(retType, source), true
 	}
 	return types.Type{}, false
 }
