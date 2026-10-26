@@ -345,16 +345,16 @@ func (ec *ExportConfig) csvNormalizedRecordTerm() []byte {
 // ESCAPED BY disables escaping — never the absence of the clause.
 // The configuration is constant for the life of one ExportConfig, so one
 // simulator can verify the whole statement.
-func (oq *ExportConfig) csvEmissionConfig() *csvparser.CSVConfig {
+func (ec *ExportConfig) csvEmissionConfig() *csvparser.CSVConfig {
 	cfg := &csvparser.CSVConfig{
 		FieldsTerminatedBy: "\t",
 		FieldsEnclosedBy:   `"`,
 		FieldsEscapedBy:    `\`,
-		LinesTerminatedBy:  string(oq.csvNormalizedRecordTerm()),
+		LinesTerminatedBy:  string(ec.csvNormalizedRecordTerm()),
 		Null:               []string{`\N`},
 		UnescapedQuote:     true,
 	}
-	if f := oq.userConfig.Fields; f != nil {
+	if f := ec.userConfig.Fields; f != nil {
 		if t := f.Terminated; t != nil && t.Value != "" {
 			cfg.FieldsTerminatedBy = t.Value
 		}
@@ -392,12 +392,12 @@ type csvEmissionSimulator struct {
 // Construction is intentionally error-recording instead of error-returning:
 // the emit path must treat an unconstructable parser the same as a failed
 // replay — fail closed.
-func (oq *ExportConfig) acquireEmissionSimulator() *csvEmissionSimulator {
-	if sim, ok := oq.simPool.Get().(*csvEmissionSimulator); ok && sim != nil {
+func (ec *ExportConfig) acquireEmissionSimulator() *csvEmissionSimulator {
+	if sim, ok := ec.simPool.Get().(*csvEmissionSimulator); ok && sim != nil {
 		return sim
 	}
 	sim := &csvEmissionSimulator{}
-	sim.parser, sim.err = csvparser.NewCSVParser(oq.csvEmissionConfig(), &sim.rd, csvparser.ReadBlockSize, false)
+	sim.parser, sim.err = csvparser.NewCSVParser(ec.csvEmissionConfig(), &sim.rd, csvparser.ReadBlockSize, false)
 	return sim
 }
 
@@ -410,8 +410,8 @@ func (oq *ExportConfig) acquireEmissionSimulator() *csvEmissionSimulator {
 // wantNull the field must read back as SQL NULL; otherwise it must read
 // back byte-identical to want. A simulator that errors mid-scan is dropped
 // rather than returned to the pool.
-func (oq *ExportConfig) csvFieldEmissionParses(field, recordTerm, want []byte, wantNull bool) bool {
-	sim := oq.acquireEmissionSimulator()
+func (ec *ExportConfig) csvFieldEmissionParses(field, recordTerm, want []byte, wantNull bool) bool {
+	sim := ec.acquireEmissionSimulator()
 	if sim.err != nil {
 		// Defensive: validateCSVFraming rejects the operator-visible
 		// misconfigurations (CR/LF/quote/NUL/invalid field delimiters) before
@@ -439,7 +439,7 @@ func (oq *ExportConfig) csvFieldEmissionParses(field, recordTerm, want []byte, w
 	} else if row[0].IsNull || row[0].Val != string(want) {
 		return false
 	}
-	oq.simPool.Put(sim)
+	ec.simPool.Put(sim)
 	return true
 }
 
