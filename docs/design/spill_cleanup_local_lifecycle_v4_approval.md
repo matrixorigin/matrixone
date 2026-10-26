@@ -17,6 +17,6 @@ aunjgr or any GitHub implementation reviewer. Existing GitHub change requests
 are not resolved automatically. The unchanged revision-4 document is retained
 as the approved artifact despite its original proposed-status header.
 
-Implementation and regression scenarios have been written locally. Final
-post-edit validation and delivery remain pending; this record is not a claim
-of complete runtime acceptance or permission to waive missing verification.
+Implementation validation and delivery status belong to the PR and CI evidence,
+not this design decision record. Approval does not waive runtime verification
+or certify whole-CN recovery, Linux execution or performance acceptance.
