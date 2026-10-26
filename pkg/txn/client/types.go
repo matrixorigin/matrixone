@@ -230,6 +230,13 @@ type DeferredTxnRollback interface {
 	RollbackAfterRunningSQL(error)
 }
 
+// AbortedTxnCleanupObserver lets a transaction owner decide whether replay is
+// safe without inferring cleanup success from a primary statement error. The
+// expected ID prevents an observation from applying to a restarted generation.
+type AbortedTxnCleanupObserver interface {
+	IsAbortedTxnCleanupComplete(expectedTxnID []byte) bool
+}
+
 // AutoIncrEpochFenceCommitter is an additive transaction capability used by
 // epoch-aware workspaces to require the V7-only terminal commit method.
 type AutoIncrEpochFenceCommitter interface {

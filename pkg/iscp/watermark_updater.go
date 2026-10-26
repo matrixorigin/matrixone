@@ -58,6 +58,7 @@ var ExecWithResult = func(
 	sql string,
 	cnUUID string,
 	txn client.TxnOperator,
+	statementOptions ...executor.StatementOption,
 ) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(cnUUID).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
@@ -70,6 +71,9 @@ var ExecWithResult = func(
 		// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 		WithDisableIncrStatement().
 		WithTxn(txn)
+	if len(statementOptions) > 0 {
+		opts = opts.WithStatementOption(statementOptions[0])
+	}
 
 	return exec.Exec(ctx, sql, opts)
 }
@@ -247,6 +251,9 @@ func registerJob(
 	}
 	emptyJobStatus := JobStatus{}
 	if jobSpec.ConsumerInfo.InitSQL != "" {
+		// Publish the lifecycle policy with registration so first-start recovery
+		// can distinguish this generation from legacy split-transaction InitSQL.
+		emptyJobStatus.LifecycleVersion = atomicInitLifecycleVersion
 		encoded := base64.StdEncoding.EncodeToString([]byte(jobSpec.ConsumerInfo.InitSQL))
 		jobSpec.ConsumerInfo.InitSQL = encoded
 	} else {

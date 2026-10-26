@@ -20,7 +20,9 @@ Session and AsyncSession with MatrixOne-specific features like snapshots, clones
 vector operations, and fulltext search.
 """
 
-from typing import Any, Optional, Tuple, TYPE_CHECKING
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 try:
     from sqlalchemy.orm import Session as SQLAlchemySession
@@ -33,296 +35,36 @@ except ImportError:
     SQLAlchemyAsyncSession = None
 
 if TYPE_CHECKING:
-    from .client import ResultSet  # noqa: F401
     from .async_client import AsyncResultSet  # noqa: F401
+    from .client import ResultSet  # noqa: F401
 
 
 class Session(SQLAlchemySession):
-    """
-    MatrixOne Session - Transaction-aware session extending SQLAlchemy Session.
+    """Synchronous SQLAlchemy session with MatrixOne managers.
 
-    This class provides a comprehensive transaction context for executing multiple database
-    operations atomically. It inherits all SQLAlchemy Session capabilities while adding
-    MatrixOne-specific features like snapshots, clones, vector operations, and fulltext search.
+    Use ``client.session()`` to begin a server transaction before the first
+    operation. The context commits on success, rolls back on errors (including
+    cancellation), and closes the session. Explicit commits end that transaction;
+    further SQL follows SQLAlchemy's transaction rules.
 
-    Key Features:
+    A session belongs to one task. Await operations sequentially within an
+    AsyncSession. Parallel transactions require separate sessions, each owned
+    by its own task; they do not commit atomically together.
 
-    - **Full SQLAlchemy API**: All standard SQLAlchemy Session methods (add, delete, query, etc.)
-    - **Atomic transactions**: All operations succeed or fail together
-    - **Automatic rollback**: Errors trigger automatic transaction rollback
-    - **MatrixOne managers**: Access to all MatrixOne-specific operations within transactions
-    - **Hybrid SQL support**: Execute both SQLAlchemy statements and string SQL
-    - **Query logging**: Integrated query logging with performance tracking
-    - **Context manager**: Automatic transaction lifecycle management
-
-    Transaction Behavior:
-
-    - **Auto-commit on success**: Transaction commits when context manager exits normally
-    - **Auto-rollback on error**: Transaction rolls back if any exception occurs
-    - **Explicit control**: Manual commit() and rollback() also supported
-    - **Isolation**: All operations within session are isolated from other transactions
-    - **ACID compliance**: Full ACID guarantees for all operations
-
-    Available Managers (all transaction-aware):
-
-    - **snapshots**: SnapshotManager for creating/managing database snapshots
-    - **clone**: CloneManager for cloning databases and tables
-    - **restore**: RestoreManager for restoring from snapshots
-    - **pitr**: PitrManager for point-in-time recovery operations
-    - **pubsub**: PubSubManager for publish-subscribe operations
-    - **account**: AccountManager for account and user management
-    - **vector_ops**: VectorManager for vector operations and indexing
-    - **fulltext_index**: FulltextIndexManager for fulltext search operations
-    - **metadata**: MetadataManager for table metadata analysis
-    - **load_data**: LoadDataManager for bulk data loading
-    - **stage**: StageManager for external stage management
-    - **cdc**: CDCManager for change data capture task operations
-
-    Creating Session:
-
-    There are two ways to create a MatrixOne Session:
-
-    1. New Session (Recommended): Create directly from client::
+    Example::
 
         with client.session() as session:
-            # Your operations here
-            pass
+            result = session.execute("SELECT * FROM users")
+            session.execute("UPDATE users SET active = 1 WHERE id = 1")
 
-    2. Wrap Existing Session (For Legacy Projects): Wrap existing SQLAlchemy session::
+    Managers execute through the session's connection. Server transaction
+    restrictions still apply: manager availability does not make every DDL or
+    administrative command transactional. Create snapshots through
+    ``client.snapshots`` outside the transaction. CLONE and DML rollback are
+    covered by the supported-server contract suite.
 
-        from sqlalchemy import create_engine
-        from sqlalchemy.orm import sessionmaker
-        from matrixone.session import Session as MatrixOneSession
-
-        # Your existing SQLAlchemy code
-        engine = create_engine('mysql+pymysql://...')
-        SessionFactory = sessionmaker(bind=engine)
-        sqlalchemy_session = SessionFactory()
-
-        # Wrap with MatrixOne features
-        mo_session = MatrixOneSession(
-            client=mo_client,
-            wrap_session=sqlalchemy_session
-        )
-        # Now you can use both SQLAlchemy and MatrixOne features
-
-    Usage Examples::
-
-        from matrixone import Client
-        from sqlalchemy import select, insert, update, delete
-
-        client = Client(host='localhost', port=6001, user='root', password='111', database='test')
-
-        # ============================================================
-        # Example 0: Wrapping Existing SQLAlchemy Session (Legacy Projects)
-        # ============================================================
-        from sqlalchemy import create_engine
-        from sqlalchemy.orm import sessionmaker
-        from matrixone.session import Session as MatrixOneSession
-
-        # Your existing SQLAlchemy setup
-        engine = create_engine('mysql+pymysql://root:111@127.0.0.1:6001/test')
-        SessionFactory = sessionmaker(bind=engine)
-        existing_session = SessionFactory()
-
-        # Wrap it with MatrixOne features
-        mo_session = MatrixOneSession(
-            client=client,
-            wrap_session=existing_session
-        )
-
-        try:
-            # Standard SQLAlchemy operations work
-            result = mo_session.execute("SELECT * FROM users")
-
-            # MatrixOne features now available
-            mo_session.stage.create_s3('backup', bucket='my-backup')
-            mo_session.snapshots.create('snapshot1', level='database')
-            mo_session.load_data.from_csv('/data/file.csv', 'users')
-
-            mo_session.commit()
-        finally:
-            mo_session.close()
-
-        # ============================================================
-        # Example 1: Basic Transaction with ORM-style Operations
-        # ============================================================
-        with client.session() as session:
-            # All operations are atomic - succeed or fail together
-            from sqlalchemy import insert, update
-
-            # Insert using SQLAlchemy insert()
-            session.execute(insert(User).values(name='John', email='john@example.com'))
-            session.execute(insert(Order).values(user_id=1, amount=100.0))
-
-            # Update using SQLAlchemy update()
-            session.execute(
-                update(Account).where(Account.user_id == 1).values(balance=Account.balance - 100)
-            )
-            # Transaction commits automatically on successful completion
-
-        # ============================================================
-        # Example 2: SQLAlchemy ORM Operations
-        # ============================================================
-        with client.session() as session:
-            # Create new objects
-            user = User(name="Alice", email="alice@example.com")
-            order = Order(user_id=1, amount=50.0)
-
-            # Add to session
-                session.add(user)
-            session.add(order)
-
-            # Query using ORM
-            stmt = select(User).where(User.name == "Alice")
-            result = session.execute(stmt)
-            users = result.scalars().all()
-
-            # Update using ORM
-            user = session.get(User, 1)
-            user.email = "newemail@example.com"
-
-            # Commit explicitly (or let context manager do it)
-                session.commit()
-
-        # ============================================================
-        # Example 3: MatrixOne Snapshot Operations in Transaction
-        # ============================================================
-            with client.session() as session:
-            # Create snapshot within transaction
-            snapshot = session.snapshots.create(
-                name='daily_backup',
-                level=SnapshotLevel.DATABASE,
-                database='production'
-            )
-
-            # Clone database within same transaction
-            session.clone.clone_database(
-                target_db='production_copy',
-                source_db='production',
-                snapshot_name='daily_backup'
-            )
-            # Both operations commit atomically
-
-        # ============================================================
-        # Example 4: Bulk Data Loading in Transaction
-        # ============================================================
-        with client.session() as session:
-            # Load data files atomically
-            session.load_data.from_csv('/data/users.csv', 'users')
-            session.load_data.from_csv('/data/orders.csv', 'orders')
-
-            # Update statistics after loading
-            session.execute("ANALYZE TABLE users")
-            session.execute("ANALYZE TABLE orders")
-            # All loads and updates commit together
-
-        # ============================================================
-        # Example 5: Error Handling with Automatic Rollback
-        # ============================================================
-        try:
-            with client.session() as session:
-                session.execute("INSERT INTO users (name) VALUES ('Bob')")
-                session.execute("INSERT INTO invalid_table (data) VALUES ('test')")  # This fails
-                # Transaction automatically rolls back - Bob is NOT inserted
-        except Exception as e:
-            print(f"Transaction failed and rolled back: {e}")
-
-        # ============================================================
-        # Example 6: Manual Transaction Control
-        # ============================================================
-        with client.session() as session:
-            try:
-                session.execute("INSERT INTO users (name) VALUES ('Charlie')")
-                session.execute("UPDATE accounts SET balance = balance - 50")
-
-                # Verify conditions before committing
-                result = session.execute("SELECT balance FROM accounts WHERE id = 1")
-                balance = result.scalar()
-
-                if balance >= 0:
-                    session.commit()  # Explicit commit
-                else:
-                    session.rollback()  # Explicit rollback
-                    print("Transaction rolled back due to insufficient balance")
-            except Exception as e:
-                session.rollback()
-                raise
-
-        # ============================================================
-        # Example 7: Complex Multi-Manager Transaction
-        # ============================================================
-        with client.session() as session:
-            # Create publication
-            pub = session.pubsub.create_database_publication(
-                name='analytics_data',
-                database='analytics',
-                account='subscriber_account'
-            )
-
-            # Create stage using simple interface
-            session.stage.create_local('export_stage', '/exports/')
-
-            # Load fresh data
-            session.load_data.from_csv('/data/latest.csv', Analytics)  # Use ORM model
-
-            # Create snapshot after load
-            session.snapshots.create(
-                name='post_load_snapshot',
-                level=SnapshotLevel.DATABASE,
-                database='analytics'
-            )
-            # All operations are atomic
-
-        # ============================================================
-        # Example 8: Vector Operations in Transaction
-        # ============================================================
-        with client.session() as session:
-            # Create vector table
-            session.create_table('documents', {
-                'id': 'int primary key',
-                'content': 'text',
-                'embedding': 'vecf32(384)'
-            })
-
-            # Create vector index
-            session.vector_ops.create_ivf(
-                'documents',
-                name='doc_idx',
-                column='embedding',
-                lists=100
-            )
-
-            # Insert vector data
-            session.insert('documents', {
-                'id': 1,
-                'content': 'sample document',
-                'embedding': [0.1] * 384
-            })
-
-    Best Practices:
-
-    1. **Always use context manager**: Use `with client.session()` for automatic cleanup
-    2. **Keep transactions short**: Long transactions can block other operations
-    3. **Handle exceptions**: Wrap session code in try-except for proper error handling
-    4. **Avoid nested transactions**: SQLAlchemy doesn't support true nested transactions
-    5. **Use explicit commits**: When you need fine-grained control over transaction boundaries
-    6. **Test rollback behavior**: Ensure your application handles rollbacks correctly
-
-    Important Notes:
-
-    - Session is created by `Client.session()` context manager
-    - Don't instantiate Session directly
-    - All manager operations within session are transaction-aware
-    - Session automatically manages transaction lifecycle
-    - Errors trigger automatic rollback
-    - Normal exit triggers automatic commit
-
-    See Also:
-
-        - Client.session(): Creates and manages Session instances
-        - AsyncSession: Async version for async/await workflows
-        - SQLAlchemy Session: Parent class documentation
+    Directly constructed or wrapped sessions retain their caller's transaction
+    ownership; use the client context for explicit server BEGIN and cleanup.
     """
 
     def __init__(self, bind=None, client=None, wrap_session=None, **kwargs):
@@ -356,12 +98,12 @@ class Session(SQLAlchemySession):
 
         # Import manager classes dynamically to avoid circular imports
         # These are defined in their respective modules
-        from .snapshot import SnapshotManager
-        from .clone import CloneManager
-        from .branch import BranchManager
-
         # These are defined in client.py after the Session class
         import sys
+
+        from .branch import BranchManager
+        from .clone import CloneManager
+        from .snapshot import SnapshotManager
 
         client_module = sys.modules.get('matrixone.client')
         if client_module:
@@ -369,15 +111,15 @@ class Session(SQLAlchemySession):
             FulltextIndexManager = getattr(client_module, 'FulltextIndexManager')
 
         # These are defined in their respective modules
-        from .metadata import MetadataManager
-        from .load_data import LoadDataManager
-        from .stage import StageManager
+        from .account import AccountManager
         from .cdc import CDCManager
+        from .export import ExportManager
+        from .load_data import LoadDataManager
+        from .metadata import MetadataManager
         from .pitr import PitrManager
         from .pubsub import PubSubManager
         from .restore import RestoreManager
-        from .account import AccountManager
-        from .export import ExportManager
+        from .stage import StageManager
 
         # Create managers that use this session as executor
         # The executor pattern allows managers to work in both client and session contexts
@@ -646,12 +388,11 @@ class Session(SQLAlchemySession):
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                final_sql = self.client._substitute_parameters(sql_or_stmt, params)
                 original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
-                result = execute_session_sql(super().execute, final_sql, **kwargs)
+                result = execute_session_sql(super().execute, sql_or_stmt, client=self.client, params=params, **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)
@@ -823,6 +564,7 @@ class Session(SQLAlchemySession):
             Session: Self for chaining
         """
         from sqlalchemy.schema import CreateTable
+
         from .sqlalchemy_ext import VectorTableBuilder
 
         # Parse primary key from kwargs
@@ -881,6 +623,7 @@ class Session(SQLAlchemySession):
             Session: Self for chaining
         """
         from sqlalchemy.schema import CreateTable
+
         from .sqlalchemy_ext import VectorTableBuilder
 
         # First create the table (same as create_table)
@@ -962,194 +705,31 @@ class Session(SQLAlchemySession):
 
 
 class AsyncSession(SQLAlchemyAsyncSession):
-    """
-    MatrixOne Async Session - Asynchronous transaction-aware session extending SQLAlchemy AsyncSession.
+    """Asynchronous SQLAlchemy session with MatrixOne managers.
 
-    This class provides async/await support for all Session functionality with full
-    SQLAlchemy AsyncSession API compatibility, while adding MatrixOne-specific async
-    managers for snapshots, clones, vector operations, and more.
+    Use ``client.session()`` to begin a server transaction before the first
+    operation. The context commits on success, rolls back on errors (including
+    cancellation), and closes the session. Explicit commits end that transaction;
+    further SQL follows SQLAlchemy's transaction rules.
 
-    Key Features:
+    A session belongs to one task. Await operations sequentially within an
+    AsyncSession. Parallel transactions require separate sessions, each owned
+    by its own task; they do not commit atomically together.
 
-    - **Full async SQLAlchemy API**: All standard async Session methods (add, delete, execute, etc.)
-    - **Non-blocking transactions**: Async transaction management with async/await
-    - **Async MatrixOne managers**: All MatrixOne operations available asynchronously
-    - **Concurrent operations**: Execute multiple operations concurrently with asyncio.gather
-    - **Automatic lifecycle**: Context manager handles async transaction lifecycle
-    - **Query logging**: Integrated async query logging
-
-    Transaction Behavior:
-
-    - **Auto-commit on success**: Transaction commits when async context manager exits normally
-    - **Auto-rollback on error**: Transaction rolls back if any exception occurs
-    - **Non-blocking**: All operations use async/await and don't block the event loop
-    - **Isolation**: All operations within session are isolated from other transactions
-    - **ACID compliance**: Full ACID guarantees for all async operations
-
-    Available Managers (all async/transaction-aware):
-
-    - **snapshots**: AsyncSnapshotManager for async snapshot operations
-    - **clone**: AsyncCloneManager for async clone operations
-    - **restore**: AsyncRestoreManager for async restore operations
-    - **pitr**: AsyncPitrManager for async point-in-time recovery
-    - **pubsub**: AsyncPubSubManager for async publish-subscribe
-    - **account**: AsyncAccountManager for async account management
-    - **vector_ops**: AsyncVectorManager for async vector operations
-    - **fulltext_index**: AsyncFulltextIndexManager for async fulltext search
-    - **metadata**: AsyncMetadataManager for async metadata analysis
-    - **load_data**: AsyncLoadDataManager for async bulk loading
-    - **stage**: AsyncStageManager for async stage management
-    - **cdc**: AsyncCDCManager for async change data capture task operations
-
-    Creating AsyncSession:
-
-    There are two ways to create a MatrixOne AsyncSession:
-
-    1. **New AsyncSession (Recommended)**: Create directly from async client::
+    Example::
 
         async with client.session() as session:
-            # Your async operations here
-            pass
+            result = await session.execute("SELECT * FROM users")
+            await session.execute("UPDATE users SET active = 1 WHERE id = 1")
 
-    2. **Wrap Existing AsyncSession (For Legacy Projects)**: Wrap existing SQLAlchemy async session::
+    Managers execute through the session's connection. Server transaction
+    restrictions still apply: manager availability does not make every DDL or
+    administrative command transactional. Create snapshots through
+    ``client.snapshots`` outside the transaction. CLONE and DML rollback are
+    covered by the supported-server contract suite.
 
-        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-        from matrixone.session import AsyncSession as MatrixOneAsyncSession
-
-        # Your existing async SQLAlchemy code
-        async_engine = create_async_engine('mysql+aiomysql://...')
-        AsyncSessionFactory = async_sessionmaker(bind=async_engine)
-        sqlalchemy_async_session = AsyncSessionFactory()
-
-        # Wrap with MatrixOne features
-        mo_async_session = MatrixOneAsyncSession(
-            client=mo_async_client,
-            wrap_session=sqlalchemy_async_session
-        )
-        # Now you can use both async SQLAlchemy and MatrixOne features
-
-    Usage Examples::
-
-        from matrixone import AsyncClient
-        from sqlalchemy import select, insert, update, delete
-        import asyncio
-
-        async def main():
-            client = AsyncClient()
-            await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
-
-            # ========================================
-            # Example 0: Wrapping Existing Async Session (Legacy Projects)
-            # ========================================
-            from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-            from matrixone.session import AsyncSession as MatrixOneAsyncSession
-
-            # Your existing async SQLAlchemy setup
-            async_engine = create_async_engine('mysql+aiomysql://root:111@127.0.0.1:6001/test')
-            AsyncSessionFactory = async_sessionmaker(bind=async_engine)
-            existing_async_session = AsyncSessionFactory()
-
-            # Wrap it with MatrixOne features
-            mo_async_session = MatrixOneAsyncSession(
-                client=client,
-                wrap_session=existing_async_session
-            )
-
-            try:
-                # Standard async SQLAlchemy operations work
-                result = await mo_async_session.execute("SELECT * FROM users")
-
-                # MatrixOne async features now available
-                await mo_async_session.stage.create_s3('backup', bucket='my-backup')
-                await mo_async_session.snapshots.create('snapshot1', level='database')
-                await mo_async_session.load_data.from_csv('/data/file.csv', 'users')
-
-                await mo_async_session.commit()
-            finally:
-                await mo_async_session.close()
-
-            # ========================================
-            # Example 1: Basic Async Transaction
-            # ========================================
-            async with client.session() as session:
-                # All operations are atomic
-                await session.execute("INSERT INTO users (name) VALUES ('John')")
-                await session.execute("INSERT INTO orders (user_id, amount) VALUES (1, 100)")
-                # Transaction commits automatically
-
-            # ========================================
-            # Example 2: Async ORM Operations
-            # ========================================
-            async with client.session() as session:
-                # Add objects
-                user = User(name="Alice")
-                session.add(user)
-
-                # Query
-                stmt = select(User).where(User.name == "Alice")
-                result = await session.execute(stmt)
-                users = result.scalars().all()
-
-                # Commit
-                await session.commit()
-
-            # ========================================
-            # Example 3: Concurrent Operations
-            # ========================================
-            async with client.session() as session:
-                # Execute multiple queries concurrently
-                results = await asyncio.gather(
-                    session.execute("SELECT * FROM users"),
-                    session.execute("SELECT * FROM orders"),
-                    session.execute("SELECT * FROM products")
-                )
-                users, orders, products = results
-
-            # ========================================
-            # Example 4: Async MatrixOne Managers
-            # ========================================
-            async with client.session() as session:
-                # Create snapshot
-                snapshot = await session.snapshots.create(
-                    'backup',
-                    SnapshotLevel.DATABASE,
-                    database='production'
-                )
-
-                # Clone database
-                await session.clone.clone_database('prod_copy', 'production')
-
-                # Load data
-                await session.load_data.from_csv('/data/users.csv', 'users')
-
-            # ========================================
-            # Example 5: Error Handling
-            # ========================================
-            try:
-                async with client.session() as session:
-                    await session.execute("INSERT INTO users (name) VALUES ('Bob')")
-                    await session.execute("INSERT INTO invalid_table (x) VALUES (1)")
-                    # Automatically rolls back on error
-            except Exception as e:
-                print(f"Transaction rolled back: {e}")
-
-            await client.disconnect()
-
-        asyncio.run(main())
-
-    Important Notes:
-
-    - Use `async with client.session()` for async sessions
-    - All execute operations must be awaited
-    - All manager operations must be awaited
-    - Perfect for FastAPI, aiohttp, and other async frameworks
-    - Enables high-concurrency database operations
-
-    See Also:
-
-        - AsyncClient.session(): Creates AsyncSession instances
-        - Session: Synchronous version
-        - SQLAlchemy AsyncSession: Parent class documentation
+    Directly constructed or wrapped sessions retain their caller's transaction
+    ownership; use the client context for explicit server BEGIN and cleanup.
     """
 
     def __init__(self, bind=None, client=None, wrap_session=None, **kwargs):
@@ -1185,22 +765,22 @@ class AsyncSession(SQLAlchemyAsyncSession):
         # Some are defined in async_client.py after the AsyncSession class
 
         # Import async vector and fulltext managers
-        from .vector_manager import AsyncVectorManager
+        from .account import AsyncAccountManager
+        from .branch import AsyncBranchManager
+        from .cdc import AsyncCDCManager
+        from .clone import AsyncCloneManager
+        from .export import AsyncExportManager
         from .fulltext_manager import AsyncFulltextIndexManager
+        from .load_data import AsyncLoadDataManager
+        from .metadata import AsyncMetadataManager
+        from .pitr import AsyncPitrManager
+        from .pubsub import AsyncPubSubManager
+        from .restore import AsyncRestoreManager
 
         # These are defined in their respective modules
         from .snapshot import AsyncSnapshotManager
-        from .clone import AsyncCloneManager
-        from .branch import AsyncBranchManager
-        from .restore import AsyncRestoreManager
-        from .pitr import AsyncPitrManager
-        from .pubsub import AsyncPubSubManager
-        from .account import AsyncAccountManager
-        from .load_data import AsyncLoadDataManager
         from .stage import AsyncStageManager
-        from .cdc import AsyncCDCManager
-        from .metadata import AsyncMetadataManager
-        from .export import AsyncExportManager
+        from .vector_manager import AsyncVectorManager
 
         # Create managers that use this session as executor
         # The executor pattern allows managers to work in both client and session contexts
@@ -1247,12 +827,13 @@ class AsyncSession(SQLAlchemyAsyncSession):
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                final_sql = self.client._substitute_parameters(sql_or_stmt, params)
                 original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
-                result = await execute_session_sql(super().execute, final_sql, **kwargs)
+                result = await execute_session_sql(
+                    super().execute, sql_or_stmt, client=self.client, params=params, **kwargs
+                )
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = await super().execute(sql_or_stmt, params, **kwargs)
@@ -1439,6 +1020,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
             Self for chaining
         """
         from sqlalchemy.schema import CreateTable
+
         from .sqlalchemy_ext import VectorTableBuilder
 
         primary_key = kwargs.pop('primary_key', None)

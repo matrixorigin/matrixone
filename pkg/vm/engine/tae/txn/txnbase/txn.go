@@ -47,6 +47,13 @@ type OpTxn struct {
 	ctx context.Context
 	Txn txnif.AsyncTxn
 	Op  OpType
+
+	// Stamped before enqueue: wait includes producer backpressure and, for
+	// apply, worker admission. Each handoff has one producer and consumer. They
+	// are owned by the commit pipeline and are not part of txn persistence.
+	preWalEnqueuedAt time.Time
+	walEnqueuedAt    time.Time
+	applyEnqueuedAt  time.Time
 }
 
 func (txn *OpTxn) IsReplay() bool { return txn.Txn.IsReplay() }

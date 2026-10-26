@@ -1,0 +1,100 @@
+drop database if exists comment_bs_rt;
+create database comment_bs_rt;
+use comment_bs_rt;
+create table t1 (a int comment 'C:\\dir\\new', b int comment 'it''s') comment 'x\\ty';
+show create table t1;
+➤ Table[12,2,0]  ¦  Create Table[12,123,0]  𝄀
+t1  ¦  CREATE TABLE `t1` (
+  `a` int DEFAULT NULL COMMENT 'C:\\dir\\new',
+  `b` int DEFAULT NULL COMMENT 'it''s'
+) COMMENT='x\\ty'
+select column_name, hex(column_comment) from information_schema.columns
+where table_schema = 'comment_bs_rt' and table_name = 't1' order by column_name;
+➤ column_name[12,256,0]  ¦  hex(column_comment)[12,16384,0]  𝄀
+a  ¦  433A5C6469725C6E6577  𝄀
+b  ¦  6974272773
+select hex(table_comment) from information_schema.tables
+where table_schema = 'comment_bs_rt' and table_name = 't1';
+➤ hex(table_comment)[-1,16383,0]  𝄀
+785C7479
+create table t2 (
+`a` int DEFAULT NULL COMMENT 'C:\\dir\\new',
+`b` int DEFAULT NULL COMMENT 'it''s'
+) COMMENT='x\\ty';
+show create table t2;
+➤ Table[12,2,0]  ¦  Create Table[12,123,0]  𝄀
+t2  ¦  CREATE TABLE `t2` (
+  `a` int DEFAULT NULL COMMENT 'C:\\dir\\new',
+  `b` int DEFAULT NULL COMMENT 'it''s'
+) COMMENT='x\\ty'
+select column_name, hex(column_comment) from information_schema.columns
+where table_schema = 'comment_bs_rt' and table_name = 't2' order by column_name;
+➤ column_name[12,256,0]  ¦  hex(column_comment)[12,16384,0]  𝄀
+a  ¦  433A5C6469725C6E6577  𝄀
+b  ¦  6974272773
+select hex(table_comment) from information_schema.tables
+where table_schema = 'comment_bs_rt' and table_name = 't2';
+➤ hex(table_comment)[-1,16383,0]  𝄀
+785C7479
+drop stage if exists comment_bs_legacy_stage;
+create stage comment_bs_legacy_stage url = 'file://$resources/table_dump_comment_legacy/';
+create table legacy_dump_target (id int primary key, v varchar(32) default 'd\\ef', c int comment 'C:\\dir\\new it''s', key idx_v(v) comment 'idx\\q''s') comment 'x\\ty''z';
+load table legacy_dump_target from 'stage://comment_bs_legacy_stage/';
+select * from legacy_dump_target order by id;
+➤ id[4,32,0]  ¦  v[12,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  one  ¦  10  𝄀
+2  ¦  two  ¦  20
+select id from legacy_dump_target force index(idx_v) where v='one';
+➤ id[4,32,0]  𝄀
+1
+drop stage comment_bs_legacy_stage;
+drop stage if exists comment_bs_dump_stage;
+create stage comment_bs_dump_stage url = 'file:///tmp/mo-comment-backslash-roundtrip-31068/';
+remove files from stage if exists 'stage://comment_bs_dump_stage/metadata/*';
+dump table t1 to 'stage://comment_bs_dump_stage/metadata' metadata only;
+create table dump_target like t1;
+load table dump_target from 'stage://comment_bs_dump_stage/metadata';
+select column_name, hex(column_comment) from information_schema.columns where table_schema = 'comment_bs_rt' and table_name = 'dump_target' and column_name = 'a';
+➤ column_name[12,256,0]  ¦  hex(column_comment)[12,16384,0]  𝄀
+a  ¦  433A5C6469725C6E6577
+select hex(table_comment) from information_schema.tables where table_schema = 'comment_bs_rt' and table_name = 'dump_target';
+➤ hex(table_comment)[-1,16383,0]  𝄀
+785C7479
+create table dump_wrong (a int comment 'different', b int comment 'it''s') comment 'x\\ty';
+load table dump_wrong from 'stage://comment_bs_dump_stage/metadata';
+invalid input: target table schema does not match table dump
+select count(*) from dump_wrong;
+➤ count(*)[-5,64,0]  𝄀
+0
+remove files from stage if exists 'stage://comment_bs_dump_stage/metadata/*';
+drop stage comment_bs_dump_stage;
+set @comment_bs_saved_mode = @@sql_mode;
+set sql_mode = 'NO_BACKSLASH_ESCAPES';
+create table t3 (a int comment 'L:\dir\new') comment 'L:\ty';
+show create table t3;
+➤ Table[12,2,0]  ¦  Create Table[12,81,0]  𝄀
+t3  ¦  CREATE TABLE `t3` (
+  `a` int DEFAULT NULL COMMENT 'L:\dir\new'
+) COMMENT='L:\ty'
+create table t4 (`a` int DEFAULT NULL COMMENT 'L:\dir\new') COMMENT='L:\ty';
+show create table t4;
+➤ Table[12,2,0]  ¦  Create Table[12,81,0]  𝄀
+t4  ¦  CREATE TABLE `t4` (
+  `a` int DEFAULT NULL COMMENT 'L:\dir\new'
+) COMMENT='L:\ty'
+select column_name, hex(column_comment) from information_schema.columns
+where table_schema = 'comment_bs_rt' and table_name = 't4' order by column_name;
+➤ column_name[12,256,0]  ¦  hex(column_comment)[12,16384,0]  𝄀
+a  ¦  4C3A5C6469725C6E6577
+select hex(table_comment) from information_schema.tables
+where table_schema = 'comment_bs_rt' and table_name = 't4';
+➤ hex(table_comment)[-1,16383,0]  𝄀
+4C3A5C7479
+set sql_mode = @comment_bs_saved_mode;
+create table t5 (a int comment 'plain text') comment 'plain table';
+show create table t5;
+➤ Table[12,2,0]  ¦  Create Table[12,87,0]  𝄀
+t5  ¦  CREATE TABLE `t5` (
+  `a` int DEFAULT NULL COMMENT 'plain text'
+) COMMENT='plain table'
+drop database if exists comment_bs_rt;
