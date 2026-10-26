@@ -47,14 +47,17 @@ func isScanNoCopy(ctx context.Context) bool {
 
 func withRelLogicalIDLegacyProof(
 	ctx context.Context,
+	id *common.ID,
 	readSchema *catalog.Schema,
 	objectName string,
 ) context.Context {
-	if readSchema == nil || readSchema.Name != pkgcatalog.MO_TABLES {
+	if id == nil || id.DbID != pkgcatalog.MO_CATALOG_ID || id.TableID != pkgcatalog.MO_TABLES_ID ||
+		readSchema == nil || readSchema.Name != pkgcatalog.MO_TABLES || objectName == "" {
 		return ctx
 	}
 	for _, def := range readSchema.ColDefs {
-		if def != nil && def.Name == pkgcatalog.SystemRelAttr_LogicalID {
+		if def != nil && def.Name == pkgcatalog.SystemRelAttr_LogicalID &&
+			def.SeqNum == uint16(pkgcatalog.MO_TABLES_LOGICAL_ID_IDX) && def.Type.Oid == types.T_uint64 {
 			return objectio.WithLegacyMissingColumnProof(ctx, objectName, def.SeqNum)
 		}
 	}
@@ -131,7 +134,7 @@ func (node *persistedNode) Scan(
 		ts := txn.GetStartTS()
 		tsForAppendable = &ts
 	}
-	ctx = withRelLogicalIDLegacyProof(ctx, readSchema, location.Name().String())
+	ctx = withRelLogicalIDLegacyProof(ctx, id, readSchema, location.Name().String())
 	vecs, deletes, release, err := LoadPersistedColumnData(
 		ctx, readSchema, node.object.rt, id, colIdxes, location, mp, tsForAppendable,
 		!isScanNoCopy(ctx),

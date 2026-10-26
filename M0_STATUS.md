@@ -13,6 +13,30 @@ each complete DUMP. TN completion alone did not make the replacement visible to
 the CN. This changes test synchronization only, not kernel/native inputs or the
 DUMP in-memory-row rejection. It does not create new Linux/performance evidence.
 
+Design-gate repair, 2026-10-26: the formal review of `4c9092203a` requested
+a separately approved design, not a new runtime fix. The complete proposed
+[restricted M0 design](docs/design/20261026-m0-restricted-add.md) defines the
+append invariant, CN/TN commit and rollback ownership, proof-context limits,
+recovery, shared default compatibility and resource/performance tradeoffs.
+This is a distinct retrospective approval phase; prior `PASS_CODE_REVIEW`
+and green CI do not establish design approval. Isolated Astra medium rejected
+R1's undecided historical boundary, then approved R2's explicit source/geometry
+and migration contract. The exact hashes, reviewer session and separate
+decisions are in [the design review record](docs/design/20261026-m0-restricted-add-review.md).
+The design requires one implementation alignment: the legacy proof must bind
+the persisted caller's real DB/table IDs and canonical column seqnum/type,
+not names alone. Native inputs and all other kernel closures remain unchanged.
+That correction is now implemented and independently delta-reviewed after the
+design decision (`PASS_CODE_REVIEW`, not a full-PR approval). The direct wrong-
+type admission counterexample failed before the fix. The canonical-system and
+wrong-identity/type/seqnum/object controls, default/M0 owning-package tests with
+`-vet=all`, and persisted `TestBlockRead`/`TestBlockRead2` passed locally. No new
+shared state is introduced; no old race, Linux or performance evidence is
+relabelled as a new execution. The review record binds the source hashes.
+Owning-package incremental lint and molint passed in default/M0 modes, as did
+the repository error check, gofmt and whitespace checks. The new publication
+head still owns its remote CI and maintainer review outcomes separately.
+
 Base: `68e642fdc533e96ed8f83ac44659119ad8be97af`.
 Kernel candidate: `cf9f5ff0f6cfbc11066e24c5bf209234f154cee9` (CF9).
 Publication branch: `codex/m0-restricted-experimental-draft`.
@@ -252,7 +276,16 @@ failed-jobs-only retry did not repeat those failures but failed
 `TestTimestampAddHistoricalDumpRoundtrip` after an `OK` TN flush because the CN
 still saw in-memory rows. The CI-only follow-up above fixes that missing
 visibility barrier without sleeps, DUMP retries or relaxed assertions. Retain
-both failed attempts; the repaired successor still needs its own terminal CI.
+both failed attempts. Repair head
+`4c9092203a49f5bba5fcd8e1d2f2a8c6bd0c4982` passed
+[run 39987278483](https://github.com/matrixorigin/matrixone/actions/runs/39987278483)
+and its automatic Ready-event
+[run 39994658132](https://github.com/matrixorigin/matrixone/actions/runs/39994658132),
+including UT/SCA/Coverage and CI Required. In the former, PROXY job
+`120534512275` actually passed the customer fixture 48/48 and View metadata
+44/44; the latter's job success is not additional case-selection evidence.
+A later documentation-only commit has its own CI status; these runs remain
+bound to `4c9092203a`, not relabelled as exact-head successor CI.
 
 Default CI does not establish M0-path coverage: the M0 SQL integration files
 require `//go:build mo_m0`, while the ordinary UT runner selects
@@ -280,6 +313,19 @@ exact-head Linux run of every closure is claimed.
 The formal review handoff targets `XuPeng-SH`, the CODEOWNER covering
 the affected planner/objectio/disttae/TAE paths. Completed model review is not
 an approval on GitHub. Ready-for-review is not Ready-to-merge.
+
+At `4c9092203a`, XuPeng-SH requested changes for the missing approved design
+revision; full implementation review was deferred, with no runtime defect
+asserted. gouhongshen's automated full-diff review was formally APPROVED with
+two non-blocking follow-ups. Both are retained, not dismissed by green CI:
+
+- Shared fail-closed reads can reject historical objects previously NULL-filled.
+  QA/release must inventory relevant upgrade sources and test ordinary/system
+  historical layouts; unknown geometry needs a narrow proof, not blanket NULL.
+- Repeated proof work remains a cost risk, including pristine eligible roots.
+  Reader-local same-object/context reuse already exists; no cross-scan cache is
+  claimed. The core proof chain was already present in CF9. Current-head cost
+  acceptance is still open; this repair adds no speculative cache or benchmark.
 
 **QA required: yes.** SQL/catalog visibility, clone/merge and recovery semantics
 need deployed acceptance. QA should verify the restricted same-version build

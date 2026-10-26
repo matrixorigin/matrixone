@@ -4,9 +4,11 @@
 `mo_m0` prototype.** It is not yet a production feature and does not select M0
 in ordinary builds.
 
-This document records the original feasibility reasoning. For the later CF9
-version-carrier repair, normal Linux qualification, candidate-only SF100 screen,
-shared default-build changes and remaining Draft/CI gates, see [M0_STATUS.md](M0_STATUS.md).
+This document records the original feasibility reasoning, not design approval.
+The complete feature's separate approval phase is defined in
+[restricted M0 design](docs/design/20261026-m0-restricted-add.md).
+For the later CF9 version-carrier repair, normal Linux qualification, candidate-only SF100 screen,
+shared default-build changes and current review/QA gates, see [M0_STATUS.md](M0_STATUS.md).
 
 ## Route decision
 
@@ -90,9 +92,10 @@ than a stale batch or block marker.
 
 ## Remaining Production Qualification
 
-1. Review the complete Draft diff, run its new BVT on the exact publication head,
-   and arrange opt-in experimental-tag CI. The existing CF9 Linux qualification
-   is retained, not a reason to repeat unchanged tests.
+1. Complete the separate design and implementation approval phases and QA.
+   Current exact-head BVT and explicit tagged/Linux evidence are recorded in
+   M0_STATUS.md; ordinary CI does not establish tagged execution. Reuse unchanged
+   evidence without calling it production or exact-successor qualification.
 2. Close UPDATE/background-debt attribution and any later performance acceptance
    with an explicitly comparable workload; the historical screen alone is not
    an end-to-end or statistically established claim.
