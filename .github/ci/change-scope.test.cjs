@@ -579,6 +579,17 @@ test('the reusable SDK owner preserves the matrix and isolates untrusted checkou
   ]) assert.equal(runInNewContext(onlineExpression, { github: { event_name: event }, inputs: { online: enabled } }), expected);
   assert.match(sections.online, /^    environment: matrixone-sdk-\$\{\{ matrix\.server \}\}$/m);
   assert.match(sections.online, /^        server: \['4\.2\.5', 'current-source'\]$/m);
+  const databaseGuard = sections.online.match(/      - name: Validate extended-suite database configuration\n        run: \|\n([\s\S]*?)(?=^      -)/m)[1];
+  for (const database of ['', 'sdk_contracts']) {
+    const result = spawnSync('bash', ['-eu', '-c', databaseGuard], {
+      env: { ...process.env, MATRIXONE_DATABASE: database }, encoding: 'utf8',
+    });
+    assert.equal(result.status === 0, database !== '', result.stderr);
+    if (!database) assert.match(result.stderr, /Configure MATRIXONE_DATABASE/);
+  }
+  assert.match(offline, /python scripts\/run_contracts\.py --output offline-contracts/);
+  assert.match(sections.online, /python scripts\/run_contracts\.py --server "\$SDK_SERVER_TARGET" --output online-contracts/);
+  assert.ok(readFileSync(join(__dirname, '../../clients/python/scripts/run_contracts.py'), 'utf8').length > 0);
   const group = sdk.match(/^  group: (.*)$/m)[1];
   assert.ok(group.startsWith('python-sdk/'));
   assert.ok(group.includes('github.event.pull_request.head.repo.full_name || github.repository'));
@@ -598,28 +609,16 @@ test('SDK workflow-only changes select SDK while trust and mixed kernel edits re
   assert.deepEqual(classify([{ filename: '.github/workflows/python-sdk.yml', previous_filename: 'pkg/a.go', status: 'renamed' }], 1), { scope: 'full', sdk_required: true });
 });
 
-test('Iceberg module checks follow Go dependency inputs and omit SDK-only PRs', () => {
+test('Iceberg module checks retain the dependency path configuration', () => {
   const workflow = readFileSync(join(__dirname, '../workflows/iceberg-connector.yml'), 'utf8');
   const trigger = workflow.split('\npermissions:')[0];
   const paths = [...trigger.matchAll(/^      - '([^']+)'$/gm)].map(match => match[1]);
-  assert.ok(paths.length > 0);
-  // The trigger uses only literal components, * and **. Exercise that closed subset.
-  function matches(pattern, path) {
-    const parts = pattern.split('/'), segments = path.split('/');
-    function visit(i, j) {
-      if (i === parts.length) return j === segments.length;
-      if (parts[i] === '**') return visit(i + 1, j) || (j < segments.length && visit(i, j + 1));
-      const expression = parts[i].split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*');
-      return j < segments.length && new RegExp('^' + expression + '$').test(segments[j]) && visit(i + 1, j + 1);
-    }
-    return visit(0, 0);
-  }
-  const runs = files => files.some(file => paths.some(pattern => matches(pattern, file)));
-  for (const path of ['pkg/a.go', 'pkg/unrelated/a_test.go', 'main.go', 'go.mod', 'go.sum', 'go.work', 'go.work.sum',
-    'pkg/iceberg/adapter/iceberggo/go.mod', 'cgo/Makefile', 'thirdparties/linux.mk',
-    'pkg/a/assembly.s', 'pkg/a/native.h', 'Makefile', '.github/workflows/iceberg-connector.yml']) assert.equal(runs([path]), true, path);
-  for (const files of [['clients/python/matrixone/client.py'], ['clients/python/tests/offline/a.py', 'clients/python/pyproject.toml'],
-    ['.github/workflows/python-sdk.yml'], ['docs/guide.md', 'README.md']]) assert.equal(runs(files), false, files.join(','));
-  assert.equal(runs(['clients/python/a.py', 'pkg/a.go']), true);
+  // GitHub owns glob matching. Check the declared dependency boundary, not a local reimplementation.
+  assert.deepEqual(paths, [
+    '**/*.go', '**/go.mod', '**/go.sum', 'go.work', 'go.work.sum',
+    '**/*.s', '**/*.S', '**/*.c', '**/*.cc', '**/*.cpp', '**/*.h', '**/*.syso',
+    'pkg/iceberg/**', 'cgo/**', 'thirdparties/**', 'Makefile',
+    '.github/workflows/iceberg-connector.yml', '.github/ci/**',
+  ]);
   assert.match(readFileSync(join(__dirname, '../workflows/ci-scope-check.yml'), 'utf8'), /'\.github\/workflows\/iceberg-connector.yml'/);
 });
