@@ -646,6 +646,9 @@ func newFT2PipelineHarness(t *testing.T, writeErr error) *ft2PipelineHarness {
 		if opts.HasParams() {
 			return executor.Result{}, h.writeErr
 		}
+		if !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "INSERT ") {
+			return executor.Result{}, nil
+		}
 		h.metaSQLs = append(h.metaSQLs, sql)
 		return executor.Result{}, nil
 	})

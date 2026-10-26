@@ -10,7 +10,10 @@
 --   1. a competitive ORDER BY score DESC LIMIT, so the limit pushes down and the TVF runs
 --      the bounded top-k search instead of streaming every match;
 --   2. a small max_postings_capacity, so the base seals into MANY segments and the
---      multi-segment fan-out is genuinely exercised (one segment would run serially).
+--      multi-segment fan-out is genuinely exercised (one segment would run serially);
+--   3. a COVERED index (INCLUDE column, pk + score projection), so there is no base-table
+--      join and no post-filter over-fetch: the search keeps exactly LIMIT 3 of the 6
+--      matches and the top-k truncation and cross-segment floor happen inside the search.
 -- 'rare' appears in a MINORITY of docs (ids 1..6) at DISTINCT term frequencies, so its
 -- idf is positive and the top-k is strictly ordered (no ties) -- a deterministic
 -- (id, score) list to compare across the serial and parallel loads.
@@ -28,21 +31,27 @@ select @@fulltext2_threads_search as after_set;
 -- is built with one worker and the top-k query runs the serial walk. max_postings_capacity
 -- 8 (~5-11 postings/doc) seals the ~80 postings into several tag=0 segments.
 set fulltext2_threads_search = 1;
-create table t1(id bigint primary key, body text);
+create table t1(id bigint primary key, body text, prio int);
 insert into t1 values
-  (1,'rare common data text word more'),
-  (2,'rare rare common data text word more'),
-  (3,'rare rare rare common data text word more'),
-  (4,'rare rare rare rare common data text word more'),
-  (5,'rare rare rare rare rare common data text word more'),
-  (6,'rare rare rare rare rare rare common data text word more'),
-  (7,'common data text word more'),
-  (8,'common data text word more'),
-  (9,'common data text word more'),
-  (10,'common data text word more'),
-  (11,'common data text word more'),
-  (12,'common data text word more');
-create fulltext2 index ft on t1(body) max_postings_capacity 8;
+  (1,'rare common data text word more',10),
+  (2,'rare rare common data text word more',20),
+  (3,'rare rare rare common data text word more',30),
+  (4,'rare rare rare rare common data text word more',40),
+  (5,'rare rare rare rare rare common data text word more',50),
+  (6,'rare rare rare rare rare rare common data text word more',60),
+  (7,'common data text word more',70),
+  (8,'common data text word more',80),
+  (9,'common data text word more',90),
+  (10,'common data text word more',100),
+  (11,'common data text word more',110),
+  (12,'common data text word more',120);
+create fulltext2 index ft on t1(body) include(prio) max_postings_capacity 8;
+-- @regex("Fulltext Index Scan on ft", true)
+-- @regex("Join", false)
+-- @regex("Candidate Limit: 3", true)
+explain select id, match(body) against('rare' in bm25 mode) as score
+  from t1 where match(body) against('rare' in bm25 mode)
+  order by score desc limit 3;
 select id, match(body) against('rare' in bm25 mode) as score
   from t1 where match(body) against('rare' in bm25 mode)
   order by score desc limit 3;
@@ -51,21 +60,27 @@ select id, match(body) against('rare' in bm25 mode) as score
 -- built parallel over the same many segments. The ranked (id, score) list must be
 -- IDENTICAL to the serial load above.
 set fulltext2_threads_search = 8;
-create table t2(id bigint primary key, body text);
+create table t2(id bigint primary key, body text, prio int);
 insert into t2 values
-  (1,'rare common data text word more'),
-  (2,'rare rare common data text word more'),
-  (3,'rare rare rare common data text word more'),
-  (4,'rare rare rare rare common data text word more'),
-  (5,'rare rare rare rare rare common data text word more'),
-  (6,'rare rare rare rare rare rare common data text word more'),
-  (7,'common data text word more'),
-  (8,'common data text word more'),
-  (9,'common data text word more'),
-  (10,'common data text word more'),
-  (11,'common data text word more'),
-  (12,'common data text word more');
-create fulltext2 index ft on t2(body) max_postings_capacity 8;
+  (1,'rare common data text word more',10),
+  (2,'rare rare common data text word more',20),
+  (3,'rare rare rare common data text word more',30),
+  (4,'rare rare rare rare common data text word more',40),
+  (5,'rare rare rare rare rare common data text word more',50),
+  (6,'rare rare rare rare rare rare common data text word more',60),
+  (7,'common data text word more',70),
+  (8,'common data text word more',80),
+  (9,'common data text word more',90),
+  (10,'common data text word more',100),
+  (11,'common data text word more',110),
+  (12,'common data text word more',120);
+create fulltext2 index ft on t2(body) include(prio) max_postings_capacity 8;
+-- @regex("Fulltext Index Scan on ft", true)
+-- @regex("Join", false)
+-- @regex("Candidate Limit: 3", true)
+explain select id, match(body) against('rare' in bm25 mode) as score
+  from t2 where match(body) against('rare' in bm25 mode)
+  order by score desc limit 3;
 select id, match(body) against('rare' in bm25 mode) as score
   from t2 where match(body) against('rare' in bm25 mode)
   order by score desc limit 3;
