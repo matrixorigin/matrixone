@@ -329,6 +329,26 @@ select id, hex(s) as hs from enc_eq_hash_back;
 drop table enc_eq_hash_back;
 drop table enc_eq_src;
 
+-- csvparser itself rejects CR, LF, a double quote or NUL as the field
+-- delimiter (its validity predicate mirrors Go's encoding/csv), so LOAD
+-- DATA with such a framing fails at parser construction. Export must
+-- reject the same framings up front with a statement error instead of
+-- writing a file no LOAD can ever read; loadable delimiters, including
+-- multi-character ones, stay allowed and keep round-tripping.
+select id, s from (select 1 as id, 'a' as s) t
+into outfile 'stage://outfile_fields_lines_stage/delim_quote.csv'
+fields terminated by '"' enclosed by '\\' escaped by '' lines starting by 'p:' header 'false';
+select count(*) from stage_list('stage://outfile_fields_lines_stage/delim_quote.csv');
+select id, s from (select 1 as id, 'ab' as s) t
+into outfile 'stage://outfile_fields_lines_stage/delim_multi_ok.csv'
+fields terminated by '|@' enclosed by '' escaped by '' lines starting by 'p:' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/delim_multi_ok.csv' as datalink)));
+create table delim_multi_back (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/delim_multi_ok.csv' into table delim_multi_back
+fields terminated by '|@' enclosed by '' escaped by '' lines starting by 'p:';
+select id, s from delim_multi_back;
+drop table delim_multi_back;
+
 remove files from stage if exists 'stage://outfile_fields_lines_stage/*.csv';
 select count(*) from stage_list('stage://outfile_fields_lines_stage/');
 drop stage outfile_fields_lines_stage;

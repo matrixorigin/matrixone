@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1511,9 +1512,9 @@ func TestOutfileEscapeEqualsEnclosureSimulation(t *testing.T) {
 		ep.ctx = context.Background()
 		require.Equal(t, "\n", string(ep.csvNormalizedRecordTerm()))
 		// The NULL variant accepts a parsable marker.
-		require.True(t, csvFieldEmissionParses(ep, []byte("#\\N#"), ep.csvNormalizedRecordTerm(), nil, true))
+		require.True(t, ep.csvFieldEmissionParses([]byte("#\\N#"), ep.csvNormalizedRecordTerm(), nil, true))
 		// Trailing records fail the exactly-one-record requirement.
-		require.False(t, csvFieldEmissionParses(ep, []byte("#a#\n#b#"), ep.csvNormalizedRecordTerm(), []byte("a"), false))
+		require.False(t, ep.csvFieldEmissionParses([]byte("#a#\n#b#"), ep.csvNormalizedRecordTerm(), []byte("a"), false))
 	})
 
 	t.Run("absent ESCAPED BY mirrors the loader default escape", func(t *testing.T) {
@@ -1651,5 +1652,156 @@ func TestOutfileEscapeEqualsEnclosureSimulation(t *testing.T) {
 		ep.ctx = context.Background()
 		ep.mrs = mrs
 		require.ErrorContains(t, exportDataFromResultSetToCSVFile(ep), "when ENCLOSED BY and ESCAPED BY are the same character")
+	})
+}
+
+// TestOutfileInvalidFieldDelimiterRejected pins the csvparser constructor
+// contract (validDelim): CR, LF, double quote, NUL and invalid runes are
+// never legal field delimiters in LOAD, so export must reject them up front
+// with a statement error instead of writing a file no LOAD can parse (and
+// the emission simulator must never be asked to replay such a framing).
+func TestOutfileInvalidFieldDelimiterRejected(t *testing.T) {
+	const msg = "CSV FIELDS TERMINATED BY must not be CR, LF, a double quote, NUL or an invalid rune"
+	t.Run("rejected delimiters", func(t *testing.T) {
+		for _, c := range []struct {
+			name string
+			term string
+		}{
+			{"double quote", "\""},
+			{"carriage return", "\r"},
+			{"line feed", "\n"},
+			{"NUL", "\x00"},
+			{"invalid rune", "\xff"},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				ep := newOutfileExportConfig(tree.NewFields(c.term, false, 0, 0), nil, "\n")
+				require.ErrorContains(t, ep.validateCSVFraming(context.Background()), msg)
+			})
+		}
+	})
+
+	t.Run("loadable delimiters still pass", func(t *testing.T) {
+		for _, c := range []struct {
+			name string
+			term string
+		}{
+			{"comma", ","},
+			{"tab", "\t"},
+			{"multibyte rune", "€"},
+			{"multi-character", "|@"},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				ep := newOutfileExportConfig(tree.NewFields(c.term, false, 0, 0), nil, "\n")
+				require.NoError(t, ep.validateCSVFraming(context.Background()))
+			})
+		}
+	})
+
+	t.Run("an unconstructable replay parser fails closed", func(t *testing.T) {
+		// validateCSVFraming keeps such a framing from ever reaching the
+		// gate; if one still did, the gate must report mismatch instead of
+		// dereferencing a nil parser.
+		ep := newOutfileExportConfig(tree.NewFields("\"", false, '#', '#'), nil, "\n")
+		require.False(t, ep.csvFieldEmissionParses([]byte("#a#"), ep.csvNormalizedRecordTerm(), []byte("a"), false))
+	})
+}
+
+// TestOutfileEmissionSimulatorPoolDeterminism verifies that reusing one
+// csvparser through Reset (the per-statement simulator pool) gives exactly
+// the same accept/reject verdicts as fresh parsers, including after a
+// simulator is dropped for failing mid-scan, and that concurrent conversion
+// workers sharing the pool do not interfere.
+func TestOutfileEmissionSimulatorPoolDeterminism(t *testing.T) {
+	// Enclosure and escape both '#': exercises the enclosure==escape scan
+	// where fresh-parser versus pooled-reuse differences were historically
+	// the most surprising.
+	fixtures := []struct {
+		name     string
+		field    string
+		want     string
+		wantNull bool
+		accept   bool
+	}{
+		{"plain enclosed value", "#ab#", "ab", false, true},
+		{"CR triple inside enclosure", "#a##r#", "a\r", false, true},
+		{"NULL marker inside enclosure", "#\\N#", "", true, true},
+		{"text value fails the NULL check", "#ab#", "", true, false},
+		{"NULL marker fails the value check", "#\\N#", "ab", false, false},
+		{"unterminated enclosure scans to an error", "#a", "", false, false},
+		{"extra record is rejected", "#a#\n#b#", "a", false, false},
+	}
+
+	t.Run("sequential reuse is deterministic", func(t *testing.T) {
+		ep := newOutfileExportConfig(tree.NewFields(",", false, '#', '#'), nil, "\n")
+		term := ep.csvNormalizedRecordTerm()
+		for round := 0; round < 50; round++ {
+			for _, c := range fixtures {
+				require.Equal(t, c.accept,
+					ep.csvFieldEmissionParses([]byte(c.field), term, []byte(c.want), c.wantNull),
+					"round %d case %s", round, c.name)
+			}
+		}
+	})
+
+	t.Run("concurrent workers are deterministic", func(t *testing.T) {
+		ep := newOutfileExportConfig(tree.NewFields(",", false, '#', '#'), nil, "\n")
+		term := ep.csvNormalizedRecordTerm()
+		var wg sync.WaitGroup
+		errs := make([]string, 0)
+		var mu sync.Mutex
+		for w := 0; w < 8; w++ {
+			wg.Add(1)
+			go func(w int) {
+				defer wg.Done()
+				for round := 0; round < 100; round++ {
+					c := fixtures[(w+round)%len(fixtures)]
+					if got := ep.csvFieldEmissionParses([]byte(c.field), term, []byte(c.want), c.wantNull); got != c.accept {
+						mu.Lock()
+						errs = append(errs, fmt.Sprintf("worker %d round %d case %s: got %v", w, round, c.name, got))
+						mu.Unlock()
+					}
+				}
+			}(w)
+		}
+		wg.Wait()
+		require.Empty(t, errs)
+	})
+}
+
+// BenchmarkOutfileEmissionSimulation measures the per-cell cost of the
+// LOAD-replay gate. Constructing a csvparser per cell (the pre-pool shape)
+// allocates a 320 KiB block buffer and compiles the escape regexp every
+// time; the pooled simulator must stay in the nanosecond/low-alloc range so
+// the gate never dominates CSV formatting.
+func BenchmarkOutfileEmissionSimulation(b *testing.B) {
+	ep := newOutfileExportConfig(tree.NewFields(",", false, '#', '#'), nil, "\n")
+	term := ep.csvNormalizedRecordTerm()
+	field := []byte("#a##r#")
+	want := []byte{'a', '\r'}
+
+	b.Run("fresh parser per cell (pre-pool shape)", func(b *testing.B) {
+		b.ReportAllocs()
+		cfg := &csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEnclosedBy: "#", FieldsEscapedBy: "#",
+			LinesTerminatedBy: "\n", Null: []string{`\N`}, UnescapedQuote: true,
+		}
+		for i := 0; i < b.N; i++ {
+			p, err := csvparser.NewCSVParser(cfg, bytes.NewReader(append(append([]byte{}, field...), term...)), csvparser.ReadBlockSize, false)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if _, err := p.Read(nil); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("pooled simulator", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if !ep.csvFieldEmissionParses(field, term, want, false) {
+				b.Fatal("fixture must round-trip")
+			}
+		}
 	})
 }

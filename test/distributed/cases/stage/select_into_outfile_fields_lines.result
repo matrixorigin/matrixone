@@ -388,6 +388,26 @@ select id, hex(s) as hs from enc_eq_hash_back;
 1  ¦  610D
 drop table enc_eq_hash_back;
 drop table enc_eq_src;
+select id, s from (select 1 as id, 'a' as s) t
+into outfile 'stage://outfile_fields_lines_stage/delim_quote.csv'
+fields terminated by '"' enclosed by '\\' escaped by '' lines starting by 'p:' header 'false';
+invalid input: CSV FIELDS TERMINATED BY must not be CR, LF, a double quote, NUL or an invalid rune: LOAD rejects the field delimiter
+select count(*) from stage_list('stage://outfile_fields_lines_stage/delim_quote.csv');
+➤ count(*)[-5,64,0]  𝄀
+0
+select id, s from (select 1 as id, 'ab' as s) t
+into outfile 'stage://outfile_fields_lines_stage/delim_multi_ok.csv'
+fields terminated by '|@' enclosed by '' escaped by '' lines starting by 'p:' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/delim_multi_ok.csv' as datalink)));
+➤ hex(load_file(cast(stage://outfile_fields_lines_stage/delim_multi_ok.csv as datalink)))[-1,16383,0]  𝄀
+703A317C4061620A
+create table delim_multi_back (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/delim_multi_ok.csv' into table delim_multi_back
+fields terminated by '|@' enclosed by '' escaped by '' lines starting by 'p:';
+select id, s from delim_multi_back;
+➤ id[4,32,0]  ¦  s[12,20,0]  𝄀
+1  ¦  ab
+drop table delim_multi_back;
 remove files from stage if exists 'stage://outfile_fields_lines_stage/*.csv';
 select count(*) from stage_list('stage://outfile_fields_lines_stage/');
 ➤ count(*)[-5,64,0]  𝄀

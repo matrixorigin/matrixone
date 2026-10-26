@@ -88,6 +88,9 @@ type ExportConfig struct {
 	stopFileCancel  func() bool
 	fileCancelDone  chan struct{}
 	ownsFileService bool
+	// simPool recycles the LOAD-replay simulators between concurrent
+	// conversion workers (see csvEmissionSimulator).
+	simPool sync.Pool
 }
 
 type writeParam struct {
@@ -336,24 +339,18 @@ func (ec *ExportConfig) csvNormalizedRecordTerm() []byte {
 	return []byte(term)
 }
 
-// csvFieldEmissionParses replays one fully emitted CSV field through LOAD's
-// parser with the configured framing and requires it to read back as exactly
-// one field and one record — the ground-truth check for configurations where
-// the writer cannot statically tell whether the encoded bytes survive
-// csvparser's enclosure/escape scan (its behavior differs between backslash
-// and other enclosure==escape bytes, per generated payload letter). With
-// wantNull the field must read back as SQL NULL; otherwise it must read
-// back byte-identical to want.
-func csvFieldEmissionParses(oq *ExportConfig, field, recordTerm, want []byte, wantNull bool) bool {
-	// Mirror the loader's clause defaults exactly (newReaderWithParam):
-	// absent clauses fall back to tab terminator, double-quote enclosure
-	// and backslash escape, and only an explicit ESCAPED BY '' disables
-	// escaping — never the absence of the clause.
+// csvEmissionConfig mirrors the loader's clause defaults exactly
+// (newReaderWithParam): absent clauses fall back to tab terminator,
+// double-quote enclosure and backslash escape, and only an explicit empty
+// ESCAPED BY disables escaping — never the absence of the clause.
+// The configuration is constant for the life of one ExportConfig, so one
+// simulator can verify the whole statement.
+func (oq *ExportConfig) csvEmissionConfig() *csvparser.CSVConfig {
 	cfg := &csvparser.CSVConfig{
 		FieldsTerminatedBy: "\t",
 		FieldsEnclosedBy:   `"`,
 		FieldsEscapedBy:    `\`,
-		LinesTerminatedBy:  string(recordTerm),
+		LinesTerminatedBy:  string(oq.csvNormalizedRecordTerm()),
 		Null:               []string{`\N`},
 		UnescapedQuote:     true,
 	}
@@ -372,21 +369,78 @@ func csvFieldEmissionParses(oq *ExportConfig, field, recordTerm, want []byte, wa
 			}
 		}
 	}
-	// NewCSVParser cannot return an error for this configuration shape: the
-	// only error paths are a non-compiling escape regexp (QuoteMeta makes it
-	// literal) and a STARTING BY/terminator overlap (never set here).
-	parser, _ := csvparser.NewCSVParser(cfg, bytes.NewReader(append(field, recordTerm...)), csvparser.ReadBlockSize, false)
-	row, err := parser.Read(nil)
+	return cfg
+}
+
+// csvEmissionSimulator wraps a reusable csvparser so the per-field emission
+// check costs a buffer refill instead of a fresh parser: NewCSVParser
+// allocates a 320 KiB block buffer and compiles the escape regexp, which per
+// cell dominated the formatter (~26 µs and ~330 KB of garbage per value at
+// review time). CSVParser.Reset re-points a parser at a new stream and
+// clears all buffered state (csvparser-sanctioned reuse, no cross-input
+// bleed), so one simulator serves every cell of the statement; concurrent
+// conversion workers share instances through ExportConfig.simPool.
+type csvEmissionSimulator struct {
+	parser  *csvparser.CSVParser
+	err     error
+	rd      bytes.Reader
+	scratch []byte
+	row     []csvparser.Field
+}
+
+// acquireEmissionSimulator returns a pooled simulator or constructs one.
+// Construction is intentionally error-recording instead of error-returning:
+// the emit path must treat an unconstructable parser the same as a failed
+// replay — fail closed.
+func (oq *ExportConfig) acquireEmissionSimulator() *csvEmissionSimulator {
+	if sim, ok := oq.simPool.Get().(*csvEmissionSimulator); ok && sim != nil {
+		return sim
+	}
+	sim := &csvEmissionSimulator{}
+	sim.parser, sim.err = csvparser.NewCSVParser(oq.csvEmissionConfig(), &sim.rd, csvparser.ReadBlockSize, false)
+	return sim
+}
+
+// csvFieldEmissionParses replays one fully emitted CSV field through LOAD's
+// parser with the configured framing and requires it to read back as exactly
+// one field and one record — the ground-truth check for configurations where
+// the writer cannot statically tell whether the encoded bytes survive
+// csvparser's enclosure/escape scan (its behavior differs between backslash
+// and other enclosure==escape bytes, per generated payload letter). With
+// wantNull the field must read back as SQL NULL; otherwise it must read
+// back byte-identical to want. A simulator that errors mid-scan is dropped
+// rather than returned to the pool.
+func (oq *ExportConfig) csvFieldEmissionParses(field, recordTerm, want []byte, wantNull bool) bool {
+	sim := oq.acquireEmissionSimulator()
+	if sim.err != nil {
+		// Defensive: validateCSVFraming rejects the operator-visible
+		// misconfigurations (CR/LF/quote/NUL/invalid field delimiters) before
+		// export starts, so construction cannot fail here. Any residual
+		// failure still fails closed.
+		return false
+	}
+	sim.scratch = append(sim.scratch[:0], field...)
+	sim.scratch = append(sim.scratch, recordTerm...)
+	sim.rd.Reset(sim.scratch)
+	sim.parser.Reset(&sim.rd)
+	sim.row = sim.row[:0]
+	row, err := sim.parser.Read(sim.row)
 	if err != nil || len(row) != 1 {
 		return false
 	}
-	if _, err = parser.Read(nil); err != io.EOF {
+	sim.row = row
+	if _, err = sim.parser.Read(sim.row[:0]); err != io.EOF {
 		return false
 	}
 	if wantNull {
-		return row[0].IsNull
+		if !row[0].IsNull {
+			return false
+		}
+	} else if row[0].IsNull || row[0].Val != string(want) {
+		return false
 	}
-	return !row[0].IsNull && row[0].Val == string(want)
+	oq.simPool.Put(sim)
+	return true
 }
 
 // readerStripsTrailingCR reports whether LOAD's parser drops a record's
@@ -466,7 +520,7 @@ var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byt
 		if flag {
 			emitted = append(append([]byte{enclosed}, encoded...), enclosed)
 		}
-		if !csvFieldEmissionParses(oq, emitted, oq.csvNormalizedRecordTerm(), tmp, false) {
+		if !oq.csvFieldEmissionParses(emitted, oq.csvNormalizedRecordTerm(), tmp, false) {
 			return moerr.NewNotSupportedf(oq.ctx,
 				"select into outfile (csv): a value cannot round-trip when ENCLOSED BY and ESCAPED BY are the same character '%c': its encoded form breaks LOAD's field scan", enclosed)
 		}
@@ -502,7 +556,7 @@ func formatOutputNull(oq *ExportConfig, symbol []byte, enclosed byte, buffer *by
 		if flag {
 			emitted = append(append([]byte{enclosed}, marker...), enclosed)
 		}
-		if !csvFieldEmissionParses(oq, emitted, oq.csvNormalizedRecordTerm(), nil, true) {
+		if !oq.csvFieldEmissionParses(emitted, oq.csvNormalizedRecordTerm(), nil, true) {
 			return moerr.NewNotSupportedf(oq.ctx,
 				"select into outfile (csv): a NULL value cannot round-trip with ENCLOSED BY '%c': the emitted \\N marker breaks LOAD's field scan", enclosed)
 		}
@@ -1077,6 +1131,17 @@ func (ec *ExportConfig) validateCSVFraming(ctx context.Context) error {
 		}
 		if terminator != "" && strings.Contains(l.StartingBy, terminator) {
 			return moerr.NewInvalidInputNoCtx(fmt.Sprintf("STARTING BY '%s' cannot contain LINES TERMINATED BY '%s'", l.StartingBy, terminator))
+		}
+	}
+	// The loader's parser constructor rejects CR, LF, double quote, NUL and
+	// invalid runes as the field delimiter (csvparser validDelim, mirroring
+	// Go's encoding/csv). Any export framed that way is unloadable — and the
+	// round-trip simulation must never see one — so reject before opening
+	// the file.
+	if f := ec.userConfig.Fields; f != nil && f.Terminated != nil && f.Terminated.Value != "" {
+		if r, _ := utf8.DecodeRuneInString(f.Terminated.Value); r == 0 || r == '"' || r == '\r' || r == '\n' || r == utf8.RuneError {
+			return moerr.NewInvalidInput(ctx,
+				"CSV FIELDS TERMINATED BY must not be CR, LF, a double quote, NUL or an invalid rune: LOAD rejects the field delimiter")
 		}
 	}
 	if ec.escapeChar() == 0 {
