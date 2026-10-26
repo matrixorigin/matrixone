@@ -467,11 +467,20 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	if id, expr, handled, err := builder.tryDeepExistential(nodeID, subquery, ctx, consumer); handled {
 		return id, expr, err
 	}
-	if builder.subqueryNeedsDependent(subquery.NodeId) && !builder.legacyDeepScalarAggregateSafe(subquery, nullResultRejected) ||
-		builder.rangeScalarNeedsDependent(nodeID, subquery, ctx) {
+	// The existing deep-correlation proof owns its complete domain. The range
+	// admission only supplements otherwise legacy, one-level relations.
+	dependent := builder.subqueryNeedsDependent(subquery.NodeId)
+	if dependent {
+		dependent = !builder.legacyDeepScalarAggregateSafe(subquery, nullResultRejected)
+	} else {
+		dependent = builder.rangeScalarNeedsDependent(nodeID, subquery, ctx)
+	}
+	if dependent {
 		if subquery.Child != nil && hasSubquery(subquery.Child) {
+			// The left operand has the same demand as the comparison. Hoisting
+			// it into a JOIN would evaluate even an unselected CASE branch.
 			var err error
-			nodeID, subquery.Child, err = builder.flattenSubqueriesWithContext(nodeID, subquery.Child, ctx, false)
+			subquery.Child, err = builder.bindDependentJoinCondition(subquery.Child)
 			if err != nil {
 				return 0, nil, err
 			}

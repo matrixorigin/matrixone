@@ -232,6 +232,12 @@ func TestCorrelatedLocalCTEIndependentAggregateFilter(t *testing.T) {
 
 func TestDeepNonEqualityScalarAggregateDoesNotEscapeIntoExists(t *testing.T) {
 	for _, tc := range []struct{ name, sql string }{
+		{"no FROM range", `SELECT o.N_NATIONKEY FROM NATION o
+			WHERE EXISTS (SELECT 1 WHERE 1 = (SELECT MAX(i.N_NATIONKEY) FROM NATION i
+				WHERE i.N_NATIONKEY < o.N_NATIONKEY))`},
+		{"multiple bindings range", `SELECT o.N_NATIONKEY FROM NATION o
+			WHERE EXISTS (SELECT 1 FROM NATION j CROSS JOIN NATION h
+				WHERE 1 = (SELECT MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY < o.N_NATIONKEY))`},
 		{"grandparent range", `SELECT o.N_NATIONKEY FROM NATION o
 			WHERE EXISTS (SELECT 1 FROM NATION j WHERE j.N_REGIONKEY = 1
 				AND j.N_REGIONKEY = (SELECT MAX(k.N_REGIONKEY) FROM NATION k
@@ -264,7 +270,20 @@ func TestDeepEqualityScalarAggregateAcrossTwoOuterScopes(t *testing.T) {
 			AND j.N_REGIONKEY = (SELECT MAX(k.N_REGIONKEY) FROM NATION k
 				WHERE o.N_NATIONKEY = 1 AND k.N_REGIONKEY = j.N_REGIONKEY))`)
 	require.NoError(t, err)
+	require.Nil(t, p.GetQuery().Correlation)
 	assertReachablePlanHasNoCorrelatedExpr(t, p.GetQuery())
+	for _, middle := range []string{"", " FROM NATION j", " FROM NATION j CROSS JOIN NATION h"} {
+		for _, predicate := range []string{"=", "<=>"} {
+			t.Run(middle+predicate, func(t *testing.T) {
+				p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+					`SELECT o.N_NATIONKEY FROM NATION o WHERE EXISTS (SELECT 1`+middle+
+						` WHERE 1 = (SELECT MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY`+predicate+`o.N_NATIONKEY))`)
+				require.NoError(t, err)
+				require.Nil(t, p.GetQuery().Correlation, "proven deep equality must remain set-oriented")
+				assertReachablePlanHasNoCorrelatedExpr(t, p.GetQuery())
+			})
+		}
+	}
 }
 
 func TestDeepOuterOnlyScalarAggregateAcrossThreeScopes(t *testing.T) {

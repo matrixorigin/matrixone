@@ -346,4 +346,56 @@ Subquery returns more than 1 row
 select 1 as connection_reusable;
 ➤ connection_reusable[-5,64,0]  𝄀
 1
+select o.id, case when o.id < 0 then
+(o.id, (select j.n from inner_rows j where j.n <= o.n)) =
+(select count(*), max(i.n) from inner_rows i where i.n <= o.n)
+else 0 end as skipped_correlated,
+case when o.id < 0 then
+(o.id, (select j.n from inner_rows j)) =
+(select count(*), max(i.n) from inner_rows i where i.n <= o.n)
+else 0 end as skipped_independent
+from outer_rows o where o.id <= 2 order by o.id;
+➤ id[4,32,0]  ¦  skipped_correlated[-6,8,0]  ¦  skipped_independent[-6,8,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  0  ¦  0
+select o.id, case when o.id = 1 then
+(o.id, (select j.n from inner_rows j where j.n <= o.n)) =
+(select count(*), max(i.n) from inner_rows i where i.n <= o.n)
+else 0 end as selected_single
+from outer_rows o where o.id <= 2 order by o.id;
+➤ id[4,32,0]  ¦  selected_single[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0
+select case when o.id > 0 then
+(o.id, (select j.n from inner_rows j where j.n <= o.n)) =
+(select count(*), max(i.n) from inner_rows i where i.n <= o.n)
+else 0 end as selected_multiple
+from outer_rows o where o.id = 2;
+Subquery returns more than 1 row
+select o.id,
+(o.id, (select j.n from inner_rows j where j.n < 0)) =
+(select count(*), max(i.n) from inner_rows i where i.n <= o.n) as empty_operand,
+(o.id, case when o.id < 0 then (select j.n from inner_rows j where j.n <= o.n) else o.id end) =
+(select count(*), max(i.n) from inner_rows i where i.n <= o.n) as nested_guard
+from outer_rows o where o.id <= 2 order by o.id;
+➤ id[4,32,0]  ¦  empty_operand[-6,8,0]  ¦  nested_guard[-6,8,0]  𝄀
+1  ¦  null  ¦  1  𝄀
+2  ¦  null  ¦  1
+select o.id from outer_rows o
+where exists (select 1 where 1 = (select max(i.n) from inner_rows i where i.n = o.n))
+order by o.id;
+➤ id[4,32,0]  𝄀
+1
+select o.id from outer_rows o
+where exists (select 1 from inner_rows a cross join inner_rows b
+where 1 = (select max(i.n) from inner_rows i where i.n <=> o.n))
+order by o.id;
+➤ id[4,32,0]  𝄀
+1
+select o.id from outer_rows o
+where exists (select 1 where 1 = (select max(i.n) from inner_rows i where i.n < o.n))
+order by o.id;
+➤ id[4,32,0]  𝄀
+2  𝄀
+6
 drop database test_scalar_cte_non_eq_agg;

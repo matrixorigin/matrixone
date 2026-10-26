@@ -20,7 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-// Select complete relation execution before pull-up can split aggregate groups
+// For one-level candidates not claimed by the existing deep/dependent routing,
+// select complete relation execution before pull-up can split aggregate groups
 // or remove filters. A range predicate above an independent aggregate does not
 // cross that aggregate and must not change its existing scalar join route.
 func (builder *QueryBuilder) rangeScalarNeedsDependent(outerID int32, sub *plan.SubqueryRef, ctx *BindContext) bool {

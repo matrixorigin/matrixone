@@ -194,5 +194,44 @@ select (select count(*) from r i where i.n <= r.n group by i.n having i.n > 0)
 from r where n = 3;
 select 1 as connection_reusable;
 
+-- 行比较两侧均属于 CASE 的求值范围；未选分支不能执行多行左操作数。
+select o.id, case when o.id < 0 then
+       (o.id, (select j.n from inner_rows j where j.n <= o.n)) =
+       (select count(*), max(i.n) from inner_rows i where i.n <= o.n)
+       else 0 end as skipped_correlated,
+       case when o.id < 0 then
+       (o.id, (select j.n from inner_rows j)) =
+       (select count(*), max(i.n) from inner_rows i where i.n <= o.n)
+       else 0 end as skipped_independent
+from outer_rows o where o.id <= 2 order by o.id;
+select o.id, case when o.id = 1 then
+       (o.id, (select j.n from inner_rows j where j.n <= o.n)) =
+       (select count(*), max(i.n) from inner_rows i where i.n <= o.n)
+       else 0 end as selected_single
+from outer_rows o where o.id <= 2 order by o.id;
+select case when o.id > 0 then
+       (o.id, (select j.n from inner_rows j where j.n <= o.n)) =
+       (select count(*), max(i.n) from inner_rows i where i.n <= o.n)
+       else 0 end as selected_multiple
+from outer_rows o where o.id = 2;
+select o.id,
+       (o.id, (select j.n from inner_rows j where j.n < 0)) =
+       (select count(*), max(i.n) from inner_rows i where i.n <= o.n) as empty_operand,
+       (o.id, case when o.id < 0 then (select j.n from inner_rows j where j.n <= o.n) else o.id end) =
+       (select count(*), max(i.n) from inner_rows i where i.n <= o.n) as nested_guard
+from outer_rows o where o.id <= 2 order by o.id;
+
+-- 深层等值关联保持集合路径；无 FROM 与多个中间绑定不改变语义。
+select o.id from outer_rows o
+where exists (select 1 where 1 = (select max(i.n) from inner_rows i where i.n = o.n))
+order by o.id;
+select o.id from outer_rows o
+where exists (select 1 from inner_rows a cross join inner_rows b
+              where 1 = (select max(i.n) from inner_rows i where i.n <=> o.n))
+order by o.id;
+select o.id from outer_rows o
+where exists (select 1 where 1 = (select max(i.n) from inner_rows i where i.n < o.n))
+order by o.id;
+
 -- @teardown
 drop database test_scalar_cte_non_eq_agg;

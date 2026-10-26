@@ -27,6 +27,7 @@ import (
 
 func TestRangeScalarCompleteRelation(t *testing.T) {
 	for _, tc := range []struct{ name, sql string }{
+		{"guarded row operand", `SELECT CASE WHEN o.N_NATIONKEY<0 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END FROM NATION o`},
 		{"arithmetic", `SELECT (SELECT MAX(i.N_NATIONKEY)+1 FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY) FROM NATION o`},
 		{"coalesce", `SELECT (SELECT COALESCE(MAX(i.N_NATIONKEY),-1) FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY) FROM NATION o`},
 		{"case", `SELECT (SELECT CASE WHEN MAX(i.N_NATIONKEY) IS NULL THEN -1 ELSE MAX(i.N_NATIONKEY) END FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY) FROM NATION o`},
@@ -53,6 +54,20 @@ func TestRangeScalarCompleteRelation(t *testing.T) {
 			require.NotEmpty(t, q.Correlation.Programs)
 			if tc.name == "two outer bindings" {
 				require.Len(t, q.Correlation.Programs[0].InputTypes, 2)
+			}
+			if tc.name == "guarded row operand" {
+				found := false
+				for _, node := range q.Nodes {
+					require.NoError(t, planpb.VisitExpressionsInOwner(node, func(expr *planpb.Expr) error {
+						return planpb.VisitExprTree(expr, func(e *planpb.Expr) error {
+							if call := e.GetDependent(); call != nil && len(call.Lhs) == 2 && call.Lhs[1].GetDependent() != nil {
+								found = true
+							}
+							return nil
+						})
+					}))
+				}
+				require.True(t, found, "comparison operand must remain inside the demand expression")
 			}
 		})
 	}
