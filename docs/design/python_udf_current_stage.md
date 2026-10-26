@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r30-2026-10-25` |
+| Design revision | `python-udf-current-stage-r31-2026-10-26` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
-| Upstream repair baseline | `9a7e12a93328a69bac7261beedc88930b7984a10` (MORPC 131 exact weighted percentile, 130 incomplete temporal strings, 129 JSON ELT/opaque text, 128 mixed JSON/numeric comparisons, 127 vector search knobs; catalog 4.0.17 preserved) |
-| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r30 contract preserves upstream historical upgrade identities through 4.0.17, adds a separate Python revision repair in catalog 4.0.18, and uses protocol 132 admission, including prepared reuse and physical/remote execution. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
+| Upstream repair baseline | `861a2c4cb68961d8b6b01f18e0aa6ac52a3a505f` (MORPC 132 float conversions, 131 exact weighted percentile, 130 incomplete temporal strings, 129 JSON ELT/opaque text, 128 mixed JSON/numeric comparisons, 127 vector search knobs; catalog 4.0.17 preserved) |
+| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r31 contract preserves upstream historical upgrade identities through 4.0.17, adds a separate Python revision repair in catalog 4.0.18, and uses protocol 133 admission, including prepared reuse and physical/remote execution. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the versioned governing proposal for the current PR stage. The owner
@@ -77,13 +77,13 @@ The shared revision catalog is additive to the existing SQL UDF contract.
 During a rolling tenant upgrade, SQL UDF writers continue using the legacy
 `mo_user_defined_function` row while `mo_function_revisions` is absent. The
 revision-aware writer and reader contract is admitted only at the active service-runtime
-MORPC protocol floor `132` (official main `latest + 1` for this PR). The immediate
-predecessor, 131, rejects Python execution and shared revision publication. Below
+MORPC protocol floor `133` (official main `latest + 1` for this PR). The immediate
+predecessor, 132, rejects Python execution and shared revision publication. Below
 that floor, a new binary creates ordinary SQL UDFs in the legacy row only, and readers explicitly
 use that row so an old writer and a new reader observe the same body. Replacing
 a function that already has a non-zero shared revision head is rejected below
 the floor; this prevents a legacy-only write from leaving a stale immutable
-revision that would become authoritative later. At protocol 132 and above,
+revision that would become authoritative later. At protocol 133 and above,
 writers publish the compatibility row, immutable revision, and active head in
 the same caller-owned transaction, and readers use the selected revision.
 A non-zero head with a missing or malformed revision is a catalog error; it is
@@ -103,13 +103,13 @@ Thus a tenant already at upstream final `4.0.17`, including one lacking revision
 tables, still
 receives the repair; earlier tenants traverse the normal chain first. Missing,
 partial and complete schemas converge through idempotent checks. Repair metadata
-requires protocol 132 before tenant tasks are created, and the repair handler
+requires protocol 133 before tenant tasks are created, and the repair handler
 rechecks every CN before catalog access on login compensation or direct replay; `Prepare` only selects
 `mo_catalog` and performs no DDL.
 
 Python DDL probes the required tenant schema and refuses admission until it is
 present. Shared revision publication and Python reads require active protocol
-132. That value is rollout state in the service runtime, not a computed live
+133. That value is rollout state in the service runtime, not a computed live
 cluster minimum. Cached/prepared Python plans and new or reused physical
 evaluators check it again before catalog reads, input evaluation or worker calls.
 Below the floor, revision-bearing SQL plans invalidate and rebind to the legacy
@@ -120,9 +120,9 @@ receiver. Missing or malformed protocol state fails closed.
 The shared `Query` protobuf preserves official `correlation = 19`; this PR
 uses `routine_dependencies = 20`. Both fields survive serialization, generated
 descriptor lookup, and deep-copy without aliasing. Python-bearing plans require
-protocol 132 before Prepare, publication, send, or execution; main-only dependent
+protocol 133 before Prepare, publication, send, or execution; main-only dependent
 programs retain their independent protocol-119 admission. The read-only
-`GetPythonUdfStatus` method uses wire capability 132, query method 47, request
+`GetPythonUdfStatus` method uses wire capability 133, query method 47, request
 field 49 and response field 50. Official session KILL/disconnect methods 45/46,
 request fields 47/48 and response fields 48/49 retain capability 120. The status
 wire fixtures use these current allocations; older unmerged candidate allocations
@@ -266,7 +266,7 @@ test/development correctness and backpressure, not hostile-code containment.
 
 | Contract | Evidence on the reviewed branch/head | Status |
 | --- | --- | --- |
-| Shared revision schema, protocol-132 admission, and SQL legacy fallback | `pkg/bootstrap/versions/v4_0_18/upgrade_test.go`; `pkg/bootstrap/service_statistics_upgrade_test.go`; `pkg/frontend/python_udf_catalog_test.go`; prepared, evaluator and remote protocol regression tests | Current repair and admission cases present; framework scheduling and idempotent DDL replay have unit cases. `pkg/tests/upgrade/upgrade_v4_0_18_routine_test.go` verifies real login repair from tenant versions 4.0.12/4.0.13/4.0.14/4.0.15/4.0.16/4.0.17, rejection at protocol 131 before mutation, legacy SQL UDF results, and two idempotent replays. This does not verify cross-binary downgrade. Historical upgrade-compatibility CI was skipped. |
+| Shared revision schema, protocol-133 admission, and SQL legacy fallback | `pkg/bootstrap/versions/v4_0_18/upgrade_test.go`; `pkg/bootstrap/service_statistics_upgrade_test.go`; `pkg/frontend/python_udf_catalog_test.go`; prepared, evaluator and remote protocol regression tests | Current repair and admission cases present; framework scheduling and idempotent DDL replay have unit cases. `pkg/tests/upgrade/upgrade_v4_0_18_routine_test.go` verifies real login repair from tenant versions 4.0.12/4.0.13/4.0.14/4.0.15/4.0.16/4.0.17, rejection at protocol 132 before mutation, legacy SQL UDF results, and two idempotent replays. This does not verify cross-binary downgrade. Historical upgrade-compatibility CI was skipped. |
 | Exact FunctionRef and overload invalidation | `pkg/frontend/routine_plan_validation_test.go`; `pkg/frontend/routine_namespace_test.go`; `test/distributed/cases/udf_python/overload_namespace.sql` | Unit and SQL prepared-plan cases present. |
 | SQL expression placement and result semantics | `pkg/sql/colexec/external_routine_eval.go`; `test/distributed/cases/udf_python/relational_positions.sql`, `dml_positions.sql`, `vector_mode.sql` | Physical evaluator and ordinary BVT cases present. |
 | Current-contract restore | `pkg/frontend/clone_database_source.go`; `pkg/frontend/snapshot_catalog_restore.go`; `snapshot_restore.sql` | Same-contract account restore case present; cross-version restore not verified. |
