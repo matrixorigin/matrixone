@@ -222,6 +222,7 @@ func TestIssue31303TaskNameInjectionCannotCrossTenant(t *testing.T) {
 	shown := make(map[string]struct{})
 	showTasks, err := tenantDB.QueryContext(ctx, "show tasks")
 	require.NoError(t, err)
+	defer showTasks.Close()
 	for showTasks.Next() {
 		var taskName sql.NullString
 		require.NoError(t, showTasks.Scan(
@@ -233,7 +234,6 @@ func TestIssue31303TaskNameInjectionCannotCrossTenant(t *testing.T) {
 		}
 	}
 	require.NoError(t, showTasks.Err())
-	showTasks.Close()
 	require.Contains(t, shown, quotedName, "quoted/backslash task name must round-trip verbatim")
 	execSQLRequire(t, ctx, tenantDB, fmt.Sprintf("drop task if exists `%s`", quotedName))
 	require.Equal(t, 0,
