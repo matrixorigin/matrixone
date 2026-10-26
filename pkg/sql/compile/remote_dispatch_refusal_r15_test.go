@@ -131,12 +131,20 @@ type r15StreamStats struct {
 	confirmVersion int64
 }
 
-// r15InstallPipelineClient installs a test pipeline client that mints
+// r15InstallPipelineClient installs the r15 dispatch scene on the test
+// goroutine's sequential setup point: a test pipeline client that mints
 // a fresh mock stream per RemoteRun — the same runtime-global override
-// the temporal and expression protocol tests use — so sequential and
-// concurrent dispatch attempts share only the stats.
+// the temporal and expression protocol tests use, so sequential and
+// concurrent dispatch attempts share only the stats — and the fake
+// transaction operator on the SHARED compile, through whose c.proc
+// every producer scope dispatched here executes. Arming both exactly
+// once here is what keeps r15ProducerScope read-only on c.proc: the
+// sustained test's barrier workers build their scopes concurrently,
+// and a shared-state write on that path is precisely the data race
+// the -race UT lanes reject.
 func r15InstallPipelineClient(t *testing.T, c *Compile, stats *r15StreamStats) {
 	t.Helper()
+	c.proc.Base.TxnOperator = fakeTxnOperator{}
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	old, had := rt.GetGlobalVariables(moruntime.PipelineClient)
 	client := &testPipelineClient{genStream: func(context.Context, string) (morpc.Stream, error) {
@@ -184,12 +192,14 @@ func r15InstallPipelineClient(t *testing.T, c *Compile, stats *r15StreamStats) {
 // the same scope is also the decided EMPTY-INPUT producer statement:
 // the runtime input is invisible at dispatch (the plan's mode is the
 // only fact the coordinator holds), which is exactly why the empty
-// statement joins the refusal.
+// statement joins the refusal. The scope's transaction operator is
+// the one r15InstallPipelineClient armed on the shared compile: this
+// builder READS c.proc only, so the sustained test's concurrent
+// workers can each build their scope safely.
 func r15ProducerScope(t *testing.T, c *Compile) *Scope {
 	t.Helper()
 	mu := multi_update.NewArgument()
 	mu.Action = multi_update.UpdateWriteS3
-	c.proc.Base.TxnOperator = fakeTxnOperator{}
 	return &Scope{
 		Magic:         Remote,
 		Proc:          c.proc,

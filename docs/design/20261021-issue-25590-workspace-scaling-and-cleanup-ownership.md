@@ -4637,3 +4637,59 @@ CI blocker classes (checkout/toolchain transport) played no part in this
 failure. The pre-correction document sha256 is
 2a83657cbdd94edf5f8f6639851e918f36f1eb9e310dc05513141a692575f8e2; this
 append is the only design-document change of the round.
+
+CI ROUND RECORD, SECOND FOLLOW-UP (2026-10-26, head 37b2e4422d;
+test-fixture ordinary fix): the same-lane re-run validated the previous
+record's correction first - matrixone ALL CI run 40267988027 attempt 1
+finished BOTH multi-CN compose BVT legs green (jobs 121397070654
+"multi CN e2e BVT Test on Linux/x64(COMPOSE, PESSIMISTIC)" and
+121397070699 "multi cn e2e bvt test docker compose(PROXY)", both
+success) on the exact expectation-mechanics fix - and then failed one
+unit lane:
+"UT Test on Ubuntu/x86" (job 121394532310, the -race lane) with exactly
+one caught defect: TestIssue25590LegacyProducerDispatchSustainedZero-
+AdmissionR15, "race detected during execution of test"; the downstream
+"CI Required" job projected it. The race is a fixture defect in this
+PR's own r15 test file, NOT in the admission path: two of the test's
+eight barrier-concurrent worker goroutines both WRITE the shared
+compile's c.proc.Base.TxnOperator inside r15ProducerScope
+(remote_dispatch_refusal_r15_test.go:192 at both heads - the identical
+report appears in the prior run 40257231611's lane job 121361633440),
+each worker building its producer scope after its barrier release.
+Equivalently: the helper armed a new fake transaction operator on the
+SHARED compile on EVERY scope build, so the concurrency testament of
+the same gate became a data race under -race; the non-race replay had
+masked it, and both CI lanes caught it deterministically. Repair
+(test-only; no production, assertion or recorded-expectation change):
+arm the shared compile exactly once on the test goroutine's sequential
+setup point - r15InstallPipelineClient, which every r15 test already
+calls first - and keep r15ProducerScope a pure READER of c.proc; the
+stateless fakeTxnOperator (nil embedding plus two pure methods,
+remoterun_test.go:3985) makes one armed instance shared across all
+producer scopes exactly equivalent. Validation ladder on the PR-head
+tree with the repository Makefile's CGO_CFLAGS include set:
+- RED, same command as CI's caught defect: go test -race -run
+  'TestIssue25590LegacyProducerDispatchSustainedZeroAdmissionR15'
+  -count=5 ./pkg/sql/compile fails with TWO identical
+  "WARNING: DATA RACE" reports at remote_dispatch_refusal_r15_test.go
+  :192/:292/:295 and "--- FAIL" exit 1
+  (/tmp/issue25590-race-round/race-repro2.log, REPRO2_RC=1),
+  matching both failed CI jobs' signatures.
+- GREEN, the identical command post-fix: ok, exit 0
+  (/tmp/issue25590-race-round/green-sustained.log,
+  GREEN_SUSTAINED_RC=0, 5 sustained-test replays under race
+  instrumentation).
+- FAMILY under -race: go test -race -run 'TestIssue25590.*R15'
+  -count=3 ./pkg/sql/compile ok, exit 0 - every r15 gate test
+  (the direct-refusal matrix, the dispatch integration subtests, the
+  capable-receiver control, the sustained campaign) replays three
+  times race-clean (/tmp/issue25590-race-round/green-family.log,
+  GREEN_FAMILY_RC=0).
+- FULL package family, nonrace regression net: go test -run
+  'TestIssue25590' -v ./pkg/sql/compile - 21 passing tests, 0 FAIL,
+  ok exit 0 (/tmp/issue25590-race-round/family-nonrace-v.log,
+  RC=0), confirming the fixture's blast radius did not reach any
+  other issue-25590 test of pkg/sql/compile.
+No §1/§5.3/§5.5 decision, invariant, or admission-path behavior
+changes; the gate's own sustainment and counterexample semantics are
+exactly as previously approved and locally re-proven here.
