@@ -1,0 +1,51 @@
+drop database if exists decimal_bool_arithmetic;
+create database decimal_bool_arithmetic;
+use decimal_bool_arithmetic;
+create table td(id int primary key, d decimal(10,2), d2 decimal(30,4));
+insert into td values (1, 1.50, 1.50), (2, 0, 0), (3, null, null);
+select id, d + true as p1, true + d as p2, d - true as m1, true - d as m2, d * true as t1, false * d as t2 from td order by id;
+➤ id[4,32,0]  ¦  p1[3,38,2]  ¦  p2[3,38,2]  ¦  m1[3,38,2]  ¦  m2[3,38,2]  ¦  t1[3,38,2]  ¦  t2[3,38,2]  𝄀
+1  ¦  2.50  ¦  2.50  ¦  0.50  ¦  -0.50  ¦  1.50  ¦  0.00  𝄀
+2  ¦  1.00  ¦  1.00  ¦  -1.00  ¦  1.00  ¦  0.00  ¦  0.00  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select id, d / true as q1, true / d as q2, d % true as r1, true % d as r2, d div true as i1 from td order by id;
+➤ id[4,32,0]  ¦  q1[3,38,6]  ¦  q2[3,38,4]  ¦  r1[3,38,2]  ¦  r2[3,38,2]  ¦  i1[-5,64,0]  𝄀
+1  ¦  1.500000  ¦  0.6667  ¦  0.50  ¦  1.00  ¦  1  𝄀
+2  ¦  0.000000  ¦  null  ¦  0.00  ¦  null  ¦  0  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select id, d = true as eq, true = d as eq2, d <> true as ne, d > true as gt, d < true as lt, d >= true as ge, d <= false as le from td order by id;
+➤ id[4,32,0]  ¦  eq[-6,8,0]  ¦  eq2[-6,8,0]  ¦  ne[-6,8,0]  ¦  gt[-6,8,0]  ¦  lt[-6,8,0]  ¦  ge[-6,8,0]  ¦  le[-6,8,0]  𝄀
+1  ¦  0  ¦  0  ¦  1  ¦  1  ¦  0  ¦  1  ¦  0  𝄀
+2  ¦  0  ¦  0  ¦  1  ¦  0  ¦  1  ¦  0  ¦  1  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select id, d2 + true as p, d2 - false as m, d2 * true as t, d2 / true as q, d2 % true as r, d2 = true as eq, d2 > false as gt from td order by id;
+➤ id[4,32,0]  ¦  p[3,38,4]  ¦  m[3,38,4]  ¦  t[3,38,4]  ¦  q[3,34,8]  ¦  r[3,30,4]  ¦  eq[-6,8,0]  ¦  gt[-6,8,0]  𝄀
+1  ¦  2.5000  ¦  1.5000  ¦  1.5000  ¦  1.50000000  ¦  0.5000  ¦  0  ¦  1  𝄀
+2  ¦  1.0000  ¦  0.0000  ¦  0.0000  ¦  0E-8  ¦  0.0000  ¦  0  ¦  0  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select cast(1.5 as decimal(10,2)) + true as a, true + cast(1.5 as decimal(10,2)) as b, cast(1.5 as decimal(10,2)) - true as c, cast(1.5 as decimal(10,2)) * true as e;
+➤ a[3,38,2]  ¦  b[3,38,2]  ¦  c[3,38,2]  ¦  e[3,38,2]  𝄀
+2.50  ¦  2.50  ¦  0.50  ¦  1.50
+select cast(1.5 as decimal(10,2)) = true as a, cast(1.5 as decimal(10,2)) > true as b, cast(0.5 as decimal(10,2)) < true as c;
+➤ a[-6,8,0]  ¦  b[-6,8,0]  ¦  c[-6,8,0]  𝄀
+0  ¦  1  ¦  1
+select 1.5 + true as a, true + 2.25 as b, 1.5 div true as c, 1.5 = true as e, 1.5 in (true, 2) as f;
+➤ a[3,38,1]  ¦  b[3,38,2]  ¦  c[-5,64,0]  ¦  e[-6,8,0]  ¦  f[-6,8,0]  𝄀
+2.5  ¦  3.25  ¦  1  ¦  0  ¦  0
+select id from td where d > true order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from td where d = false order by id;
+➤ id[4,32,0]  𝄀
+2
+select cast(true as decimal(10,2)) as t, cast(false as decimal(5,0)) as f, cast(true as decimal(30,4)) as t128, cast(true as decimal(60,4)) as t256;
+➤ t[3,10,2]  ¦  f[3,5,0]  ¦  t128[3,30,4]  ¦  t256[3,60,4]  𝄀
+1.00  ¦  0  ¦  1.0000  ¦  1.0000
+create table ti(a decimal(10,2));
+insert into ti values (true), (false), (null);
+select a from ti order by a;
+➤ a[3,10,2]  𝄀
+null  𝄀
+0.00  𝄀
+1.00
+drop database if exists decimal_bool_arithmetic;
