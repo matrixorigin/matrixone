@@ -1,0 +1,26 @@
+name: Coverage pool2 canary (do not merge)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - .github/workflows/coverage-pool2-canary.yaml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-pool2-canary-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    # This temporary same-repository PR validates CI #468 without merging it.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'codex/test-ci468-coverage-pool2-20261026'
+    uses: matrixorigin/CI/.github/workflows/coverage-ut.yaml@11441a1d4f7f7f57aa640420abb78383c8652013
+    with:
+      cache_seed: false
+      bvt_generation: ci468-canary-${{ github.run_id }}-${{ github.run_attempt }}
+    secrets: inherit
