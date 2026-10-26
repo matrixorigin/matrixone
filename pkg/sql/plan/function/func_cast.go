@@ -1191,9 +1191,9 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 			if err := newCast([]*vector.Vector{from, target}, tmp, proc, length, selectList, mode, allowTrailingSpaceTrim); err != nil {
 				return err
 			}
-			return castToLowPrecFloat([]*vector.Vector{tmp.GetResultVector(), parameters[1]}, *toType, result, proc, length, selectList)
+			return castToLowPrecFloat([]*vector.Vector{tmp.GetResultVector(), parameters[1]}, *toType, result, proc, length, selectList, mode)
 		}
-		return castToLowPrecFloat(parameters, *toType, result, proc, length, selectList)
+		return castToLowPrecFloat(parameters, *toType, result, proc, length, selectList, mode)
 	}
 	if isLowPrecFloat(fromType.Oid) {
 		// widen to float32 and cast it as a float32 value, so every float32 rule of this

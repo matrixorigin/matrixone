@@ -5596,7 +5596,7 @@ func TestCastLowPrecFloatSourcesAsFloat(t *testing.T) {
 		{"1abc", false, SQLCompatibilityMySQL, 1, false},
 		{"0.30000000000000000000000000000000000000001x", false, SQLCompatibilityMySQL, 0.30000000000000000000000000000000000000001, false},
 	} {
-		f, d, err := lowPrecTextValue(nil, tc.text, tc.binary, tc.mode)
+		f, d, err := lowPrecTextValue(nil, tc.text, tc.binary, tc.mode, castModeNormal)
 		if tc.fails {
 			require.Error(t, err, tc.text)
 			continue

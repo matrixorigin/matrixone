@@ -1165,6 +1165,16 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 			f.Func.Obj = int64(uint64(f.Func.Obj) | function.Distinct)
 		}
 	}
+	if function.GetFunctionIsWinIndicatorFunByName(funcName) || isLocalSlidingRankWindowFunction(funcName) {
+		// bf16/float16/float8/float4 values reach the kernels as float32, which holds them exactly
+		if f := windowFunc.GetF(); f != nil && len(f.Args) > 0 && types.T(f.Args[0].Typ.Id).IsLowPrecisionFloat() {
+			arg, err := appendCastBeforeExpr(b.GetContext(), f.Args[0], plan.Type{Id: int32(types.T_float32)})
+			if err != nil {
+				return nil, err
+			}
+			f.Args[0] = arg
+		}
+	}
 	if function.GetFunctionIsWinIndicatorFunByName(funcName) {
 		// Section-4 SQL surface of the technical-indicator kernels
 		// (issue #29949): required ORDER BY, explicit-frame rejection and

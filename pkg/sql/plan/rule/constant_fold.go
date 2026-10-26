@@ -1286,7 +1286,7 @@ func ContainsTruncatedFloatTextConversion(expr *plan.Expr) bool {
 			id, _ := function.DecodeOverloadID(fn.Func.Obj)
 			target := types.T(expr.Typ.Id)
 			if (id == function.CAST || id == function.CAST_STRICT || id == function.CAST_ASSIGN || id == function.CAST_IGNORE) &&
-				(target == types.T_float32 || target == types.T_float64) && types.T(fn.Args[0].Typ.Id).IsMySQLString() {
+				target.IsFloat() && types.T(fn.Args[0].Typ.Id).IsMySQLString() {
 				source := fn.Args[0]
 				if lit := source.GetLit(); lit != nil && !lit.Isnull && !lit.IsBin {
 					if value, ok := lit.Value.(*plan.Literal_Sval); ok && function.FloatTextTruncated(value.Sval) {

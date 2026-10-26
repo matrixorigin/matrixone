@@ -77,11 +77,14 @@ Data truncation: data out of range: data type FLOAT16, value 70000
 SELECT CAST(1e300 AS bf16);
 Data truncation: data out of range: data type BF16, value 1e+300
 SELECT CAST('inf' AS float8);
-invalid input: value +Inf is not a finite FLOAT8
+➤ cast(inf as float8)[7,23,31]  𝄀
+0.0
 SELECT CAST('nan' AS bf16);
-invalid input: value NaN is not a finite BF16
+➤ cast(nan as bf16)[7,23,31]  𝄀
+0.0
 SELECT CAST('-inf' AS float16);
-invalid input: value -Inf is not a finite FLOAT16
+➤ cast(-inf as float16)[7,23,31]  𝄀
+0.0
 SELECT CAST(1e308 * 100 AS bf16);
 Data truncation: data out of range: data type float64, DOUBLE value is out of range in '(1e+308 * 100)'
 SELECT CAST(6 * 2 AS float4);
@@ -830,6 +833,7 @@ SELECT CAST(CAST('7' AS JSON) AS float4);
 Data truncation: data out of range: data type FLOAT4, value 7
 DROP TABLE src;
 DROP TABLE dst;
+SET sql_mode = '';
 CREATE TABLE txt (id INT, b bf16, f FLOAT);
 INSERT INTO txt VALUES (1, 'abc', 'abc');
 INSERT INTO txt VALUES (2, '1abc', '1abc');
@@ -844,6 +848,7 @@ SELECT * FROM txt ORDER BY id;
 INSERT INTO txt VALUES (5, '1e39x', 1);
 Data truncation: data out of range: data type BF16, value 1e39x
 DROP TABLE txt;
+SET sql_mode = DEFAULT;
 SELECT HEX(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)));
 ➤ HEX(SERIAL(cast(1.5 as bf16), cast(-2 as float16), cast(-0.5 as float8), cast(3 as float4)))[-1,16383,0]  𝄀
 55BFC0563FFF574F58D0
@@ -878,4 +883,63 @@ c  ¦  4  𝄀
 d  ¦  2  𝄀
 f  ¦  12
 DROP TABLE np;
+SELECT CAST('0x10' AS FLOAT), CAST('0x10' AS bf16), CAST('-0x10' AS float16), CAST('0b101' AS float8), CAST('0b11' AS float4), CAST('0o7' AS bf16);
+➤ cast(0x10 as float)[7,23,31]  ¦  cast(0x10 as bf16)[7,23,31]  ¦  cast(-0x10 as float16)[7,23,31]  ¦  cast(0b101 as float8)[7,23,31]  ¦  cast(0b11 as float4)[7,23,31]  ¦  cast(0o7 as bf16)[7,23,31]  𝄀
+16.0  ¦  16.0  ¦  -16.0  ¦  5.0  ¦  3.0  ¦  7.0
+SELECT CAST('inf' AS FLOAT), CAST('inf' AS bf16), CAST('-inf' AS float16), CAST('nan' AS float8), CAST('nan' AS float4);
+➤ cast(inf as float)[7,23,31]  ¦  cast(inf as bf16)[7,23,31]  ¦  cast(-inf as float16)[7,23,31]  ¦  cast(nan as float8)[7,23,31]  ¦  cast(nan as float4)[7,23,31]  𝄀
+0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0
+SELECT CAST('1.5abc' AS FLOAT), CAST('1.5abc' AS bf16), CAST('1.5abc' AS float16), CAST('1.5abc' AS float8), CAST('1.5abc' AS float4);
+➤ cast(1.5abc as float)[7,23,31]  ¦  cast(1.5abc as bf16)[7,23,31]  ¦  cast(1.5abc as float16)[7,23,31]  ¦  cast(1.5abc as float8)[7,23,31]  ¦  cast(1.5abc as float4)[7,23,31]  𝄀
+1.5  ¦  1.5  ¦  1.5  ¦  1.5  ¦  1.5
+SELECT CAST('0x1.1p0' AS bf16);
+invalid input: "1.1p0" is invalid numeric string
+CREATE TABLE ta (id INT PRIMARY KEY, f FLOAT, a bf16, b float16, c float8, d float4);
+SET sql_mode = 'STRICT_TRANS_TABLES';
+INSERT INTO ta (id, f) VALUES (1, '1.5abc');
+Data truncated for DOUBLE value: '1.5abc'
+INSERT INTO ta (id, a) VALUES (1, '1.5abc');
+Data truncated for DOUBLE value: '1.5abc'
+INSERT INTO ta (id, b) VALUES (1, '1.5abc');
+Data truncated for DOUBLE value: '1.5abc'
+INSERT INTO ta (id, c) VALUES (1, '1.5abc');
+Data truncated for DOUBLE value: '1.5abc'
+INSERT INTO ta (id, d) VALUES (1, '1.5abc');
+Data truncated for DOUBLE value: '1.5abc'
+INSERT IGNORE INTO ta VALUES (1, '1.5abc', '1.5abc', '1.5abc', '1.5abc', '1.5abc');
+SET sql_mode = '';
+INSERT INTO ta VALUES (2, '2.5x', '2.5x', '2.5x', '2.5x', '2.5x');
+SET sql_mode = DEFAULT;
+SELECT * FROM ta ORDER BY id;
+➤ id[4,32,0]  ¦  f[7,23,31]  ¦  a[7,23,31]  ¦  b[7,23,31]  ¦  c[7,23,31]  ¦  d[7,23,31]  𝄀
+1  ¦  1.5  ¦  1.5  ¦  1.5  ¦  1.5  ¦  1.5  𝄀
+2  ¦  2.5  ¦  2.5  ¦  2.5  ¦  2.5  ¦  2.0
+DROP TABLE ta;
+CREATE TABLE tiw (id INT PRIMARY KEY, f FLOAT, a bf16, b float16, c float8, d float4);
+INSERT INTO tiw VALUES (1, 1, 1, 1, 1, 1), (2, 2, 2, 2, 2, 2), (3, 3, 3, 3, 3, 3), (4, 4, 4, 4, 4, 4), (5, 1.5, 1.5, 1.5, 1.5, 1.5);
+SELECT id, sma(f, 2) OVER (ORDER BY id), sma(a, 2) OVER (ORDER BY id), sma(b, 2) OVER (ORDER BY id), sma(c, 2) OVER (ORDER BY id), sma(d, 2) OVER (ORDER BY id) FROM tiw ORDER BY id;
+➤ id[4,32,0]  ¦  sma(f, 2) over (order by id)[8,53,31]  ¦  sma(a, 2) over (order by id)[8,53,31]  ¦  sma(b, 2) over (order by id)[8,53,31]  ¦  sma(c, 2) over (order by id)[8,53,31]  ¦  sma(d, 2) over (order by id)[8,53,31]  𝄀
+1  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+2  ¦  1.5  ¦  1.5  ¦  1.5  ¦  1.5  ¦  1.5  𝄀
+3  ¦  2.5  ¦  2.5  ¦  2.5  ¦  2.5  ¦  2.5  𝄀
+4  ¦  3.5  ¦  3.5  ¦  3.5  ¦  3.5  ¦  3.5  𝄀
+5  ¦  2.75  ¦  2.75  ¦  2.75  ¦  2.75  ¦  2.75
+SELECT id, mmaxDrawdown(f, 3) OVER (ORDER BY id), mmaxDrawdown(a, 3) OVER (ORDER BY id), mmaxDrawdown(d, 3) OVER (ORDER BY id), cumpositivestreak(c) OVER (ORDER BY id) FROM tiw ORDER BY id;
+➤ id[4,32,0]  ¦  mmaxDrawdown(f, 3) over (order by id)[8,53,31]  ¦  mmaxDrawdown(a, 3) over (order by id)[8,53,31]  ¦  mmaxDrawdown(d, 3) over (order by id)[8,53,31]  ¦  cumpositivestreak(c) over (order by id)[-5,64,0]  𝄀
+1  ¦  null  ¦  null  ¦  null  ¦  1  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  2  𝄀
+3  ¦  0.0  ¦  0.0  ¦  0.0  ¦  3  𝄀
+4  ¦  0.0  ¦  0.0  ¦  0.0  ¦  4  𝄀
+5  ¦  0.625  ¦  0.625  ¦  0.625  ¦  5
+SELECT id, mrank(f, 3) OVER (ORDER BY id), mrank(a, 3) OVER (ORDER BY id), mrank(c, 3) OVER (ORDER BY id), cumrank(b) OVER (ORDER BY id), cumrank(d) OVER (ORDER BY id) FROM tiw ORDER BY id;
+➤ id[4,32,0]  ¦  mrank(f, 3) over (order by id)[-5,64,0]  ¦  mrank(a, 3) over (order by id)[-5,64,0]  ¦  mrank(c, 3) over (order by id)[-5,64,0]  ¦  cumrank(b) over (order by id)[-5,64,0]  ¦  cumrank(d) over (order by id)[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  𝄀
+2  ¦  2  ¦  2  ¦  2  ¦  2  ¦  2  𝄀
+3  ¦  3  ¦  3  ¦  3  ¦  3  ¦  3  𝄀
+4  ¦  3  ¦  3  ¦  3  ¦  4  ¦  4  𝄀
+5  ¦  1  ¦  1  ¦  1  ¦  2  ¦  2
+SELECT quantileExactWeighted(f, id, 0.5), quantileExactWeighted(a, id, 0.5), quantileExactWeighted(c, id, 0.5), quantileExactWeighted(d, id, 0.5) FROM tiw;
+➤ quantileExactWeighted(f, id, 0.5)[7,23,31]  ¦  quantileExactWeighted(a, id, 0.5)[7,23,31]  ¦  quantileExactWeighted(c, id, 0.5)[7,23,31]  ¦  quantileExactWeighted(d, id, 0.5)[7,23,31]  𝄀
+2.0  ¦  2.0  ¦  2.0  ¦  2.0
+DROP TABLE tiw;
 DROP DATABASE lowprec_float;

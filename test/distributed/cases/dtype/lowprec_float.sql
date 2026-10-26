@@ -466,6 +466,7 @@ DROP TABLE dst;
 
 -- text that is not a number converts to its numeric prefix with a warning, as for FLOAT;
 -- a prefix outside the type's finite range is an error
+SET sql_mode = '';
 CREATE TABLE txt (id INT, b bf16, f FLOAT);
 INSERT INTO txt VALUES (1, 'abc', 'abc');
 INSERT INTO txt VALUES (2, '1abc', '1abc');
@@ -474,6 +475,7 @@ INSERT IGNORE INTO txt VALUES (4, ' 2.5x', ' 2.5x');
 SELECT * FROM txt ORDER BY id;
 INSERT INTO txt VALUES (5, '1e39x', 1);
 DROP TABLE txt;
+SET sql_mode = DEFAULT;
 
 -- serial keeps the stored bits; serial_extract restores them; the encoding orders as the values
 SELECT HEX(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)));
@@ -491,5 +493,35 @@ DROP TABLE so;
 CREATE TABLE np (a bf16, b float16, c float8, d float4, f FLOAT);
 SELECT column_name, numeric_precision FROM information_schema.columns WHERE table_schema = 'lowprec_float' AND table_name = 'np' ORDER BY ordinal_position;
 DROP TABLE np;
+
+-- text converts as FLOAT does: radix literals are their integer value, other text its decimal prefix
+SELECT CAST('0x10' AS FLOAT), CAST('0x10' AS bf16), CAST('-0x10' AS float16), CAST('0b101' AS float8), CAST('0b11' AS float4), CAST('0o7' AS bf16);
+SELECT CAST('inf' AS FLOAT), CAST('inf' AS bf16), CAST('-inf' AS float16), CAST('nan' AS float8), CAST('nan' AS float4);
+SELECT CAST('1.5abc' AS FLOAT), CAST('1.5abc' AS bf16), CAST('1.5abc' AS float16), CAST('1.5abc' AS float8), CAST('1.5abc' AS float4);
+SELECT CAST('0x1.1p0' AS bf16);
+
+-- truncated text in an assignment: an error in strict mode, a warning with IGNORE or without strict mode
+CREATE TABLE ta (id INT PRIMARY KEY, f FLOAT, a bf16, b float16, c float8, d float4);
+SET sql_mode = 'STRICT_TRANS_TABLES';
+INSERT INTO ta (id, f) VALUES (1, '1.5abc');
+INSERT INTO ta (id, a) VALUES (1, '1.5abc');
+INSERT INTO ta (id, b) VALUES (1, '1.5abc');
+INSERT INTO ta (id, c) VALUES (1, '1.5abc');
+INSERT INTO ta (id, d) VALUES (1, '1.5abc');
+INSERT IGNORE INTO ta VALUES (1, '1.5abc', '1.5abc', '1.5abc', '1.5abc', '1.5abc');
+SET sql_mode = '';
+INSERT INTO ta VALUES (2, '2.5x', '2.5x', '2.5x', '2.5x', '2.5x');
+SET sql_mode = DEFAULT;
+SELECT * FROM ta ORDER BY id;
+DROP TABLE ta;
+
+-- indicator and local-rank window functions read the values as FLOAT does
+CREATE TABLE tiw (id INT PRIMARY KEY, f FLOAT, a bf16, b float16, c float8, d float4);
+INSERT INTO tiw VALUES (1, 1, 1, 1, 1, 1), (2, 2, 2, 2, 2, 2), (3, 3, 3, 3, 3, 3), (4, 4, 4, 4, 4, 4), (5, 1.5, 1.5, 1.5, 1.5, 1.5);
+SELECT id, sma(f, 2) OVER (ORDER BY id), sma(a, 2) OVER (ORDER BY id), sma(b, 2) OVER (ORDER BY id), sma(c, 2) OVER (ORDER BY id), sma(d, 2) OVER (ORDER BY id) FROM tiw ORDER BY id;
+SELECT id, mmaxDrawdown(f, 3) OVER (ORDER BY id), mmaxDrawdown(a, 3) OVER (ORDER BY id), mmaxDrawdown(d, 3) OVER (ORDER BY id), cumpositivestreak(c) OVER (ORDER BY id) FROM tiw ORDER BY id;
+SELECT id, mrank(f, 3) OVER (ORDER BY id), mrank(a, 3) OVER (ORDER BY id), mrank(c, 3) OVER (ORDER BY id), cumrank(b) OVER (ORDER BY id), cumrank(d) OVER (ORDER BY id) FROM tiw ORDER BY id;
+SELECT quantileExactWeighted(f, id, 0.5), quantileExactWeighted(a, id, 0.5), quantileExactWeighted(c, id, 0.5), quantileExactWeighted(d, id, 0.5) FROM tiw;
+DROP TABLE tiw;
 
 DROP DATABASE lowprec_float;

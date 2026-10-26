@@ -58,13 +58,22 @@ GPU kernels agree on the encoding.
 - **Sources.** Every source that converts to `float` converts to these types the same
   way, then rounds once to the type: numbers, decimals, booleans, `BIT`, `YEAR`, `ENUM`
   (its index), JSON numbers, and text. A hex or bit literal (`0x05`, `b'101'`) is its
-  unsigned integer value. Text that is not a number converts to its numeric prefix, `0`
-  when there is none (`'abc'` is `0`, `'1abc'` is `1`, `''` is `0`), with the warning
-  `float` gives, in MySQL compatibility mode, and is an error in MatrixOne mode. The range
-  rule below still applies: a value or prefix outside the type's finite range is an error,
-  where `float` would clamp text to its maximum. Tests:
+  unsigned integer value, and so is radix text (`'0x10'` is `16`, `'0b101'` is `5`; a
+  hexadecimal fraction such as `'0x1.1p0'` is an error). Other text that is not a number
+  converts to its decimal prefix, `0` when there is none (`'abc'`, `'inf'` and `'nan'` are
+  `0`, `'1abc'` is `1`, `''` is `0`), in MySQL compatibility mode, and is an error in
+  MatrixOne mode. Truncated text is reported as for `float`: a warning in a query, and in an
+  `INSERT` or `UPDATE` an error in strict mode and a warning with `IGNORE` or without strict
+  mode. The range rule below still applies: a value or prefix outside the type's finite
+  range is an error, where `float` would clamp text to its maximum. Tests:
   `function/func_cast_test.go` (`TestCastLowPrecFloatSourcesAsFloat`),
-  `function/numeric_resolver_test.go`, BVT `dtype/lowprec_float.sql`.
+  `function/func_compare_lowprec_test.go` (`TestCastTextToFloat8DigitSeparators`,
+  `TestCastTextToFloat8Hexadecimal`), `function/numeric_resolver_test.go`, BVT
+  `dtype/lowprec_float.sql`.
+- **Window functions.** The technical-indicator kernels (`sma`, `mmaxDrawdown`,
+  `cumpositivestreak`, ...) and the local ranks (`mrank`, `cumrank`, `tmrank`) read a value of
+  these types as `float32`, which holds it exactly, so they return what `float` returns.
+  BVT `dtype/lowprec_float.sql`.
 - **Comparison with a literal.** A numeric literal compared with a column of these types
   (`=`, `<>`, `!=`, `<=>`, `<`, `<=`, `>`, `>=`, `IN`, `NOT IN`, `BETWEEN`) is rounded to
   the column's type, as the stored
