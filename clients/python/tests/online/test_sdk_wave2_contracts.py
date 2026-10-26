@@ -304,6 +304,14 @@ async def test_fulltext_terms_match_native_in_both_modes(client, async_client, k
                 ).rows
                 if expected is not None:
                     assert native == expected
+                if term == r'C:\path':
+                    from matrixone.orm import logical_in
+                    from matrixone.export import _query_to_sql
+
+                    generated = c.query(table).select('id').filter(natural_match('content', query=term))
+                    nested = c.query(table).select('id').filter(logical_in('id', generated))
+                    assert (await resolve(nested.execute())).rows == native
+                    assert (await resolve(c.execute(_query_to_sql(generated)))).rows == native
                 basic = FulltextSearchBuilder(table, 'content').search(term)
                 rows = (await resolve(c.execute(basic.build_sql()))).rows
                 assert sorted(row[0] for row in rows) == [row[0] for row in native]

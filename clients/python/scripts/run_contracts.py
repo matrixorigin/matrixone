@@ -6,6 +6,7 @@ pytest's green status alone cannot certify an unconfigured integration target.
 """
 
 import argparse
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -67,7 +68,25 @@ def main():
         '--tb=short',
         '--junitxml=' + str(output / 'junit.xml'),
     ]
+
+    def source_manifest():
+        # HEAD alone does not identify an editable checkout. Include dirty
+        # source and fixtures, excluding caches and generated reports.
+        inputs = set((root / 'matrixone').rglob('*.py'))
+        inputs.update((root / 'tests').rglob('*.py'))
+        inputs.update(root / name for name in ('scripts/run_contracts.py', 'pyproject.toml', 'pytest.ini', 'setup.py'))
+        return {
+            str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(inputs)
+            if path.is_file()
+        }
+
+    source_sha256 = source_manifest()
     record = dict(
+        source_sha256=source_sha256,
+        worktree_status=subprocess.check_output(
+            ['git', 'status', '--porcelain', '--untracked-files=all', '--', '.'], cwd=root, text=True
+        ).splitlines(),
         revision=revision,
         python=sys.version,
         dependencies=versions,
@@ -79,17 +98,23 @@ def main():
     )
     result = subprocess.run(command, cwd=root)
     record['exit_code'] = result.returncode
+    record['source_unchanged'] = source_sha256 == source_manifest()
     path = output / 'junit.xml'
     if path.exists():
         cases = list(ET.parse(path).getroot().iter('testcase'))
         counts = {name: sum(case.find(name) is not None for case in cases) for name in ('failure', 'error', 'skipped')}
         counts['tests'] = len(cases)
         record['counts'] = counts
+        record['observed_server'] = {
+            item.attrib['name']: item.attrib['value']
+            for item in ET.parse(path).getroot().iter('property')
+            if item.attrib.get('name', '').startswith('matrixone.')
+        }
         valid = counts['tests'] > 0 and not any(counts[name] for name in ('failure', 'error', 'skipped'))
     else:
         valid = False
     (output / 'provenance.json').write_text(json.dumps(record, indent=2) + '\n')
-    return result.returncode or (0 if valid else 1)
+    return result.returncode or (0 if valid and record['source_unchanged'] else 1)
 
 
 if __name__ == '__main__':

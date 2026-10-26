@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 """Required small public-contract suite for explicitly selected server targets."""
 
+import csv
 import json
 import os
 import uuid
@@ -22,7 +23,7 @@ pytestmark = pytest.mark.skipif(os.environ.get('MO_SDK_ONLINE') != '1', reason='
 
 
 @pytest.fixture(scope='module')
-def server():
+def server(record_testsuite_property):
     config = dict(
         host=os.environ['MO_HOST'],
         port=int(os.environ['MO_PORT']),
@@ -42,6 +43,8 @@ def server():
         if expected_revision:
             assert revision.startswith(expected_revision), (revision, expected_revision)
         print('SDK_SERVER_IDENTITY', version, revision)
+        record_testsuite_property('matrixone.version', version)
+        record_testsuite_property('matrixone.revision', revision)
         admin.execute('CREATE DATABASE ' + name)
         config['database'] = name
         yield config
@@ -232,3 +235,216 @@ def test_capabilities_are_observations(client):
     assert caps['arrow_load'].state == 'unknown'
     assert client.execute("SHOW VARIABLES LIKE 'experimental_hnsw_index'").rows == before
     assert caps['hnsw_index'].state == ('supported' if str(before[0][1]).lower() in ('on', '1') else 'disabled')
+
+
+def test_legacy_query_native_execution(client, tables):
+    from matrixone.orm import Query
+
+    model, _ = tables
+    assert Query(model, client).count() == 3
+    assert Query(model, client).filter('id=?', 1).first().label == 'red'
+    Query(model, client).insert(id=4, v=8, label='new').execute()
+    Query(model, client).filter('id=?', 4).update(v=9).execute()
+    assert Query(model, client).filter('id=?', 4).all()[0].v == 9
+    Query(model, client).filter('id=?', 4).delete()
+    assert Query(model, client).count() == 3
+    base = declarative_base()
+    renamed = type(
+        'Renamed',
+        (base,),
+        dict(
+            __tablename__=model.__tablename__,
+            key=sa.Column('id', sa.Integer, primary_key=True),
+            amount=sa.Column('v', sa.Integer),
+            display=sa.Column('label', sa.String),
+        ),
+    )
+    assert Query(renamed, client).filter('id=?', 1).first().display == 'red'
+    row = Query(renamed, client).select('label', 'id').filter('id=?', 1).first()
+    assert (row.display, row.key) == ('red', 1)
+
+
+@pytest.mark.asyncio
+async def test_native_aliased_dml_and_recursive_cte(client, async_client, tables):
+    from matrixone.orm import CTE
+
+    model, _ = tables
+    for c in (client, async_client):
+        q = c.query(model).filter(model.id == 1).update(v=model.v + 1).alias('a')
+        if c is client:
+            q.execute()
+        else:
+            await q.execute()
+        recursive = CTE('r', 'SELECT 1 AS n UNION ALL SELECT n+1 FROM r WHERE n<3', recursive=True)
+        q = c.query(recursive).select('n').order_by('n')
+        rows = q.all() if c is client else await q.all()
+        assert [r.n for r in rows] == [1, 2, 3]
+    assert client.execute(f'SELECT v FROM {model.__tablename__} WHERE id=1').scalar() == 4
+    for c in (client, async_client):
+        joined = c.query(model).join(tables[1], f'{model.__tablename__}.id={tables[1]}.ref')
+        with pytest.raises(ValueError, match='Joined UPDATE/DELETE'):
+            if c is client:
+                joined.update(v=99).execute()
+            else:
+                await joined.update(v=99).execute()
+        with pytest.raises(ValueError, match='Joined UPDATE/DELETE'):
+            if c is client:
+                joined.delete()
+            else:
+                await joined.delete()
+    assert client.execute(f'SELECT id,v FROM {model.__tablename__} ORDER BY id').rows == [(1, 4), (2, 1), (3, None)]
+    await async_client.query(model).filter(model.id == 2).alias('a').delete()
+    client.query(model).filter(model.id == 3).alias('a').delete()
+    assert client.execute(f'SELECT id FROM {model.__tablename__}').rows == [(1,)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('owner', ['client', 'session'])
+async def test_async_explicit_database_mutations(client, async_client, tables, owner):
+    model, _ = tables
+    database = 'sdk_route_' + uuid.uuid4().hex[:12]
+    table = model.__tablename__
+    client.execute('CREATE DATABASE ' + database)
+    try:
+        client.execute(f'CREATE TABLE {database}.{table}(id INT PRIMARY KEY,v INT)')
+        client.execute(f'INSERT INTO {database}.{table} VALUES(1,100),(2,200)')
+
+        async def mutate(executor):
+            q = executor.query(table)
+            q.database = database
+            q.filter('id=?', 1).update(v=101)
+            await q.execute()
+            assert (await q.first()).v == 101
+            await q.delete()
+            q.database = 'sdk_nonexistent_' + uuid.uuid4().hex[:8]
+            with pytest.raises(QueryError):
+                await q.update(v=0).execute()
+
+        if owner == 'client':
+            await mutate(async_client)
+        else:
+            async with async_client.session() as session:
+                await mutate(session)
+        assert client.execute(f'SELECT id,v FROM {database}.{table}').rows == [(2, 200)]
+        base = declarative_base()
+        mapped = type(
+            'Routed',
+            (base,),
+            dict(
+                __tablename__=table,
+                __table_args__={'schema': database},
+                id=sa.Column(sa.Integer, primary_key=True),
+                v=sa.Column(sa.Integer),
+            ),
+        )
+        from matrixone.orm import Query
+
+        assert Query(mapped, client).first().v == 200
+        routed = async_client.query(mapped).filter(mapped.id == 2).update(v=mapped.v + 1)
+        await routed.execute()
+        assert (await async_client.query(mapped).first()).v == 201
+        routed.database = 'different'
+        with pytest.raises(ValueError, match='conflicts'):
+            await routed.execute()
+        assert client.execute(f'SELECT id,v FROM {table} ORDER BY id').rows == [(1, 2), (2, 1), (3, None)]
+        assert (await async_client.execute('SELECT 42')).scalar() == 42
+    finally:
+        client.execute('DROP DATABASE ' + database)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('format', ['csv', 'jsonl'])
+async def test_async_public_export(client, async_client, tables, format):
+    model, _ = tables
+    filename = 'async_export_' + uuid.uuid4().hex + '.' + format
+    server_path = os.environ['MO_SDK_EXPORT_DIR'].rstrip('/') + '/' + filename
+    local_path = Path(os.environ['MO_SDK_EXPORT_LOCAL_DIR']) / filename
+    query = async_client.query(model).select('id', 'label').order_by('id')
+    try:
+        if format == 'jsonl':
+            await async_client.export.to_jsonl(server_path, query)
+            rows = [json.loads(line) for line in local_path.read_text().splitlines()]
+            assert rows == [{'id': 1, 'label': 'red'}, {'id': 2, 'label': 'blue'}, {'id': 3, 'label': None}]
+        else:
+            await async_client.export.to_csv(server_path, query)
+            assert list(csv.reader(local_path.read_text().splitlines())) == [
+                ['id', 'label'],
+                ['1', 'red'],
+                ['2', 'blue'],
+                ['3', r'\N'],
+            ]
+        with pytest.raises(QueryError):
+            await async_client.export.to_jsonl('/sdk_missing_' + uuid.uuid4().hex + '/fail.jsonl', query)
+        assert client.execute(f'SELECT COUNT(*) FROM {model.__tablename__}').scalar() == 3
+        assert (await async_client.execute('SELECT 42')).scalar() == 42
+    finally:
+        local_path.unlink(missing_ok=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+@pytest.mark.parametrize(
+    'scale,text,neighbor_text',
+    [
+        (18, '12345678901234567890.123456789012345678', '12345678901234567890.123456789012345679'),
+        (27, '0.000000001123456789012345678', '0.000000001123456789012345679'),
+    ],
+)
+async def test_decimal_binding_preserves_exact_mutation_scope(client, async_client, kind, scale, text, neighbor_text):
+    from .test_sdk_manager_contracts import resolve
+
+    c = client if kind == 'sync' else async_client
+    table = 'decimal_' + uuid.uuid4().hex[:10]
+    base = declarative_base()
+    amount = type(
+        'Amount',
+        (base,),
+        dict(
+            __tablename__=table,
+            id=sa.Column(sa.Integer, primary_key=True, autoincrement=False),
+            value=sa.Column(sa.Numeric(38, scale)),
+        ),
+    )
+    value = Decimal(text)
+    neighbor = Decimal(neighbor_text)
+    negative = Decimal('-' + text)
+    client.execute(f'CREATE TABLE {table}(id INT PRIMARY KEY,value DECIMAL(38,{scale}))')
+    try:
+        assert c._engine.dialect.supports_native_decimal
+        if kind == 'sync':
+            with c.session() as session:
+                session.add(amount(id=1, value=value))
+        else:
+            async with c.session() as session:
+                session.add(amount(id=1, value=value))
+        # Independent native-SQL adjacent and negative controls.
+        client.execute(f'INSERT INTO {table} VALUES(2,?),(3,?)', (neighbor, negative))
+        expected = [(1, value), (2, neighbor), (3, negative)]
+        assert client.execute(f'SELECT id,value FROM {table} ORDER BY id').rows == expected
+        assert [r.id for r in await resolve(c.query(amount).filter(amount.value == value).all())] == [1]
+        assert [r.id for r in await resolve(c.query(amount).filter_by(value=value).all())] == [1]
+        assert [r.id for r in await resolve(c.query(amount).filter(amount.value.in_([neighbor])).all())] == [2]
+        with pytest.raises(QueryError):
+            await resolve(c.execute(f'INSERT INTO {table} VALUES(2,?)', (value,)))
+        assert client.execute(f'SELECT id,value FROM {table} ORDER BY id').rows == expected
+
+        async def mutate(session):
+            selected = await resolve(session.execute(sa.select(amount.id).where(amount.value == value)))
+            assert selected.scalars().all() == [1]
+            await resolve(session.execute(sa.update(amount).where(amount.value == value).values(value=Decimal('0.5'))))
+            await resolve(session.execute(sa.delete(amount).where(amount.value == negative)))
+
+        if kind == 'sync':
+            with c.session() as session:
+                await mutate(session)
+        else:
+            async with c.session() as session:
+                await mutate(session)
+        assert client.execute(f'SELECT id,value FROM {table} ORDER BY id').rows == [(1, Decimal('0.5')), (2, neighbor)]
+        await resolve(c.query(amount).filter(amount.value == neighbor).update(value=negative).execute())
+        assert client.execute(f'SELECT id,value FROM {table} ORDER BY id').rows == [(1, Decimal('0.5')), (2, negative)]
+        await resolve(c.query(amount).filter_by(value=negative).delete())
+        assert client.execute(f'SELECT id,value FROM {table}').rows == [(1, Decimal('0.5'))]
+        assert (await resolve(c.execute('SELECT 42'))).scalar() == 42
+    finally:
+        client.execute('DROP TABLE ' + table)

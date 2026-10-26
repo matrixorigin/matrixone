@@ -355,9 +355,9 @@ class MatrixOneSQLBuilder:
         return self
 
     # CTE (Common Table Expression) methods
-    def with_cte(self, name: str, sql: str, *params: Any) -> "MatrixOneSQLBuilder":
+    def with_cte(self, name: str, sql: str, *params: Any, recursive: bool = False) -> "MatrixOneSQLBuilder":
         """Add CTE (Common Table Expression)"""
-        self._ctes.append({"name": name, "sql": sql, "params": list(params)})
+        self._ctes.append({"name": name, "sql": sql, "params": list(params), "recursive": recursive})
         return self
 
     # Vector query specific methods
@@ -426,7 +426,8 @@ class MatrixOneSQLBuilder:
             for cte in self._ctes:
                 with_parts.append(f"{cte['name']} AS ({cte['sql']})")
                 all_params.extend(cte["params"])
-            sql_parts.append("WITH " + ", ".join(with_parts))
+            prefix = "WITH RECURSIVE " if any(cte.get("recursive", False) for cte in self._ctes) else "WITH "
+            sql_parts.append(prefix + ", ".join(with_parts))
 
         # Build SELECT clause
         if self._select_columns:

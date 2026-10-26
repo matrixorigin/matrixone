@@ -8,11 +8,14 @@ python -m pip install -e '.[core-test]'
 python scripts/run_contracts.py --output contract-results
 ```
 
-The runner records Python/dependency versions, source revision, test selection,
-counts and exit status in `provenance.json`, with JUnit results beside it. It
-fails on empty selections, failures, errors or skips. Preserve the source diff
-with local evidence when testing uncommitted changes; a revision alone does not
-identify a dirty checkout.
+The runner records Python/dependency versions, source revision, worktree status,
+source/test/config hashes, test selection, counts and exit status in
+`provenance.json`, with JUnit results beside it. It fails on empty selections,
+failures, errors, skips or inputs changing during execution. Server fixtures
+record observed version and git revision in JUnit properties. A revision alone
+does not identify a dirty checkout; the content manifest identifies its tested
+inputs. Portable native reports and their JUnit results are indexed in
+[docs/validation/README.md](docs/validation/README.md).
 
 ## Dependency and server dimensions
 
@@ -161,3 +164,10 @@ The local runner rejects skips and empty selections for the required offline
 and server contracts. SDK workflow enhancements and non-SDK workflow routing
 are delivered separately from SDK production changes; their configuration only
 controls `pull_request_target` once present in the trusted base.
+
+Decimal parameters retain native driver precision. Where a legacy builder must
+render a SQL literal, it uses fixed-point notation to prevent scientific SQL
+tokens from triggering floating-point comparisons. Non-finite values and
+fixed-point representations exceeding 4096 characters are rejected before
+formatting; the expansion budget includes the sign and decimal point. This
+budget also conservatively rejects excessive positive-exponent zero inputs.

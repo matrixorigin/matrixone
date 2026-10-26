@@ -32,17 +32,27 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
         super().__init__(model_class, client, transaction_wrapper, snapshot)
         self.database = database
 
-    def _build_sql(self) -> tuple[str, List[Any]]:
-        """Build SQL query with database prefix support"""
-        # Add database prefix if provided
-        original_table_name = self._table_name
-        if self.database:
-            self._table_name = f"{self.database}.{original_table_name}"
+    def _qualified_table_name(self):
+        table = super()._qualified_table_name()
+        if not self.database:
+            return table
+        from ._sql_literals import sql_identifier
 
-        try:
-            return super()._build_sql()
-        finally:
-            self._table_name = original_table_name
+        if any((cte.get('name') if isinstance(cte, dict) else cte.name) == table for cte in self._ctes):
+            return table  # A CTE is a statement-local relation, not a schema table.
+        if not table:
+            return table
+        mapped_table = getattr(self.model_class, '__table__', None)
+        if mapped_table is not None:
+            if mapped_table.schema and mapped_table.schema != self.database:
+                raise ValueError('Explicit database conflicts with mapped table schema')
+            return sql_identifier(self.database) + '.' + sql_identifier(mapped_table.name)
+        parts = table.split('.')
+        if len(parts) > 1:
+            if len(parts) != 2 or parts[0] != self.database:
+                raise ValueError('Explicit database conflicts with qualified table name')
+            return sql_identifier(table, qualified=True)
+        return sql_identifier(self.database) + '.' + sql_identifier(table)
 
     async def _execute(self, sql, params=None):
         """Execute SQL using either transaction wrapper or client asynchronously"""

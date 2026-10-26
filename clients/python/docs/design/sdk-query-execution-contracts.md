@@ -7,7 +7,9 @@ export, database routing, recursive CTEs and query composition.
 A retained public entry point must dispatch through its supplied execution
 owner. Legacy `Query` retains its constructor, insertion methods, materialized
 SELECT results and eager deletion. Its explicit `_table_name` convention stays
-supported alongside standard SQLAlchemy models. It delegates execution to the
+supported alongside standard SQLAlchemy models. Mapped schema/name determines
+physical identity, and returned physical columns map back to mapper attribute
+keys in result order. It delegates execution to the
 client without acquiring a connection or interpreting database errors.
 
 Modern SELECT, UPDATE and DELETE share one pure target renderer. Database and
@@ -16,7 +18,9 @@ compilation must not temporarily mutate `_table_name` or issue `USE`. Existing
 expression refresh also covers SET expressions, including `update().alias()`.
 An explicit database conflicting with a qualified table fails before dispatch;
 a matching prefix is included once. Statement-local CTE names remain local.
-Missing target errors never fall back to a default-database table.
+Missing target errors never fall back to a default-database table. Joined
+mutations fail before dispatch because this API does not implement join-DML;
+dropping the JOIN would broaden the write.
 
 SDK buffered results expose column names as data; SQLAlchemy CursorResult
 exposes `columns()` as a projection method and `keys()` as metadata. String-table
@@ -51,3 +55,15 @@ results. Portable reports identify the tested binary independently of SDK HEAD.
 Prior snapshot restrictions, native file limitations and cancellation/cleanup
 contracts remain as documented in the preceding design documents. This change
 adds no join-DML feature and makes no throughput claim.
+
+The driver-preserving dialect adapter retains native Decimal binding. Legacy
+SQL literal rendering must additionally use fixed-point Decimal tokens: a
+scientific token can change server comparison semantics. Decimal.is_finite
+classifies values without a float conversion. Before formatting, tuple digits
+and exponent predict the expanded length; representations exceeding 4096
+characters (including sign/decimal point) raise ValueError. This is an output
+expansion budget, not a claim about server precision. Positive-exponent zero
+representations may be conservatively rejected by that same budget. Float
+rendering and SQLAlchemy type processors retain their existing contracts.
+Native large and very small adjacent-decimal controls assert exact read and
+mutation scope on both release and source, through sync and async paths.

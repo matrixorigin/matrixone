@@ -330,3 +330,297 @@ async def test_disjunction_does_not_broaden_mutations(query_client, operation):
         await resolve(q.delete())
         assert await resolve(query_client.query(Item).filter_by(id=1).first()) is None
     assert (await resolve(query_client.query(Item).filter_by(id=2).first())).text == 'blue'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('alias_first', [False, True])
+async def test_aliased_mutations_share_select_target(query_client, alias_first):
+    q = query_client.query(Item)
+    if alias_first:
+        q.alias('a')
+    q.filter(Item.id == 1).update(value=Item.value + 10)
+    if not alias_first:
+        q.alias('a')
+    await resolve(q.execute())
+    assert (await resolve(query_client.query(Item).filter_by(id=1).first())).value == 12
+    await resolve(query_client.query(Item).filter(Item.id == 2).alias('a').delete())
+    assert [r.id for r in await resolve(query_client.query(Item).order_by(Item.id).all())] == [1, 3]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('query_client', ['async'], indirect=True)
+async def test_async_database_routes_all_mutations_and_preserves_default(query_client):
+    from matrixone.async_orm import AsyncMatrixOneQuery
+
+    await query_client.execute("ATTACH DATABASE ':memory:' AS alternate")
+    await query_client.execute('CREATE TABLE alternate.items(id INT, value INT, text TEXT)')
+    await query_client.execute("INSERT INTO alternate.items VALUES(1,100,'other')")
+    q = AsyncMatrixOneQuery('items', query_client, database='alternate').filter('id=?', 1)
+    before = q._build_sql()
+    assert (await q.first()).value == 100
+    await q.update(value=101).execute()
+    assert (await query_client.query('alternate.items').first()).value == 101
+    assert (await query_client.query(Item).filter_by(id=1).first()).value == 2
+    assert q._build_sql() == before
+    await q.delete()
+    assert await query_client.query('alternate.items').all() == []
+    q.database = 'missing'
+    with pytest.raises(sqlite3.OperationalError):
+        await q.update(value=0).execute()
+    assert (await query_client.query(Item).filter_by(id=1).first()).value == 2
+
+
+@pytest.mark.parametrize('query_client', ['sync'], indirect=True)
+def test_direct_legacy_query_executes_all_public_operations(query_client):
+    from matrixone.orm import Query
+
+    for model in (
+        Item,
+        type(
+            'Legacy',
+            (),
+            {
+                '_table_name': 'items',
+                '__tablename__': 'unused',
+                '__init__': lambda self, **kw: self.__dict__.update(kw),
+            },
+        ),
+    ):
+        q = Query(model, query_client)
+        assert q.count() == 3
+        assert q.select('id', 'value', 'text').filter('id=?', 1).first().value == 2
+        assert len(Query(model, query_client).execute()) == 3
+        Query(model, query_client).insert(id=4, value=9, text='new').execute()
+        Query(model, query_client).filter('id=?', 4).update(value=10).execute()
+        assert Query(model, query_client).select('id', 'value', 'text').filter('id=?', 4).all()[0].value == 10
+        Query(model, query_client).filter('id=?', 4).delete()
+        assert Query(model, query_client).count() == 3
+
+
+def test_generated_fulltext_sql_composes_without_raw_fragment_revalidation():
+    from matrixone.export import _query_to_sql
+    from matrixone.orm import logical_in
+    from matrixone.sqlalchemy_ext.fulltext_search import natural_match
+
+    q = Client().query('items').select('id').filter(natural_match('text', query=r'C:\path?'))
+    sql, params = q._build_sql()
+    assert not params
+    assert _query_to_sql(q) == sql
+    assert logical_in('id', q).compile() == 'id IN (' + sql + ')'
+
+    class BoundQuery:
+        def _build_sql(self):
+            return r'SELECT $sdk$C:\path?$sdk$ AS text FROM items WHERE id=?', [1]
+
+    assert _query_to_sql(BoundQuery()).endswith('WHERE id=1')
+    assert r'$sdk$C:\path?$sdk$' in logical_in('text', BoundQuery()).compile()
+    with pytest.raises(ValueError, match='ambiguous'):
+        Client().query('items').filter(r"text='C:\path'")
+
+
+@pytest.mark.asyncio
+async def test_recursive_cte_executes_and_nonrecursive_control(query_client):
+    from matrixone.orm import CTE
+
+    recursive = CTE('r', 'SELECT 1 AS n UNION ALL SELECT n+1 FROM r WHERE n<3', recursive=True)
+    q = query_client.query(recursive).select('n').order_by('n')
+    assert [r.n for r in await resolve(q.all())] == [1, 2, 3]
+    assert q._build_sql()[0].startswith('WITH RECURSIVE ')
+    ordinary = query_client.query(CTE('plain', 'SELECT 7 AS n')).select('n')
+    assert (await resolve(ordinary.first())).n == 7
+    assert ordinary._build_sql()[0].startswith('WITH plain ')
+
+
+def test_async_export_manager_is_stable_public_entry():
+    from matrixone.export import AsyncExportManager
+
+    client = AsyncClient()
+    assert isinstance(client.export, AsyncExportManager)
+    assert client.export is client.export
+    assert client.export.client is client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+async def test_string_query_materializes_real_session_cursor_result(kind):
+    from matrixone.orm import MatrixOneQuery
+    from matrixone.async_orm import AsyncMatrixOneQuery
+
+    engine = sa.create_engine('sqlite:///:memory:')
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql('CREATE TABLE records(id INT,value INT)')
+            connection.exec_driver_sql('INSERT INTO records VALUES(1,10)')
+
+            def execute(sql, params=None):
+                return connection.exec_driver_sql(sql, tuple(params or ()))
+
+            async def async_execute(sql, params=None):
+                return execute(sql, params)
+
+            query_type = MatrixOneQuery if kind == 'sync' else AsyncMatrixOneQuery
+            wrapper = SimpleNamespace(execute=execute if kind == 'sync' else async_execute)
+            q = query_type('records', None, transaction_wrapper=wrapper)
+            assert (await resolve(q.first())).value == 10
+            await resolve(q.filter('id=?', 1).update(value=11).execute())
+            assert (await resolve(q.first())).value == 11
+    finally:
+        engine.dispose()
+
+
+def test_explicit_database_and_qualified_table_conflict_before_dispatch():
+    from matrixone.async_orm import AsyncMatrixOneQuery
+    from matrixone.orm import CTE
+
+    q = AsyncMatrixOneQuery('other.items', AsyncClient(), database='other')
+    q.update(value=1)
+    assert 'UPDATE other.items SET' in q._build_update_sql()[0]
+    q.database = 'different'
+    for build in (q._build_sql, q._build_update_sql, q._build_delete_sql):
+        with pytest.raises(ValueError, match='conflicts'):
+            build()
+    cte = AsyncClient().query(CTE('local_rows', 'SELECT 1 AS n'))
+    cte.database = 'other'
+    assert 'FROM local_rows' in cte._build_sql()[0]
+
+
+@pytest.mark.asyncio
+async def test_mapped_schema_is_the_read_and_write_identity(query_client):
+    from matrixone.orm import Query
+
+    base = declarative_base()
+
+    class Mapped(base):
+        __tablename__ = 'items'
+        __table_args__ = {'schema': 'alternate'}
+        id = sa.Column(sa.Integer, primary_key=True)
+        value = sa.Column(sa.Integer)
+        text = sa.Column(sa.String)
+
+    await resolve(query_client.execute("ATTACH DATABASE ':memory:' AS alternate"))
+    await resolve(query_client.execute('CREATE TABLE alternate.items(id INT,value INT,text TEXT)'))
+    await resolve(query_client.execute("INSERT INTO alternate.items VALUES(1,100,'chosen')"))
+    q = query_client.query(Mapped).filter(Mapped.id == 1)
+    assert (await resolve(q.first())).value == 100
+    await resolve(q.update(value=101).execute())
+    assert (await resolve(q.first())).value == 101
+    assert (await resolve(query_client.query(Item).filter_by(id=1).first())).value == 2
+    if isinstance(query_client, Client):
+        legacy = Query(Mapped, query_client).filter('id=?', 1)
+        assert legacy.first().value == 101
+        legacy.update(value=102).execute()
+        assert legacy.first().value == 102
+    else:
+        q.database = 'alternate'
+        assert (await q.first()).value == 101
+        q.database = 'different'
+        for build in (q._build_sql, q._build_update_sql, q._build_delete_sql):
+            with pytest.raises(ValueError, match='conflicts'):
+                build()
+        q.database = None
+    await resolve(q.delete())
+    assert await resolve(query_client.query(Mapped).all()) == []
+    assert (await resolve(query_client.query(Item).filter_by(id=1).first())).value == 2
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('operation', ['update', 'delete'])
+@pytest.mark.parametrize('query_client', ['sync'], indirect=True)
+def test_joined_mutation_fails_before_changing_rows(query_client, legacy, operation):
+    from matrixone.orm import Query
+
+    query = Query(Item, query_client) if legacy else query_client.query(Item)
+    query.join('other', 'items.id=other.ref')
+    if operation == 'update':
+        with pytest.raises(ValueError, match='Joined UPDATE/DELETE'):
+            query.update(value=99).execute()
+    else:
+        with pytest.raises(ValueError, match='Joined UPDATE/DELETE'):
+            query.delete()
+    assert [r.value for r in query_client.query(Item).order_by(Item.id).all()] == [2, 1, None]
+
+
+@pytest.mark.parametrize('query_client', ['sync'], indirect=True)
+def test_legacy_mapped_physical_names_and_projection_order(query_client):
+    from matrixone.orm import Query
+
+    base = declarative_base()
+
+    class Renamed(base):
+        __tablename__ = 'items'
+        key = sa.Column('id', sa.Integer, primary_key=True)
+        amount = sa.Column('value', sa.Integer)
+        label = sa.Column('text', sa.String)
+
+    assert Query(Renamed, query_client).filter('id=?', 1).first().label == 'red'
+    row = Query(Renamed, query_client).select('text', 'id').filter('id=?', 1).first()
+    assert (row.label, row.key) == ('red', 1)
+    assert Query(Renamed, query_client).filter('id=?', 1).scalar() == 1
+    metadata = sa.MetaData()
+    table = sa.Table(
+        'items',
+        metadata,
+        sa.Column('id', sa.Integer, primary_key=True),
+        sa.Column('value', sa.Integer),
+        sa.Column('text', sa.String),
+    )
+    table_model = type('DifferentClassName', (declarative_base(),), {'__table__': table})
+    assert Query(table_model, query_client).filter('id=?', 1).first().text == 'red'
+
+
+@pytest.mark.parametrize('table_name', ['order', 'line items'])
+def test_async_database_quotes_mapped_components_once(table_name):
+    from matrixone.async_orm import AsyncMatrixOneQuery
+
+    model = type(
+        'Quoted',
+        (declarative_base(),),
+        {
+            '__tablename__': table_name,
+            'id': sa.Column(sa.Integer, primary_key=True),
+        },
+    )
+    q = AsyncMatrixOneQuery(model, AsyncClient(), database='other').filter(model.id == 1).update(id=2)
+    target = 'other.`' + table_name + '`'
+    for build in (q._build_sql, q._build_update_sql, q._build_delete_sql):
+        sql, _ = build()
+        assert target in sql
+        assert '```' not in sql
+
+
+@pytest.mark.parametrize('driver', ['pymysql', 'aiomysql'])
+def test_dialect_adaptation_preserves_native_decimal_binding(driver):
+    from matrixone.sqlalchemy_ext.dialect import adapt_engine_dialect
+
+    engine = sa.create_engine('mysql+' + driver + '://unused@localhost/unused')
+    try:
+        value = Decimal('12345678901234567890.123456789012345678')
+        assert engine.dialect.supports_native_decimal
+        adapt_engine_dialect(engine)
+        assert engine.dialect.supports_native_decimal
+        column_type = sa.Numeric(38, 18).dialect_impl(engine.dialect)
+        processor = column_type.bind_processor(engine.dialect)
+        bound = processor(value) if processor else value
+        assert isinstance(bound, Decimal)
+        assert bound == value
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    'text',
+    ['12345678901234567890.123456789012345678', '-12345678901234567890.123456789012345678', '0.000000000000000001'],
+)
+def test_decimal_query_compilation_keeps_exact_values(text):
+    value = Decimal(text)
+    for query in (
+        Client().query(Item).filter(Item.value == value),
+        Client().query(Item).filter_by(value=value),
+        Client().query(Item).filter(Item.value.in_([value])),
+    ):
+        sql, params = query._build_sql()
+        assert format(value, 'f') in sql
+        assert params == []
+    sql, params = Client().query(Item).filter_by(id=1).update(value=Item.value + value)._build_update_sql()
+    assert format(value, 'f') in sql
+    assert params == []

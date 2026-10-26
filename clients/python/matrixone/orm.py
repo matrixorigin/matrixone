@@ -78,6 +78,23 @@ def _count_sql(sql):
 # Remove SimpleModel - use SQLAlchemy models directly
 
 
+def _model_table_name(model, legacy=False):
+    if isinstance(model, str):
+        return model
+    if legacy and getattr(model, '_table_name', None):
+        return model._table_name
+    table = getattr(model, '__table__', None)
+    if table is not None:
+        name = sql_identifier(table.name)
+        return sql_identifier(table.schema) + '.' + name if table.schema else name
+    return getattr(model, '__tablename__', None) or getattr(model, '_table_name', None) or model.__name__.lower()
+
+
+def _require_single_table_mutation(joins):
+    if joins:
+        raise ValueError('Joined UPDATE/DELETE is not supported; use explicit SQL')
+
+
 class Query:
     """
     Query builder for ORM operations with SQLAlchemy-style interface.
@@ -132,6 +149,9 @@ class Query:
         # For UPDATE
         self._update_set_columns = []
         self._update_set_values = []
+
+    def _execute(self, sql, params=None):
+        return self.client.execute(sql, params)
 
     def snapshot(self, snapshot_name: str) -> "Query":
         """Set snapshot for this query - SQLAlchemy style chaining"""
@@ -329,7 +349,7 @@ class Query:
             builder.select_all()
 
         # Build FROM clause with snapshot
-        builder.from_table(self.model_class._table_name, self.snapshot_name)
+        builder.from_table(_model_table_name(self.model_class, legacy=True), self.snapshot_name)
 
         # Add JOIN clauses
         builder._joins = self._joins.copy()
@@ -359,27 +379,28 @@ class Query:
         return builder.build()
 
     def all(self) -> List:
-        """Execute query and return all results"""
+        """Execute query and return all results using mapped attribute names."""
         sql, params = self._build_select_sql()
         result = self._execute(sql, params)
-
-        models = []
-        for row in result.rows:
-            # Convert row to dictionary
-            row_dict = {}
-            if hasattr(self.model_class, "__table__"):
-                column_names = [col.name for col in self.model_class.__table__.columns]
-            else:
-                column_names = self._select_columns or []
-
-            for i, col_name in enumerate(column_names):
-                if i < len(row):
-                    row_dict[col_name] = row[i]
-            # Create SQLAlchemy model instance
-            model = self.model_class(**row_dict)
-            models.append(model)
-
-        return models
+        columns = getattr(result, 'columns', None)
+        if callable(columns):
+            columns = list(result.keys())
+        table = getattr(self.model_class, '__table__', None)
+        names = self._select_columns or ([col.name for col in table.columns] if table is not None else [])
+        columns = columns or names
+        mapper = getattr(self.model_class, '__mapper__', None)
+        attributes = (
+            {
+                col.name: mapper.get_property_by_column(col).key if mapper is not None else col.name
+                for col in table.columns
+            }
+            if table is not None
+            else {}
+        )
+        return [
+            self.model_class(**{attributes.get(name, name): value for name, value in zip(columns, row)})
+            for row in result.rows
+        ]
 
     def first(self) -> Optional:
         """Execute query and return first result"""
@@ -506,7 +527,9 @@ class Query:
             # Get the first column value from the model
             if hasattr(self.model_class, "__table__"):
                 first_column = list(self.model_class.__table__.columns)[0]
-                return getattr(result, first_column.name)
+                mapper = getattr(self.model_class, '__mapper__', None)
+                attribute = mapper.get_property_by_column(first_column).key if mapper is not None else first_column.name
+                return getattr(result, attribute)
             else:
                 # For raw queries, return the first attribute
                 attrs = [attr for attr in dir(result) if not attr.startswith('_')]
@@ -558,7 +581,9 @@ class Query:
         if not self._insert_values:
             raise ValueError("No values provided for INSERT")
 
-        return build_insert_query(table_name=self.model_class._table_name, values=self._insert_values)
+        return build_insert_query(
+            table_name=_model_table_name(self.model_class, legacy=True), values=self._insert_values
+        )
 
     def update(self, **kwargs) -> "Query":
         """Start UPDATE operation"""
@@ -570,6 +595,7 @@ class Query:
 
     def _build_update_sql(self) -> tuple[str, List[Any]]:
         """Build UPDATE SQL query using unified SQL builder"""
+        _require_single_table_mutation(self._joins)
         from .sql_builder import build_update_query
 
         if not self._update_set_columns:
@@ -583,7 +609,7 @@ class Query:
             set_values[col_name] = self._update_set_values[i]
 
         return build_update_query(
-            table_name=self.model_class._table_name,
+            table_name=_model_table_name(self.model_class, legacy=True),
             set_values=set_values,
             where_conditions=self._where_conditions,
             where_params=self._where_params,
@@ -599,10 +625,11 @@ class Query:
 
     def _build_delete_sql(self) -> tuple[str, List[Any]]:
         """Build DELETE SQL query using unified SQL builder"""
+        _require_single_table_mutation(self._joins)
         from .sql_builder import build_delete_query
 
         return build_delete_query(
-            table_name=self.model_class._table_name,
+            table_name=_model_table_name(self.model_class, legacy=True),
             where_conditions=self._where_conditions,
             where_params=self._where_params,
             order_by=self._order_by_columns,
@@ -720,14 +747,23 @@ class BaseMatrixOneQuery:
                 self._table_name = model_class
                 self._columns = {}
             elif self._is_sqlalchemy_model:
-                self._table_name = model_class.__tablename__
+                self._table_name = _model_table_name(model_class)
                 self._columns = {
                     model_class.__mapper__.get_property_by_column(col).key: col for col in model_class.__table__.columns
                 }
             else:
-                # Fallback to class name
+                # Fallback to class name for non-SQLAlchemy model objects.
                 self._table_name = getattr(model_class, "_table_name", model_class.__name__.lower())
                 self._columns = getattr(model_class, "_columns", {})
+
+    def _qualified_table_name(self):
+        return self._table_name
+
+    def _table_target(self):
+        table = self._qualified_table_name()
+        if not table:
+            raise ValueError("Table name is required. Provide a model class or set table name manually.")
+        return f"{table} AS {sql_identifier(self._table_alias)}" if self._table_alias else table
 
     def _append_clause(self, attribute, render):
         clauses = getattr(self, attribute)
@@ -980,7 +1016,9 @@ class BaseMatrixOneQuery:
             for cte in self._ctes:
                 if isinstance(cte, CTE):
                     cte_sql, cte_params = cte.as_sql()
-                    builder._ctes.append({'name': cte.name, 'sql': cte_sql, 'params': cte_params})
+                    builder._ctes.append(
+                        {'name': cte.name, 'sql': cte_sql, 'params': cte_params, 'recursive': cte.recursive}
+                    )
                 else:
                     # Handle legacy CTE format
                     builder._ctes.append(cte)
@@ -998,13 +1036,7 @@ class BaseMatrixOneQuery:
             builder.select_all()
 
         # Build FROM clause with optional table alias and snapshot
-        if not self._table_name:
-            raise ValueError("Table name is required. Provide a model class or set table name manually.")
-
-        if self._table_alias:
-            builder._from_table = f"{self._table_name} AS {self._table_alias}"
-        else:
-            builder._from_table = self._table_name
+        builder._from_table = self._table_target()
 
         builder._from_snapshot = None
 
@@ -1180,8 +1212,11 @@ class BaseMatrixOneQuery:
         # Handle both SQLAlchemy expressions and simple values
         for key, value in kwargs.items():
             if hasattr(value, "compile"):  # SQLAlchemy expression
-                compiled = compile_expression(value, self.model_class, self._table_alias)
-                self._update_set_columns.append(f"{sql_identifier(key)} = {compiled}")
+                self._append_clause(
+                    '_update_set_columns',
+                    lambda key=key, value=value: f"{sql_identifier(key)} = "
+                    + compile_expression(value, self.model_class, self._table_alias),
+                )
             else:  # Simple value
                 self._update_set_columns.append(f"{key} = ?")
                 self._update_set_values.append(value)
@@ -1200,6 +1235,7 @@ class BaseMatrixOneQuery:
 
             ValueError: If no SET clauses are provided for UPDATE
         """
+        _require_single_table_mutation(self._joins)
         if not self._update_set_columns:
             raise ValueError("No SET clauses provided for UPDATE")
 
@@ -1221,7 +1257,7 @@ class BaseMatrixOneQuery:
 
         from .sql_builder import MatrixOneSQLBuilder
 
-        builder = MatrixOneSQLBuilder().update(self._table_name)
+        builder = MatrixOneSQLBuilder().update(self._table_target())
         builder._update_set_columns = set_clauses
         builder._update_set_values = params
         builder._where_conditions = self._where_conditions.copy()
@@ -1239,10 +1275,11 @@ class BaseMatrixOneQuery:
 
     def _build_delete_sql(self) -> tuple[str, List[Any]]:
         """Build DELETE SQL query using unified SQL builder"""
+        _require_single_table_mutation(self._joins)
         from .sql_builder import build_delete_query
 
         return build_delete_query(
-            table_name=self._table_name,
+            table_name=self._table_target(),
             where_conditions=self._where_conditions,
             where_params=self._where_params,
             order_by=self._order_by_columns,
@@ -1257,7 +1294,9 @@ class BaseMatrixOneQuery:
         if self._select_columns:
             columns = self._extract_select_columns()
         elif isinstance(self.model_class, str):
-            columns = result.columns if hasattr(result, 'columns') else list(result.keys())
+            columns = getattr(result, 'columns', None)
+            if columns is None or callable(columns):
+                columns = list(result.keys())
             if not columns or len(columns) != len(rows[0]):
                 raise ValueError('String-table results require complete column metadata')
         else:
@@ -1918,8 +1957,6 @@ class LogicalIn:
         return self.compile(model=model, alias=alias, table=model if isinstance(model, str) else None)
 
     def compile(self, compile_kwargs=None, model=None, alias=None, table=None):
-        from ._query_compilation import render_fragment
-
         column = compile_expression(self.column, model, alias) if hasattr(self.column, 'compile') else str(self.column)
         values = self.values
         if hasattr(values, 'query_builder'):
@@ -1931,7 +1968,7 @@ class LogicalIn:
             )
         elif hasattr(values, '_build_sql'):
             sql, params = values._build_sql()
-            body = render_fragment(sql, params)
+            body = substitute_parameters(sql, params)
         elif hasattr(values, 'compile'):
             body = compile_expression(values)
         elif isinstance(values, (list, tuple)):

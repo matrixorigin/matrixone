@@ -20,8 +20,8 @@ or stages using MatrixOne's SELECT ... INTO OUTFILE commands.
 """
 
 import warnings
-from ._query_compilation import compile_expression, render_fragment
-from ._sql_literals import sql_literal
+from ._query_compilation import compile_expression
+from ._sql_literals import sql_literal, substitute_parameters
 
 from typing import Any, Optional, Union
 
@@ -60,7 +60,7 @@ def _query_to_sql(query: Union[str, Any]) -> str:
     # If it has _build_sql method (MatrixOneQuery)
     if hasattr(query, '_build_sql'):
         sql, params = query._build_sql()
-        sql = render_fragment(sql, params)
+        sql = substitute_parameters(sql, params)
         return sql.rstrip(';').strip()
 
     # If it's a SQLAlchemy statement (has compile method)

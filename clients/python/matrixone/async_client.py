@@ -483,6 +483,7 @@ class AsyncClient(BaseMatrixOneClient):
         self._fulltext_index = None
         self._metadata = None
         self._load_data = None
+        self._export = None
         self._stage = None
         self._cdc = None
 
@@ -2261,6 +2262,15 @@ class AsyncClient(BaseMatrixOneClient):
         if self._load_data is None:
             self._load_data = AsyncLoadDataManager(self)
         return self._load_data
+
+    @property
+    def export(self):
+        """Get the async CSV/JSONL export manager for this client."""
+        if self._export is None:
+            from .export import AsyncExportManager
+
+            self._export = AsyncExportManager(self)
+        return self._export
 
     @property
     def stage(self) -> Optional["AsyncStageManager"]:
