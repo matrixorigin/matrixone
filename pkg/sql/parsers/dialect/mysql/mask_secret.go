@@ -823,7 +823,7 @@ func unionCredentialSpansUnderAllLexicalVariants(sql string, start int, lastKnow
 	// tokenizes identically, and one collection serves all four (round-12:
 	// credential-dense requests paid the 4x collection for nothing).
 	variantCount := 4
-	if strings.IndexAny(tail, "\\\"") < 0 {
+	if !strings.ContainsAny(tail, "\\\"") {
 		variantCount = 1
 	}
 	for variant := 0; variant < variantCount; variant++ {

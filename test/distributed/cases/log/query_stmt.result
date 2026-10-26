@@ -21,7 +21,7 @@ set @uuid_hide_5 = last_uuid();
 alter stage bvt_mask_stage set credentials={'aws_key'='ALTERV5CANARY9', 'aws_secret'='ALTERV5SECCANARY9'};
 set @uuid_hide_6 = last_uuid();
 create stage bvt_mask_bad credentials={'aws_secret_key'='BADV5CANARY9',;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 37 near " credentials={'aws_secret_key'='******',;";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 37 near "******";
 set @uuid_hide_7 = last_uuid();
 drop stage bvt_mask_stage;
 /* cloud_user */select 1;
