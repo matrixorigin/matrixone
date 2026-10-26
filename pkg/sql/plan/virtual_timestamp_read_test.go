@@ -15,7 +15,9 @@
 package plan
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -36,10 +38,10 @@ func TestVirtualTimestampReadAndIndexEligibility(t *testing.T) {
 		},
 		Name2ColIndex: map[string]int32{"ts": 0, "d": 1, "child": 2, "stored": 3, "stable": 4},
 	}
-	require.True(t, virtualTimestampColumn(table, 1, make(map[int32]bool)))
-	require.True(t, virtualTimestampColumn(table, 2, make(map[int32]bool)))
-	require.False(t, virtualTimestampColumn(table, 3, make(map[int32]bool)))
-	require.False(t, virtualTimestampColumn(table, 4, make(map[int32]bool)))
+	require.True(t, virtualTimestampColumn(table, 1))
+	require.True(t, virtualTimestampColumn(table, 2))
+	require.False(t, virtualTimestampColumn(table, 3))
+	require.False(t, virtualTimestampColumn(table, 4))
 	require.True(t, indexUsesVirtualTimestamp(&pb.IndexDef{Parts: []string{"stored", "child"}}, table))
 	require.False(t, indexUsesVirtualTimestamp(&pb.IndexDef{Parts: []string{"stable"}}, table))
 
@@ -52,4 +54,21 @@ func TestVirtualTimestampReadAndIndexEligibility(t *testing.T) {
 	require.Equal(t, int32(17), correlated.GetCorr().RelPos)
 	require.Equal(t, int32(0), correlated.GetCorr().ColPos)
 	require.Equal(t, int32(1), correlated.GetCorr().Depth)
+}
+
+func TestVirtualTimestampClassificationSharedDependencies(t *testing.T) {
+	table := &pb.TableDef{
+		Cols:          []*pb.ColDef{{Name: "x", Typ: pb.Type{Id: int32(types.T_int32)}}},
+		Name2ColIndex: map[string]int32{"x": 0},
+	}
+	for level := 1; level <= 30; level++ {
+		name := fmt.Sprintf("g%d", level)
+		previous := &pb.Expr{Typ: pb.Type{Id: int32(types.T_int32)}, Expr: &pb.Expr_Col{Col: &pb.ColRef{ColPos: int32(level - 1)}}}
+		expr := &pb.Expr{Typ: pb.Type{Id: int32(types.T_int32)}, Expr: &pb.Expr_F{F: &pb.Function{Args: []*pb.Expr{previous, DeepCopyExpr(previous)}}}}
+		table.Cols = append(table.Cols, &pb.ColDef{Name: name, Typ: expr.Typ, GeneratedCol: &pb.GeneratedCol{Expr: expr}})
+		table.Name2ColIndex[name] = int32(level)
+	}
+	start := time.Now()
+	require.False(t, indexUsesVirtualTimestamp(&pb.IndexDef{Parts: []string{"g30"}}, table))
+	require.Less(t, time.Since(start), 5*time.Second)
 }

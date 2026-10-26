@@ -860,8 +860,12 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
-	existentialBlock     uint64
-	subqueryNestingDepth uint32
+	// Internal UPDATE/DELETE target projections need the persisted value for
+	// old secondary-index keys. The user predicate in the same SELECT still
+	// observes the session's virtual-column value.
+	physicalGeneratedRefs map[*tree.UnresolvedName]struct{}
+	existentialBlock      uint64
+	subqueryNestingDepth  uint32
 
 	binder Binder
 

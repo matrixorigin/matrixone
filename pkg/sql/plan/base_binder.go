@@ -789,12 +789,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	}
 
 	if colPos != NotFound {
-		if resolvedBinding != nil && b.builder != nil && resolvedBinding.nodeId >= 0 &&
+		_, physicalGeneratedRef := b.ctx.physicalGeneratedRefs[astExpr]
+		if !physicalGeneratedRef && resolvedBinding != nil && b.builder != nil && resolvedBinding.nodeId >= 0 &&
 			int(resolvedBinding.nodeId) < len(b.builder.qry.Nodes) {
 			node := b.builder.qry.Nodes[resolvedBinding.nodeId]
 			if node != nil && node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil &&
 				len(node.BindingTags) == 1 && node.BindingTags[0] == relPos &&
-				virtualTimestampColumn(node.TableDef, colPos, make(map[int32]bool)) {
+				virtualTimestampColumn(node.TableDef, colPos) {
 				computed := expandVirtualTimestampColumn(node.TableDef, colPos, relPos, depth, make(map[int32]bool))
 				if computed == nil {
 					return nil, moerr.NewInternalErrorf(b.GetContext(), "invalid virtual generated column expression for %s", col)

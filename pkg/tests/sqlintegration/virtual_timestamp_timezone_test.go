@@ -60,6 +60,13 @@ func TestVirtualTimestampColumnUsesReaderTimeZone(t *testing.T) {
 		require.Equal(t, "2024-03-01", d)
 		require.Equal(t, computed, d)
 		require.Equal(t, "2024-02-29", stored)
+		var starID int
+		var starTS, starD, starStored string
+		require.NoError(t, conn.QueryRowContext(ctx, "select * from t where id=1").Scan(&starID, &starTS, &starD, &starStored))
+		require.Equal(t, 1, starID)
+		require.Equal(t, d, starD)
+		count("select count(*) from (select d from t group by d) grouped", 2)
+		count("select count(*) from t a join t b on a.d=b.d where a.id=1", 1)
 		for _, hint := range []string{"", "force index(kd)", "ignore index(kd)"} {
 			count("select count(*) from t "+hint+" where d='2024-03-01'", 1)
 			count("select count(*) from t "+hint+" where d='2024-02-29'", 1)
@@ -73,6 +80,16 @@ func TestVirtualTimestampColumnUsesReaderTimeZone(t *testing.T) {
 		var got int
 		require.NoError(t, prepared.QueryRowContext(ctx, "2024-03-01").Scan(&got))
 		require.Equal(t, 1, got)
+		exec("create table dml(id int primary key, ts timestamp(6) not null, d date as (date(ts)) virtual, key kd(d))")
+		exec("set time_zone='+00:00'")
+		exec("insert into dml(id,ts) values(1,'2024-02-29 23:30:00.123456'),(2,'2024-02-29 23:30:00.123456')")
+		exec("set time_zone='+08:00'")
+		exec("delete from dml where id=1")
+		count("select count(*) from dml where id=1", 0)
+		exec("update dml set ts=ts where id=2")
+		count("select count(*) from dml where id=2 and d='2024-03-01'", 1)
+		exec("delete from dml where id=2")
+		count("select count(*) from dml", 0)
 		exec("set time_zone='+00:00'")
 		count("select count(*) from t force index(kd) where d='2024-03-01'", 0)
 		count("select count(*) from t force index(kd) where d='2024-02-29'", 2)
