@@ -587,6 +587,16 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 	budget := &tableDumpBindingBudget{}
 	timeZones := newTableDumpTimeZones(time.LoadLocation)
 	var sensitive bool
+	// A table often has several defaults created in the same session. Reuse
+	// only the binding parameters: every expression must still be rebound and
+	// compared in full, with each attempt charged to the table-wide budget.
+	type bindingWitness struct {
+		increment int64
+		mode      tableDumpBindingMode
+		zone      *time.Location
+		locale    string
+	}
+	var lastTimezoneWitness *bindingWitness
 	for i, item := range items {
 		if err := ctx.GetContext().Err(); err != nil {
 			return false, err
@@ -679,6 +689,17 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			if supplied != nil {
 				want = sourceItems[i].expr
 			}
+			if lastTimezoneWitness != nil {
+				witness := lastTimezoneWitness
+				rebound, err := bind(witness.increment, witness.mode, witness.zone, witness.locale)
+				if fatal != nil {
+					stmt.Free()
+					return false, fatal
+				}
+				if err == nil && sameTableDumpBoundExpression(want, rebound) {
+					matched, sensitive = true, true
+				}
+			}
 			// Give every cheap precision/era witness priority over a wrong
 			// precision's exhaustive session search. Retain flags, not trees.
 			type sessionCandidate struct {
@@ -688,7 +709,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 				folded, stored bool
 			}
 			var sessions []sessionCandidate
-			for increment := int64(0); increment <= maxIncrement; increment++ {
+			for increment := int64(0); increment <= maxIncrement && !matched; increment++ {
 				if err := ctx.GetContext().Err(); err != nil {
 					stmt.Free()
 					return false, err
@@ -845,6 +866,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					if fatal == nil && err == nil && sameTableDumpBoundExpression(want, rebound) {
 						matched = true
 						sensitive = sensitive || search.legacy
+						lastTimezoneWitness = &bindingWitness{search.increment, search.mode, tz, lc}
 					}
 				}
 				if len(legacySessions) > 0 {
