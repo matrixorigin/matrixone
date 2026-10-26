@@ -72,6 +72,12 @@ create table lazy_src(id int primary key, n int, js json, txt varchar(20));
 insert into lazy_src values (1, 1, '{"p":1}', 'bad'), (2, 2, '{"p":1}', '[2]');
 select id, elt(n, js, cast(txt as json)) as selected_value from lazy_src order by id;
 
+-- Folding a parent must preserve both lazy selection and selected diagnostics.
+select concat(elt(1, 'ok', cast('bad' as json)), '!') as lazy_parent, elt(1, elt(1, 'ok', cast('bad' as json)), cast('bad' as json)) as lazy_nested;
+select elt(1, 'ok', cast(bit_count('3x') as json)) as unselected_warning;
+show count(*) warnings;
+select concat(elt(1, cast(bit_count('3x') as json), 'ok'), '!') as selected_warning;
+show count(*) warnings;
 select elt(1, cast(cast('a' as binary(1)) as json)) = '"base64:type254:YQ=="' as binary_subtype;
 create table opaque_stored(j json);
 insert into opaque_stored values (cast(cast(repeat('a',58) as blob) as json));

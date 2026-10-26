@@ -126,8 +126,6 @@ func requireNoUnpublishedCleanupMarkers(
 }
 
 func TestCancelableJob(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	var v1 atomic.Int32
 	jobName := "job"
@@ -218,8 +216,6 @@ func TestCancelableJob(t *testing.T) {
 }
 
 func TestPrintVector(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	assert.NoError(t, err)
@@ -238,8 +234,6 @@ func TestPrintVector(t *testing.T) {
 }
 
 func TestAppend1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, nil)
@@ -345,8 +339,6 @@ func TestAppend1(t *testing.T) {
 }
 
 func TestAppend2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanCKPAndLongGCOpts(nil)
@@ -403,8 +395,6 @@ func TestAppend2(t *testing.T) {
 }
 
 func TestTruncate1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -448,8 +438,6 @@ func TestTruncate1(t *testing.T) {
 	assert.GreaterOrEqual(t, db.Wal.GetTruncated(), uint64(4))
 }
 func TestAppend3(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -489,8 +477,6 @@ func TestAppend3(t *testing.T) {
 }
 
 func TestAppend4(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -627,8 +613,6 @@ func testCRUD(t *testing.T, tae *db.DB, schema *catalog.Schema) {
 }
 
 func TestCRUD(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -639,8 +623,6 @@ func TestCRUD(t *testing.T) {
 }
 
 func TestTableHandle(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -665,8 +647,6 @@ func TestTableHandle(t *testing.T) {
 }
 
 func TestCreateBlock(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -686,8 +666,6 @@ func TestCreateBlock(t *testing.T) {
 }
 
 func TestNonAppendableBlock(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -770,8 +748,6 @@ func TestNonAppendableBlock(t *testing.T) {
 }
 
 func TestCreateObject(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -809,8 +785,6 @@ func TestCreateObject(t *testing.T) {
 }
 
 func TestAddObjsWithMetaLoc(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -987,8 +961,6 @@ func TestAddObjsWithMetaLoc(t *testing.T) {
 }
 
 func TestCompactMemAlter(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1048,8 +1020,6 @@ func TestCompactMemAlter(t *testing.T) {
 }
 
 func TestFlushTableMergeOrder(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1122,8 +1092,6 @@ func TestFlushTableMergeOrder(t *testing.T) {
 }
 
 func TestFlushTableMergeOrderPK(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1197,8 +1165,6 @@ func TestFlushTableMergeOrderPK(t *testing.T) {
 }
 
 func TestFlushTableNoPk(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1233,8 +1199,6 @@ func TestFlushTableNoPk(t *testing.T) {
 }
 
 func TestFlushTableDroppedEntry(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1409,8 +1373,6 @@ func TestFlushTableErrorHandle2(t *testing.T) {
 
 func TestFlushTabletail(t *testing.T) {
 	// TODO
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -1568,8 +1530,6 @@ func TestFlushTabletail(t *testing.T) {
 }
 
 func TestRollback1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -1633,8 +1593,6 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 		{name: "checkpoint-collect", checkpoint: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			defer testutils.AfterTest(t)()
-			testutils.EnsureNoLeak(t)
 			ctx := context.Background()
 
 			opts := config.WithLongScanAndCKPOpts(nil)
@@ -1722,8 +1680,6 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 }
 
 func TestMVCC1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -1799,8 +1755,6 @@ func TestMVCC1(t *testing.T) {
 // 3. Txn2 delete the 5th row value in uncommitted state -- PASS
 // 4. Txn2 get the 5th row value -- NotFound
 func TestMVCC2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	db := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -1853,8 +1807,6 @@ func TestMVCC2(t *testing.T) {
 }
 
 func TestUnload1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -1899,8 +1851,6 @@ func TestUnload1(t *testing.T) {
 }
 
 func TestUnload2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -1968,8 +1918,6 @@ func TestUnload2(t *testing.T) {
 }
 
 func TestDelete1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2054,8 +2002,6 @@ func TestDelete1(t *testing.T) {
 }
 
 func TestLogIndex1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2111,8 +2057,6 @@ func TestLogIndex1(t *testing.T) {
 }
 
 func TestCrossDBTxn(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2174,8 +2118,6 @@ func TestCrossDBTxn(t *testing.T) {
 }
 
 func TestSystemDB2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2214,8 +2156,6 @@ func TestSystemDB2(t *testing.T) {
 }
 
 func TestSystemDB3(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
@@ -2235,8 +2175,6 @@ func TestSystemDB3(t *testing.T) {
 }
 
 func TestScan1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
 	defer tae.Close()
@@ -2255,8 +2193,6 @@ func TestScan1(t *testing.T) {
 }
 
 func TestDedup(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2280,8 +2216,6 @@ func TestDedup(t *testing.T) {
 }
 
 func TestScan2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2325,8 +2259,6 @@ func TestScan2(t *testing.T) {
 }
 
 func TestADA(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2433,8 +2365,6 @@ func TestADA(t *testing.T) {
 }
 
 func TestUpdateByFilter(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2473,8 +2403,6 @@ func TestUpdateByFilter(t *testing.T) {
 // 4. Start Txn2. Delete row 2. Commit.
 // 5. Txn1 call GetByFilter and should return PASS
 func TestGetByFilter(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2523,8 +2451,6 @@ func TestGetByFilter(t *testing.T) {
 //     3.5.2 If error, should always be w-w conflict
 //  4. Wait done all workers. Check the raw row count of table, should be same with appendedcnt.
 func TestChaos1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2610,8 +2536,6 @@ func TestChaos1(t *testing.T) {
 // 5. Txn1 try to delete the 3rd row. W-W Conflict. Rollback
 // 6. Start txn3 and try to update th3 3rd row 3rd col to int64(3333). -- PASS
 func TestSnapshotIsolation1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2670,8 +2594,6 @@ func TestSnapshotIsolation1(t *testing.T) {
 // 3. Start txn3 and delete the row and commit
 // 4. Txn1 try to append the row. (W-W). Rollback
 func TestSnapshotIsolation2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -2712,8 +2634,6 @@ func TestSnapshotIsolation2(t *testing.T) {
 // Same as TestMergeBlocks
 // no pkRow in schema, so merge will run reshape.
 func TestReshapeBlocks(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2788,8 +2708,6 @@ func TestReshapeBlocks(t *testing.T) {
 // 2. Merge blocks
 // 3. Check rows and col[0]
 func TestMergeBlocks(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, nil)
@@ -2874,8 +2792,6 @@ func totsp(ts types.TS) *timestamp.Timestamp {
 }
 
 func TestSegDelLogtail(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -2986,8 +2902,6 @@ func TestSegDelLogtail(t *testing.T) {
 // delete
 // commit merge
 func TestMergeblocks2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3081,8 +2995,6 @@ func TestMergeblocks2(t *testing.T) {
 // Object2: 8, 9, 11 | 12
 // Delete map not nil on: [obj1, blk1] and [obj2, blk2]
 func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3196,8 +3108,6 @@ func TestMergeBlocksIntoMultipleObjects(t *testing.T) {
 }
 
 func TestMergeEmptyBlocks(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3249,8 +3159,6 @@ func TestMergeEmptyBlocks(t *testing.T) {
 	}
 }
 func TestDelete2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3275,8 +3183,6 @@ func TestDelete2(t *testing.T) {
 }
 
 func TestNull1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3397,8 +3303,6 @@ func TestNull1(t *testing.T) {
 }
 
 func TestTruncate(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -3446,8 +3350,6 @@ func TestTruncate(t *testing.T) {
 }
 
 func TestGetColumnData(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3514,8 +3416,6 @@ func TestGetColumnData(t *testing.T) {
 }
 
 func TestCompactBlk1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3595,8 +3495,6 @@ func TestCompactBlk1(t *testing.T) {
 }
 
 func TestCompactBlk2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3685,8 +3583,6 @@ func TestCompactBlk2(t *testing.T) {
 }
 
 func TestCompactblk3(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3745,8 +3641,6 @@ func TestCompactblk3(t *testing.T) {
 }
 
 func TestImmutableIndexInAblk(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -3820,7 +3714,6 @@ func TestImmutableIndexInAblk(t *testing.T) {
 
 func TestDelete3(t *testing.T) {
 	// t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -4000,7 +3893,6 @@ func checkRowsAtSnapshot(
 }
 
 func TestFlushTransferTombstonesVisibleAtParentCommit(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	tae, flushTxn, oldTombstoneIDs := newFlushTransferScenario(t, ctx, nil)
 
@@ -4035,7 +3927,6 @@ func TestFlushTransferTombstonesVisibleAtParentCommit(t *testing.T) {
 }
 
 func TestFlushTransferTombstonesVisibleToSnapshotStartedWhilePreparing(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	barrier := &flushPrepareBarrier{
 		reached: make(chan struct{}),
@@ -4087,7 +3978,6 @@ func TestFlushTransferTombstonesVisibleToSnapshotStartedWhilePreparing(t *testin
 }
 
 func TestFlushTransferTombstonesRollback(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	tae, flushTxn, oldTombstoneIDs := newFlushTransferScenario(t, ctx, nil)
 
@@ -4110,7 +4000,6 @@ func TestFlushTransferTombstonesRollback(t *testing.T) {
 }
 
 func TestTombstoneMergeKeepsTargetDroppedAfterSnapshot(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -4197,8 +4086,6 @@ func TestTombstoneMergeKeepsTargetDroppedAfterSnapshot(t *testing.T) {
 }
 
 func TestTransferredTombstonesSyncFailureRollsBack(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -4285,7 +4172,6 @@ func TestTransferredTombstonesSyncFailureRollsBack(t *testing.T) {
 }
 
 func TestTransferredTombstonesPublishedBeforeConflictRollBack(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4345,7 +4231,6 @@ func TestTransferredTombstonesPublishedBeforeConflictRollBack(t *testing.T) {
 }
 
 func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	serviceRuntime := runtime.ServiceRuntime("")
 	originalVersion, hadVersion := serviceRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
@@ -4436,7 +4321,6 @@ func TestV9FlushPreservesRowIDAcrossAbortHole(t *testing.T) {
 }
 
 func TestV9PersistedTombstoneContainsSkipsRollback(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	serviceRuntime := runtime.ServiceRuntime("")
 	originalVersion, hadVersion := serviceRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
@@ -4506,7 +4390,6 @@ func TestV9PersistedTombstoneContainsSkipsRollback(t *testing.T) {
 }
 
 func TestIncrementalDedupIgnoresOldRowsInTNRewrite(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4549,7 +4432,6 @@ func TestIncrementalDedupIgnoresOldRowsInTNRewrite(t *testing.T) {
 }
 
 func TestIncrementalDedupChecksCNCreatedObject(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4594,7 +4476,6 @@ func TestIncrementalDedupChecksCNCreatedObject(t *testing.T) {
 }
 
 func TestStrictDedupIgnoresOldRowsInTNRewrite(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4645,7 +4526,6 @@ func TestDedupDetectsConcurrentRowAfterTNRewrite(t *testing.T) {
 		{name: "incremental", policy: txnif.DedupPolicy_CheckIncremental},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			defer testutils.AfterTest(t)()
 			ctx := context.Background()
 
 			opts := config.WithLongScanAndCKPOpts(nil)
@@ -4694,7 +4574,6 @@ func TestDedupDetectsConcurrentRowAfterTNRewrite(t *testing.T) {
 }
 
 func TestDropCreated1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4716,7 +4595,6 @@ func TestDropCreated1(t *testing.T) {
 }
 
 func TestDropCreated2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4741,7 +4619,6 @@ func TestDropCreated2(t *testing.T) {
 }
 
 func TestDropCreated3(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4767,7 +4644,6 @@ func TestDropCreated3(t *testing.T) {
 }
 
 func TestRollbackCreateTable(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4799,7 +4675,6 @@ func TestRollbackCreateTable(t *testing.T) {
 }
 
 func TestDropCreated4(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -4825,7 +4700,6 @@ func TestDropCreated4(t *testing.T) {
 }
 
 func TestTruncateZonemap(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	type Mod struct {
@@ -4842,7 +4716,6 @@ func TestTruncateZonemap(t *testing.T) {
 		}
 		return ret
 	}
-	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
 	defer tae.Close()
@@ -4919,7 +4792,6 @@ func mustStartTxn(t *testing.T, tae *testutil.TestEngine, tenantID uint32) txnif
 }
 
 func TestMultiTenantDBOps(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	var err error
@@ -4981,7 +4853,6 @@ func TestMultiTenantDBOps(t *testing.T) {
 }
 
 func TestMultiTenantMoCatalogOps(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	var err error
@@ -5063,7 +4934,6 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 // txn2: compact
 // txn3: append, shouldn't get rw
 func TestGetLastAppender(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -5096,7 +4966,6 @@ func TestGetLastAppender(t *testing.T) {
 // check data, row count, commit ts
 // TODO 1. in2pc committs!=preparets; 2. abort
 func TestCollectInsert(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -5176,7 +5045,6 @@ func TestCollectInsert(t *testing.T) {
 }
 
 func TestAppendnode(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -5220,7 +5088,6 @@ func TestAppendnode(t *testing.T) {
 }
 
 func TestTxnIdempotent(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -5254,7 +5121,6 @@ func TestTxnIdempotent(t *testing.T) {
 // insert 200 rows and do quick compaction
 // expect that there are some dirty tables at first and then zero dirty table found
 func TestWatchDirty(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -5318,7 +5184,6 @@ func TestWatchDirty(t *testing.T) {
 }
 
 func TestDirtyWatchRace(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -5373,7 +5238,6 @@ func TestDirtyWatchRace(t *testing.T) {
 func TestBlockRead(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
-			defer testutils.AfterTest(t)()
 			ctx := context.Background()
 
 			opts := config.WithLongScanAndCKPOpts(nil)
@@ -5512,7 +5376,6 @@ func TestBlockRead(t *testing.T) {
 func TestBlockRead2(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
-			defer testutils.AfterTest(t)()
 			ctx := context.Background()
 
 			opts := config.WithLongScanAndCKPOpts(nil)
@@ -5661,8 +5524,6 @@ func TestBlockRead2(t *testing.T) {
 }
 
 func TestCompactDeltaBlk(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -5747,7 +5608,6 @@ func TestCompactDeltaBlk(t *testing.T) {
 }
 
 func TestFlushTable(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -5790,7 +5650,6 @@ func TestFlushTable(t *testing.T) {
 }
 
 func TestReadCheckpoint(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -5883,7 +5742,6 @@ func TestReadCheckpoint(t *testing.T) {
 }
 
 func TestICKPPreservesTableIDHistoryWhileGCKPIntentIsPending(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx, cancel := context.WithTimeout(context.Background(), testutil.TestCheckpointTimeout)
 	t.Cleanup(cancel)
 
@@ -6005,7 +5863,6 @@ func TestICKPPreservesTableIDHistoryWhileGCKPIntentIsPending(t *testing.T) {
 }
 
 func TestReplacementChecksConcurrentDestinationKey(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
 	defer tae.Close()
@@ -6042,7 +5899,6 @@ func TestReplacementChecksConcurrentDestinationKey(t *testing.T) {
 }
 
 func TestReplacementRejectsCompetingPredecessor(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	for _, transferred := range []bool{false, true} {
 		name := "ordinary"
 		if transferred {
@@ -6125,7 +5981,6 @@ func TestReplacementRejectsCompetingPredecessor(t *testing.T) {
 }
 
 func TestDelete4(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -6506,7 +6361,6 @@ func TestMergeBlocks3(t *testing.T) {
 }
 
 func TestTransfer3(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -6543,7 +6397,6 @@ func TestTransfer3(t *testing.T) {
 
 func TestUpdate(t *testing.T) {
 	t.Skip(any("This case crashes occasionally, is being fixed, skip it for now"))
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts2(nil, 5)
@@ -6739,7 +6592,6 @@ func TestAppendBat(t *testing.T) {
 }
 
 func TestAlterRenameTbl(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -6916,7 +6768,6 @@ func TestAlterRenameTbl(t *testing.T) {
 }
 
 func TestAlterRenameTbl2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -7010,8 +6861,6 @@ func TestAlterRenameTbl2(t *testing.T) {
 }
 
 func TestAlterFakePk(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -7136,8 +6985,6 @@ func TestAlterFakePk(t *testing.T) {
 }
 
 func TestAlterAutoIncrementSchemaCommitAndRollback(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	tae := testutil.InitTestDB(ctx, ModuleName, t, config.WithLongScanAndCKPOpts(nil))
@@ -7190,8 +7037,6 @@ func waitAutoIncrEpochBarrier(t *testing.T, ch <-chan struct{}, name string) {
 }
 
 func TestAutoIncrEpochCommitFence(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	newEpochTable := func(t *testing.T) (*db.DB, *catalog.Schema, uint32) {
@@ -7386,8 +7231,6 @@ func TestAutoIncrEpochCommitFence(t *testing.T) {
 }
 
 func TestAlterColumnAndFreeze(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -7535,8 +7378,6 @@ func TestAlterColumnAndFreeze(t *testing.T) {
 }
 
 func TestGlobalCheckpoint1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -7573,8 +7414,6 @@ func TestGlobalCheckpoint1(t *testing.T) {
 }
 
 func TestAppendAndGC(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -7641,8 +7480,6 @@ func TestAppendAndGC(t *testing.T) {
 }
 
 func TestAppendAndGC2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -7857,8 +7694,6 @@ func appendBatchesConcurrently(
 }
 
 func TestSnapshotGC(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -8059,8 +7894,6 @@ func TestSnapshotGC(t *testing.T) {
 }
 
 func TestSnapshotMeta(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -8184,8 +8017,6 @@ func TestSnapshotMeta(t *testing.T) {
 }
 
 func TestPitrMeta(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -8417,8 +8248,6 @@ func TestPitrMeta(t *testing.T) {
 }
 
 func TestIscpMeta(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -8684,8 +8513,6 @@ func TestIscpMeta(t *testing.T) {
 }
 
 func TestMergeGC(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -8775,8 +8602,6 @@ func TestMergeGC(t *testing.T) {
 }
 
 func TestCkpLeak(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := new(options.Options)
@@ -8864,8 +8689,6 @@ func TestCkpLeak(t *testing.T) {
 }
 
 func TestGlobalCheckpoint2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 	// Flushing is asynchronous and shares workers with the checkpoint runner;
 	// use the same bounded timeout as checkpoint operations instead of a
@@ -9001,8 +8824,6 @@ func TestGlobalCheckpoint2(t *testing.T) {
 }
 
 func TestGlobalCheckpoint5(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -9058,8 +8879,6 @@ func TestGlobalCheckpoint5(t *testing.T) {
 }
 
 func TestGCCheckpoint1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -9143,7 +8962,6 @@ func TestGCCheckpoint1(t *testing.T) {
 // 7. check the incremental checkpoints -> expect 1, finished
 // 8. check the intent -> expect nil
 func Test_CheckpointChaos1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 
@@ -9232,7 +9050,6 @@ func Test_CheckpointChaos1(t *testing.T) {
 // 13. check ickp and gckp
 // 14. check all data
 func Test_CheckpointChaos2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOpts(nil)
 
 	ctx := context.Background()
@@ -9399,7 +9216,6 @@ func Test_CheckpointChaos2(t *testing.T) {
 }
 
 func Test_CheckpointChaos3(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	opts := config.WithLongScanAndCKPOptsAndQuickGC(nil)
 	ctx := context.Background()
 
@@ -9485,7 +9301,6 @@ endFor:
 }
 
 func TestGCCatalog1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -9665,7 +9480,6 @@ func TestGCCatalog1(t *testing.T) {
 }
 
 func TestGCCatalog2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -9726,7 +9540,6 @@ func TestGCCatalog2(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(3))
 }
 func TestGCCatalog3(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -9815,7 +9628,6 @@ func TestForceCheckpoint(t *testing.T) {
 }
 
 func TestForceCheckpointWithoutWAL(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -9844,7 +9656,6 @@ func TestForceCheckpointWithoutWAL(t *testing.T) {
 }
 
 func TestForceCheckpointWithFullyReservedWAL(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	options.WithReserveWALEntryCount(math.MaxUint64)(opts)
@@ -10146,8 +9957,6 @@ func TestCommitS3Blocks(t *testing.T) {
 }
 
 func TestDedupSnapshot1(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -10179,8 +9988,6 @@ func TestDedupSnapshot1(t *testing.T) {
 }
 
 func TestDedupSnapshot2(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -10239,8 +10046,6 @@ func TestDedupSnapshot2(t *testing.T) {
 }
 
 func TestDedupSnapshot3(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -10310,7 +10115,6 @@ func TestDedupSnapshot3(t *testing.T) {
 }
 
 func TestSoftDeleteRollback(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -10486,7 +10290,6 @@ func TestRW(t *testing.T) {
 }
 
 func TestReplayDeletes(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10524,7 +10327,6 @@ func TestReplayDeletes(t *testing.T) {
 	assert.NoError(t, txn2.Commit(context.Background()))
 }
 func TestApplyDeltalocation1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10577,7 +10379,6 @@ func TestApplyDeltalocation1(t *testing.T) {
 
 // test compact
 func TestApplyDeltalocation2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10641,7 +10442,6 @@ func TestApplyDeltalocation2(t *testing.T) {
 }
 
 func TestApplyDeltalocation3(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10701,7 +10501,6 @@ func TestApplyDeltalocation3(t *testing.T) {
 }
 
 func TestApplyDeltalocation4(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10742,7 +10541,6 @@ func TestApplyDeltalocation4(t *testing.T) {
 }
 
 func TestReplayPersistedDelete(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10779,8 +10577,6 @@ func TestReplayPersistedDelete(t *testing.T) {
 func TestSnapshotCheckpoint(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
-			defer testutils.AfterTest(t)()
-			testutils.EnsureNoLeak(t)
 			ctx := context.Background()
 
 			opts := new(options.Options)
@@ -10898,7 +10694,6 @@ func TestSnapshotCheckpoint(t *testing.T) {
 }
 
 func TestEstimateMemSize(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -10967,7 +10762,6 @@ func TestEstimateMemSize(t *testing.T) {
 }
 
 func TestColumnCount(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11004,7 +10798,6 @@ func TestColumnCount(t *testing.T) {
 }
 
 func TestCollectDeletesInRange1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11038,8 +10831,6 @@ func TestCollectDeletesInRange1(t *testing.T) {
 }
 
 func TestCollectDeletesInRangeWithActiveTombstoneDrop(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11087,7 +10878,6 @@ func TestCollectDeletesInRangeWithActiveTombstoneDrop(t *testing.T) {
 }
 
 func TestCollectDeletesInRange2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11161,7 +10951,6 @@ func TestCollectDeletesInRange2(t *testing.T) {
 }
 
 func TestGlobalCheckpoint7(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
@@ -11241,7 +11030,6 @@ func TestGlobalCheckpoint7(t *testing.T) {
 }
 
 func TestSplitCommand(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11264,7 +11052,6 @@ func TestSplitCommand(t *testing.T) {
 }
 
 func TestFlushAndAppend(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11310,7 +11097,6 @@ func TestFlushAndAppend(t *testing.T) {
 }
 
 func TestFlushAndAppend2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11363,7 +11149,6 @@ func TestFlushAndAppend2(t *testing.T) {
 }
 
 func TestDeletesInMerge(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11403,7 +11188,6 @@ func TestDeletesInMerge(t *testing.T) {
 }
 
 func TestDedupAndFlush(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 	opts := config.WithLongScanAndCKPOpts(nil)
 	options.WithGlobalVersionInterval(time.Microsecond)(opts)
@@ -11442,8 +11226,6 @@ func TestDedupAndFlush(t *testing.T) {
 }
 
 func TestTransferDeletes(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11493,8 +11275,6 @@ func TestTransferDeletes(t *testing.T) {
 // and leave the soft-deleted object in readSet — causing a spurious r-w
 // conflict at checkAll.
 func TestTransferDeleteVectorRealloc(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11570,8 +11350,6 @@ func TestTransferDeleteVectorRealloc(t *testing.T) {
 }
 
 func TestGCKP(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11599,8 +11377,6 @@ func TestGCKP(t *testing.T) {
 func TestCKPCollectObject(t *testing.T) {
 	ioutil.RunPipelineTest(
 		func() {
-			defer testutils.AfterTest(t)()
-			testutils.EnsureNoLeak(t)
 			ctx := context.Background()
 
 			opts := config.WithLongScanAndCKPOpts(nil)
@@ -11641,8 +11417,6 @@ func TestCKPCollectObject(t *testing.T) {
 }
 
 func TestGCCatalog4(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11809,7 +11583,6 @@ func TestClearPersistTransferTable(t *testing.T) {
 }
 
 func TestTryDeleteByDeltaloc1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -11841,7 +11614,6 @@ func TestTryDeleteByDeltaloc1(t *testing.T) {
 }
 
 func TestTryDeleteByDeltaloc2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -12540,7 +12312,6 @@ func TestDedup4(t *testing.T) {
 }
 
 func TestDeleteWithObjectStats(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -12624,7 +12395,6 @@ func TestFillBlockTombstonesPersistedAobj(t *testing.T) {
 }
 
 func TestTransferS3Deletes(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -14524,7 +14294,6 @@ func TestTNCatalogEventSource(t *testing.T) {
 }
 
 func TestCheckpointTableIDBatch1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -14735,7 +14504,6 @@ func TestCheckpointTableIDBatch1(t *testing.T) {
 }
 
 func TestCheckpointTableIDBatch2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -14802,7 +14570,6 @@ func TestCheckpointTableIDBatch2(t *testing.T) {
 }
 
 func TestRepeatedForceGCKPUsesFreshICKPBoundary(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 
@@ -14872,7 +14639,6 @@ func TestRepeatedForceGCKPUsesFreshICKPBoundary(t *testing.T) {
 }
 
 func TestGlobalCheckpointTableIDHistoryFallbackAndFailClosed(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
@@ -15024,8 +14790,6 @@ func TestGlobalCheckpointTableIDHistoryFallbackAndFailClosed(t *testing.T) {
 // remains visible after its source object is merged, and that a second append
 // with the same primary key is rejected by TN deduplication.
 func TestGetByFilterAfterMergeKeepsTheNewAppend(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)

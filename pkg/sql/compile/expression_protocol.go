@@ -62,7 +62,7 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	}
 	required := executionRemoteExpressionProtocolVersion(c.proc, features)
 	if queryRequiresPartitionFulltextRoute(qry) {
-		required = max(required, defines.MORPCVersion130)
+		required = max(required, defines.MORPCVersion132)
 	}
 	if required == 0 {
 		return nil
@@ -170,6 +170,9 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	}
 	if features.JSONNumericComparisons {
 		required = max(required, defines.MORPCVersion128)
+	}
+	if features.IncompleteTemporalStrings {
+		required = max(required, defines.MORPCVersion130)
 	}
 	return required
 }

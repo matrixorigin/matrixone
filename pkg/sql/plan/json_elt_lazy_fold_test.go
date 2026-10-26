@@ -24,22 +24,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planrule "github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
 
 func TestJSONStringEltLazyPlannerFolding(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
 	for _, tc := range []struct {
-		sql, want  string
-		null, fail bool
+		sql, want          string
+		null, fail, warned bool
 	}{
 		{sql: "elt(1,'ok',cast('bad' as json))", want: "ok"},
+		{sql: "concat(elt(1,'ok',cast('bad' as json)),'!')", want: "ok!"},
+		{sql: "elt(1,elt(1,'ok',cast('bad' as json)),cast('bad' as json))", want: "ok"},
 		{sql: "elt(null,cast('bad' as json),'ok')", null: true},
 		{sql: "elt(0,cast('bad' as json),'ok')", null: true},
 		{sql: "elt(3,cast('bad' as json),'ok')", null: true},
 		{sql: "elt(1,cast('bad' as json),'ok')", fail: true},
+		{sql: "elt(1,'ok',cast(bit_count('3x') as json))", want: "ok"},
+		{sql: "elt(1,cast(bit_count('3 ') as json),cast('bad' as json))", want: "2"},
+		{sql: "elt(1,cast(bit_count('3x') as json),'ok')", want: "2", warned: true},
+		{sql: "concat(elt(1,cast(bit_count('3x') as json),'ok'),'!')", want: "2!", warned: true},
 	} {
 		t.Run(tc.sql, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select "+tc.sql, 1)
@@ -50,6 +55,10 @@ func TestJSONStringEltLazyPlannerFolding(t *testing.T) {
 			require.NoError(t, err)
 			for _, mode := range []string{"runtime", "api", "optimizer", "prepare"} {
 				t.Run(mode, func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					t.Cleanup(proc.Free)
+					sink := &process.WarningProbe{}
+					proc.WarningSink = sink
 					expr := DeepCopyExpr(bound)
 					if mode == "api" {
 						expr, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
@@ -63,6 +72,7 @@ func TestJSONStringEltLazyPlannerFolding(t *testing.T) {
 					requires, err := planpb.RequiresMORPCVersion129JSONStringConsumerOverload([]*planpb.Expr{expr})
 					require.NoError(t, err)
 					require.True(t, requires, "fold must retain durable/remote ELT identity")
+					require.False(t, sink.Warned(), "speculative folding must not publish selected or unselected warnings")
 					result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
 					if free != nil {
 						defer free()
@@ -72,6 +82,7 @@ func TestJSONStringEltLazyPlannerFolding(t *testing.T) {
 						return
 					}
 					require.NoError(t, err)
+					require.Equal(t, tc.warned, sink.Warned(), "only the selected subtree may publish runtime warnings")
 					if tc.null {
 						require.True(t, result.IsNull(0))
 						return

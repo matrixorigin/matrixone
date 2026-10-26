@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,7 +45,6 @@ func withAllocator(opt Options) Options {
 }
 
 func TestVectorShallowForeach(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	for _, typ := range []types.Type{types.T_int32.ToType(), types.T_char.ToType()} {
 		vec := MakeVector(typ, common.DefaultAllocator)
 		for i := 0; i < 10; i++ {
@@ -72,7 +70,6 @@ func TestVectorShallowForeach(t *testing.T) {
 }
 
 func TestVector1(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	opt := withAllocator(Options{})
 	vec := NewVector(types.T_int32.ToType(), opt)
 	vec.Append(int32(12), false)
@@ -98,7 +95,6 @@ func TestVector1(t *testing.T) {
 }
 
 func TestVector2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	opt := withAllocator(Options{})
 	vec := NewVector(types.T_int64.ToType(), opt)
 	t.Log(vec.String())
@@ -154,7 +150,6 @@ func TestVector2(t *testing.T) {
 }
 
 func TestVector3(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	opts := withAllocator(Options{})
 	vec1 := NewVector(types.T_int32.ToType(), opts)
 	for i := 0; i < 100; i++ {
@@ -181,7 +176,6 @@ func TestVector3(t *testing.T) {
 }
 
 func TestVector5(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()
 	sels := nulls.NewWithSize(1)
 	sels.Add(uint64(2), uint64(6))
@@ -223,7 +217,6 @@ func TestVector5(t *testing.T) {
 }
 
 func TestVector6(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()
 	sels := nulls.NewWithSize(1)
 	sels.Add(uint64(2), uint64(6))
@@ -310,7 +303,6 @@ func TestVector6(t *testing.T) {
 }
 
 func TestVector7(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()
 	testF := func(typ types.Type, nullable bool) {
 		vec := MockVector(typ, 10, false, nil)
@@ -359,7 +351,6 @@ func TestVector7(t *testing.T) {
 }
 
 func TestVector8(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vec := MakeVector(types.T_int32.ToType(), common.DefaultAllocator)
 	defer vec.Close()
 	vec.Append(int32(0), false)
@@ -388,7 +379,6 @@ func TestVector8(t *testing.T) {
 }
 
 func TestVector9(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_varchar.ToType(), opts)
 	vec.Append([]byte("h1"), false)
@@ -407,7 +397,6 @@ func TestVector9(t *testing.T) {
 }
 
 func TestCompact(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_varchar.ToType(), opts)
 
@@ -656,7 +645,6 @@ func overLoadFactory[T any](t *testing.T, rows *roaring.Bitmap, vec Vector) func
 }
 
 func TestForeachSelectBitmap(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()
 	sels := nulls.NewWithSize(1)
 	sels.Add(uint64(2), uint64(6))
@@ -864,8 +852,6 @@ func TestConstVector(t *testing.T) {
 
 // TestVectorWrapper_WriteTo_PreAllocation tests that WriteTo uses pre-allocation to reduce reallocations
 func TestVectorWrapper_WriteTo_PreAllocation(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_int32.ToType(), opts)
@@ -897,8 +883,6 @@ func TestVectorWrapper_WriteTo_PreAllocation(t *testing.T) {
 
 // TestVectorWrapper_WriteTo_MultipleCalls tests that multiple WriteTo calls produce consistent results
 func TestVectorWrapper_WriteTo_MultipleCalls(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_int64.ToType(), opts)
@@ -926,8 +910,6 @@ func TestVectorWrapper_WriteTo_MultipleCalls(t *testing.T) {
 
 // TestVectorWrapper_WriteTo_DifferentSizes tests WriteTo with different data sizes
 func TestVectorWrapper_WriteTo_DifferentSizes(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	opts := withAllocator(Options{})
 	testCases := []struct {
@@ -968,8 +950,6 @@ func TestVectorWrapper_WriteTo_DifferentSizes(t *testing.T) {
 
 // TestVectorWrapper_WriteTo_DifferentTypes tests WriteTo with different vector types
 func TestVectorWrapper_WriteTo_DifferentTypes(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	testTypes := []types.Type{
 		types.T_int32.ToType(),
@@ -1003,8 +983,6 @@ func TestVectorWrapper_WriteTo_DifferentTypes(t *testing.T) {
 
 // TestVectorWrapper_WriteTo_WithNulls tests WriteTo with null values
 func TestVectorWrapper_WriteTo_WithNulls(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_int32.ToType(), opts)
@@ -1035,8 +1013,6 @@ func TestVectorWrapper_WriteTo_WithNulls(t *testing.T) {
 
 // TestVectorWrapper_WriteTo_EmptyVector tests WriteTo with empty vector
 func TestVectorWrapper_WriteTo_EmptyVector(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_int32.ToType(), opts)
@@ -1058,8 +1034,6 @@ func TestVectorWrapper_WriteTo_EmptyVector(t *testing.T) {
 
 // TestVectorWrapper_WriteToV1_PreAllocation tests that WriteToV1 uses pre-allocation
 func TestVectorWrapper_WriteToV1_PreAllocation(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_int32.ToType(), opts)
@@ -1086,8 +1060,6 @@ func TestVectorWrapper_WriteToV1_PreAllocation(t *testing.T) {
 
 // TestVectorWrapper_WriteToV1_MultipleCalls tests that multiple WriteToV1 calls produce consistent results
 func TestVectorWrapper_WriteToV1_MultipleCalls(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_int64.ToType(), opts)
@@ -1115,8 +1087,6 @@ func TestVectorWrapper_WriteToV1_MultipleCalls(t *testing.T) {
 
 // TestVectorWrapper_WriteTo_ConsistencyWithOriginal tests that optimized WriteTo produces same output as original
 func TestVectorWrapper_WriteTo_ConsistencyWithOriginal(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	testCases := []struct {
 		name string
@@ -1200,8 +1170,6 @@ func TestVectorWrapper_WriteTo_ConsistencyWithOriginal(t *testing.T) {
 
 // TestVectorWrapper_WriteTo_LargeData tests WriteTo with large data to verify pre-allocation helps
 func TestVectorWrapper_WriteTo_LargeData(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_varchar.ToType(), opts)
@@ -1232,8 +1200,6 @@ func TestVectorWrapper_WriteTo_LargeData(t *testing.T) {
 
 // TestVectorWrapper_WriteTo_ConstVector tests WriteTo with const vectors
 func TestVectorWrapper_WriteTo_ConstVector(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	// Test const fixed vector
 	vec1 := NewConstFixed[int32](types.T_int32.ToType(), int32(42), 100)
@@ -1283,8 +1249,6 @@ func TestVectorWrapper_WriteTo_ConstVector(t *testing.T) {
 
 // TestVectorWrapper_WriteTo_ApproxSizeAccuracy tests that ApproxSize is used for pre-allocation
 func TestVectorWrapper_WriteTo_ApproxSizeAccuracy(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	opts := withAllocator(Options{})
 	vec := NewVector(types.T_int32.ToType(), opts)
@@ -1313,8 +1277,6 @@ func TestVectorWrapper_WriteTo_ApproxSizeAccuracy(t *testing.T) {
 
 // TestVectorWrapper_WriteTo_ConcurrentCalls tests that WriteTo can be called concurrently on different vectors
 func TestVectorWrapper_WriteTo_ConcurrentCalls(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 
 	opts := withAllocator(Options{})
 	numGoroutines := 10

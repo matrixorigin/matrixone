@@ -23,14 +23,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestBatch1a(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()[2:4] // int32, int64
 	attrs := []string{"attr1", "attr2"}
 	opts := Options{}
@@ -64,7 +62,6 @@ func TestBatch1a(t *testing.T) {
 }
 
 func TestBatch1b(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()[12:14] // Varchar, Char
 	attrs := []string{"attr1", "attr2"}
 	opts := Options{}
@@ -97,7 +94,6 @@ func TestBatch1b(t *testing.T) {
 	bat.Close()
 }
 func TestBatch2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()
 	bat := MockBatch(vecTypes, 10, 3, nil)
 	assert.Equal(t, 10, bat.Length())
@@ -113,7 +109,6 @@ func TestBatch2(t *testing.T) {
 }
 
 func TestBatch3(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()
 	bat := MockBatch(vecTypes, 101, 3, nil)
 	defer bat.Close()
@@ -132,7 +127,6 @@ func TestBatch3(t *testing.T) {
 }
 
 func TestBatchWithPool(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	colTypes := types.MockColTypes()
 	seedBat := MockBatch(colTypes, 10, 3, nil)
 	defer seedBat.Close()
@@ -208,7 +202,6 @@ func BenchmarkBatchReset(b *testing.B) {
 }
 
 func TestBatchSpliter(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()
 	bat := MockBatch(vecTypes, 11, 3, nil)
 	defer bat.Close()
@@ -240,7 +233,6 @@ func TestBatchSpliter(t *testing.T) {
 }
 
 func TestApproxSize(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vec := MockVector(types.T_uint8.ToType(), 1024, false, nil)
 	t.Log(vec.ApproxSize())
 	defer vec.Close()
@@ -257,7 +249,6 @@ func TestApproxSize(t *testing.T) {
 }
 
 func TestCompatibilityV2(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	vecTypes := types.MockColTypes()[2:4] // int32, int64
 	attrs := []string{"attr1", "attr2"}
 	opts := Options{}

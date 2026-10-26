@@ -14,7 +14,54 @@
 
 package plan
 
-import pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"slices"
+
+	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
+
+// CompactPhysicalGroupKeys preserves visible output slots and appends only
+// equality representations that differ at the same ordinal. Set operators keep
+// their complete physical tuple; aggregate retention owns this compaction.
+func CompactPhysicalGroupKeys(visible, physical []*pbplan.Expr) ([]*pbplan.Expr, []int32, error) {
+	if len(physical) == 0 {
+		return visible, nil, nil
+	}
+	if len(visible) != len(physical) {
+		return nil, nil, moerr.NewInternalErrorNoCtx("physical equality key shape does not match grouped row")
+	}
+	for i := range visible {
+		if visible[i] == nil || physical[i] == nil {
+			return nil, nil, moerr.NewInternalErrorNoCtx("physical equality key contains a nil expression")
+		}
+	}
+	groups := slices.Clone(visible)
+	hashKeys := make([]int32, len(visible))
+	for i, key := range physical {
+		hashKeys[i] = int32(i)
+		comparisonKey := key
+		if visibleCol, physicalCol := visible[i].GetCol(), key.GetCol(); visibleCol != nil && physicalCol != nil {
+			// DISTINCT binding can enrich diagnostic names on the visible
+			// column. Identity and every type/provenance field stay exact.
+			exprCopy, colCopy := *key, *physicalCol
+			colCopy.Name, colCopy.TblName, colCopy.DbName = visibleCol.Name, visibleCol.TblName, visibleCol.DbName
+			exprCopy.Expr = &pbplan.Expr_Col{Col: &colCopy}
+			comparisonKey = &exprCopy
+		}
+		if !proto.Equal(visible[i], comparisonKey) {
+			hashKeys[i] = int32(len(groups))
+			groups = append(groups, DeepCopyExpr(key))
+		}
+	}
+	if len(groups) == len(visible) {
+		return visible, nil, nil
+	}
+	// Executors and spill reload require an ascending subset of retained slots.
+	slices.Sort(hashKeys)
+	return groups, hashKeys, nil
+}
 
 // determineGroupByHashKeys records a minimal physical equality key for each
 // ordinary aggregate. GroupBy remains unchanged because it defines the logical

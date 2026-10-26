@@ -1556,16 +1556,16 @@ type trackingTempTableSession struct {
 }
 
 func (s *trackingTempTableSession) GetTempTable(dbName, alias string) (string, bool) {
-	realName, ok := s.tables[dbName+"."+alias]
+	realName, ok := s.tables[defines.TempTableAliasKey(dbName, alias)]
 	return realName, ok
 }
 
 func (s *trackingTempTableSession) AddTempTable(dbName, alias, realName string) {
-	s.tables[dbName+"."+alias] = realName
+	s.tables[defines.TempTableAliasKey(dbName, alias)] = realName
 }
 
 func (s *trackingTempTableSession) RemoveTempTable(dbName, alias string) {
-	delete(s.tables, dbName+"."+alias)
+	delete(s.tables, defines.TempTableAliasKey(dbName, alias))
 }
 
 func (s *trackingTempTableSession) RemoveTempTableByRealName(string) {}
@@ -1667,8 +1667,10 @@ func TestScopeRestoreTemporaryCloneValidatesPhysicalDestination(t *testing.T) {
 			test.setup(proc, eng)
 			c := NewCompile("test", "test", "create temporary table temporary_table clone src", "", "", eng, proc, nil, false, nil, time.Now())
 
+			originalCtx := proc.Ctx
 			err := (&Scope{}).RestoreTable(c, newClonePlan())
 			require.ErrorContains(t, err, test.wantErr)
+			require.Same(t, originalCtx, proc.Ctx, "failed restore must not retain the borrowed session context")
 		})
 	}
 }
@@ -3786,7 +3788,7 @@ func TestAlterTemporaryTableRejectsRecreatedRelation(t *testing.T) {
 			proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)
 			c := NewCompile("test", "test", "alter table t add column v int", "", "", eng, proc, nil, false, nil, time.Now())
 			defer c.Release()
-			c.proc.Session = &trackingTempTableSession{tables: map[string]string{"test.t": "physical_t"}}
+			c.proc.Session = &trackingTempTableSession{tables: map[string]string{defines.TempTableAliasKey("test", "t"): "physical_t"}}
 			s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
 				Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
 					Database: "test", TableDef: &plan2.TableDef{Name: "t", TblId: 1, IsTemporary: true},
@@ -4149,7 +4151,7 @@ func TestTruncateTemporaryTableRejectsStaleRelation(t *testing.T) {
 			plannedID:    1,
 			relationName: "physical_t",
 			relationID:   2,
-			tempTables:   map[string]string{"test.t": "physical_t"},
+			tempTables:   map[string]string{defines.TempTableAliasKey("test", "t"): "physical_t"},
 		},
 	}
 
@@ -4221,7 +4223,7 @@ func TestTruncateTemporaryTableRebuildsTemporaryRelation(t *testing.T) {
 	originalCtx := defines.AttachAccountId(context.Background(), 0)
 	proc.Ctx = originalCtx
 	proc.ReplaceTopCtx(originalCtx)
-	session := &trackingTempTableSession{tables: map[string]string{"test.t": "physical_t"}}
+	session := &trackingTempTableSession{tables: map[string]string{defines.TempTableAliasKey("test", "t"): "physical_t"}}
 	proc.Session = session
 
 	internalExecutor := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {

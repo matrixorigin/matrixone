@@ -26,8 +26,8 @@ async def test_public_chunks_preserve_scalar_literals(asynchronous):
         manager.batch_insert('t', rows, batch_size=2)
         calls = executor.execute.call_args_list
     assert [call.args[0] for call in calls] == [
-        "INSERT INTO t (id, embedding, value) VALUES (0, '[1,2]', True), (1, '[1,2]', 1.0)",
-        "INSERT INTO t (id, embedding, value) VALUES (2, '[1,2]', False)",
+        "INSERT INTO t (id, embedding, value) VALUES (0, '[1,2]', 1), (1, '[1,2]', 1.0)",
+        "INSERT INTO t (id, embedding, value) VALUES (2, '[1,2]', 0)",
     ]
 
 

@@ -235,11 +235,6 @@ func (o *VacuumOpts) CalcScore(maxCreateAgo time.Duration) int {
 	return o.StartScore - (o.StartScore-o.EndScore)*int(maxCreateAgo)/int(o.Duration)
 }
 
-type ObjectStatsItem interface {
-	GetCreatedAt() types.TS
-	GetObjectStats() *objectio.ObjectStats
-}
-
 type VacuumStats struct {
 	// basic
 	TotalSize     uint64

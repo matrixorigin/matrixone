@@ -1310,27 +1310,32 @@ func DeepCopyExpr(expr *Expr) *Expr {
 		}
 
 	case *plan.Expr_W:
-		f := item.W.Frame
+		// A frameless window spec is legitimate (the local sliding-rank
+		// operators of #29947 publish their widths as function arguments and
+		// carry no frame), so the frame deep copy must follow the pointer.
 		newExpr.Expr = &plan.Expr_W{
 			W: &plan.WindowSpec{
 				WindowFunc:  DeepCopyExpr(item.W.WindowFunc),
 				PartitionBy: DeepCopyExprList(item.W.PartitionBy),
 				OrderBy:     DeepCopyOrderBySpecList(item.W.OrderBy),
 				Name:        item.W.Name,
-				Frame: &plan.FrameClause{
-					Type: f.Type,
-					Start: &plan.FrameBound{
-						Type:      f.Start.Type,
-						UnBounded: f.Start.UnBounded,
-						Val:       DeepCopyExpr(f.Start.Val),
-					},
-					End: &plan.FrameBound{
-						Type:      f.End.Type,
-						UnBounded: f.End.UnBounded,
-						Val:       DeepCopyExpr(f.End.Val),
-					},
-				},
 			},
+		}
+		if item.W.Frame != nil {
+			f := item.W.Frame
+			newExpr.GetW().Frame = &plan.FrameClause{
+				Type: f.Type,
+				Start: &plan.FrameBound{
+					Type:      f.Start.Type,
+					UnBounded: f.Start.UnBounded,
+					Val:       DeepCopyExpr(f.Start.Val),
+				},
+				End: &plan.FrameBound{
+					Type:      f.End.Type,
+					UnBounded: f.End.UnBounded,
+					Val:       DeepCopyExpr(f.End.Val),
+				},
+			}
 		}
 
 	case *plan.Expr_Sub:

@@ -54,13 +54,7 @@ func (builder *QueryBuilder) reuseMultiReferenceCTEs(rootID int32) int32 {
 		}
 
 		producer := cteRef.occurrences[0]
-		sinkID := appendSinkNodeWithTag(builder, producer.ctx, producerRootID, producer.rootTag)
-		builder.qry.Nodes[sinkID].ExtraOptions = materialized.CTESinkOption
-		if builder.cteSinkNodes == nil {
-			builder.cteSinkNodes = make(map[int32]struct{})
-		}
-		builder.cteSinkNodes[sinkID] = struct{}{}
-		sourceStep := builder.appendStep(sinkID)
+		sourceStep := builder.appendCTEProducer(producerRootID, producer.ctx, producer.rootTag)
 
 		replacements := make(map[int32]int32, len(cteRef.occurrences))
 		for _, occurrence := range cteRef.occurrences {
@@ -76,7 +70,7 @@ func (builder *QueryBuilder) reusableCTEProducer(
 	cteRef *CTERef,
 	rootID int32,
 ) (int32, map[int32]bool, bool) {
-	if cteRef == nil || cteRef.isRecursive || len(cteRef.occurrences) < 2 {
+	if cteRef == nil || cteRef.isRecursive || builder.boundCTEs[cteRef] != nil || len(cteRef.occurrences) < 2 {
 		return 0, nil, false
 	}
 

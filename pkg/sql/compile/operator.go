@@ -2009,6 +2009,15 @@ func preflightPercentileConfigs(node *plan.Node, proc *process.Process) error {
 			if _, _, err := constructOrderedPercentileConfig(f, proc); err != nil {
 				return err
 			}
+		default:
+			if strings.EqualFold(f.Func.ObjName, plan2.NameQuantileExactWeighted) {
+				if len(f.Args) != 3 || !expressionContainsParam(f.Args[2]) {
+					continue
+				}
+				if _, _, err := constructQuantileExactWeightedConfig(f, proc); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -2048,6 +2057,9 @@ func constructAggregateConfigWithError(
 			"aggregate function configuration is nil")
 	}
 	args := f.Args
+	if strings.EqualFold(f.Func.ObjName, plan2.NameQuantileExactWeighted) {
+		return constructQuantileExactWeightedConfig(f, proc)
+	}
 	switch f.Func.ObjName {
 	case plan2.NameGroupConcat:
 		value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
@@ -2195,6 +2207,47 @@ func constructOrderedPercentileConfig(
 	}
 	descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
 	return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending), nil
+}
+
+// constructQuantileExactWeightedConfig strips the flat three-argument
+// quantileExactWeighted signature down to its two data arguments
+// [value, weight] in their original types, evaluating the third (level)
+// argument exactly once as execution-invariant aggregate configuration
+// through the shared validated percentile codec.
+func constructQuantileExactWeightedConfig(
+	f *plan.Function, proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	args := f.Args
+	if len(args) != 3 {
+		return nil, nil, moerr.NewInvalidInputNoCtxf(
+			"%s requires a value, a weight, and a level argument", f.Func.ObjName)
+	}
+	configExpr := args[2]
+	if err := validateQuantileExactWeightedExpr(configExpr, f.Func.ObjName); err != nil {
+		return nil, nil, err
+	}
+	configExpr, err := normalizeAggregateConfigExpr(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer free()
+	level, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
+	if err != nil {
+		return nil, nil, err
+	}
+	return args[:2], aggexec.EncodeQuantileExactWeightedConfig(level), nil
+}
+
+func validateQuantileExactWeightedExpr(expr *plan.Expr, name string) error {
+	if !isPercentileConfigExpr(expr) {
+		return moerr.NewInvalidInputNoCtxf(
+			"level argument of %s must be a constant or parameter", name)
+	}
+	return nil
 }
 
 // normalizeAggregateConfigExpr materializes a semantically constant function
@@ -3040,6 +3093,18 @@ func constructTableClone(
 			return nil, err
 		}
 	}
+
+	// Allocator queries run before RestoreTable. Lend the source owner's
+	// session only within its account; publication/snapshot account switches
+	// must not resolve the source through the caller's temporary aliases.
+	originalCtx := c.proc.Ctx
+	if caller, callerErr := defines.GetAccountId(originalCtx); callerErr == nil && caller == account {
+		c.proc.Ctx = attachInternalExecutorSession(originalCtx, c.proc.GetSession())
+	} else {
+		// An inherited session must be masked, even if this process has none.
+		c.proc.Ctx = process.ContextWithInternalExecutorSession(originalCtx, nil)
+	}
+	defer func() { c.proc.Ctx = originalCtx }()
 
 	if mainHasAutoIncr {
 		if err := c.proc.Ctx.Err(); err != nil {

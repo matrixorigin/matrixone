@@ -20,7 +20,7 @@ Session and AsyncSession with MatrixOne-specific features like snapshots, clones
 vector operations, and fulltext search.
 """
 
-from typing import Any, Optional, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 try:
     from sqlalchemy.orm import Session as SQLAlchemySession
@@ -33,8 +33,8 @@ except ImportError:
     SQLAlchemyAsyncSession = None
 
 if TYPE_CHECKING:
-    from .client import ResultSet  # noqa: F401
     from .async_client import AsyncResultSet  # noqa: F401
+    from .client import ResultSet  # noqa: F401
 
 
 class Session(SQLAlchemySession):
@@ -356,12 +356,12 @@ class Session(SQLAlchemySession):
 
         # Import manager classes dynamically to avoid circular imports
         # These are defined in their respective modules
-        from .snapshot import SnapshotManager
-        from .clone import CloneManager
-        from .branch import BranchManager
-
         # These are defined in client.py after the Session class
         import sys
+
+        from .branch import BranchManager
+        from .clone import CloneManager
+        from .snapshot import SnapshotManager
 
         client_module = sys.modules.get('matrixone.client')
         if client_module:
@@ -369,15 +369,15 @@ class Session(SQLAlchemySession):
             FulltextIndexManager = getattr(client_module, 'FulltextIndexManager')
 
         # These are defined in their respective modules
-        from .metadata import MetadataManager
-        from .load_data import LoadDataManager
-        from .stage import StageManager
+        from .account import AccountManager
         from .cdc import CDCManager
+        from .export import ExportManager
+        from .load_data import LoadDataManager
+        from .metadata import MetadataManager
         from .pitr import PitrManager
         from .pubsub import PubSubManager
         from .restore import RestoreManager
-        from .account import AccountManager
-        from .export import ExportManager
+        from .stage import StageManager
 
         # Create managers that use this session as executor
         # The executor pattern allows managers to work in both client and session contexts
@@ -646,12 +646,11 @@ class Session(SQLAlchemySession):
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                final_sql = self.client._substitute_parameters(sql_or_stmt, params)
                 original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
-                result = execute_session_sql(super().execute, final_sql, **kwargs)
+                result = execute_session_sql(super().execute, sql_or_stmt, client=self.client, params=params, **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)
@@ -823,6 +822,7 @@ class Session(SQLAlchemySession):
             Session: Self for chaining
         """
         from sqlalchemy.schema import CreateTable
+
         from .sqlalchemy_ext import VectorTableBuilder
 
         # Parse primary key from kwargs
@@ -881,6 +881,7 @@ class Session(SQLAlchemySession):
             Session: Self for chaining
         """
         from sqlalchemy.schema import CreateTable
+
         from .sqlalchemy_ext import VectorTableBuilder
 
         # First create the table (same as create_table)
@@ -1185,22 +1186,22 @@ class AsyncSession(SQLAlchemyAsyncSession):
         # Some are defined in async_client.py after the AsyncSession class
 
         # Import async vector and fulltext managers
-        from .vector_manager import AsyncVectorManager
+        from .account import AsyncAccountManager
+        from .branch import AsyncBranchManager
+        from .cdc import AsyncCDCManager
+        from .clone import AsyncCloneManager
+        from .export import AsyncExportManager
         from .fulltext_manager import AsyncFulltextIndexManager
+        from .load_data import AsyncLoadDataManager
+        from .metadata import AsyncMetadataManager
+        from .pitr import AsyncPitrManager
+        from .pubsub import AsyncPubSubManager
+        from .restore import AsyncRestoreManager
 
         # These are defined in their respective modules
         from .snapshot import AsyncSnapshotManager
-        from .clone import AsyncCloneManager
-        from .branch import AsyncBranchManager
-        from .restore import AsyncRestoreManager
-        from .pitr import AsyncPitrManager
-        from .pubsub import AsyncPubSubManager
-        from .account import AsyncAccountManager
-        from .load_data import AsyncLoadDataManager
         from .stage import AsyncStageManager
-        from .cdc import AsyncCDCManager
-        from .metadata import AsyncMetadataManager
-        from .export import AsyncExportManager
+        from .vector_manager import AsyncVectorManager
 
         # Create managers that use this session as executor
         # The executor pattern allows managers to work in both client and session contexts
@@ -1247,12 +1248,13 @@ class AsyncSession(SQLAlchemyAsyncSession):
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                final_sql = self.client._substitute_parameters(sql_or_stmt, params)
                 original_sql = sql_or_stmt
 
                 from ._session_execution import execute_session_sql
 
-                result = await execute_session_sql(super().execute, final_sql, **kwargs)
+                result = await execute_session_sql(
+                    super().execute, sql_or_stmt, client=self.client, params=params, **kwargs
+                )
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = await super().execute(sql_or_stmt, params, **kwargs)
@@ -1439,6 +1441,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
             Self for chaining
         """
         from sqlalchemy.schema import CreateTable
+
         from .sqlalchemy_ext import VectorTableBuilder
 
         primary_key = kwargs.pop('primary_key', None)

@@ -80,13 +80,6 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		tblInfo: tblInfo,
 	}
 	tableDef := tblInfo.tableDefs[0]
-	// clusterTable, err := getAccountInfoOfClusterTable(ctx, stmt.Accounts, tableDef, tblInfo.isClusterTable[0])
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// if len(stmt.OnDuplicateUpdate) > 0 && clusterTable.IsClusterTable {
-	// 	return nil, moerr.NewNotSupported(ctx.GetContext(), "INSERT ... ON DUPLICATE KEY UPDATE ... for cluster table")
-	// }
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	// INSERT IGNORE is a statement-level conversion policy and may coexist with
@@ -161,6 +154,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, err
 	}
 	if query.Correlation == nil {
+		// CTE finalization may have compacted producer steps during createQuery.
+		sourceStep = query.MainOutputStep()
 		builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 	}
 

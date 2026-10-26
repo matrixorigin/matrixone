@@ -237,11 +237,6 @@ func runSqlWithMode(
 		if forceBackExec && realBackExec {
 			bh.ClearExecResultBatches()
 		}
-		// export as CSV need this
-		// bh.(*backExec).backSes.SetMysqlResultSet(&MysqlResultSet{})
-		//for range tblStuff.def.visibleIdxes {
-		//	bh.(*backExec).backSes.mrs.AddColumn(&MysqlColumn{})
-		//}
 		if err = bh.Exec(ctx, sql); err != nil {
 			if forceBackExec && realBackExec {
 				bh.ClearExecResultBatches()
@@ -376,7 +371,13 @@ func scanSnapshotRelationByID(
 // fall back to a relation that was already opened at snapshotTS. ALTER drops
 // replaced physical generations from the current catalog, while bounded data
 // branch operations may still need to hydrate rows from such a generation.
-func scanSnapshotRelationByIDWithFallback(
+//
+// It is a var so unit tests can substitute a deterministic blocked reader
+// (the reopenDataBranchRelationByID precedent) and prove cancellation and
+// owner routing through the LCA scan without a storage engine.
+var scanSnapshotRelationByIDWithFallback = scanSnapshotRelationByIDWithFallbackImpl
+
+func scanSnapshotRelationByIDWithFallbackImpl(
 	ctx context.Context,
 	caller string,
 	ses *Session,

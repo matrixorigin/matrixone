@@ -51,11 +51,20 @@ func TestPrivilegeCacheTracksRemoteCatalogChanges(t *testing.T) {
 		}
 		admin := open(t, 0, "dump")
 		mustExec(t, ctx, admin, "create account auth_cache admin_name 'admin' identified by '111'")
-		defer func() {
-			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		// Register before opening tenant sessions: LIFO cleanup must close their
+		// connections and pools before dropping the account, but keep admin alive.
+		t.Cleanup(func() {
+			// DROP ACCOUNT removes the tenant's catalogs as well as app.t. Give
+			// this independent cleanup phase the same budget as the test body;
+			// neither tenant deletion latency nor a 30-second limit is an oracle.
+			cleanup, stop := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer stop()
 			mustExec(t, cleanup, admin, "drop account auth_cache")
-		}()
+			var accounts int
+			require.NoError(t, admin.QueryRowContext(cleanup,
+				"select count(*) from mo_catalog.mo_account where account_name='auth_cache'").Scan(&accounts))
+			require.Zero(t, accounts, "the test account must be removed before reusing the shared cluster")
+		})
 		owner := open(t, 0, "auth_cache#admin#accountadmin")
 		// A remote commit does not imply CN1 has applied it under the default
 		// snapshot policy. Keep caches warm; synchronize catalog visibility before

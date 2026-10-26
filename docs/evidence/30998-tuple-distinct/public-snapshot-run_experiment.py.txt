@@ -1,0 +1,7 @@
+from pathlib import Path
+import subprocess,sys,json,hashlib,time
+p=Path(__file__).parent;w=Path('/private/tmp/mo-issue30995');name=sys.argv[1];script={'public':'final_public_qa.py','perf':'perf_abba.py'}[name]
+cmd=['/private/tmp/mo-27683-bench-20261023/venv/bin/python',str(p/script)];start=time.time()
+with (p/f'{name}.log').open('wb') as log:r=subprocess.run(cmd,cwd=w,stdout=log,stderr=subprocess.STDOUT)
+receipt={'name':name,'command':cmd,'cwd':str(w),'started_epoch':start,'finished_epoch':time.time(),'exit':r.returncode,'source_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=w,text=True).strip(),'pkg_tree':subprocess.check_output(['git','rev-parse','HEAD:pkg'],cwd=w,text=True).strip(),'binary_sha256':{v:hashlib.sha256((p/f'mo-service-{v}').read_bytes()).hexdigest() for v in ['baseline','candidate']},'script_sha256':{f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in p.glob('*.py')},'output_sha256':hashlib.sha256((p/f'{name}.log').read_bytes()).hexdigest()}
+(p/f'{name}-receipt.json').write_text(json.dumps(receipt,indent=2));print(name,r.returncode,flush=True);raise SystemExit(r.returncode)

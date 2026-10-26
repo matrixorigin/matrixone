@@ -20,8 +20,8 @@ without requiring a database connection.
 """
 
 import pytest
-from unittest.mock import Mock, MagicMock
-from matrixone.stage import StageManager, Stage
+from unittest.mock import AsyncMock, Mock, MagicMock
+from matrixone.stage import AsyncStageManager, StageManager, Stage
 
 
 class TestStageSQLGeneration:
@@ -105,6 +105,34 @@ class TestStageSQLGeneration:
 
         alter_sql = self.mock_client.execute.call_args_list[0][0][0]
         assert alter_sql == "ALTER STAGE my_stage SET COMMENT='new comment'"
+
+    def test_alter_stage_can_clear_comment(self):
+        """Test ALTER STAGE accepts an empty comment to clear it."""
+        self.mock_client.execute.return_value = Mock(rows=[['my_stage', 'file:///data/', 'enabled', '', None]])
+
+        self.stage_manager.alter('my_stage', comment='')
+
+        alter_sql = self.mock_client.execute.call_args_list[0][0][0]
+        assert alter_sql == "ALTER STAGE my_stage SET COMMENT=''"
+
+    @pytest.mark.asyncio
+    async def test_async_alter_stage_can_clear_comment(self):
+        """Test async ALTER STAGE accepts an empty comment to clear it."""
+        client = Mock()
+        client.execute = AsyncMock(return_value=Mock(rows=[['my_stage', 'file:///data/', 'enabled', '', None]]))
+
+        await AsyncStageManager(client).alter('my_stage', comment='')
+
+        alter_sql = client.execute.await_args_list[0][0][0]
+        assert alter_sql == "ALTER STAGE my_stage SET COMMENT=''"
+
+    @pytest.mark.parametrize('kwargs', [{}, {'url': ''}, {'credentials': {}}])
+    def test_alter_stage_still_requires_a_valid_option(self, kwargs):
+        """Test ALTER STAGE rejects absent or invalid empty SET options."""
+        with pytest.raises(ValueError, match="At least one"):
+            self.stage_manager.alter('my_stage', **kwargs)
+
+        self.mock_client.execute.assert_not_called()
 
     def test_alter_stage_enable(self):
         """Test ALTER STAGE SET ENABLE"""
