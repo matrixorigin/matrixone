@@ -647,11 +647,13 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	relPos := NotFound
 	colPos := NotFound
 	var typ *plan.Type
+	var resolvedBinding *Binding
 	localErrCtx := errutil.ContextWithNoReport(b.GetContext(), true)
 
 	if len(table) == 0 {
 		if binding, ok := b.ctx.bindingByCol[col]; ok {
 			if binding != nil {
+				resolvedBinding = binding
 				relPos = binding.tag
 				colPos = binding.colIdByName[col]
 				typ = DeepCopyType(binding.types[colPos])
@@ -698,6 +700,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	} else {
 		binding := b.resolveTableBinding(b.ctx, db, table)
 		if binding != nil {
+			resolvedBinding = binding
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "ambiguous column reference '%v'", name)
@@ -786,6 +789,19 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 	}
 
 	if colPos != NotFound {
+		if resolvedBinding != nil && b.builder != nil && resolvedBinding.nodeId >= 0 &&
+			int(resolvedBinding.nodeId) < len(b.builder.qry.Nodes) {
+			node := b.builder.qry.Nodes[resolvedBinding.nodeId]
+			if node != nil && node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil &&
+				len(node.BindingTags) == 1 && node.BindingTags[0] == relPos &&
+				virtualTimestampColumn(node.TableDef, colPos, make(map[int32]bool)) {
+				computed := expandVirtualTimestampColumn(node.TableDef, colPos, relPos, depth, make(map[int32]bool))
+				if computed == nil {
+					return nil, moerr.NewInternalErrorf(b.GetContext(), "invalid virtual generated column expression for %s", col)
+				}
+				return computed, nil
+			}
+		}
 		expr = &plan.Expr{
 			Typ: *typ,
 		}

@@ -415,6 +415,9 @@ func (builder *QueryBuilder) addFunctionalIndexFilters(node *pb.Node) {
 	}
 	originals := append([]*Expr(nil), node.FilterList...)
 	for _, index := range node.TableDef.Indexes {
+		if indexUsesVirtualTimestamp(index, node.TableDef) {
+			continue
+		}
 		for _, col := range functionalIndexColumns(node.TableDef, index) {
 			if col == nil || !functionalExpressionEligible(col.GeneratedCol.Expr, node.TableDef.Cols, make(map[int32]bool)) {
 				continue
