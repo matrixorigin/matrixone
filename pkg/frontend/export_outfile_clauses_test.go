@@ -1322,3 +1322,270 @@ func TestOutfileNewlineEscapeByteEnclosesBinaryValues(t *testing.T) {
 		roundTrip(t, string(data), "\r", `"`, "\n", "p:", "a,b")
 	})
 }
+
+// TestOutfileNullMarkerEnclosureCollisionSimulation pins the NULL-marker
+// simulation: the emitted marker always is a literal backslash plus N, and
+// whether LOAD's field scan survives depends on real parser behavior (an
+// enclosure backslash consumes the marker's leading byte as a quote-open;
+// the promoted N-wrapped form breaks when the escape byte forced
+// promotion). formatOutputNull replays the emission against the loader's
+// own parser configuration and rejects what does not read back as NULL.
+func TestOutfileNullMarkerEnclosureCollisionSimulation(t *testing.T) {
+	newGuardCfg := func(escaped, enclosed byte) *ExportConfig {
+		ep := newOutfileExportConfig(tree.NewFields(",", false, enclosed, escaped), nil, "\n")
+		ep.ctx = context.Background()
+		return ep
+	}
+
+	t.Run("rejections", func(t *testing.T) {
+		for _, c := range []struct {
+			name            string
+			escape, enclose byte
+		}{
+			// The reviewer's core probe: the bare marker's leading
+			// backslash opens an enclosure that never closes.
+			{"enclosure backslash, hash escape", '#', '\\'},
+			// ENCLOSED BY 'N' promotes the marker (field or line equals
+			// the escape byte) and the promoted form breaks, exactly the
+			// reviewer's comma- and LF-escape probes.
+			{"enclosure N, comma escape", ',', 'N'},
+			{"enclosure N, LF escape", '\n', 'N'},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				var buf bytes.Buffer
+				require.ErrorContains(t, formatOutputNull(newGuardCfg(c.escape, c.enclose), []byte("\n"), c.enclose, &buf),
+					"a NULL value cannot round-trip with ENCLOSED BY")
+			})
+		}
+	})
+
+	t.Run("allowed configurations", func(t *testing.T) {
+		for _, c := range []struct {
+			name            string
+			escape, enclose byte
+			emitted         string
+		}{
+			// Loader-ground-truth controls: these all parse back to NULL
+			// through csvparser with the loader's own settings.
+			{"enclosure quote, hash escape", '#', '"', "\\N\n"},
+			{"enclosure N, hash escape", '#', 'N', "\\N\n"},
+			{"enclosure N, default escape", '\\', 'N', "\\N\n"},
+			{"enclosure equals escape hash", '#', '#', "#\\N#\n"},
+			{"enclosure equals escape backslash", '\\', '\\', "\\\\N\\\n"},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				ep := newGuardCfg(c.escape, c.enclose)
+				var buf bytes.Buffer
+				require.NoError(t, formatOutputNull(ep, []byte("\n"), c.enclose, &buf))
+				require.Equal(t, c.emitted, buf.String())
+				parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+					FieldsTerminatedBy: ",", FieldsEscapedBy: string(c.escape), FieldsEnclosedBy: string(c.enclose),
+					LinesTerminatedBy: "\n", Null: []string{`\N`}, UnescapedQuote: true,
+				}, bytes.NewReader(buf.Bytes()), csvparser.ReadBlockSize, false)
+				require.NoError(t, err)
+				row, err := parser.Read(nil)
+				require.NoError(t, err)
+				require.Len(t, row, 1)
+				require.True(t, row[0].IsNull)
+			})
+		}
+	})
+
+	t.Run("document the reader failures the simulation prevents", func(t *testing.T) {
+		// The reviewer's probes against the loader's real configuration.
+		for _, c := range []struct {
+			data, escape, enclose, message string
+		}{
+			{"p:1,\\N\n", "#", "\\", "unterminated quoted field"},
+			{"p:1,N\\NN\n", ",", "N", "unterminated quoted field"},
+			{"p:1,N\\NN\n", "\n", "N", "no character after backslash"},
+		} {
+			parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+				FieldsTerminatedBy: ",", FieldsEscapedBy: c.escape, FieldsEnclosedBy: c.enclose,
+				LinesTerminatedBy: "\n", LinesStartingBy: "p:", Null: []string{`\N`}, UnescapedQuote: true,
+			}, bytes.NewReader([]byte(c.data)), csvparser.ReadBlockSize, false)
+			require.NoError(t, err)
+			_, err = parser.Read(nil)
+			require.ErrorContains(t, err, c.message)
+		}
+	})
+
+	t.Run("batch writer aborts on a NULL row", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Zero(t, mp.CurrNB()) }()
+		bat := newIdNameBatch(t, mp, nil)
+		defer bat.Clean(mp)
+		ep := selectIntoOutfileConfig(",", '\\', '#', "p:", "\n")
+		ep.ctx = context.Background()
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+		result := <-ch
+		require.ErrorContains(t, result.err, "a NULL value cannot round-trip with ENCLOSED BY '\\'")
+	})
+
+	t.Run("result-set writer aborts on a NULL row", func(t *testing.T) {
+		ep := selectIntoOutfileConfig(",", 'N', ',', "p:", "\n")
+		ep.ctx = context.Background()
+		ep.mrs.Data = [][]any{{int32(1), nil}}
+		require.ErrorContains(t, exportDataFromResultSetToCSVFile(ep), "a NULL value cannot round-trip with ENCLOSED BY 'N'")
+	})
+}
+
+// TestOutfileEscapeEqualsEnclosureSimulation pins the value-level round-trip
+// simulation: with ENCLOSED BY equal to ESCAPED BY, whether an encoded field
+// survives LOAD's enclosure scan is real parser behavior, not a static rule
+// (mid-value CR under 'r' parses while a trailing CR opens an unterminated
+// quoted field — the generated escape payload letter collides with the
+// escape byte itself). formatOutputString replays the emission through the
+// loader's own parser settings and rejects what does not come back
+// byte-identical — through both CSV writers, BIT included.
+func TestOutfileEscapeEqualsEnclosureSimulation(t *testing.T) {
+	t.Run("rejections", func(t *testing.T) {
+		// The reviewer's exact probe: VARCHAR bytes 61 0D (a trailing CR)
+		// under ENCLOSED BY 'r' ESCAPED BY 'r'. The writer's own encoding
+		// (double escape prefix plus the translated 'r') leaves an
+		// ambiguous run of r-bytes that LOAD's enclosure scan cannot
+		// resolve — reject instead of publishing an unparsable file.
+		ep := newOutfileExportConfig(tree.NewFields(",", false, 'r', 'r'), nil, "\n")
+		ep.ctx = context.Background()
+		var buf bytes.Buffer
+		require.ErrorContains(t, formatOutputString(ep, []byte{0x61, 0x0d}, []byte("\n"), 'r', false, true, &buf),
+			"when ENCLOSED BY and ESCAPED BY are the same character 'r'")
+	})
+
+	t.Run("translated-escape guard layers above", func(t *testing.T) {
+		// A literal 'r' inside the value was already rejected by the
+		// translated-escape rule before the simulation runs.
+		ep := newOutfileExportConfig(tree.NewFields(",", false, 'r', 'r'), nil, "\n")
+		ep.ctx = context.Background()
+		var buf bytes.Buffer
+		require.ErrorContains(t, formatOutputString(ep, []byte("car"), []byte("\n"), 'r', false, true, &buf),
+			"a value containing 'r' cannot round-trip with FIELDS ESCAPED BY 'r'")
+	})
+
+	t.Run("allowed configurations", func(t *testing.T) {
+		// Loader-ground-truth controls: each accepted emission round-trips
+		// byte-identically through csvparser with the loader's settings,
+		// proving the simulation rejects only genuinely broken shapes.
+		for _, c := range []struct {
+			name    string
+			escape  byte
+			enclose byte
+			tmp     []byte
+			emitted string
+		}{
+			{"mid-value CR under r", 'r', 'r', []byte{0x61, 0x0d, 0x62}, "rarrrbr\n"},
+			{"plain value under r", 'r', 'r', []byte("ab"), "rabr\n"},
+			{"mid-value CR under hash", '#', '#', []byte{0x61, 0x0d, 0x62}, "#a##rb#\n"},
+			{"mid-value CR under backslash", '\\', '\\', []byte{0x61, 0x0d, 0x62}, "\\a\\\\rb\\\n"},
+			{"mid-value TAB stays raw under backslash", '\\', '\\', []byte("a\tb"), "\\a\tb\\\n"},
+			{"raw LF under n", 'n', 'n', []byte("a\nb"), "na\nbn\n"},
+			{"different enclosure escapes r", 'r', '"', []byte{0x61, 0x0d, 0x62}, "arrb\n"},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				ep := newOutfileExportConfig(tree.NewFields(",", false, c.enclose, c.escape), nil, "\n")
+				ep.ctx = context.Background()
+				var buf bytes.Buffer
+				require.NoError(t, formatOutputString(ep, c.tmp, []byte("\n"), c.enclose, false, true, &buf))
+				require.Equal(t, c.emitted, buf.String())
+				parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+					FieldsTerminatedBy: ",", FieldsEscapedBy: string(c.escape), FieldsEnclosedBy: string(c.enclose),
+					LinesTerminatedBy: "\n", Null: []string{`\N`}, UnescapedQuote: true,
+				}, bytes.NewReader(buf.Bytes()), csvparser.ReadBlockSize, false)
+				require.NoError(t, err)
+				row, err := parser.Read(nil)
+				require.NoError(t, err)
+				require.Len(t, row, 1)
+				require.Equal(t, string(c.tmp), row[0].Val)
+			})
+		}
+	})
+
+	t.Run("simulation predicate branches", func(t *testing.T) {
+		// CRLF collapses to LF for the simulated record terminator.
+		ep := newOutfileExportConfig(tree.NewFields(",", false, '#', '#'), nil, "\r\n")
+		ep.ctx = context.Background()
+		require.Equal(t, "\n", string(ep.csvNormalizedRecordTerm()))
+		// The NULL variant accepts a parsable marker.
+		require.True(t, csvFieldEmissionParses(ep, []byte("#\\N#"), ep.csvNormalizedRecordTerm(), nil, true))
+		// Trailing records fail the exactly-one-record requirement.
+		require.False(t, csvFieldEmissionParses(ep, []byte("#a#\n#b#"), ep.csvNormalizedRecordTerm(), []byte("a"), false))
+	})
+
+	t.Run("document the reader failure the simulation prevents", func(t *testing.T) {
+		// The reviewer's probe bytes under the loader's real configuration:
+		// the emitted field of run r-bytes leaves an unterminated quote.
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEscapedBy: "r", FieldsEnclosedBy: "r",
+			LinesTerminatedBy: "\n", LinesStartingBy: "p:", Null: []string{`\N`}, UnescapedQuote: true,
+		}, bytes.NewReader([]byte("p:r1r,rarrrr\n")), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		_, err = parser.Read(nil)
+		require.ErrorContains(t, err, "unterminated quoted field")
+	})
+
+	t.Run("batch writer aborts on a trailing-CR BIT value", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Zero(t, mp.CurrNB()) }()
+		bat := batch.NewOffHeapWithSize(2)
+		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+		bat.Vecs[1] = vector.NewOffHeapVecWithType(types.New(types.T_bit, 16, 0))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], uint64(0x610D), false, mp)) // a CR
+		bat.SetRowCount(1)
+		defer bat.Clean(mp)
+
+		ep := selectIntoOutfileConfig(",", 'r', 'r', "p:", "\n")
+		ep.ctx = context.Background()
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+		result := <-ch
+		require.ErrorContains(t, result.err, "when ENCLOSED BY and ESCAPED BY are the same character")
+	})
+
+	t.Run("batch writer keeps a control-free BIT value", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Zero(t, mp.CurrNB()) }()
+		bat := batch.NewOffHeapWithSize(2)
+		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+		bat.Vecs[1] = vector.NewOffHeapVecWithType(types.New(types.T_bit, 16, 0))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], uint64(0x6162), false, mp)) // ab
+		bat.SetRowCount(1)
+		defer bat.Clean(mp)
+
+		ep := selectIntoOutfileConfig(",", 'r', 'r', "p:", "\n")
+		ep.ctx = context.Background()
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+		result := <-ch
+		require.NoError(t, result.err)
+		require.Equal(t, "p:r1r,rabr\n", string(result.writeByte))
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEscapedBy: "r", FieldsEnclosedBy: "r",
+			LinesTerminatedBy: "\n", LinesStartingBy: "p:", Null: []string{`\N`}, UnescapedQuote: true,
+		}, bytes.NewReader([]byte("p:r1r,rabr\n")), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, "ab", row[1].Val)
+	})
+
+	t.Run("result-set writer aborts on a trailing-CR BIT value", func(t *testing.T) {
+		mrs := &MysqlResultSet{}
+		id := new(MysqlColumn)
+		id.SetName("id")
+		id.SetColumnType(defines.MYSQL_TYPE_LONG)
+		bit := new(MysqlColumn)
+		bit.SetName("b")
+		bit.SetColumnType(defines.MYSQL_TYPE_BIT)
+		bit.SetLength(16)
+		mrs.AddColumn(id)
+		mrs.AddColumn(bit)
+		mrs.Data = [][]any{{int32(1), uint64(0x610D)}}
+		ep := selectIntoOutfileConfig(",", 'r', 'r', "p:", "\n")
+		ep.ctx = context.Background()
+		ep.mrs = mrs
+		require.ErrorContains(t, exportDataFromResultSetToCSVFile(ep), "when ENCLOSED BY and ESCAPED BY are the same character")
+	})
+}

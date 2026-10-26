@@ -290,6 +290,45 @@ fields terminated by ',' enclosed by '"' escaped by '\r' lines starting by 'p:' 
 select id, hex(b) as hb from bit_cr_back;
 drop table bit_cr_back;
 
+-- The writer replays every emitted field through LOAD's own parser before
+-- publishing: with ENCLOSED BY equal to ESCAPED BY, or marker bytes \N
+-- colliding with the enclosure, encodings the scan cannot resolve are
+-- rejected instead of writing an unparsable file. The walls stay narrow:
+-- marker/enclosure shapes that genuinely reload stay allowed.
+select id, s from (select 1 as id, null as s) t
+into outfile 'stage://outfile_fields_lines_stage/null_enc_bs.csv'
+fields terminated by ',' enclosed by '\\' escaped by '#' lines starting by 'p:' header 'false';
+select count(*) from stage_list('stage://outfile_fields_lines_stage/null_enc_bs.csv');
+select id, s from (select 1 as id, null as s) t
+into outfile 'stage://outfile_fields_lines_stage/null_enc_n_ok.csv'
+fields terminated by ',' enclosed by 'N' escaped by '#' lines starting by 'p:' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/null_enc_n_ok.csv' as datalink)));
+create table null_enc_n_back (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/null_enc_n_ok.csv' into table null_enc_n_back
+fields terminated by ',' enclosed by 'N' escaped by '#' lines starting by 'p:';
+select id, s, s is null as isn from null_enc_n_back;
+drop table null_enc_n_back;
+
+drop table if exists enc_eq_src;
+create table enc_eq_src (id int, s varchar(20));
+insert into enc_eq_src values (1, unhex('610D'));
+select id, s from enc_eq_src
+into outfile 'stage://outfile_fields_lines_stage/enc_eq_r_bad.csv'
+fields terminated by ',' enclosed by 'r' escaped by 'r' lines starting by 'p:' header 'false';
+select count(*) from stage_list('stage://outfile_fields_lines_stage/enc_eq_r_bad.csv');
+-- The identical value under a hash enclosure round-trips: only the shapes
+-- the parser cannot resolve are rejected.
+select id, s from enc_eq_src
+into outfile 'stage://outfile_fields_lines_stage/enc_eq_hash_ok.csv'
+fields terminated by ',' enclosed by '#' escaped by '#' lines starting by 'p:' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/enc_eq_hash_ok.csv' as datalink)));
+create table enc_eq_hash_back (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/enc_eq_hash_ok.csv' into table enc_eq_hash_back
+fields terminated by ',' enclosed by '#' escaped by '#' lines starting by 'p:';
+select id, hex(s) as hs from enc_eq_hash_back;
+drop table enc_eq_hash_back;
+drop table enc_eq_src;
+
 remove files from stage if exists 'stage://outfile_fields_lines_stage/*.csv';
 select count(*) from stage_list('stage://outfile_fields_lines_stage/');
 drop stage outfile_fields_lines_stage;

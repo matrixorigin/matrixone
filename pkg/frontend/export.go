@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -321,6 +322,63 @@ func checkCSVValueRoundTrip(oq *ExportConfig, tmp []byte, last bool) error {
 	return nil
 }
 
+// csvNormalizedRecordTerm returns LOAD's normalized record terminator for
+// simulation: the configured value, with CRLF collapsed the way csvparser
+// normalizes it and empty/default falling back to LF.
+func (ec *ExportConfig) csvNormalizedRecordTerm() []byte {
+	term := "\n"
+	if l := ec.userConfig.Lines; l != nil && l.TerminatedBy != nil && l.TerminatedBy.Value != "" {
+		term = l.TerminatedBy.Value
+	}
+	if term == "\r\n" {
+		term = "\n"
+	}
+	return []byte(term)
+}
+
+// csvFieldEmissionParses replays one fully emitted CSV field through LOAD's
+// parser with the configured framing and requires it to read back as exactly
+// one field and one record — the ground-truth check for configurations where
+// the writer cannot statically tell whether the encoded bytes survive
+// csvparser's enclosure/escape scan (its behavior differs between backslash
+// and other enclosure==escape bytes, per generated payload letter). With
+// wantNull the field must read back as SQL NULL; otherwise it must read
+// back byte-identical to want.
+func csvFieldEmissionParses(oq *ExportConfig, field, recordTerm, want []byte, wantNull bool) bool {
+	cfg := &csvparser.CSVConfig{
+		FieldsTerminatedBy: ",",
+		LinesTerminatedBy:  string(recordTerm),
+		Null:               []string{`\N`},
+		UnescapedQuote:     true,
+	}
+	if f := oq.userConfig.Fields; f != nil {
+		if f.Terminated != nil && f.Terminated.Value != "" {
+			cfg.FieldsTerminatedBy = f.Terminated.Value
+		}
+		if f.EnclosedBy != nil && f.EnclosedBy.Value != 0 {
+			cfg.FieldsEnclosedBy = string(f.EnclosedBy.Value)
+		}
+		if f.EscapedBy != nil && f.EscapedBy.Value != 0 {
+			cfg.FieldsEscapedBy = string(f.EscapedBy.Value)
+		}
+	}
+	// NewCSVParser cannot return an error for this configuration shape: the
+	// only error paths are a non-compiling escape regexp (QuoteMeta makes it
+	// literal) and a STARTING BY/terminator overlap (never set here).
+	parser, _ := csvparser.NewCSVParser(cfg, bytes.NewReader(append(field, recordTerm...)), csvparser.ReadBlockSize, false)
+	row, err := parser.Read(nil)
+	if err != nil || len(row) != 1 {
+		return false
+	}
+	if _, err = parser.Read(nil); err != io.EOF {
+		return false
+	}
+	if wantNull {
+		return row[0].IsNull
+	}
+	return !row[0].IsNull && row[0].Val == string(want)
+}
+
 // readerStripsTrailingCR reports whether LOAD's parser drops a record's
 // trailing CR for this configuration. The parser compares its COMPLETE
 // normalized line terminator with LF (only "\r\n" normalizes), so a
@@ -387,7 +445,23 @@ var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byt
 	if flag {
 		quote = enclosed
 	}
-	return formatOutputStringRaw(oq, addEscapeToString(oq, tmp, quote), symbol, enclosed, flag, buffer)
+	encoded := addEscapeToString(oq, tmp, quote)
+	// ENCLOSED BY equal to ESCAPED BY leaves no static rule for whether the
+	// encoded bytes survive LOAD's enclosure scan: generated escape payloads
+	// are read as enclosure opens/closes for non-backslash bytes, while some
+	// backslash payloads parse. Replay the emitted field through the parser
+	// and reject what does not come back byte-identical.
+	if enclosed != 0 && enclosed == oq.escapeChar() {
+		emitted := encoded
+		if flag {
+			emitted = append(append([]byte{enclosed}, encoded...), enclosed)
+		}
+		if !csvFieldEmissionParses(oq, emitted, oq.csvNormalizedRecordTerm(), tmp, false) {
+			return moerr.NewNotSupportedf(oq.ctx,
+				"select into outfile (csv): a value cannot round-trip when ENCLOSED BY and ESCAPED BY are the same character '%c': its encoded form breaks LOAD's field scan", enclosed)
+		}
+	}
+	return formatOutputStringRaw(oq, encoded, symbol, enclosed, flag, buffer)
 }
 
 // NULL bypasses value escaping, but still needs enclosure when the escape
@@ -406,6 +480,22 @@ func formatOutputNull(oq *ExportConfig, symbol []byte, enclosed byte, buffer *by
 	if enclosed != 0 && oq.escapeChar() != 0 {
 		field, line, _, _ := oq.csvBoundaryBytes()
 		flag = enclosed == oq.escapeChar() || field == oq.escapeChar() || line == oq.escapeChar()
+	}
+	// The marker always starts with a literal backslash and ends in N. When
+	// the enclosure collides with either byte, or equals the escape byte,
+	// whether LOAD's field scan survives is parser-behavior, not static:
+	// replay the emitted marker and reject configurations where it does not
+	// read back as a clean SQL NULL.
+	if enclosed != 0 && (enclosed == '\\' || enclosed == 'N' || enclosed == oq.escapeChar()) {
+		marker := []byte{'\\', 'N'}
+		emitted := marker
+		if flag {
+			emitted = append(append([]byte{enclosed}, marker...), enclosed)
+		}
+		if !csvFieldEmissionParses(oq, emitted, oq.csvNormalizedRecordTerm(), nil, true) {
+			return moerr.NewNotSupportedf(oq.ctx,
+				"select into outfile (csv): a NULL value cannot round-trip with ENCLOSED BY '%c': the emitted \\N marker breaks LOAD's field scan", enclosed)
+		}
 	}
 	return formatOutputStringRaw(oq, []byte{'\\', 'N'}, symbol, enclosed, flag, buffer)
 }
