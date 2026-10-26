@@ -87,72 +87,91 @@ func TestFloatConversionFeatureBoundaries(t *testing.T) {
 }
 
 func TestFloatConversionProtocolPlacementStreamAndReceive(t *testing.T) {
-	c, client := expressionProtocolTestCompile(t)
-	expr := floatConversionProtocolExpr(function.CAST, types.T_varchar, types.T_float64)
-	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
-	op := projection.NewArgument()
-	defer op.Release()
-	op.ProjectList = []*planpb.Expr{expr}
-	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-	for _, version := range []int64{defines.MORPCVersion131, defines.MORPCVersion132} {
-		client.version = version
-		c.execType = plan2.ExecTypeAP_MULTICN
-		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-		if version < defines.MORPCVersion132 {
-			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	for _, alias := range []string{"cast", "if", "iff"} {
+		t.Run(alias, func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			expr := floatConversionProtocolExpr(function.CAST, types.T_varchar, types.T_float64)
+			if alias != "cast" {
+				source := expr.GetF().Args[0]
+				var err error
+				expr, err = plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, alias, []*planpb.Expr{
+					source,
+					{Typ: types.T_int64.ToType().PlanType(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 1}}}},
+					{Typ: types.T_int64.ToType().PlanType(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 2}}}},
+				})
+				require.NoError(t, err)
+				require.Equal(t, int32(types.T_varchar), expr.GetF().Args[0].Typ.Id)
+			}
+			qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
+			op := projection.NewArgument()
+			defer op.Release()
+			op.ProjectList = []*planpb.Expr{expr}
+			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+			for _, version := range []int64{defines.MORPCVersion131, defines.MORPCVersion132} {
+				client.version = version
+				c.execType = plan2.ExecTypeAP_MULTICN
+				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+				require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+				if version < defines.MORPCVersion132 {
+					require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+					_, err := encodeRemoteScope(scope, c.proc)
+					require.ErrorContains(t, err, "132")
+				} else {
+					require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+					floor := int64(0)
+					_, err := encodeRemoteScopeWithProtocol(scope, c.proc, &floor)
+					require.NoError(t, err)
+					require.Equal(t, defines.MORPCVersion132, floor, "bound execution stream must reject a different, older worker generation")
+					c.proc.Base.TxnOperator = fakeTxnOperator{}
+					c.proc.Base.SessionInfo.TimeZone = time.UTC
+					c.proc.Ctx = defines.AttachAccountId(context.Background(), 0)
+					floor = 0
+					_, _, _, _, err = prepareRemoteRunSendingDataWithProtocol("", scope, c.proc, nil, uuid.Nil, &floor)
+					require.NoError(t, err)
+					require.Equal(t, defines.MORPCVersion132, floor)
+					for _, observed := range []int64{0, defines.MORPCVersion131, defines.MORPCVersion132} {
+						stream := &fakeStreamSender{}
+						ch := make(chan morpc.Message, 1)
+						ch <- &pipeline.Message{Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: observed}
+						sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: ch}
+						err := sender.confirmProtocolOnStream(floor)
+						if observed < floor {
+							require.Error(t, err)
+						} else {
+							require.NoError(t, err)
+						}
+						require.Equal(t, 1, stream.sentCnt)
+						request := stream.sent[0].(*pipeline.Message)
+						require.Equal(t, pipeline.Method_PipelineProtocolCheck, request.GetCmd())
+						require.Equal(t, floor, request.GetProtocolVersion())
+					}
+				}
+			}
+			// Query RPC result changed after placement; actual send must re-observe it.
+			client.version = defines.MORPCVersion131
 			_, err := encodeRemoteScope(scope, c.proc)
 			require.ErrorContains(t, err, "132")
-		} else {
-			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
-			floor := int64(0)
-			_, err := encodeRemoteScopeWithProtocol(scope, c.proc, &floor)
-			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion132, floor, "bound execution stream must reject a different, older worker generation")
-			c.proc.Base.TxnOperator = fakeTxnOperator{}
-			c.proc.Base.SessionInfo.TimeZone = time.UTC
-			c.proc.Ctx = defines.AttachAccountId(context.Background(), 0)
-			floor = 0
-			_, _, _, _, err = prepareRemoteRunSendingDataWithProtocol("", scope, c.proc, nil, uuid.Nil, &floor)
-			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion132, floor)
-			for _, observed := range []int64{0, defines.MORPCVersion131, defines.MORPCVersion132} {
-				stream := &fakeStreamSender{}
-				ch := make(chan morpc.Message, 1)
-				ch <- &pipeline.Message{Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: observed}
-				sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: ch}
-				err := sender.confirmProtocolOnStream(floor)
-				if observed < floor {
-					require.Error(t, err)
-				} else {
-					require.NoError(t, err)
-				}
-				require.Equal(t, 1, stream.sentCnt)
-				request := stream.sent[0].(*pipeline.Message)
-				require.Equal(t, pipeline.Method_PipelineProtocolCheck, request.GetCmd())
-				require.Equal(t, floor, request.GetProtocolVersion())
+			require.Equal(t, client.calls, client.releases)
+			client.customResponse = true
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+			_, err = encodeRemoteScope(scope, c.proc)
+			require.Error(t, err, "unknown capability must reject at the actual destination too")
+			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+			rt := moruntime.ServiceRuntime(c.proc.GetService())
+			for _, version := range []int64{0, defines.MORPCVersion131} {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "132")
 			}
-		}
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion132)
+			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+			// Combining independent contracts must retain the larger floor.
+			features := planpb.RemoteExpressionFeatures{FloatConversionSemantics: true, IncompleteTemporalStrings: true, DecimalStatisticalResultContracts: true}
+			require.Equal(t, defines.MORPCVersion132, executionRemoteExpressionProtocolVersion(c.proc, features))
+		})
 	}
-	// Query RPC result changed after placement; actual send must re-observe it.
-	client.version = defines.MORPCVersion131
-	_, err := encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "132")
-	require.Equal(t, client.calls, client.releases)
-	client.customResponse = true
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
-	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion131)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "132")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion132)
-	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
-	// Combining independent contracts must retain the larger floor.
-	features := planpb.RemoteExpressionFeatures{FloatConversionSemantics: true, IncompleteTemporalStrings: true, DecimalStatisticalResultContracts: true}
-	require.Equal(t, defines.MORPCVersion132, executionRemoteExpressionProtocolVersion(c.proc, features))
 }
 
 func TestGenerateProcessHelperRejectsConflictingStatementIntent(t *testing.T) {

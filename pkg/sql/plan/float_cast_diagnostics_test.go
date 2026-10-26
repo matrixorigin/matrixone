@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -130,4 +131,102 @@ func TestFloatCastSafeLiteralStillFolds(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, folded.GetLit())
 	require.Equal(t, float64(1.25), folded.GetLit().GetDval())
+}
+
+func TestIffStringTruthProtocolFromBinding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, alias := range []string{"if", "iff"} {
+		for _, tc := range []struct {
+			name                   string
+			oid                    types.T
+			param, rawBinary, want bool
+		}{
+			{"char column", types.T_char, false, false, true},
+			{"varchar column", types.T_varchar, false, false, true},
+			{"text column", types.T_text, false, false, true},
+			// A binary SQL type alone does not prove the vector's raw-binary flag.
+			{"binary column", types.T_binary, false, false, true},
+			{"varbinary column", types.T_varbinary, false, false, true},
+			{"blob column", types.T_blob, false, false, true},
+			{"varchar parameter", types.T_varchar, true, false, true},
+			{"raw binary literal", types.T_varbinary, false, true, false},
+			{"Boolean column", types.T_bool, false, false, false},
+			{"integer column", types.T_int64, false, false, false},
+			{"float column", types.T_float64, false, false, false},
+		} {
+			t.Run(alias+"/"+tc.name, func(t *testing.T) {
+				source := &planpb.Expr{Typ: tc.oid.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+				if tc.param {
+					source.Expr = &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}
+				}
+				if tc.rawBinary {
+					source.Expr = &planpb.Expr_Lit{Lit: &planpb.Literal{IsBin: true, LiteralForm: planpb.StringLiteralForm_STRING_LITERAL_HEX, Value: &planpb.Literal_Sval{Sval: "NaN"}}}
+				}
+				expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, alias, []*planpb.Expr{source, makePlan2Int64ConstExprWithType(1), makePlan2Int64ConstExprWithType(2)})
+				require.NoError(t, err)
+				require.Equal(t, int32(tc.oid), expr.GetF().Args[0].Typ.Id, "IFF retains the condition without a private CAST")
+				features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, features.FloatConversionSemantics)
+				floor, err := RequiredPersistedExpressionProtocolVersion(expr)
+				require.NoError(t, err)
+				if tc.want {
+					require.Equal(t, defines.MORPCVersion132, floor)
+				} else {
+					require.Less(t, floor, defines.MORPCVersion132)
+				}
+				// The same truth conversion can occur inside a dependent program's
+				// operands; its existing coordinator-only owner remains unchanged.
+				dependent := &planpb.Expr{Typ: expr.Typ, Expr: &planpb.Expr_Dependent{Dependent: &planpb.DependentExpr{ProgramId: 1, Inputs: []*planpb.Expr{expr}}}}
+				features, err = planpb.RequiredRemoteExpressionFeatures(dependent)
+				require.NoError(t, err)
+				require.True(t, features.DependentPrograms)
+				require.Equal(t, tc.want, features.FloatConversionSemantics)
+				floor, err = RequiredPersistedExpressionProtocolVersion(dependent)
+				require.NoError(t, err)
+				if tc.want {
+					require.Equal(t, defines.MORPCVersion132, floor)
+				} else {
+					require.Less(t, floor, defines.MORPCVersion132)
+				}
+			})
+		}
+	}
+}
+
+func TestIffStringTruthExecutionModes(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		for _, rawBinary := range []bool{false, true} {
+			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().MatrixOneNativeMode = native
+			oid := types.T_varchar
+			if rawBinary {
+				oid = types.T_varbinary
+			}
+			input := batch.NewWithSize(1)
+			defer input.Clean(proc.Mp())
+			input.Vecs[0] = vector.NewVec(oid.ToType())
+			require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"NaN", "Inf", "1.25", "0", ""}, []bool{false, false, false, false, true}, proc.Mp()))
+			input.Vecs[0].SetIsBin(rawBinary)
+			input.SetRowCount(5)
+			for _, alias := range []string{"if", "iff"} {
+				source := &planpb.Expr{Typ: oid.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+				expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, alias, []*planpb.Expr{source, makePlan2Int64ConstExprWithType(1), makePlan2Int64ConstExprWithType(2)})
+				require.NoError(t, err)
+				got, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{input})
+				require.NoError(t, err)
+				want := []int64{2, 2, 1, 2, 2}
+				if native {
+					want = []int64{1, 1, 1, 2, 2}
+				}
+				if rawBinary {
+					want = []int64{1, 1, 1, 1, 2}
+				}
+				for row, value := range want {
+					require.Equal(t, value, vector.GetFixedAtNoTypeCheck[int64](got, row), "alias=%s native=%t binary=%t row=%d", alias, native, rawBinary, row)
+				}
+				free()
+			}
+		}
+	}
 }

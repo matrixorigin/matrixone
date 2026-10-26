@@ -1914,7 +1914,7 @@ func isFloatConversionContract(expr *Expr, id int32) bool {
 	if id == 585 { // JSON_AGG_TO_DOUBLE shares MySQL text-to-float parsing.
 		return true
 	}
-	if id != 21 && id != 541 && id != 554 && id != 555 {
+	if id != 21 && id != 541 && id != 554 && id != 555 && id != 113 {
 		return false
 	}
 	fn := expr.GetF()
@@ -1924,10 +1924,15 @@ func isFloatConversionContract(expr *Expr, id int32) bool {
 	source, target := fn.Args[0].Typ.Id, expr.Typ.Id
 	floatSource := source == 30 || source == 31
 	floatTarget := target == 30 || target == 31
-	if floatTarget {
+	if floatTarget || id == 113 {
 		if lit := fn.Args[0].GetLit(); lit != nil && (lit.IsBin || lit.LiteralForm == StringLiteralForm_STRING_LITERAL_HEX || lit.LiteralForm == StringLiteralForm_STRING_LITERAL_BIT) {
 			return false // raw binary payloads retain the released conversion
 		}
+	}
+	// IF/IFF keeps its string condition; both vector and dependent execution
+	// call the float parser directly instead of inserting a CAST node.
+	if id == 113 {
+		return isPlanStringType(source)
 	}
 	return (floatTarget && isPlanStringType(source)) ||
 		((target == 32 || target == 33) && (floatSource || source == planJSONTypeID))
