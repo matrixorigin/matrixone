@@ -90,7 +90,7 @@ func (p NativeRewriteManifestsPlanner) BuildMaintenanceCommit(ctx context.Contex
 		return nil, err
 	}
 	summary := map[string]string{
-		"operation":           string(OperationRewriteManifests),
+		"operation":           "replace",
 		"engine":              "matrixone",
 		"idempotency-key":     firstNonEmptyString(req.IdempotencyKey, req.JobID),
 		"base-snapshot":       strconv.FormatInt(snapshot.SnapshotID, 10),

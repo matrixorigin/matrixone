@@ -164,7 +164,9 @@ func TestReviewWideLineEmptyLineReplace(t *testing.T) {
 
 // The terminal segment after a trailing lone CR/NEL/LS/PS still binds '$'
 // at the true end of input, while '^' stays suppressed there (mo-bot review
-// on #30646: 'a\r' with '$' becomes 'aX\rX', matching ICU 76.1).
+// on #30646: 'a\r' with '$' becomes 'aX\rX', matching ICU 76.1). Byte 0x85
+// joins that set only in the text alphabet; the binary alphabet is
+// {CR, VT, FF} plus LF, so a binary 0x85 terminates no line (#30210).
 func TestReviewWideLineTerminalDollar(t *testing.T) {
 	op := newOpBuiltInRegexp()
 	for _, tc := range []struct {
@@ -177,7 +179,6 @@ func TestReviewWideLineTerminalDollar(t *testing.T) {
 		{"nel_text", "a\xc2\x85", false, "aX\xc2\x85X"},
 		{"ls_text", "a\xe2\x80\xa8", false, "aX\xe2\x80\xa8X"},
 		{"ps_text", "a\xe2\x80\xa9", false, "aX\xe2\x80\xa9X"},
-		{"nel_binary", "a\x85", true, "aX\x85X"},
 		{"crlf_keeps_lf_contract", "a\r\n", false, "aX\r\nX"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -195,6 +196,31 @@ func TestReviewWideLineTerminalDollar(t *testing.T) {
 			}
 		})
 	}
+	// Byte 0x85 terminates no line in the binary alphabet (#30210): '$'
+	// binds only at the true end of input, so the replacement happens once
+	// and the second-occurrence probes find nothing.
+	for _, pattern := range []string{`$`, `($)+`, `($){1,2}`} {
+		got, err := op.regMap.regularReplaceWithMatchType(pattern, "a\x85", "X", 1, 0, true, "m")
+		require.NoError(t, err, pattern)
+		require.Equal(t, "a\x85X", got, pattern)
+		at, err := op.regMap.regularInstrWithMatchType(pattern, "a\x85", 1, 1, 0, true, "m")
+		require.NoError(t, err, pattern)
+		require.Equal(t, regexpSubjectLength("a\x85", true)+1, at, pattern)
+		at, err = op.regMap.regularInstrWithMatchType(pattern, "a\x85", 1, 2, 0, true, "m")
+		require.NoError(t, err, pattern)
+		require.Zero(t, at, pattern)
+		matched, value, err := op.regMap.regularSubstrWithMatchType(pattern, "a\x85", 1, 1, true, "m")
+		require.NoError(t, err, pattern)
+		require.True(t, matched, pattern)
+		require.Empty(t, value, pattern)
+		matched, _, err = op.regMap.regularSubstrWithMatchType(pattern, "a\x85", 1, 2, true, "m")
+		require.NoError(t, err, pattern)
+		require.False(t, matched, pattern)
+	}
+	// A binary 0x85 also opens no line for the caret.
+	gotBin, err := op.regMap.regularReplaceWithMatchType(`^`, "a\x85", "X", 1, 0, true, "m")
+	require.NoError(t, err)
+	require.Equal(t, "Xa\x85", gotBin)
 	// The caret stays suppressed on the same terminal segment.
 	got, err := op.regMap.regularReplaceWithMatchType(`^`, "a\r", "X", 1, 0, false, "m")
 	require.NoError(t, err)
