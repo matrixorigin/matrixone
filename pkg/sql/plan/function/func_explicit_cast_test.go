@@ -233,7 +233,6 @@ func TestExplicitCastLexicalStrictDMLEscalation(t *testing.T) {
 	// escalate conversion warnings to errors for data-modifying statements).
 	// Loose sql_mode and INSERT IGNORE keep the lenient zero+warning result.
 	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
-		oid := oid
 		for _, tc := range []struct {
 			name    string
 			sqlMode string

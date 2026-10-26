@@ -947,3 +947,26 @@ set session sql_mode = 'STRICT_TRANS_TABLES';
 select cast('abc' as decimal(10,2));
 show warnings;
 set session sql_mode = @@global.sql_mode;
+
+# Issue #30417 strict-DML guard: under STRICT_TRANS_TABLES, an explicit CAST of
+# lexically invalid text is a hard error in non-IGNORE data-modifying
+# statements (no zero row is written, UPDATE keeps the old value); INSERT
+# IGNORE and loose sql_mode keep the lenient 0.00+1292 conversion; strict
+# SELECT keeps the lenient conversion too.
+drop database if exists dml_cast_guard;
+create database dml_cast_guard;
+use dml_cast_guard;
+create table own(id int primary key, v decimal(10,2));
+insert into own values (1, 42.42);
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert into own values (2, cast('abc' as decimal(10,2)));
+insert into own select 3, cast('abc' as decimal(10,2));
+update own set v = cast('abc' as decimal(10,2)) where id = 1;
+select id, v from own order by id;
+insert ignore into own values (4, cast('abc' as decimal(10,2)));
+select id, v from own order by id;
+set session sql_mode = '';
+insert into own values (5, cast('abc' as decimal(10,2)));
+select id, v from own order by id;
+set session sql_mode = @@global.sql_mode;
+drop database dml_cast_guard;
