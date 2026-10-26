@@ -201,10 +201,9 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 	targets := [2]types.Type{coerced[0], coerced[1]}
 	isMultiply := operator == "*"
 	var nominalPrecision int64
-	for i := range inputs {
-		domain := inputs[i]
+	for i, domain := range inputs {
 		width, scale, ok := decimalArithmeticDomain(domain)
-		if !ok && inputs[i].Oid == types.T_any {
+		if !ok && domain.Oid == types.T_any {
 			domain = coerced[i]
 			width, scale, ok = decimalArithmeticDomain(domain)
 		}
