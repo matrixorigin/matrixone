@@ -388,7 +388,15 @@ func caseVectorCommonType(source []types.Type) (retType types.Type, hasVector, v
 }
 
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
-func caseCheck(_ []overload, inputs []types.Type) checkResult {
+func caseCheck(overloads []overload, inputs []types.Type) checkResult {
+	return boolValueBranchesAsNumeric(overloads, inputs, caseValueArgument, caseCheckTypes)
+}
+
+func caseValueArgument(i, n int) bool {
+	return i%2 == 1 || (n%2 == 1 && i == n-1)
+}
+
+func caseCheckTypes(_ []overload, inputs []types.Type) checkResult {
 	l := len(inputs)
 
 	needCast := false
@@ -778,7 +786,15 @@ var (
 	}
 )
 
-func iffCheck(_ []overload, inputs []types.Type) checkResult {
+func iffCheck(overloads []overload, inputs []types.Type) checkResult {
+	return boolValueBranchesAsNumeric(overloads, inputs, iffValueArgument, iffCheckTypes)
+}
+
+func iffValueArgument(i, n int) bool {
+	return n == 3 && i > 0
+}
+
+func iffCheckTypes(_ []overload, inputs []types.Type) checkResult {
 	// iff(x, y, z)
 	if len(inputs) == 3 {
 		conditionType := inputs[0]
@@ -1369,4 +1385,68 @@ func funcIs(parameters []*vector.Vector, result vector.FunctionResultWrapper, le
 		}
 	}
 	return nil
+}
+
+// boolValueBranchesAsNumeric gives CASE/IF/COALESCE MySQL's numeric meaning
+// of TRUE/FALSE when BOOL value branches are mixed with numeric ones:
+// COALESCE(2, TRUE) is 2 and IF(c, 1.5e0, TRUE) is 1.5e0. BOOL has no
+// implicit cast to a number in fixedCanImplicitCastRule (on purpose, see
+// fixedTypeMatchWithBoolNumericCast), so the plain checkers picked BOOL as the
+// common type and turned every numeric branch into 0/1.
+//
+// The common type is resolved as if each BOOL value branch were BIGINT; the
+// BOOL branches are then cast to that type. Conditions are left alone. If the
+// BOOL branches cannot be cast to the chosen type, the original resolution is
+// kept.
+func boolValueBranchesAsNumeric(
+	overloads []overload,
+	inputs []types.Type,
+	isValue func(i, n int) bool,
+	check func([]overload, []types.Type) checkResult,
+) checkResult {
+	hasBool, hasNumeric := false, false
+	for i, input := range inputs {
+		if !isValue(i, len(inputs)) {
+			continue
+		}
+		switch {
+		case input.Oid == types.T_bool:
+			hasBool = true
+		case input.Oid == types.T_any:
+		case input.IsNumeric() && input.Oid != types.T_bit:
+			hasNumeric = true
+		default:
+			return check(overloads, inputs)
+		}
+	}
+	if !hasBool || !hasNumeric {
+		return check(overloads, inputs)
+	}
+
+	normalized := append([]types.Type(nil), inputs...)
+	for i := range normalized {
+		if isValue(i, len(inputs)) && normalized[i].Oid == types.T_bool {
+			normalized[i] = types.T_int64.ToType()
+		}
+	}
+	matched := check(overloads, normalized)
+	var finalTypes []types.Type
+	switch matched.status {
+	case succeedMatched:
+		finalTypes = normalized
+	case succeedWithCast:
+		finalTypes = append([]types.Type(nil), matched.finalType...)
+	default:
+		return check(overloads, inputs)
+	}
+	for i, input := range inputs {
+		if !isValue(i, len(inputs)) || input.Oid != types.T_bool {
+			continue
+		}
+		if target := finalTypes[i]; !target.IsNumeric() || target.Oid == types.T_bit ||
+			!IfTypeCastSupported(types.T_bool, target.Oid) {
+			return check(overloads, inputs)
+		}
+	}
+	return newCheckResultWithCast(matched.idx, finalTypes)
 }

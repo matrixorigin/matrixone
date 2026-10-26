@@ -1,0 +1,40 @@
+select coalesce(2, true), coalesce(true, 2), coalesce(null, 7, false);
+➤ coalesce(2, true)[-5,64,0]  ¦  coalesce(true, 2)[-5,64,0]  ¦  coalesce(null, 7, false)[-5,64,0]  𝄀
+2  ¦  1  ¦  7
+select coalesce(2.5e0, true), coalesce(false, 2.5e0);
+➤ coalesce(2.5e0, true)[8,53,31]  ¦  coalesce(false, 2.5e0)[8,53,31]  𝄀
+2.5  ¦  0.0
+select ifnull(5, true), ifnull(null, true) + 0, ifnull(null, 7) + true;
+➤ ifnull(5, true)[-5,64,0]  ¦  ifnull(null, true) + 0[-5,64,0]  ¦  ifnull(null, 7) + true[-5,64,0]  𝄀
+5  ¦  1  ¦  8
+select if(1, 2.5e0, true), if(0, 2.5e0, true), if(1, true, 3), if(0, true, 3);
+➤ if(1, 2.5e0, true)[8,53,31]  ¦  if(0, 2.5e0, true)[8,53,31]  ¦  if(1, true, 3)[-5,64,0]  ¦  if(0, true, 3)[-5,64,0]  𝄀
+2.5  ¦  1.0  ¦  1  ¦  3
+select case when 1 then 9 else true end, case when 0 then 9 else true end;
+➤ case when 1 then 9 else true end[-5,64,0]  ¦  case when 0 then 9 else true end[-5,64,0]  𝄀
+9  ¦  1
+select case when 0 then false when 1 then -4 else 0.5e0 end;
+➤ case when 0 then false when 1 then -4 else 0.5e0 end[8,53,31]  𝄀
+-4.0
+select coalesce(true, false), if(1, true, false), case when 1 then false else true end;
+➤ coalesce(true, false)[-6,8,0]  ¦  if(1, true, false)[-6,8,0]  ¦  case when 1 then false else true end[-6,8,0]  𝄀
+1  ¦  1  ¦  0
+drop database if exists func_bool_numeric_branches;
+create database func_bool_numeric_branches;
+use func_bool_numeric_branches;
+create table t(id int, i int, d double, b bool);
+insert into t values (1, 7, 2.5, true), (2, null, null, false), (3, -3, -0.5, null);
+select id, coalesce(i, b), ifnull(d, b), if(b, i, b), case when b then d else false end from t order by id;
+➤ id[4,32,0]  ¦  coalesce(i, b)[-5,64,0]  ¦  ifnull(d, b)[8,53,31]  ¦  if(b, i, b)[-5,64,0]  ¦  case when b then d else false end[8,53,31]  𝄀
+1  ¦  7  ¦  2.5  ¦  7  ¦  2.5  𝄀
+2  ¦  0  ¦  0.0  ¦  0  ¦  0.0  𝄀
+3  ¦  -3  ¦  -0.5  ¦  null  ¦  0.0
+select id, coalesce(i, b) + 1, coalesce(d, b) * 2 from t order by id;
+➤ id[4,32,0]  ¦  coalesce(i, b) + 1[-5,64,0]  ¦  coalesce(d, b) * 2[8,53,31]  𝄀
+1  ¦  8  ¦  5.0  𝄀
+2  ¦  1  ¦  0.0  𝄀
+3  ¦  -2  ¦  -1.0
+select sum(coalesce(i, b)), max(ifnull(d, b)) from t;
+➤ sum(coalesce(i, b))[3,38,0]  ¦  max(ifnull(d, b))[8,53,31]  𝄀
+4  ¦  2.5
+drop database func_bool_numeric_branches;

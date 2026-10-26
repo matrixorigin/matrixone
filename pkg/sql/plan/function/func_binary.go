@@ -1028,6 +1028,14 @@ func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult,
 }
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
+	return boolValueBranchesAsNumeric(overloads, inputs, coalesceValueArgument, coalesceCheckTypes)
+}
+
+func coalesceValueArgument(_, _ int) bool {
+	return true
+}
+
+func coalesceCheckTypes(overloads []overload, inputs []types.Type) checkResult {
 	if target, hasVector, ok := conditionalVectorType(inputs); hasVector {
 		if !ok {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
