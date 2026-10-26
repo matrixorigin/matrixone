@@ -139,9 +139,11 @@ GPU kernels agree on the encoding.
 - **`SERIAL` keys.** `SERIAL`/`SERIAL_FULL` encode one of these values as its stored
   bits, in a tuple element of its own type, ordered as the values are; `SERIAL_EXTRACT`
   with the same type returns the stored value. (Such a value is never a table key; this
-  is the user-callable function.) Tests: `types/tuple_lowprec_test.go` (every
-  `float8`/`float4` code, `bf16`/`float16` samples: bits, decoders, order), BVT
-  `dtype/lowprec_float.sql`.
+  is the user-callable function.) A tuple element built by hand decodes a zero of either
+  sign as +0, and a NaN or infinite element is an error, in every tuple decoder. Tests:
+  `types/tuple_lowprec_test.go` (every `float8`/`float4` code, `bf16`/`float16` samples:
+  bits, decoders, order; -0, NaN and infinite elements), BVT `dtype/lowprec_float.sql`
+  (hand-built elements through constant and per-row indexes, then INSERT and GROUP BY).
 - **`INFORMATION_SCHEMA.COLUMNS.NUMERIC_PRECISION`** is the significand bits, the
   implicit leading bit included: `bf16` 8, `float16` 11, `float8` 4, `float4` 2.
 - **Implicit NOT NULL value.** `ALTER TABLE ... ADD COLUMN c bf16 NOT NULL` (and

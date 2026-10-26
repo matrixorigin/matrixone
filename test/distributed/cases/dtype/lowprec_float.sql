@@ -489,6 +489,23 @@ INSERT INTO so VALUES (6), (-1.5), (0.5), (-6), (0), (4), (-0.5), (1);
 SELECT v FROM so ORDER BY SERIAL(v);
 DROP TABLE so;
 
+-- a hand-built tuple element: -0 extracts as 0, NaN is an error
+CREATE TABLE sz (v float4);
+INSERT INTO sz SELECT SERIAL_EXTRACT(CAST(UNHEX('587F') AS VARCHAR(2)), 0 AS float4);
+INSERT INTO sz VALUES (0);
+SELECT v, COUNT(*) FROM sz GROUP BY v;
+SELECT COUNT(DISTINCT v), SUM(v = 0) FROM sz;
+DROP TABLE sz;
+SELECT SERIAL_EXTRACT(CAST(UNHEX('577F') AS VARCHAR(2)), 0 AS float8);
+SELECT SERIAL_EXTRACT(CAST(UNHEX('5700') AS VARCHAR(2)), 0 AS float8);
+SELECT SERIAL_EXTRACT(CAST(UNHEX('56037F') AS VARCHAR(3)), 0 AS float16);
+CREATE TABLE sx (s VARCHAR(10), i BIGINT);
+INSERT INTO sx VALUES (CAST(UNHEX('577F') AS VARCHAR(2)), 0);
+SELECT SERIAL_EXTRACT(s, i AS float8) FROM sx;
+INSERT INTO sx VALUES (CAST(UNHEX('5700') AS VARCHAR(2)), 0);
+SELECT SERIAL_EXTRACT(s, i AS float8) FROM sx;
+DROP TABLE sx;
+
 -- NUMERIC_PRECISION is the significand bits
 CREATE TABLE np (a bf16, b float16, c float8, d float4, f FLOAT);
 SELECT column_name, numeric_precision FROM information_schema.columns WHERE table_schema = 'lowprec_float' AND table_name = 'np' ORDER BY ordinal_position;

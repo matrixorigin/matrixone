@@ -113,3 +113,58 @@ func lowPrecTupleElemType(v any) T {
 	}
 	return T_float4
 }
+
+// A tuple element holding -0 decodes as +0, and one holding NaN or Inf is an error, through
+// every decoder entry point.
+func TestTupleLowPrecFloatNonCanonical(t *testing.T) {
+	pack := func(v any) []byte {
+		p := NewPacker()
+		defer p.Close()
+		switch v := v.(type) {
+		case BF16:
+			p.EncodeBF16(v)
+		case Float16:
+			p.EncodeFloat16(v)
+		case Float8:
+			p.EncodeFloat8(v)
+		case Float4:
+			p.EncodeFloat4(v)
+		}
+		p.EncodeInt64(7)
+		return append([]byte(nil), p.GetBuf()...)
+	}
+	negZero := []struct{ neg, zero any }{
+		{BF16(0x8000), BF16(0)},
+		{Float16(0x8000), Float16(0)},
+		{Float8(0x80), Float8(0)},
+		{Float4(0x08), Float4(0)},
+	}
+	for _, c := range negZero {
+		b := pack(c.neg)
+		tuple, schema, err := UnpackWithSchema(b)
+		require.NoError(t, err)
+		require.Equal(t, c.zero, tuple[0])
+		nth, _, err := UnpackNthElement(b, 0)
+		require.NoError(t, err)
+		require.Equal(t, c.zero, nth)
+		strs, err := StringifyTuple(b, []plan.Type{{Id: int32(schema[0])}, {Id: int32(T_int64)}})
+		require.NoError(t, err)
+		require.Equal(t, "0", strs[0])
+	}
+	nonFinite := []any{
+		BF16(0x7fc0), BF16(0x7f80), BF16(0xff80),
+		Float16(0x7e00), Float16(0x7c00), Float16(0xfc00),
+		Float8(0x7f), Float8(0xff),
+	}
+	for _, v := range nonFinite {
+		f := float64(v.(interface{ ToFloat32() float32 }).ToFloat32())
+		require.True(t, math.IsNaN(f) || math.IsInf(f, 0))
+		b := pack(v)
+		_, _, err := UnpackWithSchema(b)
+		require.Error(t, err)
+		_, _, err = UnpackNthElement(b, 0)
+		require.Error(t, err)
+		_, err = StringifyTuple(b, []plan.Type{{Id: int32(lowPrecTupleElemType(v))}, {Id: int32(T_int64)}})
+		require.Error(t, err)
+	}
+}
