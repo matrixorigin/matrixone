@@ -906,23 +906,27 @@ func TestPersistedBoundedConditionalStringProtocolAdmission(t *testing.T) {
 
 	required, err := RequiredPersistedExpressionProtocolVersion(expr)
 	require.NoError(t, err)
-	require.Equal(t, int64(defines.MORPCVersion130), required)
+	require.Equal(t, int64(defines.MORPCVersion133), required)
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
 	require.ErrorContains(t,
-		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 130")
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 133")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 	require.ErrorContains(t,
-		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 130")
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 133")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
 	require.ErrorContains(t,
-		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 130")
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 133")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
 	require.ErrorContains(t,
-		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 130")
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 133")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
-	require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 130")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
+	require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 133")
+	for _, version := range []int64{defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 133", "version=%d", version)
+	}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
 
 }

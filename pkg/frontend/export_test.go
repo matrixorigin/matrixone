@@ -265,6 +265,65 @@ func Test_writeDataToCSVFile(t *testing.T) {
 	})
 }
 
+func TestWriteExportBatchToFileRejectsAuditOverflow(t *testing.T) {
+	maxUint64 := ^uint64(0)
+	for _, tc := range []struct {
+		name      string
+		format    string
+		splitSize uint64
+		rows      uint64
+		fileBytes uint64
+		batch     BatchByte
+		wantError string
+	}{
+		{
+			name:      "csv unlimited row count",
+			format:    "csv",
+			rows:      maxUint64,
+			batch:     BatchByte{writeByte: []byte("x\n"), rowCount: 1},
+			wantError: "outfile audit row count overflow",
+		},
+		{
+			name:      "csv split row count",
+			format:    "csv",
+			splitSize: 16,
+			rows:      maxUint64,
+			batch:     BatchByte{writeByte: []byte("a\n"), rowEnds: []int{2}, rowCount: 1},
+			wantError: "outfile audit row count overflow",
+		},
+		{
+			name:      "jsonline file byte count",
+			format:    "jsonline",
+			fileBytes: maxUint64,
+			batch:     BatchByte{writeByte: []byte("{}\n"), rowCount: 1},
+			wantError: "outfile audit file byte count overflow",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ep := &ExportConfig{
+				userConfig:   &tree.ExportParam{ExportFormat: tc.format, SplitSize: tc.splitSize},
+				Rows:         tc.rows,
+				CurFileSize:  tc.fileBytes,
+				auditEnabled: true,
+			}
+			writes := 0
+			stub := gostub.Stub(&Write, func(_ *ExportConfig, output []byte) (int, error) {
+				writes++
+				return len(output), nil
+			})
+			defer stub.Reset()
+
+			err := writeExportBatchToFile(ep, &tc.batch)
+			require.ErrorContains(t, err, tc.wantError)
+			require.Zero(t, writes, "overflow must be detected before writing to the sink")
+			require.Equal(t, tc.rows, ep.Rows)
+			require.Equal(t, tc.fileBytes, ep.CurFileSize)
+			require.Zero(t, ep.auditBytesWritten)
+			require.Zero(t, ep.auditRowsWritten)
+		})
+	}
+}
+
 func Test_exportDataToCSVFile(t *testing.T) {
 	convey.Convey("exportDataFromResultSetToCSVFile succ", t, func() {
 		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
@@ -2069,7 +2128,7 @@ func TestExportParquetSplitSingleBatchPreservesRows(t *testing.T) {
 	dir := t.TempDir()
 	ec := &ExportConfig{proc: sysFileAccessTestProcess(), ctx: context.Background(), mrs: mrs, userConfig: &tree.ExportParam{
 		FilePath: filepath.Join(dir, "out_%d.parquet"), ExportFormat: "parquet", SplitSize: 8 << 10,
-	}}
+	}, auditEnabled: true}
 	execCtx := &ExecCtx{reqCtx: ec.ctx, ses: &backSession{feSessionImpl: feSessionImpl{pool: mp}}}
 	require.NoError(t, ec.Write(execCtx, nil, bat))
 	require.NoError(t, finalizeParquetExport(ec))
@@ -2078,19 +2137,24 @@ func TestExportParquetSplitSingleBatchPreservesRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(files), 1)
 	var got []string
+	var actualBytes, actualRows uint64
 	for _, name := range files {
 		data, err := os.ReadFile(name)
 		require.NoError(t, err)
+		actualBytes += uint64(len(data))
 		rows, err := parquet.Read[struct {
 			Payload string `parquet:"payload,optional"`
 		}](bytes.NewReader(data), int64(len(data)))
 		require.NoError(t, err)
 		require.NotEmpty(t, rows) // No trailing empty split file.
+		actualRows += uint64(len(rows))
 		for _, row := range rows {
 			got = append(got, row.Payload)
 		}
 	}
 	require.ElementsMatch(t, values, got)
+	require.Equal(t, actualBytes, ec.auditBytesWritten)
+	require.Equal(t, actualRows, ec.auditRowsWritten)
 }
 
 func Test_finalizeParquetExportAfterSplitDoesNotCreateTrailingFile(t *testing.T) {
@@ -2485,4 +2549,71 @@ func TestOutfileUnenclosedCSVRoundTripsThroughLoadParser(t *testing.T) {
 		require.Equal(t, v, got[i].Val, "row %d must round-trip byte-equal", i)
 	}
 	require.True(t, got[len(values)].IsNull, "the NULL row must reload as NULL")
+}
+
+// #30703: duplicatedJSONLineColumn flags the first repeated alias, even empty.
+func TestDuplicatedJSONLineColumn(t *testing.T) {
+	for _, tc := range []struct {
+		names []string
+		want  string
+		found bool
+	}{
+		{},
+		{names: []string{"a", "b"}},
+		{names: []string{"", "x"}},
+		{names: []string{"id", "x", "y", "x"}, want: "x", found: true},
+		{names: []string{"x", "x"}, want: "x", found: true},
+		{names: []string{"", ""}, found: true},
+		{names: []string{"", "", "x", "x"}, found: true},
+	} {
+		name, found := duplicatedJSONLineColumn(tc.names)
+		require.Equal(t, tc.want, name)
+		require.Equal(t, tc.found, found, "columns %q", tc.names)
+	}
+}
+
+// #30703: a JSONLINE export whose SELECT aliases repeat must fail explicitly
+// instead of writing rows with one column silently dropped.
+func TestJSONLineExportRejectsDuplicateAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		columns []string
+		want    string
+	}{
+		{name: "ordinary duplicates", columns: []string{"id", "x", "x"}},
+		{name: "empty duplicates", columns: []string{"", ""}},
+		{name: "empty duplicates before ordinary duplicates", columns: []string{"", "", "x", "x"}},
+		{name: "unique names", columns: []string{"x", "y"}, want: "{\"x\":11,\"y\":22}\n"},
+		{name: "one empty name", columns: []string{"", "x"}, want: "{\"\":11,\"x\":22}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			mrs := &MysqlResultSet{}
+			bat := batch.NewWithSize(len(tc.columns))
+			for i, name := range tc.columns {
+				column := new(MysqlColumn)
+				column.SetName(name)
+				mrs.AddColumn(column)
+				bat.Vecs[i] = testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{int32(11 * (i + 1))})
+			}
+			bat.SetRowCount(1)
+			ep := &ExportConfig{mrs: mrs}
+			bytesChan := make(chan *BatchByte, 1)
+			constructJSONLine(t.Context(), &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, bytesChan, ep)
+
+			select {
+			case result := <-bytesChan:
+				if tc.want == "" {
+					require.ErrorContains(t, result.err, "duplicate column names")
+					require.Nil(t, result.writeByte)
+				} else {
+					require.NoError(t, result.err)
+					require.Equal(t, tc.want, string(result.writeByte))
+				}
+			default:
+				t.Fatal("JSONLINE export must report its result")
+			}
+			require.Zero(t, mp.CurrNB(), "the batch must be released on success and failure")
+		})
+	}
 }

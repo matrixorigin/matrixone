@@ -1,0 +1,758 @@
+{
+  "scope": "Bounded single-CN direct-key preaggregation omission. Synthetic validation, not ClickBench closure or distributed speedup.",
+  "base_revision": "f039b89fa923821fa0fa9219fe567e54a9d0f2ed",
+  "validated_optimization_revision": "db0a75e38beb75451f124b0a84029c82422bdffe",
+  "source_files_sha256": {
+    "pkg/sql/compile/compile.go": "ac1ceee71be55377b92c2c44d05238dc41bd6f117078843e83007828f27f991a",
+    "pkg/sql/compile/compile_test.go": "fbaac6bfd4884404db7efded26ad847063a4291836e2adb8c6cdb144d14ad868"
+  },
+  "native_lib_sha256": "fb28bf3d907583c57497f6faef11d7a43191b1b4edff41fe9fffcb71b92588e7",
+  "native_input_tree_sha256": "1994009476ad6bfc0617f43396cff849987447043516310820d5ac7b0a3badb9",
+  "environment": {
+    "os": "Linux-6.12.88+deb13-amd64-x86_64-with-glibc2.41",
+    "machine": "x86_64",
+    "go": "go version go1.27.1 linux/amd64",
+    "GOMAXPROCS": 4,
+    "GOFLAGS": "-p=2",
+    "max_dop": 4,
+    "optimizer_hints": "empty; natural statistics",
+    "fixture_spill_allowance_bytes": 1073741824,
+    "normal_agg_spill_threshold_bytes": 1073741824,
+    "forced_agg_spill_threshold_bytes": 33554432,
+    "note": "Shared external diagnostic fixture overlays only; production configuration and owners unchanged. No claim about a 32MiB total statement cap.",
+    "file_caches_bytes": {
+      "CN": {
+        "memory": 536870912,
+        "disk": 536870912
+      },
+      "TN": {
+        "memory": 536870912,
+        "disk": 1073741824
+      }
+    }
+  },
+  "reproduction": {
+    "setup_sql": [
+      "create table big(k bigint unsigned,s varchar(40),hot bigint unsigned)",
+      "insert into big select result % 3000000, case when (result % 3000000) % 97=0 then null when (result % 3000000) % 89=0 then '' else concat('key-',cast(result % 3000000 as char)) end,result % 10000 from generate_series(1,6000000)g",
+      "create table small(k bigint unsigned)",
+      "insert into small select result%500000 from generate_series(1,1000000)g",
+      "create table padded(k char(4))",
+      "insert into padded values ('a'),('a '),('b'),(''),('  '),(null)",
+      "select mo_ctl('dn','flush','pr30982_native_evidence.big')",
+      "select mo_ctl('dn','flush','pr30982_native_evidence.small')",
+      "analyze table big",
+      "analyze table small",
+      "analyze table padded"
+    ],
+    "queries": {
+      "eligible_integer": "select count(distinct k) from big",
+      "eligible_nullable_varchar": "select count(distinct s) from big",
+      "small_control": "select count(distinct k) from small",
+      "duplicate_control": "select count(distinct hot) from big",
+      "padding_control": "select count(distinct k) from padded"
+    },
+    "harness_sha256": "245949dc97ed4556bf19e456f88ed6a45d78e6dfc8d32fd6ffe33713b4a5bc5a",
+    "matching_build": "BASE overlay replaces only compile.go with the frozen target version; both binaries use identical diagnostic source, fixture overlays, native library, toolchain, build flags and data generation. Compiler tests are not linked into SQL integration binaries."
+  },
+  "public_execution": {
+    "exact_results": {
+      "duplicate_control": 10000,
+      "eligible_integer": 3000000,
+      "eligible_nullable_varchar": 2935713,
+      "padding_control": 3,
+      "small_control": 500000
+    },
+    "keys": 3000000,
+    "input_rows": 6000000,
+    "prepared_parameter_sequence": [
+      3000000,
+      0,
+      1,
+      3000000
+    ],
+    "prepared_sql": "select count(distinct k) from big where k<?",
+    "physical_plan_excerpts": {
+      "duplicate_control": "Overview:\n\tMemoryUsage:6508672B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 209678453ns \n\t\t- CPU Time Detail: Parse(74859)+BuildPlan(190868)+Compile(95538)+PhyExec(210972918)+PrepareRun(97089)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(1752819)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Merge, addr:127.0.0.1:10100, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 1870ns\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:3, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 group(idx:2, isFirst:true, isLast:true)\n                        \u2514\u2500\u2500 merge group(idx:1, isFirst:false, isLast:true)\n                            \u2514\u2500\u2500 merge(idx:1, isFirst:false, isLast:false)\n  PreScopes: {\n    Scope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 4, Receiver: []) PrepareTimeConsumed: 69839ns\n      DataSource: pr30982_native_evidence.big[hot]\n      Pipeline: \u2514\u2500\u2500 connect(idx:1, isFirst:false, isLast:false) to MergeReceiver [0]\n                    \u2514\u2500\u2500 group(idx:1, isFirst:true, isLast:false)\n                        \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)",
+      "eligible_integer": "Overview:\n\tMemoryUsage:296139016B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 737256819ns \n\t\t- CPU Time Detail: Parse(81259)+BuildPlan(227237)+Compile(147178)+PhyExec(738579901)+PrepareRun(112560)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(1891316)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Merge, addr:127.0.0.1:10100, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 1590ns\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:4, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 merge group(idx:3, isFirst:false, isLast:true)\n                        \u2514\u2500\u2500 merge(idx:3, isFirst:false, isLast:false)\n  PreScopes: {\n    Scope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 4, Receiver: []) PrepareTimeConsumed: 77420ns\n      DataSource: pr30982_native_evidence.big[k]\n      Pipeline: \u2514\u2500\u2500 connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [0]\n                    \u2514\u2500\u2500 group(idx:3, isFirst:true, isLast:false)\n                        \u2514\u2500\u2500 group(idx:2, isFirst:false, isLast:true)\n                            \u2514\u2500\u2500 shuffle(idx:2, isFirst:false, isLast:false)\n                                \u2514\u2500\u2500 projection(idx:1, isFirst:true, isLast:true)\n                                    \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)",
+      "eligible_nullable_varchar": "Overview:\n\tMemoryUsage:348995848B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 1020111613ns \n\t\t- CPU Time Detail: Parse(60889)+BuildPlan(223648)+Compile(95219)+PhyExec(1022407687)+PrepareRun(96320)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(2772150)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Merge, addr:127.0.0.1:10100, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 1090ns\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:4, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 merge group(idx:3, isFirst:false, isLast:true)\n                        \u2514\u2500\u2500 merge(idx:3, isFirst:false, isLast:false)\n  PreScopes: {\n    Scope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 4, Receiver: []) PrepareTimeConsumed: 64830ns\n      DataSource: pr30982_native_evidence.big[s]\n      Pipeline: \u2514\u2500\u2500 connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [0]\n                    \u2514\u2500\u2500 group(idx:3, isFirst:true, isLast:false)\n                        \u2514\u2500\u2500 group(idx:2, isFirst:false, isLast:true)\n                            \u2514\u2500\u2500 shuffle(idx:2, isFirst:false, isLast:false)\n                                \u2514\u2500\u2500 projection(idx:1, isFirst:true, isLast:true)\n                                    \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)",
+      "padding_control": "Overview:\n\tMemoryUsage:328104B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 180478ns \n\t\t- CPU Time Detail: Parse(29030)+BuildPlan(80379)+Compile(34049)+PhyExec(21100)+PrepareRun(15920)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(0)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 1, Receiver: []) PrepareTimeConsumed: 6020ns\n  DataSource: pr30982_native_evidence.padded[k]\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:3, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 group(idx:2, isFirst:true, isLast:true)\n                        \u2514\u2500\u2500 group(idx:1, isFirst:true, isLast:true)\n                            \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)",
+      "small_control": "Overview:\n\tMemoryUsage:116146760B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 252717278ns \n\t\t- CPU Time Detail: Parse(75589)+BuildPlan(211188)+Compile(79409)+PhyExec(252582131)+PrepareRun(131178)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(362217)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Merge, addr:127.0.0.1:10100, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 910ns\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:4, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 merge group(idx:3, isFirst:false, isLast:true)\n                        \u2514\u2500\u2500 merge(idx:3, isFirst:false, isLast:false)\n  PreScopes: {\n    Scope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 4, Receiver: []) PrepareTimeConsumed: 96238ns\n      DataSource: pr30982_native_evidence.small[k]\n      Pipeline: \u2514\u2500\u2500 connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [0]\n                    \u2514\u2500\u2500 group(idx:3, isFirst:true, isLast:false)\n                        \u2514\u2500\u2500 group(idx:2, isFirst:false, isLast:true)\n                            \u2514\u2500\u2500 shuffle(idx:2, isFirst:false, isLast:false)\n                                \u2514\u2500\u2500 group(idx:1, isFirst:true, isLast:true)\n                                    \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)"
+    },
+    "logical_plans": {
+      "duplicate_control": "Project[3] (cost=1.00 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=2 rowsize=100.00)\n  Output: count(distinct big.hot)\n  ->  Aggregate[2] (cost=6010000.00 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=2 rowsize=100.00)\n        Output: count(distinct big.hot)\n        Aggregate Functions: count(#[0,0])\n        ->  Aggregate[1] (cost=6010000.00 outcnt=10000.00 selectivity=1.0000 dop=0 blockNum=733 hashmapSize=10000.00 rowsize=100.00)\n              Output: #[-1,0]\n              Group Key: big.hot\n              ->  Table Scan[0] on pr30982_native_evidence.big (cost=6000000.00 outcnt=6000000.00 selectivity=1.0000 dop=0 blockNum=737 rowsize=40.00)\n                    Output: big.hot\n                    Table: 'big' (0:'hot') shuffle: hash(__mo_fake_pk_col)\n",
+      "eligible_integer": "Project[4] (cost=1.00 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=100.00)\n  Output: count(distinct big.k)\n  ->  Aggregate[3] (cost=3068411.18 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=100.00)\n        Output: count(distinct big.k)\n        Aggregate Functions: count(#[0,0])\n        ->  Aggregate[2] (cost=3068411.18 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=375 rowsize=100.00)\n              Output: #[-1,0]\n              Group Key: #[0,0] shuffle: hash(#[0,0])\n              ->  Aggregate[1] (cost=9068410.18 outcnt=3068410.18 selectivity=1.0000 dop=0 blockNum=733 hashmapSize=3068410.18 rowsize=100.00)\n                    Output: #[-1,0]\n                    Group Key: big.k\n                    ->  Table Scan[0] on pr30982_native_evidence.big (cost=6000000.00 outcnt=6000000.00 selectivity=1.0000 dop=0 blockNum=737 rowsize=40.00)\n                          Output: big.k\n                          Table: 'big' (0:'k') shuffle: hash(__mo_fake_pk_col)\n",
+      "eligible_nullable_varchar": "Project[4] (cost=1.00 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=100.00)\n  Output: count(distinct big.s)\n  ->  Aggregate[3] (cost=3002609.92 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=100.00)\n        Output: count(distinct big.s)\n        Aggregate Functions: count(#[0,0])\n        ->  Aggregate[2] (cost=3002609.92 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=367 rowsize=100.00)\n              Output: #[-1,0]\n              Group Key: #[0,0] shuffle: hash(#[0,0])\n              ->  Aggregate[1] (cost=9002608.92 outcnt=3002608.92 selectivity=1.0000 dop=0 blockNum=733 hashmapSize=3002608.92 rowsize=100.00)\n                    Output: #[-1,0]\n                    Group Key: big.s\n                    ->  Table Scan[0] on pr30982_native_evidence.big (cost=6000000.00 outcnt=6000000.00 selectivity=1.0000 dop=0 blockNum=737 rowsize=40.00)\n                          Output: big.s\n                          Table: 'big' (0:'s') shuffle: hash(__mo_fake_pk_col)\n",
+      "padding_control": "Project[3] (cost=1.00 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=100.00)\n  Output: count(distinct padded.k)\n  ->  Aggregate[2] (cost=9.00 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=100.00)\n        Output: count(distinct padded.k)\n        Aggregate Functions: count(#[0,0])\n        ->  Aggregate[1] (cost=9.00 outcnt=3.00 selectivity=1.0000 dop=0 blockNum=1 hashmapSize=3.00 rowsize=100.00)\n              Output: #[-1,0]\n              Group Key: padded.k\n              ->  Table Scan[0] on pr30982_native_evidence.padded (cost=6.00 outcnt=6.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=24.00)\n                    Output: padded.k\n                    Table: 'padded' (0:'k') shuffle: hash(__mo_fake_pk_col)\n",
+      "small_control": "Project[4] (cost=1.00 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=100.00)\n  Output: count(distinct small.k)\n  ->  Aggregate[3] (cost=500001.00 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=100.00)\n        Output: count(distinct small.k)\n        Aggregate Functions: count(#[0,0])\n        ->  Aggregate[2] (cost=500001.00 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=62 rowsize=100.00)\n              Output: #[-1,0]\n              Group Key: #[0,0] shuffle: hash(#[0,0])\n              ->  Aggregate[1] (cost=1500000.00 outcnt=500000.00 selectivity=1.0000 dop=0 blockNum=123 hashmapSize=500000.00 rowsize=100.00)\n                    Output: #[-1,0]\n                    Group Key: small.k\n                    ->  Table Scan[0] on pr30982_native_evidence.small (cost=1000000.00 outcnt=1000000.00 selectivity=1.0000 dop=0 blockNum=125 rowsize=8.00)\n                          Output: small.k\n                          Table: 'small' (0:'k') shuffle: hash(__mo_fake_pk_col)\n"
+    },
+    "final_key_group_spill_raw_lines": [
+      "\u2514\u2500\u2500 group CallNum:129 TimeCost:529954982ns WaitTime:0ns InRows:1597492 OutRows:734460 InSize:38339808bytes InBlock:0 OutSize:17627040bytes MemSize:44283776bytes SpillSize:18131994bytes SpillRows:1201481 ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes GroupHashBuildGrowthBatches:34 GroupHashBuildGrowthBytes:150668008 GroupHashBuildMaxBytes:33554712 GroupSpillAggUnmarshalNanos:183197 GroupSpillBucketsCreated:64 GroupSpillHashMergeNanos:60224278 GroupSpillMaxBucketRows:19181 GroupSpillMaxGroups:263694 GroupSpillMaxLevel:1 GroupSpillPreallocRows:19181 GroupSpillRecords:9600 GroupSpillRecoveryReservedBytes:2142320 GroupSpillReloadBuckets:64 GroupSpillReloadNanos:193804020 GroupSpillReloadReadNanos:124218725 GroupSpillReloadRecords:9600 GroupSpillReloadRows:1201481 GroupSpillSerializedBytes:18131994 GroupSpillWriteCalls:5 GroupSpillWriteNanos:126919205",
+      "\u2514\u2500\u2500 group CallNum:129 TimeCost:522257080ns WaitTime:0ns InRows:1469318 OutRows:734659 InSize:35263632bytes InBlock:0 OutSize:17631816bytes MemSize:44241088bytes SpillSize:16359064bytes SpillRows:1085701 ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes GroupHashBuildGrowthBatches:29 GroupHashBuildGrowthBytes:134415008 GroupHashBuildMaxBytes:33554712 GroupSpillAggUnmarshalNanos:168200 GroupSpillBucketsCreated:64 GroupSpillHashMergeNanos:55221456 GroupSpillMaxBucketRows:17347 GroupSpillMaxGroups:270336 GroupSpillMaxLevel:1 GroupSpillPreallocRows:17347 GroupSpillRecords:8512 GroupSpillRecoveryReservedBytes:2195456 GroupSpillReloadBuckets:64 GroupSpillReloadNanos:173037496 GroupSpillReloadReadNanos:109177376 GroupSpillReloadRecords:8512 GroupSpillReloadRows:1085701 GroupSpillSerializedBytes:16359064 GroupSpillWriteCalls:5 GroupSpillWriteNanos:128740301",
+      "\u2514\u2500\u2500 group CallNum:129 TimeCost:470692400ns WaitTime:0ns InRows:1466134 OutRows:733067 InSize:35187216bytes InBlock:0 OutSize:17593608bytes MemSize:44241088bytes SpillSize:16313693bytes SpillRows:1083157 ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes GroupHashBuildGrowthBatches:29 GroupHashBuildGrowthBytes:134415008 GroupHashBuildMaxBytes:33554712 GroupSpillAggUnmarshalNanos:157749 GroupSpillBucketsCreated:64 GroupSpillHashMergeNanos:47968690 GroupSpillMaxBucketRows:17349 GroupSpillMaxGroups:270336 GroupSpillMaxLevel:1 GroupSpillPreallocRows:17349 GroupSpillRecords:8512 GroupSpillRecoveryReservedBytes:2195456 GroupSpillReloadBuckets:64 GroupSpillReloadNanos:156554424 GroupSpillReloadReadNanos:99880687 GroupSpillReloadRecords:8512 GroupSpillReloadRows:1083157 GroupSpillSerializedBytes:16313693 GroupSpillWriteCalls:5 GroupSpillWriteNanos:131061391",
+      "\u2514\u2500\u2500 group CallNum:129 TimeCost:472219114ns WaitTime:0ns InRows:1467056 OutRows:733528 InSize:35209344bytes InBlock:0 OutSize:17604672bytes MemSize:44241088bytes SpillSize:16316931bytes SpillRows:1083830 ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes GroupHashBuildGrowthBatches:29 GroupHashBuildGrowthBytes:134415008 GroupHashBuildMaxBytes:33554712 GroupSpillAggUnmarshalNanos:157499 GroupSpillBucketsCreated:64 GroupSpillHashMergeNanos:48105528 GroupSpillMaxBucketRows:17322 GroupSpillMaxGroups:270336 GroupSpillMaxLevel:1 GroupSpillPreallocRows:17322 GroupSpillRecords:8512 GroupSpillRecoveryReservedBytes:2195456 GroupSpillReloadBuckets:64 GroupSpillReloadNanos:160156692 GroupSpillReloadReadNanos:103485322 GroupSpillReloadRecords:8512 GroupSpillReloadRows:1083830 GroupSpillSerializedBytes:16316931 GroupSpillWriteCalls:5 GroupSpillWriteNanos:118068012"
+    ],
+    "forced_spill_physical_excerpt": "Overview:\n\tMemoryUsage:186911176B,  SpillSize:67121682B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 2651273714ns \n\t\t- CPU Time Detail: Parse(69839)+BuildPlan(206167)+Compile(107339)+PhyExec(2653295080)+PrepareRun(100629)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(2505340)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\n\tQuery Build Plan Stage:\n\t\t- CPU Time: 206167ns \n\t\t- S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0\n\t\t- Build Plan Duration: 206167ns \n\t\t- Call Stats Duration: 2610ns \n\t\t- Call StatsInCache Duration: 0ns \n\t\t- Call Stats IO Consumption: 0ns \n\t\t- Call Stats S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0\n\tQuery Compile Stage:\n\t\t- CPU Time: 107339ns \n\t\t- S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0\n\t\t- Compile TableScan Duration: 12760ns \n\tQuery Prepare Exec Stage:\n\t\t- CPU Time: 100629ns \n\t\t- CompilePreRunOnce Duration: 21830ns \n\t\t- PreRunOnce WaitLock: 0ns \n\t\t- ScopePrepareTimeConsumed: 78799ns \n\t\t- BuildReader Duration: 71789ns \n\t\t- S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0\n\tQuery Execution Stage:\n\t\t- CPU Time: 2653295080ns \n\t\t- S3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0\n\t\t- MemoryUsage: 186911176B,  SpillSize: 67121682B,  DiskI/O: 0B,  NewWorkI/O:0B\nPhysical Plan Deployment:\nScope 1 (Magic: Merge, addr:127.0.0.1:10100, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 2620ns\n  Pipeline: \u2514\u2500\u2500 output CallNum:2 TimeCost:2960ns WaitTime:0ns InRows:1 OutRows:1 InSize:8bytes InBlock:0 OutSize:8bytes MemSize:0bytes SpillSize:0bytes SpillRows:0 ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes \n                \u2514\u2500\u2500 projection CallNum:2 TimeCost:640ns WaitTime:0ns InRows:1 OutRows:1 InSize:8bytes InBlock:0 OutSize:8bytes MemSize:8bytes SpillSize:0bytes SpillRows:0 ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes \n                    \u2514\u2500\u2500 merge group CallNum:2 TimeCost:108718ns WaitTime:0ns InRows:4 OutRows:1 InSize:0bytes InBlock:0 OutSize:8bytes MemSize:131072bytes SpillSize:0bytes SpillRows:0 ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes \n                        \u2514\u2500\u2500 merge CallNum:5 TimeCost:8929ns WaitTime:672804186ns InRows:4 OutRows:4 InSize:0bytes InBlock:0 OutSize:0bytes MemSize:0bytes SpillSize:0bytes SpillRows:0 ScanBytes:0bytes NetworkIO:0bytes DiskIO:0bytes \n  PreScopes: {\n    Scope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 4, Receiver: []) PrepareTimeConsumed: 72409ns\n      DataSource: pr30982_native_evidence.big[s]\n      Pipeline: \u2514\u2500\u2500 connect to MergeReceiver [0]\n                    \u2514\u2500\u2500 group\n                        \u2514\u2500\u2500 group\n                            \u2514\u2500\u2500 shuffle\n                                \u2514\u2500\u2500 projection\n                                    \u2514\u2500\u2500 tablescan",
+    "forced_spill_logical": "Project\n  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)\n  ->  Aggregate\n        Analyze: timeConsumed=18ms group_time=[1ms,1ms,1ms,13ms] mergegroup_time=[0ms] waitTime=568ms inputRows=2935714 outputRows=1 (min=1, max=1) InputSize=67.19 MiB OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=384.00 KiB (min=128.00 KiB, max=128.00 KiB)\n        Aggregate Functions: count(#[0,0])\n        ->  Aggregate\n              Analyze: timeConsumed=2235ms group_time=[455ms,468ms,472ms,484ms] waitTime=0ms inputRows=0 outputRows=2935714 (min=733067, max=734659) InputSize=0 bytes OutputSize=67.19 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=175.29 MiB (min=42.19 MiB, max=42.23 MiB) SpillRows=3786915 SpillSize=54.40 MiB (min=13.38 MiB, max=13.83 MiB)\n              Group Key: #[0,0] shuffle: hash(#[0,0])\n              ->  Aggregate\n                    Analyze: timeConsumed=0ms waitTime=0ms inputRows=6000000 outputRows=6000000 (min=1500000, max=1500000) InputSize=137.33 MiB OutputSize=137.33 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=768.00 KiB (min=192.00 KiB, max=192.00 KiB)\n                    Group Key: big.s\n                    ->  Table Scan on pr30982_native_evidence.big\n                          Analyze: timeConsumed=0ms scan_time=[0ms,0ms,0ms,0ms] waitTime=39ms inputBlocks=736 inputRows=6000000 outputRows=6000000 (min=1500000, max=1500000) InputSize=137.33 MiB OutputSize=137.33 MiB ReadSize=29.52 MiB|0 bytes|0 bytes MemorySize=1.50 MiB (min=384.00 KiB, max=384.00 KiB)\n",
+    "statement_spill_bytes": 67121682,
+    "cancellation": {
+      "cancellation_error": "Error 1317 (70100): context canceled",
+      "cancellation_ms": 5.238,
+      "same_session_recovery": true
+    },
+    "active_execution_stack_frames": [
+      "github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle.(*Shuffle).Call(0x1cf117715770?, 0x0?)",
+      "github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).Call(0x1cf1117fc008, 0x1cf118996c00)",
+      "github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).Call(0x1cf115b99008, 0x1cf118996c00)",
+      "github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle.(*Shuffle).Call(0x1cf11592b180?, 0x0?)",
+      "github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).Call(0x1cf112ffc008, 0x1cf118996b00)",
+      "github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).Call(0x1cf115b98008, 0x1cf118996b00)",
+      "github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle.(*Shuffle).Call(0x1cf10feae370?, 0x0?)",
+      "github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).Call(0x1cf12071e008, 0x1cf118996c80)",
+      "github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).Call(0x1cf115b97008, 0x1cf118996c80)",
+      "github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle.(*Shuffle).Call(0x1cf11592ac80?, 0x0?)",
+      "github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).Call(0x1cf112ffd008, 0x1cf118996b80)",
+      "github.com/matrixorigin/matrixone/pkg/sql/colexec/group.(*Group).Call(0x1cf116a11008, 0x1cf118996b80)"
+    ],
+    "database_cleanup_verified": true
+  },
+  "benchmark": {
+    "method": "A-B-B-A, sequential fresh processes. One warmup then three measured executions per workload per phase; six measured samples per version. Consume and verify scalar results. Loading, ANALYZE, startup and EXPLAIN excluded. No benchmark overlapped other task builds/tests.",
+    "summary_seconds": {
+      "duplicate_control": {
+        "base": {
+          "samples": [
+            0.061181219,
+            0.046353585,
+            0.042386722,
+            0.060152142,
+            0.055659107,
+            0.049982968
+          ],
+          "median": 0.0528210375,
+          "min": 0.042386722,
+          "max": 0.061181219
+        },
+        "candidate": {
+          "samples": [
+            0.057350687,
+            0.03538313,
+            0.065481496,
+            0.035835714,
+            0.053325167,
+            0.037320336
+          ],
+          "median": 0.0453227515,
+          "min": 0.03538313,
+          "max": 0.065481496
+        },
+        "speedup": 1.1654419855775968
+      },
+      "eligible_integer": {
+        "base": {
+          "samples": [
+            0.413453602,
+            0.419297319,
+            0.430022866,
+            0.405747655,
+            0.44056345,
+            0.426468957
+          ],
+          "median": 0.422883138,
+          "min": 0.405747655,
+          "max": 0.44056345
+        },
+        "candidate": {
+          "samples": [
+            0.178715258,
+            0.183110614,
+            0.18339205,
+            0.170752917,
+            0.1906133,
+            0.164568184
+          ],
+          "median": 0.180912936,
+          "min": 0.164568184,
+          "max": 0.1906133
+        },
+        "speedup": 2.337495302160151
+      },
+      "small_control": {
+        "base": {
+          "samples": [
+            0.044649815,
+            0.045943988,
+            0.056953953,
+            0.063712108,
+            0.049846119,
+            0.054183747
+          ],
+          "median": 0.052014933,
+          "min": 0.044649815,
+          "max": 0.063712108
+        },
+        "candidate": {
+          "samples": [
+            0.047598349,
+            0.056087182,
+            0.048034843,
+            0.042528542,
+            0.062228955,
+            0.043669658
+          ],
+          "median": 0.047816596,
+          "min": 0.042528542,
+          "max": 0.062228955
+        },
+        "speedup": 1.0878008338360179
+      }
+    },
+    "phase_samples": [
+      {
+        "phase": "abba-0-base",
+        "seconds": {
+          "duplicate_control": [
+            0.061181219,
+            0.046353585,
+            0.042386722
+          ],
+          "eligible_integer": [
+            0.413453602,
+            0.419297319,
+            0.430022866
+          ],
+          "small_control": [
+            0.044649815,
+            0.045943988,
+            0.056953953
+          ]
+        },
+        "exact_results": {
+          "duplicate_control": 10000,
+          "eligible_integer": 3000000,
+          "eligible_nullable_varchar": 2935713,
+          "padding_control": 3,
+          "small_control": 500000
+        },
+        "binary_sha256": "bdb644976edf7fa51fde2a6463ba171ac2c4786864d32e6eee075a3d9259b4f4",
+        "cleanup": true
+      },
+      {
+        "phase": "abba-1-candidate",
+        "seconds": {
+          "duplicate_control": [
+            0.057350687,
+            0.03538313,
+            0.065481496
+          ],
+          "eligible_integer": [
+            0.178715258,
+            0.183110614,
+            0.18339205
+          ],
+          "small_control": [
+            0.047598349,
+            0.056087182,
+            0.048034843
+          ]
+        },
+        "exact_results": {
+          "duplicate_control": 10000,
+          "eligible_integer": 3000000,
+          "eligible_nullable_varchar": 2935713,
+          "padding_control": 3,
+          "small_control": 500000
+        },
+        "binary_sha256": "52bcdef579baf10e355e21db864913bc6b9e325d335bd11a1e4ae744c0288523",
+        "cleanup": true
+      },
+      {
+        "phase": "abba-2-candidate",
+        "seconds": {
+          "duplicate_control": [
+            0.035835714,
+            0.053325167,
+            0.037320336
+          ],
+          "eligible_integer": [
+            0.170752917,
+            0.1906133,
+            0.164568184
+          ],
+          "small_control": [
+            0.042528542,
+            0.062228955,
+            0.043669658
+          ]
+        },
+        "exact_results": {
+          "duplicate_control": 10000,
+          "eligible_integer": 3000000,
+          "eligible_nullable_varchar": 2935713,
+          "padding_control": 3,
+          "small_control": 500000
+        },
+        "binary_sha256": "52bcdef579baf10e355e21db864913bc6b9e325d335bd11a1e4ae744c0288523",
+        "cleanup": true
+      },
+      {
+        "phase": "abba-3-base",
+        "seconds": {
+          "duplicate_control": [
+            0.060152142,
+            0.055659107,
+            0.049982968
+          ],
+          "eligible_integer": [
+            0.405747655,
+            0.44056345,
+            0.426468957
+          ],
+          "small_control": [
+            0.063712108,
+            0.049846119,
+            0.054183747
+          ]
+        },
+        "exact_results": {
+          "duplicate_control": 10000,
+          "eligible_integer": 3000000,
+          "eligible_nullable_varchar": 2935713,
+          "padding_control": 3,
+          "small_control": 500000
+        },
+        "binary_sha256": "bdb644976edf7fa51fde2a6463ba171ac2c4786864d32e6eee075a3d9259b4f4",
+        "cleanup": true
+      }
+    ],
+    "representative_physical_plans": {
+      "abba-0-base": {
+        "duplicate_control": "Overview:\n\tMemoryUsage:6508672B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 196723690ns \n\t\t- CPU Time Detail: Parse(85078)+BuildPlan(234057)+Compile(101848)+PhyExec(197945848)+PrepareRun(95619)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(1738760)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Merge, addr:127.0.0.1:10100, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 2400ns\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:3, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 group(idx:2, isFirst:true, isLast:true)\n                        \u2514\u2500\u2500 merge group(idx:1, isFirst:false, isLast:true)\n                            \u2514\u2500\u2500 merge(idx:1, isFirst:false, isLast:false)\n  PreScopes: {\n    Scope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 4, Receiver: []) PrepareTimeConsumed: 58419ns\n      DataSource: pr30982_native_evidence.big[hot]\n      Pipeline: \u2514\u2500\u2500 connect(idx:1, isFirst:false, isLast:false) to MergeReceiver [0]\n                    \u2514\u2500\u2500 group(idx:1, isFirst:true, isLast:false)\n                        \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)",
+        "eligible_integer": "Overview:\n\tMemoryUsage:881086984B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 2440057469ns \n\t\t- CPU Time Detail: Parse(77260)+BuildPlan(214147)+Compile(108489)+PhyExec(2441569834)+PrepareRun(107199)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(2019460)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Merge, addr:127.0.0.1:10100, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 1370ns\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:4, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 merge group(idx:3, isFirst:false, isLast:true)\n                        \u2514\u2500\u2500 merge(idx:3, isFirst:false, isLast:false)\n  PreScopes: {\n    Scope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 4, Receiver: []) PrepareTimeConsumed: 73429ns\n      DataSource: pr30982_native_evidence.big[k]\n      Pipeline: \u2514\u2500\u2500 connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [0]\n                    \u2514\u2500\u2500 group(idx:3, isFirst:true, isLast:false)\n                        \u2514\u2500\u2500 group(idx:2, isFirst:false, isLast:true)\n                            \u2514\u2500\u2500 shuffle(idx:2, isFirst:false, isLast:false)\n                                \u2514\u2500\u2500 group(idx:1, isFirst:true, isLast:true)\n                                    \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)",
+        "eligible_nullable_varchar": "Overview:\n\tMemoryUsage:1027466024B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 3221330412ns \n\t\t- CPU Time Detail: Parse(86489)+BuildPlan(233327)+Compile(111338)+PhyExec(3223291845)+PrepareRun(164028)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(2556615)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Merge, addr:127.0.0.1:10100, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 1950ns\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:4, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 merge group(idx:3, isFirst:false, isLast:true)\n                        \u2514\u2500\u2500 merge(idx:3, isFirst:false, isLast:false)\n  PreScopes: {\n    Scope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 4, Receiver: []) PrepareTimeConsumed: 121649ns\n      DataSource: pr30982_native_evidence.big[s]\n      Pipeline: \u2514\u2500\u2500 connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [0]\n                    \u2514\u2500\u2500 group(idx:3, isFirst:true, isLast:false)\n                        \u2514\u2500\u2500 group(idx:2, isFirst:false, isLast:true)\n                            \u2514\u2500\u2500 shuffle(idx:2, isFirst:false, isLast:false)\n                                \u2514\u2500\u2500 group(idx:1, isFirst:true, isLast:true)\n                                    \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)",
+        "padding_control": "Overview:\n\tMemoryUsage:328104B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 174628ns \n\t\t- CPU Time Detail: Parse(26180)+BuildPlan(76229)+Compile(33679)+PhyExec(20650)+PrepareRun(17890)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(0)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 1, Receiver: []) PrepareTimeConsumed: 7480ns\n  DataSource: pr30982_native_evidence.padded[k]\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:3, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 group(idx:2, isFirst:true, isLast:true)\n                        \u2514\u2500\u2500 group(idx:1, isFirst:true, isLast:true)\n                            \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)",
+        "small_control": "Overview:\n\tMemoryUsage:116101912B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 259316547ns \n\t\t- CPU Time Detail: Parse(76369)+BuildPlan(210517)+Compile(88649)+PhyExec(259170731)+PrepareRun(141698)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(371417)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Merge, addr:127.0.0.1:10100, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 1650ns\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:4, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 merge group(idx:3, isFirst:false, isLast:true)\n                        \u2514\u2500\u2500 merge(idx:3, isFirst:false, isLast:false)\n  PreScopes: {\n    Scope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 4, Receiver: []) PrepareTimeConsumed: 106029ns\n      DataSource: pr30982_native_evidence.small[k]\n      Pipeline: \u2514\u2500\u2500 connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [0]\n                    \u2514\u2500\u2500 group(idx:3, isFirst:true, isLast:false)\n                        \u2514\u2500\u2500 group(idx:2, isFirst:false, isLast:true)\n                            \u2514\u2500\u2500 shuffle(idx:2, isFirst:false, isLast:false)\n                                \u2514\u2500\u2500 group(idx:1, isFirst:true, isLast:true)\n                                    \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)"
+      },
+      "abba-1-candidate": {
+        "duplicate_control": "Overview:\n\tMemoryUsage:6508672B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 131820779ns \n\t\t- CPU Time Detail: Parse(78559)+BuildPlan(209078)+Compile(97709)+PhyExec(132863690)+PrepareRun(85250)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(1513507)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Merge, addr:127.0.0.1:10100, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 940ns\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:3, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 group(idx:2, isFirst:true, isLast:true)\n                        \u2514\u2500\u2500 merge group(idx:1, isFirst:false, isLast:true)\n                            \u2514\u2500\u2500 merge(idx:1, isFirst:false, isLast:false)\n  PreScopes: {\n    Scope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 4, Receiver: []) PrepareTimeConsumed: 56210ns\n      DataSource: pr30982_native_evidence.big[hot]\n      Pipeline: \u2514\u2500\u2500 connect(idx:1, isFirst:false, isLast:false) to MergeReceiver [0]\n                    \u2514\u2500\u2500 group(idx:1, isFirst:true, isLast:false)\n                        \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)",
+        "eligible_integer": "Overview:\n\tMemoryUsage:296085000B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 733249064ns \n\t\t- CPU Time Detail: Parse(76919)+BuildPlan(214607)+Compile(109838)+PhyExec(734640984)+PrepareRun(114328)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(1907612)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Merge, addr:127.0.0.1:10100, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 960ns\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:4, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 merge group(idx:3, isFirst:false, isLast:true)\n                        \u2514\u2500\u2500 merge(idx:3, isFirst:false, isLast:false)\n  PreScopes: {\n    Scope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 4, Receiver: []) PrepareTimeConsumed: 82168ns\n      DataSource: pr30982_native_evidence.big[k]\n      Pipeline: \u2514\u2500\u2500 connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [0]\n                    \u2514\u2500\u2500 group(idx:3, isFirst:true, isLast:false)\n                        \u2514\u2500\u2500 group(idx:2, isFirst:false, isLast:true)\n                            \u2514\u2500\u2500 shuffle(idx:2, isFirst:false, isLast:false)\n                                \u2514\u2500\u2500 projection(idx:1, isFirst:true, isLast:true)\n                                    \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)",
+        "eligible_nullable_varchar": "Overview:\n\tMemoryUsage:348959752B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 1111629525ns \n\t\t- CPU Time Detail: Parse(76459)+BuildPlan(215377)+Compile(100279)+PhyExec(1113473879)+PrepareRun(103098)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(2339567)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Merge, addr:127.0.0.1:10100, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 2330ns\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:4, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 merge group(idx:3, isFirst:false, isLast:true)\n                        \u2514\u2500\u2500 merge(idx:3, isFirst:false, isLast:false)\n  PreScopes: {\n    Scope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 4, Receiver: []) PrepareTimeConsumed: 77109ns\n      DataSource: pr30982_native_evidence.big[s]\n      Pipeline: \u2514\u2500\u2500 connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [0]\n                    \u2514\u2500\u2500 group(idx:3, isFirst:true, isLast:false)\n                        \u2514\u2500\u2500 group(idx:2, isFirst:false, isLast:true)\n                            \u2514\u2500\u2500 shuffle(idx:2, isFirst:false, isLast:false)\n                                \u2514\u2500\u2500 projection(idx:1, isFirst:true, isLast:true)\n                                    \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)",
+        "padding_control": "Overview:\n\tMemoryUsage:328104B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 215026ns \n\t\t- CPU Time Detail: Parse(28429)+BuildPlan(116988)+Compile(31930)+PhyExec(19500)+PrepareRun(18179)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(0)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 1, Receiver: []) PrepareTimeConsumed: 7019ns\n  DataSource: pr30982_native_evidence.padded[k]\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:3, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 group(idx:2, isFirst:true, isLast:true)\n                        \u2514\u2500\u2500 group(idx:1, isFirst:true, isLast:true)\n                            \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)",
+        "small_control": "Overview:\n\tMemoryUsage:116057000B,  SpillSize:0B,  DiskI/O:0B,  NewWorkI/O:0B, AffectedRows: 0\n\tS3List:0, S3Head:0, S3Put:0, S3Get:0, S3Delete:0, S3DeleteMul:0, S3InputEstByRows((0+0)/8192):0.0000 \n\tCPU Usage: \n\t\t- Total CPU Time: 271455280ns \n\t\t- CPU Time Detail: Parse(100129)+BuildPlan(212327)+Compile(93669)+PhyExec(271252403)+PrepareRun(169208)-PreRunWaitLock(0)-PlanStatsIO(0)-IOAccess(372456)-IOMerge(0)\n\t\t- Permission Authentication Stats Array: [6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]\nPhysical Plan Deployment:\nScope 1 (Magic: Merge, addr:127.0.0.1:10100, mcpu: 1, Receiver: [0]) PrepareTimeConsumed: 3340ns\n  Pipeline: \u2514\u2500\u2500 output(idx:-1, isFirst:false, isLast:false)\n                \u2514\u2500\u2500 projection(idx:4, isFirst:true, isLast:true)\n                    \u2514\u2500\u2500 merge group(idx:3, isFirst:false, isLast:true)\n                        \u2514\u2500\u2500 merge(idx:3, isFirst:false, isLast:false)\n  PreScopes: {\n    Scope 1 (Magic: Remote, addr:127.0.0.1:10100, mcpu: 4, Receiver: []) PrepareTimeConsumed: 134388ns\n      DataSource: pr30982_native_evidence.small[k]\n      Pipeline: \u2514\u2500\u2500 connect(idx:3, isFirst:false, isLast:false) to MergeReceiver [0]\n                    \u2514\u2500\u2500 group(idx:3, isFirst:true, isLast:false)\n                        \u2514\u2500\u2500 group(idx:2, isFirst:false, isLast:true)\n                            \u2514\u2500\u2500 shuffle(idx:2, isFirst:false, isLast:false)\n                                \u2514\u2500\u2500 group(idx:1, isFirst:true, isLast:true)\n                                    \u2514\u2500\u2500 tablescan(idx:0, isFirst:true, isLast:true)"
+      }
+    }
+  },
+  "receipts": {
+    "compiler-normal": {
+      "command": [
+        ".agents/skills/mo-dev/scripts/mo-cgo-test",
+        "-json",
+        "-count=1",
+        "-timeout=240s",
+        "./pkg/sql/compile"
+      ],
+      "exit": 0,
+      "elapsed": 41.537784814834595,
+      "files": {
+        "pkg/sql/compile/compile.go": "ac1ceee71be55377b92c2c44d05238dc41bd6f117078843e83007828f27f991a",
+        "pkg/sql/compile/compile_test.go": "fbaac6bfd4884404db7efded26ad847063a4291836e2adb8c6cdb144d14ad868"
+      },
+      "head": "db0a75e38beb75451f124b0a84029c82422bdffe"
+    },
+    "compiler-race": {
+      "command": [
+        ".agents/skills/mo-dev/scripts/mo-cgo-test",
+        "-race",
+        "-json",
+        "-count=1",
+        "-timeout=300s",
+        "./pkg/sql/compile",
+        "./pkg/sql/colexec/shuffle",
+        "./pkg/sql/colexec/projection"
+      ],
+      "exit": 0,
+      "elapsed": 138.67057752609253,
+      "files": {
+        "pkg/sql/compile/compile.go": "ac1ceee71be55377b92c2c44d05238dc41bd6f117078843e83007828f27f991a",
+        "pkg/sql/compile/compile_test.go": "fbaac6bfd4884404db7efded26ad847063a4291836e2adb8c6cdb144d14ad868"
+      },
+      "head": "db0a75e38beb75451f124b0a84029c82422bdffe"
+    },
+    "sca": {
+      "command": [
+        "env",
+        "PATH=/home/xupeng/code/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+        "make",
+        "-k",
+        "static-check-selected",
+        "STATIC_CHECK_PACKAGES=./pkg/sql/compile",
+        "GOLANGCI_LINT_CONCURRENCY=2"
+      ],
+      "exit": 0,
+      "elapsed": 89.89018392562866,
+      "files": {
+        "pkg/sql/compile/compile.go": "ac1ceee71be55377b92c2c44d05238dc41bd6f117078843e83007828f27f991a",
+        "pkg/sql/compile/compile_test.go": "fbaac6bfd4884404db7efded26ad847063a4291836e2adb8c6cdb144d14ad868"
+      },
+      "head": "db0a75e38beb75451f124b0a84029c82422bdffe"
+    },
+    "vet": {
+      "command": [
+        "env",
+        "CGO_CFLAGS=-I/home/xupeng/.cache/pr-30982-repair/cgo -I/home/xupeng/.cache/pr-30982-repair/thirdparties/install/include",
+        "CGO_LDFLAGS=-L/home/xupeng/.cache/pr-30982-repair/thirdparties/install/lib",
+        "GOWORK=off",
+        "go",
+        "vet",
+        "-mod=readonly",
+        "./pkg/sql/compile"
+      ],
+      "exit": 0,
+      "elapsed": 12.13408088684082,
+      "files": {
+        "pkg/sql/compile/compile.go": "ac1ceee71be55377b92c2c44d05238dc41bd6f117078843e83007828f27f991a",
+        "pkg/sql/compile/compile_test.go": "fbaac6bfd4884404db7efded26ad847063a4291836e2adb8c6cdb144d14ad868"
+      },
+      "extra_inputs": {},
+      "head": "db0a75e38beb75451f124b0a84029c82422bdffe"
+    },
+    "candidate-cache-probe": {
+      "command": [
+        "env",
+        "MO_PR30982_MODE=probe",
+        "MO_PR30982_CANCEL=1",
+        "MO_PR30982_PHASE=candidate-cache-probe",
+        "MO_PR30982_KEYS=3000000",
+        "MO_PR30982_REPORT=/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/candidate-cache-probe.json",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/candidate-cache.test",
+        "-test.run",
+        "^TestPR30982NativeEvidence$",
+        "-test.v",
+        "-test.timeout=600s"
+      ],
+      "exit": 0,
+      "elapsed": 21.36474108695984,
+      "files": {
+        "pkg/sql/compile/compile.go": "ac1ceee71be55377b92c2c44d05238dc41bd6f117078843e83007828f27f991a",
+        "pkg/sql/compile/compile_test.go": "fbaac6bfd4884404db7efded26ad847063a4291836e2adb8c6cdb144d14ad868"
+      },
+      "extra_inputs": {
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/candidate-cache.test": "52bcdef579baf10e355e21db864913bc6b9e325d335bd11a1e4ae744c0288523"
+      },
+      "head": "db0a75e38beb75451f124b0a84029c82422bdffe"
+    },
+    "build-candidate-cache": {
+      "command": [
+        ".agents/skills/mo-dev/scripts/mo-cgo-test",
+        "-overlay",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/candidate-overlay.json",
+        "-c",
+        "-o",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/candidate-cache.test",
+        "./pkg/tests/sqlintegration"
+      ],
+      "exit": 0,
+      "elapsed": 10.367706298828125,
+      "files": {
+        "pkg/sql/compile/compile.go": "ac1ceee71be55377b92c2c44d05238dc41bd6f117078843e83007828f27f991a",
+        "pkg/sql/compile/compile_test.go": "fbaac6bfd4884404db7efded26ad847063a4291836e2adb8c6cdb144d14ad868"
+      },
+      "extra_inputs": {
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/candidate-overlay.json": "a2ad3d994489d5996c46d476a1c5f9d987175248c770e12094a51394fe9df8fd",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/native_probe_test.go": "245949dc97ed4556bf19e456f88ed6a45d78e6dfc8d32fd6ffe33713b4a5bc5a",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/fixture-template.go": "a4241d38ca39ae1371b85ae058990fe4320c9b398222ac4fd9d75bbaef1ab31b",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/fixture-testing.go": "f1a2a12fafa5c7a058dea8eb31dee401043c8124370eb0575d41d5e9e7e3d37c"
+      },
+      "head": "db0a75e38beb75451f124b0a84029c82422bdffe"
+    },
+    "build-base-cache": {
+      "command": [
+        ".agents/skills/mo-dev/scripts/mo-cgo-test",
+        "-overlay",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/base-overlay.json",
+        "-c",
+        "-o",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/base-cache.test",
+        "./pkg/tests/sqlintegration"
+      ],
+      "exit": 0,
+      "elapsed": 10.750682592391968,
+      "files": {
+        "pkg/sql/compile/compile.go": "ac1ceee71be55377b92c2c44d05238dc41bd6f117078843e83007828f27f991a",
+        "pkg/sql/compile/compile_test.go": "fbaac6bfd4884404db7efded26ad847063a4291836e2adb8c6cdb144d14ad868"
+      },
+      "extra_inputs": {
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/base-overlay.json": "fac937b1d87ebb9a4a716384476c2eb48612af0d48b6a590ff41d4c912abaadf",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/native_probe_test.go": "245949dc97ed4556bf19e456f88ed6a45d78e6dfc8d32fd6ffe33713b4a5bc5a",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/base-compile.go": "e1ba89196ca9ee93ade7b643e8d1cef585f78bc3ef43d9252d93109d838de0b5",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/fixture-template.go": "a4241d38ca39ae1371b85ae058990fe4320c9b398222ac4fd9d75bbaef1ab31b",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/fixture-testing.go": "f1a2a12fafa5c7a058dea8eb31dee401043c8124370eb0575d41d5e9e7e3d37c"
+      },
+      "head": "db0a75e38beb75451f124b0a84029c82422bdffe"
+    },
+    "abba-0-base": {
+      "command": [
+        "env",
+        "MO_PR30982_MODE=bench",
+        "MO_PR30982_PHASE=abba-0-base",
+        "MO_PR30982_KEYS=3000000",
+        "MO_PR30982_REPORT=/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/abba-0-base.json",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/base-cache.test",
+        "-test.run",
+        "^TestPR30982NativeEvidence$",
+        "-test.v",
+        "-test.timeout=600s"
+      ],
+      "exit": 0,
+      "elapsed": 19.82932162284851,
+      "files": {
+        "pkg/sql/compile/compile.go": "ac1ceee71be55377b92c2c44d05238dc41bd6f117078843e83007828f27f991a",
+        "pkg/sql/compile/compile_test.go": "fbaac6bfd4884404db7efded26ad847063a4291836e2adb8c6cdb144d14ad868"
+      },
+      "extra_inputs": {
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/base-cache.test": "bdb644976edf7fa51fde2a6463ba171ac2c4786864d32e6eee075a3d9259b4f4"
+      },
+      "head": "db0a75e38beb75451f124b0a84029c82422bdffe"
+    },
+    "abba-1-candidate": {
+      "command": [
+        "env",
+        "MO_PR30982_MODE=bench",
+        "MO_PR30982_PHASE=abba-1-candidate",
+        "MO_PR30982_KEYS=3000000",
+        "MO_PR30982_REPORT=/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/abba-1-candidate.json",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/candidate-cache.test",
+        "-test.run",
+        "^TestPR30982NativeEvidence$",
+        "-test.v",
+        "-test.timeout=600s"
+      ],
+      "exit": 0,
+      "elapsed": 18.71731209754944,
+      "files": {
+        "pkg/sql/compile/compile.go": "ac1ceee71be55377b92c2c44d05238dc41bd6f117078843e83007828f27f991a",
+        "pkg/sql/compile/compile_test.go": "fbaac6bfd4884404db7efded26ad847063a4291836e2adb8c6cdb144d14ad868"
+      },
+      "extra_inputs": {
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/candidate-cache.test": "52bcdef579baf10e355e21db864913bc6b9e325d335bd11a1e4ae744c0288523"
+      },
+      "head": "db0a75e38beb75451f124b0a84029c82422bdffe"
+    },
+    "abba-2-candidate": {
+      "command": [
+        "env",
+        "MO_PR30982_MODE=bench",
+        "MO_PR30982_PHASE=abba-2-candidate",
+        "MO_PR30982_KEYS=3000000",
+        "MO_PR30982_REPORT=/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/abba-2-candidate.json",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/candidate-cache.test",
+        "-test.run",
+        "^TestPR30982NativeEvidence$",
+        "-test.v",
+        "-test.timeout=600s"
+      ],
+      "exit": 0,
+      "elapsed": 18.501176595687866,
+      "files": {
+        "pkg/sql/compile/compile.go": "ac1ceee71be55377b92c2c44d05238dc41bd6f117078843e83007828f27f991a",
+        "pkg/sql/compile/compile_test.go": "fbaac6bfd4884404db7efded26ad847063a4291836e2adb8c6cdb144d14ad868"
+      },
+      "extra_inputs": {
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/candidate-cache.test": "52bcdef579baf10e355e21db864913bc6b9e325d335bd11a1e4ae744c0288523"
+      },
+      "head": "db0a75e38beb75451f124b0a84029c82422bdffe"
+    },
+    "abba-3-base": {
+      "command": [
+        "env",
+        "MO_PR30982_MODE=bench",
+        "MO_PR30982_PHASE=abba-3-base",
+        "MO_PR30982_KEYS=3000000",
+        "MO_PR30982_REPORT=/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/abba-3-base.json",
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/base-cache.test",
+        "-test.run",
+        "^TestPR30982NativeEvidence$",
+        "-test.v",
+        "-test.timeout=600s"
+      ],
+      "exit": 0,
+      "elapsed": 22.013377904891968,
+      "files": {
+        "pkg/sql/compile/compile.go": "ac1ceee71be55377b92c2c44d05238dc41bd6f117078843e83007828f27f991a",
+        "pkg/sql/compile/compile_test.go": "fbaac6bfd4884404db7efded26ad847063a4291836e2adb8c6cdb144d14ad868"
+      },
+      "extra_inputs": {
+        "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/base-cache.test": "bdb644976edf7fa51fde2a6463ba171ac2c4786864d32e6eee075a3d9259b4f4"
+      },
+      "head": "db0a75e38beb75451f124b0a84029c82422bdffe"
+    }
+  },
+  "retained_external_artifacts": {
+    "native_probe_test.go": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/native_probe_test.go",
+      "sha256": "245949dc97ed4556bf19e456f88ed6a45d78e6dfc8d32fd6ffe33713b4a5bc5a"
+    },
+    "candidate-overlay.json": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/candidate-overlay.json",
+      "sha256": "a2ad3d994489d5996c46d476a1c5f9d987175248c770e12094a51394fe9df8fd"
+    },
+    "base-overlay.json": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/base-overlay.json",
+      "sha256": "fac937b1d87ebb9a4a716384476c2eb48612af0d48b6a590ff41d4c912abaadf"
+    },
+    "fixture-template.go": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/fixture-template.go",
+      "sha256": "a4241d38ca39ae1371b85ae058990fe4320c9b398222ac4fd9d75bbaef1ab31b"
+    },
+    "fixture-testing.go": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/fixture-testing.go",
+      "sha256": "f1a2a12fafa5c7a058dea8eb31dee401043c8124370eb0575d41d5e9e7e3d37c"
+    },
+    "base-compile.go": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/base-compile.go",
+      "sha256": "e1ba89196ca9ee93ade7b643e8d1cef585f78bc3ef43d9252d93109d838de0b5"
+    },
+    "base-cache.test": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/base-cache.test",
+      "sha256": "bdb644976edf7fa51fde2a6463ba171ac2c4786864d32e6eee075a3d9259b4f4"
+    },
+    "candidate-cache.test": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/candidate-cache.test",
+      "sha256": "52bcdef579baf10e355e21db864913bc6b9e325d335bd11a1e4ae744c0288523"
+    },
+    "candidate-cache-probe.json": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/candidate-cache-probe.json",
+      "sha256": "dcc2bd61984f17b11a4c2b6fc26d56806b0d6d49e700056ffd00a0c8a9ae4c51"
+    },
+    "abba-phases.json": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/abba-phases.json",
+      "sha256": "1f96281b96b9cff946fd25eef50ce6c46de6ee5781f8abbef969d6b08c89972a"
+    },
+    "abba-summary.json": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/abba-summary.json",
+      "sha256": "8c9be13db2b7b430a2bfb89113202cd24a39a3cf0a4f49f876dd277e5290a385"
+    },
+    "compiler-normal.log": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/compiler-normal.log",
+      "sha256": "cd1340fbb3103c6e8b844dcdc64c2ef713c75dad517d6801f372a71d46d5f19d"
+    },
+    "compiler-race.log": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/compiler-race.log",
+      "sha256": "243e293393928b8dc3ce7d89f6c3ed8b7c1b617972757da5566d85bd1ac5eb84"
+    },
+    "sca.log": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/sca.log",
+      "sha256": "4174eb2882ac2ccfef03564d272ce7c4186384dce755bb952cdeea287d0d0adb"
+    },
+    "vet.log": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/vet.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "candidate-cache-probe.log": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/candidate-cache-probe.log",
+      "sha256": "71bd21b6f136d1a2bf97ad1bf4b453f53c9f05959af8ef461a60e2aec56d8573"
+    },
+    "build-candidate-cache.log": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/build-candidate-cache.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "build-base-cache.log": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/build-base-cache.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "abba-0-base.log": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/abba-0-base.log",
+      "sha256": "0a5348593a5bba17f7f47da9282ab5604e085e92230c166b57ece575dbab061e"
+    },
+    "abba-1-candidate.log": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/abba-1-candidate.log",
+      "sha256": "06ceab5d69cfd8d5dabb1174002a42d64fec026743a63526cf2cc2d7491fc4b6"
+    },
+    "abba-2-candidate.log": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/abba-2-candidate.log",
+      "sha256": "71e1e7022240f0f428e80259c1a37f98756d4e0504c16f8d40dd044ee07ce95c"
+    },
+    "abba-3-base.log": {
+      "path": "/home/xupeng/.codex/issue-to-pr/matrixone/pr-30982/abba-3-base.log",
+      "sha256": "2d629a0edac16834b3f38ef96dd8b374cb45bc6038d14b0c87bf43e71cdadc7d"
+    }
+  },
+  "limitations": [
+    "Synthetic data on this Linux host with explicit 512MiB caches and four threads; no original ClickBench data or DuckDB comparison.",
+    "Historical Apple M4 timing reports were not recovered and are not evidence for these measurements.",
+    "Initial diagnostic SQL hint overwrote estimates; discarded. Initial default 32MiB-cache probe was I/O dominated; not used as benchmark evidence. Both diagnostic records remain external.",
+    "Cancellation observed Group and shuffle execution; no claim of cancellation specifically during spill I/O.",
+    "These empirical guards do not estimate worker-local skew or guarantee universal speedups."
+  ],
+  "static_analysis": {
+    "go_vet": "PASS",
+    "molint_exit": 0,
+    "molint_existing_diagnostics": [
+      {
+        "check": "checkrecover",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/allocation_account_lifecycle.go:31:19",
+        "message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.allocationLifecycleCall()",
+        "file": "pkg/sql/compile/allocation_account_lifecycle.go",
+        "base_and_head_sha256": "8f80fec72d3b6713596c084fc42776462761338ea0cfe187b831efa33a4e7cf5"
+      },
+      {
+        "check": "checkrecover",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/compile2.go:615:19",
+        "message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.Compile.Run()",
+        "file": "pkg/sql/compile/compile2.go",
+        "base_and_head_sha256": "613465ed1f2abb1dd274fc5a8b13899294bdc07856ddcf25cc9a4c752baf1a86"
+      },
+      {
+        "check": "checkrecover",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/compile2.go:1017:19",
+        "message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.Compile.buildRetryCompile()",
+        "file": "pkg/sql/compile/compile2.go",
+        "base_and_head_sha256": "613465ed1f2abb1dd274fc5a8b13899294bdc07856ddcf25cc9a4c752baf1a86"
+      },
+      {
+        "check": "checkrecover",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/remoterunServer.go:412:17",
+        "message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.handlePipelineMessage()",
+        "file": "pkg/sql/compile/remoterunServer.go",
+        "base_and_head_sha256": "154af88dbb84a155a2152f814368c108fa322616257aa5d587f4abd3300f8b38"
+      },
+      {
+        "check": "checkrecover",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/remoterunServer.go:435:20",
+        "message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.handlePipelineMessage()",
+        "file": "pkg/sql/compile/remoterunServer.go",
+        "base_and_head_sha256": "154af88dbb84a155a2152f814368c108fa322616257aa5d587f4abd3300f8b38"
+      },
+      {
+        "check": "checkrecover",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/sirius_runtime.go:131:19",
+        "message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.Compile.runSiriusRead()",
+        "file": "pkg/sql/compile/sirius_runtime.go",
+        "base_and_head_sha256": "2a44fc6d9f57a0b782b593c02b839e350063ffa9968c8abd9bbc512f743d1149"
+      },
+      {
+        "check": "checkrecover",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/temporary_ddl.go:148:12",
+        "message": "unsafe recover() found: in github.com/matrixorigin/matrixone/pkg/sql/compile.Scope.createSessionTemporaryTable()",
+        "file": "pkg/sql/compile/temporary_ddl.go",
+        "base_and_head_sha256": "8ad84136bbd1b54cb382bde1d5bd2ddbf2c0e0c0100dc5216f0ade6f97f5bf73"
+      },
+      {
+        "check": "checkunsafe",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/dependent.go:35:2",
+        "message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/compile/dependent.go",
+        "file": "pkg/sql/compile/dependent.go",
+        "base_and_head_sha256": "0a20605879416399a68fbda28e14f71dded3346d2371872257885f50269e78d7"
+      },
+      {
+        "check": "checkunsafe",
+        "posn": "/home/xupeng/.cache/pr-30982-repair/pkg/sql/compile/dependent_external.go:28:2",
+        "message": "importing the unsafe package is not allowed in this file: github.com/matrixorigin/matrixone/pkg/sql/compile/dependent_external.go",
+        "file": "pkg/sql/compile/dependent_external.go",
+        "base_and_head_sha256": "9d0ab5aa793c141ff8debe3bbcc558baab67851e785a3a544ce4772a4a62a844"
+      }
+    ],
+    "golangci_configured_issues": 0,
+    "new_findings": 0
+  }
+}

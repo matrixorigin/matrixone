@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -166,6 +167,24 @@ func TestClusterAdmissionAtStart(t *testing.T) {
 			})
 		}
 	}
+	// Synthetic rollback belongs to the same private admission namespace. It
+	// must not queue behind real clusters or need a second helper process.
+	t.Run("completed-error-rollback", func(t *testing.T) {
+		t.Setenv(clusteradmission.ProcessPoolSizeEnv, "2")
+		failure := errors.New("startup and withdrawal failed")
+		svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
+		c, _ := newFixture(t)
+		c.startFn = func(op *operator) error { op.reset.svc = svc; return failure }
+		require.ErrorIs(t, c.Start(), failure)
+		require.Nil(t, c.testAdmission)
+		require.False(t, c.services[0].needsCleanup())
+		require.Equal(t, int32(1), svc.closeCount.Load())
+
+		next, starts := newFixture(t)
+		require.NoError(t, next.Start(), "completed rollback must admit the next owner")
+		require.Equal(t, 1, *starts)
+	})
+
 }
 
 func runInIsolatedClusterAdmissionProcess(t *testing.T, runPattern string) bool {
@@ -173,7 +192,12 @@ func runInIsolatedClusterAdmissionProcess(t *testing.T, runPattern string) bool 
 	if os.Getenv("MO_EMBED_ADMISSION_HELPER") == "1" {
 		return false
 	}
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run="+runPattern)
+	args := []string{"-test.run=" + runPattern}
+	// Keep subprocess counters in the directory collected by go test.
+	if coverageDir := flag.Lookup("test.gocoverdir"); coverageDir != nil && coverageDir.Value.String() != "" {
+		args = append(args, "-test.gocoverdir="+coverageDir.Value.String())
+	}
+	cmd := exec.CommandContext(t.Context(), os.Args[0], args...)
 	cmd.Env = append(os.Environ(), "MO_EMBED_ADMISSION_HELPER=1", "TMPDIR="+t.TempDir())
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
@@ -277,23 +301,6 @@ func TestOperatorStartPreservesIncompleteOwnership(t *testing.T) {
 	require.NoError(t, op.Close())
 	require.False(t, op.needsCleanup())
 	require.Nil(t, commonruntime.ServiceRuntime(op.sid))
-}
-
-func TestClusterStartRollbackCompletedErrorReleasesAdmission(t *testing.T) {
-	t.Setenv(clusteradmission.ProcessPoolSizeEnv, "2")
-	failure := errors.New("startup and withdrawal failed")
-	svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
-	op := &operator{serviceType: metadata.ServiceType_CN}
-	c := &cluster{services: []*operator{op}}
-	WithTesting()(c)
-	// The synthetic failure must remain reachable beside the shared base.
-	WithConcurrentTestClusters()(c)
-	c.startFn = func(op *operator) error { op.reset.svc = svc; return failure }
-	t.Cleanup(func() { require.NoError(t, c.Close()) })
-	require.ErrorIs(t, c.Start(), failure)
-	require.Nil(t, c.testAdmission)
-	require.False(t, op.needsCleanup())
-	require.Equal(t, int32(1), svc.closeCount.Load())
 }
 
 func (s *closeTrackingFileService) Close(context.Context) {
@@ -1049,7 +1056,13 @@ func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 						wantFetch = time.Second
 					}
 					require.Equal(t, wantFetch, cfg.CN.TaskRunner.FetchInterval.Duration)
-					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.TaskRunner.FetchInterval.Duration = 17 * time.Second })
+					require.Equal(t, wantFetch, cfg.CN.ISCP.SyncTaskInterval.Duration)
+					require.Equal(t, wantFetch, cfg.CN.ISCP.IndexFlushWatermarkInterval.Duration)
+					svc.Adjust(func(cfg *ServiceConfig) {
+						cfg.CN.TaskRunner.FetchInterval.Duration = 17 * time.Second
+						cfg.CN.ISCP.SyncTaskInterval.Duration = 17 * time.Millisecond
+						cfg.CN.ISCP.IndexFlushWatermarkInterval.Duration = 23 * time.Millisecond
+					})
 					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.LockService.KeepBindDuration.Duration = 350 * time.Millisecond })
 				}
 				if svc.ServiceType() == metadata.ServiceType_LOG {
@@ -1095,6 +1108,8 @@ func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 				require.Equal(t, 8192, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
 				require.Equal(t, 350*time.Millisecond, cn.GetServiceConfig().CN.LockService.KeepBindDuration.Duration)
 				require.Equal(t, 17*time.Second, cn.GetServiceConfig().CN.TaskRunner.FetchInterval.Duration)
+				require.Equal(t, 17*time.Millisecond, cn.GetServiceConfig().CN.ISCP.SyncTaskInterval.Duration)
+				require.Equal(t, 23*time.Millisecond, cn.GetServiceConfig().CN.ISCP.IndexFlushWatermarkInterval.Duration)
 			}
 		})
 	}

@@ -39,9 +39,12 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
-		{features.BinaryAssignmentSemantics, defines.MORPCVersion130,
+		{features.BinaryAssignmentSemantics, defines.MORPCVersion133,
 			"binary assignment semantics require a versioned remote destination",
 			"remote destination does not support binary assignment semantics (MORPC version %d)"},
+		{features.FloatConversionSemantics, defines.MORPCVersion132,
+			"corrected float conversions require a versioned remote destination",
+			"remote destination does not support corrected float conversions (MORPC version %d)"},
 		{features.LoadFKIgnoreCheck, defines.MORPCVersion125,
 			"LOAD IGNORE foreign-key filtering requires a versioned remote destination",
 			"remote destination does not support LOAD IGNORE foreign-key filtering (MORPC version %d)"},
@@ -51,6 +54,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.ScalarDivision && proc.DivisionByZeroWarningsEnabled(), defines.MORPCVersion116,
 			"SELECT division diagnostics require a versioned remote destination",
 			"remote destination does not support SELECT division diagnostics (MORPC version %d)"},
+		{features.IncompleteTemporalStrings, defines.MORPCVersion130,
+			"incomplete temporal strings require a versioned remote destination",
+			"remote destination does not support incomplete temporal strings (MORPC version %d)"},
 		{features.IntegerArithmeticDomains, defines.MORPCVersion71,
 			"checked integer arithmetic requires a versioned remote destination",
 			"remote destination does not support checked integer arithmetic (MORPC version %d)"},

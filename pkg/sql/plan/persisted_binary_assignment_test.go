@@ -54,9 +54,9 @@ func TestPersistedBinaryAssignmentProtocol(t *testing.T) {
 			required, err := RequiredPersistedExpressionProtocolVersion(&decoded)
 			require.NoError(t, err)
 			if tc.want {
-				require.Equal(t, defines.MORPCVersion130, required)
+				require.Equal(t, defines.MORPCVersion133, required)
 			} else {
-				require.Less(t, required, defines.MORPCVersion130)
+				require.Less(t, required, defines.MORPCVersion133)
 			}
 		})
 	}

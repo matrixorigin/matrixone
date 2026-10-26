@@ -86,7 +86,10 @@ func executionRemoteExpressionProtocolVersion(proc *process.Process, features pl
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
 	if features.BinaryAssignmentSemantics {
-		required = max(required, defines.MORPCVersion130)
+		required = max(required, defines.MORPCVersion133)
+	}
+	if features.FloatConversionSemantics {
+		required = max(required, defines.MORPCVersion132)
 	}
 	if features.LoadFKIgnoreCheck {
 		required = max(required, defines.MORPCVersion125)
@@ -150,6 +153,9 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	}
 	if features.JSONNumericComparisons {
 		required = max(required, defines.MORPCVersion128)
+	}
+	if features.IncompleteTemporalStrings {
+		required = max(required, defines.MORPCVersion130)
 	}
 	return required
 }
@@ -324,15 +330,15 @@ func validateTemporalResultProtocol(proc *process.Process, owner any) error {
 	if required > 0 && (!known || version < required) {
 		return moerr.NewNotSupportedf(context.Background(), "CTAS population requires MORPC protocol version %d", required)
 	}
-	if known && version >= defines.MORPCVersion130 {
+	if known && version >= defines.MORPCVersion133 {
 		return nil
 	}
 	features, err := plan.RequiredRemoteExpressionFeatures(owner)
 	if err != nil {
 		return err
 	}
-	if features.BinaryAssignmentSemantics && (!known || version < defines.MORPCVersion130) {
-		return moerr.NewNotSupportedNoCtx("binary assignment semantics require MORPC protocol version 130")
+	if features.BinaryAssignmentSemantics && (!known || version < defines.MORPCVersion133) {
+		return moerr.NewNotSupportedNoCtx("binary assignment semantics require MORPC protocol version 133")
 	}
 	if features.LoadFKIgnoreCheck && (!known || version < defines.MORPCVersion125) {
 		return moerr.NewNotSupportedNoCtx("LOAD IGNORE foreign-key filtering requires MORPC protocol version 125")

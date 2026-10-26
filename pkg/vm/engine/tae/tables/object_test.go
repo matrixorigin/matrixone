@@ -33,7 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -167,7 +166,6 @@ func TestAppendableUpgradeAfterSnapshotPublication(t *testing.T) {
 }
 
 func TestGetActiveRow(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ts1 := types.BuildTS(1, 0)
 	schema := catalog.MockSchema(1, 0)
 	c := catalog.MockCatalog(nil)
@@ -219,7 +217,6 @@ func TestGetActiveRow(t *testing.T) {
 }
 
 func TestApplyAppendLockedPadsMissingColumnsForUpgradedSchema(t *testing.T) {
-	defer testutils.AfterTest(t)()
 
 	oldSchema := catalog.MockSchema(2, 0)
 	newSchema := oldSchema.Clone()
@@ -280,7 +277,6 @@ func TestApplyAppendLockedPadsMissingColumnsForUpgradedSchema(t *testing.T) {
 }
 
 func TestMemoryNodeRollbackHoleVisibilityAndWriteLayout(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	rt := moruntime.ServiceRuntime("")
 	originalVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion11)
