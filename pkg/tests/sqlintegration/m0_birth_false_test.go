@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/m0admission"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -149,6 +150,7 @@ func TestM0BirthFalseSQL(t *testing.T) {
 		const table = schema + ".customer"
 		defer cleanupSQLIntegration(t, cn, "drop snapshot if exists m0_birth_false_before", "drop snapshot if exists m0_birth_false_history", "drop database if exists "+schema)
 		m0Exec(t, ctx, db, "create database "+schema)
+		t.Run("metadata_birth_fill", func(t *testing.T) { m0BirthMetadataControls(t, ctx, db, schema, cn) })
 		m0Exec(t, ctx, db, "create table "+schema+".empty_customer"+m0RollbackCustomerSchema)
 		m0Exec(t, ctx, db, "alter table "+schema+".empty_customer add column cleaned boolean default false")
 		var emptyCount int
@@ -308,3 +310,82 @@ func TestM0BirthFalseDeadlineTNApplied(t *testing.T) {
 }
 
 func TestM0BirthFalseDMLInterleave(t *testing.T) { m0RunAlterInsertInterleave(t, true) }
+
+// Reuse the real SQL fixture: metadata APIs must expose the same historical
+// values as COPY, including when old absent suffixes and stored NULLs coexist.
+func m0BirthMetadataControls(t *testing.T, ctx context.Context, db *sql.DB, schema string, cn embed.ServiceOperator) {
+	t.Helper()
+	for _, algorithm := range []string{"", ", algorithm=copy"} {
+		name := "metadata_birth"
+		if algorithm != "" {
+			name = "metadata_copy"
+		}
+		table := schema + "." + name
+		flush := func() {
+			m0Exec(t, ctx, db, "select mo_ctl('dn','flush','"+table+"')")
+			service := cn.RawService().(cnservice.Service)
+			frontier, _ := service.GetClock().Now()
+			applied, err := service.GetTxnClient().WaitLogTailAppliedAt(ctx, frontier)
+			require.NoError(t, err)
+			require.False(t, applied.Less(frontier))
+		}
+		m0Exec(t, ctx, db, "create table "+table+m0RollbackCustomerSchema)
+		for _, row := range []string{"(1,1,1,50000,100,10)", "(2,1,1,50000,100,NULL)"} {
+			m0Exec(t, ctx, db, "insert into "+table+" values"+row)
+			flush()
+		}
+		require.NotEmpty(t, m0ObjectFingerprints(t, ctx, db, table))
+		beforeID, beforeVersion := m0TableGeneration(t, ctx, db, schema, name)
+		m0Exec(t, ctx, db, "alter table "+table+" add column flag boolean default false"+algorithm)
+		if algorithm != "" {
+			flush() // COPY creates a new target; expose its persisted metadata too.
+		}
+		var rows, nulls int
+		require.NoError(t, db.QueryRowContext(ctx, "select sum(rows_cnt),sum(null_cnt) from metadata_scan(?, 'flag') g", table).Scan(&rows, &nulls))
+		require.Equal(t, 2, rows, name)
+		require.Zero(t, nulls, name)
+		var values string
+		require.NoError(t, db.QueryRowContext(ctx, "select group_concat(cast(flag as varchar) order by c_id) from "+table).Scan(&values))
+		t.Logf("metadata source=%s values=%s layout=%v", name, values, m0StoredColumnLayout(t, ctx, db, schema, name))
+		var minBytes, maxBytes string
+		require.NoError(t, db.QueryRowContext(ctx, "select group_concat(hex(`min`)),group_concat(hex(`max`)) from metadata_scan(?, 'flag') g", table).Scan(&minBytes, &maxBytes))
+		t.Logf("metadata source=%s min=%s max=%s", name, minBytes, maxBytes)
+
+		var low, high string
+		require.NoError(t, db.QueryRowContext(ctx, "select mo_table_col_min(?,?,'flag'),mo_table_col_max(?,?,'flag')", schema, name, schema, name).Scan(&low, &high))
+		require.Equal(t, "false", low, name)
+		// The metadata API exposes persisted bounds, not exact row extrema.
+		// COPY may conservatively publish [false,true] for all-false data.
+		wantHigh := "false"
+		for _, encoded := range strings.Split(maxBytes, ",") {
+			require.Contains(t, []string{"00", "01"}, encoded)
+			if encoded == "01" {
+				wantHigh = "true"
+			}
+		}
+		require.Equal(t, wantHigh, high, name)
+		if algorithm == "" {
+			require.Equal(t, "false", high, "the historical fill has an exact false bound")
+		}
+		m0Exec(t, ctx, db, "insert into "+table+" values(3,1,1,50000,100,30,true),(4,1,1,50000,100,40,NULL)")
+		flush()
+		require.NoError(t, db.QueryRowContext(ctx, "select sum(rows_cnt),sum(null_cnt) from metadata_scan(?, 'flag') g", table).Scan(&rows, &nulls))
+		require.Equal(t, 4, rows, name)
+		require.Equal(t, 1, nulls, name)
+		require.NoError(t, db.QueryRowContext(ctx, "select mo_table_col_min(?,?,'flag'),mo_table_col_max(?,?,'flag')", schema, name, schema, name).Scan(&low, &high))
+		require.Equal(t, "false", low, name)
+		require.Equal(t, "true", high, name)
+		if algorithm == "" {
+			currentID, currentVersion := m0TableGeneration(t, ctx, db, schema, name)
+			require.Equal(t, beforeID, currentID, "mixed objects must not hide a COPY exit")
+			require.Equal(t, beforeVersion+1, currentVersion)
+		}
+		// A subsequent unsupported NULL ADD uses COPY exit; its metadata must
+		// still agree with the ordinary control, without changing stored NULLs.
+		m0Exec(t, ctx, db, "alter table "+table+" add column null_flag boolean"+algorithm)
+		flush()
+		require.NoError(t, db.QueryRowContext(ctx, "select sum(rows_cnt),sum(null_cnt) from metadata_scan(?, 'null_flag') g", table).Scan(&rows, &nulls))
+		require.Equal(t, 4, rows, name)
+		require.Equal(t, 4, nulls, name)
+	}
+}

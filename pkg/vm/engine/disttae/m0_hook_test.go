@@ -20,7 +20,9 @@ import (
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -225,4 +227,46 @@ func TestM0BirthStateCNDomainNeedsDescriptor(t *testing.T) {
 	col.Default.OriginString = "0"
 	_, ok = m0AppendBaseFromPlan(table)
 	require.False(t, ok)
+}
+
+func TestM0MissingColumnMetadata(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_bool)}
+	state := &plan.AppendMissingState{FormatVersion: 1, LayoutId: []byte("0123456789abcdef"), BaseWidth: 1, PkSeqnum: 0,
+		Columns: []*plan.ColumnBirthFill{
+			{Seqnum: 1, BirthAppendOrdinal: 1, Type: typ, Kind: plan.MissingFillKind_MISSING_FILL_BOOL_FALSE_V1},
+			{Seqnum: 2, BirthAppendOrdinal: 2, Type: typ, Kind: plan.MissingFillKind_MISSING_FILL_NULL_V1},
+		}}
+	proof, err := objectio.NewM0ObjectProof("old", 1, 3, 42, 2, state)
+	require.NoError(t, err)
+	ctx := objectio.WithM0ProvenObject(t.Context(), proof)
+	col := &plan.ColDef{Seqnum: 1, Typ: typ}
+	zm, nulls, err := m0MissingColumnMetadata(ctx, "old", col, 2)
+	require.NoError(t, err)
+	require.Zero(t, nulls)
+	require.Equal(t, false, zm.GetMin())
+	require.Equal(t, false, zm.GetMax())
+	zm, nulls, err = m0MissingColumnMetadata(ctx, "old", col, 0)
+	require.NoError(t, err)
+	require.Zero(t, nulls)
+	require.False(t, zm.IsInited(), "no logical values for a zero-row object")
+	col.Seqnum = 2
+	zm, nulls, err = m0MissingColumnMetadata(ctx, "old", col, 2)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, nulls)
+	require.False(t, zm.IsInited())
+	for _, tc := range []struct {
+		ctx  context.Context
+		name string
+		seq  uint32
+		typ  plan.Type
+	}{
+		{t.Context(), "old", 1, typ},
+		{ctx, "other", 1, typ},
+		{ctx, "old", 0, typ},
+		{ctx, "old", 3, typ},
+		{ctx, "old", 1, plan.Type{Id: int32(types.T_int32)}},
+	} {
+		_, _, err := m0MissingColumnMetadata(tc.ctx, tc.name, &plan.ColDef{Seqnum: tc.seq, Typ: tc.typ}, 2)
+		require.ErrorIs(t, err, objectio.ErrMissingColumnWithoutProof)
+	}
 }

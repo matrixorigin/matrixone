@@ -19,11 +19,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 var activeM0Enabled bool
@@ -110,3 +112,27 @@ var (
 		return false, objectio.M0ObjectProof{}, nil
 	}
 )
+
+// m0MissingColumnMetadata is only for a fully proved absent physical suffix.
+// It shares the reader's immutable fill rule, never the current INSERT default.
+func m0MissingColumnMetadata(ctx context.Context, name string, col *plan.ColDef, rows int64) (objectio.ZoneMap, int64, error) {
+	kind, ok := objectio.MissingColumnFill(ctx, name, uint16(col.Seqnum))
+	if !ok {
+		return nil, 0, objectio.ErrMissingColumnWithoutProof
+	}
+	zm := index.NewZM(types.T(col.Typ.Id), col.Typ.Scale)
+	switch kind {
+	case plan.MissingFillKind_MISSING_FILL_NULL_V1:
+		return zm, rows, nil
+	case plan.MissingFillKind_MISSING_FILL_BOOL_FALSE_V1:
+		if types.T(col.Typ.Id) != types.T_bool || col.Typ.Width != 0 || col.Typ.Scale != 0 {
+			return nil, 0, objectio.ErrMissingColumnWithoutProof
+		}
+		if rows > 0 {
+			zm = index.SetBool(zm, false)
+		}
+		return zm, 0, nil
+	default:
+		return nil, 0, objectio.ErrMissingColumnWithoutProof
+	}
+}

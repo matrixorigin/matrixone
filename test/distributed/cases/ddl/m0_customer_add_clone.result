@@ -108,6 +108,36 @@ select count(*) as indexed_new_default from birth_index_control where c_id=4 and
 ➤ indexed_new_default[-5,64,0]  𝄀
 1
 drop table birth_index_control;
+create table birth_metadata(c_id int not null, c_d_id int not null, c_w_id int not null, c_credit_lim decimal(12,2), c_ytd_payment decimal(12,2), c_balance decimal(12,2), primary key(c_w_id,c_d_id,c_id));
+insert into birth_metadata values (1,1,1,50000,100,10);
+select count(*) as metadata_flush_ok from (select mo_ctl('dn','flush','m0_customer_child.birth_metadata') as r) g where json_unquote(json_extract(r,'$.result[0].returnStr'))='OK';
+➤ metadata_flush_ok[-5,64,0]  𝄀
+1
+insert into birth_metadata values (2,1,1,50000,100,NULL);
+select count(*) as metadata_flush_ok from (select mo_ctl('dn','flush','m0_customer_child.birth_metadata') as r) g where json_unquote(json_extract(r,'$.result[0].returnStr'))='OK';
+➤ metadata_flush_ok[-5,64,0]  𝄀
+1
+alter table birth_metadata add column flag boolean default false;
+select count(*) as metadata_flush_ok from (select mo_ctl('dn','flush','m0_customer_child.birth_metadata') as r) g where json_unquote(json_extract(r,'$.result[0].returnStr'))='OK';
+➤ metadata_flush_ok[-5,64,0]  𝄀
+1
+select count(*) as metadata_false_stats from (select sum(rows_cnt) as r,sum(null_cnt) as n from metadata_scan('m0_customer_child.birth_metadata','flag') m) g where r=2 and n=0;
+➤ metadata_false_stats[-5,64,0]  𝄀
+1
+select count(*) as metadata_false_bounds from (select mo_table_col_min('m0_customer_child','birth_metadata','flag') as lo,mo_table_col_max('m0_customer_child','birth_metadata','flag') as hi) g where lo='false' and hi in ('false','true');
+➤ metadata_false_bounds[-5,64,0]  𝄀
+1
+insert into birth_metadata values (3,1,1,50000,100,30,true),(4,1,1,50000,100,40,NULL);
+select count(*) as metadata_flush_ok from (select mo_ctl('dn','flush','m0_customer_child.birth_metadata') as r) g where json_unquote(json_extract(r,'$.result[0].returnStr'))='OK';
+➤ metadata_flush_ok[-5,64,0]  𝄀
+1
+select count(*) as metadata_mixed_stats from (select sum(rows_cnt) as r,sum(null_cnt) as n from metadata_scan('m0_customer_child.birth_metadata','flag') m) g where r=4 and n=1;
+➤ metadata_mixed_stats[-5,64,0]  𝄀
+1
+select count(*) as metadata_mixed_extrema from (select mo_table_col_min('m0_customer_child','birth_metadata','flag') as lo,mo_table_col_max('m0_customer_child','birth_metadata','flag') as hi) g where lo='false' and hi='true';
+➤ metadata_mixed_extrema[-5,64,0]  𝄀
+1
+drop table birth_metadata;
 drop snapshot m0_customer_snapshot;
 drop database m0_customer_child;
 drop database m0_customer_parent;

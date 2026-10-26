@@ -666,8 +666,6 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	tableTypes := make([]uint8, dataLength)
 	zms := make([]objectio.ZoneMap, dataLength)
 
-	var meta objectio.ObjectDataMeta
-	var objMeta objectio.ObjectMeta
 	fs, err := fileservice.Get[fileservice.FileService](
 		tbl.getTxn().proc.Base.FileService,
 		defines.SharedFileServiceName)
@@ -675,31 +673,50 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil, nil, err
 	}
 	var updateMu sync.Mutex
+	m0Base, m0AppendDomain := m0AppendBaseFromPlan(tableDef)
 	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
-		var err error
 		location := obj.Location()
-		if objMeta, err = objectio.FastLoadObjectMeta(objCtx, &location, false, fs); err != nil {
+		proofCtx := objCtx
+		provenM0 := false
+		if m0AppendDomain {
+			var proof objectio.M0ObjectProof
+			var proofErr error
+			provenM0, proof, proofErr = activeM0ReadObject(objCtx, tableDef, obj, fs)
+			if proofErr != nil {
+				return proofErr
+			}
+			if provenM0 {
+				proofCtx = objectio.WithM0ProvenObject(objCtx, proof)
+			}
+		}
+		objMeta, err := objectio.FastLoadObjectMeta(objCtx, &location, false, fs)
+		if err != nil {
 			return err
 		}
+		meta := objMeta.MustDataMeta()
 		updateMu.Lock()
 		defer updateMu.Unlock()
-		meta = objMeta.MustDataMeta()
-		if inited {
-			for idx := range zms {
-				zm := meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
-				if !zm.IsInited() {
-					continue
+		for idx := range zms {
+			col := cols[idx]
+			var zm objectio.ZoneMap
+			if provenM0 && col.Seqnum >= m0Base && col.Seqnum > uint32(meta.BlockHeader().MaxSeqnum()) {
+				zm, _, err = m0MissingColumnMetadata(proofCtx, location.Name().String(), col, int64(meta.BlockHeader().Rows()))
+				if err != nil {
+					return err
 				}
+			} else {
+				zm = meta.MustGetColumn(uint16(col.Seqnum)).ZoneMap()
+			}
+			if !inited {
+				// The aggregate owns its bytes; cached object metadata is borrowed.
+				zms[idx] = zm.Clone()
+				tableTypes[idx] = uint8(col.Typ.Id)
+			} else if zm.IsInited() {
 				index.UpdateZM(zms[idx], zm.GetMaxBuf())
 				index.UpdateZM(zms[idx], zm.GetMinBuf())
 			}
-		} else {
-			for idx := range zms {
-				zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
-				tableTypes[idx] = uint8(cols[idx].Typ.Id)
-			}
-			inited = true
 		}
+		inited = true
 
 		return nil
 	}
@@ -797,11 +814,16 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		}
 
 		provenM0 := false
+		proofCtx := objCtx
 		if m0AppendDomain {
+			var proof objectio.M0ObjectProof
 			var proofErr error
-			provenM0, _, proofErr = activeM0ReadObject(objCtx, tableDef, obj, fs)
+			provenM0, proof, proofErr = activeM0ReadObject(objCtx, tableDef, obj, fs)
 			if proofErr != nil {
 				return proofErr
+			}
+			if provenM0 {
+				proofCtx = objectio.WithM0ProvenObject(objCtx, proof)
 			}
 		}
 
@@ -817,6 +839,10 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		for _, col := range needCols {
 			if provenM0 && uint32(col.Seqnum) >= m0Base &&
 				uint32(col.Seqnum) > uint32(meta.BlockHeader().MaxSeqnum()) {
+				zm, nullCnt, err := m0MissingColumnMetadata(proofCtx, objName, col, rowCnt)
+				if err != nil {
+					return err
+				}
 				infoList = append(infoList, &plan.MetadataScanInfo{
 					ColName:    col.Name,
 					IsHidden:   col.Hidden,
@@ -825,8 +851,8 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 					CreateTs:   createTs,
 					DeleteTs:   deleteTs,
 					RowCnt:     rowCnt,
-					NullCnt:    rowCnt,
-					ZoneMap:    objectio.EmptyZm[:],
+					NullCnt:    nullCnt,
+					ZoneMap:    zm,
 					Level:      int32(obj.ObjectStats.GetLevel()),
 				})
 				continue
