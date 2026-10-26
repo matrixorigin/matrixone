@@ -1912,4 +1912,8 @@ func TestFloatDecimalShortestRounding(t *testing.T) {
 		_, err = Decimal128FromFloat64(value, 5, 2)
 		require.Error(t, err)
 	}
+	for _, target := range [][2]int32{{0, 0}, {19, 0}, {6, -1}, {5, 6}} {
+		_, err := Decimal64FromFloat64(1.234, target[0], target[1])
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	}
 }
