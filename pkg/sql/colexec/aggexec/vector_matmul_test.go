@@ -843,6 +843,74 @@ func TestVectorMatmulCompactionScratchAdmission(t *testing.T) {
 	}
 }
 
+// At every account limit, a merge whose preflight succeeds also succeeds, into an empty
+// destination and into one whose arena has spare room.
+func TestVectorMatmulPreflightMergeAdmitsOrder(t *testing.T) {
+	cfg := vmConfig(2, [][]float32{{1, 0, 0, 0}, {0, 1, 0, 0}})
+	for _, prefill := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prefill=%v", prefill), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+			mk := func(allocation *AllocationAccount) (*vectorMatmulExec, error) {
+				agg, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_int64.ToType(), vmVecType()})
+				require.NoError(t, err)
+				exec := agg.(*vectorMatmulExec)
+				require.NoError(t, exec.SetExtraInformation(cfg, 0))
+				if err := exec.SetAllocationAccount(allocation); err != nil {
+					exec.Free()
+					return nil, err
+				}
+				if err := exec.GroupGrow(1); err != nil {
+					exec.Free()
+					return nil, err
+				}
+				if prefill {
+					vecs := vmVectors(t, mp, []int64{9}, [][]float32{{0, 0, 1, 0}})
+					defer vmFree(mp, vecs)
+					if err := exec.PreflightBatchFill(0, []uint64{1}, vecs); err != nil {
+						exec.Free()
+						return nil, err
+					}
+					require.NoError(t, exec.BatchFill(0, []uint64{1}, vecs))
+				}
+				return exec, nil
+			}
+			src, err := mk(vmAllocation(t))
+			require.NoError(t, err)
+			defer src.Free()
+			vecs := vmVectors(t, mp, []int64{1, 2, 3}, [][]float32{{1, 0, 0, 0}, {0, 1, 0, 0}, {1, 1, 0, 0}})
+			defer vmFree(mp, vecs)
+			require.NoError(t, src.PreflightBatchFill(0, []uint64{1, 1, 1}, vecs))
+			require.NoError(t, src.BatchFill(0, []uint64{1, 1, 1}, vecs))
+
+			probe := vmAllocation(t)
+			dst, err := mk(probe)
+			require.NoError(t, err)
+			require.NoError(t, dst.PreflightBatchMerge(src, 0, []uint64{1}))
+			used := probe.account.Snapshot().Used
+			dst.Free()
+
+			admitted := 0
+			for limit := uint64(0); limit <= used; limit++ {
+				dst, err := mk(vmAccountWithLimit(t, limit))
+				if err != nil {
+					require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+					continue
+				}
+				if err := dst.PreflightBatchMerge(src, 0, []uint64{1}); err != nil {
+					require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
+					require.Less(t, limit, used)
+				} else {
+					admitted++
+					require.NoError(t, dst.BatchMerge(src, 0, []uint64{1}))
+				}
+				dst.Free()
+			}
+			require.Equal(t, 1, admitted)
+		})
+	}
+}
+
 // vmPlainCase holds a plain vector type and how a float32 maps to it.
 type vmPlainCase struct {
 	oid    types.T

@@ -482,8 +482,8 @@ with the hits' id text (a row that enters several queries stores its id once). A
 is charged to the aggregate's allocation account; preflight reserves the arena space for
 a batch before the batch is filled, and the arena compacts in place. Compaction and merge
 order the hits by arena offset in one array of `q` × `topk` entry indices, allocated through
-the account on the first compaction or merge; a refused allocation fails the fill or merge
-and leaves the hits unchanged.
+the account on the first compaction or merge, and by merge preflight for every merge
+target; a refused allocation fails the fill or merge and leaves the hits unchanged.
 
 Instances on one CN share its GPU: each uses its own CUDA stream and cuBLASLt
 handle/workspace, and host and device tile memory scale with the instance count
@@ -631,7 +631,8 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   and merge under an allocation account (preflight, in-place arena compaction, no leaked
   bytes); compaction of 32,768 retained distinct hits with no Go heap allocation, the
   index array counted by `Size`; a fill and a merge refused when the account cannot admit
-  the index array; an empty string id next to the id stored at the same arena offset,
+  the index array; at every account limit, a merge into an empty destination or one with
+  spare arena room succeeds whenever its preflight succeeds; an empty string id next to the id stored at the same arena offset,
   through merge and compaction; state codec including malformed input; id text of every supported id type;
   configuration errors; executors share one parsed configuration (parsed once under
   concurrent first use, dropped after the last executor is freed, errors not kept).

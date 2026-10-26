@@ -685,17 +685,26 @@ func (s *vectorMatmulState) insert(j int, e vectorMatmulEntry) {
 	}
 }
 
+// ensureOrder allocates the order scratch used by compaction and merge.
+func (s *vectorMatmulState) ensureOrder() error {
+	if s.q*s.k == 0 || s.order != nil {
+		return nil
+	}
+	order, err := makeAccountedScratch[uint32](s.allocation, s.mp, s.q*s.k)
+	if err != nil {
+		return err
+	}
+	s.order = order
+	return nil
+}
+
 // spanOrder returns the indices of src's live entries sorted by arena span, in s.order.
 func (s *vectorMatmulState) spanOrder(src *vectorMatmulState) ([]uint32, error) {
 	if s.q*s.k == 0 {
 		return nil, nil
 	}
-	if s.order == nil {
-		order, err := makeAccountedScratch[uint32](s.allocation, s.mp, s.q*s.k)
-		if err != nil {
-			return nil, err
-		}
-		s.order = order
+	if err := s.ensureOrder(); err != nil {
+		return nil, err
 	}
 	order := s.order[:0]
 	for j := 0; j < src.q; j++ {
@@ -1750,7 +1759,8 @@ func (exec *vectorMatmulExec) BatchMerge(next AggFuncExec, offset int, groups []
 	return nil
 }
 
-// PreflightBatchMerge creates the target states and reserves each source's arena bytes.
+// PreflightBatchMerge creates the target states, reserves each source's arena bytes and
+// allocates each target's order scratch.
 func (exec *vectorMatmulExec) PreflightBatchMerge(next AggFuncExec, offset int, groups []uint64) error {
 	if exec.allocation == nil {
 		return nil
@@ -1795,6 +1805,9 @@ func (exec *vectorMatmulExec) PreflightBatchMerge(next AggFuncExec, offset int, 
 			return err
 		}
 		if err := s.reserve(extra[i]); err != nil {
+			return err
+		}
+		if err := s.ensureOrder(); err != nil {
 			return err
 		}
 	}
