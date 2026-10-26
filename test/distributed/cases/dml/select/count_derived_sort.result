@@ -1,0 +1,106 @@
+drop database if exists count_derived_sort;
+create database count_derived_sort;
+use count_derived_sort;
+create table items (
+id int primary key,
+category varchar(32),
+name varchar(32),
+n int
+);
+insert into items values
+(1, 'a', 'x', null),
+(2, 'a', 'x', null),
+(3, 'a', null, 10),
+(4, 'b', 'y', 20),
+(5, null, 'z', null);
+select count(*) as total from (select name from items order by name) s;
+➤ total[-5,64,0]  𝄀
+5
+select count(1) as total from (select name from items order by name desc) s;
+➤ total[-5,64,0]  𝄀
+5
+select count(*), count(n) from (select n from items order by n) s;
+➤ count(*)[-5,64,0]  ¦  count(n)[-5,64,0]  𝄀
+5  ¦  2
+select count(*) as total from (select distinct category, name from items order by category, name) s;
+➤ total[-5,64,0]  𝄀
+4
+select count(name) as total from (select distinct category, name from items order by category, name) s;
+➤ total[-5,64,0]  𝄀
+3
+select count(distinct name) as total from (select name from items order by name) s;
+➤ total[-5,64,0]  𝄀
+3
+select count(*), sum(n) from (select n from items order by n) s;
+➤ count(*)[-5,64,0]  ¦  sum(n)[-5,64,0]  𝄀
+5  ¦  30
+select count(*), count(n) from (select n from items where id < 0 order by id) s;
+➤ count(*)[-5,64,0]  ¦  count(n)[-5,64,0]  𝄀
+0  ¦  0
+create table categories (id int primary key, category varchar(32));
+insert into categories values (1, 'a'), (2, 'b'), (3, 'a');
+select count(*) as total from (
+select distinct i.category, i.name
+from items i join categories c on i.category = c.category
+order by i.category, i.name
+) s;
+➤ total[-5,64,0]  𝄀
+3
+select count(name) as total from (
+select distinct i.category, i.name
+from items i join categories c on i.category = c.category
+order by i.category, i.name
+) s;
+➤ total[-5,64,0]  𝄀
+2
+select count(n) as total from (select n from items order by id desc limit 2) s;
+➤ total[-5,64,0]  𝄀
+1
+select count(n) as total from (select n from items order by id desc limit 3 offset 1) s;
+➤ total[-5,64,0]  𝄀
+2
+select count(*) as total from (select category from items order by id desc limit 2) s where category = 'a';
+➤ total[-5,64,0]  𝄀
+0
+select count(rn) as total from (select row_number() over (order by id) as rn from items order by rn desc) s;
+➤ total[-5,64,0]  𝄀
+5
+select id from items order by id desc;
+➤ id[4,32,0]  𝄀
+5  𝄀
+4  𝄀
+3  𝄀
+2  𝄀
+1
+select count(*) from (select cast(name as decimal(10,0)) as k from items order by k) s;
+invalid input: "x" is invalid decimal string
+create table left_join_keepalive_l (id int primary key);
+create table left_join_keepalive_r (id int primary key, bad varchar(32));
+insert into left_join_keepalive_l values (1);
+insert into left_join_keepalive_r values (1, 'bad');
+select count(*) from (
+select l.id
+from left_join_keepalive_l l left join left_join_keepalive_r r
+on l.id = r.id and cast(r.bad as decimal(10,0)) > 0
+order by r.id
+) s;
+invalid input: "bad" is invalid decimal string
+select count(*) as total from (
+select l.id
+from left_join_keepalive_l l left join left_join_keepalive_r r
+on l.id = r.id
+order by r.id
+) s;
+➤ total[-5,64,0]  𝄀
+1
+prepare count_sorted from 'select count(n) as total from (select n from items where id > ? order by id) s';
+set @min_id = 1;
+execute count_sorted using @min_id;
+➤ total[-5,64,0]  𝄀
+2
+set @min_id = 4;
+execute count_sorted using @min_id;
+➤ total[-5,64,0]  𝄀
+0
+deallocate prepare count_sorted;
+drop database count_derived_sort;

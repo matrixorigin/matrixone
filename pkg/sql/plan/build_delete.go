@@ -66,6 +66,9 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		return nil, err
 	}
 	if query.Correlation == nil {
+		// CTE finalization may have compacted producer steps during createQuery.
+		sourceStep = query.MainOutputStep()
+		sourceOutputStep = sourceStep
 		builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 	}
 

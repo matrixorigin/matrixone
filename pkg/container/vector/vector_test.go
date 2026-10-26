@@ -429,35 +429,6 @@ func TestConst(t *testing.T) {
 	require.Equal(t, int64(0), mp.CurrNB())
 }
 
-/*
-func TestWindowWithNulls(t *testing.T) {
-	v0 := NewVec(types.T_int8.ToType())
-	mp := mpool.MustNewZero()
-
-	_ = AppendFixed(v0, int8(0), false, mp)
-	_ = AppendFixed(v0, int8(1), false, mp)
-	_ = AppendFixed(v0, int8(2), false, mp)
-	_ = AppendFixed(v0, int8(-1), true, mp) // v0[3] = null
-	_ = AppendFixed(v0, int8(6), false, mp)
-	_ = AppendFixed(v0, int8(-1), true, mp) // v0[5] = null
-	_ = AppendFixed(v0, int8(-1), true, mp) // v0[6] = null
-	_ = AppendFixed(v0, int8(6), false, mp)
-	_ = AppendFixed(v0, int8(7), false, mp)
-	_ = AppendFixed(v0, int8(8), false, mp)
-
-	require.Equal(t, []uint64{3, 5, 6}, v0.GetNulls().Np.ToArray())
-
-	start, end := 1, 7
-	v0Window := NewVec(types.T_int8.ToType())
-	//v0Window = Window(v0, start, end, v0Window)
-	require.Equal(t, MustFixedColWithTypeCheck[int8](v0)[start:end], MustFixedColWithTypeCheck[int8](v0Window))
-	require.Equal(t, []uint64{2, 4, 5}, v0Window.GetNulls().Np.ToArray())
-
-	//t.Log(v0.String())
-	//t.Log(v0Window.String())
-}
-*/
-
 func TestAppend(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := NewVec(types.T_int8.ToType())

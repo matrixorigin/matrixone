@@ -99,6 +99,7 @@ func ISCPTaskExecutorFactory(
 	cdUUID string,
 	mp *mpool.MPool,
 	rootFS fileservice.FileService,
+	option ISCPExecutorOption,
 ) func(ctx context.Context, task task.Task) (err error) {
 	return func(ctx context.Context, task task.Task) (err error) {
 		var exec *ISCPTaskExecutor
@@ -111,12 +112,14 @@ func ISCPTaskExecutorFactory(
 		defer running.Store(false)
 
 		ctx = context.WithValue(ctx, defines.TenantIDKey{}, catalog.System_Account)
+		// Default filling belongs to this invocation, including attach retries.
+		effectiveOption := option
 		exec, err = NewISCPTaskExecutor(
 			ctx,
 			txnEngine,
 			cnTxnClient,
 			cdUUID,
-			nil,
+			&effectiveOption,
 			mp,
 		)
 		if err != nil {
@@ -204,7 +207,6 @@ func NewISCPTaskExecutor(
 		ownerCtx:    ownerCtx,
 		terminate:   terminate,
 		ctx:         ownerCtx,
-		packer:      types.NewPacker(),
 		tables:      newISCPTableTree(),
 		cnUUID:      cdUUID,
 		txnEngine:   txnEngine,

@@ -22,7 +22,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
 
@@ -256,6 +258,10 @@ func (jobEntry *JobEntry) tryFlushWatermark(
 		sql,
 		jobEntry.tableInfo.exec.cnUUID,
 		txn,
+		// DDL can retire these jobs in a different order. A periodic progress
+		// writer must not wait while holding earlier rows: its owner rolls the
+		// whole batch back and the existing next flush tick tries again.
+		executor.StatementOption{}.WithWaitPolicy(lock.WaitPolicy_FastFail),
 	)
 	if err != nil {
 		logutil.Error(

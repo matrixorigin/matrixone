@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -565,7 +566,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			if i != 0 {
 				sqlBuilder.WriteString(", ")
 			}
-			sqlBuilder.WriteString(fmt.Sprintf("row('%s', '%s')", dbName, tblName))
+			sqlBuilder.WriteString(fmt.Sprintf("row(%s, %s)", sqlquote.String(dbName), sqlquote.String(tblName)))
 		}
 		sqlBuilder.WriteString(") as tmp(db, tbl)")
 
@@ -604,7 +605,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			if i != 0 {
 				sqlBuilder.WriteString(", ")
 			}
-			sqlBuilder.WriteString(fmt.Sprintf("row('%s', '%s')", dbName, tblName))
+			sqlBuilder.WriteString(fmt.Sprintf("row(%s, %s)", sqlquote.String(dbName), sqlquote.String(tblName)))
 		}
 		sqlBuilder.WriteString(") as tmp(db, tbl)")
 		rets, err := ExeSqlInBgSes(ctx, bh, sqlBuilder.String())
@@ -1222,75 +1223,7 @@ func doCmdFieldList(reqCtx context.Context, ses *Session, _ *InternalCmdFieldLis
 		return moerr.NewNoDB(reqCtx)
 	}
 
-	//Get table infos for the database from the cube
-	//case 1: there are no table infos for the db
-	//case 2: db changed
-	//NOTE: it costs too much time.
-	//It just reduces the information in the auto-completion (auto-rehash) of the mysql client.
-	//var attrs []ColumnInfo
-	//
-	//if tableInfos == nil || db != dbName {
-	//	txnHandler := ses.GetTxnHandler()
-	//	eng := ses.GetStorage()
-	//	db, err := eng.Database(reqCtx, dbName, txnHandler.GetTxn())
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	names, err := db.Relations(reqCtx)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	for _, name := range names {
-	//		table, err := db.Relation(reqCtx, name)
-	//		if err != nil {
-	//			return err
-	//		}
-	//
-	//		defs, err := table.TableDefs(reqCtx)
-	//		if err != nil {
-	//			return err
-	//		}
-	//		for _, def := range defs {
-	//			if attr, ok := def.(*engine.AttributeDef); ok {
-	//				attrs = append(attrs, &engineColumnInfo{
-	//					name: attr.Attr.Name,
-	//					typ:  attr.Attr.Type,
-	//				})
-	//			}
-	//		}
-	//	}
-	//
-	//	if tableInfos == nil {
-	//		tableInfos = make(map[string][]ColumnInfo)
-	//	}
-	//	tableInfos[tableName] = attrs
-	//}
-	//
-	//cols, ok := tableInfos[tableName]
-	//if !ok {
-	//	//just give the empty info when there is no such table.
-	//	attrs = make([]ColumnInfo, 0)
-	//} else {
-	//	attrs = cols
-	//}
-	//
-	//for _, c := range attrs {
-	//	col := new(MysqlColumn)
-	//	col.SetName(c.GetName())
-	//	err = convertEngineTypeToMysqlType(c.GetType(), col)
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	/*
-	//		mysql CMD_FIELD_LIST response: send the column definition per column
-	//	*/
-	//	err = proto.SendColumnDefinitionPacket(col, int(COM_FIELD_LIST))
-	//	if err != nil {
-	//		return err
-	//	}
-	//}
+	// Return an empty field list to avoid catalog scans for client auto-completion.
 	return nil
 }
 
@@ -3500,7 +3433,6 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 }
 
 func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, proc *process.Process) error {
-	var err error
 	drop := &dropAccount{
 		IfExists: da.IfExists,
 	}
@@ -3519,14 +3451,6 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 		&BackgroundExecOption{forcePessimisticRC: true},
 	)
 	defer bh.Close()
-
-	err = bh.Exec(execCtx.reqCtx, "begin;")
-	defer func() {
-		err = finishTxn(execCtx.reqCtx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
 
 	return doDropAccount(execCtx.reqCtx, bh, ses.(*Session), drop)
 }
@@ -3767,6 +3691,10 @@ func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivi
 // handleSwitchRole switches the role to another role
 func handleSwitchRole(ses FeSession, execCtx *ExecCtx, sr *tree.SetRole) error {
 	return doSwitchRole(execCtx.reqCtx, ses.(*Session), sr)
+}
+
+func handleSetDefaultRole(ses FeSession, execCtx *ExecCtx, sdr *tree.SetDefaultRole) error {
+	return doSetDefaultRole(execCtx.reqCtx, ses.(*Session), sdr)
 }
 
 func doKill(ses *Session, execCtx *ExecCtx, k *tree.Kill) error {
@@ -5933,11 +5861,6 @@ func executeStmtWithIncrStmt(ses FeSession,
 			panic("need txn handler 3")
 		}
 
-		//!!!NOTE!!!: it does not work
-		//_, txnOp = ses.GetTxnHandler().GetTxn()
-		//if txnOp != nil {
-		//	err = rollbackLastStmt(execCtx, txnOp, err)
-		//}
 	}()
 
 	err = dispatchStmt(ses, statsArr, execCtx)
@@ -6742,7 +6665,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				seconds = float64(value)
 			}
 			if seconds > 0 {
-				proc.Base.UnixTime = int64(seconds * float64(time.Second))
+				proc.Base.UnixTime = sessionTimestampToUnixNano(seconds)
 			}
 		}
 		if ses.proc != nil {
@@ -6883,6 +6806,20 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		cacheKey, stmts, plans, planSnapshotTS, planStatsVersions, cacheProtocolVersion)
 
 	return nil
+}
+
+// sessionTimestampToUnixNano converts a validated timestamp system variable.
+// Round only the fractional seconds: multiplying the full epoch by 1e9 can
+// round just below a microsecond boundary before temporal functions truncate it.
+func sessionTimestampToUnixNano(seconds float64) int64 {
+	whole, fraction := math.Modf(seconds)
+	fractionMicros := min(int64(math.RoundToEven(fraction*1e6)), 999999)
+	// Like MySQL, cap the rounded fraction rather than carrying into a new second.
+	unixMicros := int64(whole)*1e6 + fractionMicros
+	// The accepted DOUBLE upper endpoint can round above MaxInt64 nanoseconds.
+	// Keep the last complete microsecond representable by the statement clock.
+	unixMicros = min(unixMicros, math.MaxInt64/int64(time.Microsecond))
+	return unixMicros * int64(time.Microsecond)
 }
 
 // sqlForRecordByStatement keeps the sanitized per-statement text aligned with

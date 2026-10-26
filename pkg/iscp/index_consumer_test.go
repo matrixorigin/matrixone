@@ -329,7 +329,7 @@ func TestConsumer(t *testing.T) {
 	defer cancel()
 
 	sqls := make([]string, 0, 1)
-	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		sqls = append(sqls, sql)
 		return executor.Result{AffectedRows: 1}, nil
 	})
@@ -362,7 +362,7 @@ func TestIndexConsumerConsumeReturnsExecErrorAfterRunnerExit(t *testing.T) {
 	defer cancel()
 
 	injectedErr := errors.New("injected index SQL failure")
-	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{}, injectedErr
 	})
 	defer stub1.Reset()
@@ -580,7 +580,7 @@ func TestIndexConsumerWorkerErrorCancelsBlockedNext(t *testing.T) {
 	defer cancel()
 
 	execErr := errors.New("worker failed after first chunk")
-	stubExec := gostub.Stub(&ExecWithResult, func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stubExec := gostub.Stub(&ExecWithResult, func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{}, execErr
 	})
 	defer stubExec.Reset()
@@ -691,7 +691,7 @@ func TestIndexConsumerInFlightSnapshotExecUsesParentContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	stubExec := gostub.Stub(&ExecWithResult, func(execCtx context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stubExec := gostub.Stub(&ExecWithResult, func(execCtx context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		cancel()
 		select {
 		case <-execCtx.Done():
@@ -844,7 +844,7 @@ func TestDataRetrieverUpdateWatermarkTailUsesExecWithResult(t *testing.T) {
 	retriever := NewDataRetriever(ctx, 7, 8, "job", 9, status, 11, ISCPDataType_Tail)
 
 	var execSQL string
-	stubExec := gostub.Stub(&ExecWithResult, func(execCtx context.Context, sql string, cnUUID string, txn client.TxnOperator) (executor.Result, error) {
+	stubExec := gostub.Stub(&ExecWithResult, func(execCtx context.Context, sql string, cnUUID string, txn client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		execSQL = sql
 		require.Equal(t, "cn", cnUUID)
 		require.Equal(t, catalog.System_Account, execCtx.Value(defines.TenantIDKey{}))
@@ -869,7 +869,7 @@ func TestDataRetrieverUpdateWatermarkTailRejectsLostCAS(t *testing.T) {
 		11,
 		ISCPDataType_Tail,
 	)
-	stubExec := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+	stubExec := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator, ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{AffectedRows: 0}, nil
 	})
 	defer stubExec.Reset()
@@ -884,7 +884,7 @@ func TestDataRetrieverUpdateWatermarkTailRejectsLostCAS(t *testing.T) {
 func TestDataRetrieverUpdateWatermarkTailExecError(t *testing.T) {
 	expected := errors.New("watermark update failed")
 	retriever := NewDataRetriever(context.Background(), 7, 8, "job", 9, &JobStatus{}, 11, ISCPDataType_Tail)
-	stubExec := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+	stubExec := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator, ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{}, expected
 	})
 	defer stubExec.Reset()
@@ -998,7 +998,7 @@ func TestIndexConsumerTailProducerErrorRollsBackPartialSQL(t *testing.T) {
 	watermarkAdvanced := false
 	var callbackErr error
 
-	stubExec := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stubExec := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		sqls = append(sqls, sql)
 		return executor.Result{}, nil
 	})
@@ -1078,7 +1078,7 @@ func TestIvfSnapshot(t *testing.T) {
 	defer cancel()
 
 	sqls := make([]string, 0, 1)
-	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		sqls = append(sqls, sql)
 		return executor.Result{}, nil
 	})
@@ -1161,7 +1161,7 @@ func TestIvfTail(t *testing.T) {
 	defer cancel()
 
 	sqls := make([]string, 0, 1)
-	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		sqls = append(sqls, sql)
 		return executor.Result{}, nil
 	})
@@ -1250,7 +1250,7 @@ func TestHnswConsumer(t *testing.T) {
 	defer cancel()
 
 	sqls := make([]string, 0, 1)
-	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stub1 := gostub.Stub(&ExecWithResult, func(_ context.Context, sql string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		sqls = append(sqls, sql)
 		return executor.Result{}, nil
 	})

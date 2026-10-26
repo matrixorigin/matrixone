@@ -168,6 +168,8 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, err
 	}
 	if query.Correlation == nil {
+		// CTE finalization may have compacted producer steps during createQuery.
+		sourceStep = query.MainOutputStep()
 		builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
 	}
 

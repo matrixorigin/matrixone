@@ -1523,11 +1523,6 @@ type LogtailReadBarrier interface {
 	AcquireLogtailReadBarrier(ctx context.Context) (frontier timestamp.Timestamp, err error)
 }
 
-type VectorPool interface {
-	PutBatch(bat *batch.Batch)
-	GetVector(typ types.Type) *vector.Vector
-}
-
 // CatalogCacheGCer is an optional interface for engines that support
 // on-demand GC of the in-memory catalog cache.
 type CatalogCacheGCer interface {

@@ -8384,3 +8384,30 @@ func finalizeTestMaterializedView(t *testing.T, def *plan.TableDef, id uint64) {
 	def.ViewSql = nil
 	def.Props = []*plan.PropertyDef{{Key: mvdefinition.Property, Value: encoded}}
 }
+
+func TestSessionDatabaseNullability(t *testing.T) {
+	for _, database := range []string{"", "tpch"} {
+		t.Run("database="+database, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			proc.Base.SessionInfo.Database = database
+			mock := NewMockOptimizer(false, proc)
+			const selectSQL = "select database() as d, schema() as s, " +
+				"concat('db=', database()) as c, ifnull(database(), 'none') as i, " +
+				"coalesce(schema(), 'none') as f, coalesce(schema(), null) as n"
+			wantNullable := []bool{true, true, true, false, false, true}
+			query, err := buildSingleStmt(mock, t, selectSQL)
+			require.NoError(t, err)
+			columns := GetResultColumnsFromPlan(query)
+			require.Len(t, columns, len(wantNullable))
+			for i, nullable := range wantNullable {
+				require.Equal(t, !nullable, columns[i].Typ.NotNullable, columns[i].Name)
+			}
+			ctas, err := buildSingleStmt(mock, t, "create table tpch.ctas_session_database as "+selectSQL)
+			require.NoError(t, err)
+			columns = ctas.GetDdl().GetCreateTable().GetTableDef().GetCols()
+			for i, nullable := range wantNullable {
+				require.Equal(t, nullable, columns[i].GetDefault().GetNullAbility(), columns[i].Name)
+			}
+		})
+	}
+}

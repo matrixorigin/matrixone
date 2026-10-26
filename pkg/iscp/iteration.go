@@ -367,6 +367,11 @@ func ExecuteIterationWithRuntime(
 	if rel.GetTableID(ctxWithAccount) != iterCtx.tableID {
 		return moerr.NewInternalErrorNoCtx("table id mismatch")
 	}
+	if tableDef.TableType == catalog.SystemTemporaryTable {
+		// The source identity was validated against the scheduled job above.
+		// Tail/snapshot index consumers need the same internal access as InitSQL.
+		ctxWithoutTimeout = defines.AttachTemporaryTableAccess(ctxWithoutTimeout)
+	}
 
 	if iterCtx.fromTS.IsEmpty() {
 		iterCtx.toTS = types.TimestampToTS(txnOp.SnapshotTS())
@@ -1327,21 +1332,21 @@ func NewIterationContext(accountID uint32, tableID uint64, jobNames []string, jo
 // parse error are returned so the caller can fail the InitSQL rather than
 // silently rebuild with defaults; an absent blob (no index match, or no
 // session_vars key) is (nil, nil) — legitimate, skip the overlay.
-func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, dbName, tableName, indexName string) ([]byte, error) {
+func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp client.TxnOperator, dbName, tableName, indexName string) (context.Context, []byte, error) {
 	if dbName == "" || tableName == "" || indexName == "" {
-		return nil, nil
+		return ctx, nil, nil
 	}
 	db, err := cnEngine.Database(ctx, dbName, txnOp)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 	rel, err := db.Relation(ctx, tableName, nil)
 	if err != nil {
-		return nil, err
+		return ctx, nil, err
 	}
 	tableDef := rel.CopyTableDef(ctx)
 	if tableDef == nil {
-		return nil, nil
+		return ctx, nil, nil
 	}
 	for _, idx := range tableDef.Indexes {
 		if idx.IndexName != indexName {
@@ -1349,11 +1354,18 @@ func initSQLSessionVars(ctx context.Context, cnEngine engine.Engine, txnOp clien
 		}
 		sv, serr := catalog.IndexParamsSessionVars(idx.IndexAlgoParams)
 		if serr != nil {
-			return nil, serr
+			return ctx, nil, serr
 		}
-		return sv, nil
+		// InitSQL is trusted index-maintenance SQL generated for this source.
+		// Its background executor has no frontend session. Scope the existing
+		// internal capability to this initialization transaction only, after
+		// resolving both the source and the named index in its tenant.
+		if tableDef.TableType == catalog.SystemTemporaryTable {
+			ctx = defines.AttachTemporaryTableAccess(ctx)
+		}
+		return ctx, sv, nil
 	}
-	return nil, nil
+	return ctx, nil, nil
 }
 
 // initSQLResolver builds the system-variable resolver for an InitSQL build.
@@ -1544,7 +1556,7 @@ func processInitSQL(
 			// through this process's resolver; overlaying the captured values lets the
 			// background rebuild reproduce the create-time config instead of process
 			// defaults. A load/parse failure is surfaced; an absent blob yields nil.
-			sessionVars, err := initSQLSessionVars(runCtx, cnEngine, txn, dbName, tableName, indexName)
+			runCtx, sessionVars, err := initSQLSessionVars(runCtx, cnEngine, txn, dbName, tableName, indexName)
 			if err != nil {
 				return err
 			}

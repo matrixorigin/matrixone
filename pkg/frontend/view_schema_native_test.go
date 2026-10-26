@@ -52,7 +52,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func runNativeViewSchemaCluster(t *testing.T, run func(embed.ServiceOperator, cnservice.Service)) {
+func runNativeViewSchemaCluster(t testing.TB, run func(embed.ServiceOperator, cnservice.Service)) {
 	t.Helper()
 	// 沿用本地集群 fixture 的短相对路径，避免 macOS Unix socket 路径超限。
 	cwd, err := os.Getwd()
@@ -73,19 +73,36 @@ func withNativeViewSchemaRead(t *testing.T, ctx context.Context, cn embed.Servic
 	run func(*frontend.TxnCompilerContext, client.TxnOperator, *process.Process),
 ) {
 	t.Helper()
+	require.NoError(t, withNativeViewSchemaStatement(ctx, cn, svc, database, tenant,
+		func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) error {
+			run(compiler, op, proc)
+			return nil
+		}))
+}
+
+// 返回错误而非在工作 goroutine 中 FailNow，供并发基准复用同一事务 fixture。
+// 所有获得的资源立即登记释放，callback 失败也不会留下请求/事务。
+func withNativeViewSchemaStatement(ctx context.Context, cn embed.ServiceOperator,
+	svc cnservice.Service, database string, tenant *frontend.TenantInfo,
+	run func(*frontend.TxnCompilerContext, client.TxnOperator, *process.Process) error,
+) (err error) {
 	if tenant == nil {
 		tenant = frontend.GetBackgroundTenant()
 	}
 	ctx = defines.AttachAccount(ctx, tenant.TenantID, tenant.UserID, tenant.DefaultRoleID)
 	op, err := svc.GetTxnClient().New(ctx, timestamp.Timestamp{})
-	require.NoError(t, err)
+	if err != nil {
+		return err
+	}
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		require.NoError(t, op.Rollback(cleanupCtx))
+		err = errors.Join(err, op.Rollback(cleanupCtx))
 	}()
 	storage := svc.GetEngine().(*disttae.Engine)
-	require.NoError(t, storage.New(ctx, op))
+	if err = storage.New(ctx, op); err != nil {
+		return err
+	}
 	mp := mpool.MustNewZeroNoFixed()
 	defer mpool.DeleteMPool(mp)
 	proc := process.NewTopProcess(ctx, mp, svc.GetTxnClient(), op, nil,
@@ -95,11 +112,10 @@ func withNativeViewSchemaRead(t *testing.T, ctx context.Context, cn embed.Servic
 	proc.Base.Lim.Size = 64 << 20
 	proc.SetStmtProfile(process.NewStmtProfile(uuid.New(), uuid.New()))
 	defer proc.SetStmtProfile(nil)
-	require.NoError(t, frontend.WithNativeViewSchemaCompilerForTest(ctx, cn.ServiceID(), storage,
+	return frontend.WithNativeViewSchemaCompilerForTest(ctx, cn.ServiceID(), storage,
 		op, proc, database, tenant, func(compiler *frontend.TxnCompilerContext) error {
-			run(compiler, op, proc)
-			return nil
-		}))
+			return run(compiler, op, proc)
+		})
 }
 
 type nativeViewSchemaValue struct {
