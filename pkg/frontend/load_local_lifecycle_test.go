@@ -437,6 +437,83 @@ func TestProcessLoadLocalDrainsOrdinaryErrorToEOF(t *testing.T) {
 	<-consumed
 }
 
+// A parser-retired pipe mid-upload is an ordinary (non-cancel) error too: the
+// over-budget record flavor of #30640 reached the mysql client as 2013
+// because the upload owner returned without draining. The owner must resync
+// the finite client stream at its protocol EOF, return the pipe's error, and
+// serve the next command on the same connection.
+func TestProcessLoadLocalDrainsOrdinaryPipeErrorToEOF(t *testing.T) {
+	ses, protocol, client := newInterruptibleLoadLocal(t)
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ec := newTestExecCtx(ctx, ctrl)
+	ec.proc = testutil.NewProc(t)
+	op := newTestTxnOp()
+	op.checkLockTableBinds = func(context.Context) error { return nil }
+	ec.proc.Base.TxnOperator = op
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "over.csv"}}
+	reader, writer := io.Pipe()
+	// Consume anything the loop pipes through so writer.Write never blocks the
+	// upload owner.
+	consumed := make(chan struct{})
+	go func() {
+		defer close(consumed)
+		buf := make([]byte, 64)
+		for {
+			if _, err := reader.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		done <- processLoadLocal(ctx, ses, ec, param, writer, reader)
+	}()
+	select {
+	case <-protocol.reading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upload did not enter network read")
+	}
+	// The parser side retires the pipe mid-upload (e.g. an over-budget record
+	// rejected after ~64MiB). This is an ordinary statement error — ctx is
+	// never cancelled — so the owner must drain before answering.
+	pipeErr := errors.New("csv record size exceeds max record size")
+	_ = reader.CloseWithError(pipeErr)
+	written := make(chan error, 1)
+	go func() {
+		if _, err := client.Write([]byte{1, 0, 0, 1, 'x'}); err != nil {
+			written <- err
+			return
+		}
+		if _, err := client.Write([]byte{1, 0, 0, 2, 'y'}); err != nil {
+			written <- err
+			return
+		}
+		_, err := client.Write([]byte{0, 0, 0, 3})
+		written <- err
+	}()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, pipeErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("ordinary pipe error left the upload waiting on client EOF")
+	}
+	// No cancellation happened, so no deadline interrupt was needed; the
+	// drained connection survived.
+	require.Zero(t, protocol.interrupts.Load())
+	require.Zero(t, protocol.disconnects.Load())
+	require.EqualValues(t, 1, protocol.frees.Load())
+	require.NoError(t, <-written)
+	// The drained connection serves the next command.
+	nextWritten := make(chan error, 1)
+	go func() { _, err := client.Write([]byte{1, 0, 0, 0, 'q'}); nextWritten <- err }()
+	payload, err := protocol.ioses.ReadLoadLocalPacket()
+	require.NoError(t, err)
+	require.Equal(t, []byte{'q'}, payload)
+	require.NoError(t, <-nextWritten)
+	<-consumed
+}
+
 // The #30640 contract: runner failure cancels the upload, the owner drains the
 // finite client stream to its protocol EOF instead of disconnecting, and the
 // statement still returns the runner's own error on a reusable connection.

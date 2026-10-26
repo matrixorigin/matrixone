@@ -5525,6 +5525,17 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 					return timeoutErr
 				}
 
+				// Ordinary upload-side error (e.g. the parser retired the
+				// pipe after rejecting the stream — the over-budget record
+				// flavor of #30640): the same command-boundary contract as
+				// the bind-change case above applies — resync the finite
+				// client stream at its upload EOF so this error, not 2013,
+				// answers the command on a reusable connection. A legacy
+				// protocol keeps retiring the connection immediately.
+				if _, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+					drainOnExit = true
+					break
+				}
 				return err
 			}
 			// Cancellation interrupted the upload (see the watcher): fall
