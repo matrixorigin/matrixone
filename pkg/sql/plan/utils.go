@@ -2050,6 +2050,10 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 
+	if rule.ContainsTruncatedFloatTextConversion(expr) {
+		return expr, nil
+	}
+
 	// Preserve diagnostic-bearing division subtrees through their parents;
 	// a later execution may use a different sql_mode or statement policy.
 	if rule.ContainsSqlModeDependentDivision(expr) {
