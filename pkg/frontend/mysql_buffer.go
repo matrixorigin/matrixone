@@ -236,13 +236,13 @@ type Conn struct {
 	// old check-then-arm window can never be overwritten again (it either is
 	// already visible when the deadline is chosen, or it expires the armed
 	// deadline right after). The network read itself never runs under it.
-	loadLocalMu sync.Mutex
-	allocator   *BufferAllocator
-	ses                   atomic.Pointer[holder[*Session]]
-	closeFunc             sync.Once
-	service               string
-	outputCounter         atomic.Pointer[perfcounter.CounterSet]
-	responseOutputWait    atomic.Pointer[responseOutputWaitTracker]
+	loadLocalMu        sync.Mutex
+	allocator          *BufferAllocator
+	ses                atomic.Pointer[holder[*Session]]
+	closeFunc          sync.Once
+	service            string
+	outputCounter      atomic.Pointer[perfcounter.CounterSet]
+	responseOutputWait atomic.Pointer[responseOutputWaitTracker]
 }
 
 type responseOutputWaitTracker struct {
