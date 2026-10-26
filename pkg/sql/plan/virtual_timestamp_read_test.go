@@ -90,6 +90,23 @@ func TestVirtualTimestampExpansionAdmissionChecksDescendants(t *testing.T) {
 	}
 	require.Empty(t, VirtualTimestampExpansionFindings(table), "datetime source is session stable")
 	table.Cols[0].Typ.Id = int32(types.T_timestamp)
+	// g15 expands to exactly 65,535 surviving expression nodes. DDL
+	// admission and runtime expansion must count replaced references alike.
+	require.Equal(t, 65535, virtualTimestampReadCost(table, 16))
+	require.NotNil(t, expandVirtualTimestampColumn(table, 16, 1, 0, make(map[int32]bool)))
+	boundary := &pb.TableDef{Name: "boundary", Cols: append([]*pb.ColDef(nil), table.Cols[:17]...)}
+	boundary.Cols = append(boundary.Cols, &pb.ColDef{Name: "exact", GeneratedCol: &pb.GeneratedCol{
+		Expr: &pb.Expr{Expr: &pb.Expr_F{F: &pb.Function{Args: []*pb.Expr{ref(16, types.T_int32)}}}},
+	}})
+	require.Equal(t, maxVirtualTimestampExpansionNodes, virtualTimestampReadCost(boundary, 17))
+	require.Empty(t, VirtualTimestampExpansionFindings(boundary))
+	require.NotNil(t, expandVirtualTimestampColumn(boundary, 17, 1, 0, make(map[int32]bool)))
+	boundary.Cols = append(boundary.Cols, &pb.ColDef{Name: "over", GeneratedCol: &pb.GeneratedCol{
+		Expr: &pb.Expr{Expr: &pb.Expr_F{F: &pb.Function{Args: []*pb.Expr{ref(17, types.T_int32)}}}},
+	}})
+	require.Equal(t, maxVirtualTimestampExpansionNodes+1, virtualTimestampReadCost(boundary, 18))
+	require.Equal(t, "over", VirtualTimestampExpansionFindings(boundary)[0].Column)
+	require.Nil(t, expandVirtualTimestampColumn(boundary, 18, 1, 0, make(map[int32]bool)))
 	findings := VirtualTimestampExpansionFindings(table)
 	require.Len(t, findings, 1)
 	require.Equal(t, "g16", findings[0].Column)

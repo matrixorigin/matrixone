@@ -240,6 +240,14 @@ func expandVirtualTimestampExpr(table *plan.TableDef, expr *plan.Expr, tag, dept
 	if expr == nil || *remaining == 0 {
 		return nil
 	}
+	// An affected column reference is replaced by its expression. The
+	// placeholder does not survive in the plan and must not consume the
+	// budget used by virtualTimestampExprCost and DDL admission.
+	if col, ok := expr.Expr.(*plan.Expr_Col); ok && col.Col != nil &&
+		col.Col.ColPos >= 0 && int(col.Col.ColPos) < len(table.Cols) &&
+		virtualTimestampColumn(table, col.Col.ColPos) {
+		return expandVirtualTimestampColumnBounded(table, col.Col.ColPos, tag, depth, visiting, remaining)
+	}
 	*remaining = *remaining - 1
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Col:
@@ -247,9 +255,6 @@ func expandVirtualTimestampExpr(table *plan.TableDef, expr *plan.Expr, tag, dept
 			return nil
 		}
 		pos := e.Col.ColPos
-		if virtualTimestampColumn(table, pos) {
-			return expandVirtualTimestampColumnBounded(table, pos, tag, depth, visiting, remaining)
-		}
 		if depth > 0 {
 			expr.Expr = &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: tag, ColPos: pos, Depth: depth}}
 		} else {
