@@ -65,13 +65,11 @@ func TestIssue31303TaskNameInjectionCannotCrossTenant(t *testing.T) {
 
 	// sys account owns the secret task.
 	const (
-		sysTaskName   = "sys_31303_task"
-		sysDBName     = "issue_31303_sys"
-		accountName   = "issue31303_acct"
-		tenantDBName  = "issue_31303_tenant"
-		tenantTask    = "tenant_31303_own"
-		hostileName   = "x' or task_name='sys_31303_task' -- "
-		hostileOrName = "x' or account_id=0 or '1'='1"
+		sysTaskName  = "sys_31303_task"
+		sysDBName    = "issue_31303_sys"
+		accountName  = "issue31303_acct"
+		tenantDBName = "issue_31303_tenant"
+		tenantTask   = "tenant_31303_own"
 	)
 	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -141,28 +139,64 @@ func TestIssue31303TaskNameInjectionCannotCrossTenant(t *testing.T) {
 		return count
 	}
 
-	// 1) Cross-tenant read must stay impossible; own runs stay readable.
+	// Attack shapes from the issue. Both resolve the sys account's task on
+	// unfixed code, through different mechanisms, and must resolve nothing in
+	// the tenant scope on fixed code:
+	//   - commentShape terminates the literal and comments out the account_id
+	//     conjunct of the storage WHERE clause.
+	//   - orShape restructures the predicate with OR so its middle disjunct
+	//     (account_id=0 AND task_name='sys_31303_task') selects exactly the
+	//     sys task; a payload matching several tasks would be masked by the
+	//     handlers' len(tasks) != 1 guard, so orShape is deliberately
+	//     single-target.
+	attackShapes := []string{
+		`x' or task_name='sys_31303_task' -- `,
+		`x' or account_id=0 and task_name='sys_31303_task' or '1'='2`,
+	}
+	for _, shape := range attackShapes {
+		// 1) Cross-tenant read must stay impossible: the injection must not
+		// resolve the sys account's runs; the tenant's own runs stay visible.
+		require.Equal(t, 0, showTaskRunRows(shape),
+			"injected SHOW must not leak sys account runs for %q", shape)
+
+		// 2) Cross-tenant delete must stay impossible: the hostile drop finds
+		// nothing in the tenant scope and the sys task survives.
+		execSQLRequire(t, ctx, tenantDB, fmt.Sprintf("drop task if exists `%s`", shape))
+		require.Equal(t, 1, sysTaskCount(),
+			"sys task must survive injected drop for %q", shape)
+
+		// 3) Cross-tenant execute must stay impossible: the hostile lookup
+		// fails, no additional sys run row appears and the task body's
+		// side effect (a sys sink insert) does not run.
+		_, err := tenantDB.ExecContext(ctx, fmt.Sprintf("execute task `%s`", shape))
+		require.Error(t, err, "injected execute must not find the sys task for %q", shape)
+		require.Equal(t, 1, sysRunCount(),
+			"no extra sys run may appear from injected execute for %q", shape)
+		require.Equal(t, 1,
+			queryIssue27719Count(t, ctx, sysDB,
+				"select count(*) from "+sysDBName+".sys_31303_sink"),
+			"sys sink must be untouched by injected execute for %q", shape)
+
+		// 4) Cross-tenant alter must stay impossible: same lookup boundary.
+		_, err = tenantDB.ExecContext(ctx, fmt.Sprintf("alter task `%s` set when (0)", shape))
+		require.Error(t, err, "injected alter must not find the sys task for %q", shape)
+	}
+
+	// The broad tautology shape from the issue is also an information-disclosure
+	// read on unfixed code; it matches several rows, so it is only used for the
+	// read (SHOW) path where the row count bound still detects the leak.
+	require.Equal(t, 0, showTaskRunRows(`x' or account_id=0 or '1'='1`),
+		"OR-tautology injection must not leak sys account runs")
 	require.Equal(t, 1, showTaskRunRows(tenantTask), "tenant must still see its own runs")
-	require.Equal(t, 0, showTaskRunRows(hostileName),
-		"comment-style injection must not leak sys account runs")
-	require.Equal(t, 0, showTaskRunRows(hostileOrName),
-		"OR-style injection must not leak sys account runs")
 
-	// 2) Cross-tenant delete must stay impossible: hostile and plain-name
-	// drops find nothing in the tenant scope and change nothing.
-	execSQLRequire(t, ctx, tenantDB, fmt.Sprintf("drop task if exists `%s`", hostileName))
+	// 5) Plain cross-tenant statements must stay scoped too.
 	execSQLRequire(t, ctx, tenantDB, "drop task if exists "+sysTaskName)
-	require.Equal(t, 1, sysTaskCount(), "sys task must survive tenant drop attempts")
-
-	// 3) Cross-tenant execute must stay impossible: the hostile lookup fails
-	// with an error instead of resolving the sys account's task.
-	_, err = tenantDB.ExecContext(ctx, fmt.Sprintf("execute task `%s`", hostileName))
-	require.Error(t, err, "injected execute must not find the sys task")
 	_, err = tenantDB.ExecContext(ctx, "execute task "+sysTaskName)
 	require.Error(t, err, "plain cross-tenant execute must fail")
-	require.Equal(t, 1, sysRunCount(), "no extra sys run may appear from tenant executes")
+	require.Equal(t, 1, sysTaskCount(), "sys task must survive plain cross-tenant drop")
+	require.Equal(t, 1, sysRunCount(), "no extra sys run may appear from plain execute")
 
-	// 4) CREATE duplicate check must be tenant scoped: the tenant may create
+	// 6) CREATE duplicate check must be tenant scoped: the tenant may create
 	// a task whose name collides with the sys account's task name, and the
 	// subsequent identical-name drop removes only the tenant's own task.
 	execSQLRequire(t, ctx, tenantDB,
@@ -175,12 +209,10 @@ func TestIssue31303TaskNameInjectionCannotCrossTenant(t *testing.T) {
 			tenantAccountID, sysTaskName),
 		"tenant's same-name task must be dropped by the tenant drop")
 
-	// 5) ALTER lookup must stay tenant scoped.
+	// 7) ALTER of the tenant's own task keeps working.
 	execSQLRequire(t, ctx, tenantDB, "alter task "+tenantTask+" set when (0)")
-	_, err = tenantDB.ExecContext(ctx, fmt.Sprintf("alter task `%s` set when (0)", hostileName))
-	require.Error(t, err, "injected alter must not find the sys task")
 
-	// 6) Legal quote/backslash task names round-trip through the public
+	// 8) Legal quote/backslash task names round-trip through the public
 	// interface: create, locate by exact rendered name (show tasks is the
 	// tenant-visible cursor), drop. The doubled-quote/backslash encoding must
 	// resolve to the original bytes under the actual storage connection mode.
