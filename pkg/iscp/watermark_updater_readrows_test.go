@@ -47,7 +47,7 @@ func TestGetTableIDCountsRowsAcrossBatches(t *testing.T) {
 		mpool.DeleteMPool(mp)
 	}()
 
-	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return result, nil
 	}
 
@@ -110,13 +110,13 @@ func TestMarkJobsErrorBySourceTableAllowsMissingISCPLog(t *testing.T) {
 	defer func() { ExecWithResult = oldExecWithResult }()
 
 	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(42))
-	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{}, moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_ISCP_LOG)
 	}
 	require.NoError(t, MarkJobsErrorBySourceTable(ctx, "", nil, 10, "source table was dropped"))
 
 	expected := errors.New("executor unavailable")
-	ExecWithResult = func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{}, expected
 	}
 	require.ErrorIs(t, MarkJobsErrorBySourceTable(ctx, "", nil, 10, "source table was dropped"), expected)
@@ -142,7 +142,7 @@ func TestMarkJobsErrorBySourceTableUpdatesEveryMatchingGeneration(t *testing.T) 
 	})
 	var updates []string
 	calls := 0
-	ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator, statementOptions ...executor.StatementOption) (executor.Result, error) {
 		calls++
 		if calls == 1 {
 			return result, nil
@@ -177,7 +177,7 @@ func TestUnregisterMaterializedViewUsesTargetIdentity(t *testing.T) {
 	})
 	var updates []string
 	calls := 0
-	ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator, statementOptions ...executor.StatementOption) (executor.Result, error) {
 		calls++
 		if calls == 1 {
 			return result, nil
@@ -243,7 +243,7 @@ func TestUnregisterJobsByDBNameEscapesDatabaseLiteral(t *testing.T) {
 	}()
 
 	var capturedSQL string
-	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator, statementOptions ...executor.StatementOption) (executor.Result, error) {
 		capturedSQL = sql
 		return memResult.GetResult(), nil
 	}
@@ -283,7 +283,7 @@ func TestRenameSourcePreservesMaterializedViewTargetAndIndexJobIdentity(t *testi
 	}
 	require.NoError(t, executor.AppendStringRows(rows, 2, specs))
 	var updates []string
-	ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, sql, _ string, _ client.TxnOperator, statementOptions ...executor.StatementOption) (executor.Result, error) {
 		if strings.HasPrefix(sql, "SELECT ") {
 			return rows.GetResult(), nil
 		}
@@ -334,7 +334,7 @@ func TestUnregisterJobPropagatesRetryableErrorWithoutLocalRetry(t *testing.T) {
 
 		retryErr := moerr.NewTxnNeedRetryNoCtx()
 		calls := 0
-		ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+		ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator, statementOptions ...executor.StatementOption) (executor.Result, error) {
 			calls++
 			switch calls {
 			case 1:

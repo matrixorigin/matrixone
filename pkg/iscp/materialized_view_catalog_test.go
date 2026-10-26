@@ -115,7 +115,7 @@ func newMVTestCatalog(t *testing.T, info *ConsumerInfo, sources ...*planpb.Table
 	t.Cleanup(func() { ExecWithResult = old })
 	return c
 }
-func (c *mvTestCatalog) exec(ctx context.Context, sql, _ string, txn client.TxnOperator) (executor.Result, error) {
+func (c *mvTestCatalog) exec(ctx context.Context, sql, _ string, txn client.TxnOperator, statementOptions ...executor.StatementOption) (executor.Result, error) {
 	if txn != c.txn {
 		return executor.Result{}, errors.New("refresh changed caller transaction")
 	}
@@ -240,12 +240,12 @@ func TestLoadMaterializedViewDefinitionValidatesCatalogEnvelope(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, catalog.definition.Target.ID, loaded.Target.ID)
 
-	lockFailure := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+	lockFailure := gostub.Stub(&ExecWithResult, func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{}, errors.New("lock failed")
 	})
 	require.ErrorContains(t, lockMaterializedViewDefinition(ctx, "cn", catalog.txn, catalog.definition), "lock failed")
 	lockFailure.Reset()
-	rowMismatch := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+	rowMismatch := gostub.Stub(&ExecWithResult, func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{}, nil
 	})
 	require.ErrorContains(t, lockMaterializedViewDefinition(ctx, "cn", catalog.txn, catalog.definition), "catalog identity disappeared")
@@ -293,7 +293,7 @@ func TestLoadMaterializedViewDefinitionValidatesCatalogEnvelope(t *testing.T) {
 	projected, projectErr := MaterializedViewInfo(stateCatalog.definition)
 	require.NoError(t, projectErr)
 	*stateInfo = *projected
-	stateLocks := gostub.Stub(&ExecWithResult, func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+	stateLocks := gostub.Stub(&ExecWithResult, func(_ context.Context, sql, _ string, _ client.TxnOperator, statementOptions ...executor.StatementOption) (executor.Result, error) {
 		rows := 1
 		if strings.HasPrefix(sql, "SELECT rel_id") {
 			rows = 3
