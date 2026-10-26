@@ -22,6 +22,8 @@ code duplication across different interfaces (ORM, Vector Search, Pinecone, etc.
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from ._sql_literals import substitute_parameters
+
 
 class SQLClause(Enum):
     """SQL clause types"""
@@ -567,17 +569,7 @@ class MatrixOneSQLBuilder:
         """
         sql, params = self.build()
 
-        # Replace parameters directly in SQL for MatrixOne compatibility
-        if params:
-            for param in params:
-                if isinstance(param, str):
-                    # Escape single quotes in string parameters
-                    escaped_param = param.replace("'", "''")
-                    sql = sql.replace("?", f"'{escaped_param}'", 1)
-                else:
-                    sql = sql.replace("?", str(param), 1)
-
-        return sql
+        return substitute_parameters(sql, params)
 
     # Utility methods
     def clone(self) -> "MatrixOneSQLBuilder":
