@@ -19,7 +19,7 @@ aggregate headroom and partial-state layout are not changed by this patch.
 - Decimal64 addition/subtraction retains its established 18-digit metadata and
   physical route; this patch does not introduce a carry-promotion policy.
   That legacy envelope can carry a 19-digit signed coefficient, including
-  TIME + BIGINT and a carry from Decimal64 addition. Downstream inference
+  historical TIME + BIGINT coercions and a carry from Decimal64 addition. Downstream inference
   conservatively treats Decimal64 precision 18 (or unspecified precision) as
   19 digits. Narrower declared domains remain precise. This avoids introducing
   expression-provenance state or changing the legacy producer's public type.
@@ -38,14 +38,19 @@ aggregate headroom and partial-state layout are not changed by this patch.
   reserve a carry, which bounds the sum/difference of two such coefficients;
   they retain their existing metadata rules. Below the carrier ceiling,
   declared domains remain precise.
-- Keep the existing Decimal64 multiplication kernel for safe signed-integer /
-  Decimal64 pairs. Its output is Decimal128; an internal BIGINT cast retains
-  its 19-digit logical domain. UINT64 and BIT cannot use the signed coefficient.
+- Keep the existing Decimal64 multiplication kernel for safe small-integer /
+  Decimal64 pairs. Its output is Decimal128. BIGINT, UINT64 and BIT use
+  Decimal128 inputs so synthesized casts respect their full 19/20-digit
+  domains under the current integer-to-decimal width checks.
 - Explicit Decimal256 operands retain that carrier. Unsupported coercion
   domains retain their old physical route. Result precision remains capped by
   the existing physical/public limits.
   In particular, an untyped NULL borrows a peer's cast type without acquiring
   that peer's numeric domain. A typed NULL retains its declared domain.
+
+Persisted-origin verification retains its independently frozen pre-correction
+coercion and result formulas. It cannot relax runtime assignment checks or
+leak a historical binding policy into normal execution.
 
 The first owner is operator overload resolution in list_operator.go. Comparison
 coercion remains unchanged. Existing kernels consume the same supported physical

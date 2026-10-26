@@ -1,194 +1,173 @@
-# MatrixOne Python SDK 测试指南
+# Python SDK contract testing
 
-本指南介绍如何使用简化的测试系统来验证MatrixOne Python SDK的兼容性。
+Run from `clients/python`. Core query, driver and lifecycle tests use real
+SQLAlchemy dependencies, not a global replacement of its modules.
 
-## 🎯 核心功能
-
-我们的测试系统支持：
-
-1. **环境检查** - 检查当前环境是否满足测试要求
-2. **依赖安装** - 安装SQLAlchemy 1.4或2.0的测试依赖
-3. **离线测试** - 不依赖数据库的单元测试
-4. **在线测试** - 需要数据库连接的集成测试
-5. **自动化测试** - 支持SQLAlchemy 1.4和2.0的矩阵测试
-
-## 🚀 快速开始
-
-### 1. 检查环境
-```bash
-# 检查当前环境是否满足测试要求
-make check-env
+```sh
+python -m pip install -e '.[core-test]'
+python scripts/run_contracts.py --output contract-results
 ```
 
-### 2. 安装依赖
-```bash
-# 安装SQLAlchemy 1.4依赖
-make install-sqlalchemy14
+The runner records Python/dependency versions, source revision, worktree status,
+source/test/config hashes, test selection, counts and exit status in
+`provenance.json`, with JUnit results beside it. It fails on empty selections,
+failures, errors, skips or inputs changing during execution. Server fixtures
+record observed version and git revision in JUnit properties. A revision alone
+does not identify a dirty checkout; the content manifest identifies its tested
+inputs. Portable native reports and their JUnit results are indexed in
+[docs/validation/README.md](docs/validation/README.md).
 
-# 安装SQLAlchemy 2.0依赖
-make install-sqlalchemy20
+## Dependency and server dimensions
 
-# 安装完整开发环境
-make install
+`tox` selects SQLAlchemy 1.4, 2.0 and 2.1 independently. Exact 2.0.43 is also
+validated for the aiomysql pre-ping regression. Python 3.8/3.9 core wheel-import
+checks exclude Arrow; analytics requires its separate optional dependency and
+supported Python version. Installing the core SDK must not require PyArrow.
+
+Server contracts are explicitly configured; an offline green run does not prove
+server compatibility. Required online jobs select MatrixOne 4.2.5 or a built
+current-source server. Set these variables for an isolated disposable database:
+
+- `MO_HOST`, `MO_PORT`, `MO_USER`, `MO_PASSWORD`.
+- `MO_SDK_EXPECT_VERSION`: `4.2.5` for that release, or the source server banner.
+- `MO_SDK_EXPECT_REVISION`: required for `current-source`, matching `git_version()`.
+- `MO_SDK_EXPORT_DIR`: directory visible to the server.
+- `MO_SDK_EXPORT_LOCAL_DIR`: the same directory visible to the test process.
+
+```sh
+python scripts/run_contracts.py --server 4.2.5 --output release-contracts
+python scripts/run_contracts.py --server current-source --output source-contracts
 ```
 
-### 3. 运行测试
-```bash
-# 运行离线测试
-make test-offline
+Tests create unique objects and clean them up. The configured account needs the
+DDL, snapshot, publication, vector/fulltext and checkpoint permissions exercised
+by the suite. Assertions compare native SQL values, not just successful calls or
+Top-K ordering. Required contracts never silently skip an unavailable feature.
+The broader online/analytics suite is reported separately with its skip count.
 
-# 运行在线测试（需要数据库）
-make test-online
+## Compatibility behavior
 
-# 运行所有测试
-make test
-```
+Version banners are descriptive, not a capability authority. Client capability
+observations are per connection generation, bounded and immutable; unknown
+support stays unknown. Explicit feature actions and operations can still be
+rejected by the server. The SDK never retries a failed write to probe support.
 
-### 4. 自动化测试
-```bash
-# 运行矩阵测试（SQLAlchemy 1.4 + 2.0）
-make test-matrix
+One async session belongs to one task. Use sequential awaits within a transaction;
+use separate sessions for parallel transactions. Client session contexts issue
+server `BEGIN` before yielding, then commit or roll back and close. Administrative
+commands retain the server's transaction restrictions; create snapshots outside
+these contexts. Cancellation does not prove that an already submitted COMMIT
+was rolled back.
 
-# 测试特定SQLAlchemy版本
-make test-sqlalchemy14
-make test-sqlalchemy20
-```
+Connection hooks run once per physical pool connection at checkout, including
+connections adopted from an existing engine. Awaitable callbacks finish before
+admission. Use `ConnectionAction` for initialization SQL; callbacks cannot reenter
+the same client's pool. Ordinary callback errors remain best effort and are
+logged; cancellation propagates while the pool owns physical cleanup.
 
-## 📋 可用命令
+An explicit fulltext algorithm is scoped to the query's connection. Restore the
+previous setting before pool reuse; discard the connection if restoration fails.
+The primary query error/cancellation retains precedence over cleanup failures.
 
-### 环境检查
-- `make check-env` - 检查环境是否满足测试要求
-- `make show-deps` - 显示当前依赖信息（别名）
+LOAD option validation happens before execution. Inline LOAD and grammar-only
+string tokens reject NUL and backslash because their meaning depends on server
+SQL mode. For inline payloads containing these characters, use a caller-owned
+file and the file-loading API; file paths and separator/escape tokens themselves
+remain subject to the same token restriction. Unsupported option combinations
+raise instead of silently discarding arguments.
 
-### 依赖安装
-- `make install` - 安装完整开发环境
-- `make install-sqlalchemy14` - 安装SQLAlchemy 1.4依赖
-- `make install-sqlalchemy20` - 安装SQLAlchemy 2.0依赖
+## Static checks and contribution evidence
 
-### 测试
-- `make test-offline` - 运行离线测试
-- `make test-online` - 运行在线测试
-- `make test` - 运行所有测试
-- `make test-matrix` - 运行矩阵测试
-- `make test-sqlalchemy14` - 测试SQLAlchemy 1.4
-- `make test-sqlalchemy20` - 测试SQLAlchemy 2.0
+Run the repository Black configuration on changed Python files and fatal flake8
+checks (`--select=E9,F63,F7,F82`) on their owning modules. Type-check shared query,
+snapshot and capability boundaries using the configured mypy settings. Record
+baseline findings separately from introduced failures.
 
-### 构建和发布
-- `make build` - 构建包
-- `make publish-test` - 发布到测试PyPI
-- `make publish` - 发布到正式PyPI
+Regressions should exercise public methods with precise native-SQL oracles and
+assert resource reuse after errors. For async lifecycle changes, use deterministic
+cancellation and physical pool ownership assertions across supported SQLAlchemy
+versions. Python has no Go-style race detector; a skipped concurrency check is
+not equivalent to this evidence.
 
-### 其他
-- `make clean` - 清理构建文件
-- `make help` - 显示帮助信息
-- `make version` - 显示版本号
+## Additional data contracts
 
-## 🔧 使用示例
+Pinecone handles require exactly one primary-key column. Upsert validates the
+whole batch before mutation and uses one transaction for all rows. Server errors
+or cancellation before commit roll back that transaction; an unknown COMMIT
+outcome is not automatically retried. An async batch shares one query timeout.
+Returned vectors are numeric lists and metadata excludes the ID column.
 
-### 示例1：本地开发
-```bash
-# 1. 检查环境
-make check-env
+Vector similarity/range/rank results reject duplicate column labels, including a
+stored `distance` colliding with the computed value. Select
+`distance AS stored_distance` explicitly to keep both. `l2_sq` uses the server's
+squared-distance function; unknown metric names raise.
 
-# 2. 安装开发环境
-make install
+LOCAL imports require `connect(..., local_infile=True)` on both clients. The
+option is false by default and negotiated when the driver opens a connection.
+LOCAL calls on disabled or externally adopted engines fail before execution;
+use an explicitly configured SDK connection. No per-load pool mutation occurs.
 
-# 3. 运行离线测试
-make test-offline
-```
+Fulltext STRING grammar supports ordinary quoted text and backslashes without a
+dollar sign. NUL or combined backslash/dollar input raises before execution due
+to the server lexer restriction. Queries never change sql_mode to escape text.
 
-### 示例2：测试特定SQLAlchemy版本
-```bash
-# 1. 安装SQLAlchemy 1.4依赖
-make install-sqlalchemy14
+Metadata `scan(source_column='v', columns=['min', 'max', 'sum'])` reads that
+column's native encoded ZoneMap values. With no source_column, explicit statistic
+projections (also structured `columns='*'` or `[]`) discover and sequentially
+scan the observed columns. `columns=None` and explicit `source_column='*'` keep
+the wildcard fast path, where ZoneMaps may be NULL. Object brief/detail statistics
+count row/size fields once per object; null counts sum null cells across columns
+and may exceed row counts. Column sizes and object sizes have distinct meanings.
 
-# 2. 运行测试
-make test-sqlalchemy14
-```
+CSV relations compare fresh observed source types to the creation-time observed
+schema before exposing SQL, querying or importing. Intentional explicit casts
+remain supported. Inference inspects a bounded initial block, not an immutable
+file snapshot; changes after validation or beyond that block are not ruled out.
 
-### 示例3：完整矩阵测试
-```bash
-# 运行所有SQLAlchemy版本的测试
-make test-matrix
-```
+Stage CREATE returns observed catalog state even for IF NOT EXISTS. Missing
+ALTER IF EXISTS returns None. Catalog lookup errors after acknowledged Stage or
+PITR writes retain their error category and state the readback failure.
 
-### 示例4：CI/CD环境
-```bash
-# 使用tox运行矩阵测试
-tox
 
-# 或使用make命令
-make test-matrix
-```
+## Grouped fulltext and mapped source availability
 
-## 🗄️ 数据库要求
+`boolean_match('body').group(a, b)` requires either supported positive branch.
+Each child can be one required atom or a flat optional OR of plain word/prefix
+atoms. Children must use the same columns and BOOLEAN mode. Conjunctions,
+exclusions, phrases, weights and nested/raw boolean syntax inside a child raise
+before changing the parent; existing explicit `FulltextGroup` methods retain
+their separate behavior.
 
-在线测试需要运行中的MatrixOne数据库：
+File relations validate every explicit mapped server file through a bounded
+DATALINK read (one byte per source), at construction, before scanning/importing,
+and at completed stream EOF or before import commit. Checks reuse the active
+stream/write connection; missing sources raise and a failed import rolls back.
+Existing empty files remain distinct from missing files. Local schema checks
+also remain in place. Server DATALINK read permission is required.
 
-```bash
-# 检查数据库连接
-python scripts/check_connection.py
+Mappings accept absolute local paths, local `file:///` URIs and `stage://` URIs.
+Relative paths, URI query/fragment components and literal glob metacharacters
+are rejected. Native filename restrictions still apply: for example 4.2.5
+rejects hash/space names, and its Stage resolver cannot represent percent names.
+These failures propagate; the SDK never strips a filename or tries another file.
 
-# 如果数据库不可用，在线测试会被跳过
-make test-online
-```
+These are availability observations, not immutable file snapshots. Replacing a
+file or removing and restoring it between checks is not detected. A stream can
+already have yielded partial batches before a final validation error; callers
+must observe successful exhaustion before treating its dataset as complete.
+Early close does not certify completion. SQL text obtained from `.sql` does not
+pin files or validate a later independently executed statement.
 
-## 📦 依赖文件
+All SDK contract tests live under `tests/offline/contracts`, so the existing
+trusted SDK workflow's `pytest tests/offline tests/analytics` selects them.
+The local runner rejects skips and empty selections for the required offline
+and server contracts. SDK workflow enhancements and non-SDK workflow routing
+are delivered separately from SDK production changes; their configuration only
+controls `pull_request_target` once present in the trusted base.
 
-- `requirements.txt` - 核心依赖
-- `requirements-sqlalchemy14.txt` - SQLAlchemy 1.4依赖
-- `requirements-sqlalchemy20.txt` - SQLAlchemy 2.0依赖
-
-## 🔍 故障排除
-
-### 常见问题
-
-1. **Python版本问题**
-   ```bash
-   # 检查Python版本
-   make check-env
-   
-   # 确保使用Python 3.8+
-   python --version
-   ```
-
-2. **依赖安装失败**
-   ```bash
-   # 重新安装依赖
-   make install-sqlalchemy14
-   # 或
-   make install-sqlalchemy20
-   ```
-
-3. **数据库连接失败**
-   ```bash
-   # 检查数据库连接
-   python scripts/check_connection.py
-   
-   # 如果数据库不可用，只运行离线测试
-   make test-offline
-   ```
-
-4. **测试失败**
-   ```bash
-   # 检查环境
-   make check-env
-   
-   # 运行详细测试
-   python -m pytest tests/offline/ -v -s
-   ```
-
-## 🎯 最佳实践
-
-1. **开发时**：使用 `make test-offline` 进行快速测试
-2. **提交前**：运行 `make test-matrix` 确保兼容性
-3. **发布前**：运行完整的在线测试
-4. **CI/CD**：使用 `make test-matrix` 或 `tox` 进行自动化测试
-
-## 📊 测试覆盖
-
-- **离线测试**：753个测试用例，覆盖所有核心功能
-- **在线测试**：集成测试，需要数据库连接
-- **矩阵测试**：确保SQLAlchemy 1.4和2.0的兼容性
-
-这个简化的测试系统提供了清晰、易用的测试工作流程，满足开发、测试和发布的所有需求。
+Decimal parameters retain native driver precision. Where a legacy builder must
+render a SQL literal, it uses fixed-point notation to prevent scientific SQL
+tokens from triggering floating-point comparisons. Non-finite values and
+fixed-point representations exceeding 4096 characters are rejected before
+formatting; the expansion budget includes the sign and decimal point. This
+budget also conservatively rejects excessive positive-exponent zero inputs.

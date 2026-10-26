@@ -5128,8 +5128,8 @@ func (b *baseBinder) markPreparedResultCastsProvisional(
 // markPreparedTemporalNumericPeer keeps the original TIME provenance on the
 // decimal peer introduced while a prepared numeric marker is still TEXT. The
 // executable expression uses the decimal envelope, but execute-time rebinding
-// must not reinterpret an integer marker as DECIMAL128 merely because this
-// envelope has replaced the TIME operand.
+// must resolve integer markers against the original TIME domain rather than
+// treating this provisional envelope as a user-declared decimal boundary.
 func markPreparedTemporalNumericPeer(expr *Expr, temporal Type) {
 	if expr == nil {
 		return
@@ -8296,6 +8296,7 @@ func bindFuncExprImplByPlanExpr(
 	// Resolve from its existing TIME provenance, as the ordinary binder does;
 	// that envelope is not a genuine DECIMAL arithmetic domain.
 	if isPreparedTemporalIntegerArithmetic(name) {
+		hasTemporalPeer := false
 		for i, arg := range args {
 			if peer, ok := preparedTemporalNumericPeer(arg); ok && peer.Oid.IsDecimal() {
 				// Copy once before changing a TIME lookup; argsType describes
@@ -8304,6 +8305,20 @@ func bindFuncExprImplByPlanExpr(
 					lookupTypes = append([]types.Type(nil), lookupTypes...)
 				}
 				lookupTypes[i] = types.New(types.T_time, 0, peer.Scale)
+				hasTemporalPeer = true
+			}
+		}
+		if hasTemporalPeer {
+			for i, arg := range args {
+				cast := arg.GetF()
+				if cast == nil || cast.Func == nil || cast.Func.ObjName != "cast" ||
+					isExplicitPreparedCast(arg) || len(cast.Args) == 0 ||
+					!types.T(cast.Args[0].Typ.Id).IsInteger() {
+					continue
+				}
+				// The boundary cast executes the complete integer operand, but
+				// overload lookup must retain that operand's original domain.
+				lookupTypes[i] = makeTypeByPlan2Expr(cast.Args[0])
 			}
 		}
 	}

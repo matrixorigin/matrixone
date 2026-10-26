@@ -161,6 +161,10 @@ func TestCOMStmtPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.
 		{name: "subtract", op: "-", want: "-9", value: 10},
 		{name: "mod", op: "%", want: "1", value: 10},
 		{name: "unsigned-add", op: "+", want: "11", value: 10, unsigned: true},
+		{name: "signed-positive-boundary", op: "+", want: "1000000000000000001", value: 1000000000000000000},
+		{name: "signed-negative-boundary", op: "+", want: "-999999999999999999", value: ^uint64(1000000000000000000) + 1},
+		{name: "signed-minimum", op: "+", want: "-9223372036854775807", value: uint64(1) << 63},
+		{name: "unsigned-maximum", op: "+", want: "18446744073709551616", value: ^uint64(0), unsigned: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			query := "select cast('00:00:01' as time(0)) " + tc.op + " ? as result"
@@ -188,8 +192,15 @@ func TestCOMStmtPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.
 
 			queryPlan := runtimePlan.GetQuery()
 			project := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList[0]
-			require.Equal(t, types.T_decimal64, types.T(project.Typ.Id))
-			require.Equal(t, int32(18), project.Typ.Width)
+			require.Equal(t, types.T_decimal128, types.T(project.Typ.Id))
+			width := int32(20)
+			if tc.unsigned {
+				width = 21
+			}
+			if tc.op == "%" {
+				width = 19
+			}
+			require.Equal(t, width, project.Typ.Width)
 			require.Equal(t, int32(0), project.Typ.Scale)
 			executor, err := colexec.NewExpressionExecutor(cw.proc, project)
 			require.NoError(t, err)
@@ -201,7 +212,7 @@ func TestCOMStmtPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.
 		})
 	}
 
-	t.Run("add/int64-overflow-matches-decimal64", func(t *testing.T) {
+	t.Run("add/max-int64-retains-exact-result", func(t *testing.T) {
 		query := "select cast('00:00:01' as time(0)) + ? as result"
 		ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 28963, query)
 		proto, _, scratchPrepare := newBinaryPrepareProtocolTestCase(t, query)
@@ -227,10 +238,11 @@ func TestCOMStmtPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.
 		project := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList[0]
 		executor, err := colexec.NewExpressionExecutor(cw.proc, project)
 		require.NoError(t, err)
+		t.Cleanup(executor.Free)
 		result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-		executor.Free()
-		require.Error(t, err)
-		require.Nil(t, result)
+		require.NoError(t, err)
+		require.False(t, result.IsNull(0))
+		require.Equal(t, "9223372036854775808", formatPreparedTimeDecimalResult(t, result))
 	})
 }
 
@@ -284,7 +296,7 @@ func TestCOMStmtPreparedTimeArithmeticPreservesExplicitDecimalBoundary(t *testin
 		})
 	}
 
-	t.Run("unsigned-int64-overflow-matches-decimal64", func(t *testing.T) {
+	t.Run("unsigned-maximum-retains-exact-result", func(t *testing.T) {
 		query := "select cast('00:00:01' as time(0)) + ? as result"
 		ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 28963, query)
 		proto, _, scratchPrepare := newBinaryPrepareProtocolTestCase(t, query)
@@ -296,7 +308,7 @@ func TestCOMStmtPreparedTimeArithmeticPreservesExplicitDecimalBoundary(t *testin
 
 		require.NoError(t, proto.ParseExecuteData(
 			execCtx.reqCtx, cw.proc, prepareStmt,
-			buildLongLongExecutePacket(^uint64(0)>>1, true), 0))
+			buildLongLongExecutePacket(^uint64(0), true), 0))
 		_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
 			execCtx, ses, cw, nil, prepareStmt.Name)
 		require.NoError(t, err)
@@ -310,14 +322,15 @@ func TestCOMStmtPreparedTimeArithmeticPreservesExplicitDecimalBoundary(t *testin
 
 		queryPlan := runtimePlan.GetQuery()
 		project := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList[0]
-		require.Equal(t, types.T_decimal64, types.T(project.Typ.Id))
-		require.Equal(t, int32(18), project.Typ.Width)
+		require.Equal(t, types.T_decimal128, types.T(project.Typ.Id))
+		require.Equal(t, int32(21), project.Typ.Width)
 		require.Equal(t, int32(0), project.Typ.Scale)
 		executor, err := colexec.NewExpressionExecutor(cw.proc, project)
 		require.NoError(t, err)
+		t.Cleanup(executor.Free)
 		result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
-		executor.Free()
-		require.Error(t, err)
-		require.Nil(t, result)
+		require.NoError(t, err)
+		require.False(t, result.IsNull(0))
+		require.Equal(t, "18446744073709551616", formatPreparedTimeDecimalResult(t, result))
 	})
 }

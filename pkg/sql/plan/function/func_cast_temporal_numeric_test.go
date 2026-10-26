@@ -274,7 +274,7 @@ func TestTimeNumericArithmeticPreservesFractionAndMetadata(t *testing.T) {
 	}{
 		{name: "multiply", operator: "*", wantReturn: types.New(types.T_decimal128, 38, 3)},
 		{name: "divide", operator: "/", wantReturn: decimal128Scale7Type},
-		{name: "modulo", operator: "%", wantReturn: decimal64Type},
+		{name: "modulo", operator: "%", wantReturn: types.New(types.T_decimal128, 19, 3)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resolved, err := GetFunctionByName(proc.Ctx, tc.operator,
@@ -282,7 +282,10 @@ func TestTimeNumericArithmeticPreservesFractionAndMetadata(t *testing.T) {
 			require.NoError(t, err)
 			targets, needsCast := resolved.ShouldDoImplicitTypeCast()
 			require.True(t, needsCast)
-			wantTargets := []types.Type{decimal64Type, types.T_decimal64.ToType()}
+			wantTargets := []types.Type{
+				types.New(types.T_decimal128, 19, 3),
+				types.New(types.T_decimal128, 19, 0),
+			}
 			if tc.operator == "/" {
 				wantTargets = []types.Type{
 					types.New(types.T_decimal128, 17, 3),

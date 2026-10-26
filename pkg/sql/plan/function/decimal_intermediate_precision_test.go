@@ -59,8 +59,8 @@ func TestDecimalLegacyCoefficientDomain(t *testing.T) {
 	ctx := context.Background()
 	legacy, err := GetFunctionByName(ctx, "+", []types.Type{types.New(types.T_time, 0, 0), types.T_int64.ToType()})
 	require.NoError(t, err)
-	require.Equal(t, types.New(types.T_decimal64, 18, 0), legacy.retType)
-	square, err := GetFunctionByName(ctx, "*", []types.Type{legacy.retType, legacy.retType})
+	require.Equal(t, types.New(types.T_decimal128, 20, 0), legacy.retType)
+	square, err := GetFunctionByName(ctx, "*", []types.Type{types.New(types.T_decimal64, 18, 0), types.New(types.T_decimal64, 18, 0)})
 	require.NoError(t, err)
 	require.Equal(t, types.New(types.T_decimal128, 38, 0), square.retType)
 	product, err := GetFunctionByName(ctx, "*", []types.Type{square.retType, types.New(types.T_decimal64, 1, 0)})
@@ -86,7 +86,7 @@ func TestDecimalMultiplyRetainsBIGINTCastDomain(t *testing.T) {
 	decimal := types.New(types.T_decimal64, 15, 2)
 	for _, reverse := range []bool{false, true} {
 		inputs := []types.Type{integer, decimal}
-		want := []types.Type{types.New(types.T_decimal64, 19, 0), decimal}
+		want := []types.Type{types.New(types.T_decimal128, 19, 0), types.New(types.T_decimal128, 15, 2)}
 		if reverse {
 			inputs[0], inputs[1] = inputs[1], inputs[0]
 			want[0], want[1] = want[1], want[0]

@@ -69,6 +69,28 @@ func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Typ
 		return false, left, right
 	}
 	hasCast, castLeft, castRight := fixedTypeCastRule1(left, right)
+	if castLeft.Oid.IsDecimal() && castRight.Oid.IsDecimal() {
+		// Decimal targets produced by the fixed comparison rules are synthesized
+		// physical domains, not DECIMAL assignment targets.  Re-derive their
+		// precision when an integer's own target cannot hold its domain, even
+		// when both targets have the same OID and scale (e.g. BIGINT/TIME(0)
+		// synthesized as DECIMAL64(18,0)). A narrower peer must not force a
+		// sufficient integer target to adopt that peer's width or scale.
+		targets := []types.Type{castLeft, castRight}
+		needsWiden := false
+		for i, input := range []types.Type{left, right} {
+			input = decimalComparisonSource(input)
+			if input.IsIntOrUint() && integerIntegralWidth(input.Oid) > targets[i].Width-targets[i].Scale {
+				needsWiden = true
+				break
+			}
+		}
+		if needsWiden {
+			if _, ok := alignDecimalComparisonTypes(targets, []types.Type{left, right}); ok {
+				castLeft, castRight = targets[0], targets[1]
+			}
+		}
+	}
 	if !isCollatedTextType(castLeft.Oid) || !isCollatedTextType(castRight.Oid) {
 		return hasCast, castLeft, castRight
 	}
@@ -181,13 +203,13 @@ func decimalMultiplyCoefficientWidth(oid types.T, width int32) int32 {
 }
 
 // useDecimal64MultiplyInputs owns the existing signed-integer/D64 eligibility
-// rule for both exact numeric domains and legacy temporal coercions. UINT64
-// and BIT cannot use a signed int64 coefficient.
+// rule for small exact integer domains and legacy temporal coercions.
+// BIGINT/UINT64/BIT exceed the declared precision of a D64 cast target.
 func useDecimal64MultiplyInputs(a, b, leftCoerced, rightCoerced types.T) bool {
 	if leftCoerced != types.T_decimal128 || rightCoerced != types.T_decimal128 {
 		return false
 	}
-	return (a == types.T_decimal64 || b == types.T_decimal64) && a != types.T_decimal128 && b != types.T_decimal128 && a != types.T_uint64 && b != types.T_uint64 && a != types.T_bit && b != types.T_bit
+	return (a == types.T_decimal64 || b == types.T_decimal64) && a != types.T_decimal128 && b != types.T_decimal128 && a != types.T_int64 && b != types.T_int64 && a != types.T_uint64 && b != types.T_uint64 && a != types.T_bit && b != types.T_bit
 }
 
 // decimalArithmeticInputs keeps logical precision through physical coercion.
@@ -245,12 +267,9 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 	if oid != types.T_decimal256 && precision > 38 && !keepCheckedD128 {
 		oid = types.T_decimal256
 	} else if isMultiply && oid == types.T_decimal128 && precision <= 38 {
-		// Keep the existing signed-integer/Decimal64 MUL kernel, whose output
-		// is Decimal128. Integer domains retain 19 digits for signed BIGINT;
-		// UINT64/BIT require a wider input coefficient and cannot use it.
-		// Width 19 is an internal BIGINT domain annotation, not a SQL D64
-		// declaration: signedToDecimal64 retains the full signed coefficient
-		// and d64Mul returns D128. Do not use this rule for an int64 result.
+		// Keep the existing small-integer/Decimal64 MUL kernel, whose output
+		// is Decimal128. BIGINT/UINT64/BIT retain D128 inputs because their
+		// full domains do not fit a precision-18 Decimal64 cast target.
 		if useDecimal64MultiplyInputs(inputs[0].Oid, inputs[1].Oid, coerced[0].Oid, coerced[1].Oid) {
 			oid = types.T_decimal64
 		}
@@ -324,10 +343,24 @@ func isJSONBooleanComparison(left, right types.Type) bool {
 		left.Oid == types.T_bool && right.Oid == types.T_json
 }
 
+// decimalComparisonSource exposes BIT's full unsigned numeric domain without
+// changing its public type or the non-decimal coercion rules. BIT is stored as
+// uint64, but intentionally does not satisfy Type.IsIntOrUint.
+func decimalComparisonSource(input types.Type) types.Type {
+	if input.Oid == types.T_bit {
+		return types.T_uint64.ToType()
+	}
+	return input
+}
+
 // alignDecimalComparisonTypes preserves integer capacity when comparisons need
 // one coefficient scale. Use the original exact domains: an intermediate cast
 // may have the physical type's default precision rather than the source's.
 func alignDecimalComparisonTypes(targets, inputs []types.Type) (bool, bool) {
+	return alignDecimalComparisonTypesMode(targets, inputs, false)
+}
+
+func alignDecimalComparisonTypesMode(targets, inputs []types.Type, legacy bool) (bool, bool) {
 	target := targets[0]
 	aligned := true
 	for _, typ := range targets {
@@ -335,12 +368,15 @@ func alignDecimalComparisonTypes(targets, inputs []types.Type) (bool, bool) {
 			aligned = false
 		}
 	}
-	if aligned {
+
+	if aligned && legacy {
 		return false, true
 	}
-
 	sources := make([]types.Type, len(inputs))
 	for i, input := range inputs {
+		if !legacy {
+			input = decimalComparisonSource(input)
+		}
 		if targets[i].Oid.TypeLen() > target.Oid.TypeLen() {
 			target = targets[i]
 		}
@@ -351,6 +387,22 @@ func alignDecimalComparisonTypes(targets, inputs []types.Type) (bool, bool) {
 			}
 		} else {
 			sources[i] = targets[i]
+		}
+	}
+	if aligned {
+		// Preserve the historical per-operand widths for ordinary DECIMAL
+		// comparisons.  The one exception is an integer source whose complete
+		// integral domain does not fit in the already-aligned target; that is the
+		// synthesized BIGINT/TIME case that needs promotion.
+		allIntegerDomainsFit := true
+		for i, input := range sources {
+			if input.IsIntOrUint() && integerIntegralWidth(input.Oid) > targets[i].Width-targets[i].Scale {
+				allIntegerDomainsFit = false
+				break
+			}
+		}
+		if allIntegerDomainsFit {
+			return false, true
 		}
 	}
 	if !setSafeDecimalWidthAndScaleFromSource(&target, sources) {
@@ -985,7 +1037,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint8]().operatorIn
+					return newOpOperatorIntegerIn[uint8]().operatorIn
 				},
 			},
 			{
@@ -995,7 +1047,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint16]().operatorIn
+					return newOpOperatorIntegerIn[uint16]().operatorIn
 				},
 			},
 			{
@@ -1005,7 +1057,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint32]().operatorIn
+					return newOpOperatorIntegerIn[uint32]().operatorIn
 				},
 			},
 			{
@@ -1015,7 +1067,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint64]().operatorIn
+					return newOpOperatorIntegerIn[uint64]().operatorIn
 				},
 			},
 			{
@@ -1025,7 +1077,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int8]().operatorIn
+					return newOpOperatorIntegerIn[int8]().operatorIn
 				},
 			},
 			{
@@ -1035,7 +1087,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int16]().operatorIn
+					return newOpOperatorIntegerIn[int16]().operatorIn
 				},
 			},
 			{
@@ -1045,7 +1097,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int32]().operatorIn
+					return newOpOperatorIntegerIn[int32]().operatorIn
 				},
 			},
 			{
@@ -1055,7 +1107,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int64]().operatorIn
+					return newOpOperatorIntegerIn[int64]().operatorIn
 				},
 			},
 			{
@@ -1296,7 +1348,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint8]().operatorNotIn
+					return newOpOperatorIntegerIn[uint8]().operatorNotIn
 				},
 			},
 			{
@@ -1306,7 +1358,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint16]().operatorNotIn
+					return newOpOperatorIntegerIn[uint16]().operatorNotIn
 				},
 			},
 			{
@@ -1316,7 +1368,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint32]().operatorNotIn
+					return newOpOperatorIntegerIn[uint32]().operatorNotIn
 				},
 			},
 			{
@@ -1326,7 +1378,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint64]().operatorNotIn
+					return newOpOperatorIntegerIn[uint64]().operatorNotIn
 				},
 			},
 			{
@@ -1336,7 +1388,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int8]().operatorNotIn
+					return newOpOperatorIntegerIn[int8]().operatorNotIn
 				},
 			},
 			{
@@ -1346,7 +1398,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int16]().operatorNotIn
+					return newOpOperatorIntegerIn[int16]().operatorNotIn
 				},
 			},
 			{
@@ -1356,7 +1408,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int32]().operatorNotIn
+					return newOpOperatorIntegerIn[int32]().operatorNotIn
 				},
 			},
 			{
@@ -1366,7 +1418,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int64]().operatorNotIn
+					return newOpOperatorIntegerIn[int64]().operatorNotIn
 				},
 			},
 			{
@@ -1739,12 +1791,14 @@ var supportedOperators = []FuncNew{
 					// D128×D128, downgrade to D64×D64. The d64Mul kernel produces
 					// D128 output so overflow is impossible, and it's ~4× faster
 					// than d128Mul (1 vs 4 hardware MUL instructions).
-					// Exclude UINT64/BIT (their full domain does not fit in D64).
+					// Exclude BIGINT/UINT64/BIT: their full declared decimal
+					// domains need 19/20 digits, beyond a D64 assignment target.
 					if useDecimal64MultiplyInputs(inputs[0].Oid, inputs[1].Oid, t1.Oid, t2.Oid) {
 						t1 = types.T_decimal64.ToType()
 						t2 = types.T_decimal64.ToType()
 						SetTargetScaleFromSource(&inputs[0], &t1)
 						SetTargetScaleFromSource(&inputs[1], &t2)
+
 					}
 					if multiOperatorSupportsVectorScalar(t1, t2) {
 						return newCheckResultWithCast(1, []types.Type{t1, t2})
@@ -1881,7 +1935,14 @@ var supportedOperators = []FuncNew{
 					return newCheckResultWithCast(DecimalIntegerDivUnsignedOverload, targets)
 				}
 			}
-			return legacyIntegerDivCheck(inputs)
+			result := legacyIntegerDivCheck(inputs)
+			if result.status == succeedWithCast && len(inputs) == 2 && len(result.finalType) == 2 {
+				// Upgrade ordinary execution casts without changing the frozen
+				// historical signature used to verify persisted SQL origins.
+				result.finalType[0], result.finalType[1] = widenArithmeticDecimalIntegerTargets(
+					inputs[0], inputs[1], result.finalType[0], result.finalType[1])
+			}
+			return result
 		},
 
 		Overloads: []overload{

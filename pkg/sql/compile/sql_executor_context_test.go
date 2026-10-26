@@ -16,8 +16,10 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -473,6 +475,43 @@ func TestCompilerContextBuildTableDefByMoColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tableDef.Cols, actual.Cols)
 	require.NotSame(t, tableDef, actual)
+}
+
+func TestInternalResolverNormalizesPersistedDecimalCoercions(t *testing.T) {
+	data, err := os.ReadFile("../plan/testdata/legacy_decimal_catalog_63a964a82f.json")
+	require.NoError(t, err)
+	var fixtures map[string][]byte
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	catalogDef := new(plan.TableDef)
+	require.NoError(t, catalogDef.Unmarshal(fixtures["signed_compare"]))
+	wire, err := catalogDef.Marshal()
+	require.NoError(t, err)
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	requestCtx := proc.GetTopContext()
+	pipelineCtx, cancel := context.WithCancel(requestCtx)
+	cancel()
+	proc.Ctx = pipelineCtx
+	relation := mock_frontend.NewMockRelation(ctrl)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(catalogDef).Times(2)
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)).Times(2)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	database.EXPECT().Relation(gomock.Any(), "legacy_cmp", nil).Return(relation, nil).Times(2)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil).Times(2)
+	c := &compilerContext{ctx: requestCtx, defaultDB: "db", engine: eng, proc: proc}
+	for range 2 {
+		_, resolved, err := c.Resolve("db", "legacy_cmp", nil)
+		require.NoError(t, err)
+		require.NotSame(t, catalogDef.Checks[0], resolved.Checks[0])
+		for _, arg := range resolved.Checks[0].Check.GetF().Args {
+			require.Equal(t, int32(types.T_decimal128), arg.Typ.Id)
+			require.Equal(t, int32(19), arg.Typ.Width)
+		}
+	}
+	after, err := catalogDef.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, wire, after)
 }
 
 func TestCompilerContextBuildTableDefByMoColumnsPropagatesRelationError(t *testing.T) {
