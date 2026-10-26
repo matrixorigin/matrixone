@@ -20,6 +20,12 @@ justify a fresh exchange. Non-mergeable DISTINCT, grouping-set and lossy
 string-range guards remain in force. This does not broaden join reuse. Each planning pass clears stale decisions
 and uses its actual column-reference mode when proving ownership.
 
+The compiler may replace a complete child with local preaggregation only when
+the parent establishes a normal exchange. A reuse consumer must compile the
+complete child that produces its promised distribution. The shared
+`isLocalPreAggregationGroup` predicate owns this distinction; the narrower
+local-group omission decision inherits it.
+
 For incompatible aggregate keys, retain local partial aggregation followed by
 MergeGroup. Do not exchange the preceding aggregate's rows before local
 reduction solely because its output NDV is large. The aggregate-specific admission boundary covers this case after attempting
