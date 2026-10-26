@@ -27,6 +27,7 @@ This provides better type safety and integration with SQLAlchemy.
 """
 
 import logging
+from copy import copy
 from typing import Any, Dict, List, Optional, TypeVar
 
 # SQLAlchemy compatibility import
@@ -41,6 +42,16 @@ T = TypeVar("T")
 
 # Export declarative_base for direct import
 __all__ = ["declarative_base", "Query", "MatrixOneQuery"]
+
+
+def _first_query(query):
+    """Limit a private copy without changing the caller's reusable query."""
+    return copy(query).limit(1)
+
+
+def _count_sql(sql):
+    """Count result rows, including projection, grouping and pagination."""
+    return f"SELECT COUNT(*) FROM ({sql}) AS _mo_count"
 
 
 # For SQL functions, we recommend using SQLAlchemy's func module for better integration:
@@ -570,6 +581,8 @@ class Query:
             set_values=set_values,
             where_conditions=self._where_conditions,
             where_params=self._where_params,
+            order_by=self._order_by_columns,
+            limit=self._limit_count,
         )
 
     def delete(self) -> Any:
@@ -586,6 +599,8 @@ class Query:
             table_name=self.model_class._table_name,
             where_conditions=self._where_conditions,
             where_params=self._where_params,
+            order_by=self._order_by_columns,
+            limit=self._limit_count,
         )
 
     def execute(self) -> Any:
@@ -1672,16 +1687,17 @@ class BaseMatrixOneQuery:
                 # SQLAlchemy expression (already compiled to SQL)
                 set_clauses.append(col)
 
-        # Build WHERE clause
-        where_clause = ""
-        if self._where_conditions:
-            where_clause = " WHERE " + " AND ".join(self._where_conditions)
-            params.extend(self._where_params)
+        from .sql_builder import MatrixOneSQLBuilder
 
-        # Build final SQL
-        sql = f"UPDATE {self._table_name} SET {', '.join(set_clauses)}{where_clause}"
-
-        return sql, params
+        builder = MatrixOneSQLBuilder().update(self._table_name)
+        builder._update_set_columns = set_clauses
+        builder._update_set_values = params
+        builder._where_conditions = self._where_conditions.copy()
+        builder._where_params = self._where_params.copy()
+        builder.order_by(*self._order_by_columns)
+        if self._limit_count is not None:
+            builder.limit(self._limit_count)
+        return builder.build()
 
     def delete(self) -> Any:
         """Execute DELETE operation"""
@@ -1697,6 +1713,8 @@ class BaseMatrixOneQuery:
             table_name=self._table_name,
             where_conditions=self._where_conditions,
             where_params=self._where_params,
+            order_by=self._order_by_columns,
+            limit=self._limit_count,
         )
 
 
@@ -1813,8 +1831,7 @@ class MatrixOneQuery(BaseMatrixOneQuery):
 
     def first(self) -> Optional:
         """Execute query and return first result - SQLAlchemy style"""
-        self._limit_count = 1
-        results = self.all()
+        results = _first_query(self).all()
         return results[0] if results else None
 
     def one(self):
@@ -1969,10 +1986,7 @@ class MatrixOneQuery(BaseMatrixOneQuery):
     def count(self) -> int:
         """Execute query and return count of results - SQLAlchemy style"""
         sql, params = self._build_sql()
-        # Replace SELECT * with COUNT(*)
-        sql = sql.replace("SELECT *", "SELECT COUNT(*)")
-
-        result = self._execute(sql, params)
+        result = self._execute(_count_sql(sql), params)
 
         # Handle both ResultSet and SQLAlchemy Result
         if hasattr(result, 'rows'):

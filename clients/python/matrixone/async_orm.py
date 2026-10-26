@@ -18,7 +18,7 @@ MatrixOne Async ORM - SQLAlchemy-like interface for MatrixOne database (Async)
 
 from typing import Any, List, Optional, TypeVar
 
-from .orm import BaseMatrixOneQuery
+from .orm import BaseMatrixOneQuery, _count_sql, _first_query
 
 T = TypeVar("T")
 
@@ -37,13 +37,10 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
         if self.database:
             self._table_name = f"{self.database}.{original_table_name}"
 
-        # Call parent's _build_sql method
-        sql, params = super()._build_sql()
-
-        # Restore original table name
-        self._table_name = original_table_name
-
-        return sql, params
+        try:
+            return super()._build_sql()
+        finally:
+            self._table_name = original_table_name
 
     async def _execute(self, sql, params=None):
         """Execute SQL using either transaction wrapper or client asynchronously"""
@@ -100,17 +97,13 @@ class AsyncMatrixOneQuery(BaseMatrixOneQuery):
 
     async def first(self) -> Optional:
         """Execute query and return first result - SQLAlchemy style"""
-        self._limit_count = 1
-        results = await self.all()
+        results = await _first_query(self).all()
         return results[0] if results else None
 
     async def count(self) -> int:
         """Execute query and return count of results - SQLAlchemy style"""
         sql, params = self._build_sql()
-        # Replace SELECT * with COUNT(*)
-        sql = sql.replace("SELECT *", "SELECT COUNT(*)")
-
-        result = await self._execute(sql, params)
+        result = await self._execute(_count_sql(sql), params)
 
         # Handle both AsyncResultSet and SQLAlchemy CursorResult
         if hasattr(result, 'rows'):

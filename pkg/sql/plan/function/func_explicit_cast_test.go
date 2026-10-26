@@ -99,6 +99,70 @@ func TestExplicitCastRangeDiagnostics(t *testing.T) {
 	}
 }
 
+func TestExplicitCastLexicalIntegerDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target types.Type
+		want   any
+	}{
+		{"signed", types.T_int64.ToType(), []int64{0, 0, 123, 42, 0}},
+		{"unsigned", types.T_uint64.ToType(), []uint64{0, 0, 123, 42, 0}},
+	} {
+		for _, sqlMode := range []string{"", "STRICT_TRANS_TABLES"} {
+			t.Run(tc.name+"/"+sqlMode, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				sink := &numericWarningSession{}
+				proc.WarningSink = sink
+				proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return sqlMode, nil })
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc", "", "123tail", "42", "ignored"}, []bool{false, false, false, false, true}),
+					NewFunctionTestInput(tc.target, emptyCastTargetValues(tc.target), nil),
+				}, NewFunctionTestResult(tc.target, false, tc.want, []bool{false, false, false, false, true}), NewExplicitCast)
+				ok, info := fc.RunAndFree()
+				require.True(t, ok, info)
+				require.Len(t, sink.warnings, 3)
+				require.Equal(t, []numericWarning{
+					{1292, "Truncated incorrect INTEGER value: 'abc'"},
+					{1292, "Truncated incorrect INTEGER value: ''"},
+				}, sink.warnings[:2])
+				// Numeric-prefix conversion is an existing, separate route.
+				require.EqualValues(t, 1292, sink.warnings[2].code)
+				require.Contains(t, sink.warnings[2].msg, "'123tail'")
+			})
+		}
+		t.Run(tc.name+"/implicit_stays_strict", func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			sink := &numericWarningSession{}
+			proc.WarningSink = sink
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc"}, nil),
+				NewFunctionTestInput(tc.target, emptyCastTargetValues(tc.target), nil),
+			}, NewFunctionTestResult(tc.target, false, nil, nil), NewCast)
+			t.Cleanup(fc.Free)
+			_, err := fc.DebugRun()
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), "%v", err)
+			require.Empty(t, sink.warnings)
+		})
+		t.Run(tc.name+"/binary_is_numeric_bytes", func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			sink := &numericWarningSession{}
+			proc.WarningSink = sink
+			want := any([]int64{120})
+			if tc.target.Oid == types.T_uint64 {
+				want = []uint64{120}
+			}
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"x"}, nil),
+				NewFunctionTestInput(tc.target, emptyCastTargetValues(tc.target), nil),
+			}, NewFunctionTestResult(tc.target, false, want, nil), NewExplicitCast)
+			fc.parameters[0].SetIsBin(true)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+			require.Empty(t, sink.warnings)
+		})
+	}
+}
+
 func TestExplicitCastNumericDecimalRangeDiagnostics(t *testing.T) {
 	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
 		for _, source := range []struct {
@@ -155,6 +219,8 @@ func TestExplicitCastRangeDiagnosticsSelection(t *testing.T) {
 	}{
 		{"signed", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"9223372036854775808"}, nil), types.T_int64.ToType(), 1105},
 		{"unsigned", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"18446744073709551616"}, nil), types.T_uint64.ToType(), 1292},
+		{"lexical_signed", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"abc"}, nil), types.T_int64.ToType(), 1292},
+		{"lexical_unsigned", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"abc"}, nil), types.T_uint64.ToType(), 1292},
 		{"string_decimal", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"999.995"}, nil), types.New(types.T_decimal64, 5, 2), 1264},
 		{"numeric_decimal", NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1000}, nil), types.New(types.T_decimal64, 5, 2), 1264},
 	} {
@@ -1100,4 +1166,94 @@ func TestMatrixOneExtendedIntegerTargetsRemainStrict(t *testing.T) {
 			require.True(t, succeed, info)
 		})
 	}
+}
+
+func TestFloatTextCastDiagnostics(t *testing.T) {
+	for _, oid := range []types.T{types.T_float32, types.T_float64} {
+		for _, tc := range []struct {
+			name, statement, sqlMode string
+			ignore                   bool
+			execute                  executeLogicOfOverload
+			code                     uint16
+			fail                     bool
+		}{
+			{"select strict", "Select", "STRICT_TRANS_TABLES", false, NewExplicitCast, 1292, false},
+			{"explicit strict DML", "Insert", "STRICT_TRANS_TABLES", false, NewExplicitCast, 1292, true},
+			{"explicit lenient DML", "Insert", "", false, NewExplicitCast, 1292, false},
+			{"explicit ignore", "Insert", "STRICT_TRANS_TABLES", true, NewExplicitCast, 1292, false},
+			{"assignment strict", "Insert", "STRICT_TRANS_TABLES", false, NewAssignCast, 1265, true},
+			{"assignment lenient", "Insert", "", false, NewAssignCast, 1265, false},
+			{"assignment ignore", "Insert", "STRICT_TRANS_TABLES", true, NewAssignIgnoreCast, 1265, false},
+		} {
+			t.Run(oid.String()+"/"+tc.name, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				proc.SetStmtProfile(&process.StmtProfile{})
+				query := "DML"
+				if tc.statement == "Select" {
+					query = "DQL"
+				}
+				proc.GetStmtProfile().SetStatementRuntimeProfile(tc.statement, query, tc.ignore)
+				proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return tc.sqlMode, nil })
+				sink := &numericWarningSession{}
+				proc.WarningSink = sink
+				target := oid.ToType()
+				var empty any = []float64{}
+				if oid == types.T_float32 {
+					empty = []float32{}
+				}
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.25", "inf", "nan", "information", "12tail", "0x10", ""}, []bool{false, false, false, false, false, false, true}),
+					NewFunctionTestInput(target, empty, nil),
+				}, NewFunctionTestResult(target, false, nil, nil), tc.execute)
+				t.Cleanup(fc.Free)
+				got, err := fc.DebugRun()
+				if tc.fail {
+					var e *moerr.Error
+					require.ErrorAs(t, err, &e)
+					require.Equal(t, tc.code, e.MySQLCode())
+					require.True(t, e.IsRealError())
+					state := "22007"
+					if tc.code == 1265 {
+						state = "01000"
+					}
+					require.Equal(t, state, e.SqlState())
+					require.Empty(t, sink.warnings)
+					return
+				}
+				require.NoError(t, err)
+				for row, want := range []float64{1.25, 0, 0, 0, 12, 16} {
+					var value float64
+					if oid == types.T_float32 {
+						value = float64(vector.GetFixedAtNoTypeCheck[float32](got, row))
+					} else {
+						value = vector.GetFixedAtNoTypeCheck[float64](got, row)
+					}
+					require.Equal(t, want, value)
+				}
+				require.True(t, got.IsNull(6))
+				require.Len(t, sink.warnings, 4)
+				for _, warning := range sink.warnings {
+					require.Equal(t, tc.code, warning.code)
+				}
+			})
+		}
+	}
+}
+
+func TestFloatTextSpecialTokensByCompatibility(t *testing.T) {
+	for _, input := range []string{"inf", "+INF", "-infinity", "NaN", " +nan ", "information", "nanny"} {
+		for _, bits := range []int{32, 64} {
+			value, err := parseStringToFloatWithBitSize(input, bits, SQLCompatibilityMySQL)
+			require.NoError(t, err)
+			require.Zero(t, value)
+			require.True(t, FloatTextTruncated(input))
+		}
+	}
+	for _, input := range []string{"Inf", "-Infinity", "+NaN"} {
+		value, err := parseStringToFloat(input, SQLCompatibilityMatrixOne)
+		require.NoError(t, err)
+		require.True(t, math.IsInf(value, 0) || math.IsNaN(value))
+	}
+	_, err := parseStringToFloat("information", SQLCompatibilityMatrixOne)
+	require.Error(t, err)
 }

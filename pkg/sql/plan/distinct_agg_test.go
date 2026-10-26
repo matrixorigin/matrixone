@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 
@@ -145,9 +146,9 @@ func TestOptimizeSingleCountDistinctBuildsLocalPreDedupPath(t *testing.T) {
 	// final pair stage shuffles despite having an unshuffled Group child.
 	localPair.Stats.HashmapStats.Shuffle = true
 	localPair.Stats.HashmapStats.HashmapSize = 3_000_000
-	determineShuffleForGroupBy(localPair, builder)
+	determineShuffleForGroupBy(localPair, builder, false)
 	require.False(t, localPair.Stats.HashmapStats.Shuffle)
-	determineShuffleForGroupBy(finalPair, builder)
+	determineShuffleForGroupBy(finalPair, builder, false)
 	require.True(t, finalPair.Stats.HashmapStats.Shuffle)
 	require.Equal(t, int32(1), finalPair.Stats.HashmapStats.ShuffleColIdx)
 	require.Equal(t, planpb.ShuffleType_Hash, finalPair.Stats.HashmapStats.ShuffleType)
@@ -407,4 +408,140 @@ func TestOptimizeAvgDistinctKeepsConservativeFallbacks(t *testing.T) {
 		require.Len(t, builder.qry.Nodes, 2)
 		require.True(t, RequiresSingleStageDistinctAgg(aggregate))
 	})
+}
+
+func TestTupleCountDistinctKeepsCompleteKeysAndSelectsExchangeComponent(t *testing.T) {
+	for _, nullable := range []bool{false, true} {
+		for _, reverse := range []bool{false, true} {
+			t.Run(fmt.Sprintf("nullable=%v/reverse=%v", nullable, reverse), func(t *testing.T) {
+				low := distinctAggTestCol(types.T_int32, 1, 1, 8)
+				high := distinctAggTestCol(types.T_int64, 1, 2, 1_000_000)
+				low.Typ.NotNullable, high.Typ.NotNullable = !nullable, !nullable
+				args := []*planpb.Expr{low, high}
+				selected := 1
+				if reverse {
+					args[0], args[1] = args[1], args[0]
+					selected = 0
+				}
+				count := distinctAggTestExpr(function.COUNT, true, planpb.Type{Id: int32(types.T_int64)}, args...)
+				builder, outer := newDistinctAggTestBuilder(1_000_000, 4, 0, []*planpb.Expr{count})
+				// An old physical key must not absorb either new tuple component.
+				outer.GroupBy = append(outer.GroupBy, distinctAggTestCol(types.T_int32, 1, 3, 4))
+				outer.GroupByHashKey = []int32{0}
+				require.NoError(t, builder.optimizeDistinctAgg(1))
+				if nullable {
+					require.Len(t, builder.qry.Nodes, 2)
+					require.NotZero(t, uint64(count.GetF().Func.Obj)&function.Distinct)
+					return
+				}
+				final := builder.qry.Nodes[outer.Children[0]]
+				require.Equal(t, planpb.Node_AGG, final.NodeType, "eligible tuple must receive a final pair Group")
+				require.Len(t, final.Children, 1)
+				local := builder.qry.Nodes[final.Children[0]]
+				require.Empty(t, local.AggList)
+				require.Empty(t, final.AggList)
+				require.Equal(t, []int32{0, 2, 3}, local.GroupByHashKey)
+				require.Equal(t, local.GroupByHashKey, final.GroupByHashKey)
+				require.Equal(t, int32(2+selected), builder.distinctKeyShuffleCols[final])
+				require.Len(t, count.GetF().Args, 1)
+				require.Zero(t, uint64(count.GetF().Func.Obj)&function.Distinct)
+				require.Equal(t, final.BindingTags[0], count.GetF().Args[0].GetCol().RelPos)
+				require.Equal(t, []int32{0}, outer.GroupByHashKey)
+				require.Equal(t, int32(0), local.Children[0])
+			})
+		}
+	}
+}
+
+func TestTupleCountDistinctRetainsConservativeFallbacks(t *testing.T) {
+	for _, reason := range []string{"low ndv", "missing ndv", "small input", "nan ndv", "infinite ndv", "unsupported type", "expression", "rollup", "mixed", "high group ndv", "unknown provenance"} {
+		t.Run(reason, func(t *testing.T) {
+			a := distinctAggTestCol(types.T_int32, 1, 1, 8)
+			b := distinctAggTestCol(types.T_int64, 1, 2, 1_000_000)
+			a.Typ.NotNullable, b.Typ.NotNullable = true, true
+			count := distinctAggTestExpr(function.COUNT, true, planpb.Type{Id: int32(types.T_int64)}, a, b)
+			builder, outer := newDistinctAggTestBuilder(1_000_000, 4, 0, []*planpb.Expr{count})
+			switch reason {
+			case "low ndv":
+				b.Ndv = 8
+			case "missing ndv":
+				b.Ndv = 0
+			case "small input":
+				builder.qry.Nodes[0].Stats.Outcnt = 10
+			case "nan ndv":
+				b.Ndv = math.NaN()
+			case "infinite ndv":
+				b.Ndv = math.Inf(1)
+			case "unsupported type":
+				a.Typ.Id = int32(types.T_float64)
+			case "expression":
+				b.Expr = MakePlan2Int64ConstExprWithType(1).Expr
+			case "rollup":
+				outer.GroupingFlag = []bool{false}
+			case "mixed":
+				outer.AggList = append(outer.AggList, distinctAggTestExpr(function.SUM, false, b.Typ, b))
+			case "unknown provenance":
+				b.GetCol().RelPos = 99
+			case "high group ndv":
+				outer.GroupBy[0].Ndv = 1_000_000
+			}
+			require.NoError(t, builder.optimizeDistinctAgg(1))
+			require.Len(t, builder.qry.Nodes, 2)
+			require.NotZero(t, uint64(count.GetF().Func.Obj)&function.Distinct)
+			require.Empty(t, builder.distinctKeyShuffleCols)
+		})
+	}
+}
+
+func TestTupleCountDistinctUsesAllColumnKeyContract(t *testing.T) {
+	a := distinctAggTestCol(types.T_int32, 1, 1, 8)
+	b := distinctAggTestCol(types.T_int64, 1, 2, 1_000_000)
+	a.Typ.NotNullable, b.Typ.NotNullable = true, true
+	count := distinctAggTestExpr(function.COUNT, true, planpb.Type{Id: int32(types.T_int64)}, a, b)
+	builder, outer := newDistinctAggTestBuilder(1_000_000, 1, 0, []*planpb.Expr{count})
+	outer.GroupBy = nil
+	require.NoError(t, builder.optimizeDistinctAgg(1))
+	final := builder.qry.Nodes[outer.Children[0]]
+	require.Equal(t, planpb.Node_AGG, final.NodeType, "eligible tuple must receive a final pair Group")
+	require.Len(t, final.Children, 1)
+	local := builder.qry.Nodes[final.Children[0]]
+	require.Len(t, local.GroupBy, 2)
+	require.Len(t, final.GroupBy, 2)
+	require.Empty(t, local.GroupByHashKey, "empty is the existing all-column equality contract")
+	require.Empty(t, final.GroupByHashKey)
+}
+
+func TestTupleCountDistinctCanonicalizesCharBeforeExchange(t *testing.T) {
+	a := distinctAggTestCol(types.T_char, 1, 1, 1_000_000)
+	a.Typ.Width, a.Typ.NotNullable = 32, true
+	b := distinctAggTestCol(types.T_int64, 1, 2, 8)
+	b.Typ.NotNullable = true
+	count := distinctAggTestExpr(function.COUNT, true, planpb.Type{Id: int32(types.T_int64)}, a, b)
+	builder, outer := newDistinctAggTestBuilder(1_000_000, 4, 0, []*planpb.Expr{count})
+	require.NoError(t, builder.optimizeDistinctAgg(1))
+	final := builder.qry.Nodes[outer.Children[0]]
+	require.Equal(t, planpb.Node_AGG, final.NodeType, "eligible tuple must receive a final pair Group")
+	require.Len(t, final.Children, 1)
+	local := builder.qry.Nodes[final.Children[0]]
+	require.True(t, isCastOverload(local.GroupBy[1], 2), "exchange must not see raw CHAR padding")
+	require.Equal(t, int32(types.T_varchar), local.GroupBy[1].Typ.Id)
+	require.Equal(t, int32(1), builder.distinctKeyShuffleCols[final])
+}
+
+func TestTupleCountDistinctProvesNullabilityThroughOuterJoin(t *testing.T) {
+	a := distinctAggTestCol(types.T_int64, 1, 1, 1_000_000)
+	b := distinctAggTestCol(types.T_int64, 2, 1, 1_000_000)
+	a.Typ.NotNullable, b.Typ.NotNullable = true, true
+	count := distinctAggTestExpr(function.COUNT, true, planpb.Type{Id: int32(types.T_int64)}, a, b)
+	builder, outer := newDistinctAggTestBuilder(1_000_000, 1, 0, []*planpb.Expr{count})
+	right := &planpb.Node{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{2}, Stats: builder.qry.Nodes[0].Stats}
+	join := &planpb.Node{NodeType: planpb.Node_JOIN, JoinType: planpb.Node_LEFT, Children: []int32{0, 2}, Stats: builder.qry.Nodes[0].Stats}
+	builder.qry.Nodes = append(builder.qry.Nodes, right, join)
+	builder.ctxByNode = append(builder.ctxByNode, nil, nil)
+	outer.Children, outer.GroupBy = []int32{3}, nil
+	require.NoError(t, builder.optimizeDistinctAgg(1))
+	require.Len(t, builder.qry.Nodes, 4)
+	require.Equal(t, []int32{3}, outer.Children)
+	require.NotZero(t, uint64(count.GetF().Func.Obj)&function.Distinct,
+		"NULL-extended columns retain the exact-state path regardless of bind-time NOT NULL")
 }

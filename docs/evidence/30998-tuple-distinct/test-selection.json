@@ -1,0 +1,34 @@
+{
+  "pattern": "^TestTupleCountDistinct|^TestOptimize.*Distinct|^TestDistinctKey|^Test.*LocalPreAggregation|^TestPadSpaceRemoteProtocolValidation$|^TestReadBarrier",
+  "tests": {
+    "pkg/sql/plan": [
+      "TestOptimizeSingleCountDistinctBuildsLocalPreDedupPath",
+      "TestOptimizePadSpaceCountDistinctBuildsLocalPreDedupPath",
+      "TestDistinctKeyPreAggregationRequiresEveryGroupingKeyNDV",
+      "TestOptimizeSingleCountDistinctPathSelectionAndFallbacks",
+      "TestOptimizeDistinctKeyPathLeavesMixedAggregatesUnchanged",
+      "TestOptimizeSingleSumDistinctKeepsExistingLogicalRewriteOnly",
+      "TestOptimizeSingleAvgDistinctBuildsLogicalRewrite",
+      "TestOptimizeAvgDistinctKeepsConservativeFallbacks",
+      "TestTupleCountDistinctKeepsCompleteKeysAndSelectsExchangeComponent",
+      "TestTupleCountDistinctRetainsConservativeFallbacks",
+      "TestTupleCountDistinctUsesAllColumnKeyContract",
+      "TestTupleCountDistinctCanonicalizesCharBeforeExchange",
+      "TestTupleCountDistinctProvesNullabilityThroughOuterJoin"
+    ],
+    "pkg/sql/compile": [
+      "TestPadSpaceRemoteProtocolValidation",
+      "TestCompileLocalPreAggregationKeepsEveryInputScope",
+      "TestCompileLocalPreAggregationPhysicalSelection",
+      "TestLocalPreAggregationOmissionGuards",
+      "TestLocalPreAggregationOmissionProjectsRawKey",
+      "TestLocalPreAggregationCompileShapeIsReachableFromSQL"
+    ],
+    "pkg/vm/engine/tae/logtail/service": [
+      "TestReadBarrierResponseFollowsEarlierLogtailUpdate",
+      "TestReadBarrierServerAdmissionHonorsCancellation",
+      "TestReadBarrierForcesFilteredProgressBeforeResponse",
+      "TestReadBarrierDoesNotRegressNewerSessionProgress"
+    ]
+  }
+}

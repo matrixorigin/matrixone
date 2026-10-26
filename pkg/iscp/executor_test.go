@@ -23,7 +23,9 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -766,7 +768,9 @@ func TestTryFlushWatermarkPreservesRunningStage(t *testing.T) {
 	table.jobs[JobKey{JobName: job.jobName, JobID: job.jobID}] = job
 
 	var updateSQL string
-	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator, options ...executor.StatementOption) (executor.Result, error) {
+		require.Len(t, options, 1)
+		require.Equal(t, lock.WaitPolicy_FastFail, options[0].WaitPolicy())
 		updateSQL = sql
 		return executor.Result{AffectedRows: 1}, nil
 	}
@@ -799,7 +803,7 @@ func TestTryFlushWatermarkRejectsLostCAS(t *testing.T) {
 	job.watermark = types.BuildTS(2, 0)
 	persistedBefore := job.persistedWatermark
 
-	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{AffectedRows: 0}, nil
 	}
 
@@ -830,7 +834,7 @@ func TestRollbackWatermarkFlushRestoresRetryableState(t *testing.T) {
 	job.watermark = types.BuildTS(2, 0)
 	table.jobs[jobKey] = job
 
-	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{AffectedRows: 1}, nil
 	}
 	reservations, err := table.tryFlushWatermark(context.Background(), nil, 0)
@@ -882,7 +886,7 @@ func TestFlushWatermarkForAllTablesRollsBackLocalStateOnCommitError(t *testing.T
 
 	exec := &ISCPTaskExecutor{ctx: context.Background(), tables: newISCPTableTree()}
 	job := newWatermarkFlushTestJob(exec, 3, "index_idx")
-	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{AffectedRows: 1}, nil
 	}
 	commitErr := errors.New("commit failed")
@@ -904,7 +908,7 @@ func TestFlushWatermarkForAllTablesCommitsLocalState(t *testing.T) {
 
 	exec := &ISCPTaskExecutor{ctx: context.Background(), tables: newISCPTableTree()}
 	job := newWatermarkFlushTestJob(exec, 3, "index_idx")
-	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
+	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator, _ ...executor.StatementOption) (executor.Result, error) {
 		return executor.Result{AffectedRows: 1}, nil
 	}
 	txn := &iscpTxnForTest{}
@@ -920,33 +924,59 @@ func TestFlushWatermarkForAllTablesCommitsLocalState(t *testing.T) {
 }
 
 func TestFlushWatermarkForAllTablesRollsBackPartialTransaction(t *testing.T) {
-	oldExecWithResult := ExecWithResult
-	t.Cleanup(func() { ExecWithResult = oldExecWithResult })
-
-	exec := &ISCPTaskExecutor{ctx: context.Background(), tables: newISCPTableTree()}
-	first := newWatermarkFlushTestJob(exec, 3, "first")
-	second := newWatermarkFlushTestJob(exec, 4, "second")
-	wantErr := errors.New("second update failed")
-	calls := 0
-	ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator) (executor.Result, error) {
-		calls++
-		if calls == 2 {
-			return executor.Result{}, wantErr
-		}
-		return executor.Result{AffectedRows: 1}, nil
-	}
-	txn := &iscpTxnForTest{}
-
-	err := exec.flushWatermarkForAllTablesWithTxn(0, txn)
-
-	require.ErrorIs(t, err, wantErr)
-	require.Equal(t, 2, calls)
-	require.False(t, txn.committed)
-	require.True(t, txn.rolledBack)
-	for _, job := range []*JobEntry{first, second} {
-		require.Equal(t, ISCPJobState_Completed, job.state)
-		expected := types.BuildTS(1, 0)
-		require.True(t, job.persistedWatermark.EQ(&expected))
+	for _, tc := range []struct {
+		name                      string
+		operationErr, rollbackErr error
+	}{
+		{"statement failure", errors.New("second update failed"), nil},
+		{"lock contention", moerr.NewLockConflictNoCtx(), nil},
+		{"cleanup failure", moerr.NewLockConflictNoCtx(), errors.New("rollback failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldExecWithResult := ExecWithResult
+			t.Cleanup(func() { ExecWithResult = oldExecWithResult })
+			exec := &ISCPTaskExecutor{ctx: context.Background(), tables: newISCPTableTree()}
+			first := newWatermarkFlushTestJob(exec, 3, "first")
+			second := newWatermarkFlushTestJob(exec, 4, "second")
+			calls := 0
+			ExecWithResult = func(_ context.Context, _ string, _ string, _ client.TxnOperator, options ...executor.StatementOption) (executor.Result, error) {
+				require.Len(t, options, 1)
+				require.Equal(t, lock.WaitPolicy_FastFail, options[0].WaitPolicy())
+				calls++
+				if calls == 2 {
+					return executor.Result{}, tc.operationErr
+				}
+				return executor.Result{AffectedRows: 1}, nil
+			}
+			txn := &iscpTxnForTest{rollbackErr: tc.rollbackErr}
+			err := exec.flushWatermarkForAllTablesWithTxn(0, txn)
+			require.ErrorIs(t, err, tc.operationErr)
+			if tc.rollbackErr != nil {
+				require.ErrorIs(t, err, tc.rollbackErr)
+			}
+			require.Equal(t, 2, calls)
+			require.False(t, txn.committed)
+			require.True(t, txn.rolledBack)
+			for _, job := range []*JobEntry{first, second} {
+				require.Equal(t, ISCPJobState_Completed, job.state)
+				expected := types.BuildTS(1, 0)
+				require.True(t, job.persistedWatermark.EQ(&expected))
+				require.Equal(t, uint64(5), job.currentLSN)
+			}
+			if tc.rollbackErr != nil {
+				return
+			}
+			// The next existing periodic flush retries both rows, not just the failed suffix.
+			next := &iscpTxnForTest{}
+			require.NoError(t, exec.flushWatermarkForAllTablesWithTxn(0, next))
+			require.Equal(t, 4, calls)
+			require.True(t, next.committed)
+			require.False(t, next.rolledBack)
+			for _, job := range []*JobEntry{first, second} {
+				require.Equal(t, ISCPJobState_Pending, job.state)
+				require.True(t, job.persistedWatermark.EQ(&job.watermark))
+			}
+		})
 	}
 }
 
@@ -1028,6 +1058,8 @@ func TestISCPRecoveryQuarantinesAmbiguousInitStage(t *testing.T) {
 		LSN: 5, LifecycleVersion: atomicInitLifecycleVersion, ErrorMsg: "retry initialization",
 	})
 	require.NoError(t, err)
+	atomicFreshStatus, err := MarshalJobStatus(&JobStatus{LifecycleVersion: atomicInitLifecycleVersion})
+	require.NoError(t, err)
 	encodeJSON := func(value string) []byte {
 		byteJSON, encodeErr := types.ParseStringToByteJson(value)
 		require.NoError(t, encodeErr)
@@ -1060,6 +1092,10 @@ func TestISCPRecoveryQuarantinesAmbiguousInitStage(t *testing.T) {
 		1, 3, "atomic-retryable", 9, ISCPJobState_Completed, "10-0",
 		encodeJSON(spec), encodeJSON(atomicRetryStatus), 0, true,
 	))
+	require.NoError(t, exec.addOrUpdateRecoveredJob(
+		1, 3, "atomic-fresh", 10, ISCPJobState_Completed, "10-0",
+		encodeJSON(spec), encodeJSON(atomicFreshStatus), 0, true,
+	))
 
 	table, ok := exec.getTable(1, 3)
 	require.True(t, ok)
@@ -1075,12 +1111,16 @@ func TestISCPRecoveryQuarantinesAmbiguousInitStage(t *testing.T) {
 	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "error", JobID: 7}].state)
 	require.Equal(t, ISCPJobState_Error, table.jobs[JobKey{JobName: "legacy-retryable", JobID: 8}].state)
 
-	// Only generations carrying durable atomic-protocol evidence remain
-	// schedulable, including a genuine retry after an atomic rollback.
+	// Both a fresh registration and a retry after an atomic rollback carry
+	// durable protocol evidence, so first-start recovery can schedule them.
 	iters, _ := table.getCandidate()
-	require.Len(t, iters, 1)
-	require.Equal(t, []string{"atomic-retryable"}, iters[0].jobNames)
-	require.Equal(t, []int8{JobStage_Init}, iters[0].stages)
+	require.Len(t, iters, 2)
+	var initJobs []string
+	for _, iter := range iters {
+		initJobs = append(initJobs, iter.jobNames...)
+		require.Equal(t, []int8{JobStage_Init}, iter.stages)
+	}
+	require.ElementsMatch(t, []string{"atomic-fresh", "atomic-retryable"}, initJobs)
 }
 
 func TestInitIterationCannotUseCleanTableWatermarkPath(t *testing.T) {

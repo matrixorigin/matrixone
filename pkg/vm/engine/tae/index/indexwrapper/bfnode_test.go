@@ -28,7 +28,6 @@ import (
 )
 
 func TestStaticFilterIndex(t *testing.T) {
-	defer testutils.AfterTest(t)()
 	ctx := context.Background()
 
 	var err error

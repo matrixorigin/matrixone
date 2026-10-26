@@ -318,25 +318,25 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 	case *tree.ShowColumns:
 		if len(cols) == 7 {
 			cols = []*plan2.ColDef{
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Field"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Type"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Null"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Key"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Default"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Extra"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Comment"},
 			}
 		} else {
 			cols = []*plan2.ColDef{
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Type"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Collation"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Null"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Key"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Default"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Extra"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Privileges"},
-				{Typ: plan2.Type{Id: int32(types.T_char)}, Name: "Comment"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Field"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Type"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Collation"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Null"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Key"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Default"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Extra"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Privileges"},
+				{Typ: plan2.Type{Id: int32(types.T_varchar)}, Name: "Comment"},
 			}
 		}
 	}
@@ -638,13 +638,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			cwft.compile = retComp
 		}
 
-		//check privilege
-		/* prepare not need check privilege
-		   err = authenticateUserCanExecutePrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
-		   if err != nil {
-		   	return nil, err
-		   }
-		*/
 	} else {
 		var planSnapshotTS *timestamp.Timestamp
 		if cwft.preparedStmt != nil {

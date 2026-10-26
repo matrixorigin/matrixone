@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -344,6 +345,9 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 	if diagnostic := sqlmongodb.RedactSQLForDiagnostics(text); diagnostic != text {
 		return diagnostic
 	}
+	if diagnostic := redactOutfileStatementText(statement, text); diagnostic != text {
+		return diagnostic
+	}
 
 	switch stmt := statement.(type) {
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
@@ -565,7 +569,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			if i != 0 {
 				sqlBuilder.WriteString(", ")
 			}
-			sqlBuilder.WriteString(fmt.Sprintf("row('%s', '%s')", dbName, tblName))
+			sqlBuilder.WriteString(fmt.Sprintf("row(%s, %s)", sqlquote.String(dbName), sqlquote.String(tblName)))
 		}
 		sqlBuilder.WriteString(") as tmp(db, tbl)")
 
@@ -604,7 +608,7 @@ func handleShowTableStatus(ses *Session, execCtx *ExecCtx, stmt *tree.ShowTableS
 			if i != 0 {
 				sqlBuilder.WriteString(", ")
 			}
-			sqlBuilder.WriteString(fmt.Sprintf("row('%s', '%s')", dbName, tblName))
+			sqlBuilder.WriteString(fmt.Sprintf("row(%s, %s)", sqlquote.String(dbName), sqlquote.String(tblName)))
 		}
 		sqlBuilder.WriteString(") as tmp(db, tbl)")
 		rets, err := ExeSqlInBgSes(ctx, bh, sqlBuilder.String())
@@ -1222,75 +1226,7 @@ func doCmdFieldList(reqCtx context.Context, ses *Session, _ *InternalCmdFieldLis
 		return moerr.NewNoDB(reqCtx)
 	}
 
-	//Get table infos for the database from the cube
-	//case 1: there are no table infos for the db
-	//case 2: db changed
-	//NOTE: it costs too much time.
-	//It just reduces the information in the auto-completion (auto-rehash) of the mysql client.
-	//var attrs []ColumnInfo
-	//
-	//if tableInfos == nil || db != dbName {
-	//	txnHandler := ses.GetTxnHandler()
-	//	eng := ses.GetStorage()
-	//	db, err := eng.Database(reqCtx, dbName, txnHandler.GetTxn())
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	names, err := db.Relations(reqCtx)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	for _, name := range names {
-	//		table, err := db.Relation(reqCtx, name)
-	//		if err != nil {
-	//			return err
-	//		}
-	//
-	//		defs, err := table.TableDefs(reqCtx)
-	//		if err != nil {
-	//			return err
-	//		}
-	//		for _, def := range defs {
-	//			if attr, ok := def.(*engine.AttributeDef); ok {
-	//				attrs = append(attrs, &engineColumnInfo{
-	//					name: attr.Attr.Name,
-	//					typ:  attr.Attr.Type,
-	//				})
-	//			}
-	//		}
-	//	}
-	//
-	//	if tableInfos == nil {
-	//		tableInfos = make(map[string][]ColumnInfo)
-	//	}
-	//	tableInfos[tableName] = attrs
-	//}
-	//
-	//cols, ok := tableInfos[tableName]
-	//if !ok {
-	//	//just give the empty info when there is no such table.
-	//	attrs = make([]ColumnInfo, 0)
-	//} else {
-	//	attrs = cols
-	//}
-	//
-	//for _, c := range attrs {
-	//	col := new(MysqlColumn)
-	//	col.SetName(c.GetName())
-	//	err = convertEngineTypeToMysqlType(c.GetType(), col)
-	//	if err != nil {
-	//		return err
-	//	}
-	//
-	//	/*
-	//		mysql CMD_FIELD_LIST response: send the column definition per column
-	//	*/
-	//	err = proto.SendColumnDefinitionPacket(col, int(COM_FIELD_LIST))
-	//	if err != nil {
-	//		return err
-	//	}
-	//}
+	// Return an empty field list to avoid catalog scans for client auto-completion.
 	return nil
 }
 
@@ -3500,7 +3436,6 @@ func handleCreateAccount(ses FeSession, execCtx *ExecCtx, ca *tree.CreateAccount
 }
 
 func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, proc *process.Process) error {
-	var err error
 	drop := &dropAccount{
 		IfExists: da.IfExists,
 	}
@@ -3519,14 +3454,6 @@ func handleDropAccount(ses FeSession, execCtx *ExecCtx, da *tree.DropAccount, pr
 		&BackgroundExecOption{forcePessimisticRC: true},
 	)
 	defer bh.Close()
-
-	err = bh.Exec(execCtx.reqCtx, "begin;")
-	defer func() {
-		err = finishTxn(execCtx.reqCtx, bh, err)
-	}()
-	if err != nil {
-		return err
-	}
 
 	return doDropAccount(execCtx.reqCtx, bh, ses.(*Session), drop)
 }
@@ -4329,26 +4256,32 @@ func buildPlanWithPrepareMode(
 			return ret, err
 		}
 
-		// Default handling of various statements
-		switch stmt := stmt.(type) {
-		case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
-			*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
-			*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
-			*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
-			*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
-			opt := plan2.NewBaseOptimizer(ctx)
-			optimized, err := opt.Optimize(stmt, isPrepareStmt)
-			if err != nil {
-				return nil, err
-			}
+		// The integration-only route exercises the same PREPARE/rebuild owner.
+		// Ordinary builds inline a constant false and have no activation switch.
+		var validationSelected bool
+		ret, validationSelected, err = buildViewSchemaValidationPlan(reqCtx, ses, ctx, stmt, isPrepareStmt)
+		if !validationSelected {
+			// Default handling of various statements
+			switch stmt := stmt.(type) {
+			case *tree.Select, *tree.ParenSelect, *tree.ValuesStatement,
+				*tree.Update, *tree.Delete, *tree.Insert, *tree.MultiInsert,
+				*tree.ShowDatabases, *tree.ShowTables, *tree.ShowSequences, *tree.ShowColumns, *tree.ShowColumnNumber,
+				*tree.ShowTableNumber, *tree.ShowCreateDatabase, *tree.ShowCreateTable, *tree.ShowIndex,
+				*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
+				opt := plan2.NewBaseOptimizer(ctx)
+				optimized, err := opt.Optimize(stmt, isPrepareStmt)
+				if err != nil {
+					return nil, err
+				}
 
-			ret = &plan2.Plan{
-				Plan: &plan2.Plan_Query{
-					Query: optimized,
-				},
+				ret = &plan2.Plan{
+					Plan: &plan2.Plan_Query{
+						Query: optimized,
+					},
+				}
+			default:
+				ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
 			}
-		default:
-			ret, err = plan2.BuildPlan(ctx, stmt, isPrepareStmt)
 		}
 
 		if ret != nil {
@@ -5937,11 +5870,6 @@ func executeStmtWithIncrStmt(ses FeSession,
 			panic("need txn handler 3")
 		}
 
-		//!!!NOTE!!!: it does not work
-		//_, txnOp = ses.GetTxnHandler().GetTxn()
-		//if txnOp != nil {
-		//	err = rollbackLastStmt(execCtx, txnOp, err)
-		//}
 	}()
 
 	err = dispatchStmt(ses, statsArr, execCtx)
@@ -6624,6 +6552,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		if err2 != nil {
 			return err2
 		}
+		if receipt, ok := makeOutfileReceipt(diagnosticStmt); ok && ses.tStmt != nil {
+			ses.tStmt.SetOutfileReceipt(*receipt)
+		}
 		// Commit only after the current statement has passed local admission and
 		// has a current statement identity. Authorization and plan construction
 		// still run after this boundary, matching the DDL implicit-commit
@@ -6746,7 +6677,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				seconds = float64(value)
 			}
 			if seconds > 0 {
-				proc.Base.UnixTime = int64(seconds * float64(time.Second))
+				proc.Base.UnixTime = sessionTimestampToUnixNano(seconds)
 			}
 		}
 		if ses.proc != nil {
@@ -6887,6 +6818,20 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		cacheKey, stmts, plans, planSnapshotTS, planStatsVersions, cacheProtocolVersion)
 
 	return nil
+}
+
+// sessionTimestampToUnixNano converts a validated timestamp system variable.
+// Round only the fractional seconds: multiplying the full epoch by 1e9 can
+// round just below a microsecond boundary before temporal functions truncate it.
+func sessionTimestampToUnixNano(seconds float64) int64 {
+	whole, fraction := math.Modf(seconds)
+	fractionMicros := min(int64(math.RoundToEven(fraction*1e6)), 999999)
+	// Like MySQL, cap the rounded fraction rather than carrying into a new second.
+	unixMicros := int64(whole)*1e6 + fractionMicros
+	// The accepted DOUBLE upper endpoint can round above MaxInt64 nanoseconds.
+	// Keep the last complete microsecond representable by the statement clock.
+	unixMicros = min(unixMicros, math.MaxInt64/int64(time.Microsecond))
+	return unixMicros * int64(time.Microsecond)
 }
 
 // sqlForRecordByStatement keeps the sanitized per-statement text aligned with
