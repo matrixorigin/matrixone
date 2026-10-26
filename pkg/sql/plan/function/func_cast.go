@@ -2995,10 +2995,10 @@ func strTypeToOthers(proc *process.Process,
 		return strToUnsignedWithProc(ctx, proc, source, rs, 64, length, selectList, mode, explicit, numericPrefix)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 32, length, selectList)
+		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 32, length, selectList, mode)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 64, length, selectList)
+		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 64, length, selectList, mode)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return strToDecimal64(proc, source, rs, length, selectList, mode)
@@ -7542,7 +7542,7 @@ func ParsePreparedStringToFloat64(s string, matrixOneNative bool) (float64, erro
 }
 
 func parseStringToFloatWithBitSize(s string, bitSize int, mode SQLCompatibilityMode) (float64, error) {
-	if isExtensionFloatCandidate(s) || mode == SQLCompatibilityMatrixOne {
+	if isRadixFloatCandidate(s) || mode == SQLCompatibilityMatrixOne {
 		return parseStrictFloatStringWithBitSize(s, bitSize)
 	}
 
@@ -7894,20 +7894,48 @@ func appendExplicitIntegerCastWarning(proc *process.Process, value string, warni
 	}
 }
 
+// FloatTextTruncated reports MySQL's nonempty textual float truncation fact.
+// Keep ASCII whitespace and radix recognition identical to the value parser.
+// Empty strings retain their existing zero-without-warning policy.
+func FloatTextTruncated(value string) bool {
+	trimmed := trimASCIISpace(value)
+	if trimmed == "" || isRadixFloatCandidate(trimmed) {
+		return false
+	}
+	prefix, _, ok := scanDecimalFloatPrefix(trimmed)
+	return !ok || prefix != trimmed
+}
+
+func diagnoseFloatText(proc *process.Process, ctx context.Context, mode castMode, value string) error {
+	if !FloatTextTruncated(value) {
+		return nil
+	}
+	if mode.isAssignment() {
+		message := fmt.Sprintf("Data truncated for DOUBLE value: '%-.128s'", trimASCIISpace(value))
+		if mode != castModeAssignmentIgnore && !statementIgnore(proc) &&
+			(mode == castModeStrictStringWidth || isStrictSqlMode(proc)) {
+			return moerr.NewAssignmentValueTruncated(ctx, message)
+		}
+		if proc != nil {
+			if sink, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+				sink.AppendWarningDiagnostic(moerr.WARN_DATA_TRUNCATED, message)
+			}
+		}
+		return nil
+	}
+	if proc != nil && proc.IsDMLStatement() && isStrictSqlMode(proc) && !statementIgnore(proc) {
+		return moerr.NewTruncatedWrongValue(ctx, "DOUBLE", trimASCIISpace(value))
+	}
+	appendNumericCoercionWarning(proc, value)
+	return nil
+}
+
 // appendNumericCoercionWarning mirrors MySQL's warning for a non-empty string
 // whose numeric prefix was consumed and whose remaining text was discarded.
 // Empty strings intentionally coerce to zero without a warning.
 func appendNumericCoercionWarning(proc *process.Process, value string) {
-	// Numeric prefix scanning follows MySQL's ASCII whitespace rules. Using
-	// strings.TrimSpace here would disagree with the conversion itself for
-	// inputs such as a leading non-breaking space: the value converts to zero,
-	// but the warning check would reinterpret it as a complete number.
 	trimmed := trimASCIISpace(value)
-	if trimmed == "" || isExtensionFloatCandidate(trimmed) {
-		return
-	}
-	prefix, _, ok := scanDecimalFloatPrefix(trimmed)
-	if ok && prefix == trimmed {
+	if !FloatTextTruncated(trimmed) {
 		return
 	}
 	if proc == nil {
@@ -7976,7 +8004,7 @@ func parseStrictFloatStringWithBitSize(s string, bitSize int) (float64, error) {
 	return value, nil
 }
 
-func isExtensionFloatCandidate(s string) bool {
+func isRadixFloatCandidate(s string) bool {
 	_, body, _, _ := splitCastNumericSign(s)
 	if body == "" {
 		return false
@@ -7987,21 +8015,13 @@ func isExtensionFloatCandidate(s string) bool {
 			return true
 		}
 	}
-	if len(body) >= 3 && strings.EqualFold(body[:3], "nan") {
-		return true
-	}
-	if len(body) >= 3 && strings.EqualFold(body[:3], "inf") {
-		return true
-	}
 	return false
 }
 
 // isAssignmentSpecialNumericSyntax excludes only the extension forms that
 // have an established non-decimal interpretation in the cast parser. Do not
-// reuse isExtensionFloatCandidate here: its prefix-oriented float behavior
-// intentionally recognizes words such as "information" as candidates, while
-// IGNORE integer/decimal assignment must treat those words as ordinary invalid
-// text and adjust them to zero with a warning.
+// reuse the float radix predicate here: integer/decimal IGNORE assignment
+// retains its separate special-token contract.
 func isAssignmentSpecialNumericSyntax(s string) bool {
 	_, body, _, _ := splitCastNumericSign(s)
 	if body == "" {
@@ -8521,7 +8541,12 @@ func strToFloatWithProc[T constraints.Float](
 	mode SQLCompatibilityMode,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList) error {
+	length int, selectList *FunctionSelectList, modes ...castMode) error {
+	cast := castModeNormal
+	if len(modes) > 0 {
+		cast = modes[0]
+	}
+
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
@@ -8567,7 +8592,9 @@ func strToFloatWithProc[T constraints.Float](
 					return tErr
 				}
 				if !isBinary && mode == SQLCompatibilityMySQL {
-					appendNumericCoercionWarning(proc, convertByteSliceToString(v))
+					if err := diagnoseFloatText(proc, ctx, cast, convertByteSliceToString(v)); err != nil {
+						return err
+					}
 				}
 			}
 			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
