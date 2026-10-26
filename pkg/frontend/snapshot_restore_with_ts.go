@@ -798,7 +798,7 @@ func restoreViewsFromTS(
 
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 		freeStatements(stmts)
 		if err != nil {
 			getLogger(ses.GetService()).Info(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
@@ -807,7 +807,7 @@ func restoreViewsFromTS(
 				return err
 			}
 			materializedDeps = restoreMaterializedViewDependencies(stmts, viewEntry.dbName, viewMap)
-			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 			freeStatements(stmts)
 			if err != nil {
 				if markUnservableViewInSort(ses, fmt.Sprintf("%d:%d", restoreAccount, snapshotTs), viewEntry, &g, key, err) {

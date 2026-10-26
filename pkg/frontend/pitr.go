@@ -1970,7 +1970,7 @@ func restoreViewsWithPitr(
 
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 		freeStatements(stmts)
 		if err != nil {
 			stmts, err = parseViewCreateSQLForRestore(ctx, viewEntry, 0)
@@ -1978,7 +1978,7 @@ func restoreViewsWithPitr(
 				return err
 			}
 			materializedDeps = restoreMaterializedViewDependencies(stmts, viewEntry.dbName, viewMap)
-			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			_, err = buildViewCreatePlanForRestore(compCtx, viewEntry, stmts[0])
 			freeStatements(stmts)
 			if err != nil {
 				// The dependency sort plans every view BEFORE the restore loop, so the
