@@ -1,0 +1,45 @@
+drop database if exists adjacent_aggregate_reuse;
+create database adjacent_aggregate_reuse;
+use adjacent_aggregate_reuse;
+set @saved_max_dop=@@max_dop;
+set max_dop=4;
+create table t(k int);
+insert into t select case when result%3=0 then null else result%2 end from generate_series(32768) g;
+select mo_ctl('dn','flush','adjacent_aggregate_reuse.t');
+➤ mo_ctl(dn, flush, adjacent_aggregate_reuse.t)[12,65535,0]  𝄀
+{
+  "method": "Flush",
+  "result": [
+    {
+      "returnStr": "OK"
+    }
+  ]
+}
+
+select table_cnt from table_stats('adjacent_aggregate_reuse.t','refresh','full') g;
+➤ table_cnt[8,53,31]  𝄀
+32768.0
+select table_cnt from table_stats('adjacent_aggregate_reuse.t','patch','{"table_cnt":5000000,"block_number":640,"ndv_map":{"k":5000000}}') g;
+➤ table_cnt[8,53,31]  𝄀
+5000000.0
+select count(*) from (select distinct k from (select distinct k from t) a) b;
+➤ count(*)[-5,64,0]  𝄀
+3
+select distinct k from (select distinct k from t) a order by k;
+➤ k[4,32,0]  𝄀
+null  𝄀
+0  𝄀
+1
+select count(*) from (select distinct k from (select distinct k from t where k>1) a) b;
+➤ count(*)[-5,64,0]  𝄀
+0
+prepare nested_distinct from 'select count(*) from (select distinct k from (select distinct k from t) a) b';
+execute nested_distinct;
+➤ count(*)[-5,64,0]  𝄀
+3
+execute nested_distinct;
+➤ count(*)[-5,64,0]  𝄀
+3
+deallocate prepare nested_distinct;
+set max_dop=@saved_max_dop;
+drop database adjacent_aggregate_reuse;

@@ -895,7 +895,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint8]().operatorIn
+					return newOpOperatorIntegerIn[uint8]().operatorIn
 				},
 			},
 			{
@@ -905,7 +905,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint16]().operatorIn
+					return newOpOperatorIntegerIn[uint16]().operatorIn
 				},
 			},
 			{
@@ -915,7 +915,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint32]().operatorIn
+					return newOpOperatorIntegerIn[uint32]().operatorIn
 				},
 			},
 			{
@@ -925,7 +925,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint64]().operatorIn
+					return newOpOperatorIntegerIn[uint64]().operatorIn
 				},
 			},
 			{
@@ -935,7 +935,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int8]().operatorIn
+					return newOpOperatorIntegerIn[int8]().operatorIn
 				},
 			},
 			{
@@ -945,7 +945,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int16]().operatorIn
+					return newOpOperatorIntegerIn[int16]().operatorIn
 				},
 			},
 			{
@@ -955,7 +955,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int32]().operatorIn
+					return newOpOperatorIntegerIn[int32]().operatorIn
 				},
 			},
 			{
@@ -965,7 +965,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int64]().operatorIn
+					return newOpOperatorIntegerIn[int64]().operatorIn
 				},
 			},
 			{
@@ -1206,7 +1206,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint8]().operatorNotIn
+					return newOpOperatorIntegerIn[uint8]().operatorNotIn
 				},
 			},
 			{
@@ -1216,7 +1216,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint16]().operatorNotIn
+					return newOpOperatorIntegerIn[uint16]().operatorNotIn
 				},
 			},
 			{
@@ -1226,7 +1226,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint32]().operatorNotIn
+					return newOpOperatorIntegerIn[uint32]().operatorNotIn
 				},
 			},
 			{
@@ -1236,7 +1236,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[uint64]().operatorNotIn
+					return newOpOperatorIntegerIn[uint64]().operatorNotIn
 				},
 			},
 			{
@@ -1246,7 +1246,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int8]().operatorNotIn
+					return newOpOperatorIntegerIn[int8]().operatorNotIn
 				},
 			},
 			{
@@ -1256,7 +1256,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int16]().operatorNotIn
+					return newOpOperatorIntegerIn[int16]().operatorNotIn
 				},
 			},
 			{
@@ -1266,7 +1266,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int32]().operatorNotIn
+					return newOpOperatorIntegerIn[int32]().operatorNotIn
 				},
 			},
 			{
@@ -1276,7 +1276,7 @@ var supportedOperators = []FuncNew{
 					return types.T_bool.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
-					return newOpOperatorFixedIn[int64]().operatorNotIn
+					return newOpOperatorIntegerIn[int64]().operatorNotIn
 				},
 			},
 			{
