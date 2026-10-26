@@ -1264,6 +1264,12 @@ var (
 				created_time,
 				comments
 			) values ("%s",%d,%d,"%s","%s");`
+	// User creation writes password_last_changed via current_timestamp() so
+	// the stored value is a session-local TIMESTAMP instant that matches the
+	// login-time readers (getExpiredTimeOfUserFormat): relying on the column
+	// default (UTC_TIMESTAMP, a tz-naive DATETIME form) shifts the measured
+	// password age by the creating session's zone offset and breaks
+	// default_password_lifetime at non-UTC zones.
 	initMoUserFormat = `insert into mo_catalog.mo_user(
 				user_id,
 				user_host,
@@ -1275,8 +1281,9 @@ var (
 				login_type,
 				creator,
 				owner,
-				default_role
-    		) values(%d,"%s","%s","%s","%s","%s",%s, "%s",%d,%d,%d);`
+				default_role,
+				password_last_changed
+    		) values(%d,"%s","%s","%s","%s","%s",%s, "%s",%d,%d,%d, current_timestamp());`
 	initMoUserWithoutIDFormat = `insert into mo_catalog.mo_user(
 				user_host,
 				user_name,
@@ -1288,8 +1295,9 @@ var (
 				login_type,
 				creator,
 				owner,
-				default_role
-    		) values("%s", "%s", "%s", "%s", "%s", %s, '%s', "%s",%d, %d, %d);`
+				default_role,
+				password_last_changed
+    		) values("%s", "%s", "%s", "%s", "%s", %s, '%s', "%s",%d, %d, %d, current_timestamp());`
 	initMoRolePrivPrefix = `insert into mo_catalog.mo_role_privs(
 				role_id,
 				role_name,

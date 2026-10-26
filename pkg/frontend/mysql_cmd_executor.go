@@ -412,11 +412,12 @@ func redactStatementErrorForLogging(err error, text string) error {
 // redactParseErrorSecrets scrubs lexer echoes of masked secret literals out
 // of a parser error message: the `near "..."` tail of a syntax error quotes
 // the raw input, which replays an unterminated or otherwise malformed
-// secret verbatim into the terminal log and statement records. The lexer
-// may echo only part of a masked span (skipped comments, or its truncated
-// >1024-byte tail); when the echo still shares a window with a masked
-// secret, the whole echo is replaced rather than returning partial secret
-// material.
+// secret verbatim into the terminal log and statement records. The echo
+// bytes are attacker-controlled — a password literal may itself contain
+// ` near "`, comments the lexer skips, or a literal longer than the lexer's
+// truncated echo — so a statement that carries a secret span never gets its
+// echo proven clean: the whole echo tail is replaced rather than matched
+// against partial secret windows.
 func redactParseErrorSecrets(err error, text string) error {
 	if err == nil || !containsPasswordWord(text) {
 		return err
@@ -435,37 +436,17 @@ func redactParseErrorSecrets(err error, text string) error {
 		changed = true
 	}
 
-	// Partial-echo scrub of the trailing `near "..."` lexer echo.
-	const nearAt = ` near "`
-	if idx := strings.LastIndex(msg, nearAt); idx >= 0 {
-		echoStart := idx + len(nearAt)
-		suffix := ""
-		echo := msg[echoStart:]
-		if strings.HasSuffix(echo, `";`) {
-			suffix = `";`
-			echo = echo[:len(echo)-2]
+	// Fail closed on the trailing `near "..."` lexer echo: the framing
+	// delimiter precedes the echo, so the first occurrence always bounds
+	// the attacker-controlled remainder regardless of what the password
+	// literal itself contains.
+	if idx := strings.Index(msg, ` near "`); idx >= 0 {
+		tail := ` near "******"`
+		if strings.HasSuffix(msg, `";`) {
+			tail = ` near "******";`
 		}
-		for _, secret := range secrets {
-			window := 8
-			if len(secret) < window {
-				window = len(secret)
-			}
-			if window == 0 {
-				continue
-			}
-			leaked := false
-			for k := 0; k+window <= len(secret); k++ {
-				if strings.Contains(echo, secret[k:k+window]) {
-					leaked = true
-					break
-				}
-			}
-			if leaked {
-				msg = msg[:echoStart] + "******" + suffix
-				changed = true
-				break
-			}
-		}
+		msg = msg[:idx] + tail
+		changed = true
 	}
 	if !changed {
 		return err

@@ -466,6 +466,59 @@ func TestInitUserPasswordExpireAndLock(t *testing.T) {
 		// time zone.
 		require.Contains(t, insert, passwordExpireNeverTimeSql)
 	})
+
+	t.Run("creation stamps session-local last-changed", func(t *testing.T) {
+		ses, bh, ctrl, ctx := newSessAndBg(t)
+		defer ctrl.Finish()
+
+		stubFreshUser(t, bh, "u9")
+
+		cu := &createUser{
+			Users: []*user{{
+				Username:  "u9",
+				AuthExist: true,
+				IdentTyp:  tree.AccountIdentifiedByPassword,
+				IdentStr:  "123456",
+			}},
+		}
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+
+		err := InitUser(ctx, ses, tenant, cu)
+		require.NoError(t, err)
+
+		var insert string
+		for _, s := range bh.executedSQLs {
+			if strings.HasPrefix(s, "insert into mo_catalog.mo_user(") {
+				insert = s
+			}
+		}
+		require.NotEmpty(t, insert, "expected the mo_user insert to be executed")
+		// The writer is session-local current_timestamp(), matching the
+		// login-time default_password_lifetime reader; the tz-naive
+		// UTC_TIMESTAMP column default must not supply the instant.
+		require.Contains(t, insert, "password_last_changed")
+		require.Contains(t, insert, ", current_timestamp());")
+	})
+}
+
+// TestInitMoUserFormatsSessionLocalLastChanged: both CREATE USER insert
+// formats carry the session-local writer explicitly.
+func TestInitMoUserFormatsSessionLocalLastChanged(t *testing.T) {
+	for name, format := range map[string]string{
+		"initMoUserFormat":          initMoUserFormat,
+		"initMoUserWithoutIDFormat": initMoUserWithoutIDFormat,
+	} {
+		require.Contains(t, format, "password_last_changed", name)
+		require.Contains(t, format, ", current_timestamp());", name)
+		require.NotContains(t, format, "utc_timestamp", name)
+	}
 }
 
 // TestPasswordChangeKeepsExpireNeverSentinel: a password change clears an
@@ -1097,8 +1150,51 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	scrubbed = redactStatementErrorForLogging(err, raw)
 	require.NotContains(t, scrubbed.Error(), longSecret[:64])
 
+	// Attacker-controlled delimiter: the password itself contains
+	// ` near "`, which used to make a delimiter search land inside the
+	// secret and leave an unmatched short suffix behind. Fail closed: the
+	// whole echo tail is replaced.
+	raw = "SET PASSWORD = /* annotation */ 'Abcd1234 near \"x"
+	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Abcd1234", "the raw echo carries the secret")
+	scrubbed = redactStatementErrorForLogging(err, raw)
+	require.NotContains(t, scrubbed.Error(), "Abcd1234")
+	require.Contains(t, scrubbed.Error(), ` near "******"`)
+	require.NotContains(t, scrubbed.Error(), "annotation")
+
+	// A short comment probe: the same fail-closed rule applies to any
+	// comment the lexer echo skips, not only long annotations.
+	raw = "SET PASSWORD = /*x*/'ShortPw1"
+	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
+	require.Error(t, err)
+	scrubbed = redactStatementErrorForLogging(err, raw)
+	require.NotContains(t, scrubbed.Error(), "ShortPw1")
+	require.Contains(t, scrubbed.Error(), ` near "******"`)
+
+	// Malformed SET PASSWORD client error boundary: the near-tail is always
+	// the masked placeholder once a secret literal is present, regardless of
+	// what the echo carried verbatim.
+	raw = "SET PASSWORD = 'ClientErr42' trailing garbage"
+	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
+	require.Error(t, err)
+	scrubbed = redactStatementErrorForLogging(err, raw)
+	require.Contains(t, scrubbed.Error(), ` near "******"`)
+	require.True(t, strings.HasSuffix(scrubbed.Error(), ` near "******"`) ||
+		strings.HasSuffix(scrubbed.Error(), ` near "******";`), scrubbed.Error())
+
 	// No secret shape: the original error passes through untouched.
 	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, "selec from", 1)
 	require.Error(t, err)
 	require.True(t, err == redactStatementErrorForLogging(err, "selec from"))
+
+	// Control: the masker records the post-'=' token of a malformed SET
+	// PASSWORD as a secret span even when it is not quoted, so the echo
+	// tail is replaced rather than kept — the fail-closed rule leaves no
+	// attacker-controlled remainder on this statement class either.
+	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, "SET PASSWORD = uuu", 1)
+	require.Error(t, err)
+	scrubbed = redactStatementErrorForLogging(err, "SET PASSWORD = uuu")
+	require.NotContains(t, scrubbed.Error(), "uuu")
+	require.Contains(t, scrubbed.Error(), ` near "******"`)
 }
