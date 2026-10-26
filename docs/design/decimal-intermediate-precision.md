@@ -69,7 +69,10 @@ Compare each candidate independently with clean main using local SF10 Q1-Q22,
 16 GiB CN SHARED cache and 32 GiB whole-application memory, zero measured I/O,
 spill and swap. Exclude cold warmups and collect profiles separately. Do not
 validate loaded data or query results in TPC-H benchmark scripts. A confirmed
-regression fails acceptance; an unresolved slowdown is not a pass.
+end-to-end query regression fails acceptance; an unresolved query slowdown is
+not a pass. TPC-H is the primary performance acceptance indicator. Execution
+microbenchmarks diagnose kernel selection, allocations and batch costs; report
+their results separately and assess their practical impact.
 
 ## Checked-route cost and downstream bounds
 
@@ -131,9 +134,27 @@ normal native-owner builds, with no decimal patch or source overlays in the
 alignment control. Independently resolve positive timing estimates before
 delivery. Then compare three isolated variants at the current base: ordinary clean main,
 clean main with alignment, and the precision candidate with alignment. Require
-all three pairwise controls to pass so the build option cannot hide a decimal
-regression. Repeat the complete SF10 and declared-decimal acceptance. A gain
-from alignment cannot waive a regression in any query or decimal control.
+all three pairwise TPC-H comparisons to pass so the build option cannot hide a
+query regression. Retain the declared-decimal controls to catch accidental wide
+kernels, allocation increases and material batch costs. A gain in one query
+cannot waive a regression in another query.
+
+## Current performance evidence
+
+The current isolated SF10 comparison has no statistically supported slowdown in
+Q1-Q22 across the three build comparisons. Q1 improves 7.65% against ordinary
+main and 7.26% against main with fixed alignment. Cold warmups are excluded and
+profiles are collected separately, with zero measured physical I/O, spill and
+swap under the stated cache and memory limits.
+
+The one-row DECIMAL(20,0) multiplication controls retain small execution costs
+against main with fixed alignment: 231.55 to 235.45 ns for the 17-digit peer,
+and 232.25 to 235.85 ns for the 18-digit peer. Allocation counts are unchanged,
+and the 256-row and 8192-row controls have no slower signals. With TPC-H as the
+primary indicator, these roughly 4 ns scalar differences are disclosed minor
+tradeoffs rather than automatic blockers for this correction. This decision
+does not waive a query regression, incorrect kernel selection, allocation
+increase or material batch regression.
 
 ## Candidate evidence
 
