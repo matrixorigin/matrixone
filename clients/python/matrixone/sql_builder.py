@@ -760,6 +760,8 @@ def build_update_query(
     where_conditions: Optional[List[str]] = None,
     where_params: Optional[List[Any]] = None,
     use_parameter_substitution: bool = False,
+    order_by: Optional[List[str]] = None,
+    limit: Optional[int] = None,
 ) -> Union[str, Tuple[str, List[Any]]]:
     """
     Build UPDATE query using unified SQL builder.
@@ -771,6 +773,8 @@ def build_update_query(
         where_conditions: WHERE conditions
         where_params: Parameters for WHERE conditions
         use_parameter_substitution: Whether to substitute parameters directly
+        order_by: ORDER BY expressions
+        limit: Maximum number of affected rows (zero affects no rows)
 
     Returns:
 
@@ -778,6 +782,10 @@ def build_update_query(
     """
     builder = MatrixOneSQLBuilder()
     builder.update(table_name).set(**set_values)
+    if order_by:
+        builder.order_by(*order_by)
+    if limit is not None:
+        builder.limit(limit)
 
     if where_conditions:
         for condition in where_conditions:
@@ -796,6 +804,8 @@ def build_delete_query(
     where_conditions: Optional[List[str]] = None,
     where_params: Optional[List[Any]] = None,
     use_parameter_substitution: bool = False,
+    order_by: Optional[List[str]] = None,
+    limit: Optional[int] = None,
 ) -> Union[str, Tuple[str, List[Any]]]:
     """
     Build DELETE query using unified SQL builder.
@@ -806,6 +816,8 @@ def build_delete_query(
         where_conditions: WHERE conditions
         where_params: Parameters for WHERE conditions
         use_parameter_substitution: Whether to substitute parameters directly
+        order_by: ORDER BY expressions
+        limit: Maximum number of affected rows (zero affects no rows)
 
     Returns:
 
@@ -813,6 +825,10 @@ def build_delete_query(
     """
     builder = MatrixOneSQLBuilder()
     builder.delete_from(table_name)
+    if order_by:
+        builder.order_by(*order_by)
+    if limit is not None:
+        builder.limit(limit)
 
     if where_conditions:
         for condition in where_conditions:
