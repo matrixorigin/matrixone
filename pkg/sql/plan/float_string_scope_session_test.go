@@ -140,6 +140,103 @@ func TestLegacyFloatOpaqueSessionWitnesses(t *testing.T) {
 	}
 }
 
+func TestLegacyFloatTableSessionWitnesses(t *testing.T) {
+	const expression = "concat(a,cast(concat(from_unixtime(0),cast(1 as decimal(10,0))/cast(7 as decimal(10,0))) as char(100)))"
+	const full = "-0.0000000000000012345678901234568"
+	for _, mixed := range []bool{false, true} {
+		name := "duplicate_defaults"
+		if mixed {
+			name = "distinct_origins_and_creation_settings"
+		}
+		t.Run(name, func(t *testing.T) {
+			compiler, source := legacyFloatScopeTable(t, "create table t(a double,g varchar(200) default("+expression+"),h varchar(200) default("+expression+"))", 4, time.FixedZone("creation", 8*3600+60))
+			wantH := full + "1970-01-01 08:01:000.1429"
+			if mixed {
+				// ALTER can introduce a different origin and session. A previous
+				// hint must not replace h's own precision, SQL or frozen values.
+				otherExpression := "concat(a,cast(concat(from_unixtime(120),cast(1 as decimal(10,0))/cast(7 as decimal(10,0))) as char(100)))"
+				_, other := legacyFloatScopeTable(t, "create table t(a double,h varchar(200) default("+otherExpression+"))", 30, time.FixedZone("other", 8*3600))
+				tableDumpDDLColumn(t, source, "h").Default = tableDumpDDLColumn(t, other, "h").Default
+				wantH = full + "1970-01-01 08:02:000.142857142857142857142857142857"
+			}
+			before := proto.Clone(source)
+			execution := CloneTableDefForPlan(source, true)
+			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
+			require.Equal(t, full+"1970-01-01 08:01:000.1429", executeLegacyFloatScope(t, compiler, execution, "g"))
+			require.Equal(t, wantH, executeLegacyFloatScope(t, compiler, execution, "h"))
+			sensitive, err := AnalyzeTableDumpBindings(compiler, execution, nil)
+			require.NoError(t, err)
+			require.True(t, sensitive)
+			_, err = AnalyzeTableDumpBindings(compiler, execution, execution)
+			require.NoError(t, err)
+			forged := proto.Clone(execution).(*planpb.TableDef)
+			require.NoError(t, planpb.VisitExprTree(tableDumpDDLColumn(t, forged, "h").Default.Expr, func(e *planpb.Expr) error {
+				if e.GetCol() != nil {
+					e.Typ.NotNullable = !e.Typ.NotNullable
+				}
+				return nil
+			}))
+			_, err = AnalyzeTableDumpBindings(compiler, execution, forged)
+			require.Error(t, err, "the first DEFAULT's witness cannot authorize another payload")
+			_, err = analyzeTableDumpBindingsWithCandidateVisitLimit(compiler, execution, nil, 128)
+			require.ErrorContains(t, err, "binding exceeds limit")
+			migrated := proto.Clone(execution)
+			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
+			require.True(t, proto.Equal(migrated, execution))
+			require.True(t, proto.Equal(before, source))
+			require.Same(t, time.UTC, compiler.GetProcess().GetSessionInfo().TimeZone)
+			require.Equal(t, "en_US", compiler.GetProcess().GetSessionInfo().LCTimeNames)
+			if !mixed {
+				forgedSource := proto.Clone(source).(*planpb.TableDef)
+				later := tableDumpDDLColumn(t, forgedSource, "h").Default.Expr
+				require.NoError(t, planpb.VisitExprTree(later, func(e *planpb.Expr) error {
+					if e.GetCol() != nil {
+						e.Typ.NotNullable = !e.Typ.NotNullable
+					}
+					return nil
+				}))
+				laterBefore := proto.Clone(later)
+				// A mismatched catalog may be left alone or hit the work cap;
+				// neither outcome may borrow g's proof to rewrite h.
+				_ = MigrateLegacyFloatStringTableDef(compiler, forgedSource)
+				require.False(t, hasLegacyFloatStringCast(tableDumpDDLColumn(t, forgedSource, "g").Default.Expr))
+				require.True(t, proto.Equal(laterBefore, tableDumpDDLColumn(t, forgedSource, "h").Default.Expr))
+			}
+
+			budget := &tableDumpBindingBudget{visits: tableDumpMaxCandidateVisits - 1}
+			budget.rememberSession(time.FixedZone("known", 8*3600+60), "de_DE")
+			col := tableDumpDDLColumn(t, source, "h")
+			bound, err := rebindLegacyFloatStringExpression(compiler, source, tableDumpExpression{kind: "default", name: col.Name, col: col, expr: col.Default.Expr, origin: col.Default.OriginString}, budget)
+			require.ErrorContains(t, err, "binding exceeds limit")
+			require.Nil(t, bound, "hints cannot bypass the shared work cap")
+		})
+	}
+}
+
+func TestTableDumpSessionHintBounds(t *testing.T) {
+	budget := &tableDumpBindingBudget{}
+	for i := 0; i <= tableDumpMaxSessionHints; i++ {
+		zone := time.FixedZone("hint", i*60)
+		budget.rememberSession(zone, "en_US")
+		budget.rememberSession(zone, "en_US")
+	}
+	require.Len(t, budget.sessionHints, tableDumpMaxSessionHints)
+	fresh := &tableDumpBindingBudget{}
+	found, err := fresh.matchSessionHints(time.UTC, "en_US", func(*time.Location, string) (*planpb.Expr, error) {
+		t.Fatal("a separate table must not inherit session hints")
+		return nil, nil
+	}, func(*planpb.Expr) (bool, error) { return true, nil })
+	require.NoError(t, err)
+	require.False(t, found)
+	_, err = budget.matchSessionHints(time.UTC, "en_US", func(*time.Location, string) (*planpb.Expr, error) {
+		return nil, context.Canceled
+	}, func(*planpb.Expr) (bool, error) {
+		t.Fatal("canceled hint binding cannot authorize a match")
+		return false, nil
+	})
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestLegacyFloatSessionSearchFairness(t *testing.T) {
 	zone := time.FixedZone("reading", 0)
 	witness := time.FixedZone("witness", 3600)
@@ -290,9 +387,13 @@ func TestLegacyFloatLiveSourceAlterReplay(t *testing.T) {
 	require.NotNil(t, ddlReplayForTable(ctx, "copy").columns["g"].defaultExpr)
 }
 
-func executeLegacyFloatScope(t *testing.T, compiler *MockCompilerContext, def *planpb.TableDef) string {
+func executeLegacyFloatScope(t *testing.T, compiler *MockCompilerContext, def *planpb.TableDef, names ...string) string {
 	t.Helper()
-	col := tableDumpDDLColumn(t, def, "g")
+	name := "g"
+	if len(names) != 0 {
+		name = names[0]
+	}
+	col := tableDumpDDLColumn(t, def, name)
 	expr := col.Default.GetExpr()
 	if col.GeneratedCol != nil {
 		expr = col.GeneratedCol.Expr

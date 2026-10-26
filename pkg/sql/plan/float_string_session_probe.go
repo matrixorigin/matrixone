@@ -38,6 +38,49 @@ type legacyFloatSessionProbe struct {
 type legacyFloatSessionIsland struct{ source, want *planpb.Expr }
 type legacyFloatSessionFoldKey struct{}
 
+// Hints live only for one table verification, alongside its unchanged total
+// work budget. Retain no expression or binding era: each consumer must bind and
+// verify its own complete candidate. Bounded retention only accelerates search;
+// evicted or unsuitable sessions remain reachable through the normal fallback.
+type tableDumpSessionHint struct {
+	zone   *time.Location
+	locale string
+}
+
+const tableDumpMaxSessionHints = 8
+
+func (b *tableDumpBindingBudget) rememberSession(zone *time.Location, locale string) {
+	hint := tableDumpSessionHint{zone, locale}
+	for _, previous := range b.sessionHints {
+		if previous == hint {
+			return
+		}
+	}
+	if len(b.sessionHints) == tableDumpMaxSessionHints {
+		copy(b.sessionHints, b.sessionHints[1:])
+		b.sessionHints[len(b.sessionHints)-1] = hint
+	} else {
+		b.sessionHints = append(b.sessionHints, hint)
+	}
+}
+
+func (b *tableDumpBindingBudget) matchSessionHints(zone *time.Location, locale string,
+	bind func(*time.Location, string) (*planpb.Expr, error), match func(*planpb.Expr) (bool, error)) (bool, error) {
+	for _, hint := range b.sessionHints {
+		if hint.zone == zone && hint.locale == locale {
+			continue // This candidate was already bound in the reading session.
+		}
+		bound, err := bind(hint.zone, hint.locale)
+		if err != nil {
+			return false, err
+		}
+		if matched, err := match(bound); matched || err != nil {
+			return matched, err
+		}
+	}
+	return false, nil
+}
+
 func prepareLegacyFloatSessionProbe(ctx CompilerContext, stored, folded, source *planpb.Expr, search tableDumpSessionCandidate, budget *tableDumpBindingBudget) (*legacyFloatSessionProbe, error) {
 	if source == nil || folded == nil || search.mode&tableDumpBindingPreJSON != 0 {
 		return nil, nil

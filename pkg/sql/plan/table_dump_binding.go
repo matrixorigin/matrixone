@@ -43,6 +43,7 @@ const (
 
 type tableDumpBindingBudget struct {
 	text, nodes, visits int
+	sessionHints        []tableDumpSessionHint
 }
 
 type tableDumpExpressionVisitor struct {
@@ -1045,7 +1046,12 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			if supplied != nil {
 				want = sourceItems[i].expr
 			}
-			matchCandidate := func(mode tableDumpBindingMode, candidate *planpb.Expr) (bool, error) {
+			matchCandidate := func(mode tableDumpBindingMode, candidate *planpb.Expr) (accepted bool, matchErr error) {
+				defer func() {
+					if accepted && matchErr == nil && item.kind == "default" {
+						budget.rememberSession(proc.GetSessionInfo().TimeZone, proc.GetSessionInfo().LCTimeNames)
+					}
+				}()
 				if sameTableDumpBoundExpression(want, candidate) ||
 					mode&tableDumpBindingLegacyFloat != 0 && sameHistoricalFloatBoundExpression(want, candidate) {
 					return true, nil
@@ -1155,6 +1161,25 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 						if matchErr != nil {
 							stmt.Free()
 							return false, matchErr
+						}
+					}
+					if !matched && item.kind == "default" && (dependency.timeZone || dependency.locale) {
+						readingDependency := dependency
+						var hintErr error
+						matched, hintErr = budget.matchSessionHints(zone, locale,
+							func(tz *time.Location, lc string) (*planpb.Expr, error) {
+								dependency = tableDumpDefaultSession{}
+								bound, _ := bind(increment, mode, tz, lc)
+								return bound, fatal
+							}, func(bound *planpb.Expr) (bool, error) { return matchCandidate(mode, bound) })
+						dependency = readingDependency
+						proc.GetSessionInfo().TimeZone, proc.GetSessionInfo().LCTimeNames = zone, locale
+						if hintErr != nil {
+							stmt.Free()
+							return false, hintErr
+						}
+						if matched {
+							sensitive = true
 						}
 					}
 

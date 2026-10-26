@@ -284,7 +284,11 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 			}
 			finish := func(search tableDumpSessionCandidate, old *planpb.Expr) (*planpb.Expr, error) {
 				scope, declaration, bindingMode := tableDumpBindingScope(def, ddlScope, item, search.mode)
-				return finishLegacyFloatStringExpression(ctx, scope, declaration, ast, search.increment, bindingMode, old, visit.nodes, budget)
+				repaired, err := finishLegacyFloatStringExpression(ctx, scope, declaration, ast, search.increment, bindingMode, old, visit.nodes, budget)
+				if err == nil && repaired != nil && item.kind == "default" {
+					budget.rememberSession(proc.GetSessionInfo().TimeZone, proc.GetSessionInfo().LCTimeNames)
+				}
+				return repaired, err
 			}
 			var sessions []tableDumpSessionCandidate
 			var probes []*legacyFloatSessionProbe
@@ -329,6 +333,20 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 						}
 						if match(search, bound) {
 							return finish(search, matched)
+						}
+						if item.kind == "default" && (dependency.timeZone || dependency.locale) {
+							readingDependency := dependency
+							found, err := budget.matchSessionHints(zone, locale,
+								func(tz *time.Location, lc string) (*planpb.Expr, error) { return bind(search, tz, lc) },
+								func(bound *planpb.Expr) (bool, error) { return match(search, bound), nil })
+							if err != nil {
+								return nil, err
+							}
+							if found {
+								return finish(witness, matched)
+							}
+							dependency = readingDependency
+							proc.GetSessionInfo().TimeZone, proc.GetSessionInfo().LCTimeNames = zone, locale
 						}
 						if item.kind == "default" && (dependency.folded || bound == nil && (dependency.timeZone || dependency.locale)) {
 							possible, err := legacyFloatSessionCandidateMayMatch(ctx.GetContext(), item.expr, bound, dependency.unfolded, budget)
