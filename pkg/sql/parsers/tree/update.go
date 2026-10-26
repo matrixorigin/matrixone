@@ -292,6 +292,7 @@ type HivePartColType struct {
 type ExParam struct {
 	ExternType            int32
 	JsonData              string
+	JsonBinary            string
 	FileService           fileservice.FileService
 	NullMap               map[string]([]string)
 	S3Param               *S3Parameter
@@ -474,6 +475,8 @@ func formatS3option(ctx *FmtCtx, option []string) {
 			ctx.WriteString("'format'='" + option[i+1] + "'")
 		case "jsondata":
 			ctx.WriteString("'jsondata'='" + option[i+1] + "'")
+		case "json_binary":
+			ctx.WriteString("'json_binary'='" + option[i+1] + "'")
 		case "role_arn":
 			ctx.WriteString("'role_arn'='" + option[i+1] + "'")
 		case "external_id":

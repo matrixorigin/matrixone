@@ -1,0 +1,13 @@
+Project
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=8 bytes OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=8 bytes (min=8 bytes, max=8 bytes)
+  ->  Aggregate
+        Analyze: timeConsumed=3ms group_time=[0ms,0ms,1ms,1ms] mergegroup_time=[0ms] waitTime=505ms inputRows=333337 outputRows=1 (min=1, max=1) InputSize=2.54 MiB OutputSize=8 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=384.00 KiB (min=128.00 KiB, max=128.00 KiB)
+        Aggregate Functions: count(#[0,0])
+        ->  Aggregate
+              Analyze: timeConsumed=1935ms group_time=[226ms,266ms,314ms,440ms] waitTime=0ms inputRows=0 outputRows=333337 (min=83085, max=83698) InputSize=0 bytes OutputSize=2.54 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=40.82 MiB (min=9.13 MiB, max=9.13 MiB) SpillRows=941506 SpillSize=14.88 MiB (min=3.64 MiB, max=3.76 MiB)
+              Group Key: #[0,0], #[0,1] shuffle: hash(#[0,1])
+              ->  Aggregate
+                    Analyze: timeConsumed=339ms group_time=[61ms,73ms,92ms,111ms] waitTime=0ms inputRows=1000000 outputRows=1000000 (min=245760, max=253952) InputSize=15.26 MiB OutputSize=15.26 MiB ReadSize=0 bytes|0 bytes|0 bytes MemorySize=36.52 MiB (min=9.13 MiB, max=9.13 MiB)
+                    Group Key: nn.b, nn.a
+                    ->  Table Scan on qa30995.nn
+                          Analyze: timeConsumed=0ms scan_time=[0ms,0ms,0ms,0ms] waitTime=4ms inputBlocks=123 inputRows=1000000 outputRows=1000000 (min=245760, max=253952) InputSize=15.26 MiB OutputSize=15.26 MiB ReadSize=3.86 MiB|0 bytes|0 bytes MemorySize=1.00 MiB (min=256.00 KiB, max=256.00 KiB)

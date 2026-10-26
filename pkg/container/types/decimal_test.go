@@ -15,6 +15,7 @@
 package types
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"math/big"
@@ -1618,6 +1619,65 @@ func TestDecimalFromCoefficient(t *testing.T) {
 			}
 		})
 	}
+	t.Run("128-words-and-input", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			digits  []byte
+			invalid bool
+		}{
+			{name: "nil"},
+			{name: "empty", digits: []byte{}},
+			{name: "zero18", digits: []byte(strings.Repeat("0", 18))},
+			{name: "leading-zero18", digits: []byte("001732206349000167")},
+			{name: "microseconds16", digits: []byte("1732206349000167")},
+			{name: "max18", digits: []byte(strings.Repeat("9", 18))},
+			{name: "min19", digits: []byte("1000000000000000000")},
+			{name: "max19", digits: []byte(strings.Repeat("9", 19))},
+			{name: "low-word-carry20", digits: []byte("18446744073709551616")},
+			{name: "leading-zero38", digits: []byte(strings.Repeat("0", 22) + "1732206349000167")},
+			{name: "max38", digits: []byte(strings.Repeat("9", 38))},
+			{name: "zero39-rejected-by-width", digits: []byte(strings.Repeat("0", 39)), invalid: true},
+			{name: "max39-rejected-by-width", digits: []byte(strings.Repeat("9", 39)), invalid: true},
+			{name: "below-digit", digits: []byte("/"), invalid: true},
+			{name: "above-digit", digits: []byte(":"), invalid: true},
+			{name: "invalid-last18", digits: []byte(strings.Repeat("1", 17) + "x"), invalid: true},
+			{name: "invalid-first18", digits: []byte("x" + strings.Repeat("1", 17)), invalid: true},
+			{name: "invalid-middle18", digits: []byte("12345678x123456789"), invalid: true},
+			{name: "plus-not-a-coefficient", digits: []byte("+1"), invalid: true},
+			{name: "minus-not-a-coefficient", digits: []byte("-1"), invalid: true},
+			{name: "point-not-a-coefficient", digits: []byte("1.2"), invalid: true},
+			{name: "exponent-not-a-coefficient", digits: []byte("1e2"), invalid: true},
+			{name: "space-not-ignored", digits: []byte("1 "), invalid: true},
+			{name: "NUL-not-ignored", digits: []byte{'1', 0, '2'}, invalid: true},
+			{name: "fullwidth-not-ASCII", digits: []byte("１２"), invalid: true},
+			{name: "Arabic-not-ASCII", digits: []byte("١٢"), invalid: true},
+			{name: "invalid-UTF8", digits: []byte{0xff}, invalid: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				before := bytes.Clone(tc.digits)
+				var want Decimal128
+				if !tc.invalid && len(tc.digits) > 0 {
+					// Standard-library integer arithmetic is independent of the
+					// production decimal parser, formatter and digit accumulator.
+					value, ok := new(big.Int).SetString(string(tc.digits), 10)
+					require.True(t, ok)
+					want = Decimal128{B0_63: value.Uint64(), B64_127: new(big.Int).Rsh(new(big.Int).Set(value), 64).Uint64()}
+				}
+				got, err := Decimal128FromCoefficient(tc.digits)
+				require.Equal(t, before, tc.digits, "coefficient input must not be modified")
+				if tc.invalid {
+					code, ok := moerr.GetMoErrCode(err)
+					require.True(t, ok)
+					require.Equal(t, uint16(20301), code)
+					require.EqualError(t, err, "invalid input: invalid Decimal128 coefficient")
+					require.Equal(t, Decimal128{}, got, "invalid input must not return a partial coefficient")
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, want, got)
+				}
+			})
+		}
+	})
 }
 
 func TestDecimal64DivWidenedScale(t *testing.T) {

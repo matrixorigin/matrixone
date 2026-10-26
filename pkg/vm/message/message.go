@@ -405,11 +405,3 @@ func AddrBroadCastOnCurrentCN() MessageAddress {
 		ParallelID: -1,
 	}
 }
-
-func AddrBroadCastOnALLCN() MessageAddress {
-	return MessageAddress{
-		CnAddr:     ALLCN,
-		OperatorID: -1,
-		ParallelID: -1,
-	}
-}
