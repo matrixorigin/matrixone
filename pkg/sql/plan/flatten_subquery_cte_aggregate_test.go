@@ -62,18 +62,22 @@ func TestCorrelatedLocalCTEAggregateReaggregates(t *testing.T) {
 	}
 }
 
-func TestCorrelatedLocalCTENonEqAggregateRejectsUnsafeShapes(t *testing.T) {
+func TestCorrelatedLocalCTENonEqAggregateUsesCompleteRelation(t *testing.T) {
 	t.Run("aggregate behind join", func(t *testing.T) {
-		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `SELECT o.N_NATIONKEY,
+		p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `SELECT o.N_NATIONKEY,
 			(WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY),
 			 y AS (SELECT 1 AS k) SELECT m FROM x CROSS JOIN y) FROM NATION o`)
-		require.ErrorContains(t, err, "non-equality correlated aggregate behind a non-transparent projection")
+		require.NoError(t, err)
+		require.NotNil(t, p.GetQuery().Correlation)
+		require.NoError(t, p.GetQuery().ValidateCorrelation())
 	})
 	t.Run("nested aggregate", func(t *testing.T) {
-		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `SELECT o.N_NATIONKEY,
+		p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, `SELECT o.N_NATIONKEY,
 			(WITH a AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY <= o.N_NATIONKEY),
 			 x AS (SELECT SUM(m) AS s FROM a) SELECT s FROM x) FROM NATION o`)
-		require.ErrorContains(t, err, "nested non-equality correlated aggregate")
+		require.NoError(t, err)
+		require.NotNil(t, p.GetQuery().Correlation)
+		require.NoError(t, p.GetQuery().ValidateCorrelation())
 	})
 	for _, tc := range []struct{ name, sql string }{
 		{"synthetic row argument", `SELECT o.N_NATIONKEY,
@@ -87,8 +91,10 @@ func TestCorrelatedLocalCTENonEqAggregateRejectsUnsafeShapes(t *testing.T) {
 			 SELECT m FROM x) FROM NATION o`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
-			require.Error(t, err)
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			require.NotNil(t, p.GetQuery().Correlation)
+			require.NoError(t, p.GetQuery().ValidateCorrelation())
 		})
 	}
 }

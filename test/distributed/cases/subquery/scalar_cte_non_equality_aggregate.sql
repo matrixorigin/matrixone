@@ -9,7 +9,7 @@ insert into outer_rows values (1, 1), (2, 2), (3, 3), (4, 0), (5, null), (6, 2);
 insert into inner_rows values (1, 10), (2, null), (3, 30), (4, 40);
 
 -- @case
--- @desc:issue #29129 - a local CTE aggregate remains scalar for non-equality correlation
+-- @desc:非等值相关聚合保留完整内层关系及标量语义
 -- @label:bvt
 select o.id, o.n,
        (with x as (select max(i.n) as m from inner_rows i where i.n <= o.n) select m from x) as max_le,
@@ -40,12 +40,12 @@ select o.id, p.id,
 from outer_rows o cross join outer_rows p
 where o.id in (1, 4) and p.id in (1, 4) order by o.id, p.id;
 
--- A second aggregate cannot be replaced by the single raw-row reaggregation.
+-- 嵌套聚合保留各层空集语义，不替换为单次原始行重聚合。
 select o.id, (with a as (select max(i.n) as m from inner_rows i where i.n <= o.n),
               x as (select sum(m) as s from a) select s from x) as nested_value
 from outer_rows o order by o.id;
 
--- An aggregate hidden behind a JOIN also cannot use the scalar rewrite.
+-- JOIN 包装不能丢弃聚合输出。
 select o.id, (with x as (select max(i.n) as m from inner_rows i where i.n <= o.n),
               y as (select 1 as k) select x.m from x cross join y) as joined_value
 from outer_rows o order by o.id;
@@ -118,6 +118,81 @@ from outer_rows o order by o.id;
 select o.id, (with x as (select i.n, max(i.v) as m from inner_rows i group by i.n)
               select m from x where x.n < o.n) as independent_group
 from outer_rows o where o.id = 2;
+
+-- 聚合结果表达式、HAVING 和 DISTINCT 分别保留空集与删除输出行的差异。
+select o.id,
+       (select max(i.v) + 1 from inner_rows i where i.n <= o.n) as plus_one,
+       (select coalesce(max(i.v), -1) from inner_rows i where i.n <= o.n) as coalesced,
+       (select case when max(i.v) is null then -1 else max(i.v) end from inner_rows i where i.n <= o.n) as case_value,
+       (select max(i.v) from inner_rows i where i.n <= o.n having max(i.v) >= 30) as having_value,
+       (select distinct max(i.v) from inner_rows i where i.n <= o.n) as distinct_value,
+       (select count(*) from inner_rows i where i.n <= o.n having count(*) = 0) as empty_count
+from outer_rows o order by o.id;
+
+-- 分页属于每个外层行自己的分组结果；LIMIT 0 和 OFFSET 可删除全局聚合输出。
+select o.id,
+       (select max(i.v) from inner_rows i where i.n <= o.n group by i.n order by i.n desc limit 1) as top_value,
+       (select max(i.v) from inner_rows i where i.n <= o.n group by i.n order by i.n desc limit 1 offset 1) as previous_value,
+       (select count(*) from inner_rows i where i.n <= o.n limit 0) as deleted_value,
+       (select count(*) from inner_rows i where i.n <= o.n limit 1 offset 1) as skipped_value
+from outer_rows o order by o.id;
+
+select o.id,
+       (select max(i.v) from inner_rows i where i.n <= o.n) as derived_max,
+       (select count(*) from (select n from inner_rows union all select n from inner_rows) i where i.n <= o.n) as union_count,
+       (select count(distinct i.n) from (select n from inner_rows union all select n from inner_rows) i where i.n <= o.n) as union_distinct_count
+from (select id, n from outer_rows) o order by o.id;
+select o.id, x.id,
+       (select max(i.v) from inner_rows i where i.n <= o.n and i.n < x.id) as two_outer_value
+from outer_rows o join outer_rows x on x.id = o.id order by o.id;
+
+-- 多组不能静默取首行；未选 CASE 分支不能触发该错误。
+select (select count(*) from inner_rows i where i.n <= o.n group by i.n having i.n > 0)
+from outer_rows o where o.id = 3;
+select o.id, case when o.id < 0 then
+       (select count(*) from inner_rows i where i.n <= o.n group by i.n) else 7 end as guarded_value
+from outer_rows o order by o.id;
+
+-- 在不同消费入口保持相同结果，PREPARE 不跨执行保留参数和结果。
+select o.id from outer_rows o
+where (select max(i.v) + 1 from inner_rows i where i.n <= o.n) > 20 order by o.id;
+select o.id from outer_rows o
+order by (select coalesce(max(i.v), -1) from inner_rows i where i.n <= o.n), o.id;
+create view range_values as select o.id,
+       (select coalesce(max(i.v), -1) from inner_rows i where i.n <= o.n) as v from outer_rows o;
+select * from range_values order by id;
+create table range_values_copy as select * from range_values;
+select * from range_values_copy order by id;
+prepare range_value from 'select o.id, (select max(i.v) from inner_rows i where i.n <= o.n group by i.n order by i.n desc limit 1) as v from outer_rows o where o.id = ?';
+set @range_id = 3;
+execute range_value using @range_id;
+set @range_id = 4;
+execute range_value using @range_id;
+set @range_id = 2;
+execute range_value using @range_id;
+deallocate prepare range_value;
+set @range_id = null;
+
+-- DISTINCT 日期 CTE 与范围过滤共同决定滚动去重计数。
+with events as (
+  select 1 as entity_id, cast('2025-01-01 00:00:00' as datetime) as event_time
+  union all select 2, cast('2025-01-02 00:00:00' as datetime)
+  union all select 1, cast('2025-01-08 00:00:00' as datetime)
+), days as (select distinct cast(event_time as date) as observation_date from events)
+select days.observation_date,
+       (select count(distinct events.entity_id) from events
+        where cast(events.event_time as date) <= days.observation_date
+          and timestampdiff(day, events.event_time, cast(days.observation_date as datetime)) between 0 and 6) as visitors
+from days order by days.observation_date;
+
+-- 递归源同样需要完整分组语义；多组的负例在第一条外层行立即报错。
+with recursive r(n) as (select 1 union all select n + 1 from r where n < 3)
+select n, (select count(*) from r i where i.n <= r.n group by i.n having i.n > 0 order by i.n desc limit 1) as cnt
+from r order by n;
+with recursive r(n) as (select 1 union all select n + 1 from r where n < 3)
+select (select count(*) from r i where i.n <= r.n group by i.n having i.n > 0)
+from r where n = 3;
+select 1 as connection_reusable;
 
 -- @teardown
 drop database test_scalar_cte_non_eq_agg;

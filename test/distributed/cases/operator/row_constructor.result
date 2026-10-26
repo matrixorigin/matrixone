@@ -631,19 +631,25 @@ k    real_rows_only
 1    1
 2    0
 select o.k, (0,null) <=>
-(select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k limit 0) as rejected_limit
+(select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k limit 0) as limited_empty_value
 from row_scalar_outer_28295 o order by o.k;
-pagination in non-equality correlated aggregate is not supported is not yet implemented
+➤ k[4,32,0]  ¦  limited_empty_value[-6,8,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0
 select o.k, (0,null) <=>
-(select sum(coalesce(i.v,0)),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as rejected_expression
+(select sum(coalesce(i.v,0)),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as expression_value
 from row_scalar_outer_28295 o order by o.k;
-unsupported non-equality correlated aggregate input is not yet implemented
+➤ k[4,32,0]  ¦  expression_value[-6,8,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0
 select o.k, (o.k,(select v from row_scalar_inner_28295 where k=1)) =
-(select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as rejected_composition
+(select count(*),sum(i.v) from row_scalar_inner_28295 i where i.k<o.k) as composed_value
 from row_scalar_outer_28295 o order by o.k;
-non-equality correlated aggregate with outer composition cannot be safely decorrelated is not yet implemented
-select 1 as query_after_rejections;
-query_after_rejections
+➤ k[4,32,0]  ¦  composed_value[-6,8,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0
+select 1 as query_after_aggregates;
+➤ query_after_aggregates[-5,64,0]  𝄀
 1
 insert into row_scalar_inner_28295 values (1,20);
 select o.k, (select group_concat(i.v order by i.v desc separator '~')

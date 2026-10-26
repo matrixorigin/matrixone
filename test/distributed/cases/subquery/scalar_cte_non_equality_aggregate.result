@@ -62,7 +62,7 @@ from outer_rows o where exists (select 1 from inner_rows e where e.n = o.n) orde
 select o.id, exists (select 1 from inner_rows e where e.n = o.n) as present,
 (with x as (select max(i.n) as m from inner_rows i where i.n <= o.n) select m from x) as cte_max
 from outer_rows o order by o.id;
-➤ id[4,32,0]  ¦  present[-7,1,0]  ¦  cte_max[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  present[-6,8,0]  ¦  cte_max[4,32,0]  𝄀
 1  ¦  1  ¦  1  𝄀
 2  ¦  1  ¦  2  𝄀
 3  ¦  1  ¦  3  𝄀
@@ -81,11 +81,23 @@ where o.id in (1, 4) and p.id in (1, 4) order by o.id, p.id;
 select o.id, (with a as (select max(i.n) as m from inner_rows i where i.n <= o.n),
 x as (select sum(m) as s from a) select s from x) as nested_value
 from outer_rows o order by o.id;
-nested non-equality correlated aggregate cannot be safely decorrelated is not yet implemented
+➤ id[4,32,0]  ¦  nested_value[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  null  𝄀
+5  ¦  null  𝄀
+6  ¦  2
 select o.id, (with x as (select max(i.n) as m from inner_rows i where i.n <= o.n),
 y as (select 1 as k) select x.m from x cross join y) as joined_value
 from outer_rows o order by o.id;
-non-equality correlated aggregate behind a non-transparent projection is not yet implemented
+➤ id[4,32,0]  ¦  joined_value[4,32,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  3  𝄀
+4  ¦  null  𝄀
+5  ¦  null  𝄀
+6  ¦  2
 select o.id, (with x as (select count(*) as c from inner_rows i where i.n = o.n)
 select c + 1 from x) as computed_count
 from outer_rows o order by o.id;
@@ -139,7 +151,7 @@ select c, d from x) as zero_pair,
 from inner_rows i where i.n = o.n)
 select c, d from x) as null_value_pair
 from outer_rows o order by o.id;
-➤ id[4,32,0]  ¦  zero_pair[-7,1,0]  ¦  null_value_pair[-7,1,0]  𝄀
+➤ id[4,32,0]  ¦  zero_pair[-6,8,0]  ¦  null_value_pair[-6,8,0]  𝄀
 1  ¦  0  ¦  0  𝄀
 2  ¦  0  ¦  1  𝄀
 3  ¦  0  ¦  0  𝄀
@@ -196,4 +208,142 @@ select m from x where x.n < o.n) as independent_group
 from outer_rows o where o.id = 2;
 ➤ id[4,32,0]  ¦  independent_group[4,32,0]  𝄀
 2  ¦  10
+select o.id,
+(select max(i.v) + 1 from inner_rows i where i.n <= o.n) as plus_one,
+(select coalesce(max(i.v), -1) from inner_rows i where i.n <= o.n) as coalesced,
+(select case when max(i.v) is null then -1 else max(i.v) end from inner_rows i where i.n <= o.n) as case_value,
+(select max(i.v) from inner_rows i where i.n <= o.n having max(i.v) >= 30) as having_value,
+(select distinct max(i.v) from inner_rows i where i.n <= o.n) as distinct_value,
+(select count(*) from inner_rows i where i.n <= o.n having count(*) = 0) as empty_count
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  plus_one[-5,64,0]  ¦  coalesced[-5,64,0]  ¦  case_value[-5,64,0]  ¦  having_value[4,32,0]  ¦  distinct_value[4,32,0]  ¦  empty_count[-5,64,0]  𝄀
+1  ¦  11  ¦  10  ¦  10  ¦  null  ¦  10  ¦  null  𝄀
+2  ¦  11  ¦  10  ¦  10  ¦  null  ¦  10  ¦  null  𝄀
+3  ¦  31  ¦  30  ¦  30  ¦  30  ¦  30  ¦  null  𝄀
+4  ¦  null  ¦  -1  ¦  -1  ¦  null  ¦  null  ¦  0  𝄀
+5  ¦  null  ¦  -1  ¦  -1  ¦  null  ¦  null  ¦  0  𝄀
+6  ¦  11  ¦  10  ¦  10  ¦  null  ¦  10  ¦  null
+select o.id,
+(select max(i.v) from inner_rows i where i.n <= o.n group by i.n order by i.n desc limit 1) as top_value,
+(select max(i.v) from inner_rows i where i.n <= o.n group by i.n order by i.n desc limit 1 offset 1) as previous_value,
+(select count(*) from inner_rows i where i.n <= o.n limit 0) as deleted_value,
+(select count(*) from inner_rows i where i.n <= o.n limit 1 offset 1) as skipped_value
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  top_value[4,32,0]  ¦  previous_value[4,32,0]  ¦  deleted_value[-5,64,0]  ¦  skipped_value[-5,64,0]  𝄀
+1  ¦  10  ¦  null  ¦  null  ¦  null  𝄀
+2  ¦  null  ¦  10  ¦  null  ¦  null  𝄀
+3  ¦  30  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+5  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+6  ¦  null  ¦  10  ¦  null  ¦  null
+select o.id,
+(select max(i.v) from inner_rows i where i.n <= o.n) as derived_max,
+(select count(*) from (select n from inner_rows union all select n from inner_rows) i where i.n <= o.n) as union_count,
+(select count(distinct i.n) from (select n from inner_rows union all select n from inner_rows) i where i.n <= o.n) as union_distinct_count
+from (select id, n from outer_rows) o order by o.id;
+➤ id[4,32,0]  ¦  derived_max[4,32,0]  ¦  union_count[-5,64,0]  ¦  union_distinct_count[-5,64,0]  𝄀
+1  ¦  10  ¦  2  ¦  1  𝄀
+2  ¦  10  ¦  4  ¦  2  𝄀
+3  ¦  30  ¦  6  ¦  3  𝄀
+4  ¦  null  ¦  0  ¦  0  𝄀
+5  ¦  null  ¦  0  ¦  0  𝄀
+6  ¦  10  ¦  4  ¦  2
+select o.id, x.id,
+(select max(i.v) from inner_rows i where i.n <= o.n and i.n < x.id) as two_outer_value
+from outer_rows o join outer_rows x on x.id = o.id order by o.id;
+➤ id[4,32,0]  ¦  id[4,32,0]  ¦  two_outer_value[4,32,0]  𝄀
+1  ¦  1  ¦  null  𝄀
+2  ¦  2  ¦  10  𝄀
+3  ¦  3  ¦  10  𝄀
+4  ¦  4  ¦  null  𝄀
+5  ¦  5  ¦  null  𝄀
+6  ¦  6  ¦  10
+select (select count(*) from inner_rows i where i.n <= o.n group by i.n having i.n > 0)
+from outer_rows o where o.id = 3;
+Subquery returns more than 1 row
+select o.id, case when o.id < 0 then
+(select count(*) from inner_rows i where i.n <= o.n group by i.n) else 7 end as guarded_value
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  guarded_value[-5,64,0]  𝄀
+1  ¦  7  𝄀
+2  ¦  7  𝄀
+3  ¦  7  𝄀
+4  ¦  7  𝄀
+5  ¦  7  𝄀
+6  ¦  7
+select o.id from outer_rows o
+where (select max(i.v) + 1 from inner_rows i where i.n <= o.n) > 20 order by o.id;
+➤ id[4,32,0]  𝄀
+3
+select o.id from outer_rows o
+order by (select coalesce(max(i.v), -1) from inner_rows i where i.n <= o.n), o.id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+5  𝄀
+1  𝄀
+2  𝄀
+6  𝄀
+3
+create view range_values as select o.id,
+(select coalesce(max(i.v), -1) from inner_rows i where i.n <= o.n) as v from outer_rows o;
+select * from range_values order by id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  10  𝄀
+3  ¦  30  𝄀
+4  ¦  -1  𝄀
+5  ¦  -1  𝄀
+6  ¦  10
+create table range_values_copy as select * from range_values;
+select * from range_values_copy order by id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  10  𝄀
+3  ¦  30  𝄀
+4  ¦  -1  𝄀
+5  ¦  -1  𝄀
+6  ¦  10
+prepare range_value from 'select o.id, (select max(i.v) from inner_rows i where i.n <= o.n group by i.n order by i.n desc limit 1) as v from outer_rows o where o.id = ?';
+set @range_id = 3;
+execute range_value using @range_id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+3  ¦  30
+set @range_id = 4;
+execute range_value using @range_id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+4  ¦  null
+set @range_id = 2;
+execute range_value using @range_id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  null
+deallocate prepare range_value;
+set @range_id = null;
+with events as (
+select 1 as entity_id, cast('2025-01-01 00:00:00' as datetime) as event_time
+union all select 2, cast('2025-01-02 00:00:00' as datetime)
+union all select 1, cast('2025-01-08 00:00:00' as datetime)
+), days as (select distinct cast(event_time as date) as observation_date from events)
+select days.observation_date,
+(select count(distinct events.entity_id) from events
+where cast(events.event_time as date) <= days.observation_date
+and timestampdiff(day, events.event_time, cast(days.observation_date as datetime)) between 0 and 6) as visitors
+from days order by days.observation_date;
+➤ observation_date[91,10,0]  ¦  visitors[-5,64,0]  𝄀
+2025-01-01  ¦  1  𝄀
+2025-01-02  ¦  2  𝄀
+2025-01-08  ¦  2
+with recursive r(n) as (select 1 union all select n + 1 from r where n < 3)
+select n, (select count(*) from r i where i.n <= r.n group by i.n having i.n > 0 order by i.n desc limit 1) as cnt
+from r order by n;
+➤ n[-5,64,0]  ¦  cnt[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1
+with recursive r(n) as (select 1 union all select n + 1 from r where n < 3)
+select (select count(*) from r i where i.n <= r.n group by i.n having i.n > 0)
+from r where n = 3;
+Subquery returns more than 1 row
+select 1 as connection_reusable;
+➤ connection_reusable[-5,64,0]  𝄀
+1
 drop database test_scalar_cte_non_eq_agg;
