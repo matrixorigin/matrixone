@@ -2749,7 +2749,8 @@ func (ses *Session) AppendData(row []interface{}) {
 func (ses *Session) InitExportConfig(ep *tree.ExportParam) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.ep = &ExportConfig{userConfig: ep, service: ses.service, proc: ses.proc}
+	auditEnabled := ses.tStmt != nil && ses.tStmt.HasOutfileReceipt()
+	ses.ep = &ExportConfig{userConfig: ep, service: ses.service, proc: ses.proc, auditEnabled: auditEnabled}
 }
 
 func (ses *Session) GetExportConfig() *ExportConfig {
