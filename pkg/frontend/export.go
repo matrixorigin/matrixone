@@ -372,6 +372,16 @@ var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byt
 			(isAmbiguousCSVEscape(field) && bytes.IndexByte(tmp, field) >= 0) ||
 			(isAmbiguousCSVEscape(line) && bytes.IndexByte(tmp, line) >= 0) ||
 			(isAmbiguousCSVEscape(enclosed) && bytes.IndexByte(tmp, enclosed) >= 0)
+		// A CR or LF escape byte can never protect a bare field: LOAD
+		// consumes newline bytes as record boundaries before decoding
+		// escapes whenever its normalized terminator is a newline, so an
+		// escaped byte lands after the record the escape byte itself just
+		// ended. Enclose a value whose bare encoding contains the escape
+		// byte — including BIT and other binary values whose callers pass
+		// quote=false, which the ambiguity checks above never reach.
+		if esc := oq.escapeChar(); !flag && (esc == '\r' || esc == '\n') && oq.readerRecognizesNewlineBoundaries() {
+			flag = bytes.IndexByte(addEscapeToString(oq, tmp, 0), esc) >= 0
+		}
 	}
 	quote := byte(0)
 	if flag {

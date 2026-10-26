@@ -331,6 +331,19 @@ select id, hex(s) as hs from esc_cr_back;
 ➤ id[4,32,0]  ¦  hs[12,160,0]  𝄀
 2  ¦  62652C6E73
 drop table esc_cr_back;
+select 1 as id, cast(6368354 as bit(24)) as b
+into outfile 'stage://outfile_fields_lines_stage/bit_cr_esc.csv'
+fields terminated by ',' enclosed by '"' escaped by '\r' lines starting by 'p:' terminated by '\n' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/bit_cr_esc.csv' as datalink)));
+➤ hex(load_file(cast(stage://outfile_fields_lines_stage/bit_cr_esc.csv as datalink)))[-1,16383,0]  𝄀
+703A312C22612C62220A
+create table bit_cr_back (id int, b bit(24));
+load data infile 'stage://outfile_fields_lines_stage/bit_cr_esc.csv' into table bit_cr_back
+fields terminated by ',' enclosed by '"' escaped by '\r' lines starting by 'p:' terminated by '\n';
+select id, hex(b) as hb from bit_cr_back;
+➤ id[4,32,0]  ¦  hb[12,16,0]  𝄀
+1  ¦  612C62
+drop table bit_cr_back;
 remove files from stage if exists 'stage://outfile_fields_lines_stage/*.csv';
 select count(*) from stage_list('stage://outfile_fields_lines_stage/');
 ➤ count(*)[-5,64,0]  𝄀

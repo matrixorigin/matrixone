@@ -275,6 +275,21 @@ fields terminated by ',' enclosed by '"' escaped by '\r' lines starting by 'p:';
 select id, hex(s) as hs from esc_cr_back;
 drop table esc_cr_back;
 
+-- A value whose bare encoding would emit the CR/LF escape byte cannot stay
+-- bare: LOAD consumes newlines as record boundaries before decoding escapes,
+-- so BIT 6368354 (0x612C62, bytes 'a,b') under ESCAPED BY '\r' reloaded as
+-- 0x61. The shared formatter encloses such values even when the column never
+-- asks for quotes (BIT passes quote=false to both CSV writers).
+select 1 as id, cast(6368354 as bit(24)) as b
+into outfile 'stage://outfile_fields_lines_stage/bit_cr_esc.csv'
+fields terminated by ',' enclosed by '"' escaped by '\r' lines starting by 'p:' terminated by '\n' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/bit_cr_esc.csv' as datalink)));
+create table bit_cr_back (id int, b bit(24));
+load data infile 'stage://outfile_fields_lines_stage/bit_cr_esc.csv' into table bit_cr_back
+fields terminated by ',' enclosed by '"' escaped by '\r' lines starting by 'p:' terminated by '\n';
+select id, hex(b) as hb from bit_cr_back;
+drop table bit_cr_back;
+
 remove files from stage if exists 'stage://outfile_fields_lines_stage/*.csv';
 select count(*) from stage_list('stage://outfile_fields_lines_stage/');
 drop stage outfile_fields_lines_stage;

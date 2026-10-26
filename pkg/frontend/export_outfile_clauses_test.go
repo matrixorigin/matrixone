@@ -1190,3 +1190,135 @@ func TestOutfileNewlineEscapeByteRequiresEnclosure(t *testing.T) {
 		require.Equal(t, "a,b", row[1].Val)
 	})
 }
+
+// TestOutfileNewlineEscapeByteEnclosesBinaryValues pins the promote-to-enclosure
+// rule: with a CR or LF FIELDS ESCAPED BY and LOAD recognizing newlines, no
+// CR-prefixed escape can protect a bare field (the reader ends the record at
+// the escape byte before decoding it). The shared formatter therefore encloses
+// any value whose bare encoding contains the escape byte — including BIT,
+// whose callers pass quote=false so the ambiguity checks never saw it.
+func TestOutfileNewlineEscapeByteEnclosesBinaryValues(t *testing.T) {
+	// BIT(24) 6368354 = 0x612C62 = "a,b": the reviewer's probe value.
+	bitAB := []byte{0x61, 0x2c, 0x62}
+
+	roundTrip := func(t *testing.T, data, escaped, enclosed, lineTerm, startingBy string, want string) {
+		t.Helper()
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: ",", FieldsEscapedBy: escaped, FieldsEnclosedBy: enclosed,
+			LinesTerminatedBy: lineTerm, LinesStartingBy: startingBy, Null: []string{`\N`},
+		}, bytes.NewReader([]byte(data)), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, row)
+		require.Equal(t, want, row[len(row)-1].Val)
+	}
+
+	t.Run("formatter promotes values whose encoding emits the escape byte", func(t *testing.T) {
+		ep := newOutfileExportConfig(tree.NewFields(",", false, '"', '\r'), nil, "\n")
+		for _, c := range []struct {
+			name string
+			tmp  []byte
+			want string
+		}{
+			{"BIT bytes with separator", bitAB, "\"a,b\"\n"},
+			{"plain value stays raw", []byte("plain"), "plain\n"},
+			{"embedded CR encodes as escape-r", []byte("a\rb"), "\"a\rrb\"\n"},
+			{"trailing CR encodes as escape-r", []byte{0x61, 0x0d}, "\"a\rr\"\n"},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				var buf bytes.Buffer
+				require.NoError(t, formatOutputString(ep, c.tmp, []byte("\n"), '"', false, true, &buf))
+				require.Equal(t, c.want, buf.String())
+			})
+		}
+		// Every promoted record reads back losslessly through LOAD's
+		// parser: inside quotes the separator stays literal and the
+		// translated escape-r decodes back to CR (csvparser unescape).
+		roundTrip(t, "\"a,b\"\n", "\r", `"`, "\n", "", "a,b")
+		roundTrip(t, "\"a\rrb\"\n", "\r", `"`, "\n", "", "a\rb")
+		roundTrip(t, "\"a\rr\"\n", "\r", `"`, "\n", "", "a\r")
+	})
+
+	t.Run("LF escape byte promotes too", func(t *testing.T) {
+		ep := newOutfileExportConfig(tree.NewFields(",", false, '"', '\n'), nil, "\n")
+		var buf bytes.Buffer
+		require.NoError(t, formatOutputString(ep, bitAB, []byte("\n"), '"', false, true, &buf))
+		require.Equal(t, "\"a,b\"\n", buf.String())
+		roundTrip(t, buf.String(), "\n", `"`, "\n", "", "a,b")
+	})
+
+	t.Run("non-newline terminator keeps the bare encoding", func(t *testing.T) {
+		ep := newOutfileExportConfig(tree.NewFields(",", false, '"', '\r'), nil, "|")
+		var buf bytes.Buffer
+		require.NoError(t, formatOutputString(ep, bitAB, []byte("|"), '"', false, true, &buf))
+		require.Equal(t, "a\r,b|", buf.String(), "LOAD recognizes no newlines here, so CR stays a plain escape")
+		roundTrip(t, buf.String(), "\r", `"`, "|", "", "a,b")
+	})
+
+	t.Run("default backslash escape is unaffected", func(t *testing.T) {
+		ep := newOutfileExportConfig(tree.NewFields(",", false, '"', '\\'), nil, "\n")
+		var buf bytes.Buffer
+		require.NoError(t, formatOutputString(ep, bitAB, []byte("\n"), '"', false, true, &buf))
+		require.Equal(t, "a\\,b\n", buf.String())
+		roundTrip(t, buf.String(), "\\", `"`, "\n", "", "a,b")
+	})
+
+	t.Run("batch writer encloses BIT", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Zero(t, mp.CurrNB()) }()
+		bat := batch.NewOffHeapWithSize(2)
+		bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+		bat.Vecs[1] = vector.NewOffHeapVecWithType(types.New(types.T_bit, 24, 0))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(1), false, mp))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], uint64(6368354), false, mp))
+		bat.SetRowCount(1)
+		defer bat.Clean(mp)
+
+		ep := selectIntoOutfileConfig(",", '"', '\r', "p:", "\n")
+		ep.ctx = context.Background()
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+		result := <-ch
+		require.NoError(t, result.err)
+		require.Equal(t, "p:1,\"a,b\"\n", string(result.writeByte))
+		roundTrip(t, string(result.writeByte), "\r", `"`, "\n", "p:", "a,b")
+	})
+
+	t.Run("result-set writer encloses BIT", func(t *testing.T) {
+		ctx := context.Background()
+		mrs := &MysqlResultSet{}
+		bit := new(MysqlColumn)
+		bit.SetName("b")
+		bit.SetColumnType(defines.MYSQL_TYPE_BIT)
+		bit.SetLength(24)
+		mrs.AddColumn(bit)
+		mrs.Data = [][]any{{uint64(6368354)}}
+
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
+			userConfig: &tree.ExportParam{
+				FilePath: filepath.Join(t.TempDir(), "rs_bit.csv"),
+				Fields:   tree.NewFields(",", false, '"', '\r'),
+				Lines:    tree.NewLines("p:", "\n"),
+			},
+			ctx: ctx,
+			mrs: mrs,
+		}
+		initExportFileParam(ep, mrs)
+		ep.init()
+		ep.Index.Add(1)
+		require.NoError(t, openNewFile(ctx, ep, mrs))
+		t.Cleanup(func() {
+			if ep.AsyncWriter != nil {
+				_ = Close(ep)
+			}
+		})
+		require.NoError(t, exportDataFromResultSetToCSVFile(ep))
+		require.NoError(t, Close(ep))
+
+		data, err := os.ReadFile(ep.userConfig.FilePath)
+		require.NoError(t, err)
+		require.Equal(t, "p:\"a,b\"\n", string(data))
+		roundTrip(t, string(data), "\r", `"`, "\n", "p:", "a,b")
+	})
+}
