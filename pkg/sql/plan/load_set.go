@@ -24,8 +24,12 @@ import (
 // AST whose first nil expression makes InitNullMap skip validation on retry.
 // Keep this LOAD-only: external tables also use InitNullMap.
 func validateLoadSetAssignments(param *tree.ExternParam, ctx CompilerContext, tableDef *TableDef) error {
-	if param == nil || param.Tail == nil {
+	if param == nil || param.Tail == nil || len(param.Tail.Assignments) == 0 {
 		return nil
+	}
+	columns := make(map[string]*ColDef, len(tableDef.Cols))
+	for _, column := range tableDef.Cols {
+		columns[column.Name] = column
 	}
 	for _, assignment := range param.Tail.Assignments {
 		unsupported := func() error {
@@ -39,7 +43,7 @@ func validateLoadSetAssignments(param *tree.ExternParam, ctx CompilerContext, ta
 			if target == nil {
 				return unsupported()
 			}
-			column := FindColumn(tableDef.Cols, target.ColName())
+			column := columns[target.ColName()]
 			if column == nil || column.Hidden {
 				return moerr.NewBadFieldError(ctx.GetContext(), target.ColName(), tableDef.Name)
 			}

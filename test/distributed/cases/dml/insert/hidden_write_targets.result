@@ -65,4 +65,35 @@ select a from no_key order by a;
 select count(distinct __mo_fake_pk_col)=count(*) as unique_generated_keys from no_key;
 ➤ unique_generated_keys[-6,8,0]  𝄀
 1
+create table copy_keys(a int,v int,key idx_a(a));
+insert into copy_keys values(1,10),(2,20),(3,30);
+delete from copy_keys where a=2;
+create table saved_keys as select a,__mo_fake_pk_col as saved_key from copy_keys;
+alter table copy_keys add column extra int, algorithm=copy;
+select count(*)=2 and sum(c.__mo_fake_pk_col=s.saved_key)=2 as identities_preserved from copy_keys c join saved_keys s on c.a=s.a;
+➤ identities_preserved[-6,8,0]  𝄀
+1
+select a,v from copy_keys force index(idx_a) where a=3;
+➤ a[4,32,0]  ¦  v[4,32,0]  𝄀
+3  ¦  30
+delete from copy_keys where a=3;
+select a,v from copy_keys order by a;
+➤ a[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  10
+insert into copy_keys(a,v) values(4,40);
+select count(distinct __mo_fake_pk_col)=count(*) as unique_copy_keys from copy_keys;
+➤ unique_copy_keys[-6,8,0]  𝄀
+1
+insert into copy_keys(a,__mo_fake_pk_col) values(9,777);
+Unknown column '__mo_fake_pk_col' in 'copy_keys'
+select count(*) as rows_after_rejected_key from copy_keys;
+➤ rows_after_rejected_key[-5,64,0]  𝄀
+2
+create table copy_generated(a int,g int generated always as(a+1) stored);
+insert into copy_generated(a) values(5);
+create table saved_generated as select __mo_fake_pk_col as saved_key from copy_generated;
+alter table copy_generated add column extra int, algorithm=copy;
+select a,g,c.__mo_fake_pk_col=s.saved_key as generated_identity_preserved from copy_generated c cross join saved_generated s;
+➤ a[4,32,0]  ¦  g[4,32,0]  ¦  generated_identity_preserved[-6,8,0]  𝄀
+5  ¦  6  ¦  1
 drop database hidden_write_targets;

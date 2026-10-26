@@ -81,12 +81,18 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 	var newCols []*ColDef
 
 	newTableDef := DeepCopyTableDef(tableDef, true)
+	// Legacy DML filters Cols without rebuilding Name2ColIndex. Resolve against
+	// the actual columns once instead of scanning the schema for every target.
+	columns := make(map[string]*ColDef, len(newTableDef.Cols))
+	for _, column := range newTableDef.Cols {
+		columns[column.Name] = column
+	}
 	colPos := 0
 	for i, col := range stmt.Param.Tail.ColumnList {
 		switch realCol := col.(type) {
 		case *tree.UnresolvedName:
 			colName := realCol.ColName()
-			column := FindColumn(newTableDef.Cols, colName)
+			column := columns[colName]
 			if column == nil || column.Hidden {
 				return nil, nil, nil, nil, moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%s' does not exist", colName)
 			}

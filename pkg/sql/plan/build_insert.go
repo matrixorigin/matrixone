@@ -360,7 +360,7 @@ func getInsertColsFromStmt(ctx context.Context, stmt *tree.Insert, tableDef *Tab
 		for _, column := range stmt.Columns {
 			colName := strings.ToLower(string(column))
 			idx, ok := colToIdx[colName]
-			if !ok || tableDef.Cols[idx].Hidden {
+			if !ok || (tableDef.Cols[idx].Hidden && !isAlterCopyFakePrimaryKey(ctx, tableDef, tableDef.Cols[idx])) {
 				return nil, moerr.NewBadFieldError(ctx, colName, tableDef.Name)
 			}
 			insertColsName = append(insertColsName, colName)
