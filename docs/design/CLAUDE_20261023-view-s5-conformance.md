@@ -176,3 +176,17 @@ review 指出的路径已真实复现并修复，**属于本次恢复修复未�
 - 此处是顺序、局部 parser 修复，没有新共享状态、异步生命周期、拓扑或激活机制，故不机械重跑 race/双 CN/版本切换；这些维度的旧日志不替代本轮语义证明。完整 S5 缺口与 S8 NO-GO 不变。
 
 本轮命令、真实失败、终态、源码/产物身份、覆盖率和逐 hunk 自审保留于未提交的 `CLAUDE_validation/review-case-*` 及 `CLAUDE_review_case_*`。
+
+## 10. 续作契约：目录故障与发布范围
+
+**完整 S5 仍未验收，第 6 节门禁不变。** #30953 合入只代表此前的部分闭包；后续局部修复不能替代真实版本切换与完整 B 的生产接线。
+
+订阅目录探测是普通数据库解析也会经过的共同边界。`getSubscriptionMeta` 只有确证缺库的 ErrBadDB 才转换成原有 NoDB；ExpectedEOB 保持原有无日志、交由实际数据库访问处理的行为。存储、RPC、超时和取消原因必须原样传播，不能让 `TxnCompilerContext.Resolve` 当作缺失吞掉，再被 View binder/批量元数据误判为可跳过的无效定义。
+
+- `Test_getSubscriptionMeta_ErrorPropagation`：保留真缺库、ExpectedEOB、非订阅成功控制，分别验证底层失败的错误身份。
+- `TestViewMetadataCatalogFailureIsNotInvalidDefinition`：通过真实 provider→frontend resolver→binder→candidate，覆盖当前/历史快照的根数据库与传递来源目录故障；重复失败仍需重读，解除故障后同请求成功，不保留错误或半成品，关闭后资源归零且父事务 stamp 不变。注入仅位于已有存储边界，不新增生产 hook。
+- 原生订阅 fixture 的 `table list withdrawal and recovery`：显式发布 source/view → 排除 view → 恢复 view，分别验证单对象、DESC 与 I_S 在 memo/cache-off 下的精确结果和拒绝，普通源表不受污染；沿用既有集群与零新增数据行。
+
+上述 table-list 验证针对当前发布范围，不外推到所有历史授权/remap 组合。故障注入 UT 不冒充真实断网或跨版本执行；真实 L/A/B artifact、两提交点、重启/回滚和旧进程重入证明仍需独立完成。
+
+完整候选的设计审查还必须区分现有保护的职责：普通构建的 validation 路由不激活 S4；CN 宣告 persisted-expression/barrier 能力不等于旧 catalog barrier 所要求的 view/recovery 能力。不得通过填充能力数字或伪造 recovery receipt 把旧 refresh 协议改名充当 B。任何新增激活或共享持久语义须另行批准，默认兼容路径与 S8 NO-GO 保持不变。

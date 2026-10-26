@@ -189,6 +189,81 @@ func testNativeViewMetadataPublicationTransitions(t *testing.T, ctx context.Cont
 			return
 		}
 	}
+	// 当前发布列表的收缩/恢复必须同时影响单对象与 bulk；被排除的根
+	// 不属于坏定义，不得沿历史持久列或之前成功的请求返回元数据。
+	t.Run("table list withdrawal and recovery", func(t *testing.T) {
+		exec := func(t *testing.T, query string) {
+			t.Helper()
+			_, err := system.ExecContext(ctx, query)
+			require.NoError(t, err, query)
+		}
+		defer exec(t, "alter publication schema_publication table `*`")
+		for _, tc := range []struct {
+			name, tables string
+			allowed      bool
+		}{
+			{"explicit view and source", "source,published", true},
+			{"source only", "source", false},
+			{"restore view", "source,published", true},
+		} {
+			if !t.Run(tc.name, func(t *testing.T) {
+				exec(t, "alter publication schema_publication table "+tc.tables)
+				for _, cacheOff := range []bool{false, true} {
+					t.Run(fmt.Sprintf("cache_off=%t", cacheOff), func(t *testing.T) {
+						withNativeViewSchemaRead(t, readerCtx, cn, svc, "subscribed", tenant, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
+							before := op.GetWorkspace().WriteOffset()
+							request := compiler.NewViewMetadataRequest(readerCtx, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
+							defer request.Close()
+							if cacheOff {
+								request.DisableMemoForIntegrationTest()
+							}
+							for range 2 {
+								func() {
+									result, invalid, err := plan.DescribeViewMetadataCandidate(request.Context(), "subscribed", "published", nil)
+									if result != nil {
+										defer result.Release()
+									}
+									require.False(t, invalid, "发布列表过滤不是可跳过的 View 定义错误")
+									if !tc.allowed {
+										require.Error(t, err)
+										require.Nil(t, result)
+										return
+									}
+									require.NoError(t, err)
+									columns, err := result.Columns()
+									require.NoError(t, err)
+									require.Len(t, columns, 2)
+								}()
+							}
+							rows, err := frontend.ReadNativeViewMetadataSQLForTest(request.Context(), compiler, "describe subscribed.published")
+							if tc.allowed {
+								require.NoError(t, err)
+								require.Len(t, rows, 2)
+							} else {
+								require.Error(t, err)
+								require.Empty(t, rows)
+							}
+							rows, err = frontend.ReadNativeViewMetadataSQLForTest(request.Context(), compiler, "select table_name, column_name from information_schema.columns where table_schema='subscribed' and table_name in ('published','source') order by table_name, ordinal_position")
+							require.NoError(t, err)
+							want := [][]string{{"source", "id"}}
+							if tc.allowed {
+								want = [][]string{{"published", "id"}, {"published", "extra"}, {"source", "id"}}
+							}
+							require.Equal(t, want, rows, "拒绝根对象后，仍可读取有效普通表")
+							require.Equal(t, before, op.GetWorkspace().WriteOffset())
+							request.Close()
+							budget, err := proc.GetExecutionResourceBudget()
+							require.NoError(t, err)
+							require.Zero(t, budget.Used())
+							require.False(t, budget.Closed())
+						})
+					})
+				}
+			}) {
+				return
+			}
+		}
+	})
 	// 同名 publication 指向新的数据库：subscriber alias 不变，定义身份必须改变。
 	exec("create database schema_remapped")
 	defer exec("drop database schema_remapped")

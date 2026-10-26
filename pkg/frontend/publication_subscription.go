@@ -3003,7 +3003,12 @@ func getSubscriptionMeta(ctx context.Context, dbName string, ses FeSession, txn 
 			return nil, nil
 		}
 		ses.Errorf(ctx, "Get Subscription database %s meta error: %s", dbName, err.Error())
-		return nil, moerr.NewNoDB(ctx)
+		if moerr.IsMoErrCode(err, moerr.ErrBadDB) {
+			return nil, moerr.NewNoDB(ctx)
+		}
+		// Resolver callers treat NoDB as a missing dependency. Preserve catalog
+		// failures so metadata inference cannot skip them as invalid Views.
+		return nil, err
 	}
 
 	if dbMeta.IsSubscription(ctx) {

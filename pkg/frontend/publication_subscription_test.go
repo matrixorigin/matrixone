@@ -3118,12 +3118,12 @@ func Test_getSubscriptionMeta_ErrorPropagation(t *testing.T) {
 	mockTxn := mock_frontend.NewMockTxnOperator(ctrl)
 	mockBh := mock_frontend.NewMockBackgroundExec(ctrl)
 
-	ses := newSes(nil, ctrl)
-
-	// Override StorageEngine after newSes (which sets its own pu with nil engine)
-	pu := getPu(ses.GetService())
-	pu.StorageEngine = mockEngine
-	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
+	ses, _ := newObservedProtocolSession()
+	previous := getPuIfPresent(ses.GetService())
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, mockEngine, nil, nil)
+	setPu(ses.GetService(), pu)
+	t.Cleanup(func() { setPu(ses.GetService(), previous) })
+	ctx := t.Context()
 
 	t.Run("returns NoDB when Database fails with ErrBadDB", func(t *testing.T) {
 		badDBErr := moerr.NewBadDB(ctx, "test_db")
@@ -3132,7 +3132,7 @@ func Test_getSubscriptionMeta_ErrorPropagation(t *testing.T) {
 		_, err := getSubscriptionMeta(ctx, "test_db", ses, mockTxn, mockBh)
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoDB),
-			"non-ExpectedEOB errors should still return NoDB for backward compatibility, got: %v", err)
+			"a confirmed missing database retains the legacy NoDB contract, got: %v", err)
 	})
 
 	t.Run("returns nil when Database fails with ExpectedEOB", func(t *testing.T) {
@@ -3146,15 +3146,22 @@ func Test_getSubscriptionMeta_ErrorPropagation(t *testing.T) {
 		require.Equal(t, 0, logs.Len())
 	})
 
-	t.Run("returns NoDB when Database fails with internal error", func(t *testing.T) {
-		internalErr := moerr.NewInternalErrorNoCtx("engine failure")
-		mockEngine.EXPECT().Database(gomock.Any(), "test_db", mockTxn).Return(nil, internalErr)
-
-		_, err := getSubscriptionMeta(ctx, "test_db", ses, mockTxn, mockBh)
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoDB),
-			"non-ExpectedEOB errors should still return NoDB, got: %v", err)
-	})
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"engine failure", moerr.NewInternalErrorNoCtx("engine failure")},
+		{"transport failure", fmt.Errorf("catalog RPC: %w", errors.New("connection lost"))},
+		{"dependency timeout", context.DeadlineExceeded},
+		{"dependency cancellation", context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockEngine.EXPECT().Database(gomock.Any(), "test_db", mockTxn).Return(nil, tc.err)
+			sub, err := getSubscriptionMeta(ctx, "test_db", ses, mockTxn, mockBh)
+			require.Nil(t, sub)
+			require.ErrorIs(t, err, tc.err, "a failed lookup is not evidence of an absent database")
+		})
+	}
 
 	t.Run("returns nil for non-subscription database", func(t *testing.T) {
 		mockDB := mock_frontend.NewMockDatabase(ctrl)
