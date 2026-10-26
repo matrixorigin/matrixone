@@ -15,7 +15,10 @@
 package plan
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -44,9 +47,17 @@ func virtualTimestampColumnState(table *plan.TableDef, pos int32, state []uint8)
 		return false
 	}
 	col := table.Cols[pos]
-	if col == nil || col.GeneratedCol == nil || col.GeneratedCol.IsStored || col.GeneratedCol.Expr == nil {
+	if col == nil {
+		state[pos] = 3
+		return true
+	}
+	if col.GeneratedCol == nil || col.GeneratedCol.IsStored {
 		state[pos] = 2
 		return false
+	}
+	if col.GeneratedCol.Expr == nil {
+		state[pos] = 3
+		return true
 	}
 	state[pos] = 1
 	if virtualExprUsesTimestamp(table, col.GeneratedCol.Expr, state) {
@@ -100,6 +111,116 @@ func virtualExprUsesTimestamp(table *plan.TableDef, expr *plan.Expr, state []uin
 // virtual dependencies. It only receives catalog expressions whose column
 // references are local (RelPos 0); the copy is safe for each query binding.
 const maxVirtualTimestampExpansionNodes = 65536
+
+// VirtualTimestampExpansionFinding identifies a generated column whose
+// read-time expression cannot be expanded within the planner's resource bound.
+// Cost is saturated at maxVirtualTimestampExpansionNodes+1.
+type VirtualTimestampExpansionFinding struct {
+	Column string
+	Cost   int
+}
+
+// VirtualTimestampExpansionFindings is shared by DDL admission and the
+// catalog preflight command. It examines the complete table, including hidden
+// generated columns, so an ALTER of an upstream dependency cannot evade it.
+func VirtualTimestampExpansionFindings(table *plan.TableDef) []VirtualTimestampExpansionFinding {
+	if table == nil {
+		return nil
+	}
+	classified := make([]uint8, len(table.Cols))
+	state := make([]uint8, len(table.Cols))
+	costs := make([]int, len(table.Cols))
+	var findings []VirtualTimestampExpansionFinding
+	for pos, col := range table.Cols {
+		if col == nil || !virtualTimestampColumnState(table, int32(pos), classified) {
+			continue
+		}
+		cost := virtualTimestampColumnCost(table, int32(pos), classified, state, costs)
+		if cost > maxVirtualTimestampExpansionNodes {
+			findings = append(findings, VirtualTimestampExpansionFinding{Column: col.Name, Cost: cost})
+		}
+	}
+	return findings
+}
+
+func validateVirtualTimestampExpansion(ctx context.Context, table *plan.TableDef) error {
+	for _, finding := range VirtualTimestampExpansionFindings(table) {
+		return moerr.NewNotSupportedf(ctx,
+			"table '%s' virtual generated column '%s' needs more than %d read-expression nodes",
+			table.Name, finding.Column, maxVirtualTimestampExpansionNodes)
+	}
+	return nil
+}
+
+func virtualTimestampReadCost(table *plan.TableDef, pos int32) int {
+	if table == nil {
+		return maxVirtualTimestampExpansionNodes + 1
+	}
+	n := len(table.Cols)
+	return virtualTimestampColumnCost(table, pos, make([]uint8, n), make([]uint8, n), make([]int, n))
+}
+
+func virtualTimestampColumnCost(table *plan.TableDef, pos int32, classified, state []uint8, costs []int) int {
+	if pos < 0 || int(pos) >= len(table.Cols) || table.Cols[pos] == nil || table.Cols[pos].GeneratedCol == nil {
+		return maxVirtualTimestampExpansionNodes + 1
+	}
+	switch state[pos] {
+	case 1:
+		return maxVirtualTimestampExpansionNodes + 1
+	case 2:
+		return costs[pos]
+	}
+	state[pos] = 1
+	cost := virtualTimestampExprCost(table, table.Cols[pos].GeneratedCol.Expr, classified, state, costs)
+	state[pos], costs[pos] = 2, cost
+	return cost
+}
+
+func virtualTimestampExprCost(table *plan.TableDef, expr *plan.Expr, classified, state []uint8, costs []int) int {
+	if expr == nil {
+		return maxVirtualTimestampExpansionNodes + 1
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		if e.Col == nil || e.Col.ColPos < 0 || int(e.Col.ColPos) >= len(table.Cols) {
+			return maxVirtualTimestampExpansionNodes + 1
+		}
+		if virtualTimestampColumnState(table, e.Col.ColPos, classified) {
+			return virtualTimestampColumnCost(table, e.Col.ColPos, classified, state, costs)
+		}
+		return 1
+	case *plan.Expr_F:
+		if e.F == nil {
+			return maxVirtualTimestampExpansionNodes + 1
+		}
+		cost := 1
+		for _, arg := range e.F.Args {
+			cost = saturatingVirtualTimestampCost(cost, virtualTimestampExprCost(table, arg, classified, state, costs))
+		}
+		return cost
+	case *plan.Expr_List:
+		if e.List == nil {
+			return maxVirtualTimestampExpansionNodes + 1
+		}
+		cost := 1
+		for _, arg := range e.List.List {
+			cost = saturatingVirtualTimestampCost(cost, virtualTimestampExprCost(table, arg, classified, state, costs))
+		}
+		return cost
+	case *plan.Expr_Lit, *plan.Expr_T:
+		return 1
+	default:
+		return maxVirtualTimestampExpansionNodes + 1
+	}
+}
+
+func saturatingVirtualTimestampCost(a, b int) int {
+	if a > maxVirtualTimestampExpansionNodes || b > maxVirtualTimestampExpansionNodes ||
+		a > maxVirtualTimestampExpansionNodes-b {
+		return maxVirtualTimestampExpansionNodes + 1
+	}
+	return a + b
+}
 
 func expandVirtualTimestampColumn(table *plan.TableDef, pos, tag, depth int32, visiting map[int32]bool) *plan.Expr {
 	remaining := maxVirtualTimestampExpansionNodes

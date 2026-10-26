@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,5 +94,44 @@ func TestVirtualTimestampColumnUsesReaderTimeZone(t *testing.T) {
 		exec("set time_zone='+00:00'")
 		count("select count(*) from t force index(kd) where d='2024-03-01'", 0)
 		count("select count(*) from t force index(kd) where d='2024-02-29'", 2)
+	})
+}
+
+func TestVirtualTimestampGeneratedDDLAdmission(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		const schema = "virtual_timestamp_admission"
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
+		_, err = conn.ExecContext(ctx, "create database "+schema)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "use "+schema)
+		require.NoError(t, err)
+		create := func(name, sourceType string) string {
+			cols := []string{"source " + sourceType, "g0 date as (date(source)) virtual"}
+			for level := 1; level <= 16; level++ {
+				previous := fmt.Sprintf("g%d", level-1)
+				expression := previous + "+" + previous
+				if level == 1 {
+					expression = "year(g0)+year(g0)"
+				}
+				cols = append(cols, fmt.Sprintf("g%d int as (%s) virtual", level, expression))
+			}
+			return fmt.Sprintf("create table %s(%s)", name, strings.Join(cols, ","))
+		}
+		_, err = conn.ExecContext(ctx, create("too_large", "timestamp(6)"))
+		require.ErrorContains(t, err, "read-expression nodes")
+		_, err = conn.ExecContext(ctx, create("stable", "datetime(6)"))
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "alter table stable modify column source timestamp(6)")
+		require.ErrorContains(t, err, "read-expression nodes")
 	})
 }

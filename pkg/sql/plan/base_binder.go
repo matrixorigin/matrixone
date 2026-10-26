@@ -798,7 +798,9 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				virtualTimestampColumn(node.TableDef, colPos) {
 				computed := expandVirtualTimestampColumn(node.TableDef, colPos, relPos, depth, make(map[int32]bool))
 				if computed == nil {
-					return nil, moerr.NewInternalErrorf(b.GetContext(), "invalid virtual generated column expression for %s", col)
+					return nil, moerr.NewNotSupportedf(b.GetContext(),
+						"virtual generated column '%s' needs %d read-expression nodes (limit %d); run the virtual timestamp preflight and migrate this table before upgrade",
+						col, virtualTimestampReadCost(node.TableDef, colPos), maxVirtualTimestampExpansionNodes)
 				}
 				return computed, nil
 			}

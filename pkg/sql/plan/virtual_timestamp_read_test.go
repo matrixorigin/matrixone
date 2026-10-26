@@ -72,3 +72,29 @@ func TestVirtualTimestampClassificationSharedDependencies(t *testing.T) {
 	require.False(t, indexUsesVirtualTimestamp(&pb.IndexDef{Parts: []string{"g30"}}, table))
 	require.Less(t, time.Since(start), 5*time.Second)
 }
+
+func TestVirtualTimestampExpansionAdmissionChecksDescendants(t *testing.T) {
+	table := &pb.TableDef{Name: "dag", Cols: []*pb.ColDef{{Name: "source", Typ: pb.Type{Id: int32(types.T_datetime)}}}}
+	ref := func(pos int32, typ types.T) *pb.Expr {
+		return &pb.Expr{Typ: pb.Type{Id: int32(typ)}, Expr: &pb.Expr_Col{Col: &pb.ColRef{ColPos: pos}}}
+	}
+	table.Cols = append(table.Cols, &pb.ColDef{Name: "g0", Typ: pb.Type{Id: int32(types.T_date)},
+		GeneratedCol: &pb.GeneratedCol{Expr: ref(0, types.T_date)}})
+	for level := 1; level <= 16; level++ {
+		previous := ref(int32(level), types.T_int32)
+		table.Cols = append(table.Cols, &pb.ColDef{Name: fmt.Sprintf("g%d", level),
+			Typ: pb.Type{Id: int32(types.T_int32)}, GeneratedCol: &pb.GeneratedCol{Expr: &pb.Expr{
+				Typ:  pb.Type{Id: int32(types.T_int32)},
+				Expr: &pb.Expr_F{F: &pb.Function{Args: []*pb.Expr{previous, DeepCopyExpr(previous)}}},
+			}}})
+	}
+	require.Empty(t, VirtualTimestampExpansionFindings(table), "datetime source is session stable")
+	table.Cols[0].Typ.Id = int32(types.T_timestamp)
+	findings := VirtualTimestampExpansionFindings(table)
+	require.Len(t, findings, 1)
+	require.Equal(t, "g16", findings[0].Column)
+	require.Equal(t, maxVirtualTimestampExpansionNodes+1, findings[0].Cost)
+	require.ErrorContains(t, validateVirtualTimestampExpansion(t.Context(), table), "g16")
+	require.Equal(t, maxVirtualTimestampExpansionNodes, saturatingVirtualTimestampCost(maxVirtualTimestampExpansionNodes-1, 1))
+	require.Equal(t, maxVirtualTimestampExpansionNodes+1, saturatingVirtualTimestampCost(maxVirtualTimestampExpansionNodes, 1))
+}
