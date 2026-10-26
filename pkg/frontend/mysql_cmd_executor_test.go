@@ -7078,6 +7078,14 @@ func TestUnsupportedFrontendParserStatements(t *testing.T) {
 		return err
 	}
 
+	for _, stmt := range []tree.Statement{&tree.CreateExtension{}, &tree.LoadExtension{}} {
+		t.Run(stmt.GetStatementType(), func(t *testing.T) {
+			err := run(stmt)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+			require.ErrorContains(t, err, "extension statements are not supported in MatrixOne")
+		})
+	}
+
 	err := run(&tree.CheckTableStmt{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "CHECK TABLE is not supported in MatrixOne")
@@ -10255,6 +10263,8 @@ func Test_StatementClassify(t *testing.T) {
 		{&tree.AnalyzeStmt{}, true},
 		{&tree.CheckTableStmt{}, true},
 		{&tree.ShowProfileStmt{}, true},
+		{&tree.CreateExtension{}, true},
+		{&tree.LoadExtension{}, true},
 	}
 	ses := &Session{
 		feSessionImpl: feSessionImpl{},
