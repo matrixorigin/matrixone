@@ -235,21 +235,21 @@ func legacyDecimalMultiplyReturnType(parameters []types.Type) types.Type {
 	return types.New(types.T_decimal128, 38, scale)
 }
 
-func (r *FuncGetResult) applyLegacyDecimalArithmeticReturnType(inputs []types.Type) {
-	if r.overloadId != 0 {
+func (fr *FuncGetResult) applyLegacyDecimalArithmeticReturnType(inputs []types.Type) {
+	if fr.overloadId != 0 {
 		return
 	}
 	parameters := inputs
-	if r.needCast {
-		parameters = r.targetTypes
+	if fr.needCast {
+		parameters = fr.targetTypes
 	}
 	if len(parameters) != 2 || !parameters[0].Oid.IsDecimal() {
 		return
 	}
-	switch r.fid {
+	switch fr.fid {
 	case PLUS, MINUS:
-		r.retType = legacyDecimalAddSubReturnType(parameters)
+		fr.retType = legacyDecimalAddSubReturnType(parameters)
 	case MULTI:
-		r.retType = legacyDecimalMultiplyReturnType(parameters)
+		fr.retType = legacyDecimalMultiplyReturnType(parameters)
 	}
 }

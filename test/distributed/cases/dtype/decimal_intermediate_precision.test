@@ -82,4 +82,9 @@ select c*null as null_product, cast(c as decimal(38,0))+null as null_sum, cast(c
 -- A typed NULL retains its declared domain even though its value is NULL.
 -- @metacmp(true)
 select c*cast(null as decimal(20,0)) as typed_null_product from checked_carriers order by i;
+create table legacy_decimal_sums(a decimal(18,0), b decimal(18,0));
+insert into legacy_decimal_sums values (999999999999999999,999999999999999999),(null,999999999999999999);
+-- A D64 addition can still carry a 19-digit coefficient under strict integer casts.
+-- @metacmp(true)
+select ((a+b)*(a+b))*99 as legacy_sum_product from legacy_decimal_sums order by a;
 drop database decimal_intermediate_precision;

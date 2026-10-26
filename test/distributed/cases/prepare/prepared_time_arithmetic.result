@@ -28,14 +28,14 @@ PREPARE p_time_integer_add FROM
 'SELECT CAST(''00:00:01'' AS TIME(0)) + ? AS result';
 SET @p_time_numeric_v = CAST(10 AS SIGNED);
 EXECUTE p_time_integer_add USING @p_time_numeric_v;
-➤ result[3,38,0]  𝄀
+➤ result[3,20,0]  𝄀
 11
 DEALLOCATE PREPARE p_time_integer_add;
 PREPARE p_time_integer_sub FROM
 'SELECT CAST(''00:00:01'' AS TIME(0)) - ? AS result';
 SET @p_time_numeric_v = CAST(10 AS SIGNED);
 EXECUTE p_time_integer_sub USING @p_time_numeric_v;
-➤ result[3,38,0]  𝄀
+➤ result[3,20,0]  𝄀
 -9
 DEALLOCATE PREPARE p_time_integer_sub;
 PREPARE p_time_integer_mod FROM
@@ -50,7 +50,7 @@ PREPARE p_time_nested_add FROM
 SET @p_time_nested_left = CAST(1 AS SIGNED);
 SET @p_time_nested_right = CAST(2 AS SIGNED);
 EXECUTE p_time_nested_add USING @p_time_nested_left, @p_time_nested_right;
-➤ result[3,38,0]  𝄀
+➤ result[3,20,0]  𝄀
 4
 DEALLOCATE PREPARE p_time_nested_add;
 PREPARE p_time_nested_scale FROM
@@ -58,28 +58,28 @@ PREPARE p_time_nested_scale FROM
 SET @p_time_nested_left = CAST(10000000000000 AS SIGNED);
 SET @p_time_nested_right = CAST(9999999999999 AS SIGNED);
 EXECUTE p_time_nested_scale USING @p_time_nested_left, @p_time_nested_right;
-➤ result[3,38,6]  𝄀
+➤ result[3,26,6]  𝄀
 2.000000
 DEALLOCATE PREPARE p_time_nested_scale;
 PREPARE p_time_unsigned FROM
 'SELECT CAST(''00:00:01'' AS TIME(0)) + ? AS result';
 SET @p_time_numeric_v = CAST(10 AS UNSIGNED);
 EXECUTE p_time_unsigned USING @p_time_numeric_v;
-➤ result[3,38,0]  𝄀
+➤ result[3,21,0]  𝄀
 11
 DEALLOCATE PREPARE p_time_unsigned;
 PREPARE p_time_folded_signed FROM
 'SELECT CAST(''00:00:01'' AS TIME(0)) + (CAST(NULL AS SIGNED) + ?) AS result';
 SET @p_time_folded_v = CAST(2 AS SIGNED);
 EXECUTE p_time_folded_signed USING @p_time_folded_v;
-➤ result[3,38,0]  𝄀
+➤ result[3,20,0]  𝄀
 null
 DEALLOCATE PREPARE p_time_folded_signed;
 PREPARE p_time_folded_signed_value FROM
 'SELECT CAST(''00:00:01'' AS TIME(0)) + (CAST(1 AS SIGNED) + ?) AS result';
 SET @p_time_folded_v = CAST(2 AS SIGNED);
 EXECUTE p_time_folded_signed_value USING @p_time_folded_v;
-➤ result[3,38,0]  𝄀
+➤ result[3,20,0]  𝄀
 4
 DEALLOCATE PREPARE p_time_folded_signed_value;
 PREPARE p_time_explicit_decimal FROM
