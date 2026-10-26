@@ -25,4 +25,5 @@ type appendCtx struct {
 	anode  txnif.AppendNode
 	start  uint32
 	count  uint32
+	dest   uint32
 }
