@@ -20,43 +20,12 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/require"
 )
-
-func m0TestPlanTable() *plan.TableDef {
-	table := &plan.TableDef{Name: "customer", Version: 1, Name2ColIndex: make(map[string]int32)}
-	for i := 0; i < 6; i++ {
-		name := []string{"c_id", "c_d_id", "c_w_id", "c_credit_lim", "c_ytd_payment", "c_balance"}[i]
-		table.Cols = append(table.Cols, &plan.ColDef{
-			Name: name, ColId: uint64(i + 1), Seqnum: uint32(i),
-			Typ: plan.Type{Id: int32(types.T_int32)},
-		})
-		table.Name2ColIndex[name] = int32(i)
-	}
-	key := &plan.ColDef{
-		Name: catalog.CPrimaryKeyColName, ColId: 7, Seqnum: 6, Hidden: true, Primary: true,
-		Typ: plan.Type{Id: int32(types.T_varchar), Width: 32},
-	}
-	table.Cols = append(table.Cols, key)
-	table.Name2ColIndex[key.Name] = 6
-	appended := &plan.ColDef{
-		Name: "tier", ColId: 8, Seqnum: 7,
-		Typ:     plan.Type{Id: int32(types.T_varchar), Width: 8},
-		Default: &plan.Default{NullAbility: true},
-	}
-	table.Cols = append(table.Cols, appended)
-	table.Name2ColIndex[appended.Name] = 7
-	rowid := MakeRowIdColDef()
-	rowid.ColId = 9
-	table.Cols = append(table.Cols, rowid)
-	table.Pkey = &plan.PrimaryKeyDef{PkeyColName: key.Name, CompPkeyCol: key}
-	return table
-}
 
 func TestM0PlanAdmissionRejectsIdentitiesAndBackfill(t *testing.T) {
 	table := m0TestPlanTable()

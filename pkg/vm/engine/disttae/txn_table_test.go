@@ -252,6 +252,33 @@ func TestTxnTableGetTableDefRestoresDefaultCharset(t *testing.T) {
 	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), tableDef.DefaultCharset)
 }
 
+func TestTxnTableGetTableDefOwnsBirthMetadata(t *testing.T) {
+	key := &planpb.ColDef{Name: catalog.CPrimaryKeyColName, ColId: 1, Seqnum: 0, Hidden: true, Primary: true, Typ: planpb.Type{Id: int32(types.T_varchar)}}
+	flag := &planpb.ColDef{Name: "flag", ColId: 2, Seqnum: 1, Typ: planpb.Type{Id: int32(types.T_bool)}, Default: &planpb.Default{NullAbility: true}}
+	rowid := &planpb.ColDef{Name: catalog.Row_ID, ColId: 3, Seqnum: 2, Hidden: true, Typ: planpb.Type{Id: int32(types.T_Rowid)}}
+	state := &planpb.AppendMissingState{FormatVersion: 1, LayoutId: []byte("0123456789abcdef"), BaseWidth: 1, PkSeqnum: 0,
+		Columns: []*planpb.ColumnBirthFill{{Seqnum: 1, BirthAppendOrdinal: 1, Type: flag.Typ, Kind: planpb.MissingFillKind_MISSING_FILL_BOOL_FALSE_V1}}}
+	defs := engine.PlanColsToExeCols([]*planpb.ColDef{key, flag, rowid})
+	for i, def := range defs {
+		def.(*engine.AttributeDef).Attr.ID = uint64(i + 1) // IDs normally come from mo_columns.
+	}
+	constraints := &engine.ConstraintDef{Cts: []engine.Constraint{&engine.PrimaryKeyDef{Pkey: &planpb.PrimaryKeyDef{PkeyColName: key.Name, CompPkeyCol: key}}}}
+	constraint, err := constraints.MarshalBinary()
+	require.NoError(t, err)
+	defs = append(defs, constraints)
+	table := &txnTable{db: &txnDatabase{}, version: 1, defs: defs, constraint: constraint, extraInfo: &api.SchemaExtra{AppendMissingState: state}}
+	def := table.GetTableDef(t.Context())
+	require.NoError(t, planpb.ValidateAppendMissingTable(def))
+	require.Equal(t, state, def.AppendMissingState)
+	require.NotSame(t, state, def.AppendMissingState)
+	def.AppendMissingState.LayoutId[0] = 'x'
+	def.AppendMissingState.Columns[0].Kind = planpb.MissingFillKind_MISSING_FILL_NULL_V1
+	require.Equal(t, byte('0'), state.LayoutId[0])
+	require.Equal(t, planpb.MissingFillKind_MISSING_FILL_BOOL_FALSE_V1, state.Columns[0].Kind)
+	table.RefeshTableDef(t.Context())
+	require.Equal(t, state, table.GetTableDef(t.Context()).AppendMissingState, "cache rebuild must restore the catalog-owned history")
+}
+
 func makeBatchForTest(
 	mp *mpool.MPool,
 	ints ...int64,

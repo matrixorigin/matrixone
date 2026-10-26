@@ -193,3 +193,40 @@ clone/merge, cancellation, rollback, restart/checkpoint and ordinary COPY
 controls. These local results do not certify external launcher deployment,
 current-head CI, production QA or mixed versions. Those remain separate gates;
 the source integration has no newly measured full-workflow performance claim.
+
+
+## Dependency safety and default-build coverage closure — 2026-10-26
+
+Merge `25d1e5b76d9fbf481f8e0ab145a712adaed32130` integrates prerequisite
+`a329de964e8b7738790c98d26bdf24c0d446a589`. Legacy catalog missing-column
+proof now requires the real catalog database/table identity, the canonical logical
+ID column seqnum/type and a concrete object. Same-name user layouts cannot obtain
+that authority. The owning tables package and positive/negative identity tests
+pass locally; this does not qualify mixed binaries or old-tool access.
+
+The former default-build coverage result was 480/835 (57.49%). Most manifest
+validation tests previously returned at the compile-capability gate, so negative
+inputs could all pass for the same unrelated rejection. Initialize still gates
+ordinary binaries before reading a manifest. Its existing verification/publication
+body is shared through one private helper; tests now check the real guard reason,
+failed reinitialization, lock/root/config identity and strict marker decoding.
+Tagged exec/startup tests retain the real public entry point. No capability flag,
+second state machine, admission bypass or new deployment mode is introduced.
+
+Mode-independent COPY exit and deep-copy tests now run in both builds. Existing
+hook seams separately test bound ADD dispatch and typed-fill consumption; those
+injected consumer tests are not described as proof-producer or Linux integration
+qualification. Catalog projection tests verify immutable history is copied and
+restored from its owner. Default-disabled startup tests reject marked data,
+fileservice and disk-cache paths. No service or performance workload is added.
+
+The original CI parser and ignore rules reproduce the archived 480/835 exactly.
+A local projection combining unchanged archived Linux blocks with current passing
+ordinary component profiles reaches 630/836 (75.36%). This is a hybrid estimate,
+not a final-head CI PASS; the unchanged >75% gate must still pass in CI.
+No coverage exclusion, threshold relaxation or CI-repository modification was made.
+
+Only the dependency/coverage closure is authorized in this phase. Ubuntu, the
+new-head Linux window, SF100 and Ready remain untouched. Previously prepared
+5ef8889c Linux inputs are superseded for final-head qualification; their absence
+of execution must not be confused with a pass at the newer source.

@@ -200,6 +200,12 @@ func Initialize(args []string) (func(), error) {
 	if !birthBuildEnabled {
 		return nil, moerr.NewInvalidInputNoCtxf("M0 admission: this binary lacks birth-fill capability")
 	}
+	return initializeManifest(path, args)
+}
+
+// initializeManifest owns manifest validation and admission publication. Keep
+// the build-capability gate in Initialize, before any manifest is consumed.
+func initializeManifest(path string, args []string) (func(), error) {
 	var manifest Manifest
 	if err := readJSON(path, &manifest); err != nil {
 		return nil, err
