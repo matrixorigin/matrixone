@@ -1082,6 +1082,8 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 			// Give every cheap precision/era witness priority over a wrong
 			// precision's exhaustive session search. Retain flags, not trees.
 			var sessions []tableDumpSessionCandidate
+			var probes []*legacyFloatSessionProbe
+			probeKeys := make(map[string]int)
 			for increment := int64(0); increment <= maxIncrement; increment++ {
 				if err := ctx.GetContext().Err(); err != nil {
 					stmt.Free()
@@ -1093,7 +1095,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					if item.kind == "default" && mode&tableDumpBindingPreIncompleteTemporal != 0 && !needsIncompleteEra {
 						continue
 					}
-					dependency = tableDumpDefaultSession{}
+					dependency = tableDumpDefaultSession{captureUnfolded: item.kind == "default"}
 					candidate, err := bind(increment, mode, zone, locale)
 					if normalizedDecimal && dependency.floatFormatting && !integerDecimal {
 						// A persisted ALTER may already have removed the old casts.
@@ -1168,26 +1170,43 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 						if typeCanMatch && (folded || stored || dependency.folded || err != nil && (dependency.timeZone || dependency.locale)) {
 							sensitive = true
 							flags := tableDumpDefaultSession{timeZone: dependency.timeZone, locale: dependency.locale, folded: dependency.folded}
-							sessions = append(sessions, tableDumpSessionCandidate{increment, mode, flags, folded, stored})
+							search := tableDumpSessionCandidate{increment, mode, flags, folded, stored}
+							sessions = append(sessions, search)
+							if !matched && dependency.floatFormatting {
+								if err := addLegacyFloatSessionProbe(ctx, want, candidate, dependency.unfolded, search, &probes, probeKeys, budget); err != nil {
+									stmt.Free()
+									return false, err
+								}
+								if budget.visits > candidateVisitLimit {
+									stmt.Free()
+									return false, moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
+								}
+							}
 						}
 					}
 				}
 			}
 			if !matched {
-				matched, err = matchTableDumpSessions(want, zone, locale, timeZones, sessions,
-					func(search tableDumpSessionCandidate, tz *time.Location, lc string) (*planpb.Expr, error) {
-						if fatal != nil {
-							return nil, fatal
-						}
-						dependency = search.dependency
-						result, _ := bind(search.increment, search.mode, tz, lc)
-						return result, fatal
-					},
-					func(search tableDumpSessionCandidate, rebound *planpb.Expr) bool {
-						var result bool
-						result, fatal = matchCandidate(search.mode, rebound)
-						return result
+				bindSession := func(search tableDumpSessionCandidate, tz *time.Location, lc string) (*planpb.Expr, error) {
+					if fatal != nil {
+						return nil, fatal
+					}
+					dependency = search.dependency
+					result, _ := bind(search.increment, search.mode, tz, lc)
+					return result, fatal
+				}
+				matchSession := func(search tableDumpSessionCandidate, rebound *planpb.Expr) bool {
+					var result bool
+					result, fatal = matchCandidate(search.mode, rebound)
+					return result
+				}
+				matched, err = matchLegacyFloatSessionProbes(ctx, zone, locale, timeZones, probes, budget, candidateVisitLimit, bindSession,
+					func(search tableDumpSessionCandidate, rebound *planpb.Expr) (bool, error) {
+						return matchCandidate(search.mode, rebound)
 					})
+				if !matched && err == nil && fatal == nil {
+					matched, err = matchTableDumpSessions(want, zone, locale, timeZones, sessions, bindSession, matchSession)
+				}
 				if err == nil {
 					err = fatal
 				}

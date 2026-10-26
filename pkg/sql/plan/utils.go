@@ -2059,6 +2059,11 @@ func constantFoldWithPreparedExactSource(
 	if rule.ContainsSqlModeDependentDivision(expr) {
 		return expr, nil
 	}
+	// Catalog proof can pre-fold independent children once while retaining
+	// session-dependent islands for a later, private witness evaluation.
+	if preserved, _ := proc.Ctx.Value(legacyFloatSessionFoldKey{}).(map[*plan.Expr]bool); preserved[expr] {
+		return expr, nil
+	}
 
 	vec, free, warned, err := rule.EvaluateConstantExpression(proc, expr, bat)
 	if err != nil {

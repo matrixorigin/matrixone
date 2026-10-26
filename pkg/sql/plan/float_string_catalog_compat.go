@@ -287,6 +287,8 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 				return finishLegacyFloatStringExpression(ctx, scope, declaration, ast, search.increment, bindingMode, old, visit.nodes, budget)
 			}
 			var sessions []tableDumpSessionCandidate
+			var probes []*legacyFloatSessionProbe
+			probeKeys := make(map[string]int)
 			maxIncrement := int64(0)
 			if visit.hasDivision {
 				maxIncrement = 30
@@ -338,11 +340,24 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 							}
 							search.dependency = tableDumpDefaultSession{timeZone: dependency.timeZone, locale: dependency.locale, folded: dependency.folded}
 							sessions = append(sessions, search)
+							if err := addLegacyFloatSessionProbe(ctx, item.expr, bound, dependency.unfolded, search, &probes, probeKeys, budget); err != nil {
+								return nil, err
+							}
 						}
 					}
 				}
 			}
-			found, err := matchLegacyFloatSessions(zone, locale, newLegacyFloatTimeZones(time.LoadLocation), sessions, bind, match)
+			found, err := matchLegacyFloatSessionProbes(ctx, zone, locale, newTableDumpTimeZones(time.LoadLocation), probes, budget, tableDumpMaxCandidateVisits, bind,
+				func(search tableDumpSessionCandidate, bound *planpb.Expr) (bool, error) {
+					return match(search, bound), nil
+				})
+			if found || err != nil {
+				if err != nil {
+					return nil, err
+				}
+				return finish(witness, matched)
+			}
+			found, err = matchLegacyFloatSessions(zone, locale, newLegacyFloatTimeZones(time.LoadLocation), sessions, bind, match)
 			if err != nil || !found {
 				return nil, err
 			}
