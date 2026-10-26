@@ -349,6 +349,24 @@ fields terminated by '|@' enclosed by '' escaped by '' lines starting by 'p:';
 select id, s from delim_multi_back;
 drop table delim_multi_back;
 
+-- The NULL marker is always a literal backslash + N, so a field
+-- terminator starting with either byte splits the emitted marker into
+-- two non-NULL fields on LOAD. Export rejects such framings; with the
+-- default backslash escape the identical bytes still read back as NULL.
+select id, s from (select 1 as id, null as s) t
+into outfile 'stage://outfile_fields_lines_stage/null_term_n.csv'
+fields terminated by 'N' enclosed by '"' escaped by '#' lines starting by 'p:' header 'false';
+select count(*) from stage_list('stage://outfile_fields_lines_stage/null_term_n.csv');
+select id, s from (select 1 as id, null as s) t
+into outfile 'stage://outfile_fields_lines_stage/null_term_n_ok.csv'
+fields terminated by 'N' enclosed by '"' escaped by '\\' lines starting by 'p:' header 'false';
+select hex(load_file(cast('stage://outfile_fields_lines_stage/null_term_n_ok.csv' as datalink)));
+create table null_term_n_back (id int, s varchar(20));
+load data infile 'stage://outfile_fields_lines_stage/null_term_n_ok.csv' into table null_term_n_back
+fields terminated by 'N' enclosed by '"' escaped by '\\' lines starting by 'p:';
+select id, s, s is null as isn from null_term_n_back;
+drop table null_term_n_back;
+
 remove files from stage if exists 'stage://outfile_fields_lines_stage/*.csv';
 select count(*) from stage_list('stage://outfile_fields_lines_stage/');
 drop stage outfile_fields_lines_stage;

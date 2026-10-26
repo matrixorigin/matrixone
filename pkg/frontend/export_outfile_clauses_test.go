@@ -1768,6 +1768,104 @@ func TestOutfileEmissionSimulatorPoolDeterminism(t *testing.T) {
 	})
 }
 
+// TestOutfileNullMarkerTerminatorCollision pins the review finding that a
+// field terminator starting with the NULL marker's bytes splits the emitted
+// marker into two non-NULL fields on LOAD: the marker is always a literal
+// backslash + N, so FIELDS TERMINATED BY 'N' with ESCAPED BY '#' reloads
+// the record as ('\', ”) instead of NULL. The marker replay therefore runs
+// for every framing, not only for the enclosure-collision class; framings
+// the loader's scan survives — the default backslash escape guards \N as
+// its own NULL marker — keep exporting the same bytes.
+func TestOutfileNullMarkerTerminatorCollision(t *testing.T) {
+	const (
+		generalMsg   = "a NULL value cannot round-trip with this CSV framing"
+		enclosureMsg = "a NULL value cannot round-trip with ENCLOSED BY"
+	)
+
+	t.Run("simulation predicate on terminator collisions", func(t *testing.T) {
+		// Escape '#': the raw marker cannot survive a terminator of N.
+		ep := newOutfileExportConfig(tree.NewFields("N", false, '"', '#'), nil, "\n")
+		require.False(t, ep.csvFieldEmissionParses([]byte{'\\', 'N'}, ep.csvNormalizedRecordTerm(), nil, true))
+		// The default backslash escape guards \N as its own NULL marker.
+		ep = newOutfileExportConfig(tree.NewFields("N", false, '"', '\\'), nil, "\n")
+		require.True(t, ep.csvFieldEmissionParses([]byte{'\\', 'N'}, ep.csvNormalizedRecordTerm(), nil, true))
+		// A comma terminator never touches the marker.
+		ep = newOutfileExportConfig(tree.NewFields(",", false, '"', '#'), nil, "\n")
+		require.True(t, ep.csvFieldEmissionParses([]byte{'\\', 'N'}, ep.csvNormalizedRecordTerm(), nil, true))
+	})
+
+	t.Run("batch writer rejects the terminator-N framing", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Zero(t, mp.CurrNB()) }()
+		bat := newIdNameBatch(t, mp, nil)
+		defer bat.Clean(mp)
+		ep := selectIntoOutfileConfig("N", '"', '#', "", "\n")
+		ep.ctx = context.Background()
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+		result := <-ch
+		require.ErrorContains(t, result.err, generalMsg)
+	})
+
+	t.Run("result-set writer rejects the terminator-N framing", func(t *testing.T) {
+		ep := selectIntoOutfileConfig("N", '"', '#', "", "\n")
+		ep.ctx = context.Background()
+		ep.mrs.Data = [][]any{{int32(1), nil}}
+		require.ErrorContains(t, exportDataFromResultSetToCSVFile(ep), generalMsg)
+	})
+
+	t.Run("enclosure-collision rejections keep their diagnostic", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Zero(t, mp.CurrNB()) }()
+		bat := newIdNameBatch(t, mp, nil)
+		defer bat.Clean(mp)
+		ep := selectIntoOutfileConfig(",", '\\', '#', "p:", "\n")
+		ep.ctx = context.Background()
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+		result := <-ch
+		require.ErrorContains(t, result.err, enclosureMsg)
+	})
+
+	t.Run("backslash escape keeps the marker and the NULL", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Zero(t, mp.CurrNB()) }()
+		bat := newIdNameBatch(t, mp, nil)
+		defer bat.Clean(mp)
+		ep := selectIntoOutfileConfig("N", '"', '\\', "", "\n")
+		ep.ctx = context.Background()
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+		result := <-ch
+		require.NoError(t, result.err)
+		require.Equal(t, "1N\\N\n", string(result.writeByte))
+		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+			FieldsTerminatedBy: "N", FieldsEscapedBy: `\`, FieldsEnclosedBy: `"`,
+			LinesTerminatedBy: "\n", Null: []string{`\N`}, UnescapedQuote: true,
+		}, bytes.NewReader(result.writeByte), csvparser.ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Len(t, row, 2)
+		require.Equal(t, "1", row[0].Val)
+		require.True(t, row[1].IsNull)
+	})
+
+	t.Run("ordinary values under a terminator-N framing stay allowed", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		defer func() { require.Zero(t, mp.CurrNB()) }()
+		bat := newIdNameBatch(t, mp, "ab")
+		defer bat.Clean(mp)
+		ep := selectIntoOutfileConfig("N", '"', '#', "", "\n")
+		ep.ctx = context.Background()
+		ch := make(chan *BatchByte, 1)
+		constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+		result := <-ch
+		require.NoError(t, result.err)
+		require.Equal(t, "1N\"ab\"\n", string(result.writeByte))
+	})
+}
+
 // BenchmarkOutfileEmissionSimulation measures the per-cell cost of the
 // LOAD-replay gate. Constructing a csvparser per cell (the pre-pool shape)
 // allocates a 320 KiB block buffer and compiles the escape regexp every

@@ -545,21 +545,27 @@ func formatOutputNull(oq *ExportConfig, symbol []byte, enclosed byte, buffer *by
 		field, line, _, _ := oq.csvBoundaryBytes()
 		flag = enclosed == oq.escapeChar() || field == oq.escapeChar() || line == oq.escapeChar()
 	}
-	// The marker always starts with a literal backslash and ends in N. When
-	// the enclosure collides with either byte, or equals the escape byte,
-	// whether LOAD's field scan survives is parser-behavior, not static:
-	// replay the emitted marker and reject configurations where it does not
-	// read back as a clean SQL NULL.
-	if enclosed != 0 && (enclosed == '\\' || enclosed == 'N' || enclosed == oq.escapeChar()) {
-		marker := []byte{'\\', 'N'}
-		emitted := marker
-		if flag {
-			emitted = append(append([]byte{enclosed}, marker...), enclosed)
-		}
-		if !oq.csvFieldEmissionParses(emitted, oq.csvNormalizedRecordTerm(), nil, true) {
+	// The marker always starts with a literal backslash and ends in N.
+	// Those bytes can collide with the enclosure, with a field or record
+	// terminator, or with the escape byte — a field terminator of N splits
+	// the raw marker into two non-NULL fields on LOAD. Which collisions
+	// the field scan survives is parser-behavior, not static, so replay
+	// the marker exactly as emitted (wrapped or raw) against the loader's
+	// full clause set and reject any framing where it does not read back
+	// as a clean SQL NULL. Enclosure-collision rejections keep their
+	// precise diagnostic; all other framings get the general one.
+	marker := []byte{'\\', 'N'}
+	emitted := marker
+	if flag {
+		emitted = append(append([]byte{enclosed}, marker...), enclosed)
+	}
+	if !oq.csvFieldEmissionParses(emitted, oq.csvNormalizedRecordTerm(), nil, true) {
+		if enclosed != 0 && (enclosed == '\\' || enclosed == 'N' || enclosed == oq.escapeChar()) {
 			return moerr.NewNotSupportedf(oq.ctx,
 				"select into outfile (csv): a NULL value cannot round-trip with ENCLOSED BY '%c': the emitted \\N marker breaks LOAD's field scan", enclosed)
 		}
+		return moerr.NewNotSupported(oq.ctx,
+			"select into outfile (csv): a NULL value cannot round-trip with this CSV framing: the emitted \\N marker breaks LOAD's field scan")
 	}
 	return formatOutputStringRaw(oq, []byte{'\\', 'N'}, symbol, enclosed, flag, buffer)
 }
