@@ -107,6 +107,17 @@ func (opts StatementOption) WithTrustedCheckConstraintNames() StatementOption {
 	return opts
 }
 
+// WithTrustedForeignKeyLayout marks a CREATE that physically reconstructs an
+// owned table unchanged — TRUNCATE's drop-and-recreate, including the
+// truncate-optimized unfiltered DELETE — so the planner reinstalls the
+// historical foreign-key layout without re-validating it as a newly authored
+// constraint (#30282: a legacy SET NULL over a NOT NULL column must stay
+// truncatable). Never set this for user-visible CREATE TABLE statements.
+func (opts StatementOption) WithTrustedForeignKeyLayout() StatementOption {
+	opts.trustedForeignKeyLayout = true
+	return opts
+}
+
 // WithTxn exec sql in a exists txn
 func (opts Options) WithTxn(txnOp client.TxnOperator) Options {
 	opts.txnOp = txnOp
@@ -347,6 +358,13 @@ func (opts StatementOption) IgnoreForeignKey() bool {
 // names inherited from an owned source, without a 3822 sibling name scan.
 func (opts StatementOption) TrustedCheckConstraintNames() bool {
 	return opts.trustedCheckConstraintNames
+}
+
+// TrustedForeignKeyLayout reports whether the internal CREATE physically
+// reconstructs an owned table unchanged, keeping its historical foreign-key
+// layout out of newly-authored-constraint validation (#30282).
+func (opts StatementOption) TrustedForeignKeyLayout() bool {
+	return opts.trustedForeignKeyLayout
 }
 
 func (opts Options) WithDisableWaitPaused() Options {

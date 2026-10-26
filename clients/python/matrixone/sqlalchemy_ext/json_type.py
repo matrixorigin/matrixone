@@ -127,7 +127,7 @@ class JSONPathElement(ColumnElement):
                 other_value = other
             else:
                 # Add quotes for regular strings
-                other_value = f'"{other}"'
+                other_value = json.dumps(other, ensure_ascii=False)
         elif isinstance(other, bool):
             # Convert Python bool to JSON boolean string
             other_value = 'true' if other else 'false'
@@ -146,7 +146,7 @@ class JSONPathElement(ColumnElement):
             if other in ('true', 'false', 'null') or other.startswith('"'):
                 other_value = other
             else:
-                other_value = f'"{other}"'
+                other_value = json.dumps(other, ensure_ascii=False)
         elif isinstance(other, bool):
             other_value = 'true' if other else 'false'
         else:

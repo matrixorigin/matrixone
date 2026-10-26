@@ -375,7 +375,7 @@ const (
 // SpatialDistanceSemantics requires MORPC v90 because geodetic
 // ST_FRECHETDISTANCE/ST_HAUSDORFFDISTANCE change the meaning of existing
 // overloads and the distance family adds length-unit overloads.
-// CRC32JSONTextBytes requires MORPC v130 for the new CRC32 JSON-text execution
+// CRC32JSONTextBytes requires MORPC v132 for the new CRC32 JSON-text execution
 // identity. Legacy catalog and wire expressions retain binary JSON hashing
 // under overload zero.
 // PreparedPrecisionScalar requires MORPC v95 because older executors lose
@@ -400,6 +400,8 @@ const (
 // TIMESTAMP identities; released unary identities retain TIMESTAMP vectors.
 // DynamicTimeResultContracts uses the same epoch for prepared TIME results
 // over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
+// IncompleteTemporalStrings requires MORPC v130 for raw-calendar string
+// overloads and incomplete-input rejection diagnostics.
 type RemoteExpressionFeatures struct {
 	JSONStringConsumerOverload    bool
 	JSONOpaqueTextContracts       bool
@@ -449,6 +451,7 @@ type RemoteExpressionFeatures struct {
 	DateNumericResultContracts              bool
 	TimestampDatetimeResultContracts        bool
 	DynamicTimeResultContracts              bool
+	IncompleteTemporalStrings               bool
 	DecimalStatisticalResultContracts       bool
 	TableCollationFunction                  bool
 	InvalidDecimalStatisticalResultContract bool
@@ -489,6 +492,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.MediumIntAssignmentBounds ||
 		features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts ||
 		features.DateNumericResultContracts ||
+		features.IncompleteTemporalStrings ||
 		features.DecimalStatisticalResultContracts ||
 		features.TableCollationFunction ||
 		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
@@ -1047,10 +1051,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					features.TemporalResultContracts = true
 				}
 				if current.Typ.Id == planInt32TypeID &&
-					((id == 216 && overload >= 0 && overload <= 3) || (id == 206 && overload == 0)) {
+					((id == 216 && overload >= 0 && overload <= 5) || (id == 206 && overload == 0)) {
 					features.DateNumericResultContracts = true
 				}
-				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
+				if id == 216 && (overload == 0 || overload == 1 || overload == 4) { // one-arg WEEK: DATE/DATETIME/VARCHAR
 					features.WeekSessionDefault = true
 				}
 				timestamp, dynamicTime := TemporalResultContractFeatures(current)
@@ -1062,6 +1066,19 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 						want = planDatetimeTypeID
 					}
 					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || current.Typ.Id != want
+				}
+				// New string identities cannot execute on pre-v127 workers.
+				// Released LAST_DAY and DATE_ADD/SUB string identities also
+				// need the new incomplete-calendar warning contract.
+				if (id == 251 && overload == 2) || // DATE_FORMAT
+					(id == 93 && overload >= 1 && overload <= 3) || // DATEDIFF
+					((id == 222 || id == 223) && overload == 1) || // TO_DAYS/TO_SECONDS
+					(id == 216 && (overload == 4 || overload == 5)) || // WEEK
+					(id == 360 && overload == 3) || // DAYOFWEEK
+					(id == 201 && (overload == 0 || overload == 1)) || // LAST_DAY
+					(id == 224 && (overload == 2 || overload == 3 || overload == 6)) || // DATE_ADD
+					(id == 225 && (overload == 2 || overload == 3 || overload == 5)) { // DATE_SUB
+					features.IncompleteTemporalStrings = true
 				}
 				// Released overloads retain their physical vector ABI. The new
 				// numeric EXTRACT and string ADDTIME/SUBTIME results use appended
@@ -1237,9 +1254,9 @@ func isCRC32JSONTextBytes(expr *Expr) bool {
 	return fn != nil && fn.Func != nil && int32(fn.Func.Obj>>32) == crc32FunctionID && int32(fn.Func.Obj) == CRC32JSONTextOverload
 }
 
-// RequiresMORPCVersion130CRC32JSONTextBytes reports whether an owner contains
+// RequiresMORPCVersion132CRC32JSONTextBytes reports whether an owner contains
 // the normalized-JSON-text CRC32 contract introduced by the CRC32 JSON fix.
-func RequiresMORPCVersion130CRC32JSONTextBytes(owner any) (bool, error) {
+func RequiresMORPCVersion132CRC32JSONTextBytes(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.CRC32JSONTextBytes, err
 }

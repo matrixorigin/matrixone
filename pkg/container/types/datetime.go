@@ -61,7 +61,19 @@ func (dt Datetime) String() string {
 	}
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
-	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
+	// Keep the existing representation for values outside the SQL datetime range.
+	if dt < 0 || y < MinDatetimeYear || y > MaxDatetimeYear {
+		return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
+	}
+	buf := [19]byte{
+		'0' + byte(y/1000), '0' + byte(y/100%10), '0' + byte(y/10%10), '0' + byte(y%10), '-',
+		'0' + m/10, '0' + m%10, '-',
+		'0' + d/10, '0' + d%10, ' ',
+		'0' + byte(hour/10), '0' + byte(hour%10), ':',
+		'0' + byte(minute/10), '0' + byte(minute%10), ':',
+		'0' + byte(sec/10), '0' + byte(sec%10),
+	}
+	return string(buf[:])
 }
 
 func (dt Datetime) String2(scale int32) string {

@@ -121,6 +121,21 @@ select id, elt(n, js, cast(txt as json)) as selected_value from lazy_src order b
 ➤ id[4,32,0]  ¦  selected_value[-1,16383,0]  𝄀
 1  ¦  {"p": 1}  𝄀
 2  ¦  [2]
+select concat(elt(1, 'ok', cast('bad' as json)), '!') as lazy_parent, elt(1, elt(1, 'ok', cast('bad' as json)), cast('bad' as json)) as lazy_nested;
+➤ lazy_parent[-1,16383,0]  ¦  lazy_nested[-1,16383,0]  𝄀
+ok!  ¦  ok
+select elt(1, 'ok', cast(bit_count('3x') as json)) as unselected_warning;
+➤ unselected_warning[-1,16383,0]  𝄀
+ok
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+select concat(elt(1, cast(bit_count('3x') as json), 'ok'), '!') as selected_warning;
+➤ selected_warning[-1,16383,0]  𝄀
+2!
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+1
 select elt(1, cast(cast('a' as binary(1)) as json)) = '"base64:type254:YQ=="' as binary_subtype;
 ➤ binary_subtype[-7,1,0]  𝄀
 1

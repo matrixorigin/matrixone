@@ -133,8 +133,8 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.DecimalIntegerDivisionSemantics && requiredVersion < defines.MORPCVersion121 {
 		requiredVersion = defines.MORPCVersion121
 	}
-	if features.CRC32JSONTextBytes && requiredVersion < defines.MORPCVersion130 {
-		requiredVersion = defines.MORPCVersion130
+	if features.CRC32JSONTextBytes && requiredVersion < defines.MORPCVersion132 {
+		requiredVersion = defines.MORPCVersion132
 	}
 	if features.DecimalDivisionSemantics && requiredVersion < defines.MORPCVersion97 {
 		requiredVersion = defines.MORPCVersion97
@@ -179,6 +179,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	if features.ViewMetadataFunctions {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion126)
+	}
+	if features.IncompleteTemporalStrings {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion130)
 	}
 	return requiredVersion, nil
 }

@@ -31,10 +31,13 @@ import (
 
 func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 	RunSingleCNBaseClusterTests(t, func(c Cluster) {
-		admin := openIcebergTestDB(t, c)
-		defer admin.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		admin, err := sql.Open("mysql", fmt.Sprintf("sys#root#moadmin:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer admin.Close()
 		exec := func(query string) {
 			t.Helper()
 			_, err := admin.ExecContext(ctx, query)
@@ -42,13 +45,19 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 		}
 		const db = "outfile_csv_30702"
 		exec("create database " + db)
-		defer func() { _, err := admin.Exec("drop database " + db); require.NoError(t, err) }()
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			_, err := admin.ExecContext(cleanupCtx, "drop database "+db)
+			require.NoError(t, err)
+		}()
 		exec("create table " + db + ".strings_src(id int primary key,s varchar(128))")
 		values := []string{"plain", "", "a,b", "a\nb", "a\rb", "a\r\nb", "tail\r", `\N`, "NULL", `back\slash`, `"first`, "a::b||c", "你好"}
+		stringTuples := make([]string, 0, len(values))
 		for i, value := range values {
-			exec(fmt.Sprintf("insert into %s.strings_src values (%d,cast(x'%s' as char))", db, i, hex.EncodeToString([]byte(value))))
+			stringTuples = append(stringTuples, fmt.Sprintf("(%d,cast(x'%s' as char))", i, hex.EncodeToString([]byte(value))))
 		}
-		exec("insert into " + db + ".strings_src values (99,null)")
+		exec("insert into " + db + ".strings_src values " + strings.Join(stringTuples, ",") + ",(99,null)")
 		exec("create table " + db + ".bits_src(id int primary key,b bit(8))")
 		var tuples []string
 		for i := 0; i < 256; i++ {
@@ -64,7 +73,22 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 		// Leading/middle CR, including CR followed by ':' to collide with
 		// the complete multi-byte 'r:' separator after escape translation.
 		exec("insert into " + db + ".bits24_src values (1,6360418),(2,6382178),(3,null),(4,876898),(5,866914),(6,6360378),(7,6385250)")
-		for _, tc := range []struct {
+		read := func(t *testing.T, ctx context.Context, table, column string) []string {
+			t.Helper()
+			rows, err := admin.QueryContext(ctx, "select id,hex("+column+") from "+table+" order by id")
+			require.NoError(t, err)
+			defer rows.Close()
+			var result []string
+			for rows.Next() {
+				var id int
+				var value sql.NullString
+				require.NoError(t, rows.Scan(&id, &value))
+				result = append(result, fmt.Sprintf("%d:%t:%s", id, value.Valid, value.String))
+			}
+			require.NoError(t, rows.Err())
+			return result
+		}
+		cases := []struct {
 			name, source, column, field, line, quote, extra string
 		}{
 			{"string-unenclosed", "strings_src", "s", ",", "\n", "", ""},
@@ -115,17 +139,29 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 			{"cr-enclosure-custom-line-force", "bits24_src", "b", `\`, "||", "\r", " FORCE_QUOTE (b)"},
 			{"cr-enclosure-custom-line-n-colon", "bits24_src", "b", "n:", "||", "\r", ""},
 			{"cr-enclosure-custom-line-n-colon-force", "bits24_src", "b", "n:", "||", "\r", " FORCE_QUOTE (b)"},
-		} {
+		}
+		expected := make(map[string][]string)
+		for _, tc := range cases {
+			if _, exists := expected[tc.source]; exists {
+				continue
+			}
+			exec("create table " + db + ".restored_" + tc.source + " like " + db + "." + tc.source)
+			expected[tc.source] = read(t, ctx, db+"."+tc.source, tc.column)
+		}
+		// Setup owns a separate budget. Every case remains runnable after it ends.
+		cancel()
+		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+				defer cancel()
 				exec := func(query string) {
 					t.Helper()
 					_, err := admin.ExecContext(ctx, query)
 					require.NoError(t, err, query)
 				}
 				path := filepath.Join(t.TempDir(), "rows.csv")
-				dst := db + ".restored"
-				exec("create table " + dst + " like " + db + "." + tc.source)
-				defer func() { _, err := admin.Exec("drop table " + dst); require.NoError(t, err) }()
+				dst := db + ".restored_" + tc.source
+				exec("truncate table " + dst)
 				fields := " FIELDS TERMINATED BY " + sqlquote.String(tc.field)
 				quote := sqlquote.String(tc.quote)
 				lines := " LINES TERMINATED BY " + sqlquote.String(tc.line)
@@ -143,22 +179,7 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 					require.Contains(t, string(data), `"N"`)
 				}
 				exec("LOAD DATA INFILE " + sqlquote.String(path) + " INTO TABLE " + dst + fields + " OPTIONALLY ENCLOSED BY " + quote + lines)
-				read := func(table string) []string {
-					t.Helper()
-					rows, err := admin.QueryContext(ctx, "select id,hex("+tc.column+") from "+table+" order by id")
-					require.NoError(t, err)
-					defer rows.Close()
-					var result []string
-					for rows.Next() {
-						var id int
-						var value sql.NullString
-						require.NoError(t, rows.Scan(&id, &value))
-						result = append(result, fmt.Sprintf("%d:%t:%s", id, value.Valid, value.String))
-					}
-					require.NoError(t, rows.Err())
-					return result
-				}
-				require.Equal(t, read(db+"."+tc.source), read(dst))
+				require.Equal(t, expected[tc.source], read(t, ctx, dst, tc.column))
 			})
 		}
 		for _, tc := range []struct {
@@ -176,6 +197,8 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 		} {
 			for _, force := range []bool{false, true} {
 				t.Run(fmt.Sprintf("enclosure-prefix/%s/force=%t", tc.name, force), func(t *testing.T) {
+					ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+					defer cancel()
 					path := filepath.Join(t.TempDir(), "rejected.csv")
 					options := " FIELDS TERMINATED BY " + sqlquote.String(tc.field) + " ENCLOSED BY " + sqlquote.String(tc.quote) +
 						" LINES TERMINATED BY " + sqlquote.String(tc.line)
@@ -193,7 +216,9 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 						_, createErr := admin.ExecContext(ctx, "create table "+db+".rejected_restore like "+db+"."+tc.source)
 						require.NoError(t, createErr)
 						defer func() {
-							_, dropErr := admin.Exec("drop table " + db + ".rejected_restore")
+							cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+							defer cleanupCancel()
+							_, dropErr := admin.ExecContext(cleanupCtx, "drop table "+db+".rejected_restore")
 							require.NoError(t, dropErr)
 						}()
 						_, loadErr := admin.ExecContext(ctx, "LOAD DATA INFILE "+sqlquote.String(path)+" INTO TABLE "+db+".rejected_restore"+options)
@@ -213,6 +238,8 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 			" FIELDS ENCLOSED BY '' LINES TERMINATED BY " + sqlquote.String(`\`),
 		} {
 			t.Run("unrepresentable-bare-format"+options, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+				defer cancel()
 				path := filepath.Join(t.TempDir(), "rejected.csv")
 				_, err := admin.ExecContext(ctx, "select id,s from "+db+".strings_src INTO OUTFILE "+sqlquote.String(path)+
 					options+" HEADER 'false'")

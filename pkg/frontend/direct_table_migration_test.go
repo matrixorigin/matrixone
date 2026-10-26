@@ -261,7 +261,7 @@ func TestDirectTableMigrationMissingDispositionPreservesTargetAndOnce(t *testing
 	rt.setSession(ses)
 	req := &query.MigrateConnToRequest{DB: "db", LastInsertIDExported: true,
 		PrepareStmts: []*query.PrepareStmt{{Name: "p", SQL: "select id from db.t",
-			DirectTableSelect: directTestProof(t), RequiredProtocolVersion: defines.MORPCVersion131}}}
+			DirectTableSelect: directTestProof(t), RequiredProtocolVersion: defines.MORPCVersion133}}}
 	err := rt.migrateConnectionTo(t.Context(), req)
 	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
 	require.Equal(t, "keep", ses.GetDatabaseName())

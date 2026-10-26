@@ -1572,34 +1572,34 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion93)
 		err = validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
-		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 130")
+		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 132")
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 		client.version = defines.MORPCVersion93
 		_, err = encodeRemoteScope(scope, c.proc)
 		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics")
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline), "protocol version 130")
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline), "protocol version 132")
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline), "protocol version 130")
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline), "protocol version 132")
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline), "protocol version 130")
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline), "protocol version 132")
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline), "protocol version 130")
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline), "protocol version 132")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion132)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
-		client.version = defines.MORPCVersion130
-		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
+		client.version = defines.MORPCVersion132
+		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion132)
 		encoded, err := encodeRemoteScope(scope, c.proc)
 		require.NoError(t, err)
 		decoded, err := decodeScope(encoded, c.proc, true, nil)
 		require.NoError(t, err)
 		decoded.release()
 
-		for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion117, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129} {
+		for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion117, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131} {
 			cRT.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 			decoded, err = decodeScope(encoded, c.proc, true, nil)
-			require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 130")
+			require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 132")
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 			require.Nil(t, decoded)
 		}
@@ -1846,7 +1846,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 
 func TestCRC32JSONTextBytesActualStreamProtocolMinimum(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
-	client.version = defines.MORPCVersion131
+	client.version = defines.MORPCVersion133
 
 	jsonInput := &planpb.Expr{
 		Typ:  planpb.Type{Id: int32(types.T_json)},
@@ -1903,8 +1903,20 @@ func TestCRC32JSONTextBytesActualStreamProtocolMinimum(t *testing.T) {
 			wantError:       true,
 		},
 		{
-			name:            "v130 accepts pipeline message",
+			name:            "v130 refuses before pipeline message",
 			receiverVersion: defines.MORPCVersion130,
+			wantCommands:    []pipeline.Method{pipeline.Method_PipelineProtocolCheck},
+			wantError:       true,
+		},
+		{
+			name:            "v131 refuses before pipeline message",
+			receiverVersion: defines.MORPCVersion131,
+			wantCommands:    []pipeline.Method{pipeline.Method_PipelineProtocolCheck},
+			wantError:       true,
+		},
+		{
+			name:            "v132 accepts pipeline message",
+			receiverVersion: defines.MORPCVersion132,
 			wantCommands: []pipeline.Method{
 				pipeline.Method_PipelineProtocolCheck,
 				pipeline.Method_PipelineMessage,
@@ -1936,14 +1948,14 @@ func TestCRC32JSONTextBytesActualStreamProtocolMinimum(t *testing.T) {
 			}
 			require.Equal(t, tc.wantCommands, commands)
 			if tc.wantError {
-				require.ErrorContains(t, err, "remote pipeline stream requires MORPC protocol version 130")
+				require.ErrorContains(t, err, "remote pipeline stream requires MORPC protocol version 132")
 				return
 			}
 			require.NoError(t, err)
 			require.Equal(t, data, stream.sent[1].(*pipeline.Message).GetData())
 		})
 	}
-	require.Equal(t, defines.MORPCVersion130, minimum)
+	require.Equal(t, defines.MORPCVersion132, minimum)
 
 	elt := bindJSONStringConsumerExpr(t, "elt")
 	for _, tc := range []struct {
@@ -1968,18 +1980,18 @@ func TestCRC32JSONTextBytesActualStreamProtocolMinimum(t *testing.T) {
 		{
 			name:        "CRC32 composes with v129 using the maximum",
 			expressions: []*planpb.Expr{elt, crc32JSONText},
-			want:        defines.MORPCVersion130,
+			want:        defines.MORPCVersion132,
 		},
 		{
 			name:        "fresh encoding replaces a stale output floor",
 			expressions: []*planpb.Expr{crc32JSONText},
-			initial:     defines.MORPCVersion131,
-			want:        defines.MORPCVersion130,
+			initial:     defines.MORPCVersion133,
+			want:        defines.MORPCVersion132,
 		},
 		{
 			name:        "no feature clears a stale output floor",
 			expressions: []*planpb.Expr{plan.MakePlan2StringConstExprWithType("plain", false)},
-			initial:     defines.MORPCVersion131,
+			initial:     defines.MORPCVersion133,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

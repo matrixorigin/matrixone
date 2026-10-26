@@ -124,6 +124,11 @@ type StatementOption struct {
 	// inherited from an owned source (ALTER ... COPY replica, partition backing
 	// table, TRUNCATE recreate) instead of tripping the 3822 sibling scan.
 	trustedCheckConstraintNames bool
+	// trustedForeignKeyLayout lets an internal CREATE that physically
+	// reconstructs an owned table unchanged (TRUNCATE / truncate-optimized
+	// DELETE recreate) reinstall the historical foreign-key layout without
+	// re-validation as a newly authored constraint (#30282).
+	trustedForeignKeyLayout bool
 }
 
 // Result exec sql result

@@ -726,6 +726,44 @@ func TestUnixTimestampTypedTimestampPreservesFraction(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestUnixTimestampTypedDatetimeDSTGap(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = zone
+
+	gap := types.DatetimeFromClock(2024, 3, 10, 2, 30, 0, 123456)
+	control := types.DatetimeFromClock(2024, 3, 10, 3, 30, 0, 123456)
+	preEpoch := types.DatetimeFromClock(1969, 12, 31, 18, 59, 59, 999999)
+	for _, tc := range []struct {
+		name   string
+		input  types.Type
+		expect FunctionTestResult
+	}{
+		{
+			name:   "whole seconds",
+			input:  types.T_datetime.ToType(),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1710054000, 1710055800, 0, 0, 0}, []bool{false, false, false, true, true}),
+		},
+		{
+			name:  "fractional seconds",
+			input: types.T_datetime.ToTypeWithScale(6),
+			expect: NewFunctionTestResult(types.New(types.T_decimal128, 38, 6), false,
+				[]types.Decimal128{mustDecimal128(t, "1710054000.123456", 38, 6), mustDecimal128(t, "1710055800.123456", 38, 6), {}, {}, {}},
+				[]bool{false, false, false, true, true}),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(tc.input,
+					[]types.Datetime{gap, control, preEpoch, types.ZeroDatetime, 0}, []bool{false, false, false, false, true})},
+				tc.expect, builtInUnixTimestampDatetime)
+			ok, info := fcTC.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestUnixTimestampTypedTimestampDecimalNulls(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().TimeZone = time.UTC

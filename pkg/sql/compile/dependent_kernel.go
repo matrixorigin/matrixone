@@ -137,9 +137,10 @@ func (c *Compile) compileDependentKernel(node *plan.Node, children []*plan.Node)
 			}
 			if len(n.PhysicalEqualityKeyList) > 0 {
 				visibleCount := len(distinct.GroupBy)
-				for i, key := range n.PhysicalEqualityKeyList {
-					distinct.GroupBy = append(distinct.GroupBy, key)
-					distinct.GroupByHashKey = append(distinct.GroupByHashKey, int32(visibleCount+i))
+				var err error
+				distinct.GroupBy, distinct.GroupByHashKey, err = plan2.CompactPhysicalGroupKeys(distinct.GroupBy, n.PhysicalEqualityKeyList)
+				if err != nil {
+					return nil, err
 				}
 				distinct.ProjectList = make([]*plan.Expr, visibleCount)
 				for i, e := range n.ProjectList {

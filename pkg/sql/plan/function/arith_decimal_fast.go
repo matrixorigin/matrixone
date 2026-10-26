@@ -2859,10 +2859,35 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 
 // ---- Decimal256 multiply ----
 
+// decimalOperandRange describes a bound implied by a valid operand type, not
+// sampled values or optimizer statistics. It is never stored on a vector.
+type decimalOperandRange uint8
+
+const (
+	decimalRangeUnknown decimalOperandRange = iota
+	decimalRangeInt32
+	decimalRangeInt64
+)
+
+func decimal256OperandRange(typ types.Type) decimalOperandRange {
+	if typ.Oid != types.T_decimal256 || typ.Width <= 0 || typ.Scale < 0 || typ.Scale > typ.Width {
+		return decimalRangeUnknown
+	}
+	// A p-digit signed coefficient has magnitude at most 10^p-1.
+	if typ.Width <= 9 {
+		return decimalRangeInt32
+	}
+	if typ.Width <= 18 {
+		return decimalRangeInt64
+	}
+	return decimalRangeUnknown
+}
+
 // d256Mul is the batch kernel for Decimal256 multiplication.
 // Inlines the schoolbook 4×4 Mul256 cross-product to avoid
 // per-element method calls (Mul256 cost 1230 >> inlining budget 80).
-func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls,
+	leftRange, rightRange decimalOperandRange) error {
 	desiredScale := int32(12)
 	if scale1 > desiredScale {
 		desiredScale = scale1
@@ -2893,7 +2918,8 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 	// Tier 1 prescan: if all values fit in int32, products fit in int64 →
 	// single 64-bit multiply + single 64÷64 division per scale step.
 	// Saves one DIV instruction per element vs the int64 tier.
-	if d256AllFitInt32(v1, len1) && d256AllFitInt32(v2, len2) {
+	if (leftRange == decimalRangeInt32 || d256AllFitInt32(v1, len1)) &&
+		(rightRange == decimalRangeInt32 || d256AllFitInt32(v2, len2)) {
 		needScale := scaleAdj < 0
 		negScaleAdj := -scaleAdj
 		pow10a, twoStep, pow10b := scalePow10Factors(negScaleAdj)
@@ -2985,7 +3011,8 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 	// 10-multiply schoolbook in d256MulInline (cost >> 80, never inlines).
 	// When scaleAdj < 0, fuse scale-down into the loop (d128DivPow10 on
 	// the unsigned 128-bit product) to avoid a second pass over the array.
-	if d256AllFitInt64(v1, len1) && d256AllFitInt64(v2, len2) {
+	if (leftRange != decimalRangeUnknown || d256AllFitInt64(v1, len1)) &&
+		(rightRange != decimalRangeUnknown || d256AllFitInt64(v2, len2)) {
 		needScale := scaleAdj < 0
 		negScaleAdj := -scaleAdj
 		if len1 == len2 {

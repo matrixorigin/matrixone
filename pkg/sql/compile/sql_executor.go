@@ -444,6 +444,12 @@ func (exec *txnExecutor) Exec(
 			true)
 	}
 
+	if statementOption.TrustedForeignKeyLayout() {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.TrustedForeignKeyLayout{},
+			true)
+	}
+
 	if v := statementOption.AlterCopyDedupOpt(); v != nil {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.AlterCopyOpt{}, v)

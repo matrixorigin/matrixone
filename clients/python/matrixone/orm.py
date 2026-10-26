@@ -27,6 +27,7 @@ This provides better type safety and integration with SQLAlchemy.
 """
 
 import logging
+from copy import copy
 from typing import Any, Dict, List, Optional, TypeVar
 
 # SQLAlchemy compatibility import
@@ -41,6 +42,16 @@ T = TypeVar("T")
 
 # Export declarative_base for direct import
 __all__ = ["declarative_base", "Query", "MatrixOneQuery"]
+
+
+def _first_query(query):
+    """Limit a private copy without changing the caller's reusable query."""
+    return copy(query).limit(1)
+
+
+def _count_sql(sql):
+    """Count result rows, including projection, grouping and pagination."""
+    return f"SELECT COUNT(*) FROM ({sql}) AS _mo_count"
 
 
 # For SQL functions, we recommend using SQLAlchemy's func module for better integration:
@@ -1813,8 +1824,7 @@ class MatrixOneQuery(BaseMatrixOneQuery):
 
     def first(self) -> Optional:
         """Execute query and return first result - SQLAlchemy style"""
-        self._limit_count = 1
-        results = self.all()
+        results = _first_query(self).all()
         return results[0] if results else None
 
     def one(self):
@@ -1969,10 +1979,7 @@ class MatrixOneQuery(BaseMatrixOneQuery):
     def count(self) -> int:
         """Execute query and return count of results - SQLAlchemy style"""
         sql, params = self._build_sql()
-        # Replace SELECT * with COUNT(*)
-        sql = sql.replace("SELECT *", "SELECT COUNT(*)")
-
-        result = self._execute(sql, params)
+        result = self._execute(_count_sql(sql), params)
 
         # Handle both ResultSet and SQLAlchemy Result
         if hasattr(result, 'rows'):
