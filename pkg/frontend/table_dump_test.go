@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -2212,5 +2213,32 @@ func TestReadTableDumpManifestBindingFormats(t *testing.T) {
 			require.Equal(t, payload, got.BoundExpressions)
 		}
 		require.NoError(t, fs.Delete(ctx, tableDumpManifestName))
+	}
+}
+
+func TestTableDumpDefaultHashesMatchPre31067(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "default_quote_hashes_pre31067.json"))
+	require.NoError(t, err)
+	var fixtures []struct {
+		Name         string
+		Definition   []byte
+		PhysicalHash string
+		LogicalHash  string
+	}
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 12)
+	for _, f := range fixtures {
+		t.Run(f.Name, func(t *testing.T) {
+			var def plan.TableDef
+			require.NoError(t, def.Unmarshal(f.Definition))
+			before := proto.Clone(&def)
+			physical, err := tableSchemaHash(&def)
+			require.NoError(t, err)
+			require.Equal(t, f.PhysicalHash, physical)
+			logical, err := tableLogicalSchemaHashWithResolver(t.Context(), &def, nil)
+			require.NoError(t, err)
+			require.Equal(t, f.LogicalHash, logical)
+			require.True(t, proto.Equal(before, &def), "hashing must not rewrite catalog defaults")
+		})
 	}
 }
