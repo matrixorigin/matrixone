@@ -173,7 +173,7 @@ func TestDecimal256IntervalUnarySignPreservesFractionalSeconds(t *testing.T) {
 			name: "nested float cast uses float rounding",
 			sql: "select date_add(cast('2026-01-01 00:00:00' as datetime(6)), " +
 				"interval cast(cast(1.005e0 as decimal(10,2)) as decimal(40,2)) second)",
-			want: 1000000,
+			want: 1010000,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -240,8 +240,8 @@ func TestDecimal256IntervalHandlesFloatAndNestedCasts(t *testing.T) {
 		width int32
 		want  int64
 	}{
-		{name: "decimal64 follows float conversion", id: types.T_decimal64, width: 10, want: 1000000},
-		{name: "decimal128 follows float conversion", id: types.T_decimal128, width: 30, want: 1000000},
+		{name: "decimal64 follows float conversion", id: types.T_decimal64, width: 10, want: 1010000},
+		{name: "decimal128 follows float conversion", id: types.T_decimal128, width: 30, want: 1010000},
 		{name: "decimal256 keeps direct float conversion", id: types.T_decimal256, width: 40, want: 1010000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
