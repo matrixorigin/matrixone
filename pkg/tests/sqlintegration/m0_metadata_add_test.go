@@ -267,6 +267,70 @@ func TestM0MetadataOnlyAddColumnSQL(t *testing.T) {
 		)
 
 		m0Exec(t, ctx, db, "create database "+schema)
+		t.Run("partition_copy", func(t *testing.T) {
+			for _, tc := range []struct {
+				name      string
+				algorithm string
+			}{
+				{"partition_default", ""},
+				{"partition_explicit_copy", ", algorithm=copy"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					table := schema + "." + tc.name
+					m0Exec(t, ctx, db, "create table "+table+
+						"(a int not null,b int not null,primary key(a,b)) partition by hash(a) partitions 2")
+					m0Exec(t, ctx, db, "insert into "+table+" values(1,1)")
+					beforeID, beforeVersion := m0TableGeneration(t, ctx, db, schema, tc.name)
+					require.Zero(t, beforeVersion)
+
+					// Compare routing IDs with the actual backing relations, not
+					// just names or a successful SELECT of the pre-ALTER rows.
+					partitionIDs := func(rootID uint64) map[string]uint64 {
+						rows, err := db.QueryContext(ctx,
+							"select p.partition_name,p.partition_table_name,p.partition_id,t.rel_id "+
+								"from mo_catalog.mo_partition_tables p left join mo_catalog.mo_tables t "+
+								"on t.reldatabase=? and t.relname=p.partition_table_name "+
+								"where p.primary_table_id=?", schema, rootID)
+						require.NoError(t, err)
+						defer rows.Close()
+						ids := make(map[string]uint64)
+						for rows.Next() {
+							var logicalName, name string
+							var routingID, actualID uint64
+							require.NoError(t, rows.Scan(&logicalName, &name, &routingID, &actualID))
+							require.Equal(t, actualID, routingID, "stale partition routing: %s", name)
+							ids[logicalName] = actualID
+						}
+						require.NoError(t, rows.Err())
+						require.Len(t, ids, 2)
+						return ids
+					}
+					beforeChildren := partitionIDs(beforeID)
+					m0Exec(t, ctx, db, "alter table "+table+" add column x int"+tc.algorithm)
+					// Preserve the review's exact first terminal consumer, then
+					// write the opposite HASH partition as well.
+					m0Exec(t, ctx, db, "insert into "+table+"(a,b,x) values(2,2,42)")
+					m0Exec(t, ctx, db, "insert into "+table+"(a,b,x) values(3,3,42)")
+					require.Equal(t, 3, m0Count(t, ctx, db, "select count(*) from "+table))
+					require.Equal(t, 1, m0Count(t, ctx, db,
+						"select count(*) from "+table+" where a=1 and b=1 and x is null"))
+					require.Equal(t, 2, m0Count(t, ctx, db,
+						"select count(*) from "+table+" where a in (2,3) and b=a and x=42"))
+					afterID, afterVersion := m0TableGeneration(t, ctx, db, schema, tc.name)
+					require.NotEqual(t, beforeID, afterID, "partition root must take COPY")
+					require.Zero(t, afterVersion)
+					afterChildren := partitionIDs(afterID)
+					for name, oldID := range beforeChildren {
+						require.Contains(t, afterChildren, name)
+						require.NotEqual(t, oldID, afterChildren[name], "backing partition must take COPY")
+						require.Zero(t, m0Count(t, ctx, db, fmt.Sprintf(
+							"select count(*) from mo_catalog.mo_tables where rel_id=%d", oldID)))
+					}
+					require.Zero(t, m0Count(t, ctx, db, fmt.Sprintf(
+						"select count(*) from mo_catalog.mo_partition_tables where primary_table_id=%d", beforeID)))
+				})
+			}
+		})
 		m0Exec(t, ctx, db, "create table "+customer+`(
 			c_id int not null,
 			c_d_id int not null,

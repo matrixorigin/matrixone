@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -31,6 +32,7 @@ var activeM0Enabled bool
 func m0AppendBaseFromPlan(table *plan.TableDef) (uint32, bool) {
 	if !activeM0Enabled || table == nil || table.IsTemporary || table.Pkey == nil || table.Pkey.CompPkeyCol == nil ||
 		table.ClusterBy != nil || table.TableType == catalog.SystemPartitionRel ||
+		features.IsPartitioned(table.FeatureFlag) || features.IsPartition(table.FeatureFlag) || table.Partition != nil ||
 		len(table.Indexes) != 0 || len(table.Fkeys) != 0 || len(table.RefChildTbls) != 0 ||
 		len(table.Checks) != 0 ||
 		len(table.Cols) < 2 {

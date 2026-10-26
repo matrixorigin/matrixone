@@ -20,6 +20,7 @@ import (
 	"context"
 	"strings"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -168,6 +170,11 @@ func buildM0CNAddColumn(
 	}
 
 	table := tbl.GetTableDef(ctx)
+	if table.TableType == pkgcatalog.SystemPartitionRel ||
+		features.IsPartitioned(table.FeatureFlag) || features.IsPartition(table.FeatureFlag) || table.Partition != nil ||
+		tbl.partitioned > 0 || tbl.partition != "" {
+		return nil, moerr.NewInternalErrorNoCtxf("M0: partitioned tables and backing partitions require COPY")
+	}
 	if len(table.Indexes) != 0 || len(table.Fkeys) != 0 ||
 		len(table.RefChildTbls) != 0 || len(table.Checks) != 0 {
 		return nil, moerr.NewInternalErrorNoCtxf("M0: secondary indexes, foreign keys and checks are outside the append domain")
