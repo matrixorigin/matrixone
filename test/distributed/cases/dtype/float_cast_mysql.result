@@ -20,6 +20,25 @@ select id,cast(d as decimal(10,2)),cast(d as decimal(20,2)),cast(d as decimal(65
 2  ¦  -1.01  ¦  -1.01  ¦  -1.01  𝄀
 3  ¦  1.02  ¦  1.02  ¦  1.02  𝄀
 4  ¦  null  ¦  null  ¦  null
+create table tiny_src(id int, d double);
+insert into tiny_src values(1,1e-20),(2,-1e-20),(3,null);
+select id,cast(d as decimal(16,6)) as tiny64,
+cast(d as decimal(38,19)) as tiny19,
+cast(d as decimal(38,20)) as tiny20
+from tiny_src order by id;
+➤ id[4,32,0]  ¦  tiny64[3,16,6]  ¦  tiny19[3,38,19]  ¦  tiny20[3,38,20]  𝄀
+1  ¦  0.000000  ¦  0E-19  ¦  1E-20  𝄀
+2  ¦  0.000000  ¦  0E-19  ¦  -1E-20  𝄀
+3  ¦  null  ¦  null  ¦  null
+insert into tiny_src values(4,999.995e0),(5,-999.995e0);
+select id,cast(d as decimal(5,2)) as clamped from tiny_src where id>=4 order by id;
+➤ id[4,32,0]  ¦  clamped[3,5,2]  𝄀
+4  ¦  999.99  𝄀
+5  ¦  -999.99
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'decimal' at row 1  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'decimal' at row 2
 set sql_mode='STRICT_TRANS_TABLES';
 select cast('inf' as double),cast('nan' as double),cast('information' as double),cast('-INFINITY' as float),cast('0x10' as double);
 ➤ cast(inf as double)[8,53,31]  ¦  cast(nan as double)[8,53,31]  ¦  cast(information as double)[8,53,31]  ¦  cast(-INFINITY as float)[7,23,31]  ¦  cast(0x10 as double)[8,53,31]  𝄀
