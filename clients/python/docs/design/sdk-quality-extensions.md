@@ -1,12 +1,15 @@
 # Python SDK quality: related API and lifecycle corrections
 
-Revision 1 — 2026-10-26. Accepted design supplement to
+Revision 2 — 2026-10-26. Accepted design supplement to
 [sdk-quality-contracts.md](sdk-quality-contracts.md). Owner: Python SDK.
 Implementation: the same `codex/python-sdk-quality-20261026` PR; URL added when
 published. Base remains `b466f4ae9b74813a4ff93eaf43a6c81e6cbb8b0b`; the first
 design was committed as `559fd3ba5f233b68843fdeda9055fa5f4568f312` before its
 implementation. This supplement must also be committed before the extension
 implementation. Exact reviewed hashes/decision are recorded externally.
+Revision 1 was committed as `e78ca18589`; revision 2 narrows LOAD grammar-only
+string tokens after a native parser discriminator and does not alter the other
+extension decisions.
 
 ## 1. Evidence, scope and first owners
 
@@ -151,6 +154,34 @@ combinations instead of swallowing **kwargs. Reject negative/bool skip counts
 and invalid option shapes before dispatch; no input row/file is opened merely
 for syntax validation.
 
+LOAD source/options occupy grammar positions requiring a STRING token, rather
+than an arbitrary SQL expression. The general safe literal renderer's
+`CONVERT(X'...' USING utf8mb4)` representation cannot be substituted there.
+Native dollar-quoted SELECT literals work on both targets, but the observed
+current-source `LOAD DATA INLINE ... DATA=$tag$...$tag$` discriminator fails with
+1064 (`manager-current-1.log`); do not infer grammar-token compatibility from
+SELECT expression support.
+
+Use a small grammar-specific string-token renderer: require str, reject NUL
+and any backslash, and double single quotes inside one ordinary single-quoted
+token. Plain quotes, literal newlines, Unicode and dollar text retain their
+bytes. With backslashes excluded, this representation is independent of
+NO_BACKSLASH_ESCAPES and ANSI_QUOTES. Apply it consistently to LOAD paths,
+inline DATA, separators/enclosure/escape/line options and brace values. Never
+fall back to an expression, dollar quote, removed bytes or an assumed SQL mode.
+NUL/backslash inputs raise an actionable ValueError before executor invocation
+or connection checkout. Caller-authored SET expressions retain their separate
+raw-SQL contract; they are not grammar-token data values.
+
+For inline **data** requiring NUL/backslash bytes, suggest writing a caller-owned
+file and using supported non-inline LOAD, preserving those file bytes and normal
+CSV decoding conventions. This does not solve an unsupported path or option
+token: a backslash-containing path/escapechar itself remains explicitly rejected;
+use a suitable path/stage or a different supported convention. The SDK does not
+create a temporary file, change session SQL mode, or add a second I/O/cleanup
+owner merely to support this neighboring input. This is a deliberate bounded
+limitation, not a claim of complete arbitrary-byte inline support.
+
 Supported minimum cells, each proved on both MatrixOne targets:
 
 | Source/format | Required options |
@@ -158,7 +189,7 @@ Supported minimum cells, each proved on both MatrixOne targets:
 | CSV file and read_csv delegation | explicit gzip on `.payload`, delimiter/quote/escape, skip count and columns; existing supported SET behavior retained. |
 | JSONLINE file | object/array selector, compression, IGNORE lines, mapped/reordered columns, server-supported NULLIF SET transformation. |
 | Parquet file | explicit column subset/reordering/default fill, existing compression semantics. Do not claim IGNORE/SET behavior from JSONLINE evidence. |
-| Inline CSV | skiprows/IGNORE, names/column order/default fill, escapechar, delimiter/quote; complete values including newline/quote/backslash controls. |
+| Inline CSV | skiprows/IGNORE, names/column order/default fill, escapechar, delimiter/quote; complete values for newline/quote/Unicode/dollar text. NUL/backslash grammar-token inputs fail before I/O. |
 
 Inline CSV SET was observed ineffective even through direct native SQL in the
 issue; it must be rejected/documented rather than claimed as repaired. Encoding,
@@ -415,7 +446,7 @@ assumptions for those measured MatrixOne boundaries.
 | --- | --- | --- |
 | Branch gate/snapshot | No version-only pre-dispatch veto; sync/async forwarded suffix and invalid snapshot; original builder oracle. | Historical/live two-row distinction for table/database branches; source isolation and unsupported/privilege error reuse. |
 | Name/wildcard/readback | Shared canonical identity, ALL vs ordinary account SQL, injected post-CREATE lookup failure preserving acknowledgement. | Mixed-case snapshot create/get/exists and duplicate retry; database/table ACCOUNT ALL metadata; mixed-case publication get, truly missing name. |
-| LOAD | Cross-entry-point option table and strict invalid-combination oracle; shared complete SQL tail, no swallowed kwargs. | Same files/inline bytes versus native controls; gzip `.payload`, JSONLINE header/mapping/NULLIF, Parquet column/default, inline skip/map/escape, malformed/invalid control plus row state/reuse. |
+| LOAD | Cross-entry-point option table and strict invalid-combination oracle; shared complete SQL tail, no swallowed kwargs. Grammar-token NUL/backslash rejection asserts zero executor calls and unchanged query/target state; quote/newline/dollar text round-trips. | Same files/inline bytes versus native controls; gzip `.payload`, JSONLINE header/mapping/NULLIF, Parquet column/default, inline skip/map/escape, malformed/invalid control plus row state/reuse. |
 | Search/filter/schema | All field operators and logical siblings, nested grouping, parameters/identifiers, exact-column index match; no stale values across operation snapshots. | Minimal 3-vector metrics with different rankings and exact score oracle; two vector columns with distinct index algorithms/metrics; existing handle ADD/DROP; sync/async range filter vs explicit AND/native; two databases with same-name tables and different IVF counts. |
 | Fulltext | One-connection exact read/SET/query/restore order; invalid algorithm before I/O; query/restore error precedence and invalidation. | Small frequency/length-varying corpus, BM25 versus TF-IDF scores, default preservation, pool reuse plus injected query failure restoration. |
 | Hook lifecycle | ConnectionRecord/physical generation, exactly one attempt, sync-returned awaitable, async bridge, cancellation, new physical connection, reentrant fail-fast and no global ID ledger. | Two held physical connections admitted with barriers, callback completed before each query; repeated same CONNECTION_ID causes no new hook; invalidation/reconnect starts one new attempt, no unawaited warning, pool capacity returns. |
