@@ -4209,6 +4209,23 @@ func initJsonUnquoteTestCase() []tcTemp {
 
 func TestJsonUnquote(t *testing.T) {
 	testCases := initJsonUnquoteTestCase()
+	documents := []string{"123", "true", "null", `[1,"two"]`, `{"a":"b"}`}
+	jsonInputs := make([]string, len(documents))
+	for i, document := range documents {
+		bj, err := types.ParseStringToByteJson(document)
+		require.NoError(t, err)
+		encoded, err := bj.Marshal()
+		require.NoError(t, err)
+		jsonInputs[i] = string(encoded)
+	}
+	testCases = append(testCases, tcTemp{
+		info: "native JSON scalar and composite text",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), jsonInputs, nil),
+		},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"123", "true", "null", `[1, "two"]`, `{"a": "b"}`}, nil),
+	})
 
 	// do the test work.
 	proc := testutil.NewProcess(t)
@@ -4369,6 +4386,7 @@ func TestJsonUnquoteUsesEvaluatedRowStringDomain(t *testing.T) {
 
 func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 	values := []string{
+		"",
 		"plain",
 		"a\"b",
 		"\"leading",
@@ -4377,6 +4395,9 @@ func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 		"\"",
 		"\"\"",
 		"\"你好\"",
+		"slashes\\and\nlines",
+		strings.Repeat("a", types.VarlenaInlineSize),
+		strings.Repeat("a", types.VarlenaInlineSize+1),
 	}
 	inputs := make([]string, len(values))
 	for i, value := range values {
@@ -4403,16 +4424,70 @@ func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 		require.NoError(t, err)
 		jsonInputs[i] = string(encoded)
 	}
-	jsonTC := NewFunctionTestCase(proc,
-		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_json.ToType(), jsonInputs,
-				make([]bool, len(jsonInputs))),
-		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, values,
-			make([]bool, len(values))),
-		JsonUnquote)
-	s, info = jsonTC.RunAndFree()
-	require.True(t, s, info)
+	for _, scenario := range []struct {
+		name     string
+		constant bool
+		masked   bool
+		valueRow int
+	}{
+		{name: "flat"},
+		{name: "flat NULL and masked rows", masked: true},
+		{name: "constant inline", constant: true, valueRow: 5},
+		{name: "constant area", constant: true, valueRow: len(values) - 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			input, wanted := jsonInputs, values
+			inputNulls := make([]bool, len(input))
+			wantedNulls := make([]bool, len(wanted))
+			var selected *FunctionSelectList
+			if scenario.masked {
+				inputNulls[1], wantedNulls[1], wantedNulls[2] = true, true, true
+				selected = &FunctionSelectList{AnyNull: true, SelectList: make([]bool, len(input))}
+				for row := range selected.SelectList {
+					selected.SelectList[row] = row != 2
+				}
+			}
+			inputCase := NewFunctionTestInput(types.T_json.ToType(), input, inputNulls)
+			if scenario.constant {
+				input = []string{jsonInputs[scenario.valueRow]}
+				wanted = []string{values[scenario.valueRow], values[scenario.valueRow]}
+				wantedNulls = nil
+				inputCase = NewFunctionTestConstInput(types.T_json.ToType(), input, nil)
+			}
+			jsonTC := NewFunctionTestCase(proc, []FunctionTestInput{inputCase},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, wanted, wantedNulls), JsonUnquote).
+				WithSelectList(selected)
+			defer jsonTC.Free()
+			jsonTC.fnLength = len(wanted)
+			source := jsonTC.parameters[0]
+			source.SetLength(len(wanted))
+			s, info := jsonTC.Run()
+			require.True(t, s, info)
+			assertOwnedResult := func() {
+				result := vector.GenerateFunctionStrParameter(jsonTC.GetResultVectorDirectly())
+				for row, want := range wanted {
+					got, isNull := result.GetStrValue(uint64(row))
+					wantNull := len(wantedNulls) > 0 && wantedNulls[row]
+					require.Equal(t, wantNull, isNull, "row %d", row)
+					if !wantNull {
+						require.Equal(t, want, string(got), "row %d aliases input", row)
+					}
+				}
+			}
+			// Overwrite both inline and area-backed input before releasing it.
+			// The repeated-constant append must also own its first payload copy.
+			for row := range input {
+				stored := source.GetBytesAt(row)
+				for i := range stored {
+					stored[i] = '?'
+				}
+			}
+			assertOwnedResult()
+			source.Free(proc.Mp())
+			jsonTC.parameters[0] = nil
+			assertOwnedResult()
+		})
+	}
 }
 
 func TestLoadFile(t *testing.T) {
