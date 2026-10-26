@@ -852,20 +852,6 @@ func (s *runnerStore) CollectCheckpointsInRange(
 	}
 	pivot := NewCheckpointEntry(s.sid, newStart, newStart, ET_Incremental)
 
-	// For debug
-	// checkpoints := make([]*CheckpointEntry, 0)
-	// defer func() {
-	// 	items := tree.Items()
-	// 	logutil.Infof("CollectCheckpointsInRange: Pivot: %s", pivot.String())
-	// 	for i, item := range items {
-	// 		logutil.Infof("CollectCheckpointsInRange: Source[%d]: %s", i, item.String())
-	// 	}
-	// 	for i, ckp := range checkpoints {
-	// 		logutil.Infof("CollectCheckpointsInRange: Found[%d]:%s", i, ckp.String())
-	// 	}
-	// 	logutil.Infof("CollectCheckpointsInRange: Checkpointed=%s", checkpointed.ToString())
-	// }()
-
 	iter := tree.Iter()
 	defer iter.Release()
 

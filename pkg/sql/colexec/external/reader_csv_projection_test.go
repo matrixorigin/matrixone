@@ -46,6 +46,7 @@ func TestJsonLineBinaryBase64Roundtrip(t *testing.T) {
 		typeId   int32
 		line     string
 		want     string
+		legacy   bool
 	}{
 		// Wrapped MO-exported payloads decode to the original bytes.
 		{name: "varbinary wrapped object", jsonData: tree.OBJECT, typeId: int32(types.T_varbinary), line: `{"raw":{"$binary":"AP8="}}`, want: "\x00\xff"},
@@ -63,16 +64,58 @@ func TestJsonLineBinaryBase64Roundtrip(t *testing.T) {
 		// Non-binary columns never decode.
 		{name: "varchar untouched", jsonData: tree.OBJECT, typeId: int32(types.T_varchar), line: `{"raw":"AP8="}`, want: "AP8="},
 		{name: "text untouched", jsonData: tree.OBJECT, typeId: int32(types.T_text), line: `{"raw":"AP8="}`, want: "AP8="},
+		{name: "legacy varbinary object", jsonData: tree.OBJECT, typeId: int32(types.T_varbinary), line: `{"raw":"AP8="}`, want: "\x00\xff", legacy: true},
+		{name: "legacy binary array", jsonData: tree.ARRAY, typeId: int32(types.T_binary), line: `["AP8="]`, want: "\x00\xff", legacy: true},
+		{name: "legacy blob object", jsonData: tree.OBJECT, typeId: int32(types.T_blob), line: `{"raw":"qwA="}`, want: "\xab\x00", legacy: true},
+		{name: "legacy varbinary array", jsonData: tree.ARRAY, typeId: int32(types.T_varbinary), line: `["qwA="]`, want: "\xab\x00", legacy: true},
+		{name: "legacy binary object", jsonData: tree.OBJECT, typeId: int32(types.T_binary), line: `{"raw":"AP8="}`, want: "\x00\xff", legacy: true},
+		{name: "legacy blob array", jsonData: tree.ARRAY, typeId: int32(types.T_blob), line: `["qwA="]`, want: "\xab\x00", legacy: true},
+		{name: "legacy empty bytes", jsonData: tree.OBJECT, typeId: int32(types.T_varbinary), line: `{"raw":""}`, want: "", legacy: true},
+		{name: "legacy decoded sentinel", jsonData: tree.ARRAY, typeId: int32(types.T_varbinary), line: `["XE4="]`, want: `\N`, legacy: true},
+		{name: "legacy wrapper still supported", jsonData: tree.OBJECT, typeId: int32(types.T_varbinary), line: `{"raw":{"$binary":"AP8="}}`, want: "\x00\xff", legacy: true},
+		{name: "legacy text remains text", jsonData: tree.OBJECT, typeId: int32(types.T_text), line: `{"raw":"AP8="}`, want: "AP8=", legacy: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cols := []*plan.ColDef{{Name: "raw", Typ: plan.Type{Id: tc.typeId}}}
 			reader := &CsvReader{}
+			if tc.legacy {
+				reader.param = &ExternalParam{ExParamConst: ExParamConst{Extern: &tree.ExternParam{
+					ExParam: tree.ExParam{JsonBinary: plan2.JSONBinaryLegacyBase64},
+				}}}
+			}
 			line, err := reader.transJson2Lines(proc.Ctx, tc.line, attrs, cols, tc.jsonData)
 			require.NoError(t, err)
 			require.Len(t, line, 1)
 			require.False(t, line[0].IsNull)
 			require.Equal(t, tc.want, line[0].Val)
 		})
+	}
+}
+
+func TestJSONLineLegacyBinaryRejectsMalformedValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	attrs := []plan.ExternAttr{{ColName: "raw", ColIndex: 0, ColFieldIndex: 0}}
+	cols := []*plan.ColDef{{Name: "raw", Typ: plan.Type{Id: int32(types.T_varbinary)}}}
+	reader := &CsvReader{param: &ExternalParam{ExParamConst: ExParamConst{Extern: &tree.ExternParam{
+		ExParam: tree.ExParam{JsonBinary: plan2.JSONBinaryLegacyBase64},
+	}}}}
+	for _, value := range []string{`"not-base64!"`, `123`, `true`, `[]`, `{}`, `{"$binary":123}`} {
+		t.Run(value, func(t *testing.T) {
+			_, err := reader.transJson2Lines(proc.Ctx, `{"raw":`+value+`}`, attrs, cols, tree.OBJECT)
+			require.Error(t, err)
+			_, err = reader.transJson2Lines(proc.Ctx, `[`+value+`]`, attrs, cols, tree.ARRAY)
+			require.Error(t, err)
+		})
+	}
+	for _, shape := range []string{tree.OBJECT, tree.ARRAY} {
+		line := `{"raw":null}`
+		if shape == tree.ARRAY {
+			line = `[null]`
+		}
+		fields, err := reader.transJson2Lines(proc.Ctx, line, attrs, cols, shape)
+		require.NoError(t, err)
+		require.True(t, fields[0].IsNull)
 	}
 }
 

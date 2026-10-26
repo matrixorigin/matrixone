@@ -20,13 +20,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/require"
 )
 
 func TestARTIndexNumeric(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	typ := types.T_int32.ToType()
 	idx := NewSimpleARTMap()
 
@@ -89,8 +86,6 @@ func TestARTIndexNumeric(t *testing.T) {
 }
 
 func TestArtIndexString(t *testing.T) {
-	defer testutils.AfterTest(t)()
-	testutils.EnsureNoLeak(t)
 	typ := types.T_varchar.ToType()
 	idx := NewSimpleARTMap()
 

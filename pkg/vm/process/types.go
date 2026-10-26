@@ -199,8 +199,15 @@ type Session interface {
 type TemporaryTableDDL interface {
 	CheckTemporaryTableCapacity(context.Context) error
 	OwnsTemporaryTable(database, physicalName string) bool
-	PublishTemporaryTable(database, alias, physicalName string)
+	PublishTemporaryTable(database, alias, physicalName string, indexes map[string]string)
 	RetireTemporaryTable(database, alias, physicalName string, indexNames []string)
+}
+
+// MissingTemporaryTableForgetter removes logical ownership after an authoritative
+// lookup proves the physical table absent. It must not schedule physical DROP:
+// legacy temporary names can be reused by the next CREATE in the same transaction.
+type MissingTemporaryTableForgetter interface {
+	ForgetMissingTemporaryTable(database, alias, physicalName string)
 }
 
 // ForeignConn is a connection to a foreign data source (Elasticsearch, an
