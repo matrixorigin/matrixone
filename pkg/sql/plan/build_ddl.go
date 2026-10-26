@@ -7899,6 +7899,11 @@ type FkData struct {
 // because it is not ready. It should be checked after the pk,uk has been ready.
 func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, def *tree.ForeignKey) (*FkData, error) {
 	refer := def.Refer
+	// Foreign keys are not yet supported in conjunction with partitioning,
+	// neither on the child (ALTER TABLE ... ADD FOREIGN KEY) nor on the parent.
+	if isPartitionedTableDef(tableDef) {
+		return nil, moerr.NewErrForeignKeyOnPartitioned(ctx.GetContext())
+	}
 	catalogLayout, err := resolveForeignKeyCatalogLayout(ctx)
 	if err != nil {
 		return nil, err
@@ -8010,6 +8015,9 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	if parentTableDef.IsTemporary {
 		return nil, moerr.NewNotSupported(ctx.GetContext(), "add foreign key for temporary table")
 	}
+	if isPartitionedTableDef(parentTableDef) {
+		return nil, moerr.NewErrForeignKeyOnPartitioned(ctx.GetContext())
+	}
 
 	fkData.Def.ForeignTbl = parentTableDef.TblId
 
@@ -8023,6 +8031,10 @@ func getForeignKeyData(ctx CompilerContext, dbName string, tableDef *TableDef, d
 	fkData.UpdateSql = getSqlForAddFkWithCatalogLayout(dbName, tableDef.Name, &fkData, fkData.catalogLayout)
 
 	return &fkData, nil
+}
+
+func isPartitionedTableDef(tableDef *TableDef) bool {
+	return tableDef != nil && (tableDef.Partition != nil || features.IsPartitioned(tableDef.FeatureFlag))
 }
 
 func foreignKeyActionOrigin(option tree.ReferenceOptionType) plan.ForeignKeyDef_RefActionOrigin {
