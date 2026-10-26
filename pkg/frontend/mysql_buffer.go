@@ -462,7 +462,14 @@ func (c *Conn) CheckAllowedPacketSize(totalLength int) error {
 }
 
 // ReadLoadLocalPacket just for processLoadLocal, reuse memory, and not merge 16MB packets
-func (c *Conn) ReadLoadLocalPacket() (_ []byte, err error) {
+func (c *Conn) ReadLoadLocalPacket() ([]byte, error) {
+	return c.ReadLoadLocalPacketWithTimeout(c.loadLocalReadTimeout)
+}
+
+// ReadLoadLocalPacketWithTimeout reads one client upload packet with an
+// explicit per-read timeout. processLoadLocal's post-cancellation drain uses
+// it to bound each silent read independently of the session setting.
+func (c *Conn) ReadLoadLocalPacketWithTimeout(timeout time.Duration) (_ []byte, err error) {
 	var packetLength int
 	defer func() {
 		if rErr := recover(); rErr != nil {
@@ -477,7 +484,7 @@ func (c *Conn) ReadLoadLocalPacket() (_ []byte, err error) {
 			c.FreeLoadLocal()
 		}
 	}()
-	err = c.ReadNBytesIntoBufWithTimeout(c.header[:], HeaderLengthOfTheProtocol, c.loadLocalReadTimeout)
+	err = c.ReadNBytesIntoBufWithTimeout(c.header[:], HeaderLengthOfTheProtocol, timeout)
 	if err != nil {
 		return
 	}
@@ -501,7 +508,7 @@ func (c *Conn) ReadLoadLocalPacket() (_ []byte, err error) {
 		}
 	}
 
-	err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, packetLength, c.loadLocalReadTimeout)
+	err = c.ReadNBytesIntoBufWithTimeout(c.loadLocalBuf.data, packetLength, timeout)
 	if err != nil {
 		return
 	}
@@ -1059,6 +1066,29 @@ func (c *Conn) Disconnect() error {
 		return c.conn.Close()
 	}
 	return nil
+}
+
+// InterruptLoadLocalIO unblocks any in-flight LOAD LOCAL network read or write
+// by expiring both deadlines, without closing the connection. The owner checks
+// cancellation afterwards and decides between drain and disconnect.
+func (c *Conn) InterruptLoadLocalIO() {
+	if c.conn == nil {
+		return
+	}
+	now := time.Now()
+	_ = c.conn.SetReadDeadline(now)
+	_ = c.conn.SetWriteDeadline(now)
+}
+
+// ClearLoadLocalIOInterrupt removes any deadlines left by
+// InterruptLoadLocalIO before a drained connection is reused for the next
+// command. Every timed load-local read already reinstalls its own deadline.
+func (c *Conn) ClearLoadLocalIOInterrupt() {
+	if c.conn == nil {
+		return
+	}
+	_ = c.conn.SetReadDeadline(time.Time{})
+	_ = c.conn.SetWriteDeadline(time.Time{})
 }
 
 // Reset does not release fix buffer but release dynamical buffer

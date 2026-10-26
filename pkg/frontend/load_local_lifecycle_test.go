@@ -26,6 +26,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -38,6 +39,7 @@ type interruptibleLoadLocalWriter struct {
 	*testMysqlWriter
 	reading      chan struct{}
 	disconnects  atomic.Int32
+	interrupts   atomic.Int32
 	frees        atomic.Int32
 	blockRequest bool
 }
@@ -57,6 +59,23 @@ func (w *interruptibleLoadLocalWriter) ReadLoadLocalPacket() ([]byte, error) {
 	default:
 	}
 	return w.ioses.ReadLoadLocalPacket()
+}
+
+func (w *interruptibleLoadLocalWriter) ReadLoadLocalPacketWithTimeout(timeout time.Duration) ([]byte, error) {
+	select {
+	case w.reading <- struct{}{}:
+	default:
+	}
+	return w.ioses.ReadLoadLocalPacketWithTimeout(timeout)
+}
+
+func (w *interruptibleLoadLocalWriter) InterruptLoadLocalIO() {
+	w.interrupts.Add(1)
+	w.ioses.InterruptLoadLocalIO()
+}
+
+func (w *interruptibleLoadLocalWriter) ClearLoadLocalIOInterrupt() {
+	w.ioses.ClearLoadLocalIOInterrupt()
 }
 
 func (w *interruptibleLoadLocalWriter) Disconnect() error {
@@ -274,4 +293,204 @@ func TestUploadAbortsStalledClientOnStorageFailure(t *testing.T) {
 			require.EqualValues(t, 1, protocol.frees.Load())
 		})
 	}
+}
+
+// A cancellation no longer disconnects mid-upload: the owner interrupts the
+// in-flight read and drains a finite client stream to its protocol EOF, so the
+// connection survives. A silent stream is retired by the drain's per-read
+// budget instead. Both paths synchronize on the owner's network reads.
+func TestProcessLoadLocalDrainAfterCancel(t *testing.T) {
+	for _, name := range []string{"finite tail reaches EOF", "stalled stream forced retire"} {
+		t.Run(name, func(t *testing.T) {
+			ses, protocol, client := newInterruptibleLoadLocal(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			reader, writer := io.Pipe()
+			t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
+			ec := newTestExecCtx(ctx, gomock.NewController(t))
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "test.csv"}}
+			done := make(chan error, 1)
+			go func() {
+				done <- processLoadLocal(ctx, ses, ec, param, writer, reader)
+			}()
+			select {
+			case <-protocol.reading:
+			case <-time.After(5 * time.Second):
+				t.Fatal("upload did not enter network read")
+			}
+			cancel()
+			if name == "finite tail reaches EOF" {
+				// The drain parks in its own read before the client tail is
+				// written; the packets below then reach the drained connection
+				// in upload framing and end at the protocol EOF.
+				select {
+				case <-protocol.reading:
+				case <-time.After(5 * time.Second):
+					t.Fatal("cancellation did not enter the drain read")
+				}
+				// net.Pipe writes return only after those bytes have been consumed.
+				_, err := client.Write([]byte{1, 0, 0, 1, 'x'})
+				require.NoError(t, err)
+				_, err = client.Write([]byte{0, 0, 0, 2})
+				require.NoError(t, err)
+			}
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(5 * time.Second):
+				t.Fatal("cancelled upload did not terminate")
+			}
+			require.EqualValues(t, 1, protocol.interrupts.Load())
+			if name == "finite tail reaches EOF" {
+				require.Zero(t, protocol.disconnects.Load())
+				// The drained connection serves the next command.
+				written := make(chan error, 1)
+				go func() { _, err := client.Write([]byte{1, 0, 0, 0, 'q'}); written <- err }()
+				payload, err := protocol.ioses.ReadLoadLocalPacket()
+				require.NoError(t, err)
+				require.Equal(t, []byte{'q'}, payload)
+				require.NoError(t, <-written)
+			} else {
+				require.EqualValues(t, 1, protocol.disconnects.Load())
+			}
+			require.EqualValues(t, 1, protocol.frees.Load())
+		})
+	}
+}
+
+// An ordinary statement-side error that is NOT a cancellation (here: lock
+// table bind changed mid-upload, the #30640 2013 flavor) must also resync the
+// finite client stream at its protocol EOF: the original SQL error, not 2013,
+// answers the command and the drained connection serves the next command.
+func TestProcessLoadLocalDrainsOrdinaryErrorToEOF(t *testing.T) {
+	ses, protocol, client := newInterruptibleLoadLocal(t)
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ec := newTestExecCtx(ctx, ctrl)
+	ec.proc = testutil.NewProc(t)
+	expected := moerr.NewLockTableBindChangedNoCtx()
+	op := newTestTxnOp()
+	op.checkLockTableBinds = func(context.Context) error {
+		if op.checkLockTableChecks == 2 {
+			return expected
+		}
+		return nil
+	}
+	ec.proc.Base.TxnOperator = op
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "test.csv"}}
+	reader, writer := io.Pipe()
+	// Consume anything the loop pipes through so writer.Write never blocks the
+	// upload owner.
+	consumed := make(chan struct{})
+	go func() {
+		defer close(consumed)
+		buf := make([]byte, 64)
+		for {
+			if _, err := reader.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+	done := make(chan error, 1)
+	go func() {
+		done <- processLoadLocal(ctx, ses, ec, param, writer, reader)
+	}()
+	select {
+	case <-protocol.reading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upload did not enter network read")
+	}
+	// Finite upload: iteration 1 consumes the first packet, the second bind
+	// check then fails, and the drain resyncs the remainder to protocol EOF.
+	written := make(chan error, 1)
+	go func() {
+		if _, err := client.Write([]byte{1, 0, 0, 1, 'x'}); err != nil {
+			written <- err
+			return
+		}
+		if _, err := client.Write([]byte{1, 0, 0, 2, 'y'}); err != nil {
+			written <- err
+			return
+		}
+		_, err := client.Write([]byte{0, 0, 0, 3})
+		written <- err
+	}()
+	select {
+	case err := <-done:
+		require.Equal(t, expected, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("ordinary error left the upload waiting on client EOF")
+	}
+	// No cancellation happened, so no deadline interrupt was needed; the
+	// drained connection survived.
+	require.Zero(t, protocol.interrupts.Load())
+	require.Zero(t, protocol.disconnects.Load())
+	require.EqualValues(t, 1, protocol.frees.Load())
+	require.NoError(t, <-written)
+	// The drained connection serves the next command.
+	nextWritten := make(chan error, 1)
+	go func() { _, err := client.Write([]byte{1, 0, 0, 0, 'q'}); nextWritten <- err }()
+	payload, err := protocol.ioses.ReadLoadLocalPacket()
+	require.NoError(t, err)
+	require.Equal(t, []byte{'q'}, payload)
+	require.NoError(t, <-nextWritten)
+	<-consumed
+}
+
+// The #30640 contract: runner failure cancels the upload, the owner drains the
+// finite client stream to its protocol EOF instead of disconnecting, and the
+// statement still returns the runner's own error on a reusable connection.
+func TestExecuteStatusStmtDrainsFiniteLocalUpload(t *testing.T) {
+	ses, protocol, client := newInterruptibleLoadLocal(t)
+	ctrl := gomock.NewController(t)
+	ec := newTestExecCtx(context.Background(), ctrl)
+	ec.proc = testutil.NewProc(t)
+	ec.stmt = &tree.Load{Local: true, Param: &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "test.csv"}}}
+	failure := errors.New("runner failed")
+	runner := mock_frontend.NewMockComputationRunner(ctrl)
+	uploading := make(chan struct{})
+	serving := make(chan struct{})
+	runner.EXPECT().Run(uint64(0)).DoAndReturn(func(uint64) (*util.RunResult, error) {
+		<-protocol.reading // upload owner parked in its first network read
+		close(uploading)
+		<-serving // client tail in flight; then fail the load
+		return nil, failure
+	})
+	ec.runner = runner
+	done := make(chan any, 1)
+	go func() {
+		done <- executeStatusStmt(ses, ec)
+	}()
+	<-uploading
+	close(serving)
+	// Finite client: synchronize on the drain's own network read before
+	// feeding the tail, so each net.Pipe write pairs with a parked drain read
+	// instead of racing the per-read drain budget on a loaded race build.
+	select {
+	case <-protocol.reading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancellation did not enter the drain read")
+	}
+	_, err := client.Write([]byte{1, 0, 0, 1, 'x'})
+	require.NoError(t, err)
+	_, err = client.Write([]byte{0, 0, 0, 2})
+	require.NoError(t, err)
+	select {
+	case result := <-done:
+		require.Equal(t, failure, result)
+	case <-time.After(5 * time.Second):
+		t.Fatal("runner cleanup blocked on client upload")
+	}
+	require.EqualValues(t, 1, protocol.interrupts.Load())
+	require.Zero(t, protocol.disconnects.Load())
+	require.EqualValues(t, 1, protocol.frees.Load())
+	require.Nil(t, ec.proc.GetLoadLocalReader())
+	require.Nil(t, ec.loadLocalWriter)
+	// The drained connection serves the next command.
+	written := make(chan error, 1)
+	go func() { _, err := client.Write([]byte{1, 0, 0, 0, 'q'}); written <- err }()
+	payload, err := protocol.ioses.ReadLoadLocalPacket()
+	require.NoError(t, err)
+	require.Equal(t, []byte{'q'}, payload)
+	require.NoError(t, <-written)
 }

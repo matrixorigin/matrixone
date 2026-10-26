@@ -5361,10 +5361,36 @@ func readThenWrite(ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, wri
 	return readTime, writeTime, err
 }
 
-// An upload either reaches the protocol EOF or retires its connection. Retrying
-// reads or draining an unlimited client stream after failure cannot establish a
-// bounded, reusable command boundary. Only the upload owner frees its buffer;
-// the cancellation watcher interrupts I/O and is joined before owner cleanup.
+// Bounds for the post-cancellation upload drain. A single read timeout does not
+// bound the drain: a trickling or endless client stream is retired by the total
+// wait and byte budgets instead.
+const (
+	// loadLocalDrainReadTimeout bounds one silent read while draining, so a
+	// stalled client cannot pin the statement goroutine after failure.
+	loadLocalDrainReadTimeout = time.Second
+	// loadLocalDrainMaxWait bounds the whole drain, however many packets arrive.
+	loadLocalDrainMaxWait = 30 * time.Second
+	// loadLocalDrainMaxBytes bounds the payload volume drained from cancel on.
+	loadLocalDrainMaxBytes = 256 * 1024 * 1024
+)
+
+// loadLocalDrainCapable is the narrow slice of the protocol the upload owner
+// needs to interrupt in-flight network I/O and run the post-cancellation
+// drain. *Conn implements it; any other MysqlRrWr keeps the legacy behaviour
+// of retiring the connection immediately on cancellation.
+type loadLocalDrainCapable interface {
+	InterruptLoadLocalIO()
+	ClearLoadLocalIOInterrupt()
+	ReadLoadLocalPacketWithTimeout(time.Duration) ([]byte, error)
+}
+
+// An upload either reaches the protocol EOF or retires its connection. Any
+// error or cancellation interrupts the in-flight network I/O, then a bounded
+// drain still gives a finite client stream the chance to reach its protocol
+// EOF: the statement error can then reach the client and the connection stays
+// usable. An unlimited stream is retired by the drain budgets. Only the upload
+// owner frees its buffer; the cancellation watcher interrupts I/O and is
+// joined before owner cleanup.
 func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, param *tree.ExternParam, writer *io.PipeWriter, reader *io.PipeReader) (err error) {
 	mysqlRwer := ses.GetResponser().MysqlRrWr()
 	defer func() {
@@ -5389,7 +5415,13 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 		select {
 		case <-ctx.Done():
 			_ = reader.CloseWithError(ctx.Err())
-			disconnect()
+			if drainer, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+				// Interrupt the in-flight network I/O without closing the
+				// socket; the owner below decides between drain and retire.
+				drainer.InterruptLoadLocalIO()
+			} else {
+				disconnect()
+			}
 		case <-quitC:
 		}
 	}()
@@ -5399,6 +5431,10 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 		<-watcherDone
 		if !reachedEOF {
 			disconnect()
+		} else if drainer, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+			// A late cancellation may have poked I/O deadlines on a connection
+			// that stays alive for the next command.
+			drainer.ClearLoadLocalIOInterrupt()
 		}
 		if ctx.Err() != nil {
 			err = ctx.Err()
@@ -5408,6 +5444,14 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 	if err != nil {
 		return
 	}
+	// The client has accepted the upload; a later cancellation or failure
+	// drains its finite remainder before the command boundary is answered.
+	requestAccepted := true
+	// drainOnExit requests the bounded post-failure drain below for an ordinary
+	// (non-cancellation) error, so the SQL error — not 2013 — answers the
+	// command on a connection that stays usable, exactly as after a
+	// cancellation drain.
+	drainOnExit := false
 
 	// handleNetworkTimeout checks if the error is a network timeout and disconnects the client
 	handleNetworkTimeout := func(err error) error {
@@ -5452,7 +5496,22 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 
 	for {
 		if err = checkLockTableBinds(); err != nil {
-			return
+			if ctx.Err() == nil {
+				// Ordinary statement-side error (e.g. lock table bind
+				// changed, which is exactly the #30640 2013 flavor): a
+				// drain-capable protocol resyncs the finite client stream
+				// at its upload EOF below, so this error reaches the
+				// client on a reusable connection. A legacy protocol keeps
+				// retiring the connection immediately.
+				if _, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+					drainOnExit = true
+					break
+				}
+				return
+			}
+			// Cancellation interrupted the upload (see the watcher): fall
+			// through to the bounded drain below.
+			break
 		}
 		readTime, writeTime, err = readThenWrite(ses, execCtx, param, writer, mysqlRwer)
 		if err != nil {
@@ -5461,12 +5520,16 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 				err = nil
 				break
 			}
+			if ctx.Err() == nil {
+				if timeoutErr := handleNetworkTimeout(err); timeoutErr != nil {
+					return timeoutErr
+				}
 
-			if timeoutErr := handleNetworkTimeout(err); timeoutErr != nil {
-				return timeoutErr
+				return err
 			}
-
-			return err
+			// Cancellation interrupted the upload (see the watcher): fall
+			// through to the bounded drain below.
+			break
 		}
 
 		updateTimeStats(readTime, writeTime)
@@ -5480,10 +5543,59 @@ func processLoadLocal(ctx context.Context, ses FeSession, execCtx *ExecCtx, para
 		epoch += 1
 	}
 
+	// The statement side retired this upload while a finite client may still be
+	// sending. Resync the protocol at the upload EOF so the original statement
+	// error and the next command can still use this connection; a stream that
+	// never terminates within the drain budgets keeps the legacy behaviour of
+	// retiring the connection (see the cleanup defer above).
+	if !reachedEOF && requestAccepted && (ctx.Err() != nil || drainOnExit) {
+		if drainer, ok := mysqlRwer.(loadLocalDrainCapable); ok {
+			reachedEOF = drainLoadLocalUpload(ses, execCtx, drainer)
+		}
+	}
+
 	if execCtx.isIssue3482 {
 		ses.Infof(execCtx.reqCtx, "load local '%s', read&write all data from client cost: %s\n", param.Filepath, time.Since(start))
 	}
 	return
+}
+
+// drainLoadLocalUpload discards client upload packets after cancellation until
+// the upload's protocol EOF, so a finite client still receives its statement
+// error on a connection that stays usable. The drain is bounded three ways: a
+// single silent read outlasts loadLocalDrainReadTimeout, total drain time
+// outlasts loadLocalDrainMaxWait, and drained payload exceeds
+// loadLocalDrainMaxBytes. True means the protocol EOF was reached; false means
+// the caller must retire the connection because the stream did not terminate
+// within its budgets. The empty upload packet is the protocol EOF marker (see
+// readThenWrite).
+func drainLoadLocalUpload(ses FeSession, execCtx *ExecCtx, drainer loadLocalDrainCapable) bool {
+	deadline := time.Now().Add(loadLocalDrainMaxWait)
+	var drainedBytes int64
+	for {
+		payload, err := drainer.ReadLoadLocalPacketWithTimeout(loadLocalDrainReadTimeout)
+		if err == nil && len(payload) == 0 {
+			return true
+		}
+		if err != nil {
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				ses.Errorf(execCtx.reqCtx, "load local upload cancelled: client stalled during drain, retiring connection")
+			} else {
+				ses.Errorf(execCtx.reqCtx, "load local upload cancelled: drain read failed, retiring connection: %v", err)
+			}
+			return false
+		}
+		drainedBytes += int64(len(payload))
+		ses.CountPayload(len(payload))
+		switch {
+		case drainedBytes > loadLocalDrainMaxBytes:
+			ses.Errorf(execCtx.reqCtx, "load local upload cancelled: drained %d bytes over budget %d, retiring connection", drainedBytes, loadLocalDrainMaxBytes)
+			return false
+		case time.Now().After(deadline):
+			ses.Errorf(execCtx.reqCtx, "load local upload cancelled: drain outlasted %s, retiring connection", loadLocalDrainMaxWait)
+			return false
+		}
+	}
 }
 
 func makeCompactTxnInfo(op TxnOperator) string {

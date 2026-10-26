@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1039,4 +1040,269 @@ func TestWhitespaceOnlyRecord(t *testing.T) {
 			require.ErrorIs(t, err, io.EOF)
 		})
 	}
+}
+
+// maxRecordTestCfg returns the LOAD DATA configuration with an explicit
+// per-record size bound, so boundary tests run on a few hundred bytes instead
+// of MiB-scale inputs.
+func maxRecordTestCfg(limit int64) *CSVConfig {
+	return &CSVConfig{
+		FieldsTerminatedBy: ",",
+		FieldsEnclosedBy:   `"`,
+		FieldsEscapedBy:    `\`,
+		LinesTerminatedBy:  "\n",
+		Null:               []string{`\N`},
+		UnescapedQuote:     true,
+		MaxRecordSize:      limit,
+	}
+}
+
+// TestMaxRecordSizeBound pins the single-record raw-size bound: it applies to
+// the whole record identically no matter how quotes, escapes, field
+// separators or read blocks fragment the row — which the former per-fragment
+// check in readUntil did not. Tests use an injected small bound; blockBufSize
+// 16 gives 16*BufferSizeScale=80-byte read blocks so every case also crosses
+// refill boundaries.
+func TestMaxRecordSizeBound(t *testing.T) {
+	const (
+		limit     int64 = 96
+		blockSize int64 = 16
+	)
+
+	readRow := func(t *testing.T, cfg *CSVConfig, input string) []Field {
+		t.Helper()
+		parser, err := NewCSVParser(cfg, NewStringReader(input), blockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		return row
+	}
+	assertLimitError := func(t *testing.T, cfg *CSVConfig, input string) {
+		t.Helper()
+		parser, err := NewCSVParser(cfg, NewStringReader(input), blockSize, false)
+		require.NoError(t, err)
+		_, err = parser.Read(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "largest-entry-limit")
+		require.NotContains(t, err.Error(), "txn-entry-size-limit",
+			"the bound is the parser's own record bound, it never was the txn entry limit")
+		require.False(t, IsSyntaxError(err),
+			"oversized records must fail loading, not be skipped as tolerated syntax errors")
+	}
+
+	// Under / equal / above the record bound on a plain unquoted field: a
+	// single-field row weighs content bytes + 1 (its only field frame), so
+	// the inclusive boundary sits at limit-1 content bytes.
+	t.Run("unquoted field below at above bound", func(t *testing.T) {
+		row := readRow(t, maxRecordTestCfg(limit), strings.Repeat("x", int(limit)-2)+"\n")
+		require.Len(t, row, 1)
+		require.Len(t, row[0].Val, int(limit)-2)
+
+		row = readRow(t, maxRecordTestCfg(limit), strings.Repeat("x", int(limit)-1)+"\n")
+		require.Len(t, row[0].Val, int(limit)-1, "content plus its one field frame is inclusive")
+
+		// Content alone exceeds the bound: the fold-in check rejects the record.
+		assertLimitError(t, maxRecordTestCfg(limit), strings.Repeat("x", int(limit)+1)+"\n")
+		// Over by many blocks: readUntil's growth check fails fast mid-record.
+		assertLimitError(t, maxRecordTestCfg(limit), strings.Repeat("x", int(5*limit))+"\n")
+	})
+
+	// A quoted field made only of escape pairs never gives readUntil a large
+	// fragment; the bound must still apply through the per-token path.
+	t.Run("quoted field of escape tokens", func(t *testing.T) {
+		below := `"` + strings.Repeat(`\"`, 40) + `"` + "\n" // 80 raw bytes
+		row := readRow(t, maxRecordTestCfg(limit), below)
+		require.Len(t, row, 1)
+		require.Equal(t, strings.Repeat(`"`, 40), row[0].Val)
+		require.True(t, row[0].HasStringQuote)
+
+		assertLimitError(t, maxRecordTestCfg(limit), `"`+strings.Repeat(`\"`, 60)+`"`+"\n")
+	})
+
+	// Quoted content spanning read blocks is bounded like unquoted content.
+	t.Run("quoted field across read blocks", func(t *testing.T) {
+		row := readRow(t, maxRecordTestCfg(limit), `"`+strings.Repeat("x", 90)+`"`+"\n")
+		require.Len(t, row[0].Val, 90)
+
+		// the fragment completes past the bound: fold-in check
+		assertLimitError(t, maxRecordTestCfg(limit), `"`+strings.Repeat("x", int(limit)+24)+`"`+"\n")
+		// the fragment itself outgrows the bound: readUntil fails fast
+		assertLimitError(t, maxRecordTestCfg(limit), `"`+strings.Repeat("x", int(5*limit))+`"`+"\n")
+	})
+
+	// The bound is cumulative over the record: three mid-size fields exceed it
+	// together even though each fits on its own.
+	t.Run("composite multi-field row", func(t *testing.T) {
+		row := readRow(t, maxRecordTestCfg(limit),
+			strings.Repeat("x", 30)+","+strings.Repeat("y", 30)+","+strings.Repeat("z", 30)+"\n")
+		require.Len(t, row, 3)
+
+		assertLimitError(t, maxRecordTestCfg(limit),
+			strings.Repeat("x", 40)+","+strings.Repeat("y", 40)+","+strings.Repeat("z", 40)+"\n")
+	})
+
+	// Framing counts toward the record bound too: a row of only separators
+	// must not grow fieldIndexes/fieldIsQuoted (and downstream the decoded
+	// row slice) without limit while recordBuffer stays empty. Every block
+	// size must reach the same accept/reject decision, otherwise the bound
+	// would depend on read segmentation.
+	t.Run("framing counts toward the record bound", func(t *testing.T) {
+		const frameLimit int64 = 8
+		cases := []struct {
+			name       string
+			input      string
+			wantFields int // > 0: row parses with this many fields; 0: rejected
+			wantQuoted bool
+			wantEmpty  bool
+		}{
+			{"commas at bound", ",,,,,,,\n", 8, false, true},
+			{"commas over bound", ",,,,,,,,\n", 0, false, false},
+			{"empty quoted at bound", `""` + strings.Repeat(`,""`, 7) + "\n", 8, true, true},
+			{"empty quoted over bound", `""` + strings.Repeat(`,""`, 8) + "\n", 0, true, false},
+			{"mixed content and framing at bound", "abc,def\n", 2, false, false},
+			{"mixed content over bound", "abcd,defg\n", 0, false, false},
+		}
+		for _, tc := range cases {
+			for _, bs := range []int64{1, 4, blockSize, ReadBlockSize} {
+				t.Run(fmt.Sprintf("%s/block=%d", tc.name, bs), func(t *testing.T) {
+					parser, err := NewCSVParser(maxRecordTestCfg(frameLimit), NewStringReader(tc.input), bs, false)
+					require.NoError(t, err)
+					row, err := parser.Read(nil)
+					if tc.wantFields == 0 {
+						require.Error(t, err)
+						require.ErrorContains(t, err, "largest-entry-limit")
+						require.False(t, IsSyntaxError(err))
+						return
+					}
+					require.NoError(t, err)
+					require.Len(t, row, tc.wantFields)
+					if tc.wantEmpty {
+						want := newStringField("", false, tc.wantQuoted)
+						for i, f := range row {
+							require.Equal(t, want, f, "field %d decoded from empty", i)
+						}
+					}
+				})
+			}
+		}
+	})
+
+	// The bound resets for every record: a file of many individually-small
+	// records parses regardless of total file size.
+	t.Run("bound is per record not per file", func(t *testing.T) {
+		parser, err := NewCSVParser(maxRecordTestCfg(8),
+			NewStringReader(strings.Repeat("abc,de\n", 100)), 4, false)
+		require.NoError(t, err)
+		for i := 0; i < 100; i++ {
+			row, err := parser.Read(nil)
+			require.NoError(t, err)
+			require.Len(t, row, 2, "record %d", i)
+		}
+		_, err = parser.Read(nil)
+		require.ErrorIs(t, err, io.EOF)
+	})
+
+	// Lines the parser skips outright (comments) share the same bound, both
+	// when one fragment outgrows it and when a multi-byte terminator keeps
+	// every fragment tiny so only the accumulation check can fire.
+	t.Run("skipped lines share the bound", func(t *testing.T) {
+		cfg := maxRecordTestCfg(limit)
+		cfg.Comment = "#"
+		row := readRow(t, cfg, "#"+strings.Repeat("c", 80)+"\na,b\n")
+		require.Len(t, row, 2)
+
+		assertLimitError(t, cfg, "#"+strings.Repeat("c", 200)+"\na,b\n")
+
+		cfg = maxRecordTestCfg(limit)
+		cfg.Comment = "#"
+		cfg.LinesTerminatedBy = "::"
+		assertLimitError(t, cfg, "#"+strings.Repeat("c:", 60)+"::a,b::")
+	})
+
+	// Reset keeps the parser (and its bound) reusable: a clean row parses and
+	// the next oversized row is rejected again, with no cross-input bleed.
+	t.Run("reset reuses the same bound", func(t *testing.T) {
+		parser, err := NewCSVParser(maxRecordTestCfg(16), NewStringReader(strings.Repeat("x", 20)+"\n"), 4, false)
+		require.NoError(t, err)
+		_, err = parser.Read(nil)
+		require.Error(t, err)
+
+		parser.Reset(NewStringReader("a,b\n" + strings.Repeat("y", 20) + "\n"))
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Len(t, row, 2)
+		_, err = parser.Read(nil)
+		require.ErrorContains(t, err, "largest-entry-limit")
+	})
+
+	// An explicit MaxRecordSize always wins over the server default.
+	t.Run("explicit bound overrides default", func(t *testing.T) {
+		assertLimitError(t, maxRecordTestCfg(16), strings.Repeat("x", 20)+"\n")
+		require.Equal(t, int64(config.LargestEntryLimit), (&CSVParser{cfg: &CSVConfig{}}).maxRecordSize())
+	})
+}
+
+// TestLargeRowsByDefault covers issue #30640 at its reproducing scale with
+// the default bound: rows that are legal to INSERT must also parse when
+// LOADed from a CSV dump. Inputs are generated, no fixture files.
+func TestLargeRowsByDefault(t *testing.T) {
+	const MiB = 1024 * 1024
+	require.GreaterOrEqual(t, config.LargestEntryLimit, 40*MiB,
+		"the default bound must cover the 32MiB composite issue row with headroom")
+
+	cfg := maxRecordTestCfg(0) // 0 => default bound
+	readOne := func(t *testing.T, input string) []Field {
+		t.Helper()
+		parser, err := NewCSVParser(cfg, NewStringReader(input), ReadBlockSize, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		return row
+	}
+
+	// The former hidden 10MiB fragment cap is gone: just under, equal, just
+	// above it and the issue's 12MiB LONGTEXT all parse identically.
+	for _, size := range []int{10*MiB - 1, 10 * MiB, 10*MiB + 1, 12 * MiB} {
+		t.Run(fmt.Sprintf("plain field of %d bytes", size), func(t *testing.T) {
+			row := readOne(t, strings.Repeat("x", size)+"\n")
+			require.Len(t, row, 1)
+			require.Len(t, row[0].Val, size, "REPEAT('x',%d) must round trip through CSV", size)
+		})
+	}
+
+	// The 32MiB composite MEDIUMTEXT/LONGTEXT row from the issue, including a
+	// quoted field holding escaped quotes.
+	t.Run("32MiB composite row", func(t *testing.T) {
+		var quoted strings.Builder
+		for i := 0; i < 8; i++ {
+			quoted.WriteString(strings.Repeat("x", MiB-2))
+			quoted.WriteString(`\"`) // escaped quotes keep this field on the token path too
+		}
+		require.Equal(t, 8*MiB, quoted.Len())
+		input := `"` + quoted.String() + `",` +
+			`"` + strings.Repeat("y", 8*MiB) + `",` +
+			strings.Repeat("z", 8*MiB) + "," +
+			strings.Repeat("w", 8*MiB) + "\n"
+		row := readOne(t, input)
+		require.Len(t, row, 4)
+		require.Len(t, row[0].Val, 8*MiB-8, "each \" pair decodes to one quote")
+		require.True(t, row[0].HasStringQuote)
+		require.Len(t, row[1].Val, 8*MiB)
+		require.True(t, row[1].HasStringQuote)
+		require.Len(t, row[2].Val, 8*MiB)
+		require.False(t, row[2].HasStringQuote)
+		require.Len(t, row[3].Val, 8*MiB)
+	})
+
+	// Past the default bound the row is still rejected, with an actionable
+	// error that points at the real knob.
+	t.Run("over default bound is rejected", func(t *testing.T) {
+		input := strings.Repeat("x", config.LargestEntryLimit+1) + "\n"
+		parser, err := NewCSVParser(cfg, NewStringReader(input), ReadBlockSize, false)
+		require.NoError(t, err)
+		_, err = parser.Read(nil)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "largest-entry-limit")
+		require.False(t, IsSyntaxError(err))
+	})
 }
