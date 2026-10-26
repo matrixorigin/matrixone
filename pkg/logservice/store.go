@@ -1379,7 +1379,7 @@ func (l *store) updateCNWorkState(ctx context.Context, workState pb.CNWorkState)
 }
 
 func (l *store) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) error {
-	state, err := l.getCheckerState()
+	state, err := l.getCheckerStateWithContext(ctx)
 	if err != nil {
 		return err
 	}
@@ -1401,7 +1401,7 @@ func (l *store) patchCNStore(ctx context.Context, stateLabel pb.CNStateLabel) er
 }
 
 func (l *store) deleteCNStore(ctx context.Context, cnStore pb.DeleteCNStore) error {
-	state, err := l.getCheckerState()
+	state, err := l.getCheckerStateWithContext(ctx)
 	if err != nil {
 		return err
 	}

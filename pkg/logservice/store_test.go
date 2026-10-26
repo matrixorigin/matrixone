@@ -1226,14 +1226,32 @@ func TestUpdateCNLabel(t *testing.T) {
 		_, ok3 = info.Labels["role"]
 		assert.False(t, ok3)
 
-		t.Run("expired_request", func(t *testing.T) {
-			expired, cancel := context.WithDeadline(context.Background(), time.Unix(0, 0))
-			defer cancel()
-			// Reject the expired request at the authoritative read, before CN
-			// validation. A detached read would instead report a missing CN.
-			err := store.updateCNLabel(expired, pb.CNStoreLabel{UUID: "missing-cn"})
-			require.ErrorIs(t, err, dragonboat.ErrInvalidDeadline)
-		})
+		// The preflight read belongs to the mutation's caller budget too.
+		// An unknown CN distinguishes a detached read (missing-CN error or
+		// successful no-op deletion) from rejection of the expired request.
+		expired, cancelExpired := context.WithDeadline(context.Background(), time.Unix(1, 0))
+		defer cancelExpired()
+		for _, tc := range []struct {
+			name string
+			run  func(context.Context) error
+		}{
+			{"label", func(ctx context.Context) error {
+				return store.updateCNLabel(ctx, pb.CNStoreLabel{UUID: "missing-cn"})
+			}},
+			{"work_state", func(ctx context.Context) error {
+				return store.updateCNWorkState(ctx, pb.CNWorkState{UUID: "missing-cn"})
+			}},
+			{"patch", func(ctx context.Context) error {
+				return store.patchCNStore(ctx, pb.CNStateLabel{UUID: "missing-cn"})
+			}},
+			{"delete", func(ctx context.Context) error {
+				return store.deleteCNStore(ctx, pb.DeleteCNStore{StoreID: "missing-cn"})
+			}},
+		} {
+			t.Run("expired_"+tc.name, func(t *testing.T) {
+				require.ErrorIs(t, tc.run(expired), dragonboat.ErrInvalidDeadline)
+			})
+		}
 	}
 	runStoreTest(t, fn)
 }

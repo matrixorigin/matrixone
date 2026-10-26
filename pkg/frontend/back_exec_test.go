@@ -57,6 +57,8 @@ func TestBindBackExecSession(t *testing.T) {
 	realName, ok := clientSession.GetTempTable("db1", "tmp1")
 	require.True(t, ok)
 	require.Equal(t, "real_tmp1", realName)
+	require.True(t, backSes.OwnsTemporaryTable("db1", "real_tmp1"))
+	require.False(t, backSes.OwnsTemporaryTable("other-db", "real_tmp1"))
 	cleaner, ok := proc.GetSession().(interface {
 		RemoveTempTablesByDatabase(string)
 	})
@@ -64,6 +66,22 @@ func TestBindBackExecSession(t *testing.T) {
 	cleaner.RemoveTempTablesByDatabase("db1")
 	_, ok = clientSession.GetTempTable("db1", "tmp1")
 	require.False(t, ok)
+}
+
+func TestBackSessionForgetsMissingTemporaryTable(t *testing.T) {
+	var absent *backSession
+	absent.ForgetMissingTemporaryTable("db", "t", "physical")
+	(&backSession{}).ForgetMissingTemporaryTable("db", "t", "physical")
+	ses := &Session{}
+	ses.PublishTemporaryTable("db", "t", "physical", nil)
+	parent := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
+	parent.ForgetMissingTemporaryTable("db", "t", "old")
+	_, ok := ses.GetTempTable("db", "t")
+	require.True(t, ok, "stale observation must not erase replacement")
+	parent.ForgetMissingTemporaryTable("db", "t", "physical")
+	_, ok = ses.GetTempTable("db", "t")
+	require.False(t, ok)
+	require.Empty(t, ses.retiredTempTables)
 }
 
 func TestBackSessionInheritsForeignKeyChecks(t *testing.T) {

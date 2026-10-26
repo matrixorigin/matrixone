@@ -1,12 +1,12 @@
 # Distributed ODKU Result Protocol
 
 Current implementation alignment: [r2 addendum](20261016-odku-distributed-result-protocol-r2-addendum.md), with the subsequent candidate-allocation overlay recorded there.
-Against frozen main `6cbe375b49696021d72778baa292a66287f080bd` (capability prefix
-through MORPC128), the isolated candidate retains main's MORPC125 LOAD IGNORE,
-MORPC126 VIEWS, MORPC127 IndexSearchScan knobs and MORPC128 mixed JSON/numeric
-comparison contracts and provisionally assigns JSON ELT/opaque text to MORPC129,
-typed JSON MIN/MAX to MORPC130, and the complete ODKU/session-baseline contract
-to MORPC131. Independent unpublished candidates do not implement each other's
+Against frozen main `4769417cdce5531c9771644eca49f1e71d8f654c` (capability prefix
+through MORPC131), the isolated candidate retains all main contracts, including
+MORPC129 JSON ELT/opaque text, MORPC130 incomplete temporal strings and MORPC131
+exact weighted percentile dispatch. The same JSON expression contract keeps
+main's MORPC129; typed JSON MIN/MAX is provisionally appended at MORPC132 and
+the complete ODKU/session-baseline contract at MORPC133. Independent unpublished candidates do not implement each other's
 features merely by assigning the same number; these assignments do not establish
 cross-branch deployment compatibility and must be revalidated at authoritative
 main admission.

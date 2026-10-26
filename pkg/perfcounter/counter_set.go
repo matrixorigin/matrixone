@@ -23,24 +23,7 @@ type CounterSet struct {
 	ProtocolOutputWaitNS atomic.Int64 // time blocked in physical client socket writes
 }
 
-// ColumnConstructionCounterSet counts column-cache constructors, not scan rows
-// or cache misses. Bytes includes successful decoded column bytes only.
-type ColumnConstructionCounterSet struct {
-	Calls  atomic.Int64
-	Bytes  atomic.Int64
-	Errors atomic.Int64
-}
-
 type FileServiceCounterSet struct {
-	// ReaderCacheWriteBypassBlocks counts reads crossing the reader's own
-	// block threshold, independently of caller-supplied FileService policy.
-	ReaderCacheWriteBypassBlocks atomic.Int64
-	ColumnConstruction           struct {
-		Uncompressed ColumnConstructionCounterSet
-		LZ4          ColumnConstructionCounterSet
-		Chunked      ColumnConstructionCounterSet
-		Other        ColumnConstructionCounterSet
-	}
 	S3 struct {
 		List        atomic.Int64 // listObjects:List all Objects  [Put type request]
 		Head        atomic.Int64 // statObject:View all meta information contained in the object [Get type request]
@@ -54,13 +37,8 @@ type FileServiceCounterSet struct {
 		Read   atomic.Int64 // CacheRead
 		Hit    atomic.Int64 // CacheHit
 		Memory struct {
-			Read                 atomic.Int64 // CacheMemoryRead
-			Hit                  atomic.Int64 // CacheMemoryHit
-			UpdatePolicySkips    atomic.Int64 // IOVectors skipped before entry inspection
-			UpdateEntries        atomic.Int64 // non-hit entries with decoded cache data
-			UpdateAdmitted       atomic.Int64 // newly inserted entries
-			UpdateAlreadyPresent atomic.Int64 // successful Set with an existing key
-			UpdatePressureSkips  atomic.Int64 // rejected before/after rehome or by Set
+			Read atomic.Int64 // CacheMemoryRead
+			Hit  atomic.Int64 // CacheMemoryHit
 		}
 		Disk struct {
 			Read atomic.Int64 // CacheDiskRead
@@ -83,22 +61,6 @@ type FileServiceCounterSet struct {
 }
 
 func (c *CounterSet) Reset() {
-	c.FileService.ReaderCacheWriteBypassBlocks.Store(0)
-	for _, codec := range []*ColumnConstructionCounterSet{
-		&c.FileService.ColumnConstruction.Uncompressed,
-		&c.FileService.ColumnConstruction.LZ4,
-		&c.FileService.ColumnConstruction.Chunked,
-		&c.FileService.ColumnConstruction.Other,
-	} {
-		codec.Calls.Store(0)
-		codec.Bytes.Store(0)
-		codec.Errors.Store(0)
-	}
-	c.FileService.Cache.Memory.UpdatePolicySkips.Store(0)
-	c.FileService.Cache.Memory.UpdateEntries.Store(0)
-	c.FileService.Cache.Memory.UpdateAdmitted.Store(0)
-	c.FileService.Cache.Memory.UpdateAlreadyPresent.Store(0)
-	c.FileService.Cache.Memory.UpdatePressureSkips.Store(0)
 	// FileService.S3
 	c.FileService.S3.List.Store(0)
 	c.FileService.S3.Head.Store(0)

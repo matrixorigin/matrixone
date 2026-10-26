@@ -59,33 +59,6 @@ func GetUpgradeVersions(
 	return values, nil
 }
 
-func GetUpgradeVersionsByOrder(
-	finalVersion string,
-	order int32,
-	txn executor.TxnExecutor) ([]VersionUpgrade, error) {
-	sql := fmt.Sprintf(`select
-			id,
-			from_version,
-			to_version,
-			final_version,
-			final_version_offset,
-			state,
-			upgrade_order,
-			upgrade_cluster,
-			upgrade_tenant,
-			total_tenant,
-			ready_tenant from %s
-			where final_version = '%s' and upgrade_order = %d`,
-		catalog.MOUpgradeTable,
-		finalVersion,
-		order)
-	values, err := getVersionUpgradesBySQL(sql, txn)
-	if err != nil {
-		return nil, err
-	}
-	return values, nil
-}
-
 func GetUpgradingTenantVersion(txn executor.TxnExecutor) (VersionUpgrade, bool, error) {
 	sql := fmt.Sprintf(`select
 			id,

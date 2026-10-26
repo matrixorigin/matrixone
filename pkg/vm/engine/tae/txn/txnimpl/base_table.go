@@ -448,19 +448,6 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 	if err != nil {
 		return
 	}
-	// s := ""
-	// for _, v := range candidates {
-	// 	s += v.StringWithLevel(2) + ","
-	// }
-	// logutil.Info("incr",
-	// 	zap.Bool("inQueue", inQueue),
-	// 	zap.String("table", tbl.txnTable.store.txn.Repr()),
-	// 	zap.String("from", from.ToString()),
-	// 	zap.String("to", to.ToString()),
-	// 	zap.String("rowIDs", rowIDs.String()),
-	// 	zap.String("pks", pks.String()),
-	// 	zap.String("candidates", s),
-	// )
 	return
 }
 

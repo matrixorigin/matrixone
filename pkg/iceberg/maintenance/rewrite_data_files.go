@@ -56,7 +56,7 @@ func (p RewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Context, req
 	targetRef := firstNonEmptyString(req.TargetRef, "main")
 	payload := rewriteDataFilesPayload(req.Options, snapshot)
 	summary := map[string]string{
-		"operation":       string(OperationRewriteDataFiles),
+		"operation":       "replace",
 		"engine":          "matrixone",
 		"idempotency-key": firstNonEmptyString(req.IdempotencyKey, req.JobID),
 		"base-snapshot":   strconv.FormatInt(snapshot.SnapshotID, 10),

@@ -406,39 +406,10 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			}
 		}
 
-		// Y should be cast to a same type.
-		//allYSame := true
-		//t := inputs[1]
-		//
-		//if l%2 == 1 {
-		//	if inputs[l-1].Oid != t.Oid {
-		//		allYSame = false
-		//	}
-		//}
-		//if allYSame {
-		//	for i := 1; i < l; i += 2 {
-		//		if t.Oid != inputs[i].Oid {
-		//			allYSame = false
-		//			break
-		//		}
-		//	}
-		//}
-
 		// XXX choose a supported Y type.
 		var source []types.Type
 		minCost := math.MaxInt32
 		retType := types.Type{}
-		//if allYSame {
-		//	source = []types.Type{inputs[1]}
-		//} else {
-		//	source = make([]types.Type, 0, (l+1)/2)
-		//	for j := 1; j < l; j += 2 {
-		//		source = append(source, inputs[j])
-		//	}
-		//	if l%2 == 1 {
-		//		source = append(source, inputs[l-1])
-		//	}
-		//}
 
 		source = make([]types.Type, 0, (l+1)/2)
 		for j := 1; j < l; j += 2 {

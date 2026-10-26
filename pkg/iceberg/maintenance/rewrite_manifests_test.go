@@ -43,7 +43,7 @@ func TestRewriteManifestsPlannerBuildsCatalogCommitAction(t *testing.T) {
 	require.Equal(t, "s3://warehouse/orders/metadata/snap-4.avro", plan.Attempt.Updates[0].FilePath)
 	require.Equal(t, "4", plan.Attempt.Updates[0].Payload["snapshot_id"])
 	require.Equal(t, "set-snapshot-summary", plan.Attempt.Updates[1].Type)
-	require.Equal(t, string(OperationRewriteManifests), plan.Attempt.Summary["operation"])
+	require.Equal(t, "replace", plan.Attempt.Summary["operation"])
 }
 
 func TestRewriteManifestsPlannerUsesBranchRefSnapshot(t *testing.T) {

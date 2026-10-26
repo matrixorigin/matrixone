@@ -110,3 +110,10 @@ SELECT a, b
 FROM t1
 WHERE b REGEXP '^Power';
 drop table t1;
+
+-- Issue #30210 regression control: without match_type the operator has no
+-- multiline mode; separators stay ordinary characters so '^b' after any of
+-- them does not match.
+SELECT CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b') REGEXP '^b' AS cr_default;
+SELECT CONCAT('a', CONVERT(CHAR(10) USING utf8mb4), 'b') REGEXP '^b' AS lf_default;
+SELECT CONCAT('a', CONVERT(UNHEX('C285') USING utf8mb4), 'b') REGEXP '^b' AS nel_default;

@@ -60,6 +60,7 @@
 // The retry loop exits when:
 //   - Context is cancelled/timeout
 //   - Non-retryable error (ErrBackendClosed, ErrCircuitOpen, ErrClientClosed)
+//   - Backend factory returns a connection failure or exhausted connect budget
 //   - Bounded wait timeout exceeded (if configured)
 //
 // # Usage Example
@@ -1488,8 +1489,9 @@ type backendCreateState struct {
 	done            chan struct{}
 	// factoryErr is set only when factory I/O completed with an error while
 	// this exact state still owned the remote generation. Closing done
-	// publishes it to waiters. Definitive connection errors are returned
-	// precisely; generic factory errors retain the configured retry/backoff.
+	// publishes it to waiters. Connection failures and exhausted connection
+	// budgets are returned precisely; generic factory errors retain the
+	// configured retry/backoff.
 	// Reset, queue expiry, and client/manager shutdown close done without
 	// setting it, so local invalidation remains distinct from factory evidence.
 	factoryErr    error
@@ -2363,7 +2365,13 @@ func (c *client) classifyBackendFactoryCompletion(
 }
 
 func definitiveBackendCreateError(err error) error {
-	if moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) {
+	// A completed factory timeout already exhausted its configured connect
+	// budget. Return it to the caller instead of silently starting another
+	// factory attempt against the same address for the operation's full lifetime.
+	// Preserve the timeout code: unlike CannotConnect, it is not authoritative
+	// evidence that a remote service is dead.
+	if moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+		moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) {
 		return err
 	}
 	return nil
