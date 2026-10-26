@@ -345,21 +345,31 @@ func (ec *ExportConfig) csvNormalizedRecordTerm() []byte {
 // wantNull the field must read back as SQL NULL; otherwise it must read
 // back byte-identical to want.
 func csvFieldEmissionParses(oq *ExportConfig, field, recordTerm, want []byte, wantNull bool) bool {
+	// Mirror the loader's clause defaults exactly (newReaderWithParam):
+	// absent clauses fall back to tab terminator, double-quote enclosure
+	// and backslash escape, and only an explicit ESCAPED BY '' disables
+	// escaping — never the absence of the clause.
 	cfg := &csvparser.CSVConfig{
-		FieldsTerminatedBy: ",",
+		FieldsTerminatedBy: "\t",
+		FieldsEnclosedBy:   `"`,
+		FieldsEscapedBy:    `\`,
 		LinesTerminatedBy:  string(recordTerm),
 		Null:               []string{`\N`},
 		UnescapedQuote:     true,
 	}
 	if f := oq.userConfig.Fields; f != nil {
-		if f.Terminated != nil && f.Terminated.Value != "" {
-			cfg.FieldsTerminatedBy = f.Terminated.Value
+		if t := f.Terminated; t != nil && t.Value != "" {
+			cfg.FieldsTerminatedBy = t.Value
 		}
-		if f.EnclosedBy != nil && f.EnclosedBy.Value != 0 {
-			cfg.FieldsEnclosedBy = string(f.EnclosedBy.Value)
+		if e := f.EnclosedBy; e != nil && e.Value != 0 {
+			cfg.FieldsEnclosedBy = string(e.Value)
 		}
-		if f.EscapedBy != nil && f.EscapedBy.Value != 0 {
-			cfg.FieldsEscapedBy = string(f.EscapedBy.Value)
+		if e := f.EscapedBy; e != nil {
+			if e.Value == 0 {
+				cfg.FieldsEscapedBy = ""
+			} else {
+				cfg.FieldsEscapedBy = string(e.Value)
+			}
 		}
 	}
 	// NewCSVParser cannot return an error for this configuration shape: the

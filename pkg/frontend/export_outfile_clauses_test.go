@@ -1350,6 +1350,10 @@ func TestOutfileNullMarkerEnclosureCollisionSimulation(t *testing.T) {
 			// reviewer's comma- and LF-escape probes.
 			{"enclosure N, comma escape", ',', 'N'},
 			{"enclosure N, LF escape", '\n', 'N'},
+			// Only the default backslash enclosure promotion could parse
+			// the marker; ESCAPED BY '' disables escaping entirely, so the
+			// bare marker's leading backslash opens an unterminated quote.
+			{"enclosure backslash, no escape", 0, '\\'},
 		} {
 			t.Run(c.name, func(t *testing.T) {
 				var buf bytes.Buffer
@@ -1510,6 +1514,66 @@ func TestOutfileEscapeEqualsEnclosureSimulation(t *testing.T) {
 		require.True(t, csvFieldEmissionParses(ep, []byte("#\\N#"), ep.csvNormalizedRecordTerm(), nil, true))
 		// Trailing records fail the exactly-one-record requirement.
 		require.False(t, csvFieldEmissionParses(ep, []byte("#a#\n#b#"), ep.csvNormalizedRecordTerm(), []byte("a"), false))
+	})
+
+	t.Run("absent ESCAPED BY mirrors the loader default escape", func(t *testing.T) {
+		// Regression for the embed smoke legs: with no ESCAPED BY clause the
+		// loader parses with a backslash escape (newReaderWithParam), so the
+		// simulation must apply the same default. An absent clause used to
+		// simulate escapeFlavorNone and reject every value whose encoding
+		// contains a backslash. Pin the CI leg shapes: BIT CR triples, 'r'
+		// and 'r:' separators, trailing CR, embedded backslash, NULL.
+		newEp := func(fieldTerm string) *ExportConfig {
+			ep := &ExportConfig{
+				userConfig: &tree.ExportParam{
+					Fields: &tree.Fields{
+						Terminated: &tree.Terminated{Value: fieldTerm},
+						EnclosedBy: &tree.EnclosedBy{Value: '\\'},
+					},
+					Lines: tree.NewLines("", "\n"),
+				},
+				ctx: context.Background(),
+			}
+			return ep
+		}
+		for _, c := range []struct {
+			name   string
+			field  string
+			tmp    []byte
+			want   string
+			quoted bool
+		}{
+			{"bit mid CR", ",", []byte{0x61, 0x0d, 0x62}, "\\a\\\\rb\\\n", true},
+			{"bit leading CR", ",", []byte{0x0d, 0x61, 0x62}, "\\\\\\rab\\\n", true},
+			{"bit CR colon", "r:", []byte{0x61, 0x0d, 0x3a}, "\\a\\\\r:\\\n", true},
+			{"string trailing CR", ",", []byte("tail\r"), "\\tail\\\\r\\\n", true},
+			{"string embedded backslash", ",", []byte(`back\slash`), "\\back\\\\\\\\slash\\\n", true},
+			{"bit bare CR", ",", []byte{0x0d}, "\\\\\\r\\\n", true},
+			{"bit backslash byte", ",", []byte{0x5c}, "\\\\\\\\\\\\\n", true},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				ep := newEp(c.field)
+				var buf bytes.Buffer
+				require.NoError(t, formatOutputString(ep, c.tmp, []byte("\n"), '\\', false, true, &buf))
+				require.Equal(t, c.want, buf.String())
+				parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+					FieldsTerminatedBy: c.field, FieldsEscapedBy: "\\", FieldsEnclosedBy: "\\",
+					LinesTerminatedBy: "\n", Null: []string{`\N`}, UnescapedQuote: true,
+				}, bytes.NewReader(buf.Bytes()), csvparser.ReadBlockSize, false)
+				require.NoError(t, err)
+				row, err := parser.Read(nil)
+				require.NoError(t, err)
+				require.Len(t, row, 1)
+				require.Equal(t, string(c.tmp), row[0].Val)
+			})
+		}
+
+		t.Run("NULL under bare backslash enclosure", func(t *testing.T) {
+			ep := newEp(",")
+			var buf bytes.Buffer
+			require.NoError(t, formatOutputNull(ep, []byte("\n"), '\\', &buf))
+			require.Equal(t, "\\\\N\\\n", buf.String())
+		})
 	})
 
 	t.Run("document the reader failure the simulation prevents", func(t *testing.T) {
