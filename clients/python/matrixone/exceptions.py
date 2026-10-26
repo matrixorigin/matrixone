@@ -16,6 +16,8 @@
 MatrixOne SDK Exceptions
 """
 
+from typing import Optional
+
 
 class MatrixOneError(Exception):
     """Base exception for all MatrixOne SDK errors"""
@@ -26,7 +28,10 @@ class ConnectionError(MatrixOneError):
 
 
 class QueryError(MatrixOneError):
-    """Raised when SQL query execution fails"""
+    """Raised when SQL query execution fails; orig and errno retain its source."""
+
+    orig: Optional[Exception] = None
+    errno: Optional[int] = None
 
 
 class ConfigurationError(MatrixOneError):

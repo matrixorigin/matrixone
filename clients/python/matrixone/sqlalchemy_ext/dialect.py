@@ -17,6 +17,7 @@ MatrixOne SQLAlchemy dialect support.
 """
 
 import sqlalchemy
+from sqlalchemy import event
 from sqlalchemy.dialects.mysql.base import MySQLTypeCompiler, MySQLDialect, ischema_names as mysql_ischema_names
 
 from .vector_type import VectorType, VectorPrecision
@@ -87,6 +88,8 @@ class MatrixOneDialect(MySQLDialect):
 
     name = "matrixone"
     driver = "pymysql"
+    # Standalone compilation must preserve Decimal as PyMySQL/aiomysql do.
+    supports_native_decimal = True
 
     ischema_names = _mo_ischema_names
 
@@ -98,6 +101,10 @@ class MatrixOneDialect(MySQLDialect):
         # This flag is used by MySQL dialect to handle foreign key reflection quirks
         # For MatrixOne, we set it to False as we don't have those specific MySQL bugs
         self._needs_correct_for_88718_96365 = False
+
+    @classmethod
+    def engine_created(cls, engine):
+        _install_compiler_contract(engine)
 
     def _extract_error_code(self, exception):
         """Extract error code from MatrixOne exceptions."""
@@ -194,6 +201,17 @@ class MatrixOneDialect(MySQLDialect):
 class MatrixOneCompiler(MySQLDialect.statement_compiler):
     """MatrixOne SQL compiler for handling vector types."""
 
+    def visit_select(self, select_stmt, asfrom=False, **kwargs):
+        snapshot = select_stmt._annotations.get('matrixone_snapshot')
+        if snapshot is not None and (asfrom or self.stack or kwargs.get('visiting_cte') is not None):
+            raise ValueError('Snapshot annotations on nested SELECTs or CTEs are unsupported')
+        sql = super().visit_select(select_stmt, asfrom=asfrom, **kwargs)
+        if snapshot is not None:
+            from .._snapshot_sql import rewrite_snapshot
+
+            sql = rewrite_snapshot(sql, snapshot)
+        return sql
+
     def visit_user_defined_type(self, type_, **kw):
         """Handle user-defined vector types."""
         if hasattr(type_, "get_col_spec"):
@@ -223,6 +241,7 @@ def adapt_engine_dialect(engine):
     SQLAlchemy's first-connect closure retains this object, even for a lazy
     engine. Keep its DBAPI, ping, server state and driver-specific overrides.
     """
+    _install_compiler_contract(engine)
     dialect = engine.dialect
     if isinstance(dialect, MatrixOneDialect):
         return
@@ -237,3 +256,29 @@ def adapt_engine_dialect(engine):
     dialect.type_compiler = compiler
     dialect.type_compiler_instance = compiler
     engine.clear_compiled_cache()
+
+
+_COMPILER_CONTRACT = 'matrixone-snapshot-v1'
+_PREPARED_ATTRIBUTE = '_matrixone_compiler_prepared'
+
+
+def _prepare_compiler_statement(connection, statement, multiparams, params, execution_options):
+    """Partition external caches without changing the caller's cache or dialect owner."""
+    if statement._annotations.get('matrixone_compiler_contract') == _COMPILER_CONTRACT:
+        return statement, multiparams, params
+    memo = getattr(statement, _PREPARED_ATTRIBUTE, None)
+    # Generative SQLAlchemy copies may inherit __dict__; never reuse a parent's SQL.
+    if memo is not None and memo[0] is statement and memo[1] == _COMPILER_CONTRACT:
+        prepared = memo[2]
+    else:
+        prepared = statement._annotate({'matrixone_compiler_contract': _COMPILER_CONTRACT})
+        prepared.__dict__.pop(_PREPARED_ATTRIBUTE, None)
+        setattr(statement, _PREPARED_ATTRIBUTE, (statement, _COMPILER_CONTRACT, prepared))
+    return prepared, multiparams, params
+
+
+def _install_compiler_contract(engine):
+    # OptionEngine inherits its base engine's listeners. contains() avoids duplicate
+    # registration on an exact engine; duplicate inherited calls are harmless.
+    if not event.contains(engine, 'before_execute', _prepare_compiler_statement):
+        event.listen(engine, 'before_execute', _prepare_compiler_statement, retval=True)

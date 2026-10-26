@@ -9,7 +9,7 @@ must use native SQL with explicit snapshot hints; no partial query is dispatched
 import re
 from typing import List, NamedTuple
 
-from ._sql_literals import sql_literal
+from ._sql_literals import sql_string_token
 
 
 class _Token(NamedTuple):
@@ -141,7 +141,7 @@ def rewrite_snapshot(sql, snapshot):
             if not (suffix.kind == 'word' and suffix.text.upper() in _BOUNDARIES) and suffix.text != ';':
                 raise ValueError('Unsupported snapshot table-source suffix')
         inserts.append(end)
-    hint = '{snapshot = ' + sql_literal(snapshot) + '}'
+    hint = '{snapshot = ' + sql_string_token(snapshot, context='Snapshot') + '}'
     parts: List[str] = []
     previous = 0
     for end in inserts:

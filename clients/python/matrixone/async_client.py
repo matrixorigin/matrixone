@@ -37,12 +37,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from ._utils import discard_unrestored_connection, is_non_transactional_statement
+from ._utils import discard_unrestored_connection, is_non_transactional_statement, result_returns_rows
 from .account import AsyncAccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .branch import AsyncBranchManager
 from .cdc import AsyncCDCManager
-from .clone import BaseCloneManager
+from .clone import AsyncCloneManager
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import (
     ConnectionError,
@@ -108,46 +108,6 @@ class AsyncResultSet:
 
     def __len__(self):
         return len(self.rows)
-
-
-class AsyncCloneManager(BaseCloneManager):
-    """Async clone manager"""
-
-    async def clone_database(
-        self,
-        target_db: str,
-        source_db: str,
-        snapshot_name: Optional[str] = None,
-        if_not_exists: bool = False,
-    ) -> None:
-        """Clone database asynchronously"""
-        sql = self._build_clone_database_sql(target_db, source_db, snapshot_name, if_not_exists)
-
-        await self.client.execute(sql)
-
-    async def clone_table(
-        self,
-        target_table: str,
-        source_table: str,
-        snapshot_name: Optional[str] = None,
-        if_not_exists: bool = False,
-    ) -> None:
-        """Clone table asynchronously"""
-        sql = self._build_clone_table_sql(target_table, source_table, snapshot_name, if_not_exists)
-
-        await self.client.execute(sql)
-
-    async def clone_database_with_snapshot(
-        self, target_db: str, source_db: str, snapshot_name: str, if_not_exists: bool = False
-    ) -> None:
-        """Clone database with snapshot asynchronously"""
-        await self.clone_database(target_db, source_db, snapshot_name, if_not_exists)
-
-    async def clone_table_with_snapshot(
-        self, target_table: str, source_table: str, snapshot_name: str, if_not_exists: bool = False
-    ) -> None:
-        """Clone table with snapshot asynchronously"""
-        await self.clone_table(target_table, source_table, snapshot_name, if_not_exists)
 
 
 class AsyncRestoreManager:
@@ -256,11 +216,9 @@ class AsyncMoCtlManager:
         import json
 
         try:
-            # Build mo_ctl SQL command
-            if params:
-                sql = f"SELECT mo_ctl('{method}', '{target}', '{params}')"
-            else:
-                sql = f"SELECT mo_ctl('{method}', '{target}', '')"
+            from .moctl import _build_moctl_sql
+
+            sql = _build_moctl_sql(method, target, params)
 
             # Execute the command
             result = await self.client.execute(sql)
@@ -281,9 +239,9 @@ class AsyncMoCtlManager:
             return parsed_result
 
         except json.JSONDecodeError as e:
-            raise MoCtlError(f"Failed to parse mo_ctl result: {e}")
+            raise MoCtlError(f"Failed to parse mo_ctl result: {e}") from e
         except Exception as e:
-            raise MoCtlError(f"mo_ctl operation failed: {e}")
+            raise MoCtlError(f"mo_ctl operation failed: {e}") from e
 
     async def flush_table(self, database: str, table: str) -> Dict[str, Any]:
         """Force flush table asynchronously"""
@@ -745,6 +703,9 @@ class AsyncClient(BaseMatrixOneClient):
         client = cls(**kwargs)
 
         # Set the provided engine
+        from .sqlalchemy_ext.dialect import adapt_engine_dialect
+
+        adapt_engine_dialect(engine.sync_engine)
         client._engine = engine
 
         # Initialize vector managers after engine is set
@@ -819,6 +780,9 @@ class AsyncClient(BaseMatrixOneClient):
         # but their aiomysql adapter requires reconnect=False. This also
         # affects 2.0 releases; newer dialects already pass False directly.
         engine.dialect._send_false_to_ping = True
+        from .sqlalchemy_ext.dialect import adapt_engine_dialect
+
+        adapt_engine_dialect(engine.sync_engine)
 
         return engine
 
@@ -1013,7 +977,10 @@ class AsyncClient(BaseMatrixOneClient):
             self.logger.log_error(e, context=context)
             from .client import _classify_db_error
 
-            raise _classify_db_error(e, sql) from None
+            classified = _classify_db_error(e, sql)
+            if classified is e:
+                raise
+            raise classified from e
 
     async def execute(self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None) -> AsyncResultSet:
         """Execute with a deadline covering pool wait, execution, fetch and commit.
@@ -1304,7 +1271,7 @@ class AsyncClient(BaseMatrixOneClient):
                     result = await session.execute(sql_or_stmt, params, log_mode='off')
 
                     # Convert SQLAlchemy result to AsyncResultSet
-                    if hasattr(result, 'returns_rows') and result.returns_rows:
+                    if result_returns_rows(result):
                         # SELECT query
                         columns = list(result.keys())
                         rows = result.fetchall()
@@ -1424,7 +1391,10 @@ class AsyncClient(BaseMatrixOneClient):
 
             from .client import _classify_db_error
 
-            raise _classify_db_error(e, sql_or_stmt) from None
+            classified = _classify_db_error(e, sql_or_stmt)
+            if classified is e:
+                raise
+            raise classified from e
 
     def _substitute_parameters(self, sql: str, params=None, *, sql_mode='') -> str:
         """Render legacy parameters outside SQL literals, identifiers and comments."""
@@ -1527,11 +1497,15 @@ class AsyncClient(BaseMatrixOneClient):
 
     def _escape_identifier(self, identifier: str) -> str:
         """Escapes an identifier to prevent SQL injection."""
-        return f"`{identifier.replace('`', '``')}`"
+        from ._sql_literals import sql_identifier
+
+        return sql_identifier(identifier, force=True)
 
     def _escape_string(self, value: str) -> str:
         """Escapes a string value for SQL queries."""
-        return f"'{value}'"
+        from ._sql_literals import sql_string_token
+
+        return sql_string_token(value, context='Administrative SQL')
 
     def query(self, *columns, snapshot: str = None):
         """Get async MatrixOne query builder - SQLAlchemy style

@@ -18,10 +18,12 @@ MatrixOne Clone Management
 Unified clone management supporting sync/async and client/session executors.
 """
 
+import asyncio
 from typing import Optional
 
 from .exceptions import CloneError, ConnectionError
 from .version import requires_version
+from ._sql_literals import sql_object_name, sql_string_token, identifier_parts, sql_literal
 
 
 class BaseCloneManager:
@@ -58,9 +60,55 @@ class BaseCloneManager:
         if_not_exists: bool = False,
     ) -> str:
         """Build a CREATE ... CLONE SQL statement."""
-        if_not_exists_clause = "IF NOT EXISTS " if if_not_exists else ""
-        snapshot_clause = f' {{snapshot = "{snapshot_name}"}}' if snapshot_name else ""
-        return f"CREATE {object_type} {if_not_exists_clause}{target_name} CLONE {source_name}{snapshot_clause}"
+        if if_not_exists:
+            raise ValueError('Raw CLONE IF NOT EXISTS is unsafe; use client.clone with if_not_exists=True')
+        if snapshot_name is not None and (not isinstance(snapshot_name, str) or not snapshot_name):
+            raise ValueError('snapshot_name must be a nonempty string or None')
+        target_name = sql_object_name(target_name, qualified=object_type == 'TABLE')
+        source_name = sql_object_name(source_name, qualified=object_type == 'TABLE')
+        snapshot_clause = (
+            (' {snapshot = ' + sql_string_token(snapshot_name, context='Snapshot') + '}')
+            if snapshot_name is not None
+            else ''
+        )
+        return f"CREATE {object_type} {target_name} CLONE {source_name}{snapshot_clause}"
+
+    @staticmethod
+    def _existence_sql(object_type, target):
+        parts = identifier_parts(target, qualified=object_type == 'TABLE')
+        if object_type == 'DATABASE':
+            return (
+                'SELECT 1 FROM information_schema.schemata WHERE schema_name=LOWER('
+                + sql_literal(parts[0])
+                + ') LIMIT 1'
+            )
+        database = 'LOWER(' + sql_literal(parts[0]) + ')' if len(parts) == 2 else 'DATABASE()'
+        return (
+            'SELECT 1 FROM information_schema.tables WHERE table_schema='
+            + database
+            + ' AND table_name=LOWER('
+            + sql_literal(parts[-1])
+            + ') LIMIT 1'
+        )
+
+    @staticmethod
+    def _has_rows(result):
+        try:
+            rows = result.rows if hasattr(result, 'rows') else result.fetchall()
+            return bool(rows)
+        finally:
+            close = getattr(result, 'close', None)
+            if close is not None:
+                close()
+
+    @staticmethod
+    def _verification_sql(object_type, target):
+        return 'SHOW CREATE ' + object_type + ' ' + sql_object_name(target, qualified=object_type == 'TABLE')
+
+    @classmethod
+    def _verify_result(cls, result):
+        if not cls._has_rows(result):
+            raise CloneError('CLONE acknowledged but target existence was not verified')
 
     def _build_clone_database_sql(
         self,
@@ -173,6 +221,22 @@ class CloneManager(BaseCloneManager):
         - MetadataManager: For managing database metadata
     """
 
+    def _clone(self, object_type, target, source, snapshot, if_not_exists):
+        if not self.client._engine:
+            raise ConnectionError('Not connected to database')
+        sql = self._build_clone_sql(object_type, target, source, snapshot)
+        executor = self._get_executor()
+        try:
+            if if_not_exists and self._has_rows(executor.execute(self._existence_sql(object_type, target))):
+                return
+            executor.execute(sql)
+        except Exception as error:
+            raise CloneError('Failed to clone ' + object_type.lower() + ': ' + str(error)) from error
+        try:
+            self._verify_result(executor.execute(self._verification_sql(object_type, target)))
+        except Exception as error:
+            raise CloneError('CLONE acknowledged but target existence verification failed') from error
+
     @requires_version(
         min_version="1.0.0",
         feature_name="database_cloning",
@@ -199,15 +263,7 @@ class CloneManager(BaseCloneManager):
             ConnectionError: If not connected to database
             CloneError: If clone operation fails
         """
-        if not self.client._engine:
-            raise ConnectionError("Not connected to database")
-
-        sql = self._build_clone_database_sql(target_db, source_db, snapshot_name, if_not_exists)
-
-        try:
-            self._get_executor().execute(sql)
-        except Exception as e:
-            raise CloneError(f"Failed to clone database: {e}") from e
+        self._clone('DATABASE', target_db, source_db, snapshot_name, if_not_exists)
 
     def clone_table(
         self,
@@ -229,15 +285,7 @@ class CloneManager(BaseCloneManager):
             ConnectionError: If not connected to database
             CloneError: If clone operation fails
         """
-        if not self.client._engine:
-            raise ConnectionError("Not connected to database")
-
-        sql = self._build_clone_table_sql(target_table, source_table, snapshot_name, if_not_exists)
-
-        try:
-            self._get_executor().execute(sql)
-        except Exception as e:
-            raise CloneError(f"Failed to clone table: {e}") from e
+        self._clone('TABLE', target_table, source_table, snapshot_name, if_not_exists)
 
     def clone_database_with_snapshot(
         self,
@@ -259,10 +307,6 @@ class CloneManager(BaseCloneManager):
             ConnectionError: If not connected to database
             CloneError: If clone operation fails or snapshot doesn't exist
         """
-        # Verify snapshot exists using snapshot manager
-        if not self.client.snapshots.exists(snapshot_name):
-            raise CloneError(f"Snapshot '{snapshot_name}' does not exist")
-
         self.clone_database(target_db, source_db, snapshot_name, if_not_exists)
 
     def clone_table_with_snapshot(
@@ -285,10 +329,6 @@ class CloneManager(BaseCloneManager):
             ConnectionError: If not connected to database
             CloneError: If clone operation fails or snapshot doesn't exist
         """
-        # Verify snapshot exists using snapshot manager
-        if not self.client.snapshots.exists(snapshot_name):
-            raise CloneError(f"Snapshot '{snapshot_name}' does not exist")
-
         self.clone_table(target_table, source_table, snapshot_name, if_not_exists)
 
 
@@ -374,6 +414,29 @@ class AsyncCloneManager(BaseCloneManager):
         - AsyncSession: For async transaction management
     """
 
+    async def _clone(self, object_type, target, source, snapshot, if_not_exists):
+        from ._connection_options import positive_timeout
+
+        timeout = positive_timeout(self.client.query_timeout, 'query_timeout')
+        if not self.client._engine:
+            raise ConnectionError('Not connected to database')
+        sql = self._build_clone_sql(object_type, target, source, snapshot)
+        executor = self._get_executor()
+
+        async def operation():
+            try:
+                if if_not_exists and self._has_rows(await executor.execute(self._existence_sql(object_type, target))):
+                    return
+                await executor.execute(sql)
+            except Exception as error:
+                raise CloneError('Failed to clone ' + object_type.lower() + ': ' + str(error)) from error
+            try:
+                self._verify_result(await executor.execute(self._verification_sql(object_type, target)))
+            except Exception as error:
+                raise CloneError('CLONE acknowledged but target existence verification failed') from error
+
+        await asyncio.wait_for(operation(), timeout)
+
     @requires_version(
         min_version="1.0.0",
         feature_name="database_cloning",
@@ -400,15 +463,7 @@ class AsyncCloneManager(BaseCloneManager):
             ConnectionError: If not connected to database
             CloneError: If clone operation fails
         """
-        if not self.client._engine:
-            raise ConnectionError("Not connected to database")
-
-        sql = self._build_clone_database_sql(target_db, source_db, snapshot_name, if_not_exists)
-
-        try:
-            await self._get_executor().execute(sql)
-        except Exception as e:
-            raise CloneError(f"Failed to clone database: {e}") from e
+        await self._clone('DATABASE', target_db, source_db, snapshot_name, if_not_exists)
 
     async def clone_table(
         self,
@@ -430,15 +485,7 @@ class AsyncCloneManager(BaseCloneManager):
             ConnectionError: If not connected to database
             CloneError: If clone operation fails
         """
-        if not self.client._engine:
-            raise ConnectionError("Not connected to database")
-
-        sql = self._build_clone_table_sql(target_table, source_table, snapshot_name, if_not_exists)
-
-        try:
-            await self._get_executor().execute(sql)
-        except Exception as e:
-            raise CloneError(f"Failed to clone table: {e}") from e
+        await self._clone('TABLE', target_table, source_table, snapshot_name, if_not_exists)
 
     async def clone_database_with_snapshot(
         self,
@@ -460,12 +507,7 @@ class AsyncCloneManager(BaseCloneManager):
             ConnectionError: If not connected to database
             CloneError: If clone operation fails or snapshot doesn't exist
         """
-        # Verify snapshot exists using snapshot manager
-        # Note: exists() needs to be awaited for async version
-        if not await self.client.snapshots.exists(snapshot_name):
-            raise CloneError(f"Snapshot '{snapshot_name}' does not exist")
-
-        await self.clone_database(target_db, source_db, snapshot_name, if_not_exists)
+        await self._clone('DATABASE', target_db, source_db, snapshot_name, if_not_exists)
 
     async def clone_table_with_snapshot(
         self,
@@ -487,9 +529,4 @@ class AsyncCloneManager(BaseCloneManager):
             ConnectionError: If not connected to database
             CloneError: If clone operation fails or snapshot doesn't exist
         """
-        # Verify snapshot exists using snapshot manager
-        # Note: exists() needs to be awaited for async version
-        if not await self.client.snapshots.exists(snapshot_name):
-            raise CloneError(f"Snapshot '{snapshot_name}' does not exist")
-
-        await self.clone_table(target_table, source_table, snapshot_name, if_not_exists)
+        await self._clone('TABLE', target_table, source_table, snapshot_name, if_not_exists)

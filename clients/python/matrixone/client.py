@@ -28,7 +28,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import URL, Engine
 from sqlalchemy.orm import Session as SQLAlchemySession
 
-from ._utils import discard_unrestored_connection, is_non_transactional_statement
+from ._utils import discard_unrestored_connection, is_non_transactional_statement, result_returns_rows
 from .account import AccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .branch import BranchManager
@@ -117,7 +117,17 @@ _MO_DB_ALREADY_EXISTS = 20420  # Database already exists
 _MO_PRIMARY_KEY_DUP = 20623  # Primary key duplicated
 
 
-def _classify_db_error(exc: Exception, sql_or_stmt: Any = None) -> QueryError:
+def _classify_db_error(exc: Union[Exception, str], sql_or_stmt: Any = None) -> QueryError:
+    """Keep the original driver boundary and errno alongside stable diagnostics."""
+    if isinstance(exc, QueryError):
+        return exc
+    error = _query_error_message(exc, sql_or_stmt)
+    error.orig = exc if isinstance(exc, Exception) else None
+    error.errno = _extract_errno(exc) if not isinstance(exc, str) else None
+    return error
+
+
+def _query_error_message(exc: Union[Exception, str], sql_or_stmt: Any = None) -> QueryError:
     """Classify a database error into a user-friendly QueryError.
 
     Uses the numeric error code (MySQL or moerr) as the primary classifier,
@@ -879,11 +889,15 @@ class Client(BaseMatrixOneClient):
 
     def _escape_identifier(self, identifier: str) -> str:
         """Escapes an identifier to prevent SQL injection."""
-        return f"`{identifier.replace('`', '``')}`"
+        from ._sql_literals import sql_identifier
+
+        return sql_identifier(identifier, force=True)
 
     def _escape_string(self, value: str) -> str:
         """Escapes a string value for SQL queries."""
-        return f"'{value}'"
+        from ._sql_literals import sql_string_token
+
+        return sql_string_token(value, context='Administrative SQL')
 
     def _build_login_info(
         self, user: str, account: Optional[str] = None, role: Optional[str] = None
@@ -1033,7 +1047,10 @@ class Client(BaseMatrixOneClient):
             execution_time = time.time() - start_time
             self.logger.log_query(sql, execution_time, success=False, log_mode=log_mode)
             self.logger.log_error(e, context=context)
-            raise _classify_db_error(e, sql) from None
+            classified = _classify_db_error(e, sql)
+            if classified is e:
+                raise
+            raise classified from e
 
     @property
     def analytics(self):
@@ -1325,7 +1342,7 @@ class Client(BaseMatrixOneClient):
                     result = session.execute(sql_or_stmt, params, log_mode='off')
 
                     # Convert SQLAlchemy result to ResultSet
-                    if hasattr(result, 'returns_rows') and result.returns_rows:
+                    if result_returns_rows(result):
                         # SELECT query
                         columns = list(result.keys())
                         rows = result.fetchall()
@@ -1445,7 +1462,10 @@ class Client(BaseMatrixOneClient):
 
                 print(f"Warning: Error logging failed: {log_err}", file=sys.stderr)
 
-            raise _classify_db_error(e, sql_or_stmt) from None
+            classified = _classify_db_error(e, sql_or_stmt)
+            if classified is e:
+                raise
+            raise classified from e
 
     def insert(self, table_name_or_model, data: dict) -> "ResultSet":
         """
@@ -3227,7 +3247,7 @@ class Session(SQLAlchemySession):
             execution_time = time.time() - start_time
 
             # Log query
-            if hasattr(result, 'returns_rows') and result.returns_rows:
+            if result_returns_rows(result):
                 self.client.logger.log_query(original_sql, execution_time, None, success=True, log_mode=log_mode)
             else:
                 self.client.logger.log_query(
@@ -3249,7 +3269,10 @@ class Session(SQLAlchemySession):
                 log_mode=log_mode,
             )
             self.client.logger.log_error(e, context="Session query execution")
-            raise _classify_db_error(e, sql_or_stmt) from None
+            classified = _classify_db_error(e, sql_or_stmt)
+            if classified is e:
+                raise
+            raise classified from e
 
     def get_connection(self):
         """
