@@ -2474,6 +2474,35 @@ func boundedFloatComparisonPreservesValue(columnT types.Type, expr *plan.Expr) b
 		types.NewFloat32ScaleNormalizer(columnT.Scale).Normalize(float32(value)) == float32(value)
 }
 
+// integerConstantFitsDeclaredDecimalDomain reports whether an integer
+// constant magnitude stays inside the declared domain of a DECIMAL column.
+// Converting an integer to DECIMAL(w,s) multiplies it by 10^s, and the
+// strict integer->decimal conversion rejects scaled magnitudes that reach
+// 10^w. The col-vs-const comparison rewrite replaces the constant with
+// cast(const AS DECIMAL(w,s)); that replacement is only valid while the
+// cast cannot raise the range error. A non-positive column width marks a
+// synthesized decimal type whose conversion skips the declared-range check,
+// so the rewrite remains valid there.
+func integerConstantFitsDeclaredDecimalDomain(columnT types.Type, magnitude uint64) bool {
+	if columnT.Width <= 0 {
+		return true
+	}
+	intDigits := columnT.Width - columnT.Scale
+	if intDigits < 0 {
+		intDigits = 0
+	}
+	if intDigits > 18 {
+		// Declared integer digits beyond the int64 range impose no extra
+		// constraint on a 64-bit constant.
+		return true
+	}
+	bound := uint64(1)
+	for i := int32(0); i < intDigits; i++ {
+		bound *= 10
+	}
+	return magnitude < bound
+}
+
 func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr *plan.Expr) bool {
 	if columnT.Oid.IsInteger() && constT.Oid.IsDecimal() {
 		return exactDecimalIntegerFits(constExpr, columnT.Oid)
@@ -2577,7 +2606,12 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 			// Use MaxInt32 as conservative limit for practical purposes
 			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
 		case types.T_decimal64:
-			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32)
+			magnitude := uint64(constVal)
+			if constVal < 0 {
+				magnitude = -magnitude
+			}
+			return constVal <= int64(math.MaxInt32) && constVal >= int64(math.MinInt32) &&
+				integerConstantFitsDeclaredDecimalDomain(columnT, magnitude)
 		default:
 			return false
 		}
@@ -2615,7 +2649,8 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 			// Use MaxUint32 as conservative limit
 			return constVal <= math.MaxUint32
 		case types.T_decimal64:
-			return constVal <= math.MaxInt32
+			return constVal <= math.MaxInt32 &&
+				integerConstantFitsDeclaredDecimalDomain(columnT, constVal)
 		default:
 			return false
 		}
