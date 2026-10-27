@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/panjf2000/ants/v2"
@@ -98,25 +97,16 @@ func (s *parallelJobScheduler) Schedule(job *Job) (err error) {
 }
 
 type Job struct {
-	id      string
-	typ     JobType
-	wg      sync.WaitGroup
-	ctx     context.Context
-	exec    JobExecutor
-	result  *JobResult
-	startTs time.Time
-	endTs   time.Time
+	id     string
+	typ    JobType
+	wg     sync.WaitGroup
+	ctx    context.Context
+	exec   JobExecutor
+	result *JobResult
 }
 
 func (job *Job) Run() {
 	defer job.wg.Done()
-	job.startTs = time.Now()
-	defer func() {
-		job.endTs = time.Now()
-		/*logutil.Debug("run-job", common.AnyField("name", job.String()),
-		common.ErrorField(job.result.Err),
-		common.DurationField(job.endTs.Sub(job.startTs)))*/
-	}()
 	result := job.exec(job.ctx)
 	job.result = result
 }

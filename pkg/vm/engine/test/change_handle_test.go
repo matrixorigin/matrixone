@@ -1726,6 +1726,9 @@ func TestGetObjectsFromCheckpointRange(t *testing.T) {
 			appendableStillVisible := newObjectEntryForCheckpointTest(t, 2, true, false, types.BuildTS(6, 0), types.TS{})
 			appendableDeletedBeforeRange := newObjectEntryForCheckpointTest(t, 3, true, false, types.BuildTS(4, 0), types.BuildTS(9, 0))
 			appendableCreatedAfterRange := newObjectEntryForCheckpointTest(t, 4, true, false, types.BuildTS(21, 0), types.TS{})
+			emptyAppendable := newObjectEntryForCheckpointTest(t, 9, true, false, types.BuildTS(15, 0), types.TS{})
+			require.NoError(t, objectio.SetObjectStatsBlkCnt(&emptyAppendable.ObjectStats, 0))
+			require.NoError(t, objectio.SetObjectStatsRowCnt(&emptyAppendable.ObjectStats, 0))
 			cnInRange := newObjectEntryForCheckpointTest(t, 5, false, true, types.BuildTS(12, 0), types.TS{})
 			cnBeforeRange := newObjectEntryForCheckpointTest(t, 6, false, true, types.BuildTS(8, 0), types.TS{})
 			mergedTNObject := newObjectEntryForCheckpointTest(t, 7, false, false, types.BuildTS(13, 0), types.TS{})
@@ -1738,10 +1741,12 @@ func TestGetObjectsFromCheckpointRange(t *testing.T) {
 						{entry: appendableStillVisible, isTombstone: false},
 						{entry: appendableDeletedBeforeRange, isTombstone: false},
 						{entry: appendableCreatedAfterRange, isTombstone: false},
+						{entry: emptyAppendable, isTombstone: false},
 						{entry: cnInRange, isTombstone: false},
 						{entry: cnBeforeRange, isTombstone: false},
 						{entry: mergedTNObject, isTombstone: false},
 						{entry: appendableOverlap, isTombstone: true},
+						{entry: emptyAppendable, isTombstone: true},
 						{entry: cnInRange, isTombstone: true},
 						{entry: mergedTNTombstone, isTombstone: true},
 					},
@@ -1819,6 +1824,8 @@ func newObjectEntryForCheckpointTest(t *testing.T, id byte, appendable bool, cnC
 	if cnCreated {
 		objectio.WithCNCreated()(stats)
 	}
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, 1))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(stats, 1))
 
 	return objectio.ObjectEntry{
 		ObjectStats: *stats,

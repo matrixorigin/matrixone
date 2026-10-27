@@ -38,7 +38,9 @@ func TestLoadInlineFormatOverMySQLProtocol(t *testing.T) {
 				_, err := db.ExecContext(ctx, "create database "+database)
 				require.NoError(t, err)
 				defer func() {
-					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					// DROP is cleanup, not a five-second DDL latency assertion.
+					// Keep it bounded and independent of the workload's context.
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
 					defer cleanupCancel()
 					_, err := db.ExecContext(cleanupCtx, "drop database "+database)
 					require.NoError(t, err)
