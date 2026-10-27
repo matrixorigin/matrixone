@@ -191,6 +191,8 @@ func TestQCloudSDKConditionalObjectIdentityReads(t *testing.T) {
 	defer server.Close()
 
 	sdk := newTestCOSClient(t, server)
+	testOrdinaryObjectReadRanges(t, sdk)
+
 	identity, err := sdk.StatObjectIdentity(context.Background(), "object")
 	require.NoError(t, err)
 	wantLastModified, err := time.Parse(http.TimeFormat, lastModRaw)

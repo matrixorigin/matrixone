@@ -509,25 +509,6 @@ func (a *MinioSDK) Read(
 		}
 	}()
 
-	if max == nil {
-		// read to end
-		r, err := a.getObject(
-			ctx,
-			key,
-			min,
-			nil,
-		)
-		if err != nil {
-			return nil, err
-		}
-		// eager read to expose file not found error
-		_, err = r.Read(nil)
-		if err != nil {
-			return nil, err
-		}
-		return r, nil
-	}
-
 	r, err = a.getObject(
 		ctx,
 		key,
@@ -541,6 +522,9 @@ func (a *MinioSDK) Read(
 	_, err = r.Read(nil)
 	if err != nil {
 		return nil, err
+	}
+	if max == nil {
+		return r, nil
 	}
 	return &readCloser{
 		r:         io.LimitReader(r, int64(*max-*min)),

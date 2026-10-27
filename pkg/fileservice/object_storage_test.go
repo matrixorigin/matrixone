@@ -25,7 +25,24 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// testOrdinaryObjectReadRanges checks the shared behavior against each provider's HTTP fixture.
+func testOrdinaryObjectReadRanges(t *testing.T, storage ObjectStorage) {
+	t.Helper()
+	t.Run("ordinary ranges", func(t *testing.T) {
+		min, max := int64(1), int64(4)
+		for _, end := range []*int64{&max, nil} {
+			reader, err := storage.Read(context.Background(), "object", &min, end)
+			require.NoError(t, err)
+			data, err := io.ReadAll(reader)
+			require.NoError(t, err)
+			require.NoError(t, reader.Close())
+			require.Equal(t, "bcd", string(data))
+		}
+	})
+}
 
 func testObjectStorage[T ObjectStorage](
 	t *testing.T,

@@ -708,24 +708,6 @@ func (a *AwsSDKv2) Read(
 	err error,
 ) {
 
-	if max == nil {
-		// read to end
-		r, err := a.getObject(
-			ctx,
-			min,
-			nil,
-			&s3.GetObjectInput{
-				Bucket: ptrTo(a.bucket),
-				Key:    ptrTo(key),
-			},
-		)
-		err = a.mapError(err, key)
-		if err != nil {
-			return nil, err
-		}
-		return r, nil
-	}
-
 	r, err = a.getObject(
 		ctx,
 		min,
@@ -738,6 +720,9 @@ func (a *AwsSDKv2) Read(
 	err = a.mapError(err, key)
 	if err != nil {
 		return nil, err
+	}
+	if max == nil {
+		return r, nil
 	}
 	return &readCloser{
 		r:         io.LimitReader(r, int64(*max-*min)),

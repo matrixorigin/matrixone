@@ -83,6 +83,8 @@ func TestAliyunSDKConditionalObjectIdentityReads(t *testing.T) {
 	require.NoError(t, err)
 	sdk := &AliyunSDK{bucket: bucket}
 
+	testOrdinaryObjectReadRanges(t, sdk)
+
 	identity, err := sdk.StatObjectIdentity(context.Background(), "object")
 	require.NoError(t, err)
 	wantLastModified, err := time.Parse(http.TimeFormat, lastModRaw)
