@@ -31,7 +31,7 @@ func InSubMetaTables(m *plan.SubscriptionMeta, tableName string) bool {
 		return true
 	}
 
-	for _, name := range strings.Split(m.Tables, Sep) {
+	for name := range strings.SplitSeq(m.Tables, Sep) {
 		if name == tableName {
 			return true
 		}
@@ -50,7 +50,7 @@ func SplitAccounts(s string) (accounts []string) {
 	if len(s) == 0 {
 		return
 	}
-	for _, split := range strings.Split(s, Sep) {
+	for split := range strings.SplitSeq(s, Sep) {
 		accounts = append(accounts, strings.TrimSpace(split))
 	}
 	return
@@ -81,7 +81,15 @@ func CanPubToAll(accountName, pubAllAccounts string) bool {
 	if pubAllAccounts == PubAllAccounts {
 		return true
 	}
-	return slices.Contains(SplitAccounts(pubAllAccounts), accountName)
+	if pubAllAccounts == "" {
+		return false
+	}
+	for account := range strings.SplitSeq(pubAllAccounts, Sep) {
+		if strings.TrimSpace(account) == accountName {
+			return true
+		}
+	}
+	return false
 }
 
 func RemoveTable(oldTableListStr, tblName string) string {
