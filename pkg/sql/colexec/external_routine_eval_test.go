@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/udf/protocol"
 	"github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -828,4 +829,28 @@ func TestExternalRoutineSkipsArgumentsForEmptySelection(t *testing.T) {
 			require.Zero(t, seen, "an unselected call must not evaluate any arguments")
 		})
 	}
+}
+
+func TestExternalRoutineEvalRenewsExpiringGroup(t *testing.T) {
+	e := &ExternalRoutineEval{}
+	now := protocol.GroupNow()
+	first := make(map[string]string)
+	require.NoError(t, e.attachInvocationGroupAt(first, "statement", now))
+	second := make(map[string]string)
+	require.NoError(t, e.attachInvocationGroupAt(second, "statement", now.Add(time.Minute)))
+	require.Equal(t, first["group_id"], second["group_id"])
+	require.Equal(t, "2", second["group_epoch"])
+	renewed := make(map[string]string)
+	require.NoError(t, e.attachInvocationGroupAt(renewed, "statement", now.Add(6*time.Minute)))
+	require.NotEqual(t, first["group_id"], renewed["group_id"])
+	require.Equal(t, "1", renewed["group_epoch"])
+	missing := make(map[string]string)
+	require.NoError(t, e.attachInvocationGroupAt(missing, "", now))
+	require.NotEqual(t, renewed["group_id"], missing["group_id"])
+	require.Equal(t, "1", missing["group_epoch"])
+	_, err := protocol.GroupIdentityDeadline(missing["group_id"])
+	require.NoError(t, err)
+	different := make(map[string]string)
+	require.NoError(t, e.attachInvocationGroupAt(different, "different", now))
+	require.NotEqual(t, renewed["group_id"], different["group_id"])
 }

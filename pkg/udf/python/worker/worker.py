@@ -96,9 +96,11 @@ MAX_LEDGER_ENTRIES = 10000
 MAX_LEDGER_BYTES = 16 << 20
 # Closed group fences are retained separately from terminal records. They are
 # the proof that permits TTL collection without allowing an old tuple to
-# regain an execution grant. The cap makes the safety cost explicit: once the
-# owner fence is full, admission fails closed until a durable scheduler fence
-# is available.
+# regain an execution grant. An expired immutable identity rejects all new
+# Opens, allowing its inactive fence to retire. Live retention windows remain
+# bounded and apply backpressure instead of evicting replay protection.
+GROUP_IDENTITY_CONTRACT = "expiring-v1"
+GROUP_IDENTITY_MAX_FUTURE_MS = 15 * 60 * 1000
 MAX_CLOSED_GROUP_ENTRIES = MAX_LEDGER_ENTRIES
 MAX_CLOSED_GROUP_BYTES = MAX_LEDGER_BYTES
 TERMINAL_TTL_SECONDS = 300.0
@@ -391,6 +393,7 @@ _DEFINITION_VALIDATION_KEYS = frozenset(
 _CAPABILITY_RESPONSE_KEYS = frozenset(
     {
         "protocol_version",
+        "group_identity_contract",
         "abi_contract",
         "adapter_version",
         "sdk_version",
@@ -1143,6 +1146,7 @@ def _encode_capabilities(request: Dict[str, Any], lease_epoch: int = 1) -> bytes
         raise ValueError("PROTOCOL: invalid worker lease epoch")
     value = {
         "protocol_version": PROTOCOL_VERSION,
+        "group_identity_contract": GROUP_IDENTITY_CONTRACT,
         "abi_contract": ABI_CONTRACT,
         "adapter_version": ADAPTER_VERSION,
         "sdk_version": SDK_VERSION,
@@ -3198,6 +3202,20 @@ class _InvocationState:
                 self.condition.wait(min(remaining, 0.2))
 
 
+def _group_deadline(group_id: str) -> int:
+    parts = group_id.split("/")
+    if len(parts) != 3 or parts[0] != "py1":
+        raise ValueError("PROTOCOL: invalid expiring group identity")
+    try:
+        millis = int(parts[1])
+        nonce = _uuid.UUID(parts[2])
+    except (ValueError, AttributeError) as exc:
+        raise ValueError("PROTOCOL: invalid group admission deadline or nonce") from exc
+    if not 0 < millis <= 253402300799999 or str(millis) != parts[1] or str(nonce) != parts[2]:
+        raise ValueError("PROTOCOL: noncanonical group identity")
+    return millis
+
+
 class RoutineFlightServer(_FlightServerBase):
     def __init__(
         self,
@@ -3206,6 +3224,7 @@ class RoutineFlightServer(_FlightServerBase):
         clock=time.monotonic,
         terminal_ttl_seconds=TERMINAL_TTL_SECONDS,
         lease_epoch=1,
+        wall_clock=time.time,
     ):
         if isinstance(lease_epoch, bool) or not isinstance(lease_epoch, int) or lease_epoch <= 0 or lease_epoch > (1 << 64) - 1:
             raise ValueError("PROTOCOL: invalid worker lease epoch")
@@ -3224,6 +3243,9 @@ class RoutineFlightServer(_FlightServerBase):
         self._reserved_groups: set[tuple] = set()
         self._reserved_group_bytes = 0
         self._clock = clock
+        self._group_wall_clock = wall_clock
+        self._group_last_monotonic = clock()
+        self._group_last_time = wall_clock()
         self._terminal_ttl_seconds = terminal_ttl_seconds
         self._lease_epoch = lease_epoch
         # H is independent from the number of admitted Flight invocations K.
@@ -3266,12 +3288,22 @@ class RoutineFlightServer(_FlightServerBase):
         # account-scoped key rather than only charging the display id.
         return len(group_key[1].encode("utf-8")) + 16
 
+    def _group_time_locked(self) -> float:
+        monotonic = self._clock()
+        progress = max(0.0, monotonic - self._group_last_monotonic)
+        now = max(self._group_wall_clock(), self._group_last_time + progress)
+        self._group_last_monotonic = max(monotonic, self._group_last_monotonic)
+        self._group_last_time = now
+        return now * 1000
+
     def _purge_terminal_locked(self, now: float) -> None:
+        group_now = self._group_time_locked()
         expired = [
             key
             for key, record in self._terminal.items()
             if record.expires_at <= now
-            and self._closed_groups.get(self._group_key(key), 0) >= key[3]
+            and (self._closed_groups.get(self._group_key(key), 0) >= key[3]
+                 or _group_deadline(key[2]) <= group_now)
         ]
         for key in expired:
             record = self._terminal.pop(key)
@@ -3281,6 +3313,12 @@ class RoutineFlightServer(_FlightServerBase):
         size = self._entry_bytes(key)
         group_key, group_epoch = self._group_key(key), key[3]
         with self._lock:
+            now = self._group_time_locked()
+            deadline = _group_deadline(key[2])
+            if deadline <= now:
+                raise ValueError("PROTOCOL: execution group admission deadline expired")
+            if deadline > now + GROUP_IDENTITY_MAX_FUTURE_MS:
+                raise ValueError("PROTOCOL: group admission deadline is too far in the future")
             if self._closed_groups.get(group_key, 0) >= group_epoch:
                 raise ValueError("PROTOCOL: execution group epoch is already closed")
             self._purge_terminal_locked(self._clock())
@@ -3296,6 +3334,14 @@ class RoutineFlightServer(_FlightServerBase):
                 raise ValueError("RESOURCE_EXHAUSTED: terminal ledger bytes are full")
             if group_key not in self._closed_groups and group_key not in self._reserved_groups:
                 fence_bytes = self._group_fence_bytes(group_key)
+                # Lazy collection under pressure keeps the normal Open path
+                # independent of the number of completed group fences.
+                if (len(self._closed_groups) + len(self._reserved_groups) >= MAX_CLOSED_GROUP_ENTRIES
+                    or self._closed_group_bytes + self._reserved_group_bytes + fence_bytes > MAX_CLOSED_GROUP_BYTES):
+                    for closed in list(self._closed_groups):
+                        if closed not in self._active_groups and _group_deadline(closed[1]) <= now:
+                            self._closed_groups.pop(closed)
+                            self._closed_group_bytes -= self._group_fence_bytes(closed)
                 if (
                     len(self._closed_groups) + len(self._reserved_groups)
                     >= MAX_CLOSED_GROUP_ENTRIES

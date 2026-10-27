@@ -32,6 +32,14 @@ sys.modules[spec.name] = worker
 spec.loader.exec_module(worker)
 
 
+_TEST_GROUP_EXPIRY = int((time.time() + 600) * 1000)
+
+def _test_group_id(label, expires=None):
+    if label.startswith("py1/"):
+        return label
+    return f"py1/{expires if expires is not None else _TEST_GROUP_EXPIRY}/{uuid.uuid5(uuid.NAMESPACE_OID, label)}"
+
+
 def complete_open_payload(payload):
     """Build a current-contract Open payload for direct Flight tests."""
     payload = dict(payload)
@@ -540,7 +548,7 @@ class WorkerContractTest(unittest.TestCase):
         fence = {
             "account_id": 1,
             "statement_id": "legacy-demo",
-            "group_id": "legacy-group",
+            "group_id": _test_group_id("legacy-group"),
             "group_epoch": 1,
             "invocation_id": "legacy-invocation",
             "lease_epoch": 1,
@@ -597,7 +605,7 @@ class WorkerContractTest(unittest.TestCase):
         fence = {
             "account_id": 1,
             "statement_id": "missing-context",
-            "group_id": "missing-context-group",
+            "group_id": _test_group_id("missing-context-group"),
             "group_epoch": 1,
             "invocation_id": "missing-context-invocation",
             "lease_epoch": 1,
@@ -652,7 +660,7 @@ class WorkerContractTest(unittest.TestCase):
     def test_worker_rejects_a_tuple_from_another_instance(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0", lease_epoch=17)
         with self.assertRaisesRegex(ValueError, "STALE_LEASE_EPOCH"):
-            server._require_current_lease((1, "statement", "group", 1, "invocation", 16))
+            server._require_current_lease((1, "statement", _test_group_id("group"), 1, "invocation", 16))
         with self.assertRaisesRegex(ValueError, "invalid worker lease epoch"):
             worker.RoutineFlightServer("grpc://127.0.0.1:0", lease_epoch=0)
 
@@ -716,7 +724,7 @@ class WorkerContractTest(unittest.TestCase):
         fence = {
             "account_id": 1,
             "statement_id": "shutdown",
-            "group_id": "shutdown-group",
+            "group_id": _test_group_id("shutdown-group"),
             "group_epoch": 1,
             "invocation_id": "shutdown-invocation",
             "lease_epoch": 1,
@@ -1063,7 +1071,7 @@ class WorkerContractTest(unittest.TestCase):
         fence = {
             "account_id": 1,
             "statement_id": "review",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "zero-sequence",
             "lease_epoch": 1,
@@ -1091,7 +1099,7 @@ class WorkerContractTest(unittest.TestCase):
         fence = {
             "account_id": 1,
             "statement_id": "statement",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "invocation",
             "lease_epoch": 1,
@@ -1225,7 +1233,7 @@ class WorkerContractTest(unittest.TestCase):
             value = {
                 "account_id": 1,
                 "statement_id": "statement",
-                "group_id": "group",
+                "group_id": _test_group_id("group"),
                 "group_epoch": 1,
                 "invocation_id": "invocation",
                 "lease_epoch": 1,
@@ -1248,7 +1256,7 @@ class WorkerContractTest(unittest.TestCase):
 
     def test_duplicate_open_cleanup_requires_state_ownership(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
-        key = (1, "statement", "group", 1, "invocation", 1)
+        key = (1, "statement", _test_group_id("group"), 1, "invocation", 1)
         state = server._admit(key)
         server._finish_invocation(key, None)
         self.assertIn(key, server._active)
@@ -1258,7 +1266,7 @@ class WorkerContractTest(unittest.TestCase):
 
     def test_exchange_cleanup_releases_invocation_when_resource_close_fails(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
-        key = (1, "statement", "cleanup-group", 1, "cleanup", 1)
+        key = (1, "statement", _test_group_id("cleanup-group"), 1, "cleanup", 1)
         state = server._admit(key)
 
         class FailingClose:
@@ -1279,7 +1287,7 @@ class WorkerContractTest(unittest.TestCase):
 
     def test_exchange_cleanup_retries_a_handler_close_owned_by_the_session(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
-        key = (1, "statement", "cleanup-retry-group", 1, "cleanup-retry", 1)
+        key = (1, "statement", _test_group_id("cleanup-retry-group"), 1, "cleanup-retry", 1)
         state = server._admit(key)
 
         class RetryingClose:
@@ -1303,7 +1311,7 @@ class WorkerContractTest(unittest.TestCase):
 
     def test_persistent_handler_cleanup_retains_invocation_until_owner_recovers(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
-        key = (1, "statement", "cleanup-owner-group", 1, "cleanup-owner", 1)
+        key = (1, "statement", _test_group_id("cleanup-owner-group"), 1, "cleanup-owner", 1)
         state = server._admit(key)
 
         class RetainedSession(worker._HandlerProcessSession):
@@ -1353,7 +1361,7 @@ class WorkerContractTest(unittest.TestCase):
 
     def test_failed_native_reader_cleanup_retains_invocation_until_reader_stops(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
-        key = (1, "statement", "reader-cleanup-group", 1, "reader-cleanup", 1)
+        key = (1, "statement", _test_group_id("reader-cleanup-group"), 1, "reader-cleanup", 1)
         state = server._admit(key)
 
         class RetainedReader(worker._ExchangeInputReader):
@@ -1397,7 +1405,7 @@ class WorkerContractTest(unittest.TestCase):
         fence = {
             "account_id": 1,
             "statement_id": "digest",
-            "group_id": "digest-group",
+            "group_id": _test_group_id("digest-group"),
             "group_epoch": 1,
             "invocation_id": "stale-artifact",
             "lease_epoch": 1,
@@ -1458,7 +1466,7 @@ class WorkerContractTest(unittest.TestCase):
         fence = {
             "account_id": 1,
             "statement_id": "budget",
-            "group_id": "budget-group",
+            "group_id": _test_group_id("budget-group"),
             "group_epoch": 1,
             "invocation_id": "invalid-budget",
             "lease_epoch": 1,
@@ -1545,7 +1553,7 @@ class WorkerContractTest(unittest.TestCase):
                 fence = {
                     "account_id": 1,
                     "statement_id": "cumulative-budget",
-                    "group_id": f"cumulative-{limit_name}",
+                    "group_id": _test_group_id(f"cumulative-{limit_name}"),
                     "group_epoch": 1,
                     "invocation_id": f"cumulative-{limit_name}-invocation",
                     "lease_epoch": 1,
@@ -2160,7 +2168,7 @@ class WorkerContractTest(unittest.TestCase):
             "handler_timeout_seconds": 10,
         })
         fence = {"account_id": 1, "statement_id": "construction",
-                 "group_id": "construction", "group_epoch": 1,
+                 "group_id": _test_group_id("construction"), "group_epoch": 1,
                  "invocation_id": "failed", "lease_epoch": 1}
         batch = pa.RecordBatch.from_arrays(
             [pa.array([7], type=pa.int64())],
@@ -2318,12 +2326,43 @@ class WorkerContractTest(unittest.TestCase):
         client = flight.FlightClient(("127.0.0.1", server.port))
         server_thread = threading.Thread(target=server.serve, daemon=True)
         server_thread.start()
+        try:
+            self._assert_flight_half_close(client, _test_group_id("flight-group"))
+        finally:
+            client.close()
+            server.shutdown()
+            server_thread.join(3)
+
+    def test_real_flight_recovers_group_capacity_after_expiry(self):
+        now = [time.time()]
+        server = worker.RoutineFlightServer(
+            "grpc://127.0.0.1:0", clock=lambda: now[0], wall_clock=lambda: now[0],
+            terminal_ttl_seconds=1.0,
+        )
+        client = flight.FlightClient(("127.0.0.1", server.port))
+        thread = threading.Thread(target=server.serve, daemon=True)
+        thread.start()
+        try:
+            with mock.patch.object(worker, "MAX_CLOSED_GROUP_ENTRIES", 1):
+                for statement in range(3):
+                    group = _test_group_id(str(statement), int((now[0]+5)*1000))
+                    self._assert_flight_half_close(client, group)
+                    with server._lock:
+                        self.assertFalse(server._active)
+                        self.assertEqual(1, len(server._closed_groups))
+                    now[0] += 6.0
+        finally:
+            client.close()
+            server.shutdown()
+            thread.join(3)
+
+    def _assert_flight_half_close(self, client, group_id):
         writer = None
         try:
             fence = {
                 "account_id": 1,
                 "statement_id": "flight-contract",
-                "group_id": "flight-group",
+                "group_id": group_id,
                 "group_epoch": 1,
                 "invocation_id": "delayed-float",
                 "lease_epoch": 1,
@@ -2413,9 +2452,6 @@ class WorkerContractTest(unittest.TestCase):
                     writer.close()
                 except Exception:
                     pass
-            client.close()
-            server.shutdown()
-            server_thread.join(3)
 
     def test_real_flight_reuses_handler_within_one_burst(self):
         """A bounded invocation burst compiles the handler only once."""
@@ -2430,7 +2466,7 @@ class WorkerContractTest(unittest.TestCase):
                 fence = {
                     "account_id": 1,
                     "statement_id": "flight-burst",
-                    "group_id": "burst-group",
+                    "group_id": _test_group_id("burst-group"),
                     "group_epoch": 1,
                     "invocation_id": "reuse-handler",
                     "lease_epoch": 1,
@@ -2554,7 +2590,7 @@ class WorkerContractTest(unittest.TestCase):
             fence = {
                 "account_id": 1,
                 "statement_id": "finish-response-loss",
-                "group_id": "finish-group",
+                "group_id": _test_group_id("finish-group"),
                 "group_epoch": 1,
                 "invocation_id": "response-loss",
                 "lease_epoch": 1,
@@ -2960,7 +2996,7 @@ except Exception:
         fence = {
             "account_id": 1,
             "statement_id": "review",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "late-input",
             "lease_epoch": 1,
@@ -3038,7 +3074,7 @@ except Exception:
         fence = {
             "account_id": 1,
             "statement_id": "blocked-reader",
-            "group_id": "blocked-reader-group",
+            "group_id": _test_group_id("blocked-reader-group"),
             "group_epoch": 1,
             "invocation_id": "blocked-reader-invocation",
             "lease_epoch": 1,
@@ -3140,7 +3176,7 @@ except Exception:
         fence = {
             "account_id": 1,
             "statement_id": "cancelled-handoff",
-            "group_id": "cancelled-handoff-group",
+            "group_id": _test_group_id("cancelled-handoff-group"),
             "group_epoch": 1,
             "invocation_id": "cancelled-handoff-invocation",
             "lease_epoch": 1,
@@ -3251,7 +3287,7 @@ except Exception:
         fence = {
             "account_id": 1,
             "statement_id": "review",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "duplicate-open",
             "lease_epoch": 1,
@@ -3315,7 +3351,7 @@ except Exception:
         fence = {
             "account_id": 1,
             "statement_id": "review",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "invalid-open",
             "lease_epoch": 1,
@@ -3363,7 +3399,7 @@ except Exception:
         fence = {
             "account_id": 1,
             "statement_id": "review",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "empty-frame",
             "lease_epoch": 1,
@@ -3420,7 +3456,7 @@ except Exception:
         fence = {
             "account_id": 1,
             "statement_id": "review",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "invalid-input-values",
             "lease_epoch": 1,
@@ -3742,14 +3778,14 @@ except Exception:
             worker.MAX_LEDGER_ENTRIES = 1
             worker.MAX_LEDGER_BYTES = 1 << 20
             server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
-            first = (1, "statement", "group", 1, "invocation", 1)
+            first = (1, "statement", _test_group_id("group"), 1, "invocation", 1)
             state = server._admit(first)
             with server._lock:
                 server._active.pop(first)
                 server._active_bytes -= state.terminal_bytes
                 server._remember_terminal_locked(first, state)
             with self.assertRaisesRegex(ValueError, "entries are full"):
-                server._admit((1, "statement", "other-group", 1, "second", 1))
+                server._admit((1, "statement", _test_group_id("other-group"), 1, "second", 1))
             self.assertIn(first, server._terminal)
             with server._lock:
                 server._terminal[first] = worker._TerminalRecord(
@@ -3758,7 +3794,7 @@ except Exception:
                 )
                 server._close_group_epoch_locked(first)
                 server._purge_terminal_locked(1.0)
-            second = server._admit((1, "statement", "other-group", 1, "second", 1))
+            second = server._admit((1, "statement", _test_group_id("other-group"), 1, "second", 1))
             self.assertIsNotNone(second)
         finally:
             worker.MAX_LEDGER_ENTRIES = old_records
@@ -3776,9 +3812,9 @@ except Exception:
                 clock=lambda: now[0],
                 terminal_ttl_seconds=10.0,
             )
-            first = (1, "statement", "group-first", 1, "first", 1)
-            second = (1, "statement", "group-second", 1, "second", 1)
-            third = (1, "statement", "group-third", 1, "third", 1)
+            first = (1, "statement", _test_group_id("group-first"), 1, "first", 1)
+            second = (1, "statement", _test_group_id("group-second"), 1, "second", 1)
+            third = (1, "statement", _test_group_id("group-third"), 1, "third", 1)
             for key in (first, second):
                 state = server._admit(key)
                 state.mark_finish_sent("finish-" + key[4])
@@ -3802,15 +3838,142 @@ except Exception:
         server = worker.RoutineFlightServer(
             "grpc://127.0.0.1:0", clock=lambda: now[0], terminal_ttl_seconds=1.0
         )
-        key = (1, "statement", "closed-group", 1, "first", 1)
+        key = (1, "statement", _test_group_id("closed-group"), 1, "first", 1)
         state = server._admit(key)
         server._finish_invocation(key, state)
         now[0] += 2.0
         with self.assertRaisesRegex(ValueError, "group epoch is already closed"):
-            server._admit((1, "statement", "closed-group", 1, "late", 1))
+            server._admit((1, "statement", _test_group_id("closed-group"), 1, "late", 1))
         with server._lock:
             server._purge_terminal_locked(now[0])
         self.assertNotIn(key, server._terminal)
+
+    def test_expired_groups_retire_without_reopening_stale_epochs(self):
+        now = [100.0]
+        server = worker.RoutineFlightServer(
+            "grpc://127.0.0.1:0", clock=lambda: now[0],
+            wall_clock=lambda: now[0], terminal_ttl_seconds=1.0,
+        )
+        self.addCleanup(server.shutdown)
+        oldest = None
+        with mock.patch.object(worker, "MAX_CLOSED_GROUP_ENTRIES", 2):
+            for window in range(3):
+                for member in range(2):
+                    group = _test_group_id(f"{window}-{member}", int((now[0]+5)*1000))
+                    key = (1, "statement", group, 1, "invocation", 1)
+                    oldest = oldest or key
+                    state = server._admit(key)
+                    server._finish_invocation(key, state)
+                    self.assertLessEqual(len(server._closed_groups), 2)
+                now[0] += 6.0
+            # Opening a fresh identity collects expired closed fences and TTL
+            # tombstones. The retired identity remains inadmissible forever.
+            fresh = (1, "new", _test_group_id("fresh", int((now[0]+5)*1000)), 1, "fresh", 1)
+            state = server._admit(fresh)
+            self.assertNotIn(server._group_key(oldest), server._closed_groups)
+            self.assertNotIn(oldest, server._terminal)
+            for epoch in (1, 2):
+                with self.assertRaisesRegex(ValueError, "deadline expired"):
+                    server._admit((*oldest[:3], epoch, "new-member", 1))
+            server._finish_invocation(fresh, state)
+            self.assertFalse(server._active)
+            self.assertFalse(server._reserved_groups)
+            self.assertEqual(0, server._reserved_group_bytes)
+            self.assertEqual(server._group_fence_bytes(server._group_key(fresh)), server._closed_group_bytes)
+
+    def test_active_expired_group_keeps_cleanup_ownership(self):
+        self.enterContext(mock.patch.object(worker, "MAX_CLOSED_GROUP_ENTRIES", 2))
+        now = [100.0]
+        server = worker.RoutineFlightServer(
+            "grpc://127.0.0.1:0", clock=lambda: now[0], wall_clock=lambda: now[0],
+            terminal_ttl_seconds=1.0,
+        )
+        self.addCleanup(server.shutdown)
+        group = _test_group_id("held", 105000)
+        first = (1, "statement", group, 1, "first", 1)
+        state = server._admit(first)
+        server._finish_invocation(first, state)
+        active = (1, "statement", group, 2, "active", 1)
+        state = server._admit(active)
+        now[0] = 106.0
+        other = (1, "other", _test_group_id("other", 120000), 1, "other", 1)
+        other_state = server._admit(other)
+        self.assertIs(server._active[active], state)
+        self.assertIn(server._group_key(active), server._closed_groups)
+        self.assertEqual(2, len(server._active))
+        server._finish_invocation(active, state)
+        server._finish_invocation(active, state)  # stale cleanup is a no-op
+        server._finish_invocation(other, other_state)
+        fresh = (1, "fresh", _test_group_id("fresh", 120000), 1, "fresh", 1)
+        fresh_state = server._admit(fresh)
+        self.assertNotIn(server._group_key(active), server._closed_groups)
+        server._finish_invocation(fresh, fresh_state)
+
+    def test_group_admission_clock_cannot_resurrect_retired_identity(self):
+        self.enterContext(mock.patch.object(worker, "MAX_CLOSED_GROUP_ENTRIES", 1))
+        wall, monotonic = [100.0], [10.0]
+        server = worker.RoutineFlightServer(
+            "grpc://127.0.0.1:0", clock=lambda: monotonic[0],
+            wall_clock=lambda: wall[0], terminal_ttl_seconds=1.0,
+        )
+        self.addCleanup(server.shutdown)
+        key = (1, "statement", _test_group_id("retired", 105000), 1, "first", 1)
+        state = server._admit(key)
+        server._finish_invocation(key, state)
+        wall[0], monotonic[0] = 106.0, 16.0
+        fresh = (1, "new", _test_group_id("new", 108000), 1, "new", 1)
+        state = server._admit(fresh)
+        self.assertNotIn(server._group_key(key), server._closed_groups)
+        server._finish_invocation(fresh, state)
+        wall[0] = 90.0
+        with self.assertRaisesRegex(ValueError, "deadline expired"):
+            server._admit(key)
+        monotonic[0] = 19.0  # monotonic elapsed time progresses despite rollback
+        with self.assertRaisesRegex(ValueError, "deadline expired"):
+            server._admit(fresh)
+
+    def test_group_deadline_future_bound(self):
+        server = worker.RoutineFlightServer(
+            "grpc://127.0.0.1:0", clock=lambda: 100.0, wall_clock=lambda: 100.0,
+        )
+        self.addCleanup(server.shutdown)
+        boundary = 100000 + worker.GROUP_IDENTITY_MAX_FUTURE_MS
+        for expires in (100000, boundary+1):
+            key = (1, "statement", _test_group_id("invalid", expires), 1, "first", 1)
+            with self.assertRaises(ValueError):
+                server._admit(key)
+            self.assertFalse(server._active)
+            self.assertFalse(server._reserved_groups)
+            self.assertEqual(0, server._reserved_group_bytes)
+        key = (1, "statement", _test_group_id("boundary", boundary), 1, "first", 1)
+        state = server._admit(key)
+        server._finish_invocation(key, state)
+
+    def test_group_clock_progresses_after_forward_jump_then_rollback(self):
+        self.enterContext(mock.patch.object(worker, "MAX_CLOSED_GROUP_ENTRIES", 1))
+        wall, monotonic = [100.0], [10.0]
+        server = worker.RoutineFlightServer(
+            "grpc://127.0.0.1:0", clock=lambda: monotonic[0],
+            wall_clock=lambda: wall[0], terminal_ttl_seconds=1.0,
+        )
+        self.addCleanup(server.shutdown)
+        wall[0] = 10000.0
+        key = (1, "statement", _test_group_id("future", 10005000), 1, "first", 1)
+        state = server._admit(key)
+        server._finish_invocation(key, state)
+        wall[0], monotonic[0] = 100.0, 16.0
+        fresh = (1, "new", _test_group_id("new", 10010000), 1, "new", 1)
+        state = server._admit(fresh)
+        self.assertNotIn(server._group_key(key), server._closed_groups)
+        with self.assertRaisesRegex(ValueError, "deadline expired"):
+            server._admit(key)
+        server._finish_invocation(fresh, state)
+
+    def test_group_identity_rejects_legacy_and_noncanonical_deadlines(self):
+        for value in ("legacy", "py1/+1/"+str(uuid.uuid4()), "py1/01/"+str(uuid.uuid4()),
+                      "py1/253402300800000/"+str(uuid.uuid4()), "py1/1000/invalid"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                worker._group_deadline(value)
 
     def test_active_groups_reserve_future_closed_fences(self):
         old_entries = worker.MAX_CLOSED_GROUP_ENTRIES
@@ -3819,8 +3982,8 @@ except Exception:
             worker.MAX_CLOSED_GROUP_ENTRIES = 1
             worker.MAX_CLOSED_GROUP_BYTES = 1 << 20
             server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
-            first = (1, "statement", "reserved-first", 1, "first", 1)
-            second = (1, "statement", "reserved-second", 1, "second", 1)
+            first = (1, "statement", _test_group_id("reserved-first"), 1, "first", 1)
+            second = (1, "statement", _test_group_id("reserved-second"), 1, "second", 1)
             first_state = server._admit(first)
             self.assertIn((first[0], first[2]), server._reserved_groups)
             with self.assertRaisesRegex(ValueError, "closed-group fence is full"):
@@ -3837,42 +4000,42 @@ except Exception:
 
     def test_active_group_rejects_a_second_member_before_handler_creation(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
-        first = (1, "statement", "single-owner", 1, "first", 1)
+        first = (1, "statement", _test_group_id("single-owner"), 1, "first", 1)
         first_state = server._admit(first)
         try:
             with self.assertRaisesRegex(ValueError, "execution group epoch is already active"):
-                server._admit((1, "statement", "single-owner", 1, "second", 1))
+                server._admit((1, "statement", _test_group_id("single-owner"), 1, "second", 1))
         finally:
             server._finish_invocation(first, first_state)
 
     def test_group_fence_is_scoped_by_account(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
-        first = (1, "statement-a", "same-name", 1, "first", 1)
-        second = (2, "statement-b", "same-name", 1, "second", 1)
+        first = (1, "statement-a", _test_group_id("same-name"), 1, "first", 1)
+        second = (2, "statement-b", _test_group_id("same-name"), 1, "second", 1)
         first_state = server._admit(first)
         second_state = server._admit(second)
         try:
-            self.assertIn((1, "same-name"), server._active_groups)
-            self.assertIn((2, "same-name"), server._active_groups)
+            self.assertIn((1, _test_group_id("same-name")), server._active_groups)
+            self.assertIn((2, _test_group_id("same-name")), server._active_groups)
             server._finish_invocation(first, first_state)
             self.assertIn(second, server._active)
-            self.assertIn((1, "same-name"), server._closed_groups)
-            self.assertNotIn((2, "same-name"), server._closed_groups)
+            self.assertIn((1, _test_group_id("same-name")), server._closed_groups)
+            self.assertNotIn((2, _test_group_id("same-name")), server._closed_groups)
         finally:
             server._finish_invocation(second, second_state)
 
         # Each account can advance its own epoch independently after the
         # previous same-named group has closed.
         self.assertIsNotNone(
-            server._admit((1, "statement-a-2", "same-name", 2, "third", 1))
+            server._admit((1, "statement-a-2", _test_group_id("same-name"), 2, "third", 1))
         )
         self.assertIsNotNone(
-            server._admit((2, "statement-b-2", "same-name", 2, "fourth", 1))
+            server._admit((2, "statement-b-2", _test_group_id("same-name"), 2, "fourth", 1))
         )
 
     def test_terminal_ack_requires_the_completed_fence(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
-        key = (1, "statement", "group", 1, "completed", 1)
+        key = (1, "statement", _test_group_id("group"), 1, "completed", 1)
         state = server._admit(key)
         state.last_result = 2
         state.mark_finish_sent("finish-2")
@@ -3933,7 +4096,7 @@ except Exception:
 
     def test_late_finish_ack_cannot_promote_unconfirmed_terminal(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
-        key = (1, "statement", "group", 1, "unconfirmed", 1)
+        key = (1, "statement", _test_group_id("group"), 1, "unconfirmed", 1)
         state = server._admit(key)
         state.mark_finish_sent("finish-unconfirmed")
         server._finish_invocation(key, state)
@@ -3976,7 +4139,7 @@ except Exception:
 
     def test_cancelled_terminal_is_frozen_and_rejects_late_ack(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
-        key = (1, "statement", "cancel-group", 1, "cancelled", 1)
+        key = (1, "statement", _test_group_id("cancel-group"), 1, "cancelled", 1)
         state = server._admit(key)
         state.mark_cancelled()
         with self.assertRaisesRegex(ValueError, "already terminal"):
@@ -4001,7 +4164,7 @@ except Exception:
 
     def test_cancelled_or_shutdown_action_cannot_ack_active_invocation(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
-        key = (1, "statement", "action-cancel", 1, "active", 1)
+        key = (1, "statement", _test_group_id("action-cancel"), 1, "active", 1)
         state = server._admit(key)
         state.mark_finish_sent("finish-active")
         tuple_value = {
@@ -4029,27 +4192,27 @@ except Exception:
 
     def test_active_fence_cannot_be_admitted_twice(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
-        key = (1, "statement", "group", 1, "invocation", 1)
+        key = (1, "statement", _test_group_id("group"), 1, "invocation", 1)
         server._admit(key)
         with self.assertRaisesRegex(ValueError, "fence is active"):
             server._admit(key)
         with self.assertRaisesRegex(ValueError, "fencing tuple changed"):
             worker._require_tuple(
-                {"account_id": 1, "statement_id": "other", "group_id": "group", "group_epoch": 1, "invocation_id": "invocation", "lease_epoch": 1},
-                {"account_id": 1, "statement_id": "statement", "group_id": "group", "group_epoch": 1, "invocation_id": "invocation", "lease_epoch": 1},
+                {"account_id": 1, "statement_id": "other", "group_id": _test_group_id("group"), "group_epoch": 1, "invocation_id": "invocation", "lease_epoch": 1},
+                {"account_id": 1, "statement_id": "statement", "group_id": _test_group_id("group"), "group_epoch": 1, "invocation_id": "invocation", "lease_epoch": 1},
             )
 
     def test_control_numeric_fields_are_strict(self):
         tuple_value = {
             "account_id": 0,
             "statement_id": "statement",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "invocation",
             "lease_epoch": 1,
         }
         self.assertEqual(
-            (0, "statement", "group", 1, "invocation", 1),
+            (0, "statement", _test_group_id("group"), 1, "invocation", 1),
             worker._tuple_key(tuple_value),
         )
         with self.assertRaisesRegex(ValueError, "unsupported control"):
@@ -4063,7 +4226,7 @@ except Exception:
         tuple_value = {
             "account_id": 0,
             "statement_id": "statement",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "invocation",
             "lease_epoch": 1,
@@ -4084,7 +4247,7 @@ except Exception:
         tuple_value = {
             "account_id": 1,
             "statement_id": "statement",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "invocation",
             "lease_epoch": 1,
@@ -4116,7 +4279,7 @@ except Exception:
         tuple_value = {
             "account_id": 1,
             "statement_id": "statement",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "invocation",
             "lease_epoch": 1,
@@ -4137,7 +4300,7 @@ except Exception:
         tuple_value = {
             "account_id": 1,
             "statement_id": "statement",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "invocation",
             "lease_epoch": 1,
@@ -4156,7 +4319,7 @@ except Exception:
         tuple_value = {
             "account_id": 1,
             "statement_id": "statement",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "invocation",
             "lease_epoch": 1,
@@ -4181,7 +4344,7 @@ except Exception:
         tuple_value = {
             "account_id": 0,
             "statement_id": "statement",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "invocation",
             "lease_epoch": 1,
@@ -4197,7 +4360,7 @@ except Exception:
         tuple_value = {
             "account_id": 1,
             "statement_id": "\ud800",
-            "group_id": "group",
+            "group_id": _test_group_id("group"),
             "group_epoch": 1,
             "invocation_id": "invocation",
             "lease_epoch": 1,
@@ -4223,7 +4386,7 @@ except Exception:
             "tuple": {
                 "account_id": 1,
                 "statement_id": "statement",
-                "group_id": "group",
+                "group_id": _test_group_id("group"),
                 "group_epoch": 1,
                 "invocation_id": "invocation",
                 "lease_epoch": 1,
