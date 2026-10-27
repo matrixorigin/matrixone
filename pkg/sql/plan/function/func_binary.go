@@ -4066,7 +4066,7 @@ func parseBaseIntegerPrefix(n []byte, fromBase int64) (int64, uint64, bool, erro
 	// to scan the suffix or allocate a string: the first non-digit terminates
 	// the prefix, and the bounded accumulator can decide overflow in one pass.
 	pos := 0
-	for pos < len(n) && isConvWhitespace(n[pos]) {
+	for pos < len(n) && isMySQLNumericWhitespace(n[pos]) {
 		pos++
 	}
 
@@ -4148,15 +4148,6 @@ func convDigitValue(ch byte) (uint8, bool) {
 		return ch - 'a' + 10, true
 	default:
 		return 0, false
-	}
-}
-
-func isConvWhitespace(ch byte) bool {
-	switch ch {
-	case ' ', '\t', '\n', '\v', '\f', '\r':
-		return true
-	default:
-		return false
 	}
 }
 
