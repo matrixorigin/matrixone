@@ -168,8 +168,7 @@ const (
 	MORPCVersion130    int64 = 130 // incomplete temporal string overloads and rejection diagnostics
 	MORPCVersion131    int64 = 131 // exact weighted percentile aggregate remote dispatch
 	MORPCVersion132    int64 = 132 // decimal float rounding and strict textual float conversions
-	MORPCVersion133    int64 = 133 // first remote fragment workspace adoption intake build (issue #25590); builds 114-132 were all taken on main when this shipped (the intake was renumbered twice: 114 -> 132 -> 133), so a current-main receiver advertising 132 still lacks the intake and is refused
-	MORPCLatestVersion       = MORPCVersion133
+	MORPCLatestVersion       = MORPCVersion132
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

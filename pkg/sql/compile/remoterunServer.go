@@ -291,38 +291,42 @@ func settleRemoteFragmentWorkspaceAfterDrain(
 	if !remoteRunScopesAdmitAdoption(runCompile.scopes) {
 		return dtRun.FinalizeRemoteFragmentWorkspace(runCompile.proc.Ctx, false)
 	}
-	// D3'' (issue #25590 design r11): capability reaches settlement
-	// through the stored REQUEST value, never a receiver-side global.
-	// A below-adoption or absent advertisement keeps the transferred
-	// classification unreachable — fail-closed, exactly like the run
-	// case's refusal (whose empty runs carry nothing to transfer, so a
-	// non-transferred settlement only ever runs an empty rollback for
-	// them).
-	if !requestAdoptsIntakeAdmission(receiver.coordinatorProtocolVersion) {
-		return dtRun.FinalizeRemoteFragmentWorkspace(runCompile.proc.Ctx, false)
-	}
+	// r17 run-scoped barrier (issue #25590 round-52 review): the drain
+	// is the adoption proof in BOTH stream modes. A negotiated stream
+	// carries its windowed flow, and the run case late-registers an
+	// accounting-only (no-window) flow for admitted scopes on a fresh
+	// stream, so an admitted run has one here in every supported
+	// configuration. The admission stays fail-closed: a missing barrier
+	// keeps the ending local — transfer requires the clean run's own
+	// flow to exist AND drain, so no configuration can release names
+	// before the recording side's intake has adopted them.
 	transferred := *runErr == nil
-	if *runErr == nil &&
-		receiver.streamLifecycle != nil &&
-		receiver.streamLifecycle.batchFlow != nil {
-		flow := receiver.streamLifecycle.batchFlow
-		drainErr := waitUntilPipelineBatchFlowDrained(
-			receiver.messageCtx,
-			receiver.connectionCtx,
-			flow,
-			func(count int, bytes uint64) {
-				logutil.Warn("pipeline batch drain delayed before fragment settlement",
-					zap.Uint64("stream-id", receiver.messageId),
-					zap.String("remote-address", receiver.clientSession.RemoteAddress()),
-					zap.Int("outstanding-batches", count),
-					zap.Uint64("outstanding-bytes", bytes))
-			})
-		// A receiver-driven stop maps an aborted flow to a drained
-		// terminal: batches the stream dropped after the stop never
-		// reached the recording side, so the fragment must keep its
-		// local owner for them instead of transferring.
-		transferred = drainErr == nil && !flow.wasStoppedByReceiver()
-		*runErr = drainErr
+	if *runErr == nil {
+		flow := (*pipelineBatchFlow)(nil)
+		if receiver.streamLifecycle != nil {
+			flow = receiver.streamLifecycle.batchFlow
+		}
+		if flow == nil {
+			transferred = false
+		} else {
+			drainErr := waitUntilPipelineBatchFlowDrained(
+				receiver.messageCtx,
+				receiver.connectionCtx,
+				flow,
+				func(count int, bytes uint64) {
+					logutil.Warn("pipeline batch drain delayed before fragment settlement",
+						zap.Uint64("stream-id", receiver.messageId),
+						zap.String("remote-address", receiver.clientSession.RemoteAddress()),
+						zap.Int("outstanding-batches", count),
+						zap.Uint64("outstanding-bytes", bytes))
+				})
+			// A receiver-driven stop maps an aborted flow to a drained
+			// terminal: batches the stream dropped after the stop never
+			// reached the recording side, so the fragment must keep its
+			// local owner for them instead of transferring.
+			transferred = drainErr == nil && !flow.wasStoppedByReceiver()
+			*runErr = drainErr
+		}
 	}
 	return dtRun.FinalizeRemoteFragmentWorkspace(runCompile.proc.Ctx, transferred)
 }
@@ -363,6 +367,20 @@ func (receiver *messageReceiverOnServer) hasLiveReceiverStop() bool {
 }
 
 func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
+	// r17 run-scoped ownership barrier (issue #25590 round-52 review):
+	// the batch flow the run case late-registers below is owned by this
+	// message's handling; removal at return keeps the barrier from
+	// outliving the message stream. ACKs flushed after removal are
+	// handled as benign registration misses by handlePipelineBatchAck,
+	// and a StopSending that arrives during the run aborts the flow by
+	// key through abortPipelineBatchFlow, so no terminal leaves a flow
+	// unowned behind it.
+	var lateLifecycle *pipelineStreamLifecycle
+	defer func() {
+		if lateLifecycle != nil {
+			lateLifecycle.remove()
+		}
+	}()
 
 	switch receiver.messageTyp {
 	case pipeline.Method_PrepareDoneNotifyMessage:
@@ -664,18 +682,35 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		}
 
 		runCompile.scopes = []*Scope{s}
-		// D3' (issue #25590 design r11): before any fragment pipeline
-		// step executes, a persistence-producing fragment refuses a
-		// request whose advertised coordinator capability is below the
-		// first adoption build — nothing persists, the definite error
-		// takes the sendError terminal, and the statement fails on
-		// both sides with nothing to delete.
-		if errRefuse := refuseRemoteWriteFromIncapableCoordinator(
-			receiver.getMessageContext(),
-			receiver.coordinatorProtocolVersion,
-			runCompile.scopes,
-		); errRefuse != nil {
-			return errRefuse
+		// r17 run-scoped ownership barrier (issue #25590 round-52
+		// review): a run whose decoded scopes admit adoption must
+		// sequence its names' release behind the recording side's
+		// intake adoption in EVERY supported configuration. A
+		// negotiated stream already carries its windowed flow
+		// (registered in cnPipelineHandler); a fresh stream — stream
+		// reuse disabled, or a run without a FinishAck request — has
+		// no flow at all, and before r17 the settlement then
+		// transferred the clean run with no adoption proof. The run
+		// registers an accounting-only (no-window) flow here: after
+		// the scope decode, the same classification the settlement
+		// uses, and before any emission. The sequences it stamps are
+		// acked by the recording side's unchanged receive loops after
+		// their intake adoption, so the settlement's drain proves
+		// adoption without imposing any credit window on the stream.
+		if receiver.streamLifecycle == nil &&
+			remoteRunScopesAdmitAdoption(runCompile.scopes) {
+			lateLifecycle, runErr = registerPipelineStreamLifecycle(
+				receiver.clientSession,
+				receiver.messageId,
+				newRunScopedPipelineBatchFlow())
+			if runErr != nil {
+				return runErr
+			}
+			receiver.streamLifecycle = lateLifecycle
+			// Close the same StopSending registration race the
+			// negotiated path closes: a stop that arrived before this
+			// registration is already in the cancellation tombstone.
+			receiver.abortBatchFlowForPendingStop()
 		}
 		if runErr = validateRemoteAllocationTopologyCapability(
 			runCompile.scopes,
@@ -748,10 +783,12 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		// (cancellation), the receiver stopped the stream before its
 		// end — settles through the ordinary rollback terminal and keeps
 		// a reachable deletion owner on THIS engine for exactly the names
-		// whose records can still land nowhere. A stream that negotiated
-		// no batch flow keeps the r5 clean-run classification (the peer
-		// cannot prove adoption; the design scopes the r6 guarantee to
-		// the negotiated protocol).
+		// whose records can still land nowhere. A stream that ends
+		// without a batch flow keeps the same local settlement: r17
+		// made the barrier a property of the run — every admitted
+		// scope set carries a flow, negotiated windowed or late
+		// registered no-window, and a missing flow is fail-closed
+		// non-transfer, never the r5 clean-run release.
 		settleErr := settleRemoteFragmentWorkspaceAfterDrain(receiver, runCompile, &runErr)
 		if settleErr != nil && runErr == nil {
 			runErr = settleErr
@@ -1006,15 +1043,6 @@ type messageReceiverOnServer struct {
 	acceptedTeardownMode  pipeline.StreamTeardownMode
 	streamLifecycle       *pipelineStreamLifecycle
 
-	// coordinatorProtocolVersion is the request's D3'' advertisement —
-	// the coordinator's own build protocol, stored per execution
-	// request (a fresh receiver per pipeline message is the reset).
-	// The run case's D3' refusal and the settlement's transferred
-	// classification consume exactly this stored value; absent/zero
-	// (an older coordinator build never sent the field) is the
-	// fail-closed incapable default.
-	coordinatorProtocolVersion int64
-
 	colexecServer *colexec.Server
 
 	// result.
@@ -1052,17 +1080,16 @@ func newMessageReceiverOnServer(
 	colexecServer *colexec.Server) (messageReceiverOnServer, error) {
 	connectionCtx := cs.SessionCtx()
 	receiver := messageReceiverOnServer{
-		messageCtx:                 ctx,
-		connectionCtx:              connectionCtx,
-		messageId:                  m.GetId(),
-		messageTyp:                 m.GetCmd(),
-		clientSession:              cs,
-		messageAcquirer:            messageAcquirer,
-		maxMessageSize:             maxMessageSizeToMoRpc,
-		needNotReply:               m.NeedNotReply,
-		requestedTeardownMode:      m.GetRequestedTeardownMode(),
-		coordinatorProtocolVersion: m.GetCoordinatorProtocolVersion(),
-		colexecServer:              colexecServer,
+		messageCtx:            ctx,
+		connectionCtx:         connectionCtx,
+		messageId:             m.GetId(),
+		messageTyp:            m.GetCmd(),
+		clientSession:         cs,
+		messageAcquirer:       messageAcquirer,
+		maxMessageSize:        maxMessageSizeToMoRpc,
+		needNotReply:          m.NeedNotReply,
+		requestedTeardownMode: m.GetRequestedTeardownMode(),
+		colexecServer:         colexecServer,
 	}
 	receiver.cnInformation = cnInformation{
 		cnAddr:      cnAddr,

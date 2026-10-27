@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -169,14 +168,12 @@ func TestIssue25590AdmissionAuthenticatesProducerModesR29(t *testing.T) {
 		&Scope{RootOp: tableUpd}, &Scope{RootOp: insOrdinary}, &Scope{RootOp: delLocal})
 	require.False(t, remoteRunScopesAdmitAdoption([]*Scope{nestedOrdinary}),
 		"ALL the same families in ordinary modes still settle transferred=false: no classifier may ever see their rows")
-	require.NoError(t, refuseRemoteWriteFromIncapableCoordinator(context.Background(), 0, []*Scope{nestedOrdinary}),
-		"an ordinary-mode fragment never depends on coordinator adoption capability")
 
 	mixedBearer := &Scope{}
 	ordinaryRoot := connector.NewArgument()
 	ordinaryRoot.GetOperatorBase().AppendChild(value_scan.NewArgument())
 	mixedBearer.RootOp = ordinaryRoot
 	mixedBearer.PreScopes = append(mixedBearer.PreScopes, &Scope{RootOp: s3Upd})
-	require.True(t, refuseRemoteWriteFromIncapableCoordinator(context.Background(), 0, []*Scope{mixedBearer}) != nil,
-		"a fragment with ANY metadata-mode producer (here in PreScopes) still refuses a below-adoption coordinator")
+	require.True(t, remoteRunScopesAdmitAdoption([]*Scope{mixedBearer}),
+		"a fragment with ANY metadata-mode producer (here in PreScopes) stays admitted, so the r17 run-scoped barrier covers it in every stream mode")
 }

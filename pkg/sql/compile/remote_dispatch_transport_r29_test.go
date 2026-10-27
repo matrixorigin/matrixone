@@ -14,17 +14,18 @@
 
 package compile
 
-// Dispatcher-level transport proof ladder for issue #25590 design r11
-// (D1/D2/D4, round-29 pre-PR finding 2): the disttae-side r23
-// regressions call the classifiers and Adopt/Finalize in place, which
-// the round-28 review found bypasses the compile dispatcher - no test
-// invoked AdoptRemoteRunIntakeMetadata, the three receive loops, or the
-// settle's transfer/keep classification with real scopes. These legs run
-// in the compile package, where every layer is reachable:
+// Dispatcher-level transport proof ladder for issue #25590 (the round-29
+// composer's finding 2, extended by the r17 run-scoped barrier of the
+// round-52 review): the disttae-side regressions call the classifiers
+// and Adopt/Finalize in place, which bypasses the compile dispatcher -
+// no legs would invoke AdoptRemoteRunIntakeMetadata, the three receive
+// loops, or the settle's transfer/keep classification with real scopes.
+// These legs run in the compile package, where every layer is
+// reachable, entirely within the same version:
 //
 //   - the intake mode matrix drives the REAL dispatcher export with
 //     production-format metadata batches under ordinary and metadata
-//     modes, with the coordnator's adoption observable through the
+//     modes, with the coordinator's adoption observable through the
 //     engine's admission ledger (PinUnpublishedPendingAdmissionLimitForTest:
 //     a successful reserve consumes one bound slot permanently in this
 //     fixture, so whether the intake REALLY adopted a name is decided by
@@ -37,15 +38,17 @@ package compile
 //     and BEFORE forwarding, a stopped receiver still ACKs after
 //     adoption, and an ordinary-mode stream ACKs a malformed tail
 //     without error;
-//   - the settle legs run through settleRemoteFragmentWorkspaceAfterDrain
-//     with real runCompile/receiver fixtures: the capable-peer clean
-//     drain TRANSFERS the retained names (the fragment engine queue
-//     stays empty and the witness file is physically retained), while
-//     the below-advertisement request, the cancelled run, the
-//     receiver-stopped flow and the drain failure each KEEP the local
-//     owner (the fragment engine queue ACQUIRES the retained names, and
-//     the running engine's drain - proven physically by the in-package
-//     disttae composed regressions r23/r21 - retires them).
+//   - the settle corpus runs settleRemoteFragmentWorkspaceAfterDrain in
+//     BOTH stream modes - the negotiated windowed flow and the r17 late
+//     no-window accounting flow - plus the fail-closed no-flow class:
+//     a clean drained run TRANSFERS in each mode, while the cancelled
+//     run, the receiver-stopped flow, the drain failure, an admitted
+//     run with NO flow (the r17 fail-closed class) and a plain
+//     non-producer run each KEEP the local owner (the fragment engine
+//     queue ACQUIRES the retained names and the engine drain retires
+//     them). The parked-intake leg pins the r17 ordering - no release
+//     before the parked ack lands - and the repeated-refusal matrix
+//     runs every failed attempt's own residue deletion in both modes.
 //
 // The physical deletion of a KEEPed fragment's queue is the in-package
 // disttae machinery (the queue drain is unexported); its end-to-end
@@ -59,6 +62,7 @@ package compile
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -66,6 +70,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
@@ -74,9 +79,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -91,6 +96,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// r29MockMOCluster satisfies clusterservice.MOCluster with empty
+// enumeration — just enough for disttae.NewTxnWorkSpace to resolve the
+// cluster-service global in a compile-package fixture (the testutil
+// mock lives in a package that imports compile and cannot be reused
+// from here).
+type r29MockMOCluster struct{}
+
+func (r29MockMOCluster) GetCNService(
+	clusterservice.Selector, func(metadata.CNService) bool) {
+}
+
+func (r29MockMOCluster) GetTNService(
+	clusterservice.Selector, func(metadata.TNService) bool) {
+}
+
+func (r29MockMOCluster) GetAllTNServices() []metadata.TNService { return nil }
+
+func (r29MockMOCluster) GetCNServiceWithoutWorkingState(
+	clusterservice.Selector, func(metadata.CNService) bool) {
+}
+
+func (r29MockMOCluster) ForceRefresh(sync bool)                               {}
+func (r29MockMOCluster) Close()                                               {}
+func (r29MockMOCluster) DebugUpdateCNLabel(string, map[string][]string) error { return nil }
+func (r29MockMOCluster) DebugUpdateCNWorkState(string, int) error             { return nil }
+func (r29MockMOCluster) RemoveCN(string)                                      {}
+func (r29MockMOCluster) AddCN(metadata.CNService)                             {}
+func (r29MockMOCluster) UpdateCN(metadata.CNService)                          {}
 
 const (
 	// r29IntakeBound pins the admission ledger bound small enough that a
@@ -115,7 +149,7 @@ func r29IntakeFixture(t *testing.T) (*Scope, *disttae.Transaction, func()) {
 	// admission tests pinned).
 	colexec.NewServer("")
 	moruntime.ServiceRuntime("").SetGlobalVariables(
-		moruntime.ClusterService, r11MockMOCluster{})
+		moruntime.ClusterService, r29MockMOCluster{})
 	eng := &disttae.Engine{}
 	ws := disttae.NewTxnWorkSpace(eng, proc)
 	txnOp.AddWorkspace(ws)
@@ -315,7 +349,7 @@ func TestIssue25590DispatcherIntakeModeMatrixR29(t *testing.T) {
 		if l.pre != nil {
 			s.PreScopes = append(s.PreScopes, l.pre()...)
 		}
-		require.NoError(t, AdoptRemoteRunIntakeMetadata(s, bat, coordinatorIntakeAdoptionVersion),
+		require.NoError(t, AdoptRemoteRunIntakeMetadata(s, bat),
 			l.why+": the intake must not error on this stream")
 		err := r29ProbeAdoption(t, ws, "probe-"+l.probe)
 		if l.adopt {
@@ -575,7 +609,7 @@ func TestIssue25590DispatcherFailClosedMetadataModesR29(t *testing.T) {
 			defer restore()
 			bat := malformed(t, s.Proc.Mp())
 			defer bat.Clean(s.Proc.Mp())
-			err := AdoptRemoteRunIntakeMetadata(r29ProducerScope(s, root), bat, coordinatorIntakeAdoptionVersion)
+			err := AdoptRemoteRunIntakeMetadata(r29ProducerScope(s, root), bat)
 			require.Error(t, err,
 				"a metadata-mode stream that cannot prove its tail rejects fail-closed")
 		})
@@ -587,7 +621,7 @@ func TestIssue25590DispatcherFailClosedMetadataModesR29(t *testing.T) {
 			defer restore()
 			bat := malformed(t, s.Proc.Mp())
 			defer bat.Clean(s.Proc.Mp())
-			require.NoError(t, AdoptRemoteRunIntakeMetadata(r29ProducerScope(s, root), bat, coordinatorIntakeAdoptionVersion),
+			require.NoError(t, AdoptRemoteRunIntakeMetadata(r29ProducerScope(s, root), bat),
 				"an ordinary-mode stream's rows are ordinary data: no recognizer may reject them")
 		})
 	}
@@ -982,17 +1016,52 @@ func TestIssue25590ReceiveLoopsAdoptBeforeForwardAndAckR29(t *testing.T) {
 	})
 }
 
+// r29FlowMode selects the stream shape a settle leg runs against: the
+// negotiated windowed flow, the r17 late no-window accounting flow, or
+// no flow at all (the r17 fail-closed class and the plain-query class).
+type r29FlowMode int
+
+const (
+	r29FlowWindowed r29FlowMode = iota
+	r29FlowNoWindow
+	r29FlowNil
+)
+
+func (mode r29FlowMode) why() string {
+	switch mode {
+	case r29FlowWindowed:
+		return "negotiated windowed flow"
+	case r29FlowNoWindow:
+		return "r17 late no-window accounting flow"
+	}
+	return "no flow"
+}
+
+func (mode r29FlowMode) build() *pipelineBatchFlow {
+	switch mode {
+	case r29FlowWindowed:
+		return newPipelineBatchFlow(pipelineBatchCreditCount, pipelineBatchCreditBytes)
+	case r29FlowNoWindow:
+		return newRunScopedPipelineBatchFlow()
+	}
+	return nil
+}
+
 // r29SettleFixture builds the server-side settle inputs: a runCompile
 // whose process owns a real workspace on an ENGINE FIXTURE ATTACHED TO
 // THE WITNESS FILE SERVICE (disttae.NewEngineForTest, the round-31
-// review's finding-3 requirement), a receiver with the given request
-// advertisement, and a batch flow. The fixture returns the attached
-// engine so the settle legs can assert the exact queue handoff and the
-// physical retirement through the engine's own bounded drain.
+// review's finding-3 requirement): an admitted producer scope set
+// carrying a batch flow of the requested stream shape (windowed,
+// no-window or none), or a plain non-producer run that never registers
+// one. The fixture returns the attached engine so the settle legs can
+// assert the exact queue handoff and the physical retirement through
+// the engine's own bounded drain.
 func r29SettleFixture(
 	t *testing.T,
 	fs fileservice.FileService,
 	witness string,
+	mode r29FlowMode,
+	producerAdmitted bool,
 ) (*messageReceiverOnServer, *Compile, *disttae.Transaction, *disttae.Engine, *pipelineBatchFlow) {
 	t.Helper()
 	ctx := context.Background()
@@ -1004,7 +1073,7 @@ func r29SettleFixture(
 	// default runtime).
 	colexec.NewServer("")
 	moruntime.ServiceRuntime("").SetGlobalVariables(
-		moruntime.ClusterService, r11MockMOCluster{})
+		moruntime.ClusterService, r29MockMOCluster{})
 	eng := disttae.NewEngineForTest(fs)
 	fragmentWs := disttae.NewTxnWorkSpace(eng, proc)
 	txnOp.AddWorkspace(fragmentWs)
@@ -1025,19 +1094,29 @@ func r29SettleFixture(
 	require.Equal(t, 1, live, "pre-settle state: the retain holds the sole owned membership")
 	require.Zero(t, inFlight, "pre-settle state: no in-flight reservation")
 
-	mu := multi_update.NewArgument()
-	mu.Action = multi_update.UpdateWriteS3
-	write := &Scope{}
-	write.RootOp = mu
+	run := &Scope{}
+	if producerAdmitted {
+		mu := multi_update.NewArgument()
+		mu.Action = multi_update.UpdateWriteS3
+		run.RootOp = mu
+	} else {
+		plainRoot := connector.NewArgument()
+		plainRoot.GetOperatorBase().AppendChild(value_scan.NewArgument())
+		run.RootOp = plainRoot
+	}
 	runCompile := &Compile{proc: proc}
-	runCompile.scopes = []*Scope{write}
+	runCompile.scopes = []*Scope{run}
 
-	flow := newPipelineBatchFlow(pipelineBatchCreditCount, pipelineBatchCreditBytes)
+	var flow *pipelineBatchFlow
+	var lifecycle *pipelineStreamLifecycle
+	if mode != r29FlowNil {
+		flow = mode.build()
+		lifecycle = &pipelineStreamLifecycle{batchFlow: flow}
+	}
 	receiver := &messageReceiverOnServer{
-		coordinatorProtocolVersion: defines.MORPCVersion133,
-		messageCtx:                 ctx,
-		connectionCtx:              ctx,
-		streamLifecycle:            &pipelineStreamLifecycle{batchFlow: flow},
+		messageCtx:      ctx,
+		connectionCtx:   ctx,
+		streamLifecycle: lifecycle,
 	}
 	return receiver, runCompile, fragmentWs, eng, flow
 }
@@ -1064,123 +1143,278 @@ func r29RequireWitnessDeleted(t *testing.T, fs fileservice.FileService, ctx cont
 
 // TestIssue25590SettlementTransferAndKeepOwnershipR31 runs
 // settleRemoteFragmentWorkspaceAfterDrain through real fixtures for
-// every terminal class (design r11 D3/D5, round-31 review finding 3):
-// the capable-peer clean drain TRANSFERS, and every keep class
-// (below-advertisement, cancelled run, receiver-stopped flow, drain
-// failure) hands the retained name to the fragment engine's cleanup
-// queue. Each leg asserts the EXACT ownership trajectory - the
-// transaction's ownership clears, the correct name reaches engine
-// cleanup (the queue holds exactly it, and ONLY for the keep classes),
-// the bounded drain physically deletes the kept witness from the
-// fixture's real file service with balanced accounting, and the
-// transferred witness is physically retained with an empty queue.
+// every terminal class in BOTH stream modes (design r17, the round-52
+// review): the clean drained run TRANSFERS through the negotiated
+// windowed flow AND the late no-window accounting flow; every keep
+// class - the cancelled run, the receiver-stopped flow, the drain
+// failure, and the r17 fail-closed class of an admitted run with NO
+// flow - hands the retained name to the fragment engine's cleanup
+// queue; and the plain non-producer run keeps its local owner on the
+// base no-flow path. The parked-intake leg pins the r17 ordering (no
+// release before the parked adoption's ack lands; no sleeps), and the
+// repeated-refusal matrix drives every failed attempt's own residue
+// deletion in both modes. Each leg asserts the EXACT ownership
+// trajectory - the transaction's ownership clears, the correct name
+// reaches engine cleanup (the queue holds exactly it, and ONLY for the
+// keep classes), the bounded drain physically deletes the kept witness
+// from the fixture's real file service with balanced accounting, and
+// the transferred witness is physically retained with an empty queue.
 func TestIssue25590SettlementTransferAndKeepOwnershipR31(t *testing.T) {
 	ctx := context.Background()
 
 	witness := "settle-witness-0001"
-	fsFor := func(t *testing.T) fileservice.FileService {
+	fsFor := func(t *testing.T, name string) fileservice.FileService {
 		t.Helper()
 		fs, err := fileservice.NewMemoryFS("issue25590-r31", fileservice.DisabledCacheConfig, nil)
 		require.NoError(t, err)
 		require.NoError(t, fs.Write(ctx, fileservice.IOVector{
-			FilePath: witness,
+			FilePath: name,
 			Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("w")}},
 		}))
 		return fs
 	}
 
-	// Transfer leg: capable peer, clean drain - transferred=true.
-	t.Run("capable peer transfers", func(t *testing.T) {
-		fs := fsFor(t)
-		receiver, runCompile, fragmentWs, eng, _ := r29SettleFixture(t, fs, witness)
-		runErr := error(nil)
-		require.NoError(t, settleRemoteFragmentWorkspaceAfterDrain(receiver, runCompile, &runErr))
-		require.NoError(t, runErr, "the clean, drained run settled without error")
+	// Transfer corpus, both modes: the clean drained run releases the
+	// retained name to the recording side in each stream shape.
+	for _, mode := range []r29FlowMode{r29FlowWindowed, r29FlowNoWindow} {
+		t.Run("transfers via "+mode.why(), func(t *testing.T) {
+			fs := fsFor(t, witness)
+			receiver, runCompile, fragmentWs, eng, flow := r29SettleFixture(t, fs, witness, mode, true)
+			require.NotNil(t, flow, "the admitted run carries its mode's flow")
+			runErr := error(nil)
+			require.NoError(t, settleRemoteFragmentWorkspaceAfterDrain(receiver, runCompile, &runErr))
+			require.NoError(t, runErr, "the clean, drained run settled without error")
 
-		gotPending, gotReserved := r29UnsettledNames(t, fragmentWs)
-		require.Empty(t, gotPending,
-			"the transferred terminal clears the transaction's cleanup ownership")
-		require.Empty(t, gotReserved,
-			"the transferred terminal leaves no outstanding reservation")
-		queued, live, inFlight := eng.InspectUnpublishedPendingForTest()
-		require.Empty(t, queued,
-			"the transferred name never enters the FRAGMENT engine's cleanup queue - the coordinator adopted it")
-		require.Zero(t, live, "the released membership retired exactly")
-		require.Zero(t, inFlight, "no reservation was left in flight")
-		r29RequireWitnessKept(t, fs, ctx, witness,
-			"the transferred witness file is physically retained after the settle - its cleanup owner is the recording side")
-	})
-
-	// All four keep classes share the same exact ownership trajectory.
-	keepLeg := func(t *testing.T, name string, mutate func(*messageReceiverOnServer, *pipelineBatchFlow) func(*error)) {
-		t.Helper()
-		fs := fsFor(t)
-		receiver, runCompile, fragmentWs, eng, flow := r29SettleFixture(t, fs, witness)
-		setRunErr := mutate(receiver, flow)
-		runErr := error(nil)
-		setRunErr(&runErr)
-
-		require.NoError(t, settleRemoteFragmentWorkspaceAfterDrain(receiver, runCompile, &runErr))
-
-		gotPending, gotReserved := r29UnsettledNames(t, fragmentWs)
-		require.Empty(t, gotPending,
-			name+": the keep terminal hands the name out of the transaction - the ownership clears, it is not stranded")
-		require.Empty(t, gotReserved,
-			name+": the keep terminal leaves no outstanding reservation on the transaction")
-		queued, live, inFlight := eng.InspectUnpublishedPendingForTest()
-		require.Equal(t, []string{witness}, queued,
-			name+": exactly the retained witness name reached engine cleanup")
-		require.Zero(t, live, name+": the owned-ledger membership retired at the handoff")
-		require.Zero(t, inFlight, name+": no capacity stayed held in flight")
-
-		// The bounded drain retire the kept witness physically, with
-		// balanced accounting and an exactly-empty queue.
-		r29RequireWitnessKept(t, fs, ctx, witness,
-			name+": the file is still present before the engine drain - the queue ticket, not the queue itself, owns it")
-		require.NoError(t, eng.DrainUnpublishedPendingForTest(ctx),
-			name+": the bounded drain deletes the queued witness")
-		r29RequireWitnessDeleted(t, fs, ctx, witness,
-			name+": after the drain the kept witness file is physically deleted")
-		queued, live, inFlight = eng.InspectUnpublishedPendingForTest()
-		require.Empty(t, queued, name+": the drain retired the queue exactly")
-		require.Zero(t, live, name+": the ledger is balanced after the drain")
-		require.Zero(t, inFlight, name+": the drain moved no capacity")
+			gotPending, gotReserved := r29UnsettledNames(t, fragmentWs)
+			require.Empty(t, gotPending,
+				"the transferred terminal clears the transaction's cleanup ownership")
+			require.Empty(t, gotReserved,
+				"the transferred terminal leaves no outstanding reservation")
+			queued, live, inFlight := eng.InspectUnpublishedPendingForTest()
+			require.Empty(t, queued,
+				"the transferred name never enters the FRAGMENT engine's cleanup queue - the coordinator adopted it")
+			require.Zero(t, live, "the released membership retired exactly")
+			require.Zero(t, inFlight, "no reservation was left in flight")
+			r29RequireWitnessKept(t, fs, ctx, witness,
+				"the transferred witness file is physically retained after the settle - its cleanup owner is the recording side")
+		})
 	}
 
-	t.Run("below-advertisement keeps", func(t *testing.T) {
-		keepLeg(t, "below-advertisement", func(receiver *messageReceiverOnServer, flow *pipelineBatchFlow) func(*error) {
-			receiver.coordinatorProtocolVersion = defines.MORPCVersion113
-			return func(*error) {}
-		})
-	})
-
-	t.Run("cancelled run keeps", func(t *testing.T) {
-		keepLeg(t, "cancelled run", func(receiver *messageReceiverOnServer, flow *pipelineBatchFlow) func(*error) {
-			return func(runErr *error) {
-				*runErr = moerr.NewInternalErrorNoCtx("the fragment run failed")
-			}
-		})
-	})
-
-	t.Run("receiver-stopped flow keeps", func(t *testing.T) {
-		keepLeg(t, "receiver-stopped flow", func(receiver *messageReceiverOnServer, flow *pipelineBatchFlow) func(*error) {
-			flow.stop(moerr.NewInternalErrorNoCtx("receiver-side stop"))
-			return func(*error) {}
-		})
-	})
-
-	t.Run("drain failure keeps", func(t *testing.T) {
-		keepLeg(t, "drain failure", func(receiver *messageReceiverOnServer, flow *pipelineBatchFlow) func(*error) {
-			// One outstanding reserved batch whose request context is
-			// already cancelled: the drain can only fail.
-			reserveCtx, reserveCancel := context.WithCancel(ctx)
-			_, err := flow.reserve(reserveCtx, context.Background(), 1)
+	// Parked-intake leg, both modes: the run stands clean while its last
+	// relay batch is reserved and its adoption is parked on the
+	// recording side. The release cannot pass the drain gate while the
+	// ack is absent - the same gate the settlement passes first, proven
+	// dead under a cancelled request context - and only after the
+	// parked ack lands does the settle transfer. Deterministic by
+	// context order; no sleeps, no goroutine races.
+	for _, mode := range []r29FlowMode{r29FlowWindowed, r29FlowNoWindow} {
+		t.Run("parked intake releases only after the ack - "+mode.why(), func(t *testing.T) {
+			fs := fsFor(t, witness)
+			receiver, runCompile, fragmentWs, eng, flow := r29SettleFixture(t, fs, witness, mode, true)
+			parkedCtx, parkedCancel := context.WithCancel(ctx)
+			seq, err := flow.reserve(parkedCtx, context.Background(), 1)
 			require.NoError(t, err)
-			reserveCancel()
-			messageCtx, messageCancel := context.WithCancel(ctx)
-			receiver.messageCtx = messageCtx
-			messageCancel()
-			return func(*error) {}
+			parkedCancel()
+
+			// The parked state: the drain gate cannot complete while
+			// the ack is absent. A request context that dies here takes
+			// the error terminal, proving the settle would still be
+			// behind the gate - transfer requires the drain to return
+			// nil, and nil is reachable only at a fully acked flow.
+			parkedFlowCtx, cancelParked := context.WithCancel(ctx)
+			cancelParked()
+			err = flow.waitUntilDrained(parkedFlowCtx, context.Background(), nil)
+			require.Error(t, err,
+				"while the adoption's ack is parked the settlement's drain gate cannot pass - release waits")
+			require.Len(t, flow.pending, 1,
+				"the parked sequence carries an outstanding obligation until its ack")
+
+			// The parked adoption's ack lands; the gate opens and the
+			// SAME settle now transfers.
+			require.NoError(t, flow.acknowledge(seq))
+			runErr := error(nil)
+			require.NoError(t, settleRemoteFragmentWorkspaceAfterDrain(receiver, runCompile, &runErr))
+			require.NoError(t, runErr, "the parked intake's ack opens the gate: the clean run settles")
+			gotPending, gotReserved := r29UnsettledNames(t, fragmentWs)
+			require.Empty(t, gotPending,
+				"after the parked ack the transferred terminal clears the transaction's ownership")
+			require.Empty(t, gotReserved)
+			queued, live, inFlight := eng.InspectUnpublishedPendingForTest()
+			require.Empty(t, queued,
+				"the released name stays off the fragment engine's queue: the recording side adopted it")
+			require.Zero(t, live)
+			require.Zero(t, inFlight)
+			r29RequireWitnessKept(t, fs, ctx, witness,
+				"the transferred witness is physically retained - the release followed the parked ack, it did not precede it")
 		})
+	}
+
+	// Noop mutation for the terminal classes whose run ends pre-drained.
+	r29KeepNoop := func(*messageReceiverOnServer, *pipelineBatchFlow) func(*error) {
+		return func(*error) {}
+	}
+
+	// The keep classes that carry a flow, in both stream modes.
+	for _, leg := range []struct {
+		name   string
+		mutate func(*messageReceiverOnServer, *pipelineBatchFlow) func(*error)
+	}{
+		{
+			name: "cancelled run keeps",
+			mutate: func(receiver *messageReceiverOnServer, flow *pipelineBatchFlow) func(*error) {
+				return func(runErr *error) {
+					*runErr = moerr.NewInternalErrorNoCtx("the fragment run failed")
+				}
+			},
+		},
+		{
+			name: "receiver-stopped flow keeps",
+			mutate: func(receiver *messageReceiverOnServer, flow *pipelineBatchFlow) func(*error) {
+				flow.stop(moerr.NewInternalErrorNoCtx("receiver-side stop"))
+				return func(*error) {}
+			},
+		},
+		{
+			name: "drain failure keeps",
+			mutate: func(receiver *messageReceiverOnServer, flow *pipelineBatchFlow) func(*error) {
+				// One outstanding reserved batch whose request context is
+				// already cancelled: the drain can only fail.
+				reserveCtx, reserveCancel := context.WithCancel(ctx)
+				_, err := flow.reserve(reserveCtx, context.Background(), 1)
+				require.NoError(t, err)
+				reserveCancel()
+				messageCtx, messageCancel := context.WithCancel(ctx)
+				receiver.messageCtx = messageCtx
+				messageCancel()
+				return func(*error) {}
+			},
+		},
+	} {
+		for _, mode := range []r29FlowMode{r29FlowWindowed, r29FlowNoWindow} {
+			t.Run(leg.name+" - "+mode.why(), func(t *testing.T) {
+				r29KeepLeg(t, fsFor(t, witness), witness, mode, true, leg.name, leg.mutate)
+			})
+		}
+	}
+
+	// The r17 fail-closed class: an ADMITTED clean run with NO flow. It
+	// failed open on the pre-r17 tree (the clean run settled
+	// transferred=true with no adoption proof - the round-52 finding's
+	// hole); the barrier now keeps every ending local when the barrier
+	// itself is absent.
+	t.Run("admitted no-flow keeps (r17 fail-closed)", func(t *testing.T) {
+		r29KeepLeg(t, fsFor(t, witness), witness, r29FlowNil, true,
+			"admitted no-flow fail-closed", r29KeepNoop)
 	})
+
+	// The plain-query regression: a non-producer run never registers a
+	// barrier and keeps its local owner on the base no-flow path -
+	// plain fresh queries are untouched by the barrier in every mode.
+	t.Run("plain no-flow keeps", func(t *testing.T) {
+		r29KeepLeg(t, fsFor(t, witness), witness, r29FlowNil, false,
+			"plain no-flow", r29KeepNoop)
+	})
+
+	// The repeated-refusal matrix, both modes: three failed attempts,
+	// each refusing the intake of its own relay batch (the refusing
+	// sequence is never acked, the query cancels), each attempt's
+	// settlement keeping its own residue and each attempt's own engine
+	// drain deleting it - nothing accumulates across attempts and the
+	// return to an EXACTLY empty ledger closes every round.
+	for _, mode := range []r29FlowMode{r29FlowWindowed, r29FlowNoWindow} {
+		for attempt := 1; attempt <= 3; attempt++ {
+			t.Run(fmt.Sprintf("refusal attempt %d keeps - %s", attempt, mode.why()), func(t *testing.T) {
+				perAttempt := fmt.Sprintf("refusal-witness-%d-%02d", mode, attempt)
+				fs := fsFor(t, perAttempt)
+				receiver, runCompile, fragmentWs, eng, flow := r29SettleFixture(t, fs, perAttempt, mode, true)
+				// The fragment's emitted relay batch: reserved, and the
+				// recording side's intake refuses its name, so the
+				// receive loop errors BEFORE the ack and the query
+				// cancels the fragment's message context.
+				reservedCtx, reservedCancel := context.WithCancel(ctx)
+				seq, err := flow.reserve(reservedCtx, context.Background(), 1)
+				require.NoError(t, err)
+				reservedCancel()
+				cancelledCtx, cancelAttempt := context.WithCancel(ctx)
+				cancelAttempt()
+				receiver.messageCtx = cancelledCtx
+
+				runErr := error(nil)
+				require.NoError(t, settleRemoteFragmentWorkspaceAfterDrain(receiver, runCompile, &runErr))
+				require.Error(t, runErr,
+					"the refusing attempt never acks the refusing sequence: the cancelled request fails the drain")
+				require.Len(t, flow.pending, 1,
+					"the refusing sequence stays un-acked - the refusal owns no release")
+				require.NoError(t, flow.acknowledge(seq),
+					"fixture cleanup: a late ack on the aborted flow is benign")
+				require.Empty(t, flow.pending)
+
+				gotPending, gotReserved := r29UnsettledNames(t, fragmentWs)
+				require.Empty(t, gotPending,
+					"the refused attempt's terminal hands its residue out of the transaction")
+				require.Empty(t, gotReserved)
+				queued, live, inFlight := eng.InspectUnpublishedPendingForTest()
+				require.Equal(t, []string{perAttempt}, queued,
+					"the FAILED attempt's own terminal filed exactly its own residue")
+				require.Zero(t, live)
+				require.Zero(t, inFlight)
+				r29RequireWitnessKept(t, fs, ctx, perAttempt,
+					"the file is still present before the engine drain - the queue ticket owns it")
+				require.NoError(t, eng.DrainUnpublishedPendingForTest(ctx),
+					"the attempt's own drain deletes its own residue")
+				r29RequireWitnessDeleted(t, fs, ctx, perAttempt,
+					"after the drain the refused attempt's file is physically deleted - no orphan accumulates")
+				queued, live, inFlight = eng.InspectUnpublishedPendingForTest()
+				require.Empty(t, queued, "the drain retired the queue exactly")
+				require.Zero(t, live, "the ledger is balanced after the drain")
+				require.Zero(t, inFlight, "the drain moved no capacity")
+			})
+		}
+	}
+}
+
+// r29KeepLeg runs one keep-class settle and asserts the EXACT ownership
+// trajectory: ownership clears out of the transaction, exactly the
+// witness reaches the fragment engine's cleanup queue, and the bounded
+// drain deletes the kept witness physically with balanced accounting.
+func r29KeepLeg(
+	t *testing.T,
+	fs fileservice.FileService,
+	witness string,
+	mode r29FlowMode,
+	producerAdmitted bool,
+	name string,
+	mutate func(*messageReceiverOnServer, *pipelineBatchFlow) func(*error),
+) {
+	t.Helper()
+	receiver, runCompile, fragmentWs, eng, flow := r29SettleFixture(t, fs, witness, mode, producerAdmitted)
+	setRunErr := mutate(receiver, flow)
+	runErr := error(nil)
+	setRunErr(&runErr)
+
+	require.NoError(t, settleRemoteFragmentWorkspaceAfterDrain(receiver, runCompile, &runErr))
+
+	gotPending, gotReserved := r29UnsettledNames(t, fragmentWs)
+	require.Empty(t, gotPending,
+		name+": the keep terminal hands the name out of the transaction - the ownership clears, it is not stranded")
+	require.Empty(t, gotReserved,
+		name+": the keep terminal leaves no outstanding reservation on the transaction")
+	queued, live, inFlight := eng.InspectUnpublishedPendingForTest()
+	require.Equal(t, []string{witness}, queued,
+		name+": exactly the retained witness name reached engine cleanup")
+	require.Zero(t, live, name+": the owned-ledger membership retired at the handoff")
+	require.Zero(t, inFlight, name+": no capacity stayed held in flight")
+
+	// The bounded drain retires the kept witness physically, with
+	// balanced accounting and an exactly-empty queue.
+	r29RequireWitnessKept(t, fs, context.Background(), witness,
+		name+": the file is still present before the engine drain - the queue ticket, not the queue itself, owns it")
+	require.NoError(t, eng.DrainUnpublishedPendingForTest(context.Background()),
+		name+": the bounded drain deletes the queued witness")
+	r29RequireWitnessDeleted(t, fs, context.Background(), witness,
+		name+": after the drain the kept witness file is physically deleted")
+	queued, live, inFlight = eng.InspectUnpublishedPendingForTest()
+	require.Empty(t, queued, name+": the drain retired the queue exactly")
+	require.Zero(t, live, name+": the ledger is balanced after the drain")
+	require.Zero(t, inFlight, name+": the drain moved no capacity")
 }

@@ -134,10 +134,7 @@ func TestFloatConversionProtocolPlacementStreamAndReceive(t *testing.T) {
 						ch := make(chan morpc.Message, 1)
 						ch <- &pipeline.Message{Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: observed}
 						sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: ch}
-						// The merged tree's receiver confirm returns the receiver's advertisement
-						// alongside the error (the #25590 intake); this floor exercise
-						// consumes only the error.
-						_, err := sender.confirmProtocolOnStream(floor)
+						err := sender.confirmProtocolOnStream(floor)
 						if observed < floor {
 							require.Error(t, err)
 						} else {

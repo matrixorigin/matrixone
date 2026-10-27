@@ -9,13 +9,6 @@ create database issue_25590_remote_capability;
 use issue_25590_remote_capability;
 create table rfc_t (id bigint primary key, v bigint, payload varchar(128));
 create table rfc_sentinel (k int primary key, note varchar(32));
-create table rfc_cn_inventory as
-select mo_ctl('cn', 'GetProtocolVersion', '') as inv;
-create table rfc_coord_capture as
-select @@server_id as coord_id,
-substring(regexp_substr(inv, concat(@@server_id, ':[0-9]+'), 1, 1),
-length(@@server_id) + 2) as coord_v
-from rfc_cn_inventory;
 create table h16 (n int);
 insert into h16 values (0),(1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12),(13),(14),(15);
 create table h68 (n int);
@@ -53,99 +46,6 @@ select count(*) from rfc_t where v = 1;
 select count(*) from rfc_sentinel;
 ➤ count(*)[-5,64,0]  𝄀
 0
-select mo_ctl('cn', 'SetProtocolVersion', concat((select coord_id from rfc_coord_capture), ':129'));
-➤ mo_ctl(cn, SetProtocolVersion, concat((select coord_id from rfc_coord_capture), :129))[12,65535,0]  𝄀
-{
-  "method": "SETPROTOCOLVERSION",
-  "result": "dd1dccb4-4d3c-41f8-b482-5251dc7a51c1:129"
-}
-
-select (locate(concat((select coord_id from rfc_coord_capture), ':129'),
-mo_ctl('cn', 'GetProtocolVersion', '')) > 0)
-as coordinator_pinned_129;
-➤ coordinator_pinned_129[-7,1,0]  𝄀
-1
-begin;
-insert into rfc_sentinel values (1, 'sentinel-p2a');
-update rfc_t set v = v + 1;
-not supported: remote write fragments require coordinator protocol capability 133 or newer (coordinator advertised 129)
-select note from rfc_sentinel where k = 1;
-➤ note[12,32,0]  𝄀
-sentinel-p2a
-select count(*), min(v), max(v) from rfc_t;
-➤ count(*)[-5,64,0]  ¦  min(v)[-5,64,0]  ¦  max(v)[-5,64,0]  𝄀
-4456448  ¦  1  ¦  1
-select count(*) from rfc_sentinel;
-➤ count(*)[-5,64,0]  𝄀
-1
-commit;
-select count(*) from rfc_t where v = 2;
-➤ count(*)[-5,64,0]  𝄀
-0
-select count(*) from rfc_sentinel;
-➤ count(*)[-5,64,0]  𝄀
-1
-use issue_25590_remote_capability;
-select note from rfc_sentinel;
-➤ note[12,32,0]  𝄀
-sentinel-p2a
-select count(*) from rfc_sentinel;
-➤ count(*)[-5,64,0]  𝄀
-1
-select count(*) from rfc_t where v = 2;
-➤ count(*)[-5,64,0]  𝄀
-0
-select count(*) from rfc_t where v = 1;
-➤ count(*)[-5,64,0]  𝄀
-4456448
-begin;
-insert into rfc_sentinel values (2, 'sentinel-p2b');
-update rfc_t set v = v + 1;
-not supported: remote write fragments require coordinator protocol capability 133 or newer (coordinator advertised 129)
-rollback;
-select count(*) from rfc_sentinel;
-➤ count(*)[-5,64,0]  𝄀
-1
-select count(*) from rfc_t where v = 2;
-➤ count(*)[-5,64,0]  𝄀
-0
-use issue_25590_remote_capability;
-select count(*) from rfc_sentinel;
-➤ count(*)[-5,64,0]  𝄀
-1
-select count(*) from rfc_t where v = 2;
-➤ count(*)[-5,64,0]  𝄀
-0
-select mo_ctl('cn', 'SetProtocolVersion',
-concat((select coord_id from rfc_coord_capture), ':', (select coord_v from rfc_coord_capture)));
-➤ mo_ctl(cn, SetProtocolVersion, concat((select coord_id from rfc_coord_capture), :, (select coord_v from rfc_coord_capture)))[12,65535,0]  𝄀
-{
-  "method": "SETPROTOCOLVERSION",
-  "result": "dd1dccb4-4d3c-41f8-b482-5251dc7a51c1:133"
-}
-
-select (locate(concat((select coord_id from rfc_coord_capture), ':', (select coord_v from rfc_coord_capture)),
-mo_ctl('cn', 'GetProtocolVersion', '')) > 0)
-as coordinator_restored;
-➤ coordinator_restored[-7,1,0]  𝄀
-1
-begin;
-insert into rfc_sentinel values (3, 'sentinel-control');
-update rfc_t set v = v + 1;
-commit;
-select count(*) from rfc_t where v = 2;
-➤ count(*)[-5,64,0]  𝄀
-4456448
-select count(*) from rfc_sentinel;
-➤ count(*)[-5,64,0]  𝄀
-2
-use issue_25590_remote_capability;
-select count(*) from rfc_t where v = 2;
-➤ count(*)[-5,64,0]  𝄀
-4456448
-select count(*) from rfc_sentinel;
-➤ count(*)[-5,64,0]  𝄀
-2
 select remove_fault_point('inject_send_pipeline');
 ➤ remove_fault_point(inject_send_pipeline)[-7,1,0]  𝄀
 1

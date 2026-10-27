@@ -126,24 +126,8 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// before an old RPC callback is delivered; a closed captured sink then drops
 	// that stale callback instead of publishing it into the new attempt.
 	sender.warningSink = s.Proc.GetWarningSink()
-	if remoteRunRequiresFragmentProtocolConfirm(requiredProtocol, s) {
-		var confirmErr error
-		sender.confirmedFragmentProtocol, confirmErr =
-			sender.confirmProtocolOnStream(requiredProtocol)
-		if confirmErr != nil {
-			return sender, confirmErr
-		}
-		// Design r15 (issue #25590 round-45 reviews): a
-		// persistence-producing scope must never reach a below-adoption
-		// receiver — no ledger state can bound what an admitted legacy
-		// run leaves behind, so the enforced finite bound is zero
-		// admitted legacy obligations. Refuse BEFORE sendPipeline so
-		// the old fragment never persists anything; plain scopes never
-		// consult this refusal and capable receivers keep the intake
-		// gate exactly as before.
-		if err := refuseRemoteWriteToNonRetainingFragment(
-			s.Proc.Ctx, sender.confirmedFragmentProtocol, s,
-		); err != nil {
+	if requiredProtocol > 0 {
+		if err = sender.confirmProtocolOnStream(requiredProtocol); err != nil {
 			return sender, err
 		}
 	}
@@ -359,12 +343,14 @@ func receiveMessageFromCnServer(s *Scope, withoutOutput bool, sender *messageSen
 // exists from the moment the bytes leave the wire, strictly earlier
 // than the fragment's own terminal settlement. Admission uses the SAME
 // per-object reservation the writers use (round-22 review, finding
-// H2): a saturated recording engine refuses the adoption now, the
-// refusal fails the transport and with it the whole run — whose
-// failure-side owner is the FRAGMENT when its confirmed advertisement
-// (round-44 review) reaches the first admission build, and the
-// RECORDING WORKSPACE itself for a below-adoption fragment that
-// retains nothing on failure. Either way a received obligation is
+// H2): a saturated recording engine refuses the admission now, the
+// refusal fails the transport and with it the whole run — the refused
+// batch is never acknowledged, so the fragment's settlement behind its
+// batch-flow drain observes the failing query's own terminal
+// (cancellation or stop) and keeps the non-transferred rollback: every
+// still-local name stays reachable and the fragment deletes it. The
+// failure-side owner is the fragment itself in both stream modes
+// (issue #25590 round-52 review, design r17). A received obligation is
 // never discarded without an enumerable owner — refusals can never
 // pile names onto a bound nobody releases.
 //
@@ -382,7 +368,7 @@ func receiveMessageFromCnServer(s *Scope, withoutOutput bool, sender *messageSen
 // ack — undecodable, incomplete metadata fails the run and keeps the
 // fragment's local owner.
 func adoptRelayedS3ObjectsAtIntake(
-	s *Scope, bat *batch.Batch, fragmentProtocol int64,
+	s *Scope, bat *batch.Batch,
 ) error {
 	adm := scopeRemoteObjectAdmission(s)
 	if !adm.any() {
@@ -436,24 +422,19 @@ func adoptRelayedS3ObjectsAtIntake(
 	if !isDisttae {
 		return nil
 	}
-	if fragmentRetainsRefusedIntakeObjects(fragmentProtocol) {
-		return rtx.AdoptRemoteTransferredObjectNames(names)
-	}
-	return rtx.AdoptRemoteTransferredObjectNamesFromNonRetainingFragment(names)
+	return rtx.AdoptRemoteTransferredObjectNames(names)
 }
 
 // AdoptRemoteRunIntakeMetadata is the transport intake's exported
 // contract (issue #25590 round-23 review): the receive loops call it
-// for every decoded batch with their stream's CONFIRMED RECEIVER
-// ADVERTISEMENT (issue #25590 round-44 review) — a fragment at the
-// first admission build keeps the failure-side ownership of a refused
-// run, a below-adoption fragment does not — and the transport
-// regression calls the same path to prove a stream without a registered
-// persistence producer never turns rows into cleanup obligations.
+// for every decoded batch — before the ack releases the fragment's
+// credit — and the transport regression calls the same path to prove a
+// stream without a registered persistence producer never turns rows
+// into cleanup obligations.
 func AdoptRemoteRunIntakeMetadata(
-	s *Scope, bat *batch.Batch, fragmentProtocol int64,
+	s *Scope, bat *batch.Batch,
 ) error {
-	return adoptRelayedS3ObjectsAtIntake(s, bat, fragmentProtocol)
+	return adoptRelayedS3ObjectsAtIntake(s, bat)
 }
 
 func receiveMessageFromCnServerIfOnlyRun(s *Scope, sender *messageSenderOnClient) error {
@@ -474,7 +455,7 @@ func receiveMessageFromCnServerIfOnlyRun(s *Scope, sender *messageSenderOnClient
 		// r6 intake adoption (issue #25590 round-22 review): even a
 		// stream this loop only drains discards the decoded batch, so
 		// the relayed object names need their recording-side owner HERE.
-		if err = adoptRelayedS3ObjectsAtIntake(s, bat, sender.confirmedFragmentProtocol); err != nil {
+		if err = adoptRelayedS3ObjectsAtIntake(s, bat); err != nil {
 			bat.Clean(mp)
 			return err
 		}
@@ -505,7 +486,7 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		// relayed object names before forwarding — the local receiver
 		// below may already have stopped and discard this batch, and the
 		// ack that follows releases the fragment's credit.
-		if err = adoptRelayedS3ObjectsAtIntake(s, bat, sender.confirmedFragmentProtocol); err != nil {
+		if err = adoptRelayedS3ObjectsAtIntake(s, bat); err != nil {
 			bat.Clean(mp)
 			return err
 		}
@@ -561,7 +542,7 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 		// relayed object names before the dispatch re-emits the batch —
 		// its receivers may already have stopped, and the ack that
 		// follows releases the fragment's credit.
-		if err = adoptRelayedS3ObjectsAtIntake(s, bat, sender.confirmedFragmentProtocol); err != nil {
+		if err = adoptRelayedS3ObjectsAtIntake(s, bat); err != nil {
 			bat.Clean(mp)
 			return err
 		}
@@ -645,21 +626,6 @@ type messageSenderOnClient struct {
 	// message sender and its data receiver.
 	streamSender morpc.Stream
 	receiveCh    chan morpc.Message
-
-	// confirmedFragmentProtocol is this stream's confirmed RECEIVER
-	// protocol version (issue #25590 round-44 review): remoteRun
-	// confirms the fragment-side protocol on the stream that will
-	// carry the pipeline — for every feature requiring a floor and,
-	// additionally, for every fragment whose operator tree registers a
-	// remote-persistence producer — and stores the receiver's
-	// advertised version here. The receive loops' intake consults it:
-	// a fragment at the first admission build retains its relayed
-	// objects on a refused run (intake books nothing), while a
-	// below-adoption fragment has no failure-side owner, so a refused
-	// intake must retain the received names itself. Zero is the
-	// never-confirmed default and readopt fails closed toward the
-	// recording-side retention branch.
-	confirmedFragmentProtocol int64
 
 	// Two Flags to help us know the sender status.
 	//
@@ -777,34 +743,10 @@ func (sender *messageSenderOnClient) requestStreamProtocols(message *pipeline.Me
 	message.RequestedBatchCreditBytes = pipelineBatchCreditBytes
 }
 
-// setCoordinatorProtocolAdvertisement stamps the coordinator's OWN build
-// protocol version on every run request (issue #25590 design r11 D3”).
-// It is a run-request property, independent of the FinishAck gate, and
-// the receiver consumes it fail-closed: absent/zero means an older
-// coordinator build, refusal-before-persistence for remotely
-// dispatched persistence-producing DML and an unreachable transferred
-// classification at settlement.
-func (sender *messageSenderOnClient) setCoordinatorProtocolAdvertisement(
-	message *pipeline.Message,
-) {
-	advertisement := int64(0)
-	if sender.proc != nil {
-		if rt := moruntime.ServiceRuntime(sender.proc.GetService()); rt != nil {
-			if value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
-				advertisement, _ = value.(int64)
-			}
-		}
-	}
-	message.CoordinatorProtocolVersion = advertisement
-}
-
 // The capability query uses a different RPC connection. Confirm on the stream
 // that will carry the pipeline so a replacement old CN cannot execute a newer
-// contract. The confirmed response also carries the RECEIVER's own advertised
-// protocol version back to the caller (issue #25590 round-44 review): the
-// intake adoption consults it to decide the failure-side owner when the
-// recording engine's admission bound refuses a received batch.
-func (sender *messageSenderOnClient) confirmProtocolOnStream(minimum int64) (int64, error) {
+// contract.
+func (sender *messageSenderOnClient) confirmProtocolOnStream(minimum int64) error {
 	ctx, cancel := context.WithTimeout(sender.ctx, 5*time.Second)
 	defer cancel()
 	message := cnclient.AcquireMessage()
@@ -812,29 +754,29 @@ func (sender *messageSenderOnClient) confirmProtocolOnStream(minimum int64) (int
 	message.SetMessageType(pipeline.Method_PipelineProtocolCheck)
 	message.ProtocolVersion = minimum
 	if err := sender.streamSender.Send(ctx, message); err != nil {
-		return 0, err
+		return err
 	}
 	select {
 	case <-ctx.Done():
-		return 0, ctx.Err()
+		return ctx.Err()
 	case val, ok := <-sender.receiveCh:
 		if !ok || val == nil {
 			sender.markReceiveClosed()
-			return 0, moerr.NewStreamClosedNoCtx()
+			return moerr.NewStreamClosedNoCtx()
 		}
 		response, ok := val.(*pipeline.Message)
 		if ok {
 			if err, hasError := response.TryToGetMoErr(); hasError {
-				return 0, err
+				return err
 			}
 		}
 		if !ok || response.GetID() != sender.streamSender.ID() ||
 			response.GetCmd() != pipeline.Method_PipelineProtocolCheck ||
 			response.GetSid() != pipeline.Status_Last ||
 			response.GetProtocolVersion() < minimum {
-			return 0, moerr.NewNotSupportedNoCtxf("remote pipeline stream requires MORPC protocol version %d", minimum)
+			return moerr.NewNotSupportedNoCtxf("remote pipeline stream requires MORPC protocol version %d", minimum)
 		}
-		return response.GetProtocolVersion(), nil
+		return nil
 	}
 }
 
@@ -851,7 +793,6 @@ func (sender *messageSenderOnClient) sendPipeline(
 		message.SetProcData(procData)
 		message.SetSid(pipeline.Status_Last)
 		sender.requestStreamProtocols(message)
-		sender.setCoordinatorProtocolAdvertisement(message)
 		message.NeedNotReply = noDataBack
 		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
 			return err
@@ -878,7 +819,6 @@ func (sender *messageSenderOnClient) sendPipeline(
 		}
 		message.NeedNotReply = noDataBack
 		sender.requestStreamProtocols(message)
-		sender.setCoordinatorProtocolAdvertisement(message)
 
 		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
 			return err
