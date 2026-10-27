@@ -59,7 +59,7 @@ func TestIe(t *testing.T) {
 			err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
 			assert.Error(t, err)
 			res := executor.Query(ctx, "whatever", ie.NewOptsBuilder().Finish())
-			assert.Error(t, err)
+			assert.Error(t, res.Error())
 			assert.Equal(t, uint64(0), res.RowCount())
 		},
 	)
@@ -85,23 +85,24 @@ func TestIeProto(t *testing.T) {
 	assert.Nil(t, p.WriteEOFOrOK(0, 1))
 
 	p.stashResult = true
-	p.WriteResponse(ctx, &Response{
+	require.NoError(t, p.WriteResponse(ctx, &Response{
 		category:     OkResponse,
 		status:       0,
 		affectedRows: 1,
 		data:         nil,
-	})
-	assert.Nil(t, nil, p.result.resultSet)
+	}))
+	assert.Nil(t, p.result.resultSet)
 	assert.Equal(t, uint64(1), p.result.affectedRows)
-	p.WriteResponse(ctx, &Response{
+	require.NoError(t, p.WriteResponse(ctx, &Response{
 		category: ResultResponse,
 		status:   0,
 		data: &MysqlExecutionResult{
 			affectedRows: 1,
 			mrs:          mockResultSet(),
 		},
-	})
-	v, _ := p.result.Value(ctx, 0, 0)
+	}))
+	v, err := p.result.Value(ctx, 0, 0)
+	require.NoError(t, err)
 	assert.Equal(t, 42, v.(int))
 
 	p.ResetStatistics()

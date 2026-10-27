@@ -16,16 +16,24 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/publication"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 // -------------------------------------------------------
@@ -1045,16 +1053,68 @@ func TestCoverage_getDownstreamIndexTables_IndexNameError(t *testing.T) {
 // getUpstreamIndexTables
 // -------------------------------------------------------
 
-// mockSQLExecutor implements publication.SQLExecutor for testing getUpstreamIndexTables.
-// Since publication.Result has unexported fields and we can't construct one from outside the package,
-// we test getUpstreamIndexTables only for the error path from ExecSQL.
-// The success path and scan errors are implicitly covered by integration-level tests.
+type upstreamIndexTestExecutor struct {
+	publication.SQLExecutor
+	t         *testing.T
+	result    *publication.Result
+	err       error
+	query     string
+	cancelled bool
+}
 
-func TestCoverage_getUpstreamIndexTables_Placeholder(t *testing.T) {
-	// getUpstreamIndexTables uses publication.SQLExecutor whose Result struct has
-	// unexported fields, making it untestable from outside the publication package.
-	// The coverage for this function is handled by integration tests.
-	require.True(t, true)
+func (e *upstreamIndexTestExecutor) ExecSQL(_ context.Context, _ *publication.ActiveRoutine, accountID uint32, query string, useTxn, needRetry bool, timeout time.Duration) (*publication.Result, context.CancelFunc, error) {
+	require.Equal(e.t, publication.InvalidAccountID, accountID)
+	require.False(e.t, useTxn)
+	require.False(e.t, needRetry)
+	require.Zero(e.t, timeout)
+	e.query = query
+	if e.err != nil {
+		return nil, nil, e.err
+	}
+	return e.result, func() { e.cancelled = true }, nil
+}
+
+func TestGetUpstreamIndexTables(t *testing.T) {
+	ctx := context.Background()
+	t.Run("query error", func(t *testing.T) {
+		e := &upstreamIndexTestExecutor{t: t, err: errors.New("query failed")}
+		got, err := getUpstreamIndexTables(ctx, e, 42, "tenant", "pub", "snap")
+		require.Nil(t, got)
+		require.ErrorContains(t, err, "failed to query upstream index tables: query failed")
+		require.Equal(t, publication.PublicationSQLBuilder.QueryMoIndexesSQL(42, "tenant", "pub", "snap"), e.query)
+	})
+
+	for _, tc := range []struct {
+		name      string
+		malformed bool
+	}{{"rows", false}, {"scan error", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZeroNoFixed()
+			defer mpool.DeleteMPool(mp)
+			b := batch.NewWithSize(4)
+			b.Vecs[0] = testutil.MakeInt64Vector([]int64{42, 42, 42}, nil, mp)
+			values := [][]string{{"idx_one", "idx_empty", "idx_two"}, {"", "", ""}, {"table_one", "", "table_two"}}
+			for i, v := range values {
+				b.Vecs[i+1] = testutil.NewStringVector(3, types.T_varchar.ToType(), mp, false, nil, v)
+			}
+			if tc.malformed {
+				b.Vecs[3].Free(mp)
+				b.Vecs[3] = nil
+			}
+			b.SetRowCount(3)
+			e := &upstreamIndexTestExecutor{t: t, result: publication.NewResultFromExecutorResult(executor.Result{Batches: []*batch.Batch{b}, Mp: mp})}
+			got, err := getUpstreamIndexTables(ctx, e, 42, "tenant", "pub", "snap")
+			if tc.malformed {
+				require.Nil(t, got)
+				require.ErrorContains(t, err, "failed to scan upstream index table result")
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, map[string]string{"table_one": "idx_one", "table_two": "idx_two"}, got)
+			}
+			require.True(t, e.cancelled)
+			require.Equal(t, int64(0), mp.CurrNB())
+		})
+	}
 }
 
 // -------------------------------------------------------
