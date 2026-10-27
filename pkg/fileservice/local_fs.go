@@ -1253,20 +1253,29 @@ func (l *LocalFS) toNativeFilePath(filePath string) string {
 	return filepath.Join(l.rootPath, toOSPath(filePath))
 }
 
-var _ MutableFileService = new(LocalFS)
-
-func (l *LocalFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
+// openLocalMutatorFile validates the service path and returns an opened file
+// only when the OS open succeeds. The caller owns the returned file.
+func openLocalMutatorFile(ctx context.Context, serviceName, filePath string, toNativePath func(string) string) (*os.File, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	path, err := parseFilePathAtService(filePath, l.name)
+	path, err := parseFilePathAtService(filePath, serviceName)
 	if err != nil {
 		return nil, err
 	}
-	nativePath := l.toNativeFilePath(path.File)
-	f, err := os.OpenFile(nativePath, os.O_RDWR, 0644)
+	f, err := os.OpenFile(toNativePath(path.File), os.O_RDWR, 0644)
 	if os.IsNotExist(err) {
 		return nil, moerr.NewFileNotFoundNoCtx(path.File)
+	}
+	return f, err
+}
+
+var _ MutableFileService = new(LocalFS)
+
+func (l *LocalFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
+	f, err := openLocalMutatorFile(ctx, l.name, filePath, l.toNativeFilePath)
+	if err != nil {
+		return nil, err
 	}
 	return &LocalFSMutator{
 		osFile:           f,

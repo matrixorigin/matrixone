@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -45,6 +46,15 @@ func testMutableFileService(
 		assert.Truef(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound),
 			"%s returned %v", operation, err)
 	}
+	// foo is a file, so a child path cannot be opened as a mutator. This
+	// exercises errors other than a missing file (for example ENOTDIR).
+	badMutator, err := fs.NewMutator(ctx, "foo/child")
+	var pathErr *os.PathError
+	assert.ErrorAs(t, err, &pathErr)
+	assert.Nil(t, badMutator)
+	missingMutator, err := fs.NewMutator(ctx, "missing")
+	assert.Nil(t, missingMutator)
+	assertFileNotFound("NewMutator missing file", err)
 	assert.NoError(t, fs.EnsureDir(ctx, ""), "EnsureDir must keep accepting the root path")
 	emptyMutator, err := fs.NewMutator(ctx, "")
 	if emptyMutator != nil {

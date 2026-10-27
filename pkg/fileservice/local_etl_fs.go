@@ -676,21 +676,11 @@ func (l *LocalETLFS) ETLCompatible() {}
 var _ MutableFileService = new(LocalETLFS)
 
 func (l *LocalETLFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	path, err := parseFilePathAtService(filePath, l.name)
+	f, err := openLocalMutatorFile(ctx, l.name, filePath, l.toNativeFilePath)
 	if err != nil {
 		return nil, err
 	}
-	nativePath := l.toNativeFilePath(path.File)
-	f, err := os.OpenFile(nativePath, os.O_RDWR, 0644)
-	if os.IsNotExist(err) {
-		return nil, moerr.NewFileNotFoundNoCtx(path.File)
-	}
-	return &LocalETLFSMutator{
-		osFile: f,
-	}, nil
+	return &LocalETLFSMutator{osFile: f}, nil
 }
 
 type LocalETLFSMutator struct {
