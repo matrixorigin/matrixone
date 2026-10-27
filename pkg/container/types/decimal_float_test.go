@@ -84,6 +84,14 @@ func TestFloatDecimalRationalOracle(t *testing.T) {
 			check(value, 18, scale)
 		}
 	}
+	// Include both sides of the normal/subnormal transition and signed tiny
+	// values at the fast-path scale limit and the first unconditional fallback scale.
+	for _, value := range []float64{math.SmallestNonzeroFloat64, math.Float64frombits((1 << 52) - 1), math.Float64frombits(1 << 52)} {
+		for _, scale := range []int32{0, 19, 20} {
+			checkBoth(value, scale)
+			checkBoth(-value, scale)
+		}
+	}
 	scales := []int32{0, 1, 2, 6, 18, 19, 20, 38}
 	// Stratified finite bit patterns include subnormals, binade transitions,
 	// 17-digit significands, exact large integers and overflow at both signs.
@@ -103,6 +111,13 @@ func TestFloatDecimalRationalOracle(t *testing.T) {
 	}
 	for _, scale := range scales {
 		factor := math.Pow10(int(scale))
+		// Confirm that the oracle actually challenges both sides of the
+		// rounded-product cutoff; expected results remain rational-derived.
+		if scale <= 19 {
+			cutoff := 0.25 / factor
+			require.Less(t, math.Nextafter(cutoff, 0)*factor, 0.25)
+			require.GreaterOrEqual(t, math.Nextafter(cutoff, math.Inf(1))*factor, 0.25)
+		}
 		// Decimal half-integer grid and the closest binary values on either side.
 		for _, odd := range []float64{1, 3, 17, 201, 203, 535, 199999} {
 			value := (odd / 2) / factor
@@ -136,6 +151,23 @@ func TestFloatDecimalRationalOracle(t *testing.T) {
 			}
 		}
 	}
+	// Real binary64 inputs whose normalized shortest powers plus scale cross
+	// the downscale/drop cutoff and checked upscale boundary.
+	for _, tc := range []struct {
+		value float64
+		scale int32
+	}{
+		{1e-18, 0}, {5e-18, 0}, {5e-17, 0}, {0.5, 0},
+		{0.125, 3}, {0.125, 4},
+		// These q=0/1 coefficients exceed the binary fast-path range.
+		{0.12345678901234568, 17}, {0.12345678901234568, 18},
+		{0.12345678901234568, 19},
+		{0.12345678901234568, 20}, {0.12345678901234568, 38},
+		{9.999999999999998, 38},
+	} {
+		checkBoth(tc.value, tc.scale)
+		checkBoth(-tc.value, tc.scale)
+	}
 	t.Logf("checked %d finite value/target combinations", checks)
 }
 
@@ -153,6 +185,7 @@ func TestFloatDecimalConversionsDoNotAllocate(t *testing.T) {
 		{"tiny", 1e-20, 6},
 		{"large", 123456789012.34567, 6},
 		{"high scale", 0.12345678901234568, 18},
+		{"subnormal", math.SmallestNonzeroFloat64, 18},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Decimal64FromFloat64(tc.value, 18, tc.scale)
@@ -165,6 +198,13 @@ func TestFloatDecimalConversionsDoNotAllocate(t *testing.T) {
 			}))
 		})
 	}
+	for _, scale := range []int32{20, 38} {
+		_, err := Decimal128FromFloat64(0.12345678901234568, 38, scale)
+		require.NoError(t, err)
+		require.Zero(t, testing.AllocsPerRun(100, func() {
+			decimal128FromFloat64Sink, _ = Decimal128FromFloat64(0.12345678901234568, 38, scale)
+		}))
+	}
 }
 
 func BenchmarkFloatDecimalConversions(b *testing.B) {
@@ -174,25 +214,31 @@ func BenchmarkFloatDecimalConversions(b *testing.B) {
 		scale  int32
 	}{
 		{"ordinary", []float64{12345.6789}, 6},
+		{"integral", []float64{12345, -12346}, 6},
 		{"tie", []float64{1.005}, 2},
 		{"near_tie", []float64{math.Nextafter(1.005, 0)}, 2},
 		{"small", []float64{1e-20}, 6},
 		{"large", []float64{123456789012.34567}, 6},
 		{"high_scale", []float64{0.12345678901234568}, 18},
+		{"scale19", []float64{1e-20, 2e-20}, 19},
+		{"scale20", []float64{1e-20, 2e-20}, 20},
+		{"scale38", []float64{1e-20, 2e-20}, 38},
 		// Fixed before measurements: eight ordinary values, two tie/neighbor
 		// values, one tiny value, one large value. Inputs vary on every call.
 		{"mixed", []float64{12345.6789, -12345.6789, 12.3456789, -98.7654321, 0.1234567, 456.1234567, 77.1234567, 9876.5432101, 1.0000005, math.Nextafter(1.0000005, 0), 1e-20, 123456789012.34567}, 6},
 	} {
-		b.Run("decimal64/"+tc.name, func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				result, err := Decimal64FromFloat64(tc.values[i%len(tc.values)], 18, tc.scale)
-				if err != nil {
-					b.Fatal(err)
+		if tc.scale <= 18 {
+			b.Run("decimal64/"+tc.name, func(b *testing.B) {
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					result, err := Decimal64FromFloat64(tc.values[i%len(tc.values)], 18, tc.scale)
+					if err != nil {
+						b.Fatal(err)
+					}
+					decimal64FromFloat64Sink = result
 				}
-				decimal64FromFloat64Sink = result
-			}
-		})
+			})
+		}
 		b.Run("decimal128/"+tc.name, func(b *testing.B) {
 			scale := tc.scale
 			if tc.name == "high_scale" {
