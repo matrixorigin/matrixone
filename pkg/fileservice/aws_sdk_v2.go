@@ -624,41 +624,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	type partBuffer struct {
-		buf    []byte
-		n      int
-		tokens int64
-	}
-
-	releasePartBuffer := func(part *partBuffer) {
-		if part == nil {
-			return
-		}
-		releaseParallelUploadBufferBudget(part.tokens)
-	}
-
-	readChunk := func() (*partBuffer, error) {
-		tokens, err := acquireParallelUploadBufferBudget(ctx, int64(options.PartSize))
-		if err != nil {
-			return nil, err
-		}
-		raw := make([]byte, options.PartSize)
-		n, err := io.ReadFull(r, raw)
-		switch {
-		case errors.Is(err, io.EOF):
-			releaseParallelUploadBufferBudget(tokens)
-			return nil, io.EOF
-		case errors.Is(err, io.ErrUnexpectedEOF):
-			return &partBuffer{buf: raw, n: n, tokens: tokens}, io.EOF
-		case err != nil:
-			releaseParallelUploadBufferBudget(tokens)
-			return nil, err
-		default:
-			return &partBuffer{buf: raw, n: n, tokens: tokens}, nil
-		}
-	}
-
-	firstPart, err := readChunk()
+	firstPart, err := readParallelUploadPart(ctx, r, options.PartSize)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
@@ -670,7 +636,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		data := make([]byte, firstPart.n)
 		copy(data, firstPart.buf[:firstPart.n])
 		size := int64(firstPart.n)
-		releasePartBuffer(firstPart)
+		releaseParallelUploadPart(firstPart)
 		return a.Write(ctx, key, bytes.NewReader(data), &size, options.Expire)
 	}
 
@@ -682,7 +648,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		})
 	}, maxRetryAttemps, IsRetryableError)
 	if createErr != nil {
-		releasePartBuffer(firstPart)
+		releaseParallelUploadPart(firstPart)
 		return createErr
 	}
 
@@ -695,7 +661,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 
 	type partJob struct {
 		num  int32
-		part *partBuffer
+		part *parallelUploadPart
 	}
 
 	var (
@@ -722,7 +688,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		select {
 		case uploadSlots <- struct{}{}:
 		case <-ctx.Done():
-			releasePartBuffer(job.part)
+			releaseParallelUploadPart(job.part)
 			setErr(ctx.Err())
 			return false
 		}
@@ -730,7 +696,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		case getParallelUploadSemaphore() <- struct{}{}:
 		case <-ctx.Done():
 			<-uploadSlots
-			releasePartBuffer(job.part)
+			releaseParallelUploadPart(job.part)
 			setErr(ctx.Err())
 			return false
 		}
@@ -746,7 +712,7 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				setErr(ctxErr)
-				releasePartBuffer(job.part)
+				releaseParallelUploadPart(job.part)
 				return
 			}
 			uploadOutput, uploadErr := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
@@ -761,11 +727,11 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 			}, maxRetryAttemps, IsRetryableError)
 			if uploadErr != nil {
 				setErr(uploadErr)
-				releasePartBuffer(job.part)
+				releaseParallelUploadPart(job.part)
 				return
 			}
 			recordS3AcceptedBytes(ctx, int64(job.part.n), a.perfCounterSets...)
-			releasePartBuffer(job.part)
+			releaseParallelUploadPart(job.part)
 			partsLock.Lock()
 			parts = append(parts, types.CompletedPart{
 				ETag:       uploadOutput.ETag,
@@ -776,11 +742,11 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		return true
 	}
 
-	sendJob := func(part *partBuffer) bool {
+	sendJob := func(part *parallelUploadPart) bool {
 		partNum++
 		if partNum > maxMultipartParts {
 			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", partNum))
-			releasePartBuffer(part)
+			releaseParallelUploadPart(part)
 			return false
 		}
 		job := partJob{
@@ -792,17 +758,17 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 
 	if sendJob(firstPart) {
 		for {
-			part, readErr := readChunk()
+			part, readErr := readParallelUploadPart(ctx, r, options.PartSize)
 			if errors.Is(readErr, io.EOF) && part == nil {
 				break
 			}
 			if readErr != nil && !errors.Is(readErr, io.EOF) {
 				setErr(readErr)
-				releasePartBuffer(part)
+				releaseParallelUploadPart(part)
 				break
 			}
 			if part == nil || part.n == 0 {
-				releasePartBuffer(part)
+				releaseParallelUploadPart(part)
 				break
 			}
 			if !sendJob(part) {

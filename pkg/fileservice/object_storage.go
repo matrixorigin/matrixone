@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"io"
 	"iter"
 	"runtime"
@@ -98,6 +99,41 @@ func releaseParallelUploadBufferBudget(bytes int64) {
 		return
 	}
 	getParallelUploadBufferBudget().semaphore.Release(bytes)
+}
+
+// parallelUploadPart owns the budget reserved for its buffer until released.
+type parallelUploadPart struct {
+	buf    []byte
+	n      int
+	tokens int64
+}
+
+func releaseParallelUploadPart(part *parallelUploadPart) {
+	if part == nil {
+		return
+	}
+	releaseParallelUploadBufferBudget(part.tokens)
+}
+
+func readParallelUploadPart(ctx context.Context, r io.Reader, partSize int64) (*parallelUploadPart, error) {
+	tokens, err := acquireParallelUploadBufferBudget(ctx, partSize)
+	if err != nil {
+		return nil, err
+	}
+	raw := make([]byte, partSize)
+	n, err := io.ReadFull(r, raw)
+	switch {
+	case errors.Is(err, io.EOF):
+		releaseParallelUploadBufferBudget(tokens)
+		return nil, io.EOF
+	case errors.Is(err, io.ErrUnexpectedEOF):
+		return &parallelUploadPart{buf: raw, n: n, tokens: tokens}, io.EOF
+	case err != nil:
+		releaseParallelUploadBufferBudget(tokens)
+		return nil, err
+	default:
+		return &parallelUploadPart{buf: raw, n: n, tokens: tokens}, nil
+	}
 }
 
 func normalizeParallelOption(opt *ParallelMultipartOption) ParallelMultipartOption {
