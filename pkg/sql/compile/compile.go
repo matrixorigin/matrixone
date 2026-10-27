@@ -9055,6 +9055,19 @@ func supportsRemoteStatementLastInsertID(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion26
 }
 
+func supportsRemoteODKUResultTracking(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion134
+}
+
 func supportsRemoteAutoIncrementSessionOptions(service string) bool {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
@@ -9172,7 +9185,9 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasCanonicalDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
-		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum())
+		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum()) &&
+		(!hasJSONMinMaxAggregate(node) || c.remoteProtocolVersion() >=
+			requiredExpressionContractProtocolVersion(plan.RemoteExpressionFeatures{JSONMinMaxTypedComparison: true}))
 }
 
 // supportsQuantileExactWeightedDispatch is the compile-time fast-fail layer of
@@ -9318,6 +9333,14 @@ func (c *Compile) appendPrescopes(parents, children []*Scope, stageNodes engine.
 
 // compilePreInsert Compile PreInsert Node and set it as the root operator for each Scope.
 func (c *Compile) compilePreInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	// Assign row provenance at one input-stream boundary, before parallel
+	// deduplication. VALUES keeps its row-list order; ORDER BY has already
+	// produced a globally ordered stream. Unordered SELECT has no SQL-defined
+	// order. Merge streams batches with existing backpressure, not a row cache.
+	if node.PreInsertCtx != nil && node.PreInsertCtx.TrackOdkuResult && !c.scopesRunOnCoordinator(ss) {
+		ss = []*Scope{c.newMergeScope(ss)}
+		ss[0].NodeInfo.Mcpu = 1
+	}
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		preInsertArg, err := constructPreInsert(c.anal.qry.Nodes, node, c.e, c.proc)

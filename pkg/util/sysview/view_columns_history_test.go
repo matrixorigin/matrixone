@@ -61,7 +61,10 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 	require.Equal(t, v109, lowerAdapted, "only the historical lowercase view name is normalized")
 	const v109DataType = "upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT' "
 	const v110DataType = v109DataType + "when upper(mo_show_visible_bin(mc.atttyp,3)) like 'MEDIUMINT%' then 'MEDIUMINT' "
-	require.Equal(t, strings.ReplaceAll(v109, v109DataType, v110DataType), InformationSchemaColumnsDDL)
+	require.Equal(t,
+		strings.ReplaceAll(strings.ReplaceAll(v109, v109DataType, v110DataType),
+			"WHEN 2 then 'binary'", "WHEN 2 then NULL"),
+		InformationSchemaColumnsDDL, "v109 + MEDIUMINT + #31160 binary-NULL selector is the current DDL chain")
 	require.False(t, IsInformationSchemaColumnsMigrationDDL(v109))
 
 	adapted, ok := AdaptLegacyInformationSchemaColumnsDDL(InformationSchemaColumnsV58DDL())
