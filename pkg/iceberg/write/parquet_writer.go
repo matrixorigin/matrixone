@@ -509,7 +509,7 @@ func (m *columnMetrics) observeNull() {
 }
 
 func (m *columnMetrics) observe(ctx context.Context, typ api.IcebergType, value any) error {
-	if isNaN(value) {
+	if IsMetricNaN(value) {
 		m.nanCount = saturatingWriterAdd(m.nanCount, 1)
 		return nil
 	}
@@ -538,11 +538,11 @@ func (m *columnMetrics) observe(ctx context.Context, typ api.IcebergType, value 
 		m.upper = append([]byte(nil), encoded...)
 		return nil
 	}
-	if compareMetricValue(cmp, m.compare) < 0 {
+	if CompareMetricValues(cmp, m.compare) < 0 {
 		m.compare = cmp
 		m.lower = encoded
 	}
-	if compareMetricValue(cmp, decodeMetricValue(typ, m.upper)) > 0 {
+	if CompareMetricValues(cmp, decodeMetricValue(typ, m.upper)) > 0 {
 		m.upper = encoded
 	}
 	return nil
@@ -641,7 +641,8 @@ func decimalInt64FromBoundBytes(data []byte) int64 {
 	return int64(binary.BigEndian.Uint64(buf[:]))
 }
 
-func compareMetricValue(left, right any) int {
+// CompareMetricValues orders decoded Iceberg metric values of the same type.
+func CompareMetricValues(left, right any) int {
 	switch l := left.(type) {
 	case bool:
 		r := right.(bool)
@@ -677,7 +678,8 @@ func compareMetricValue(left, right any) int {
 	}
 }
 
-func isNaN(value any) bool {
+// IsMetricNaN reports whether a metric value is a floating-point NaN.
+func IsMetricNaN(value any) bool {
 	switch v := value.(type) {
 	case float32:
 		return math.IsNaN(float64(v))

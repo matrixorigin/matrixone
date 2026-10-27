@@ -28,6 +28,7 @@ import (
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
+	icebergwrite "github.com/matrixorigin/matrixone/pkg/iceberg/write"
 )
 
 const (
@@ -549,8 +550,8 @@ func (m *deleteMetrics) observeNull(fieldID int) {
 
 func (m *deleteMetrics) observe(ctx context.Context, fieldID int, value any) {
 	field, ok := m.fields[fieldID]
-	if !ok || isDeleteNaN(value) {
-		if isDeleteNaN(value) {
+	if !ok || icebergwrite.IsMetricNaN(value) {
+		if icebergwrite.IsMetricNaN(value) {
 			m.nanCounts[fieldID] = saturatingDeleteAdd(m.nanCounts[fieldID], 1)
 		}
 		return
@@ -573,12 +574,12 @@ func (m *deleteMetrics) observe(ctx context.Context, fieldID int, value any) {
 		return
 	}
 	current, hasCurrent := m.compare[fieldID]
-	if !hasCurrent || compareDeleteMetricValue(cmp, current) < 0 {
+	if !hasCurrent || icebergwrite.CompareMetricValues(cmp, current) < 0 {
 		m.compare[fieldID] = cmp
 		m.lowerBounds[fieldID] = encoded
 	}
 	upper := m.upperBounds[fieldID]
-	if len(upper) == 0 || compareDeleteMetricValue(cmp, decodeDeleteMetricValue(field.Type, upper)) > 0 {
+	if len(upper) == 0 || icebergwrite.CompareMetricValues(cmp, decodeDeleteMetricValue(field.Type, upper)) > 0 {
 		m.upperBounds[fieldID] = append([]byte(nil), encoded...)
 	}
 }
@@ -646,53 +647,6 @@ func decodeDeleteMetricValue(typ api.IcebergType, data []byte) any {
 		return string(data)
 	default:
 		return nil
-	}
-}
-
-func compareDeleteMetricValue(left, right any) int {
-	switch l := left.(type) {
-	case bool:
-		r := right.(bool)
-		if l == r {
-			return 0
-		}
-		if !l {
-			return -1
-		}
-		return 1
-	case int64:
-		r := right.(int64)
-		if l < r {
-			return -1
-		}
-		if l > r {
-			return 1
-		}
-		return 0
-	case float64:
-		r := right.(float64)
-		if l < r {
-			return -1
-		}
-		if l > r {
-			return 1
-		}
-		return 0
-	case string:
-		return strings.Compare(l, right.(string))
-	default:
-		return 0
-	}
-}
-
-func isDeleteNaN(value any) bool {
-	switch v := value.(type) {
-	case float32:
-		return math.IsNaN(float64(v))
-	case float64:
-		return math.IsNaN(v)
-	default:
-		return false
 	}
 }
 
