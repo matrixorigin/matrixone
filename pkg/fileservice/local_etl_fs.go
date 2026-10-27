@@ -667,51 +667,7 @@ func (l *LocalETLFS) NewWriter(ctx context.Context, filePath string) (io.WriteCl
 }
 
 func (l *LocalETLFS) ensureDir(nativePath string) error {
-	nativePath = filepath.Clean(nativePath)
-	if nativePath == "" {
-		return nil
-	}
-
-	// check existence by l.dirFiles
-	l.RLock()
-	_, ok := l.dirFiles[nativePath]
-	if ok {
-		// dir existed
-		l.RUnlock()
-		return nil
-	}
-	l.RUnlock()
-
-	// check existence by fstat
-	_, err := os.Stat(nativePath)
-	if err == nil {
-		// existed
-		return nil
-	}
-
-	// ensure parent
-	parent, _ := filepath.Split(nativePath)
-	if parent != nativePath {
-		if err := l.ensureDir(parent); err != nil {
-			return err
-		}
-	}
-
-	// create
-	if err := os.Mkdir(nativePath, 0755); err != nil {
-		if os.IsExist(err) {
-			// existed
-			return nil
-		}
-		return err
-	}
-
-	// sync parent dir
-	if err := l.syncDir(parent); err != nil {
-		return err
-	}
-
-	return nil
+	return ensureLocalDir(&l.RWMutex, l.dirFiles, nativePath)
 }
 
 func (l *LocalETLFS) toOSPath(filePath string) string {
@@ -722,22 +678,7 @@ func (l *LocalETLFS) toOSPath(filePath string) string {
 }
 
 func (l *LocalETLFS) syncDir(nativePath string) error {
-	l.Lock()
-	f, ok := l.dirFiles[nativePath]
-	if !ok {
-		var err error
-		f, err = os.Open(nativePath)
-		if err != nil {
-			l.Unlock()
-			return err
-		}
-		l.dirFiles[nativePath] = f
-	}
-	l.Unlock()
-	if err := f.Sync(); err != nil {
-		return err
-	}
-	return nil
+	return syncLocalDir(&l.RWMutex, l.dirFiles, nativePath)
 }
 
 func (l *LocalETLFS) Cost() *CostAttr {

@@ -1171,20 +1171,29 @@ func (l *LocalFS) NewWriter(ctx context.Context, filePath string) (io.WriteClose
 }
 
 func (l *LocalFS) ensureDir(nativePath string) error {
+	return ensureLocalDir(&l.RWMutex, l.dirFiles, nativePath)
+}
+
+func (l *LocalFS) syncDir(nativePath string) error {
+	return syncLocalDir(&l.RWMutex, l.dirFiles, nativePath)
+}
+
+// ensureLocalDir preserves the caller's directory cache and synchronization.
+func ensureLocalDir(mu *sync.RWMutex, dirFiles map[string]*os.File, nativePath string) error {
 	nativePath = filepath.Clean(nativePath)
 	if nativePath == "" {
 		return nil
 	}
 
-	// check existence by l.dirFiles
-	l.RLock()
-	_, ok := l.dirFiles[nativePath]
+	// check existence by dirFiles
+	mu.RLock()
+	_, ok := dirFiles[nativePath]
 	if ok {
 		// dir existed
-		l.RUnlock()
+		mu.RUnlock()
 		return nil
 	}
-	l.RUnlock()
+	mu.RUnlock()
 
 	// check existence by fstat
 	_, err := os.Stat(nativePath)
@@ -1196,7 +1205,7 @@ func (l *LocalFS) ensureDir(nativePath string) error {
 	// ensure parent
 	parent, _ := filepath.Split(nativePath)
 	if parent != nativePath {
-		if err := l.ensureDir(parent); err != nil {
+		if err := ensureLocalDir(mu, dirFiles, parent); err != nil {
 			return err
 		}
 	}
@@ -1211,26 +1220,27 @@ func (l *LocalFS) ensureDir(nativePath string) error {
 	}
 
 	// sync parent dir
-	if err := l.syncDir(parent); err != nil {
+	if err := syncLocalDir(mu, dirFiles, parent); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (l *LocalFS) syncDir(nativePath string) error {
-	l.Lock()
-	f, ok := l.dirFiles[nativePath]
+// syncLocalDir opens and syncs a directory using the caller-owned cache.
+func syncLocalDir(mu *sync.RWMutex, dirFiles map[string]*os.File, nativePath string) error {
+	mu.Lock()
+	f, ok := dirFiles[nativePath]
 	if !ok {
 		var err error
 		f, err = os.Open(nativePath)
 		if err != nil {
-			l.Unlock()
+			mu.Unlock()
 			return err
 		}
-		l.dirFiles[nativePath] = f
+		dirFiles[nativePath] = f
 	}
-	l.Unlock()
+	mu.Unlock()
 	if err := f.Sync(); err != nil {
 		return err
 	}
