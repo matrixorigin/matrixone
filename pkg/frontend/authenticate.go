@@ -994,7 +994,6 @@ var (
 		"mo_columns":                    0,
 		"mo_account":                    0,
 		"mo_user":                       0,
-		"mo_pwd_ts_convention":          0,
 		"mo_role":                       0,
 		"mo_user_grant":                 0,
 		"mo_role_grant":                 0,
@@ -1056,7 +1055,6 @@ var (
 	// Wrap them in a transaction
 	createSqls = []string{
 		MoCatalogMoUserDDL,
-		MoCatalogMoPwdTsConventionDDL,
 		MoCatalogMoAccountDDL,
 		MoCatalogMoRoleDDL,
 		MoCatalogMoUserGrantDDL,
@@ -1266,12 +1264,9 @@ var (
 				created_time,
 				comments
 			) values ("%s",%d,%d,"%s","%s");`
-	// User creation writes password_last_changed via current_timestamp() so
-	// the stored value is a session-local TIMESTAMP instant that matches the
-	// login-time readers (getExpiredTimeOfUserFormat): relying on the column
-	// default (UTC_TIMESTAMP, a tz-naive DATETIME form) shifts the measured
-	// password age by the creating session's zone offset and breaks
-	// default_password_lifetime at non-UTC zones.
+	// Keep the existing UTC_TIMESTAMP column default for password_last_changed.
+	// Its session-displayed digits are read as UTC by the default-lifetime
+	// policy; changing only the writer or only the reader shifts password age.
 	initMoUserFormat = `insert into mo_catalog.mo_user(
 				user_id,
 				user_host,
@@ -1283,9 +1278,8 @@ var (
 				login_type,
 				creator,
 				owner,
-				default_role,
-				password_last_changed
-    		) values(%d,"%s","%s","%s","%s","%s",%s, "%s",%d,%d,%d, current_timestamp());`
+				default_role
+			) values(%d,"%s","%s","%s","%s","%s",%s, "%s",%d,%d,%d);`
 	initMoUserWithoutIDFormat = `insert into mo_catalog.mo_user(
 				user_host,
 				user_name,
@@ -1297,16 +1291,8 @@ var (
 				login_type,
 				creator,
 				owner,
-				default_role,
-				password_last_changed
-    		) values("%s", "%s", "%s", "%s", "%s", %s, '%s', "%s",%d, %d, %d, current_timestamp());`
-
-	// InsertMoPwdTsConventionSql seeds the per-tenant convention anchor: the
-	// first instant at which this tenant's writer is the session-local
-	// current_timestamp() form. The guard keeps the seed idempotent for
-	// re-run init and upgrade paths. Exported for the bootstrap upgrade
-	// entries that retrofit existing tenants.
-	InsertMoPwdTsConventionSql = `insert into mo_catalog.mo_pwd_ts_convention (convention, anchor) select "` + passwordTsConventionSessionLocal + `", current_timestamp() from dual where not exists (select 1 from mo_catalog.mo_pwd_ts_convention where convention = "` + passwordTsConventionSessionLocal + `");`
+				default_role
+			) values("%s", "%s", "%s", "%s", "%s", %s, '%s', "%s",%d, %d, %d);`
 
 	initMoRolePrivPrefix = `insert into mo_catalog.mo_role_privs(
 				role_id,
@@ -1356,29 +1342,14 @@ const (
 	//     (expired_time <= current_timestamp())
 	getLockInfoOfUserFormat = `select status, login_attempts, lock_time, expired_time is not null, expired_time <= current_timestamp() from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
-	// passwordTsConventionSessionLocal names the session-local
-	// password_last_changed writer convention recorded per tenant in
-	// mo_pwd_ts_convention (see MoCatalogMoPwdTsConventionDDL).
-	passwordTsConventionSessionLocal = "session_local"
-
-	// The default-password-lifetime check is evaluated at the server with a
-	// convention discriminator: rows whose password_last_changed instant is
-	// at or after the tenant anchor came from the session-local
-	// current_timestamp() writer and compare with current_timestamp()
-	// directly (identical result in every session time zone); older rows
-	// came from the legacy UTC_TIMESTAMP column default and are read with
-	// the legacy fixed interpretation — the session-displayed digits
-	// compared against utc_timestamp() — which restores exactly what the
-	// pre-anchor Go reader produced. A missing marker makes every row
-	// legacy, so a cluster without the convention table keeps the old
-	// behaviour. Strict "<" mirrors lastChanged + N days < now in both
-	// branches.
-	getExpiredTimeOfUserFormat = `select password_last_changed is not null and
-  case when ifnull(password_last_changed >= (select anchor from mo_catalog.mo_pwd_ts_convention where convention = "` + passwordTsConventionSessionLocal + `"), false)
-       then password_last_changed < current_timestamp() - interval %d day
-       else cast(password_last_changed as datetime) < utc_timestamp() - interval %d day
-  end
-from mo_catalog.mo_user where user_name = "%s" order by user_id;`
+	// Preserve the pre-existing default-lifetime contract: the displayed
+	// password_last_changed digits are interpreted as UTC. Both the column
+	// default and password resets continue to write UTC_TIMESTAMP. Casting to
+	// DATETIME before comparing reproduces the old Go UTC-string reader,
+	// including legacy rows whose stored instant is ahead of an upgrade time.
+	// No new catalog object is needed before authentication/tenant upgrade.
+	// Strict "<" preserves the old lastChanged + lifetime < now boundary.
+	getExpiredTimeOfUserFormat = `select password_last_changed is not null and cast(password_last_changed as datetime) < utc_timestamp() - interval %d day from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 
 	getPasswordHistotyOfUsrFormat = `select password_history from mo_catalog.mo_user where user_name = "%s";`
 
@@ -1390,7 +1361,7 @@ from mo_catalog.mo_user where user_name = "%s" order by user_id;`
 	// default_password_lifetime policy) together with password_last_changed.
 	// The one exception is the never-expire marker: in MySQL the never-expire
 	// lifetime survives a password change, so it is kept here.
-	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" , password_last_changed = current_timestamp(), expired_time = if(expired_time > ` + passwordExpireNeverHorizonSql + `, expired_time, null) where user_name = "%s" order by user_id;`
+	updatePasswordOfUserFormat = `update mo_catalog.mo_user set authentication_string = "%s" , password_last_changed = utc_timestamp(), expired_time = if(expired_time > ` + passwordExpireNeverHorizonSql + `, expired_time, null) where user_name = "%s" order by user_id;`
 
 	updateExpiredTimeOfUserFormat = `update mo_catalog.mo_user set expired_time = %s where user_name = "%s" order by user_id;`
 
@@ -1890,7 +1861,7 @@ func getLockInfoOfUserSql(user string) string {
 // follows the global default lifetime (expired_time IS NULL) has reached
 // the defPwdLife-day password age.
 func getExpiredTimeOfUserSql(user string, defPwdLife int) string {
-	return fmt.Sprintf(getExpiredTimeOfUserFormat, defPwdLife, defPwdLife, user)
+	return fmt.Sprintf(getExpiredTimeOfUserFormat, defPwdLife, user)
 }
 
 func getSqlForUpdatePasswordHistoryOfUser(passwordHistory, user string) string {
@@ -11278,10 +11249,6 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 		newTenant.GetUserID(), newTenant.GetDefaultRoleID(), accountAdminRoleID)
 	addSqlIntoSet(initMoUser1)
-
-	// The tenant's first user is already a session-local writer row: stamp
-	// the tenant convention anchor in the same transaction.
-	addSqlIntoSet(InsertMoPwdTsConventionSql)
 
 	// Initialize each role in one statement within the existing account transaction.
 	addSqlIntoSet(initialRolePrivilegesSQL(accountAdminRoleID, accountAdminRoleName,

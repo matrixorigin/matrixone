@@ -827,7 +827,6 @@ mo_catalog  ¦  mo_mongodb_tables  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_mysql_compatibility_mode  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_partition_metadata  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_partition_tables  ¦  r  ¦  accountadmin  𝄀
-mo_catalog  ¦  mo_pwd_ts_convention  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_role  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_role_grant  ¦  r  ¦  accountadmin  𝄀
 mo_catalog  ¦  mo_role_privs  ¦  r  ¦  accountadmin  𝄀

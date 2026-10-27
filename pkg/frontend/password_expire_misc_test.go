@@ -33,12 +33,10 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 // TestConvertMiscOptToExpiredTime covers the translation of the PASSWORD
@@ -502,25 +500,27 @@ func TestInitUserPasswordExpireAndLock(t *testing.T) {
 			}
 		}
 		require.NotEmpty(t, insert, "expected the mo_user insert to be executed")
-		// The writer is session-local current_timestamp(), matching the
-		// login-time default_password_lifetime reader; the tz-naive
-		// UTC_TIMESTAMP column default must not supply the instant.
-		require.Contains(t, insert, "password_last_changed")
-		require.Contains(t, insert, ", current_timestamp());")
+		// Creation must keep the same UTC_TIMESTAMP column default as
+		// pre-upgrade tenants and the password-reset writer.
+		require.NotContains(t, insert, "password_last_changed")
+		require.Contains(t, MoCatalogMoUserDDL, "password_last_changed timestamp default utc_timestamp")
 	})
 }
 
-// TestInitMoUserFormatsSessionLocalLastChanged: both CREATE USER insert
-// formats carry the session-local writer explicitly.
-func TestInitMoUserFormatsSessionLocalLastChanged(t *testing.T) {
+// Creation and password resets retain one timestamp convention on both sides
+// of an upgrade, rather than inferring the writer from a stored instant.
+func TestPasswordLastChangedKeepsLegacyConvention(t *testing.T) {
 	for name, format := range map[string]string{
 		"initMoUserFormat":          initMoUserFormat,
 		"initMoUserWithoutIDFormat": initMoUserWithoutIDFormat,
 	} {
-		require.Contains(t, format, "password_last_changed", name)
-		require.Contains(t, format, ", current_timestamp());", name)
-		require.NotContains(t, format, "utc_timestamp", name)
+		require.NotContains(t, format, "password_last_changed", name)
 	}
+	require.Contains(t, MoCatalogMoUserDDL, "password_last_changed timestamp default utc_timestamp")
+	reset, err := getSqlForUpdatePasswordOfUser(t.Context(), "*hash", "u1")
+	require.NoError(t, err)
+	require.Contains(t, reset, "password_last_changed = utc_timestamp()")
+	require.Equal(t, `select password_last_changed is not null and cast(password_last_changed as datetime) < utc_timestamp() - interval 1 day from mo_catalog.mo_user where user_name = "u1" order by user_id;`, getExpiredTimeOfUserSql("u1", 1))
 }
 
 // TestPasswordChangeKeepsExpireNeverSentinel: a password change clears an
@@ -532,64 +532,6 @@ func TestPasswordChangeKeepsExpireNeverSentinel(t *testing.T) {
 	require.Contains(t, sql,
 		"expired_time = if(expired_time > "+passwordExpireNeverHorizonSql+", expired_time, null)")
 	require.NotContains(t, sql, "expired_time = null where")
-}
-
-// TestPwdTsConventionSeedAndReader: the per-tenant convention anchor seed
-// is an idempotent current_timestamp() write, and the login reader splits
-// session-local rows (>= anchor) from legacy rows with the fixed-UTC digit
-// interpretation while a missing marker keeps every row legacy.
-func TestPwdTsConventionSeedAndReader(t *testing.T) {
-	require.Contains(t, InsertMoPwdTsConventionSql, "mo_catalog.mo_pwd_ts_convention")
-	require.Contains(t, InsertMoPwdTsConventionSql, "current_timestamp()")
-	require.Contains(t, InsertMoPwdTsConventionSql, "where not exists")
-	require.Contains(t, InsertMoPwdTsConventionSql, passwordTsConventionSessionLocal)
-	require.Contains(t, MoCatalogMoPwdTsConventionDDL, "anchor timestamp")
-	require.Contains(t, createSqls, MoCatalogMoPwdTsConventionDDL)
-
-	sql := getExpiredTimeOfUserSql("u1", 30)
-	require.Contains(t, sql, "mo_pwd_ts_convention")
-	// three-valued safe: a NULL anchor folds to false and reads as legacy
-	require.Contains(t, sql, `ifnull(password_last_changed >= (select anchor from mo_catalog.mo_pwd_ts_convention where convention = "`+
-		passwordTsConventionSessionLocal+`"), false)`)
-	require.Contains(t, sql, "password_last_changed < current_timestamp() - interval 30 day")
-	require.Contains(t, sql, "cast(password_last_changed as datetime) < utc_timestamp() - interval 30 day")
-	require.Equal(t, 2, strings.Count(sql, "interval 30 day"),
-		"both convention branches carry the lifetime")
-
-	// The convention table is a per-tenant catalog table: account teardown
-	// must not treat it as a shared cluster table and delete by account_id.
-	require.False(t, isClusterTable("mo_catalog", "mo_pwd_ts_convention"),
-		"mo_pwd_ts_convention is a predefined per-tenant table")
-}
-
-// TestCreateTablesInMoCatalogSeedsPwdTsConvention: fresh bootstrap
-// initialisation creates the convention table and stamps the tenant anchor
-// inside the same transaction as the root/dump seeds.
-func TestCreateTablesInMoCatalogSeedsPwdTsConvention(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	op := mock_frontend.NewMockTxnOperator(ctrl)
-	op.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-	op.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
-
-	executed := make([]string, 0, 16)
-	txnExec := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
-		executed = append(executed, sql)
-		return executor.Result{}, nil
-	}, op)
-
-	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-	pu.SV.SetDefaultValues()
-	ctx := context.WithValue(context.Background(), config.ParameterUnitKey, pu)
-
-	require.NoError(t, createTablesInMoCatalog(ctx, txnExec, "4.0.17"))
-
-	joined := strings.Join(executed, "\n")
-	require.Contains(t, joined, "create table mo_catalog.mo_pwd_ts_convention",
-		"the per-tenant convention table is created with the catalog tables")
-	require.Contains(t, joined, "insert into mo_catalog.mo_pwd_ts_convention",
-		"the convention anchor is stamped in the bootstrap transaction")
 }
 
 // TestLoginAttemptsCounterSqls covers the bookkeeping SQLs of the failed
@@ -738,6 +680,10 @@ func TestAuthenticateUserExpiryAndAttempts(t *testing.T) {
 
 		bh := &backgroundExecTest{}
 		bh.init()
+		// Model an old tenant with no convention table. No authentication
+		// statement may require that table before MaybeUpgradeTenant runs.
+		bh.sqlPrefixErr[`select password_last_changed is not null and
+  case when`] = moerr.NewNoSuchTable(t.Context(), "mo_catalog", "mo_pwd_ts_convention")
 		bh.sql2result["begin;"] = nil
 		bh.sql2result["commit;"] = nil
 		bh.sql2result["rollback;"] = nil
@@ -874,6 +820,26 @@ func TestAuthenticateUserExpiryAndAttempts(t *testing.T) {
 		err := authenticate(t, ses, true)
 		require.NoError(t, err)
 		require.False(t, ses.getRoutine().isExpired())
+	})
+
+	t.Run("default lifetime catalog error must not allow login", func(t *testing.T) {
+		ses, bh := newTestSession(t)
+		bh.sql2result[getLockInfoOfUserSql(userName)] =
+			newMrsForLockInfoOfUser(userStatusUnlock, 0, "2020-01-01 00:00:00", 0, 0)
+		bh.sql2result[getSqlForGetSystemVariablesWithAccount(uint64(sysAccountID))] =
+			newMrsForSystemVariablesWithLifetime("1")
+		bh.sql2err[getExpiredTimeOfUserSql(userName, 1)] = context.Canceled
+		require.ErrorIs(t, authenticate(t, ses, true), context.Canceled)
+	})
+
+	t.Run("wrong password does not read default lifetime", func(t *testing.T) {
+		ses, bh := newTestSession(t)
+		bh.sql2result[getLockInfoOfUserSql(userName)] =
+			newMrsForLockInfoOfUser(userStatusUnlock, 0, "2020-01-01 00:00:00", 0, 0)
+		bh.sql2result[getSqlForGetSystemVariablesWithAccount(uint64(sysAccountID))] =
+			newMrsForSystemVariablesWithLifetime("1")
+		require.ErrorContains(t, authenticate(t, ses, false), "check password failed")
+		require.NotContains(t, bh.executedSQLs, getExpiredTimeOfUserSql(userName, 1))
 	})
 
 	t.Run("permanently locked account is rejected before password check", func(t *testing.T) {

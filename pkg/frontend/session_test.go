@@ -1376,22 +1376,20 @@ func TestCheckPasswordExpired(t *testing.T) {
 	}
 	ses.SetTenantInfo(tenant)
 
-	// The default-lifetime decision is evaluated at the server with a
-	// convention discriminator: rows at or after the tenant anchor compare
-	// in the session-local TIMESTAMP convention (exact in every zone);
-	// older rows read via the legacy fixed-UTC digit interpretation.
+	// The server-side decision preserves the pre-existing UTC-digit reader
+	// without depending on catalog objects installed after authentication.
 	ses.gSysVars.Set(DefaultPasswordLifetime, int64(30))
 	expired30 := getExpiredTimeOfUserSql("u1", 30)
 	assert.Contains(t, expired30, "password_last_changed is not null")
-	assert.Contains(t, expired30, "mo_pwd_ts_convention")
-	assert.Contains(t, expired30, "password_last_changed < current_timestamp() - interval 30 day")
+	assert.NotContains(t, expired30, "mo_pwd_ts_convention")
 	assert.Contains(t, expired30, "cast(password_last_changed as datetime) < utc_timestamp() - interval 30 day")
 	assert.Contains(t, expired30, `user_name = "u1"`)
 
 	// the produced SQL is valid MySQL grammar
 	rpLife, errLife := mysql.Parse(ctx, expired30, 1)
+	require.NoError(t, errLife)
+	require.Len(t, rpLife, 1)
 	defer rpLife[0].Free()
-	assert.NoError(t, errLife)
 
 	// exexpir can not execute stmt
 	ses.setRoutine(&Routine{})

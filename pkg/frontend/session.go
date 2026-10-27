@@ -3761,10 +3761,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 					ses.getRoutine().setExpired(true)
 				}
 			} else if defPwdLife > 0 {
-				// The default-lifetime decision is evaluated at the
-				// server on TIMESTAMP semantics (see
-				// getExpiredTimeOfUserSql), so it is independent of
-				// the background session's time zone.
+				// Preserve the existing UTC-digit interpretation of
+				// password_last_changed, including before tenant upgrade.
 				userExpiredSql := getExpiredTimeOfUserSql(tenant.GetUser(), defPwdLife)
 				userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userExpiredSql)
 				if err != nil {

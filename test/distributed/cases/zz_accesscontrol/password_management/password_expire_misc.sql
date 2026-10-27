@@ -66,6 +66,33 @@ select expired_time is null from mo_catalog.mo_user where user_name = 'pe_u7';
 alter user pe_u7 password expire default;
 select expired_time is null from mo_catalog.mo_user where user_name = 'pe_u7';
 
+-- Legacy UTC digit convention: a -08:00 write made one hour before a
+-- hypothetical cutover at 13:00 UTC stores 20:00 UTC, after the cutover.
+-- At 13:00 UTC the next day it is 25 hours old, not 17 hours old.
+set @pe_time_zone = @@session.time_zone;
+drop database if exists pe_lifetime_clock;
+create database pe_lifetime_clock;
+create table pe_lifetime_clock.pwd_clock (id int, password_last_changed timestamp);
+set time_zone = '-08:00';
+insert into pe_lifetime_clock.pwd_clock values (1, '2026-01-01 12:00:00'), (2, '2026-01-01 13:00:00'), (3, '2026-01-01 17:00:00'), (4, null);
+set time_zone = '+00:00';
+select cast(password_last_changed as datetime) as stored_utc from pe_lifetime_clock.pwd_clock where id = 1;
+set time_zone = '-08:00';
+select id, password_last_changed is not null and cast(password_last_changed as datetime) < cast('2026-01-02 13:00:00' as datetime) - interval 1 day as expired from pe_lifetime_clock.pwd_clock order by id;
+set time_zone = @pe_time_zone;
+drop database pe_lifetime_clock;
+
+-- Exercise the real pre-upgrade login boundary with the default policy on.
+-- No convention table or migration may be required to reach authentication.
+set @pe_password_lifetime = @@global.default_password_lifetime;
+set global default_password_lifetime = 1;
+-- @session:id=21&user=sys:pe_u4&password=Start123a
+select 1;
+set password = 'Fresh456b';
+select 1;
+-- @session
+set global default_password_lifetime = @pe_password_lifetime;
+
 drop user if exists pe_u1;
 drop user if exists pe_u2;
 drop user if exists pe_u3;

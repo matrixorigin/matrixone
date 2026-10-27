@@ -96,10 +96,6 @@ func createTablesInMoCatalog(ctx context.Context, txn executor.TxnExecutor, fina
 	addSqlIntoSet(initMoUser1)
 	addSqlIntoSet(initMoUser2)
 
-	// Root and dump are the first session-local writer rows: stamp the
-	// tenant convention anchor in the same bootstrap transaction.
-	addSqlIntoSet(InsertMoPwdTsConventionSql)
-
 	// Initialize each role in one statement within the bootstrap transaction.
 	addSqlIntoSet(initialRolePrivilegesSQL(moAdminRoleID, moAdminRoleName,
 		rootID, entriesOfMoAdminForMoRolePrivsFor))
