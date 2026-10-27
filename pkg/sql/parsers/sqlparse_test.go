@@ -488,6 +488,18 @@ func TestHandleSqlForRecord(t *testing.T) {
 			require.Equal(t, []string{`SELECT '\'`, "SET PASSWORD = '******'"}, records)
 		}
 	})
+	t.Run("lexical failure before a credential fails closed", func(t *testing.T) {
+		for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES"} {
+			for _, tail := range []string{"'", ""} {
+				sql := "CREATE ACCOUNT `` ADMIN_NAME 'admin' IDENTIFIED BY 'LexicalSecret42" + tail
+				fragments, secrets := MaskSecretLiteralsWithSQLMode(sql, mode)
+				require.Equal(t, []string{"******"}, fragments)
+				require.Equal(t, []string{sql}, secrets)
+			}
+		}
+		// No credential keyword: preserve ordinary invalid SQL diagnostics.
+		require.Equal(t, []string{"SELECT ``"}, HandleSqlForRecord("SELECT ``"))
+	})
 	t.Run("password keyword without set is not masked", func(t *testing.T) {
 		// ALTER USER ... PASSWORD EXPIRE has no secret literal to mask.
 		require.Equal(t, []string{"ALTER USER u1 PASSWORD EXPIRE INTERVAL 3 DAY"},

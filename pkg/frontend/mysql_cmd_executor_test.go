@@ -225,12 +225,14 @@ func TestDoComQuerySetPasswordTargetNameRedaction(t *testing.T) {
 func TestDoComQueryPasswordSQLModeRedaction(t *testing.T) {
 	for _, tc := range []struct {
 		name, mode, prefix, command string
+		lexicalError                bool
 	}{
-		{"default", "", "SELECT 1; ", "SET PASSWORD = '"},
-		{"no-backslash ordinary prefix", "NO_BACKSLASH_ESCAPES", "SELECT 1; ", "SET PASSWORD = '"},
-		{"no-backslash quoted prefix", "NO_BACKSLASH_ESCAPES", `SELECT '\'; `, "SET PASSWORD = '"},
-		{"ansi and no-backslash", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", `SELECT '\'; `, "SET PASSWORD = '"},
-		{"identified without PASSWORD keyword", "NO_BACKSLASH_ESCAPES", `SELECT '\'; `, "CREATE USER diagnostic_user IDENTIFIED BY '"},
+		{"default", "", "SELECT 1; ", "SET PASSWORD = '", false},
+		{"no-backslash ordinary prefix", "NO_BACKSLASH_ESCAPES", "SELECT 1; ", "SET PASSWORD = '", false},
+		{"no-backslash quoted prefix", "NO_BACKSLASH_ESCAPES", `SELECT '\'; `, "SET PASSWORD = '", false},
+		{"ansi and no-backslash", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", `SELECT '\'; `, "SET PASSWORD = '", false},
+		{"identified without PASSWORD keyword", "NO_BACKSLASH_ESCAPES", `SELECT '\'; `, "CREATE USER diagnostic_user IDENTIFIED BY '", false},
+		{"lexical error before credential", "", "CREATE ACCOUNT `` ", "ADMIN_NAME 'admin' IDENTIFIED BY '", true},
 	} {
 		for _, tail := range []string{"' trailing", ""} {
 			t.Run(tc.name+"/"+tail, func(t *testing.T) {
@@ -249,9 +251,13 @@ func TestDoComQueryPasswordSQLModeRedaction(t *testing.T) {
 				const secret = "ReviewSQLModeSecret42"
 				valid := tc.prefix + tc.command + secret + "'"
 				stmts, err := mysql.ParseWithSQLMode(ctx, valid, 1, tc.mode)
-				require.NoError(t, err)
 				freeStatements(stmts)
-				require.Len(t, stmts, 2, "the prefix must be a real statement under the active mode")
+				if tc.lexicalError {
+					require.Error(t, err, "the lexer must fail before reaching IDENTIFIED BY")
+				} else {
+					require.NoError(t, err)
+					require.Len(t, stmts, 2, "the prefix must be a real statement under the active mode")
+				}
 				err = doComQuery(ses, execCtx, &UserInput{sql: tc.prefix + tc.command + secret + tail})
 				require.Error(t, err)
 				require.NotContains(t, err.Error(), secret)

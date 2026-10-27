@@ -51,9 +51,9 @@ create user  test_user1 identified by '12345678';
 internal error: the user test_user1 exists
 create user if not exists test_user1 identified by '12345678';
 create user user1 identified by '12345678',user2 identified by '12345678',user3 identified by '12345678',user4 identified by '12345678',user5 identified by '12345678',user6 identified by '12345678',user7 identified by '12345678',user8 identified by '12345678',user9 identified by '12345678',user10 identified by '12345678' default role u_role;
-select count(*) from mo_catalog.mo_user where user_name like 'user%';
+select count(*) from mo_catalog.mo_user where user_name in ('user123456','user1234.aaaa','user1','user2','user3','user4','user5','user6','user7','user8','user9','user10');
 count(*)
-13
+12
 create user tester1 identified by '12345678',tester2 identified by '12345678',user3 identified by '12345678',user4 identified by '12345678';
 internal error: the user user3 exists
 select count(*) from mo_catalog.mo_user where user_name like 'tester%';
@@ -64,9 +64,9 @@ select count(*) from mo_catalog.mo_user where user_name like 'tester%';
 count(*)
 2
 create user tester001 identified by '12345678',tester002  identified by '12345678',tester:003 identified by '12345678';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 90 near ":003 identified by '12345678';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 90 near "******";
 create user if not exists tester001 identified by '12345678',tester002  identified by '12345678',tester:003 identified by '12345678';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 104 near ":003 identified by '12345678';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 104 near "******";
 select count(*) from mo_catalog.mo_user where user_name like 'tester00%';
 count(*)
 0
@@ -100,11 +100,11 @@ customername    localhost
 CREATE USER ''@'localhost' IDENTIFIED BY '1111';
 internal error: the name "" is invalid
 create user if not exists user1 ,user2 ,user3 identified by '12345678';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 33 near " ,user2 ,user3 identified by '12345678';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 33 near "******";
 create user if not exists all identified by '111' ;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " all identified by '111' ;";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near "******";
 create user user:1 identified by '111' ;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 17 near ":1 identified by '111' ;";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 17 near "******";
 create user 'user:1' identified by '111' ;
 internal error: the name "user:1" is invalid
 create user "user:1" identified by '111' ;

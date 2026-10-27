@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -2568,7 +2569,14 @@ func (ui *UserInput) parseErrorRecords(ses FeSession) ([]string, []string) {
 	source := constant.ExternSql
 	previousToken := 0
 	appendRecord := func(end int) {
-		records = append(records, strings.Join(parsers.HandleSqlForRecordWithSQLMode(sql[start:end], sqlMode), ";"))
+		fragment := sql[start:end]
+		if diagnostic := sqlmongodb.RedactSQLForDiagnostics(fragment); diagnostic != fragment {
+			// Preserve the selector's authoritative privacy marker before a
+			// generic lexical-failure fallback can replace the whole fragment.
+			records = append(records, diagnostic)
+		} else {
+			records = append(records, strings.Join(parsers.HandleSqlForRecordWithSQLMode(fragment, sqlMode), ";"))
+		}
 		sources = append(sources, source)
 	}
 	for {

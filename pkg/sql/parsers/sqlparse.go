@@ -80,6 +80,40 @@ var HandleSqlForRecord = func(sql string) []string {
 	return masked
 }
 
+// ContainsCredentialWord is an allocation-free, conservative precheck for the
+// credential keywords recognized by the diagnostic masker. It is not a lexer:
+// it also protects credentials following a token that cannot be lexed.
+func ContainsCredentialWord(text string) bool {
+	for i := 0; i < len(text); i++ {
+		var needle string
+		switch text[i] | 0x20 {
+		case 'p':
+			needle = "password"
+		case 'i':
+			needle = "identified"
+		case 'a':
+			needle = "access_key_id"
+		case 's':
+			needle = "secret_access_key"
+		default:
+			continue
+		}
+		if len(text)-i < len(needle) {
+			continue
+		}
+		j := 1
+		for ; j < len(needle); j++ {
+			if text[i+j]|0x20 != needle[j] {
+				break
+			}
+		}
+		if j == len(needle) {
+			return true
+		}
+	}
+	return false
+}
+
 // HandleSqlForRecordWithSQLMode masks records using execution's lexical rules.
 func HandleSqlForRecordWithSQLMode(sql, sqlMode string) []string {
 	masked, _ := MaskSecretLiteralsWithSQLMode(sql, sqlMode)
@@ -173,6 +207,13 @@ func handleSQLForRecordFragmentWithSecrets(sql string, mode mysql.SQLModeFlags) 
 	sawSetPassword := false
 	for scanner.Pos < len(sql) {
 		typ, s := scanSQLToken(scanner, &previousToken)
+		if typ == mysql.LEX_ERROR && ContainsCredentialWord(sql) {
+			// A lexical error before a credential (for example an empty
+			// quoted identifier) makes subsequent tokens untrustworthy.
+			// Retain no raw fragment; its full span also marks parser-error
+			// echoes as credential-bearing for frontend error scrubbing.
+			return "******", []string{sql}
+		}
 		// SET PASSWORD owns its target and value. A target named
 		// access_key_id/secret_access_key is a user, not a credential option:
 		// generic lookahead must not consume '=' or PASSWORD('secret').

@@ -373,45 +373,11 @@ func redactStatementTextForLogging(statement tree.Statement, text string, ses Fe
 		// every supported secret shape over the whole input, including
 		// fragments of multi-statement texts. The fold scan keeps ordinary
 		// texts on a zero-allocation pass-through.
-		if containsCredentialWord(text) {
+		if parsers.ContainsCredentialWord(text) {
 			return strings.Join(parsers.HandleSqlForRecordWithSQLMode(text, sessionSQLModeForParser(ses)), ";")
 		}
 		return text
 	}
-}
-
-// containsCredentialWord is the allocation-free admission check for the
-// credential forms supported by parsers.MaskSecretLiteralsWithSQLMode. Only
-// credential-bearing diagnostics need a session-mode lookup and lexical scan.
-func containsCredentialWord(text string) bool {
-	for i := 0; i < len(text); i++ {
-		var needle string
-		switch text[i] | 0x20 {
-		case 'p':
-			needle = "password"
-		case 'i':
-			needle = "identified"
-		case 'a':
-			needle = "access_key_id"
-		case 's':
-			needle = "secret_access_key"
-		default:
-			continue
-		}
-		if len(text)-i < len(needle) {
-			continue
-		}
-		j := 1
-		for ; j < len(needle); j++ {
-			if text[i+j]|0x20 != needle[j] {
-				break
-			}
-		}
-		if j == len(needle) {
-			return true
-		}
-	}
-	return false
 }
 
 // redactStatementErrorForLogging replaces a parser echo of __mo_query or of
@@ -438,7 +404,7 @@ func redactStatementErrorForLogging(err error, text string, ses FeSession) error
 // fragments and the lexer's truncated >1024-byte echoes are never provably
 // clean.
 func redactParseErrorSecrets(err error, text string, ses FeSession) error {
-	if err == nil || !containsCredentialWord(text) {
+	if err == nil || !parsers.ContainsCredentialWord(text) {
 		return err
 	}
 	_, secrets := parsers.MaskSecretLiteralsWithSQLMode(text, sessionSQLModeForParser(ses))
@@ -5199,10 +5165,6 @@ func rewriteSQLStatementInput(ctx context.Context, ses *Session, input *UserInpu
 	return &rewrittenInput, nil
 }
 
-func sqlForRecord(sql string) string {
-	return sqlForRecordWithSQLMode(sql, "")
-}
-
 func sqlForRecordWithSQLMode(sql, sqlMode string) string {
 	parts := parsers.HandleSqlForRecordWithSQLMode(sql, sqlMode)
 	if len(parts) == 0 {
@@ -7214,7 +7176,7 @@ func sqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, sqlMode
 }
 
 // schedulingSQLByStatementWithSQLMode keeps raw statement text (including
-// optimizer comments) aligned with the parser's AST list. Unlike sqlForRecord,
+// optimizer comments) aligned with the parser's AST list. Unlike sqlForRecordWithSQLMode,
 // this text is control-plane input and must never be sanitized first.
 func schedulingSQLByStatementWithSQLMode(ctx context.Context, sql string, sqlMode string, internalSource bool) ([]string, []string, error) {
 	if isCmdFieldListSql(sql) || isCmdGetSnapshotTsSql(sql) ||
