@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -511,33 +510,7 @@ func (c *Config) getObservabilityConfig() config.ObservabilityParameters {
 
 // memberlist requires all gossip seed addresses to be provided as IP:PORT
 func (c *Config) resolveGossipSeedAddresses() error {
-	result := make([]string, 0)
-	for _, addr := range c.LogService.GossipSeedAddresses {
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			return err
-		}
-		ips, err := net.LookupIP(host)
-		if err != nil {
-			// the configured member may be failed currently, keep the host name anyway since
-			// memberlist would try to resolve it again
-			result = append(result, addr)
-			continue
-		}
-		// only keep IPv4 addresses
-		filtered := make([]string, 0)
-		for _, ip := range ips {
-			if ip.To4() != nil {
-				filtered = append(filtered, ip.String())
-			}
-		}
-		if len(filtered) != 1 {
-			return moerr.NewBadConfigf(context.Background(), "GossipSeedAddress %s", addr)
-		}
-		result = append(result, net.JoinHostPort(filtered[0], port))
-	}
-	c.LogService.GossipSeedAddresses = result
-	return nil
+	return c.LogService.ResolveGossipSeedAddresses()
 }
 
 func (c *Config) hashNodeID() uint16 {
