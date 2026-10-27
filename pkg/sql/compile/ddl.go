@@ -7904,21 +7904,8 @@ func validateLosslessNoFullStartCompileProtocol(ctx context.Context, c *Compile)
 	return cdc.ValidateLosslessNoFullStartProtocol(ctx, protocolVersion)
 }
 
-func CDCStrToTime(tsStr string, tz *time.Location) (ts time.Time, err error) {
-	if tsStr == "" {
-		return
-	}
-
-	if tz != nil {
-		if ts, err = time.ParseInLocation(
-			time.DateTime, tsStr, tz,
-		); err == nil {
-			return
-		}
-	}
-
-	ts, err = time.Parse(time.RFC3339, tsStr)
-	return
+func CDCStrToTime(tsStr string, tz *time.Location) (time.Time, error) {
+	return cdc.CDCStrToTime(tsStr, tz)
 }
 
 func (opts *CDCCreateTaskOptions) handleLevel(

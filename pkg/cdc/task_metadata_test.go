@@ -75,3 +75,20 @@ func TestBuildTaskDetailsPreservesPersistedFields(t *testing.T) {
 	require.NoError(t, decoded.Unmarshal(encoded))
 	require.Equal(t, want, &decoded)
 }
+
+func TestCDCStrToTimeFormatsAndTimezone(t *testing.T) {
+	zone := time.FixedZone("offset", 2*60*60)
+	got, err := CDCStrToTime("2025-01-02 03:04:05", zone)
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2025, 1, 2, 3, 4, 5, 0, zone), got)
+	got, err = CDCStrToTime("2025-01-02T03:04:05Z", zone)
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC), got)
+	_, err = CDCStrToTime("2025-01-02 03:04:05", nil)
+	require.Error(t, err)
+	_, err = CDCStrToTime("bad", zone)
+	require.Error(t, err)
+	got, err = CDCStrToTime("", nil)
+	require.NoError(t, err)
+	require.True(t, got.IsZero())
+}

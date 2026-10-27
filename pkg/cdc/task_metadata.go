@@ -70,3 +70,21 @@ func BuildTaskDetails(accountID uint32, accountName, userName, taskName, taskID 
 		},
 	}
 }
+
+// CDCStrToTime parses a CDC task timestamp in its configured timezone or RFC3339.
+func CDCStrToTime(tsStr string, tz *time.Location) (ts time.Time, err error) {
+	if tsStr == "" {
+		return
+	}
+
+	if tz != nil {
+		if ts, err = time.ParseInLocation(
+			time.DateTime, tsStr, tz,
+		); err == nil {
+			return
+		}
+	}
+
+	ts, err = time.Parse(time.RFC3339, tsStr)
+	return
+}
