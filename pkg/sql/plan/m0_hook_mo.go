@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -39,6 +40,7 @@ func m0PlanBase(table *plan.TableDef) (uint32, error) {
 func m0PlanBaseWithConstraints(table *plan.TableDef, rejectConstraints bool) (uint32, error) {
 	if table == nil || table.Pkey == nil || table.Pkey.CompPkeyCol == nil ||
 		table.ClusterBy != nil || table.IsTemporary || table.TableType == catalog.SystemPartitionRel ||
+		features.IsPartitioned(table.FeatureFlag) || features.IsPartition(table.FeatureFlag) || table.Partition != nil ||
 		rejectConstraints && (len(table.Indexes) != 0 || len(table.Fkeys) != 0 ||
 			len(table.RefChildTbls) != 0 || len(table.Checks) != 0) {
 		return 0, moerr.NewInternalErrorNoCtxf("M0: table is outside the hidden composite primary-key domain")

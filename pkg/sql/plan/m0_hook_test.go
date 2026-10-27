@@ -24,6 +24,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,6 +74,30 @@ func TestM0PlanAdmissionRejectsIdentitiesAndBackfill(t *testing.T) {
 	inboundFK.RefChildTbls = []uint64{42}
 	_, err = m0PlanBase(inboundFK)
 	require.Error(t, err)
+}
+
+func TestM0PlanAdmissionRejectsPartitions(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*plan.TableDef)
+	}{
+		{"partitioned root", func(d *plan.TableDef) { d.FeatureFlag = features.Partitioned }},
+		{"backing partition", func(d *plan.TableDef) { d.FeatureFlag = features.Partition }},
+		{"partitioned index", func(d *plan.TableDef) { d.FeatureFlag = features.Partitioned | features.IndexTable }},
+		{"partition metadata", func(d *plan.TableDef) { d.Partition = &plan.Partition{} }},
+		{"legacy partition", func(d *plan.TableDef) { d.TableType = catalog.SystemPartitionRel }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			table := m0TestPlanTable()
+			_, err := m0PlanBase(table)
+			require.NoError(t, err, "ordinary composite-PK control")
+			tc.mutate(table)
+			_, err = m0PlanBase(table)
+			require.Error(t, err)
+			_, err = m0PlanBaseWithConstraints(table, false)
+			require.Error(t, err, "relaxing constraints must not admit partitions")
+		})
+	}
 }
 
 func TestM0FormalAddBuildsInplaceAddColumnAction(t *testing.T) {

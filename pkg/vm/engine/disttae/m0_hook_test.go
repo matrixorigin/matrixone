@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -97,6 +98,10 @@ func TestM0AppendBaseRejectsUnboundLayouts(t *testing.T) {
 		{"missing composite key", func(d *plan.TableDef) { d.Pkey.CompPkeyCol = nil }},
 		{"clustered", func(d *plan.TableDef) { d.ClusterBy = &plan.ClusterByDef{} }},
 		{"partition", func(d *plan.TableDef) { d.TableType = pkgcatalog.SystemPartitionRel }},
+		{"partitioned root", func(d *plan.TableDef) { d.FeatureFlag = features.Partitioned }},
+		{"backing partition", func(d *plan.TableDef) { d.FeatureFlag = features.Partition }},
+		{"partitioned index", func(d *plan.TableDef) { d.FeatureFlag = features.Partitioned | features.IndexTable }},
+		{"partition metadata", func(d *plan.TableDef) { d.Partition = &plan.Partition{} }},
 		{"index", func(d *plan.TableDef) { d.Indexes = []*plan.IndexDef{{}} }},
 		{"foreign key", func(d *plan.TableDef) { d.Fkeys = []*plan.ForeignKeyDef{{}} }},
 		{"check", func(d *plan.TableDef) { d.Checks = []*plan.CheckDef{{}} }},

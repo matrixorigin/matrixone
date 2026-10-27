@@ -20,13 +20,57 @@ import (
 	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+func TestM0CNAddColumnRejectsPartitionsBeforePublication(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*txnTable)
+	}{
+		{"partitioned root", func(tbl *txnTable) { tbl.tableDef.FeatureFlag = features.Partitioned }},
+		{"backing partition", func(tbl *txnTable) { tbl.tableDef.FeatureFlag = features.Partition }},
+		{"partition metadata", func(tbl *txnTable) { tbl.tableDef.Partition = &plan.Partition{} }},
+		{"legacy partition", func(tbl *txnTable) { tbl.tableDef.TableType = catalog.SystemPartitionRel }},
+		{"stored partition flag", func(tbl *txnTable) { tbl.partitioned = 1 }},
+		{"stored partition metadata", func(tbl *txnTable) { tbl.partition = "partition metadata" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			workspace := &Transaction{op: op}
+			op.EXPECT().IsSnapOp().Return(false)
+			op.EXPECT().GetWorkspace().Return(workspace)
+			op.EXPECT().TxnOptions().Return(txn.TxnOptions{Autocommit: true})
+			op.EXPECT().Txn().Return(txn.TxnMeta{
+				Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC,
+			}).Times(2)
+			table := &txnTable{
+				db:              &txnDatabase{op: op},
+				tableDef:        m0TestAppendTableDef(),
+				remoteWorkspace: true,
+			}
+			tc.mutate(table)
+			before := table.tableDef
+			defs, err := buildM0CNAddColumn(table, context.Background(),
+				api.NewAddColumnReq(7, 42, "x", plan.Type{Id: int32(types.T_int32)}, -1))
+			require.ErrorContains(t, err, "partitioned tables and backing partitions require COPY")
+			require.Nil(t, defs)
+			require.Same(t, before, table.tableDef)
+			require.Empty(t, workspace.writes)
+			require.Empty(t, workspace.restoreTxnTableFunc)
+		})
+	}
+}
 
 func TestM0AlterRefreshesSameRelationDefinitionCache(t *testing.T) {
 	nullable := &plan.Default{NullAbility: true}

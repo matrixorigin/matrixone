@@ -74,6 +74,23 @@ select count(*) as metadata_flush_ok from (select mo_ctl('dn','flush','m0_custom
 select count(*) as metadata_mixed_stats from (select sum(rows_cnt) as r,sum(null_cnt) as n from metadata_scan('m0_customer_child.birth_metadata','flag') m) g where r=4 and n=1;
 select count(*) as metadata_mixed_extrema from (select mo_table_col_min('m0_customer_child','birth_metadata','flag') as lo,mo_table_col_max('m0_customer_child','birth_metadata','flag') as hi) g where lo='false' and hi='true';
 drop table birth_metadata;
+-- Partition roots and backing tables must use COPY together; stale child IDs break the next INSERT.
+create table partition_default(a int not null,b int not null,primary key(a,b)) partition by hash(a) partitions 2;
+insert into partition_default values(1,1);
+alter table partition_default add column x int;
+insert into partition_default(a,b,x) values(2,2,42);
+insert into partition_default(a,b,x) values(3,3,42);
+select count(*) as partition_default_rows from partition_default where (a=1 and b=1 and x is null) or (a in (2,3) and b=a and x=42);
+select count(*) as partition_default_copy_root from mo_catalog.mo_tables where reldatabase='m0_customer_child' and relname='partition_default' and rel_version=0;
+select count(*) as partition_default_live_routes from mo_catalog.mo_partition_tables p join mo_catalog.mo_tables r on p.primary_table_id=r.rel_id join mo_catalog.mo_tables c on p.partition_id=c.rel_id and p.partition_table_name=c.relname and c.reldatabase=r.reldatabase where r.reldatabase='m0_customer_child' and r.relname='partition_default';
+create table partition_explicit_copy(a int not null,b int not null,primary key(a,b)) partition by hash(a) partitions 2;
+insert into partition_explicit_copy values(1,1);
+alter table partition_explicit_copy add column x int, algorithm=copy;
+insert into partition_explicit_copy(a,b,x) values(2,2,42);
+insert into partition_explicit_copy(a,b,x) values(3,3,42);
+select count(*) as partition_explicit_copy_rows from partition_explicit_copy where (a=1 and b=1 and x is null) or (a in (2,3) and b=a and x=42);
+select count(*) as partition_explicit_copy_root from mo_catalog.mo_tables where reldatabase='m0_customer_child' and relname='partition_explicit_copy' and rel_version=0;
+select count(*) as partition_explicit_copy_live_routes from mo_catalog.mo_partition_tables p join mo_catalog.mo_tables r on p.primary_table_id=r.rel_id join mo_catalog.mo_tables c on p.partition_id=c.rel_id and p.partition_table_name=c.relname and c.reldatabase=r.reldatabase where r.reldatabase='m0_customer_child' and r.relname='partition_explicit_copy';
 drop snapshot m0_customer_snapshot;
 drop database m0_customer_child;
 drop database m0_customer_parent;
