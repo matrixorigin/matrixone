@@ -11141,113 +11141,110 @@ func Test_castBinaryArrayToInt(t *testing.T) {
 	}
 }
 
-func initTimeFormatTestCase() []tcTemp {
-	t1, _ := types.ParseTime("15:30:45", 6)
-	t2, _ := types.ParseTime("00:00:00", 6)
-	t3, _ := types.ParseTime("23:59:59.123456", 6)
-	t4, _ := types.ParseTime("12:34:56.789012", 6)
-	t5, _ := types.ParseTime("123:45:06", 6)
-	t6, _ := types.ParseTime("-123:45:06", 6)
+func initTimeFormatTestCase(t *testing.T) []tcTemp {
+	t.Helper()
+	parse := func(value string) types.Time {
+		parsed, err := types.ParseTime(value, 6)
+		require.NoError(t, err)
+		return parsed
+	}
+	t1 := parse("15:30:45")
+	t2 := parse("00:00:00")
+	t3 := parse("23:59:59.123456")
+	t4 := parse("12:34:56.789012")
+	t5 := parse("123:45:06")
+	t6 := parse("-123:45:06")
 
+	cases := []struct {
+		info                            string
+		values                          []types.Time
+		format, want                    []string
+		valueNull, formatNull, wantNull []bool
+	}{
+		{
+			info:       "test time_format - %H:%i:%s",
+			values:     []types.Time{t1, t2, t3},
+			format:     []string{"%H:%i:%s"},
+			want:       []string{"15:30:45", "00:00:00", "23:59:59"},
+			valueNull:  []bool{false, false, false},
+			formatNull: []bool{false},
+			wantNull:   []bool{false, false, false},
+		},
+		{
+			info:       "test time_format - %T",
+			values:     []types.Time{t1, t5, t6},
+			format:     []string{"%T"},
+			want:       []string{"15:30:45", "123:45:06", "-123:45:06"},
+			valueNull:  []bool{false, false, false},
+			formatNull: []bool{false},
+			wantNull:   []bool{false, false, false},
+		},
+		{
+			info:       "test time_format - negative time prefixes complete result",
+			values:     []types.Time{t6},
+			format:     []string{"elapsed=%H:%i:%s"},
+			want:       []string{"-elapsed=123:45:06"},
+			valueNull:  []bool{false},
+			formatNull: []bool{false},
+			wantNull:   []bool{false},
+		},
+		{
+			info:       "test time_format - empty format returns null",
+			values:     []types.Time{t1, t6},
+			format:     []string{""},
+			want:       []string{"", ""},
+			valueNull:  []bool{false, false},
+			formatNull: []bool{false},
+			wantNull:   []bool{true, true},
+		},
+		{
+			info:       "test time_format - %h:%i:%s %p",
+			values:     []types.Time{t1, t2, t4},
+			format:     []string{"%h:%i:%s %p"},
+			want:       []string{"03:30:45 PM", "12:00:00 AM", "12:34:56 PM"},
+			valueNull:  []bool{false, false, false},
+			formatNull: []bool{false},
+			wantNull:   []bool{false, false, false},
+		},
+		{
+			info:       "test time_format - %r",
+			values:     []types.Time{t1, t2, t4},
+			format:     []string{"%r"},
+			want:       []string{"03:30:45 PM", "12:00:00 AM", "12:34:56 PM"},
+			valueNull:  []bool{false, false, false},
+			formatNull: []bool{false},
+			wantNull:   []bool{false, false, false},
+		},
+		{
+			info:       "test time_format - %H:%i:%s.%f",
+			values:     []types.Time{t3, t4},
+			format:     []string{"%H:%i:%s.%f"},
+			want:       []string{"23:59:59.123456", "12:34:56.789012"},
+			valueNull:  []bool{false, false},
+			formatNull: []bool{false},
+			wantNull:   []bool{false, false},
+		},
+		{
+			info:       "test time_format - null",
+			values:     []types.Time{t1},
+			format:     []string{"%H:%i:%s"},
+			want:       []string{""},
+			valueNull:  []bool{true},
+			formatNull: []bool{false},
+			wantNull:   []bool{true},
+		},
+	}
 	testCases := make([]tcTemp, 0, 18)
-	testCases = append(testCases,
-		tcTemp{
-			info: "test time_format - %H:%i:%s",
+	for _, tc := range cases {
+		testCases = append(testCases, tcTemp{
+			info: tc.info,
 			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1, t2, t3},
-					[]bool{false, false, false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%H:%i:%s"}, []bool{false}),
+				NewFunctionTestInput(types.T_time.ToType(), tc.values, tc.valueNull),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), tc.format, tc.formatNull),
 			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"15:30:45", "00:00:00", "23:59:59"},
-				[]bool{false, false, false}),
-		},
-		tcTemp{
-			info: "test time_format - %T",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1, t5, t6},
-					[]bool{false, false, false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%T"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"15:30:45", "123:45:06", "-123:45:06"},
-				[]bool{false, false, false}),
-		},
-		tcTemp{
-			info: "test time_format - negative time prefixes complete result",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t6},
-					[]bool{false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"elapsed=%H:%i:%s"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"-elapsed=123:45:06"},
-				[]bool{false}),
-		},
-		tcTemp{
-			info: "test time_format - empty format returns null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1, t6},
-					[]bool{false, false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"", ""},
-				[]bool{true, true}),
-		},
-		tcTemp{
-			info: "test time_format - %h:%i:%s %p",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1, t2, t4},
-					[]bool{false, false, false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%h:%i:%s %p"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"03:30:45 PM", "12:00:00 AM", "12:34:56 PM"},
-				[]bool{false, false, false}),
-		},
-		tcTemp{
-			info: "test time_format - %r",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1, t2, t4},
-					[]bool{false, false, false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%r"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"03:30:45 PM", "12:00:00 AM", "12:34:56 PM"},
-				[]bool{false, false, false}),
-		},
-		tcTemp{
-			info: "test time_format - %H:%i:%s.%f",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t3, t4},
-					[]bool{false, false}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%H:%i:%s.%f"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"23:59:59.123456", "12:34:56.789012"},
-				[]bool{false, false}),
-		},
-		tcTemp{
-			info: "test time_format - null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_time.ToType(),
-					[]types.Time{t1},
-					[]bool{true}),
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%H:%i:%s"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{true}),
-		},
-	)
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, tc.wantNull),
+		})
+	}
 	for _, tc := range []struct {
 		format   string
 		positive string
@@ -11278,7 +11275,7 @@ func initTimeFormatTestCase() []tcTemp {
 }
 
 func TestTimeFormat(t *testing.T) {
-	testCases := initTimeFormatTestCase()
+	testCases := initTimeFormatTestCase(t)
 
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
