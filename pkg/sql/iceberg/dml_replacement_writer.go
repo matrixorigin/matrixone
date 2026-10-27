@@ -62,7 +62,7 @@ func WriteDMLReplacementDataFiles(ctx context.Context, req DMLReplacementDataFil
 	if err != nil {
 		return nil, err
 	}
-	statementKey := firstNonEmpty(req.Base.StatementID, req.Base.IdempotencyKey)
+	statementKey := api.FirstNonBlankPreserveWhitespace(req.Base.StatementID, req.Base.IdempotencyKey)
 	if statementKey == "" {
 		return nil, api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML replacement writer requires statement id or idempotency key", map[string]string{
 			"table": req.Base.Table,

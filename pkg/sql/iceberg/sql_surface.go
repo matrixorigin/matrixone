@@ -16,6 +16,7 @@ package iceberg
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -68,9 +69,9 @@ func ParseTableMappingSpec(ctx context.Context, param *tree.IcebergTableParam) (
 		return TableMappingSpec{}, moerr.NewInvalidInput(ctx, "iceberg table mapping requires catalog, namespace, and table options")
 	}
 
-	defaultRef := firstNonEmpty(values[optionRef], values[optionDefaultRef], model.DefaultRefMain)
-	readMode := firstNonEmpty(values[optionReadMode], model.ReadModeAppendOnly)
-	writeMode := firstNonEmpty(values[optionWriteMode], model.WriteModeReadOnly)
+	defaultRef := api.FirstNonBlankPreserveWhitespace(values[optionRef], values[optionDefaultRef], model.DefaultRefMain)
+	readMode := api.FirstNonBlankPreserveWhitespace(values[optionReadMode], model.ReadModeAppendOnly)
+	writeMode := api.FirstNonBlankPreserveWhitespace(values[optionWriteMode], model.WriteModeReadOnly)
 	if readMode != model.ReadModeAppendOnly && readMode != model.ReadModeMergeOnRead {
 		return TableMappingSpec{}, moerr.NewInvalidInputf(ctx, "unsupported iceberg read_mode %s", readMode)
 	}
@@ -90,13 +91,4 @@ func ParseTableMappingSpec(ctx context.Context, param *tree.IcebergTableParam) (
 			WriteMode:  writeMode,
 		},
 	}, nil
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }

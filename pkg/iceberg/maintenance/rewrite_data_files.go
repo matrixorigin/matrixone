@@ -53,12 +53,12 @@ func (p RewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Context, req
 	if err != nil {
 		return nil, err
 	}
-	targetRef := firstNonEmptyString(req.TargetRef, "main")
+	targetRef := api.FirstNonBlankPreserveWhitespace(req.TargetRef, "main")
 	payload := rewriteDataFilesPayload(req.Options, snapshot)
 	summary := map[string]string{
 		"operation":       "replace",
 		"engine":          "matrixone",
-		"idempotency-key": firstNonEmptyString(req.IdempotencyKey, req.JobID),
+		"idempotency-key": api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID),
 		"base-snapshot":   strconv.FormatInt(snapshot.SnapshotID, 10),
 	}
 	updates := []api.CommitUpdate{
@@ -79,7 +79,7 @@ func (p RewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Context, req
 			}},
 			Updates:        updates,
 			Summary:        summary,
-			IdempotencyKey: firstNonEmptyString(req.IdempotencyKey, req.JobID),
+			IdempotencyKey: api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID),
 			BaseSnapshotID: snapshot.SnapshotID,
 			TargetRef:      targetRef,
 		},

@@ -60,7 +60,7 @@ func BuildDMLManifestPaths(ctx context.Context, req DMLManifestPathRequest) (DML
 	if err != nil {
 		return DMLManifestPaths{}, err
 	}
-	idempotencyKey := firstNonEmpty(req.Stream.Base.StatementID, req.Stream.Base.IdempotencyKey)
+	idempotencyKey := api.FirstNonBlankPreserveWhitespace(req.Stream.Base.StatementID, req.Stream.Base.IdempotencyKey)
 	if idempotencyKey == "" {
 		return DMLManifestPaths{}, api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML manifest paths require statement id or idempotency key", map[string]string{
 			"table": req.Stream.Base.Table,
@@ -111,7 +111,7 @@ func BuildDMLDeleteFilePath(ctx context.Context, req DMLDeleteFilePathRequest) (
 	if err != nil {
 		return "", err
 	}
-	idempotencyKey := firstNonEmpty(req.Stream.Base.StatementID, req.Stream.Base.IdempotencyKey)
+	idempotencyKey := api.FirstNonBlankPreserveWhitespace(req.Stream.Base.StatementID, req.Stream.Base.IdempotencyKey)
 	if idempotencyKey == "" {
 		return "", api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML delete file path requires statement id or idempotency key", map[string]string{
 			"table": req.Stream.Base.Table,

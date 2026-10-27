@@ -435,8 +435,9 @@ func TestDMLWorkflowAccountingAndPathHelpers(t *testing.T) {
 	cloned[0].Entries[0].SnapshotID = 2
 	require.Equal(t, int64(1), sources[0].Entries[0].SnapshotID)
 	require.Nil(t, clonePreservedManifestSources(nil))
-	require.Equal(t, "value", firstNonEmpty("", "value", "ignored"))
-	require.Empty(t, firstNonEmpty("", " "))
+	require.Equal(t, "value", api.FirstNonBlankPreserveWhitespace("", "value", "ignored"))
+	require.Equal(t, " value ", api.FirstNonBlankPreserveWhitespace("  ", " value ", "ignored"))
+	require.Empty(t, api.FirstNonBlankPreserveWhitespace("", " "))
 }
 
 type fakeManifestObjectWriter struct {

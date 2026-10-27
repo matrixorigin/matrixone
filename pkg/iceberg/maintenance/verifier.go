@@ -82,7 +82,7 @@ func (v CatalogCommitVerifier) VerifyCommittedMaintenance(ctx context.Context, r
 		return result, false, err
 	}
 	expected, hasAddedSnapshot := api.ExpectedAddedSnapshot(plan.Attempt)
-	snapshot, err := maintenanceTargetSnapshot(meta, firstNonEmptyString(req.TargetRef, plan.Attempt.TargetRef), "")
+	snapshot, err := maintenanceTargetSnapshot(meta, api.FirstNonBlankPreserveWhitespace(req.TargetRef, plan.Attempt.TargetRef), "")
 	if err != nil {
 		return result, false, err
 	}

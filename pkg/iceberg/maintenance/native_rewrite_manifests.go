@@ -74,7 +74,7 @@ func (p NativeRewriteManifestsPlanner) BuildMaintenanceCommit(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
-	targetRef := firstNonEmptyString(req.TargetRef, "main")
+	targetRef := api.FirstNonBlankPreserveWhitespace(req.TargetRef, "main")
 	now := maintenanceNow(p.Now)
 	newSnapshotID := nextMaintenanceSnapshotID(now, meta)
 	sequenceNumber := nextMaintenanceSequenceNumber(meta)
@@ -92,7 +92,7 @@ func (p NativeRewriteManifestsPlanner) BuildMaintenanceCommit(ctx context.Contex
 	summary := map[string]string{
 		"operation":           "replace",
 		"engine":              "matrixone",
-		"idempotency-key":     firstNonEmptyString(req.IdempotencyKey, req.JobID),
+		"idempotency-key":     api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID),
 		"base-snapshot":       strconv.FormatInt(snapshot.SnapshotID, 10),
 		"rewritten-manifests": strconv.FormatUint(materialized.RewrittenManifestCount, 10),
 	}
@@ -119,7 +119,7 @@ func (p NativeRewriteManifestsPlanner) BuildMaintenanceCommit(ctx context.Contex
 			Updates:        updates,
 			ManifestFiles:  append([]api.ManifestFile(nil), materialized.Manifests...),
 			Summary:        summary,
-			IdempotencyKey: firstNonEmptyString(req.IdempotencyKey, req.JobID),
+			IdempotencyKey: api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID),
 			BaseSnapshotID: snapshot.SnapshotID,
 			TargetRef:      targetRef,
 			TargetRefType:  req.TargetRefType,
@@ -393,7 +393,7 @@ func (m RewriteManifestsMaterializer) rewriteBasePath(req RewriteManifestsMateri
 }
 
 func rewriteManifestsID(req RewriteManifestsMaterializeRequest) string {
-	raw := firstNonEmptyString(req.IdempotencyKey, req.JobID, strconv.FormatInt(req.Snapshot.SnapshotID, 10))
+	raw := api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID, strconv.FormatInt(req.Snapshot.SnapshotID, 10))
 	if raw == "" {
 		raw = "rewrite-manifests"
 	}

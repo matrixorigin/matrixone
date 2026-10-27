@@ -562,12 +562,12 @@ func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context
 		FilePathHash:     api.PathHash(location),
 	}
 	return RewriteDataFileRewrite{
-		Group:            group,
-		ReplacementFiles: []api.DataFile{replacement},
-	}, ObjectWrite{
-		Location: location,
-		Payload:  output.Bytes(),
-	}, nil
+			Group:            group,
+			ReplacementFiles: []api.DataFile{replacement},
+		}, ObjectWrite{
+			Location: location,
+			Payload:  output.Bytes(),
+		}, nil
 }
 
 type boundedRewriteBuffer struct {
@@ -703,7 +703,7 @@ func (c ParquetConcatRewriteDataFilesCompactor) outputLocation(req RewriteDataFi
 			"snapshot_id": strconv.FormatInt(req.Snapshot.SnapshotID, 10),
 		})
 	}
-	rewriteID := "rw-" + api.PathHash(firstNonEmptyString(req.IdempotencyKey, req.JobID, strconv.FormatInt(req.Snapshot.SnapshotID, 10)))
+	rewriteID := "rw-" + api.PathHash(api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID, strconv.FormatInt(req.Snapshot.SnapshotID, 10)))
 	fileName := "group-" + strconv.Itoa(groupIndex+1) + "-" + api.PathHash(group.PartitionKey) + ".parquet"
 	return api.JoinObjectPath(base, "mo-rewrite-data-files", rewriteID, fileName), nil
 }
@@ -728,7 +728,7 @@ func rewriteDataFilesWriterSchema(meta *api.TableMetadata, fallback *parquet.Sch
 		if err != nil {
 			return nil, err
 		}
-		return parquet.NewSchema(firstNonEmptyString(fallback.Name(), "iceberg"), node), nil
+		return parquet.NewSchema(api.FirstNonBlankPreserveWhitespace(fallback.Name(), "iceberg"), node), nil
 	}
 	return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg parquet rewrite-data-files compactor requires a current schema or fallback parquet schema", nil)
 }

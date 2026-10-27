@@ -33,6 +33,16 @@ func FirstNonEmptyTrimmed(values ...string) string {
 	return ""
 }
 
+// FirstNonBlankPreserveWhitespace returns the first nonblank value unchanged.
+func FirstNonBlankPreserveWhitespace(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 type CatalogClient interface {
 	GetConfig(ctx context.Context, req GetConfigRequest) (*ConfigResponse, error)
 	ListNamespaces(ctx context.Context, req ListNamespacesRequest) (*ListNamespacesResponse, error)

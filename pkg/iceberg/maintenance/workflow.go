@@ -269,10 +269,10 @@ func maintenanceCommitRequest(req Request, plan *CommitPlan) api.CommitRequest {
 		CatalogRequest: plan.Catalog,
 		Namespace:      namespaceFromString(req.Namespace),
 		Table:          req.Table,
-		TargetRef:      firstNonEmptyString(req.TargetRef, plan.Attempt.TargetRef, "main"),
+		TargetRef:      api.FirstNonBlankPreserveWhitespace(req.TargetRef, plan.Attempt.TargetRef, "main"),
 		Requirements:   append([]api.CommitRequirement(nil), plan.Attempt.Requirements...),
 		Updates:        append([]api.CommitUpdate(nil), plan.Attempt.Updates...),
-		IdempotencyKey: firstNonEmptyString(plan.Attempt.IdempotencyKey, req.IdempotencyKey),
+		IdempotencyKey: api.FirstNonBlankPreserveWhitespace(plan.Attempt.IdempotencyKey, req.IdempotencyKey),
 		Summary:        cloneStringMap(plan.Attempt.Summary),
 	}
 }
@@ -336,7 +336,7 @@ func (r CommitRunner) recordOrphanPaths(ctx context.Context, req Request, paths 
 		candidates = append(candidates, write.OrphanCandidate{
 			AccountID:         req.AccountID,
 			CatalogID:         req.CatalogID,
-			JobID:             firstNonEmptyString(req.JobID, req.IdempotencyKey),
+			JobID:             api.FirstNonBlankPreserveWhitespace(req.JobID, req.IdempotencyKey),
 			Namespace:         req.Namespace,
 			TableName:         req.Table,
 			TableLocationHash: api.PathHash(req.Namespace + "." + req.Table),
@@ -367,15 +367,6 @@ func snapshotIDString(result *api.CommitResult) string {
 		return ""
 	}
 	return strconv.FormatInt(result.SnapshotID, 10)
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

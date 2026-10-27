@@ -273,10 +273,10 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 		SequenceNumber:     nextMaintenanceSequenceNumber(meta),
 		TimestampMS:        now.UnixMilli(),
 		SchemaID:           meta.CurrentSchemaID,
-		TargetRef:          firstNonEmptyString(req.TargetRef, "main"),
+		TargetRef:          api.FirstNonBlankPreserveWhitespace(req.TargetRef, "main"),
 		TargetRefType:      req.TargetRefType,
-		TargetRefRetention: meta.Refs[firstNonEmptyString(req.TargetRef, "main")],
-		IdempotencyKey:     firstNonEmptyString(req.IdempotencyKey, req.JobID),
+		TargetRefRetention: meta.Refs[api.FirstNonBlankPreserveWhitespace(req.TargetRef, "main")],
+		IdempotencyKey:     api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID),
 		DataManifestPath:   dataManifestPath,
 		ManifestListPath:   manifestListPath,
 		PreservedManifests: append(
@@ -286,7 +286,7 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 		Summary: map[string]string{
 			"operation":           "replace",
 			"engine":              "matrixone",
-			"idempotency-key":     firstNonEmptyString(req.IdempotencyKey, req.JobID),
+			"idempotency-key":     api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID),
 			"base-snapshot":       strconv.FormatInt(snapshot.SnapshotID, 10),
 			"candidate-files":     strconv.FormatUint(selection.CandidateFileCount, 10),
 			"candidate-bytes":     strconv.FormatInt(selection.CandidateSizeBytes, 10),
@@ -337,7 +337,7 @@ func rewriteDataFilesCompactorSupportsDeletes(compactor RewriteDataFilesCompacto
 }
 
 func rewriteDataFilesID(req Request, snapshot api.Snapshot) string {
-	raw := firstNonEmptyString(req.IdempotencyKey, req.JobID, strconv.FormatInt(snapshot.SnapshotID, 10))
+	raw := api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.JobID, strconv.FormatInt(snapshot.SnapshotID, 10))
 	if raw == "" {
 		raw = "rewrite-data-files"
 	}
@@ -696,7 +696,7 @@ func isRewriteDataFilesCandidate(file api.DataFile, opts rewriteDataFilesSelecti
 	if uint64(file.FileSizeInBytes) > opts.targetFileSizeBytes {
 		return false
 	}
-	return strings.EqualFold(firstNonEmptyString(file.FileFormat, "parquet"), "parquet")
+	return strings.EqualFold(api.FirstNonBlankPreserveWhitespace(file.FileFormat, "parquet"), "parquet")
 }
 
 func buildRewriteDataFileGroups(grouped map[string][]RewriteDataFileCandidate, opts rewriteDataFilesSelectionOptions) []RewriteDataFileGroup {
@@ -1070,7 +1070,7 @@ func rewriteDataFilesManifestEntryWithSequences(status api.ManifestEntryStatus, 
 }
 
 func buildRewriteDataFilesCommitAttempt(req RewriteDataFilesMaterializeRequest, manifests []api.ManifestFile, rewrittenFiles, addedFiles uint64) *api.CommitAttempt {
-	targetRef := firstNonEmptyString(req.TargetRef, "main")
+	targetRef := api.FirstNonBlankPreserveWhitespace(req.TargetRef, "main")
 	summary := cloneStringMap(req.Summary)
 	if summary == nil {
 		summary = make(map[string]string)

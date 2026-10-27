@@ -129,7 +129,7 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 		return nil, api.ToMOErr(ctx, err)
 	}
 	namespace := dottedNamespace(req.Namespace)
-	rawTargetRef := firstNonEmpty(req.DMLScan.Ref, req.DefaultRef, model.DefaultRefMain)
+	rawTargetRef := api.FirstNonBlankPreserveWhitespace(req.DMLScan.Ref, req.DefaultRef, model.DefaultRefMain)
 	catalogReq, targetRef, targetRefType, err := resolveRuntimeCatalogRequestPrefixForWriteRef(ctx, client, api.CatalogRequest{
 		Catalog:           catalogModel,
 		ExternalPrincipal: req.ExternalPrincipal,
@@ -166,7 +166,7 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 	if !ok {
 		return nil, api.ToMOErr(ctx, api.NewError(api.ErrMetadataInvalid, "Iceberg DML base snapshot is no longer present in table metadata", map[string]string{
 			"table": req.Table,
-			"ref":   firstNonEmpty(req.DMLScan.Ref, req.DefaultRef, model.DefaultRefMain),
+			"ref":   api.FirstNonBlankPreserveWhitespace(req.DMLScan.Ref, req.DefaultRef, model.DefaultRefMain),
 		}))
 	}
 	scanObjectIO := objectIORefDMLObjectWriter{ObjectIORef: req.DMLScan.ObjectIORef}
@@ -229,8 +229,8 @@ func (f DMLDeleteRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, 
 		BaseSnapshotID:      req.DMLScan.BaseSnapshotID,
 		TableUUID:           tableMeta.TableUUID,
 		BaseSchemaID:        schema.SchemaID,
-		IdempotencyKey:      firstNonEmpty(req.IdempotencyKey, req.StatementID),
-		StatementID:         firstNonEmpty(req.StatementID, req.IdempotencyKey),
+		IdempotencyKey:      api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.StatementID),
+		StatementID:         api.FirstNonBlankPreserveWhitespace(req.StatementID, req.IdempotencyKey),
 	}
 	partitionSpec, _ := tableMeta.DefaultSpec()
 	base.BaseSpecID = partitionSpec.SpecID
@@ -406,11 +406,11 @@ func (c *dmlRuntimeSharedCoordinator) releaseOnce() {
 }
 
 func dmlRuntimeCoordinatorCacheKey(req icebergwrite.AppendRequest) string {
-	statementKey := strings.TrimSpace(firstNonEmpty(req.IdempotencyKey, req.StatementID))
+	statementKey := strings.TrimSpace(api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.StatementID))
 	if statementKey == "" {
 		return ""
 	}
-	ref := strings.TrimSpace(firstNonEmpty(req.DMLScan.Ref, req.DefaultRef, model.DefaultRefMain))
+	ref := strings.TrimSpace(api.FirstNonBlankPreserveWhitespace(req.DMLScan.Ref, req.DefaultRef, model.DefaultRefMain))
 	return lengthPrefixedKey(
 		strconv.FormatUint(uint64(req.AccountID), 10),
 		strconv.FormatUint(req.RoleID, 10),
@@ -488,7 +488,7 @@ func (f DMLDeleteRuntimeCoordinatorFactory) validateRuntimeRequest(ctx context.C
 			"table": req.Table,
 		}))
 	}
-	if strings.TrimSpace(firstNonEmpty(req.IdempotencyKey, req.StatementID)) == "" {
+	if strings.TrimSpace(api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.StatementID)) == "" {
 		return api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg DML requires a statement idempotency key", map[string]string{
 			"table": req.Table,
 		}))

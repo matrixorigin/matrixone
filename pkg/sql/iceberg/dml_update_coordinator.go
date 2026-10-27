@@ -203,13 +203,13 @@ func resolveDMLCommitBase(base dml.CommitBase, req icebergwrite.AppendRequest) d
 		base.Table = req.Table
 	}
 	if base.TargetRef == "" {
-		base.TargetRef = firstNonEmpty(req.DMLScan.Ref, req.DefaultRef, "main")
+		base.TargetRef = api.FirstNonBlankPreserveWhitespace(req.DMLScan.Ref, req.DefaultRef, "main")
 	}
 	if base.IdempotencyKey == "" {
-		base.IdempotencyKey = firstNonEmpty(req.IdempotencyKey, req.StatementID)
+		base.IdempotencyKey = api.FirstNonBlankPreserveWhitespace(req.IdempotencyKey, req.StatementID)
 	}
 	if base.StatementID == "" {
-		base.StatementID = firstNonEmpty(req.StatementID, req.IdempotencyKey)
+		base.StatementID = api.FirstNonBlankPreserveWhitespace(req.StatementID, req.IdempotencyKey)
 	}
 	if base.BaseSnapshotID == 0 {
 		base.BaseSnapshotID = req.DMLScan.BaseSnapshotID

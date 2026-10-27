@@ -304,10 +304,10 @@ func (w CommitWorkflow) recordOrphans(ctx context.Context, req CommitWorkflowReq
 		candidates = append(candidates, icebergwrite.OrphanCandidate{
 			AccountID:         req.Catalog.Catalog.AccountID,
 			CatalogID:         req.Catalog.Catalog.CatalogID,
-			JobID:             firstNonEmpty(req.Stream.Base.StatementID, req.Stream.Base.IdempotencyKey),
+			JobID:             api.FirstNonBlankPreserveWhitespace(req.Stream.Base.StatementID, req.Stream.Base.IdempotencyKey),
 			Namespace:         strings.Join(req.Stream.Base.Namespace, "."),
 			TableName:         req.Stream.Base.Table,
-			TableLocationHash: api.PathHash(firstNonEmpty(req.TableLocation, req.Stream.Base.Table)),
+			TableLocationHash: api.PathHash(api.FirstNonBlankPreserveWhitespace(req.TableLocation, req.Stream.Base.Table)),
 			FilePath:          path,
 			FilePathHash:      api.PathHash(path),
 			FilePathRedacted:  api.RedactPath(path),
@@ -324,10 +324,10 @@ func dmlCommitRequest(catalog api.CatalogRequest, base CommitBase, attempt *api.
 		CatalogRequest: catalog,
 		Namespace:      base.Namespace,
 		Table:          base.Table,
-		TargetRef:      firstNonEmpty(attempt.TargetRef, base.TargetRef, "main"),
+		TargetRef:      api.FirstNonBlankPreserveWhitespace(attempt.TargetRef, base.TargetRef, "main"),
 		Requirements:   append([]api.CommitRequirement(nil), attempt.Requirements...),
 		Updates:        append([]api.CommitUpdate(nil), attempt.Updates...),
-		IdempotencyKey: firstNonEmpty(attempt.IdempotencyKey, base.IdempotencyKey),
+		IdempotencyKey: api.FirstNonBlankPreserveWhitespace(attempt.IdempotencyKey, base.IdempotencyKey),
 		Summary:        cloneStringMap(attempt.Summary),
 	}
 }
@@ -335,7 +335,7 @@ func dmlCommitRequest(catalog api.CatalogRequest, base CommitBase, attempt *api.
 func dmlPublishAudit(req CommitWorkflowRequest, result api.CommitResult, status, category string) icebergwrite.PublishAudit {
 	base := req.Stream.Base
 	return icebergwrite.PublishAudit{
-		JobID:                firstNonEmpty(base.StatementID, base.IdempotencyKey),
+		JobID:                api.FirstNonBlankPreserveWhitespace(base.StatementID, base.IdempotencyKey),
 		AccountID:            req.Catalog.Catalog.AccountID,
 		TargetCatalogID:      req.Catalog.Catalog.CatalogID,
 		TargetNamespace:      strings.Join(base.Namespace, "."),
@@ -369,7 +369,7 @@ func dmlMetricsReport(req CommitWorkflowRequest, intent *CommitIntent, materiali
 		CatalogRequest:       req.Catalog,
 		Namespace:            append(api.Namespace(nil), base.Namespace...),
 		Table:                base.Table,
-		Ref:                  firstNonEmpty(base.TargetRef, "main"),
+		Ref:                  api.FirstNonBlankPreserveWhitespace(base.TargetRef, "main"),
 		SnapshotID:           result.SnapshotID,
 		StatementID:          base.StatementID,
 		Kind:                 api.MetricsReportWrite,
@@ -529,13 +529,4 @@ func clonePreservedManifestSources(in []PreservedManifestSource) []PreservedMani
 		out[i].Entries = append([]api.ManifestEntry(nil), in[i].Entries...)
 	}
 	return out
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }

@@ -242,7 +242,7 @@ func (r NativeExpireSnapshotsProcedureRunner) RunMaintenance(ctx context.Context
 		ResidencyPolicies:      mergeMaintenanceResidencyPolicies(r.ResidencyPolicies, req.ResidencyPolicies),
 		ResidencyPolicyLister:  r.ResidencyPolicyLister,
 		RequireResidencyPolicy: r.RequireResidencyPolicy,
-		Principal:              firstNonEmpty(req.ExternalPrincipal, "matrixone-maintenance"),
+		Principal:              api.FirstNonBlankPreserveWhitespace(req.ExternalPrincipal, "matrixone-maintenance"),
 	})
 	if err != nil {
 		return maintenance.Result{}, err
@@ -324,7 +324,7 @@ func (r NativeRewriteManifestsProcedureRunner) RunMaintenance(ctx context.Contex
 		ResidencyPolicies:      mergeMaintenanceResidencyPolicies(r.ResidencyPolicies, req.ResidencyPolicies),
 		ResidencyPolicyLister:  r.ResidencyPolicyLister,
 		RequireResidencyPolicy: r.RequireResidencyPolicy,
-		Principal:              firstNonEmpty(req.ExternalPrincipal, "matrixone-maintenance"),
+		Principal:              api.FirstNonBlankPreserveWhitespace(req.ExternalPrincipal, "matrixone-maintenance"),
 	})
 	if err != nil {
 		return maintenance.Result{}, err
@@ -413,7 +413,7 @@ func (r NativeRewriteDataFilesProcedureRunner) RunMaintenance(ctx context.Contex
 		ResidencyPolicies:      mergeMaintenanceResidencyPolicies(r.ResidencyPolicies, req.ResidencyPolicies),
 		ResidencyPolicyLister:  r.ResidencyPolicyLister,
 		RequireResidencyPolicy: r.RequireResidencyPolicy,
-		Principal:              firstNonEmpty(req.ExternalPrincipal, "matrixone-maintenance"),
+		Principal:              api.FirstNonBlankPreserveWhitespace(req.ExternalPrincipal, "matrixone-maintenance"),
 	})
 	if err != nil {
 		return maintenance.Result{}, err
