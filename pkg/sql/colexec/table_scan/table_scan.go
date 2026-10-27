@@ -342,18 +342,13 @@ func (tableScan *TableScan) evalFilter(
 			return engine.ReaderFilterResult{}, moerr.NewInvalidInput(proc.Ctx, "filter condition is not boolean")
 		}
 
-		if tableScan.ctr.filterBs == nil {
-			tableScan.ctr.filterBs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
-		} else {
-			ok := vector.ReuseFunctionFixedTypeParameter[bool](vec, tableScan.ctr.filterBs)
-			if !ok {
+		if vec.IsConst() {
+			if tableScan.ctr.filterBs == nil {
+				tableScan.ctr.filterBs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
+			} else if !vector.ReuseFunctionFixedTypeParameter[bool](vec, tableScan.ctr.filterBs) {
 				tableScan.ctr.filterBs = vector.GenerateFunctionFixedTypeParameter[bool](vec)
 			}
-		}
-		bs := tableScan.ctr.filterBs
-
-		if vec.IsConst() {
-			v, null := bs.GetValue(0)
+			v, null := tableScan.ctr.filterBs.GetValue(0)
 			if null || !v {
 				tableScan.clearLoadedFilterColumns(bat, loadedColumns)
 				tableScan.ctr.filterRows = tableScan.ctr.filterRows[:0]
@@ -366,17 +361,16 @@ func (tableScan *TableScan) evalFilter(
 			}
 			sels = sels[:0]
 
-			l := uint64(vec.Length())
-			if bs.WithAnyNullValue() {
-				for j := uint64(0); j < l; j++ {
-					v, null := bs.GetValue(j)
-					if !null && v {
+			values := vector.MustFixedColNoTypeCheck[bool](vec)
+			nulls := vec.GetNulls()
+			if !nulls.EmptyByFlag() {
+				for j, v := range values {
+					if v && !nulls.Contains(uint64(j)) {
 						sels = append(sels, int64(j))
 					}
 				}
 			} else {
-				for j := uint64(0); j < l; j++ {
-					v, _ := bs.GetValue(j)
+				for j, v := range values {
 					if v {
 						sels = append(sels, int64(j))
 					}
