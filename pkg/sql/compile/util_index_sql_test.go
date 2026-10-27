@@ -37,12 +37,13 @@ import (
 )
 
 func TestIndexMetadataType(t *testing.T) {
-	require.Equal(t, INDEX_TYPE_UNIQUE, colexec.IndexMetadataType(true, ""))
-	require.Equal(t, INDEX_TYPE_MULTIPLE, colexec.IndexMetadataType(false, ""))
-	require.Equal(t, INDEX_TYPE_SPATIAL, colexec.IndexMetadataType(false, catalog.MoIndexRTreeAlgo.ToString()))
-	require.Equal(t, INDEX_TYPE_FULLTEXT, colexec.IndexMetadataType(false, catalog.MOIndexFullTextAlgo.ToString()))
-	require.Equal(t, INDEX_TYPE_FULLTEXT, colexec.IndexMetadataType(false, catalog.MoIndexFullText2Algo.ToString()))
-	require.Equal(t, INDEX_TYPE_UNIQUE, colexec.IndexMetadataType(true, catalog.MoIndexRTreeAlgo.ToString()))
+	require.Equal(t, "PRIMARY", INDEX_TYPE_PRIMARY)
+	require.Equal(t, "UNIQUE", colexec.IndexMetadataType(true, ""))
+	require.Equal(t, "MULTIPLE", colexec.IndexMetadataType(false, ""))
+	require.Equal(t, "SPATIAL", colexec.IndexMetadataType(false, catalog.MoIndexRTreeAlgo.ToString()))
+	require.Equal(t, "FULLTEXT", colexec.IndexMetadataType(false, catalog.MOIndexFullTextAlgo.ToString()))
+	require.Equal(t, "FULLTEXT", colexec.IndexMetadataType(false, catalog.MoIndexFullText2Algo.ToString()))
+	require.Equal(t, "UNIQUE", colexec.IndexMetadataType(true, catalog.MoIndexRTreeAlgo.ToString()))
 }
 
 func TestGenInsertIndexTableSql_QuotesReservedKeywordColumn(t *testing.T) {
