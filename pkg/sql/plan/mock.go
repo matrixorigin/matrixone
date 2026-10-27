@@ -153,6 +153,8 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		return int64(1), nil
 	case "sort_spill_mem", "cagra_batch_window", "ivfpq_batch_window", "gpu_multi_simulation", "mo_pk_check_by_cn":
 		return int64(0), nil
+	case "rollup_algorithm":
+		return "COST", nil
 	case windowPartitionAlgorithmVariable:
 		return "SORT", nil
 	case "probe_limit":

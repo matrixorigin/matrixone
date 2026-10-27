@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"strings"
 	"sync"
 
@@ -60,24 +61,28 @@ func SetValidBitmap(definition string) (uint64, error) {
 }
 
 func NormalizeSetValues(values []string) ([]string, error) {
+	return normalizeSetValuesWithContext(defaultParseContext, values)
+}
+
+func normalizeSetValuesWithContext(ctx context.Context, values []string) ([]string, error) {
 	if len(values) == 0 {
-		return nil, moerr.NewInvalidInputNoCtx("set type length err")
+		return nil, moerr.NewInvalidInput(parseErrorContext(ctx), "set type length err")
 	}
 	if len(values) > MaxSetMembers {
-		return nil, moerr.NewInvalidInputNoCtxf("set type out of max length %d", MaxSetMembers)
+		return nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "set type out of max length %d", MaxSetMembers)
 	}
 
 	normalized := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))
 	for _, value := range values {
 		if strings.Contains(value, ",") {
-			return nil, moerr.NewInvalidInputNoCtxf("set member %q contains ','", value)
+			return nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "set member %q contains ','", value)
 		}
 
 		trimmed := strings.TrimRight(value, " ")
 		key := strings.ToLower(trimmed)
 		if _, ok := normalized[key]; ok {
-			return nil, moerr.NewInvalidInputNoCtxf("duplicate set member %q", value)
+			return nil, moerr.NewInvalidInputf(parseErrorContext(ctx), "duplicate set member %q", value)
 		}
 
 		normalized[key] = struct{}{}
@@ -87,12 +92,17 @@ func NormalizeSetValues(values []string) ([]string, error) {
 }
 
 func ParseSet(setStr string, name string) (uint64, error) {
-	bits, truncated, err := ParseSetAssignment(setStr, name)
+	return ParseSetWithContext(defaultParseContext, setStr, name)
+}
+
+// ParseSetWithContext parses with the caller's error reporting context.
+func ParseSetWithContext(ctx context.Context, setStr string, name string) (uint64, error) {
+	bits, truncated, err := parseSetAssignmentWithContext(ctx, setStr, name)
 	if err != nil {
 		return 0, err
 	}
 	if truncated {
-		return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL set failed: item %s is not in set [%s]", name, setStr)
+		return 0, moerr.NewInternalErrorf(parseErrorContext(ctx), "convert to MySQL set failed: item %s is not in set [%s]", name, setStr)
 	}
 	return bits, nil
 }
@@ -100,7 +110,11 @@ func ParseSet(setStr string, name string) (uint64, error) {
 // ParseSetAssignment retains valid list members and reports value truncation
 // separately from invalid metadata. SQL-mode policy belongs to its caller.
 func ParseSetAssignment(setStr, name string) (uint64, bool, error) {
-	descriptor, err := getSetDescriptor(setStr)
+	return parseSetAssignmentWithContext(defaultParseContext, setStr, name)
+}
+
+func parseSetAssignmentWithContext(ctx context.Context, setStr, name string) (uint64, bool, error) {
+	descriptor, err := getSetDescriptorWithContext(ctx, setStr)
 	if err != nil {
 		return 0, false, err
 	}
@@ -132,7 +146,12 @@ func ParseSetAssignment(setStr, name string) (uint64, bool, error) {
 // definition, exactly as ParseSet matches names, without building an error.
 // Numeric bitmap input is not considered.
 func MatchSetName(setStr string, name string) bool {
-	descriptor, err := getSetDescriptor(setStr)
+	return MatchSetNameWithContext(defaultParseContext, setStr, name)
+}
+
+// MatchSetNameWithContext parses with the caller's error reporting context.
+func MatchSetNameWithContext(ctx context.Context, setStr string, name string) bool {
+	descriptor, err := getSetDescriptorWithContext(ctx, setStr)
 	if err != nil {
 		return false
 	}
@@ -164,11 +183,15 @@ type setDescriptor struct {
 }
 
 func getSetDescriptor(setStr string) (*setDescriptor, error) {
+	return getSetDescriptorWithContext(defaultParseContext, setStr)
+}
+
+func getSetDescriptorWithContext(ctx context.Context, setStr string) (*setDescriptor, error) {
 	if descriptor, ok := setDescriptorCache.Load(setStr); ok {
 		return descriptor.(*setDescriptor), nil
 	}
 
-	descriptor, err := buildSetDescriptor(setStr)
+	descriptor, err := buildSetDescriptorWithContext(ctx, setStr)
 	if err != nil {
 		return nil, err
 	}
@@ -177,12 +200,12 @@ func getSetDescriptor(setStr string) (*setDescriptor, error) {
 	return actual.(*setDescriptor), nil
 }
 
-func buildSetDescriptor(setStr string) (*setDescriptor, error) {
+func buildSetDescriptorWithContext(ctx context.Context, setStr string) (*setDescriptor, error) {
 	if len(setStr) == 0 {
-		return nil, moerr.NewInternalErrorNoCtxf("convert to MySQL set failed: set define is empty %v", setStr)
+		return nil, moerr.NewInternalErrorf(parseErrorContext(ctx), "convert to MySQL set failed: set define is empty %v", setStr)
 	}
 
-	values, err := NormalizeSetValues(DecodeSetValues(setStr))
+	values, err := normalizeSetValuesWithContext(ctx, DecodeSetValues(setStr))
 	if err != nil {
 		return nil, err
 	}
