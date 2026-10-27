@@ -309,7 +309,7 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 		); err != nil {
 			return nil, err
 		}
-		specFieldCounts = partitionSpecFieldCounts(loaded.Metadata)
+		specFieldCounts = loaded.Metadata.PartitionSpecFieldCounts()
 	}
 	deleteTasks, err := pairDeleteTasksBoundedMemory(
 		planningCtx,
@@ -431,17 +431,6 @@ func (p LocalScanPlanner) planSnapshotlessScan(ctx context.Context, req api.Scan
 		DeleteMaxMemoryBytes: req.DeleteMaxMemoryBytes,
 		EnableDeleteSpill:    req.EnableDeleteSpill,
 	}, nil
-}
-
-func partitionSpecFieldCounts(meta *api.TableMetadata) map[int]int {
-	if meta == nil {
-		return nil
-	}
-	out := make(map[int]int, len(meta.PartitionSpecs))
-	for _, spec := range meta.PartitionSpecs {
-		out[spec.SpecID] = len(spec.Fields)
-	}
-	return out
 }
 
 type RefCacheRefresher interface {

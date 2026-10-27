@@ -133,7 +133,7 @@ func (c ParquetConcatRewriteDataFilesCompactor) buildDeleteFilters(ctx context.C
 	if len(candidates) == 0 {
 		return nil, memoryUsed, nil
 	}
-	specFieldCounts := rewriteDataFilesSpecFieldCounts(req.Metadata)
+	specFieldCounts := req.Metadata.PartitionSpecFieldCounts()
 	facade := c.Metadata
 	if facade == nil {
 		facade = metadata.NativeFacade{}
@@ -296,17 +296,6 @@ func rewriteDataFilesCompactionCandidates(groups []RewriteDataFileGroup) map[str
 				out[path] = candidate.File
 			}
 		}
-	}
-	return out
-}
-
-func rewriteDataFilesSpecFieldCounts(meta *api.TableMetadata) map[int]int {
-	if meta == nil {
-		return nil
-	}
-	out := make(map[int]int, len(meta.PartitionSpecs))
-	for _, spec := range meta.PartitionSpecs {
-		out[spec.SpecID] = len(spec.Fields)
 	}
 	return out
 }
