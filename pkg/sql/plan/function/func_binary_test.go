@@ -5967,167 +5967,134 @@ func TestSqrt(t *testing.T) {
 
 // L2 Distance
 func initStDistanceTestCase() []tcTemp {
-	return []tcTemp{
+	cases := []struct {
+		info                          string
+		left, right                   []string
+		want                          []float64
+		leftNull, rightNull, wantNull []bool
+	}{
 		{
-			info: "test st_distance point to point",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(0 0)", "POINT(-1 -1)"},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(3 4)", "POINT(2 3)"},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{5, 5},
-				[]bool{false, false}),
+			info:      "test st_distance point to point",
+			left:      []string{"POINT(0 0)", "POINT(-1 -1)"},
+			right:     []string{"POINT(3 4)", "POINT(2 3)"},
+			want:      []float64{5, 5},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
-			info: "test st_distance point to linestring",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(1 1)", "POINT(3 0)"},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{1, 1},
-				[]bool{false, false}),
+			info:      "test st_distance point to linestring",
+			left:      []string{"POINT(1 1)", "POINT(3 0)"},
+			right:     []string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
+			want:      []float64{1, 1},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
-			info: "test st_distance linestring to point",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(1 0)", "POINT(3 0)"},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 1},
-				[]bool{false, false}),
+			info:      "test st_distance linestring to point",
+			left:      []string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
+			right:     []string{"POINT(1 0)", "POINT(3 0)"},
+			want:      []float64{0, 1},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
 			info: "test st_distance point to polygon",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(1 1)", "POINT(3 1)", "POINT(0 1)"},
-					[]bool{false, false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-					},
-					[]bool{false, false, false}),
+			left: []string{"POINT(1 1)", "POINT(3 1)", "POINT(0 1)"},
+			right: []string{
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 1, 0},
-				[]bool{false, false, false}),
+			want:      []float64{0, 1, 0},
+			leftNull:  []bool{false, false, false},
+			rightNull: []bool{false, false, false},
+			wantNull:  []bool{false, false, false},
 		},
 		{
 			info: "test st_distance polygon to point",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-					},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(1 1)", "POINT(3 1)"},
-					[]bool{false, false}),
+			left: []string{
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 1},
-				[]bool{false, false}),
+			right:     []string{"POINT(1 1)", "POINT(3 1)"},
+			want:      []float64{0, 1},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
-			info: "test st_distance linestring to linestring",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(1 -1,1 1)", "LINESTRING(0 1,2 1)"},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 1},
-				[]bool{false, false}),
+			info:      "test st_distance linestring to linestring",
+			left:      []string{"LINESTRING(0 0,2 0)", "LINESTRING(0 0,2 0)"},
+			right:     []string{"LINESTRING(1 -1,1 1)", "LINESTRING(0 1,2 1)"},
+			want:      []float64{0, 1},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
 			info: "test st_distance linestring to polygon",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(-1 1,3 1)", "LINESTRING(0 3,2 3)"},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-					},
-					[]bool{false, false}),
+			left: []string{"LINESTRING(-1 1,3 1)", "LINESTRING(0 3,2 3)"},
+			right: []string{
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 1},
-				[]bool{false, false}),
+			want:      []float64{0, 1},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
 			info: "test st_distance polygon to linestring",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-					},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"LINESTRING(-1 1,3 1)", "LINESTRING(0 3,2 3)"},
-					[]bool{false, false}),
+			left: []string{
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 1},
-				[]bool{false, false}),
+			right:     []string{"LINESTRING(-1 1,3 1)", "LINESTRING(0 3,2 3)"},
+			want:      []float64{0, 1},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
 			info: "test st_distance polygon to polygon",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-						"POLYGON((0 0,2 0,2 2,0 2,0 0))",
-					},
-					[]bool{false, false}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{
-						"POLYGON((1 0,3 0,3 2,1 2,1 0))",
-						"POLYGON((3 0,5 0,5 2,3 2,3 0))",
-					},
-					[]bool{false, false}),
+			left: []string{
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+				"POLYGON((0 0,2 0,2 2,0 2,0 0))",
 			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0, 1},
-				[]bool{false, false}),
+			right: []string{
+				"POLYGON((1 0,3 0,3 2,1 2,1 0))",
+				"POLYGON((3 0,5 0,5 2,3 2,3 0))",
+			},
+			want:      []float64{0, 1},
+			leftNull:  []bool{false, false},
+			rightNull: []bool{false, false},
+			wantNull:  []bool{false, false},
 		},
 		{
-			info: "test st_distance null",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(0 0)"},
-					[]bool{true}),
-				NewFunctionTestInput(types.T_geometry.ToType(),
-					[]string{"POINT(3 4)"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{0},
-				[]bool{true}),
+			info:      "test st_distance null",
+			left:      []string{"POINT(0 0)"},
+			right:     []string{"POINT(3 4)"},
+			want:      []float64{0},
+			leftNull:  []bool{true},
+			rightNull: []bool{false},
+			wantNull:  []bool{true},
 		},
 	}
+	result := make([]tcTemp, 0, len(cases))
+	for _, tc := range cases {
+		result = append(result, tcTemp{
+			info: tc.info,
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), tc.left, tc.leftNull),
+				NewFunctionTestInput(types.T_geometry.ToType(), tc.right, tc.rightNull),
+			},
+			expect: NewFunctionTestResult(types.T_float64.ToType(), false, tc.want, tc.wantNull),
+		})
+	}
+	return result
 }
 
 func TestStMeasuresGeodetic(t *testing.T) {
