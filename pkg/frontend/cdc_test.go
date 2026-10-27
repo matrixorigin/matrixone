@@ -1122,14 +1122,13 @@ func (tie *testIE) Query(ctx context.Context, s string, options ie.SessionOverri
 		// Capability probes intentionally return an empty result set. Keep the
 		// row-bearing fixture strict for all other queries, while allowing this
 		// zero-row probe to exercise the production empty-result path.
-		return &testIER{rows: rows, sqlIdx: idx}
+		return &testIER{rows: rows}
 	} else {
 		panic("must have data")
 	}
 
 	return &testIER{
 		rows:      rows,
-		sqlIdx:    idx,
 		rowValues: rowValues,
 	}
 }
@@ -1138,7 +1137,6 @@ var _ ie.InternalExecResult = new(testIER)
 
 type testIER struct {
 	rows      *sql.Rows
-	sqlIdx    int
 	rowValues []any
 }
 
