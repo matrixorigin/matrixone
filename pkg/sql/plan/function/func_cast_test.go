@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/exp/constraints"
 )
 
 func TestStringToFloatDefaultCompatibilityUsesNumericPrefix(t *testing.T) {
@@ -5495,4 +5496,29 @@ func TestCastApproximateToTextMySQL(t *testing.T) {
 		succeed, info := tc.RunAndFree()
 		require.True(t, succeed, info)
 	}
+}
+
+func strToSigned[T constraints.Signed](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[T], bitSize int,
+	length int, selectList *FunctionSelectList, explicit ...bool) error {
+	return strToSignedWithProc(ctx, nil, from, to, bitSize, length, selectList, castModeNormal, explicit...)
+}
+
+func strToUnsigned[T constraints.Unsigned](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[T], bitSize int,
+	length int, selectList *FunctionSelectList, explicit ...bool) error {
+	return strToUnsignedWithProc(ctx, nil, from, to, bitSize, length, selectList, castModeNormal, explicit...)
+}
+
+func strToFloat[T constraints.Float](
+	ctx context.Context,
+	mode SQLCompatibilityMode,
+	from vector.FunctionParameterWrapper[types.Varlena],
+	to *vector.FunctionResult[T], bitSize int,
+	length int, selectList *FunctionSelectList) error {
+	return strToFloatWithProc(ctx, nil, mode, from, to, bitSize, length, selectList)
 }

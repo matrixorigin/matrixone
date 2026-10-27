@@ -7413,14 +7413,6 @@ func decimalStringToBit(ctx context.Context, proc *process.Process, value string
 	return 0, moerr.NewOutOfRangef(ctx, fmt.Sprintf("bit(%d)", bitSize), "value '%v'", value)
 }
 
-func strToSigned[T constraints.Signed](
-	ctx context.Context,
-	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList, explicit ...bool) error {
-	return strToSignedWithProc(ctx, nil, from, to, bitSize, length, selectList, castModeNormal, explicit...)
-}
-
 func strToSignedWithProc[T constraints.Signed](
 	ctx context.Context,
 	proc *process.Process,
@@ -8567,14 +8559,6 @@ func ParsePreparedStringToUint64(s string) (uint64, error) {
 	return parseUnsignedExplicitCastString(s, 64)
 }
 
-func strToUnsigned[T constraints.Unsigned](
-	ctx context.Context,
-	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList, explicit ...bool) error {
-	return strToUnsignedWithProc(ctx, nil, from, to, bitSize, length, selectList, castModeNormal, explicit...)
-}
-
 func strToUnsignedWithProc[T constraints.Unsigned](
 	ctx context.Context,
 	proc *process.Process,
@@ -8698,15 +8682,6 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 		}
 	}
 	return nil
-}
-
-func strToFloat[T constraints.Float](
-	ctx context.Context,
-	mode SQLCompatibilityMode,
-	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList) error {
-	return strToFloatWithProc(ctx, nil, mode, from, to, bitSize, length, selectList)
 }
 
 // preparedNonFiniteFloat restores a non-finite FLOAT/DOUBLE prepared
