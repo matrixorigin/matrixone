@@ -2632,7 +2632,7 @@ func decimal64ToOthers(proc *process.Process,
 		return decimal64ToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
-		return decimal64ToYear(ctx, proc, source, rs, length, selectList, mode)
+		return decimalToYear(ctx, proc, source, rs, length, selectList, mode)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal64 to %s", toType))
 }
@@ -2714,7 +2714,7 @@ func decimal128ToOthers(proc *process.Process,
 		return decimal128ToStr(ctx, source, rs, length, toType, strictStringWidth...)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
-		return decimal128ToYear(ctx, proc, source, rs, length, selectList, mode)
+		return decimalToYear(ctx, proc, source, rs, length, selectList, mode)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from decimal128 to %s", toType))
 }
@@ -6090,58 +6090,10 @@ func decimalToSigned[D decimalIntegerSource[D], T constraints.Signed](
 	return nil
 }
 
-// decimal64ToYear converts decimal64 to YEAR type
-func decimal64ToYear(
+// decimalToYear converts a decimal value to YEAR.
+func decimalToYear[D decimalIntegerSource[D]](
 	ctx context.Context, proc *process.Process,
-	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList,
-	mode castMode) error {
-	var i uint64
-	l := uint64(length)
-	fromTyp := from.GetType()
-	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
-		if null {
-			if err := to.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			x, err := v.Scale(-fromTyp.Scale)
-			if err != nil {
-				return err
-			}
-			xStr := x.Format(0)
-			result, err := strconv.ParseInt(xStr, 10, 16)
-			if err != nil {
-				err = handleInvalidYearCast(
-					proc, mode, to,
-					moerr.NewOutOfRangef(ctx, "year", "value '%v'", xStr),
-					false,
-				)
-				if err != nil {
-					return err
-				}
-				continue
-			}
-			year, err := types.ParseMoYearFromInt(result)
-			if err != nil {
-				if err = handleInvalidYearCast(proc, mode, to, err, false); err != nil {
-					return err
-				}
-				continue
-			}
-			if err = to.Append(year, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// decimal128ToYear converts decimal128 to YEAR type
-func decimal128ToYear(
-	ctx context.Context, proc *process.Process,
-	from vector.FunctionParameterWrapper[types.Decimal128],
+	from vector.FunctionParameterWrapper[D],
 	to *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList,
 	mode castMode) error {
 	var i uint64
