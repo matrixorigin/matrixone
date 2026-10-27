@@ -420,19 +420,6 @@ func appendFloat64(buf []byte, value float64, bitSize int) []byte {
 	return buf
 }
 
-func floatArrayToString[T float32 | float64](arr []T) string {
-	str := "'["
-	for i, v := range arr {
-		if i == 0 {
-			str += fmt.Sprintf("%f", v)
-		} else {
-			str += fmt.Sprintf(",%f", v)
-		}
-	}
-	str += "]'"
-	return str
-}
-
 const openDbConnAttemptTimeout = 10 * time.Second
 
 var OpenDbConn = func(

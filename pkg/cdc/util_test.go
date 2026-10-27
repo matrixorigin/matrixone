@@ -799,32 +799,6 @@ func Test_extractRowFromVector(t *testing.T) {
 	}
 }
 
-func Test_floatArrayToString(t *testing.T) {
-	type args[T interface{ float32 | float64 }] struct {
-		arr []T
-	}
-	type testCase[T interface{ float32 | float64 }] struct {
-		name string
-		args args[T]
-		want string
-	}
-	tests := []testCase[float32]{
-		{
-			args: args[float32]{arr: []float32{}},
-			want: "'[]'",
-		},
-		{
-			args: args[float32]{arr: []float32{1.1, 2.2, 3.3}},
-			want: "'[1.100000,2.200000,3.300000]'",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, floatArrayToString(tt.args.arr), "floatArrayToString(%v)", tt.args.arr)
-		})
-	}
-}
-
 func Test_openDbConn(t *testing.T) {
 	deadlineSeen := false
 	stub := gostub.Stub(&tryConn, func(ctx context.Context, _ *mysql.Config) (*sql.DB, error) {
