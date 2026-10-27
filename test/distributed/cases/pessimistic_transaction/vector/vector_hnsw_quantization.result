@@ -2,6 +2,9 @@ drop database if exists hnsw_quantization;
 create database hnsw_quantization;
 use hnsw_quantization;
 set experimental_hnsw_index = 1;
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s') not like '%failed=[%' as all_cn_updated;
+➤ all_cn_updated[-6,8,0]  𝄀
+1
 create table t_ref(id bigint primary key, v vecf32(4));
 insert into t_ref values
 (1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),
@@ -842,4 +845,7 @@ create index i_big using hnsw on t_big(v) quantization 'float16';
 Data truncation: data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16
 select id from t_f16 order by l2_distance(v,'[100000,1,1,1]') limit 1;
 Data truncation: data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0') not like '%failed=[%' as all_cn_restored;
+➤ all_cn_restored[-6,8,0]  𝄀
+1
 drop database hnsw_quantization;

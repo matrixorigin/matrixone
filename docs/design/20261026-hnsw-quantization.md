@@ -1,7 +1,7 @@
 # HNSW quantization, narrow vector columns and exact prefiltered search
 
 Branch `hnsw_quantization`. Every claim in "Claims" names the black-box test that proves it.
-The black-box suite is `test/distributed/cases/vector/vector_hnsw_quantization.sql`; each of
+The black-box suite is `test/distributed/cases/pessimistic_transaction/vector/vector_hnsw_quantization.sql`; each of
 its sections is headed by the claim it proves (`-- C<n>`).
 
 Status: proposed.

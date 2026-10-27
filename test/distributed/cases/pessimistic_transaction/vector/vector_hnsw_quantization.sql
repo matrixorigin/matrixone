@@ -7,6 +7,11 @@ use hnsw_quantization;
 
 set experimental_hnsw_index = 1;
 
+-- A CN that does not run the ISCP sync keeps its cached HNSW model until the cross-CN
+-- freshness sweep (default about 10 minutes). Shorten the sweep on every CN so the
+-- waits below converge; restore the default at exit.
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s') not like '%failed=[%' as all_cn_updated;
+
 create table t_ref(id bigint primary key, v vecf32(4));
 insert into t_ref values
     (1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),
@@ -264,4 +269,5 @@ insert into t_big values (1,'[1,1,1,1]'),(2,'[100000,1,1,1]');
 create index i_big using hnsw on t_big(v) quantization 'float16';
 select id from t_f16 order by l2_distance(v,'[100000,1,1,1]') limit 1;
 
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0') not like '%failed=[%' as all_cn_restored;
 drop database hnsw_quantization;
