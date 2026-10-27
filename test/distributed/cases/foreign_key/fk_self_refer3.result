@@ -35,17 +35,17 @@ update t1 set g = 2 where b = 5;
 update t1 set c = 4 where b = 5;
 delete from t1 where b = 5;
 delete from t1 where b = 3;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set e = NULL where b = 3;
 delete from t1 where b = 3;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set g = NULL where b = 3;
 delete from t1 where b = 3;
 delete from t1 where b = 2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set e = NULL where b = 2;
 delete from t1 where b = 2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set g = NULL where b = 2;
 delete from t1 where b = 2;
 select count(*) from t1;
@@ -104,24 +104,24 @@ insert into t1 values (
 update t1 set c = 6 where b = 3;
 update t1 set c = NULL where b = 3;
 delete from t1 where c = 4;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from t1 where c = 4;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set h = NULL where c = 4;
 delete from t1 where c = 4;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set d = NULL where c = 4;
 delete from t1 where c = 4;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set f = NULL,g = NULL where c = 4;
 delete from t1 where c = 4;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set i = NULL, j = NULL, k = NULL where c = 4;
 delete from t1 where c = 4;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 update t1 set c = NULL where b = 2;
 delete from t1 where b = 2;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 drop table if exists p1;
 internal error: can not drop table 'p1' referenced by some foreign key constraint
 create table t1(a int primary key,b int,constraint `c1` foreign key fk1(b) references t1(a));
