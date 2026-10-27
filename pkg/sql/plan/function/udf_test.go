@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -295,12 +296,15 @@ func TestPythonExecutionValidatesDescriptorAndInputTypes(t *testing.T) {
 	require.NoError(t, err)
 	require.ErrorContains(t, validatePythonRoutineDescriptor(empty), "descriptor is empty")
 
-	nonConst := vector.NewOffHeapVecWithTypeAndData(
-		types.T_text.ToType(), []byte("routine"), 1, 1,
-	)
+	mp := mpool.MustNewZero()
+	nonConst := vector.NewVec(types.T_text.ToType())
+	defer nonConst.Free(mp)
+	require.NoError(t, vector.AppendBytes(nonConst, []byte("routine"), false, mp))
 	require.ErrorContains(t, validatePythonRoutineDescriptor(nonConst), "must be constant")
 
-	input := vector.NewOffHeapVecWithTypeAndData(types.T_int32.ToType(), make([]byte, 4), 1, 1)
+	input := vector.NewVec(types.T_int32.ToType())
+	defer input.Free(mp)
+	require.NoError(t, vector.AppendFixed(input, int32(0), false, mp))
 	require.ErrorContains(t,
 		validatePythonInputVectors([]*vector.Vector{input}, []types.Type{types.T_int64.ToType()}, 1),
 		"does not match",
