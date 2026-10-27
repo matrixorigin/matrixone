@@ -110,7 +110,14 @@ def test_local_infile_driver_flag(monkeypatch, asynchronous, enabled):
         ssl_mode='disabled',
         local_infile=enabled,
     )
-    factory = Mock(return_value=MagicMock())
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    engine = (
+        create_async_engine('mysql+aiomysql://unused@localhost/db')
+        if asynchronous
+        else sa.create_engine('mysql+pymysql://unused@localhost/db')
+    )
+    factory = Mock(return_value=engine)
     if asynchronous:
         monkeypatch.setattr('matrixone.async_client.create_async_engine', factory)
         client._create_async_engine()
@@ -118,6 +125,10 @@ def test_local_infile_driver_flag(monkeypatch, asynchronous, enabled):
         monkeypatch.setattr('matrixone.client.create_engine', factory)
         client._create_engine()
     assert factory.call_args.kwargs['connect_args']['local_infile'] is enabled
+    if asynchronous:
+        asyncio.run(engine.dispose())
+    else:
+        engine.dispose()
 
 
 def test_join_missing_and_ambiguous_foreign_keys_are_not_cartesian():
