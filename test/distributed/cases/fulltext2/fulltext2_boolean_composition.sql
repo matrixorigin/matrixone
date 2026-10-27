@@ -215,6 +215,50 @@ execute boolean_stmt using @term, @threshold, @tag;
 
 deallocate prepare boolean_stmt;
 
+-- A term in every document, and any term of a one-row table, has idf zero, so
+-- the index returns those rows with score 0. A MATCH used as a condition is
+-- whether the index returned the row, so MATCH, MATCH OR FALSE and NOT MATCH
+-- agree; comparisons still read the score (#31411).
+create table every_doc (id bigint primary key, body text, tag int);
+
+insert into every_doc values (1, 'qaanchor one', 0), (2, 'qaanchor two', 1), (3, 'qaanchor three', NULL);
+
+create fulltext2 index ft_every on every_doc(body) with parser gojieba;
+
+alter table every_doc alter reindex ft_every fulltext2 force_sync;
+
+select id, match(body) against('qaanchor') as score from every_doc where match(body) against('qaanchor') order by id;
+
+select id from every_doc where match(body) against('qaanchor') or id = -1 order by id;
+
+select id from every_doc where not match(body) against('qaanchor') order by id;
+
+select id from every_doc where match(body) against('+qaanchor' in boolean mode) or tag = 1 order by id;
+
+select id from every_doc where not (match(body) against('+qaanchor' in boolean mode)) and tag is not null order by id;
+
+select id, case when match(body) against('qaanchor') then 'y' else 'n' end as hit from every_doc where match(body) against('qaanchor') or id > 0 order by id;
+
+select id, if(match(body) against('qaanchor'), 'y', 'n') as hit from every_doc where match(body) against('qaanchor') order by id;
+
+select id from every_doc where match(body) against('qaanchor') = 0 or id = -1 order by id;
+
+select id from every_doc where match(body) against('one') or not match(body) against('qaanchor') order by id;
+
+create table one_doc (id bigint primary key, body text);
+
+insert into one_doc values (1, 'solo');
+
+create fulltext2 index ft_one on one_doc(body) with parser gojieba;
+
+alter table one_doc alter reindex ft_one fulltext2 force_sync;
+
+select id from one_doc where match(body) against('solo');
+
+select id from one_doc where match(body) against('solo') or false;
+
+select id from one_doc where not match(body) against('solo');
+
 -- Index coverage/binding refusal is all-or-nothing, even if another
 -- leaf is valid or the scalar branch alone could produce rows.
 select id from docs where match(body, alt) against('alpha' in boolean mode) or match(body) against('beta' in boolean mode) or tag = 1 order by id;
