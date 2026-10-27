@@ -1,7 +1,7 @@
 # RENAME USER identity-preserving compatibility design
 
 - Owning issue: https://github.com/matrixorigin/matrixone/issues/30467
-- Revision: v0.5, 2026-10-27; **DESIGN REVIEW PENDING**
+- Revision: v0.6, 2026-10-27; **AFFECTED DESIGN REVIEW PENDING**
 - Source baseline: `83c1e23526fc0ed31188abd7fc2ca87cd3a6d4b3` (fresh main clone).
 - Implementation PR: not created. No product implementation accompanies this draft.
 - Review routing: frontend owner `@XuPeng-SH`; parser owners `@iamlinjunhong` and
@@ -355,3 +355,60 @@ No new catalog migration, distributed protocol, online-upgrade claim, restore
 concurrency support or special account creation is introduced. Real SQL, unique
 index races, multi-CN and restart/restore acceptance still require independent
 execution evidence, not mock/race-detector extrapolation.
+
+
+## v0.6 destination login-name safety boundary
+
+This addendum supersedes v0.5's normalizeName-only destination policy. User
+Sentinel_d4a1219f51248191b7ff14c881429854 explicitly confirmed rejection of target
+names that cannot reliably log in, responding to assistant
+Sentinel_c90afd87634c8191850f114a8d80b58d. Parent supplied the exact approved
+consumer-derived boundary; implementation follows independent affected review.
+
+### Concrete failure and narrow closure
+
+RENAME can currently publish a destination accepted by normalizeName but rejected
+or reinterpreted on subsequent authentication. inputNameIsInvalid rejects ASCII
+space/tab/backtick/single/double quotes; getSqlForPasswordOfUser uses that helper
+before its double-quoted SQL template. Backslashes change the template's literal
+meaning. getUserPart truncates at `?`; standalone GetTenantInfo converts exact
+`%3A` into a tenant delimiter. Protocol username fields use readStringNUL, making
+NUL unable to roundtrip. Merely removing the shared input guard would also admit
+these names into other unescaped CREATE/ALTER/DROP/GRANT templates.
+
+After existing normalizeName trimming/empty/:/# rules, apply a destination-only
+validator: reuse inputNameIsInvalid for its exact rejected ASCII set; additionally
+reject backslash, question mark, NUL and exact uppercase substring `%3A`. Reject
+before obtaining a background executor or starting a transaction. Validate every
+pair before any statement writes, so an invalid later destination cannot publish
+an earlier rename. No credential/management helper or wire parser is loosened.
+
+Do NOT add this validator to source names. Existing source normalization and
+protected/admin/DEFINER checks remain, allowing catalog labels with quotes or
+other newly-disallowed destination characters to be renamed away through the
+existing safely quoted source lookup. This is not a promise that arbitrary
+corrupt/unparseable catalog bytes can be addressed by SQL.
+
+Keep other accepted names: ordinary Unicode, underscore, dash, dot, literal
+percent and lowercase `%3a`. Do not generalize into ASCII-only identifiers,
+case-insensitive percent rejection, all whitespace/control rejection or a new
+login protocol. The invariant is this bounded proven consumer restriction, not
+full MySQL username-grammar compatibility. No additional host/identity policy.
+
+### Validation / compatibility
+
+Tests enumerate each rejected character and exact `%3A`, plus positive Unicode,
+`_`, `-`, `.`, `%`, `%3a` controls. Handler tests put the invalid destination in
+the second pair, assert zero executor creation/SQL/transaction effects, and retain
+normal ordered-pair atomicity tests. A legacy quoted source successfully migrates
+to a safe destination while retaining its ID. Parser remains expressive; only
+execution destinations gain this restriction. Re-run affected frontend focused,
+owning normal/race checks and independent review. Earlier unchanged parser,
+planner and engine compile evidence may be reused with exact-source justification.
+
+The recovered v0.5 patch/head is 9022c82b20f124841a30b57fbd404512364c571eeb69c61a00c1b72aaada9e12 /
+78fc21627d6799d25e1d3bdc83086c41503827f2. Restored from verified Library v1, not
+reconstructed from conversation. All existing offline/bootstrap/restore, host,
+admin, DEFINER, CLONE pessimistic-RC and stable-ID contracts remain unchanged.
+Real SQL/multi-CN/restore acceptance remains NOT_RUN and transfer blocked until
+supported execution is available; this user approval does not waive those gates.

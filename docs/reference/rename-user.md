@@ -33,3 +33,15 @@ is a new operation, not guaranteed rollback if the former name has been reused.
 
 Mock/unit results are not engine concurrency, multi-CN, restart or restore
 acceptance. Consult the versioned design and final validation record before rollout.
+
+## Destination names and login compatibility
+
+After existing trimming/empty-name/colon/hash validation, new destinations reject
+ASCII space/tab, backtick, single/double quotes, backslash, question mark, NUL,
+and the exact uppercase substring `%3A`. These are existing login/SQL/protocol
+consumer limitations, not a new general ASCII-only username grammar. Unicode,
+underscore, dash, dot, other percent uses and lowercase `%3a` remain accepted.
+All pairs are checked before the transaction starts; an invalid later target
+cannot rename an earlier source. Source names do not gain these new restrictions,
+so addressable legacy catalog labels can migrate to a safe name. Existing shared
+credential/management guards and the login protocol are not loosened.

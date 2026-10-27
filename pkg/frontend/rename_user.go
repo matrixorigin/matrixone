@@ -129,6 +129,20 @@ func protectedRenameUser(name string) bool {
 	ok, _, _ := isSpecialUser(name)
 	return ok
 }
+
+// validateRenameUserDestination preserves the existing login/management grammar.
+// It applies only to destinations: legacy catalog names must remain renameable
+// away through the safely quoted source lookup. Do not loosen shared SQL guards.
+func validateRenameUserDestination(ctx context.Context, name string) error {
+	if err := inputNameIsInvalid(ctx, name); err != nil {
+		return err
+	}
+	if strings.ContainsAny(name, "\\?\x00") || strings.Contains(name, "%3A") {
+		return moerr.NewInvalidInput(ctx, "RENAME USER destination cannot reliably roundtrip through login")
+	}
+	return nil
+}
+
 func doRenameUser(ctx context.Context, ses *Session, stmt *tree.RenameUser) (err error) {
 	if ses == nil || ses.GetTenantInfo() == nil || stmt == nil || len(stmt.Pairs) == 0 {
 		return moerr.NewInternalError(ctx, "RENAME USER requires account and pairs")
@@ -147,6 +161,10 @@ func doRenameUser(ctx context.Context, ses *Session, stmt *tree.RenameUser) (err
 			if protectedRenameUser(u.Username) {
 				return moerr.NewInvalidInput(ctx, "cannot rename protected user")
 			}
+		}
+		// Validate every pair before acquiring an executor or starting a txn.
+		if err = validateRenameUserDestination(ctx, p.To.Username); err != nil {
+			return err
 		}
 	}
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, cancelTxnCreateWithRequest: true})

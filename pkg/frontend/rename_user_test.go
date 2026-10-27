@@ -514,3 +514,48 @@ func TestRenameUserFailureFinalization(t *testing.T) {
 		})
 	}
 }
+
+func TestRenameUserDestinationLoginSafetyBeforeTransaction(t *testing.T) {
+	for _, tc := range []struct{ name, destination string }{
+		{"ASCII space", "new name"}, {"tab", "new\tname"},
+		{"backtick", "new`name"}, {"single quote", "new'name"},
+		{"double quote", "new\"name"}, {"backslash", "new\\name"},
+		{"question mark", "new?label"}, {"NUL", "new\x00name"},
+		{"encoded separator", "new%3Aname"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses, bh := newRenameFixture(t)
+			created := stubSetDefaultRoleBackgroundExec(t, bh, nil)
+			// A later invalid pair must reject even the first otherwise-valid rename.
+			err := doRenameUser(context.Background(), ses, renameStatement("alice", "bob", "other", tc.destination))
+			require.Error(t, err)
+			require.Zero(t, *created)
+			require.Empty(t, bh.executedSQLs)
+		})
+	}
+}
+
+func TestRenameUserDestinationLoginSafetyPositiveControls(t *testing.T) {
+	for _, name := range []string{"user_name", "user-name", "user.name", "用户", "user%name", "user%3aname"} {
+		t.Run(name, func(t *testing.T) {
+			ses, bh := newRenameFixture(t)
+			require.NoError(t, doRenameUser(context.Background(), ses, renameStatement("alice", name)))
+			require.Contains(t, bh.executedSQLs, fmt.Sprintf("update mo_catalog.mo_user set user_name = %s where user_id = 8;", quoteSQLStringLiteral(name)))
+			require.Contains(t, bh.executedSQLs, "commit;")
+		})
+	}
+}
+
+func TestRenameUserLegacySourceCanMigrateToSafeName(t *testing.T) {
+	// Source parsing/lookup is deliberately not narrowed with the new destination
+	// grammar. These are legacy catalog labels, not new login promises.
+	for _, name := range []string{"old name", "old\tname", "old`name", "o'brien", "old\"name", "old\\name", "old?label", "old%3Aname"} {
+		t.Run(name, func(t *testing.T) {
+			ses, bh := newRenameFixture(t)
+			seedAccountUser(bh, 8, name)
+			require.NoError(t, doRenameUser(context.Background(), ses, renameStatement(name, "safe_name")))
+			require.Contains(t, bh.executedSQLs, "update mo_catalog.mo_user set user_name = 'safe_name' where user_id = 8;")
+			require.Contains(t, bh.executedSQLs, "commit;")
+		})
+	}
+}
