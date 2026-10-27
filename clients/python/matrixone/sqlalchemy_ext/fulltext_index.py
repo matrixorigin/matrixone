@@ -16,6 +16,7 @@
 Fulltext index support for SQLAlchemy integration with MatrixOne.
 """
 
+from .._sql_literals import fulltext_term_token
 from typing import Any, List, Union
 
 from sqlalchemy import Index, text
@@ -610,14 +611,14 @@ class FulltextSearchBuilder:
         columns_str = ", ".join(self.columns)
         # MatrixOne doesn't support "IN NATURAL_LANGUAGE" syntax, use simple AGAINST
         if self.search_mode == FulltextModeType.NATURAL_LANGUAGE or self.search_mode == "natural language mode":
-            match_clause = f"MATCH({columns_str}) AGAINST('{self.search_term}')"
+            match_clause = f"MATCH({columns_str}) AGAINST({fulltext_term_token(self.search_term)})"
         elif self.search_mode == FulltextModeType.BOOLEAN or self.search_mode == "boolean mode":
-            match_clause = f"MATCH({columns_str}) AGAINST('{self.search_term}' IN BOOLEAN MODE)"
+            match_clause = f"MATCH({columns_str}) AGAINST({fulltext_term_token(self.search_term)} IN BOOLEAN MODE)"
         elif self.search_mode == FulltextModeType.QUERY_EXPANSION or self.search_mode == "query expansion mode":
-            match_clause = f"MATCH({columns_str}) AGAINST('{self.search_term}' WITH QUERY EXPANSION)"
+            match_clause = f"MATCH({columns_str}) AGAINST({fulltext_term_token(self.search_term)} WITH QUERY EXPANSION)"
         else:
             # Default to simple AGAINST for unknown modes
-            match_clause = f"MATCH({columns_str}) AGAINST('{self.search_term}')"
+            match_clause = f"MATCH({columns_str}) AGAINST({fulltext_term_token(self.search_term)})"
 
         if self.include_score:
             builder.select("*", f"{match_clause} AS score")

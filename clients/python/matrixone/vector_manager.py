@@ -20,12 +20,12 @@ shared SQL generation logic to eliminate code duplication.
 """
 
 from __future__ import annotations
+
 from typing import TYPE_CHECKING, Any, Dict, List, Union
 
 if TYPE_CHECKING:
     from .sqlalchemy_ext import VectorOpType
     from .ivf_rank import IVFRankMode
-
 
 from ._utils import get_table_name as _extract_table_name
 from .exceptions import QueryError
@@ -38,6 +38,26 @@ class _VectorManagerBase:
     All SQL building logic is centralized here, eliminating duplication
     between sync and async implementations.
     """
+
+    @staticmethod
+    def _distance_function(distance_type):
+        functions = {
+            'l2': 'l2_distance',
+            'l2_sq': 'l2_distance_sq',
+            'cosine': 'cosine_distance',
+            'inner_product': 'inner_product',
+        }
+        if distance_type not in functions:
+            raise ValueError('Unsupported distance_type: ' + str(distance_type))
+        return functions[distance_type]
+
+    @staticmethod
+    def _result_dicts(result):
+        labels = list(result.keys())
+        normalized = [str(label).lower() for label in labels]
+        if len(set(normalized)) != len(normalized):
+            raise QueryError('Ambiguous vector result column names; alias stored distance as stored_distance')
+        return [dict(zip(labels, row)) for row in result]
 
     @staticmethod
     def _validate_batch(data_list, batch_size):
@@ -79,7 +99,9 @@ class _VectorManagerBase:
         if op_type is None:
             op_type = VectorOpType.VECTOR_L2_OPS
 
-        index = HnswVectorIndex(name, column, m=m, ef_construction=ef_construction, ef_search=ef_search, op_type=op_type)
+        index = HnswVectorIndex(
+            name, column, m=m, ef_construction=ef_construction, ef_search=ef_search, op_type=op_type
+        )
         return index.create_sql(table_name)
 
     @staticmethod
@@ -110,18 +132,9 @@ class _VectorManagerBase:
     @staticmethod
     def _build_insert_sql(table_name: str, data: Dict[str, Any]) -> str:
         """Build SQL for inserting vector data."""
-        columns = ", ".join(data.keys())
-        values = []
-        for v in data.values():
-            if isinstance(v, list):
-                vector_str = "[" + ",".join(str(x) for x in v) + "]"
-                values.append(f"'{vector_str}'")
-            elif isinstance(v, str):
-                values.append(f"'{v}'")
-            else:
-                values.append(str(v))
-        values_str = ", ".join(values)
-        return f"INSERT INTO {table_name} ({columns}) VALUES ({values_str})"
+        from .base_client import BaseMatrixOneClient
+
+        return BaseMatrixOneClient()._build_insert_sql(table_name, data)
 
     @staticmethod
     def _build_similarity_search_sql(
@@ -138,14 +151,7 @@ class _VectorManagerBase:
         vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
 
         # Select distance function
-        if distance_type == "l2":
-            distance_func = "l2_distance"
-        elif distance_type == "cosine":
-            distance_func = "cosine_distance"
-        elif distance_type == "inner_product":
-            distance_func = "inner_product"
-        else:
-            distance_func = "l2_distance"
+        distance_func = _VectorManagerBase._distance_function(distance_type)
 
         sql = f"SELECT {columns}, {distance_func}({vector_column}, '{vector_str}') as distance FROM {table_name}"
 
@@ -369,7 +375,7 @@ class VectorManager(_VectorManagerBase):
                 table_name, vector_column, query_vector, limit, select_columns, where_clause, distance_type
             )
             result = self.executor.execute(sql, log_mode=log_mode)
-            return [dict(row._mapping) for row in result]
+            return self._result_dicts(result)
         except Exception as e:
             raise QueryError(f"Failed to perform similarity search on table {table_name}: {e}")
 
@@ -390,7 +396,7 @@ class VectorManager(_VectorManagerBase):
                 table_name, vector_column, query_vector, max_distance, select_columns, where_clause
             )
             result = self.executor.execute(sql, log_mode=log_mode)
-            return [dict(row._mapping) for row in result]
+            return self._result_dicts(result)
         except Exception as e:
             raise QueryError(f"Failed to perform range search on table {table_name}: {e}")
 
@@ -489,14 +495,7 @@ class VectorManager(_VectorManagerBase):
             vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
 
             # Select distance function
-            if distance_type == "l2":
-                distance_func = "l2_distance"
-            elif distance_type == "cosine":
-                distance_func = "cosine_distance"
-            elif distance_type == "inner_product":
-                distance_func = "inner_product"
-            else:
-                distance_func = "l2_distance"
+            distance_func = _VectorManagerBase._distance_function(distance_type)
 
             sql = f"SELECT {columns}, {distance_func}({vector_column}, '{vector_str}') as distance FROM {table_name}"
 
@@ -507,7 +506,7 @@ class VectorManager(_VectorManagerBase):
             sql += f" ORDER BY distance LIMIT {limit} BY RANK WITH OPTION 'mode={rank_mode.value}'"
 
             result = self.executor.execute(sql, log_mode=log_mode)
-            return [dict(row._mapping) for row in result]
+            return self._result_dicts(result)
         except Exception as e:
             raise QueryError(f"Failed to perform vector search with rank on table {table_name}: {e}") from e
 
@@ -530,12 +529,16 @@ class VectorManager(_VectorManagerBase):
         """
         table_name = _extract_table_name(table_name)
 
+        if '.' in table_name:
+            qualifier, table_name = table_name.split('.', 1)
+            if database is not None and database != qualifier:
+                raise ValueError('Explicit database conflicts with qualified table name')
+            database = qualifier
         if database is None:
-            # Try to get database from connection params first
-            if hasattr(self.client, '_connection_params') and self.client._connection_params:
-                database = self.client._connection_params.get('database')
+            result = self.executor.execute('SELECT DATABASE()')
+            database = result.scalar()
             if not database:
-                database = getattr(self.client, 'database', 'test')
+                raise QueryError('No database selected; pass database explicitly')
 
         # Auto-infer column name if not provided
         if not column_name:
@@ -734,7 +737,7 @@ class AsyncVectorManager(_VectorManagerBase):
                 table_name, vector_column, query_vector, limit, select_columns, where_clause, distance_type
             )
             result = await self.executor.execute(sql, log_mode=log_mode)
-            return [dict(row._mapping) for row in result]
+            return self._result_dicts(result)
         except Exception as e:
             raise QueryError(f"Failed to perform similarity search on table {table_name}: {e}")
 
@@ -755,7 +758,7 @@ class AsyncVectorManager(_VectorManagerBase):
                 table_name, vector_column, query_vector, max_distance, select_columns, where_clause
             )
             result = await self.executor.execute(sql, log_mode=log_mode)
-            return [dict(row._mapping) for row in result]
+            return self._result_dicts(result)
         except Exception as e:
             raise QueryError(f"Failed to perform range search on table {table_name}: {e}")
 
@@ -858,14 +861,7 @@ class AsyncVectorManager(_VectorManagerBase):
             vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
 
             # Select distance function
-            if distance_type == "l2":
-                distance_func = "l2_distance"
-            elif distance_type == "cosine":
-                distance_func = "cosine_distance"
-            elif distance_type == "inner_product":
-                distance_func = "inner_product"
-            else:
-                distance_func = "l2_distance"
+            distance_func = _VectorManagerBase._distance_function(distance_type)
 
             sql = f"SELECT {columns}, {distance_func}({vector_column}, '{vector_str}') as distance FROM {table_name}"
 
@@ -876,7 +872,7 @@ class AsyncVectorManager(_VectorManagerBase):
             sql += f" ORDER BY distance LIMIT {limit} BY RANK WITH OPTION 'mode={rank_mode.value}'"
 
             result = await self.executor.execute(sql, log_mode=log_mode)
-            return [dict(row._mapping) for row in result]
+            return self._result_dicts(result)
         except Exception as e:
             raise QueryError(f"Failed to perform vector search with rank on table {table_name}: {e}") from e
 
@@ -899,12 +895,16 @@ class AsyncVectorManager(_VectorManagerBase):
         """
         table_name = _extract_table_name(table_name)
 
+        if '.' in table_name:
+            qualifier, table_name = table_name.split('.', 1)
+            if database is not None and database != qualifier:
+                raise ValueError('Explicit database conflicts with qualified table name')
+            database = qualifier
         if database is None:
-            # Try to get database from connection params first
-            if hasattr(self.client, '_connection_params') and self.client._connection_params:
-                database = self.client._connection_params.get('database')
+            result = await self.executor.execute('SELECT DATABASE()')
+            database = result.scalar()
             if not database:
-                database = getattr(self.client, 'database', 'test')
+                raise QueryError('No database selected; pass database explicitly')
 
         # Auto-infer column name if not provided
         if not column_name:

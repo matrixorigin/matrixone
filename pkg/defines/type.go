@@ -171,6 +171,13 @@ type RoleIDKey struct{}
 type DDLOwnerRoleIDKey struct{}
 type NodeIDKey struct{}
 type InternalExecutorKey struct{}
+
+// TemporaryTableAccessKey marks trusted internal catalog maintenance that must
+// resolve a temporary table by its exact physical name. It is intentionally
+// separate from InternalExecutorKey: ordinary internal SQL keeps the same
+// session-isolation rules as user SQL unless its owner explicitly attaches
+// this capability.
+type TemporaryTableAccessKey struct{}
 type LockWriterFairKey struct{}
 
 func IsInternalExecutor(ctx context.Context) bool {
@@ -189,6 +196,22 @@ func IsInternalExecutor(ctx context.Context) bool {
 // see through its own session roles.
 func AttachInternalExecutor(ctx context.Context) context.Context {
 	return context.WithValue(ctx, InternalExecutorKey{}, true)
+}
+
+// AttachTemporaryTableAccess grants the narrow capability used by session
+// reset/disconnect, orphan-GC cleanup, and validated ISCP index maintenance.
+// Ordinary SQL cannot set context
+// values, and InternalExecutorKey alone does not grant this access.
+func AttachTemporaryTableAccess(ctx context.Context) context.Context {
+	return context.WithValue(ctx, TemporaryTableAccessKey{}, true)
+}
+
+func HasTemporaryTableAccess(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(TemporaryTableAccessKey{}).(bool)
+	return v
 }
 
 // AttachLockWriterFair marks lock requests derived from ctx as writer-fair.
@@ -406,7 +429,3 @@ type AutoIncrCache struct {
 	MaxNum uint64
 	Step   uint64
 }
-
-// HnswSnapshotFallbackKey requests a source scan only for a coverage retry.
-// It is statement-local and never changes the session search mode or SQL AST.
-type HnswSnapshotFallbackKey struct{}

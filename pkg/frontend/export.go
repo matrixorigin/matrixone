@@ -64,6 +64,12 @@ type ExportConfig struct {
 	FileCnt     uint
 	ColumnFlag  []bool
 	Symbol      [][]byte
+
+	// Audit totals contain only files confirmed by the existing sink boundary.
+	auditEnabled         bool
+	auditBytesWritten    uint64
+	auditRowsWritten     uint64
+	parquetConfirmedRows uint64
 	// default flush size
 	DefaultBufSize int64
 
@@ -623,6 +629,8 @@ func exportCleanupError(primary, cleanup error) error {
 
 func (ec *ExportConfig) closeFile(cause error) error {
 	var err error
+	fileActive := ec.AsyncWriter != nil || ec.AsyncGroup != nil
+	fileBytes, fileRows := ec.CurFileSize, ec.Rows
 	if ec.AsyncWriter != nil {
 		if cause != nil {
 			err = ec.AsyncWriter.CloseWithError(cause)
@@ -644,6 +652,11 @@ func (ec *ExportConfig) closeFile(cause error) error {
 	}
 	if ec.ownsFileService && ec.FileService != nil {
 		ec.FileService.Close(context.Background())
+	}
+	if cause == nil && err == nil && fileActive {
+		if auditErr := ec.addOutfileAuditTotals(fileBytes, fileRows); auditErr != nil {
+			err = auditErr
+		}
 	}
 	ec.AsyncReader, ec.AsyncWriter, ec.AsyncGroup = nil, nil, nil
 	ec.stopFileCancel, ec.fileCancelDone = nil, nil
@@ -702,8 +715,22 @@ func exceedsFileSize(currentSize, additionalSize, maxSize uint64) bool {
 }
 
 func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
+	if ep.auditEnabled && batch.rowCount < 0 {
+		return moerr.NewInternalErrorNoCtx("outfile audit row count is negative")
+	}
 	if ep.getExportFormat() != "csv" {
-		return writeToCSVFile(ep, batch.writeByte)
+		if ep.getExportFormat() == "jsonline" && ep.auditEnabled {
+			if ^uint64(0)-ep.Rows < uint64(batch.rowCount) {
+				return moerr.NewInternalErrorNoCtx("outfile audit row count overflow")
+			}
+		}
+		if err := writeToCSVFile(ep, batch.writeByte); err != nil {
+			return err
+		}
+		if ep.getExportFormat() == "jsonline" && ep.auditEnabled {
+			ep.Rows += uint64(batch.rowCount)
+		}
+		return nil
 	}
 	if batch.rowCount == 0 {
 		return nil
@@ -711,6 +738,9 @@ func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
 
 	maxSize := getEffectiveMaxFileSize(ep)
 	if maxSize == 0 {
+		if ep.auditEnabled && ^uint64(0)-ep.Rows < uint64(batch.rowCount) {
+			return moerr.NewInternalErrorNoCtx("outfile audit row count overflow")
+		}
 		if err := writeToCSVFile(ep, batch.writeByte); err != nil {
 			return err
 		}
@@ -722,6 +752,9 @@ func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
 	flushChunk := func() error {
 		if chunkRows == 0 {
 			return nil
+		}
+		if ep.auditEnabled && ^uint64(0)-ep.Rows < uint64(chunkRows) {
+			return moerr.NewInternalErrorNoCtx("outfile audit row count overflow")
 		}
 		if err := writeToCSVFile(ep, batch.writeByte[chunkStart:chunkEnd]); err != nil {
 			return err
@@ -754,6 +787,9 @@ func writeExportBatchToFile(ep *ExportConfig, batch *BatchByte) error {
 }
 
 var writeDataToCSVFile = func(ep *ExportConfig, output []byte) error {
+	if ep.auditEnabled && ^uint64(0)-ep.CurFileSize < uint64(len(output)) {
+		return moerr.NewInternalErrorNoCtx("outfile audit file byte count overflow")
+	}
 
 	for {
 		if n, err := Write(ep, output); err != nil {
@@ -1755,6 +1791,9 @@ func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
 	// Check if we need to split the file
 	splitSize := getEffectiveMaxFileSize(ec)
 	if splitSize == 0 {
+		if ec.auditEnabled && ^uint64(0)-ec.Rows < uint64(bat.RowCount()) {
+			return moerr.NewInternalErrorNoCtx("outfile audit row count overflow")
+		}
 		if err := ec.parquetWriter.WriteBatch(bat, execCtx.ses.GetMemPool(), timeZone); err != nil {
 			return err
 		}
@@ -1765,6 +1804,9 @@ func (ec *ExportConfig) writeParquet(execCtx *ExecCtx, bat *batch.Batch) error {
 	// Accumulate bounded row groups across executor batches. Flush ends a row
 	// group, so flushing every row causes large metadata overhead and exhausts
 	// parquet-go's per-file row-group limit long before SPLITSIZE is reached.
+	if ec.auditEnabled && ^uint64(0)-ec.Rows < uint64(bat.RowCount()) {
+		return moerr.NewInternalErrorNoCtx("outfile audit row count overflow")
+	}
 	for row := 0; row < bat.RowCount(); {
 		if ec.parquetWriter == nil {
 			var err error
@@ -1829,7 +1871,30 @@ func (ec *ExportConfig) flushParquetFile() error {
 	if err := writeParquetToFile(ec, parquetData); err != nil {
 		return err
 	}
+	if ec.auditEnabled {
+		if ec.Rows < ec.parquetConfirmedRows {
+			return moerr.NewInternalErrorNoCtx("outfile audit parquet row count regressed")
+		}
+		newRows := ec.Rows - ec.parquetConfirmedRows
+		if err := ec.addOutfileAuditTotals(uint64(len(parquetData)), newRows); err != nil {
+			return err
+		}
+		ec.parquetConfirmedRows = ec.Rows
+	}
 
+	return nil
+}
+
+func (ec *ExportConfig) addOutfileAuditTotals(bytesWritten, rowsWritten uint64) error {
+	if !ec.auditEnabled {
+		return nil
+	}
+	max := ^uint64(0)
+	if max-ec.auditBytesWritten < bytesWritten || max-ec.auditRowsWritten < rowsWritten {
+		return moerr.NewInternalErrorNoCtx("outfile audit total overflow")
+	}
+	ec.auditBytesWritten += bytesWritten
+	ec.auditRowsWritten += rowsWritten
 	return nil
 }
 
@@ -2024,6 +2089,7 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 	if !sendExportBatchByte(ctx, ByteChan, &BatchByte{
 		index:     index,
 		writeByte: result,
+		rowCount:  bat.RowCount(),
 		err:       nil,
 	}) {
 		return

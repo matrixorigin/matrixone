@@ -1685,39 +1685,78 @@ func Decimal128ToFloat64(x Decimal128, scale int32) float64 {
 }
 
 func Decimal64FromFloat64(x float64, width, scale int32) (y Decimal64, err error) {
-	err = nil
 	if x != x || x+1 == x || width > 18 || width < 1 || scale > width || scale < 0 {
 		err = moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal64: %f(%d,%d)", x, width, scale)
 		return
 	}
-	z := x
-	signx := false
+	magnitude, err := decimal128FromFloat64Magnitude(x, scale)
+	if err != nil || magnitude.B64_127 != 0 || magnitude.B0_63 >= Pow10[width] {
+		return 0, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal64: %f(%d,%d)", x, width, scale)
+	}
+	y = Decimal64(magnitude.B0_63)
 	if x < 0 {
-		z = -z
-		signx = true
-	}
-	for scale > 19 {
-		scale -= 19
-		z *= float64(Pow10[19])
-	}
-	z *= float64(Pow10[scale])
-	if z > float64(Pow10[width]) {
-		err = moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal64: %f(%d,%d)", x, width, scale)
-		return
-	}
-	y = Decimal64(uint64(z * 2))
-	if y&1 == 1 {
-		y++
-	}
-	y >>= 1
-	if uint64(y) >= Pow10[width] {
-		err = moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal64: %f(%d,%d)", x, width, scale)
-		return
-	}
-	if signx {
 		y = y.Minus()
 	}
-	return
+	return y, nil
+}
+
+// decimal128FromFloat64Magnitude rounds the shortest decimal representation,
+// rather than a binary product. Callers validate finite inputs and the target.
+// Scientific notation bounds the coefficient to 17 digits and avoids leading
+// fractional zeros consuming a decimal parser's precision budget.
+func decimal128FromFloat64Magnitude(x float64, scale int32) (Decimal128, error) {
+	if scale >= 0 && scale <= 19 {
+		// These powers of ten are exact binary64 integers. In this range,
+		// the shortest decimal, scaled exactly, differs from z by < 3*u*z
+		// (u = 2^-53), including the binary multiplication's rounding.
+		z := float64(math.Abs(x) * float64(Pow10[scale]))
+		if z >= 0.25 && z < 0x1p52 {
+			n := uint64(z)
+			fraction := z - float64(n) // Exact subtraction in this range.
+			// The 8*u*z allowance also covers rounding in distance. Only
+			// accept when decimal and binary rounding cannot cross a tie.
+			distance := math.Abs(fraction - 0.5)
+			if distance > z*0x1p-50 {
+				if fraction > 0.5 {
+					n++
+				}
+				return Decimal128{B0_63: n}, nil
+			}
+		}
+	}
+	var scratch [32]byte
+	text := strconv.AppendFloat(scratch[:0], math.Abs(x), 'e', -1, 64)
+	var coefficient uint64
+	digits, i := int32(0), 0
+	for text[i] != 'e' {
+		if text[i] != '.' {
+			coefficient = coefficient*10 + uint64(text[i]-'0')
+			digits++
+		}
+		i++
+	}
+	negativeExponent := text[i+1] == '-'
+	var exponent int32
+	for i += 2; i < len(text); i++ {
+		exponent = exponent*10 + int32(text[i]-'0')
+	}
+	if negativeExponent {
+		exponent = -exponent
+	}
+	power := exponent - (digits - 1) + scale
+	if power < 0 {
+		drop := -power
+		if drop > 17 {
+			return Decimal128{}, nil
+		}
+		divisor := Pow10[drop]
+		quotient := coefficient / divisor
+		if coefficient%divisor >= divisor/2 {
+			quotient++
+		}
+		return Decimal128{B0_63: quotient}, nil
+	}
+	return (Decimal128{B0_63: coefficient}).Scale(power)
 }
 
 func decimal128WidthLimit(width int32) Decimal128 {
@@ -1790,44 +1829,11 @@ func Decimal128FromFloat64(x float64, width, scale int32) (y Decimal128, err err
 		return magnitude, nil
 	}
 
-	z := x
-	signx := false
-	n := scale
-	if x < 0 {
-		z = -z
-		signx = true
-	}
-	for n > 19 {
-		n -= 19
-		z *= float64(Pow10[19])
-	}
-	z *= float64(Pow10[n])
-	if z > FloatHigh {
-		n = 0
-		for z > FloatHigh {
-			z /= 10
-			n++
-		}
-		if z < float64(Pow10[19]) {
-			if n > 19 || width-n < 19 {
-				return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
-			}
-		} else if n > 18 || width-n < 20 {
-			return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
-		}
-		y.B0_63 = uint64(z)
-		y, _ = y.Scale(n)
-	} else {
-		if z*2 > FloatHigh || uint64(z*2)&1 == 0 {
-			y.B0_63 = uint64(z)
-		} else {
-			y.B0_63 = uint64(z) + 1
-		}
-	}
-	if !y.Less(limit) {
+	y, err = decimal128FromFloat64Magnitude(x, scale)
+	if err != nil || !y.Less(limit) {
 		return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
 	}
-	if signx {
+	if x < 0 {
 		y = y.Minus()
 	}
 	return y, nil

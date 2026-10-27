@@ -265,6 +265,65 @@ func Test_writeDataToCSVFile(t *testing.T) {
 	})
 }
 
+func TestWriteExportBatchToFileRejectsAuditOverflow(t *testing.T) {
+	maxUint64 := ^uint64(0)
+	for _, tc := range []struct {
+		name      string
+		format    string
+		splitSize uint64
+		rows      uint64
+		fileBytes uint64
+		batch     BatchByte
+		wantError string
+	}{
+		{
+			name:      "csv unlimited row count",
+			format:    "csv",
+			rows:      maxUint64,
+			batch:     BatchByte{writeByte: []byte("x\n"), rowCount: 1},
+			wantError: "outfile audit row count overflow",
+		},
+		{
+			name:      "csv split row count",
+			format:    "csv",
+			splitSize: 16,
+			rows:      maxUint64,
+			batch:     BatchByte{writeByte: []byte("a\n"), rowEnds: []int{2}, rowCount: 1},
+			wantError: "outfile audit row count overflow",
+		},
+		{
+			name:      "jsonline file byte count",
+			format:    "jsonline",
+			fileBytes: maxUint64,
+			batch:     BatchByte{writeByte: []byte("{}\n"), rowCount: 1},
+			wantError: "outfile audit file byte count overflow",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ep := &ExportConfig{
+				userConfig:   &tree.ExportParam{ExportFormat: tc.format, SplitSize: tc.splitSize},
+				Rows:         tc.rows,
+				CurFileSize:  tc.fileBytes,
+				auditEnabled: true,
+			}
+			writes := 0
+			stub := gostub.Stub(&Write, func(_ *ExportConfig, output []byte) (int, error) {
+				writes++
+				return len(output), nil
+			})
+			defer stub.Reset()
+
+			err := writeExportBatchToFile(ep, &tc.batch)
+			require.ErrorContains(t, err, tc.wantError)
+			require.Zero(t, writes, "overflow must be detected before writing to the sink")
+			require.Equal(t, tc.rows, ep.Rows)
+			require.Equal(t, tc.fileBytes, ep.CurFileSize)
+			require.Zero(t, ep.auditBytesWritten)
+			require.Zero(t, ep.auditRowsWritten)
+		})
+	}
+}
+
 func Test_exportDataToCSVFile(t *testing.T) {
 	convey.Convey("exportDataFromResultSetToCSVFile succ", t, func() {
 		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
@@ -2064,7 +2123,7 @@ func TestExportParquetSplitSingleBatchPreservesRows(t *testing.T) {
 	dir := t.TempDir()
 	ec := &ExportConfig{proc: sysFileAccessTestProcess(), ctx: context.Background(), mrs: mrs, userConfig: &tree.ExportParam{
 		FilePath: filepath.Join(dir, "out_%d.parquet"), ExportFormat: "parquet", SplitSize: 8 << 10,
-	}}
+	}, auditEnabled: true}
 	execCtx := &ExecCtx{reqCtx: ec.ctx, ses: &backSession{feSessionImpl: feSessionImpl{pool: mp}}}
 	require.NoError(t, ec.Write(execCtx, nil, bat))
 	require.NoError(t, finalizeParquetExport(ec))
@@ -2073,19 +2132,24 @@ func TestExportParquetSplitSingleBatchPreservesRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(files), 1)
 	var got []string
+	var actualBytes, actualRows uint64
 	for _, name := range files {
 		data, err := os.ReadFile(name)
 		require.NoError(t, err)
+		actualBytes += uint64(len(data))
 		rows, err := parquet.Read[struct {
 			Payload string `parquet:"payload,optional"`
 		}](bytes.NewReader(data), int64(len(data)))
 		require.NoError(t, err)
 		require.NotEmpty(t, rows) // No trailing empty split file.
+		actualRows += uint64(len(rows))
 		for _, row := range rows {
 			got = append(got, row.Payload)
 		}
 	}
 	require.ElementsMatch(t, values, got)
+	require.Equal(t, actualBytes, ec.auditBytesWritten)
+	require.Equal(t, actualRows, ec.auditRowsWritten)
 }
 
 func Test_finalizeParquetExportAfterSplitDoesNotCreateTrailingFile(t *testing.T) {

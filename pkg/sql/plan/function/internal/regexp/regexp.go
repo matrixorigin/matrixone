@@ -78,6 +78,7 @@ import (
 // except for configuration methods, such as [Regexp.Longest].
 type Regexp struct {
 	lineMode       LineMode     // immutable MatrixOne line-assertion policy
+	lineMask       bool         // suppress match starts at a CRLF interior (line-anchored, non-exempt)
 	expr           string       // as passed to Compile
 	prog           *syntax.Prog // compiled program
 	onepass        *onePassProg // onepass program or nil
@@ -211,6 +212,12 @@ func compile(expr string, mode syntax.Flags, longest bool) (*Regexp, error) {
 		i++
 	}
 	regexp.mpool = i
+
+	// Finish all ordinary metadata and one-pass compilation before annotating
+	// the shared program for the bounded backtracking executor.
+	if regexp.onepass == nil && regexp.maxBitStateLen > 0 {
+		markEndTextRepeats(prog)
+	}
 
 	return regexp, nil
 }

@@ -54,9 +54,12 @@ func (s *sessionTemporaryDDLTestOwner) OwnsTemporaryTable(db, physical string) b
 	return false
 }
 func (*sessionTemporaryDDLTestOwner) CheckTemporaryTableCapacity(context.Context) error { return nil }
-func (s *sessionTemporaryDDLTestOwner) PublishTemporaryTable(db, alias, name string) {
+func (s *sessionTemporaryDDLTestOwner) PublishTemporaryTable(db, alias, name string, indexes map[string]string) {
 	s.published = append(s.published, name)
 	s.AddTempTable(db, alias, name)
+	for alias, physical := range indexes {
+		s.AddTempTable(db, alias, physical)
+	}
 }
 func (s *sessionTemporaryDDLTestOwner) RetireTemporaryTable(db, alias, name string, _ []string) {
 	s.retired = append(s.retired, name)
@@ -368,7 +371,7 @@ func TestExecutorTemporaryDDLPolicyRetryAndPoolReuse(t *testing.T) {
 	from.pn = &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
 		DdlType: plan.DataDefinition_CREATE_TABLE,
 	}}}
-	retry, err := from.buildRetryCompile(false, from.proc.GetTopContext())
+	retry, err := from.buildRetryCompile(false)
 	require.NoError(t, err)
 	defer retry.Release()
 	require.True(t, retry.temporaryDDLInExecutorTxn)
@@ -377,7 +380,7 @@ func TestExecutorTemporaryDDLPolicyRetryAndPoolReuse(t *testing.T) {
 	retry.SetPreparedParamValues([]any{"1"})
 	require.Equal(t, []any{"2020-01-01", "2020-01-03"}, from.preparedParamValues)
 	from.SetBuildPlanFunc(func(context.Context) (*plan.Plan, error) { return from.pn, nil })
-	rebuilt, err := from.buildRetryCompile(true, from.proc.GetTopContext())
+	rebuilt, err := from.buildRetryCompile(true)
 	require.NoError(t, err)
 	defer rebuilt.Release()
 	require.Same(t, from.temporaryDropRetryStage, rebuilt.temporaryDropRetryStage)
@@ -665,7 +668,7 @@ func TestTemporaryDDLGenerationPreservesIndexIdentity(t *testing.T) {
 
 func TestCreateIndexTemporaryNameUsesRootGeneration(t *testing.T) {
 	base := &trackingTempTableSession{tables: make(map[string]string)}
-	stage := &temporaryDDLSession{Session: base, sessionID: uuid.New(), generation: "root-generation", aliases: make(map[string]string)}
+	stage := &temporaryDDLSession{Session: base, sessionID: uuid.New(), generation: "root-generation", aliases: make(map[temporaryTableAlias]string)}
 	root := stage.TemporaryTableName("db", "root")
 	stage.AddTempTable("db", "root", root)
 
@@ -694,4 +697,34 @@ func TestCreateIndexTemporaryNameUsesRootGeneration(t *testing.T) {
 
 	require.ErrorIs(t, (&Scope{Plan: pn}).CreateIndex(c), assert.AnError)
 	require.Equal(t, strings.TrimSuffix(root, "root")+"idx", q.Index.IndexTables[0].Name)
+}
+
+func TestTemporaryDDLSessionOwnsStagedRoot(t *testing.T) {
+	owner := &sessionTemporaryDDLTestOwner{trackingTempTableSession: trackingTempTableSession{tables: make(map[string]string)}}
+	stage := &temporaryDDLSession{
+		Session: owner,
+		aliases: map[temporaryTableAlias]string{{"db", "t"}: "staged_t"},
+	}
+	require.True(t, stage.OwnsTemporaryTable("db", "staged_t"))
+	require.False(t, stage.OwnsTemporaryTable("db", "staged"))
+	stage.sessionID = uuid.New()
+	require.Equal(t, stage.sessionID, stage.GetSessId())
+	stage.AddTempIndexTable("db", "idx", "staged_index")
+	require.True(t, stage.OwnsTemporaryTable("db", "staged_index"))
+	require.False(t, stage.OwnsTemporaryTable("db", "staged_ind"))
+	require.False(t, stage.OwnsTemporaryTable("other-db", "staged_t"))
+	owner.AddTempTable("db", "published", "published-root")
+	require.True(t, stage.OwnsTemporaryTable("db", "published-root"))
+	stage.AddTempTable("a.b", "c", "dotted_root")
+	stage.AddTempIndexTable("a.b", "idx.c", "dotted_index")
+	stage.AddTempTable("a", "b.c", "other_root")
+	require.True(t, stage.OwnsTemporaryTable("a.b", "dotted_root"))
+	require.False(t, stage.OwnsTemporaryTable("a", "dotted_root"))
+	require.Equal(t, []string{"dotted_index"}, stage.indexNames("a.b", "c"))
+	stage.RemoveTempTable("a.b", "c")
+	_, exists := stage.GetTempTable("a.b", "c")
+	require.False(t, exists)
+	name, exists := stage.GetTempTable("a", "b.c")
+	require.True(t, exists)
+	require.Equal(t, "other_root", name)
 }

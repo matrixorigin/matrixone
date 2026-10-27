@@ -47,3 +47,31 @@ The pinned engine source hashes below bind provenance. A future Go toolchain upd
   "onepass.go": "fd0e29803438c6ea3021c78227d4f69de163f693e82c155dc62d721eaacbd24b"
 }
 ```
+
+## Addendum 2026-10-25: issue #30210 line-terminator classification repair
+
+The follow-up design `20261024-30210-regexp-multiline-line-terminators.md`
+(Rev 10) supersedes three decisions recorded in this document, each backed
+by independent live ICU 77.1 measurements cited there:
+
+1. **VT/FF scope.** CRT, NEL, LS and PS are not the complete text addition:
+   ICU's `isLineTerminator` also includes VT (U+000B) and FF (U+000C), in
+   every wide mode and binary alphabet. The text terminator set is
+   {CR, VT, FF, NEL, LS, PS} plus LF.
+2. **Binary 0x85.** Byte 0x85 reaches the binary facade as U+E085 (or
+   folds to U+2026) and is never a line terminator; both binary alphabets
+   collapse to one policy {CR, VT, FF} plus LF, so `WideBinaryFoldLines`
+   is now only a source-compatible alias.
+3. **CR|LF-interior caret.** The wide caret holds in the CRLF interior
+   (prev CR, next LF), matching ICU's assertion table; CRLF atomicity is
+   instead enforced structurally by skipping the interior as a match-start
+   candidate for line-anchored, non-exempt patterns, computed by the
+   shared pre-publication classifier (`internal/regexpclass`) and applied
+   on every candidate loop of both engines.
+
+The regexp2 anchor lookaround rewrite named above (`rewriteRegexpWideMultilineAnchors`)
+is removed together with the external `dlclark/regexp2` dependency: the
+vendored fork under `internal/regexp2` carries native line modes
+(`SetLinePolicy`) with wide Bol/Eol tables and the same candidate mask, so
+the compiled program is now byte-identical to the user pattern in every
+match_type (admission identity is pinned by tests).
