@@ -16,6 +16,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -109,5 +111,27 @@ func TestCauseForCode(t *testing.T) {
 	}
 	if CauseForCode(ErrPlanningTimeout) != moerr.CauseIcebergPlanning {
 		t.Fatalf("planning timeout code should map to planning cause")
+	}
+}
+
+func TestErrorCategory(t *testing.T) {
+	classified := NewError(ErrMetadataInvalid, "invalid", nil)
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil", nil, ""},
+		{"classified", classified, string(ErrMetadataInvalid)},
+		{"wrapped", fmt.Errorf("outer: %w", classified), string(ErrMetadataInvalid)},
+		{"joined", errors.Join(context.Canceled, classified), string(ErrMetadataInvalid)},
+		{"empty code", NewError("", "empty", nil), string(ErrInternal)},
+		{"other", context.Canceled, string(ErrInternal)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ErrorCategory(tc.err); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

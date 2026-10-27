@@ -387,9 +387,9 @@ func TestCommitWorkflowVerifierFailureDoesNotReverseCommittedResult(t *testing.T
 }
 
 func TestDMLWorkflowAccountingAndPathHelpers(t *testing.T) {
-	require.Empty(t, dmlErrorCategory(nil))
-	require.Equal(t, string(api.ErrMetadataInvalid), dmlErrorCategory(api.NewError(api.ErrMetadataInvalid, "invalid", nil)))
-	require.Equal(t, string(api.ErrInternal), dmlErrorCategory(context.Canceled))
+	require.Empty(t, api.ErrorCategory(nil))
+	require.Equal(t, string(api.ErrMetadataInvalid), api.ErrorCategory(api.NewError(api.ErrMetadataInvalid, "invalid", nil)))
+	require.Equal(t, string(api.ErrInternal), api.ErrorCategory(context.Canceled))
 	require.Zero(t, presentDataFileCount(api.DataFile{}))
 	require.Equal(t, 1, presentDataFileCount(api.DataFile{FilePath: "path"}))
 	require.Zero(t, positiveRecordCount(api.DataFile{RecordCount: -1}))

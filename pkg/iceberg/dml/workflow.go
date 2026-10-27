@@ -90,7 +90,7 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 		recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
 		defer cancel()
 		recordErr := w.recordOrphans(recoveryCtx, req, nil)
-		w.onFailure(recoveryCtx, req, "failed", dmlErrorCategory(err))
+		w.onFailure(recoveryCtx, req, "failed", api.ErrorCategory(err))
 		return nil, stderrors.Join(err, recordErr)
 	}
 	materialized, err := BuildManifestCommitAttempt(ctx, ManifestMaterializeRequest{
@@ -113,14 +113,14 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 		recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
 		defer cancel()
 		recordErr := w.recordOrphans(recoveryCtx, req, nil)
-		w.onFailure(recoveryCtx, req, "failed", dmlErrorCategory(err))
+		w.onFailure(recoveryCtx, req, "failed", api.ErrorCategory(err))
 		return nil, stderrors.Join(err, recordErr)
 	}
 	if err := w.writeManifests(ctx, materialized); err != nil {
 		recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
 		defer cancel()
 		recordErr := w.recordOrphans(recoveryCtx, req, materialized)
-		w.onFailure(recoveryCtx, req, "failed", dmlErrorCategory(err))
+		w.onFailure(recoveryCtx, req, "failed", api.ErrorCategory(err))
 		return nil, stderrors.Join(err, recordErr)
 	}
 	result, err := w.Committer.CommitTable(ctx, dmlCommitRequest(req.Catalog, req.Stream.Base, materialized.Attempt))
@@ -131,7 +131,7 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 			verified, ok, verifyErr := w.verifyUnknown(recoveryCtx, req, materialized, result)
 			if verifyErr != nil {
 				recordErr := w.recordOrphans(recoveryCtx, req, materialized)
-				w.onFailure(recoveryCtx, req, "unknown", dmlErrorCategory(verifyErr))
+				w.onFailure(recoveryCtx, req, "unknown", api.ErrorCategory(verifyErr))
 				return nil, stderrors.Join(verifyErr, recordErr)
 			}
 			if ok {
@@ -140,13 +140,13 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 			}
 			recordErr := w.recordOrphans(recoveryCtx, req, materialized)
 			unknownErr := api.NewError(api.ErrCommitUnknown, "Iceberg DML commit result is unknown and could not be verified", map[string]string{"table": req.Stream.Base.Table})
-			w.onFailure(recoveryCtx, req, "unknown", dmlErrorCategory(unknownErr))
+			w.onFailure(recoveryCtx, req, "unknown", api.ErrorCategory(unknownErr))
 			return nil, stderrors.Join(unknownErr, recordErr)
 		}
 		recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
 		defer cancel()
 		recordErr := w.recordOrphans(recoveryCtx, req, materialized)
-		w.onFailure(recoveryCtx, req, "failed", dmlErrorCategory(err))
+		w.onFailure(recoveryCtx, req, "failed", api.ErrorCategory(err))
 		return nil, stderrors.Join(err, recordErr)
 	}
 	if result == nil || result.Unknown {
@@ -155,7 +155,7 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 		verified, ok, verifyErr := w.verifyUnknown(recoveryCtx, req, materialized, result)
 		if verifyErr != nil {
 			recordErr := w.recordOrphans(recoveryCtx, req, materialized)
-			w.onFailure(recoveryCtx, req, "unknown", dmlErrorCategory(verifyErr))
+			w.onFailure(recoveryCtx, req, "unknown", api.ErrorCategory(verifyErr))
 			return nil, stderrors.Join(verifyErr, recordErr)
 		}
 		if ok {
@@ -164,7 +164,7 @@ func (w CommitWorkflow) CommitDML(ctx context.Context, req CommitWorkflowRequest
 		}
 		recordErr := w.recordOrphans(recoveryCtx, req, materialized)
 		unknownErr := api.NewError(api.ErrCommitUnknown, "Iceberg DML commit result is unknown and could not be verified", map[string]string{"table": req.Stream.Base.Table})
-		w.onFailure(recoveryCtx, req, "unknown", dmlErrorCategory(unknownErr))
+		w.onFailure(recoveryCtx, req, "unknown", api.ErrorCategory(unknownErr))
 		return nil, stderrors.Join(unknownErr, recordErr)
 	}
 	recoveryCtx, cancel := icebergwrite.NewRecoveryContext(ctx)
@@ -379,17 +379,6 @@ func dmlMetricsReport(req CommitWorkflowRequest, intent *CommitIntent, materiali
 		Files:                dmlActionFileCount(req.Stream),
 		Extra:                extra,
 	}
-}
-
-func dmlErrorCategory(err error) string {
-	if err == nil {
-		return ""
-	}
-	var icebergErr *api.IcebergError
-	if stderrors.As(err, &icebergErr) && icebergErr.Code != "" {
-		return string(icebergErr.Code)
-	}
-	return string(api.ErrInternal)
 }
 
 func dmlActionRecordCount(stream ActionStream) int64 {
