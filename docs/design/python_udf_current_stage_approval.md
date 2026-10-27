@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r33-2026-10-28`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r34-2026-10-28`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -719,3 +719,16 @@ external capability handshake requires `expiring-v1`. No persisted catalog,
 MORPC, production isolation or deployment scope changes. Existing upstream
 protocols through 134 remain unchanged. Independent Architecture and SQL/Planner
 approval of r33 remains pending; this maintenance fix does not supply approval.
+
+## r34 — 2026-10-28 encoded-size and frozen-type correctness
+
+Governing artifact: `python_udf_current_stage.md` r34. Encoded catalog TEXT and
+external Open bounds are checked before accepting definitions. TEXT/BLOB widths
+preserve SQL byte capacities, while CHAR/VARCHAR keep character semantics.
+String-domain analysis uses frozen RoutineCall return metadata instead of
+passing user-only arguments to the legacy Python overload checker. No persisted
+format, MORPC or deployment scope is added. Existing width-zero descriptors are
+not rewritten. [Review 5673875427](https://github.com/matrixorigin/matrixone/pull/29152#pullrequestreview-5673875427)
+accepted the development-stage design and identified these concrete defects;
+that assessment does not assert implementation approval of this correction.
+Independent Architecture/SQL approval facts remain as recorded above.
