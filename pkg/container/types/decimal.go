@@ -1702,8 +1702,8 @@ func Decimal64FromFloat64(x float64, width, scale int32) (y Decimal64, err error
 
 // decimal128FromFloat64Magnitude rounds the shortest decimal representation,
 // rather than a binary product. Callers validate finite inputs and the target.
-// Scientific notation bounds the coefficient to 17 digits and avoids leading
-// fractional zeros consuming a decimal parser's precision budget.
+// The numerical shortest pair bounds the coefficient to 17 significant digits
+// without formatting and reparsing a decimal string.
 func decimal128FromFloat64Magnitude(x float64, scale int32) (Decimal128, error) {
 	if scale >= 0 && scale <= 19 {
 		// These powers of ten are exact binary64 integers. In this range,
@@ -1724,26 +1724,8 @@ func decimal128FromFloat64Magnitude(x float64, scale int32) (Decimal128, error) 
 			}
 		}
 	}
-	var scratch [32]byte
-	text := strconv.AppendFloat(scratch[:0], math.Abs(x), 'e', -1, 64)
-	var coefficient uint64
-	digits, i := int32(0), 0
-	for text[i] != 'e' {
-		if text[i] != '.' {
-			coefficient = coefficient*10 + uint64(text[i]-'0')
-			digits++
-		}
-		i++
-	}
-	negativeExponent := text[i+1] == '-'
-	var exponent int32
-	for i += 2; i < len(text); i++ {
-		exponent = exponent*10 + int32(text[i]-'0')
-	}
-	if negativeExponent {
-		exponent = -exponent
-	}
-	power := exponent - (digits - 1) + scale
+	coefficient, exponent := float64ShortestDecimal(x)
+	power := exponent + scale
 	if power < 0 {
 		drop := -power
 		if drop > 17 {
