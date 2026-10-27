@@ -187,6 +187,38 @@ func TestFulltext2CreateStartFeedsBuilder(t *testing.T) {
 	st.free(tf, proc, false, nil)
 }
 
+func TestFulltext2CreateBytePKWords(t *testing.T) {
+	for _, pf := range []bool{false, true} {
+		t.Run(map[bool]string{false: "positional", true: "position-free"}[pf], func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mp)
+			tf, vecs := ft2CreateArgVecs(t, mp, ft2CreateCfg(t, fulltext2.ParserNgram, pf), 1, "alpha alpha beta")
+			t.Cleanup(func() {
+				for _, vec := range vecs {
+					vec.Free(mp)
+				}
+			})
+			vecs[1].Free(mp)
+			vecs[1] = vector.NewVec(types.T_varchar.ToType())
+			require.NoError(t, vector.AppendBytes(vecs[1], []byte("row-a"), false, mp))
+			st := &fulltext2CreateState{}
+			t.Cleanup(func() { st.free(tf, proc, false, nil) })
+			require.NoError(t, st.start(tf, proc, 0, nil))
+			require.NoError(t, st.start(tf, proc, 0, nil), "a repeated byte PK appends to the same document")
+			require.Equal(t, 1, st.cur.NumDocs())
+			require.Equal(t, 6, st.cur.NumPostings())
+			copy(vecs[1].GetBytesAt(0), "other")
+			seg, err := st.cur.Finish()
+			require.NoError(t, err)
+			idx := fulltext2.NewIndex([]*fulltext2.Segment{seg}, nil)
+			got, err := idx.SearchQuery([]byte("alpha"), true, fulltext2.ParserNgram, fulltext2.BM25, 10, nil)
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			require.Equal(t, []byte("row-a"), got[0].Pk, "builder owns its PK after input vector reuse")
+		})
+	}
+}
+
 func TestFulltext2CreateLongPhysicalIdentity(t *testing.T) {
 	var ids []string
 	for _, suffix := range []string{"first", "second"} {

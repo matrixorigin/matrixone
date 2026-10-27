@@ -359,6 +359,29 @@ func (b *Builder) Add(word string, pos int32, pk any) error {
 	return nil
 }
 
+// AddWords appends a document's ordered token occurrences, resolving its pk once.
+// For supported primary keys, this matches repeated Add calls: an empty word
+// fails after retaining any valid prefix; an empty input or an invalid first
+// word does not register a document.
+func (b *Builder) AddWords(words []WordPos, pk any) error {
+	if len(words) == 0 {
+		return nil
+	}
+	if words[0].Word == "" {
+		return moerr.NewInternalErrorNoCtx("fulltext2 builder: empty word")
+	}
+	ord := b.docOrd(pk)
+	for _, w := range words {
+		if w.Word == "" {
+			return moerr.NewInternalErrorNoCtx("fulltext2 builder: empty word")
+		}
+		b.docs[ord].Terms = append(b.docs[ord].Terms, w.Word)
+		b.docs[ord].Positions = append(b.docs[ord].Positions, w.Pos)
+		b.postings++
+	}
+	return nil
+}
+
 // SetDoc REPLACES a pk's document terms with words (assigning a fresh ord on first
 // sight), rather than appending like Add. It is the CDC upsert primitive: a later
 // upsert of a pk already present in this open segment must supersede — not merge with —

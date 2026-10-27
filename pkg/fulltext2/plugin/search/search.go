@@ -384,8 +384,8 @@ func (u *reader) next(mp *mpool.MPool, out *batch.Batch) (int, error) {
 // columns. It is the ONE consumer shared by both result paths: the streaming path passes the
 // per-batch emitted output with start=0, n=Keys.N; the LIMIT path pages the whole-result output
 // by u.offset. pk and each include col bulk-append via AppendColumnBufferRange (no per-row
-// boxing); score narrows float32 per row. Any mpool failure surfaces as the error so the caller
-// never SetRowCounts a batch whose vectors disagree in length. A segPos out of range (should not
+// boxing); scores bulk-copy their existing float32 values. Any mpool failure surfaces as the
+// error so the caller never SetRowCounts a batch whose vectors disagree in length. A segPos out of range (should not
 // happen on the covered path) fills SQL NULLs to keep the batch column-aligned.
 func (u *reader) appendOutputRange(res *vectorindex.SearchOutput, start, n int, mp *mpool.MPool, out *batch.Batch) error {
 	if u.pkVecIdx >= 0 {
@@ -393,12 +393,14 @@ func (u *reader) appendOutputRange(res *vectorindex.SearchOutput, start, n int, 
 			return err
 		}
 	}
-	if u.scoreVecIdx >= 0 {
+	if u.scoreVecIdx >= 0 && n > 0 {
 		vec := out.Vecs[u.scoreVecIdx]
-		for i := start; i < start+n; i++ {
-			if err := vector.AppendFixed[float32](vec, res.Dists[i], false, mp); err != nil {
+		if n == 1 {
+			if err := vector.AppendFixed[float32](vec, res.Dists[start], false, mp); err != nil {
 				return err
 			}
+		} else if err := vector.AppendFixedList[float32](vec, res.Dists[start:start+n], nil, mp); err != nil {
+			return err
 		}
 	}
 	for _, ic := range u.includeOut {

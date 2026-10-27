@@ -161,13 +161,11 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 	// Feed this doc's tokens contiguously and in order, each with its BYTE position
 	// (positional phrase queries match by byte offset), mirroring the base build.
 	pk := vector.GetAny(pkVec, nthRow, false)
-	for _, w := range terms {
-		if aerr := u.cur.Add(w.Word, w.Pos, pk); aerr != nil {
-			return aerr
-		}
+	if aerr := u.cur.AddWords(terms, pk); aerr != nil {
+		return aerr
 	}
 	// Attach this row's INCLUDE column values (actual values → segment docmap for
-	// prefilter + coverage). Only for docs the Add loop created, i.e. rows with
+	// prefilter + coverage). Only for docs the token append created, i.e. rows with
 	// searchable content (a no-searchable-content row is skipped above), consistent
 	// with the CDC/build empty-doc skip.
 	if len(u.tblcfg.IncludeTypes) > 0 {
