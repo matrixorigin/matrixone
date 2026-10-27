@@ -29,6 +29,68 @@ class Item(Base):
     text = sa.Column(sa.String)
 
 
+def test_legacy_filter_by_never_discards_predicates():
+    from matrixone.orm import Query
+
+    db = sqlite3.connect(':memory:')
+    try:
+        db.executescript(
+            "CREATE TABLE items(id INT, value INT, text TEXT); INSERT INTO items VALUES(1,2,'red'),(2,NULL,'blue');"
+        )
+        client = Client()
+
+        def execute(sql, params=None):
+            cursor = db.execute(sql, params or [])
+            return SimpleNamespace(rows=cursor.fetchall(), columns=[c[0] for c in cursor.description or []])
+
+        client.execute = execute
+        assert Query(Item, client).filter_by(text='red').count() == 1
+        assert Query('items', client).filter_by(text='red').count() == 1
+        assert Query(Item, client).filter_by(value=None).count() == 1
+        q = Query(Item, client).filter_by(id=1)
+        with pytest.raises(ValueError, match='Unknown model field'):
+            q.filter_by(text='red', typo='blue')
+        assert q._build_select_sql()[1] == [1]  # Failed calls must not partially add predicates.
+        assert Query(Item, client).count() == 2
+        with pytest.raises(ValueError, match='Unknown model field'):
+            Query(Item, client).filter_by(typo='red').delete()
+        assert Query(Item, client).count() == 2
+    finally:
+        db.close()
+
+
+def test_legacy_filter_by_uses_mapped_attribute_and_physical_column():
+    from matrixone.orm import Query
+
+    class Renamed(Base):
+        __tablename__ = 'renamed_filter'
+        key = sa.Column('id', sa.Integer, primary_key=True)
+        display = sa.Column('select', sa.String)
+
+    query = Query(Renamed, Mock()).filter_by(display="O'Reilly")
+    sql, params = query._build_select_sql()
+    assert '`select` = ?' in sql
+    assert params == ["O'Reilly"]
+
+
+def test_legacy_filter_by_excluded_columns_do_not_break_valid_fields():
+    from matrixone.orm import Query
+
+    table = sa.Table(
+        'partial_filter', Base.metadata, sa.Column('id', sa.Integer, primary_key=True), sa.Column('ignored', sa.String)
+    )
+
+    class Partial(Base):
+        __table__ = table
+        __mapper_args__ = {'exclude_properties': ['ignored']}
+
+    q = Query(Partial, Mock()).filter_by(id=1)
+    assert q._build_select_sql()[1] == [1]
+    with pytest.raises(ValueError, match='Unknown model field'):
+        q.filter_by(ignored='x')
+    assert q._build_select_sql()[1] == [1]
+
+
 @pytest.fixture(params=['sync', 'async'])
 def query_client(request):
     db = sqlite3.connect(':memory:')

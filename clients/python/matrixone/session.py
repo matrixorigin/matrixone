@@ -22,6 +22,8 @@ vector operations, and fulltext search.
 
 from __future__ import annotations
 
+from ._utils import result_returns_rows
+
 from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 try:
@@ -401,7 +403,7 @@ class Session(SQLAlchemySession):
             execution_time = time.time() - start_time
 
             # Log query
-            if hasattr(result, 'returns_rows') and result.returns_rows:
+            if result_returns_rows(result):
                 self.client.logger.log_query(original_sql, execution_time, None, success=True, log_mode=log_mode)
             else:
                 self.client.logger.log_query(
@@ -425,7 +427,10 @@ class Session(SQLAlchemySession):
             self.client.logger.log_error(e, context="Session query execution")
             from .client import _classify_db_error
 
-            raise _classify_db_error(e, sql_or_stmt) from None
+            classified = _classify_db_error(e, sql_or_stmt)
+            if classified is e:
+                raise
+            raise classified from e
 
     def insert(self, table_name: str, data: dict[str, Any]) -> "ResultSet":
         """
@@ -842,7 +847,7 @@ class AsyncSession(SQLAlchemyAsyncSession):
             execution_time = time.time() - start_time
 
             # Log query
-            if hasattr(result, 'returns_rows') and result.returns_rows:
+            if result_returns_rows(result):
                 self.client.logger.log_query(original_sql, execution_time, None, success=True, log_mode=log_mode)
             else:
                 self.client.logger.log_query(
@@ -866,7 +871,10 @@ class AsyncSession(SQLAlchemyAsyncSession):
             self.client.logger.log_error(e, context="Async session query execution")
             from .client import _classify_db_error
 
-            raise _classify_db_error(e, sql_or_stmt) from None
+            classified = _classify_db_error(e, sql_or_stmt)
+            if classified is e:
+                raise
+            raise classified from e
 
     async def insert(self, table_name_or_model, data: dict):
         """
