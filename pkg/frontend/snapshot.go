@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -1568,7 +1569,7 @@ func restoreToDatabaseOrTable(
 		return
 	}
 	if isSubDb && restoreToTbl {
-		return moerr.NewInternalError(ctx, "can't restore to table for sub db")
+		return false, moerr.NewInternalError(ctx, "can't restore to table for sub db")
 	}
 
 	if isRestoreCluster && isSubDb {
@@ -1591,7 +1592,7 @@ func restoreToDatabaseOrTable(
 		var isMasterDb bool
 		isMasterDb, err = checkDatabaseIsMaster(toCtx, sid, bh, snapshotName, dbName)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if isMasterDb {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore master db: %v, which has been referenced by foreign keys", snapshotName, dbName))
@@ -1615,7 +1616,7 @@ func restoreToDatabaseOrTable(
 		var isPubExist bool
 		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if !isPubExist {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, dbName))
@@ -1658,9 +1659,9 @@ func restoreToDatabaseOrTable(
 	// if restore to table, expect only one table here
 	if restoreToTbl {
 		if len(tableInfos) == 0 {
-			return moerr.NewInternalErrorf(ctx, "table %s not exists at snapshot %s", tblName, snapshotName)
+			return false, moerr.NewInternalErrorf(ctx, "table %s not exists at snapshot %s", tblName, snapshotName)
 		} else if len(tableInfos) != 1 {
-			return moerr.NewInternalErrorf(ctx, "find %v tableInfos by name %s at snapshot %s, expect only 1", len(tableInfos), tblName, snapshotName)
+			return false, moerr.NewInternalErrorf(ctx, "find %v tableInfos by name %s at snapshot %s, expect only 1", len(tableInfos), tblName, snapshotName)
 		}
 	}
 
@@ -1675,7 +1676,7 @@ func restoreToDatabaseOrTable(
 		// external table data is stored outside MO and cannot be restored by clone.
 		if shouldSkipRestoreTableInBulk(tblInfo) {
 			if restoreToTbl {
-				return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
+				return false, newExternalTableRestoreError(ctx, tblInfo, "snapshot")
 			}
 			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore external table: %v.%v", snapshotName, tblInfo.dbName, tblInfo.tblName))
 			continue
