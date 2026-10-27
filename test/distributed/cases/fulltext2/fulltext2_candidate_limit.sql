@@ -27,6 +27,22 @@ create fulltext2 index ft_exact_idx on ft_exact(body) with parser gojieba;
 -- explicit so this semantic result is independent of score ties.
 -- @sortkey:0
 select id from ft_exact where match(body) against('+needle' in boolean mode) and match(body) against('+alpha' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+-- The same multi-MATCH shapes with Bloom membership pushdown must not hang.
+set fulltext_bloom_filter_pushdown = 1;
+-- @sortkey:0
+select id from ft_exact where match(body) against('+needle' in boolean mode) and match(body) against('+alpha' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+-- @sortkey:0
+select id from ft_exact where match(body) against('+needle' in boolean mode) and match(body) against('+alpha' in boolean mode) and match(body) against('+beta' in boolean mode) and category = 'keep' order by id;
+set fulltext_bloom_filter_pushdown = 0;
+
+-- With exact membership, an explicit score order bounds the search exactly like the
+-- implicit relevance order, and returns the same page as the unbounded plan.
+set fulltext_bloom_filter_pushdown = 1;
+-- @regex("Candidate Limit: 3",true)
+explain select id, category, match(body) against('+needle' in boolean mode) as sc from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by sc desc limit 2 offset 1;
+select id, category, match(body) against('+needle' in boolean mode) as sc from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by sc desc limit 2 offset 1;
+set fulltext_bloom_filter_pushdown = 0;
+select id, category, match(body) against('+needle' in boolean mode) as sc from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by sc desc limit 2 offset 1;
 
 -- Ranking witness: the controlled TF/document-length fixture makes the two
 -- excluded rows score strictly above the qualifying rows.  The projected
@@ -279,8 +295,102 @@ select id from (select id, match(body) against('needle' in natural language mode
 -- @regex("Candidate Limit: 3",true)
 -- @regex("(?s)Sort Key:.*Sort Key:",false)
 explain select id, match(body) against('needle' in natural language mode) as sc from ft_include where match(body) against('needle' in natural language mode) and category = 1 order by sc desc limit 2 offset 1;
+-- A non-covered explicit score order bounds the search exactly like the implicit
+-- relevance order when every base filter is an INCLUDE predicate the search enforces.
+-- @regex("Candidate Limit: 2",true)
+explain select id, payload from ft_include where match(body) against('needle' in natural language mode) and category = 1 limit 2;
+-- @regex("Candidate Limit: 2",true)
+explain select id, payload, match(body) against('needle' in natural language mode) as sc from ft_include where match(body) against('needle' in natural language mode) and category = 1 order by sc desc limit 2;
 -- A residual payload predicate and an alternate order must still see all hits.
+-- @sortkey:0
 select id from ft_include where match(body) against('needle' in natural language mode) and category = 1 and payload <> 'b' order by match(body) against('needle' in natural language mode) desc limit 2;
 select id from ft_include where match(body) against('needle' in natural language mode) and category = 1 order by id desc limit 2 offset 1;
+
+-- Non-covered ORDER BY score DESC LIMIT: the score sort sits above the base-table join,
+-- so the top-k is pushed into the search scan as its candidate limit.
+create table ft_join (
+    id bigint primary key,
+    body text,
+    payload varchar(10)
+);
+insert into ft_join values
+(1, 'needle filler filler filler filler filler', 'p1'),
+(2, 'needle needle filler filler filler filler', 'p2'),
+(3, 'needle needle needle filler filler filler', 'p3'),
+(4, 'needle needle needle needle filler filler', 'p4'),
+(5, 'needle needle needle needle needle filler', 'p5'),
+(6, 'other filler filler filler filler filler', 'p6');
+create fulltext2 index ft_join_idx on ft_join(body);
+select id, payload from ft_join where match(body) against('needle') order by match(body) against('needle') desc limit 2 offset 1;
+select id, payload from (select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc limit 3) as page;
+-- A residual base-table predicate declines the push; it must return the same rows.
+select id, payload from ft_join where match(body) against('needle') and payload <> 'zz' order by match(body) against('needle') desc limit 2 offset 1;
+-- @regex("Candidate Limit: 3",true)
+explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc limit 2 offset 1;
+-- @regex("Candidate Limit",false)
+explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') and payload <> 'zz' order by sc desc limit 2 offset 1;
+-- A secondary ORDER BY key declines: the search cannot choose among rows tied at the
+-- cutoff by that key.
+-- @regex("Candidate Limit",false)
+explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc, id limit 2;
+select id, payload from ft_join where match(body) against('needle') order by match(body) against('needle') desc, id limit 3;
+select id, payload from ft_join where match(body) against('needle') and payload <> 'zz' order by match(body) against('needle') desc, id limit 3;
+-- A non-score first key declines.
+-- @regex("Candidate Limit",false)
+explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by id, sc desc limit 2;
+-- @regex("Candidate Limit",false)
+explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by id desc limit 2;
+-- @regex("Candidate Limit",false)
+explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc asc limit 2;
+
+-- Rows tied at the LIMIT cutoff: id 10 scores highest, ids 1-5 tie. The secondary key
+-- picks among the tied rows, so ORDER BY score DESC, id is never bounded, on the covered
+-- path (id only) or the base-table join path (payload).
+create table ft_tie (
+    id bigint primary key,
+    body text,
+    payload varchar(10)
+);
+insert into ft_tie values
+(1, 'needle filler filler filler', 't1'),
+(2, 'needle filler filler filler', 't2'),
+(3, 'needle filler filler filler', 't3'),
+(4, 'needle filler filler filler', 't4'),
+(5, 'needle filler filler filler', 't5'),
+(10, 'needle needle needle filler', 't10'),
+(11, 'other filler filler filler', 't11');
+create fulltext2 index ft_tie_idx on ft_tie(body);
+-- @regex("Candidate Limit",false)
+explain select id, match(body) against('needle') as sc from ft_tie where match(body) against('needle') order by sc desc, id desc limit 2;
+-- @regex("Candidate Limit",false)
+explain select id, payload, match(body) against('needle') as sc from ft_tie where match(body) against('needle') order by sc desc, id desc limit 2;
+-- @regex("Candidate Limit",false)
+explain select id, payload, match(body) against('needle') as sc from ft_tie where match(body) against('needle') order by sc desc, id limit 2 offset 1;
+select id from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id desc limit 2;
+select id from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id limit 2;
+select id, payload from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id desc limit 2;
+select id, payload from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id limit 3 offset 1;
+
+-- Re-ordering the top n by another key: bound the search in a derived table, then sort
+-- the page. The inner score-only order is bounded; the outer key orders the page.
+-- @regex("Candidate Limit: 3",true)
+explain select id from (select id, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc limit 3) as page order by id;
+-- @regex("Candidate Limit: 3",true)
+explain select id, payload from (select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc limit 3) as page order by id;
+select id from (select id, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc limit 3) as page order by id;
+select id, payload from (select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc limit 3) as page order by id desc;
+
+-- Other shapes the bound cannot see through decline: SQL_CALC_FOUND_ROWS, an aggregate
+-- and a join between the sort and the search.
+-- @regex("Candidate Limit",false)
+explain select sql_calc_found_rows id, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc limit 2;
+-- @regex("Candidate Limit",false)
+explain select payload, max(match(body) against('needle')) as sc from ft_join where match(body) against('needle') group by payload order by sc desc limit 2;
+-- @regex("Candidate Limit",false)
+explain select j.id, t.payload, match(j.body) against('needle') as sc from ft_join j join ft_tie t on j.id = t.id where match(j.body) against('needle') order by sc desc limit 2;
+select sql_calc_found_rows id from ft_join where match(body) against('needle') order by match(body) against('needle') desc limit 2;
+select found_rows();
+select payload, max(match(body) against('needle')) as sc from ft_join where match(body) against('needle') group by payload order by sc desc limit 2;
+select j.id, t.payload from ft_join j join ft_tie t on j.id = t.id where match(j.body) against('needle') order by match(j.body) against('needle') desc, j.id limit 2;
 
 drop database fulltext2_candidate_limit;
