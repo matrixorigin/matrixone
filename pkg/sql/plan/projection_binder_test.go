@@ -1179,6 +1179,7 @@ func TestProjectionBinderBindWinFunc(t *testing.T) {
 		types:          []*plan.Type{&plan2Type, &plan2Type, &varcharPlan2Type},
 		colIdByName:    map[string]int32{"a": 0, "b": 1, "c": 2},
 		isClusterTable: false,
+		defaults:       []string{"", "", ""},
 	}
 	bindCtx.bindings = append(bindCtx.bindings, bind)
 	bindCtx.bindingByTable[bind.table] = bind

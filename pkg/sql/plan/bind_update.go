@@ -371,6 +371,7 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 	cols := make([]string, len(tableDef.Cols))
 	hidden := make([]bool, len(tableDef.Cols))
 	types := make([]*plan.Type, len(tableDef.Cols))
+	defaults := make([]string, len(tableDef.Cols))
 	for i, col := range tableDef.Cols {
 		cols[i] = col.Name
 		hidden[i] = col.Hidden
@@ -379,9 +380,12 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 		// ENUM/SET column is already a VARCHAR display vector at this boundary;
 		// declaring it as ENUM/SET would add a second index-to-value conversion.
 		types[i] = DeepCopyType(&currentProjectList[i].Typ)
+		if col.Default != nil {
+			defaults[i] = col.Default.OriginString
+		}
 		builder.nameByColRef[[2]int32{tag, int32(i)}] = alias + "." + col.Name
 	}
-	binding := NewBinding(tag, nodeID, tableDef.DbName, alias, tableDef.TblId, cols, hidden, types, false, nil)
+	binding := NewBinding(tag, nodeID, tableDef.DbName, alias, tableDef.TblId, cols, hidden, types, false, defaults)
 	ctx.bindings = append(ctx.bindings, binding)
 	ctx.bindingByTag[tag] = binding
 	ctx.bindingByTable[alias] = binding

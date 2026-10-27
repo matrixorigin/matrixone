@@ -1123,6 +1123,7 @@ func genBuilderAndCtx(t testing.TB) (builder *QueryBuilder, bindCtx *BindContext
 		types:          []*plan.Type{&plan2Type, &plan2Type, &plan2Type},
 		colIdByName:    map[string]int32{"a": 0, "b": 1, "c": 2},
 		isClusterTable: false,
+		defaults:       []string{"", "", ""},
 	}
 	bindCtx.bindings = append(bindCtx.bindings, bind)
 	bindCtx.bindingByTable[bind.table] = bind
@@ -3477,6 +3478,7 @@ func genBuilderAndCtxWithColumnTypesType(t testing.TB, typesType types.Type, col
 		types:          []*plan.Type{&plan2Type},
 		colIdByName:    map[string]int32{colName: 0},
 		isClusterTable: false,
+		defaults:       []string{""},
 	}
 	bindCtx.bindings = append(bindCtx.bindings, bind)
 	bindCtx.bindingByTable[bind.table] = bind
@@ -6754,6 +6756,7 @@ func TestQueryBuilder_bindOrderByEnum(t *testing.T) {
 		types:          []*plan.Type{&plan2IntType, &plan2Type},
 		colIdByName:    map[string]int32{"id": 0, "val": 1},
 		isClusterTable: false,
+		defaults:       []string{"", ""},
 	}
 	bindCtx.bindings = append(bindCtx.bindings, bind)
 	bindCtx.bindingByTable[bind.table] = bind
@@ -6801,6 +6804,7 @@ func TestQueryBuilder_bindOrderByEnumDistinct(t *testing.T) {
 		types:          []*plan.Type{&plan2IntType, &plan2Type},
 		colIdByName:    map[string]int32{"id": 0, "val": 1},
 		isClusterTable: false,
+		defaults:       []string{"", ""},
 	}
 	bindCtx.bindings = append(bindCtx.bindings, bind)
 	bindCtx.bindingByTable[bind.table] = bind
@@ -8085,6 +8089,7 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 					types:          []*plan.Type{&plan2Type},
 					colIdByName:    map[string]int32{"string_col": 0},
 					isClusterTable: false,
+					defaults:       []string{""},
 				}
 				bindCtx.bindings = append(bindCtx.bindings, bind)
 				bindCtx.bindingByTable[bind.table] = bind
@@ -8120,6 +8125,7 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 					types:          []*plan.Type{&plan2Type},
 					colIdByName:    map[string]int32{"string_col": 0},
 					isClusterTable: false,
+					defaults:       []string{""},
 				}
 				bindCtx.bindings = append(bindCtx.bindings, bind)
 				bindCtx.bindingByTable[bind.table] = bind
@@ -8324,6 +8330,7 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 					types:          []*plan.Type{&plan2Type},
 					colIdByName:    map[string]int32{"string_col": 0},
 					isClusterTable: false,
+					defaults:       []string{""},
 				}
 				bindCtx.bindings = append(bindCtx.bindings, bind)
 				bindCtx.bindingByTable[bind.table] = bind
@@ -8359,6 +8366,7 @@ func TestBaseBinder_bindComparisonExpr(t *testing.T) {
 					types:          []*plan.Type{&plan2Type},
 					colIdByName:    map[string]int32{"string_col": 0},
 					isClusterTable: false,
+					defaults:       []string{""},
 				}
 				bindCtx.bindings = append(bindCtx.bindings, bind)
 				bindCtx.bindingByTable[bind.table] = bind

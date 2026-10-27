@@ -1389,6 +1389,7 @@ type Binding struct {
 	// lower case
 	colIdByName    map[string]int32
 	isClusterTable bool
+	defaults       []string
 }
 
 const (
