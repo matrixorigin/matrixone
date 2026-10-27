@@ -990,3 +990,15 @@ func writeMemoryFile(t *testing.T, ctx context.Context, fs fileservice.ETLFileSe
 		t.Fatalf("write memory file %q: %v", path, err)
 	}
 }
+
+func TestClonedCredentialAndSignedRequestDoNotShareNonEmptyMaps(t *testing.T) {
+	credential := api.StorageCredential{Config: map[string]string{"token": "original"}}
+	request := SignedRequest{Headers: map[string]string{"Authorization": "original"}}
+	clonedCredential := cloneStorageCredential(credential)
+	clonedRequest := cloneSignedRequest(request)
+	clonedCredential.Config["token"] = "changed"
+	clonedRequest.Headers["Authorization"] = "changed"
+	if credential.Config["token"] != "original" || request.Headers["Authorization"] != "original" {
+		t.Fatal("mutating a clone changed the original credential or request")
+	}
+}
