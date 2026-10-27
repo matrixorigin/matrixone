@@ -34,23 +34,6 @@ func validateRuntimeWriteFormatVersion(ctx context.Context, table string, format
 	}))
 }
 
-func resolveRuntimeCatalogRequestPrefix(ctx context.Context, client api.CatalogClient, req api.CatalogRequest) (api.CatalogRequest, error) {
-	if client == nil || strings.TrimSpace(req.Prefix) != "" {
-		return req, nil
-	}
-	resp, err := client.GetConfig(ctx, api.GetConfigRequest{
-		CatalogRequest: req,
-		Warehouse:      req.Catalog.Warehouse,
-	})
-	if err != nil {
-		return req, err
-	}
-	if resp != nil && strings.TrimSpace(resp.Prefix) != "" {
-		req.Prefix = strings.TrimSpace(resp.Prefix)
-	}
-	return req, nil
-}
-
 func resolveRuntimeCatalogRequestPrefixForWriteRef(ctx context.Context, client api.CatalogClient, req api.CatalogRequest, rawRef string, caps api.CatalogCapabilities, allowTagMove bool) (api.CatalogRequest, string, string, error) {
 	if client == nil || strings.TrimSpace(req.Prefix) != "" {
 		return req, "", "", nil

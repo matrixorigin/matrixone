@@ -82,7 +82,7 @@ func TestResolveRuntimeCatalogRequestPrefixForWriteRefRejectsTag(t *testing.T) {
 
 func TestResolveRuntimeCatalogRequestPrefixEdges(t *testing.T) {
 	req := api.CatalogRequest{Prefix: " already-set "}
-	resolved, err := resolveRuntimeCatalogRequestPrefix(context.Background(), nil, req)
+	resolved, err := api.ResolveCatalogRequestPrefix(context.Background(), nil, req)
 	require.NoError(t, err)
 	require.Equal(t, req, resolved)
 
@@ -93,7 +93,7 @@ func TestResolveRuntimeCatalogRequestPrefixEdges(t *testing.T) {
 			return &api.ConfigResponse{Prefix: " branch | s3://warehouse "}, nil
 		},
 	}
-	resolved, err = resolveRuntimeCatalogRequestPrefix(context.Background(), client, api.CatalogRequest{
+	resolved, err = api.ResolveCatalogRequestPrefix(context.Background(), client, api.CatalogRequest{
 		Catalog: model.Catalog{Warehouse: "s3://warehouse"},
 	})
 	require.NoError(t, err)

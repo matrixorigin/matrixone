@@ -56,7 +56,7 @@ func (v CatalogFactoryCommitVerifier) VerifyCommittedMaintenance(ctx context.Con
 	// principal even when transport settings come from the commit plan.
 	catalogReq.Catalog = req.Catalog
 	catalogReq.ExternalPrincipal = strings.TrimSpace(req.ExternalPrincipal)
-	catalogReq, err = resolveMaintenanceCatalogRequestPrefix(ctx, client, catalogReq)
+	catalogReq, err = api.ResolveCatalogRequestPrefix(ctx, client, catalogReq)
 	if err != nil {
 		return result, false, err
 	}

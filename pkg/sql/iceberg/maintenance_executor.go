@@ -218,7 +218,7 @@ func (r NativeExpireSnapshotsProcedureRunner) RunMaintenance(ctx context.Context
 	if err != nil {
 		return maintenance.Result{}, err
 	}
-	catalogReq, err := resolveRuntimeCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+	catalogReq, err := api.ResolveCatalogRequestPrefix(ctx, client, api.CatalogRequest{
 		Catalog:           req.Catalog,
 		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
 	})
@@ -300,7 +300,7 @@ func (r NativeRewriteManifestsProcedureRunner) RunMaintenance(ctx context.Contex
 	if err != nil {
 		return maintenance.Result{}, err
 	}
-	catalogReq, err := resolveRuntimeCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+	catalogReq, err := api.ResolveCatalogRequestPrefix(ctx, client, api.CatalogRequest{
 		Catalog:           req.Catalog,
 		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
 	})
@@ -389,7 +389,7 @@ func (r NativeRewriteDataFilesProcedureRunner) RunMaintenance(ctx context.Contex
 	if err != nil {
 		return maintenance.Result{}, err
 	}
-	catalogReq, err := resolveRuntimeCatalogRequestPrefix(ctx, client, api.CatalogRequest{
+	catalogReq, err := api.ResolveCatalogRequestPrefix(ctx, client, api.CatalogRequest{
 		Catalog:           req.Catalog,
 		ExternalPrincipal: strings.TrimSpace(req.ExternalPrincipal),
 	})

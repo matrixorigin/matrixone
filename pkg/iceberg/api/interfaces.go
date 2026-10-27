@@ -17,6 +17,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
@@ -196,4 +197,22 @@ type MetadataReader interface {
 
 type ObjectReader interface {
 	Read(ctx context.Context, location string, offset, length int64) ([]byte, error)
+}
+
+// ResolveCatalogRequestPrefix retrieves the catalog prefix when it is not already set.
+func ResolveCatalogRequestPrefix(ctx context.Context, client CatalogClient, req CatalogRequest) (CatalogRequest, error) {
+	if client == nil || strings.TrimSpace(req.Prefix) != "" {
+		return req, nil
+	}
+	resp, err := client.GetConfig(ctx, GetConfigRequest{
+		CatalogRequest: req,
+		Warehouse:      req.Catalog.Warehouse,
+	})
+	if err != nil {
+		return req, err
+	}
+	if resp != nil && strings.TrimSpace(resp.Prefix) != "" {
+		req.Prefix = strings.TrimSpace(resp.Prefix)
+	}
+	return req, nil
 }
