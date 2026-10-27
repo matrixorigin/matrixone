@@ -7583,89 +7583,54 @@ func TestRtrimNullAndWhitespace(t *testing.T) {
 // Reverse
 
 func initReverseTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			//TODO: How to handle ScalarNulls. Original code: https://github.com/m-schen/matrixone/blob/6715c45c2f6e2b15808b10a21fafc17d03a8ae0b/pkg/sql/plan/function/builtin/unary/reverse_test.go#L75
-			info: "test reverse",
-			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
-				[]string{
-					"abc",
-					"abcd",
-					"hello",
-					"ｱｲｳｴｵ",
-					"あいうえお",
-					"龔龖龗龞龡",
-					"你好",
-					"再 见",
-					"bcd",
-					"def",
-					"xyz",
-					"1a1",
-					"2012",
-					"@($)@($#)_@(#",
-					"2023-04-24",
-					"10:03:23.021412",
-					"sdfad  ",
-				},
-				[]bool{
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-				})},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{
-					"cba",
-					"dcba",
-					"olleh",
-					"ｵｴｳｲｱ",
-					"おえういあ",
-					"龡龞龗龖龔",
-					"好你",
-					"见 再",
-					"dcb",
-					"fed",
-					"zyx",
-					"1a1",
-					"2102",
-					"#(@_)#$(@)$(@",
-					"42-40-3202",
-					"214120.32:30:01",
-					"  dafds",
-				},
-				[]bool{
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-				}),
-		},
+	cases := []struct{ input, want string }{
+		{"abc", "cba"},
+		{"abcd", "dcba"},
+		{"hello", "olleh"},
+		{"ｱｲｳｴｵ", "ｵｴｳｲｱ"},
+		{"あいうえお", "おえういあ"},
+		{"龔龖龗龞龡", "龡龞龗龖龔"},
+		{"你好", "好你"},
+		{"再 见", "见 再"},
+		{"bcd", "dcb"},
+		{"def", "fed"},
+		{"xyz", "zyx"},
+		{"1a1", "1a1"},
+		{"2012", "2102"},
+		{"@($)@($#)_@(#", "#(@_)#$(@)$(@"},
+		{"2023-04-24", "42-40-3202"},
+		{"10:03:23.021412", "214120.32:30:01"},
+		{"sdfad  ", "  dafds"},
+	}
+	inputs := make([]string, len(cases))
+	expected := make([]string, len(cases))
+	for i, c := range cases {
+		inputs[i], expected[i] = c.input, c.want
+	}
+	return []tcTemp{{info: "test reverse",
+		inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), inputs, make([]bool, len(cases)))},
+		expect: NewFunctionTestResult(types.T_varchar.ToType(), false, expected, make([]bool, len(cases)))}}
+}
+
+func TestReverseConstantAndNull(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	for _, c := range []struct {
+		name   string
+		isNull bool
+		want   []string
+		nulls  []bool
+	}{
+		{"constant", false, []string{"好你", "好你", "好你"}, nil},
+		{"constant null", true, []string{"", "", ""}, []bool{true, true, true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"你好"}, []bool{c.isNull})},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, c.want, c.nulls), Reverse)
+			fc.fnLength = len(c.want)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
 	}
 }
 
