@@ -5013,17 +5013,6 @@ func initInstrTestCase() []tcTemp {
 			substrs: []string{"", "", "a", "b", "c"},
 			wants:   []int64{1, 1, 1, 2, 3},
 		},
-		//TODO: @m-schen. Please fix these. Original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/instr_test.go#L43
-		//{
-		//	strs:    []string{"abc", "abc", "abc", "abc", "abc"},
-		//	substrs: []string{"bc"},
-		//	wants:   []int64{2, 2, 2, 2, 2},
-		//},
-		//{
-		//	strs:    []string{"abc"},
-		//	substrs: []string{"bc", "b", "abc", "a", "dca"},
-		//	wants:   []int64{2, 2, 1, 1, 0},
-		//},
 	}
 
 	var testInputs = make([]tcTemp, 0, len(cases))
@@ -5053,6 +5042,31 @@ func TestInstr(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Instr)
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestInstrConstantArguments(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	varchar := types.T_varchar.ToType()
+	cases := []struct {
+		name        string
+		left, right FunctionTestInput
+		want        []int64
+		nulls       []bool
+	}{
+		{"constant needle", NewFunctionTestInput(varchar, []string{"abc", "abc", "abc", "abc", "abc"}, nil), NewFunctionTestConstInput(varchar, []string{"bc"}, nil), []int64{2, 2, 2, 2, 2}, nil},
+		{"constant haystack", NewFunctionTestConstInput(varchar, []string{"abc"}, nil), NewFunctionTestInput(varchar, []string{"bc", "b", "abc", "a", "dca"}, nil), []int64{2, 2, 1, 1, 0}, nil},
+		{"null needle", NewFunctionTestInput(varchar, []string{"abc", "abc", "abc", "abc", "abc"}, nil), NewFunctionTestConstInput(varchar, []string{""}, []bool{true}), []int64{0, 0, 0, 0, 0}, []bool{true, true, true, true, true}},
+		{"null haystack", NewFunctionTestConstInput(varchar, []string{""}, []bool{true}), NewFunctionTestInput(varchar, []string{"bc", "b", "abc", "a", "dca"}, nil), []int64{0, 0, 0, 0, 0}, []bool{true, true, true, true, true}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{c.left, c.right}, NewFunctionTestResult(types.T_int64.ToType(), false, c.want, c.nulls), Instr)
+			fc.fnLength = len(c.want)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
 	}
 }
 
