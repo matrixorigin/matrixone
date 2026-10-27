@@ -408,6 +408,13 @@ func TestParseTableMappingSpecDefaultContractFromSQL(t *testing.T) {
 	}
 }
 
+func TestProjectedPaths(t *testing.T) {
+	require.NotNil(t, ProjectedPaths(nil))
+	require.Empty(t, ProjectedPaths(nil))
+	columns := []ColumnMapping{{Path: "a.b"}, {Path: "a"}, {Path: "a.b"}, {Path: ""}, {Path: ""}, {Path: "c"}}
+	require.Equal(t, []string{"a.b", "a", "", "c"}, ProjectedPaths(columns))
+}
+
 func TestProjectColumnsByNameKeepsCompactResidualLayout(t *testing.T) {
 	columns := []ColumnMapping{
 		{Name: "device_id", Path: "metadata.device_id"},

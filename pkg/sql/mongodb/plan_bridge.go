@@ -24,6 +24,20 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+// ProjectedPaths returns distinct MongoDB paths in first-occurrence order.
+func ProjectedPaths(columns []ColumnMapping) []string {
+	result := make([]string, 0, len(columns))
+	seen := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
+		if _, ok := seen[column.Path]; ok {
+			continue
+		}
+		seen[column.Path] = struct{}{}
+		result = append(result, column.Path)
+	}
+	return result
+}
+
 // ProjectColumnsByName returns mappings in the compact MO scan-column order.
 // Column pruning rewrites filter ColPos values against that compact order, so
 // a connector must convert every retained scan column (including residual-only

@@ -13709,7 +13709,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 					Database:       mongoEnv.Database,
 					Collection:     mongoEnv.Collection,
 					Columns:        sqlmongodb.ColumnsToPlan(mongoEnv.Columns),
-					ProjectedPaths: projectedMongoPaths(mongoEnv.Columns),
+					ProjectedPaths: sqlmongodb.ProjectedPaths(mongoEnv.Columns),
 					MaxParallelism: 1,
 				}
 			} else if externType == plan.ExternType_DATASTREAM_TB {
@@ -14055,19 +14055,6 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 	}
 
 	return
-}
-
-func projectedMongoPaths(columns []sqlmongodb.ColumnMapping) []string {
-	result := make([]string, 0, len(columns))
-	seen := make(map[string]struct{}, len(columns))
-	for _, column := range columns {
-		if _, ok := seen[column.Path]; ok {
-			continue
-		}
-		seen[column.Path] = struct{}{}
-		result = append(result, column.Path)
-	}
-	return result
 }
 
 // refreshMongoScanPushdown produces plan-time EXPLAIN evidence from the DDL
