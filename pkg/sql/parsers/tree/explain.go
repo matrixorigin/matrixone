@@ -58,15 +58,7 @@ type explainImpl struct {
 	Options   []OptionElem
 }
 
-func (e *explainImpl) Free() {
-}
-
-// EXPLAIN stmt statement
-type ExplainStmt struct {
-	explainImpl
-}
-
-func (node *ExplainStmt) Format(ctx *FmtCtx) {
+func (node *explainImpl) format(ctx *FmtCtx) {
 	ctx.WriteString("explain")
 	if len(node.Options) > 0 {
 		ctx.WriteString(" (")
@@ -81,7 +73,7 @@ func (node *ExplainStmt) Format(ctx *FmtCtx) {
 		ctx.WriteString(temp[:len(temp)-1] + ")")
 	}
 
-	stmt := node.explainImpl.Statement
+	stmt := node.Statement
 	switch st := stmt.(type) {
 	case *ShowColumns:
 		if st.Table != nil {
@@ -98,6 +90,18 @@ func (node *ExplainStmt) Format(ctx *FmtCtx) {
 			stmt.Format(ctx)
 		}
 	}
+}
+
+func (e *explainImpl) Free() {
+}
+
+// EXPLAIN stmt statement
+type ExplainStmt struct {
+	explainImpl
+}
+
+func (node *ExplainStmt) Format(ctx *FmtCtx) {
+	node.explainImpl.format(ctx)
 }
 
 func (node *ExplainStmt) GetStatementType() string { return "Explain" }
@@ -128,37 +132,7 @@ type ExplainAnalyze struct {
 }
 
 func (node *ExplainAnalyze) Format(ctx *FmtCtx) {
-	ctx.WriteString("explain")
-	if len(node.Options) > 0 {
-		ctx.WriteString(" (")
-		var temp string
-		for _, v := range node.Options {
-			temp += v.Name
-			if v.Value != "NULL" {
-				temp += " " + v.Value
-			}
-			temp += ","
-		}
-		ctx.WriteString(temp[:len(temp)-1] + ")")
-	}
-
-	stmt := node.explainImpl.Statement
-	switch st := stmt.(type) {
-	case *ShowColumns:
-		if st.Table != nil {
-			ctx.WriteByte(' ')
-			st.Table.ToTableName().Format(ctx)
-		}
-		if st.ColName != nil {
-			ctx.WriteByte(' ')
-			st.ColName.Format(ctx)
-		}
-	default:
-		if stmt != nil {
-			ctx.WriteByte(' ')
-			stmt.Format(ctx)
-		}
-	}
+	node.explainImpl.format(ctx)
 }
 
 func (node *ExplainAnalyze) GetStatementType() string { return "Explain Analyze" }
@@ -311,37 +285,7 @@ type ExplainPhyPlan struct {
 }
 
 func (node *ExplainPhyPlan) Format(ctx *FmtCtx) {
-	ctx.WriteString("explain")
-	if len(node.Options) > 0 {
-		ctx.WriteString(" (")
-		var temp string
-		for _, v := range node.Options {
-			temp += v.Name
-			if v.Value != "NULL" {
-				temp += " " + v.Value
-			}
-			temp += ","
-		}
-		ctx.WriteString(temp[:len(temp)-1] + ")")
-	}
-
-	stmt := node.explainImpl.Statement
-	switch st := stmt.(type) {
-	case *ShowColumns:
-		if st.Table != nil {
-			ctx.WriteByte(' ')
-			st.Table.ToTableName().Format(ctx)
-		}
-		if st.ColName != nil {
-			ctx.WriteByte(' ')
-			st.ColName.Format(ctx)
-		}
-	default:
-		if stmt != nil {
-			ctx.WriteByte(' ')
-			stmt.Format(ctx)
-		}
-	}
+	node.explainImpl.format(ctx)
 }
 
 func (node *ExplainPhyPlan) GetStatementType() string { return "Explain PhyPlan" }
