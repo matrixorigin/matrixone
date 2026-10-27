@@ -57,6 +57,21 @@ func TestBuildImportPlanPinsSnapshotAndBuildsProfile(t *testing.T) {
 	require.Equal(t, plan.Profile.Checksum, again.Profile.Checksum)
 }
 
+func TestImportChecksumUsesExistingOrComputedPathHash(t *testing.T) {
+	snapshot := api.SnapshotPlan{SnapshotID: 42, MetadataLocationHash: "metadata"}
+	data := []api.DataFileTask{{DataFile: api.DataFile{FilePath: "s3://warehouse/a", RecordCount: 5}}}
+	deletes := []api.DeleteFileTask{{DataFile: api.DataFile{FilePath: "s3://warehouse/b"}}}
+	want := importChecksum(snapshot, data, deletes)
+	data[0].DataFile.FilePathHash = "  " + api.PathHash(data[0].DataFile.FilePath) + "  "
+	deletes[0].DataFile.FilePathHash = "\t" + api.PathHash(deletes[0].DataFile.FilePath) + "\n"
+	require.Equal(t, want, importChecksum(snapshot, data, deletes))
+	data[0].DataFile.FilePath = "different location"
+	deletes[0].DataFile.FilePath = "different location"
+	require.Equal(t, want, importChecksum(snapshot, data, deletes), "precomputed hashes determine the checksum")
+	data[0].DataFile.FilePathHash = "  "
+	require.NotEqual(t, want, importChecksum(snapshot, data, deletes), "blank hash falls back to the path")
+}
+
 func TestImportPlanDataFileCopies(t *testing.T) {
 	file := api.DataFile{
 		Partition:    map[string]any{"region": "old"},
