@@ -279,7 +279,7 @@ func TestValidateP1DeleteFileRejectsInvalidDeleteMetadata(t *testing.T) {
 }
 
 func TestDeleteTaskIdentityDoesNotCollideOnDelimiters(t *testing.T) {
-	if deleteTaskIdentity("a\x00b", "c", "d") == deleteTaskIdentity("a", "b\x00c", "d") {
+	if api.LengthPrefixedKey("a\x00b", "c", "d") == api.LengthPrefixedKey("a", "b\x00c", "d") {
 		t.Fatal("delete task identities collided on path delimiters")
 	}
 }

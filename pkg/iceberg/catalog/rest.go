@@ -823,23 +823,13 @@ func (c *RESTClient) pathPrefix(req api.CatalogRequest) []string {
 }
 
 func (c *RESTClient) configCacheKey(req api.GetConfigRequest) string {
-	return lengthPrefixedRESTCacheKey(
+	return api.LengthPrefixedKey(
 		strconv.FormatUint(uint64(req.Catalog.AccountID), 10),
 		strconv.FormatUint(req.Catalog.CatalogID, 10),
 		req.Catalog.URI,
 		api.FirstNonEmptyTrimmed(req.Warehouse, req.Catalog.Warehouse),
 		req.ExternalPrincipal,
 	)
-}
-
-func lengthPrefixedRESTCacheKey(parts ...string) string {
-	var out strings.Builder
-	for _, part := range parts {
-		out.WriteString(strconv.Itoa(len(part)))
-		out.WriteByte(':')
-		out.WriteString(part)
-	}
-	return out.String()
 }
 
 func (c *RESTClient) getConfigCache(key string) (api.ConfigResponse, bool) {

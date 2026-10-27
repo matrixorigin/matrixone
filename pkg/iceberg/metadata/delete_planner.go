@@ -108,7 +108,7 @@ func pairDeleteTasksBoundedMemory(ctx context.Context, dataTasks []api.DataFileT
 		if dataPath == "" {
 			return nil
 		}
-		key := deleteTaskIdentity(entry.manifestPath, file.FilePath, dataPath)
+		key := api.LengthPrefixedKey(entry.manifestPath, file.FilePath, dataPath)
 		if _, ok := seen[key]; ok {
 			return nil
 		}
@@ -204,16 +204,6 @@ func pairDeleteTasksBoundedMemory(ctx context.Context, dataTasks []api.DataFileT
 		}
 	}
 	return out, nil
-}
-
-func deleteTaskIdentity(parts ...string) string {
-	var out strings.Builder
-	for _, part := range parts {
-		out.WriteString(strconv.Itoa(len(part)))
-		out.WriteByte(':')
-		out.WriteString(part)
-	}
-	return out.String()
 }
 
 func addHiddenDeleteColumnMappings(mappings []api.IcebergColumnMapping, schema api.Schema, deleteTasks []api.DeleteFileTask) ([]api.IcebergColumnMapping, error) {

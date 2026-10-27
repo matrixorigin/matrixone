@@ -411,7 +411,7 @@ func dmlRuntimeCoordinatorCacheKey(req icebergwrite.AppendRequest) string {
 		return ""
 	}
 	ref := strings.TrimSpace(api.FirstNonBlankPreserveWhitespace(req.DMLScan.Ref, req.DefaultRef, model.DefaultRefMain))
-	return lengthPrefixedKey(
+	return api.LengthPrefixedKey(
 		strconv.FormatUint(uint64(req.AccountID), 10),
 		strconv.FormatUint(req.RoleID, 10),
 		strconv.FormatUint(req.UserID, 10),
