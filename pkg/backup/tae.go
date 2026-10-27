@@ -119,7 +119,6 @@ func BackupData(
 	}
 
 	// Setup backup protection manager
-	//exec, opts = getSQLExecutor(sid)
 	protectionMgr := newBackupProtectionManager(ctx, exec, opts)
 	defer protectionMgr.cleanup()
 
@@ -1060,16 +1059,6 @@ func streamCopyFile(
 	}
 	return hasher.Sum(nil), nil
 }
-
-// getSQLExecutor tries to get SQL executor from runtime
-// Returns (executor, opts) if available, (nil, empty opts) otherwise
-//func getSQLExecutor(sid string) (executor.SQLExecutor, executor.Options) {
-//	v, ok := runtime.ServiceRuntime(sid).GetGlobalVariables(runtime.InternalSQLExecutor)
-//	if !ok {
-//		return nil, executor.Options{}
-//	}
-//	return v.(executor.SQLExecutor), executor.Options{}
-//}
 
 // buildBackupProtectionSQL builds the SQL command for backup protection
 func buildBackupProtectionSQL(protectedTS types.TS) string {

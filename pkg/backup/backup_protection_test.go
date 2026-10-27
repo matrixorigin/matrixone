@@ -931,15 +931,6 @@ func TestCopyFileAndGetMetaFilesWithStartGEBackup(t *testing.T) {
 	assert.Len(t, metaFiles, 0, "Should skip files with start >= backup or end > backup")
 }
 
-// TestGetSQLExecutor tests getSQLExecutor function
-//func TestGetSQLExecutor(t *testing.T) {
-//
-//	// Test with empty sid (should return nil)
-//	exec, opts := getSQLExecutor("")
-//	assert.Nil(t, exec)
-//	assert.Equal(t, executor.Options{}, opts)
-//}
-
 // TestBackupProtectionSQLBuilders tests SQL builder functions
 func TestBackupProtectionSQLBuilders(t *testing.T) {
 
