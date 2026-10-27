@@ -484,7 +484,7 @@ func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapSh
 	// refer to the `handleCloneDatabase`
 	snapshotTxnOp := ses.proc.GetTxnOperator()
 	if localSnapshot {
-		snapshotTxnOp = backgroundExecTxnOperator(bh)
+		snapshotTxnOp = snapshotBackgroundTxnOperator(bh)
 	}
 	if snapshotTS, err = tryToIncreaseTxnPhysicalTS(ctx, snapshotTxnOp); err != nil {
 		return err
