@@ -16,6 +16,7 @@ package icebergio
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 )
+
+func TestCredentialRefreshFailurePreservesErrorAndSkipsClock(t *testing.T) {
+	ctx := context.Background()
+	wantErr := errors.New("refresh failed")
+	clockCalls := 0
+	now := func() time.Time { clockCalls++; return time.Time{} }
+	refresh := func(context.Context, ObjectScope) (ObjectScope, error) {
+		return ObjectScope{CredentialID: "partial"}, wantErr
+	}
+	for name, provider := range map[string]ObjectIOProvider{
+		"scoped": ScopedProvider{Now: now, RefreshFunc: refresh},
+		"vended": VendedCredentialProvider{Now: now, RefreshFunc: refresh},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := provider.Refresh(ctx, ObjectScope{})
+			if !errors.Is(err, wantErr) || got.CredentialID != "" {
+				t.Fatalf("unexpected refresh result: %+v, %v", got, err)
+			}
+			if clockCalls != 0 {
+				t.Fatalf("clock called after refresh failed: %d", clockCalls)
+			}
+		})
+	}
+}
 
 func TestScopedProviderResolveAndRefresh(t *testing.T) {
 	ctx := context.Background()

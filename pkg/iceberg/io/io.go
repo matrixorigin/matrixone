@@ -391,28 +391,22 @@ func (p RemoteSigningProvider) Resolve(ctx context.Context, scope ObjectScope) (
 }
 
 func (p ScopedProvider) Refresh(ctx context.Context, scope ObjectScope) (ObjectScope, error) {
-	if p.RefreshFunc == nil {
-		return ObjectScope{}, api.ToMOErr(ctx, api.NewError(api.ErrCredentialExpired, "Iceberg object credential refresh is not configured", nil))
-	}
-	refreshed, err := p.RefreshFunc(ctx, scope)
-	if err != nil {
-		return ObjectScope{}, err
-	}
-	if err := CheckCredentialExpiration(ctx, refreshed, p.now(), p.MinTTL); err != nil {
-		return ObjectScope{}, err
-	}
-	return refreshed, nil
+	return refreshCredentialScope(ctx, scope, p.RefreshFunc, p.now, p.MinTTL)
 }
 
 func (p VendedCredentialProvider) Refresh(ctx context.Context, scope ObjectScope) (ObjectScope, error) {
-	if p.RefreshFunc == nil {
+	return refreshCredentialScope(ctx, scope, p.RefreshFunc, p.now, p.MinTTL)
+}
+
+func refreshCredentialScope(ctx context.Context, scope ObjectScope, refresh func(context.Context, ObjectScope) (ObjectScope, error), now func() time.Time, minTTL time.Duration) (ObjectScope, error) {
+	if refresh == nil {
 		return ObjectScope{}, api.ToMOErr(ctx, api.NewError(api.ErrCredentialExpired, "Iceberg object credential refresh is not configured", nil))
 	}
-	refreshed, err := p.RefreshFunc(ctx, scope)
+	refreshed, err := refresh(ctx, scope)
 	if err != nil {
 		return ObjectScope{}, err
 	}
-	if err := CheckCredentialExpiration(ctx, refreshed, p.now(), p.MinTTL); err != nil {
+	if err := CheckCredentialExpiration(ctx, refreshed, now(), minTTL); err != nil {
 		return ObjectScope{}, err
 	}
 	return refreshed, nil
