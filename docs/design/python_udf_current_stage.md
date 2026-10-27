@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r33-2026-10-28` |
+| Design revision | `python-udf-current-stage-r34-2026-10-28` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
 | Upstream repair baseline | `3b7752551b8a1cc60daddecde9a5438d5357cdf4` (unrelated existing MORPC gates through 134 and catalog handlers through 4.0.17 preserved) |
-| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r33 contract preserves upstream historical upgrade identities through 4.0.17, adds a separate Python revision repair in catalog 4.0.18, and follows full-cluster shutdown upgrade, with no Python/shared-routine MORPC capability gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
+| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r34 contract preserves upstream historical upgrade identities through 4.0.17, adds a separate Python revision repair in catalog 4.0.18, and follows full-cluster shutdown upgrade, with no Python/shared-routine MORPC capability gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the versioned governing proposal for the current PR stage. The owner
@@ -21,6 +21,18 @@ fallback execution path.
 ## Identity, Catalog, and publication
 
 Python functions use the shared `mo_user_defined_function` identity namespace.
+The complete JSON routine body must fit the catalog TEXT capacity (65,535
+encoded UTF-8 bytes) before source artifact publication or catalog mutation.
+This includes source escaping and all typed metadata; raw artifact size alone
+is insufficient. Rejected CREATE/REPLACE does not publish a new catalog revision.
+Definition validation also checks definition-owned Open content against the
+external control budget; the complete invocation-dependent envelope remains
+checked at execution. TEXT/BLOB descriptor widths retain SQL byte limits
+(including TINYTEXT/TINYBLOB); CHAR/VARCHAR widths count Unicode characters.
+Existing width-zero descriptors keep unspecified-width semantics. String-domain
+inference consumes frozen RoutineCall return types rather than the legacy
+Python synthetic-argument checker. These corrections add no persisted format
+version, in-cluster gate or transparent retry.
 The current catalog upgrade adds `active_revision`, `namespace_version`, the
 canonical input/return descriptors, and signature schema/fingerprint columns.
 `mo_function_revisions` stores the immutable typed revision keyed by

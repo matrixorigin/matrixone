@@ -756,3 +756,20 @@ func TestPreparedFieldWrappedTypeHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestFrozenRoutineStringDomainUsesReturnType(t *testing.T) {
+	for _, oid := range []types.T{types.T_blob, types.T_text} {
+		for _, count := range []int{0, 1} {
+			typ := planpb.Type{Id: int32(oid)}
+			expr := &planpb.Expr{Typ: typ, Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "python_user_defined_function"},
+				Args: make([]*planpb.Expr, count), RoutineCall: &planpb.RoutineCall{ReturnType: typ},
+			}}}
+			want := uint8(possibleStringDomainText)
+			if oid == types.T_blob {
+				want = possibleStringDomainBinary
+			}
+			require.Equal(t, want, possibleStringDomainsForExpr(expr))
+		}
+	}
+}

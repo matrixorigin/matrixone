@@ -402,6 +402,28 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python artifact digest does not match the immutable source")
 	}
 
+	// Check definition-owned Open content before validating/publishing an
+	// artifact that cannot cross the execution control boundary. Invocation-
+	// dependent context is checked again in the complete runtime envelope.
+	_, err = marshalOpenInvocation(protocol.FencingTuple{
+		AccountID: definition.AccountID, StatementID: "definition", GroupID: "definition",
+		GroupEpoch: 1, InvocationID: "definition", LeaseEpoch: 1,
+	}, openPayload{
+		FunctionRef: udf.FunctionRef{AccountID: definition.AccountID},
+		Handler:     definition.Handler, Source: source, Mode: definition.Mode,
+		NullPolicy: definition.NullPolicy, ABIContract: definition.ABIContract,
+		AdapterVersion: definition.AdapterVersion, SDKVersion: definition.SDKVersion,
+		DefinitionSchemaVersion: definition.DefinitionSchemaVersion,
+		ArtifactDigest:          definition.ArtifactDigest, EnvironmentDigest: definition.EnvironmentDigest,
+		DefinitionFingerprint: definition.DefinitionFingerprint, Args: args, Return: returnDescriptor,
+		MaxBatchBytes: g.cfg.MaxBatchBytes, MaxBatchRows: g.cfg.MaxBatchRows,
+		MaxInvocationRows: g.cfg.MaxInvocationRows, MaxInvocationResultBytes: g.cfg.MaxInvocationResultBytes,
+		HandlerTimeoutSeconds: g.cfg.RequestTimeout.Seconds(),
+	})
+	if err != nil {
+		return errutil.Wrapf(err, "Python definition cannot fit execution control")
+	}
+
 	client, err := g.flightClient()
 	if err != nil {
 		return err
@@ -610,6 +632,14 @@ type openPayload struct {
 	HandlerTimeoutSeconds    float64               `json:"handler_timeout_seconds"`
 }
 
+func marshalOpenInvocation(tuple protocol.FencingTuple, payload openPayload) ([]byte, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, errutil.Wrapf(err, "python udf: encode open payload")
+	}
+	return protocol.MarshalControl(protocol.Control{Kind: "OpenInvocation", Tuple: tuple, Payload: body})
+}
+
 func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, result vector.FunctionResultWrapper, mp *mpool.MPool) (err error) {
 	g.mu.Lock()
 	closed := g.closed
@@ -726,7 +756,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 			g.invalidateCapabilities(capability.generation)
 		}
 	}()
-	openBody, err := json.Marshal(openPayload{
+	open, err := marshalOpenInvocation(execution.Tuple, openPayload{
 		FunctionRef: execution.FunctionRef, Handler: execution.Handler, Source: execution.Source,
 		Mode: execution.Mode, NullPolicy: execution.NullPolicy, ABIContract: execution.ABIContract,
 		AdapterVersion: execution.AdapterVersion, SDKVersion: execution.SDKVersion,
@@ -741,10 +771,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 		MaxInvocationRows: g.cfg.MaxInvocationRows, MaxInvocationResultBytes: g.cfg.MaxInvocationResultBytes,
 		HandlerTimeoutSeconds: g.cfg.RequestTimeout.Seconds(),
 	})
-	if err != nil {
-		return errutil.Wrapf(err, "python udf: encode open payload")
-	}
-	open, err := protocol.MarshalControl(protocol.Control{Kind: "OpenInvocation", Tuple: execution.Tuple, Payload: openBody})
+
 	if err != nil {
 		return err
 	}

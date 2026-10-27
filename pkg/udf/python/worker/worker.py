@@ -1684,7 +1684,8 @@ def _check_scalar(value: Any, descriptor: Dict[str, Any]):
     if type_id in (CHAR, VARCHAR, TEXT):
         if type(value) is not str: raise ValueError("TYPE_CONTRACT: expected string")
         width = int(descriptor.get("width") or 0)
-        if width > 0 and len(value) > width: raise ValueError("TYPE_CONTRACT: string exceeds the declared width")
+        length = len(value.encode("utf-8")) if type_id == TEXT else len(value)
+        if width > 0 and length > width: raise ValueError("TYPE_CONTRACT: string exceeds the declared width")
         return value
     if type_id == JSON: return _check_json(value)
     if type_id in (BINARY, VARBINARY, BLOB):

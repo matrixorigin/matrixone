@@ -706,6 +706,27 @@ func TestValidateDefinitionRejectsMalformedCurrentContractsBeforeRPC(t *testing.
 			DefinitionFingerprint:   invocation.DefinitionFingerprint,
 		}
 	}
+	t.Run("encoded execution control budget", func(t *testing.T) {
+		gateway, err := NewGateway(ClientConfig{Enabled: true, AllowUnisolated: true, ServerAddress: "127.0.0.1:1"})
+		require.NoError(t, err)
+		defer gateway.Close()
+		definition := valid()
+		// Raw source fits the artifact budget; JSON escaping exceeds Open's cap.
+		definition.Source = "def f(ctx, x): return x\n#" + strings.Repeat("<", 200000)
+		definition.ArtifactDigest = udf.PythonInlineArtifactDigest(definition.Handler, definition.Source)
+		args := make([]TypeDescriptor, len(definition.Args))
+		for i, typ := range definition.Args {
+			args[i], err = NewTypeDescriptor(typ)
+			require.NoError(t, err)
+		}
+		ret, err := NewTypeDescriptor(definition.ReturnType)
+		require.NoError(t, err)
+		definition.DefinitionFingerprint, err = DefinitionFingerprint(definition.DefinitionSchemaVersion, definition.Handler, definition.Mode, definition.NullPolicy, definition.ABIContract, definition.AdapterVersion, definition.ArtifactDigest, definition.EnvironmentDigest, definition.SDKVersion, args, ret)
+		require.NoError(t, err)
+		require.ErrorContains(t, gateway.ValidateDefinition(context.Background(), definition), "cannot fit execution control")
+		require.Nil(t, gateway.conn, "reject before capability or validation RPC")
+	})
+
 	for _, tc := range []struct {
 		name   string
 		mutate func(*udf.RoutineDefinition)

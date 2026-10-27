@@ -35,7 +35,7 @@ import (
 //     which size = (len(inputs) - 2) / 2
 func checkPythonUdf(overloads []overload, inputs []types.Type) checkResult {
 
-	if len(inputs)%2 == 1 {
+	if len(inputs) < 2 || len(inputs)%2 == 1 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
 	if len(inputs) == 2 {
