@@ -147,6 +147,9 @@ func ToStorage[T types.ArrayElement](vec []T, kind usearch.Quantization, bounds 
 	if len(vec) == 0 {
 		return nil, nil, moerr.NewInternalErrorNoCtx("usearch vector is empty")
 	}
+	if !allFinite(vec) {
+		return nil, nil, moerr.NewInvalidInputNoCtx("hnsw vector has a NaN or infinite element")
+	}
 	if storedAsIs(vec, kind, bounds) {
 		return unsafe.Pointer(&vec[0]), vec, nil
 	}
@@ -195,6 +198,16 @@ func ToStorage[T types.ArrayElement](vec []T, kind usearch.Quantization, bounds 
 			return nil, nil, moerr.NewInternalErrorNoCtx("hnsw int8/uint8 model has no trained quantization range")
 		}
 		mul, add := quantizeParams(kind, bounds)
+		if err := checkQuantizeParams(mul, add, bounds); err != nil {
+			return nil, nil, err
+		}
+		if isF64 {
+			for i := range f32 {
+				if err := checkNarrowed(f64[i], float64(f32[i]), usearch.F32); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
 		if kind == usearch.U8 {
 			out := quantizer.ApplyUint8(f32, mul, add)
 			return unsafe.Pointer(&out[0]), out, nil
@@ -204,6 +217,33 @@ func ToStorage[T types.ArrayElement](vec []T, kind usearch.Quantization, bounds 
 	default:
 		return nil, nil, moerr.NewNotSupportedNoCtxf("hnsw storage type %v", kind)
 	}
+}
+
+// allFinite reports whether no element of vec is NaN or infinite.
+func allFinite[T types.ArrayElement](vec []T) bool {
+	switch x := any(vec).(type) {
+	case []float32:
+		return metric.AllFiniteF32(x)
+	case []float64:
+		for _, e := range x {
+			if e-e != 0 {
+				return false
+			}
+		}
+	case []types.Float16:
+		for _, e := range x {
+			if uint16(e)&0x7c00 == 0x7c00 {
+				return false
+			}
+		}
+	case []types.BF16:
+		for _, e := range x {
+			if uint16(e)&0x7f80 == 0x7f80 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // storedAsIs reports whether vec already is in the element type kind stores.
@@ -223,6 +263,37 @@ func storedAsIs[T types.ArrayElement](vec []T, kind usearch.Quantization, bounds
 		return kind == usearch.U8 && bounds == BaseBounds(int32(types.T_array_uint8))
 	}
 	return false
+}
+
+// checkQuantizeParams rejects a range whose map q(x) = x*mul + add is not finite in the
+// float32 arithmetic it is applied in.
+func checkQuantizeParams(mul, add float64, bounds QuantizeBounds) error {
+	fmul, fadd := float64(float32(mul)), float64(float32(add))
+	if fmul == 0 || math.IsInf(fmul, 0) || math.IsInf(fadd, 0) {
+		return moerr.NewOutOfRangeNoCtxf("hnsw quantization", "range [%v, %v] cannot be mapped onto int8/uint8 in float32", bounds.Min, bounds.Max)
+	}
+	return nil
+}
+
+// storedFloat32 returns vec as float32 after narrowing it to kind, the float element type
+// the index stores.
+func storedFloat32[T types.ArrayElement](vec []T, kind usearch.Quantization) []float32 {
+	f32 := toFloat32(vec)
+	switch kind {
+	case usearch.F16:
+		out := make([]float32, len(f32))
+		for i, x := range f32 {
+			out[i] = types.Float16FromFloat32(x).ToFloat32()
+		}
+		return out
+	case usearch.BF16:
+		out := make([]float32, len(f32))
+		for i, x := range f32 {
+			out[i] = types.BF16FromFloat32(x).ToFloat32()
+		}
+		return out
+	}
+	return f32
 }
 
 // checkNarrowed rejects a finite element that overflows the element type the index stores.

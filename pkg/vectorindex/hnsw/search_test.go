@@ -17,6 +17,7 @@ package hnsw
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"slices"
 	"sort"
@@ -226,6 +227,32 @@ func TestHnswSearchCosineRejected(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, keys)
 	require.Empty(t, dists)
+}
+
+// A cosine query is checked in the element type the index stores: a query that is normal in
+// float32 but zero once narrowed to float16 is rejected; bfloat16 keeps the float32 exponent.
+func TestHnswSearchCosineNarrowedQuery(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithOwnedMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	rt := vectorindex.RuntimeConfig{Limit: 1, OrigFuncName: "cosine_distance"}
+	query := []float32{1e-9, -2e-9, 3e-9}
+
+	for _, kind := range []usearch.Quantization{usearch.F32, usearch.BF16, usearch.F16} {
+		idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+		idxcfg.Usearch.Metric = usearch.Cosine
+		idxcfg.Usearch.Quantization = kind
+		s := NewHnswSearch[float32](idxcfg, vectorindex.IndexTableConfig{})
+		_, _, err := s.Search(sqlproc, query, rt)
+		if kind == usearch.F16 {
+			require.ErrorContains(t, err, "normalized", kind.String())
+		} else {
+			require.NoError(t, err, kind.String())
+		}
+		negZero := float32(math.Copysign(0, -1))
+		_, _, err = s.Search(sqlproc, []float32{negZero, negZero, negZero}, rt)
+		require.ErrorContains(t, err, "normalized", kind.String())
+	}
 }
 
 func TestBoundedHnswSearchLimits(t *testing.T) {

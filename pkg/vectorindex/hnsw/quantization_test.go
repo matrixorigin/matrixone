@@ -92,6 +92,98 @@ func TestToStorage(t *testing.T) {
 	require.Equal(t, []uint8{0, 255}, v)
 }
 
+// Edge values on the int8/uint8 map: signed and subnormal zeros share the code of zero, a
+// range too narrow or too wide for the float32 map and a float64 element beyond float32 are
+// rejected instead of saturating every code.
+func TestToStorageQuantizeEdges(t *testing.T) {
+	negZero := math.Copysign(0, -1)
+	bounds := QuantizeBounds{Min: -1, Max: 1, Set: true}
+	_, v, err := ToStorage([]float32{0, float32(negZero), 1e-40, -1e-45}, usearch.I8, bounds)
+	require.NoError(t, err)
+	require.Equal(t, []int8{-1, -1, -1, -1}, v)
+	_, v, err = ToStorage([]float64{0, negZero, 1e-310}, usearch.U8, bounds)
+	require.NoError(t, err)
+	require.Equal(t, []uint8{128, 128, 128}, v)
+
+	zeros := TrainQuantizeBounds([][]float32{{0, float32(negZero)}, {float32(negZero), 0}})
+	_, v, err = ToStorage([]float32{0, float32(negZero)}, usearch.I8, zeros)
+	require.NoError(t, err)
+	require.Equal(t, v.([]int8)[0], v.([]int8)[1])
+
+	for _, b := range []QuantizeBounds{
+		{Min: -1e-40, Max: 1e-40, Set: true},
+		{Min: -1e-37, Max: 1e-37, Set: true},
+		{Min: -1e-300, Max: 1e-300, Set: true},
+		{Min: -1e300, Max: 1e300, Set: true},
+		{Min: 1e300, Max: 1e300 + 1e290, Set: true},
+	} {
+		for _, kind := range []usearch.Quantization{usearch.I8, usearch.U8} {
+			_, _, err = ToStorage([]float32{0, 1e-40}, kind, b)
+			require.Error(t, err, "%v %+v", kind, b)
+		}
+	}
+
+	_, _, err = ToStorage([]float64{0, 1e300}, usearch.I8, bounds)
+	require.Error(t, err)
+	_, _, err = ToStorage([]float64{0, -1e300}, usearch.U8, bounds)
+	require.Error(t, err)
+}
+
+// A NaN or infinite element is rejected for every stored type, also when the vector is
+// already of that type.
+func TestToStorageNonFinite(t *testing.T) {
+	bounds := QuantizeBounds{Min: -1, Max: 1, Set: true}
+	kinds := []usearch.Quantization{usearch.F32, usearch.F64, usearch.F16, usearch.BF16, usearch.I8, usearch.U8}
+	for _, x := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		for _, kind := range kinds {
+			_, _, err := ToStorage([]float32{1, float32(x)}, kind, bounds)
+			require.ErrorContains(t, err, "NaN or infinite", "%v %v", x, kind)
+			_, _, err = ToStorage([]float64{x, 1}, kind, bounds)
+			require.ErrorContains(t, err, "NaN or infinite", "%v %v", x, kind)
+			_, _, err = ToStorage([]types.Float16{types.Float16FromFloat32(float32(x))}, kind, bounds)
+			require.ErrorContains(t, err, "NaN or infinite", "%v %v", x, kind)
+			_, _, err = ToStorage([]types.BF16{types.BF16FromFloat32(float32(x))}, kind, bounds)
+			require.ErrorContains(t, err, "NaN or infinite", "%v %v", x, kind)
+		}
+	}
+	for _, kind := range kinds {
+		_, _, err := ToStorage([]types.Float16{types.Float16FromFloat32(65504), types.Float16FromFloat32(-6e-8)}, kind, bounds)
+		require.NoError(t, err, kind.String())
+		_, _, err = ToStorage([]types.BF16{types.BF16FromFloat32(3e38), types.BF16FromFloat32(-1e-40)}, kind, bounds)
+		if kind == usearch.F16 {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err, kind.String())
+		}
+	}
+
+	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(2)}
+	cfg.Usearch.Quantization = usearch.I8
+	cfg.Usearch.Metric = usearch.L2sq
+	model, err := NewHnswModelForBuild[float32]("nonfinite", cfg, 1, 4, 0, t.TempDir())
+	require.NoError(t, err)
+	defer model.Destroy()
+	model.Bounds = bounds
+	require.NoError(t, model.Add(1, []float32{0.5, 0.5}))
+	require.Error(t, model.Add(2, []float32{float32(math.NaN()), 0.5}))
+	_, _, err = model.Search([]float32{float32(math.Inf(1)), 0.5}, 1)
+	require.Error(t, err)
+}
+
+// Narrowing to the stored float type keeps signed zeros and flushes values below its range.
+func TestStoredFloat32(t *testing.T) {
+	negZero := float32(math.Copysign(0, -1))
+	q := []float32{negZero, 1e-9, 1e-30, 1.5}
+	require.Equal(t, q, storedFloat32(q, usearch.F32))
+	f16 := storedFloat32(q, usearch.F16)
+	require.True(t, math.Signbit(float64(f16[0])))
+	require.Equal(t, []float32{0, 0, 0, 1.5}, f16)
+	bf16 := storedFloat32(q, usearch.BF16)
+	require.True(t, math.Signbit(float64(bf16[0])))
+	require.NotZero(t, bf16[2])
+	require.Equal(t, []float32{1.5}, storedFloat32([]float64{1.5}, usearch.F64))
+}
+
 // A narrow vector already of the stored type is used as it is; otherwise it is converted by
 // value.
 func TestToStorageNarrow(t *testing.T) {

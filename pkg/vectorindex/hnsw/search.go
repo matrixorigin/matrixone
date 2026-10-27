@@ -105,7 +105,7 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 		// heap discards candidates before any transform. Reject it fail-fast -- do NOT modify the
 		// vector (rewriting it would silently disagree with the stored index). A normalized query uses
 		// native cosine ANN (#29082).
-		if norm, ok := metric.CosineVectorL2Norm(toFloat32(query)); !ok {
+		if norm, ok := metric.CosineVectorL2Norm(storedFloat32(query, s.Idxcfg.Usearch.Quantization)); !ok {
 			return nil, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
 				"hnsw cosine search requires a normalized (non-zero, non-subnormal) query vector; its L2 norm %g underflows the float32 domain the index computes in", norm))
 		}
