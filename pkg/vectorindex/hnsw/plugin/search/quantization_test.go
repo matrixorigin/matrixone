@@ -15,9 +15,12 @@
 package search
 
 import (
+	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -73,4 +76,41 @@ func TestNewAlgoQueryType(t *testing.T) {
 	} {
 		require.IsType(t, want, newAlgo(idxcfg, tblcfg, int32(typ)), typ.String())
 	}
+}
+
+// A narrow query is searched in its own element type; the searcher learns the dict table and
+// the indexed column's type from the scan.
+func TestNarrowQuerySearch(t *testing.T) {
+	_, created := stubAlgo(t)
+	proc := testutil.NewProc(t)
+	for _, c := range []struct {
+		typ     types.T
+		payload []byte
+	}{
+		{types.T_array_float16, types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{1, 2}))},
+		{types.T_array_bf16, types.ArrayToBytes([]types.BF16{types.BF16FromFloat32(1), types.BF16FromFloat32(2)})},
+		{types.T_array_int8, types.ArrayToBytes([]int8{1, 2})},
+		{types.T_array_uint8, types.ArrayToBytes([]uint8{1, 2})},
+	} {
+		spec := hnswSpec(t.Name() + c.typ.String())
+		spec.Index.Parts = []string{"v"}
+		spec.SourceTableDef = &plan.TableDef{Name: "t", Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(c.typ), Width: 2}}},
+			Name2ColIndex: map[string]int32{"v": 0}}
+		spec.HiddenTables = append(spec.HiddenTables, &plan.IndexHiddenTableRef{Role: catalog.Hnsw_TblType_Dict, Object: &plan.ObjectRef{ObjName: "dict"}})
+		req := searchplugin.Request{QueryPayload: c.payload, QueryType: plan.Type{Id: int32(c.typ), Width: 2}, CandidateBudget: 2}
+		s, err := newSearcher(proc, spec, req)
+		require.NoError(t, err, c.typ.String())
+		require.Equal(t, int32(c.typ), s.queryType)
+		_, _, err = s.Next(context.Background())
+		require.NoError(t, err, c.typ.String())
+		got := (*created)[len(*created)-1].tblcfg
+		require.Equal(t, "dict", got.DictTable)
+		require.Equal(t, int32(c.typ), got.KeyPartType)
+		require.NoError(t, s.Close())
+	}
+
+	// a query of a non-vector type is rejected
+	req := searchplugin.Request{QueryPayload: []byte{1, 0, 0, 0, 0, 0, 0, 0}, QueryType: plan.Type{Id: int32(types.T_int64), Width: 1}, CandidateBudget: 1}
+	_, err := newSearcher(proc, hnswSpec(t.Name()+"_bad"), req)
+	require.Error(t, err)
 }
