@@ -807,44 +807,6 @@ var writeDataToCSVFile = func(ep *ExportConfig, output []byte) error {
 	return nil
 }
 
-func escapeJSONControlChars(s string) string {
-	var builder strings.Builder
-	builder.Grow(len(s))
-
-	// \\t
-	// \\\\t
-	// abc\t
-	// {"a": "abc", "b": "abc\t"}
-	for i := 0; i < len(s); {
-		if i+2 > len(s) {
-			builder.WriteString(s[i:])
-			break
-		}
-		switch s[i : i+2] {
-		case `\t`:
-			i += 2
-			builder.WriteString(`\\t`)
-		case `\n`:
-			i += 2
-			builder.WriteString(`\\n`)
-		case `\r`:
-			i += 2
-			builder.WriteString(`\\r`)
-		case `\f`:
-			i += 2
-			builder.WriteString(`\\f`)
-		case `\\`:
-			i += 2
-			builder.WriteString(`\\\\`)
-		default:
-			builder.WriteString(s[i : i+1])
-			i++
-		}
-	}
-
-	return builder.String()
-}
-
 func sendExportBatchByte(
 	ctx context.Context,
 	byteChan chan *BatchByte,
