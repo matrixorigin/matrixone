@@ -65,6 +65,7 @@ func TestQueryType(t *testing.T) {
 					&CreateView{}:          QueryTypeDDL,
 					&CreateIndex{}:         QueryTypeDDL,
 					&CreateFunction{}:      QueryTypeDDL,
+					&CreateExtension{}:     QueryTypeDDL,
 					&AlterView{}:           QueryTypeDDL,
 					&AlterDataBaseConfig{}: QueryTypeDDL,
 					&DropDatabase{}:        QueryTypeDDL,
@@ -110,6 +111,7 @@ func TestQueryType(t *testing.T) {
 					&ReleaseSavePoint{}:    QueryTypeTCL,
 					&RollbackToSavePoint{}: QueryTypeTCL,
 					// Other
+					&LoadExtension{}:  QueryTypeOth,
 					&AnalyzeStmt{}:    QueryTypeOth,
 					&ExplainAnalyze{}: QueryTypeOth,
 					&ExplainFor{}:     QueryTypeOth,
@@ -184,4 +186,29 @@ func Test_DropCDC_StmtKind_InternalFlag(t *testing.T) {
 	require.Equal(t, defaultStatusTyp, d1.StmtKind())
 	d2 := &DropCDC{Internal: false}
 	require.Equal(t, frontendStatusTyp, d2.StmtKind())
+}
+
+func TestExtensionStatementMetadata(t *testing.T) {
+	check := func(t *testing.T, stmt Statement, name, query string) {
+		t.Helper()
+		require.Equal(t, name, stmt.GetStatementType())
+		require.Equal(t, query, stmt.GetQueryType())
+		require.Equal(t, MakeStmtKind(OUTPUT_UNDEFINED, RESP_STATUS, EXEC_IN_FRONTEND), stmt.StmtKind())
+	}
+	t.Run("create", func(t *testing.T) {
+		check(t, &CreateExtension{}, "Create Extension", QueryTypeDDL)
+		stmt := NewCreateExtension("pg", "ext", "/missing.so")
+		defer stmt.Free()
+		check(t, stmt, "Create Extension", QueryTypeDDL)
+		stmt.reset()
+		check(t, stmt, "Create Extension", QueryTypeDDL)
+	})
+	t.Run("load", func(t *testing.T) {
+		check(t, &LoadExtension{}, "Load Extension", QueryTypeOth)
+		stmt := NewLoadExtension("ext")
+		defer stmt.Free()
+		check(t, stmt, "Load Extension", QueryTypeOth)
+		stmt.reset()
+		check(t, stmt, "Load Extension", QueryTypeOth)
+	})
 }

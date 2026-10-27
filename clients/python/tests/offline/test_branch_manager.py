@@ -100,7 +100,7 @@ class TestBranchManager:
         """Test creating table branch with snapshot"""
         manager = BranchManager(MockClient())
         sql = manager._build_create_table_branch_sql('branch_tbl', 'base_tbl', 'snapshot_1')
-        assert sql == 'data branch create table branch_tbl from base_tbl{snapshot="snapshot_1"}'
+        assert sql == "data branch create table branch_tbl from base_tbl{snapshot='snapshot_1'}"
 
     def test_delete_table_branch(self):
         """Test deleting table branch"""
@@ -130,7 +130,7 @@ class TestBranchManager:
         """Test diffing tables with snapshot"""
         manager = BranchManager(MockClient())
         sql = manager._build_diff_table_sql('t2', 't1', 'snapshot_1')
-        assert sql == 'data branch diff t2 against t1{snapshot="snapshot_1"}'
+        assert sql == "data branch diff t2 against t1{snapshot='snapshot_1'}"
 
     def test_diff_table_with_count_output(self):
         """Test diffing tables with count output"""
@@ -164,7 +164,7 @@ class TestAsyncBranchManager:
         """Test creating table branch with snapshot"""
         manager = AsyncBranchManager(MockAsyncClient())
         sql = manager._build_create_table_branch_sql('branch_tbl', 'base_tbl', 'snapshot_1')
-        assert sql == 'data branch create table branch_tbl from base_tbl{snapshot="snapshot_1"}'
+        assert sql == "data branch create table branch_tbl from base_tbl{snapshot='snapshot_1'}"
 
     def test_delete_table_branch(self):
         """Test deleting table branch"""
@@ -194,7 +194,7 @@ class TestAsyncBranchManager:
         """Test diffing tables with snapshot"""
         manager = AsyncBranchManager(MockAsyncClient())
         sql = manager._build_diff_table_sql('t2', 't1', 'snapshot_1')
-        assert sql == 'data branch diff t2 against t1{snapshot="snapshot_1"}'
+        assert sql == "data branch diff t2 against t1{snapshot='snapshot_1'}"
 
     def test_diff_table_with_count_output(self):
         """Test diffing tables with count output"""

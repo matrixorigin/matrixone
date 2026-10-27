@@ -842,13 +842,16 @@ func TestIffConditionTruthyAt(t *testing.T) {
 			".5xyz", "1e2foo", "1eabc", "-0suffix", "   ",
 		}, nil)
 	for row, want := range []bool{
-		false, true, true, true, true, true, false, false,
+		false, true, true, true, false, true, false, false,
 		true, true, true, false, false,
 	} {
 		got, err := IffConditionTruthyAt(stringVec, uint64(row), SQLCompatibilityMySQL)
 		require.NoError(t, err)
 		require.Equal(t, want, got)
 	}
+	got, err := IffConditionTruthyAt(stringVec, 4, SQLCompatibilityMatrixOne)
+	require.NoError(t, err)
+	require.True(t, got, "native mode retains NaN truthiness")
 	for _, row := range []uint64{5, 6, 7, 8, 9, 10, 11, 12} {
 		_, err := IffConditionTruthyAt(stringVec, row, SQLCompatibilityMatrixOne)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))

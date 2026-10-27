@@ -19878,3 +19878,16 @@ func TestIsSysOnlyCatalogRelationSQL(t *testing.T) {
 	require.False(t, isSysOnlyCatalogRelationSQL("create table mo_catalog.mo_index_update (x int)"),
 		"the lowercase spelling is not the statement upstream skips tenants for")
 }
+
+func TestExtensionPrivilegeClassification(t *testing.T) {
+	for _, stmt := range []tree.Statement{&tree.CreateExtension{}, &tree.LoadExtension{}} {
+		t.Run(stmt.GetStatementType(), func(t *testing.T) {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			require.Equal(t, objectTypeNone, priv.objectType())
+			require.Equal(t, privilegeKindNone, priv.kind)
+			require.Empty(t, priv.entries)
+			require.True(t, priv.canExecInRestricted)
+			require.False(t, priv.canExecInPasswordExpired)
+		})
+	}
+}

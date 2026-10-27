@@ -1791,7 +1791,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 				// coerce the completed integer operand before choosing an overload.
 				for i, original := range fn.Args {
 					coerced, _, err := rule.coercePreparedTemporalIntegerOperand(
-						original, copy.GetF().Args[i], temporalPeer,
+						name, original, copy.GetF().Args[i], temporalPeer,
 						len(preparedNumericValueParamPositions(original)) > 0)
 					if err != nil {
 						return nil, false, err
@@ -1984,8 +1984,9 @@ func isPreparedTemporalIntegerArithmetic(name string) bool {
 // parameter leaves would move the TIME scale into an inner integer operation
 // and can change both its overflow behavior and its result. Keep the inner
 // expression in its execute-time integer domain, then cast the whole integer
-// result to the TIME peer's DECIMAL64 domain with scale zero.
+// result to the same decimal domain selected for ordinary TIME arithmetic.
 func (rule *ResetParamRefRule) coercePreparedTemporalIntegerOperand(
+	functionName string,
 	original, bound *Expr,
 	temporalPeer types.Type,
 	hasNumericValueParam bool,
@@ -1995,9 +1996,28 @@ func (rule *ResetParamRefRule) coercePreparedTemporalIntegerOperand(
 		!types.T(bound.Typ.Id).IsInteger() || !temporalPeer.Oid.IsDecimal() {
 		return bound, false, nil
 	}
-	temporalPeer.Scale = 0
-	coerced, err := appendCastBeforeExpr(rule.ctx, bound, makePlan2Type(&temporalPeer))
+	target, err := rule.preparedTemporalIntegerTarget(functionName, temporalPeer, makeTypeByPlan2Expr(bound))
+	if err != nil {
+		return nil, false, err
+	}
+	coerced, err := appendCastBeforeExpr(rule.ctx, bound, makePlan2Type(&target))
 	return coerced, true, err
+}
+
+func (rule *ResetParamRefRule) preparedTemporalIntegerTarget(functionName string, peer, integer types.Type) (types.Type, error) {
+	// The decimal peer is a PREPARE-time envelope, not the original TIME
+	// domain. Resolve from TIME so a BIGINT/UINT64 is never narrowed to
+	// DECIMAL(18,0), while inner integer operations retain their own domain.
+	resolved, err := planfunction.GetFunctionByName(rule.ctx, functionName,
+		[]types.Type{types.New(types.T_time, 0, peer.Scale), integer})
+	if err != nil {
+		return types.Type{}, err
+	}
+	targets, cast := resolved.ShouldDoImplicitTypeCast()
+	if !cast {
+		return integer, nil
+	}
+	return targets[1], nil
 }
 
 // preparedTemporalStrictNullNestedArithmetic reports whether expr is a nested
@@ -2182,14 +2202,13 @@ func (rule *ResetParamRefRule) preparedTemporalNullEnvelopeType(
 		if err != nil || !ok {
 			return plan.Type{}, false, err
 		}
-		// The executable TIME boundary first coerces a completed integer
-		// operand into the TIME peer's DECIMAL64 domain. Reproduce that boundary
-		// in the type-only inference as well; resolving DECIMAL64 + INT directly
-		// would widen an explicit CAST(... AS SIGNED/UNSIGNED) to DECIMAL128.
+		// Reproduce the executable TIME/integer boundary without narrowing the
+		// declared integer domain, including explicit SIGNED/UNSIGNED casts.
 		if types.T(typ.Oid).IsInteger() {
-			integerPeer := temporalPeer
-			integerPeer.Scale = 0
-			typ = integerPeer
+			typ, err = rule.preparedTemporalIntegerTarget(functionName, temporalPeer, typ)
+			if err != nil {
+				return plan.Type{}, false, err
+			}
 		}
 		argTypes[i] = typ
 	}
@@ -3459,7 +3478,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			if !implicitParamCast && hasPreparedNumericValue {
 				coerced, coercedChanged, coercedErr := rule.coercePreparedTemporalIntegerOperand(
-					originalArgs[i], rewrittenArg, temporalPeer, hasPreparedNumericValue)
+					functionName, originalArgs[i], rewrittenArg, temporalPeer, hasPreparedNumericValue)
 				if coercedErr != nil {
 					return nil, coercedErr
 				}
@@ -3522,7 +3541,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 						if hasPreparedNumericValue {
 							coerced, coercedChanged, coercedErr :=
 								rule.coercePreparedTemporalIntegerOperand(
-									originalArgs[i], typed, temporalPeer, hasPreparedNumericValue)
+									functionName, originalArgs[i], typed, temporalPeer, hasPreparedNumericValue)
 							if coercedErr != nil {
 								return nil, coercedErr
 							}

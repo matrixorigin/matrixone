@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,7 +32,7 @@ func TestDaemonClaimSQLRoundTrip(t *testing.T) {
 	RunSingleCNBaseClusterTests(t, func(c Cluster) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
-		service, ok := cn.RawService().(taskServiceGetter).GetTaskService()
+		service, ok := cn.RawService().(testutil.TaskServiceGetter).GetTaskService()
 		require.True(t, ok)
 		storage := service.GetStorage()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
