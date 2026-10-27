@@ -108,7 +108,7 @@ func WriteDMLReplacementDataFiles(ctx context.Context, req DMLReplacementDataFil
 }
 
 func dmlReplacementDataDir(operation, statementKey string, snapshotID int64) string {
-	return joinDMLObjectPath("data", "mo-dml", operation, "stmt-"+api.PathHash(statementKey), "replacement", "snap-"+strconv.FormatInt(snapshotID, 10))
+	return api.JoinObjectPath("data", "mo-dml", operation, "stmt-"+api.PathHash(statementKey), "replacement", "snap-"+strconv.FormatInt(snapshotID, 10))
 }
 
 type bufferedDataFileOutputFactory struct {

@@ -693,7 +693,7 @@ func addRewriteMemory(left, right uint64) (uint64, bool) {
 func (c ParquetConcatRewriteDataFilesCompactor) outputLocation(req RewriteDataFilesCompactRequest, group RewriteDataFileGroup, groupIndex int) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(c.OutputPrefix), "/")
 	if base == "" && req.Metadata != nil && strings.TrimSpace(req.Metadata.Location) != "" {
-		base = joinObjectPath(req.Metadata.Location, "data")
+		base = api.JoinObjectPath(req.Metadata.Location, "data")
 	}
 	if base == "" {
 		base = objectDir(req.Snapshot.ManifestList)
@@ -705,7 +705,7 @@ func (c ParquetConcatRewriteDataFilesCompactor) outputLocation(req RewriteDataFi
 	}
 	rewriteID := "rw-" + api.PathHash(firstNonEmptyString(req.IdempotencyKey, req.JobID, strconv.FormatInt(req.Snapshot.SnapshotID, 10)))
 	fileName := "group-" + strconv.Itoa(groupIndex+1) + "-" + api.PathHash(group.PartitionKey) + ".parquet"
-	return joinObjectPath(base, "mo-rewrite-data-files", rewriteID, fileName), nil
+	return api.JoinObjectPath(base, "mo-rewrite-data-files", rewriteID, fileName), nil
 }
 
 func rewriteDataFilesWriterSchema(meta *api.TableMetadata, fallback *parquet.Schema) (*parquet.Schema, error) {

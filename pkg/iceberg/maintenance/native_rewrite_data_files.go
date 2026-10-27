@@ -236,8 +236,8 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 	}
 	now := maintenanceNow(p.Now)
 	newSnapshotID := nextMaintenanceSnapshotID(now, meta)
-	dataManifestPath := joinObjectPath(basePath, "data-manifest.avro")
-	manifestListPath := joinObjectPath(basePath, "manifest-list.avro")
+	dataManifestPath := api.JoinObjectPath(basePath, "data-manifest.avro")
+	manifestListPath := api.JoinObjectPath(basePath, "manifest-list.avro")
 	memoryLimit := maintenanceMemoryLimit(selector.MaxMemoryBytes)
 	memoryUsed := compacted.RetainedMemoryBytes
 	if memoryUsed < selection.RetainedMemoryBytes {
@@ -318,7 +318,7 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 func (p NativeRewriteDataFilesPlanner) rewriteBasePath(meta *api.TableMetadata, snapshot api.Snapshot, req Request) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(p.PathPrefix), "/")
 	if base == "" && meta != nil && strings.TrimSpace(meta.Location) != "" {
-		base = joinObjectPath(meta.Location, "metadata")
+		base = api.JoinObjectPath(meta.Location, "metadata")
 	}
 	if base == "" {
 		base = objectDir(snapshot.ManifestList)
@@ -328,7 +328,7 @@ func (p NativeRewriteDataFilesPlanner) rewriteBasePath(meta *api.TableMetadata, 
 			"snapshot_id": strconv.FormatInt(snapshot.SnapshotID, 10),
 		})
 	}
-	return joinObjectPath(base, "mo-rewrite-data-files", rewriteDataFilesID(req, snapshot)), nil
+	return api.JoinObjectPath(base, "mo-rewrite-data-files", rewriteDataFilesID(req, snapshot)), nil
 }
 
 func rewriteDataFilesCompactorSupportsDeletes(compactor RewriteDataFilesCompactor) bool {
@@ -386,7 +386,7 @@ func materializeRewriteDataFilesPreservedManifestsWithBudget(meta *api.TableMeta
 		if len(entries) == 0 {
 			continue
 		}
-		path := joinObjectPath(basePath, fmt.Sprintf("preserved-manifest-%05d.avro", idx+1))
+		path := api.JoinObjectPath(basePath, fmt.Sprintf("preserved-manifest-%05d.avro", idx+1))
 		content := item.Manifest.Content
 		if content == "" {
 			content = api.ManifestContentData

@@ -1019,15 +1019,15 @@ func buildAppendManifestPaths(ctx context.Context, tableLocation, statementKey s
 	if strings.TrimSpace(statementKey) == "" || snapshotID <= 0 {
 		return appendManifestPaths{}, api.ToMOErr(ctx, api.NewError(api.ErrConfigInvalid, "Iceberg append manifest paths require statement key and snapshot id", nil))
 	}
-	base := joinDMLObjectPath(tableLocation, "metadata", "mo-append", "stmt-"+api.PathHash(statementKey))
+	base := api.JoinObjectPath(tableLocation, "metadata", "mo-append", "stmt-"+api.PathHash(statementKey))
 	return appendManifestPaths{
-		ManifestPath:     joinDMLObjectPath(base, "data-manifest-snap-"+strconv.FormatInt(snapshotID, 10)+".avro"),
-		ManifestListPath: joinDMLObjectPath(base, "manifest-list-snap-"+strconv.FormatInt(snapshotID, 10)+".avro"),
+		ManifestPath:     api.JoinObjectPath(base, "data-manifest-snap-"+strconv.FormatInt(snapshotID, 10)+".avro"),
+		ManifestListPath: api.JoinObjectPath(base, "manifest-list-snap-"+strconv.FormatInt(snapshotID, 10)+".avro"),
 	}, nil
 }
 
 func appendDataDir(statementKey string, snapshotID int64) string {
-	return joinDMLObjectPath("data", "mo-append", "stmt-"+api.PathHash(statementKey), "snap-"+strconv.FormatInt(snapshotID, 10))
+	return api.JoinObjectPath("data", "mo-append", "stmt-"+api.PathHash(statementKey), "snap-"+strconv.FormatInt(snapshotID, 10))
 }
 
 func appendCurrentSchema(ctx context.Context, meta *api.TableMetadata, table string) (api.Schema, error) {

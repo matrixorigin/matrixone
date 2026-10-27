@@ -235,7 +235,7 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 			result.PostCommitOrphanPaths = append(result.PostCommitOrphanPaths, manifestPath)
 			continue
 		}
-		rewritePath := joinObjectPath(basePath, fmt.Sprintf("manifest-%05d.avro", idx))
+		rewritePath := api.JoinObjectPath(basePath, fmt.Sprintf("manifest-%05d.avro", idx))
 		content := manifest.Content
 		if content == "" {
 			content = api.ManifestContentData
@@ -277,7 +277,7 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 		result.Objects = append(result.Objects, ObjectWrite{Location: rewritePath, Payload: rewriteData})
 		result.PostCommitOrphanPaths = append(result.PostCommitOrphanPaths, manifestPath)
 	}
-	manifestListPath := joinObjectPath(basePath, "manifest-list.avro")
+	manifestListPath := api.JoinObjectPath(basePath, "manifest-list.avro")
 	parentSnapshotID := req.Snapshot.SnapshotID
 	encoderScratch := metadata.ManifestListMemoryWeight(0, result.Manifests)
 	if err := checkMaintenanceMemory(memoryUsed, encoderScratch, memoryLimit); err != nil {
@@ -379,7 +379,7 @@ func rewrittenMaintenanceManifest(req RewriteManifestsMaterializeRequest, origin
 func (m RewriteManifestsMaterializer) rewriteBasePath(req RewriteManifestsMaterializeRequest) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(m.PathPrefix), "/")
 	if base == "" && req.Metadata != nil && strings.TrimSpace(req.Metadata.Location) != "" {
-		base = joinObjectPath(req.Metadata.Location, "metadata")
+		base = api.JoinObjectPath(req.Metadata.Location, "metadata")
 	}
 	if base == "" {
 		base = objectDir(req.Snapshot.ManifestList)
@@ -389,7 +389,7 @@ func (m RewriteManifestsMaterializer) rewriteBasePath(req RewriteManifestsMateri
 			"snapshot_id": strconv.FormatInt(req.Snapshot.SnapshotID, 10),
 		})
 	}
-	return joinObjectPath(base, "mo-rewrite-manifests", rewriteManifestsID(req)), nil
+	return api.JoinObjectPath(base, "mo-rewrite-manifests", rewriteManifestsID(req)), nil
 }
 
 func rewriteManifestsID(req RewriteManifestsMaterializeRequest) string {
@@ -398,22 +398,6 @@ func rewriteManifestsID(req RewriteManifestsMaterializeRequest) string {
 		raw = "rewrite-manifests"
 	}
 	return "rw-" + api.PathHash(raw)
-}
-
-func joinObjectPath(base string, parts ...string) string {
-	out := strings.TrimRight(strings.TrimSpace(base), "/")
-	for _, part := range parts {
-		part = strings.Trim(strings.TrimSpace(part), "/")
-		if part == "" {
-			continue
-		}
-		if out == "" {
-			out = part
-		} else {
-			out += "/" + part
-		}
-	}
-	return out
 }
 
 func objectDir(location string) string {

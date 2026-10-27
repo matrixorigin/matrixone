@@ -16,7 +16,6 @@ package iceberg
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"testing"
 
@@ -31,7 +30,7 @@ type recordingDeniedSigner struct{ methods []string }
 
 func (s *recordingDeniedSigner) Sign(_ context.Context, method, _ string) (icebergio.SignedRequest, error) {
 	s.methods = append(s.methods, method)
-	return icebergio.SignedRequest{}, errors.New("signing denied")
+	return icebergio.SignedRequest{}, api.NewError(api.ErrRemoteSigningDenied, "signing denied", nil)
 }
 
 func TestAppendSignedWriteSelectsMethodsAndPropagatesDenial(t *testing.T) {
