@@ -1,3 +1,17 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package frontend
 
 import (
@@ -376,5 +390,82 @@ func TestDropUserRejectsRenamedBinding(t *testing.T) {
 	require.Contains(t, bh.executedSQLs, "rollback;")
 	for _, sql := range bh.executedSQLs {
 		require.False(t, strings.HasPrefix(sql, "delete "))
+	}
+}
+
+func TestCloneProcedureRejectsBeforeSessionMutation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	raw := &backgroundExecTest{}
+	raw.init()
+	op := mock_frontend.NewMockTxnOperator(ctrl)
+	op.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_SI}).AnyTimes()
+	bh := &renameTxnExec{raw, op}
+	before, err := ses.GetSessionSysVar("foreign_key_checks")
+	require.NoError(t, err)
+	source := &cloneDatabaseSource{srcResolveDBName: "source", opAccountId: sysAccountID, toAccountId: sysAccountID, hasFkCycle: true, storedProcedures: []storedProcedureDefinition{{name: "p", args: "[]", lang: "sql", body: "begin select 1; end", dbName: "source"}}}
+	stmt := &tree.CloneDatabase{DstDatabase: "destination", SrcDatabase: "source", AtTsExpr: &tree.AtTimeStamp{}}
+	_, err = handleCloneDatabaseWithSource(newTestExecCtx(defines.AttachAccountId(context.Background(), sysAccountID), ctrl), ses, bh, stmt, source)
+	require.ErrorContains(t, err, "requires pessimistic RC")
+	require.Empty(t, raw.executedSQLs)
+	after, err := ses.GetSessionSysVar("foreign_key_checks")
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+}
+
+// seedLegacyUserBindingFixtures makes the existing credential-row fixtures
+// explicit for the new shared binding queries. It is opt-in per owning test;
+// negative binding tests do not use it, and the executor has no auto-success rule.
+func seedLegacyUserBindingFixtures(t *testing.T, bh *backgroundExecTest) {
+	t.Helper()
+	prefix := `select user_id, authentication_string, default_role from mo_catalog.mo_user where user_name = "`
+	suffix := `" order by user_id;`
+	for sql, result := range bh.sql2result {
+		if !strings.HasPrefix(sql, prefix) || !strings.HasSuffix(sql, suffix) {
+			continue
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(sql, prefix), suffix)
+		if result == nil || result.GetRowCount() == 0 {
+			bh.sql2result["select user_id, user_name, user_host from mo_catalog.mo_user where user_name = "+quoteSQLStringLiteral(name)+" order by user_id;"] = renameRows()
+			continue
+		}
+		id, err := result.GetInt64(context.Background(), 0, 0)
+		require.NoError(t, err)
+		seedAccountUser(bh, id, name)
+	}
+}
+
+func TestUserRoleWritersRejectRenamedBinding(t *testing.T) {
+	for _, grant := range []bool{false, true} {
+		t.Run(fmt.Sprint(grant), func(t *testing.T) {
+			ses, bh := newRenameFixture(t)
+			roleSQL, err := getSqlForRoleIdOfRole(context.Background(), "writer")
+			require.NoError(t, err)
+			bh.sql2result[roleSQL] = renameRows([]interface{}{int64(20)})
+			passwordSQL, err := getSqlForPasswordOfUser(context.Background(), "alice")
+			require.NoError(t, err)
+			bh.sql2result[passwordSQL] = newMrsForPasswordOfUser([][]interface{}{{int64(8), "hash", int64(1)}})
+			old := bh.beforeExec
+			bh.beforeExec = func(sql string) {
+				old(sql)
+				if sql == "select user_id, user_name, user_host from mo_catalog.mo_user where user_id = 8 order by user_id for update;" {
+					seedAccountUser(bh, 8, "renamed")
+				}
+			}
+			roles := []*tree.Role{{UserName: "writer"}}
+			users := []*tree.User{{Username: "alice", Hostname: "%"}}
+			if grant {
+				err = doGrantRole(context.Background(), ses, &tree.GrantRole{Roles: roles, Users: users})
+			} else {
+				err = doRevokeRole(context.Background(), ses, &tree.RevokeRole{Roles: roles, Users: users})
+			}
+			require.Error(t, err)
+			require.Contains(t, bh.executedSQLs, "rollback;")
+			for _, sql := range bh.executedSQLs {
+				require.False(t, strings.HasPrefix(sql, "insert "))
+				require.False(t, strings.HasPrefix(sql, "delete "))
+			}
+		})
 	}
 }
