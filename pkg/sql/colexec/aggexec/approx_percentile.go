@@ -1042,10 +1042,10 @@ func EncodeApproxPercentileConfig(config []byte, descending bool) []byte {
 	return encoded
 }
 
-func parsePercentileConfig(partialResult any) (*big.Rat, float64, bool, error) {
+func parsePercentileConfig(partialResult any) (*big.Rat, bool, error) {
 	b, ok := partialResult.([]byte)
 	if !ok {
-		return nil, 0, false, moerr.NewInternalErrorNoCtx("approx_percentile: expected []byte config")
+		return nil, false, moerr.NewInternalErrorNoCtx("approx_percentile: expected []byte config")
 	}
 	text := string(b)
 	descending := strings.HasPrefix(text, approxPercentileDescPrefix)
@@ -1054,17 +1054,17 @@ func parsePercentileConfig(partialResult any) (*big.Rat, float64, bool, error) {
 	}
 	p, err := strconv.ParseFloat(text, 64)
 	if err != nil {
-		return nil, 0, false, err
+		return nil, false, err
 	}
 	if math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 1 {
-		return nil, 0, false, moerr.NewInvalidInputNoCtxf(
+		return nil, false, moerr.NewInvalidInputNoCtxf(
 			"approx_percentile: percentile must be in [0,1] and finite, got %v", p)
 	}
 	rat, ok := new(big.Rat).SetString(text)
 	if !ok || rat.Sign() < 0 || rat.Cmp(big.NewRat(1, 1)) > 0 {
-		return nil, 0, false, moerr.NewInvalidInputNoCtxf("approx_percentile: invalid percentile %q", text)
+		return nil, false, moerr.NewInvalidInputNoCtxf("approx_percentile: invalid percentile %q", text)
 	}
-	return rat, p, descending, nil
+	return rat, descending, nil
 }
 
 func orderedCompare[T numeric](a, b T) int {
@@ -1136,12 +1136,11 @@ func legacyApproxPercentileCompare[T quantileValue](compare func(T, T) int) func
 
 type approxPercentileExecBase[T quantileValue] struct {
 	aggExec
-	percentile      *big.Rat
-	percentileFloat float64
-	ascCompare      func(T, T) int
-	compare         func(T, T) int
-	descending      bool
-	arithmetic      percentileArithmeticScratch
+	percentile *big.Rat
+	ascCompare func(T, T) int
+	compare    func(T, T) int
+	descending bool
+	arithmetic percentileArithmeticScratch
 }
 
 func (exec *approxPercentileExecBase[T]) PreflightBatchFill(
@@ -1444,7 +1443,7 @@ func (exec *approxPercentileExecBase[T]) batchMerge(other *approxPercentileExecB
 }
 
 func (exec *approxPercentileExecBase[T]) SetExtraInformation(partialResult any, groupIndex int) error {
-	percentile, percentileFloat, descending, err := parsePercentileConfig(partialResult)
+	percentile, descending, err := parsePercentileConfig(partialResult)
 	if err != nil {
 		return err
 	}
@@ -1461,7 +1460,6 @@ func (exec *approxPercentileExecBase[T]) SetExtraInformation(partialResult any, 
 		}
 	}
 	exec.percentile = percentile
-	exec.percentileFloat = percentileFloat
 	return nil
 }
 
@@ -1753,7 +1751,7 @@ func percentileDecimal128Vals(values []types.Decimal128, p float64, argWidth, ar
 	if len(values) == 0 || p < 0 || p > 1 {
 		return types.Decimal128{}, nil
 	}
-	rat, _, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
+	rat, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
 	if err != nil {
 		return types.Decimal128{}, err
 	}

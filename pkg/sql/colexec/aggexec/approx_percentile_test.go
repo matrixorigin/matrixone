@@ -41,7 +41,7 @@ func percentileNumericVals[T numeric](values []T, p float64) float64 {
 	if len(values) == 0 || p < 0 || p > 1 {
 		return math.NaN()
 	}
-	rat, _, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
+	rat, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
 	if err != nil {
 		return math.NaN()
 	}
@@ -55,7 +55,7 @@ func percentileDecimal64Vals(values []types.Decimal64, p float64, argScale int32
 	if len(values) == 0 || p < 0 || p > 1 {
 		return types.Decimal128{}, nil
 	}
-	rat, _, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
+	rat, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
 	if err != nil {
 		return types.Decimal128{}, err
 	}
