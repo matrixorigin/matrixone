@@ -372,9 +372,6 @@ func (m *mysqlTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.Async
 		)
 	}
 
-	if sqlStr == insertAsyncTask {
-		return 0, nil
-	}
 	exec, err := m.db.ExecContext(ctx, sqlStr[:len(sqlStr)-1], vals...)
 	if err != nil {
 		dup, err := removeDuplicateAsyncTasks(err, tasks)
