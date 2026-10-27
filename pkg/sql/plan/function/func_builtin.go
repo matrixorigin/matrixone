@@ -770,12 +770,14 @@ func builtInMoShowVisibleBinEnum(parameters []*vector.Vector, result vector.Func
 			return nil, moerr.NewNotSupportedf(proc.Ctx, "show visible bin enum, the type must be enum/set, but got %s", typ.String())
 		}
 
-		members := strings.Split(enumStr, ",")
+		var members []string
 		if typ.Oid == types.T_uint64 {
 			if enumStr == "" {
 				return nil, nil
 			}
 			members = types.DecodeSetValues(enumStr)
+		} else {
+			members = strings.Split(enumStr, ",")
 		}
 		for i := range members {
 			members[i] = sqlquote.String(members[i])
