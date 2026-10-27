@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func Test_getSubstring(t *testing.T) {
+func TestRuneByteOffsetSuffix(t *testing.T) {
 	tests := []struct {
 		name  string
 		str   string
@@ -58,7 +58,12 @@ func Test_getSubstring(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, getSubstring(tt.str, tt.start), "getSubstring(%v, %v)", tt.str, tt.start)
+			offset, ok := runeByteOffset(tt.str, int64(tt.start))
+			got := ""
+			if ok {
+				got = tt.str[offset:]
+			}
+			assert.Equalf(t, tt.want, got, "runeByteOffset(%v, %v)", tt.str, tt.start)
 		})
 	}
 }
