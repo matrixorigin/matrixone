@@ -89,6 +89,17 @@ func TestDatabaseDefaultsDurableRestart(t *testing.T) {
 	var count int
 	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from converted force index(iv) where v='ss'").Scan(&count))
 	require.Equal(t, 2, count)
+	exec("insert into inherited values ('ß'),('SS')")
+	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from inherited where v='ss'").Scan(&count))
+	require.Equal(t, 2, count, "重启后的新定义必须实际使用继承的CI域")
+	exec("insert into converted values (3,'SS')")
+	for _, hint := range []string{"force index(iv)", "ignore index(iv)"} {
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from converted "+hint+" where v='ss'").Scan(&count))
+		require.Equal(t, 3, count, hint)
+	}
+	var raw string
+	require.NoError(t, db.QueryRowContext(ctx, "select group_concat(hex(v) order by id) from converted").Scan(&raw))
+	require.Equal(t, "C39F,7373,5353", raw, "已有行和新写入保留原字节而非权重")
 	exec("set div_precision_increment=0")
 	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from expressions where g='x0.333333333333'").Scan(&count))
 	require.Equal(t, 1, count, "the converted catalog expression and existing row must survive restart")

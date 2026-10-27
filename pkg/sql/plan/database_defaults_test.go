@@ -43,6 +43,9 @@ func TestNormalizeDatabaseDefaults(t *testing.T) {
 		identity, revision                 uint32
 	}{
 		{sql: "create database d", fallback: "utf8mb4_bin", charset: "utf8mb4", name: "utf8mb4_bin", identity: 2},
+		{sql: "create database d", fallback: "utf8mb4_general_ci", charset: "utf8mb4", name: "utf8mb4_general_ci", identity: 3},
+		{sql: "create database d", fallback: "utf8mb4_unicode_ci", charset: "utf8mb4", name: "utf8mb4_unicode_ci", identity: 10, revision: 1},
+		{sql: "create database d character set utf8mb4", fallback: "utf8mb4_unicode_ci", charset: "utf8mb4", name: "utf8mb4_general_ci", identity: 3},
 		{sql: "create database d character set UTF8MB4", fallback: "utf8mb4_bin", charset: "utf8mb4", name: "utf8mb4_general_ci", identity: 3},
 		{sql: "create database d collate UTF8MB4_BIN", charset: "utf8mb4", name: "utf8mb4_bin", identity: 2},
 		{sql: "create database d default collate=utf8mb4_bin default character set=utf8mb4", charset: "utf8mb4", name: "utf8mb4_bin", identity: 2},
@@ -53,6 +56,8 @@ func TestNormalizeDatabaseDefaults(t *testing.T) {
 		{sql: "create database d", fallback: "binary", charset: "binary", name: "binary", identity: 1},
 		{sql: "create database d character set utf8 collate utf8_unicode_ci", charset: "utf8", name: "utf8_unicode_ci", identity: 9, revision: 1},
 		{sql: "create database d collate utf8mb4_unicode_ci", charset: "utf8mb4", name: "utf8mb4_unicode_ci", identity: 10, revision: 1},
+		{sql: "create database d character set utf8mb4 collate utf8mb4_unicode_ci", fallback: "utf8mb4_bin", charset: "utf8mb4", name: "utf8mb4_unicode_ci", identity: 10, revision: 1},
+		{sql: "create database d collate utf8mb4_unicode_ci character set utf8mb4", charset: "utf8mb4", name: "utf8mb4_unicode_ci", identity: 10, revision: 1},
 		{sql: "create database d character set utf8mb4 character set latin1", fail: "conflicting"},
 		{sql: "create database d collate utf8mb4_bin collate utf8mb4_general_ci", fail: "conflicting"},
 		{sql: "create database d character set latin1", fail: "unsupported character set"},
@@ -192,12 +197,16 @@ func TestDatabaseDefaultsPublicDDLPlans(t *testing.T) {
 func TestCreateTableInheritsDatabaseDefaults(t *testing.T) {
 	databaseDefaultsProtocol(t, defines.MORPCVersion118)
 	for _, tc := range []struct {
-		sql                                string
-		want, inherited, revision          uint32
-		read, legacy, readError, badServer bool
+		sql                                     string
+		want, wantRevision, inherited, revision uint32
+		read, legacy, readError, badServer      bool
 	}{
 		{sql: "create table target.t(v varchar(8))", want: 2, inherited: 2, read: true},
-		{sql: "create table target.t(v varchar(8))", want: 10, inherited: 10, revision: 1, read: true},
+		{sql: "create table target.t(v varchar(8))", want: 10, wantRevision: 1, inherited: 10, revision: 1, read: true},
+		{sql: "create table target.t(v varchar(8) collate utf8mb4_bin)", want: 2, inherited: 10, revision: 1, read: true},
+		{sql: "create table target.t(v varchar(8) character set utf8mb4)", want: 3, inherited: 10, revision: 1, read: true},
+		{sql: "create table target.t(v varchar(8) collate utf8mb4_unicode_ci)", want: 10, wantRevision: 1, inherited: 2, read: true},
+		{sql: "create table target.t(v varchar(8)) collate utf8mb4_unicode_ci", want: 10, wantRevision: 1},
 		{sql: "create table target.t(v varchar(8))", want: 2, inherited: 2, read: true, badServer: true},
 		{sql: "create table target.t(v varchar(8) collate utf8mb4_general_ci)", want: 3, inherited: 2, read: true},
 		{sql: "create table target.t(v varchar(8)) collate utf8mb4_general_ci", want: 3},
@@ -242,12 +251,21 @@ func TestCreateTableInheritsDatabaseDefaults(t *testing.T) {
 				require.NoError(t, err)
 				create := p.GetDdl().GetCreateTable()
 				require.Equal(t, tc.want, create.TableDef.Cols[0].Typ.Charset)
+				require.Equal(t, tc.wantRevision, create.TableDef.Cols[0].Typ.CollationVersion)
+				wantTable, wantTableRevision := tc.want, tc.wantRevision
+				if tc.read && !tc.legacy {
+					wantTable, wantTableRevision = tc.inherited, tc.revision
+				}
+				require.Equal(t, wantTable, create.TableDef.DefaultCharset)
+				require.Equal(t, wantTableRevision, create.TableDef.CollationVersion)
 				if tc.read {
 					require.Equal(t, uint64(42), create.DatabaseDefaults.DatabaseId)
 					if tc.legacy {
 						require.Zero(t, create.DatabaseDefaults.Version)
 					} else {
 						require.Equal(t, uint64(7), create.DatabaseDefaults.Version)
+						require.Equal(t, tc.inherited, create.DatabaseDefaults.CollationId)
+						require.Equal(t, tc.revision, create.DatabaseDefaults.CollationRevision)
 					}
 				} else {
 					require.Nil(t, create.DatabaseDefaults)

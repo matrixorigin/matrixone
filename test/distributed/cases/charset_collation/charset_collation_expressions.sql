@@ -3,6 +3,7 @@
 -- @desc: Explicit collation domains, conflict errors and unchanged source values
 -- @label:bvt
 DROP DATABASE IF EXISTS collation_expression_test;
+DROP DATABASE IF EXISTS collation_inherited_test;
 CREATE DATABASE collation_expression_test;
 USE collation_expression_test;
 
@@ -247,4 +248,49 @@ SELECT BIT_AND(SUBSTRING(b,1,511) COLLATE binary) = (_utf8mb4'a' COLLATE utf8mb4
 SELECT BIT_OR(SUBSTRING(b,1,511) COLLATE binary) = (_utf8mb4'a' COLLATE utf8mb4_bin) FROM bitwise_collation;
 SELECT BIT_XOR(SUBSTRING(b,1,511) COLLATE binary) = (_utf8mb4'a' COLLATE utf8mb4_bin) FROM bitwise_collation;
 DROP TABLE bitwise_collation;
+
+-- CI库继承的域贯穿派生表达式；同权值用id打破平局，不固定偶然顺序。
+CREATE DATABASE collation_inherited_test COLLATE utf8mb4_unicode_ci;
+CREATE TABLE collation_inherited_test.words(id INT PRIMARY KEY, v VARCHAR(20));
+INSERT INTO collation_inherited_test.words VALUES (1,'Z'),(2,'Á'),(3,'a ');
+SELECT column_name,collation_name FROM information_schema.columns
+WHERE table_schema='collation_inherited_test' AND table_name='words' AND column_name='v';
+SELECT id FROM collation_inherited_test.words WHERE v='a' ORDER BY id;
+SELECT id FROM collation_inherited_test.words WHERE v IN ('a') ORDER BY id;
+SELECT COUNT(DISTINCT v) FROM collation_inherited_test.words;
+SELECT MIN(id),COUNT(*) FROM collation_inherited_test.words GROUP BY v ORDER BY MIN(id);
+SELECT COUNT(*) FROM collation_inherited_test.words a JOIN collation_inherited_test.words b ON a.v=b.v;
+SELECT id FROM collation_inherited_test.words ORDER BY IF(id=1,'z',v),id;
+SELECT id FROM collation_inherited_test.words ORDER BY IF(id=1,'z',v),id LIMIT 2;
+-- 单行OFFSET固定实际位置，不让比较器的结果排序掩盖SQL顺序错误。
+SELECT id FROM collation_inherited_test.words ORDER BY IF(id=1,'z',v),id LIMIT 1 OFFSET 1;
+SELECT id,DENSE_RANK() OVER (ORDER BY IF(id=1,'z',v)) FROM collation_inherited_test.words ORDER BY id;
+SELECT COUNT(*) FROM collation_inherited_test.words WHERE CASE WHEN id=1 THEN 'z' ELSE v END='a';
+WITH c AS (SELECT IF(id=1,'z',v) AS v FROM collation_inherited_test.words)
+SELECT COUNT(*) FROM c WHERE v='a';
+SELECT COUNT(*) FROM (SELECT v FROM collation_inherited_test.words UNION ALL SELECT NULL) u WHERE v='a';
+SELECT MIN(v)='a',MAX(v)='z',HEX(MIN(v)) IN ('C381','6120'),HEX(MAX(v)) FROM collation_inherited_test.words;
+SELECT COUNT(*) FROM collation_inherited_test.words WHERE v='Á' COLLATE utf8mb4_bin;
+SELECT id,HEX(v) FROM collation_inherited_test.words ORDER BY id;
+
+-- 同一prepared语句跨值/NULL复用，不能沿用上一次参数的比较结果。
+PREPARE inherited_stmt FROM 'SELECT COUNT(*) FROM collation_inherited_test.words WHERE IF(id=1,''z'',v)=?';
+SET @inherited_value='a';
+EXECUTE inherited_stmt USING @inherited_value;
+SET @inherited_value=NULL;
+EXECUTE inherited_stmt USING @inherited_value;
+SET @inherited_value='z';
+EXECUTE inherited_stmt USING @inherited_value;
+SET @inherited_value='a ';
+EXECUTE inherited_stmt USING @inherited_value;
+DEALLOCATE PREPARE inherited_stmt;
+SET @inherited_value=NULL;
+
+-- 命名UCA400 oracle包含重音、展开、组合字符和可忽略NUL；binary保留字节差异。
+SELECT 'café' COLLATE utf8mb4_unicode_ci='cafe',
+       'ß' COLLATE utf8mb4_unicode_ci='ss',
+       'é' COLLATE utf8mb4_unicode_ci='é';
+SELECT '' COLLATE utf8mb4_unicode_ci='\0',_binary''=_binary'\0',
+       NULL='a' COLLATE utf8mb4_unicode_ci;
+DROP DATABASE collation_inherited_test;
 DROP DATABASE collation_expression_test;

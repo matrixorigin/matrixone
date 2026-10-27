@@ -1,6 +1,6 @@
 # 保留默认行为的 CI 数据库：范围与验收设计
 
-状态：**r2-draft.1，2026-10-26，待维护者设计评审**。关联 [#25096](https://github.com/matrixorigin/matrixone/issues/25096)；替代已关闭、未合并的 [#30684](https://github.com/matrixorigin/matrixone/pull/30684) 的交付方案，不认可或继承其实现审批。本 PR 只有设计文档；**本设计获批并合并之前，不修改实现或测试代码**。
+状态：**r2 设计已批准，并于 2026-10-26 通过 [#31256](https://github.com/matrixorigin/matrixone/pull/31256) 合并**；审批依据见第 9 节。2026-10-27 补充决策记录、适用升级政策及第 10 节使用边界，不改变已批准的 UCA400 范围，也不代表实现已获审批。关联 [#25096](https://github.com/matrixorigin/matrixone/issues/25096)；替代已关闭、未合并的 [#30684](https://github.com/matrixorigin/matrixone/pull/30684) 的交付方案，不认可或继承其实现审批。设计先合并、后实施的前置条件已经满足；后续实现仍须按第 8 节分片验证。
 
 源码基线：`mo/main@83c1e23526fc0ed31188abd7fc2ca87cd3a6d4b3`。下文“已有”来自源码/测试定义检查，不表示本轮执行过测试。实现时重新核对当时 main，仅修复经复现确认的缺口，不整支 cherry-pick 旧 PR。
 
@@ -16,7 +16,7 @@
 | 变更局部化、测试为主 | 先补行为契约，缺陷在现有公共 owner 修复；恢复流程作为元数据往返消费者验收，不复制一套 collation 专用 snapshot/PITR 状态机。 |
 | 先完成设计审批 | 原 [aptend](https://github.com/matrixorigin/matrixone/pull/30684#discussion_r4358707072)、[iamlinjunhong](https://github.com/matrixorigin/matrixone/pull/30684#discussion_r4365958199) 和 [XuPeng-SH](https://github.com/matrixorigin/matrixone/pull/30684#pullrequestreview-5644313301) 的设计门不因关闭 PR、CI 或本提案而自动解决；见第 9 节。 |
 
-**最重要的范围选择尚待确认：** fengttt 没有指定 “CI” 必须是哪种算法。本提案建议首期采用已有 UCA 4.0 的 `utf8mb4_unicode_ci`，而非激活 `utf8mb4_general_ci` 的新修订。它们不是同义词；例如 `ß` 与 `ss` 的关系不同。如果首期必须修复原 issue 的显式 `general_ci` 示例，需在本设计合并前明确选择并扩展设计，不能把 UCA 方案冒充完成。
+**已批准的首期范围：** 采用已有 UCA 4.0 的 `utf8mb4_unicode_ci`，而非激活 `utf8mb4_general_ci` 的新修订；该选择由第 9 节的明确审批确认，不将 fengttt 原评审的 “CI” 泛称当作具体算法批准。两者不是同义词，例如 `ß` 与 `ss` 的关系不同。原 issue 的显式 `general_ci` 示例需要另行设计，不能把 UCA 方案冒充完成。
 
 ## 2. 当前事实、目标与不变量
 
@@ -116,8 +116,8 @@ catalog、clone、export、restore
 - **创建/变更**：默认值和对象由现有 DDL 事务发布；缓存对照 account/database identity 与代际。失败、取消或代际失效不留下半建对象；DROP/recreate 同名数据库不能复用旧身份。缺行的历史默认与损坏/未知 metadata 区分，不能都 fallback。
 - **执行与传输**：同一有效域穿过 binder→fold→plan→vector→remote。未知或不支持的类型在消费/发布前拒绝；已分配的 batch/向量由既有 owner 清理。空批次、NULL-only 和常量不得绕过必要的类型准入。
 - **保存与恢复**：已有对象保留 identity/revision，数据库默认只影响未来定义。重启、clone、View、snapshot/PITR、DUMP/restore、CDC 分别验收原有支持范围内的元数据往返和未来写入，不能只断言命令成功。普通 SQL 导出若无法保真，沿用对应 owner 的明确拒绝，不能删字段后继续成功。
-- **混合版本/升级**：未达到现有各操作能力要求时拒绝；不以本地开关启用。本系列不扩大旧 binary 可读/可写范围，不把 revision=1 降为 0。正常升级保留旧表/索引字节；真正的新持久能力需要另行设计。
-- **回退**：因为没有新格式，回退到基线能力内的版本不新增格式迁移义务；仍必须服从该版本已有的对象/索引兼容下限，不能声称任意旧版本都可读。更改库默认也不是数据降级或索引重建。
+- **升级兼容**：遵循仓库后续明确的 [shutdown-only 升级政策](../../.agents/skills/mo-dev/references/upgrade-compatibility.md)：全停集群后替换二进制，不支持滚动混跑，也不为本系列新增 MORPC 数字、peer 能力门或旧端 fallback。现有门留待专门清理，不借此扩展或删除。新 binary 读取旧目录、表、索引和备份仍须保真，不把 revision=1 降为 0；跨集群复制与 MySQL 协议仍有各自的外部兼容契约。
+- **回退**：仓库不支持旧 binary 启动新 binary 写过的数据；没有新增格式也不构成 downgrade 承诺。更改库默认不是数据降级或索引重建。
 - **权限/租户**：仍通过当前账户权限、目标库解析和事务快照读取默认；不能只按数据库名查缓存或使用 sys 会话代替租户身份。错误时不暴露其他租户的默认/表定义。
 
 不引入新 worker、锁、queue、timer、retry 或持久 cache。临时 key/scratch 借用现有执行器预算，原值仍归向量 owner；取消、失败、Reset/Free 不跨查询保留缓存。长度计算必须校验溢出，不能按声明的最大 VARCHAR 宽度逐行填充权重；大值拒绝/内存限制复用现有准入。无需新增逐行日志或高基数指标；诊断使用已有 collation 展示、类型/协议错误和执行计划。
@@ -152,7 +152,7 @@ oracle 分工：MO 旧路径与经核对的基线结果比较；命名 UCA400 �
 
 每个后续切片的完成条件：非空精确测试选择；被改公共 owner 的 UT/实际 consumer；SQL 变化有正常比较模式 BVT；`.result` 仅工具生成并独立审查；同实例两轮与清理后置检查；只有触及的协议/持久/共享状态维度增加 topology/restart/race 证明。生产改动的自身变更语句覆盖率至少 75%，不是要求测试-only 或本设计跑 Go。通过测试不替代维护者设计决定。
 
-本设计 PR 只做文档一致性、源码引用、链接及交付范围检查，**不宣称 UCA 全链路、原 issue 或旧实现已重新验证**。
+设计 PR #31256 只做了文档一致性、源码引用、链接及交付范围检查，**不宣称 UCA 全链路、原 issue 或旧实现已重新验证**。
 
 ## 8. 小 PR 交付与止损边界
 
@@ -166,16 +166,40 @@ oracle 分工：MO 旧路径与经核对的基线结果比较；命名 UCA400 �
 
 [#31120](https://github.com/matrixorigin/matrixone/issues/31120) 与本表无依赖；需要交付时另提针对当时 main 的独立修复 PR。本轮不开始该修复。旧 #30684 保留为参考，不恢复其维护循环。
 
+本次实现交付中，T/F/A 是内部工作阶段；必须先完成整个已批准范围的验收，不能以单片测试通过为由提交半成品 PR（包括 Draft）。
+
 切片按行为闭包而非文件数拆分：不能先开放入口、以后再补持久/远端安全。一个缺陷若要求新增协议/格式、改事务边界或扩成跨恢复体系重构，先停止 F、更新设计并重新评审；不能用“小 PR”标签绕过设计门。
 
-## 9. 必须在设计合并前完成的决定
+## 9. 设计批准记录
 
-建议由 fengttt 确认产品方向、适用模块维护者确认职责边界；这是评审请求，不声明任何人已接受责任或批准。
+[XuPeng-SH 的 APPROVED 评审](https://github.com/matrixorigin/matrixone/pull/31256#pullrequestreview-5650551409) 于 2026-10-26 明确认可 UCA400 范围、保持默认、复用现有 owner 及 test-first 交付；并明确排除 native general-ci、全局默认变化和关闭整个 issue。这是设计范围批准，不是运行时正确性或旧实现批准。
 
-| 决定 | 推荐值 | 状态 |
+| 决定 | 批准值 | 状态 |
 | --- | --- | --- |
-| D1：首期 “CI” 的确切含义 | 复用 `utf8mb4_unicode_ci` / UCA400 / PAD SPACE；general-ci 另行设计，本系列不关闭整个 #25096 | **待确认，阻塞设计批准** |
-| D2：默认兼容 | 保持当前默认行为、名称及旧对象语义，不统一改成 MySQL 8 默认，也不新增 C/CI SQL 名称 | **待确认，阻塞设计批准** |
-| D3：实现/测试边界 | 接受 T→必要 F→A；事务独立；持久消费者做保真验收而不复制恢复机制；新格式须再设计 | **待确认，阻塞设计批准** |
+| D1：首期 “CI” 的确切含义 | 复用 `utf8mb4_unicode_ci` / UCA400 / PAD SPACE；general-ci 另行设计，本系列不关闭整个 #25096 | **已批准** |
+| D2：默认兼容 | 保持当前默认行为、名称及旧对象语义，不统一改成 MySQL 8 默认，也不新增 C/CI SQL 名称 | **已批准** |
+| D3：实现/测试边界 | 接受 T→必要 F→A；事务独立；持久消费者做保真验收而不复制恢复机制；新格式须再设计 | **已批准** |
 
-审批记录必须链接本文件的实际评审 commit 和决定；合并前关闭上述问题并更新状态。后续实现 PR 引用该合并版本。**本草案、自审和旧 PR 的测试都不是设计批准，也不是提前实施许可。**
+评审正文引用 commit `5bf0d3f3bc94976b72d9db88c164a47b25f89c4e`，最终 PR head 为 `aa8faaabfbfa8889bbf9faf9db8c8d8fb2a26844`，合并 commit 为 [`849affba2c21f6c11625e9633cb0add44e0829ae`](https://github.com/matrixorigin/matrixone/commit/849affba2c21f6c11625e9633cb0add44e0829ae)。三个版本的本设计文件字节相同（Git blob `d7cecba708955461938f741c2372506ee83a8aa3`）。合并时文件残留的 draft/待确认文字由本记录更正，不是新增或自我授予批准。后续实现引用该合并版本及本审批链接；超出批准范围必须重新设计评审。
+
+## 10. 使用边界与持续回归入口
+
+使用第 3.2 节的显式 `utf8mb4_unicode_ci` 示例即可，不需要新开关或修改全局默认。已有普通库不会自动变为 CI；ALTER 默认只影响之后的定义，既有列仍按自己的类型执行。需要区分原始字节时使用明确的 binary 类型或已有的 `utf8mb4_bin` 覆盖，不用权重值代替原始值。
+
+- UCA400/PAD SPACE 会合并大小写、重音、部分展开和可忽略字符；它不是 general-ci，也不是 MySQL 8 默认的 0900/NO PAD。排序同权值需要稳定输出时，另外指定唯一的排序键。
+- 继续保留现有 UCA UNIQUE 能力及 ADD INDEX 等操作的既有拒绝边界；本系列不开放新索引格式。索引查询与扫描、恢复前后及后续写入应保持同一比较关系。
+- clone、表级 DUMP/LOAD、SHOW/DDL 回放消费已解析的表/列定义。共享 formatter 能保真重建表定义，不等于所有复制产品、数据库级复制默认值或任意导出工具都已获支持。
+- **CDC 的 MO/MySQL 目标 schema 校验目前不支持 UCA400 源列**，即使目标声明同名 collation 也不能验证成功；不得改成 legacy 目标绕过拒绝。该限制由既有 owner 保持，本系列不激活 CDC UCA 同步。
+- 未增加生产热路径、逐行 catalog 查询、恢复状态机、协议门或格式。验收发现新格式/跨恢复机制需求时仍回到设计，不复用旧 PR 的框架。
+
+| 持续契约 | 回归入口 |
+| --- | --- |
+| 默认、目标库继承、覆盖与不改变裸字面量 | `TestNormalizeDatabaseDefaults`、`TestCreateTableInheritsDatabaseDefaults`、`TestDatabaseCharsetInheritanceContract`；`charset_collation_defaults_conversion.sql` |
+| 已继承域的 IF/CASE/CTE/UNION、MIN/MAX、fold 与参数复用 | `TestExpressionCollationDerivedMetadata`、`TestExpressionCollationSemantics`；`charset_collation_expressions.sql` |
+| 真实 UCA 类型的 vector、remote batch、aggregate/spill 往返及拒绝清理 | `TestCollationMetadataVectorReaderRoundTrip`、`TestCollationMetadataRemoteBatchAdmission`、`TestAggregateCollationAdmission` |
+| context-free 表 DDL 回放的默认、列 Type 与 UNIQUE key format | `TestCreateSQLWithoutContextPreservesCollation`；同一 formatter 服务 clone、dump、publication/getDDL 等调用方 |
+| 恢复和重启后的现有行、原字节、未来写入、索引/扫描等价 | `TestDatabaseDefaultsFailureAndRecovery`、`TestDatabaseDefaultsDurableRestart` |
+| prepared 默认代际、同名重建与跨 CN 刷新 | `TestDatabaseDefaultsTwoCNPreparedFreshness` |
+| CDC 现有成功域与 UCA 拒绝/防降级边界 | `TestVerifyCDCTargetTableStructure` |
+
+这些入口用于持续回归，不把测试定义本身当作已执行证据，也不替代相应平台或交付时的验证。本系列不宣称已解决 #25096 的 general-ci 激活、全局默认切换或全部兼容诉求。

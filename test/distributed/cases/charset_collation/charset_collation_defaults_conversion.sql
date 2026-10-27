@@ -1,4 +1,5 @@
 drop database if exists charset_defaults_contract;
+drop database if exists charset_defaults_create;
 create database charset_defaults_contract collate utf8mb4_bin;
 use charset_defaults_contract;
 
@@ -35,6 +36,51 @@ create table native_like like native_defaults;
 create table native_ctas as select v from native_defaults;
 select table_name,column_name,collation_name from information_schema.columns
 where table_schema='charset_defaults_contract' and table_name in ('native_like','native_ctas') and column_name='v' order by table_name;
+
+-- 普通CREATE不继承当前USE库的CI默认；IF NOT EXISTS不改已有默认。
+create database charset_defaults_create;
+create table charset_defaults_create.t(v varchar(8));
+insert into charset_defaults_create.t values ('abc'),('ABC'),('abc ');
+select default_character_set_name,default_collation_name from information_schema.schemata
+where schema_name='charset_defaults_create';
+select count(*) from charset_defaults_create.t where v='ABC';
+select count(distinct v) from charset_defaults_create.t;
+create database if not exists charset_defaults_create collate utf8mb4_unicode_ci;
+select default_collation_name from information_schema.schemata where schema_name='charset_defaults_create';
+drop database charset_defaults_create;
+
+-- 同名重建为显式CI库，目标库的域独立于当前库及连接默认。
+create database charset_defaults_create character set utf8mb4 collate utf8mb4_unicode_ci;
+show create database charset_defaults_create;
+create table charset_defaults_create.t(
+    v varchar(8),
+    raw_v varchar(8) collate utf8mb4_bin,
+    charset_v varchar(8) character set utf8mb4,
+    bytes_v varchar(8) character set binary
+);
+insert into charset_defaults_create.t values ('abc','abc','abc','abc'),('ABC','ABC','ABC','ABC'),('abc ','abc ','abc ','abc ');
+select column_name,data_type,character_set_name,collation_name from information_schema.columns
+where table_schema='charset_defaults_create' and table_name='t' order by ordinal_position;
+select table_collation from information_schema.tables where table_schema='charset_defaults_create' and table_name='t';
+select count(*) from charset_defaults_create.t where v='ABC';
+select count(*) from charset_defaults_create.t where raw_v='ABC';
+select count(*) from charset_defaults_create.t where charset_v='ABC';
+select count(*) from charset_defaults_create.t where bytes_v='ABC';
+select count(distinct v),count(distinct raw_v),count(distinct charset_v),count(distinct bytes_v) from charset_defaults_create.t;
+select hex(v),hex(raw_v),hex(charset_v),hex(bytes_v) from charset_defaults_create.t order by hex(v);
+create table charset_defaults_create.table_override(v varchar(8)) collate utf8mb4_bin;
+create table charset_defaults_create.charset_override(v varchar(8)) character set utf8mb4;
+insert into charset_defaults_create.table_override select v from charset_defaults_create.t;
+insert into charset_defaults_create.charset_override select v from charset_defaults_create.t;
+select table_name,collation_name from information_schema.columns
+where table_schema='charset_defaults_create' and table_name in ('table_override','charset_override') order by table_name;
+select count(*) from charset_defaults_create.table_override where v='ABC';
+select count(*) from charset_defaults_create.charset_override where v='ABC';
+use charset_defaults_create;
+select @@character_set_database,@@collation_database;
+select 'abc'='ABC','abc'='abc ';
+use charset_defaults_contract;
+drop database charset_defaults_create;
 
 -- CONVERT owns carried columns and rebuilt secondary-index keys.
 create table converted(id int primary key, v varchar(8), index iv(v)) collate=utf8mb4_bin;
