@@ -67,7 +67,7 @@ func Test_ResolveFun(t *testing.T) {
 		{
 			metricType: Metric_L2sqDistance,
 			spherical:  false,
-			distfn:     L2DistanceSq[float32],
+			distfn:     L2Distance[float32],
 			normalize:  false,
 		},
 		{
@@ -122,17 +122,24 @@ func Test_ResolveFun(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		_, normalize, err := ResolveKmeansDistanceFn[float32](tt.metricType, tt.spherical)
-		require.Nil(t, err)
-		//require.Equal(t, reflect.ValueOf(distfn), reflect.ValueOf(tt.distfn))
-		require.Equal(t, normalize, tt.normalize)
+		distfn, normalize, err := ResolveKmeansDistanceFn[float32](tt.metricType, tt.spherical)
+		require.NoError(t, err)
+		require.Equal(t, tt.normalize, normalize)
+		left, right := []float32{1, 0}, []float32{0, 2}
+		want, err := tt.distfn(left, right)
+		require.NoError(t, err)
+		got, err := distfn(left, right)
+		require.NoError(t, err)
+		require.InDelta(t, want, got, 1e-6)
+		_, err = distfn(left, right[:1])
+		require.Error(t, err)
 	}
 
 	_, _, err := ResolveKmeansDistanceFn[float32](MetricType(100), false)
-	require.NotNil(t, err)
+	require.Error(t, err)
 
-	_, _, err = ResolveKmeansDistanceFn[float32](MetricType(100), false)
-	require.NotNil(t, err)
+	_, _, err = ResolveKmeansDistanceFn[float32](MetricType(100), true)
+	require.Error(t, err)
 
 }
 
