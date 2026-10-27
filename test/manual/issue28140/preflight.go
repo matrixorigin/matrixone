@@ -83,117 +83,108 @@ func run(ctx context.Context, db *sql.DB) error {
 	}
 
 	accounts := make(map[uint32]bool)
-	accountRows, err := tx.QueryContext(ctx, "select account_id from mo_catalog.mo_account")
-	if err != nil {
-		return fmt.Errorf("account inventory: %w", err)
-	}
-	for accountRows.Next() {
-		var id uint32
-		if err := accountRows.Scan(&id); err != nil {
-			accountRows.Close()
-			return err
+	if err := func() error {
+		accountRows, err := tx.QueryContext(ctx, "select account_id from mo_catalog.mo_account")
+		if err != nil {
+			return fmt.Errorf("account inventory: %w", err)
 		}
-		if accounts[id] {
-			accountRows.Close()
-			return fmt.Errorf("duplicate account %d", id)
+		defer accountRows.Close()
+		for accountRows.Next() {
+			var id uint32
+			if err := accountRows.Scan(&id); err != nil {
+				return err
+			}
+			if accounts[id] {
+				return fmt.Errorf("duplicate account %d", id)
+			}
+			accounts[id] = true
 		}
-		accounts[id] = true
-	}
-	if err := accountRows.Err(); err != nil {
-		accountRows.Close()
+		return accountRows.Err()
+	}(); err != nil {
 		return err
 	}
-	accountRows.Close()
 	if len(accounts) == 0 || !accounts[0] {
 		return errors.New("account inventory is empty or omits the system account")
 	}
 
 	tables := make(map[tableKey]*catalogTable)
-	tableRows, err := tx.QueryContext(ctx, "select account_id, rel_id, reldatabase, relname from mo_catalog.mo_tables")
-	if err != nil {
-		return fmt.Errorf("table inventory: %w", err)
-	}
-	for tableRows.Next() {
-		var key tableKey
-		var database, name string
-		if err := tableRows.Scan(&key.account, &key.id, &database, &name); err != nil {
-			tableRows.Close()
-			return err
+	if err := func() error {
+		tableRows, err := tx.QueryContext(ctx, "select account_id, rel_id, reldatabase, relname from mo_catalog.mo_tables")
+		if err != nil {
+			return fmt.Errorf("table inventory: %w", err)
 		}
-		if !accounts[key.account] {
-			tableRows.Close()
-			return fmt.Errorf("table %s.%s belongs to unlisted account %d", database, name, key.account)
+		defer tableRows.Close()
+		for tableRows.Next() {
+			var key tableKey
+			var database, name string
+			if err := tableRows.Scan(&key.account, &key.id, &database, &name); err != nil {
+				return err
+			}
+			if !accounts[key.account] {
+				return fmt.Errorf("table %s.%s belongs to unlisted account %d", database, name, key.account)
+			}
+			if tables[key] != nil {
+				return fmt.Errorf("duplicate table id %d for account %d", key.id, key.account)
+			}
+			tables[key] = &catalogTable{key: key, database: database, name: name, columns: make(map[int]*pb.ColDef)}
 		}
-		if tables[key] != nil {
-			tableRows.Close()
-			return fmt.Errorf("duplicate table id %d for account %d", key.id, key.account)
-		}
-		tables[key] = &catalogTable{key: key, database: database, name: name, columns: make(map[int]*pb.ColDef)}
-	}
-	if err := tableRows.Err(); err != nil {
-		tableRows.Close()
+		return tableRows.Err()
+	}(); err != nil {
 		return err
 	}
-	tableRows.Close()
 	if len(tables) == 0 {
 		return errors.New("table inventory is empty")
 	}
 
-	columnRows, err := tx.QueryContext(ctx, `select account_id, att_relname_id, att_database,
-		att_relname, attname, attnum, atttyp, attr_has_generated, attr_generated, attisdropped
-		from mo_catalog.mo_columns`)
-	if err != nil {
-		return fmt.Errorf("column inventory: %w", err)
-	}
 	columnCount := 0
-	for columnRows.Next() {
-		var key tableKey
-		var database, tableName, name string
-		var ordinal, hasGenerated, dropped int
-		var typeBytes, generatedBytes []byte
-		if err := columnRows.Scan(&key.account, &key.id, &database, &tableName, &name,
-			&ordinal, &typeBytes, &hasGenerated, &generatedBytes, &dropped); err != nil {
-			columnRows.Close()
-			return err
+	if err := func() error {
+		columnRows, err := tx.QueryContext(ctx, `select account_id, att_relname_id, att_database,
+			att_relname, attname, attnum, atttyp, attr_has_generated, attr_generated, attisdropped
+			from mo_catalog.mo_columns`)
+		if err != nil {
+			return fmt.Errorf("column inventory: %w", err)
 		}
-		table := tables[key]
-		if table == nil || table.database != database || table.name != tableName {
-			columnRows.Close()
-			return fmt.Errorf("column %s.%s.%s has no matching table inventory row (account %d)", database, tableName, name, key.account)
-		}
-		if ordinal <= 0 || ordinal > 65536 || dropped != 0 || table.columns[ordinal] != nil {
-			columnRows.Close()
-			return fmt.Errorf("invalid, dropped, or duplicate column ordinal %d for %s.%s.%s", ordinal, database, tableName, name)
-		}
-		var typ types.Type
-		if err := typ.Unmarshal(typeBytes); err != nil {
-			columnRows.Close()
-			return fmt.Errorf("decode type for %s.%s.%s: %w", database, tableName, name, err)
-		}
-		col := &pb.ColDef{Name: name, Typ: pb.Type{Id: int32(typ.Oid)}}
-		if hasGenerated != 0 {
-			col.GeneratedCol = new(pb.GeneratedCol)
-			if len(generatedBytes) == 0 {
-				columnRows.Close()
-				return fmt.Errorf("missing generated expression for %s.%s.%s", database, tableName, name)
+		defer columnRows.Close()
+		for columnRows.Next() {
+			var key tableKey
+			var database, tableName, name string
+			var ordinal, hasGenerated, dropped int
+			var typeBytes, generatedBytes []byte
+			if err := columnRows.Scan(&key.account, &key.id, &database, &tableName, &name,
+				&ordinal, &typeBytes, &hasGenerated, &generatedBytes, &dropped); err != nil {
+				return err
 			}
-			if err := types.Decode(generatedBytes, col.GeneratedCol); err != nil {
-				columnRows.Close()
-				return fmt.Errorf("decode generated expression for %s.%s.%s: %w", database, tableName, name, err)
+			table := tables[key]
+			if table == nil || table.database != database || table.name != tableName {
+				return fmt.Errorf("column %s.%s.%s has no matching table inventory row (account %d)", database, tableName, name, key.account)
 			}
-			if col.GeneratedCol.Expr == nil {
-				columnRows.Close()
-				return fmt.Errorf("empty generated expression for %s.%s.%s", database, tableName, name)
+			if ordinal <= 0 || ordinal > 65536 || dropped != 0 || table.columns[ordinal] != nil {
+				return fmt.Errorf("invalid, dropped, or duplicate column ordinal %d for %s.%s.%s", ordinal, database, tableName, name)
 			}
+			var typ types.Type
+			if err := typ.Unmarshal(typeBytes); err != nil {
+				return fmt.Errorf("decode type for %s.%s.%s: %w", database, tableName, name, err)
+			}
+			col := &pb.ColDef{Name: name, Typ: pb.Type{Id: int32(typ.Oid)}}
+			if hasGenerated != 0 {
+				col.GeneratedCol = new(pb.GeneratedCol)
+				if len(generatedBytes) == 0 {
+					return fmt.Errorf("missing generated expression for %s.%s.%s", database, tableName, name)
+				}
+				if err := types.Decode(generatedBytes, col.GeneratedCol); err != nil {
+					return fmt.Errorf("decode generated expression for %s.%s.%s: %w", database, tableName, name, err)
+				}
+				if col.GeneratedCol.Expr == nil {
+					return fmt.Errorf("empty generated expression for %s.%s.%s", database, tableName, name)
+				}
+			}
+			table.columns[ordinal] = col
+			columnCount++
 		}
-		table.columns[ordinal] = col
-		columnCount++
-	}
-	if err := columnRows.Err(); err != nil {
-		columnRows.Close()
+		return columnRows.Err()
+	}(); err != nil {
 		return err
 	}
-	columnRows.Close()
 
 	oversized, err := auditCatalogTables(accounts, tables)
 	if err != nil {
