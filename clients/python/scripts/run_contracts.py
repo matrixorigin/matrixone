@@ -80,6 +80,8 @@ def main():
         ]
         if args.suite == 'full':
             required.extend(('MO_SDK_EXPORT_DIR', 'MO_SDK_EXPORT_LOCAL_DIR'))
+            if os.environ.get('MO_SDK_DISPOSABLE_SERVER') != '1':
+                parser.error('Full server contracts require MO_SDK_DISPOSABLE_SERVER=1 and exclusive tenant access')
         if args.server == 'current-source':
             required.append('MO_SDK_EXPECT_REVISION')
         missing = [name for name in required if not os.environ.get(name)]

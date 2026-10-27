@@ -27,13 +27,16 @@ supported Python version. Installing the core SDK must not require PyArrow.
 Server contracts are explicitly configured; an offline green run does not prove
 server compatibility. Release qualification selects an exact MatrixOne 4.1.x or 4.2.x patch, or a built
 current-source server. Use full contracts on 4.1.0, 4.1.6, 4.2.0 and 4.2.6,
-and core contracts on every intermediate stable patch. Set these variables for an isolated disposable database:
+and core contracts on every intermediate stable patch. Set these variables for an isolated disposable target:
 
 - `MO_HOST`, `MO_PORT`, `MO_USER`, `MO_PASSWORD`.
 - `MO_SDK_EXPECT_VERSION`: the exact selected release, or the source server banner.
 - `MO_SDK_EXPECT_REVISION`: required for `current-source`, matching `git_version()`.
 - `MO_SDK_EXPORT_DIR`: directory visible to the server.
 - `MO_SDK_EXPORT_LOCAL_DIR`: the same directory visible to the test process.
+- `MO_SDK_DISPOSABLE_SERVER=1`: required for full contracts, only when the server or tenant is disposable and
+  exclusively owned by this test run. Case-mode tests change a tenant-global setting and must run serially; they
+  restore it afterwards, but concurrent sessions could observe the temporary setting.
 
 ```sh
 python scripts/run_contracts.py --server 4.1.0 --suite full --output release-contracts

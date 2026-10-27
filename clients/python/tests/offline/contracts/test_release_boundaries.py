@@ -1,7 +1,11 @@
 """Shared public SQL/compiler/error contracts; native release proof is separate."""
 
 import asyncio
+import os
+import subprocess
+import sys
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -568,6 +572,21 @@ def test_source_identity_requires_revision_and_banner():
         validate_server_identity('8.0.30-MatrixOne-v20261026', 'abcdef', 'v20261026')
 
 
+def test_full_server_contracts_require_explicit_disposable_opt_in(tmp_path):
+    env = dict(os.environ)
+    env.pop('MO_SDK_DISPOSABLE_SERVER', None)
+    result = subprocess.run(
+        [sys.executable, 'scripts/run_contracts.py', '--server', '4.1.0', '--output', str(tmp_path)],
+        cwd=str(Path(__file__).resolve().parents[3]),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 2
+    assert 'MO_SDK_DISPOSABLE_SERVER=1' in result.stderr
+
+
 @pytest.mark.parametrize('async_mode', [False, True])
 @pytest.mark.parametrize('existing', [False, True])
 @pytest.mark.parametrize('object_type,target', [('TABLE', '`Db`.`Mixed-Target`'), ('DATABASE', '`Mixed-Db`')])
@@ -592,9 +611,9 @@ async def test_clone_noop_or_plain_write_uses_same_executor(async_mode, existing
         await result
     assert len(calls) == (1 if existing else 3)
     assert calls[0].startswith('SELECT 1 FROM information_schema.')
-    assert "LOWER('Mixed-" in calls[0]
+    assert "@@lower_case_table_names=0 THEN 'Mixed-" in calls[0]
     if object_type == 'TABLE':
-        assert "table_schema=LOWER('Db')" in calls[0]
+        assert "@@lower_case_table_names=0 THEN 'Db' ELSE LOWER('Db')" in calls[0]
     if not existing:
         assert calls[1].startswith('CREATE ' + object_type + ' ')
         assert calls[2].startswith('SHOW CREATE ' + object_type + ' ')

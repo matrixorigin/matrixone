@@ -76,19 +76,24 @@ class BaseCloneManager:
     @staticmethod
     def _existence_sql(object_type, target):
         parts = identifier_parts(target, qualified=object_type == 'TABLE')
+
+        def normalized(name):
+            literal = sql_literal(name)
+            return '(CASE WHEN @@lower_case_table_names=0 THEN ' + literal + ' ELSE LOWER(' + literal + ') END)'
+
         if object_type == 'DATABASE':
             return (
-                'SELECT 1 FROM information_schema.schemata WHERE schema_name=LOWER('
-                + sql_literal(parts[0])
-                + ') LIMIT 1'
+                'SELECT 1 FROM information_schema.schemata WHERE BINARY schema_name=BINARY '
+                + normalized(parts[0])
+                + ' LIMIT 1'
             )
-        database = 'LOWER(' + sql_literal(parts[0]) + ')' if len(parts) == 2 else 'DATABASE()'
+        database = normalized(parts[0]) if len(parts) == 2 else '(DATABASE())'
         return (
-            'SELECT 1 FROM information_schema.tables WHERE table_schema='
+            'SELECT 1 FROM information_schema.tables WHERE BINARY table_schema=BINARY '
             + database
-            + ' AND table_name=LOWER('
-            + sql_literal(parts[-1])
-            + ') LIMIT 1'
+            + ' AND BINARY table_name=BINARY '
+            + normalized(parts[-1])
+            + ' LIMIT 1'
         )
 
     @staticmethod

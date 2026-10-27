@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import declarative_base
 
 from matrixone import Client, AsyncClient, select, compile_select_to_sql
-from matrixone.exceptions import QueryError
+from matrixone.exceptions import CloneError, QueryError
 from matrixone.session import Session
 from matrixone.sqlalchemy_ext.fulltext_index import FulltextSearchBuilder as IndexSearch
 from matrixone.sqlalchemy_ext.fulltext_search import FulltextQueryBuilder, FulltextSearchBuilder
@@ -367,6 +367,131 @@ async def test_clone_existing_target_is_noop(client, async_client, server, kind,
             client.execute('DROP DATABASE IF EXISTS ' + database)
         else:
             client.execute('DROP TABLE IF EXISTS ' + target)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', [0, 1, 2])
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+@pytest.mark.parametrize('owner', ['client', 'session'])
+@pytest.mark.parametrize('object_type', ['TABLE', 'QUALIFIED_TABLE', 'DATABASE'])
+async def test_clone_target_case_matches_native_mode(server, mode, kind, owner, object_type):
+    # Global changes are safe only on an isolated server. New physical connections
+    # inherit the new value; existing pooled connections do not.
+    if os.environ.get('MO_SDK_DISPOSABLE_SERVER') != '1':
+        pytest.fail('Set MO_SDK_DISPOSABLE_SERVER=1 only for an exclusive disposable server or tenant')
+    admin = pymysql.connect(
+        host=server['host'], port=server['port'], user=server['user'], password=server['password'], autocommit=True
+    )
+    c = None
+    original_mode = None
+    target = 'Case_' + uuid.uuid4().hex[:12]
+    lower = target.lower()
+    fresh = 'fresh_' + uuid.uuid4().hex[:12]
+    source = 'source_' + uuid.uuid4().hex[:12]
+    database = server['database']
+    is_database = object_type == 'DATABASE'
+    try:
+        with admin.cursor() as cursor:
+            cursor.execute('SELECT @@global.lower_case_table_names')
+            original_mode = int(cursor.fetchone()[0])
+            cursor.execute('SET GLOBAL lower_case_table_names = %s', (mode,))
+        c = (AsyncClient if kind == 'async' else Client)(sql_log_mode='off')
+        await resolve(c.connect(**server))
+        assert int((await resolve(c.execute('SELECT @@lower_case_table_names'))).scalar()) == mode
+        await resolve(c.execute('CREATE TABLE ' + source + '(id INT)'))
+        await resolve(c.execute('INSERT INTO ' + source + ' VALUES(42)'))
+        if is_database:
+            await resolve(c.execute('CREATE DATABASE ' + lower))
+            await resolve(c.execute('CREATE TABLE ' + lower + '.contents(id INT)'))
+            await resolve(c.execute('INSERT INTO ' + lower + '.contents VALUES(99)'))
+            target_arg, source_arg = target, database
+        else:
+            await resolve(c.execute('CREATE TABLE ' + lower + '(id INT)'))
+            await resolve(c.execute('INSERT INTO ' + lower + ' VALUES(99)'))
+            prefix = database + '.' if object_type == 'QUALIFIED_TABLE' else ''
+            target_arg, source_arg = prefix + target, prefix + source
+
+        async def check(executor):
+            assert int((await resolve(executor.execute('SELECT @@lower_case_table_names'))).scalar()) == mode
+            method = executor.clone.clone_database if is_database else executor.clone.clone_table
+            if mode == 0:
+                # Released servers execute CLONE using a lowercasing background
+                # executor even in mode 0. Surface that native conflict rather
+                # than reporting a successful no-op for the absent exact name.
+                exact = target if is_database else target_arg
+                try:
+                    await resolve(method(target_arg, source_arg, if_not_exists=True))
+                except CloneError as error:
+                    assert 'already exists' in str(error).lower() or 'acknowledged' in str(error).lower()
+                    with pytest.raises(QueryError):
+                        await resolve(
+                            executor.execute('SHOW CREATE ' + ('DATABASE ' if is_database else 'TABLE ') + exact)
+                        )
+                    if is_database:
+                        await resolve(executor.execute('CREATE DATABASE ' + target))
+                    else:
+                        await resolve(executor.execute('CREATE TABLE ' + exact + '(id INT)'))
+                else:
+                    location = target + '.' + source if is_database else exact
+                    assert [
+                        tuple(row) for row in rows(await resolve(executor.execute('SELECT id FROM ' + location)))
+                    ] == [(42,)]
+                await resolve(method(target_arg, 'missing_source', if_not_exists=True))
+                fresh_arg = database + '.' + fresh if object_type == 'QUALIFIED_TABLE' else fresh
+                await resolve(method(fresh_arg, source_arg, if_not_exists=True))
+                fresh_location = fresh + '.' + source if is_database else fresh_arg
+                assert [
+                    tuple(row) for row in rows(await resolve(executor.execute('SELECT id FROM ' + fresh_location)))
+                ] == [(42,)]
+            else:
+                await resolve(method(target_arg, 'missing_source', if_not_exists=True))
+                if mode == 1:
+                    mixed_fresh = 'F' + fresh[1:]
+                    fresh_arg = database + '.' + mixed_fresh if object_type == 'QUALIFIED_TABLE' else mixed_fresh
+                    await resolve(method(fresh_arg, source_arg, if_not_exists=True))
+                    fresh_location = mixed_fresh + '.' + source if is_database else fresh_arg
+                    assert [
+                        tuple(row) for row in rows(await resolve(executor.execute('SELECT id FROM ' + fresh_location)))
+                    ] == [(42,)]
+            location = lower + '.contents' if is_database else lower
+            assert [tuple(row) for row in rows(await resolve(executor.execute('SELECT id FROM ' + location)))] == [
+                (99,)
+            ]
+            if mode == 0 and object_type == 'QUALIFIED_TABLE':
+                # The differently-cased schema must not alias this database.
+                with pytest.raises(CloneError):
+                    await resolve(method(database.upper() + '.' + lower, database + '.' + source, if_not_exists=True))
+
+        if owner == 'client':
+            await check(c)
+        elif kind == 'sync':
+            with c.session() as session:
+                await check(session)
+        else:
+            async with c.session() as session:
+                await check(session)
+    finally:
+        try:
+            if c is not None:
+                try:
+                    if is_database:
+                        await resolve(c.execute('DROP DATABASE IF EXISTS ' + target))
+                        await resolve(c.execute('DROP DATABASE IF EXISTS ' + lower))
+                        await resolve(c.execute('DROP DATABASE IF EXISTS ' + fresh))
+                    else:
+                        await resolve(c.execute('DROP TABLE IF EXISTS ' + target))
+                        await resolve(c.execute('DROP TABLE IF EXISTS ' + lower))
+                        await resolve(c.execute('DROP TABLE IF EXISTS ' + fresh))
+                    await resolve(c.execute('DROP TABLE IF EXISTS ' + source))
+                finally:
+                    await resolve(c.disconnect())
+        finally:
+            try:
+                if original_mode is not None:
+                    with admin.cursor() as cursor:
+                        cursor.execute('SET GLOBAL lower_case_table_names = %s', (original_mode,))
+            finally:
+                admin.close()
 
 
 @pytest.mark.asyncio

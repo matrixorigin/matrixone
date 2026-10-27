@@ -60,9 +60,17 @@ Native CLONE IF NOT EXISTS can append data to an existing target in supported
 releases. Safe manager if_not_exists therefore observes the target using bounded,
 read-only information_schema queries on the same executor. Existing targets
 return immediately. Missing targets use plain CLONE and verification. Names
-are decoded and normalized by server LOWER to match native catalog behavior.
+are decoded and compared as binary catalog values, preserving exact spelling
+when `lower_case_table_names=0` and using server LOWER for the other modes.
 The operation introduces one query for an existing target, or three for a missing
 target. Ordinary CLONE uses two queries.
+
+In tested 4.1 and 4.2 releases, the server's internal CLONE executor can still
+lowercase a new target in mode 0. A conflicting lowercase sibling can therefore
+cause a native error; the SDK propagates the error instead of reporting a no-op
+for an absent exact target. In mode 2, native CLONE can create a lowercase name
+while SHOW CREATE uses the requested spelling, causing verification to fail even
+after creation. The SDK reports that failure rather than claiming success.
 
 This observation is not a race-free creation lock. A concurrent creator can win;
 any native failure propagates, while an acknowledgement still requires target
