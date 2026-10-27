@@ -524,22 +524,7 @@ func (a *MinioSDK) Delete(
 	err error,
 ) {
 
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	if len(keys) == 0 {
-		return nil
-	}
-	if len(keys) == 1 {
-		return a.deleteSingle(ctx, keys[0])
-	}
-
-	if _, err := a.deleteObjects(ctx, keys...); err != nil {
-		return err
-	}
-
-	return nil
+	return deleteObjectKeys(ctx, keys, 0, a.deleteSingle, a.deleteObjects)
 }
 
 func (a *MinioSDK) deleteSingle(ctx context.Context, key string) error {

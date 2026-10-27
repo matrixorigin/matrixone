@@ -396,28 +396,7 @@ func (a *AliyunSDK) Delete(
 	err error,
 ) {
 
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	if len(keys) == 0 {
-		return nil
-	}
-	if len(keys) == 1 {
-		return a.deleteSingle(ctx, keys[0])
-	}
-
-	for i := 0; i < len(keys); i += 1000 {
-		end := i + 1000
-		if end > len(keys) {
-			end = len(keys)
-		}
-		if _, err := a.deleteObjects(ctx, keys[i:end]...); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return deleteObjectKeys(ctx, keys, 1000, a.deleteSingle, a.deleteObjects)
 }
 
 func (a *AliyunSDK) deleteSingle(ctx context.Context, key string) error {

@@ -57,6 +57,46 @@ func TestObjectExistsCancellationAndErrors(t *testing.T) {
 	require.False(t, exists)
 }
 
+func TestDeleteObjectKeysBatchingAndCancellation(t *testing.T) {
+	keys := make([]string, 2001)
+	var batches []int
+	var singles []string
+	failure := errors.New("delete failed")
+	deleteSingle := func(_ context.Context, key string) error {
+		singles = append(singles, key)
+		return failure
+	}
+	deleteBatch := func(_ context.Context, keys ...string) (bool, error) {
+		batches = append(batches, len(keys))
+		if len(batches) == 2 {
+			return false, failure
+		}
+		return true, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, deleteObjectKeys(ctx, nil, 1000, deleteSingle, deleteBatch), context.Canceled)
+	require.Empty(t, singles)
+	require.Empty(t, batches)
+	require.NoError(t, deleteObjectKeys(context.Background(), nil, 1000, deleteSingle, deleteBatch))
+	require.ErrorIs(t, deleteObjectKeys(context.Background(), []string{"one"}, 1000, deleteSingle, deleteBatch), failure)
+	require.Equal(t, []string{"one"}, singles)
+	require.ErrorIs(t, deleteObjectKeys(context.Background(), keys, 1000, deleteSingle, deleteBatch), failure)
+	require.Equal(t, []int{1000, 1000}, batches, "stop before the third batch")
+
+	batches = nil
+	require.NoError(t, deleteObjectKeys(context.Background(), keys, 1000, deleteSingle,
+		func(_ context.Context, keys ...string) (bool, error) {
+			batches = append(batches, len(keys))
+			return true, nil
+		}))
+	require.Equal(t, []int{1000, 1000, 1}, batches)
+
+	batches = nil
+	require.NoError(t, deleteObjectKeys(context.Background(), keys, 0, deleteSingle, deleteBatch))
+	require.Equal(t, []int{2001}, batches, "delegate unlimited batches to the provider")
+}
+
 // testOrdinaryObjectReadRanges checks the shared behavior against each provider's HTTP fixture.
 func testOrdinaryObjectReadRanges(t *testing.T, storage ObjectStorage) {
 	t.Helper()

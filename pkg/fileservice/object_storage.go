@@ -49,6 +49,34 @@ func objectExists[T any](
 	return true, nil
 }
 
+// deleteObjectKeys preserves single-object and provider-specific batch paths.
+// A zero batch limit leaves batching to the provider.
+func deleteObjectKeys[T any](
+	ctx context.Context, keys []string, batchLimit int,
+	deleteSingle func(context.Context, string) error,
+	deleteBatch func(context.Context, ...string) (T, error),
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	if len(keys) == 1 {
+		return deleteSingle(ctx, keys[0])
+	}
+	if batchLimit <= 0 {
+		batchLimit = len(keys)
+	}
+	for start := 0; start < len(keys); start += batchLimit {
+		end := min(start+batchLimit, len(keys))
+		if _, err := deleteBatch(ctx, keys[start:end]...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 const smallObjectThreshold = 64 * (1 << 20)
 const (
 	// defaultParallelMultipartPartSize defines the default per-part size for parallel multipart uploads.
