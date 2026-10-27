@@ -13113,7 +13113,6 @@ func TestDateAddWithNullInterval(t *testing.T) {
 		name         string
 		dateStr      string
 		intervalType types.IntervalType
-		funcName     string
 		testFunc     func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
 		resultType   types.T
 	}{
@@ -13121,7 +13120,6 @@ func TestDateAddWithNullInterval(t *testing.T) {
 			name:         "DateStringAdd with NULL SECOND",
 			dateStr:      "1997-12-31 23:59:59",
 			intervalType: types.Second,
-			funcName:     "DateStringAdd",
 			testFunc:     DateStringAdd,
 			resultType:   types.T_varchar,
 		},
@@ -13129,7 +13127,6 @@ func TestDateAddWithNullInterval(t *testing.T) {
 			name:         "DateStringAdd with NULL MINUTE_SECOND",
 			dateStr:      "1997-12-31 23:59:59",
 			intervalType: types.Minute_Second,
-			funcName:     "DateStringAdd",
 			testFunc:     DateStringAdd,
 			resultType:   types.T_varchar,
 		},
@@ -13137,7 +13134,6 @@ func TestDateAddWithNullInterval(t *testing.T) {
 			name:         "DatetimeAdd with NULL SECOND",
 			dateStr:      "1997-12-31 23:59:59",
 			intervalType: types.Second,
-			funcName:     "DatetimeAdd",
 			testFunc:     DatetimeAdd,
 			resultType:   types.T_datetime,
 		},
@@ -13145,11 +13141,8 @@ func TestDateAddWithNullInterval(t *testing.T) {
 			name:         "DateAdd with NULL SECOND",
 			dateStr:      "1997-12-31",
 			intervalType: types.Second,
-			funcName:     "DateAdd",
-			testFunc: func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-				return DateAdd(ivecs, result, proc, length, selectList)
-			},
-			resultType: types.T_date,
+			testFunc:     DateAdd,
+			resultType:   types.T_date,
 		},
 	}
 
@@ -13163,10 +13156,12 @@ func TestDateAddWithNullInterval(t *testing.T) {
 			if tc.resultType == types.T_varchar {
 				ivecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.dateStr), 1, proc.Mp())
 			} else if tc.resultType == types.T_datetime {
-				dt, _ := types.ParseDatetime(tc.dateStr, 6)
+				dt, parseErr := types.ParseDatetime(tc.dateStr, 6)
+				require.NoError(t, parseErr)
 				ivecs[0], err = vector.NewConstFixed(types.T_datetime.ToType(), dt, 1, proc.Mp())
 			} else {
-				d, _ := types.ParseDateCast(tc.dateStr)
+				d, parseErr := types.ParseDateCast(tc.dateStr)
+				require.NoError(t, parseErr)
 				ivecs[0], err = vector.NewConstFixed(types.T_date.ToType(), d, 1, proc.Mp())
 			}
 			require.NoError(t, err)
