@@ -286,7 +286,8 @@ func (u *hnswCreateState) addAll(proc *process.Process) (err error) {
 		sqlquote.QualifiedIdent(u.tblcfg.DbName, u.tblcfg.SrcTable), sqlquote.Ident(u.tblcfg.KeyPart))
 
 	streamCh := make(chan executor.Result, 2)
-	errCh := make(chan error, 1)
+	// A failed SELECT is sent on errCh by the executor and again by the goroutine below.
+	errCh := make(chan error, 2)
 	ctx, cancel := context.WithCancelCause(proc.Ctx)
 	defer cancel(nil)
 

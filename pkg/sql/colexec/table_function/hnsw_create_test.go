@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -44,6 +45,11 @@ type hnswSource struct {
 	rows [][]float64
 	// streamErr fails the streamed SELECT after its rows.
 	streamErr error
+	// untilCanceled streams the rows until the SELECT is canceled, then fails it as the SQL
+	// executor does: the error is sent on the error channel and also returned.
+	untilCanceled bool
+	// cancelCaller cancels the caller's context after the first rows are streamed.
+	cancelCaller bool
 }
 
 type hnswCreateRun struct {
@@ -134,10 +140,27 @@ func runHnswCreate(t *testing.T, params, cfg string, src hnswSource) (*hnswCreat
 	oldSql, oldStream := hnsw_runSql, hnsw_runStreamingSql
 	t.Cleanup(func() { hnsw_runSql, hnsw_runStreamingSql = oldSql, oldStream })
 	hnsw_runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) { return query(sql) }
-	hnsw_runStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, ch chan executor.Result, _ chan error) (executor.Result, error) {
+	callerCtx, cancelCaller := context.WithCancel(run.proc.Ctx)
+	t.Cleanup(cancelCaller)
+	run.proc.Ctx = callerCtx
+	hnsw_runStreamingSql = func(ctx context.Context, _ *sqlexec.SqlProcess, sql string, ch chan executor.Result, errCh chan error) (executor.Result, error) {
 		run.sqls = append(run.sqls, sql)
-		ch <- executor.Result{Mp: mp, Batches: []*batch.Batch{src.batch(t, mp)}}
-		return executor.Result{}, src.streamErr
+		if !src.untilCanceled {
+			ch <- executor.Result{Mp: mp, Batches: []*batch.Batch{src.batch(t, mp)}}
+			return executor.Result{}, src.streamErr
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				err := context.Cause(ctx)
+				errCh <- err
+				return executor.Result{}, err
+			case ch <- executor.Result{Mp: mp, Batches: []*batch.Batch{src.batch(t, mp)}}:
+				if src.cancelCaller {
+					cancelCaller()
+				}
+			}
+		}
 	}
 
 	require.NoError(t, run.tf.Prepare(run.proc))
@@ -263,6 +286,35 @@ func TestHnswCreateStreamError(t *testing.T) {
 	src := hnswSource{typ: types.T_array_float32, dim: 3, rows: hnswRows(4, 3), streamErr: moerr.NewInternalErrorNoCtx("scan failed")}
 	_, err := runHnswCreate(t, hnswL2, hnswCfg(src, false), src)
 	require.ErrorContains(t, err, "scan failed")
+}
+
+// A build error or a canceled caller ends a live stream: hnsw_create returns the error
+// instead of blocking on the executor, which reports a failed SELECT both on the error
+// channel and as its result.
+func TestHnswCreateStreamStopsOnError(t *testing.T) {
+	overflow := hnswSource{typ: types.T_array_float32, dim: 3, rows: [][]float64{{1, 2, 3}, {100000, 1, 1}}, untilCanceled: true}
+	canceled := hnswSource{typ: types.T_array_float32, dim: 3, rows: hnswRows(4, 3), untilCanceled: true, cancelCaller: true}
+	for _, tc := range []struct {
+		name, params string
+		src          hnswSource
+	}{
+		{"build error", `{"op_type": "vector_l2_ops", "quantization": "float16"}`, overflow},
+		{"caller canceled", hnswL2, canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			done := make(chan error, 1)
+			go func() {
+				_, err := runHnswCreate(t, tc.params, hnswCfg(tc.src, false), tc.src)
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				require.Error(t, err)
+			case <-time.After(30 * time.Second):
+				t.Fatal("hnsw_create blocked after the stream failed")
+			}
+		})
+	}
 }
 
 func TestHnswCreateBadInput(t *testing.T) {
