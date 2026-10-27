@@ -954,13 +954,13 @@ func (c ParquetConcatRewriteDataFilesCompactor) readPositionDeletePositions(ctx 
 			"file": api.RedactPath(deletePath),
 		}, err)
 	}
-	filePathCol, ok := rewriteDataFilesColumnIndexByName(file, "file_path", "file")
+	filePathCol, ok := metadata.ParquetColumnIndexByName(file, "file_path", "file")
 	if !ok {
 		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg position delete file is missing file_path column", map[string]string{
 			"delete_file": api.RedactPath(deletePath),
 		})
 	}
-	posCol, ok := rewriteDataFilesColumnIndexByName(file, "pos", "position", "row_position")
+	posCol, ok := metadata.ParquetColumnIndexByName(file, "pos", "position", "row_position")
 	if !ok {
 		return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg position delete file is missing pos column", map[string]string{
 			"delete_file": api.RedactPath(deletePath),
@@ -1197,22 +1197,6 @@ func rewriteDataFilesColumnIndexByFieldID(file *parquet.File) (map[int]int, erro
 		out[fieldID] = leaf.ColumnIndex
 	}
 	return out, nil
-}
-
-func rewriteDataFilesColumnIndexByName(file *parquet.File, names ...string) (int, bool) {
-	if file == nil || file.Root() == nil {
-		return 0, false
-	}
-	wanted := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		wanted[strings.ToLower(strings.TrimSpace(name))] = struct{}{}
-	}
-	for _, col := range file.Root().Columns() {
-		if _, ok := wanted[strings.ToLower(strings.TrimSpace(col.Name()))]; ok {
-			return int(col.Index()), true
-		}
-	}
-	return 0, false
 }
 
 func rewriteDataFilesRowDeleted(row parquet.Row, columnByID map[int]int, filters []rewriteDataFilesEqualityDeleteFilter) (bool, error) {
