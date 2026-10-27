@@ -600,7 +600,7 @@ func TestRequiredRemoteExpressionFeaturesBoundedConditionalStringDomains(t *test
 		"the existing character overload remains wire-compatible")
 }
 
-func TestRequiresMORPCVersion133JSONValueContract(t *testing.T) {
+func TestRequiresMORPCVersion135JSONValueContract(t *testing.T) {
 	text := func(value string) *Expr {
 		return &Expr{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: value}}}}
 	}
@@ -619,11 +619,11 @@ func TestRequiresMORPCVersion133JSONValueContract(t *testing.T) {
 		Args: []*Expr{text(`{"a":1}`), text("$.a")},
 	}}}
 
-	required, err := RequiresMORPCVersion133JSONValueContract(jsonValueContract)
+	required, err := RequiresMORPCVersion135JSONValueContract(jsonValueContract)
 	require.NoError(t, err)
 	require.True(t, required)
 
-	required, err = RequiresMORPCVersion133JSONValueContract(legacy)
+	required, err = RequiresMORPCVersion135JSONValueContract(legacy)
 	require.NoError(t, err)
 	require.False(t, required)
 
@@ -653,7 +653,7 @@ func TestRequiresMORPCVersion133JSONValueContract(t *testing.T) {
 			decoded := &Plan{}
 			require.NoError(t, decoded.Unmarshal(encoded))
 			for _, value := range []any{scan, node, query, owner, decoded} {
-				required, err := RequiresMORPCVersion133JSONValueContract(value)
+				required, err := RequiresMORPCVersion135JSONValueContract(value)
 				require.NoError(t, err)
 				require.Equal(t, tc.want, required)
 				features, err := RequiredRemoteExpressionFeatures(value)
@@ -1173,6 +1173,24 @@ func TestRequiredRemoteExpressionFeaturesMediumIntAssignmentBounds(t *testing.T)
 			require.Equal(t, tc.want, features.Any())
 		})
 	}
+}
+
+func TestRequiredRemoteExpressionFeaturesODKUOwnerMetadata(t *testing.T) {
+	for _, owner := range []any{
+		&Query{Nodes: []*Node{{PreInsertCtx: &PreInsertCtx{TrackOdkuResult: true}}}},
+		&Plan{Plan: &Plan_Query{Query: &Query{Nodes: []*Node{{DedupJoinCtx: &DedupJoinCtx{
+			OdkuOrdinalCol: &ColRef{}, OdkuGeneratedCol: &ColRef{},
+		}}}}}},
+	} {
+		features, err := RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		require.True(t, features.ODKUStatementResult)
+		require.True(t, features.Any())
+		require.False(t, features.SessionLastInsertIDBaseline, "tracking metadata needs a floor without any LAST_INSERT_ID expression")
+	}
+	features, err := RequiredRemoteExpressionFeatures(&PreInsertCtx{})
+	require.NoError(t, err)
+	require.False(t, features.ODKUStatementResult)
 }
 
 func TestDateNumericResultFeaturesRoundTrip(t *testing.T) {

@@ -134,7 +134,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		Host:         "",
 		Role:         "",
 		ConnectionID: 0,
-		LastInsertID: 0,
+		LastInsertID: 500,
 		Database:     "",
 		Version:      "",
 		// Pin to UTC: time.Time{}.In(time.Local).MarshalBinary() can fail
@@ -150,12 +150,13 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		SeqLastValue:   nil,
 		SqlHelper:      nil,
 	}
+	proc.SetLastInsertID(500)
 
 	remoteExecutionID := uuid.New()
 	data, err := encodeProcessInfo(proc, "", map[string]uint32{
 		"cn-a:6001": 2,
 		"cn-b:6001": 1,
-	}, remoteExecutionID)
+	}, remoteExecutionID, 1<<32)
 	require.Nil(t, err)
 	restored := new(pipeline.ProcessInfo)
 	require.NoError(t, restored.Unmarshal(data))
@@ -166,6 +167,8 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	restoredExecutionID, err := uuid.FromBytes(restored.RemoteExecutionId)
 	require.NoError(t, err)
 	require.Equal(t, remoteExecutionID, restoredExecutionID)
+	require.Equal(t, uint64(1<<32), restored.OdkuOrdinalBase)
+	require.Equal(t, uint64(500), restored.SessionInfo.LastInsertId)
 }
 
 func TestGenerateProcessHelperRejectsIncompleteRemoteLifecycleMetadata(t *testing.T) {
@@ -1106,6 +1109,83 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline))
 }
 
+func TestRemoteODKUResultTrackingProtocolValidation(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	pre := &preinsert.PreInsert{
+		HasAutoCol:                   true,
+		TrackAutoIncrementGenerated:  true,
+		AutoIncrementGeneratedColumn: 0,
+		TrackODKUResult:              true,
+		ODKUOrdinalColumn:            1,
+		ODKUAutoIncrementColumn:      0,
+	}
+	pipelinePre := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.PreInsert),
+			PreInsert: &pipeline.PreInsert{
+				HasAutoCol:                  true,
+				TrackAutoIncrementGenerated: true,
+				TrackOdkuResult:             true,
+				OdkuOrdinalColumn:           1,
+				OdkuAutoIncrementColumn:     0,
+			},
+		}},
+	}}}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
+	_, _, err := convertToPipelineInstruction(pre, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 134")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, pipelinePre),
+		"requires MORPC protocol version 134")
+	dedup := &dedupjoin.DedupJoin{
+		ODKUResultTracking: true,
+		Conditions:         [][]*planpb.Expr{{}, {}},
+	}
+	dedupPipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op:        int32(vm.DedupJoin),
+			DedupJoin: &pipeline.DedupJoin{OdkuResultTracking: true},
+		}},
+	}}}
+	_, _, err = convertToPipelineInstruction(dedup, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 134")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline),
+		"requires MORPC protocol version 134")
+
+	// Presence is independently checked on the receiver, including zero.
+	require.ErrorContains(t, validateRemoteODKUBaselinePresence(proc, pipelinePre), "baseline")
+	proc.Base.SessionInfo.LastInsertIDSet = true
+	proc.Base.SessionInfo.LastInsertID = 0
+	require.NoError(t, validateRemoteODKUBaselinePresence(proc, pipelinePre))
+	require.NoError(t, validateRemoteODKUBaselinePresence(proc, dedupPipeline))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
+	_, instruction, err := convertToPipelineInstruction(pre, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.PreInsert.TrackOdkuResult)
+	require.Equal(t, int32(0), instruction.PreInsert.OdkuAutoIncrementColumn)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, pipelinePre))
+	_, instruction, err = convertToPipelineInstruction(dedup, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.DedupJoin.OdkuResultTracking)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline))
+}
+
 func TestChangedRowsUpdateRemoteProtocolValidation(t *testing.T) {
 	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
 	proc := testutil.NewProcess(t)
@@ -1714,9 +1794,9 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		{
 			name:                "JSON_VALUE seven-argument plan",
 			expressions:         []*planpb.Expr{jsonValueContract()},
-			incompatibleVersion: defines.MORPCVersion132,
-			compatibleVersion:   defines.MORPCVersion133,
-			errorContains:       "seven-argument JSON_VALUE plans require MORPC protocol version 133",
+			incompatibleVersion: defines.MORPCVersion134,
+			compatibleVersion:   defines.MORPCVersion135,
+			errorContains:       "seven-argument JSON_VALUE plans require MORPC protocol version 135",
 		},
 		{
 			name: "signed WEEK without JSON_VALUE",
@@ -1734,9 +1814,9 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 				Func: &planpb.ObjectRef{Obj: planfunction.EncodeOverloadID(planfunction.WEEK, 2), ObjName: "week"},
 				Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_date)}}, {Typ: planpb.Type{Id: int32(types.T_int64)}}},
 			}}}},
-			incompatibleVersion: defines.MORPCVersion132,
-			compatibleVersion:   defines.MORPCVersion133,
-			errorContains:       "seven-argument JSON_VALUE plans require MORPC protocol version 133",
+			incompatibleVersion: defines.MORPCVersion134,
+			compatibleVersion:   defines.MORPCVersion135,
+			errorContains:       "seven-argument JSON_VALUE plans require MORPC protocol version 135",
 		},
 		{
 			name:                "numeric prefix and JSON comparison",

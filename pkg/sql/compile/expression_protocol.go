@@ -159,6 +159,12 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	if features.JSONValueContract {
+		return defines.MORPCVersion135
+	}
+	if features.ODKUStatementResult || features.SessionLastInsertIDBaseline {
+		return defines.MORPCVersion134
+	}
+	if features.JSONMinMaxTypedComparison {
 		return defines.MORPCVersion133
 	}
 	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
