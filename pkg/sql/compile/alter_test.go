@@ -1716,6 +1716,75 @@ func TestAlterCopyAutoIncrementCleanupDiscardsTrackedReset(t *testing.T) {
 	require.ErrorIs(t, statementErr, cleanupErr)
 }
 
+func TestAlterCopyRetiredResetCleanup(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	c := newAlterCopyPrecheckCompile(t, ctrl, &alterCopyInsertSpyExecutor{})
+	svc := mock_frontend.NewMockAutoIncrementService(ctrl)
+	failure := errors.New("discard failed")
+	gomock.InOrder(
+		svc.EXPECT().DiscardOffsetReset(c.proc.Ctx, uint64(11), c.proc.GetTxnOperator()).Return(failure),
+		svc.EXPECT().DiscardOffsetReset(c.proc.Ctx, uint64(11), c.proc.GetTxnOperator()).Return(nil),
+		svc.EXPECT().DiscardOffsetReset(gomock.Any(), uint64(12), c.proc.GetTxnOperator()).Return(nil),
+	)
+	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), svc)
+	cleanup := newAlterAutoIncrementResetCleanup(c)
+	cleanup.track(11)
+	require.ErrorIs(t, cleanup.discard(11), failure)
+	require.Equal(t, []uint64{11}, cleanup.tableIDs, "failed retirement keeps its cleanup owner")
+	require.NoError(t, cleanup.discard(11))
+	require.NoError(t, cleanup.discard(11), "retirement is idempotent")
+	cleanup.track(12)
+	err := errors.New("replacement failed")
+	cleanup.finish(&err)
+	require.ErrorContains(t, err, "replacement failed")
+}
+
+type alterCopyHistoryWorkspace struct {
+	*Ws
+	offset uint64
+}
+
+func (w alterCopyHistoryWorkspace) WriteOffset() uint64 { return w.offset }
+
+func TestAlterCopyBorrowedWorkspaceHistory(t *testing.T) {
+	for _, offset := range []uint64{0, 1} {
+		t.Run(fmt.Sprint(offset), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			op.EXPECT().TxnOptions().Return(txn.TxnOptions{Autocommit: true})
+			op.EXPECT().GetWorkspace().Return(alterCopyHistoryWorkspace{Ws: &Ws{}, offset: offset})
+			require.Equal(t, offset != 0, alterCopyHasWorkspaceHistory(op, false),
+				"a borrowed autocommit-marked operator must retain caller-local writes")
+		})
+	}
+}
+
+func TestAlterCopyReplicaOwnershipFailsBeforeDrop(t *testing.T) {
+	for _, child := range []bool{false, true} {
+		t.Run(fmt.Sprint("public_child_", child), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			spy := &alterCopyInsertSpyExecutor{}
+			c := newAlterCopyPrecheckCompile(t, ctrl, spy)
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			op.EXPECT().GetWorkspace().Return(creationViewWorkspace{created: map[uint64]bool{2: child}})
+			c.proc.Base.TxnOperator = op
+			db := mock_frontend.NewMockDatabase(ctrl)
+			rel := mock_frontend.NewMockRelation(ctrl)
+			rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(2)).AnyTimes()
+			db.EXPECT().Relation(gomock.Any(), "replica", nil).Return(rel, nil)
+			if child {
+				rel.EXPECT().GetTableDef(gomock.Any()).Return(&plan.TableDef{Indexes: []*plan.IndexDef{{TableExist: true, IndexTableName: "idx"}}})
+				index := mock_frontend.NewMockRelation(ctrl)
+				index.EXPECT().GetTableID(gomock.Any()).Return(uint64(3))
+				db.EXPECT().Relation(gomock.Any(), "idx", nil).Return(index, nil)
+			}
+			err := c.retireAlterCopyReplica(db, "test", "replica", rel, 1, newAlterAutoIncrementResetCleanup(c))
+			require.ErrorContains(t, err, "not owned by this preparation")
+			require.Empty(t, spy.executedSQLs, "no private DROP before ownership is proven")
+		})
+	}
+}
+
 type partitionAlterTestExecutor struct {
 	executedSQLs []string
 	failAt       int
