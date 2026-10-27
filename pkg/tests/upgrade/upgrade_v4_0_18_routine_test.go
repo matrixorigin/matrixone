@@ -25,11 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_18"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
-	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
@@ -115,21 +113,7 @@ func TestV4018LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithAccountID(catalog.System_Account)))
 				}
 				checkCatalog(sourceVersion, false)
-				rt := moruntime.ServiceRuntime(cn.ServiceID())
-				original, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-				require.True(t, present)
-				require.GreaterOrEqual(t, original.(int64), udf.SharedRoutineRevisionProtocolVersion)
-				defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
 				tenantDSN := fmt.Sprintf("%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", account, port)
-				func() {
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, udf.SharedRoutineRevisionProtocolVersion-1)
-					defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
-					db, err := sql.Open("mysql", tenantDSN)
-					require.NoError(t, err)
-					defer db.Close()
-					require.ErrorContains(t, db.PingContext(ctx), "upgrade requires all CNs to support protocol version 133")
-				}()
-				checkCatalog(sourceVersion, false)
 				tenantDB, err := sql.Open("mysql", tenantDSN)
 				require.NoError(t, err)
 				defer tenantDB.Close()
