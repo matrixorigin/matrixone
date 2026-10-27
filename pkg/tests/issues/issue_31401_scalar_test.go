@@ -72,7 +72,7 @@ func TestIssue31401ScalarRefreshProgress(t *testing.T) {
 				} else if mode == "broad_index" {
 					definition = "id int,v int,key idx_v(v)"
 				} else if mode == "defaults" {
-					definition += ",body varchar(12) default 'needle',created timestamp default current_timestamp,changed timestamp default current_timestamp on update current_timestamp"
+					definition = "id int not null,v int not null,body varchar(12) not null default 'needle',created timestamp not null default current_timestamp,changed timestamp default current_timestamp on update current_timestamp"
 				}
 				tableOptions := ""
 				if mode == "allocator" {

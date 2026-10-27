@@ -65,14 +65,35 @@ func sameAlterCopyColumn(a, b *plan.ColDef) bool {
 		return false
 	}
 	x, y := *a, *b
+	normalizeExpr := func(expr *plan.Expr) *plan.Expr {
+		copy := proto.Clone(expr).(*plan.Expr)
+		// Type.Table is catalog lineage, including on bound column arguments;
+		// rebinding CREATE can omit it without changing expression semantics.
+		_ = plan.VisitExprTree(copy, func(node *plan.Expr) error {
+			node.Typ.Table = ""
+			return nil
+		})
+		return copy
+	}
 	for _, col := range []*plan.ColDef{&x, &y} {
 		col.ColId, col.Seqnum, col.Pkidx, col.Alg = 0, 0, 0, 0
 		col.TblName, col.OriginTblName, col.DbName = "", "", ""
 		col.Typ.Table = ""
-		// CREATE carries this in ColDef.NotNull; stored definitions carry it
-		// in Type.NotNullable. Primary keys are nonnullable in both forms.
-		col.Typ.NotNullable = col.Typ.NotNullable || col.NotNull || col.Primary
+		// CREATE carries nullability in Default.NullAbility; stored definitions
+		// also carry it in Type.NotNullable. Keep the full default comparison.
+		col.Typ.NotNullable = col.Typ.NotNullable || col.NotNull || col.Primary ||
+			col.Default != nil && !col.Default.NullAbility
 		col.NotNull = false
+		if d := col.Default; d != nil && d.Expr != nil {
+			canonical := *d
+			canonical.Expr = normalizeExpr(d.Expr)
+			col.Default = &canonical
+		}
+		if u := col.OnUpdate; u != nil && u.Expr != nil {
+			canonical := *u
+			canonical.Expr = normalizeExpr(u.Expr)
+			col.OnUpdate = &canonical
+		}
 		if d := col.Default; d != nil && (d.Expr == nil && d.OriginString == "" ||
 			strings.EqualFold(strings.TrimSpace(d.OriginString), "null") &&
 				(d.Expr == nil || d.Expr.GetLit() != nil && d.Expr.GetLit().Isnull)) {

@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -182,5 +183,85 @@ func TestScalarAlterCopyImplicitNullDefaultNormalization(t *testing.T) {
 	require.False(t, sameAlterCopyColumn(a, b), "the string 'null' is not an implicit NULL default")
 	b = plan2.DeepCopyColDef(a)
 	b.Default.NullAbility = false
+	require.False(t, sameAlterCopyColumn(a, b))
+}
+
+func TestScalarAlterCopyColumnNullabilityRepresentations(t *testing.T) {
+	for _, withDefault := range []bool{false, true} {
+		create := &plan.ColDef{Name: "a", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{NullAbility: false}}
+		if withDefault {
+			create.Default.OriginString = "7"
+			create.Default.Expr = plan2.MakePlan2Int64ConstExprWithType(7)
+		}
+		stored := plan2.DeepCopyColDef(create)
+		stored.Typ.NotNullable = true
+		beforeCreate, beforeStored := proto.Clone(create), proto.Clone(stored)
+		require.True(t, sameAlterCopyColumn(create, stored), "CREATE carries NOT NULL in Default.NullAbility")
+		require.True(t, sameAlterCopyColumn(stored, create))
+		require.True(t, proto.Equal(beforeCreate, create))
+		require.True(t, proto.Equal(beforeStored, stored))
+
+		changed := plan2.DeepCopyColDef(create)
+		changed.Default.NullAbility = true
+		require.False(t, sameAlterCopyColumn(stored, changed), "nullable and NOT NULL columns differ")
+		changed = plan2.DeepCopyColDef(create)
+		changed.Typ.Id = int32(types.T_int64)
+		require.False(t, sameAlterCopyColumn(stored, changed), "nullability normalization must preserve type checks")
+		changed = plan2.DeepCopyColDef(create)
+		changed.Default.OriginString = "8"
+		require.False(t, sameAlterCopyColumn(stored, changed), "default semantics must still match")
+	}
+}
+
+func TestScalarAlterCopyExpressionOriginHints(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_int32), Width: 32, Table: "source"}
+	a := &plan.ColDef{Name: "b", Typ: typ, Default: &plan.Default{
+		NullAbility: true, OriginString: "(a + c)",
+		Expr: &plan.Expr{Typ: typ, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: 42949672960, ObjName: "+"},
+			Args: []*plan.Expr{
+				{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "a"}}},
+				{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "c", ColPos: 1}}},
+			},
+		}}},
+	}}
+	b := plan2.DeepCopyColDef(a)
+	b.Typ.Table = ""
+	b.Default.Expr.Typ.Table = ""
+	for _, arg := range b.Default.Expr.GetF().Args {
+		arg.Typ.Table = ""
+	}
+	beforeA, beforeB := proto.Clone(a), proto.Clone(b)
+	require.True(t, sameAlterCopyColumn(a, b))
+	require.True(t, sameAlterCopyColumn(b, a))
+	require.True(t, proto.Equal(beforeA, a), "comparison must not strip source expression lineage")
+	require.True(t, proto.Equal(beforeB, b))
+	for name, mutate := range map[string]func(*plan.ColDef){
+		"column_position": func(col *plan.ColDef) { col.Default.Expr.GetF().Args[1].GetCol().ColPos = 0 },
+		"relation":        func(col *plan.ColDef) { col.Default.Expr.GetF().Args[1].GetCol().RelPos = 1 },
+		"function":        func(col *plan.ColDef) { col.Default.Expr.GetF().Func.Obj++ },
+		"argument_type":   func(col *plan.ColDef) { col.Default.Expr.GetF().Args[1].Typ.Width++ },
+		"nullable":        func(col *plan.ColDef) { col.Default.NullAbility = false },
+		"sql":             func(col *plan.ColDef) { col.Default.OriginString = "(a - c)" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := plan2.DeepCopyColDef(b)
+			mutate(changed)
+			require.False(t, sameAlterCopyColumn(a, changed))
+		})
+	}
+
+	a = &plan.ColDef{Name: "updated", Typ: plan.Type{Id: int32(types.T_timestamp)}, OnUpdate: &plan.OnUpdate{
+		OriginString: "current_timestamp", Expr: &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_timestamp), Table: "source"},
+			Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "current_timestamp"}}},
+		},
+	}}
+	b = plan2.DeepCopyColDef(a)
+	b.OnUpdate.Expr.Typ.Table = ""
+	beforeA = proto.Clone(a)
+	require.True(t, sameAlterCopyColumn(a, b))
+	require.True(t, proto.Equal(beforeA, a))
+	b.OnUpdate.Expr.GetF().Func.ObjName = "utc_timestamp"
 	require.False(t, sameAlterCopyColumn(a, b))
 }
