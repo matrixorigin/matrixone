@@ -35,54 +35,6 @@ from datetime import datetime
 _original_modules = {}
 
 
-def setup_sqlalchemy_mocks():
-    """Setup SQLAlchemy mocks for this test class"""
-    _original_modules['pymysql'] = sys.modules.get('pymysql')
-    _original_modules['aiomysql'] = sys.modules.get('aiomysql')
-    _original_modules['sqlalchemy'] = sys.modules.get('sqlalchemy')
-    _original_modules['sqlalchemy.engine'] = sys.modules.get('sqlalchemy.engine')
-    _original_modules['sqlalchemy.orm'] = sys.modules.get('sqlalchemy.orm')
-    _original_modules['sqlalchemy.ext'] = sys.modules.get('sqlalchemy.ext')
-    _original_modules['sqlalchemy.ext.asyncio'] = sys.modules.get('sqlalchemy.ext.asyncio')
-
-    # Mock the external dependencies
-    sys.modules['pymysql'] = Mock()
-    sys.modules['aiomysql'] = Mock()
-
-    # Create a more sophisticated SQLAlchemy mock that supports submodules
-    sqlalchemy_mock = Mock()
-    sqlalchemy_mock.create_engine = Mock()
-    sqlalchemy_mock.text = Mock()
-    sqlalchemy_mock.Column = Mock()
-    sqlalchemy_mock.Integer = Mock()
-    sqlalchemy_mock.String = Mock()
-    sqlalchemy_mock.DateTime = Mock()
-
-    sys.modules['sqlalchemy'] = sqlalchemy_mock
-    sys.modules['sqlalchemy.engine'] = Mock()
-    sys.modules['sqlalchemy.engine'].Engine = Mock()
-    sys.modules['sqlalchemy.orm'] = Mock()
-    sys.modules['sqlalchemy.orm'].sessionmaker = Mock()
-    sys.modules['sqlalchemy.orm'].declarative_base = Mock()
-
-    # Mock SQLAlchemy async engine
-    sys.modules['sqlalchemy.ext'] = Mock()
-    sys.modules['sqlalchemy.ext.asyncio'] = Mock()
-    sys.modules['sqlalchemy.ext.asyncio'].create_async_engine = Mock()
-    sys.modules['sqlalchemy.ext.asyncio'].AsyncEngine = Mock()
-    sys.modules['sqlalchemy.ext.asyncio'].AsyncSession = Mock()
-    sys.modules['sqlalchemy.ext.asyncio'].async_sessionmaker = Mock()
-
-
-def teardown_sqlalchemy_mocks():
-    """Restore original modules"""
-    for module_name, original_module in _original_modules.items():
-        if original_module is not None:
-            sys.modules[module_name] = original_module
-        elif module_name in sys.modules:
-            del sys.modules[module_name]
-
-
 # Add the matrixone package to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
@@ -104,12 +56,12 @@ class TestAsyncResultSet(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def test_async_result_set(self):
         """Test AsyncResultSet basic functionality"""
@@ -135,12 +87,12 @@ class TestAsyncClientBasic(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -211,12 +163,12 @@ class TestAsyncClientConnection(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -262,7 +214,9 @@ class TestAsyncClientConnection(unittest.IsolatedAsyncioTestCase):
         # Mock create_async_engine to return our mock engine
         mock_create_async_engine.return_value = mock_engine
 
-        await self.client.connect(host="localhost", port=6001, user="root", password="111", database="test", on_connect=[])
+        await self.client.connect(
+            host="localhost", port=6001, user="root", password="111", database="test", on_connect=[]
+        )
 
         # Verify create_async_engine was called
         mock_create_async_engine.assert_called_once()
@@ -302,12 +256,12 @@ class TestAsyncClientQuery(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -470,9 +424,6 @@ class TestAsyncClientQuery(unittest.IsolatedAsyncioTestCase):
 
         mock_connection.execute = Mock(side_effect=mock_execute)
 
-        # Mock the text function
-        sys.modules['sqlalchemy'].text = Mock(return_value="SELECT id, name FROM users {SNAPSHOT = 'test_snapshot'}")
-
         # Create mock engine instance
         mock_engine = MockEngine(mock_connection)
 
@@ -480,9 +431,9 @@ class TestAsyncClientQuery(unittest.IsolatedAsyncioTestCase):
 
         result = await self.client.query("users", snapshot="test_snapshot").select("id", "name").execute()
 
-        expected_sql = "SELECT id, name FROM users {SNAPSHOT = 'test_snapshot'}"
+        expected_sql = "SELECT id, name FROM users{snapshot = 'test_snapshot'}"
         # Check that exec_driver_sql or execute was called
-        assert mock_connection.exec_driver_sql.called or mock_connection.execute.called
+        mock_connection.exec_driver_sql.assert_called_once_with(expected_sql)
         self.assertIsInstance(result, AsyncResultSet)
 
 
@@ -492,12 +443,12 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -637,9 +588,7 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
         connection = MockConnection()
         client._engine = MockEngine(connection)
 
-        snapshot = await client.snapshots.create(
-            "review_snap", SnapshotLevel.DATABASE, database="review_db"
-        )
+        snapshot = await client.snapshots.create("review_snap", SnapshotLevel.DATABASE, database="review_db")
 
         self.assertEqual(len(connection.statements), 2)
         self.assertEqual(connection.statements[0], "CREATE SNAPSHOT review_snap FOR DATABASE review_db")
@@ -675,15 +624,10 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
                 self.statements.append(sql)
                 is_select = sql.lstrip().startswith("SELECT")
                 escaped_lookup = self.lookup_name.replace("'", "''")
-                matched = (
-                    is_select
-                    and f"WHERE sname = LOWER('{escaped_lookup}')" in sql
-                )
+                matched = is_select and f"WHERE sname = LOWER('{escaped_lookup}')" in sql
                 rows = []
                 if matched:
-                    rows = [
-                        (self.canonical_name, timestamp_ns, 'cluster', 'sys', None, None)
-                    ]
+                    rows = [(self.canonical_name, timestamp_ns, 'cluster', 'sys', None, None)]
                 return MockResult(rows, returns_rows=is_select)
 
         class MockBeginContext:
@@ -805,12 +749,12 @@ class TestAsyncCloneManager(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -900,12 +844,12 @@ class TestAsyncMoCtlManager(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -968,12 +912,12 @@ class TestAsyncSQLAlchemyIntegration(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""

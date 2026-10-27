@@ -20,58 +20,144 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/stretchr/testify/require"
-	"github.com/tidwall/btree"
 )
 
-func makeIncrementalObject(
-	marker byte,
-	appendable bool,
-	createdAt, deletedAt int64,
-) *catalog.ObjectEntry {
-	var id objectio.ObjectId
-	id[0] = marker
-	entry := &catalog.ObjectEntry{
-		EntryMVCCNode: catalog.EntryMVCCNode{
-			CreatedAt: types.BuildTS(createdAt, 0),
-		},
-		ObjectMVCCNode: catalog.ObjectMVCCNode{
-			ObjectStats: *objectio.NewObjectStatsWithObjectID(&id, appendable, false, false),
-		},
-	}
-	if deletedAt != 0 {
-		entry.DeletedAt = types.BuildTS(deletedAt, 0)
-	}
-	return entry
-}
-
 func TestForeachIncrementalObjectUsesGroupBounds(t *testing.T) {
-	tree := btree.NewBTreeG((*catalog.ObjectEntry).Less)
-	for _, entry := range []*catalog.ObjectEntry{
-		makeIncrementalObject(1, true, 1, 0),
-		makeIncrementalObject(2, true, 3, 0),
-		makeIncrementalObject(3, true, 5, 0),
-		makeIncrementalObject(4, true, 7, 0),
-		makeIncrementalObject(8, false, 3, 0),
-		makeIncrementalObject(9, false, 4, 0),
-		makeIncrementalObject(10, false, 6, 0),
-		makeIncrementalObject(11, false, 7, 0),
-	} {
-		tree.Set(entry)
+	cata := catalog.MockCatalog(nil)
+	db := catalog.MockDBEntryWithAccInfo(0, 1)
+	table := catalog.MockTableEntryWithDB(db, 2)
+	for _, appendable := range []bool{true, false} {
+		for _, createdAt := range []int64{1, 3, 4, 5, 6, 7} {
+			catalog.MockCreatedObjectEntry2ListWithAppendable(
+				table, cata, false, appendable, types.BuildTS(createdAt, 0),
+			)
+		}
 	}
 
-	it := tree.Iter()
-	defer it.Release()
-	var markers []byte
+	snapshot := table.MakeDataObjectSnapshot()
+	var markers []int64
 	err := foreachIncrementalObject(
-		&it,
+		snapshot,
 		types.BuildTS(4, 0),
 		types.BuildTS(6, 0),
 		func(entry *catalog.ObjectEntry) error {
-			markers = append(markers, entry.ID()[0])
+			marker := entry.CreatedAt.Physical()
+			if !entry.IsAppendable() {
+				marker += 100
+			}
+			markers = append(markers, marker)
 			return nil
 		},
 	)
 	require.NoError(t, err)
-	require.Equal(t, []byte{2, 3, 9, 10}, markers)
+	// Every appendable create entry at or before to is visited because an old
+	// appendable object can contain an append prepared in the incremental range.
+	require.Equal(t, []int64{1, 3, 4, 5, 6, 104, 105, 106}, markers)
+}
+
+func TestForeachIncrementalObjectDropStartsAfterFrom(t *testing.T) {
+	cata := catalog.MockCatalog(nil)
+	db := catalog.MockDBEntryWithAccInfo(0, 1)
+	table := catalog.MockTableEntryWithDB(db, 2)
+
+	for _, deletedAt := range []int64{2, 3, 4, 5} {
+		created := catalog.MockCreatedObjectEntry2List(
+			table, cata, false, types.BuildTS(2, 0),
+		)
+		catalog.MockDroppedObjectEntry2List(created, types.BuildTS(deletedAt, 0))
+	}
+
+	snapshot := table.MakeDataObjectSnapshot()
+	var deletedAt []types.TS
+	err := foreachIncrementalObject(
+		snapshot,
+		types.BuildTS(2, 0),
+		types.BuildTS(4, 0),
+		func(entry *catalog.ObjectEntry) error {
+			deletedAt = append(deletedAt, entry.DeletedAt)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	// DeletedAt == from is excluded; DeletedAt < to is no longer visible at to;
+	// the scan continues through the group and keeps entries deleted at/after to.
+	require.Equal(t, []types.TS{types.BuildTS(4, 0), types.BuildTS(5, 0)}, deletedAt)
+}
+
+func TestForeachIncrementalObjectSkipsOldNonAppendableDrop(t *testing.T) {
+	cata := catalog.MockCatalog(nil)
+	db := catalog.MockDBEntryWithAccInfo(0, 1)
+	table := catalog.MockTableEntryWithDB(db, 2)
+	old := catalog.MockCreatedObjectEntry2ListWithAppendable(
+		table, cata, false, false, types.BuildTS(1, 0),
+	)
+	catalog.MockDroppedObjectEntry2List(old, types.BuildTS(6, 0))
+	newer := catalog.MockCreatedObjectEntry2ListWithAppendable(
+		table, cata, false, false, types.BuildTS(4, 0),
+	)
+	catalog.MockDroppedObjectEntry2List(newer, types.BuildTS(6, 0))
+
+	var visited []types.TS
+	err := foreachIncrementalObject(
+		table.MakeDataObjectSnapshot(),
+		types.BuildTS(3, 0),
+		types.BuildTS(5, 0),
+		func(entry *catalog.ObjectEntry) error {
+			visited = append(visited, entry.CreatedAt)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []types.TS{types.BuildTS(4, 0)}, visited)
+}
+
+func TestForeachIncrementalObjectSkipsFinalizedOldAppendableObject(t *testing.T) {
+	factory := tables.NewDataFactory(nil, "")
+	cata := catalog.MockCatalog(factory)
+	defer cata.Close()
+	db, err := cata.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(catalog.MockSchema(1, 0), nil, nil)
+	require.NoError(t, err)
+	createObject := func(createdAt types.TS) *catalog.ObjectEntry {
+		id := objectio.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&id, true, false, false)
+		entry, createErr := table.CreateCommittedObject(
+			createdAt,
+			&objectio.CreateObjOpt{Stats: stats},
+			factory.MakeObjectFactory(),
+		)
+		require.NoError(t, createErr)
+		return entry
+	}
+
+	old := createObject(types.BuildTS(1, 0))
+	old.GetObjectData().(interface{ SealAppend() }).SealAppend()
+
+	equal := createObject(types.BuildTS(2, 0))
+	require.NoError(t, equal.GetObjectData().OnReplayAppend(
+		updates.MockAppendNode(types.BuildTS(4, 0), 0, 1, nil),
+	))
+	equal.GetObjectData().(interface{ SealAppend() }).SealAppend()
+
+	createObject(types.BuildTS(3, 0))
+
+	var visited []int64
+	err = foreachIncrementalObject(
+		table.MakeDataObjectSnapshot(),
+		types.BuildTS(4, 0),
+		types.BuildTS(6, 0),
+		func(entry *catalog.ObjectEntry) error {
+			visited = append(visited, entry.CreatedAt.Physical())
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	// A finalized object whose max commit is strictly before from is skipped.
+	// A sealed object with unfinished append history has no safe max bound and
+	// must remain visible to the scan.
+	require.Equal(t, []int64{2, 3}, visited)
 }
