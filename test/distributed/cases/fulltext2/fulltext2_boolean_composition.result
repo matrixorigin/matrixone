@@ -324,6 +324,14 @@ select id, if(match(body) against('qaanchor'), 'y', 'n') as hit from every_doc w
 1  ¦  y  𝄀
 2  ¦  y  𝄀
 3  ¦  y
+select id, if(match(body) against('qaanchor'), 'y', 'n') as hit from every_doc where match(body) against('qaanchor') or id = -1 order by id;
+➤ id[-5,64,0]  ¦  hit[12,1,0]  𝄀
+1  ¦  y  𝄀
+2  ¦  y  𝄀
+3  ¦  y
+select count(if(match(body) against('qaanchor'), 1, null)) as hits from every_doc where match(body) against('qaanchor') or id = -1;
+➤ hits[-5,64,0]  𝄀
+3
 select id from every_doc where match(body) against('qaanchor') = 0 or id = -1 order by id;
 ➤ id[-5,64,0]  𝄀
 1  𝄀

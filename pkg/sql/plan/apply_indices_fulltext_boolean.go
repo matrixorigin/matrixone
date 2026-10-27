@@ -221,6 +221,9 @@ func (builder *QueryBuilder) rewriteFullTextBooleanConsumers(node *plan.Node) er
 	}
 	var rewriteErr error
 	rewrite := func(fn *plan.Function) *plan.Expr {
+		if builder.fullTextIfConditionAsBool(fn) {
+			return nil
+		}
 		match := fn
 		if inner := fullTextMatchCastToBool(fn); inner != nil {
 			match = inner

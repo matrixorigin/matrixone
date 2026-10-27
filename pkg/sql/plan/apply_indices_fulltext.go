@@ -1968,11 +1968,7 @@ func (builder *QueryBuilder) servedFullTextScoreSameTable(fn *plan.Function, ser
 // for it, for a MATCH cast to BOOL whether that scan returned the row. It returns nil when
 // no served scan answers fn.
 func (builder *QueryBuilder) servedFullTextExpr(fn *plan.Function, served []fulltextServedMatch, sameTable bool) *plan.Expr {
-	if fn != nil && fn.Func != nil && fn.Func.ObjName == "if" && len(fn.Args) > 0 {
-		// IF takes its condition uncast.
-		if cond, err := fullTextPredicateAsBool(builder.GetContext(), fn.Args[0]); err == nil {
-			fn.Args[0] = cond
-		}
+	if builder.fullTextIfConditionAsBool(fn) {
 		return nil
 	}
 	match, found := fn, false
@@ -2025,6 +2021,18 @@ func fullTextMatchCastToBool(fn *plan.Function) *plan.Function {
 		return match
 	}
 	return nil
+}
+
+// fullTextIfConditionAsBool casts a bare MATCH condition of IF, which the binder leaves
+// uncast, to BOOL in place. It reports whether fn is an IF.
+func (builder *QueryBuilder) fullTextIfConditionAsBool(fn *plan.Function) bool {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "if" || len(fn.Args) == 0 {
+		return false
+	}
+	if cond, err := fullTextPredicateAsBool(builder.GetContext(), fn.Args[0]); err == nil {
+		fn.Args[0] = cond
+	}
+	return true
 }
 
 // fullTextPredicateAsBool casts a predicate that is a bare MATCH to BOOL, so that it is

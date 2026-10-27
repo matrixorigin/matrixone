@@ -241,6 +241,10 @@ select id, case when match(body) against('qaanchor') then 'y' else 'n' end as hi
 
 select id, if(match(body) against('qaanchor'), 'y', 'n') as hit from every_doc where match(body) against('qaanchor') order by id;
 
+select id, if(match(body) against('qaanchor'), 'y', 'n') as hit from every_doc where match(body) against('qaanchor') or id = -1 order by id;
+
+select count(if(match(body) against('qaanchor'), 1, null)) as hits from every_doc where match(body) against('qaanchor') or id = -1;
+
 select id from every_doc where match(body) against('qaanchor') = 0 or id = -1 order by id;
 
 select id from every_doc where match(body) against('one') or not match(body) against('qaanchor') order by id;

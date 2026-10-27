@@ -902,6 +902,7 @@ func TestFullTextBooleanMatchTruthIsFound(t *testing.T) {
 			{"case when", "select id, case when match(title, body) against('hello') then 1 else 0 end from ft where match(title, body) against('hello')", true, false},
 			{"if", "select id, if(match(title, body) against('hello'), 'y', 'n') from ft where match(title, body) against('hello')", true, false},
 			{"if under or", "select id, if(match(title, body) against('hello'), 'y', 'n') from ft where match(title, body) against('hello') or base_id='b1'", true, false},
+			{"if in aggregate under or", "select base_id, count(if(match(title, body) against('hello'), 1, null)) from ft where match(title, body) against('hello') or base_id='b1' group by base_id", true, false},
 			{"comparison", "select id from ft where match(title, body) against('hello') > 0 or base_id='b1'", false, true},
 			{"projected score", "select id, match(title, body) against('hello') from ft where not match(title, body) against('hello')", true, true},
 		} {
@@ -911,11 +912,13 @@ func TestFullTextBooleanMatchTruthIsFound(t *testing.T) {
 				for _, n := range booleanFullTextNodes(query, query.Steps[0]) {
 					exprs = append(exprs, n.FilterList...)
 					exprs = append(exprs, n.ProjectList...)
+					exprs = append(exprs, n.AggList...)
 				}
 				found, castScore := 0, 0
 				for _, expr := range exprs {
 					found += countExprFunctionCalls([]*planpb.Expr{expr}, "isnotnull")
 					castScore += countBoolCastOfFloat(expr)
+					requireIfConditionsFound(t, expr)
 				}
 				require.Equal(t, tc.found, found > 0, "found test")
 				require.Zero(t, castScore, "a score is never used as a truth value")
@@ -933,6 +936,22 @@ func TestFullTextBooleanMatchTruthIsFound(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// requireIfConditionsFound requires every IF condition in expr to be a found test.
+func requireIfConditionsFound(t *testing.T, expr *planpb.Expr) {
+	fn := expr.GetF()
+	if fn == nil {
+		return
+	}
+	if fn.Func.ObjName == "if" {
+		cond := fn.Args[0].GetF()
+		require.NotNil(t, cond)
+		require.Equal(t, "isnotnull", cond.Func.ObjName)
+	}
+	for _, arg := range fn.Args {
+		requireIfConditionsFound(t, arg)
 	}
 }
 
