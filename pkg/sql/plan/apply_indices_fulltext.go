@@ -1421,14 +1421,15 @@ func isProjIndexPosition(projids []int32, i int32) bool {
 
 // coveredFulltext2ScoreLimit is called only after exact predicate and projection
 // coverage has been proved. OFFSET remains on the outer sort; the search keeps
-// LIMIT+OFFSET score-ranked candidates, including legal arbitrary cutoff ties.
+// LIMIT+OFFSET score-ranked candidates, including legal arbitrary cutoff ties. Keys after
+// a leading score DESC key only order those candidates.
 func (builder *QueryBuilder) coveredFulltext2ScoreLimit(nodeID int32, projNode, sortNode, scanNode *plan.Node,
 	projids []int32, limit, offset *plan.Expr) *plan.Expr {
 	if limit == nil || builder.sqlCalcFoundRows || projNode.RankOption != nil || scanNode.RankOption != nil {
 		return nil
 	}
 	if sortNode != nil {
-		if sortNode.RankOption != nil || len(sortNode.OrderBy) != 1 || !fulltext2ScoreDescending(sortNode.OrderBy[0]) {
+		if sortNode.RankOption != nil || len(sortNode.OrderBy) == 0 || !fulltext2ScoreDescending(sortNode.OrderBy[0]) {
 			return nil
 		}
 		col := sortNode.OrderBy[0].Expr.GetCol()
@@ -1446,12 +1447,12 @@ func (builder *QueryBuilder) coveredFulltext2ScoreLimit(nodeID int32, projNode, 
 }
 
 // pushCoveredFulltext2ScoreLimitFromSort handles the bound SQL shape where the
-// explicit ORDER BY score LIMIT is above the covered projection. Only a direct
+// explicit ORDER BY score DESC [, more keys] LIMIT is above the covered projection. Only a direct
 // column projection and, when present, an equivalent implicit score sort may
 // separate the outer sort from the search; joins and residual filters decline.
 func (builder *QueryBuilder) pushCoveredFulltext2ScoreLimitFromSort(sortNode *plan.Node) {
 	if sortNode == nil || sortNode.Limit == nil || sortNode.RankOption != nil ||
-		len(sortNode.Children) != 1 || len(sortNode.OrderBy) != 1 || len(sortNode.FilterList) != 0 {
+		len(sortNode.Children) != 1 || len(sortNode.OrderBy) == 0 || len(sortNode.FilterList) != 0 {
 		return
 	}
 	bound, ok := buildCandidateLimit(sortNode.Limit, sortNode.Offset)

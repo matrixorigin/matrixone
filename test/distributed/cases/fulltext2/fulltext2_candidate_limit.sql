@@ -283,4 +283,31 @@ explain select id, match(body) against('needle' in natural language mode) as sc 
 select id from ft_include where match(body) against('needle' in natural language mode) and category = 1 and payload <> 'b' order by match(body) against('needle' in natural language mode) desc limit 2;
 select id from ft_include where match(body) against('needle' in natural language mode) and category = 1 order by id desc limit 2 offset 1;
 
+-- ORDER BY score DESC with later keys is bounded like ORDER BY score DESC: the search
+-- keeps the top LIMIT+OFFSET rows by score and the later keys order them. Rows tied at
+-- the cutoff are chosen by the search. id 10 scores highest; ids 1-5 tie. The INCLUDE
+-- index makes these queries covered.
+create table ft_tie (id bigint primary key, body text, tag int);
+insert into ft_tie values
+(1, 'needle filler filler filler', 0),
+(2, 'needle filler filler filler', 0),
+(3, 'needle filler filler filler', 0),
+(4, 'needle filler filler filler', 0),
+(5, 'needle filler filler filler', 0),
+(10, 'needle needle needle filler', 0),
+(11, 'other filler filler filler', 0);
+create fulltext2 index ft_tie_idx on ft_tie(body) include(tag);
+-- @regex("Candidate Limit: 2",true)
+explain select id, match(body) against('needle') as sc from ft_tie where match(body) against('needle') order by sc desc, id desc limit 2;
+-- @regex("Candidate Limit: 3",true)
+explain select id, match(body) against('needle') as sc from ft_tie where match(body) against('needle') order by sc desc, id limit 2 offset 1;
+-- A non-score first key is not bounded.
+-- @regex("Candidate Limit",false)
+explain select id, match(body) against('needle') as sc from ft_tie where match(body) against('needle') order by id, sc desc limit 2;
+select id from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id desc limit 1;
+select count(*) from (select id from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id limit 3) p where id between 1 and 5;
+select id from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id desc limit 6;
+select id from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id limit 10 offset 1;
+select id from ft_tie where match(body) against('needle') order by id, match(body) against('needle') desc limit 2;
+
 drop database fulltext2_candidate_limit;
