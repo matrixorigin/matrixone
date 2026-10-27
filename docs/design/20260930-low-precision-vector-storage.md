@@ -484,6 +484,11 @@ a batch before the batch is filled, and the arena compacts in place. Compaction 
 order the hits by arena offset in one array of `q` × `topk` entry indices, allocated through
 the account on the first compaction or merge, and by merge preflight for every merge
 target; a refused allocation fails the fill or merge and leaves the hits unchanged.
+A fill offers a string id from the input vector and formats a numeric or UUID id in a
+fixed 36-byte buffer, and the CPU scorer reuses one operand per executor, so a fill
+allocates nothing on the Go heap. Flush writes each group's result straight into the
+accounted result vector, in the binary JSON layout its text parses to, sorting each query's
+hits in one accounted `topk` scratch; no JSON text is built.
 
 Instances on one CN share its GPU: each uses its own CUDA stream and cuBLASLt
 handle/workspace, and host and device tile memory scale with the instance count
@@ -629,7 +634,10 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   empty groups (`[]` per query); several groups; merge of three partial states in both
   orders against a brute-force reference; intermediate-result round trip; accounted fill
   and merge under an allocation account (preflight, in-place arena compaction, no leaked
-  bytes); compaction of 32,768 retained distinct hits with no Go heap allocation, the
+  bytes); a fill with 64 KiB to 8 MiB string ids and a UUID-id fill with no Go heap copy;
+  the flushed result equal, byte for byte, to its JSON text parsed (escapes, invalid UTF-8,
+  empty ids, integral, float32, float64 and signed-zero distances, empty groups) and its
+  Go heap allocation independent of `topk`; compaction of 32,768 retained distinct hits with no Go heap allocation, the
   index array counted by `Size`; a fill and a merge refused when the account cannot admit
   the index array; at every account limit, a merge into an empty destination or one with
   spare arena room succeeds whenever its preflight succeeds; an empty string id next to the id stored at the same arena offset,

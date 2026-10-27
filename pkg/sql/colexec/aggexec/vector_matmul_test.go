@@ -20,16 +20,21 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/stretchr/testify/require"
 )
 
@@ -572,12 +577,9 @@ func TestVectorMatmulStateCodec(t *testing.T) {
 	require.NoError(t, err)
 	defer r.Free()
 	require.NoError(t, r.UnmarshalBinary(data))
-	got, err := r.appendJSON(nil)
-	require.NoError(t, err)
-	want, err := s.appendJSON(nil)
-	require.NoError(t, err)
-	require.Equal(t, string(want), string(got))
-	require.Equal(t, `[[["bb",-2],["a",-1]],[["a",-5],["bb",-4]]]`, string(got))
+	got, want := vmStateJSON(t, mp, r), vmStateJSON(t, mp, s)
+	require.Equal(t, want.String(), got.String())
+	require.Equal(t, `[[["bb", -2], ["a", -1]], [["a", -5], ["bb", -4]]]`, got.String())
 
 	for _, bad := range [][]byte{
 		{},
@@ -1568,7 +1570,7 @@ func TestVectorMatmulCPUDistanceAtExtremeMagnitudes(t *testing.T) {
 							l2 += (xv[k] - qv[k]) * (xv[k] - qv[k])
 						}
 						out := make([]float64, 1)
-						err := cfg.score(cell, out)
+						err := cfg.score(cell, new(metric.VecBlockOperand), out)
 						if strings.Contains(options, "cosine") {
 							require.NoError(t, err, msg)
 							want := 1.0
@@ -1778,4 +1780,222 @@ func TestVectorMatmulQueryNarrowsToInfinity(t *testing.T) {
 			}
 		}
 	}
+}
+
+// sorted returns query j's hits best first.
+func (s *vectorMatmulState) sorted(j int) []vectorMatmulEntry {
+	e := &vectorMatmulJSON{s: s, sorted: make([]vectorMatmulEntry, 0, s.k)}
+	return slices.Clone(e.sortedHits(j))
+}
+
+// vmStateJSON encodes s as Flush does and returns a copy of the value.
+func vmStateJSON(t *testing.T, mp *mpool.MPool, s *vectorMatmulState) bytejson.ByteJson {
+	t.Helper()
+	vec := vector.NewVec(types.T_json.ToType())
+	defer vec.Free(mp)
+	enc := &vectorMatmulJSON{s: s, sorted: make([]vectorMatmulEntry, 0, s.k)}
+	require.NoError(t, vector.AppendByteJsonEncoded(vec, enc, mp))
+	raw := slices.Clone(vec.GetBytesAt(0))
+	return bytejson.ByteJson{Type: raw[0], Data: raw[1:]}
+}
+
+// vmReferenceJSON is the result as JSON text parsed to a ByteJson.
+func vmReferenceJSON(s *vectorMatmulState) (bytejson.ByteJson, error) {
+	out := []byte{'['}
+	for j := 0; j < s.q; j++ {
+		if j > 0 {
+			out = append(out, ',')
+		}
+		out = append(out, '[')
+		for i, e := range s.sorted(j) {
+			if i > 0 {
+				out = append(out, ',')
+			}
+			if math.IsInf(e.score, 0) || math.IsNaN(e.score) {
+				return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtx("vector_matmul: the distance overflows the float32 domain")
+			}
+			id, err := json.Marshal(string(s.id(e)))
+			if err != nil {
+				return bytejson.ByteJson{}, err
+			}
+			dist := -e.score
+			if dist == 0 {
+				dist = 0
+			}
+			bitSize := 64
+			if float64(float32(dist)) == dist {
+				bitSize = 32
+			}
+			out = append(out, '[')
+			out = append(out, id...)
+			out = append(out, ',')
+			out = strconv.AppendFloat(out, dist, 'g', -1, bitSize)
+			out = append(out, ']')
+		}
+		out = append(out, ']')
+	}
+	out = append(out, ']')
+	return types.ParseSliceToByteJson(out)
+}
+
+// The encoded result is the ByteJson its JSON text parses to: ids with escapes, non-ASCII,
+// invalid UTF-8 and empty ids; integral, float32, float64, signed-zero and extreme distances;
+// empty queries and a group with no rows.
+func TestVectorMatmulJSONMatchesText(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	ids := []string{"a", "", "id-7", "\"q\"\\", "\x00\n\t\u2028<&>", "\u00e9\U0001f600", "\xff\xfeok\xc3", strings.Repeat("z", 300)}
+	scores := []float64{
+		-1, 1, 0, math.Copysign(0, -1), -1000000, -123456789, -1e21, -float64(float32(0.1)), -0.1,
+		-1.0 / 3, -float64(math.MaxFloat32), -math.MaxFloat64, -math.SmallestNonzeroFloat64, 5e-324, -9007199254740993,
+	}
+	r := rand.New(rand.NewSource(3))
+	for _, shape := range [][2]int{{1, 1}, {3, 5}, {4, 16}} {
+		s, err := newVectorMatmulState(mp, nil, shape[0], shape[1])
+		require.NoError(t, err)
+		for row := 0; row < 40; row++ {
+			sc := make([]float64, shape[0])
+			for j := range sc {
+				sc[j] = scores[r.Intn(len(scores))]
+			}
+			require.NoError(t, s.offer(sc, []byte(ids[r.Intn(len(ids))]+strconv.Itoa(row%3))))
+		}
+		require.NoError(t, s.offer(make([]float64, shape[0]), []byte(ids[1])))
+		want, err := vmReferenceJSON(s)
+		require.NoError(t, err)
+		got := vmStateJSON(t, mp, s)
+		require.Equal(t, want.Type, got.Type)
+		require.Equal(t, want.Data, got.Data, "%s", want.String())
+		s.Free()
+	}
+
+	empty := &vectorMatmulState{q: 3, k: 2}
+	want, err := vmReferenceJSON(empty)
+	require.NoError(t, err)
+	got := vmStateJSON(t, mp, empty)
+	require.Equal(t, want.Data, got.Data)
+	require.Equal(t, `[[], [], []]`, got.String())
+
+	for _, bad := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		s, err := newVectorMatmulState(mp, nil, 1, 2)
+		require.NoError(t, err)
+		require.NoError(t, s.offer([]float64{bad}, []byte("x")))
+		vec := vector.NewVec(types.T_json.ToType())
+		err = vector.AppendByteJsonEncoded(vec, &vectorMatmulJSON{s: s, sorted: make([]vectorMatmulEntry, 0, 2)}, mp)
+		require.ErrorContains(t, err, "overflows the float32 domain")
+		require.Zero(t, vec.Length())
+		vec.Free(mp)
+		s.Free()
+	}
+}
+
+// vmGoAlloc returns the Go heap bytes f allocates.
+func vmGoAlloc(f func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// A fill offers a string id from the input vector and a fixed-size id from a fixed buffer:
+// a fill with a large id, admitted or rejected, does not copy it on the Go heap, and an
+// executor retains no id buffer.
+func TestVectorMatmulFillIDNotCopied(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	cfg := vmConfig(1, [][]float32{{1, 0, 0, 0}})
+	for _, size := range []int{64 << 10, 1 << 20, 8 << 20} {
+		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_text.ToType(), vmVecType()})
+		require.NoError(t, err)
+		ex := exec.(*vectorMatmulExec)
+		require.NoError(t, ex.SetExtraInformation(cfg, 0))
+		require.NoError(t, ex.SetAllocationAccount(vmAllocation(t)))
+		require.NoError(t, ex.GroupGrow(1))
+		long := strings.Repeat("x", size)
+		vecs := vmTextVectors(t, mp, []string{long, long + "y"}, [][]float32{{1, 0, 0, 0}, {0, 0, 0, 0}})
+		vecs[0].SetType(types.T_text.ToType())
+		groups := []uint64{1, 1}
+		require.NoError(t, ex.PreflightBatchFill(0, groups, vecs))
+		sizeBefore := ex.Size()
+		allocated := vmGoAlloc(func() { require.NoError(t, ex.BatchFill(0, groups, vecs)) })
+		require.Less(t, allocated, uint64(4<<10), "size %d", size)
+		require.Equal(t, sizeBefore, ex.Size())
+		require.Equal(t, []string{`[[["` + long + `",-1]]]`}, vmFlush(t, mp, ex))
+		vmFree(mp, vecs)
+		ex.Free()
+	}
+
+	exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_uuid.ToType(), vmVecType()})
+	require.NoError(t, err)
+	ex := exec.(*vectorMatmulExec)
+	defer ex.Free()
+	require.NoError(t, ex.SetExtraInformation(vmConfig(2, [][]float32{{1, 0, 0, 0}}), 0))
+	require.NoError(t, ex.GroupGrow(1))
+	u := types.Uuid{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10}
+	idv := vector.NewVec(types.T_uuid.ToType())
+	require.NoError(t, vector.AppendFixed(idv, u, false, mp))
+	vv := vmVectors(t, mp, []int64{0}, [][]float32{{1, 0, 0, 0}})
+	vecs := []*vector.Vector{idv, vv[1]}
+	defer vmFree(mp, []*vector.Vector{idv, vv[0], vv[1]})
+	require.NoError(t, ex.BatchFill(0, []uint64{1}, vecs))
+	st, err := ex.stateAt(0)
+	require.NoError(t, err)
+	require.NoError(t, st.reserve(1<<10))
+	allocs := testing.AllocsPerRun(20, func() {
+		if err := ex.BatchFill(0, []uint64{1}, vecs); err != nil {
+			panic(err)
+		}
+	})
+	require.Zero(t, allocs)
+	require.Equal(t, []string{`[[["` + u.String() + `",-1],["` + u.String() + `",-1]]]`}, vmFlush(t, mp, ex))
+}
+
+// Flush writes each group's result into the result vector: its Go heap allocation does not
+// grow with the result size.
+func TestVectorMatmulFlushGoAllocation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	allocated := map[int]uint64{}
+	for _, topk := range []int{16, 1024} {
+		queries := make([][]float32, 8)
+		for j := range queries {
+			queries[j] = []float32{float32(j + 1), 1, 0, 0}
+		}
+		exec, err := makeVectorMatmul(mp, AggIdOfVectorMatmul, false, []types.Type{types.T_varchar.ToType(), vmVecType()})
+		require.NoError(t, err)
+		ex := exec.(*vectorMatmulExec)
+		require.NoError(t, ex.SetExtraInformation(vmConfig(topk, queries), 0))
+		require.NoError(t, ex.SetAllocationAccount(vmAllocation(t)))
+		require.NoError(t, ex.GroupGrow(2))
+		ids := make([]string, 2*topk)
+		rows := make([][]float32, len(ids))
+		groups := make([]uint64, len(ids))
+		for i := range ids {
+			ids[i] = fmt.Sprintf("%064d", i)
+			rows[i] = []float32{float32(i % 7), float32(i % 5), 0, 0}
+			groups[i] = 1
+		}
+		for start := 0; start < len(ids); start += hashmap.UnitLimit {
+			end := min(start+hashmap.UnitLimit, len(ids))
+			vecs := vmTextVectors(t, mp, ids[start:end], rows[start:end])
+			require.NoError(t, ex.PreflightBatchFill(0, groups[start:end], vecs))
+			require.NoError(t, ex.BatchFill(0, groups[start:end], vecs))
+			vmFree(mp, vecs)
+		}
+		var results []*vector.Vector
+		allocated[topk] = vmGoAlloc(func() {
+			results, err = ex.Flush()
+		})
+		require.NoError(t, err)
+		require.Equal(t, 2, results[0].Length())
+		require.Greater(t, len(results[0].GetBytesAt(0)), 8*topk*64)
+		for _, r := range results {
+			r.Free(mp)
+		}
+		ex.Free()
+	}
+	require.Less(t, allocated[1024], uint64(64<<10))
+	require.Less(t, allocated[1024], 2*allocated[16]+(16<<10))
 }
