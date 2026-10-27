@@ -63,6 +63,10 @@ func TestWriteManifestRoundTrip(t *testing.T) {
 	require.Equal(t, "parquet", got[0].DataFile.FileFormat)
 	require.Equal(t, int64(100), got[0].DataFile.RecordCount)
 	require.Equal(t, int64(1024), got[0].DataFile.ColumnSizes[1])
+	require.Equal(t, entries[0].DataFile.ValueCounts, got[0].DataFile.ValueCounts)
+	require.Equal(t, entries[0].DataFile.NullValueCounts, got[0].DataFile.NullValueCounts)
+	require.Equal(t, entries[0].DataFile.LowerBounds, got[0].DataFile.LowerBounds)
+	require.Equal(t, entries[0].DataFile.UpperBounds, got[0].DataFile.UpperBounds)
 	require.Equal(t, 19815, got[0].DataFile.Partition["created_day"])
 }
 

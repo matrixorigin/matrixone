@@ -501,12 +501,12 @@ func dataFileRecord(file api.DataFile, fields []partitionField) (map[string]any,
 		"partition":            partition,
 		"record_count":         file.RecordCount,
 		"file_size_in_bytes":   file.FileSizeInBytes,
-		"column_sizes":         intLongRecords(file.ColumnSizes),
-		"value_counts":         intLongRecords(file.ValueCounts),
-		"null_value_counts":    intLongRecords(file.NullValueCounts),
-		"nan_value_counts":     intLongRecords(file.NaNValueCounts),
-		"lower_bounds":         intBytesRecords(file.LowerBounds),
-		"upper_bounds":         intBytesRecords(file.UpperBounds),
+		"column_sizes":         intMetricRecords(file.ColumnSizes),
+		"value_counts":         intMetricRecords(file.ValueCounts),
+		"null_value_counts":    intMetricRecords(file.NullValueCounts),
+		"nan_value_counts":     intMetricRecords(file.NaNValueCounts),
+		"lower_bounds":         intMetricRecords(file.LowerBounds),
+		"upper_bounds":         intMetricRecords(file.UpperBounds),
 		"split_offsets":        file.SplitOffsets,
 		"equality_ids":         optionalInt32Slice(file.EqualityIDs),
 		"sort_order_id":        int32(file.SortOrderID),
@@ -531,23 +531,7 @@ func partitionSummaryRecords(in []api.PartitionFieldSummary) []map[string]any {
 	return out
 }
 
-func intLongRecords(in map[int]int64) []map[string]any {
-	if len(in) == 0 {
-		return []map[string]any{}
-	}
-	keys := make([]int, 0, len(in))
-	for key := range in {
-		keys = append(keys, key)
-	}
-	sort.Ints(keys)
-	out := make([]map[string]any, 0, len(keys))
-	for _, key := range keys {
-		out = append(out, map[string]any{"key": int32(key), "value": in[key]})
-	}
-	return out
-}
-
-func intBytesRecords(in map[int][]byte) []map[string]any {
+func intMetricRecords[T int64 | []byte](in map[int]T) []map[string]any {
 	if len(in) == 0 {
 		return []map[string]any{}
 	}
