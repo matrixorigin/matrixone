@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -37,7 +38,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/tests"
 	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
+	"github.com/matrixorigin/matrixone/pkg/testutil/portlease"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -755,7 +758,7 @@ func TestGetInitValueWithEmptyNameMustPanic(t *testing.T) {
 func TestClusterPortLeasesAreExclusive(t *testing.T) {
 	// This lock-only test must own its namespace: other cluster processes may
 	// legitimately acquire a released range before this test reacquires it.
-	t.Setenv("TMPDIR", t.TempDir())
+	isolateClusterPortLeases(t)
 	first, err := acquireClusterPortLease()
 	require.NoError(t, err)
 	firstCluster := &cluster{
@@ -800,7 +803,7 @@ func TestClusterPortLeasesAreExclusive(t *testing.T) {
 }
 
 func TestClusterStopRetainsPortLease(t *testing.T) {
-	t.Setenv("TMPDIR", t.TempDir())
+	isolateClusterPortLeases(t)
 	ports, err := acquireClusterPortLease()
 	require.NoError(t, err)
 	c := &cluster{portLease: ports, portLeaseBase: ports.base, portLeaseNext: ports.base,
@@ -898,7 +901,7 @@ func TestNewClusterRejectsPortRangeExhaustion(t *testing.T) {
 }
 
 func TestNextBasePortExhaustionDoesNotConsumeCapacity(t *testing.T) {
-	lease := &clusterPortLease{base: minPort}
+	lease := &clusterPortLease{base: portlease.MinPort}
 	lastValid := lease.base + portLeaseSpan - basePortStep
 	lease.next.Store(lastValid)
 	c := &cluster{id: 1, portLease: lease, portLeaseNext: lastValid}
@@ -910,7 +913,7 @@ func TestNextBasePortExhaustionDoesNotConsumeCapacity(t *testing.T) {
 }
 
 func TestStartNewCNServiceRejectsCapacityWithoutMutatingTopology(t *testing.T) {
-	lease := &clusterPortLease{base: minPort}
+	lease := &clusterPortLease{base: portlease.MinPort}
 	lastValid := lease.base + portLeaseSpan - basePortStep
 	lease.next.Store(lastValid)
 	c := &cluster{
@@ -938,8 +941,8 @@ func TestClusterRejectsNegativeCNCounts(t *testing.T) {
 	require.Nil(t, value)
 	require.ErrorContains(t, err, "CN count cannot be negative")
 
-	c := &cluster{state: started, portLease: &clusterPortLease{base: minPort}}
-	c.portLease.next.Store(minPort)
+	c := &cluster{state: started, portLease: &clusterPortLease{base: portlease.MinPort}}
+	c.portLease.next.Store(portlease.MinPort)
 	err = c.StartNewCNService(-1)
 	require.ErrorContains(t, err, "additional CN count cannot be negative")
 	require.Zero(t, c.options.cn)
@@ -1750,4 +1753,29 @@ load-to-mo = true
 	require.NoError(t, c.Stop())
 	require.NoError(t, c.Start())
 	check(false)
+}
+
+func isolateClusterPortLeases(t *testing.T) {
+	previous := clusterPortAllocator
+	clusterPortAllocator = portlease.Allocator{Directory: t.TempDir()}
+	t.Cleanup(func() { clusterPortAllocator = previous })
+}
+
+func TestClusterAndLegacyPortAllocatorsShareLeases(t *testing.T) {
+	clusterLease, err := acquireClusterPortLease()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, clusterLease.lock.Close()) })
+	port, err := tests.GetAvailablePort("127.0.0.1")
+	require.NoError(t, err)
+	value, err := strconv.ParseUint(port, 10, 64)
+	require.NoError(t, err)
+	require.True(t, value < clusterLease.base || value >= clusterLease.base+portLeaseSpan)
+	// The legacy allocation remains reserved even though no listener was started.
+	base := portlease.MinPort + (value-portlease.MinPort)/portlease.Span*portlease.Span
+	contender, locked, err := tryAcquireClusterPortLease(base)
+	require.NoError(t, err)
+	if contender != nil {
+		require.NoError(t, contender.lock.Close())
+	}
+	require.False(t, locked)
 }

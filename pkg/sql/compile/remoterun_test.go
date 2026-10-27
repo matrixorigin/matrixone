@@ -134,7 +134,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		Host:         "",
 		Role:         "",
 		ConnectionID: 0,
-		LastInsertID: 0,
+		LastInsertID: 500,
 		Database:     "",
 		Version:      "",
 		// Pin to UTC: time.Time{}.In(time.Local).MarshalBinary() can fail
@@ -150,12 +150,13 @@ func Test_EncodeProcessInfo(t *testing.T) {
 		SeqLastValue:   nil,
 		SqlHelper:      nil,
 	}
+	proc.SetLastInsertID(500)
 
 	remoteExecutionID := uuid.New()
 	data, err := encodeProcessInfo(proc, "", map[string]uint32{
 		"cn-a:6001": 2,
 		"cn-b:6001": 1,
-	}, remoteExecutionID)
+	}, remoteExecutionID, 1<<32)
 	require.Nil(t, err)
 	restored := new(pipeline.ProcessInfo)
 	require.NoError(t, restored.Unmarshal(data))
@@ -166,6 +167,8 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	restoredExecutionID, err := uuid.FromBytes(restored.RemoteExecutionId)
 	require.NoError(t, err)
 	require.Equal(t, remoteExecutionID, restoredExecutionID)
+	require.Equal(t, uint64(1<<32), restored.OdkuOrdinalBase)
+	require.Equal(t, uint64(500), restored.SessionInfo.LastInsertId)
 }
 
 func TestGenerateProcessHelperRejectsIncompleteRemoteLifecycleMetadata(t *testing.T) {
@@ -1117,17 +1120,17 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 	}}}
 	routeData, err := routePipeline.Marshal()
 	require.NoError(t, err)
-	for _, version := range []int64{defines.MORPCVersion88, defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103, defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132} {
+	for _, version := range []int64{defines.MORPCVersion88, defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103, defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		_, _, err = convertToPipelineInstruction(routePreInsert, proc, ctx, 1)
-		require.ErrorContains(t, err, "partitioned FULLTEXT routing requires MORPC protocol version 133")
+		require.ErrorContains(t, err, "partitioned FULLTEXT routing requires MORPC protocol version 135")
 		require.ErrorContains(t,
 			validateRemoteStatementLastInsertIDPipelineProtocol(proc, routePipeline),
-			"partitioned FULLTEXT routing requires MORPC protocol version 133")
+			"partitioned FULLTEXT routing requires MORPC protocol version 135")
 		_, receiveErr := decodeScope(routeData, proc, true, nil)
-		require.ErrorContains(t, receiveErr, "partitioned FULLTEXT routing requires MORPC protocol version 133")
+		require.ErrorContains(t, receiveErr, "partitioned FULLTEXT routing requires MORPC protocol version 135")
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
 	_, instruction, err = convertToPipelineInstruction(routePreInsert, proc, ctx, 1)
 	require.NoError(t, err)
 	require.True(t, instruction.PreInsert.PreserveInput)
@@ -1136,6 +1139,83 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 	decoded, err = decodeScope(routeData, proc, true, nil)
 	require.NoError(t, err)
 	decoded.release()
+}
+
+func TestRemoteODKUResultTrackingProtocolValidation(t *testing.T) {
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	pre := &preinsert.PreInsert{
+		HasAutoCol:                   true,
+		TrackAutoIncrementGenerated:  true,
+		AutoIncrementGeneratedColumn: 0,
+		TrackODKUResult:              true,
+		ODKUOrdinalColumn:            1,
+		ODKUAutoIncrementColumn:      0,
+	}
+	pipelinePre := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.PreInsert),
+			PreInsert: &pipeline.PreInsert{
+				HasAutoCol:                  true,
+				TrackAutoIncrementGenerated: true,
+				TrackOdkuResult:             true,
+				OdkuOrdinalColumn:           1,
+				OdkuAutoIncrementColumn:     0,
+			},
+		}},
+	}}}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
+	_, _, err := convertToPipelineInstruction(pre, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 134")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, pipelinePre),
+		"requires MORPC protocol version 134")
+	dedup := &dedupjoin.DedupJoin{
+		ODKUResultTracking: true,
+		Conditions:         [][]*planpb.Expr{{}, {}},
+	}
+	dedupPipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op:        int32(vm.DedupJoin),
+			DedupJoin: &pipeline.DedupJoin{OdkuResultTracking: true},
+		}},
+	}}}
+	_, _, err = convertToPipelineInstruction(dedup, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 134")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline),
+		"requires MORPC protocol version 134")
+
+	// Presence is independently checked on the receiver, including zero.
+	require.ErrorContains(t, validateRemoteODKUBaselinePresence(proc, pipelinePre), "baseline")
+	proc.Base.SessionInfo.LastInsertIDSet = true
+	proc.Base.SessionInfo.LastInsertID = 0
+	require.NoError(t, validateRemoteODKUBaselinePresence(proc, pipelinePre))
+	require.NoError(t, validateRemoteODKUBaselinePresence(proc, dedupPipeline))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
+	_, instruction, err := convertToPipelineInstruction(pre, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.PreInsert.TrackOdkuResult)
+	require.Equal(t, int32(0), instruction.PreInsert.OdkuAutoIncrementColumn)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, pipelinePre))
+	_, instruction, err = convertToPipelineInstruction(dedup, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.DedupJoin.OdkuResultTracking)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, dedupPipeline))
 }
 
 func TestChangedRowsUpdateRemoteProtocolValidation(t *testing.T) {
@@ -2683,12 +2763,15 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 
 	t.Run("PreInsert_State", func(t *testing.T) {
 		op := &preinsert.PreInsert{
-			RejectZeroTemporal: true,
-			HasTargetSelector:  true,
-			PreserveInput:      true,
-			TargetRowNumberCol: 7,
-			TargetActiveCol:    8,
-			TargetRowIDCol:     9,
+			RejectZeroTemporal:      true,
+			HasTargetSelector:       true,
+			PreserveInput:           true,
+			TrackODKUResult:         true,
+			ODKUOrdinalColumn:       11,
+			ODKUAutoIncrementColumn: 2,
+			TargetRowNumberCol:      7,
+			TargetActiveCol:         8,
+			TargetRowIDCol:          9,
 		}
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
@@ -2704,6 +2787,10 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		wireInstr := new(pipeline.Instruction)
 		require.NoError(t, wireInstr.Unmarshal(wireBytes))
 		require.True(t, wireInstr.PreInsert.RejectZeroTemporal)
+		require.True(t, wireInstr.PreInsert.PreserveInput)
+		require.True(t, wireInstr.PreInsert.TrackOdkuResult)
+		require.Equal(t, int32(11), wireInstr.PreInsert.OdkuOrdinalColumn)
+		require.Equal(t, int32(2), wireInstr.PreInsert.OdkuAutoIncrementColumn)
 
 		restored, err := convertToVmOperator(wireInstr, ctx, nil)
 		require.NoError(t, err)
@@ -2711,6 +2798,9 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.True(t, restoredPreInsert.RejectZeroTemporal)
 		require.True(t, restoredPreInsert.HasTargetSelector)
 		require.True(t, restoredPreInsert.PreserveInput)
+		require.True(t, restoredPreInsert.TrackODKUResult)
+		require.Equal(t, int32(11), restoredPreInsert.ODKUOrdinalColumn)
+		require.Equal(t, int32(2), restoredPreInsert.ODKUAutoIncrementColumn)
 		require.Equal(t, int32(7), restoredPreInsert.TargetRowNumberCol)
 		require.Equal(t, int32(8), restoredPreInsert.TargetActiveCol)
 		require.Equal(t, int32(9), restoredPreInsert.TargetRowIDCol)

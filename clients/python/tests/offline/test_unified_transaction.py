@@ -1,3 +1,5 @@
+from unittest.mock import call
+
 # Copyright 2021 - 2022 Matrix Origin
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,43 +28,6 @@ import os
 _original_modules = {}
 
 
-def setup_sqlalchemy_mocks():
-    """Setup SQLAlchemy mocks for this test class"""
-    global _original_modules
-
-    # Store original modules
-    _original_modules['pymysql'] = sys.modules.get('pymysql')
-    _original_modules['sqlalchemy'] = sys.modules.get('sqlalchemy')
-    _original_modules['sqlalchemy.engine'] = sys.modules.get('sqlalchemy.engine')
-    _original_modules['sqlalchemy.orm'] = sys.modules.get('sqlalchemy.orm')
-
-    # Mock the external dependencies
-    sys.modules['pymysql'] = Mock()
-    sys.modules['sqlalchemy'] = Mock()
-    sys.modules['sqlalchemy.engine'] = Mock()
-    sys.modules['sqlalchemy.engine'].Engine = Mock()
-    sys.modules['sqlalchemy.orm'] = Mock()
-    sys.modules['sqlalchemy.orm'].sessionmaker = Mock()
-    sys.modules['sqlalchemy.orm'].declarative_base = Mock()
-    sys.modules['sqlalchemy'].create_engine = Mock()
-    sys.modules['sqlalchemy'].text = Mock()
-    sys.modules['sqlalchemy'].Column = Mock()
-    sys.modules['sqlalchemy'].Integer = Mock()
-    sys.modules['sqlalchemy'].String = Mock()
-    sys.modules['sqlalchemy'].DateTime = Mock()
-
-
-def teardown_sqlalchemy_mocks():
-    """Restore original modules"""
-    global _original_modules
-
-    for module_name, original_module in _original_modules.items():
-        if original_module is not None:
-            sys.modules[module_name] = original_module
-        elif module_name in sys.modules:
-            del sys.modules[module_name]
-
-
 # Add the matrixone package to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'matrixone'))
 
@@ -81,12 +46,12 @@ class TestUnifiedTransaction(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Setup mocks for the entire test class"""
-        setup_sqlalchemy_mocks()
+        pass
 
     @classmethod
     def tearDownClass(cls):
         """Restore original modules after tests"""
-        teardown_sqlalchemy_mocks()
+        pass
 
     def setUp(self):
         """Set up test fixtures"""
@@ -250,7 +215,9 @@ class TestUnifiedTransaction(unittest.TestCase):
                     session.commit = Mock()
 
                     # Simulate MatrixOne operations
-                    tx.snapshots.create = Mock(return_value=Snapshot("test_snap", SnapshotLevel.DATABASE, datetime.now()))
+                    tx.snapshots.create = Mock(
+                        return_value=Snapshot("test_snap", SnapshotLevel.DATABASE, datetime.now())
+                    )
 
                     # Perform operations
                     session.add("user")
@@ -322,7 +289,10 @@ class TestUnifiedTransaction(unittest.TestCase):
         tx_clone.clone_database("target_db", "source_db")
 
         # Verify that the transaction's execute was called
-        mock_tx.execute.assert_called_once_with("CREATE DATABASE target_db CLONE source_db")
+        self.assertEqual(
+            mock_tx.execute.call_args_list,
+            [call('CREATE DATABASE target_db CLONE source_db'), call('SHOW CREATE DATABASE target_db')],
+        )
 
     def test_mixed_operations_pattern(self):
         """Test mixed SQLAlchemy and MatrixOne operations pattern"""
@@ -429,7 +399,9 @@ class TestUnifiedTransaction(unittest.TestCase):
                     session.commit = Mock(side_effect=Exception("SQLAlchemy error"))
 
                     # MatrixOne operations
-                    tx.snapshots.create = Mock(return_value=Snapshot("error_snap", SnapshotLevel.DATABASE, datetime.now()))
+                    tx.snapshots.create = Mock(
+                        return_value=Snapshot("error_snap", SnapshotLevel.DATABASE, datetime.now())
+                    )
 
                     # Perform operations
                     session.add("user")

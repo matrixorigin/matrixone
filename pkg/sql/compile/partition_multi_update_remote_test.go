@@ -47,7 +47,7 @@ func TestPartitionFulltextRouteDestinationAdmission(t *testing.T) {
 	// and uses 129 for JSON ELT and opaque text expression execution.
 	// Main owns incomplete temporal strings at 130 and weighted percentiles at 131.
 	// Main owns decimal rounding and textual float conversions at 132.
-	// Partitioned FULLTEXT routing has its own capability at 133.
+	// Partitioned FULLTEXT routing has its own provisional capability at 135.
 	require.Equal(t, int64(107), defines.MORPCVersion107)
 	require.Equal(t, int64(108), defines.MORPCVersion108)
 	require.Equal(t, int64(109), defines.MORPCVersion109)
@@ -71,7 +71,7 @@ func TestPartitionFulltextRouteDestinationAdmission(t *testing.T) {
 	require.Equal(t, int64(130), defines.MORPCVersion130)
 	require.Equal(t, int64(131), defines.MORPCVersion131)
 	require.Equal(t, int64(132), defines.MORPCVersion132)
-	require.Equal(t, int64(133), defines.MORPCVersion133)
+	require.Equal(t, int64(135), defines.MORPCVersion135)
 	for _, kind := range []string{"preinsert", "multi_update"} {
 		t.Run(kind, func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
@@ -90,12 +90,12 @@ func TestPartitionFulltextRouteDestinationAdmission(t *testing.T) {
 			}
 			qry := &plan.Query{Nodes: []*plan.Node{node}, Steps: []int32{0}}
 			// Reuse one endpoint across sends: successful admission is never cached.
-			for _, version := range []int64{defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133} {
+			for _, version := range []int64{defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134, defines.MORPCVersion135} {
 				client.version = version
 				c.execType = plan2.ExecTypeAP_MULTICN
 				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 				require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-				if version < defines.MORPCVersion133 {
+				if version < defines.MORPCVersion135 {
 					require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 				} else {
 					require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
@@ -103,11 +103,11 @@ func TestPartitionFulltextRouteDestinationAdmission(t *testing.T) {
 				calls, releases := client.calls, client.releases
 				requiredProtocol := defines.MORPCVersion111
 				err := validateRemoteExpressionDestinationWithProtocol(c.proc, p, plan.RemoteExpressionFeatures{DecimalDivisionSemantics: true}, &requiredProtocol)
-				if version < defines.MORPCVersion133 {
-					require.ErrorContains(t, err, "partitioned FULLTEXT routing (MORPC protocol version 133)")
+				if version < defines.MORPCVersion135 {
+					require.ErrorContains(t, err, "partitioned FULLTEXT routing (MORPC protocol version 135)")
 				} else {
 					require.NoError(t, err)
-					require.Equal(t, defines.MORPCVersion133, requiredProtocol)
+					require.Equal(t, defines.MORPCVersion135, requiredProtocol)
 				}
 				require.Equal(t, 1, client.calls-calls, "expression and routing floors share one observation")
 				require.Equal(t, 1, client.releases-releases)
@@ -118,15 +118,15 @@ func TestPartitionFulltextRouteDestinationAdmission(t *testing.T) {
 			var composedProtocol int64
 			require.NoError(t, validateRemoteExpressionDestinationWithProtocol(c.proc, p,
 				plan.RemoteExpressionFeatures{FloatConversionSemantics: true}, &composedProtocol))
-			require.Equal(t, defines.MORPCVersion133, composedProtocol)
+			require.Equal(t, defines.MORPCVersion135, composedProtocol)
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion132)
-			client.version = defines.MORPCVersion133
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
+			client.version = defines.MORPCVersion135
 			calls := client.calls
-			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, plan.RemoteExpressionFeatures{}), "MORPC protocol version 133")
+			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, plan.RemoteExpressionFeatures{}), "MORPC protocol version 135")
 			require.Equal(t, calls, client.calls)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
-			client.version = defines.MORPCVersion133
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
+			client.version = defines.MORPCVersion135
 			client.customResponse = true
 			require.Error(t, validateRemoteExpressionDestination(c.proc, p, plan.RemoteExpressionFeatures{}))
 			client.sendErr = errors.New("unreachable destination")
@@ -153,30 +153,30 @@ func TestPartitionFulltextRouteSendAdmission(t *testing.T) {
 	op.PreserveInput = true
 	t.Cleanup(op.Release)
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-	for _, version := range []int64{defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133} {
+	for _, version := range []int64{defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134, defines.MORPCVersion135} {
 		client.version = version
 		calls := client.calls
 		var requiredProtocol int64
 		data, err := encodeRemoteScopeWithProtocol(scope, c.proc, &requiredProtocol)
-		if version < defines.MORPCVersion133 {
-			require.ErrorContains(t, err, "partitioned FULLTEXT routing (MORPC protocol version 133)")
+		if version < defines.MORPCVersion135 {
+			require.ErrorContains(t, err, "partitioned FULLTEXT routing (MORPC protocol version 135)")
 			require.Empty(t, data)
 		} else {
 			require.NoError(t, err)
 			require.NotEmpty(t, data)
-			require.Equal(t, defines.MORPCVersion133, requiredProtocol, "route admission must reach the execution stream")
+			require.Equal(t, defines.MORPCVersion135, requiredProtocol, "route admission must reach the execution stream")
 		}
 		require.Equal(t, 1, client.calls-calls)
 	}
 	// remoteRun receives the requirement from the final, post-folding encoding.
-	client.version = defines.MORPCVersion133
+	client.version = defines.MORPCVersion135
 	c.proc.Base.TxnOperator = fakeTxnOperator{}
 	c.proc.Base.SessionInfo.TimeZone = time.UTC
 	c.proc.Ctx = defines.AttachAccountId(context.Background(), 0)
 	var requiredProtocol int64
 	_, _, _, _, err := prepareRemoteRunSendingDataWithProtocol("", scope, c.proc, nil, uuid.Nil, &requiredProtocol)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion133, requiredProtocol)
+	require.Equal(t, defines.MORPCVersion135, requiredProtocol)
 	op.PreserveInput = false
 	calls := client.calls
 	requiredProtocol = 0
@@ -201,6 +201,9 @@ func TestExpressionDestinationProtocolPreservesMainFloors(t *testing.T) {
 		{"JSON ELT", plan.RemoteExpressionFeatures{JSONStringConsumerOverload: true}, defines.MORPCVersion129},
 		{"incomplete temporal strings", plan.RemoteExpressionFeatures{IncompleteTemporalStrings: true}, defines.MORPCVersion130},
 		{"float conversions", plan.RemoteExpressionFeatures{FloatConversionSemantics: true}, defines.MORPCVersion132},
+		{"typed JSON minmax", plan.RemoteExpressionFeatures{JSONMinMaxTypedComparison: true}, defines.MORPCVersion133},
+		{"ODKU result", plan.RemoteExpressionFeatures{ODKUStatementResult: true}, defines.MORPCVersion134},
+		{"session baseline", plan.RemoteExpressionFeatures{SessionLastInsertIDBaseline: true}, defines.MORPCVersion134},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
@@ -211,9 +214,9 @@ func TestExpressionDestinationProtocolPreservesMainFloors(t *testing.T) {
 			client.version = tc.version
 			require.NoError(t, validateRemoteExpressionDestinationWithProtocol(c.proc, p, tc.features, &requiredProtocol))
 			require.Equal(t, tc.version, requiredProtocol)
-			requiredProtocol = defines.MORPCVersion133
+			requiredProtocol = defines.MORPCVersion135
 			require.NoError(t, validateRemoteExpressionDestinationWithProtocol(c.proc, p, tc.features, &requiredProtocol))
-			require.Equal(t, defines.MORPCVersion133, requiredProtocol, "a composed requirement must never decrease")
+			require.Equal(t, defines.MORPCVersion135, requiredProtocol, "a composed requirement must never decrease")
 		})
 	}
 }
@@ -243,24 +246,24 @@ func TestPartitionFulltextRouteIndexSearchComposition(t *testing.T) {
 	require.NoError(t, decoded.Unmarshal(data))
 	require.Equal(t, spec, decoded.Children[0].InstructionList[0].Apply.IndexSearchScan)
 	require.Equal(t, defines.MORPCVersion111, minimumRemoteVectorProtocol(decoded))
-	for _, version := range []int64{defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133} {
+	for _, version := range []int64{defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134, defines.MORPCVersion135} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		if version < defines.MORPCVersion111 {
 			require.ErrorContains(t, validateRemoteVectorPartitionProtocol(c.proc, decoded), "version 111")
 		} else {
 			require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, decoded))
 		}
-		if version < defines.MORPCVersion133 {
-			require.ErrorContains(t, validateRemoteStatementLastInsertIDPipelineProtocol(c.proc, decoded), "version 133")
+		if version < defines.MORPCVersion135 {
+			require.ErrorContains(t, validateRemoteStatementLastInsertIDPipelineProtocol(c.proc, decoded), "version 135")
 		} else {
 			require.NoError(t, validateRemoteStatementLastInsertIDPipelineProtocol(c.proc, decoded))
 		}
 	}
-	for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133} {
+	for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134, defines.MORPCVersion135} {
 		client.version = version
 		err := validateRemoteExpressionDestination(c.proc, decoded, plan.RemoteExpressionFeatures{})
-		if version < defines.MORPCVersion133 {
-			require.ErrorContains(t, err, "version 133")
+		if version < defines.MORPCVersion135 {
+			require.ErrorContains(t, err, "version 135")
 		} else {
 			require.NoError(t, err)
 		}
@@ -289,7 +292,7 @@ func TestPartitionMultiUpdateRemoteConstructorRoundTrip(t *testing.T) {
 	proc.Base.PartitionService = codecPartitionService{}
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
 	t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, old) })
 	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}, scope: &Scope{Proc: proc}}
 	for _, kind := range []string{"parent", "index", "plain"} {
@@ -395,20 +398,20 @@ func TestPartitionMultiUpdateRemoteProtocol(t *testing.T) {
 				PartitionIndexCtx: &plan.PartitionIndexCtx{PartitionCol: plan.ColRef{ColPos: 2}},
 			}}}
 			op := multi_update.NewPartitionMultiUpdate(raw)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
 			_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
 			require.NoError(t, err)
 			p := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{InstructionList: []*pipeline.Instruction{instruction}}}}
 			require.NoError(t, validateRemoteStatementLastInsertIDPipelineProtocol(proc, p))
 			data, err := p.Marshal()
 			require.NoError(t, err)
-			for _, version := range []int64{defines.MORPCVersion88, defines.MORPCVersion100, defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103, defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132} {
+			for _, version := range []int64{defines.MORPCVersion88, defines.MORPCVersion100, defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103, defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 				_, _, err = convertToPipelineInstruction(op, proc, ctx, 1)
-				require.ErrorContains(t, err, "MORPC protocol version 133")
-				require.ErrorContains(t, validateRemoteStatementLastInsertIDPipelineProtocol(proc, p), "MORPC protocol version 133")
+				require.ErrorContains(t, err, "MORPC protocol version 135")
+				require.ErrorContains(t, validateRemoteStatementLastInsertIDPipelineProtocol(proc, p), "MORPC protocol version 135")
 				_, err = decodeScope(data, proc, true, nil)
-				require.ErrorContains(t, err, "MORPC protocol version 133")
+				require.ErrorContains(t, err, "MORPC protocol version 135")
 			}
 			raw.MultiUpdateCtx[0].PartitionIndexCtx = nil
 			_, _, err = convertToPipelineInstruction(raw, proc, ctx, 1)

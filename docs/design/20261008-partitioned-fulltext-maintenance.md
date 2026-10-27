@@ -141,6 +141,13 @@ existing persisted block and catalog formats, not a new posting format.
 
 ## Cumulative compatibility
 
+**Integration note:** On main `c4946bb74d43f0f777977507a5a7d0105e628bf2`,
+133 and 134 belong to upstream capabilities. The current merge candidate
+provisionally appends FULLTEXT routing at MORPC135 and uses plan
+`PreInsertCtx.preserve_input=18` and pipeline `PreInsert.preserve_input=22`.
+Numbers and component evidence below describe the historical R7 snapshot;
+they are not validation of this candidate or final allocation approval.
+
 The integrated main snapshot owns MORPC 101-129, including vector-cache control at 102,
 functional-index metadata/generated-key maintenance at 107 (#29472), and
 isolated user-variable NULL regexp history in connection migration at 108,

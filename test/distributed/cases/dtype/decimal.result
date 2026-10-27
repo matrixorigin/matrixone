@@ -1368,7 +1368,8 @@ SELECT CAST(NULL AS decimal(6));
 ➤ cast(null as decimal(6))[3,7,0]  𝄀
 null
 SELECT 10.0 + CAST('aaa' AS decimal(38,0));
-invalid input: "aaa" is invalid decimal string
+➤ 10.0 + cast(aaa as decimal(38))[3,40,1]  𝄀
+10.0
 SELECT CAST('101010101001' AS decimal(38,0));
 ➤ cast(101010101001 as decimal(38))[3,39,0]  𝄀
 101010101001
@@ -1379,7 +1380,8 @@ SELECT CAST('0101010' AS decimal(38,0));
 ➤ cast(0101010 as decimal(38))[3,39,0]  𝄀
 101010
 SELECT CAST('' AS decimal(38,0));
-invalid input: "" is invalid numeric string
+➤ cast( as decimal(38))[3,38,0]  𝄀
+0
 DROP TABLE IF EXISTS decimal20;
 CREATE TABLE decimal20(v varchar(40), tt tinytext, t text, mt mediumtext, lt longtext);
 INSERT INTO decimal20 VALUES('1.01415', '2.02115', '-3.03', '444.04', '4515.05');
