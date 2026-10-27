@@ -19,7 +19,6 @@ import (
 	"errors"
 	"io"
 	"math"
-	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -519,26 +518,7 @@ func (f DMLDeleteRuntimeCoordinatorFactory) dmlWriteObjectIOContext(
 		if scopeForLocation == nil {
 			scopeForLocation = icebergio.S3ObjectScopeForConfig(baseScope, loadResp.Config)
 		}
-		buildSignedFileService := icebergio.SignedHTTPFileServiceBuilder{}.Build
-		return appendObjectIOContext{
-			WriterProvider: icebergio.RemoteSigningProvider{
-				Signer:                 signer,
-				BuildFileService:       buildSignedFileService,
-				Method:                 http.MethodPut,
-				Now:                    f.opts.Now,
-				ResidencyValidator:     residencyValidator,
-				RequireResidencyPolicy: f.requireResidencyPolicy(),
-			},
-			ReaderProvider: icebergio.RemoteSigningProvider{
-				Signer:                 signer,
-				BuildFileService:       buildSignedFileService,
-				Method:                 http.MethodGet,
-				Now:                    f.opts.Now,
-				ResidencyValidator:     residencyValidator,
-				RequireResidencyPolicy: f.requireResidencyPolicy(),
-			},
-			ScopeForLocation: scopeForLocation,
-		}, true, nil
+		return signedWriteObjectIOContext(signer, scopeForLocation, f.opts.Now, residencyValidator, f.requireResidencyPolicy()), true, nil
 	}
 	return appendObjectIOContext{}, false, nil
 }

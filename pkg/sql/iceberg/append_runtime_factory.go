@@ -717,31 +717,36 @@ func (f AppendRuntimeCoordinatorFactory) objectIOContext(
 		if scopeForLocation == nil {
 			scopeForLocation = icebergio.S3ObjectScopeForConfig(baseScope, loadResp.Config)
 		}
-		buildSignedFileService := icebergio.SignedHTTPFileServiceBuilder{}.Build
-		return appendObjectIOContext{
-			WriterProvider: icebergio.RemoteSigningProvider{
-				Signer:                 signer,
-				BuildFileService:       buildSignedFileService,
-				Method:                 http.MethodPut,
-				Now:                    f.opts.Now,
-				ResidencyValidator:     residencyValidator,
-				RequireResidencyPolicy: f.requireResidencyPolicy(),
-			},
-			ReaderProvider: icebergio.RemoteSigningProvider{
-				Signer:                 signer,
-				BuildFileService:       buildSignedFileService,
-				Method:                 http.MethodGet,
-				Now:                    f.opts.Now,
-				ResidencyValidator:     residencyValidator,
-				RequireResidencyPolicy: f.requireResidencyPolicy(),
-			},
-			ScopeForLocation: scopeForLocation,
-		}, nil
+		return signedWriteObjectIOContext(signer, scopeForLocation, f.opts.Now, residencyValidator, f.requireResidencyPolicy()), nil
 	}
 	return appendObjectIOContext{}, api.ToMOErr(ctx, api.NewError(api.ErrCredentialExpired, "Iceberg append catalog did not return usable storage credentials", map[string]string{
 		"catalog": catalog.Name,
 		"table":   table,
 	}))
+}
+
+// signedWriteObjectIOContext configures matching signed read and write providers.
+func signedWriteObjectIOContext(signer icebergio.RemoteSigner, scopeForLocation icebergio.ObjectScopeForLocation, now func() time.Time, residencyValidator icebergio.ResidencyValidator, requireResidencyPolicy bool) appendObjectIOContext {
+	buildSignedFileService := icebergio.SignedHTTPFileServiceBuilder{}.Build
+	return appendObjectIOContext{
+		WriterProvider: icebergio.RemoteSigningProvider{
+			Signer:                 signer,
+			BuildFileService:       buildSignedFileService,
+			Method:                 http.MethodPut,
+			Now:                    now,
+			ResidencyValidator:     residencyValidator,
+			RequireResidencyPolicy: requireResidencyPolicy,
+		},
+		ReaderProvider: icebergio.RemoteSigningProvider{
+			Signer:                 signer,
+			BuildFileService:       buildSignedFileService,
+			Method:                 http.MethodGet,
+			Now:                    now,
+			ResidencyValidator:     residencyValidator,
+			RequireResidencyPolicy: requireResidencyPolicy,
+		},
+		ScopeForLocation: scopeForLocation,
+	}
 }
 
 func (f AppendRuntimeCoordinatorFactory) requireResidencyPolicy() bool {
