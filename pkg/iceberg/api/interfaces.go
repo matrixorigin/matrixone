@@ -17,6 +17,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"strings"
 	"time"
 
@@ -48,11 +49,7 @@ func CloneNonEmptyMap[K comparable, V any](in map[K]V) map[K]V {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make(map[K]V, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
+	return maps.Clone(in)
 }
 
 // CloneMetricBounds copies metric byte values and normalizes empty maps to nil.
