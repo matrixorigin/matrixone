@@ -653,118 +653,81 @@ func TestSoundexBinaryInputPreservesBinaryResultDomain(t *testing.T) {
 func initSoundexTestCase() []tcTemp {
 	lateGrowthInput := strings.Repeat("BEB", 4096) + strings.Repeat("BC", 64)
 	lateGrowthWant := "B2" + strings.Repeat("12", 63)
-	return []tcTemp{
+	cases := []struct {
+		info         string
+		values, want []string
+		nulls        []bool
+	}{
 		{
-			info: "test soundex basic",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello", "World", "Test"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"H400", "W643", "T230"},
-				[]bool{false, false, false}),
+			info:   "test soundex basic",
+			values: []string{"Hello", "World", "Test"},
+			want:   []string{"H400", "W643", "T230"},
+			nulls:  []bool{false, false, false},
 		},
 		{
-			info: "test soundex with vowels",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"AEIOU", "aeiou"},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"A000", "A000"},
-				[]bool{false, false}),
+			info:   "test soundex with vowels",
+			values: []string{"AEIOU", "aeiou"},
+			want:   []string{"A000", "A000"},
+			nulls:  []bool{false, false},
 		},
 		{
-			info: "test soundex with non-alphabetic",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello123", "Test!@#", "123ABC", "123!", "123!ABC"},
-					[]bool{false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"H400", "T230", "A120", "", "A120"},
-				[]bool{false, false, false, false, false}),
+			info:   "test soundex with non-alphabetic",
+			values: []string{"Hello123", "Test!@#", "123ABC", "123!", "123!ABC"},
+			want:   []string{"H400", "T230", "A120", "", "A120"},
+			nulls:  []bool{false, false, false, false, false},
 		},
 		{
-			info: "test soundex empty string",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{""},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{false}),
+			info:   "test soundex empty string",
+			values: []string{""},
+			want:   []string{""},
+			nulls:  []bool{false},
 		},
 		{
-			info: "test soundex with NULL",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello"},
-					[]bool{true}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{true}),
+			info:   "test soundex with NULL",
+			values: []string{"Hello"},
+			want:   []string{""},
+			nulls:  []bool{true},
 		},
 		{
-			info: "test soundex with mixed NULL and non-NULL rows",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Pfister", "ignored", "Ashcraft"},
-					[]bool{false, true, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"P236", "", "A2613"},
-				[]bool{false, true, false}),
+			info:   "test soundex with mixed NULL and non-NULL rows",
+			values: []string{"Pfister", "ignored", "Ashcraft"},
+			want:   []string{"P236", "", "A2613"},
+			nulls:  []bool{false, true, false},
 		},
 		{
-			info: "test soundex first-letter and discarded-letter duplicate suppression",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"LLL", "RRR", "MMM", "BEB", "BHB", "BWB", "B-B"},
-					[]bool{false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"L000", "R000", "M000", "B000", "B000", "B000", "B000"},
-				[]bool{false, false, false, false, false, false, false}),
+			info:   "test soundex first-letter and discarded-letter duplicate suppression",
+			values: []string{"LLL", "RRR", "MMM", "BEB", "BHB", "BWB", "B-B"},
+			want:   []string{"L000", "R000", "M000", "B000", "B000", "B000", "B000"},
+			nulls:  []bool{false, false, false, false, false, false, false},
 		},
 		{
-			info: "test soundex with H and W",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello", "World", "What"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"H400", "W643", "W300"},
-				[]bool{false, false, false}),
+			info:   "test soundex with H and W",
+			values: []string{"Hello", "World", "What"},
+			want:   []string{"H400", "W643", "W300"},
+			nulls:  []bool{false, false, false},
 		},
 		{
-			info: "test soundex short strings",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"A", "AB", "ABC"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"A000", "A100", "A120"},
-				[]bool{false, false, false}),
+			info:   "test soundex short strings",
+			values: []string{"A", "AB", "ABC"},
+			want:   []string{"A000", "A100", "A120"},
+			nulls:  []bool{false, false, false},
 		},
 		{
-			info: "test MySQL original Soundex and variable-length results",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Ashcraft", "Pfister", "Tymczak", "Quadratically", "pfister", "BDFJLMPR", "BDFJLMPRB", lateGrowthInput},
-					[]bool{false, false, false, false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"A2613", "P236", "T520", "Q36324", "P236", "B3124516", "B31245161", lateGrowthWant},
-				[]bool{false, false, false, false, false, false, false, false}),
+			info:   "test MySQL original Soundex and variable-length results",
+			values: []string{"Ashcraft", "Pfister", "Tymczak", "Quadratically", "pfister", "BDFJLMPR", "BDFJLMPRB", lateGrowthInput},
+			want:   []string{"A2613", "P236", "T520", "Q36324", "P236", "B3124516", "B31245161", lateGrowthWant},
+			nulls:  []bool{false, false, false, false, false, false, false, false},
 		},
 	}
+	result := make([]tcTemp, 0, len(cases))
+	for _, tc := range cases {
+		result = append(result, tcTemp{
+			info:   tc.info,
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), tc.values, tc.nulls)},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, tc.nulls),
+		})
+	}
+	return result
 }
 
 func TestSoundex(t *testing.T) {
