@@ -550,8 +550,9 @@ func (m *deleteMetrics) observeNull(fieldID int) {
 
 func (m *deleteMetrics) observe(ctx context.Context, fieldID int, value any) {
 	field, ok := m.fields[fieldID]
-	if !ok || icebergwrite.IsMetricNaN(value) {
-		if icebergwrite.IsMetricNaN(value) {
+	isNaN := icebergwrite.IsMetricNaN(value)
+	if !ok || isNaN {
+		if isNaN {
 			m.nanCounts[fieldID] = saturatingDeleteAdd(m.nanCounts[fieldID], 1)
 		}
 		return
