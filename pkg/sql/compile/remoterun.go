@@ -519,7 +519,6 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 		CnCnt:   s.NodeInfo.CNCNT,
 		CnIdx:   s.NodeInfo.CNIDX,
 	}
-	ctx.pipe = p
 	ctx.scope = s
 	p.ChildrenCount = int32(len(s.Proc.Reg.MergeReceivers))
 	{
