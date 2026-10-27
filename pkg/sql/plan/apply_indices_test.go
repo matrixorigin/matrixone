@@ -7572,6 +7572,17 @@ func TestGetIndexForNonEquiCond_DetectsPairedRangeOnIndexColumn(t *testing.T) {
 	idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{idxDef}, node)
 	require.Equal(t, 0, idxPos)
 	require.ElementsMatch(t, []int32{0, 1}, filterIdx)
+
+	// The cost-based production matcher must retain the same paired bounds.
+	node.Stats = &planpb.Stats{TableCnt: 1000, Outcnt: 10}
+	costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
+	require.ElementsMatch(t, []int32{0, 1}, costCtx.matchRangeBackfill(idxDef))
+	prefixIndex := *idxDef
+	prefixIndex.IndexAlgoParams = `{"prefix_lengths":"price:3"}`
+	require.Empty(t, costCtx.matchRangeBackfill(&prefixIndex))
+	node.Stats.TableCnt = 100_000
+	node.Stats.Selectivity = 1
+	require.Empty(t, costCtx.matchRangeBackfill(idxDef))
 }
 
 func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
