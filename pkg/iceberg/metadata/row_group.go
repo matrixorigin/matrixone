@@ -42,10 +42,10 @@ func BuildRowGroupSplits(footers []RowGroupFooter) []api.RowGroupSplit {
 			StartRowOrdinal: start,
 			RowCount:        footer.RowCount,
 			Bytes:           footer.Bytes,
-			LowerBounds:     cloneIntBytesMap(footer.LowerBounds),
-			UpperBounds:     cloneIntBytesMap(footer.UpperBounds),
-			NullValueCounts: cloneIntInt64Map(footer.NullValueCounts),
-			ValueCounts:     cloneIntInt64Map(footer.ValueCounts),
+			LowerBounds:     cloneBytesMap(footer.LowerBounds),
+			UpperBounds:     cloneBytesMap(footer.UpperBounds),
+			NullValueCounts: cloneInt64Map(footer.NullValueCounts),
+			ValueCounts:     cloneInt64Map(footer.ValueCounts),
 		}
 		out = append(out, split)
 		if footer.RowCount > 0 {
@@ -83,26 +83,4 @@ func PruneRowGroupSplits(meta *api.TableMetadata, schema api.Schema, specID int,
 		out = append(out, split)
 	}
 	return out, pruned
-}
-
-func cloneIntBytesMap(in map[int][]byte) map[int][]byte {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[int][]byte, len(in))
-	for key, value := range in {
-		out[key] = append([]byte(nil), value...)
-	}
-	return out
-}
-
-func cloneIntInt64Map(in map[int]int64) map[int]int64 {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[int]int64, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }

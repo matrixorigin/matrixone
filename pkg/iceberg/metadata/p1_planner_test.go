@@ -48,6 +48,28 @@ func TestRowGroupSplitsCarryStartOrdinalAndPruneStats(t *testing.T) {
 	}
 }
 
+func TestRowGroupSplitsOwnStatistics(t *testing.T) {
+	footer := RowGroupFooter{
+		LowerBounds:     map[int][]byte{1: {1}},
+		UpperBounds:     map[int][]byte{},
+		NullValueCounts: map[int]int64{1: 2},
+		ValueCounts:     map[int]int64{},
+	}
+	split := BuildRowGroupSplits([]RowGroupFooter{footer})[0]
+	footer.LowerBounds[1][0] = 3
+	footer.NullValueCounts[1] = 4
+	if split.LowerBounds[1][0] != 1 || split.NullValueCounts[1] != 2 {
+		t.Fatalf("row group statistics alias input: %+v", split)
+	}
+	if split.UpperBounds != nil || split.ValueCounts != nil {
+		t.Fatalf("empty statistics must be normalized to nil: %+v", split)
+	}
+	split.LowerBounds[1][0] = 5
+	if footer.LowerBounds[1][0] != 3 {
+		t.Fatal("input bounds alias row group statistics")
+	}
+}
+
 func TestPairDeleteTasksPositionAndEquality(t *testing.T) {
 	dataTasks := []api.DataFileTask{
 		{DataFile: api.DataFile{FilePath: "s3://warehouse/t/data/a.parquet", FileFormat: "parquet", SpecID: 1, SequenceNumber: 10, Partition: map[string]any{"day": int32(1)}}},
