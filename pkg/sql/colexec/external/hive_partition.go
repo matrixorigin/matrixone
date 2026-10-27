@@ -820,30 +820,6 @@ func collectFiles(
 	return nil
 }
 
-// filterPartitionDir returns true if the directory should be kept (not pruned).
-// Only MatchFalse causes pruning; MatchUnknown is conservative (keeps directory).
-func filterPartitionDir(dirValue string, colType tree.HivePartColType, pred *PartitionPredicate) bool {
-	if pred == nil {
-		return true
-	}
-	var result MatchResult
-	switch pred.Op {
-	case PartOpEq, PartOpIn:
-		result = matchPartitionValue(dirValue, pred.Values, colType)
-	case PartOpLt, PartOpLe, PartOpGt, PartOpGe:
-		result = matchPartitionCompare(dirValue, pred.Values, colType, pred.Op)
-	case PartOpBetween:
-		result = matchPartitionRange(dirValue, pred.Values, colType)
-	case PartOpIsNull:
-		result = matchPartitionNull(dirValue, true)
-	case PartOpIsNotNull:
-		result = matchPartitionNull(dirValue, false)
-	default:
-		result = MatchUnknown
-	}
-	return result != MatchFalse
-}
-
 // MatchResult is a three-state result for partition value comparison.
 type MatchResult int
 
