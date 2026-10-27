@@ -301,7 +301,8 @@ jobs:
           license-eye -c .licenserc.yml dep check
           memory_snapshot after-license
           if [[ "$VARIANT" == tuned ]]; then
-            export GOFLAGS="$(go env GOFLAGS) -p=1"
+            go_flags="$(go env GOFLAGS)"
+            export GOFLAGS="${go_flags:+${go_flags} }-p=1"
             export GOMEMLIMIT="${GOMEMLIMIT:-5GiB}"
           fi
           echo "SCA_ANALYSIS_FLAGS goflags=${GOFLAGS:-<unset>} gomemlimit=${GOMEMLIMIT:-<unset>}"
