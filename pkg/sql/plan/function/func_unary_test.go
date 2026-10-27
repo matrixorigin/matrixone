@@ -7790,12 +7790,26 @@ func initRtrimTestCase() []tcTemp {
 func TestRtrim(t *testing.T) {
 	testCases := initRtrimTestCase()
 
-	proc := testutil.NewProcess(t)
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
 	for _, tc := range testCases {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Rtrim)
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestRtrimNullAndWhitespace(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	nulls := []bool{false, true, false, false, false, false}
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"", "ignored  ", "   ", "x \t ", "x\u00a0 ", " x  "}, nulls)},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"", "", "", "x \t", "x\u00a0", " x"}, nulls), Rtrim)
+	ok, info := tc.RunAndFree()
+	require.True(t, ok, info)
 }
 
 // Reverse
