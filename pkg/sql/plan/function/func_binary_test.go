@@ -2202,9 +2202,9 @@ func TestTimestampAddMySQLCompatibility(t *testing.T) {
 	})
 }
 
-func initDateAddTestCase() []tcTemp {
+func initDateArithmeticTestCase(resultDate, stringCaseInfo string) []tcTemp {
 	d1, _ := types.ParseDatetime("2022-01-01", 6)
-	r1, _ := types.ParseDatetime("2022-01-02", 6)
+	r1, _ := types.ParseDatetime(resultDate, 6)
 	return []tcTemp{
 		{
 			info: "test DateAdd",
@@ -2243,7 +2243,7 @@ func initDateAddTestCase() []tcTemp {
 				[]bool{false}),
 		},
 		{
-			info: "test DateStringAdd",
+			info: stringCaseInfo,
 			typ:  types.T_varchar,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
@@ -2257,7 +2257,7 @@ func initDateAddTestCase() []tcTemp {
 					[]bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"2022-01-02"},
+				[]string{resultDate},
 				[]bool{false}),
 		},
 	}
@@ -2283,10 +2283,11 @@ func TestDoTimeIntervalRejectsMySQLRangeOverflow(t *testing.T) {
 }
 
 func TestDateAdd(t *testing.T) {
-	testCases := initDateAddTestCase()
+	testCases := initDateArithmeticTestCase("2022-01-02", "test DateStringAdd")
 
 	// do the test work.
 	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -2299,6 +2300,8 @@ func TestDateAdd(t *testing.T) {
 		case types.T_varchar:
 			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, DateStringAdd)
+		default:
+			t.Fatalf("unsupported date arithmetic test type: %v", tc.typ)
 		}
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -3714,72 +3717,12 @@ func TestDateFormatZeroDatetimeMatchesMySQL(t *testing.T) {
 	}
 }
 
-func initDateSubTestCase() []tcTemp {
-	d1, _ := types.ParseDatetime("2022-01-01", 6)
-	r1, _ := types.ParseDatetime("2021-12-31", 6)
-	return []tcTemp{
-		{
-			info: "test DateAdd",
-			typ:  types.T_date,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_date.ToType(),
-					[]types.Date{d1.ToDate()},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{int64(types.Day)},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_date.ToType(), false,
-				[]types.Date{r1.ToDate()},
-				[]bool{false}),
-		},
-		{
-			info: "test DatetimeAdd",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{int64(types.Day)},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
-				[]types.Datetime{r1},
-				[]bool{false}),
-		},
-		{
-			info: "test DateStringSub",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"2022-01-01"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{1},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{int64(types.Day)},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"2021-12-31"},
-				[]bool{false}),
-		},
-	}
-}
-
 func TestDateSub(t *testing.T) {
-	testCases := initDateSubTestCase()
+	testCases := initDateArithmeticTestCase("2021-12-31", "test DateStringSub")
 
 	// do the test work.
 	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
 	for _, tc := range testCases {
 		var fcTC FunctionTestCase
 		switch tc.typ {
@@ -3792,6 +3735,8 @@ func TestDateSub(t *testing.T) {
 		case types.T_varchar:
 			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, DateStringSub)
+		default:
+			t.Fatalf("unsupported date arithmetic test type: %v", tc.typ)
 		}
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
