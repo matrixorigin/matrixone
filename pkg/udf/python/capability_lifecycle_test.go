@@ -134,6 +134,7 @@ func TestStaleCapabilityFailurePreservesNewGeneration(t *testing.T) {
 
 func currentTestCapabilities() capabilityResponse {
 	response := capabilityResponse{
+		GroupIdentityContract:      protocol.GroupIdentityContract,
 		ProtocolVersion:            protocol.Version,
 		ABIContract:                udf.PythonABIContract,
 		AdapterVersion:             udf.PythonAdapterVersion,

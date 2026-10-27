@@ -2,10 +2,10 @@
 
 | Field | Value |
 | --- | --- |
-| Design revision | `python-udf-current-stage-r32-2026-10-27` |
+| Design revision | `python-udf-current-stage-r33-2026-10-28` |
 | Applies to | MatrixOne PR #29152, test/development-stage Python UDF |
-| Upstream repair baseline | `861a2c4cb68961d8b6b01f18e0aa6ac52a3a505f` (MORPC 132 float conversions, 131 exact weighted percentile, 130 incomplete temporal strings, 129 JSON ELT/opaque text, 128 mixed JSON/numeric comparisons, 127 vector search knobs; catalog 4.0.17 preserved) |
-| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r32 contract preserves upstream historical upgrade identities through 4.0.17, adds a separate Python revision repair in catalog 4.0.18, and follows full-cluster shutdown upgrade, with no Python/shared-routine MORPC capability gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
+| Upstream repair baseline | `3b7752551b8a1cc60daddecde9a5438d5357cdf4` (unrelated existing MORPC gates through 134 and catalog handlers through 4.0.17 preserved) |
+| Approval | Feature owner approved the r1 current-stage contract on 2026-09-24 in [PR comment](https://github.com/matrixorigin/matrixone/pull/29152#issuecomment-5809313638). The r33 contract preserves upstream historical upgrade identities through 4.0.17, adds a separate Python revision repair in catalog 4.0.18, and follows full-cluster shutdown upgrade, with no Python/shared-routine MORPC capability gate. Independent Architecture and SQL/Planner approval of this revision is pending; no production or security scope is added. The immutable approval artifact and independent-review status remain recorded in the [design approval record](python_udf_current_stage_approval.md). |
 | Not covered | Production tenant isolation, sandbox, Operator rollout, or cross-version rollback/restore |
 
 This is the versioned governing proposal for the current PR stage. The owner
@@ -206,8 +206,31 @@ Empty and all-NULL work is completed locally by the evaluator, without a remote
 group. For admitted work, partial Open, cancellation, and close have one owner
 and a terminal outcome. The worker owns H, child process/session cleanup, and
 its own ledger. Generation/lease fences reject stale callbacks and messages. A
-terminal TTL alone never grants a new execution epoch. On cancel, timeout, or
-transport failure, Gateway cancels/closes the exchange before returning its
+terminal TTL alone never grants a new execution epoch.
+
+The external capability contract requires `group_identity_contract=expiring-v1`.
+A transport group is `py1/<not-after-unix-ms>/<canonical UUID>`, issued for ten
+minutes and renewed by the evaluator with five minutes remaining. Statement,
+account and invocation identities remain separate. The deadline is inseparable
+from the group ID: changing it creates a new identity. Every new Open rejects
+legacy, malformed or expired group identities before resource admission. A
+higher epoch or different invocation ID cannot reopen an expired group.
+Gateway and worker collect only inactive closed fences after this deadline;
+active invocations and pending cleanup retain ownership even past expiry.
+Terminal records additionally retain their existing TTL before collection.
+Each owner advances its prior logical admission time by nonnegative monotonic
+elapsed time, then takes the maximum of that result and current wall time.
+This keeps retirement progressing even after a forward clock jump and rollback;
+rollback cannot resurrect a retired identity. Admission rejects deadlines more
+than fifteen minutes ahead (ten-minute lease plus five-minute skew allowance),
+so even producer clock errors cannot pin accepted fences indefinitely.
+Clock skew may reject a group early; it never authorizes replay after
+local retirement. Worker restarts retain the existing instance-lease fence.
+Finite retention windows may still cause temporary resource exhaustion under
+load; completion no longer consumes permanent lifetime group capacity. This
+contract does not add authentication, a new scheduler, MORPC gates or retries.
+
+On cancel, timeout, or transport failure, Gateway cancels/closes the exchange before returning its
 local K or ledger ownership; the worker retains H and cleanup ownership until
 the child is terminated and reaped. STARTED work is not transparently replayed.
 

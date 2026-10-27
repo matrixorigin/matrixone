@@ -394,7 +394,7 @@ func validInvocation() *udf.Invocation {
 			Mode:            "INVOKER",
 		},
 		Tuple: protocol.FencingTuple{
-			AccountID: 1, StatementID: "statement", GroupID: "group",
+			AccountID: 1, StatementID: "statement", GroupID: testGroupID("group"),
 			GroupEpoch: 1, InvocationID: "invocation", LeaseEpoch: 1,
 		},
 	}
@@ -960,6 +960,7 @@ func TestGatewayFeatureGateRejectsDisabledRuntime(t *testing.T) {
 
 func TestValidateCapabilitiesRequiresWorkerInstanceLease(t *testing.T) {
 	response := capabilityResponse{
+		GroupIdentityContract:      protocol.GroupIdentityContract,
 		ProtocolVersion:            protocol.Version,
 		ABIContract:                udf.PythonABIContract,
 		AdapterVersion:             udf.PythonAdapterVersion,
@@ -978,6 +979,10 @@ func TestValidateCapabilitiesRequiresWorkerInstanceLease(t *testing.T) {
 	}
 	require.ErrorContains(t, validateCapabilities(response), "contract does not match")
 	response.LeaseEpoch = 17
+	require.NoError(t, validateCapabilities(response))
+	response.GroupIdentityContract = ""
+	require.ErrorContains(t, validateCapabilities(response), "contract does not match")
+	response.GroupIdentityContract = protocol.GroupIdentityContract
 	require.NoError(t, validateCapabilities(response))
 	response.MaxOwnerHandlerProcesses++
 	require.ErrorContains(t, validateCapabilities(response), "contract does not match")
@@ -1155,7 +1160,7 @@ func TestReceiveResultBatchRejectsMalformedProtocolProgress(t *testing.T) {
 		{
 			name: "changed tuple",
 			results: []*flight.FlightData{gatewayControl(t, "InputConsumed", protocol.FencingTuple{
-				AccountID: tuple.AccountID + 1, StatementID: tuple.StatementID, GroupID: tuple.GroupID,
+				AccountID: tuple.AccountID + 1, StatementID: tuple.StatementID, GroupID: testGroupID(tuple.GroupID),
 				GroupEpoch: tuple.GroupEpoch, InvocationID: tuple.InvocationID, LeaseEpoch: tuple.LeaseEpoch,
 			}, func(control *protocol.Control) {
 				control.Sequence = 1

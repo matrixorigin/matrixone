@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r32-2026-10-27`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r33-2026-10-28`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -703,3 +703,19 @@ Historical per-feature predecessor/rollback evidence is superseded; retained
 round-trip, catalog, evaluator and external-contract oracles test the supported
 behavior. This revision does not grant independent Architecture/SQL Planner
 approval or expand the authorized test/development scope.
+
+## r33 — 2026-10-28 bounded group retirement
+
+Governing artifact: `python_udf_current_stage.md` r33. Completion previously
+retained each distinct statement/evaluator group for the Gateway and worker
+lifetimes, exhausting their bounded fence maps permanently. Expiring immutable
+group IDs now provide the rejection authority required to retire inactive
+fences safely. Both admission owners reject new Opens after the deadline,
+including changed invocation IDs and higher epochs; already admitted work keeps
+its cleanup ownership. Nondecreasing owner clocks prevent resurrection after
+wall-clock rollback, and existing terminal-record TTL and account isolation
+remain enforced. The evaluator renews transport identity before expiry and the
+external capability handshake requires `expiring-v1`. No persisted catalog,
+MORPC, production isolation or deployment scope changes. Existing upstream
+protocols through 134 remain unchanged. Independent Architecture and SQL/Planner
+approval of r33 remains pending; this maintenance fix does not supply approval.
