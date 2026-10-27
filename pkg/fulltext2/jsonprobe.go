@@ -306,5 +306,7 @@ func (idx *Index) StreamJSONProbe(pattern []byte, _ ScoreAlgo, filter *prefilter
 	if !ok {
 		return moerr.NewInternalErrorNoCtx("fulltext2: malformed json probe payload")
 	}
-	return idx.streamJSONProbeDocs(p, filter, newStreamSink(idx, wantInclude, filter, emit))
+	sink := newStreamSink(idx, wantInclude, filter, emit)
+	defer sink.close()
+	return idx.streamJSONProbeDocs(p, filter, sink)
 }

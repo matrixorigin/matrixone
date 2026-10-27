@@ -783,6 +783,7 @@ func (u *reader) start() (err error) {
 		u.errCh = make(chan error, 1)
 		ctx, cancel := context.WithCancel(proc.Ctx)
 		u.cancel = cancel
+		u.configureConditionalTopK(ctx, &q)
 		rt := vectorindex.RuntimeConfig{Emit: func(out *vectorindex.SearchOutput) error {
 			select {
 			case u.streamCh <- out:
@@ -827,6 +828,49 @@ func (u *reader) start() (err error) {
 	return veccache.Cache.SearchInto(sp, cacheKey, newsearch, q, rt, u.out)
 }
 
+// sourceUnchanged resolves the trusted table identity under the query's original
+// transaction. It never resets the borrowed relation or retains it across reads.
+func (u *reader) sourceUnchanged(ctx context.Context, buildTS int64) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	ref, def := u.spec.GetSourceTable(), u.spec.GetSourceTableDef()
+	if ref == nil || def == nil || ref.Obj <= 0 || def.TblId != uint64(ref.Obj) ||
+		ref.PubInfo != nil || ref.SubscriptionName != "" || ref.Snapshot != nil ||
+		def.Partition != nil || def.IsTemporary || ref.SchemaName != u.tblcfg.DbName ||
+		ref.ObjName != def.Name {
+		return false, nil
+	}
+	op := u.proc.GetTxnOperator()
+	if op == nil || op.IsSnapOp() || op.Txn().Mirror || op.GetWorkspace() == nil || !op.GetWorkspace().Readonly() {
+		return false, nil
+	}
+	account, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return false, nil
+	}
+	queryAccount, err := defines.GetAccountId(u.proc.Ctx)
+	if err != nil || account != queryAccount {
+		return false, nil
+	}
+	eng := u.proc.GetSessionInfo().StorageEngine
+	if eng == nil {
+		return false, nil
+	}
+	db, name, rel, err := eng.GetRelationById(ctx, op, uint64(ref.Obj))
+	if err != nil || rel == nil || db != ref.SchemaName || name != ref.ObjName ||
+		rel.GetTableID(ctx) != uint64(ref.Obj) || rel.GetTableName() != ref.ObjName {
+		return false, err
+	}
+	provider, ok := rel.(engine.SourceCommitTSProvider)
+	if !ok {
+		return false, nil
+	}
+	bound := types.BuildTS(buildTS, 0)
+	bar, err := provider.SourceCommitTS(ctx, bound)
+	return err == nil && !bar.IsEmpty() && !bar.GT(&bound), err
+}
+
 // scoreAlgo resolves the relevance formula from fulltext2's OWN session
 // variable ft2_relevancy_algorithm, which defaults to BM25 (distinct from classic
 // fulltext's ft_relevancy_algorithm, default TF-IDF). Only an explicit
@@ -841,4 +885,15 @@ func scoreAlgo(proc *process.Process) fulltext2.ScoreAlgo {
 		}
 	}
 	return algo
+}
+
+// configureConditionalTopK declines unsupported descriptors without affecting pagination.
+func (u *reader) configureConditionalTopK(ctx context.Context, q *fulltext2.Fulltext2Query) {
+	if desc := u.opts.ConditionalStreamTopK; desc != nil &&
+		desc.Semantics == ft2plan.ConditionalStreamTopKVersion && desc.K > 0 &&
+		desc.K <= fulltext2.MaxConditionalStreamTopK && u.spec.GetScanSnapshot() == nil {
+		q.ConditionalTopK = int(desc.K)
+		q.Context = ctx
+		q.SourceUnchanged = u.sourceUnchanged
+	}
 }

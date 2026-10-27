@@ -32,6 +32,8 @@ type ScanOptions struct {
 	// ScoreRange is the fulltext2.ScoreRange JSON of the pushed score bounds;
 	// empty means none.
 	ScoreRange string `json:"score_range,omitempty"`
+	// ConditionalStreamTopK is optional. Older readers ignore it and stream all rows.
+	ConditionalStreamTopK *ConditionalStreamTopK `json:"conditional_stream_topk,omitempty"`
 }
 
 // EncodeScanOptions returns the algo_options bytes of opts.
@@ -49,4 +51,12 @@ func DecodeScanOptions(data []byte) (ScanOptions, error) {
 		return opts, moerr.NewInvalidInputNoCtxf("invalid fulltext2 scan options: %v", err)
 	}
 	return opts, nil
+}
+
+// ConditionalStreamTopKVersion identifies exact score DESC / byte-PK ASC semantics.
+const ConditionalStreamTopKVersion = "bm25_score_desc_byte_pk_asc_v1"
+
+type ConditionalStreamTopK struct {
+	Semantics string `json:"semantics"`
+	K         uint64 `json:"k"`
 }
