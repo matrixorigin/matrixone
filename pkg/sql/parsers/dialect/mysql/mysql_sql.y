@@ -222,6 +222,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     jsonTableColumn *tree.JSONTableColumn
     jsonTableColumns []*tree.JSONTableColumn
     jsonTableResponse *tree.JSONTableResponse
+    jsonTableCharset *string
     rowFormatType tree.RowFormatType
     matchType tree.MatchType
     fullTextSearchType tree.FullTextSearchType
@@ -477,6 +478,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <jsonTableColumns> json_table_columns
 %type <jsonTableResponse> json_table_response json_table_on_empty json_table_on_error
 %type <str> json_table_path_opt
+%type <jsonTableCharset> json_table_charset_opt
 %nonassoc EMPTY
 %left <str> UNION EXCEPT INTERSECT MINUS
 %nonassoc LOWER_THAN_ORDER
@@ -8486,12 +8488,17 @@ json_table_columns:
 json_table_column:
     ident FOR JSON_TABLE_ORDINALITY
     { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "ordinality"} }
-|   ident column_type JSON_TABLE_PATH STRING json_table_policies
-    { $$ = $5; $$.Name = $1.Origin(); $$.Kind = "path"; $$.Type = $2; $$.Path = $4 }
-|   ident column_type EXISTS JSON_TABLE_PATH STRING
-    { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "exists", Type: $2, Path: $5} }
+|   ident column_type json_table_charset_opt JSON_TABLE_PATH STRING json_table_policies
+    { $$ = $6; $$.Name = $1.Origin(); $$.Kind = "path"; $$.Type = $2; $$.Charset = $3; $$.Path = $5 }
+|   ident column_type json_table_charset_opt EXISTS JSON_TABLE_PATH STRING
+    { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "exists", Type: $2, Charset: $3, Path: $6} }
 |   JSON_TABLE_NESTED json_table_path_opt STRING COLUMNS '(' json_table_columns ')'
     { $$ = &tree.JSONTableColumn{Kind: "nested", Path: $3, Children: $6} }
+
+json_table_charset_opt:
+    { $$ = nil }
+|   charset_keyword charset_name
+    { charset := $2; $$ = &charset }
 
 json_table_path_opt:
     { $$ = "" }
