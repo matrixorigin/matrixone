@@ -2357,3 +2357,19 @@ func TestExecRowsAffected(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildTaskInsertSQL(t *testing.T) {
+	for _, tc := range []struct {
+		name, prefix, row, suffix string
+		count                     int
+		want                      string
+	}{
+		{"empty", "insert ", "(?)", " suffix", 0, "insert  suffix"},
+		{"single", "insert ", "(?)", "", 1, "insert (?)"},
+		{"multiple", "insert ", "(?, ?)", " suffix", 3, "insert (?, ?),(?, ?),(?, ?) suffix"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, buildTaskInsertSQL(tc.prefix, tc.row, tc.suffix, tc.count))
+		})
+	}
+}

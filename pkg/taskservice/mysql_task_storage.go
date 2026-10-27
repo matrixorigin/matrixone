@@ -339,6 +339,24 @@ func (m *mysqlTaskStorage) PingContext(ctx context.Context) error {
 	return m.db.PingContext(ctx)
 }
 
+// buildTaskInsertSQL builds one placeholder group per task without repeatedly
+// copying the accumulated SQL for each row.
+func buildTaskInsertSQL(prefix, row, suffix string, count int) string {
+	if count == 1 {
+		return prefix + row + suffix
+	}
+	var sql strings.Builder
+	sql.WriteString(prefix)
+	for i := 0; i < count; i++ {
+		if i != 0 {
+			sql.WriteByte(',')
+		}
+		sql.WriteString(row)
+	}
+	sql.WriteString(suffix)
+	return sql.String()
+}
+
 func (m *mysqlTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.AsyncTask) (int, error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
@@ -348,7 +366,6 @@ func (m *mysqlTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.Async
 		return 0, nil
 	}
 
-	sqlStr := insertAsyncTask
 	vals := make([]any, 0, len(tasks)*13)
 
 	for _, t := range tasks {
@@ -357,7 +374,6 @@ func (m *mysqlTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.Async
 			return 0, err
 		}
 
-		sqlStr += "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),"
 		vals = append(vals, t.Metadata.ID,
 			t.Metadata.Executor,
 			t.Metadata.Context,
@@ -372,7 +388,7 @@ func (m *mysqlTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.Async
 		)
 	}
 
-	exec, err := m.db.ExecContext(ctx, sqlStr[:len(sqlStr)-1], vals...)
+	exec, err := m.db.ExecContext(ctx, buildTaskInsertSQL(insertAsyncTask, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", "", len(tasks)), vals...)
 	if err != nil {
 		dup, err := removeDuplicateAsyncTasks(err, tasks)
 		if err != nil {
@@ -549,11 +565,8 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 		return 0, nil
 	}
 
-	sqlStr := insertCronTask
 	vals := make([]any, 0)
 	for _, t := range cronTask {
-		sqlStr += "(?, ?, ?, ?, ?, ?, ?, ?, ?),"
-
 		j, err := json.Marshal(t.Metadata.Options)
 		if err != nil {
 			return 0, err
@@ -571,7 +584,7 @@ func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.Cro
 			t.UpdateAt,
 		)
 	}
-	exec, err := m.db.ExecContext(ctx, sqlStr[:len(sqlStr)-1]+cronTaskOnDuplicate, vals...)
+	exec, err := m.db.ExecContext(ctx, buildTaskInsertSQL(insertCronTask, "(?, ?, ?, ?, ?, ?, ?, ?, ?)", cronTaskOnDuplicate, len(cronTask)), vals...)
 	if err != nil {
 		return 0, err
 	}
@@ -1574,12 +1587,11 @@ func (m *mysqlTaskStorage) AddDaemonTask(ctx context.Context, tasks ...task.Daem
 }
 
 func (m *mysqlTaskStorage) RunAddDaemonTask(ctx context.Context, db SqlExecutor, tasks ...task.DaemonTask) (int, error) {
-
-	sqlStr := insertDaemonTask
+	if len(tasks) == 0 {
+		return 0, nil
+	}
 	values := make([]any, 0)
 	for _, t := range tasks {
-		sqlStr += "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),"
-
 		j, err := json.Marshal(t.Metadata.Options)
 		if err != nil {
 			return 0, err
@@ -1603,10 +1615,7 @@ func (m *mysqlTaskStorage) RunAddDaemonTask(ctx context.Context, db SqlExecutor,
 			details,
 		)
 	}
-	if sqlStr == insertDaemonTask {
-		return 0, nil
-	}
-	exec, err := db.ExecContext(ctx, sqlStr[:len(sqlStr)-1], values...)
+	exec, err := db.ExecContext(ctx, buildTaskInsertSQL(insertDaemonTask, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", "", len(tasks)), values...)
 	if err != nil {
 		dup, err := removeDuplicateDaemonTasks(err, tasks)
 		if err != nil {
