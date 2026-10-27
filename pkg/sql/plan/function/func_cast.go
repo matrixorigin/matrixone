@@ -6438,26 +6438,12 @@ func decimalToFloat[D decimalIntegerSource[D], T constraints.Float](
 	return nil
 }
 
-// decimalPhysicalPrecision returns the signed coefficient precision for a decimal OID.
-func decimalPhysicalPrecision(oid types.T) int32 {
-	switch oid {
-	case types.T_decimal64:
-		return 18
-	case types.T_decimal128:
-		return 38
-	case types.T_decimal256:
-		return 76
-	default:
-		return 0
-	}
-}
-
 // canWidenDecimalScale proves that increasing the coefficient's scale cannot
 // exceed either the declared precision or the physical DECIMAL representation.
 // Scale reduction can carry into the integer part, so it stays on the checked path.
 // Source and result types are fixed for a batch; evaluate this before the row loop.
 func canWidenDecimalScale(from, to types.Type) bool {
-	sourceLimit, targetLimit := decimalPhysicalPrecision(from.Oid), decimalPhysicalPrecision(to.Oid)
+	sourceLimit, targetLimit := types.DecimalMaxPrecision(from.Oid), types.DecimalMaxPrecision(to.Oid)
 	return sourceLimit > 0 && targetLimit > 0 && sourceLimit <= targetLimit &&
 		from.Width > 0 && from.Width <= sourceLimit &&
 		from.Scale >= 0 && from.Scale <= from.Width && to.Scale > from.Scale &&
