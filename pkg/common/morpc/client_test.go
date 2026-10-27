@@ -364,7 +364,7 @@ func TestCloseIdleBackends(t *testing.T) {
 		"",
 		factory,
 		WithClientMaxBackendPerHost(2),
-		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
+		WithClientMaxBackendMaxIdleDuration(time.Hour),
 		WithClientCreateTaskChanSize(1),
 		WithClientEnableAutoCreateBackend(),
 		WithClientDisableCircuitBreaker())
@@ -396,51 +396,53 @@ func TestCloseIdleBackends(t *testing.T) {
 			t.Fatal("timeout waiting for backend create (second backend may not have been created)")
 		}
 	}
-	c.mu.Lock()
-	require.Equal(t, 2, len(c.mu.backends["b1"]), "second backend must be created")
 	// b is the locked backend returned by getBackend; find the active (non-b) backend
 	// without assuming slice order, since concurrent creation may append in any order.
 	var activeBackend Backend
-	for _, bk := range c.mu.backends["b1"] {
-		if bk != b {
-			activeBackend = bk
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		if len(c.mu.backends["b1"]) == 2 {
+			for _, bk := range c.mu.backends["b1"] {
+				if bk != b {
+					activeBackend = bk
+					break
+				}
+			}
+		}
+		c.mu.Unlock()
+		if activeBackend != nil {
 			break
 		}
+		runtime.Gosched()
 	}
-	c.mu.Unlock()
 	require.NotNil(t, activeBackend, "active backend not found")
 
-	// b is the idle backend: unlock it and zero activeTime so GC will close it
-	b.Unlock()
+	// Mark b idle while its lease is still held. Zero would instead mark it inactive.
 	tb := b.(*testBackend)
-	tb.Lock()
-	tb.activeTime = time.Time{}
-	tb.Unlock()
+	tb.RWMutex.Lock()
+	tb.activeTime = time.Now().Add(-2 * time.Hour)
+	tb.RWMutex.Unlock()
+	b.Unlock()
 
 	gcDeadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(gcDeadline) {
-		// Refresh the non-idle backend inline so GC deterministically closes only the
-		// backend we explicitly marked idle, without relying on goroutine scheduling.
-		activeBackend.(*testBackend).active()
 		globalClientGC.doGCIdle()
-		runtime.Gosched()
 		c.mu.Lock()
-		v := len(c.mu.backends["b1"])
+		backends := c.mu.backends["b1"]
+		retained := len(backends) == 1 && backends[0] == activeBackend
 		c.mu.Unlock()
-		if v == 1 {
-			tb.RLock()
-			closed := tb.closed
-			tb.RUnlock()
-			require.True(t, closed, "idle backend must be closed by GC")
+		tb.RLock()
+		closed := tb.closed
+		tb.RUnlock()
+		if retained && closed {
 			ab := activeBackend.(*testBackend)
 			ab.RLock()
 			assert.False(t, ab.closed)
 			ab.RUnlock()
-			c.mu.Lock()
-			assert.Equal(t, 1, len(c.mu.backends["b1"]))
-			c.mu.Unlock()
 			return
 		}
+		runtime.Gosched()
 	}
 	t.Fatal("idle backend was not closed by GC within 10s")
 }
@@ -450,35 +452,41 @@ func TestLockedBackendCannotClosedWithGCIdleTask(t *testing.T) {
 		"",
 		newTestBackendFactory(),
 		WithClientMaxBackendPerHost(2),
-		WithClientMaxBackendMaxIdleDuration(time.Millisecond*100),
+		WithClientMaxBackendMaxIdleDuration(time.Hour),
 		WithClientCreateTaskChanSize(1),
 		WithClientEnableAutoCreateBackend())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
 
-	// Get backend with lock, may need retry
 	var b Backend
-	for i := 0; i < 10; i++ {
+	require.Eventually(t, func() bool {
 		b, err = c.getBackend("b1", true)
-		if err == nil && b != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	assert.NoError(t, err)
-	assert.NotNil(t, b)
+		return err == nil && b != nil
+	}, 10*time.Second, 10*time.Millisecond, "timeout waiting for locked backend")
 	assert.True(t, b.Locked())
 	b.(*testBackend).RWMutex.Lock()
-	b.(*testBackend).activeTime = time.Time{}
+	b.(*testBackend).activeTime = time.Now().Add(-2 * time.Hour)
 	b.(*testBackend).RWMutex.Unlock()
 
-	time.Sleep(time.Second * 1)
+	globalClientGC.doGCIdle()
 	c.mu.Lock()
-	assert.Equal(t, 1, len(c.mu.backends["b1"]))
+	found := false
+	for _, backend := range c.mu.backends["b1"] {
+		if backend == b {
+			found = true
+			break
+		}
+	}
 	c.mu.Unlock()
+	assert.True(t, found, "locked backend must remain in the pool")
+	tb := b.(*testBackend)
+	tb.RLock()
+	closed := tb.closed
+	tb.RUnlock()
+	assert.False(t, closed, "locked backend must not be closed")
 }
 
 func TestGetBackendsWithAllInactiveAndWillCreateNew(t *testing.T) {
@@ -488,37 +496,26 @@ func TestGetBackendsWithAllInactiveAndWillCreateNew(t *testing.T) {
 		WithClientMaxBackendPerHost(1),
 		WithClientCreateTaskChanSize(1),
 		WithClientEnableAutoCreateBackend())
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	c := rc.(*client)
 	defer func() {
 		assert.NoError(t, c.Close())
 	}()
 
-	b, err := c.getBackend("b1", false)
-	// With async creation, first call may fail
-	if err != nil {
-		// Wait for async creation
-		time.Sleep(50 * time.Millisecond)
+	var b Backend
+	require.Eventually(t, func() bool {
 		b, err = c.getBackend("b1", false)
-	}
-	assert.NoError(t, err)
-	assert.NotNil(t, b)
+		return err == nil && b != nil
+	}, 10*time.Second, 10*time.Millisecond, "timeout waiting for backend")
 
-	b.(*testBackend).activeTime = time.Time{}
+	tb := b.(*testBackend)
+	tb.RWMutex.Lock()
+	tb.activeTime = time.Time{}
+	tb.RWMutex.Unlock()
 
-	// Backend is now inactive, next call triggers async recreation
-	b, err = c.getBackend("b1", false)
-	// May return error initially
-	if err != nil {
-		// Wait for async creation and retry
-		for i := 0; i < 10; i++ {
-			time.Sleep(10 * time.Millisecond)
-			b, err = c.getBackend("b1", false)
-			if err == nil && b != nil {
-				break
-			}
-		}
-	}
-	assert.NoError(t, err)
-	assert.NotNil(t, b)
+	// Backend is now inactive, next call triggers async recreation.
+	require.Eventually(t, func() bool {
+		b, err = c.getBackend("b1", false)
+		return err == nil && b != nil
+	}, 10*time.Second, 10*time.Millisecond, "timeout waiting for replacement backend")
 }
