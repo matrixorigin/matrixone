@@ -45,7 +45,7 @@ func TestDecimal64DenseBatchMatchesRowFill(t *testing.T) {
 		for _, sum := range []bool{true, false} {
 			t.Run(fmt.Sprintf("empty/groups%d/sum%v", groups, sum), func(t *testing.T) {
 				mp := mpool.MustNewZero()
-				t.Cleanup(func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) })
+				t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
 				typ := types.New(types.T_decimal64, 12, 2)
 				input := vector.NewVec(typ)
 				defer input.Free(mp)
@@ -63,9 +63,16 @@ func TestDecimal64DenseBatchMatchesRowFill(t *testing.T) {
 				assertDecimal64StateEqual(t, actual, expected)
 				if groups == 0 {
 					for _, exec := range []*sumDecimal64FastExec{actual, expected} {
-						results, err := exec.Flush()
-						require.NoError(t, err)
-						require.Empty(t, results)
+						func() {
+							results, err := exec.Flush()
+							defer func() {
+								for _, result := range results {
+									result.Free(mp)
+								}
+							}()
+							require.NoError(t, err)
+							require.Empty(t, results)
+						}()
 					}
 				} else {
 					requireSingleAggResultEqual(t, mp, actual, expected, "")
@@ -78,9 +85,15 @@ func TestDecimal64DenseBatchMatchesRowFill(t *testing.T) {
 			for _, sum := range []bool{true, false} {
 				t.Run(fmt.Sprintf("groups%d/%s/sum%v", groups, kind, sum), func(t *testing.T) {
 					mp := mpool.MustNewZero()
+					t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
 					typ := types.New(types.T_decimal64, 18, 2)
 					const rows = 515
 					var input *vector.Vector
+					defer func() {
+						if input != nil {
+							input.Free(mp)
+						}
+					}()
 					switch kind {
 					case "constant":
 						var err error
@@ -109,7 +122,9 @@ func TestDecimal64DenseBatchMatchesRowFill(t *testing.T) {
 						id = AggIdOfAvg
 					}
 					actual := newSumDecimal64FastExec(mp, sum, id, false, typ).(*sumDecimal64FastExec)
+					defer actual.Free()
 					expected := newSumDecimal64FastExec(mp, sum, id, false, typ).(*sumDecimal64FastExec)
+					defer expected.Free()
 					require.NoError(t, actual.GroupGrow(groups))
 					require.NoError(t, expected.GroupGrow(groups))
 					for offset := 1; offset < rows; {
@@ -129,7 +144,17 @@ func TestDecimal64DenseBatchMatchesRowFill(t *testing.T) {
 						offset += n
 					}
 					a, ea := actual.Flush()
+					defer func() {
+						for _, v := range a {
+							v.Free(mp)
+						}
+					}()
 					b, eb := expected.Flush()
+					defer func() {
+						for _, v := range b {
+							v.Free(mp)
+						}
+					}()
 					require.Equal(t, eb, ea)
 					if ea == nil {
 						for i := range a {
@@ -146,20 +171,10 @@ func TestDecimal64DenseBatchMatchesRowFill(t *testing.T) {
 							}
 						}
 					}
-					for _, v := range a {
-						v.Free(mp)
-					}
-					for _, v := range b {
-						v.Free(mp)
-					}
 					require.Equal(t, before, vector.MustFixedColNoTypeCheck[types.Decimal64](input))
 					for i := range nulls {
 						require.Equal(t, nulls[i], input.IsNull(uint64(i)))
 					}
-					actual.Free()
-					expected.Free()
-					input.Free(mp)
-					require.Zero(t, mp.CurrNB())
 				})
 			}
 		}
@@ -168,13 +183,17 @@ func TestDecimal64DenseBatchMatchesRowFill(t *testing.T) {
 
 func TestDecimal64DenseBatchGrowthBoundary(t *testing.T) {
 	mp := mpool.MustNewZero()
+	t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
 	typ := types.New(types.T_decimal64, 18, 0)
 	input := vector.NewVec(typ)
+	defer input.Free(mp)
 	for i := 0; i < 513; i++ {
 		require.NoError(t, vector.AppendFixed(input, types.Decimal64(i-256), false, mp))
 	}
 	actual := newSumDecimal64FastExec(mp, true, AggIdOfSum, false, typ).(*sumDecimal64FastExec)
+	defer actual.Free()
 	expected := newSumDecimal64FastExec(mp, true, AggIdOfSum, false, typ).(*sumDecimal64FastExec)
+	defer expected.Free()
 	require.NoError(t, actual.GroupGrow(256))
 	require.NoError(t, expected.GroupGrow(256))
 	for phase := 0; phase < 2; phase++ {
@@ -195,10 +214,6 @@ func TestDecimal64DenseBatchGrowthBoundary(t *testing.T) {
 		}
 		assertDecimal64StateEqual(t, actual, expected)
 	}
-	actual.Free()
-	expected.Free()
-	input.Free(mp)
-	require.Zero(t, mp.CurrNB())
 }
 
 func BenchmarkDecimal64DenseBatch(b *testing.B) {
@@ -206,8 +221,10 @@ func BenchmarkDecimal64DenseBatch(b *testing.B) {
 		for _, groups := range []int{1, 100, 256, 257} {
 			b.Run(fmt.Sprintf("rows%d/groups%d", size, groups), func(b *testing.B) {
 				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
 				typ := types.New(types.T_decimal64, 18, 2)
 				input := vector.NewVec(typ)
+				defer input.Free(mp)
 				for i := 0; i < size; i++ {
 					if err := vector.AppendFixed(input, types.Decimal64(i%23-11), false, mp); err != nil {
 						b.Fatal(err)
@@ -218,6 +235,7 @@ func BenchmarkDecimal64DenseBatch(b *testing.B) {
 					ids[i] = uint64(i%groups + 1)
 				}
 				exec := newSumDecimal64FastExec(mp, true, AggIdOfSum, false, typ)
+				defer exec.Free()
 				if err := exec.GroupGrow(groups); err != nil {
 					b.Fatal(err)
 				}
@@ -233,8 +251,6 @@ func BenchmarkDecimal64DenseBatch(b *testing.B) {
 					}
 				}
 				b.StopTimer()
-				exec.Free()
-				input.Free(mp)
 			})
 		}
 	}
@@ -244,13 +260,16 @@ func TestDecimal64DenseBatchPreservesUncheckedPrefixSemantics(t *testing.T) {
 	for _, isSum := range []bool{true, false} {
 		t.Run(fmt.Sprintf("sum%v", isSum), func(t *testing.T) {
 			mp := mpool.MustNewZero()
+			t.Cleanup(func() { defer mpool.DeleteMPool(mp); require.Zero(t, mp.CurrNB()) })
 			param := types.New(types.T_decimal64, 18, 0)
 			id := AggIdOfSum
 			if !isSum {
 				id = AggIdOfAvg
 			}
 			actual := newSumDecimal64FastExec(mp, isSum, id, false, param).(*sumDecimal64FastExec)
+			defer actual.Free()
 			expected := newSumDecimal64FastExec(mp, isSum, id, false, param).(*sumDecimal64FastExec)
+			defer expected.Free()
 			require.NoError(t, actual.GroupGrow(1))
 			require.NoError(t, expected.GroupGrow(1))
 			one := types.Decimal128FromInt64(1)
@@ -261,6 +280,7 @@ func TestDecimal64DenseBatchPreservesUncheckedPrefixSemantics(t *testing.T) {
 				vector.MustFixedColNoTypeCheck[int64](exec.state[0].vecs[1])[0] = 1
 			}
 			input := vector.NewVec(param)
+			defer input.Free(mp)
 			for _, value := range []int64{1, 1, -2} {
 				require.NoError(t, vector.AppendFixed(input, types.Decimal64(value), false, mp))
 			}
@@ -274,10 +294,6 @@ func TestDecimal64DenseBatchPreservesUncheckedPrefixSemantics(t *testing.T) {
 				wantErr = "Decimal128 Div overflow"
 			}
 			requireSingleAggResultEqual(t, mp, actual, expected, wantErr)
-			actual.Free()
-			expected.Free()
-			input.Free(mp)
-			require.Zero(t, mp.CurrNB())
 		})
 	}
 }
