@@ -4820,8 +4820,8 @@ func calcDateTimeInterval(t1 types.Datetime, t2 types.Datetime, sign int) (secon
 	second := int(t2.Sec())
 	microsecond := int(t2.MicroSec())
 
-	days1 := calcDaysSinceZero(int(t1.Year()), int(t1.Month()), int(t1.Day()))
-	days2 := calcDaysSinceZero(year, month, day)
+	days1 := types.MySQLDayNumber(int(t1.Year()), int(t1.Month()), int(t1.Day()))
+	days2 := types.MySQLDayNumber(year, month, day)
 	days1 -= sign * days2
 
 	tmp := (int64(days1)*SecondsIn24Hours+
@@ -4839,22 +4839,6 @@ func calcDateTimeInterval(t1 types.Datetime, t2 types.Datetime, sign int) (secon
 	seconds = int(tmp / 1e6)
 	microseconds = int(tmp % 1e6)
 	return
-}
-
-// calcDaynr calculates days since 0000-00-00.
-func calcDaysSinceZero(year int, month int, day int) int {
-	if year == 0 && month == 0 {
-		return 0
-	}
-
-	delsum := 365*year + 31*(month-1) + day
-	if month <= 2 {
-		year--
-	} else {
-		delsum -= (month*4 + 23) / 10
-	}
-	temp := ((year/100 + 1) * 3) / 4
-	return delsum + year/4 - temp
 }
 
 // Seconds in 0000 AD
