@@ -129,7 +129,6 @@ func TestSessionControlProtocol(t *testing.T) {
 	}{
 		{query.CmdMethod_KillSession, defines.MORPCVersion120},
 		{query.CmdMethod_DisconnectSession, defines.MORPCVersion120},
-		{query.CmdMethod_GetPythonUdfStatus, defines.MORPCVersion133},
 	} {
 		require.Equal(t, test.floor, methodVersions[test.method])
 		req := &query.Request{CmdMethod: test.method}
@@ -168,4 +167,20 @@ func TestSessionControlProtocol(t *testing.T) {
 		require.NoError(t, got.Unmarshal(data))
 		require.Equal(t, response, &got)
 	}
+}
+
+func TestPythonStatusHasNoFeatureProtocolAdmission(t *testing.T) {
+	sid := "python-status-no-feature-protocol"
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, sid, zap.NewNop())
+	runtime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { runtime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+	value, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	require.True(t, rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, value))
+	require.Error(t, CheckMethodVersion(context.Background(), sid, nil))
+	req := &query.Request{CmdMethod: query.CmdMethod_GetPythonUdfStatus}
+	require.NoError(t, CheckMethodVersion(context.Background(), sid, req))
+	require.Error(t, CheckMethodVersion(context.Background(), sid, &query.Request{CmdMethod: query.CmdMethod_KillSession}))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCMinVersion)
+	require.NoError(t, CheckMethodVersion(context.Background(), sid, req))
+	require.Error(t, CheckMethodVersion(context.Background(), sid, &query.Request{CmdMethod: query.CmdMethod_KillSession}))
 }

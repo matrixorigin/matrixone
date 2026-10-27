@@ -156,7 +156,7 @@ func (*namespaceValidationSession) GetTxnCompileCtx() *TxnCompilerContext { retu
 func (*namespaceValidationSession) GetAccountId() uint32                  { return 9 }
 func (*namespaceValidationSession) GetService() string                    { return "" }
 func TestRoutinePlanWithoutNamespaceRebinds(t *testing.T) {
-	setSharedRoutineRevisionProtocolForTest(t, sharedRoutineRevisionProtocolVersion)
+	setRoutineProtocolForTest(t, defines.MORPCMinVersion)
 	dependency := testRoutinePlanDependency()
 	dependency.NamespaceFingerprint = ""
 	p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{RoutineDependencies: []*planpb.RoutinePlanDependency{dependency}}}}

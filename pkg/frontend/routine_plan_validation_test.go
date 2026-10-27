@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -312,7 +313,7 @@ func TestCachedRoutinePlanWithDependencyRequiresCatalogSession(t *testing.T) {
 }
 
 func TestValidateRoutinePlanDependenciesUsesCatalogTransactionAndFailsClosed(t *testing.T) {
-	setSharedRoutineRevisionProtocolForTest(t, sharedRoutineRevisionProtocolVersion)
+	setRoutineProtocolForTest(t, defines.MORPCMinVersion)
 	ctx := context.Background()
 	plainPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{}}}
 	changed, err := validateRoutinePlanDependencies(ctx, nil, plainPlan)
@@ -483,29 +484,4 @@ func TestRoutinePlanDependenciesVisitsSharedQueriesOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, dependencies, 1)
 	require.Same(t, dependency, dependencies[0])
-}
-
-func TestPreparedRoutinePlanRejectsProtocolRollbackBeforeCatalogRead(t *testing.T) {
-	setSharedRoutineRevisionProtocolForTest(t, sharedRoutineRevisionProtocolVersion-1)
-	for _, language := range []string{udf.LanguagePython, udf.LanguageSQL} {
-		t.Run(language, func(t *testing.T) {
-			dependency := testRoutinePlanDependency()
-			dependency.Language = language
-			if language == udf.LanguageSQL {
-				dependency.ArtifactDigest = ""
-				dependency.EnvironmentDigest = ""
-			}
-			p := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{RoutineDependencies: []*planpb.RoutinePlanDependency{dependency}}}}
-			exec := &routinePlanValidationExec{}
-			changed, err := validateRoutinePlanDependencies(context.Background(), &routinePlanValidationSession{exec: exec}, p)
-			if language == udf.LanguagePython {
-				require.ErrorContains(t, err, "Python prepared execution requires")
-				require.False(t, changed)
-			} else {
-				require.NoError(t, err)
-				require.True(t, changed)
-			}
-			require.Empty(t, exec.statements)
-		})
-	}
 }

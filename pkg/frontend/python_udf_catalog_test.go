@@ -522,7 +522,7 @@ func TestPersistPythonCreateIdentityLookupIncludesLanguage(t *testing.T) {
 	require.Contains(t, b.executedSQLs[0], "language = 'python'")
 }
 
-func TestPersistSQLCreateKeepsRollingCatalogCompatibility(t *testing.T) {
+func TestPersistSQLCreateKeepsHistoricalCatalogCompatibility(t *testing.T) {
 	bh := &backgroundExecTestWithHistory{}
 	bh.init()
 	bh.sql2err[functionRevisionCatalogSchemaCheck] = moerr.NewNoSuchTableNoCtx(
@@ -544,7 +544,7 @@ func TestPersistSQLCreateKeepsRollingCatalogCompatibility(t *testing.T) {
 	require.NotContains(t, bh.executedSqls[1], "mo_function_revisions")
 }
 
-func setSharedRoutineRevisionProtocolForTest(t *testing.T, version int64) {
+func setRoutineProtocolForTest(t *testing.T, version int64) {
 	t.Helper()
 	rt := moruntime.ServiceRuntime("")
 	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -556,99 +556,6 @@ func setSharedRoutineRevisionProtocolForTest(t *testing.T, version int64) {
 		}
 	})
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-}
-
-func TestSharedRoutineRevisionProtocolGatesMixedVersionSQLUdfWrites(t *testing.T) {
-	setSharedRoutineRevisionProtocolForTest(t, sharedRoutineRevisionProtocolVersion-1)
-
-	create := &backgroundExecTestWithHistory{}
-	create.init()
-	create.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
-	err := persistUserDefinedFunction(context.Background(), create, &TenantInfo{User: "owner"}, 7, userDefinedFunctionDefinition{
-		name:     "legacy_until_ready",
-		args:     `[{"name":"value","type":"bigint"}]`,
-		argTypes: `["bigint"]`,
-		retType:  "bigint",
-		body:     "select value + 1",
-		lang:     string(tree.SQL),
-		dbName:   "db1",
-	}, nil)
-	require.NoError(t, err)
-	require.Len(t, create.executedSqls, 2)
-	require.NotContains(t, create.executedSqls[1], "mo_function_revisions")
-
-	for _, test := range []struct {
-		name                string
-		revision, namespace int64
-		wantError           string
-	}{
-		{name: "legacy_zero_head"},
-		{name: "revision_head", revision: 1, namespace: 1, wantError: "SQL UDF revision replacement requires MORPC protocol version 133"},
-		{name: "half_zero_revision", namespace: 1, wantError: "invalid revision head"},
-		{name: "half_zero_namespace", revision: 1, wantError: "invalid revision head"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			functionID := int64(92)
-			replace := &backgroundExecTestWithHistory{}
-			replace.init()
-			replace.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
-			replace.sql2result[fmt.Sprintf("select language from mo_catalog.mo_user_defined_function where function_id = %d;", functionID)] = singleStringResult("language", string(tree.SQL))
-			replace.sql2result[fmt.Sprintf("select rettype from mo_catalog.mo_user_defined_function where function_id = %d;", functionID)] = singleStringResult("rettype", "bigint")
-			result := &MysqlResultSet{}
-			for _, name := range []string{"active_revision", "namespace_version"} {
-				column := &MysqlColumn{}
-				column.SetName(name)
-				column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-				result.AddColumn(column)
-			}
-			result.AddRow([]interface{}{test.revision, test.namespace})
-			replace.sql2result[fmt.Sprintf("select active_revision, namespace_version from mo_catalog.mo_user_defined_function where function_id = %d;", functionID)] = result
-			err := persistUserDefinedFunction(context.Background(), replace, &TenantInfo{User: "owner"}, 7, userDefinedFunctionDefinition{
-				name: "legacy_until_ready", args: `[{"name":"value","type":"bigint"}]`,
-				argTypes: `["bigint"]`, retType: "bigint", body: "select value + 2", lang: string(tree.SQL), dbName: "db1",
-			}, &functionID)
-			if test.wantError != "" {
-				require.ErrorContains(t, err, test.wantError)
-			} else {
-				require.NoError(t, err)
-			}
-			var updates int
-			for _, sql := range replace.executedSqls {
-				require.NotContains(t, sql, "insert into mo_catalog.mo_function_revisions")
-				if strings.HasPrefix(sql, "update mo_catalog.mo_user_defined_function") {
-					updates++
-				}
-			}
-			if test.wantError == "" {
-				require.Equal(t, 1, updates)
-			} else {
-				require.Zero(t, updates)
-			}
-		})
-	}
-}
-
-func TestReadSQLRevisionUsesLegacyBodyBeforeRevisionProtocol(t *testing.T) {
-	setSharedRoutineRevisionProtocolForTest(t, sharedRoutineRevisionProtocolVersion-1)
-
-	background := &backgroundExecTestWithHistory{}
-	background.init()
-	got, found, err := readSQLRevision(context.Background(), background, 92, nil)
-	require.NoError(t, err)
-	require.False(t, found)
-	require.Equal(t, sqlRevisionCatalogRow{}, got)
-	require.Empty(t, background.executedSqls,
-		"ResolveUdf keeps the already-read legacy compatibility row while the shared revision contract is gated")
-}
-
-func TestPythonUdfRevisionProtocolRejectsImmediatePredecessor(t *testing.T) {
-	setSharedRoutineRevisionProtocolForTest(t, udf.SharedRoutineRevisionProtocolVersion-1)
-
-	background := &backgroundExecTestWithHistory{}
-	background.init()
-	err := ensurePythonUdfCatalogReady(context.Background(), background)
-	require.ErrorContains(t, err, "Python UDF catalog contract requires MORPC protocol version 133")
-	require.Empty(t, background.executedSqls)
 }
 
 func TestFunctionRevisionCatalogAvailablePropagatesMalformedProbeResult(t *testing.T) {
@@ -703,6 +610,7 @@ func TestExactlyOneCatalogRowRejectsDuplicateOrSplitPointReads(t *testing.T) {
 }
 
 func TestPersistSQLCreatePublishesSharedRevisionWhenCatalogIsReady(t *testing.T) {
+	setRoutineProtocolForTest(t, defines.MORPCMinVersion)
 	bh := &backgroundExecTestWithHistory{}
 	bh.init()
 	bh.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
@@ -1045,6 +953,7 @@ func TestReadSQLRevisionBindsActiveHeadAndRejectsTampering(t *testing.T) {
 }
 
 func TestEnsurePythonUdfCatalogReadyRequiresCurrentSchema(t *testing.T) {
+	setRoutineProtocolForTest(t, defines.MORPCMinVersion)
 	bh := &backgroundExecTestWithHistory{}
 	bh.init()
 	bh.sql2result[pythonUdfCatalogIdentitySchemaCheck] = emptyCatalogProbeResult(6)
@@ -1592,4 +1501,33 @@ func TestPythonDropSignatureUsesExactDescriptor(t *testing.T) {
 	require.Contains(t, bh.executedSQLs, fmt.Sprintf(deleteUserDefinedFunctionRevisionsFormat, 101))
 	require.NotContains(t, bh.executedSQLs, fmt.Sprintf(deleteUserDefinedFunctionFormat, 102))
 	require.NotContains(t, bh.executedSQLs, fmt.Sprintf(deleteUserDefinedFunctionRevisionsFormat, 102))
+}
+
+func TestSQLRevisionReplacementRejectsIncompleteHead(t *testing.T) {
+	for _, head := range [][2]int64{{0, 1}, {1, 0}} {
+		t.Run(fmt.Sprint(head), func(t *testing.T) {
+			bh := &backgroundExecTestWithHistory{}
+			bh.init()
+			bh.sql2result[functionRevisionCatalogSchemaCheck] = emptyCatalogProbeResult(20)
+			id := int64(92)
+			bh.sql2result[fmt.Sprintf("select language from mo_catalog.mo_user_defined_function where function_id = %d;", id)] = singleStringResult("language", string(tree.SQL))
+			result := &MysqlResultSet{}
+			for _, name := range []string{"active_revision", "namespace_version"} {
+				column := &MysqlColumn{}
+				column.SetName(name)
+				column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+				result.AddColumn(column)
+			}
+			result.AddRow([]interface{}{head[0], head[1]})
+			bh.sql2result[fmt.Sprintf("select active_revision, namespace_version from mo_catalog.mo_user_defined_function where function_id = %d;", id)] = result
+			err := persistUserDefinedFunction(context.Background(), bh, &TenantInfo{User: "owner"}, 7, userDefinedFunctionDefinition{
+				name: "incomplete_head", args: `[{"name":"value","type":"bigint"}]`, argTypes: `["bigint"]`, retType: "bigint", body: "select value + 2", lang: string(tree.SQL), dbName: "db1",
+			}, &id)
+			require.ErrorContains(t, err, "invalid revision head")
+			for _, sql := range bh.executedSqls {
+				require.NotContains(t, sql, "insert into")
+				require.NotContains(t, sql, "update mo_catalog.mo_user_defined_function")
+			}
+		})
+	}
 }
