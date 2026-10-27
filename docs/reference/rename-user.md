@@ -31,8 +31,11 @@ Existing sessions retain historical login display, but authority and login
 bookkeeping use IDs. SET DEFAULT ROLE may require reconnecting. Reverse rename
 is a new operation, not guaranteed rollback if the former name has been reused.
 
-Mock/unit results are not engine concurrency, multi-CN, restart or restore
-acceptance. Consult the versioned design and final validation record before rollout.
+Public SQL, selected deterministic engine interleavings, separate-process two-CN
+bootstrap, snapshot restore, restart and exact pre-feature-base offline replacement
+have been exercised. See the [current design validation boundary](../design/20261026-rename-user.md#current-validation-and-supported-rollout-boundary).
+Historical released-version upgrades, rolling/mixed versions, downgrade and
+multi-host deployment are not covered by that result.
 
 ## Destination names and login compatibility
 

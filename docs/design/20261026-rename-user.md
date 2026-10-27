@@ -1,9 +1,10 @@
 # RENAME USER identity-preserving compatibility design
 
 - Owning issue: https://github.com/matrixorigin/matrixone/issues/30467
-- Revision: v0.6, 2026-10-27; **AFFECTED DESIGN REVIEW PENDING**
+- Revision: v0.6, 2026-10-27; approved scope and affected technical design review complete.
 - Source baseline: `83c1e23526fc0ed31188abd7fc2ca87cd3a6d4b3` (fresh main clone).
-- Implementation PR: not created. No product implementation accompanies this draft.
+- Implementation: parser, frontend and regression coverage are present. Maintainer
+  PR review is separate from the completed technical design/runtime validation.
 - Review routing: frontend owner `@XuPeng-SH`; parser owners `@iamlinjunhong` and
   `@XuPeng-SH` (CODEOWNERS). The repository does not prescribe one exclusive
   approver, but a traceable design approval is mandatory before implementation.
@@ -254,8 +255,9 @@ approval request should present these as full MySQL identity compatibility.
 | Delivery | gofmt, affected-package vet/lint, generated-parser diff, self-review |
 
 Use the repository CGo wrapper for transitive frontend tests. Do not interpret a
-mock-only pass as public SQL or multi-CN acceptance. All implementation tests are
-currently **NOT_RUN** because implementation is held behind this design gate.
+mock-only pass as public SQL or multi-CN acceptance. The current validation
+status below records the executed public SQL and deployment boundaries separately
+from unexecuted release/topology combinations.
 
 ## Compatibility and rollout
 
@@ -270,7 +272,11 @@ existing conservative identity-continuity rule. Reversing names is a new account
 administration operation, not guaranteed rollback (the old name may be reused).
 No deployment, account mutation, or wire-version bump is authorized here.
 
-## Review record and evidence limits
+## Historical review record and evidence limits
+
+The v0.1–v0.4 entries below describe earlier revisions before approval and
+implementation. Their pending/NOT_RUN labels are historical and are superseded
+by the approved addenda and current validation status below.
 
 - v0.1: REQUEST_CHANGES, independent design reviewer.
 - v0.2: REQUEST_CHANGES; concrete writer and operational-policy gaps.
@@ -325,8 +331,7 @@ allow stale SI canonical reads (violates identity invariant), separate side txn
 all non-RC CLONE. User accepted continued dot work after the exact additional
 restriction and cloud validation explanation on 2026-10-27:
 Sentinel_7b8d3b5825d081919aa77510cd153f72, “发布云端，允许dot继续”.
-Parent provided this as explicit scope approval; publication here remains out of
-scope. Tests must cover function/procedure, missing op, SI/optimistic rejection,
+This records the explicit scope approval at that implementation stage. Tests cover function/procedure, missing op, SI/optimistic rejection,
 pessimistic-RC acceptance and no-routine control, plus entrypoint proof that
 rejection occurs before CREATE DATABASE.
 
@@ -410,5 +415,33 @@ The recovered v0.5 patch/head is 9022c82b20f124841a30b57fbd404512364c571eeb69c61
 78fc21627d6799d25e1d3bdc83086c41503827f2. Restored from verified Library v1, not
 reconstructed from conversation. All existing offline/bootstrap/restore, host,
 admin, DEFINER, CLONE pessimistic-RC and stable-ID contracts remain unchanged.
-Real SQL/multi-CN/restore acceptance remains NOT_RUN and transfer blocked until
-supported execution is available; this user approval does not waive those gates.
+The transfer and socket limitations recorded during restoration were subsequently
+resolved through the supported local execution flow. The current status below
+supersedes that earlier execution block; the approval did not waive validation.
+
+
+## Current validation and supported rollout boundary
+
+The v0.6 destination-name scope received user approval and independent affected
+design review before implementation. Focused consumer tests, frontend owning
+normal/race tests, and affected compile/vet checks completed successfully.
+
+Real public SQL exercised stable IDs/credentials/grants, old/new login and
+existing sessions, ordered-pair rollback, destination restrictions, DEFINER and
+routine-bearing CLONE admission. Deterministic real-engine interleavings covered
+distinct-operator target-key conflict with whole-statement rollback, ordinary-role
+GRANT/DROP binding revalidation, and routine create/replace versus rename. The
+GRANT case is not administrator promotion; existing guards reject that promotion.
+Snapshot restore both before and after rename and same-version restart passed.
+
+Separate OS processes for one LOG, one TN and two CNs completed authoritative
+special-task bootstrap on both CNs before feature SQL. A fully stopped replacement
+from pre-feature base 83c1e23526fc0ed31188abd7fc2ca87cd3a6d4b3 to the implementation
+at 38ab30c91e69699e82d1937b9d0cfdfa465770b6 preserved controlled user identity,
+credentials, grants, data and routine behavior, then exercised rename/login.
+
+This is bounded validation of that exact base-to-head replacement. A separately
+pinned historical released-version/catalog upgrade, rolling or mixed-version
+serving, downgrade, multi-host deployment and a runtime MySQL oracle were not run.
+Those results do not broaden the operational prerequisites in the reference
+contract or constitute maintainer/production release approval.
