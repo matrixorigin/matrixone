@@ -10881,61 +10881,6 @@ func initReplaceTestCase() []tcTemp {
 
 			expect: []string{"123"},
 		},
-		//FIXME: Didn't implement the ReplaceWithArrays. Hence multi string case fails.
-
-		//{
-		//	info: "Multi string case1",
-		//	input: [][]string{
-		//		[]string{"firststring", "secondstring"},
-		//		[]string{"st"},
-		//		[]string{"re"},
-		//	},
-		//
-		//	expect: []string{"firrerering", "secondrering"},
-		//},
-		//{
-		//	info: "Multi string case2",
-		//	input: [][]string{
-		//		[]string{"Oneinput"},
-		//		[]string{"n"},
-		//		[]string{"e", "b"},
-		//	},
-		//
-		//	expect: []string{"Oeeieput", "Obeibput"},
-		//},
-		//
-		//{
-		//	info: "Multi string case3",
-		//	input: [][]string{
-		//		[]string{"aaabbb"},
-		//		[]string{"a", "b"},
-		//		[]string{"n"},
-		//	},
-		//
-		//	expect: []string{"nnnbbb", "aaannn"},
-		//},
-		//
-		//{
-		//	info: "Multi string case4",
-		//	input: [][]string{
-		//		[]string{"Matrix", "Origin"},
-		//		[]string{"a", "i"},
-		//		[]string{"b", "d"},
-		//	},
-		//
-		//	expect: []string{"Mbtrix", "Ordgdn"},
-		//},
-		//
-		//{
-		//	info: "Scalar case1",
-		//	input: [][]string{
-		//		[]string{"cool"},
-		//		[]string{"o"},
-		//		[]string{"a"},
-		//	},
-		//
-		//	expect: []string{"caal"},
-		//},
 	}
 
 	var testInputs = make([]tcTemp, 0, len(cases))
@@ -11012,6 +10957,39 @@ func TestReplace(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, Replace)
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestReplaceVectorAndConstantInputs(t *testing.T) {
+	cases := []struct {
+		name                                      string
+		value, needle, replacement, want          []string
+		valueConst, needleConst, replacementConst bool
+	}{
+		{"constant needle and replacement", []string{"firststring", "secondstring"}, []string{"st"}, []string{"re"}, []string{"firrerering", "secondrering"}, false, true, true},
+		{"constant needle", []string{"Oneinput"}, []string{"n"}, []string{"e", "b"}, []string{"Oeeieput", "Obeibput"}, true, true, false},
+		{"constant replacement", []string{"aaabbb"}, []string{"a", "b"}, []string{"n"}, []string{"nnnbbb", "aaannn"}, true, false, true},
+		{"per-row arguments", []string{"Matrix", "Origin"}, []string{"a", "i"}, []string{"b", "d"}, []string{"Mbtrix", "Ordgdn"}, false, false, false},
+		{"single row", []string{"cool"}, []string{"o"}, []string{"a"}, []string{"caal"}, false, false, false},
+	}
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := types.T_varchar.ToType()
+			value := NewFunctionTestInput(typ, tc.value, nil)
+			value.isConst = tc.valueConst
+			needle := NewFunctionTestInput(typ, tc.needle, nil)
+			replacement := NewFunctionTestInput(typ, tc.replacement, nil)
+			needle.isConst = tc.needleConst
+			replacement.isConst = tc.replacementConst
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{value, needle, replacement},
+				NewFunctionTestResult(typ, false, tc.want, nil), Replace)
+			fc.fnLength = len(tc.want)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
 	}
 }
 
