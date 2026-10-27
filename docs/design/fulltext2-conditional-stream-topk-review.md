@@ -36,3 +36,26 @@ proof R3; query-local bounded collector and cancellation R3; existing row-key
 and score-batch changes retain their previously mapped evidence. Final evidence
 must cover every changed closure, including negative public SQL controls,
 static/package checks, focused lifecycle/race tests and real same-data A/B.
+
+## Implementation review before real-data execution
+
+Root and the independent design reviewer inspected the full production closure.
+The ordinary BM25 configuration does not carry a source table name; the reader
+therefore proves source identity from the trusted scan specification and the
+actual resolved relation. A first implementation's config-name check would have
+prevented activation and was corrected before runtime testing. Source/spec
+identity equality, source runtime-filter rejection and nil-process fallback are
+now local guards. No correctness guard was relaxed to obtain activation.
+
+The frozen source manifest passed normal owning-package tests/vet, public SQL
+binding controls, concurrent-collector race repetition, owning-package race and
+incremental lint. These do not establish actual runtime activation or speedup;
+the next gate is bounded service-level correctness and full-corpus A/B.
+
+Accepted cancellation scope: the 8192-visit bound applies to candidate traversal
+and its segment boundaries. Existing tokenization and dirty-liveness document
+frequency preprocessing remain unchanged on both the original stream and the
+collector. Both call the same buildWandIters/globalStats.df/liveTermDF before
+emission. The independent reviewer found no new repetition, lock, wait or
+recursion in that stage. This PR does not claim an end-to-end cancellation time
+bound for that pre-existing preprocessing; broadening it is separate work.
