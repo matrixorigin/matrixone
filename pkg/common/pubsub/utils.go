@@ -27,7 +27,7 @@ import (
 )
 
 func InSubMetaTables(m *plan.SubscriptionMeta, tableName string) bool {
-	if strings.ToLower(m.Tables) == TableAll {
+	if m.Tables == TableAll {
 		return true
 	}
 
