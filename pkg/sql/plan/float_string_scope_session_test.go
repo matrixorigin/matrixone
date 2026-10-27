@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -25,6 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
@@ -213,6 +217,221 @@ func TestLegacyFloatTableSessionWitnesses(t *testing.T) {
 	}
 }
 
+func TestLegacyFloatAlteredSessionWitnesses(t *testing.T) {
+	const expression = "concat(a,cast(concat(from_unixtime(0),cast(1 as decimal(10,0))/cast(7 as decimal(10,0))) as char(100)))"
+	for _, tc := range []struct {
+		name, suffix string
+		offset       int
+		precision    int32
+	}{
+		{"next_minute", "1970-01-01 08:02:00", 8*3600 + 2*60, 4},
+		{"changed_precision", "1970-01-01 08:02:00", 8*3600 + 2*60, 30},
+		{"earlier_witness", "1969-12-31 10:01:00", -(13*3600 + 59*60), 4},
+		{"distant_witness", "1970-01-01 13:59:00", 13*3600 + 59*60, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			compiler, source := legacyFloatScopeTable(t, "create table t(a double,g varchar(200) default("+expression+"),h varchar(200) default("+expression+"))", 4, time.FixedZone("creation", 8*3600+60))
+			func() {
+				proc := compiler.GetProcess()
+				reading := compiler.GetContext()
+				defer func() {
+					compiler.SetContext(reading)
+					proc.Ctx = reading
+					compiler.ResolveVariableFunc = nil
+					proc.GetSessionInfo().TimeZone = time.UTC
+				}()
+				creation := function.WithDivPrecisionIncrement(function.WithLegacyFloatStringFormatting(function.WithLegacyFloatStringBounds(reading)), tc.precision)
+				compiler.SetContext(creation)
+				proc.Ctx = creation
+				proc.GetSessionInfo().TimeZone = time.FixedZone("alter", tc.offset)
+				fallback := *compiler
+				compiler.ResolveVariableFunc = func(name string, system, global bool) (any, error) {
+					if name == "div_precision_increment" {
+						return int64(tc.precision), nil
+					}
+					return fallback.ResolveVariable(name, system, global)
+				}
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "alter table t alter column h set default("+expression+")", 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				altered := CloneTableDefForPlan(source, true)
+				_, err = AlterColumn(compiler, &planpb.AlterTable{TableDef: source, CopyTableDef: altered}, stmt.(*tree.AlterTable).Options[0].(*tree.AlterTableAlterColumnClause), initAlterTableContext(source, altered, ""))
+				require.NoError(t, err)
+				source = altered
+			}()
+			before := proto.Clone(source)
+			execution := CloneTableDefForPlan(source, true)
+			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
+			const full = "-0.0000000000000012345678901234568"
+			require.Equal(t, full+"1970-01-01 08:01:000.1429", executeLegacyFloatScope(t, compiler, execution, "g"))
+			fraction := "0.1429"
+			if tc.precision == 30 {
+				fraction = "0.142857142857142857142857142857"
+			}
+			require.Equal(t, full+tc.suffix+fraction, executeLegacyFloatScope(t, compiler, execution, "h"))
+			require.True(t, proto.Equal(before, source))
+
+			_, err := AnalyzeTableDumpBindings(compiler, execution, nil)
+			require.NoError(t, err)
+			_, err = AnalyzeTableDumpBindings(compiler, execution, execution)
+			require.NoError(t, err)
+			require.Same(t, time.UTC, compiler.GetProcess().GetSessionInfo().TimeZone)
+			require.Equal(t, "en_US", compiler.GetProcess().GetSessionInfo().LCTimeNames)
+			migrated := proto.Clone(execution)
+			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
+			require.True(t, proto.Equal(migrated, execution))
+			proof := newTableDumpProofProcess(compiler)
+			defer proof.Free()
+			proofCtx := tableDumpBindContext{CompilerContext: compiler, ctx: compiler.GetContext(), proc: proof}
+			budget := &tableDumpBindingBudget{}
+			for item := range persistedTableExpressions(source) {
+				if !hasLegacyFloatStringCast(item.expr) {
+					continue
+				}
+				bound, err := rebindLegacyFloatStringExpression(proofCtx, source, item, budget)
+				require.NoError(t, err)
+				require.NotNil(t, bound)
+			}
+			t.Logf("complete table proof: visits=%d memo entries=%d charged bytes=%d", budget.visits, budget.probeMemo.entries, budget.probeMemo.bytes)
+			require.Less(t, budget.visits, tableDumpMaxCandidateVisits)
+			require.LessOrEqual(t, budget.probeMemo.entries, legacyFloatProbeMemoEntries)
+			require.LessOrEqual(t, budget.probeMemo.bytes, legacyFloatProbeMemoBytes)
+		})
+	}
+}
+
+func TestLegacyFloatProbeMemoIsolation(t *testing.T) {
+	compiler := floatCatalogCompiler(t)
+	budget := &tableDumpBindingBudget{}
+	first := legacyFloatSessionIsland{source: makePlan2StringConstExprWithType("first"), want: makePlan2StringConstExprWithType("first")}
+	require.NoError(t, budget.prepareSessionIsland(&first, 0))
+	probe := &legacyFloatSessionProbe{islands: []legacyFloatSessionIsland{first}}
+	matched, err := probe.matches(compiler, budget)
+	require.NoError(t, err)
+	require.True(t, matched)
+	probe.islands[0].want = makePlan2StringConstExprWithType("different")
+	require.NoError(t, budget.prepareSessionIsland(&probe.islands[0], 0))
+	matched, err = probe.matches(compiler, budget)
+	require.NoError(t, err)
+	require.False(t, matched, "a shared evaluation cannot substitute another expected value")
+	// Even a colliding fingerprint is only a hint; the full literal still
+	// differs and must be rejected after decoding the retained result.
+	session := legacyFloatProbeSession{compiler.GetProcess().GetSessionInfo().TimeZone, function.TemporalLocaleNameForProcess(compiler.GetProcess())}
+	probe.islands[0].wantValue = first.memo.results[session].value
+	matched, err = probe.matches(compiler, budget)
+	require.NoError(t, err)
+	require.False(t, matched)
+	second := legacyFloatSessionIsland{source: makePlan2StringConstExprWithType("different"), want: makePlan2StringConstExprWithType("different")}
+	require.NoError(t, budget.prepareSessionIsland(&second, 0))
+	probe.islands[0] = second
+	matched, err = probe.matches(compiler, budget)
+	require.NoError(t, err)
+	require.True(t, matched, "distinct residuals must not share evaluations")
+	partial := legacyFloatSessionIsland{
+		source: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0, Name: "a"}}},
+		want:   first.want,
+	}
+	require.NoError(t, budget.prepareSessionIsland(&partial, 0))
+	entries := budget.probeMemo.entries
+	probe.islands[0] = partial
+	matched, err = probe.matches(compiler, budget)
+	require.NoError(t, err)
+	require.False(t, matched)
+	require.Equal(t, entries, budget.probeMemo.entries, "partial folds are not cached")
+
+	for _, capKind := range []string{"bytes", "entries"} {
+		t.Run(capKind, func(t *testing.T) {
+			full := &tableDumpBindingBudget{}
+			if capKind == "bytes" {
+				full.probeMemo.bytes = legacyFloatProbeMemoBytes
+			} else {
+				full.probeMemo.entries = legacyFloatProbeMemoEntries
+			}
+			island := legacyFloatSessionIsland{source: second.source, want: second.want}
+			require.NoError(t, full.prepareSessionIsland(&island, 0))
+			fallback := &legacyFloatSessionProbe{islands: []legacyFloatSessionIsland{island}}
+			matched, err := fallback.matches(compiler, full)
+			require.NoError(t, err)
+			require.True(t, matched, "full optional storage must retain uncached evaluation")
+			require.LessOrEqual(t, full.probeMemo.bytes, legacyFloatProbeMemoBytes)
+			require.LessOrEqual(t, full.probeMemo.entries, legacyFloatProbeMemoEntries)
+		})
+	}
+	canceled, cancel := context.WithCancel(compiler.GetContext())
+	cancel()
+	compiler.SetContext(canceled)
+	_, err = probe.matches(compiler, budget)
+	require.ErrorIs(t, err, context.Canceled, "cached results must not hide cancellation")
+}
+
+func TestLegacyFloatProbePreferenceRequiresProof(t *testing.T) {
+	compiler := floatCatalogCompiler(t)
+	budget := &tableDumpBindingBudget{}
+	value := makePlan2StringConstExprWithType("first")
+	island := legacyFloatSessionIsland{source: value, want: value}
+	require.NoError(t, budget.prepareSessionIsland(&island, 0))
+	probe := &legacyFloatSessionProbe{islands: []legacyFloatSessionIsland{island}, searches: []tableDumpSessionCandidate{{}}}
+	zones := func(yield func(*time.Location) bool) { yield(time.UTC) }
+	bind := func(tableDumpSessionCandidate, *time.Location, string) (*planpb.Expr, error) { return value, nil }
+	found, err := matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, []*legacyFloatSessionProbe{probe}, budget, tableDumpMaxCandidateVisits, bind,
+		func(tableDumpSessionCandidate, *planpb.Expr) (bool, error) { return false, nil })
+	require.NoError(t, err)
+	require.False(t, found)
+	require.False(t, island.memo.proven, "an island match cannot publish full-expression provenance")
+	_, err = matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, []*legacyFloatSessionProbe{probe}, budget, tableDumpMaxCandidateVisits, bind,
+		func(tableDumpSessionCandidate, *planpb.Expr) (bool, error) { return true, context.DeadlineExceeded })
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.False(t, island.memo.proven)
+	found, err = matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, []*legacyFloatSessionProbe{probe}, budget, tableDumpMaxCandidateVisits, bind,
+		func(tableDumpSessionCandidate, *planpb.Expr) (bool, error) { return true, nil })
+	require.NoError(t, err)
+	require.True(t, found)
+
+	target := makePlan2StringConstExprWithType("later")
+	wrong := legacyFloatSessionIsland{source: value, want: target}
+	require.NoError(t, budget.prepareSessionIsland(&wrong, 0))
+	right := legacyFloatSessionIsland{source: target, want: target}
+	require.NoError(t, budget.prepareSessionIsland(&right, 0))
+	probes := []*legacyFloatSessionProbe{
+		{islands: []legacyFloatSessionIsland{wrong}, searches: []tableDumpSessionCandidate{{increment: 4}}},
+		{islands: []legacyFloatSessionIsland{right}, searches: []tableDumpSessionCandidate{{increment: 30}}},
+	}
+	found, err = matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, probes, budget, tableDumpMaxCandidateVisits,
+		func(search tableDumpSessionCandidate, _ *time.Location, _ string) (*planpb.Expr, error) {
+			require.Equal(t, int64(30), search.increment)
+			return target, nil
+		}, func(_ tableDumpSessionCandidate, bound *planpb.Expr) (bool, error) { return bound == target, nil })
+	require.NoError(t, err)
+	require.True(t, found, "unsuitable preference must retain fair search for another candidate")
+}
+
+func TestLegacyFloatLiteralFingerprintZeros(t *testing.T) {
+	for _, oid := range []types.T{types.T_float32, types.T_float64} {
+		positive := &planpb.Expr{Typ: planpb.Type{Id: int32(oid)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{}}}
+		negative := proto.Clone(positive).(*planpb.Expr)
+		if oid == types.T_float32 {
+			positive.GetLit().Value = &planpb.Literal_Fval{Fval: 0}
+			negative.GetLit().Value = &planpb.Literal_Fval{Fval: float32(math.Copysign(0, -1))}
+		} else {
+			positive.GetLit().Value = &planpb.Literal_Dval{Dval: 0}
+			negative.GetLit().Value = &planpb.Literal_Dval{Dval: math.Copysign(0, -1)}
+		}
+		before := proto.Clone(negative)
+		require.True(t, sameLegacyFloatOrigin(positive, negative))
+		a, err := legacyFloatLiteralFingerprint(positive)
+		require.NoError(t, err)
+		b, err := legacyFloatLiteralFingerprint(negative)
+		require.NoError(t, err)
+		require.Equal(t, a, b, "fast rejection must preserve protobuf equality")
+		require.True(t, proto.Equal(before, negative))
+		if oid == types.T_float32 {
+			require.True(t, math.Signbit(float64(negative.GetLit().GetFval())))
+		} else {
+			require.True(t, math.Signbit(negative.GetLit().GetDval()))
+		}
+	}
+}
+
 func TestTableDumpSessionHintBounds(t *testing.T) {
 	budget := &tableDumpBindingBudget{}
 	for i := 0; i <= tableDumpMaxSessionHints; i++ {
@@ -321,37 +540,46 @@ func TestLegacyFloatSessionProjectionMatchesBinding(t *testing.T) {
 	const sql = "create table t(a double,g varchar(200) default(concat(a,cast(concat(from_unixtime(0),cast(1 as decimal(10,0))/cast(7 as decimal(10,0))) as char(100)))))"
 	zone := time.FixedZone("creation", 8*3600+60)
 	for _, precision := range []int32{4, 30} {
-		compiler, source := legacyFloatScopeTable(t, sql, precision, zone)
-		col := tableDumpDDLColumn(t, source, "g")
-		item := tableDumpExpression{kind: "default", name: col.Name, col: col, expr: col.Default.Expr, origin: col.Default.OriginString}
-		stmt, ast, _, err := parseTableDumpExpression(compiler.GetContext(), item.origin, "")
-		require.NoError(t, err)
-		defer stmt.Free()
-		for _, format := range []tableDumpBindingMode{0, tableDumpBindingLegacyFloatFormatting} {
-			search := tableDumpSessionCandidate{increment: int64(precision), mode: tableDumpBindingLegacyFloat | format}
-			dependency := &tableDumpDefaultSession{captureUnfolded: true}
-			folded, err := bindTableDumpExpression(compiler, source, item, ast, search.increment, search.mode, dependency)
+		for _, sql := range []string{sql,
+			"create table t(a double,g varchar(200) default(concat(a,cast(concat(date_format(from_unixtime(0),'%M %H:%i'),cast(hour(from_unixtime(0)) as double)*cast('1e20' as double)) as char(100)))))",
+		} {
+			compiler, source := legacyFloatScopeTable(t, sql, precision, zone)
+			col := tableDumpDDLColumn(t, source, "g")
+			item := tableDumpExpression{kind: "default", name: col.Name, col: col, expr: col.Default.Expr, origin: col.Default.OriginString}
+			stmt, ast, _, err := parseTableDumpExpression(compiler.GetContext(), item.origin, "")
 			require.NoError(t, err)
-			original := proto.Clone(dependency.unfolded)
-			probe, err := prepareLegacyFloatSessionProbe(compiler, item.expr, folded, dependency.unfolded, search, &tableDumpBindingBudget{})
-			require.NoError(t, err)
-			require.NotNil(t, probe)
-			for _, tz := range []*time.Location{time.UTC, zone} {
-				compiler.GetProcess().GetSessionInfo().TimeZone = tz
-				bound, err := bindTableDumpExpression(compiler, source, item, ast, search.increment, search.mode, &tableDumpDefaultSession{})
+			defer stmt.Free()
+			budget := &tableDumpBindingBudget{}
+			for _, format := range []tableDumpBindingMode{0, tableDumpBindingLegacyFloatFormatting} {
+				search := tableDumpSessionCandidate{increment: int64(precision), mode: tableDumpBindingLegacyFloat | format}
+				dependency := &tableDumpDefaultSession{captureUnfolded: true}
+				folded, err := bindTableDumpExpression(compiler, source, item, ast, search.increment, search.mode, dependency)
 				require.NoError(t, err)
-				possible, err := probe.matches(compiler, &tableDumpBindingBudget{})
+				original := proto.Clone(dependency.unfolded)
+				probe, err := prepareLegacyFloatSessionProbe(compiler, item.expr, folded, dependency.unfolded, search, budget)
 				require.NoError(t, err)
-				require.Equal(t, sameLegacyFloatOrigin(item.expr, bound), possible)
+				require.NotNil(t, probe)
+				for _, tz := range []*time.Location{time.UTC, zone} {
+					compiler.GetProcess().GetSessionInfo().TimeZone = tz
+					for _, lc := range []string{"en_US", "de_DE", "en_US"} {
+						compiler.GetProcess().GetSessionInfo().LCTimeNames = lc
+						bound, err := bindTableDumpExpression(compiler, source, item, ast, search.increment, search.mode, &tableDumpDefaultSession{})
+						require.NoError(t, err)
+						possible, err := probe.matches(compiler, budget)
+						require.NoError(t, err)
+						require.Equal(t, sameLegacyFloatOrigin(item.expr, bound), possible, "sql=%s format=%d zone=%v locale=%s", sql, format, tz, lc)
+					}
+				}
+				compiler.GetProcess().GetSessionInfo().TimeZone = time.UTC
+				compiler.GetProcess().GetSessionInfo().LCTimeNames = "en_US"
+				require.True(t, proto.Equal(original, dependency.unfolded))
+				// An already bound TIMESTAMP literal needs original SQL binding,
+				// rather than replaying a reading-session-dependent value.
+				timestamp := makePlan2TimestampConstExprWithType(0)
+				probe, err = prepareLegacyFloatSessionProbe(compiler, timestamp, timestamp, timestamp, search, &tableDumpBindingBudget{})
+				require.NoError(t, err)
+				require.Nil(t, probe)
 			}
-			compiler.GetProcess().GetSessionInfo().TimeZone = time.UTC
-			require.True(t, proto.Equal(original, dependency.unfolded))
-			// An already bound TIMESTAMP literal needs original SQL binding,
-			// rather than replaying a reading-session-dependent value.
-			timestamp := makePlan2TimestampConstExprWithType(0)
-			probe, err = prepareLegacyFloatSessionProbe(compiler, timestamp, timestamp, timestamp, search, &tableDumpBindingBudget{})
-			require.NoError(t, err)
-			require.Nil(t, probe)
 		}
 	}
 }

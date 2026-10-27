@@ -44,6 +44,8 @@ const (
 type tableDumpBindingBudget struct {
 	text, nodes, visits int
 	sessionHints        []tableDumpSessionHint
+	probeMemo           legacyFloatProbeMemo
+	probeTimeZones      func(func(*time.Location) bool)
 }
 
 type tableDumpExpressionVisitor struct {

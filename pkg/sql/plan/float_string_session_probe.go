@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"crypto/sha256"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
@@ -35,8 +36,113 @@ type legacyFloatSessionProbe struct {
 	searches []tableDumpSessionCandidate
 }
 
-type legacyFloatSessionIsland struct{ source, want *planpb.Expr }
+type legacyFloatSessionIsland struct {
+	source, want *planpb.Expr
+	memo         *legacyFloatIslandMemo
+	wantValue    [sha256.Size]byte
+}
 type legacyFloatSessionFoldKey struct{}
+
+// Verification-local evaluation sharing excludes the expected literal. A later
+// DEFAULT may have the same residual SQL but a different creation session. Only
+// immutable, fully folded result bytes are shared; each consumer still compares
+// its own complete island and performs its own authoritative binding proof.
+type legacyFloatProbeMemo struct {
+	bytes, entries int
+	sources        map[legacyFloatProbeSource]*legacyFloatIslandMemo
+}
+
+type legacyFloatProbeSource struct {
+	source string
+	mode   tableDumpBindingMode
+}
+
+type legacyFloatProbeSession struct {
+	zone   *time.Location
+	locale string
+}
+
+type legacyFloatIslandMemo struct {
+	owner   *tableDumpBindingBudget
+	proven  bool // A full origin/admission comparison accepted this source; only an ordering hint.
+	results map[legacyFloatProbeSession]legacyFloatProbeResult
+}
+
+type legacyFloatProbeResult struct {
+	data  []byte
+	value [sha256.Size]byte
+}
+
+const (
+	legacyFloatProbeMemoBytes   = 32 << 20
+	legacyFloatProbeMemoEntries = 65_536
+	// Account conservatively for map buckets, keys, slice headers and owners in
+	// addition to all retained serialized source/result bytes.
+	legacyFloatProbeMemoOverhead = 256
+)
+
+func (m *legacyFloatProbeMemo) admits(size int) bool {
+	return m.entries < legacyFloatProbeMemoEntries && size <= legacyFloatProbeMemoBytes-m.bytes-legacyFloatProbeMemoOverhead
+}
+
+func (b *tableDumpBindingBudget) prepareSessionIsland(island *legacyFloatSessionIsland, mode tableDumpBindingMode) error {
+	if island.want.GetLit() == nil {
+		return nil
+	}
+	m := &b.probeMemo
+	if err := chargeFloatStringRebind(island.want, b); err != nil {
+		return err
+	}
+	var err error
+	island.wantValue, err = legacyFloatLiteralFingerprint(island.want)
+	if err != nil {
+		return err
+	}
+	if err := chargeFloatStringRebind(island.source, b); err != nil {
+		return err
+	}
+	data, err := proto.Marshal(island.source)
+	if err != nil {
+		return err
+	}
+	key := legacyFloatProbeSource{string(data), mode}
+	if previous := m.sources[key]; previous != nil {
+		island.memo = previous
+		return nil
+	}
+	if !m.admits(len(data)) {
+		return nil // Optional sharing is full; ordinary bounded proof remains.
+	}
+	if m.sources == nil {
+		m.sources = make(map[legacyFloatProbeSource]*legacyFloatIslandMemo)
+	}
+	island.memo = &legacyFloatIslandMemo{owner: b}
+	m.sources[key] = island.memo
+	m.entries++
+	m.bytes += len(data) + legacyFloatProbeMemoOverhead
+	return nil
+}
+
+// Literal payload inequality can reject a session without decoding and copying
+// its whole result tree. Types and Src still go through the existing comparator
+// on every positive hint. Canonicalize signed floating zero because proto.Equal
+// compares float values with ==, whereas their protobuf wire bits differ.
+func legacyFloatLiteralFingerprint(expr *planpb.Expr) ([sha256.Size]byte, error) {
+	literal := *expr.GetLit()
+	literal.Src = nil
+	switch value := literal.Value.(type) {
+	case *planpb.Literal_Dval:
+		if value.Dval == 0 {
+			literal.Value = &planpb.Literal_Dval{Dval: 0}
+		}
+	case *planpb.Literal_Fval:
+		if value.Fval == 0 {
+			literal.Value = &planpb.Literal_Fval{Fval: 0}
+		}
+	}
+	data, err := proto.Marshal(&literal)
+	return sha256.Sum256(data), err
+}
 
 // Hints live only for one table verification, alongside its unchanged total
 // work budget. Retain no expression or binding era: each consumer must bind and
@@ -177,6 +283,11 @@ func prepareLegacyFloatSessionProbe(ctx CompilerContext, stored, folded, source 
 	if !formatting {
 		probe.mode &^= tableDumpBindingLegacyFloatFormatting
 	}
+	for i := range probe.islands {
+		if err := budget.prepareSessionIsland(&probe.islands[i], probe.mode); err != nil {
+			return nil, err
+		}
+	}
 	return probe, nil
 }
 
@@ -227,18 +338,70 @@ func (p *legacyFloatSessionProbe) key(budget *tableDumpBindingBudget) (string, e
 
 func (p *legacyFloatSessionProbe) matches(ctx CompilerContext, budget *tableDumpBindingBudget) (bool, error) {
 	proc := legacyFloatSessionProbeProcess(ctx, p.mode)
+	session := legacyFloatProbeSession{proc.GetSessionInfo().TimeZone, function.TemporalLocaleNameForProcess(proc)}
 	for _, island := range p.islands {
 		if err := ctx.GetContext().Err(); err != nil {
 			return false, err
 		}
-		// Precharge every copied/evaluated subtree and complete comparison input.
-		for _, expr := range []*planpb.Expr{island.source, island.want} {
-			if err := chargeFloatStringRebind(expr, budget); err != nil {
+		var folded *planpb.Expr
+		memo := island.memo
+		if memo != nil && memo.owner == budget {
+			// Charge a lookup, then the actual decoded comparison input on hits.
+			if err := chargeFloatStringRebind(&planpb.Expr{}, budget); err != nil {
 				return false, err
 			}
+			if result, exists := memo.results[session]; exists {
+				if result.value != island.wantValue {
+					return false, nil
+				}
+				folded = &planpb.Expr{}
+				if err := proto.Unmarshal(result.data, folded); err != nil {
+					return false, err
+				}
+				if err := chargeFloatStringRebind(folded, budget); err != nil {
+					return false, err
+				}
+			}
 		}
-		folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(island.source), proc, false, true)
-		if err != nil || !sameLegacyFloatOrigin(island.want, folded) {
+		if folded == nil {
+			if err := chargeFloatStringRebind(island.source, budget); err != nil {
+				return false, err
+			}
+			var err error
+			folded, err = ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(island.source), proc, false, true)
+			if err != nil {
+				return false, ctx.GetContext().Err()
+			}
+			m := &budget.probeMemo
+			if memo != nil && memo.owner == budget && folded.GetLit() != nil {
+				if err := chargeFloatStringRebind(folded, budget); err != nil {
+					return false, err
+				}
+				value, err := legacyFloatLiteralFingerprint(folded)
+				if err != nil {
+					return false, err
+				}
+				if m.admits(proto.Size(folded)) {
+					data, err := proto.Marshal(folded)
+					if err != nil {
+						return false, err
+					}
+					if memo.results == nil {
+						memo.results = make(map[legacyFloatProbeSession]legacyFloatProbeResult)
+					}
+					memo.results[session] = legacyFloatProbeResult{data, value}
+					m.entries++
+					m.bytes += len(data) + legacyFloatProbeMemoOverhead
+				}
+				if value != island.wantValue {
+					return false, nil
+				}
+			}
+		}
+		if err := chargeFloatStringRebind(island.want, budget); err != nil {
+			return false, err
+		}
+		if !sameLegacyFloatOrigin(island.want, folded) {
 			return false, ctx.GetContext().Err()
 		}
 	}
@@ -250,53 +413,89 @@ func matchLegacyFloatSessionProbes(ctx CompilerContext, zone *time.Location, loc
 	if len(probes) == 0 {
 		return false, nil
 	}
-	// Preserve headroom for authoritative binding and the original fallback.
-	limit := budget.visits + (candidateVisitLimit-budget.visits)*3/4
+	// Keep named-rule identities stable across expression searches in this table.
+	if budget.probeTimeZones == nil {
+		budget.probeTimeZones = timeZones
+	}
+	timeZones = budget.probeTimeZones
 	locales := []string{locale}
 	for _, other := range function.TemporalLocaleNames() {
 		if other != locale {
 			locales = append(locales, other)
 		}
 	}
-	for tz := range timeZones {
-		for _, p := range probes {
-			for _, lc := range locales {
-				if lc != locale && !p.searches[0].dependency.locale {
-					continue
-				}
-				if budget.visits >= limit {
-					return false, nil
-				}
-				ctx.GetProcess().GetSessionInfo().TimeZone, ctx.GetProcess().GetSessionInfo().LCTimeNames = tz, lc
-				possible, err := p.matches(ctx, budget)
-				if err != nil {
-					return false, err
-				}
-				if budget.visits > candidateVisitLimit {
-					return false, moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
-				}
-				if !possible {
-					continue
-				}
-				for _, search := range p.searches {
-					bound, err := bind(search, tz, lc)
-					if err != nil {
-						return false, err
+	searchProbes := func(candidates []*legacyFloatSessionProbe, limit int) (bool, error) {
+		for tz := range timeZones {
+			for _, p := range candidates {
+				for _, lc := range locales {
+					if lc != locale && !p.searches[0].dependency.locale {
+						continue
 					}
-					matched, err := match(search, bound)
+					if budget.visits >= limit {
+						return false, nil
+					}
+					ctx.GetProcess().GetSessionInfo().TimeZone, ctx.GetProcess().GetSessionInfo().LCTimeNames = tz, lc
+					possible, err := p.matches(ctx, budget)
 					if err != nil {
 						return false, err
 					}
 					if budget.visits > candidateVisitLimit {
 						return false, moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
 					}
-					if matched {
-						return true, nil
+					if !possible {
+						continue
+					}
+					for _, search := range p.searches {
+						bound, err := bind(search, tz, lc)
+						if err != nil {
+							return false, err
+						}
+						matched, err := match(search, bound)
+						if err != nil {
+							return false, err
+						}
+						if budget.visits > candidateVisitLimit {
+							return false, moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
+						}
+						if matched {
+							for _, island := range p.islands {
+								if island.memo != nil && island.memo.owner == budget {
+									island.memo.proven = true
+								}
+							}
+							return true, nil
+						}
 					}
 				}
 			}
 		}
+		return false, nil
 	}
+	// Reuse a previously proved residual's precision/formatting as an ordering
+	// hint, including when a later DEFAULT needs a different timezone. Each
+	// candidate still belongs to THIS expression. Limit unsuccessful preference
+	// work, then retain the fair search and its original fallback headroom.
+	var preferred []*legacyFloatSessionProbe
+	for _, probe := range probes {
+		proven := len(probe.islands) > 0
+		for _, island := range probe.islands {
+			proven = proven && island.memo != nil && island.memo.owner == budget && island.memo.proven
+		}
+		if proven {
+			preferred = append(preferred, probe)
+		}
+	}
+	if len(preferred) > 0 {
+		limit := budget.visits + (candidateVisitLimit-budget.visits)/4
+		if found, err := searchProbes(preferred, limit); found || err != nil {
+			return found, err
+		}
+	}
+	limit := budget.visits + (candidateVisitLimit-budget.visits)*3/4
+	if found, err := searchProbes(probes, limit); found || err != nil {
+		return found, err
+	}
+
 	ctx.GetProcess().GetSessionInfo().TimeZone, ctx.GetProcess().GetSessionInfo().LCTimeNames = zone, locale
 	return false, nil
 }
