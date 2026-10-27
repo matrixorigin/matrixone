@@ -69,6 +69,16 @@ func TestToStorage(t *testing.T) {
 	_, _, err = ToStorage([]float32{}, usearch.F32, QuantizeBounds{})
 	require.Error(t, err)
 
+	// a finite element the stored type cannot hold is rejected
+	_, _, err = ToStorage([]float32{1, 1e5}, usearch.F16, QuantizeBounds{})
+	require.Error(t, err)
+	_, _, err = ToStorage([]float64{1, 1e39}, usearch.F32, QuantizeBounds{})
+	require.Error(t, err)
+	_, _, err = ToStorage([]float64{1, 1e39}, usearch.BF16, QuantizeBounds{})
+	require.Error(t, err)
+	_, _, err = ToStorage([]float32{65504}, usearch.F16, QuantizeBounds{})
+	require.NoError(t, err)
+
 	// int8/uint8 map the trained range onto the integer range, and need it
 	_, _, err = ToStorage([]float32{0.5}, usearch.I8, QuantizeBounds{})
 	require.Error(t, err)

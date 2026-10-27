@@ -6,7 +6,7 @@ create table t_ref(id bigint primary key, v vecf32(4));
 insert into t_ref values
 (1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),
 (4,'[50,50,50,50]'),(5,'[52,52,52,52]'),(6,'[54,54,54,54]');
-select id from t_ref order by l2_distance(v,'[2,2,2,2]') limit 3;
+select id from t_ref order by l2_distance(v,'[2,2,2,3]') limit 3;
 ➤ id[-5,64,0]  𝄀
 2  𝄀
 1  𝄀
@@ -31,26 +31,6 @@ t_f16  ¦  CREATE TABLE `t_f16` (
   PRIMARY KEY (`id`),
   KEY `i_f16` USING hnsw (`v`) op_type 'vector_l2_ops'  quantization 'float16' 
 )
-explain select id from t_f16 order by l2_distance(v,'[2,2,2,2]') limit 3;
--- @regex("Vector Index Scan on", true)
-➤ TP QUERY PLAN[12,-1,0]  𝄀
-Project  𝄀
-  ->  Sort  𝄀
-        Sort Key: #[0,1] INTERNAL  𝄀
-        Limit: 3  𝄀
-        ->  Join  𝄀
-              Join Type: INNER  𝄀
-              Join Cond: (t_f16.id = #[1,0])  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
-              ->  Table Scan on hnsw_quantization.t_f16  𝄀
-                    Runtime Filter Probe: t_f16.id  𝄀
-              ->  Vector Index Scan on i_f16 [l2_distance]  𝄀
-                    Vector Index: i_f16, Metric: l2_distance, Candidate Limit: 3
-select id from t_f16 order by l2_distance(v,'[2,2,2,2]') limit 3;
-➤ id[-5,64,0]  𝄀
-2  𝄀
-1  𝄀
-3
 create table t_bf16(id bigint primary key, v vecf32(4));
 insert into t_bf16 select * from t_cos;
 create index i_bf16 using hnsw on t_bf16(v) op_type 'vector_cosine_ops' quantization 'BF16';
@@ -62,11 +42,17 @@ t_bf16  ¦  CREATE TABLE `t_bf16` (
   PRIMARY KEY (`id`),
   KEY `i_bf16` USING hnsw (`v`) op_type 'vector_cosine_ops'  quantization 'bf16' 
 )
-select id from t_bf16 order by cosine_distance(v,'[0.95,0.2,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-2  𝄀
-1  𝄀
-6
+create table t_f32(id bigint primary key, v vecf32(4));
+insert into t_f32 select * from t_ref;
+create index i_f32 using hnsw on t_f32(v) quantization 'Float32';
+show create table t_f32;
+➤ Table[12,5,0]  ¦  Create Table[12,180,0]  𝄀
+t_f32  ¦  CREATE TABLE `t_f32` (
+  `id` bigint NOT NULL,
+  `v` vecf32(4) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `i_f32` USING hnsw (`v`) op_type 'vector_l2_ops'  quantization 'float32' 
+)
 create table t_i8(id bigint primary key, v vecf32(4));
 insert into t_i8 select * from t_ref;
 create index i_i8 using hnsw on t_i8(v) quantization 'int8';
@@ -78,30 +64,6 @@ t_i8  ¦  CREATE TABLE `t_i8` (
   PRIMARY KEY (`id`),
   KEY `i_i8` USING hnsw (`v`) op_type 'vector_l2_ops'  quantization 'int8' 
 )
-explain select id from t_i8 order by l2_distance(v,'[2,2,2,2]') limit 3;
--- @regex("Vector Index Scan on", true)
-➤ TP QUERY PLAN[12,-1,0]  𝄀
-Project  𝄀
-  ->  Sort  𝄀
-        Sort Key: #[0,1] INTERNAL  𝄀
-        Limit: 3  𝄀
-        ->  Join  𝄀
-              Join Type: INNER  𝄀
-              Join Cond: (t_i8.id = #[1,0])  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
-              ->  Table Scan on hnsw_quantization.t_i8  𝄀
-                    Runtime Filter Probe: t_i8.id  𝄀
-              ->  Vector Index Scan on i_i8 [l2_distance]  𝄀
-                    Vector Index: i_i8, Metric: l2_distance, Candidate Limit: 3
-select id from t_i8 order by l2_distance(v,'[2,2,2,2]') limit 3;
-➤ id[-5,64,0]  𝄀
-2  𝄀
-1  𝄀
-3
-select id from t_i8 order by l2_distance(v,'[51,51,51,51]') limit 2;
-➤ id[-5,64,0]  𝄀
-5  𝄀
-4
 create table t_u8(id bigint primary key, v vecf32(4));
 insert into t_u8 select * from t_ref;
 create index i_u8 using hnsw on t_u8(v) op_type 'vector_l2_ops' quantization 'uint8';
@@ -113,39 +75,34 @@ t_u8  ¦  CREATE TABLE `t_u8` (
   PRIMARY KEY (`id`),
   KEY `i_u8` USING hnsw (`v`) op_type 'vector_l2_ops'  quantization 'uint8' 
 )
-select id from t_u8 order by l2_distance(v,'[2,2,2,2]') limit 3;
-➤ id[-5,64,0]  𝄀
-2  𝄀
-1  𝄀
-3
-create index i_bad using hnsw on t_ref(v) op_type 'vector_cosine_ops' quantization 'int8';
-not supported: hnsw quantization "int8" is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
-create index i_bad using hnsw on t_ref(v) op_type 'vector_ip_ops' quantization 'uint8';
-not supported: hnsw quantization "uint8" is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
-create index i_bad using hnsw on t_ref(v) op_type 'vector_l2_ops' quantization 'int4';
-not supported: hnsw quantization "int4" (supported: float32, float16, bf16, float64, int8, uint8)
-create index i_bad using hnsw on t_ref(v) op_type 'vector_l2_ops' quantization 'float64';
-not supported: HNSW QUANTIZATION 'float64' (8 bytes/element) cannot upcast base column VECF32 (4 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
 create table t_f64(id bigint primary key, v vecf64(4));
 insert into t_f64 select id, cast(v as vecf64(4)) from t_ref;
-create index i_f64 using hnsw on t_f64(v) op_type 'vector_l2_ops' quantization 'float32';
+create index i_f64 using hnsw on t_f64(v) op_type 'vector_l2_ops' quantization 'float64';
 show create table t_f64;
 ➤ Table[12,5,0]  ¦  Create Table[12,180,0]  𝄀
 t_f64  ¦  CREATE TABLE `t_f64` (
   `id` bigint NOT NULL,
   `v` vecf64(4) DEFAULT NULL,
   PRIMARY KEY (`id`),
-  KEY `i_f64` USING hnsw (`v`) op_type 'vector_l2_ops'  quantization 'float32' 
+  KEY `i_f64` USING hnsw (`v`) op_type 'vector_l2_ops'  quantization 'float64' 
 )
-select id from t_f64 order by l2_distance(v,'[2,2,2,2]') limit 3;
-➤ id[-5,64,0]  𝄀
-2  𝄀
-1  𝄀
-3
+create table t_f64n(id bigint primary key, v vecf64(4));
+insert into t_f64n select * from t_f64;
+create index i_f64n using hnsw on t_f64n(v) op_type 'vector_l2_ops' quantization 'float32';
+show create table t_f64n;
+➤ Table[12,6,0]  ¦  Create Table[12,182,0]  𝄀
+t_f64n  ¦  CREATE TABLE `t_f64n` (
+  `id` bigint NOT NULL,
+  `v` vecf64(4) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `i_f64n` USING hnsw (`v`) op_type 'vector_l2_ops'  quantization 'float32' 
+)
+create index i_bad using hnsw on t_ref(v) op_type 'vector_l2_ops' quantization 'int4';
+not supported: hnsw quantization "int4" (supported: float32, float16, bf16, float64, int8, uint8)
 create table t_cf16(id bigint primary key, v vecf16(4));
 insert into t_cf16 select id, cast(v as vecf16(4)) from t_ref;
 create index i_cf16 using hnsw on t_cf16(v) op_type 'vector_l2_ops';
-explain select id from t_cf16 order by l2_distance(v,'[2,2,2,2]') limit 3;
+explain select id from t_cf16 order by l2_distance(v,'[2,2,2,3]') limit 3;
 -- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
@@ -160,7 +117,7 @@ Project  𝄀
                     Runtime Filter Probe: t_cf16.id  𝄀
               ->  Vector Index Scan on i_cf16 [l2_distance]  𝄀
                     Vector Index: i_cf16, Metric: l2_distance, Candidate Limit: 3
-select id from t_cf16 order by l2_distance(v,'[2,2,2,2]') limit 3;
+select id from t_cf16 order by l2_distance(v,'[2,2,2,3]') limit 3;
 ➤ id[-5,64,0]  𝄀
 2  𝄀
 1  𝄀
@@ -168,6 +125,21 @@ select id from t_cf16 order by l2_distance(v,'[2,2,2,2]') limit 3;
 create table t_cbf16(id bigint primary key, v vecbf16(4));
 insert into t_cbf16 select id, cast(v as vecbf16(4)) from t_cos;
 create index i_cbf16 using hnsw on t_cbf16(v) op_type 'vector_cosine_ops';
+explain select id from t_cbf16 order by cosine_distance(v,'[0.95,0.2,0,0]') limit 3;
+-- @regex("Vector Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_cbf16.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_cbf16  𝄀
+                    Runtime Filter Probe: t_cbf16.id  𝄀
+              ->  Vector Index Scan on i_cbf16 [cosine_distance]  𝄀
+                    Vector Index: i_cbf16, Metric: cosine_distance, Candidate Limit: 3
 select id from t_cbf16 order by cosine_distance(v,'[0.95,0.2,0,0]') limit 3;
 ➤ id[-5,64,0]  𝄀
 2  𝄀
@@ -176,7 +148,7 @@ select id from t_cbf16 order by cosine_distance(v,'[0.95,0.2,0,0]') limit 3;
 create table t_ci8(id bigint primary key, v vecint8(4));
 insert into t_ci8 select id, cast(v as vecint8(4)) from t_ref;
 create index i_ci8 using hnsw on t_ci8(v) op_type 'vector_l2_ops';
-explain select id from t_ci8 order by l2_distance(v,'[2,2,2,2]') limit 3;
+explain select id from t_ci8 order by l2_distance(v,'[2,2,2,3]') limit 3;
 -- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
@@ -191,18 +163,33 @@ Project  𝄀
                     Runtime Filter Probe: t_ci8.id  𝄀
               ->  Vector Index Scan on i_ci8 [l2_distance]  𝄀
                     Vector Index: i_ci8, Metric: l2_distance, Candidate Limit: 3
-select id from t_ci8 order by l2_distance(v,'[2,2,2,2]') limit 3;
+select id from t_ci8 order by l2_distance(v,'[2,2,2,3]') limit 3;
 ➤ id[-5,64,0]  𝄀
 2  𝄀
 1  𝄀
 3
-select id from t_ci8 order by l2_distance(v,'[51,51,51,51]') limit 2;
+select id from t_ci8 order by l2_distance(v,'[52,52,52,51]') limit 2;
 ➤ id[-5,64,0]  𝄀
 5  𝄀
 4
 create table t_cu8(id bigint primary key, v vecuint8(4));
 insert into t_cu8 select id, cast(v as vecuint8(4)) from t_ref;
 create index i_cu8 using hnsw on t_cu8(v) op_type 'vector_ip_ops';
+explain select id from t_cu8 order by inner_product(v,'[1,1,1,1]') limit 2;
+-- @regex("Vector Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_cu8.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_cu8  𝄀
+                    Runtime Filter Probe: t_cu8.id  𝄀
+              ->  Vector Index Scan on i_cu8 [inner_product]  𝄀
+                    Vector Index: i_cu8, Metric: inner_product, Candidate Limit: 2
 select id from t_ref order by inner_product(v,'[1,1,1,1]') limit 2;
 ➤ id[-5,64,0]  𝄀
 6  𝄀
@@ -211,34 +198,196 @@ select id from t_cu8 order by inner_product(v,'[1,1,1,1]') limit 2;
 ➤ id[-5,64,0]  𝄀
 6  𝄀
 5
+create index i_bad using hnsw on t_ref(v) op_type 'vector_l2_ops' quantization 'float64';
+not supported: HNSW QUANTIZATION 'float64' (8 bytes/element) cannot upcast base column VECF32 (4 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
+create index i_bad using hnsw on t_cf16(v) quantization 'float32';
+not supported: HNSW QUANTIZATION 'float32' (4 bytes/element) cannot upcast base column VECF16 (2 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
+create index i_bad using hnsw on t_ci8(v) quantization 'float16';
+not supported: HNSW QUANTIZATION 'float16' (2 bytes/element) cannot upcast base column VECINT8 (1 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
+create index i_bad using hnsw on t_cu8(v) quantization 'bf16';
+not supported: HNSW QUANTIZATION 'bf16' (2 bytes/element) cannot upcast base column VECUINT8 (1 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
 create table t_cf16_i8(id bigint primary key, v vecf16(4));
 insert into t_cf16_i8 select * from t_cf16;
 create index i_cf16_i8 using hnsw on t_cf16_i8(v) quantization 'int8';
-select id from t_cf16_i8 order by l2_distance(v,'[2,2,2,2]') limit 3;
+select id from t_cf16_i8 order by l2_distance(v,'[2,2,2,3]') limit 3;
 ➤ id[-5,64,0]  𝄀
 2  𝄀
 1  𝄀
 3
-create index i_bad using hnsw on t_ci8(v) quantization 'float16';
-not supported: HNSW QUANTIZATION 'float16' (2 bytes/element) cannot upcast base column VECINT8 (1 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
-alter table t_f16 alter reindex i_f16 hnsw quantization 'bf16';
-not supported: ALTER REINDEX option "quantization" on a hnsw index
-alter table t_f16 alter reindex i_f16 hnsw ef_search = 64;
-show create table t_f16;
-➤ Table[12,5,0]  ¦  Create Table[12,196,0]  𝄀
-t_f16  ¦  CREATE TABLE `t_f16` (
-  `id` bigint NOT NULL,
-  `v` vecf32(4) DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  KEY `i_f16` USING hnsw (`v`) ef_search = 64  op_type 'vector_l2_ops'  quantization 'float16' 
-)
-select id from t_f16 order by l2_distance(v,'[2,2,2,2]') limit 3;
+create table t_cu8_i8(id bigint primary key, v vecuint8(4));
+insert into t_cu8_i8 select * from t_cu8;
+create index i_cu8_i8 using hnsw on t_cu8_i8(v) quantization 'int8';
+explain select id from t_cu8_i8 order by l2_distance(v,'[52,52,52,51]') limit 2;
+-- @regex("Vector Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_cu8_i8.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_cu8_i8  𝄀
+                    Runtime Filter Probe: t_cu8_i8.id  𝄀
+              ->  Vector Index Scan on i_cu8_i8 [l2_distance]  𝄀
+                    Vector Index: i_cu8_i8, Metric: l2_distance, Candidate Limit: 2
+select id from t_cu8_i8 order by l2_distance(v,'[52,52,52,51]') limit 2;
+➤ id[-5,64,0]  𝄀
+5  𝄀
+4
+create index i_bad using hnsw on t_ref(v) op_type 'vector_cosine_ops' quantization 'int8';
+not supported: hnsw quantization "int8" is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
+create index i_bad using hnsw on t_ref(v) op_type 'vector_ip_ops' quantization 'uint8';
+not supported: hnsw quantization "uint8" is only supported with L2 (op_type 'vector_l2_ops'); the int8/uint8 affine quantizer does not preserve inner-product / cosine geometry
+create table t_sq(id bigint primary key, v vecf32(4));
+insert into t_sq select * from t_ref;
+create index i_sq using hnsw on t_sq(v) op_type 'vector_l2sq_ops' quantization 'uint8';
+explain select id from t_sq order by l2_distance_sq(v,'[2,2,2,3]') limit 3;
+-- @regex("Vector Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_sq.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_sq  𝄀
+                    Runtime Filter Probe: t_sq.id  𝄀
+              ->  Vector Index Scan on i_sq [l2_distance_sq]  𝄀
+                    Vector Index: i_sq, Metric: l2_distance_sq, Candidate Limit: 3
+select id from t_sq order by l2_distance_sq(v,'[2,2,2,3]') limit 3;
 ➤ id[-5,64,0]  𝄀
 2  𝄀
 1  𝄀
 3
-insert into t_i8 values (7,'[2,2,2,2]');
-explain select id from t_i8 order by l2_distance(v,'[2,2,2,2]') limit 1;
+explain select id from t_f16 order by l2_distance(v,'[2,2,2,3]') limit 3;
+-- @regex("Vector Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_f16.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_f16  𝄀
+                    Runtime Filter Probe: t_f16.id  𝄀
+              ->  Vector Index Scan on i_f16 [l2_distance]  𝄀
+                    Vector Index: i_f16, Metric: l2_distance, Candidate Limit: 3
+select id from t_f16 order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1  𝄀
+3
+explain select id from t_bf16 order by cosine_distance(v,'[0.95,0.2,0,0]') limit 3;
+-- @regex("Vector Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_bf16.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_bf16  𝄀
+                    Runtime Filter Probe: t_bf16.id  𝄀
+              ->  Vector Index Scan on i_bf16 [cosine_distance]  𝄀
+                    Vector Index: i_bf16, Metric: cosine_distance, Candidate Limit: 3
+select id from t_bf16 order by cosine_distance(v,'[0.95,0.2,0,0]') limit 3;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1  𝄀
+6
+select id from t_f32 order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1  𝄀
+3
+explain select id from t_i8 order by l2_distance(v,'[2,2,2,3]') limit 3;
+-- @regex("Vector Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_i8.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_i8  𝄀
+                    Runtime Filter Probe: t_i8.id  𝄀
+              ->  Vector Index Scan on i_i8 [l2_distance]  𝄀
+                    Vector Index: i_i8, Metric: l2_distance, Candidate Limit: 3
+select id from t_i8 order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1  𝄀
+3
+select id from t_i8 order by l2_distance(v,'[52,52,52,51]') limit 2;
+➤ id[-5,64,0]  𝄀
+5  𝄀
+4
+explain select id from t_u8 order by l2_distance(v,'[2,2,2,3]') limit 3;
+-- @regex("Vector Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_u8.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_u8  𝄀
+                    Runtime Filter Probe: t_u8.id  𝄀
+              ->  Vector Index Scan on i_u8 [l2_distance]  𝄀
+                    Vector Index: i_u8, Metric: l2_distance, Candidate Limit: 3
+select id from t_u8 order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1  𝄀
+3
+select id from t_f64 order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1  𝄀
+3
+select id from t_f64n order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1  𝄀
+3
+select id, l2_distance(v,'[2.3,2,2,2]') d from t_ref order by d limit 3;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+2  ¦  1.8681541681289673  𝄀
+1  ¦  2.1656405925750732  𝄀
+3  ¦  5.855766296386719
+select q.id, abs(q.d - l2_distance(r.v,'[2.3,2,2,2]')) < 1 within_step
+from (select id, l2_distance(v,'[2.3,2,2,2]') d from t_i8 order by d limit 3) q
+join t_ref r on r.id = q.id order by q.d;
+➤ id[-5,64,0]  ¦  within_step[-6,8,0]  𝄀
+2  ¦  1  𝄀
+1  ¦  1  𝄀
+3  ¦  1
+select q.id, abs(q.d - l2_distance(r.v,'[2.3,2,2,2]')) < 1 within_step
+from (select id, l2_distance(v,'[2.3,2,2,2]') d from t_u8 order by d limit 3) q
+join t_ref r on r.id = q.id order by q.d;
+➤ id[-5,64,0]  ¦  within_step[-6,8,0]  𝄀
+2  ¦  1  𝄀
+1  ¦  1  𝄀
+3  ¦  1
+select id, l2_distance(v,'[2,2,2,3]') d from t_ci8 order by d limit 3;
+➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
+2  ¦  1.7320507764816284  𝄀
+1  ¦  2.6457512378692627  𝄀
+3  ¦  5.5677642822265625
+insert into t_i8 values (7,'[2,2,2,3]');
+explain select id from t_i8 order by l2_distance(v,'[2,2,2,3]') limit 1;
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -252,11 +401,29 @@ Project  𝄀
                     Runtime Filter Probe: t_i8.id  𝄀
               ->  Vector Index Scan on i_i8 [l2_distance]  𝄀
                     Vector Index: i_i8, Metric: l2_distance, Candidate Limit: 1
-select id from t_i8 order by l2_distance(v,'[2,2,2,2]') limit 1;
+select id from t_i8 order by l2_distance(v,'[2,2,2,3]') limit 1;
 ➤ id[-5,64,0]  𝄀
 7
-insert into t_ci8 values (7,'[2,2,2,2]');
-explain select id from t_ci8 order by l2_distance(v,'[2,2,2,2]') limit 1;
+delete from t_i8 where id = 7;
+explain select id from t_i8 order by l2_distance(v,'[2.3,2,2,2]') limit 1;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_i8.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_i8  𝄀
+                    Runtime Filter Probe: t_i8.id  𝄀
+              ->  Vector Index Scan on i_i8 [l2_distance]  𝄀
+                    Vector Index: i_i8, Metric: l2_distance, Candidate Limit: 1
+select id from t_i8 order by l2_distance(v,'[2.3,2,2,2]') limit 1;
+➤ id[-5,64,0]  𝄀
+2
+insert into t_ci8 values (7,'[2,2,2,3]');
+explain select id from t_ci8 order by l2_distance(v,'[2,2,2,3]') limit 1;
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
@@ -270,7 +437,339 @@ Project  𝄀
                     Runtime Filter Probe: t_ci8.id  𝄀
               ->  Vector Index Scan on i_ci8 [l2_distance]  𝄀
                     Vector Index: i_ci8, Metric: l2_distance, Candidate Limit: 1
-select id from t_ci8 order by l2_distance(v,'[2,2,2,2]') limit 1;
+select id from t_ci8 order by l2_distance(v,'[2,2,2,3]') limit 1;
 ➤ id[-5,64,0]  𝄀
 7
+create table t_empty(id bigint primary key, v vecf32(4));
+create index i_empty using hnsw on t_empty(v) quantization 'int8';
+insert into t_empty select * from t_ref;
+explain select id from t_empty order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_empty.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_empty  𝄀
+                    Runtime Filter Probe: t_empty.id  𝄀
+              ->  Vector Index Scan on i_empty [l2_distance]  𝄀
+                    Vector Index: i_empty, Metric: l2_distance, Candidate Limit: 3
+select id from t_empty order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1  𝄀
+3
+select id from t_empty order by l2_distance(v,'[52,52,52,51]') limit 2;
+➤ id[-5,64,0]  𝄀
+5  𝄀
+4
+insert into t_i8 values (8,'[1000,1000,1000,1000]');
+explain select id from t_i8 order by l2_distance(v,'[1000,1000,1000,1000]') limit 2;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_i8.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_i8  𝄀
+                    Runtime Filter Probe: t_i8.id  𝄀
+              ->  Vector Index Scan on i_i8 [l2_distance]  𝄀
+                    Vector Index: i_i8, Metric: l2_distance, Candidate Limit: 2
+select count(*) from (select id from t_i8 order by l2_distance(v,'[1000,1000,1000,1000]') limit 2) q where id in (6, 8);
+➤ count(*)[-5,64,0]  𝄀
+2
+select id, d from (select id, l2_distance(v,'[1000,1000,1000,1000]') d from t_i8 order by d limit 2) q order by id;
+➤ id[-5,64,0]  ¦  d[8,9,0]  𝄀
+6  ¦  0.0  𝄀
+8  ¦  0.0
+alter table t_f16 alter reindex i_f16 hnsw quantization 'bf16';
+not supported: ALTER REINDEX option "quantization" on a hnsw index
+alter table t_i8 alter reindex i_i8 hnsw quantization 'uint8';
+not supported: ALTER REINDEX option "quantization" on a hnsw index
+alter table t_f16 alter reindex i_f16 hnsw ef_search = 64;
+show create table t_f16;
+➤ Table[12,5,0]  ¦  Create Table[12,196,0]  𝄀
+t_f16  ¦  CREATE TABLE `t_f16` (
+  `id` bigint NOT NULL,
+  `v` vecf32(4) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `i_f16` USING hnsw (`v`) ef_search = 64  op_type 'vector_l2_ops'  quantization 'float16' 
+)
+select id from t_f16 order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1  𝄀
+3
+alter table t_i8 alter reindex i_i8 hnsw;
+show create table t_i8;
+➤ Table[12,4,0]  ¦  Create Table[12,175,0]  𝄀
+t_i8  ¦  CREATE TABLE `t_i8` (
+  `id` bigint NOT NULL,
+  `v` vecf32(4) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `i_i8` USING hnsw (`v`) op_type 'vector_l2_ops'  quantization 'int8' 
+)
+explain select id from t_i8 order by l2_distance(v,'[1000,1000,1000,1000]') limit 1;
+-- @regex("Vector Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_i8.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_i8  𝄀
+                    Runtime Filter Probe: t_i8.id  𝄀
+              ->  Vector Index Scan on i_i8 [l2_distance]  𝄀
+                    Vector Index: i_i8, Metric: l2_distance, Candidate Limit: 1
+select id from t_i8 order by l2_distance(v,'[1000,1000,1000,1000]') limit 1;
+➤ id[-5,64,0]  𝄀
+8
+select id from t_i8 order by l2_distance(v,'[60,60,60,60]') limit 1;
+➤ id[-5,64,0]  𝄀
+6
+create table t_alt(id bigint primary key, v vecf32(4));
+insert into t_alt select * from t_ref;
+create index i_alt using hnsw on t_alt(v) quantization 'int8';
+alter table t_alt add column z int;
+show create table t_alt;
+➤ Table[12,5,0]  ¦  Create Table[12,201,0]  𝄀
+t_alt  ¦  CREATE TABLE `t_alt` (
+  `id` bigint NOT NULL,
+  `v` vecf32(4) DEFAULT NULL,
+  `z` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `i_alt` USING hnsw (`v`) op_type 'vector_l2_ops'  quantization 'int8' 
+)
+explain select id from t_alt order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_alt.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_alt  𝄀
+                    Runtime Filter Probe: t_alt.id  𝄀
+              ->  Vector Index Scan on i_alt [l2_distance]  𝄀
+                    Vector Index: i_alt, Metric: l2_distance, Candidate Limit: 3
+select id from t_alt order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1  𝄀
+3
+create table t_cln clone t_u8;
+show create table t_cln;
+➤ Table[12,5,0]  ¦  Create Table[12,177,0]  𝄀
+t_cln  ¦  CREATE TABLE `t_cln` (
+  `id` bigint NOT NULL,
+  `v` vecf32(4) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `i_u8` USING hnsw (`v`) op_type 'vector_l2_ops'  quantization 'uint8' 
+)
+explain select id from t_cln order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_cln.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_cln  𝄀
+                    Runtime Filter Probe: t_cln.id  𝄀
+              ->  Vector Index Scan on i_u8 [l2_distance]  𝄀
+                    Vector Index: i_u8, Metric: l2_distance, Candidate Limit: 3
+select id from t_cln order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+1  𝄀
+3
+truncate table t_u8;
+insert into t_u8 select * from t_ref where id > 1;
+show create table t_u8;
+➤ Table[12,4,0]  ¦  Create Table[12,176,0]  𝄀
+t_u8  ¦  CREATE TABLE `t_u8` (
+  `id` bigint NOT NULL,
+  `v` vecf32(4) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `i_u8` USING hnsw (`v`) op_type 'vector_l2_ops'  quantization 'uint8' 
+)
+explain select id from t_u8 order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_u8.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_u8  𝄀
+                    Runtime Filter Probe: t_u8.id  𝄀
+              ->  Vector Index Scan on i_u8 [l2_distance]  𝄀
+                    Vector Index: i_u8, Metric: l2_distance, Candidate Limit: 3
+select id from t_u8 order by l2_distance(v,'[2,2,2,3]') limit 3;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+3  𝄀
+4
+create table t_g(id bigint primary key, c int, v vecf32(2));
+insert into t_g select result, if(result % 500 = 0, 1, 0),
+cast(concat('[', cast(result % 50 as char), ',', cast(floor(result / 50) as char), ']') as vecf32(2))
+from generate_series(1, 5000) gs;
+create index i_g using hnsw on t_g(v) m = 4 ef_construction = 8 ef_search = 4;
+select @@hnsw_prefilter_exact_threshold;
+➤ @@hnsw_prefilter_exact_threshold[-1,16383,0]  𝄀
+100000
+set hnsw_prefilter_exact_threshold = -1;
+internal error: convert to the system variable int type failed
+set hnsw_prefilter_exact_threshold = 1000000001;
+internal error: convert to the system variable int type failed
+set hnsw_prefilter_exact_threshold = 1000000000;
+select @@hnsw_prefilter_exact_threshold;
+➤ @@hnsw_prefilter_exact_threshold[-1,16383,0]  𝄀
+1000000000
+set hnsw_prefilter_exact_threshold = 100000;
+explain verbose select id from t_g where c = 1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+-- @regex("PrefilterExactThreshold: 100000", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[6] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=100.00)  𝄀
+  Output: t_g.id  𝄀
+  ->  Sort[5] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=100.00)  𝄀
+        Output: t_g.id  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 10  𝄀
+        ->  Join[4] (cost=5001.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=100.00)  𝄀
+              Output: t_g.id, #[1,1]  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_g.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan[0] on hnsw_quantization.t_g (cost=1.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=36.02)  𝄀
+                    Output: t_g.id  𝄀
+                    Table: 't_g' (0:'id', 1:'c') shuffle: hash(id)  𝄀
+                    Filter Cond: (t_g.c = 1)  𝄀
+                    Runtime Filter Probe: t_g.id  𝄀
+              ->  Join[3] (cost=5000.00 outcnt=0.00 selectivity=0.0000 dop=0 hashmapSize=2500.00 rowsize=100.00)  𝄀
+                    Output: #[0,0], #[0,1]  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_g.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan[1] on i_g [l2_distance] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0)  𝄀
+                          Output: pkid, score  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: i_g, Metric: l2_distance, Candidate Limit: 10, ThreadsSearch: 0, PrefilterExactThreshold: 100000  𝄀
+                    ->  Table Scan[2] on hnsw_quantization.t_g (cost=5000.00 outcnt=2500.00 selectivity=0.5000 dop=0 blockNum=2 rowsize=36.02)  𝄀
+                          Output: t_g.id  𝄀
+                          Table: 't_g' (0:'id', 1:'c') shuffle: hash(id)  𝄀
+                          Filter Cond: (t_g.c = 1)
+set hnsw_prefilter_exact_threshold = 0;
+explain verbose select id from t_g where c = 1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+-- @regex("PrefilterExactThreshold", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project[6] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=100.00)  𝄀
+  Output: t_g.id  𝄀
+  ->  Sort[5] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=100.00)  𝄀
+        Output: t_g.id  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 10  𝄀
+        ->  Join[4] (cost=5001.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=100.00)  𝄀
+              Output: t_g.id, #[1,1]  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_g.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan[0] on hnsw_quantization.t_g (cost=1.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=36.02)  𝄀
+                    Output: t_g.id  𝄀
+                    Table: 't_g' (0:'id', 1:'c') shuffle: hash(id)  𝄀
+                    Filter Cond: (t_g.c = 1)  𝄀
+                    Runtime Filter Probe: t_g.id  𝄀
+              ->  Join[3] (cost=5000.00 outcnt=0.00 selectivity=0.0000 dop=0 hashmapSize=2500.00 rowsize=100.00)  𝄀
+                    Output: #[0,0], #[0,1]  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_g.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan[1] on i_g [l2_distance] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0)  𝄀
+                          Output: pkid, score  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: i_g, Metric: l2_distance, Candidate Limit: 10, ThreadsSearch: 0  𝄀
+                    ->  Table Scan[2] on hnsw_quantization.t_g (cost=5000.00 outcnt=2500.00 selectivity=0.5000 dop=0 blockNum=2 rowsize=36.02)  𝄀
+                          Output: t_g.id  𝄀
+                          Table: 't_g' (0:'id', 1:'c') shuffle: hash(id)  𝄀
+                          Filter Cond: (t_g.c = 1)
+select id from t_g where c = 1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+500  𝄀
+1000  𝄀
+1500  𝄀
+2000  𝄀
+2500  𝄀
+3000  𝄀
+3500  𝄀
+4000  𝄀
+4500  𝄀
+5000
+set hnsw_prefilter_exact_threshold = 100000;
+explain select id from t_g where c = 1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+-- @regex("Vector Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
+        Limit: 10  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_g.id = #[1,0])  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hnsw_quantization.t_g  𝄀
+                    Filter Cond: (t_g.c = 1)  𝄀
+                    Runtime Filter Probe: t_g.id  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_g.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on i_g [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: i_g, Metric: l2_distance, Candidate Limit: 10  𝄀
+                    ->  Table Scan on hnsw_quantization.t_g  𝄀
+                          Filter Cond: (t_g.c = 1)
+select id from t_g where c = 1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+500  𝄀
+1000  𝄀
+1500  𝄀
+2000  𝄀
+2500  𝄀
+3000  𝄀
+3500  𝄀
+4000  𝄀
+4500  𝄀
+5000
+select id from t_g where c = 1 order by l2_distance(v,'[24,51]') limit 3 by rank with option 'mode=force';
+➤ id[-5,64,0]  𝄀
+2500  𝄀
+3000  𝄀
+2000
+select id from t_g where c = 1 order by l2_distance(v,'[24,51]') limit 3 by rank with option 'mode=pre';
+➤ id[-5,64,0]  𝄀
+2500  𝄀
+3000  𝄀
+2000
+set hnsw_prefilter_exact_threshold = default;
+create table t_big(id bigint primary key, v vecf32(4));
+insert into t_big values (1,'[1,1,1,1]'),(2,'[100000,1,1,1]');
+create index i_big using hnsw on t_big(v) quantization 'float16';
+Data truncation: data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16
+select id from t_f16 order by l2_distance(v,'[100000,1,1,1]') limit 1;
+Data truncation: data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16
 drop database hnsw_quantization;

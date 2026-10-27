@@ -77,11 +77,26 @@ func (s *HnswSync[T]) newModel(maxcap uint) (*HnswModel[T], error) {
 	return m, nil
 }
 
-// setupBounds gives an int8/uint8 sync the bounds its new models map their vectors with.
+// setupBounds gives an int8/uint8 sync the bounds its models map their vectors with. A model
+// created while no bounds were known holds no vectors and takes the bounds once they are.
 func (s *HnswSync[T]) setupBounds(cdc *vectorindex.VectorIndexCdc[T]) {
-	if !NeedsQuantizeBounds(s.idxcfg.Usearch.Quantization) || s.bounds.Set {
+	if !NeedsQuantizeBounds(s.idxcfg.Usearch.Quantization) {
 		return
 	}
+	if !s.bounds.Set {
+		s.findBounds(cdc)
+	}
+	if !s.bounds.Set {
+		return
+	}
+	for _, m := range s.indexes {
+		if !m.Bounds.Set {
+			m.Bounds = s.bounds
+		}
+	}
+}
+
+func (s *HnswSync[T]) findBounds(cdc *vectorindex.VectorIndexCdc[T]) {
 	if s.baseBounds.Set {
 		s.bounds = s.baseBounds
 		return

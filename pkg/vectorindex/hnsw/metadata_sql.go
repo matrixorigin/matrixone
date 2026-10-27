@@ -35,10 +35,10 @@ func metadataRow(provenance bool, indexID, checksum string, ts, filesize, nrow, 
 // metadataInsertSql is catalog.IndexMetadataInsertSql naming the bounds columns too when the
 // rows carry them.
 func metadataInsertSql(db, table string, provenance, quantized bool, rows []string) string {
-	sql := catalog.IndexMetadataInsertSql(db, table, provenance, rows)
 	if !quantized {
-		return sql
+		return catalog.IndexMetadataInsertSql(db, table, provenance, rows)
 	}
-	return strings.Replace(sql, ") VALUES ", ", "+sqlquote.Ident(catalog.Hnsw_TblCol_Metadata_Quantize_Min)+
-		", "+sqlquote.Ident(catalog.Hnsw_TblCol_Metadata_Quantize_Max)+") VALUES ", 1)
+	prefix := strings.TrimSuffix(catalog.IndexMetadataInsertSql(db, table, provenance, nil), ") VALUES ")
+	return prefix + ", " + sqlquote.Ident(catalog.Hnsw_TblCol_Metadata_Quantize_Min) +
+		", " + sqlquote.Ident(catalog.Hnsw_TblCol_Metadata_Quantize_Max) + ") VALUES " + strings.Join(rows, ", ")
 }

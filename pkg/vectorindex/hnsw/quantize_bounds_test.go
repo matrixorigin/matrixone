@@ -153,6 +153,16 @@ func TestMetadataSqlCarriesBounds(t *testing.T) {
 	require.True(t, strings.HasSuffix(row, ", 4, -1.5, 2.25)"), row)
 	sql := metadataInsertSql("db", "meta", true, true, []string{row})
 	require.Contains(t, sql, "`build_ts`, `quantize_min`, `quantize_max`) VALUES "+row)
+
+	sql = metadataInsertSql("a) VALUES b", "meta", true, true, []string{row})
+	require.Equal(t, "INSERT INTO `a) VALUES b`.`meta` (`index_id`, `checksum`, `timestamp`, `filesize`, `nrow`, `build_ts`, `quantize_min`, `quantize_max`) VALUES "+row, sql)
+}
+
+// Rescaling keeps distances nonzero for a range whose scale squared exceeds float32.
+func TestRescaleDistancesTinyRange(t *testing.T) {
+	d := []float32{1e5}
+	RescaleDistances(d, usearch.I8, QuantizeBounds{Min: 0, Max: 1e-18, Set: true})
+	require.Greater(t, d[0], float32(0))
 }
 
 // LoadMetadata reads the bounds an int8/uint8 model persisted, and none from a row without them.
@@ -199,6 +209,21 @@ func TestSyncQuantizeBounds(t *testing.T) {
 	require.NoError(t, err)
 	defer m.Destroy()
 	require.Equal(t, s.bounds, m.Bounds)
+
+	// a model created by a chunk with no vectors takes the bounds a later chunk trains
+	empty := vectorindex.NewVectorIndexCdc[float32](4)
+	empty.Delete(100)
+	s = &HnswSync[float32]{idxcfg: cfg, tmpDir: t.TempDir()}
+	s.setupBounds(empty)
+	require.False(t, s.bounds.Set)
+	first, err := s.newModel(16)
+	require.NoError(t, err)
+	defer first.Destroy()
+	s.indexes = append(s.indexes, first)
+	s.setupBounds(cdc)
+	require.True(t, s.bounds.Set)
+	require.Equal(t, s.bounds, first.Bounds)
+	require.NoError(t, first.Add(1, cdc.Data[0].Vec))
 
 	cfg.Usearch.Quantization = usearch.F16
 	s = &HnswSync[float32]{idxcfg: cfg}

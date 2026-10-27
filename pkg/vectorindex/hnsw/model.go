@@ -952,8 +952,8 @@ func (idx *HnswModel[T]) Search(query []T, limit uint) (keys []usearch.Key, dist
 }
 
 // SearchWithMembership searches for the nearest limit keys that membership holds; a nil
-// membership searches every key. With exact, it scans the vectors membership holds instead
-// of traversing the graph.
+// membership searches every key. With exact, it tests every indexed key against membership
+// and measures the distance of each key membership holds, instead of traversing the graph.
 func (idx *HnswModel[T]) SearchWithMembership(query []T, limit uint, membership docfilter.MembershipFilter, exact bool) (keys []usearch.Key, distances []float32, err error) {
 	if idx.Index == nil {
 		return nil, nil, moerr.NewInternalErrorNoCtx("usearch index is nil")

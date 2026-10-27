@@ -102,9 +102,9 @@ func RescaleDistances(distances []float32, kind usearch.Quantization, bounds Qua
 		return
 	}
 	mul, _ := quantizeParams(kind, bounds)
-	scale := float32(mul * mul)
+	scale := mul * mul
 	for i := range distances {
-		distances[i] /= scale
+		distances[i] = float32(float64(distances[i]) / scale)
 	}
 }
 
@@ -125,6 +125,9 @@ func ToStorage[T types.RealNumbers](vec []T, kind usearch.Quantization, bounds Q
 		out := make([]float32, len(vec))
 		for i, x := range vec {
 			out[i] = float32(x)
+			if err := checkNarrowed(float64(x), float64(out[i]), kind); err != nil {
+				return nil, nil, err
+			}
 		}
 		return unsafe.Pointer(&out[0]), out, nil
 	case usearch.F64:
@@ -140,12 +143,18 @@ func ToStorage[T types.RealNumbers](vec []T, kind usearch.Quantization, bounds Q
 		out := make([]types.Float16, len(vec))
 		for i, x := range vec {
 			out[i] = types.Float16FromFloat32(float32(x))
+			if err := checkNarrowed(float64(x), float64(out[i].ToFloat32()), kind); err != nil {
+				return nil, nil, err
+			}
 		}
 		return unsafe.Pointer(&out[0]), out, nil
 	case usearch.BF16:
 		out := make([]types.BF16, len(vec))
 		for i, x := range vec {
 			out[i] = types.BF16FromFloat32(float32(x))
+			if err := checkNarrowed(float64(x), float64(out[i].ToFloat32()), kind); err != nil {
+				return nil, nil, err
+			}
 		}
 		return unsafe.Pointer(&out[0]), out, nil
 	case usearch.I8, usearch.U8:
@@ -166,6 +175,14 @@ func ToStorage[T types.RealNumbers](vec []T, kind usearch.Quantization, bounds Q
 	default:
 		return nil, nil, moerr.NewNotSupportedNoCtxf("hnsw storage type %v", kind)
 	}
+}
+
+// checkNarrowed rejects a finite element that overflows the element type the index stores.
+func checkNarrowed(x, stored float64, kind usearch.Quantization) error {
+	if math.IsInf(stored, 0) && !math.IsInf(x, 0) {
+		return moerr.NewOutOfRangeNoCtxf("hnsw quantization", "vector element %v cannot be stored as %s", x, kind.String())
+	}
+	return nil
 }
 
 // BaseBounds returns the bounds an int8/uint8 index of a vecint8/vecuint8 column maps its

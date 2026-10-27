@@ -28,8 +28,8 @@ typedef char const *mo_error_t;
 /* Filtered search against a doc_id membership filter. `filter` is the C handle
  * of a docfilter.MembershipFilter and `filter_kind` selects how each candidate
  * key is tested (MO_MEMBERSHIP_* in membership.h). A NULL filter passes all keys.
- * A non-zero `exact` scans the indexed vectors the filter keeps instead of
- * traversing the graph. */
+ * A non-zero `exact` tests every indexed key against the filter and measures
+ * the distance of each key it keeps, instead of traversing the graph. */
 size_t usearchex_filtered_search_with_membership(
     usearch_index_t index,
     void const* query_vector, usearch_scalar_kind_t query_kind, size_t count,
