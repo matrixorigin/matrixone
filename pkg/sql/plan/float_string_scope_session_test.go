@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -220,14 +221,18 @@ func TestLegacyFloatTableSessionWitnesses(t *testing.T) {
 func TestLegacyFloatAlteredSessionWitnesses(t *testing.T) {
 	const expression = "concat(a,cast(concat(from_unixtime(0),cast(1 as decimal(10,0))/cast(7 as decimal(10,0))) as char(100)))"
 	for _, tc := range []struct {
-		name, suffix string
-		offset       int
-		precision    int32
+		name, suffix, altered string
+		offset                int
+		precision             int32
 	}{
-		{"next_minute", "1970-01-01 08:02:00", 8*3600 + 2*60, 4},
-		{"changed_precision", "1970-01-01 08:02:00", 8*3600 + 2*60, 30},
-		{"earlier_witness", "1969-12-31 10:01:00", -(13*3600 + 59*60), 4},
-		{"distant_witness", "1970-01-01 13:59:00", 13*3600 + 59*60, 4},
+		{"next_minute", "1970-01-01 08:02:00", expression, 8*3600 + 2*60, 4},
+		{"changed_precision", "1970-01-01 08:02:00", expression, 8*3600 + 2*60, 30},
+		{"earlier_witness", "1969-12-31 10:01:00", expression, -(13*3600 + 59*60), 4},
+		{"distant_witness", "1970-01-01 13:59:00", expression, 13*3600 + 59*60, 4},
+		{"distinct_source", "1970-01-01 08:04:00", strings.Replace(expression, "from_unixtime(0)", "from_unixtime(120)", 1), 8*3600 + 2*60, 4},
+		{"distinct_source_precision", "1970-01-01 08:04:00", strings.Replace(expression, "from_unixtime(0)", "from_unixtime(120)", 1), 8*3600 + 2*60, 30},
+		{"distinct_source_earlier", "1969-12-31 10:03:00", strings.Replace(expression, "from_unixtime(0)", "from_unixtime(120)", 1), -(13*3600 + 59*60), 4},
+		{"distinct_source_distant", "1970-01-01 14:01:00", strings.Replace(expression, "from_unixtime(0)", "from_unixtime(120)", 1), 13*3600 + 59*60, 4},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			compiler, source := legacyFloatScopeTable(t, "create table t(a double,g varchar(200) default("+expression+"),h varchar(200) default("+expression+"))", 4, time.FixedZone("creation", 8*3600+60))
@@ -251,7 +256,7 @@ func TestLegacyFloatAlteredSessionWitnesses(t *testing.T) {
 					}
 					return fallback.ResolveVariable(name, system, global)
 				}
-				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "alter table t alter column h set default("+expression+")", 1)
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "alter table t alter column h set default("+tc.altered+")", 1)
 				require.NoError(t, err)
 				defer stmt.Free()
 				altered := CloneTableDefForPlan(source, true)
@@ -370,28 +375,41 @@ func TestLegacyFloatProbePreferenceRequiresProof(t *testing.T) {
 	value := makePlan2StringConstExprWithType("first")
 	island := legacyFloatSessionIsland{source: value, want: value}
 	require.NoError(t, budget.prepareSessionIsland(&island, 0))
-	probe := &legacyFloatSessionProbe{islands: []legacyFloatSessionIsland{island}, searches: []tableDumpSessionCandidate{{}}}
+	probe := &legacyFloatSessionProbe{islands: []legacyFloatSessionIsland{island}, searches: []tableDumpSessionCandidate{{increment: 4}}}
 	zones := func(yield func(*time.Location) bool) { yield(time.UTC) }
 	bind := func(tableDumpSessionCandidate, *time.Location, string) (*planpb.Expr, error) { return value, nil }
 	found, err := matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, []*legacyFloatSessionProbe{probe}, budget, tableDumpMaxCandidateVisits, bind,
 		func(tableDumpSessionCandidate, *planpb.Expr) (bool, error) { return false, nil })
 	require.NoError(t, err)
 	require.False(t, found)
-	require.False(t, island.memo.proven, "an island match cannot publish full-expression provenance")
+	require.Empty(t, budget.probeHints, "an island match cannot publish full-expression provenance")
 	_, err = matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, []*legacyFloatSessionProbe{probe}, budget, tableDumpMaxCandidateVisits, bind,
 		func(tableDumpSessionCandidate, *planpb.Expr) (bool, error) { return true, context.DeadlineExceeded })
 	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.False(t, island.memo.proven)
+	require.Empty(t, budget.probeHints)
 	found, err = matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, []*legacyFloatSessionProbe{probe}, budget, tableDumpMaxCandidateVisits, bind,
 		func(tableDumpSessionCandidate, *planpb.Expr) (bool, error) { return true, nil })
 	require.NoError(t, err)
 	require.True(t, found)
+	require.Equal(t, []legacyFloatProbeHint{{increment: 4}}, budget.probeHints)
 
 	target := makePlan2StringConstExprWithType("later")
 	wrong := legacyFloatSessionIsland{source: value, want: target}
 	require.NoError(t, budget.prepareSessionIsland(&wrong, 0))
 	right := legacyFloatSessionIsland{source: target, want: target}
 	require.NoError(t, budget.prepareSessionIsland(&right, 0))
+	// A different source can use the context priority, but must still pass
+	// its own full comparison. The non-preferred candidate is listed first.
+	found, err = matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, []*legacyFloatSessionProbe{
+		{islands: []legacyFloatSessionIsland{right}, searches: []tableDumpSessionCandidate{{increment: 30}}},
+		{islands: []legacyFloatSessionIsland{right}, searches: []tableDumpSessionCandidate{{increment: 4}}},
+	}, budget, tableDumpMaxCandidateVisits,
+		func(search tableDumpSessionCandidate, _ *time.Location, _ string) (*planpb.Expr, error) {
+			require.Equal(t, int64(4), search.increment)
+			return target, nil
+		}, func(_ tableDumpSessionCandidate, bound *planpb.Expr) (bool, error) { return bound == target, nil })
+	require.NoError(t, err)
+	require.True(t, found)
 	probes := []*legacyFloatSessionProbe{
 		{islands: []legacyFloatSessionIsland{wrong}, searches: []tableDumpSessionCandidate{{increment: 4}}},
 		{islands: []legacyFloatSessionIsland{right}, searches: []tableDumpSessionCandidate{{increment: 30}}},
@@ -403,6 +421,27 @@ func TestLegacyFloatProbePreferenceRequiresProof(t *testing.T) {
 		}, func(_ tableDumpSessionCandidate, bound *planpb.Expr) (bool, error) { return bound == target, nil })
 	require.NoError(t, err)
 	require.True(t, found, "unsuitable preference must retain fair search for another candidate")
+	modeBudget := &tableDumpBindingBudget{}
+	modeBudget.rememberProbe(4, 0)
+	formatted := right
+	require.NoError(t, modeBudget.prepareSessionIsland(&formatted, tableDumpBindingLegacyFloatFormatting))
+	found, err = matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, []*legacyFloatSessionProbe{
+		{islands: []legacyFloatSessionIsland{right}, searches: []tableDumpSessionCandidate{{increment: 30}}},
+		{mode: tableDumpBindingLegacyFloatFormatting, islands: []legacyFloatSessionIsland{formatted}, searches: []tableDumpSessionCandidate{{increment: 4}}},
+	}, modeBudget, tableDumpMaxCandidateVisits,
+		func(search tableDumpSessionCandidate, _ *time.Location, _ string) (*planpb.Expr, error) {
+			require.Equal(t, int64(30), search.increment, "another folding mode must not inherit the priority")
+			return target, nil
+		}, func(_ tableDumpSessionCandidate, bound *planpb.Expr) (bool, error) { return bound == target, nil })
+	require.NoError(t, err)
+	require.True(t, found)
+	for i := 0; i <= tableDumpMaxSessionHints; i++ {
+		budget.rememberProbe(int64(i), tableDumpBindingLegacyFloatFormatting)
+		budget.rememberProbe(int64(i), tableDumpBindingLegacyFloatFormatting)
+	}
+	require.Len(t, budget.probeHints, tableDumpMaxSessionHints)
+	require.Equal(t, legacyFloatProbeHint{increment: 1, mode: tableDumpBindingLegacyFloatFormatting}, budget.probeHints[0])
+	require.Empty(t, (&tableDumpBindingBudget{}).probeHints, "hints cannot cross table operations")
 }
 
 func TestLegacyFloatLiteralFingerprintZeros(t *testing.T) {

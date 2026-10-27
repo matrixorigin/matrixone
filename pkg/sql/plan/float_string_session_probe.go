@@ -64,8 +64,30 @@ type legacyFloatProbeSession struct {
 
 type legacyFloatIslandMemo struct {
 	owner   *tableDumpBindingBudget
-	proven  bool // A full origin/admission comparison accepted this source; only an ordering hint.
 	results map[legacyFloatProbeSession]legacyFloatProbeResult
+}
+
+// A successful full comparison supplies search order only. Keeping the context
+// separate from source/result identity lets another DEFAULT use its own source
+// and expected value while trying a previously useful precision first.
+type legacyFloatProbeHint struct {
+	increment int64
+	mode      tableDumpBindingMode
+}
+
+func (b *tableDumpBindingBudget) rememberProbe(increment int64, mode tableDumpBindingMode) {
+	hint := legacyFloatProbeHint{increment, mode}
+	for _, previous := range b.probeHints {
+		if previous == hint {
+			return
+		}
+	}
+	if len(b.probeHints) == tableDumpMaxSessionHints {
+		copy(b.probeHints, b.probeHints[1:])
+		b.probeHints[len(b.probeHints)-1] = hint
+	} else {
+		b.probeHints = append(b.probeHints, hint)
+	}
 }
 
 type legacyFloatProbeResult struct {
@@ -458,11 +480,7 @@ func matchLegacyFloatSessionProbes(ctx CompilerContext, zone *time.Location, loc
 							return false, moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
 						}
 						if matched {
-							for _, island := range p.islands {
-								if island.memo != nil && island.memo.owner == budget {
-									island.memo.proven = true
-								}
-							}
+							budget.rememberProbe(search.increment, p.mode)
 							return true, nil
 						}
 					}
@@ -471,17 +489,22 @@ func matchLegacyFloatSessionProbes(ctx CompilerContext, zone *time.Location, loc
 		}
 		return false, nil
 	}
-	// Reuse a previously proved residual's precision/formatting as an ordering
-	// hint, including when a later DEFAULT needs a different timezone. Each
-	// candidate still belongs to THIS expression. Limit unsuccessful preference
-	// work, then retain the fair search and its original fallback headroom.
+	// Try previously successful precision/folding contexts across sources. These
+	// probes and their full binding candidates still belong to THIS expression;
+	// a hint neither shares values nor authorizes a repair. Bound unsuccessful
+	// priority work, then retain every candidate in the ordinary fair search.
 	var preferred []*legacyFloatSessionProbe
 	for _, probe := range probes {
-		proven := len(probe.islands) > 0
-		for _, island := range probe.islands {
-			proven = proven && island.memo != nil && island.memo.owner == budget && island.memo.proven
+		preferredProbe := false
+		for _, hint := range budget.probeHints {
+			if hint.mode != probe.mode {
+				continue
+			}
+			for _, search := range probe.searches {
+				preferredProbe = preferredProbe || search.increment == hint.increment
+			}
 		}
-		if proven {
+		if preferredProbe {
 			preferred = append(preferred, probe)
 		}
 	}
