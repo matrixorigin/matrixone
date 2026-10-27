@@ -385,6 +385,8 @@ func (c *Config) createFileServiceWithCreator(
 	metricScope := fileservice.ServiceMetricScope(serviceType.String(), nodeUUID)
 	for _, config := range c.FileServices {
 		config.Cache.MetricScope = metricScope
+		config.Cache.IndexFileCacheEnabled = serviceType == metadata.ServiceType_CN &&
+			strings.EqualFold(config.Name, defines.SharedFileServiceName)
 		counterSet := new(perfcounter.CounterSet)
 		service, err := creator(
 			ctx,

@@ -17,8 +17,13 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -542,5 +547,108 @@ func TestSiriusConfigurationUsesOnlyCurrentSchema(t *testing.T) {
 				require.NoError(t, err)
 			}
 		})
+	}
+}
+
+func TestCreateFileServiceEnablesIndexFileCacheOnlyForCNShared(t *testing.T) {
+	for _, serviceType := range []metadata.ServiceType{
+		metadata.ServiceType_CN, metadata.ServiceType_TN, metadata.ServiceType_LOG, metadata.ServiceType_PROXY,
+	} {
+		configs := []fileservice.Config{
+			{Name: defines.LocalFileServiceName, Backend: "MEM"},
+			{Name: defines.SharedFileServiceName, Backend: "MEM"},
+			{Name: defines.ETLFileServiceName, Backend: "MEM"},
+			{Name: defines.TmpFileServiceName, Backend: "MEM"},
+		}
+		cfg := &Config{FileServices: configs}
+		cfg.Observability.DisableMetric = true
+		cfg.Observability.DisableTrace = true
+		nodeUUID := "index-file-cache-" + serviceType.String()
+		enabled := make(map[string]bool)
+		fs, err := cfg.createFileServiceWithCreator(
+			context.Background(),
+			serviceType,
+			nodeUUID,
+			func(ctx context.Context, fsCfg fileservice.Config, counterSets []*perfcounter.CounterSet) (fileservice.FileService, error) {
+				enabled[fsCfg.Name] = fsCfg.Cache.IndexFileCacheEnabled
+				return fileservice.NewFileService(ctx, fsCfg, counterSets)
+			},
+		)
+		require.NoError(t, err)
+		fs.Close(context.Background())
+		for _, fsCfg := range configs {
+			perfcounter.Named.Delete(perfcounter.NameForFileService(serviceType.String(), nodeUUID, fsCfg.Name))
+		}
+		perfcounter.Named.Delete(perfcounter.NameForNode(serviceType.String(), nodeUUID))
+
+		for name, on := range enabled {
+			want := serviceType == metadata.ServiceType_CN && name == defines.SharedFileServiceName
+			require.Equal(t, want, on, "%s %s", serviceType, name)
+		}
+		require.Len(t, enabled, len(configs))
+	}
+}
+
+func TestCNSharedFileServiceHasIndexFileCache(t *testing.T) {
+	for _, share := range []string{"", "index-file-disk-share = 0.3"} {
+		testCNSharedFileServiceIndexFileCache(t, share, share != "")
+	}
+}
+
+func testCNSharedFileServiceIndexFileCache(t *testing.T, shareSetting string, configured bool) {
+	dir := t.TempDir()
+	cfgFile := filepath.Join(dir, "cn.toml")
+	require.NoError(t, os.WriteFile(cfgFile, []byte(fmt.Sprintf(`
+service-type = "CN"
+data-dir = %[1]q
+
+[[fileservice]]
+name = "LOCAL"
+backend = "DISK-V2"
+data-dir = %[2]q
+
+[[fileservice]]
+name = "SHARED"
+backend = "DISK-V2"
+data-dir = %[3]q
+
+[fileservice.cache]
+disk-capacity = "1GB"
+%[4]s
+`, dir, filepath.Join(dir, "local2"), filepath.Join(dir, "shared2"), shareSetting)), 0644))
+
+	for _, tc := range []struct {
+		serviceType metadata.ServiceType
+		want        bool
+	}{{metadata.ServiceType_CN, configured}, {metadata.ServiceType_TN, false}} {
+		cfg := NewConfig()
+		require.NoError(t, parseConfigFromFile(cfgFile, cfg))
+		require.NoError(t, cfg.setDefaultValue())
+		cfg.Observability.DisableMetric = true
+		cfg.Observability.DisableTrace = true
+		nodeUUID := "index-file-cache-e2e-" + tc.serviceType.String()
+		fs, err := cfg.createFileService(context.Background(), tc.serviceType, nodeUUID)
+		require.NoError(t, err)
+
+		c := fileservice.GetIndexFileCache(fs)
+		require.Equal(t, tc.want, c != nil, tc.serviceType)
+		if c != nil {
+			written, err := c.Put(context.Background(), "1/ab/0/sum", []fileservice.IndexCacheFile{{
+				Name: "data",
+				Open: func(context.Context) (io.ReadCloser, error) {
+					return io.NopCloser(strings.NewReader("payload")), nil
+				},
+			}})
+			require.NoError(t, err)
+			require.True(t, written)
+			entries, err := os.ReadDir(filepath.Join(dir, "shared2-cache-index-file"))
+			require.NoError(t, err)
+			require.NotEmpty(t, entries, "the index-file cache lives next to the SHARED disk cache path")
+		}
+		fs.Close(context.Background())
+		for _, fsCfg := range cfg.FileServices {
+			perfcounter.Named.Delete(perfcounter.NameForFileService(tc.serviceType.String(), nodeUUID, fsCfg.Name))
+		}
+		perfcounter.Named.Delete(perfcounter.NameForNode(tc.serviceType.String(), nodeUUID))
 	}
 }

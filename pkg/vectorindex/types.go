@@ -388,6 +388,13 @@ type RuntimeConfig struct {
 	// captured under the cache entry's read lock during Search/SearchInto. The cache reads
 	// it back to decide eviction without touching the underlying algo unsynchronized.
 	EmptyGeneration *bool
+
+	// SearchDFCutoff is the fulltext2 high-df term cutoff for this query: a ranked
+	// bag-of-words term whose global df/N reaches this fraction is dropped from the BM25
+	// search (0 = off). It is query-scoped and MUST travel here, not be cached on the shared
+	// index object, because different sessions/queries can set different cutoffs against the
+	// same warm cache entry. Other algorithms ignore it.
+	SearchDFCutoff float64
 }
 
 type IvfIncludeResult struct {

@@ -18,6 +18,7 @@ package compile
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -44,6 +45,8 @@ type stubCtx struct {
 	registered  int
 	origTable   *plan.TableDef
 	qryDatabase string
+	vars        map[string]any
+	varErr      error
 }
 
 func newStubCtx() *stubCtx {
@@ -62,7 +65,13 @@ func (s *stubCtx) RunSql(sql string) error {
 	return s.runErr
 }
 func (s *stubCtx) BuildIndexTable(_ *plan.TableDef) error { return nil }
-func (s *stubCtx) ResolveVariable(_ string, _, _ bool) (any, error) {
+func (s *stubCtx) ResolveVariable(name string, _, _ bool) (any, error) {
+	if s.varErr != nil {
+		return nil, s.varErr
+	}
+	if v, ok := s.vars[name]; ok {
+		return v, nil
+	}
 	return int64(0), nil
 }
 func (s *stubCtx) IsFrontend() bool   { return s.isFrontend }
@@ -268,7 +277,7 @@ func TestGenFulltext2BuildFromSourceSQL(t *testing.T) {
 	sql, err := genFulltext2BuildFromSourceSQL(
 		srcTableDef(), defs[catalog.FullText2Index_TblType_Storage],
 		defs[catalog.FullText2Index_TblType_Metadata], "db",
-		DefaultMaxIndexCapacity, DefaultMaxPostingsCapacity)
+		DefaultMaxIndexCapacity, DefaultMaxPostingsCapacity, 0)
 	require.NoError(t, err)
 	require.Contains(t, sql, "fulltext2_create(")
 	require.Contains(t, sql, "CROSS APPLY")
@@ -286,7 +295,7 @@ func TestGenFulltext2BuildFromSourceSQL_Include(t *testing.T) {
 
 	sql, err := genFulltext2BuildFromSourceSQL(
 		srcTableDef(), storeDef, defs[catalog.FullText2Index_TblType_Metadata], "db",
-		DefaultMaxIndexCapacity, DefaultMaxPostingsCapacity)
+		DefaultMaxIndexCapacity, DefaultMaxPostingsCapacity, 0)
 	require.NoError(t, err)
 	require.Contains(t, sql, "`src`.`payload`")
 	require.True(t, strings.Index(sql, "`src`.`body`") < strings.Index(sql, "`src`.`payload`"),
@@ -311,7 +320,7 @@ func TestGenFulltext2BuildFromSourceSQL_IncludeNotOnSource(t *testing.T) {
 
 	_, err := genFulltext2BuildFromSourceSQL(
 		srcTableDef(), storeDef, defs[catalog.FullText2Index_TblType_Metadata], "db",
-		DefaultMaxIndexCapacity, DefaultMaxPostingsCapacity)
+		DefaultMaxIndexCapacity, DefaultMaxPostingsCapacity, 0)
 	require.Error(t, err)
 }
 
@@ -439,4 +448,42 @@ func TestIdxcronMetadata(t *testing.T) {
 	blob, err = Hooks{}.IdxcronMetadata(fe)
 	require.NoError(t, err)
 	require.NotEmpty(t, blob, "a frontend capture always registers a non-nil blob")
+}
+
+func TestResolveFulltext2ThreadsBuild(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		val  any
+		err  error
+		want int64
+	}{
+		{name: "explicit", val: int64(6), want: 6},
+		{name: "default", val: int64(0), want: 0},
+		{name: "negative", val: int64(-1), want: 0},
+		{name: "wrong type", val: "6", want: 0},
+		{name: "unresolvable", err: errors.New("no session"), want: 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx := newStubCtx()
+			ctx.vars = map[string]any{"fulltext2_threads_build": c.val}
+			ctx.varErr = c.err
+			require.Equal(t, c.want, resolveFulltext2ThreadsBuild(ctx))
+		})
+	}
+}
+
+func TestBuildFromSourceCarriesThreadsBuild(t *testing.T) {
+	defs := indexDefs("")
+	ctx := newStubCtx()
+	ctx.vars = map[string]any{"fulltext2_threads_build": int64(6)}
+	require.NoError(t, buildFromSource(ctx, defs[catalog.FullText2Index_TblType_Storage],
+		defs[catalog.FullText2Index_TblType_Metadata], srcTableDef(), "db"))
+	require.Len(t, ctx.sqls, 1)
+	require.Contains(t, ctx.sqls[0], `"threads_build":6`)
+
+	sql, err := genFulltext2BuildFromSourceSQL(
+		srcTableDef(), defs[catalog.FullText2Index_TblType_Storage], defs[catalog.FullText2Index_TblType_Metadata], "db",
+		DefaultMaxIndexCapacity, DefaultMaxPostingsCapacity, 0)
+	require.NoError(t, err)
+	require.NotContains(t, sql, "threads_build")
 }

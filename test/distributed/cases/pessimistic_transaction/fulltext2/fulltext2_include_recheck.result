@@ -1,0 +1,209 @@
+set experimental_fulltext2_index = 1;
+drop database if exists fulltext2_include_recheck;
+create database fulltext2_include_recheck;
+use fulltext2_include_recheck;
+create table t (id bigint primary key, body text, category int, tag varchar(10));
+insert into t values (1, 'needle a', 1, 'x'), (2, 'needle b', 1, 'y'), (3, 'needle c', 2, 'x'), (4, 'needle d', 1, 'x');
+create fulltext2 index ftx on t(body) include(category) with parser gojieba;
+set fulltext_bloom_filter_pushdown = 0;
+begin;
+update t set category = 2 where id = 4;
+select id, category, tag from t where match(body) against('needle') and category = 1;
+➤ id[-5,64,0]  ¦  category[4,32,0]  ¦  tag[12,10,0]  𝄀
+1  ¦  1  ¦  x  𝄀
+2  ¦  1  ¦  y
+select id, category, tag from t where match(body) against('needle') and category = 1 limit 10;
+➤ id[-5,64,0]  ¦  category[4,32,0]  ¦  tag[12,10,0]  𝄀
+2  ¦  1  ¦  y  𝄀
+1  ¦  1  ¦  x
+rollback;
+set fulltext_bloom_filter_pushdown = 1;
+begin;
+update t set category = 2 where id = 4;
+select id, category, tag from t where match(body) against('needle') and category = 1 and tag = 'x';
+➤ id[-5,64,0]  ¦  category[4,32,0]  ¦  tag[12,10,0]  𝄀
+1  ¦  1  ¦  x
+rollback;
+set fulltext_bloom_filter_pushdown = 0;
+select id, category, tag from t where match(body) against('needle') and category = 1;
+➤ id[-5,64,0]  ¦  category[4,32,0]  ¦  tag[12,10,0]  𝄀
+1  ¦  1  ¦  x  𝄀
+2  ¦  1  ¦  y  𝄀
+4  ¦  1  ¦  x
+explain select id, category, tag from t where match(body) against('needle') and category = 1;
+-- @regex("Filter Cond: \(t.category = 1\)", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_include_recheck.t  𝄀
+                    Filter Cond: (t.category = 1)  𝄀
+                    Runtime Filter Probe: t.id  𝄀
+              ->  Fulltext Index Scan on ftx  𝄀
+                    Fulltext Index: ftx
+create table rk (id bigint primary key, body text, category int, tag varchar(10));
+insert into rk values (11, 'needle needle needle', 1, 'a'), (12, 'needle needle filler', 1, 'b'), (13, 'needle filler filler', 1, 'c'),
+(14, 'other filler filler', 1, 'd'), (15, 'other other filler', 1, 'e');
+create fulltext2 index rkx on rk(body) include(category) with parser gojieba;
+explain select id, tag from rk where match(body) against('needle') order by match(body) against('needle') desc limit 1;
+-- @regex("Candidate Limit: 1", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (rk.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_include_recheck.rk  𝄀
+                    Runtime Filter Probe: rk.id  𝄀
+              ->  Fulltext Index Scan on rkx  𝄀
+                    Fulltext Index: rkx, Candidate Limit: 1
+explain select id, tag from rk where match(body) against('needle') and category = 1 limit 1;
+-- @regex("Candidate Limit: 1", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (rk.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_include_recheck.rk  𝄀
+                    Filter Cond: (rk.category = 1)  𝄀
+                    Runtime Filter Probe: rk.id  𝄀
+              ->  Fulltext Index Scan on rkx  𝄀
+                    Fulltext Index: rkx, Candidate Limit: 1
+begin;
+delete from rk where id = 11;
+select id, tag from rk where match(body) against('needle') order by match(body) against('needle') desc limit 1;
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+12  ¦  b
+select id, tag from rk where match(body) against('needle') limit 1;
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+12  ¦  b
+select id, tag from rk where match(body) against('needle') order by match(body) against('needle') desc limit 1 offset 1;
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+13  ¦  c
+rollback;
+begin;
+update rk set category = 2 where id = 11;
+select id, tag from rk where match(body) against('needle') and category = 1 order by match(body) against('needle') desc limit 1;
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+12  ¦  b
+select id, tag from rk where match(body) against('needle') and category = 1 limit 1;
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+12  ¦  b
+rollback;
+select id, match(body) against('needle') > 0 as positive from rk where match(body) against('needle') order by match(body) against('needle') desc;
+➤ id[-5,64,0]  ¦  positive[-6,8,0]  𝄀
+11  ¦  1  𝄀
+12  ¦  1  𝄀
+13  ¦  1
+create table rk2 (id bigint primary key, body text, tag varchar(10));
+insert into rk2 select result, 'needle needle needle', 'top' from generate_series(101, 115) g;
+insert into rk2 values (120, 'needle filler filler', 'live');
+insert into rk2 select result, 'other filler filler', 'other' from generate_series(200, 240) g;
+create fulltext2 index rk2x on rk2(body) with parser gojieba;
+begin;
+delete from rk2 where id between 101 and 115;
+explain select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc limit 1;
+-- @regex("Candidate Limit: 1", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (rk2.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_include_recheck.rk2  𝄀
+                    Runtime Filter Probe: rk2.id  𝄀
+              ->  Fulltext Index Scan on rk2x  𝄀
+                    Fulltext Index: rk2x, Candidate Limit: 1
+select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc limit 1;
+➤ id[-5,64,0]  ¦  tag[12,10,0]
+select id, tag from rk2 where match(body) against('needle') limit 1;
+➤ id[-5,64,0]  ¦  tag[12,10,0]
+explain select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc, id limit 1;
+-- @regex("Candidate Limit", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC, rk2.id INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (rk2.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_include_recheck.rk2  𝄀
+                    Runtime Filter Probe: rk2.id  𝄀
+              ->  Fulltext Index Scan on rk2x  𝄀
+                    Fulltext Index: rk2x
+select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc, id limit 1;
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+120  ¦  live
+explain select id from rk2 where match(body) against('needle') order by match(body) against('needle') desc limit 1;
+-- @regex("Table Scan on fulltext2_include_recheck.rk2", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (rk2.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_include_recheck.rk2  𝄀
+                    Runtime Filter Probe: rk2.id  𝄀
+              ->  Fulltext Index Scan on rk2x  𝄀
+                    Fulltext Index: rk2x, Candidate Limit: 1
+select id from rk2 where match(body) against('needle') order by match(body) against('needle') desc limit 1;
+➤ id[-5,64,0]
+rollback;
+begin;
+delete from rk where id = 11;
+update rk set category = 2 where id = 12;
+explain select id, category from rk where match(body) against('needle') order by match(body) against('needle') desc;
+-- @regex("Table Scan", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Fulltext Index Scan on rkx  𝄀
+              Fulltext Index: rkx
+select id, category from rk where match(body) against('needle') order by match(body) against('needle') desc;
+➤ id[-5,64,0]  ¦  category[4,32,0]  𝄀
+11  ¦  1  𝄀
+12  ¦  1  𝄀
+13  ¦  1
+select id, category from rk where id in (11, 12, 13) order by id;
+➤ id[-5,64,0]  ¦  category[4,32,0]  𝄀
+12  ¦  2  𝄀
+13  ¦  1
+rollback;
+begin;
+insert into rk2 values (130, 'needle needle needle needle', 'new');
+select id from rk2 where match(body) against('needle') and id = 130;
+➤ id[-5,64,0]
+select id from rk2 where body like '%needle%' and id = 130;
+➤ id[-5,64,0]  𝄀
+130
+rollback;
+begin;
+update rk2 set body = 'other filler filler' where id = 120;
+select id, tag from rk2 where match(body) against('needle') and tag = 'live';
+➤ id[-5,64,0]  ¦  tag[12,10,0]  𝄀
+120  ¦  live
+select id, body like '%needle%' as has_needle from rk2 where id = 120;
+➤ id[-5,64,0]  ¦  has_needle[-6,8,0]  𝄀
+120  ¦  0
+rollback;
+drop database fulltext2_include_recheck;
