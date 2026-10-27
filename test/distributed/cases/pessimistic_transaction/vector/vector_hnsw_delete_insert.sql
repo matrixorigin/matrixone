@@ -4,9 +4,6 @@
 -- two line neighbours, so before the fix every id below the deleted one disappeared.
 SET experimental_hnsw_index = 1;
 SET hnsw_threads_build = 1;
--- The serving CN refreshes a warm index through a periodic cross-CN freshness sweep.
--- Keep that sweep within the 120s readiness wait, then restore its default cadence.
-select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s') not like '%failed=[%' as all_cn_updated;
 
 drop database if exists hnsw_delete_insert;
 create database hnsw_delete_insert;
@@ -99,6 +96,5 @@ select id from t order by l2_distance(v, '[1,1,2]') limit 3;
 commit;
 
 drop database hnsw_delete_insert;
-select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0') not like '%failed=[%' as all_cn_restored;
 SET experimental_hnsw_index = 0;
 SET hnsw_threads_build = 0;
