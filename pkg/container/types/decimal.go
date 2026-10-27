@@ -1702,29 +1702,30 @@ func Decimal64FromFloat64(x float64, width, scale int32) (y Decimal64, err error
 
 // decimal128FromFloat64Magnitude rounds the shortest decimal representation,
 // rather than a binary product. Callers validate finite inputs and the target.
-// Scientific notation bounds the coefficient to 17 digits and avoids leading
-// fractional zeros consuming a decimal parser's precision budget.
+// The numerical shortest pair bounds the coefficient to 17 significant digits
+// without formatting and reparsing a decimal string.
 func decimal128FromFloat64Magnitude(x float64, scale int32) (Decimal128, error) {
-	var scratch [32]byte
-	text := strconv.AppendFloat(scratch[:0], math.Abs(x), 'e', -1, 64)
-	var coefficient uint64
-	digits, i := int32(0), 0
-	for text[i] != 'e' {
-		if text[i] != '.' {
-			coefficient = coefficient*10 + uint64(text[i]-'0')
-			digits++
+	if scale >= 0 && scale <= 19 {
+		// These powers of ten are exact binary64 integers. In this range,
+		// the shortest decimal, scaled exactly, differs from z by < 3*u*z
+		// (u = 2^-53), including the binary multiplication's rounding.
+		z := float64(math.Abs(x) * float64(Pow10[scale]))
+		if z >= 0.25 && z < 0x1p52 {
+			n := uint64(z)
+			fraction := z - float64(n) // Exact subtraction in this range.
+			// The 8*u*z allowance also covers rounding in distance. Only
+			// accept when decimal and binary rounding cannot cross a tie.
+			distance := math.Abs(fraction - 0.5)
+			if distance > z*0x1p-50 {
+				if fraction > 0.5 {
+					n++
+				}
+				return Decimal128{B0_63: n}, nil
+			}
 		}
-		i++
 	}
-	negativeExponent := text[i+1] == '-'
-	var exponent int32
-	for i += 2; i < len(text); i++ {
-		exponent = exponent*10 + int32(text[i]-'0')
-	}
-	if negativeExponent {
-		exponent = -exponent
-	}
-	power := exponent - (digits - 1) + scale
+	coefficient, exponent := float64ShortestDecimal(x)
+	power := exponent + scale
 	if power < 0 {
 		drop := -power
 		if drop > 17 {

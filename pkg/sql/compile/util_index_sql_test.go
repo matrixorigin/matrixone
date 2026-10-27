@@ -63,6 +63,75 @@ func TestGenInsertIndexTableSql_QuotesReservedKeywordColumn(t *testing.T) {
 	require.Contains(t, sql, "select serial_full(`order`,`id`), `id` from `test`.`files_related_mph`;")
 }
 
+// Issue #31080: db/table/column identifiers may legitimately contain backticks
+// (`tick“table`). The default-ALGORITHM backfill SQL is re-parsed by the
+// internal executor, so every identifier spliced into the format templates must
+// carry doubled backticks; previously only ALGORITHM=COPY worked.
+func TestGenInsertIndexTableSql_EscapesBacktickIdentifiers(t *testing.T) {
+	pkeyTableDef := &planpb.TableDef{
+		Name: "tick`table",
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "p`k",
+			Names:       []string{"p`k"},
+		},
+	}
+
+	// Secondary index with multi parts and primary key (the exact failing shape
+	// from the issue report).
+	secondary := &planpb.IndexDef{
+		IndexTableName: "__mo_index_secondary_fixed",
+		Parts:          []string{"v`1", "v2"},
+		Unique:         false,
+	}
+	sql, err := genInsertIndexTableSql(pkeyTableDef, secondary, "db`1", false)
+	require.NoError(t, err)
+	require.Contains(t, sql, "insert into  `db``1`.`__mo_index_secondary_fixed`")
+	require.Contains(t, sql, "serial_full(`v``1`,`v2`)")
+	require.Contains(t, sql, "`p``k` from `db``1`.`tick``table`;")
+
+	// Multi part index on a table without primary key.
+	noKeyTableDef := &planpb.TableDef{
+		Name: "tick`table",
+		Pkey: &planpb.PrimaryKeyDef{},
+	}
+	sql, err = genInsertIndexTableSql(noKeyTableDef, secondary, "db`1", false)
+	require.NoError(t, err)
+	require.Contains(t, sql, "insert into  `db``1`.`__mo_index_secondary_fixed`")
+	require.Contains(t, sql, "select serial(`v``1`,`v2`) from `db``1`.`tick``table` where serial(`v``1`,`v2`) is not null;")
+
+	// Single part index with primary key (parenthesized key expression branch).
+	singlePart := &planpb.IndexDef{
+		IndexTableName: "__mo_index_secondary_single",
+		Parts:          []string{"v`1"},
+		Unique:         false,
+	}
+	sql, err = genInsertIndexTableSql(pkeyTableDef, singlePart, "db`1", false)
+	require.NoError(t, err)
+	require.Contains(t, sql, "select (`v``1`), `p``k` from `db``1`.`tick``table` where (`v``1`) is not null;")
+
+	// Master index backfill goes through a separate generator that must apply
+	// the same quoting.
+	masterPkeyTableDef := &planpb.TableDef{
+		Name: "tick`table",
+		Cols: []*planpb.ColDef{
+			{Name: "p`k", Seqnum: 11},
+			{Name: "v`1", Seqnum: 12},
+		},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "p`k",
+			Names:       []string{"p`k"},
+		},
+	}
+	master := &planpb.IndexDef{
+		IndexTableName: "__mo_index_master",
+		Parts:          []string{"v`1"},
+	}
+	sqls := genInsertIndexTableSqlForMasterIndex(masterPkeyTableDef, master, "db`1")
+	require.Len(t, sqls, 1)
+	require.Contains(t, sqls[0], "insert into  `db``1`.`__mo_index_master`")
+	require.Contains(t, sqls[0], "serial_full('12', `v``1`, `p``k`), `p``k` from `db``1`.`tick``table`;")
+}
+
 func TestGenInsertIndexTableSql_UsesPrefixExpression(t *testing.T) {
 	originTableDef := &planpb.TableDef{
 		Name: "orders",

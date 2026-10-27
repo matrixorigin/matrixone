@@ -71,16 +71,6 @@ func resourceAvailable(
 	return estMem <= 2*mem/3
 }
 
-func IterEntryAsStats(objs []*catalog.ObjectEntry) iter.Seq[*objectio.ObjectStats] {
-	return func(yield func(*objectio.ObjectStats) bool) {
-		for _, obj := range objs {
-			if !yield(obj.GetObjectStats()) {
-				return
-			}
-		}
-	}
-}
-
 func IterStats(objs []*objectio.ObjectStats) iter.Seq[*objectio.ObjectStats] {
 	return func(yield func(*objectio.ObjectStats) bool) {
 		for _, obj := range objs {

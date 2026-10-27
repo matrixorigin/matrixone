@@ -5547,8 +5547,8 @@ func (b *baseBinder) markPreparedResultCastsProvisional(
 // markPreparedTemporalNumericPeer keeps the original TIME provenance on the
 // decimal peer introduced while a prepared numeric marker is still TEXT. The
 // executable expression uses the decimal envelope, but execute-time rebinding
-// must not reinterpret an integer marker as DECIMAL128 merely because this
-// envelope has replaced the TIME operand.
+// must resolve integer markers against the original TIME domain rather than
+// treating this provisional envelope as a user-declared decimal boundary.
 func markPreparedTemporalNumericPeer(expr *Expr, temporal Type) {
 	if expr == nil {
 		return

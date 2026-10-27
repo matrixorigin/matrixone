@@ -234,6 +234,85 @@ func TestHandleSQLTaskCreateAlterDrop(t *testing.T) {
 	require.NoError(t, ts.Close())
 }
 
+func TestHandleCreateSQLTaskRequiresDatabase(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses, ts, store := newSQLTaskHandlerTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	ctx := context.Background()
+
+	require.NoError(t, handleCreateSQLTask(ctx, ses, &tree.CreateSQLTask{
+		Name:    tree.Identifier("task_existing"),
+		SQLBody: "select 1",
+	}))
+	before := mustGetTestSQLTasksForFrontend(t, store)
+	require.Len(t, before, 1)
+	require.Equal(t, "testdb", before[0].DatabaseName)
+	ses.SetDatabaseName("")
+
+	checkNoDatabase := func(t *testing.T, stmt *tree.CreateSQLTask) {
+		t.Helper()
+		err := handleCreateSQLTask(ctx, ses, stmt)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoDB), "got %v", err)
+		var dbErr *moerr.Error
+		require.ErrorAs(t, err, &dbErr)
+		require.Equal(t, uint16(1046), dbErr.MySQLCode())
+		require.Equal(t, "3D000", dbErr.SqlState())
+		require.EqualError(t, err, "No database selected")
+		require.Equal(t, before, mustGetTestSQLTasksForFrontend(t, store))
+		runs, err := store.QuerySQLTaskRun(ctx)
+		require.NoError(t, err)
+		require.Empty(t, runs)
+	}
+
+	for _, tc := range []struct {
+		name string
+		stmt tree.CreateSQLTask
+	}{
+		{
+			name: "unqualified body",
+			stmt: tree.CreateSQLTask{Name: "task_unqualified", SQLBody: "insert into tmk values (1)"},
+		},
+		{
+			name: "qualified body",
+			stmt: tree.CreateSQLTask{Name: "task_qualified", SQLBody: "insert into testdb.tmk values (1)"},
+		},
+		{
+			name: "constant body",
+			stmt: tree.CreateSQLTask{Name: "task_constant", SQLBody: "select 1"},
+		},
+		{
+			name: "scheduled task with gate",
+			stmt: tree.CreateSQLTask{
+				Name: "task_scheduled", CronExpr: "0 0 0 1 1 *", Timezone: "UTC",
+				GateCondition: "1", SQLBody: "select 1",
+			},
+		},
+		{
+			name: "existing task",
+			stmt: tree.CreateSQLTask{Name: "task_existing", SQLBody: "select 2"},
+		},
+		{
+			name: "existing task with if not exists",
+			stmt: tree.CreateSQLTask{Name: "task_existing", IfNotExists: true, SQLBody: "select 2"},
+		},
+		{
+			name: "invalid timeout",
+			stmt: tree.CreateSQLTask{Name: "task_bad_timeout", Timeout: "-1s", SQLBody: "select 1"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checkNoDatabase(t, &tc.stmt)
+		})
+	}
+
+	t.Run("task service not published", func(t *testing.T) {
+		pu := getPu(ses.GetService())
+		pu.SetTaskService(nil)
+		t.Cleanup(func() { pu.SetTaskService(ts) })
+		checkNoDatabase(t, &tree.CreateSQLTask{Name: "task_not_ready", SQLBody: "select 1"})
+	})
+}
+
 func TestHandleSQLTaskDefaultsTimezoneToUTC(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

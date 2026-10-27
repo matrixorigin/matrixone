@@ -3,7 +3,26 @@ name: Iceberg Connector E2E
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    # Tidy includes transitive root-module test dependencies, so any PR can affect it.
+    # Tidy follows root-module production and test imports, including non-Iceberg Go packages.
+    paths:
+      - '**/*.go'
+      - '**/go.mod'
+      - '**/go.sum'
+      - 'go.work'
+      - 'go.work.sum'
+      - '**/*.s'
+      - '**/*.S'
+      - '**/*.c'
+      - '**/*.cc'
+      - '**/*.cpp'
+      - '**/*.h'
+      - '**/*.syso'
+      - 'pkg/iceberg/**'
+      - 'cgo/**'
+      - 'thirdparties/**'
+      - 'Makefile'
+      - '.github/workflows/iceberg-connector.yml'
+      - '.github/ci/**'
 
 permissions:
   contents: read

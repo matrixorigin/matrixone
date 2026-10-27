@@ -723,7 +723,7 @@ func TestDetermineShuffleForGroupByCanUseDependentHighNDVColumn(t *testing.T) {
 	}
 	builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{child, agg}}}
 
-	determineShuffleForGroupBy(agg, builder)
+	determineShuffleForGroupBy(agg, builder, false)
 
 	require.True(t, agg.Stats.HashmapStats.Shuffle)
 	require.Equal(t, int32(2), agg.Stats.HashmapStats.ShuffleColIdx,
@@ -761,7 +761,7 @@ func TestDetermineShuffleForGroupByDoesNotForceUnknownNDV(t *testing.T) {
 
 	for _, inputRows := range []float64{threshHoldForHashShuffle - 1, threshHoldForHashShuffle, 10_000_000} {
 		agg, builder := newAggregate(inputRows)
-		determineShuffleForGroupBy(agg, builder)
+		determineShuffleForGroupBy(agg, builder, false)
 		require.Falsef(t, agg.Stats.HashmapStats.Shuffle,
 			"unknown NDV must not route all raw rows by an assumed high cardinality at input=%v", inputRows)
 	}
@@ -841,23 +841,23 @@ func TestDetermineShuffleForGroupByAccountsForCountDistinctState(t *testing.T) {
 	}
 
 	large := newAggregate(1_000_000)
-	determineShuffleForGroupBy(large, builder)
+	determineShuffleForGroupBy(large, builder, false)
 	require.True(t, large.Stats.HashmapStats.Shuffle)
 	require.Equal(t, int32(0), large.Stats.HashmapStats.ShuffleColIdx)
 
 	small := newAggregate(threshHoldForShuffleGroup)
-	determineShuffleForGroupBy(small, builder)
+	determineShuffleForGroupBy(small, builder, false)
 	require.False(t, small.Stats.HashmapStats.Shuffle)
 
 	lowGroupNDV := newAggregate(1_000_000)
 	lowGroupNDV.GroupBy[0].Ndv = shuffleDistinctGroupMinNDV - 1
-	determineShuffleForGroupBy(lowGroupNDV, builder)
+	determineShuffleForGroupBy(lowGroupNDV, builder, false)
 	require.False(t, lowGroupNDV.Stats.HashmapStats.Shuffle,
 		"too few groups would serialize the high-cardinality distinct state")
 
 	emptyGroupingSet := newAggregate(1_000_000)
 	emptyGroupingSet.GroupingFlag = []bool{false}
-	determineShuffleForGroupBy(emptyGroupingSet, builder)
+	determineShuffleForGroupBy(emptyGroupingSet, builder, false)
 	require.False(t, emptyGroupingSet.Stats.HashmapStats.Shuffle,
 		"an empty grouping set has no raw child key safe for pre-group shuffle")
 
@@ -868,7 +868,7 @@ func TestDetermineShuffleForGroupByAccountsForCountDistinctState(t *testing.T) {
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
 	})
 	activeGroupingKey.GroupingFlag = []bool{false, true}
-	determineShuffleForGroupBy(activeGroupingKey, builder)
+	determineShuffleForGroupBy(activeGroupingKey, builder, false)
 	require.True(t, activeGroupingKey.Stats.HashmapStats.Shuffle,
 		"a grouping-set branch may still shuffle on an active key")
 	require.Equal(t, int32(1), activeGroupingKey.Stats.HashmapStats.ShuffleColIdx,
@@ -876,7 +876,7 @@ func TestDetermineShuffleForGroupByAccountsForCountDistinctState(t *testing.T) {
 
 	child.Stats.Outcnt = 100_000_000
 	lowStateRatio := newAggregate(1_000_000)
-	determineShuffleForGroupBy(lowStateRatio, builder)
+	determineShuffleForGroupBy(lowStateRatio, builder, false)
 	require.False(t, lowStateRatio.Stats.HashmapStats.Shuffle,
 		"do not redistribute a large input for a comparatively small exact state")
 
@@ -885,12 +885,12 @@ func TestDetermineShuffleForGroupByAccountsForCountDistinctState(t *testing.T) {
 	child.Stats.Selectivity = 0.01
 	selective := newAggregate(1_000_000)
 	selective.GroupBy[0].Ndv = 100_000
-	determineShuffleForGroupBy(selective, builder)
+	determineShuffleForGroupBy(selective, builder, false)
 	require.False(t, selective.Stats.HashmapStats.Shuffle,
 		"table-level NDV must not claim that all distinct values survive selection")
 	selectiveManyOwners := newAggregate(100_000_000)
 	selectiveManyOwners.GroupBy[0].Ndv = 100_000
-	determineShuffleForGroupBy(selectiveManyOwners, builder)
+	determineShuffleForGroupBy(selectiveManyOwners, builder, false)
 	require.True(t, selectiveManyOwners.Stats.HashmapStats.Shuffle,
 		"selection may retain shuffle when enough estimated owners and exact state remain")
 
@@ -905,7 +905,7 @@ func TestDetermineShuffleForGroupByAccountsForCountDistinctState(t *testing.T) {
 			Args: []*plan.Expr{arg},
 		}},
 	})
-	determineShuffleForGroupBy(singleStage, builder)
+	determineShuffleForGroupBy(singleStage, builder, false)
 	require.False(t, singleStage.Stats.HashmapStats.Shuffle,
 		"an aggregate forced to one CN must clear even stale shuffle state")
 }
@@ -1008,7 +1008,7 @@ func TestDetermineShuffleForGroupByAccountsForSpillBudget(t *testing.T) {
 			if tc.change != nil {
 				tc.change(node, child, builder)
 			}
-			determineShuffleForGroupBy(node, builder)
+			determineShuffleForGroupBy(node, builder, false)
 			require.Equal(t, tc.want, node.Stats.HashmapStats.Shuffle)
 			if tc.want {
 				require.Equal(t, int32(0), node.Stats.HashmapStats.ShuffleColIdx)
@@ -1456,7 +1456,7 @@ func TestDetermineShuffleForGroupByRequiresGlobalJoinOwnership(t *testing.T) {
 				builder.optimizerHints = &OptimizerHints{outerAntiPlanning: 1}
 			}
 
-			determineShuffleForGroupBy(agg, builder)
+			determineShuffleForGroupBy(agg, builder, false)
 
 			require.True(t, agg.Stats.HashmapStats.Shuffle)
 			require.Equal(t, tt.wantMethod, agg.Stats.HashmapStats.ShuffleMethod)
