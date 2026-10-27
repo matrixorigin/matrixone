@@ -7539,7 +7539,7 @@ func TestRegularIndexOnlyMatchRequiresContiguousPrefix(t *testing.T) {
 	}
 }
 
-func TestGetIndexForNonEquiCond_DetectsPairedRangeOnIndexColumn(t *testing.T) {
+func TestRangeBackfillDetectsPairedRangeOnIndexColumn(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	idxDef := &IndexDef{
@@ -7569,11 +7569,6 @@ func TestGetIndexForNonEquiCond_DetectsPairedRangeOnIndexColumn(t *testing.T) {
 		},
 	}
 
-	idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{idxDef}, node)
-	require.Equal(t, 0, idxPos)
-	require.ElementsMatch(t, []int32{0, 1}, filterIdx)
-
-	// The cost-based production matcher must retain the same paired bounds.
 	node.Stats = &planpb.Stats{TableCnt: 1000, Outcnt: 10}
 	costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
 	require.ElementsMatch(t, []int32{0, 1}, costCtx.matchRangeBackfill(idxDef))
@@ -7705,7 +7700,7 @@ func TestRangeBackfillSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
 	}
 }
 
-func TestGetIndexForNonEquiCondUsesCompleteRangeIndexAlternative(t *testing.T) {
+func TestRangeBackfillUsesCompleteRangeIndexAlternative(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	prefixIdx := &planpb.IndexDef{
@@ -7746,9 +7741,17 @@ func TestGetIndexForNonEquiCondUsesCompleteRangeIndexAlternative(t *testing.T) {
 				},
 			}
 
-			idxPos, filterIdx := builder.getIndexForNonEquiCond(tt.indexes, node)
-			require.Equal(t, tt.wantIdx, idxPos)
-			require.Equal(t, []int32{0}, filterIdx)
+			node.BindingTags = []int32{bindTag}
+			node.TableDef.Pkey = &planpb.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName}
+			node.Stats = &planpb.Stats{TableCnt: 1000, Outcnt: 10}
+			costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
+			for i, index := range tt.indexes {
+				if i == tt.wantIdx {
+					require.Equal(t, []int32{0}, costCtx.matchRangeBackfill(index))
+				} else {
+					require.Empty(t, costCtx.matchRangeBackfill(index))
+				}
+			}
 		})
 	}
 }
@@ -7933,7 +7936,7 @@ func TestRegularIndexPrefixMetadataUsable(t *testing.T) {
 	}), "rebuild the index")
 }
 
-func TestGetIndexForNonEquiCondSkipsDeclaredPrefixIndexes(t *testing.T) {
+func TestRangeBackfillSkipsDeclaredPrefixIndexes(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	node := &planpb.Node{
@@ -7971,18 +7974,18 @@ func TestGetIndexForNonEquiCondSkipsDeclaredPrefixIndexes(t *testing.T) {
 		for _, filter := range filters {
 			t.Run(idxDef.IndexName+"/"+filter.name, func(t *testing.T) {
 				node.FilterList = []*planpb.Expr{filter.expr}
-				idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{idxDef}, node)
-				require.Equal(t, -1, idxPos)
-				require.Nil(t, filterIdx)
+				node.Stats = &planpb.Stats{TableCnt: 1000, Outcnt: 10}
+				costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
+				require.Empty(t, costCtx.matchRangeBackfill(idxDef))
 			})
 		}
 	}
 
 	complete := &planpb.IndexDef{IndexName: "idx_name_full", Parts: []string{"name", catalog.CreateAlias("id")}}
 	node.FilterList = []*planpb.Expr{makeStringInFilterExpr(bindTag, 1, "abcdx", "abcex")}
-	idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{prefixNonUnique, complete}, node)
-	require.Equal(t, 1, idxPos)
-	require.Equal(t, []int32{0}, filterIdx)
+	costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
+	require.Empty(t, costCtx.matchRangeBackfill(prefixNonUnique))
+	require.Equal(t, []int32{0}, costCtx.matchRangeBackfill(complete))
 }
 
 func TestMakeIndexLookupPartExprDoesNotFailOpen(t *testing.T) {
