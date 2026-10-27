@@ -295,9 +295,6 @@ func (f AppendRuntimeCoordinatorFactory) newCoordinator(ctx context.Context, req
 		workflow:     workflow,
 		closed:       false,
 		committed:    false,
-		dataFiles:    nil,
-		objectRef:    "",
-		releaseRef:   nil,
 		memoryBudget: appendWriteBudget,
 	}, nil
 }
@@ -801,9 +798,6 @@ type AppendRuntimeCoordinator struct {
 	workflow     icebergwritecore.AppendWorkflow
 	closed       bool
 	committed    bool
-	dataFiles    []api.DataFile
-	objectRef    string
-	releaseRef   func()
 	memoryBudget *dmlMemoryBudget
 }
 
@@ -929,7 +923,6 @@ func (c *AppendRuntimeCoordinator) Commit(ctx context.Context) error {
 		return api.ToMOErr(ctx, errors.Join(err, abortErr, recordErr))
 	}
 	c.closed = true
-	c.dataFiles = append([]api.DataFile(nil), files...)
 	if len(files) == 0 {
 		c.committed = true
 		return nil
