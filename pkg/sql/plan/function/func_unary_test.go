@@ -10124,6 +10124,42 @@ func TestUserLevelLockConnectionIDFromProbeTxnID(t *testing.T) {
 		userLevelLockProbeTxnIDPrefix("owner-1", 1001, "probe_lock", "is_free")))
 }
 
+func getUserLevelLock(name string, timeout float64, proc *process.Process) (int64, error) {
+	name, err := validateUserLevelLockName(name)
+	if err != nil {
+		return 0, err
+	}
+	timeoutSeconds, err := userLevelLockTimeoutSeconds(timeout)
+	if err != nil {
+		return 0, err
+	}
+	return getUserLevelLockValidated(name, timeoutSeconds, proc)
+}
+
+func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, error) {
+	name, err := validateUserLevelLockName(name)
+	if err != nil {
+		return 0, false, err
+	}
+	return releaseUserLevelLockValidated(name, proc)
+}
+
+func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
+	name, err := validateUserLevelLockName(name)
+	if err != nil {
+		return 0, err
+	}
+	return isUserLevelLockFreeValidated(name, proc)
+}
+
+func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, error) {
+	name, err := validateUserLevelLockName(name)
+	if err != nil {
+		return 0, false, err
+	}
+	return isUserLevelLockUsedValidated(name, proc)
+}
+
 func TestUserLevelLockFunctions(t *testing.T) {
 	runUserLevelLockTest(t, func(services []lockservice.LockService) {
 		proc := newUserLevelLockTestProcess(t, services[0], "acc")
