@@ -3849,6 +3849,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemSystemEnumType("window_partition_algorithm", "COST", "SORT", "HASH"),
 		Default:           "SORT",
 	},
+	"rollup_algorithm": {
+		Name:              "rollup_algorithm",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemSystemEnumType("rollup_algorithm", "COST", "SORT", "HASH"),
+		Default:           "COST",
+	},
 	"windowing_use_high_precision": {
 		Name:              "windowing_use_high_precision",
 		Scope:             ScopeBoth,

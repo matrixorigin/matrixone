@@ -1295,6 +1295,15 @@ func (ov *overload) GetExecuteMethod() (
 	return fn, nil, nil, nil
 }
 
+// GetArgumentType returns one element of the registered signature, whose meaning
+// is defined by the function's type checker, without exposing its mutable slice.
+func (ov *overload) GetArgumentType(index int) (types.T, bool) {
+	if index < 0 || index >= len(ov.args) {
+		return types.T_any, false
+	}
+	return ov.args[index], true
+}
+
 func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {
 	return ov.retType
 }

@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"math"
 	"strconv"
 	"strings"
@@ -263,22 +264,26 @@ func indexFrom(str, substr string, start int) int {
 }
 
 // rejectNonFiniteArrayElem returns an error when a vector element is NaN or ±Inf.
-func rejectNonFiniteArrayElem(num float64) error {
+func rejectNonFiniteArrayElemWithContext(ctx context.Context, num float64) error {
 	if math.IsNaN(num) || math.IsInf(num, 0) {
-		return moerr.NewInternalErrorNoCtxf("vector element cannot be NaN or Inf: %v", num)
+		return moerr.NewInternalErrorf(parseErrorContext(ctx), "vector element cannot be NaN or Inf: %v", num)
 	}
 	return nil
 }
 
 // stringToT convert str to T
 func stringToT[T ArrayElement](str string) (t T, err error) {
+	return stringToTWithContext[T](moerr.Context(), str)
+}
+
+func stringToTWithContext[T ArrayElement](ctx context.Context, str string) (t T, err error) {
 	switch any(t).(type) {
 	case float32:
 		num, err := strconv.ParseFloat(str, 32)
 		if err != nil {
-			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_float32.String())
+			return t, moerr.NewInternalErrorf(parseErrorContext(ctx), "error while casting %s to %s", str, T_float32.String())
 		}
-		if err = rejectNonFiniteArrayElem(num); err != nil {
+		if err = rejectNonFiniteArrayElemWithContext(ctx, num); err != nil {
 			return t, err
 		}
 		// FIX: https://stackoverflow.com/a/36391858/1609570
@@ -287,9 +292,9 @@ func stringToT[T ArrayElement](str string) (t T, err error) {
 	case float64:
 		num, err := strconv.ParseFloat(str, 64)
 		if err != nil {
-			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_float64.String())
+			return t, moerr.NewInternalErrorf(parseErrorContext(ctx), "error while casting %s to %s", str, T_float64.String())
 		}
-		if err = rejectNonFiniteArrayElem(num); err != nil {
+		if err = rejectNonFiniteArrayElemWithContext(ctx, num); err != nil {
 			return t, err
 		}
 		return *(*T)(unsafe.Pointer(&num)), nil
@@ -297,14 +302,14 @@ func stringToT[T ArrayElement](str string) (t T, err error) {
 		// rounded once from the exact value of the text
 		num, v64, err := Float32RoundToOddString(str)
 		if err != nil {
-			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_bf16.String())
+			return t, moerr.NewInternalErrorf(parseErrorContext(ctx), "error while casting %s to %s", str, T_array_bf16.String())
 		}
-		if err = rejectNonFiniteArrayElem(float64(num)); err != nil {
+		if err = rejectNonFiniteArrayElemWithContext(ctx, float64(num)); err != nil {
 			return t, err
 		}
 		// checked by the float32 value, as a scalar bf16 (RejectNarrowFloatInput)
 		if f := float32(v64); f > BF16MaxFinite || f < -BF16MaxFinite {
-			return t, moerr.NewOutOfRangeNoCtxf(T_array_bf16.String(), "element %s", str)
+			return t, moerr.NewOutOfRangef(parseErrorContext(ctx), T_array_bf16.String(), "element %s", str)
 		}
 		bf := BF16FromFloat32(num)
 		return *(*T)(unsafe.Pointer(&bf)), nil
@@ -312,13 +317,13 @@ func stringToT[T ArrayElement](str string) (t T, err error) {
 		// rounded once from the exact value of the text
 		num, _, err := Float32RoundToOddString(str)
 		if err != nil {
-			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_float16.String())
+			return t, moerr.NewInternalErrorf(parseErrorContext(ctx), "error while casting %s to %s", str, T_array_float16.String())
 		}
-		if err = rejectNonFiniteArrayElem(float64(num)); err != nil {
+		if err = rejectNonFiniteArrayElemWithContext(ctx, float64(num)); err != nil {
 			return t, err
 		}
 		if num > Float16MaxFinite || num < -Float16MaxFinite {
-			return t, moerr.NewOutOfRangeNoCtxf(T_array_float16.String(), "element %s", str)
+			return t, moerr.NewOutOfRangef(parseErrorContext(ctx), T_array_float16.String(), "element %s", str)
 		}
 		h := Float16FromFloat32(num)
 		return *(*T)(unsafe.Pointer(&h)), nil
@@ -329,7 +334,7 @@ func stringToT[T ArrayElement](str string) (t T, err error) {
 		// round+clamp; only direct string parsing is strict.)
 		num, err := strconv.ParseInt(str, 10, 8)
 		if err != nil {
-			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_int8.String())
+			return t, moerr.NewInternalErrorf(parseErrorContext(ctx), "error while casting %s to %s", str, T_array_int8.String())
 		}
 		i8 := int8(num)
 		return *(*T)(unsafe.Pointer(&i8)), nil
@@ -340,11 +345,11 @@ func stringToT[T ArrayElement](str string) (t T, err error) {
 		// round+clamp; only direct string parsing is strict.)
 		num, err := strconv.ParseUint(str, 10, 8)
 		if err != nil {
-			return t, moerr.NewInternalErrorNoCtxf("error while casting %s to %s", str, T_array_uint8.String())
+			return t, moerr.NewInternalErrorf(parseErrorContext(ctx), "error while casting %s to %s", str, T_array_uint8.String())
 		}
 		u8 := uint8(num)
 		return *(*T)(unsafe.Pointer(&u8)), nil
 	default:
-		panic(moerr.NewInternalErrorNoCtx("not implemented"))
+		panic(moerr.NewInternalError(parseErrorContext(ctx), "not implemented"))
 	}
 }
