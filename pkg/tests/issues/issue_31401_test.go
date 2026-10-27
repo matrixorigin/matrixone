@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -121,14 +122,28 @@ func TestIssue31401AlterCopyRebuildTransaction(t *testing.T) {
 				var taskPreserved atomic.Bool
 				if mode == "plugin" {
 					require.NoError(t, db.QueryRowContext(ctx, "select table_id,job_id from mo_catalog.mo_iscp_log where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='t') and job_name='index_ft' and drop_at is null", name).Scan(&sourceTableID, &sourceJobID))
-					// Fence/drain this source consumer through its existing owner so
-					// task-catalog isolation is independent of background watermark IO.
+					// The daemon can run on any CN in the shared fixture. Fence all
+					// candidates, including not-yet-started executor generations.
 					key := iscp.NewJobRuntimeKey(0, sourceTableID, "index_ft", sourceJobID)
-					iscp.InstallCNJobFence(cn.ServiceID(), key, 5*time.Minute)
-					defer iscp.RemoveCNJobFence(cn.ServiceID(), key)
-					if running, ok := iscp.GetExecutorRuntime(cn.ServiceID()); ok {
-						require.NoError(t, running.CancelAndDrainJobConsumer(ctx, 0, sourceTableID, "index_ft", sourceJobID))
-					}
+					var fenced []string
+					defer func() {
+						for _, sid := range fenced {
+							iscp.RemoveCNJobFence(sid, key)
+						}
+					}()
+					cluster.ForeachServices(func(service embed.ServiceOperator) bool {
+						if service.ServiceType() != metadata.ServiceType_CN {
+							return true
+						}
+						sid := service.ServiceID()
+						iscp.InstallCNJobFence(sid, key, 5*time.Minute)
+						fenced = append(fenced, sid)
+						if running, ok := iscp.GetExecutorRuntime(sid); ok {
+							t.Logf("draining source job on %s", sid)
+							require.NoError(t, running.CancelAndDrainJobConsumer(ctx, 0, sourceTableID, "index_ft", sourceJobID))
+						}
+						return true
+					})
 					observer.afterRetire = func(checkCtx context.Context) error {
 						var count int
 						err := db.QueryRowContext(checkCtx, "select count(*) from mo_catalog.mo_iscp_log where table_id=? and job_id=? and drop_at is null", sourceTableID, sourceJobID).Scan(&count)
