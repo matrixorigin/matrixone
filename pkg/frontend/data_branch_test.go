@@ -119,6 +119,15 @@ func generatedColumnsLogicallyEqualForTest(left, right *plan.GeneratedCol) bool 
 	)
 }
 
+func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, commonVisibleIdxes, tarOnlyIdxes []int, err error) {
+	return checkSchemaCompatibilityWithResolver(
+		tarDef, baseDef,
+		func(tarCol *plan.ColDef) *plan.ColDef {
+			return dataBranchColumnDefByLogicalName(baseDef, tarCol)
+		},
+	)
+}
+
 func TestDataBranchColumnClassification(t *testing.T) {
 	require.True(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: "tenant"}))
 	require.True(t, isDataBranchWritableColumn(&plan.ColDef{Name: "tenant"}))

@@ -1726,15 +1726,6 @@ func dataBranchColumnTypeAttributesEqual(left, right plan.Type) bool {
 
 type dataBranchEndpointColumnResolver func(*plan.ColDef) *plan.ColDef
 
-func checkSchemaCompatibility(tarDef, baseDef *plan.TableDef) (commonIdxes, commonVisibleIdxes, tarOnlyIdxes []int, err error) {
-	return checkSchemaCompatibilityWithResolver(
-		tarDef, baseDef,
-		func(tarCol *plan.ColDef) *plan.ColDef {
-			return dataBranchColumnDefByLogicalName(baseDef, tarCol)
-		},
-	)
-}
-
 func checkSchemaCompatibilityWithResolver(
 	tarDef, baseDef *plan.TableDef,
 	resolveBaseColumn dataBranchEndpointColumnResolver,
