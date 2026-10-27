@@ -27,6 +27,11 @@ header:
     - '**/goyacc.go'
     - 'pkg/sql/parsers/dialect/postgresql/postgresql_sql.go'
     - 'pkg/sql/parsers/dialect/mysql/mysql_sql.go'
+    # Pinned Go 1.27.1 shortest-decimal conversion and power-table generator
+    # retain their BSD headers/license in LICENSES/Golang-license.
+    - 'pkg/container/types/float_decimal.go'
+    - 'pkg/container/types/float_decimal_pow10_gen.go'
+    - 'pkg/container/types/float_decimal_pow10_table.go'
     # Pinned Go 1.27.1 regexp implementation retains its BSD headers/license.
     - 'pkg/sql/plan/function/internal/regexp/regexp.go'
     - 'pkg/sql/plan/function/internal/regexp/exec.go'
