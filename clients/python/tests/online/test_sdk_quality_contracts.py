@@ -18,6 +18,7 @@ from sqlalchemy.orm import declarative_base
 
 from matrixone import Client, AsyncClient
 from matrixone.exceptions import QueryError
+from scripts.run_contracts import validate_server_identity
 
 pytestmark = pytest.mark.skipif(os.environ.get('MO_SDK_ONLINE') != '1', reason='explicit isolated target required')
 
@@ -64,10 +65,8 @@ def server(record_testsuite_property):
     try:
         version, revision = admin.execute('SELECT version(),git_version()').rows[0]
         expected = os.environ['MO_SDK_EXPECT_VERSION']
-        assert expected in version, (version, expected)
         expected_revision = os.environ.get('MO_SDK_EXPECT_REVISION')
-        if expected_revision:
-            assert revision.startswith(expected_revision), (revision, expected_revision)
+        validate_server_identity(version, revision, expected, expected_revision)
         print('SDK_SERVER_IDENTITY', version, revision)
         record_testsuite_property('matrixone.version', version)
         record_testsuite_property('matrixone.revision', revision)

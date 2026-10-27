@@ -19,7 +19,6 @@ This module provides MatrixOne-specific snapshot query capabilities
 integrated with SQLAlchemy's select() API.
 """
 
-import re
 from sqlalchemy import select as sqlalchemy_select
 from sqlalchemy.sql.selectable import Select
 
@@ -37,7 +36,7 @@ def _with_snapshot(self, snapshot_name: str):
         snapshot_name: Name of the snapshot to query
 
     Returns:
-        Self for method chaining
+        A new Select; the original remains unchanged
 
     Examples::
 
@@ -53,8 +52,12 @@ def _with_snapshot(self, snapshot_name: str):
                 .with_snapshot('yesterday_backup')
                 .limit(10))
     """
-    self._matrixone_snapshot = snapshot_name
-    return self
+    from .._sql_literals import sql_string_token
+
+    if not isinstance(snapshot_name, str) or not snapshot_name:
+        raise ValueError('snapshot must be a nonempty string')
+    sql_string_token(snapshot_name, context='Snapshot')
+    return self._annotate({'matrixone_snapshot': snapshot_name})
 
 
 # Monkey-patch the Select class to add with_snapshot method
@@ -118,88 +121,32 @@ def select(*entities, snapshot=None):
     """
     stmt = sqlalchemy_select(*entities)
 
-    if snapshot:
-        # Attach snapshot name as custom attribute
-        stmt._matrixone_snapshot = snapshot
+    if snapshot is not None:
+        stmt = _with_snapshot(stmt, snapshot)
 
     return stmt
 
 
 def compile_select(stmt, engine=None):
+    """Render typed parameters and all supported snapshot sources consistently.
+
+    Snapshot compilation requires the MatrixOne dialect. An explicitly supplied
+    foreign engine remains usable for ordinary statements; it cannot silently
+    ignore snapshot metadata.
     """
-    Compile a SQLAlchemy select statement to SQL with MatrixOne snapshot support.
+    from sqlalchemy.sql import visitors
 
-    This function compiles a select statement and injects MatrixOne snapshot hints
-    if the statement has snapshot metadata attached.
+    from .._query_compilation import compile_expression
+    from .dialect import MatrixOneDialect
 
-    Args:
-        stmt: SQLAlchemy Select statement (possibly created with snapshot parameter)
-        engine: Optional SQLAlchemy engine for dialect-specific compilation
-
-    Returns:
-        SQL string with snapshot hint injected if applicable
-
-    Examples::
-
-        from matrixone.sqlalchemy_ext import select, compile_select
-
-        # Create statement with snapshot
-        stmt = select(User, snapshot='backup').where(User.age > 25)
-
-        # Compile to SQL
-        sql = compile_select(stmt)
-        # Result: "SELECT users.id, users.name FROM users {snapshot = 'backup'} WHERE users.age > 25"
-
-        # Use with client
-        results = client.execute(sql)
-
-    Note:
-        The snapshot hint is injected after the first table name in the FROM clause
-        using MatrixOne's snapshot query syntax: {snapshot = 'snapshot_name'}
-    """
-    # Compile to standard SQL
-    if engine:
-        compiled = stmt.compile(bind=engine, compile_kwargs={"literal_binds": True})
-    else:
-        compiled = stmt.compile(compile_kwargs={"literal_binds": True})
-
-    sql = str(compiled)
-
-    # Inject snapshot hint if present
-    if hasattr(stmt, '_matrixone_snapshot'):
-        sql = _inject_snapshot_hint(sql, stmt._matrixone_snapshot)
-
-    return sql
+    dialect = engine.dialect if engine is not None else None
+    if dialect is not None and not isinstance(dialect, MatrixOneDialect):
+        if any(item._annotations.get('matrixone_snapshot') is not None for item in visitors.iterate(stmt)):
+            raise ValueError('Snapshot compilation requires a MatrixOne engine')
+    return compile_expression(stmt, compiler_dialect=dialect)
 
 
-def _inject_snapshot_hint(sql: str, snapshot_name: str) -> str:
-    """
-    Inject MatrixOne snapshot hint into SQL query.
+# Retain the private import for existing callers, with one rewriting authority.
+from .._snapshot_sql import rewrite_snapshot as _inject_snapshot_hint
 
-    Finds the first table after FROM clause and injects the snapshot hint.
-
-    Args:
-        sql: SQL query string
-        snapshot_name: Name of the snapshot
-
-    Returns:
-        SQL with snapshot hint injected
-
-    Example:
-        Input:  "SELECT * FROM users WHERE age > 25"
-        Output: "SELECT * FROM users {snapshot = 'backup'} WHERE age > 25"
-    """
-    # Pattern to find first table after FROM
-    pattern = r'(\bFROM\s+)(\w+)(\s|,|$)'
-
-    def replace_func(match):
-        return f"{match.group(1)}{match.group(2)} {{snapshot = '{snapshot_name}'}}{match.group(3)}"
-
-    # Inject snapshot hint after first table
-    return re.sub(pattern, replace_func, sql, count=1)
-
-
-__all__ = [
-    'select',
-    'compile_select',
-]
+__all__ = ['select', 'compile_select']

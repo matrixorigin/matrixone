@@ -401,13 +401,13 @@ class PitrManager:
             conditions = []
 
             if level:
-                conditions.append(f"pitr_level = {self._client._escape_string(level)}")
+                conditions.append(f"pitr_level = {sql_literal(level)}")
             if account_name:
-                conditions.append(f"account_name = {self._client._escape_string(account_name)}")
+                conditions.append(f"account_name = {sql_literal(account_name)}")
             if database_name:
-                conditions.append(f"database_name = {self._client._escape_string(database_name)}")
+                conditions.append(f"database_name = {sql_literal(database_name)}")
             if table_name:
-                conditions.append(f"table_name = {self._client._escape_string(table_name)}")
+                conditions.append(f"table_name = {sql_literal(table_name)}")
 
             if conditions:
                 where_clause = " WHERE " + " AND ".join(conditions)
@@ -697,13 +697,13 @@ class AsyncPitrManager:
             conditions = []
 
             if level:
-                conditions.append(f"pitr_level = {self._client._escape_string(level)}")
+                conditions.append(f"pitr_level = {sql_literal(level)}")
             if account_name:
-                conditions.append(f"account_name = {self._client._escape_string(account_name)}")
+                conditions.append(f"account_name = {sql_literal(account_name)}")
             if database_name:
-                conditions.append(f"database_name = {self._client._escape_string(database_name)}")
+                conditions.append(f"database_name = {sql_literal(database_name)}")
             if table_name:
-                conditions.append(f"table_name = {self._client._escape_string(table_name)}")
+                conditions.append(f"table_name = {sql_literal(table_name)}")
 
             if conditions:
                 where_clause = " WHERE " + " AND ".join(conditions)
