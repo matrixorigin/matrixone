@@ -1,7 +1,7 @@
 # Conditional FULLTEXT2 stream Top-K
 
-Status: design review, revision 1, 2026-10-27. Implementation is blocked until
-the separate design review approves this revision. Owner: fulltext optimization
+Status: approved design, revision 2, 2026-10-27. The separate review records
+approval before each implementation revision. Owner: fulltext optimization
 work for issue #31119 and existing draft PR #31407. This is a continuation of
 that PR, not a new PR or a change to the benchmark workload.
 
