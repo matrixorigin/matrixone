@@ -1082,11 +1082,6 @@ type rangeSelectivityKey struct {
 	colFnName string
 }
 
-type rangeSelectivityGroup struct {
-	key   rangeSelectivityKey
-	exprs []*plan.Expr
-}
-
 // estimateAndSelectivity treats constant ranges on the same column as one
 // interval. Multiplying nested predicates such as x >= 35, x >= 36, x <= 45,
 // x <= 50 counts the same restriction four times and makes estimates depend on
@@ -1096,7 +1091,7 @@ func estimateAndSelectivity(args []*plan.Expr, builder *QueryBuilder, s *pb.Stat
 	for _, arg := range args {
 		flattenAndConjuncts(arg, &conjuncts)
 	}
-	groups := make([]rangeSelectivityGroup, 0)
+	groups := make([][]*plan.Expr, 0)
 	groupByKey := make(map[rangeSelectivityKey]int)
 	groupForConjunct := make([]int, len(conjuncts))
 	for i := range groupForConjunct {
@@ -1111,9 +1106,9 @@ func estimateAndSelectivity(args []*plan.Expr, builder *QueryBuilder, s *pb.Stat
 		if !exists {
 			groupIndex = len(groups)
 			groupByKey[key] = groupIndex
-			groups = append(groups, rangeSelectivityGroup{key: key})
+			groups = append(groups, nil)
 		}
-		groups[groupIndex].exprs = append(groups[groupIndex].exprs, conjunct)
+		groups[groupIndex] = append(groups[groupIndex], conjunct)
 		groupForConjunct[i] = groupIndex
 	}
 
@@ -1121,7 +1116,7 @@ func estimateAndSelectivity(args []*plan.Expr, builder *QueryBuilder, s *pb.Stat
 	emitted := make([]bool, len(groups))
 	for i, conjunct := range conjuncts {
 		groupIndex := groupForConjunct[i]
-		if groupIndex < 0 || len(groups[groupIndex].exprs) == 1 {
+		if groupIndex < 0 || len(groups[groupIndex]) == 1 {
 			ret = andSelectivity(ret, estimateExprSelectivity(conjunct, builder, s))
 			continue
 		}
@@ -1130,9 +1125,9 @@ func estimateAndSelectivity(args []*plan.Expr, builder *QueryBuilder, s *pb.Stat
 		}
 		emitted[groupIndex] = true
 		groupSelectivity, ok := estimateConjunctiveRangeSelectivity(
-			groups[groupIndex].exprs, builder)
+			groups[groupIndex], builder)
 		if !ok {
-			for _, grouped := range groups[groupIndex].exprs {
+			for _, grouped := range groups[groupIndex] {
 				ret = andSelectivity(ret, estimateExprSelectivity(grouped, builder, s))
 			}
 			continue
