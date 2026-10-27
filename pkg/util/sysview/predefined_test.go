@@ -741,3 +741,19 @@ func TestMetadataVisibilityPolicyMatchesPersistedViews(t *testing.T) {
 		require.Contains(t, sql, "rp.obj_id = tbl.rel_logical_id")
 	}
 }
+
+func TestInformationSchemaTablesLiteralIndexPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name, ddl string
+		branches  int
+	}{
+		{"legacy", InformationSchemaTablesV41DDL, 1},
+		{"current", InformationSchemaTablesDDL, 2},
+		{"protocol 118", InformationSchemaTablesV118DDL, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.branches, strings.Count(tc.ddl, "not startswith(tbl.relname, '"+catalog.IndexTableNamePrefix+"')"))
+			require.NotContains(t, tc.ddl, "relname not like '"+catalog.IndexTableNamePrefix+"%'")
+		})
+	}
+}

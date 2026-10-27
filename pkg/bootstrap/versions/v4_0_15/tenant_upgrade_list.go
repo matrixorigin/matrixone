@@ -63,19 +63,5 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 			return exists && definition == sysview.InformationSchemaColumnsDDL, err
 		},
 	},
-	{
-		Schema:                  sysview.InformationDBConst,
-		TableName:               "TABLES",
-		UpgType:                 versions.MODIFY_VIEW,
-		UpgSql:                  sysview.InformationSchemaTablesV118DDL,
-		PreSql:                  "DROP VIEW IF EXISTS information_schema.TABLES;",
-		RequiredProtocolVersion: defines.MORPCVersion118,
-		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
-			exists, definition, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "TABLES")
-			if err == nil && !exists {
-				exists, definition, err = versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "tables")
-			}
-			return exists && definition == sysview.InformationSchemaTablesV118DDL, err
-		},
-	},
+	versions.InformationSchemaTablesUpgradeEntry(),
 }

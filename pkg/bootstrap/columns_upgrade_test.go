@@ -86,7 +86,11 @@ func TestColumnsUpgradeReachesExistingTenants(t *testing.T) {
 			return executor.Result{}, nil
 		}, op)
 		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
-			func(s *service) { s.initUpgrade() })
+			func(s *service) {
+				s.initUpgrade()
+				require.Equal(t, "4.0.18", s.getFinalVersionHandle().Metadata().Version)
+				s.handles = s.handles[:len(s.handles)-1]
+			})
 		t.Cleanup(s.stopper.Stop)
 		final := s.getFinalVersionHandle().Metadata()
 		require.NoError(t, s.doCheckUpgrade(t.Context()))
