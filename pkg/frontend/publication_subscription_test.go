@@ -2749,36 +2749,32 @@ func Test_doCreateSubscription_NoDataKey(t *testing.T) {
 
 func Test_doCreateSubscription_SyncLevels(t *testing.T) {
 	tests := []struct {
-		name           string
-		isDatabase     bool
-		dbName         string
-		tableName      string
-		expectedLevel  string
-		expectedDbName string
+		name          string
+		isDatabase    bool
+		dbName        string
+		tableName     string
+		expectedLevel string
 	}{
 		{
-			name:           "account level - empty db name",
-			isDatabase:     true,
-			dbName:         "",
-			tableName:      "",
-			expectedLevel:  "account",
-			expectedDbName: "",
+			name:          "account level - empty db name",
+			isDatabase:    true,
+			dbName:        "",
+			tableName:     "",
+			expectedLevel: "account",
 		},
 		{
-			name:           "database level",
-			isDatabase:     true,
-			dbName:         "testdb",
-			tableName:      "",
-			expectedLevel:  "database",
-			expectedDbName: "testdb",
+			name:          "database level",
+			isDatabase:    true,
+			dbName:        "testdb",
+			tableName:     "",
+			expectedLevel: "database",
 		},
 		{
-			name:           "table level",
-			isDatabase:     false,
-			dbName:         "testdb",
-			tableName:      "testtable",
-			expectedLevel:  "table",
-			expectedDbName: "testdb",
+			name:          "table level",
+			isDatabase:    false,
+			dbName:        "testdb",
+			tableName:     "testtable",
+			expectedLevel: "table",
 		},
 	}
 
@@ -2786,19 +2782,7 @@ func Test_doCreateSubscription_SyncLevels(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cs := tree.NewCreateSubscription(tt.isDatabase, tree.Identifier(tt.dbName), tt.tableName, "mysql://user:pass@host:3306", "", "pub1", 0)
 
-			// Determine sync_level based on the same logic as in doCreateSubscription
-			var syncLevel string
-			if cs.IsDatabase {
-				if string(cs.DbName) == "" {
-					syncLevel = "account"
-				} else {
-					syncLevel = "database"
-				}
-			} else {
-				syncLevel = "table"
-			}
-
-			require.Equal(t, tt.expectedLevel, syncLevel)
+			require.Equal(t, tt.expectedLevel, subscriptionSyncLevel(cs))
 		})
 	}
 }

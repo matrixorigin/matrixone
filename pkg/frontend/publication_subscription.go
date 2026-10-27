@@ -3577,6 +3577,16 @@ func checkUpstreamPublicationCoverage(
 	return nil
 }
 
+func subscriptionSyncLevel(cs *tree.CreateSubscription) string {
+	if !cs.IsDatabase {
+		return "table"
+	}
+	if cs.DbName == "" {
+		return "account"
+	}
+	return "database"
+}
+
 func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubscription) (err error) {
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
@@ -3658,17 +3668,7 @@ func doCreateSubscription(ctx context.Context, ses *Session, cs *tree.CreateSubs
 		encryptedUri = fmt.Sprintf("mysql://#%s:%s@%s:%d", user, encodedPassword, host, port)
 	}
 
-	// Determine sync_level
-	var syncLevel string
-	if cs.IsDatabase {
-		if string(cs.DbName) == "" {
-			syncLevel = "account"
-		} else {
-			syncLevel = "database"
-		}
-	} else {
-		syncLevel = "table"
-	}
+	syncLevel := subscriptionSyncLevel(cs)
 
 	// Validate level and corresponding names
 	if syncLevel == "account" {
