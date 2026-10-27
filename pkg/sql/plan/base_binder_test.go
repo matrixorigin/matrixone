@@ -1410,6 +1410,11 @@ func TestBindSerialFunctionOverEmptyExprListDoesNotPanic(t *testing.T) {
 }
 
 func TestBindUnaryMinusUint64MinInt64Boundary(t *testing.T) {
+	testBindUnaryMinusMinInt64Boundary(t)
+}
+
+func testBindUnaryMinusMinInt64Boundary(t *testing.T) {
+	t.Helper()
 	builder, bindCtx := genBuilderAndCtx(t)
 	whereBinder := NewWhereBinder(builder, bindCtx)
 
