@@ -6432,6 +6432,35 @@ func initTruncateTestCase() []tcTemp {
 	return testInputs
 }
 
+func TestUnsignedFloorAndTruncateDigits(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fn   executeLogicOfOverload
+	}{
+		{"floor", FloorUInt64},
+		{"truncate", TruncateUint64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newMemoryFunctionTestProcess(t)
+			t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+			for _, c := range []struct {
+				digits int64
+				want   uint64
+			}{
+				{math.MinInt64, 0}, {-20, 0}, {-19, 10000000000000000000},
+				{-1, 18446744073709551610}, {0, math.MaxUint64}, {1, math.MaxUint64},
+			} {
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{
+					NewFunctionTestConstInput(types.T_uint64.ToType(), []uint64{math.MaxUint64}, nil),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{c.digits}, nil),
+				}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{c.want}, nil), tc.fn)
+				ok, info := fc.RunAndFree()
+				require.True(t, ok, "digits %d: %s", c.digits, info)
+			}
+		})
+	}
+}
+
 func TestTruncate(t *testing.T) {
 	testCases := initTruncateTestCase()
 

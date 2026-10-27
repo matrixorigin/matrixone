@@ -377,7 +377,8 @@ var ScaleTable = [...]uint64{
 	10000000000000000000, // 1 followed by 19 zeros, maxUint64 number has 20 digits, so the max scale is 1 followed by 19 zeroes
 }
 
-func floorUint64(x uint64, digits int64) uint64 {
+// truncateUnsignedDigits serves FLOOR and TRUNCATE for nonnegative integers.
+func truncateUnsignedDigits(x uint64, digits int64) uint64 {
 	switch {
 	case digits >= 0:
 		return x
@@ -391,7 +392,7 @@ func floorUint64(x uint64, digits int64) uint64 {
 }
 
 func FloorUInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return generalMathMulti("floor", ivecs, result, proc, length, floorUint64, selectList)
+	return generalMathMulti("floor", ivecs, result, proc, length, truncateUnsignedDigits, selectList)
 }
 
 func floorInt64(x int64, digits int64) int64 {
@@ -671,21 +672,8 @@ func RoundFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 
 // TRUNCATE function implementations
 // TRUNCATE truncates a number to D decimal places without rounding
-func truncateUint64(x uint64, digits int64) uint64 {
-	switch {
-	case digits >= 0:
-		return x
-	case digits > -MaxUint64digits:
-		scale := ScaleTable[-digits]
-		x = x / scale * scale // truncate without rounding
-	case digits <= -MaxUint64digits:
-		x = 0
-	}
-	return x
-}
-
 func TruncateUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return generalMathMulti("truncate", ivecs, result, proc, length, truncateUint64, selectList)
+	return generalMathMulti("truncate", ivecs, result, proc, length, truncateUnsignedDigits, selectList)
 }
 
 func truncateInt64(x int64, digits int64) int64 {
