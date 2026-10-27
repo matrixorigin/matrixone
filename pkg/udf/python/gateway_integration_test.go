@@ -88,7 +88,7 @@ func TestGatewayExecutesAgainstRealPythonWorker(t *testing.T) {
 		valid := integrationInvocationForArgs(
 			ModeScalar, "add", source,
 			[]types.Type{types.T_int64.ToType()}, nil, 0,
-			protocol.FencingTuple{AccountID: 1, StatementID: "definition-validation", GroupID: "definition-validation-group", GroupEpoch: 1, InvocationID: "valid", LeaseEpoch: 1},
+			protocol.FencingTuple{AccountID: 1, StatementID: "definition-validation", GroupID: testGroupID("definition-validation-group"), GroupEpoch: 1, InvocationID: "valid", LeaseEpoch: 1},
 		)
 		publishIntegrationArtifact(t, artifactStore, valid)
 		definition := routineDefinitionForIntegration(valid)
@@ -107,7 +107,7 @@ func TestGatewayExecutesAgainstRealPythonWorker(t *testing.T) {
 		invalid := integrationInvocationForArgs(
 			ModeScalar, "add", "def add(ctx, value) return value",
 			[]types.Type{types.T_int64.ToType()}, nil, 0,
-			protocol.FencingTuple{AccountID: 1, StatementID: "definition-validation-invalid", GroupID: "definition-validation-invalid-group", GroupEpoch: 1, InvocationID: "invalid", LeaseEpoch: 1},
+			protocol.FencingTuple{AccountID: 1, StatementID: "definition-validation-invalid", GroupID: testGroupID("definition-validation-invalid-group"), GroupEpoch: 1, InvocationID: "invalid", LeaseEpoch: 1},
 		)
 		publishIntegrationArtifact(t, artifactStore, invalid)
 		validationContext, cancel = context.WithTimeout(context.Background(), 5*time.Second)
@@ -125,7 +125,7 @@ func TestGatewayExecutesAgainstRealPythonWorker(t *testing.T) {
 		result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
 		defer result.Free()
 		invocation := integrationInvocation(ModeScalar, "def add(ctx, value): return value + 10", input, protocol.FencingTuple{
-			AccountID: 1, StatementID: "real-flight-scalar", GroupID: "real-flight-scalar-group",
+			AccountID: 1, StatementID: "real-flight-scalar", GroupID: testGroupID("real-flight-scalar-group"),
 			GroupEpoch: 1, InvocationID: "real-flight-scalar-invocation", LeaseEpoch: 1,
 		})
 		publishIntegrationArtifact(t, artifactStore, invocation)
@@ -157,7 +157,7 @@ func TestGatewayExecutesAgainstRealPythonWorker(t *testing.T) {
 				mode, "identity", "def identity(ctx, value): return value",
 				[]types.Type{typ}, []*vector.Vector{input}, 3,
 				protocol.FencingTuple{AccountID: 1, StatementID: "json-" + mode,
-					GroupID: "json-group-" + mode, GroupEpoch: 1, InvocationID: "json-" + mode, LeaseEpoch: 1},
+					GroupID: testGroupID("json-group-" + mode), GroupEpoch: 1, InvocationID: "json-" + mode, LeaseEpoch: 1},
 			)
 			invocation.ReturnType = typ
 			descriptor, err := NewTypeDescriptor(typ)
@@ -194,7 +194,7 @@ func TestGatewayExecutesAgainstRealPythonWorker(t *testing.T) {
 			nil,
 			1,
 			protocol.FencingTuple{
-				AccountID: 1, StatementID: "real-flight-zero-arg-scalar", GroupID: "real-flight-zero-arg-scalar-group",
+				AccountID: 1, StatementID: "real-flight-zero-arg-scalar", GroupID: testGroupID("real-flight-zero-arg-scalar-group"),
 				GroupEpoch: 1, InvocationID: "real-flight-zero-arg-scalar-invocation", LeaseEpoch: 1,
 			},
 		)
@@ -216,7 +216,7 @@ func TestGatewayExecutesAgainstRealPythonWorker(t *testing.T) {
 			"import pyarrow as pa\ndef add(ctx, values): return pa.array([value.as_py() + 20 for value in values], type=pa.int64())",
 			input,
 			protocol.FencingTuple{
-				AccountID: 1, StatementID: "real-flight-vector", GroupID: "real-flight-vector-group",
+				AccountID: 1, StatementID: "real-flight-vector", GroupID: testGroupID("real-flight-vector-group"),
 				GroupEpoch: 1, InvocationID: "real-flight-vector-invocation", LeaseEpoch: 1,
 			},
 		)
@@ -233,7 +233,7 @@ func TestGatewayExecutesAgainstRealPythonWorker(t *testing.T) {
 		defer result.Free()
 		source := "import pyarrow as pa\ndef add(ctx): return pa.array([ctx.num_rows] * ctx.num_rows, type=pa.int64())"
 		invocation := integrationZeroArgVectorInvocation(source, rows, protocol.FencingTuple{
-			AccountID: 1, StatementID: "real-flight-zero-arg", GroupID: "real-flight-zero-arg-group",
+			AccountID: 1, StatementID: "real-flight-zero-arg", GroupID: testGroupID("real-flight-zero-arg-group"),
 			GroupEpoch: 1, InvocationID: "real-flight-zero-arg-invocation", LeaseEpoch: 1,
 		})
 		publishIntegrationArtifact(t, artifactStore, invocation)
@@ -295,7 +295,7 @@ func TestSupervisorExecutesAgainstRealPythonWorker(t *testing.T) {
 	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
 	defer result.Free()
 	invocation := integrationInvocation(ModeScalar, "def add(ctx, value): return value + 30", input, protocol.FencingTuple{
-		AccountID: 1, StatementID: "supervisor-flight", GroupID: "supervisor-flight-group",
+		AccountID: 1, StatementID: "supervisor-flight", GroupID: testGroupID("supervisor-flight-group"),
 		GroupEpoch: 1, InvocationID: "supervisor-flight-invocation", LeaseEpoch: 1,
 	})
 	publishIntegrationArtifact(t, artifactStore, invocation)
@@ -355,7 +355,7 @@ func TestGatewayRejectsThePreviousWorkerLeaseAfterRestart(t *testing.T) {
 	firstResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
 	defer firstResult.Free()
 	firstInvocation := integrationInvocation(ModeScalar, "def add(ctx, value): return value + 1", input, protocol.FencingTuple{
-		AccountID: 1, StatementID: "restart-statement", GroupID: "restart-group", GroupEpoch: 1,
+		AccountID: 1, StatementID: "restart-statement", GroupID: testGroupID("restart-group"), GroupEpoch: 1,
 		InvocationID: "restart-invocation", LeaseEpoch: 1,
 	})
 	// The Gateway has a cached lease from the first worker. The second worker
@@ -367,7 +367,7 @@ func TestGatewayRejectsThePreviousWorkerLeaseAfterRestart(t *testing.T) {
 	secondResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
 	defer secondResult.Free()
 	secondInvocation := integrationInvocation(ModeScalar, "def add(ctx, value): return value + 1", input, protocol.FencingTuple{
-		AccountID: 1, StatementID: "restart-statement", GroupID: "restart-group-2", GroupEpoch: 1,
+		AccountID: 1, StatementID: "restart-statement", GroupID: testGroupID("restart-group-2"), GroupEpoch: 1,
 		InvocationID: "restart-invocation-2", LeaseEpoch: 1,
 	})
 	require.NoError(t, gateway.Execute(context.Background(), secondInvocation, secondResult, mp))
@@ -467,7 +467,7 @@ def add(ctx, value):
 	input, mp := integrationInput(t, []int64{1})
 	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
 	invocation := integrationInvocation(ModeScalar, source, input, protocol.FencingTuple{
-		AccountID: 1, StatementID: "gateway-close", GroupID: "gateway-close-group",
+		AccountID: 1, StatementID: "gateway-close", GroupID: testGroupID("gateway-close-group"),
 		GroupEpoch: 1, InvocationID: "gateway-close-invocation", LeaseEpoch: 1,
 	})
 	done := make(chan error, 1)
@@ -586,7 +586,7 @@ def add(ctx, value):
 					protocol.FencingTuple{
 						AccountID:    1,
 						StatementID:  fmt.Sprintf("benchmark-%s-%d-%d-%d", label, runID, iteration, call),
-						GroupID:      fmt.Sprintf("benchmark-%s-group-%d-%d-%d", label, runID, iteration, call),
+						GroupID:      testGroupID(fmt.Sprintf("benchmark-%s-group-%d-%d-%d", label, runID, iteration, call)),
 						GroupEpoch:   1,
 						InvocationID: fmt.Sprintf("benchmark-%s-invocation-%d-%d-%d", label, runID, iteration, call),
 						LeaseEpoch:   1,
@@ -677,7 +677,7 @@ func BenchmarkGatewayRealPythonWorkerLargeBatch(b *testing.B) {
 				[]*vector.Vector{input}, rows,
 				protocol.FencingTuple{
 					AccountID: 1, StatementID: fmt.Sprintf("large-%s-%d-%d", label, runID, iteration),
-					GroupID: fmt.Sprintf("large-%s-group-%d-%d", label, runID, iteration), GroupEpoch: 1,
+					GroupID: testGroupID(fmt.Sprintf("large-%s-group-%d-%d", label, runID, iteration)), GroupEpoch: 1,
 					InvocationID: fmt.Sprintf("large-%s-invocation-%d-%d", label, runID, iteration), LeaseEpoch: 1,
 				},
 			)

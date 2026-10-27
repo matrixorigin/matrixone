@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/udf/udferr"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,6 +34,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/udf/protocol"
 	pythonudf "github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -364,29 +364,35 @@ func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch
 // cannot be reopened and a later batch cannot consume the previous member's
 // resources. ResetForNextQuery discards the group identity; an evaluator that
 // has no statement query id uses a fresh one-shot group because it cannot prove
-// that two calls belong to the same statement.
+// that two calls belong to the same statement. The transport identity is also
+// renewed before its immutable admission deadline; admitted work may finish later.
 func (e *ExternalRoutineEval) attachInvocationGroup(context map[string]string, queryID string) error {
 	if context == nil {
 		return udferr.Newf("python udf: invocation context is unavailable")
 	}
+	return e.attachInvocationGroupAt(context, queryID, protocol.GroupNow())
+}
+
+func (e *ExternalRoutineEval) attachInvocationGroupAt(context map[string]string, queryID string, now time.Time) error {
 	e.groupMu.Lock()
 	defer e.groupMu.Unlock()
 	if queryID == "" {
-		group, err := uuid.NewV7()
+		group, err := protocol.NewGroupIdentity(now)
 		if err != nil {
 			return errutil.Wrapf(err, "python udf: create execution group fence")
 		}
-		context["group_id"] = "python/" + group.String()
+		context["group_id"] = group
 		context["group_epoch"] = "1"
 		return nil
 	}
-	if e.groupID == "" || e.groupStatementID != queryID {
-		group, err := uuid.NewV7()
+	deadline, deadlineErr := protocol.GroupIdentityDeadline(e.groupID)
+	if e.groupID == "" || e.groupStatementID != queryID || deadlineErr != nil || !now.Add(protocol.GroupIdentityRenewalMargin).Before(deadline) {
+		group, err := protocol.NewGroupIdentity(now)
 		if err != nil {
 			return errutil.Wrapf(err, "python udf: create execution group fence")
 		}
 		e.groupStatementID = queryID
-		e.groupID = queryID + "/python/" + group.String()
+		e.groupID = group
 		e.groupEpoch = 0
 	}
 	if e.groupEpoch == ^uint64(0) {
