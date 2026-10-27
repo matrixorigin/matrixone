@@ -123,6 +123,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		intervalUnit         string
 		expectedIntervalVal  int64
 		expectedIntervalType types.IntervalType
+		wantCast             bool
 		expectError          bool
 		errorContains        string
 	}{
@@ -145,7 +146,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 			name:                 "INTERVAL 'invalid' SECOND (varchar, invalid string)",
 			intervalValueExpr:    makeVarcharConst("invalid"),
 			intervalUnit:         "SECOND",
-			expectedIntervalVal:  0, // Invalid string returns MaxInt64
+			expectedIntervalVal:  0, // Invalid string produces NULL
 			expectedIntervalType: types.Second,
 		},
 		// Test float64 time units
@@ -232,6 +233,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		// Test int64 (no conversion for time units, goes through cast path)
 		{
 			name:                 "INTERVAL 1 SECOND (int64)",
+			wantCast:             true,
 			intervalValueExpr:    makeInt64Const(1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1,
@@ -239,6 +241,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		},
 		{
 			name:                 "INTERVAL 2 MINUTE (int64)",
+			wantCast:             true,
 			intervalValueExpr:    makeInt64Const(2),
 			intervalUnit:         "MINUTE",
 			expectedIntervalVal:  2,
@@ -249,6 +252,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		// So we just verify the structure and type
 		{
 			name:                 "INTERVAL 1.5 MONTH (float64, non-time unit)",
+			wantCast:             true,
 			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "MONTH",
 			expectedIntervalVal:  0, // Returns cast expression, not direct value
@@ -256,6 +260,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		},
 		{
 			name:                 "INTERVAL 1.5 YEAR (float64, non-time unit)",
+			wantCast:             true,
 			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "YEAR",
 			expectedIntervalVal:  0, // Returns cast expression, not direct value
@@ -263,6 +268,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		},
 		{
 			name:                 "INTERVAL 1.5 WEEK (float64, non-time unit)",
+			wantCast:             true,
 			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "WEEK",
 			expectedIntervalVal:  0, // Returns cast expression, not direct value
@@ -271,6 +277,7 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		// Test NULL value with time unit and decimal/float type (should not convert, hasValue=false)
 		{
 			name:                 "INTERVAL NULL SECOND (null float64 literal)",
+			wantCast:             true,
 			intervalValueExpr:    makeNullConst(),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  0, // NULL will be handled at execution time, goes through cast path
@@ -278,7 +285,8 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		},
 		// Test NULL float32 with time unit
 		{
-			name: "INTERVAL NULL SECOND (null float32 literal)",
+			name:     "INTERVAL NULL SECOND (null float32 literal)",
+			wantCast: true,
 			intervalValueExpr: func() *plan.Expr {
 				expr := makeNullConst()
 				expr.Typ.Id = int32(types.T_float32)
@@ -290,7 +298,8 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		},
 		// Test NULL decimal64 with time unit
 		{
-			name: "INTERVAL NULL SECOND (null decimal64 literal)",
+			name:     "INTERVAL NULL SECOND (null decimal64 literal)",
+			wantCast: true,
 			intervalValueExpr: func() *plan.Expr {
 				expr := makeNullConst()
 				expr.Typ.Id = int32(types.T_decimal64)
@@ -303,7 +312,8 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		},
 		// Test NULL decimal128 with time unit
 		{
-			name: "INTERVAL NULL SECOND (null decimal128 literal)",
+			name:     "INTERVAL NULL SECOND (null decimal128 literal)",
+			wantCast: true,
 			intervalValueExpr: func() *plan.Expr {
 				expr := makeNullConst()
 				expr.Typ.Id = int32(types.T_decimal128)
@@ -358,27 +368,25 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 			require.NotNil(t, args)
 			require.Len(t, args, 2, "resetIntervalFunctionArgs should return 2 expressions")
 
-			// Invalid interval syntax is NULL, distinct from a numeric overflow.
-			if tc.name == "INTERVAL 'invalid' SECOND (varchar, invalid string)" {
-				require.True(t, args[0].GetLit().Isnull)
-			}
-
-			// Verify the interval value
-			intervalValue := extractInt64FromExpr(args[0])
-			// For non-time units with float64, the function returns a cast expression
-			// So we only check the value if it's not a cast expression
-			if tc.expectedIntervalVal != 0 || intervalValue != 0 {
-				// Only verify if we expect a non-zero value or got a non-zero value
-				if _, isCast := args[0].Expr.(*plan.Expr_F); !isCast {
-					require.Equal(t, tc.expectedIntervalVal, intervalValue,
-						"Interval value mismatch for %s", tc.name)
+			if tc.wantCast {
+				fn := args[0].GetF()
+				require.NotNil(t, fn)
+				require.NotNil(t, fn.Func)
+				require.Equal(t, "cast", fn.Func.ObjName)
+				require.Len(t, fn.Args, 2)
+				require.Equal(t, tc.intervalValueExpr, fn.Args[0])
+			} else {
+				lit := args[0].GetLit()
+				require.NotNil(t, lit)
+				if tc.name == "INTERVAL 'invalid' SECOND (varchar, invalid string)" {
+					require.True(t, lit.Isnull)
+				} else {
+					require.False(t, lit.Isnull)
+					require.Equal(t, tc.expectedIntervalVal, extractInt64ValueFromExpr(t, args[0]))
 				}
 			}
 
-			// Verify the interval type
-			intervalType := extractInt64FromExpr(args[1])
-			require.Equal(t, int64(tc.expectedIntervalType), intervalType,
-				"Interval type mismatch for %s", tc.name)
+			require.Equal(t, int64(tc.expectedIntervalType), extractInt64ValueFromExpr(t, args[1]))
 		})
 	}
 }
