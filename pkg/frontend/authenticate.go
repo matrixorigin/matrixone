@@ -1177,9 +1177,8 @@ var (
 			database_collation,
 			sql_mode) values ("%s",%d,'%s','%s',"%s","%s",%d,"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
-	// SQL UDF creation keeps the pre-Python catalog write shape. During a
-	// rolling upgrade an ordinary SQL writer may still target a catalog that
-	// has not received the Python identity columns. Python creation is gated on
+	// SQL UDF creation keeps the pre-Python catalog write shape for historical
+	// tenant schemas without Python identity columns. Python creation requires
 	// the current catalog contract and uses initMoUserDefinedFunctionFormat.
 	initMoUserDefinedFunctionSQLFormat = `insert into mo_catalog.mo_user_defined_function(
 			name,
@@ -1609,8 +1608,8 @@ const (
 	// contract. They deliberately reference every column used by the Python
 	// writer. COUNT keeps one result row even when the catalog is empty; a
 	// literal LIMIT 0 is optimized away by BackgroundExec and does not expose a
-	// result-set schema. A frontend in a rolling upgrade must reject Python
-	// publication before it creates or changes a routine when the tenant has
+	// result-set schema. The frontend must reject Python publication before
+	// it creates or changes a routine when the tenant has
 	// not reached this schema.
 	pythonUdfCatalogIdentitySchemaCheck = `select count(active_revision), count(namespace_version), count(canonical_input_descriptor), count(return_descriptor), count(signature_key_schema_version), count(signature_fingerprint) from mo_catalog.mo_user_defined_function;`
 	functionRevisionCatalogSchemaCheck  = `select count(function_id), count(revision), count(namespace_version), count(name), count(args), count(arg_types), count(rettype), count(body), count(language), count(definition_schema_version), count(abi_contract), count(adapter_version), count(artifact_digest), count(environment_digest), count(sdk_version), count(null_policy), count(volatility), count(definition_fingerprint), count(created_time), count(security_type) from mo_catalog.mo_function_revisions;`
@@ -12274,12 +12273,7 @@ func Upload(ses FeSession, execCtx *ExecCtx, localPath string, storageDir string
 }
 
 func ensurePythonUdfCatalogReady(ctx context.Context, bh BackgroundExec) error {
-	if !sharedRoutineRevisionProtocolReady(bh.Service()) {
-		return moerr.NewNotSupportedNoCtxf(
-			"Python UDF catalog contract requires MORPC protocol version %d",
-			sharedRoutineRevisionProtocolVersion,
-		)
-	}
+
 	probes := []struct {
 		query        string
 		expectedCols uint64
@@ -12320,19 +12314,9 @@ func ensurePythonUdfCatalogReady(ctx context.Context, bh BackgroundExec) error {
 	return nil
 }
 
-const sharedRoutineRevisionProtocolVersion = udf.SharedRoutineRevisionProtocolVersion
-
-// sharedRoutineRevisionProtocolReady reads this service's active rollout
-// floor, not its compiled-in maximum or a live cluster minimum. Remote
-// dispatch independently probes its actual destination and the receiver.
-func sharedRoutineRevisionProtocolReady(service string) bool {
-	return udf.SharedRoutineRevisionProtocolReady(service)
-}
-
 // functionRevisionCatalogAvailable reports whether the current shared
-// revision table exists. Ordinary SQL UDFs remain writable during a rolling
-// upgrade before v4_0_7 reaches every tenant; revision publication is enabled
-// only after both the table and the shared routine protocol floor are ready.
+// revision table exists. Historical catalog and snapshot schemas can lack
+// this table; SQL compatibility reads and writes retain the legacy row there.
 func functionRevisionCatalogAvailable(ctx context.Context, bh BackgroundExec) (bool, error) {
 	bh.ClearExecResultSet()
 	if err := bh.Exec(ctx, functionRevisionCatalogSchemaCheck); err != nil {
@@ -12343,7 +12327,7 @@ func functionRevisionCatalogAvailable(ctx context.Context, bh BackgroundExec) (b
 	}
 	// The aggregate probe must return one row. Anything else indicates a broken
 	// executor/result contract and must reach the caller; only an explicitly
-	// missing catalog object is a supported rolling-upgrade path.
+	// missing catalog object is a supported historical-schema path.
 	results, err := getResultSet(ctx, bh)
 	if err != nil {
 		return false, err
@@ -13028,13 +13012,7 @@ func persistUserDefinedFunction(
 					*functionID,
 				)
 			}
-			if (previousRevision != 0 || previousNamespace != 0) &&
-				!sharedRoutineRevisionProtocolReady(bh.Service()) {
-				return moerr.NewNotSupportedNoCtxf(
-					"SQL UDF revision replacement requires MORPC protocol version %d",
-					sharedRoutineRevisionProtocolVersion,
-				)
-			}
+
 			previousReturnType, returnErr := readUserDefinedFunctionReturnType(ctx, bh, *functionID)
 			if returnErr != nil {
 				return returnErr
@@ -13063,7 +13041,7 @@ func persistUserDefinedFunction(
 			}
 			return activateFunctionRevision(ctx, bh, *functionID, nextRevision, nextNamespace)
 		}
-		if !revisionCatalogReady || !sharedRoutineRevisionProtocolReady(bh.Service()) {
+		if !revisionCatalogReady {
 			return nil
 		}
 		nextRevision := previousRevision + 1
@@ -13103,7 +13081,7 @@ func persistUserDefinedFunction(
 			tenant.GetUser(), created, created, "FUNCTION", securityType, "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode)
 	} else {
 		// Keep ordinary SQL UDF creation independent of the Python catalog
-		// columns until the rolling upgrade has reached every writer.
+		// columns when the historical tenant schema lacks revision metadata.
 		insertSQL = fmt.Sprintf(initMoUserDefinedFunctionSQLFormat,
 			definition.name,
 			ownerRoleID,
@@ -13124,7 +13102,7 @@ func persistUserDefinedFunction(
 		}
 		return activateFunctionRevision(ctx, bh, functionIDValue, 1, 1)
 	}
-	if !revisionCatalogReady || !sharedRoutineRevisionProtocolReady(bh.Service()) {
+	if !revisionCatalogReady {
 		return nil
 	}
 	functionIDValue, err := findPersistedSQLFunctionID(ctx, bh, definition)

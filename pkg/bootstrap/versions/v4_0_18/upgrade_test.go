@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -39,32 +38,11 @@ func TestPythonRevisionRepairUpgradePath(t *testing.T) {
 	require.Equal(t, "4.0.17", metadata.MinUpgradeVersion)
 	require.Equal(t, versions.No, metadata.UpgradeCluster)
 	require.Equal(t, versions.Yes, metadata.UpgradeTenant)
-	require.Equal(t, int64(defines.MORPCVersion133), metadata.RequiredProtocolVersion)
+	require.Zero(t, metadata.RequiredProtocolVersion)
 	require.Equal(t, uint32(len(v4_0_7.PythonRevisionUpgradeEntries())), metadata.VersionOffset)
 	require.True(t, metadata.CanDirectUpgrade("4.0.17"))
 	require.False(t, metadata.CanDirectUpgrade("4.0.16"))
 	require.Len(t, v4_0_7.PythonRevisionUpgradeEntries(), 9)
-}
-
-func TestPythonRevisionRepairRejectsOldProtocolBeforeCatalogAccess(t *testing.T) {
-	for _, response := range []string{
-		`{"result":"cn-a:132"}`,
-		`{"result":"cn-a:133,cn-b:132"}`,
-		`{"result":""}`,
-		`invalid`,
-	} {
-		t.Run(response, func(t *testing.T) {
-			var statements []string
-			txn := executor.NewMemTxnExecutor(func(statement string) (executor.Result, error) {
-				statements = append(statements, statement)
-				require.Equal(t, "SELECT mo_ctl('cn', 'GetProtocolVersion', '')", statement)
-				return repairStringResult(t, response), nil
-			}, nil)
-			err := Handler.HandleTenantUpgrade(context.Background(), 7, txn)
-			require.ErrorContains(t, err, "upgrade requires all CNs to support protocol version 133")
-			require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, statements)
-		})
-	}
 }
 
 func TestPythonRevisionRepairIsIdempotentForCatalogStates(t *testing.T) {
@@ -143,6 +121,7 @@ func newRepairTxnExecutor(t *testing.T, state *pythonRevisionCatalogState) execu
 	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 	txnOperator.EXPECT().TxnOptions().Return(pbtxn.TxnOptions{}).AnyTimes()
 	return executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		require.NotContains(t, sql, "GetProtocolVersion")
 		lower := strings.ToLower(sql)
 		switch {
 		case strings.Contains(lower, "from mo_catalog.mo_columns"):
@@ -165,8 +144,6 @@ func newRepairTxnExecutor(t *testing.T, state *pythonRevisionCatalogState) execu
 				return repairStringResult(t, "mo_function_revisions"), nil
 			}
 			return executor.Result{}, nil
-		case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-			return repairStringResult(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:133"}`), nil
 		case strings.Contains(lower, "alter table mo_catalog.mo_user_defined_function add column"):
 			for column := range state.columns {
 				if strings.Contains(sql, "add column "+column+" ") {
