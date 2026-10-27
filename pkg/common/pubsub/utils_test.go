@@ -315,6 +315,16 @@ func TestJoinAccountIds(t *testing.T) {
 			wantS: "",
 		},
 		{
+			name:  "nil",
+			args:  args{accIds: nil},
+			wantS: "",
+		},
+		{
+			name:  "signed boundaries and duplicate",
+			args:  args{accIds: []int32{0, -1, -2147483648, 2147483647, 0}},
+			wantS: "0,-1,-2147483648,2147483647,0",
+		},
+		{
 			args: args{
 				accIds: []int32{1},
 			},
