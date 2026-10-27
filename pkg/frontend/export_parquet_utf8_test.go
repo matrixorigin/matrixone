@@ -136,6 +136,7 @@ func TestParquetExportRejectsInvalidUTF8(t *testing.T) {
 		file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
 		require.NoError(t, err)
 		require.Equal(t, int64(4), file.NumRows())
+		require.NotNil(t, file.Metadata().Schema[1].LogicalType.UTF8)
 	})
 
 	t.Run("binary-flagged columns bypass validation and stay lossless", func(t *testing.T) {
@@ -145,8 +146,13 @@ func TestParquetExportRejectsInvalidUTF8(t *testing.T) {
 			engineT   types.T
 		}{
 			{"varbinary", defines.MYSQL_TYPE_VAR_STRING, types.T_varbinary},
+			{"varchar binary metadata", defines.MYSQL_TYPE_VARCHAR, types.T_varbinary},
 			{"binary", defines.MYSQL_TYPE_STRING, types.T_binary},
+			{"text binary metadata", defines.MYSQL_TYPE_TEXT, types.T_blob},
+			{"tiny blob", defines.MYSQL_TYPE_TINY_BLOB, types.T_blob},
 			{"blob", defines.MYSQL_TYPE_BLOB, types.T_blob},
+			{"medium blob", defines.MYSQL_TYPE_MEDIUM_BLOB, types.T_blob},
+			{"long blob", defines.MYSQL_TYPE_LONG_BLOB, types.T_blob},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				mrs := newParquetUTF8ResultSet("s", tc.mysqlType, uint16(defines.BINARY_FLAG))
@@ -163,6 +169,24 @@ func TestParquetExportRejectsInvalidUTF8(t *testing.T) {
 				data, err := pw.Close()
 				require.NoError(t, err)
 				require.Equal(t, "PAR1", string(data[:4]))
+				// Inspect the serialized footer independently of MO's loader:
+				// raw binary is BYTE_ARRAY with neither UTF8 nor STRING tags.
+				file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+				require.NoError(t, err)
+				require.Len(t, file.Metadata().Schema, 2)
+				leaf := file.Metadata().Schema[1]
+				require.Nil(t, leaf.LogicalType)
+				require.Nil(t, leaf.ConvertedType)
+				require.Equal(t, parquet.ByteArray, file.Schema().Fields()[0].Type().Kind())
+				// Use the library reader, not vectorValueToParquet or MO LOAD.
+				decoded, err := parquet.Read[struct {
+					S []byte `parquet:"s"`
+				}](bytes.NewReader(data), int64(len(data)))
+				require.NoError(t, err)
+				require.Len(t, decoded, len(raw))
+				for i := range raw {
+					require.Equal(t, raw[i], decoded[i].S)
+				}
 			})
 		}
 	})

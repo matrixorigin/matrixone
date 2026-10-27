@@ -1655,7 +1655,11 @@ func TestOutfileEscapeEqualsEnclosureSimulation(t *testing.T) {
 	})
 }
 
-// TestOutfileInvalidFieldDelimiterRejected pins the csvparser constructor
+// TestOutfileInvalidFieldDelimiterRejected pins the deliberate OUTFILE
+// compatibility restriction described in docs/developer-guide/outfile-framing.md:
+// older writers could emit these separators for non-MO consumers, but now fail
+// before opening a file, even when no new OUTFILE clause is specified.
+// It also pins the csvparser constructor
 // contract (validDelim): CR, LF, double quote, NUL and invalid runes are
 // never legal field delimiters in LOAD, so export must reject them up front
 // with a statement error instead of writing a file no LOAD can parse (and
@@ -1675,6 +1679,9 @@ func TestOutfileInvalidFieldDelimiterRejected(t *testing.T) {
 		} {
 			t.Run(c.name, func(t *testing.T) {
 				ep := newOutfileExportConfig(tree.NewFields(c.term, false, 0, 0), nil, "\n")
+				require.ErrorContains(t, ep.validateCSVFraming(context.Background()), msg)
+				// The old OUTFILE syntax leaves ESCAPED BY absent, not empty.
+				ep.userConfig.Fields.EscapedBy = nil
 				require.ErrorContains(t, ep.validateCSVFraming(context.Background()), msg)
 			})
 		}
@@ -1706,12 +1713,137 @@ func TestOutfileInvalidFieldDelimiterRejected(t *testing.T) {
 	})
 }
 
+// Both boundary verdicts belong to the immutable statement, not a row or a
+// conversion worker. A failing field boundary must neither poison the final
+// column nor get forgotten on the next row; non-NULL output remains allowed.
+func TestOutfileNullEmissionCache(t *testing.T) {
+	ep := selectIntoOutfileConfig("NN", '"', '#', "", "\n")
+	var ordinary bytes.Buffer
+	require.NoError(t, formatOutputString(ep, []byte("plain"), []byte("NN"), '"', true, false, &ordinary))
+	start := make(chan struct{})
+	var workers sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		workers.Go(func() {
+			<-start
+			for range 20 {
+				var field, record bytes.Buffer
+				if err := formatOutputNull(ep, []byte("NN"), '"', false, &field); err == nil || field.Len() != 0 {
+					errs <- fmt.Errorf("unsafe field boundary accepted: %q, %v", field.String(), err)
+					return
+				}
+				if err := formatOutputNull(ep, []byte("\n"), '"', true, &record); err != nil || record.String() != "\\N\n" {
+					errs <- fmt.Errorf("safe record boundary changed: %q, %v", record.String(), err)
+					return
+				}
+			}
+		})
+	}
+	close(start)
+	workers.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	require.ErrorContains(t, ep.nullEmission[0].err, "a NULL value cannot round-trip")
+	require.NoError(t, ep.nullEmission[1].err)
+}
+
+// Exercise both real row writers, not just the NULL predicate. The batch path
+// includes the producer's normal duplication/worker cleanup. Source creation
+// and file I/O are outside this CPU benchmark.
+func BenchmarkOutfileCSVRow(b *testing.B) {
+	oldWrite := Write
+	b.Cleanup(func() { Write = oldWrite })
+	var written int
+	Write = func(_ *ExportConfig, data []byte) (int, error) {
+		written = len(data)
+		return len(data), nil
+	}
+	for _, escape := range []byte{'\\', '#'} {
+		for _, nullHeavy := range []bool{false, true} {
+			for _, writer := range []string{"result-set", "batch-128"} {
+				b.Run(fmt.Sprintf("escape-%c/null-heavy-%v/%s", escape, nullHeavy, writer), func(b *testing.B) {
+					ep := selectIntoOutfileConfig(",", '"', escape, "", "\n")
+					ep.ctx = context.Background()
+					ep.mrs = &MysqlResultSet{}
+					row := []any{"alice", "has,comma", "héllo", "plain", "double\"quote", "", "last", "value"}
+					for i := range row {
+						col := &MysqlColumn{}
+						col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+						ep.mrs.AddColumn(col)
+						if nullHeavy && i%2 == 1 {
+							row[i] = nil
+						}
+					}
+					ep.mrs.Data = [][]any{row}
+					initExportFileParam(ep, ep.mrs)
+					emit := func() error { return exportDataFromResultSetToCSVFile(ep) }
+					if writer == "batch-128" {
+						mp := mpool.MustNewZero()
+						bat := batch.NewOffHeapWithSize(len(row))
+						b.Cleanup(func() {
+							bat.Clean(mp)
+							if mp.CurrNB() != 0 {
+								b.Fatalf("batch benchmark leaked %d bytes", mp.CurrNB())
+							}
+						})
+						for col, val := range row {
+							bat.Vecs[col] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+							for range 128 {
+								var raw []byte
+								if val != nil {
+									raw = []byte(val.(string))
+								}
+								if err := vector.AppendBytes(bat.Vecs[col], raw, val == nil, mp); err != nil {
+									b.Fatal(err)
+								}
+							}
+						}
+						bat.SetRowCount(128)
+						ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
+						ch := make(chan *BatchByte, 1)
+						emit = func() error {
+							dup, err := bat.DupWithoutAllocationAccount(mp)
+							if err != nil {
+								return err
+							}
+							constructByte(ep.ctx, ses, dup, 0, ch, ep)
+							result := <-ch
+							written = len(result.writeByte)
+							return result.err
+						}
+					}
+					if err := emit(); err != nil {
+						b.Fatal(err)
+					}
+					b.SetBytes(int64(written))
+					b.ReportAllocs()
+					b.ResetTimer()
+					for range b.N {
+						if err := emit(); err != nil {
+							b.Fatal(err)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
 // TestOutfileEmissionSimulatorPoolDeterminism verifies that reusing one
 // csvparser through Reset (the per-statement simulator pool) gives exactly
 // the same accept/reject verdicts as fresh parsers, including after a
 // simulator is dropped for failing mid-scan, and that concurrent conversion
 // workers sharing the pool do not interfere.
 func TestOutfileEmissionSimulatorPoolDeterminism(t *testing.T) {
+	t.Run("LOAD defaults are shared", func(t *testing.T) {
+		ep := newOutfileExportConfig(nil, nil, "\n")
+		cfg := ep.csvEmissionConfig()
+		require.Equal(t, tree.DefaultFieldsTerminated, cfg.FieldsTerminatedBy)
+		require.Equal(t, tree.DefaultFieldsEnclosedBy, cfg.FieldsEnclosedBy)
+		require.Equal(t, tree.DefaultFieldsEscapedBy, cfg.FieldsEscapedBy)
+	})
 	// Enclosure and escape both '#': exercises the enclosure==escape scan
 	// where fresh-parser versus pooled-reuse differences were historically
 	// the most surprising.

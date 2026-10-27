@@ -97,6 +97,14 @@ type ExportConfig struct {
 	// simPool recycles the LOAD-replay simulators between concurrent
 	// conversion workers (see csvEmissionSimulator).
 	simPool sync.Pool
+	// Framing is immutable for a statement, including across file rotation.
+	// All non-final columns share the field terminator; the final column uses
+	// the record terminator. Validate NULL lazily once for each, not per row.
+	nullEmission [2]struct {
+		once   sync.Once
+		quoted bool
+		err    error
+	}
 }
 
 type writeParam struct {
@@ -345,36 +353,15 @@ func (ec *ExportConfig) csvNormalizedRecordTerm() []byte {
 	return []byte(term)
 }
 
-// csvEmissionConfig mirrors the loader's clause defaults exactly
-// (newReaderWithParam): absent clauses fall back to tab terminator,
-// double-quote enclosure and backslash escape, and only an explicit empty
-// ESCAPED BY disables escaping — never the absence of the clause.
-// The configuration is constant for the life of one ExportConfig, so one
-// simulator can verify the whole statement.
+// csvEmissionConfig shares LOAD's authoritative clause/default mapping.
+// Only the line-prefix filter is disabled: simulation starts at a field in
+// an already-admitted record, not at a physical line containing the prefix.
 func (ec *ExportConfig) csvEmissionConfig() *csvparser.CSVConfig {
-	cfg := &csvparser.CSVConfig{
-		FieldsTerminatedBy: "\t",
-		FieldsEnclosedBy:   `"`,
-		FieldsEscapedBy:    `\`,
-		LinesTerminatedBy:  string(ec.csvNormalizedRecordTerm()),
-		Null:               []string{`\N`},
-		UnescapedQuote:     true,
-	}
-	if f := ec.userConfig.Fields; f != nil {
-		if t := f.Terminated; t != nil && t.Value != "" {
-			cfg.FieldsTerminatedBy = t.Value
-		}
-		if e := f.EnclosedBy; e != nil && e.Value != 0 {
-			cfg.FieldsEnclosedBy = string(e.Value)
-		}
-		if e := f.EscapedBy; e != nil {
-			if e.Value == 0 {
-				cfg.FieldsEscapedBy = ""
-			} else {
-				cfg.FieldsEscapedBy = string(e.Value)
-			}
-		}
-	}
+	cfg := external.CSVConfigForLoad(&tree.ExternParam{Tail: &tree.TailParameter{
+		Fields: ec.userConfig.Fields,
+		Lines:  ec.userConfig.Lines,
+	}})
+	cfg.LinesStartingBy = ""
 	return cfg
 }
 
@@ -548,12 +535,30 @@ var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byt
 // prefix would otherwise become a separator or opening enclosure. Keep this
 // check off the ordinary non-NULL raw writer path.
 func formatOutputNull(oq *ExportConfig, symbol []byte, enclosed byte, last bool, buffer *bytes.Buffer) error {
+	boundary := 0
+	if last {
+		boundary = 1
+	}
+	check := &oq.nullEmission[boundary]
+	check.once.Do(func() {
+		check.quoted, check.err = oq.checkNullEmission(symbol, enclosed, last)
+	})
+	if check.err != nil {
+		return check.err
+	}
+	return formatOutputStringRaw(oq, []byte{'\\', 'N'}, symbol, enclosed, check.quoted, buffer)
+}
+
+// checkNullEmission depends only on statement framing and the actual following
+// boundary. Call it only on first encountering NULL at that boundary: unsafe
+// NULL framing must not reject a statement which exports no NULLs.
+func (oq *ExportConfig) checkNullEmission(symbol []byte, enclosed byte, last bool) (bool, error) {
 	// The NULL marker always ends in 'N'. With FIELDS ESCAPED BY 'N' the
 	// reader consumes the byte after the marker (separator or terminator)
 	// as escape content, merging fields/records — no safe encoding exists,
 	// so reject before writing a corrupt file.
 	if oq.escapeChar() == 'N' {
-		return moerr.NewNotSupported(oq.ctx,
+		return false, moerr.NewNotSupported(oq.ctx,
 			"select into outfile (csv): a NULL value cannot round-trip with FIELDS ESCAPED BY 'N'")
 	}
 	flag := false
@@ -577,13 +582,13 @@ func formatOutputNull(oq *ExportConfig, symbol []byte, enclosed byte, last bool,
 	}
 	if !oq.csvFieldEmissionParses(emitted, symbol, last, nil, true) {
 		if enclosed != 0 && (enclosed == '\\' || enclosed == 'N' || enclosed == oq.escapeChar()) {
-			return moerr.NewNotSupportedf(oq.ctx,
+			return false, moerr.NewNotSupportedf(oq.ctx,
 				"select into outfile (csv): a NULL value cannot round-trip with ENCLOSED BY '%c': the emitted \\N marker breaks LOAD's field scan", enclosed)
 		}
-		return moerr.NewNotSupported(oq.ctx,
+		return false, moerr.NewNotSupported(oq.ctx,
 			"select into outfile (csv): a NULL value cannot round-trip with this CSV framing: the emitted \\N marker breaks LOAD's field scan")
 	}
-	return formatOutputStringRaw(oq, []byte{'\\', 'N'}, symbol, enclosed, flag, buffer)
+	return flag, nil
 }
 
 // formatOutputStringRaw is also used for the genuine NULL marker. All non-NULL

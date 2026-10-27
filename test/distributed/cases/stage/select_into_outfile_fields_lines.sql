@@ -339,6 +339,11 @@ select id, s from (select 1 as id, 'a' as s) t
 into outfile 'stage://outfile_fields_lines_stage/delim_quote.csv'
 fields terminated by '"' enclosed by '\\' escaped by '' lines starting by 'p:' header 'false';
 select count(*) from stage_list('stage://outfile_fields_lines_stage/delim_quote.csv');
+-- Deliberate compatibility change: even the pre-existing syntax without
+-- ESCAPED BY or STARTING BY rejects this LOAD-incompatible delimiter.
+select 1 into outfile 'stage://outfile_fields_lines_stage/delim_legacy.csv'
+fields terminated by '"|' enclosed by '' header 'false';
+select count(*) from stage_list('stage://outfile_fields_lines_stage/delim_legacy.csv');
 select id, s from (select 1 as id, 'ab' as s) t
 into outfile 'stage://outfile_fields_lines_stage/delim_multi_ok.csv'
 fields terminated by '|@' enclosed by '' escaped by '' lines starting by 'p:' header 'false';

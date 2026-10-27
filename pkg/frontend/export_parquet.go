@@ -107,12 +107,9 @@ func NewParquetWriter(ctx context.Context, mrs *MysqlResultSet) (*ParquetWriter,
 }
 
 // valueRequiresValidUTF8 reports whether a column's raw bytes land in a
-// Parquet String() (UTF-8 logical) node with string semantics. Binary-flagged
-// columns (VARBINARY/BINARY/BLOB-family declared binary) are exempt: the
-// loader stores them without a UTF-8 check and they must keep round-tripping
-// losslessly. This mirrors the loader's admission rule for VARCHAR-family
-// targets exactly, so the export never reports success for a file the loader
-// would refuse.
+// Parquet String() (UTF-8 logical) node with string semantics. This is also
+// the schema's raw-string classification: binary-flagged string families use
+// unannotated BYTE_ARRAY instead, not merely an exemption from validation.
 func valueRequiresValidUTF8(typ defines.MysqlType, flag uint16) bool {
 	if flag&uint16(defines.BINARY_FLAG) != 0 {
 		return false
@@ -170,13 +167,13 @@ func buildParquetNode(typ defines.MysqlType, flag uint16) parquet.Node {
 		// Use string representation for decimals
 		return parquet.Optional(parquet.String())
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
-		defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_UUID, defines.MYSQL_TYPE_TEXT:
-		return parquet.Optional(parquet.String())
-	case defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_BLOB,
+		defines.MYSQL_TYPE_TEXT, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_BLOB,
 		defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB:
-		if flag&uint16(defines.BINARY_FLAG) != 0 {
-			return parquet.Optional(parquet.Leaf(parquet.ByteArrayType))
+		if valueRequiresValidUTF8(typ, flag) {
+			return parquet.Optional(parquet.String())
 		}
+		return parquet.Optional(parquet.Leaf(parquet.ByteArrayType))
+	case defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_UUID:
 		return parquet.Optional(parquet.String())
 	default:
 		// Default to string for unknown types
