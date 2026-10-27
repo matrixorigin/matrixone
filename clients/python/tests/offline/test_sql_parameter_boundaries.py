@@ -220,3 +220,38 @@ def test_duration_and_uuid_share_parameter_and_builder_encoding(value):
 def test_duration_and_uuid_do_not_expand_json_allowlist(value):
     with pytest.raises(TypeError, match='Unsupported JSON parameter type'):
         sql_literal({'nested': value})
+
+
+@pytest.mark.parametrize(
+    'text,expected',
+    [
+        ('1E+3', '1000'),
+        ('1E-8', '0.00000001'),
+        ('-0.00', '-0.00'),
+        ('0.00000000000000000112345678901234567890', '0.00000000000000000112345678901234567890'),
+    ],
+)
+def test_decimal_literals_use_exact_fixed_point_tokens(text, expected):
+    assert sql_literal(Decimal(text)) == expected
+    assert substitute_parameters('SELECT ?', (Decimal(text),)) == 'SELECT ' + expected
+
+
+@pytest.mark.parametrize('text', ['1E4095', '-1E4094', '1E-4094'])
+def test_decimal_literal_expansion_budget_includes_sign_and_point(text):
+    assert len(sql_literal(Decimal(text))) == 4096
+
+
+@pytest.mark.parametrize('text', ['1E4096', '-1E4095', '1E-4095', '1E1000000000', '1E-1000000000', '0E1000000000'])
+def test_decimal_expansion_rejected_before_allocating_output(text):
+    class NoExpansion(Decimal):
+        def __format__(self, spec):
+            raise AssertionError('Rejected Decimal must not reach output formatting')
+
+    with pytest.raises(ValueError, match='expansion budget'):
+        sql_literal(NoExpansion(text))
+
+
+@pytest.mark.parametrize('text', ['NaN', 'sNaN', 'Infinity', '-Infinity'])
+def test_nonfinite_decimal_rejected_without_float_conversion(text):
+    with pytest.raises(ValueError, match='Non-finite'):
+        sql_literal(Decimal(text))

@@ -433,7 +433,3 @@ type AutoIncrCache struct {
 // CRC32CopyExpressionsKey carries the final, execution-owned ALTER COPY schema.
 // Regenerated SQL alone cannot preserve historical CRC32 execution identities.
 type CRC32CopyExpressionsKey struct{}
-
-// HnswSnapshotFallbackKey requests a source scan only for a coverage retry.
-// It is statement-local and never changes the session search mode or SQL AST.
-type HnswSnapshotFallbackKey struct{}

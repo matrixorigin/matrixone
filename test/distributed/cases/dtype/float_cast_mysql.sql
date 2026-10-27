@@ -19,6 +19,19 @@ create table src(id int, d double, s varchar(32));
 insert into src values(1,1.005e0,'1.25'),(2,-1.005e0,'inf'),(3,1.015e0,'nan'),(4,null,null);
 select id,cast(d as decimal(10,2)),cast(d as decimal(20,2)),cast(d as decimal(65,2)) from src order by id;
 
+-- Tiny runtime values cover both sides of the fast-path scale limit.
+create table tiny_src(id int, d double);
+insert into tiny_src values(1,1e-20),(2,-1e-20),(3,null);
+select id,cast(d as decimal(16,6)) as tiny64,
+       cast(d as decimal(38,19)) as tiny19,
+       cast(d as decimal(38,20)) as tiny20
+from tiny_src order by id;
+
+-- DOUBLE rounding overflow retains explicit clamping and warning ownership.
+insert into tiny_src values(4,999.995e0),(5,-999.995e0);
+select id,cast(d as decimal(5,2)) as clamped from tiny_src where id>=4 order by id;
+show warnings;
+
 -- SELECT retains truncation warnings even in strict mode; IEEE word tokens
 -- are ordinary nonnumeric text while radix remains an explicit extension.
 set sql_mode='STRICT_TRANS_TABLES';
