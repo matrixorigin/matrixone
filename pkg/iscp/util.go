@@ -20,11 +20,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"slices"
-
-	// "encoding/hex"
 	"math"
-	// "slices"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -36,8 +33,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-
-	// "github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
