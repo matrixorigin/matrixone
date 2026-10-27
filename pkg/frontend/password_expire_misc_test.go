@@ -467,7 +467,7 @@ func TestInitUserPasswordExpireAndLock(t *testing.T) {
 		require.Contains(t, insert, passwordExpireNeverTimeSql)
 	})
 
-	t.Run("creation stamps session-local last-changed", func(t *testing.T) {
+	t.Run("creation keeps the legacy UTC last-changed default", func(t *testing.T) {
 		ses, bh, ctrl, ctx := newSessAndBg(t)
 		defer ctrl.Finish()
 

@@ -193,6 +193,35 @@ func TestDoComQueryParseErrorRedactsMongoDBSelector(t *testing.T) {
 	assertMongoDBSelectorIsAbsent(t, redactedErr)
 }
 
+func TestDoComQuerySetPasswordTargetNameRedaction(t *testing.T) {
+	for _, user := range []string{"ordinary_user", "access_key_id", "secret_access_key"} {
+		t.Run(user, func(t *testing.T) {
+			ctx := defines.AttachAccountId(t.Context(), catalog.System_Account)
+			previousPU := getPuIfPresent("")
+			t.Cleanup(func() { setPu("", previousPU) })
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			observed, logs := newObservedProtocolSession()
+			ses.logger, ses.logLevel = observed.logger, observed.logLevel
+			ses.loggerOnce.Do(func() {})
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			const secret = "ReviewSecret42"
+			query := "SET PASSWORD FOR " + user + " = PASSWORD('" + secret + "') trailing"
+			err := doComQuery(ses, execCtx, &UserInput{sql: query})
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), secret)
+			require.NotContains(t, ses.GetSqlOfStmt(), secret)
+			require.Contains(t, ses.GetSqlOfStmt(), "SET PASSWORD FOR "+user)
+			require.NotEmpty(t, logs.All(), "exercise the real frontend diagnostic sink")
+			for _, entry := range logs.All() {
+				require.NotContains(t, entry.Message+fmt.Sprint(entry.ContextMap()), secret)
+			}
+		})
+	}
+}
+
 func TestDoComQueryPrepareMultiReplacesPreviousDiagnostics(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	ctrl := gomock.NewController(t)

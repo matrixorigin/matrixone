@@ -160,6 +160,12 @@ func handleSQLForRecordFragmentWithSecrets(sql string) (string, []string) {
 	sawSetPassword := false
 	for scanner.Pos < len(sql) {
 		typ, s := scanSQLToken(scanner, &previousToken)
+		// SET PASSWORD owns its target and value. A target named
+		// access_key_id/secret_access_key is a user, not a credential option:
+		// generic lookahead must not consume '=' or PASSWORD('secret').
+		if sawSetPassword && typ != eq {
+			continue
+		}
 		if typ == mysql.IDENTIFIED {
 			typ, _ = scanSQLToken(scanner, &previousToken)
 			if typ == mysql.BY || typ == mysql.WITH {

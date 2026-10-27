@@ -436,6 +436,23 @@ func TestHandleSqlForRecord(t *testing.T) {
 		require.Equal(t, []string{"SET PASSWORD = ******"},
 			HandleSqlForRecord("SET PASSWORD = /* annotation */ 'commented-tail42' identified by 'other-value42'"))
 	})
+	t.Run("set password owns credential-like target names", func(t *testing.T) {
+		for _, user := range []string{"ordinary_user", "access_key_id", "secret_access_key"} {
+			for _, value := range []string{"'ReviewSecret42'", "PASSWORD('ReviewSecret42')"} {
+				t.Run(user+"/"+value, func(t *testing.T) {
+					sql := "SET PASSWORD FOR " + user + " = " + value
+					stmt, err := ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+					require.NoError(t, err, "credential-option names are legal users")
+					stmt.Free()
+					for _, tail := range []string{"", " trailing"} {
+						fragments, secrets := MaskSecretLiterals(sql + tail)
+						require.Equal(t, []string{strings.Replace(sql+tail, "ReviewSecret42", "******", 1)}, fragments)
+						require.Equal(t, []string{"ReviewSecret42"}, secrets, "mask the value, not the PASSWORD function or target")
+					}
+				})
+			}
+		}
+	})
 	t.Run("masked secrets are reported for echo scrubbing", func(t *testing.T) {
 		fragments, secrets := MaskSecretLiterals("SET PASSWORD = 'sec''ret-doubled'")
 		require.Len(t, secrets, 1)
