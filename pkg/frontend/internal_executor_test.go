@@ -116,6 +116,27 @@ func TestIeProto(t *testing.T) {
 	assert.Equal(t, uint64(0), r.resultSet.GetRowCount())
 }
 
+func TestInternalProtocolResultStashLimit(t *testing.T) {
+	p := &internalProtocol{result: &internalExecResult{}, stashResult: true}
+	rows := mockResultSet()
+	for i := 0; i < 101; i++ {
+		require.NoError(t, p.WriteResultSetRow(rows, 1))
+	}
+	require.EqualValues(t, 101, p.result.RowCount())
+	require.EqualValues(t, 101, p.result.affectedRows)
+
+	// The next batch is ignored once the existing result has more than 100 rows.
+	require.NoError(t, p.WriteResultSetRow(rows, 1))
+	require.EqualValues(t, 101, p.result.RowCount())
+	require.EqualValues(t, 101, p.result.affectedRows)
+
+	p.ResetStatistics()
+	p.stashResult = false
+	require.NoError(t, p.WriteResultSetRow(rows, 1))
+	require.Nil(t, p.result.resultSet)
+	require.EqualValues(t, 1, p.result.affectedRows)
+}
+
 func TestIeResult(t *testing.T) {
 	set := mockResultSet()
 	result := &internalExecResult{affectedRows: 1, resultSet: set, err: moerr.NewInternalError(context.TODO(), "random")}
