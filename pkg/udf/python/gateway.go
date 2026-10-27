@@ -87,8 +87,8 @@ type Gateway struct {
 	ledgerTTL            time.Duration
 	// admittedGroups and closedGroups are the Gateway's ownership fence for
 	// the current one-member adapter. A group epoch may be admitted only once;
-	// a terminal tombstone is reclaimable only after its exact group epoch has
-	// been closed by this owner. closedGroups stores a monotonic high-water
+	// a terminal tombstone is reclaimable after its exact epoch closes or its
+	// immutable identity expires. closedGroups stores a monotonic high-water
 	// epoch per group so a late lower-epoch retry cannot become executable
 	// after its ledger tombstone is collected.
 	admittedGroups       map[string]uint64
@@ -97,6 +97,7 @@ type Gateway struct {
 	reservedGroupBytes   int64
 	closedGroupLimit     int
 	closedGroupByteLimit int64
+	groupNow             func() time.Time // test seam; defaults to the nondecreasing admission clock
 }
 
 func NewGateway(cfg ClientConfig) (*Gateway, error) {
@@ -1055,7 +1056,34 @@ func (g *Gateway) ensureAdmissionState() error {
 	return nil
 }
 
+func (g *Gateway) groupTime() time.Time {
+	if g.groupNow != nil {
+		return g.groupNow()
+	}
+	return protocol.GroupNow()
+}
+
+func groupDeadline(scopedID string) (time.Time, error) {
+	_, id, ok := strings.Cut(scopedID, "\x00")
+	if !ok {
+		id = scopedID
+	} // manually constructed admission records
+	return protocol.GroupIdentityDeadline(id)
+}
+
 func (g *Gateway) claimGroupLocked(groupID string, groupEpoch uint64) error {
+	now := g.groupTime()
+	deadline, err := groupDeadline(groupID)
+	if err != nil {
+		return err
+	}
+	if !now.Before(deadline) {
+		return errutil.WrapfCauseFirst(protocol.ErrGroupClosed, "execution group admission deadline expired")
+	}
+	if deadline.After(now.Add(protocol.GroupIdentityMaxFuture)) {
+		return errutil.WrapfCauseFirst(protocol.ErrProtocol, "execution group admission deadline is too far in the future")
+	}
+
 	if closedEpoch, ok := g.closedGroups[groupID]; ok && groupEpoch <= closedEpoch {
 		return errutil.WrapfCauseFirst(protocol.ErrDuplicate, "execution group %q epoch %d is already closed", groupID, groupEpoch)
 	}
@@ -1067,8 +1095,31 @@ func (g *Gateway) claimGroupLocked(groupID string, groupEpoch uint64) error {
 		// closedGroups admits an unbounded number of concurrent groups between
 		// two completions and can overflow the bounded fence ledger when they
 		// drain together.
-		if len(g.closedGroups)+len(g.admittedGroups) >= g.closedGroupLimit ||
-			g.closedGroupBytes+g.reservedGroupBytes+int64(len(groupID)+8) > g.closedGroupByteLimit {
+		reservedGroups := len(g.admittedGroups)
+		for id := range g.admittedGroups {
+			if _, closed := g.closedGroups[id]; closed {
+				reservedGroups--
+			}
+		}
+		full := func() bool {
+			return len(g.closedGroups)+reservedGroups >= g.closedGroupLimit ||
+				g.closedGroupBytes+g.reservedGroupBytes+int64(len(groupID)+8) > g.closedGroupByteLimit
+		}
+		// Sweep only under capacity pressure, avoiding a new full-ledger scan
+		// on every Open. An active newer epoch keeps its existing fence.
+		if full() {
+			for id := range g.closedGroups {
+				if _, active := g.admittedGroups[id]; active {
+					continue
+				}
+				expires, err := groupDeadline(id)
+				if err == nil && !now.Before(expires) {
+					delete(g.closedGroups, id)
+					g.closedGroupBytes -= int64(len(id) + 8)
+				}
+			}
+		}
+		if full() {
 			return errutil.WrapfCauseFirst(protocol.ErrLedgerFull, "Python UDF closed-group fence is full")
 		}
 		g.reservedGroupBytes += int64(len(groupID) + 8)
@@ -1109,7 +1160,11 @@ func (g *Gateway) epochClosed(groupID string, groupEpoch uint64) bool {
 	g.admissionMu.Lock()
 	defer g.admissionMu.Unlock()
 	closedEpoch, ok := g.closedGroups[groupID]
-	return ok && groupEpoch <= closedEpoch
+	if ok && groupEpoch <= closedEpoch {
+		return true
+	}
+	deadline, err := groupDeadline(groupID)
+	return err == nil && !g.groupTime().Before(deadline)
 }
 
 // scopedGroupKey is an internal ownership key. The wire protocol keeps the
@@ -1227,6 +1282,7 @@ type definitionValidationResponse struct {
 }
 
 type capabilityResponse struct {
+	GroupIdentityContract      string   `json:"group_identity_contract"`
 	ProtocolVersion            int      `json:"protocol_version"`
 	ABIContract                string   `json:"abi_contract"`
 	AdapterVersion             string   `json:"adapter_version"`
@@ -1386,7 +1442,8 @@ func (g *Gateway) invalidateCapabilities(expected ...uint64) {
 }
 
 func validateCapabilities(response capabilityResponse) error {
-	if response.ProtocolVersion != protocol.Version ||
+	if response.GroupIdentityContract != protocol.GroupIdentityContract ||
+		response.ProtocolVersion != protocol.Version ||
 		response.ABIContract != udf.PythonABIContract ||
 		response.AdapterVersion != udf.PythonAdapterVersion ||
 		response.SDKVersion != udf.PythonSDKVersion ||
