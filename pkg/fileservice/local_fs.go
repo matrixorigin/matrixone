@@ -1035,9 +1035,11 @@ func (l *LocalFS) deleteSingle(_ context.Context, filePath string) error {
 	if err != nil {
 		return err
 	}
-	nativePath := l.toNativeFilePath(path.File)
+	return deleteLocalFile(&l.RWMutex, l.dirFiles, l.toNativeFilePath(path.File))
+}
 
-	_, err = os.Stat(nativePath)
+func deleteLocalFile(mu *sync.RWMutex, dirFiles map[string]*os.File, nativePath string) error {
+	_, err := os.Stat(nativePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// ignore not found error
@@ -1052,7 +1054,7 @@ func (l *LocalFS) deleteSingle(_ context.Context, filePath string) error {
 	}
 
 	parentDir, _ := filepath.Split(nativePath)
-	err = l.syncDir(parentDir)
+	err = syncLocalDir(mu, dirFiles, parentDir)
 	if err != nil {
 		return err
 	}

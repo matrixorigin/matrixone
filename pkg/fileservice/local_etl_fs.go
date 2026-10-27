@@ -539,29 +539,7 @@ func (l *LocalETLFS) deleteSingle(ctx context.Context, filePath string) error {
 	if err != nil {
 		return err
 	}
-	nativePath := l.toNativeFilePath(path.File)
-
-	_, err = os.Stat(nativePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// ignore not found error
-			return nil
-		}
-		return err
-	}
-
-	err = os.Remove(nativePath)
-	if err != nil {
-		return err
-	}
-
-	parentDir, _ := filepath.Split(nativePath)
-	err = l.syncDir(parentDir)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return deleteLocalFile(&l.RWMutex, l.dirFiles, l.toNativeFilePath(path.File))
 }
 
 var _ ReaderWriterFileService = new(LocalETLFS)
