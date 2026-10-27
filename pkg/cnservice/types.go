@@ -501,31 +501,22 @@ func (c *Config) setTaskRunnerDefaults() {
 }
 
 func (c *Config) setTxnFeatureDefaults() {
-	// Fix txn mode various config, simply override
-	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
-		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = 1
-		}
-		if c.Txn.EnableCNBasedConsistency == 0 {
+	// Resolve the mode before modifying fields so invalid modes still panic without mutation.
+	pessimistic := txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic
+	if c.Txn.EnableSacrificingFreshness == 0 {
+		c.Txn.EnableSacrificingFreshness = 1
+	}
+	if c.Txn.EnableCNBasedConsistency == 0 {
+		if pessimistic {
 			c.Txn.EnableCNBasedConsistency = -1
-		}
-		// We don't support the following now, so always disable
-		c.Txn.EnableRefreshExpression = -1
-		if c.Txn.EnableLeakCheck == 0 {
-			c.Txn.EnableLeakCheck = -1
-		}
-	} else {
-		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = 1
-		}
-		if c.Txn.EnableCNBasedConsistency == 0 {
+		} else {
 			c.Txn.EnableCNBasedConsistency = 1
 		}
-		// We don't support the following now, so always disable
-		c.Txn.EnableRefreshExpression = -1
-		if c.Txn.EnableLeakCheck == 0 {
-			c.Txn.EnableLeakCheck = -1
-		}
+	}
+	// Refresh expressions are not supported in either transaction mode.
+	c.Txn.EnableRefreshExpression = -1
+	if c.Txn.EnableLeakCheck == 0 {
+		c.Txn.EnableLeakCheck = -1
 	}
 
 	if c.Txn.MaxActiveAges.Duration == 0 {
