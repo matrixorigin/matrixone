@@ -11413,7 +11413,7 @@ func TestUpsertStoredProcedureReplaceAndDuplicateHandling(t *testing.T) {
 		bh.sql2result[checkSQL] = newMrsForPasswordOfUser([][]interface{}{{"not-an-id"}})
 
 		require.Error(t, upsertStoredProcedure(ctx, bh, tenant, definition, true))
-		require.Equal(t, []string{checkSQL}, bh.executedSQLs)
+		require.Equal(t, []string{checkSQL, "select user_id, user_name, user_host from mo_catalog.mo_user where user_id = 0 order by user_id for update;"}, bh.executedSQLs)
 	})
 }
 

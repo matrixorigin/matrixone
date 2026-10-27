@@ -272,9 +272,16 @@ func TestAuthenticateUserNameReuseKeepsCredentialIdentity(t *testing.T) {
 			pu.TxnClient = client
 			pu.StorageEngine = &authenticationBarrierEngine{acquire: func(context.Context) (timestamp.Timestamp, error) { return timestamp.Timestamp{PhysicalTime: 100}, nil }}
 			const accountID = 17008
+			GSysVarsMgr.Lock()
+			previousAccountVars, hadAccountVars := GSysVarsMgr.accountsGlobalSysVarsMap[accountID]
+			GSysVarsMgr.Unlock()
 			t.Cleanup(func() {
 				GSysVarsMgr.Lock()
-				delete(GSysVarsMgr.accountsGlobalSysVarsMap, accountID)
+				if hadAccountVars {
+					GSysVarsMgr.accountsGlobalSysVarsMap[accountID] = previousAccountVars
+				} else {
+					delete(GSysVarsMgr.accountsGlobalSysVarsMap, accountID)
+				}
 				GSysVarsMgr.Unlock()
 			})
 			previous := ExeSqlInBgSes
@@ -465,6 +472,44 @@ func TestUserRoleWritersRejectRenamedBinding(t *testing.T) {
 			for _, sql := range bh.executedSQLs {
 				require.False(t, strings.HasPrefix(sql, "insert "))
 				require.False(t, strings.HasPrefix(sql, "delete "))
+			}
+		})
+	}
+}
+
+func TestRenameUserFailureFinalization(t *testing.T) {
+	for _, failure := range []string{"query", "commit", "cancel", "deleted principal", "admin"} {
+		t.Run(failure, func(t *testing.T) {
+			ses, bh := newRenameFixture(t)
+			lifecycle := &setDefaultRoleLifecycleExec{backgroundExecTest: bh}
+			var opts *BackgroundExecOption
+			stubSetDefaultRoleBackgroundExec(t, lifecycle, &opts)
+			sentinel := errors.New("injected failure")
+			switch failure {
+			case "query":
+				bh.sql2err["select user_id, user_name, user_host from mo_catalog.mo_user where user_name = 'alice' order by user_id;"] = sentinel
+			case "commit":
+				bh.sql2err["commit;"] = sentinel
+			case "cancel":
+				bh.sql2err["update mo_catalog.mo_user set user_name = 'bob' where user_id = 8;"] = context.Canceled
+			case "deleted principal":
+				bh.sql2result["select user_id, user_name, user_host from mo_catalog.mo_user where user_id = 1 order by user_id;"] = renameRows()
+			case "admin":
+				sql, e := getSqlForRoleOfUser(context.Background(), 8, accountAdminRoleName)
+				require.NoError(t, e)
+				bh.sql2result[sql] = renameRows([]interface{}{int64(accountAdminRoleID)})
+			}
+			err := doRenameUser(context.Background(), ses, renameStatement("alice", "bob"))
+			require.Error(t, err)
+			require.Contains(t, bh.executedSQLs, "rollback;")
+			require.Equal(t, 1, lifecycle.closeCalls)
+			require.True(t, opts.forcePessimisticRC)
+			require.True(t, opts.cancelTxnCreateWithRequest)
+			if failure == "query" || failure == "commit" {
+				require.ErrorIs(t, err, sentinel)
+			}
+			if failure == "cancel" {
+				require.ErrorIs(t, err, context.Canceled)
 			}
 		})
 	}
