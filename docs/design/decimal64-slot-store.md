@@ -1,6 +1,7 @@
 # Decimal64 grouped-combiner slot stores
 
-Owner: #30847. Implementation PR: pending validation. This proposal changes only
+Owner: #30847. Implementation: branch `perf/decimal64-slot-store`, runtime
+commit `5c816098da`. This proposal changes only
 the initialization of the existing local slot table in Decimal64 SUM/AVG.
 
 ## Problem and invariant
@@ -69,3 +70,30 @@ this does not waive confirmed regressions. No server129 measurement is allowed.
 Publish a templated PR only after the required tests, performance checks and
 self-review pass. Local SF10 evidence does not close the umbrella's SF100 or
 mixed-I/O acceptance requirements.
+
+## Design and implementation review record
+
+The design at `f1cc97380f` passed the separate design-first review for an isolated
+prototype. The implementation follows that revision without a state or lifecycle
+change. R3 applies to hot-path performance; concurrency, persistence, protocol,
+security and new-resource dimensions have no changed transition to audit.
+
+The focused SUM/AVG tests pass on both builds. All 615 aggregate test roots and
+the group consumer suite pass, and the SIMD/v3 scoped static check has zero
+issues. The complete 30-case component screen and the independent longer
+large-batch/NULL/DISTINCT check have no slower interval, with unchanged allocation
+counts. Fixed-work counters show about 13% fewer user cycles for four-group and
+10% fewer for sequential caller-shaped updates.
+
+Local SF10 full-suite paired medians are Q1 -1.24% and Q18 -1.72%; both intervals
+include no change. The separate Q1/Q18 context measured +0.76% and +0.84%, also
+inconclusive. These observations remain separate. The requester accepts lower
+observed query medians with uncertainty reported; that decision does not waive a
+confirmed regression. All 22 full-suite intervals include no change or favor the
+candidate. Higher point estimates remain uncertain rather than proven neutral.
+The twelve full-suite and twelve target arms passed the recorded all-memory and
+host-load gates, with zero measured physical I/O, spill or application swap.
+
+This patch supplies a bounded component-work reduction and limited local SF10
+query evidence. It does not close the umbrella's SF100/mixed-I/O requirements.
+The implementation PR must report the final pre-push and review outcome.
