@@ -26,15 +26,15 @@ import (
 // attachConditionalStreamTopK annotates only the complete retained
 // SORT / PROJECT / positive-score FILTER / source-PK JOIN shape.
 // No operators or pagination are removed and CandidateLimit stays nil.
-func (b *QueryBuilder) attachConditionalStreamTopK(sortNode, project *plan.Node) {
-	if b.sqlCalcFoundRows || sortNode == nil || project == nil || sortNode.RankOption != nil ||
+func (builder *QueryBuilder) attachConditionalStreamTopK(sortNode, project *plan.Node) {
+	if builder.sqlCalcFoundRows || sortNode == nil || project == nil || sortNode.RankOption != nil ||
 		project.RankOption != nil || len(sortNode.Children) != 1 || len(project.Children) != 1 ||
 		len(sortNode.OrderBy) != 2 || len(project.ProjectList) != 2 || len(project.BindingTags) != 1 ||
 		len(sortNode.FilterList) != 0 || len(project.FilterList) != 0 || project.Limit != nil || project.Offset != nil {
 		return
 	}
-	if project.NodeId >= 0 && int(project.NodeId) < len(b.ctxByNode) {
-		if ctx := b.ctxByNode[project.NodeId]; ctx != nil && (ctx.isDistinct || len(ctx.windows) != 0 || len(ctx.groups) != 0 || len(ctx.aggregates) != 0) {
+	if project.NodeId >= 0 && int(project.NodeId) < len(builder.ctxByNode) {
+		if ctx := builder.ctxByNode[project.NodeId]; ctx != nil && (ctx.isDistinct || len(ctx.windows) != 0 || len(ctx.groups) != 0 || len(ctx.aggregates) != 0) {
 			return
 		}
 	}
@@ -67,21 +67,21 @@ func (b *QueryBuilder) attachConditionalStreamTopK(sortNode, project *plan.Node)
 		}
 		return e
 	}
-	input := b.qry.Nodes[sortNode.Children[0]]
+	input := builder.qry.Nodes[sortNode.Children[0]]
 	if input == project {
-		input = b.qry.Nodes[project.Children[0]]
+		input = builder.qry.Nodes[project.Children[0]]
 	}
 	if input.NodeType != plan.Node_FILTER || len(input.Children) != 1 || len(input.FilterList) != 1 ||
 		input.Limit != nil || input.Offset != nil || input.RankOption != nil {
 		return
 	}
 	filter := input.FilterList[0]
-	join := b.qry.Nodes[input.Children[0]]
+	join := builder.qry.Nodes[input.Children[0]]
 	if join.NodeType != plan.Node_JOIN || join.JoinType != plan.Node_INNER || len(join.Children) != 2 ||
 		len(join.OnList) != 1 || len(join.FilterList) != 0 || join.Limit != nil || join.Offset != nil || join.RankOption != nil {
 		return
 	}
-	source, search := b.qry.Nodes[join.Children[0]], b.qry.Nodes[join.Children[1]]
+	source, search := builder.qry.Nodes[join.Children[0]], builder.qry.Nodes[join.Children[1]]
 	if source.NodeType != plan.Node_TABLE_SCAN || search.NodeType != plan.Node_INDEX_SEARCH_SCAN {
 		return
 	}
