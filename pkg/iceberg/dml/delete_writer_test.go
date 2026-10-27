@@ -308,6 +308,7 @@ func TestDeleteMetricBoundsCoverTypesAndNaN(t *testing.T) {
 
 	require.Equal(t, int64(1), metrics.nullCounts[6])
 	require.Equal(t, int64(1), metrics.nanCounts[4])
+	require.Nil(t, decodeDeleteMetricValue(api.IcebergType{Kind: api.TypeDecimal}, []byte{1}))
 	require.Equal(t, int64(-3), decodeDeleteMetricValue(api.IcebergType{Kind: api.TypeInt}, metrics.lowerBounds[2]))
 	require.Equal(t, int64(20), decodeDeleteMetricValue(api.IcebergType{Kind: api.TypeInt}, metrics.upperBounds[2]))
 	require.Equal(t, int64(100), decodeDeleteMetricValue(api.IcebergType{Kind: api.TypeLong}, metrics.lowerBounds[3]))

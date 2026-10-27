@@ -632,22 +632,11 @@ func encodeDeleteBound(ctx context.Context, typ api.IcebergType, value any) ([]b
 }
 
 func decodeDeleteMetricValue(typ api.IcebergType, data []byte) any {
-	switch typ.Kind {
-	case api.TypeBoolean:
-		return len(data) > 0 && data[0] != 0
-	case api.TypeInt, api.TypeDate:
-		return int64(int32(binary.LittleEndian.Uint32(data)))
-	case api.TypeLong, api.TypeTimestamp, api.TypeTimestampTZ:
-		return int64(binary.LittleEndian.Uint64(data))
-	case api.TypeFloat:
-		return float64(math.Float32frombits(binary.LittleEndian.Uint32(data)))
-	case api.TypeDouble:
-		return math.Float64frombits(binary.LittleEndian.Uint64(data))
-	case api.TypeString:
-		return string(data)
-	default:
+	// Delete bounds do not currently support decimal values.
+	if typ.Kind == api.TypeDecimal {
 		return nil
 	}
+	return icebergwrite.DecodeMetricValue(typ, data)
 }
 
 type deleteCountingWriter struct {

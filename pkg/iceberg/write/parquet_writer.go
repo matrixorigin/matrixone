@@ -542,7 +542,7 @@ func (m *columnMetrics) observe(ctx context.Context, typ api.IcebergType, value 
 		m.compare = cmp
 		m.lower = encoded
 	}
-	if CompareMetricValues(cmp, decodeMetricValue(typ, m.upper)) > 0 {
+	if CompareMetricValues(cmp, DecodeMetricValue(typ, m.upper)) > 0 {
 		m.upper = encoded
 	}
 	return nil
@@ -603,7 +603,8 @@ func decimalInt64BoundBytes(value int64) []byte {
 	return append([]byte(nil), buf[start:]...)
 }
 
-func decodeMetricValue(typ api.IcebergType, data []byte) any {
+// DecodeMetricValue decodes an Iceberg metric bound into its comparable value.
+func DecodeMetricValue(typ api.IcebergType, data []byte) any {
 	switch typ.Kind {
 	case api.TypeBoolean:
 		return len(data) > 0 && data[0] != 0
