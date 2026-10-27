@@ -2,10 +2,10 @@
 # Licensed under the Apache License, Version 2.0.
 """Pure compilation shared by buffered sync/async queries and exports."""
 
+import copy
 import re
 from typing import Any, cast
 
-from sqlalchemy.dialects.mysql import dialect
 from sqlalchemy.sql import visitors
 from sqlalchemy.sql.elements import ClauseElement
 from sqlalchemy.sql.compiler import SQLCompiler
@@ -20,7 +20,7 @@ def render_fragment(sql, params=()):
     return substitute_parameters(sql, params)
 
 
-def compile_expression(expression, model=None, alias=None, projection=False):
+def compile_expression(expression, model=None, alias=None, projection=False, compiler_dialect=None):
     if not isinstance(expression, ClauseElement) and hasattr(expression, '__clause_element__'):
         expression = expression.__clause_element__()
     if not isinstance(expression, ClauseElement):
@@ -35,23 +35,35 @@ def compile_expression(expression, model=None, alias=None, projection=False):
             return None
 
         expression = visitors.replacement_traverse(cast(Any, expression), {}, replace)
+    from .sqlalchemy_ext.dialect import MatrixOneDialect
+
+    if compiler_dialect is None:
+        compiler_dialect = MatrixOneDialect(paramstyle='qmark')
+    else:
+        # A string-producing API owns literal substitution, not DBAPI percent
+        # expansion. Preserve the supplied dialect's types without mutating it.
+        compiler_dialect = copy.copy(compiler_dialect)
+        compiler_dialect.paramstyle = 'qmark'
+        compiler_dialect.positional = True
+        compiler_dialect.identifier_preparer = compiler_dialect.preparer(compiler_dialect)
     compiled = cast(
         SQLCompiler,
         ClauseElement.compile(
             expression,
-            dialect=dialect(paramstyle='qmark'),
+            dialect=compiler_dialect,
             compile_kwargs={'render_postcompile': True, 'within_columns_clause': projection},
         ),
     )
     # SQLAlchemy owns expression syntax; our shared renderer owns value quoting.
-    parameters = compiled.params
-    processors = dict(compiled._bind_processors)
     expanded = getattr(compiled, '_post_compile_expanded_state', None)
+    parameters = expanded.parameters if expanded is not None else compiled.params
+    processors = dict(compiled._bind_processors)
     if expanded is not None:
         processors.update(expanded.processors)
     values = []
     for key in compiled.positiontup or ():
-        value = parameters[key]
+        parameter_key = key if expanded is not None else compiled.escaped_bind_names.get(key, key)
+        value = parameters[parameter_key]
         processor = processors.get(key)
         if processor is not None:
             if not callable(processor):
