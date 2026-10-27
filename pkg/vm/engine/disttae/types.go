@@ -265,7 +265,6 @@ type Engine struct {
 	us       udf.Service
 	cli      client.TxnClient
 	idGen    IDGenerator
-	tnID     string
 
 	config struct {
 		insertEntryMaxCount      int
