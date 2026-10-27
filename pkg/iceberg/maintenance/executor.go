@@ -172,7 +172,7 @@ func buildDispatchRequest(req ProcedureExecutionRequest, catalog ProcedureCatalo
 		JobID:               jobID,
 		IdempotencyKey:      idempotencyKey,
 		Operation:           req.Parsed.Operation,
-		Options:             cloneStringMap(req.Parsed.Options),
+		Options:             api.CloneNonEmptyMap(req.Parsed.Options),
 	}, nil
 }
 

@@ -68,7 +68,7 @@ type DMLOverwriteCoordinator struct {
 func NewDMLOverwriteCoordinator(spec DMLOverwriteCoordinatorSpec) *DMLOverwriteCoordinator {
 	spec.Schema = cloneDMLDeleteSchema(spec.Schema)
 	spec.AffectedDataFiles = append([]api.DataFile(nil), spec.AffectedDataFiles...)
-	spec.Partition = cloneDMLAnyMap(spec.Partition)
+	spec.Partition = api.CloneNonEmptyMap(spec.Partition)
 	return &DMLOverwriteCoordinator{spec: spec}
 }
 
@@ -253,7 +253,7 @@ func (c *DMLOverwriteCoordinator) commitRequestLocked() DMLOverwriteActionStream
 		Schema:             c.spec.Schema,
 		Base:               resolveDMLCommitBase(c.spec.Base, c.writeReq),
 		Scope:              overwriteScopeOrDefault(c.spec.Scope),
-		Partition:          cloneDMLAnyMap(c.spec.Partition),
+		Partition:          api.CloneNonEmptyMap(c.spec.Partition),
 		PartitionSpec:      c.spec.PartitionSpec,
 		ObjectWriter:       c.spec.ObjectWriter,
 		AffectedDataFiles:  append([]api.DataFile(nil), c.spec.AffectedDataFiles...),

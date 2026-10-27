@@ -43,6 +43,18 @@ func FirstNonBlankPreserveWhitespace(values ...string) string {
 	return ""
 }
 
+// CloneNonEmptyMap shallow-copies a map, normalizing empty maps to nil.
+func CloneNonEmptyMap[K comparable, V any](in map[K]V) map[K]V {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[K]V, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
 type CatalogClient interface {
 	GetConfig(ctx context.Context, req GetConfigRequest) (*ConfigResponse, error)
 	ListNamespaces(ctx context.Context, req ListNamespacesRequest) (*ListNamespacesResponse, error)

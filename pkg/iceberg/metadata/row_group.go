@@ -44,8 +44,8 @@ func BuildRowGroupSplits(footers []RowGroupFooter) []api.RowGroupSplit {
 			Bytes:           footer.Bytes,
 			LowerBounds:     cloneBytesMap(footer.LowerBounds),
 			UpperBounds:     cloneBytesMap(footer.UpperBounds),
-			NullValueCounts: cloneInt64Map(footer.NullValueCounts),
-			ValueCounts:     cloneInt64Map(footer.ValueCounts),
+			NullValueCounts: api.CloneNonEmptyMap(footer.NullValueCounts),
+			ValueCounts:     api.CloneNonEmptyMap(footer.ValueCounts),
 		}
 		out = append(out, split)
 		if footer.RowCount > 0 {

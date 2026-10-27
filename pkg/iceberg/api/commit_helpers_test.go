@@ -23,6 +23,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCloneNonEmptyMapOwnership(t *testing.T) {
+	require.Nil(t, CloneNonEmptyMap(map[string]string(nil)))
+	require.Nil(t, CloneNonEmptyMap(map[string]string{}))
+	bytes := []byte{1}
+	input := map[string]any{"bytes": bytes}
+	cloned := CloneNonEmptyMap(input)
+	cloned["new"] = "value"
+	require.NotContains(t, input, "new")
+	bytes[0] = 2
+	require.Equal(t, byte(2), cloned["bytes"].([]byte)[0], "values remain shallow copies")
+}
+
 func TestCommitSnapshotHelpersCloneMutableSummary(t *testing.T) {
 	summary := map[string]string{"operation": "append", "added-records": "10"}
 	snapshot := NewCommitSnapshot(11, 10, 4, 7, 123456, "s3://warehouse/metadata/snap.avro", summary)

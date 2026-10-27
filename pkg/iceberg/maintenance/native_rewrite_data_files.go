@@ -220,7 +220,7 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 		Selection:      *selection,
 		JobID:          req.JobID,
 		IdempotencyKey: req.IdempotencyKey,
-		Options:        cloneStringMap(req.Options),
+		Options:        api.CloneNonEmptyMap(req.Options),
 	})
 	if err != nil {
 		return nil, err
@@ -1071,7 +1071,7 @@ func rewriteDataFilesManifestEntryWithSequences(status api.ManifestEntryStatus, 
 
 func buildRewriteDataFilesCommitAttempt(req RewriteDataFilesMaterializeRequest, manifests []api.ManifestFile, rewrittenFiles, addedFiles uint64) *api.CommitAttempt {
 	targetRef := api.FirstNonBlankPreserveWhitespace(req.TargetRef, "main")
-	summary := cloneStringMap(req.Summary)
+	summary := api.CloneNonEmptyMap(req.Summary)
 	if summary == nil {
 		summary = make(map[string]string)
 	}

@@ -406,20 +406,9 @@ func cloneLoadTableResponse(in *api.LoadTableResponse) *api.LoadTableResponse {
 	}
 	out := *in
 	out.MetadataJSON = append([]byte(nil), in.MetadataJSON...)
-	out.Config = cloneStringMap(in.Config)
+	out.Config = api.CloneNonEmptyMap(in.Config)
 	out.StorageCredentials = cloneStorageCredentials(in.StorageCredentials)
 	return &out
-}
-
-func cloneStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
 }
 
 func cloneStorageCredentials(in []api.StorageCredential) []api.StorageCredential {
@@ -428,7 +417,7 @@ func cloneStorageCredentials(in []api.StorageCredential) []api.StorageCredential
 	}
 	out := append([]api.StorageCredential(nil), in...)
 	for i := range out {
-		out[i].Config = cloneStringMap(in[i].Config)
+		out[i].Config = api.CloneNonEmptyMap(in[i].Config)
 	}
 	return out
 }

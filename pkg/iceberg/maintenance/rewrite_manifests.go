@@ -60,7 +60,7 @@ func (p RewriteManifestsPlanner) BuildMaintenanceCommit(ctx context.Context, req
 				"manifest_list": snapshot.ManifestList,
 			},
 		},
-		{Type: "set-snapshot-summary", Payload: cloneStringMap(summary)},
+		{Type: "set-snapshot-summary", Payload: api.CloneNonEmptyMap(summary)},
 	}
 	return &CommitPlan{
 		Catalog: p.Catalog,

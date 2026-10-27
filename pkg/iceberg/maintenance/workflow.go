@@ -273,7 +273,7 @@ func maintenanceCommitRequest(req Request, plan *CommitPlan) api.CommitRequest {
 		Requirements:   append([]api.CommitRequirement(nil), plan.Attempt.Requirements...),
 		Updates:        append([]api.CommitUpdate(nil), plan.Attempt.Updates...),
 		IdempotencyKey: api.FirstNonBlankPreserveWhitespace(plan.Attempt.IdempotencyKey, req.IdempotencyKey),
-		Summary:        cloneStringMap(plan.Attempt.Summary),
+		Summary:        api.CloneNonEmptyMap(plan.Attempt.Summary),
 	}
 }
 
@@ -367,15 +367,4 @@ func snapshotIDString(result *api.CommitResult) string {
 		return ""
 	}
 	return strconv.FormatInt(result.SnapshotID, 10)
-}
-
-func cloneStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }

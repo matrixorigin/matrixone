@@ -554,7 +554,7 @@ func (c ParquetConcatRewriteDataFilesCompactor) compactGroup(ctx context.Context
 		Content:          api.DataFileContentData,
 		FilePath:         location,
 		FileFormat:       "parquet",
-		Partition:        cloneRewriteDataFilesPartition(group.Candidates[0].File.Partition),
+		Partition:        api.CloneNonEmptyMap(group.Candidates[0].File.Partition),
 		RecordCount:      totalRows,
 		FileSizeInBytes:  int64(output.Len()),
 		SpecID:           group.PartitionSpecID,
@@ -925,17 +925,6 @@ func (p *rewriteDataFilesProjection) project(rows, output []parquet.Row) error {
 		}
 	}
 	return nil
-}
-
-func cloneRewriteDataFilesPartition(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }
 
 var _ RewriteDataFilesCompactor = ParquetConcatRewriteDataFilesCompactor{}

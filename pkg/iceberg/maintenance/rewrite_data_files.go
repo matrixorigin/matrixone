@@ -67,7 +67,7 @@ func (p RewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Context, req
 			FilePath: snapshot.ManifestList,
 			Payload:  payload,
 		},
-		{Type: "set-snapshot-summary", Payload: cloneStringMap(summary)},
+		{Type: "set-snapshot-summary", Payload: api.CloneNonEmptyMap(summary)},
 	}
 	return &CommitPlan{
 		Catalog: p.Catalog,

@@ -328,7 +328,7 @@ func dmlCommitRequest(catalog api.CatalogRequest, base CommitBase, attempt *api.
 		Requirements:   append([]api.CommitRequirement(nil), attempt.Requirements...),
 		Updates:        append([]api.CommitUpdate(nil), attempt.Updates...),
 		IdempotencyKey: api.FirstNonBlankPreserveWhitespace(attempt.IdempotencyKey, base.IdempotencyKey),
-		Summary:        cloneStringMap(attempt.Summary),
+		Summary:        api.CloneNonEmptyMap(attempt.Summary),
 	}
 }
 

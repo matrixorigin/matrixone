@@ -344,12 +344,12 @@ func cloneManifestEntries(in []api.ManifestEntry) []api.ManifestEntry {
 
 func cloneDataFile(in api.DataFile) api.DataFile {
 	out := in
-	out.Partition = cloneAnyMap(in.Partition)
-	out.PartitionFieldIDs = cloneStringIntMap(in.PartitionFieldIDs)
-	out.ColumnSizes = cloneInt64Map(in.ColumnSizes)
-	out.ValueCounts = cloneInt64Map(in.ValueCounts)
-	out.NullValueCounts = cloneInt64Map(in.NullValueCounts)
-	out.NaNValueCounts = cloneInt64Map(in.NaNValueCounts)
+	out.Partition = api.CloneNonEmptyMap(in.Partition)
+	out.PartitionFieldIDs = api.CloneNonEmptyMap(in.PartitionFieldIDs)
+	out.ColumnSizes = api.CloneNonEmptyMap(in.ColumnSizes)
+	out.ValueCounts = api.CloneNonEmptyMap(in.ValueCounts)
+	out.NullValueCounts = api.CloneNonEmptyMap(in.NullValueCounts)
+	out.NaNValueCounts = api.CloneNonEmptyMap(in.NaNValueCounts)
 	out.LowerBounds = cloneBytesMap(in.LowerBounds)
 	out.UpperBounds = cloneBytesMap(in.UpperBounds)
 	out.SplitOffsets = append([]int64(nil), in.SplitOffsets...)
@@ -359,39 +359,6 @@ func cloneDataFile(in api.DataFile) api.DataFile {
 	if in.FirstRowID != nil {
 		first := *in.FirstRowID
 		out.FirstRowID = &first
-	}
-	return out
-}
-
-func cloneStringIntMap(in map[string]int) map[string]int {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]int, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
-func cloneAnyMap(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
-func cloneInt64Map(in map[int]int64) map[int]int64 {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[int]int64, len(in))
-	for k, v := range in {
-		out[k] = v
 	}
 	return out
 }

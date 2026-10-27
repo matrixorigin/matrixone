@@ -73,7 +73,7 @@ func (AppendBuilder) BuildAppend(ctx context.Context, req api.AppendRequest) (*a
 			},
 		})
 	}
-	summary := cloneStringMap(req.Summary)
+	summary := api.CloneNonEmptyMap(req.Summary)
 	if summary == nil {
 		summary = make(map[string]string)
 	}
@@ -91,7 +91,7 @@ func (AppendBuilder) BuildAppend(ctx context.Context, req api.AppendRequest) (*a
 	}
 	summary["added-data-files"] = strconv.Itoa(len(dataFiles))
 	summary["added-records"] = strconv.FormatInt(totalRecords(dataFiles), 10)
-	updates = append(updates, api.CommitUpdate{Type: "set-snapshot-summary", Payload: cloneStringMap(summary)})
+	updates = append(updates, api.CommitUpdate{Type: "set-snapshot-summary", Payload: api.CloneNonEmptyMap(summary)})
 	return &api.CommitAttempt{
 		Requirements:   requirements,
 		Updates:        updates,
@@ -283,7 +283,7 @@ func appendMetricsReport(req api.AppendRequest, attempt *api.CommitAttempt, resu
 	if attempt != nil {
 		rows = totalRecords(attempt.DataFiles)
 		files = len(attempt.DataFiles)
-		summary = cloneStringMap(attempt.Summary)
+		summary = api.CloneNonEmptyMap(attempt.Summary)
 	}
 	return api.MetricsReportRequest{
 		CatalogRequest:       req.CatalogRequest,
@@ -407,7 +407,7 @@ func commitRequest(req api.AppendRequest, attempt *api.CommitAttempt) api.Commit
 		Requirements:   append([]api.CommitRequirement(nil), attempt.Requirements...),
 		Updates:        append([]api.CommitUpdate(nil), attempt.Updates...),
 		IdempotencyKey: api.FirstNonEmptyTrimmed(attempt.IdempotencyKey, req.IdempotencyKey),
-		Summary:        cloneStringMap(attempt.Summary),
+		Summary:        api.CloneNonEmptyMap(attempt.Summary),
 	}
 }
 
@@ -474,12 +474,12 @@ func cloneDataFiles(in []api.DataFile) []api.DataFile {
 	}
 	out := append([]api.DataFile(nil), in...)
 	for i := range out {
-		out[i].Partition = cloneAnyMap(in[i].Partition)
-		out[i].PartitionFieldIDs = cloneStringIntMap(in[i].PartitionFieldIDs)
-		out[i].ColumnSizes = cloneInt64Map(in[i].ColumnSizes)
-		out[i].ValueCounts = cloneInt64Map(in[i].ValueCounts)
-		out[i].NullValueCounts = cloneInt64Map(in[i].NullValueCounts)
-		out[i].NaNValueCounts = cloneInt64Map(in[i].NaNValueCounts)
+		out[i].Partition = api.CloneNonEmptyMap(in[i].Partition)
+		out[i].PartitionFieldIDs = api.CloneNonEmptyMap(in[i].PartitionFieldIDs)
+		out[i].ColumnSizes = api.CloneNonEmptyMap(in[i].ColumnSizes)
+		out[i].ValueCounts = api.CloneNonEmptyMap(in[i].ValueCounts)
+		out[i].NullValueCounts = api.CloneNonEmptyMap(in[i].NullValueCounts)
+		out[i].NaNValueCounts = api.CloneNonEmptyMap(in[i].NaNValueCounts)
 		out[i].LowerBounds = cloneBytesMap(in[i].LowerBounds)
 		out[i].UpperBounds = cloneBytesMap(in[i].UpperBounds)
 		out[i].SplitOffsets = append([]int64(nil), in[i].SplitOffsets...)
@@ -501,50 +501,6 @@ func clonePartitionSpecs(in []api.PartitionSpec) []api.PartitionSpec {
 func clonePartitionSpec(in api.PartitionSpec) api.PartitionSpec {
 	out := in
 	out.Fields = append([]api.PartitionField(nil), in.Fields...)
-	return out
-}
-
-func cloneStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
-func cloneStringIntMap(in map[string]int) map[string]int {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]int, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
-}
-
-func cloneAnyMap(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
-func cloneInt64Map(in map[int]int64) map[int]int64 {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[int]int64, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
 	return out
 }
 

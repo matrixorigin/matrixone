@@ -328,7 +328,7 @@ func buildDMLCommitAttempt(req ManifestMaterializeRequest, manifests []api.Manif
 		Requirements:   append([]api.CommitRequirement(nil), req.Intent.Requirements...),
 		Updates:        updates,
 		ManifestFiles:  append([]api.ManifestFile(nil), manifests...),
-		Summary:        cloneStringMap(req.Intent.Summary),
+		Summary:        api.CloneNonEmptyMap(req.Intent.Summary),
 		IdempotencyKey: req.Intent.IdempotencyKey,
 		BaseSnapshotID: req.Intent.BaseSnapshotID,
 		TargetRef:      req.Intent.TargetRef,

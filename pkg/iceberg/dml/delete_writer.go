@@ -500,7 +500,7 @@ func deleteDataFile(path string, content api.DataFileContent, rows, size int64, 
 		Content:          content,
 		FilePath:         path,
 		FileFormat:       "parquet",
-		Partition:        cloneAnyMap(partition),
+		Partition:        api.CloneNonEmptyMap(partition),
 		RecordCount:      rows,
 		FileSizeInBytes:  size,
 		SpecID:           specID,
@@ -510,8 +510,8 @@ func deleteDataFile(path string, content api.DataFileContent, rows, size int64, 
 	}
 	if metrics != nil {
 		file.ValueCounts = metrics.valueCounts(rows)
-		file.NullValueCounts = cloneInt64Map(metrics.nullCounts)
-		file.NaNValueCounts = cloneInt64Map(metrics.nanCounts)
+		file.NullValueCounts = api.CloneNonEmptyMap(metrics.nullCounts)
+		file.NaNValueCounts = api.CloneNonEmptyMap(metrics.nanCounts)
 		file.LowerBounds = cloneBytesMap(metrics.lowerBounds)
 		file.UpperBounds = cloneBytesMap(metrics.upperBounds)
 	}
@@ -723,28 +723,6 @@ func saturatingDeleteMul(left, right int64) int64 {
 		return math.MaxInt64
 	}
 	return left * right
-}
-
-func cloneAnyMap(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
-}
-
-func cloneInt64Map(in map[int]int64) map[int]int64 {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[int]int64, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }
 
 func cloneBytesMap(in map[int][]byte) map[int][]byte {

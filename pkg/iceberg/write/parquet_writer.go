@@ -232,7 +232,7 @@ func (w *ParquetDataWriter) Close(ctx context.Context) (api.DataFile, error) {
 		Content:           api.DataFileContentData,
 		FilePath:          w.cfg.FilePath,
 		FileFormat:        "parquet",
-		Partition:         clonePartition(w.partition),
+		Partition:         api.CloneNonEmptyMap(w.partition),
 		PartitionFieldIDs: partitionFieldIDs(w.cfg.PartitionSpec),
 		RecordCount:       w.rows,
 		FileSizeInBytes:   w.out.n,
@@ -307,7 +307,7 @@ func (w *ParquetDataWriter) observePartition(ctx context.Context, partition map[
 	if !w.partitionSet {
 		w.partitionSet = true
 		w.partitionKey = key
-		w.partition = clonePartition(partition)
+		w.partition = api.CloneNonEmptyMap(partition)
 		return nil
 	}
 	if key != w.partitionKey {
@@ -866,17 +866,6 @@ func partitionValueString(value any) string {
 	default:
 		return strings.TrimSpace(fmt.Sprint(v))
 	}
-}
-
-func clonePartition(in map[string]any) map[string]any {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
 }
 
 type countingWriter struct {

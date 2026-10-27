@@ -40,7 +40,7 @@ func (c *RESTClient) NewRemoteSigner(req api.CatalogRequest, config map[string]s
 	return restRemoteSigner{
 		client:  c,
 		req:     req,
-		config:  cloneStringMap(config),
+		config:  api.CloneNonEmptyMap(config),
 		nowFunc: time.Now,
 	}
 }
