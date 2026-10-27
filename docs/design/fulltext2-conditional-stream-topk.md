@@ -47,7 +47,10 @@ Planner admission is deliberately narrow:
   MATCH streams, SQL_CALC_FOUND_ROWS, windows or aggregation affecting this
   pagination. The only retained score predicate is exactly score > 0, optionally
   with the lossless float32-to-float64 cast on score and an exact zero constant.
-- A single non-null VARCHAR PK with byte ordering. Unicode/UCA collations,
+- A single non-null VARCHAR PK with byte ordering: persisted charset identities
+  0 through 3 at collation revision 0. This includes the current default
+  CharsetUTF8 identity; its SQL ordering and VARCHAR key equality retain raw
+  bytes despite its general-ci name. Unicode/UCA collations,
   composite or hidden PKs, alternate types, partitioned sources, publication or
   named-snapshot reads are excluded initially.
 - No INCLUDE-column output or INCLUDE predicates. Pattern parameters may be

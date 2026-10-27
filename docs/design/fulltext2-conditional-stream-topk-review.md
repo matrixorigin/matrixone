@@ -59,3 +59,32 @@ collector. Both call the same buildWandIters/globalStats.df/liveTermDF before
 emission. The independent reviewer found no new repetition, lock, wait or
 recursion in that stage. This PR does not claim an end-to-end cancellation time
 bound for that pre-existing preprocessing; broadening it is separate work.
+
+## Revision 2: executable default VARCHAR comparison identity
+
+The d6ad5d2 real-service candidate preserved all 33 semantic controls and 63
+small-query captures, but its index scan still emitted eight candidates for
+LIMIT 3. This is not an activation or performance pass. The planner fixture
+had explicitly used charset identity 0; ordinary live CREATE TABLE defaults to
+CharsetUTF8 (identity 3), which the first whitelist excluded.
+
+Before changing production code, root and the independent reviewer audited
+identity 3 across Top/MergeTop (compare.NewOrder and strCompare), full sort,
+merge/spill, scalar VARCHAR equality, hash join key encoding, runtime IN filters
+and fulltext PK normalization. At revision 0 these paths retain byte order and
+byte identity. CompareStringOrderValues returns bytes.Compare for non-UCA
+identities; CHAR padding behavior does not apply to VARCHAR. The identity's
+general-ci name and case-insensitive string helpers do not describe the
+ORDER BY/PK equality implementations used here.
+
+Design amendment: permit known identities 0..3 only, still requiring VARCHAR,
+not-null PK, collation revision 0 and every original shape/visibility guard.
+CHAR, UCA, unknown identities and future revisions remain excluded. This does
+not change benchmark DDL, tokenization, scoring or SQL comparison behavior.
+Independent decision: PASS. Root decision: PASS before implementation.
+
+Required new evidence: planner binding carrying the actual default identity,
+comparison tests with equal-score mixed-case/trailing-space/non-ASCII keys,
+and fresh actual scan-output admission. Rebuild the candidate and repeat the
+service-level controls before the full-corpus performance comparison. If
+another guard prevents admission, investigate it without bypassing the proof.
