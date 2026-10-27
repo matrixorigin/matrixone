@@ -1551,7 +1551,8 @@ func normalizeTypedArrayElementName(name string) string {
 }
 
 func parseFirstArrayTypeParam(params string) (int, bool) {
-	first := strings.TrimSpace(strings.Split(params, ",")[0])
+	first, _, _ := strings.Cut(params, ",")
+	first = strings.TrimSpace(first)
 	if first == "" {
 		return -1, false
 	}
