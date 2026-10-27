@@ -33,7 +33,6 @@ func initLeastTestCase() []tcTemp {
 		// Test int8
 		{
 			info: "test least int8",
-			typ:  types.T_int8,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_int8.ToType(),
 					[]int8{1, 5, -3, 10, -5},
@@ -52,7 +51,6 @@ func initLeastTestCase() []tcTemp {
 		// Test int64
 		{
 			info: "test least int64",
-			typ:  types.T_int64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{100, -50, 0, 200, -100},
@@ -68,7 +66,6 @@ func initLeastTestCase() []tcTemp {
 		// Test uint64
 		{
 			info: "test least uint64",
-			typ:  types.T_uint64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_uint64.ToType(),
 					[]uint64{100, 50, 200, 10, 5},
@@ -84,7 +81,6 @@ func initLeastTestCase() []tcTemp {
 		// Test float64
 		{
 			info: "test least float64",
-			typ:  types.T_float64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
 					[]float64{1.5, -2.3, 0.0, 10.5, -5.7},
@@ -100,7 +96,6 @@ func initLeastTestCase() []tcTemp {
 		// Test bool
 		{
 			info: "test least bool",
-			typ:  types.T_bool,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_bool.ToType(),
 					[]bool{true, false, true, false},
@@ -116,7 +111,6 @@ func initLeastTestCase() []tcTemp {
 		// Test varchar
 		{
 			info: "test least varchar",
-			typ:  types.T_varchar,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"apple", "banana", "cherry", "date"},
@@ -132,7 +126,6 @@ func initLeastTestCase() []tcTemp {
 		// Test date
 		{
 			info: "test least date",
-			typ:  types.T_date,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_date.ToType(),
 					[]types.Date{types.Date(1000), types.Date(2000), types.Date(1500)},
@@ -148,7 +141,6 @@ func initLeastTestCase() []tcTemp {
 		// Test with nulls
 		{
 			info: "test least with nulls",
-			typ:  types.T_int64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{10, 20, 30},
@@ -164,7 +156,6 @@ func initLeastTestCase() []tcTemp {
 		// Test single argument
 		{
 			info: "test least single argument",
-			typ:  types.T_int64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{42, 100, -50},
@@ -177,7 +168,6 @@ func initLeastTestCase() []tcTemp {
 		// Test three arguments
 		{
 			info: "test least three arguments",
-			typ:  types.T_int64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{10, 20, 30},
@@ -199,27 +189,10 @@ func initLeastTestCase() []tcTemp {
 func TestLeast(t *testing.T) {
 	testCases := initLeastTestCase()
 	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
 
 	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_int8:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, leastFn)
-		case types.T_int64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, leastFn)
-		case types.T_uint64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, leastFn)
-		case types.T_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, leastFn)
-		case types.T_bool:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, leastFn)
-		case types.T_varchar:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, leastFn)
-		case types.T_date:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, leastFn)
-		default:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, leastFn)
-		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, leastFn)
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info '%s'", tc.info, info))
 	}
@@ -279,7 +252,6 @@ func initGreatestTestCase() []tcTemp {
 		// Test int8
 		{
 			info: "test greatest int8",
-			typ:  types.T_int8,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_int8.ToType(),
 					[]int8{1, 5, -3, 10, -5},
@@ -298,7 +270,6 @@ func initGreatestTestCase() []tcTemp {
 		// Test int64
 		{
 			info: "test greatest int64",
-			typ:  types.T_int64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{100, -50, 0, 200, -100},
@@ -314,7 +285,6 @@ func initGreatestTestCase() []tcTemp {
 		// Test uint64
 		{
 			info: "test greatest uint64",
-			typ:  types.T_uint64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_uint64.ToType(),
 					[]uint64{100, 50, 200, 10, 5},
@@ -330,7 +300,6 @@ func initGreatestTestCase() []tcTemp {
 		// Test float64
 		{
 			info: "test greatest float64",
-			typ:  types.T_float64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_float64.ToType(),
 					[]float64{1.5, -2.3, 0.0, 10.5, -5.7},
@@ -346,7 +315,6 @@ func initGreatestTestCase() []tcTemp {
 		// Test bool
 		{
 			info: "test greatest bool",
-			typ:  types.T_bool,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_bool.ToType(),
 					[]bool{true, false, true, false},
@@ -362,7 +330,6 @@ func initGreatestTestCase() []tcTemp {
 		// Test varchar
 		{
 			info: "test greatest varchar",
-			typ:  types.T_varchar,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
 					[]string{"apple", "banana", "cherry", "date"},
@@ -378,7 +345,6 @@ func initGreatestTestCase() []tcTemp {
 		// Test date
 		{
 			info: "test greatest date",
-			typ:  types.T_date,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_date.ToType(),
 					[]types.Date{types.Date(1000), types.Date(2000), types.Date(1500)},
@@ -394,7 +360,6 @@ func initGreatestTestCase() []tcTemp {
 		// Test with nulls
 		{
 			info: "test greatest with nulls",
-			typ:  types.T_int64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{10, 20, 30},
@@ -410,7 +375,6 @@ func initGreatestTestCase() []tcTemp {
 		// Test single argument
 		{
 			info: "test greatest single argument",
-			typ:  types.T_int64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{42, 100, -50},
@@ -423,7 +387,6 @@ func initGreatestTestCase() []tcTemp {
 		// Test three arguments
 		{
 			info: "test greatest three arguments",
-			typ:  types.T_int64,
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_int64.ToType(),
 					[]int64{10, 20, 30},
@@ -445,27 +408,10 @@ func initGreatestTestCase() []tcTemp {
 func TestGreatest(t *testing.T) {
 	testCases := initGreatestTestCase()
 	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
 
 	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
-		case types.T_int8:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, greatestFn)
-		case types.T_int64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, greatestFn)
-		case types.T_uint64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, greatestFn)
-		case types.T_float64:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, greatestFn)
-		case types.T_bool:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, greatestFn)
-		case types.T_varchar:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, greatestFn)
-		case types.T_date:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, greatestFn)
-		default:
-			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, greatestFn)
-		}
+		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, greatestFn)
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
