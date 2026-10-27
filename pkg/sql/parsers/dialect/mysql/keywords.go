@@ -318,6 +318,7 @@ func init() {
 		"level":                      LEVEL,
 		"like":                       LIKE,
 		"ilike":                      ILIKE,
+		"sounds":                     SOUNDS,
 		"list":                       LIST,
 		"listagg":                    GROUP_CONCAT,
 		"lists":                      LISTS,

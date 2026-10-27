@@ -108,3 +108,37 @@ DEALLOCATE PREPARE soundex_prepared_28912;
 
 # Explicit binary and direct binary inputs keep byte-oriented Soundex.
 SELECT COALESCE(NULLIF(HEX(SOUNDEX(CAST(UNHEX('C3A9') AS VARBINARY(2)))), ''), '<empty>') AS direct_binary_hex;
+
+# SOUNDS LIKE uses SOUNDEX equality, not LIKE pattern matching.
+SELECT 'Hello' SOUNDS LIKE 'Hallo' AS same_sound, 'Hello' SOUNDS LIKE 'World' AS different_sound, 'Hello' SOUNDS LIKE 'H%' AS not_a_pattern;
+SELECT NULL SOUNDS LIKE 'Hello' AS null_left, 'Hello' SOUNDS LIKE NULL AS null_right, NULL SOUNDS LIKE NULL AS null_both;
+SELECT '' SOUNDS LIKE '123!' AS empty_codes, 'pfister' SOUNDS LIKE 'Pfister' AS mixed_case, 123 SOUNDS LIKE 456 AS numeric_codes;
+SELECT NOT 'Hello' SOUNDS LIKE 'Hallo' AS negated, 'Hello' SOUNDS LIKE 'Hallo' = 1 AS comparison, 'Hello' SOUNDS LIKE 'Hallo' AND FALSE AS conjunction;
+SELECT CAST(UNHEX('C3A9') AS VARBINARY(2)) SOUNDS LIKE CAST('' AS VARBINARY(2)) AS binary_codes;
+
+# Keyword lookahead retains comments and pre-existing implicit aliases.
+SELECT 'Hello' SOUNDS /* comment */ LIKE 'Hallo' AS comment_match, 'Hello' SOUNDS /*! LIKE */ 'Hallo' AS executable_comment_match;
+SELECT 1 sounds;
+
+# Column evaluation, non-reserved identifiers, filtering, and persisted SQL.
+DROP VIEW IF EXISTS sounds_like_view;
+DROP TABLE IF EXISTS sounds_like_input;
+CREATE TABLE sounds_like_input(id INT PRIMARY KEY, sounds VARCHAR(20), other VARCHAR(20));
+INSERT INTO sounds_like_input VALUES (1, 'Hello', 'Hallo'), (2, 'Hello', 'World'), (3, '', '123!'), (4, NULL, 'Hallo');
+SELECT id, sounds SOUNDS LIKE other AS matches, SOUNDEX(sounds) = SOUNDEX(other) AS explicit_comparison FROM sounds_like_input ORDER BY id;
+SELECT id FROM sounds_like_input WHERE sounds SOUNDS LIKE other ORDER BY id;
+CREATE VIEW sounds_like_view AS SELECT id, sounds SOUNDS LIKE other AS matches FROM sounds_like_input;
+SELECT id, matches FROM sounds_like_view ORDER BY id;
+DROP VIEW sounds_like_view;
+DROP TABLE sounds_like_input;
+
+# Each prepared operand retains one parameter, including NULL on reuse.
+PREPARE sounds_like_stmt FROM 'SELECT ? SOUNDS LIKE ? AS matches';
+SET @sounds_like_left='Hello', @sounds_like_right='Hallo';
+EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right;
+SET @sounds_like_right='World';
+EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right;
+SET @sounds_like_left=NULL;
+EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right;
+DEALLOCATE PREPARE sounds_like_stmt;
+SET @sounds_like_left=NULL, @sounds_like_right=NULL;

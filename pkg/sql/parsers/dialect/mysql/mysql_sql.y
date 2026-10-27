@@ -518,7 +518,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %right <str> NOT '!'
 %left <str> BETWEEN CASE WHEN THEN ELSE END ELSEIF
 %nonassoc LOWER_THAN_EQ
-%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT ILIKE
+%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT ILIKE SOUNDS
 %left <str> '|'
 %left <str> '&'
 %left <str> SHIFT_LEFT SHIFT_RIGHT ARROW LONG_ARROW
@@ -15163,6 +15163,21 @@ predicate:
     {
         $$ = tree.NewComparisonExpr(tree.MEMBER_OF, $1, $5)
     }
+|   bit_expr SOUNDS LIKE bit_expr %prec SOUNDS
+    {
+        name := tree.NewUnresolvedColName("soundex")
+        left := &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr("soundex", 1),
+            Exprs: tree.Exprs{$1},
+        }
+        right := &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("soundex")),
+            FuncName: tree.NewCStr("soundex", 1),
+            Exprs: tree.Exprs{$4},
+        }
+        $$ = tree.NewComparisonExpr(tree.EQUAL, left, right)
+    }
 |   bit_expr LIKE simple_expr like_escape_opt
     {
         $$ = tree.NewComparisonExprWithEscape(tree.LIKE, $1, $3, $4)
@@ -16860,6 +16875,7 @@ non_reserved_keyword:
 |   SIGNED
 |   SMALLINT
 |   SNAPSHOT
+|   SOUNDS
 |   PITR
 |   RECOVERY_WINDOW
 |   SPATIAL

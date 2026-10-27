@@ -453,6 +453,20 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	if reservedKeywordsAfterAS[typ] && l.lastToken == AS {
 		typ = ID
 	}
+	// Keep SOUNDS usable as an implicit alias unless the next token is LIKE.
+	// A separate scanner preserves the real cursor/buffer while honoring SQL
+	// modes, executable comments, and the current parse work/cancellation budget.
+	if typ == SOUNDS {
+		lookahead := Scanner{}
+		lookahead.setSql(l.scanner.buf[l.scanner.Pos:])
+		lookahead.setSQLMode(l.sqlMode)
+		lookahead.CommentFlag = l.scanner.CommentFlag
+		lookahead.parseControl = l.scanner.parseControl
+		next, _ := lookahead.Scan()
+		if next != LIKE {
+			typ = ID
+		}
+	}
 	// CONFIG is a MatrixOne contextual keyword used by SHOW CONFIG and ALTER
 	// ACCOUNT CONFIG. MySQL otherwise treats it as a non-reserved identifier.
 	if typ == CONFIG && l.lastToken != SHOW &&

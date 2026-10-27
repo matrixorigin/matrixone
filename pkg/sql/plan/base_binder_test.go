@@ -1492,6 +1492,29 @@ func TestBindFuncExprImplByPlanExpr_JsonValid(t *testing.T) {
 	})
 }
 
+func TestBindSoundsLikeOperator(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL, "select 'Hello' sounds like 'Hallo'", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	selectClause := stmt.(*tree.Select).Select.(*tree.SelectClause)
+	binder := NewDefaultBinder(context.Background(), nil, nil, plan.Type{}, nil)
+	bound, err := binder.BindExpr(selectClause.Exprs[0].Expr, 0, false)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_bool), bound.Typ.Id)
+	comparison := bound.GetF()
+	require.NotNil(t, comparison)
+	require.Equal(t, "=", comparison.Func.ObjName)
+	require.Len(t, comparison.Args, 2)
+	for _, operand := range comparison.Args {
+		call := operand.GetF()
+		require.NotNil(t, call)
+		require.Equal(t, "soundex", call.Func.ObjName)
+		require.Len(t, call.Args, 1)
+	}
+}
+
 func TestBindMemberOfOperator(t *testing.T) {
 	stmt, err := parsers.ParseOne(
 		context.Background(), dialect.MYSQL, "select 1 member of ('[1]')", 1)
