@@ -4161,7 +4161,7 @@ func TestDecimalToFloatRangeCheckUsesFullPrecision(t *testing.T) {
 	defer f32Res.Free()
 	require.NoError(t, f32Res.PreExtendAndReset(1))
 	f32Res.GetResultVector().SetType(floatTyp)
-	err = decimal128ToFloat[float32](
+	err = decimalToFloat(
 		ctx,
 		vector.GenerateFunctionFixedTypeParameter[types.Decimal128](d128Vec),
 		f32Res, 1, 32)

@@ -2555,10 +2555,10 @@ func decimal64ToOthers(proc *process.Process,
 		return decimal64ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return decimal64ToFloat(ctx, source, rs, length, 32)
+		return decimalToFloat(ctx, source, rs, length, 32)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return decimal64ToFloat(ctx, source, rs, length, 64)
+		return decimalToFloat(ctx, source, rs, length, 64)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return decimalToSigned(ctx, source, rs, 8, length, selectList)
@@ -2691,10 +2691,10 @@ func decimal128ToOthers(proc *process.Process,
 		return decimal128ToDecimal128(source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return decimal128ToFloat(ctx, source, rs, length, 32)
+		return decimalToFloat(ctx, source, rs, length, 32)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return decimal128ToFloat(ctx, source, rs, length, 64)
+		return decimalToFloat(ctx, source, rs, length, 64)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return decimal128ToTime(proc, source, rs, length, selectList, mode)
@@ -6397,50 +6397,9 @@ func decimalToTimestamp[T interface {
 	return nil
 }
 
-func decimal64ToFloat[T constraints.Float](
+func decimalToFloat[D decimalIntegerSource[D], T constraints.Float](
 	ctx context.Context,
-	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[T], length int, bitSize int) error {
-	// IF float32, then bitSize should be 32. IF float64, then 64
-	var i uint64
-	l := uint64(length)
-	fromType := from.GetType()
-	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
-		if null {
-			if err := to.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			xStr := v.Format(fromType.Scale)
-			result, err := strconv.ParseFloat(xStr, bitSize)
-			if err != nil {
-				return moerr.NewOutOfRangef(ctx, "float32", "value '%v'", xStr)
-			}
-			if bitSize == 32 {
-				result, _ = strconv.ParseFloat(xStr, 64)
-			}
-			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
-				if err = to.Append(T(result), false); err != nil {
-					return err
-				}
-			} else {
-				v2, err := floatNumToFixFloat(ctx, result, to, xStr)
-				if err != nil {
-					return err
-				}
-				if err = to.Append(T(v2), false); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func decimal128ToFloat[T constraints.Float](
-	ctx context.Context,
-	from vector.FunctionParameterWrapper[types.Decimal128],
+	from vector.FunctionParameterWrapper[D],
 	to *vector.FunctionResult[T], length int, bitSize int) error {
 	// IF float32, then bitSize should be 32. IF float64, then 64
 	var i uint64
