@@ -2552,7 +2552,7 @@ func decimal64ToOthers(proc *process.Process,
 		return decimalToBool(source, rs, length)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return decimal64ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
+		return decimalToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		return decimalToFloat(ctx, source, rs, length, 32)
@@ -2648,7 +2648,7 @@ func decimal128ToOthers(proc *process.Process,
 		return decimalToBool(source, rs, length)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
-		return decimal128ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
+		return decimalToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
 		return decimalToSigned(ctx, source, rs, 8, length, selectList)
@@ -7349,34 +7349,9 @@ func decimal256ToStr(
 	return nil
 }
 
-func decimal64ToBitWithIgnore(
+func decimalToBitWithIgnore[D decimalIntegerSource[D]](
 	ctx context.Context, proc *process.Process,
-	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
-	for i := 0; i < length; i++ {
-		v, null := from.GetValue(uint64(i))
-		if null {
-			if err := to.Append(uint64(0), true); err != nil {
-				return err
-			}
-		} else {
-			xStr := v.Format(from.GetType().Scale)
-			xStr = strings.Split(xStr, ".")[0]
-			result, err := decimalStringToBit(ctx, proc, xStr, bitSize)
-			if err != nil {
-				return err
-			}
-			if err = to.Append(result, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func decimal128ToBitWithIgnore(
-	ctx context.Context, proc *process.Process,
-	from vector.FunctionParameterWrapper[types.Decimal128],
+	from vector.FunctionParameterWrapper[D],
 	to *vector.FunctionResult[uint64], bitSize int, length int, selectList *FunctionSelectList) error {
 	for i := 0; i < length; i++ {
 		v, null := from.GetValue(uint64(i))
