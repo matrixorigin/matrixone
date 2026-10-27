@@ -29,20 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
-// var newObjectCnt atomic.Int64
-// var getObjectCnt atomic.Int64
-// var putObjectCnt atomic.Int64
-// func GetStatsString() string {
-// 	return fmt.Sprintf(
-// 		"NewObj: %d, GetObj: %d, PutObj: %d, NewBlk: %d, GetBlk: %d, PutBlk: %d",
-// 		newObjectCnt.Load(),
-// 		getObjectCnt.Load(),
-// 		putObjectCnt.Load(),
-// 		newBlockCnt.Load(),
-// 		getBlockCnt.Load(),
-// 		putBlockCnt.Load())
-// }
-
 var (
 	_objPool = sync.Pool{
 		New: func() any {

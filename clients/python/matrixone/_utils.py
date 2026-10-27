@@ -3,6 +3,7 @@
 from typing import Optional, Union, Type
 
 try:
+    from sqlalchemy import Table
     from sqlalchemy.orm import DeclarativeMeta as _unused  # noqa: F401
 
     SQLALCHEMY_AVAILABLE = True
@@ -16,10 +17,14 @@ def get_table_name(table: Union[str, Type]) -> str:
     Supports:
     - "table_name"
     - "db.table_name"
-    - ORM model with optional __table_args__['schema'] for db.table
+    - ORM model's resolved table name and schema for db.table
     """
     if isinstance(table, str):
         return table
+    if SQLALCHEMY_AVAILABLE:
+        mapped_table = getattr(table, '__table__', None)
+        if isinstance(mapped_table, Table):
+            return mapped_table.fullname
     if SQLALCHEMY_AVAILABLE and hasattr(table, '__tablename__'):
         name = table.__tablename__
         if hasattr(table, '__table_args__'):

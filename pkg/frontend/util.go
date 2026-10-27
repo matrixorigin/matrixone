@@ -1491,7 +1491,13 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binE
 		return true
 	}
 	finish := func() string { return commonutil.Abbreviate(bb.String(), limit) }
-	if !appendPart(envStmt) || !appendPart(" // ") || !appendPart(strings.TrimSpace(prepared.Sql)) || !appendPart(" ; ") {
+	if !appendPart(envStmt) || !appendPart(" // ") {
+		return finish()
+	}
+	// Only scan the saved SQL when its diagnostic can be retained. Redact
+	// before clipping so a later privacy marker cannot expose an earlier prefix.
+	preparedSQL := redactStatementTextForLogging(prepared.PrepareStmt, strings.TrimSpace(prepared.Sql))
+	if !appendPart(preparedSQL) || !appendPart(" ; ") {
 		return finish()
 	}
 	if len(variables) != 0 {
@@ -2981,20 +2987,6 @@ func tableNameIsLegal(name string) bool {
 	}
 	return isLegal(name, createTableSqls)
 }
-
-//func tableNameIsRegexpr(s string) bool {
-//	if len(s) < 2 {
-//		return false
-//	}
-//	if strings.HasPrefix(s, "/") && strings.HasSuffix(s, "/") {
-//		_, err := regexp.Compile(s)
-//		if err != nil {
-//			return false
-//		}
-//		return true
-//	}
-//	return false
-//}
 
 // replaceStr replaces s[start:end] by s2
 func replaceStr(s string, start, end int, s2 string) string {

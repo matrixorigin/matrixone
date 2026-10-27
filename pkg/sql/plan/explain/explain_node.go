@@ -660,17 +660,6 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(ctx context.Context, options *Explai
 		lines = append(lines, buf.String())
 	}
 
-	//if ndesc.Node.UpdateList != nil {
-	//	updateListDesc := &UpdateListDescribeImpl{
-	//		UpdateList: ndesc.Node.UpdateList,
-	//	}
-	//	updatedesc, err := updateListDesc.GetDescription(options)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	lines = append(lines, "Set columns with("+updatedesc+")")
-	//}
-
 	if len(ndesc.Node.SendMsgList) > 0 {
 		msgInfo, err := ndesc.GetSendMessageInfo(ctx, options)
 		if err != nil {

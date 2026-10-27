@@ -15,6 +15,7 @@
 package hashjoin
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -97,7 +98,9 @@ func TestHashJoinUniqueProjectionResumesAndReuses(t *testing.T) {
 	tc := newTestCase(t, []types.Type{typ}, nil,
 		[][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
 	tc.arg.JoinType, tc.arg.NonEqCond = plan.Node_INNER, nil
-	tc.arg.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}}
+	tc.arg.LeftTypes = append(tc.arg.LeftTypes, types.T_decimal128.ToType())
+	tc.arg.RightTypes = append(tc.arg.RightTypes, types.T_decimal128.ToType())
+	tc.arg.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}, {Rel: 0, Pos: 1}, {Rel: 1, Pos: 1}}
 	inputs := make([]*batch.Batch, 0, 6)
 	t.Cleanup(func() {
 		tc.arg.Reset(tc.proc, false, nil)
@@ -126,6 +129,14 @@ func TestHashJoinUniqueProjectionResumesAndReuses(t *testing.T) {
 		probe, build := makeInt32Batch(tc.proc, values), makeInt32Batch(tc.proc, []int32{1, 2})
 		probe.Vecs[0].GetNulls().Add(0)
 		inputs = append(inputs, probe, build)
+		for side, input := range []*batch.Batch{probe, build} {
+			payload := vector.NewVec(types.T_decimal128.ToType())
+			input.Vecs = append(input.Vecs, payload)
+			for row := range input.RowCount() {
+				require.NoError(t, vector.AppendFixed(payload,
+					types.Decimal128{B0_63: uint64(row), B64_127: uint64(side + 1)}, false, tc.proc.Mp()))
+			}
+		}
 		resetChildrenWithBatch(tc.arg, probe)
 		resetHashBuildChildrenWithBatch(tc.barg, build)
 		require.NoError(t, tc.arg.Prepare(tc.proc))
@@ -140,9 +151,13 @@ func TestHashJoinUniqueProjectionResumesAndReuses(t *testing.T) {
 			require.NotNil(t, res.Batch)
 			require.Equal(t, count, res.Batch.RowCount())
 			for row := range count {
-				for _, vec := range res.Batch.Vecs {
+				for _, vec := range res.Batch.Vecs[:2] {
 					require.Equal(t, values[seen+row+2], vector.GetFixedAtNoTypeCheck[int32](vec, row))
 				}
+				require.Equal(t, types.Decimal128{B0_63: uint64(seen + row + 2), B64_127: 1},
+					vector.GetFixedAtNoTypeCheck[types.Decimal128](res.Batch.Vecs[2], row))
+				require.Equal(t, types.Decimal128{B0_63: uint64(values[seen+row+2] - 1), B64_127: 2},
+					vector.GetFixedAtNoTypeCheck[types.Decimal128](res.Batch.Vecs[3], row))
 			}
 			seen += count
 		}
@@ -194,6 +209,23 @@ func TestHashJoinUniqueProjectionPropagatesAllocationFailure(t *testing.T) {
 }
 
 func BenchmarkHashJoinUniqueProjection(b *testing.B) {
+	for _, tc := range []struct {
+		name     string
+		typ      types.Type
+		nullable bool
+	}{
+		{"int32", types.T_int32.ToType(), false},
+		{"decimal128", types.T_decimal128.ToType(), false},
+		{"varchar", types.T_varchar.ToType(), false},
+		{"nullable-varchar", types.T_varchar.ToType(), true},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			benchmarkHashJoinUniqueProjection(b, tc.typ, tc.nullable)
+		})
+	}
+}
+
+func benchmarkHashJoinUniqueProjection(b *testing.B, typ types.Type, nullable bool) {
 	proc := testutil.NewProcessWithOwnedMPool(b, "", mpool.MustNewZero())
 	arg := &HashJoin{}
 	ctr := &arg.ctr
@@ -212,13 +244,21 @@ func BenchmarkHashJoinUniqueProjection(b *testing.B) {
 	})
 	for col := range 8 {
 		arg.ResultCols = append(arg.ResultCols, colexec.ResultPos{Rel: int32(col / 4), Pos: int32(col % 4)})
-		ctr.resBat.Vecs[col] = vector.NewVec(types.T_varchar.ToType())
+		ctr.resBat.Vecs[col] = vector.NewVec(typ)
 	}
 	for _, bat := range append([]*batch.Batch{ctr.leftBat}, ctr.rightBats...) {
 		for col := range 4 {
-			bat.Vecs[col] = vector.NewVec(types.T_varchar.ToType())
-			for range hashmap.UnitLimit {
-				require.NoError(b, vector.AppendBytes(bat.Vecs[col], []byte("a non-inline projection payload value"), false, proc.Mp()))
+			bat.Vecs[col] = vector.NewVec(typ)
+			for row := range hashmap.UnitLimit {
+				isNull := nullable && row%4 == 0
+				switch typ.Oid {
+				case types.T_int32:
+					require.NoError(b, vector.AppendFixed(bat.Vecs[col], int32(row), isNull, proc.Mp()))
+				case types.T_decimal128:
+					require.NoError(b, vector.AppendFixed(bat.Vecs[col], types.Decimal128{B0_63: uint64(row)}, isNull, proc.Mp()))
+				default:
+					require.NoError(b, vector.AppendBytes(bat.Vecs[col], []byte("a non-inline projection payload value"), isNull, proc.Mp()))
+				}
 			}
 		}
 		bat.SetRowCount(hashmap.UnitLimit)
@@ -231,25 +271,27 @@ func BenchmarkHashJoinUniqueProjection(b *testing.B) {
 				ctr.vs[row] += uint64(row % 2 * colexec.DefaultBatchSize)
 			}
 		}
-		for _, method := range []string{"scalar", "batch"} {
-			b.Run(shape+"/"+method, func(b *testing.B) {
-				b.ReportAllocs()
-				for range b.N {
-					ctr.resBat.CleanOnlyData()
-					if method == "batch" {
-						if _, err := ctr.appendUniqueMatches(arg, proc, hashmap.UnitLimit); err != nil {
-							b.Fatal(err)
-						}
-					} else {
-						for row, match := range ctr.vs {
-							idx := int64(match - 1)
-							if err := ctr.appendOneMatch(arg, proc, int64(row), idx/colexec.DefaultBatchSize, idx%colexec.DefaultBatchSize); err != nil {
+		for _, count := range []int{0, 1, hashmap.UnitLimit} {
+			for _, method := range []string{"scalar", "batch"} {
+				b.Run(fmt.Sprintf("%s/rows=%d/%s", shape, count, method), func(b *testing.B) {
+					b.ReportAllocs()
+					for range b.N {
+						ctr.resBat.CleanOnlyData()
+						if method == "batch" {
+							if _, err := ctr.appendUniqueMatches(arg, proc, count); err != nil {
 								b.Fatal(err)
+							}
+						} else {
+							for row, match := range ctr.vs[:count] {
+								idx := int64(match - 1)
+								if err := ctr.appendOneMatch(arg, proc, int64(row), idx/colexec.DefaultBatchSize, idx%colexec.DefaultBatchSize); err != nil {
+									b.Fatal(err)
+								}
 							}
 						}
 					}
-				}
-			})
+				})
+			}
 		}
 	}
 }

@@ -38,8 +38,15 @@ func TestMySQLDateFormatWidth(t *testing.T) {
 		{name: "date_format", format: "%W %M %Y", width: 134},
 		{name: "date_format", format: "%a %b %D %j", width: 74},
 		{name: "date_format", format: "%H|%r|%T|%f", width: 35},
-		{name: "date_format", format: "%U%u%V%v%y%m%d%h%I%i%l%p%S%s%c%e", width: 53},
-		{name: "date_format", format: "%U|%u|%V", width: 29},
+		{name: "date_format", format: "%U%u%V%v%y%m%d%h%I%i%l%p%S%s%c%e", width: 60},
+		{name: "date_format", format: "%U|%u|%V|%v", width: 39},
+		{name: "date_format", format: "%v", width: 9},
+		{name: "time_format", format: "%v", width: 3},
+		{name: "date_format", format: "%X", width: 10},
+		{name: "date_format", format: "%x", width: 10},
+		{name: "date_format", format: "%X|%x|%Y|%D", width: 31},
+		{name: "date_format", format: strings.Repeat("%X", 8192), width: types.MaxVarcharLen},
+		{name: "time_format", format: "%X|%x", width: 10},
 		{name: "date_format", format: "%%-%q-%", width: 5},
 		{name: "date_format", format: strings.Repeat("%W", 2048), width: types.MaxVarcharLen},
 		{name: "time_format", format: "%H", width: 11},
@@ -68,6 +75,26 @@ func TestBindDateFormatMetadata(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), literal.Typ.Id)
 	require.Equal(t, int32(134), literal.Typ.Width)
 	require.False(t, literal.Typ.NotNullable)
+
+	// Both the raw string and typed temporal overloads use the shared bound.
+	for _, oid := range []types.T{types.T_varchar, types.T_datetime} {
+		operandType := oid.ToType()
+		operand := &planpb.Expr{
+			Typ:  makePlan2Type(&operandType),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+		}
+		for _, format := range []string{"%X", "%x", "%v"} {
+			expr, err := BindFuncExprImplByPlanExpr(context.Background(), "date_format", []*planpb.Expr{
+				operand, makePlan2StringConstExprWithType(format),
+			})
+			require.NoError(t, err)
+			wantWidth := int32(10)
+			if format == "%v" {
+				wantWidth = 9
+			}
+			require.Equal(t, wantWidth, expr.Typ.Width, "%v %s", oid, format)
+		}
+	}
 
 	dynamicPatternType := types.New(types.T_varchar, 12, 0)
 	dynamic, err := BindFuncExprImplByPlanExpr(context.Background(), "date_format", []*planpb.Expr{

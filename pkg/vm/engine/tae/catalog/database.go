@@ -95,10 +95,9 @@ func (entry *TableEntry) Less(b *TableEntry) int {
 
 func NewDBEntryWithID(catalog *Catalog, name string, createSql, datTyp string, id uint64, txn txnif.AsyncTxn) *DBEntry {
 	e := &DBEntry{
-		ID: id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
-		catalog: catalog,
+		ID:            id,
+		BaseEntryImpl: NewBaseEntry[*EmptyMVCCNode](),
+		catalog:       catalog,
 		DBNode: &DBNode{
 			name:      name,
 			createSql: createSql,
@@ -133,7 +132,7 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 
 func NewReplayDBEntry() *DBEntry {
 	entry := &DBEntry{
-		BaseEntryImpl: NewBaseEntry(func() *EmptyMVCCNode { return &EmptyMVCCNode{} }),
+		BaseEntryImpl: NewBaseEntry[*EmptyMVCCNode](),
 		entries:       make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes:     make(map[string]*nodeList[*TableEntry]),
 		link:          common.NewGenericSortedDList((*TableEntry).Less),
@@ -600,6 +599,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 		}
 		e.link.Delete(n)
 		delete(e.entries, table.ID)
+		table.retireAObjectMetrics()
 	}
 	return
 }
@@ -761,7 +761,7 @@ func MockDBEntryWithAccInfo(accId uint64, dbId uint64) *DBEntry {
 
 	entry.DBNode = &DBNode{}
 	entry.DBNode.acInfo.TenantID = uint32(accId)
-	entry.BaseEntryImpl = NewBaseEntry(func() *EmptyMVCCNode { return &EmptyMVCCNode{} })
+	entry.BaseEntryImpl = NewBaseEntry[*EmptyMVCCNode]()
 
 	return entry
 }

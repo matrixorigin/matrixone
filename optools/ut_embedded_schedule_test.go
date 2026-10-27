@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 )
 
 const embeddedSetup = `source ./run_ut.sh UT
@@ -329,6 +330,7 @@ func TestEmbeddedPrebuiltAdmission(t *testing.T) {
 		{"serial", "1", "success"},
 		{"pool", "2", "success"},
 		{"heavy-failure", "2", "heavy-failure"},
+		{"slow-prebuild", "1", "slow-prebuild"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			script := embeddedSetup + `
@@ -347,25 +349,27 @@ artifact_dir=$CLUSTER_PREBUILD_DIR
 (
  trap release_children EXIT
  trap 'exit 143' TERM INT
+ # The harness deadline bounds the fixture, including prebuild and metadata
+ # discovery. FIFO reads assert event ordering, not preparation latency.
  for heavy in embed bootstrap; do
-  read -r -t 5 leaf pid <&8 || exit 100
+  read -r leaf pid <&8 || exit 100
   [[ "$leaf" == "$heavy" ]] || exit 101
   kill -0 "$pid" || exit 102
   printf 'release\n' >&10
  done
  if [[ "$UT_EMBEDDED_PACKAGE_PARALLEL" == 2 ]]; then
-  read -r -t 5 first first_pid <&8 || exit 103
-  read -r -t 5 second second_pid <&8 || exit 104
+  read -r first first_pid <&8 || exit 103
+  read -r second second_pid <&8 || exit 104
   [[ "$first $second" == 'arrowload dml' || "$first $second" == 'dml arrowload' ]] || exit 105
   [[ "$first_pid" != "$second_pid" ]] || exit 106
   kill -0 "$first_pid" && kill -0 "$second_pid" || exit 107
   printf 'release\nrelease\n' >&11
-  read -r -t 5 leaf pid <&8 || exit 108
+  read -r leaf pid <&8 || exit 108
   [[ "$leaf" == sqlintegration ]] || exit 109
   printf 'release\n' >&10
  else
   for next in arrowload sqlintegration dml; do
-   read -r -t 5 leaf pid <&8 || exit 110
+   read -r leaf pid <&8 || exit 110
    [[ "$leaf" == "$next" ]] || exit 111
    if [[ "$leaf" == sqlintegration ]]; then printf 'release\n' >&10; else printf 'release\n' >&11; fi
   done
@@ -409,6 +413,8 @@ fi
 if [[ "$1" == test ]]; then
  package=${!#}; leaf=${package##*/}
  [[ " $* " == *' -c '* ]] || exit 120
+ # Exceed the old per-event timeout before execution can publish any event.
+ if [[ "$MODE" == slow-prebuild && "$leaf" == bootstrap ]]; then sleep 6; fi
  while [[ "$1" != -o ]]; do shift; done
  output=$2
  printf '%s\n' "$output" > "$CASE_DIR/binary-$leaf"
@@ -433,7 +439,7 @@ if [[ "$1" == tool && "$2" == test2json ]]; then
 fi
 exit 125
 `
-			out, err := scheduleHarnessWithMock(t, script, mock,
+			out, err := scheduleHarnessWithMockTimeout(t, 30*time.Second, script, mock, nil,
 				"MODE="+tc.mode, "UT_EMBEDDED_PACKAGE_PARALLEL="+tc.parallel)
 			if err != nil {
 				t.Fatalf("prebuilt entry admission %s: %v\n%s", tc.name, err, out)

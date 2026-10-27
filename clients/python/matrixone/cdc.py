@@ -58,6 +58,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from dateutil.parser import isoparse
+
 
 class CDCSinkType(str, Enum):
     """Supported CDC sink types."""
@@ -139,14 +141,8 @@ def _parse_watermark_timestamp(value: Optional[str]) -> Optional[datetime.dateti
     if not value:
         return None
     value = value.strip()
+
     dt: Optional[datetime.datetime] = None
-    numeric_part = value.split("-", 1)[0]
-    if numeric_part.isdigit():
-        try:
-            nanos = int(numeric_part)
-            dt = datetime.datetime.fromtimestamp(nanos / 1_000_000_000, tz=datetime.timezone.utc)
-        except (ValueError, OverflowError):
-            dt = None
     for candidate in (value, value.replace(" ", "T")):
         try:
             dt = datetime.datetime.fromisoformat(candidate)
@@ -154,6 +150,29 @@ def _parse_watermark_timestamp(value: Optional[str]) -> Optional[datetime.dateti
         except ValueError:
             dt = None
     if dt is None:
+        try:
+            iso_dt = isoparse(value)
+        except (ValueError, OverflowError):
+            pass
+        else:
+            # Older Python versions reject basic ISO forms. Admit only a
+            # complete calendar date, not reduced/ordinal forms that overlap
+            # numeric HLC values, or a normalized next-day 24:00 value.
+            calendar_date = iso_dt.date().isoformat()
+            if value.startswith((calendar_date, calendar_date.replace("-", ""))):
+                dt = iso_dt
+    if dt is None:
+        hlc_match = re.fullmatch(r"(?P<physical>\d+)-\d+", value)
+        raw_nanos = hlc_match.group("physical") if hlc_match else value
+        if raw_nanos.isdigit():
+            try:
+                seconds, remaining_nanos = divmod(int(raw_nanos), 1_000_000_000)
+                return datetime.datetime.fromtimestamp(seconds, tz=datetime.timezone.utc) + datetime.timedelta(
+                    microseconds=remaining_nanos // 1_000
+                )
+            except (OSError, ValueError, OverflowError):
+                return None
+
         formats = (
             "%Y-%m-%d %H:%M:%S",
             "%Y-%m-%d %H:%M:%S.%f",

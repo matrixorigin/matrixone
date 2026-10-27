@@ -25,6 +25,54 @@ import (
 
 var dayInMonth []int = []int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 
+func datetimeStringFmtOracle(dt Datetime) string {
+	if dt == ZeroDatetime {
+		return "0000-00-00 00:00:00"
+	}
+	year, month, day, _ := dt.ToDate().Calendar(true)
+	hour, minute, second := dt.Clock()
+	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", year, month, day, hour, minute, second)
+}
+
+func TestDatetimeStringFormatting(t *testing.T) {
+	for _, tc := range []struct {
+		dt   Datetime
+		want string
+	}{
+		{ZeroDatetime, "0000-00-00 00:00:00"},
+		{DatetimeEpoch, "0001-01-01 00:00:00"},
+		{DatetimeFromClock(99, 12, 31, 1, 2, 3, 0), "0099-12-31 01:02:03"},
+		{DatetimeFromClock(1000, 1, 1, 10, 20, 30, 0), "1000-01-01 10:20:30"},
+		{DatetimeFromClock(1900, 3, 1, 0, 0, 0, 0), "1900-03-01 00:00:00"},
+		{DatetimeFromClock(2000, 2, 29, 23, 59, 59, 999999), "2000-02-29 23:59:59"},
+		{DatetimeFromClock(2026, 1, 1, 12, 34, 56, 123456), "2026-01-01 12:34:56"},
+		{DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999), "9999-12-31 23:59:59"},
+		{DatetimeFromClock(10000, 1, 1, 0, 0, 0, 0), "10000-01-01 00:00:00"},
+	} {
+		t.Run(tc.want, func(t *testing.T) { require.Equal(t, tc.want, tc.dt.String()) })
+	}
+
+	// Preserve the old minimum-width representation for unvalidated raw values,
+	// including negative clocks and years wider than the SQL four-digit range.
+	for _, raw := range []int64{math.MinInt64, -86400000001, -86400000000, -1000001, -1000000, -999999, -2, -1, 0, 1, 999999, 1000000, 86399999999, 86400000000, math.MaxInt64} {
+		dt := Datetime(raw)
+		require.Equal(t, datetimeStringFmtOracle(dt), dt.String(), "raw value %d", raw)
+	}
+
+	// A fixed seed and bound cover both ordinary SQL values and raw int64 values.
+	// This is deterministic differential coverage, not an unbounded fuzz run.
+	state := uint64(0x5eed20261025)
+	maxValue := uint64(DatetimeFromClock(9999, 12, 31, 23, 59, 59, 999999))
+	for i := 0; i < 512; i++ {
+		state = state*6364136223846793005 + 1442695040888963407
+		dt := Datetime(state)
+		if i%2 == 0 {
+			dt = Datetime(state % (maxValue + 1))
+		}
+		require.Equal(t, datetimeStringFmtOracle(dt), dt.String(), "input %d, raw value %d", i, int64(dt))
+	}
+}
+
 // Calendar precedence is intentional for a successfully parsed compact date.
 // Padding a TIME to eight digits must not make an impossible calendar date.
 func TestCalendarCandidateCompactDurationBoundary(t *testing.T) {

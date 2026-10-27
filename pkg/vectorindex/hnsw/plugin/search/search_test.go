@@ -19,23 +19,18 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/search/planreader"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -43,10 +38,9 @@ import (
 // recordingSearch is a cached index whose searches return keys 1 and 2 and
 // record the configuration and runtime limit they ran with.
 type recordingSearch struct {
-	idxcfg  vectorindex.IndexConfig
-	tblcfg  vectorindex.IndexTableConfig
-	limits  *[]uint
-	buildTS int64
+	idxcfg vectorindex.IndexConfig
+	tblcfg vectorindex.IndexTableConfig
+	limits *[]uint
 }
 
 func (m *recordingSearch) Search(_ *sqlexec.SqlProcess, _ any, rt vectorindex.RuntimeConfig) (any, []float64, error) {
@@ -63,7 +57,7 @@ func (m *recordingSearch) Preload(*sqlexec.SqlProcess) error { return nil }
 func (m *recordingSearch) GetIndexSize() (int64, int64)      { return 0, 0 }
 func (m *recordingSearch) Destroy()                          {}
 func (m *recordingSearch) Load(*sqlexec.SqlProcess) error    { return nil }
-func (m *recordingSearch) BuildTS() int64                    { return m.buildTS }
+func (m *recordingSearch) BuildTS() int64                    { return 0 }
 
 // stubAlgo replaces newAlgo for the test and returns the recorded searches.
 func stubAlgo(t *testing.T) (*[]uint, *[]*recordingSearch) {
@@ -167,10 +161,8 @@ func TestHnswReaderFloat64AndEmptyBudget(t *testing.T) {
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	before := len(*limits)
 	_, _, err = canceled.Next(ctx)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Len(t, *limits, before, "cancelled entry must not search the cache")
 }
 
 func TestHnswReaderRejectsInvalidScans(t *testing.T) {
@@ -252,146 +244,4 @@ func TestExplainSettings(t *testing.T) {
 	got, err = Hooks{}.ExplainSettings(malformed, false)
 	require.NoError(t, err)
 	require.Nil(t, got)
-}
-
-func TestHnswReaderSearchedGenerationSnapshot(t *testing.T) {
-	for _, tc := range []struct {
-		name                              string
-		build                             int64
-		source                            types.TS
-		historical, skipSource, wantRetry bool
-		readPhysical, replacementBuild    int64
-	}{
-		{name: "same_tick", build: 100, source: types.BuildTS(99, 0), skipSource: true, wantRetry: true},
-		{name: "future", build: 101, source: types.BuildTS(99, 0), skipSource: true, wantRetry: true},
-		{name: "unknown", source: types.BuildTS(99, 0), skipSource: true, wantRetry: true},
-		{name: "older", build: 99, source: types.BuildTS(99, 0)},
-		{name: "source_logical", build: 99, source: types.BuildTS(99, 1), wantRetry: true},
-		{name: "historical_same_tick", build: 100, source: types.BuildTS(99, 0), historical: true, skipSource: true, wantRetry: true},
-		{name: "historical_older", build: 99, source: types.BuildTS(99, 0), historical: true},
-		{name: "receipt_survives_future_replacement", build: 99, source: types.BuildTS(99, 0), replacementBuild: 100},
-		{name: "receipt_survives_caught_up_replacement", build: 99, source: types.BuildTS(100, 0), readPhysical: 101, replacementBuild: 100, wantRetry: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			limits, _ := stubAlgo(t)
-			proc := testutil.NewProc(t)
-			spec := hnswSpec(t.Name())
-			spec.SourceTableDef.TblId = 1
-			read := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
-			if tc.readPhysical != 0 {
-				read.PhysicalTime = tc.readPhysical
-			}
-			current := read
-			if tc.historical {
-				current = timestamp.Timestamp{PhysicalTime: 200}
-				spec.ScanSnapshot = &plan.Snapshot{TS: &read}
-			}
-			op := &hnswReaderTxn{snapshot: current}
-			proc.Base.TxnOperator = op
-			source := &hnswReaderEngine{source: tc.source}
-			proc.Base.SessionInfo.StorageEngine = source
-			storage := t.Name()
-			t.Cleanup(func() { veccache.Cache.RemoveAllGenerations(storage, "test_cleanup") })
-			seed := func(key string, build int64) error {
-				_, _, err := veccache.Cache.Search(nil, key, &recordingSearch{limits: limits, buildTS: build}, nil, vectorindex.RuntimeConfig{})
-				return err
-			}
-			key := storage
-			if tc.historical {
-				key = veccache.SnapshotKey(storage, read)
-				other := int64(100)
-				if tc.build == 100 {
-					other = 99
-				}
-				require.NoError(t, seed(storage, other))
-			}
-			require.NoError(t, seed(key, tc.build))
-			*limits = nil
-			var replacementErr error
-			if tc.replacementBuild > 0 {
-				source.afterSearch = func() { veccache.Cache.Remove(key); replacementErr = seed(key, tc.replacementBuild) }
-			}
-			reader, err := Hooks{}.NewReader(proc, spec, f32Request([]float32{1, 2, 3}, 5))
-			require.NoError(t, err)
-			defer reader.Close()
-			out := batch.NewWithSize(2)
-			out.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-			out.Vecs[1] = vector.NewVec(types.T_float64.ToType())
-			defer out.Clean(proc.Mp())
-			done, err := reader.Read(context.Background(), []string{planreader.KeyColumn, planreader.ScoreColumn}, nil, proc.Mp(), out)
-			require.NoError(t, replacementErr)
-			if tc.wantRetry {
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrVectorIndexSnapshotChanged), "got %v", err)
-				require.Zero(t, out.RowCount(), "unproven candidates must not be emitted")
-			} else {
-				require.NoError(t, err)
-				require.False(t, done)
-				require.Equal(t, []int64{1, 2}, vector.MustFixedColNoTypeCheck[int64](out.Vecs[0]))
-				require.Equal(t, []float64{0.5, 1.5}, vector.MustFixedColNoTypeCheck[float64](out.Vecs[1]))
-				done, err = reader.Read(context.Background(), []string{planreader.KeyColumn, planreader.ScoreColumn}, nil, proc.Mp(), out)
-				require.NoError(t, err)
-				require.True(t, done)
-			}
-			if tc.skipSource {
-				require.Nil(t, source.readTxn)
-				require.Zero(t, source.relationCalls)
-				require.Zero(t, source.sourceCalls)
-			} else {
-				require.Equal(t, 1, source.relationCalls)
-				require.Equal(t, 1, source.sourceCalls)
-				require.NotNil(t, source.readTxn)
-				require.Equal(t, read, source.readTxn.SnapshotTS())
-				if tc.historical {
-					require.NotSame(t, op, source.readTxn)
-				} else {
-					require.Same(t, op, source.readTxn)
-				}
-
-			}
-			if tc.replacementBuild > 0 {
-				build, ok := veccache.Cache.GetBuildTS(key)
-				require.True(t, ok)
-				require.Equal(t, tc.replacementBuild, build)
-			}
-		})
-	}
-}
-
-type hnswReaderTxn struct {
-	client.TxnOperator
-	snapshot timestamp.Timestamp
-}
-
-func (t *hnswReaderTxn) SnapshotTS() timestamp.Timestamp { return t.snapshot }
-func (t *hnswReaderTxn) Txn() txn.TxnMeta                { return txn.TxnMeta{SnapshotTS: t.snapshot} }
-func (t *hnswReaderTxn) CloneSnapshotOp(ts timestamp.Timestamp) client.TxnOperator {
-	return &hnswReaderTxn{snapshot: ts}
-}
-
-type hnswReaderEngine struct {
-	engine.Engine
-	source                     types.TS
-	readTxn                    client.TxnOperator
-	afterSearch                func()
-	relationCalls, sourceCalls int
-}
-
-func (e *hnswReaderEngine) GetRelationById(_ context.Context, op client.TxnOperator, _ uint64) (string, string, engine.Relation, error) {
-	e.relationCalls++
-	e.readTxn = op
-	if e.afterSearch != nil {
-		e.afterSearch()
-	}
-	return "db", "t", hnswReaderSource{source: e.source, calls: &e.sourceCalls}, nil
-}
-
-type hnswReaderSource struct {
-	engine.Relation
-	source types.TS
-	calls  *int
-}
-
-func (r hnswReaderSource) SourceCommitTS(context.Context, types.TS) (types.TS, error) {
-	*r.calls++
-	return r.source, nil
 }

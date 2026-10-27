@@ -73,7 +73,7 @@ class TestLogicalInMethod:
 
         assert "SELECT" in sql1
         assert "FROM users" in sql1
-        assert "WHERE id IN (1,2,3,4)" in sql1
+        assert "WHERE users.id IN (1,2,3,4)" in sql1
 
         # Test with string list
         query2 = self.client.query(User).filter(logical_in("city", ["北京", "上海", "广州"]))
@@ -92,17 +92,22 @@ class TestLogicalInMethod:
         query = self.client.query(User).filter(logical_in(User.id, 5))
         sql = query.to_sql()
 
-        assert "WHERE id IN (5)" in sql
+        assert "WHERE users.id IN (5)" in sql
 
     def test_logical_in_with_fulltext_filter(self):
         """Test logical_in with FulltextFilter objects"""
         # Basic boolean_match
-        query1 = self.client.query(Article).filter(logical_in(Article.id, boolean_match("title", "content").must("python")))
+        query1 = self.client.query(Article).filter(
+            logical_in(Article.id, boolean_match("title", "content").must("python"))
+        )
         sql1 = query1.to_sql()
 
         assert "SELECT" in sql1
         assert "FROM articles" in sql1
-        assert "WHERE id IN (SELECT id FROM table WHERE MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE))" in sql1
+        assert (
+            "WHERE articles.id IN (SELECT id FROM articles WHERE MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE))"
+            in sql1
+        )
 
         # Complex boolean_match
         query2 = self.client.query(Article).filter(
@@ -113,7 +118,7 @@ class TestLogicalInMethod:
         sql2 = query2.to_sql()
 
         assert (
-            "WHERE id IN (SELECT id FROM table WHERE MATCH(title, content) AGAINST('+python programming -java' IN BOOLEAN MODE))"
+            "WHERE articles.id IN (SELECT id FROM articles WHERE MATCH(title, content) AGAINST('+python programming -java' IN BOOLEAN MODE))"
             in sql2
         )
 
@@ -125,7 +130,7 @@ class TestLogicalInMethod:
         query = self.client.query(Article).filter(logical_in(Article.author, subquery))
         sql = query.to_sql()
 
-        assert "WHERE author IN (SELECT users.id AS id FROM users WHERE age > 25)" in sql
+        assert "WHERE articles.author IN (SELECT users.id FROM users WHERE users.age > 25)" in sql
 
     def test_logical_in_with_sqlalchemy_expressions(self):
         """Test logical_in with SQLAlchemy expressions"""
@@ -133,7 +138,7 @@ class TestLogicalInMethod:
         query = self.client.query(User).filter(logical_in("id", func.count(User.id)))
         sql = query.to_sql()
 
-        assert "WHERE id IN (count(id))" in sql
+        assert "WHERE id IN (count(users.id))" in sql
 
     def test_logical_in_with_string_column(self):
         """Test logical_in with string column names"""
@@ -147,7 +152,7 @@ class TestLogicalInMethod:
         query = self.client.query(User).filter(logical_in(User.department, ["Engineering", "Sales", "Marketing"]))
         sql = query.to_sql()
 
-        assert "WHERE department IN ('Engineering','Sales','Marketing')" in sql
+        assert "WHERE users.department IN ('Engineering','Sales','Marketing')" in sql
 
     def test_logical_in_combined_with_other_conditions(self):
         """Test logical_in combined with other filter conditions"""
@@ -160,8 +165,11 @@ class TestLogicalInMethod:
 
         sql = query.to_sql()
 
-        assert "WHERE author = '张三'" in sql
-        assert "AND id IN (SELECT id FROM table WHERE MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE))" in sql
+        assert "WHERE articles.author = '张三'" in sql
+        assert (
+            "AND articles.id IN (SELECT id FROM articles WHERE MATCH(title, content) AGAINST('+python' IN BOOLEAN MODE))"
+            in sql
+        )
         assert "AND created_at > '2023-01-01'" in sql
 
     def test_logical_in_with_tuple_values(self):
@@ -169,7 +177,7 @@ class TestLogicalInMethod:
         query = self.client.query(User).filter(logical_in(User.id, (1, 2, 3, 4, 5)))
         sql = query.to_sql()
 
-        assert "WHERE id IN (1,2,3,4,5)" in sql
+        assert "WHERE users.id IN (1,2,3,4,5)" in sql
 
     def test_logical_in_edge_cases(self):
         """Test logical_in with edge cases"""
@@ -177,7 +185,7 @@ class TestLogicalInMethod:
         query1 = self.client.query(User).filter(logical_in(User.id, None))
         sql1 = query1.to_sql()
 
-        assert "WHERE id IN (None)" in sql1
+        assert "WHERE users.id IN (NULL)" in sql1
 
         # Test with mixed types in list
         query2 = self.client.query(User).filter(logical_in("id", [1, "2", 3.0]))
@@ -198,10 +206,10 @@ class TestLogicalInMethod:
 
         sql = query.to_sql()
 
-        assert "WHERE city IN ('北京','上海')" in sql
-        assert "AND department IN ('Engineering','Sales')" in sql
-        assert "AND age > 25" in sql
-        assert "ORDER BY name" in sql
+        assert "WHERE users.city IN ('北京','上海')" in sql
+        assert "AND users.department IN ('Engineering','Sales')" in sql
+        assert "AND users.age > 25" in sql
+        assert "ORDER BY users.name" in sql
         assert "LIMIT 10" in sql
 
     def test_logical_in_performance_queries(self):
@@ -223,12 +231,12 @@ class TestLogicalInMethod:
 
         assert "SELECT" in sql
         assert "FROM users" in sql
-        assert "WHERE city IN ('北京','上海','广州','深圳')" in sql
-        assert "AND department IN ('Engineering','Sales','Marketing')" in sql
-        assert "AND age > 25" in sql
-        assert "GROUP BY department" in sql
-        assert "HAVING count(id) > 1" in sql
-        assert "ORDER BY count(id) DESC" in sql
+        assert "WHERE users.city IN ('北京','上海','广州','深圳')" in sql
+        assert "AND users.department IN ('Engineering','Sales','Marketing')" in sql
+        assert "AND users.age > 25" in sql
+        assert "GROUP BY users.department" in sql
+        assert "HAVING count(users.id) > 1" in sql
+        assert "ORDER BY count(users.id) DESC" in sql
         assert "LIMIT 20" in sql
 
 

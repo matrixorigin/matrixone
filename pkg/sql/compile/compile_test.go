@@ -3831,6 +3831,10 @@ func TestCompileLocalPreAggregationKeepsEveryInputScope(t *testing.T) {
 		}},
 	}
 	require.True(t, isLocalPreAggregationGroup(final, local))
+	final.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
+	require.False(t, isLocalPreAggregationGroup(final, local),
+		"reusing the child's partition must preserve the child's complete aggregation")
+	final.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
 	final.Stats.HashmapStats.Shuffle = false
 	require.False(t, isLocalPreAggregationGroup(final, local),
 		"a downstream complete Group is required before localizing its child")
@@ -3911,7 +3915,6 @@ func TestCompileLocalPreAggregationPhysicalSelection(t *testing.T) {
 		remoteSource bool
 		partial      bool
 		dop          int32
-		reuse        bool
 		coordinator  bool
 		wantOmit     bool
 	}{
@@ -3921,7 +3924,6 @@ func TestCompileLocalPreAggregationPhysicalSelection(t *testing.T) {
 		{name: "distributed targets", mcpu: 1, sources: 1, targets: 2, dop: 4},
 		{name: "remote source to local target", mcpu: 1, sources: 1, targets: 1, remoteSource: true, dop: 4},
 		{name: "single owner", mcpu: 1, sources: 1, targets: 1, dop: 1},
-		{name: "shuffle reuse", mcpu: 4, sources: 1, targets: 1, dop: 4, reuse: true},
 		{name: "metadata partial results", mcpu: 4, sources: 1, targets: 1, dop: 4, partial: true},
 		{name: "parent coordinator projection", mcpu: 4, sources: 1, targets: 1, dop: 4, coordinator: true},
 	} {
@@ -3936,9 +3938,6 @@ func TestCompileLocalPreAggregationPhysicalSelection(t *testing.T) {
 			}
 			local, final, nodes := newLocalPreAggregationTestNodes()
 			local.Stats.Dop, final.Stats.Dop = tc.dop, tc.dop
-			if tc.reuse {
-				final.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
-			}
 			if tc.coordinator {
 				c.addr = "127.0.0.1:18002"
 				fn, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "found_rows", nil)
@@ -4118,6 +4117,7 @@ func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 	stats.BlockNumber = 1_000
 	stats.NdvMap["l_returnflag"] = 3
 	stats.NdvMap["l_orderkey"] = 1_500_000
+	stats.NdvMap["l_suppkey"] = 10_000
 	cache := plan2.NewStatsCache()
 	cache.Set(tableDef.TblId, stats)
 	compilerCtx := &distinctPreAggregationCompilerContext{
@@ -4131,9 +4131,13 @@ func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 		sql      string
 		ndv      float64
 		wantOmit bool
+		reuse    bool
 	}{
 		{name: "grouped fallback", sql: "select l_returnflag, count(distinct l_orderkey) from lineitem group by l_returnflag", ndv: 1_500_000},
 		{name: "large global key", sql: "select count(distinct l_orderkey) from lineitem", ndv: 5_000_000, wantOmit: true},
+		{name: "grouped tuple", sql: "select l_returnflag, count(distinct l_suppkey,l_orderkey) from lineitem group by l_returnflag", ndv: 1_500_000},
+		{name: "global tuple spelling", sql: "select count(distinct (l_orderkey,l_suppkey)) from lineitem", ndv: 1_500_000},
+		{name: "nested distinct preserves complete owner", sql: "select distinct l_orderkey from (select distinct l_orderkey from lineitem) q", ndv: 5_000_000, reuse: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stats.NdvMap["l_orderkey"] = tc.ndv
@@ -4147,6 +4151,68 @@ func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 					continue
 				}
 				local := query.Nodes[parent.Children[0]]
+				if tc.reuse {
+					if parent.NodeType != plan.Node_AGG || local.NodeType != plan.Node_AGG ||
+						parent.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Reuse {
+						continue
+					}
+					require.True(t, local.Stats.HashmapStats.Shuffle)
+					require.False(t, isLocalPreAggregationGroup(parent, local),
+						"the compiler must preserve the distribution the finalized SQL plan reuses")
+					for _, targets := range []int{1, 2} {
+						t.Run(fmt.Sprintf("targets-%d", targets), func(t *testing.T) {
+							c := newCompileForShuffleGroupTest(t)
+							c.addr = "127.0.0.1:18000"
+							c.cnList = engine.Nodes{{Addr: c.addr, Mcpu: 4}}
+							if targets == 2 {
+								c.cnList = append(c.cnList, engine.Node{Addr: "127.0.0.1:18001", Mcpu: 4})
+							}
+							// Keep the finalized aggregate plan and replace only storage
+							// access. Public SQL separately verifies cross-worker results.
+							nodes := plan2.DeepCopyQuery(query).Nodes
+							for i, node := range nodes {
+								// DeepCopyStats omits the physical DOP computed above.
+								node.Stats.Dop = query.Nodes[i].Stats.Dop
+								if node.NodeType == plan.Node_TABLE_SCAN {
+									node.NodeType = plan.Node_VALUE_SCAN
+								}
+							}
+							scopes, err := c.compilePlanScope(0, parent.NodeId, nodes)
+							require.NoError(t, err)
+							t.Cleanup(func() { ReleaseScopes(scopes) })
+							childGroups, parentGroups, exchanges, mergeGroups := 0, 0, 0, 0
+							var visit func(*Scope)
+							visit = func(scope *Scope) {
+								require.NoError(t, vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+									switch op.OpType() {
+									case vm.Group:
+										if op.GetOperatorBase().GetIdx() == int(local.NodeId) {
+											childGroups++
+										} else if op.GetOperatorBase().GetIdx() == int(parent.NodeId) {
+											parentGroups++
+										}
+									case vm.Shuffle:
+										exchanges++
+									case vm.MergeGroup:
+										mergeGroups++
+									}
+									return nil
+								}))
+								for _, child := range scope.PreScopes {
+									visit(child)
+								}
+							}
+							for _, scope := range scopes {
+								visit(scope)
+							}
+							require.Equal(t, 1, exchanges, "preserve the child exchange without adding a second one")
+							require.Equal(t, 4*targets, childGroups)
+							require.Equal(t, childGroups, parentGroups)
+							require.Zero(t, mergeGroups, "complete owners can still be reused")
+						})
+					}
+					return
+				}
 				if !isLocalPreAggregationGroup(parent, local) {
 					continue
 				}
@@ -4165,7 +4231,6 @@ func TestLocalPreAggregationCompileShapeIsReachableFromSQL(t *testing.T) {
 			t.Fatal("finalized SQL plan did not retain the local-pair compile contract")
 		})
 	}
-
 }
 
 func newCompileForShuffleGroupTest(t *testing.T) *Compile {

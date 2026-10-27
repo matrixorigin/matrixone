@@ -268,13 +268,12 @@ func (m *MessageBoard) cleanupQueuedMessagesLocked() {
 }
 
 type MessageReceiver struct {
-	debug    bool // for unit test
-	offset   int32
-	tags     []int32
-	received []int32
-	addr     *MessageAddress
-	mb       *MessageBoard
-	waiter   chan bool
+	debug  bool // for unit test
+	offset int32
+	tags   []int32
+	addr   *MessageAddress
+	mb     *MessageBoard
+	waiter chan bool
 }
 
 func NewMessageReceiver(tags []int32, addr MessageAddress, mb *MessageBoard) *MessageReceiver {
@@ -325,7 +324,6 @@ func (mr *MessageReceiver) receiveMessageNonBlock() ([]Message, bool) {
 		for i := range mr.tags {
 			if mr.tags[i] == message.GetMsgTag() {
 				result = append(result, message)
-				mr.received = append(mr.received, mr.offset)
 				break
 			}
 		}
@@ -401,14 +399,6 @@ func MatchAddress(m Message, raddr *MessageAddress) bool {
 func AddrBroadCastOnCurrentCN() MessageAddress {
 	return MessageAddress{
 		CnAddr:     CURRENTCN,
-		OperatorID: -1,
-		ParallelID: -1,
-	}
-}
-
-func AddrBroadCastOnALLCN() MessageAddress {
-	return MessageAddress{
-		CnAddr:     ALLCN,
 		OperatorID: -1,
 		ParallelID: -1,
 	}

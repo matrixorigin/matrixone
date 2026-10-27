@@ -886,6 +886,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql", "dat_type"}, [][]interface{}{{dbName, "create database db1", ""}})
 		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, uint32(sysAccountID))+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
+		bh.sql2result[getPubInfoWithPitr(snapshotTs, uint32(sysAccountID), dbName)] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 		bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, uint32(sysAccountID))] =
 			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
 				{"base_t", "BASE TABLE", "r"},
@@ -897,8 +898,9 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{"hive_ext", "create external table hive_ext (id int)"}})
 		bh.sql2result[fmt.Sprintf(checkTableIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral("base_t"))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 
-		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil, nil)
+		recreated, err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil, nil)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(recreated, convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, restoreTableDataByTsSQL(dbName, "base_t", snapshotTs)), convey.ShouldBeTrue)
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
 	})
@@ -921,8 +923,9 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 		bh.sql2result[fmt.Sprintf("show create table `%s`.`%s` {MO_TS = %d}", dbName, tblName, snapshotTs)] =
 			newMrsForRestoreStringRows([]string{"Table", "Create Table"}, [][]interface{}{{tblName, "create external table hive_ext (id int)"}})
 
-		err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, tblName, uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil, nil)
+		recreated, err := restoreToDatabaseOrTable(ctx, "", bh, snapshotName, dbName, tblName, uint32(sysAccountID), map[string]*tableInfo{}, map[string]*tableInfo{}, snapshotTs, uint32(sysAccountID), false, nil, nil)
 		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(recreated, convey.ShouldBeFalse)
 		convey.So(err.Error(), convey.ShouldContainSubstring, "external table db1.hive_ext cannot be restored from snapshot")
 		convey.So(restoreTestExecutedSQLContains(bh, "hive_ext` clone"), convey.ShouldBeFalse)
 	})
@@ -1039,11 +1042,12 @@ func TestMarkedDatabaseRestoreRejectsBeforeDestructiveWorkBelowCapability(t *tes
 				ts, dbName,
 			),
 			run: func(bh BackgroundExec) error {
-				return restoreToDatabaseOrTable(
+				_, err := restoreToDatabaseOrTable(
 					ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID),
 					map[string]*tableInfo{}, map[string]*tableInfo{}, ts,
 					uint32(sysAccountID), false, nil, nil,
 				)
+				return err
 			},
 		},
 		{
@@ -1289,11 +1293,12 @@ func TestMarkedDatabaseRestorePreservesIdentityAtCapability(t *testing.T) {
 			),
 			tablesSQL: buildTableInfoListSQL(dbName, "", ts, uint32(sysAccountID)),
 			run: func(bh BackgroundExec) error {
-				return restoreToDatabaseOrTable(
+				_, err := restoreToDatabaseOrTable(
 					ctx, "", bh, snapshotName, dbName, "", uint32(sysAccountID),
 					map[string]*tableInfo{}, map[string]*tableInfo{}, ts,
 					uint32(sysAccountID), false, nil, nil,
 				)
+				return err
 			},
 		},
 		{
@@ -1340,6 +1345,10 @@ func TestMarkedDatabaseRestorePreservesIdentityAtCapability(t *testing.T) {
 			)
 			bh.sql2result[masterSQL] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 			bh.sql2result[publicationSQL] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
+			// PITR replays publications in its core; snapshot replay belongs to
+			// the top-level DATABASE operation, not these shared workers.
+			bh.sql2result[getPubInfoWithPitr(ts, uint32(sysAccountID), dbName)] =
+				newMrsForRestoreStringRows([]string{"account_id"}, nil)
 			bh.sql2result[test.tablesSQL] = newMrsForRestoreStringRows(
 				[]string{"relname", "table_type", "relkind", "viewdef"}, nil,
 			)
@@ -1348,6 +1357,9 @@ func TestMarkedDatabaseRestorePreservesIdentityAtCapability(t *testing.T) {
 			}
 
 			require.NoError(t, test.run(bh))
+			if test.name != "pitr" {
+				require.NotContains(t, bh.executedSQLs, getPubInfoWithPitr(ts, uint32(sysAccountID), dbName))
+			}
 			createIndex := -1
 			for i, sql := range bh.executedSQLs {
 				if sql == createSQL {

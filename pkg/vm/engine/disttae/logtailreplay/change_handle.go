@@ -1568,6 +1568,11 @@ func (h *AObjectHandle) nextPrefetchTarget(
 			return nil, 0, false, nil
 		}
 		obj = h.objects[h.objectOffsetCursor]
+		if obj == nil || obj.BlkCnt() == 0 {
+			h.objectOffsetCursor++
+			h.blkOffsetCursor = 0
+			continue
+		}
 		blk = uint16(h.blkOffsetCursor)
 		h.blkOffsetCursor++
 		if h.blkOffsetCursor >= int(obj.BlkCnt()) {
@@ -3263,6 +3268,9 @@ func classifyCheckpointObject(
 	start, end types.TS,
 	selection checkpointObjectSelection,
 ) checkpointObjectKind {
+	if obj.GetAppendable() && obj.Rows() == 0 && obj.BlkCnt() == 0 {
+		return checkpointObjectKindIgnore
+	}
 	switch selection {
 	case checkpointObjectSelectionRange:
 		if obj.GetAppendable() {
@@ -3863,23 +3871,6 @@ func sortBatch(bat *batch.Batch, sortIdx int, mp *mpool.MPool) error {
 	}
 	return nil
 }
-
-//func checkObjectEntry(entry *ObjectEntry, start, end types.TS) bool {
-//	if entry.GetAppendable() {
-//		if entry.CreateTime.GT(&end) {
-//			return false
-//		}
-//		if !entry.DeleteTime.IsEmpty() && entry.DeleteTime.LT(&start) {
-//			return false
-//		}
-//		return true
-//	} else {
-//		if !entry.ObjectStats.GetCNCreated() {
-//			return false
-//		}
-//		return entry.CreateTime.GE(&start) && entry.DeleteTime.LE(&end)
-//	}
-//}
 
 func newDataBatchWithBatch(src *batch.Batch, retainRowID bool, logicalSeqnums []uint16) (data *batch.Batch) {
 	data = batch.NewWithSize(0)

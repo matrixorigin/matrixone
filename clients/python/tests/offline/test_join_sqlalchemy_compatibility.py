@@ -97,19 +97,11 @@ class TestJoinSQLAlchemyCompatibility(unittest.TestCase):
         self.assertIn("addresses", matrixone_query._joins[0])
 
     def test_join_without_condition_matches_sqlalchemy(self):
-        """Test that join without condition matches SQLAlchemy ORM"""
-        # MatrixOne query
         matrixone_query = MatrixOneQuery(User, self.mock_client)
-        matrixone_query._table_name = 'users'
-        matrixone_query.join(Address)
-
-        # SQLAlchemy equivalent
-        sqlalchemy_query = select(User).join(Address)
-
-        # Both should produce INNER JOIN without ON condition
-        self.assertTrue(matrixone_query._joins[0].startswith("INNER JOIN"))
-        self.assertIn("addresses", matrixone_query._joins[0])
-        self.assertNotIn("ON", matrixone_query._joins[0])
+        with self.assertRaisesRegex(ValueError, 'foreign key'):
+            matrixone_query.join(Address)
+        with self.assertRaises(Exception):
+            str(select(User).join(Address))
 
     def test_multiple_joins_matches_sqlalchemy(self):
         """Test that multiple joins match SQLAlchemy ORM"""
@@ -272,5 +264,7 @@ if __name__ == '__main__':
     print(f"Tests run: {result.testsRun}")
     print(f"Failures: {len(result.failures)}")
     print(f"Errors: {len(result.errors)}")
-    print(f"Success rate: {((result.testsRun - len(result.failures) - len(result.errors)) / result.testsRun * 100):.1f}%")
+    print(
+        f"Success rate: {((result.testsRun - len(result.failures) - len(result.errors)) / result.testsRun * 100):.1f}%"
+    )
     print(f"{'='*50}")
