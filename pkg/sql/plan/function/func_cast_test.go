@@ -1170,6 +1170,66 @@ func Test_CastToDecimal256(t *testing.T) {
 	}
 }
 
+func TestDecimalIntegerCastAcrossPhysicalWidths(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	typesAndValues := []struct {
+		name  string
+		typ   types.Type
+		parse func(string) any
+	}{
+		{"decimal64", types.New(types.T_decimal64, 18, 2), func(s string) any {
+			v, err := types.ParseDecimal64(s, 18, 2)
+			require.NoError(t, err)
+			return []types.Decimal64{v, v}
+		}},
+		{"decimal128", types.New(types.T_decimal128, 38, 2), func(s string) any {
+			v, err := types.ParseDecimal128(s, 38, 2)
+			require.NoError(t, err)
+			return []types.Decimal128{v, v}
+		}},
+		{"decimal256", types.New(types.T_decimal256, 65, 2), func(s string) any {
+			v, err := types.ParseDecimal256(s, 65, 2)
+			require.NoError(t, err)
+			return []types.Decimal256{v, v}
+		}},
+	}
+	for _, src := range typesAndValues {
+		t.Run(src.name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name, input string
+				target      types.Type
+				values      any
+				wantErr     bool
+			}{
+				{"signed and null", "42.00", types.T_int8.ToType(), []int8{42, 0}, false},
+				{"unsigned and null", "42.00", types.T_uint8.ToType(), []uint8{42, 0}, false},
+				{"signed fractional", "42.75", types.T_int8.ToType(), []int8{43, 0}, false},
+				{"unsigned fractional", "42.75", types.T_uint8.ToType(), []uint8{42, 0}, false},
+				{"signed overflow", "300.00", types.T_int8.ToType(), []int8{}, true},
+				{"negative unsigned", "-1.00", types.T_uint8.ToType(), []uint8{}, true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					inputs := []FunctionTestInput{
+						NewFunctionTestInput(src.typ, src.parse(tc.input), []bool{false, true}),
+						NewFunctionTestInput(tc.target, tc.values, nil),
+					}
+					want := NewFunctionTestResult(tc.target, tc.wantErr, tc.values, []bool{false, true})
+					fc := NewFunctionTestCase(proc, inputs, want, NewCast)
+					defer fc.Free()
+					if tc.wantErr {
+						_, err := fc.DebugRun()
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+						return
+					}
+					ok, info := fc.Run()
+					require.True(t, ok, info)
+				})
+			}
+		})
+	}
+}
+
 func Test_CastFromDecimal256(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	decimal256Type := types.New(types.T_decimal256, 65, 2)

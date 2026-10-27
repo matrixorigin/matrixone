@@ -2561,28 +2561,28 @@ func decimal64ToOthers(proc *process.Process,
 		return decimal64ToFloat(ctx, source, rs, length, 64)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return decimal64ToSigned(ctx, source, rs, 8, length, selectList)
+		return decimalToSigned(ctx, source, rs, 8, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return decimal64ToSigned(ctx, source, rs, 16, length, selectList)
+		return decimalToSigned(ctx, source, rs, 16, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return decimal64ToSigned(ctx, source, rs, 32, length, selectList)
+		return decimalToSigned(ctx, source, rs, 32, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return decimal64ToSigned(ctx, source, rs, 64, length, selectList)
+		return decimalToSigned(ctx, source, rs, 64, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return decimal64ToUnsigned(ctx, source, rs, 8, length, selectList)
+		return decimalToUnsigned(ctx, source, rs, 8, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return decimal64ToUnsigned(ctx, source, rs, 16, length, selectList)
+		return decimalToUnsigned(ctx, source, rs, 16, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return decimal64ToUnsigned(ctx, source, rs, 32, length, selectList)
+		return decimalToUnsigned(ctx, source, rs, 32, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return decimal64ToUnsigned(ctx, source, rs, 64, length, selectList)
+		return decimalToUnsigned(ctx, source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		// Reusing the physical values is safe only when the target preserves
@@ -2651,28 +2651,28 @@ func decimal128ToOthers(proc *process.Process,
 		return decimal128ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return decimal128ToSigned(ctx, source, rs, 8, length, selectList)
+		return decimalToSigned(ctx, source, rs, 8, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return decimal128ToSigned(ctx, source, rs, 16, length, selectList)
+		return decimalToSigned(ctx, source, rs, 16, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return decimal128ToSigned(ctx, source, rs, 32, length, selectList)
+		return decimalToSigned(ctx, source, rs, 32, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return decimal128ToSigned(ctx, source, rs, 64, length, selectList)
+		return decimalToSigned(ctx, source, rs, 64, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return decimal128ToUnsigned(ctx, source, rs, 8, length, selectList)
+		return decimalToUnsigned(ctx, source, rs, 8, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return decimal128ToUnsigned(ctx, source, rs, 16, length, selectList)
+		return decimalToUnsigned(ctx, source, rs, 16, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return decimal128ToUnsigned(ctx, source, rs, 32, length, selectList)
+		return decimalToUnsigned(ctx, source, rs, 32, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return decimal128ToUnsigned(ctx, source, rs, 64, length, selectList)
+		return decimalToUnsigned(ctx, source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return decimal128ToDecimal64(ctx, source, rs, length, selectList)
@@ -6049,43 +6049,16 @@ func timeToDecimal128(
 	return nil
 }
 
-func decimal64ToSigned[T constraints.Signed](
-	ctx context.Context,
-	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[T], bitSize int, length int, selectList *FunctionSelectList) error {
-	var i uint64
-	l := uint64(length)
-	fromTyp := from.GetType()
-	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
-		if null {
-			if err := to.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			x, err := v.Scale(-fromTyp.Scale)
-			if err != nil {
-				return err
-			}
-			xStr := x.Format(0)
-			result, err := strconv.ParseInt(xStr, 10, bitSize)
-			if err != nil {
-				return moerr.NewOutOfRangef(ctx,
-					fmt.Sprintf("int%d", bitSize),
-					"value '%v'", xStr)
-			}
-			err = to.Append(T(result), false)
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+// decimalIntegerSource preserves each physical decimal type's scaling and formatting.
+type decimalIntegerSource[D any] interface {
+	types.Decimal64 | types.Decimal128
+	Scale(int32) (D, error)
+	Format(int32) string
 }
 
-func decimal128ToSigned[T constraints.Signed](
+func decimalToSigned[D decimalIntegerSource[D], T constraints.Signed](
 	ctx context.Context,
-	from vector.FunctionParameterWrapper[types.Decimal128],
+	from vector.FunctionParameterWrapper[D],
 	to *vector.FunctionResult[T], bitSize int, length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
@@ -6256,41 +6229,9 @@ func decimal256ToYear(
 	return nil
 }
 
-func decimal64ToUnsigned[T constraints.Unsigned](
+func decimalToUnsigned[D decimalIntegerSource[D], T constraints.Unsigned](
 	ctx context.Context,
-	from vector.FunctionParameterWrapper[types.Decimal64],
-	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList) error {
-	var i uint64
-	l := uint64(length)
-	fromType := from.GetType()
-	for i = 0; i < l; i++ {
-		v, null := from.GetValue(i)
-		if null {
-			if err := to.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			xStr := v.Format(fromType.Scale)
-			xStr = strings.Split(xStr, ".")[0]
-			result, err := strconv.ParseUint(xStr, 10, bitSize)
-			if err != nil {
-				return moerr.NewOutOfRangef(ctx,
-					fmt.Sprintf("uint%d", bitSize),
-					"value '%v'", xStr)
-			}
-			err = to.Append(T(result), false)
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func decimal128ToUnsigned[T constraints.Unsigned](
-	ctx context.Context,
-	from vector.FunctionParameterWrapper[types.Decimal128],
+	from vector.FunctionParameterWrapper[D],
 	to *vector.FunctionResult[T], bitSize int,
 	length int, selectList *FunctionSelectList) error {
 	var i uint64
