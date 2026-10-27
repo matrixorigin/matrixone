@@ -1315,7 +1315,7 @@ func (e *Engine) BuildBlockReaders(
 		defer mainFilter.Free()
 	}
 
-	shards := relData.Split(newNum)
+	shards := activeM0ReadShards(ctx, def, relData, newNum, false)
 	for i := 0; i < newNum; i++ {
 		readerHint := hint
 		var readerFilter docfilter.MembershipFilter

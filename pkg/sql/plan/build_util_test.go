@@ -139,7 +139,7 @@ func TestRewriteCountNotNullColToStarcount(t *testing.T) {
 					F: &plan.Function{
 						Func: &plan.ObjectRef{ObjName: "count"},
 						Args: []*plan.Expr{
-							{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+							{Typ: plan.Type{NotNullable: true}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
 						},
 					},
 				},
@@ -157,6 +157,10 @@ func TestRewriteCountNotNullColToStarcount(t *testing.T) {
 	agg := node.AggList[0].GetF()
 	require.NotNil(t, agg)
 	require.NotNil(t, agg.Func)
+	if activeM0PlanHooks.disableCountNotNull {
+		require.Equal(t, "count", agg.Func.ObjName)
+		return
+	}
 	assert.Equal(t, "starcount", agg.Func.ObjName, "ObjName must be starcount so compile treats as single starcount")
 	assert.Equal(t, wantObj, agg.Func.Obj, "Obj must be CountStar overload so runtime uses countStarExec")
 }

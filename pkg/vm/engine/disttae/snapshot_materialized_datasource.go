@@ -43,6 +43,10 @@ type materializedSnapshotDataSource struct {
 	memPKFilter *readutil.MemPKFilter
 	orderBy     []*plan.OrderBySpec
 
+	readTable       *plan.TableDef
+	m0CapturedBatch *batch.Batch
+	m0CapturedProof objectio.M0BatchProof
+
 	built        bool
 	mp           *mpool.MPool
 	inMemBatches []*batch.Batch
@@ -181,6 +185,9 @@ func (ds *materializedSnapshotDataSource) SetFilterZM(zm objectio.ZoneMap) {
 }
 
 func (ds *materializedSnapshotDataSource) Close() {
+	ds.m0CapturedBatch = nil
+	ds.m0CapturedProof = objectio.M0BatchProof{}
+	ds.readTable = nil
 	if ds.remote != nil {
 		ds.remote.Close()
 	}
@@ -255,7 +262,25 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 			ds.inMemBatches = append(ds.inMemBatches, out)
 			out = newMaterializedInMemBatch(attrs, colTypes)
 		}
-		if err := appendCommittedInMemEntry(out, entry, seqNums, mp); err != nil {
+		var birthProof *objectio.M0BatchProof
+		if ds.readTable != nil && ds.readTable.AppendMissingState != nil {
+			if ds.m0CapturedBatch != entry.Batch {
+				captured := entry.WriteSchema
+				if captured == nil || len(captured.XXX_unrecognized) != 0 {
+					out.Clean(mp)
+					return objectio.ErrMissingColumnWithoutProof
+				}
+				var err error
+				ds.m0CapturedProof, err = objectio.NewM0BatchProof(ds.readTable, entry.Batch.Attrs, entry.Batch.Vecs, captured.Version, captured.NextColSeqnum, 2)
+				if err != nil {
+					out.Clean(mp)
+					return err
+				}
+				ds.m0CapturedBatch = entry.Batch
+			}
+			birthProof = &ds.m0CapturedProof
+		}
+		if err := appendCommittedInMemEntry(out, entry, seqNums, mp, birthProof); err != nil {
 			out.Clean(mp)
 			return err
 		}
@@ -346,6 +371,7 @@ func appendCommittedInMemEntry(
 	entry *logtailreplay.RowEntry,
 	seqNums []uint16,
 	mp *mpool.MPool,
+	proof *objectio.M0BatchProof,
 ) error {
 	for i := range out.Attrs {
 		switch seqNums[i] {
@@ -360,7 +386,13 @@ func appendCommittedInMemEntry(
 		default:
 			idx := 2 + seqNums[i]
 			if int(idx) >= len(entry.Batch.Vecs) || entry.Batch.Attrs[idx] == "" {
-				if err := vector.AppendAny(out.Vecs[i], nil, true, mp); err != nil {
+				var err error
+				if proof != nil {
+					err = proof.AppendFill(out.Vecs[i], seqNums[i], mp)
+				} else {
+					err = vector.AppendNull(out.Vecs[i], mp)
+				}
+				if err != nil {
 					return err
 				}
 				continue

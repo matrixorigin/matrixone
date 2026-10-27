@@ -56,7 +56,8 @@ type TxnLogtailRespBuilder struct {
 	currentPkSeqnum           uint32
 	txn                       txnif.AsyncTxn
 
-	batches []*containers.Batch
+	batches       []*containers.Batch
+	dataInsSchema *api.LogtailWriteSchema
 
 	logtails       *[]logtail.TableLogtail
 	currentLogtail *logtail.TableLogtail
@@ -165,6 +166,17 @@ func (b *TxnLogtailRespBuilder) visitAppendTombstone(src *containers.BatchWithVe
 	}
 }
 func (b *TxnLogtailRespBuilder) visitAppendData(src *containers.BatchWithVersion) {
+	captured := m0LogtailWriteSchema(src.Version, src.NextSeqnum)
+	if b.batches[dataInsBatch] != nil && captured != nil && b.dataInsSchema != nil &&
+		(captured.Version != b.dataInsSchema.Version || captured.NextColSeqnum != b.dataInsSchema.NextColSeqnum) {
+		// Never label mixed captured schemas with just the last version.
+		// Emit the completed batch using the existing entry/retention path.
+		b.buildLogtailEntry(b.currTableID, b.currDBID, b.currTableName, b.currDBName, dataInsBatch, api.Entry_Insert)
+		b.insertBatch.Add(uint32(len(b.batchToClose)))
+		b.batchToClose = append(b.batchToClose, b.batches[dataInsBatch])
+		b.batches[dataInsBatch] = nil
+	}
+	b.dataInsSchema = captured
 	sort.Sort(src)
 	mybat := containers.NewBatchWithCapacity(int(src.NextSeqnum) + 2)
 	mybat.AddVector(
@@ -217,6 +229,10 @@ func (b *TxnLogtailRespBuilder) buildLogtailEntry(tid, dbid uint64, tableName, d
 	// 	)
 	// }
 	apiBat, err := containersBatchToProtoBatch(bat)
+	if err == nil && batchIdx == dataInsBatch && b.dataInsSchema != nil {
+		captured := *b.dataInsSchema
+		apiBat.LogtailWriteSchema = &captured
+	}
 	common.DoIfDebugEnabled(func() {
 		logutil.Debugf(
 			"[logtail] from table %d-%s, delete %v, batch length %d @%s",

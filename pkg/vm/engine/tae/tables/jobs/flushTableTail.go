@@ -700,10 +700,15 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 
 	objID := objectio.NewObjectid()
 	name := objectio.BuildObjectNameWithObjectID(&objID)
+	if !isTombstone {
+		if err = validateM0CapturedWrite(schema, seqnums, schema.Version); err != nil {
+			return err
+		}
+	}
 	writer, err := ioutil.NewBlockWriterWithArena(
 		task.rt.Fs,
 		name,
-		schema.Version,
+		activeM0WriteSchemaVersion(schema, seqnums, schema.Version),
 		seqnums,
 		isTombstone,
 		arena,
@@ -859,9 +864,15 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context, isTom
 			}
 		}
 
+		if !isTombstone {
+			if err = validateM0CapturedWrite(task.schema, dataVer.Seqnums, dataVer.Version); err != nil {
+				dataVer.Close()
+				return
+			}
+		}
 		aobjectTask := NewFlushObjTask(
 			tasks.WaitableCtx,
-			dataVer.Version,
+			activeM0WriteSchemaVersion(task.schema, dataVer.Seqnums, dataVer.Version),
 			dataVer.Seqnums,
 			task.rt.Fs,
 			obj,

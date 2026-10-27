@@ -1053,6 +1053,12 @@ func (p *PartitionState) HandleRowsInsert(
 		packer,
 	)
 
+	var captured *api.LogtailWriteSchema
+	if input.LogtailWriteSchema != nil {
+		clone := *input.LogtailWriteSchema
+		clone.XXX_unrecognized = append([]byte(nil), clone.XXX_unrecognized...)
+		captured = &clone
+	}
 	clusterKeys := p.encodeClusterKeys(batch, packer, keys)
 
 	var numInserted int64
@@ -1076,6 +1082,7 @@ func (p *PartitionState) HandleRowsInsert(
 
 		if !p.noData {
 			entry.Batch = batch
+			entry.WriteSchema = captured
 			entry.Offset = int64(i)
 		}
 		entry.PrimaryIndexBytes = primaryKeys[i]

@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -988,29 +989,33 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 		var hints []apipb.MergeHint
 		copy(hints, newSchema.Extra.Hints)
 		newSchema.Extra = &apipb.SchemaExtra{
-			NextColSeqnum:     newSchema.Extra.NextColSeqnum,
-			MinOsizeQuailifed: newSchema.Extra.MinOsizeQuailifed,
-			MaxObjOnerun:      newSchema.Extra.MaxObjOnerun,
-			MaxOsizeMergedObj: newSchema.Extra.MaxOsizeMergedObj,
-			MinCnMergeSize:    newSchema.Extra.MinCnMergeSize,
-			BlockMaxRows:      newSchema.Extra.BlockMaxRows,
-			ObjectMaxBlocks:   newSchema.Extra.ObjectMaxBlocks,
-			Hints:             hints,
-			AutoIncrOffset:    newSchema.Extra.AutoIncrOffset,
-			AutoIncrEpoch:     newSchema.Extra.AutoIncrEpoch,
-			AutoIdCache:       newSchema.Extra.AutoIdCache,
-			DefaultCharset:    newSchema.Extra.DefaultCharset,
-			CollationVersion:  newSchema.Extra.CollationVersion,
-			KeyFormat:         newSchema.Extra.KeyFormat,
-			Checks:            checks,
+			NextColSeqnum:      newSchema.Extra.NextColSeqnum,
+			MinOsizeQuailifed:  newSchema.Extra.MinOsizeQuailifed,
+			MaxObjOnerun:       newSchema.Extra.MaxObjOnerun,
+			MaxOsizeMergedObj:  newSchema.Extra.MaxOsizeMergedObj,
+			MinCnMergeSize:     newSchema.Extra.MinCnMergeSize,
+			BlockMaxRows:       newSchema.Extra.BlockMaxRows,
+			ObjectMaxBlocks:    newSchema.Extra.ObjectMaxBlocks,
+			Hints:              hints,
+			AutoIncrOffset:     newSchema.Extra.AutoIncrOffset,
+			AutoIncrEpoch:      newSchema.Extra.AutoIncrEpoch,
+			AutoIdCache:        newSchema.Extra.AutoIdCache,
+			DefaultCharset:     newSchema.Extra.DefaultCharset,
+			CollationVersion:   newSchema.Extra.CollationVersion,
+			KeyFormat:          newSchema.Extra.KeyFormat,
+			AppendMissingState: plan.CloneAppendMissingState(newSchema.Extra.AppendMissingState),
+			Checks:             checks,
 		}
 
 	}
 	if err = newSchema.ApplyAlterTable(req); err != nil {
 		return
 	}
-	if isNewNode {
+	if isNewNode && (req.Kind != apipb.AlterKind_AddColumn || req.GetAddColumn().AppendMissingState == nil) {
 		node.BaseNode.Schema.Version += 1
+	}
+	if err = newSchema.validateAppendMissingColumns(); err != nil {
+		return
 	}
 	return
 }

@@ -46,6 +46,89 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Validate the memory reader's consumer contract independently of the
+// build-specific proof producer; tagged tests exercise the actual producer.
+func TestMemoryNodeConsumesTypedFill(t *testing.T) {
+	previous := activeM0MemoryFills
+	t.Cleanup(func() { activeM0MemoryFills = previous })
+	write := catalog.MockSchema(1, 0)
+	read := write.Clone()
+	rowid := read.ColDefs[1]
+	flag := &catalog.ColDef{Name: "flag", Idx: 1, SeqNum: 1, Type: types.T_bool.ToType(), NullAbility: true}
+	read.ColDefs = append(read.ColDefs[:1], flag, rowid)
+	rowid.Idx = 2
+	read.Extra.NextColSeqnum = 2
+	read.Version = 1
+	require.NoError(t, read.Finalize(true))
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	input := containers.BuildBatch(write.AllNames(), write.AllTypes(), containers.Options{Allocator: mp})
+	defer input.Close()
+	for _, v := range input.Vecs {
+		v.Append(nil, true)
+		v.Append(nil, true)
+	}
+	rt := dbutils.NewRuntime()
+	defer rt.VectorPool.Transient.Destory()
+	defer rt.VectorPool.Small.Destory()
+	mvcc := updates.NewAppendMVCCHandle(nil)
+	for row := uint32(0); row < 2; row++ {
+		ts := types.BuildTS(int64(row+1), 0)
+		appendNode := updates.NewAppendNode(nil, row, row+1, false, mvcc)
+		appendNode.Start, appendNode.Prepare, appendNode.End = ts, ts, ts
+		appendNode.Aborted = row == 0
+		mvcc.OnReplayAppendNode(appendNode)
+	}
+	node := &memoryNode{writeSchema: write, data: input, object: &baseObject{rt: rt, RWMutex: mvcc.RWMutex, appendMVCC: mvcc}}
+	for _, null := range []bool{false, true} {
+		t.Run(fmt.Sprintf("null=%t", null), func(t *testing.T) {
+			activeM0MemoryFills = func(r, w *catalog.Schema, data *containers.Batch, cols []int) (map[int]bool, error) {
+				require.Same(t, read, r)
+				require.Same(t, write, w)
+				require.Same(t, input, data)
+				require.Equal(t, []int{1}, cols)
+				return map[int]bool{1: null}, nil
+			}
+			var out *containers.Batch
+			require.NoError(t, node.getDataWindowLocked(&out, read, []int{1}, 0, 2, mp))
+			defer out.Close()
+			require.NoError(t, node.getDataWindowLocked(&out, read, []int{1}, 0, 2, mp))
+			require.Equal(t, 4, out.Length())
+			for i := 0; i < 4; i++ {
+				require.Equal(t, null, out.Vecs[0].IsNull(i))
+				if !null {
+					require.Equal(t, false, out.Vecs[0].Get(i))
+				}
+			}
+			var scanned *containers.Batch
+			scanErr := node.Scan(t.Context(), &scanned,
+				updates.MockTxnWithStartTS(types.BuildTS(2, 0)), read, 0, []int{1}, mp)
+			if scanned != nil {
+				defer scanned.Close()
+			}
+			require.NoError(t, scanErr)
+			require.NotNil(t, scanned)
+			require.Equal(t, 2, scanned.Length(), "typed fill preserves physical row offsets")
+			require.True(t, scanned.IsDeleted(0), "the aborted append stays invisible")
+			require.False(t, scanned.IsDeleted(1))
+			require.Equal(t, null, scanned.Vecs[0].IsNull(1))
+			if !null {
+				require.Equal(t, false, scanned.Vecs[0].Get(1))
+			}
+		})
+	}
+	activeM0MemoryFills = func(*catalog.Schema, *catalog.Schema, *containers.Batch, []int) (map[int]bool, error) {
+		return nil, objectio.ErrMissingColumnWithoutProof
+	}
+	var out *containers.Batch
+	err := node.Scan(t.Context(), &out, txnbase.MockTxnReaderWithStartTS(types.BuildTS(2, 0)), read, 0, []int{1}, mp)
+	if out != nil {
+		defer out.Close()
+	}
+	require.ErrorIs(t, err, objectio.ErrMissingColumnWithoutProof)
+	require.Nil(t, out, "a failed proof must stop Scan before allocation or postprocessing")
+}
+
 type waitCountingTxn struct {
 	txnif.AsyncTxn
 	waits atomic.Int32

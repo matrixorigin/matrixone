@@ -10939,6 +10939,9 @@ func (c *Compile) handleDbRelContext(node *plan.Node, onRemoteCN bool) (engine.R
 }
 
 func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
+	if activeM0DisableCountNotNullRewrite {
+		return nil, nil, nil
+	}
 	partialResults := make([]any, len(node.AggList))
 	partialResultTypes := make([]types.T, len(node.AggList))
 	columnMap := make(map[int]int)
@@ -10974,12 +10977,13 @@ func checkAggOptimize(node *plan.Node) ([]any, []types.T, map[int]int) {
 				if node.TableDef == nil {
 					return nil, nil, nil
 				}
-				colPos := int(col.Col.ColPos)
+				colPos := plan2.M0ResolveColumnPosition(node.TableDef, col.Col.Name, int(col.Col.ColPos))
 				if colPos < 0 || colPos >= len(node.TableDef.Cols) {
 					return nil, nil, nil
 				}
 				// Check if column is NOT NULL
-				if node.TableDef.Cols[colPos].Typ.NotNullable {
+				if node.TableDef.Cols[colPos].Typ.NotNullable && args.Typ.NotNullable &&
+					!activeM0DisableCountNotNullRewrite && !plan2.M0AppendDomain(node.TableDef) {
 					// Rewrite COUNT(not_null_col) to STARCOUNT so runtime uses countStarExec
 					agg.F.Func.ObjName = "starcount"
 					agg.F.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)

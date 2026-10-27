@@ -33,6 +33,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/m0admission"
 	"github.com/matrixorigin/matrixone/pkg/common/malloc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -85,6 +86,14 @@ func main() {
 
 	flag.Parse()
 	maybePrintVersion()
+	closeBirthAdmission, err := m0admission.Initialize(os.Args[1:])
+	if err != nil {
+		panic(err)
+	}
+	defer closeBirthAdmission()
+	if m0admission.Enabled() && (*launchFile == "" || *configFile != "" || *daemon || *withProxy) {
+		panic("M0 birth deployment requires one guarded static launch process")
+	}
 	maybeRunInDaemonMode()
 	// Connection tracking is optional debug instrumentation. Start it only
 	// after command-line handling so image validation with -h does not require
@@ -233,6 +242,9 @@ func startService(
 	shutdownC chan struct{},
 ) error {
 	if err := cfg.validate(); err != nil {
+		return err
+	}
+	if err := validateM0BirthConfig(cfg); err != nil {
 		return err
 	}
 	if err := cfg.resolveGossipSeedAddresses(); err != nil {

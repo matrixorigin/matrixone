@@ -1,0 +1,189 @@
+drop snapshot if exists m0_customer_snapshot;
+drop database if exists m0_customer_child;
+drop database if exists m0_customer_parent;
+create database m0_customer_parent;
+use m0_customer_parent;
+set autocommit = 1;
+create table customer(c_id int not null, c_d_id int not null, c_w_id int not null, c_credit_lim decimal(12,2), c_ytd_payment decimal(12,2), c_balance decimal(12,2), primary key(c_w_id,c_d_id,c_id));
+insert into customer values (1,1,1,50000,10000,10),(2,2,2,60000,6000,null),(3,3,3,70000,1000,30);
+alter table customer add column loyalty_tier_t0_s0 varchar(8);
+alter table customer add column credit_lim_t0_s0 decimal(12,2);
+select count(*) as parent_public_ordinals from information_schema.columns where table_schema='m0_customer_parent' and table_name='customer' and ((column_name='loyalty_tier_t0_s0' and ordinal_position=7) or (column_name='credit_lim_t0_s0' and ordinal_position=8));
+➤ parent_public_ordinals[-5,64,0]  𝄀
+2
+select ordinal_position as filtered_parent_ordinal from information_schema.columns where table_schema='m0_customer_parent' and table_name='customer' and column_name='loyalty_tier_t0_s0';
+➤ filtered_parent_ordinal[4,32,0]  𝄀
+7
+select count(*) as missing_suffix_rows from customer where loyalty_tier_t0_s0 is null and credit_lim_t0_s0 is null;
+➤ missing_suffix_rows[-5,64,0]  𝄀
+3
+update customer set loyalty_tier_t0_s0 = case when c_ytd_payment > 9000 then 'Gold' when c_ytd_payment > 5000 then 'Silver' else 'Bronze' end, credit_lim_t0_s0 = c_credit_lim;
+select count(*) as parent_values from customer where (c_id=1 and loyalty_tier_t0_s0='Gold' and credit_lim_t0_s0=50000) or (c_id=2 and loyalty_tier_t0_s0='Silver' and credit_lim_t0_s0=60000) or (c_id=3 and loyalty_tier_t0_s0='Bronze' and credit_lim_t0_s0=70000);
+➤ parent_values[-5,64,0]  𝄀
+3
+create snapshot m0_customer_snapshot for database m0_customer_parent;
+create database m0_customer_child clone m0_customer_parent {snapshot='m0_customer_snapshot'};
+use m0_customer_child;
+alter table customer add column loyalty_tier_t1_s1 varchar(8);
+alter table customer add column credit_lim_t1_s1 decimal(12,2);
+select count(*) as child_public_ordinals from information_schema.columns where table_schema='m0_customer_child' and table_name='customer' and ((column_name='loyalty_tier_t0_s0' and ordinal_position=7) or (column_name='credit_lim_t0_s0' and ordinal_position=8) or (column_name='loyalty_tier_t1_s1' and ordinal_position=9) or (column_name='credit_lim_t1_s1' and ordinal_position=10));
+➤ child_public_ordinals[-5,64,0]  𝄀
+4
+select count(*) as child_missing_suffix from customer where loyalty_tier_t1_s1 is null and credit_lim_t1_s1 is null and credit_lim_t0_s0 is not null;
+➤ child_missing_suffix[-5,64,0]  𝄀
+3
+update customer set loyalty_tier_t0_s0='Child', loyalty_tier_t1_s1='Gold', credit_lim_t1_s1=c_credit_lim where c_id=1;
+select count(*) as child_changed from customer where c_id=1 and loyalty_tier_t0_s0='Child' and loyalty_tier_t1_s1='Gold' and credit_lim_t1_s1=50000;
+➤ child_changed[-5,64,0]  𝄀
+1
+select count(*) as child_partial_nulls from customer where c_id in (2,3) and loyalty_tier_t1_s1 is null and credit_lim_t1_s1 is null;
+➤ child_partial_nulls[-5,64,0]  𝄀
+2
+insert into customer(c_id,c_d_id,c_w_id,c_credit_lim,c_ytd_payment,c_balance) values (4,4,4,80000,12000,40);
+select count(*) as inserted_nullable_suffix from customer where c_id=4 and loyalty_tier_t0_s0 is null and credit_lim_t0_s0 is null and loyalty_tier_t1_s1 is null and credit_lim_t1_s1 is null;
+➤ inserted_nullable_suffix[-5,64,0]  𝄀
+1
+select count(credit_lim_t0_s0) as inherited_not_null_rows from customer;
+➤ inherited_not_null_rows[-5,64,0]  𝄀
+3
+select count(credit_lim_t1_s1) as child_not_null_rows from customer;
+➤ child_not_null_rows[-5,64,0]  𝄀
+1
+insert into customer(c_id,c_d_id,c_w_id) values (null,5,5);
+constraint violation: Column 'c_id' cannot be null
+select count(*) as rows_after_failed_insert from customer;
+➤ rows_after_failed_insert[-5,64,0]  𝄀
+4
+select count(*) as parent_unchanged from m0_customer_parent.customer where (c_id=1 and loyalty_tier_t0_s0='Gold' and credit_lim_t0_s0=50000) or (c_id=2 and loyalty_tier_t0_s0='Silver' and credit_lim_t0_s0=60000) or (c_id=3 and loyalty_tier_t0_s0='Bronze' and credit_lim_t0_s0=70000);
+➤ parent_unchanged[-5,64,0]  𝄀
+3
+select count(*) as parent_no_child_insert from m0_customer_parent.customer where c_id=4;
+➤ parent_no_child_insert[-5,64,0]  𝄀
+0
+select count(*) as snapshot_rows from m0_customer_parent.customer {snapshot='m0_customer_snapshot'};
+➤ snapshot_rows[-5,64,0]  𝄀
+3
+select count(*) as nullable_child_columns from information_schema.columns where table_schema='m0_customer_child' and table_name='customer' and column_name in ('loyalty_tier_t0_s0','credit_lim_t0_s0','loyalty_tier_t1_s1','credit_lim_t1_s1') and is_nullable='YES';
+➤ nullable_child_columns[-5,64,0]  𝄀
+4
+select count(c_id) as count_not_null from customer;
+➤ count_not_null[-5,64,0]  𝄀
+4
+select count(null) as count_null from customer;
+➤ count_null[-5,64,0]  𝄀
+0
+select count(distinct c_balance) as count_distinct_nullable from customer;
+➤ count_distinct_nullable[-5,64,0]  𝄀
+3
+select count(c.c_id) as count_outer_nullable from m0_customer_parent.customer p left join customer c on p.c_id=c.c_id and c.c_id=1;
+➤ count_outer_nullable[-5,64,0]  𝄀
+1
+select c_id from customer where c_id<0;
+➤ c_id[4,32,0]  𝄀
+create table comment_control(a int, b int, primary key(a,b));
+insert into comment_control values (1,2);
+alter table comment_control add column x int comment 'kept';
+select count(*) as kept_comments from information_schema.columns where table_schema='m0_customer_child' and table_name='comment_control' and column_name='x' and column_comment='kept';
+➤ kept_comments[-5,64,0]  𝄀
+1
+select count(*) as comment_control_rows from comment_control where a=1 and b=2 and x is null;
+➤ comment_control_rows[-5,64,0]  𝄀
+1
+create table birth_index_control(c_id int not null, c_d_id int not null, c_w_id int not null, c_credit_lim decimal(12,2), c_ytd_payment decimal(12,2), c_balance decimal(12,2), primary key(c_w_id,c_d_id,c_id));
+insert into birth_index_control values (1,1,1,50000,100,10),(2,1,1,50000,100,20),(3,1,1,50000,100,30);
+alter table birth_index_control add column flag boolean default false;
+update birth_index_control set flag=null where c_id=3;
+create index ix on birth_index_control(c_balance);
+select count(*) as indexed_false_rows from birth_index_control where flag=false;
+➤ indexed_false_rows[-5,64,0]  𝄀
+2
+select count(*) as indexed_null_rows from birth_index_control where flag is null;
+➤ indexed_null_rows[-5,64,0]  𝄀
+1
+select count(*) as indexed_lookup from birth_index_control where c_balance=20 and flag=false;
+➤ indexed_lookup[-5,64,0]  𝄀
+1
+insert into birth_index_control(c_id,c_d_id,c_w_id,c_balance) values (4,1,1,40);
+select count(*) as indexed_new_default from birth_index_control where c_id=4 and flag=false;
+➤ indexed_new_default[-5,64,0]  𝄀
+1
+drop table birth_index_control;
+create table birth_metadata(c_id int not null, c_d_id int not null, c_w_id int not null, c_credit_lim decimal(12,2), c_ytd_payment decimal(12,2), c_balance decimal(12,2), primary key(c_w_id,c_d_id,c_id));
+insert into birth_metadata values (1,1,1,50000,100,10);
+select count(*) as metadata_flush_ok from (select mo_ctl('dn','flush','m0_customer_child.birth_metadata') as r) g where json_unquote(json_extract(r,'$.result[0].returnStr'))='OK';
+➤ metadata_flush_ok[-5,64,0]  𝄀
+1
+insert into birth_metadata values (2,1,1,50000,100,NULL);
+select count(*) as metadata_flush_ok from (select mo_ctl('dn','flush','m0_customer_child.birth_metadata') as r) g where json_unquote(json_extract(r,'$.result[0].returnStr'))='OK';
+➤ metadata_flush_ok[-5,64,0]  𝄀
+1
+alter table birth_metadata add column flag boolean default false;
+select count(*) as metadata_flush_ok from (select mo_ctl('dn','flush','m0_customer_child.birth_metadata') as r) g where json_unquote(json_extract(r,'$.result[0].returnStr'))='OK';
+➤ metadata_flush_ok[-5,64,0]  𝄀
+1
+select count(*) as metadata_false_stats from (select sum(rows_cnt) as r,sum(null_cnt) as n from metadata_scan('m0_customer_child.birth_metadata','flag') m) g where r=2 and n=0;
+➤ metadata_false_stats[-5,64,0]  𝄀
+1
+select count(*) as metadata_false_bounds from (select mo_table_col_min('m0_customer_child','birth_metadata','flag') as lo,mo_table_col_max('m0_customer_child','birth_metadata','flag') as hi) g where lo='false' and hi in ('false','true');
+➤ metadata_false_bounds[-5,64,0]  𝄀
+1
+insert into birth_metadata values (3,1,1,50000,100,30,true),(4,1,1,50000,100,40,NULL);
+select count(*) as metadata_flush_ok from (select mo_ctl('dn','flush','m0_customer_child.birth_metadata') as r) g where json_unquote(json_extract(r,'$.result[0].returnStr'))='OK';
+➤ metadata_flush_ok[-5,64,0]  𝄀
+1
+select count(*) as metadata_mixed_stats from (select sum(rows_cnt) as r,sum(null_cnt) as n from metadata_scan('m0_customer_child.birth_metadata','flag') m) g where r=4 and n=1;
+➤ metadata_mixed_stats[-5,64,0]  𝄀
+1
+select count(*) as metadata_mixed_extrema from (select mo_table_col_min('m0_customer_child','birth_metadata','flag') as lo,mo_table_col_max('m0_customer_child','birth_metadata','flag') as hi) g where lo='false' and hi='true';
+➤ metadata_mixed_extrema[-5,64,0]  𝄀
+1
+drop table birth_metadata;
+create table partition_default(a int not null,b int not null,primary key(a,b)) partition by hash(a) partitions 2;
+insert into partition_default values(1,1);
+alter table partition_default add column x int;
+insert into partition_default(a,b,x) values(2,2,42);
+insert into partition_default(a,b,x) values(3,3,42);
+select count(*) as partition_default_rows from partition_default where (a=1 and b=1 and x is null) or (a in (2,3) and b=a and x=42);
+➤ partition_default_rows[-5,64,0]  𝄀
+3
+select count(*) as partition_default_copy_root from mo_catalog.mo_tables where reldatabase='m0_customer_child' and relname='partition_default' and rel_version=0;
+➤ partition_default_copy_root[-5,64,0]  𝄀
+1
+select count(*) as partition_default_live_routes from mo_catalog.mo_partition_tables p join mo_catalog.mo_tables r on p.primary_table_id=r.rel_id join mo_catalog.mo_tables c on p.partition_id=c.rel_id and p.partition_table_name=c.relname and c.reldatabase=r.reldatabase where r.reldatabase='m0_customer_child' and r.relname='partition_default';
+➤ partition_default_live_routes[-5,64,0]  𝄀
+2
+create table partition_explicit_copy(a int not null,b int not null,primary key(a,b)) partition by hash(a) partitions 2;
+insert into partition_explicit_copy values(1,1);
+alter table partition_explicit_copy add column x int, algorithm=copy;
+insert into partition_explicit_copy(a,b,x) values(2,2,42);
+insert into partition_explicit_copy(a,b,x) values(3,3,42);
+select count(*) as partition_explicit_copy_rows from partition_explicit_copy where (a=1 and b=1 and x is null) or (a in (2,3) and b=a and x=42);
+➤ partition_explicit_copy_rows[-5,64,0]  𝄀
+3
+select count(*) as partition_explicit_copy_root from mo_catalog.mo_tables where reldatabase='m0_customer_child' and relname='partition_explicit_copy' and rel_version=0;
+➤ partition_explicit_copy_root[-5,64,0]  𝄀
+1
+select count(*) as partition_explicit_copy_live_routes from mo_catalog.mo_partition_tables p join mo_catalog.mo_tables r on p.primary_table_id=r.rel_id join mo_catalog.mo_tables c on p.partition_id=c.rel_id and p.partition_table_name=c.relname and c.reldatabase=r.reldatabase where r.reldatabase='m0_customer_child' and r.relname='partition_explicit_copy';
+➤ partition_explicit_copy_live_routes[-5,64,0]  𝄀
+2
+create table birth_partition_default(c_id int not null, c_d_id int not null, c_w_id int not null, c_credit_lim decimal(12,2), c_ytd_payment decimal(12,2), c_balance decimal(12,2), primary key(c_w_id,c_d_id,c_id)) partition by hash(c_id) partitions 2;
+insert into birth_partition_default values (1,1,1,50000,100,10);
+alter table birth_partition_default add column flag boolean default false;
+select count(*) as birth_partition_copy_root from mo_catalog.mo_tables where reldatabase='m0_customer_child' and relname='birth_partition_default' and rel_version=0;
+➤ birth_partition_copy_root[-5,64,0]  𝄀
+1
+insert into birth_partition_default(c_id,c_d_id,c_w_id,c_credit_lim,c_ytd_payment,c_balance) values (2,1,1,50000,100,20);
+insert into birth_partition_default values (3,1,1,50000,100,30,NULL);
+select count(*) as birth_partition_false_rows from birth_partition_default where flag=false;
+➤ birth_partition_false_rows[-5,64,0]  𝄀
+2
+select count(*) as birth_partition_null_rows from birth_partition_default where flag is null;
+➤ birth_partition_null_rows[-5,64,0]  𝄀
+1
+select count(*) as birth_partition_live_routes from mo_catalog.mo_partition_tables p join mo_catalog.mo_tables r on p.primary_table_id=r.rel_id join mo_catalog.mo_tables c on p.partition_id=c.rel_id and p.partition_table_name=c.relname and c.reldatabase=r.reldatabase where r.reldatabase='m0_customer_child' and r.relname='birth_partition_default';
+➤ birth_partition_live_routes[-5,64,0]  𝄀
+2
+drop table birth_partition_default;
+drop snapshot m0_customer_snapshot;
+drop database m0_customer_child;
+drop database m0_customer_parent;

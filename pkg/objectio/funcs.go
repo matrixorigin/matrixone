@@ -228,6 +228,11 @@ func readOneBlockWithMeta(
 
 		// need fill vector
 		if seqnum > maxSeqnum || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
+			if !CanFillMissingColumn(ctx, name, seqnum) {
+				return ioVec, wrapM0Error(
+					ErrMissingColumnWithoutProof, "seqnum=%d maxseqnum=%d", seqnum, maxSeqnum,
+				)
+			}
 			putFillHolder(i, seqnum)
 			continue
 		}
@@ -283,7 +288,14 @@ func readOneBlockWithMeta(
 			} else {
 				buf := &bytes.Buffer{}
 				buf.Write(EncodeIOEntryHeader(&IOEntryHeader{Type: IOET_ColData, Version: IOET_ColumnData_CurrVer}))
-				if err = vector.NewConstNull(typs[i], length, m).MarshalBinaryWithBuffer(buf); err != nil {
+				var fill *vector.Vector
+				fill, err = newMissingColumnVector(ctx, name, seqnums[i], typs[i], length, m)
+				if err != nil {
+					return
+				}
+				err = fill.MarshalBinaryWithBuffer(buf)
+				fill.Free(m)
+				if err != nil {
 					return
 				}
 				cacheData := fileservice.DefaultCacheDataAllocator().CopyToCacheData(ctx, buf.Bytes())

@@ -6500,6 +6500,21 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	default:
 		return nil, moerr.NewNotSupportedf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
+	if tableDef.AppendMissingState != nil {
+		// CREATE INDEX and ALTER TABLE ADD INDEX must use the same transactional
+		// COPY exit before changing constraints on a birth-fill layout.
+		var index tree.TableDef
+		switch {
+		case uIdx != nil:
+			index = uIdx
+		case ftIdx != nil:
+			index = ftIdx
+		default:
+			index = sIdx
+		}
+		return buildAlterTable(&tree.AlterTable{Table: stmt.Table,
+			Options: tree.AlterTableOptions{&tree.AlterOptionAdd{Def: index}}}, ctx)
+	}
 	colMap := make(map[string]*ColDef)
 	for _, col := range tableDef.Cols {
 		colMap[col.Name] = col
@@ -7546,6 +7561,37 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				Action: &plan.AlterTable_Action_AlterComment{
 					AlterComment: &plan.AlterTableComment{
 						NewComment: opt.Comment,
+					},
+				},
+			}
+
+		case *tree.AlterAddCol:
+			if activeM0PlanHooks.validateAdd == nil {
+				return nil, moerr.NewInvalidInputf(
+					ctx.GetContext(),
+					unsupportedErrFmt,
+					formatTreeNode(opt),
+				)
+			}
+			bindPlan := &plan.AlterTable{
+				TableDef:     tableDef,
+				CopyTableDef: DeepCopyTableDef(currentTableDef, true),
+			}
+			bindCtx := initAlterTableContext(tableDef, bindPlan.CopyTableDef, databaseName)
+			if _, err = AddColumn(ctx, bindPlan, opt, bindCtx); err != nil {
+				return nil, err
+			}
+			newCol := FindColumn(bindPlan.CopyTableDef.Cols, opt.Column.Name.ColName())
+			if err = m0ValidateBoundAddColumn(newCol); err != nil {
+				return nil, err
+			}
+			alterTable.Actions[i] = &plan.AlterTable_Action{
+				Action: &plan.AlterTable_Action_AddColumn{
+					AddColumn: &plan.AlterAddColumn{
+						Name:    newCol.Name,
+						Type:    newCol.Typ,
+						Pos:     -1,
+						Default: DeepCopyDefault(newCol.Default),
 					},
 				},
 			}

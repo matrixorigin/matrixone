@@ -1535,6 +1535,12 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return err
 	}
 
+	if qry.TableDef != nil && qry.TableDef.AppendMissingState != nil {
+		if err := validateM0CopyExitTarget(qry.TableDef, newRel.CopyTableDef(c.proc.Ctx)); err != nil {
+			return err
+		}
+	}
+
 	//5. copy the original table data to the temporary replica table
 	alterCopyOpt, err := c.precheckAlterCopyPkDedup(dbName, tblName, qry)
 	if err != nil {
@@ -2620,8 +2626,23 @@ func (s *Scope) doAlterTable(c *Compile, cleanup *alterAutoIncrementResetCleanup
 			return nil
 		}
 	}
-	return c.refreshViewsAfterRelationMutation(
-		databaseName, qry.GetTableDef().GetName(), oldRelationID, oldLogicalID)
+	if err := c.refreshViewsAfterRelationMutation(
+		databaseName, qry.GetTableDef().GetName(), oldRelationID, oldLogicalID); err != nil {
+		return err
+	}
+	// Materialize once under the original name, then rename the ordinary
+	// replacement inside the same user transaction. The inner statement is
+	// rebound against its new relation identity and cannot recurse into COPY.
+	if qry.AlgorithmType == plan.AlterTable_COPY && qry.TableDef.AppendMissingState != nil {
+		for _, action := range qry.Actions {
+			if rename := action.GetAlterName(); rename != nil && rename.NewName != rename.OldName {
+				if err := c.runSql(m0CopyExitRenameSQL(databaseName, rename)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Scope) RenameTable(c *Compile) (err error) {
@@ -2634,6 +2655,25 @@ func (s *Scope) RenameTable(c *Compile) (err error) {
 	qry := s.Plan.GetDdl().GetRenameTable()
 	if err = checkRoleRuleRenameAdmissionBatch(c, qry.AlterTables); err != nil {
 		return err
+	}
+	// A COPY exit changes physical identity. Rebind every rename in this
+	// transaction when one source carries birth state, including aliases made
+	// by an earlier pair (a -> tmp -> b). Never reuse the old planned IDs.
+	birthExit := false
+	for _, alterTable := range qry.AlterTables {
+		birthExit = birthExit || alterTable.GetTableDef().GetAppendMissingState() != nil
+	}
+	if birthExit {
+		for _, alterTable := range qry.AlterTables {
+			for _, action := range alterTable.Actions {
+				if rename := action.GetAlterName(); rename != nil && rename.OldName != rename.NewName {
+					if err := c.runSql(m0CopyExitRenameSQL(alterTable.Database, rename)); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
 	}
 	for _, alterTable := range qry.AlterTables {
 		plan := &plan.Plan{

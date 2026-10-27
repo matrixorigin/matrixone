@@ -3021,7 +3021,7 @@ func cleanHint(originSql string) string {
 // RewriteCountNotNullColToStarcount rewrites count(not_null_col) to starcount (ObjName + Obj) on node.AggList
 // so that compile uses countStarExec instead of countColumnExec. tableDef must be the child's (e.g. TABLE_SCAN).
 func RewriteCountNotNullColToStarcount(node *plan.Node, tableDef *plan.TableDef) {
-	if node == nil || tableDef == nil || len(node.AggList) == 0 {
+	if activeM0PlanHooks.disableCountNotNull || node == nil || tableDef == nil || len(node.AggList) == 0 {
 		return
 	}
 	for i := range node.AggList {
@@ -3040,11 +3040,14 @@ func RewriteCountNotNullColToStarcount(node *plan.Node, tableDef *plan.TableDef)
 		if col == nil {
 			continue
 		}
-		colPos := int(col.ColPos)
+		colPos := M0ResolveColumnPosition(tableDef, col.Name, int(col.ColPos))
 		if colPos < 0 || colPos >= len(tableDef.Cols) {
 			continue
 		}
 		if !tableDef.Cols[colPos].Typ.NotNullable {
+			continue
+		}
+		if M0AppendDomain(tableDef) {
 			continue
 		}
 		agg.Func.ObjName = "starcount"

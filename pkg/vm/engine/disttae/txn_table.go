@@ -658,15 +658,14 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 	}
 
 	var inited bool
-	cols := tbl.GetTableDef(ctx).GetCols()
+	tableDef := tbl.GetTableDef(ctx)
+	cols := tableDef.GetCols()
 	dataLength := len(cols) - 1
 
 	tableVal := make([][2]any, dataLength)
 	tableTypes := make([]uint8, dataLength)
 	zms := make([]objectio.ZoneMap, dataLength)
 
-	var meta objectio.ObjectDataMeta
-	var objMeta objectio.ObjectMeta
 	fs, err := fileservice.Get[fileservice.FileService](
 		tbl.getTxn().proc.Base.FileService,
 		defines.SharedFileServiceName)
@@ -674,31 +673,50 @@ func (tbl *txnTable) MaxAndMinValues(ctx context.Context) ([][2]any, []uint8, er
 		return nil, nil, err
 	}
 	var updateMu sync.Mutex
+	m0Base, m0AppendDomain := m0AppendBaseFromPlan(tableDef)
 	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
-		var err error
 		location := obj.Location()
-		if objMeta, err = objectio.FastLoadObjectMeta(objCtx, &location, false, fs); err != nil {
+		proofCtx := objCtx
+		provenM0 := false
+		if m0AppendDomain {
+			var proof objectio.M0ObjectProof
+			var proofErr error
+			provenM0, proof, proofErr = activeM0ReadObject(objCtx, tableDef, obj, fs)
+			if proofErr != nil {
+				return proofErr
+			}
+			if provenM0 {
+				proofCtx = objectio.WithM0ProvenObject(objCtx, proof)
+			}
+		}
+		objMeta, err := objectio.FastLoadObjectMeta(objCtx, &location, false, fs)
+		if err != nil {
 			return err
 		}
+		meta := objMeta.MustDataMeta()
 		updateMu.Lock()
 		defer updateMu.Unlock()
-		meta = objMeta.MustDataMeta()
-		if inited {
-			for idx := range zms {
-				zm := meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
-				if !zm.IsInited() {
-					continue
+		for idx := range zms {
+			col := cols[idx]
+			var zm objectio.ZoneMap
+			if provenM0 && col.Seqnum >= m0Base && col.Seqnum > uint32(meta.BlockHeader().MaxSeqnum()) {
+				zm, _, err = m0MissingColumnMetadata(proofCtx, location.Name().String(), col, int64(meta.BlockHeader().Rows()))
+				if err != nil {
+					return err
 				}
+			} else {
+				zm = meta.MustGetColumn(uint16(col.Seqnum)).ZoneMap()
+			}
+			if !inited {
+				// The aggregate owns its bytes; cached object metadata is borrowed.
+				zms[idx] = zm.Clone()
+				tableTypes[idx] = uint8(col.Typ.Id)
+			} else if zm.IsInited() {
 				index.UpdateZM(zms[idx], zm.GetMaxBuf())
 				index.UpdateZM(zms[idx], zm.GetMinBuf())
 			}
-		} else {
-			for idx := range zms {
-				zms[idx] = meta.MustGetColumn(uint16(cols[idx].Seqnum)).ZoneMap()
-				tableTypes[idx] = uint8(cols[idx].Typ.Id)
-			}
-			inited = true
 		}
+		inited = true
 
 		return nil
 	}
@@ -731,7 +749,8 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		return nil, err
 	}
 
-	cols := tbl.GetTableDef(ctx).GetCols()
+	tableDef := tbl.GetTableDef(ctx)
+	cols := tableDef.GetCols()
 	found := false
 	n := 0
 	for _, c := range cols {
@@ -761,6 +780,7 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 	}
 	infoList := make([]*plan.MetadataScanInfo, 0, state.ApproxDataObjectsNum())
 	var updateMu sync.Mutex
+	m0Base, m0AppendDomain := m0AppendBaseFromPlan(tableDef)
 	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
 		createTs, err := obj.CreateTime.Marshal()
 		if err != nil {
@@ -793,6 +813,20 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 			return nil
 		}
 
+		provenM0 := false
+		proofCtx := objCtx
+		if m0AppendDomain {
+			var proof objectio.M0ObjectProof
+			var proofErr error
+			provenM0, proof, proofErr = activeM0ReadObject(objCtx, tableDef, obj, fs)
+			if proofErr != nil {
+				return proofErr
+			}
+			if provenM0 {
+				proofCtx = objectio.WithM0ProvenObject(objCtx, proof)
+			}
+		}
+
 		objMeta, err := objectio.FastLoadObjectMeta(objCtx, &location, false, fs)
 		if err != nil {
 			return err
@@ -803,6 +837,26 @@ func (tbl *txnTable) GetColumMetadataScanInfo(ctx context.Context, name string, 
 		rowCnt := int64(meta.BlockHeader().Rows())
 
 		for _, col := range needCols {
+			if provenM0 && uint32(col.Seqnum) >= m0Base &&
+				uint32(col.Seqnum) > uint32(meta.BlockHeader().MaxSeqnum()) {
+				zm, nullCnt, err := m0MissingColumnMetadata(proofCtx, objName, col, rowCnt)
+				if err != nil {
+					return err
+				}
+				infoList = append(infoList, &plan.MetadataScanInfo{
+					ColName:    col.Name,
+					IsHidden:   col.Hidden,
+					ObjectName: objName,
+					ObjLoc:     location,
+					CreateTs:   createTs,
+					DeleteTs:   deleteTs,
+					RowCnt:     rowCnt,
+					NullCnt:    nullCnt,
+					ZoneMap:    zm,
+					Level:      int32(obj.ObjectStats.GetLevel()),
+				})
+				continue
+			}
 			colMeta := meta.MustGetColumn(uint16(col.Seqnum))
 			infoList = append(infoList, &plan.MetadataScanInfo{
 				ColName:      col.Name,
@@ -1424,23 +1478,31 @@ func (tbl *txnTable) rangesOnePart(
 	uncommittedObjects []objectio.ObjectStats,
 ) (err error) {
 	var done bool
+	m0TableDef := tableDef
+	if activeM0Enabled {
+		m0TableDef = tbl.GetTableDef(ctx)
+	}
 
-	if done, err = readutil.TryFastFilterBlocksWithZone(
-		ctx,
-		tbl.db.op.SnapshotTS(),
-		tbl.tableDef,
-		rangesParam,
-		state,
-		nil,
-		uncommittedObjects,
-		outBlocks,
-		tbl.PrefetchAllMeta,
-		tbl.getTxn().engine.fs,
-		proc.GetSessionInfo().TimeZone,
-	); err != nil {
-		return err
-	} else if done {
-		return nil
+	// Fast filtering interprets an absent metadata column directly and has no
+	// per-object proof context. Keep the append domain on the proving slow path.
+	if _, m0AppendDomain := m0AppendBaseFromPlan(m0TableDef); !m0AppendDomain {
+		if done, err = readutil.TryFastFilterBlocksWithZone(
+			ctx,
+			tbl.db.op.SnapshotTS(),
+			m0TableDef,
+			rangesParam,
+			state,
+			nil,
+			uncommittedObjects,
+			outBlocks,
+			tbl.PrefetchAllMeta,
+			tbl.getTxn().engine.fs,
+			proc.GetSessionInfo().TimeZone,
+		); err != nil {
+			return err
+		} else if done {
+			return nil
+		}
 	}
 
 	if slowPathCounter.Add(1) >= 1000 {
@@ -1498,14 +1560,25 @@ func (tbl *txnTable) rangesOnePart(
 	if auxIdCnt > 0 {
 		zms = make([]objectio.ZoneMap, auxIdCnt)
 		vecs = make([]*vector.Vector, auxIdCnt)
-		plan2.GetColumnMapByExprs(rangesParam.BlockFilters, tableDef, columnMap)
+		plan2.GetColumnMapByExprs(rangesParam.BlockFilters, m0TableDef, columnMap)
 	}
 
 	errCtx := errutil.ContextWithNoReport(ctx, true)
+	m0FS := tbl.getTxn().engine.fs
 
 	if err = ForeachSnapshotObjects(
 		tbl.db.op.SnapshotTS(),
 		func(obj objectio.ObjectEntry, isCommitted bool) (err2 error) {
+			evalCtx := errCtx
+			if activeM0Enabled {
+				provenM0, proof, proofErr := activeM0ReadObject(evalCtx, m0TableDef, obj, m0FS)
+				if proofErr != nil {
+					return proofErr
+				}
+				if provenM0 {
+					evalCtx = objectio.WithM0ProvenObject(evalCtx, proof)
+				}
+			}
 			// Only the local workspace enumerates uncommitted objects; remote CNs cannot take ownership.
 			if isCommitted && plan2.ShouldSkipObjByShuffle(rangesParam.Rsp, &obj.ObjectStats) {
 				return
@@ -1529,7 +1602,7 @@ func (tbl *txnTable) rangesOnePart(
 				if meta.BlockCount() > 2 {
 					for _, expr := range rangesParam.BlockFilters {
 						if !colexec.EvaluateFilterByZoneMap(
-							errCtx, proc, expr, meta, columnMap, zms, vecs,
+							evalCtx, proc, expr, meta, columnMap, zms, vecs,
 						) {
 							skipObj = true
 							break
@@ -1558,7 +1631,7 @@ func (tbl *txnTable) rangesOnePart(
 				if auxIdCnt > 0 {
 					// eval filter expr on the block
 					for _, expr := range rangesParam.BlockFilters {
-						if !colexec.EvaluateFilterByZoneMap(errCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
+						if !colexec.EvaluateFilterByZoneMap(evalCtx, proc, expr, blkMeta, columnMap, zms, vecs) {
 							skipBlk = true
 							break
 						}
@@ -1876,6 +1949,17 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
 			tbl.tableDef.CollationVersion = tbl.extraInfo.CollationVersion
 			tbl.tableDef.KeyFormat = tbl.extraInfo.KeyFormat
+			tbl.tableDef.AppendMissingState = plan.CloneAppendMissingState(tbl.extraInfo.AppendMissingState)
+		}
+		if base, ok := m0AppendBaseFromPlan(tbl.tableDef); ok {
+			for _, col := range tbl.tableDef.Cols {
+				if col != nil && !col.Hidden && uint32(col.Seqnum) >= base {
+					// The M0 admission guarantees this suffix is nullable and
+					// backfill-free. Keep the CN projection aligned with the
+					// persisted catalog state and count-column semantics.
+					col.Typ.NotNullable = false
+				}
+			}
 		}
 	}
 	return tbl.tableDef
@@ -1944,6 +2028,35 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("cannot alter table in snapshot operation")
 	}
+	var m0AddReq *api.AlterTableReq
+	if activeM0Enabled {
+		for _, req := range reqs {
+			if req.GetKind() != api.AlterKind_AddColumn {
+				continue
+			}
+			if m0AddReq != nil || len(reqs) != 1 {
+				return moerr.NewInternalErrorNoCtx("M0: ADD COLUMN must be one independent ALTER action")
+			}
+			m0AddReq = req
+		}
+	}
+	var m0Defs []engine.TableDef
+	if m0AddReq != nil {
+		var err error
+		m0Defs, err = activeM0CNAddColumn(tbl, ctx, m0AddReq)
+		if err != nil {
+			return err
+		}
+		if err = triggerM0AlterFault(ctx, M0FaultAfterDefs); err != nil {
+			return err
+		}
+	} else if activeM0Enabled && tbl.version > 0 {
+		if _, ok := m0AppendBaseFromPlan(tbl.GetTableDef(ctx)); ok {
+			return moerr.NewInvalidInputNoCtx(
+				"M0 append-domain table only supports metadata-only ADD COLUMN",
+			)
+		}
+	}
 	var autoIncrResetCount uint64
 	for _, req := range reqs {
 		if req.GetKind() == api.AlterKind_UpdateAutoIncrement {
@@ -1963,6 +2076,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	oldTableName := tbl.tableName
 	oldCreateSQL := tbl.createSql
 	olddefs := tbl.defs
+	oldVersion := tbl.version
+	oldExtraInfo := api.CloneExtra(tbl.extraInfo)
 	oldPart := tbl.partitioned
 	oldPartInfo := tbl.partition
 	oldComment := tbl.comment
@@ -2005,8 +2120,13 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			}
 		}
 		tbl.defs = olddefs
+		tbl.version = oldVersion
+		tbl.extraInfo = oldExtraInfo
 		tbl.tableDef = nil
 		tbl.GetTableDef(ctx)
+		if m0AddReq != nil {
+			tbl.refreshM0DerivedIndices(ctx)
+		}
 	}
 	txn.Lock()
 	txn.restoreTxnTableFunc = append(txn.restoreTxnTableFunc, restore)
@@ -2075,6 +2195,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			tbl.extraInfo.AutoIncrOffset = req.GetUpdateAutoIncrement().GetOffset()
 			tbl.extraInfo.AutoIncrEpoch++
 			req.GetUpdateAutoIncrement().Epoch = tbl.extraInfo.AutoIncrEpoch
+		case api.AlterKind_AddColumn:
+			if !activeM0Enabled {
+				panic("not supported")
+			}
 		default:
 			panic("not supported")
 		}
@@ -2106,6 +2230,15 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		tbl.extraInfo.DefaultCharset = replacementExtra.DefaultCharset
 		tbl.extraInfo.CollationVersion = replacementExtra.CollationVersion
 		baseDefs = append(baseDefs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
+	} else if m0Defs != nil {
+		baseDefs = m0Defs
+		if proposed := m0AddReq.GetAddColumn().AppendMissingState; proposed != nil {
+			// oldExtraInfo owns rollback. Do not mutate the previous catalog
+			// projection while publishing the new descriptor/version.
+			tbl.extraInfo = api.CloneExtra(tbl.extraInfo)
+			tbl.extraInfo.AppendMissingState = plan.CloneAppendMissingState(proposed)
+			tbl.extraInfo.NextColSeqnum = proposed.BaseWidth + uint32(len(proposed.Columns))
+		}
 	} else {
 		baseDefs = append([]engine.TableDef{}, tbl.defs...)
 	}
@@ -2142,12 +2275,22 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			bat.Clean(txn.proc.Mp())
 			return err
 		}
+		if m0AddReq != nil {
+			if err = triggerM0AlterFault(ctx, M0FaultAfterTNAlter); err != nil {
+				return err
+			}
+		}
 	}
 
 	//------------------------------------------------------------------------------------------------------------------
 	// 1. delete old table metadata
 	if _, err := tbl.db.deleteTable(ctx, oldTableName, true, !createdInTxn); err != nil {
 		return err
+	}
+	if m0AddReq != nil {
+		if err := triggerM0AlterFault(ctx, M0FaultAfterCatalogDelete); err != nil {
+			return err
+		}
 	}
 
 	// update table defs after deleting old table metadata
@@ -2173,6 +2316,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	); err != nil {
 		return err
 	}
+	if m0AddReq != nil {
+		tbl.RefeshTableDef(ctx)
+		tbl.refreshM0DerivedIndices(ctx)
+	}
 	if createdInTxn {
 		// 3. adjust writes for the table
 		txn.Lock()
@@ -2181,6 +2328,20 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	}
 
 	return nil
+}
+
+func (tbl *txnTable) refreshM0DerivedIndices(ctx context.Context) {
+	def := tbl.GetTableDef(ctx)
+	tbl.primaryIdx, tbl.primarySeqnum, tbl.clusterByIdx = -1, -1, -1
+	for i, col := range def.Cols {
+		if col.Primary {
+			tbl.primaryIdx = i
+			tbl.primarySeqnum = int(col.Seqnum)
+		}
+		if col.ClusterBy {
+			tbl.clusterByIdx = i
+		}
+	}
 }
 
 func (tbl *txnTable) TableRenameInTxn(ctx context.Context, constraint [][]byte) error {
@@ -2720,7 +2881,7 @@ func (tbl *txnTable) BuildReaders(
 	}
 
 	def := tbl.GetTableDef(ctx)
-	shards := relData.Split(newNum)
+	shards := activeM0ReadShards(ctx, def, relData, newNum, orderBy)
 
 	preparedHint, mainFilter, owned, err := prepareMembershipFilter(
 		filterHint,

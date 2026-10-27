@@ -50,6 +50,7 @@ var (
 )
 
 type snapshotScanReaderConfig struct {
+	readTable      *plan.TableDef
 	attrs          []string
 	seqnums        []uint16
 	colTypes       []types.Type
@@ -459,6 +460,10 @@ func readSnapshotWithSource(
 ) error {
 	readerOpts := []readutil.ReaderOption{
 		readutil.WithColumns(cfg.seqnums, cfg.colTypes),
+		readutil.WithReadTableDef(cfg.readTable),
+	}
+	if materialized, ok := source.(*materializedSnapshotDataSource); ok {
+		materialized.readTable = cfg.readTable
 	}
 	if cfg.hasBlockFilter {
 		readerOpts = append(readerOpts, readutil.WithBlockFilter(cfg.blockFilter, cfg.filterSeqnum, cfg.filterType))
@@ -502,9 +507,10 @@ func buildSnapshotScanReaderConfig(
 	mp *mpool.MPool,
 ) (snapshotScanReaderConfig, error) {
 	cfg := snapshotScanReaderConfig{
-		attrs:    attrs,
-		seqnums:  attrsToSeqnums(attrs, tableDef),
-		colTypes: colTypes,
+		readTable: tableDef,
+		attrs:     attrs,
+		seqnums:   attrsToSeqnums(attrs, tableDef),
+		colTypes:  colTypes,
 	}
 
 	blockFilter, filterSeqnum, filterType, ok, err := buildSnapshotBlockFilter(tableDef, filterExpr, mp)

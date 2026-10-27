@@ -87,3 +87,14 @@ ALTER TABLE tmp_alg_lock ALGORITHM=DEFAULT, ADD INDEX idx_tmp_b(b);
 ALTER TABLE tmp_alg_lock LOCK=SHARED, ADD INDEX idx_tmp_ab(a, b);
 
 drop table tmp_alg_lock;
+
+-- A bound non-NULL default must choose COPY before metadata-only admission.
+create table t_alg_default_bool(a int not null, b int not null, primary key(a,b));
+insert into t_alg_default_bool values (1,1),(2,1);
+alter table t_alg_default_bool add column flag boolean default false;
+select count(*) as n, count(case when flag=false then 1 end) as falses, count(case when flag is null then 1 end) as nulls from t_alg_default_bool;
+update t_alg_default_bool set flag=NULL where a=1;
+alter table t_alg_default_bool add column flag2 boolean default false;
+select count(*) as n, count(case when flag is null then 1 end) as nulls, count(case when flag2=false then 1 end) as falses2 from t_alg_default_bool;
+alter table t_alg_default_bool add column unsupported boolean default true, algorithm=inplace;
+drop table t_alg_default_bool;

@@ -18,10 +18,13 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/m0admission"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -36,6 +39,33 @@ import (
 type closeTrackingFileService struct {
 	fileservice.FileService
 	closeCount int
+}
+
+func TestM0UnadmittedStartupRejectsCandidatePaths(t *testing.T) {
+	require.False(t, m0admission.Enabled())
+	plain, marked := t.TempDir(), t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(marked, m0admission.MarkerName), []byte("{}"), 0600))
+	for _, route := range []string{"ordinary", "data", "fileservice", "disk-cache"} {
+		t.Run(route, func(t *testing.T) {
+			cfg := &Config{DataDir: plain, FileServices: []fileservice.Config{{Backend: "DISK", DataDir: plain}}}
+			candidate := filepath.Join(marked, "child")
+			switch route {
+			case "data":
+				cfg.DataDir = candidate
+			case "fileservice":
+				cfg.FileServices[0].DataDir = candidate
+			case "disk-cache":
+				cfg.FileServices[0].Cache.DiskPath = &candidate
+			}
+			err := validateM0BirthConfig(cfg)
+			if route == "ordinary" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "candidate data requires its guarded binary")
+			}
+			require.False(t, m0admission.Enabled(), "a rejected startup must not grant admission")
+		})
+	}
 }
 
 func (f *closeTrackingFileService) Close(ctx context.Context) {
