@@ -21,7 +21,7 @@ or stages using MatrixOne's SELECT ... INTO OUTFILE commands.
 
 import warnings
 from ._query_compilation import compile_expression
-from ._sql_literals import sql_literal, substitute_parameters
+from ._sql_literals import sql_literal, sql_string_token, substitute_parameters
 
 from typing import Any, Optional, Union
 
@@ -135,9 +135,9 @@ def _build_csv_export_sql(
     # Add CSV options
     options = []
 
-    fields = f"fields terminated by '{sep}'"
+    fields = f"fields terminated by {sql_string_token(sep)}"
     if quotechar:
-        fields += f" enclosed by '{quotechar}'"
+        fields += f" enclosed by {sql_string_token(quotechar)}"
     options.append(fields)
 
     # Add line terminator if not default
@@ -274,6 +274,7 @@ class ExportManager:
             - For local paths, the MatrixOne server must have write permissions
             - For stage paths, use format: 'stage://stage_name/filename.csv'
             - sep and quotechar can be used together
+            - sep/quotechar must not contain NUL or backslashes; use actual tab characters for TSV
             - header=True is not yet supported by MatrixOne
         """
         # Build SQL

@@ -384,8 +384,10 @@ async def test_async_public_export(client, async_client, tables, format):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind', ['sync', 'async'])
-@pytest.mark.parametrize('sep', [',', ';'])
-@pytest.mark.parametrize('quotechar', ['"', '~'])
+@pytest.mark.parametrize(
+    'sep,quotechar',
+    [(sep, quotechar) for sep in (',', ';', "'") for quotechar in ('"', '~', "'") if sep != quotechar],
+)
 async def test_csv_separator_and_quotechar_round_trip(client, async_client, tables, kind, sep, quotechar):
     model, _ = tables
     label = 'comma,semicolon;and\nnewline'
