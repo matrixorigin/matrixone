@@ -149,6 +149,13 @@ type CSVParser struct {
 	fieldIndexes  []int
 	fieldIsQuoted []bool
 
+	// recordSurcharge prices consumed input bytes that folded into fewer
+	// recordBuffer bytes — today only the doubled-quote fold, where two raw
+	// bytes decode to one quote. recordWeight includes it so the whole-record
+	// bound prices raw consumed bytes, never the decoded output; it resets
+	// with the other per-record accumulators in readRecord.
+	recordSurcharge int64
+
 	LastRow []Field
 
 	escFlavor escapeFlavor
@@ -590,12 +597,29 @@ func (parser *CSVParser) recordSizeLimitError(size int64) error {
 		size, parser.maxRecordSize()))
 }
 
-// recordWeight is the current record's cost under maxRecordSize: raw field
-// content accumulated in recordBuffer plus one for every field already
-// framed. The second term keeps fieldIndexes/fieldIsQuoted (and, downstream,
-// the decoded row slice) as bounded as the content itself.
+// recordWeight is the current record's cost under maxRecordSize: the stored
+// representation accumulated in recordBuffer — quoted content is stored as
+// produced by its read path and backslash escape pairs stay raw until the
+// later unescape — plus recordSurcharge, the consumed-then-folded raw bytes
+// the stored representation dropped (today: one byte per doubled quote pair),
+// plus one for every field already framed. The last term keeps
+// fieldIndexes/fieldIsQuoted (and, downstream, the decoded row slice) as
+// bounded as the content itself.
 func (parser *CSVParser) recordWeight() int64 {
-	return int64(len(parser.recordBuffer) + len(parser.fieldIndexes))
+	return int64(len(parser.recordBuffer)+len(parser.fieldIndexes)) + parser.recordSurcharge
+}
+
+// chargeFolded prices consumed input bytes that do NOT appear in recordBuffer
+// byte-for-byte — today the second byte of every doubled-quote pair, whose
+// two raw bytes decode into one quote. The decoded value stays bit-identical;
+// only the accounting sees the raw consumption, so encoded content can no
+// longer bypass the pre-unescaping whole-record weight through folding.
+func (parser *CSVParser) chargeFolded(n int) error {
+	if newSize := parser.recordWeight() + int64(n); newSize > parser.maxRecordSize() {
+		return parser.recordSizeLimitError(newSize)
+	}
+	parser.recordSurcharge += int64(n)
+	return nil
 }
 
 // appendToRecord appends content to the record buffer under the single-record
@@ -690,6 +714,7 @@ func (parser *CSVParser) readRecord() error {
 	parser.recordBuffer = parser.recordBuffer[:0]
 	parser.fieldIndexes = parser.fieldIndexes[:0]
 	parser.fieldIsQuoted = parser.fieldIsQuoted[:0]
+	parser.recordSurcharge = 0
 
 	isEmptyLine := true
 	foundStartingByThisLine := false
@@ -905,8 +930,14 @@ func (parser *CSVParser) readQuotedField() error {
 				return err
 			}
 			if doubledDelimiter {
-				// consume the double quotation mark and continue
+				// consume the double quotation mark and continue: two raw
+				// bytes fold into one decoded quote, so recordBuffer keeps
+				// the decoded byte while the folded second byte is charged
+				// as raw consumed input.
 				if err := parser.appendToRecord(parser.quote); err != nil {
+					return err
+				}
+				if err := parser.chargeFolded(len(parser.quote)); err != nil {
 					return err
 				}
 			} else if parser.unescapedQuote {

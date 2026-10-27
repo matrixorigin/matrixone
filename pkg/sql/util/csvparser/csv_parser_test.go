@@ -1242,6 +1242,117 @@ func TestMaxRecordSizeBound(t *testing.T) {
 	})
 }
 
+// TestDoubledQuoteChargesRawBytes pins the pre-unescaping whole-record weight:
+// a doubled quote "" is two consumed input bytes folding into one decoded
+// quote, and both consumed bytes are charged — identically at every read-block
+// size. Four pairs therefore weigh 8 content bytes plus 1 field frame, so
+// MaxRecordSize=5 must reject the record the fold-then-charge accounting
+// previously accepted. The escaped equivalent \" also prices two consumed
+// bytes per decoded quote and yields the same decoded value under the same
+// weight, so neither encoding can bypass the bound; a within-budget control at
+// the exact threshold must still parse with its decoded value unchanged.
+func TestDoubledQuoteChargesRawBytes(t *testing.T) {
+	readAt := func(t *testing.T, input string, limit, blockSize int64) ([]Field, error) {
+		t.Helper()
+		parser, err := NewCSVParser(maxRecordTestCfg(limit), NewStringReader(input), blockSize, false)
+		require.NoError(t, err)
+		return parser.Read(nil)
+	}
+	requireLimitError := func(t *testing.T, input string, limit, blockSize int64) {
+		t.Helper()
+		_, err := readAt(t, input, limit, blockSize)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "largest-entry-limit")
+	}
+
+	const wantVal = `""""`
+	doubled := `"` + strings.Repeat(`""`, 4) + `"` + "\n"
+	escaped := `"` + strings.Repeat(`\"`, 4) + `"` + "\n"
+
+	// Exact threshold with one pair: weight = 2 content + 1 field == 3.
+	t.Run("exact threshold with one pair", func(t *testing.T) {
+		pair := `""""` + "\n"
+		row, err := readAt(t, pair, 3, 4)
+		require.NoError(t, err)
+		require.Len(t, row, 1)
+		require.Equal(t, `"`, row[0].Val)
+		requireLimitError(t, pair, 2, 4)
+	})
+
+	for _, blockSize := range []int64{1, 4, 65536} {
+		t.Run(fmt.Sprintf("block=%d", blockSize), func(t *testing.T) {
+			// 4 pairs cost 8 raw content bytes; with the field frame the
+			// inclusive weight is 9.
+			requireLimitError(t, doubled, 5, blockSize)
+			requireLimitError(t, doubled, 8, blockSize)
+
+			row, err := readAt(t, doubled, 9, blockSize)
+			require.NoError(t, err)
+			require.Len(t, row, 1)
+			require.Equal(t, wantVal, row[0].Val,
+				"decoded value must not change with raw-byte accounting")
+
+			// Identical decoded bytes must price identically across encodings.
+			requireLimitError(t, escaped, 5, blockSize)
+			erow, err := readAt(t, escaped, 9, blockSize)
+			require.NoError(t, err)
+			require.Len(t, erow, 1)
+			require.Equal(t, wantVal, erow[0].Val)
+		})
+	}
+
+	// The folded-quote charge is per-record state: back-to-back records, each
+	// exactly in budget (weight 2 content + 1 field == 3), must all parse on
+	// one parser — the bound applies per record, never to the whole file.
+	t.Run("charge resets per record", func(t *testing.T) {
+		parser, err := NewCSVParser(maxRecordTestCfg(3), NewStringReader(`""""`+"\n"+`""""`+"\n"), 4, false)
+		require.NoError(t, err)
+		for i := 0; i < 2; i++ {
+			row, err := parser.Read(nil)
+			require.NoError(t, err, "record %d succeeds on its own exact budget", i+1)
+			require.Len(t, row, 1)
+			require.Equal(t, `"`, row[0].Val, "record %d decoded value", i+1)
+		}
+		_, err = parser.Read(nil)
+		require.ErrorIs(t, err, io.EOF)
+	})
+
+	// Several doubled-quote fields inside ONE record share the whole-record
+	// budget: `a""b` consumes 4 raw bytes per field (decoded buffer 3+3,
+	// folded delta 1+1) and the two field frames add 2 — weight is 10 exactly.
+	// At the exact limit it passes; one less must reject.
+	t.Run("multiple doubled-quote fields share the record budget", func(t *testing.T) {
+		multi := `"a""b","c""d"` + "\n"
+		parser, err := NewCSVParser(maxRecordTestCfg(10), NewStringReader(multi), 4, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Len(t, row, 2)
+		require.Equal(t, `a"b`, row[0].Val)
+		require.Equal(t, `c"d`, row[1].Val)
+
+		requireLimitError(t, multi, 9, 4)
+	})
+
+	// Reset reuses the same parser (and bound) after folded rows: the next
+	// input starts from a clean record with no cross-input bleed, and its
+	// decoded value is unchanged.
+	t.Run("reset reuses the parser after folded rows", func(t *testing.T) {
+		parser, err := NewCSVParser(maxRecordTestCfg(3), NewStringReader(`""""`+"\n"), 4, false)
+		require.NoError(t, err)
+		row, err := parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, `"`, row[0].Val)
+
+		parser.Reset(NewStringReader(`""""` + "\n"))
+		row, err = parser.Read(nil)
+		require.NoError(t, err)
+		require.Equal(t, `"`, row[0].Val)
+		_, err = parser.Read(nil)
+		require.ErrorIs(t, err, io.EOF)
+	})
+}
+
 // TestLargeRowsByDefault covers issue #30640 at its reproducing scale with
 // the default bound: rows that are legal to INSERT must also parse when
 // LOADed from a CSV dump. Inputs are generated, no fixture files.
