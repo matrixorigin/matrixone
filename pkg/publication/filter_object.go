@@ -627,16 +627,13 @@ func getChunkWithRetry(
 	return nil, moerr.NewInternalErrorf(ctx, "failed to get chunk %d after %d retries: %v", chunkIndex, maxRetries, lastErr)
 }
 
-// extractSortKeyFromObject extracts sortkey seqnum from object metadata
-func extractSortKeyFromObject(
-	ctx context.Context,
-	objectContent []byte,
-	stats *objectio.ObjectStats,
-) (uint16, error) {
+// readObjectMetadataBytes reads the metadata extent, retaining uncompressed
+// bytes and copying compressed bytes before releasing the cache buffer.
+func readObjectMetadataBytes(ctx context.Context, objectContent []byte, stats *objectio.ObjectStats) ([]byte, error) {
 	// Read object meta from objectContent bytes
 	metaExtent := stats.Extent()
 	if int(metaExtent.Offset()+metaExtent.Length()) > len(objectContent) {
-		return 0, moerr.NewInternalErrorf(ctx, "object content too small for meta extent")
+		return nil, moerr.NewInternalErrorf(ctx, "object content too small for meta extent")
 	}
 	metaBytes := objectContent[metaExtent.Offset() : metaExtent.Offset()+metaExtent.Length()]
 
@@ -654,7 +651,7 @@ func extractSortKeyFromObject(
 			if decompressedBuf != nil {
 				decompressedBuf.Release()
 			}
-			return 0, moerr.NewInternalErrorf(ctx, "failed to decompress meta data: %v", err)
+			return nil, moerr.NewInternalErrorf(ctx, "failed to decompress meta data: %v", err)
 		}
 		decompressedMetaBytes = decompressedBuf.Bytes()[:len(bs)]
 		// Clone the data to ensure meta doesn't hold reference to buffer
@@ -662,6 +659,20 @@ func extractSortKeyFromObject(
 		if decompressedBuf != nil {
 			decompressedBuf.Release()
 		}
+	}
+
+	return decompressedMetaBytes, nil
+}
+
+// extractSortKeyFromObject extracts sortkey seqnum from object metadata
+func extractSortKeyFromObject(
+	ctx context.Context,
+	objectContent []byte,
+	stats *objectio.ObjectStats,
+) (uint16, error) {
+	decompressedMetaBytes, err := readObjectMetadataBytes(ctx, objectContent, stats)
+	if err != nil {
+		return 0, err
 	}
 
 	meta := objectio.MustObjectMeta(decompressedMetaBytes)
@@ -686,33 +697,9 @@ func rewriteNonAppendableTombstoneWithSinker(
 	txnID []byte,
 	cleanupOwner *CCPRObjectCleanupOwner,
 ) ([]objectio.ObjectStats, error) {
-	// Step 1: Parse object metadata
-	metaExtent := stats.Extent()
-	if int(metaExtent.Offset()+metaExtent.Length()) > len(objectContent) {
-		return nil, moerr.NewInternalErrorf(ctx, "object content too small for meta extent")
-	}
-	metaBytes := objectContent[metaExtent.Offset() : metaExtent.Offset()+metaExtent.Length()]
-
-	// Decompress meta if needed
-	var decompressedMetaBytes []byte
-	var decompressedMetaBuf fscache.Data
-	if metaExtent.Alg() == compress.None {
-		decompressedMetaBytes = metaBytes
-	} else {
-		allocator := fileservice.DefaultCacheDataAllocator()
-		decompressedMetaBuf = allocator.AllocateCacheDataWithHint(ctx, int(metaExtent.OriginSize()), malloc.NoClear)
-		bs, err := compress.Decompress(metaBytes, decompressedMetaBuf.Bytes(), compress.Lz4)
-		if err != nil {
-			if decompressedMetaBuf != nil {
-				decompressedMetaBuf.Release()
-			}
-			return nil, moerr.NewInternalErrorf(ctx, "failed to decompress meta data: %v", err)
-		}
-		decompressedMetaBytes = decompressedMetaBuf.Bytes()[:len(bs)]
-		decompressedMetaBytes = append([]byte(nil), decompressedMetaBytes...)
-		if decompressedMetaBuf != nil {
-			decompressedMetaBuf.Release()
-		}
+	decompressedMetaBytes, err := readObjectMetadataBytes(ctx, objectContent, stats)
+	if err != nil {
+		return nil, err
 	}
 
 	meta := objectio.MustObjectMeta(decompressedMetaBytes)
