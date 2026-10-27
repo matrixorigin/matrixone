@@ -280,10 +280,6 @@ jobs:
         run: |
           set -euo pipefail
           case "$VARIANT" in baseline|tuned) ;; *) exit 2 ;; esac
-          if [[ "$VARIANT" == tuned ]]; then
-            export GOFLAGS="${GOFLAGS:+${GOFLAGS} }-p=1"
-            export GOMEMLIMIT=5GiB
-          fi
           relative="$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup)"
           cgroup="/sys/fs/cgroup${relative}"
           if [[ ! -r "$cgroup/memory.current" ]]; then cgroup=/sys/fs/cgroup; fi
@@ -304,6 +300,17 @@ jobs:
           license-eye -c .licenserc.yml header check
           license-eye -c .licenserc.yml dep check
           memory_snapshot after-license
+          if [[ "$VARIANT" == tuned ]]; then
+            export GOFLAGS="$(go env GOFLAGS) -p=1"
+            export GOMEMLIMIT="${GOMEMLIMIT:-5GiB}"
+          fi
+          echo "SCA_ANALYSIS_FLAGS goflags=${GOFLAGS:-<unset>} gomemlimit=${GOMEMLIMIT:-<unset>}"
+          ancestor="$cgroup"
+          while [[ "$ancestor" == /sys/fs/cgroup* ]]; do
+            if [[ -r "$ancestor/memory.max" ]]; then printf 'SCA_ANCESTOR %s max=%s\n' "$ancestor" "$(cat "$ancestor/memory.max")"; fi
+            [[ "$ancestor" == /sys/fs/cgroup ]] && break
+            ancestor="$(dirname "$ancestor")"
+          done
           TIMEFORMAT='SCA_TIME elapsed=%R user=%U sys=%S'
           if time SCA_FULL=1 make static-check-analysis GOLANGCI_LINT_CONCURRENCY=1; then
             status=0
