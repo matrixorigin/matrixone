@@ -262,6 +262,13 @@ select id, match(body) against('qaanchor') is true as t, round(match(body) again
 
 select id from every_doc where match(body) against('one') or not match(body) against('qaanchor') order by id;
 
+-- A projected score is the score, also when a condition uses it.
+select id from (select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor') or id > 0) d where sc order by id;
+
+select id from (select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor')) d where sc or id = -1 order by id;
+
+select id, if(sc, 'y', 'n') as hit from (select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor')) d where not sc order by id;
+
 create table one_doc (id bigint primary key, body text);
 
 insert into one_doc values (1, 'solo');

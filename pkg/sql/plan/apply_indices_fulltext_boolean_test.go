@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -985,6 +986,37 @@ func TestFullTextBooleanExplicitCastIsFound(t *testing.T) {
 			require.Len(t, projected, 3, sql)
 			require.Equal(t, 1, countExprFunctionCalls(projected[1:2], "isnotnull"), sql)
 			require.Zero(t, countExprFunctionCalls(projected[2:], "isnotnull"), sql)
+		}
+	}
+}
+
+func TestFullTextBooleanProjectedScoreAsBoolIsScore(t *testing.T) {
+	planFuncCalls := func(query *planpb.Query, name string) int {
+		count := 0
+		var visit func(int32)
+		visit = func(id int32) {
+			node := query.Nodes[id]
+			count += countExprFunctionCalls(node.FilterList, name)
+			count += countExprFunctionCalls(node.ProjectList, name)
+			for _, child := range node.Children {
+				visit(child)
+			}
+		}
+		visit(query.Steps[0])
+		return count
+	}
+	const inner = "select id, match(title, body) against('hello') sc from ft where match(title, body) against('hello')"
+	for _, ft2 := range []bool{false, true} {
+		for _, where := range []string{"%s", "%s or id < 0", "%s or id", "not %s", "if(%s, true, false)", "case when %s then true else false end"} {
+			for _, from := range []string{inner, inner + " or base_id = 'b1'"} {
+				sql := fmt.Sprintf("select id from (%s) d where %s", from, fmt.Sprintf(where, "sc"))
+				control := fmt.Sprintf("select id from (%s) d where %s", from, fmt.Sprintf(where, "sc <> 0"))
+				query := buildBooleanFullTextPublicPlan(t, sql, ft2, false)
+				expected := buildBooleanFullTextPublicPlan(t, control, ft2, false)
+				require.Equal(t, planFuncCalls(expected, "isnotnull"), planFuncCalls(query, "isnotnull"), sql)
+				require.Equal(t, planFuncCalls(expected, "<>"), planFuncCalls(query, "<>"), sql)
+				require.Positive(t, planFuncCalls(query, "<>"), sql)
+			}
 		}
 	}
 }

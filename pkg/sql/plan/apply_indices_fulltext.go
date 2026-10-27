@@ -2044,6 +2044,54 @@ func fullTextPredicateAsBool(ctx context.Context, expr *plan.Expr) (*plan.Expr, 
 	return makePlan2CastExpr(ctx, expr, plan.Type{Id: int32(types.T_bool)})
 }
 
+// fullTextProjectsMatch reports whether a project list projects a bare MATCH.
+func fullTextProjectsMatch(projects []*plan.Expr) bool {
+	for _, p := range projects {
+		if fn := p.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "fulltext_match" {
+			return true
+		}
+	}
+	return false
+}
+
+// fullTextProjectedScoreAsBool rewrites each BOOL use of a column that projects a MATCH
+// (cast to BOOL, IF condition) into a comparison of that column with zero, so that it keeps
+// reading the score once the column is replaced by the MATCH.
+func fullTextProjectedScoreAsBool(ctx context.Context, expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return expr
+	}
+	for i, arg := range fn.Args {
+		fn.Args[i] = fullTextProjectedScoreAsBool(ctx, arg, tag, projects)
+	}
+	switch {
+	case fn.Func.ObjName == "cast" && len(fn.Args) == 2 && fn.Args[1].GetT() != nil &&
+		fn.Args[1].Typ.Id == int32(types.T_bool):
+		if cmp := fullTextProjectedScoreNonZero(ctx, fn.Args[0], tag, projects); cmp != nil {
+			return cmp
+		}
+	case fn.Func.ObjName == "if" && len(fn.Args) > 0:
+		if cmp := fullTextProjectedScoreNonZero(ctx, fn.Args[0], tag, projects); cmp != nil {
+			fn.Args[0] = cmp
+		}
+	}
+	return expr
+}
+
+// fullTextProjectedScoreNonZero returns col <> 0 if col projects a MATCH, otherwise nil.
+func fullTextProjectedScoreNonZero(ctx context.Context, col *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
+	ref := col.GetCol()
+	if ref == nil || ref.RelPos != tag || ref.ColPos < 0 || int(ref.ColPos) >= len(projects) {
+		return nil
+	}
+	if !fullTextProjectsMatch(projects[ref.ColPos : ref.ColPos+1]) {
+		return nil
+	}
+	cmp, _ := BindFuncExprImplByPlanExpr(ctx, "<>", []*plan.Expr{col, makePlan2Float32ConstExprWithType(0)})
+	return cmp
+}
+
 // fullTextScoreColRef builds a reference to nodeID's score column, or nil if that node cannot
 // supply one.
 func (builder *QueryBuilder) fullTextScoreColRef(nodeID int32) *plan.Expr {

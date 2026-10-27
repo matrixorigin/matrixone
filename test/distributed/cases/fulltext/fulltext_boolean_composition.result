@@ -358,6 +358,15 @@ select id, match(body) against('qaanchor') is true as t, round(match(body) again
 select id from every_doc where match(body) against('one') or not match(body) against('qaanchor') order by id;
 ➤ id[-5,64,0]  𝄀
 1
+select id from (select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor') or id > 0) d where sc order by id;
+➤ id[-5,64,0]
+select id from (select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor')) d where sc or id = -1 order by id;
+➤ id[-5,64,0]
+select id, if(sc, 'y', 'n') as hit from (select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor')) d where not sc order by id;
+➤ id[-5,64,0]  ¦  hit[12,1,0]  𝄀
+1  ¦  n  𝄀
+2  ¦  n  𝄀
+3  ¦  n
 create table one_doc (id bigint primary key, body text);
 insert into one_doc values (1, 'solo');
 create fulltext index ft_one on one_doc(body) with parser gojieba;

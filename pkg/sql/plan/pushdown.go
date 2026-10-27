@@ -1007,7 +1007,11 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 		}
 		projectTag := node.BindingTags[0]
 
+		projectsMatch := fullTextProjectsMatch(node.ProjectList)
 		for _, filter := range filters {
+			if projectsMatch {
+				filter = fullTextProjectedScoreAsBool(builder.GetContext(), DeepCopyExpr(filter), projectTag, node.ProjectList)
+			}
 			introducesVolatile := replaceColRefsIntroducesVolatile(filter, projectTag, node.ProjectList)
 			rewritten := replaceColRefs(DeepCopyExpr(filter), projectTag, node.ProjectList)
 			if introducesVolatile {
