@@ -56,6 +56,25 @@ func TestVirtualTimestampReadAndIndexEligibility(t *testing.T) {
 	require.Equal(t, int32(1), correlated.GetCorr().Depth)
 }
 
+func TestVirtualTimestampOrdinaryColumnDoesNotAllocate(t *testing.T) {
+	table := &pb.TableDef{Cols: make([]*pb.ColDef, 4096)}
+	for i := range table.Cols {
+		table.Cols[i] = &pb.ColDef{Typ: pb.Type{Id: int32(types.T_int64)}}
+	}
+	ctx := &BindContext{builder: &QueryBuilder{}}
+	binding := &Binding{virtualTimestampTable: table}
+	require.Zero(t, testing.AllocsPerRun(10, func() {
+		for i := range table.Cols {
+			if virtualTimestampColumn(table, int32(i)) {
+				panic("ordinary column classified as affected")
+			}
+			if _, affected, err := ctx.bindVirtualTimestampRead(binding, int32(i), 0); err != nil || affected {
+				panic("ordinary column binding changed")
+			}
+		}
+	}))
+}
+
 func TestVirtualTimestampClassificationSharedDependencies(t *testing.T) {
 	table := &pb.TableDef{
 		Cols:          []*pb.ColDef{{Name: "x", Typ: pb.Type{Id: int32(types.T_int32)}}},

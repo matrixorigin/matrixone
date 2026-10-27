@@ -741,6 +741,16 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			columnPos: colPos,
 		})
 	}
+	var virtualRead *plan.Expr
+	if colPos != NotFound {
+		_, physicalGeneratedRef := b.ctx.physicalGeneratedRefs[astExpr]
+		if !physicalGeneratedRef {
+			virtualRead, _, err = b.ctx.bindVirtualTimestampRead(resolvedBinding, colPos, depth)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	preserveSpecialValue := typ != nil && b.mysqlSpecialTargetType != nil &&
 		typ.Enumvalues == b.mysqlSpecialTargetType.Enumvalues &&
@@ -784,26 +794,16 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				},
 			},
 		}
+		if virtualRead != nil {
+			args[len(args)-1] = virtualRead
+		}
 
 		return BindFuncExprImplByPlanExpr(b.GetContext(), indexToValueFun, args)
 	}
 
 	if colPos != NotFound {
-		_, physicalGeneratedRef := b.ctx.physicalGeneratedRefs[astExpr]
-		if !physicalGeneratedRef && resolvedBinding != nil && b.builder != nil && resolvedBinding.nodeId >= 0 &&
-			int(resolvedBinding.nodeId) < len(b.builder.qry.Nodes) {
-			node := b.builder.qry.Nodes[resolvedBinding.nodeId]
-			if node != nil && node.NodeType == plan.Node_TABLE_SCAN && node.TableDef != nil &&
-				len(node.BindingTags) == 1 && node.BindingTags[0] == relPos &&
-				virtualTimestampColumn(node.TableDef, colPos) {
-				computed := expandVirtualTimestampColumn(node.TableDef, colPos, relPos, depth, make(map[int32]bool))
-				if computed == nil {
-					return nil, moerr.NewNotSupportedf(b.GetContext(),
-						"virtual generated column '%s' needs %d read-expression nodes (limit %d); run the virtual timestamp preflight and migrate this table before upgrade",
-						col, virtualTimestampReadCost(node.TableDef, colPos), maxVirtualTimestampExpansionNodes)
-				}
-				return computed, nil
-			}
+		if virtualRead != nil {
+			return virtualRead, nil
 		}
 		expr = &plan.Expr{
 			Typ: *typ,

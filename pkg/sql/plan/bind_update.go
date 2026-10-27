@@ -386,6 +386,7 @@ func (builder *QueryBuilder) newSequentialUpdateProjectionBinder(
 		builder.nameByColRef[[2]int32{tag, int32(i)}] = alias + "." + col.Name
 	}
 	binding := NewBinding(tag, nodeID, tableDef.DbName, alias, tableDef.TblId, cols, hidden, types, false, defaults)
+	binding.virtualTimestampTable = tableDef
 	ctx.bindings = append(ctx.bindings, binding)
 	ctx.bindingByTag[tag] = binding
 	ctx.bindingByTable[alias] = binding

@@ -29,10 +29,72 @@ import (
 // column, so a generated-column DAG costs linear work rather than repeatedly
 // traversing shared dependencies. A malformed cycle is unsafe for index use.
 func virtualTimestampColumn(table *plan.TableDef, pos int32) bool {
-	if table == nil {
+	if table == nil || pos < 0 || int(pos) >= len(table.Cols) ||
+		(table.Cols[pos] != nil && (table.Cols[pos].GeneratedCol == nil || table.Cols[pos].GeneratedCol.IsStored)) {
 		return false
 	}
 	return virtualTimestampColumnState(table, pos, make([]uint8, len(table.Cols)))
+}
+
+// bindVirtualTimestampRead is shared by ordinary references and JOIN USING
+// operands. It also binds sequential UPDATE RHS references against the current
+// projection, while the separate OLD projection retains the physical value.
+func (bc *BindContext) bindVirtualTimestampRead(binding *Binding, pos, depth int32) (*plan.Expr, bool, error) {
+	if bc == nil || binding == nil || bc.builder == nil {
+		return nil, false, nil
+	}
+	table := binding.virtualTimestampTable
+	if table == nil && bc.builder.qry != nil && binding.nodeId >= 0 && int(binding.nodeId) < len(bc.builder.qry.Nodes) {
+		node := bc.builder.qry.Nodes[binding.nodeId]
+		if node != nil && node.NodeType == plan.Node_TABLE_SCAN && len(node.BindingTags) == 1 &&
+			node.BindingTags[0] == binding.tag {
+			table = node.TableDef
+		}
+	}
+	if table == nil || pos < 0 || int(pos) >= len(table.Cols) || table.Cols[pos] == nil ||
+		table.Cols[pos].GeneratedCol == nil || table.Cols[pos].GeneratedCol.IsStored {
+		return nil, false, nil
+	}
+	if len(binding.virtualTimestampClass) != len(table.Cols) {
+		binding.virtualTimestampClass = make([]uint8, len(table.Cols))
+	}
+	if !virtualTimestampColumnState(table, pos, binding.virtualTimestampClass) {
+		return nil, false, nil
+	}
+	computed := expandVirtualTimestampColumnClassified(table, pos, binding.tag, depth,
+		make(map[int32]bool), binding.virtualTimestampClass)
+	if computed == nil {
+		return nil, true, moerr.NewNotSupportedf(bc.builder.GetContext(),
+			"virtual generated column '%s' needs %d read-expression nodes (limit %d); run the virtual timestamp preflight and migrate this table before upgrade",
+			table.Cols[pos].Name, virtualTimestampReadCost(table, pos), maxVirtualTimestampExpansionNodes)
+	}
+	for scope := bc; scope != nil; scope = scope.parent {
+		if !scope.nullExtendedTags[binding.tag] {
+			continue
+		}
+		rowPos, ok := table.Name2ColIndex[catalog.Row_ID]
+		if !ok || rowPos < 0 || int(rowPos) >= len(binding.types) {
+			return nil, true, moerr.NewNotSupportedf(bc.builder.GetContext(),
+				"virtual generated column '%s' on a nullable join side requires a row identity", table.Cols[pos].Name)
+		}
+		rowID := &plan.Expr{Typ: *binding.types[rowPos]}
+		rowID.Typ.NotNullable = false
+		if depth == 0 {
+			rowID.Expr = &plan.Expr_Col{Col: &plan.ColRef{RelPos: binding.tag, ColPos: rowPos}}
+		} else {
+			rowID.Expr = &plan.Expr_Corr{Corr: &plan.CorrColRef{RelPos: binding.tag, ColPos: rowPos, Depth: depth}}
+		}
+		missing, err := BindFuncExprImplByPlanExpr(bc.builder.GetContext(), "isnull", []*plan.Expr{rowID})
+		if err != nil {
+			return nil, true, err
+		}
+		nullValue := makePlan2NullConstExprWithType()
+		nullValue.Typ = computed.Typ
+		nullValue.Typ.NotNullable = false
+		computed, err = BindFuncExprImplByPlanExpr(bc.builder.GetContext(), "if", []*plan.Expr{missing, nullValue, computed})
+		return computed, true, err
+	}
+	return computed, true, nil
 }
 
 // state: 0 unseen, 1 visiting, 2 safe, 3 affected.
@@ -223,20 +285,27 @@ func saturatingVirtualTimestampCost(a, b int) int {
 }
 
 func expandVirtualTimestampColumn(table *plan.TableDef, pos, tag, depth int32, visiting map[int32]bool) *plan.Expr {
-	remaining := maxVirtualTimestampExpansionNodes
-	return expandVirtualTimestampColumnBounded(table, pos, tag, depth, visiting, &remaining)
+	if table == nil {
+		return nil
+	}
+	return expandVirtualTimestampColumnClassified(table, pos, tag, depth, visiting, make([]uint8, len(table.Cols)))
 }
 
-func expandVirtualTimestampColumnBounded(table *plan.TableDef, pos, tag, depth int32, visiting map[int32]bool, remaining *int) *plan.Expr {
+func expandVirtualTimestampColumnClassified(table *plan.TableDef, pos, tag, depth int32, visiting map[int32]bool, classified []uint8) *plan.Expr {
+	remaining := maxVirtualTimestampExpansionNodes
+	return expandVirtualTimestampColumnBounded(table, pos, tag, depth, visiting, &remaining, classified)
+}
+
+func expandVirtualTimestampColumnBounded(table *plan.TableDef, pos, tag, depth int32, visiting map[int32]bool, remaining *int, classified []uint8) *plan.Expr {
 	if pos < 0 || int(pos) >= len(table.Cols) || table.Cols[pos] == nil || table.Cols[pos].GeneratedCol == nil || visiting[pos] {
 		return nil
 	}
 	visiting[pos] = true
 	defer delete(visiting, pos)
-	return expandVirtualTimestampExpr(table, DeepCopyExpr(table.Cols[pos].GeneratedCol.Expr), tag, depth, visiting, remaining)
+	return expandVirtualTimestampExpr(table, DeepCopyExpr(table.Cols[pos].GeneratedCol.Expr), tag, depth, visiting, remaining, classified)
 }
 
-func expandVirtualTimestampExpr(table *plan.TableDef, expr *plan.Expr, tag, depth int32, visiting map[int32]bool, remaining *int) *plan.Expr {
+func expandVirtualTimestampExpr(table *plan.TableDef, expr *plan.Expr, tag, depth int32, visiting map[int32]bool, remaining *int, classified []uint8) *plan.Expr {
 	if expr == nil || *remaining == 0 {
 		return nil
 	}
@@ -245,8 +314,8 @@ func expandVirtualTimestampExpr(table *plan.TableDef, expr *plan.Expr, tag, dept
 	// budget used by virtualTimestampExprCost and DDL admission.
 	if col, ok := expr.Expr.(*plan.Expr_Col); ok && col.Col != nil &&
 		col.Col.ColPos >= 0 && int(col.Col.ColPos) < len(table.Cols) &&
-		virtualTimestampColumn(table, col.Col.ColPos) {
-		return expandVirtualTimestampColumnBounded(table, col.Col.ColPos, tag, depth, visiting, remaining)
+		virtualTimestampColumnState(table, col.Col.ColPos, classified) {
+		return expandVirtualTimestampColumnBounded(table, col.Col.ColPos, tag, depth, visiting, remaining, classified)
 	}
 	*remaining = *remaining - 1
 	switch e := expr.Expr.(type) {
@@ -265,7 +334,7 @@ func expandVirtualTimestampExpr(table *plan.TableDef, expr *plan.Expr, tag, dept
 			return nil
 		}
 		for i, arg := range e.F.Args {
-			e.F.Args[i] = expandVirtualTimestampExpr(table, arg, tag, depth, visiting, remaining)
+			e.F.Args[i] = expandVirtualTimestampExpr(table, arg, tag, depth, visiting, remaining, classified)
 			if e.F.Args[i] == nil {
 				return nil
 			}
@@ -275,7 +344,7 @@ func expandVirtualTimestampExpr(table *plan.TableDef, expr *plan.Expr, tag, dept
 			return nil
 		}
 		for i, arg := range e.List.List {
-			e.List.List[i] = expandVirtualTimestampExpr(table, arg, tag, depth, visiting, remaining)
+			e.List.List[i] = expandVirtualTimestampExpr(table, arg, tag, depth, visiting, remaining, classified)
 			if e.List.List[i] == nil {
 				return nil
 			}

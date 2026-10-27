@@ -68,6 +68,29 @@ func TestVirtualTimestampColumnUsesReaderTimeZone(t *testing.T) {
 		require.Equal(t, d, starD)
 		count("select count(*) from (select d from t group by d) grouped", 2)
 		count("select count(*) from t a join t b on a.d=b.d where a.id=1", 1)
+		// USING constructs its equality without the ordinary column binder.
+		exec("create table using_side(uid int primary key, source_ts timestamp(6) not null, d date as (date(source_ts)) virtual)")
+		exec("set time_zone='+00:00'")
+		exec("insert into using_side(uid,source_ts) values(1,'2024-03-01 00:30:00')")
+		exec("set time_zone='+08:00'")
+		count("select count(*) from t join using_side using(d) where t.id=1", 1)
+		count("select count(*) from t natural join using_side where t.id=1", 1)
+		// A generated expression can return a non-NULL fallback for an absent
+		// outer-join row; SQL still requires the nullable side to produce NULL.
+		exec("create table nullable_side(id int primary key, ts timestamp(6), d date as (coalesce(date(ts),cast('2000-01-01' as date))) virtual)")
+		exec("insert into nullable_side(id,ts) values(1,'2024-02-29 23:30:00')")
+		count("select count(*) from t left join nullable_side r on r.id=99 where r.d is null", 2)
+		count("select count(*) from nullable_side r right join t on r.id=99 where r.d is null", 2)
+		// ENUM has a separate storage index and display value. The display
+		// conversion must consume the reader-session generated index.
+		exec("create table special_side(id int primary key, ts timestamp(6) not null, e enum('a','b') as (if(date(ts)='2024-03-01','b','a')) virtual)")
+		exec("set time_zone='+00:00'")
+		exec("insert into special_side(id,ts) values(1,'2024-02-29 23:30:00')")
+		exec("set time_zone='+08:00'")
+		count("select count(*) from special_side where e='b'", 1)
+		var label string
+		require.NoError(t, conn.QueryRowContext(ctx, "select cast(e as char) from special_side where id=1").Scan(&label))
+		require.Equal(t, "b", label)
 		for _, hint := range []string{"", "force index(kd)", "ignore index(kd)"} {
 			count("select count(*) from t "+hint+" where d='2024-03-01'", 1)
 			count("select count(*) from t "+hint+" where d='2024-02-29'", 1)
@@ -89,6 +112,17 @@ func TestVirtualTimestampColumnUsesReaderTimeZone(t *testing.T) {
 		count("select count(*) from dml where id=1", 0)
 		exec("update dml set ts=ts where id=2")
 		count("select count(*) from dml where id=2 and d='2024-03-01'", 1)
+		// A second assignment changes UPDATE planning to sequential projections.
+		// Both forms must read the session value for the user's RHS.
+		exec("create table update_rhs(id int primary key, ts timestamp(6) not null, d date as (date(ts)) virtual, x date, y int, key kd(d))")
+		exec("set time_zone='+00:00'")
+		exec("insert into update_rhs(id,ts) values(1,'2024-02-29 23:30:00'),(2,'2024-02-29 23:30:00')")
+		exec("set time_zone='+08:00'")
+		exec("update update_rhs set x=d where id=1")
+		exec("update update_rhs set x=d,y=1 where id=2")
+		count("select count(*) from update_rhs where x='2024-03-01'", 2)
+		exec("update update_rhs set ts='2024-03-02 00:30:00',x=d where id=2")
+		count("select count(*) from update_rhs where id=2 and x='2024-03-02'", 1)
 		exec("delete from dml where id=2")
 		count("select count(*) from dml", 0)
 		exec("set time_zone='+00:00'")

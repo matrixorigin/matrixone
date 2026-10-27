@@ -860,12 +860,15 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
+	builder *QueryBuilder
 	// Internal UPDATE/DELETE target projections need the persisted value for
 	// old secondary-index keys. The user predicate in the same SELECT still
 	// observes the session's virtual-column value.
 	physicalGeneratedRefs map[*tree.UnresolvedName]struct{}
-	existentialBlock      uint64
-	subqueryNestingDepth  uint32
+	// Tags whose rows can be NULL-extended by a join in this query block.
+	nullExtendedTags     map[int32]bool
+	existentialBlock     uint64
+	subqueryNestingDepth uint32
 
 	binder Binder
 
@@ -1302,11 +1305,15 @@ const (
 )
 
 type Binding struct {
-	tag     int32
-	nodeId  int32
-	db      string
-	table   string
-	tableID uint64
+	tag    int32
+	nodeId int32
+	// A sequential UPDATE binds RHS expressions against a projection of the
+	// current row. Its generated columns still use the base table expression.
+	virtualTimestampTable *plan.TableDef
+	virtualTimestampClass []uint8
+	db                    string
+	table                 string
+	tableID               uint64
 	// lower case: used for binding/lookup
 	cols []string
 	// original case: only for SELECT * display, must be same length as cols (or empty)
