@@ -22,6 +22,32 @@ from matrixone.exceptions import QueryError
 pytestmark = pytest.mark.skipif(os.environ.get('MO_SDK_ONLINE') != '1', reason='explicit isolated target required')
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+@pytest.mark.parametrize(
+    'format,quoted_path,terminator', [('csv', True, '\n'), ('csv', False, "'\n"), ('jsonl', True, '\n')]
+)
+async def test_export_quoted_path_and_line_terminator(client, async_client, kind, format, quoted_path, terminator):
+    filename = 'export_token_' + uuid.uuid4().hex + ("'quoted" if quoted_path else '') + '.' + format
+    server_path = os.environ['MO_SDK_EXPORT_DIR'].rstrip('/') + '/' + filename
+    local_path = Path(os.environ['MO_SDK_EXPORT_LOCAL_DIR']) / filename
+    exporter = async_client.export if kind == 'async' else client.export
+    try:
+        method = getattr(exporter, 'to_' + format)
+        kwargs = {'lineterminator': terminator} if format == 'csv' else {}
+        result = method(server_path, 'SELECT 1 AS id', **kwargs)
+        if kind == 'async':
+            await result
+        if format == 'csv':
+            assert local_path.read_bytes() == ('id' + terminator + '1' + terminator).encode()
+        else:
+            assert [json.loads(line) for line in local_path.read_text().splitlines()] == [{'id': 1}]
+        assert client.execute('SELECT 42').scalar() == 42
+        assert (await async_client.execute('SELECT 42')).scalar() == 42
+    finally:
+        local_path.unlink(missing_ok=True)
+
+
 @pytest.fixture(scope='module')
 def server(record_testsuite_property):
     config = dict(
