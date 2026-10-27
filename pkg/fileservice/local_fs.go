@@ -1270,6 +1270,52 @@ func openLocalMutatorFile(ctx context.Context, serviceName, filePath string, toN
 	return f, err
 }
 
+func ensureMutableLocalDir(ctx context.Context, name, filePath string, native func(string) string, ensure func(string) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path, err := ParsePathAtService(filePath, name)
+	if err != nil {
+		return err
+	}
+	return ensure(native(path.File))
+}
+
+func mutableLocalPath(ctx context.Context, name, filePath string, native func(string) string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	path, err := parseFilePathAtService(filePath, name)
+	if err != nil {
+		return "", err
+	}
+	return native(path.File), nil
+}
+
+func openMutableLocalFile(ctx context.Context, name, filePath string, native func(string) string) (*os.File, error) {
+	path, err := mutableLocalPath(ctx, name, filePath, native)
+	if err != nil {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_RDWR, 0644)
+}
+
+func createMutableLocalFile(ctx context.Context, name, filePath string, native func(string) string) (*os.File, error) {
+	path, err := mutableLocalPath(ctx, name, filePath, native)
+	if err != nil {
+		return nil, err
+	}
+	return os.Create(path)
+}
+
+func removeMutableLocalFile(ctx context.Context, name, filePath string, native func(string) string) error {
+	path, err := mutableLocalPath(ctx, name, filePath, native)
+	if err != nil {
+		return err
+	}
+	return os.Remove(path)
+}
+
 var _ MutableFileService = new(LocalFS)
 
 func (l *LocalFS) NewMutator(ctx context.Context, filePath string) (Mutator, error) {
@@ -1455,63 +1501,23 @@ func entryIsDir(path string, name string, entry fs.FileInfo) (bool, error) {
 	return false, nil
 }
 
-// open for read and write, raw os.File API.
+// EnsureDir creates a directory for a local file service.
 func (l *LocalFS) EnsureDir(ctx context.Context, filePath string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	path, err := ParsePathAtService(filePath, l.name)
-	if err != nil {
-		return err
-	}
-	return l.ensureDir(l.toNativeFilePath(path.File))
+	return ensureMutableLocalDir(ctx, l.name, filePath, l.toNativeFilePath, l.ensureDir)
 }
 
 func (l *LocalFS) OpenFile(ctx context.Context, filePath string) (*os.File, error) {
-	err := ctx.Err()
-	if err != nil {
-		return nil, err
-	}
-
-	path, err := parseFilePathAtService(filePath, l.name)
-	if err != nil {
-		return nil, err
-	}
-	nativePath := l.toNativeFilePath(path.File)
-	return os.OpenFile(nativePath, os.O_RDWR, 0644)
+	return openMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath)
 }
 
-// create or truncate.
 func (l *LocalFS) CreateFile(ctx context.Context, filePath string) (*os.File, error) {
-	err := ctx.Err()
-	if err != nil {
-		return nil, err
-	}
-
-	path, err := parseFilePathAtService(filePath, l.name)
-	if err != nil {
-		return nil, err
-	}
-	nativePath := l.toNativeFilePath(path.File)
-	return os.Create(nativePath)
+	return createMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath)
 }
 
-// remove file
 func (l *LocalFS) RemoveFile(ctx context.Context, filePath string) error {
-	err := ctx.Err()
-	if err != nil {
-		return err
-	}
-
-	path, err := parseFilePathAtService(filePath, l.name)
-	if err != nil {
-		return err
-	}
-	nativePath := l.toNativeFilePath(path.File)
-	return os.Remove(nativePath)
+	return removeMutableLocalFile(ctx, l.name, filePath, l.toNativeFilePath)
 }
 
-// open/create then immediately remove.   the opend file is good for read/write.
 func (l *LocalFS) CreateAndRemoveFile(ctx context.Context, filePath string) (*os.File, error) {
 	err := ctx.Err()
 	if err != nil {
