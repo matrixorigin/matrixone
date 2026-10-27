@@ -1010,6 +1010,16 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 				continue
 			}
 			switch act := action.Action.(type) {
+			case *plan.AlterTable_Action_AddColumn:
+				if act == nil || act.AddColumn == nil {
+					continue
+				}
+				add := *act.AddColumn
+				add.XXX_unrecognized = slices.Clone(act.AddColumn.XXX_unrecognized)
+				add.Type = *DeepCopyType(&act.AddColumn.Type)
+				AlterTable.Actions[i] = &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AddColumn{AddColumn: &add},
+				}
 			case *plan.AlterTable_Action_Drop:
 				AlterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_Drop{
