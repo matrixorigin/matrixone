@@ -180,15 +180,11 @@ func TestPauseResumeRaceCondition_DataLoss(t *testing.T) {
 
 	// Step 3: Set up hooks to control timing precisely
 	// The updater will signal when watermark update is about to happen
-	watermarkUpdateStarted := make(chan struct{}, 1)
+	watermarkUpdateStarted := make(chan struct{})
+	resumeWatermarkUpdate := make(chan struct{})
 	updater.beforeUpdateHook = func() {
-		// Signal that we're about to update watermark
-		select {
-		case watermarkUpdateStarted <- struct{}{}:
-		default:
-		}
-		// Give pause signal a chance to arrive during watermark update
-		time.Sleep(20 * time.Millisecond)
+		close(watermarkUpdateStarted)
+		<-resumeWatermarkUpdate
 	}
 
 	// Step 4: Start commit in background
@@ -206,6 +202,7 @@ func TestPauseResumeRaceCondition_DataLoss(t *testing.T) {
 	updater.markTaskPaused("race-test")
 	sinker.signalPause()
 	updater.signalPause()
+	close(resumeWatermarkUpdate)
 	t.Logf("Pause signal sent during watermark update")
 
 	// Wait for commit to complete
@@ -214,6 +211,11 @@ func TestPauseResumeRaceCondition_DataLoss(t *testing.T) {
 
 	// Step 6: Verify NO watermark updates happened during pause (with fix, should be blocked)
 	updateLog := updater.getUpdateLog()
+	require.Len(t, updateLog, 1)
+	updater.mu.Lock()
+	storedWatermarks := len(updater.watermarks)
+	updater.mu.Unlock()
+	require.Zero(t, storedWatermarks, "paused task must not publish a watermark")
 	for _, update := range updateLog {
 		if update.pausedDuringUpdate {
 			assert.Fail(t,
