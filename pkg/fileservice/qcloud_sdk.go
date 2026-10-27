@@ -29,7 +29,6 @@ import (
 	gotrace "runtime/trace"
 	"slices"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -596,136 +595,24 @@ func (a *QCloudSDK) WriteMultipartParallel(
 		}
 	}()
 
-	type partJob struct {
-		num  int32
-		part *parallelUploadPart
-	}
-
-	var (
-		partNum   int32
-		parts     []cos.Object
-		partsLock sync.Mutex
-		wg        sync.WaitGroup
-		errOnce   sync.Once
-		firstErr  error
-	)
-
-	setErr := func(e error) {
-		if e == nil {
-			return
+	parts, err := uploadParallelParts(ctx, cancel, r, options, firstPart, func(ctx context.Context, num int32, part *parallelUploadPart) (cos.Object, error) {
+		uploadOpt := &cos.ObjectUploadPartOptions{ContentLength: int64(part.n)}
+		resp, uploadErr := DoWithRetryContext(ctx, "cos upload part", func() (*cos.Response, error) {
+			recordS3PutRequest(ctx, a.perfCounterSets...)
+			return a.client.Object.UploadPart(ctx, key, output.UploadID, int(num), bytes.NewReader(part.buf[:part.n]), uploadOpt)
+		}, maxRetryAttemps, IsRetryableError)
+		if uploadErr != nil {
+			return cos.Object{}, uploadErr
 		}
-		errOnce.Do(func() {
-			firstErr = e
-			cancel()
-		})
-	}
-
-	uploadSlots := make(chan struct{}, options.Concurrency)
-	startPartUpload := func(job partJob) bool {
-		select {
-		case uploadSlots <- struct{}{}:
-		case <-ctx.Done():
-			releaseParallelUploadPart(job.part)
-			setErr(ctx.Err())
-			return false
+		recordS3AcceptedBytes(ctx, int64(part.n), a.perfCounterSets...)
+		etag := ""
+		if resp != nil && resp.Header != nil {
+			etag = resp.Header.Get("ETag")
 		}
-		select {
-		case getParallelUploadSemaphore() <- struct{}{}:
-		case <-ctx.Done():
-			<-uploadSlots
-			releaseParallelUploadPart(job.part)
-			setErr(ctx.Err())
-			return false
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() {
-				<-getParallelUploadSemaphore()
-				<-uploadSlots
-			}()
-			if options.beforePartUpload != nil {
-				options.beforePartUpload()
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				setErr(ctxErr)
-				releaseParallelUploadPart(job.part)
-				return
-			}
-			uploadOpt := &cos.ObjectUploadPartOptions{
-				ContentLength: int64(job.part.n),
-			}
-			resp, uploadErr := DoWithRetryContext(ctx, "cos upload part", func() (*cos.Response, error) {
-				recordS3PutRequest(ctx, a.perfCounterSets...)
-				return a.client.Object.UploadPart(ctx, key, output.UploadID, int(job.num), bytes.NewReader(job.part.buf[:job.part.n]), uploadOpt)
-			}, maxRetryAttemps, IsRetryableError)
-			if uploadErr != nil {
-				setErr(uploadErr)
-				releaseParallelUploadPart(job.part)
-				return
-			}
-			recordS3AcceptedBytes(ctx, int64(job.part.n), a.perfCounterSets...)
-			etag := ""
-			if resp != nil && resp.Header != nil {
-				etag = resp.Header.Get("ETag")
-			}
-			releaseParallelUploadPart(job.part)
-			partsLock.Lock()
-			parts = append(parts, cos.Object{
-				PartNumber: int(job.num),
-				ETag:       etag,
-			})
-			partsLock.Unlock()
-		}()
-		return true
-	}
-
-	sendJob := func(part *parallelUploadPart) bool {
-		partNum++
-		if partNum > maxMultipartParts {
-			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", partNum))
-			releaseParallelUploadPart(part)
-			return false
-		}
-		job := partJob{
-			num:  partNum,
-			part: part,
-		}
-		return startPartUpload(job)
-	}
-
-	if sendJob(firstPart) {
-		for {
-			part, readErr := readParallelUploadPart(ctx, r, options.PartSize)
-			if errors.Is(readErr, io.EOF) && part == nil {
-				break
-			}
-			if readErr != nil && !errors.Is(readErr, io.EOF) {
-				setErr(readErr)
-				releaseParallelUploadPart(part)
-				break
-			}
-			if part == nil || part.n == 0 {
-				releaseParallelUploadPart(part)
-				break
-			}
-			if !sendJob(part) {
-				break
-			}
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-		}
-	}
-
-	wg.Wait()
-
-	if firstErr != nil {
-		err = firstErr
+		return cos.Object{PartNumber: int(num), ETag: etag}, nil
+	})
+	if err != nil {
 		return err
-	}
-	if len(parts) != int(partNum) {
-		return moerr.NewInternalErrorNoCtxf("multipart upload incomplete, expect %d parts got %d", partNum, len(parts))
 	}
 
 	slices.SortFunc(parts, func(a, b cos.Object) int {

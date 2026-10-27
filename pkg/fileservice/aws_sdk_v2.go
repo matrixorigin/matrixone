@@ -29,7 +29,6 @@ import (
 	gotrace "runtime/trace"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -659,135 +658,25 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 		}
 	}()
 
-	type partJob struct {
-		num  int32
-		part *parallelUploadPart
-	}
-
-	var (
-		partNum   int32
-		parts     []types.CompletedPart
-		partsLock sync.Mutex
-		wg        sync.WaitGroup
-		errOnce   sync.Once
-		firstErr  error
-	)
-
-	setErr := func(e error) {
-		if e == nil {
-			return
-		}
-		errOnce.Do(func() {
-			firstErr = e
-			cancel()
-		})
-	}
-
-	uploadSlots := make(chan struct{}, options.Concurrency)
-	startPartUpload := func(job partJob) bool {
-		select {
-		case uploadSlots <- struct{}{}:
-		case <-ctx.Done():
-			releaseParallelUploadPart(job.part)
-			setErr(ctx.Err())
-			return false
-		}
-		select {
-		case getParallelUploadSemaphore() <- struct{}{}:
-		case <-ctx.Done():
-			<-uploadSlots
-			releaseParallelUploadPart(job.part)
-			setErr(ctx.Err())
-			return false
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() {
-				<-getParallelUploadSemaphore()
-				<-uploadSlots
-			}()
-			if options.beforePartUpload != nil {
-				options.beforePartUpload()
-			}
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				setErr(ctxErr)
-				releaseParallelUploadPart(job.part)
-				return
-			}
-			uploadOutput, uploadErr := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
-				recordS3PutRequest(ctx, a.perfCounterSets...)
-				return a.client.UploadPart(ctx, &s3.UploadPartInput{
-					Bucket:     ptrTo(a.bucket),
-					Key:        ptrTo(key),
-					PartNumber: &job.num,
-					UploadId:   output.UploadId,
-					Body:       bytes.NewReader(job.part.buf[:job.part.n]),
-				})
-			}, maxRetryAttemps, IsRetryableError)
-			if uploadErr != nil {
-				setErr(uploadErr)
-				releaseParallelUploadPart(job.part)
-				return
-			}
-			recordS3AcceptedBytes(ctx, int64(job.part.n), a.perfCounterSets...)
-			releaseParallelUploadPart(job.part)
-			partsLock.Lock()
-			parts = append(parts, types.CompletedPart{
-				ETag:       uploadOutput.ETag,
-				PartNumber: ptrTo(job.num),
+	parts, err := uploadParallelParts(ctx, cancel, r, options, firstPart, func(ctx context.Context, num int32, part *parallelUploadPart) (types.CompletedPart, error) {
+		uploadOutput, uploadErr := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
+			recordS3PutRequest(ctx, a.perfCounterSets...)
+			return a.client.UploadPart(ctx, &s3.UploadPartInput{
+				Bucket:     ptrTo(a.bucket),
+				Key:        ptrTo(key),
+				PartNumber: &num,
+				UploadId:   output.UploadId,
+				Body:       bytes.NewReader(part.buf[:part.n]),
 			})
-			partsLock.Unlock()
-		}()
-		return true
-	}
-
-	sendJob := func(part *parallelUploadPart) bool {
-		partNum++
-		if partNum > maxMultipartParts {
-			setErr(moerr.NewInternalErrorNoCtxf("too many parts for multipart upload: %d", partNum))
-			releaseParallelUploadPart(part)
-			return false
+		}, maxRetryAttemps, IsRetryableError)
+		if uploadErr != nil {
+			return types.CompletedPart{}, uploadErr
 		}
-		job := partJob{
-			num:  partNum,
-			part: part,
-		}
-		return startPartUpload(job)
-	}
-
-	if sendJob(firstPart) {
-		for {
-			part, readErr := readParallelUploadPart(ctx, r, options.PartSize)
-			if errors.Is(readErr, io.EOF) && part == nil {
-				break
-			}
-			if readErr != nil && !errors.Is(readErr, io.EOF) {
-				setErr(readErr)
-				releaseParallelUploadPart(part)
-				break
-			}
-			if part == nil || part.n == 0 {
-				releaseParallelUploadPart(part)
-				break
-			}
-			if !sendJob(part) {
-				break
-			}
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-		}
-	}
-
-	wg.Wait()
-
-	if firstErr != nil {
-		err = firstErr
+		recordS3AcceptedBytes(ctx, int64(part.n), a.perfCounterSets...)
+		return types.CompletedPart{ETag: uploadOutput.ETag, PartNumber: ptrTo(num)}, nil
+	})
+	if err != nil {
 		return err
-	}
-	if len(parts) != int(partNum) {
-		return moerr.NewInternalErrorNoCtxf("multipart upload incomplete, expect %d parts got %d", partNum, len(parts))
 	}
 
 	slices.SortFunc(parts, func(a, b types.CompletedPart) int {
