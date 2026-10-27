@@ -295,7 +295,6 @@ type WriteObjectJobInfo interface {
 
 // syncProtectionEntry represents a registered sync protection job
 type syncProtectionEntry struct {
-	jobID       string
 	ttlExpireTS atomic.Int64
 }
 
@@ -624,9 +623,7 @@ func (w *worker) RegisterSyncProtection(jobID string, ttlExpireTS int64) {
 		return
 	}
 
-	entry := &syncProtectionEntry{
-		jobID: jobID,
-	}
+	entry := &syncProtectionEntry{}
 	entry.ttlExpireTS.Store(ttlExpireTS)
 	w.syncProtectionJobs[jobID] = entry
 
