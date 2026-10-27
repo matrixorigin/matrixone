@@ -48,7 +48,7 @@ func (f VendedObjectReaderFactory) NewObjectReader(ctx context.Context, catalog 
 		Namespace:      req.Namespace,
 		Table:          req.Table,
 		PlanID:         f.PlanID,
-		ReferencedBy:   cloneStringSlice(f.ReferencedBy),
+		ReferencedBy:   append([]string(nil), f.ReferencedBy...),
 	})
 	if err != nil {
 		return nil, ObjectReaderContext{}, err
@@ -83,13 +83,13 @@ func (f VendedObjectReaderFactory) newVendedObjectReader(ctx context.Context, re
 	}
 	credentialHash := api.PathHash(storageCredentialsIdentity(credentials))
 	return icebergio.ProviderObjectReader{
-		Provider:         provider,
-		ScopeForLocation: scopeForLocation,
-	}, ObjectReaderContext{
-		CredentialHash:  credentialHash,
-		CredentialScope: credentialHash,
-		ObjectIORef:     objectIORef,
-	}, nil
+			Provider:         provider,
+			ScopeForLocation: scopeForLocation,
+		}, ObjectReaderContext{
+			CredentialHash:  credentialHash,
+			CredentialScope: credentialHash,
+			ObjectIORef:     objectIORef,
+		}, nil
 }
 
 func (f VendedObjectReaderFactory) newRemoteSigningObjectReader(ctx context.Context, catalog api.CatalogClient, req api.ScanPlanRequest) (api.ObjectReader, ObjectReaderContext, error) {
@@ -98,7 +98,7 @@ func (f VendedObjectReaderFactory) newRemoteSigningObjectReader(ctx context.Cont
 		Namespace:      req.Namespace,
 		Table:          req.Table,
 		Snapshots:      "all",
-		ReferencedBy:   cloneStringSlice(f.ReferencedBy),
+		ReferencedBy:   append([]string(nil), f.ReferencedBy...),
 	})
 	if err != nil {
 		return nil, ObjectReaderContext{}, err
@@ -149,13 +149,13 @@ func (f VendedObjectReaderFactory) newRemoteSigningObjectReader(ctx context.Cont
 	}
 	scopeHash := api.PathHash(remoteSigningIdentity(table.Config))
 	return icebergio.ProviderObjectReader{
-		Provider:         provider,
-		ScopeForLocation: scopeForLocation,
-	}, ObjectReaderContext{
-		CredentialHash:  scopeHash,
-		CredentialScope: scopeHash,
-		ObjectIORef:     objectIORef,
-	}, nil
+			Provider:         provider,
+			ScopeForLocation: scopeForLocation,
+		}, ObjectReaderContext{
+			CredentialHash:  scopeHash,
+			CredentialScope: scopeHash,
+			ObjectIORef:     objectIORef,
+		}, nil
 }
 
 func objectIORefTTL(credentials []api.StorageCredential, nowFunc func() time.Time) time.Duration {
@@ -271,13 +271,6 @@ func writeObjectReaderIdentityPart(out *strings.Builder, value string) {
 	out.WriteString(strconv.Itoa(len(value)))
 	out.WriteByte(':')
 	out.WriteString(value)
-}
-
-func cloneStringSlice(in []string) []string {
-	if len(in) == 0 {
-		return nil
-	}
-	return append([]string(nil), in...)
 }
 
 var _ ObjectReaderFactory = VendedObjectReaderFactory{}.NewObjectReader

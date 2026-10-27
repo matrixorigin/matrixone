@@ -499,13 +499,8 @@ func clonePartitionSpecs(in []api.PartitionSpec) []api.PartitionSpec {
 	}
 	out := make([]api.PartitionSpec, len(in))
 	for i := range in {
-		out[i] = clonePartitionSpec(in[i])
+		out[i] = in[i]
+		out[i].Fields = append([]api.PartitionField(nil), in[i].Fields...)
 	}
-	return out
-}
-
-func clonePartitionSpec(in api.PartitionSpec) api.PartitionSpec {
-	out := in
-	out.Fields = append([]api.PartitionField(nil), in.Fields...)
 	return out
 }
