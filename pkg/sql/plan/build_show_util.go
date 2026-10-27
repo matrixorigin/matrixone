@@ -1550,36 +1550,28 @@ func formatForeignTableOptionsForShowCreate(cfg foreignext.Config, sqlMode strin
 }
 
 func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam, sqlMode string) string {
+	// External tables must be recreatable from their own DDL: SHOW CREATE
+	// output feeds mo-dump restores and snapshot/PITR replay, so the read
+	// FILEPATH is preserved rather than masked (#24372 covered the
+	// Hive-partitioned scope, #31261 the ordinary infile scope), and empty
+	// optional keys are omitted because the read-side option validator rejects
+	// them (e.g. 'JSONDATA'=''). Credential-bearing S3 sources keep their
+	// masking in formatS3ExternalOptionsForShowCreate; a plain server-local
+	// path is not a secret, and masking it builds an unreadable table.
+	parts := make([]string, 0, 7)
+	parts = append(parts,
+		formatStrLitForSQLMode("FILEPATH", sqlMode)+"="+formatStrLitForSQLMode(param.Filepath, sqlMode))
+	appendInfileOptionForShowCreate(&parts, "COMPRESSION", param.CompressType, sqlMode)
+	appendInfileOptionForShowCreate(&parts, "FORMAT", param.Format, sqlMode)
+	appendInfileOptionForShowCreate(&parts, "JSONDATA", param.JsonData, sqlMode)
 	if pattern, writable := GetWriteFilePattern(param); writable {
-		// Writable external tables must be recreatable from their own DDL:
-		// snapshot/PITR restore replays SHOW CREATE output, so masking the
-		// read FILEPATH (or emitting empty optional keys, which the read-side
-		// option validator rejects — e.g. 'JSONDATA'='') would silently
-		// produce a table that can write but not read its files.
-		parts := make([]string, 0, 6)
-		appendInfileOptionForShowCreate(&parts, "FILEPATH", param.Filepath, sqlMode)
-		appendInfileOptionForShowCreate(&parts, "COMPRESSION", param.CompressType, sqlMode)
-		appendInfileOptionForShowCreate(&parts, "FORMAT", param.Format, sqlMode)
-		appendInfileOptionForShowCreate(&parts, "JSONDATA", param.JsonData, sqlMode)
+		// A writable external table must retain its write pattern or the
+		// recreated table silently degrades to read-only.
 		appendInfileOptionForShowCreate(&parts, "WRITE_FILE_PATTERN", pattern, sqlMode)
-		// The CSV reader skips lines whose raw prefix matches COMMENT (the writer
-		// encloses colliding first fields), so the marker affects readback and
-		// must round-trip; omitted when unset.
-		appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param), sqlMode)
-		return " INFILE{" + strings.Join(parts, ",") + "}"
 	}
-	filepath := ""
-	if param.HivePartitioning {
-		filepath = param.Filepath
-	}
-	parts := []string{
-		formatStrLitForSQLMode("FILEPATH", sqlMode) + "=" + formatStrLitForSQLMode(filepath, sqlMode),
-		formatStrLitForSQLMode("COMPRESSION", sqlMode) + "=" + formatStrLitForSQLMode(param.CompressType, sqlMode),
-		formatStrLitForSQLMode("FORMAT", sqlMode) + "=" + formatStrLitForSQLMode(param.Format, sqlMode),
-		formatStrLitForSQLMode("JSONDATA", sqlMode) + "=" + formatStrLitForSQLMode(param.JsonData, sqlMode),
-	}
-	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
-	// changes which rows are returned; round-trip it (omitted when unset).
+	// The CSV reader skips lines whose raw prefix matches COMMENT (the writer
+	// encloses colliding first fields), so the marker affects readback and
+	// must round-trip; omitted when unset.
 	appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param), sqlMode)
 	appendInfileOptionForShowCreate(&parts, "JSON_BINARY", param.JsonBinary, sqlMode)
 	appendHivePartitionOptionsForShowCreate(&parts, param, true, sqlMode)
