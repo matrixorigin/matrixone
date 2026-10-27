@@ -1163,6 +1163,13 @@ func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...a
 	return newError(ctx, ErrDataTruncated, typ, msg)
 }
 
+// NewAssignmentValueTruncated is a real strict-assignment failure with MySQL
+// diagnostic 1265/01000. Reuse the released error code used by ENUM/SET so
+// older error decoders retain the same real-error and rollback semantics.
+func NewAssignmentValueTruncated(ctx context.Context, message string) *Error {
+	return newError(ctx, ErrEnumSetValueTruncated, message)
+}
+
 // NewEnumSetValueTruncated is a real strict-assignment failure, even though
 // MySQL uses the same diagnostic number for non-strict truncation warnings.
 func NewEnumSetValueTruncated(ctx context.Context, message string) *Error {

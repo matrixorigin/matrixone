@@ -28,13 +28,15 @@ const records = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map(name => ({
 }));
 records[1].imports = [records[0].id];
 records.push({ id: `${records[2].id}_test [${records[2].id}.test]`, dir: records[2].dir,
-  imports: [records[0].id] });
+  imports: [records[1].id] });
 const file = (filename, status = 'M') => ({ filename, status });
 
 test('complete package selection follows production and test imports, not test reverse imports', () => {
   assert.deepEqual(selectPackages([file('pkg/a/a.go')], records, root), ['./pkg/a', './pkg/b', './pkg/c']);
   assert.deepEqual(selectPackages([file('pkg/a/a_test.go')], records, root), ['./pkg/a']);
-  assert.deepEqual(selectPackages([file('pkg/a/a.go', 'D'), file('pkg/d/a.go', 'A')], records, root), ['./...']);
+  const reasons = [];
+  assert.deepEqual(selectPackages([file('pkg/a/a.go', 'D'), file('pkg/d/a.go', 'A')], records, root, reason => reasons.push(reason)), ['./...']);
+  assert.match(reasons.join('\n'), /threshold \(4\/8 packages\)/);
   assert.deepEqual(selectPackages([file('pkg/a/a.go', 'D')], records, root), ['./pkg/a', './pkg/b', './pkg/c']);
 });
 
@@ -90,7 +92,9 @@ test('immutable tree comparison handles shallow bases, moves, dirt and unavailab
       return git(args);
     } }), null);
   }
-  assert.equal(immutableChanges({ env, git: args => args[0] === 'status' ? ' M pkg/a/a.go' : git(args) }), null);
+  const reasons = [];
+  assert.equal(immutableChanges({ env, git: args => args[0] === 'status' ? ' M pkg/a/a.go' : git(args), report: reason => reasons.push(reason) }), null);
+  assert.deepEqual(reasons, ['checkout contains uncommitted inputs']);
   assert.equal(immutableChanges({ env, git: args => args[0] === 'rev-parse' ? base : git(args) }), null);
   assert.equal(immutableChanges({ env: { ...env, GITHUB_EVENT_NAME: 'push' }, git }), null);
 });
@@ -144,6 +148,7 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   const first = run();
   assert.equal(first.result.status, 0, first.result.stderr + first.result.stdout);
   assert.equal(first.commands.length, 2);
+  assert.match(first.result.stderr, /SCA selection: 3\/8 packages/);
   for (const command of first.commands) assert.ok(command.endsWith('./pkg/a ./pkg/b ./pkg/c'), command);
   assert.ok(first.commands[1].includes('--concurrency 1'));
   const ignored = path.join(repo, 'pkg/h/ignored.go');
@@ -151,17 +156,44 @@ test('real Make consumer shares selection, keeps full override, and propagates a
   const generated = run();
   fs.unlinkSync(ignored);
   assert.equal(generated.result.status, 0, generated.result.stderr);
+  assert.match(generated.result.stderr, /untracked, generated or nonregular source inputs/);
   assert.ok(generated.commands.every(command => command.endsWith('./...')),
     'Go consumes ignored inputs too; Git status alone cannot exempt their packages');
   const full = run({ SCA_FULL: '1' });
   assert.equal(full.result.status, 0, full.result.stderr);
+  assert.match(full.result.stderr, /SCA_FULL=1/);
   assert.ok(full.commands.every(command => command.endsWith('./...')));
   const vetFailure = run({ FAIL_VET: '7' });
   assert.notEqual(vetFailure.result.status, 0);
   assert.equal(vetFailure.commands.length, 1);
   assert.notEqual(run({ FAIL_LINT: '9' }).result.status, 0);
+  const noNode = path.join(dir, 'without-node');
+  fs.mkdirSync(noNode);
+  for (const command of ['make', 'grep', 'git', 'which']) {
+    const executable = execFileSync('which', [command], { encoding: 'utf8' }).trim();
+    fs.symlinkSync(executable, path.join(noNode, command));
+  }
+  for (const command of Object.keys(tools)) fs.symlinkSync(path.join(bin, command), path.join(noNode, command));
+  const missingNode = run({ PATH: noNode });
+  assert.equal(missingNode.result.status, 0, missingNode.result.stderr);
+  assert.match(missingNode.result.stderr, /full graph \(Node unavailable on PATH in CI\)/);
+  assert.equal(missingNode.commands.length, 2);
+  assert.ok(missingNode.commands.every(command => command.endsWith('./...')));
+  const missingNodeVetFailure = run({ PATH: noNode, FAIL_VET: '7' });
+  assert.notEqual(missingNodeVetFailure.result.status, 0);
+  assert.equal(missingNodeVetFailure.commands.length, 1);
+  const missingNodeLintFailure = run({ PATH: noNode, FAIL_LINT: '9' });
+  assert.notEqual(missingNodeLintFailure.result.status, 0);
+  assert.equal(missingNodeLintFailure.commands.length, 2);
+  const local = run({ PATH: noNode, GITHUB_ACTIONS: 'false' });
+  assert.equal(local.result.status, 0, local.result.stderr);
+  assert.match(local.result.stderr, /full graph \(local invocation\)/);
+  assert.ok(local.commands.every(command => command.endsWith('./...')));
   fs.writeFileSync(path.join(repo, 'pkg/a/a.go'), 'not a Go package\n');
   const invalid = run();
   assert.notEqual(invalid.result.status, 0);
   assert.equal(invalid.commands.length, 0);
+  const missingNodeInvalid = run({ PATH: noNode });
+  assert.notEqual(missingNodeInvalid.result.status, 0);
+  assert.equal(missingNodeInvalid.commands.length, 0, 'full graph validation must precede either analyzer');
 });

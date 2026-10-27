@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -190,6 +191,7 @@ func TestExportPipeCancellation(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				ep, _, _, _ := exportLifecycleFixture(t, ctx, "csv")
+				ep.auditEnabled = true
 				defer ep.Close()
 				ep.service = ses.GetService()
 				ep.userConfig.FilePath = "SHARED:/cancel.csv"
@@ -229,6 +231,10 @@ func TestExportPipeCancellation(t *testing.T) {
 					} else if phase == "reader" {
 						synctest.Wait()
 						cancel()
+					} else if phase == "late-close" {
+						// Model progress accepted by the pipe before the sink reports a
+						// close error. It must remain provisional, not exact output.
+						ep.CurFileSize, ep.Rows = 17, 1
 					}
 				}
 				err := ep.finish(nil)
@@ -243,6 +249,8 @@ func TestExportPipeCancellation(t *testing.T) {
 				require.Nil(t, ep.AsyncWriter)
 				require.Nil(t, ep.AsyncGroup)
 				require.Nil(t, ep.stopFileCancel)
+				require.Zero(t, ep.auditBytesWritten)
+				require.Zero(t, ep.auditRowsWritten)
 			})
 		})
 	}
@@ -252,18 +260,25 @@ func TestExportSplitAndEmptyFileCleanup(t *testing.T) {
 	for _, empty := range []bool{false, true} {
 		t.Run(map[bool]string{false: "split", true: "empty"}[empty], func(t *testing.T) {
 			dir := t.TempDir()
-			ep := &ExportConfig{ctx: context.Background(), proc: sysFileAccessTestProcess(), userConfig: newDiffCSVUserConfig(), mrs: &MysqlResultSet{}}
+			ep := &ExportConfig{ctx: context.Background(), proc: sysFileAccessTestProcess(), userConfig: newDiffCSVUserConfig(), mrs: &MysqlResultSet{}, auditEnabled: true}
 			ep.userConfig.FilePath = filepath.Join(dir, "out.csv")
 			ep.userConfig.MaxFileSize = 3
 			ep.init()
 			defer ep.Close()
 			require.NoError(t, openNewFile(ep.ctx, ep, ep.mrs))
 			if !empty {
-				require.NoError(t, writeToCSVFile(ep, []byte("a\n")))
-				require.NoError(t, writeToCSVFile(ep, []byte("b\n")))
+				require.NoError(t, writeExportBatchToFile(ep, &BatchByte{writeByte: []byte("a\n"), rowEnds: []int{2}, rowCount: 1}))
+				require.NoError(t, writeExportBatchToFile(ep, &BatchByte{writeByte: []byte("b\n"), rowEnds: []int{2}, rowCount: 1}))
 			}
 			require.NoError(t, exportAllDataFromBatches(ep))
 			require.NoError(t, ep.finish(nil))
+			if empty {
+				require.Zero(t, ep.auditBytesWritten)
+				require.Zero(t, ep.auditRowsWritten)
+			} else {
+				require.EqualValues(t, 4, ep.auditBytesWritten)
+				require.EqualValues(t, 2, ep.auditRowsWritten)
+			}
 			require.Nil(t, ep.FileService)
 			require.Nil(t, ep.AsyncGroup)
 			content, err := os.ReadFile(filepath.Join(dir, "out.csv"))
@@ -276,6 +291,103 @@ func TestExportSplitAndEmptyFileCleanup(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, "b\n", string(content))
 			}
+		})
+	}
+}
+
+func TestExportAuditPartialSplitFailureKeepsConfirmedLowerBoundAndAllowsReuse(t *testing.T) {
+	ses := newValidateSession(t)
+	pu := getPu(ses.GetService())
+	original := pu.FileService
+	t.Cleanup(func() { pu.FileService = original })
+
+	injected := errors.New("second split sink failure")
+	completed := make(map[string][]byte)
+	fs := &exportLifecycleFS{write: func(_ context.Context, v fileservice.IOVector) error {
+		data, err := io.ReadAll(v.Entries[0].ReaderForWrite)
+		if err != nil {
+			return err
+		}
+		if v.FilePath == "SHARED:/audit/partial.csv.1" {
+			return injected
+		}
+		completed[v.FilePath] = data
+		return nil
+	}}
+	pu.FileService = fs
+
+	failed, _, _, _ := exportLifecycleFixture(t, context.Background(), "csv")
+	failed.auditEnabled = true
+	failed.service = ses.GetService()
+	failed.userConfig.FilePath = "SHARED:/audit/partial.csv"
+	failed.userConfig.SplitSize = 2
+	defer failed.Close()
+	require.NoError(t, openNewFile(failed.ctx, failed, failed.mrs))
+	require.NoError(t, writeExportBatchToFile(failed, &BatchByte{
+		writeByte: []byte("a\nb\n"), rowEnds: []int{2, 4}, rowCount: 2,
+	}))
+	require.ErrorIs(t, failed.finish(nil), injected)
+	require.Equal(t, []byte("a\n"), completed["SHARED:/audit/partial.csv"])
+	require.NotContains(t, completed, "SHARED:/audit/partial.csv.1", "the failed split is not a confirmed file")
+	require.EqualValues(t, 2, failed.auditBytesWritten)
+	require.EqualValues(t, 1, failed.auditRowsWritten)
+	require.Nil(t, failed.AsyncGroup)
+	require.Nil(t, failed.AsyncWriter)
+
+	failedStatement := motrace.NewStatementInfo()
+	failedStatement.SetOutfileReceipt(motrace.StatementOutfileReceipt{
+		Version: 1, Target: "SHARED:/audit/partial.csv", Format: "csv",
+	})
+	failedStatement.UpdateOutfileReceipt("csv", failed.auditBytesWritten, failed.auditRowsWritten, false)
+	require.JSONEq(t,
+		`{"outfile":{"version":1,"target":"SHARED:/audit/partial.csv","format":"csv","bytes_written":2,"rows_written":1,"complete":false}}`,
+		string(failedStatement.ExecPlan2Json(context.Background())),
+	)
+
+	recovered, _, _, _ := exportLifecycleFixture(t, context.Background(), "csv")
+	recovered.auditEnabled = true
+	recovered.service = ses.GetService()
+	recovered.userConfig.FilePath = "SHARED:/audit/recovered.csv"
+	defer recovered.Close()
+	require.NoError(t, openNewFile(recovered.ctx, recovered, recovered.mrs))
+	require.NoError(t, writeExportBatchToFile(recovered, &BatchByte{
+		writeByte: []byte("c\n"), rowEnds: []int{2}, rowCount: 1,
+	}))
+	require.NoError(t, recovered.finish(nil))
+	require.Equal(t, []byte("c\n"), completed["SHARED:/audit/recovered.csv"])
+	require.EqualValues(t, 2, recovered.auditBytesWritten)
+	require.EqualValues(t, 1, recovered.auditRowsWritten)
+	ordinaryStatement := motrace.NewStatementInfo()
+	require.False(t, ordinaryStatement.HasOutfileReceipt(), "the next ordinary statement has no receipt")
+	require.False(t, fs.closed.Load(), "the shared file service is borrowed")
+}
+
+func TestExportAuditCountsCSVHeaderAndJSONLines(t *testing.T) {
+	for _, tc := range []struct {
+		name, format, payload, want string
+		rows                        int
+		header                      bool
+		rowEnds                     []int
+	}{
+		{name: "csv header", format: "csv", payload: "42\n", want: "value\n42\n", rows: 1, header: true, rowEnds: []int{3}},
+		{name: "jsonline", format: "jsonline", payload: "{\"value\":1}\n{\"value\":2}\n", want: "{\"value\":1}\n{\"value\":2}\n", rows: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ep, _, _, _ := exportLifecycleFixture(t, context.Background(), tc.format)
+			ep.auditEnabled = true
+			ep.userConfig.FilePath = filepath.Join(t.TempDir(), "audit.out")
+			ep.userConfig.Header = tc.header
+			defer ep.Close()
+			require.NoError(t, openNewFile(ep.ctx, ep, ep.mrs))
+			require.NoError(t, writeExportBatchToFile(ep, &BatchByte{
+				writeByte: []byte(tc.payload), rowCount: tc.rows, rowEnds: tc.rowEnds,
+			}))
+			require.NoError(t, ep.finish(nil))
+			actual, err := os.ReadFile(ep.userConfig.FilePath)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, string(actual))
+			require.Equal(t, uint64(len(actual)), ep.auditBytesWritten)
+			require.Equal(t, uint64(tc.rows), ep.auditRowsWritten)
 		})
 	}
 }
@@ -319,7 +431,11 @@ func (w exportStatusColumns) GetColumns(context.Context) ([]interface{}, error) 
 
 func TestExportStatementLifecycle(t *testing.T) {
 	for _, format := range []string{"csv", "jsonline"} {
-		for _, mode := range []string{"success", "runner-error", "cancel", "header-error"} {
+		modes := []string{"success", "runner-error", "cancel", "header-error"}
+		if format == "jsonline" {
+			modes = append(modes, "duplicate-columns")
+		}
+		for _, mode := range modes {
 			t.Run(format+"/"+mode, func(t *testing.T) {
 				ses := newValidateSession(t)
 				ses.pool = ses.proc.Mp()
@@ -332,6 +448,8 @@ func TestExportStatementLifecycle(t *testing.T) {
 					cfg.MaxFileSize = 1
 					cfg.ExportFormat = "csv"
 				}
+				ses.tStmt = motrace.NewStatementInfo()
+				ses.tStmt.SetOutfileReceipt(motrace.StatementOutfileReceipt{Target: cfg.FilePath, Format: format})
 				ses.InitExportConfig(cfg)
 				ep := ses.GetExportConfig()
 				ctx, cancel := context.WithCancel(context.Background())
@@ -345,7 +463,11 @@ func TestExportStatementLifecycle(t *testing.T) {
 				require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, ses.pool))
 				source.SetRowCount(1)
 				injected := errors.New("runner failed")
-				execCtx := &ExecCtx{reqCtx: ctx, ses: ses, stmt: &tree.Select{}, cw: exportStatusColumns{columns: []interface{}{col}}}
+				columns := []interface{}{col}
+				if mode == "duplicate-columns" {
+					columns = append(columns, col)
+				}
+				execCtx := &ExecCtx{reqCtx: ctx, ses: ses, stmt: &tree.Select{}, cw: exportStatusColumns{columns: columns}}
 				execCtx.runner = exportStatusRunner{run: func() error {
 					if err := ep.Write(execCtx, nil, source); err != nil {
 						return err
@@ -375,6 +497,20 @@ func TestExportStatementLifecycle(t *testing.T) {
 					require.ErrorIs(t, err, context.Canceled)
 				case "header-error":
 					require.ErrorContains(t, err, "header line size")
+				case "duplicate-columns":
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+					require.ErrorContains(t, err, "duplicate column names")
+				}
+				var fields struct {
+					Outfile motrace.StatementOutfileReceipt `json:"outfile"`
+				}
+				require.NoError(t, json.Unmarshal(ses.tStmt.ExecPlan2Json(ctx), &fields))
+				require.Equal(t, mode == "success", fields.Outfile.Complete)
+				if mode == "success" {
+					actual, readErr := os.ReadFile(cfg.FilePath)
+					require.NoError(t, readErr)
+					require.EqualValues(t, len(actual), fields.Outfile.BytesWritten)
+					require.EqualValues(t, 1, fields.Outfile.RowsWritten)
 				}
 				source.Clean(ses.pool)
 				require.Zero(t, ses.pool.CurrNB())
@@ -384,6 +520,84 @@ func TestExportStatementLifecycle(t *testing.T) {
 				require.Nil(t, ep.mrs)
 			})
 		}
+	}
+}
+
+// A panic must abort publication before joining converters, preserve completed
+// splits, and reach the outer statement recovery with its original identity.
+func TestExportStatementPanicAbortsAndKeepsReceiptIncomplete(t *testing.T) {
+	for _, blocked := range []bool{false, true} {
+		t.Run(map[bool]string{false: "no-worker", true: "blocked-conversion"}[blocked], func(t *testing.T) {
+			ses := newValidateSession(t)
+			ses.pool = ses.proc.Mp()
+			pu := getPu(ses.GetService())
+			original := pu.FileService
+			t.Cleanup(func() { pu.FileService = original })
+			synctest.Test(t, func(t *testing.T) {
+				completed := make(map[string][]byte)
+				fs := &exportLifecycleFS{write: func(_ context.Context, v fileservice.IOVector) error {
+					data, err := io.ReadAll(v.Entries[0].ReaderForWrite)
+					if err == nil {
+						completed[v.FilePath] = data
+					}
+					return err
+				}}
+				pu.FileService = fs
+				cfg := newDiffCSVUserConfig()
+				cfg.FilePath = "SHARED:/panic.csv"
+				cfg.SplitSize = 2
+				ses.SetMysqlResultSet(&MysqlResultSet{})
+				ses.tStmt = motrace.NewStatementInfo()
+				ses.tStmt.SetOutfileReceipt(motrace.StatementOutfileReceipt{Target: cfg.FilePath, Format: "csv"})
+				ses.InitExportConfig(cfg)
+				ep := ses.GetExportConfig()
+				defer ep.Close()
+				column := &MysqlColumn{}
+				column.SetName("value")
+				column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+				source := batch.NewOffHeapWithSize(1)
+				defer source.Clean(ses.pool)
+				source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(source.Vecs[0], int64(42), false, ses.pool))
+				source.SetRowCount(1)
+				injected := moerr.NewInvalidInputNoCtx("runner panic")
+				execCtx := &ExecCtx{reqCtx: t.Context(), ses: ses, stmt: &tree.Select{}, cw: exportStatusColumns{columns: []interface{}{column}}}
+				execCtx.runner = exportStatusRunner{run: func() error {
+					require.NoError(t, writeExportBatchToFile(ep, &BatchByte{
+						writeByte: []byte("a\nb\n"), rowEnds: []int{2, 4}, rowCount: 2,
+					}))
+					if blocked {
+						ep.ByteChan = make(chan *BatchByte)
+						copied, err := cloneExportWorkerBatch(source, ses.pool)
+						require.NoError(t, err)
+						ep.workers.Add(1)
+						go func() {
+							defer ep.workers.Done()
+							constructByte(ep.ctx, ses, copied, 1, ep.ByteChan, ep)
+						}()
+						synctest.Wait() // converter is blocked publishing to the abandoned consumer.
+					}
+					panic(injected)
+				}}
+				require.PanicsWithValue(t, injected, func() { _ = executeStatusStmt(ses, execCtx) })
+				var fields struct {
+					Outfile motrace.StatementOutfileReceipt `json:"outfile"`
+				}
+				require.NoError(t, json.Unmarshal(ses.tStmt.ExecPlan2Json(t.Context()), &fields))
+				require.False(t, fields.Outfile.Complete)
+				require.EqualValues(t, 2, fields.Outfile.BytesWritten)
+				require.EqualValues(t, 1, fields.Outfile.RowsWritten)
+				require.Equal(t, []byte("a\n"), completed[cfg.FilePath])
+				require.NotContains(t, completed, cfg.FilePath+".1")
+				require.Nil(t, ep.AsyncGroup)
+				require.Nil(t, ep.AsyncWriter)
+				require.Nil(t, ep.ByteChan)
+				require.Nil(t, ep.ctx)
+				source.Clean(ses.pool)
+				require.Zero(t, ses.pool.CurrNB())
+				require.False(t, fs.closed.Load(), "shared file service is borrowed")
+			})
+		})
 	}
 }
 

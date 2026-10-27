@@ -775,6 +775,9 @@ message ProcessInfo {
   // Positive outer SELECT classification for expression warning policy.
   // Legacy senders omit this field and remain unclassified.
   bool statement_runtime_select = 17;
+  // Positive outer DML classification; absent on legacy senders means unknown.
+  // Corrected float conversions require MORPC v132 on the bound stream.
+  bool statement_runtime_dml = 18;
 }
 
 message SessionInfo {
