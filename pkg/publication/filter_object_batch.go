@@ -223,25 +223,8 @@ func convertObjectToBatch(
 		return containers.NewBatch(), nil
 	}
 
-	// Step 2: Get column information from first block meta
-	firstBlkMeta := dataMeta.GetBlockMeta(0)
-	maxSeqnum := firstBlkMeta.GetMaxSeqnum()
-
-	// Step 3: Prepare columns and types
-	// For appendable objects, we need to include commit TS column
-	cols := make([]uint16, 0, maxSeqnum+3)
-	typs := make([]types.Type, 0, maxSeqnum+3)
-
-	// Add data columns
-	for seqnum := uint16(0); seqnum <= maxSeqnum; seqnum++ {
-		colMeta := firstBlkMeta.ColumnMeta(seqnum)
-		if colMeta.DataType() == 0 {
-			continue // Skip invalid columns
-		}
-		cols = append(cols, seqnum)
-		typ := types.T(colMeta.DataType()).ToType()
-		typs = append(typs, typ)
-	}
+	// Reserve space for the commit and abort columns of appendable objects.
+	cols, typs, maxSeqnum := publicationObjectColumns(dataMeta.GetBlockMeta(0), 3)
 
 	// Add commit TS column for appendable objects
 	cols = append(cols, objectio.SEQNUM_COMMITTS)

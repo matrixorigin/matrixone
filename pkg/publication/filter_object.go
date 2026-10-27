@@ -683,6 +683,23 @@ func extractSortKeyFromObject(
 	return sortKeySeqnum, nil
 }
 
+// publicationObjectColumns reads the data columns common to both object paths.
+// reserved also accounts for the extra commit/abort columns on appendable objects.
+func publicationObjectColumns(block objectio.BlockObject, reserved uint16) ([]uint16, []types.Type, uint16) {
+	maxSeqnum := block.GetMaxSeqnum()
+	cols := make([]uint16, 0, maxSeqnum+reserved)
+	typs := make([]types.Type, 0, maxSeqnum+reserved)
+	for seqnum := uint16(0); seqnum <= maxSeqnum; seqnum++ {
+		colMeta := block.ColumnMeta(seqnum)
+		if colMeta.DataType() == 0 {
+			continue
+		}
+		cols = append(cols, seqnum)
+		typs = append(typs, types.T(colMeta.DataType()).ToType())
+	}
+	return cols, typs, maxSeqnum
+}
+
 // rewriteNonAppendableTombstoneWithSinker reads tombstone blocks one by one,
 // rewrites rowids using aobjectMap, and writes to a sorted sinker with unique output names.
 // This avoids loading the entire object into memory at once.
@@ -709,22 +726,8 @@ func rewriteNonAppendableTombstoneWithSinker(
 		return nil, nil
 	}
 
-	// Step 2: Get column information from first block meta
-	firstBlkMeta := dataMeta.GetBlockMeta(0)
-	maxSeqnum := firstBlkMeta.GetMaxSeqnum()
-
-	// Prepare columns and types (excluding commit TS for non-appendable)
-	cols := make([]uint16, 0, maxSeqnum+1)
-	typs := make([]types.Type, 0, maxSeqnum+1)
-	for seqnum := uint16(0); seqnum <= maxSeqnum; seqnum++ {
-		colMeta := firstBlkMeta.ColumnMeta(seqnum)
-		if colMeta.DataType() == 0 {
-			continue
-		}
-		cols = append(cols, seqnum)
-		typ := types.T(colMeta.DataType()).ToType()
-		typs = append(typs, typ)
-	}
+	// Non-appendable tombstones contain only their data columns.
+	cols, typs, maxSeqnum := publicationObjectColumns(dataMeta.GetBlockMeta(0), 1)
 
 	// Get PK type from second column (TombstoneAttr_PK_Idx = 1)
 	pkType := typs[objectio.TombstoneAttr_PK_Idx]
