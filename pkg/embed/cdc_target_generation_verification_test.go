@@ -96,12 +96,16 @@ func TestCDCGenerationContractFetchConfiguration(t *testing.T) {
 			service.cfg.CN.TaskRunner.HeartbeatTimeout.Duration = 30 * time.Second
 			service.cfg.CN.TaskRunner.Parallelism = 2
 			service.cfg.CN.TaskRunner.MaxWaitTasks = 50
+			service.cfg.CN.ISCP.SyncTaskInterval.Duration = 17 * time.Millisecond
+			service.cfg.CN.ISCP.IndexFlushWatermarkInterval.Duration = 23 * time.Millisecond
 			expected := service.cfg.CN.TaskRunner
+			expectedISCP := service.cfg.CN.ISCP
 			if kind == metadata.ServiceType_CN {
 				expected.FetchInterval.Duration = time.Second
 			}
 			adjustTestingClusterTiming(service)
 			require.Equal(t, expected, service.GetServiceConfig().CN.TaskRunner)
+			require.Equal(t, expectedISCP, service.GetServiceConfig().CN.ISCP)
 		})
 	}
 }

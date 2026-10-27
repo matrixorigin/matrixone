@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -79,6 +80,35 @@ func TestExecutionResourceRecorder(t *testing.T) {
 	require.Equal(t, uint64(80), summary.Memory.MaxDomainPeakLiveBytes)
 	require.Zero(t, summary.Quality&resource.QualityMissingMemoryDomain)
 	require.Zero(t, summary.Quality&resource.QualityMissingFragment)
+}
+
+func TestRemoteODKUResultFromProcess(t *testing.T) {
+	require.Nil(t, remoteODKUResultFromProcess(process.ODKUResultSummary{}))
+
+	summary := process.ODKUResultSummary{
+		HasGenerated:          true,
+		FirstGeneratedOrdinal: 2,
+		FirstGeneratedID:      11,
+		HasAction:             true,
+		LastActionOrdinal:     5,
+		LastActionID:          13,
+		HasSuccessfulAction:   true,
+		LastSuccessfulOrdinal: 4,
+		LastSuccessfulID:      12,
+	}
+	got := remoteODKUResultFromProcess(summary)
+	require.NotNil(t, got)
+	require.Equal(t, &remoteODKUResultSummary{
+		HasGenerated:          true,
+		FirstGeneratedOrdinal: 2,
+		FirstGeneratedID:      11,
+		HasAction:             true,
+		LastActionOrdinal:     5,
+		LastActionID:          13,
+		HasSuccessfulAction:   true,
+		LastSuccessfulOrdinal: 4,
+		LastSuccessfulID:      12,
+	}, got)
 }
 
 func TestExecutionResourceRecorderPublishesAllocationTerminal(t *testing.T) {
@@ -910,4 +940,40 @@ func TestAnalyzeModuleRemoteResourceConcurrentAccess(t *testing.T) {
 	require.LessOrEqual(t, snapshot.DirectReportCount, uint64(400))
 	require.LessOrEqual(t, snapshot.MissingFragmentCount, uint64(400))
 	require.LessOrEqual(t, snapshot.MissingMemoryDomainCount, uint64(400))
+}
+
+func TestRemoteODKUTerminalFailureCancellationAndRetry(t *testing.T) {
+	for _, outcome := range []string{"success", "participant-error", "canceled", "late-retry"} {
+		t.Run(outcome, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			sender := &messageSenderOnClient{proc: proc, ctx: ctx,
+				odkuGeneration: proc.ODKUResultGeneration()}
+			data, err := json.Marshal(remoteTerminalEnvelope{ODKUResult: &remoteODKUResultSummary{
+				HasGenerated: true, FirstGeneratedOrdinal: 3, FirstGeneratedID: 17}})
+			require.NoError(t, err)
+			message := &pipeline.Message{Analyse: data}
+			if outcome == "participant-error" {
+				message.SetMoError(ctx, moerr.NewTxnNeedRetry(ctx))
+			}
+			if outcome == "canceled" {
+				cancel()
+			}
+			if outcome == "late-retry" {
+				proc.ResetODKUResult()
+			}
+			err = sender.finishRemoteTerminal(message)
+			if outcome == "participant-error" {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, outcome == "success", proc.GetODKUResultSummary().HasGenerated)
+			// The terminal owner consumes at most once, even after retry/reset.
+			proc.ResetODKUResult()
+			require.NoError(t, sender.dealRemoteTerminal(data))
+			require.False(t, proc.GetODKUResultSummary().HasGenerated)
+		})
+	}
 }

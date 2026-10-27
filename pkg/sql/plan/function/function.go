@@ -608,6 +608,9 @@ func getFunctionByName(
 	}
 
 	check := f.checkArgumentTypes(args, stringDomainModes)
+	if legacyIntegerDecimalCoercions(ctx) {
+		check = legacyIntegerDecimalCheck(r.fid, args, check)
+	}
 	if r.fid == UNIX_TIMESTAMP && LegacyUnixTimestampDatetime(ctx) {
 		check = fixedTypeMatch(f.Overloads[:4], args)
 	}
@@ -848,6 +851,9 @@ func DeduceNotNullableForBinding(ctx context.Context, overloadID int64, args []*
 func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr) bool {
 	fid, oid := DecodeOverloadID(overloadID)
 	switch fid {
+	case DATABASE:
+		// DATABASE and its SCHEMA alias can observe an unset default database.
+		return false
 	case SMA, WMA, TRIMA, EMA, WILDER, KAMA, DEMA, TEMA, T3, MMAXDRAWDOWN:
 		// Indicator kernels emit leading warmup NULLs (issue #29949,
 		// design section 4); never proven not-nullable regardless of
@@ -1287,6 +1293,15 @@ func (ov *overload) GetExecuteMethod() (
 
 	fn := ov.newOp()
 	return fn, nil, nil, nil
+}
+
+// GetArgumentType returns one element of the registered signature, whose meaning
+// is defined by the function's type checker, without exposing its mutable slice.
+func (ov *overload) GetArgumentType(index int) (types.T, bool) {
+	if index < 0 || index >= len(ov.args) {
+		return types.T_any, false
+	}
+	return ov.args[index], true
 }
 
 func (ov *overload) GetReturnTypeMethod() func(parameters []types.Type) types.Type {

@@ -156,7 +156,7 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 			finalAggregateTag := builder.genNewBindTag()
 			finalGroupBy := make([]*plan.Expr, len(innerGroupBy))
 			for i, expr := range innerGroupBy {
-				finalGroupBy[i] = distinctPairGroupCol(
+				finalGroupBy[i] = builder.distinctPairGroupCol(
 					expr, localGroupTag, int32(i))
 			}
 			finalNodeID := builder.appendNode(&plan.Node{
@@ -177,12 +177,12 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 		node.Children[0] = resultNodeID
 		node.GroupBy = make([]*plan.Expr, oldGroupLen)
 		for i := range node.GroupBy {
-			node.GroupBy[i] = distinctPairGroupCol(
+			node.GroupBy[i] = builder.distinctPairGroupCol(
 				oldGroupBy[i], resultGroupTag, int32(i))
 		}
 
 		aggFunc.Func.Obj &= function.DistinctMask
-		aggFunc.Args[0] = distinctPairGroupCol(
+		aggFunc.Args[0] = builder.distinctPairGroupCol(
 			distinctArg, resultGroupTag, int32(oldGroupLen))
 	}
 	return nil
@@ -254,10 +254,19 @@ func hashKeyContains(hashKey []int32, target int32) bool {
 	return slices.Contains(hashKey, target)
 }
 
-func distinctPairGroupCol(source *plan.Expr, tag, pos int32) *plan.Expr {
+// Only estimates resolved through the statistics owner may cross a new binding.
+// A copied Expr.Ndv alone is not provenance for a synthesized column.
+func (builder *QueryBuilder) distinctPairGroupCol(source *plan.Expr, tag, pos int32) *plan.Expr {
+	ndv := getExprNdv(source, builder)
+	if ndv > 0 && !math.IsInf(ndv, 0) && !math.IsNaN(ndv) {
+		if builder.syntheticNDVCols == nil {
+			builder.syntheticNDVCols = make(map[[2]int32]struct{})
+		}
+		builder.syntheticNDVCols[[2]int32{tag, pos}] = struct{}{}
+	}
 	return &plan.Expr{
 		Typ:         source.Typ,
-		Ndv:         source.Ndv,
+		Ndv:         ndv,
 		Selectivity: source.Selectivity,
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{
 			RelPos: tag,
@@ -383,7 +392,7 @@ func (builder *QueryBuilder) optimizeTupleCountDistinct(node *plan.Node, shuffle
 	builder.markDistinctKeyLocalPreAgg(builder.qry.Nodes[localID])
 	finalKeys := make([]*plan.Expr, len(keys))
 	for i, key := range keys {
-		finalKeys[i] = distinctPairGroupCol(key, localTag, int32(i))
+		finalKeys[i] = builder.distinctPairGroupCol(key, localTag, int32(i))
 	}
 	finalTag, finalAggTag := builder.genNewBindTag(), builder.genNewBindTag()
 	finalID := builder.appendNode(&plan.Node{
@@ -398,9 +407,9 @@ func (builder *QueryBuilder) optimizeTupleCountDistinct(node *plan.Node, shuffle
 	node.Children[0] = finalID
 	node.GroupBy = make([]*plan.Expr, groupLen)
 	for i, group := range oldGroups {
-		node.GroupBy[i] = distinctPairGroupCol(group, finalTag, int32(i))
+		node.GroupBy[i] = builder.distinctPairGroupCol(group, finalTag, int32(i))
 	}
 	f.Func.Obj &= function.DistinctMask
-	f.Args = []*plan.Expr{distinctPairGroupCol(keys[groupLen], finalTag, int32(groupLen))}
+	f.Args = []*plan.Expr{builder.distinctPairGroupCol(keys[groupLen], finalTag, int32(groupLen))}
 	return nil
 }

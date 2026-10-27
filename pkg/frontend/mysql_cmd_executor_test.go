@@ -2419,27 +2419,43 @@ func TestEffectiveStatementForTxn(t *testing.T) {
 }
 
 func TestHandleDropAccountUsesLifecycleOwnerTxn(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	ctx := context.Background()
-	ses := newTestSession(t, ctrl)
-	defer ses.Close()
-	bh := &backgroundExecTest{}
-	bh.init()
 	beginErr := errors.New("begin failed")
-	bh.sql2err["begin;"] = beginErr
-	oldNewBackgroundExec := NewBackgroundExec
-	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
-	forcedPessimisticRC := false
-	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
-		for _, opt := range opts {
-			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
-		}
-		return bh
-	}
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"success", nil},
+		{"begin failure", beginErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, ses, bh, _ := newAccountDropTest(t)
+			bh.sql2err["begin;"] = tc.err
+			oldNewBackgroundExec := NewBackgroundExec
+			t.Cleanup(func() { NewBackgroundExec = oldNewBackgroundExec })
+			forcedPessimisticRC := false
+			NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+				for _, opt := range opts {
+					forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+				}
+				return bh
+			}
 
-	err := handleDropAccount(ses, &ExecCtx{reqCtx: ctx}, &tree.DropAccount{Name: boxExprStr("tenant")}, ses.GetProc())
-	require.ErrorIs(t, err, beginErr)
-	require.True(t, forcedPessimisticRC)
+			err := handleDropAccount(ses, &ExecCtx{reqCtx: ctx}, &tree.DropAccount{Name: boxExprStr("acc")}, ses.GetProc())
+			require.ErrorIs(t, err, tc.err)
+			require.True(t, forcedPessimisticRC)
+			terminals := make(map[string]int)
+			for _, statement := range bh.executedSQLs {
+				terminals[statement]++
+			}
+			require.Equal(t, 1, terminals["begin;"])
+			require.Zero(t, terminals["rollback;"])
+			if tc.err == nil {
+				require.Equal(t, 1, terminals["commit;"])
+			} else {
+				require.Zero(t, terminals["commit;"])
+			}
+		})
+	}
 }
 
 func TestHandleCreateAccountUsesLifecycleOwnerTxn(t *testing.T) {
@@ -7078,6 +7094,14 @@ func TestUnsupportedFrontendParserStatements(t *testing.T) {
 		return err
 	}
 
+	for _, stmt := range []tree.Statement{&tree.CreateExtension{}, &tree.LoadExtension{}} {
+		t.Run(stmt.GetStatementType(), func(t *testing.T) {
+			err := run(stmt)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+			require.ErrorContains(t, err, "extension statements are not supported in MatrixOne")
+		})
+	}
+
 	err := run(&tree.CheckTableStmt{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "CHECK TABLE is not supported in MatrixOne")
@@ -10255,6 +10279,8 @@ func Test_StatementClassify(t *testing.T) {
 		{&tree.AnalyzeStmt{}, true},
 		{&tree.CheckTableStmt{}, true},
 		{&tree.ShowProfileStmt{}, true},
+		{&tree.CreateExtension{}, true},
+		{&tree.LoadExtension{}, true},
 	}
 	ses := &Session{
 		feSessionImpl: feSessionImpl{},

@@ -20,8 +20,8 @@ import pytest
 import sqlalchemy
 
 from matrixone import Client
-from matrixone.async_client import AsyncClient
 from matrixone._utils import is_non_transactional_statement
+from matrixone.async_client import AsyncClient
 
 
 @pytest.mark.parametrize(
@@ -1098,13 +1098,14 @@ class _AsyncFakeConnection(_FakeDbapiConnection):
 @pytest.fixture(params=["legacy", "future", "async"])
 def pooled_client(request, monkeypatch):
     """One-slot pools exercise real sync/future/async cleanup and next reuse."""
-    from sqlalchemy.ext.asyncio import create_async_engine
     import aiomysql
+    from sqlalchemy.ext.asyncio import create_async_engine
 
     created = []
     mode = request.param
     baseline = "0"
     if mode == "async":
+
         async def connect(*args, **kwargs):
             raw = _AsyncFakeConnection(autocommit=baseline)
             created.append(raw)
@@ -1114,13 +1115,17 @@ def pooled_client(request, monkeypatch):
         engine = create_async_engine("mysql+aiomysql://root:pw@fake/test", pool_size=1, max_overflow=0)
         client = AsyncClient.from_engine(engine, logger=Mock())
     else:
+
         def connect():
             raw = _FakeDbapiConnection(autocommit=baseline)
             created.append(raw)
             return raw
 
         engine = sqlalchemy.create_engine(
-            "mysql+pymysql://root:pw@fake/test", creator=connect, pool_size=1, max_overflow=0,
+            "mysql+pymysql://root:pw@fake/test",
+            creator=connect,
+            pool_size=1,
+            max_overflow=0,
             **({"future": True} if mode == "future" else {}),
         )
         client = Client.from_engine(engine, logger=Mock())
@@ -1150,6 +1155,7 @@ async def _dispose_pool(engine):
 )
 async def test_unrestorable_pool_connection_is_terminated(pooled_client, outcome, failure_listener):
     import asyncio
+
     from sqlalchemy import event
 
     client, engine, created = pooled_client
@@ -1288,7 +1294,9 @@ def test_cleanup_preserves_primary_outcome(statement_fails, restore_interrupts, 
     conn.exec_driver_sql.side_effect = execute
     client = Client(logger=Mock())
     client._engine = engine
-    expected = primary if statement_fails else restore if restore_interrupts else discard if discard_interrupts else None
+    expected = (
+        primary if statement_fails else restore if restore_interrupts else discard if discard_interrupts else None
+    )
     if expected is None:
         assert client.execute("data branch merge src into dst") is not None
     else:
@@ -1327,3 +1335,56 @@ def test_real_pool_restore_failure_with_raising_invalidate_listener_not_repooled
     finally:
         event.remove(engine, "invalidate", raising_listener)
         engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.parametrize("probe_fails", [False, True])
+async def test_mode_sensitive_pick_retains_execution_connection_and_autocommit(asynchronous, probe_fails, monkeypatch):
+    from matrixone import _sql_literals
+    from matrixone.exceptions import QueryError
+
+    engine, _, connection, owner = _async_engine() if asynchronous else _sync_engine()
+    commands = []
+    if asynchronous:
+        connection.exec_driver_sql = AsyncMock(side_effect=_async_result(commands))
+        connection.run_sync = AsyncMock(side_effect=lambda fn: fn(connection.sync_connection))
+    else:
+        connection.exec_driver_sql.side_effect = _result(commands)
+
+    def mode_probe(actual):
+        assert actual is connection
+        commands.append("mode probe")
+        if probe_fails:
+            raise RuntimeError("mode unavailable")
+        return "NO_BACKSLASH_ESCAPES"
+
+    monkeypatch.setattr(_sql_literals, "connection_sql_mode", mode_probe)
+    client = AsyncClient(logger=Mock()) if asynchronous else Client(logger=Mock())
+    client._engine = engine
+    sql = "data branch pick src into dst keys('\\', ?)"
+
+    async def execute():
+        if asynchronous:
+            return await client._execute(sql, (7,))
+        return client.execute(sql, (7,))
+
+    if probe_fails:
+        with pytest.raises(QueryError, match="mode unavailable"):
+            await execute()
+        assert commands == ["SELECT @@autocommit", "mode probe"]
+    else:
+        await execute()
+        assert commands == [
+            "SELECT @@autocommit",
+            "mode probe",
+            "SET autocommit = 1",
+            "data branch pick src into dst keys('\\', 7)",
+            "SET autocommit = 0",
+        ]
+    engine.connect.assert_called_once_with()
+    engine.begin.assert_not_called()
+    if asynchronous:
+        owner.__aexit__.assert_awaited_once()
+    else:
+        owner.__exit__.assert_called_once()

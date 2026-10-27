@@ -114,7 +114,25 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 		if ep.needExportToFile() {
-			defer func() { err = ep.finish(err) }()
+			exportCompleted := false
+			defer func() {
+				// A producer panic skips the ordered drain. Abort before joining
+				// abandoned publishers; the panic continues to the existing outer
+				// recovery boundary without changing its payload.
+				cause := err
+				if !exportCompleted && cause == nil {
+					cause = context.Canceled
+				}
+				err = ep.finish(cause)
+				if ep.auditEnabled && ses.tStmt != nil {
+					ses.tStmt.UpdateOutfileReceipt(
+						outfileFormat(ep.userConfig),
+						ep.auditBytesWritten,
+						ep.auditRowsWritten,
+						exportCompleted && err == nil,
+					)
+				}
+			}()
 			columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 			if err != nil {
 				ses.Error(execCtx.reqCtx,
@@ -159,6 +177,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			if err = exportAllDataFromBatches(ep); err != nil {
 				return
 			}
+			exportCompleted = true
 
 		} else {
 			return moerr.NewInternalError(execCtx.reqCtx, "select without it generates the result rows")
@@ -413,9 +432,19 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		localFileName := ""
 		switch st := execCtx.stmt.(type) {
 		case *tree.Insert:
-			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
-			if res.lastInsertId != 0 {
-				ses.SetLastInsertID(res.lastInsertId)
+			isODKU := len(st.OnDuplicateUpdate) > 0 &&
+				!(len(st.OnDuplicateUpdate) == 1 && st.OnDuplicateUpdate[0] == nil)
+			if isODKU && execCtx.cw != nil && execCtx.cw.Plan().GetQuery().HasODKUResultTracking() {
+				lastInsertID, generated := execCtx.proc.GetODKUProtocolIDForSource(st.IsValuesSource())
+				res.lastInsertId = lastInsertID
+				if generated {
+					ses.SetLastInsertID(res.lastInsertId)
+				}
+			} else {
+				res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+				if res.lastInsertId != 0 {
+					ses.SetLastInsertID(res.lastInsertId)
+				}
 			}
 		case *tree.Replace:
 			// REPLACE uses the same PRE_INSERT auto-increment pipeline as INSERT,

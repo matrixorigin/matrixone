@@ -150,13 +150,17 @@ def test_driver_receives_sync_timeout_and_charset(monkeypatch):
         'charset': 'utf8mb4',
         'ssl_mode': 'disabled',
     }
-    factory = Mock(return_value=MagicMock())
+    import sqlalchemy as sa
+
+    engine = sa.create_engine('mysql+pymysql://unused@localhost/db')
+    factory = Mock(return_value=engine)
     monkeypatch.setattr(module, 'create_engine', factory)
     client._create_engine()
     assert factory.call_args.kwargs['connect_args'] == {
         'connect_timeout': 12,
         'read_timeout': 7,
         'write_timeout': 7,
+        'local_infile': False,
         'charset': 'utf8mb4',
         'ssl_disabled': True,
     }
@@ -175,10 +179,15 @@ def test_async_driver_receives_connect_timeout(monkeypatch):
         'connect_timeout': 13,
         'charset': 'utf8mb4',
     }
-    factory = Mock()
+    factory = Mock(wraps=module.create_async_engine)
     monkeypatch.setattr(module, 'create_async_engine', factory)
-    client._create_async_engine()
-    assert factory.call_args.kwargs['connect_args']['connect_timeout'] == 13
+    engine = client._create_async_engine()
+    try:
+        assert factory.call_args.kwargs['connect_args']['connect_timeout'] == 13
+    finally:
+        import asyncio
+
+        asyncio.run(engine.dispose())
 
 
 def test_failed_disconnect_does_not_leave_connected_state():
@@ -213,14 +222,8 @@ def test_failed_manager_init_reports_no_success(monkeypatch):
         client.connect(database='test', on_connect=[])
     assert not client.connected()
     engine.dispose.assert_called_once()
-    assert not any(
-        call.kwargs.get('success') is True
-        for call in client.logger.log_connection.call_args_list
-    )
-    assert any(
-        call.kwargs.get('success') is False
-        for call in client.logger.log_connection.call_args_list
-    )
+    assert not any(call.kwargs.get('success') is True for call in client.logger.log_connection.call_args_list)
+    assert any(call.kwargs.get('success') is False for call in client.logger.log_connection.call_args_list)
 
 
 def test_unhandled_hook_wrapper_failure_reports_no_success(monkeypatch):
@@ -233,17 +236,14 @@ def test_unhandled_hook_wrapper_failure_reports_no_success(monkeypatch):
     monkeypatch.setattr(client, '_initialize_managers', lambda: None)
     monkeypatch.setattr(
         client,
-        '_execute_connection_hook_immediately',
+        '_setup_connection_hook',
         Mock(side_effect=RuntimeError('hook failed')),
     )
     with pytest.raises(ConnectionError, match='hook failed'):
         client.connect(database='test', on_connect=[object()])
     assert not client.connected()
     engine.dispose.assert_called_once()
-    assert not any(
-        call.kwargs.get('success') is True
-        for call in client.logger.log_connection.call_args_list
-    )
+    assert not any(call.kwargs.get('success') is True for call in client.logger.log_connection.call_args_list)
 
 
 @pytest.mark.asyncio
@@ -271,22 +271,16 @@ async def test_async_unhandled_hook_wrapper_failure_reports_no_success(monkeypat
 
     from matrixone.connection_hooks import ConnectionAction
 
-    async def failing_hook(*args, **kwargs):
+    def failing_hook(*args, **kwargs):
         raise RuntimeError('async hook failed')
 
-    monkeypatch.setattr(client, '_execute_connection_hook_immediately', failing_hook)
+    monkeypatch.setattr(client, '_setup_connection_hook', failing_hook)
     with pytest.raises(ConnectionError, match='async hook failed'):
         await client.connect(database='test', on_connect=[ConnectionAction.ENABLE_ALL])
     assert not client.connected()
     engine.dispose.assert_awaited_once()
-    assert not any(
-        call.kwargs.get('success') is True
-        for call in client.logger.log_connection.call_args_list
-    )
-    assert any(
-        call.kwargs.get('success') is False
-        for call in client.logger.log_connection.call_args_list
-    )
+    assert not any(call.kwargs.get('success') is True for call in client.logger.log_connection.call_args_list)
+    assert any(call.kwargs.get('success') is False for call in client.logger.log_connection.call_args_list)
 
 
 # ─── #30062 follow-up: create_table diagnostics must not carry the password ──

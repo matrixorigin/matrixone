@@ -3120,111 +3120,11 @@ func regexpMatchTypeUnixLines(pureMatchType string) bool {
 }
 
 // regexpMatchTypeWideMultiline reports whether multiline matching must
-// accept MySQL's wider line-terminator set (m without u): CR, NEL,
-// LINE SEPARATOR, PARAGRAPH SEPARATOR, plus LF (issue #30210). The regular
-// engine applies this policy to assertions; genuine ICU patterns use the
-// equivalent lookaround rewrite below.
+// accept MySQL's wider line-terminator set (m without u): CR, VT, FF, NEL,
+// LINE SEPARATOR, PARAGRAPH SEPARATOR, plus LF (issue #30210). Both engines
+// apply this policy natively to assertions through their line modes.
 func regexpMatchTypeWideMultiline(pureMatchType string) bool {
 	return strings.ContainsRune(pureMatchType, 'm') && !regexpMatchTypeUnixLines(pureMatchType)
-}
-
-// Zero-width forms of ^ and $ covering the MySQL multiline terminators.
-// CRLF still counts as a single terminator.
-// After a trailing CR/NEL/LS/PS there is no caret match at end of input:
-// ICU/MySQL report no (nonexistent empty) line there. LF keeps Go RE2's
-// native multiline behavior, which already coincides with the database's
-// observable contract for that terminator (mo-bot review on #30646).
-const regexpWideMultilineCaret = `(?:\A|(?<=[\n])|(?<=[\x85\x{2028}\x{2029}])(?!\z)|(?<=\r(?!\n))(?!\z))`
-const regexpWideMultilineDollar = `(?:\z|(?=\r)|(?<!\r)(?=\n)|(?=[\x85\x{2028}\x{2029}]))`
-
-// Binary-mode variants only emit byte escapes: NEL stays (x85 is one byte),
-// while LS/PS are dropped because binary patterns reject escapes above
-// \x{FF} and neither terminator fits in a single byte (#30210 binary fix).
-const regexpWideMultilineCaretBinary = `(?:\A|(?<=[\n])|(?<=\x85)(?!\z)|(?<=\r(?!\n))(?!\z))`
-const regexpWideMultilineDollarBinary = `(?:\z|(?=\r)|(?<!\r)(?=\n)|(?=\x85))`
-
-// rewriteRegexpWideMultilineAnchors rewrites unescaped ^ and $ anchors
-// outside character classes and \Q..\E quotes so multiline matching
-// recognizes MySQL's full line-terminator set (issue #30210). It is a
-// syntax-level transform.
-func rewriteRegexpWideMultilineAnchors(pat string, binary bool, limit int) (string, error) {
-	caret, dollar := regexpWideMultilineCaret, regexpWideMultilineDollar
-	if binary {
-		caret, dollar = regexpWideMultilineCaretBinary, regexpWideMultilineDollarBinary
-	}
-	var b strings.Builder
-	b.Grow(min(len(pat), limit))
-	quoted := false
-	type mode struct{ multiline, freeSpacing bool }
-	current := mode{multiline: true}
-	var scopes []mode
-	for i := 0; i < len(pat); {
-		end := i + 1
-		replacement := ""
-		if quoted {
-			if pat[i] == '\\' && i+1 < len(pat) && pat[i+1] == 'E' {
-				quoted = false
-				end = i + 2
-			} else {
-				_, size := utf8.DecodeRuneInString(pat[i:])
-				end = i + max(size, 1)
-			}
-		} else if current.freeSpacing && pat[i] == '#' {
-			for end < len(pat) && pat[end] != '\n' {
-				end++
-			}
-		} else if strings.HasPrefix(pat[i:], "(?#") {
-			end = len(pat)
-			if close := strings.IndexByte(pat[i+3:], ')'); close >= 0 {
-				end = i + 3 + close + 1
-			}
-		} else {
-			switch pat[i] {
-			case '\\':
-				if i+1 < len(pat) && pat[i+1] == 'Q' {
-					quoted = true
-					end = i + 2
-				} else {
-					end = i + regexpEscapeTokenLen(pat, i)
-				}
-			case '[':
-				end = regexpCharClassEnd(pat, i)
-			case '(':
-				if next, multiline, scoped, ok := regexpInlineOption(pat, i, current.multiline, 'm'); ok {
-					_, freeSpacing, _, _ := regexpInlineFreeSpacing(pat, i, current.freeSpacing)
-					if scoped {
-						scopes = append(scopes, current)
-					}
-					current = mode{multiline: multiline, freeSpacing: freeSpacing}
-					end = next
-				} else {
-					scopes = append(scopes, current)
-				}
-			case ')':
-				if n := len(scopes); n > 0 {
-					current = scopes[n-1]
-					scopes = scopes[:n-1]
-				}
-			case '^':
-				if current.multiline {
-					replacement = caret
-				}
-			case '$':
-				if current.multiline {
-					replacement = dollar
-				}
-			}
-		}
-		if replacement == "" {
-			replacement = pat[i:end]
-		}
-		if len(replacement) > limit-b.Len() {
-			return "", regexp2InvalidInputf("regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxPatternBytes)
-		}
-		b.WriteString(replacement)
-		i = end
-	}
-	return b.String(), nil
 }
 
 // regexpPatternWithPureMatchType is the ICU pattern-size admission owner.
@@ -3238,14 +3138,7 @@ func regexpPatternWithPureMatchType(pat, pureMatchType string, binary bool) (str
 	if engineFlags != "" {
 		prefix = "(?" + engineFlags + ")"
 	}
-	limit := regexp2MaxPatternBytes - len(prefix)
-	if regexpMatchTypeWideMultiline(pureMatchType) {
-		var err error
-		pat, err = rewriteRegexpWideMultilineAnchors(pat, binary, limit)
-		if err != nil {
-			return "", err
-		}
-	} else if len(pat) > limit {
+	if len(pat) > regexp2MaxPatternBytes-len(prefix) {
 		return "", regexp2InvalidInputf("regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxPatternBytes)
 	}
 	return prefix + pat, nil
