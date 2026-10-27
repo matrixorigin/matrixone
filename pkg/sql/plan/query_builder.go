@@ -7536,17 +7536,6 @@ func numericProjectionTableKey(ctx *BindContext, table string) string {
 	return tree.NewCStr(table, ctx.lower).Compare()
 }
 
-func storeNumericTableProjectionTargets(
-	targetsByTable map[string][]Type,
-	ambiguousByTable map[string][]bool,
-	table string,
-	targets []Type,
-) bool {
-	return storeNumericTableProjectionTargetsWithMerge(
-		targetsByTable, ambiguousByTable, strings.ToLower(table), targets, false,
-	)
-}
-
 func storeNumericTableProjectionTargetsWithMerge(
 	targetsByTable map[string][]Type,
 	ambiguousByTable map[string][]bool,
