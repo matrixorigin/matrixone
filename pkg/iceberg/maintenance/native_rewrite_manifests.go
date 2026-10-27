@@ -184,9 +184,9 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 	// The result retains a second manifest slice, ObjectWrite headers and orphan
 	// path headers alongside the decoded source list. Reserve those capacities
 	// before allocating them; payload capacities are charged as they are encoded.
-	resultCapacityMemory := saturatingMaintenanceAdd(
+	resultCapacityMemory := api.SaturatingNonnegativeAdd(
 		metadata.ManifestListMemoryWeight(0, manifests),
-		api.SaturatingMemoryMul(saturatingMaintenanceAdd(int64(len(manifests)), 1), 128),
+		api.SaturatingMemoryMul(api.SaturatingNonnegativeAdd(int64(len(manifests)), 1), 128),
 	)
 	if err := reserveMaintenanceMemory(&memoryUsed, resultCapacityMemory, memoryLimit); err != nil {
 		return nil, err

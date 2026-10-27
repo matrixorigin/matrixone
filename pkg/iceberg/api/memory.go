@@ -27,3 +27,12 @@ func SaturatingMemoryMul(left, right int64) int64 {
 	}
 	return left * right
 }
+
+// SaturatingNonnegativeAdd adds nonnegative values, saturating on overflow.
+// Negative inputs are treated as an invalid size and saturate.
+func SaturatingNonnegativeAdd(left, right int64) int64 {
+	if left < 0 || right < 0 || left > math.MaxInt64-right {
+		return math.MaxInt64
+	}
+	return left + right
+}

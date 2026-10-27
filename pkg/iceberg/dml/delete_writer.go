@@ -99,13 +99,13 @@ func deleteParquetScratchBytes(fields int) int64 {
 	// destination writer. Bounded row groups cap their lifetime; reserve a
 	// conservative per-column allowance for that opaque state. A future writer
 	// exposing allocator hooks could replace this estimate with exact charging.
-	return saturatingDeleteAdd(2<<20, api.SaturatingMemoryMul(int64(fields), 1<<20))
+	return api.SaturatingNonnegativeAdd(2<<20, api.SaturatingMemoryMul(int64(fields), 1<<20))
 }
 
 func retainedDeleteFileMetadataBytes(fields int) int64 {
 	// Bounds are capped at 4 KiB and DataFile metadata is defensively cloned by
 	// planning/commit handoffs. Keep the reservation until the coordinator ends.
-	return saturatingDeleteAdd(32<<10, api.SaturatingMemoryMul(int64(fields), 16<<10))
+	return api.SaturatingNonnegativeAdd(32<<10, api.SaturatingMemoryMul(int64(fields), 16<<10))
 }
 
 func WritePositionDeleteFile(ctx context.Context, dst io.Writer, req PositionDeleteWriteRequest) (api.DataFile, error) {
@@ -244,7 +244,7 @@ func WriteEqualityDeleteFile(ctx context.Context, dst io.Writer, req EqualityDel
 			return api.DataFile{}, err
 		}
 		end := min(start+deleteWriteBatchRows, len(req.Rows))
-		perRowBytes := saturatingDeleteAdd(128, api.SaturatingMemoryMul(int64(len(fields)), 96))
+		perRowBytes := api.SaturatingNonnegativeAdd(128, api.SaturatingMemoryMul(int64(len(fields)), 96))
 		workingBytes := api.SaturatingMemoryMul(int64(end-start), perRowBytes)
 		if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, workingBytes); err != nil {
 			return api.DataFile{}, err
@@ -545,7 +545,7 @@ func newDeleteMetrics(fields []api.SchemaField) *deleteMetrics {
 }
 
 func (m *deleteMetrics) observeNull(fieldID int) {
-	m.nullCounts[fieldID] = saturatingDeleteAdd(m.nullCounts[fieldID], 1)
+	m.nullCounts[fieldID] = api.SaturatingNonnegativeAdd(m.nullCounts[fieldID], 1)
 }
 
 func (m *deleteMetrics) observe(ctx context.Context, fieldID int, value any) {
@@ -553,7 +553,7 @@ func (m *deleteMetrics) observe(ctx context.Context, fieldID int, value any) {
 	isNaN := icebergwrite.IsMetricNaN(value)
 	if !ok || isNaN {
 		if isNaN {
-			m.nanCounts[fieldID] = saturatingDeleteAdd(m.nanCounts[fieldID], 1)
+			m.nanCounts[fieldID] = api.SaturatingNonnegativeAdd(m.nanCounts[fieldID], 1)
 		}
 		return
 	}
@@ -647,7 +647,7 @@ type deleteCountingWriter struct {
 
 func (w *deleteCountingWriter) Write(data []byte) (int, error) {
 	n, err := w.writer.Write(data)
-	w.n = saturatingDeleteAdd(w.n, int64(n))
+	w.n = api.SaturatingNonnegativeAdd(w.n, int64(n))
 	return n, err
 }
 
@@ -706,11 +706,4 @@ func (b *deleteObjectBuffer) Release() {
 	b.data = nil
 	releaseDeleteWriterMemory(b.budget, b.reserved)
 	b.reserved = 0
-}
-
-func saturatingDeleteAdd(left, right int64) int64 {
-	if left < 0 || right < 0 || left > math.MaxInt64-right {
-		return math.MaxInt64
-	}
-	return left + right
 }

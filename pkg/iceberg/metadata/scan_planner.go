@@ -587,13 +587,6 @@ func reservePlanningMemory(used *int64, addition, limit int64, mode api.ServerPl
 	return nil
 }
 
-func saturatingPlanningAdd(left, right int64) int64 {
-	if left < 0 || right < 0 || left > math.MaxInt64-right {
-		return math.MaxInt64
-	}
-	return left + right
-}
-
 func planningDataFileMemory(file api.DataFile) int64 {
 	return ManifestEntriesMemoryWeight(0, []api.ManifestEntry{{DataFile: file}})
 }

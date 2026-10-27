@@ -116,7 +116,7 @@ func pairDeleteTasksBoundedMemory(ctx context.Context, dataTasks []api.DataFileT
 			return planningLimitExceeded("delete_tasks", len(out)+1, maxTasks, mode)
 		}
 		if memoryUsed != nil {
-			taskMemory := saturatingPlanningAdd(
+			taskMemory := api.SaturatingNonnegativeAdd(
 				planningDataFileMemory(file),
 				int64(192+len(key)+len(entry.manifestPath)+len(dataPath)+len(credentialScope)),
 			)

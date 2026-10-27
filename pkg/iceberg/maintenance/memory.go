@@ -117,13 +117,6 @@ func reserveMaintenanceMemory(used *int64, addition, limit int64) error {
 	return nil
 }
 
-func saturatingMaintenanceAdd(left, right int64) int64 {
-	if left < 0 || right < 0 || left > math.MaxInt64-right {
-		return math.MaxInt64
-	}
-	return left + right
-}
-
 func maintenanceMemoryExceeded(actual, limit int64) error {
 	return api.NewError(api.ErrPlanningLimitExceeded, "Iceberg maintenance planning memory limit exceeded", map[string]string{
 		"actual_bytes": strconv.FormatInt(actual, 10),

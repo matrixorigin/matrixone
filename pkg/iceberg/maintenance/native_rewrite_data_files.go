@@ -872,7 +872,7 @@ func BuildRewriteDataFilesManifestCommit(req RewriteDataFilesMaterializeRequest)
 		manifests = append(manifests, manifest)
 		manifestObjects = append(manifestObjects, ObjectWrite{Location: manifestPath, Payload: manifestBytes})
 	}
-	manifestListMemory := saturatingMaintenanceAdd(
+	manifestListMemory := api.SaturatingNonnegativeAdd(
 		metadata.ManifestListMemoryWeight(0, req.PreservedManifests),
 		metadata.ManifestListMemoryWeight(0, manifests),
 	)
@@ -942,7 +942,7 @@ func rewriteDataFilesNewEntriesMemory(req RewriteDataFilesMaterializeRequest) in
 
 func saturatingMetadataEntryWeight(total int64, file api.DataFile) int64 {
 	weight := metadata.ManifestEntriesMemoryWeight(0, []api.ManifestEntry{{DataFile: file}})
-	return saturatingMaintenanceAdd(total, weight)
+	return api.SaturatingNonnegativeAdd(total, weight)
 }
 
 func rewriteDataFilesEntriesBySpec(entries []api.ManifestEntry) map[int][]api.ManifestEntry {
