@@ -455,30 +455,68 @@ func TestStatementInfoSpoolAckBatchLeavesNoMarker(t *testing.T) {
 }
 
 func TestStatementInfoSpoolReplayDropsTornTail(t *testing.T) {
-	dir := t.TempDir()
 	ctx := context.Background()
 	full := encodeStatementInfoCSVLine(ctx, []string{"s1-r1"})
-	{
-		s := openTestSpool(t, dir, 0, 1, time.Minute)
-		s.appendRecord(full)
-		spoolKillFile(s)
-		// a kill landing mid-append leaves an unterminated tail line behind
-		// (the record it belonged to never got its fsync confirmation).
-		f, err := os.OpenFile(filepath.Join(dir, spoolSegmentFileName(1)), os.O_WRONLY|os.O_APPEND, 0644)
-		require.NoError(t, err)
-		_, err = f.Write([]byte("\"partially-written-row"))
-		require.NoError(t, err)
-		require.NoError(t, f.Close())
-	}
+	for _, tc := range []struct {
+		name        string
+		prefix      []byte
+		failRemoval bool
+	}{
+		{name: "complete_prefix", prefix: full},
+		{name: "only_torn_tail"},
+		{name: "removal_retry", prefix: full, failRemoval: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, spoolSegmentFileName(1))
+			raw := append(append([]byte(nil), tc.prefix...), []byte("\"partially-written-row")...)
+			require.NoError(t, os.WriteFile(path, raw, 0644))
+			stub := stubSpoolSQLFlush(t)
+			s := openTestSpool(t, dir, 0, 1, time.Minute)
+			t.Cleanup(s.close)
+			// New traffic must retain its own charge after the orphan is removed.
+			fresh := []byte("new-record\n")
+			require.NotZero(t, s.appendRecord(fresh))
+			charged := int64(len(raw) + len(fresh))
+			require.Equal(t, charged, s.totalSize)
 
-	stub := stubSpoolSQLFlush(t)
-	s2 := openTestSpool(t, dir, 0, 1, time.Minute)
-	defer s2.close()
-	s2.replayOnce(ctx)
-	// the complete prefix replays; the torn tail is dropped, not rejected.
-	assert.Equal(t, full, stub.bytes())
-	assert.False(t, s2.hasPendingOrphans())
-	assert.NotContains(t, spoolDirFiles(t, dir), spoolSegmentFileName(1))
+			if tc.failRemoval {
+				// Replace the exported file by a non-empty directory, making
+				// os.Remove fail even when tests run as root. Keep the actual
+				// charged bytes beside it until the removal retry.
+				sqlFlushSpoolContent = func(ctx context.Context, content []byte) error {
+					if err := stub.flush(ctx, content); err != nil {
+						return err
+					}
+					require.NoError(t, os.Rename(path, path+".retained"))
+					require.NoError(t, os.Mkdir(path, 0755))
+					require.NoError(t, os.WriteFile(filepath.Join(path, "block-remove"), nil, 0644))
+					return nil
+				}
+			}
+			s.replayOnce(ctx)
+			if tc.failRemoval {
+				require.True(t, s.hasPendingOrphans())
+				require.True(t, s.orphans[0].exportedPendingRemove)
+				assert.Equal(t, int64(len(raw)), s.orphans[0].size)
+				assert.Equal(t, charged, s.totalSize, "failed removal must retain the raw file charge")
+				require.NoError(t, os.Remove(filepath.Join(path, "block-remove")))
+				require.NoError(t, os.Remove(path))
+				require.NoError(t, os.Rename(path+".retained", path))
+				s.replayOnce(ctx)
+			}
+			assert.Equal(t, tc.prefix, stub.bytes())
+			assert.Equal(t, int64(len(fresh)), s.totalSize, "release the raw size, including the discarded tail")
+			assert.False(t, s.hasPendingOrphans())
+			assert.NotContains(t, spoolDirFiles(t, dir), spoolSegmentFileName(1))
+			assert.NotContains(t, spoolDirFiles(t, dir), spoolAckFileName(spoolSegmentFileName(1)))
+			calls := 0
+			if len(tc.prefix) > 0 {
+				calls = 1
+			}
+			assert.Equal(t, calls, stub.calls(), "retry removal without exporting twice")
+		})
+	}
 }
 
 // TestLastCompleteCSVRecordEnd pins the quote-aware boundary scan: a
@@ -1276,13 +1314,15 @@ func TestSpoolFsyncGroupAppendSurfacesSyncError(t *testing.T) {
 // and one-shot partial-write injection (partialN/partialErr) for the torn
 // tail repair probe.
 type spoolMemFile struct {
-	mux        sync.Mutex
-	buf        []byte
-	syncs      int
-	fail       error
-	partialN   int   // next Write keeps only this many bytes and fails
-	partialErr error // error paired with the partial write
-	truncs     []int64
+	mux         sync.Mutex
+	buf         []byte
+	syncs       int
+	fail        error
+	partialN    int   // next Write keeps only this many bytes and fails
+	partialErr  error // error paired with the partial write
+	truncs      []int64
+	truncateErr error
+	closeErr    error
 }
 
 func (f *spoolMemFile) Write(p []byte) (int, error) {
@@ -1310,6 +1350,9 @@ func (f *spoolMemFile) Truncate(size int64) error {
 	f.mux.Lock()
 	defer f.mux.Unlock()
 	f.truncs = append(f.truncs, size)
+	if f.truncateErr != nil {
+		return f.truncateErr
+	}
 	if int64(len(f.buf)) > size {
 		f.buf = f.buf[:size]
 	}
@@ -1323,7 +1366,7 @@ func (f *spoolMemFile) Sync() error {
 	return f.fail
 }
 
-func (f *spoolMemFile) Close() error { return nil }
+func (f *spoolMemFile) Close() error { return f.closeErr }
 
 func (f *spoolMemFile) syncCount() int {
 	f.mux.Lock()
@@ -1391,12 +1434,12 @@ func TestSpoolFsyncGroupCommitSharesSync(t *testing.T) {
 	assert.Equal(t, 3, writes)
 	assert.Equal(t, 2, syncs) // in-flight leader + one Sync for the queue
 	g.mu.Lock()
-	assert.Equal(t, g.fileSize, g.confirmedWidth)
+	assert.Equal(t, g.fileSize, g.result.confirmedWidth)
 	g.mu.Unlock()
 }
 
 // TestSpoolFsyncGroupWaiterAcrossSealSucceeds: an appender whose fsync
-// confirmation is delivered by the rotation's seal Sync (sealGen bump) must
+// confirmation is delivered by the rotation's seal Sync must
 // return success, not hang behind the fresh file and not double-fsync.
 func TestSpoolFsyncGroupWaiterAcrossSealSucceeds(t *testing.T) {
 	f := &spoolGateFile{
@@ -1448,8 +1491,136 @@ func TestSpoolFsyncGroupWaiterAcrossSealSucceeds(t *testing.T) {
 	assert.LessOrEqual(t, syncs, 3)
 	g.mu.Lock()
 	assert.Nil(t, g.f)
-	assert.Equal(t, uint64(1), g.sealGen)
+	assert.Equal(t, int64(len("a\nb\n")), g.result.confirmedWidth)
 	g.mu.Unlock()
+}
+
+// spoolWaiterGate holds a cond waiter immediately before it reacquires the
+// group mutex. This lets rotation and adoption finish first, without sleeps
+// or a production scheduling hook. Only cond.Wait uses this locker.
+type spoolWaiterGate struct {
+	sync.Locker
+	waiting chan struct{}
+	woken   chan struct{}
+	resume  chan struct{}
+}
+
+func (l *spoolWaiterGate) Unlock() {
+	l.Locker.Unlock()
+	close(l.waiting)
+}
+
+func (l *spoolWaiterGate) Lock() {
+	close(l.woken)
+	<-l.resume
+	l.Locker.Lock()
+}
+
+func TestSpoolFsyncGroupWaiterSurvivesRotationResult(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		sealErr error
+		newErr  error
+	}{
+		{name: "failed_seal", sealErr: io.ErrClosedPipe},
+		{name: "healthy_seal", newErr: io.ErrUnexpectedEOF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &spoolGateFile{
+				blockFirst: true, gate: make(chan struct{}), enteredSync: make(chan struct{}),
+				failOn: 1, failErr: io.ErrClosedPipe,
+			}
+			g := &spoolFsyncGroup{}
+			g.init()
+			g.adoptLocked(f, 0)
+			gate := &spoolWaiterGate{
+				Locker: &g.mu, waiting: make(chan struct{}), woken: make(chan struct{}), resume: make(chan struct{}),
+			}
+			g.cond.L = gate
+			releaseSync := sync.OnceFunc(func() { close(f.gate) })
+			releaseWaiter := sync.OnceFunc(func() { close(gate.resume) })
+			var workers sync.WaitGroup
+			t.Cleanup(func() {
+				releaseSync()
+				releaseWaiter()
+				workers.Wait()
+			})
+			leader := make(chan error, 1)
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				_, err := g.append([]byte("A\n"))
+				leader <- err
+			}()
+			<-f.enteredSync
+			waiter := make(chan error, 1)
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				_, err := g.append([]byte("B\n"))
+				waiter <- err
+			}()
+			<-gate.waiting
+			releaseSync()
+			require.ErrorIs(t, <-leader, io.ErrClosedPipe)
+			<-gate.woken // the old-file waiter cannot reacquire g.mu yet
+			if tc.sealErr == nil {
+				f.setFail(0, nil)
+			}
+			g.mu.Lock()
+			size, sealErr := g.sealFileLocked()
+			next := &spoolMemFile{fail: tc.newErr}
+			g.adoptLocked(next, 0)
+			g.mu.Unlock()
+			assert.Equal(t, int64(len("A\nB\n")), size)
+			assert.ErrorIs(t, sealErr, tc.sealErr)
+			_, syncs := f.counters()
+			assert.Equal(t, 2, syncs)
+			// The new generation's result (and larger confirmed/failed byte
+			// range) must never settle an old generation's append.
+			_, err := g.append([]byte("new-generation-record\n"))
+			assert.ErrorIs(t, err, tc.newErr)
+			releaseWaiter()
+			assert.ErrorIs(t, <-waiter, tc.sealErr)
+		})
+	}
+}
+
+func TestSpoolFsyncGroupSealReportsIOErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		syncErr  error
+		closeErr error
+	}{
+		{name: "healthy"},
+		{name: "sync_error", syncErr: io.ErrClosedPipe},
+		{name: "close_error", closeErr: io.ErrUnexpectedEOF},
+		{name: "both_errors", syncErr: io.ErrClosedPipe, closeErr: io.ErrUnexpectedEOF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &spoolMemFile{}
+			g := &spoolFsyncGroup{}
+			g.init()
+			g.adoptLocked(f, 0)
+			_, err := g.append([]byte("a\n"))
+			require.NoError(t, err)
+			f.fail, f.closeErr = tc.syncErr, tc.closeErr
+			g.mu.Lock()
+			size, err := g.sealFileLocked()
+			g.mu.Unlock()
+			assert.Equal(t, int64(2), size)
+			assert.Nil(t, g.f)
+			if tc.syncErr != nil {
+				assert.ErrorIs(t, err, tc.syncErr)
+			}
+			if tc.closeErr != nil {
+				assert.ErrorIs(t, err, tc.closeErr)
+			}
+			if tc.syncErr == nil && tc.closeErr == nil {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }
 
 // TestSpoolFsyncGroupFreshFileRequiresNewSync: confirmation is per file — the
@@ -2003,41 +2174,63 @@ func TestSpoolFsyncGroupSharedSyncFailureReachesEveryWaiter(t *testing.T) {
 // complete boundary, so the joined-line corruption of the X/C/D shape is
 // impossible and the segment's byte accounting stays exact.
 func TestSpoolFsyncGroupPartialWriteRestoresBoundary(t *testing.T) {
-	fm := &spoolMemFile{}
-	g := &spoolFsyncGroup{}
-	g.init()
-	g.mu.Lock()
-	g.adoptLocked(fm, 0)
-	g.mu.Unlock()
-
-	n, err := g.append([]byte("X\n"))
-	require.NoError(t, err)
-	require.Equal(t, 2, n)
-
-	fm.partialN = 3
-	fm.partialErr = io.ErrClosedPipe
-	_, err = g.append([]byte("CCCCC\n"))
-	require.ErrorIs(t, err, io.ErrClosedPipe)
-	// the fragment is gone: the file is back at the last complete boundary,
-	// and the repair was a single truncate to exactly that boundary.
-	require.Equal(t, []int64{2}, fm.truncs)
-	require.Equal(t, []byte("X\n"), fm.buf)
-
-	n, err = g.append([]byte("D\n"))
-	require.NoError(t, err)
-	require.Equal(t, 2, n)
-	// no join corruption: D starts a fresh line right after X's terminator.
-	require.Equal(t, []byte("X\nD\n"), fm.buf)
+	for _, repairFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("repair_fails=%t", repairFails), func(t *testing.T) {
+			fm := &spoolMemFile{}
+			g := &spoolFsyncGroup{}
+			g.init()
+			g.adoptLocked(fm, 0)
+			n, err := g.append([]byte("X\n"))
+			require.NoError(t, err)
+			require.Equal(t, 2, n)
+			fm.partialN, fm.partialErr = 3, io.ErrShortWrite
+			if repairFails {
+				fm.truncateErr = io.ErrClosedPipe
+			}
+			n, err = g.append([]byte("CCCCC\n"))
+			require.ErrorIs(t, err, io.ErrShortWrite)
+			require.Equal(t, []int64{2}, fm.truncs)
+			if repairFails {
+				assert.ErrorIs(t, err, io.ErrClosedPipe)
+				assert.Equal(t, 3, n, "retain the charge for the fragment still on disk")
+				assert.Equal(t, []byte("X\nCCC"), fm.buf)
+				assert.Equal(t, int64(len(fm.buf)), g.fileSize)
+				n, err = g.append([]byte("D\n"))
+				assert.ErrorIs(t, err, io.ErrClosedPipe)
+				assert.Zero(t, n)
+				assert.Equal(t, []byte("X\nCCC"), fm.buf, "never join another record onto the damaged tail")
+				g.mu.Lock()
+				size, sealErr := g.sealFileLocked()
+				next := &spoolMemFile{}
+				g.adoptLocked(next, 0)
+				g.mu.Unlock()
+				assert.ErrorIs(t, sealErr, io.ErrClosedPipe)
+				assert.Equal(t, int64(len(fm.buf)), size)
+				n, err = g.append([]byte("D\n"))
+				require.NoError(t, err)
+				assert.Equal(t, 2, n)
+				assert.Equal(t, []byte("D\n"), next.buf, "a healthy new segment may resume writes")
+			} else {
+				assert.Zero(t, n)
+				require.Equal(t, []byte("X\n"), fm.buf)
+				n, err = g.append([]byte("D\n"))
+				require.NoError(t, err)
+				assert.Equal(t, 2, n)
+				assert.Equal(t, []byte("X\nD\n"), fm.buf)
+			}
+		})
+	}
 }
 
 // spoolPartialWriteFile fails exactly one armed Write with a short count,
 // then heals — the real-file twin of spoolMemFile.partialN.
 type spoolPartialWriteFile struct {
 	*os.File
-	mux    sync.Mutex
-	arm    bool
-	keep   int
-	truncs []int64
+	mux         sync.Mutex
+	arm         bool
+	keep        int
+	truncs      []int64
+	truncateErr error
 }
 
 func (f *spoolPartialWriteFile) Write(p []byte) (int, error) {
@@ -2063,7 +2256,11 @@ func (f *spoolPartialWriteFile) Write(p []byte) (int, error) {
 func (f *spoolPartialWriteFile) Truncate(size int64) error {
 	f.mux.Lock()
 	f.truncs = append(f.truncs, size)
+	err := f.truncateErr
 	f.mux.Unlock()
+	if err != nil {
+		return err
+	}
 	return f.File.Truncate(size)
 }
 
@@ -2073,47 +2270,69 @@ func (f *spoolPartialWriteFile) Truncate(size int64) error {
 // ends up exactly with the surviving records — quota and bytes never
 // desynchronize.
 func TestStatementInfoSpoolPartialWriteKeepsLedgerExact(t *testing.T) {
-	dir := t.TempDir()
-	ctx := context.Background()
-	stub := &spoolPartialWriteFile{}
-	old := openSpoolSegmentFile
-	openSpoolSegmentFile = func(dir string, seq uint64) (spoolSyncFile, int64, error) {
-		f, size, err := openSegmentFile(dir, seq)
-		if err != nil {
-			return nil, 0, err
-		}
-		if stub.File == nil {
-			stub.File = f
-			return stub, size, nil
-		}
-		return f, size, nil
+	for _, repairFails := range []bool{false, true} {
+		t.Run(fmt.Sprintf("repair_fails=%t", repairFails), func(t *testing.T) {
+			dir := t.TempDir()
+			ctx := context.Background()
+			stub := &spoolPartialWriteFile{}
+			old := openSpoolSegmentFile
+			openSpoolSegmentFile = func(dir string, seq uint64) (spoolSyncFile, int64, error) {
+				f, size, err := openSegmentFile(dir, seq)
+				if err != nil {
+					return nil, 0, err
+				}
+				if stub.File == nil {
+					stub.File = f
+					return stub, size, nil
+				}
+				return f, size, nil
+			}
+			t.Cleanup(func() { openSpoolSegmentFile = old })
+
+			s := openTestSpool(t, dir, 0, 0, 0)
+			defer s.close()
+
+			lineX := encodeStatementInfoCSVLine(ctx, []string{"x-survives"})
+			seqX := s.appendRecord(lineX)
+			require.NotZero(t, seqX)
+			require.Equal(t, int64(len(lineX)), s.totalSize)
+
+			stub.arm = true
+			stub.keep = 3
+			if repairFails {
+				stub.truncateErr = io.ErrClosedPipe
+			}
+			lineC := encodeStatementInfoCSVLine(ctx, []string{"cccc-victim"})
+			require.Greater(t, len(lineC), 3)
+			seqC := s.appendRecord(lineC)
+			require.Zero(t, seqC, "the partially written record must not be acknowledged")
+			require.Equal(t, []int64{int64(len(lineX))}, stub.truncs)
+			lineD := encodeStatementInfoCSVLine(ctx, []string{"d-next"})
+			if repairFails {
+				want := append(append([]byte{}, lineX...), lineC[:stub.keep]...)
+				require.Equal(t, want, readSpoolFile(t, dir, 1))
+				require.Equal(t, int64(len(want)), s.totalSize, "a failed repair keeps the physical byte charge")
+				require.Zero(t, s.appendRecord(lineD), "reject further writes to the damaged file")
+				require.Equal(t, want, readSpoolFile(t, dir, 1))
+				require.Equal(t, int64(len(want)), s.totalSize, "the rejected write must release only its own reservation")
+				seg := s.sealForExport()
+				require.NotNil(t, seg)
+				require.Equal(t, int64(len(want)), seg.size)
+				require.NotZero(t, s.appendRecord(lineD), "rotation restores service on a new file")
+				require.Equal(t, lineD, readSpoolFile(t, dir, 2))
+				require.Equal(t, int64(len(want)+len(lineD)), s.totalSize)
+				return
+			}
+			require.Equal(t, int64(len(lineX)), s.totalSize, "the lost record's whole reservation is released")
+			require.Equal(t, lineX, readSpoolFile(t, dir, 1))
+
+			seqD := s.appendRecord(lineD)
+			require.NotZero(t, seqD)
+			want := append(append([]byte{}, lineX...), lineD...)
+			require.Equal(t, want, readSpoolFile(t, dir, 1), "the next record appends at the restored boundary, never joined")
+			require.Equal(t, int64(len(lineX)+len(lineD)), s.totalSize)
+		})
 	}
-	t.Cleanup(func() { openSpoolSegmentFile = old })
-
-	s := openTestSpool(t, dir, 0, 0, 0)
-	defer s.close()
-
-	lineX := encodeStatementInfoCSVLine(ctx, []string{"x-survives"})
-	seqX := s.appendRecord(lineX)
-	require.NotZero(t, seqX)
-	require.Equal(t, int64(len(lineX)), s.totalSize)
-
-	stub.arm = true
-	stub.keep = 3
-	lineC := encodeStatementInfoCSVLine(ctx, []string{"cccc-victim"})
-	require.Greater(t, len(lineC), 3)
-	seqC := s.appendRecord(lineC)
-	require.Zero(t, seqC, "the partially written record must not be acknowledged")
-	require.Equal(t, []int64{int64(len(lineX))}, stub.truncs)
-	require.Equal(t, int64(len(lineX)), s.totalSize, "the lost record's whole reservation is released")
-	require.Equal(t, lineX, readSpoolFile(t, dir, 1))
-
-	lineD := encodeStatementInfoCSVLine(ctx, []string{"d-next"})
-	seqD := s.appendRecord(lineD)
-	require.NotZero(t, seqD)
-	want := append(append([]byte{}, lineX...), lineD...)
-	require.Equal(t, want, readSpoolFile(t, dir, 1), "the next record appends at the restored boundary, never joined")
-	require.Equal(t, int64(len(lineX)+len(lineD)), s.totalSize)
 }
 
 // TestStatementInfoSpoolDurablyPublishesNames (round-3, finding 6): an

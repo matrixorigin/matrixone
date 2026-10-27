@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -252,18 +253,23 @@ type spoolFsyncGroup struct {
 	f spoolSyncFile
 	// fileSize counts bytes written into the current file.
 	fileSize int64
-	// confirmedWidth is the prefix of the current file a completed Sync is
-	// known to have covered. It starts at the file's size at adoption
-	// (re-opened content was confirmed by its original writer) and is raised
-	// only to the fileSize snapshot taken BEFORE the Sync started: a write
-	// racing an in-flight Sync is not covered by that Sync.
-	confirmedWidth int64
 	// syncing marks one appender leading a Sync.
 	syncing bool
-	// sealGen is bumped by sealFileLocked after its final Sync confirmed the
-	// whole file, right before closing it. An append waiter whose sealGen
-	// changed under it returns success: the seal Sync covered its write.
-	sealGen uint64
+	// result belongs to this file, not the group. Each append retains it
+	// until completion, so adoption cannot erase an old waiter's result.
+	// Retired results are reclaimed with their last waiter, not kept in a map.
+	result *spoolFsyncResult
+
+	terminate bool
+}
+
+// spoolFsyncResult is protected by the group's mutex, including after its
+// file is retired. It contains no file handle and outlives rotation only
+// while an append is still observing that file's completion.
+type spoolFsyncResult struct {
+	// confirmedWidth advances only to the fileSize snapshot taken BEFORE a
+	// successful Sync: racing writes are not covered by that Sync.
+	confirmedWidth int64
 
 	// failErr/failWidth publish the coverage of a failed Sync: every waiter
 	// whose bytes sit at or below failWidth exits with failErr, so a shared
@@ -273,8 +279,8 @@ type spoolFsyncGroup struct {
 	// failure (fsync semantics), so success is checked first on exit.
 	failErr   error
 	failWidth int64
-
-	terminate bool
+	// writeErr disables further writes after a failed boundary repair.
+	writeErr error
 }
 
 func (g *spoolFsyncGroup) init() {
@@ -288,9 +294,7 @@ func (g *spoolFsyncGroup) init() {
 func (g *spoolFsyncGroup) adoptLocked(f spoolSyncFile, size int64) {
 	g.f = f
 	g.fileSize = size
-	g.confirmedWidth = size
-	g.failErr = nil
-	g.failWidth = 0
+	g.result = &spoolFsyncResult{confirmedWidth: size}
 }
 
 // append writes line to the current file and blocks until an fsync of that
@@ -302,8 +306,14 @@ func (g *spoolFsyncGroup) append(line []byte) (int, error) {
 	if g.terminate || g.f == nil {
 		return 0, moerr.NewInternalErrorNoCtx("statement_info spool file is closed")
 	}
-	myGen := g.sealGen
+	result := g.result
+	if result.writeErr != nil {
+		return 0, result.writeErr
+	}
 	n, err := g.f.Write(line)
+	if err == nil && n != len(line) {
+		err = io.ErrShortWrite
+	}
 	if err != nil {
 		if n > 0 {
 			// A partial write left a torn tail without its newline
@@ -314,9 +324,11 @@ func (g *spoolFsyncGroup) append(line []byte) (int, error) {
 			// been bumped yet, so it is exactly the clean boundary. The file
 			// is O_APPEND, so the next write lands at the truncated EOF.
 			if terr := g.f.Truncate(g.fileSize); terr != nil {
-				return 0, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
-					"statement_info spool: partial write (%d bytes lost: %v) and boundary repair failed: %v",
-					n, err, terr))
+				// The fragment remains on disk. Charge it and stop writes to
+				// this file; only rotation to a healthy file may resume them.
+				g.fileSize += int64(n)
+				result.writeErr = fmt.Errorf("statement_info spool: partial write boundary repair failed: %w", errors.Join(err, terr))
+				return n, result.writeErr
 			}
 			// the fragment is gone from disk: report zero kept bytes so the
 			// caller releases the whole reservation.
@@ -326,12 +338,10 @@ func (g *spoolFsyncGroup) append(line []byte) (int, error) {
 	}
 	g.fileSize += int64(n)
 	end := g.fileSize
-	for g.confirmedWidth < end && g.failWidth < end {
-		if g.terminate || g.sealGen != myGen {
-			// The file I wrote to was sealed (or the group is going down
-			// after sealing it): the seal's final Sync confirmed my write
-			// (success in confirmedWidth, failure in failWidth — the exit
-			// check below reports both correctly).
+	for result.confirmedWidth < end && result.failWidth < end {
+		if g.terminate || g.result != result || g.f == nil {
+			// A retired file's result is settled by its final Sync, never
+			// by the newly adopted file's byte widths or errors.
 			break
 		}
 		if !g.syncing {
@@ -349,32 +359,33 @@ func (g *spoolFsyncGroup) append(line []byte) (int, error) {
 				// publish the failure to every covered waiter (not one):
 				// the Sync attempt for these bytes is finished, so they
 				// must not keep waiting nor re-lead a failing disk forever.
-				g.failErr = syncErr
-				if target > g.failWidth {
-					g.failWidth = target
+				result.failErr = syncErr
+				if target > result.failWidth {
+					result.failWidth = target
 				}
-			} else if target > g.confirmedWidth {
-				g.confirmedWidth = target
+			} else if target > result.confirmedWidth {
+				result.confirmedWidth = target
 			}
 			g.cond.Broadcast()
 		} else {
 			g.cond.Wait()
 		}
 	}
-	if g.confirmedWidth >= end {
+	if result.confirmedWidth >= end {
 		return n, nil
 	}
 	// settled by a failed Sync (failure is shared: every covered waiter
 	// surfaces it, none may claim unconfirmed durability)
-	if err := g.failErr; err != nil && end <= g.failWidth {
+	if err := result.failErr; err != nil && end <= result.failWidth {
 		return n, err
 	}
-	return n, nil
+	return n, moerr.NewInternalErrorNoCtx("statement_info spool file closed before sync confirmation")
 }
 
-// sealFileLocked sync-confirms and closes the current file. Every record
-// appended before sealFileLocked acquired the lock is durable before the file
-// is closed. Call with g.mu held.
+// sealFileLocked publishes the final Sync result and closes the current file.
+// Successful confirmation survives for its pending appenders even after the
+// next file is adopted. Sync, Close and boundary-repair failures are returned
+// to the caller. Call with g.mu held.
 func (g *spoolFsyncGroup) sealFileLocked() (int64, error) {
 	if g.f == nil {
 		return 0, nil
@@ -385,31 +396,26 @@ func (g *spoolFsyncGroup) sealFileLocked() (int64, error) {
 		g.cond.Wait()
 	}
 	size := g.fileSize
-	if err := g.f.Sync(); err != nil {
+	result := g.result
+	syncErr := g.f.Sync()
+	if syncErr != nil {
 		// publish the seal failure to every covered waiter (failWidth covers
 		// the whole file: a seal that could not confirm a byte must not let
 		// that byte's appender report durability).
-		g.failErr = err
-		if size > g.failWidth {
-			g.failWidth = size
+		result.failErr = syncErr
+		if size > result.failWidth {
+			result.failWidth = size
 		}
 	} else {
-		g.confirmedWidth = size
+		result.confirmedWidth = size
 	}
-	// Wake append waiters of this file before the handle goes away: the Sync
-	// above settled their writes, so they must observe the generation bump
-	// and exit through the confirmedWidth/failWidth check (success in
-	// confirmedWidth, a shared failure in failWidth).
-	g.sealGen++
+	// A broadcast does not mean the waiters have reacquired mu. Keep this
+	// file's completion state intact while adoption replaces g.result.
 	g.cond.Broadcast()
-	var closeErr error
-	if err := g.f.Close(); err != nil {
-		closeErr = err
-	}
+	closeErr := g.f.Close()
 	g.f = nil
 	g.fileSize = 0
-	g.confirmedWidth = 0
-	return size, closeErr
+	return size, errors.Join(syncErr, closeErr, result.writeErr)
 }
 
 // close terminates the group: no further appends are accepted.
@@ -828,7 +834,7 @@ func (s *statementInfoSpool) sealForExport() *spoolSegment {
 	size, sealErr := s.fg.sealFileLocked()
 	if sealErr != nil {
 		v2.TraceMOLoggerSpoolErrorCounter.Inc()
-		logutil.Error("statement_info spool close active segment failed", zap.Error(sealErr))
+		logutil.Error("statement_info spool seal active segment failed", zap.Error(sealErr))
 	}
 	var f spoolSyncFile
 	var nextSize int64
@@ -1117,8 +1123,8 @@ func (s *statementInfoSpool) replaySegment(ctx context.Context, seg *spoolSegmen
 			logutil.Error("statement_info spool replay ack marker write failed",
 				zap.String("file", spoolAckFileName(seg.name)), zap.Error(err))
 		}
-		size = int64(len(content))
-		seg.size = size
+		// Recovery trims the replay content, not the file. Keep its original
+		// byte charge until removal succeeds, including across removal retries.
 		seg.exportedPendingRemove = true
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
