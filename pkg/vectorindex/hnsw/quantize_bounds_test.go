@@ -101,8 +101,9 @@ func TestBuildModelCapacity(t *testing.T) {
 	for i, v := range quantizeTestVectors(count, dim) {
 		require.NoError(t, build.Add(int64(i), v))
 	}
-	var caps []uint
-	for _, idx := range build.GetIndexes() {
+	indexes := build.GetIndexes()
+	caps := make([]uint, 0, len(indexes))
+	for _, idx := range indexes {
 		caps = append(caps, idx.MaxCapacity)
 	}
 	require.Equal(t, []uint{300, 300, 100}, caps)

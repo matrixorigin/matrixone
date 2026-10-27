@@ -211,8 +211,9 @@ func TestHnswCreateCapacity(t *testing.T) {
 	src := hnswSource{typ: types.T_array_float32, dim: 3, rows: hnswRows(5, 3)}
 	run, err := runHnswCreate(t, `{"op_type": "vector_l2_ops", "max_index_capacity": "2"}`, hnswCfg(src, false), src)
 	require.NoError(t, err)
-	var caps []uint
-	for _, m := range run.models() {
+	models := run.models()
+	caps := make([]uint, 0, len(models))
+	for _, m := range models {
 		caps = append(caps, m.maxCapacity)
 	}
 	require.Equal(t, []uint{2, 2, 1}, caps)
