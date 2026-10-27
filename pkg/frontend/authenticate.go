@@ -12148,6 +12148,11 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		if err != nil {
 			return err
 		}
+		// Both catalog bodies are TEXT. Check the encoded envelope, not raw
+		// source bytes, before artifact publication or any catalog mutation.
+		if len(byt) > types.MaxStringSize {
+			return moerr.NewInvalidInputNoCtxf("Python UDF encoded catalog body exceeds %d bytes", types.MaxStringSize)
+		}
 		// Keep raw JSON here; SQL-level escaping is applied below.
 		// Using strconv.Quote here would preserve backslashes before JSON quotes
 		// in storage and break json.Unmarshal when invoking python UDFs.

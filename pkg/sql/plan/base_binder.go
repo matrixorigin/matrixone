@@ -7275,6 +7275,7 @@ func (c *stringDomainWitnessCollector) collectResult(expr *Expr, visited map[*Ex
 		c.addStaticDomain(expr, possibleStringDomainsForType(makeTypeByPlan2Expr(expr)), declaration)
 		return
 	}
+
 	name := strings.ToLower(fn.Func.GetObjName())
 	if name == "cast" {
 		// COLLATE uses CAST0, but its explicit rank is still a declaration.
@@ -9860,6 +9861,12 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
 		return staticDomains
+	}
+	// Frozen routine calls contain only user arguments. Their exact result
+	// type owns the representation; builtin overload checkers expect another
+	// argument layout and must not reinterpret this call.
+	if call := fn.GetRoutineCall(); call != nil {
+		return possibleStringDomainsForType(makeTypeByPlan2Type(call.ReturnType))
 	}
 	name := strings.ToLower(fn.Func.GetObjName())
 	if name == "cast" {

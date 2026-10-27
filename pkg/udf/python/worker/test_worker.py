@@ -978,6 +978,24 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "offset_width must be an integer"):
             worker._field("result", {"type_id": worker.INT64, "offset_width": "32"})
 
+    def test_text_blob_byte_bounds_scalar_and_vector(self):
+        for type_id, good, bad in (
+            (worker.TEXT, "a"*255, "a"*256),
+            (worker.TEXT, "中"*85, "中"*86),
+            (worker.BLOB, b"x"*255, b"x"*256),
+        ):
+            descriptor = {"type_id": type_id, "width": 255, "offset_width": 32,
+                          "charset": 1 if type_id == worker.BLOB else 0}
+            with self.subTest(type_id=type_id, length=len(good)):
+                self.assertEqual(good, worker._check_scalar(good, descriptor))
+                with self.assertRaisesRegex(ValueError, "width"):
+                    worker._check_scalar(bad, descriptor)
+                self.assertEqual([good], worker._output_array([good], descriptor, 1).to_pylist())
+                with self.assertRaisesRegex(ValueError, "width"):
+                    worker._output_array(pa.array([bad]), descriptor, 1)
+        varchar = {"type_id": worker.VARCHAR, "width": 255, "offset_width": 32}
+        self.assertEqual("中"*255, worker._check_scalar("中"*255, varchar))
+
     def test_text_descriptor_rejects_opaque_binary_charset(self):
         for type_id in (worker.CHAR, worker.VARCHAR, worker.TEXT):
             with self.subTest(type_id=type_id):

@@ -92,7 +92,7 @@ func NewTypeDescriptor(typ types.Type) (TypeDescriptor, error) {
 		if scale < 0 {
 			scale = 0
 		}
-	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary,
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64:
 		scale = 0
 	default:
@@ -1498,7 +1498,11 @@ func validateArrowValueDomain(descriptor TypeDescriptor, input arrow.Array) erro
 			continue
 		}
 		switch types.T(descriptor.TypeID) {
-		case types.T_char, types.T_varchar, types.T_text:
+		case types.T_text:
+			if descriptor.Width > 0 && len(input.(*array.String).Value(row)) > int(descriptor.Width) {
+				return udferr.Newf("TYPE_CONTRACT: text row %d exceeds byte width %d", row, descriptor.Width)
+			}
+		case types.T_char, types.T_varchar:
 			if descriptor.Width > 0 && int32(utf8.RuneCountInString(input.(*array.String).Value(row))) > descriptor.Width {
 				return udferr.Newf("TYPE_CONTRACT: string row %d exceeds width %d", row, descriptor.Width)
 			}

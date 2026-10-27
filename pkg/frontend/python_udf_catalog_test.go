@@ -159,6 +159,18 @@ func TestInitPythonFunctionValidatesArtifactBeforeCatalogReadiness(t *testing.T)
 			require.Empty(t, background.executedSqls, "unsupported types must fail before catalog access")
 		})
 	}
+	originalBody := createFunction.Body
+	for _, replace := range []bool{false, true} {
+		createFunction.Replace = replace
+		createFunction.Body = strings.Repeat("#", 65109)
+		runtime.definition = nil
+		background.executedSqls = nil
+		err = InitFunction(session, &ExecCtx{reqCtx: ctx}, tenant, createFunction)
+		require.ErrorContains(t, err, "encoded catalog body exceeds")
+		require.Nil(t, runtime.definition, "oversize envelopes fail before worker validation")
+		require.Empty(t, background.executedSqls, "failed replacement cannot mutate the prior revision")
+	}
+	createFunction.Body, createFunction.Replace = originalBody, false
 	err = InitFunction(session, &ExecCtx{reqCtx: ctx}, tenant, createFunction)
 	require.ErrorContains(t, err, "Python UDF catalog contract is not ready")
 	require.ErrorContains(t, err, missingRevisionCatalog.Error())
