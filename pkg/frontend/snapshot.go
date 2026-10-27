@@ -282,6 +282,16 @@ func NewSubDbRestoreRecord(dbName string, sourceAccount, targetAccount uint32, c
 	}
 }
 
+var snapshotBackgroundTxnOperator = backgroundExecTxnOperator
+
+var resolvePublicationSnapshotDatabaseID = func(ctx context.Context, ses *Session, bh BackgroundExec, databaseName string) (uint64, error) {
+	db, err := ses.proc.GetSessionInfo().StorageEngine.Database(ctx, databaseName, snapshotBackgroundTxnOperator(bh))
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(db.GetDatabaseId(ctx), 10, 64)
+}
+
 func doCreateSnapshot(ctx context.Context, ses *Session, stmt *tree.CreateSnapShot) (err error) {
 	var snapshotLevel tree.SnapshotLevel
 	var snapshotForAccount string
@@ -1004,7 +1014,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	case tree.RESTORELEVELDATABASE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
 
-		if err = restoreToDatabase(ctx,
+		if _, err = restoreToDatabase(ctx,
 			ses.GetService(),
 			bh,
 			snapshotName,
@@ -1400,7 +1410,7 @@ func restoreToAccount(
 
 	// restore dbs
 	for _, dbName := range restoreDBNames {
-		if err = restoreToDatabase(ctx,
+		if _, err = restoreToDatabase(ctx,
 			sid,
 			bh,
 			snapshotName,
@@ -1466,7 +1476,7 @@ func restoreToDatabase(
 	isRestoreCluster bool,
 	subDbToRestore map[string]*subDbRestoreRecord,
 	source *partialRestoreSource,
-) (err error) {
+) (databaseRecreated bool, err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore db: %v, restore timestamp: %d", snapshotName, dbName, snapshotTs))
 	return restoreToDatabaseOrTable(ctx,
 		sid,
@@ -1498,7 +1508,7 @@ func restoreToTable(
 	source *partialRestoreSource,
 ) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore table: %v, restore timestamp: %d", snapshotName, tblName, snapshotTs))
-	return restoreToDatabaseOrTable(ctx,
+	_, err = restoreToDatabaseOrTable(ctx,
 		sid,
 		bh,
 		snapshotName,
@@ -1511,6 +1521,7 @@ func restoreToTable(
 		restoreAccount,
 		false,
 		nil, source)
+	return err
 }
 
 func restoreToDatabaseOrTable(
@@ -1528,7 +1539,7 @@ func restoreToDatabaseOrTable(
 	isRestoreCluster bool,
 	subDbToRestore map[string]*subDbRestoreRecord,
 	source *partialRestoreSource,
-) (err error) {
+) (databaseRecreated bool, err error) {
 	if needSkipDb(dbName) {
 		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v", snapshotName, dbName))
 		return
@@ -1626,6 +1637,8 @@ func restoreToDatabaseOrTable(
 			return
 		}
 	}
+
+	databaseRecreated = !restoreToTbl
 
 	tempSnap := &plan.Snapshot{
 		TS:     &timestamp.Timestamp{PhysicalTime: snapshotTs},
@@ -4301,6 +4314,31 @@ func getRestoreAcurrentExistsAccount(
 	return
 }
 
+// newSnapshotRestoreTempPassword returns a CSPRNG-generated one-shot
+// password for the account bootstrap performed inside the snapshot/PITR
+// restore pipeline. The catalog (mo_account) stores no password material, so
+// a dropped account is first re-created with this temporary password and the
+// real credentials land later when the snapshot's mo_user rows are restored.
+// #30752: the previous constant "111" was the shipped factory default of
+// every MatrixOne instance, making the restored account loginable with a
+// widely-known credential for the whole restore window — and leaving a
+// permanent backdoor admin whenever the restore failed after the account
+// creation step. The random value is never logged, never returned to any
+// client, and never leaves the pipeline in plaintext.
+// snapshotRestoreRandRead exists so tests can exercise the entropy-failure
+// branch; in production it is always crypto/rand.Read.
+var snapshotRestoreRandRead = cryptorand.Read
+
+func newSnapshotRestoreTempPassword() (string, error) {
+	var buf [24]byte
+	if _, err := snapshotRestoreRandRead(buf[:]); err != nil {
+		return "", moerr.NewInternalErrorNoCtxf("generate snapshot restore temp password: %v", err)
+	}
+	// 48 lowercase hex characters: safe to embed in a single-quoted SQL
+	// literal, and 192 bits of entropy make it unguessable.
+	return hex.EncodeToString(buf[:]), nil
+}
+
 func makeCreateAccountSqlByAccountRecord(record accountRecord) string {
 	baseSQL := fmt.Sprintf(
 		"create account IF NOT EXISTS %s ADMIN_NAME '%s' IDENTIFIED BY '%s'",
@@ -4372,7 +4410,10 @@ func getPastExistsAccounts(
 				return nil, err
 			}
 
-			account.pwd = "111"
+			account.pwd, err = newSnapshotRestoreTempPassword()
+			if err != nil {
+				return nil, err
+			}
 
 			accounts = append(accounts, account)
 		}
@@ -4754,7 +4795,10 @@ func getAccountRecordByTs(ctx context.Context, ses *Session, bh BackgroundExec, 
 		if account.comments, err = erArray[0].GetString(ctx, 0, 3); err != nil {
 			return &accountRecord{}, err
 		}
-		account.pwd = "111"
+		account.pwd, err = newSnapshotRestoreTempPassword()
+		if err != nil {
+			return &accountRecord{}, err
+		}
 		return &account, nil
 	}
 
