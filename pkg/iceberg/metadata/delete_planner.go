@@ -346,21 +346,3 @@ func unsignedPartitionValueToken(value uint64) string {
 	}
 	return "u:" + strconv.FormatUint(value, 10)
 }
-
-func firstNonZeroInt(values ...int) int {
-	for _, value := range values {
-		if value != 0 {
-			return value
-		}
-	}
-	return 0
-}
-
-func firstNonZeroInt64(values ...int64) int64 {
-	for _, value := range values {
-		if value != 0 {
-			return value
-		}
-	}
-	return 0
-}

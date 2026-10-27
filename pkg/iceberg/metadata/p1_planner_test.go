@@ -306,9 +306,6 @@ func TestDeletePlannerHiddenMappingsAndPartitionTokens(t *testing.T) {
 			t.Fatalf("empty partition token for %#v", value)
 		}
 	}
-	if firstNonZeroInt(0, 0, 7) != 7 || firstNonZeroInt64(0, 9) != 9 {
-		t.Fatalf("first non-zero helpers returned unexpected values")
-	}
 }
 
 func TestLocalScanPlannerMergeOnReadReadsDeleteManifest(t *testing.T) {
