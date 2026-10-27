@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -96,4 +97,51 @@ func TestOversizeWALAfterApplyAppendRollsBack(t *testing.T) {
 	require.False(t, isNull)
 	require.Equal(t, pk, value)
 	require.NoError(t, readTxn.Commit(ctx))
+}
+
+func TestOversizeWALRemovesNonAppendableObject(t *testing.T) {
+	ctx := context.Background()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	t.Cleanup(func() {
+		mgr.Stop()
+		c.Close()
+		require.NoError(t, driver.Close())
+	})
+
+	schema := catalog.MockSchemaAll(1, 0)
+	setup, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err := setup.CreateDatabase("wal_size_naobj", "", "")
+	require.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	require.NoError(t, err)
+	tableEntry := rel.GetMeta().(*catalog.TableEntry)
+	require.NoError(t, setup.Commit(ctx))
+	before := tableEntry.ObjectCnt(false)
+
+	txn, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	txnDB, err := txn.GetDatabase("wal_size_naobj")
+	require.NoError(t, err)
+	txnRel, err := txnDB.GetRelationByName(schema.Name)
+	require.NoError(t, err)
+	obj, err := txnRel.CreateNonAppendableObject(false, nil)
+	require.NoError(t, err)
+	objID := *obj.GetID()
+	stats := objectio.NewObjectStats()
+	objectio.SetObjectStatsLocation(stats, objectio.MockLocation(objectio.BuildObjectNameWithObjectID(&objID)))
+	objectio.SetObjectStatsSize(stats, 1)
+	require.NoError(t, obj.UpdateStats(*stats))
+	require.NoError(t, obj.Close())
+	_, err = tableEntry.GetObjectByID(&objID, false)
+	require.NoError(t, err)
+
+	txn.GetStore().(*txnStore).cmdMgr.maxWalSize = 1
+	err = txn.Commit(ctx)
+	require.ErrorContains(t, err, "WAL record is too large")
+	rolledBackObj, lookupErr := tableEntry.GetObjectByID(&objID, false)
+	require.Nil(t, rolledBackObj)
+	require.Error(t, lookupErr)
+	require.Equal(t, before, tableEntry.ObjectCnt(false))
 }
