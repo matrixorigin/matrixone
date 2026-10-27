@@ -497,7 +497,7 @@ func dataFileRecord(file api.DataFile, fields []partitionField) (map[string]any,
 	return map[string]any{
 		"content":              int32(file.Content),
 		"file_path":            file.FilePath,
-		"file_format":          strings.ToUpper(firstNonEmpty(file.FileFormat, "parquet")),
+		"file_format":          strings.ToUpper(api.FirstNonEmptyTrimmed(file.FileFormat, "parquet")),
 		"partition":            partition,
 		"record_count":         file.RecordCount,
 		"file_size_in_bytes":   file.FileSizeInBytes,
@@ -737,15 +737,6 @@ func manifestPartitionAvroType(kind api.IcebergTypeKind, source api.IcebergType,
 			"type":     source.String(),
 		})
 	}
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
 
 type partitionField struct {

@@ -240,7 +240,7 @@ func (c *RESTClient) GetConfig(ctx context.Context, req api.GetConfigRequest) (*
 		Overrides:              cloneStringMap(wire.Overrides),
 		Endpoints:              append([]string(nil), wire.Endpoints...),
 		IdempotencyKeyLifetime: wire.IdempotencyKeyLifetime,
-		Prefix:                 normalizeCatalogPrefix(firstNonEmpty(wire.Overrides["prefix"], wire.Defaults["prefix"])),
+		Prefix:                 normalizeCatalogPrefix(api.FirstNonEmptyTrimmed(wire.Overrides["prefix"], wire.Defaults["prefix"])),
 	}
 	resp.Capabilities = negotiateCapabilities(resp.Defaults, resp.Overrides, resp.Endpoints)
 	if !req.NoCache {
@@ -408,7 +408,7 @@ func (c *RESTClient) CreateTable(ctx context.Context, req api.CreateTableRequest
 		TableName:            req.Table,
 		MetadataLocation:     wire.MetadataLocation,
 		MetadataLocationHash: api.PathHash(wire.MetadataLocation),
-		TableUUID:            firstNonEmpty(wire.Config["table-uuid"], wire.Config["uuid"]),
+		TableUUID:            api.FirstNonEmptyTrimmed(wire.Config["table-uuid"], wire.Config["uuid"]),
 		Config:               cloneStringMap(wire.Config),
 		MetadataJSON:         cloneRawMessage(wire.Metadata),
 		StorageCredentials:   storageCredentialsFromWire(wire.StorageCredentials),
@@ -462,7 +462,7 @@ func (c *RESTClient) CommitTable(ctx context.Context, req api.CommitRequest) (*a
 		SnapshotID:           wire.SnapshotID,
 		MetadataLocation:     metadataLocation,
 		MetadataLocationHash: api.PathHash(metadataLocation),
-		CommitID:             firstNonEmpty(raw.headers.Get("X-Iceberg-Commit-ID"), raw.headers.Get("X-Request-ID")),
+		CommitID:             api.FirstNonEmptyTrimmed(raw.headers.Get("X-Iceberg-Commit-ID"), raw.headers.Get("X-Request-ID")),
 	}, nil
 }
 
@@ -691,7 +691,7 @@ func (c *RESTClient) configURL(ctx context.Context, req api.GetConfigRequest) (s
 		return "", api.WrapError(api.ErrConfigInvalid, "Iceberg REST config URL is invalid", map[string]string{"uri": target}, err)
 	}
 	q := u.Query()
-	warehouse := firstNonEmpty(req.Warehouse, req.Catalog.Warehouse)
+	warehouse := api.FirstNonEmptyTrimmed(req.Warehouse, req.Catalog.Warehouse)
 	if warehouse != "" {
 		q.Set("warehouse", warehouse)
 	}
@@ -815,7 +815,7 @@ func (c *RESTClient) metricsURL(ctx context.Context, req api.MetricsReportReques
 }
 
 func (c *RESTClient) pathPrefix(req api.CatalogRequest) []string {
-	prefix := normalizeCatalogPrefix(firstNonEmpty(req.Prefix, prefixFromWarehouse(req.Catalog.Warehouse)))
+	prefix := normalizeCatalogPrefix(api.FirstNonEmptyTrimmed(req.Prefix, prefixFromWarehouse(req.Catalog.Warehouse)))
 	if prefix == "" {
 		return nil
 	}
@@ -827,7 +827,7 @@ func (c *RESTClient) configCacheKey(req api.GetConfigRequest) string {
 		strconv.FormatUint(uint64(req.Catalog.AccountID), 10),
 		strconv.FormatUint(req.Catalog.CatalogID, 10),
 		req.Catalog.URI,
-		firstNonEmpty(req.Warehouse, req.Catalog.Warehouse),
+		api.FirstNonEmptyTrimmed(req.Warehouse, req.Catalog.Warehouse),
 		req.ExternalPrincipal,
 	)
 }
@@ -1248,15 +1248,6 @@ func selectStorageCredentialConfig(config map[string]string) map[string]string {
 		return nil
 	}
 	return out
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

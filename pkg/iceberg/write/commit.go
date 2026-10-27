@@ -289,7 +289,7 @@ func appendMetricsReport(req api.AppendRequest, attempt *api.CommitAttempt, resu
 		CatalogRequest:       req.CatalogRequest,
 		Namespace:            append(api.Namespace(nil), req.Namespace...),
 		Table:                req.Table,
-		Ref:                  firstNonEmpty(req.TargetRef, "main"),
+		Ref:                  api.FirstNonEmptyTrimmed(req.TargetRef, "main"),
 		SnapshotID:           result.SnapshotID,
 		QueryID:              req.SourceQueryID,
 		StatementID:          req.StatementID,
@@ -358,10 +358,10 @@ func (w AppendWorkflow) RecordOrphanPaths(ctx context.Context, req api.AppendReq
 		candidates = append(candidates, OrphanCandidate{
 			AccountID:         req.Catalog.AccountID,
 			CatalogID:         req.Catalog.CatalogID,
-			JobID:             firstNonEmpty(req.PublishAuditHint.JobID, req.StatementID, req.IdempotencyKey),
+			JobID:             api.FirstNonEmptyTrimmed(req.PublishAuditHint.JobID, req.StatementID, req.IdempotencyKey),
 			Namespace:         strings.Join(req.Namespace, "."),
 			TableName:         req.Table,
-			TableLocationHash: api.PathHash(firstNonEmpty(req.TableLocation, req.Table)),
+			TableLocationHash: api.PathHash(api.FirstNonEmptyTrimmed(req.TableLocation, req.Table)),
 			FilePath:          path,
 			FilePathHash:      api.PathHash(path),
 			FilePathRedacted:  api.RedactPath(path),
@@ -403,10 +403,10 @@ func commitRequest(req api.AppendRequest, attempt *api.CommitAttempt) api.Commit
 		CatalogRequest: req.CatalogRequest,
 		Namespace:      req.Namespace,
 		Table:          req.Table,
-		TargetRef:      firstNonEmpty(attempt.TargetRef, req.TargetRef, "main"),
+		TargetRef:      api.FirstNonEmptyTrimmed(attempt.TargetRef, req.TargetRef, "main"),
 		Requirements:   append([]api.CommitRequirement(nil), attempt.Requirements...),
 		Updates:        append([]api.CommitUpdate(nil), attempt.Updates...),
-		IdempotencyKey: firstNonEmpty(attempt.IdempotencyKey, req.IdempotencyKey),
+		IdempotencyKey: api.FirstNonEmptyTrimmed(attempt.IdempotencyKey, req.IdempotencyKey),
 		Summary:        cloneStringMap(attempt.Summary),
 	}
 }
@@ -428,14 +428,14 @@ func publishAudit(req api.AppendRequest, attempt *api.CommitAttempt, result api.
 		fileCount = len(attempt.DataFiles)
 	}
 	return PublishAudit{
-		JobID:                firstNonEmpty(hint.JobID, req.StatementID, req.IdempotencyKey),
+		JobID:                api.FirstNonEmptyTrimmed(hint.JobID, req.StatementID, req.IdempotencyKey),
 		AccountID:            req.Catalog.AccountID,
 		TargetCatalogID:      req.Catalog.CatalogID,
 		TargetNamespace:      strings.Join(req.Namespace, "."),
 		TargetTable:          req.Table,
 		SourceDB:             hint.SourceDB,
 		SourceTable:          hint.SourceTable,
-		SourceBatch:          firstNonEmpty(hint.SourceBatch, req.SourceBatch),
+		SourceBatch:          api.FirstNonEmptyTrimmed(hint.SourceBatch, req.SourceBatch),
 		WatermarkStart:       hint.WatermarkStart,
 		WatermarkEnd:         hint.WatermarkEnd,
 		BusinessWindow:       hint.BusinessWindow,
@@ -557,13 +557,4 @@ func cloneBytesMap(in map[int][]byte) map[int][]byte {
 		out[k] = append([]byte(nil), v...)
 	}
 	return out
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }

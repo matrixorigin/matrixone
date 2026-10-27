@@ -545,8 +545,8 @@ func TestManifestPartitionTypeValidation(t *testing.T) {
 	require.Equal(t, api.TypeInt, field.Kind)
 	_, err = manifestPartitionFields(api.Schema{}, api.PartitionSpec{Fields: []api.PartitionField{{Name: "part", SourceID: 1}}})
 	require.Error(t, err)
-	require.Equal(t, "value", firstNonEmpty("", " value ", "ignored"))
-	require.Empty(t, firstNonEmpty("", "  "))
+	require.Equal(t, "value", api.FirstNonEmptyTrimmed("", " value ", "ignored"))
+	require.Empty(t, api.FirstNonEmptyTrimmed("", "  "))
 }
 
 func TestManifestRecordEncodingHelpers(t *testing.T) {

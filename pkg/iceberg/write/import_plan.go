@@ -79,13 +79,13 @@ func importChecksum(snapshot api.SnapshotPlan, dataTasks []api.DataFileTask, del
 	hash.Write([]byte(snapshot.MetadataLocationHash))
 	for _, task := range dataTasks {
 		hash.Write([]byte{0})
-		hash.Write([]byte(firstNonEmpty(task.DataFile.FilePathHash, api.PathHash(task.DataFile.FilePath))))
+		hash.Write([]byte(api.FirstNonEmptyTrimmed(task.DataFile.FilePathHash, api.PathHash(task.DataFile.FilePath))))
 		hash.Write([]byte{0})
 		hash.Write([]byte(strconv.FormatInt(task.DataFile.RecordCount, 10)))
 	}
 	for _, task := range deleteTasks {
 		hash.Write([]byte{0})
-		hash.Write([]byte(firstNonEmpty(task.DataFile.FilePathHash, api.PathHash(task.DataFile.FilePath))))
+		hash.Write([]byte(api.FirstNonEmptyTrimmed(task.DataFile.FilePathHash, api.PathHash(task.DataFile.FilePath))))
 	}
 	return hex.EncodeToString(hash.Sum(nil))
 }

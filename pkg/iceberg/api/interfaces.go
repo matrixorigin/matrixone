@@ -23,6 +23,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 )
 
+// FirstNonEmptyTrimmed returns the first value that is not whitespace, trimmed.
+func FirstNonEmptyTrimmed(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 type CatalogClient interface {
 	GetConfig(ctx context.Context, req GetConfigRequest) (*ConfigResponse, error)
 	ListNamespaces(ctx context.Context, req ListNamespacesRequest) (*ListNamespacesResponse, error)
