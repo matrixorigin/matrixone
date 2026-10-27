@@ -251,7 +251,10 @@ const (
 	// ErrFkColumnNotNull reports a foreign key with an ON DELETE/ON UPDATE
 	// SET NULL action over a NOT NULL child column (MySQL error 1830,
 	// ER_FK_COLUMN_NOT_NULL). The action could never write NULL at runtime.
-	ErrFkColumnNotNull uint16 = 20484
+	ErrFkColumnNotNull    uint16 = 20484
+	ErrDigestParse        uint16 = 20485
+	ErrNoDefaultForColumn uint16 = 20486
+	ErrDefaultExpression  uint16 = 20487
 
 	// Group 5: rpc errors
 	//
@@ -602,6 +605,9 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrForeignKeyColumnCannotChangeChild:        {ER_FK_COLUMN_CANNOT_CHANGE_CHILD, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s' of table '%-.192s'"},
 	ErrForeignKeyColumnCannotChange:             {ER_FK_COLUMN_CANNOT_CHANGE, []string{MySQLDefaultSqlState}, "Cannot change column '%-.192s': used in a foreign key constraint '%-.192s'"},
 	ErrFkColumnNotNull:                          {ER_FK_COLUMN_NOT_NULL, []string{MySQLDefaultSqlState}, "Column '%-.192s' cannot be NOT NULL: needed in a foreign key constraint '%-.192s' SET NULL"},
+	ErrDigestParse:                              {ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN, []string{MySQLDefaultSqlState}, "Could not parse argument to digest function."},
+	ErrNoDefaultForColumn:                       {ER_NO_DEFAULT_FOR_FIELD, []string{MySQLDefaultSqlState}, "Field '%-.192s' doesn't have a default value"},
+	ErrDefaultExpression:                        {ER_DEFAULT_AS_VAL_GENERATED, []string{MySQLDefaultSqlState}, "DEFAULT function cannot be used with default value expressions"},
 	ErrForeignKeyOnPartitioned:                  {ER_FOREIGN_KEY_ON_PARTITIONED, []string{MySQLDefaultSqlState}, "Foreign keys are not yet supported in conjunction with partitioning"},
 	ErrKeyColumnDoesNotExist:                    {ER_KEY_COLUMN_DOES_NOT_EXIST, []string{"42000"}, "Key column '%-.192s' doesn't exist in table"},
 	ErrKeyDoesNotExist:                          {ER_KEY_DOES_NOT_EXIST, []string{"42000"}, "Key '%-.192s' doesn't exist in table '%-.192s'"},
@@ -1806,6 +1812,18 @@ func NewErrWrongNameForIndex(ctx context.Context, k any) *Error {
 
 func NewErrInvalidDefault(ctx context.Context, k any) *Error {
 	return newError(ctx, ErrInvalidDefault, k)
+}
+
+func NewDigestParse(ctx context.Context) *Error {
+	return newError(ctx, ErrDigestParse)
+}
+
+func NewNoDefaultForColumn(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrNoDefaultForColumn, name)
+}
+
+func NewDefaultExpression(ctx context.Context) *Error {
+	return newError(ctx, ErrDefaultExpression)
 }
 
 func NewErrCastWidthExceeded(ctx context.Context, msg string) *Error {

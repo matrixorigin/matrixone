@@ -930,12 +930,17 @@ const (
 	// renumbering is safe.
 	QUANTILE_EXACT_WEIGHTED = 619
 
+	STATEMENT_DIGEST      = 620
+	STATEMENT_DIGEST_TEXT = 621
+
 	// Keep FUNCTION_END_NUMBER one past the highest allocated function id.
-	FUNCTION_END_NUMBER = 620
+	FUNCTION_END_NUMBER = 622
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"statement_digest":             STATEMENT_DIGEST,
+	"statement_digest_text":        STATEMENT_DIGEST_TEXT,
 	"timestampadd_second_interval": TIMESTAMPADD_SECOND_INTERVAL,
 	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
 

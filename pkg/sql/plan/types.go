@@ -1179,6 +1179,8 @@ type baseBinder struct {
 	inetNtoaNumericLiteralContext bool
 	subqueryInAggregateInput      bool
 	aggregateInputCorrelation     bool
+	// DEFAULT's metadata-only reference may use output aliases in ORDER BY.
+	defaultColumnAliases bool
 }
 
 type boundColumn struct {
@@ -1189,9 +1191,12 @@ type boundColumn struct {
 
 type DefaultBinder struct {
 	baseBinder
-	typ           Type
-	cols          []string // Name-only SHOW scope; mutually exclusive with columns.
-	columns       []*ColDef
+	typ     Type
+	cols    []string // Name-only SHOW scope; mutually exclusive with columns.
+	columns []*ColDef
+	// defaultTarget is only the namespace of DEFAULT(col) in VALUES. It must
+	// not admit ordinary row-column references in INSERT value expressions.
+	defaultTarget *TableDef
 	allowSubquery bool
 }
 

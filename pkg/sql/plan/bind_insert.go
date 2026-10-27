@@ -5841,6 +5841,7 @@ func (builder *QueryBuilder) buildValueScan(
 			} else {
 				defaultBinder := NewDefaultBinder(builder.GetContext(), builder, valueBindCtx, col.Typ, nil)
 				defaultBinder.allowSubquery = true
+				defaultBinder.defaultTarget = tableDef
 				binder = defaultBinder
 
 				// Non-numeric destinations need a target-free function binder. The
@@ -5850,6 +5851,7 @@ func (builder *QueryBuilder) buildValueScan(
 				// from overload metadata before the final assignment cast.
 				defaultFuncBinder := NewDefaultBinder(builder.GetContext(), builder, valueBindCtx, plan.Type{}, nil)
 				defaultFuncBinder.allowSubquery = true
+				defaultFuncBinder.defaultTarget = tableDef
 				funcBinder = defaultFuncBinder
 			}
 			for _, r := range stmt.Rows {

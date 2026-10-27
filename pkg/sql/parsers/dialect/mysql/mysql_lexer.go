@@ -190,9 +190,15 @@ func Parse(ctx context.Context, sql string, lower int64) ([]tree.Statement, erro
 	return ParseWithSQLMode(ctx, sql, lower, "")
 }
 
-func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) (statements []tree.Statement, err error) {
+func ParseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string) ([]tree.Statement, error) {
+	return parseWithSQLMode(ctx, sql, lower, sqlMode, nil)
+}
+
+func parseWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode string, digest *statementDigestSyntax) (statements []tree.Statement, err error) {
 	lexer := NewLexerWithSQLMode(dialect.MYSQL, sql, lower, ParseSQLModeFlags(sqlMode))
 	defer PutScanner(lexer.scanner)
+	lexer.digest = digest
+	lexer.scanner.digestMode = digest != nil
 	if limits, ok := ctx.Value(parseLimitsKey{}).(ParseLimits); ok {
 		if cause := context.Cause(ctx); cause != nil {
 			return nil, cause
@@ -272,6 +278,7 @@ func ParseOneWithSQLMode(ctx context.Context, sql string, lower int64, sqlMode s
 }
 
 type Lexer struct {
+	digest                *statementDigestSyntax
 	scanner               *Scanner
 	stmts                 []tree.Statement
 	paramIndex            int
@@ -399,6 +406,33 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	} else {
 		typ, str = l.scanner.Scan()
 	}
+	// Digest input is parsed, never bound/executed. Admit MySQL's explicit
+	// ROW constructor and quoted user-variable names without changing ordinary
+	// SQL execution syntax. The independent digest scanner keeps their tokens.
+	if l.digest != nil {
+		if typ == ROW {
+			if !digestRowConstructorValid(l.scanner) {
+				typ = LEX_ERROR
+			} else {
+				typ = ID
+			}
+		} else if typ == ID && strings.EqualFold(str, "n") && l.scanner.cur() == '\'' {
+			// National strings are one literal, not an identifier plus alias.
+			typ, str = l.scanner.Scan()
+		} else if typ == QUOTE_ID {
+			typ = ID
+		} else if digestCharsetIntroducer(str) {
+			typ = UNDERSCORE_BINARY
+		} else if typ == ASSIGNMENT && l.lastToken == AT_ID {
+			typ = '='
+		} else if typ == '@' {
+			if next, value := l.scanner.Scan(); next == STRING || next == QUOTE_ID {
+				typ, str = AT_ID, value
+			} else {
+				typ = LEX_ERROR
+			}
+		}
+	}
 	lval.pos = l.scanner.Pos
 	l.scanner.LastToken = str
 	// yacc precedence is static, so HIGH_NOT_PRECEDENCE uses a distinct token
@@ -462,6 +496,7 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		lookahead.setSQLMode(l.sqlMode)
 		lookahead.CommentFlag = l.scanner.CommentFlag
 		lookahead.parseControl = l.scanner.parseControl
+		lookahead.digestMode = l.scanner.digestMode
 		next, _ := lookahead.Scan()
 		if next != LIKE {
 			typ = ID

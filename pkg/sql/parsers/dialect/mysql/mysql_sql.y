@@ -13104,6 +13104,10 @@ simple_expr:
     {
         $$ = $1
     }
+|   DEFAULT '(' column_name ')'
+    {
+        $$ = &tree.DefaultColExpr{Column: $3, StrictMode: yylex.(*Lexer).sqlMode.Has(SQLModeStrict)}
+    }
 |   literal
     {
         $$ = $1
@@ -14840,6 +14844,7 @@ function_call_keyword:
         val := tree.NewNumVal($2, $2, false, tree.P_char)
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
+            IsTemporalLiteral: true,
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{val},
@@ -14850,6 +14855,7 @@ function_call_keyword:
         val := tree.NewNumVal($2, $2, false, tree.P_char)
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
+            IsTemporalLiteral: true,
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{val},
@@ -14889,6 +14895,7 @@ function_call_keyword:
         val := tree.NewNumVal($2, $2, false, tree.P_char)
         name := tree.NewUnresolvedColName($1)
         $$ = &tree.FuncExpr{
+            IsTemporalLiteral: true,
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{val},
@@ -15378,6 +15385,9 @@ literal:
     }
 |   NULL
     {
+        if digest := yylex.(*Lexer).digest; digest != nil {
+            digest.nulls[$<pos>1] = struct{}{}
+        }
         $$ = tree.NewNumVal("null", "null", false, tree.P_null)
     }
 |   HEXNUM

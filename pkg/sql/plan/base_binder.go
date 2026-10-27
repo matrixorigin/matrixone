@@ -311,6 +311,9 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	case *tree.Subquery:
 		expr, err = b.impl.BindSubquery(exprImpl, isRoot)
 
+	case *tree.DefaultColExpr:
+		return b.bindColumnDefault(exprImpl)
+
 	case *tree.DefaultVal:
 		return &Expr{
 			Typ: plan.Type{

@@ -599,6 +599,8 @@ func wkbConstructor(id int, fn executeLogicOfOverload) FuncNew {
 }
 
 var supportedStringBuiltIns = []FuncNew{
+	statementDigestFunction(STATEMENT_DIGEST, false),
+	statementDigestFunction(STATEMENT_DIGEST_TEXT, true),
 	// MySQL Performance Schema formatting functions evaluate in the DOUBLE domain.
 	{
 		functionId: FORMAT_BYTES,

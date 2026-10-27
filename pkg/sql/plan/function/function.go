@@ -851,6 +851,9 @@ func DeduceNotNullableForBinding(ctx context.Context, overloadID int64, args []*
 func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr) bool {
 	fid, oid := DecodeOverloadID(overloadID)
 	switch fid {
+	case STATEMENT_DIGEST, STATEMENT_DIGEST_TEXT:
+		// MySQL exposes nullable metadata even for a constant SQL argument.
+		return false
 	case DATABASE:
 		// DATABASE and its SCHEMA alias can observe an unset default database.
 		return false

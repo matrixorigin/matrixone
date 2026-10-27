@@ -1,0 +1,283 @@
+SET @default_column_saved_sql_mode = @@sql_mode;
+SET sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES';
+DROP VIEW IF EXISTS default_column_view;
+DROP TABLE IF EXISTS default_column_metadata;
+DROP TABLE IF EXISTS default_column_input;
+CREATE TABLE default_column_input (
+id INT AUTO_INCREMENT PRIMARY KEY,
+a INT DEFAULT 7,
+b INT,
+c INT NOT NULL,
+d INT DEFAULT (2+3),
+e TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+f TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+g INT AS (a+1),
+h VARCHAR(5) NOT NULL DEFAULT 'xyz',
+j DATE NOT NULL DEFAULT '2020-01-01',
+k BINARY(3) DEFAULT 'a',
+p INT DEFAULT (7),
+q INT DEFAULT (NULL)
+);
+INSERT INTO default_column_input(c) VALUES(1);
+SELECT DEFAULT(id), DEFAULT(a), DEFAULT(b), DEFAULT(e), DEFAULT(f), DEFAULT(h), DEFAULT(j), HEX(DEFAULT(k)) FROM default_column_input;
+➤ default(id)[4,32,0]  ¦  default(a)[4,32,0]  ¦  default(b)[4,32,0]  ¦  default(e)[93,19,0]  ¦  default(f)[93,19,0]  ¦  default(h)[12,5,0]  ¦  default(j)[91,10,0]  ¦  HEX(default(k))[12,6,0]  𝄀
+0  ¦  7  ¦  null  ¦  null  ¦  0000-00-00 00:00:00  ¦  xyz  ¦  2020-01-01  ¦  610000
+SELECT DEFAULT(c) FROM default_column_input;
+Field 'c' doesn't have a default value
+SELECT DEFAULT(d) FROM default_column_input;
+DEFAULT function cannot be used with default value expressions
+SELECT DEFAULT(g) FROM default_column_input;
+Field 'g' doesn't have a default value
+SELECT DEFAULT(p) FROM default_column_input;
+DEFAULT function cannot be used with default value expressions
+SELECT DEFAULT(q) FROM default_column_input;
+DEFAULT function cannot be used with default value expressions
+SELECT DEFAULT(missing) FROM default_column_input;
+unknown column 'missing' in DEFAULT
+SELECT DEFAULT(a+1) FROM default_column_input;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 17 near "+1) FROM default_column_input;";
+SELECT DEFAULT(1) FROM default_column_input;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near "1) FROM default_column_input;";
+SELECT DEFAULT(a), a FROM default_column_input WHERE a=7;
+➤ default(a)[4,32,0]  ¦  a[4,32,0]  𝄀
+7  ¦  7
+SELECT DEFAULT(t.a) FROM default_column_input t;
+➤ default(t.a)[4,32,0]  𝄀
+7
+SELECT DEFAULT(a) FROM default_column_input x, default_column_input y;
+invalid input: ambiguous column reference 'a'
+SELECT DEFAULT(x) FROM (SELECT 1 AS x) derived;
+➤ default(x)[-5,64,0]  𝄀
+0
+SELECT DEFAULT(x) FROM (SELECT 'abc' AS x) derived;
+➤ default(x)[12,3,0]  𝄀
+
+SELECT DEFAULT(x) FROM (SELECT NULL AS x) derived;
+➤ default(x)[12,1,0]  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT 1.23 AS x) derived;
+➤ default(x)[3,3,2]  𝄀
+0.00
+SELECT DEFAULT(x) FROM (SELECT CAST('2020-01-01' AS DATE) AS x) derived;
+➤ default(x)[91,10,0]  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT CAST('2020-01-01' AS DATETIME) AS x) derived;
+➤ default(x)[93,19,0]  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT CAST('12:34:56' AS TIME) AS x) derived;
+➤ default(x)[92,10,0]  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x) derived;
+➤ default(x)[91,10,0]  𝄀
+0000-00-00
+SELECT DEFAULT(x) FROM (SELECT TIME '12:34:56' AS x) derived;
+➤ default(x)[92,10,0]  𝄀
+00:00:00
+SELECT DEFAULT(x) FROM (SELECT TIMESTAMP '2020-01-01 00:00:00' AS x) derived;
+➤ default(x)[93,19,0]  𝄀
+0000-00-00 00:00:00
+SELECT DEFAULT(x) FROM (SELECT DATE('2020-01-01') AS x) derived;
+➤ default(x)[91,10,0]  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT TIME('12:34:56') AS x) derived;
+➤ default(x)[92,10,0]  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT TIMESTAMP('2020-01-01 00:00:00') AS x) derived;
+➤ default(x)[93,19,0]  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT CURRENT_DATE AS x) derived;
+➤ default(x)[91,10,0]  𝄀
+0000-00-00
+SELECT DEFAULT(x) FROM (SELECT CURRENT_TIME AS x) derived;
+➤ default(x)[92,10,0]  𝄀
+00:00:00
+SELECT DEFAULT(x) FROM (SELECT x FROM (SELECT CAST('2020-01-01' AS DATE) AS x) inner_derived) derived;
+➤ default(x)[91,10,0]  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x UNION ALL SELECT CAST('2020-01-01' AS DATE) AS x) derived;
+➤ default(x)[91,10,0]  𝄀
+null  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x UNION ALL SELECT DATE '2021-01-01' AS x) derived;
+Field 'x' doesn't have a default value
+SELECT DEFAULT(x) FROM (SELECT JSON_OBJECT('a',1) AS x) derived;
+➤ default(x)[-1,2147483647,0]  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT a AS x FROM default_column_input) derived;
+➤ default(x)[4,32,0]  𝄀
+7
+SELECT DEFAULT(x) FROM (SELECT a AS x FROM default_column_input LIMIT 1) derived;
+➤ default(x)[4,32,0]  𝄀
+7
+SELECT DEFAULT(x) FROM (SELECT a+0 AS x FROM default_column_input) derived;
+Field 'x' doesn't have a default value
+SELECT DEFAULT(x) FROM (SELECT a+0 AS x FROM default_column_input LIMIT 1) derived;
+➤ default(x)[-5,64,0]  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT CAST(a AS SIGNED) AS x FROM default_column_input) derived;
+Field 'x' doesn't have a default value
+SELECT DEFAULT(x) FROM (SELECT CAST(a AS SIGNED) AS x FROM default_column_input LIMIT 1) derived;
+➤ default(x)[-5,64,0]  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT a AS x FROM default_column_input UNION ALL SELECT a AS x FROM default_column_input) derived;
+➤ default(x)[4,32,0]  𝄀
+null  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT a AS x FROM default_column_input GROUP BY a) derived;
+➤ default(x)[4,32,0]  𝄀
+7
+SELECT DEFAULT(x) FROM (SELECT MAX(a) AS x FROM default_column_input) derived;
+➤ default(x)[4,32,0]  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT COUNT(*) AS x FROM default_column_input) derived;
+➤ default(x)[-5,64,0]  𝄀
+0
+WITH derived AS (SELECT a AS x FROM default_column_input) SELECT DEFAULT(x) FROM derived;
+➤ default(x)[4,32,0]  𝄀
+7
+SELECT (SELECT DEFAULT(t.a)) FROM default_column_input t;
+➤ (select default(t.a))[4,32,0]  𝄀
+7
+SELECT DEFAULT(a), COUNT(*) FROM default_column_input;
+➤ default(a)[4,32,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+7  ¦  1
+SELECT a,DEFAULT(a) FROM default_column_input GROUP BY a;
+➤ a[4,32,0]  ¦  default(a)[4,32,0]  𝄀
+7  ¦  7
+SELECT a AS x,DEFAULT(x) FROM default_column_input;
+unknown column 'x' in DEFAULT
+SELECT a AS x FROM default_column_input ORDER BY DEFAULT(x);
+➤ x[4,32,0]  𝄀
+7
+SELECT a AS x FROM default_column_input HAVING DEFAULT(x)=7;
+➤ x[4,32,0]  𝄀
+7
+SELECT a AS c FROM default_column_input HAVING DEFAULT(c)=7;
+➤ c[4,32,0]  𝄀
+7
+SELECT a AS c FROM default_column_input ORDER BY DEFAULT(c);
+Field 'c' doesn't have a default value
+SELECT (SELECT DEFAULT(t.a) FROM (SELECT 1 AS z) t) FROM default_column_input t;
+➤ (select default(t.a) from (select 1 as z) as t)[4,32,0]  𝄀
+7
+SELECT DEFAULT(r.a) FROM default_column_input l LEFT JOIN default_column_input r ON FALSE;
+➤ default(r.a)[4,32,0]  𝄀
+7
+SELECT DEFAULT(r.c) FROM default_column_input l LEFT JOIN default_column_input r ON FALSE;
+Field 'c' doesn't have a default value
+CREATE VIEW default_column_view AS SELECT a,h,c,d,e,f,g FROM default_column_input;
+SELECT DEFAULT(a),DEFAULT(h),DEFAULT(e),DEFAULT(f) FROM default_column_view;
+➤ default(a)[4,32,0]  ¦  default(h)[12,5,0]  ¦  default(e)[93,19,0]  ¦  default(f)[93,19,0]  𝄀
+7  ¦  xyz  ¦  null  ¦  0000-00-00 00:00:00
+SELECT DEFAULT(c) FROM default_column_view;
+Field 'c' doesn't have a default value
+SELECT DEFAULT(d) FROM default_column_view;
+DEFAULT function cannot be used with default value expressions
+SELECT DEFAULT(g) FROM default_column_view;
+Field 'g' doesn't have a default value
+CREATE TABLE default_column_metadata AS SELECT DEFAULT(id) AS id, DEFAULT(a) AS a, DEFAULT(h) AS h FROM default_column_input;
+SHOW COLUMNS FROM default_column_metadata;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+a  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+h  ¦  varchar(5)  ¦  NO  ¦    ¦    ¦    ¦  
+SELECT * FROM default_column_metadata;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  h[12,5,0]  𝄀
+0  ¦  7  ¦  xyz
+UPDATE default_column_input SET c=DEFAULT(a),a=9;
+SELECT a,c,DEFAULT(a) FROM default_column_input;
+➤ a[4,32,0]  ¦  c[4,32,0]  ¦  default(a)[4,32,0]  𝄀
+9  ¦  7  ¦  7
+UPDATE default_column_input SET a=10,c=DEFAULT(a);
+SELECT a,c,DEFAULT(a) FROM default_column_input;
+➤ a[4,32,0]  ¦  c[4,32,0]  ¦  default(a)[4,32,0]  𝄀
+10  ¦  7  ¦  7
+UPDATE default_column_input SET a=DEFAULT;
+INSERT INTO default_column_input(c) VALUES(DEFAULT(a));
+INSERT INTO default_column_input(c) VALUES(DEFAULT(default_column_input.a));
+INSERT INTO default_column_input(c) VALUES(DEFAULT(c));
+Field 'c' doesn't have a default value
+INSERT INTO default_column_input(id,c) VALUES(1,99) ON DUPLICATE KEY UPDATE c=DEFAULT(a);
+SELECT id,a,c FROM default_column_input ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  7  ¦  7  𝄀
+2  ¦  7  ¦  7  𝄀
+3  ¦  7  ¦  7
+REPLACE INTO default_column_input(id,c) VALUES(1,DEFAULT(a));
+SELECT id,a,c FROM default_column_input ORDER BY id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  c[4,32,0]  𝄀
+1  ¦  7  ¦  7  𝄀
+2  ¦  7  ¦  7  𝄀
+3  ¦  7  ¦  7
+PREPARE default_column_prepared FROM 'SELECT id,DEFAULT(a),DEFAULT(h) FROM default_column_input WHERE id=?';
+SET @default_column_id=1;
+EXECUTE default_column_prepared USING @default_column_id;
+➤ id[4,32,0]  ¦  default(a)[4,32,0]  ¦  default(h)[12,5,0]  𝄀
+1  ¦  7  ¦  xyz
+SET @default_column_id=2;
+EXECUTE default_column_prepared USING @default_column_id;
+➤ id[4,32,0]  ¦  default(a)[4,32,0]  ¦  default(h)[12,5,0]  𝄀
+2  ¦  7  ¦  xyz
+ALTER TABLE default_column_input ALTER COLUMN a SET DEFAULT 8;
+EXECUTE default_column_prepared USING @default_column_id;
+➤ id[4,32,0]  ¦  default(a)[4,32,0]  ¦  default(h)[12,5,0]  𝄀
+2  ¦  8  ¦  xyz
+DEALLOCATE PREPARE default_column_prepared;
+DROP VIEW IF EXISTS default_column_temporal_view;
+CREATE VIEW default_column_temporal_view AS SELECT DATE '2020-01-01' AS x,CAST('2020-01-01' AS DATE) AS y;
+SELECT DEFAULT(x),DEFAULT(y) FROM default_column_temporal_view;
+➤ default(x)[91,10,0]  ¦  default(y)[91,10,0]  𝄀
+0000-00-00  ¦  null
+DROP VIEW default_column_temporal_view;
+DROP TABLE IF EXISTS default_column_special;
+CREATE TABLE default_column_special(a ENUM('red','blue') NOT NULL DEFAULT 'blue',b SET('a','b') NOT NULL DEFAULT 'a,b');
+INSERT INTO default_column_special VALUES(DEFAULT,DEFAULT);
+SELECT DEFAULT(a),DEFAULT(a)+0,DEFAULT(b),DEFAULT(b)+0 FROM default_column_special;
+➤ default(a)[12,65535,0]  ¦  default(a) + 0[-5,64,0]  ¦  default(b)[12,65535,0]  ¦  default(b) + 0[-5,64,0]  𝄀
+blue  ¦  2  ¦  a,b  ¦  3
+UPDATE default_column_special SET a='red',b=DEFAULT(b);
+SELECT a,b,DEFAULT(a),DEFAULT(b) FROM default_column_special;
+➤ a[12,65535,0]  ¦  b[12,65535,0]  ¦  default(a)[12,65535,0]  ¦  default(b)[12,65535,0]  𝄀
+red  ¦  a,b  ¦  blue  ¦  a,b
+UPDATE default_column_special SET a=2,b=1;
+SELECT a,b FROM default_column_special;
+➤ a[12,65535,0]  ¦  b[12,65535,0]  𝄀
+blue  ¦  a
+UPDATE default_column_special SET a=DEFAULT,b=DEFAULT;
+SELECT a,b FROM default_column_special;
+➤ a[12,65535,0]  ¦  b[12,65535,0]  𝄀
+blue  ¦  a,b
+DROP TABLE IF EXISTS default_column_special_metadata;
+CREATE TABLE default_column_special_metadata AS SELECT DEFAULT(a) AS a,DEFAULT(b) AS b FROM default_column_special;
+SHOW COLUMNS FROM default_column_special_metadata;
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
+a  ¦  enum('red','blue')  ¦  NO  ¦    ¦  red  ¦    ¦    𝄀
+b  ¦  set('a','b')  ¦  NO  ¦    ¦    ¦    ¦  
+SELECT * FROM default_column_special_metadata;
+➤ a[12,65535,0]  ¦  b[12,65535,0]  𝄀
+blue  ¦  a,b
+SELECT DEFAULT(x) FROM (SELECT DEFAULT(a) AS x FROM default_column_special) derived;
+Field 'x' doesn't have a default value
+SELECT DEFAULT(x) FROM (SELECT DEFAULT(a) AS x FROM default_column_special LIMIT 1) derived;
+➤ default(x)[12,65535,0]  𝄀
+
+DROP TABLE default_column_special_metadata;
+DROP TABLE default_column_special;
+SET sql_mode = '';
+PREPARE default_union_mode FROM 'SELECT DEFAULT(x) FROM (SELECT DATE ''2020-01-01'' AS x UNION ALL SELECT DATE ''2021-01-01'' AS x) derived';
+EXECUTE default_union_mode;
+➤ default(x)[91,10,0]  𝄀
+0000-00-00  𝄀
+0000-00-00
+SET sql_mode = 'STRICT_TRANS_TABLES';
+EXECUTE default_union_mode;
+➤ default(x)[91,10,0]  𝄀
+0000-00-00  𝄀
+0000-00-00
+DEALLOCATE PREPARE default_union_mode;
+PREPARE default_union_strict FROM 'SELECT DEFAULT(x) FROM (SELECT DATE ''2020-01-01'' AS x UNION ALL SELECT DATE ''2021-01-01'' AS x) derived';
+Field 'x' doesn't have a default value
+SET sql_mode = @default_column_saved_sql_mode;
+DROP VIEW default_column_view;
+DROP TABLE default_column_metadata;
+DROP TABLE default_column_input;

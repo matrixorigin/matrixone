@@ -59,6 +59,8 @@ type Scanner struct {
 	parseControl           *parseControl
 	aliasFollowerLookahead bool
 	identifierAfterDot     bool
+	// digestMode applies MySQL 8.4 lexical compatibility only to digest arguments.
+	digestMode bool
 }
 
 func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
@@ -77,6 +79,7 @@ func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
 	s.parseControl = nil
 	s.aliasFollowerLookahead = false
 	s.identifierAfterDot = false
+	s.digestMode = false
 
 	if clearLargeOnly {
 		if oversized {
@@ -218,6 +221,8 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 			typ, str := s.scanIdentifier(false)
 			if s.cur() != '$' {
 				return typ, str
+			} else if s.digestMode {
+				return LEX_ERROR, ""
 			} else {
 				// this is a dollar sign string
 				strTyp, strStr := s.scanString('$', STRING)
@@ -294,6 +299,9 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 		s.inc()
 		switch s.cur() {
 		case '/':
+			if s.digestMode {
+				return int('/'), ""
+			}
 			s.inc()
 			id, str := s.scanCommentTypeLine(2)
 			if comments || id == LEX_ERROR {
@@ -440,11 +448,18 @@ func (s *Scanner) readVersion() bool {
 	if s.Pos < len(s.buf) {
 		if isDigit(s.cur()) {
 			if s.Pos+4 < len(s.buf) {
+				version := 0
 				for i := 0; i < 5; i++ {
 					if !isDigit(s.cur()) {
 						return false
 					}
+					version = version*10 + int(s.cur()-'0')
 					s.inc()
+				}
+				if s.digestMode && version > 80411 {
+					token, _ := s.scanCommentTypeBlock()
+					s.CommentFlag = false
+					return token != LEX_ERROR
 				}
 				return true
 			}

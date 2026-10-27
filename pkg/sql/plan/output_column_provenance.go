@@ -46,13 +46,14 @@ const (
 )
 
 // SourceColumnMetadata is an immutable planner-local snapshot. It deliberately
-// contains only metadata consumed by output-schema builders, so transparent
+// contains only metadata consumed by output-schema builders and DEFAULT, so transparent
 // query boundaries can share it without retaining or repeatedly copying a
 // complete catalog ColDef.
 type SourceColumnMetadata struct {
 	Typ         plan.Type
 	Default     *plan.Default
 	NullAbility bool
+	Generated   bool
 }
 
 type SourceColumn struct {
@@ -62,6 +63,22 @@ type SourceColumn struct {
 	Metadata SourceColumnMetadata
 }
 
+type columnDefaultKind uint8
+
+const (
+	typeDefaultNone columnDefaultKind = iota
+	typeDefaultImplicit
+	typeDefaultUnion
+)
+
+type typeDefaultNullability uint8
+
+const (
+	typeDefaultInheritNullability typeDefaultNullability = iota
+	typeDefaultNullable
+	typeDefaultNotNullable
+)
+
 type OutputColumnProvenance struct {
 	// Planner-local display length of a DECIMAL DIV expression, captured before
 	// optimization and carried only across transparent query boundaries.
@@ -69,21 +86,23 @@ type OutputColumnProvenance struct {
 	State                   ProvenanceState
 	Source                  *SourceColumn
 	CTASDefaultPolicy       CTASDefaultPolicy
+	// ResultType retains a DEFAULT expression's ENUM/SET field declaration
+	// without claiming its value is a transparent source-column reference.
+	ResultType *plan.Type
+	// TypeDefault identifies a materialized expression column, as opposed to
+	// a merged expression that DEFAULT(col) cannot treat as a field.
+	TypeDefault columnDefaultKind
+	// Retain MySQL temporary-field nullability before conversion/literal
+	// syntax is erased by lowering and constant folding.
+	TypeDefaultNullability typeDefaultNullability
 }
 
 func snapshotSourceColumnMetadata(col *plan.ColDef) SourceColumnMetadata {
 	typ := col.Typ
 	metadata := SourceColumnMetadata{
 		NullAbility: col.Default == nil || col.Default.NullAbility,
-		Typ: plan.Type{
-			Id:          typ.Id,
-			NotNullable: typ.NotNullable,
-			AutoIncr:    typ.AutoIncr,
-			Width:       typ.Width,
-			Scale:       typ.Scale,
-			Table:       typ.Table,
-			Enumvalues:  typ.Enumvalues,
-		},
+		Generated:   col.GeneratedCol != nil,
+		Typ:         *DeepCopyType(&typ),
 	}
 	if col.Default == nil {
 		metadata.NullAbility = !typ.NotNullable

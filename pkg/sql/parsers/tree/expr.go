@@ -965,8 +965,11 @@ type FuncExpr struct {
 	// its native built-in rule. That distinction matters when IGNORE_SPACE is
 	// disabled.
 	IsGeneric bool
-	Type      FuncType
-	Exprs     Exprs
+	// IsTemporalLiteral distinguishes DATE/TIME/TIMESTAMP literals from the
+	// conversion functions: only the literals have non-nullable MySQL fields.
+	IsTemporalLiteral bool
+	Type              FuncType
+	Exprs             Exprs
 
 	//specify the type of aggregation.
 	AggType AggType
@@ -996,6 +999,12 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	funcName := ""
 	if node.FuncName != nil {
 		funcName = node.FuncName.Origin()
+	}
+	if node.IsTemporalLiteral {
+		ctx.WriteString(funcName)
+		ctx.WriteByte(' ')
+		node.Exprs[0].Format(ctx)
+		return
 	}
 	if ctx.detectDateTimeFormat && isDateTimeFormatFunction(funcName) {
 		ctx.sawDateTimeFormat = true
@@ -1848,6 +1857,40 @@ func NewIntervalExpr(t IntervalType) *IntervalExpr {
 	return &IntervalExpr{
 		Type: t,
 	}
+}
+
+// DefaultColExpr reads a named column's metadata, unlike the bare DEFAULT
+// assignment marker. Keep the AST nodes distinct for every DML consumer.
+type DefaultColExpr struct {
+	exprImpl
+	Column *UnresolvedName
+	// StrictMode belongs to the statement's parse/prepare snapshot, not to a
+	// later EXECUTE that internally rebuilds the same prepared statement.
+	StrictMode bool
+}
+
+func (node *DefaultColExpr) Format(ctx *FmtCtx) {
+	ctx.WriteString("default(")
+	node.Column.Format(ctx)
+	ctx.WriteByte(')')
+}
+
+func (node *DefaultColExpr) Accept(v Visitor) (Expr, bool) {
+	newNode, skipChildren := v.Enter(node)
+	if skipChildren {
+		return v.Exit(newNode)
+	}
+	node = newNode.(*DefaultColExpr)
+	column, ok := node.Column.Accept(v)
+	if !ok {
+		return node, false
+	}
+	name, ok := column.(*UnresolvedName)
+	if !ok {
+		return node, false
+	}
+	node.Column = name
+	return v.Exit(node)
 }
 
 // the DEFAULT expression.
