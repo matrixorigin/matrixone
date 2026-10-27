@@ -23,10 +23,12 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -53,7 +55,7 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 	schema.Name = tableName
 
 	txnop := p.StartCNTxn()
-	_, _ = p.CreateDBAndTable(txnop, databaseName, schema)
+	_, firstTable := p.CreateDBAndTable(txnop, databaseName, schema)
 	require.NoError(t, txnop.Commit(p.Ctx))
 
 	v, ok := runtime.ServiceRuntime("").GetGlobalVariables(runtime.InternalSQLExecutor)
@@ -124,7 +126,83 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 				databaseName, tableName, databaseName, tableName),
 			executor.Options{}.WithTxn(txnop))
 		require.NoError(t, err)
+		require.NoError(t, txnop.Commit(p.Ctx))
 	}
+
+	// Reuse this fixture: its server-state checker prevents background MTS
+	// tasks from starting, so the seeded statistics cannot be overwritten.
+	t.Run("account size aggregation", func(t *testing.T) {
+		e.HandleMoTableStatsCtl("use_old_impl:false")
+		e.HandleMoTableStatsCtl("force_update:false")
+		runSQL := func(sql string) {
+			result, err := exec.Exec(p.Ctx, sql, executor.Options{})
+			require.NoError(t, err)
+			defer result.Close()
+		}
+		runSQL(frontend.MoCatalogMoIndexesDDL)
+		runSQL(frontend.MoCatalogMoTableStatsDDL)
+		secondSchema := catalog.MockSchemaAll(3, 2)
+		secondSchema.Name = "account_size_peer"
+		secondTable := func() engine.Relation {
+			op := p.StartCNTxn()
+			defer op.Rollback(p.Ctx)
+			rel := p.CreateTableInDB(op, databaseName, secondSchema)
+			require.NoError(t, op.Commit(p.Ctx))
+			return rel
+		}()
+		dbID, firstID, secondID := firstTable.GetDBID(p.Ctx), firstTable.GetTableID(p.Ctx), secondTable.GetTableID(p.Ctx)
+		statsTable := "mo_catalog." + catalog2.MO_TABLE_STATS
+		insert := func(account, database, table uint64, value string) {
+			runSQL(fmt.Sprintf("insert into %s (account_id,database_id,table_id,table_stats,update_time) values (%d,%d,%d,%s,'2026-01-01 00:00:00')",
+				statsTable, account, database, table, value))
+		}
+		// Each incomplete join key would count one of these unrelated rows.
+		insert(42, dbID, firstID, `'{"table_size":9999}'`)
+		insert(0, 9223372036854775807, firstID, `'{"table_size":9999}'`)
+		insert(0, dbID, 9223372036854775807, `'{"table_size":9999}'`)
+		for _, test := range []struct {
+			name, first, second string
+			want                uint64
+		}{
+			{"truncate before sum", `'{"table_size":1.8}'`, `'{"table_size":1.8}'`, 2},
+			{"SQL and JSON null", "NULL", `'{"table_size":null}'`, 0},
+			{"missing field and row", `'{}'`, "", 0},
+			{"exact integer sum", `'{"table_size":9007199254740992}'`, `'{"table_size":1}'`, 9007199254740993},
+			{"near uint64 limit", `'{"table_size":18446744073709549568}'`, `'{"table_size":1}'`, 18446744073709549569},
+			{"uint64 sum wraps", `'{"table_size":9223372036854775808}'`, `'{"table_size":9223372036854775808}'`, 0},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				runSQL(fmt.Sprintf("delete from %s where account_id=0 and database_id=%d and table_id in (%d,%d)", statsTable, dbID, firstID, secondID))
+				insert(0, dbID, firstID, test.first)
+				if test.second != "" {
+					insert(0, dbID, secondID, test.second)
+				}
+				sizes, ok, err := e.QueryAccountTableSizes(p.Ctx, []uint64{0, 404}, false)
+				require.NoError(t, err)
+				require.True(t, ok)
+				require.Equal(t, map[uint64]uint64{0: test.want}, sizes)
+				values, accounts, ok, err := e.QueryTableStatsByAccounts(p.Ctx, []int{disttae.TableStatsTableSize}, []uint64{0, 404}, false, false)
+				require.NoError(t, err)
+				require.True(t, ok)
+				legacy := make(map[uint64]uint64)
+				for i, account := range accounts {
+					legacy[account] += uint64(values[0][i].(float64))
+				}
+				require.Equal(t, legacy, sizes)
+			})
+		}
+		runSQL(fmt.Sprintf(`update %s set table_stats='{"table_size":9999}' where account_id=0 and database_id=%d and table_id=%d`, statsTable, dbID, secondID))
+		func() {
+			op := p.StartCNTxn()
+			defer op.Rollback(p.Ctx)
+			p.DeleteTableInDB(op, databaseName, secondSchema.Name)
+			require.NoError(t, op.Commit(p.Ctx))
+		}()
+		sizes, ok, err := e.QueryAccountTableSizes(p.Ctx, []uint64{0}, false)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, map[uint64]uint64{0: 9223372036854775808}, sizes, "a dropped table's stale statistics must be excluded")
+	})
 }
 
 func TestMoTableStatsMoCtl2(t *testing.T) {
