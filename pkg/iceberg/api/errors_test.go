@@ -17,7 +17,6 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -114,6 +113,10 @@ func TestCauseForCode(t *testing.T) {
 	}
 }
 
+type categoryTestWrapper struct{ error }
+
+func (w categoryTestWrapper) Unwrap() error { return w.error }
+
 func TestErrorCategory(t *testing.T) {
 	classified := NewError(ErrMetadataInvalid, "invalid", nil)
 	for _, tc := range []struct {
@@ -123,7 +126,7 @@ func TestErrorCategory(t *testing.T) {
 	}{
 		{"nil", nil, ""},
 		{"classified", classified, string(ErrMetadataInvalid)},
-		{"wrapped", fmt.Errorf("outer: %w", classified), string(ErrMetadataInvalid)},
+		{"wrapped", categoryTestWrapper{classified}, string(ErrMetadataInvalid)},
 		{"joined", errors.Join(context.Canceled, classified), string(ErrMetadataInvalid)},
 		{"empty code", NewError("", "empty", nil), string(ErrInternal)},
 		{"other", context.Canceled, string(ErrInternal)},
