@@ -23,6 +23,23 @@ from scripts.run_contracts import validate_server_identity
 pytestmark = pytest.mark.skipif(os.environ.get('MO_SDK_ONLINE') != '1', reason='explicit isolated target required')
 
 
+def test_legacy_filter_by_preserves_mutation_scope(client, tables):
+    from matrixone.orm import Query
+
+    model, _ = tables
+    assert Query(model, client).filter_by(label='red').count() == 1
+    assert Query(model.__tablename__, client).filter_by(label='blue').count() == 1
+    assert Query(model, client).filter_by(label=None).count() == 1
+    with pytest.raises(ValueError, match='Unknown model field'):
+        Query(model, client).filter_by(typo='red').delete()
+    Query(model, client).filter_by(id=2).update(label='changed').execute()
+    assert client.execute(f'SELECT id,label FROM {model.__tablename__} ORDER BY id').rows == [
+        (1, 'red'),
+        (2, 'changed'),
+        (3, None),
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('kind', ['sync', 'async'])
 @pytest.mark.parametrize(

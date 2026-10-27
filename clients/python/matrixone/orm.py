@@ -177,14 +177,35 @@ class Query:
         return self
 
     def filter_by(self, **kwargs) -> "Query":
-        """Add WHERE conditions from keyword arguments"""
+        """Add named predicates; reject unknown fields before modifying the query."""
+        table = getattr(self.model_class, '__table__', None)
+        mapper = getattr(self.model_class, '__mapper__', None)
+        if isinstance(self.model_class, str):
+            columns = None
+        elif table is not None and mapper is not None:
+            columns = {
+                prop.key: prop.columns[0].name
+                for prop in mapper.column_attrs
+                if len(prop.columns) == 1 and any(prop.columns[0] is col for col in table.columns)
+            }
+        elif table is not None:
+            columns = {col.name: col.name for col in table.columns}
+        else:
+            columns = getattr(self.model_class, '_columns', {})
+
+        predicates, values = [], []
         for key, value in kwargs.items():
-            # Check if the column exists in the SQLAlchemy model
-            if hasattr(self.model_class, "__table__") and key in [
-                col.name for col in self.model_class.__table__.columns
-            ]:
-                self._where_conditions.append(f"{key} = ?")
-                self._where_params.append(value)
+            if columns is not None and key not in columns:
+                raise ValueError(f'Unknown model field: {key}')
+            column = key if columns is None else columns[key]
+            column = getattr(column, 'name', column)
+            if value is None:
+                predicates.append(f'{sql_identifier(column)} IS NULL')
+            else:
+                predicates.append(f'{sql_identifier(column)} = ?')
+                values.append(value)
+        self._where_conditions.extend(predicates)
+        self._where_params.extend(values)
         return self
 
     def join(self, table: str, condition: str) -> "Query":
