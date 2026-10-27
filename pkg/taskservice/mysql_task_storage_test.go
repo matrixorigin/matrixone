@@ -986,20 +986,45 @@ func TestRemoveDuplicateTasks(t *testing.T) {
 	}
 	otherErr := errors.New("not mysql err")
 
-	remainingAsync, err := removeDuplicateAsyncTasks(dupErr, asyncTasks)
+	remainingAsync, err := removeDuplicateTasks(dupErr, asyncTasks, func(t task.AsyncTask) string { return t.Metadata.ID })
 	require.NoError(t, err)
 	require.Len(t, remainingAsync, 1)
 	require.Equal(t, "b", remainingAsync[0].Metadata.ID)
 
-	remainingDaemon, err := removeDuplicateDaemonTasks(dupErr, daemonTasks)
+	remainingDaemon, err := removeDuplicateTasks(dupErr, daemonTasks, func(t task.DaemonTask) string { return t.Metadata.ID })
 	require.NoError(t, err)
 	require.Len(t, remainingDaemon, 1)
 	require.Equal(t, "b", remainingDaemon[0].Metadata.ID)
 
-	_, err = removeDuplicateAsyncTasks(otherErr, asyncTasks)
+	_, err = removeDuplicateTasks(otherErr, asyncTasks, func(t task.AsyncTask) string { return t.Metadata.ID })
 	require.Error(t, err)
-	_, err = removeDuplicateDaemonTasks(otherErr, daemonTasks)
+	_, err = removeDuplicateTasks(otherErr, daemonTasks, func(t task.DaemonTask) string { return t.Metadata.ID })
 	require.Error(t, err)
+}
+
+func TestRemoveDuplicateTasksPreservesErrorAndSliceSemantics(t *testing.T) {
+	id := func(t task.AsyncTask) string { return t.Metadata.ID }
+	input := []task.AsyncTask{
+		{Metadata: task.TaskMetadata{ID: "first"}},
+		{Metadata: task.TaskMetadata{ID: "duplicate"}},
+		{Metadata: task.TaskMetadata{ID: "last"}},
+	}
+	duplicate := &mysqlDriver.MySQLError{Number: moerr.ER_DUP_ENTRY, Message: "duplicate"}
+	result, err := removeDuplicateTasks(fmt.Errorf("wrapped: %w", duplicate), input, id)
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	require.Equal(t, []string{"first", "last"}, []string{result[0].Metadata.ID, result[1].Metadata.ID})
+	require.Same(t, &input[0], &result[0])
+
+	other := &mysqlDriver.MySQLError{Number: 1, Message: "duplicate"}
+	result, err = removeDuplicateTasks(other, input, id)
+	require.Same(t, other, err)
+	require.Nil(t, result)
+
+	var empty []task.AsyncTask
+	result, err = removeDuplicateTasks(duplicate, empty, id)
+	require.NoError(t, err)
+	require.Nil(t, result)
 }
 
 func TestAddAsyncTaskWithDuplicateEntry(t *testing.T) {

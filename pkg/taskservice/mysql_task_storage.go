@@ -390,7 +390,7 @@ func (m *mysqlTaskStorage) AddAsyncTask(ctx context.Context, tasks ...task.Async
 
 	exec, err := m.db.ExecContext(ctx, buildTaskInsertSQL(insertAsyncTask, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", "", len(tasks)), vals...)
 	if err != nil {
-		dup, err := removeDuplicateAsyncTasks(err, tasks)
+		dup, err := removeDuplicateTasks(err, tasks, func(t task.AsyncTask) string { return t.Metadata.ID })
 		if err != nil {
 			return 0, err
 		}
@@ -1522,34 +1522,14 @@ func sqlTaskEnabledValue(v bool) uint8 {
 	return 0
 }
 
-func removeDuplicateAsyncTasks(err error, tasks []task.AsyncTask) ([]task.AsyncTask, error) {
+func removeDuplicateTasks[T any](err error, tasks []T, taskID func(T) string) ([]T, error) {
 	var me *mysql.MySQLError
-	if ok := errors.As(err, &me); !ok {
-		return nil, err
-	}
-	if me.Number != moerr.ER_DUP_ENTRY {
+	if !errors.As(err, &me) || me.Number != moerr.ER_DUP_ENTRY {
 		return nil, err
 	}
 	b := tasks[:0]
 	for _, t := range tasks {
-		if !strings.Contains(me.Message, t.Metadata.ID) {
-			b = append(b, t)
-		}
-	}
-	return b, nil
-}
-
-func removeDuplicateDaemonTasks(err error, tasks []task.DaemonTask) ([]task.DaemonTask, error) {
-	var me *mysql.MySQLError
-	if ok := errors.As(err, &me); !ok {
-		return nil, err
-	}
-	if me.Number != moerr.ER_DUP_ENTRY {
-		return nil, err
-	}
-	b := tasks[:0]
-	for _, t := range tasks {
-		if !strings.Contains(me.Message, t.Metadata.ID) {
+		if !strings.Contains(me.Message, taskID(t)) {
 			b = append(b, t)
 		}
 	}
@@ -1617,7 +1597,7 @@ func (m *mysqlTaskStorage) RunAddDaemonTask(ctx context.Context, db SqlExecutor,
 	}
 	exec, err := db.ExecContext(ctx, buildTaskInsertSQL(insertDaemonTask, "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", "", len(tasks)), values...)
 	if err != nil {
-		dup, err := removeDuplicateDaemonTasks(err, tasks)
+		dup, err := removeDuplicateTasks(err, tasks, func(t task.DaemonTask) string { return t.Metadata.ID })
 		if err != nil {
 			return 0, err
 		}
