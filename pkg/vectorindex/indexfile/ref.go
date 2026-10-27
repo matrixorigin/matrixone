@@ -69,10 +69,16 @@ func entryName(tableID uint64, r *Ref) string {
 		tableID, hex.EncodeToString([]byte(r.IndexID)), r.Tag, r.FirstChunk, r.Size, pathSafe(r.Checksum))
 }
 
+// pathSafe maps a checksum to a path component one-to-one, also on a case-insensitive
+// file system: digits and lowercase letters not starting with 'x' are kept as they are,
+// anything else is 'x' followed by its lowercase hex encoding.
 func pathSafe(s string) string {
+	if len(s) > 0 && s[0] == 'x' {
+		return "x" + hex.EncodeToString([]byte(s))
+	}
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'z') {
 			return "x" + hex.EncodeToString([]byte(s))
 		}
 	}

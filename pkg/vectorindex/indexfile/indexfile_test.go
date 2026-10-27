@@ -33,6 +33,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -151,6 +152,18 @@ func TestManifestAndNames(t *testing.T) {
 	require.Equal(t, "42/"+hex.EncodeToString([]byte("a/b:1"))+"/1/5-70000/0a1b2c3d", entryName(42, &ref))
 	ref.Checksum = "../x"
 	require.Equal(t, "42/"+hex.EncodeToString([]byte("a/b:1"))+"/1/5-70000/x"+hex.EncodeToString([]byte("../x")), entryName(42, &ref))
+
+	// distinct checksums never share a name, compared case-insensitively as on a
+	// case-insensitive file system
+	sums := []string{"!", "x21", "X21", "Ab", "aB", "ab", "AB", "x", "xx", "78", "0a1b2c3d", md5Hex([]byte("v"))}
+	seen := make(map[string]string)
+	for _, sum := range sums {
+		name := strings.ToLower(pathSafe(sum))
+		other, dup := seen[name]
+		require.False(t, dup, "%q and %q share %q", sum, other, name)
+		seen[name] = sum
+	}
+	require.Equal(t, md5Hex([]byte("v")), pathSafe(md5Hex([]byte("v"))), "a hex MD5 keeps its name")
 
 	for _, r := range []Ref{
 		{Table: "t", IndexID: "i", Checksum: "c"},
@@ -370,6 +383,42 @@ func TestOpenRebuildsThenHitsCache(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 	require.Equal(t, int32(1), tbl.scans.Load(), "a full check of a good entry still hits")
+}
+
+// Two versions of a file that differ only in a custom checksum are distinct cache entries:
+// opening the second rebuilds it instead of serving the first version's bytes.
+func TestOpenDistinguishesCustomChecksums(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	first, second := randomBytes(ChunkSize+9, 21), randomBytes(ChunkSize+9, 22)
+	want := map[string][]byte{"!": first, "x21": second}
+	ref := Ref{DB: "db", Table: "idx", IndexID: "idx:1:0", Size: int64(len(first)), Checksum: "!"}
+	ref.Verify = func(f *os.File, size int64, checksum string) error {
+		got, err := io.ReadAll(io.NewSectionReader(f, 0, size))
+		if err != nil {
+			return err
+		}
+		if string(got) != string(want[checksum]) {
+			return moerr.NewInternalErrorNoCtxf("content is not version %q", checksum)
+		}
+		return nil
+	}
+	current := first
+	tbl := &fakeTable{tableID: 23, rows: func() []chunkRow { return fileRows(ref, current, 24) }}
+	env := newEnv(t, ctrl, tbl, newCache(t, t.TempDir()))
+	ctx := context.Background()
+
+	f, err := Open(ctx, env, ref)
+	require.NoError(t, err)
+	require.Equal(t, first, readFile(t, f))
+	require.NoError(t, f.Close())
+
+	current = second
+	ref.Checksum = "x21"
+	f, err = Open(ctx, env, ref)
+	require.NoError(t, err)
+	require.Equal(t, second, readFile(t, f))
+	require.NoError(t, f.Close())
+	require.Equal(t, int32(2), tbl.scans.Load(), "the second version is rebuilt, not read from the first's entry")
 }
 
 func TestOpenTailFrameRange(t *testing.T) {
