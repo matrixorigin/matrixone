@@ -495,7 +495,14 @@ func runISCPTaskIterationConsumers(
 	changeHandelWg.Add(1)
 	go func() {
 		var dataLength int
+		var pendingInsert, pendingDelete *AtomicBatch
 		defer func() {
+			if pendingInsert != nil {
+				pendingInsert.Close()
+			}
+			if pendingDelete != nil {
+				pendingDelete.Close()
+			}
 			logutil.Infof("ISCP-Task iteration %s, data length %d", iterCtx.String(), dataLength)
 		}()
 		defer changeHandelWg.Done()
@@ -515,7 +522,16 @@ func runISCPTaskIterationConsumers(
 				err = moerr.NewInternalErrorNoCtx(msg)
 				objectio.WaitForISCPExecutorFault(ctxWithCancel, msg)
 			}
+			cleanCurrent := func() {
+				if insertData != nil {
+					insertData.Clean(mp)
+				}
+				if deleteData != nil {
+					deleteData.Clean(mp)
+				}
+			}
 			if err != nil {
+				cleanCurrent()
 				jobNames := ""
 				for _, jobName := range iterCtx.jobNames {
 					jobNames = fmt.Sprintf("%s%s, ", jobNames, jobName)
@@ -530,39 +546,41 @@ func runISCPTaskIterationConsumers(
 					zap.String("to", iterCtx.toTS.ToString()),
 				)
 				data = NewISCPData(true, nil, nil, err)
+			} else if insertData == nil && deleteData == nil {
+				if pendingInsert != nil || currentHint == engine.ChangesHandle_Tail_wip {
+					err = moerr.NewInternalErrorNoCtx("incomplete ISCP tail change group")
+				}
+				data = NewISCPData(true, nil, nil, err)
 			} else {
-				// both nil denote no more data (end of this tail)
-				if insertData == nil && deleteData == nil {
-					data = NewISCPData(true, nil, nil, err)
-				} else {
-					var insertAtmBatch *AtomicBatch
-					var deleteAtmBatch *AtomicBatch
-					switch currentHint {
-					case engine.ChangesHandle_Snapshot:
-						if typ != ISCPDataType_Snapshot {
-							err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid type %d, should be snapshot", typ))
-							data = NewISCPData(true, nil, nil, err)
-						} else {
-							insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
-							insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-							data = NewISCPData(false, insertAtmBatch, nil, nil)
-						}
-					case engine.ChangesHandle_Tail_wip:
-						err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid hint %d", currentHint))
-						data = NewISCPData(true, nil, nil, err)
-					case engine.ChangesHandle_Tail_done:
-						if typ != ISCPDataType_Tail {
-							err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid type %d, should be tail", typ))
-							data = NewISCPData(true, nil, nil, err)
-						} else {
-							insertAtmBatch = allocateAtomicBatchIfNeed(insertAtmBatch)
-							deleteAtmBatch = allocateAtomicBatchIfNeed(deleteAtmBatch)
-							insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
-							deleteAtmBatch.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
-							data = NewISCPData(false, insertAtmBatch, deleteAtmBatch, nil)
-						}
-
+				switch currentHint {
+				case engine.ChangesHandle_Snapshot:
+					if typ != ISCPDataType_Snapshot || pendingInsert != nil || deleteData != nil {
+						err = moerr.NewInternalErrorNoCtx("invalid ISCP snapshot change group")
+						break
 					}
+					insertAtmBatch := NewAtomicBatch(mp)
+					insertAtmBatch.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+					data = NewISCPData(false, insertAtmBatch, nil, nil)
+				case engine.ChangesHandle_Tail_wip, engine.ChangesHandle_Tail_done:
+					if typ != ISCPDataType_Tail {
+						err = moerr.NewInternalErrorNoCtx("invalid ISCP tail change group")
+						break
+					}
+					pendingInsert = allocateAtomicBatchIfNeed(pendingInsert)
+					pendingDelete = allocateAtomicBatchIfNeed(pendingDelete)
+					pendingInsert.Append(packer, insertData, insTSColIdx, insCompositedPkColIdx)
+					pendingDelete.Append(packer, deleteData, delTSColIdx, delCompositedPkColIdx)
+					if currentHint == engine.ChangesHandle_Tail_wip {
+						continue
+					}
+					data = NewISCPData(false, pendingInsert, pendingDelete, nil)
+					pendingInsert, pendingDelete = nil, nil
+				default:
+					err = moerr.NewInternalErrorNoCtx(fmt.Sprintf("invalid hint %d", currentHint))
+				}
+				if err != nil {
+					cleanCurrent()
+					data = NewISCPData(true, nil, nil, err)
 				}
 			}
 
