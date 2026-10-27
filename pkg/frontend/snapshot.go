@@ -1083,7 +1083,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	case tree.RESTORELEVELDATABASE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
 
-		if err = restoreToDatabase(ctx,
+		if _, err = restoreToDatabase(ctx,
 			ses.GetService(),
 			bh,
 			snapshotName,
@@ -1479,7 +1479,7 @@ func restoreToAccount(
 
 	// restore dbs
 	for _, dbName := range restoreDBNames {
-		if err = restoreToDatabase(ctx,
+		if _, err = restoreToDatabase(ctx,
 			sid,
 			bh,
 			snapshotName,
@@ -1577,7 +1577,7 @@ func restoreToTable(
 	source *partialRestoreSource,
 ) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore table: %v, restore timestamp: %d", snapshotName, tblName, snapshotTs))
-	return restoreToDatabaseOrTable(ctx,
+	_, err = restoreToDatabaseOrTable(ctx,
 		sid,
 		bh,
 		snapshotName,
@@ -1590,6 +1590,7 @@ func restoreToTable(
 		restoreAccount,
 		false,
 		nil, source)
+	return err
 }
 
 func restoreToDatabaseOrTable(
@@ -4903,61 +4904,6 @@ func checkPublicationSubscriberGeneration(ctx context.Context, bh BackgroundExec
 		return moerr.NewInternalErrorf(ctx, "account %s session is no longer active", currentAccount)
 	}
 	return nil
-}
-
-func resolveAccountFromPublication(ctx context.Context, bh BackgroundExec, pubAccountName string, pubName string, currentAccount string, lock bool) (accountID uint64, accountName string, err error) {
-	// Query mo_pubs to get publication info and verify permission
-	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	queryPubSQL := fmt.Sprintf(`SELECT account_id, account_name, pub_name, database_name, database_id, table_list, account_list 
-			FROM mo_catalog.mo_pubs 
-			WHERE account_name = '%s' AND pub_name = '%s'`, strings.ReplaceAll(pubAccountName, "'", "''"), strings.ReplaceAll(pubName, "'", "''"))
-	if lock {
-		// ALTER/DROP PUBLICATION updates this row. Hold its lock through the
-		// snapshot transaction so membership cannot change after authorization.
-		queryPubSQL += " for update"
-	}
-
-	bh.ClearExecResultSet()
-	err = bh.Exec(systemCtx, queryPubSQL)
-	if err != nil {
-		return 0, "", moerr.NewInternalErrorf(ctx, "failed to query publication info: %v", err)
-	}
-
-	erArray, err := getResultSet(systemCtx, bh)
-	if err != nil {
-		return 0, "", err
-	}
-
-	if !execResultArrayHasData(erArray) {
-		return 0, "", moerr.NewInternalErrorf(ctx, "publication %s.%s does not exist", pubAccountName, pubName)
-	}
-
-	// Get publication info
-	var accountList string
-	for i := uint64(0); i < erArray[0].GetRowCount(); i++ {
-		accountID, err = erArray[0].GetUint64(ctx, i, 0)
-		if err != nil {
-			return 0, "", err
-		}
-		accountName, err = erArray[0].GetString(ctx, i, 1)
-		if err != nil {
-			return 0, "", err
-		}
-		accountList, err = erArray[0].GetString(ctx, i, 6)
-		if err != nil {
-			return 0, "", err
-		}
-	}
-
-	// Check if current account has permission to access this publication
-	pubInfo := &pubsub.PubInfo{
-		SubAccountsStr: accountList,
-	}
-	if !pubInfo.InSubAccounts(currentAccount) {
-		return 0, "", moerr.NewInternalErrorf(ctx, "account %s does not have permission to access publication %s.%s", currentAccount, pubAccountName, pubName)
-	}
-
-	return
 }
 
 func checkSnapshotPublicationCoverage(
