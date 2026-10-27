@@ -7451,15 +7451,7 @@ func ExecuteAndGetRowsAffected(
 	query string,
 	args ...interface{},
 ) (int64, error) {
-	exec, err := tx.ExecContext(ctx, query, args...)
-	if err != nil {
-		return 0, err
-	}
-	rows, err := exec.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
-	return rows, nil
+	return taskservice.ExecRowsAffected(ctx, tx, query, args...)
 }
 
 func (opts *CDCCreateTaskOptions) BuildTaskDetails() (details *task.Details, err error) {
