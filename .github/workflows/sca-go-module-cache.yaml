@@ -284,7 +284,7 @@ jobs:
           cgroup="/sys/fs/cgroup${relative}"
           if [[ ! -r "$cgroup/memory.current" ]]; then cgroup=/sys/fs/cgroup; fi
           memory_snapshot() {
-            local label="$1" file
+            local label="$1" file ancestor
             printf 'SCA_SAMPLE %s time=%s cgroup=%s\n' "$label" "$(date -u +%FT%TZ)" "$cgroup"
             for file in memory.max memory.current memory.peak memory.events; do
               if [[ -r "$cgroup/$file" ]]; then
@@ -294,6 +294,17 @@ jobs:
             if [[ -r "$cgroup/memory.stat" ]]; then
               awk '$1 == "anon" || $1 == "file" || $1 == "shmem" || $1 == "kernel" {print "memory.stat." $1 "=" $2}' "$cgroup/memory.stat"
             fi
+            ancestor="$cgroup"
+            while [[ "$ancestor" == /sys/fs/cgroup* ]]; do
+              for file in memory.max memory.current memory.peak memory.events; do
+                if [[ -r "$ancestor/$file" ]]; then
+                  printf 'SCA_ANCESTOR %s %s %s=' "$label" "$ancestor" "$file"
+                  tr '\n' ',' < "$ancestor/$file"; echo
+                fi
+              done
+              [[ "$ancestor" == /sys/fs/cgroup ]] && break
+              ancestor="$(dirname "$ancestor")"
+            done
           }
           echo "SCA_PROBE variant=$VARIANT goflags=${GOFLAGS:-<unset>} gomemlimit=${GOMEMLIMIT:-<unset>}"
           memory_snapshot before
@@ -306,12 +317,6 @@ jobs:
             export GOMEMLIMIT="${GOMEMLIMIT:-5GiB}"
           fi
           echo "SCA_ANALYSIS_FLAGS goflags=${GOFLAGS:-<unset>} gomemlimit=${GOMEMLIMIT:-<unset>}"
-          ancestor="$cgroup"
-          while [[ "$ancestor" == /sys/fs/cgroup* ]]; do
-            if [[ -r "$ancestor/memory.max" ]]; then printf 'SCA_ANCESTOR %s max=%s\n' "$ancestor" "$(cat "$ancestor/memory.max")"; fi
-            [[ "$ancestor" == /sys/fs/cgroup ]] && break
-            ancestor="$(dirname "$ancestor")"
-          done
           TIMEFORMAT='SCA_TIME elapsed=%R user=%U sys=%S'
           if time SCA_FULL=1 make static-check-analysis GOLANGCI_LINT_CONCURRENCY=1; then
             status=0
