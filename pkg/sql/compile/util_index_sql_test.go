@@ -30,16 +30,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
 func TestIndexMetadataType(t *testing.T) {
-	require.Equal(t, INDEX_TYPE_UNIQUE, indexMetadataType(true, ""))
-	require.Equal(t, INDEX_TYPE_MULTIPLE, indexMetadataType(false, ""))
-	require.Equal(t, INDEX_TYPE_SPATIAL, indexMetadataType(false, catalog.MoIndexRTreeAlgo.ToString()))
-	require.Equal(t, INDEX_TYPE_FULLTEXT, indexMetadataType(false, catalog.MOIndexFullTextAlgo.ToString()))
+	require.Equal(t, INDEX_TYPE_UNIQUE, colexec.IndexMetadataType(true, ""))
+	require.Equal(t, INDEX_TYPE_MULTIPLE, colexec.IndexMetadataType(false, ""))
+	require.Equal(t, INDEX_TYPE_SPATIAL, colexec.IndexMetadataType(false, catalog.MoIndexRTreeAlgo.ToString()))
+	require.Equal(t, INDEX_TYPE_FULLTEXT, colexec.IndexMetadataType(false, catalog.MOIndexFullTextAlgo.ToString()))
+	require.Equal(t, INDEX_TYPE_FULLTEXT, colexec.IndexMetadataType(false, catalog.MoIndexFullText2Algo.ToString()))
+	require.Equal(t, INDEX_TYPE_UNIQUE, colexec.IndexMetadataType(true, catalog.MoIndexRTreeAlgo.ToString()))
 }
 
 func TestGenInsertIndexTableSql_QuotesReservedKeywordColumn(t *testing.T) {
