@@ -1619,15 +1619,38 @@ func TestShowCreateSerializesGeneralCIDefault(t *testing.T) {
 	require.Contains(t, showSQL, ") COLLATE=utf8mb4_general_ci")
 }
 
-func TestCreateSQLWithoutContextSerializesGeneralCIDefault(t *testing.T) {
-	mock := NewMockOptimizer(false, newPlanTestProcess(t))
-	tableDef, err := buildTestCreateTableStmt(mock,
-		"create table general_replay(v varchar(10)) collate utf8mb4_general_ci")
-	require.NoError(t, err)
-
-	createSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, false, nil)
-	require.NoError(t, err)
-	require.Contains(t, createSQL, ") COLLATE=utf8mb4_general_ci")
+func TestCreateSQLWithoutContextPreservesCollation(t *testing.T) {
+	for _, name := range []string{"utf8mb4_bin", "utf8mb4_general_ci", "utf8mb4_unicode_ci"} {
+		t.Run(name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			mock.ctxt.ResolveVariableFunc = func(name string, isSystem, isGlobal bool) (interface{}, error) {
+				if name == "collation_server" && isSystem && !isGlobal {
+					return "utf8mb4_bin", nil
+				}
+				return nil, nil
+			}
+			tableDef, err := buildTestCreateTableStmt(mock,
+				"create table collation_replay(id int primary key,v varchar(10),raw_v varchar(10) collate utf8mb4_bin,unique key uv(v)) collate "+name)
+			require.NoError(t, err)
+			tableDef.DbName = "tpch"
+			for _, useDBName := range []bool{false, true} {
+				createSQL, _, err := ConstructCreateTableSQL(nil, tableDef, nil, useDBName, nil)
+				require.NoError(t, err)
+				require.Contains(t, createSQL, ") COLLATE="+name)
+				replayed, err := buildTestCreateTableStmt(mock, createSQL)
+				require.NoError(t, err)
+				require.Equal(t, tableDef.DefaultCharset, replayed.DefaultCharset)
+				require.Equal(t, tableDef.CollationVersion, replayed.CollationVersion)
+				require.Equal(t, tableDef.KeyFormat, replayed.KeyFormat)
+				for _, column := range []string{"id", "v", "raw_v"} {
+					require.Equal(t, FindColumn(tableDef.Cols, column).Typ, FindColumn(replayed.Cols, column).Typ)
+				}
+				require.Len(t, replayed.Indexes, 1)
+				require.True(t, replayed.Indexes[0].Unique)
+				require.Equal(t, tableDef.Indexes[0].KeyFormat, replayed.Indexes[0].KeyFormat)
+			}
+		})
+	}
 }
 
 func TestShowCreateKeepsLegacyDefaultOutputStable(t *testing.T) {

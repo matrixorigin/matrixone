@@ -510,6 +510,8 @@ func TestVerifyCDCTargetTableStructure(t *testing.T) {
 		{"reordered columns", []column{{"v", "varchar(20)"}, {"id", "int"}}, nil, false, "column 1"},
 		{"narrowed varchar", []column{{"id", "int"}, {"v", "varchar(5)"}}, nil, false, "column 2"},
 		{"changed text collation", []column{{"id", "int"}, {"v", "varchar(20)"}}, nil, false, "collation differs"},
+		{"unsupported UCA target", []column{{"id", "int"}, {"v", "varchar(20)"}}, nil, false, "collation differs"},
+		{"UCA cannot downgrade to legacy target", []column{{"id", "int"}, {"v", "varchar(20)"}}, nil, false, "collation differs"},
 		{"missing column", []column{{"id", "int"}}, nil, false, "has 1 columns"},
 		{"missing primary key", []column{{"id", "int"}, {"v", "varchar(20)"}}, nil, false, "primary key differs"},
 		{"extra unique index", []column{{"id", "int"}, {"v", "varchar(20)"}}, []index{{"PRIMARY", "id", 0, 1, nil}, {"uk_v", "v", 0, 1, nil}}, false, "unexpected unique key"},
@@ -536,6 +538,9 @@ func TestVerifyCDCTargetTableStructure(t *testing.T) {
 				Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}},
 			}
 			switch tc.name {
+			case "unsupported UCA target", "UCA cannot downgrade to legacy target":
+				def.Cols[1].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+				def.Cols[1].Typ.CollationVersion = 1
 			case "valid year display width":
 				def.Cols[1].Typ = plan.Type{Id: int32(types.T_year), Width: 4}
 			case "valid MO float scale", "different MO float scale":
@@ -557,13 +562,15 @@ func TestVerifyCDCTargetTableStructure(t *testing.T) {
 					collation = "utf8mb4_bin"
 					if tc.name == "changed text collation" {
 						collation = "utf8mb4_general_ci"
+					} else if tc.name == "unsupported UCA target" {
+						collation = "utf8mb4_unicode_ci"
 					}
 				}
 				columnRows.AddRow(col.name, col.typ, collation, numericScale)
 			}
-			mock.ExpectQuery(regexp.QuoteMeta(columnsSQL)).WithArgs("dst", "t").WillReturnRows(columnRows)
+			mock.ExpectQuery(regexp.QuoteMeta(columnsSQL)).WithArgs("dst", "t").WillReturnRows(columnRows).RowsWillBeClosed()
 			if len(tc.columns) == 2 && tc.columns[0].name == "id" &&
-				(tc.columns[1].typ == "varchar(20)" && tc.name != "changed text collation" ||
+				(tc.columns[1].typ == "varchar(20)" && tc.wantErr != "collation differs" ||
 					tc.name == "valid year display width" || tc.name == "valid MO float scale") {
 				indexRows := sqlmock.NewRows([]string{"index_name", "non_unique", "seq_in_index", "column_name", "sub_part"})
 				for _, idx := range tc.indexes {

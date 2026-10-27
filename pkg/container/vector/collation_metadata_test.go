@@ -20,7 +20,10 @@ import (
 
 func TestCollationMetadataVectorReaderRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
-	for _, domain := range []struct{ id, revision uint8 }{{0, 0}, {1, 0}, {2, 0}, {3, 0}, {4, 1}, {5, 1}, {7, 1}, {12, 1}} {
+	for _, domain := range []struct{ id, revision uint8 }{
+		{0, 0}, {1, 0}, {2, 0}, {3, 0}, {4, 1}, {5, 1}, {7, 1}, {12, 1},
+		{types.CharsetUTF8MB4UnicodeCI, 1},
+	} {
 		typ := types.NewWithCharset(types.T_varchar, 32, 0, domain.id)
 		typ.CollationVersion = domain.revision
 		src := NewVec(typ)

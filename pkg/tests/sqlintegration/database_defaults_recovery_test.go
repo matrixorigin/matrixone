@@ -54,6 +54,32 @@ func TestDatabaseDefaultsFailureAndRecovery(t *testing.T) {
 				"select collation_name from information_schema.columns where table_schema='c03_recovery' and table_name=? and column_name='v'", table).Scan(&actual))
 			require.Equal(t, want, actual)
 		}
+		verifyRestoredRows := func(t *testing.T, ctx context.Context, connection, unaffected *sql.DB, insert, remove string) {
+			t.Helper()
+			check := func(want int, wantHex string) {
+				t.Helper()
+				for _, hint := range []string{"force index(iv)", "ignore index(iv)"} {
+					var matched int
+					require.NoError(t, connection.QueryRowContext(ctx,
+						"select count(*) from "+schema+".t "+hint+" where v='ss'").Scan(&matched))
+					require.Equal(t, want, matched, hint)
+				}
+				var raw string
+				require.NoError(t, connection.QueryRowContext(ctx,
+					"select group_concat(hex(v) order by hex(v)) from "+schema+".t").Scan(&raw))
+				require.Equal(t, wantHex, raw)
+			}
+			check(2, "7373,C39F")
+			exec(t, ctx, connection, insert)
+			check(3, "5353,7373,C39F")
+			if unaffected != nil {
+				var sourceRows int
+				require.NoError(t, unaffected.QueryRowContext(ctx, "select count(*) from "+schema+".t").Scan(&sourceRows))
+				require.Equal(t, 2, sourceRows, "目标第三行仍存在时，源账户必须保持不变")
+			}
+			exec(t, ctx, connection, remove)
+			check(2, "7373,C39F")
+		}
 		exec(t, ctx, db, "create database "+schema+" collate utf8mb4_bin")
 		exec(t, ctx, db, "create table "+schema+".t(id int primary key,v varchar(8),index iv(v))")
 		exec(t, ctx, db, "insert into "+schema+".t values (1,'ß'),(2,'ss')")
@@ -159,13 +185,14 @@ func TestDatabaseDefaultsFailureAndRecovery(t *testing.T) {
 				var current string
 				require.NoError(t, db.QueryRowContext(ctx, "select default_collation_name from information_schema.schemata where schema_name=?", schema).Scan(&current))
 				require.Equal(t, "utf8mb4_bin", current, "table-only restore must not overwrite the database")
+				verifyRestoredRows(t, ctx, db, nil,
+					"insert into "+schema+".t values (3,'SS')", "delete from "+schema+".t where id=3")
 			}
 			exec(t, ctx, db, "restore database "+schema+" from pitr c03_recovery_pitr '"+at+"'")
 			exec(t, ctx, db, "create table "+schema+".inherited(v varchar(8))")
 			column(t, ctx, db, "inherited", "utf8mb4_unicode_ci")
-			var matched int
-			require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+schema+".t force index(iv) where v='ss'").Scan(&matched))
-			require.Equal(t, 2, matched)
+			verifyRestoredRows(t, ctx, db, nil,
+				"insert into "+schema+".t values (3,'SS')", "delete from "+schema+".t where id=3")
 		}) {
 			return // Later scenarios depend on this state; quarantine the failed fixture.
 		}
@@ -197,9 +224,8 @@ func TestDatabaseDefaultsFailureAndRecovery(t *testing.T) {
 			var sourceRule string
 			require.NoError(t, source.QueryRowContext(ctx, "select default_collation_name from information_schema.schemata where schema_name=?", schema).Scan(&sourceRule))
 			require.Equal(t, "utf8mb4_bin", sourceRule)
-			var matched int
-			require.NoError(t, target.QueryRowContext(ctx, "select count(*) from "+schema+".t force index(iv) where v='ss'").Scan(&matched))
-			require.Equal(t, 2, matched)
+			verifyRestoredRows(t, ctx, target, source,
+				"insert into "+schema+".t values ('SS')", "delete from "+schema+".t where hex(v)='5353'")
 		}) {
 			return // Later scenarios depend on this state; quarantine the failed fixture.
 		}

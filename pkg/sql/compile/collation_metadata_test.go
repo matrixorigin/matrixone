@@ -26,28 +26,71 @@ import (
 )
 
 func TestCollationMetadataRemoteBatchAdmission(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-	source := batch.NewWithSize(2)
-	defer func() {
-		source.Clean(mp)
-		require.Zero(t, mp.CurrNB())
-	}()
-	source.Attrs = []string{"legacy", "disabled"}
-	for i, version := range []uint8{0, 1} {
-		typ := types.NewWithCharset(types.T_varchar, 8, 0, 3)
-		typ.CollationVersion = version
-		source.Vecs[i] = vector.NewVec(typ)
-		require.NoError(t, vector.AppendBytes(source.Vecs[i], []byte("x"), false, mp))
+	for _, domain := range []struct {
+		name              string
+		charset, revision uint8
+		admitted          bool
+	}{
+		{"legacy", types.CharsetUTF8, 0, true},
+		{"UCA400", types.CharsetUTF8MB4UnicodeCI, 1, true},
+		{"disabled", types.CharsetUTF8, 1, false},
+	} {
+		for _, shape := range []string{"value", "empty", "null", "constant"} {
+			t.Run(domain.name+"/"+shape, func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				source := batch.NewWithSize(2)
+				defer func() {
+					source.Clean(mp)
+					require.Zero(t, mp.CurrNB())
+				}()
+				source.Attrs = []string{"legacy", domain.name}
+				for i := range source.Vecs {
+					typ := types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetUTF8)
+					if i == 1 {
+						typ.Charset, typ.CollationVersion = domain.charset, domain.revision
+					}
+					if shape == "constant" {
+						var err error
+						source.Vecs[i], err = vector.NewConstBytes(typ, []byte("Á"), 1, mp)
+						require.NoError(t, err)
+					} else {
+						source.Vecs[i] = vector.NewVec(typ)
+						if shape != "empty" {
+							require.NoError(t, vector.AppendBytes(source.Vecs[i], []byte("Á"), shape == "null", mp))
+						}
+					}
+				}
+				if shape != "empty" {
+					source.SetRowCount(1)
+				}
+				data, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
+				require.NoError(t, err)
+				before := mp.CurrNB()
+				decoded, err := decodeBatch(mp, data)
+				if !domain.admitted {
+					require.ErrorContains(t, err, "disabled")
+					require.Nil(t, decoded)
+					require.Equal(t, before, mp.CurrNB(), "rejection must release all decoded columns")
+					return
+				}
+				require.NoError(t, err)
+				require.NotNil(t, decoded)
+				defer decoded.Clean(mp)
+				require.Equal(t, source.RowCount(), decoded.RowCount())
+				require.Len(t, decoded.Vecs, len(source.Vecs))
+				for i, value := range decoded.Vecs {
+					require.Equal(t, *source.Vecs[i].GetType(), *value.GetType())
+					if shape != "empty" {
+						require.Equal(t, shape == "null", value.IsNull(0))
+						if shape != "null" {
+							require.Equal(t, "Á", value.GetStringAt(0))
+						}
+					}
+				}
+			})
+		}
 	}
-	source.SetRowCount(1)
-	data, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
-	require.NoError(t, err)
-	before := mp.CurrNB()
-	decoded, err := decodeBatch(mp, data)
-	require.ErrorContains(t, err, "disabled")
-	require.Nil(t, decoded)
-	require.Equal(t, before, mp.CurrNB(), "rejection must release all decoded columns")
 }
 
 func TestCollationMetadataExecutionBoundaries(t *testing.T) {

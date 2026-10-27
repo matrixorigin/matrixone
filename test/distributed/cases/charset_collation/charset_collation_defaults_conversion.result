@@ -1,4 +1,5 @@
 drop database if exists charset_defaults_contract;
+drop database if exists charset_defaults_create;
 create database charset_defaults_contract collate utf8mb4_bin;
 use charset_defaults_contract;
 create table defaults_target(v varchar(8), c char(8), t tinytext, raw varbinary(8), n int, index iv(v));
@@ -48,11 +49,11 @@ native_defaults  ¦  CREATE TABLE `native_defaults` (
   `n` int DEFAULT NULL
 ) COLLATE=utf8mb4_unicode_ci
 show full columns from native_defaults;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Privileges[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
 v  ¦  varchar(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
 g  ¦  varchar(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references  ¦    𝄀
 raw  ¦  varbinary(8)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-n  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references
+n  ¦  int  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦  
 select column_name,character_set_name,collation_name from information_schema.columns
 where table_schema='charset_defaults_contract' and table_name='native_defaults' order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
@@ -80,6 +81,89 @@ where table_schema='charset_defaults_contract' and table_name in ('native_like',
 ➤ table_name[12,256,0]  ¦  column_name[12,256,0]  ¦  collation_name[12,18,0]  𝄀
 native_ctas  ¦  v  ¦  utf8mb4_unicode_ci  𝄀
 native_like  ¦  v  ¦  utf8mb4_unicode_ci
+create database charset_defaults_create;
+create table charset_defaults_create.t(v varchar(8));
+insert into charset_defaults_create.t values ('abc'),('ABC'),('abc ');
+select default_character_set_name,default_collation_name from information_schema.schemata
+where schema_name='charset_defaults_create';
+➤ default_character_set_name[12,7,0]  ¦  default_collation_name[12,18,0]  𝄀
+utf8mb4  ¦  utf8mb4_general_ci
+select count(*) from charset_defaults_create.t where v='ABC';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(distinct v) from charset_defaults_create.t;
+➤ count(distinct v)[-5,64,0]  𝄀
+3
+create database if not exists charset_defaults_create collate utf8mb4_unicode_ci;
+select default_collation_name from information_schema.schemata where schema_name='charset_defaults_create';
+➤ default_collation_name[12,18,0]  𝄀
+utf8mb4_general_ci
+drop database charset_defaults_create;
+create database charset_defaults_create character set utf8mb4 collate utf8mb4_unicode_ci;
+show create database charset_defaults_create;
+➤ Database[12,5000,0]  ¦  Create Database[12,90,0]  𝄀
+charset_defaults_create  ¦  CREATE DATABASE `charset_defaults_create` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+create table charset_defaults_create.t(
+v varchar(8),
+raw_v varchar(8) collate utf8mb4_bin,
+charset_v varchar(8) character set utf8mb4,
+bytes_v varchar(8) character set binary
+);
+insert into charset_defaults_create.t values ('abc','abc','abc','abc'),('ABC','ABC','ABC','ABC'),('abc ','abc ','abc ','abc ');
+select column_name,data_type,character_set_name,collation_name from information_schema.columns
+where table_schema='charset_defaults_create' and table_name='t' order by ordinal_position;
+➤ column_name[12,256,0]  ¦  data_type[12,65535,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
+v  ¦  varchar  ¦  utf8mb4  ¦  utf8mb4_unicode_ci  𝄀
+raw_v  ¦  varchar  ¦  utf8mb4  ¦  utf8mb4_bin  𝄀
+charset_v  ¦  varchar  ¦  utf8mb4  ¦  utf8mb4_general_ci  𝄀
+bytes_v  ¦  varbinary  ¦  binary  ¦  binary
+select table_collation from information_schema.tables where table_schema='charset_defaults_create' and table_name='t';
+➤ table_collation[12,64,0]  𝄀
+utf8mb4_unicode_ci
+select count(*) from charset_defaults_create.t where v='ABC';
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from charset_defaults_create.t where raw_v='ABC';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from charset_defaults_create.t where charset_v='ABC';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from charset_defaults_create.t where bytes_v='ABC';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(distinct v),count(distinct raw_v),count(distinct charset_v),count(distinct bytes_v) from charset_defaults_create.t;
+➤ count(distinct v)[-5,64,0]  ¦  count(distinct raw_v)[-5,64,0]  ¦  count(distinct charset_v)[-5,64,0]  ¦  count(distinct bytes_v)[-5,64,0]  𝄀
+1  ¦  3  ¦  3  ¦  3
+select hex(v),hex(raw_v),hex(charset_v),hex(bytes_v) from charset_defaults_create.t order by hex(v);
+➤ hex(v)[12,64,0]  ¦  hex(raw_v)[12,64,0]  ¦  hex(charset_v)[12,64,0]  ¦  hex(bytes_v)[12,16,0]  𝄀
+414243  ¦  414243  ¦  414243  ¦  414243  𝄀
+616263  ¦  616263  ¦  616263  ¦  616263  𝄀
+61626320  ¦  61626320  ¦  61626320  ¦  61626320
+create table charset_defaults_create.table_override(v varchar(8)) collate utf8mb4_bin;
+create table charset_defaults_create.charset_override(v varchar(8)) character set utf8mb4;
+insert into charset_defaults_create.table_override select v from charset_defaults_create.t;
+insert into charset_defaults_create.charset_override select v from charset_defaults_create.t;
+select table_name,collation_name from information_schema.columns
+where table_schema='charset_defaults_create' and table_name in ('table_override','charset_override') order by table_name;
+➤ table_name[12,256,0]  ¦  collation_name[12,18,0]  𝄀
+charset_override  ¦  utf8mb4_general_ci  𝄀
+table_override  ¦  utf8mb4_bin
+select count(*) from charset_defaults_create.table_override where v='ABC';
+➤ count(*)[-5,64,0]  𝄀
+1
+select count(*) from charset_defaults_create.charset_override where v='ABC';
+➤ count(*)[-5,64,0]  𝄀
+1
+use charset_defaults_create;
+select @@character_set_database,@@collation_database;
+➤ @@character_set_database[-1,16383,0]  ¦  @@collation_database[-1,16383,0]  𝄀
+utf8mb4  ¦  utf8mb4_unicode_ci
+select 'abc'='ABC','abc'='abc ';
+➤ abc = ABC[-6,8,0]  ¦  abc = abc [-6,8,0]  𝄀
+0  ¦  0
+use charset_defaults_contract;
+drop database charset_defaults_create;
 create table converted(id int primary key, v varchar(8), index iv(v)) collate=utf8mb4_bin;
 insert into converted values (1,'ß'),(2,'ss');
 alter table converted convert to character set utf8mb4 collate utf8mb4_unicode_ci;
@@ -95,9 +179,9 @@ converted  ¦  CREATE TABLE `converted` (
   KEY `iv` (`v`)
 ) COLLATE=utf8mb4_unicode_ci
 show full columns from converted;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Privileges[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
 id  ¦  int  ¦  null  ¦  NO  ¦  PRI  ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-v  ¦  varchar(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  select,insert,update,references
+v  ¦  varchar(8)  ¦  utf8mb4_unicode_ci  ¦  YES  ¦  MUL  ¦  null  ¦    ¦  select,insert,update,references  ¦  
 alter table converted default collate=utf8mb4_bin, add column added varchar(8), convert to character set utf8mb4 collate utf8mb4_unicode_ci;
 select column_name,collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='converted' order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  collation_name[12,18,0]  𝄀
@@ -260,9 +344,9 @@ explicit_binary  ¦  CREATE TABLE `explicit_binary` (
   `g` binary(2) GENERATED ALWAYS AS (cast(v as binary(2))) STORED
 ) CHARACTER SET=binary
 show full columns from explicit_binary;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Collation[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Privileges[1,0,0]  ¦  Comment[1,0,0]  𝄀
+➤ Field[12,-1,0]  ¦  Type[12,-1,0]  ¦  Collation[12,-1,0]  ¦  Null[12,-1,0]  ¦  Key[12,-1,0]  ¦  Default[12,-1,0]  ¦  Extra[12,-1,0]  ¦  Privileges[12,-1,0]  ¦  Comment[12,-1,0]  𝄀
 v  ¦  varbinary(4)  ¦  null  ¦  YES  ¦    ¦  null  ¦    ¦  select,insert,update,references  ¦    𝄀
-g  ¦  binary(2)  ¦  null  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references
+g  ¦  binary(2)  ¦  null  ¦  YES  ¦    ¦  null  ¦  STORED GENERATED  ¦  select,insert,update,references  ¦  
 create table source_like(v varchar(8)) collate=utf8mb4_bin;
 create table target_like like source_like;
 alter table target_like default collate=utf8mb4_general_ci;

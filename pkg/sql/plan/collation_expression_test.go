@@ -470,6 +470,58 @@ func TestExpressionCollationDerivedMetadata(t *testing.T) {
 		}
 		require.True(t, found, sql)
 	}
+
+	// 默认继承与显式声明使用相同的列类型；派生表达式必须保持该类型的域。
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table derived_ci(id int,v varchar(20) collate utf8mb4_unicode_ci,raw_v varchar(20) collate utf8mb4_bin)", 1)
+	require.NoError(t, err)
+	created, err := BuildPlan(ctx, stmt, false)
+	stmt.Free()
+	require.NoError(t, err)
+	table := created.GetDdl().GetCreateTable().TableDef
+	ctx.tables["derived_ci"] = table
+	ctx.objects["derived_ci"] = &ObjectRef{ObjName: "derived_ci", SchemaName: "tpch"}
+	original := proto.Clone(table)
+	for _, tc := range []struct {
+		sql                string
+		identity, revision uint32
+	}{
+		{"select if(id=1,v,'x') from derived_ci", 10, 1},
+		{"select case when id=1 then v else 'x' end from derived_ci", 10, 1},
+		{"with c as (select if(id=1,v,'x') as v from derived_ci) select v from c", 10, 1},
+		{"select v from derived_ci union all select 'x'", 10, 1},
+		{"select min(v),max(v) from derived_ci", 10, 1},
+		{"select if(id=1,v,'x') collate utf8mb4_bin from derived_ci", 2, 0},
+		{"select raw_v from derived_ci", 2, 0},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			copied := DeepCopyPlan(built)
+			encoded, err := proto.Marshal(built)
+			require.NoError(t, err)
+			var transported pb.Plan
+			require.NoError(t, proto.Unmarshal(encoded, &transported))
+			require.True(t, proto.Equal(built, &transported))
+			query := built.GetQuery()
+			project := query.Nodes[query.Steps[0]].ProjectList
+			require.NotEmpty(t, project)
+			for _, candidate := range []*Plan{built, copied, &transported} {
+				query := candidate.GetQuery()
+				actual := query.Nodes[query.Steps[0]].ProjectList
+				require.Len(t, actual, len(project))
+				for i, expr := range actual {
+					require.Equal(t, project[i].Typ, expr.Typ)
+					require.Equal(t, tc.identity, expr.Typ.Charset)
+					require.Equal(t, tc.revision, expr.Typ.CollationVersion)
+				}
+			}
+			require.True(t, proto.Equal(original, table), "派生和显式覆盖不能修改共享源列")
+		})
+	}
 }
 
 func TestExpressionCollationSubqueryProvenance(t *testing.T) {
@@ -570,6 +622,12 @@ func TestExpressionCollationSemantics(t *testing.T) {
 		{"'Á' collate utf8mb4_unicode_ci = 'a'", "true"},
 		{"'a' = 'Á' collate utf8mb4_unicode_ci", "true"},
 		{"'a ' collate utf8mb4_unicode_ci = 'a'", "true"},
+		{"'café' collate utf8mb4_unicode_ci = 'cafe'", "true"},
+		{"'ß' collate utf8mb4_unicode_ci = 'ss'", "true"},
+		{"'é' collate utf8mb4_unicode_ci = 'e\u0301'", "true"},
+		{"'\\0' collate utf8mb4_unicode_ci = ''", "true"},
+		{"'Á' collate utf8mb4_unicode_ci = null", "NULL"},
+		{"_binary'\\0' = _binary''", "false"},
 		{"_binary'a ' = _binary'a'", "false"},
 		{"'Á' collate utf8mb4_unicode_ci in ('a','z')", "true"},
 		{"'Á' collate utf8mb4_unicode_ci between 'a' and 'b'", "true"},
