@@ -185,7 +185,6 @@ func (scan *MongoScan) Prepare(proc *process.Process) (err error) {
 		return moerr.NewInternalErrorf(proc.Ctx, "MongoDB %s failed", operation)
 	}
 	metric.MongoDBCursorEventCounter.WithLabelValues("open").Inc()
-	scan.ctr.generation++
 	scan.ctr.done = false
 	scan.ctr.rows = 0
 	scan.ctr.rawBytes = 0
