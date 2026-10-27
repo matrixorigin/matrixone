@@ -667,7 +667,7 @@ class FulltextQueryBuilder:
         order_clause = f"ORDER BY {order_by}" if order_by else ""
 
         # Build LIMIT clause
-        limit_clause = f"LIMIT {limit}" if limit else ""
+        limit_clause = f"LIMIT {limit}" if limit is not None else ""
 
         # Build OFFSET clause
         offset_clause = f"OFFSET {offset}" if offset else ""
@@ -1621,7 +1621,7 @@ class FulltextSearchBuilder:
         order_clause = f"ORDER BY {self._order_by}" if self._order_by else ""
 
         # Build LIMIT clause
-        limit_clause = f"LIMIT {self._limit_value}" if self._limit_value else ""
+        limit_clause = f"LIMIT {self._limit_value}" if self._limit_value is not None else ""
 
         # Build OFFSET clause
         offset_clause = f"OFFSET {self._offset_value}" if self._offset_value else ""
