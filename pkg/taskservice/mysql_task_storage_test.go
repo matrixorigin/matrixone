@@ -1021,6 +1021,23 @@ func TestRemoveDuplicateTasksPreservesErrorAndSliceSemantics(t *testing.T) {
 	require.Same(t, other, err)
 	require.Nil(t, result)
 
+	// An unmatched duplicate leaves the retry input unchanged and in place.
+	unmatchedInput := []task.AsyncTask{{Metadata: task.TaskMetadata{ID: "alpha"}}, {Metadata: task.TaskMetadata{ID: "beta"}}}
+	unmatchedWant := append([]task.AsyncTask(nil), unmatchedInput...)
+	result, err = removeDuplicateTasks(duplicate, unmatchedInput, id)
+	require.NoError(t, err)
+	require.Equal(t, unmatchedWant, result)
+	require.Len(t, result, 2)
+	require.Same(t, &unmatchedInput[0], &result[0])
+
+	daemonInput := []task.DaemonTask{{Metadata: task.TaskMetadata{ID: "alpha"}}, {Metadata: task.TaskMetadata{ID: "beta"}}}
+	daemonWant := append([]task.DaemonTask(nil), daemonInput...)
+	daemons, err := removeDuplicateTasks(duplicate, daemonInput, func(t task.DaemonTask) string { return t.Metadata.ID })
+	require.NoError(t, err)
+	require.Equal(t, daemonWant, daemons)
+	require.Len(t, daemons, 2)
+	require.Same(t, &daemonInput[0], &daemons[0])
+
 	var empty []task.AsyncTask
 	result, err = removeDuplicateTasks(duplicate, empty, id)
 	require.NoError(t, err)
