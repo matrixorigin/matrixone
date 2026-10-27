@@ -147,18 +147,20 @@ type service struct {
 	}
 
 	upgrade struct {
-		upgradeTenantBatch                       int
-		checkUpgradeDuration                     time.Duration
-		checkUpgradeTenantDuration               time.Duration
-		upgradeTenantTasks                       int
-		finalVersionCompleted                    atomic.Bool
-		orphanPrivilegeMaintenanceWorkerRunning  atomic.Bool
-		orphanPrivilegeMaintenanceRunning        atomic.Bool
-		orphanPrivilegeMaintenanceState          orphanPrivilegeMaintenanceState
-		orphanPrivilegeMaintenanceStart          func() string
-		informationSchemaViewsMaintenanceRunning atomic.Bool
-		informationSchemaViewsMaintenanceState   informationSchemaViewsMaintenanceState
-		kek                                      string
+		upgradeTenantBatch                               int
+		checkUpgradeDuration                             time.Duration
+		checkUpgradeTenantDuration                       time.Duration
+		upgradeTenantTasks                               int
+		finalVersionCompleted                            atomic.Bool
+		orphanPrivilegeMaintenanceWorkerRunning          atomic.Bool
+		orphanPrivilegeMaintenanceRunning                atomic.Bool
+		orphanPrivilegeMaintenanceState                  orphanPrivilegeMaintenanceState
+		orphanPrivilegeMaintenanceStart                  func() string
+		informationSchemaViewsMaintenanceRunning         atomic.Bool
+		informationSchemaViewsMaintenanceState           informationSchemaViewsMaintenanceState
+		informationSchemaColumnsTablesMaintenanceRunning atomic.Bool
+		informationSchemaColumnsTablesMaintenanceState   informationSchemaColumnsTablesMaintenanceState
+		kek                                              string
 	}
 }
 
