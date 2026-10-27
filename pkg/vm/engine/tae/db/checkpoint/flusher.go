@@ -132,12 +132,6 @@ func WithFlusherInterval(interval time.Duration) FlusherOption {
 	}
 }
 
-func WithFlusherQueueSize(size int) FlusherOption {
-	return func(flusher *flushImpl) {
-		flusher.flushQueueSize = size
-	}
-}
-
 func WithFlusherCfg(cfg FlushCfg) FlusherOption {
 	return func(flusher *flushImpl) {
 		WithFlusherInterval(cfg.FlushInterval)(flusher)
@@ -595,25 +589,23 @@ func foreachAobjBefore(_ context.Context,
 	// 2. the ts is lagged, lowering the possibility of missing aobj. In contrast, we have to wait when checkpoint pending checkpoint tasks
 	// table.WaitDataObjectCommitted(ts)
 	// table.WaitTombstoneObjectCommitted(ts)
-	data := table.MakeDataObjectIt()
-	defer data.Release()
-	for ok := catalog.SeekObjectListGroup(&data, catalog.ObjectListGroupAppendableCreate, lastCkp); ok; ok = data.Next() {
-		item := data.Item()
-		if item.ObjectListGroup() != catalog.ObjectListGroupAppendableCreate || item.CreatedAt.GT(&ts) {
-			break
+	data := table.MakeDataObjectSnapshot()
+	data.AscendGroup(catalog.ObjectListGroupAppendableCreate, lastCkp, func(item *catalog.ObjectEntry) bool {
+		if item.CreatedAt.GT(&ts) {
+			return false
 		}
 		df(item)
-	}
+		return true
+	})
 
-	tomb := table.MakeTombstoneObjectIt()
-	defer tomb.Release()
-	for ok := catalog.SeekObjectListGroup(&tomb, catalog.ObjectListGroupAppendableCreate, lastCkp); ok; ok = tomb.Next() {
-		item := tomb.Item()
-		if item.ObjectListGroup() != catalog.ObjectListGroupAppendableCreate || item.CreatedAt.GT(&ts) {
-			break
+	tomb := table.MakeTombstoneObjectSnapshot()
+	tomb.AscendGroup(catalog.ObjectListGroupAppendableCreate, lastCkp, func(item *catalog.ObjectEntry) bool {
+		if item.CreatedAt.GT(&ts) {
+			return false
 		}
 		tf(item)
-	}
+		return true
+	})
 }
 
 func (flusher *flushImpl) collectTableMemUsage(entry *logtail.DirtyTreeEntry, lastCkp types.TS) (memPressureRate float64) {

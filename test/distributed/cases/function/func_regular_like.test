@@ -6,6 +6,15 @@ SELECT REGEXP_LIKE('Cat', '^Da') Result;
 SELECT REGEXP_LIKE(NULL, '.*');
 SELECT REGEXP_LIKE('Cat', NULL);
 SELECT REGEXP_LIKE(NULL, NULL);
+# A present binary pattern is validated before a NULL subject on both routes.
+select regexp_like(cast(NULL as varbinary(20)), cast(concat('^', char(92), 'x{100}') as varbinary(20)), 'm');
+select regexp_like(cast(NULL as varbinary(20)), cast(concat('^', char(92), 'x{100}') as varbinary(20)), 'mu');
+select regexp_like(cast(NULL as varbinary(20)), cast(_binary'^a' as varbinary(2)), 'm') as valid_binary_null;
+# Mandatory repetition of a nullable dollar keeps the true terminal match.
+select regexp_instr(concat('a', convert(char(13) using utf8mb4)), '($)+', 1, 2, 0, 'm') as terminal_at,
+       length(regexp_substr(concat('a', convert(char(13) using utf8mb4)), '($)+', 1, 2, 'm')) as terminal_len,
+       hex(regexp_replace(concat('a', convert(char(13) using utf8mb4)), '($)+', 'X', 1, 0, 'm')) as terminal_replaced;
+
 drop table if exists t1;
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , "PowerSlave");
@@ -114,12 +123,87 @@ CREATE TABLE t_regexp_match_type (
 INSERT INTO t_regexp_match_type VALUES
     (1, 'Abc', 'abc', 'X', 'i'),
     (2, 'Abc', 'abc', 'X', 'c'),
-    (3, 'abc', 'abc', 'X', 'u');
+    (3, 'abc', 'abc', 'X', 'u'),
+    (4, CONCAT('a', CHAR(13), 'b'), '^b', 'X', 'm'),
+    (5, CONCAT('a', CHAR(13), 'b'), '^b', 'X', 'mu');
 SELECT id,
        REGEXP_LIKE(s, p, mt) AS is_match,
        REGEXP_INSTR(s, p, 1, 1, 0, mt) AS start_pos,
        REGEXP_SUBSTR(s, p, 1, 1, mt) AS substr_value,
-       REGEXP_REPLACE(s, p, r, 1, 0, mt) AS replaced
+       HEX(REGEXP_REPLACE(s, p, r, 1, 0, mt)) AS replaced_hex
 FROM t_regexp_match_type
 ORDER BY id;
 DROP TABLE t_regexp_match_type;
+
+# Anchors inside classes and disabled inline scopes keep their meaning.
+SELECT REGEXP_LIKE('$', '[[:alpha:]^$]', 'm') AS posix_literal,
+       REGEXP_LIKE('a', '[^]$]', 'm') AS negated_class,
+       REGEXP_LIKE(CAST(CONCAT('a', CHAR(13), 'b') AS CHAR), '(?-m:^b)', 'm') AS scoped_off;
+# Byte 0x85 is a line terminator only in the text alphabet; the binary
+# alphabet is {CR, VT, FF} plus LF, so this is 0 under both modes (#30210).
+SELECT REGEXP_LIKE(X'618562', _binary '^b', 'm') AS binary_nel,
+       REGEXP_LIKE(X'618562', _binary '^b', 'mu') AS binary_unix;
+
+# Regular cross-line patterns keep their input domain beyond ICU limits.
+SELECT REGEXP_LIKE(s, '^a\\sb', 'm') AS matched,
+       REGEXP_INSTR(s, '^a\\sb', 1, 1, 1, 'm') AS end_pos,
+       HEX(REGEXP_SUBSTR(s, '^a\\sb', 1, 1, 'm')) AS matched_hex,
+       LENGTH(REGEXP_REPLACE(s, '^a\\sb', 'X', 1, 1, 'm')) AS replaced_length
+FROM (SELECT CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b', REPEAT('y', 1048577)) AS s) AS input;
+
+# Issue #30210: MySQL-compatible multiline line-terminator classification.
+# m treats CR, LF, CRLF, VT, FF, NEL, LS and PS as line terminators; mu keeps
+# Unix LF semantics (LF inside CRLF). Separator matrix across the four
+# positional entry points.
+DROP TABLE IF EXISTS t_regexp_line_terminators;
+CREATE TABLE t_regexp_line_terminators (
+    id INT,
+    name VARCHAR(8),
+    s VARCHAR(16)
+);
+INSERT INTO t_regexp_line_terminators VALUES
+    (1, 'cr',   CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b')),
+    (2, 'lf',   CONCAT('a', CONVERT(CHAR(10) USING utf8mb4), 'b')),
+    (3, 'crlf', CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'b')),
+    (4, 'vt',   CONCAT('a', CONVERT(CHAR(11) USING utf8mb4), 'b')),
+    (5, 'ff',   CONCAT('a', CONVERT(CHAR(12) USING utf8mb4), 'b')),
+    (6, 'nel',  CONCAT('a', CONVERT(UNHEX('C285') USING utf8mb4), 'b')),
+    (7, 'ls',   CONCAT('a', CONVERT(UNHEX('E280A8') USING utf8mb4), 'b')),
+    (8, 'ps',   CONCAT('a', CONVERT(UNHEX('E280A9') USING utf8mb4), 'b'));
+SELECT id, name,
+       REGEXP_LIKE(s, '^b', 'm') AS like_m,
+       REGEXP_LIKE(s, '^b', 'mu') AS like_mu,
+       REGEXP_INSTR(s, '^b', 1, 1, 0, 'm') AS instr_m,
+       REGEXP_INSTR(s, '^b', 1, 1, 0, 'mu') AS instr_mu,
+       HEX(REGEXP_SUBSTR(s, '^b', 1, 1, 'm')) AS substr_m_hex,
+       HEX(REGEXP_SUBSTR(s, '^b', 1, 1, 'mu')) AS substr_mu_hex,
+       HEX(REGEXP_REPLACE(s, '^b', 'X', 1, 0, 'm')) AS replace_m_hex,
+       HEX(REGEXP_REPLACE(s, '^b', 'X', 1, 0, 'mu')) AS replace_mu_hex
+FROM t_regexp_line_terminators
+ORDER BY id;
+DROP TABLE t_regexp_line_terminators;
+
+# CRLF stays atomic for anchored single-literal heads: its interior is not a
+# line-start candidate. A >= 2 rune exempt literal string may start inside
+# CRLF, and a zero-width assertion seal blocks the interior again.
+SELECT REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'b'), '^\\n', 'm') AS crlf_sealed_single_m,
+       REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'xb'), '^\\nx', 'm') AS crlf_exempt_run_m,
+       REGEXP_INSTR(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'xb'), '^\\nx', 1, 1, 0, 'm') AS crlf_exempt_run_instr_m,
+       HEX(REGEXP_SUBSTR(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'xb'), '^\\nx', 1, 1, 'm')) AS crlf_exempt_run_substr_m,
+       REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'xb'), '^\\n$\\nx', 'm') AS crlf_assertion_sealed_m,
+       REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), CONVERT(CHAR(10) USING utf8mb4), 'xb'), '^\\n\\nx', 'm') AS crlf_adjacent_run_m;
+
+# The regexp2 route (lookaround) honors the same wide line starts.
+SELECT REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b'), '(?=[\\s\\S])^b', 'm') AS r2_cr_m,
+       REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(13) USING utf8mb4), 'b'), '(?=[\\s\\S])^b', 'mu') AS r2_cr_mu,
+       REGEXP_LIKE(CONCAT('a', CONVERT(UNHEX('E280A8') USING utf8mb4), 'b'), '(?=[\\s\\S])^b', 'm') AS r2_ls_m,
+       REGEXP_LIKE(CONCAT('a', CONVERT(CHAR(11) USING utf8mb4), 'b'), '(?=[\\s\\S])^b', 'm') AS r2_vt_m;
+
+# Binary alphabet: CR, VT and FF terminate lines; byte 0x85 never does
+# (case-insensitive matching cannot promote it either).
+SELECT REGEXP_LIKE(X'610B62', _binary '^b', 'm') AS binary_vt_m,
+       REGEXP_LIKE(X'610C62', _binary '^b', 'm') AS binary_ff_m,
+       REGEXP_LIKE(X'610D62', _binary '^b', 'm') AS binary_cr_m,
+       REGEXP_LIKE(X'618562', _binary '^b', 'm') AS binary_nel_m,
+       REGEXP_LIKE(X'618562', _binary '^b', 'mi') AS binary_nel_mi,
+       REGEXP_LIKE(X'618562', _binary '^b', 'mu') AS binary_nel_mu;

@@ -97,7 +97,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
@@ -711,14 +710,12 @@ func (c *Compile) run(s *Scope) error {
 	return nil
 }
 
-// isRetryErr accepts transaction retries under RC and snapshot-coverage retries
-// under either isolation level. A coverage retry changes the access path, not
-// the transaction snapshot.
+// isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
+// he statement
 func (c *Compile) isRetryErr(err error) bool {
-	return moerr.IsMoErrCode(err, moerr.ErrVectorIndexSnapshotChanged) ||
-		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-			c.proc.GetTxnOperator().Txn().IsRCIsolation()
+	return (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
+		c.proc.GetTxnOperator().Txn().IsRCIsolation()
 }
 
 type scopeRunResult struct {
@@ -2012,7 +2009,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 			ss, err = c.compileParallelUnionAllInput(step, childNodeID, nodes)
 		} else if isLocalPreAggregationGroup(node, childNode) &&
 			!c.hasUnsupportedRemoteGroupWire(node) {
-			ss, err = c.compileLocalPreAggregationScope(step, childNodeID, nodes)
+			ss, err = c.compileLocalPreAggregationScope(step, curNodeIdx, nodes)
 		} else {
 			ss, err = c.compilePlanScope(step, childNodeID, nodes)
 		}
@@ -6494,6 +6491,7 @@ func canPreserveParallelUnionAllBranches(node *plan.Node) bool {
 
 func (c *Compile) canCompileParallelUnionAllAggregate(node *plan.Node) bool {
 	return !hasOrderedGroupConcat(node) && !hasOrderedSetPercentile(node) &&
+		!hasQuantileExactWeighted(node) &&
 		!c.hasUnsupportedRemoteGroupWire(node) &&
 		!plan2.RequiresSingleStageDistinctAgg(node)
 }
@@ -7691,7 +7689,7 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 		return c.compileOrder(node, ss)
 
 	case node.Limit != nil && node.Offset != nil && len(node.OrderBy) > 0:
-		if rule.IsConstant(node.Limit, false) && rule.IsConstant(node.Offset, false) {
+		if function.IsConstant(node.Limit, false) && function.IsConstant(node.Offset, false) {
 			// get limit
 			vec1, free1, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, node.Limit)
 			if err != nil {
@@ -8206,6 +8204,7 @@ func (c *Compile) compileGroupWithoutShuffle(
 	distinctRequiresSingleStage bool,
 ) []*Scope {
 	if hasOrderedGroupConcat(node) || hasOrderedSetPercentile(node) ||
+		hasQuantileExactWeighted(node) ||
 		c.hasUnsupportedRemoteGroupWire(node) {
 		return c.compileOrderedAggregateSingleStage(node, ss, ns)
 	}
@@ -8223,14 +8222,18 @@ func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
 		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
 		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
 		(hasLegacyFloatDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
-		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates())
+		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates()) ||
+		(hasQuantileExactWeighted(node) && !c.supportsQuantileExactWeightedDispatch())
 }
 
+// Local reduction may replace a complete child only when the parent establishes
+// its own distribution. A reuse consumer must preserve the complete child.
 func isLocalPreAggregationGroup(parent, child *plan.Node) bool {
 	if parent == nil || child == nil ||
 		parent.NodeType != plan.Node_AGG || child.NodeType != plan.Node_AGG ||
 		parent.Stats == nil || parent.Stats.HashmapStats == nil ||
 		!parent.Stats.HashmapStats.Shuffle ||
+		parent.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Normal ||
 		len(parent.AggList) != 0 || len(child.AggList) != 0 ||
 		len(parent.GroupBy) == 0 || len(parent.GroupBy) != len(child.GroupBy) ||
 		len(parent.GroupingFlag) != 0 || len(child.GroupingFlag) != 0 ||
@@ -8280,19 +8283,16 @@ func (c *Compile) compileLocalPreAggregationScope(
 	nodeID int32,
 	nodes []*plan.Node,
 ) ([]*Scope, error) {
+	parent := nodes[nodeID]
+	nodeID = parent.Children[0]
 	node := nodes[nodeID]
 	ss, err := c.compilePlanScope(step, node.Children[0], nodes)
 	if err != nil {
 		return nil, err
 	}
-	groupInfo := constructGroup(c.proc.Ctx, node, nodes[node.Children[0]], false, 0, c.proc)
-	defer groupInfo.Release()
-
 	c.setAnalyzeCurrent(ss, int(nodeID))
 	ss = c.ensureCoordinatorOnlyFunctions(node, ss)
-	ss = c.compileLocalGroupBy(node, ss, nodes)
-	ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
-	return ss, nil
+	return c.compileLocalGroupBy(node, parent, ss, nodes), nil
 }
 
 // compileLocalGroupBy performs only the duplicate-reduction half of a logical
@@ -8300,10 +8300,17 @@ func (c *Compile) compileLocalPreAggregationScope(
 // completes the same key after exchange, so merging here would defeat the
 // pre-exchange reduction without adding correctness.
 func (c *Compile) compileLocalGroupBy(
-	node *plan.Node,
+	node, parent *plan.Node,
 	ss []*Scope,
 	ns []*plan.Node,
 ) []*Scope {
+	if c.canOmitLocalPreAggregation(parent, node, ns[node.Children[0]], ss) {
+		// The parent still completes the same key after shuffle. Preserve the
+		// local Group's output schema even when its hash table is unnecessary.
+		return c.compileProjection(&plan.Node{
+			ProjectList: plan2.DeepCopyExprList(node.GroupBy),
+		}, ss)
+	}
 	currentFirstFlag := c.anal.isFirst
 	for i := range ss {
 		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
@@ -8312,7 +8319,82 @@ func (c *Compile) compileLocalGroupBy(
 		ss[i].HasPartialResults = false
 	}
 	c.anal.isFirst = false
-	return ss
+	return c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, ss)))
+}
+
+// canOmitLocalPreAggregation chooses only between two physical implementations
+// of the existing pure-key pair. Keep reduction before remote exchanges; within
+// one CN, large, weakly reducing local sets can duplicate the final Group's state.
+func (c *Compile) canOmitLocalPreAggregation(
+	parent, local, input *plan.Node,
+	ss []*Scope,
+) bool {
+	if !isLocalPreAggregationGroup(parent, local) ||
+		local.Stats == nil || local.Stats.HashmapStats == nil ||
+		len(local.GroupBy) != 1 || local.GroupBy[0].GetCol() == nil ||
+		local.Stats.HashmapStats.Shuffle ||
+		local.GroupBy[0].Typ.PadSpace || len(local.OrderBy) != 0 ||
+		!isIdentityGroupByProjection(parent) || len(parent.FilterList) != 0 ||
+		len(parent.RuntimeFilterProbeList) != 0 || len(parent.RuntimeFilterBuildList) != 0 ||
+		len(parent.OrderBy) != 0 || parent.Limit != nil || parent.Offset != nil ||
+		parent.ExtraOptions != "" || len(parent.PhysicalEqualityKeyList) != 0 ||
+		len(local.RuntimeFilterProbeList) != 0 || len(local.RuntimeFilterBuildList) != 0 ||
+		local.ExtraOptions != "" || len(local.PhysicalEqualityKeyList) != 0 ||
+		input.Stats == nil || len(ss) == 0 ||
+		parent.Stats.Dop <= 1 || !c.canCompileShuffleGroup(parent) ||
+		parent.Stats.HashmapStats.ShuffleColIdx != 0 {
+		return false
+	}
+	for _, key := range [][]int32{local.GroupByHashKey, parent.GroupByHashKey} {
+		if len(key) != 0 && (len(key) != 1 || key[0] != 0) {
+			return false
+		}
+	}
+	if _, expands := plan2.DecodeGroupingSetExpandOption(input.ExtraOptions); expands {
+		return false
+	}
+	key := local.GroupBy[0]
+	col := key.GetCol()
+	if col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(input.ProjectList) {
+		return false
+	}
+	switch types.T(key.Typ.Id) {
+	case types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_char, types.T_varchar, types.T_text:
+	default:
+		return false
+	}
+	inputType := input.ProjectList[col.ColPos].Typ
+	if !types.MustTypeFromPlan(key.Typ).Eq(types.MustTypeFromPlan(inputType)) ||
+		key.Typ.NotNullable != inputType.NotNullable ||
+		key.Typ.Charset != inputType.Charset || key.Typ.PadSpace != inputType.PadSpace {
+		return false
+	}
+	// These are single-CN cost guards, not a claim about worker-local reduction.
+	groups, rows := local.Stats.Outcnt, input.Stats.Outcnt
+	if math.IsNaN(groups) || math.IsInf(groups, 0) ||
+		math.IsNaN(rows) || math.IsInf(rows, 0) || rows <= 0 || groups > rows ||
+		groups < 2_000_000 || groups/rows < 0.25 {
+		return false
+	}
+	for _, s := range ss {
+		if s == nil || s.RootOp == nil {
+			return false
+		}
+	}
+	targets := c.shuffleStageNodes(ss)
+	if len(targets) != 1 || (targets[0].Id == "" && targets[0].Addr == "") {
+		return false
+	}
+	for _, s := range ss {
+		if s.HasPartialResults ||
+			(s.NodeInfo.Id == "" && s.NodeInfo.Addr == "") ||
+			!sameExecutionNode(s.NodeInfo, targets[0]) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Compile) compileMergeGroup(
@@ -8406,6 +8488,21 @@ func hasOrderedSetPercentile(node *plan.Node) bool {
 			case plan2.NamePercentileCont, plan2.NamePercentileDisc:
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// hasQuantileExactWeighted reports whether this aggregate node evaluates the
+// exact weighted percentile aggregate anywhere in its list.
+func hasQuantileExactWeighted(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil &&
+			strings.EqualFold(fn.Func.ObjName, plan2.NameQuantileExactWeighted) {
+			return true
 		}
 	}
 	return false
@@ -9067,6 +9164,7 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		node.Stats.HashmapStats.Shuffle &&
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
 		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
+		(!hasQuantileExactWeighted(node) || c.supportsQuantileExactWeightedDispatch()) &&
 		(!hasApproxPercentile(node) || c.supportsRemoteApproxPercentile()) &&
 		(!hasHLLAggregate(node) || c.supportsRemoteHLL()) &&
 		(canonicalHLLAddRequiredVersion(node) <= c.remoteProtocolVersion()) &&
@@ -9075,6 +9173,35 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
 		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum())
+}
+
+// supportsQuantileExactWeightedDispatch is the compile-time fast-fail layer of
+// the design's D10 mixed-version gate: the exact weighted percentile aggregate
+// is distributed only when the coordinator AND every CN in the cluster
+// inventory advertise the protocol capability (an incomplete inventory counts
+// as unsupported). The destination is additionally verified by the
+// requiredProtocol floor raised during remote-scope encoding and confirmed on
+// the live stream before the pipeline is delivered.
+func (c *Compile) supportsQuantileExactWeightedDispatch() bool {
+	supported, err := AllCNsSupportProtocol(c.proc, defines.MORPCVersion131)
+	return err == nil && supported
+}
+
+// supportsRemoteQuantileExactWeighted supplies only the coordinator-side
+// self-gate and its coherent not-supported message; destination capability is
+// verified by AllCNsSupportProtocol, the encoded requiredProtocol floor and
+// the send-time stream confirmation.
+func supportsRemoteQuantileExactWeighted(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion131
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {

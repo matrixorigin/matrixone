@@ -21,6 +21,8 @@ from datetime import datetime
 from typing import List, Optional
 
 from .exceptions import PitrError
+from ._sql_literals import sql_literal
+from .snapshot import _snapshot_lookup_name
 from .version import requires_version
 
 
@@ -169,17 +171,24 @@ class PitrManager:
         try:
             self._validate_range(range_value, range_unit)
 
-            sql = f"CREATE PITR {self._client._escape_identifier(name)} " f"FOR CLUSTER RANGE {range_value} '{range_unit}'"
+            sql = (
+                f"CREATE PITR {self._client._escape_identifier(name)} "
+                f"FOR CLUSTER RANGE {range_value} '{range_unit}'"
+            )
 
             result = self._get_executor().execute(sql)
             if result is None:
                 raise PitrError(f"Failed to create cluster PITR '{name}'")
 
             # Return PITR object (we'll get the actual details via SHOW PITR)
-            return self.get(name)
 
         except Exception as e:
             raise PitrError(f"Failed to create cluster PITR '{name}': {e}") from e
+
+        try:
+            return self.get(name)
+        except Exception as error:
+            raise PitrError("PITR write acknowledged but metadata readback failed for %r" % name) from error
 
     def create_account_pitr(
         self,
@@ -225,17 +234,21 @@ class PitrManager:
                 )
             else:
                 sql = (
-                    f"CREATE PITR {self._client._escape_identifier(name)} " f"FOR ACCOUNT RANGE {range_value} '{range_unit}'"
+                    f"CREATE PITR {self._client._escape_identifier(name)} "
+                    f"FOR ACCOUNT RANGE {range_value} '{range_unit}'"
                 )
 
             result = self._get_executor().execute(sql)
             if result is None:
                 raise PitrError(f"Failed to create account PITR '{name}'")
 
-            return self.get(name)
-
         except Exception as e:
             raise PitrError(f"Failed to create account PITR '{name}': {e}") from e
+
+        try:
+            return self.get(name)
+        except Exception as error:
+            raise PitrError("PITR write acknowledged but metadata readback failed for %r" % name) from error
 
     def create_database_pitr(self, name: str, database_name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
         """
@@ -273,10 +286,13 @@ class PitrManager:
             if result is None:
                 raise PitrError(f"Failed to create database PITR '{name}'")
 
-            return self.get(name)
-
         except Exception as e:
             raise PitrError(f"Failed to create database PITR '{name}': {e}") from e
+
+        try:
+            return self.get(name)
+        except Exception as error:
+            raise PitrError("PITR write acknowledged but metadata readback failed for %r" % name) from error
 
     def create_table_pitr(
         self,
@@ -323,10 +339,13 @@ class PitrManager:
             if result is None:
                 raise PitrError(f"Failed to create table PITR '{name}'")
 
-            return self.get(name)
-
         except Exception as e:
             raise PitrError(f"Failed to create table PITR '{name}': {e}") from e
+
+        try:
+            return self.get(name)
+        except Exception as error:
+            raise PitrError("PITR write acknowledged but metadata readback failed for %r" % name) from error
 
     def get(self, name: str) -> Pitr:
         """
@@ -345,7 +364,7 @@ class PitrManager:
             PitrError: If PITR not found
         """
         try:
-            sql = f"SHOW PITR WHERE pitr_name = {self._client._escape_string(name)}"
+            sql = f"SHOW PITR WHERE pitr_name = LOWER({sql_literal(_snapshot_lookup_name(name))})"
             result = self._get_executor().execute(sql)
 
             if not result or not result.rows:
@@ -433,10 +452,13 @@ class PitrManager:
             if result is None:
                 raise PitrError(f"Failed to alter PITR '{name}'")
 
-            return self.get(name)
-
         except Exception as e:
             raise PitrError(f"Failed to alter PITR '{name}': {e}") from e
+
+        try:
+            return self.get(name)
+        except Exception as error:
+            raise PitrError("PITR write acknowledged but metadata readback failed for %r" % name) from error
 
     def delete(self, name: str) -> bool:
         """
@@ -528,9 +550,9 @@ class AsyncPitrManager:
             created_time=row[1],
             modified_time=row[2],
             level=row[3],
-            account_name=row[4],
-            database_name=row[5],
-            table_name=row[6],
+            account_name=row[4] if row[4] != "*" else None,
+            database_name=row[5] if row[5] != "*" else None,
+            table_name=row[6] if row[6] != "*" else None,
             range_value=row[7],
             range_unit=row[8],
         )
@@ -552,10 +574,13 @@ class AsyncPitrManager:
             if result is None:
                 raise PitrError(f"Failed to create cluster PITR '{name}'")
 
-            return await self.get(name)
-
         except Exception as e:
             raise PitrError(f"Failed to create cluster PITR '{name}': {e}")
+
+        try:
+            return await self.get(name)
+        except Exception as error:
+            raise PitrError("PITR write acknowledged but metadata readback failed for %r" % name) from error
 
     async def create_account_pitr(
         self,
@@ -581,12 +606,17 @@ class AsyncPitrManager:
             if result is None:
                 raise PitrError(f"Failed to create account PITR '{name}'")
 
-            return await self.get(name)
-
         except Exception as e:
             raise PitrError(f"Failed to create account PITR '{name}': {e}")
 
-    async def create_database_pitr(self, name: str, database_name: str, range_value: int = 1, range_unit: str = "d") -> Pitr:
+        try:
+            return await self.get(name)
+        except Exception as error:
+            raise PitrError("PITR write acknowledged but metadata readback failed for %r" % name) from error
+
+    async def create_database_pitr(
+        self, name: str, database_name: str, range_value: int = 1, range_unit: str = "d"
+    ) -> Pitr:
         """Create database-level PITR asynchronously"""
         try:
             self._validate_range(range_value, range_unit)
@@ -601,10 +631,13 @@ class AsyncPitrManager:
             if result is None:
                 raise PitrError(f"Failed to create database PITR '{name}'")
 
-            return await self.get(name)
-
         except Exception as e:
             raise PitrError(f"Failed to create database PITR '{name}': {e}")
+
+        try:
+            return await self.get(name)
+        except Exception as error:
+            raise PitrError("PITR write acknowledged but metadata readback failed for %r" % name) from error
 
     async def create_table_pitr(
         self,
@@ -629,15 +662,18 @@ class AsyncPitrManager:
             if result is None:
                 raise PitrError(f"Failed to create table PITR '{name}'")
 
-            return await self.get(name)
-
         except Exception as e:
             raise PitrError(f"Failed to create table PITR '{name}': {e}")
+
+        try:
+            return await self.get(name)
+        except Exception as error:
+            raise PitrError("PITR write acknowledged but metadata readback failed for %r" % name) from error
 
     async def get(self, name: str) -> Pitr:
         """Get PITR by name asynchronously"""
         try:
-            sql = f"SHOW PITR WHERE pitr_name = {self._client._escape_string(name)}"
+            sql = f"SHOW PITR WHERE pitr_name = LOWER({sql_literal(_snapshot_lookup_name(name))})"
             result = await self._get_executor().execute(sql)
 
             if not result or not result.rows:
@@ -696,10 +732,13 @@ class AsyncPitrManager:
             if result is None:
                 raise PitrError(f"Failed to alter PITR '{name}'")
 
-            return await self.get(name)
-
         except Exception as e:
             raise PitrError(f"Failed to alter PITR '{name}': {e}")
+
+        try:
+            return await self.get(name)
+        except Exception as error:
+            raise PitrError("PITR write acknowledged but metadata readback failed for %r" % name) from error
 
     async def delete(self, name: str) -> bool:
         """Delete PITR asynchronously"""

@@ -306,11 +306,6 @@ func decode(buf []byte, trusted bool) (any, error) {
 	return v, nil
 }
 
-// NOTE: hack way to get vector
-func MustVectorTo(toVec *vector.Vector, buf []byte) (err error) {
-	return mustVectorTo(toVec, buf, false)
-}
-
 // MustVectorToCached binds cache-backed column data to toVec. Only data with
 // objectio's private validation marker uses the trusted path.
 func MustVectorToCached(toVec *vector.Vector, data fscache.Data) error {

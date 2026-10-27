@@ -1,0 +1,9 @@
+{
+  "source_head": "3d1b86fcaee0b83eb10c50b2b5cee141ab3f0396",
+  "pkg_tree": "e92b301ddfb3ad233451251e6406dea894255a11",
+  "base": "94faf0209b9ac3254d31906f92e34405f1988203",
+  "scope_count": 345,
+  "result_sha256": "42938bd92061da0dc13abcee13069d7e89392bbc0b7421fbfccf773539bd46cd",
+  "result": "all3commands exit0; golangci0issues; molint reports existing diagnostics and is not claimed rawzero",
+  "recorded_epoch": 1792802967.875251
+}

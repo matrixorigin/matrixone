@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"math"
 	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -60,6 +61,9 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 	}
 
 	if node.NodeType == plan.Node_AGG {
+		if shuffleArg := tupleDistinctShuffleArgument(node, builder); shuffleArg >= 0 {
+			return builder.optimizeTupleCountDistinct(node, shuffleArg)
+		}
 		if !canOptimizeDistinctAgg(node) {
 			// HavingBinder leaves a single-argument COUNT/SUM/AVG DISTINCT value
 			// unchanged because this rewrite normally gives it a separate physical
@@ -152,7 +156,7 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 			finalAggregateTag := builder.genNewBindTag()
 			finalGroupBy := make([]*plan.Expr, len(innerGroupBy))
 			for i, expr := range innerGroupBy {
-				finalGroupBy[i] = distinctPairGroupCol(
+				finalGroupBy[i] = builder.distinctPairGroupCol(
 					expr, localGroupTag, int32(i))
 			}
 			finalNodeID := builder.appendNode(&plan.Node{
@@ -173,12 +177,12 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 		node.Children[0] = resultNodeID
 		node.GroupBy = make([]*plan.Expr, oldGroupLen)
 		for i := range node.GroupBy {
-			node.GroupBy[i] = distinctPairGroupCol(
+			node.GroupBy[i] = builder.distinctPairGroupCol(
 				oldGroupBy[i], resultGroupTag, int32(i))
 		}
 
 		aggFunc.Func.Obj &= function.DistinctMask
-		aggFunc.Args[0] = distinctPairGroupCol(
+		aggFunc.Args[0] = builder.distinctPairGroupCol(
 			distinctArg, resultGroupTag, int32(oldGroupLen))
 	}
 	return nil
@@ -243,10 +247,19 @@ func hashKeyContains(hashKey []int32, target int32) bool {
 	return slices.Contains(hashKey, target)
 }
 
-func distinctPairGroupCol(source *plan.Expr, tag, pos int32) *plan.Expr {
+// Only estimates resolved through the statistics owner may cross a new binding.
+// A copied Expr.Ndv alone is not provenance for a synthesized column.
+func (builder *QueryBuilder) distinctPairGroupCol(source *plan.Expr, tag, pos int32) *plan.Expr {
+	ndv := getExprNdv(source, builder)
+	if ndv > 0 && !math.IsInf(ndv, 0) && !math.IsNaN(ndv) {
+		if builder.syntheticNDVCols == nil {
+			builder.syntheticNDVCols = make(map[[2]int32]struct{})
+		}
+		builder.syntheticNDVCols[[2]int32{tag, pos}] = struct{}{}
+	}
 	return &plan.Expr{
 		Typ:         source.Typ,
-		Ndv:         source.Ndv,
+		Ndv:         ndv,
 		Selectivity: source.Selectivity,
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{
 			RelPos: tag,
@@ -278,4 +291,118 @@ func (builder *QueryBuilder) markDistinctKeyShuffle(node *plan.Node, col int32) 
 		builder.distinctKeyShuffleCols = make(map[*plan.Node]int32)
 	}
 	builder.distinctKeyShuffleCols[node] = col
+}
+
+// tupleDistinctShuffleArgument admits only the equality domains already owned
+// by the scalar exchange. The complete tuple remains the Group identity;
+// marginal NDV chooses an exchange key, never a distinctness proof.
+func tupleDistinctShuffleArgument(node *plan.Node, builder *QueryBuilder) int {
+	if hasInactiveGroupingColumn(node.GroupingFlag) || len(node.AggList) != 1 ||
+		len(node.Children) != 1 || node.Children[0] < 0 || int(node.Children[0]) >= len(builder.qry.Nodes) {
+		return -1
+	}
+	f := node.AggList[0].GetF()
+	if f == nil || f.Func == nil || len(f.Args) < 2 || uint64(f.Func.Obj)&function.Distinct == 0 {
+		return -1
+	}
+	id, _ := function.DecodeOverloadID(int64(uint64(f.Func.Obj) & function.DistinctMask))
+	if id != function.COUNT {
+		return -1
+	}
+	best, highest := -1, float64(0)
+	for i, arg := range f.Args {
+		if arg == nil || !isSupportedDistinctKeyShuffleType(arg.Typ.Id) {
+			return -1
+		}
+		source := arg
+		if isCastOverload(source, 2) && len(source.GetF().Args) > 0 {
+			source = source.GetF().Args[0]
+		}
+		if source.GetCol() == nil {
+			return -1
+		}
+		// Bind-time NOT NULL is insufficient across outer joins or materialized
+		// inputs. Reuse the existing input-path proof before admitting this plan.
+		if !builder.exprEffectivelyNotNullableBeforeRemap(arg, node.Children[0]) {
+			return -1
+		}
+		ndv := max(arg.Ndv, source.Ndv, getExprNdv(source, builder))
+		if math.IsNaN(ndv) || math.IsInf(ndv, 0) {
+			continue
+		}
+		ndv = estimateNDVAfterSelection(ndv, builder.qry.Nodes[node.Children[0]].Stats)
+		if ndv > highest {
+			best, highest = i, ndv
+		}
+	}
+	if highest < shuffleDistinctGroupMinNDV || !shouldUseDistinctKeyPreAggregation(node, builder) {
+		return -1
+	}
+	return best
+}
+
+func (builder *QueryBuilder) optimizeTupleCountDistinct(node *plan.Node, shuffleArg int) error {
+	f := node.AggList[0].GetF()
+	groupLen := len(node.GroupBy)
+	oldGroups := node.GroupBy
+	keys := slices.Clone(oldGroups)
+	for _, arg := range f.Args {
+		normalized, err := appendPadSpaceWindowKeyCastIfNeeded(builder.GetContext(), arg)
+		if err != nil {
+			return err
+		}
+		normalized = DeepCopyExpr(normalized)
+		normalized.Ndv = max(arg.Ndv, getExprNdv(arg, builder))
+		keys = append(keys, normalized)
+	}
+	// An old PK-minimized/physical string key does not determine new tuple axes.
+	// Keep every canonical component in both pair stages, even after FD analysis.
+	hashKeys := slices.Clone(node.GroupByHashKey)
+	if len(hashKeys) == 0 {
+		for i := range oldGroups {
+			hashKeys = append(hashKeys, int32(i))
+		}
+	}
+	for i := range f.Args {
+		hashKeys = append(hashKeys, int32(groupLen+i))
+	}
+	// The wire uses an empty list for all columns; explicit keys must be a
+	// strict subset. Do not apply another FD reduction to these tuple keys.
+	if len(hashKeys) == len(keys) {
+		hashKeys = nil
+	}
+	childID := node.Children[0]
+	ctx := builder.ctxByNode[childID]
+	localTag, localAggTag := builder.genNewBindTag(), builder.genNewBindTag()
+	localID := builder.appendNode(&plan.Node{
+		NodeType:       plan.Node_AGG,
+		Children:       []int32{childID},
+		GroupBy:        keys,
+		GroupByHashKey: hashKeys,
+		BindingTags:    []int32{localTag, localAggTag},
+		SpillMem:       builder.aggSpillMem,
+	}, ctx)
+	builder.markDistinctKeyLocalPreAgg(builder.qry.Nodes[localID])
+	finalKeys := make([]*plan.Expr, len(keys))
+	for i, key := range keys {
+		finalKeys[i] = builder.distinctPairGroupCol(key, localTag, int32(i))
+	}
+	finalTag, finalAggTag := builder.genNewBindTag(), builder.genNewBindTag()
+	finalID := builder.appendNode(&plan.Node{
+		NodeType:       plan.Node_AGG,
+		Children:       []int32{localID},
+		GroupBy:        finalKeys,
+		GroupByHashKey: slices.Clone(hashKeys),
+		BindingTags:    []int32{finalTag, finalAggTag},
+		SpillMem:       builder.aggSpillMem,
+	}, ctx)
+	builder.markDistinctKeyShuffle(builder.qry.Nodes[finalID], int32(groupLen+shuffleArg))
+	node.Children[0] = finalID
+	node.GroupBy = make([]*plan.Expr, groupLen)
+	for i, group := range oldGroups {
+		node.GroupBy[i] = builder.distinctPairGroupCol(group, finalTag, int32(i))
+	}
+	f.Func.Obj &= function.DistinctMask
+	f.Args = []*plan.Expr{builder.distinctPairGroupCol(keys[groupLen], finalTag, int32(groupLen))}
+	return nil
 }

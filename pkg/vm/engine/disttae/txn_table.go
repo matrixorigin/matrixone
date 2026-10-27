@@ -2516,27 +2516,6 @@ func (tbl *txnTable) Delete(
 		deletionTyp = bat.Attrs[0]
 	)
 
-	// this should not happen, just in case slice out of bound
-	//if len(bat.Attrs) == 0 {
-	//	logutil.Info("deletion bat has empty attr",
-	//		zap.String("name", name),
-	//		zap.String("bat", common.MoBatchToString(bat, 20)))
-	//
-	//	if objectio.IsPhysicalAddr(name) {
-	//		deletionTyp = name
-	//	} else {
-	//		typStr := string(name[len(name)-1])
-	//		typ, err := strconv.ParseInt(typStr, 10, 64)
-	//		if err != nil {
-	//			return err
-	//		}
-	//
-	//		if typ == deletion.FlushDeltaLoc {
-	//			deletionTyp = catalog.ObjectMeta_ObjectStats
-	//		}
-	//	}
-	//}
-
 	switch deletionTyp {
 	case catalog.Row_ID:
 		bat = tbl.getTxn().deleteBatch(bat, tbl.db.databaseId, tbl.tableId)

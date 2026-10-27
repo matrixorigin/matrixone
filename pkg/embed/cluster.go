@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
+	"github.com/matrixorigin/matrixone/pkg/testutil/portlease"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
@@ -42,11 +43,10 @@ const (
 )
 
 var (
-	minPort = uint64(10000)
-	maxPort = uint64(60000)
+	clusterPortAllocator = portlease.Allocator{}
 
 	basePortStep  = uint64(20)
-	portLeaseSpan = uint64(1000)
+	portLeaseSpan = portlease.Span
 
 	clusterID = getInitValue("mo-test.cluster")
 )
@@ -66,7 +66,7 @@ const (
 type clusterPortLease struct {
 	base uint64
 	next atomic.Uint64
-	lock *flock.Flock
+	lock *portlease.Lease
 }
 
 type cluster struct {
@@ -87,7 +87,6 @@ type cluster struct {
 	options struct {
 		dataPath                    string
 		cn                          int
-		withProxy                   bool
 		preStart                    func(ServiceOperator)
 		testing                     bool
 		testTCPOnly                 bool
@@ -670,34 +669,25 @@ func (c *cluster) initTNServiceConfig() error {
 }
 
 func acquireClusterPortLease() (*clusterPortLease, error) {
-	for base := minPort; base+portLeaseSpan <= maxPort; base += portLeaseSpan {
-		lease, locked, err := tryAcquireClusterPortLease(base)
-		if err != nil {
-			return nil, err
-		}
-		if locked {
-			return lease, nil
-		}
+	lease, err := clusterPortAllocator.Acquire()
+	if err != nil {
+		return nil, err
 	}
-	return nil, moerr.NewInternalErrorNoCtx("no embedded-test port range is available")
+	return wrapClusterPortLease(lease), nil
 }
 
 func tryAcquireClusterPortLease(base uint64) (*clusterPortLease, bool, error) {
-	dir := filepath.Join(os.TempDir(), "mo-test-port-leases")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, false, err
+	lease, locked, err := clusterPortAllocator.TryAcquire(base)
+	if err != nil || !locked {
+		return nil, locked, err
 	}
-	fl := flock.New(filepath.Join(dir, fmt.Sprintf("%d.lock", base)))
-	locked, err := fl.TryLock()
-	if err != nil {
-		return nil, false, err
-	}
-	if !locked {
-		return nil, false, fl.Close()
-	}
-	lease := &clusterPortLease{base: base, lock: fl}
-	lease.next.Store(base)
-	return lease, true, nil
+	return wrapClusterPortLease(lease), true, nil
+}
+
+func wrapClusterPortLease(lease *portlease.Lease) *clusterPortLease {
+	result := &clusterPortLease{base: lease.Base(), lock: lease}
+	result.next.Store(lease.Base())
+	return result
 }
 
 func portBaseCapacity() (uint64, error) {
@@ -936,12 +926,12 @@ func getInitValue(name string) uint64 {
 	if err != nil && err != io.EOF {
 		panic(err)
 	}
-	value := minPort
+	value := portlease.MinPort
 	if n > 0 {
 		value = binary.BigEndian.Uint64(data)
 	}
-	if value > maxPort {
-		value = minPort
+	if value > portlease.MaxPort {
+		value = portlease.MinPort
 	}
 	binary.BigEndian.PutUint64(data, value+1000)
 

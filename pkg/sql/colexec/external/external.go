@@ -1412,8 +1412,6 @@ func checkLineStrict(param *ExternalParam) bool {
 	return true
 }
 
-const JsonNull = "\\N"
-
 // JsonBinaryKey is the single-key object wrapper JSONLINE OUTFILE uses to
 // export BINARY/VARBINARY/BLOB values: {"$binary":"<base64>"}. The wrapper
 // lets the jsonline loader distinguish MO-encoded binary payloads from plain-

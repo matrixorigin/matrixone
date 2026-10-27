@@ -1035,8 +1035,12 @@ func SetInsertValueDecimal64(proc *process.Process, numVal *tree.NumVal, typ *ty
 	appendWithStr := func(str string) (types.Decimal64, error) {
 		return types.ParseDecimal64(str, typ.Width, typ.Scale)
 	}
+	// Integer family literals (int/uint/hexnum/bit) must observe the same
+	// DECIMAL(width, scale) bound as string literals. Routing them through
+	// ParseDecimal64 keeps int writes from bypassing precision checking
+	// (#30367).
 	appendWithUnSigned := func(v uint64) (types.Decimal64, error) {
-		return types.Decimal64(v).Scale(typ.Scale)
+		return appendWithStr(strconv.FormatUint(v, 10))
 	}
 
 	switch numVal.ValType {
@@ -1045,7 +1049,7 @@ func SetInsertValueDecimal64(proc *process.Process, numVal *tree.NumVal, typ *ty
 		if !ok {
 			return false, res, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
-		res, err = appendWithUnSigned(uint64(val))
+		res, err = appendWithStr(strconv.FormatInt(val, 10))
 		return
 
 	case tree.P_uint64:
@@ -1053,7 +1057,7 @@ func SetInsertValueDecimal64(proc *process.Process, numVal *tree.NumVal, typ *ty
 		if !ok {
 			return false, res, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
-		res, err = appendWithUnSigned(uint64(val))
+		res, err = appendWithStr(strconv.FormatUint(val, 10))
 		return
 
 	case tree.P_decimal, tree.P_char, tree.P_float64:
@@ -1088,9 +1092,11 @@ func SetInsertValueDecimal128(proc *process.Process, numVal *tree.NumVal, typ *t
 	appendWithStr := func(str string) (types.Decimal128, error) {
 		return types.ParseDecimal128(str, typ.Width, typ.Scale)
 	}
+	// See SetInsertValueDecimal64: integer family literals must observe the
+	// DECIMAL(width, scale) bound instead of bypassing precision checking
+	// via Scale() (#30367).
 	appendWithUnSigned := func(v uint64) (types.Decimal128, error) {
-		result := types.Decimal128{B0_63: v, B64_127: 0}
-		return result.Scale(typ.Scale)
+		return appendWithStr(strconv.FormatUint(v, 10))
 	}
 
 	switch numVal.ValType {
@@ -1099,14 +1105,14 @@ func SetInsertValueDecimal128(proc *process.Process, numVal *tree.NumVal, typ *t
 		if !ok {
 			return false, res, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
-		res, err = appendWithUnSigned(uint64(val))
+		res, err = appendWithStr(strconv.FormatInt(val, 10))
 		return
 	case tree.P_uint64:
 		val, ok := numVal.Uint64()
 		if !ok {
 			return false, res, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
-		res, err = appendWithUnSigned(uint64(val))
+		res, err = appendWithStr(strconv.FormatUint(val, 10))
 		return
 
 	case tree.P_decimal, tree.P_char, tree.P_float64:

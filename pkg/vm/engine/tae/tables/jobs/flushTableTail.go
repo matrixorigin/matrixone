@@ -501,6 +501,7 @@ func (task *flushTableTailTask) prepareAObjSortedData(
 		err = obj.Scan(ctx, &bat, 0, idxs, common.MergeAllocator)
 	} else {
 		obj = task.aObjHandles[objIdx]
+		ctx = tables.WithPreservePhysicalRows(ctx)
 		err = obj.HybridScan(ctx, &bat, 0, idxs, common.MergeAllocator)
 	}
 

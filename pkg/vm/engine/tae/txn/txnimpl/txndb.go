@@ -139,17 +139,6 @@ func (db *txnDB) AddDataFiles(
 	return table.AddDataFiles(ctx, stats)
 }
 
-// func (db *txnDB) DeleteOne(table *txnTable, id *common.ID, row uint32, dt handle.DeleteType) (err error) {
-// 	changed, nid, nrow, err := table.TransferDeleteIntent(id, row)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	if !changed {
-// 		return table.RangeDelete(id, row, row, dt)
-// 	}
-// 	return table.RangeDelete(nid, nrow, nrow, dt)
-// }
-
 func (db *txnDB) RangeDelete(
 	id *common.ID, start, end uint32,
 	pkVec containers.Vector, dt handle.DeleteType,
@@ -461,6 +450,13 @@ func (db *txnDB) ApplyRollback() (err error) {
 	return
 }
 
+func (db *txnDB) ApplyRollbackPendingAppends() (err error) {
+	for _, table := range db.tables {
+		err = combineTxnLifecycleErrors(err, table.ApplyRollbackPendingAppends())
+	}
+	return
+}
+
 func (db *txnDB) WaitWal() (err error) {
 	for _, table := range db.tables {
 		table.WaitSynced()
@@ -526,6 +522,11 @@ func (db *txnDB) Freeze(ctx context.Context) (err error) {
 		}
 		v2.TxnTNAppendDeduplicateDurationHistogram.Observe(time.Since(now).Seconds())
 	}
+	for _, table := range db.tables {
+		if err = table.FreezeAppend(ctx); err != nil {
+			return err
+		}
+	}
 	return
 }
 
@@ -544,6 +545,9 @@ func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 			txnif.PrePreparePhase,
 			table.store.rt.Now(),
 		); err != nil {
+			return
+		}
+		if err = table.ReapplyTransferredTombstones(); err != nil {
 			return
 		}
 	}
@@ -570,7 +574,7 @@ func (db *txnDB) PrePrepare(ctx context.Context) (err error) {
 	}
 
 	for _, table := range db.tables {
-		if err = table.PrePrepare(); err != nil {
+		if err = table.PrePrepare(ctx); err != nil {
 			return
 		}
 	}

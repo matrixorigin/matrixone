@@ -343,11 +343,29 @@ func (s *service) handleISCPDrainConsumer(ctx context.Context, req *query.Reques
 	defer cancel()
 	exec, ok := getISCPExecutorRuntime(readyCtx, s.cfg.UUID)
 	if !ok || exec == nil {
+		// The published runtime is removed only after its workers stop. A
+		// replacement copies the CN fence before it can admit consumers, so a
+		// real registry miss already proves quiescence. The fault-aware lookup
+		// above can also report a synthetic miss while a runtime is active;
+		// retain the wait and drain for that case.
+		if _, present := iscp.GetExecutorRuntime(s.cfg.UUID); !present {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
+			return nil
+		}
 		exec, ok = waitISCPExecutorRuntime(readyCtx, s.cfg.UUID)
 	}
 	if !ok || exec == nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		// The runtime may have stopped while the fault-aware wait was in
+		// progress. Its workers are drained before registry removal.
+		if _, present := iscp.GetExecutorRuntime(s.cfg.UUID); !present {
+			resp.ISCPDrainConsumerResponse = &query.ISCPDrainConsumerResponse{Success: true}
+			return nil
 		}
 		// This code is preserved by queryservice's response error envelope and
 		// is retried by the compile-side drain path only.

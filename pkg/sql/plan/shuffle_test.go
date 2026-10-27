@@ -723,7 +723,7 @@ func TestDetermineShuffleForGroupByCanUseDependentHighNDVColumn(t *testing.T) {
 	}
 	builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{child, agg}}}
 
-	determineShuffleForGroupBy(agg, builder)
+	determineShuffleForGroupBy(agg, builder, false)
 
 	require.True(t, agg.Stats.HashmapStats.Shuffle)
 	require.Equal(t, int32(2), agg.Stats.HashmapStats.ShuffleColIdx,
@@ -761,7 +761,7 @@ func TestDetermineShuffleForGroupByDoesNotForceUnknownNDV(t *testing.T) {
 
 	for _, inputRows := range []float64{threshHoldForHashShuffle - 1, threshHoldForHashShuffle, 10_000_000} {
 		agg, builder := newAggregate(inputRows)
-		determineShuffleForGroupBy(agg, builder)
+		determineShuffleForGroupBy(agg, builder, false)
 		require.Falsef(t, agg.Stats.HashmapStats.Shuffle,
 			"unknown NDV must not route all raw rows by an assumed high cardinality at input=%v", inputRows)
 	}
@@ -841,23 +841,23 @@ func TestDetermineShuffleForGroupByAccountsForCountDistinctState(t *testing.T) {
 	}
 
 	large := newAggregate(1_000_000)
-	determineShuffleForGroupBy(large, builder)
+	determineShuffleForGroupBy(large, builder, false)
 	require.True(t, large.Stats.HashmapStats.Shuffle)
 	require.Equal(t, int32(0), large.Stats.HashmapStats.ShuffleColIdx)
 
 	small := newAggregate(threshHoldForShuffleGroup)
-	determineShuffleForGroupBy(small, builder)
+	determineShuffleForGroupBy(small, builder, false)
 	require.False(t, small.Stats.HashmapStats.Shuffle)
 
 	lowGroupNDV := newAggregate(1_000_000)
 	lowGroupNDV.GroupBy[0].Ndv = shuffleDistinctGroupMinNDV - 1
-	determineShuffleForGroupBy(lowGroupNDV, builder)
+	determineShuffleForGroupBy(lowGroupNDV, builder, false)
 	require.False(t, lowGroupNDV.Stats.HashmapStats.Shuffle,
 		"too few groups would serialize the high-cardinality distinct state")
 
 	emptyGroupingSet := newAggregate(1_000_000)
 	emptyGroupingSet.GroupingFlag = []bool{false}
-	determineShuffleForGroupBy(emptyGroupingSet, builder)
+	determineShuffleForGroupBy(emptyGroupingSet, builder, false)
 	require.False(t, emptyGroupingSet.Stats.HashmapStats.Shuffle,
 		"an empty grouping set has no raw child key safe for pre-group shuffle")
 
@@ -868,7 +868,7 @@ func TestDetermineShuffleForGroupByAccountsForCountDistinctState(t *testing.T) {
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: 0}},
 	})
 	activeGroupingKey.GroupingFlag = []bool{false, true}
-	determineShuffleForGroupBy(activeGroupingKey, builder)
+	determineShuffleForGroupBy(activeGroupingKey, builder, false)
 	require.True(t, activeGroupingKey.Stats.HashmapStats.Shuffle,
 		"a grouping-set branch may still shuffle on an active key")
 	require.Equal(t, int32(1), activeGroupingKey.Stats.HashmapStats.ShuffleColIdx,
@@ -876,7 +876,7 @@ func TestDetermineShuffleForGroupByAccountsForCountDistinctState(t *testing.T) {
 
 	child.Stats.Outcnt = 100_000_000
 	lowStateRatio := newAggregate(1_000_000)
-	determineShuffleForGroupBy(lowStateRatio, builder)
+	determineShuffleForGroupBy(lowStateRatio, builder, false)
 	require.False(t, lowStateRatio.Stats.HashmapStats.Shuffle,
 		"do not redistribute a large input for a comparatively small exact state")
 
@@ -885,12 +885,12 @@ func TestDetermineShuffleForGroupByAccountsForCountDistinctState(t *testing.T) {
 	child.Stats.Selectivity = 0.01
 	selective := newAggregate(1_000_000)
 	selective.GroupBy[0].Ndv = 100_000
-	determineShuffleForGroupBy(selective, builder)
+	determineShuffleForGroupBy(selective, builder, false)
 	require.False(t, selective.Stats.HashmapStats.Shuffle,
 		"table-level NDV must not claim that all distinct values survive selection")
 	selectiveManyOwners := newAggregate(100_000_000)
 	selectiveManyOwners.GroupBy[0].Ndv = 100_000
-	determineShuffleForGroupBy(selectiveManyOwners, builder)
+	determineShuffleForGroupBy(selectiveManyOwners, builder, false)
 	require.True(t, selectiveManyOwners.Stats.HashmapStats.Shuffle,
 		"selection may retain shuffle when enough estimated owners and exact state remain")
 
@@ -905,9 +905,117 @@ func TestDetermineShuffleForGroupByAccountsForCountDistinctState(t *testing.T) {
 			Args: []*plan.Expr{arg},
 		}},
 	})
-	determineShuffleForGroupBy(singleStage, builder)
+	determineShuffleForGroupBy(singleStage, builder, false)
 	require.False(t, singleStage.Stats.HashmapStats.Shuffle,
 		"an aggregate forced to one CN must clear even stale shuffle state")
+}
+
+func TestDetermineShuffleForGroupByAccountsForSpillBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*plan.Node, *plan.Node, *QueryBuilder)
+		want   bool
+	}{
+		{name: "moderate-cardinality-count", want: true},
+		{name: "grouped-only", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.AggList = nil }, want: true},
+		{name: "multiple-counts", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.AggList = append(n.AggList, DeepCopyExpr(n.AggList[0])) }, want: true},
+		{name: "count-nullable", change: func(n, _ *plan.Node, _ *QueryBuilder) {
+			n.AggList[0].GetF().Func.Obj = function.EncodeOverloadID(function.COUNT, 0)
+		}, want: true},
+		{name: "having-does-not-shrink-state", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.Stats.Outcnt = 1; n.Stats.Selectivity = 0.00001 }, want: true},
+		{name: "dop-one", change: func(_, _ *plan.Node, b *QueryBuilder) { b.qry.MaxDop = 1 }},
+		{name: "dop-two", change: func(_, _ *plan.Node, b *QueryBuilder) { b.qry.MaxDop = 2 }, want: true},
+		{name: "unknown-workers", change: func(_, c *plan.Node, _ *QueryBuilder) { c.Stats.BlockNum = 0 }},
+		{name: "resident-budget", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.SpillMem = 16 << 20 }},
+		{name: "both-owners-spill", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.SpillMem = 1 << 20 }},
+		{name: "forced-group-count", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.SpillMem = 9999 }},
+		{name: "byte-boundary", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.SpillMem = 10000 }},
+		{name: "auto-resident", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.SpillMem = 0 }},
+		{name: "no-replication", change: func(_, c *plan.Node, _ *QueryBuilder) { c.Stats.Outcnt = 100000 }},
+		{name: "unknown-groups", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.Stats.HashmapStats.HashmapSize = -1 }},
+		{name: "nan-groups", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.Stats.HashmapStats.HashmapSize = math.NaN() }},
+		{name: "infinite-input", change: func(_, c *plan.Node, _ *QueryBuilder) { c.Stats.Outcnt = math.Inf(1) }},
+		{name: "overflow-input", change: func(_, c *plan.Node, _ *QueryBuilder) { c.Stats.Outcnt = math.MaxFloat64 }},
+		{name: "default-stats", change: func(_, c *plan.Node, _ *QueryBuilder) { c.Stats = DefaultStats() }},
+		{name: "low-ndv", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.GroupBy[0].Ndv = 100 }},
+		{name: "unknown-ndv", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.GroupBy[0].Ndv = math.NaN() }},
+		{name: "selective", change: func(_, c *plan.Node, _ *QueryBuilder) { c.Stats.Selectivity = 0.01 }},
+		{name: "inactive-key", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.GroupingFlag = []bool{false} }},
+		{name: "dynamic-grouping", change: func(_, c *plan.Node, _ *QueryBuilder) {
+			c.NodeType = plan.Node_PROJECT
+			c.ExtraOptions = groupingSetExpandOptionPrefix + "2"
+		}},
+		{name: "variable-key", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.GroupBy[0].Typ.Id = int32(types.T_varchar) }},
+		{name: "wide-count-input", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.AggList[0].GetF().Args[0].Typ.Id = int32(types.T_varchar) }},
+		{name: "computed-count-input", change: func(n, _ *plan.Node, _ *QueryBuilder) {
+			n.AggList[0].GetF().Args[0].Expr = &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "length"}}}
+		}},
+		{name: "computed-group-input", change: func(n, _ *plan.Node, _ *QueryBuilder) {
+			n.GroupBy = append(n.GroupBy, &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "length"}}}})
+		}},
+		{name: "prepared-count-input", change: func(n, _ *plan.Node, _ *QueryBuilder) {
+			n.AggList[0].GetF().Args[0].PreparedNumeric = &plan.PreparedNumericMetadata{Fallback: true}
+		}},
+		{name: "dynamic-literal-count-input", change: func(n, _ *plan.Node, _ *QueryBuilder) {
+			arg := MakePlan2Int64ConstExprWithType(1)
+			arg.GetLit().Src = DeepCopyExpr(n.GroupBy[0])
+			n.AggList[0].GetF().Args[0] = arg
+		}},
+		{name: "literal-count-input", change: func(n, _ *plan.Node, _ *QueryBuilder) {
+			n.AggList[0].GetF().Args[0] = MakePlan2Int64ConstExprWithType(1)
+		}, want: true},
+		{name: "unsupported-sum-state", change: func(n, _ *plan.Node, _ *QueryBuilder) {
+			n.AggList[0].GetF().Func.Obj = function.EncodeOverloadID(function.SUM, 0)
+		}},
+		{name: "unsupported-result", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.AggList[0].Typ.Id = int32(types.T_int32) }},
+		{name: "malformed-count", change: func(n, _ *plan.Node, _ *QueryBuilder) { n.AggList[0].GetF().Args = nil }},
+		{name: "nonmergeable-distinct", change: func(n, _ *plan.Node, _ *QueryBuilder) {
+			n.AggList[0].GetF().Func.Obj = int64(uint64(function.EncodeOverloadID(function.SUM, 0)) | function.Distinct)
+		}},
+		{name: "dependent-logical-payload", change: func(n, _ *plan.Node, _ *QueryBuilder) {
+			n.GroupBy = append(n.GroupBy, DeepCopyExpr(n.GroupBy[0]))
+			n.GroupByHashKey = []int32{0}
+			n.SpillMem = 5600000
+		}, want: true},
+		{name: "wide-fixed-codec", change: func(n, _ *plan.Node, _ *QueryBuilder) {
+			n.GroupBy[0].Typ.Id = int32(types.T_int64)
+			n.SpillMem = 8 << 20
+		}, want: true},
+		{name: "nonnull-h8-codec", change: func(n, _ *plan.Node, _ *QueryBuilder) {
+			n.GroupBy[0].Typ = plan.Type{Id: int32(types.T_int64), NotNullable: true}
+		}, want: true},
+		{name: "bad-physical-position", change: func(n, _ *plan.Node, _ *QueryBuilder) {
+			n.GroupBy = append(n.GroupBy, DeepCopyExpr(n.GroupBy[0]))
+			n.GroupByHashKey = []int32{-1}
+		}},
+		{name: "duplicate-physical-position", change: func(n, _ *plan.Node, _ *QueryBuilder) {
+			n.GroupBy = append(n.GroupBy, DeepCopyExpr(n.GroupBy[0]), DeepCopyExpr(n.GroupBy[0]))
+			n.GroupByHashKey = []int32{0, 0}
+		}},
+		{name: "existing-topology-exclusion", change: func(n, _ *plan.Node, b *QueryBuilder) { b.distinctKeyLocalPreAggs = map[*plan.Node]struct{}{n: {}} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			child := &plan.Node{NodeType: plan.Node_TABLE_SCAN, Stats: &plan.Stats{Outcnt: 1000000, Selectivity: 1, BlockNum: 64}}
+			key := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Ndv: 100000, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1}}}
+			node := &plan.Node{
+				NodeType: plan.Node_AGG, Children: []int32{0}, GroupBy: []*plan.Expr{key}, SpillMem: 4 << 20,
+				Stats: &plan.Stats{Outcnt: 100000, Selectivity: 1, HashmapStats: &plan.HashMapStats{HashmapSize: 100000}},
+				AggList: []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.STARCOUNT, 0)}, Args: []*plan.Expr{DeepCopyExpr(key)},
+				}}}},
+			}
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{child, node}, MaxDop: 4}}
+			if tc.change != nil {
+				tc.change(node, child, builder)
+			}
+			determineShuffleForGroupBy(node, builder, false)
+			require.Equal(t, tc.want, node.Stats.HashmapStats.Shuffle)
+			if tc.want {
+				require.Equal(t, int32(0), node.Stats.HashmapStats.ShuffleColIdx)
+				require.Equal(t, plan.ShuffleType_Hash, node.Stats.HashmapStats.ShuffleType, "pressure must survive the ordinary small-hash veto when range metadata is absent")
+			}
+		})
+	}
 }
 
 func TestEstimateNDVAfterSelectionRejectsInvalidStats(t *testing.T) {
@@ -1348,7 +1456,7 @@ func TestDetermineShuffleForGroupByRequiresGlobalJoinOwnership(t *testing.T) {
 				builder.optimizerHints = &OptimizerHints{outerAntiPlanning: 1}
 			}
 
-			determineShuffleForGroupBy(agg, builder)
+			determineShuffleForGroupBy(agg, builder, false)
 
 			require.True(t, agg.Stats.HashmapStats.Shuffle)
 			require.Equal(t, tt.wantMethod, agg.Stats.HashmapStats.ShuffleMethod)

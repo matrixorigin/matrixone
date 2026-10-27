@@ -443,6 +443,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     minValueOption  *tree.MinValueOption
     maxValueOption  *tree.MaxValueOption
     startWithOption *tree.StartWithOption
+    sequenceOptions *sequenceOptions
     cycleOption     *tree.CycleOption
     alterTypeOption *tree.TypeOption
 
@@ -668,12 +669,13 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 // Built-in function
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT SERIAL_EXTRACT
-%token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
+%token <str> APPROX_PERCENTILE QUANTILE_EXACT_WEIGHTED CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> CLUSTER_CENTERS KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
-%token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK
+%token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK MRANK CUMRANK TMRANK
+%token <str> SMA WMA TRIMA EMA WILDER KAMA DEMA TEMA T3 MMAXDRAWDOWN CUMPOSITIVESTREAK
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 %token <str> JSON_ARRAYAGG JSON_OBJECTAGG
 %token <str> GET_FORMAT
@@ -1036,6 +1038,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <minValueOption> min_value_opt
 %type <maxValueOption> max_value_opt
 %type <startWithOption> start_with_opt
+%type <sequenceOptions> sequence_option_list_opt sequence_option_list sequence_option
 %type <cycleOption> alter_cycle_opt
 %type <alterTypeOption> alter_as_datatype_opt
 %type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
@@ -1044,7 +1047,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <int64Val> parallel_opt
 %type <unsignedOpt> strict_opt
 %type <zeroFillOpt> zero_fill_opt
-%type <boolVal> global_scope exists_opt temporary_opt cycle_opt drop_table_opt rollup_opt
+%type <boolVal> global_scope exists_opt temporary_opt drop_table_opt rollup_opt
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict separator_opt kmeans_opt
 %type <insert> insert_data
@@ -11097,26 +11100,97 @@ load_charset:
     }
 
 create_sequence_stmt:
-    CREATE SEQUENCE not_exists_opt table_name as_datatype_opt increment_by_opt min_value_opt max_value_opt start_with_opt cycle_opt
+    CREATE SEQUENCE not_exists_opt table_name as_datatype_opt sequence_option_list_opt
     {
-        var Name = $4
-        var Type = $5
-        var IfNotExists = $3
-        var IncrementBy = $6
-        var MinValue = $7
-        var MaxValue = $8
-        var StartWith = $9
-        var Cycle = $10
+        opts := $6
         $$ = tree.NewCreateSequence(
-            Name,
-            Type,
-            IfNotExists,
-            IncrementBy,
-            MinValue,
-            MaxValue,
-            StartWith,
-            Cycle,
+            $4,
+            $5,
+            $3,
+            opts.incrementBy,
+            opts.minValue,
+            opts.maxValue,
+            opts.startWith,
+            opts.cycle,
         )
+    }
+sequence_option_list_opt:
+    {
+        $$ = &sequenceOptions{}
+    }
+|   sequence_option_list
+    {
+        $$ = $1
+    }
+sequence_option_list:
+    sequence_option
+    {
+        $$ = $1
+    }
+|   sequence_option_list sequence_option
+    {
+        if name := $1.merge($2); name != "" {
+            yylex.Error("option '" + name + "' used twice in CREATE SEQUENCE")
+            goto ret1
+        }
+        $$ = $1
+    }
+sequence_option:
+    INCREMENT BY INTEGRAL
+    {
+        $$ = &sequenceOptions{incrementBy: &tree.IncrementByOption{Minus: false, Num: $3}}
+    }
+|   INCREMENT INTEGRAL
+    {
+        $$ = &sequenceOptions{incrementBy: &tree.IncrementByOption{Minus: false, Num: $2}}
+    }
+|   INCREMENT BY '-' INTEGRAL
+    {
+        $$ = &sequenceOptions{incrementBy: &tree.IncrementByOption{Minus: true, Num: $4}}
+    }
+|   INCREMENT '-' INTEGRAL
+    {
+        $$ = &sequenceOptions{incrementBy: &tree.IncrementByOption{Minus: true, Num: $3}}
+    }
+|   MINVALUE INTEGRAL
+    {
+        $$ = &sequenceOptions{minValue: &tree.MinValueOption{Minus: false, Num: $2}}
+    }
+|   MINVALUE '-' INTEGRAL
+    {
+        $$ = &sequenceOptions{minValue: &tree.MinValueOption{Minus: true, Num: $3}}
+    }
+|   MAXVALUE INTEGRAL
+    {
+        $$ = &sequenceOptions{maxValue: &tree.MaxValueOption{Minus: false, Num: $2}}
+    }
+|   MAXVALUE '-' INTEGRAL
+    {
+        $$ = &sequenceOptions{maxValue: &tree.MaxValueOption{Minus: true, Num: $3}}
+    }
+|   START WITH INTEGRAL
+    {
+        $$ = &sequenceOptions{startWith: &tree.StartWithOption{Minus: false, Num: $3}}
+    }
+|   START INTEGRAL
+    {
+        $$ = &sequenceOptions{startWith: &tree.StartWithOption{Minus: false, Num: $2}}
+    }
+|   START WITH '-' INTEGRAL
+    {
+        $$ = &sequenceOptions{startWith: &tree.StartWithOption{Minus: true, Num: $4}}
+    }
+|   START '-' INTEGRAL
+    {
+        $$ = &sequenceOptions{startWith: &tree.StartWithOption{Minus: true, Num: $3}}
+    }
+|   NO CYCLE
+    {
+        $$ = &sequenceOptions{cycle: false, cycleSet: true}
+    }
+|   CYCLE
+    {
+        $$ = &sequenceOptions{cycle: true, cycleSet: true}
     }
 as_datatype_opt:
     {
@@ -11177,18 +11251,6 @@ increment_by_opt:
             Minus: true,
             Num: $3,
         }
-    }
-cycle_opt:
-    {
-        $$ = false
-    }
-|   NO CYCLE
-    {
-        $$ = false
-    }
-|   CYCLE
-    {
-        $$ = true
     }
 min_value_opt:
     {
@@ -13084,10 +13146,10 @@ simple_expr:
             locale := ""
             t := &tree.T{
                 InternalType: tree.InternalType{
-                   Family: tree.TimestampFamily,
-                   FamilyString: "DATETIME",
+                   Family: tree.DateFamily,
+                   FamilyString: "DATE",
                    Locale: &locale,
-                   Oid: uint32(defines.MYSQL_TYPE_DATETIME),
+                   Oid: uint32(defines.MYSQL_TYPE_DATE),
                 },
             }
             $$ = tree.NewCastExpr($3, t)
@@ -13368,6 +13430,147 @@ function_call_window:
             FuncName: tree.NewCStr($1, 1),
             Exprs: tree.Exprs{$3, $5},
             WindowSpec: $9,
+        }
+    }
+|	MRANK '(' expression ',' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            WindowSpec: $7,
+        }
+    }
+|	CUMRANK '(' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $5,
+        }
+    }
+|	TMRANK '(' expression ',' interval_expr ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            WindowSpec: $7,
+        }
+    }
+
+|	SMA '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	WMA '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	TRIMA '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	EMA '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	WILDER '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	KAMA '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	DEMA '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	TEMA '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	T3 '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	MMAXDRAWDOWN '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
+        }
+    }
+|	CUMPOSITIVESTREAK '(' expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $3,
+            WindowSpec: $5,
         }
     }
 
@@ -13934,6 +14137,17 @@ function_call_aggregate:
             WindowSpec: $6,
             OrderBy: $5,
             WithinGroup: $5 != nil,
+        }
+    }
+|   QUANTILE_EXACT_WEIGHTED '(' func_type_opt expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $4,
+            Type: $3,
+            WindowSpec: $6,
         }
     }
 |  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt kmeans_opt ')' window_spec_opt
@@ -16878,6 +17092,20 @@ non_reserved_keyword:
 |   FIRST_VALUE
 |   LAST_VALUE
 |   NTH_VALUE
+|   MRANK
+|   CUMRANK
+|   TMRANK
+|   SMA
+|   WMA
+|   TRIMA
+|   EMA
+|   WILDER
+|   KAMA
+|   DEMA
+|   TEMA
+|   T3
+|   MMAXDRAWDOWN
+|   CUMPOSITIVESTREAK
 
 func_not_keyword:
     DATE_ADD
@@ -16900,6 +17128,7 @@ not_keyword:
 |   APPROX_COUNT
 |   APPROX_COUNT_DISTINCT
 |   APPROX_PERCENTILE
+|   QUANTILE_EXACT_WEIGHTED
 |   CURDATE
 |   CURTIME
 |   DATE_ADD

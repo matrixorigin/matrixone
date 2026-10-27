@@ -117,9 +117,18 @@ func runIssue27947FloatLockScenario(
 	execSQLRequire(t, ctx, ownerDB, fmt.Sprintf(
 		"insert into %s select cast(result as %s), result from generate_series(1, 10002) g",
 		qualified, sqlType))
+	// These are IEEE key fixtures, independent of textual numeric coercion.
+	negativeInfinity := "bit_cast(unhex('000000000000f0ff') as double)"
+	positiveInfinity := "bit_cast(unhex('000000000000f07f') as double)"
+	nan := "bit_cast(unhex('000000000000f87f') as double)"
+	if typ.Oid == types.T_float32 {
+		negativeInfinity = "bit_cast(unhex('000080ff') as float)"
+		positiveInfinity = "bit_cast(unhex('0000807f') as float)"
+		nan = "bit_cast(unhex('0000c07f') as float)"
+	}
 	execSQLRequire(t, ctx, ownerDB, fmt.Sprintf(
-		"insert into %s values (cast('-Inf' as %s), -1), (cast('Inf' as %s), -2), (cast('NaN' as %s), -3)",
-		qualified, sqlType, sqlType, sqlType))
+		"insert into %s values (%s, -1), (%s, -2), (%s, -3)",
+		qualified, negativeInfinity, positiveInfinity, nan))
 	execSQLRequire(t, ctx, ownerDB, "analyze table "+qualified)
 
 	var tableID uint64
@@ -142,8 +151,8 @@ func runIssue27947FloatLockScenario(
 		marker    int
 		predicate string
 	}{
-		{name: "negative infinity", marker: -1, predicate: "k = cast('-Inf' as " + sqlType + ")"},
-		{name: "positive infinity", marker: -2, predicate: "k = cast('Inf' as " + sqlType + ")"},
+		{name: "negative infinity", marker: -1, predicate: "k = " + negativeInfinity},
+		{name: "positive infinity", marker: -2, predicate: "k = " + positiveInfinity},
 		// MatrixOne follows IEEE comparison semantics, so NaN is selected by
 		// k != k rather than equality with another NaN value.
 		{name: "NaN", marker: -3, predicate: "k != k"},

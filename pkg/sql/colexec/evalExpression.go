@@ -495,7 +495,7 @@ func newExpressionExecutorWithAllocation(
 			executor.rowScopedDiagnostics = overload.HasRowScopedDiagnostics()
 			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
-			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
+			executor.evalFn, executor.resetFn, executor.freeFn, _ = overload.GetExecuteMethod()
 		}
 		if err = executor.init(proc, len(t.F.Args), typ, selection); err != nil {
 			executor.Free()
@@ -515,7 +515,8 @@ func newExpressionExecutorWithAllocation(
 			defer func() { buildCtx.joinBuildDiagnosticOwner = owner }()
 		}
 		conditional := !deferDiagnostic &&
-			(executor.fid == function.IFF || executor.fid == function.CASE || executor.fid == function.COALESCE)
+			(executor.fid == function.IFF || executor.fid == function.CASE || executor.fid == function.COALESCE ||
+				(executor.fid == function.ELT && int32(executor.overloadID) == 1))
 		if conditional {
 			buildCtx.conditionalJoinDepth++
 			defer func() { buildCtx.conditionalJoinDepth-- }()
@@ -1216,6 +1217,50 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 	return err
 }
 
+// EvalJSONStringElt evaluates the selector first and masks each value subtree.
+// Only overload 1 has this JSON-aware, selected-consumer execution contract.
+func (expr *FunctionExpressionExecutor) EvalJSONStringElt(proc *process.Process, batches []*batch.Batch, selectList []bool) error {
+	index, err := expr.parameterExecutor[0].Eval(proc, batches, selectList)
+	if err != nil {
+		return err
+	}
+	expr.parameterResults[0] = index
+	rowCount := expressionRowCount(batches)
+	if len(expr.selectList1) < rowCount {
+		expr.selectList1 = make([]bool, rowCount)
+	}
+	selected := expr.selectList1[:rowCount]
+	var signedIndex vector.FunctionParameterWrapper[int64]
+	var unsignedIndex vector.FunctionParameterWrapper[uint64]
+	switch index.GetType().Oid {
+	case types.T_int64:
+		signedIndex = vector.GenerateFunctionFixedTypeParameter[int64](index)
+	case types.T_uint64, types.T_bit:
+		unsignedIndex = vector.GenerateFunctionFixedTypeParameter[uint64](index)
+	}
+	for branch := 1; branch < len(expr.parameterExecutor); branch++ {
+		for row := range selected {
+			selected[row] = false
+			if selectList != nil && !selectList[row] {
+				continue
+			}
+			switch {
+			case signedIndex != nil:
+				value, isNull := signedIndex.GetValue(uint64(row))
+				selected[row] = !isNull && value == int64(branch)
+			case unsignedIndex != nil:
+				value, isNull := unsignedIndex.GetValue(uint64(row))
+				selected[row] = !isNull && value == uint64(branch)
+			}
+		}
+		expr.parameterResults[branch], err = expr.parameterExecutor[branch].Eval(proc, batches, selected)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func hasSelectedRows(selectList []bool) bool {
 	for _, selected := range selectList {
 		if selected {
@@ -1825,6 +1870,11 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	} else if expr.fid == function.CASE {
 		err = expr.EvalCase(proc, batches, selectList)
+		if err != nil {
+			return nil, err
+		}
+	} else if expr.fid == function.ELT && int32(expr.overloadID) == 1 {
+		err = expr.EvalJSONStringElt(proc, batches, selectList)
 		if err != nil {
 			return nil, err
 		}

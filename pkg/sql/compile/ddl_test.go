@@ -1556,16 +1556,16 @@ type trackingTempTableSession struct {
 }
 
 func (s *trackingTempTableSession) GetTempTable(dbName, alias string) (string, bool) {
-	realName, ok := s.tables[dbName+"."+alias]
+	realName, ok := s.tables[defines.TempTableAliasKey(dbName, alias)]
 	return realName, ok
 }
 
 func (s *trackingTempTableSession) AddTempTable(dbName, alias, realName string) {
-	s.tables[dbName+"."+alias] = realName
+	s.tables[defines.TempTableAliasKey(dbName, alias)] = realName
 }
 
 func (s *trackingTempTableSession) RemoveTempTable(dbName, alias string) {
-	delete(s.tables, dbName+"."+alias)
+	delete(s.tables, defines.TempTableAliasKey(dbName, alias))
 }
 
 func (s *trackingTempTableSession) RemoveTempTableByRealName(string) {}
@@ -1667,8 +1667,10 @@ func TestScopeRestoreTemporaryCloneValidatesPhysicalDestination(t *testing.T) {
 			test.setup(proc, eng)
 			c := NewCompile("test", "test", "create temporary table temporary_table clone src", "", "", eng, proc, nil, false, nil, time.Now())
 
+			originalCtx := proc.Ctx
 			err := (&Scope{}).RestoreTable(c, newClonePlan())
 			require.ErrorContains(t, err, test.wantErr)
+			require.Same(t, originalCtx, proc.Ctx, "failed restore must not retain the borrowed session context")
 		})
 	}
 }
@@ -2155,6 +2157,71 @@ func TestDropSequenceCleansLogicalObjectPrivileges(t *testing.T) {
 	require.Equal(t, []uint64{101}, proc.GetSessionInfo().SeqDeleteKeys)
 	_, exists := db.rels["s"]
 	require.False(t, exists)
+}
+
+func TestCreateOrReplaceViewPreservesIdentity(t *testing.T) {
+	createErr := errors.New("stop after create context is captured")
+	deleteErr := errors.New("delete failed")
+	lockErr := errors.New("lock failed")
+	for _, tc := range []struct {
+		name                           string
+		absent, baseTable, ifNotExists bool
+		logicalID                      uint64
+		deleteErr, lockErr             error
+		wantErr                        error
+		wantIdentity                   uint64
+		wantCreate, wantRetained       bool
+	}{
+		{name: "view", logicalID: 77, wantErr: createErr, wantIdentity: 77, wantCreate: true},
+		{name: "legacy view", wantErr: createErr, wantIdentity: 101, wantCreate: true},
+		{name: "absent view gets new identity", absent: true, wantErr: createErr, wantCreate: true},
+		{name: "if not exists retains view", ifNotExists: true, logicalID: 77, wantRetained: true},
+		{name: "base table cannot be replaced", baseTable: true, wantRetained: true},
+		{name: "delete failure stops create", deleteErr: deleteErr, wantErr: deleteErr, wantRetained: true},
+		{name: "lock failure stops delete", lockErr: lockErr, wantErr: lockErr, wantRetained: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eng := newStubEngine()
+			db := newStubDatabase("db")
+			db.createErr, db.deleteErr = createErr, tc.deleteErr
+			old := &stubRelation{name: "v", tableID: 101, tableDef: &plan2.TableDef{TblId: 101, LogicalId: tc.logicalID}}
+			if !tc.baseTable {
+				old.tableDef.ViewSql = &plan2.ViewDef{}
+			}
+			if !tc.absent {
+				db.rels["v"] = old
+			}
+			eng.dbs["db"] = db
+			stubs := gostub.New()
+			defer stubs.Reset()
+			stubs.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+			stubs.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return tc.lockErr })
+			proc := testutil.NewProcess(t)
+			proc.Base.SessionInfo.Buf = buffer.New()
+			proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+			c := NewCompile("test", "db", "create or replace view v as select 1", "", "", eng, proc, nil, false, nil, time.Now())
+			s := &Scope{Proc: proc, Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+				Definition: &plan2.DataDefinition_CreateView{CreateView: &plan2.CreateView{
+					Replace: true, IfNotExists: tc.ifNotExists, Database: "db", TableDef: &plan2.TableDef{Name: "v"},
+				}},
+			}}}}
+			err := s.CreateView(c)
+			if tc.baseTable {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTableAlreadyExists), "%v", err)
+			} else {
+				require.ErrorIs(t, err, tc.wantErr)
+			}
+			if tc.wantCreate {
+				require.NotNil(t, db.createCtx)
+				identity, _ := db.createCtx.Value(defines.LogicalIdKey{}).(uint64)
+				require.Equal(t, tc.wantIdentity, identity)
+			} else {
+				require.Nil(t, db.createCtx)
+			}
+			_, retained := db.rels["v"]
+			require.Equal(t, tc.wantRetained, retained)
+		})
+	}
 }
 
 func TestAlterViewPreservesLogicalID(t *testing.T) {
@@ -3721,7 +3788,7 @@ func TestAlterTemporaryTableRejectsRecreatedRelation(t *testing.T) {
 			proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)
 			c := NewCompile("test", "test", "alter table t add column v int", "", "", eng, proc, nil, false, nil, time.Now())
 			defer c.Release()
-			c.proc.Session = &trackingTempTableSession{tables: map[string]string{"test.t": "physical_t"}}
+			c.proc.Session = &trackingTempTableSession{tables: map[string]string{defines.TempTableAliasKey("test", "t"): "physical_t"}}
 			s := &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
 				Definition: &plan2.DataDefinition_AlterTable{AlterTable: &plan2.AlterTable{
 					Database: "test", TableDef: &plan2.TableDef{Name: "t", TblId: 1, IsTemporary: true},
@@ -4084,7 +4151,7 @@ func TestTruncateTemporaryTableRejectsStaleRelation(t *testing.T) {
 			plannedID:    1,
 			relationName: "physical_t",
 			relationID:   2,
-			tempTables:   map[string]string{"test.t": "physical_t"},
+			tempTables:   map[string]string{defines.TempTableAliasKey("test", "t"): "physical_t"},
 		},
 	}
 
@@ -4156,7 +4223,7 @@ func TestTruncateTemporaryTableRebuildsTemporaryRelation(t *testing.T) {
 	originalCtx := defines.AttachAccountId(context.Background(), 0)
 	proc.Ctx = originalCtx
 	proc.ReplaceTopCtx(originalCtx)
-	session := &trackingTempTableSession{tables: map[string]string{"test.t": "physical_t"}}
+	session := &trackingTempTableSession{tables: map[string]string{defines.TempTableAliasKey("test", "t"): "physical_t"}}
 	proc.Session = session
 
 	internalExecutor := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {

@@ -20,6 +20,9 @@ or stages using MatrixOne's SELECT ... INTO OUTFILE commands.
 """
 
 import warnings
+from ._query_compilation import compile_expression
+from ._sql_literals import sql_literal, substitute_parameters
+
 from typing import Any, Optional, Union
 
 
@@ -57,19 +60,13 @@ def _query_to_sql(query: Union[str, Any]) -> str:
     # If it has _build_sql method (MatrixOneQuery)
     if hasattr(query, '_build_sql'):
         sql, params = query._build_sql()
-        # Replace parameters in the SQL
-        if params:
-            for param in params:
-                if isinstance(param, str):
-                    sql = sql.replace("?", f"'{param}'", 1)
-                else:
-                    sql = sql.replace("?", str(param), 1)
+        sql = substitute_parameters(sql, params)
         return sql.rstrip(';').strip()
 
     # If it's a SQLAlchemy statement (has compile method)
     if hasattr(query, 'compile'):
         try:
-            compiled = query.compile(compile_kwargs={"literal_binds": True})
+            compiled = compile_expression(query)
             return str(compiled).rstrip(';').strip()
         except Exception as e:
             raise ValueError(f"Failed to compile SQLAlchemy statement: {e}")
@@ -156,7 +153,8 @@ def _build_csv_export_sql(
     # Note: HEADER option not yet supported in MatrixOne
     if header:
         warnings.warn(
-            "header=True is not yet supported by MatrixOne's INTO OUTFILE. " "Headers will not be included in the output.",
+            "header=True is not yet supported by MatrixOne's INTO OUTFILE. "
+            "Headers will not be included in the output.",
             UserWarning,
         )
 
@@ -182,7 +180,7 @@ def _build_jsonl_export_sql(
 
     # Build the export SQL with JSONL format
     # MatrixOne syntax: INTO OUTFILE 'path' FORMAT 'jsonline'
-    return f"{query_sql} INTO OUTFILE '{output_path}'"
+    return f"{query_sql} INTO OUTFILE {sql_literal(output_path)} FORMAT 'jsonline'"
 
 
 class ExportManager:

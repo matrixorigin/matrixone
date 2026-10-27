@@ -64,6 +64,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/debug/goroutine"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type CloseFlag struct {
@@ -628,6 +629,8 @@ func getPreparedPlanExprValueWithMeta(
 	runtimeDomain *types.RuntimeStringDomain,
 	isBin *bool,
 ) (interface{}, plan.Type, error) {
+	restore := bindFrontendExpressionContext(execCtx.proc, execCtx.reqCtx)
+	defer restore()
 	executor, err := colexec.NewExpressionExecutor(execCtx.proc, expr)
 	if err != nil {
 		return nil, plan.Type{}, err
@@ -695,7 +698,16 @@ func bindSetVariableResultExpr(
 	return binder.BindExpr(e, 0, false)
 }
 
-// only support single value and unary minus
+// bindFrontendExpressionContext borrows only the pipeline context field for
+// synchronous frontend evaluation. The caller must restore it after consuming
+// and freeing the result; query cancellation and compiler state stay untouched.
+func bindFrontendExpressionContext(proc *process.Process, ctx context.Context) func() {
+	previous := proc.Ctx
+	proc.Ctx = ctx
+	return func() { proc.Ctx = previous }
+}
+
+// GetSimpleExprValue supports single values and unary minus.
 func GetSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession) (interface{}, error) {
 	return getSimpleExprValue(ctx, e, feSes, nil)
 }
@@ -735,21 +747,19 @@ func getSimpleExprValue(ctx context.Context, e tree.Expr, feSes FeSession, targe
 		}
 	}
 
-	txnCompileCtx := feSes.GetTxnCompileCtx()
-	// set @a = 'on', type of a is bool. And mo cast rule does not fit set variable rule so delay to convert type.
-	// Here the evalExpr may execute some function that needs engine.Engine.
-	txnCompileCtx.GetProcess().ReplaceTopCtx(
-		attachValue(txnCompileCtx.GetProcess().GetTopContext(),
-			defines.EngineKey{},
-			feSes.GetTxnHandler().GetStorage()))
-
-	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(txnCompileCtx.GetProcess(), planExpr)
+	proc := feSes.GetTxnCompileCtx().GetProcess()
+	// Runtime expressions need the current request, including its values and
+	// cancellation, without resetting compiler-owned query state.
+	evalCtx := attachValue(ctx, defines.EngineKey{}, feSes.GetTxnHandler().GetStorage())
+	restore := bindFrontendExpressionContext(proc, evalCtx)
+	defer restore()
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, planExpr)
 	if err != nil {
 		return nil, err
 	}
 
+	defer free()
 	value, err := getValueFromVector(ctx, vec, feSes, planExpr)
-	free()
 	return value, err
 }
 
@@ -1481,7 +1491,13 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binE
 		return true
 	}
 	finish := func() string { return commonutil.Abbreviate(bb.String(), limit) }
-	if !appendPart(envStmt) || !appendPart(" // ") || !appendPart(strings.TrimSpace(prepared.Sql)) || !appendPart(" ; ") {
+	if !appendPart(envStmt) || !appendPart(" // ") {
+		return finish()
+	}
+	// Only scan the saved SQL when its diagnostic can be retained. Redact
+	// before clipping so a later privacy marker cannot expose an earlier prefix.
+	preparedSQL := redactStatementTextForLogging(prepared.PrepareStmt, strings.TrimSpace(prepared.Sql))
+	if !appendPart(preparedSQL) || !appendPart(" ; ") {
 		return finish()
 	}
 	if len(variables) != 0 {
@@ -2962,20 +2978,6 @@ func tableNameIsLegal(name string) bool {
 	}
 	return isLegal(name, createTableSqls)
 }
-
-//func tableNameIsRegexpr(s string) bool {
-//	if len(s) < 2 {
-//		return false
-//	}
-//	if strings.HasPrefix(s, "/") && strings.HasSuffix(s, "/") {
-//		_, err := regexp.Compile(s)
-//		if err != nil {
-//			return false
-//		}
-//		return true
-//	}
-//	return false
-//}
 
 // replaceStr replaces s[start:end] by s2
 func replaceStr(s string, start, end int, s2 string) string {

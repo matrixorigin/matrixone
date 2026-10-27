@@ -595,6 +595,24 @@ var supportedAggInNewFramework = []FuncNew{
 		},
 	},
 
+	// function `QUANTILE_EXACT_WEIGHTED`: exact weighted percentile aggregate.
+	// Exact weighted percentile over (value, weight) rows; the third argument
+	// is stripped into compile-time aggregate configuration.
+	{
+		functionId: QUANTILE_EXACT_WEIGHTED,
+		class:      plan.Function_AGG,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    quantileExactWeightedCheck,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				isAgg:      true,
+				retType:    aggexec.QuantileExactWeightedReturnType,
+				aggName:    "quantileExactWeighted",
+			},
+		},
+	},
+
 	// function `BITMAP_CONSTRUCT_AGG`
 	{
 		functionId: BITMAP_CONSTRUCT_AGG,
@@ -730,7 +748,10 @@ func maxByTypeCheck(_ []overload, inputs []types.Type) checkResult {
 			}
 		}
 	}
+	// Only MIN/MAX have typed JSON key comparison. MAX_BY may return JSON,
+	// but its ordering and tie keys must not reach the bytewise fallback.
 	if !typeInList(casts[0].Oid, AnyValueSupportedTypes) ||
+		casts[1].Oid == types.T_json || casts[2].Oid == types.T_json ||
 		!typeInList(casts[1].Oid, MinMaxSupportedTypes) ||
 		!typeInList(casts[2].Oid, MinMaxSupportedTypes) {
 		return newCheckResultWithFailure(failedAggParametersWrong)
@@ -828,6 +849,7 @@ var MinMaxSupportedTypes = []types.T{
 	types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink,
 	types.T_uuid,
 	types.T_binary, types.T_varbinary,
+	types.T_json,
 }
 
 var AnyValueSupportedTypes = []types.T{

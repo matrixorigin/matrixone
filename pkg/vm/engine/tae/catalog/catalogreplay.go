@@ -125,13 +125,6 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand[*EmptyMVCCNode,
 
 func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *TableNode], _ wal.ReplayObserver) {
 	catalog.OnReplayTableID(cmd.ID.TableID)
-	// prepareTS := cmd.GetTs()
-	// if prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
-	// 	if observer != nil {
-	// 		observer.OnStaleIndex(idx)
-	// 	}
-	// 	return
-	// }
 	db, err := catalog.GetDatabaseByID(cmd.ID.DbID)
 	if err != nil {
 		panic(err)
@@ -144,6 +137,8 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand[*TableMVCCNode, *T
 		defer db.Unlock()
 		tbl = NewReplayTableEntry()
 		tbl.ID = cmd.ID.TableID
+		tbl.dataObjects.SetTableID(tbl.ID)
+		tbl.tombstoneObjects.SetTableID(tbl.ID)
 		tbl.db = db
 		tbl.tableData = catalog.MakeTableFactory()(tbl)
 		tbl.TableNode = cmd.node
@@ -553,6 +548,8 @@ func (catalog *Catalog) onReplayCreateTable(dbid, tid uint64, schema *Schema, tx
 	tbl.TableNode.schema.Store(schema)
 	tbl.db = db
 	tbl.ID = tid
+	tbl.dataObjects.SetTableID(tbl.ID)
+	tbl.tombstoneObjects.SetTableID(tbl.ID)
 	tbl.tableData = catalog.MakeTableFactory()(tbl)
 	_ = db.AddEntryLocked(tbl, nil, true)
 	un := &MVCCNode[*TableMVCCNode]{
