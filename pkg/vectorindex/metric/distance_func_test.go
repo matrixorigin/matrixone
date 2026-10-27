@@ -20,7 +20,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/assertx"
 	"github.com/stretchr/testify/require"
-	"gonum.org/v1/gonum/blas/blas32"
 )
 
 func Test_MaxFloat(t *testing.T) {
@@ -31,23 +30,12 @@ func Test_MaxFloat(t *testing.T) {
 	require.Equal(t, max64, float64(math.MaxFloat64))
 }
 
-func Test_Blas32(t *testing.T) {
-
-	v1 := blas32.Vector{
-		N:    3,
-		Inc:  1,
-		Data: []float32{4, 5, 6},
-	}
-	v2 := blas32.Vector{
-		N:    3,
-		Inc:  1,
-		Data: []float32{1, 2, 3},
-	}
+func TestKmeansL2Distance(t *testing.T) {
 	distfn, _, err := ResolveKmeansDistanceFn[float32](Metric_L2Distance, false)
-	require.Nil(t, err)
-
-	_, err = distfn(v1.Data, v2.Data)
-	require.Nil(t, err)
+	require.NoError(t, err)
+	distance, err := distfn([]float32{4, 5, 6}, []float32{1, 2, 3})
+	require.NoError(t, err)
+	require.InDelta(t, math.Sqrt(27), distance, 1e-6)
 }
 
 func Test_ResolveFun(t *testing.T) {
