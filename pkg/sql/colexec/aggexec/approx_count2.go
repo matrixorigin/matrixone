@@ -873,7 +873,7 @@ func (exec *approxCountExec) BulkFill(groupIndex int, vectors []*vector.Vector) 
 	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
 }
 
-func (exec *approxCountExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
+func (exec *hllStateExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -982,34 +982,6 @@ func (exec *hllAddExec) Fill(groupIndex int, row int, vectors []*vector.Vector) 
 
 func (exec *hllAddExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
 	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
-}
-
-func (exec *hllAddExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {
-	for i, group := range groups {
-		if group == GroupNotMatched {
-			continue
-		}
-		row := offset + i
-		if vectors[0].IsConst() {
-			row = 0
-		}
-		if vectors[0].IsNull(uint64(row)) {
-			continue
-		}
-		x, y := exec.getXY(group - 1)
-		sketch, err := exec.sketchForPublication(x, y)
-		if err != nil {
-			return err
-		}
-		scratch, err := exec.prepareCanonicalScratch(
-			x, vectors[0].GetRawBytesAt(row))
-		if err != nil {
-			return err
-		}
-		insertHLLValueWithScratch(
-			sketch, exec.argTypes[0], vectors[0].GetRawBytesAt(row), scratch)
-	}
-	return nil
 }
 
 func (exec *hllAddExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) error {
