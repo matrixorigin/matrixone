@@ -18,8 +18,52 @@ from sqlalchemy.orm import declarative_base
 
 from matrixone import Client, AsyncClient
 from matrixone.exceptions import QueryError
+from scripts.run_contracts import validate_server_identity
 
 pytestmark = pytest.mark.skipif(os.environ.get('MO_SDK_ONLINE') != '1', reason='explicit isolated target required')
+
+
+def test_legacy_filter_by_preserves_mutation_scope(client, tables):
+    from matrixone.orm import Query
+
+    model, _ = tables
+    assert Query(model, client).filter_by(label='red').count() == 1
+    assert Query(model.__tablename__, client).filter_by(label='blue').count() == 1
+    assert Query(model, client).filter_by(label=None).count() == 1
+    with pytest.raises(ValueError, match='Unknown model field'):
+        Query(model, client).filter_by(typo='red').delete()
+    Query(model, client).filter_by(id=2).update(label='changed').execute()
+    assert client.execute(f'SELECT id,label FROM {model.__tablename__} ORDER BY id').rows == [
+        (1, 'red'),
+        (2, 'changed'),
+        (3, None),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['sync', 'async'])
+@pytest.mark.parametrize(
+    'format,quoted_path,terminator', [('csv', True, '\n'), ('csv', False, "'\n"), ('jsonl', True, '\n')]
+)
+async def test_export_quoted_path_and_line_terminator(client, async_client, kind, format, quoted_path, terminator):
+    filename = 'export_token_' + uuid.uuid4().hex + ("'quoted" if quoted_path else '') + '.' + format
+    server_path = os.environ['MO_SDK_EXPORT_DIR'].rstrip('/') + '/' + filename
+    local_path = Path(os.environ['MO_SDK_EXPORT_LOCAL_DIR']) / filename
+    exporter = async_client.export if kind == 'async' else client.export
+    try:
+        method = getattr(exporter, 'to_' + format)
+        kwargs = {'lineterminator': terminator} if format == 'csv' else {}
+        result = method(server_path, 'SELECT 1 AS id', **kwargs)
+        if kind == 'async':
+            await result
+        if format == 'csv':
+            assert local_path.read_bytes() == ('id' + terminator + '1' + terminator).encode()
+        else:
+            assert [json.loads(line) for line in local_path.read_text().splitlines()] == [{'id': 1}]
+        assert client.execute('SELECT 42').scalar() == 42
+        assert (await async_client.execute('SELECT 42')).scalar() == 42
+    finally:
+        local_path.unlink(missing_ok=True)
 
 
 @pytest.fixture(scope='module')
@@ -38,10 +82,8 @@ def server(record_testsuite_property):
     try:
         version, revision = admin.execute('SELECT version(),git_version()').rows[0]
         expected = os.environ['MO_SDK_EXPECT_VERSION']
-        assert expected in version, (version, expected)
         expected_revision = os.environ.get('MO_SDK_EXPECT_REVISION')
-        if expected_revision:
-            assert revision.startswith(expected_revision), (revision, expected_revision)
+        validate_server_identity(version, revision, expected, expected_revision)
         print('SDK_SERVER_IDENTITY', version, revision)
         record_testsuite_property('matrixone.version', version)
         record_testsuite_property('matrixone.revision', revision)

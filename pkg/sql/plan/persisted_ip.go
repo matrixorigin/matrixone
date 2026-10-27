@@ -136,8 +136,8 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.DecimalIntegerDivisionSemantics && requiredVersion < defines.MORPCVersion121 {
 		requiredVersion = defines.MORPCVersion121
 	}
-	if features.CRC32JSONTextBytes && requiredVersion < defines.MORPCVersion133 {
-		requiredVersion = defines.MORPCVersion133
+	if features.CRC32JSONTextBytes && requiredVersion < defines.MORPCVersion135 {
+		requiredVersion = defines.MORPCVersion135
 	}
 	if features.DecimalDivisionSemantics && requiredVersion < defines.MORPCVersion97 {
 		requiredVersion = defines.MORPCVersion97
@@ -153,8 +153,14 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.JSONInputContracts || features.YearBitCast {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
+	if features.ODKUStatementResult || features.SessionLastInsertIDBaseline {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion134)
+	}
 	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion129)
+	}
+	if features.JSONMinMaxTypedComparison {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion133)
 	}
 	if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion122)

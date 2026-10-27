@@ -306,7 +306,8 @@ type Config struct {
 	// PrimaryKeyCheck
 	PrimaryKeyCheck bool `toml:"primary-key-check"`
 
-	// LargestEntryLimit is the max size for reading file to buf
+	// LargestEntryLimit is the max raw size of one CSV record readable by the
+	// LOAD DATA / external-table CSV parser; see config.LargestEntryLimit.
 	LargestEntryLimit int `toml:"largest-entry-limit"`
 
 	// MaxPreparedStmtCount

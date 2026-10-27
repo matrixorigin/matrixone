@@ -24,6 +24,7 @@ from typing import List, Optional, Union
 
 from .exceptions import ConnectionError, SnapshotError
 from .version import requires_version
+from ._sql_literals import identifier_parts, sql_object_name
 
 
 class SnapshotLevel(Enum):
@@ -142,6 +143,7 @@ class BaseSnapshotManager:
         else:
             level_enum = level
 
+        name = sql_object_name(name)
         # Build CREATE SNAPSHOT SQL using correct MatrixOne syntax
         if level_enum == SnapshotLevel.CLUSTER:
             return f"CREATE SNAPSHOT {name} FOR CLUSTER"
@@ -150,11 +152,11 @@ class BaseSnapshotManager:
         elif level_enum == SnapshotLevel.DATABASE:
             if not database:
                 raise SnapshotError("Database name required for database level snapshot")
-            return f"CREATE SNAPSHOT {name} FOR DATABASE {database}"
+            return f"CREATE SNAPSHOT {name} FOR DATABASE {sql_object_name(database)}"
         elif level_enum == SnapshotLevel.TABLE:
             if not database or not table:
                 raise SnapshotError("Database and table names required for table level snapshot")
-            return f"CREATE SNAPSHOT {name} FOR TABLE {database} {table}"
+            return f"CREATE SNAPSHOT {name} FOR TABLE {sql_object_name(database)} {sql_object_name(table)}"
         else:
             raise SnapshotError(f"Unsupported snapshot level: {level_enum}")
 
@@ -182,10 +184,7 @@ class BaseSnapshotManager:
 
 
 def _snapshot_lookup_name(name):
-    if len(name) >= 2 and name[0] in ('`', '"') and name[-1] == name[0]:
-        quote = name[0]
-        return name[1:-1].replace(quote * 2, quote)
-    return name
+    return identifier_parts(name)[0]
 
 
 class SnapshotManager(BaseSnapshotManager):
@@ -387,7 +386,7 @@ class SnapshotManager(BaseSnapshotManager):
             raise ConnectionError("Not connected to database")
 
         try:
-            self._get_executor().execute(f"DROP SNAPSHOT {name}")
+            self._get_executor().execute(f"DROP SNAPSHOT {sql_object_name(name)}")
         except Exception as e:
             raise SnapshotError(f"Failed to delete snapshot: {e}") from e
 
@@ -528,7 +527,7 @@ class AsyncSnapshotManager(BaseSnapshotManager):
             raise ConnectionError("Not connected to database")
 
         try:
-            await self._get_executor().execute(f"DROP SNAPSHOT {name}")
+            await self._get_executor().execute(f"DROP SNAPSHOT {sql_object_name(name)}")
         except Exception as e:
             raise SnapshotError(f"Failed to delete snapshot: {e}") from e
 

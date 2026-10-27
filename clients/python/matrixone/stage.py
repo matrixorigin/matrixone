@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from .exceptions import QueryError, ConnectionError
-from ._sql_literals import sql_literal
+from ._sql_literals import identifier_parts, sql_literal, sql_object_name, sql_string_token
 
 
 @dataclass
@@ -272,15 +272,18 @@ class BaseStageManager:
         if if_not_exists:
             sql_parts.append("IF NOT EXISTS")
 
-        sql_parts.append(stage_name)  # No escaping to match existing behavior
-        sql_parts.append(f"URL='{url}'")
+        sql_parts.append(sql_object_name(stage_name))
+        sql_parts.append(f"URL={sql_string_token(url, context='Stage')}")
 
         if credentials:
-            cred_parts = [f"'{k}'='{v}'" for k, v in credentials.items()]
+            cred_parts = [
+                sql_string_token(k, context='Stage') + '=' + sql_string_token(v, context='Stage')
+                for k, v in credentials.items()
+            ]
             sql_parts.append(f"CREDENTIALS={{{', '.join(cred_parts)}}}")
 
-        if comment:
-            sql_parts.append(f"COMMENT='{comment}'")
+        if comment is not None:
+            sql_parts.append(f"COMMENT={sql_string_token(comment, context='Stage')}")
 
         # Note: enable is not included in SQL - MatrixOne stages are enabled by default
         return " ".join(sql_parts)
@@ -290,7 +293,7 @@ class BaseStageManager:
         sql_parts = ["DROP STAGE"]
         if if_exists:
             sql_parts.append("IF EXISTS")
-        sql_parts.append(stage_name)  # No escaping to match existing behavior
+        sql_parts.append(sql_object_name(stage_name))
         return " ".join(sql_parts)
 
     def _build_alter_stage_sql(
@@ -306,16 +309,19 @@ class BaseStageManager:
         sql_parts = ["ALTER STAGE"]
         if if_exists:
             sql_parts.append("IF EXISTS")
-        sql_parts.append(f"{stage_name} SET")
+        sql_parts.append(f"{sql_object_name(stage_name)} SET")
 
         set_clauses = []
         if set_url is not None:
-            set_clauses.append(f"URL='{set_url}'")
+            set_clauses.append(f"URL={sql_string_token(set_url, context='Stage')}")
         if set_credentials is not None:
-            cred_parts = [f"'{k}'='{v}'" for k, v in set_credentials.items()]
+            cred_parts = [
+                sql_string_token(k, context='Stage') + '=' + sql_string_token(v, context='Stage')
+                for k, v in set_credentials.items()
+            ]
             set_clauses.append(f"CREDENTIALS={{{', '.join(cred_parts)}}}")
         if set_comment is not None:
-            set_clauses.append(f"COMMENT='{set_comment}'")
+            set_clauses.append(f"COMMENT={sql_string_token(set_comment, context='Stage')}")
         if set_enable is not None:
             set_clauses.append(f"ENABLE={'TRUE' if set_enable else 'FALSE'}")
 
@@ -334,7 +340,7 @@ class BaseStageManager:
         """Build SQL to get a specific stage"""
         return (
             f"SELECT stage_name, url, stage_status, comment, created_time "
-            f"FROM mo_catalog.mo_stages WHERE stage_name = LOWER({sql_literal(stage_name)})"
+            f"FROM mo_catalog.mo_stages WHERE stage_name = LOWER({sql_literal(identifier_parts(stage_name)[0])})"
         )
 
     def _row_to_stage(self, row: tuple) -> Stage:
