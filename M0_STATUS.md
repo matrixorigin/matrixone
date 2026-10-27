@@ -8,6 +8,15 @@ CI and earlier tests do not resolve that obligation. R2 and its model review
 remain unchanged as historical records. No new test or performance result is
 claimed, and the maintainer architecture CR remains open.
 
+R3 evidence publication, 2026-10-27: the [inspectable local evidence package](docs/design/m0-r3-evidence/README.md)
+contains the original three-test patch, reproduction commands, sanitized result
+summary and source/native/receipt hashes. The expanded R3 includes the scoped
+CREATE/COPY/clone/checkpoint-restart SQL result and synthetic default-reader
+comparison. This is publication of existing executions; no test was rerun for
+the documentation update. Trusted classification and supported historical
+reads under shutdown upgrade and backup/restore remain the design decisions.
+Mixed-version operation and downgrade are not added as approval requirements.
+
 Review handoff, 2026-10-23: **request formal maintainer review of the restricted,
 default-disabled M0 candidate, not production enablement or merge approval.**
 The reviewed kernel head is `b3c86e3f3375f6441d3326d08ac23ac6598d4d1d`.

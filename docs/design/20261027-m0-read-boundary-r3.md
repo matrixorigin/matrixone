@@ -5,9 +5,9 @@ belongs to [PR #30816](https://github.com/matrixorigin/matrixone/pull/30816)
 and parent issue [#30518](https://github.com/matrixorigin/matrixone/issues/30518).
 It examines source `a44bc4b37cc221938dd29da63cf965185c75ab5c`, including
 main merge `2465dae7a4ada1b277113cca5afff6fe10149b96`. It does not assert
-that the current implementation meets this proposal. No runtime tests,
-upgrade qualification, performance measurement, or maintainer approval were
-produced for R3.
+that the current implementation meets this proposal. The focused local tests
+summarized in section 2.1 are feasibility evidence, not upgrade qualification,
+performance measurement, or maintainer approval.
 
 [R2](20261026-m0-restricted-add.md) and its
 [review record](20261026-m0-restricted-add-review.md) remain unchanged. Their
@@ -66,6 +66,69 @@ that all earlier transitions satisfied the assumptions.
 | Clone | The clone hook copies complete definitions/version and assigns new relation identity. | Establish which relation owns each visible shared object, and preserve the same evolution contract without treating the parent identity as the child identity. |
 | INSERT / UPDATE / flush / merge | Writers use complete dense schema or existing fallback; merge qualifies data input separately. | Show that every admitted writer and every object produced under the contract preserves the prefix/identity assumptions. An incomplete writer fallback must not silently authorize an M0 object. |
 | Restart / WAL / checkpoint / restore | Normal catalog and transaction persistence carry existing fields. | Show how a reader recovers the same admission/contract decision, including a restored or cloned relation; a successful replay alone is not origin evidence. |
+
+### 2.1. Local feasibility evidence: CREATE, COPY, clone and restart
+
+The [public evidence package](m0-r3-evidence/README.md) provides the exact
+diagnostic test patch, portable reproduction steps, sanitized result summary
+and source/native/receipt identities. The tests were executed before this
+documentation publication; publishing them does not create a new execution.
+
+The following evidence is bound to product source
+`a44bc4b37cc221938dd29da63cf965185c75ab5c`. It narrows the root-creation
+question; it does **not** resolve the relation/domain-classification contract
+or approve either design.
+
+- On CREATE, CN `GenColumnsFromDefs` assigns ordinary column IDs and seqnums
+  in creation order; physical rowid is not an ordinary object column. The
+  version is 0 when no `VersionDef` is supplied. The catalog table and column
+  entries are parsed into TN schema definitions. A nonzero plan version is
+  explicitly carried by `VersionDef` in the experimental path. Thus CREATE
+  does not generally preserve arbitrary source seqnums unchanged.
+- COPY planning deep-copies the source definition, but execution constructs
+  and executes a temporary CREATE SQL statement, copies rows and switches to
+  the new relation. The plan copy alone cannot establish the final version or
+  column identities. For a table created within the current transaction, the
+  rename path has a distinct version-update branch.
+- The M0 clone hook copies an admitted source definition and version while
+  resetting relation IDs. Creation still reassigns ordinary column identities;
+  matching seqnums follow for the supported dense layout, not for arbitrary
+  layouts. The child can reference the same object as the parent. Snapshot and
+  relation selection, not the object name alone, establish visible membership.
+- A two-row local `mo_m0` SQL test exercised CREATE and flush, one COPY ADD
+  **before any M0 ADD**, clone, global checkpoint, orderly TN/CN restart, and a
+  subsequent M0 ADD on the child. CREATE and COPY each had CN/TN version 0;
+  COPY produced a new physical relation and object. Clone had a new relation
+  identity, the same column layout/version, and referenced the same object as
+  its parent. After restart those identities, layouts, object references and
+  data were unchanged. The child's ADD advanced CN/TN to version 1, preserved
+  the old object and returned NULL for both old rows, while the parent did not
+  acquire the added column. `TestR3CreateCopyCloneRestartIdentity` passed on
+  Darwin/arm64, Go 1.27.1, using an external test overlay; no product source
+  was modified. CN and TN versions were recorded; relation/layout/object/data
+  observations were asserted. Test source SHA-256
+  `065b02806c8748d60818f7a6ed2d4aeb57da7f98538e0f37e49d3e60d60a3b7e`;
+  log SHA-256 `8cc09852f61298e86e030bb75dfa84bf18c7f8d6741a96e1e43b17d6f1f8d98d`.
+
+The resulting candidate root is trustworthy only *conditionally*: the
+controlled create/rewrite path and subsequent transitions must be within the
+accepted domain; the selected object's relation/snapshot membership, physical
+prefix, types and version must be checked against the target schema. A dense
+version-zero shape does not authenticate how any historical object was created.
+This one local test covers neither all COPY variants nor a COPY after a prior
+M0 ADD, imported/legacy data, crash recovery, downgrade or mixed-version
+participants. The existing nonzero-version clone/merge/recovery receipts have
+their own scope and are not newly executed by this test.
+
+Two additional focused local observations constrain the decision. First, for a
+synthetic inconsistent version/layout, the actual M0 classifier returns no
+proof and the physical read then fails in shared ObjectIO; this does not prove
+all pre-read filtering paths fail at the same point or that a supported SQL
+history reaches that state. Second, on the same synthetic serialized object,
+the pre-PR baseline filled a requested absent column with NULL while the
+candidate default reader rejected it. This establishes a reader-contract
+difference for that geometry, not that a supported historical release produced
+the object. The origin and supported-history questions remain open.
 
 The following is a **design counterexample, not a reproduced production bug**.
 Start with an M0 relation with one appended column and an old object missing
@@ -193,7 +256,8 @@ contract. Historical geometry is not automatically corruption.
 | Older canonical system object lacking `rel_logical_id` | Current code has a narrow DB/table/column/type/object-bound exception. Preserve or replace only under an accepted compatibility decision. |
 | Restricted M0 object read by matching participants | Conditional on trusted domain classification and complete proof; candidate evidence is not production qualification. |
 | M0 data read by default/old binary or mixed participants | **Unsupported / not qualified** by current evidence. The owner must specify how access is prevented before using that as a safety claim; no automatic enforcement is established here. |
-| Backup, restore, clone and downgrade | **Not qualified** across the proposed boundary. Current-table rewrite alone cannot prove that snapshots, clones or backups no longer reference old objects. Define actual inventory, owner and migration/rollback procedure before supporting it. |
+| Shutdown upgrade, backup/restore and historical references | The supported persisted-data boundary remains **unresolved**. Current-table rewrite alone cannot prove that snapshots, clones or backups no longer reference old objects. Define the supported sources, owner and migration/recovery procedure. |
+| Mixed-version cluster operation and downgrade | Outside the supported upgrade contract and the current approval requirement; no additional qualification matrix is requested. This draft does not claim those operations are safe. |
 
 If maintainers retain a stricter global rule, treat it as an explicit
 compatibility change: supported source inventory, deterministic diagnosis and
@@ -224,6 +288,13 @@ result, mixed-version support or production readiness follows from this draft.
 
 Maintainer decisions requested: (1) accepted ownership A, B or neither;
 (2) authoritative origin/classification and its lifecycle; (3) ordinary
-historical-read and upgrade/downgrade policy; (4) any explicit experiment-only
+historical-read, shutdown-upgrade and backup/restore policy; (4) any explicit experiment-only
 deployment restrictions and the owner who enforces them. Record the accepted
 revision and decision before implementation review or code delivery.
+
+The [review of b40841dc](https://github.com/matrixorigin/matrixone/pull/30816#pullrequestreview-5665504109)
+recognizes the engine-owned direction as reasonable but retains the domain
+authority and historical-reader design blocker. It does not require a new
+document format or persistent marker, and does not assert a separate
+performance blocker. The evidence package improves inspectability; it does
+not close that maintainer decision.
