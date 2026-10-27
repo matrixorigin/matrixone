@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r31-2026-10-26`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r32-2026-10-27`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -65,6 +65,10 @@ skipped at the recorded head; cross-version rollback/restore is unsupported in
 this stage. Those gaps are recorded as limits and are not represented as passing
 approval evidence. Full implementation/lifecycle review remains a separate PR
 review step after the design record is accepted by the relevant reviewers.
+
+Historical protocol-allocation addenda below describe prior proposals. Their
+per-feature rollout floors are superseded by r32; they are not current admission
+requirements or independent approvals.
 
 ## r3 maintenance addendum (2026-10-05)
 
@@ -678,3 +682,24 @@ float folding, view restore creation context and Prepare hooks, outfile audit
 receipts and ISCP lifecycle/timing changes. No new runtime owner is introduced.
 Independent Architecture and SQL/Planner approval of r31 remains pending; this
 mechanical allocation does not supply approval or expand the development scope.
+
+
+## r32 — 2026-10-27 shutdown-only upgrade contract
+
+Governing artifact: `python_udf_current_stage.md` r32. The repository upgrade
+contract requires full-cluster shutdown; concurrent old/new in-cluster binaries
+and downgrade are unsupported. This revision removes the PR-introduced MORPC
+133, Python/shared-revision local and remote admission, destination probes,
+protocol-driven SQL fallback, and upgrade protocol prechecks. MORPC latest
+returns to the unchanged official baseline 132. No unrelated existing gate is
+removed or extended.
+
+Catalog 4.0.18, its minimum source 4.0.17 and nine idempotent repair entries
+remain, including first-login repair and historical schema/snapshot reads.
+Immutable revision, account, namespace, descriptor and corruption checks remain.
+External Flight wire/ABI/schema/environment negotiation remains exact. The
+status query retains its method/field identities without feature admission.
+Historical per-feature predecessor/rollback evidence is superseded; retained
+round-trip, catalog, evaluator and external-contract oracles test the supported
+behavior. This revision does not grant independent Architecture/SQL Planner
+approval or expand the authorized test/development scope.

@@ -92,7 +92,6 @@ var pythonRevisionUpgEntries = []versions.UpgradeEntry{
 			security_type varchar(10) not null default 'DEFINER',
 			primary key(function_id, revision)
 		)`, types.MaxStringSize),
-		RequiredProtocolVersion: defines.MORPCVersion48,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckTableDefinition(txn, accountID, catalog.MO_CATALOG, "mo_function_revisions")
 		},
@@ -111,11 +110,10 @@ func PythonRevisionUpgradeEntries() []versions.UpgradeEntry {
 // arg_types column for SQL UDFs and catalog readers.
 func addPythonSignatureIndex() versions.UpgradeEntry {
 	return versions.UpgradeEntry{
-		Schema:                  catalog.MO_CATALOG,
-		TableName:               "mo_user_defined_function",
-		UpgType:                 versions.ADD_INDEX,
-		UpgSql:                  "create unique index name_db_arg_types_descriptor on mo_catalog.mo_user_defined_function(name, db, arg_types, canonical_input_descriptor)",
-		RequiredProtocolVersion: defines.MORPCVersion48,
+		Schema:    catalog.MO_CATALOG,
+		TableName: "mo_user_defined_function",
+		UpgType:   versions.ADD_INDEX,
+		UpgSql:    "create unique index name_db_arg_types_descriptor on mo_catalog.mo_user_defined_function(name, db, arg_types, canonical_input_descriptor)",
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			return versions.CheckIndexDefinition(
 				txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "name_db_arg_types_descriptor",
@@ -126,11 +124,10 @@ func addPythonSignatureIndex() versions.UpgradeEntry {
 
 func dropLegacyPythonSignatureIndex() versions.UpgradeEntry {
 	return versions.UpgradeEntry{
-		Schema:                  catalog.MO_CATALOG,
-		TableName:               "mo_user_defined_function",
-		UpgType:                 versions.DROP_INDEX,
-		UpgSql:                  "alter table mo_catalog.mo_user_defined_function drop index name_db_arg_types",
-		RequiredProtocolVersion: defines.MORPCVersion48,
+		Schema:    catalog.MO_CATALOG,
+		TableName: "mo_user_defined_function",
+		UpgType:   versions.DROP_INDEX,
+		UpgSql:    "alter table mo_catalog.mo_user_defined_function drop index name_db_arg_types",
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, err := versions.CheckIndexDefinition(
 				txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", "name_db_arg_types",
@@ -149,7 +146,6 @@ func addPythonRevisionHeadColumn(name, definition string) versions.UpgradeEntry 
 			"alter table mo_catalog.mo_user_defined_function add column %s %s after function_id",
 			name, definition,
 		),
-		RequiredProtocolVersion: defines.MORPCVersion48,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			column, err := versions.CheckTableColumn(txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", name)
 			if err != nil {
@@ -175,7 +171,6 @@ func addPythonSignatureColumn(name, definition, after string) versions.UpgradeEn
 			"alter table mo_catalog.mo_user_defined_function add column %s %s after %s",
 			name, definition, after,
 		),
-		RequiredProtocolVersion: defines.MORPCVersion48,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			column, err := versions.CheckTableColumn(txn, accountID, catalog.MO_CATALOG, "mo_user_defined_function", name)
 			if err != nil {

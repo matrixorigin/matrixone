@@ -259,8 +259,8 @@ func TestPreparedFieldRetryDeclarationGeneration(t *testing.T) {
 // Routine revision metadata is outside table Schemas. Retry must validate an
 // immutable, bounded snapshot before applying the preceding FIELD declaration.
 func TestPreparedFieldRoutineRetryGeneration(t *testing.T) {
-	setSharedRoutineRevisionProtocolForTest(t, sharedRoutineRevisionProtocolVersion)
-	for _, name := range []string{"unchanged", "revision", "catalog error", "nested immutable facts", "capture error", "protocol rollback"} {
+	setRoutineProtocolForTest(t, defines.MORPCMinVersion)
+	for _, name := range []string{"unchanged", "revision", "catalog error", "nested immutable facts", "capture error"} {
 		t.Run(name, func(t *testing.T) {
 			ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 312,
 				"select field(case when ? then ? else null end,'A','a')")
@@ -322,8 +322,6 @@ func TestPreparedFieldRoutineRetryGeneration(t *testing.T) {
 				row[1], row[4] = uint64(8), uint64(8)
 			case "catalog error":
 				catalog.failOn = "mo_user_defined_function"
-			case "protocol rollback":
-				setSharedRoutineRevisionProtocolForTest(t, sharedRoutineRevisionProtocolVersion-1)
 			}
 			execution := &routinePlanValidationSession{FeSession: ses, exec: catalog}
 			compiler := ses.GetTxnCompileCtx()

@@ -74,7 +74,6 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_ISCPDrainConsumer:       defines.MORPCVersion4,
 	pb.CmdMethod_IcebergCacheInvalidate:  defines.MORPCVersion4,
 	pb.CmdMethod_MongoDBClientRetire:     defines.MORPCVersion5,
-	pb.CmdMethod_GetPythonUdfStatus:      defines.MORPCVersion133,
 }
 
 type queryClient struct {
@@ -177,5 +176,8 @@ func (c *queryClient) unwrapResponseError(resp *pb.Response) (*pb.Response, erro
 // CheckMethodVersion validates the current service protocol for a query RPC.
 // Senders and effectful receivers share the same method requirements.
 func CheckMethodVersion(ctx context.Context, service string, req *pb.Request) error {
+	if req.GetMethod() == pb.CmdMethod_GetPythonUdfStatus {
+		return nil
+	}
 	return runtime.CheckMethodVersion(ctx, service, methodVersions, req)
 }

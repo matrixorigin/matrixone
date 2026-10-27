@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 )
@@ -34,12 +33,11 @@ import (
 // Complete, partial and absent catalog states converge on retry.
 var Handler = &versionHandle{
 	metadata: versions.Version{
-		Version:                 "4.0.18",
-		MinUpgradeVersion:       "4.0.17",
-		UpgradeCluster:          versions.No,
-		UpgradeTenant:           versions.Yes,
-		VersionOffset:           uint32(len(tenantUpgEntries)),
-		RequiredProtocolVersion: defines.MORPCVersion133,
+		Version:           "4.0.18",
+		MinUpgradeVersion: "4.0.17",
+		UpgradeCluster:    versions.No,
+		UpgradeTenant:     versions.Yes,
+		VersionOffset:     uint32(len(tenantUpgEntries)),
 	},
 }
 
@@ -57,11 +55,6 @@ func (v *versionHandle) Prepare(ctx context.Context, txn executor.TxnExecutor, f
 }
 
 func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
-	// Login compensation invokes this handler without the cluster-upgrade
-	// scheduler, so enforce the same floor before any catalog mutation.
-	if err := versions.CheckCommonProtocolVersion(txn, v.metadata.RequiredProtocolVersion); err != nil {
-		return err
-	}
 	logger := runtime.ServiceRuntime(txn.Txn().TxnOptions().CN).Logger()
 	for _, entry := range tenantUpgEntries {
 		start := time.Now()

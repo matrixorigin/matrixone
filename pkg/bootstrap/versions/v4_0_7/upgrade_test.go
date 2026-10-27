@@ -39,6 +39,11 @@ func TestPythonFunctionRevisionUpgradeContract(t *testing.T) {
 	}
 
 	entries := PythonRevisionUpgradeEntries()
+	for _, entry := range entries {
+		if entry.RequiredProtocolVersion != 0 {
+			t.Fatalf("Python repair must not probe a feature protocol: %+v", entry)
+		}
+	}
 	if len(entries) != 9 {
 		t.Fatalf("expected six UDF identity columns, index replacement, and one revision table, got %d entries", len(entries))
 	}
@@ -74,13 +79,13 @@ func TestPythonFunctionRevisionUpgradeContract(t *testing.T) {
 			revision = entry
 		}
 	}
-	if addIndex == nil || addIndex.UpgType != versions.ADD_INDEX || addIndex.RequiredProtocolVersion != defines.MORPCVersion48 {
+	if addIndex == nil || addIndex.UpgType != versions.ADD_INDEX || addIndex.RequiredProtocolVersion != 0 {
 		t.Fatalf("missing current Python signature index upgrade: %+v", addIndex)
 	}
 	if !strings.Contains(strings.ToLower(addIndex.UpgSql), "canonical_input_descriptor") {
 		t.Fatalf("current Python signature index omits exact descriptor: %s", addIndex.UpgSql)
 	}
-	if dropIndex == nil || dropIndex.UpgType != versions.DROP_INDEX || dropIndex.RequiredProtocolVersion != defines.MORPCVersion48 {
+	if dropIndex == nil || dropIndex.UpgType != versions.DROP_INDEX || dropIndex.RequiredProtocolVersion != 0 {
 		t.Fatalf("missing legacy signature index removal: %+v", dropIndex)
 	}
 	if revision == nil {
@@ -89,7 +94,7 @@ func TestPythonFunctionRevisionUpgradeContract(t *testing.T) {
 	if revision.Schema != catalog.MO_CATALOG || revision.TableName != "mo_function_revisions" {
 		t.Fatalf("unexpected revision catalog identity: %+v", revision)
 	}
-	if revision.UpgType != versions.CREATE_NEW_TABLE || revision.RequiredProtocolVersion != defines.MORPCVersion48 {
+	if revision.UpgType != versions.CREATE_NEW_TABLE || revision.RequiredProtocolVersion != 0 {
 		t.Fatalf("unexpected revision catalog upgrade: %+v", revision)
 	}
 	lowerDDL := strings.ToLower(revision.UpgSql)

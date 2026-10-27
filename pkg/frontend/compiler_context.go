@@ -1307,26 +1307,17 @@ type sqlRevisionCatalogRow struct {
 	SecurityType          string
 }
 
-// readSQLRevision resolves the current shared revision head without making a
-// legacy SQL row look current. Below the shared revision protocol floor it
-// returns found=false so the caller keeps using the legacy compatibility row;
-// this is the explicit mixed-writer contract during a rolling upgrade. Once
-// the floor is active, a missing v4_0_7 table/column is reported as found=false
-// for ordinary SQL compatibility, while every non-zero head with a missing or
-// malformed revision is a hard catalog error.
+// readSQLRevision resolves the immutable shared revision head. A historical
+// catalog or snapshot without revision columns retains SQL compatibility through
+// its legacy row. A non-zero head with a missing or malformed revision is a
+// hard catalog error; it is never synthesized from that row.
 func readSQLRevision(
 	ctx context.Context,
 	bh BackgroundExec,
 	functionID int64,
 	snapshot *plan2.Snapshot,
 ) (sqlRevisionCatalogRow, bool, error) {
-	if !sharedRoutineRevisionProtocolReady(bh.Service()) {
-		// During the rolling upgrade the legacy row is the only shared-writer
-		// contract. ResolveUdf already loaded that row, so returning found=false
-		// keeps old writers and new readers on the same body until every CN has
-		// reached the revision-aware protocol floor.
-		return sqlRevisionCatalogRow{}, false, nil
-	}
+
 	baseTable := "mo_catalog.mo_user_defined_function"
 	revisionTable := "mo_catalog.mo_function_revisions"
 	if snapshot != nil && snapshot.TS != nil {
@@ -1462,12 +1453,6 @@ func readSQLRevision(
 }
 
 func readPythonRevision(ctx context.Context, bh BackgroundExec, functionID int64, snapshot *plan2.Snapshot) (pythonRevisionCatalogRow, error) {
-	if !sharedRoutineRevisionProtocolReady(bh.Service()) {
-		return pythonRevisionCatalogRow{}, udferr.Newf(
-			"UNSUPPORTED_ROUTINE_VERSION: Python UDF revision contract requires MORPC protocol version %d",
-			sharedRoutineRevisionProtocolVersion,
-		)
-	}
 	bh.ClearExecResultSet()
 	query := pythonRevisionCatalogSQL(snapshot, functionID)
 	if err := bh.Exec(ctx, query); err != nil {
