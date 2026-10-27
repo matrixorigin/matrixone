@@ -1955,6 +1955,31 @@ func TestVectorMatmulFillIDNotCopied(t *testing.T) {
 // Flush writes each group's result into the result vector: its Go heap allocation does not
 // grow with the result size.
 func TestVectorMatmulFlushGoAllocation(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		scale float32
+	}{
+		{"integral", 1},
+		{"fractional", 0.125},
+		{"exponent", 1e-7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vmFlushGoAllocation(t, tc.scale)
+		})
+	}
+}
+
+func TestVectorMatmulJSONPutDistanceNoAlloc(t *testing.T) {
+	dists := []float64{0, -3, 1e6, -0.125, float64(float32(0.1)), 0.1, 1e21, 3e-7, math.MaxFloat64, 5e-324}
+	var dst [8]byte
+	for _, d := range dists {
+		require.Zero(t, testing.AllocsPerRun(10, func() {
+			vectorMatmulJSONPutDistance(dst[:], d)
+		}), "%v", d)
+	}
+}
+
+func vmFlushGoAllocation(t *testing.T, scale float32) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()) }()
 	allocated := map[int]uint64{}
@@ -1974,7 +1999,7 @@ func TestVectorMatmulFlushGoAllocation(t *testing.T) {
 		groups := make([]uint64, len(ids))
 		for i := range ids {
 			ids[i] = fmt.Sprintf("%064d", i)
-			rows[i] = []float32{float32(i % 7), float32(i % 5), 0, 0}
+			rows[i] = []float32{float32(i%7) * scale, float32(i%5) * scale, 0, 0}
 			groups[i] = 1
 		}
 		for start := 0; start < len(ids); start += hashmap.UnitLimit {

@@ -1112,7 +1112,8 @@ func vectorMatmulJSONSetEntry(dst []byte, i int, tp bytejson.TpCode, off int) {
 // vectorMatmulJSONPutDistance writes dist as the 8-byte number its JSON text parses to, as
 // bytejson.AppendBinaryNumber reads it: text that parses as an int64 or uint64 is that
 // integer, other text a float64. The text is the shortest float32 text when dist is a float32
-// value (GPU, float32 kernels), float64 text otherwise.
+// value (GPU, float32 kernels), float64 text otherwise. Text with a '.' or an exponent goes
+// to ParseFloat without the integer parsers.
 func vectorMatmulJSONPutDistance(dst []byte, dist float64) bytejson.TpCode {
 	if dist == 0 {
 		dist = 0
@@ -1123,13 +1124,15 @@ func vectorMatmulJSONPutDistance(dst []byte, dist float64) bytejson.TpCode {
 	}
 	var buf [32]byte
 	text := util.UnsafeBytesToString(strconv.AppendFloat(buf[:0], dist, 'g', -1, bitSize))
-	if v, err := strconv.ParseInt(text, 10, 64); err == nil {
-		binary.LittleEndian.PutUint64(dst, uint64(v))
-		return bytejson.TpCodeInt64
-	}
-	if v, err := strconv.ParseUint(text, 10, 64); err == nil {
-		binary.LittleEndian.PutUint64(dst, v)
-		return bytejson.TpCodeUint64
+	if !strings.ContainsAny(text, ".eE") {
+		if v, err := strconv.ParseInt(text, 10, 64); err == nil {
+			binary.LittleEndian.PutUint64(dst, uint64(v))
+			return bytejson.TpCodeInt64
+		}
+		if v, err := strconv.ParseUint(text, 10, 64); err == nil {
+			binary.LittleEndian.PutUint64(dst, v)
+			return bytejson.TpCodeUint64
+		}
 	}
 	v, _ := strconv.ParseFloat(text, 64)
 	binary.LittleEndian.PutUint64(dst, math.Float64bits(v))
