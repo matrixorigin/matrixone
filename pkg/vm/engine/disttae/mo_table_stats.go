@@ -1048,26 +1048,6 @@ func intsJoin(items []uint64, delimiter string) (string, func()) {
 	}
 }
 
-func joinAccountDatabase(accIds []uint64, dbIds []uint64) (string, func()) {
-	bb := builderPool.Get().(*builder)
-	for i := range accIds {
-		bb.writeString("(account_id = ")
-		bb.writeString(strconv.FormatUint(accIds[i], 10))
-		bb.writeString(" AND database_id = ")
-		bb.writeString(strconv.FormatUint(dbIds[i], 10))
-		bb.writeString(")")
-
-		if i < len(accIds)-1 {
-			bb.writeString(" OR ")
-		}
-	}
-
-	return bb.string(), func() {
-		bb.reset()
-		builderPool.Put(bb)
-	}
-}
-
 func constructInStmt(
 	tblIds []uint64,
 	by string,
@@ -1083,31 +1063,6 @@ func constructInStmt(
 	}
 
 	bb.writeString(")")
-
-	return bb.string(), func() {
-		bb.reset()
-		builderPool.Put(bb)
-	}
-}
-
-func joinAccountDatabaseTable(
-	accIds []uint64, dbIds []uint64, tblIds []uint64,
-) (string, func()) {
-
-	bb := builderPool.Get().(*builder)
-	for i := range accIds {
-		bb.writeString("(account_id = ")
-		bb.writeString(strconv.FormatUint(accIds[i], 10))
-		bb.writeString(" AND database_id = ")
-		bb.writeString(strconv.FormatUint(dbIds[i], 10))
-		bb.writeString(" AND table_id = ")
-		bb.writeString(strconv.FormatUint(tblIds[i], 10))
-		bb.writeString(")")
-
-		if i < len(accIds)-1 {
-			bb.writeString(" OR ")
-		}
-	}
 
 	return bb.string(), func() {
 		bb.reset()
