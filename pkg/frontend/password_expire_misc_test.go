@@ -202,17 +202,25 @@ func TestDoAlterUserPasswordExpire(t *testing.T) {
 		})
 	}
 
-	t.Run("reject identified with password expire", func(t *testing.T) {
-		ses, _, ctrl, ctx := newSessAndBg(t)
-		defer ctrl.Finish()
-
-		au := newAlterUser(&tree.UserMiscOptionPasswordExpireNone{})
-		au.Users[0].AuthExist = true
-		au.Users[0].IdentTyp = tree.AccountIdentifiedByPassword
-		au.Users[0].IdentStr = "123456"
-		err := doAlterUser(ctx, ses, au)
-		require.ErrorContains(t, err, "not support identified with password expire operation")
-	})
+	for _, auth := range []string{"identified by '123456'", "identified by ''", "identified by random password"} {
+		for _, option := range []string{"password expire", "password expire default", "account lock"} {
+			t.Run("reject "+auth+" with "+option, func(t *testing.T) {
+				ses, bh, ctrl, ctx := newSessAndBg(t)
+				defer ctrl.Finish()
+				ses.rt = &Routine{}
+				ses.getRoutine().setExpired(true)
+				// Exercise the real parser and AST-to-authentication lowering:
+				// empty/random passwords have an auth clause but empty IdentStr.
+				stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "alter user u1 "+auth+" "+option, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				err = handleAlterUser(ses, &ExecCtx{reqCtx: ctx}, stmt.(*tree.AlterUser))
+				require.ErrorContains(t, err, "not support identified with")
+				require.Empty(t, bh.executedSQLs, "reject before beginning a catalog transaction")
+				require.True(t, ses.getRoutine().isExpired(), "rejection must not release the password sandbox")
+			})
+		}
+	}
 
 	t.Run("still reject unsupported misc option", func(t *testing.T) {
 		ses, _, ctrl, ctx := newSessAndBg(t)

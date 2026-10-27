@@ -35,6 +35,19 @@ select expired_time is null from mo_catalog.mo_user where user_name = 'pe_u5';
 
 -- identified with password expire combination is rejected with a clear error
 alter user pe_u5 identified by 'Other999b' password expire;
+-- Empty/random credentials must not be silently discarded while changing
+-- expiration or locking the account. The rejected statement is atomic.
+alter user pe_u5 password expire;
+set @pe_saved_auth = (select authentication_string from mo_catalog.mo_user where user_name = 'pe_u5');
+set @pe_saved_expiry = (select expired_time from mo_catalog.mo_user where user_name = 'pe_u5');
+alter user pe_u5 identified by '' password expire;
+alter user pe_u5 identified by random password password expire;
+alter user pe_u5 identified by '' password expire default;
+alter user pe_u5 identified by random password password expire default;
+alter user pe_u5 identified by '' account lock;
+alter user pe_u5 identified by random password account lock;
+select authentication_string = @pe_saved_auth as password_unchanged, expired_time = @pe_saved_expiry as expiration_unchanged, status = 'unlock' as unlocked from mo_catalog.mo_user where user_name = 'pe_u5';
+alter user pe_u5 password expire default;
 -- unsupported misc options keep the historical error
 alter user pe_u5 password history default;
 

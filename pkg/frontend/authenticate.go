@@ -3291,7 +3291,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		if _, ok := au.MiscOpt.(*tree.UserMiscOptionAccountUnlock); ok {
 			doLockOrUnlock = unlockUser
 		} else if _, ok := au.MiscOpt.(*tree.UserMiscOptionAccountLock); ok {
-			if user.IdentStr != "" {
+			if user.AuthExist {
 				msg := "not support identified with lock operation, use `alter user xx lock` instead"
 				return moerr.NewInternalError(ctx, msg)
 			}
@@ -3300,7 +3300,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 			// PASSWORD EXPIRE (NONE / INTERVAL n DAY / NEVER / DEFAULT):
 			// persist the new expiration into mo_user.expired_time. The next
 			// login sandboxes the session once expired_time is reached.
-			if user.IdentStr != "" {
+			if user.AuthExist {
 				msg := "not support identified with password expire operation, use `alter user xx password expire` instead"
 				return moerr.NewInternalError(ctx, msg)
 			}
