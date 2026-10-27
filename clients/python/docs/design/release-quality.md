@@ -29,6 +29,11 @@ A before_execute listener stamps typed statements with a compiler-contract
 namespace so a caller cache warmed before adoption cannot reuse MySQL SQL without
 snapshot hints. Caller cache entries remain intact. Engine-created and adopted
 sync/async engines share the listener; raw driver SQL is unaffected.
+Legacy SQLAlchemy 1.4 string execution passes through the listener unchanged.
+Snapshot tokens inserted during typed compilation follow the active compiler's
+percent-escaping policy; raw/export SQL retains the original snapshot name.
+Compiler-local snapshot bindings avoid caller and expanded parameter names, and
+execution parameters cannot replace the immutable snapshot annotation.
 
 Each live immutable statement retains at most one prepared annotation memo,
 guarded by exact original identity and compiler-contract version. Generative

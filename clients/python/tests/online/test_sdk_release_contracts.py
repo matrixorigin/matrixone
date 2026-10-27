@@ -35,9 +35,11 @@ def historical_join(client, server):
         client.execute(f'CREATE TABLE {b_name}(ref INT)')
         client.execute(f'INSERT INTO {a_name} VALUES(1),(2),(3)')
         client.execute(f'INSERT INTO {b_name} VALUES(1)')
+        snapshot_base = name('release_sp_')
         for ref in (1, 2):
             client.execute(f'UPDATE {b_name} SET ref={ref}')
-            snapshot = name('release_sp_')
+            # Collapsing %% to % would select the other existing snapshot.
+            snapshot = snapshot_base + '%' * ref + 'name'
             client.snapshots.create(snapshot, 'database', database=database)
             snapshots.append(snapshot)
         client.execute(f'UPDATE {b_name} SET ref=3')

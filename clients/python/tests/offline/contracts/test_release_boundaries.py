@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import pymysql
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 
@@ -33,6 +34,247 @@ def engine():
         yield engine
     finally:
         engine.dispose()
+
+
+@pytest.fixture(params=['pyformat', 'format'])
+def mysql_transport(request, monkeypatch):
+    """Real compilation/event/driver formatting with a deterministic DBAPI transport."""
+    wire = []
+    formatter_connection = pymysql.Connection(defer_connect=True)
+    formatter_connection.server_status = 0
+    formatter = formatter_connection.cursor()
+
+    class Cursor:
+        description = (('value', None, None, None, None, None, None),)
+        rowcount = 1
+
+        def execute(self, sql, params=None):
+            wire.append(formatter.mogrify(sql, params))
+            self.rows = [(1,)]
+
+        def fetchone(self):
+            return self.rows.pop(0) if self.rows else None
+
+        def fetchall(self):
+            result, self.rows = self.rows, []
+            return result
+
+        def close(self):
+            pass
+
+    class Connection:
+        def character_set_name(self):
+            return 'utf8mb4'
+
+        def cursor(self):
+            return Cursor()
+
+        def rollback(self):
+            pass
+
+        def commit(self):
+            pass
+
+        def close(self):
+            pass
+
+    engine = sa.create_engine('mysql+pymysql://unused@localhost/db', creator=Connection, paramstyle=request.param)
+    # Only server introspection is unavailable; execution dispatch remains real.
+    engine.dialect.initialize = lambda connection: None
+    monkeypatch.setattr(Client, '_detect_backend_version', lambda client: None)
+    try:
+        yield engine, wire, formatter
+    finally:
+        engine.dispose()
+        formatter_connection.close()
+
+
+def test_adopted_engine_preserves_legacy_string_execution(mysql_transport):
+    engine, wire, _ = mysql_transport
+
+    def check():
+        with engine.connect() as connection:
+            if sa.__version__.startswith('1.4.'):
+                assert connection.execute('SELECT 1').scalar() == 1
+                assert wire[-1] == 'SELECT 1'
+            else:
+                with pytest.raises(sa.exc.ObjectNotExecutableError):
+                    connection.execute('SELECT 1')
+            assert connection.execute(sa.text('SELECT :value'), {'value': 1}).scalar() == 1
+            assert connection.exec_driver_sql('SELECT 1').scalar() == 1
+
+    check()
+    Client.from_engine(engine, logger=Mock(), sql_log_mode='off')
+    check()
+
+
+@pytest.mark.parametrize(
+    'snapshot',
+    [
+        'plain',
+        'snapshot%name',
+        'snapshot%%name',
+        'snapshot%s',
+        'snapshot%(id)s',
+        'snapshot__[POSTCOMPILE_id]',
+        'snapshot__[POSTCOMPILE_ids]',
+        "quo'te%漢",
+    ],
+)
+@pytest.mark.parametrize('bound', [False, True])
+@pytest.mark.parametrize('owner', ['client', 'session'])
+def test_snapshot_driver_formatting_preserves_identity(mysql_transport, snapshot, bound, owner):
+    engine, wire, _ = mysql_transport
+    table = sa.table('t', sa.column('id'))
+    other = sa.table('other', sa.column('id'))
+    columns = [sa.literal(42).label('projection'), table.c.id] if bound else [table.c.id]
+    statement = select(*columns).select_from(table.join(other, table.c.id == other.c.id)).with_snapshot(snapshot)
+    if bound:
+        statement = statement.where(table.c.id == sa.bindparam('id', 7)).where(
+            table.c.id.in_(sa.bindparam('ids', [7, 8], expanding=True))
+        )
+    cache = {}
+    adopted = engine.execution_options(compiled_cache=cache)
+    with adopted.connect() as connection:
+        assert connection.execute(statement).scalar() == 1
+        assert 'snapshot =' not in wire[-1]
+    warmed = dict(cache)
+    client = Client.from_engine(adopted, logger=Mock(), sql_log_mode='off')
+    hint = "{snapshot = '" + snapshot.replace("'", "''") + "'}"
+
+    def check(executor):
+        for _ in range(2):
+            assert executor.execute(statement).scalar() == 1
+            assert wire[-1].count(hint) == 2
+            if bound:
+                assert 'SELECT 42 AS projection' in wire[-1]
+                assert 't.id = 7' in wire[-1]
+                assert 't.id IN (7, 8)' in wire[-1]
+
+    if owner == 'client':
+        check(client)
+    else:
+        with client.session() as session:
+            check(session)
+    assert all(cache[key] is value for key, value in warmed.items())
+    assert statement._annotations['matrixone_snapshot'] == snapshot
+
+
+@pytest.mark.parametrize(
+    'snapshot',
+    ['snapshot%name', 'snapshot%%name', 'snapshot%s', 'snapshot%(id)s', 'snapshot__[POSTCOMPILE_id]', "quo'te%漢"],
+)
+def test_snapshot_raw_export_sql_keeps_original_percents(mysql_transport, snapshot):
+    engine, wire, formatter = mysql_transport
+    client = Client.from_engine(engine, logger=Mock(), sql_log_mode='off')
+    table = sa.table('t', sa.column('id'))
+    statement = select(table.c.id).where(table.c.id == 7).with_snapshot(snapshot)
+    hint = "{snapshot = '" + snapshot.replace("'", "''") + "'}"
+    for sql in (
+        compile_select_to_sql(statement),
+        compile_select_to_sql(statement, engine),
+        compile_expression(statement),
+        _query_to_sql(statement),
+    ):
+        assert hint in sql
+        assert client.execute(sql).scalar() == 1
+        assert wire[-1] == sql
+    literal = statement.compile(dialect=engine.dialect, compile_kwargs={'literal_binds': True})
+    arguments = literal.params if engine.dialect.paramstyle == 'pyformat' else ()
+    assert formatter.mogrify(str(literal), arguments) == compile_select_to_sql(statement)
+
+
+@pytest.mark.parametrize(
+    'parameter',
+    [
+        'matrixone_snapshot_1',
+        '_matrixone_snapshot_0_value',
+        '_matrixone_snapshot.0.value',
+        '_matrixone_snapshot 0 value',
+    ],
+)
+@pytest.mark.parametrize('expanding', [False, True])
+def test_snapshot_annotation_isolated_from_caller_bind_namespace(mysql_transport, parameter, expanding):
+    engine, wire, _ = mysql_transport
+    client = Client.from_engine(engine.execution_options(compiled_cache={}), logger=Mock(), sql_log_mode='off')
+    table = sa.table('t', sa.column('id'))
+    value = [7, 8] if expanding else 7
+    bind = sa.bindparam(parameter, [5, 6] if expanding else 5, expanding=expanding)
+    predicate = table.c.id.in_(bind) if expanding else table.c.id == bind
+    live = select(table.c.id).where(predicate)
+    assert client.execute(live).scalar() == 1
+    assert ('t.id IN (5, 6)' if expanding else 't.id = 5') in wire[-1]
+    snapshot = live.with_snapshot('expected_history')
+    supplied = {parameter: value}
+    supplied.update(
+        {
+            f'_matrixone_snapshot_{index}_value': 'wrong_history'
+            for index in range(4)
+            if f'_matrixone_snapshot_{index}_value' != parameter
+        }
+    )
+    supplied['matrixone_snapshot_1'] = value if parameter == 'matrixone_snapshot_1' else 'wrong_history'
+    original = dict(supplied)
+    expected_predicate = 't.id IN (7, 8)' if expanding else 't.id = 7'
+    for _ in range(2):
+        assert client.execute(snapshot, supplied).scalar() == 1
+        assert "{snapshot = 'expected_history'}" in wire[-1]
+        assert expected_predicate in wire[-1]
+    # SQLAlchemy 2.1 also collects .params() separately from execution arguments.
+    derived = snapshot.params(supplied)
+    assert client.execute(derived).scalar() == 1
+    assert "{snapshot = 'expected_history'}" in wire[-1]
+    raw = compile_select_to_sql(derived)
+    assert "{snapshot = 'expected_history'}" in raw and expected_predicate in raw
+    assert supplied == original
+
+
+def test_snapshot_binding_avoids_multiple_occupied_caller_names(mysql_transport):
+    engine, wire, _ = mysql_transport
+    client = Client.from_engine(engine.execution_options(compiled_cache={}), logger=Mock(), sql_log_mode='off')
+    table = sa.table('t', sa.column('id'))
+    statement = (
+        select(table.c.id)
+        .where(table.c.id >= sa.bindparam('_matrixone_snapshot_0_value', 3))
+        .where(table.c.id <= sa.bindparam('_matrixone_snapshot_1_value', 5))
+        .with_snapshot('expected_history')
+    )
+    for lower, upper in ((7, 9), (8, 10)):
+        parameters = {
+            '_matrixone_snapshot_0_value': lower,
+            '_matrixone_snapshot_1_value': upper,
+            '_matrixone_snapshot_2_value': 'wrong_history',
+        }
+        original = dict(parameters)
+        assert client.execute(statement, parameters).scalar() == 1
+        assert "{snapshot = 'expected_history'}" in wire[-1]
+        assert 't.id >= ' + str(lower) in wire[-1]
+        assert 't.id <= ' + str(upper) in wire[-1]
+        assert parameters == original
+
+
+@pytest.mark.parametrize('snapshot', [None, 'historical'])
+@pytest.mark.parametrize('expanding', [False, True])
+def test_raw_compilation_preserves_escaped_bind_processors(mysql_transport, snapshot, expanding):
+    engine, wire, _ = mysql_transport
+    client = Client.from_engine(engine, logger=Mock(), sql_log_mode='off')
+
+    class OffsetInteger(sa.TypeDecorator):
+        impl = sa.Integer
+        cache_ok = True
+
+        def process_bind_param(self, value, dialect):
+            return value + 1
+
+    table = sa.table('t', sa.column('id'))
+    bind = sa.bindparam('ordinary name', [7, 8] if expanding else 7, type_=OffsetInteger(), expanding=expanding)
+    statement = select(table.c.id).where(table.c.id.in_(bind) if expanding else table.c.id == bind)
+    if snapshot is not None:
+        statement = statement.with_snapshot(snapshot)
+    assert client.execute(statement).scalar() == 1
+    expected = 't.id IN (8, 9)' if expanding else 't.id = 8'
+    assert expected in wire[-1]
+    assert expected in compile_select_to_sql(statement)
 
 
 @pytest.mark.parametrize(
@@ -143,8 +385,13 @@ def test_snapshot_select_is_generative_and_cache_keyed_across_consumers():
         assert sql.count("{snapshot = 'first'}") == 2
         assert '1.000000000000000001' in sql
     assert 'snapshot' not in compile_select_to_sql(live)
-    compiled = statement.compile(dialect=MatrixOneDialect())
-    assert compiled.params == {'amount': Decimal('1.000000000000000001')}
+    compiled = statement.compile(dialect=MatrixOneDialect(), compile_kwargs={'render_postcompile': True})
+    expanded = getattr(compiled, '_post_compile_expanded_state', None)
+    parameters = expanded.parameters if expanded is not None else compiled.params
+    assert parameters['amount'] == Decimal('1.000000000000000001')
+    # SQLAlchemy 1.4 retains the consumed literal-execute value in introspection;
+    # real driver assertions above verify the actual remaining wire parameters.
+    assert all(value == 'first' for key, value in parameters.items() if key != 'amount')
 
 
 @pytest.mark.parametrize('shape', ['subquery', 'cte', 'outer_cte'])
@@ -298,7 +545,9 @@ async def test_async_driver_adoption_keeps_owner_and_compiles_snapshots():
         assert isinstance(dialect, MatrixOneDialect)
         assert dialect.supports_native_decimal
         a, _ = snapshot_tables()
-        assert "{snapshot = 'historical'}" in str(select(a, snapshot='historical').compile(dialect=dialect))
+        assert "{snapshot = 'historical'}" in str(
+            select(a, snapshot='historical').compile(dialect=dialect, compile_kwargs={'render_postcompile': True})
+        )
     finally:
         await engine.dispose()
 

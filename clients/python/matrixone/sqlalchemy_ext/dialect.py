@@ -18,6 +18,7 @@ MatrixOne SQLAlchemy dialect support.
 
 import sqlalchemy
 from sqlalchemy import event
+from sqlalchemy.sql.elements import ClauseElement
 from sqlalchemy.dialects.mysql.base import MySQLTypeCompiler, MySQLDialect, ischema_names as mysql_ischema_names
 
 from .vector_type import VectorType, VectorPrecision
@@ -209,8 +210,32 @@ class MatrixOneCompiler(MySQLDialect.statement_compiler):
         if snapshot is not None:
             from .._snapshot_sql import rewrite_snapshot
 
-            sql = rewrite_snapshot(sql, snapshot)
+            # Defer the grammar value until positional/postcompile bind scanning
+            # finishes, so bind-looking snapshot names remain data.
+            occupied = set(self.binds).union(self.bind_names.values(), self.escaped_bind_names.values())
+            index = 0
+            name = '_matrixone_snapshot_0_value'
+            while name in occupied:
+                index += 1
+                name = '_matrixone_snapshot_' + str(index) + '_value'
+            # The fixed suffix cannot collide with expanding binds' numeric suffixes.
+            self._matrixone_snapshot_binding = (name, snapshot)
+            token = self.process(
+                sqlalchemy.bindparam(name, snapshot, type_=sqlalchemy.String(), literal_execute=True),
+                literal_binds=False,
+                render_postcompile=bool(kwargs.get('render_postcompile') or kwargs.get('literal_binds')),
+            )
+            sql = rewrite_snapshot(sql, snapshot, snapshot_token=token)
         return sql
+
+    def construct_params(self, *args, **kwargs):
+        parameters = super().construct_params(*args, **kwargs)
+        binding = getattr(self, '_matrixone_snapshot_binding', None)
+        if binding is not None and binding[0] in parameters:
+            # Execution parameters cannot replace immutable snapshot annotations.
+            # Never re-add a value already consumed by eager postcompilation.
+            parameters[binding[0]] = binding[1]
+        return parameters
 
     def visit_user_defined_type(self, type_, **kw):
         """Handle user-defined vector types."""
@@ -264,6 +289,8 @@ _PREPARED_ATTRIBUTE = '_matrixone_compiler_prepared'
 
 def _prepare_compiler_statement(connection, statement, multiparams, params, execution_options):
     """Partition external caches without changing the caller's cache or dialect owner."""
+    if not isinstance(statement, ClauseElement):
+        return statement, multiparams, params
     if statement._annotations.get('matrixone_compiler_contract') == _COMPILER_CONTRACT:
         return statement, multiparams, params
     memo = getattr(statement, _PREPARED_ATTRIBUTE, None)

@@ -55,14 +55,15 @@ def compile_expression(expression, model=None, alias=None, projection=False, com
         ),
     )
     # SQLAlchemy owns expression syntax; our shared renderer owns value quoting.
-    parameters = compiled.params
-    processors = dict(compiled._bind_processors)
     expanded = getattr(compiled, '_post_compile_expanded_state', None)
+    parameters = expanded.parameters if expanded is not None else compiled.params
+    processors = dict(compiled._bind_processors)
     if expanded is not None:
         processors.update(expanded.processors)
     values = []
     for key in compiled.positiontup or ():
-        value = parameters[key]
+        parameter_key = key if expanded is not None else compiled.escaped_bind_names.get(key, key)
+        value = parameters[parameter_key]
         processor = processors.get(key)
         if processor is not None:
             if not callable(processor):
