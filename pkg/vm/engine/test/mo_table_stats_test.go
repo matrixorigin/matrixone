@@ -191,17 +191,28 @@ func TestMoTableStatsMoCtl(t *testing.T) {
 				require.Equal(t, legacy, sizes)
 			})
 		}
-		runSQL(fmt.Sprintf(`update %s set table_stats='{"table_size":9999}' where account_id=0 and database_id=%d and table_id=%d`, statsTable, dbID, secondID))
-		func() {
-			op := p.StartCNTxn()
-			defer op.Rollback(p.Ctx)
-			p.DeleteTableInDB(op, databaseName, secondSchema.Name)
-			require.NoError(t, op.Commit(p.Ctx))
-		}()
-		sizes, ok, err := e.QueryAccountTableSizes(p.Ctx, []uint64{0}, false)
-		require.NoError(t, err)
-		require.True(t, ok)
-		require.Equal(t, map[uint64]uint64{0: 9223372036854775808}, sizes, "a dropped table's stale statistics must be excluded")
+		// Run the destructive case last; the outer fixture owns final cleanup.
+		t.Run("dropped table stale statistics", func(t *testing.T) {
+			// Seed both rows independently of which sibling subtests ran.
+			runSQL(fmt.Sprintf("delete from %s where account_id=0 and database_id=%d and table_id in (%d,%d)", statsTable, dbID, firstID, secondID))
+			insert(0, dbID, firstID, `'{"table_size":1}'`)
+			insert(0, dbID, secondID, `'{"table_size":9999}'`)
+			sizes, ok, err := e.QueryAccountTableSizes(p.Ctx, []uint64{0}, false)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, map[uint64]uint64{0: 10000}, sizes, "both live tables' statistics must be counted")
+
+			func() {
+				op := p.StartCNTxn()
+				defer op.Rollback(p.Ctx)
+				p.DeleteTableInDB(op, databaseName, secondSchema.Name)
+				require.NoError(t, op.Commit(p.Ctx))
+			}()
+			sizes, ok, err = e.QueryAccountTableSizes(p.Ctx, []uint64{0}, false)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, map[uint64]uint64{0: 1}, sizes, "a dropped table's stale statistics must be excluded")
+		})
 	})
 }
 
