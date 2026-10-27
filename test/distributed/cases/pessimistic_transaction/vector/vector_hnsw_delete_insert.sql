@@ -44,6 +44,10 @@ insert into t values (2001, '[777.2,1,2]');
 -- waits and the exact assertions below therefore all observe the SAME serving
 -- index cache; without the pin an inter-statement rebalance could hand the
 -- assertions to a CN that has not loaded the generation yet.
+-- Poll published metadata under READ COMMITTED so each statement sees new
+-- commits while the proxy keeps the transaction on the same CN.
+set @old_txn_isolation = @@session.transaction_isolation;
+set session transaction_isolation = 'READ-COMMITTED';
 begin;
 
 -- A changed checksum proves the published model applied the DELETE and the INSERT.
@@ -99,6 +103,7 @@ deallocate prepare wait_serve;
 select count(*), count(distinct id), sum(id < 500) as below_deleted from (select id from t order by l2_distance(v, '[888.8,1,2]') limit 1000) q;
 select id from t order by l2_distance(v, '[1,1,2]') limit 3;
 commit;
+set session transaction_isolation = @old_txn_isolation;
 
 select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0') not like '%failed=[%' as all_cn_restored;
 

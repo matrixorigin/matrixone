@@ -26,6 +26,8 @@ execute capture;
 deallocate prepare capture;
 delete from t where id = 100;
 insert into t values (2001, '[777.2,1,2]');
+set @old_txn_isolation = @@session.transaction_isolation;
+set session transaction_isolation = 'READ-COMMITTED';
 begin;
 set @wait_delta_sql = concat('select checksum <> @before and nrow = 1000 as delta_ready from `', database(), '`.`', @meta, '` limit 1');
 prepare wait_delta from @wait_delta_sql;
@@ -84,6 +86,7 @@ select id from t order by l2_distance(v, '[1,1,2]') limit 3;
 2  𝄀
 3
 commit;
+set session transaction_isolation = @old_txn_isolation;
 select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0') not like '%failed=[%' as all_cn_restored;
 ➤ all_cn_restored[-7,1,0]  𝄀
 1
