@@ -17,6 +17,7 @@ package versions
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"go.uber.org/zap"
 	"time"
@@ -127,6 +128,47 @@ func RunHistoricalTenantUpgradeEntries(tenantID int32, txn executor.TxnExecutor,
 			zap.Int64("time cost(ms)", duration.Milliseconds()),
 			zap.Int32("tenantId", tenantID),
 			zap.String("toVersion", version()))
+	}
+
+	return nil
+}
+
+// RunGlobalLogTenantUpgradeEntries preserves the historical global tenant upgrade logs.
+func RunGlobalLogTenantUpgradeEntries(tenantID int32, txn executor.TxnExecutor, entries []UpgradeEntry, version func() string) error {
+
+	var (
+		err    error
+		goon   bool
+		logger func(msg string, fields ...zap.Field)
+	)
+
+	for _, upgEntry := range entries {
+		goon = false
+		logger = logutil.Error
+
+		start := time.Now()
+		err = upgEntry.Upgrade(txn, uint32(tenantID))
+
+		duration := time.Since(start)
+
+		if err == nil {
+			logger = logutil.Info
+			goon = true
+		}
+
+		logger("tenant upgrade",
+			zap.String("cn", txn.Txn().TxnOptions().CN),
+			zap.String("entry", upgEntry.String()),
+			zap.Int32("tenantId", tenantID),
+			zap.String("version", version()),
+			zap.Duration("duration", duration),
+			zap.Error(err),
+		)
+
+		if goon {
+			continue
+		}
+		return err
 	}
 
 	return nil

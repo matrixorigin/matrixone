@@ -16,14 +16,11 @@ package v3_0_0
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"go.uber.org/zap"
 )
 
 var (
@@ -59,43 +56,7 @@ func (v *versionHandle) HandleTenantUpgrade(
 	tenantID int32,
 	txn executor.TxnExecutor,
 ) error {
-
-	var (
-		err    error
-		goon   bool
-		logger func(msg string, fields ...zap.Field)
-	)
-
-	for _, upgEntry := range tenantUpgEntries {
-		goon = false
-		logger = logutil.Error
-
-		start := time.Now()
-		err = upgEntry.Upgrade(txn, uint32(tenantID))
-
-		duration := time.Since(start)
-
-		if err == nil {
-			logger = logutil.Info
-			goon = true
-		}
-
-		logger("tenant upgrade",
-			zap.String("cn", txn.Txn().TxnOptions().CN),
-			zap.String("entry", upgEntry.String()),
-			zap.Int32("tenantId", tenantID),
-			zap.String("version", v.metadata.Version),
-			zap.Duration("duration", duration),
-			zap.Error(err),
-		)
-
-		if goon {
-			continue
-		}
-		return err
-	}
-
-	return nil
+	return versions.RunGlobalLogTenantUpgradeEntries(tenantID, txn, tenantUpgEntries, func() string { return v.metadata.Version })
 }
 
 func (v *versionHandle) HandleClusterUpgrade(
