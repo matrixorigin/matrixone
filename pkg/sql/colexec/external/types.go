@@ -479,6 +479,10 @@ type ParseLineHandler struct {
 // It only depends on config and io.Reader, not on ExParam.
 // Used by both CsvReader.Open and getTailSizeStrict.
 func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.CSVParser, error) {
+	return newCSVParserFromReaderWithBlockSize(extern, r, csvparser.ReadBlockSize)
+}
+
+func newCSVParserFromReaderWithBlockSize(extern *tree.ExternParam, r io.Reader, blockSize int64) (*csvparser.CSVParser, error) {
 	fieldsTerminatedBy := tree.DefaultFieldsTerminated
 	fieldsEnclosedBy := tree.DefaultFieldsEnclosedBy
 	fieldsEscapedBy := tree.DefaultFieldsEscapedBy
@@ -536,7 +540,7 @@ func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.C
 		config.Context = extern.Ctx
 	}
 
-	return csvparser.NewCSVParser(&config, bufio.NewReader(r), csvparser.ReadBlockSize, false)
+	return csvparser.NewCSVParser(&config, bufio.NewReader(r), blockSize, false)
 }
 
 type ParquetHandler struct {

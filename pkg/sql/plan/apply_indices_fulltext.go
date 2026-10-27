@@ -85,7 +85,10 @@ func (builder *QueryBuilder) applyIndicesForProjectionUsingFullTextIndex(nodeID 
 		// The fulltext function returns relevance order. It is not safe to
 		// truncate that stream before an explicit sort on another expression.
 		// SQL_CALC_FOUND_ROWS likewise needs the complete stream before its
-		// top-level pagination owner runs on the coordinator.
+		// top-level pagination owner runs on the coordinator. A sort that IS the
+		// relevance order (score DESC) is handled post-build by
+		// pushJoinFulltext2ScoreLimitFromSort, which sets the scan's CandidateLimit
+		// once the join is shaped.
 		internalLimit, internalOffset = nil, nil
 	}
 
@@ -655,8 +658,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// LIMIT to the filtered set). Reusing buildFilterPredicateJSON keeps this correctness-safe:
 	// it peels only NUMERIC + pk predicates exactly and leaves varchar/others residual (so a
 	// collation-sensitive string filter stays on the existing scan path — no wrong results).
-	// Removing the peeled predicates lets the pre-filter second-scan below be skipped when no
-	// residual filter remains.
+	// The pushdown and candidate-limit decisions below see only the residual filters, so the
+	// pre-filter second-scan is skipped when no residual filter remains.
+	allFilters := append([]*plan.Expr(nil), scanNode.FilterList...)
 	var ft2PredsJSON string
 	if len(indexDefs) > 0 && catalog.IsFullText2IndexAlgo(indexDefs[0].IndexAlgo) {
 		if incCols := indexDefIncludedColumnsBestEffort(indexDefs[0]); len(incCols) > 0 {
@@ -701,9 +705,14 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 	// A lifted wrapped-MATCH predicate counts here exactly like a filter left on the scan. It
 	// runs above the join, so limiting the stream below it can under-fill the final result.
-	limitExpr := builder.buildFullTextCandidateLimit(
-		scanNode, wrappedMatchFilters, ft_filters, indexDefs, pushdownEnabled, exactPrefilter,
-		paginationLimit, paginationOffset)
+	limitRuleOK, limitLiteralOnly := builder.fullTextCandidateLimitRule(
+		scanNode, wrappedMatchFilters, ft_filters, indexDefs, pushdownEnabled, exactPrefilter)
+	limitExpr := candidateLimitForRule(limitRuleOK, limitLiteralOnly, paginationLimit, paginationOffset)
+	drivingSearchID := int32(-1)
+
+	// The search evaluates the peeled predicates on index-time values, so the base scans
+	// re-check every filter on current values.
+	scanNode.FilterList = allFilters
 
 	// buildFullTextIndexScan
 	var last_node_id int32
@@ -762,9 +771,13 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 			},
 		}
 
-		// pushdown limit
+		// pushdown limit; the search over-fetches for the candidates the base-table join drops
 		if limitExpr != nil {
 			curr_ftnode.IndexSearchScan.CandidateLimit = DeepCopyExpr(limitExpr)
+			curr_ftnode.IndexSearchScan.PostFilterOverFetch = true
+		}
+		if i == 0 {
+			drivingSearchID = curr_ftnode_id
 		}
 
 		// change doc_id type to the primary type here
@@ -922,19 +935,18 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		// BloomFilter runtime filter: secondScan(build) -> all ft_func(probe)
 		innerJoinNode := builder.qry.Nodes[innerJoinNodeID]
 
-		// Collect all unique ft_func node IDs for BF probe
+		// Collect the unique ft_func node IDs on the probe spine of innerJoin. A probe
+		// on a build side of the ft join chain waits for a filter that innerJoin's
+		// build has not produced yet, so those ft_func nodes run unfiltered.
+		probeSpine := builder.probeSpineNodeIDs(last_node_id)
 		allFtNodeIDs := make([]int32, 0, len(ret_filter_node_ids)+len(ret_proj_node_ids))
 		seen := make(map[int32]bool)
-		for _, id := range ret_filter_node_ids {
-			if !seen[id] {
-				seen[id] = true
-				allFtNodeIDs = append(allFtNodeIDs, id)
-			}
-		}
-		for _, id := range ret_proj_node_ids {
-			if !seen[id] {
-				seen[id] = true
-				allFtNodeIDs = append(allFtNodeIDs, id)
+		for _, ids := range [][]int32{ret_filter_node_ids, ret_proj_node_ids} {
+			for _, id := range ids {
+				if !seen[id] && probeSpine[id] {
+					seen[id] = true
+					allFtNodeIDs = append(allFtNodeIDs, id)
+				}
 			}
 		}
 
@@ -1069,6 +1081,16 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}, ctx)
 	}
 
+	if limitRuleOK && drivingSearchID >= 0 {
+		if builder.fulltextBoundableJoins == nil {
+			builder.fulltextBoundableJoins = make(map[int32]fulltextBoundableJoin)
+		}
+		builder.fulltextBoundableJoins[joinnodeID] = fulltextBoundableJoin{
+			search:      drivingSearchID,
+			literalOnly: limitLiteralOnly,
+		}
+	}
+
 	// Clear Limit/Offset from scanNode when pushdown is enabled
 	// (they should be applied after SORT)
 	// Note: caller (applyIndicesForProjectionUsingFullTextIndex) may still need
@@ -1116,19 +1138,21 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, served, nil
 }
 
-func (builder *QueryBuilder) buildFullTextCandidateLimit(
+// fullTextCandidateLimitRule reports whether the fulltext search may be bounded by the
+// result LIMIT+OFFSET and whether that LIMIT must be a literal. The residual-filter case is
+// admitted at plan time, so prepared or dynamic LIMIT values remain unbounded there; the
+// no-residual case accepts any LIMIT expression.
+func (builder *QueryBuilder) fullTextCandidateLimitRule(
 	scanNode *plan.Node,
 	wrappedMatchFilters []*plan.Expr,
 	fullTextFilters []*plan.Expr,
 	indexDefs []*plan.IndexDef,
 	prefilterPushdown bool,
 	exactPrefilter bool,
-	paginationLimit *plan.Expr,
-	paginationOffset *plan.Expr,
-) *plan.Expr {
+) (ok, literalOnly bool) {
 	if builder.sqlCalcFoundRows || scanNode == nil ||
 		len(wrappedMatchFilters) != 0 || len(fullTextFilters) != 1 {
-		return nil
+		return false, false
 	}
 	// A json probe must NEVER take a pushed LIMIT. It is a PREFILTER the
 	// optimizer injected, returning a superset that the retained predicate then
@@ -1138,26 +1162,40 @@ func (builder *QueryBuilder) buildFullTextCandidateLimit(
 	// already decline — but only incidentally, and this rule's correctness is
 	// too important to rest on that.
 	if isJSONProbeMatch(fullTextFilters[0]) {
-		return nil
+		return false, false
 	}
 	if len(scanNode.FilterList) == 0 {
-		limit, _ := buildCandidateLimit(paginationLimit, paginationOffset)
-		return limit
+		return true, false
 	}
 	if !shouldPushFulltextCandidateLimit(
 		len(fullTextFilters), len(scanNode.FilterList), prefilterPushdown, exactPrefilter,
 	) || len(indexDefs) != 1 ||
 		!fulltext2ConjunctiveCandidateLimitEligible(fullTextFilters[0], indexDefs[0]) {
+		return false, false
+	}
+	return true, true
+}
+
+// candidateLimitForRule returns the LIMIT+OFFSET bound for a fulltext search admitted by
+// fullTextCandidateLimitRule, or nil when the rule or the LIMIT expression declines.
+func candidateLimitForRule(ok, literalOnly bool, limit, offset *plan.Expr) *plan.Expr {
+	if !ok {
 		return nil
 	}
-	// The residual-filter path is admitted at plan time, so prepared or dynamic
-	// LIMIT values remain unbounded. The no-residual path above preserves main's
-	// existing dynamic-LIMIT behavior.
-	if _, literal := getLiteralUint64(paginationLimit); !literal {
-		return nil
+	if literalOnly {
+		if _, literal := getLiteralUint64(limit); !literal {
+			return nil
+		}
 	}
-	limit, _ := buildCandidateLimit(paginationLimit, paginationOffset)
-	return limit
+	bound, _ := buildCandidateLimit(limit, offset)
+	return bound
+}
+
+// fulltextBoundableJoin is a base-table join built by the fulltext rewrite whose driving
+// search the result LIMIT may bound under the rewrite's candidate-limit rule.
+type fulltextBoundableJoin struct {
+	search      int32
+	literalOnly bool
 }
 
 // tryApplyCoveredFulltext2 implements the covered fast path (Phase 6): a fully-covered
@@ -1505,6 +1543,82 @@ func (builder *QueryBuilder) pushCoveredFulltext2ScoreLimitFromSort(sortNode *pl
 		}
 	}
 	spec.CandidateLimit = bound
+}
+
+// pushJoinFulltext2ScoreLimitFromSort bounds the fulltext2 search under an explicit
+// `ORDER BY score DESC LIMIT k` that sits above the fulltext rewrite's base-table join, by
+// the same rule the rewrite applies to the implicit relevance order. Only plain PROJECT and
+// SORT nodes may separate the sort from that join; a user join, filter, aggregate, second
+// match or secondary ORDER BY key declines.
+func (builder *QueryBuilder) pushJoinFulltext2ScoreLimitFromSort(sortNode *plan.Node) {
+	if sortNode == nil || sortNode.Limit == nil || sortNode.RankOption != nil ||
+		len(sortNode.Children) != 1 || len(sortNode.OrderBy) != 1 || len(sortNode.FilterList) != 0 {
+		return
+	}
+	if !fulltext2ScoreDescending(sortNode.OrderBy[0]) {
+		return
+	}
+	keyCol := sortNode.OrderBy[0].Expr.GetCol()
+	project := builder.qry.Nodes[sortNode.Children[0]]
+	if project.NodeType != plan.Node_PROJECT || len(project.Children) != 1 ||
+		len(project.BindingTags) != 1 || len(project.FilterList) != 0 ||
+		project.Limit != nil || project.Offset != nil || project.RankOption != nil ||
+		keyCol == nil || keyCol.RelPos != project.BindingTags[0] || keyCol.ColPos < 0 ||
+		int(keyCol.ColPos) >= len(project.ProjectList) {
+		return
+	}
+	id := project.Children[0]
+	for {
+		n := builder.qry.Nodes[id]
+		if n.NodeType != plan.Node_PROJECT && n.NodeType != plan.Node_SORT {
+			break
+		}
+		if len(n.Children) != 1 || n.Limit != nil || n.Offset != nil ||
+			len(n.FilterList) != 0 || n.RankOption != nil {
+			return
+		}
+		id = n.Children[0]
+	}
+	join, ok := builder.fulltextBoundableJoins[id]
+	if !ok {
+		return
+	}
+	joinNode := builder.qry.Nodes[id]
+	if joinNode.NodeType != plan.Node_JOIN || joinNode.JoinType != plan.Node_INNER ||
+		joinNode.Limit != nil || joinNode.Offset != nil || len(joinNode.FilterList) != 0 {
+		return
+	}
+	bound := candidateLimitForRule(true, join.literalOnly, sortNode.Limit, sortNode.Offset)
+	if bound == nil {
+		return
+	}
+	search := builder.qry.Nodes[join.search]
+	spec := search.IndexSearchScan
+	if spec == nil || !catalog.IsFullText2IndexAlgo(spec.GetIndex().GetIndexAlgo()) ||
+		spec.CandidateLimit != nil || len(search.BindingTags) != 1 ||
+		search.Limit != nil || search.Offset != nil || len(search.FilterList) != 0 {
+		return
+	}
+	projectScore := project.ProjectList[keyCol.ColPos].GetCol()
+	if projectScore == nil || projectScore.RelPos != search.BindingTags[0] || projectScore.ColPos != 1 {
+		return
+	}
+	spec.CandidateLimit = bound
+	spec.PostFilterOverFetch = true
+}
+
+// probeSpineNodeIDs returns the nodes reached from nodeID through the probe
+// child of each JOIN and the sole child of every other node.
+func (builder *QueryBuilder) probeSpineNodeIDs(nodeID int32) map[int32]bool {
+	spine := make(map[int32]bool)
+	for {
+		spine[nodeID] = true
+		n := builder.qry.Nodes[nodeID]
+		if len(n.Children) == 0 || (n.NodeType != plan.Node_JOIN && len(n.Children) != 1) {
+			return spine
+		}
+		nodeID = n.Children[0]
+	}
 }
 
 func fulltext2ScoreDescending(key *plan.OrderBySpec) bool {
