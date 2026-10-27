@@ -91,6 +91,22 @@ func testMutableFileService(
 	_, err = fs.CreateAndRemoveFile(canceledCtx, "")
 	assert.ErrorIs(t, err, context.Canceled)
 
+	unlinked, err := fs.CreateAndRemoveFile(ctx, "unlinked")
+	if assert.NoError(t, err) {
+		defer unlinked.Close()
+		_, err = os.Stat(unlinked.Name())
+		assert.ErrorIs(t, err, os.ErrNotExist)
+		_, err = unlinked.Write([]byte("content"))
+		assert.NoError(t, err)
+		content := make([]byte, 7)
+		_, err = unlinked.ReadAt(content, 0)
+		assert.NoError(t, err)
+		assert.Equal(t, []byte("content"), content)
+	}
+	unlinked, err = fs.CreateAndRemoveFile(ctx, "foo/child")
+	assert.Nil(t, unlinked)
+	assert.ErrorAs(t, err, &pathErr)
+
 	mutator, err := fs.NewMutator(ctx, "foo")
 	assert.Nil(t, err)
 	defer func() {
