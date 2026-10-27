@@ -3976,15 +3976,6 @@ func NewOffHeapVecWithType(typ types.Type) *Vector {
 	return vec
 }
 
-func NewOffHeapVecWithTypeAndData(typ types.Type, data []byte, length, cap int) *Vector {
-	vec := NewVec(typ)
-	vec.offHeap = true
-	vec.data = data
-	vec.length = length
-	vec.areaDisjoint = !typ.IsVarlen() || length == 0
-	return vec
-}
-
 func NewOffHeapVec() *Vector {
 	vec := NewVecFromReuse()
 	vec.offHeap = true

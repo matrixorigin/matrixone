@@ -15,6 +15,7 @@
 package function
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -537,6 +538,151 @@ func TestDecimalWideningConstBatch(t *testing.T) {
 		})
 		require.Zero(t, proc.Mp().CurrNB())
 	}
+}
+
+// Issue #30367: integer assignments into DECIMAL(p,s) must obey the declared
+// precision (|value| < 10^(p-s) after scaling, i.e. the raw coefficient must
+// stay within +/-10^width), exactly like the string/decimal sources. Used to
+// accept `2` into DECIMAL(2,2) by scaling into the carrier without a width
+// check.
+func TestIntToDecimalWidthContract(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	wide128, err := types.ParseDecimal128("9", 38, 37)
+	require.NoError(t, err)
+	wide256, err := types.ParseDecimal256("9", 76, 75)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name           string
+		source, target types.Type
+		values, want   any
+		nulls          []bool
+		wantErr        string
+	}{
+		{name: "issue30367_int32_to_decimal64_2_2",
+			source:  types.New(types.T_int32, 0, 0),
+			target:  types.New(types.T_decimal64, 2, 2),
+			values:  []int32{2},
+			wantErr: "Decimal64(2,2)"},
+		{name: "issue30367_int32_boundary_accept",
+			source: types.New(types.T_int32, 0, 0),
+			target: types.New(types.T_decimal64, 3, 2),
+			values: []int32{9, 0, -9},
+			want:   []types.Decimal64{900, 0, types.Decimal64(900).Minus()}},
+		{name: "issue30367_int32_to_decimal64_3_2_reject",
+			source:  types.New(types.T_int32, 0, 0),
+			target:  types.New(types.T_decimal64, 3, 2),
+			values:  []int32{10},
+			wantErr: "Decimal64(3,2)"},
+		{name: "issue30367_negative_boundary_reject",
+			source:  types.New(types.T_int16, 0, 0),
+			target:  types.New(types.T_decimal64, 4, 2),
+			values:  []int16{-100},
+			wantErr: "Decimal64(4,2)"},
+		{name: "issue30367_negative_boundary_accept",
+			source: types.New(types.T_int16, 0, 0),
+			target: types.New(types.T_decimal64, 4, 2),
+			values: []int16{-99, 99},
+			want:   []types.Decimal64{types.Decimal64(9900).Minus(), 9900}},
+		{name: "issue30367_uint64_overflow_decimal64",
+			source:  types.New(types.T_uint64, 0, 0),
+			target:  types.New(types.T_decimal64, 18, 0),
+			values:  []uint64{math.MaxUint64},
+			wantErr: "Decimal64(18,0)"},
+		{name: "bit_declared_decimal64_boundary_reject",
+			source:  types.New(types.T_bit, 64, 0),
+			target:  types.New(types.T_decimal64, 18, 0),
+			values:  []uint64{1000000000000000000},
+			wantErr: "Decimal64(18,0)"},
+		{name: "issue30367_int64_max_decimal64_reject",
+			source:  types.New(types.T_int64, 0, 0),
+			target:  types.New(types.T_decimal64, 18, 0),
+			values:  []int64{math.MaxInt64},
+			wantErr: "Decimal64(18,0)"},
+		{name: "issue30367_int64_max_decimal64_accept_19",
+			source: types.New(types.T_int64, 0, 0),
+			target: types.New(types.T_decimal128, 19, 0),
+			values: []int64{math.MaxInt64},
+			want:   []types.Decimal128{{B0_63: uint64(9223372036854775807)}}},
+		{name: "issue30367_uint64_max_decimal128_accept",
+			source: types.New(types.T_uint64, 0, 0),
+			target: types.New(types.T_decimal128, 20, 0),
+			values: []uint64{math.MaxUint64},
+			want:   []types.Decimal128{{B0_63: math.MaxUint64}}},
+		{name: "issue30367_uint64_max_decimal128_19_reject",
+			source:  types.New(types.T_uint64, 0, 0),
+			target:  types.New(types.T_decimal128, 19, 0),
+			values:  []uint64{math.MaxUint64},
+			wantErr: "Decimal128(19,0)"},
+		{name: "issue30367_int64_to_decimal256_narrow_reject",
+			source:  types.New(types.T_int64, 0, 0),
+			target:  types.New(types.T_decimal256, 10, 2),
+			values:  []int64{12345678901},
+			wantErr: "Decimal256(10,2)"},
+		{name: "wide_decimal128_signed_accept",
+			source: types.T_int64.ToType(), target: types.New(types.T_decimal128, 38, 37),
+			values: []int64{9, -9, 0, 0}, nulls: []bool{false, false, false, true},
+			want: []types.Decimal128{wide128, wide128.Minus(), {}, {}}},
+		{name: "wide_decimal128_signed_positive_reject",
+			source: types.T_int64.ToType(), target: types.New(types.T_decimal128, 38, 37),
+			values: []int64{9, 10}, wantErr: "Decimal128(38,37)"},
+		{name: "wide_decimal128_signed_negative_reject",
+			source: types.T_int64.ToType(), target: types.New(types.T_decimal128, 38, 37),
+			values: []int64{-9, -10}, wantErr: "Decimal128(38,37)"},
+		{name: "wide_decimal128_unsigned_accept",
+			source: types.T_uint64.ToType(), target: types.New(types.T_decimal128, 38, 37),
+			values: []uint64{9, 0}, nulls: []bool{false, true}, want: []types.Decimal128{wide128, {}}},
+		{name: "wide_decimal128_unsigned_reject",
+			source: types.T_uint64.ToType(), target: types.New(types.T_decimal128, 38, 37),
+			values: []uint64{9, 10}, wantErr: "Decimal128(38,37)"},
+		{name: "wide_decimal256_signed_accept",
+			source: types.T_int64.ToType(), target: types.New(types.T_decimal256, 76, 75),
+			values: []int64{9, -9, 0, 0}, nulls: []bool{false, false, false, true},
+			want: []types.Decimal256{wide256, wide256.Minus(), {}, {}}},
+		{name: "wide_decimal256_signed_positive_reject",
+			source: types.T_int64.ToType(), target: types.New(types.T_decimal256, 76, 75),
+			values: []int64{9, 10}, wantErr: "Decimal256(76,75)"},
+		{name: "wide_decimal256_signed_negative_reject",
+			source: types.T_int64.ToType(), target: types.New(types.T_decimal256, 76, 75),
+			values: []int64{-9, -10}, wantErr: "Decimal256(76,75)"},
+		{name: "wide_decimal256_unsigned_accept",
+			source: types.T_uint64.ToType(), target: types.New(types.T_decimal256, 76, 75),
+			values: []uint64{9, 0}, nulls: []bool{false, true}, want: []types.Decimal256{wide256, {}}},
+		{name: "wide_decimal256_unsigned_reject",
+			source: types.T_uint64.ToType(), target: types.New(types.T_decimal256, 76, 75),
+			values: []uint64{9, 10}, wantErr: "Decimal256(76,75)"},
+		{name: "issue30367_int8_to_decimal64_reject",
+			source:  types.New(types.T_int8, 0, 0),
+			target:  types.New(types.T_decimal64, 4, 2),
+			values:  []int8{100},
+			wantErr: "Decimal64(4,2)"},
+		{name: "issue30367_scale_overflow_reject",
+			source:  types.New(types.T_int64, 0, 0),
+			target:  types.New(types.T_decimal64, 18, 18),
+			values:  []int64{1 << 62},
+			wantErr: "scale overflow"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sourceType := tc.source
+			input := NewFunctionTestInput(sourceType, tc.values, tc.nulls)
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{input, NewFunctionTestInput(tc.target, emptyCastTargetValues(tc.target), nil)},
+				NewFunctionTestResult(tc.target, tc.wantErr != "", tc.want, tc.nulls),
+				NewCast)
+			defer fc.Free()
+			if tc.wantErr != "" {
+				_, err := fc.DebugRun()
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "error %v", err)
+				require.ErrorContains(t, err, tc.wantErr)
+			} else {
+				ok, info := fc.Run()
+				require.True(t, ok, info)
+				require.True(t, *fc.parameters[0].GetType() == sourceType, "source metadata changed")
+				require.True(t, tc.target == *fc.GetResultVectorDirectly().GetType(), "target metadata changed")
+			}
+		})
+	}
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 // NULL admission is bounded by the requested rows, not the backing vector.

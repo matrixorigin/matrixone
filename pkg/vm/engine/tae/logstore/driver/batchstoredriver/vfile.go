@@ -30,9 +30,8 @@ import (
 var Metasize = 2
 
 type vFileState struct {
-	bufPos int
-	pos    int
-	file   *vFile
+	pos  int
+	file *vFile
 }
 
 type vFile struct {
@@ -95,9 +94,8 @@ func (vf *vFile) GetState() *vFileState {
 	vf.RLock()
 	defer vf.RUnlock()
 	return &vFileState{
-		bufPos: vf.bufpos,
-		pos:    vf.size,
-		file:   vf,
+		pos:  vf.size,
+		file: vf,
 	}
 }
 

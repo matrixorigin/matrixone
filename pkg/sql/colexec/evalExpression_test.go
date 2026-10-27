@@ -3582,6 +3582,70 @@ func TestFlowControlShortCircuitInvalidCast(t *testing.T) {
 		require.Equal(t, []bool{false, true, false}, vector.MustFixedColWithTypeCheck[bool](result))
 	})
 
+	t.Run("integer in-list compaction and reset", func(t *testing.T) {
+		list := vector.NewVec(types.T_int64.ToType())
+		defer list.Free(proc.Mp())
+		for i := int64(0); i < 32; i += 2 {
+			require.NoError(t, vector.AppendFixed(list, i, false, proc.Mp()))
+		}
+		list.SetSorted(true)
+		data, err := list.MarshalBinary()
+		require.NoError(t, err)
+		values := []int64{-1, 0, 1, 2, 30, 31}
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(6, types.T_bool.ToType(), proc.Mp(), false, []bool{false, true, true, true, true, true}),
+			testutil.NewVector(6, types.T_int64.ToType(), proc.Mp(), false, values),
+		}, nil)
+		defer input.Clean(proc.Mp())
+		input.Vecs[1].GetNulls().Add(5)
+		for _, name := range []string{"in", "not_in"} {
+			t.Run(name, func(t *testing.T) {
+				listExpr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{Len: 16, Data: data}}}
+				expr := bindTestFunction(t, proc, "if", column(0, types.T_bool.ToType()), bindTestFunction(t, proc, name, column(1, types.T_int64.ToType()), listExpr), makePlan2BoolConstExprWithType(false))
+				executor, err := NewExpressionExecutor(proc, expr)
+				require.NoError(t, err)
+				defer executor.Free()
+				for _, mask := range [][]bool{nil, {true, false, true, true, true, true}, {false, false, false, false, false, false}, nil} {
+					result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+					require.NoError(t, err)
+					for i, v := range values {
+						wantNull := i == 5 || mask != nil && !mask[i]
+						require.Equal(t, wantNull, result.IsNull(uint64(i)), "row %d", i)
+						if !wantNull {
+							want := false
+							if i > 0 {
+								want = (v >= 0 && v < 32 && v%2 == 0) != (name == "not_in")
+							}
+							require.Equal(t, want, vector.GetFixedAtWithTypeCheck[bool](result, i), "row %d", i)
+						}
+					}
+					executor.ResetForNextQuery()
+				}
+			})
+		}
+	})
+	t.Run("integer in-list refreshes prepared values", func(t *testing.T) {
+		input := testutil.NewBatchWithVectors([]*vector.Vector{
+			testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 2, 3}),
+		}, nil)
+		defer input.Clean(proc.Mp())
+		param := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+		list := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			bindTestCast(t, proc, 0, param, types.T_int64.ToType()), makePlan2Int64ConstExprWithType(2),
+		}}}}
+		executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, "in", column(0, types.T_int64.ToType()), list))
+		require.NoError(t, err)
+		defer executor.Free()
+		for _, tc := range []struct {
+			value string
+			want  []bool
+		}{{"1", []bool{true, true, false}}, {"3", []bool{false, true, true}}, {"1", []bool{true, true, false}}} {
+			result := evalTestTextParameter(t, proc, executor, tc.value, false, vector.PrepareParamNone, []*batch.Batch{input}, nil)
+			require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[bool](result))
+			executor.ResetForNextQuery()
+		}
+	})
+
 	t.Run("case preserves first match across multiple when clauses and reuse", func(t *testing.T) {
 		expr := bindTestFunction(t, proc, "case",
 			column(0, types.T_bool.ToType()),
