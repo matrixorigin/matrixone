@@ -4878,76 +4878,20 @@ func TestEndsWith(t *testing.T) {
 // FindInSet
 
 func initFindInSetTestCase() []tcTemp {
-
-	return []tcTemp{
-		{
-			info: "test findinset",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{
-					"abc",
-					"xyz",
-					"z",
-					"abc", //TODO: Ignoring the scalar checks. Please fix. Original code:https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/findinset_test.go#L67
-					"abc",
-					"abc",
-					"",
-					"abc",
-				},
-					[]bool{
-						false,
-						false,
-						false,
-						false,
-						false,
-						false,
-						true,
-						false,
-					}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{
-					"abc,def",
-					"dec,xyz,abc",
-					"a,e,c,z",
-					"abc,def",
-					"abc,def",
-					"abc,def",
-					"abc",
-					"",
-				},
-					[]bool{
-						false,
-						false,
-						false,
-						false,
-						false,
-						false,
-						false,
-						true,
-					}),
-			},
-			expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
-				[]uint64{
-					1,
-					2,
-					4,
-					1,
-					1,
-					1,
-					0,
-					0,
-				},
-				[]bool{
-					false,
-					false,
-					false,
-					false,
-					false,
-					false,
-					true,
-					true,
-				},
-			),
+	return []tcTemp{{
+		info: "test findinset",
+		inputs: []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"abc", "xyz", "z", "abc", "abc", "abc", "", "abc"},
+				[]bool{false, false, false, false, false, false, true, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"abc,def", "dec,xyz,abc", "a,e,c,z", "abc,def", "abc,def", "abc,def", "abc", ""},
+				[]bool{false, false, false, false, false, false, false, true}),
 		},
-	}
+		expect: NewFunctionTestResult(types.T_uint64.ToType(), false,
+			[]uint64{1, 2, 4, 1, 1, 1, 0, 0},
+			[]bool{false, false, false, false, false, false, true, true}),
+	}}
 }
 
 func TestFindInSet(t *testing.T) {
@@ -4959,6 +4903,31 @@ func TestFindInSet(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, FindInSet)
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestFindInSetConstantInputs(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	typ := types.T_varchar.ToType()
+	for _, tc := range []struct {
+		name         string
+		needle, list FunctionTestInput
+		want         []uint64
+		nulls        []bool
+	}{
+		{"constant needle", NewFunctionTestConstInput(typ, []string{"abc"}, nil), NewFunctionTestInput(typ, []string{"abc,x", "x,abc", "x"}, nil), []uint64{1, 2, 0}, nil},
+		{"constant list", NewFunctionTestInput(typ, []string{"a", "b", "c"}, nil), NewFunctionTestConstInput(typ, []string{"a,b,a"}, nil), []uint64{1, 2, 0}, nil},
+		{"both constant", NewFunctionTestConstInput(typ, []string{"b"}, nil), NewFunctionTestConstInput(typ, []string{"a,b"}, nil), []uint64{2, 2}, nil},
+		{"null constant", NewFunctionTestConstInput(typ, []string{""}, []bool{true}), NewFunctionTestInput(typ, []string{"a", ""}, nil), []uint64{0, 0}, []bool{true, true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.needle, tc.list},
+				NewFunctionTestResult(types.T_uint64.ToType(), false, tc.want, tc.nulls), FindInSet)
+			fc.fnLength = len(tc.want)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
 	}
 }
 
