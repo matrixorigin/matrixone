@@ -7585,7 +7585,7 @@ func TestGetIndexForNonEquiCond_DetectsPairedRangeOnIndexColumn(t *testing.T) {
 	require.Empty(t, costCtx.matchRangeBackfill(idxDef))
 }
 
-func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
+func TestRangeBackfillSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, true)
 	bindTag := builder.genNewBindTag()
 	prefixParams := `{"prefix_lengths":"name:3"}`
@@ -7616,26 +7616,22 @@ func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
 		name        string
 		idxDef      *planpb.IndexDef
 		filters     []*planpb.Expr
-		wantIdx     int
 		wantFilters []int32
 	}{
 		{
 			name:    "non-unique prefix between",
 			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
 			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
-			wantIdx: -1,
 		},
 		{
 			name:    "unique prefix between",
 			idxDef:  makeIndex(true, []string{"name"}, prefixParams),
 			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
-			wantIdx: -1,
 		},
 		{
 			name:    "prefix single lower bound",
 			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
 			filters: []*planpb.Expr{makeRangeFilterExpr(bindTag, 1, ">=", 99)},
-			wantIdx: -1,
 		},
 		{
 			name:   "prefix paired range",
@@ -7644,13 +7640,11 @@ func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
 				makeRangeFilterExpr(bindTag, 1, ">=", 99),
 				makeRangeFilterExpr(bindTag, 1, "<=", 299),
 			},
-			wantIdx: -1,
 		},
 		{
 			name:    "prefix in range",
 			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
 			filters: []*planpb.Expr{makeInRange()},
-			wantIdx: -1,
 		},
 		{
 			name:   "prefix or containing range",
@@ -7659,32 +7653,27 @@ func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
 				makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA"),
 				makeStringInFilterExpr(bindTag, 1, "abe"),
 			)},
-			wantIdx: -1,
 		},
 		{
 			name:    "prefix in is rejected with other non equality predicates",
 			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, prefixParams),
 			filters: []*planpb.Expr{makeStringInFilterExpr(bindTag, 1, "abcX", "abdA")},
-			wantIdx: -1,
 		},
 		{
 			name:        "complete index between remains eligible",
 			idxDef:      makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, ""),
 			filters:     []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
-			wantIdx:     0,
 			wantFilters: []int32{0},
 		},
 		{
 			name:    "non-leading declared prefix also rejects range",
 			idxDef:  makeIndex(false, []string{"name", "suffix", catalog.FakePrimaryKeyColName}, `{"prefix_lengths":"suffix:3"}`),
 			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
-			wantIdx: -1,
 		},
 		{
 			name:    "invalid prefix metadata fails closed for range",
 			idxDef:  makeIndex(false, []string{"name", catalog.FakePrimaryKeyColName}, "{bad json"),
 			filters: []*planpb.Expr{makeStringBetweenFilterExpr(bindTag, 1, "abcX", "abdA")},
-			wantIdx: -1,
 		},
 	}
 
@@ -7709,9 +7698,9 @@ func TestGetIndexForNonEquiCondSkipsNonEqualityOnDeclaredPrefix(t *testing.T) {
 				FilterList: tt.filters,
 			}
 
-			idxPos, filterIdx := builder.getIndexForNonEquiCond([]*planpb.IndexDef{tt.idxDef}, node)
-			require.Equal(t, tt.wantIdx, idxPos)
-			require.ElementsMatch(t, tt.wantFilters, filterIdx)
+			node.Stats = &planpb.Stats{TableCnt: 1000, Outcnt: 10}
+			costCtx := builder.newEncodedRegularIndexCostContext(node, nil)
+			require.ElementsMatch(t, tt.wantFilters, costCtx.matchRangeBackfill(tt.idxDef))
 		})
 	}
 }
