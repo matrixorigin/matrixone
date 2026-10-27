@@ -155,7 +155,6 @@ type container struct {
 
 type spillRun struct {
 	file       *os.File
-	rowCount   int64
 	batchCount int
 	fdToken    *process.ExecutionSpillFDReservation
 	diskToken  *process.ExecutionSpillDiskReservation
