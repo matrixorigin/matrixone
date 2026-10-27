@@ -2373,3 +2373,50 @@ func TestBuildTaskInsertSQL(t *testing.T) {
 		})
 	}
 }
+
+func TestBatchTaskInsertSQLAndArguments(t *testing.T) {
+	t.Run("async", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectExec(insertAsyncTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").
+			WithArgs("a", 0, []byte(nil), "{}", "", 0, "", 0, 0, sqlmock.AnyArg(), 0,
+				"b", 0, []byte(nil), "{}", "", 0, "", 0, 0, sqlmock.AnyArg(), 0).
+			WillReturnResult(sqlmock.NewResult(0, 2))
+		n, err := storage.AddAsyncTask(context.Background(), newTaskFromMetadata(task.TaskMetadata{ID: "a"}), newTaskFromMetadata(task.TaskMetadata{ID: "b"}))
+		require.NoError(t, err)
+		require.Equal(t, 2, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	t.Run("cron", func(t *testing.T) {
+		storage, mock := newMockStorage(t)
+		mock.ExpectExec(insertCronTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?),(?, ?, ?, ?, ?, ?, ?, ?, ?)"+cronTaskOnDuplicate).
+			WithArgs("a", 0, []byte(nil), "{}", "cron-a", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+				"b", 0, []byte(nil), "{}", "cron-b", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 2))
+		n, err := storage.AddCronTask(context.Background(), newTestCronTask("a", "cron-a"), newTestCronTask("b", "cron-b"))
+		require.NoError(t, err)
+		require.Equal(t, 2, n)
+		mock.ExpectClose()
+		require.NoError(t, storage.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	t.Run("daemon", func(t *testing.T) {
+		a := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+		b := newDaemonTaskForTest(2, task.TaskStatus_Created, "")
+		a.Metadata.ID, b.Metadata.ID = "a", "b"
+		calls := 0
+		executor := &mockSqlExecutor{execFn: func(_ context.Context, query string, args ...interface{}) (sql.Result, error) {
+			calls++
+			require.Equal(t, insertDaemonTask+"(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?),(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", query)
+			require.Len(t, args, 22)
+			require.Equal(t, "a", args[0])
+			require.Equal(t, "b", args[11])
+			return mockRowsAffectedResult{rows: 2}, nil
+		}}
+		n, err := (&mysqlTaskStorage{}).RunAddDaemonTask(context.Background(), executor, a, b)
+		require.NoError(t, err)
+		require.Equal(t, 2, n)
+		require.Equal(t, 1, calls)
+	})
+}
