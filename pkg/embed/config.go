@@ -233,7 +233,7 @@ func (c *ServiceConfig) validate() error {
 		c.Log.StacktraceLevel = zap.PanicLevel.String()
 	}
 
-	if err := c.resolveGossipSeedAddresses(); err != nil {
+	if err := c.LogService.ResolveGossipSeedAddresses(); err != nil {
 		return err
 	}
 	return nil
@@ -482,11 +482,6 @@ func (c *ServiceConfig) getCNServiceConfig() cnservice.Config {
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend.SetLogAndVersion(&c.Log, version.Version)
 	return cfg
-}
-
-// memberlist requires all gossip seed addresses to be provided as IP:PORT
-func (c *ServiceConfig) resolveGossipSeedAddresses() error {
-	return c.LogService.ResolveGossipSeedAddresses()
 }
 
 func (c *ServiceConfig) hashNodeID() uint16 {

@@ -508,11 +508,6 @@ func (c *Config) getObservabilityConfig() config.ObservabilityParameters {
 	return c.Observability
 }
 
-// memberlist requires all gossip seed addresses to be provided as IP:PORT
-func (c *Config) resolveGossipSeedAddresses() error {
-	return c.LogService.ResolveGossipSeedAddresses()
-}
-
 func (c *Config) hashNodeID() uint16 {
 	st, err := c.getServiceType()
 	if err != nil {
