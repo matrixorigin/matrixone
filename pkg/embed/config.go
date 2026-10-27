@@ -355,7 +355,7 @@ func (c *ServiceConfig) createFileService(
 
 	// set distributed cache callbacks
 	for i := range c.FileServices {
-		c.setCacheCallbacks(&c.FileServices[i])
+		c.FileServices[i].Cache.SetRemoteCacheCallback()
 	}
 
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
@@ -541,10 +541,6 @@ func (c *ServiceConfig) mustGetServiceUUID() string {
 		return c.ProxyConfig.UUID
 	}
 	panic("impossible")
-}
-
-func (c *ServiceConfig) setCacheCallbacks(fsConfig *fileservice.Config) {
-	fsConfig.Cache.SetRemoteCacheCallback()
 }
 
 func (c *ServiceConfig) setFileserviceDefaultValues() {

@@ -362,7 +362,7 @@ func (c *Config) createFileServiceWithCreator(
 
 	// set distributed cache callbacks
 	for i := range c.FileServices {
-		c.setCacheCallbacks(&c.FileServices[i])
+		c.FileServices[i].Cache.SetRemoteCacheCallback()
 	}
 
 	services := make([]fileservice.FileService, 0, len(c.FileServices))
@@ -567,10 +567,6 @@ func (c *Config) mustGetServiceUUID() string {
 		return c.PythonUdfServerConfig.UUID
 	}
 	panic("impossible")
-}
-
-func (c *Config) setCacheCallbacks(fsConfig *fileservice.Config) {
-	fsConfig.Cache.SetRemoteCacheCallback()
 }
 
 // dumpCommonConfig gets the common config items except cn,tn,log,proxy
