@@ -93,6 +93,9 @@ func TestPythonRoutineSQLBoundaries(t *testing.T) {
 	conn, err := db.Conn(ctx)
 	require.NoError(t, err)
 	defer conn.Close()
+	// These SQL boundaries do not depend on the host's SYSTEM timezone identity.
+	_, err = conn.ExecContext(ctx, "set session time_zone = '+00:00'")
+	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, "use python_boundary")
 	require.NoError(t, err)
 	create := func(name, result, source, mode string) error {
