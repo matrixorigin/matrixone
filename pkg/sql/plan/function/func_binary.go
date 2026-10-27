@@ -8676,12 +8676,16 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 		if strlist == "" {
 			return toResult(0)
 		}
-		for j, s := range strings.Split(strlist, ",") {
-			if s == str {
-				return toResult(uint64(j + 1))
+		for position := uint64(1); ; position++ {
+			member, rest, more := strings.Cut(strlist, ",")
+			if member == str {
+				return toResult(position)
 			}
+			if !more {
+				return toResult(0)
+			}
+			strlist = rest
 		}
-		return toResult(0)
 	}
 
 	return opBinaryStrStrToFixed[Tr](ivecs, result, proc, length, findInStrList, nil)

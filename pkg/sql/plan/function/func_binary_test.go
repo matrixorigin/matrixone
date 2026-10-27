@@ -5013,6 +5013,30 @@ func TestFindInSetEmptyStringListInt32ResultWrapper(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestFindInSetListBoundaries(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "", "", "", "a", "b", "A", "x,y", "\xff", "a"}, []bool{false, false, false, false, false, false, false, false, false, true}),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"", ",", "a,", ",a", "a,a", "a,,b", "a,A", "x,y", "\x00,\xff", "a"}, nil),
+	}
+	nulls := []bool{false, false, false, false, false, false, false, false, false, true}
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		want any
+	}{
+		{"uint64", types.T_uint64.ToType(), []uint64{0, 1, 2, 1, 1, 3, 2, 0, 2, 0}},
+		{"int32", types.T_int32.ToType(), []int32{0, 1, 2, 1, 1, 3, 2, 0, 2, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(tc.typ, false, tc.want, nulls), FindInSet)
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestFindInSetSetDefinition(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	caseData := NewFunctionTestCase(
