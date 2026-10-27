@@ -3671,7 +3671,6 @@ func TestKeepBindFailedSkipsBindPublishedAfterSnapshot(t *testing.T) {
 	}
 	s.tableGroups.set(bind.Group, bind.Table, newRemoteLockTable(
 		s.serviceID,
-		time.Second,
 		bind,
 		nil,
 		s.handleBindChanged,
@@ -3835,7 +3834,6 @@ func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
 				staleRemoteTable,
 				newRemoteLockTable(
 					l1.serviceID,
-					time.Second,
 					staleRemoteBind,
 					l1.remote.client,
 					l1.handleBindChanged,
@@ -4241,7 +4239,6 @@ func TestAllocatorObserverPurgesRemoteAndProxyLockTables(t *testing.T) {
 				remoteTable,
 				newRemoteLockTable(
 					l1.serviceID,
-					time.Second,
 					remoteBind,
 					l1.remote.client,
 					l1.handleBindChanged,

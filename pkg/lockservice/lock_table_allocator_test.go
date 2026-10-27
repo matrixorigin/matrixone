@@ -438,7 +438,6 @@ func TestKeepaliveBind(t *testing.T) {
 				1,
 				newRemoteLockTable(
 					"s1",
-					time.Second,
 					bind,
 					c,
 					func(lt pb.LockTable) {},

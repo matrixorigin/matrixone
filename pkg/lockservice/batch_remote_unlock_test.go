@@ -126,7 +126,6 @@ func newBatchUnlockOriginState(
 		}
 		remote := newRemoteLockTable(
 			s.serviceID,
-			time.Second,
 			bind,
 			client,
 			nil,
