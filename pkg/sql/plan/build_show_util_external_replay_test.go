@@ -152,6 +152,21 @@ func TestFormatInfileExternalOptionsMasksServiceArgumentCredentials(t *testing.T
 			in:   "s3-opts,key=KEYNC1S3,secret=SECNC1S3",
 			want: "s3-opts,<redacted>",
 		},
+		{
+			name: "review witness: fully quoted service field is fail-closed",
+			in:   `"s3-opts",key=REVIEWKEY1,"secret=REVIEWSECRET1:rows.csv`,
+			want: "s3-opts,<redacted>:rows.csv",
+		},
+		{
+			name: "review witness: colonless fully quoted service field is fail-closed",
+			in:   `"s3-opts",key=REVIEWKEY2,secret=REVIEWSECRET2`,
+			want: "s3-opts,<redacted>",
+		},
+		{
+			name: "escaped-quote-claimed service field is fail-closed",
+			in:   `""s3-opts"",key=REVIEWKEY4:rows.csv`,
+			want: "s3-opts,<redacted>:rows.csv",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -174,6 +189,9 @@ func TestFormatInfileExternalOptionsMasksServiceArgumentCredentials(t *testing.T
 		"etl,foo=bar:x.csv",
 		// colonless strings without a service claim are plain local paths
 		"data,row.csv",
+		// quoted paths that do not dequote to a service name stay verbatim
+		`"C:\tmp dir\file.csv"`,
+		`"/opt/data dir/file.csv"`,
 		// leading-colon path has no service section
 		":dir/file.csv",
 		// minimal positional s3 without a credential pair stays untouched
@@ -289,6 +307,26 @@ func TestShowCreateCreatePlannerExternalTableMasksServiceArgumentCredentials(t *
 		require.Contains(t, show, "'FILEPATH'='s3-opts,<redacted>'")
 		require.NotContains(t, show, "PCRDco1")
 		require.NotContains(t, show, "PCRDco2")
+	})
+
+	t.Run("review witness fully quoted service field is masked", func(t *testing.T) {
+		show, def := planExternal(t,
+			`create external table mask_probe_q1 (a int) infile{'filepath'='"s3-opts",key=REVIEWQK1,"secret=REVIEWQS1:rows.csv','format'='csv'}`)
+		require.Contains(t, def.Createsql, "REVIEWQK1")
+		require.Contains(t, def.Createsql, "REVIEWQS1")
+		require.Contains(t, show, "'FILEPATH'='s3-opts,<redacted>:rows.csv'")
+		require.NotContains(t, show, "REVIEWQK1")
+		require.NotContains(t, show, "REVIEWQS1")
+	})
+
+	t.Run("review witness colonless fully quoted service field is masked", func(t *testing.T) {
+		show, def := planExternal(t,
+			`create external table mask_probe_q2 (a int) infile{'filepath'='"s3-opts",key=REVIEWQK2,secret=REVIEWQS2','format'='csv'}`)
+		require.Contains(t, def.Createsql, "REVIEWQK2")
+		require.Contains(t, def.Createsql, "REVIEWQS2")
+		require.Contains(t, show, "'FILEPATH'='s3-opts,<redacted>'")
+		require.NotContains(t, show, "REVIEWQK2")
+		require.NotContains(t, show, "REVIEWQS2")
 	})
 }
 

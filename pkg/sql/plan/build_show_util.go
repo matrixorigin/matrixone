@@ -1576,17 +1576,24 @@ var showCreateCredentialServiceArgKeys = map[string]struct{}{
 // that claim a known credential-bearing fileservice service but do not
 // survive the production service CSV grammar (unbalanced quote, embedded
 // newline record). Claim detection compares only the token before the FIRST
-// comma (tolerating a leading quote), so an ordinary local path can never
-// trigger it: a path whose prefix is exactly `s3,`/`s3-opts,`/... before the
-// final colon sits inside the service grammar's claim zone the production
-// loader also treats as a service path. Unknown claims pass through as-is.
+// comma with all surrounding quote chars de-quoted, so an ordinary local
+// path can never trigger it: a path whose prefix is exactly `s3,`/
+// `s3-opts,`/... before the final colon sits inside the service grammar's
+// claim zone the production loader also treats as a service path. Unknown
+// claims pass through as-is.
 // s3-no-key is credential-free and left untouched.
 func redactMalformedServiceClaim(section, file, fp string) string {
 	claim, _, ok := strings.Cut(section, ",")
 	if !ok {
 		return fp
 	}
-	claim = strings.TrimPrefix(claim, `"`)
+	// Reviewer witness: the service field itself may be a fully quoted
+	// CSV token ("s3-opts",key=K,"secret=S:file) or carry escaped/bare
+	// quote chars; dequote all surrounding quote chars so the exact
+	// service-name equality below still claims them, while ordinary local
+	// paths (including quoted ones that do not dequote to a service name)
+	// are never rewritten.
+	claim = strings.Trim(claim, `"`)
 	switch strings.ToLower(claim) {
 	case "s3", "minio", "s3-opts", "opts", "options", "hdfs":
 		if file == "" {
