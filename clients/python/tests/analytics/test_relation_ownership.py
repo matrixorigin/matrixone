@@ -29,6 +29,9 @@ class FaultEngine:
         self.primary = ConnectionError('CREATE acknowledgement unavailable')
         self.cleanup = PermissionError('DROP unavailable')
 
+    def connect(self):
+        return self.begin()
+
     @contextmanager
     def begin(self):
         self.connections += 1
@@ -38,6 +41,8 @@ class FaultEngine:
         operation = []
 
         def execute(sql, params=None):
+            if sql.startswith('SELECT length(load_file('):
+                return SimpleNamespace(scalar=lambda: 1)
             if sql == 'SELECT DATABASE()':
                 self.operations.append(('DATABASE', None, connection_id))
                 if self.phase == 'database' or (self.phase == 'database_second' and connection_id == 2):
@@ -305,3 +310,38 @@ def test_public_client_use_preserves_relation_and_foreign_table(hard_client, tmp
             client.disconnect()
         for database in reversed(created):
             hard_client.execute('DROP DATABASE IF EXISTS ' + qualified((database,)))
+
+
+def test_stream_source_error_keeps_precedence_over_cleanup():
+    from matrixone.analytics import ArrowStream
+
+    primary = PermissionError('source no longer readable')
+    cleanup = ConnectionError('connection reset failed')
+    stream = ArrowStream.__new__(ArrowStream)
+    stream._closed = False
+    stream._complete = False
+    stream.batch_size = 1
+    stream._cursor = SimpleNamespace(fetchmany=lambda size: [])
+    stream._check_sources = Mock(side_effect=primary)
+    stream.close = Mock(side_effect=cleanup)
+    with pytest.raises(PermissionError) as caught:
+        next(stream)
+    assert caught.value is primary
+    assert primary.cleanup_error is cleanup
+    stream.close.assert_called_once()
+
+
+def test_stream_validation_cursor_close_keeps_primary_error():
+    from matrixone.analytics import ArrowStream
+
+    primary = PermissionError('source denied')
+    cleanup = ConnectionError('validation cursor close failed')
+    cursor = SimpleNamespace(execute=Mock(), close=Mock(side_effect=cleanup))
+    stream = ArrowStream.__new__(ArrowStream)
+    stream._raw = SimpleNamespace(cursor=lambda: cursor)
+    stream._source_check = Mock(side_effect=primary)
+    with pytest.raises(PermissionError) as caught:
+        stream._check_sources()
+    assert caught.value is primary
+    assert primary.cursor_cleanup_error is cleanup
+    cursor.close.assert_called_once()
