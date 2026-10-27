@@ -71,7 +71,7 @@ restores the ordering.
 **D7 — Exact prefiltered search below a threshold.** When a prefiltered search knows the
 exact number of qualifying rows and it is at most `hnsw_prefilter_exact_threshold`, the index
 search computes the distance to every qualifying row instead of walking the graph. The
-threshold is a session variable, range `[0, 1e9]`, default 100000; `0` disables exact search.
+threshold is a session variable, range `[0, 1e9]`, default 5000; `0` disables exact search.
 The decision uses the qualifying row count, not a selectivity estimate: it bounds the number
 of distances an exact search computes. The search still tests every indexed row against the
 filter, a membership lookup per row with no distance, so its cost also grows with the index
@@ -112,5 +112,9 @@ size. The threshold and its value are shown in `EXPLAIN VERBOSE` of a prefiltere
   of the same data can order near-ties differently. Small tables are sampled whole and are
   deterministic.
 - An exact prefiltered search costs one distance per qualifying row, which the threshold
-  bounds, plus one filter test per indexed row, which it does not. On a very large index a
-  graph walk can be cheaper than the exact scan even below the threshold.
+  bounds, plus one filter test per indexed row, which it does not. A filtered graph walk
+  that finds fewer than `ef_search` qualifying rows visits the whole graph, so for few
+  qualifying rows exact is cheaper at any index size; the walk becomes cheaper once
+  qualifying rows exceed roughly 30–85 × `ef_search`, nearly independent of index size and
+  dimension. The default sits at that crossover for the default `ef_search`; a query with a
+  much larger `ef_search` can raise the threshold.

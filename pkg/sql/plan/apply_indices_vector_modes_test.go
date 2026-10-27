@@ -144,8 +144,8 @@ func TestHnswIterativeWidens(t *testing.T) {
 		iterative bool
 		exact     int64
 	}{
-		{"pre", true, false, 100000},
-		{"iterative", true, true, 100000},
+		{"pre", true, false, 5000},
+		{"iterative", true, true, 5000},
 		{"post", false, false, 0},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {

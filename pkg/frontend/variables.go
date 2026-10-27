@@ -4221,7 +4221,7 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("hnsw_prefilter_exact_threshold", 0, 1000000000, false),
-		Default:           int64(100000),
+		Default:           int64(5000),
 	},
 	"hnsw_max_index_capacity": {
 		Name:              "hnsw_max_index_capacity",

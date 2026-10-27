@@ -293,7 +293,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnswWithColRefCnt(nodeID in
 
 	var exactThreshold int64
 	if usePreFilter {
-		if exactThreshold, err = builder.resolveInt64Variable("hnsw_prefilter_exact_threshold", 100000); err != nil {
+		if exactThreshold, err = builder.resolveInt64Variable("hnsw_prefilter_exact_threshold", 5000); err != nil {
 			return 0, err
 		}
 	}

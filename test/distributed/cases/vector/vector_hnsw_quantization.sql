@@ -221,8 +221,8 @@ set hnsw_prefilter_exact_threshold = -1;
 set hnsw_prefilter_exact_threshold = 1000000001;
 set hnsw_prefilter_exact_threshold = 1000000000;
 select @@hnsw_prefilter_exact_threshold;
-set hnsw_prefilter_exact_threshold = 100000;
--- @regex("PrefilterExactThreshold: 100000", true)
+set hnsw_prefilter_exact_threshold = default;
+-- @regex("PrefilterExactThreshold: 5000", true)
 explain verbose select id from t_g where c = 1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
 set hnsw_prefilter_exact_threshold = 0;
 -- @regex("PrefilterExactThreshold", false)
@@ -230,7 +230,7 @@ explain verbose select id from t_g where c = 1 order by l2_distance(v,'[0,0]') l
 
 -- ---------------- C12: within the threshold the prefiltered page is exact ----
 select id from t_g where c = 1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=force';
-set hnsw_prefilter_exact_threshold = 100000;
+set hnsw_prefilter_exact_threshold = default;
 -- @regex("Vector Index Scan on", true)
 explain select id from t_g where c = 1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
 select id from t_g where c = 1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';

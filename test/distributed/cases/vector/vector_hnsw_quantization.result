@@ -632,7 +632,7 @@ from generate_series(1, 5000) gs;
 create index i_g using hnsw on t_g(v) m = 4 ef_construction = 8 ef_search = 4;
 select @@hnsw_prefilter_exact_threshold;
 ➤ @@hnsw_prefilter_exact_threshold[-1,16383,0]  𝄀
-100000
+5000
 set hnsw_prefilter_exact_threshold = -1;
 internal error: convert to the system variable int type failed
 set hnsw_prefilter_exact_threshold = 1000000001;
@@ -641,9 +641,9 @@ set hnsw_prefilter_exact_threshold = 1000000000;
 select @@hnsw_prefilter_exact_threshold;
 ➤ @@hnsw_prefilter_exact_threshold[-1,16383,0]  𝄀
 1000000000
-set hnsw_prefilter_exact_threshold = 100000;
+set hnsw_prefilter_exact_threshold = default;
 explain verbose select id from t_g where c = 1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
--- @regex("PrefilterExactThreshold: 100000", true)
+-- @regex("PrefilterExactThreshold: 5000", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project[6] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=100.00)  𝄀
   Output: t_g.id  𝄀
@@ -669,7 +669,7 @@ Project[6] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0 blockNum=1 rowsize=10
                     ->  Vector Index Scan[1] on i_g [l2_distance] (cost=0.00 outcnt=0.00 selectivity=0.0000 dop=0)  𝄀
                           Output: pkid, score  𝄀
                           Runtime Filter Probe: #[8,0]  𝄀
-                          Vector Index: i_g, Metric: l2_distance, Candidate Limit: 10, ThreadsSearch: 0, PrefilterExactThreshold: 100000  𝄀
+                          Vector Index: i_g, Metric: l2_distance, Candidate Limit: 10, ThreadsSearch: 0, PrefilterExactThreshold: 5000  𝄀
                     ->  Table Scan[2] on hnsw_quantization.t_g (cost=5000.00 outcnt=2500.00 selectivity=0.5000 dop=0 blockNum=2 rowsize=36.02)  𝄀
                           Output: t_g.id  𝄀
                           Table: 't_g' (0:'id', 1:'c') shuffle: hash(id)  𝄀
@@ -719,7 +719,7 @@ select id from t_g where c = 1 order by l2_distance(v,'[0,0]') limit 10 by rank 
 4000  𝄀
 4500  𝄀
 5000
-set hnsw_prefilter_exact_threshold = 100000;
+set hnsw_prefilter_exact_threshold = default;
 explain select id from t_g where c = 1 order by l2_distance(v,'[0,0]') limit 10 by rank with option 'mode=pre';
 -- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
