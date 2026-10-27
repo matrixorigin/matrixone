@@ -440,6 +440,9 @@ func registerJob(
 	}
 	emptyJobStatus := JobStatus{}
 	if jobSpec.ConsumerInfo.InitSQL != "" {
+		// Publish the lifecycle policy with registration so first-start recovery
+		// can distinguish this generation from legacy split-transaction InitSQL.
+		emptyJobStatus.LifecycleVersion = atomicInitLifecycleVersion
 		encoded := base64.StdEncoding.EncodeToString([]byte(jobSpec.ConsumerInfo.InitSQL))
 		jobSpec.ConsumerInfo.InitSQL = encoded
 	} else {

@@ -33,6 +33,7 @@ class TestStageSQLGeneration:
         self.mock_client.execute = Mock()
         self.stage_manager = StageManager(self.mock_client)
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_stage_basic(self):
         """Test CREATE STAGE basic SQL generation"""
         self.stage_manager.create('my_stage', 'file:///data/')
@@ -42,6 +43,7 @@ class TestStageSQLGeneration:
         actual_sql = self.mock_client.execute.call_args[0][0]
         assert actual_sql == expected_sql
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_stage_if_not_exists(self):
         """Test CREATE STAGE IF NOT EXISTS"""
         self.stage_manager.create('my_stage', 'file:///data/', if_not_exists=True)
@@ -50,6 +52,7 @@ class TestStageSQLGeneration:
         actual_sql = self.mock_client.execute.call_args[0][0]
         assert actual_sql == expected_sql
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_stage_with_comment(self):
         """Test CREATE STAGE with COMMENT"""
         self.stage_manager.create('my_stage', 'file:///data/', comment='test stage')
@@ -58,6 +61,7 @@ class TestStageSQLGeneration:
         actual_sql = self.mock_client.execute.call_args[0][0]
         assert actual_sql == expected_sql
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_stage_with_credentials(self):
         """Test CREATE STAGE with CREDENTIALS"""
         self.stage_manager.create(
@@ -73,10 +77,15 @@ class TestStageSQLGeneration:
         assert "'AWS_SECRET_KEY'='test_secret'" in actual_sql
         assert "'AWS_REGION'='us-east-1'" in actual_sql
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_stage_full(self):
         """Test CREATE STAGE with all options"""
         self.stage_manager.create(
-            'full_stage', 's3://bucket/path/', credentials={'AWS_KEY_ID': 'key'}, comment='full test', if_not_exists=True
+            'full_stage',
+            's3://bucket/path/',
+            credentials={'AWS_KEY_ID': 'key'},
+            comment='full test',
+            if_not_exists=True,
         )
 
         actual_sql = self.mock_client.execute.call_args[0][0]
@@ -99,7 +108,9 @@ class TestStageSQLGeneration:
 
     def test_alter_stage_comment(self):
         """Test ALTER STAGE SET COMMENT"""
-        self.mock_client.execute.return_value = Mock(rows=[['my_stage', 'file:///data/', 'enabled', 'new comment', None]])
+        self.mock_client.execute.return_value = Mock(
+            rows=[['my_stage', 'file:///data/', 'enabled', 'new comment', None]]
+        )
 
         self.stage_manager.alter('my_stage', comment='new comment')
 
@@ -227,10 +238,11 @@ class TestStageSQLGeneration:
 
         self.stage_manager.get('my_stage')
 
-        expected_sql = "SELECT stage_name, url, stage_status, comment, created_time FROM mo_catalog.mo_stages WHERE stage_name = 'my_stage'"
+        expected_sql = "SELECT stage_name, url, stage_status, comment, created_time FROM mo_catalog.mo_stages WHERE stage_name = LOWER('my_stage')"
         actual_sql = self.mock_client.execute.call_args[0][0]
         assert actual_sql == expected_sql
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_local_path_expansion(self):
         """Test create_local path expansion and URL generation"""
         import os
@@ -243,6 +255,7 @@ class TestStageSQLGeneration:
         assert actual_sql.startswith("CREATE STAGE local_stage URL='file://")
         assert actual_sql.endswith("/data/'")
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_local_home_expansion(self):
         """Test create_local with ~ expansion"""
         self.stage_manager.create_local('home_stage', '~/data/')
@@ -252,9 +265,12 @@ class TestStageSQLGeneration:
         assert actual_sql.startswith("CREATE STAGE home_stage URL='file://")
         assert '~' not in actual_sql  # ~ should be expanded
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_s3_url_generation(self):
         """Test create_s3 URL generation"""
-        self.stage_manager.create_s3('s3_stage', bucket='my-bucket', path='data/', aws_key_id='key', aws_secret_key='secret')
+        self.stage_manager.create_s3(
+            's3_stage', bucket='my-bucket', path='data/', aws_key_id='key', aws_secret_key='secret'
+        )
 
         actual_sql = self.mock_client.execute.call_args[0][0]
 
@@ -264,6 +280,7 @@ class TestStageSQLGeneration:
         assert "'AWS_KEY_ID'='key'" in actual_sql
         assert "'AWS_SECRET_KEY'='secret'" in actual_sql
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_s3_with_region(self):
         """Test create_s3 with AWS region"""
         self.stage_manager.create_s3(
@@ -273,9 +290,12 @@ class TestStageSQLGeneration:
         actual_sql = self.mock_client.execute.call_args[0][0]
         assert "'AWS_REGION'='us-west-2'" in actual_sql
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_s3_skip_prefix_if_present(self):
         """Test create_s3 correctly builds s3:// URL from bucket and path"""
-        self.stage_manager.create_s3('s3_stage', bucket='my-bucket', path='data/', aws_key_id='key', aws_secret_key='secret')
+        self.stage_manager.create_s3(
+            's3_stage', bucket='my-bucket', path='data/', aws_key_id='key', aws_secret_key='secret'
+        )
 
         actual_sql = self.mock_client.execute.call_args[0][0]
         # Should not be s3://s3:// (trailing / stripped)
@@ -414,6 +434,7 @@ class TestStageManagerConvenienceMethods:
         self.mock_client.execute = Mock()
         self.stage_manager = StageManager(self.mock_client)
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_local_relative_path(self):
         """Test create_local with relative path"""
         import os
@@ -428,6 +449,7 @@ class TestStageManagerConvenienceMethods:
         # Should not contain ./
         assert "'file://./data/'" not in actual_sql
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_local_home_expansion(self):
         """Test create_local expands ~ to home directory"""
         import os
@@ -440,6 +462,7 @@ class TestStageManagerConvenienceMethods:
         home_dir = os.path.expanduser('~')
         assert f"URL='file://{home_dir}/mydata/'" in actual_sql
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_local_adds_trailing_slash(self):
         """Test create_local adds trailing slash if missing"""
         self.stage_manager.create_local('local', '/data')
@@ -447,6 +470,7 @@ class TestStageManagerConvenienceMethods:
         actual_sql = self.mock_client.execute.call_args[0][0]
         assert "URL='file:///data/'" in actual_sql  # Note the trailing /
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_s3_adds_prefix(self):
         """Test create_s3 builds s3:// URL from bucket and path"""
         self.stage_manager.create_s3('s3', bucket='my-bucket', path='path/', aws_key_id='key', aws_secret_key='secret')
@@ -454,6 +478,7 @@ class TestStageManagerConvenienceMethods:
         actual_sql = self.mock_client.execute.call_args[0][0]
         assert "URL='s3://my-bucket/path'" in actual_sql
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_s3_preserves_prefix(self):
         """Test create_s3 correctly builds URL from bucket and path"""
         self.stage_manager.create_s3('s3', bucket='my-bucket', path='path/', aws_key_id='key', aws_secret_key='secret')
@@ -462,6 +487,7 @@ class TestStageManagerConvenienceMethods:
         assert "URL='s3://my-bucket/path'" in actual_sql
         assert "s3://s3://" not in actual_sql
 
+    @pytest.mark.usefixtures("isolate_create_sql_from_catalog_readback")
     def test_create_s3_env_fallback(self):
         """Test create_s3 can work without explicit credentials"""
         import os
@@ -489,3 +515,10 @@ class TestStageManagerConvenienceMethods:
                 os.environ['AWS_SECRET_ACCESS_KEY'] = old_secret
             else:
                 os.environ.pop('AWS_SECRET_ACCESS_KEY', None)
+
+
+@pytest.fixture
+def isolate_create_sql_from_catalog_readback(monkeypatch):
+    """These tests inspect CREATE SQL; catalog behavior has separate contracts."""
+    monkeypatch.setattr(StageManager, 'get', Mock(return_value=Mock()))
+    monkeypatch.setattr(AsyncStageManager, 'get', AsyncMock(return_value=Mock()))

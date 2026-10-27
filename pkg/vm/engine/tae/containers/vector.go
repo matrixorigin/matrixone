@@ -159,6 +159,13 @@ func (vec *vectorWrapper) ShallowGet(i int) any {
 	return getNonNullValue(vec.wrapped, uint32(i))
 }
 
+func (vec *vectorWrapper) CopyFrom(src Vector, dstRow, srcRow int) {
+	if err := vec.wrapped.Copy(
+		src.GetDownstreamVector(), int64(dstRow), int64(srcRow), vec.mpool); err != nil {
+		panic(err)
+	}
+}
+
 func (vec *vectorWrapper) Length() int {
 	if vec.wrapped == nil {
 		return 0

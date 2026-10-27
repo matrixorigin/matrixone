@@ -1,0 +1,169 @@
+drop database if exists float_cast_mysql;
+create database float_cast_mysql;
+use float_cast_mysql;
+set @saved_float_cast_mode=@@sql_mode;
+select cast(1.005e0 as decimal(10,2)) as positive_tie,
+cast(1.015e0 as decimal(20,2)) as next_tie,
+cast(-1.005e0 as decimal(10,2)) as negative_tie,
+cast('1.005' as decimal(10,2)) as string_control;
+➤ positive_tie[3,10,2]  ¦  next_tie[3,20,2]  ¦  negative_tie[3,10,2]  ¦  string_control[3,10,2]  𝄀
+1.01  ¦  1.02  ¦  -1.01  ¦  1.01
+select cast(1.0000000000000002e0 as decimal(38,18)) as high_scale,
+cast(1e-18 as decimal(18,18)) as small_value;
+➤ high_scale[3,38,18]  ¦  small_value[3,18,18]  𝄀
+1.000000000000000200  ¦  1E-18
+create table src(id int, d double, s varchar(32));
+insert into src values(1,1.005e0,'1.25'),(2,-1.005e0,'inf'),(3,1.015e0,'nan'),(4,null,null);
+select id,cast(d as decimal(10,2)),cast(d as decimal(20,2)),cast(d as decimal(65,2)) from src order by id;
+➤ id[4,32,0]  ¦  cast(d as decimal(10, 2))[3,10,2]  ¦  cast(d as decimal(20, 2))[3,20,2]  ¦  cast(d as decimal(65, 2))[3,65,2]  𝄀
+1  ¦  1.01  ¦  1.01  ¦  1.01  𝄀
+2  ¦  -1.01  ¦  -1.01  ¦  -1.01  𝄀
+3  ¦  1.02  ¦  1.02  ¦  1.02  𝄀
+4  ¦  null  ¦  null  ¦  null
+create table tiny_src(id int, d double);
+insert into tiny_src values(1,1e-20),(2,-1e-20),(3,null);
+select id,cast(d as decimal(16,6)) as tiny64,
+cast(d as decimal(38,19)) as tiny19,
+cast(d as decimal(38,20)) as tiny20
+from tiny_src order by id;
+➤ id[4,32,0]  ¦  tiny64[3,16,6]  ¦  tiny19[3,38,19]  ¦  tiny20[3,38,20]  𝄀
+1  ¦  0.000000  ¦  0E-19  ¦  1E-20  𝄀
+2  ¦  0.000000  ¦  0E-19  ¦  -1E-20  𝄀
+3  ¦  null  ¦  null  ¦  null
+insert into tiny_src values(4,999.995e0),(5,-999.995e0);
+select id,cast(d as decimal(5,2)) as clamped from tiny_src where id>=4 order by id;
+➤ id[4,32,0]  ¦  clamped[3,5,2]  𝄀
+4  ¦  999.99  𝄀
+5  ¦  -999.99
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'decimal' at row 1  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'decimal' at row 2
+set sql_mode='STRICT_TRANS_TABLES';
+select cast('inf' as double),cast('nan' as double),cast('information' as double),cast('-INFINITY' as float),cast('0x10' as double);
+➤ cast(inf as double)[8,53,31]  ¦  cast(nan as double)[8,53,31]  ¦  cast(information as double)[8,53,31]  ¦  cast(-INFINITY as float)[7,23,31]  ¦  cast(0x10 as double)[8,53,31]  𝄀
+0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  16.0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: 'inf'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: 'nan'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: 'information'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '-INFINITY'
+select id,cast(s as double) from src order by id;
+➤ id[4,32,0]  ¦  cast(s as double)[8,53,31]  𝄀
+1  ¦  1.25  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: 'inf'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: 'nan'
+create table dst(id int, d double);
+insert into dst values(1,'1.25'),(2,'inf');
+Data truncated for DOUBLE value: 'inf'
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  1265  ¦  Data truncated for DOUBLE value: 'inf'
+select count(*) from dst;
+➤ count(*)[-5,64,0]  𝄀
+0
+insert into dst values(1,cast('1.25' as double)),(2,cast('inf' as double));
+Data truncation: Truncated incorrect DOUBLE value: 'inf'
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  1292  ¦  Truncated incorrect DOUBLE value: 'inf'
+select count(*) from dst;
+➤ count(*)[-5,64,0]  𝄀
+0
+insert into dst select id,s from src where id<=2 order by id;
+Data truncated for DOUBLE value: 'inf'
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  1265  ¦  Data truncated for DOUBLE value: 'inf'
+select count(*) from dst;
+➤ count(*)[-5,64,0]  𝄀
+0
+insert ignore into dst values(1,'inf');
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1265  ¦  Data truncated for DOUBLE value: 'inf'
+insert ignore into dst values(2,cast('nan' as double));
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: 'nan'
+select * from dst order by id;
+➤ id[4,32,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0
+prepare direct_float from 'insert into dst values(3,?)';
+prepare explicit_float from 'insert into dst values(4,cast(? as double))';
+prepare literal_float from 'insert into dst values(5,''inf'')';
+prepare literal_explicit_float from 'insert into dst values(6,cast(''inf'' as double))';
+set @float_text='inf';
+execute direct_float using @float_text;
+Data truncated for DOUBLE value: 'inf'
+execute explicit_float using @float_text;
+Data truncation: Truncated incorrect DOUBLE value: 'inf'
+execute literal_float;
+Data truncated for DOUBLE value: 'inf'
+execute literal_explicit_float;
+Data truncation: Truncated incorrect DOUBLE value: 'inf'
+select count(*) from dst;
+➤ count(*)[-5,64,0]  𝄀
+2
+set sql_mode='';
+execute direct_float using @float_text;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1265  ¦  Data truncated for DOUBLE value: 'inf'
+set @float_text='nan';
+execute explicit_float using @float_text;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: 'nan'
+execute literal_float;
+execute literal_explicit_float;
+select * from dst order by id;
+➤ id[4,32,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  0.0  𝄀
+5  ¦  0.0  𝄀
+6  ¦  0.0
+set sql_mode='STRICT_TRANS_TABLES';
+set @float_text='2.5';
+execute direct_float using @float_text;
+select d from dst where id=3 order by d;
+➤ d[8,53,31]  𝄀
+0.0  𝄀
+2.5
+update dst set d=cast(case when id=1 then '2.5' else 'inf' end as double) where id in (1,2);
+Data truncation: Truncated incorrect DOUBLE value: 'inf'
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Error  ¦  1292  ¦  Truncated incorrect DOUBLE value: 'inf'
+select * from dst where id in (1,2) order by id;
+➤ id[4,32,0]  ¦  d[8,53,31]  𝄀
+1  ¦  0.0  𝄀
+2  ¦  0.0
+select case when false then cast('inf' as double) else 1e0 end;
+➤ case when false then cast(inf as double) else 1e0 end[8,53,31]  𝄀
+1.0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select id,case when id<0 then cast(s as double) else 1e0 end from src order by id;
+➤ id[4,32,0]  ¦  case when id < 0 then cast(s as double) else 1e0 end[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.0  𝄀
+3  ¦  1.0  𝄀
+4  ¦  1.0
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+deallocate prepare direct_float;
+deallocate prepare explicit_float;
+deallocate prepare literal_float;
+deallocate prepare literal_explicit_float;
+set sql_mode=@saved_float_cast_mode;
+drop database float_cast_mysql;

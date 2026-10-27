@@ -24,7 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
 )
 
@@ -635,12 +635,17 @@ func adjustTestingClusterTiming(svc ServiceOperator) {
 			config.CN.LockService.KeepBindDuration.Duration = testLockBindHeartbeatInterval
 			// Functional task tests need transitions, not production polling delays.
 			config.CN.TaskRunner.FetchInterval.Duration = time.Second
+			// Keep real index discovery and durable-watermark transitions on the
+			// same cadence as local BVT. Explicit timing scenarios retain their
+			// configuration, and WithPreStart can override these defaults.
+			if config.CN.ISCP.SyncTaskInterval.Duration == 0 {
+				config.CN.ISCP.SyncTaskInterval.Duration = time.Second
+			}
+			if config.CN.ISCP.IndexFlushWatermarkInterval.Duration == 0 {
+				config.CN.ISCP.IndexFlushWatermarkInterval.Duration = time.Second
+			}
 		})
 	}
-}
-
-type taskServiceGetter interface {
-	GetTaskService() (taskservice.TaskService, bool)
 }
 
 func waitBasicClusterTaskServices(ctx context.Context, c Cluster, cnCount int) error {
@@ -649,44 +654,17 @@ func waitBasicClusterTaskServices(ctx context.Context, c Cluster, cnCount int) e
 		if err != nil {
 			return err
 		}
-		getter, ok := svc.RawService().(taskServiceGetter)
+		getter, ok := svc.RawService().(testutil.TaskServiceGetter)
 		if !ok {
 			return moerr.NewInternalErrorNoCtxf(
 				"CN %s does not expose its task service", svc.ServiceID())
 		}
-		if err := waitTaskServiceReady(ctx, getter, basicClusterServiceStartupRetryInterval); err != nil {
+		if err := testutil.WaitTaskServiceReady(ctx, getter, basicClusterServiceStartupRetryInterval); err != nil {
 			return errors.Join(moerr.NewInternalErrorNoCtxf(
 				"CN %s task service did not become ready", svc.ServiceID()), err)
 		}
 	}
 	return nil
-}
-
-func waitTaskServiceReady(
-	ctx context.Context,
-	getter taskServiceGetter,
-	retryInterval time.Duration,
-) error {
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if service, ok := getter.GetTaskService(); ok && service != nil {
-			// Holder publication does not imply backing storage availability.
-			// Ping also succeeds with no store; a bounded read observes the real
-			// boundary and requests refresh without retrying any business write.
-			_, err := service.QueryDaemonTask(ctx, taskservice.WithTaskIDCond(taskservice.EQ, 0))
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if err == nil || !errors.Is(err, taskservice.ErrNotReady) {
-				return err
-			}
-		}
-		if err := waitStartupRetry(ctx, retryInterval); err != nil {
-			return err
-		}
-	}
 }
 
 func basicClusterSetupTracer(t testReporter, cnCount int) func(string, time.Duration, error) {

@@ -17,11 +17,22 @@ Connection hooks for MatrixOne clients
 """
 
 from enum import Enum
+from contextvars import ContextVar
+import inspect
 from typing import Callable, List, Optional, Union
 
 from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine
+
+_initializing_clients = ContextVar('matrixone_initializing_clients', default=())
+
+
+def assert_not_in_hook(client):
+    if any(owner is client for owner in _initializing_clients.get()):
+        raise RuntimeError(
+            'on_connect cannot reenter the same client pool; use ConnectionAction for session initialization'
+        )
 
 
 class ConnectionAction(Enum):
@@ -37,7 +48,9 @@ class ConnectionAction(Enum):
 class ConnectionHook:
     """Connection hook that executes actions after successful connection"""
 
-    def __init__(self, actions: Optional[List[Union[ConnectionAction, str]]] = None, custom_hook: Optional[Callable] = None):
+    def __init__(
+        self, actions: Optional[List[Union[ConnectionAction, str]]] = None, custom_hook: Optional[Callable] = None
+    ):
         """
         Initialize connection hook
 
@@ -56,62 +69,52 @@ class ConnectionHook:
             ConnectionAction.ENABLE_ALL: self._enable_all_with_connection,
         }
         self._client_ref = None  # Will be set when hook is attached to a client
-        self._executed_connections = set()  # Track which connections have executed the hook
+        self._async_engine = False
 
     def set_client(self, client):
         """Set the client reference for this hook"""
         self._client_ref = client
 
-    def attach_to_engine(self, engine: Union[Engine, AsyncEngine]):
-        """Attach this hook to a SQLAlchemy engine to listen for connection events"""
-        if isinstance(engine, AsyncEngine):
-            # For async engines, listen to both connect and before_cursor_execute events
-            event.listen(engine.sync_engine, "connect", self._on_connect_sync)
-            event.listen(engine.sync_engine, "before_cursor_execute", self._on_before_cursor_execute)
-            if hasattr(self._client_ref, 'logger'):
-                self._client_ref.logger.debug("Attached connection hook to async engine")
-        else:
-            # For sync engines, listen to both connect and before_cursor_execute events
-            event.listen(engine, "connect", self._on_connect_sync)
-            event.listen(engine, "before_cursor_execute", self._on_before_cursor_execute)
-            if hasattr(self._client_ref, 'logger'):
-                self._client_ref.logger.debug("Attached connection hook to sync engine")
+    def attach_to_engine(self, engine):
+        """Initialize once per physical generation, including already-open adoption."""
+        self._async_engine = isinstance(engine, AsyncEngine)
+        target = engine.sync_engine if self._async_engine else engine
+        event.listen(target, 'checkout', self._on_checkout)
+
+    def _on_checkout(self, dbapi_connection, connection_record, connection_proxy):
+        assert_not_in_hook(self._client_ref)
+        # Checkout owns cleanup even on cancellation in SQLAlchemy 1.4 and 2.0.
+        # Existing engine connections may predate hook attachment. Record.info
+        # is cleared by SQLAlchemy when a physical connection is replaced.
+        self._on_connect_sync(dbapi_connection, connection_record)
 
     def _on_connect_sync(self, dbapi_connection, connection_record):
-        """SQLAlchemy event handler for new connections (sync)"""
-        if self._client_ref:
-            # Get connection ID to track which connections have executed the hook
-            conn_id = id(dbapi_connection)
-            if conn_id not in self._executed_connections:
-                try:
-                    # Log that the hook is being executed
-                    if hasattr(self._client_ref, 'logger'):
-                        self._client_ref.logger.debug(f"Executing connection hook on new connection {conn_id}")
-                    # Pass the connection to avoid creating new connections
-                    self.execute_sync_with_connection(self._client_ref, dbapi_connection)
-                    self._executed_connections.add(conn_id)
-                except Exception as e:
-                    # Log error but don't fail the connection
-                    if hasattr(self._client_ref, 'logger'):
-                        self._client_ref.logger.warning(f"Connection hook execution failed: {e}")
+        client = self._client_ref
+        if client is None or connection_record.info.get(self):
+            return
+        assert_not_in_hook(client)
+        connection_record.info[self] = True
+        token = _initializing_clients.set(_initializing_clients.get() + (client,))
+        try:
+            for action in self.actions:
+                action = ConnectionAction(action) if isinstance(action, str) else action
+                self._action_handlers[action](client, dbapi_connection)
+            if self.custom_hook is not None:
+                result = self.custom_hook(client)
+                if inspect.isawaitable(result):
+                    if not self._async_engine:
+                        if inspect.iscoroutine(result):
+                            result.close()
+                        raise TypeError('An asynchronous on_connect callback requires AsyncClient')
+                    # The adapter's checkout event runs inside SQLAlchemy's
+                    # greenlet, so this suspends admission until completion.
+                    from sqlalchemy.util.concurrency import await_only
 
-    def _on_before_cursor_execute(self, conn, cursor, statement, parameters, context, executemany):
-        """SQLAlchemy event handler for before cursor execute"""
-        if self._client_ref:
-            # Get connection ID to track which connections have executed the hook
-            conn_id = id(conn.connection)
-            if conn_id not in self._executed_connections:
-                try:
-                    # Log that the hook is being executed
-                    if hasattr(self._client_ref, 'logger'):
-                        self._client_ref.logger.debug(f"Executing connection hook on connection {conn_id}")
-                    # Use the connection to avoid creating new connections
-                    self.execute_sync_with_connection(self._client_ref, conn.connection)
-                    self._executed_connections.add(conn_id)
-                except Exception as e:
-                    # Log error but don't fail the query
-                    if hasattr(self._client_ref, 'logger'):
-                        self._client_ref.logger.warning(f"Connection hook execution failed: {e}")
+                    await_only(result)
+        except Exception as error:
+            client.logger.warning(f'Connection hook execution failed: {error}')
+        finally:
+            _initializing_clients.reset(token)
 
     async def execute_async(self, client) -> None:
         """Execute hook actions asynchronously (for immediate execution)"""
@@ -196,7 +199,9 @@ class ConnectionHook:
             if self.custom_hook:
                 if hasattr(self.custom_hook, '__call__'):
                     # Check if it's an async function
-                    if hasattr(self.custom_hook, '__code__') and self.custom_hook.__code__.co_flags & 0x80:  # Check if async
+                    if (
+                        hasattr(self.custom_hook, '__code__') and self.custom_hook.__code__.co_flags & 0x80
+                    ):  # Check if async
                         await self.custom_hook(client)
                     else:
                         # Try to call it as sync, but handle potential async functions
@@ -247,7 +252,11 @@ class ConnectionHook:
             # Execute custom hook if provided
             if self.custom_hook:
                 if hasattr(self.custom_hook, '__call__'):
-                    self.custom_hook(client)
+                    result = self.custom_hook(client)
+                    if inspect.isawaitable(result):
+                        if inspect.iscoroutine(result):
+                            result.close()
+                        raise TypeError('An asynchronous on_connect callback requires AsyncClient')
                 else:
                     client.logger.warning("Custom hook is not callable")
 
@@ -259,8 +268,10 @@ class ConnectionHook:
         try:
             # Execute SQL directly on the connection to avoid creating new connections
             cursor = dbapi_connection.cursor()
-            cursor.execute("SET experimental_ivf_index = 1")
-            cursor.close()
+            try:
+                cursor.execute("SET experimental_ivf_index = 1")
+            finally:
+                cursor.close()
             client.logger.debug("✓ Enabled IVF vector operations")
         except Exception as e:
             client.logger.warning(f"Failed to enable IVF: {e}")
@@ -270,8 +281,10 @@ class ConnectionHook:
         try:
             # Execute SQL directly on the connection to avoid creating new connections
             cursor = dbapi_connection.cursor()
-            cursor.execute("SET experimental_hnsw_index = 1")
-            cursor.close()
+            try:
+                cursor.execute("SET experimental_hnsw_index = 1")
+            finally:
+                cursor.close()
             client.logger.debug("✓ Enabled HNSW vector operations")
         except Exception as e:
             client.logger.warning(f"Failed to enable HNSW: {e}")
@@ -281,8 +294,10 @@ class ConnectionHook:
         try:
             # Execute SQL directly on the connection to avoid creating new connections
             cursor = dbapi_connection.cursor()
-            cursor.execute("SET experimental_fulltext_index = 1")
-            cursor.close()
+            try:
+                cursor.execute("SET experimental_fulltext_index = 1")
+            finally:
+                cursor.close()
             client.logger.debug("✓ Enabled fulltext search operations")
         except Exception as e:
             client.logger.warning(f"Failed to enable fulltext: {e}")

@@ -8236,11 +8236,14 @@ func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
 		(hasQuantileExactWeighted(node) && !c.supportsQuantileExactWeightedDispatch())
 }
 
+// Local reduction may replace a complete child only when the parent establishes
+// its own distribution. A reuse consumer must preserve the complete child.
 func isLocalPreAggregationGroup(parent, child *plan.Node) bool {
 	if parent == nil || child == nil ||
 		parent.NodeType != plan.Node_AGG || child.NodeType != plan.Node_AGG ||
 		parent.Stats == nil || parent.Stats.HashmapStats == nil ||
 		!parent.Stats.HashmapStats.Shuffle ||
+		parent.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Normal ||
 		len(parent.AggList) != 0 || len(child.AggList) != 0 ||
 		len(parent.GroupBy) == 0 || len(parent.GroupBy) != len(child.GroupBy) ||
 		len(parent.GroupingFlag) != 0 || len(child.GroupingFlag) != 0 ||
@@ -8349,7 +8352,6 @@ func (c *Compile) canOmitLocalPreAggregation(
 		local.ExtraOptions != "" || len(local.PhysicalEqualityKeyList) != 0 ||
 		input.Stats == nil || len(ss) == 0 ||
 		parent.Stats.Dop <= 1 || !c.canCompileShuffleGroup(parent) ||
-		parent.Stats.HashmapStats.ShuffleMethod != plan.ShuffleMethod_Normal ||
 		parent.Stats.HashmapStats.ShuffleColIdx != 0 {
 		return false
 	}

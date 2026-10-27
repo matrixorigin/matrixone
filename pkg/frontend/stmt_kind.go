@@ -351,7 +351,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 		// ANALYZE TABLE rewrites to a derived SELECT, so it follows the same
 		// transaction policy as SELECT.
 		return true, nil
-	case *tree.CheckTableStmt, *tree.ShowProfileStmt:
+	case *tree.CheckTableStmt, *tree.ShowProfileStmt, *tree.CreateExtension, *tree.LoadExtension:
 		// These are not supported, but we let them reach the NotSupported handler
 		// instead of the generic unclassified-transaction error.
 		return true, nil

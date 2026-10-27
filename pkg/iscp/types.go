@@ -122,10 +122,10 @@ const (
 	JobStage_Running
 )
 
-// atomicInitLifecycleVersion marks job generations handled with the invariant
-// that InitSQL effects and the Init -> Running status transition share one
-// transaction. An absent/zero value means that invariant cannot be proven after
-// a restart; this includes legacy rows and fresh jobs not yet handled durably.
+// atomicInitLifecycleVersion marks generations whose InitSQL effects and
+// Init -> Running transition share one transaction. Persist it at registration,
+// before an executor can recover the fresh row. An absent/zero value cannot
+// establish that guarantee for an existing Init row.
 const atomicInitLifecycleVersion uint64 = 1
 
 type JobStatus struct {

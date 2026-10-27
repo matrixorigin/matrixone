@@ -892,6 +892,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 		return nil, moerr.NewInternalErrorf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	case *tree.Do, *tree.Declare:
 		return nil, moerr.NewNotSupported(ctx.GetContext(), tree.String(stmt, dialect.MYSQL))
+	case *tree.CreateExtension, *tree.LoadExtension:
+		return nil, moerr.NewNotSupported(ctx.GetContext(), "extension statements are not supported in MatrixOne")
 	case *tree.ValuesStatement:
 		return buildValues(stmt, ctx, isPrepareStmt)
 	case *tree.LockTableStmt:
