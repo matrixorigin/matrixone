@@ -4447,195 +4447,41 @@ func TestStrCmpInt32ResultWrapper(t *testing.T) {
 }
 
 func initSubStrTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "2",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"efghijklmn"},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_blob,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_blob.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{7},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_blob.ToType(), false,
-				[]string{"ghijklmn"},
-				[]bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_text,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_text.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{11},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_text.ToType(), false,
-				[]string{"klmn"},
-				[]bool{false}),
-		},
-
-		{
-			info: "2",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{16},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{6},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"efghij"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{6},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-8},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{6},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-9},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{""},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-4},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{4},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"klmn"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-14},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{14},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"abcdefghijklmn"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-14},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{10},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"abcdefghij"},
-				[]bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"abcdefghijklmn"},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{-12},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{2},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"cd"},
-				[]bool{false}),
-		},
+	cases := []struct {
+		info             string
+		typ              types.T
+		value, want      string
+		position, length int64
+	}{
+		{"2", types.T_varchar, "abcdefghijklmn", "efghijklmn", 5, 0},
+		{"2", types.T_blob, "abcdefghijklmn", "ghijklmn", 7, 0},
+		{"2", types.T_text, "abcdefghijklmn", "klmn", 11, 0},
+		{"2", types.T_varchar, "abcdefghijklmn", "", 16, 0},
+		{"3", types.T_varchar, "abcdefghijklmn", "efghij", 5, 6},
+		{"3", types.T_varchar, "abcdefghijklmn", "", 6, -8},
+		{"3", types.T_varchar, "abcdefghijklmn", "", 6, -9},
+		{"3", types.T_varchar, "abcdefghijklmn", "klmn", -4, 4},
+		{"3", types.T_varchar, "abcdefghijklmn", "abcdefghijklmn", -14, 14},
+		{"3", types.T_varchar, "abcdefghijklmn", "abcdefghij", -14, 10},
+		{"3", types.T_varchar, "abcdefghijklmn", "cd", -12, 2},
 	}
+	result := make([]tcTemp, 0, len(cases))
+	for _, tc := range cases {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(tc.typ.ToType(), []string{tc.value}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.position}, []bool{false}),
+		}
+		if tc.info == "3" {
+			inputs = append(inputs, NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.length}, []bool{false}))
+		}
+		result = append(result, tcTemp{
+			info:   tc.info,
+			typ:    tc.typ,
+			inputs: inputs,
+			expect: NewFunctionTestResult(tc.typ.ToType(), false, []string{tc.want}, []bool{false}),
+		})
+	}
+	return result
 }
 
 func TestSubStr(t *testing.T) {
