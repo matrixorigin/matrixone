@@ -84,7 +84,7 @@ func makeVarcharConst(s string) *plan.Expr {
 }
 
 // Helper function to create a NULL literal expression
-func makeNullConst() *plan.Expr {
+func makeNullConst(oid types.T, scale int32) *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_Lit{
 			Lit: &plan.Literal{
@@ -92,8 +92,9 @@ func makeNullConst() *plan.Expr {
 			},
 		},
 		Typ: plan.Type{
-			Id:          int32(types.T_float64),
+			Id:          int32(oid),
 			NotNullable: false,
+			Scale:       scale,
 		},
 	}
 }
@@ -278,48 +279,34 @@ func TestResetIntervalFunctionArgsComprehensive(t *testing.T) {
 		{
 			name:                 "INTERVAL NULL SECOND (null float64 literal)",
 			wantCast:             true,
-			intervalValueExpr:    makeNullConst(),
+			intervalValueExpr:    makeNullConst(types.T_float64, 0),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  0, // NULL will be handled at execution time, goes through cast path
 			expectedIntervalType: types.Second,
 		},
 		// Test NULL float32 with time unit
 		{
-			name:     "INTERVAL NULL SECOND (null float32 literal)",
-			wantCast: true,
-			intervalValueExpr: func() *plan.Expr {
-				expr := makeNullConst()
-				expr.Typ.Id = int32(types.T_float32)
-				return expr
-			}(),
+			name:                 "INTERVAL NULL SECOND (null float32 literal)",
+			wantCast:             true,
+			intervalValueExpr:    makeNullConst(types.T_float32, 0),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  0,
 			expectedIntervalType: types.Second,
 		},
 		// Test NULL decimal64 with time unit
 		{
-			name:     "INTERVAL NULL SECOND (null decimal64 literal)",
-			wantCast: true,
-			intervalValueExpr: func() *plan.Expr {
-				expr := makeNullConst()
-				expr.Typ.Id = int32(types.T_decimal64)
-				expr.Typ.Scale = 1
-				return expr
-			}(),
+			name:                 "INTERVAL NULL SECOND (null decimal64 literal)",
+			wantCast:             true,
+			intervalValueExpr:    makeNullConst(types.T_decimal64, 1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  0,
 			expectedIntervalType: types.Second,
 		},
 		// Test NULL decimal128 with time unit
 		{
-			name:     "INTERVAL NULL SECOND (null decimal128 literal)",
-			wantCast: true,
-			intervalValueExpr: func() *plan.Expr {
-				expr := makeNullConst()
-				expr.Typ.Id = int32(types.T_decimal128)
-				expr.Typ.Scale = 1
-				return expr
-			}(),
+			name:                 "INTERVAL NULL SECOND (null decimal128 literal)",
+			wantCast:             true,
+			intervalValueExpr:    makeNullConst(types.T_decimal128, 1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  0,
 			expectedIntervalType: types.Second,
@@ -396,8 +383,7 @@ func TestResetIntervalFunctionArgsNullHandling(t *testing.T) {
 	ctx := context.Background()
 
 	// Test NULL float64 with time unit (should not convert, goes through cast path)
-	nullFloatExpr := makeNullConst()
-	nullFloatExpr.Typ.Id = int32(types.T_float64)
+	nullFloatExpr := makeNullConst(types.T_float64, 0)
 	intervalExpr := makeIntervalExpr(nullFloatExpr, "SECOND")
 
 	args, err := resetIntervalFunctionArgs(ctx, intervalExpr)

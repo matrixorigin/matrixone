@@ -69,83 +69,6 @@ func makeDecimal128ConstForProjectionWithNegativeScale(val float64, scale int32)
 	}
 }
 
-// Helper function to create a null constant expression for decimal64 type
-func makeNullDecimal64ConstForProjection() *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: true,
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_decimal64),
-			NotNullable: false,
-			Scale:       1,
-		},
-	}
-}
-
-// Helper function to create a null constant expression for decimal128 type
-func makeNullDecimal128ConstForProjection() *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: true,
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_decimal128),
-			NotNullable: false,
-			Scale:       1,
-		},
-	}
-}
-
-// Helper function to create a null constant expression for float64 type
-func makeNullFloat64ConstForProjection() *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: true,
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_float64),
-			NotNullable: false,
-		},
-	}
-}
-
-// Helper function to create a null constant expression for float32 type
-func makeNullFloat32ConstForProjection() *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: true,
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_float32),
-			NotNullable: false,
-		},
-	}
-}
-
-// Helper function to create a null constant expression for int64 type
-func makeNullInt64ConstForProjection() *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: true,
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_int64),
-			NotNullable: false,
-		},
-	}
-}
-
 // Helper to extract int64 value from a constant expression
 func extractInt64ValueFromExpr(t *testing.T, expr *plan.Expr) int64 {
 	t.Helper()
@@ -444,7 +367,7 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 		// Actual SQL NULL is an illegal frame argument.
 		{
 			name:              "INTERVAL NULL SECOND (decimal64, null value)",
-			intervalValueExpr: makeNullDecimal64ConstForProjection(),
+			intervalValueExpr: makeNullConst(types.T_decimal64, 1),
 			intervalUnit:      "SECOND",
 			expectError:       true,
 			errorContains:     "frame start or end is negative, NULL",
@@ -452,7 +375,7 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 		// Test null decimal128 constant - goes through fallback executor path
 		{
 			name:              "INTERVAL NULL SECOND (decimal128, null value)",
-			intervalValueExpr: makeNullDecimal128ConstForProjection(),
+			intervalValueExpr: makeNullConst(types.T_decimal128, 1),
 			intervalUnit:      "SECOND",
 			expectError:       true,
 			errorContains:     "frame start or end is negative, NULL",
@@ -460,7 +383,7 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 		// Test null float64 constant - goes through fallback executor path
 		{
 			name:              "INTERVAL NULL SECOND (float64, null value)",
-			intervalValueExpr: makeNullFloat64ConstForProjection(),
+			intervalValueExpr: makeNullConst(types.T_float64, 0),
 			intervalUnit:      "SECOND",
 			expectError:       true,
 			errorContains:     "frame start or end is negative, NULL",
@@ -468,7 +391,7 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 		// Test null float32 constant - goes through fallback executor path
 		{
 			name:              "INTERVAL NULL SECOND (float32, null value)",
-			intervalValueExpr: makeNullFloat32ConstForProjection(),
+			intervalValueExpr: makeNullConst(types.T_float32, 0),
 			intervalUnit:      "SECOND",
 			expectError:       true,
 			errorContains:     "frame start or end is negative, NULL",
@@ -488,7 +411,7 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 		// Actual SQL NULL is also rejected for non-time units.
 		{
 			name:              "INTERVAL NULL WEEK (int64, null value)",
-			intervalValueExpr: makeNullInt64ConstForProjection(),
+			intervalValueExpr: makeNullConst(types.T_int64, 0),
 			intervalUnit:      "WEEK",
 			expectError:       true,
 			errorContains:     "frame start or end is negative, NULL",
