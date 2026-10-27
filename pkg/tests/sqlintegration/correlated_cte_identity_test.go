@@ -207,7 +207,7 @@ LIMIT 10;
 				require.NoError(t, rows.Err())
 			})
 		}
-		t.Run("prepared reuse after empty output and rejected query", func(t *testing.T) {
+		t.Run("prepared reuse after empty output and scalar error", func(t *testing.T) {
 			stmt, err := db.PrepareContext(ctx, `WITH q AS(SELECT * FROM bag_rows) SELECT b.k,
     (SELECT MAX(v) FROM q x WHERE x.k<=b.k) AS m,
     (SELECT COUNT(*) FROM q x WHERE x.k<=b.k) AS c FROM q b WHERE b.k>=?`)
@@ -223,11 +223,20 @@ LIMIT 10;
 			}
 			check(-1, []string{"0:NULL:1", "2:10:3", "2:10:3"})
 			check(3, nil)
-			_, err = db.ExecContext(ctx, `WITH q AS(SELECT k,v FROM bag_rows UNION ALL SELECT k,v FROM bag_rows)
-    SELECT (SELECT MAX(v) FROM bag_rows x WHERE x.k<=b.k) FROM q b`)
+			func() {
+				rows, err := db.QueryContext(ctx, `WITH q AS(SELECT k,v FROM bag_rows UNION ALL SELECT k,v FROM bag_rows)
+    SELECT (SELECT MAX(v) FROM bag_rows x WHERE x.k<=b.k) AS m FROM q b`)
+				require.NoError(t, err)
+				defer rows.Close()
+				require.ElementsMatch(t, []string{"NULL", "NULL", "NULL", "NULL", "10", "10", "10", "10"},
+					read(t, rows, []string{"m"}))
+				require.NoError(t, rows.Err())
+			}()
+			_, err = db.ExecContext(ctx, `SELECT (SELECT x.k FROM bag_rows x WHERE x.k<=b.k)
+    FROM bag_rows b WHERE b.k=2`)
 			var serverErr *mysql.MySQLError
 			require.ErrorAs(t, err, &serverErr)
-			require.EqualValues(t, 20102, serverErr.Number)
+			require.EqualValues(t, 1242, serverErr.Number)
 			execSQLRequire(t, ctx, db, "INSERT INTO bag_rows VALUES(1,20)")
 			check(-1, []string{"0:NULL:1", "1:20:2", "2:20:4", "2:20:4"})
 		})

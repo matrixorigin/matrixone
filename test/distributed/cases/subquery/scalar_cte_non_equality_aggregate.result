@@ -398,4 +398,42 @@ order by o.id;
 ➤ id[4,32,0]  𝄀
 2  𝄀
 6
+prepare scalar_operand_params from 'select ? as exposed, (o.id,(select ?)) <=> (select count(*),max(i.n) from inner_rows i where i.n<=o.n) as compared from outer_rows o where o.id<=2 order by o.id';
+set @scalar_operand_value = 1;
+execute scalar_operand_params using @scalar_operand_value, @scalar_operand_value;
+➤ exposed[-1,16383,0]  ¦  compared[-6,8,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  0
+set @scalar_operand_value = null;
+execute scalar_operand_params using @scalar_operand_value, @scalar_operand_value;
+➤ exposed[-1,16383,0]  ¦  compared[-6,8,0]  𝄀
+null  ¦  0  𝄀
+null  ¦  0
+set @scalar_operand_value = 2;
+execute scalar_operand_params using @scalar_operand_value, @scalar_operand_value;
+➤ exposed[-1,16383,0]  ¦  compared[-6,8,0]  𝄀
+2  ¦  0  𝄀
+2  ¦  1
+set @scalar_operand_value = cast(1.00 as decimal(20,2));
+execute scalar_operand_params using @scalar_operand_value, @scalar_operand_value;
+➤ exposed[-1,16383,0]  ¦  compared[-6,8,0]  𝄀
+1.00  ¦  1  𝄀
+1.00  ¦  0
+set @scalar_operand_value = '2';
+execute scalar_operand_params using @scalar_operand_value, @scalar_operand_value;
+➤ exposed[-1,16383,0]  ¦  compared[-6,8,0]  𝄀
+2  ¦  0  𝄀
+2  ¦  1
+set @scalar_operand_value = 1;
+execute scalar_operand_params using @scalar_operand_value, @scalar_operand_value;
+➤ exposed[-1,16383,0]  ¦  compared[-6,8,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  0
+deallocate prepare scalar_operand_params;
+prepare scalar_operand_skip from 'select case when o.id<0 then (o.id,(select ?)) <=> (select count(*),max(i.n) from inner_rows i where i.n<=o.n) else 0 end as skipped from outer_rows o where o.id<=2 order by o.id';
+execute scalar_operand_skip using @scalar_operand_value;
+➤ skipped[-6,8,0]  𝄀
+0  𝄀
+0
+deallocate prepare scalar_operand_skip;
 drop database test_scalar_cte_non_eq_agg;

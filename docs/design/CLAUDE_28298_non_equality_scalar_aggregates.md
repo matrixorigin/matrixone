@@ -111,5 +111,6 @@ r1 送审时以上仅为源码与既有测试的调查结论；实施从独立�
 - 既有 `subqueryNeedsDependent / legacyDeepScalarAggregateSafe` 优先拥有深层及已有 dependent 关系的分类；新的 range 准入只补充其余单层关系。单层分页资格中的 depth=1 限制不能否定已证明安全的深层等值集合路径，无 FROM 或多个中间绑定也不能改变这个优先级。
 - 行比较的左操作数通过现有递归 dependent 表达式绑定保留在比较的 demand stage；不能预先展开为外层 SINGLE JOIN。外层 CASE / COALESCE 或左操作数内部 CASE 跳过它时，不执行其基数检查；实际选中且返回多行时仍报错。
 - 已有投影拥有的关联具有独立的 MARK join / per-outer-row LIMIT 规范化与准入边界，不由新分页选择器接管。独立聚合之上的关联过滤也保留原标量 join 路由。
+- SQL EXECUTE 的裸参数 TEXT 展示只作用于 `MainOutputStep()` 指定的客户端结果；内部 program 和 CTE producer 保留语义输出类型，不能遍历全部 steps 改写展示类型。
 - 不新增 runtime 状态、协议或资源 owner。现有 native fixture 覆盖两次执行、读源关闭与预算归零，并检查词法源仅编译一次、内层按实际外层需求开启。
 - SQL 回归复用原聚合与行身份 fixture；同步更新行构造器与 hint CTE 中不再适用的拒绝预期，保留标量基数错误及原始安全快速路径的对照。

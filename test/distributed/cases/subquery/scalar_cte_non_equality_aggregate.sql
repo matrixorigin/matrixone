@@ -233,5 +233,24 @@ select o.id from outer_rows o
 where exists (select 1 where 1 = (select max(i.n) from inner_rows i where i.n < o.n))
 order by o.id;
 
+-- SQL EXECUTE 的展示转换只属于外部结果，不能改写内部标量 program。
+prepare scalar_operand_params from 'select ? as exposed, (o.id,(select ?)) <=> (select count(*),max(i.n) from inner_rows i where i.n<=o.n) as compared from outer_rows o where o.id<=2 order by o.id';
+set @scalar_operand_value = 1;
+execute scalar_operand_params using @scalar_operand_value, @scalar_operand_value;
+set @scalar_operand_value = null;
+execute scalar_operand_params using @scalar_operand_value, @scalar_operand_value;
+set @scalar_operand_value = 2;
+execute scalar_operand_params using @scalar_operand_value, @scalar_operand_value;
+set @scalar_operand_value = cast(1.00 as decimal(20,2));
+execute scalar_operand_params using @scalar_operand_value, @scalar_operand_value;
+set @scalar_operand_value = '2';
+execute scalar_operand_params using @scalar_operand_value, @scalar_operand_value;
+set @scalar_operand_value = 1;
+execute scalar_operand_params using @scalar_operand_value, @scalar_operand_value;
+deallocate prepare scalar_operand_params;
+prepare scalar_operand_skip from 'select case when o.id<0 then (o.id,(select ?)) <=> (select count(*),max(i.n) from inner_rows i where i.n<=o.n) else 0 end as skipped from outer_rows o where o.id<=2 order by o.id';
+execute scalar_operand_skip using @scalar_operand_value;
+deallocate prepare scalar_operand_skip;
+
 -- @teardown
 drop database test_scalar_cte_non_eq_agg;
