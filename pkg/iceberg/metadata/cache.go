@@ -259,16 +259,10 @@ func cloneTableMetadata(in *api.TableMetadata) *api.TableMetadata {
 		out.CurrentSnapshotID = &current
 	}
 	if len(in.Properties) > 0 {
-		out.Properties = make(map[string]string, len(in.Properties))
-		for k, v := range in.Properties {
-			out.Properties[k] = v
-		}
+		out.Properties = api.CloneNonEmptyMap(in.Properties)
 	}
 	if len(in.Refs) > 0 {
-		out.Refs = make(map[string]api.SnapshotRef, len(in.Refs))
-		for k, v := range in.Refs {
-			out.Refs[k] = v
-		}
+		out.Refs = api.CloneNonEmptyMap(in.Refs)
 	}
 	for i := range out.Schemas {
 		out.Schemas[i].Fields = cloneSchemaFields(in.Schemas[i].Fields)

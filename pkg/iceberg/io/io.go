@@ -514,10 +514,7 @@ func selectStorageCredential(credentials []api.StorageCredential, location strin
 func cloneStorageCredential(in api.StorageCredential) api.StorageCredential {
 	out := in
 	if len(in.Config) > 0 {
-		out.Config = make(map[string]string, len(in.Config))
-		for k, v := range in.Config {
-			out.Config[k] = v
-		}
+		out.Config = api.CloneNonEmptyMap(in.Config)
 	}
 	return out
 }
@@ -525,10 +522,7 @@ func cloneStorageCredential(in api.StorageCredential) api.StorageCredential {
 func cloneSignedRequest(in SignedRequest) SignedRequest {
 	out := in
 	if len(in.Headers) > 0 {
-		out.Headers = make(map[string]string, len(in.Headers))
-		for k, v := range in.Headers {
-			out.Headers[k] = v
-		}
+		out.Headers = api.CloneNonEmptyMap(in.Headers)
 	}
 	out.ExpiresAt = in.ExpiresAt.UTC()
 	return out
