@@ -14120,7 +14120,6 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var mysqlSpecialCanonicalTypes []*plan.Type
 	var outputColumnProvenance []OutputColumnProvenance
 	var headingMetadata headingProvenanceMap
-	var defaultVals []string
 	var binding *Binding
 	var bindingToReplace *Binding
 	var table string
@@ -14192,7 +14191,6 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		originCols := make([]string, colLength)
 		colIsHidden = make([]bool, colLength)
 		types = make([]*plan.Type, colLength)
-		defaultVals = make([]string, colLength)
 		if shared := builder.headingProvenanceByNode[nodeID]; len(shared) > 0 {
 			headingMetadata = cloneHeadingProvenances(shared)
 			delete(builder.headingProvenanceByNode, nodeID)
@@ -14218,15 +14216,12 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 				catalog.IsKafkaHiddenCol(col.Name, col.ColId) ||
 				catalog.IsExternalErrorCol(col.Name, col.ColId)
 			types[i] = &col.Typ
-			if col.Default != nil {
-				defaultVals[i] = col.Default.OriginString
-			}
 			name := table + "." + cols[i]
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
 		binding = NewBinding(tag, nodeID, sqlDatabase, table, node.TableDef.TblId, cols, colIsHidden, types,
-			util.TableIsClusterTable(node.TableDef.TableType), defaultVals)
+			util.TableIsClusterTable(node.TableDef.TableType), nil)
 		binding.originCols = originCols
 		binding.headingProvenance = headingMetadata
 		binding.outputColumnProvenance = make([]OutputColumnProvenance, colLength)
@@ -14275,7 +14270,6 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		headingMetadata := cloneHeadingProvenances(subCtx.headingProvenance)
 		colIsHidden = make([]bool, colLength)
 		types = make([]*plan.Type, colLength)
-		defaultVals = make([]string, colLength)
 		for i, col := range headings {
 			if i < len(alias.Cols) {
 				cols[i] = string(alias.Cols[i])
@@ -14289,7 +14283,6 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			cols[i] = strings.ToLower(cols[i])
 			types[i] = &projects[i].Typ
 			colIsHidden[i] = false
-			defaultVals[i] = ""
 			if orderType := subCtx.mysqlSpecialOrderTypeForProject(int32(i)); orderType != nil {
 				if mysqlSpecialOrderTypes == nil {
 					mysqlSpecialOrderTypes = make([]*plan.Type, colLength)
@@ -14323,7 +14316,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 			builder.nameByColRef[[2]int32{tag, int32(i)}] = name
 		}
 
-		binding = NewBinding(tag, nodeID, subCtx.cteDatabase, table, 0, cols, colIsHidden, types, false, defaultVals)
+		binding = NewBinding(tag, nodeID, subCtx.cteDatabase, table, 0, cols, colIsHidden, types, false, nil)
 		binding.originCols = originCols
 		binding.headingProvenance = headingMetadata
 		binding.mysqlSpecialOrderTypes = mysqlSpecialOrderTypes
