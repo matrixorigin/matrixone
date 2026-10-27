@@ -1325,12 +1325,6 @@ const (
 
 	updateStatusUnlockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = 0 where user_name = "%s" order by user_id;`
 
-	updateLoginAttemptsOfUserFormat = `update mo_catalog.mo_user set login_attempts = login_attempts + 1  where user_name = "%s";`
-
-	updateLockTimeOfUserFormat = `update mo_catalog.mo_user set lock_time = utc_timestamp() where user_name = "%s";`
-
-	updateStatusLockOfUserFormat = `update mo_catalog.mo_user set status = "%s", login_attempts = login_attempts + 1, lock_time = utc_timestamp() where user_name = "%s";`
-
 	updateStatusLockOfUserForeverFormat = `update mo_catalog.mo_user set status = "%s" where user_name = "%s";`
 
 	roleNameOfRoleIdFormat = `select role_name from mo_catalog.mo_role where role_id = %d;`
@@ -1831,18 +1825,6 @@ func getSqlForUpdatePasswordOfUser(ctx context.Context, password, user string) (
 
 func getSqlForUpdateUnlcokStatusOfUser(status, user string) string {
 	return fmt.Sprintf(updateStatusUnlockOfUserFormat, status, user)
-}
-
-func getSqlForUpdateLoginAttemptsOfUser(user string) string {
-	return fmt.Sprintf(updateLoginAttemptsOfUserFormat, user)
-}
-
-func getSqlForUpdateLockTimeOfUser(user string) string {
-	return fmt.Sprintf(updateLockTimeOfUserFormat, user)
-}
-
-func getSqlForUpdateStatusLockOfUser(status, user string) string {
-	return fmt.Sprintf(updateStatusLockOfUserFormat, status, user)
 }
 
 func getSqlForUpdateStatusLockOfUserForever(status string, user string) string {
