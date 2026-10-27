@@ -567,6 +567,25 @@ func totalLoadFileSize(fileSize []int64) int64 {
 	return total
 }
 
+// loadFieldDelimiters translates LOAD field options into scan delimiters.
+func loadFieldDelimiters(fields *tree.Fields) (string, []byte, []byte) {
+	terminated := tree.DefaultFieldsTerminated
+	enclosedBy := []byte(tree.DefaultFieldsEnclosedBy)
+	escapedBy := []byte{0}
+	if fields != nil {
+		if fields.EnclosedBy != nil && fields.EnclosedBy.Value != 0 {
+			enclosedBy = []byte{fields.EnclosedBy.Value}
+		}
+		if fields.EscapedBy != nil && fields.EscapedBy.Value != 0 {
+			escapedBy = []byte{fields.EscapedBy.Value}
+		}
+		if fields.Terminated != nil {
+			terminated = fields.Terminated.Value
+		}
+	}
+	return terminated, enclosedBy, escapedBy
+}
+
 func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -670,24 +689,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		return nil, err
 	}
 	bindCtx := NewBindContext(builder, nil)
-	terminated := ","
-	enclosedBy := []byte("\"")
-	escapedBy := []byte{0}
-	if stmt.Param.Tail.Fields != nil {
-		if stmt.Param.Tail.Fields.EnclosedBy != nil {
-			if stmt.Param.Tail.Fields.EnclosedBy.Value != 0 {
-				enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy.Value}
-			}
-		}
-		if stmt.Param.Tail.Fields.EscapedBy != nil {
-			if stmt.Param.Tail.Fields.EscapedBy.Value != 0 {
-				escapedBy = []byte{stmt.Param.Tail.Fields.EscapedBy.Value}
-			}
-		}
-		if stmt.Param.Tail.Fields.Terminated != nil {
-			terminated = stmt.Param.Tail.Fields.Terminated.Value
-		}
-	}
+	terminated, enclosedBy, escapedBy := loadFieldDelimiters(stmt.Param.Tail.Fields)
 
 	externalScanNode := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,

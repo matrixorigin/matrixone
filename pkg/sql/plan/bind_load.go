@@ -244,24 +244,7 @@ func (builder *QueryBuilder) bindExternalScan(
 		tableDef.Createsql = string(json_byte)
 	}
 
-	terminated := tree.DefaultFieldsTerminated
-	enclosedBy := []byte(tree.DefaultFieldsEnclosedBy)
-	escapedBy := []byte{0}
-	if stmt.Param.Tail.Fields != nil {
-		if stmt.Param.Tail.Fields.EnclosedBy != nil {
-			if stmt.Param.Tail.Fields.EnclosedBy.Value != 0 {
-				enclosedBy = []byte{stmt.Param.Tail.Fields.EnclosedBy.Value}
-			}
-		}
-		if stmt.Param.Tail.Fields.EscapedBy != nil {
-			if stmt.Param.Tail.Fields.EscapedBy.Value != 0 {
-				escapedBy = []byte{stmt.Param.Tail.Fields.EscapedBy.Value}
-			}
-		}
-		if stmt.Param.Tail.Fields.Terminated != nil {
-			terminated = stmt.Param.Tail.Fields.Terminated.Value
-		}
-	}
+	terminated, enclosedBy, escapedBy := loadFieldDelimiters(stmt.Param.Tail.Fields)
 
 	externalScanNode := &plan.Node{
 		NodeType: plan.Node_EXTERNAL_SCAN,
