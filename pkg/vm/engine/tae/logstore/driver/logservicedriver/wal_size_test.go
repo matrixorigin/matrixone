@@ -41,7 +41,7 @@ func TestCommitGroupsUseEncodedSize(t *testing.T) {
 	backend.RLock()
 	defer backend.RUnlock()
 	require.Len(t, backend.store, 2)
-	var dsns []uint64
+	dsns := make([]uint64, 0, len(backend.store))
 	for _, record := range backend.store {
 		walRecord := LogEntry(record.Payload())
 		require.Equal(t, maxSize, len(walRecord))
