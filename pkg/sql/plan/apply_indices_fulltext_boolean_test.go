@@ -1008,7 +1008,12 @@ func TestFullTextBooleanProjectedScoreAsBoolIsScore(t *testing.T) {
 	const inner = "select id, match(title, body) against('hello') sc from ft where match(title, body) against('hello')"
 	for _, ft2 := range []bool{false, true} {
 		for _, where := range []string{"%s", "%s or id < 0", "%s or id", "not %s", "if(%s, true, false)", "case when %s then true else false end"} {
-			for _, from := range []string{inner, inner + " or base_id = 'b1'"} {
+			composed := inner + " or base_id = 'b1'"
+			for _, from := range []string{inner, composed,
+				inner + " union all " + composed, composed + " union " + inner,
+				inner + " intersect " + composed, composed + " except " + inner,
+				"select id, match(title, body) against('hello') sc from ft where match(title, body) against('hello') group by id, sc",
+			} {
 				sql := fmt.Sprintf("select id from (%s) d where %s", from, fmt.Sprintf(where, "sc"))
 				control := fmt.Sprintf("select id from (%s) d where %s", from, fmt.Sprintf(where, "sc <> 0"))
 				query := buildBooleanFullTextPublicPlan(t, sql, ft2, false)

@@ -2170,7 +2170,8 @@ func fullTextProjectsMatch(projects []*plan.Expr) bool {
 
 // fullTextProjectedScoreAsBool rewrites each BOOL use of a column that projects a MATCH
 // (cast to BOOL, IF condition) into a comparison of that column with zero, so that it keeps
-// reading the score once the column is replaced by the MATCH.
+// reading the score once the column is replaced by the MATCH. A negative tag matches columns
+// of any binding, as set operations substitute by position.
 func fullTextProjectedScoreAsBool(ctx context.Context, expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
@@ -2196,7 +2197,7 @@ func fullTextProjectedScoreAsBool(ctx context.Context, expr *plan.Expr, tag int3
 // fullTextProjectedScoreNonZero returns col <> 0 if col projects a MATCH, otherwise nil.
 func fullTextProjectedScoreNonZero(ctx context.Context, col *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
 	ref := col.GetCol()
-	if ref == nil || ref.RelPos != tag || ref.ColPos < 0 || int(ref.ColPos) >= len(projects) {
+	if ref == nil || (tag >= 0 && ref.RelPos != tag) || ref.ColPos < 0 || int(ref.ColPos) >= len(projects) {
 		return nil
 	}
 	if !fullTextProjectsMatch(projects[ref.ColPos : ref.ColPos+1]) {

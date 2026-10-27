@@ -269,6 +269,10 @@ select id from (select id, match(body) against('qaanchor') as sc from every_doc 
 
 select id, if(sc, 'y', 'n') as hit from (select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor')) d where not sc order by id;
 
+select id from (select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor') or id > 0 union all select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor') or id > 0) d where sc order by id;
+
+select id from (select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor') union select id, match(body) against('qaanchor') as sc from every_doc where match(body) against('qaanchor') or id > 0) d where not sc order by id;
+
 create table one_doc (id bigint primary key, body text);
 
 insert into one_doc values (1, 'solo');
