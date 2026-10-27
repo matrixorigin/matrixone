@@ -393,6 +393,7 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | empty input | an empty string or an empty `BLOB` is not a vector: a cast, an insert (literal, `INSERT … SELECT`, prepared parameter) or an update with it is an error, for every vector type (`vecf32` and the narrow types included), as an empty string is for an `INT` column; NULL stays NULL. `LOAD` reads an empty field as NULL, as for `INT` |
 | exact binary | `vecblock_binary(v)` returns the stored cell as a `BLOB` (§Cell format); a `BLOB` of a cell casts, inserts or binds back to the same bytes without quantization, and a `BLOB` of cell length that is not a valid cell of the target is an error |
 | exact text | `vecblock_json(v)` returns the cell as stored, `{"g": g, "s": [scales], "v": [values]}`, the parts in the cell's order: `g` the global scale (1 for `vecf8`), `s` one scale per block of 32 (`vecf8`) / 16 (`vecf4`) values, the last block shorter, `v` the element values; casting that text (or inserting it, or `LOAD`ing it) builds the same cell bytes without quantization. Element `i` is `v[i] · s[i / blockSize] · g`; `g` is required, `s` must hold `ceil(len(v) / blockSize)` scale code values (E8M0 / UE4M3), `v` element code values (E4M3 / E2M1), `-0` the negative-zero code. Each number must denote its float32 value without rounding: the exact value, or the shortest float32 or float64 text of that value, in any notation (`1`, `1.0`, `1e0`; `5.877472e-39` for the scale 2^-127); anything else (`1.00000001`, which float32 parsing rounds to `1`) is an error, never rounded |
+| `serial_extract(t, i AS vecf8(N))` / `vecf4(N)` | the tuple element as the stored cell; an element that is not a valid cell of the target format, or of dimension `N`, is an error |
 
 The promotion is implemented in these operations only: function resolution dequantizes a
 `vecf8`/`vecf4` argument to `vecf32` for the functions listed above, and every other
@@ -674,6 +675,10 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   `448.00001`, a scale `0.50000001`, a global `1.00000001`) is rejected; `1.0`, `1e0`,
   `-0.0`, the scale 2^-127 as `5.877472e-39` and as its float64 text, and a global as its
   float64 or exact text are accepted and write back as the shortest float32 text.
+- **SERIAL_EXTRACT** (`function/func_builtin_test.go` `TestSerialExtractBlockScaledCell`, BVT
+  `dtype/vecblock.sql`): a `vecf8`/`vecf4` element round-trips through `serial` with a
+  constant and a per-row index; a string element (short, or of cell length), a cell of the
+  other format and a dimension mismatch are errors, and so is a cell with a NaN scale.
 - **Empty input** (`function/func_cast_test.go` `TestCastEmptyToVectorErrors`, every vector
   type from `VARCHAR`, `TEXT` and `BLOB`; BVT `vector/vector_empty_input.sql`): an empty
   string or `BLOB` errors through a literal, `INSERT … SELECT`, a prepared parameter and a

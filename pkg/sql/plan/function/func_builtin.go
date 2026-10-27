@@ -4433,9 +4433,30 @@ func serialExtractExceptStrings[T types.Number | types.BF16 | types.Float16 | ty
 	return nil
 }
 
+// serialExtractCheckCell validates an element extracted as a vecf8/vecf4 value: it must be
+// a stored cell of that format and, when the type declares a dimension, of that dimension.
+func serialExtractCheckCell(typ *types.Type, value []byte) error {
+	f, ok := typ.Oid.BlockScaledFormat()
+	if !ok {
+		return nil
+	}
+	c, err := types.ParseBlockScaledCell(value)
+	if err != nil {
+		return err
+	}
+	if c.Format != f {
+		return moerr.NewInvalidInputNoCtxf("%s cell is not a %s cell", c.Format, f)
+	}
+	if int(typ.Width) != types.MaxArrayDimension && int(typ.Width) != c.Dim {
+		return moerr.NewArrayDefMismatchNoCtx(int(typ.Width), c.Dim)
+	}
+	return nil
+}
+
 func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[types.Varlena], proc *process.Process, length int, selectList *FunctionSelectList) error {
+	resTyp := result.GetResultVector().GetType()
 
 	// Fast path: when p2 is constant, use UnpackNthElement to avoid full tuple deserialization
 	if p2.WithAnyNullValue() {
@@ -4463,6 +4484,9 @@ func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 			}
 
 			if value, ok := el.([]byte); ok {
+				if err := serialExtractCheckCell(resTyp, value); err != nil {
+					return err
+				}
 				if err := result.AppendBytes(value, false); err != nil {
 					return err
 				}
@@ -4500,6 +4524,9 @@ func serialExtractForString(p1 vector.FunctionParameterWrapper[types.Varlena],
 		}
 
 		if value, ok := tuple[v2].([]byte); ok {
+			if err := serialExtractCheckCell(resTyp, value); err != nil {
+				return err
+			}
 			if err := result.AppendBytes(value, false); err != nil {
 				return err
 			}

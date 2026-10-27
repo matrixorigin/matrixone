@@ -643,4 +643,28 @@ select id, inner_product(v, q) = inner_product(cast(v as vecf32(17)), q) as same
 4  ¦  1  ¦  0  𝄀
 5  ¦  1  ¦  0  𝄀
 6  ¦  1  ¦  1
+create table sx (id bigint primary key, s varchar(20), a vecf8(4), b vecf4(4));
+insert into sx values (1, 'x', '[1,-2,3,0.5]', '[1,-2,3,0.5]'), (2, 'aaaaaaaaaaaaaa', '[0,1,2,3]', '[0,1,2,3]');
+select id, serial_extract(serial(a), 0 as vecf8(4)) = a as a_same, serial_extract(serial(b), 0 as vecf4(4)) = b as b_same from sx order by id;
+➤ id[-5,64,0]  ¦  a_same[-7,1,0]  ¦  b_same[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1
+select id, serial_extract(serial(a), id - id as vecf8(4)) = a as a_same, serial_extract(serial(b), id - id as vecf4(4)) = b as b_same from sx order by id;
+➤ id[-5,64,0]  ¦  a_same[-7,1,0]  ¦  b_same[-7,1,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  1  ¦  1
+select hex(vecblock_binary(serial_extract(serial(s), 0 as vecf8(1)))) from sx where id = 1;
+invalid input: block-scaled vector cell too short: 1 bytes
+select hex(vecblock_binary(serial_extract(serial(s), 0 as vecf8(1)))) from sx where id = 2;
+invalid input: unsupported block-scaled vector version 97
+select hex(vecblock_binary(serial_extract(serial(s), id - id as vecf4(1)))) from sx where id = 2;
+invalid input: unsupported block-scaled vector version 97
+select serial_extract(serial(a), 0 as vecf4(4)) from sx where id = 1;
+invalid input: vecf8 cell is not a vecf4 cell
+select serial_extract(serial(b), id - id as vecf8(4)) from sx where id = 1;
+invalid input: vecf4 cell is not a vecf8 cell
+select serial_extract(serial(a), 0 as vecf8(3)) from sx where id = 1;
+invalid input: expected vector dimension 3 != actual dimension 4.
+select serial_extract(serial(a), id - id as vecf8(5)) from sx where id = 1;
+invalid input: expected vector dimension 5 != actual dimension 4.
 drop database vecblock_db;

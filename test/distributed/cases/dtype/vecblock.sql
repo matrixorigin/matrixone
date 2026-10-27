@@ -320,4 +320,17 @@ select id, inner_product(v, q) = inner_product(cast(v as vecf32(1)), q) as same,
 select id, inner_product(v, q) = inner_product(cast(v as vecf32(16)), q) as same, inner_product(v, q) < 0 as neg from sub16, q16 order by id;
 select id, inner_product(v, q) = inner_product(cast(v as vecf32(17)), q) as same, inner_product(v, q) < 0 as neg from sub17, q17 order by id;
 
+-- serial_extract returns a vecf8/vecf4 element only when it is a cell of the declared type and dimension
+create table sx (id bigint primary key, s varchar(20), a vecf8(4), b vecf4(4));
+insert into sx values (1, 'x', '[1,-2,3,0.5]', '[1,-2,3,0.5]'), (2, 'aaaaaaaaaaaaaa', '[0,1,2,3]', '[0,1,2,3]');
+select id, serial_extract(serial(a), 0 as vecf8(4)) = a as a_same, serial_extract(serial(b), 0 as vecf4(4)) = b as b_same from sx order by id;
+select id, serial_extract(serial(a), id - id as vecf8(4)) = a as a_same, serial_extract(serial(b), id - id as vecf4(4)) = b as b_same from sx order by id;
+select hex(vecblock_binary(serial_extract(serial(s), 0 as vecf8(1)))) from sx where id = 1;
+select hex(vecblock_binary(serial_extract(serial(s), 0 as vecf8(1)))) from sx where id = 2;
+select hex(vecblock_binary(serial_extract(serial(s), id - id as vecf4(1)))) from sx where id = 2;
+select serial_extract(serial(a), 0 as vecf4(4)) from sx where id = 1;
+select serial_extract(serial(b), id - id as vecf8(4)) from sx where id = 1;
+select serial_extract(serial(a), 0 as vecf8(3)) from sx where id = 1;
+select serial_extract(serial(a), id - id as vecf8(5)) from sx where id = 1;
+
 drop database vecblock_db;
