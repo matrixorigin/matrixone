@@ -23,6 +23,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCloneMetricBoundsOwnership(t *testing.T) {
+	require.Nil(t, CloneMetricBounds(nil))
+	require.Nil(t, CloneMetricBounds(map[int][]byte{}))
+	input := map[int][]byte{1: {1, 2}, 2: {}, 3: nil}
+	cloned := CloneMetricBounds(input)
+	require.Nil(t, cloned[2])
+	require.Nil(t, cloned[3])
+	input[1][0] = 3
+	require.Equal(t, []byte{1, 2}, cloned[1])
+	cloned[1][1] = 4
+	require.Equal(t, []byte{3, 2}, input[1])
+}
+
 func TestCloneNonEmptyMapOwnership(t *testing.T) {
 	require.Nil(t, CloneNonEmptyMap(map[string]string(nil)))
 	require.Nil(t, CloneNonEmptyMap(map[string]string{}))

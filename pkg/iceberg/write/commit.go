@@ -480,8 +480,8 @@ func cloneDataFiles(in []api.DataFile) []api.DataFile {
 		out[i].ValueCounts = api.CloneNonEmptyMap(in[i].ValueCounts)
 		out[i].NullValueCounts = api.CloneNonEmptyMap(in[i].NullValueCounts)
 		out[i].NaNValueCounts = api.CloneNonEmptyMap(in[i].NaNValueCounts)
-		out[i].LowerBounds = cloneBytesMap(in[i].LowerBounds)
-		out[i].UpperBounds = cloneBytesMap(in[i].UpperBounds)
+		out[i].LowerBounds = api.CloneMetricBounds(in[i].LowerBounds)
+		out[i].UpperBounds = api.CloneMetricBounds(in[i].UpperBounds)
 		out[i].SplitOffsets = append([]int64(nil), in[i].SplitOffsets...)
 	}
 	return out
@@ -501,16 +501,5 @@ func clonePartitionSpecs(in []api.PartitionSpec) []api.PartitionSpec {
 func clonePartitionSpec(in api.PartitionSpec) api.PartitionSpec {
 	out := in
 	out.Fields = append([]api.PartitionField(nil), in.Fields...)
-	return out
-}
-
-func cloneBytesMap(in map[int][]byte) map[int][]byte {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[int][]byte, len(in))
-	for k, v := range in {
-		out[k] = append([]byte(nil), v...)
-	}
 	return out
 }

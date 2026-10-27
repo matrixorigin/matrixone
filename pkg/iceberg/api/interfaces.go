@@ -55,6 +55,18 @@ func CloneNonEmptyMap[K comparable, V any](in map[K]V) map[K]V {
 	return out
 }
 
+// CloneMetricBounds copies metric byte values and normalizes empty maps to nil.
+func CloneMetricBounds(in map[int][]byte) map[int][]byte {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[int][]byte, len(in))
+	for key, value := range in {
+		out[key] = append([]byte(nil), value...)
+	}
+	return out
+}
+
 type CatalogClient interface {
 	GetConfig(ctx context.Context, req GetConfigRequest) (*ConfigResponse, error)
 	ListNamespaces(ctx context.Context, req ListNamespacesRequest) (*ListNamespacesResponse, error)

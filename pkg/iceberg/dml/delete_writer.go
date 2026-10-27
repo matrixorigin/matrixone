@@ -512,8 +512,8 @@ func deleteDataFile(path string, content api.DataFileContent, rows, size int64, 
 		file.ValueCounts = metrics.valueCounts(rows)
 		file.NullValueCounts = api.CloneNonEmptyMap(metrics.nullCounts)
 		file.NaNValueCounts = api.CloneNonEmptyMap(metrics.nanCounts)
-		file.LowerBounds = cloneBytesMap(metrics.lowerBounds)
-		file.UpperBounds = cloneBytesMap(metrics.upperBounds)
+		file.LowerBounds = api.CloneMetricBounds(metrics.lowerBounds)
+		file.UpperBounds = api.CloneMetricBounds(metrics.upperBounds)
 	}
 	return file
 }
@@ -723,15 +723,4 @@ func saturatingDeleteMul(left, right int64) int64 {
 		return math.MaxInt64
 	}
 	return left * right
-}
-
-func cloneBytesMap(in map[int][]byte) map[int][]byte {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[int][]byte, len(in))
-	for key, value := range in {
-		out[key] = append([]byte(nil), value...)
-	}
-	return out
 }

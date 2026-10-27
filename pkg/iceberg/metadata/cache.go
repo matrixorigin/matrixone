@@ -350,8 +350,8 @@ func cloneDataFile(in api.DataFile) api.DataFile {
 	out.ValueCounts = api.CloneNonEmptyMap(in.ValueCounts)
 	out.NullValueCounts = api.CloneNonEmptyMap(in.NullValueCounts)
 	out.NaNValueCounts = api.CloneNonEmptyMap(in.NaNValueCounts)
-	out.LowerBounds = cloneBytesMap(in.LowerBounds)
-	out.UpperBounds = cloneBytesMap(in.UpperBounds)
+	out.LowerBounds = api.CloneMetricBounds(in.LowerBounds)
+	out.UpperBounds = api.CloneMetricBounds(in.UpperBounds)
 	out.SplitOffsets = append([]int64(nil), in.SplitOffsets...)
 	out.EqualityIDs = append([]int(nil), in.EqualityIDs...)
 	out.KeyMetadata = append([]byte(nil), in.KeyMetadata...)
@@ -359,17 +359,6 @@ func cloneDataFile(in api.DataFile) api.DataFile {
 	if in.FirstRowID != nil {
 		first := *in.FirstRowID
 		out.FirstRowID = &first
-	}
-	return out
-}
-
-func cloneBytesMap(in map[int][]byte) map[int][]byte {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[int][]byte, len(in))
-	for k, v := range in {
-		out[k] = append([]byte(nil), v...)
 	}
 	return out
 }
