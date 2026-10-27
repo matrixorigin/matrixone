@@ -19,12 +19,13 @@ is claimed by this document. Root owns reviewer and lifecycle decisions.
 ## Subsequent candidate allocation overlay (not part of r2 approval)
 
 For the current conflict-repair candidate, actual main is
-`4769417cdce5531c9771644eca49f1e71d8f654c`, whose capability prefix reaches
-MORPC131. The candidate preserves every main allocation, including MORPC129
+`861a2c4cb68961d8b6b01f18e0aa6ac52a3a505f`, whose capability prefix reaches
+MORPC132. The candidate preserves every main allocation, including MORPC129
 JSON ELT/opaque text, MORPC130 incomplete temporal strings and MORPC131 exact
-weighted percentile dispatch. The already shared JSON expression contract stays
-at MORPC129; typed JSON MIN/MAX is provisionally appended at MORPC132 and the
-complete ODKU/session-LAST_INSERT_ID contract at MORPC133. Independent unpublished candidates do not implement each
+weighted percentile dispatch and MORPC132 decimal/float conversions. The already
+shared JSON expression contract stays at MORPC129; typed JSON MIN/MAX is
+provisionally appended at MORPC133 and the complete ODKU/session-LAST_INSERT_ID
+contract at MORPC134. Independent unpublished candidates do not implement each
 other's features merely by assigning the same number; this is not a coordinated
 allocation or cross-branch deployment guarantee. Revalidate it at authoritative
 main admission.
@@ -33,7 +34,7 @@ claim design approval or implementation acceptance. The r2 review record and
 allocation below remain historical and bound to their stated source and target.
 
 The maintenance merge is bound to source
-`8030407a39878935365e866b8d27beaa12ced2da` and the frozen main above.
+`946ef84b38f259200aba81b2e5ad82e887e3780f` and the frozen main above.
 Main's `pipeline.DedupJoin.dedup_key_exprs` retains tag30; the candidate's
 unmerged ODKU suffix follows it:
 
@@ -47,16 +48,25 @@ unmerged ODKU suffix follows it:
 
 Main's `plan.Node.dedup_key_exprs` tag95 and
 `plan.PreInsertUkCtx.key_diagnostic_exprs` tag19 also remain intact. The current
-source/cached/destination/receiver/actual-stream ODKU floor is133; JSON129,
-main's temporal130/weighted-percentile131 and typed MIN/MAX132 do not imply
+source/cached/destination/receiver/actual-stream ODKU floor is134; JSON129,
+main's temporal130/weighted-percentile131/decimal-float132 and typed MIN/MAX133 do not imply
 ODKU support. This is append safety relative to actual main, not compatibility
-with earlier unmerged131 ODKU executables or unmerged127 executables using
+with the earlier133 ODKU executable whose ProcessInfo ordinal used tag18,
+earlier unmerged131 ODKU executables, or unmerged127 executables using
 ODKU tags30..34. Do not mix those pre-resolution binaries based on the shared
 numeric floor. Such interoperability is not certified by this merge or the
 historical approvals. The approved ownership, coordinator ordering, reduction,
 result policy, retry/quiescence and resource-budget choices are unchanged;
 measured performance, real mixed binaries and deployment acceptance remain
 separate gates.
+
+Main's `ProcessInfo.statement_runtime_select` retains tag17 and
+`statement_runtime_dml` retains tag18. The candidate's `odku_ordinal_base`
+moves to unused tag19, guarded by the complete ODKU134 contract. An ordinal
+must never be interpreted as the main DML boolean, nor a main DML boolean as
+an ODKU range. Schema, generated struct/marshal/size/unmarshal/descriptor and
+the wire regression must agree. This maintenance overlay is not approval of
+these new numbers or tags; both immutable approval records remain unchanged.
 
 The approved r2 addendum below supersedes only the allocation and compatibility
 boundaries in the [retained r1 specification](20261016-odku-distributed-result-protocol.md).

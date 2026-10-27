@@ -323,6 +323,8 @@ func TestJSONNumericAggMySQLWarningConversion(t *testing.T) {
 		{text: "SQL NULL", sqlNull: true},
 		{text: `"12"`, want: 12},
 		{text: `" 12 "`, want: 12},
+		{text: `"inf"`, want: 0, warnings: 1, code: moerr.ER_TRUNCATED_WRONG_VALUE},
+		{text: `"nan"`, want: 0, warnings: 1, code: moerr.ER_TRUNCATED_WRONG_VALUE},
 		{text: `null`, want: 0, warnings: 1, code: moerr.WARN_DATA_TRUNCATED},
 		{text: `[1]`, want: 0, warnings: 1, code: moerr.WARN_DATA_TRUNCATED},
 		{text: `{"v":1}`, want: 0, warnings: 1, code: moerr.WARN_DATA_TRUNCATED},

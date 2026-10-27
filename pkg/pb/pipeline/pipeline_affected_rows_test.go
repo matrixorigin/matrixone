@@ -36,28 +36,41 @@ func TestProcessInfoAffectedRowsRoundTrip(t *testing.T) {
 	}
 }
 
-func TestProcessInfoSelectAndODKUWireFieldsRemainIndependent(t *testing.T) {
-	// Field 17 belongs to upstream SELECT classification. ODKU must use 18
-	// so an ordinal cannot be decoded as the outer statement's SELECT flag.
+func TestProcessInfoSelectDMLAndODKUWireFieldsRemainIndependent(t *testing.T) {
+	// Upstream owns SELECT17 and DML18. ODKU ordinal19 must not be decoded as
+	// either boolean. Process decoding separately rejects SELECT+DML together.
 	legacy := new(ProcessInfo)
 	require.NoError(t, legacy.Unmarshal([]byte{0x88, 0x01, 0x01}))
 	require.True(t, legacy.StatementRuntimeSelect)
+	require.False(t, legacy.StatementRuntimeDml)
 	require.Zero(t, legacy.OdkuOrdinalBase)
+	mainDML := new(ProcessInfo)
+	require.NoError(t, mainDML.Unmarshal([]byte{0x90, 0x01, 0x01}))
+	require.False(t, mainDML.StatementRuntimeSelect)
+	require.True(t, mainDML.StatementRuntimeDml)
+	require.Zero(t, mainDML.OdkuOrdinalBase)
 
 	for _, selectStatement := range []bool{false, true} {
-		info := &ProcessInfo{StatementRuntimeSelect: selectStatement, OdkuOrdinalBase: 700}
-		data, err := info.Marshal()
-		require.NoError(t, err)
-		want := []byte{0x90, 0x01, 0xbc, 0x05}
-		if selectStatement {
-			want = append([]byte{0x88, 0x01, 0x01}, want...)
+		for _, dml := range []bool{false, true} {
+			info := &ProcessInfo{StatementRuntimeSelect: selectStatement, StatementRuntimeDml: dml, OdkuOrdinalBase: 700}
+			data, err := info.Marshal()
+			require.NoError(t, err)
+			var want []byte
+			if selectStatement {
+				want = append(want, 0x88, 0x01, 0x01)
+			}
+			if dml {
+				want = append(want, 0x90, 0x01, 0x01)
+			}
+			want = append(want, 0x98, 0x01, 0xbc, 0x05)
+			// Non-nullable nested messages precede these fields even at zero.
+			require.GreaterOrEqual(t, len(data), len(want))
+			require.Equal(t, want, data[len(data)-len(want):])
+			decoded := new(ProcessInfo)
+			require.NoError(t, decoded.Unmarshal(data))
+			require.Equal(t, selectStatement, decoded.StatementRuntimeSelect)
+			require.Equal(t, dml, decoded.StatementRuntimeDml)
+			require.Equal(t, uint64(700), decoded.OdkuOrdinalBase)
 		}
-		// Non-nullable nested messages precede these fields even at zero.
-		require.GreaterOrEqual(t, len(data), len(want))
-		require.Equal(t, want, data[len(data)-len(want):])
-		decoded := new(ProcessInfo)
-		require.NoError(t, decoded.Unmarshal(data))
-		require.Equal(t, selectStatement, decoded.StatementRuntimeSelect)
-		require.Equal(t, uint64(700), decoded.OdkuOrdinalBase)
 	}
 }

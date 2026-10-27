@@ -784,9 +784,13 @@ message ProcessInfo {
   // Positive outer SELECT classification for expression warning policy.
   // Legacy senders omit this field and remain unclassified.
   bool statement_runtime_select = 17;
+  // Positive outer DML classification; absent on legacy senders means unknown.
+  // Corrected float conversions require MORPC v132 on the bound stream.
+  bool statement_runtime_dml = 18;
   // Statement-local ODKU ordinal range reserved by the initiating CN before
-  // this remote pipeline starts. Older senders leave it zero.
-  uint64 odku_ordinal_base = 18;
+  // this remote pipeline starts. Tag18 belongs to upstream DML classification;
+  // the complete ODKU contract requires MORPC v134. Older senders leave it zero.
+  uint64 odku_ordinal_base = 19;
 }
 
 message SessionInfo {

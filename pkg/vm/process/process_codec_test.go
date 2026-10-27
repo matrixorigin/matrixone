@@ -1163,3 +1163,45 @@ func TestSelectStatementProfileCodecRoundTrip(t *testing.T) {
 		}()
 	}
 }
+
+func TestDMLStatementProfileCodecRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		statement, query string
+		ignore           bool
+	}{
+		{"Select", "DQL", false}, {"Insert", "DML", false}, {"Update", "DML", false},
+		{"Load", "DML", true}, {"Insert", "DML", true}, {"", "", false}, {"Create Table", "DDL", false},
+	} {
+		t.Run(fmt.Sprintf("%s/%t", tc.statement, tc.ignore), func(t *testing.T) {
+			proc, _ := newCodecTestProcess(t)
+			t.Cleanup(proc.Free)
+			proc.GetStmtProfile().SetStatementRuntimeProfile(tc.statement, tc.query, tc.ignore)
+			info, err := proc.BuildProcessInfo("context roundtrip")
+			require.NoError(t, err)
+			data, err := info.Marshal()
+			require.NoError(t, err)
+			var wire pipeline.ProcessInfo
+			require.NoError(t, wire.Unmarshal(data))
+			svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil).(*codecService)
+			decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), wire.AccountId), wire)
+			require.NoError(t, err)
+			t.Cleanup(decoded.Free)
+			require.Equal(t, proc.IsDMLStatement(), decoded.IsDMLStatement())
+			require.Equal(t, proc.IsSelectStatement(), decoded.IsSelectStatement())
+			require.Equal(t, tc.ignore, decoded.GetStmtProfile().GetStatementIgnore())
+			forwarded, err := decoded.BuildProcessInfo("forward context")
+			require.NoError(t, err)
+			require.Equal(t, info.StatementRuntimeDml, forwarded.StatementRuntimeDml)
+			// An old sender's missing DML bit remains unknown, never !SELECT.
+			wire.StatementRuntimeDml = false
+			legacy, err := svc.Decode(defines.AttachAccountId(context.Background(), wire.AccountId), wire)
+			require.NoError(t, err)
+			t.Cleanup(legacy.Free)
+			require.False(t, legacy.IsDMLStatement())
+			wire.StatementRuntimeDml = true
+			wire.StatementRuntimeSelect = true
+			_, err = svc.Decode(defines.AttachAccountId(context.Background(), wire.AccountId), wire)
+			require.ErrorContains(t, err, "conflicting SELECT and DML")
+		})
+	}
+}
