@@ -173,3 +173,44 @@ func RunGlobalLogTenantUpgradeEntries(tenantID int32, txn executor.TxnExecutor, 
 
 	return nil
 }
+
+// RunServiceTenantUpgradeEntries runs entries while preserving per-entry service logging.
+func RunServiceTenantUpgradeEntries(tenantID int32, txn executor.TxnExecutor, entries []UpgradeEntry, logger func(string) *log.MOLogger, version func() string) error {
+	for _, upgEntry := range entries {
+		start := time.Now()
+		if err := upgEntry.Upgrade(txn, uint32(tenantID)); err != nil {
+			logger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error",
+				zap.Error(err),
+				zap.Int32("tenantId", tenantID),
+				zap.String("version", version()),
+				zap.String("upgrade entry", upgEntry.String()))
+			return err
+		}
+		logger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete",
+			zap.String("upgrade entry", upgEntry.String()),
+			zap.Int64("time cost(ms)", time.Since(start).Milliseconds()),
+			zap.String("toVersion", version()))
+	}
+	return nil
+}
+
+// RunCurrentAccountClusterUpgradeEntries uses the account of the executing transaction.
+func RunCurrentAccountClusterUpgradeEntries(txn executor.TxnExecutor, entries []UpgradeEntry, logger func(string) *log.MOLogger, version func() string) error {
+	for _, upgEntry := range entries {
+		start := time.Now()
+		if err := upgEntry.Upgrade(txn, uint32(txn.Txn().TxnOptions().AccountID)); err != nil {
+			logger(txn.Txn().TxnOptions().CN).Error("cluster upgrade entry execute error",
+				zap.Error(err),
+				zap.String("version", version()),
+				zap.String("upgrade entry", upgEntry.String()))
+			return err
+		}
+		logger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
+			zap.String("upgrade entry", upgEntry.String()),
+			zap.Int64("time cost(ms)", time.Since(start).Milliseconds()),
+			zap.String("toVersion", version()))
+	}
+	logger(txn.Txn().TxnOptions().CN).Info("cluster upgrade success",
+		zap.String("toVersion", version()))
+	return nil
+}

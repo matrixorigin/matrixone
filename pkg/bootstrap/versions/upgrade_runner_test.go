@@ -47,6 +47,9 @@ func TestUpgradeEntryRunnersStopOnError(t *testing.T) {
 			{"tenant", 42, 2, func(entries []UpgradeEntry, logger func(string) *log.MOLogger, version func() string) error {
 				return RunTenantUpgradeEntries(42, tx, entries, logger, version)
 			}},
+			{"service_tenant", 42, 2, func(entries []UpgradeEntry, logger func(string) *log.MOLogger, version func() string) error {
+				return RunServiceTenantUpgradeEntries(42, tx, entries, logger, version)
+			}},
 			{"historical_tenant", 42, 2, func(entries []UpgradeEntry, logger func(string) *log.MOLogger, version func() string) error {
 				return RunHistoricalTenantUpgradeEntries(42, tx, entries, logger, version)
 			}},
@@ -90,5 +93,43 @@ func TestUpgradeEntryRunnersStopOnError(t *testing.T) {
 				require.Equal(t, 2, versionCalls)
 			})
 		}
+	})
+}
+
+func TestCurrentAccountClusterUpgradeEntries(t *testing.T) {
+	const sid = "current-account-upgrade"
+	runtime.RunTest(sid, func(rt runtime.Runtime) {
+		op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+		op.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid, AccountID: 42}).AnyTimes()
+		tx := executor.NewMemTxnExecutor(func(string) (executor.Result, error) { t.Fatal("unexpected SQL"); return executor.Result{}, nil }, op)
+		loggerCalls, versionCalls := 0, 0
+		logger := func(cn string) *log.MOLogger { require.Equal(t, sid, cn); loggerCalls++; return rt.Logger() }
+		version := func() string { versionCalls++; return "4.0.test" }
+		require.NoError(t, RunCurrentAccountClusterUpgradeEntries(tx, nil, logger, version))
+		require.Equal(t, 1, loggerCalls)
+		require.Equal(t, 1, versionCalls)
+		loggerCalls, versionCalls = 0, 0
+		fail := errors.New("upgrade failure")
+		var seen []string
+		entries := []UpgradeEntry{
+			{TableName: "first", CheckFunc: func(_ executor.TxnExecutor, account uint32) (bool, error) {
+				require.Equal(t, uint32(42), account)
+				seen = append(seen, "first")
+				return true, nil
+			}},
+			{TableName: "failed", CheckFunc: func(_ executor.TxnExecutor, account uint32) (bool, error) {
+				require.Equal(t, uint32(42), account)
+				seen = append(seen, "failed")
+				return false, fail
+			}},
+			{TableName: "unreachable", CheckFunc: func(_ executor.TxnExecutor, _ uint32) (bool, error) {
+				seen = append(seen, "unreachable")
+				return true, nil
+			}},
+		}
+		require.ErrorIs(t, RunCurrentAccountClusterUpgradeEntries(tx, entries, logger, version), fail)
+		require.Equal(t, []string{"first", "failed"}, seen)
+		require.Equal(t, 2, loggerCalls)
+		require.Equal(t, 2, versionCalls)
 	})
 }
