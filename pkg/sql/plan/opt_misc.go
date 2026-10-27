@@ -2115,23 +2115,6 @@ func integerTypeDomain(oid types.T) (bits int, signed bool) {
 	}
 }
 
-func integerDecimalDigits(oid types.T) int32 {
-	switch oid {
-	case types.T_int8, types.T_uint8:
-		return 3
-	case types.T_int16, types.T_uint16:
-		return 5
-	case types.T_int32, types.T_uint32:
-		return 10
-	case types.T_int64:
-		return 19
-	case types.T_uint64:
-		return 20
-	default:
-		return 0
-	}
-}
-
 func singleRowSumOrAvgCastIsExact(name string, source, target plan.Type) bool {
 	sourceID := types.T(source.Id)
 	if sourceID == types.T_float32 || sourceID == types.T_float64 {
