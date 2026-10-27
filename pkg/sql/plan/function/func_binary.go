@@ -11064,16 +11064,16 @@ func StFrechetDistanceGeodetic32(ivecs []*vector.Vector, result vector.FunctionR
 }
 
 func stFrechetDistance[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stFrechetDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+	return stDiscreteDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
 		discreteFrechetDistancePlanar)
 }
 
 func stFrechetDistanceGeodetic[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stFrechetDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+	return stDiscreteDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
 		discreteFrechetDistanceBySRID)
 }
 
-func stFrechetDistanceWithKernel[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID) error {
+func stDiscreteDistanceWithKernel[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID) error {
 	emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
 	if err != nil {
 		return err
@@ -11126,28 +11126,13 @@ func StHausdorffDistanceGeodetic32(ivecs []*vector.Vector, result vector.Functio
 }
 
 func stHausdorffDistance[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stHausdorffDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+	return stDiscreteDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
 		discreteHausdorffDistancePlanar)
 }
 
 func stHausdorffDistanceGeodetic[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stHausdorffDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+	return stDiscreteDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
 		discreteHausdorffDistanceBySRID)
-}
-
-func stHausdorffDistanceWithKernel[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID) error {
-	emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
-	if err != nil {
-		return err
-	}
-	if emptyBatch {
-		return nil
-	}
-	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
-	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
-		d, err := distanceFn(v1, v2, srid)
-		return T(d), err
-	}, selectList)
 }
 
 // StHausdorffDistanceWithUnit is the geographic ST_HausdorffDistance overload
