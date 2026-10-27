@@ -369,6 +369,21 @@ func TestCDCCreateTaskOptionsPreservePatternValidationError(t *testing.T) {
 	require.NotContains(t, err.Error(), "invalid level")
 }
 
+func TestCDCCreateTaskDetailsPreserveIdentity(t *testing.T) {
+	opts := &CDCCreateTaskOptions{
+		TaskId: "task-id", TaskName: "task-name",
+		UserInfo: &CDCUserInfo{AccountId: 42, AccountName: "tenant", UserName: "user"},
+	}
+	details, err := opts.BuildTaskDetails()
+	require.NoError(t, err)
+	require.Equal(t, uint32(42), details.AccountID)
+	require.Equal(t, "tenant", details.Account)
+	require.Equal(t, "user", details.Username)
+	require.Equal(t, "task-id", details.GetCreateCdc().TaskId)
+	require.Equal(t, "task-name", details.GetCreateCdc().TaskName)
+	require.Equal(t, []*task.Account{{Id: 42, Name: "tenant"}}, details.GetCreateCdc().Accounts)
+}
+
 func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 	legacy := (&CDCCreateTaskOptions{TaskId: "legacy"}).BuildTaskMetadata()
 	require.Equal(t, task.TaskCode_InitCdc, legacy.Executor)

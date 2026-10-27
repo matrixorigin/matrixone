@@ -53,3 +53,25 @@ func TestBuildTaskMetadataProtocolSelection(t *testing.T) {
 	}
 	require.Equal(t, task.TaskCode_InitCdc, BuildTaskMetadata("task-id", "{", true).Executor)
 }
+
+func TestBuildTaskDetailsPreservesPersistedFields(t *testing.T) {
+	got := BuildTaskDetails(42, "tenant", "user", "task-name", "task-id")
+	want := &task.Details{
+		AccountID: 42,
+		Account:   "tenant",
+		Username:  "user",
+		Details: &task.Details_CreateCdc{CreateCdc: &task.CreateCdcDetails{
+			TaskName: "task-name",
+			TaskId:   "task-id",
+			Accounts: []*task.Account{{Id: 42, Name: "tenant"}},
+		}},
+	}
+	encoded, err := got.Marshal()
+	require.NoError(t, err)
+	wantEncoded, err := want.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, wantEncoded, encoded)
+	var decoded task.Details
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Equal(t, want, &decoded)
+}

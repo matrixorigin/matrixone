@@ -335,24 +335,8 @@ func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 }
 
 func (opts *CDCCreateTaskOptions) BuildTaskDetails() (details *task.Details, err error) {
-	details = &task.Details{
-		AccountID: opts.UserInfo.AccountId,
-		Account:   opts.UserInfo.AccountName,
-		Username:  opts.UserInfo.UserName,
-		Details: &task.Details_CreateCdc{
-			CreateCdc: &task.CreateCdcDetails{
-				TaskName: opts.TaskName,
-				TaskId:   opts.TaskId,
-				Accounts: []*task.Account{
-					{
-						Id:   uint64(opts.UserInfo.AccountId),
-						Name: opts.UserInfo.AccountName,
-					},
-				},
-			},
-		},
-	}
-	return
+	return cdc.BuildTaskDetails(opts.UserInfo.AccountId, opts.UserInfo.AccountName,
+		opts.UserInfo.UserName, opts.TaskName, opts.TaskId), nil
 }
 
 func (opts *CDCCreateTaskOptions) ToInsertTaskSQL(

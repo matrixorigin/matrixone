@@ -49,3 +49,24 @@ func BuildTaskMetadata(taskID, extraOpts string, noFull bool) task.TaskMetadata 
 		},
 	}
 }
+
+// BuildTaskDetails constructs the persisted details for a CDC daemon task.
+func BuildTaskDetails(accountID uint32, accountName, userName, taskName, taskID string) *task.Details {
+	return &task.Details{
+		AccountID: accountID,
+		Account:   accountName,
+		Username:  userName,
+		Details: &task.Details_CreateCdc{
+			CreateCdc: &task.CreateCdcDetails{
+				TaskName: taskName,
+				TaskId:   taskID,
+				Accounts: []*task.Account{
+					{
+						Id:   uint64(accountID),
+						Name: accountName,
+					},
+				},
+			},
+		},
+	}
+}
