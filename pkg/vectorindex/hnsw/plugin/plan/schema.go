@@ -83,14 +83,14 @@ func (Hooks) BuildSecondaryIndexDefs(
 		}
 	}
 
-	indexDefs := make([]*plan.IndexDef, 2)
-	tableDefs := make([]*plan.TableDef, 2)
+	indexDefs := make([]*plan.IndexDef, 2, 3)
+	tableDefs := make([]*plan.TableDef, 2, 3)
 
 	// 1. metadata table
 	provenance := planplugin.ClusterHasIndexProvenance(ctx)
 	metadataCols := 4
 	if provenance {
-		metadataCols = 8
+		metadataCols = 6
 	}
 
 	{
@@ -179,15 +179,6 @@ func (Hooks) BuildSecondaryIndexDefs(
 					Scale: 0,
 				},
 				Default: planplugin.ZeroInt64Default(),
-			}
-			// The trained range of an int8/uint8 model; NULL otherwise.
-			for i, name := range []string{catalog.Hnsw_TblCol_Metadata_Quantize_Min, catalog.Hnsw_TblCol_Metadata_Quantize_Max} {
-				tableDefs[0].Cols[6+i] = &plan.ColDef{
-					Name:    name,
-					Alg:     plan.CompressType_Lz4,
-					Typ:     plan.Type{Id: int32(types.T_float64)},
-					Default: &plan.Default{NullAbility: true, Expr: nil, OriginString: ""},
-				}
 			}
 		}
 
@@ -286,6 +277,49 @@ func (Hooks) BuildSecondaryIndexDefs(
 				Properties: &plan.PropertiesDef{Properties: properties},
 			},
 		})
+	}
+
+	// 3. dict table of an int8/uint8 index: ( key VARCHAR PRIMARY KEY, val VARCHAR )
+	if indexInfo.IndexOption != nil && hnswrt.NeedsDict(indexInfo.IndexOption.Quantization) {
+		indexTableName, err := util.BuildIndexTableName(ctx.GetContext(), false)
+		if err != nil {
+			return nil, nil, err
+		}
+		indexDef, err := planplugin.CreateIndexDef(ctx, indexInfo, indexTableName, catalog.Hnsw_TblType_Dict, indexParts, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		tableDef := &plan.TableDef{
+			Name:      indexTableName,
+			TableType: catalog.Hnsw_TblType_Dict,
+			Cols:      make([]*plan.ColDef, 2),
+		}
+		for i, name := range []string{catalog.Hnsw_TblCol_Dict_Key, catalog.Hnsw_TblCol_Dict_Val} {
+			tableDef.Cols[i] = &plan.ColDef{
+				Name: name,
+				Alg:  plan.CompressType_Lz4,
+				Typ: plan.Type{
+					Id:      int32(types.T_varchar),
+					Width:   types.MaxVarcharLen,
+					Charset: uint32(types.CharsetBinary),
+				},
+				Primary: i == 0,
+				Default: &plan.Default{NullAbility: false, Expr: nil, OriginString: ""},
+			}
+		}
+		tableDef.Pkey = &plan.PrimaryKeyDef{
+			Names:       []string{catalog.Hnsw_TblCol_Dict_Key},
+			PkeyColName: catalog.Hnsw_TblCol_Dict_Key,
+		}
+		tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+			Def: &plan.TableDef_DefType_Properties{
+				Properties: &plan.PropertiesDef{Properties: []*plan.Property{
+					{Key: catalog.SystemRelAttr_Kind, Value: catalog.Hnsw_TblType_Dict},
+				}},
+			},
+		})
+		indexDefs = append(indexDefs, indexDef)
+		tableDefs = append(tableDefs, tableDef)
 	}
 	return indexDefs, tableDefs, nil
 }

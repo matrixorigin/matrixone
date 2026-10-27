@@ -140,36 +140,36 @@ select q.id, abs(q.d - l2_distance(r.v,'[2.3,2,2,2]')) < 1 within_step
 select id, l2_distance(v,'[2,2,2,3]') d from t_ci8 order by d limit 3;
 
 -- ---------------- C7: incremental sync uses the index's range ----------------
--- While the index lags a change the query is planned as a full scan; wait until it is
--- served by the index again, so the result comes from the int8 index.
+-- While the index lags a change the query is served by the index as it was; wait until
+-- the synced rows are returned.
 insert into t_i8 values (7,'[2,2,2,3]');
--- @wait_expect(2, 60)
 explain select id from t_i8 order by l2_distance(v,'[2,2,2,3]') limit 1;
+-- @wait_expect(2, 60)
 select id from t_i8 order by l2_distance(v,'[2,2,2,3]') limit 1;
 delete from t_i8 where id = 7;
--- @wait_expect(2, 60)
 explain select id from t_i8 order by l2_distance(v,'[2.3,2,2,2]') limit 1;
+-- @wait_expect(2, 60)
 select id from t_i8 order by l2_distance(v,'[2.3,2,2,2]') limit 1;
 
 insert into t_ci8 values (7,'[2,2,2,3]');
--- @wait_expect(2, 60)
 explain select id from t_ci8 order by l2_distance(v,'[2,2,2,3]') limit 1;
+-- @wait_expect(2, 60)
 select id from t_ci8 order by l2_distance(v,'[2,2,2,3]') limit 1;
 
 -- an int8 index created on an empty table trains its range from the first rows synced
 create table t_empty(id bigint primary key, v vecf32(4));
 create index i_empty using hnsw on t_empty(v) quantization 'int8';
 insert into t_empty select * from t_ref;
--- @wait_expect(2, 60)
 explain select id from t_empty order by l2_distance(v,'[2,2,2,3]') limit 3;
+-- @wait_expect(2, 60)
 select id from t_empty order by l2_distance(v,'[2,2,2,3]') limit 3;
 select id from t_empty order by l2_distance(v,'[52,52,52,51]') limit 2;
 
 -- ---------------- C8: an out-of-range row saturates --------------------------
 -- [1000,...] is far outside [1,54]: it is stored as the top of the range, like id 6
 insert into t_i8 values (8,'[1000,1000,1000,1000]');
--- @wait_expect(2, 60)
 explain select id from t_i8 order by l2_distance(v,'[1000,1000,1000,1000]') limit 2;
+-- @wait_expect(2, 60)
 select count(*) from (select id from t_i8 order by l2_distance(v,'[1000,1000,1000,1000]') limit 2) q where id in (6, 8);
 select id, d from (select id, l2_distance(v,'[1000,1000,1000,1000]') d from t_i8 order by d limit 2) q order by id;
 
@@ -193,21 +193,21 @@ insert into t_alt select * from t_ref;
 create index i_alt using hnsw on t_alt(v) quantization 'int8';
 alter table t_alt add column z int;
 show create table t_alt;
--- @wait_expect(2, 60)
 explain select id from t_alt order by l2_distance(v,'[2,2,2,3]') limit 3;
+-- @wait_expect(2, 60)
 select id from t_alt order by l2_distance(v,'[2,2,2,3]') limit 3;
 
 create table t_cln clone t_u8;
 show create table t_cln;
--- @wait_expect(2, 60)
 explain select id from t_cln order by l2_distance(v,'[2,2,2,3]') limit 3;
+-- @wait_expect(2, 60)
 select id from t_cln order by l2_distance(v,'[2,2,2,3]') limit 3;
 
 truncate table t_u8;
 insert into t_u8 select * from t_ref where id > 1;
 show create table t_u8;
--- @wait_expect(2, 60)
 explain select id from t_u8 order by l2_distance(v,'[2,2,2,3]') limit 3;
+-- @wait_expect(2, 60)
 select id from t_u8 order by l2_distance(v,'[2,2,2,3]') limit 3;
 
 -- ---------------- C11: the exact-search threshold ----------------------------
@@ -237,6 +237,26 @@ select id from t_g where c = 1 order by l2_distance(v,'[0,0]') limit 10 by rank 
 select id from t_g where c = 1 order by l2_distance(v,'[24,51]') limit 3 by rank with option 'mode=force';
 select id from t_g where c = 1 order by l2_distance(v,'[24,51]') limit 3 by rank with option 'mode=pre';
 set hnsw_prefilter_exact_threshold = default;
+
+-- ---------------- C13: only an int8 / uint8 index has a dict table ------------
+select t.relname, count(*) from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id = t.rel_id
+    where t.reldatabase = 'hnsw_quantization' and i.algo_table_type = 'hnsw_dict' group by t.relname order by t.relname;
+
+-- ---------------- C15: max_index_capacity splits the index into models -------
+select @@hnsw_max_index_capacity;
+create table t_cap(id bigint primary key, v vecf32(4));
+insert into t_cap select * from t_ref;
+create index i_cap using hnsw on t_cap(v) quantization 'int8' max_index_capacity 2;
+show create table t_cap;
+-- @regex("Vector Index Scan on", true)
+explain select id from t_cap order by l2_distance(v,'[2,2,2,3]') limit 3;
+select id from t_cap order by l2_distance(v,'[2,2,2,3]') limit 3;
+select id from t_cap order by l2_distance(v,'[52,52,52,51]') limit 2;
+insert into t_cap values (7,'[2,2,2,3]'),(8,'[53,53,53,53]');
+explain select id from t_cap order by l2_distance(v,'[2,2,2,3]') limit 1;
+-- @wait_expect(2, 60)
+select id from t_cap order by l2_distance(v,'[2,2,2,3]') limit 1;
+select id from t_cap order by l2_distance(v,'[53,53,53,53]') limit 1;
 
 -- ---------------- C14: an element the stored type cannot hold is rejected -----
 create table t_big(id bigint primary key, v vecf32(4));

@@ -18,6 +18,7 @@ import (
 	"math"
 	"sort"
 	"testing"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -91,6 +92,58 @@ func TestToStorage(t *testing.T) {
 	require.Equal(t, []uint8{0, 255}, v)
 }
 
+// A narrow vector already of the stored type is used as it is; otherwise it is converted by
+// value.
+func TestToStorageNarrow(t *testing.T) {
+	f16 := types.Float32ToFloat16Slice([]float32{1.5, -2})
+	ptr, v, err := ToStorage(f16, usearch.F16, QuantizeBounds{})
+	require.NoError(t, err)
+	require.Equal(t, unsafe.Pointer(&f16[0]), ptr, "no copy")
+	require.Equal(t, f16, v)
+	bf16 := []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-2)}
+	ptr, _, err = ToStorage(bf16, usearch.BF16, QuantizeBounds{})
+	require.NoError(t, err)
+	require.Equal(t, unsafe.Pointer(&bf16[0]), ptr)
+
+	_, v, err = ToStorage(f16, usearch.F32, QuantizeBounds{})
+	require.NoError(t, err)
+	require.Equal(t, []float32{1.5, -2}, v, "a float16 element converts by value, not by its bits")
+	_, v, err = ToStorage(bf16, usearch.F64, QuantizeBounds{})
+	require.NoError(t, err)
+	require.Equal(t, []float64{1.5, -2}, v)
+	_, v, err = ToStorage(bf16, usearch.F16, QuantizeBounds{})
+	require.NoError(t, err)
+	require.Equal(t, f16, v)
+	_, v, err = ToStorage(f16, usearch.I8, QuantizeBounds{Min: -2, Max: 2, Set: true})
+	require.NoError(t, err)
+	_, want, err := ToStorage([]float32{1.5, -2}, usearch.I8, QuantizeBounds{Min: -2, Max: 2, Set: true})
+	require.NoError(t, err)
+	require.Equal(t, want, v)
+
+	// a vecint8/vecuint8 vector mapped with its own type range is used as it is
+	i8 := []int8{-128, 5, 127}
+	ptr, v, err = ToStorage(i8, usearch.I8, BaseBounds(int32(types.T_array_int8)))
+	require.NoError(t, err)
+	require.Equal(t, unsafe.Pointer(&i8[0]), ptr)
+	require.Equal(t, i8, v)
+	u8 := []uint8{0, 5, 255}
+	ptr, _, err = ToStorage(u8, usearch.U8, BaseBounds(int32(types.T_array_uint8)))
+	require.NoError(t, err)
+	require.Equal(t, unsafe.Pointer(&u8[0]), ptr)
+	// with another range it is mapped, and as a float stored type it converts by value
+	_, v, err = ToStorage(i8, usearch.I8, QuantizeBounds{Min: -128, Max: 0, Set: true})
+	require.NoError(t, err)
+	_, want, err = ToStorage([]float32{-128, 5, 127}, usearch.I8, QuantizeBounds{Min: -128, Max: 0, Set: true})
+	require.NoError(t, err)
+	require.Equal(t, want, v)
+	require.NotEqual(t, i8, v)
+	_, v, err = ToStorage(u8, usearch.F16, QuantizeBounds{})
+	require.NoError(t, err)
+	require.Equal(t, types.Float32ToFloat16Slice([]float32{0, 5, 255}), v)
+
+	require.Equal(t, TrainQuantizeBounds([][]float32{{1.5, -2}}), TrainQuantizeBounds([][]types.Float16{f16}))
+}
+
 // A model storing quantized elements is built from and searched with base-type vectors:
 // every vector finds itself, and the top 10 agree with brute force.
 func TestQuantizedModelSearch(t *testing.T) {
@@ -110,7 +163,7 @@ func testQuantizedModelSearch[T types.RealNumbers](t *testing.T, storage usearch
 	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(dimensions)}
 	cfg.Usearch.Quantization = storage
 	cfg.Usearch.Metric = metricKind
-	model, err := NewHnswModelForBuild[T]("q", cfg, 1, count, t.TempDir())
+	model, err := NewHnswModelForBuild[T]("q", cfg, 1, count, 0, t.TempDir())
 	require.NoError(t, err)
 	defer model.Destroy()
 
@@ -225,5 +278,51 @@ func TestNarrowColumns(t *testing.T) {
 		got, err := StorageQuantization("", int32(typ))
 		require.NoError(t, err)
 		require.Equal(t, want, got, typ.String())
+	}
+}
+
+// A model of a narrow element type is built from and searched with vectors of that type:
+// every vector finds itself.
+func TestNarrowModelSearch(t *testing.T) {
+	f16 := func(x float64) types.Float16 { return types.Float16FromFloat32(float32(x)) }
+	bf16 := func(x float64) types.BF16 { return types.BF16FromFloat32(float32(x)) }
+	i8 := func(x float64) int8 { return int8(x * 40) }
+	u8 := func(x float64) uint8 { return uint8(x*40 + 128) }
+	testNarrowModelSearch(t, usearch.F16, QuantizeBounds{}, f16)
+	testNarrowModelSearch(t, usearch.I8, QuantizeBounds{Min: -3, Max: 3, Set: true}, f16)
+	testNarrowModelSearch(t, usearch.BF16, QuantizeBounds{}, bf16)
+	testNarrowModelSearch(t, usearch.F32, QuantizeBounds{}, bf16)
+	testNarrowModelSearch(t, usearch.I8, BaseBounds(int32(types.T_array_int8)), i8)
+	testNarrowModelSearch(t, usearch.U8, BaseBounds(int32(types.T_array_uint8)), u8)
+	testNarrowModelSearch(t, usearch.F16, QuantizeBounds{}, u8)
+}
+
+func testNarrowModelSearch[T types.ArrayElement](t *testing.T, storage usearch.Quantization, bounds QuantizeBounds, conv func(float64) T) {
+	const dimensions = 16
+	const count = 300
+	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(dimensions)}
+	cfg.Usearch.Quantization = storage
+	cfg.Usearch.Metric = usearch.L2sq
+	model, err := NewHnswModelForBuild[T]("narrow", cfg, 1, count, 0, t.TempDir())
+	require.NoError(t, err)
+	defer model.Destroy()
+	model.Bounds = bounds
+
+	vectors := make([][]T, count)
+	state := uint32(11)
+	for i := range vectors {
+		vectors[i] = make([]T, dimensions)
+		for d := range vectors[i] {
+			state = state*1664525 + 1013904223
+			vectors[i][d] = conv(float64(state>>8)/float64(1<<24)*6 - 3)
+		}
+		require.NoError(t, model.Add(int64(i), vectors[i]))
+	}
+	for i, v := range vectors {
+		keys, distances, err := model.Search(v, 1)
+		require.NoError(t, err)
+		require.Len(t, keys, 1)
+		require.EqualValues(t, i, keys[0], "%T stored as %v", v, storage)
+		require.InDelta(t, 0, distances[0], 1e-3)
 	}
 }

@@ -151,6 +151,7 @@ type IndexTableConfig struct {
 	SrcTable      string `json:"src"`
 	MetadataTable string `json:"metadata"`
 	IndexTable    string `json:"index"`
+	DictTable     string `json:"dict,omitempty"`
 	PKey          string `json:"pkey"`
 	KeyPart       string `json:"part"`
 	OrigFuncName  string `json:"orig_func_name"`
@@ -163,6 +164,7 @@ type IndexTableConfig struct {
 	Nprobe             uint     `json:"nprobe"`
 	PKeyType           int32    `json:"pktype"`
 	KeyPartType        int32    `json:"parttype"`
+	KeyPartWidth       int32    `json:"partwidth,omitempty"`
 	KmeansTrainPercent float64  `json:"kmeans_train_percent"`
 	KmeansMaxIteration int64    `json:"kmeans_max_iteration"`
 	Limit              uint64   `json:"limit"`
@@ -433,11 +435,11 @@ type IvfSearchCursor struct {
 // ColumnBuffer (the typed, box-free streaming key batch used by Emit) lives in
 // columnbuffer.go.
 
-type VectorIndexCdc[T types.RealNumbers] struct {
+type VectorIndexCdc[T types.ArrayElement] struct {
 	Data []VectorIndexCdcEntry[T] `json:"cdc"`
 }
 
-func NewVectorIndexCdc[T types.RealNumbers](capacity int) *VectorIndexCdc[T] {
+func NewVectorIndexCdc[T types.ArrayElement](capacity int) *VectorIndexCdc[T] {
 	return &VectorIndexCdc[T]{
 		Data: make([]VectorIndexCdcEntry[T], 0, capacity),
 	}
@@ -499,7 +501,7 @@ func (h *VectorIndexCdc[T]) ToJson() (string, error) {
 	return string(b), nil
 }
 
-type VectorIndexCdcEntry[T types.RealNumbers] struct {
+type VectorIndexCdcEntry[T types.ArrayElement] struct {
 	Type string `json:"t"` // I - INSERT, D - DELETE, U - UPSERT
 	PKey int64  `json:"pk"`
 	Vec  []T    `json:"v,omitempty"`

@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_14"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_15"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_16"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_17"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
@@ -83,7 +82,6 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 		{name: "current_4.0.14", version: "4.0.14", offset: v4_0_14.Handler.Metadata().VersionOffset, upgrade: true},
 		{name: "current_4.0.15", version: "4.0.15", offset: v4_0_15.Handler.Metadata().VersionOffset, upgrade: true},
 		{name: "current_4.0.16", version: "4.0.16", offset: v4_0_16.Handler.Metadata().VersionOffset, upgrade: true},
-		{name: "current_4.0.17", version: "4.0.17", offset: v4_0_17.Handler.Metadata().VersionOffset, upgrade: true},
 		{name: "current", version: final.Version, offset: final.VersionOffset},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -119,9 +117,6 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 				require.NoError(t, b.doCheckUpgrade(context.Background()))
 				if test.upgrade {
 					hops := []versions.Version{final}
-					if versions.Compare(test.version, "4.0.17") < 0 {
-						hops = append([]versions.Version{v4_0_17.Handler.Metadata()}, hops...)
-					}
 					if versions.Compare(test.version, "4.0.16") < 0 {
 						hops = append([]versions.Version{v4_0_16.Handler.Metadata()}, hops...)
 					}

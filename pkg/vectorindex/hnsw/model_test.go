@@ -404,6 +404,7 @@ func TestModel(t *testing.T) {
 	err = idx.Unload()
 	require.Nil(t, err)
 
+	idx.Headroom = 10
 	err = idx.LoadIndex(sqlproc, idxcfg, tblcfg, 0, view)
 	require.Nil(t, err)
 
@@ -586,7 +587,7 @@ func TestNewHnswModelForBuild(t *testing.T) {
 	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	cfg.Usearch.Metric = usearch.L2sq
 
-	idx, err := NewHnswModelForBuild[float32]("build-test", cfg, 1, 64, "")
+	idx, err := NewHnswModelForBuild[float32]("build-test", cfg, 1, 64, 0, "")
 	require.NoError(t, err)
 	require.NotNil(t, idx.Index)
 	defer idx.Destroy()
@@ -613,7 +614,7 @@ func TestNewHnswModelForBuild(t *testing.T) {
 func TestSearchWithCMembership(t *testing.T) {
 	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	cfg.Usearch.Metric = usearch.L2sq
-	idx, err := NewHnswModelForBuild[float32]("membership-test", cfg, 1, 4096, "")
+	idx, err := NewHnswModelForBuild[float32]("membership-test", cfg, 1, 4096, 0, "")
 	require.NoError(t, err)
 	defer idx.Destroy()
 	for i := int64(0); i < 2000; i++ {
@@ -702,7 +703,7 @@ func TestSearch_WrongDimension(t *testing.T) {
 	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	cfg.Usearch.Metric = usearch.L2sq
 
-	idx, err := NewHnswModelForBuild[float32]("dim-test", cfg, 1, 16, "")
+	idx, err := NewHnswModelForBuild[float32]("dim-test", cfg, 1, 16, 0, "")
 	require.NoError(t, err)
 	defer idx.Destroy()
 

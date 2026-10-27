@@ -15,598 +15,281 @@
 package table_function
 
 import (
-	"fmt"
-	"os"
+	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
-type hnswCreateTestCase struct {
-	arg  *TableFunction
-	proc *process.Process
+// hnswSource is the source table an hnsw_create test reads: the rows its streamed SELECT
+// returns, with the type of their vector column.
+type hnswSource struct {
+	typ  types.T
+	dim  int32
+	rows [][]float64
+	// streamErr fails the streamed SELECT after its rows.
+	streamErr error
 }
 
-var (
-	hnswcreatedefaultAttrs = []string{"status"}
+type hnswCreateRun struct {
+	tf    *TableFunction
+	proc  *process.Process
+	sqls  []string
+	state *hnswCreateState
+}
 
-	hnswcreatedefaultColdefs = []*plan.ColDef{
-		// row_id type should be same as index type
-		{
-			Name: "status",
-			Typ: plan.Type{
-				Id:          int32(types.T_int32),
-				NotNullable: false,
-			},
-		},
+func hnswCfg(src hnswSource, dict bool) string {
+	cfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__meta", IndexTable: "__index",
+		PKey: "id", KeyPart: "v", KeyPartType: int32(src.typ), KeyPartWidth: src.dim}
+	if dict {
+		cfg.DictTable = "__dict"
 	}
-)
+	b, _ := json.Marshal(cfg)
+	return string(b)
+}
 
-func newHnswCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param string) hnswCreateTestCase {
-	proc := testutil.NewProcessWithMPool(t, "", m)
-	colDefs := make([]*plan.ColDef, len(attrs))
-	for i := range attrs {
-		for j := range hnswcreatedefaultColdefs {
-			if attrs[i] == hnswcreatedefaultColdefs[j].Name {
-				colDefs[i] = hnswcreatedefaultColdefs[j]
-				break
+func (src hnswSource) batch(t *testing.T, mp *mpool.MPool) *batch.Batch {
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	bat.Vecs[1] = vector.NewVec(types.New(src.typ, src.dim, 0))
+	for i, row := range src.rows {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(i), false, mp))
+		var b []byte
+		switch src.typ {
+		case types.T_array_float64:
+			b = types.ArrayToBytes(row)
+		case types.T_array_int8:
+			v := make([]int8, len(row))
+			for j, x := range row {
+				v[j] = int8(x)
+			}
+			b = types.ArrayToBytes(v)
+		default:
+			v := make([]float32, len(row))
+			for j, x := range row {
+				v[j] = float32(x)
+			}
+			if src.typ == types.T_array_float16 {
+				b = types.ArrayToBytes(types.Float32ToFloat16Slice(v))
+			} else {
+				b = types.ArrayToBytes(v)
 			}
 		}
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], b, false, mp))
 	}
-
-	ret := hnswCreateTestCase{
-		proc: proc,
-		arg: &TableFunction{
-			Attrs:    attrs,
-			Rets:     colDefs,
-			FuncName: "hnsw_create",
-			OperatorBase: vm.OperatorBase{
-				OperatorInfo: vm.OperatorInfo{
-					Idx:     0,
-					IsFirst: false,
-					IsLast:  false,
-				},
-			},
-			Params: []byte(param),
-		},
-	}
-	mockIndexTxn(t, proc, func(sql string, _ executor.StatementOption) (executor.Result, error) {
-		return hnsw_runSql(sqlexec.NewSqlProcess(proc), sql)
-	})
-	return ret
-}
-
-func mock_hnsw_runSql(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-	proc := sqlproc.Proc
-	return executor.Result{Mp: proc.Mp(), Batches: []*batch.Batch{}}, nil
-}
-
-func TestHnswCreate(t *testing.T) {
-
-	hnsw_runSql = mock_hnsw_runSql
-
-	param := "{\"op_type\": \"vector_l2_ops\"}"
-	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
-
-	inbat := makeBatchHnswCreate(ut.proc)
-
-	ut.arg.Args = makeConstInputExprsHnswCreate()
-
-	// Prepare
-	err := ut.arg.Prepare(ut.proc)
-	require.Nil(t, err)
-
-	for i := range ut.arg.ctr.executorsForArgs {
-		ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
-		require.Nil(t, err)
-	}
-
-	// start
-	err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
-	require.Nil(t, err)
-
-	// first call receive data
-	result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
-	require.Nil(t, err)
-
-	require.Equal(t, result.Status, vm.ExecStop)
-
-	err = ut.arg.ctr.state.end(ut.arg, ut.proc)
-	require.Nil(t, err)
-
-	// reset
-	ut.arg.ctr.state.reset(ut.arg, ut.proc)
-
-	// free
-	ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
-}
-
-var failedparam []string = []string{"{",
-	"{\"op_type\": \"vector_cos_ops\"}",
-	"{\"op_type\": \"vector_l2_ops\", \"m\":\"notnumber\"}",
-	"{\"op_type\": \"vector_l2_ops\", \"ef_construction\":\"notnumber\"}",
-	"{\"op_type\": \"vector_l2_ops\"}, \"ef_search\":\"notnumber\"",
-}
-
-func TestHnswCreateParamFail(t *testing.T) {
-
-	hnsw_runSql = mock_hnsw_runSql
-
-	for _, param := range failedparam {
-		ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
-
-		inbat := makeBatchHnswCreate(ut.proc)
-
-		ut.arg.Args = makeConstInputExprsHnswCreate()
-
-		// Prepare
-		err := ut.arg.Prepare(ut.proc)
-		require.Nil(t, err)
-
-		for i := range ut.arg.ctr.executorsForArgs {
-			ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
-			require.Nil(t, err)
-		}
-
-		// start
-		err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
-		require.NotNil(t, err)
-		os.Stderr.WriteString(fmt.Sprintf("%v\n", err))
-	}
-
-	/*
-		// first call receive data
-		result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
-		require.Nil(t, err)
-
-		require.Equal(t, result.Status, vm.ExecStop)
-
-		err = ut.arg.ctr.state.end(ut.arg, ut.proc)
-		require.Nil(t, err)
-
-		// reset
-		ut.arg.ctr.state.reset(ut.arg, ut.proc)
-
-		// free
-		ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
-	*/
-}
-
-func TestHnswCreateIndexTableConfigFail(t *testing.T) {
-
-	hnsw_runSql = mock_hnsw_runSql
-	param := "{\"op_type\": \"vector_l2_ops\"}"
-
-	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, param)
-	failbatches := makeBatchHnswCreateFail(ut.proc)
-	for _, b := range failbatches {
-
-		inbat := b.bat
-		ut.arg.Args = b.args
-
-		// Prepare
-		err := ut.arg.Prepare(ut.proc)
-		require.Nil(t, err)
-
-		for i := range ut.arg.ctr.executorsForArgs {
-			ut.arg.ctr.argVecs[i], err = ut.arg.ctr.executorsForArgs[i].Eval(ut.proc, []*batch.Batch{inbat}, nil)
-			require.Nil(t, err)
-		}
-
-		// start
-		err = ut.arg.ctr.state.start(ut.arg, ut.proc, 0, nil)
-		require.NotNil(t, err)
-		os.Stderr.WriteString(fmt.Sprintf("%v\n", err))
-	}
-
-	/*
-	   // first call receive data
-	   result, err := ut.arg.ctr.state.call(ut.arg, ut.proc)
-	   require.Nil(t, err)
-
-	   require.Equal(t, result.Status, vm.ExecStop)
-
-	   err = ut.arg.ctr.state.end(ut.arg, ut.proc)
-	   require.Nil(t, err)
-
-	   // reset
-	   ut.arg.ctr.state.reset(ut.arg, ut.proc)
-
-	   // free
-	   ut.arg.ctr.state.free(ut.arg, ut.proc, false, nil)
-	*/
-}
-
-func makeConstInputExprsHnswCreate() []*plan.Expr {
-
-	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
-	ret := []*plan.Expr{
-		{
-			Typ: plan.Type{
-				Id:    int32(types.T_varchar),
-				Width: 512,
-			},
-			Expr: &plan.Expr_Lit{
-				Lit: &plan.Literal{
-					Value: &plan.Literal_Sval{
-						Sval: tblcfg,
-					},
-				},
-			},
-		},
-		{
-
-			Typ: plan.Type{
-				Id: int32(types.T_int64),
-			},
-			Expr: &plan.Expr_Lit{
-				Lit: &plan.Literal{
-					Value: &plan.Literal_I64Val{
-						I64Val: 1,
-					},
-				},
-			},
-		},
-
-		plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
-	}
-
-	return ret
-}
-func makeBatchHnswCreate(proc *process.Process) *batch.Batch {
-
-	bat := batch.NewWithSize(3)
-
-	bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))     // index table config
-	bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))         // pkid int64
-	bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
-
-	tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
-	vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
-	vector.AppendFixed(bat.Vecs[1], int64(1), false, proc.Mp())
-
-	v := []float32{0, 1, 2}
-	vector.AppendArray(bat.Vecs[2], v, false, proc.Mp())
-
-	bat.SetRowCount(1)
+	bat.SetRowCount(len(src.rows))
 	return bat
-
 }
 
-type failBatch struct {
-	args []*plan.Expr
-	bat  *batch.Batch
+func int64Result(t *testing.T, mp *mpool.MPool, n int64) executor.Result {
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], n, false, mp))
+	bat.SetRowCount(1)
+	return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
 }
 
-func makeBatchHnswCreateFail(proc *process.Process) []failBatch {
-
-	failBatches := make([]failBatch, 0, 3)
-
-	//tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
-	{
-		tblcfg := ``
-		ret := []*plan.Expr{
-			{
-				Typ: plan.Type{
-					Id:    int32(types.T_varchar),
-					Width: 512,
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_Sval{
-							Sval: tblcfg,
-						},
-					},
-				},
-			},
-			{
-
-				Typ: plan.Type{
-					Id: int32(types.T_int64),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_I64Val{
-							I64Val: 1,
-						},
-					},
-				},
-			},
-
-			plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
-		}
-
-		bat := batch.NewWithSize(3)
-
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))     // index table config
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))         // pkid int64
-		bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
-
-		vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
-		vector.AppendFixed(bat.Vecs[1], int64(1), false, proc.Mp())
-
-		v := []float32{0, 1, 2}
-		vector.AppendArray(bat.Vecs[2], v, false, proc.Mp())
-
-		bat.SetRowCount(1)
-
-		failBatches = append(failBatches, failBatch{ret, bat})
-
+// runHnswCreate prepares hnsw_create with params and cfg, then starts and ends it over src.
+func runHnswCreate(t *testing.T, params, cfg string, src hnswSource) (*hnswCreateRun, error) {
+	mp := mpool.MustNewZero()
+	run := &hnswCreateRun{proc: testutil.NewProcessWithMPool(t, "", mp)}
+	run.tf = &TableFunction{
+		Attrs:    []string{"status"},
+		Rets:     []*plan.ColDef{{Name: "status", Typ: plan.Type{Id: int32(types.T_int32)}}},
+		FuncName: "hnsw_create",
+		Params:   []byte(params),
+		Args: []*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_varchar), Width: 512},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: cfg}}},
+		}},
 	}
-	{
-		tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
-		ret := []*plan.Expr{
-			{
-				Typ: plan.Type{
-					Id:    int32(types.T_varchar),
-					Width: 512,
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_Sval{
-							Sval: tblcfg,
-						},
-					},
-				},
-			},
-			{
-
-				Typ: plan.Type{
-					Id: int32(types.T_int32),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_I32Val{
-							I32Val: 1,
-						},
-					},
-				},
-			},
-
-			plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
+	query := func(sql string) (executor.Result, error) {
+		run.sqls = append(run.sqls, sql)
+		switch {
+		case strings.HasPrefix(sql, "SELECT count(*)"):
+			return int64Result(t, mp, int64(len(src.rows))), nil
+		case strings.HasPrefix(sql, "SELECT SAMPLE("):
+			bat := src.batch(t, mp)
+			bat.Vecs = bat.Vecs[1:]
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 		}
-
-		bat := batch.NewWithSize(3)
-
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))     // index table config
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 8, 0))         // pkid int64
-		bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
-
-		vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
-		vector.AppendFixed(bat.Vecs[1], int32(1), false, proc.Mp())
-
-		v := []float32{0, 1, 2}
-		vector.AppendArray(bat.Vecs[2], v, false, proc.Mp())
-
-		bat.SetRowCount(1)
-
-		failBatches = append(failBatches, failBatch{ret, bat})
-
+		return executor.Result{Mp: mp}, nil
 	}
-	{
-		//tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
-		ret := []*plan.Expr{
-			{
-
-				Typ: plan.Type{
-					Id: int32(types.T_int64),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_I64Val{
-							I64Val: 1,
-						},
-					},
-				},
-			},
-			{
-
-				Typ: plan.Type{
-					Id: int32(types.T_int64),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_I64Val{
-							I64Val: 1,
-						},
-					},
-				},
-			},
-
-			plan2.MakePlan2Vecf32ConstExprWithType("[0,1,2]", 3),
-		}
-
-		bat := batch.NewWithSize(3)
-
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_int64, 8, 0))         // index table config
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))         // pkid int64
-		bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
-
-		vector.AppendFixed(bat.Vecs[0], int64(1), false, proc.Mp())
-		vector.AppendFixed(bat.Vecs[1], int64(1), false, proc.Mp())
-
-		v := []float32{0, 1, 2}
-		vector.AppendArray(bat.Vecs[2], v, false, proc.Mp())
-
-		bat.SetRowCount(1)
-
-		failBatches = append(failBatches, failBatch{ret, bat})
-
+	mockIndexTxn(t, run.proc, func(sql string, _ executor.StatementOption) (executor.Result, error) { return query(sql) })
+	oldSql, oldStream := hnsw_runSql, hnsw_runStreamingSql
+	t.Cleanup(func() { hnsw_runSql, hnsw_runStreamingSql = oldSql, oldStream })
+	hnsw_runSql = func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) { return query(sql) }
+	hnsw_runStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, ch chan executor.Result, _ chan error) (executor.Result, error) {
+		run.sqls = append(run.sqls, sql)
+		ch <- executor.Result{Mp: mp, Batches: []*batch.Batch{src.batch(t, mp)}}
+		return executor.Result{}, src.streamErr
 	}
-	{
-		tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
-		ret := []*plan.Expr{
-			{
-				Typ: plan.Type{
-					Id:    int32(types.T_varchar),
-					Width: 512,
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_Sval{
-							Sval: tblcfg,
-						},
-					},
-				},
-			},
-			{
 
-				Typ: plan.Type{
-					Id: int32(types.T_int64),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_I64Val{
-							I64Val: 1,
-						},
-					},
-				},
-			},
-
-			{
-
-				Typ: plan.Type{
-					Id: int32(types.T_int64),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_I64Val{
-							I64Val: 1,
-						},
-					},
-				},
-			},
-		}
-
-		bat := batch.NewWithSize(3)
-
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0)) // index table config
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_int64, 8, 0))     // pkid int64
-		bat.Vecs[2] = vector.NewVec(types.New(types.T_int64, 8, 0))     // pkid int64
-
-		vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
-		vector.AppendFixed(bat.Vecs[1], int64(1), false, proc.Mp())
-		vector.AppendFixed(bat.Vecs[2], int64(1), false, proc.Mp())
-
-		bat.SetRowCount(1)
-
-		failBatches = append(failBatches, failBatch{ret, bat})
-
+	require.NoError(t, run.tf.Prepare(run.proc))
+	run.state = run.tf.ctr.state.(*hnswCreateState)
+	for i := range run.tf.ctr.executorsForArgs {
+		vec, err := run.tf.ctr.executorsForArgs[i].Eval(run.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		require.NoError(t, err)
+		run.tf.ctr.argVecs[i] = vec
 	}
-	{
-		tblcfg := `{"db":"db", "src":"src", "metadata":"__metadata", "index":"__index", "index_capacity": 10000}`
-		ret := []*plan.Expr{
-			{
-				Typ: plan.Type{
-					Id:    int32(types.T_varchar),
-					Width: 512,
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_Sval{
-							Sval: tblcfg,
-						},
-					},
-				},
-			},
-			{
-
-				Typ: plan.Type{
-					Id: int32(types.T_int64),
-				},
-				Expr: &plan.Expr_Lit{
-					Lit: &plan.Literal{
-						Value: &plan.Literal_I64Val{
-							I64Val: 1,
-						},
-					},
-				},
-			},
-
-			plan2.MakePlan2Vecf32ConstExprWithType("[0,1]", 3),
-		}
-
-		bat := batch.NewWithSize(3)
-
-		bat.Vecs[0] = vector.NewVec(types.New(types.T_varchar, 128, 0))     // index table config
-		bat.Vecs[1] = vector.NewVec(types.New(types.T_int32, 8, 0))         // pkid int64
-		bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 3, 0)) // float32 array [3]float32
-
-		vector.AppendBytes(bat.Vecs[0], []byte(tblcfg), false, proc.Mp())
-		vector.AppendFixed(bat.Vecs[1], int32(1), false, proc.Mp())
-
-		v := []float32{0, 1, 2}
-		vector.AppendArray(bat.Vecs[2], v, false, proc.Mp())
-
-		bat.SetRowCount(1)
-
-		failBatches = append(failBatches, failBatch{ret, bat})
+	t.Cleanup(func() { run.state.free(run.tf, run.proc, false, nil) })
+	if err := run.state.start(run.tf, run.proc, 0, nil); err != nil {
+		return run, err
 	}
-	return failBatches
+	res, err := run.state.call(run.tf, run.proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecStop, res.Status)
+	return run, run.state.end(run.tf, run.proc)
 }
 
-// TestHnswCreatePrepareParsesConfig covers the zero-doc enabler: Prepare const-folds the
-// IndexTableConfig (arg 0) so end() has the table names even when start() never runs (empty source).
-func TestHnswCreatePrepareParsesConfig(t *testing.T) {
-	hnsw_runSql = mock_hnsw_runSql
-	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, "{\"op_type\": \"vector_l2_ops\"}")
-	ut.arg.Args = makeConstInputExprsHnswCreate()
-
-	require.Nil(t, ut.arg.Prepare(ut.proc))
-
-	st := ut.arg.ctr.state.(*hnswCreateState)
-	require.Equal(t, "db", st.tblcfg.DbName)
-	require.Equal(t, "__metadata", st.tblcfg.MetadataTable)
-	require.Equal(t, "__index", st.tblcfg.IndexTable)
-}
-
-// TestHnswCreateEndZeroDocClears covers the zero-doc rebuild: with no builder created (start()/call()
-// never ran, as on an empty source) end() must STILL clear both hidden tables — via DELETE ... WHERE
-// TRUE (an in-place delete, not a TRUNCATE that would swap the physical table id).
-func TestHnswCreateEndZeroDocClears(t *testing.T) {
-	var captured []string
-	old := hnsw_runSql
-	defer func() { hnsw_runSql = old }()
-	hnsw_runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		captured = append(captured, sql)
-		return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{}}, nil
-	}
-
-	ut := newHnswCreateTestCase(t, mpool.MustNewZero(), hnswcreatedefaultAttrs, "{\"op_type\": \"vector_l2_ops\"}")
-	ut.arg.Args = makeConstInputExprsHnswCreate()
-	require.Nil(t, ut.arg.Prepare(ut.proc))
-
-	// end() WITHOUT start()/call() → buildf32/buildf64 stay nil (zero-doc).
-	st := ut.arg.ctr.state.(*hnswCreateState)
-	require.Nil(t, st.end(ut.arg, ut.proc))
-
-	var deletes []string
-	for _, s := range captured {
-		if strings.Contains(s, "DELETE FROM") {
-			deletes = append(deletes, s)
+func (r *hnswCreateRun) find(prefix string) []string {
+	var out []string
+	for _, sql := range r.sqls {
+		if strings.HasPrefix(sql, prefix) {
+			out = append(out, sql)
 		}
 	}
-	require.Len(t, deletes, 2, "zero-doc rebuild must still clear metadata + storage")
-	for _, d := range deletes {
-		require.Contains(t, d, "WHERE TRUE", "clear must be an in-place delete, not a TRUNCATE")
+	return out
+}
+
+func hnswRows(n, dim int) [][]float64 {
+	rows := make([][]float64, n)
+	for i := range rows {
+		rows[i] = make([]float64, dim)
+		for d := range rows[i] {
+			rows[i][d] = float64((i*7+d*3)%11) - 5
+		}
+	}
+	return rows
+}
+
+const hnswL2 = `{"op_type": "vector_l2_ops"}`
+
+// hnsw_create reads the source itself: it counts the vectors, streams every one into the
+// build, then clears the hidden tables and persists the models.
+func TestHnswCreateBuildsFromSource(t *testing.T) {
+	for _, typ := range []types.T{types.T_array_float32, types.T_array_float64, types.T_array_float16} {
+		t.Run(typ.String(), func(t *testing.T) {
+			src := hnswSource{typ: typ, dim: 3, rows: hnswRows(20, 3)}
+			run, err := runHnswCreate(t, hnswL2, hnswCfg(src, false), src)
+			require.NoError(t, err)
+			require.Equal(t, []string{"SELECT count(*) FROM `db`.`src` WHERE `v` IS NOT NULL"}, run.find("SELECT count"))
+			require.Equal(t, []string{"SELECT `id`, `v` FROM `db`.`src` WHERE `v` IS NOT NULL"}, run.find("SELECT `id`"))
+			require.Empty(t, run.find("SELECT SAMPLE"), "a float index trains no range")
+			require.Equal(t, []string{
+				"DELETE FROM `db`.`__meta` WHERE TRUE",
+				"DELETE FROM `db`.`__index` WHERE TRUE",
+			}, run.find("DELETE"))
+			require.Len(t, run.find("INSERT INTO `db`.`__meta`"), 1)
+
+			var rows int64
+			for _, m := range run.models() {
+				rows += m.len
+			}
+			require.EqualValues(t, 20, rows)
+		})
 	}
 }
 
-// TestHnswCreateEndNoConfigSkips covers the guard: an uninitialized state (no table names — e.g. the
-// const-fold parse failed) must skip the clear rather than emit an invalid "DELETE FROM " with an
-// empty identifier.
+// max_index_capacity splits the build into models, the last sized to the rows left.
+func TestHnswCreateCapacity(t *testing.T) {
+	src := hnswSource{typ: types.T_array_float32, dim: 3, rows: hnswRows(5, 3)}
+	run, err := runHnswCreate(t, `{"op_type": "vector_l2_ops", "max_index_capacity": "2"}`, hnswCfg(src, false), src)
+	require.NoError(t, err)
+	var caps []uint
+	for _, m := range run.models() {
+		caps = append(caps, m.maxCapacity)
+	}
+	require.Equal(t, []uint{2, 2, 1}, caps)
+}
+
+// An int8 index on a float column trains its range from a sample and writes it to its dict
+// table; on a vecint8 column it writes the column type's range without sampling.
+func TestHnswCreateDict(t *testing.T) {
+	src := hnswSource{typ: types.T_array_float32, dim: 3, rows: hnswRows(20, 3)}
+	run, err := runHnswCreate(t, `{"op_type": "vector_l2_ops", "quantization": "int8"}`, hnswCfg(src, true), src)
+	require.NoError(t, err)
+	require.Len(t, run.find("SELECT SAMPLE(`v`, 100.000000 PERCENT) FROM `db`.`src`"), 1)
+	require.Contains(t, run.find("DELETE"), "DELETE FROM `db`.`__dict` WHERE TRUE")
+	dict := run.find("INSERT INTO `db`.`__dict`")
+	require.Len(t, dict, 1)
+	require.Contains(t, dict[0], "('quantize_min', '-5'), ('quantize_max', '5')")
+	require.True(t, run.state.bounds.Set)
+	for _, m := range run.models() {
+		require.Equal(t, run.state.bounds, m.bounds)
+	}
+
+	src = hnswSource{typ: types.T_array_int8, dim: 3, rows: hnswRows(20, 3)}
+	run, err = runHnswCreate(t, `{"op_type": "vector_l2_ops", "quantization": "int8"}`, hnswCfg(src, true), src)
+	require.NoError(t, err)
+	require.Empty(t, run.find("SELECT SAMPLE"))
+	dict = run.find("INSERT INTO `db`.`__dict`")
+	require.Len(t, dict, 1)
+	require.Contains(t, dict[0], "('quantize_min', '-128'), ('quantize_max', '127')")
+}
+
+// An empty source still clears every hidden table and builds nothing.
+func TestHnswCreateEmptySource(t *testing.T) {
+	src := hnswSource{typ: types.T_array_float32, dim: 3}
+	run, err := runHnswCreate(t, `{"op_type": "vector_l2_ops", "quantization": "int8"}`, hnswCfg(src, true), src)
+	require.NoError(t, err)
+	require.Empty(t, run.find("SELECT `id`"), "nothing to read")
+	require.Empty(t, run.find("SELECT SAMPLE"))
+	require.Equal(t, []string{
+		"DELETE FROM `db`.`__meta` WHERE TRUE",
+		"DELETE FROM `db`.`__index` WHERE TRUE",
+		"DELETE FROM `db`.`__dict` WHERE TRUE",
+	}, run.find("DELETE"))
+	require.Empty(t, run.find("INSERT"), "an index built empty trains its range on its first sync")
+}
+
+func TestHnswCreateStreamError(t *testing.T) {
+	src := hnswSource{typ: types.T_array_float32, dim: 3, rows: hnswRows(4, 3), streamErr: moerr.NewInternalErrorNoCtx("scan failed")}
+	_, err := runHnswCreate(t, hnswL2, hnswCfg(src, false), src)
+	require.ErrorContains(t, err, "scan failed")
+}
+
+func TestHnswCreateBadInput(t *testing.T) {
+	src := hnswSource{typ: types.T_array_float32, dim: 3, rows: hnswRows(4, 3)}
+	for _, params := range []string{"{",
+		`{"op_type": "vector_cos_ops"}`,
+		`{"op_type": "vector_l2_ops", "m":"notnumber"}`,
+		`{"op_type": "vector_l2_ops", "ef_construction":"notnumber"}`,
+		`{"op_type": "vector_l2_ops", "ef_search":"notnumber"}`,
+		`{"op_type": "vector_l2_ops", "quantization":"bad"}`,
+	} {
+		_, err := runHnswCreate(t, params, hnswCfg(src, false), src)
+		require.Error(t, err, params)
+	}
+
+	noColumns, _ := json.Marshal(vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__meta", IndexTable: "__index"})
+	for _, cfg := range []string{"", "{", string(noColumns)} {
+		_, err := runHnswCreate(t, hnswL2, cfg, src)
+		require.Error(t, err, cfg)
+	}
+
+	// a vector of the wrong dimension
+	wrong := hnswSource{typ: types.T_array_float32, dim: 3, rows: [][]float64{{1, 2}}}
+	_, err := runHnswCreate(t, hnswL2, hnswCfg(src, false), wrong)
+	require.Error(t, err)
+}
+
+// Without table names end() runs no SQL rather than an invalid "DELETE FROM ".
 func TestHnswCreateEndNoConfigSkips(t *testing.T) {
 	var called bool
 	old := hnsw_runSql
@@ -616,7 +299,40 @@ func TestHnswCreateEndNoConfigSkips(t *testing.T) {
 		return executor.Result{}, nil
 	}
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
-	st := &hnswCreateState{} // empty tblcfg
+	st := &hnswCreateState{}
 	require.Nil(t, st.end(&TableFunction{}, proc))
 	require.False(t, called, "no SQL must run without a valid table config")
+}
+
+type hnswModelInfo struct {
+	len         int64
+	maxCapacity uint
+	bounds      hnsw.QuantizeBounds
+}
+
+// models reports the models a run built.
+func (r *hnswCreateRun) models() []hnswModelInfo {
+	switch b := r.state.build.(type) {
+	case typedHnswBuilder[float32]:
+		return modelInfos(b.GetIndexes())
+	case typedHnswBuilder[float64]:
+		return modelInfos(b.GetIndexes())
+	case typedHnswBuilder[types.Float16]:
+		return modelInfos(b.GetIndexes())
+	case typedHnswBuilder[types.BF16]:
+		return modelInfos(b.GetIndexes())
+	case typedHnswBuilder[int8]:
+		return modelInfos(b.GetIndexes())
+	case typedHnswBuilder[uint8]:
+		return modelInfos(b.GetIndexes())
+	}
+	return nil
+}
+
+func modelInfos[T types.ArrayElement](models []*hnsw.HnswModel[T]) []hnswModelInfo {
+	out := make([]hnswModelInfo, 0, len(models))
+	for _, m := range models {
+		out = append(out, hnswModelInfo{m.Len.Load(), m.MaxCapacity, m.Bounds})
+	}
+	return out
 }

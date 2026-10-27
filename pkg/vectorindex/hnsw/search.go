@@ -38,7 +38,7 @@ var runSql = sqlexec.RunSql
 var runSql_streaming = sqlexec.RunStreamingSql
 
 // This is the HNSW search implementation that implement VectorIndexSearchIf interface
-type HnswSearch[T types.RealNumbers] struct {
+type HnswSearch[T types.ArrayElement] struct {
 	Idxcfg        vectorindex.IndexConfig
 	Tblcfg        vectorindex.IndexTableConfig
 	Indexes       []*HnswModel[T]
@@ -66,7 +66,7 @@ type HnswSearch[T types.RealNumbers] struct {
 	buildTS int64
 }
 
-func NewHnswSearch[T types.RealNumbers](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch[T] {
+func NewHnswSearch[T types.ArrayElement](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch[T] {
 	nthread := vectorindex.GetConcurrency(tblcfg.ThreadsSearch)
 	s := &HnswSearch[T]{Idxcfg: idxcfg, Tblcfg: tblcfg, ThreadsSearch: nthread}
 	s.Cond = sync.NewCond(&s.Mutex)
@@ -105,7 +105,7 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 		// heap discards candidates before any transform. Reject it fail-fast -- do NOT modify the
 		// vector (rewriting it would silently disagree with the stored index). A normalized query uses
 		// native cosine ANN (#29082).
-		if norm, ok := metric.CosineVectorL2Norm(query); !ok {
+		if norm, ok := metric.CosineVectorL2Norm(toFloat32(query)); !ok {
 			return nil, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
 				"hnsw cosine search requires a normalized (non-zero, non-subnormal) query vector; its L2 norm %g underflows the float32 domain the index computes in", norm))
 		}
@@ -219,7 +219,7 @@ func (s *HnswSearch[T]) searchOnce(
 	// overflows float32 saturates to +/-Inf while the exact scalar stays finite -- silently
 	// corrupting the value, Top-K order, and any outer predicate (the derived-table row-loss,
 	// #29040 / #29050). Vector distances are a float32 domain, so fail fast rather than serve it.
-	if metric.HasFloat64DistanceOverflow[T](resdistances) {
+	if _, f64 := any(query).([]float64); f64 && metric.HasFloat64DistanceOverflow[float64](resdistances) {
 		return nil, nil, moerr.NewInternalError(sqlproc.GetContext(),
 			"vector distance exceeds the float32 range the vector index computes in; a float64 vector of this magnitude is unsupported -- use a smaller-magnitude/normalized column or the exact scalar path")
 	}
@@ -281,7 +281,7 @@ func (s *HnswSearch[T]) Destroy() {
 // commit reflected across ALL metadata rows -- base generations AND cdc_tail frames (which
 // LoadIndex later drops from the resident set). It is the coverage point the async-index
 // freshness gate reports via BuildTS. 0 = unknown (pre-migration index).
-func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*HnswModel[T], int64, error) {
+func LoadMetadata[T types.ArrayElement](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*HnswModel[T], int64, error) {
 
 	sql := fmt.Sprintf("SELECT * FROM %s ORDER BY timestamp ASC", sqlquote.QualifiedIdent(dbname, metatbl))
 	res, err := runSql(sqlproc, sql)
@@ -318,14 +318,6 @@ func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname strin
 			if len(bat.Vecs) > 5 {
 				idx.BuildTS = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[5], i)
 			}
-			// quantize_min and quantize_max follow, set only on an int8/uint8 model.
-			if len(bat.Vecs) > 7 && !bat.Vecs[6].IsNull(uint64(i)) && !bat.Vecs[7].IsNull(uint64(i)) {
-				idx.Bounds = QuantizeBounds{
-					Min: vector.GetFixedAtWithTypeCheck[float64](bat.Vecs[6], i),
-					Max: vector.GetFixedAtWithTypeCheck[float64](bat.Vecs[7], i),
-					Set: true,
-				}
-			}
 			indexes = append(indexes, idx)
 		}
 	}
@@ -340,6 +332,26 @@ func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname strin
 	logMetadataProvenance(metatbl, len(indexes), rows, newest)
 
 	return indexes, newest, nil
+}
+
+// LoadModels is LoadMetadata with every model given the range its index maps vectors with: the
+// range in its dict table, else the range of a vecint8/vecuint8 column (tblcfg.KeyPartType).
+func LoadModels[T types.ArrayElement](sqlproc *sqlexec.SqlProcess, tblcfg vectorindex.IndexTableConfig) ([]*HnswModel[T], int64, error) {
+	indexes, buildTS, err := LoadMetadata[T](sqlproc, tblcfg.DbName, tblcfg.MetadataTable)
+	if err != nil {
+		return nil, 0, err
+	}
+	bounds, err := LoadQuantizeBounds(sqlproc, tblcfg.DbName, tblcfg.DictTable)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !bounds.Set {
+		bounds = BaseBounds(tblcfg.KeyPartType)
+	}
+	for _, idx := range indexes {
+		idx.Bounds = bounds
+	}
+	return indexes, buildTS, nil
 }
 
 // load index from database
@@ -367,7 +379,7 @@ func (s *HnswSearch[T]) LoadIndex(sqlproc *sqlexec.SqlProcess, indexes []*HnswMo
 // Load will claim in host memory. The models are parked on s.Indexes unloaded, so GetIndexSize
 // answers before a single model file is read.
 func (s *HnswSearch[T]) Preload(sqlproc *sqlexec.SqlProcess) error {
-	indexes, buildTS, err := LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+	indexes, buildTS, err := LoadModels[T](sqlproc, s.Tblcfg)
 	if err != nil {
 		return err
 	}
@@ -382,7 +394,7 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	indexes := s.Indexes
 	if indexes == nil {
 		var err error
-		if indexes, s.buildTS, err = LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable); err != nil {
+		if indexes, s.buildTS, err = LoadModels[T](sqlproc, s.Tblcfg); err != nil {
 			return err
 		}
 	}

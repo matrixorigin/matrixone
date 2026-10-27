@@ -64,7 +64,7 @@ func stubAlgo(t *testing.T) (*[]uint, *[]*recordingSearch) {
 	limits := new([]uint)
 	created := new([]*recordingSearch)
 	saved := newAlgo
-	newAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, _ bool) veccache.VectorIndexSearchIf {
+	newAlgo = func(idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, _ int32) veccache.VectorIndexSearchIf {
 		s := &recordingSearch{idxcfg: idxcfg, tblcfg: tblcfg, limits: limits}
 		*created = append(*created, s)
 		return s

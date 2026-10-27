@@ -4228,8 +4228,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("hnsw_max_index_capacity", 1, 5000000000, false),
-		Default:           int64(1000000),
+		Type:              InitSystemVariableIntType("hnsw_max_index_capacity", 0, 5000000000, false),
+		Default:           int64(0),
 	},
 	"experimental_cagra_index": {
 		Name:              "experimental_cagra_index",

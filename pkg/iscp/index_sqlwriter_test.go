@@ -21,11 +21,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 )
 
@@ -570,16 +572,35 @@ func TestIvfflatSqlWriterEnumReplay(t *testing.T) {
 	}
 }
 
-// The hnsw writer of a vecf16/vecbf16/vecint8/vecuint8 column widens its vectors to float32.
-func TestHnswVectorWidensNarrowColumns(t *testing.T) {
-	v, ok := hnswVector[float32]([]int8{-1, 2})
-	require.True(t, ok)
-	require.Equal(t, []float32{-1, 2}, v)
-	v, ok = hnswVector[float32]([]float32{3})
-	require.True(t, ok)
-	require.Equal(t, []float32{3}, v)
-	_, ok = hnswVector[float64]([]int8{1})
-	require.False(t, ok)
-	_, ok = hnswVector[float32]("x")
-	require.False(t, ok)
+// The hnsw writer of a vecf16/vecbf16/vecint8/vecuint8 column keeps its vectors in the column's
+// element type through the CDC payload the sync decodes, and accepts the dict table of an
+// int8/uint8 index.
+func TestHnswSqlWriterNarrowColumns(t *testing.T) {
+	testHnswSqlWriterNarrow(t, types.T_array_int8, []int8{-1, 2})
+	testHnswSqlWriterNarrow(t, types.T_array_uint8, []uint8{3, 255})
+	testHnswSqlWriterNarrow(t, types.T_array_float16, types.Float32ToFloat16Slice([]float32{1.5, -2}))
+	testHnswSqlWriterNarrow(t, types.T_array_bf16, []types.BF16{types.BF16FromFloat32(1.5), types.BF16FromFloat32(-2)})
+
+	tabledef := newTestTableDef("pk", types.T_int64, "vec", types.T_array_float32, 2)
+	_, err := NewHnswSqlWriter("hnsw", newTestJobID(), newTestConsumerInfo(), tabledef, tabledef.Indexes[:1])
+	require.Error(t, err, "an hnsw index has its metadata and storage tables")
+}
+
+func testHnswSqlWriterNarrow[T types.ArrayElement](t *testing.T, typ types.T, vec []T) {
+	ctx := t.Context()
+	tabledef := newTestTableDef("pk", types.T_int64, "vec", typ, int32(len(vec)))
+	dict := *tabledef.Indexes[0]
+	dict.IndexAlgoTableType = catalog.Hnsw_TblType_Dict
+	dict.IndexTableName = "dict_tbl"
+	writer, err := NewHnswSqlWriter("hnsw", newTestJobID(), newTestConsumerInfo(), tabledef, append(tabledef.Indexes, &dict))
+	require.NoError(t, err, typ.String())
+	require.IsType(t, &HnswSqlWriter[T]{}, writer)
+	require.NoError(t, writer.Insert(ctx, []any{int64(1), vec, nil}))
+	require.Error(t, writer.Insert(ctx, []any{int64(2), []float64{1, 2}, nil}), "a vector of another element type")
+	payload, err := writer.ToSql()
+	require.NoError(t, err)
+	var cdc vectorindex.VectorIndexCdc[T]
+	require.NoError(t, sonic.Unmarshal(payload, &cdc))
+	require.Len(t, cdc.Data, 1)
+	require.Equal(t, vec, cdc.Data[0].Vec)
 }

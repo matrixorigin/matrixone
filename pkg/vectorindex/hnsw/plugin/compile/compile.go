@@ -38,23 +38,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	hnswruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
-	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 )
 
-// insertIntoHnswIndexTableFormat is the SQL template used to populate the
-// HNSW index storage table. Lifted from pkg/sql/compile/util.go:118.
-// The %s placeholders are pre-quoted/escaped via pkg/common/sqlquote: the
-// source table and alias are quoted identifiers, params + config are escaped
-// string literals, and the pk / part are quoted column references.
-const insertIntoHnswIndexTableFormat = "SELECT f.* from %s AS %s CROSS APPLY hnsw_create(%s, %s, %s, %s) AS f;"
+// buildHnswIndexFormat is the SQL that builds the HNSW index: hnsw_create reads the source
+// table itself. The params and config are escaped string literals.
+const buildHnswIndexFormat = "SELECT f.* FROM hnsw_create(%s, %s) AS f;"
 
 var _ compileplugin.Hooks = Hooks{}
 
@@ -87,7 +81,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		}
 	}
 
-	if len(indexDefs) != 2 {
+	if len(indexDefs) != 2 && len(indexDefs) != 3 {
 		return moerr.NewInternalErrorNoCtx("invalid hnsw index table definition")
 	}
 	metaDef, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
@@ -256,18 +250,20 @@ func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]st
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx("hnsw_index index definition not found")
 	}
-	return []string{
-		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, meta.IndexTableName)),
-		fmt.Sprintf("DELETE FROM %s", sqlquote.QualifiedIdent(qryDatabase, idx.IndexTableName)),
-	}, nil
+	sqls := []string{
+		fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, meta.IndexTableName)),
+		fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, idx.IndexTableName)),
+	}
+	if dict, ok := indexDefs[catalog.Hnsw_TblType_Dict]; ok {
+		sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, dict.IndexTableName)))
+	}
+	return sqls, nil
 }
 
 // genBuildSQL is lifted from pkg/sql/compile/util.go:576.
 func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) ([]string, error) {
 	originalTableDef := ctx.OriginalTableDef()
 	qryDatabase := ctx.QryDatabase()
-	const srcAlias = "src"
-	pkCol := originalTableDef.Pkey.PkeyColName
 
 	meta, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
 	if !ok {
@@ -277,14 +273,25 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	if !ok {
 		return nil, moerr.NewInternalErrorNoCtx("hnsw_index index definition not found")
 	}
+	part := idx.Parts[0]
+	partPos, ok := originalTableDef.Name2ColIndex[part]
+	if !ok {
+		return nil, moerr.NewInternalErrorNoCtxf("hnsw index column %s not found", part)
+	}
+	partType := originalTableDef.Cols[partPos].Typ
 
 	cfg := vectorindex.IndexTableConfig{
 		MetadataTable: meta.IndexTableName,
 		IndexTable:    idx.IndexTableName,
 		DbName:        qryDatabase,
 		SrcTable:      originalTableDef.Name,
-		PKey:          srcAlias + "." + pkCol,
-		KeyPart:       idx.Parts[0],
+		PKey:          originalTableDef.Pkey.PkeyColName,
+		KeyPart:       part,
+		KeyPartType:   partType.Id,
+		KeyPartWidth:  partType.Width,
+	}
+	if dict, ok := indexDefs[catalog.Hnsw_TblType_Dict]; ok {
+		cfg.DictTable = dict.IndexTableName
 	}
 
 	threads, err := ctx.ResolveVariable("hnsw_threads_build", true, false)
@@ -293,63 +300,11 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	}
 	cfg.ThreadsBuild = threads.(int64)
 
-	// max_index_capacity now rides algo_params as a flat key (written at
-	// CREATE INDEX); hnsw_create / sync read it from there.
-	// An int8/uint8 build samples the column to train its range; the sample rate comes
-	// from the number of vectors, as for ivfflat.
-	var param vectorindex.HnswParam
-	if len(meta.IndexAlgoParams) > 0 {
-		if err := json.Unmarshal([]byte(meta.IndexAlgoParams), &param); err != nil {
-			return nil, err
-		}
-	}
-	switch catalog.ToLower(param.Quantization) {
-	case metric.Quantization_INT8_Str, metric.Quantization_UINT8_Str:
-		if cfg.DataSize, err = indexColCount(ctx, idx.Parts[0], qryDatabase, originalTableDef.Name); err != nil {
-			return nil, err
-		}
-	}
-
 	cfgbytes, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	params := idx.IndexAlgoParams
-
-	// Quoted column references for the hnsw_create CROSS APPLY args: `src`.`pk`
-	// and `src`.`vec`. Quoting via sqlquote keeps identifiers containing
-	// backticks or reserved words valid.
-	pkColExpr := sqlquote.QualifiedIdent(srcAlias, pkCol)
-	part := sqlquote.QualifiedIdent(srcAlias, idx.Parts[0])
-
-	sql := fmt.Sprintf(insertIntoHnswIndexTableFormat,
-		sqlquote.QualifiedIdent(qryDatabase, originalTableDef.Name),
-		sqlquote.Ident(srcAlias),
-		sqlquote.String(params),
-		sqlquote.String(string(cfgbytes)),
-		pkColExpr,
-		part)
+	sql := fmt.Sprintf(buildHnswIndexFormat, sqlquote.String(idx.IndexAlgoParams), sqlquote.String(string(cfgbytes)))
 	return []string{sql}, nil
-}
-
-// indexColCount returns the number of non-NULL vectors of the indexed column.
-func indexColCount(ctx compileplugin.CompileContext, col, qryDatabase, table string) (int64, error) {
-	rs, err := ctx.RunSqlWithResult(fmt.Sprintf("select count(%s) from %s;",
-		sqlquote.Ident(col), sqlquote.QualifiedIdent(qryDatabase, table)))
-	if err != nil {
-		return 0, err
-	}
-	defer rs.Close()
-	var n int64
-	rs.ReadRows(func(_ int, cols []*vector.Vector) bool {
-		if len(cols) == 0 {
-			return false
-		}
-		if rows := executor.GetFixedRows[int64](cols[0]); len(rows) > 0 {
-			n = rows[0]
-		}
-		return false
-	})
-	return n, nil
 }

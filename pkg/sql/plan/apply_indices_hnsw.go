@@ -30,6 +30,7 @@ type hnswIndexContext struct {
 	vecCtx       *vectorSortContext
 	metaDef      *plan.IndexDef
 	idxDef       *plan.IndexDef
+	dictDef      *plan.IndexDef
 	vecLitArg    *plan.Expr
 	origFuncName string
 	partPos      int32
@@ -125,6 +126,7 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 		vecCtx:       vecCtx,
 		metaDef:      metaDef,
 		idxDef:       idxDef,
+		dictDef:      multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Dict],
 		vecLitArg:    vecLitArg,
 		origFuncName: origFuncName,
 		partPos:      partPos,
@@ -262,6 +264,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnswWithColRefCnt(nodeID in
 				{Role: catalog.Hnsw_TblType_Storage, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: hnswCtx.idxDef.IndexTableName}},
 			},
 		},
+	}
+	if hnswCtx.dictDef != nil {
+		tableFuncNode.IndexSearchScan.HiddenTables = append(tableFuncNode.IndexSearchScan.HiddenTables,
+			&plan.IndexHiddenTableRef{Role: catalog.Hnsw_TblType_Dict, Object: &plan.ObjectRef{SchemaName: scanNode.ObjRef.SchemaName, ObjName: hnswCtx.dictDef.IndexTableName}})
 	}
 	setIndexSearchScanKnobs(tableFuncNode.IndexSearchScan, vecCtx)
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)

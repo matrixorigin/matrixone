@@ -90,9 +90,37 @@ func quantizeParams(kind usearch.Quantization, bounds QuantizeBounds) (mul, add 
 }
 
 // TrainQuantizeBounds returns the range an int8/uint8 index maps the sample vectors with.
-func TrainQuantizeBounds[T types.RealNumbers](sample [][]T) QuantizeBounds {
-	min, max := quantizer.TrainInt8(sample)
+func TrainQuantizeBounds[T types.ArrayElement](sample [][]T) QuantizeBounds {
+	var min, max float64
+	switch x := any(sample).(type) {
+	case [][]float32:
+		min, max = quantizer.TrainInt8(x)
+	case [][]float64:
+		min, max = quantizer.TrainInt8(x)
+	default:
+		widened := make([][]float32, len(sample))
+		for i, v := range sample {
+			widened[i] = toFloat32(v)
+		}
+		min, max = quantizer.TrainInt8(widened)
+	}
 	return QuantizeBounds{Min: min, Max: max, Set: true}
+}
+
+// toFloat32 returns vec as float32: vec itself when it already is, else a widened copy.
+func toFloat32[T types.ArrayElement](vec []T) []float32 {
+	switch x := any(vec).(type) {
+	case []float32:
+		return x
+	case []float64:
+		out := make([]float32, len(x))
+		for i, e := range x {
+			out[i] = float32(e)
+		}
+		return out
+	}
+	out, _ := WidenToFloat32(vec)
+	return out
 }
 
 // RescaleDistances turns the squared L2 distances usearch computes between quantized vectors
@@ -109,50 +137,55 @@ func RescaleDistances(distances []float32, kind usearch.Quantization, bounds Qua
 }
 
 // ToStorage converts vec to kind, the element type the index stores: usearch reads its
-// input as exactly that type. The second result holds the converted vector, which the
-// caller keeps alive while usearch reads the pointer.
+// input as exactly that type. A vector already of that type is used as it is. The second
+// result holds the vector usearch reads, which the caller keeps alive while usearch reads the
+// pointer.
 //
-// An int8/uint8 kind maps each element with the trained bounds.
-func ToStorage[T types.RealNumbers](vec []T, kind usearch.Quantization, bounds QuantizeBounds) (unsafe.Pointer, any, error) {
+// An int8/uint8 kind maps each element with the trained bounds; a vecint8/vecuint8 vector
+// mapped with the range of its own type is used as it is.
+func ToStorage[T types.ArrayElement](vec []T, kind usearch.Quantization, bounds QuantizeBounds) (unsafe.Pointer, any, error) {
 	if len(vec) == 0 {
 		return nil, nil, moerr.NewInternalErrorNoCtx("usearch vector is empty")
 	}
+	if storedAsIs(vec, kind, bounds) {
+		return unsafe.Pointer(&vec[0]), vec, nil
+	}
+	f64, isF64 := any(vec).([]float64)
+	f32 := toFloat32(vec)
+	src := func(i int) float64 {
+		if isF64 {
+			return f64[i]
+		}
+		return float64(f32[i])
+	}
 	switch kind {
 	case usearch.F32:
-		if v, ok := any(vec).([]float32); ok {
-			return unsafe.Pointer(&v[0]), v, nil
-		}
-		out := make([]float32, len(vec))
-		for i, x := range vec {
-			out[i] = float32(x)
-			if err := checkNarrowed(float64(x), float64(out[i]), kind); err != nil {
+		for i := range f32 {
+			if err := checkNarrowed(src(i), float64(f32[i]), kind); err != nil {
 				return nil, nil, err
 			}
 		}
-		return unsafe.Pointer(&out[0]), out, nil
+		return unsafe.Pointer(&f32[0]), f32, nil
 	case usearch.F64:
-		if v, ok := any(vec).([]float64); ok {
-			return unsafe.Pointer(&v[0]), v, nil
-		}
-		out := make([]float64, len(vec))
-		for i, x := range vec {
-			out[i] = float64(x)
+		out := make([]float64, len(f32))
+		for i := range out {
+			out[i] = src(i)
 		}
 		return unsafe.Pointer(&out[0]), out, nil
 	case usearch.F16:
-		out := make([]types.Float16, len(vec))
-		for i, x := range vec {
-			out[i] = types.Float16FromFloat32(float32(x))
-			if err := checkNarrowed(float64(x), float64(out[i].ToFloat32()), kind); err != nil {
+		out := make([]types.Float16, len(f32))
+		for i, x := range f32 {
+			out[i] = types.Float16FromFloat32(x)
+			if err := checkNarrowed(src(i), float64(out[i].ToFloat32()), kind); err != nil {
 				return nil, nil, err
 			}
 		}
 		return unsafe.Pointer(&out[0]), out, nil
 	case usearch.BF16:
-		out := make([]types.BF16, len(vec))
-		for i, x := range vec {
-			out[i] = types.BF16FromFloat32(float32(x))
-			if err := checkNarrowed(float64(x), float64(out[i].ToFloat32()), kind); err != nil {
+		out := make([]types.BF16, len(f32))
+		for i, x := range f32 {
+			out[i] = types.BF16FromFloat32(x)
+			if err := checkNarrowed(src(i), float64(out[i].ToFloat32()), kind); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -160,10 +193,6 @@ func ToStorage[T types.RealNumbers](vec []T, kind usearch.Quantization, bounds Q
 	case usearch.I8, usearch.U8:
 		if !bounds.Set {
 			return nil, nil, moerr.NewInternalErrorNoCtx("hnsw int8/uint8 model has no trained quantization range")
-		}
-		f32 := make([]float32, len(vec))
-		for i, x := range vec {
-			f32[i] = float32(x)
 		}
 		mul, add := quantizeParams(kind, bounds)
 		if kind == usearch.U8 {
@@ -175,6 +204,25 @@ func ToStorage[T types.RealNumbers](vec []T, kind usearch.Quantization, bounds Q
 	default:
 		return nil, nil, moerr.NewNotSupportedNoCtxf("hnsw storage type %v", kind)
 	}
+}
+
+// storedAsIs reports whether vec already is in the element type kind stores.
+func storedAsIs[T types.ArrayElement](vec []T, kind usearch.Quantization, bounds QuantizeBounds) bool {
+	switch any(vec).(type) {
+	case []float32:
+		return kind == usearch.F32
+	case []float64:
+		return kind == usearch.F64
+	case []types.Float16:
+		return kind == usearch.F16
+	case []types.BF16:
+		return kind == usearch.BF16
+	case []int8:
+		return kind == usearch.I8 && bounds == BaseBounds(int32(types.T_array_int8))
+	case []uint8:
+		return kind == usearch.U8 && bounds == BaseBounds(int32(types.T_array_uint8))
+	}
+	return false
 }
 
 // checkNarrowed rejects a finite element that overflows the element type the index stores.

@@ -39,6 +39,7 @@ func (CatalogHooks) HiddenTableTypes() []string {
 	return []string{
 		catalog.Hnsw_TblType_Metadata,
 		catalog.Hnsw_TblType_Storage,
+		catalog.Hnsw_TblType_Dict,
 	}
 }
 
@@ -116,6 +117,16 @@ func (CatalogHooks) ValidQuantization(quant, op string) error {
 	}
 }
 
+// NeedsDict reports whether an index of this QUANTIZATION has a dict table holding the
+// range it maps vectors with.
+func NeedsDict(quant string) bool {
+	switch strings.ToLower(quant) {
+	case metric.Quantization_INT8_Str, metric.Quantization_UINT8_Str:
+		return true
+	}
+	return false
+}
+
 // CheckQuantizationBase rejects a QUANTIZATION wider than the base column element type.
 func CheckQuantizationBase(quant string, base types.T) error {
 	if strings.ToLower(quant) == metric.Quantization_F64_Str {
@@ -151,10 +162,9 @@ func (CatalogHooks) SyncDescriptor() catalogplugin.SyncDescriptor {
 	}
 }
 
-// DefaultMaxIndexCapacity mirrors the hnsw_max_index_capacity session-var
-// default; the build path (hnsw_create) uses it when the flat algo_params key
-// is absent (a legacy index created before the param was promoted).
-const DefaultMaxIndexCapacity = int64(1000000)
+// DefaultMaxIndexCapacity is the hnsw_max_index_capacity session-var default: 0 sizes
+// each model from the host memory budget.
+const DefaultMaxIndexCapacity = int64(0)
 
 // ParamsFromTree is lifted verbatim from catalog.indexParamsToMap's
 // INDEX_TYPE_HNSW case (pkg/catalog/secondary_index_utils.go:341-375).
