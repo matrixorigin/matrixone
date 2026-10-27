@@ -833,6 +833,23 @@ func (r *Row) ParseRow(cols []string) error {
 	return nil
 }
 
+// CsvPrimaryKey return string = concat($CsvCol[PrimaryKeyColumnIdx], '-')
+// Deprecated
+func (r *Row) CsvPrimaryKey() string {
+	if len(r.Table.PrimaryKeyColumn) == 0 {
+		return ""
+	}
+	if len(r.Table.PrimaryKeyColumn) == 1 {
+		return r.CsvColumns[r.Table.name2ColumnIdx[r.Table.PrimaryKeyColumn[0].Name]]
+	}
+	sb := strings.Builder{}
+	for _, col := range r.Table.PrimaryKeyColumn {
+		sb.WriteString(r.CsvColumns[r.Table.name2ColumnIdx[col.Name]])
+		sb.WriteRune('-')
+	}
+	return sb.String()
+}
+
 func (r *Row) Size() (size int64) {
 	if len(r.CsvColumns) > 0 {
 		for _, v := range r.CsvColumns {
