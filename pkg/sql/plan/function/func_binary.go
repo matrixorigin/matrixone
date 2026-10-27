@@ -7245,27 +7245,6 @@ func FloatUnixTimeParts(v float64) (sec int64, nsec int64, ok bool) {
 	return sec, microseconds * 1_000, true
 }
 
-func decimal256ToInt64ForUnix(v types.Decimal256) (int64, error) {
-	if v.Sign() {
-		if v.B64_127 != ^uint64(0) || v.B128_191 != ^uint64(0) || v.B192_255 != ^uint64(0) {
-			return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-		}
-		if v.B0_63 < 0x8000000000000000 {
-			return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-		}
-		negated := v.Minus()
-		return -int64(negated.B0_63), nil
-	}
-
-	if v.B64_127 != 0 || v.B128_191 != 0 || v.B192_255 != 0 {
-		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-	}
-	if v.B0_63 > 0x7FFFFFFFFFFFFFFF {
-		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
-	}
-	return int64(v.B0_63), nil
-}
-
 func decimal256Pow10ForUnix(n int32) (types.Decimal256, error) {
 	if n < 0 {
 		return types.Decimal256{}, moerr.NewInvalidInputNoCtxf("negative decimal power: %d", n)
@@ -7298,7 +7277,7 @@ func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec i
 	if err != nil {
 		return 0, 0, false, nil
 	}
-	sec, err = decimal256ToInt64ForUnix(whole)
+	sec, err = decimal256ToInt64(whole)
 	if err != nil {
 		return 0, 0, false, nil
 	}
@@ -7354,7 +7333,7 @@ func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec i
 	if err != nil {
 		return 0, 0, false, err
 	}
-	microseconds, err := decimal256ToInt64ForUnix(frac)
+	microseconds, err := decimal256ToInt64(frac)
 	if err != nil {
 		return 0, 0, false, err
 	}
