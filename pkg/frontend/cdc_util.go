@@ -17,9 +17,7 @@ package frontend
 import (
 	"context"
 	"database/sql"
-	"math"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -676,59 +674,4 @@ func CDCParseGranularityTuple(
 		pt.Sink.Table = pt.Source.Table
 	}
 	return
-}
-
-// only accept positive integers that end with m or h
-func isValidFrequency(freq string) bool {
-	if !strings.HasSuffix(freq, "m") && !strings.HasSuffix(freq, "h") {
-		return false
-	}
-
-	numPart := strings.TrimSuffix(strings.TrimSuffix(freq, "m"), "h")
-
-	matched, _ := regexp.MatchString(`^[1-9]\d*$`, numPart)
-	if !matched {
-		return false
-	}
-
-	num, err := strconv.Atoi(numPart)
-	if err != nil {
-		return false
-	}
-
-	if num < 0 {
-		return false
-	}
-
-	if num > 10000000 {
-		return false
-	}
-
-	return true
-}
-
-// e.g. 1h -> 1
-//
-//	30m -> 1
-//	60m -> 1
-//	61m -> 2
-//
-// call isValidFrequency before calling this function
-func transformIntoHours(freq string) int64 {
-	if strings.HasSuffix(freq, "h") {
-		hoursStr := strings.TrimSuffix(freq, "h")
-		hours, _ := strconv.Atoi(hoursStr)
-		return int64(hours)
-	}
-
-	if strings.HasSuffix(freq, "m") {
-		minStr := strings.TrimSuffix(freq, "m")
-		minutes, _ := strconv.Atoi(minStr)
-
-		hours := int(math.Ceil(float64(minutes) / 60.0))
-
-		return int64(hours)
-	}
-
-	return 0
 }

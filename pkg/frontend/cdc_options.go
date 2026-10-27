@@ -480,10 +480,10 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
-	if !isValidFrequency(frequency) {
+	if !cdc.IsValidFrequency(frequency) {
 		return moerr.NewInternalErrorf(ctx, "invalid frequency: %s", frequency)
 	}
-	normalized := transformIntoHours(frequency)
+	normalized := cdc.FrequencyHours(frequency)
 	var patterTupples *cdc.PatternTuples
 	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, req.Tables,

@@ -7992,55 +7992,6 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 	return
 }
 
-// only accept positive integers that end with m or h
-func isValidFrequency(freq string) bool {
-	if !strings.HasSuffix(freq, "m") && !strings.HasSuffix(freq, "h") {
-		return false
-	}
-
-	numPart := strings.TrimSuffix(strings.TrimSuffix(freq, "m"), "h")
-
-	matched, _ := regexp.MatchString(`^[1-9]\d*$`, numPart)
-	if !matched {
-		return false
-	}
-
-	num, err := strconv.Atoi(numPart)
-	if err != nil {
-		return false
-	}
-
-	if num < 0 {
-		return false
-	}
-
-	if num > 10000000 {
-		return false
-	}
-
-	return true
-}
-
-// call isValidFrequency before calling this function
-func transformIntoHours(freq string) int64 {
-	if strings.HasSuffix(freq, "h") {
-		hoursStr := strings.TrimSuffix(freq, "h")
-		hours, _ := strconv.Atoi(hoursStr)
-		return int64(hours)
-	}
-
-	if strings.HasSuffix(freq, "m") {
-		minStr := strings.TrimSuffix(freq, "m")
-		minutes, _ := strconv.Atoi(minStr)
-
-		hours := int(math.Ceil(float64(minutes) / 60.0))
-
-		return int64(hours)
-	}
-
-	return 0
-}
-
 func (c *Compile) checkPitrGranularity(
 	ctx context.Context,
 	pts *cdc.PatternTuples,
@@ -8300,11 +8251,11 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 		err = moerr.NewInternalErrorf(ctx, "invalid level: %s", level)
 		return
 	}
-	if !isValidFrequency(frequency) {
+	if !cdc.IsValidFrequency(frequency) {
 		return moerr.NewInternalErrorf(ctx, "invalid frequency: %s", frequency)
 	}
 
-	normalized := transformIntoHours(frequency)
+	normalized := cdc.FrequencyHours(frequency)
 	var patterTupples *cdc.PatternTuples
 	if patterTupples, err = CDCParsePitrGranularity(
 		ctx, level, tables,

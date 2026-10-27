@@ -6284,8 +6284,8 @@ func TestIsValidFrequency(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.freq, func(t *testing.T) {
-			if got := isValidFrequency(tt.freq); got != tt.valid {
-				t.Errorf("isValidFrequency(%q) = %v, want %v", tt.freq, got, tt.valid)
+			if got := cdc.IsValidFrequency(tt.freq); got != tt.valid {
+				t.Errorf("cdc.IsValidFrequency(%q) = %v, want %v", tt.freq, got, tt.valid)
 			}
 		})
 	}
@@ -6312,8 +6312,8 @@ func TestTransformIntoHours(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			if got := transformIntoHours(tt.input); got != tt.want {
-				t.Errorf("transformIntoHours(%q) = %d, want %d", tt.input, got, tt.want)
+			if got := cdc.FrequencyHours(tt.input); got != tt.want {
+				t.Errorf("cdc.FrequencyHours(%q) = %d, want %d", tt.input, got, tt.want)
 			}
 		})
 	}
