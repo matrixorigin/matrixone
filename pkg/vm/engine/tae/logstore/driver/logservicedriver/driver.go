@@ -92,7 +92,6 @@ type LogServiceDriver struct {
 	postCommitQueue chan any
 	truncateQueue   sm.Queue
 
-	ctx    context.Context
 	cancel context.CancelFunc
 	closeC chan struct{}
 
@@ -136,7 +135,7 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	close(d.pendingZero)
 
 	d.config = *cfg
-	d.ctx, d.cancel = context.WithCancel(context.Background())
+	_, d.cancel = context.WithCancel(context.Background())
 	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
 	d.commitLoop.Start()
 	d.waitCommitLoop = sm.NewLoop(d.commitWaitQueue, nil, d.onWaitCommitted, 10000)
