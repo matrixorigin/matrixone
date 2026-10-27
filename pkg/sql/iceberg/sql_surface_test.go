@@ -24,6 +24,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
+func TestIsBuiltinProcedure(t *testing.T) {
+	if IsBuiltinProcedure(nil) || IsBuiltinProcedure(&tree.CallStmt{}) {
+		t.Fatal("nil call or name must not be recognized")
+	}
+	for _, tc := range []struct {
+		sql  string
+		want bool
+	}{
+		{"call iceberg_run('a')", true},
+		{"call ICEBERG_run('a')", true},
+		{"call other_run('a')", false},
+		{"call app.iceberg_run('a')", false},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), tc.sql, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stmt.Free()
+			call, ok := stmt.(*tree.CallStmt)
+			if !ok {
+				t.Fatalf("expected CALL, got %T", stmt)
+			}
+			if got := IsBuiltinProcedure(call); got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuiltinProcedureArgs(t *testing.T) {
 	for _, tc := range []struct {
 		name, sql, target, options, wantErr string

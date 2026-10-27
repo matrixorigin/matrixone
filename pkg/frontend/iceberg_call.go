@@ -27,11 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/iceberg/maintenance"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-const icebergBuiltinProcedurePrefix = "iceberg_"
 const icebergRegisterAccessProcedure = "iceberg_register_access"
 const icebergUnregisterAccessProcedure = "iceberg_unregister_access"
 const IcebergMaintenanceCallExecutorRuntimeKey = "iceberg.maintenance.call.executor"
@@ -84,7 +82,7 @@ func (e IcebergMaintenanceProcedureExecutor) ExecuteParsedIcebergMaintenanceCall
 }
 
 func parseIcebergBuiltinCall(ctx context.Context, call *tree.CallStmt) (IcebergBuiltinProcedureCall, bool, error) {
-	if !isIcebergBuiltinProcedure(call) {
+	if !sqliceberg.IsBuiltinProcedure(call) {
 		return IcebergBuiltinProcedureCall{}, false, nil
 	}
 	name, target, options, err := sqliceberg.BuiltinProcedureArgs(ctx, call)
@@ -519,14 +517,6 @@ func icebergMaintenanceCallExecutorFromRuntimeExact(service string) (IcebergMain
 	}
 	executor, ok := value.(IcebergMaintenanceCallExecutor)
 	return executor, ok
-}
-
-func isIcebergBuiltinProcedure(call *tree.CallStmt) bool {
-	if call == nil || call.Name == nil || !call.Name.HasNoNameQualifier() {
-		return false
-	}
-	name := strings.ToLower(strings.TrimSpace(tree.String(call.Name, dialect.MYSQL)))
-	return strings.HasPrefix(name, icebergBuiltinProcedurePrefix)
 }
 
 func icebergMaintenanceProcedureResultSet(operation maintenance.Operation, result maintenance.Result) *MysqlResultSet {

@@ -16,25 +16,13 @@ package plan
 
 import (
 	"context"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/maintenance"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
-
-const icebergBuiltinCallPrefix = "iceberg_"
-
-func isIcebergBuiltinCall(stmt *tree.CallStmt) bool {
-	if stmt == nil || stmt.Name == nil || !stmt.Name.HasNoNameQualifier() {
-		return false
-	}
-	name := strings.ToLower(strings.TrimSpace(tree.String(stmt.Name, dialect.MYSQL)))
-	return strings.HasPrefix(name, icebergBuiltinCallPrefix)
-}
 
 func buildIcebergBuiltinCall(stmt *tree.CallStmt, ctx CompilerContext) (*Plan, error) {
 	call, err := parseIcebergBuiltinCall(ctx.GetContext(), stmt)
@@ -57,7 +45,7 @@ type icebergBuiltinCall struct {
 }
 
 func parseIcebergBuiltinCall(ctx context.Context, stmt *tree.CallStmt) (icebergBuiltinCall, error) {
-	if !isIcebergBuiltinCall(stmt) {
+	if !sqliceberg.IsBuiltinProcedure(stmt) {
 		return icebergBuiltinCall{}, moerr.NewInvalidInput(ctx, "not an Iceberg builtin procedure call")
 	}
 	name, target, options, err := sqliceberg.BuiltinProcedureArgs(ctx, stmt)

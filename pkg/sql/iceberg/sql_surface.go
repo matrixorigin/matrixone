@@ -35,6 +35,15 @@ const (
 	optionWriteMode  = "write_mode"
 )
 
+// IsBuiltinProcedure identifies an unqualified Iceberg builtin CALL.
+func IsBuiltinProcedure(call *tree.CallStmt) bool {
+	if call == nil || call.Name == nil || !call.Name.HasNoNameQualifier() {
+		return false
+	}
+	name := strings.ToLower(strings.TrimSpace(tree.String(call.Name, dialect.MYSQL)))
+	return strings.HasPrefix(name, "iceberg_")
+}
+
 // BuiltinProcedureArgs validates and extracts the common Iceberg CALL arguments.
 // The caller is responsible for checking that call is a recognized builtin.
 func BuiltinProcedureArgs(ctx context.Context, call *tree.CallStmt) (name, target, options string, err error) {
