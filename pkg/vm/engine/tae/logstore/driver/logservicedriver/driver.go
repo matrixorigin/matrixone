@@ -92,7 +92,6 @@ type LogServiceDriver struct {
 	postCommitQueue chan any
 	truncateQueue   sm.Queue
 
-	cancel context.CancelFunc
 	closeC chan struct{}
 
 	workers   *ants.Pool
@@ -135,7 +134,6 @@ func NewLogServiceDriver(cfg *Config) *LogServiceDriver {
 	close(d.pendingZero)
 
 	d.config = *cfg
-	_, d.cancel = context.WithCancel(context.Background())
 	d.commitLoop = sm.NewSafeQueue(10000, 10000, d.onCommitIntents)
 	d.commitLoop.Start()
 	d.waitCommitLoop = sm.NewLoop(d.commitWaitQueue, nil, d.onWaitCommitted, 10000)
@@ -229,7 +227,6 @@ func (d *LogServiceDriver) Close() error {
 		d.waitCommitLoop.Stop()
 		d.truncateQueue.Stop()
 		d.clientPool.Close()
-		d.cancel()
 		close(d.commitWaitQueue)
 		close(d.postCommitQueue)
 	})
