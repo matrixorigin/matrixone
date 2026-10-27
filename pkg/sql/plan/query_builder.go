@@ -2296,7 +2296,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			}
 
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: groupingFlagOutputType(expr.Typ, node.GroupingFlag, int32(idx)),
+				Typ: groupingFlagOutputType(
+					expr.Typ, node.GroupingFlag, int32(idx),
+					IsSortRollupOption(node.ExtraOptions)),
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
@@ -2352,7 +2354,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				remapping.addColRef(globalRef)
 
 				node.ProjectList = append(node.ProjectList, &plan.Expr{
-					Typ: groupingFlagOutputType(node.GroupBy[0].Typ, node.GroupingFlag, 0),
+					Typ: groupingFlagOutputType(
+						node.GroupBy[0].Typ, node.GroupingFlag, 0,
+						IsSortRollupOption(node.ExtraOptions)),
 					Expr: &plan.Expr_Col{
 						Col: &plan.ColRef{
 							RelPos: -1,
@@ -6346,6 +6350,58 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 			selectClause = &nextSelectClause
 		}
+		sortRollupCandidate := isRoot &&
+			selectClause.GroupBy != nil &&
+			selectClause.GroupBy.Rollup &&
+			// DISTINCT must stay on the legacy grouping-set path until its
+			// pre-dedup normalization converts grouping sentinels to SQL NULL.
+			// Sort rollup preserves the grouping bitmap for GROUPING(), so
+			// sending it directly to DISTINCT would keep source NULL and
+			// rollup NULL as different hash keys.
+			!selectClause.Distinct &&
+			// SAMPLE owns a separate node, so it cannot produce the additional
+			// prefixes after sort rollup suppresses grouping-set expansion.
+			!selectClauseHasSampleExpr(selectClause) &&
+			builder.sortRollupMode() != 2 &&
+			len(selectClause.GroupBy.GroupByExprsList) == 1 &&
+			(sortRollupSimpleBaseTableSource(selectClause.From.Tables) ||
+				sortRollupOrderedDerivedSource(
+					selectClause.From.Tables,
+					selectClause.GroupBy.GroupByExprsList[0])) &&
+			sortRollupGroupingListEligible(
+				selectClause.GroupBy.GroupByExprsList[0], selectClause.Exprs) &&
+			sortRollupAggregateOrderEligible(
+				selectClause.Exprs,
+				sortRollupAdditionalExprs(selectClause.Having, astOrderBy)...) &&
+			len(selectClause.Windows) == 0 &&
+			!sortRollupSelectHasWindow(selectClause, astOrderBy)
+		useSortRollup := false
+		if sortRollupCandidate {
+			if builder.sortRollupMode() == 1 {
+				// Forced sort still has to pass the semantic/type probe, but
+				// does not pay for a statistics read or WHERE probe.
+				useSortRollup = builder.sortRollupGroupingTypesEligible(
+					ctx,
+					selectClause.From.Tables,
+					selectClause.GroupBy.GroupByExprsList[0],
+					isRoot)
+			} else {
+				// The automatic path performs the type and statistics probe once;
+				// an unsupported type or unknown statistics falls back to hash.
+				useSortRollup = builder.chooseSortRollup(
+					ctx,
+					selectClause.From.Tables,
+					selectClause.Where,
+					selectClause.GroupBy.GroupByExprsList[0],
+					selectClause.Exprs,
+					selectClause.Having,
+					astOrderBy,
+					isRoot)
+			}
+		}
+		if useSortRollup {
+			ctx.sortRollup = true
+		}
 		if selectClause.GroupBy != nil {
 			groupByExprsList := selectClause.GroupBy.GroupByExprsList
 			if selectClause.GroupBy.Rollup {
@@ -6377,7 +6433,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 			}
 			selectClause.GroupBy.GroupByExprsList = groupByExprsList
-			if len(groupByExprsList) > 1 && !selectClause.GroupBy.Apart {
+			if len(groupByExprsList) > 1 && !selectClause.GroupBy.Apart && !useSortRollup {
 				if rewrittenSelect, hasWindow, rewriteErr := rewriteRollupWindowSelectWithHeadingProvenance(ctx, selectClause, astOrderBy, astLimit, astRankOption); hasWindow {
 					if rewriteErr != nil {
 						return 0, rewriteErr
@@ -6846,6 +6902,24 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	return
+}
+
+func sortRollupSelectHasWindow(selectClause *tree.SelectClause, orderBy tree.OrderBy) bool {
+	if selectClause == nil {
+		return false
+	}
+	for _, expr := range selectClause.Exprs {
+		if rollupWindowExprContainsWindow(expr.Expr) {
+			return true
+		}
+	}
+	for _, order := range orderBy {
+		if order != nil && rollupWindowExprContainsWindow(order.Expr) {
+			return true
+		}
+	}
+	return selectClause.Having != nil &&
+		rollupWindowExprContainsWindow(selectClause.Having.Expr)
 }
 
 // seedNumericTableProjectionTypes pushes numeric assignment targets through a
@@ -11348,6 +11422,46 @@ func (builder *QueryBuilder) appendAggNode(
 		}
 	}
 
+	var sortRollupOrder []*plan.OrderBySpec
+	orderedRollupInput := false
+	if ctx.sortRollup {
+		// Sort by the physical equality keys when padding-aware grouping added
+		// hidden keys; otherwise the visible grouping expressions are enough.
+		sortExprs := groupBy
+		if len(groupByHashKey) > 0 {
+			sortExprs = make([]*plan.Expr, 0, len(groupByHashKey))
+			for _, idx := range groupByHashKey {
+				sortExprs = append(sortExprs, groupBy[idx])
+			}
+		}
+		// Reuse order only after the child plan proves a complete global SORT
+		// (or a transparent FILTER over one). An AST-level ORDER BY is useful for
+		// cost estimation, but it must not by itself let this node skip sorting.
+		// Never reuse the property when hidden pad-space equality keys were added:
+		// the visible AST order does not prove that physical key order.
+		orderedRollupInput = len(groupByHashKey) == 0 &&
+			builder.sortRollupNodeInputOrdered(nodeID, sortExprs)
+		if !orderedRollupInput {
+			sortRollupOrder = make([]*plan.OrderBySpec, len(sortExprs))
+			for i, expr := range sortExprs {
+				sortRollupOrder[i] = &plan.OrderBySpec{
+					Expr: DeepCopyExpr(expr),
+					Flag: plan.OrderBySpec_INTERNAL | plan.OrderBySpec_ASC | plan.OrderBySpec_NULLS_FIRST,
+				}
+			}
+			nodeID = builder.appendNode(&plan.Node{
+				NodeType: plan.Node_SORT,
+				Children: []int32{nodeID},
+				OrderBy:  sortRollupOrder,
+				SpillMem: builder.sortSpillMem,
+			}, ctx)
+		}
+	}
+
+	extraOptions := ""
+	if ctx.sortRollup {
+		extraOptions = EncodeSortRollupOption()
+	}
 	nodeID = builder.appendNode(&plan.Node{
 		NodeType:       plan.Node_AGG,
 		Children:       []int32{nodeID},
@@ -11357,6 +11471,7 @@ func (builder *QueryBuilder) appendAggNode(
 		AggList:        ctx.aggregates,
 		BindingTags:    []int32{ctx.groupTag, ctx.aggregateTag},
 		SpillMem:       builder.aggSpillMem,
+		ExtraOptions:   extraOptions,
 	}, ctx)
 
 	// Plan-level rewrite: count(not_null_col) -> starcount (ObjName + Obj) so compile uses countStarExec.
@@ -14578,6 +14693,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId = builder.buildTableStats(tbl, ctx, exprs, nil)
 		case "load_file_chunks":
 			nodeId = builder.buildLoadFileChunks(tbl, ctx, exprs, nil)
+		case indexFileChunksFuncName:
+			nodeId, err = builder.buildIndexFileChunks(tbl, ctx, exprs, nil)
 		default:
 			err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 		}
