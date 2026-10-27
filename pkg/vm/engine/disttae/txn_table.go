@@ -2913,6 +2913,58 @@ func pkCommitTSMatchedInRange(
 	return false, true
 }
 
+// pkCheckZoneMapUsable rejects absent or incompatible bounds. AnyIn returns
+// false for an uninitialized ZM; that is not proof that a PK is absent.
+func pkCheckZoneMapUsable(zm objectio.ZoneMap, typ *types.Type) bool {
+	return len(zm) == index.ZMSize && zm.IsInited() &&
+		zm.GetType() == typ.Oid && zm.GetScale() == typ.Scale
+}
+
+// collectPKCheckObjects only inspects snapshot metadata. Complete this phase
+// before any file reads so a large unknown working set still bails out cheaply.
+// keys is sorted and NULL-free. A fake PK's sort-key ZM may describe another
+// column, so only real PK stats can prove an object irrelevant.
+func collectPKCheckObjects(
+	ctx context.Context,
+	p *logtailreplay.PartitionState,
+	created, deleted map[objectio.ObjectNameShort]struct{},
+	keys *vector.Vector,
+	isFakePK bool,
+) ([]objectio.ObjectEntry, bool, error) {
+	candidates := make([]objectio.ObjectEntry, 0, maxChangedObjectsForIO)
+	for i, objects := range []map[objectio.ObjectNameShort]struct{}{created, deleted} {
+		for name := range objects {
+			if err := ctx.Err(); err != nil {
+				return nil, false, err
+			}
+			if i == 1 {
+				if _, counted := created[name]; counted {
+					continue
+				}
+			}
+			obj, ok := p.GetObject(name)
+			if !ok {
+				return nil, true, nil
+			}
+			if !isFakePK {
+				zm := obj.SortKeyZoneMap()
+				if pkCheckZoneMapUsable(zm, keys.GetType()) && !zm.AnyIn(keys) {
+					continue
+				}
+			}
+			// Count both created and deleted objects that can require I/O. Do
+			// not let unrelated, metadata-proven negatives force a SQL retry.
+			if pkCheckBailoutOnChangedObjects(len(candidates) + 1) {
+				return nil, true, nil
+			}
+			candidates = append(candidates, obj)
+		}
+	}
+	return candidates, false, ctx.Err()
+}
+
+// PKPersistedBetween may sort keys in place; the public PK-check entry point
+// supplies an owned, NULL-free copy of the caller's vector.
 func (tbl *txnTable) PKPersistedBetween(
 	ctx context.Context,
 	p *logtailreplay.PartitionState,
@@ -2967,6 +3019,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	}
 	fs := tbl.getTxn().engine.fs
 	primaryIdx := tbl.primaryIdx
+	// AnyIn/SubVecIn binary-search NULL-free vectors. Establish ordering
+	// before even the snapshot-only pruning, not just before row filtering.
+	keys.InplaceSort()
 
 	var (
 		meta objectio.ObjectDataMeta
@@ -2980,92 +3035,91 @@ func (tbl *txnTable) PKPersistedBetween(
 	// from.Next(), weakening the PK-conflict check at that exact boundary.
 	delObjs, cObjs = p.GetChangedObjsBetween(from, types.MaxTs())
 
-	if pkCheckBailoutOnChangedObjects(len(cObjs)) {
-		reason = "changed_objects_bailout"
+	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
+	objects, unknown, err := collectPKCheckObjects(ctx, p, cObjs, delObjs, keys, isFakePK)
+	if err != nil {
+		return false, err
+	}
+	if unknown {
+		reason = "data_objects_bailout"
 		return true, nil
 	}
 
-	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
-	if err := ForeachCommittedObjects(cObjs, delObjs, p,
-		func(obj objectio.ObjectEntry) (err2 error) {
-			if err2 = ctx.Err(); err2 != nil {
-				return
-			}
-			var zmCkecked bool
-			if !isFakePK {
-				// if the object info contains a pk zonemap, fast-check with the zonemap
-				if !obj.ZMIsEmpty() {
-					if !obj.SortKeyZoneMap().AnyIn(keys) {
-						return
-					}
-					zmCkecked = true
-				}
-			}
+	checkObject := func(obj objectio.ObjectEntry) (err2 error) {
+		if err2 = ctx.Err(); err2 != nil {
+			return
+		}
+		var objMeta objectio.ObjectMeta
+		location := obj.Location()
 
-			var objMeta objectio.ObjectMeta
-			location := obj.Location()
+		// load object metadata
+		if objMeta, err2 = objectio.FastLoadObjectMeta(
+			ctx, &location, false, fs,
+		); err2 != nil {
+			return
+		}
 
-			// load object metadata
-			if objMeta, err2 = objectio.FastLoadObjectMeta(
-				ctx, &location, false, fs,
+		// reset bloom filter to nil for each object
+		meta = objMeta.MustDataMeta()
+
+		zm := meta.MustGetColumn(uint16(primaryIdx)).ZoneMap()
+		if pkCheckZoneMapUsable(zm, keys.GetType()) && !zm.AnyIn(keys) {
+			return
+		}
+
+		bf = nil
+		//fake pk has no bf
+		if !isFakePK {
+			if bf, err2 = objectio.LoadBFWithMeta(
+				ctx, meta, location, fs,
 			); err2 != nil {
 				return
 			}
+		}
 
-			// reset bloom filter to nil for each object
-			meta = objMeta.MustDataMeta()
-
-			// check whether the object is skipped by zone map
-			// If object zone map doesn't contains the pk value, we need to check bloom filter
-			if !zmCkecked {
-				if !meta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
-					return
+		objectio.ForeachBlkInObjStatsList(false, meta,
+			func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
+				var blockZM objectio.ZoneMap
+				if !blkMeta.IsEmpty() {
+					blockZM = blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap()
 				}
-			}
-
-			bf = nil
-			//fake pk has no bf
-			if !isFakePK {
-				if bf, err2 = objectio.LoadBFWithMeta(
-					ctx, meta, location, fs,
-				); err2 != nil {
-					return
+				usableZM := pkCheckZoneMapUsable(blockZM, keys.GetType())
+				if usableZM && !blockZM.AnyIn(keys) {
+					return true
 				}
-			}
-
-			objectio.ForeachBlkInObjStatsList(false, meta,
-				func(blk objectio.BlockInfo, blkMeta objectio.BlockObject) bool {
-					if !blkMeta.IsEmpty() &&
-						!blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().AnyIn(keys) {
+				//fake pk has no bf
+				if !isFakePK {
+					blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
+					blkBfIdx := index.NewEmptyBloomFilter()
+					if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
+						return false
+					}
+					var exist bool
+					lowerBound, upperBound := 0, keys.Length()
+					if usableZM {
+						lowerBound, upperBound = blockZM.SubVecIn(keys)
+					}
+					if exist = blkBfIdx.MayContainsAny(keys, lowerBound, upperBound); !exist {
 						return true
 					}
-					//fake pk has no bf
-					if !isFakePK {
-						blkBf := bf.GetBloomFilter(uint32(blk.BlockID.Sequence()))
-						blkBfIdx := index.NewEmptyBloomFilter()
-						if err2 = index.DecodeBloomFilter(blkBfIdx, blkBf); err2 != nil {
-							return false
-						}
-						var exist bool
-						lowerBound, upperBound := blkMeta.MustGetColumn(uint16(primaryIdx)).ZoneMap().SubVecIn(keys)
-						if exist = blkBfIdx.MayContainsAny(keys, lowerBound, upperBound); !exist {
-							return true
-						}
-					}
+				}
 
-					blk.SetFlagByObjStats(&obj.ObjectStats)
+				blk.SetFlagByObjStats(&obj.ObjectStats)
 
-					candidateBlks[blk.BlockID] = &blk
-					return true
-				}, obj.ObjectStats)
+				candidateBlks[blk.BlockID] = &blk
+				return true
+			}, obj.ObjectStats)
 
-			return
-		}); err != nil {
-		reason = "data_object_check_error"
-		return true, err
+		return
+	}
+	// At most 64 objects can reach metadata/BF I/O, including deleted objects.
+	for _, obj := range objects {
+		if err := checkObject(obj); err != nil {
+			reason = "data_object_check_error"
+			return true, err
+		}
 	}
 
-	keys.InplaceSort()
 	bytes, _ := keys.MarshalBinary()
 	colExpr := readutil.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
 	inExpr := plan2.MakeInExpr(

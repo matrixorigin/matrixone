@@ -37,6 +37,11 @@ import (
 // checkpoint replay, or concurrent DDL is needed to reach the persisted boundary.
 func newPersistedPKCheckTable(t *testing.T, oid types.T, tombstone bool) (*txnTable, *Engine, fileservice.FileService, *batch.Batch) {
 	t.Helper()
+	return newPersistedPKCheckTableBlocks(t, oid, tombstone, 1, false)
+}
+
+func newPersistedPKCheckTableBlocks(t *testing.T, oid types.T, tombstone bool, blocks int, deleted bool) (*txnTable, *Engine, fileservice.FileService, *batch.Batch) {
+	t.Helper()
 	tbl, eng := newPrimaryKeyCheckTableForTest(t)
 	proc := tbl.proc.Load()
 	mp := proc.Mp()
@@ -67,6 +72,10 @@ func newPersistedPKCheckTable(t *testing.T, oid types.T, tombstone bool) (*txnTa
 		require.NoError(t, vector.AppendFixed(data.Vecs[2], false, false, mp))
 		writer = ioutil.ConstructWriter(0, []uint16{0, objectio.SEQNUM_COMMITTS, objectio.SEQNUM_ABORT}, 0, true, false, fs)
 	}
+	if deleted {
+		// A sealed appendable object can predate the row commits it retains.
+		writer.SetAppendable()
+	}
 	if oid == types.T_varchar {
 		require.NoError(t, vector.AppendBytes(pk, []byte("target"), false, mp))
 	} else {
@@ -74,17 +83,23 @@ func newPersistedPKCheckTable(t *testing.T, oid types.T, tombstone bool) (*txnTa
 	}
 	require.NoError(t, vector.AppendFixed(ts, types.BuildTS(20, 0), false, mp))
 	data.SetRowCount(1)
-	_, err = writer.WriteBatch(data)
-	require.NoError(t, err)
+	for range blocks {
+		_, err = writer.WriteBatch(data)
+		require.NoError(t, err)
+	}
 	_, _, err = writer.Sync(proc.Ctx)
 	require.NoError(t, err)
 	part := eng.GetOrCreateLatestPart(proc.Ctx, uint64(tbl.accountId), tbl.db.databaseId, tbl.tableId)
 	state, done := part.MutateState()
+	defer done()
 	state.UpdateDuration(types.TS{}, types.MaxTs())
-	err = state.HandleObjectEntry(proc.Ctx, fs, objectio.ObjectEntry{
+	entry := objectio.ObjectEntry{
 		ObjectStats: writer.GetObjectStats(), CreateTime: types.BuildTS(40, 0),
-	}, tombstone)
-	done()
+	}
+	if deleted {
+		entry.CreateTime, entry.DeleteTime = types.BuildTS(1, 0), types.BuildTS(40, 0)
+	}
+	err = state.HandleObjectEntry(proc.Ctx, fs, entry, tombstone)
 	require.NoError(t, err)
 	eng.pClient.SetSubscribeState(tbl.db.databaseId, tbl.tableId, Subscribed)
 	keys := batch.NewWithSize(1)
