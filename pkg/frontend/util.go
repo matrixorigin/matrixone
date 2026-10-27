@@ -1496,7 +1496,7 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binE
 	}
 	// Only scan the saved SQL when its diagnostic can be retained. Redact
 	// before clipping so a later privacy marker cannot expose an earlier prefix.
-	preparedSQL := redactStatementTextForLogging(prepared.PrepareStmt, strings.TrimSpace(prepared.Sql))
+	preparedSQL := redactStatementTextForLogging(prepared.PrepareStmt, strings.TrimSpace(prepared.Sql), prepared.schedulingSQLMode)
 	if !appendPart(preparedSQL) || !appendPart(" ; ") {
 		return finish()
 	}
