@@ -428,6 +428,43 @@ select id, s, s is null as isn from null_term_n_back;
 ➤ id[4,32,0]  ¦  s[12,20,0]  ¦  isn[-6,8,0]  𝄀
 1  ¦  null  ¦  1
 drop table null_term_n_back;
+select a, b from (select null as a, 12 as b) t
+into outfile 'stage://outfile_fields_lines_stage/null_term_nn_first.csv'
+fields terminated by 'NN' enclosed by '"' escaped by '#' header 'false';
+not supported: select into outfile (csv): a NULL value cannot round-trip with this CSV framing: the emitted \N marker breaks LOAD's field scan
+select count(*) from stage_list('stage://outfile_fields_lines_stage/null_term_nn_first.csv');
+➤ count(*)[-5,64,0]  𝄀
+0
+select a, b, c from (select 1 as a, null as b, 12 as c) t
+into outfile 'stage://outfile_fields_lines_stage/null_term_nn_middle.csv'
+fields terminated by 'NN' enclosed by '"' escaped by '#' header 'false';
+not supported: select into outfile (csv): a NULL value cannot round-trip with this CSV framing: the emitted \N marker breaks LOAD's field scan
+select count(*) from stage_list('stage://outfile_fields_lines_stage/null_term_nn_middle.csv');
+➤ count(*)[-5,64,0]  𝄀
+0
+select a, b, c from (select 1 as a, 12 as b, null as c) t
+into outfile 'stage://outfile_fields_lines_stage/null_term_nn_last.csv'
+fields terminated by 'NN' enclosed by '"' escaped by '#' header 'false';
+create table null_term_nn_back (a int, b int, c int);
+load data infile 'stage://outfile_fields_lines_stage/null_term_nn_last.csv' into table null_term_nn_back
+fields terminated by 'NN' enclosed by '"' escaped by '#';
+select a, b, c, c is null as isn from null_term_nn_back;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  ¦  isn[-6,8,0]  𝄀
+1  ¦  12  ¦  null  ¦  1
+truncate table null_term_nn_back;
+select a, b, c from (select null as a, 12 as b, 23 as c union all select 12, null, 23 union all select 12, 23, null) t
+order by coalesce(a, 0), coalesce(b, 0), coalesce(c, 0)
+into outfile 'stage://outfile_fields_lines_stage/null_term_nn_ok.csv'
+fields terminated by 'NN' enclosed by '"' escaped by '\\' header 'false';
+load data infile 'stage://outfile_fields_lines_stage/null_term_nn_ok.csv' into table null_term_nn_back
+fields terminated by 'NN' enclosed by '"' escaped by '\\';
+select a, b, c, a is null as na, b is null as nb, c is null as nc from null_term_nn_back
+order by coalesce(a, 0), coalesce(b, 0), coalesce(c, 0);
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  ¦  na[-6,8,0]  ¦  nb[-6,8,0]  ¦  nc[-6,8,0]  𝄀
+null  ¦  12  ¦  23  ¦  1  ¦  0  ¦  0  𝄀
+12  ¦  null  ¦  23  ¦  0  ¦  1  ¦  0  𝄀
+12  ¦  23  ¦  null  ¦  0  ¦  0  ¦  1
+drop table null_term_nn_back;
 remove files from stage if exists 'stage://outfile_fields_lines_stage/*.csv';
 select count(*) from stage_list('stage://outfile_fields_lines_stage/');
 ➤ count(*)[-5,64,0]  𝄀

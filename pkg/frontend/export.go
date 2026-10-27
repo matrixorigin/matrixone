@@ -401,16 +401,18 @@ func (ec *ExportConfig) acquireEmissionSimulator() *csvEmissionSimulator {
 	return sim
 }
 
-// csvFieldEmissionParses replays one fully emitted CSV field through LOAD's
-// parser with the configured framing and requires it to read back as exactly
-// one field and one record — the ground-truth check for configurations where
+// csvFieldEmissionParses replays a fully emitted CSV field and its actual
+// following boundary through LOAD's parser. A non-final field also includes an
+// empty following-field witness: delimiters can overlap the field's suffix
+// even when they do not occur inside the field alone. Require exactly the
+// expected field(s) and one record — the ground-truth check for configurations where
 // the writer cannot statically tell whether the encoded bytes survive
 // csvparser's enclosure/escape scan (its behavior differs between backslash
 // and other enclosure==escape bytes, per generated payload letter). With
 // wantNull the field must read back as SQL NULL; otherwise it must read
 // back byte-identical to want. A simulator that errors mid-scan is dropped
 // rather than returned to the pool.
-func (ec *ExportConfig) csvFieldEmissionParses(field, recordTerm, want []byte, wantNull bool) bool {
+func (ec *ExportConfig) csvFieldEmissionParses(field, boundary []byte, last bool, want []byte, wantNull bool) bool {
 	sim := ec.acquireEmissionSimulator()
 	if sim.err != nil {
 		// Defensive: validateCSVFraming rejects the operator-visible
@@ -420,16 +422,21 @@ func (ec *ExportConfig) csvFieldEmissionParses(field, recordTerm, want []byte, w
 		return false
 	}
 	sim.scratch = append(sim.scratch[:0], field...)
-	sim.scratch = append(sim.scratch, recordTerm...)
+	sim.scratch = append(sim.scratch, boundary...)
+	fields := 1
+	if !last {
+		sim.scratch = append(sim.scratch, ec.csvNormalizedRecordTerm()...)
+		fields = 2
+	}
 	sim.rd.Reset(sim.scratch)
 	sim.parser.Reset(&sim.rd)
 	sim.row = sim.row[:0]
 	row, err := sim.parser.Read(sim.row)
-	if err != nil || len(row) != 1 {
+	if err != nil || len(row) != fields {
 		return false
 	}
 	sim.row = row
-	if _, err = sim.parser.Read(sim.row[:0]); err != io.EOF {
+	if !last && (row[1].IsNull || row[1].Val != "") {
 		return false
 	}
 	if wantNull {
@@ -437,6 +444,9 @@ func (ec *ExportConfig) csvFieldEmissionParses(field, recordTerm, want []byte, w
 			return false
 		}
 	} else if row[0].IsNull || row[0].Val != string(want) {
+		return false
+	}
+	if _, err = sim.parser.Read(sim.row[:0]); err != io.EOF {
 		return false
 	}
 	ec.simPool.Put(sim)
@@ -520,7 +530,7 @@ var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byt
 		if flag {
 			emitted = append(append([]byte{enclosed}, encoded...), enclosed)
 		}
-		if !oq.csvFieldEmissionParses(emitted, oq.csvNormalizedRecordTerm(), tmp, false) {
+		if !oq.csvFieldEmissionParses(emitted, symbol, last, tmp, false) {
 			return moerr.NewNotSupportedf(oq.ctx,
 				"select into outfile (csv): a value cannot round-trip when ENCLOSED BY and ESCAPED BY are the same character '%c': its encoded form breaks LOAD's field scan", enclosed)
 		}
@@ -531,7 +541,7 @@ var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byt
 // NULL bypasses value escaping, but still needs enclosure when the escape
 // prefix would otherwise become a separator or opening enclosure. Keep this
 // check off the ordinary non-NULL raw writer path.
-func formatOutputNull(oq *ExportConfig, symbol []byte, enclosed byte, buffer *bytes.Buffer) error {
+func formatOutputNull(oq *ExportConfig, symbol []byte, enclosed byte, last bool, buffer *bytes.Buffer) error {
 	// The NULL marker always ends in 'N'. With FIELDS ESCAPED BY 'N' the
 	// reader consumes the byte after the marker (separator or terminator)
 	// as escape content, merging fields/records — no safe encoding exists,
@@ -559,7 +569,7 @@ func formatOutputNull(oq *ExportConfig, symbol []byte, enclosed byte, buffer *by
 	if flag {
 		emitted = append(append([]byte{enclosed}, marker...), enclosed)
 	}
-	if !oq.csvFieldEmissionParses(emitted, oq.csvNormalizedRecordTerm(), nil, true) {
+	if !oq.csvFieldEmissionParses(emitted, symbol, last, nil, true) {
 		if enclosed != 0 && (enclosed == '\\' || enclosed == 'N' || enclosed == oq.escapeChar()) {
 			return moerr.NewNotSupportedf(oq.ctx,
 				"select into outfile (csv): a NULL value cannot round-trip with ENCLOSED BY '%c': the emitted \\N marker breaks LOAD's field scan", enclosed)
@@ -863,7 +873,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 		for j, vec := range bat.Vecs {
 			if vec.GetNulls().Contains(uint64(i)) {
 				if fmtErr == nil {
-					fmtErr = formatOutputNull(ep, symbol[j], closeby, buffer)
+					fmtErr = formatOutputNull(ep, symbol[j], closeby, j == len(bat.Vecs)-1, buffer)
 				}
 				continue
 			}
@@ -1322,7 +1332,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			return err
 		} else if isNil {
 			//NULL is output as \N
-			if err = formatOutputNull(oq, symbol[i], closeby, buffer); err != nil {
+			if err = formatOutputNull(oq, symbol[i], closeby, i == oq.mrs.GetColumnCount()-1, buffer); err != nil {
 				return err
 			}
 			continue

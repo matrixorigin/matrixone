@@ -477,7 +477,7 @@ func TestOutfileExactBackslashNRejectedWithCustomEscape(t *testing.T) {
 		// block it; LOAD reads it back as SQL NULL as intended.
 		ep := newGuardCfg('#', 0)
 		var buf bytes.Buffer
-		require.NoError(t, formatOutputNull(ep, []byte("\n"), 0, &buf))
+		require.NoError(t, formatOutputNull(ep, []byte("\n"), 0, true, &buf))
 		require.Equal(t, "\\N\n", buf.String())
 		parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
 			FieldsTerminatedBy: ",", FieldsEscapedBy: "#", LinesTerminatedBy: "\n",
@@ -921,7 +921,7 @@ func TestOutfileTranslatedEscapeByteValueRejected(t *testing.T) {
 		// uppercase-N escape collides with it (covered separately).
 		ep := newGuardCfg('n', 0)
 		var buf bytes.Buffer
-		require.NoError(t, formatOutputNull(ep, []byte("\n"), 0, &buf))
+		require.NoError(t, formatOutputNull(ep, []byte("\n"), 0, true, &buf))
 		require.Equal(t, "\\N\n", buf.String())
 	})
 
@@ -955,7 +955,7 @@ func TestOutfileNullWithEscapeNRejected(t *testing.T) {
 
 	t.Run("NULL write rejected", func(t *testing.T) {
 		var buf bytes.Buffer
-		require.ErrorContains(t, formatOutputNull(newGuardCfg('N', 0), []byte("\n"), 0, &buf), wantErr)
+		require.ErrorContains(t, formatOutputNull(newGuardCfg('N', 0), []byte("\n"), 0, true, &buf), wantErr)
 	})
 
 	t.Run("batch writer aborts on a NULL row", func(t *testing.T) {
@@ -1358,7 +1358,7 @@ func TestOutfileNullMarkerEnclosureCollisionSimulation(t *testing.T) {
 		} {
 			t.Run(c.name, func(t *testing.T) {
 				var buf bytes.Buffer
-				require.ErrorContains(t, formatOutputNull(newGuardCfg(c.escape, c.enclose), []byte("\n"), c.enclose, &buf),
+				require.ErrorContains(t, formatOutputNull(newGuardCfg(c.escape, c.enclose), []byte("\n"), c.enclose, true, &buf),
 					"a NULL value cannot round-trip with ENCLOSED BY")
 			})
 		}
@@ -1381,7 +1381,7 @@ func TestOutfileNullMarkerEnclosureCollisionSimulation(t *testing.T) {
 			t.Run(c.name, func(t *testing.T) {
 				ep := newGuardCfg(c.escape, c.enclose)
 				var buf bytes.Buffer
-				require.NoError(t, formatOutputNull(ep, []byte("\n"), c.enclose, &buf))
+				require.NoError(t, formatOutputNull(ep, []byte("\n"), c.enclose, true, &buf))
 				require.Equal(t, c.emitted, buf.String())
 				parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
 					FieldsTerminatedBy: ",", FieldsEscapedBy: string(c.escape), FieldsEnclosedBy: string(c.enclose),
@@ -1512,9 +1512,9 @@ func TestOutfileEscapeEqualsEnclosureSimulation(t *testing.T) {
 		ep.ctx = context.Background()
 		require.Equal(t, "\n", string(ep.csvNormalizedRecordTerm()))
 		// The NULL variant accepts a parsable marker.
-		require.True(t, ep.csvFieldEmissionParses([]byte("#\\N#"), ep.csvNormalizedRecordTerm(), nil, true))
+		require.True(t, ep.csvFieldEmissionParses([]byte("#\\N#"), ep.csvNormalizedRecordTerm(), true, nil, true))
 		// Trailing records fail the exactly-one-record requirement.
-		require.False(t, ep.csvFieldEmissionParses([]byte("#a#\n#b#"), ep.csvNormalizedRecordTerm(), []byte("a"), false))
+		require.False(t, ep.csvFieldEmissionParses([]byte("#a#\n#b#"), ep.csvNormalizedRecordTerm(), true, []byte("a"), false))
 	})
 
 	t.Run("absent ESCAPED BY mirrors the loader default escape", func(t *testing.T) {
@@ -1572,7 +1572,7 @@ func TestOutfileEscapeEqualsEnclosureSimulation(t *testing.T) {
 		t.Run("NULL under bare backslash enclosure", func(t *testing.T) {
 			ep := newEp(",")
 			var buf bytes.Buffer
-			require.NoError(t, formatOutputNull(ep, []byte("\n"), '\\', &buf))
+			require.NoError(t, formatOutputNull(ep, []byte("\n"), '\\', true, &buf))
 			require.Equal(t, "\\\\N\\\n", buf.String())
 		})
 	})
@@ -1702,7 +1702,7 @@ func TestOutfileInvalidFieldDelimiterRejected(t *testing.T) {
 		// gate; if one still did, the gate must report mismatch instead of
 		// dereferencing a nil parser.
 		ep := newOutfileExportConfig(tree.NewFields("\"", false, '#', '#'), nil, "\n")
-		require.False(t, ep.csvFieldEmissionParses([]byte("#a#"), ep.csvNormalizedRecordTerm(), []byte("a"), false))
+		require.False(t, ep.csvFieldEmissionParses([]byte("#a#"), ep.csvNormalizedRecordTerm(), true, []byte("a"), false))
 	})
 }
 
@@ -1736,9 +1736,15 @@ func TestOutfileEmissionSimulatorPoolDeterminism(t *testing.T) {
 		term := ep.csvNormalizedRecordTerm()
 		for round := 0; round < 50; round++ {
 			for _, c := range fixtures {
-				require.Equal(t, c.accept,
-					ep.csvFieldEmissionParses([]byte(c.field), term, []byte(c.want), c.wantNull),
-					"round %d case %s", round, c.name)
+				for _, last := range []bool{true, false} {
+					boundary := term
+					if !last {
+						boundary = []byte(",")
+					}
+					require.Equal(t, c.accept,
+						ep.csvFieldEmissionParses([]byte(c.field), boundary, last, []byte(c.want), c.wantNull),
+						"round %d case %s last=%v", round, c.name, last)
+				}
 			}
 		}
 	})
@@ -1755,7 +1761,12 @@ func TestOutfileEmissionSimulatorPoolDeterminism(t *testing.T) {
 				defer wg.Done()
 				for round := 0; round < 100; round++ {
 					c := fixtures[(w+round)%len(fixtures)]
-					if got := ep.csvFieldEmissionParses([]byte(c.field), term, []byte(c.want), c.wantNull); got != c.accept {
+					last := (w+round)%2 == 0
+					boundary := term
+					if !last {
+						boundary = []byte(",")
+					}
+					if got := ep.csvFieldEmissionParses([]byte(c.field), boundary, last, []byte(c.want), c.wantNull); got != c.accept {
 						mu.Lock()
 						errs = append(errs, fmt.Sprintf("worker %d round %d case %s: got %v", w, round, c.name, got))
 						mu.Unlock()
@@ -1782,16 +1793,88 @@ func TestOutfileNullMarkerTerminatorCollision(t *testing.T) {
 		enclosureMsg = "a NULL value cannot round-trip with ENCLOSED BY"
 	)
 
+	t.Run("actual field boundary at every NULL position", func(t *testing.T) {
+		for _, term := range []string{"NN", "NNN", ","} {
+			for _, escape := range []byte{'#', '\\'} {
+				for nullCol := 0; nullCol < 3; nullCol++ {
+					for _, writer := range []string{"batch", "result-set"} {
+						t.Run(fmt.Sprintf("%s/%c/null-%d/%s", term, escape, nullCol, writer), func(t *testing.T) {
+							ep := selectIntoOutfileConfig(term, '"', escape, "", "\n")
+							ep.ctx = context.Background()
+							ep.Symbol = [][]byte{[]byte(term), []byte(term), []byte("\n")}
+							ep.ColumnFlag = []bool{false, false, false}
+							ep.mrs = &MysqlResultSet{}
+							row := []any{int32(12), int32(23), int32(34)}
+							row[nullCol] = nil
+							for range row {
+								column := &MysqlColumn{}
+								column.SetColumnType(defines.MYSQL_TYPE_LONG)
+								ep.mrs.AddColumn(column)
+							}
+							var data []byte
+							var err error
+							if writer == "batch" {
+								mp := mpool.MustNewZero()
+								defer func() { require.Zero(t, mp.CurrNB()) }()
+								bat := batch.NewOffHeapWithSize(3)
+								defer bat.Clean(mp)
+								for i := range row {
+									bat.Vecs[i] = vector.NewOffHeapVecWithType(types.T_int32.ToType())
+									require.NoError(t, vector.AppendFixed(bat.Vecs[i], int32(12+11*i), i == nullCol, mp))
+								}
+								bat.SetRowCount(1)
+								ch := make(chan *BatchByte, 1)
+								constructByte(ep.ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
+								result := <-ch
+								data, err = result.writeByte, result.err
+							} else {
+								var out bytes.Buffer
+								old := Write
+								Write = func(_ *ExportConfig, b []byte) (int, error) { return out.Write(b) }
+								defer func() { Write = old }()
+								ep.mrs.Data = [][]any{row}
+								err = exportDataFromResultSetToCSVFile(ep)
+								data = out.Bytes()
+							}
+							if escape == '#' && term != "," && nullCol != 2 {
+								require.ErrorContains(t, err, generalMsg)
+								require.Empty(t, data, "a corrupt row must not be published")
+								return
+							}
+							require.NoError(t, err)
+							parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+								FieldsTerminatedBy: term, FieldsEnclosedBy: `"`, FieldsEscapedBy: string(escape),
+								LinesTerminatedBy: "\n", Null: []string{`\N`}, UnescapedQuote: true,
+							}, bytes.NewReader(data), csvparser.ReadBlockSize, false)
+							require.NoError(t, err)
+							got, err := parser.Read(nil)
+							require.NoError(t, err)
+							require.Len(t, got, 3)
+							for i := range row {
+								require.Equal(t, i == nullCol, got[i].IsNull, "column %d", i)
+								if i != nullCol {
+									require.Equal(t, strconv.Itoa(12+11*i), got[i].Val)
+								}
+							}
+							_, err = parser.Read(nil)
+							require.ErrorIs(t, err, io.EOF)
+						})
+					}
+				}
+			}
+		}
+	})
+
 	t.Run("simulation predicate on terminator collisions", func(t *testing.T) {
 		// Escape '#': the raw marker cannot survive a terminator of N.
 		ep := newOutfileExportConfig(tree.NewFields("N", false, '"', '#'), nil, "\n")
-		require.False(t, ep.csvFieldEmissionParses([]byte{'\\', 'N'}, ep.csvNormalizedRecordTerm(), nil, true))
+		require.False(t, ep.csvFieldEmissionParses([]byte{'\\', 'N'}, ep.csvNormalizedRecordTerm(), true, nil, true))
 		// The default backslash escape guards \N as its own NULL marker.
 		ep = newOutfileExportConfig(tree.NewFields("N", false, '"', '\\'), nil, "\n")
-		require.True(t, ep.csvFieldEmissionParses([]byte{'\\', 'N'}, ep.csvNormalizedRecordTerm(), nil, true))
+		require.True(t, ep.csvFieldEmissionParses([]byte{'\\', 'N'}, ep.csvNormalizedRecordTerm(), true, nil, true))
 		// A comma terminator never touches the marker.
 		ep = newOutfileExportConfig(tree.NewFields(",", false, '"', '#'), nil, "\n")
-		require.True(t, ep.csvFieldEmissionParses([]byte{'\\', 'N'}, ep.csvNormalizedRecordTerm(), nil, true))
+		require.True(t, ep.csvFieldEmissionParses([]byte{'\\', 'N'}, ep.csvNormalizedRecordTerm(), true, nil, true))
 	})
 
 	t.Run("batch writer rejects the terminator-N framing", func(t *testing.T) {
@@ -1897,7 +1980,7 @@ func BenchmarkOutfileEmissionSimulation(b *testing.B) {
 	b.Run("pooled simulator", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			if !ep.csvFieldEmissionParses(field, term, want, false) {
+			if !ep.csvFieldEmissionParses(field, term, true, want, false) {
 				b.Fatal("fixture must round-trip")
 			}
 		}
