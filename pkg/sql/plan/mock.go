@@ -210,12 +210,10 @@ type col struct {
 }
 
 type index struct {
-	indexName  string
-	tableName  string
-	unique     bool
-	parts      []string
-	cols       []col
-	tableExist bool
+	indexName string
+	tableName string
+	unique    bool
+	parts     []string
 	// indexAlgo / indexAlgoTableType / indexAlgoParams describe an irregular
 	// (fulltext / ivfflat / ...) index; empty for a regular B-tree index.
 	indexAlgo          string
@@ -736,21 +734,13 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 				indexName: "",
 				tableName: catalog.UniqueIndexTableNamePrefix + "412f4fad-77ba-11ed-b347-000c29847904",
 				parts:     []string{"ename", "job"},
-				cols: []col{
-					{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
-				},
-				tableExist: true,
-				unique:     true,
+				unique:    true,
 			},
 			{
 				indexName: "",
 				tableName: catalog.SecondaryIndexTableNamePrefix + "512f4fad-77ba-11ed-b347-000c29847904",
 				parts:     []string{"ename", "job"},
-				cols: []col{
-					{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
-				},
-				tableExist: true,
-				unique:     false,
+				unique:    false,
 			},
 		},
 	}
@@ -793,11 +783,7 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 				indexName: "idx_val",
 				tableName: catalog.SecondaryIndexTableNamePrefix + "single-idx-t-idx-val",
 				parts:     []string{"val"},
-				cols: []col{
-					{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
-				},
-				tableExist: true,
-				unique:     false,
+				unique:    false,
 			},
 		},
 	}
@@ -833,21 +819,13 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 				indexName: "",
 				tableName: catalog.UniqueIndexTableNamePrefix + "8e3246dd-7a19-11ed-ba7d-000c29847904",
 				parts:     []string{"dname"},
-				cols: []col{
-					{catalog.IndexTableIndexColName, types.T_varchar, true, 15, 0},
-				},
-				tableExist: true,
-				unique:     true,
+				unique:    true,
 			},
 			{
 				indexName: "",
 				tableName: catalog.UniqueIndexTableNamePrefix + "35fd5c5f-ab54-4873-85e4-3d5ab0ae20a2",
 				parts:     []string{"loc", "dname"},
-				cols: []col{
-					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
-				},
-				tableExist: true,
-				unique:     false,
+				unique:    false,
 			},
 		},
 	}
@@ -893,11 +871,7 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 				indexName: "uk_dname_loc",
 				tableName: catalog.UniqueIndexTableNamePrefix + "dept-composite-uk-idx",
 				parts:     []string{"dname", "loc"},
-				cols: []col{
-					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
-				},
-				tableExist: true,
-				unique:     true,
+				unique:    true,
 			},
 		},
 	}
@@ -936,11 +910,7 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 				indexName: "uk_dname_loc",
 				tableName: catalog.UniqueIndexTableNamePrefix + "dept-ck-idx",
 				parts:     []string{"dname", "loc"},
-				cols: []col{
-					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
-				},
-				tableExist: true,
-				unique:     true,
+				unique:    true,
 			},
 		},
 	}
@@ -993,11 +963,7 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 				indexName: "uk_a",
 				tableName: catalog.UniqueIndexTableNamePrefix + "fake-pk-t-uk-a",
 				parts:     []string{"a"},
-				cols: []col{
-					{catalog.IndexTableIndexColName, types.T_int32, true, 32, 0},
-				},
-				tableExist: true,
-				unique:     true,
+				unique:    true,
 			},
 		},
 	}
@@ -1036,11 +1002,7 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 				indexName: "uk_ab",
 				tableName: catalog.UniqueIndexTableNamePrefix + "fake-pk-comp-uk-ab",
 				parts:     []string{"a", "b"},
-				cols: []col{
-					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
-				},
-				tableExist: true,
-				unique:     true,
+				unique:    true,
 			},
 		},
 	}
@@ -1076,11 +1038,7 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 				indexName: "uk_a_b",
 				tableName: catalog.UniqueIndexTableNamePrefix + "fake-pk-composite-t-uk-a-b",
 				parts:     []string{"a", "b"},
-				cols: []col{
-					{catalog.IndexTableIndexColName, types.T_varchar, true, 255, 0},
-				},
-				tableExist: true,
-				unique:     true,
+				unique:    true,
 			},
 		},
 	}
@@ -1430,11 +1388,7 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 				indexName: "",
 				tableName: catalog.UniqueIndexTableNamePrefix + "6380d30e-79f8-11ed-9c02-000c29847904",
 				parts:     []string{"empno", "ename"},
-				cols: []col{
-					{catalog.IndexTableIndexColName, types.T_varchar, true, 65535, 0},
-				},
-				tableExist: true,
-				unique:     true,
+				unique:    true,
 			},
 		},
 	}
@@ -1487,13 +1441,7 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 				indexName: "ft_body",
 				tableName: catalog.FullTextIndexTableNamePrefix + "docs_ft_body",
 				parts:     []string{"body"},
-				cols: []col{
-					{catalog.FullTextIndex_TabCol_Id, types.T_int32, false, 32, 0},
-					{catalog.FullTextIndex_TabCol_Position, types.T_int32, false, 32, 0},
-					{catalog.FullTextIndex_TabCol_Word, types.T_varchar, false, 255, 0},
-				},
-				tableExist: true,
-				indexAlgo:  catalog.MOIndexFullTextAlgo.ToString(),
+				indexAlgo: catalog.MOIndexFullTextAlgo.ToString(),
 			},
 		},
 	}
@@ -1526,7 +1474,6 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 				indexName:       "ft_body_async",
 				tableName:       catalog.FullTextIndexTableNamePrefix + "docs_ft_async_body",
 				parts:           []string{"body"},
-				tableExist:      true,
 				indexAlgo:       catalog.MOIndexFullTextAlgo.ToString(),
 				indexAlgoParams: `{"async":"true"}`,
 			},
@@ -1555,9 +1502,9 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		},
 		pks: []int{0},
 		idxs: []index{
-			{indexName: "ft_body", tableName: catalog.FullTextIndexTableNamePrefix + "docs_ft_dual_body", parts: []string{"body"}, tableExist: true, indexAlgo: catalog.MOIndexFullTextAlgo.ToString()},
-			{indexName: "ft_summary", tableName: catalog.FullTextIndexTableNamePrefix + "docs_ft_dual_summary", parts: []string{"summary"}, tableExist: true, indexAlgo: catalog.MOIndexFullTextAlgo.ToString()},
-			{indexName: "uk_payload", tableName: catalog.UniqueIndexTableNamePrefix + "docs-ft-dual-payload", parts: []string{"payload"}, tableExist: true, unique: true},
+			{indexName: "ft_body", tableName: catalog.FullTextIndexTableNamePrefix + "docs_ft_dual_body", parts: []string{"body"}, indexAlgo: catalog.MOIndexFullTextAlgo.ToString()},
+			{indexName: "ft_summary", tableName: catalog.FullTextIndexTableNamePrefix + "docs_ft_dual_summary", parts: []string{"summary"}, indexAlgo: catalog.MOIndexFullTextAlgo.ToString()},
+			{indexName: "uk_payload", tableName: catalog.UniqueIndexTableNamePrefix + "docs-ft-dual-payload", parts: []string{"payload"}, unique: true},
 		},
 	}
 	for i, hiddenName := range []string{
