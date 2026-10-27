@@ -6197,7 +6197,7 @@ func decimalToUnsigned[D decimalIntegerSource[D], T constraints.Unsigned](
 			}
 		} else {
 			xStr := v.Format(fromType.Scale)
-			xStr = strings.Split(xStr, ".")[0]
+			xStr, _, _ = strings.Cut(xStr, ".")
 			result, err := strconv.ParseUint(xStr, 10, bitSize)
 			if err != nil {
 				return moerr.NewOutOfRangef(ctx,
@@ -6262,7 +6262,7 @@ func decimal256ToUnsigned[T constraints.Unsigned](
 			}
 		} else {
 			xStr := v.Format(fromType.Scale)
-			xStr = strings.Split(xStr, ".")[0]
+			xStr, _, _ = strings.Cut(xStr, ".")
 			result, err := strconv.ParseUint(xStr, 10, bitSize)
 			if err != nil {
 				return moerr.NewOutOfRangef(ctx,
@@ -7347,7 +7347,7 @@ func decimalToBitWithIgnore[D decimalIntegerSource[D]](
 			}
 		} else {
 			xStr := v.Format(from.GetType().Scale)
-			xStr = strings.Split(xStr, ".")[0]
+			xStr, _, _ = strings.Cut(xStr, ".")
 			result, err := decimalStringToBit(ctx, proc, xStr, bitSize)
 			if err != nil {
 				return err
@@ -7372,7 +7372,7 @@ func decimal256ToBitWithIgnore(
 			}
 		} else {
 			xStr := v.Format(from.GetType().Scale)
-			xStr = strings.Split(xStr, ".")[0]
+			xStr, _, _ = strings.Cut(xStr, ".")
 			result, err := decimalStringToBit(ctx, proc, xStr, bitSize)
 			if err != nil {
 				return err

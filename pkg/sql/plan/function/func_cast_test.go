@@ -1207,6 +1207,9 @@ func TestDecimalIntegerCastAcrossPhysicalWidths(t *testing.T) {
 				{"unsigned and null", "42.00", types.T_uint8.ToType(), []uint8{42, 0}, false},
 				{"signed fractional", "42.75", types.T_int8.ToType(), []int8{43, 0}, false},
 				{"unsigned fractional", "42.75", types.T_uint8.ToType(), []uint8{42, 0}, false},
+				{"bit fractional and null", "42.75", types.New(types.T_bit, 64, 0), []uint64{42, 0}, false},
+				{"negative bit", "-1.00", types.New(types.T_bit, 64, 0), []uint64{}, true},
+				{"bit overflow", "16.00", types.New(types.T_bit, 4, 0), []uint64{}, true},
 				{"signed overflow", "300.00", types.T_int8.ToType(), []int8{}, true},
 				{"negative unsigned", "-1.00", types.T_uint8.ToType(), []uint8{}, true},
 			} {
