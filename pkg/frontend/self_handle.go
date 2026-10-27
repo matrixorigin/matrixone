@@ -448,6 +448,10 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleCreateUser(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.RenameUser:
+		if err = doRenameUser(execCtx.reqCtx, ses, st); err != nil {
+			return err
+		}
 	case *tree.DropUser:
 		ses.EnterFPrint(FPDropUser)
 		defer ses.ExitFPrint(FPDropUser)

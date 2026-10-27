@@ -3292,8 +3292,7 @@ func (ses *Session) skipAuthForSpecialUser() bool {
 
 	acc := ses.GetTenantInfo()
 	if acc != nil {
-		ok, _, _ := isSpecialUser(acc.GetUser())
-		return ok
+		return authenticatedSpecialUser(acc)
 	}
 	return false
 }
@@ -3678,11 +3677,11 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 
-	userLockInfoSql := getLockInfoOfUserSql(tenant.GetUser())
+	userLockInfoSql := loginUserStateSQL(userID, false)
 	statusColIdx := uint64(0)
 	loginAttemptsColIdx := uint64(1)
 	lockTimeColIdx := uint64(2)
-	userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userLockInfoSql)
+	userRsset, err = executeLoginUserRead(tenantCtx, bh, userLockInfoSql)
 	if err != nil {
 		return nil, err
 	}
@@ -3733,8 +3732,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			}
 
 			if defPwdLife > 0 {
-				userExpiredSql := getExpiredTimeOfUserSql(tenant.GetUser())
-				userRsset, err = executeSQLInBackgroundSession(tenantCtx, bh, userExpiredSql)
+				userExpiredSql := loginUserStateSQL(userID, true)
+				userRsset, err = executeLoginUserRead(tenantCtx, bh, userExpiredSql)
 				if err != nil {
 					return nil, err
 				}
@@ -3753,7 +3752,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 
 			if needCheckLock && userStatus == userStatusLock {
 				// if user lock status is locked, update status to unlock
-				if err = setUserUnlock(tenantCtx, tenant.GetUser(), bh); err != nil {
+				if err = setUserUnlock(tenantCtx, userID, bh); err != nil {
 					return nil, err
 				}
 			}
@@ -3768,19 +3767,19 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 				}
 				if int64(loginAttempts) >= maxLoginAttempts {
 					// if login attempts is greater than max login attempts, update user status to lock
-					if err = setUserLock(tenantCtx, tenant.GetUser(), bh); err != nil {
+					if err = setUserLock(tenantCtx, userID, bh); err != nil {
 						return nil, err
 					}
 				} else {
 					// if login attempts is less than max login attempts, update login_attempts
-					if err = increaseLoginAttempts(tenantCtx, tenant.GetUser(), bh); err != nil {
+					if err = increaseLoginAttempts(tenantCtx, userID, bh); err != nil {
 						return nil, err
 					}
 				}
 
 			} else {
 				// if user lock status is locked, update lock_time to now
-				if err = updateLockTime(tenantCtx, tenant.GetUser(), bh); err != nil {
+				if err = updateLockTime(tenantCtx, userID, bh); err != nil {
 					return nil, err
 				}
 			}
@@ -5007,12 +5006,12 @@ func whetherNeedCheckLoginAttempts(ctx context.Context, ses *Session) (bool, err
 	return loginMaxTimes > 0 && loginMaxDelay > 0, nil
 }
 
-func setUserUnlock(ctx context.Context, userName string, bh BackgroundExec) error {
+func setUserUnlock(ctx context.Context, userID int64, bh BackgroundExec) error {
 	var (
 		sql string
 		err error
 	)
-	sql = getSqlForUpdateUnlcokStatusOfUser(userStatusUnlock, userName)
+	sql = fmt.Sprintf(`update mo_catalog.mo_user set status = "%s", login_attempts = 0 where user_id = %d;`, userStatusUnlock, userID)
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return err
@@ -5020,12 +5019,12 @@ func setUserUnlock(ctx context.Context, userName string, bh BackgroundExec) erro
 	return nil
 }
 
-func increaseLoginAttempts(ctx context.Context, userName string, bh BackgroundExec) error {
+func increaseLoginAttempts(ctx context.Context, userID int64, bh BackgroundExec) error {
 	var (
 		sql string
 		err error
 	)
-	sql = getSqlForUpdateLoginAttemptsOfUser(userName)
+	sql = fmt.Sprintf(`update mo_catalog.mo_user set login_attempts = login_attempts + 1 where user_id = %d;`, userID)
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return err
@@ -5033,12 +5032,12 @@ func increaseLoginAttempts(ctx context.Context, userName string, bh BackgroundEx
 	return nil
 }
 
-func updateLockTime(ctx context.Context, userName string, bh BackgroundExec) error {
+func updateLockTime(ctx context.Context, userID int64, bh BackgroundExec) error {
 	var (
 		sql string
 		err error
 	)
-	sql = getSqlForUpdateLockTimeOfUser(userName)
+	sql = fmt.Sprintf(`update mo_catalog.mo_user set lock_time = utc_timestamp() where user_id = %d;`, userID)
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return err
@@ -5046,12 +5045,12 @@ func updateLockTime(ctx context.Context, userName string, bh BackgroundExec) err
 	return nil
 }
 
-func setUserLock(ctx context.Context, userName string, bh BackgroundExec) error {
+func setUserLock(ctx context.Context, userID int64, bh BackgroundExec) error {
 	var (
 		sql string
 		err error
 	)
-	sql = getSqlForUpdateStatusLockOfUser(userStatusLock, userName)
+	sql = fmt.Sprintf(`update mo_catalog.mo_user set status = "%s", login_attempts = login_attempts + 1, lock_time = utc_timestamp() where user_id = %d;`, userStatusLock, userID)
 	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return err

@@ -27,7 +27,7 @@ import (
 func IsAdministrativeStatement(stmt tree.Statement) bool {
 	switch st := stmt.(type) {
 	case *tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
-		*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
+		*tree.CreateUser, *tree.DropUser, *tree.AlterUser, *tree.RenameUser,
 		*tree.CreateRole, *tree.DropRole,
 		*tree.Revoke, *tree.Grant,
 		*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:

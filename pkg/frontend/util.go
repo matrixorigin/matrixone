@@ -2435,7 +2435,7 @@ func (ui *UserInput) isInternalSQLSource(ses FeSession) bool {
 	tenant := ses.GetTenantInfo()
 	internal := ui.isInternal() || tenant == nil || strings.HasPrefix(ui.getSql(), cmdFieldListSql)
 	if tenant != nil {
-		special, _, _ := isSpecialUser(tenant.GetUser())
+		special := authenticatedSpecialUser(tenant)
 		internal = internal || special || tenant.GetTenant() == sysAccountName && tenant.GetUser() == "internal"
 	}
 	return internal

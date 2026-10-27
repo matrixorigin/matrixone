@@ -223,7 +223,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			}
 
 		case *tree.DropIndex, *tree.DropView, *tree.DropSequence,
-			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
+			*tree.CreateUser, *tree.DropUser, *tree.AlterUser, *tree.RenameUser,
 			*tree.CreateRole, *tree.DropRole,
 			*tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole:

@@ -1162,7 +1162,7 @@ var (
 			character_set_client,
 			collation_connection,
 			database_collation,
-			sql_mode) values ("%s",%d,'%s','%s',"%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s","%s");`
+			sql_mode) values ("%s",%d,'%s','%s',"%s","%s","%s","%s",%s,"%s","%s","%s","%s","%s","%s","%s","%s","%s");`
 
 	updateMoUserDefinedFunctionFormat = `update mo_catalog.mo_user_defined_function
 			set owner = %d, 
@@ -1171,7 +1171,7 @@ var (
 			    retType = '%s',
 			    body = "%s",
 			    language = '%s',
-			    definer = '%s',
+			    definer = %s,
 			    modified_time = '%s',
 			    type = '%s',
 			    security_type = '%s',
@@ -1197,7 +1197,7 @@ var (
 		comment,
 		character_set_client,
 		collation_connection,
-		database_collation) values ('%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s', '%s');`
+		database_collation) values ('%s','%s','%s','%s','%s','%s',%s,'%s','%s','%s','%s','%s','%s','%s', '%s');`
 
 	updateMoStoredProcedureFormat = `update mo_catalog.mo_stored_procedure
 			set 
@@ -1206,7 +1206,7 @@ var (
 			    body = '%s',
 				sql_mode = '%s',
 				db = '%s',
-			    definer = '%s',
+			    definer = %s,
 			    modified_time = '%s',
 			    type = '%s',
 			    security_type = '%s',
@@ -3177,7 +3177,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 	)
 	doLockOrUnlock := noneLockOrUnlockUser
 	account := ses.GetTenantInfo()
-	currentUser := account.GetUser()
+	currentUserID := int64(account.GetUserID())
 
 	// 1.authenticate the actions
 	if au.Role != nil {
@@ -3208,7 +3208,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -3247,11 +3247,27 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 		}
 	}
 
-	//
+	targetRows, e := queryAccountUsers(ctx, bh, "user_name = "+quoteSQLStringLiteral(userName), false)
+	if e != nil {
+		return e
+	}
+	if len(targetRows) != 1 || targetRows[0].id != vr.id {
+		return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+	}
+	principal, e := queryAccountUsers(ctx, bh, fmt.Sprintf("user_id = %d", currentUserID), false)
+	if e != nil {
+		return e
+	}
+	if len(principal) != 1 {
+		return moerr.NewInternalError(ctx, "authenticated user no longer exists")
+	}
+	if err = lockAccountUserBindings(ctx, bh, append(targetRows, principal...)); err != nil {
+		return err
+	}
 	if account.IsSysTenant() {
-		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, moAdminRoleID)
+		sql = fmt.Sprintf("select role_id from mo_catalog.mo_user_grant where user_id = %d and role_id = %d;", currentUserID, moAdminRoleID)
 	} else {
-		sql, err = getSqlForCheckUserHasRole(ctx, currentUser, accountAdminRoleID)
+		sql = fmt.Sprintf("select role_id from mo_catalog.mo_user_grant where user_id = %d and role_id = %d;", currentUserID, accountAdminRoleID)
 	}
 	if err != nil {
 		return err
@@ -3322,7 +3338,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 				return err
 			}
 		} else {
-			if (targetUserIsAdmin && !currentUserIsAdmin) && currentUser != userName {
+			if (targetUserIsAdmin && !currentUserIsAdmin) && currentUserID != vr.id {
 				return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
 			}
 			sql, err = getSqlForUpdatePasswordOfUser(ctx, encryption, userName)
@@ -3347,7 +3363,7 @@ func doAlterUser(ctx context.Context, ses *Session, au *alterUser) (err error) {
 				return err
 			}
 		} else {
-			if (targetUserIsAdmin && !currentUserIsAdmin) && currentUser != userName {
+			if (targetUserIsAdmin && !currentUserIsAdmin) && currentUserID != vr.id {
 				return moerr.NewInternalErrorf(ctx, "Operation ALTER USER failed for '%s'@'%s', don't have the privilege to alter", userName, hostName)
 			}
 			err = bh.Exec(ctx, sql)
@@ -4703,6 +4719,21 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 		return err
 	}
 
+	var lockedUsers []accountUserBinding
+	for _, user := range du.Users {
+		rows, e := queryAccountUsers(ctx, bh, "user_name = "+quoteSQLStringLiteral(user.Username), false)
+		if e != nil {
+			return e
+		}
+		lockedUsers = append(lockedUsers, rows...)
+	}
+	if err = lockAccountUserBindings(ctx, bh, lockedUsers); err != nil {
+		return err
+	}
+	lockedIDs := make(map[int64]bool)
+	for _, user := range lockedUsers {
+		lockedIDs[user.id] = true
+	}
 	// step1: check users exists or not.
 	// handle "IF EXISTS"
 	for _, user := range du.Users {
@@ -4725,6 +4756,9 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 			continue
 		}
 
+		if !lockedIDs[vr.id] {
+			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
 		// if the user is admin user with the role moadmin or accountadmin,
 		// the user can not be deleted.
 		if account.IsSysTenant() {
@@ -6149,6 +6183,10 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) (err e
 		verifiedFromRoles[i] = vr
 	}
 
+	if err = lockVerifiedUserBindings(ctx, bh, verifiedToRoles); err != nil {
+		return err
+	}
+
 	// step3 : process Revoke role from role
 	// step4 : process Revoke role from user
 	for _, from := range verifiedFromRoles {
@@ -6242,7 +6280,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 	}
 
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// step1 : check Roles exists or not
@@ -6308,13 +6346,21 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) (err err
 			}
 			verifiedToRoles[i] = vr
 
-			// the user is the administrator or not
-			useIsAdmin, err = userIsAdministrator(ctx, bh, vr.id, account)
-			if err != nil {
-				return err
-			}
-			verifiedToRoles[i].userIsAdmin = useIsAdmin
 		}
+	}
+
+	if err = lockVerifiedUserBindings(ctx, bh, verifiedToRoles); err != nil {
+		return err
+	}
+	for _, target := range verifiedToRoles {
+		if target.typ != userType {
+			continue
+		}
+		useIsAdmin, err = userIsAdministrator(ctx, bh, target.id, account)
+		if err != nil {
+			return err
+		}
+		target.userIsAdmin = useIsAdmin
 	}
 
 	// If there is at least one role in the verifiedToRoles,
@@ -6543,6 +6589,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			}
 			extraEntries = append(extraEntries, entry1, entry2)
 		}
+	case *tree.RenameUser:
+		typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll)
 	case *tree.DropUser:
 		typs = append(typs, PrivilegeTypeDropUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership*/)
 	case *tree.AlterUser:
@@ -12094,6 +12142,11 @@ func persistUserDefinedFunction(
 	definition userDefinedFunctionDefinition,
 	functionID *int64,
 ) error {
+	definer, err := canonicalRoutineDefiner(ctx, bh, tenant)
+	if err != nil {
+		return err
+	}
+
 	body := escapeSQLStringForDoubleQuotes(definition.body)
 	sqlMode := plan2.EscapeFormat(definition.sqlMode)
 	if functionID != nil {
@@ -12101,7 +12154,7 @@ func persistUserDefinedFunction(
 			ownerRoleID,
 			definition.args,
 			definition.argTypes, definition.retType, body, definition.lang,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode,
+			quoteSQLStringLiteral(definer), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode,
 			int32(*functionID)))
 	}
 	return bh.Exec(ctx, fmt.Sprintf(initMoUserDefinedFunctionFormat,
@@ -12109,7 +12162,7 @@ func persistUserDefinedFunction(
 		ownerRoleID,
 		definition.args,
 		definition.argTypes, definition.retType, body, definition.lang, definition.dbName,
-		tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode))
+		quoteSQLStringLiteral(definer), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "FUNCTION", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci", sqlMode))
 }
 
 // storedProcedureDefinition is the procedure metadata kept outside mo_tables.
@@ -12213,6 +12266,11 @@ func persistStoredProcedure(
 	definition storedProcedureDefinition,
 	erArray []ExecResult,
 ) error {
+	definer, err := canonicalRoutineDefiner(ctx, bh, tenant)
+	if err != nil {
+		return err
+	}
+
 	var persistSQL string
 	if execResultArrayHasData(erArray) {
 		id, err := erArray[0].GetInt64(ctx, 0, 0)
@@ -12222,14 +12280,14 @@ func persistStoredProcedure(
 		persistSQL = fmt.Sprintf(updateMoStoredProcedureFormat,
 			definition.args,
 			definition.lang, plan2.EscapeFormat(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
+			quoteSQLStringLiteral(definer), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci",
 			int32(id))
 	} else {
 		persistSQL = fmt.Sprintf(initMoStoredProcedureFormat,
 			definition.name,
 			definition.args,
 			definition.lang, plan2.EscapeFormat(definition.body), plan2.EscapeFormat(definition.sqlMode), definition.dbName,
-			tenant.GetUser(), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
+			quoteSQLStringLiteral(definer), types.CurrentTimestamp().String2(time.UTC, 0), types.CurrentTimestamp().String2(time.UTC, 0), "PROCEDURE", "DEFINER", "", "utf8mb4", "utf8mb4_0900_ai_ci", "utf8mb4_0900_ai_ci")
 	}
 	return bh.Exec(ctx, persistSQL)
 }
@@ -12240,18 +12298,19 @@ func InitProcedure(ctx context.Context, ses *Session, tenant *TenantInfo, cp *tr
 		return err
 	}
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
-	erArray, err := prepareStoredProcedurePersistence(ctx, bh, definition, cp.Replace)
-	if err != nil {
-		return err
-	}
 	if err = bh.Exec(ctx, "begin;"); err != nil {
 		return err
 	}
 	defer func() {
 		err = finishTxn(ctx, bh, err)
 	}()
+
+	erArray, err := prepareStoredProcedurePersistence(ctx, bh, definition, cp.Replace)
+	if err != nil {
+		return err
+	}
 
 	return persistStoredProcedure(ctx, bh, tenant, definition, erArray)
 }
