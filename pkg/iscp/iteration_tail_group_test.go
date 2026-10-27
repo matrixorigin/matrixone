@@ -17,6 +17,7 @@ package iscp
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -185,4 +186,82 @@ func TestISCPCancelCleansPendingTailWIP(t *testing.T) {
 	}
 	require.Empty(t, consumer.groups)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestISCPIterationWaitsForPendingTailCleanup(t *testing.T) {
+	for _, ending := range []string{"cancel", "incomplete-eof"} {
+		t.Run(ending, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			releaseStarted := make(chan struct{})
+			allowRelease := make(chan struct{})
+			released := make(chan struct{})
+			var releaseOnce sync.Once
+			t.Cleanup(func() { releaseOnce.Do(func() { close(allowRelease) }) })
+
+			pkData := types.EncodeSlice([]int64{1})
+			lease, err := vector.NewRefCountedBufferLease(pkData, int64(cap(pkData)), func() {
+				close(releaseStarted)
+				<-allowRelease
+				close(released)
+			})
+			require.NoError(t, err)
+			pk, err := vector.NewBorrowedFixedVector(types.T_int64.ToType(), 1, pkData, lease)
+			require.NoError(t, err)
+			lease.Release() // the vector now owns the borrowed backing
+			firstBatch := testutil.NewBatchWithVectors([]*vector.Vector{
+				pk,
+				testutil.NewVector(1, types.T_TS.ToType(), mp, false, []types.TS{types.BuildTS(1, 0)}),
+			}, nil)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			readingAgain := make(chan struct{})
+			step := 0
+			changes := &iterationChangesHandle{next: func(ctx context.Context, _ *mpool.MPool) (*batch.Batch, *batch.Batch, engine.ChangesHandle_Hint, error) {
+				step++
+				if step == 1 {
+					return firstBatch, nil, engine.ChangesHandle_Tail_wip, nil
+				}
+				close(readingAgain)
+				if ending == "cancel" {
+					<-ctx.Done()
+					return nil, nil, engine.ChangesHandle_Tail_done, ctx.Err()
+				}
+				return nil, nil, engine.ChangesHandle_Tail_done, nil
+			}}
+			done := runIterationConsumersForTest(ctx, testIterationContext(), changes,
+				[]Consumer{new(recordingTailConsumer)}, ISCPDataType_Tail, mp)
+			select {
+			case <-readingAgain:
+			case <-time.After(5 * time.Second):
+				t.Fatal("tail reader did not reach the second source read")
+			}
+			if ending == "cancel" {
+				cancel()
+			}
+			select {
+			case <-releaseStarted:
+			case <-time.After(5 * time.Second):
+				t.Fatal("pending tail cleanup did not start")
+			}
+			select {
+			case <-done:
+				t.Fatal("iteration returned before pending tail cleanup completed")
+			case <-time.After(time.Second):
+			}
+			releaseOnce.Do(func() { close(allowRelease) })
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("iteration did not finish after pending tail cleanup")
+			}
+			select {
+			case <-released:
+			default:
+				t.Fatal("release callback was still running when iteration returned")
+			}
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }
