@@ -541,4 +541,16 @@ SELECT id, mrank(f, 3) OVER (ORDER BY id), mrank(a, 3) OVER (ORDER BY id), mrank
 SELECT quantileExactWeighted(f, id, 0.5), quantileExactWeighted(a, id, 0.5), quantileExactWeighted(c, id, 0.5), quantileExactWeighted(d, id, 0.5) FROM tiw;
 DROP TABLE tiw;
 
+-- ROLLUP over the four types gives the same rows with the sort, hash and cost-chosen plans
+CREATE TABLE tru (g INT, h INT, f FLOAT, a bf16, b float16, c float8, d float4);
+INSERT INTO tru VALUES (1, 1, 1.5, 1.5, 1.5, 1.5, 1.5), (1, 2, -2, -2, -2, -2, -2), (2, 1, 3, 3, 3, 3, 3), (2, 1, 0.5, 0.5, 0.5, 0.5, 0.5), (NULL, 1, 4, 4, 4, 4, 4);
+SET SESSION rollup_algorithm = 'SORT';
+SELECT g, h, SUM(f), SUM(a), MIN(b), MAX(c), COUNT(d), GROUPING(g, h) FROM tru GROUP BY g, h WITH ROLLUP ORDER BY GROUPING(g, h), g, h;
+SET SESSION rollup_algorithm = 'HASH';
+SELECT g, h, SUM(f), SUM(a), MIN(b), MAX(c), COUNT(d), GROUPING(g, h) FROM tru GROUP BY g, h WITH ROLLUP ORDER BY GROUPING(g, h), g, h;
+SET SESSION rollup_algorithm = 'COST';
+SELECT g, h, SUM(f), SUM(a), MIN(b), MAX(c), COUNT(d), GROUPING(g, h) FROM tru GROUP BY g, h WITH ROLLUP ORDER BY GROUPING(g, h), g, h;
+SET SESSION rollup_algorithm = default;
+DROP TABLE tru;
+
 DROP DATABASE lowprec_float;
