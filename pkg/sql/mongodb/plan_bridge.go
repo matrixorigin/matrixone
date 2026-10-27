@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -36,6 +37,17 @@ func ProjectedPaths(columns []ColumnMapping) []string {
 		result = append(result, column.Path)
 	}
 	return result
+}
+
+// RetainedColumnNames returns mapped scan columns in their retained order.
+func RetainedColumnNames(columns []*plan.ColDef) []string {
+	names := make([]string, 0, len(columns))
+	for _, column := range columns {
+		if column != nil && !column.Hidden && !catalog.IsForeignQueryCol(column.Name, column.ColId) {
+			names = append(names, column.Name)
+		}
+	}
+	return names
 }
 
 // ProjectColumnsByName returns mappings in the compact MO scan-column order.

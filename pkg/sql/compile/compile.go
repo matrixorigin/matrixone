@@ -3545,12 +3545,7 @@ func projectedMongoColumns(
 	if tableDef == nil {
 		return nil, moerr.NewInternalError(ctx, "MongoDB external scan is missing its table definition")
 	}
-	names := make([]string, 0, len(tableDef.Cols))
-	for _, column := range tableDef.Cols {
-		if column != nil && !column.Hidden && !catalog.IsForeignQueryCol(column.Name, column.ColId) {
-			names = append(names, column.Name)
-		}
-	}
+	names := sqlmongodb.RetainedColumnNames(tableDef.Cols)
 	if len(names) == 0 {
 		if allowEmpty {
 			return nil, nil

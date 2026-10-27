@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -406,6 +407,20 @@ func TestParseTableMappingSpecDefaultContractFromSQL(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRetainedColumnNames(t *testing.T) {
+	columns := []*planpb.ColDef{
+		nil,
+		{Name: "value"},
+		{Name: "hidden", Hidden: true},
+		{Name: catalog.ExternalQuery, ColId: catalog.ExternalQueryColId},
+		{Name: catalog.ExternalQuery, ColId: 1},
+		{Name: "value"},
+	}
+	require.Equal(t, []string{"value", catalog.ExternalQuery, "value"}, RetainedColumnNames(columns))
+	require.NotNil(t, RetainedColumnNames(nil))
+	require.Empty(t, RetainedColumnNames(nil))
 }
 
 func TestProjectedPaths(t *testing.T) {

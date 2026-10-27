@@ -14070,12 +14070,7 @@ func (builder *QueryBuilder) refreshMongoScanPushdown(node *plan.Node) error {
 		return moerr.NewInternalError(builder.GetContext(), "MongoDB external scan is missing its table definition")
 	}
 	scan := node.ExternScan.MongodbScan
-	names := make([]string, 0, len(node.TableDef.Cols))
-	for _, column := range node.TableDef.Cols {
-		if column != nil && !column.Hidden && !catalog.IsForeignQueryCol(column.Name, column.ColId) {
-			names = append(names, column.Name)
-		}
-	}
+	names := sqlmongodb.RetainedColumnNames(node.TableDef.Cols)
 	columns, err := sqlmongodb.ProjectColumnsByName(
 		builder.GetContext(), sqlmongodb.ColumnsFromPlan(scan.Columns), names)
 	if err != nil {
