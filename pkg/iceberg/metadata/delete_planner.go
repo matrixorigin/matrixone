@@ -89,7 +89,7 @@ func pairDeleteTasksBoundedMemory(ctx context.Context, dataTasks []api.DataFileT
 	if memoryUsed != nil {
 		// dataByPath and seen are transient but coexist with the retained task
 		// slices during pairing. Reserve their bucket/header overhead up front.
-		indexMemory := saturatingPlanningMul(int64(len(dataTasks)+len(deleteEntries)), 128)
+		indexMemory := api.SaturatingMemoryMul(int64(len(dataTasks)+len(deleteEntries)), 128)
 		if err := reservePlanningMemory(memoryUsed, indexMemory, memoryLimit, mode); err != nil {
 			return nil, err
 		}

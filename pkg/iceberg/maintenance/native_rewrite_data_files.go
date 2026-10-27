@@ -372,13 +372,13 @@ func materializeRewriteDataFilesPreservedManifestsWithBudget(meta *api.TableMeta
 	if len(preserved) == 0 {
 		return nil, nil, nil
 	}
-	if err := reserveMaintenanceMemory(memoryUsed, saturatingMaintenanceMul(int64(len(preserved)), 512), memoryLimit); err != nil {
+	if err := reserveMaintenanceMemory(memoryUsed, api.SaturatingMemoryMul(int64(len(preserved)), 512), memoryLimit); err != nil {
 		return nil, nil, err
 	}
 	outManifests := make([]api.ManifestFile, 0, len(preserved))
 	outObjects := make([]ObjectWrite, 0, len(preserved))
 	for idx, item := range preserved {
-		encoderScratch := saturatingMaintenanceMul(metadata.ManifestEntriesMemoryWeight(0, item.Entries), 2)
+		encoderScratch := api.SaturatingMemoryMul(metadata.ManifestEntriesMemoryWeight(0, item.Entries), 2)
 		if err := checkMaintenanceMemory(*memoryUsed, encoderScratch, memoryLimit); err != nil {
 			return nil, nil, err
 		}
@@ -592,7 +592,7 @@ func (s RewriteDataFilesSelector) Select(ctx context.Context, req RewriteDataFil
 			candidate := RewriteDataFileCandidate{ManifestPath: manifestPath, Entry: entry, File: file}
 			// Candidate structs duplicate headers retained by PreservedDataManifests;
 			// their maps/strings still share immutable decoded backing storage.
-			candidateMemory := saturatingMaintenanceMul(metadata.ManifestEntriesMemoryWeight(0, []api.ManifestEntry{entry}), 2)
+			candidateMemory := api.SaturatingMemoryMul(metadata.ManifestEntriesMemoryWeight(0, []api.ManifestEntry{entry}), 2)
 			if err := checkMaintenanceMemory(memoryUsed, candidateMemory, memoryLimit); err != nil {
 				return nil, err
 			}
@@ -837,7 +837,7 @@ func BuildRewriteDataFilesManifestCommit(req RewriteDataFilesMaterializeRequest)
 		specIDs = append(specIDs, specID)
 	}
 	sort.Ints(specIDs)
-	if err := reserveMaintenanceMemory(&memoryUsed, saturatingMaintenanceMul(int64(len(specIDs)), 512), memoryLimit); err != nil {
+	if err := reserveMaintenanceMemory(&memoryUsed, api.SaturatingMemoryMul(int64(len(specIDs)), 512), memoryLimit); err != nil {
 		return nil, err
 	}
 	manifests := make([]api.ManifestFile, 0, len(specIDs))

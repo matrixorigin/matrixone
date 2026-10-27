@@ -186,7 +186,7 @@ func (m RewriteManifestsMaterializer) Materialize(ctx context.Context, req Rewri
 	// before allocating them; payload capacities are charged as they are encoded.
 	resultCapacityMemory := saturatingMaintenanceAdd(
 		metadata.ManifestListMemoryWeight(0, manifests),
-		saturatingMaintenanceMul(saturatingMaintenanceAdd(int64(len(manifests)), 1), 128),
+		api.SaturatingMemoryMul(saturatingMaintenanceAdd(int64(len(manifests)), 1), 128),
 	)
 	if err := reserveMaintenanceMemory(&memoryUsed, resultCapacityMemory, memoryLimit); err != nil {
 		return nil, err

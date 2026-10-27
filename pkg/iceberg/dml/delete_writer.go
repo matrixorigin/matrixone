@@ -99,13 +99,13 @@ func deleteParquetScratchBytes(fields int) int64 {
 	// destination writer. Bounded row groups cap their lifetime; reserve a
 	// conservative per-column allowance for that opaque state. A future writer
 	// exposing allocator hooks could replace this estimate with exact charging.
-	return saturatingDeleteAdd(2<<20, saturatingDeleteMul(int64(fields), 1<<20))
+	return saturatingDeleteAdd(2<<20, api.SaturatingMemoryMul(int64(fields), 1<<20))
 }
 
 func retainedDeleteFileMetadataBytes(fields int) int64 {
 	// Bounds are capped at 4 KiB and DataFile metadata is defensively cloned by
 	// planning/commit handoffs. Keep the reservation until the coordinator ends.
-	return saturatingDeleteAdd(32<<10, saturatingDeleteMul(int64(fields), 16<<10))
+	return saturatingDeleteAdd(32<<10, api.SaturatingMemoryMul(int64(fields), 16<<10))
 }
 
 func WritePositionDeleteFile(ctx context.Context, dst io.Writer, req PositionDeleteWriteRequest) (api.DataFile, error) {
@@ -115,7 +115,7 @@ func WritePositionDeleteFile(ctx context.Context, dst io.Writer, req PositionDel
 	if strings.TrimSpace(req.FilePath) == "" {
 		return api.DataFile{}, api.NewError(api.ErrConfigInvalid, "Iceberg position delete writer requires file path", nil)
 	}
-	rowCopyBytes := saturatingDeleteMul(int64(len(req.Rows)), 64)
+	rowCopyBytes := api.SaturatingMemoryMul(int64(len(req.Rows)), 64)
 	if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, rowCopyBytes); err != nil {
 		return api.DataFile{}, err
 	}
@@ -152,7 +152,7 @@ func WritePositionDeleteFile(ctx context.Context, dst io.Writer, req PositionDel
 			return api.DataFile{}, err
 		}
 		end := min(start+deleteWriteBatchRows, len(rows))
-		workingBytes := saturatingDeleteMul(int64(end-start), 256)
+		workingBytes := api.SaturatingMemoryMul(int64(end-start), 256)
 		if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, workingBytes); err != nil {
 			return api.DataFile{}, err
 		}
@@ -244,8 +244,8 @@ func WriteEqualityDeleteFile(ctx context.Context, dst io.Writer, req EqualityDel
 			return api.DataFile{}, err
 		}
 		end := min(start+deleteWriteBatchRows, len(req.Rows))
-		perRowBytes := saturatingDeleteAdd(128, saturatingDeleteMul(int64(len(fields)), 96))
-		workingBytes := saturatingDeleteMul(int64(end-start), perRowBytes)
+		perRowBytes := saturatingDeleteAdd(128, api.SaturatingMemoryMul(int64(len(fields)), 96))
+		workingBytes := api.SaturatingMemoryMul(int64(end-start), perRowBytes)
 		if err := reserveDeleteWriterMemory(ctx, req.MemoryBudget, workingBytes); err != nil {
 			return api.DataFile{}, err
 		}
@@ -713,14 +713,4 @@ func saturatingDeleteAdd(left, right int64) int64 {
 		return math.MaxInt64
 	}
 	return left + right
-}
-
-func saturatingDeleteMul(left, right int64) int64 {
-	if left <= 0 || right <= 0 {
-		return 0
-	}
-	if left > math.MaxInt64/right {
-		return math.MaxInt64
-	}
-	return left * right
 }

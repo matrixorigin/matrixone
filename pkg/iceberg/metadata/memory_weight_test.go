@@ -52,8 +52,8 @@ func TestMetadataMemoryWeightsAccountNestedRetainedData(t *testing.T) {
 func TestMetadataMemoryWeightSaturates(t *testing.T) {
 	require.Equal(t, int64(math.MaxInt64), saturatingMetadataAdd(math.MaxInt64, 1))
 	require.Equal(t, int64(-1), saturatingMetadataAdd(1, -2))
-	require.Zero(t, saturatingMetadataMul(0, 10))
-	require.Zero(t, saturatingMetadataMul(10, -1))
-	require.Equal(t, int64(math.MaxInt64), saturatingMetadataMul(math.MaxInt64, 2))
-	require.Equal(t, int64(12), saturatingMetadataMul(3, 4))
+	require.Zero(t, api.SaturatingMemoryMul(0, 10))
+	require.Zero(t, api.SaturatingMemoryMul(10, -1))
+	require.Equal(t, int64(math.MaxInt64), api.SaturatingMemoryMul(math.MaxInt64, 2))
+	require.Equal(t, int64(12), api.SaturatingMemoryMul(3, 4))
 }

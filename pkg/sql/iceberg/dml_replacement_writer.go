@@ -152,7 +152,7 @@ func retainedDMLDataFileMetadataBytesForSchema(schema api.Schema, spec api.Parti
 	columns := int64(len(schema.Fields))
 	partitions := int64(len(spec.Fields))
 	return saturatingDMLAdd(retainedDMLDataFileMetadataBytes,
-		saturatingDMLAdd(saturatingDMLMul(columns, perColumn), saturatingDMLMul(partitions, 1024)))
+		saturatingDMLAdd(api.SaturatingMemoryMul(columns, perColumn), api.SaturatingMemoryMul(partitions, 1024)))
 }
 
 type bufferedDataFileObject struct {

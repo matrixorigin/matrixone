@@ -57,7 +57,7 @@ func (p LocalScanPlanner) applyRowGroupPlanning(
 		// Footer structs, split clones and the optional pruning slice coexist for
 		// one file. They are transient; validate the peak without permanently
 		// charging them to the retained output task budget.
-		peakMemory := saturatingPlanningMul(footerMemory, 3)
+		peakMemory := api.SaturatingMemoryMul(footerMemory, 3)
 		peakUsed := int64(0)
 		if memoryUsed != nil {
 			peakUsed = *memoryUsed
@@ -132,7 +132,7 @@ func (p LocalScanPlanner) readParquetRowGroupFooters(ctx context.Context, schema
 	// objects. A conservative expansion factor bounds the parser before it asks
 	// ReaderAt for a footer-sized buffer. A future streaming footer decoder can
 	// replace this factor with exact token accounting.
-	estimatedFooterMemory := saturatingPlanningMul(footerBytes, 64)
+	estimatedFooterMemory := api.SaturatingMemoryMul(footerBytes, 64)
 	if maxMemory <= 0 || estimatedFooterMemory > maxMemory {
 		return nil, planningMemoryExceeded(estimatedFooterMemory, maxMemory, mode)
 	}
@@ -174,9 +174,9 @@ func parquetRowGroupFooters(file *parquet.File, schema api.Schema, fileSize int6
 	}
 	fields := schemaFieldsByID(schema)
 	columnFieldIDs := parquetLeafColumnFieldIDs(file.Root(), fields)
-	estimatedMemory := saturatingPlanningMul(
+	estimatedMemory := api.SaturatingMemoryMul(
 		int64(len(rowGroups)),
-		saturatingPlanningAdd(256, saturatingPlanningMul(int64(len(columnFieldIDs)), 192)),
+		saturatingPlanningAdd(256, api.SaturatingMemoryMul(int64(len(columnFieldIDs)), 192)),
 	)
 	if estimatedMemory > maxMemory {
 		return nil, planningMemoryExceeded(estimatedMemory, maxMemory, mode)
@@ -250,7 +250,7 @@ func rowGroupFootersMemory(footers []RowGroupFooter) int64 {
 				total = saturatingPlanningAdd(total, int64(48+len(value)))
 			}
 		}
-		total = saturatingPlanningAdd(total, saturatingPlanningMul(int64(len(footer.NullValueCounts)+len(footer.ValueCounts)), 40))
+		total = saturatingPlanningAdd(total, api.SaturatingMemoryMul(int64(len(footer.NullValueCounts)+len(footer.ValueCounts)), 40))
 	}
 	return total
 }
