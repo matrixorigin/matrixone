@@ -2193,10 +2193,6 @@ func builtInCurrentUserName(_ []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func padResultByteLength(src string, tgtLen int64, pad string, maxBytes int64) (int, bool) {
-	return padResultByteLengthWithCharacterWidth(src, tgtLen, pad, maxBytes, utf8.UTFMax)
-}
-
 func padResultByteLengthWithCharacterWidth(
 	src string,
 	tgtLen int64,

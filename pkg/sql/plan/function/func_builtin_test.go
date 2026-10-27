@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -1689,7 +1690,7 @@ func TestPadRejectsAccountedAllocationBeforeBuildingResult(t *testing.T) {
 
 func TestPadAndInsertSizingMatchesRuntimePaths(t *testing.T) {
 	invalid := string([]byte{0xff})
-	size, null := padResultByteLength(invalid, 1, invalid, int64(types.MaxBlobLen))
+	size, null := padResultByteLengthWithCharacterWidth(invalid, 1, invalid, int64(types.MaxBlobLen), utf8.UTFMax)
 	require.False(t, null)
 	require.Equal(t, 1, size, "the exact-source path preserves invalid UTF-8 bytes")
 
