@@ -155,6 +155,24 @@ func (builder *QueryBuilder) resolveInt64Variable(name string, def int64) (int64
 	return v, nil
 }
 
+func (builder *QueryBuilder) resolveFloat64Variable(name string, def float64) (float64, error) {
+	value, err := builder.compCtx.ResolveVariable(name, true, false)
+	if err != nil {
+		return 0, err
+	}
+	if value == nil {
+		return def, nil
+	}
+	switch v := value.(type) {
+	case float64:
+		return v, nil
+	case int64:
+		return float64(v), nil
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("ResolveVariable: %s is not float64 but %T", name, value)
+	}
+}
+
 func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	return builder.applyIndicesForSortUsingHnswWithColRefCnt(nodeID, vecCtx, multiTableIndex, nil, idxColMap)
 }
