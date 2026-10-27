@@ -21,7 +21,7 @@ or stages using MatrixOne's SELECT ... INTO OUTFILE commands.
 
 import warnings
 from ._query_compilation import compile_expression
-from ._sql_literals import sql_literal, sql_string_token, substitute_parameters
+from ._sql_literals import sql_string_token, substitute_parameters
 
 from typing import Any, Optional, Union
 
@@ -130,7 +130,7 @@ def _build_csv_export_sql(
     query_sql = _query_to_sql(query)
 
     # Build the export SQL
-    sql_parts = [query_sql, "INTO OUTFILE", f"'{output_path}'"]
+    sql_parts = [query_sql, "INTO OUTFILE", sql_string_token(output_path)]
 
     # Add CSV options
     options = []
@@ -142,7 +142,7 @@ def _build_csv_export_sql(
 
     # Add line terminator if not default
     if lineterminator != '\n':
-        options.append(f"lines terminated by '{lineterminator}'")
+        options.append(f"lines terminated by {sql_string_token(lineterminator)}")
 
     sql_parts.extend(options)
 
@@ -176,7 +176,7 @@ def _build_jsonl_export_sql(
 
     # Build the export SQL with JSONL format
     # MatrixOne syntax: INTO OUTFILE 'path' FORMAT 'jsonline'
-    return f"{query_sql} INTO OUTFILE {sql_literal(output_path)} FORMAT 'jsonline'"
+    return f"{query_sql} INTO OUTFILE {sql_string_token(output_path)} FORMAT 'jsonline'"
 
 
 class ExportManager:
@@ -274,7 +274,7 @@ class ExportManager:
             - For local paths, the MatrixOne server must have write permissions
             - For stage paths, use format: 'stage://stage_name/filename.csv'
             - sep and quotechar can be used together
-            - sep/quotechar must not contain NUL or backslashes; use actual tab characters for TSV
+            - path/sep/quotechar/lineterminator must not contain NUL or backslashes; use actual tabs for TSV
             - header=True is not yet supported by MatrixOne
         """
         # Build SQL
@@ -329,6 +329,7 @@ class ExportManager:
 
         Note:
             - JSONL format: one JSON object per line, no array wrapper
+            - path must not contain NUL or backslashes
             - Each line is a complete, valid JSON object
             - Suitable for streaming and big data processing
         """
