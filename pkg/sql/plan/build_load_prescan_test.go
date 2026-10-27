@@ -321,6 +321,28 @@ func TestIgnoredLinesCommentWithStartingAndTerminator(t *testing.T) {
 	}
 }
 
+func TestLoadFieldDelimiters(t *testing.T) {
+	tests := []struct {
+		name              string
+		fields            *tree.Fields
+		terminated        string
+		enclosed, escaped []byte
+	}{
+		{name: "nil", terminated: ",", enclosed: []byte{'"'}, escaped: []byte{0}},
+		{name: "empty", fields: &tree.Fields{}, terminated: ",", enclosed: []byte{'"'}, escaped: []byte{0}},
+		{name: "zero bytes and empty terminator", fields: &tree.Fields{Terminated: &tree.Terminated{}, EnclosedBy: &tree.EnclosedBy{}, EscapedBy: &tree.EscapedBy{}}, terminated: "", enclosed: []byte{'"'}, escaped: []byte{0}},
+		{name: "custom", fields: &tree.Fields{Optionally: true, Terminated: &tree.Terminated{Value: "||"}, EnclosedBy: &tree.EnclosedBy{Value: '\''}, EscapedBy: &tree.EscapedBy{Value: '\\'}}, terminated: "||", enclosed: []byte{'\''}, escaped: []byte{'\\'}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			terminated, enclosed, escaped := loadFieldDelimiters(tt.fields)
+			require.Equal(t, tt.terminated, terminated)
+			require.Equal(t, tt.enclosed, enclosed)
+			require.Equal(t, tt.escaped, escaped)
+		})
+	}
+}
+
 func TestPrepareLoadScanPrescanAndFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
