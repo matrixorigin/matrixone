@@ -1031,7 +1031,7 @@ const (
 	strictProbeBlockSize = 16 * 1024
 )
 
-var errStrictProbeBudgetExceeded = errors.New("strict CSV boundary probe budget exceeded")
+var errStrictProbeBudgetExceeded = moerr.NewInternalError(moerr.NoReportContext(), "strict CSV boundary probe budget exceeded")
 
 // strictProbeReader borrows the stream. A non-EOF error prevents the parser
 // from accepting an artificially truncated record as a complete final row.
