@@ -135,14 +135,10 @@ def _build_csv_export_sql(
     # Add CSV options
     options = []
 
-    # MatrixOne limitation: can't use both sep and quotechar simultaneously
-    # If both are specified, use sep only
-    if quotechar and sep != ',':
-        # Use quotechar only if sep is not default (user wants quoting behavior)
-        options.append(f"fields enclosed by '{quotechar}'")
-    elif sep:
-        # Use sep (default behavior)
-        options.append(f"fields terminated by '{sep}'")
+    fields = f"fields terminated by '{sep}'"
+    if quotechar:
+        fields += f" enclosed by '{quotechar}'"
+    options.append(fields)
 
     # Add line terminator if not default
     if lineterminator != '\n':
@@ -277,7 +273,7 @@ class ExportManager:
         Note:
             - For local paths, the MatrixOne server must have write permissions
             - For stage paths, use format: 'stage://stage_name/filename.csv'
-            - MatrixOne doesn't support using sep and quotechar simultaneously
+            - sep and quotechar can be used together
             - header=True is not yet supported by MatrixOne
         """
         # Build SQL
@@ -391,7 +387,7 @@ class ExportManager:
         Note:
             - The stage must exist before calling this method
             - Use client.stage.create_s3() or client.stage.create_local() to create stages
-            - MatrixOne doesn't support using sep and quotechar simultaneously
+            - sep and quotechar can be used together
         """
         # Build stage path
         stage_path = f"stage://{stage_name}/{filename}"
