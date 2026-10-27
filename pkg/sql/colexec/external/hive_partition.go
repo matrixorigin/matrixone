@@ -959,7 +959,7 @@ func matchIntCompare(dirVal, predVal string, bitSize int, op PartitionOp) MatchR
 	if err != nil {
 		return MatchUnknown
 	}
-	if compareSigned(dv, pv, op) {
+	if comparePartitionInteger(dv, pv, op) {
 		return MatchTrue
 	}
 	return MatchFalse
@@ -974,28 +974,13 @@ func matchUintCompare(dirVal, predVal string, bitSize int, op PartitionOp) Match
 	if err != nil {
 		return MatchUnknown
 	}
-	if compareUnsigned(dv, pv, op) {
+	if comparePartitionInteger(dv, pv, op) {
 		return MatchTrue
 	}
 	return MatchFalse
 }
 
-func compareSigned(left, right int64, op PartitionOp) bool {
-	switch op {
-	case PartOpLt:
-		return left < right
-	case PartOpLe:
-		return left <= right
-	case PartOpGt:
-		return left > right
-	case PartOpGe:
-		return left >= right
-	default:
-		return false
-	}
-}
-
-func compareUnsigned(left, right uint64, op PartitionOp) bool {
+func comparePartitionInteger[T int64 | uint64](left, right T, op PartitionOp) bool {
 	switch op {
 	case PartOpLt:
 		return left < right
