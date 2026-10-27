@@ -2522,7 +2522,6 @@ type spillStats struct {
 	spilledEntries      uint64
 	spilledPayloadBytes uint64
 	spilledBytes        uint64
-	segmentsCreated     uint64
 
 	bucketScans       uint64
 	bucketScanBytes   uint64
@@ -2857,7 +2856,6 @@ func (ss *spillStore) createSegment(bucket *spillBucket, bucketID uint32) (*spil
 	}
 	seg := &spillSegment{path: path}
 	bucket.segments = append(bucket.segments, seg)
-	ss.stats.segmentsCreated++
 	return seg, file, bufio.NewWriter(file), nil
 }
 
