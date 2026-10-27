@@ -17,7 +17,10 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +44,7 @@ func streamRows(o *vectorindex.SearchOutput) []rankedStreamRow {
 
 func TestConditionalStreamTopKExhaustiveOracle(t *testing.T) {
 	segs := make([]*Segment, 0, 2)
-	for si, keys := range [][]string{{"z", "aa", "a", "é"}, {"\x00", "a\x00", "中", "b", "aa"}} {
+	for si, keys := range [][]string{{"z", "aa", "a", "é", "A", "a "}, {"\x00", "a\x00", "中", "b", "aa", "A ", "É", "e"}} {
 		b := NewBuilder(fmt.Sprint(si), int32(types.T_varchar))
 		for i, key := range keys {
 			feed(t, b, key, "alpha", "beta")
@@ -68,13 +71,16 @@ func TestConditionalStreamTopKExhaustiveOracle(t *testing.T) {
 			return nil
 		})
 		require.NoError(t, err)
-		sort.Slice(oracle, func(i, j int) bool {
-			a, b := math.Float32frombits(oracle[i].bits), math.Float32frombits(oracle[j].bits)
-			if a != b {
-				return a > b
+		if len(oracle) > 0 {
+			byKey := make(map[string]uint32, len(oracle))
+			for _, row := range oracle {
+				byKey[row.key] = row.bits
 			}
-			return oracle[i].key < oracle[j].key
-		})
+			require.Equal(t, byKey["a"], byKey["A"], "mixed-case keys must tie on score")
+			require.Equal(t, byKey["a "], byKey["A "], "trailing-space keys must tie on score")
+			require.Equal(t, byKey["é"], byKey["e"], "non-ASCII and ASCII keys must tie on score")
+		}
+		oracle = sqlOrderedStreamRows(t, oracle)
 		for _, k := range []int{1, 3, 8, 9, MaxConditionalStreamTopK} {
 			var got []rankedStreamRow
 			err := idx.streamBagOfWordsTopK(context.Background(), []byte(pattern), ParserDefault, BM25, nil, k, func(o *vectorindex.SearchOutput) error {
@@ -86,6 +92,48 @@ func TestConditionalStreamTopKExhaustiveOracle(t *testing.T) {
 			require.Equal(t, oracle[:min(k, len(oracle))], got, "pattern=%q k=%d", pattern, k)
 		}
 	}
+}
+
+// sqlOrderedStreamRows uses the ORDER BY comparator used by Top/MergeTop,
+// independently of the collector's byte comparator and heap implementation.
+func sqlOrderedStreamRows(t *testing.T, rows []rankedStreamRow) []rankedStreamRow {
+	t.Helper()
+	if len(rows) == 0 {
+		return rows
+	}
+	mp := mpool.MustNewZero()
+	pkType := types.New(types.T_varchar, 128, 0)
+	require.Equal(t, types.CharsetUTF8, pkType.Charset)
+	require.Zero(t, pkType.CollationVersion)
+	pkVec := vector.NewVec(pkType)
+	defer pkVec.Free(mp)
+	scoreType := types.T_float32.ToType()
+	scoreVec := vector.NewVec(scoreType)
+	defer scoreVec.Free(mp)
+	order := make([]int, len(rows))
+	for i, row := range rows {
+		require.NoError(t, vector.AppendBytes(pkVec, []byte(row.key), false, mp))
+		require.NoError(t, vector.AppendFixed(scoreVec, math.Float32frombits(row.bits), false, mp))
+		order[i] = i
+	}
+	scoreCmp := compare.NewOrder(scoreType, true, false)
+	pkCmp := compare.NewOrder(pkType, false, false)
+	scoreCmp.Set(0, scoreVec)
+	scoreCmp.Set(1, scoreVec)
+	pkCmp.Set(0, pkVec)
+	pkCmp.Set(1, pkVec)
+	sort.Slice(order, func(i, j int) bool {
+		left, right := int64(order[i]), int64(order[j])
+		if c := scoreCmp.Compare(0, 1, left, right); c != 0 {
+			return c < 0
+		}
+		return pkCmp.Compare(0, 1, left, right) < 0
+	})
+	result := make([]rankedStreamRow, len(rows))
+	for i, row := range order {
+		result[i] = rows[row]
+	}
+	return result
 }
 
 func TestConditionalStreamTopKHeapScoreDomain(t *testing.T) {

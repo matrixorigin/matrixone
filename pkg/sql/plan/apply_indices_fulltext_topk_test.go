@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,6 +28,7 @@ func TestConditionalFulltextTopKPublicBinding(t *testing.T) {
 		mutate                                func(*planpb.TableDef)
 		want                                  uint64
 		patternParameter                      bool
+		wantBindError                         bool
 	}{
 		{name: "original", want: 2},
 		{name: "pattern parameter", patternParameter: true, want: 2},
@@ -52,7 +54,10 @@ func TestConditionalFulltextTopKPublicBinding(t *testing.T) {
 		{name: "distinct", projection: "distinct id," + match + " as score"},
 		{name: "window", projection: "id," + match + " as score,row_number() over()"},
 		{name: "numeric pk", mutate: func(d *planpb.TableDef) { d.Cols[0].Typ.Id = int32(types.T_int64) }},
-		{name: "case insensitive pk", mutate: func(d *planpb.TableDef) { d.Cols[0].Typ.Charset = uint32(types.CharsetUTF8) }},
+		{name: "legacy pk", mutate: func(d *planpb.TableDef) { d.Cols[0].Typ.Charset = uint32(types.CharsetLegacy) }, want: 2},
+		{name: "binary collation pk", mutate: func(d *planpb.TableDef) { d.Cols[0].Typ.Charset = uint32(types.CharsetUTF8MB4Bin) }, want: 2},
+		{name: "unknown collation identity", mutate: func(d *planpb.TableDef) { d.Cols[0].Typ.Charset = 255 }, wantBindError: true},
+		{name: "future collation revision", mutate: func(d *planpb.TableDef) { d.Cols[0].Typ.CollationVersion = 1 }, wantBindError: true},
 		{name: "unicode pk", mutate: func(d *planpb.TableDef) {
 			d.Cols[0].Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
 			d.Cols[0].Typ.CollationVersion = 1
@@ -65,7 +70,11 @@ func TestConditionalFulltextTopKPublicBinding(t *testing.T) {
 			table := b.qry.Nodes[scanID].TableDef
 			table.Name = "ft_conditional"
 			table.TblId = 10001
-			table.Cols[0].Typ = planpb.Type{Id: int32(types.T_varchar), NotNullable: true, Width: 128}
+			pkType := types.New(types.T_varchar, 128, 0)
+			pkType.SetNotNull(true)
+			require.Equal(t, types.CharsetUTF8, pkType.Charset, "fixture must carry the live CREATE TABLE default")
+			table.Cols[0].Typ = makePlan2Type(&pkType)
+			table.Cols[0].Typ.NotNullable = pkType.GetNotNull()
 			table.Pkey.Names = []string{"id"}
 			for _, idx := range table.Indexes {
 				registerFullTextJoinRegularIndexTable(b, idx.IndexTableName)
@@ -99,6 +108,10 @@ func TestConditionalFulltextTopKPublicBinding(t *testing.T) {
 			require.Len(t, statements, 1)
 			defer statements[0].Free()
 			p, err := BuildPlan(&fullTextOrderPythonUdfContext{ctx}, statements[0], strings.Contains(sql, "?"))
+			if tc.wantBindError {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "unsupported catalog collation must be rejected before acceleration: %v", err)
+				return
+			}
 			require.NoError(t, err)
 			q := p.GetQuery()
 			require.NotNil(t, q)

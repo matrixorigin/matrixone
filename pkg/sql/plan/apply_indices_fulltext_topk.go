@@ -104,7 +104,9 @@ func (b *QueryBuilder) attachConditionalStreamTopK(sortNode, project *plan.Node)
 		return
 	}
 	pk := def.Cols[pkPos]
-	if pk.Typ.Id != int32(types.T_varchar) || !pk.Typ.NotNullable || pk.Typ.Charset > uint32(types.CharsetUTF8MB4Bin) ||
+	// Revision-0 identities 0..3 retain bytewise SQL ORDER BY and VARCHAR key equality.
+	// UCA, unknown identities and future revisions remain ineligible.
+	if pk.Typ.Id != int32(types.T_varchar) || !pk.Typ.NotNullable || pk.Typ.Charset > uint32(types.CharsetUTF8) ||
 		pk.Typ.CollationVersion != 0 {
 		return
 	}
