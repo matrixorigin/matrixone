@@ -113,6 +113,12 @@ func TestExplicitCloneInstallsLifecycleValidationOnlyAfterSuccess(t *testing.T) 
 	require.False(t, handler.lineageOwnerLifecycleValidation)
 }
 
+func generatedColumnsLogicallyEqualForTest(left, right *plan.GeneratedCol) bool {
+	return dataBranchGeneratedColumnsLogicallyEqual(
+		&plan.ColDef{GeneratedCol: left}, &plan.ColDef{GeneratedCol: right}, nil, nil, nil,
+	)
+}
+
 func TestDataBranchColumnClassification(t *testing.T) {
 	require.True(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: "tenant"}))
 	require.True(t, isDataBranchWritableColumn(&plan.ColDef{Name: "tenant"}))
@@ -132,8 +138,8 @@ func TestDataBranchColumnClassification(t *testing.T) {
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.CPrimaryKeyColName, Hidden: true}))
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: "__mo_cbkey_006tenant003seq", Hidden: true}))
 	require.False(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: catalog.Row_ID, Hidden: true}))
-	require.False(t, dataBranchGeneratedColumnsEqual(&plan.GeneratedCol{}, &plan.GeneratedCol{}))
-	require.True(t, dataBranchGeneratedColumnsEqual(
+	require.False(t, generatedColumnsLogicallyEqualForTest(&plan.GeneratedCol{}, &plan.GeneratedCol{}))
+	require.True(t, generatedColumnsLogicallyEqualForTest(
 		&plan.GeneratedCol{OriginString: "tenant * 2", IsStored: true},
 		&plan.GeneratedCol{OriginString: "tenant * 2", IsStored: true},
 	))
@@ -149,19 +155,19 @@ func TestDataBranchGeneratedColumnsTreatLegacyNoneAsOrdinaryText(t *testing.T) {
 			}},
 		}}
 	}
-	require.True(t, dataBranchGeneratedColumnsEqual(
+	require.True(t, generatedColumnsLogicallyEqualForTest(
 		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_NONE),
 		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_TEXT),
 	))
-	require.False(t, dataBranchGeneratedColumnsEqual(
+	require.False(t, generatedColumnsLogicallyEqualForTest(
 		makeGenerated(types.T_varbinary.ToType(), plan.StringLiteralForm_STRING_LITERAL_NONE),
 		makeGenerated(types.T_varbinary.ToType(), plan.StringLiteralForm_STRING_LITERAL_TEXT),
 	))
-	require.False(t, dataBranchGeneratedColumnsEqual(
+	require.False(t, generatedColumnsLogicallyEqualForTest(
 		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_TEXT),
 		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm_STRING_LITERAL_HEX),
 	))
-	require.False(t, dataBranchGeneratedColumnsEqual(
+	require.False(t, generatedColumnsLogicallyEqualForTest(
 		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm(99)),
 		makeGenerated(types.T_varchar.ToType(), plan.StringLiteralForm(99)),
 	))

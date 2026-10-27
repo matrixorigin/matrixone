@@ -73,23 +73,6 @@ func isDataBranchWritableColumn(col *plan.ColDef) bool {
 	return isDataBranchUserVisibleColumn(col) && col.GeneratedCol == nil
 }
 
-func dataBranchGeneratedColumnsEqual(left, right *plan.GeneratedCol) bool {
-	if left == nil || right == nil {
-		return left == right
-	}
-	if left.IsStored != right.IsStored {
-		return false
-	}
-	if left.Expr != nil || right.Expr != nil {
-		leftExpr := proto.Clone(left.Expr).(*plan.Expr)
-		rightExpr := proto.Clone(right.Expr).(*plan.Expr)
-		return leftExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
-			rightExpr.NormalizeTextLiteralFormsForCompatibility() == nil &&
-			proto.Equal(leftExpr, rightExpr)
-	}
-	return left.OriginString != "" && left.OriginString == right.OriginString
-}
-
 func dataBranchGeneratedColumnsLogicallyEqual(
 	tarCol, baseCol *plan.ColDef,
 	tarDef, baseDef *plan.TableDef,
