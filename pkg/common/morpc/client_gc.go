@@ -336,21 +336,6 @@ func init() {
 	globalClientGC.mu.Unlock()
 }
 
-// ResetGlobalClientGCManagerForTest resets the global GC manager for testing purposes.
-// This stops the current manager and creates a new one.
-// WARNING: Only use this in tests!
-func ResetGlobalClientGCManagerForTest() {
-	globalClientGCMu.Lock()
-	defer globalClientGCMu.Unlock()
-	mgr := globalClientGC
-	mgr.stop()
-	replacement := newClientGCManager()
-	replacement.mu.Lock()
-	replacement.ensureStartedLocked()
-	replacement.mu.Unlock()
-	globalClientGC = replacement
-}
-
 // triggerGCInactive triggers GC inactive task for a specific client and backend.
 // If channel is full, the request is dropped to avoid blocking.
 func (m *clientGCManager) triggerGCInactive(c *client, remote string) {

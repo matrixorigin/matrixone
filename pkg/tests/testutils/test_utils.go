@@ -392,14 +392,6 @@ func GetSQLExecutor(
 	return cn.RawService().(cnservice.Service).GetSQLExecutor()
 }
 
-func DBExists(
-	t *testing.T,
-	name string,
-	cn embed.ServiceOperator,
-) bool {
-	return DBExistsWithAccount(t, 0, name, cn)
-}
-
 func DBExistsWithAccount(
 	t *testing.T,
 	account int32,
