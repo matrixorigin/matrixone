@@ -11534,40 +11534,40 @@ func yearToOthers(proc *process.Process,
 	switch toType.Oid {
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
-		return yearToYear(ctx, source, rs, length, selectList)
+		return yearToNumeric(ctx, source, rs, length, selectList)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return yearToInteger(ctx, source, rs, length, selectList)
+		return yearToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return yearToInteger(ctx, source, rs, length, selectList)
+		return yearToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return yearToInteger(ctx, source, rs, length, selectList)
+		return yearToNumeric(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return yearToInteger(ctx, source, rs, length, selectList)
+		return yearToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return yearToInteger(ctx, source, rs, length, selectList)
+		return yearToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return yearToInteger(ctx, source, rs, length, selectList)
+		return yearToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return yearToInteger(ctx, source, rs, length, selectList)
+		return yearToNumeric(ctx, source, rs, length, selectList)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return yearToInteger(ctx, source, rs, length, selectList)
+		return yearToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
-		return yearToFloat(ctx, source, rs, length, selectList)
+		return yearToNumeric(ctx, source, rs, length, selectList)
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
-		return yearToFloat(ctx, source, rs, length, selectList)
+		return yearToNumeric(ctx, source, rs, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return yearToDecimal64(source, rs, length, selectList)
@@ -11597,46 +11597,8 @@ func yearToOthers(proc *process.Process,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from year to %s", toType))
 }
 
-// yearToYear copies YEAR value as-is
-func yearToYear(ctx context.Context,
-	source vector.FunctionParameterWrapper[types.MoYear],
-	rs *vector.FunctionResult[types.MoYear], length int, selectList *FunctionSelectList) error {
-	for i := 0; i < length; i++ {
-		v, isnull := source.GetValue(uint64(i))
-		if isnull {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(v, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// yearToInteger converts YEAR to integer types
-func yearToInteger[T constraints.Integer](ctx context.Context,
-	source vector.FunctionParameterWrapper[types.MoYear],
-	rs *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
-	for i := 0; i < length; i++ {
-		v, isnull := source.GetValue(uint64(i))
-		if isnull {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-		} else {
-			if err := rs.Append(T(v), false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// yearToFloat converts YEAR to float types
-func yearToFloat[T constraints.Float](ctx context.Context,
+// yearToNumeric converts YEAR to integer, float, or YEAR values.
+func yearToNumeric[T constraints.Integer | constraints.Float](ctx context.Context,
 	source vector.FunctionParameterWrapper[types.MoYear],
 	rs *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
 	for i := 0; i < length; i++ {
