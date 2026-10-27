@@ -1039,22 +1039,6 @@ func TestAesCFBDecodeWithKey_EmptyKey(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func Test_batchRowCount(t *testing.T) {
-	assert.Equal(t, 0, batchRowCount(nil))
-
-	mp := mpool.MustNewZeroNoFixed()
-	defer mpool.DeleteMPool(mp)
-
-	bat := batch.New([]string{})
-	assert.Equal(t, 0, batchRowCount(bat))
-
-	bat = batch.New([]string{"a", "ts"})
-	bat.Vecs[0] = testutil.MakeUint64Vector([]uint64{1, 2, 3}, nil, mp)
-	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 2, 3}, nil, mp)
-	bat.SetRowCount(3)
-	assert.Equal(t, 3, batchRowCount(bat))
-}
-
 func Test_compUriInfo(t *testing.T) {
 	ret, _ := compositedUriInfo("", "prefix")
 	assert.False(t, ret)

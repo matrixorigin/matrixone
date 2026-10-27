@@ -749,13 +749,6 @@ func GetInitDataKeySql(kek string) (_ string, err error) {
 	return fmt.Sprintf(InsertDataKeyFormat, catalog.System_Account, InitKeyId, encryptedKey), nil
 }
 
-func batchRowCount(bat *batch.Batch) int {
-	if bat == nil || len(bat.Vecs) == 0 {
-		return 0
-	}
-	return bat.Vecs[0].Length()
-}
-
 // AddSingleQuotesJoin [a, b, c] -> 'a','b','c'
 func AddSingleQuotesJoin(s []string) string {
 	if len(s) == 0 {
