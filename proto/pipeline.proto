@@ -238,6 +238,10 @@ message PreInsert {
   int32 target_row_id_col = 16;
   bool track_auto_increment_generated = 17;
   int32 auto_increment_generated_column = 18;
+  bool track_odku_result = 19;
+  int32 odku_ordinal_column = 20;
+  // ODKU provenance names the user-visible AUTO_INCREMENT source column.
+  int32 odku_auto_increment_column = 21;
 }
 
 message PostDml {
@@ -362,6 +366,11 @@ message DedupJoin {
   int32 action_final_result_pos = 28;
   repeated ODKUForeignKeyCheck foreign_key_checks = 29 [(gogoproto.nullable) = false];
   repeated plan.Expr dedup_key_exprs = 30;
+  int32 odku_target_auto_increment_col = 31;
+  int32 odku_generated_col = 32;
+  int32 odku_ordinal_col = 33;
+  bool odku_result_tracking = 34;
+  int32 odku_generated_auto_increment_col = 35;
 }
 
 message RightDedupJoin {
@@ -778,6 +787,10 @@ message ProcessInfo {
   // Positive outer DML classification; absent on legacy senders means unknown.
   // Corrected float conversions require MORPC v132 on the bound stream.
   bool statement_runtime_dml = 18;
+  // Statement-local ODKU ordinal range reserved by the initiating CN before
+  // this remote pipeline starts. Tag18 belongs to upstream DML classification;
+  // the complete ODKU contract requires MORPC v134. Older senders leave it zero.
+  uint64 odku_ordinal_base = 19;
 }
 
 message SessionInfo {
@@ -813,6 +826,10 @@ message SessionInfo {
   bool default_week_format_set = 21;
   // Effective locale captured for locale-sensitive temporal functions.
   string lc_time_names = 22;
+  // Captured session baseline; zero is meaningful and the presence bit
+  // distinguishes an older sender that did not transport this state.
+  uint64 last_insert_id = 23;
+  bool last_insert_id_set = 24;
 }
 
 message SessionLoggerInfo {
