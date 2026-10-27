@@ -391,10 +391,11 @@ func CheckTableColumn(txn executor.TxnExecutor,
 
 // CheckViewDefinition Check if the view exists, if so, return true and return the view definition
 var CheckViewDefinition = func(txn executor.TxnExecutor, accountId uint32, schema string, viewName string) (bool, string, error) {
-	sql := fmt.Sprintf("SELECT tbl.rel_createsql AS `VIEW_DEFINITION` FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.relkind = 'v' AND tbl.reldatabase = '%s'  AND  tbl.relname = '%s'", schema, viewName)
+	accountFilter := ""
 	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf("SELECT tbl.rel_createsql AS `VIEW_DEFINITION` FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.relkind = 'v' AND account_id = 0 AND tbl.reldatabase = '%s'  AND  tbl.relname = '%s'", schema, viewName)
+		accountFilter = "account_id = 0 AND "
 	}
+	sql := fmt.Sprintf("SELECT tbl.rel_createsql AS `VIEW_DEFINITION` FROM mo_catalog.mo_tables tbl LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.relkind = 'v' AND %stbl.reldatabase = '%s'  AND  tbl.relname = '%s'", accountFilter, schema, viewName)
 
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId).WithDisableLog())
 	if err != nil {
@@ -514,16 +515,15 @@ func CheckIndexDefinition(txn executor.TxnExecutor, accountId uint32, schema str
 		return false, moerr.NewInternalErrorNoCtx("schema name or table name or indexName is empty")
 	}
 
+	accountFilter := ""
+	if accountId == catalog.System_Account {
+		accountFilter = fmt.Sprintf("`tbl`.`account_id` = %d AND ", accountId)
+	}
 	sql := fmt.Sprintf("select distinct `idx`.`name` from `mo_catalog`.`mo_indexes` `idx` "+
 		"left join `mo_catalog`.`mo_tables` `tbl` on `idx`.`table_id` = `tbl`.`rel_id` "+
-		"where `tbl`.`reldatabase` = '%s' AND `tbl`.`relname` = '%s' AND `idx`.`name` = '%s'",
-		schema, tableName, indexName)
-	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf("select distinct `idx`.`name` from `mo_catalog`.`mo_indexes` `idx` "+
-			"left join `mo_catalog`.`mo_tables` `tbl` on `idx`.`table_id` = `tbl`.`rel_id` "+
-			"where `tbl`.`account_id` = %d AND `tbl`.`reldatabase` = '%s' AND `tbl`.`relname` = '%s' AND `idx`.`name` = '%s'",
-			accountId, schema, tableName, indexName)
-	}
+		"where %s`tbl`.`reldatabase` = '%s' AND `tbl`.`relname` = '%s' AND `idx`.`name` = '%s'",
+		accountFilter, schema, tableName, indexName)
+
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
 	if err != nil {
 		return false, err
