@@ -123,6 +123,35 @@ func normalizeParallelOption(opt *ParallelMultipartOption) ParallelMultipartOpti
 	return res
 }
 
+// readObjectRange applies the object storage half-open byte range to a seekable reader.
+// The caller retains responsibility for closing source, including on error.
+func readObjectRange(source io.ReadSeeker, key string, min, max *int64) (io.Reader, error) {
+	var reader io.Reader
+	reader = source
+
+	if min != nil {
+		pos, err := source.Seek(*min, io.SeekStart)
+		if err != nil {
+			return nil, err
+		}
+		if pos != *min {
+			return nil, moerr.NewEmptyRangeNoCtx(key)
+		}
+	}
+
+	if max != nil {
+		limit := *max
+		if min != nil {
+			limit -= *min
+		}
+		if limit <= 0 {
+			return nil, moerr.NewEmptyRangeNoCtx(key)
+		}
+		reader = io.LimitReader(reader, limit)
+	}
+	return reader, nil
+}
+
 type ObjectStorage interface {
 	// List lists objects with specified prefix
 	List(
