@@ -14,6 +14,19 @@
 
 package api
 
+// ExpectedAddedSnapshot returns the first valid add-snapshot update in an attempt.
+func ExpectedAddedSnapshot(attempt *CommitAttempt) (Snapshot, bool) {
+	if attempt == nil {
+		return Snapshot{}, false
+	}
+	for _, update := range attempt.Updates {
+		if update.Type == "add-snapshot" && update.Snapshot != nil && update.Snapshot.SnapshotID > 0 {
+			return *update.Snapshot, true
+		}
+	}
+	return Snapshot{}, false
+}
+
 func NewAddSnapshotUpdate(snapshot Snapshot) CommitUpdate {
 	snapshot.Summary = cloneCommitStringMap(snapshot.Summary)
 	return CommitUpdate{Type: "add-snapshot", Snapshot: &snapshot}

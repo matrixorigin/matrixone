@@ -111,3 +111,23 @@ func TestErrorWrappingCauseAndMOConversionEdges(t *testing.T) {
 		require.NotNil(t, CauseForCode(code), code)
 	}
 }
+
+func TestExpectedAddedSnapshot(t *testing.T) {
+	_, ok := ExpectedAddedSnapshot(nil)
+	require.False(t, ok)
+	_, ok = ExpectedAddedSnapshot(&CommitAttempt{Updates: []CommitUpdate{
+		{Type: "add-snapshot"},
+		{Type: "add-snapshot", Snapshot: &Snapshot{SnapshotID: 0}},
+		{Type: "other", Snapshot: &Snapshot{SnapshotID: 5}},
+	}})
+	require.False(t, ok)
+	attempt := &CommitAttempt{Updates: []CommitUpdate{
+		{Type: "add-snapshot", Snapshot: &Snapshot{SnapshotID: -1}},
+		{Type: "add-snapshot", Snapshot: &Snapshot{SnapshotID: 7, ManifestList: "first"}},
+		{Type: "add-snapshot", Snapshot: &Snapshot{SnapshotID: 8, ManifestList: "second"}},
+	}}
+	got, ok := ExpectedAddedSnapshot(attempt)
+	require.True(t, ok)
+	require.Equal(t, int64(7), got.SnapshotID)
+	require.Equal(t, "first", got.ManifestList)
+}

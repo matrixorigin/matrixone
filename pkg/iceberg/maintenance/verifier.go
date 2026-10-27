@@ -81,7 +81,7 @@ func (v CatalogCommitVerifier) VerifyCommittedMaintenance(ctx context.Context, r
 	if err != nil {
 		return result, false, err
 	}
-	expected, hasAddedSnapshot := maintenanceExpectedSnapshot(plan.Attempt)
+	expected, hasAddedSnapshot := api.ExpectedAddedSnapshot(plan.Attempt)
 	snapshot, err := maintenanceTargetSnapshot(meta, firstNonEmptyString(req.TargetRef, plan.Attempt.TargetRef), "")
 	if err != nil {
 		return result, false, err
@@ -127,18 +127,6 @@ func (v CatalogCommitVerifier) VerifyCommittedMaintenance(ctx context.Context, r
 	result.Unknown = false
 	result.Verified = true
 	return result, true, nil
-}
-
-func maintenanceExpectedSnapshot(attempt *api.CommitAttempt) (api.Snapshot, bool) {
-	if attempt == nil {
-		return api.Snapshot{}, false
-	}
-	for _, update := range attempt.Updates {
-		if update.Type == "add-snapshot" && update.Snapshot != nil && update.Snapshot.SnapshotID > 0 {
-			return *update.Snapshot, true
-		}
-	}
-	return api.Snapshot{}, false
 }
 
 func maintenanceHasSnapshotSummaryUpdate(updates []api.CommitUpdate) bool {
