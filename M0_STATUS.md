@@ -1,5 +1,13 @@
 # M0 restricted metadata-only ADD prototype
 
+Architecture follow-up, 2026-10-27: [R3 read-boundary proposal](docs/design/20261027-m0-read-boundary-r3.md)
+is a draft for maintainer decision, not approval or an implementation change.
+It reopens the R2 default-compatibility policy and identifies an unresolved
+trusted-origin/classification obligation. Current source remains `a44bc4b3`;
+CI and earlier tests do not resolve that obligation. R2 and its model review
+remain unchanged as historical records. No new test or performance result is
+claimed, and the maintainer architecture CR remains open.
+
 Review handoff, 2026-10-23: **request formal maintainer review of the restricted,
 default-disabled M0 candidate, not production enablement or merge approval.**
 The reviewed kernel head is `b3c86e3f3375f6441d3326d08ac23ac6598d4d1d`.
