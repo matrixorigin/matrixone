@@ -552,19 +552,19 @@ func formatOutputNull(oq *ExportConfig, symbol []byte, enclosed byte, last bool,
 // checkNullEmission depends only on statement framing and the actual following
 // boundary. Call it only on first encountering NULL at that boundary: unsafe
 // NULL framing must not reject a statement which exports no NULLs.
-func (oq *ExportConfig) checkNullEmission(symbol []byte, enclosed byte, last bool) (bool, error) {
+func (ec *ExportConfig) checkNullEmission(symbol []byte, enclosed byte, last bool) (bool, error) {
 	// The NULL marker always ends in 'N'. With FIELDS ESCAPED BY 'N' the
 	// reader consumes the byte after the marker (separator or terminator)
 	// as escape content, merging fields/records — no safe encoding exists,
 	// so reject before writing a corrupt file.
-	if oq.escapeChar() == 'N' {
-		return false, moerr.NewNotSupported(oq.ctx,
+	if ec.escapeChar() == 'N' {
+		return false, moerr.NewNotSupported(ec.ctx,
 			"select into outfile (csv): a NULL value cannot round-trip with FIELDS ESCAPED BY 'N'")
 	}
 	flag := false
-	if enclosed != 0 && oq.escapeChar() != 0 {
-		field, line, _, _ := oq.csvBoundaryBytes()
-		flag = enclosed == oq.escapeChar() || field == oq.escapeChar() || line == oq.escapeChar()
+	if enclosed != 0 && ec.escapeChar() != 0 {
+		field, line, _, _ := ec.csvBoundaryBytes()
+		flag = enclosed == ec.escapeChar() || field == ec.escapeChar() || line == ec.escapeChar()
 	}
 	// The marker always starts with a literal backslash and ends in N.
 	// Those bytes can collide with the enclosure, with a field or record
@@ -580,12 +580,12 @@ func (oq *ExportConfig) checkNullEmission(symbol []byte, enclosed byte, last boo
 	if flag {
 		emitted = append(append([]byte{enclosed}, marker...), enclosed)
 	}
-	if !oq.csvFieldEmissionParses(emitted, symbol, last, nil, true) {
-		if enclosed != 0 && (enclosed == '\\' || enclosed == 'N' || enclosed == oq.escapeChar()) {
-			return false, moerr.NewNotSupportedf(oq.ctx,
+	if !ec.csvFieldEmissionParses(emitted, symbol, last, nil, true) {
+		if enclosed != 0 && (enclosed == '\\' || enclosed == 'N' || enclosed == ec.escapeChar()) {
+			return false, moerr.NewNotSupportedf(ec.ctx,
 				"select into outfile (csv): a NULL value cannot round-trip with ENCLOSED BY '%c': the emitted \\N marker breaks LOAD's field scan", enclosed)
 		}
-		return false, moerr.NewNotSupported(oq.ctx,
+		return false, moerr.NewNotSupported(ec.ctx,
 			"select into outfile (csv): a NULL value cannot round-trip with this CSV framing: the emitted \\N marker breaks LOAD's field scan")
 	}
 	return flag, nil
