@@ -10412,64 +10412,52 @@ func initExtractTestCase() []tcTemp {
 		return ds
 	}
 
+	dateValues := MakeDates("2020-01-01", "2021-02-03", "2024-03-04", "")
+
 	return []tcTemp{
 		{
 			info: "test extractFromDate year",
 			typ:  types.T_date,
 			inputs: []FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"year", "year", "year", "year"}, []bool{false, false, false, false}),
-				NewFunctionTestInput(types.T_date.ToType(), MakeDates("2020-01-01", "2021-02-03", "2024-03-04", ""), []bool{false, false, false, true}),
+				NewFunctionTestInput(types.T_date.ToType(), dateValues, []bool{false, false, false, true}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{2020, 2021, 2024, 1},
 				[]bool{false, false, false, true}),
-			//TODO: Comments migrated from original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract_test.go#L39
-			// XXX why?  This seems to be wrong.  ExtractFromDate "" should error out,
-			// but if it does not, we tested the result is 1 in prev check.
-			// it should not be null.
-			// require.True(t, nulls.Contains(outputVector.GetNulls(), uint64(3)))
 		},
 		{
 			info: "test extractFromDate month",
 			typ:  types.T_date,
 			inputs: []FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"month", "month", "month", "month"}, []bool{false, false, false, false}),
-				NewFunctionTestInput(types.T_date.ToType(), MakeDates("2020-01-01", "2021-02-03", "2024-03-04", ""), []bool{false, false, false, true}),
+				NewFunctionTestInput(types.T_date.ToType(), dateValues, []bool{false, false, false, true}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{1, 2, 3, 1},
 				[]bool{false, false, false, true}),
-			//TODO: Comments migrated from original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract_test.go#L39
-			// XXX same as above.
-			// require.True(t, nulls.Contains(outputVector.GetNulls(), uint64(3)))
 		},
 		{
 			info: "test extractFromDate day",
 			typ:  types.T_date,
 			inputs: []FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"day", "day", "day", "day"}, []bool{}),
-				NewFunctionTestInput(types.T_date.ToType(), MakeDates("2020-01-01", "2021-02-03", "2024-03-04", ""), []bool{false, false, false, true}),
+				NewFunctionTestInput(types.T_date.ToType(), dateValues, []bool{false, false, false, true}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{1, 3, 4, 1},
 				[]bool{false, false, false, true}),
-			//TODO: Comments migrated from original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract_test.go#L39
-			// XXX Same
-			// require.True(t, nulls.Contains(outputVector.GetNulls(), uint64(3)))
 		},
 		{
 			info: "test extractFromDate year_month",
 			typ:  types.T_date,
 			inputs: []FunctionTestInput{
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"year_month", "year_month", "year_month", "year_month"}, []bool{}),
-				NewFunctionTestInput(types.T_date.ToType(), MakeDates("2020-01-01", "2021-02-03", "2024-03-04", ""), []bool{false, false, false, true}),
+				NewFunctionTestInput(types.T_date.ToType(), dateValues, []bool{false, false, false, true}),
 			},
 			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
 				[]int64{202001, 202102, 202403, 101},
 				[]bool{false, false, false, true}),
-			//TODO: Comments migrated from original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract_test.go#L39
-			// XXX same
-			// require.True(t, nulls.Contains(outputVector.GetNulls(), uint64(3)))
 		},
 		{
 			info: "test extractFromDateTime year",
@@ -10496,6 +10484,8 @@ func TestExtract(t *testing.T) {
 			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, ExtractFromDate)
 		case types.T_datetime:
 			fcTC = NewFunctionTestCase(proc, tc.inputs, tc.expect, ExtractFromDatetime)
+		default:
+			t.Fatalf("unexpected EXTRACT input type %v", tc.typ)
 		}
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
