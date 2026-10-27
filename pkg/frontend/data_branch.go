@@ -2050,7 +2050,6 @@ func getRelations(
 		)
 		return
 	}
-	tarOperand.rel = tarRel
 	if err = validateDataBranchNamedSnapshotScope(
 		ctx, tarName.AtTsExpr, tarSnap, tarDBName, tarTblName, tarRel,
 	); err != nil {
@@ -2079,7 +2078,6 @@ func getRelations(
 		)
 		return
 	}
-	baseOperand.rel = baseRel
 	if err = validateDataBranchNamedSnapshotScope(
 		ctx, baseName.AtTsExpr, baseSnap, baseDBName, baseTblName, baseRel,
 	); err != nil {
@@ -2125,10 +2123,7 @@ func buildBranchOperand(
 		return nil, newBranchOperandOutsidePublicationScopeError(ctx, dbName, tblName)
 	}
 	operand = &branchOperand{
-		userDb:    dbName,
-		userTable: tblName,
-		tableName: tblName,
-		ctx:       ctx,
+		ctx: ctx,
 	}
 	if classified.local {
 		operand.physAccount = ses.GetAccountId()
