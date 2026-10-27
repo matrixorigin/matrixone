@@ -339,7 +339,7 @@ func buildDMLCommitAttempt(req ManifestMaterializeRequest, manifests []api.Manif
 func materializePreservedManifests(req ManifestMaterializeRequest, budget *manifestMaterializeBudget, dataEntries []api.ManifestEntry) ([]api.ManifestFile, []RewrittenPreservedManifest, error) {
 	deletedFiles := deletedDataFileSet(dataEntries)
 	if len(deletedFiles) == 0 {
-		return cloneManifestFiles(req.PreservedManifests), nil, nil
+		return append([]api.ManifestFile(nil), req.PreservedManifests...), nil, nil
 	}
 	if len(req.PreservedManifests) == 0 {
 		return nil, nil, api.NewError(api.ErrMetadataInvalid, "Iceberg DML file-delete commit requires preserved data manifests", map[string]string{
@@ -503,15 +503,6 @@ func dmlTimestampMS(timestampMS int64) int64 {
 		return timestampMS
 	}
 	return time.Now().UnixMilli()
-}
-
-func cloneManifestFiles(in []api.ManifestFile) []api.ManifestFile {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]api.ManifestFile, len(in))
-	copy(out, in)
-	return out
 }
 
 func manifestSpecID(entries []api.ManifestEntry) int {
