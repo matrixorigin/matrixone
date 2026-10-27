@@ -130,9 +130,9 @@ func TestUpgradeProbesFilterHiddenObjectsByPrefixNotLike(t *testing.T) {
 		}
 	}
 
-	_, _ = CheckTableDefinition(executor.NewMemTxnExecutor(record("table"), nil), 0, "db", "tbl")
-	_, _, _ = CheckTableComment(executor.NewMemTxnExecutor(record("comment"), nil), 0, "db", "tbl")
-	_, _ = CheckTableColumn(executor.NewMemTxnExecutor(record("column"), nil), 0, "db", "tbl", "col")
+	_, _ = CheckTableDefinition(executor.NewMemTxnExecutor(record("table"), nil), 42, "db", "tbl")
+	_, _, _ = CheckTableComment(executor.NewMemTxnExecutor(record("comment"), nil), 42, "db", "tbl")
+	_, _ = CheckTableColumn(executor.NewMemTxnExecutor(record("column"), nil), 42, "db", "tbl", "col")
 	// The System_Account variants are separate statements and need the same filter.
 	_, _ = CheckTableDefinition(executor.NewMemTxnExecutor(record("table-sys"), nil), catalog.System_Account, "db", "tbl")
 	_, _, _ = CheckTableComment(executor.NewMemTxnExecutor(record("comment-sys"), nil), catalog.System_Account, "db", "tbl")
@@ -148,4 +148,6 @@ func TestUpgradeProbesFilterHiddenObjectsByPrefixNotLike(t *testing.T) {
 	for _, name := range []string{"column", "column-sys"} {
 		require.Contains(t, seen[name], "NOT prefix_eq(att_relname, '__mo_cpkey_')", name)
 	}
+	require.NotContains(t, seen["column"], "AND account_id = 0")
+	require.Contains(t, seen["column-sys"], "AND account_id = 0")
 }

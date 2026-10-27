@@ -337,6 +337,10 @@ func CheckTableColumn(txn executor.TxnExecutor,
 		Name:    columnName,
 	}
 
+	systemAccountFilter := ""
+	if accountId == catalog.System_Account {
+		systemAccountFilter = " AND account_id = 0"
+	}
 	sql := fmt.Sprintf(`SELECT mo_show_visible_bin(atttyp, 2) AS DATA_TYPE,
        CASE WHEN attnotnull != 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE,
        internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,
@@ -348,25 +352,8 @@ func CheckTableColumn(txn executor.TxnExecutor,
        CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA,
        att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns
             WHERE att_relname != 'mo_increment_columns' AND NOT prefix_eq(att_relname, '__mo_cpkey_')
-            AND attname != '__mo_rowid'
-            AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
-
-	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf(`SELECT mo_show_visible_bin(atttyp, 2) AS DATA_TYPE,
-       CASE WHEN attnotnull != 0 THEN 'NO' ELSE 'YES' END AS IS_NULLABLE,
-       internal_char_length(atttyp) AS CHARACTER_MAXIMUM_LENGTH,
-       internal_numeric_precision(atttyp) AS NUMERIC_PRECISION,
-       internal_numeric_scale(atttyp) AS NUMERIC_SCALE,
-       internal_datetime_scale(atttyp) AS DATETIME_PRECISION,
-       attnum AS ORDINAL_POSITION,
-       mo_show_visible_bin(att_default, 1) AS COLUMN_DEFAULT,
-       CASE WHEN att_is_auto_increment = 1 THEN 'auto_increment' ELSE '' END AS EXTRA,
-       att_comment AS COLUMN_COMMENT FROM mo_catalog.mo_columns
-            WHERE att_relname != 'mo_increment_columns' AND NOT prefix_eq(att_relname, '__mo_cpkey_')
-            AND attname != '__mo_rowid' AND account_id = 0
-            AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, schema, tableName, columnName)
-	}
-
+            AND attname != '__mo_rowid'%s
+            AND att_database = '%s' and att_relname = '%s' and attname = '%s';`, systemAccountFilter, schema, tableName, columnName)
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId).WithDisableLog())
 	if err != nil {
 		return colInfo, err
