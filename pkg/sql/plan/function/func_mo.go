@@ -1461,7 +1461,6 @@ func CastJsonToArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 }
 
 type typedArrayElementSpec struct {
-	raw      string
 	name     string
 	width    int
 	unsigned bool
@@ -1489,7 +1488,7 @@ func parseTypedArrayTypeSpec(declaredType string) (typedArrayElementSpec, error)
 	if err != nil {
 		return typedArrayElementSpec{}, err
 	}
-	return typedArrayElementSpec{raw: raw, name: "array", nested: &elem}, nil
+	return typedArrayElementSpec{name: "array", nested: &elem}, nil
 }
 
 func parseTypedArrayScalarSpec(rawType string) (typedArrayElementSpec, error) {
@@ -1520,7 +1519,7 @@ func parseTypedArrayScalarSpec(rawType string) (typedArrayElementSpec, error) {
 		params = strings.TrimSpace(lower[idx+1 : len(lower)-1])
 	}
 
-	spec := typedArrayElementSpec{raw: raw, name: normalizeTypedArrayElementName(name), width: -1, unsigned: unsigned}
+	spec := typedArrayElementSpec{name: normalizeTypedArrayElementName(name), width: -1, unsigned: unsigned}
 	if params != "" {
 		if width, ok := parseFirstArrayTypeParam(params); ok {
 			spec.width = width
