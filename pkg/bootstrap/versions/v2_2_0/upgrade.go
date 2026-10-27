@@ -16,13 +16,11 @@ package v2_2_0
 
 import (
 	"context"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"go.uber.org/zap"
 )
 
 var (
@@ -75,22 +73,7 @@ func (v *versionHandle) HandleTenantUpgrade(
 func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
-	for _, upgEntry := range clusterUpgEntries {
-		start := time.Now()
-
-		err := upgEntry.Upgrade(txn, catalog.System_Account)
-		if err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("cluster upgrade entry execute error", zap.Error(err), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
-			return err
-		}
-
-		duration := time.Since(start)
-		getLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
-			zap.String("upgrade entry", upgEntry.String()),
-			zap.Int64("time cost(ms)", duration.Milliseconds()),
-			zap.String("toVersion", v.Metadata().Version))
-	}
-	return nil
+	return versions.RunClusterUpgradeEntries(txn, clusterUpgEntries, getLogger, func() string { return v.Metadata().Version })
 }
 
 func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
