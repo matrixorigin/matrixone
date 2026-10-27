@@ -11,7 +11,7 @@ where table_schema='charset_defaults_contract' and table_name='defaults_target' 
 v  ¦  utf8mb4  ¦  utf8mb4_bin  𝄀
 c  ¦  utf8mb4  ¦  utf8mb4_bin  𝄀
 t  ¦  utf8mb4  ¦  utf8mb4_bin  𝄀
-raw  ¦  binary  ¦  binary  𝄀
+raw  ¦  null  ¦  null  𝄀
 n  ¦  null  ¦  null  𝄀
 before_default  ¦  utf8mb4  ¦  utf8mb4_general_ci  𝄀
 after_default  ¦  utf8mb4  ¦  utf8mb4_bin
@@ -58,7 +58,7 @@ where table_schema='charset_defaults_contract' and table_name='native_defaults' 
 ➤ column_name[12,256,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
 v  ¦  utf8mb4  ¦  utf8mb4_unicode_ci  𝄀
 g  ¦  utf8mb4  ¦  utf8mb4_unicode_ci  𝄀
-raw  ¦  binary  ¦  binary  𝄀
+raw  ¦  null  ¦  null  𝄀
 n  ¦  null  ¦  null
 select table_collation from information_schema.tables where table_schema='charset_defaults_contract' and table_name='native_defaults';
 ➤ table_collation[12,64,0]  𝄀
