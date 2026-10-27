@@ -138,8 +138,8 @@ WHERE table_schema = DATABASE()
 AND table_name IN ('soundex_binary_view', 'soundex_binary_ctas')
 ORDER BY table_name;
 table_name    column_name    data_type    character_maximum_length    character_set_name    collation_name
-soundex_binary_ctas    s    varbinary    64    binary    binary
-soundex_binary_view    s    varbinary    64    binary    binary
+soundex_binary_ctas    s    varbinary    64    null    null
+soundex_binary_view    s    varbinary    64    null    null
 DROP TABLE soundex_binary_ctas;
 DROP VIEW soundex_binary_view;
 DROP TABLE soundex_binary_domain;
