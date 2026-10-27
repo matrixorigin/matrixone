@@ -648,13 +648,6 @@ func (l *LocalETLFS) ensureDir(nativePath string) error {
 	return ensureLocalDir(&l.RWMutex, l.dirFiles, nativePath)
 }
 
-func (l *LocalETLFS) toOSPath(filePath string) string {
-	if os.PathSeparator == '/' {
-		return filePath
-	}
-	return strings.ReplaceAll(filePath, "/", osPathSeparatorStr)
-}
-
 func (l *LocalETLFS) syncDir(nativePath string) error {
 	return syncLocalDir(&l.RWMutex, l.dirFiles, nativePath)
 }
@@ -666,7 +659,7 @@ func (l *LocalETLFS) Cost() *CostAttr {
 }
 
 func (l *LocalETLFS) toNativeFilePath(filePath string) string {
-	return filepath.Join(l.rootPath, l.toOSPath(filePath))
+	return filepath.Join(l.rootPath, toOSPath(filePath))
 }
 
 var _ ETLFileService = new(LocalETLFS)
