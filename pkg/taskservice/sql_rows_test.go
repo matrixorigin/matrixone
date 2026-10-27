@@ -65,3 +65,19 @@ func TestForeachQueriedRow(t *testing.T) {
 	require.Zero(t, count)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestForeachQueriedRowReportsIterationError(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	defer db.Close()
+	injected := errors.New("row stream failed")
+	rows := sqlmock.NewRows([]string{"n"}).AddRow(1).AddRow(2).RowError(1, injected)
+	mock.ExpectQuery("SELECT n").WillReturnRows(rows).RowsWillBeClosed()
+	count, err := ForeachQueriedRow(context.Background(), db, "SELECT n", func(_ context.Context, rows *sql.Rows) (bool, error) {
+		var n int
+		return true, rows.Scan(&n)
+	})
+	require.ErrorIs(t, err, injected)
+	require.EqualValues(t, 1, count)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

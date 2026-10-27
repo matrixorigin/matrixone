@@ -19,6 +19,7 @@ import (
 	"database/sql"
 )
 
+// ForeachQueriedRow visits query results and counts rows accepted by the callback.
 func ForeachQueriedRow(
 	ctx context.Context,
 	tx SqlExecutor,
@@ -48,5 +49,6 @@ func ForeachQueriedRow(
 			cnt++
 		}
 	}
+	err = rows.Err()
 	return
 }
