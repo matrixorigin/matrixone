@@ -512,6 +512,7 @@ func init() {
 		"signed":                     SIGNED,
 		"simple":                     SIMPLE,
 		"smallint":                   SMALLINT,
+		"sounds":                     SOUNDS,
 		"spatial":                    SPATIAL,
 		"specific":                   UNUSED,
 		"sql":                        SQL,

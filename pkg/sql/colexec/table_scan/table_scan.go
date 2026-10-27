@@ -63,6 +63,7 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 		if err != nil {
 			return
 		}
+		tableScan.ctr.subjectReuseAdmissionDone = false
 	}
 
 	// runtime filters are set fresh by handleRuntimeFilters before each Prepare call
@@ -293,6 +294,11 @@ func (tableScan *TableScan) evalFilter(
 	bat *batch.Batch,
 	loadedColumns []int,
 ) (engine.ReaderFilterResult, error) {
+	firstInvocation := false
+	if !bat.IsEmpty() {
+		firstInvocation = !tableScan.ctr.subjectReuseAdmissionDone
+		tableScan.ctr.subjectReuseAdmissionDone = true
+	}
 	if tableScan.ctr.padCharToFullLength {
 		if err := padCharColumnsToFullLength(bat, proc); err != nil {
 			return engine.ReaderFilterResult{}, err
@@ -314,6 +320,12 @@ func (tableScan *TableScan) evalFilter(
 	for i := range tableScan.ctr.allFilterExecutors {
 		if bat.IsEmpty() {
 			break
+		}
+		if firstInvocation && i >= len(tableScan.ctr.runtimeFilterExecutors) {
+			staticIndex := i - len(tableScan.ctr.runtimeFilterExecutors)
+			executor := colexec.ReuseFilterExpressionExecutor(tableScan.FilterExprs[staticIndex], tableScan.ctr.filterExecutors[staticIndex], bat.RowCount())
+			tableScan.ctr.filterExecutors[staticIndex] = executor
+			tableScan.ctr.allFilterExecutors[i] = executor
 		}
 
 		vec, err := tableScan.ctr.allFilterExecutors[i].Eval(proc, []*batch.Batch{bat}, nil)
