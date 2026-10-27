@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -42,7 +43,7 @@ func TestBinaryAssignmentFloatConversionComposition(t *testing.T) {
 	for _, withBinary := range []bool{false, true} {
 		name := "float-only-132"
 		if withBinary {
-			name = "float-and-binary-133"
+			name = "float-and-binary-135"
 		}
 		t.Run(name, func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
@@ -52,7 +53,7 @@ func TestBinaryAssignmentFloatConversionComposition(t *testing.T) {
 			minimum := defines.MORPCVersion132
 			if withBinary {
 				exprs = append(exprs, binaryAssignmentProtocolExpr())
-				minimum = defines.MORPCVersion133
+				minimum = defines.MORPCVersion135
 			}
 			qry := &plan.Query{Nodes: []*plan.Node{{ProjectList: exprs}}, Steps: []int32{0}}
 			features, err := plan.RequiredRemoteExpressionFeatures(qry)
@@ -80,8 +81,8 @@ func TestBinaryAssignmentFloatConversionComposition(t *testing.T) {
 			payload := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: exprs}}}
 			cached := &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}
 			retained := &Compile{proc: c.proc, pn: cached}
-			for _, version := range []int64{defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133} {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
+			for _, version := range []int64{defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134, defines.MORPCVersion135} {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
 				client.version = version
 				c.execType = plan2.ExecTypeAP_MULTICN
 				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}
@@ -100,10 +101,10 @@ func TestBinaryAssignmentFloatConversionComposition(t *testing.T) {
 					require.ErrorContains(t, receiveErr, strconv.FormatInt(minimum, 10))
 					require.ErrorContains(t, persistedErr, strconv.FormatInt(minimum, 10))
 					if withBinary {
-						require.ErrorContains(t, validateTemporalResultProtocol(c.proc, cached), "133")
-						require.ErrorContains(t, retained.Compile(c.proc.Ctx, cached, nil), "133")
+						require.ErrorContains(t, validateTemporalResultProtocol(c.proc, cached), "135")
+						require.ErrorContains(t, retained.Compile(c.proc.Ctx, cached, nil), "135")
 						_, runErr := retained.Run(0)
-						require.ErrorContains(t, runErr, "133")
+						require.ErrorContains(t, runErr, "135")
 					}
 				} else {
 					require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
@@ -126,7 +127,7 @@ func binaryAssignmentProtocolExpr() *plan.Expr {
 func TestBinaryAssignmentPlacementSenderReceiver(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
 	expr := binaryAssignmentProtocolExpr()
 	qry := &plan.Query{Nodes: []*plan.Node{{ProjectList: []*plan.Expr{expr}}}, Steps: []int32{0}}
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}
@@ -154,14 +155,14 @@ func TestBinaryAssignmentPlacementSenderReceiver(t *testing.T) {
 	c.execType = plan2.ExecTypeAP_MULTICN
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-	for _, version := range []int64{defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132} {
+	for _, version := range []int64{defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134} {
 		client.version = version
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}
 		c.execType = plan2.ExecTypeAP_MULTICN
 		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 		require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType, "version=%d", version)
 	}
-	client.version = defines.MORPCVersion133
+	client.version = defines.MORPCVersion135
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}
 	c.execType = plan2.ExecTypeAP_MULTICN
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
@@ -175,44 +176,44 @@ func TestBinaryAssignmentPlacementSenderReceiver(t *testing.T) {
 	require.Error(t, err)
 	client.version = defines.MORPCVersion126
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "MORPC version 133")
+	require.ErrorContains(t, err, "MORPC version 135")
 	client.version = defines.MORPCVersion127
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "MORPC version 133")
+	require.ErrorContains(t, err, "MORPC version 135")
 	client.version = defines.MORPCVersion128
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "MORPC version 133")
+	require.ErrorContains(t, err, "MORPC version 135")
 	client.version = defines.MORPCVersion129
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "MORPC version 133")
-	for _, version := range []int64{defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132} {
+	require.ErrorContains(t, err, "MORPC version 135")
+	for _, version := range []int64{defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134} {
 		client.version = version
 		_, err = encodeRemoteScope(scope, c.proc)
-		require.ErrorContains(t, err, "MORPC version 133", "version=%d", version)
+		require.ErrorContains(t, err, "MORPC version 135", "version=%d", version)
 	}
-	client.version = defines.MORPCVersion133
+	client.version = defines.MORPCVersion135
 	minimum := int64(0)
 	data, err := encodeRemoteScopeWithProtocol(scope, c.proc, &minimum)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion133, minimum)
+	require.Equal(t, defines.MORPCVersion135, minimum)
 	var decoded pipeline.Pipeline
 	require.NoError(t, decoded.Unmarshal(data))
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &decoded), "protocol version 133")
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &decoded), "protocol version 135")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &decoded), "protocol version 133")
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &decoded), "protocol version 135")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &decoded), "protocol version 133")
-	for _, version := range []int64{defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132} {
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &decoded), "protocol version 135")
+	for _, version := range []int64{defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &decoded), "protocol version 133", "version=%d", version)
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &decoded), "protocol version 135", "version=%d", version)
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, &decoded))
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &decoded), "protocol version 133")
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &decoded), "protocol version 135")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &decoded), "protocol version 133")
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &decoded), "protocol version 135")
 	scope.NodeInfo.Addr = "stale:6001"
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.Error(t, err)
@@ -236,57 +237,109 @@ func TestBinaryAssignmentLocalAndRetainedPlan(t *testing.T) {
 			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion131)
 			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion132)
 			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion134)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion135)
 		}
 	})
 	p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
 		Nodes: []*plan.Node{{ProjectList: []*plan.Expr{binaryAssignmentProtocolExpr()}}}, Steps: []int32{0},
 	}}}
 	c := &Compile{proc: proc, pn: p}
-	for _, version := range []int64{defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion132, defines.MORPCVersion131, defines.MORPCVersion130, defines.MORPCVersion129, defines.MORPCVersion128, defines.MORPCVersion127, defines.MORPCVersion126, defines.MORPCVersion125} {
+	for _, version := range []int64{defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134, defines.MORPCVersion135, defines.MORPCVersion134, defines.MORPCVersion133, defines.MORPCVersion132, defines.MORPCVersion131, defines.MORPCVersion130, defines.MORPCVersion129, defines.MORPCVersion128, defines.MORPCVersion127, defines.MORPCVersion126, defines.MORPCVersion125} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		if version == defines.MORPCVersion133 {
+		if version == defines.MORPCVersion135 {
 			require.NoError(t, validateTemporalResultProtocol(proc, p))
 			continue
 		}
-		require.ErrorContains(t, validateTemporalResultProtocol(proc, p), "protocol version 133")
-		require.ErrorContains(t, c.Compile(proc.Ctx, p, nil), "protocol version 133")
+		require.ErrorContains(t, validateTemporalResultProtocol(proc, p), "protocol version 135")
+		require.ErrorContains(t, c.Compile(proc.Ctx, p, nil), "protocol version 135")
 		_, err := c.Run(0)
-		require.ErrorContains(t, err, "protocol version 133")
+		require.ErrorContains(t, err, "protocol version 135")
 	}
 	features := plan.RemoteExpressionFeatures{BinaryAssignmentSemantics: true, LoadFKIgnoreCheck: true, TimestampAddSecondIntervals: true}
-	require.Equal(t, defines.MORPCVersion133, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion135, remoteExpressionProtocolVersion(features))
 	features.BinaryAssignmentSemantics = false
 	require.Equal(t, defines.MORPCVersion125, remoteExpressionProtocolVersion(features))
 }
 
 func TestBinaryAssignmentProtocolPreservesMainContracts(t *testing.T) {
-	// Main129 JSON, main130 temporal strings, main131 weighted aggregates and main132 floats
-	// precede the independent binary assignment capability.
+	// Main assigns typed JSON MIN/MAX to 133 and ODKU result tracking to 134;
+	// the independent binary assignment capability follows both.
 	require.Less(t, defines.MORPCVersion132, remoteExpressionProtocolVersion(
 		plan.RemoteExpressionFeatures{BinaryAssignmentSemantics: true}))
 	require.Equal(t, defines.MORPCVersion132, remoteExpressionProtocolVersion(
 		plan.RemoteExpressionFeatures{FloatConversionSemantics: true}))
-	require.Equal(t, defines.MORPCVersion133, remoteExpressionProtocolVersion(
+	require.Equal(t, defines.MORPCVersion135, remoteExpressionProtocolVersion(
 		plan.RemoteExpressionFeatures{FloatConversionSemantics: true, BinaryAssignmentSemantics: true}))
-	require.Equal(t, defines.MORPCVersion133, remoteExpressionProtocolVersion(
+	require.Equal(t, defines.MORPCVersion135, remoteExpressionProtocolVersion(
 		plan.RemoteExpressionFeatures{BinaryAssignmentSemantics: true}))
 	require.Equal(t, defines.MORPCVersion130, remoteExpressionProtocolVersion(
 		plan.RemoteExpressionFeatures{IncompleteTemporalStrings: true}))
-	require.Equal(t, defines.MORPCVersion133, remoteExpressionProtocolVersion(
+	require.Equal(t, defines.MORPCVersion135, remoteExpressionProtocolVersion(
 		plan.RemoteExpressionFeatures{IncompleteTemporalStrings: true, BinaryAssignmentSemantics: true}))
 	require.Equal(t, defines.MORPCVersion126, remoteExpressionProtocolVersion(
 		plan.RemoteExpressionFeatures{ViewMetadataFunctions: true}))
 	require.Equal(t, defines.MORPCVersion128, remoteExpressionProtocolVersion(
 		plan.RemoteExpressionFeatures{JSONNumericComparisons: true}))
-	require.Equal(t, defines.MORPCVersion133, remoteExpressionProtocolVersion(
+	require.Equal(t, defines.MORPCVersion135, remoteExpressionProtocolVersion(
 		plan.RemoteExpressionFeatures{JSONNumericComparisons: true, BinaryAssignmentSemantics: true}))
+	for _, tc := range []struct {
+		features plan.RemoteExpressionFeatures
+		floor    int64
+	}{
+		{plan.RemoteExpressionFeatures{JSONMinMaxTypedComparison: true}, defines.MORPCVersion133},
+		{plan.RemoteExpressionFeatures{ODKUStatementResult: true}, defines.MORPCVersion134},
+		{plan.RemoteExpressionFeatures{SessionLastInsertIDBaseline: true}, defines.MORPCVersion134},
+	} {
+		require.Equal(t, tc.floor, remoteExpressionProtocolVersion(tc.features))
+		tc.features.BinaryAssignmentSemantics = true
+		require.Equal(t, defines.MORPCVersion135, remoteExpressionProtocolVersion(tc.features))
+	}
 	for _, features := range []plan.RemoteExpressionFeatures{
 		{JSONStringConsumerOverload: true},
 		{JSONOpaqueTextContracts: true},
 	} {
 		require.Equal(t, defines.MORPCVersion129, remoteExpressionProtocolVersion(features))
 		features.BinaryAssignmentSemantics = true
-		require.Equal(t, defines.MORPCVersion133, remoteExpressionProtocolVersion(features))
+		require.Equal(t, defines.MORPCVersion135, remoteExpressionProtocolVersion(features))
+	}
+}
+
+func TestBinaryAssignmentComposesWithMainProtocolAfterSerialization(t *testing.T) {
+	c, _ := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	last := &plan.Expr{Typ: plan.Type{Id: 28}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: int64(function.LAST_INSERT_ID) << 32}}}}
+	for _, nodes := range [][]*plan.Node{
+		{{ProjectList: []*plan.Expr{binaryAssignmentProtocolExpr(), last}, AggList: []*plan.Expr{jsonMinMaxPlanExpr(aggexec.AggIdOfMin)}}, {PreInsertCtx: &plan.PreInsertCtx{TrackOdkuResult: true}}},
+		{{PreInsertCtx: &plan.PreInsertCtx{TrackOdkuResult: true}}, {ProjectList: []*plan.Expr{last, binaryAssignmentProtocolExpr()}, AggList: []*plan.Expr{jsonMinMaxPlanExpr(aggexec.AggIdOfMin)}}},
+	} {
+		owner := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: nodes}}}
+		data, err := owner.Marshal()
+		require.NoError(t, err)
+		var decoded plan.Plan
+		require.NoError(t, decoded.Unmarshal(data))
+		features, err := plan.RequiredRemoteExpressionFeatures(&decoded)
+		require.NoError(t, err)
+		require.True(t, features.BinaryAssignmentSemantics)
+		require.True(t, features.JSONMinMaxTypedComparison)
+		require.True(t, features.ODKUStatementResult)
+		require.True(t, features.SessionLastInsertIDBaseline)
+		require.Equal(t, defines.MORPCVersion135, remoteExpressionProtocolVersion(features))
+		floor, err := plan2.RequiredPersistedExpressionProtocolVersion(&decoded)
+		require.NoError(t, err)
+		require.Equal(t, defines.MORPCVersion135, floor)
+		for _, version := range []int64{defines.MORPCVersion134, defines.MORPCVersion135} {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+			receiveErr := validateRemoteExpressionFeatures(c.proc, features)
+			persistedErr := plan2.RequirePersistedExpressionProtocol(c.proc.Ctx, c.proc, &decoded)
+			if version < defines.MORPCVersion135 {
+				require.ErrorContains(t, receiveErr, "protocol version 135")
+				require.ErrorContains(t, persistedErr, "protocol version 135")
+			} else {
+				require.NoError(t, receiveErr)
+				require.NoError(t, persistedErr)
+			}
+		}
 	}
 }
 
@@ -295,8 +348,8 @@ func TestBinaryAssignmentProtocolPreservesMainContracts(t *testing.T) {
 // prevents payload send. This proves capability admission, not a rolling
 // deployment; the supported upgrade procedure stops all old nodes first.
 func TestBinaryAssignmentActualReceiverWire(t *testing.T) {
-	const minimum = defines.MORPCVersion133
-	for _, version := range []int64{defines.MORPCVersion117, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, minimum} {
+	const minimum = defines.MORPCVersion135
+	for _, version := range []int64{defines.MORPCVersion117, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134, minimum} {
 		t.Run(strconv.FormatInt(version, 10), func(t *testing.T) {
 			sid := t.Name()
 			moruntime.SetupServiceBasedRuntime(sid, moruntime.DefaultRuntime())

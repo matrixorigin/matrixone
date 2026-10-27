@@ -146,9 +146,17 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
-	features, err := requiredRemotePipelineExpressionFeatures(p)
+	features, err := pipelineExpressionFeatures(p)
 	if err != nil {
 		return nil, err
+	}
+	// Scope cloning/folding preserves this Process, and the sender serializes
+	// this exact owner's ProcessInfo. The capability/root Process cannot lend
+	// a baseline to an unrelated scope with a missing state owner.
+	if features.ODKUStatementResult || features.SessionLastInsertIDBaseline {
+		if s.Proc == nil || s.Proc.Base == nil || s.Proc.Base.LastInsertID == nil {
+			return nil, moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID baseline owner is missing")
+		}
 	}
 	if features.FloatConversionSemantics && requiredProtocol != nil {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion132)
@@ -168,10 +176,18 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion125)
 	}
 	if requiredProtocol != nil && features.BinaryAssignmentSemantics {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion133)
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion135)
 	}
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
+	}
+	// Reconfirm these contracts on the very stream that carries the scope,
+	// not only at an earlier inventory/capability observation.
+	if requiredProtocol != nil && (features.ODKUStatementResult || features.SessionLastInsertIDBaseline) {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion134)
+	}
+	if requiredProtocol != nil && features.JSONMinMaxTypedComparison {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion133)
 	}
 	if requiredProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion129)
@@ -314,6 +330,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteStatementLastInsertIDPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		if err = validateRemoteODKUBaselinePresence(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteTargetAwareUpdatePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -383,6 +402,7 @@ func encodeProcessInfo(
 	sql string,
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
+	odkuOrdinalBase ...uint64,
 ) ([]byte, error) {
 	v, err := proc.BuildProcessInfo(sql)
 	if err != nil {
@@ -391,6 +411,9 @@ func encodeProcessInfo(
 	v.RemoteFragmentCounts = maps.Clone(remoteFragmentCounts)
 	if remoteExecutionID != uuid.Nil {
 		v.RemoteExecutionId = append([]byte(nil), remoteExecutionID[:]...)
+	}
+	if len(odkuOrdinalBase) > 0 {
+		v.OdkuOrdinalBase = odkuOrdinalBase[0]
 	}
 	return v.Marshal()
 }
@@ -854,6 +877,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, t.HasTargetSelector); err != nil {
 			return ctxId, nil, err
 		}
+		if t.TrackODKUResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
+			return ctxId, nil, moerr.NewNotSupportedNoCtx(
+				"remote ODKU result tracking requires MORPC protocol version 134")
+		}
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName:                   t.SchemaName,
 			TableDef:                     t.TableDef,
@@ -867,6 +894,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ColOffset:                    t.ColOffset,
 			TrackAutoIncrementGenerated:  t.TrackAutoIncrementGenerated,
 			AutoIncrementGeneratedColumn: t.AutoIncrementGeneratedColumn,
+			TrackOdkuResult:              t.TrackODKUResult,
+			OdkuOrdinalColumn:            t.ODKUOrdinalColumn,
+			OdkuAutoIncrementColumn:      t.ODKUAutoIncrementColumn,
 			RejectZeroTemporal:           t.RejectZeroTemporal,
 			HasTargetSelector:            t.HasTargetSelector,
 			TargetRowNumberCol:           t.TargetRowNumberCol,
@@ -1200,6 +1230,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		if err := validateRemoteODKUActionRowsProtocol(proc, t.EmitActionRows || len(t.ForeignKeyChecks) > 0); err != nil {
 			return ctxId, nil, err
 		}
+		if t.ODKUResultTracking && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
+			return ctxId, nil, moerr.NewNotSupportedNoCtx(
+				"remote ODKU result tracking requires MORPC protocol version 134")
+		}
 		relList, colList := getRelColList(t.Result)
 		in.DedupJoin = &pipeline.DedupJoin{
 			RelList:                         relList,
@@ -1231,6 +1265,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			CountFoundRows:                  t.CountFoundRows,
 			EmitActionRows:                  t.EmitActionRows,
 			ActionFinalResultPos:            t.ActionFinalResultPos,
+			OdkuResultTracking:              t.ODKUResultTracking,
+			OdkuTargetAutoIncrementCol:      t.ODKUTargetAutoIncrementCol,
+			OdkuGeneratedCol:                t.ODKUGeneratedCol,
+			OdkuOrdinalCol:                  t.ODKUOrdinalCol,
+			OdkuGeneratedAutoIncrementCol:   t.ODKUGeneratedAutoIncrementCol,
 		}
 		in.DedupJoin.ForeignKeyChecks = make([]pipeline.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
 		for i, check := range t.ForeignKeyChecks {
@@ -1466,6 +1505,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ColOffset = t.ColOffset
 		arg.TrackAutoIncrementGenerated = t.GetTrackAutoIncrementGenerated()
 		arg.AutoIncrementGeneratedColumn = t.GetAutoIncrementGeneratedColumn()
+		arg.TrackODKUResult = t.GetTrackOdkuResult()
+		arg.ODKUOrdinalColumn = t.GetOdkuOrdinalColumn()
+		arg.ODKUAutoIncrementColumn = t.GetOdkuAutoIncrementColumn()
 		arg.RejectZeroTemporal = t.GetRejectZeroTemporal()
 		arg.HasTargetSelector = t.GetHasTargetSelector()
 		arg.TargetRowNumberCol = t.GetTargetRowNumberCol()
@@ -1894,6 +1936,11 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.CountFoundRows = t.CountFoundRows
 		arg.EmitActionRows = t.EmitActionRows
 		arg.ActionFinalResultPos = t.ActionFinalResultPos
+		arg.ODKUResultTracking = t.GetOdkuResultTracking()
+		arg.ODKUTargetAutoIncrementCol = t.GetOdkuTargetAutoIncrementCol()
+		arg.ODKUGeneratedCol = t.GetOdkuGeneratedCol()
+		arg.ODKUOrdinalCol = t.GetOdkuOrdinalCol()
+		arg.ODKUGeneratedAutoIncrementCol = t.GetOdkuGeneratedAutoIncrementCol()
 		arg.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
 		for i, check := range t.ForeignKeyChecks {
 			arg.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
@@ -2155,6 +2202,11 @@ func validateRemoteAggregateProtocol(
 				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 14",
 			)
 		}
+		if aggregateUsesJSONMinMax(agg) {
+			if err := validateRemoteExpressionFeatures(proc, plan.RemoteExpressionFeatures{JSONMinMaxTypedComparison: true}); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -2409,11 +2461,20 @@ func validateRemoteExpressionPipelineProtocol(
 	if err := plan.RequireLegacyCollations(p); err != nil {
 		return err
 	}
-	features, err := requiredRemotePipelineExpressionFeatures(p)
+	features, err := pipelineExpressionFeatures(p)
 	if err != nil {
 		return err
 	}
-	return validateRemoteExpressionFeatures(proc, features)
+	if err := validateRemoteExpressionFeatures(proc, features); err != nil {
+		return err
+	}
+	// Decoding must prove wire presence even for expression-only consumers;
+	// a receiver-local default pointer or resolver is not sender provenance.
+	if features.SessionLastInsertIDBaseline && (proc == nil || proc.Base == nil ||
+		proc.Base.LastInsertID == nil || !proc.GetSessionInfo().LastInsertIDSet) {
+		return moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID requires an explicit session baseline")
+	}
+	return nil
 }
 
 // The sender reuses analysis of its current pipeline; the receiver computes
@@ -2439,14 +2500,25 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
+	if features.ODKUStatementResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
+		return moerr.NewNotSupportedNoCtx("remote ODKU statement result requires MORPC protocol version 134")
+	}
+	if features.SessionLastInsertIDBaseline {
+		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion134 {
+			return moerr.NewNotSupportedNoCtx("remote LAST_INSERT_ID baseline requires MORPC protocol version 134")
+		}
+	}
+	if features.JSONMinMaxTypedComparison && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion133) {
+		return moerr.NewNotSupportedNoCtx("typed JSON MIN/MAX requires MORPC protocol version 133")
+	}
 	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion129) {
-		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 129")
+		return moerr.NewNotSupportedNoCtx("JSON string consumer execution requires MORPC protocol version 129")
 	}
 	if features.LoadFKIgnoreCheck && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion125) {
 		return moerr.NewNotSupportedNoCtx("LOAD IGNORE foreign-key filtering requires MORPC protocol version 125")
 	}
-	if features.BinaryAssignmentSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion133) {
-		return moerr.NewNotSupportedNoCtx("binary assignment semantics require MORPC protocol version 133")
+	if features.BinaryAssignmentSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion135) {
+		return moerr.NewNotSupportedNoCtx("binary assignment semantics require MORPC protocol version 135")
 	}
 	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
 		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")
@@ -2716,6 +2788,27 @@ func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
 	return nil
 }
 
+// A zero session baseline is authoritative only when explicitly transported.
+// Keep this at the remote decode boundary, before scope/operator construction.
+func validateRemoteODKUBaselinePresence(proc *process.Process, p *pipeline.Pipeline) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		tracked := instruction.GetPreInsert() != nil && instruction.GetPreInsert().TrackOdkuResult ||
+			instruction.GetDedupJoin() != nil && instruction.GetDedupJoin().OdkuResultTracking
+		if tracked && (proc == nil || proc.Base == nil || proc.Base.LastInsertID == nil || !proc.GetSessionInfo().LastInsertIDSet) {
+			return moerr.NewNotSupportedNoCtx("remote ODKU result tracking requires an explicit session LAST_INSERT_ID baseline")
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteODKUBaselinePresence(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateRemoteStatementLastInsertIDPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
@@ -2729,6 +2822,15 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 				proc, preInsert.HasAutoCol, preInsert.TrackAutoIncrementGenerated); err != nil {
 				return err
 			}
+			if preInsert.TrackOdkuResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
+				return moerr.NewNotSupportedNoCtx(
+					"remote ODKU result tracking requires MORPC protocol version 134")
+			}
+		}
+		if dedup := instruction.GetDedupJoin(); dedup != nil && dedup.OdkuResultTracking &&
+			(proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"remote ODKU result tracking requires MORPC protocol version 134")
 		}
 		if preInsertUnique := instruction.GetPreInsertUnique(); preInsertUnique != nil {
 			if err := validateRemoteAutoIncrementSessionOptionsProtocol(
@@ -3124,6 +3226,10 @@ func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bo
 	default:
 		return false
 	}
+}
+
+func aggregateUsesJSONMinMax(agg aggexec.AggFuncExecExpression) bool {
+	return plan.IsJSONMinMaxAggregate(agg.GetAggID(), agg.GetArgExpressions())
 }
 
 // convert []aggexec.AggFuncExecExpression to []*pipeline.Aggregate

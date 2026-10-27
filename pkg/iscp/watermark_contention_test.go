@@ -49,7 +49,7 @@ func (p *watermarkSQLProbe) Exec(ctx context.Context, statement string, opts exe
 	// still use the real service executor and the production statement options.
 	statement = strings.ReplaceAll(statement, "mo_catalog.mo_iscp_log", "watermark_contention.jobs")
 	result, err := p.SQLExecutor.Exec(ctx, statement, opts)
-	if err == nil && strings.Contains(statement, "AND table_id = 3 ") {
+	if err == nil && result.AffectedRows == 1 && strings.Contains(statement, "AND table_id = 3 ") {
 		p.once.Do(func() {
 			close(p.held)
 			select {
@@ -87,6 +87,18 @@ func TestWatermarkBatchYieldsToRetirement(t *testing.T) {
 		require.NoError(t, err, statement)
 	}
 	service := cn.RawService().(cnservice.Service)
+	peerService := peer.RawService().(cnservice.Service)
+	// Cross-CN sessions do not share a commit frontier. Fence each handoff
+	// before creating the reader's transaction, using this test's own budget.
+	syncCommit := func(reader, writer cnservice.Service) {
+		t.Helper()
+		commitTS := writer.GetTxnClient().GetLatestCommitTS()
+		require.False(t, commitTS.IsEmpty())
+		snapshot, err := reader.GetTxnClient().WaitLogTailAppliedAt(ctx, commitTS)
+		require.NoError(t, err)
+		require.True(t, snapshot.Greater(commitTS))
+	}
+	syncCommit(service, peerService)
 	rt := moruntime.ServiceRuntime(cn.ServiceID())
 	original, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
 	require.True(t, ok)
@@ -103,17 +115,25 @@ func TestWatermarkBatchYieldsToRetirement(t *testing.T) {
 	defer func() { cancel(); resume(); <-flushed }()
 	select {
 	case <-probe.held:
+	case <-flushed:
+		t.Fatalf("publisher exited before acquiring its first row: %v", flushErr)
 	case <-ctx.Done():
 		t.Fatal("publisher did not acquire its first row", ctx.Err())
 	}
 	retirement, err := db.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	defer retirement.Rollback()
-	_, err = retirement.ExecContext(ctx, "update watermark_contention.jobs set drop_at=now() where account_id=1 and table_id=4 and job_name='second' and job_id=1")
+	result, err := retirement.ExecContext(ctx, "update watermark_contention.jobs set drop_at=now() where account_id=1 and table_id=4 and job_name='second' and job_id=1")
 	require.NoError(t, err)
+	affected, err := result.RowsAffected()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), affected)
 	resume()
-	_, err = retirement.ExecContext(ctx, "update watermark_contention.jobs set drop_at=now() where account_id=1 and table_id=3 and job_name='first' and job_id=1")
+	result, err = retirement.ExecContext(ctx, "update watermark_contention.jobs set drop_at=now() where account_id=1 and table_id=3 and job_name='first' and job_id=1")
 	require.NoError(t, err, "retirement must acquire the row released by the publisher")
+	affected, err = result.RowsAffected()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), affected)
 	require.NoError(t, retirement.Commit())
 	<-flushed
 	require.ErrorContains(t, flushErr, "wait policy is fast fail")
@@ -122,7 +142,9 @@ func TestWatermarkBatchYieldsToRetirement(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from watermark_contention.jobs where watermark='1-0' and cast(json_extract(job_status,'$.LSN') as unsigned)=5 and drop_at is not null").Scan(&rows))
 	require.Equal(t, 2, rows, "no prefix of the failed batch may become durable")
 	// A subsequent normal flush commits both rows through the same owner.
+	syncCommit(service, peerService)
 	require.NoError(t, flush())
+	syncCommit(peerService, service)
 	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from watermark_contention.jobs where watermark='2-0' and cast(json_extract(job_status,'$.LSN') as unsigned)=6").Scan(&rows))
 	require.Equal(t, 2, rows)
 	_, err = db.ExecContext(ctx, "drop database watermark_contention")

@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,6 +79,12 @@ func (data *containsObjectData) Contains(
 	_ *mpool.MPool,
 ) error {
 	return data.contains(keys)
+}
+
+func (data *containsObjectData) WaitAppendCommittingBefore(
+	types.TS, txnif.TxnReader, containers.Vector, index.ZM,
+) bool {
+	return false
 }
 
 func (data *dedupErrorObjectData) GetDuplicatedRows(
@@ -150,7 +158,7 @@ func TestIncrementalGetRowsByPKReleasesResultOnError(t *testing.T) {
 		pks,
 		from,
 		to,
-		true,
+		dedupMetricPrePrepare,
 	)
 	if rowIDs != nil {
 		defer rowIDs.Close()
@@ -220,7 +228,7 @@ func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
 	entry.AddEntryLocked(first)
 	entry.AddEntryLocked(second)
 
-	err = tbl.findDeletesForCandidates(context.Background(), candidates, types.TS{}, types.MaxTs())
+	err = tbl.findDeletesForCandidates(context.Background(), candidates, types.TS{}, types.MaxTs(), dedupMetricLookup)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
 	require.True(t, candidates.appendable.IsNull(candidates.appendableByKey[0][0]))
 	require.False(t, candidates.nonAppendable.IsNull(candidates.nonAppendableByKey[0][0]))
@@ -636,6 +644,173 @@ func TestAppend(t *testing.T) {
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
+func TestConcurrentFreezeAppendReservations(t *testing.T) {
+	ctx := context.Background()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Extra.BlockMaxRows = 10000
+	setup, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err := setup.CreateDatabase("db", "", "")
+	require.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	require.NoError(t, err)
+	tableEntry := rel.GetMeta().(*catalog.TableEntry)
+	require.NoError(t, setup.Commit(ctx))
+
+	const txnCount = 8
+	const rowsPerTxn = 16
+	allRows := catalog.MockBatch(schema, txnCount*rowsPerTxn)
+	defer allRows.Close()
+	batches := allRows.Split(txnCount)
+	txns := make([]txnif.AsyncTxn, txnCount)
+	for i := range txns {
+		txns[i], err = mgr.StartTxn(nil)
+		require.NoError(t, err)
+		txnDB, err := txns[i].GetDatabase("db")
+		require.NoError(t, err)
+		txnRel, err := txnDB.GetRelationByName(schema.Name)
+		require.NoError(t, err)
+		require.NoError(t, txnRel.Append(ctx, batches[i]))
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, txnCount)
+	var wg sync.WaitGroup
+	for _, txn := range txns {
+		wg.Add(1)
+		go func(txn txnif.AsyncTxn) {
+			defer wg.Done()
+			<-start
+			errs <- txn.Commit(ctx)
+		}(txn)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.Equal(t, uint64(txnCount*rowsPerTxn), tableEntry.GetRows())
+
+	readTxn, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	readDB, err := readTxn.GetDatabase("db")
+	require.NoError(t, err)
+	readRel, err := readDB.GetRelationByName(schema.Name)
+	require.NoError(t, err)
+	pkIdx := schema.GetSingleSortKeyIdx()
+	for row := 0; row < allRows.Length(); row++ {
+		pk := allRows.Vecs[pkIdx].Get(row)
+		value, isNull, err := readRel.GetValueByFilter(ctx, handle.NewEQFilter(pk), pkIdx)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, pk, value)
+	}
+	require.NoError(t, readTxn.Commit(ctx))
+}
+
+func TestConcurrentDedupSamePK(t *testing.T) {
+	ctx := context.Background()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.Extra.BlockMaxRows = 10000
+	setup, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err := setup.CreateDatabase("db", "", "")
+	require.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	require.NoError(t, err)
+	tableEntry := rel.GetMeta().(*catalog.TableEntry)
+	require.NoError(t, setup.Commit(ctx))
+
+	const txnCount = 16
+	txns := make([]txnif.AsyncTxn, txnCount)
+	batches := make([]*containers.Batch, txnCount)
+	for i := range txns {
+		txns[i], err = mgr.StartTxn(nil)
+		require.NoError(t, err)
+		txnDB, err := txns[i].GetDatabase("db")
+		require.NoError(t, err)
+		txnRel, err := txnDB.GetRelationByName(schema.Name)
+		require.NoError(t, err)
+		// Offset zero makes every batch contain the same primary key.
+		batches[i] = containers.MockBatchWithAttrsAndOffset(schema.Types(), schema.Attrs(), 1, 0)
+		require.NoError(t, txnRel.Append(ctx, batches[i]))
+	}
+	defer func() {
+		for _, bat := range batches {
+			bat.Close()
+		}
+	}()
+
+	start := make(chan struct{})
+	errs := make(chan error, txnCount)
+	var wg sync.WaitGroup
+	for _, txn := range txns {
+		wg.Add(1)
+		go func(txn txnif.AsyncTxn) {
+			defer wg.Done()
+			<-start
+			errs <- txn.Commit(ctx)
+		}(txn)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	failures := 0
+	duplicates := 0
+	wwConflicts := 0
+	otherFailures := 0
+	for err := range errs {
+		if err == nil {
+			successes++
+		} else {
+			failures++
+			switch {
+			case moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry):
+				duplicates++
+			case moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict):
+				wwConflicts++
+			default:
+				otherFailures++
+				t.Logf("unexpected commit error: %v", err)
+			}
+		}
+	}
+	t.Logf(
+		"same-PK concurrent commit: successes=%d failures=%d duplicates=%d ww-conflicts=%d other=%d rows=%d",
+		successes, failures, duplicates, wwConflicts, otherFailures, tableEntry.GetRows(),
+	)
+	require.Zero(t, otherFailures, "every failed writer must report duplicate entry or WW conflict")
+	it := tableEntry.MakeDataObjectIt()
+	defer it.Release()
+	for ok := it.First(); ok; ok = it.Next() {
+		obj := it.Item()
+		rows, err := obj.GetObjectData().Rows()
+		require.NoError(t, err)
+		t.Logf("data object: id=%s physical-rows=%d", obj.ID().String(), rows)
+		compactable, reason := obj.GetObjectData().PrepareCompactInfo()
+		require.Truef(t, compactable, "object %s is not compactable: %s", obj.ID().String(), reason)
+	}
+	t.Logf("data object count: %d", tableEntry.ObjectCnt(false))
+	require.Equal(t, 1, successes)
+	require.Equal(t, txnCount-1, failures)
+	require.Equal(t, uint64(1), tableEntry.GetRows())
+}
+
 func TestIndex(t *testing.T) {
 	index := NewSimpleTableIndex()
 	err := index.Insert(1, 10)
@@ -976,12 +1151,15 @@ func TestTxnManager1(t *testing.T) {
 	assert.Equal(t, expected, seqs)
 }
 
-func initTestContext(ctx context.Context, t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Store) {
+func initTestContext(ctx context.Context, t *testing.T, dir string, decorators ...func(catalog.DataFactory) catalog.DataFactory) (*catalog.Catalog, *txnbase.TxnManager, wal.Store) {
 	fs := objectio.TmpNewFileservice(ctx, path.Join(dir, "data"))
 	rt := dbutils.NewRuntime(
 		dbutils.WithRuntimeObjectFS(fs),
 	)
-	factory := tables.NewDataFactory(rt, dir)
+	var factory catalog.DataFactory = tables.NewDataFactory(rt, dir)
+	for _, decorate := range decorators {
+		factory = decorate(factory)
+	}
 	c := catalog.MockCatalog(factory)
 	driver := wal.NewLocalHandle(dir, "store", nil)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(context.Background(), c, driver, rt),
@@ -1623,7 +1801,7 @@ func (d *dedupRangeObjectData) GetDuplicatedRows(
 	return d.visit(from, to)
 }
 
-func TestPrePrepareDedupStreamCoverage(t *testing.T) {
+func TestPrePrepareDedupRangeCoverage(t *testing.T) {
 	for _, tc := range []struct {
 		name, phase string
 		first       bool
@@ -1682,7 +1860,18 @@ func TestPrePrepareDedupStreamCoverage(t *testing.T) {
 				}, types.BuildTS(5, 0))
 				entry.AddEntryLocked(obj)
 			}
+			phase := dedupMetricPhase(tc.phase)
+			opposite := dedupMetricFreeze
+			if phase == opposite {
+				opposite = dedupMetricPrePrepare
+			}
+			metric := objectScanMetrics(phase, tc.first, catalog.ObjectListGroupNonAppendableCreate)
+			other := objectScanMetrics(opposite, tc.first, catalog.ObjectListGroupNonAppendableCreate)
+			before := testutil.ToFloat64(metric.operation)
+			oppositeBefore := testutil.ToFloat64(other.operation)
 			require.NoError(t, tbl.PrePrepareDedup(ctx, tc.first, tc.phase, phaseTS))
+			require.Equal(t, before+1, testutil.ToFloat64(metric.operation))
+			require.Equal(t, oppositeBefore, testutil.ToFloat64(other.operation))
 			require.Equal(t, 1, calls[tc.first])
 			require.Equal(t, phaseTS, tbl.getBaseTable(tc.first).dedupTS)
 			require.True(t, tbl.getBaseTable(!tc.first).dedupTS.IsEmpty())

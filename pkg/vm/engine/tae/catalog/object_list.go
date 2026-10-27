@@ -19,11 +19,13 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -41,7 +43,7 @@ const (
 )
 
 /*
-ObjectList keeps entries in six contiguous groups:
+ObjectList keeps entries in six independent B-trees:
 
  1. appendable serving C entries
  2. appendable C entries with a D counterpart
@@ -50,24 +52,38 @@ ObjectList keeps entries in six contiguous groups:
  5. non-appendable C entries with a D counterpart
  6. non-appendable D entries
 
-Within each group entries are ordered by their entry commit timestamp
+Each tree is ordered by the entry commit timestamp
 (CreatedAt for C entries and DeletedAt for D entries), then by object name.
-Uncommitted entries therefore sit at the end of their own group instead of in
-one global transaction-active zone.
+Uncommitted entries therefore sit at the end of their group.
 
 The C and D entries for a dropped object remain separate tree items. Callers
 that need only the latest version must skip C entries having a D counterpart.
 
-Visible scans use a second copy-on-write B-tree containing only C entries,
-globally ordered by CreatedAt and object name. Both trees are published in one
-atomic snapshot so readers never observe mismatched catalog indexes.
+All-object compatibility scans use a combined tree with the same group order.
+Visible scans use another copy-on-write B-tree containing only C entries,
+globally ordered by CreatedAt and object name. The combined, grouped, and
+visible indexes are published in one atomic snapshot so readers never observe
+mismatched catalog indexes.
 */
 
 type ObjectList struct {
 	isTombstone bool
 	sync.RWMutex
-	objectID_index map[objectio.ObjectId]objectListIndex
-	trees          atomic.Pointer[objectListTrees]
+	metricPublication struct {
+		sync.Mutex
+		retired bool
+	}
+	objectID_index    map[objectio.ObjectId]objectListIndex
+	trees             atomic.Pointer[objectListTrees]
+	appendMaxes       map[objectio.ObjectId]objectListAppendMax
+	appendMaxStates   map[objectio.ObjectId]objectListAppendMaxState
+	appendMaxCounts   [3]int
+	tableID           uint64
+	restartSealed     map[objectio.ObjectId]types.TS
+	bookmarkSchedule  func(func() error) error
+	bookmarkPending   bool
+	bookmarkPendingAt time.Time
+	bookmarkVersion   uint64
 }
 
 type objectListIndex struct {
@@ -76,20 +92,63 @@ type objectListIndex struct {
 }
 
 type objectListTrees struct {
-	all     *btree.BTreeG[*ObjectEntry]
-	visible *btree.BTreeG[*ObjectEntry]
+	all       *btree.BTreeG[*ObjectEntry]
+	groups    [ObjectListGroupNonAppendableDrop + 1]*btree.BTreeG[*ObjectEntry]
+	visible   *btree.BTreeG[*ObjectEntry]
+	bookmarks [ObjectListGroupNonAppendableDrop + 1]*objectListCommitBookmark
+}
+
+type objectListAppendMax struct {
+	max       types.TS
+	finalized bool
+}
+
+type objectListAppendMaxState uint8
+
+const (
+	appendMaxStatePending objectListAppendMaxState = iota
+	appendMaxStateSealedWaiting
+	appendMaxStateFinalized
+)
+
+// objectListCommitBookmark records a prefix maximum in group-tree order.
+// maxThrough includes the current entry and all preceding entries.
+type objectListCommitBookmark struct {
+	entries []objectListCommitBookmarkEntry
+}
+
+type objectListCommitBookmarkEntry struct {
+	entry      *ObjectEntry
+	maxThrough types.TS
+}
+
+type mutableObjectListTrees struct {
+	old    *objectListTrees
+	next   *objectListTrees
+	copied [ObjectListGroupNonAppendableDrop + 1]bool
 }
 
 func newObjectEntryTreeWithLess(less func(a, b *ObjectEntry) bool) *btree.BTreeG[*ObjectEntry] {
 	opts := btree.Options{
-		Degree:  64,
-		NoLocks: true,
+		Degree: 64,
 	}
 	return btree.NewBTreeGOptions(less, opts)
 }
 
 func newObjectEntryTree() *btree.BTreeG[*ObjectEntry] {
 	return newObjectEntryTreeWithLess((*ObjectEntry).Less)
+}
+
+func objectEntryGroupLess(a, b *ObjectEntry) bool {
+	t1, t2 := a.ObjectListCommitTS(), b.ObjectListCommitTS()
+	if !t1.EQ(&t2) {
+		return t1.LT(&t2)
+	}
+	return bytes.Compare(a.ObjectShortName()[:], b.ObjectShortName()[:]) < 0
+}
+
+func newObjectEntryGroupTree() *btree.BTreeG[*ObjectEntry] {
+	return newObjectEntryTreeWithLess(objectEntryGroupLess)
 }
 
 func visibleObjectEntryLess(a, b *ObjectEntry) bool {
@@ -100,15 +159,87 @@ func visibleObjectEntryLess(a, b *ObjectEntry) bool {
 }
 
 func NewObjectList(isTombstone bool) *ObjectList {
+	return NewObjectListWithTableID(0, isTombstone)
+}
+
+func NewObjectListWithTableID(tableID uint64, isTombstone bool) *ObjectList {
 	list := &ObjectList{
-		objectID_index: make(map[types.Objectid]objectListIndex),
-		isTombstone:    isTombstone,
+		objectID_index:  make(map[types.Objectid]objectListIndex),
+		appendMaxes:     make(map[objectio.ObjectId]objectListAppendMax),
+		appendMaxStates: make(map[objectio.ObjectId]objectListAppendMaxState),
+		tableID:         tableID,
+		restartSealed:   make(map[objectio.ObjectId]types.TS),
+		isTombstone:     isTombstone,
 	}
-	list.trees.Store(&objectListTrees{
+	trees := &objectListTrees{
 		all:     newObjectEntryTree(),
 		visible: newObjectEntryTreeWithLess(visibleObjectEntryLess),
-	})
+	}
+	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+		trees.groups[group] = newObjectEntryGroupTree()
+	}
+	list.trees.Store(trees)
 	return list
+}
+
+// SetTableID is used by replay-created TableEntry values whose ID is assigned
+// after the ObjectList is constructed.
+func (l *ObjectList) SetTableID(tableID uint64) {
+	l.Lock()
+	l.tableID = tableID
+	l.Unlock()
+	l.publishAppendMaxMetrics()
+}
+
+// Call after releasing the ObjectList lock. Read the authoritative counts only
+// after acquiring publication order, so an older callback cannot restore stale
+// gauges after a newer lifecycle transition has already been published.
+func (l *ObjectList) publishAppendMaxMetrics() {
+	l.metricPublication.Lock()
+	defer l.metricPublication.Unlock()
+	if l.metricPublication.retired {
+		return
+	}
+	l.RLock()
+	tableID, counts := l.tableID, l.appendMaxCounts
+	l.RUnlock()
+	v2.UpdateTxnAObjectMaxCommitState(
+		tableID,
+		l.isTombstone,
+		counts[appendMaxStatePending],
+		counts[appendMaxStateSealedWaiting],
+		counts[appendMaxStateFinalized],
+	)
+}
+
+// retireMetrics serializes with an in-flight append-max publication. Catalog
+// removal calls it before deleting metric children, so a late node callback
+// cannot recreate a retired table's series.
+func (l *ObjectList) retireMetrics() {
+	l.metricPublication.Lock()
+	l.metricPublication.retired = true
+	l.metricPublication.Unlock()
+}
+
+func (l *ObjectList) setAppendMaxStateLocked(id *objectio.ObjectId, state objectListAppendMaxState) {
+	old, exists := l.appendMaxStates[*id]
+	if exists && old == state {
+		return
+	}
+	if exists {
+		l.appendMaxCounts[old]--
+	}
+	l.appendMaxStates[*id] = state
+	l.appendMaxCounts[state]++
+}
+
+func (l *ObjectList) deleteAppendMaxStateLocked(id *objectio.ObjectId) {
+	state, exists := l.appendMaxStates[*id]
+	if !exists {
+		return
+	}
+	delete(l.appendMaxStates, *id)
+	l.appendMaxCounts[state]--
 }
 
 func (l *ObjectList) loadTrees() *objectListTrees {
@@ -117,6 +248,346 @@ func (l *ObjectList) loadTrees() *objectListTrees {
 
 func (l *ObjectList) loadTree() *btree.BTreeG[*ObjectEntry] {
 	return l.loadTrees().all
+}
+
+func (trees *objectListTrees) group(group ObjectListGroup) *btree.BTreeG[*ObjectEntry] {
+	if group > ObjectListGroupNonAppendableDrop {
+		panic("invalid object list group")
+	}
+	return trees.groups[group]
+}
+
+func newMutableObjectListTrees(old *objectListTrees) *mutableObjectListTrees {
+	next := &objectListTrees{
+		all:       old.all.Copy(),
+		groups:    old.groups,
+		visible:   old.visible.Copy(),
+		bookmarks: old.bookmarks,
+	}
+	return &mutableObjectListTrees{old: old, next: next}
+}
+
+func (trees *mutableObjectListTrees) group(group ObjectListGroup) *btree.BTreeG[*ObjectEntry] {
+	if !trees.copied[group] {
+		trees.next.groups[group] = trees.old.groups[group].Copy()
+		trees.copied[group] = true
+	}
+	return trees.next.groups[group]
+}
+
+type appendMaxCommitter interface {
+	GetAppendMaxCommitTS() (types.TS, bool)
+}
+
+func appendMaxStateForEntry(entry *ObjectEntry) objectListAppendMax {
+	if data := entry.GetObjectData(); data != nil {
+		if committer, ok := data.(appendMaxCommitter); ok {
+			max, finalized := committer.GetAppendMaxCommitTS()
+			return objectListAppendMax{max: max, finalized: finalized}
+		}
+	}
+	// Persisted objects do not retain AppendNode history.  The object-list
+	// commit timestamp is the conservative upper bound for their materialized
+	// rows.
+	return objectListAppendMax{max: entry.ObjectListCommitTS(), finalized: true}
+}
+
+func (l *ObjectList) ensureAppendMaxStateLocked(entry *ObjectEntry) {
+	if _, ok := l.appendMaxes[*entry.ID()]; ok {
+		return
+	}
+	l.appendMaxes[*entry.ID()] = appendMaxStateForEntry(entry)
+}
+
+func clearObjectListBookmarks(trees *objectListTrees) {
+	for i := range trees.bookmarks {
+		trees.bookmarks[i] = nil
+	}
+}
+
+// SetBookmarkScheduler installs the one executor used to rebuild prefix
+// bookmarks. The catalog does not own a goroutine; the object runtime owns
+// the scheduler and its lifecycle.
+func (l *ObjectList) SetBookmarkScheduler(schedule func(func() error) error) {
+	l.Lock()
+	l.bookmarkSchedule = schedule
+	need := !l.bookmarkPending
+	if need {
+		l.bookmarkPending = true
+		l.bookmarkPendingAt = time.Now()
+	}
+	logutil.Debugf(
+		"[ObjectListBookmark] scheduler installed tombstone=%v initial_rebuild=%v pending=%v",
+		l.isTombstone, need, l.bookmarkPending)
+	l.Unlock()
+	if need {
+		l.scheduleBookmarkRebuild(schedule)
+	}
+}
+
+func (l *ObjectList) requestBookmarkRebuild() {
+	l.Lock()
+	if l.bookmarkSchedule == nil || l.bookmarkPending {
+		if l.bookmarkSchedule == nil {
+			logutil.Debugf(
+				"[ObjectListBookmark] rebuild request dropped tombstone=%v reason=no_scheduler",
+				l.isTombstone)
+		}
+		l.Unlock()
+		return
+	}
+	l.bookmarkPending = true
+	l.bookmarkPendingAt = time.Now()
+	schedule := l.bookmarkSchedule
+	logutil.Debugf(
+		"[ObjectListBookmark] rebuild requested tombstone=%v version=%d",
+		l.isTombstone, l.bookmarkVersion)
+	l.Unlock()
+	l.scheduleBookmarkRebuild(schedule)
+}
+
+func (l *ObjectList) scheduleBookmarkRebuild(schedule func(func() error) error) {
+	if schedule == nil {
+		l.Lock()
+		l.bookmarkPending = false
+		l.Unlock()
+		return
+	}
+	if err := schedule(func() error {
+		l.rebuildCommitBookmarks()
+		return nil
+	}); err != nil {
+		l.Lock()
+		l.bookmarkPending = false
+		l.Unlock()
+	}
+}
+
+func (l *ObjectList) rebuildCommitBookmarks() {
+	rebuildStart := time.Now()
+	l.RLock()
+	trees := l.loadTrees()
+	version := l.bookmarkVersion
+	pendingAt := l.bookmarkPendingAt
+	states := make(map[objectio.ObjectId]objectListAppendMax, len(l.appendMaxes))
+	restartSealed := make(map[objectio.ObjectId]types.TS, len(l.restartSealed))
+	for id, state := range l.appendMaxes {
+		states[id] = state
+	}
+	for id, ts := range l.restartSealed {
+		restartSealed[id] = ts
+	}
+	l.RUnlock()
+	logutil.Debugf(
+		"[ObjectListBookmark] rebuild started tombstone=%v version=%d pending_age=%s state_count=%d",
+		l.isTombstone, version, rebuildStart.Sub(pendingAt), len(states))
+
+	var bookmarks [ObjectListGroupNonAppendableDrop + 1]*objectListCommitBookmark
+	// Only appendable objects can acquire new rows after creation. For the
+	// non-appendable groups a CreatedAt/DeletedAt seek is sufficient, so do not
+	// build or retain prefix max-commit bookmarks for their history.
+	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupAppendableDrop; group++ {
+		bookmark := &objectListCommitBookmark{}
+		it := trees.groups[group].Iter()
+		maxCommit := types.TS{}
+		groupEntries := 0
+		firstUnfinalized := -1
+		var firstUnfinalizedEntry *ObjectEntry
+		var firstUnfinalizedState objectListAppendMax
+		for ok := it.First(); ok; ok = it.Next() {
+			entry := it.Item()
+			groupEntries++
+			state, exists := states[*entry.ID()]
+			if !exists {
+				state = appendMaxStateForEntry(entry)
+			}
+			if restartTS, ok := restartSealed[*entry.ID()]; ok {
+				// Replayed appendable objects do not retain their AppendNode
+				// history.  At restart, a frozen prefix is nevertheless known to
+				// contain only rows committed before this restart timestamp.
+				// Publish that boundary as a conservative bookmark instead of
+				// treating the recovered history as permanently unbounded.
+				if maxCommit.LT(&restartTS) {
+					maxCommit = restartTS
+				}
+				state = objectListAppendMax{max: restartTS, finalized: true}
+			}
+			if !state.finalized {
+				// An unfinalized append history is equivalent to UncommitTS:
+				// it is an upper bound that cannot be below any real `from`.
+				// Keep the bookmark and continue so the consumer can skip the
+				// proven prefix and start at this first uncertain object.
+				maxCommit = txnif.UncommitTS
+				if firstUnfinalized == -1 {
+					firstUnfinalized = groupEntries - 1
+					firstUnfinalizedEntry = entry
+					firstUnfinalizedState = state
+				}
+			} else if maxCommit != txnif.UncommitTS && state.max.GT(&maxCommit) {
+				maxCommit = state.max
+			}
+			bookmark.entries = append(bookmark.entries, objectListCommitBookmarkEntry{
+				entry:      entry,
+				maxThrough: maxCommit,
+			})
+		}
+		it.Release()
+		if firstUnfinalizedEntry != nil {
+			logutil.Debugf(
+				"[ObjectListBookmark] group has unfinalized suffix tombstone=%v group=%d entries=%d known_prefix_entries=%d first_unfinalized_index=%d first_unfinalized_object=%s max_commit=%s finalized=%v elapsed=%s",
+				l.isTombstone, group, groupEntries, firstUnfinalized,
+				firstUnfinalized, firstUnfinalizedEntry.ID().ShortStringEx(),
+				firstUnfinalizedState.max.ToString(), firstUnfinalizedState.finalized,
+				time.Since(rebuildStart))
+		} else {
+			logutil.Debugf(
+				"[ObjectListBookmark] group evaluated tombstone=%v group=%d entries=%d valid=true elapsed=%s",
+				l.isTombstone, group, groupEntries, time.Since(rebuildStart))
+		}
+		bookmarks[group] = bookmark
+	}
+
+	l.Lock()
+	if l.loadTrees() == trees && l.bookmarkVersion == version {
+		next := &objectListTrees{
+			all:       trees.all,
+			groups:    trees.groups,
+			visible:   trees.visible,
+			bookmarks: bookmarks,
+		}
+		l.trees.Store(next)
+		l.bookmarkPending = false
+		l.bookmarkPendingAt = time.Time{}
+		logutil.Debugf(
+			"[ObjectListBookmark] rebuild published tombstone=%v version=%d elapsed=%s",
+			l.isTombstone, version, time.Since(rebuildStart))
+		l.Unlock()
+		return
+	}
+	l.bookmarkPending = false
+	l.bookmarkPendingAt = time.Time{}
+	logutil.Debugf(
+		"[ObjectListBookmark] rebuild discarded tombstone=%v built_version=%d current_version=%d elapsed=%s",
+		l.isTombstone, version, l.bookmarkVersion, time.Since(rebuildStart))
+	l.Unlock()
+	l.requestBookmarkRebuild()
+}
+
+// MarkAppendMaxPending invalidates all bookmarks until this live object has
+// reached a terminal append state.
+func (l *ObjectList) MarkAppendMaxPending(id *objectio.ObjectId) {
+	l.Lock()
+	delete(l.restartSealed, *id)
+	l.appendMaxes[*id] = objectListAppendMax{finalized: false}
+	l.setAppendMaxStateLocked(id, appendMaxStatePending)
+	l.bookmarkVersion++
+	logutil.Debugf(
+		"[ObjectListBookmark] object pending tombstone=%v object=%s version=%d",
+		l.isTombstone, id.ShortStringEx(), l.bookmarkVersion)
+	trees := l.loadTrees()
+	next := &objectListTrees{all: trees.all, groups: trees.groups, visible: trees.visible, bookmarks: trees.bookmarks}
+	clearObjectListBookmarks(next)
+	l.trees.Store(next)
+	l.Unlock()
+	l.publishAppendMaxMetrics()
+	l.requestBookmarkRebuild()
+}
+
+// MarkAppendMaxSealedWaiting records that no more AppendNodes can be added to
+// the object, but at least one existing AppendNode still has to reach commit
+// or rollback before the exact max commit timestamp is available.
+func (l *ObjectList) MarkAppendMaxSealedWaiting(id *objectio.ObjectId) {
+	l.Lock()
+	l.setAppendMaxStateLocked(id, appendMaxStateSealedWaiting)
+	l.Unlock()
+	l.publishAppendMaxMetrics()
+}
+
+// UpdateAppendMaxCommit publishes an exact max for one object. Rebuilding the
+// prefix values is intentionally asynchronous and coalesced per ObjectList.
+func (l *ObjectList) UpdateAppendMaxCommit(id *objectio.ObjectId, max types.TS) {
+	l.Lock()
+	delete(l.restartSealed, *id)
+	l.appendMaxes[*id] = objectListAppendMax{max: max, finalized: true}
+	l.setAppendMaxStateLocked(id, appendMaxStateFinalized)
+	l.bookmarkVersion++
+	logutil.Debugf(
+		"[ObjectListBookmark] object finalized tombstone=%v object=%s max_commit=%s version=%d",
+		l.isTombstone, id.ShortStringEx(), max.ToString(), l.bookmarkVersion)
+	trees := l.loadTrees()
+	next := &objectListTrees{all: trees.all, groups: trees.groups, visible: trees.visible, bookmarks: trees.bookmarks}
+	clearObjectListBookmarks(next)
+	l.trees.Store(next)
+	l.Unlock()
+	l.publishAppendMaxMetrics()
+	l.requestBookmarkRebuild()
+}
+
+type appendFrozenObject interface {
+	IsAppendFrozen() bool
+}
+
+// MarkRestartSealedPrefix records the contiguous frozen prefix of a group at
+// restart. Replayed appendable objects do not have their AppendNode history,
+// so their normal max-commit state is intentionally unknown. The restart
+// timestamp is a safe upper bound for that recovered prefix; the first object
+// that is not frozen terminates the prefix.
+func (l *ObjectList) MarkRestartSealedPrefix(restartTS types.TS) {
+	l.Lock()
+	trees := l.loadTrees()
+	marked := 0
+	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupAppendableDrop; group++ {
+		it := trees.groups[group].Iter()
+		for ok := it.First(); ok; ok = it.Next() {
+			entry := it.Item()
+			data := entry.GetObjectData()
+			frozen, ok := data.(appendFrozenObject)
+			if !ok || !frozen.IsAppendFrozen() {
+				break
+			}
+			l.restartSealed[*entry.ID()] = restartTS
+			l.setAppendMaxStateLocked(entry.ID(), appendMaxStateFinalized)
+			marked++
+		}
+		it.Release()
+	}
+	if marked > 0 {
+		l.bookmarkVersion++
+		next := &objectListTrees{
+			all:       trees.all,
+			groups:    trees.groups,
+			visible:   trees.visible,
+			bookmarks: trees.bookmarks,
+		}
+		clearObjectListBookmarks(next)
+		l.trees.Store(next)
+	}
+	l.Unlock()
+	l.publishAppendMaxMetrics()
+	if marked > 0 {
+		logutil.Debugf(
+			"[ObjectListBookmark] restart sealed prefix tombstone=%v restart_ts=%s objects=%d",
+			l.isTombstone, restartTS.ToString(), marked)
+		l.requestBookmarkRebuild()
+	}
+}
+
+func (trees *mutableObjectListTrees) delete(entry *ObjectEntry) (*ObjectEntry, bool) {
+	trees.next.all.Delete(entry)
+	return trees.group(entry.ObjectListGroup()).Delete(entry)
+}
+
+func (trees *mutableObjectListTrees) set(entry *ObjectEntry) (*ObjectEntry, bool) {
+	trees.next.all.Set(entry)
+	return trees.group(entry.ObjectListGroup()).Set(entry)
+}
+
+func (trees *mutableObjectListTrees) deleteFromGroup(
+	group ObjectListGroup,
+	entry *ObjectEntry,
+) (*ObjectEntry, bool) {
+	trees.next.all.Delete(entry)
+	return trees.group(group).Delete(entry)
 }
 
 //// read part
@@ -138,22 +609,22 @@ func getObjectEntry(it *btree.IterG[*ObjectEntry], pivot *ObjectEntry) *ObjectEn
 func (l *ObjectList) getNodes(id *objectio.ObjectId, latestOnly bool) []*ObjectEntry {
 	l.RLock()
 	index, ok := l.objectID_index[*id]
-	tree := l.loadTree()
+	trees := l.loadTrees()
 	l.RUnlock()
 	if !ok {
 		return nil
 	}
-	return l.getNodesSnap(tree, index, id, latestOnly)
+	return l.getNodesSnap(trees, index, id, latestOnly)
 }
 
 // getNodes returns the create and delete (if exists) entries of the object with the given objectID
 func (l *ObjectList) getNodesSnap(
-	tree *btree.BTreeG[*ObjectEntry],
+	trees *objectListTrees,
 	index objectListIndex,
 	id *objectio.ObjectId,
 	latestOnly bool,
 ) []*ObjectEntry {
-	it := tree.Iter()
+	it := trees.group(index.group).Iter()
 	defer it.Release()
 
 	var key ObjectEntry
@@ -201,17 +672,23 @@ func (l *ObjectList) GetObjectByID(objectID *objectio.ObjectId) (obj *ObjectEntr
 
 func (l *ObjectList) UpdateReplayTs(entry *ObjectEntry, ts types.TS) *ObjectEntry {
 	l.Lock()
-	defer l.Unlock()
+	defer func() {
+		l.Unlock()
+		l.requestBookmarkRebuild()
+	}()
 	oldIndex, ok := l.objectID_index[*entry.ID()]
 	if !ok {
 		panic("replay object index not found")
 	}
 	oldTrees := l.loadTrees()
-	newTree := oldTrees.all.Copy()
-	newVisibleTree := oldTrees.visible.Copy()
+	mutableTrees := newMutableObjectListTrees(oldTrees)
+	l.ensureAppendMaxStateLocked(entry)
+	clearObjectListBookmarks(mutableTrees.next)
+	l.bookmarkVersion++
+	newVisibleTree := mutableTrees.next.visible
 	var oldKey ObjectEntry
 	initObjectListKey(&oldKey, oldIndex.group, oldIndex.ts, entry.ID())
-	if _, deleted := newTree.Delete(&oldKey); !deleted {
+	if _, deleted := mutableTrees.deleteFromGroup(oldIndex.group, &oldKey); !deleted {
 		panic("replay object not found")
 	}
 	if !entry.IsDEntry() {
@@ -226,15 +703,15 @@ func (l *ObjectList) UpdateReplayTs(entry *ObjectEntry, ts types.TS) *ObjectEntr
 		panic(err)
 	}
 	if entry.IsDEntry() {
-		if _, deleted := newTree.Delete(entry.prevVersion); !deleted {
+		if _, deleted := mutableTrees.delete(entry.prevVersion); !deleted {
 			panic("replay object create entry not found")
 		}
-		newTree.Set(entry.prevVersion)
+		mutableTrees.set(entry.prevVersion)
 		newVisibleTree.Set(entry.prevVersion)
 	} else {
 		newVisibleTree.Set(updated)
 	}
-	newTree.Set(updated)
+	mutableTrees.set(updated)
 	if updated.objData != nil {
 		updated.objData.UpdateMeta(updated)
 	}
@@ -242,10 +719,7 @@ func (l *ObjectList) UpdateReplayTs(entry *ObjectEntry, ts types.TS) *ObjectEntr
 		ts:    updated.ObjectListCommitTS(),
 		group: updated.ObjectListGroup(),
 	}
-	if !l.trees.CompareAndSwap(oldTrees, &objectListTrees{
-		all:     newTree,
-		visible: newVisibleTree,
-	}) {
+	if !l.trees.CompareAndSwap(oldTrees, mutableTrees.next) {
 		panic("concurrent mutation")
 	}
 	return updated
@@ -257,7 +731,10 @@ func (l *ObjectList) UpdateReplayTs(entry *ObjectEntry, ts types.TS) *ObjectEntr
 // 4. all operations are atomic from the view of the caller of modify
 func (l *ObjectList) modify(del, ins, updated *ObjectEntry) (deleted, replaced1, replaced2 bool) {
 	l.Lock()
-	defer l.Unlock()
+	defer func() {
+		l.Unlock()
+		l.requestBookmarkRebuild()
+	}()
 	oldIndex, existed := l.objectID_index[*ins.ID()]
 	l.objectID_index[*ins.ID()] = objectListIndex{
 		ts:    ins.ObjectListCommitTS(),
@@ -265,14 +742,17 @@ func (l *ObjectList) modify(del, ins, updated *ObjectEntry) (deleted, replaced1,
 	}
 
 	oldTrees := l.loadTrees()
-	newTree := oldTrees.all.Copy()
-	newVisibleTree := oldTrees.visible.Copy()
+	mutableTrees := newMutableObjectListTrees(oldTrees)
+	l.ensureAppendMaxStateLocked(ins)
+	clearObjectListBookmarks(mutableTrees.next)
+	l.bookmarkVersion++
+	newVisibleTree := mutableTrees.next.visible
 
 	if del != nil {
 		if del.IsTombstone != l.isTombstone {
 			panic("logic error")
 		}
-		_, deleted = newTree.Delete(del)
+		_, deleted = mutableTrees.delete(del)
 		if !del.IsDEntry() {
 			newVisibleTree.Delete(del)
 		}
@@ -286,8 +766,8 @@ func (l *ObjectList) modify(del, ins, updated *ObjectEntry) (deleted, replaced1,
 		ins.IsDEntry() && ins.prevVersion != nil {
 		var oldC ObjectEntry
 		initObjectListKey(&oldC, oldIndex.group, oldIndex.ts, ins.ID())
-		newTree.Delete(&oldC)
-		newTree.Set(ins.prevVersion)
+		mutableTrees.deleteFromGroup(oldIndex.group, &oldC)
+		mutableTrees.set(ins.prevVersion)
 	}
 	// Rolling back a drop performs the inverse transition. Remove the
 	// create-with-drop counterpart before restoring the serving C entry.
@@ -295,15 +775,15 @@ func (l *ObjectList) modify(del, ins, updated *ObjectEntry) (deleted, replaced1,
 		(oldIndex.group == ObjectListGroupAppendableDrop ||
 			oldIndex.group == ObjectListGroupNonAppendableDrop) &&
 		!ins.HasDropIntent() && del != nil && del.prevVersion != nil {
-		newTree.Delete(del.prevVersion)
+		mutableTrees.delete(del.prevVersion)
 	}
 	if updated != nil {
-		_, replaced2 = newTree.Set(updated)
+		_, replaced2 = mutableTrees.set(updated)
 		if !updated.IsDEntry() {
 			newVisibleTree.Set(updated)
 		}
 	}
-	_, replaced1 = newTree.Set(ins)
+	_, replaced1 = mutableTrees.set(ins)
 	if ins.IsDEntry() {
 		if existed && ins.prevVersion != nil {
 			newVisibleTree.Set(ins.prevVersion)
@@ -311,10 +791,7 @@ func (l *ObjectList) modify(del, ins, updated *ObjectEntry) (deleted, replaced1,
 	} else {
 		newVisibleTree.Set(ins)
 	}
-	ok := l.trees.CompareAndSwap(oldTrees, &objectListTrees{
-		all:     newTree,
-		visible: newVisibleTree,
-	})
+	ok := l.trees.CompareAndSwap(oldTrees, mutableTrees.next)
 	if !ok {
 		panic("concurrent mutation")
 	}
@@ -402,26 +879,34 @@ func (l *ObjectList) UpdateObjectInfo(
 // deleteEntryLocked deletes all entries with the given objectID, used in GC & Rollback
 func (l *ObjectList) DeleteAllEntries(id *objectio.ObjectId) error {
 	l.Lock()
-	defer l.Unlock()
+	defer func() {
+		l.Unlock()
+		l.publishAppendMaxMetrics()
+		l.requestBookmarkRebuild()
+	}()
 	index, ok := l.objectID_index[*id]
 	if !ok {
 		return nil
 	}
 	oldTrees := l.loadTrees()
-	newTree := oldTrees.all.Copy()
-	newVisibleTree := oldTrees.visible.Copy()
-	objs := l.getNodesSnap(newTree, index, id, false)
+	mutableTrees := newMutableObjectListTrees(oldTrees)
+	clearObjectListBookmarks(mutableTrees.next)
+	l.bookmarkVersion++
+	newVisibleTree := mutableTrees.next.visible
+	objs := l.getNodesSnap(oldTrees, index, id, false)
 	for _, obj := range objs {
-		newTree.Delete(obj)
+		mutableTrees.delete(obj)
 		if !obj.IsDEntry() {
 			newVisibleTree.Delete(obj)
 		}
 		delete(l.objectID_index, *obj.ID())
+		delete(l.appendMaxes, *obj.ID())
+		l.deleteAppendMaxStateLocked(obj.ID())
+		delete(l.restartSealed, *obj.ID())
 	}
-	ok = l.trees.CompareAndSwap(oldTrees, &objectListTrees{
-		all:     newTree,
-		visible: newVisibleTree,
-	})
+	l.bookmarkVersion++
+	clearObjectListBookmarks(mutableTrees.next)
+	ok = l.trees.CompareAndSwap(oldTrees, mutableTrees.next)
 	if !ok {
 		panic("concurrent mutation")
 	}
@@ -430,15 +915,20 @@ func (l *ObjectList) DeleteAllEntries(id *objectio.ObjectId) error {
 
 func (l *ObjectList) UpdateCreateTS(id *objectio.ObjectId, ts types.TS) (*ObjectEntry, error) {
 	l.Lock()
-	defer l.Unlock()
+	defer func() {
+		l.Unlock()
+		l.requestBookmarkRebuild()
+	}()
 	oldIndex, ok := l.objectID_index[*id]
 	if !ok {
 		return nil, moerr.GetOkExpectedEOB()
 	}
 	oldTrees := l.loadTrees()
-	newTree := oldTrees.all.Copy()
-	newVisibleTree := oldTrees.visible.Copy()
-	nodes := l.getNodesSnap(newTree, oldIndex, id, true)
+	mutableTrees := newMutableObjectListTrees(oldTrees)
+	clearObjectListBookmarks(mutableTrees.next)
+	l.bookmarkVersion++
+	newVisibleTree := mutableTrees.next.visible
+	nodes := l.getNodesSnap(oldTrees, oldIndex, id, true)
 	if len(nodes) == 0 {
 		return nil, moerr.GetOkExpectedEOB()
 	}
@@ -452,17 +942,17 @@ func (l *ObjectList) UpdateCreateTS(id *objectio.ObjectId, ts types.TS) (*Object
 		newNode.CreatedAt = ts
 		newNode.CreateNode = txnbase.NewTxnMVCCNodeWithTS(ts)
 		newNode.prevVersion = newPrev
-		newTree.Delete(oldNode)
-		newTree.Delete(oldNode.prevVersion)
-		newTree.Set(newNode)
-		newTree.Set(newPrev)
+		mutableTrees.delete(oldNode)
+		mutableTrees.delete(oldNode.prevVersion)
+		mutableTrees.set(newNode)
+		mutableTrees.set(newPrev)
 		newVisibleTree.Delete(oldNode.prevVersion)
 		newVisibleTree.Set(newPrev)
 	} else {
 		newNode.CreatedAt = ts
 		newNode.CreateNode = txnbase.NewTxnMVCCNodeWithTS(ts)
-		newTree.Delete(oldNode)
-		newTree.Set(newNode)
+		mutableTrees.delete(oldNode)
+		mutableTrees.set(newNode)
 		newVisibleTree.Delete(oldNode)
 		newVisibleTree.Set(newNode)
 	}
@@ -470,10 +960,7 @@ func (l *ObjectList) UpdateCreateTS(id *objectio.ObjectId, ts types.TS) (*Object
 		ts:    newNode.ObjectListCommitTS(),
 		group: newNode.ObjectListGroup(),
 	}
-	if !l.trees.CompareAndSwap(oldTrees, &objectListTrees{
-		all:     newTree,
-		visible: newVisibleTree,
-	}) {
+	if !l.trees.CompareAndSwap(oldTrees, mutableTrees.next) {
 		panic("concurrent mutation")
 	}
 	return newNode, nil
@@ -483,7 +970,7 @@ func (l *ObjectList) UpdateCreateTS(id *objectio.ObjectId, ts types.TS) (*Object
 // returns, all creating objects that can be visible to ts have committed.
 func (l *ObjectList) WaitUntilCommitted(ts types.TS) {
 	it := l.loadTree().Iter()
-	defer it.Release()
+	var waiting []txnif.TxnReader
 	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
 		for ok := SeekObjectListGroup(&it, group, txnif.UncommitTS); ok; ok = it.Next() {
 			obj := it.Item()
@@ -494,28 +981,200 @@ func (l *ObjectList) WaitUntilCommitted(ts types.TS) {
 				continue
 			}
 			if needWait, txn := obj.CreateNode.NeedWaitCommitting(ts); needWait {
-				txn.GetTxnState(true)
+				waiting = append(waiting, txn)
 			}
 			if needWait, txn := obj.DeleteNode.NeedWaitCommitting(ts); needWait {
-				txn.GetTxnState(true)
+				waiting = append(waiting, txn)
 			}
 		}
+	}
+	// BTreeG.Copy needs the tree's write lock. A committing transaction may
+	// need to publish its ObjectEntry through Copy, so release the iterator's
+	// read lock before waiting for any transaction to finish.
+	it.Release()
+	for _, txn := range waiting {
+		txn.GetTxnState(true)
 	}
 }
 
 // Iterator part
+
+// ObjectListSnapshot pins the atomically published set of group trees so a
+// multi-group scan cannot mix catalog generations.
+type ObjectListSnapshot struct {
+	trees *objectListTrees
+}
+
+// VisitAllUnlocked visits the pinned all-object tree in reverse order without
+// holding its iterator's read lock while calling fn. The callback may wait for
+// a transaction whose finalization needs to publish another tree version.
+// Returning false stops the scan.
+func (snapshot ObjectListSnapshot) VisitAllUnlocked(fn func(*ObjectEntry) bool) {
+	var last *ObjectEntry
+	for {
+		it := snapshot.trees.all.Iter()
+		var ok bool
+		if last == nil {
+			ok = it.Last()
+		} else {
+			ok = it.Seek(last)
+			if ok {
+				ok = it.Prev()
+			}
+		}
+		var batch [64]*ObjectEntry
+		count := 0
+		for ok && count < len(batch) {
+			obj := it.Item()
+			batch[count] = obj
+			count++
+			last = obj
+			ok = it.Prev()
+		}
+		finished := !ok
+		it.Release()
+		for _, obj := range batch[:count] {
+			if !fn(obj) {
+				return
+			}
+		}
+		if finished {
+			return
+		}
+	}
+}
+
+func (snapshot ObjectListSnapshot) Group(group ObjectListGroup) btree.IterG[*ObjectEntry] {
+	return snapshot.trees.group(group).Iter()
+}
+
+func (snapshot ObjectListSnapshot) ScanGroup(
+	group ObjectListGroup,
+	fn func(*ObjectEntry) bool,
+) {
+	snapshot.scanGroupUnlocked(group, nil, fn)
+}
+
+// scanGroupUnlocked pins the published tree version, but releases each B-tree
+// scan's read lock before invoking fn. A callback can wait for a transaction or
+// acquire the table lock; holding the tree's read lock then can deadlock a catalog
+// writer that holds the table lock and needs BTree.Copy's write lock.
+func (snapshot ObjectListSnapshot) scanGroupUnlocked(
+	group ObjectListGroup,
+	start *ObjectEntry,
+	fn func(*ObjectEntry) bool,
+) {
+	tree := snapshot.trees.group(group)
+	var last *ObjectEntry
+	for {
+		var batch [64]*ObjectEntry
+		count := 0
+		pivot := start
+		if last != nil {
+			pivot = last
+		}
+		collect := func(entry *ObjectEntry) bool {
+			if entry == last {
+				return true
+			}
+			batch[count] = entry
+			count++
+			return count < len(batch)
+		}
+		if pivot == nil {
+			tree.Scan(collect)
+		} else {
+			tree.Ascend(pivot, collect)
+		}
+		finished := count < len(batch)
+		for _, entry := range batch[:count] {
+			if !fn(entry) {
+				return
+			}
+		}
+		if finished {
+			return
+		}
+		last = batch[count-1]
+	}
+}
+
+// CommitBookmarkStart returns the first object whose prefix max commit can
+// reach from. A valid bookmark with a nil entry means the whole group is
+// older than from and can be skipped.
+func (snapshot ObjectListSnapshot) CommitBookmarkStart(
+	group ObjectListGroup, from types.TS,
+) (*ObjectEntry, bool) {
+	start, valid, _ := snapshot.CommitBookmarkStartWithCount(group, from)
+	return start, valid
+}
+
+// CommitBookmarkStartWithCount is the instrumentable form of
+// CommitBookmarkStart. skipped is the number of group entries proven to have
+// max commit timestamps below from by the prefix bookmark.
+func (snapshot ObjectListSnapshot) CommitBookmarkStartWithCount(
+	group ObjectListGroup, from types.TS,
+) (*ObjectEntry, bool, int) {
+	bookmark := snapshot.trees.bookmarks[group]
+	if bookmark == nil {
+		return nil, false, 0
+	}
+	lo, hi := 0, len(bookmark.entries)
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		if bookmark.entries[mid].maxThrough.LT(&from) {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo == len(bookmark.entries) {
+		return nil, true, lo
+	}
+	return bookmark.entries[lo].entry, true, lo
+}
+
+// ScanGroupFrom scans a group from an entry retained by the same immutable
+// snapshot. The entry is obtained from CommitBookmarkStart, so this avoids a
+// second seek/key construction in the hot dedup path.
+func (snapshot ObjectListSnapshot) ScanGroupFrom(
+	group ObjectListGroup,
+	start *ObjectEntry,
+	fn func(*ObjectEntry) bool,
+) {
+	if start == nil {
+		return
+	}
+	snapshot.scanGroupUnlocked(group, start, fn)
+}
+
+func (snapshot ObjectListSnapshot) AscendGroup(
+	group ObjectListGroup,
+	ts types.TS,
+	fn func(*ObjectEntry) bool,
+) {
+	var minID objectio.ObjectId
+	var key ObjectEntry
+	initObjectListKey(&key, group, ts, &minID)
+	snapshot.scanGroupUnlocked(group, &key, fn)
+}
 
 var _iterPool = sync.Pool{New: func() any {
 	return &VisibleCommittedObjectIt{}
 }}
 
 type VisibleCommittedObjectIt struct {
-	iter        btree.IterG[*ObjectEntry]
+	tree        *btree.BTreeG[*ObjectEntry]
+	pending     []*ObjectEntry
+	pendingOff  int
+	lastFetched *ObjectEntry
+	exhausted   bool
 	curr        *ObjectEntry
 	txn         txnif.TxnReader
 	isMockTxn   bool
-	firstCalled bool
 }
+
+const visibleObjectBatchSize = 64
 
 // MakeVisibleCommittedObjectIt returns an iterator that iterates over committed objects visible to the given txn
 // two cases:
@@ -524,25 +1183,52 @@ type VisibleCommittedObjectIt struct {
 
 func (l *ObjectList) MakeVisibleCommittedObjectIt(txn txnif.TxnReader) *VisibleCommittedObjectIt {
 	it := _iterPool.Get().(*VisibleCommittedObjectIt)
-	it.iter = l.loadTrees().visible.Iter()
+	it.tree = l.loadTrees().visible
 	it.txn = txn
 	it.isMockTxn = len(txn.GetCtx()) == 0
 	return it
 }
 
-func (it *VisibleCommittedObjectIt) Next() bool {
+func (it *VisibleCommittedObjectIt) refill() {
+	it.pending = it.pending[:0]
+	it.pendingOff = 0
+	iter := it.tree.Iter()
 	var ok bool
+	if it.lastFetched == nil {
+		ok = iter.Last()
+	} else {
+		// The tree is an immutable published snapshot, so the prior key is
+		// still present. Resume immediately before the last fetched entry.
+		ok = iter.Seek(it.lastFetched)
+		if ok {
+			ok = iter.Prev()
+		}
+	}
+	for ok && len(it.pending) < visibleObjectBatchSize {
+		entry := iter.Item()
+		it.pending = append(it.pending, entry)
+		it.lastFetched = entry
+		ok = iter.Prev()
+	}
+	it.exhausted = !ok
+	iter.Release()
+}
+
+func (it *VisibleCommittedObjectIt) Next() bool {
 	for {
-		if !it.firstCalled {
-			ok = it.iter.Last()
-			it.firstCalled = true
-		} else {
-			ok = it.iter.Prev()
+		if it.pendingOff == len(it.pending) {
+			if it.exhausted {
+				return false
+			}
+			it.refill()
+			if len(it.pending) == 0 {
+				return false
+			}
 		}
-		if !ok {
-			return false
-		}
-		entry := it.iter.Item()
+		entry := it.pending[it.pendingOff]
+		it.pending[it.pendingOff] = nil
+		it.pendingOff++
+		// No tree lock is held while IsVisible waits for a committing txn.
 		if it.isMockTxn {
 			if !entry.IsCreating() && !entry.HasDCounterpart() {
 				it.curr = entry
@@ -566,10 +1252,14 @@ func (it *VisibleCommittedObjectIt) Release() {
 		logutil.Errorf("attempt to put iter %p into pool twice", it)
 		return
 	}
-	it.iter.Release()
+	it.tree = nil
+	clear(it.pending)
+	it.pending = it.pending[:0]
+	it.pendingOff = 0
+	it.lastFetched = nil
+	it.exhausted = false
 	it.curr = nil
 	it.txn = nil
-	it.firstCalled = false
 	it.isMockTxn = false
 	_iterPool.Put(it)
 }
@@ -580,8 +1270,7 @@ func (it *VisibleCommittedObjectIt) Release() {
 func (l *ObjectList) Show() string {
 	l.RLock()
 	defer l.RUnlock()
-	tree := l.loadTree()
-	it := tree.Iter()
+	it := l.loadTree().Iter()
 	defer it.Release()
 	ret := ""
 	for it.Next() {

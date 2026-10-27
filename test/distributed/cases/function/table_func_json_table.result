@@ -16,6 +16,46 @@ select jt.n from json_table('[]', '$[*]' columns(n int path '$')) jt;
 ➤ n[4,32,0]
 select jt.n from json_table(null, '$[*]' columns(n int path '$')) jt;
 ➤ n[4,32,0]
+select jt.channel from json_table('["alpha","beta"]', '$[*]' columns(channel varchar(150) path '$')) jt order by jt.channel;
+➤ channel[12,150,0]  𝄀
+alpha  𝄀
+beta
+select jt.channel,charset(jt.channel),collation(jt.channel) from json_table('["alpha","beta"]', '$[*]' columns(channel varchar(150) character set utf8mb4 path '$')) jt order by jt.channel;
+➤ channel[12,150,0]  ¦  charset(jt.channel)[12,65535,0]  ¦  collation(jt.channel)[12,65535,0]  𝄀
+alpha  ¦  utf8mb4  ¦  utf8mb4_general_ci  𝄀
+beta  ¦  utf8mb4  ¦  utf8mb4_general_ci
+select jt.o,jt.v,hex(jt.v),char_length(jt.v) from json_table('["中","😀"]', '$[*]' columns(o for ordinality,v varchar(1) character set utf8mb4 path '$')) jt order by jt.o;
+➤ o[4,32,0]  ¦  v[12,1,0]  ¦  hex(jt.v)[12,8,0]  ¦  char_length(jt.v)[-5,64,0]  𝄀
+1  ¦  中  ¦  E4B8AD  ¦  1  𝄀
+2  ¦  😀  ¦  F09F9880  ¦  1
+select jt.v from json_table('[{}]', '$[*]' columns(v varchar(4) character set utf8mb4 path '$.v' default '"中😀"' on empty)) jt;
+➤ v[12,4,0]  𝄀
+中😀
+set @jt_saved_character_set_connection=@@character_set_connection;
+set @jt_saved_collation_connection=@@collation_connection;
+set character_set_connection='utf8mb3';
+select jt.v,hex(jt.v),charset(jt.v) from json_table('["\\u4e2d","\\ud83d\\ude00"]', '$[*]' columns(v varchar(1) character set utf8mb4 path '$')) jt order by hex(jt.v);
+➤ v[12,1,0]  ¦  hex(jt.v)[12,8,0]  ¦  charset(jt.v)[12,65535,0]  𝄀
+中  ¦  E4B8AD  ¦  utf8mb4  𝄀
+😀  ¦  F09F9880  ¦  utf8mb4
+set collation_connection='utf8mb4_bin';
+select jt.v,charset(jt.v),collation(jt.v) from json_table('["alpha"]', '$[*]' columns(v varchar(20) character set utf8mb4 path '$')) jt;
+➤ v[12,20,0]  ¦  charset(jt.v)[12,65535,0]  ¦  collation(jt.v)[12,65535,0]  𝄀
+alpha  ¦  utf8mb4  ¦  utf8mb4_general_ci
+set character_set_connection=@jt_saved_character_set_connection;
+set collation_connection=@jt_saved_collation_connection;
+select jt.v from json_table('[]', '$[*]' columns(v varchar(20) character set latin1 path '$')) jt;
+not supported: JSON_TABLE character set 'latin1'
+select jt.v from json_table('[]', '$[*]' columns(v varchar(20) character set '' path '$')) jt;
+not supported: JSON_TABLE character set ''
+create table jt_checkpoints(id int,checkpoint json);
+insert into jt_checkpoints values(1,'{"channel_versions":{"alpha":1,"beta":2}}'),(2,'{"channel_versions":{"中":3,"😀":4}}');
+select c.id,channels.channel from jt_checkpoints c,json_table(json_keys(c.checkpoint,'$.channel_versions'), '$[*]' columns(channel varchar(150) character set utf8mb4 path '$')) as channels order by c.id,hex(channels.channel);
+➤ id[4,32,0]  ¦  channel[12,150,0]  𝄀
+1  ¦  alpha  𝄀
+1  ¦  beta  𝄀
+2  ¦  中  𝄀
+2  ¦  😀
 create table jt_sources(id int,doc text);
 insert into jt_sources values(1,'[1,2]'),(2,'[2,3]'),(3,'[]'),(4,null);
 select t.id,jt.n from jt_sources t,json_table(t.doc, '$[*]' columns(n int path '$')) jt order by t.id,jt.n;
@@ -87,6 +127,16 @@ execute jt_stmt using @jt_doc;
 ➤ n[4,32,0]  𝄀
 7
 deallocate prepare jt_stmt;
+prepare jt_charset_stmt from 'select jt.v,charset(jt.v) from json_table(?, ''$[*]'' columns(v varchar(4) character set utf8mb4 path ''$'')) jt';
+set @jt_doc='["中"]';
+execute jt_charset_stmt using @jt_doc;
+➤ v[12,4,0]  ¦  charset(jt.v)[12,65535,0]  𝄀
+中  ¦  utf8mb4
+set @jt_doc='["😀"]';
+execute jt_charset_stmt using @jt_doc;
+➤ v[12,4,0]  ¦  charset(jt.v)[12,65535,0]  𝄀
+😀  ¦  utf8mb4
+deallocate prepare jt_charset_stmt;
 select jt.v from json_table('[1.25,2.75]', '$[*]' columns(v decimal(3,1) path '$')) jt limit 1;
 ➤ v[3,3,1]  𝄀
 1.3

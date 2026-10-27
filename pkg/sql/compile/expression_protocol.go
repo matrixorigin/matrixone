@@ -86,7 +86,7 @@ func executionRemoteExpressionProtocolVersion(proc *process.Process, features pl
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
 	if features.BinaryAssignmentSemantics {
-		required = max(required, defines.MORPCVersion133)
+		required = max(required, defines.MORPCVersion135)
 	}
 	if features.FloatConversionSemantics {
 		required = max(required, defines.MORPCVersion132)
@@ -161,6 +161,12 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 }
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.ODKUStatementResult || features.SessionLastInsertIDBaseline {
+		return defines.MORPCVersion134
+	}
+	if features.JSONMinMaxTypedComparison {
+		return defines.MORPCVersion133
+	}
 	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
 		return defines.MORPCVersion129
 	}
@@ -330,15 +336,15 @@ func validateTemporalResultProtocol(proc *process.Process, owner any) error {
 	if required > 0 && (!known || version < required) {
 		return moerr.NewNotSupportedf(context.Background(), "CTAS population requires MORPC protocol version %d", required)
 	}
-	if known && version >= defines.MORPCVersion133 {
+	if known && version >= defines.MORPCVersion135 {
 		return nil
 	}
 	features, err := plan.RequiredRemoteExpressionFeatures(owner)
 	if err != nil {
 		return err
 	}
-	if features.BinaryAssignmentSemantics && (!known || version < defines.MORPCVersion133) {
-		return moerr.NewNotSupportedNoCtx("binary assignment semantics require MORPC protocol version 133")
+	if features.BinaryAssignmentSemantics && (!known || version < defines.MORPCVersion135) {
+		return moerr.NewNotSupportedNoCtx("binary assignment semantics require MORPC protocol version 135")
 	}
 	if features.LoadFKIgnoreCheck && (!known || version < defines.MORPCVersion125) {
 		return moerr.NewNotSupportedNoCtx("LOAD IGNORE foreign-key filtering requires MORPC protocol version 125")

@@ -85,7 +85,7 @@ func TestBoundedConditionalStringPlacementAndDestinationProtocol(t *testing.T) {
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan.ExecTypeAP_ONECN, c.execType)
 
-	for _, version := range []int64{defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132} {
+	for _, version := range []int64{defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134} {
 		c.execType = plan.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		client.version = version
@@ -94,7 +94,7 @@ func TestBoundedConditionalStringPlacementAndDestinationProtocol(t *testing.T) {
 	}
 	c.execType = plan.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	client.version = defines.MORPCVersion133
+	client.version = defines.MORPCVersion135
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType)
 	data, err := encodeRemoteScope(scope, c.proc)
@@ -102,7 +102,7 @@ func TestBoundedConditionalStringPlacementAndDestinationProtocol(t *testing.T) {
 	require.NotEmpty(t, data)
 	client.version = defines.MORPCVersion126
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 133")
+	require.ErrorContains(t, err, "version 135")
 
 	client.version = defines.MORPCVersion80
 	_, err = encodeRemoteScope(scope, c.proc)
@@ -113,20 +113,20 @@ func TestBoundedConditionalStringPlacementAndDestinationProtocol(t *testing.T) {
 	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc,
 		&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 			ProjectList: []*planpb.Expr{qry.Nodes[0].ProjectList[0]},
-		}}}), "version 133")
+		}}}), "version 135")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion126)
 	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc,
 		&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 			ProjectList: []*planpb.Expr{qry.Nodes[0].ProjectList[0]},
-		}}}), "version 133")
-	for _, version := range []int64{defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132} {
+		}}}), "version 135")
+	for _, version := range []int64{defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132, defines.MORPCVersion133, defines.MORPCVersion134} {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
 		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc,
 			&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 				ProjectList: []*planpb.Expr{qry.Nodes[0].ProjectList[0]},
-			}}}), "version 133", "version=%d", version)
+			}}}), "version 135", "version=%d", version)
 	}
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion133)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion135)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc,
 		&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 			ProjectList: []*planpb.Expr{qry.Nodes[0].ProjectList[0]},

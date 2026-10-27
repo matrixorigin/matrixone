@@ -103,28 +103,16 @@ func (rw *reactWriter) AddAfter(hook table.AckHook) {
 }
 
 func GetWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string, enableSqlWriter bool) table.WriterFactory {
-
-	var extension = table.CsvExtension
-	var cfg = table.FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: extension}
-	var factory func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter
-
-	switch extension {
-	case table.CsvExtension:
-		factory = func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
-			options := []etl.FSWriterOption{
-				etl.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)),
-			}
-			cw := etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))
-			if enableSqlWriter {
-				// return newWriter(ctx, etl.NewSqlWriter(ctx, tbl, cw))
-				// new version
-				return newWriter(ctx, etl.NewContentWriter(ctx, tbl, cw))
-			} else {
-				return newWriter(ctx, cw)
-			}
+	cfg := table.FilePathCfg{NodeUUID: nodeUUID, NodeType: nodeType, Extension: table.CsvExtension}
+	factory := func(ctx context.Context, account string, tbl *table.Table, ts time.Time) table.RowWriter {
+		options := []etl.FSWriterOption{
+			etl.WithFilePath(cfg.LogsFilePathFactory(account, tbl, ts)),
 		}
-	case table.TaeExtension:
-		// Deprecated
+		cw := etl.NewCSVWriter(ctx, etl.NewFSWriter(ctx, fs, options...))
+		if enableSqlWriter {
+			return newWriter(ctx, etl.NewContentWriter(ctx, tbl, cw))
+		}
+		return newWriter(ctx, cw)
 	}
 
 	bufferWriterFactory := func(ctx context.Context, filepath string) io.WriteCloser {

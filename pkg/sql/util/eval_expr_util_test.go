@@ -17,6 +17,7 @@ package util
 import (
 	"errors"
 	"math"
+	"strconv"
 	"testing"
 	"time"
 
@@ -305,6 +306,88 @@ func TestSetInsertValueBoolUsesNonZeroNumericSemantics(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestIntLiteralIntoColumnKeepsDecimalWidth(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ2 := types.New(types.T_decimal64, 2, 2)
+	typWide := types.New(types.T_decimal64, 18, 0)
+	typ128 := types.New(types.T_decimal128, 30, 5)
+
+	t.Run("decimal64 integer literals respect the width bound", func(t *testing.T) {
+		// issue #30367: VALUES (2) into DECIMAL(2,2) used to store 2.00
+		for _, v := range []int64{1, 2, -1, -2} {
+			neg := v < 0
+			abs := v
+			if neg {
+				abs = -v
+			}
+			_, _, err := SetInsertValueDecimal64(proc,
+				tree.NewNumVal(v, strconv.FormatInt(abs, 10), neg, tree.P_int64), &typ2)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "beyond the range, can't be converted to Decimal64(2,2).")
+		}
+		_, _, err := SetInsertValueDecimal64(proc,
+			tree.NewNumVal(uint64(2), "2", false, tree.P_uint64), &typ2)
+		require.Error(t, err)
+		_, _, err = SetInsertValueDecimal64(proc,
+			tree.NewNumVal(uint64(math.MaxUint64), "18446744073709551615", false, tree.P_uint64), &typ2)
+		require.Error(t, err)
+		_, _, err = SetInsertValueDecimal64(proc,
+			tree.NewNumVal("0x2", "0x2", false, tree.P_hexnum), &typ2)
+		require.Error(t, err)
+	})
+
+	t.Run("decimal64 valid boundaries still accepted", func(t *testing.T) {
+		canInsert, v, err := SetInsertValueDecimal64(proc,
+			tree.NewNumVal(int64(0), "0", false, tree.P_int64), &typ2)
+		require.NoError(t, err)
+		require.True(t, canInsert)
+		require.Equal(t, "0.00", v.Format(2))
+
+		canInsert, v, err = SetInsertValueDecimal64(proc,
+			tree.NewNumVal(int64(999999999999999999), "999999999999999999", false, tree.P_int64), &typWide)
+		require.NoError(t, err)
+		require.True(t, canInsert)
+		require.Equal(t, "999999999999999999", v.Format(0))
+
+		// 10^18 and MaxInt64 exceed DECIMAL(18,0); MaxUint64 must not wrap.
+		_, _, err = SetInsertValueDecimal64(proc,
+			tree.NewNumVal(int64(math.MaxInt64), "9223372036854775807", false, tree.P_int64), &typWide)
+		require.Error(t, err)
+		_, _, err = SetInsertValueDecimal64(proc,
+			tree.NewNumVal(uint64(math.MaxUint64), "18446744073709551615", false, tree.P_uint64), &typWide)
+		require.Error(t, err)
+	})
+
+	t.Run("decimal128 integer literals respect the width bound", func(t *testing.T) {
+		_, _, err := SetInsertValueDecimal128(proc,
+			tree.NewNumVal(int64(123), "123", false, tree.P_int64), &typ128)
+		require.NoError(t, err)
+		// 25 integer digits + scale 5 fill DECIMAL(30,5)
+		canInsert, wide, err := SetInsertValueDecimal128(proc,
+			tree.NewNumVal("9999999999999999999999999", "9999999999999999999999999", false, tree.P_decimal), &typ128)
+		require.NoError(t, err)
+		require.True(t, canInsert)
+		require.Equal(t, "9999999999999999999999999.00000", wide.Format(5))
+
+		narrow := types.New(types.T_decimal128, 5, 5)
+		canInsert, v, err := SetInsertValueDecimal128(proc,
+			tree.NewNumVal(int64(4), "4", false, tree.P_int64), &typ128)
+		require.NoError(t, err)
+		require.True(t, canInsert)
+		require.Equal(t, "4.00000", v.Format(5))
+
+		_, _, err = SetInsertValueDecimal128(proc,
+			tree.NewNumVal(int64(1), "1", false, tree.P_int64), &narrow)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "beyond the range, can't be converted to Decimal128(5,5).")
+
+		// uint64 magnitudes beyond int64 must not wrap negative.
+		_, _, err = SetInsertValueDecimal128(proc,
+			tree.NewNumVal(uint64(math.MaxUint64), "18446744073709551615", false, tree.P_uint64), &narrow)
+		require.Error(t, err)
+	})
 }
 
 func TestSetInsertValueStringBinaryHexPadding(t *testing.T) {

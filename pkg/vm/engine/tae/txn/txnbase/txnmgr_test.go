@@ -23,7 +23,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -420,4 +423,43 @@ func TestSingleTNInvalidStateAndReplayRollback(t *testing.T) {
 	require.Panics(t, func() {
 		_ = replayTxn.rollback1PC(context.Background())
 	})
+}
+
+func TestCommitQueueStageMetricsFollowExecutedWork(t *testing.T) {
+	mgr := NewTxnManager(NoopStoreFactory, nil, types.NewMockHLCClock(1))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+	mgr.StopHeartbeat()
+	waitTxnManagerEmpty(t, mgr)
+	stages := []string{"pre_wal_queue_wait", "pre_prepare", "prepare_ts", "prepare_commit", "pre_apply_commit", "wal_queue_wait", "prepare_wal", "apply_queue_wait", "wait_wal_and_tail", "apply_commit"}
+	count := func(stage string) uint64 {
+		var metric dto.Metric
+		child := v2.TxnTNCommitQueueStageDurationHistogram.WithLabelValues(stage).(prometheus.Metric)
+		require.NoError(t, child.Write(&metric))
+		return metric.GetHistogram().GetSampleCount()
+	}
+	before := make(map[string]uint64, len(stages))
+	for _, stage := range stages {
+		before[stage] = count(stage)
+	}
+	txn, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(context.Background()))
+	waitTxnManagerEmpty(t, mgr)
+	for _, stage := range stages {
+		require.Equal(t, before[stage]+1, count(stage), stage)
+		before[stage] = count(stage)
+	}
+	txn, err = mgr.StartTxn(nil)
+	require.NoError(t, err)
+	require.NoError(t, txn.Rollback(context.Background()))
+	waitTxnManagerEmpty(t, mgr)
+	for _, stage := range stages {
+		want := before[stage]
+		switch stage {
+		case "pre_wal_queue_wait", "prepare_ts", "wal_queue_wait", "apply_queue_wait":
+			want++ // Rollback traverses the queues but skips commit work.
+		}
+		require.Equal(t, want, count(stage), stage)
+	}
 }

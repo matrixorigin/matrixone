@@ -39,7 +39,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
-		{features.BinaryAssignmentSemantics, defines.MORPCVersion133,
+		{features.BinaryAssignmentSemantics, defines.MORPCVersion135,
 			"binary assignment semantics require a versioned remote destination",
 			"remote destination does not support binary assignment semantics (MORPC version %d)"},
 		{features.FloatConversionSemantics, defines.MORPCVersion132,
@@ -99,7 +99,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{temporalExpressionProtocolVersion(features) != 0, temporalExpressionProtocolVersion(features),
 			"temporal result contracts require a versioned remote destination",
 			"remote destination does not support temporal result contracts (MORPC version %d)"},
-		{(features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) || features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts || features.ExpressionResultMetadataContracts || features.JSONInputContracts || features.YearBitCast || features.JSONScalarLiteralContracts, requiredExpressionContractProtocolVersion(features),
+		{features.ODKUStatementResult || features.SessionLastInsertIDBaseline || features.JSONMinMaxTypedComparison || features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts || features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts || features.ExpressionResultMetadataContracts || features.JSONInputContracts || features.YearBitCast || features.JSONScalarLiteralContracts, requiredExpressionContractProtocolVersion(features),
 			"versioned expression semantics require a remote destination",
 			"remote destination does not support versioned expression semantics (MORPC version %d)"},
 		{features.StringNumericResultContracts, defines.MORPCVersion80,
