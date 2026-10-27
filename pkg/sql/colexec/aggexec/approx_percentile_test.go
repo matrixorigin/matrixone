@@ -29,6 +29,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Exact percentile helpers provide reference values for the sketch tests.
+func interpolateNumeric[T numeric](lo, hi T, fraction *big.Rat) float64 {
+	var scratch percentileArithmeticScratch
+	return interpolateNumericWithScratch(&scratch, lo, hi, percentileFraction{
+		numerator: fraction.Num(), denominator: fraction.Denom(),
+	})
+}
+
+func percentileNumericVals[T numeric](values []T, p float64) float64 {
+	if len(values) == 0 || p < 0 || p > 1 {
+		return math.NaN()
+	}
+	rat, _, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
+	if err != nil {
+		return math.NaN()
+	}
+	loRank, hiRank, frac := percentileRanks(uint64(len(values)), rat)
+	lo := selectKthNumeric(values, int(loRank))
+	hi := selectKthNumeric(values, int(hiRank))
+	return interpolateNumeric(lo, hi, frac)
+}
+
+func percentileDecimal64Vals(values []types.Decimal64, p float64, argScale int32) (types.Decimal128, error) {
+	if len(values) == 0 || p < 0 || p > 1 {
+		return types.Decimal128{}, nil
+	}
+	rat, _, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	loRank, hiRank, frac := percentileRanks(uint64(len(values)), rat)
+	compare := func(a, b types.Decimal64) int { return a.Compare(b) }
+	lo := FromD64ToD128(selectKthFunc(values, int(loRank), compare))
+	hi := FromD64ToD128(selectKthFunc(values, int(hiRank), compare))
+	return interpolateDecimal(lo, hi, frac, 1)
+}
+
 // --- percentile computation algorithm tests ---
 
 func TestPercentileNumericVals_Basic(t *testing.T) {
