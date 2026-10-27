@@ -1772,42 +1772,31 @@ func convertTimezone(tz string) *time.Location {
 	if tz == "" {
 		return nil
 	}
-
-	loc, err := time.LoadLocation(tz)
-	if err != nil && tz[0] != '+' && tz[0] != '-' {
-		return nil
-	}
-	// convert from timezone offset to location
-	if tz[0] == '+' || tz[0] == '-' {
-		parts := strings.Split(tz, ":")
-		if len(parts) != 2 {
-			return nil
-		}
-		hours, err := strconv.Atoi(parts[0])
+	if tz[0] != '+' && tz[0] != '-' {
+		loc, err := time.LoadLocation(tz)
 		if err != nil {
 			return nil
-		} else if hours < -13 || hours > 14 { // timezone should be in [-13:59, +14:00]
-			return nil
 		}
-		minutes, err := strconv.Atoi(parts[1])
-		if err != nil || minutes < 0 || minutes > 59 {
-			return nil
-		}
-		if (hours == 14 && minutes != 0) || (hours == -13 && minutes > 59) || hours < -13 {
-			return nil
-		}
-		if tz[0] == '-' {
-			minutes = -minutes
-		}
-		if tz[0] == '-' && hours == -14 {
-			return nil
-		}
-
-		offset := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
-		loc = time.FixedZone("GMT", int(offset.Seconds()))
+		return loc
 	}
 
-	return loc
+	hourPart, minutePart, found := strings.Cut(tz, ":")
+	if !found || strings.Contains(minutePart, ":") {
+		return nil
+	}
+	hours, err := strconv.Atoi(hourPart)
+	if err != nil || hours < -13 || hours > 14 {
+		return nil
+	}
+	minutes, err := strconv.Atoi(minutePart)
+	if err != nil || minutes < 0 || minutes > 59 || (hours == 14 && minutes != 0) {
+		return nil
+	}
+	if tz[0] == '-' {
+		minutes = -minutes
+	}
+	offset := time.Duration(hours)*time.Hour + time.Duration(minutes)*time.Minute
+	return time.FixedZone("GMT", int(offset.Seconds()))
 }
 
 // Arithmetic consumers distinguish invalid input from a valid computation

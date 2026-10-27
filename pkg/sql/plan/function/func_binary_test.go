@@ -278,6 +278,8 @@ func TestTemporalConversionHelpers(t *testing.T) {
 		{input: "+14:00", want: time.FixedZone("+14:00", 14*60*60)},
 		{input: "-13:59", want: time.FixedZone("-13:59", -(13*60+59)*60)},
 		{input: "+05:30", want: time.FixedZone("+05:30", (5*60+30)*60)},
+		{input: "-00:30", want: time.FixedZone("-00:30", -30*60)},
+		{input: "+00:+30", want: time.FixedZone("+00:+30", 30*60)},
 	} {
 		got := convertTimezone(tc.input)
 		require.NotNil(t, got)
@@ -285,7 +287,7 @@ func TestTemporalConversionHelpers(t *testing.T) {
 		_, wantOffset := time.Now().In(tc.want).Zone()
 		require.Equal(t, wantOffset, gotOffset)
 	}
-	for _, input := range []string{"+14:01", "-14:00", "+05:60", "bad"} {
+	for _, input := range []string{"+14:01", "-14:00", "+05:60", "+00:00:00", "+00::00", "+00:", "bad"} {
 		require.Nil(t, convertTimezone(input), input)
 	}
 
