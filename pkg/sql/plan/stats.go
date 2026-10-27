@@ -1211,10 +1211,7 @@ func estimateConjunctiveRangeSelectivity(
 		if fn == nil {
 			return 0, false
 		}
-		first, ok := rangeLiteralAsFloat64(fn.Args[1], types.T(typeID))
-		if colFnName == "year" {
-			first, ok = rangeLiteralAsFloat64(fn.Args[1], typ)
-		}
+		first, ok := rangeLiteralAsFloat64(fn.Args[1], typ)
 		if !ok {
 			return 0, false
 		}
@@ -1236,10 +1233,7 @@ func estimateConjunctiveRangeSelectivity(
 				upperInclusive = false
 			}
 		case "between":
-			second, secondOK := rangeLiteralAsFloat64(fn.Args[2], types.T(typeID))
-			if colFnName == "year" {
-				second, secondOK = rangeLiteralAsFloat64(fn.Args[2], typ)
-			}
+			second, secondOK := rangeLiteralAsFloat64(fn.Args[2], typ)
 			if !secondOK {
 				return 0, false
 			}
