@@ -84,6 +84,14 @@ func TestFloatDecimalRationalOracle(t *testing.T) {
 			check(value, 18, scale)
 		}
 	}
+	// Include both sides of the normal/subnormal transition and signed tiny
+	// values at the fast-path scale limit and the first unconditional fallback scale.
+	for _, value := range []float64{math.SmallestNonzeroFloat64, math.Float64frombits((1 << 52) - 1), math.Float64frombits(1 << 52)} {
+		for _, scale := range []int32{0, 19, 20} {
+			checkBoth(value, scale)
+			checkBoth(-value, scale)
+		}
+	}
 	scales := []int32{0, 1, 2, 6, 18, 19, 20, 38}
 	// Stratified finite bit patterns include subnormals, binade transitions,
 	// 17-digit significands, exact large integers and overflow at both signs.
@@ -103,6 +111,13 @@ func TestFloatDecimalRationalOracle(t *testing.T) {
 	}
 	for _, scale := range scales {
 		factor := math.Pow10(int(scale))
+		// Confirm that the oracle actually challenges both sides of the
+		// rounded-product cutoff; expected results remain rational-derived.
+		if scale <= 19 {
+			cutoff := 0.25 / factor
+			require.Less(t, math.Nextafter(cutoff, 0)*factor, 0.25)
+			require.GreaterOrEqual(t, math.Nextafter(cutoff, math.Inf(1))*factor, 0.25)
+		}
 		// Decimal half-integer grid and the closest binary values on either side.
 		for _, odd := range []float64{1, 3, 17, 201, 203, 535, 199999} {
 			value := (odd / 2) / factor
@@ -174,6 +189,7 @@ func BenchmarkFloatDecimalConversions(b *testing.B) {
 		scale  int32
 	}{
 		{"ordinary", []float64{12345.6789}, 6},
+		{"integral", []float64{12345, -12346}, 6},
 		{"tie", []float64{1.005}, 2},
 		{"near_tie", []float64{math.Nextafter(1.005, 0)}, 2},
 		{"small", []float64{1e-20}, 6},
