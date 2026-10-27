@@ -691,6 +691,13 @@ func TestQCloudSDKReadOnlyOperationsPreserveInFlightCancellation(t *testing.T) {
 			},
 		},
 		{
+			name: "exists",
+			run: func(ctx context.Context, sdk *QCloudSDK) error {
+				_, err := sdk.Exists(ctx, "object")
+				return err
+			},
+		},
+		{
 			name: "read",
 			run: func(ctx context.Context, sdk *QCloudSDK) error {
 				reader, err := sdk.Read(ctx, "object", nil, nil)

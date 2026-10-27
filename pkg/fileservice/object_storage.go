@@ -30,6 +30,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
+// objectExists keeps the context and provider-specific not-found handling shared
+// by object stores whose stat result is irrelevant to existence.
+func objectExists[T any](
+	ctx context.Context, key string,
+	stat func(context.Context, string) (T, error), isNotFound func(error) bool,
+) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	_, err := stat(ctx, key)
+	if err != nil {
+		if isNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 const smallObjectThreshold = 64 * (1 << 20)
 const (
 	// defaultParallelMultipartPartSize defines the default per-part size for parallel multipart uploads.

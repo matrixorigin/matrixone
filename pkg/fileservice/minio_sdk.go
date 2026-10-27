@@ -418,22 +418,7 @@ func (a *MinioSDK) Exists(
 	error,
 ) {
 
-	if err := ctx.Err(); err != nil {
-		return false, err
-	}
-
-	_, err := a.statObject(
-		ctx,
-		key,
-	)
-	if err != nil {
-		if a.is404(err) {
-			return false, nil
-		}
-		return false, err
-	}
-
-	return true, nil
+	return objectExists(ctx, key, a.statObject, a.is404)
 }
 
 func (a *MinioSDK) Write(

@@ -17,6 +17,7 @@ package fileservice
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"path"
 	"strings"
@@ -27,6 +28,34 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestObjectExistsCancellationAndErrors(t *testing.T) {
+	notFound := errors.New("missing")
+	failure := errors.New("unavailable")
+	calls := 0
+	stat := func(_ context.Context, _ string) (int, error) {
+		calls++
+		return 0, failure
+	}
+	classify := func(err error) bool { return errors.Is(err, notFound) }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	exists, err := objectExists(ctx, "object", stat, classify)
+	require.False(t, exists)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, calls)
+
+	exists, err = objectExists(context.Background(), "object", stat, classify)
+	require.False(t, exists)
+	require.ErrorIs(t, err, failure)
+	require.Equal(t, 1, calls)
+
+	exists, err = objectExists(context.Background(), "object", func(context.Context, string) (int, error) {
+		return 0, notFound
+	}, classify)
+	require.NoError(t, err)
+	require.False(t, exists)
+}
 
 // testOrdinaryObjectReadRanges checks the shared behavior against each provider's HTTP fixture.
 func testOrdinaryObjectReadRanges(t *testing.T, storage ObjectStorage) {
