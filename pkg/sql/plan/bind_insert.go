@@ -57,6 +57,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	defer func() {
 		builder.insertHasOnDuplicateUpdate = false
 	}()
+	builder.isODKU = builder.insertHasOnDuplicateUpdate
 	dmlCtx := NewDMLContext()
 	// Allow FK tables on the modern insert path: bypass the generic FK-table
 	// rejection in ResolveTables via IgnoreForeignKey, then enforce parent
@@ -3687,6 +3688,45 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					CountFoundRows:         countFoundRows,
 					EmitActionRows:         emitODKUActionRows,
 				}
+				// ODKU result tracking is attached only to the main UPDATE join.
+				// The old/probe auto-increment value is the protocol fallback target;
+				// the input/build marker and ordinal identify a successful generated
+				// INSERT action.  Explicit refs let every later projection/remap keep
+				// the contract intact without inspecting transient column names.
+				autoIncrementCol := int32(-1)
+				autoIncrementInputCol := int32(-1)
+				for i, col := range tableDef.Cols {
+					if col == nil || col.Hidden || !col.Typ.AutoIncr {
+						continue
+					}
+					autoIncrementCol = int32(i)
+					var ok bool
+					autoIncrementInputCol, ok = colName2Idx[tableDef.Name+"."+col.Name]
+					if !ok {
+						return 0, moerr.NewInternalError(builder.GetContext(),
+							"ODKU auto-increment column is missing from input projection")
+					}
+					break // Same first-visible-column policy as PRE_INSERT provenance.
+				}
+				if autoIncrementCol >= 0 && autoIncrementInputCol >= 0 && autoIncrementGeneratedColumn >= 0 {
+					ordinalCol := autoIncrementGeneratedColumn + 1
+					if int(ordinalCol) >= len(selectNode.ProjectList) {
+						return 0, moerr.NewInternalError(builder.GetContext(),
+							"ODKU result provenance columns are missing from input projection")
+					}
+					dedupJoinNode.DedupJoinCtx.OdkuTargetAutoIncrementCol = &plan.ColRef{
+						RelPos: scanTag, ColPos: autoIncrementCol,
+					}
+					dedupJoinNode.DedupJoinCtx.OdkuGeneratedCol = &plan.ColRef{
+						RelPos: selectTag, ColPos: autoIncrementGeneratedColumn,
+					}
+					dedupJoinNode.DedupJoinCtx.OdkuOrdinalCol = &plan.ColRef{
+						RelPos: selectTag, ColPos: ordinalCol,
+					}
+					dedupJoinNode.DedupJoinCtx.OdkuGeneratedAutoIncrementCol = &plan.ColRef{
+						RelPos: selectTag, ColPos: autoIncrementInputCol,
+					}
+				}
 				if emitODKUActionRows {
 					dedupJoinNode.DedupJoinCtx.ActionFinalCol = &plan.ColRef{
 						RelPos: selectTag, ColPos: actionFinalInputPos,
@@ -5405,10 +5445,16 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 ) (int32, map[string]int32, []bool, int32, error) {
 	colName2Idx := make(map[string]int32)
 	hasAutoCol := false
-	for _, col := range tableDef.Cols {
-		if col.Typ.AutoIncr {
+	odkuAutoIncrementColumn := int32(-1)
+	for i, col := range tableDef.Cols {
+		if col != nil && col.Typ.AutoIncr {
 			hasAutoCol = true
-			break
+			if builder.isODKU && !col.Hidden && odkuAutoIncrementColumn < 0 {
+				// Multiple visible AUTO_INCREMENT columns remain valid DML. Use
+				// the first in table order for both generated and fallback IDs;
+				// later columns still allocate normally but do not own this result.
+				odkuAutoIncrementColumn = int32(i)
+			}
 		}
 	}
 
@@ -5616,6 +5662,18 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	}
 	markerPhysicalPos, trackAutoIncrementGenerated := builder.insertIgnoreAutoIncrementReorderable(
 		tableDef, skipUniqueIdx, compPkeyExpr, clusterByExpr)
+	// A table without a user-visible AUTO_INCREMENT column may still carry
+	// MatrixOne's hidden fake primary key. That key is an allocation detail and
+	// must not become LAST_INSERT_ID or an ODKU OK-packet value.
+	trackODKUResult := builder.isODKU && odkuAutoIncrementColumn >= 0
+	if trackODKUResult {
+		// ODKU uses the same pre-allocation generated marker as INSERT IGNORE,
+		// but keeps a distinct statement-local ordinal beside it.  The marker is
+		// never used as a hidden-name convention; its physical position is carried
+		// through PreInsertCtx and the DEDUP metadata below.
+		markerPhysicalPos = int32(len(projList2))
+		trackAutoIncrementGenerated = true
+	}
 	if trackAutoIncrementGenerated {
 		projList2 = append(projList2, &plan.Expr{
 			Typ: plan.Type{Id: int32(types.T_bool)},
@@ -5624,22 +5682,37 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				ColPos: markerPhysicalPos,
 			}},
 		})
+		if trackODKUResult {
+			projList2 = append(projList2, &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_uint64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: preInsertTag,
+					ColPos: markerPhysicalPos + 1,
+				}},
+			})
+		}
 	}
 
 	if hasAutoCol || compPkeyExpr != nil || clusterByExpr != nil {
+		preInsertCtx := &plan.PreInsertCtx{
+			Ref:                          objRef,
+			TableDef:                     tableDef,
+			HasAutoCol:                   hasAutoCol,
+			CompPkeyExpr:                 compPkeyExpr,
+			ClusterByExpr:                clusterByExpr,
+			TrackAutoIncrementGenerated:  trackAutoIncrementGenerated && !trackODKUResult,
+			AutoIncrementGeneratedColumn: markerPhysicalPos,
+			TrackOdkuResult:              trackODKUResult,
+			OdkuOrdinalColumn:            markerPhysicalPos + 1,
+		}
+		if trackODKUResult {
+			preInsertCtx.OdkuAutoIncrementColumn = odkuAutoIncrementColumn
+		}
 		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_PRE_INSERT,
-			Children: []int32{lastNodeID},
-			PreInsertCtx: &plan.PreInsertCtx{
-				Ref:                          objRef,
-				TableDef:                     tableDef,
-				HasAutoCol:                   hasAutoCol,
-				CompPkeyExpr:                 compPkeyExpr,
-				ClusterByExpr:                clusterByExpr,
-				TrackAutoIncrementGenerated:  trackAutoIncrementGenerated,
-				AutoIncrementGeneratedColumn: markerPhysicalPos,
-			},
-			BindingTags: []int32{preInsertTag},
+			NodeType:     plan.Node_PRE_INSERT,
+			Children:     []int32{lastNodeID},
+			PreInsertCtx: preInsertCtx,
+			BindingTags:  []int32{preInsertTag},
 		}, tmpCtx)
 	}
 
@@ -5650,7 +5723,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		BindingTags: []int32{builder.genNewBindTag()},
 	}, tmpCtx)
 
-	if !trackAutoIncrementGenerated {
+	if !trackAutoIncrementGenerated && !trackODKUResult {
 		markerPhysicalPos = -1
 	}
 	return lastNodeID, colName2Idx, skipUniqueIdx, markerPhysicalPos, nil
