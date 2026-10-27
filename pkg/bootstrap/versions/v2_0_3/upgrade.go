@@ -55,13 +55,13 @@ func (v *versionHandle) HandleTenantUpgrade(
 	ctx context.Context,
 	tenantID int32,
 	txn executor.TxnExecutor) error {
-	return versions.RunHistoricalTenantUpgradeEntries(tenantID, txn, tenantUpgEntries, getLogger, func() string { return v.Metadata().Version })
+	return versions.RunHistoricalTenantUpgradeEntries(tenantID, txn, tenantUpgEntries, versions.StrictServiceLogger, func() string { return v.Metadata().Version })
 }
 
 func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
-	return versions.RunClusterUpgradeEntries(txn, clusterUpgEntries, getLogger, func() string { return v.Metadata().Version })
+	return versions.RunClusterUpgradeEntries(txn, clusterUpgEntries, versions.StrictServiceLogger, func() string { return v.Metadata().Version })
 }
 
 func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {

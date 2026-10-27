@@ -60,7 +60,7 @@ func (v *versionHandle) HandleTenantUpgrade(
 	ctx context.Context,
 	tenantID int32,
 	txn executor.TxnExecutor) error {
-	return versions.RunHistoricalTenantUpgradeEntries(tenantID, txn, tenantUpgEntries, getLogger, func() string { return v.Metadata().Version })
+	return versions.RunHistoricalTenantUpgradeEntries(tenantID, txn, tenantUpgEntries, versions.StrictServiceLogger, func() string { return v.Metadata().Version })
 }
 
 func (v *versionHandle) HandleClusterUpgrade(
@@ -71,12 +71,12 @@ func (v *versionHandle) HandleClusterUpgrade(
 
 		err := upgEntry.Upgrade(txn, catalog.System_Account)
 		if err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("cluster upgrade entry execute error", zap.Error(err), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
+			versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Error("cluster upgrade entry execute error", zap.Error(err), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
 			return err
 		}
 
 		duration := time.Since(start)
-		getLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
+		versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Info("cluster upgrade entry complete",
 			zap.String("upgrade entry", upgEntry.String()),
 			zap.Int64("time cost(ms)", duration.Milliseconds()),
 			zap.String("toVersion", v.Metadata().Version))
@@ -84,7 +84,7 @@ func (v *versionHandle) HandleClusterUpgrade(
 
 	if needUpgradePubSub {
 		if err := UpgradePubSub(txn); err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("cluster UpgradePubSub error",
+			versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Error("cluster UpgradePubSub error",
 				zap.Error(err),
 				zap.String("version", v.Metadata().Version))
 			return err
@@ -93,7 +93,7 @@ func (v *versionHandle) HandleClusterUpgrade(
 
 	kek := ctx.Value(KekKey{}).(string)
 	if err := InsertInitDataKey(txn, kek); err != nil {
-		getLogger(txn.Txn().TxnOptions().CN).Error("cluster Upgrade InsertInitDataKey error",
+		versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Error("cluster Upgrade InsertInitDataKey error",
 			zap.Error(err),
 			zap.String("version", v.Metadata().Version))
 		return err

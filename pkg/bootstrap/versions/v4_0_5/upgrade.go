@@ -55,17 +55,17 @@ func (v *versionHandle) Prepare(ctx context.Context, txn executor.TxnExecutor, f
 }
 
 func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
-	if err := versions.RunServiceTenantUpgradeEntries(tenantID, txn, tenantUpgEntries, getLogger, func() string { return v.Metadata().Version }); err != nil {
+	if err := versions.RunServiceTenantUpgradeEntries(tenantID, txn, tenantUpgEntries, versions.StrictServiceLogger, func() string { return v.Metadata().Version }); err != nil {
 		return err
 	}
-	getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade success",
+	versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade success",
 		zap.Int32("tenantId", tenantID),
 		zap.String("toVersion", v.Metadata().Version))
 	return nil
 }
 
 func (v *versionHandle) HandleClusterUpgrade(ctx context.Context, txn executor.TxnExecutor) error {
-	return versions.RunCurrentAccountClusterUpgradeEntries(txn, clusterUpgEntries, getLogger, func() string { return v.Metadata().Version })
+	return versions.RunCurrentAccountClusterUpgradeEntries(txn, clusterUpgEntries, versions.StrictServiceLogger, func() string { return v.Metadata().Version })
 }
 
 func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {

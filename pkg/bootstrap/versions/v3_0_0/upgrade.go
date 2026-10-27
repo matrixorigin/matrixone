@@ -63,7 +63,7 @@ func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor,
 ) error {
-	return versions.RunClusterUpgradeEntries(txn, clusterUpgEntries, getLogger, func() string { return v.Metadata().Version })
+	return versions.RunClusterUpgradeEntries(txn, clusterUpgEntries, versions.StrictServiceLogger, func() string { return v.Metadata().Version })
 }
 
 func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {

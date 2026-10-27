@@ -66,12 +66,12 @@ func (v *versionHandle) HandleTenantUpgrade(
 
 		err := upgEntry.Upgrade(txn, uint32(tenantID))
 		if err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
+			versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", v.Metadata().Version), zap.String("upgrade entry", upgEntry.String()))
 			return err
 		}
 
 		duration := time.Since(start)
-		getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete",
+		versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete",
 			zap.String("upgrade entry", upgEntry.String()),
 			zap.Int64("time cost(ms)", duration.Milliseconds()),
 			zap.Int32("tenantId", tenantID),
@@ -80,7 +80,7 @@ func (v *versionHandle) HandleTenantUpgrade(
 
 	err := upgradeForBM25(uint32(tenantID), txn)
 	if err != nil {
-		getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute for BM25 error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", v.Metadata().Version))
+		versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute for BM25 error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", v.Metadata().Version))
 		return err
 	}
 
@@ -90,7 +90,7 @@ func (v *versionHandle) HandleTenantUpgrade(
 func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
-	return versions.RunClusterUpgradeEntries(txn, clusterUpgEntries, getLogger, func() string { return v.Metadata().Version })
+	return versions.RunClusterUpgradeEntries(txn, clusterUpgEntries, versions.StrictServiceLogger, func() string { return v.Metadata().Version })
 }
 
 func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
@@ -99,7 +99,7 @@ func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) erro
 
 func upgradeForBM25(accountId uint32, txn executor.TxnExecutor) error {
 
-	getLogger(txn.Txn().TxnOptions().CN).Info("begin upgrade for BM25",
+	versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Info("begin upgrade for BM25",
 		zap.Uint32("accountId", accountId))
 
 	sql := `select distinct b.datname, a.index_table_name from mo_catalog.mo_indexes a 
@@ -137,13 +137,13 @@ func upgradeForBM25(accountId uint32, txn executor.TxnExecutor) error {
 			}
 			insertRes.Close()
 
-			getLogger(txn.Txn().TxnOptions().CN).Info("insert doclen for BM25",
+			versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Info("insert doclen for BM25",
 				zap.String("db", dbName),
 				zap.String("index table", idxTable))
 		}
 	}
 
-	getLogger(txn.Txn().TxnOptions().CN).Info("finish upgrade for BM25",
+	versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Info("finish upgrade for BM25",
 		zap.Uint32("accountId", accountId))
 	return nil
 }

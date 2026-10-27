@@ -64,7 +64,7 @@ func (v *versionHandle) HandleTenantUpgrade(
 		start := time.Now()
 		err := upgEntry.Upgrade(txn, uint32(tenantID))
 		if err != nil {
-			getLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error",
+			versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error",
 				zap.Error(err),
 				zap.Int32("tenantId", tenantID),
 				zap.String("version", v.Metadata().Version),
@@ -73,7 +73,7 @@ func (v *versionHandle) HandleTenantUpgrade(
 		}
 
 		duration := time.Since(start)
-		getLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete",
+		versions.StrictServiceLogger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete",
 			zap.String("upgrade entry", upgEntry.String()),
 			zap.Int64("time cost(ms)", duration.Milliseconds()),
 			zap.Int32("tenantId", tenantID),
@@ -86,7 +86,7 @@ func (v *versionHandle) HandleTenantUpgrade(
 func (v *versionHandle) HandleClusterUpgrade(
 	ctx context.Context,
 	txn executor.TxnExecutor) error {
-	return versions.RunClusterUpgradeEntries(txn, clusterUpgEntries, getLogger, func() string { return v.Metadata().Version })
+	return versions.RunClusterUpgradeEntries(txn, clusterUpgEntries, versions.StrictServiceLogger, func() string { return v.Metadata().Version })
 }
 
 func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
