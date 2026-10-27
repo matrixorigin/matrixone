@@ -50,6 +50,7 @@ func SplitAccounts(s string) (accounts []string) {
 	if len(s) == 0 {
 		return
 	}
+	accounts = make([]string, 0, strings.Count(s, Sep)+1)
 	for split := range strings.SplitSeq(s, Sep) {
 		accounts = append(accounts, strings.TrimSpace(split))
 	}
