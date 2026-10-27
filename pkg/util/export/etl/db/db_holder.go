@@ -80,7 +80,7 @@ func GetSQLWriterDBUser() (*DBUser, error) {
 	if dbUser == nil {
 		return nil, errNotReady
 	} else {
-		return sqlWriterDBUser.Load().(*DBUser), nil
+		return dbUser.(*DBUser), nil
 
 	}
 }
