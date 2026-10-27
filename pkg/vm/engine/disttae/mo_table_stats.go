@@ -451,13 +451,6 @@ func initMoTableStatsConfig(
 			eng.dynamicCtx.conf.CorrectionDuration = defaultGamaCycleDur
 		}
 
-		eng.dynamicCtx.objIdsPool = sync.Pool{
-			New: func() interface{} {
-				objIds := make([]types.Objectid, 0)
-				return &objIds
-			},
-		}
-
 		eng.dynamicCtx.tblQueue = make(chan tablePair, options.DefaultBlockMaxRows*2)
 
 		eng.dynamicCtx.cleanDeletesQueue = make(chan struct{})
@@ -692,8 +685,7 @@ type dynamicCtx struct {
 	updateForgottenQueue chan struct{}
 	insertNewTableQueue  chan struct{}
 
-	de         *Engine
-	objIdsPool sync.Pool
+	de *Engine
 
 	tableStock struct {
 		tbls []tablePair
