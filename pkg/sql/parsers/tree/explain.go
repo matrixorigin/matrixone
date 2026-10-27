@@ -92,7 +92,7 @@ func (node *explainImpl) format(ctx *FmtCtx) {
 	}
 }
 
-func (e *explainImpl) Free() {
+func (node *explainImpl) Free() {
 }
 
 // EXPLAIN stmt statement
