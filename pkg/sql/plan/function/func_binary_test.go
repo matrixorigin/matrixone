@@ -4480,6 +4480,41 @@ func TestSubStrIndex(t *testing.T) {
 	}
 }
 
+func TestSubStrIndexOverlappingDelimiters(t *testing.T) {
+	for _, tc := range []struct {
+		value, delimiter string
+		count            int64
+		want             string
+	}{
+		{"aaaaa", "aa", 1, ""},
+		{"aaaaa", "aa", 2, "aa"},
+		{"aaaaa", "aa", -1, "a"},
+		{"aaaaa", "aa", -2, "aaa"},
+		{"ababa", "aba", -1, "ba"},
+		{"aaaaa", "aa", math.MinInt64, "aaaaa"},
+		{"aaaaa", "aa", math.MaxInt64, "aaaaa"},
+	} {
+		got, err := subStrIndex(tc.value, tc.delimiter, tc.count)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got, "value=%q delimiter=%q count=%d", tc.value, tc.delimiter, tc.count)
+	}
+}
+
+func TestSubStrIndexNullAndSelectedRows(t *testing.T) {
+	proc := newMemoryFunctionTestProcess(t)
+	t.Cleanup(func() { proc.Free(); require.Zero(t, proc.Mp().CurrNB()) })
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"aaaaa", "aaaaa", "x.y", "m.n"}, []bool{false, false, true, false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"aa", "aa", ".", "."}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, -2, 1, 1}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a", "aaa", "", ""}, []bool{false, false, true, true}),
+		SubStrIndex[int64]).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}})
+	ok, info := fc.RunAndFree()
+	require.True(t, ok, info)
+}
+
 func initTimeDiffInTimeTestCase() []tcTemp {
 	//Test Set 1
 	t11, _ := types.ParseTime("22:22:22", 6)

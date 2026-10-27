@@ -7743,38 +7743,41 @@ func substringBounds(total int, start, length int64, withLength bool) (left, rig
 }
 
 func subStrIndex(str, delim string, count int64) (string, error) {
-	// if the length of delim is 0, return empty string
-	if len(delim) == 0 {
+	if len(delim) == 0 || count == 0 {
 		return "", nil
 	}
-	// if the count is 0, return empty string
-	if count == 0 {
-		return "", nil
-	}
-
-	partions := strings.Split(str, delim)
-	start, end := int64(0), int64(len(partions))
-
 	if count > 0 {
-		//is count is positive, reset the end position
-		if count < end {
-			end = count
-		}
-	} else {
-		count = -count
-
-		// -count overflows max int64, return the whole string.
-		if count < 0 {
-			return str, nil
-		}
-
-		//if count is negative, reset the start postion
-		if count < end {
-			start = end - count
+		offset := 0
+		for remaining := count; ; remaining-- {
+			i := strings.Index(str[offset:], delim)
+			if i < 0 {
+				return str, nil
+			}
+			offset += i
+			if remaining == 1 {
+				return str[:offset], nil
+			}
+			offset += len(delim)
 		}
 	}
-	subPartions := partions[start:end]
-	return strings.Join(subPartions, delim), nil
+	if count == math.MinInt64 {
+		return str, nil
+	}
+	// Count from the left before selecting a suffix. Searching backwards
+	// directly would choose different occurrences for overlapping delimiters.
+	occurrences := int64(strings.Count(str, delim))
+	wanted := -count
+	if wanted > occurrences {
+		return str, nil
+	}
+	offset := 0
+	for remaining := occurrences - wanted; ; remaining-- {
+		i := strings.Index(str[offset:], delim)
+		offset += i + len(delim)
+		if remaining == 0 {
+			return str[offset:], nil
+		}
+	}
 }
 
 func getCount[T number](typ types.Type, val T) int64 {
