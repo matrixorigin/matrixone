@@ -595,7 +595,10 @@ func TestIssue28397FieldKeepsExactNumericComparison(t *testing.T) {
 			stmt, err := conn.PrepareContext(ctx, "select field(cast(? as decimal(20,0)), abs(cast(9007199254740992 as decimal(20,0))))")
 			require.NoError(t, err)
 			defer func() { require.NoError(t, stmt.Close()) }()
-			require.Error(t, stmt.QueryRowContext(ctx, "invalid").Scan(&field))
+			// The failing-execution witness must stay a genuine hard error: since
+			// issue #30417, lexically invalid DECIMAL text converts leniently, so
+			// a non-finite literal (still a hard error) takes the witness role.
+			require.Error(t, stmt.QueryRowContext(ctx, "Inf").Scan(&field))
 			require.NoError(t, stmt.QueryRowContext(ctx, uint64(9007199254740993)).Scan(&field))
 			require.Zero(t, field)
 		})

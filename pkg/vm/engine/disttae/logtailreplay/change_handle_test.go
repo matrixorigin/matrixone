@@ -1666,6 +1666,22 @@ func TestAObjectHandleNextPrefetchTarget_SkipsPrunedBlocks(t *testing.T) {
 	require.Equal(t, 0, handle.blkOffsetCursor)
 }
 
+func TestAObjectHandleNextPrefetchTarget_SkipsEmptyObjects(t *testing.T) {
+	empty := makeTestObjectEntry(t, 0, true, false, types.BuildTS(10, 0))
+	handle := &AObjectHandle{
+		objects:    []*objectio.ObjectEntry{nil, empty},
+		blockPlans: make(map[string]*aobjBlockPlan),
+	}
+
+	obj, blk, ok, err := handle.nextPrefetchTarget(context.Background())
+	require.NoError(t, err)
+	require.Nil(t, obj)
+	require.Zero(t, blk)
+	require.False(t, ok)
+	require.Equal(t, len(handle.objects), handle.objectOffsetCursor)
+	require.Zero(t, handle.blkOffsetCursor)
+}
+
 func TestAObjectHandleGetNextAObject_UsesCachedBatch(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer mpool.DeleteMPool(mp)
@@ -2503,6 +2519,12 @@ func TestClassifyCheckpointObject(t *testing.T) {
 		require.Equal(t, checkpointObjectKindRowCommitTS, kind)
 	})
 
+	t.Run("range_empty_appendable", func(t *testing.T) {
+		obj := *makeTestObjectEntry(t, 0, true, false, types.BuildTS(15, 0))
+		kind := classifyCheckpointObject(obj, false, start, end, checkpointObjectSelectionRange)
+		require.Equal(t, checkpointObjectKindIgnore, kind)
+	})
+
 	t.Run("range_appendable_after_end", func(t *testing.T) {
 		obj := *makeTestObjectEntry(t, 1, true, false, types.BuildTS(25, 0))
 		kind := classifyCheckpointObject(obj, false, start, end, checkpointObjectSelectionRange)
@@ -2544,6 +2566,12 @@ func TestClassifyCheckpointObject(t *testing.T) {
 		obj := *makeTestObjectEntry(t, 1, true, false, types.BuildTS(15, 0))
 		kind := classifyCheckpointObject(obj, false, start, end, checkpointObjectSelectionRecovery)
 		require.Equal(t, checkpointObjectKindRowCommitTS, kind)
+	})
+
+	t.Run("recovery_empty_appendable", func(t *testing.T) {
+		obj := *makeTestObjectEntry(t, 0, true, false, types.BuildTS(15, 0))
+		kind := classifyCheckpointObject(obj, false, start, end, checkpointObjectSelectionRecovery)
+		require.Equal(t, checkpointObjectKindIgnore, kind)
 	})
 
 	t.Run("recovery_appendable_before_start", func(t *testing.T) {

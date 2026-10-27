@@ -13,9 +13,12 @@ import re
 from datetime import date, time, timedelta
 from decimal import Decimal
 from uuid import UUID
+from typing import cast
 
 import numpy as np
 from sqlalchemy.dialects.mysql.base import MySQLIdentifierPreparer
+
+_MAX_DECIMAL_LITERAL_CHARS = 4096
 
 _NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 # Native unquoted identifiers allow digits, dollar signs and BMP characters.
@@ -80,8 +83,20 @@ def sql_literal(value):
         return 'NULL'
     if isinstance(value, (bool, np.bool_)):
         return '1' if value else '0'
-    if isinstance(value, (int, float, Decimal, np.integer, np.floating)):
-        if isinstance(value, (float, Decimal, np.floating)):
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError('Non-finite SQL numeric parameters are unsupported')
+        parts = value.as_tuple()
+        exponent = cast(int, parts.exponent)
+        digits = len(parts.digits)
+        length = parts.sign + (digits + exponent if exponent >= 0 else max(digits + exponent, 1) + 1 - exponent)
+        if length > _MAX_DECIMAL_LITERAL_CHARS:
+            raise ValueError('Decimal SQL literal exceeds the 4096-character expansion budget')
+        # Scientific notation is a floating-point token in MatrixOne SQL.
+        # Preserve exact decimal comparison/storage without context rounding.
+        return format(value, 'f')
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        if isinstance(value, (float, np.floating)):
             finite = np.isfinite(value) if isinstance(value, np.floating) else math.isfinite(value)
             if not finite:
                 raise ValueError('Non-finite SQL numeric parameters are unsupported')
@@ -228,3 +243,30 @@ def substitute_parameters(sql, params, *, sql_mode=''):
         else:
             raise ValueError('Too many SQL parameters')
     return ''.join(output)
+
+
+def sql_string_token(value):
+    """Render a grammar STRING, rejecting SQL-mode-dependent escapes.
+
+    LOAD's STRING positions cannot use CAST/hex or dollar-quoted expressions.
+    Inline data containing backslashes must use a caller-owned input file;
+    paths/options themselves must not contain backslashes or NUL bytes.
+    """
+    if not isinstance(value, str) or '\x00' in value or '\\' in value:
+        raise ValueError('LOAD string tokens require text without NUL or backslashes; use a file for such inline data')
+    return "'" + value.replace("'", "''") + "'"
+
+
+def fulltext_term_token(value):
+    """Render AGAINST's STRING grammar, independent of sql_mode.
+
+    NUL and combined backslash/dollar input cannot be represented safely by
+    the supported server lexer and are rejected before query execution.
+    """
+    if not isinstance(value, str):
+        raise TypeError('Fulltext search term must be a string')
+    if '\x00' in value or ('\\' in value and '$' in value):
+        raise ValueError('Fulltext terms cannot contain NUL or both backslash and dollar')
+    if '\\' in value:
+        return '$sdk$' + value + '$sdk$'
+    return sql_string_token(value)

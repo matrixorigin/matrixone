@@ -54,6 +54,17 @@ class BaseMatrixOneClient:
     actual database operations.
     """
 
+    def _reset_compatibility(self, overrides=None):
+        from .capabilities import validate_overrides
+        from .version import new_version_manager
+
+        checked = validate_overrides(overrides)
+        self._compatibility_generation = getattr(self, '_compatibility_generation', 0) + 1
+        self._capability_cache = None
+        self._capability_overrides = checked
+        self._version_manager = new_version_manager()
+        self._backend_version = None
+
     def _build_insert_sql(self, table_name: str, data: dict) -> str:
         """
         Build INSERT SQL statement from data dictionary.
