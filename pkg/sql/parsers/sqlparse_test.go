@@ -470,6 +470,24 @@ func TestHandleSqlForRecord(t *testing.T) {
 		_, secrets = MaskSecretLiterals("CREATE USER u IDENTIFIED BY 'ident-secret42'")
 		require.Contains(t, secrets, "ident-secret42")
 	})
+	t.Run("masking follows execution SQL mode", func(t *testing.T) {
+		for _, mode := range []string{"NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+			for _, tail := range []string{"' trailing", ""} {
+				const prefix = `SELECT '\'; `
+				const secret = "ReviewSQLModeSecret42"
+				sql := prefix + "SET PASSWORD = '" + secret + tail
+				fragments, secrets := MaskSecretLiteralsWithSQLMode(sql, mode)
+				require.Len(t, fragments, 2)
+				require.NotContains(t, strings.Join(fragments, ";"), secret)
+				require.Len(t, secrets, 1)
+				require.Contains(t, secrets[0], secret)
+			}
+			valid := `SELECT '\'; SET PASSWORD = 'ReviewSQLModeSecret42'`
+			records, err := HandleSqlForRecordByStatementWithSQLMode(t.Context(), valid, mode)
+			require.NoError(t, err)
+			require.Equal(t, []string{`SELECT '\'`, "SET PASSWORD = '******'"}, records)
+		}
+	})
 	t.Run("password keyword without set is not masked", func(t *testing.T) {
 		// ALTER USER ... PASSWORD EXPIRE has no secret literal to mask.
 		require.Equal(t, []string{"ALTER USER u1 PASSWORD EXPIRE INTERVAL 3 DAY"},

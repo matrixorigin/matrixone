@@ -188,7 +188,7 @@ func TestDoComQueryParseErrorRedactsMongoDBSelector(t *testing.T) {
 	require.Error(t, err)
 	assertMongoDBSelectorIsRedacted(t, ses.GetSqlOfStmt())
 	assertMongoDBSelectorIsAbsent(t, err.Error())
-	redactedErr := redactStatementErrorForLogging(err, sql).Error()
+	redactedErr := redactStatementErrorForLogging(err, sql, nil).Error()
 	require.Contains(t, redactedErr, "<redacted MongoDB __mo_query statement>")
 	assertMongoDBSelectorIsAbsent(t, redactedErr)
 }
@@ -219,6 +219,49 @@ func TestDoComQuerySetPasswordTargetNameRedaction(t *testing.T) {
 				require.NotContains(t, entry.Message+fmt.Sprint(entry.ContextMap()), secret)
 			}
 		})
+	}
+}
+
+func TestDoComQueryPasswordSQLModeRedaction(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, prefix, command string
+	}{
+		{"default", "", "SELECT 1; ", "SET PASSWORD = '"},
+		{"no-backslash ordinary prefix", "NO_BACKSLASH_ESCAPES", "SELECT 1; ", "SET PASSWORD = '"},
+		{"no-backslash quoted prefix", "NO_BACKSLASH_ESCAPES", `SELECT '\'; `, "SET PASSWORD = '"},
+		{"ansi and no-backslash", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", `SELECT '\'; `, "SET PASSWORD = '"},
+		{"identified without PASSWORD keyword", "NO_BACKSLASH_ESCAPES", `SELECT '\'; `, "CREATE USER diagnostic_user IDENTIFIED BY '"},
+	} {
+		for _, tail := range []string{"' trailing", ""} {
+			t.Run(tc.name+"/"+tail, func(t *testing.T) {
+				ctx := defines.AttachAccountId(t.Context(), catalog.System_Account)
+				previousPU := getPuIfPresent("")
+				t.Cleanup(func() { setPu("", previousPU) })
+				ctrl := gomock.NewController(t)
+				ses := newTestSession(t, ctrl)
+				defer ses.Close()
+				require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", tc.mode))
+				observed, logs := newObservedProtocolSession()
+				ses.logger, ses.logLevel = observed.logger, observed.logLevel
+				ses.loggerOnce.Do(func() {})
+				execCtx := newTestExecCtx(ctx, ctrl)
+				execCtx.ses = ses
+				const secret = "ReviewSQLModeSecret42"
+				valid := tc.prefix + tc.command + secret + "'"
+				stmts, err := mysql.ParseWithSQLMode(ctx, valid, 1, tc.mode)
+				require.NoError(t, err)
+				freeStatements(stmts)
+				require.Len(t, stmts, 2, "the prefix must be a real statement under the active mode")
+				err = doComQuery(ses, execCtx, &UserInput{sql: tc.prefix + tc.command + secret + tail})
+				require.Error(t, err)
+				require.NotContains(t, err.Error(), secret)
+				require.NotContains(t, ses.GetSqlOfStmt(), secret)
+				require.NotEmpty(t, logs.All())
+				for _, entry := range logs.All() {
+					require.NotContains(t, entry.Message+fmt.Sprint(entry.ContextMap()), secret)
+				}
+			})
+		}
 	}
 }
 
@@ -12862,6 +12905,24 @@ func TestRecordStatementUTF8(t *testing.T) {
 				case "err_code":
 					require.Equal(t, fmt.Sprintf("%d", moerr.ErrParseError), row.ToStrings()[i])
 				}
+			}
+		})
+	}
+}
+
+func BenchmarkRedactCredentialDiagnostics(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		text string
+	}{
+		{"ordinary", "select id, name, price from orders where id = 42"},
+		{"password", "SET PASSWORD = 'benchmark_secret' trailing"},
+		{"identified", "CREATE USER diagnostic_user IDENTIFIED BY 'benchmark_secret' trailing"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				redactStatementTextForLogging(nil, tc.text, nil)
 			}
 		})
 	}

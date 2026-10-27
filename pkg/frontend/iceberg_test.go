@@ -138,7 +138,7 @@ func TestIcebergCatalogStatementLoggingRedactsSecret(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			redacted := redactStatementTextForLogging(tt.stmt, tt.sql)
+			redacted := redactStatementTextForLogging(tt.stmt, tt.sql, nil)
 			require.Contains(t, redacted, "<redacted>")
 			require.False(t, strings.Contains(redacted, "raw-token"), redacted)
 		})

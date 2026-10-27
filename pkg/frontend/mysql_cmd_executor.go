@@ -201,7 +201,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		copy(stmID[:], cw.GetUUID())
 		statement = cw.GetAst()
 	}
-	envStmt = redactStatementTextForLogging(statement, envStmt)
+	envStmt = redactStatementTextForLogging(statement, envStmt, ses)
 
 	if cw != nil {
 		ses.ast = statement
@@ -217,7 +217,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	// envStmt has been redacted. Redact the completed diagnostic payload too:
 	// this is the final boundary before either session state or statement
 	// telemetry can retain it.
-	text = redactStatementTextForLogging(nil, text)
+	text = redactStatementTextForLogging(nil, text, ses)
 	ses.SetStmtId(stmID)
 	stmtTyp := getStatementType(statement).GetStatementType()
 	queryTyp := getStatementType(statement).GetQueryType()
@@ -334,7 +334,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return ctx, nil
 }
 
-func redactStatementTextForLogging(statement tree.Statement, text string) string {
+func redactStatementTextForLogging(statement tree.Statement, text string, ses FeSession) string {
 	// __mo_query is a user-supplied MongoDB filter or pipeline. It is valid in
 	// ordinary SELECT statements, whose AST formatting deliberately preserves
 	// string literals, so neither the default branch nor a re-rendered AST is a
@@ -373,20 +373,35 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 		// every supported secret shape over the whole input, including
 		// fragments of multi-statement texts. The fold scan keeps ordinary
 		// texts on a zero-allocation pass-through.
-		if containsPasswordWord(text) {
-			return strings.Join(parsers.HandleSqlForRecord(text), ";")
+		if containsCredentialWord(text) {
+			return strings.Join(parsers.HandleSqlForRecordWithSQLMode(text, sessionSQLModeForParser(ses)), ";")
 		}
 		return text
 	}
 }
 
-// containsPasswordWord reports whether text contains the word "password"
-// (ASCII case-insensitive) without allocating. It is the cheap pre-check
-// before the full fragment masking of redactStatementTextForLogging.
-func containsPasswordWord(text string) bool {
-	const needle = "password"
-	for i := 0; i+len(needle) <= len(text); i++ {
-		j := 0
+// containsCredentialWord is the allocation-free admission check for the
+// credential forms supported by parsers.MaskSecretLiteralsWithSQLMode. Only
+// credential-bearing diagnostics need a session-mode lookup and lexical scan.
+func containsCredentialWord(text string) bool {
+	for i := 0; i < len(text); i++ {
+		var needle string
+		switch text[i] | 0x20 {
+		case 'p':
+			needle = "password"
+		case 'i':
+			needle = "identified"
+		case 'a':
+			needle = "access_key_id"
+		case 's':
+			needle = "secret_access_key"
+		default:
+			continue
+		}
+		if len(text)-i < len(needle) {
+			continue
+		}
+		j := 1
 		for ; j < len(needle); j++ {
 			if text[i+j]|0x20 != needle[j] {
 				break
@@ -402,14 +417,14 @@ func containsPasswordWord(text string) bool {
 // redactStatementErrorForLogging replaces a parser echo of __mo_query or of
 // masked secret literals before it reaches a client, statement telemetry,
 // or the terminal statement logger.
-func redactStatementErrorForLogging(err error, text string) error {
+func redactStatementErrorForLogging(err error, text string, ses FeSession) error {
 	if err == nil {
 		return err
 	}
 	if sqlmongodb.RedactSQLForDiagnostics(text) != text {
 		return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
 	}
-	return redactParseErrorSecrets(err, text)
+	return redactParseErrorSecrets(err, text, ses)
 }
 
 // redactParseErrorSecrets scrubs lexer echoes of masked secret literals out
@@ -422,11 +437,11 @@ func redactStatementErrorForLogging(err error, text string) error {
 // attacker-controlled remainder is dropped — comments, unterminated
 // fragments and the lexer's truncated >1024-byte echoes are never provably
 // clean.
-func redactParseErrorSecrets(err error, text string) error {
-	if err == nil || !containsPasswordWord(text) {
+func redactParseErrorSecrets(err error, text string, ses FeSession) error {
+	if err == nil || !containsCredentialWord(text) {
 		return err
 	}
-	_, secrets := parsers.MaskSecretLiterals(text)
+	_, secrets := parsers.MaskSecretLiteralsWithSQLMode(text, sessionSQLModeForParser(ses))
 	if len(secrets) == 0 {
 		return err
 	}
@@ -4903,6 +4918,9 @@ func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, e
 }
 
 func sessionSQLMode(ses FeSession) string {
+	if ses == nil {
+		return ""
+	}
 	v, err := ses.GetSessionSysVar("sql_mode")
 	if err != nil {
 		return ""
@@ -5182,7 +5200,11 @@ func rewriteSQLStatementInput(ctx context.Context, ses *Session, input *UserInpu
 }
 
 func sqlForRecord(sql string) string {
-	parts := parsers.HandleSqlForRecord(sql)
+	return sqlForRecordWithSQLMode(sql, "")
+}
+
+func sqlForRecordWithSQLMode(sql, sqlMode string) string {
+	parts := parsers.HandleSqlForRecordWithSQLMode(sql, sqlMode)
 	if len(parts) == 0 {
 		return strings.TrimSpace(sql)
 	}
@@ -6679,7 +6701,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// internal and diagnostic inputs outside the client boundary.
 		resetDiagnosticsForStatement(ses, execCtx, errorInput, nil)
 		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
-		diagnosticErr := redactStatementErrorForLogging(parseErr, errorInput.getSql())
+		diagnosticErr := redactStatementErrorForLogging(parseErr, errorInput.getSql(), ses)
 		records, sources := errorInput.parseErrorRecords(ses)
 		var recordErr error
 		execCtx.reqCtx, recordErr = RecordParseErrorStatement(
@@ -6705,7 +6727,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// Keep the terminal error log on the same diagnostic boundary as
 		// RecordParseErrorStatement. Parse failures have no AST, so use the raw
 		// text scanner and never pass the original selector to the logger.
-		logStatementStringStatus(execCtx.reqCtx, ses, redactStatementTextForLogging(nil, errorInput.getSql()), fail, diagnosticErr)
+		logStatementStringStatus(execCtx.reqCtx, ses, redactStatementTextForLogging(nil, errorInput.getSql(), ses), fail, diagnosticErr)
 		return parseErr
 	}
 
@@ -6753,7 +6775,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	stagedSQLRecords := make([]string, 0, 1)
 	if stagedSQLMode {
 		stagedInputs = append(stagedInputs, executionInput)
-		stagedSQLRecords = append(stagedSQLRecords, sqlForRecord(executionInput.getSql()))
+		stagedSQLRecords = append(stagedSQLRecords, sqlForRecordWithSQLMode(executionInput.getSql(), sessionSQLModeForParser(ses)))
 	}
 
 	for i := 0; i < len(cws); i++ {
@@ -7082,7 +7104,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			}
 			cws = append(cws, nextCWs[0])
 			stagedInputs = append(stagedInputs, nextInput)
-			stagedSQLRecords = append(stagedSQLRecords, sqlForRecord(nextInput.getSql()))
+			stagedSQLRecords = append(stagedSQLRecords, sqlForRecordWithSQLMode(nextInput.getSql(), sessionSQLModeForParser(ses)))
 			stagedRemaining = remaining
 		}
 

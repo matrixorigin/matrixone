@@ -987,7 +987,7 @@ func TestRedactSetPasswordForLogging(t *testing.T) {
 		User:     &tree.User{Username: "u1", Hostname: "%"},
 		Password: "super-secret-value",
 	}
-	redacted := redactStatementTextForLogging(stmt, raw)
+	redacted := redactStatementTextForLogging(stmt, raw, nil)
 	require.NotContains(t, redacted, "super-secret-value")
 	require.Contains(t, redacted, "******")
 	require.Contains(t, redacted, "set password for")
@@ -1008,19 +1008,19 @@ func TestRedactSetPasswordForLogging(t *testing.T) {
 		// unterminated literal must fail closed
 		"SET PASSWORD = 'super-secret-value",
 	} {
-		redacted = redactStatementTextForLogging(nil, broken)
+		redacted = redactStatementTextForLogging(nil, broken, nil)
 		require.NotContains(t, redacted, "super-secret-value", broken)
 	}
 
 	// Doubled-quote literals mask by raw span: no part of the secret survives.
-	redacted = redactStatementTextForLogging(nil, "SET PASSWORD = 'sec''ret-part42' broken")
+	redacted = redactStatementTextForLogging(nil, "SET PASSWORD = 'sec''ret-part42' broken", nil)
 	require.NotContains(t, redacted, "sec''ret-part42")
 	require.NotContains(t, redacted, "ret-part42")
 	require.Contains(t, redacted, "******")
 
 	// Unrelated statements pass through untouched.
 	ordinary := "select 1"
-	require.Equal(t, ordinary, redactStatementTextForLogging(nil, ordinary))
+	require.Equal(t, ordinary, redactStatementTextForLogging(nil, ordinary, nil))
 }
 
 // TestHandleSetPasswordRequiresAlterUserPrivilege: SET PASSWORD FOR other
@@ -1147,7 +1147,7 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unterminated-secret42", "the parser echo carries the raw secret")
 
-	scrubbed := redactStatementErrorForLogging(err, raw)
+	scrubbed := redactStatementErrorForLogging(err, raw, nil)
 	require.NotContains(t, scrubbed.Error(), "unterminated-secret42")
 	require.Contains(t, scrubbed.Error(), "******")
 
@@ -1155,14 +1155,14 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	raw = "SET PASSWORD = 'sec''ret-echo42' broken"
 	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
 	require.Error(t, err)
-	scrubbed = redactStatementErrorForLogging(err, raw)
+	scrubbed = redactStatementErrorForLogging(err, raw, nil)
 	require.NotContains(t, scrubbed.Error(), "ret-echo42")
 
 	// Multi-statement input: the secret sits in the second fragment.
 	raw = "select 1; SET PASSWORD = 'batch-echo42' broken"
 	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
 	require.Error(t, err)
-	scrubbed = redactStatementErrorForLogging(err, raw)
+	scrubbed = redactStatementErrorForLogging(err, raw, nil)
 	require.NotContains(t, scrubbed.Error(), "batch-echo42")
 
 	// A comment between '=' and the literal is skipped by the lexer echo, so
@@ -1171,7 +1171,7 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	raw = "SET PASSWORD = /* annotation */ 'comment-secret42"
 	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
 	require.Error(t, err)
-	scrubbed = redactStatementErrorForLogging(err, raw)
+	scrubbed = redactStatementErrorForLogging(err, raw, nil)
 	require.NotContains(t, scrubbed.Error(), "comment-secret42")
 	require.Contains(t, scrubbed.Error(), "******")
 
@@ -1181,7 +1181,7 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	raw = "SET PASSWORD = '" + longSecret + " broken"
 	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
 	require.Error(t, err)
-	scrubbed = redactStatementErrorForLogging(err, raw)
+	scrubbed = redactStatementErrorForLogging(err, raw, nil)
 	require.NotContains(t, scrubbed.Error(), longSecret[:64])
 
 	// Composed multi-secret probe: the first password IS the framing
@@ -1193,7 +1193,7 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "ReviewFramingSecret42")
-	scrubbed = redactStatementErrorForLogging(err, raw)
+	scrubbed = redactStatementErrorForLogging(err, raw, nil)
 	require.NotContains(t, scrubbed.Error(), "ReviewFramingSecret42")
 	require.NotContains(t, scrubbed.Error(), "' near '")
 	require.Contains(t, scrubbed.Error(), ` near "******"`)
@@ -1204,7 +1204,7 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	raw = "SET PASSWORD = /* annotation */ 'ReviewCommentUnterminated42"
 	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
 	require.Error(t, err)
-	scrubbed = redactStatementErrorForLogging(err, raw)
+	scrubbed = redactStatementErrorForLogging(err, raw, nil)
 	require.NotContains(t, scrubbed.Error(), "ReviewCommentUnterminated42")
 
 	// Attacker-controlled delimiter: the password itself contains
@@ -1215,7 +1215,7 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "Abcd1234", "the raw echo carries the secret")
-	scrubbed = redactStatementErrorForLogging(err, raw)
+	scrubbed = redactStatementErrorForLogging(err, raw, nil)
 	require.NotContains(t, scrubbed.Error(), "Abcd1234")
 	require.Contains(t, scrubbed.Error(), ` near "******"`)
 	require.NotContains(t, scrubbed.Error(), "annotation")
@@ -1225,7 +1225,7 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	raw = "SET PASSWORD = /*x*/'ShortPw1"
 	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
 	require.Error(t, err)
-	scrubbed = redactStatementErrorForLogging(err, raw)
+	scrubbed = redactStatementErrorForLogging(err, raw, nil)
 	require.NotContains(t, scrubbed.Error(), "ShortPw1")
 	require.Contains(t, scrubbed.Error(), ` near "******"`)
 
@@ -1235,7 +1235,7 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	raw = "SET PASSWORD = 'ClientErr42' trailing garbage"
 	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, raw, 1)
 	require.Error(t, err)
-	scrubbed = redactStatementErrorForLogging(err, raw)
+	scrubbed = redactStatementErrorForLogging(err, raw, nil)
 	require.Contains(t, scrubbed.Error(), ` near "******"`)
 	require.True(t, strings.HasSuffix(scrubbed.Error(), ` near "******"`) ||
 		strings.HasSuffix(scrubbed.Error(), ` near "******";`), scrubbed.Error())
@@ -1243,7 +1243,7 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	// No secret shape: the original error passes through untouched.
 	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, "selec from", 1)
 	require.Error(t, err)
-	require.True(t, err == redactStatementErrorForLogging(err, "selec from"))
+	require.True(t, err == redactStatementErrorForLogging(err, "selec from", nil))
 
 	// Control: the masker records the post-'=' token of a malformed SET
 	// PASSWORD as a secret span even when it is not quoted, so the echo
@@ -1251,7 +1251,7 @@ func TestRedactParseErrorSecrets(t *testing.T) {
 	// attacker-controlled remainder on this statement class either.
 	_, err = parsers.ParseOne(context.TODO(), dialect.MYSQL, "SET PASSWORD = uuu", 1)
 	require.Error(t, err)
-	scrubbed = redactStatementErrorForLogging(err, "SET PASSWORD = uuu")
+	scrubbed = redactStatementErrorForLogging(err, "SET PASSWORD = uuu", nil)
 	require.NotContains(t, scrubbed.Error(), "uuu")
 	require.Contains(t, scrubbed.Error(), ` near "******"`)
 }

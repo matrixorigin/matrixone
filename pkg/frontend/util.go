@@ -1496,7 +1496,7 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binE
 	}
 	// Only scan the saved SQL when its diagnostic can be retained. Redact
 	// before clipping so a later privacy marker cannot expose an earlier prefix.
-	preparedSQL := redactStatementTextForLogging(prepared.PrepareStmt, strings.TrimSpace(prepared.Sql))
+	preparedSQL := redactStatementTextForLogging(prepared.PrepareStmt, strings.TrimSpace(prepared.Sql), ses)
 	if !appendPart(preparedSQL) || !appendPart(" ; ") {
 		return finish()
 	}
@@ -2560,14 +2560,15 @@ func sqlSourcesByFragment(ctx context.Context, sql, sqlMode string, fragments []
 // lexical failure. These entries are for recording only, not execution.
 func (ui *UserInput) parseErrorRecords(ses FeSession) ([]string, []string) {
 	sql := ui.getSql()
-	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sessionSQLModeForParser(ses)))
+	sqlMode := sessionSQLModeForParser(ses)
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mysql.ParseSQLModeFlags(sqlMode))
 	defer mysql.PutScanner(scanner)
 	var records, sources []string
 	start := 0
 	source := constant.ExternSql
 	previousToken := 0
 	appendRecord := func(end int) {
-		records = append(records, strings.Join(parsers.HandleSqlForRecord(sql[start:end]), ";"))
+		records = append(records, strings.Join(parsers.HandleSqlForRecordWithSQLMode(sql[start:end], sqlMode), ";"))
 		sources = append(sources, source)
 	}
 	for {

@@ -80,23 +80,36 @@ var HandleSqlForRecord = func(sql string) []string {
 	return masked
 }
 
+// HandleSqlForRecordWithSQLMode masks records using execution's lexical rules.
+func HandleSqlForRecordWithSQLMode(sql, sqlMode string) []string {
+	masked, _ := MaskSecretLiteralsWithSQLMode(sql, sqlMode)
+	return masked
+}
+
 // MaskSecretLiterals returns the same statement fragments as
 // HandleSqlForRecord plus the raw source text of every masked secret
 // literal, so callers can also scrub lexer echoes of those secrets (for
 // example the `near "..."` tail of a parser error) from diagnostics.
 var MaskSecretLiterals = func(sql string) ([]string, []string) {
-	split := SplitSqlBySemicolon(sql)
+	return MaskSecretLiteralsWithSQLMode(sql, "")
+}
+
+// MaskSecretLiteralsWithSQLMode keeps diagnostic statement boundaries and
+// secret spans on the same lexical rules as execution, including malformed SQL.
+func MaskSecretLiteralsWithSQLMode(sql, sqlMode string) ([]string, []string) {
+	mode := mysql.ParseSQLModeFlags(sqlMode)
+	split := splitSqlBySemicolonWithSQLMode(sql, mode)
 	var secrets []string
 	for i := range split {
 		var fragmentSecrets []string
-		split[i], fragmentSecrets = handleSQLForRecordFragmentWithSecrets(split[i])
+		split[i], fragmentSecrets = handleSQLForRecordFragmentWithSecrets(split[i], mode)
 		secrets = append(secrets, fragmentSecrets...)
 	}
 	return split, secrets
 }
 
-func handleSQLForRecordFragmentWithSecrets(sql string) (string, []string) {
-	stripScanner := mysql.NewScanner(dialect.MYSQL, sql)
+func handleSQLForRecordFragmentWithSecrets(sql string, mode mysql.SQLModeFlags) (string, []string) {
+	stripScanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
 	defer mysql.PutScanner(stripScanner)
 	//strip needed comment "/*XXX*/"
 	var commentIdx [][]int
@@ -142,7 +155,7 @@ func handleSQLForRecordFragmentWithSecrets(sql string) (string, []string) {
 	// And if len(sql) is 10, then we get slice indexes:
 	// -1, 1, 2, 3, 3, 10
 	// These mean we need to get (-1, 1), (2, 3), (3, 10) from sql
-	scanner := mysql.NewScanner(dialect.MYSQL, sql)
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
 	defer mysql.PutScanner(scanner)
 	previousToken := 0
 	indexes := []int{-1}
@@ -250,12 +263,16 @@ func scanSQLToken(scanner *mysql.Scanner, previousToken *int) (int, string) {
 }
 
 func SplitSqlBySemicolon(sql string) []string {
+	return splitSqlBySemicolonWithSQLMode(sql, 0)
+}
+
+func splitSqlBySemicolonWithSQLMode(sql string, mode mysql.SQLModeFlags) []string {
 	var ret []string
 	if len(sql) == 0 {
 		// case 1 : "" => [""]
 		return []string{sql}
 	}
-	scanner := mysql.NewScanner(dialect.MYSQL, sql)
+	scanner := mysql.NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
 	defer mysql.PutScanner(scanner)
 	previousToken := 0
 	lastEnd := 0
@@ -901,7 +918,7 @@ func HandleSqlForRecordByStatementWithSQLMode(ctx context.Context, sql string, s
 	}
 	records := make([]string, len(fragments))
 	for i, fragment := range fragments {
-		records[i] = strings.Join(HandleSqlForRecord(fragment), ";")
+		records[i] = strings.Join(HandleSqlForRecordWithSQLMode(fragment, sqlMode), ";")
 	}
 	return records, nil
 }
