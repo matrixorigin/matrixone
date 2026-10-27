@@ -102,10 +102,12 @@ func TestResolveRuntimeCatalogRequestPrefixEdges(t *testing.T) {
 }
 
 func TestRuntimeNessiePrefixHelpersRejectNoopInputs(t *testing.T) {
-	require.False(t, isRuntimeNessieCatalogConfig(nil))
-	require.True(t, isRuntimeNessieCatalogConfig(&api.ConfigResponse{
-		Defaults: map[string]string{" nessie.is-nessie-catalog ": " TRUE "},
-	}))
+	var noConfig *api.ConfigResponse
+	require.False(t, noConfig.IsNessieCatalog())
+	require.True(t, (&api.ConfigResponse{
+		Defaults:  map[string]string{" nessie.is-nessie-catalog ": " TRUE "},
+		Overrides: map[string]string{"nessie.is-nessie-catalog": "false"},
+	}).IsNessieCatalog())
 
 	for _, tc := range []struct {
 		prefix string

@@ -86,6 +86,22 @@ type ConfigResponse struct {
 	Cached                 bool
 }
 
+// IsNessieCatalog reports whether either configuration map advertises Nessie.
+func (r *ConfigResponse) IsNessieCatalog() bool {
+	if r == nil {
+		return false
+	}
+	for _, cfg := range []map[string]string{r.Overrides, r.Defaults} {
+		for key, value := range cfg {
+			if strings.EqualFold(strings.TrimSpace(key), "nessie.is-nessie-catalog") &&
+				strings.EqualFold(strings.TrimSpace(value), "true") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type CatalogCapabilities struct {
 	CredentialVending  bool
 	RemoteSigning      bool

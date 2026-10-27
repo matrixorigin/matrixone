@@ -27,7 +27,7 @@ import (
 
 func TestCredentialRefreshFailurePreservesErrorAndSkipsClock(t *testing.T) {
 	ctx := context.Background()
-	wantErr := errors.New("refresh failed")
+	wantErr := api.NewError(api.ErrObjectIO, "refresh failed", nil)
 	clockCalls := 0
 	now := func() time.Time { clockCalls++; return time.Time{} }
 	refresh := func(context.Context, ObjectScope) (ObjectScope, error) {
