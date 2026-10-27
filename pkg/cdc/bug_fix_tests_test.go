@@ -302,19 +302,17 @@ func (s *raceTestSinker) SendRollback() {
 
 // raceTestWatermarkUpdater tracks watermark updates and pause state
 type raceTestWatermarkUpdater struct {
-	mu                      sync.Mutex
-	watermarks              map[string]types.TS
-	updateLog               []watermarkUpdate
-	paused                  bool
-	beforeUpdateHook        func()
-	pauseSignalDuringUpdate bool
-	pausedTasks             map[string]time.Time // Tracks paused tasks (matches real implementation)
+	mu               sync.Mutex
+	watermarks       map[string]types.TS
+	updateLog        []watermarkUpdate
+	paused           bool
+	beforeUpdateHook func()
+	pausedTasks      map[string]time.Time // Tracks paused tasks (matches real implementation)
 }
 
 type watermarkUpdate struct {
 	watermark          types.TS
 	pausedDuringUpdate bool
-	timestamp          time.Time
 }
 
 func (u *raceTestWatermarkUpdater) getUpdateLog() []watermarkUpdate {
@@ -342,7 +340,6 @@ func (u *raceTestWatermarkUpdater) UpdateWatermarkOnly(ctx context.Context, key 
 		u.updateLog = append(u.updateLog, watermarkUpdate{
 			watermark:          *watermark,
 			pausedDuringUpdate: false, // Not a violation - properly blocked
-			timestamp:          time.Now(),
 		})
 		return nil // Blocked successfully!
 	}
@@ -352,13 +349,7 @@ func (u *raceTestWatermarkUpdater) UpdateWatermarkOnly(ctx context.Context, key 
 	u.updateLog = append(u.updateLog, watermarkUpdate{
 		watermark:          *watermark,
 		pausedDuringUpdate: u.paused,
-		timestamp:          time.Now(),
 	})
-
-	// Check if pause was signaled during this update
-	if u.paused {
-		u.pauseSignalDuringUpdate = true
-	}
 
 	return nil
 }

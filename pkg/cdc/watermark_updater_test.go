@@ -38,11 +38,10 @@ import (
 )
 
 type wmMockSQLExecutor struct {
-	mp                        map[string]string
-	insertRe                  *regexp.Regexp
-	updateRe                  *regexp.Regexp
-	selectRe                  *regexp.Regexp
-	insertOnDuplicateUpdateRe *regexp.Regexp
+	mp       map[string]string
+	insertRe *regexp.Regexp
+	updateRe *regexp.Regexp
+	selectRe *regexp.Regexp
 }
 
 type retryableMockExecutor struct {
@@ -310,10 +309,9 @@ func newWmMockSQLExecutor() *wmMockSQLExecutor {
 	return &wmMockSQLExecutor{
 		mp: make(map[string]string),
 		// matches[1] = db_name, matches[2] = table_name, matches[3] = watermark
-		insertRe:                  regexp.MustCompile(`^INSERT .* VALUES \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\)$`),
-		updateRe:                  regexp.MustCompile(`^UPDATE .* SET watermark\=\'(.*)\' WHERE .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
-		selectRe:                  regexp.MustCompile(`^SELECT .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
-		insertOnDuplicateUpdateRe: regexp.MustCompile(`^INSERT .* VALUES \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\) ON DUPLICATE KEY UPDATE watermark \= VALUES\(watermark\)$`),
+		insertRe: regexp.MustCompile(`^INSERT .* VALUES \(.*\, .*\, \'(.*)\'\, \'(.*)\'\, \'(.*)\'\, \'\'\)$`),
+		updateRe: regexp.MustCompile(`^UPDATE .* SET watermark\=\'(.*)\' WHERE .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
+		selectRe: regexp.MustCompile(`^SELECT .* AND db_name \= '(.*)' AND table_name \= '(.*)'$`),
 	}
 }
 
