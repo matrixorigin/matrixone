@@ -15,13 +15,13 @@
 package hashjoin
 
 import (
-	"bytes"
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -57,6 +57,18 @@ const (
 	psNextBatch probeState = iota
 	psSelsForOneRow
 	psBatchRow
+)
+
+// Sealed topology is a nonowning handle. Only actual execution acquires a
+// participant claim; retirement must survive Pipeline.Cleanup's Reset -> Free.
+type spillParticipantState uint8
+
+const (
+	spillParticipantNone spillParticipantState = iota
+	spillParticipantExpected
+	spillParticipantRegistered
+	spillParticipantFinalizer
+	spillParticipantRetired
 )
 
 type container struct {
@@ -97,11 +109,22 @@ type container struct {
 	rightMatchedIter bitmap.Iterator
 	bitmapSynced     bool
 
-	maxAllocSize int64
+	joinInputLeases [2]*rscthrottler.InputLease
+	outputLease     *rscthrottler.InputLease
+	outputTarget    int64
+	outputRowWidth  int64
+	outputBytes     int64
+	maxAllocSize    int64
 
 	// spill support
-	spillQueue     []spillBucket // multi-level spill work queue
-	spillThreshold int64
+	spillGeneration  bool
+	spillParticipant spillParticipantState
+	spillConsumer    bool
+	spillWork        *message.JoinSpillWork
+	skew             *skewJoin
+	activeBucket     *spillBucket
+	spillQueue       []spillBucket // multi-level spill work queue
+	spillThreshold   int64
 
 	// state for processing current bucket
 	probeBucketReader *spillBucketReader             // reused across buckets; buffer allocated once
@@ -114,7 +137,6 @@ type container struct {
 	spillBucketRowIds    [][]int32
 	spillNonEmptyBuckets []int
 	spillKeyVecs         []*vector.Vector
-	spillWriteBuf        bytes.Buffer
 	spillBuildReadBatch  *batch.Batch
 	spillProbeReadBatch  *batch.Batch
 	spillBuildSubBufs    []*batch.Batch
@@ -149,6 +171,12 @@ type HashJoin struct {
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 	JoinMapTag         int32
 	SpillThreshold     int64
+
+	SpillScopeID        uint32
+	SpillExpectedScopes []uint32
+	SpillGroup          *message.JoinSpillGroup
+	SpillEpoch          uint64
+	SpillParticipantID  uint64
 
 	vm.OperatorBase
 }
@@ -188,10 +216,40 @@ func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Bat
 	return input, nil
 }
 
+// retireSpillParticipant makes the actual's one terminal group transition.
+// Pipeline.Cleanup cancels proc even on success, so context cancellation alone
+// cannot classify its outcome. Local buffers/readers are destroyed by the
+// caller before the existing sole work owner closes its remaining files.
+func (hashJoin *HashJoin) retireSpillParticipant(pipelineFailed bool, err error) {
+	ctr := &hashJoin.ctr
+	state := ctr.spillParticipant
+	if state == spillParticipantNone || state == spillParticipantRetired {
+		return
+	}
+	ctr.spillParticipant = spillParticipantRetired
+	if hashJoin.SpillGroup == nil {
+		return
+	}
+	failed := pipelineFailed || err != nil || ctr.state != End
+	switch state {
+	case spillParticipantExpected:
+		if failed || hashJoin.spillGeneration() {
+			hashJoin.SpillGroup.Abort(hashJoin.SpillEpoch)
+		} else {
+			hashJoin.SpillGroup.FinishParticipant(hashJoin.SpillEpoch, hashJoin.SpillParticipantID)
+		}
+	case spillParticipantRegistered, spillParticipantFinalizer:
+		if failed {
+			hashJoin.SpillGroup.Abort(hashJoin.SpillEpoch)
+		}
+	}
+}
+
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
+	hashJoin.retireSpillParticipant(pipelineFailed, err)
 	ctr.itr = nil
-	if !ctr.bitmapSynced && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
+	if !ctr.bitmapSynced && !hashJoin.spillGeneration() && hashJoin.NumCPU > 1 && !hashJoin.IsMerger {
 		hashJoin.Channel <- nil
 	}
 	ctr.cleanBucketBatches(proc)
@@ -206,9 +264,34 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0
 	ctr.cleanupSpillFiles(proc)
+	// A controlled attempt must retire cached expression/output capacity before
+	// returning its admitted slots. ResetForNextQuery preserves function results.
+	if ctr.joinInputLeases[0] != nil || ctr.joinInputLeases[1] != nil || ctr.outputLease != nil {
+		ctr.cleanBatch(proc)
+		ctr.cleanNonEqCondExecutor()
+		ctr.cleanEqCondExecutors()
+		ctr.eqCondVecs = nil
+		ctr.vs, ctr.zvs, ctr.sels = nil, nil, nil
+	}
+	for i, lease := range ctr.joinInputLeases {
+		if lease != nil {
+			lease.Release()
+			ctr.joinInputLeases[i] = nil
+		}
+	}
+	if ctr.spillWork != nil {
+		ctr.spillWork.Close()
+		ctr.spillWork = nil
+	}
+	ctr.spillGeneration, ctr.spillConsumer = false, false
 
 	if hashJoin.OpAnalyzer != nil {
 		hashJoin.OpAnalyzer.Alloc(ctr.maxAllocSize)
+	}
+	if ctr.outputLease != nil {
+		ctr.cleanBatch(proc)
+		ctr.outputLease.Release()
+		ctr.outputLease = nil
 	}
 	ctr.leftBat = nil
 	ctr.maxAllocSize = 0
@@ -216,21 +299,50 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 
 func (hashJoin *HashJoin) Free(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &hashJoin.ctr
+	hashJoin.retireSpillParticipant(pipelineFailed, err)
+
 	ctr.cleanBatch(proc)
+	if ctr.outputLease != nil {
+		ctr.outputLease.Release()
+		ctr.outputLease = nil
+	}
 	ctr.cleanBucketBatches(proc)
 	ctr.cleanHashMap()
 	ctr.cleanNonEqCondExecutor()
 	ctr.cleanEqCondExecutors()
 	ctr.cleanupSpillFiles(proc)
+	for i, lease := range ctr.joinInputLeases {
+		if lease != nil {
+			lease.Release()
+			ctr.joinInputLeases[i] = nil
+		}
+	}
+	if ctr.spillWork != nil {
+		ctr.spillWork.Close()
+		ctr.spillWork = nil
+	}
 	ctr.freeSpillBuildExprExecs()
 	ctr.spillBucketRowIds = nil
 	ctr.spillNonEmptyBuckets = nil
 }
 
 func (ctr *container) cleanupSpillFiles(proc *process.Process) {
+	if ctr.skew != nil {
+		ctr.skew.close(proc)
+		ctr.skew = nil
+	}
 	if ctr.probeBucketActive && ctr.probeBucketReader != nil {
 		ctr.probeBucketReader.close()
 		ctr.probeBucketActive = false
+	}
+	if ctr.activeBucket != nil {
+		if ctr.activeBucket.buildFd != nil {
+			_ = ctr.activeBucket.buildFd.Close()
+		}
+		if ctr.activeBucket.probeFd != nil {
+			_ = ctr.activeBucket.probeFd.Close()
+		}
+		ctr.activeBucket = nil
 	}
 	if len(ctr.spillQueue) == 0 {
 		return
@@ -277,6 +389,10 @@ func (ctr *container) cleanBatch(proc *process.Process) {
 }
 
 func (ctr *container) cleanBucketBatches(proc *process.Process) {
+	if ctr.spillBuildReader != nil {
+		ctr.spillBuildReader.close()
+		ctr.spillBuildReader = nil
+	}
 	if ctr.probeBucketReader != nil {
 		ctr.probeBucketReader.close()
 		ctr.probeBucketReader = nil
@@ -397,4 +513,8 @@ func (ctr *container) setSpillThreshold(threshold int64) {
 	} else {
 		ctr.spillThreshold = threshold
 	}
+}
+
+func (hashJoin *HashJoin) spillGeneration() bool {
+	return hashJoin.ctr.spillGeneration || hashJoin.SpillGroup != nil && hashJoin.SpillGroup.IsSpilled()
 }

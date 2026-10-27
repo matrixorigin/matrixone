@@ -74,13 +74,16 @@ type MessageCenter struct {
 }
 
 type MessageBoard struct {
-	reset         bool // for debug purpose
-	multiCN       bool
-	stmtId        uuid.UUID
-	messageCenter *MessageCenter
-	messages      []*Message
-	waiters       []chan bool
-	rwMutex       *sync.RWMutex
+	reset               bool // for debug purpose
+	multiCN             bool
+	stmtId              uuid.UUID
+	messageCenter       *MessageCenter
+	messages            []*Message
+	waiters             []chan bool
+	rwMutex             *sync.RWMutex
+	spillMu             sync.Mutex
+	spillGroups         map[int32]*JoinSpillGroup
+	spillResetRequested bool
 }
 
 func NewMessageBoard() *MessageBoard {
@@ -140,13 +143,19 @@ func (m *MessageBoard) BeforeRunonce() {
 
 func (m *MessageBoard) Reset() *MessageBoard {
 	if m.multiCN {
+		if m.retainSpillBoardOnReset() {
+			return NewMessageBoard()
+		}
 		m.messageCenter.RwMutex.Lock()
-		delete(m.messageCenter.StmtIDToBoard, m.stmtId)
+		if m.messageCenter.StmtIDToBoard[m.stmtId] == m {
+			delete(m.messageCenter.StmtIDToBoard, m.stmtId)
+		}
 		m.messageCenter.RwMutex.Unlock()
 		// other pipeline could still access thie messageBoard
 		// so reset current message board to a new one
 		return NewMessageBoard()
 	}
+	m.abortSpillGroups()
 	m.rwMutex.Lock()
 	defer m.rwMutex.Unlock()
 	m.cleanupQueuedMessagesLocked()
@@ -159,6 +168,7 @@ func (m *MessageBoard) cleanupQueuedMessages() {
 	if m == nil || m.rwMutex == nil {
 		return
 	}
+	m.abortSpillGroups()
 	m.rwMutex.Lock()
 	defer m.rwMutex.Unlock()
 	m.cleanupQueuedMessagesLocked()

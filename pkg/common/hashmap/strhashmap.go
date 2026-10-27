@@ -98,11 +98,14 @@ func (itr *strHashmapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		}
 	}
 	keys := itr.keys
+	capacity := itr.keyCapacity
 	for i := 0; i < count; i++ {
 		if l := len(keys[i]); l < 16 {
 			keys[i] = append(keys[i], hashtable.StrKeyPadding[l:]...)
 		}
+		capacity += cap(keys[i])
 	}
+	itr.keyCapacity = capacity
 }
 
 func fillStringGroupStrForConstVec(itr *strHashmapIterator, vec *vector.Vector, n int, start int) {

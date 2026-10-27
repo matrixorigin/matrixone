@@ -15,6 +15,7 @@
 package hashmap
 
 import (
+	"math"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -60,9 +61,7 @@ func StrIteratorCapacity(itr Iterator) int {
 }
 
 func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]uint64, []int64) {
-	for i := 0; i < count; i++ {
-		itr.keys[i] = itr.keys[i][:0]
-	}
+	itr.prepareKeyBuffers(vecs, start, count)
 	copy(itr.zValues[:count], OneInt64s[:count])
 	copy(itr.values[:count], zeroUint64[:count])
 	itr.encodeHashKeys(vecs, start, count)
@@ -72,6 +71,7 @@ func (itr *strHashmapIterator) Find(start, count int, vecs []*vector.Vector) ([]
 
 // Insert a row from multiple columns into the hashmap, return true if it is new, otherwise false
 func (itr *strHashmapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, error) {
+	itr.prepareKeyBuffers(vecs, row, 1)
 	keys := itr.keys
 	defer func() { keys[0] = keys[0][:0] }()
 	itr.encodeHashKeys(vecs, row, 1)
@@ -87,6 +87,7 @@ func (itr *strHashmapIterator) DetectDup(vecs []*vector.Vector, row int) (bool, 
 
 func (itr *strHashmapIterator) Insert(start, count int, vecs []*vector.Vector) ([]uint64, []int64, error) {
 	var err error
+	itr.prepareKeyBuffers(vecs, start, count)
 
 	defer func() {
 		for i := 0; i < count; i++ {
@@ -167,4 +168,66 @@ func updateHashTableRows(hashMap HashMap, vs []uint64, zvs []int64) {
 	}
 	count := groupCount - hashMap.GroupCount()
 	hashMap.AddGroups(count)
+}
+
+// prepareKeyBuffers prevents a batch iterator from retaining 256 independent
+// historical wide-key peaks. Small buffers reuse the existing encoding loop;
+// larger history is pruned and preallocated to the current encoded row sizes.
+func (itr *strHashmapIterator) prepareKeyBuffers(vecs []*vector.Vector, start, count int) {
+	if itr.keyCapacity <= MaxStrIteratorCapacity {
+		capacity := itr.keyCapacity
+		for row := 0; row < count; row++ {
+			capacity -= cap(itr.keys[row])
+			itr.keys[row] = itr.keys[row][:0]
+		}
+		itr.keyCapacity = capacity
+		return
+	}
+	var sizes [UnitLimit]int
+	total := 0
+	for _, vec := range vecs {
+		for row := 0; row < count; row++ {
+			index := start + row
+			if vec.IsConst() {
+				index = 0
+			}
+			if vec.GetNulls().Contains(uint64(index)) || vec.IsConstNull() {
+				sizes[row]++
+				continue
+			}
+			if vec.GetType().IsFixedLen() {
+				sizes[row] += vec.GetType().TypeSize() + 1
+			} else {
+				sizes[row] += len(vec.GetBytesAt(index)) + 3
+			}
+		}
+	}
+	for row := 0; row < count; row++ {
+		sizes[row] = max(sizes[row], 16)
+		total += sizes[row]
+	}
+	capacity := StrIteratorCapacity(itr)
+	limit := MaxStrIteratorCapacity
+	if total <= math.MaxInt/2 {
+		limit = max(limit, total*2)
+	} else {
+		limit = math.MaxInt
+	}
+	if capacity > limit {
+		for row := range itr.keys {
+			itr.keys[row] = nil
+		}
+	}
+	itr.keyCapacity = 0
+	for row := range itr.keys {
+		if row >= count {
+			itr.keys[row] = nil
+			continue
+		}
+		if cap(itr.keys[row]) < sizes[row] {
+			itr.keys[row] = make([]byte, 0, sizes[row])
+		} else {
+			itr.keys[row] = itr.keys[row][:0]
+		}
+	}
 }

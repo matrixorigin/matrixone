@@ -20,6 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
@@ -141,4 +143,31 @@ func TestDupOperatorShuffleV2SharesPoolAcrossWorkers(t *testing.T) {
 	require.NotNil(t, op.GetShufflePool())
 	require.Same(t, op.GetShufflePool(), dup1.GetShufflePool())
 	require.Same(t, op.GetShufflePool(), dup2.GetShufflePool())
+}
+
+// Public CSV joins choose broadcast for a small build side. The configured
+// threshold must reach the actual build operator, as it already does for probe
+// HashJoin and shuffle builds.
+func TestConstructBroadcastHashBuildPreservesSpillThreshold(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		threshold int64
+	}{{"automatic", 0}, {"row threshold", 1000}, {"byte threshold", 128 << 20}} {
+		t.Run(tc.name, func(t *testing.T) {
+			probe := hashjoin.NewArgument()
+			defer probe.Release()
+			probe.SpillThreshold = tc.threshold
+			probe.JoinMapTag = 17
+			probe.EqConds = [][]*plan.Expr{{}, {}}
+			op := constructJoinBuildOperator(&Compile{}, probe, 3)
+			build, ok := op.(*hashbuild.HashBuild)
+			require.True(t, ok)
+			defer build.Release()
+			require.Equal(t, tc.threshold, build.SpillThreshold, "broadcast construction cannot silently revert an explicit threshold to automatic")
+			require.Equal(t, int32(3), build.JoinMapRefCnt)
+			require.True(t, build.NeedHashMap)
+			require.True(t, build.CanSpill)
+			require.False(t, build.IsShuffle)
+		})
+	}
 }

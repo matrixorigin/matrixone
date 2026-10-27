@@ -105,7 +105,9 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 			ctr.batIdx = 0
 			ctr.tfFinish = true
-			apply.TableFunction.ApplyArgsEval(ctr.inbat, proc)
+			if err = apply.TableFunction.ApplyArgsEval(ctr.inbat, proc); err != nil {
+				return vm.CancelResult, err
+			}
 		}
 		if ctr.rbat == nil {
 			ctr.rbat = batch.NewWithSize(len(apply.Result))
@@ -135,8 +137,14 @@ func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallRes
 	count := inbat.RowCount()
 	tfResult := vm.NewCallResult()
 	var err error
+	var logicalOutputBytes int64
 	for i := ctr.batIdx; i < count; i++ {
 		if ctr.tfFinish {
+			unit := int64(0)
+			if proc.Base.ImportMemory != nil {
+				unit = proc.Base.ImportMemory.UnitBytes
+			}
+			ap.TableFunction.SetMemoryOutputLimit(unit, inbat, i, ap.Result)
 			err = ap.TableFunction.ApplyStart(i, proc, analyzer)
 			ctr.tfNull = true
 			if err != nil {
@@ -179,9 +187,28 @@ func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallRes
 				if err != nil {
 					return err
 				}
+				if memory := proc.Base.ImportMemory; memory != nil {
+					remaining := memory.UnitBytes - logicalOutputBytes
+					if rp.Rel == 0 {
+						one := ctr.inbat.Vecs[rp.Pos].WindowSize(i, i+1)
+						if one > remaining/int64(max(1, rowCountIncrease)) {
+							logicalOutputBytes = memory.UnitBytes
+						} else {
+							logicalOutputBytes += one * int64(rowCountIncrease)
+						}
+					} else {
+						added := tfResult.Batch.Vecs[rp.Pos].WindowSize(0, rowCountIncrease)
+						if added > remaining {
+							logicalOutputBytes = memory.UnitBytes
+						} else {
+							logicalOutputBytes += added
+						}
+					}
+				}
 			}
 			ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
-			if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
+			if ctr.rbat.RowCount() >= colexec.DefaultBatchSize ||
+				proc.Base.ImportMemory != nil && logicalOutputBytes >= proc.Base.ImportMemory.UnitBytes {
 				ctr.batIdx = i
 				break
 			}

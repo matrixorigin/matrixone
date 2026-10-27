@@ -50,6 +50,10 @@ func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 	ctr.remoteRegsCnt = len(dispatch.RemoteRegs)
 	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt
 	ctr.sp = pSpool.InitMyPipelineSpool(proc.Mp(), uint32(len(dispatch.LocalRegs)))
+	if memory := proc.Base.ImportMemory; memory != nil {
+		ctr.sp.SetCacheMemoryLimit(memory.UnitBytes)
+	}
+	proc.RegisterPipelineSpool(ctr.sp, dispatch.LocalRegs...)
 
 	switch dispatch.FuncId {
 	case SendToAllFunc:

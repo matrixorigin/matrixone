@@ -15,9 +15,13 @@
 package mergeutil
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -148,4 +152,74 @@ func TestSortColumnsByIndexWithBuf(t *testing.T) {
 			[]byte("POINT(3 3)"),
 		}, vector.InefficientMustBytesCol(vecs[1]))
 	})
+}
+
+// A sink may reuse backing or replace it. Both must invalidate the byte/data
+// capacity frontier, including after an oversized singleton and bitmap growth.
+func TestMergeSortByteBoundAcrossBufferReuse(t *testing.T) {
+	for _, replace := range []bool{false, true} {
+		for _, bits := range []bool{false, true} {
+			t.Run(fmt.Sprintf("replace=%t/bitmaps=%t", replace, bits), func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				t.Cleanup(func() { mpool.DeleteMPool(mp) })
+				newBuffer := func() *batch.Batch {
+					b := batch.NewWithSize(3)
+					b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+					b.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+					b.Vecs[2] = vector.NewVec(types.T_varchar.ToType())
+					return b
+				}
+				inputs := []*batch.Batch{newBuffer(), newBuffer()}
+				payloads := []string{"inline", strings.Repeat("x", 40), strings.Repeat("y", 300)}
+				for index, src := range inputs {
+					t.Cleanup(func() { src.Clean(mp) })
+					for row, payload := range payloads {
+						require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(row*2+index+1), false, mp))
+						require.NoError(t, vector.AppendBytes(src.Vecs[1], []byte(payload), bits && row == 1, mp))
+					}
+					src.Vecs[2].Free(mp)
+					var err error
+					src.Vecs[2], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(strings.Repeat("c", 32)), 3, mp)
+					require.NoError(t, err)
+					if bits {
+						src.Vecs[1].GetGrouping().Add(2)
+					}
+					src.SetRowCount(3)
+				}
+				out := newBuffer()
+				t.Cleanup(func() { out.Clean(mp) })
+				var got []int64
+				limit := int64(4096)
+				sink := func(buf *batch.Batch) (*batch.Batch, error) {
+					require.Positive(t, buf.RowCount())
+					if int64(buf.Allocated()) > limit {
+						require.Equal(t, 1, buf.RowCount())
+					}
+					for row, key := range vector.MustFixedColWithTypeCheck[int64](buf.Vecs[0]) {
+						got = append(got, key)
+						pos := int((key - 1) / 2)
+						require.Equal(t, bits && pos == 1, buf.Vecs[1].IsNull(uint64(row)))
+						if !buf.Vecs[1].IsNull(uint64(row)) {
+							require.Equal(t, payloads[pos], buf.Vecs[1].GetStringAt(row))
+						}
+						require.Equal(t, bits && pos == 2, buf.Vecs[1].GetGrouping().Contains(uint64(row)))
+						require.Equal(t, strings.Repeat("c", 32), buf.Vecs[2].GetStringAt(row))
+					}
+					if replace {
+						buf.Clean(mp)
+						return newBuffer(), nil
+					}
+					buf.CleanOnlyData()
+					return buf, nil
+				}
+				var err error
+				for _, limit = range []int64{4096, 256, 4096} {
+					got = nil
+					out, err = MergeSortBatches(inputs, 0, out, sink, mp, nil, limit)
+					require.NoError(t, err)
+					require.Equal(t, []int64{1, 2, 3, 4, 5, 6}, got)
+				}
+			})
+		}
+	}
 }

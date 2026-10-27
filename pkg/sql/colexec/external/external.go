@@ -70,6 +70,61 @@ func (external *External) OpType() vm.OpType {
 	return vm.External
 }
 
+// UsesMemoryInput is shared with compiler admission. The physical CSV reader
+// has a source allocation table. JSONLINE also parses and constructs fields
+// through transJson*, whose conversion scratch/expansion has no complete input
+// contract here; it retains legacy execution alongside Parquet/result scans.
+func (external *External) UsesMemoryInput() bool {
+	_, ok := external.memoryInputParam()
+	return ok
+}
+
+func (external *External) memoryInputParam() (*tree.ExternParam, bool) {
+	if external == nil || external.Es == nil {
+		return nil, false
+	}
+	param := external.Es.Extern
+	if param == nil {
+		param = &tree.ExternParam{}
+		if json.Unmarshal([]byte(external.Es.CreateSql), param) != nil {
+			return nil, false
+		}
+		if plan2.InitS3Param(param) != nil {
+			return nil, false
+		}
+	}
+	if param.ExternType == int32(plan.ExternType_RESULT_SCAN) || param.Format != tree.CSV || len(external.Es.Attrs) > len(external.Es.Cols) {
+		return nil, false
+	}
+	for i, attr := range external.Es.Attrs {
+		// getFieldFromLine substitutes a filename for this synthetic column.
+		// Its length is unrelated to the bounded raw record, so that source
+		// cannot claim the CSV allocation table without a separate path bound.
+		if catalog.ContainExternalHidenCol(attr.ColName) || external.Es.Cols[i] == nil ||
+			attr.ColIndex < 0 || int(attr.ColIndex) >= len(external.Es.Attrs) || attr.ColFieldIndex < 0 {
+			return nil, false
+		}
+	}
+	return param, true
+}
+
+// MemoryInputSchema describes the physical vectors allocated by Prepare before
+// any fused projection. ParallelLoad reads raw VARCHAR vectors even when SQL
+// declares numeric/JSON/vector columns. Cluster-table row validation does not
+// change this allocation rule. Keep the same makeType owner as Prepare.
+func (external *External) MemoryInputSchema() ([]types.Type, bool) {
+	param, ok := external.memoryInputParam()
+	if !ok {
+		return nil, false
+	}
+	parallelLoad := external.Es.ParallelLoad && param.Format != tree.PARQUET
+	schema := make([]types.Type, len(external.Es.Attrs))
+	for i := range schema {
+		schema[i] = makeType(&external.Es.Cols[i].Typ, parallelLoad)
+	}
+	return schema, true
+}
+
 func (external *External) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
 	defer span.End()
@@ -100,6 +155,21 @@ func (external *External) Prepare(proc *process.Process) error {
 	}
 	if !loadFormatIsValid(param.Extern) {
 		return moerr.NewNYIf(proc.Ctx, "load format '%s'", param.Extern.Format)
+	}
+	prepared := false
+	acquired := false
+	defer func() {
+		if !prepared && acquired {
+			external.Free(proc, true, nil)
+		}
+	}()
+	if external.inputLease == nil && proc.Base.ImportMemory != nil && external.UsesMemoryInput() {
+		lease, err := proc.Base.ImportMemory.AcquireInput(proc.Ctx)
+		if err != nil {
+			return err
+		}
+		external.inputLease = lease
+		acquired = lease != nil
 	}
 	if param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
 		(param.Extern.Parallel || param.Extern.ParallelLoadRequested) {
@@ -183,6 +253,7 @@ func (external *External) Prepare(proc *process.Process) error {
 			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 		}
 	}
+	prepared = true
 	return nil
 }
 
@@ -945,6 +1016,12 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam, fieldIdx int32) csvparser.Field {
 	if catalog.ContainExternalHidenCol(colName) {
 		return csvparser.Field{Val: param.Fileparam.Filepath}
+	}
+	// Capacity forecasting also reads fields before getOneRowData applies the
+	// strict-row policy. A missing field contributes no payload; validation and
+	// permissive NULL filling remain with that owner.
+	if fieldIdx < 0 || int64(fieldIdx) >= int64(len(line)) {
+		return csvparser.Field{IsNull: true}
 	}
 	return line[fieldIdx]
 }

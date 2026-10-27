@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"sort"
 	"strconv"
@@ -132,7 +133,9 @@ func NewCompile(
 	c.stmt = stmt
 	c.addr = addr
 	c.isInternal = isInternal
-	c.cnLabel = cnLabel
+	// A Compile clears its labels on Release. Retries and the connection may
+	// still use the supplied map after this attempt has retired.
+	c.cnLabel = maps.Clone(cnLabel)
 	c.startAt = startAt
 	c.disableRetry = false
 	c.ncpu = system.GoMaxProcs()
@@ -240,6 +243,7 @@ func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
 }
 
 func (c *Compile) clear() {
+	defer c.endImportMemory()
 	if c.anal != nil {
 		c.anal.release()
 	}
@@ -279,6 +283,7 @@ func (c *Compile) clear() {
 	c.needLockMeta = false
 	c.isInternal = false
 	c.isPrepare = false
+	c.importMemoryPrepared = false
 	c.hasMergeOp = false
 	c.needBlock = false
 	c.ignorePublish = false
@@ -570,6 +575,10 @@ func (c *Compile) printPipeline() {
 // 1. lock table.
 // 2. init data source.
 func (c *Compile) prePipelineInitializer() (err error) {
+	if err = c.beginImportMemory(); err != nil {
+		return err
+	}
+	c.beginSpillEpochs()
 	// do table lock.
 	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
 		return err

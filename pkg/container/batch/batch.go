@@ -126,6 +126,9 @@ func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, 
 	w.Write(types.EncodeInt32(&l))
 	for i := 0; i < int(l); i++ {
 		var size uint32
+		if bat.Vecs[i].MarshalBinarySize() > int64(^uint32(0)) {
+			return nil, moerr.NewInternalErrorNoCtx("vector encoding exceeds frame size")
+		}
 		offset := w.Len()
 		w.Write(types.EncodeUint32(&size))
 		err := bat.Vecs[i].MarshalBinaryWithBuffer(w)
@@ -150,12 +153,93 @@ func (bat *Batch) MarshalBinaryWithBuffer(w *bytes.Buffer, reset bool) ([]byte, 
 	}
 
 	// ExtraBuf
-	types.WriteSizeBytes(bat.ExtraBuf, w)
+	extraSize := uint32(len(bat.ExtraBuf))
+	w.Write(types.EncodeUint32(&extraSize))
+	w.Write(bat.ExtraBuf)
 
 	w.Write(types.EncodeInt32(&bat.Recursive))
 	w.Write(types.EncodeInt32(&bat.ShuffleIDX))
 
 	return w.Bytes(), nil
+}
+
+// MarshalBinarySize is the byte length of the existing batch encoding.
+func (bat *Batch) MarshalBinarySize() int64 {
+	size := int64(8 + 4 + 4 + 4 + len(bat.ExtraBuf) + 4 + 4)
+	for _, v := range bat.Vecs {
+		size += 4 + v.MarshalBinarySize()
+	}
+	for _, attr := range bat.Attrs {
+		size += 4 + int64(len(attr))
+	}
+	return size
+}
+
+// MarshalBinaryTo streams the existing batch encoding. Lengths are computed
+// from the source, so even a non-seekable writer needs no whole-batch buffer.
+func (bat *Batch) MarshalBinaryTo(w io.Writer) error {
+	if buffer, ok := w.(*bytes.Buffer); ok {
+		_, err := bat.MarshalBinaryWithBuffer(buffer, false)
+		return err
+	}
+	write := func(p []byte) error {
+		n, err := w.Write(p)
+		if err == nil && n != len(p) {
+			err = io.ErrShortWrite
+		}
+		return err
+	}
+	rl := int64(bat.rowCount)
+	if err := write(types.EncodeInt64(&rl)); err != nil {
+		return err
+	}
+	count := int32(len(bat.Vecs))
+	if err := write(types.EncodeInt32(&count)); err != nil {
+		return err
+	}
+	for _, v := range bat.Vecs {
+		size64 := v.MarshalBinarySize()
+		if size64 > int64(^uint32(0)) {
+			return moerr.NewInternalErrorNoCtxf("vector encoding exceeds frame size: %d", size64)
+		}
+		size := uint32(size64)
+		if err := write(types.EncodeUint32(&size)); err != nil {
+			return err
+		}
+		if err := v.MarshalBinaryTo(w); err != nil {
+			return err
+		}
+	}
+	count = int32(len(bat.Attrs))
+	if err := write(types.EncodeInt32(&count)); err != nil {
+		return err
+	}
+	for _, attr := range bat.Attrs {
+		size := int32(len(attr))
+		if err := write(types.EncodeInt32(&size)); err != nil {
+			return err
+		}
+		n, err := io.WriteString(w, attr)
+		if err != nil {
+			return err
+		}
+		if n != len(attr) {
+			return io.ErrShortWrite
+		}
+	}
+	size := int32(len(bat.ExtraBuf))
+	if err := write(types.EncodeInt32(&size)); err != nil {
+		return err
+	}
+	if len(bat.ExtraBuf) > 0 {
+		if err := write(bat.ExtraBuf); err != nil {
+			return err
+		}
+	}
+	if err := write(types.EncodeInt32(&bat.Recursive)); err != nil {
+		return err
+	}
+	return write(types.EncodeInt32(&bat.ShuffleIDX))
 }
 
 func (bat *Batch) UnmarshalBinary(data []byte) (err error) {
@@ -277,10 +361,18 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 	if err != nil {
 		return err
 	}
-	bat.rowCount = int(i64)
+	if i64 < 0 || uint64(i64) > uint64(^uint(0)>>1) {
+		return moerr.NewInternalErrorNoCtxf("invalid encoded batch row count %d", i64)
+	}
 
 	l, err := types.ReadInt32AsInt(r)
 	if err != nil {
+		return err
+	}
+	// Every vector has its own length prefix and fixed encoding fields, and
+	// attrs/ExtraBuf/Recursive/ShuffleIDX still need four int32 words.
+	const minVectorBytes = 4 + 1 + types.TSize + 4 + 4 + 4 + 4 + 1
+	if err = types.CheckReadCount(r, int64(l), int64(minVectorBytes), 16); err != nil {
 		return err
 	}
 	if l != len(bat.Vecs) {
@@ -296,11 +388,15 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 			}
 		}
 	}
+	bat.rowCount = int(i64)
 	vecs := bat.Vecs
 
 	for i := 0; i < l; i++ {
 		vecL, err := types.ReadUint32(r)
 		if err != nil {
+			return err
+		}
+		if err = types.CheckReadSize(r, int64(vecL)); err != nil {
 			return err
 		}
 		limitedReader := io.LimitReader(r, int64(vecL))
@@ -317,6 +413,9 @@ func (bat *Batch) UnmarshalFromReader(r io.Reader, mp *mpool.MPool) (err error) 
 
 	l, err = types.ReadInt32AsInt(r)
 	if err != nil {
+		return err
+	}
+	if err = types.CheckReadCount(r, int64(l), 4, 12); err != nil {
 		return err
 	}
 	if l != len(bat.Attrs) {

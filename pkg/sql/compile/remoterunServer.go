@@ -172,6 +172,12 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 		if errBuildCompile != nil {
 			return errBuildCompile
 		}
+		defer func() {
+			runCompile.closePipelineSpoolsAfterReadersStopped()
+			runCompile.endImportMemory()
+			runCompile.clear()
+			runCompile.Release()
+		}()
 
 		// decode and running the pipeline.
 		s, err := decodeScope(receiver.scopeData, runCompile.proc, true, runCompile.e)
@@ -196,10 +202,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) error {
 
 		runCompile.scopes = []*Scope{s}
 		runCompile.InitPipelineContextToExecuteQuery()
-		defer func() {
-			runCompile.clear()
-			runCompile.Release()
-		}()
 
 		if err := registerRemoteDispatchReceivers(s, runCompile.proc); err != nil {
 			return err

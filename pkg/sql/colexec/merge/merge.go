@@ -44,6 +44,7 @@ func (merge *Merge) Prepare(proc *process.Process) error {
 	} else {
 		merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, proc.Reg.MergeReceivers)
 	}
+	proc.RegisterPipelineSignalReceiver(merge.ctr.receiver)
 	return nil
 }
 

@@ -224,6 +224,11 @@ func (op *PartitionMultiUpdate) writeTable(
 func (op *PartitionMultiUpdate) writeS3(
 	proc *process.Process,
 ) (vm.CallResult, error) {
+	// Build consumes the child once. Eval may publish many metadata frames;
+	// forward each result before asking the producer for another.
+	if op.raw.ctr.state != vm.Build {
+		return op.raw.Call(proc)
+	}
 	for {
 		input, err := vm.ChildrenCall(
 			op.GetChildren(0),
@@ -331,10 +336,7 @@ func (op *PartitionMultiUpdate) Free(
 	err error,
 ) {
 	op.raw.Free(proc, pipelineFailed, err)
-
-	for _, w := range op.freeWriters {
-		w.free(proc)
-	}
+	op.freePartitionWriters(proc)
 }
 
 func (op *PartitionMultiUpdate) Release() {
@@ -347,6 +349,20 @@ func (op *PartitionMultiUpdate) Reset(
 	err error,
 ) {
 	op.raw.Reset(proc, pipelineFailed, err)
+	op.freePartitionWriters(proc)
+}
+
+// The wrapper owns writers in both Build and Eval. A partial execution must
+// retire both sets before its grants, temporary files or pools can be reused.
+func (op *PartitionMultiUpdate) freePartitionWriters(proc *process.Process) {
+	for id, w := range op.writers {
+		w.free(proc)
+		delete(op.writers, id)
+	}
+	for _, w := range op.freeWriters {
+		w.free(proc)
+	}
+	op.freeWriters = nil
 }
 
 func (op *PartitionMultiUpdate) GetOperatorBase() *vm.OperatorBase {

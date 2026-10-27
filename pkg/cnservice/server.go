@@ -232,7 +232,7 @@ func NewService(
 	srv.CNMemoryThrottler = rscthrottler.NewMemThrottler(
 		"CNFlushS3",
 		90.0/100.0,
-		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3),
+		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForCNFlushS3, rscthrottler.MaxAcquireForCNFlushS3),
 		rscthrottler.WithRSSScavenging(),
 		rscthrottler.WithRSSCachePressureTarget(
 			setRSSCachePressureTarget,

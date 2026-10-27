@@ -82,8 +82,10 @@ func (a *WriteArena) Alloc(size int) []byte {
 // without any fallback allocations.
 func (a *WriteArena) Reset() {
 	limit := a.sizeLimit
-	if limit <= 0 {
+	if limit == 0 {
 		limit = arenaMaxSize
+	} else if limit < 0 {
+		limit = 0
 	}
 	if needed := a.totalRequested; needed > len(a.data) && needed <= limit {
 		newCap := arenaNextPow2(needed)
@@ -135,7 +137,12 @@ func (a *WriteArena) CompressBuf(minSize int) []byte {
 	return a.compressBuf[:minSize]
 }
 
-// FreeBuffers releases the off-heap data and compressBuf allocations.
+// Allocated counts the complete retained capacity, including Go serialization.
+func (a *WriteArena) Allocated() int {
+	return cap(a.data) + cap(a.compressBuf) + a.serialBuf.Cap()
+}
+
+// FreeBuffers releases the off-heap allocations and drops Go serialization.
 // Call this before dropping an arena that won't be returned to the pool.
 func (a *WriteArena) FreeBuffers() {
 	if a.data != nil {
@@ -146,6 +153,7 @@ func (a *WriteArena) FreeBuffers() {
 		arenaMPool.Free(a.compressBuf)
 		a.compressBuf = nil
 	}
+	a.serialBuf = bytes.Buffer{}
 }
 
 type objectWriterV1 struct {

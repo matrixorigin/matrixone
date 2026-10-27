@@ -607,22 +607,24 @@ func TestRefreshAndReleaseS3MemGrantSkipsRefreshWhenCoverageIsAlreadyEnough(t *t
 	require.Equal(t, []string{"release"}, throttler.ops)
 }
 
-func TestAcquireFlushSlotWaitsForFlushSlotAfterTimeout(t *testing.T) {
+func TestAcquireFlushSlotWakesOnOwnerRelease(t *testing.T) {
 	oldFlushLimiterState := flushLimiterState
 	oldFlushConcurrencyForAcquire := flushConcurrencyForAcquire
-	oldAcquireTimeout := flushSemaphoreAcquireTimeout
-	oldRefreshInterval := flushConcurrencyRefreshInterval
 	defer func() {
 		flushLimiterState = oldFlushLimiterState
 		flushConcurrencyForAcquire = oldFlushConcurrencyForAcquire
-		flushSemaphoreAcquireTimeout = oldAcquireTimeout
-		flushConcurrencyRefreshInterval = oldRefreshInterval
 	}()
 
 	flushLimiterState = newFlushLimiter()
-	flushConcurrencyForAcquire = func() int { return 1 }
-	flushSemaphoreAcquireTimeout = time.Millisecond
-	flushConcurrencyRefreshInterval = time.Millisecond
+	blocked := make(chan struct{})
+	attempts := 0
+	flushConcurrencyForAcquire = func() int {
+		attempts++
+		if attempts == 2 {
+			close(blocked)
+		}
+		return 1
+	}
 	heldRelease, waitCh := flushLimiterState.tryAcquire()
 	require.NotNil(t, heldRelease)
 	require.Nil(t, waitCh)
@@ -639,9 +641,12 @@ func TestAcquireFlushSlotWaitsForFlushSlotAfterTimeout(t *testing.T) {
 		errCh <- err
 	}()
 
-	require.Never(t, func() bool {
-		return len(releaseCh) > 0
-	}, 5*time.Millisecond, time.Millisecond)
+	<-blocked
+	select {
+	case <-releaseCh:
+		t.Fatal("full limiter granted another owner")
+	default:
+	}
 	require.Equal(t, 1, flushLimiterState.inUseCount())
 	heldRelease()
 
@@ -669,19 +674,21 @@ func TestFlushConcurrencyLimitScalesWithGOMAXPROCS(t *testing.T) {
 func TestAcquireFlushSlotWaitsWhenNormalSlotsAreFull(t *testing.T) {
 	oldFlushLimiterState := flushLimiterState
 	oldFlushConcurrencyForAcquire := flushConcurrencyForAcquire
-	oldAcquireTimeout := flushSemaphoreAcquireTimeout
-	oldRefreshInterval := flushConcurrencyRefreshInterval
 	defer func() {
 		flushLimiterState = oldFlushLimiterState
 		flushConcurrencyForAcquire = oldFlushConcurrencyForAcquire
-		flushSemaphoreAcquireTimeout = oldAcquireTimeout
-		flushConcurrencyRefreshInterval = oldRefreshInterval
 	}()
 
 	flushLimiterState = newFlushLimiter()
-	flushConcurrencyForAcquire = func() int { return 1 }
-	flushSemaphoreAcquireTimeout = time.Millisecond
-	flushConcurrencyRefreshInterval = time.Millisecond
+	blocked := make(chan struct{})
+	attempts := 0
+	flushConcurrencyForAcquire = func() int {
+		attempts++
+		if attempts == 2 {
+			close(blocked)
+		}
+		return 1
+	}
 	heldRelease, waitCh := flushLimiterState.tryAcquire()
 	require.NotNil(t, heldRelease)
 	require.Nil(t, waitCh)
@@ -697,7 +704,7 @@ func TestAcquireFlushSlotWaitsWhenNormalSlotsAreFull(t *testing.T) {
 		errCh <- err
 	}()
 
-	time.Sleep(5 * time.Millisecond)
+	<-blocked
 	cancel()
 	require.ErrorIs(t, <-errCh, context.Canceled)
 	require.Equal(t, 1, flushLimiterState.inUseCount())

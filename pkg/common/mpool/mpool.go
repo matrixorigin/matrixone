@@ -255,11 +255,12 @@ func (d *mpoolDetails) reportJson() string {
 
 // The memory pool.
 type MPool struct {
-	id      int64      // mpool generated, used to look up the MPool
-	tag     string     // user supplied, for debug/inspect
-	cap     int64      // pool capacity
-	stats   MPoolStats // stats
-	details *mpoolDetails
+	id        int64      // mpool generated, used to look up the MPool
+	tag       string     // user supplied, for debug/inspect
+	cap       int64      // pool capacity
+	stats     MPoolStats // stats
+	details   *mpoolDetails
+	allocated *allocationCounter
 
 	noLock bool
 	ptrs   map[unsafe.Pointer]memHdr
@@ -299,6 +300,7 @@ func (mp *MPool) deallocateAllPtrs() {
 			profileRecordFree(uintptr(ptr), int64(sz))
 			simpleCAllocator().Deallocate(unsafe.Slice((*byte)(ptr), sz), uint64(sz))
 		}
+		releaseAllocated(hdr.poolId, int64(hdr.allocSz))
 	}
 	mp.ptrs = nil
 }
@@ -390,6 +392,8 @@ func NewMPool(tag string, cap int64, flag int) (*MPool, error) {
 
 	mp.stats.Init()
 	mp.ptrs = make(map[unsafe.Pointer]memHdr)
+	mp.allocated = new(allocationCounter)
+	allocationCounters.Store(id, mp.allocated)
 	globalPools.Store(id, &mp)
 	return &mp, nil
 }
@@ -453,12 +457,48 @@ func DeleteMPool(mp *MPool) {
 	// logutil.Infof("destroy mpool %s, cap %d, stats\n%s", mp.tag, mp.cap, mp.Report())
 	mp.destroy()
 	globalPools.Delete(mp.id)
+	mp.allocated.deleted.Store(true)
+	if mp.allocated.bytes.Load() == 0 {
+		allocationCounters.Delete(mp.id)
+	}
 }
 
 var nextPool int64
 var globalCap atomic.Int64
 var globalStats MPoolStats
 var globalPools sync.Map
+
+// Allocation ownership includes Go buffers as well as native buffers. Keep the
+// small counter alive after DeleteMPool when a consumer still owns a buffer.
+// The public MPoolStats intentionally continue to describe native allocations.
+type allocationCounter struct {
+	bytes   atomic.Int64
+	deleted atomic.Bool
+}
+
+var allocationCounters sync.Map // pool id -> *allocationCounter
+
+func releaseAllocated(poolID int64, sz int64) {
+	if value, ok := allocationCounters.Load(poolID); ok {
+		counter := value.(*allocationCounter)
+		remaining := counter.bytes.Add(-sz)
+		if remaining < 0 {
+			panic("mpool allocation ownership underflow")
+		}
+		if remaining == 0 && counter.deleted.Load() {
+			allocationCounters.Delete(poolID)
+		}
+	}
+}
+
+// AllocatedBytes returns the current capacity owned by this pool, including
+// both Go and native allocations. A transferred buffer stays charged until Free.
+func (mp *MPool) AllocatedBytes() int64 {
+	if mp == nil || mp.allocated == nil {
+		return 0
+	}
+	return mp.allocated.bytes.Load()
+}
 
 // Sharded pointer map to reduce lock contention
 const numPtrShards = 128
@@ -556,6 +596,7 @@ func (mp *MPool) alloc(detailk string, sz int64, offHeap bool) ([]byte, error) {
 		bs = make([]byte, sz)
 	}
 
+	mp.allocated.bytes.Add(sz)
 	// always record the ptr, offHeap or not.
 	mp.recordPtrHdr(unsafe.Pointer(&bs[0]), hdr)
 	if offHeap {
@@ -605,10 +646,12 @@ func (mp *MPool) freePtr(detailk string, ptr unsafe.Pointer) {
 		} else {
 			(otherPool.(*MPool)).freePtrInternal(detailk, ptr, hdr)
 		}
+		releaseAllocated(hdr.poolId, int64(hdr.allocSz))
 		return
 	}
 
 	mp.freePtrInternal(detailk, ptr, hdr)
+	releaseAllocated(hdr.poolId, int64(hdr.allocSz))
 }
 
 func (mp *MPool) freePtrInternal(detailk string, ptr unsafe.Pointer, hdr memHdr) {
@@ -699,7 +742,16 @@ func (mp *MPool) ReallocZero(old []byte, sz int, offHeap bool) ([]byte, error) {
 		return nil, err
 	}
 	newptr := unsafe.Pointer(&newbs[0])
-	mp.removePtrHdr(oldptr)
+	oldhdr, ok := mp.removePtrHdr(oldptr)
+	if !ok {
+		panic("mpool realloc lost allocation owner")
+	}
+	if oldhdr.poolId == mp.id {
+		mp.allocated.bytes.Add(int64(sz) - int64(oldhdr.allocSz))
+	} else {
+		mp.allocated.bytes.Add(int64(sz))
+		releaseAllocated(oldhdr.poolId, int64(oldhdr.allocSz))
+	}
 	mp.recordPtrHdr(newptr, memHdr{
 		poolId:  mp.id,
 		allocSz: int32(sz),
@@ -886,4 +938,14 @@ func calculateNewCap(oldCap int64, requiredSize int64) int64 {
 		newcap = int64(CapLimit)
 	}
 	return newcap
+}
+
+// GrowCapacity is the allocation capacity used by Grow when it must allocate.
+// It returns zero when existing storage suffices. Callers reserve this complete
+// new allocation before mutation: the old allocation is still live at that time.
+func GrowCapacity(oldCap, requiredSize int64) int64 {
+	if requiredSize <= oldCap {
+		return 0
+	}
+	return calculateNewCap(oldCap, requiredSize)
 }
