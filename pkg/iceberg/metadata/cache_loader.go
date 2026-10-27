@@ -412,9 +412,6 @@ func cloneLoadTableResponse(in *api.LoadTableResponse) *api.LoadTableResponse {
 }
 
 func cloneStorageCredentials(in []api.StorageCredential) []api.StorageCredential {
-	if len(in) == 0 {
-		return nil
-	}
 	out := append([]api.StorageCredential(nil), in...)
 	for i := range out {
 		out[i].Config = api.CloneNonEmptyMap(in[i].Config)

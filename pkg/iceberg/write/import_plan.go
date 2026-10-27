@@ -99,9 +99,6 @@ func importFilePathHash(file api.DataFile) string {
 }
 
 func cloneDataFileTasks(in []api.DataFileTask) []api.DataFileTask {
-	if len(in) == 0 {
-		return nil
-	}
 	out := append([]api.DataFileTask(nil), in...)
 	for i := range out {
 		out[i].DataFile = cloneDataFile(in[i].DataFile)
@@ -110,9 +107,6 @@ func cloneDataFileTasks(in []api.DataFileTask) []api.DataFileTask {
 }
 
 func cloneDeleteFileTasks(in []api.DeleteFileTask) []api.DeleteFileTask {
-	if len(in) == 0 {
-		return nil
-	}
 	out := append([]api.DeleteFileTask(nil), in...)
 	for i := range out {
 		out[i].DataFile = cloneDataFile(in[i].DataFile)

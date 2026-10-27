@@ -275,9 +275,6 @@ func cloneTableMetadata(in *api.TableMetadata) *api.TableMetadata {
 }
 
 func cloneSchemaFields(in []api.SchemaField) []api.SchemaField {
-	if len(in) == 0 {
-		return nil
-	}
 	out := append([]api.SchemaField(nil), in...)
 	for i := range out {
 		out[i].InitialDefault = append([]byte(nil), in[i].InitialDefault...)
@@ -306,9 +303,6 @@ func cloneIcebergType(in api.IcebergType) api.IcebergType {
 }
 
 func cloneManifestFiles(in []api.ManifestFile) []api.ManifestFile {
-	if len(in) == 0 {
-		return nil
-	}
 	out := append([]api.ManifestFile(nil), in...)
 	for i := range out {
 		out[i].Partitions = append([]api.PartitionFieldSummary(nil), in[i].Partitions...)
@@ -326,9 +320,6 @@ func cloneManifestFiles(in []api.ManifestFile) []api.ManifestFile {
 }
 
 func cloneManifestEntries(in []api.ManifestEntry) []api.ManifestEntry {
-	if len(in) == 0 {
-		return nil
-	}
 	out := append([]api.ManifestEntry(nil), in...)
 	for i := range out {
 		out[i].DataFile = cloneDataFile(in[i].DataFile)
