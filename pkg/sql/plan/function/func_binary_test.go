@@ -4777,135 +4777,52 @@ func TestTimeDiffString(t *testing.T) {
 
 // TIMESTAMPDIFF
 
-func initTimestampDiffTestCase() []tcTemp {
-	// FIXME: Migrating the testcases as it was from the original functions code. May refactor it later. Original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/multi/timestampdiff_test.go#L35
+func initTimestampDiffTestCase(t *testing.T) []tcTemp {
+	t.Helper()
 	cases := []struct {
-		name   string
-		inputs []string
-		want   int64
+		name, start, end, unit string
+		want                   int64
 	}{
-		{
-			name:   "TEST01",
-			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "microsecond"},
-			want:   2660588000000,
-		},
-		{
-			name:   "TEST02",
-			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "second"},
-			want:   2660588,
-		},
-		{
-			name:   "TEST03",
-			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "minute"},
-			want:   44343,
-		},
-		{
-			name:   "TEST04",
-			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "hour"},
-			want:   739,
-		},
-		{
-			name:   "TEST05",
-			inputs: []string{"2017-12-01 12:15:12", "2018-01-01 7:18:20", "day"},
-			want:   30,
-		},
-		{
-			name:   "TEST06",
-			inputs: []string{"2017-12-01 12:15:12", "2018-01-08 12:15:12", "week"},
-			want:   5,
-		},
-		{
-			name:   "TEST07",
-			inputs: []string{"2017-11-01 12:15:12", "2018-01-01 12:15:12", "month"},
-			want:   2,
-		},
-		{
-			name:   "TEST08",
-			inputs: []string{"2017-01-01 12:15:12", "2018-01-01 12:15:12", "quarter"},
-			want:   4,
-		},
-		{
-			name:   "TEST09",
-			inputs: []string{"2017-01-01 12:15:12", "2018-01-01 12:15:12", "year"},
-			want:   1,
-		},
-		{
-			name:   "TEST10",
-			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "microsecond"},
-			want:   -2660588000000,
-		},
-		{
-			name:   "TEST11",
-			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "second"},
-			want:   -2660588,
-		},
-		{
-			name:   "TEST12",
-			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "minute"},
-
-			want: -44343,
-		},
-		{
-			name:   "TEST13",
-			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "hour"},
-
-			want: -739,
-		},
-		{
-			name:   "TEST14",
-			inputs: []string{"2018-01-01 7:18:20", "2017-12-01 12:15:12", "day"},
-
-			want: -30,
-		},
-		{
-			name:   "TEST15",
-			inputs: []string{"2018-01-08 12:15:12", "2017-12-01 12:15:12", "week"},
-			want:   -5,
-		},
-		{
-			name:   "TEST16",
-			inputs: []string{"2018-01-01 12:15:12", "2017-11-01 12:15:12", "month"},
-			want:   -2,
-		},
-		{
-			name:   "TEST17",
-			inputs: []string{"2018-01-01 12:15:12", "2017-01-01 12:15:12", "quarter"},
-			want:   -4,
-		},
-		{
-			name:   "TEST18",
-			inputs: []string{"2018-01-01 12:15:12", "2017-01-01 12:15:12", "year"},
-			want:   -1,
-		},
+		{"TEST01", "2017-12-01 12:15:12", "2018-01-01 7:18:20", "microsecond", 2660588000000},
+		{"TEST02", "2017-12-01 12:15:12", "2018-01-01 7:18:20", "second", 2660588},
+		{"TEST03", "2017-12-01 12:15:12", "2018-01-01 7:18:20", "minute", 44343},
+		{"TEST04", "2017-12-01 12:15:12", "2018-01-01 7:18:20", "hour", 739},
+		{"TEST05", "2017-12-01 12:15:12", "2018-01-01 7:18:20", "day", 30},
+		{"TEST06", "2017-12-01 12:15:12", "2018-01-08 12:15:12", "week", 5},
+		{"TEST07", "2017-11-01 12:15:12", "2018-01-01 12:15:12", "month", 2},
+		{"TEST08", "2017-01-01 12:15:12", "2018-01-01 12:15:12", "quarter", 4},
+		{"TEST09", "2017-01-01 12:15:12", "2018-01-01 12:15:12", "year", 1},
+		{"TEST10", "2018-01-01 7:18:20", "2017-12-01 12:15:12", "microsecond", -2660588000000},
+		{"TEST11", "2018-01-01 7:18:20", "2017-12-01 12:15:12", "second", -2660588},
+		{"TEST12", "2018-01-01 7:18:20", "2017-12-01 12:15:12", "minute", -44343},
+		{"TEST13", "2018-01-01 7:18:20", "2017-12-01 12:15:12", "hour", -739},
+		{"TEST14", "2018-01-01 7:18:20", "2017-12-01 12:15:12", "day", -30},
+		{"TEST15", "2018-01-08 12:15:12", "2017-12-01 12:15:12", "week", -5},
+		{"TEST16", "2018-01-01 12:15:12", "2017-11-01 12:15:12", "month", -2},
+		{"TEST17", "2018-01-01 12:15:12", "2017-01-01 12:15:12", "quarter", -4},
+		{"TEST18", "2018-01-01 12:15:12", "2017-01-01 12:15:12", "year", -1},
 	}
-
-	var testInputs = make([]tcTemp, 0, len(cases))
-	for _, c := range cases {
-
-		i1 := c.inputs[2]
-		i2, _ := types.ParseDatetime(c.inputs[0], 6)
-		i3, _ := types.ParseDatetime(c.inputs[1], 6)
-
-		o := c.want
-
-		testInputs = append(testInputs, tcTemp{
-
-			info: "test TimestampDiff " + c.name,
+	result := make([]tcTemp, 0, len(cases))
+	for _, tc := range cases {
+		start, err := types.ParseDatetime(tc.start, 6)
+		require.NoError(t, err, tc.name)
+		end, err := types.ParseDatetime(tc.end, 6)
+		require.NoError(t, err, tc.name)
+		result = append(result, tcTemp{
+			info: "test TimestampDiff " + tc.name,
 			inputs: []FunctionTestInput{
-				// Create a input entry <String, Datetime1, Datetime2>
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{i1}, []bool{}),
-				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{i2}, []bool{}),
-				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{i3}, []bool{}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.unit}, []bool{}),
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{start}, []bool{}),
+				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{end}, []bool{}),
 			},
-			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{o}, []bool{}),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{tc.want}, []bool{}),
 		})
 	}
-
-	return testInputs
+	return result
 }
 
 func TestTimestampDiff(t *testing.T) {
-	testCases := initTimestampDiffTestCase()
+	testCases := initTimestampDiffTestCase(t)
 
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
