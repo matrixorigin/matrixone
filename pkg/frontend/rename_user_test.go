@@ -538,6 +538,17 @@ func TestRenameUserDestinationLoginSafetyBeforeTransaction(t *testing.T) {
 func TestRenameUserDestinationLoginSafetyPositiveControls(t *testing.T) {
 	for _, name := range []string{"user_name", "user-name", "user.name", "用户", "user%name", "user%3aname"} {
 		t.Run(name, func(t *testing.T) {
+			// Exercise actual existing consumers, not just the new validator.
+			for _, login := range []string{name, "tenant:" + name} {
+				identity, err := GetTenantInfo(context.Background(), login)
+				require.NoError(t, err)
+				require.Equal(t, name, identity.GetUser())
+			}
+			lookup, err := getSqlForPasswordOfUser(context.Background(), name)
+			require.NoError(t, err)
+			statement, err := mysql.ParseOne(context.Background(), lookup, 1)
+			require.NoError(t, err)
+			defer statement.Free()
 			ses, bh := newRenameFixture(t)
 			require.NoError(t, doRenameUser(context.Background(), ses, renameStatement("alice", name)))
 			require.Contains(t, bh.executedSQLs, fmt.Sprintf("update mo_catalog.mo_user set user_name = %s where user_id = 8;", quoteSQLStringLiteral(name)))
