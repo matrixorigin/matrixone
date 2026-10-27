@@ -291,6 +291,29 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		})
 	}
 	rowIDColumn := col{catalog.Row_ID, types.T_Rowid, false, 16, 0}
+	replaceFKParentColumns := func() []col {
+		return []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"v", types.T_varchar, true, 20, 0},
+			rowIDColumn,
+		}
+	}
+	replaceFKChildColumns := func() []col {
+		return []col{
+			{"id", types.T_int32, true, 32, 0},
+			{"pid", types.T_int32, true, 32, 0},
+			rowIDColumn,
+		}
+	}
+	fulltextIndexColumns := func() []col {
+		return []col{
+			{catalog.FullTextIndex_TabCol_Id, types.T_int32, false, 32, 0},
+			{catalog.FullTextIndex_TabCol_Position, types.T_int32, false, 32, 0},
+			{catalog.FullTextIndex_TabCol_Word, types.T_varchar, false, 255, 0},
+			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 64, 0},
+			rowIDColumn,
+		}
+	}
 	tpchSchema := make(map[string]*Schema)
 	moSchema := make(map[string]*Schema)
 	constraintTestSchema := make(map[string]*Schema)
@@ -1153,23 +1176,15 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 			foreign key(pid) references replace_fk_cp(id) on delete cascade);
 	*/
 	constraintTestSchema["replace_fk_p"] = &Schema{
-		tblId: 77001,
-		cols: []col{
-			{"id", types.T_int32, true, 32, 0},
-			{"v", types.T_varchar, true, 20, 0},
-			rowIDColumn,
-		},
+		tblId:        77001,
+		cols:         replaceFKParentColumns(),
 		pks:          []int{0},
 		refChildTbls: []uint64{77002},
 	}
 	constraintTestSchema["replace_fk_c"] = &Schema{
 		tblId: 77002,
-		cols: []col{
-			{"id", types.T_int32, true, 32, 0},
-			{"pid", types.T_int32, true, 32, 0},
-			rowIDColumn,
-		},
-		pks: []int{0},
+		cols:  replaceFKChildColumns(),
+		pks:   []int{0},
 		fks: []*plan.ForeignKeyDef{
 			{
 				Name:        "fk_replace_c",
@@ -1221,23 +1236,15 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		},
 	}
 	constraintTestSchema["replace_fk_cp"] = &Schema{
-		tblId: 77003,
-		cols: []col{
-			{"id", types.T_int32, true, 32, 0},
-			{"v", types.T_varchar, true, 20, 0},
-			rowIDColumn,
-		},
+		tblId:        77003,
+		cols:         replaceFKParentColumns(),
 		pks:          []int{0},
 		refChildTbls: []uint64{77004},
 	}
 	constraintTestSchema["replace_fk_cc"] = &Schema{
 		tblId: 77004,
-		cols: []col{
-			{"id", types.T_int32, true, 32, 0},
-			{"pid", types.T_int32, true, 32, 0},
-			rowIDColumn,
-		},
-		pks: []int{0},
+		cols:  replaceFKChildColumns(),
+		pks:   []int{0},
 		fks: []*plan.ForeignKeyDef{
 			{
 				Name:        "fk_replace_cc",
@@ -1250,23 +1257,15 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		},
 	}
 	constraintTestSchema["replace_fk_sp"] = &Schema{
-		tblId: 77005,
-		cols: []col{
-			{"id", types.T_int32, true, 32, 0},
-			{"v", types.T_varchar, true, 20, 0},
-			rowIDColumn,
-		},
+		tblId:        77005,
+		cols:         replaceFKParentColumns(),
 		pks:          []int{0},
 		refChildTbls: []uint64{77006},
 	}
 	constraintTestSchema["replace_fk_sc"] = &Schema{
 		tblId: 77006,
-		cols: []col{
-			{"id", types.T_int32, true, 32, 0},
-			{"pid", types.T_int32, true, 32, 0},
-			rowIDColumn,
-		},
-		pks: []int{0},
+		cols:  replaceFKChildColumns(),
+		pks:   []int{0},
 		fks: []*plan.ForeignKeyDef{
 			{
 				Name:        "fk_replace_sc",
@@ -1279,23 +1278,15 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		},
 	}
 	constraintTestSchema["replace_fk_np"] = &Schema{
-		tblId: 77007,
-		cols: []col{
-			{"id", types.T_int32, true, 32, 0},
-			{"v", types.T_varchar, true, 20, 0},
-			rowIDColumn,
-		},
+		tblId:        77007,
+		cols:         replaceFKParentColumns(),
 		pks:          []int{0},
 		refChildTbls: []uint64{77008},
 	}
 	constraintTestSchema["replace_fk_nc"] = &Schema{
 		tblId: 77008,
-		cols: []col{
-			{"id", types.T_int32, true, 32, 0},
-			{"pid", types.T_int32, true, 32, 0},
-			rowIDColumn,
-		},
-		pks: []int{0},
+		cols:  replaceFKChildColumns(),
+		pks:   []int{0},
 		fks: []*plan.ForeignKeyDef{
 			{
 				Name:        "fk_replace_nc",
@@ -1308,23 +1299,15 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		},
 	}
 	constraintTestSchema["replace_fk_dp"] = &Schema{
-		tblId: 77009,
-		cols: []col{
-			{"id", types.T_int32, true, 32, 0},
-			{"v", types.T_varchar, true, 20, 0},
-			rowIDColumn,
-		},
+		tblId:        77009,
+		cols:         replaceFKParentColumns(),
 		pks:          []int{0},
 		refChildTbls: []uint64{77010},
 	}
 	constraintTestSchema["replace_fk_dc"] = &Schema{
 		tblId: 77010,
-		cols: []col{
-			{"id", types.T_int32, true, 32, 0},
-			{"pid", types.T_int32, true, 32, 0},
-			rowIDColumn,
-		},
-		pks: []int{0},
+		cols:  replaceFKChildColumns(),
+		pks:   []int{0},
 		fks: []*plan.ForeignKeyDef{
 			{
 				Name:        "fk_replace_dc",
@@ -1447,14 +1430,8 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		},
 	}
 	constraintTestSchema[catalog.FullTextIndexTableNamePrefix+"docs_ft_body"] = &Schema{
-		tblId: 88951,
-		cols: []col{
-			{catalog.FullTextIndex_TabCol_Id, types.T_int32, false, 32, 0},
-			{catalog.FullTextIndex_TabCol_Position, types.T_int32, false, 32, 0},
-			{catalog.FullTextIndex_TabCol_Word, types.T_varchar, false, 255, 0},
-			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 64, 0},
-			rowIDColumn,
-		},
+		tblId:     88951,
+		cols:      fulltextIndexColumns(),
 		pks:       []int{3},
 		tableType: catalog.SystemIndexRel,
 	}
@@ -1481,14 +1458,8 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		},
 	}
 	constraintTestSchema[catalog.FullTextIndexTableNamePrefix+"docs_ft_async_body"] = &Schema{
-		tblId: 88958,
-		cols: []col{
-			{catalog.FullTextIndex_TabCol_Id, types.T_int32, false, 32, 0},
-			{catalog.FullTextIndex_TabCol_Position, types.T_int32, false, 32, 0},
-			{catalog.FullTextIndex_TabCol_Word, types.T_varchar, false, 255, 0},
-			{catalog.FakePrimaryKeyColName, types.T_uint64, false, 64, 0},
-			rowIDColumn,
-		},
+		tblId:     88958,
+		cols:      fulltextIndexColumns(),
 		pks:       []int{3},
 		tableType: catalog.SystemIndexRel,
 	}
@@ -1513,14 +1484,8 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		catalog.FullTextIndexTableNamePrefix + "docs_ft_dual_summary",
 	} {
 		constraintTestSchema[hiddenName] = &Schema{
-			tblId: int64(88953 + i),
-			cols: []col{
-				{catalog.FullTextIndex_TabCol_Id, types.T_int32, false, 32, 0},
-				{catalog.FullTextIndex_TabCol_Position, types.T_int32, false, 32, 0},
-				{catalog.FullTextIndex_TabCol_Word, types.T_varchar, false, 255, 0},
-				{catalog.FakePrimaryKeyColName, types.T_uint64, false, 64, 0},
-				rowIDColumn,
-			},
+			tblId:     int64(88953 + i),
+			cols:      fulltextIndexColumns(),
 			pks:       []int{3},
 			tableType: catalog.SystemIndexRel,
 		}
