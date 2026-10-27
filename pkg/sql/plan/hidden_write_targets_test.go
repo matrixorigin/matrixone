@@ -162,6 +162,16 @@ func TestHiddenWriteMetadataControls(t *testing.T) {
 	require.NoError(t, InitNullMap(param, &mock.ctxt))
 	table.Cols[0].Hidden = true
 	require.True(t, moerr.IsMoErrCode(validateLoadSetAssignments(param, &mock.ctxt, table), moerr.ErrBadFieldError))
+	table.Cols[0].Hidden = false
+	table.Cols[0].Name = "renamed"
+	require.True(t, moerr.IsMoErrCode(validateLoadSetAssignments(param, &mock.ctxt, table), moerr.ErrBadFieldError))
+	param.Tail.Assignments = append(param.Tail.Assignments, &tree.UpdateExpr{
+		Expr: tree.NewNumVal("x", "x", false, tree.P_char),
+	})
+	err = validateLoadSetAssignments(param, &mock.ctxt, table)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+	require.Equal(t, map[string][]string{"a": {"0"}}, param.NullMap)
+	require.Nil(t, param.Tail.Assignments[0].Expr, "rejected validation must not alter the consumed marker")
 }
 
 func TestHiddenLegacyWriteTargets(t *testing.T) {

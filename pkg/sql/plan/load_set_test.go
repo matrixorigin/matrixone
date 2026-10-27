@@ -66,6 +66,23 @@ func TestLoadSetMalformedNullIfDoesNotConsumeEarlierAssignments(t *testing.T) {
 	}
 }
 
+func TestLoadSetDiagnosticPriority(t *testing.T) {
+	for _, tc := range []struct {
+		name, assignments, diagnostic string
+		code                          uint16
+	}{
+		{"unknown target mismatch", "missing=nullif(n_name,'NULL')", "first param must equal to colName", moerr.ErrInvalidInput},
+		{"unknown target then unsupported", "missing=nullif(missing,'NULL'),n_comment='CONSTVAL'", "LOAD DATA SET only supports NULLIF", moerr.ErrNotSupported},
+		{"unknown target then invalid literal", "missing=nullif(missing,'NULL'),n_comment=nullif(n_comment,upper('NULL'))", "second param is not NumVal", moerr.ErrInvalidInput},
+		{"first expression error wins", "missing=nullif(missing,'NULL'),n_comment=nullif(n_name,'NULL'),n_name='CONSTVAL'", "first param must equal to colName", moerr.ErrInvalidInput},
+		{"valid expression unknown target", "missing=nullif(missing,'NULL')", "Unknown column 'missing'", moerr.ErrBadFieldError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testLoadSetRejectedWithoutMutation(t, tc.assignments, tc.code, tc.diagnostic)
+		})
+	}
+}
+
 func TestLoadSetCollatedNullIfValidation(t *testing.T) {
 	for _, tc := range []struct {
 		expression string
@@ -118,7 +135,7 @@ func TestLoadSetSupportedNullIfRebind(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(validateLoadSetAssignments(param, ctx, ctx.tables["nation"]), moerr.ErrNotSupported))
 }
 
-func testLoadSetRejectedWithoutMutation(t *testing.T, assignments string, code uint16) {
+func testLoadSetRejectedWithoutMutation(t *testing.T, assignments string, code uint16, diagnostic ...string) {
 	t.Helper()
 	for _, legacy := range []bool{false, true} {
 		name := "modern"
@@ -148,6 +165,9 @@ func testLoadSetRejectedWithoutMutation(t *testing.T, assignments string, code u
 				require.Error(t, err, "pass %d", pass)
 				require.Nil(t, built)
 				require.True(t, moerr.IsMoErrCode(err, code), "%v", err)
+				if len(diagnostic) > 0 {
+					require.ErrorContains(t, err, diagnostic[0])
+				}
 				if code == moerr.ErrNotSupported {
 					require.Contains(t, err.Error(), "LOAD DATA SET only supports NULLIF")
 				}

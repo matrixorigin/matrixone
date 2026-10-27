@@ -27,26 +27,13 @@ func validateLoadSetAssignments(param *tree.ExternParam, ctx CompilerContext, ta
 	if param == nil || param.Tail == nil || len(param.Tail.Assignments) == 0 {
 		return nil
 	}
-	columns := make(map[string]*ColDef, len(tableDef.Cols))
-	for _, column := range tableDef.Cols {
-		columns[column.Name] = column
+	unsupported := func() error {
+		return moerr.NewNotSupported(ctx.GetContext(),
+			"LOAD DATA SET only supports NULLIF(column, literal) or NULLIF(@variable, literal)")
 	}
 	for _, assignment := range param.Tail.Assignments {
-		unsupported := func() error {
-			return moerr.NewNotSupported(ctx.GetContext(),
-				"LOAD DATA SET only supports NULLIF(column, literal) or NULLIF(@variable, literal)")
-		}
 		if assignment == nil {
 			return unsupported()
-		}
-		for _, target := range assignment.Names {
-			if target == nil {
-				return unsupported()
-			}
-			column := columns[target.ColName()]
-			if column == nil || column.Hidden {
-				return moerr.NewBadFieldError(ctx.GetContext(), target.ColName(), tableDef.Name)
-			}
 		}
 		if assignment.Expr == nil {
 			// Normalization consumes the expression, but retains its target.
@@ -79,6 +66,24 @@ func validateLoadSetAssignments(param *tree.ExternParam, ctx CompilerContext, ta
 			}
 		default:
 			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param is not UnresolvedName form")
+		}
+	}
+	// Preserve the existing expression diagnostic priority across the whole
+	// SET list, then validate targets before InitNullMap consumes expressions.
+	// Normalized assignments still retain their targets and must be checked.
+	columns := make(map[string]*ColDef, len(tableDef.Cols))
+	for _, column := range tableDef.Cols {
+		columns[column.Name] = column
+	}
+	for _, assignment := range param.Tail.Assignments {
+		for _, target := range assignment.Names {
+			if target == nil {
+				return unsupported()
+			}
+			column := columns[target.ColName()]
+			if column == nil || column.Hidden {
+				return moerr.NewBadFieldError(ctx.GetContext(), target.ColName(), tableDef.Name)
+			}
 		}
 	}
 	return nil
