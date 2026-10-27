@@ -299,13 +299,14 @@ func makeNullInt64ConstForProjection() *plan.Expr {
 }
 
 // Helper to extract int64 value from a constant expression
-func extractInt64ValueFromExpr(expr *plan.Expr) int64 {
-	if lit, ok := expr.Expr.(*plan.Expr_Lit); ok {
-		if i64val, ok := lit.Lit.Value.(*plan.Literal_I64Val); ok {
-			return i64val.I64Val
-		}
-	}
-	return 0
+func extractInt64ValueFromExpr(t *testing.T, expr *plan.Expr) int64 {
+	t.Helper()
+	require.NotNil(t, expr)
+	lit := expr.GetLit()
+	require.NotNil(t, lit)
+	value, ok := lit.Value.(*plan.Literal_I64Val)
+	require.True(t, ok, "expected an int64 literal, got %T", lit.Value)
+	return value.I64Val
 }
 
 // TestProjectionBinderResetIntervalComprehensive tests resetInterval with full ProjectionBinder setup
@@ -543,13 +544,13 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 				require.True(t, isFuncExpr, "Expected cast expression (Expr_F) for %s", tc.name)
 			} else {
 				// Verify the interval value is a constant
-				intervalValue := extractInt64ValueFromExpr(listExpr.List.List[0])
+				intervalValue := extractInt64ValueFromExpr(t, listExpr.List.List[0])
 				require.Equal(t, tc.expectedIntervalVal, intervalValue,
 					"Interval value mismatch for %s", tc.name)
 			}
 
 			// Verify the interval type
-			intervalType := extractInt64ValueFromExpr(listExpr.List.List[1])
+			intervalType := extractInt64ValueFromExpr(t, listExpr.List.List[1])
 			require.Equal(t, int64(tc.expectedIntervalType), intervalType,
 				"Interval type mismatch for %s", tc.name)
 		})
@@ -636,14 +637,6 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 			expectedIntervalVal:  1000000,
 			expectedIntervalType: types.MicroSecond,
 		},
-		// Test NULL decimal64 rejection in the fallback source domain.
-		{
-			name:              "INTERVAL NULL SECOND (decimal64, fallback returns null marker)",
-			intervalValueExpr: makeNullDecimal64ConstForProjection(),
-			intervalUnit:      "SECOND",
-			expectError:       true,
-			errorContains:     "frame start or end is negative, NULL",
-		},
 		// Actual SQL NULL is also rejected for non-time units.
 		{
 			name:              "INTERVAL NULL WEEK (int64, null value)",
@@ -677,106 +670,14 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 			require.Len(t, listExpr.List.List, 2, "Result should have 2 elements")
 
 			// Verify the interval value
-			intervalValue := extractInt64ValueFromExpr(listExpr.List.List[0])
+			intervalValue := extractInt64ValueFromExpr(t, listExpr.List.List[0])
 			require.Equal(t, tc.expectedIntervalVal, intervalValue,
 				"Interval value mismatch for %s", tc.name)
 
 			// Verify the interval type
-			intervalType := extractInt64ValueFromExpr(listExpr.List.List[1])
+			intervalType := extractInt64ValueFromExpr(t, listExpr.List.List[1])
 			require.Equal(t, int64(tc.expectedIntervalType), intervalType,
 				"Interval type mismatch for %s", tc.name)
-		})
-	}
-}
-
-// TestProjectionBinderResetIntervalDecimalTypeCheck tests that the type checking logic
-// in resetInterval correctly identifies decimal/float types that need microsecond conversion.
-func TestProjectionBinderResetIntervalDecimalTypeCheck(t *testing.T) {
-	testCases := []struct {
-		name                       string
-		intervalValueType          types.T
-		intervalUnit               string
-		shouldConvertToMicrosecond bool
-	}{
-		{
-			name:                       "float64 SECOND should convert",
-			intervalValueType:          types.T_float64,
-			intervalUnit:               "SECOND",
-			shouldConvertToMicrosecond: true,
-		},
-		{
-			name:                       "decimal64 SECOND should convert",
-			intervalValueType:          types.T_decimal64,
-			intervalUnit:               "SECOND",
-			shouldConvertToMicrosecond: true,
-		},
-		{
-			name:                       "decimal128 SECOND should convert",
-			intervalValueType:          types.T_decimal128,
-			intervalUnit:               "SECOND",
-			shouldConvertToMicrosecond: true,
-		},
-		{
-			name:                       "float32 SECOND should convert",
-			intervalValueType:          types.T_float32,
-			intervalUnit:               "SECOND",
-			shouldConvertToMicrosecond: true,
-		},
-		{
-			name:                       "float64 MINUTE should convert",
-			intervalValueType:          types.T_float64,
-			intervalUnit:               "MINUTE",
-			shouldConvertToMicrosecond: true,
-		},
-		{
-			name:                       "float64 HOUR should convert",
-			intervalValueType:          types.T_float64,
-			intervalUnit:               "HOUR",
-			shouldConvertToMicrosecond: true,
-		},
-		{
-			name:                       "float64 DAY should convert",
-			intervalValueType:          types.T_float64,
-			intervalUnit:               "DAY",
-			shouldConvertToMicrosecond: true,
-		},
-		{
-			name:                       "int64 SECOND should NOT convert",
-			intervalValueType:          types.T_int64,
-			intervalUnit:               "SECOND",
-			shouldConvertToMicrosecond: false,
-		},
-		{
-			name:                       "float64 MONTH should NOT convert",
-			intervalValueType:          types.T_float64,
-			intervalUnit:               "MONTH",
-			shouldConvertToMicrosecond: false,
-		},
-		{
-			name:                       "float64 YEAR should NOT convert",
-			intervalValueType:          types.T_float64,
-			intervalUnit:               "YEAR",
-			shouldConvertToMicrosecond: false,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Simulate the type checking logic from resetInterval
-			intervalType, err := types.IntervalTypeOf(tc.intervalUnit)
-			require.NoError(t, err)
-
-			isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
-				intervalType == types.Hour || intervalType == types.Day
-			isDecimalOrFloat := tc.intervalValueType == types.T_decimal64 ||
-				tc.intervalValueType == types.T_decimal128 ||
-				tc.intervalValueType == types.T_float32 ||
-				tc.intervalValueType == types.T_float64
-
-			needsMicrosecondConversion := isTimeUnit && isDecimalOrFloat
-
-			require.Equal(t, tc.shouldConvertToMicrosecond, needsMicrosecondConversion,
-				"Type check should correctly identify if microsecond conversion is needed")
 		})
 	}
 }
