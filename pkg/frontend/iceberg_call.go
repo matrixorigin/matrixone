@@ -193,13 +193,13 @@ func executeIcebergRegisterAccessCall(ctx context.Context, ses FeSession, call I
 	if targetAccountID != 0 && roleID == model.PrincipalUnspecifiedID && userID == model.PrincipalUnspecifiedID {
 		return nil, moerr.NewInvalidInput(ctx, "Iceberg access registration requires role_id or user_id")
 	}
-	externalPrincipal := strings.TrimSpace(firstNonEmptyIcebergAccessOption(opts, "external_principal", "principal"))
+	externalPrincipal := firstNonEmptyIcebergAccessOption(opts, "external_principal", "principal")
 	if externalPrincipal == "" {
 		return nil, moerr.NewInvalidInput(ctx, "Iceberg access registration requires external_principal")
 	}
-	endpoint := strings.TrimSpace(firstNonEmptyIcebergAccessOption(opts, "endpoint", "allowed_endpoint"))
-	region := strings.TrimSpace(firstNonEmptyIcebergAccessOption(opts, "region", "allowed_region"))
-	bucket := strings.TrimSpace(firstNonEmptyIcebergAccessOption(opts, "bucket", "allowed_bucket"))
+	endpoint := firstNonEmptyIcebergAccessOption(opts, "endpoint", "allowed_endpoint")
+	region := firstNonEmptyIcebergAccessOption(opts, "region", "allowed_region")
+	bucket := firstNonEmptyIcebergAccessOption(opts, "bucket", "allowed_bucket")
 	if endpoint == "" || region == "" || bucket == "" {
 		return nil, moerr.NewInvalidInput(ctx, "Iceberg access registration requires endpoint, region, and bucket")
 	}
@@ -467,7 +467,7 @@ func icebergAccessUint64Option(ctx context.Context, opts map[string]string, key 
 }
 
 func icebergAccessPolicyState(ctx context.Context, opts map[string]string) (string, error) {
-	state := strings.ToLower(strings.TrimSpace(firstNonEmptyIcebergAccessOption(opts, "policy_state", "state")))
+	state := strings.ToLower(firstNonEmptyIcebergAccessOption(opts, "policy_state", "state"))
 	if state == "" {
 		return model.ResidencyPolicyEnabled, nil
 	}
