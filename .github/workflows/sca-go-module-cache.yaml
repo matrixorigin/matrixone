@@ -7,7 +7,7 @@ on:
         description: Full SCA resource experiment
         required: true
         type: choice
-        options: [baseline, tuned]
+        options: [baseline, tuned, lint-memory-only]
 
 permissions:
   contents: read
@@ -279,7 +279,7 @@ jobs:
           VARIANT: ${{ inputs.variant }}
         run: |
           set -euo pipefail
-          case "$VARIANT" in baseline|tuned) ;; *) exit 2 ;; esac
+          case "$VARIANT" in baseline|tuned|lint-memory-only) ;; *) exit 2 ;; esac
           relative="$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup)"
           cgroup="/sys/fs/cgroup${relative}"
           if [[ ! -r "$cgroup/memory.current" ]]; then cgroup=/sys/fs/cgroup; fi
@@ -317,8 +317,28 @@ jobs:
             export GOMEMLIMIT="${GOMEMLIMIT:-5GiB}"
           fi
           echo "SCA_ANALYSIS_FLAGS goflags=${GOFLAGS:-<unset>} gomemlimit=${GOMEMLIMIT:-<unset>}"
+          if [[ "$VARIANT" == lint-memory-only ]]; then
+            # Probe the original golangci command with only its memory target changed.
+            make_args=('STATIC_CHECK_GOLANGCI=GOMEMLIMIT=5GiB $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml $(STATIC_CHECK_PACKAGES)')
+          else
+            make_args=()
+          fi
+          (
+            while :; do
+              printf 'SCA_MONITOR time=%s current=%s ' "$(date -u +%FT%TZ)" "$(cat "$cgroup/memory.current")"
+              awk '$1 == "anon" || $1 == "file" || $1 == "inactive_file" || $1 == "kernel" {printf "%s=%s ", $1, $2}' "$cgroup/memory.stat"
+              awk '$1 == "max" || $1 == "oom" || $1 == "oom_kill" {printf "%s=%s ", $1, $2}' "$cgroup/memory.events"
+              if [[ -r "$cgroup/memory.pressure" ]]; then
+                awk '$1 == "some" {printf "psi_some_%s ", $2}' "$cgroup/memory.pressure"
+              fi
+              echo
+              sleep 5
+            done
+          ) &
+          sampler=$!
+          trap 'kill "$sampler" 2>/dev/null || :; wait "$sampler" 2>/dev/null || :' EXIT
           TIMEFORMAT='SCA_TIME elapsed=%R user=%U sys=%S'
-          if time SCA_FULL=1 make static-check-analysis GOLANGCI_LINT_CONCURRENCY=1; then
+          if time SCA_FULL=1 make static-check-analysis GOLANGCI_LINT_CONCURRENCY=1 "${make_args[@]}"; then
             status=0
           else
             status=$?
