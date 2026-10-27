@@ -161,3 +161,11 @@ def discard_unrestored_connection(conn):
             conn.dialect.do_terminate(raw)
         finally:
             conn.invalidate()
+
+
+def result_returns_rows(result):
+    """CursorResult declares its shape; ORM row results expose keys/fetchall."""
+    declared = getattr(result, 'returns_rows', None)
+    if declared is not None:
+        return bool(declared)
+    return callable(getattr(result, 'keys', None)) and callable(getattr(result, 'fetchall', None))
