@@ -39,15 +39,19 @@ func TestUpgradeEntryRunnersStopOnError(t *testing.T) {
 		}, op)
 		fail := errors.New("upgrade check failed")
 		for _, tc := range []struct {
-			name   string
-			tenant uint32
-			run    func([]UpgradeEntry, func(string) *log.MOLogger, func() string) error
+			name        string
+			tenant      uint32
+			loggerCalls int
+			run         func([]UpgradeEntry, func(string) *log.MOLogger, func() string) error
 		}{
-			{"tenant", 42, func(entries []UpgradeEntry, logger func(string) *log.MOLogger, version func() string) error {
+			{"tenant", 42, 2, func(entries []UpgradeEntry, logger func(string) *log.MOLogger, version func() string) error {
 				return RunTenantUpgradeEntries(42, tx, entries, logger, version)
 			}},
-			{"cluster", catalog.System_Account, func(entries []UpgradeEntry, logger func(string) *log.MOLogger, version func() string) error {
+			{"cluster", catalog.System_Account, 2, func(entries []UpgradeEntry, logger func(string) *log.MOLogger, version func() string) error {
 				return RunClusterUpgradeEntries(tx, entries, logger, version)
+			}},
+			{"tenant_with_logger", 42, 0, func(entries []UpgradeEntry, _ func(string) *log.MOLogger, version func() string) error {
+				return RunTenantUpgradeEntriesWithLogger(42, tx, entries, rt.Logger(), version)
 			}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -76,7 +80,7 @@ func TestUpgradeEntryRunnersStopOnError(t *testing.T) {
 				}
 				require.ErrorIs(t, tc.run(entries, logger, version), fail)
 				require.Equal(t, []string{"first", "failure"}, seen)
-				require.Equal(t, 2, loggerCalls)
+				require.Equal(t, tc.loggerCalls, loggerCalls)
 				require.Equal(t, 2, versionCalls)
 			})
 		}

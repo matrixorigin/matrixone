@@ -87,3 +87,24 @@ func RunClusterUpgradeEntries(txn executor.TxnExecutor, entries []UpgradeEntry, 
 	}
 	return nil
 }
+
+// RunTenantUpgradeEntriesWithLogger executes the later tenant upgrade sequence.
+func RunTenantUpgradeEntriesWithLogger(tenantID int32, txn executor.TxnExecutor, entries []UpgradeEntry, logger *log.MOLogger, version func() string) error {
+	for _, entry := range entries {
+		start := time.Now()
+		if err := entry.Upgrade(txn, uint32(tenantID)); err != nil {
+			logger.Error("tenant upgrade entry execute error",
+				zap.Error(err),
+				zap.Int32("tenantId", tenantID),
+				zap.String("version", version()),
+				zap.String("upgrade entry", entry.String()))
+			return err
+		}
+		logger.Info("tenant upgrade entry complete",
+			zap.Int32("tenantId", tenantID),
+			zap.String("upgrade entry", entry.String()),
+			zap.Int64("time cost(ms)", time.Since(start).Milliseconds()),
+			zap.String("toVersion", version()))
+	}
+	return nil
+}

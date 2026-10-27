@@ -16,7 +16,6 @@ package v4_0_19
 
 import (
 	"context"
-	"time"
 
 	"go.uber.org/zap"
 
@@ -67,23 +66,7 @@ func (v *versionHandle) Prepare(_ context.Context, txn executor.TxnExecutor, _ b
 
 func (v *versionHandle) HandleTenantUpgrade(_ context.Context, tenantID int32, txn executor.TxnExecutor) error {
 	logger := runtime.ServiceRuntime(txn.Txn().TxnOptions().CN).Logger()
-	for _, entry := range tenantUpgEntries {
-		start := time.Now()
-		if err := entry.Upgrade(txn, uint32(tenantID)); err != nil {
-			logger.Error("tenant upgrade entry execute error",
-				zap.Error(err),
-				zap.Int32("tenantId", tenantID),
-				zap.String("version", v.metadata.Version),
-				zap.String("upgrade entry", entry.String()))
-			return err
-		}
-		logger.Info("tenant upgrade entry complete",
-			zap.Int32("tenantId", tenantID),
-			zap.String("upgrade entry", entry.String()),
-			zap.Int64("time cost(ms)", time.Since(start).Milliseconds()),
-			zap.String("toVersion", v.metadata.Version))
-	}
-	return nil
+	return versions.RunTenantUpgradeEntriesWithLogger(tenantID, txn, tenantUpgEntries, logger, func() string { return v.metadata.Version })
 }
 
 func (v *versionHandle) HandleClusterUpgrade(_ context.Context, _ executor.TxnExecutor) error {
