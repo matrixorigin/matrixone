@@ -1,39 +1,25 @@
 name: Warm SCA caches
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - go.mod
-      - go.sum
-      - .golangci.yml
-      - Makefile
-      - cgo/*.c
-      - cgo/*.h
-      - cgo/Makefile
-      - thirdparties/Makefile
-      - thirdparties/*.tar.gz
-      - thirdparties/download
-      - .github/workflows/sca-go-module-cache.yaml
-  schedule:
-    # Keep the pre-existing module/native/tool caches inside the configured
-    # retention window. The expensive analysis below runs only on a cache miss,
-    # so daily keepalive no longer means daily full lint.
-    - cron: "0 18 * * *"
   workflow_dispatch:
+    inputs:
+      variant:
+        description: Full SCA resource experiment
+        required: true
+        type: choice
+        options: [baseline, tuned]
 
 permissions:
   contents: read
 
 concurrency:
-  group: sca-go-module-cache
+  group: issue-31428-sca-probe
   cancel-in-progress: false
 
 jobs:
   warm-sca-caches:
     name: Warm SCA caches
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/codex/issue31428-sca-probe-20261027'
     runs-on: ${{ vars.SCA_RUNNER_LABEL || 'arm64-mo-shanghai-4c8g' }}
     timeout-minutes: 90
     steps:
@@ -123,7 +109,7 @@ jobs:
         if: steps.go-module-cache.outputs.cache-hit != 'true'
         run: go mod download
       - name: Save Go module cache
-        if: steps.go-module-cache.outputs.cache-hit != 'true'
+        if: ${{ false }}
         uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: .sca-go-module-cache
@@ -230,13 +216,13 @@ jobs:
             sha256sum onnxruntime*.so > SHA256SUMS
           )
       - name: Save ONNX Runtime fallback
-        if: steps.onnx-cache.outputs.cache-hit != 'true'
+        if: ${{ false }}
         uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: .sca-onnx-runtime
           key: ${{ steps.onnx-cache.outputs.cache-primary-key }}
       - name: Save native SCA prerequisites
-        if: steps.native-cache.outputs.cache-hit != 'true'
+        if: ${{ false }}
         uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: |
@@ -273,7 +259,7 @@ jobs:
           test -x .sca-static-check-tools/molint
           test -x .sca-static-check-tools/license-eye
       - name: Save static-check tools
-        if: steps.static-check-tool-cache.outputs.cache-hit != 'true'
+        if: ${{ false }}
         uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
           path: .sca-static-check-tools
@@ -288,72 +274,42 @@ jobs:
           mv .sca-static-check-tools/* "$runtime_dir/"
           rmdir .sca-static-check-tools
           echo "$runtime_dir" >> "$GITHUB_PATH"
-      - name: Warm golangci-lint analysis cache
-        id: warm-analysis-cache
-        if: steps.golangci-analysis-cache.outputs.cache-hit != 'true'
+      - name: Measure full SCA without publishing caches
         env:
-          CACHE_COMPRESSION_METHOD: ${{ steps.analysis-cache-compression.outputs.method }}
+          VARIANT: ${{ inputs.variant }}
         run: |
           set -euo pipefail
-          # The producer is not a validation gate: populate only the cache
-          # consumed by golangci-lint. PR SCA still runs molint, golangci-lint,
-          # and the applicable complete/incremental license checks.
-          make static-check-golangci GOLANGCI_LINT_CONCURRENCY=1
-          cache_files="$(find "$GOLANGCI_LINT_CACHE" -type f -print | wc -l | tr -d ' ')"
-          max_cache_files=200000
-          if (( cache_files == 0 )); then
-            echo "::error::golangci-lint completed without producing analysis cache files"
-            printf '### SCA cache publication failed\n\nThe analyzer produced an empty cache.\n' >> "$GITHUB_STEP_SUMMARY"
-            echo "cache-within-budget=false" >> "$GITHUB_OUTPUT"
-            exit 1
-          elif (( cache_files > max_cache_files )); then
-            echo "::error::golangci-lint cache exceeds the 200,000-file publication budget"
-            printf '### SCA cache publication failed\n\nCache files: %s\n\nBudget: %s files\n' \
-              "$cache_files" "$max_cache_files" >> "$GITHUB_STEP_SUMMARY"
-            echo "cache-within-budget=false" >> "$GITHUB_OUTPUT"
-            exit 1
+          case "$VARIANT" in baseline|tuned) ;; *) exit 2 ;; esac
+          if [[ "$VARIANT" == tuned ]]; then
+            export GOFLAGS="${GOFLAGS:+${GOFLAGS} }-p=1"
+            export GOMEMLIMIT=5GiB
           fi
-          # GitHub accounts cache quota against the uploaded compressed archive,
-          # not filesystem blocks. Match actions/cache's zstd-or-gzip selection
-          # so this estimate remains valid on runner images without zstd.
-          case "$CACHE_COMPRESSION_METHOD" in
-            zstd)
-              # actions/cache uses the multithreaded alias when creating its
-              # archive, so measure with the same compressor.
-              compressor=(zstdmt -q -c)
-              ;;
-            gzip)
-              compressor=(gzip -c)
-              ;;
-            *)
-              echo "::error::Unsupported analysis cache compression method: $CACHE_COMPRESSION_METHOD"
-              exit 1
-              ;;
-          esac
-          cache_archive_bytes="$(
-            tar -C "$GOLANGCI_LINT_CACHE" -cf - . | "${compressor[@]}" | wc -c | tr -d ' '
-          )"
-          cache_archive_kib=$(((cache_archive_bytes + 1023) / 1024))
-          max_cache_kib=$((160 * 1024))
-          echo "golangci-lint cache: ${cache_files} files, estimated ${CACHE_COMPRESSION_METHOD} archive $((cache_archive_kib / 1024)) MiB (limit: $((max_cache_kib / 1024)) MiB)"
-          if (( cache_archive_kib > max_cache_kib )); then
-            echo "::error::golangci-lint cache exceeds the 160 MiB compressed publication budget"
-            printf '### SCA cache publication failed\n\nEstimated %s archive: %s MiB\n\nBudget: %s MiB\n' \
-              "$CACHE_COMPRESSION_METHOD" "$((cache_archive_kib / 1024))" "$((max_cache_kib / 1024))" >> "$GITHUB_STEP_SUMMARY"
-            echo "cache-within-budget=false" >> "$GITHUB_OUTPUT"
-            exit 1
+          relative="$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup)"
+          cgroup="/sys/fs/cgroup${relative}"
+          if [[ ! -r "$cgroup/memory.current" ]]; then cgroup=/sys/fs/cgroup; fi
+          memory_snapshot() {
+            local label="$1" file
+            printf 'SCA_SAMPLE %s time=%s cgroup=%s\n' "$label" "$(date -u +%FT%TZ)" "$cgroup"
+            for file in memory.max memory.current memory.peak memory.events; do
+              if [[ -r "$cgroup/$file" ]]; then
+                printf '%s=' "$file"; tr '\n' ',' < "$cgroup/$file"; echo
+              else printf '%s=unavailable\n' "$file"; fi
+            done
+            if [[ -r "$cgroup/memory.stat" ]]; then
+              awk '$1 == "anon" || $1 == "file" || $1 == "shmem" || $1 == "kernel" {print "memory.stat." $1 "=" $2}' "$cgroup/memory.stat"
+            fi
+          }
+          echo "SCA_PROBE variant=$VARIANT goflags=${GOFLAGS:-<unset>} gomemlimit=${GOMEMLIMIT:-<unset>}"
+          memory_snapshot before
+          license-eye -c .licenserc.yml header check
+          license-eye -c .licenserc.yml dep check
+          memory_snapshot after-license
+          TIMEFORMAT='SCA_TIME elapsed=%R user=%U sys=%S'
+          if time SCA_FULL=1 make static-check-analysis GOLANGCI_LINT_CONCURRENCY=1; then
+            status=0
+          else
+            status=$?
           fi
-          echo "cache-within-budget=true" >> "$GITHUB_OUTPUT"
-      - name: Stage golangci-lint analysis cache
-        if: steps.golangci-analysis-cache.outputs.cache-hit != 'true' && steps.warm-analysis-cache.outputs.cache-within-budget == 'true'
-        run: |
-          set -euo pipefail
-          staging_dir="$GITHUB_WORKSPACE/.sca-golangci-analysis-cache"
-          mkdir "$staging_dir"
-          mv "$GOLANGCI_LINT_CACHE" "$staging_dir/golangci-lint"
-      - name: Save golangci-lint analysis cache
-        if: steps.golangci-analysis-cache.outputs.cache-hit != 'true' && steps.warm-analysis-cache.outputs.cache-within-budget == 'true'
-        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
-        with:
-          path: .sca-golangci-analysis-cache
-          key: ${{ steps.golangci-analysis-cache.outputs.cache-primary-key }}
+          memory_snapshot after-analysis
+          echo "SCA_RESULT variant=$VARIANT status=$status"
+          exit "$status"
