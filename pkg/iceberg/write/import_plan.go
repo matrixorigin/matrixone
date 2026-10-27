@@ -96,7 +96,7 @@ func cloneDataFileTasks(in []api.DataFileTask) []api.DataFileTask {
 	}
 	out := append([]api.DataFileTask(nil), in...)
 	for i := range out {
-		out[i].DataFile = cloneDataFiles([]api.DataFile{in[i].DataFile})[0]
+		out[i].DataFile = cloneDataFile(in[i].DataFile)
 	}
 	return out
 }
@@ -107,7 +107,7 @@ func cloneDeleteFileTasks(in []api.DeleteFileTask) []api.DeleteFileTask {
 	}
 	out := append([]api.DeleteFileTask(nil), in...)
 	for i := range out {
-		out[i].DataFile = cloneDataFiles([]api.DataFile{in[i].DataFile})[0]
+		out[i].DataFile = cloneDataFile(in[i].DataFile)
 	}
 	return out
 }

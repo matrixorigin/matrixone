@@ -472,18 +472,24 @@ func cloneDataFiles(in []api.DataFile) []api.DataFile {
 	if len(in) == 0 {
 		return nil
 	}
-	out := append([]api.DataFile(nil), in...)
-	for i := range out {
-		out[i].Partition = api.CloneNonEmptyMap(in[i].Partition)
-		out[i].PartitionFieldIDs = api.CloneNonEmptyMap(in[i].PartitionFieldIDs)
-		out[i].ColumnSizes = api.CloneNonEmptyMap(in[i].ColumnSizes)
-		out[i].ValueCounts = api.CloneNonEmptyMap(in[i].ValueCounts)
-		out[i].NullValueCounts = api.CloneNonEmptyMap(in[i].NullValueCounts)
-		out[i].NaNValueCounts = api.CloneNonEmptyMap(in[i].NaNValueCounts)
-		out[i].LowerBounds = api.CloneMetricBounds(in[i].LowerBounds)
-		out[i].UpperBounds = api.CloneMetricBounds(in[i].UpperBounds)
-		out[i].SplitOffsets = append([]int64(nil), in[i].SplitOffsets...)
+	out := make([]api.DataFile, len(in))
+	for i := range in {
+		out[i] = cloneDataFile(in[i])
 	}
+	return out
+}
+
+func cloneDataFile(in api.DataFile) api.DataFile {
+	out := in
+	out.Partition = api.CloneNonEmptyMap(in.Partition)
+	out.PartitionFieldIDs = api.CloneNonEmptyMap(in.PartitionFieldIDs)
+	out.ColumnSizes = api.CloneNonEmptyMap(in.ColumnSizes)
+	out.ValueCounts = api.CloneNonEmptyMap(in.ValueCounts)
+	out.NullValueCounts = api.CloneNonEmptyMap(in.NullValueCounts)
+	out.NaNValueCounts = api.CloneNonEmptyMap(in.NaNValueCounts)
+	out.LowerBounds = api.CloneMetricBounds(in.LowerBounds)
+	out.UpperBounds = api.CloneMetricBounds(in.UpperBounds)
+	out.SplitOffsets = append([]int64(nil), in.SplitOffsets...)
 	return out
 }
 
