@@ -8088,6 +8088,29 @@ func appendExplicitIntegerCastWarning(proc *process.Process, value string, warni
 	}
 }
 
+// appendExplicitDecimalCastWarning mirrors MySQL: an explicit CAST of lexically
+// invalid (or truncated) text to DECIMAL reports a truncated-value warning
+// instead of erroring (issue #30417). The full original value is the fact.
+func appendExplicitDecimalCastWarning(proc *process.Process, value string) {
+	if proc == nil {
+		return
+	}
+	if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+		appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
+			fmt.Sprintf("Truncated incorrect DECIMAL value: '%-.128s'", value))
+	}
+}
+
+// explicitCastMustErrorOnStrictDML reports whether an explicit CAST lexical
+// conversion failure must stay a hard error: while executing a data-modifying
+// statement under strict sql_mode, MySQL escalates the conversion warning to
+// an error unless the statement carries IGNORE (sql-mode docs / bug 78127).
+// Mirrors the diagnoseFloatText gate; SELECT leniency and IGNORE/loose
+// sessions are unaffected (issue #30417).
+func explicitCastMustErrorOnStrictDML(proc *process.Process) bool {
+	return proc != nil && proc.IsDMLStatement() && isStrictSqlMode(proc) && !statementIgnore(proc)
+}
+
 // FloatTextTruncated reports MySQL's nonempty textual float truncation fact.
 // Keep ASCII whitespace and radix recognition identical to the value parser.
 // Empty strings retain their existing zero-without-warning policy.
@@ -8853,6 +8876,30 @@ func strToDecimal64(
 					result, err = parseDecimal64CastString(s, totype.Width, totype.Scale)
 				}
 				if err != nil {
+					if mode == castModeExplicit && !isAssignmentSpecialNumericSyntax(s) && isDecimalLexicalConversionError(err) && !explicitCastMustErrorOnStrictDML(proc) {
+						// MySQL explicit CAST keeps the numeric prefix, or zero
+						// when none exists, reporting a truncated-value warning
+						// instead of an error (issue #30417). Special numeric
+						// syntax (nan/inf/radix) keeps its own established
+						// contract, hard-fail included.
+						if prefix, ok := assignmentDecimalPrefix(s); ok {
+							if prefixed, prefixOverflow, prefixErr := parseDecimal64CastStringWithOverflow(prefix, totype.Width, totype.Scale, true); prefixErr == nil {
+								appendExplicitDecimalCastWarning(proc, s)
+								if prefixOverflow {
+									appendDecimalCastRangeWarning(proc, i)
+								}
+								if err = to.Append(prefixed, false); err != nil {
+									return err
+								}
+								continue
+							}
+						}
+						appendExplicitDecimalCastWarning(proc, s)
+						if err = to.Append(dft, false); err != nil {
+							return err
+						}
+						continue
+					}
 					if mode == castModeAssignmentIgnore && !isAssignmentSpecialNumericSyntax(s) {
 						if prefix, ok := assignmentDecimalPrefix(s); ok {
 							if prefixed, prefixErr := parseDecimal64CastString(prefix, totype.Width, totype.Scale); prefixErr == nil {
@@ -9194,6 +9241,30 @@ func strToDecimal128(
 					result, err = parseDecimal128CastString(s, totype.Width, totype.Scale)
 				}
 				if err != nil {
+					if mode == castModeExplicit && !isAssignmentSpecialNumericSyntax(s) && isDecimalLexicalConversionError(err) && !explicitCastMustErrorOnStrictDML(proc) {
+						// MySQL explicit CAST keeps the numeric prefix, or zero
+						// when none exists, reporting a truncated-value warning
+						// instead of an error (issue #30417). Special numeric
+						// syntax (nan/inf/radix) keeps its own established
+						// contract, hard-fail included.
+						if prefix, ok := assignmentDecimalPrefix(s); ok {
+							if prefixed, prefixOverflow, prefixErr := parseDecimal128CastStringWithOverflow(prefix, totype.Width, totype.Scale, true); prefixErr == nil {
+								appendExplicitDecimalCastWarning(proc, s)
+								if prefixOverflow {
+									appendDecimalCastRangeWarning(proc, i)
+								}
+								if err = to.Append(prefixed, false); err != nil {
+									return err
+								}
+								continue
+							}
+						}
+						appendExplicitDecimalCastWarning(proc, s)
+						if err = to.Append(dft, false); err != nil {
+							return err
+						}
+						continue
+					}
 					if mode == castModeAssignmentIgnore && !isAssignmentSpecialNumericSyntax(s) {
 						if prefix, ok := assignmentDecimalPrefix(s); ok {
 							if prefixed, prefixErr := parseDecimal128CastString(prefix, totype.Width, totype.Scale); prefixErr == nil {
@@ -9290,6 +9361,30 @@ func strToDecimal256(
 					result, err = parseDecimal256CastString(s, totype.Width, totype.Scale)
 				}
 				if err != nil {
+					if mode == castModeExplicit && !isAssignmentSpecialNumericSyntax(s) && isDecimalLexicalConversionError(err) && !explicitCastMustErrorOnStrictDML(proc) {
+						// MySQL explicit CAST keeps the numeric prefix, or zero
+						// when none exists, reporting a truncated-value warning
+						// instead of an error (issue #30417). Special numeric
+						// syntax (nan/inf/radix) keeps its own established
+						// contract, hard-fail included.
+						if prefix, ok := assignmentDecimalPrefix(s); ok {
+							if prefixed, prefixOverflow, prefixErr := parseDecimal256CastStringWithOverflow(prefix, totype.Width, totype.Scale, true); prefixErr == nil {
+								appendExplicitDecimalCastWarning(proc, s)
+								if prefixOverflow {
+									appendDecimalCastRangeWarning(proc, i)
+								}
+								if err = to.Append(prefixed, false); err != nil {
+									return err
+								}
+								continue
+							}
+						}
+						appendExplicitDecimalCastWarning(proc, s)
+						if err = to.Append(dft, false); err != nil {
+							return err
+						}
+						continue
+					}
 					if mode == castModeAssignmentIgnore && !isAssignmentSpecialNumericSyntax(s) {
 						if prefix, ok := assignmentDecimalPrefix(s); ok {
 							if prefixed, prefixErr := parseDecimal256CastString(prefix, totype.Width, totype.Scale); prefixErr == nil {
