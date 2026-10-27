@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -1091,4 +1092,45 @@ func TestDecimal128ToDecimal64ChecksSignedRange(t *testing.T) {
 	require.ErrorContains(t, err, "does not fit Decimal64")
 	_, err = decimalFromArray(decimal128.New(-1, uint64(1)<<63-1), true)
 	require.ErrorContains(t, err, "does not fit Decimal64")
+}
+
+func TestArrowTextAndBlobPreserveByteBounds(t *testing.T) {
+	for _, oid := range []types.T{types.T_text, types.T_blob} {
+		typ := types.New(oid, 255, 0)
+		descriptor, err := NewTypeDescriptor(typ)
+		require.NoError(t, err)
+		require.Equal(t, int32(255), descriptor.Width)
+		for _, size := range []int{255, 256} {
+			var input arrow.Array
+			if oid == types.T_text {
+				b := array.NewStringBuilder(memory.NewGoAllocator())
+				b.Append(strings.Repeat("a", size))
+				input = b.NewArray()
+				b.Release()
+			} else {
+				b := array.NewBinaryBuilder(memory.NewGoAllocator(), arrow.BinaryTypes.Binary)
+				b.Append([]byte(strings.Repeat("a", size)))
+				input = b.NewArray()
+				b.Release()
+			}
+			err = validateArrowValueDomain(descriptor, input)
+			input.Release()
+			if size == 255 {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "width")
+			}
+		}
+	}
+	b := array.NewStringBuilder(memory.NewGoAllocator())
+	defer b.Release()
+	b.Append(strings.Repeat("中", 86))
+	values := b.NewArray()
+	defer values.Release()
+	text, err := NewTypeDescriptor(types.New(types.T_text, 255, 0))
+	require.NoError(t, err)
+	require.ErrorContains(t, validateArrowValueDomain(text, values), "byte width")
+	varchar, err := NewTypeDescriptor(types.New(types.T_varchar, 255, 0))
+	require.NoError(t, err)
+	require.NoError(t, validateArrowValueDomain(varchar, values))
 }
