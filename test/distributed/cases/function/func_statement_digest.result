@@ -59,6 +59,16 @@ SELECT STATEMENT_DIGEST('SELECT 1; SELECT 2');
 Could not parse argument to digest function.
 SELECT STATEMENT_DIGEST_TEXT('SELECT');
 Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST('CREATE TABLE t(a INT PRIMARY KEY DEFAULT NULL)');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('CREATE TABLE t(a INT AUTO_INCREMENT DEFAULT 1)');
+Could not parse argument to digest function.
+SELECT STATEMENT_DIGEST_TEXT('CREATE TABLE t(a INT AUTO_INCREMENT DEFAULT NULL)');
+➤ STATEMENT_DIGEST_TEXT(CREATE TABLE t(a INT AUTO_INCREMENT DEFAULT NULL))[-1,536870911,0]  𝄀
+CREATE TABLE `t` ( `a` INTEGER AUTO_INCREMENT DEFAULT ? )
+SELECT STATEMENT_DIGEST_TEXT('CREATE TABLE t(a INT DEFAULT NULL, PRIMARY KEY(a))');
+➤ STATEMENT_DIGEST_TEXT(CREATE TABLE t(a INT DEFAULT NULL, PRIMARY KEY(a)))[-1,536870911,0]  𝄀
+CREATE TABLE `t` ( `a` INTEGER DEFAULT ? , PRIMARY KEY ( `a` ) )
 SELECT STATEMENT_DIGEST();
 invalid argument function statement_digest, bad value []
 SELECT STATEMENT_DIGEST_TEXT('SELECT 1', 'SELECT 2');
@@ -71,6 +81,27 @@ SELECT id, STATEMENT_DIGEST_TEXT(sql_text), STATEMENT_DIGEST(sql_text) FROM stat
 1  ¦  SELECT ?  ¦  d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae  𝄀
 2  ¦  SELECT ? IS NULL  ¦  3a54881a552eac34cfae066250785f70bba3a7e97a284339287de118e53c98c2  𝄀
 3  ¦  null  ¦  null
+INSERT INTO statement_digest_input VALUES
+(4,'SELECT ''_latin1'''),(5,'SELECT t._latin1 FROM t'),
+(6,'SELECT n"a"'),(7,'SELECT n''a'''),
+(8,'SELECT 123ABC'),(9,'SELECT 1e2abc'),
+(10,'SELECT @@session.`sql_mode`'),
+(11,'SELECT /*+ QB_NAME(1abc) */ 1'),(12,'SELECT /*+ QB_NAME(1e2) */ 1'),
+(13,'SELECT /*+ QB_NAME(16K) */ 1'),(14,'SELECT /*+ */ 1');
+SELECT id, STATEMENT_DIGEST_TEXT(sql_text), STATEMENT_DIGEST(sql_text) FROM statement_digest_input WHERE id>=4 ORDER BY id;
+➤ id[4,32,0]  ¦  STATEMENT_DIGEST_TEXT(sql_text)[-1,536870911,0]  ¦  STATEMENT_DIGEST(sql_text)[12,64,0]  𝄀
+4  ¦  SELECT ?  ¦  d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae  𝄀
+5  ¦  SELECT `t` . `_latin1` FROM `t`  ¦  bc61cd9ee0f7a037cf4055589161057f784b7612cc6f21e8b4f8da3c68d18ffa  𝄀
+6  ¦  SELECT `n` ?  ¦  b592e6e9621a2681e4c809ef539b8f96d8fa942d12ce0ddf334229b1fd98022a  𝄀
+7  ¦  SELECT ?  ¦  d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae  𝄀
+8  ¦  SELECT `123ABC`  ¦  1b7bcf12cdc45237f0fbdfd5f95ade1ed0b563fb22437a1df7005f8390bade51  𝄀
+9  ¦  SELECT ? `abc`  ¦  3dd865f671884656a5de6c1b38e6eee117fd918f367c88456a9224a046ccf4b6  𝄀
+10  ¦  SELECT @@SESSION . `sql_mode`  ¦  e150be6761e6ac2a779221373cbd94529f93c7208964fb12b7503ae236e911f7  𝄀
+11  ¦  SELECT /*+ QB_NAME ( `1abc` ) */ ?  ¦  a2003011e22125d57fcc08eb4a8333fd0f4de18f3e32f4d9f4c4d97fdb102293  𝄀
+12  ¦  SELECT /*+ QB_NAME ( `1e2` ) */ ?  ¦  a607e33382d4867f449d0d10b9118716c2a73c7d4ddd1bb6aae87e991d8caf54  𝄀
+13  ¦  SELECT /*+ QB_NAME (?) */ ?  ¦  6a8c707b2e7f43dda8879355b7cbfd716fd1ccd810e68dfd95a66d5a6f90b924  𝄀
+14  ¦  SELECT ?  ¦  d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae
+DELETE FROM statement_digest_input WHERE id>=4;
 SELECT STATEMENT_DIGEST_TEXT('DROP TABLE statement_digest_input');
 ➤ STATEMENT_DIGEST_TEXT(DROP TABLE statement_digest_input)[-1,536870911,0]  𝄀
 DROP TABLE `statement_digest_input`

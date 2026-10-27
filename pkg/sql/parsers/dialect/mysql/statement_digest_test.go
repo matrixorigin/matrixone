@@ -105,6 +105,51 @@ func TestStatementDigestParseLimitsAndScannerReuse(t *testing.T) {
 	require.Equal(t, "select 1 + 2", tree.String(statement, dialect.MYSQL))
 }
 
+func TestStatementDigestEmptyHintBudget(t *testing.T) {
+	// Sweep through storage exhaustion on both sides of a nested SELECT.
+	// An empty hint must not consume bytes or change prefix reductions.
+	for n := 140; n <= 150; n++ {
+		prefix := "SELECT " + strings.Repeat("a+", n) + "(SELECT "
+		text, hash, err := StatementDigest(t.Context(), prefix+"1)", "")
+		require.NoError(t, err)
+		for _, hint := range []string{"/*+ */", "/*+ . */", "/*+ 'unterminated */"} {
+			gotText, gotHash, err := StatementDigest(t.Context(), prefix+hint+"1)", "")
+			require.NoError(t, err)
+			require.Equal(t, text, gotText, "n=%d hint=%s", n, hint)
+			require.Equal(t, hash, gotHash, "n=%d hint=%s", n, hint)
+		}
+	}
+}
+
+func TestStatementDigestNumericScannerIsolation(t *testing.T) {
+	for _, tc := range []struct {
+		sql, digestText, ordinaryText string
+		digestKind, ordinaryKind      int
+	}{
+		{"123ABC", "123ABC", "123abc", ID, ID},
+		{"1e2abc", "1e2", "1e2abc", FLOAT, ID},
+		{"0XAB", "0XAB", "0xab", ID, HEXNUM},
+		{"0B10", "0B10", "0b10", ID, BIT_LITERAL},
+	} {
+		for _, digest := range []bool{true, false} {
+			func() {
+				s := NewScanner(dialect.MYSQL, tc.sql)
+				defer PutScanner(s)
+				require.False(t, s.digestMode)
+				s.digestMode = digest
+				kind, text := s.Scan()
+				if digest {
+					require.Equal(t, tc.digestKind, kind)
+					require.Equal(t, tc.digestText, text)
+				} else {
+					require.Equal(t, tc.ordinaryKind, kind)
+					require.Equal(t, tc.ordinaryText, text)
+				}
+			}()
+		}
+	}
+}
+
 func BenchmarkStatementDigest(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {

@@ -86,8 +86,12 @@ type OutputColumnProvenance struct {
 	State                   ProvenanceState
 	Source                  *SourceColumn
 	CTASDefaultPolicy       CTASDefaultPolicy
-	// ResultType retains a DEFAULT expression's ENUM/SET field declaration
-	// without claiming its value is a transparent source-column reference.
+	// ColumnDefaultSource preserves a unary-plus field's immutable DEFAULT
+	// metadata without claiming that MO's numeric lowering preserves row type
+	// or granting CTAS the source column's default-inheritance policy.
+	ColumnDefaultSource *SourceColumn
+	// ResultType retains the field declaration used by DEFAULT without
+	// claiming its value is a transparent source-column reference.
 	ResultType *plan.Type
 	// TypeDefault identifies a materialized expression column, as opposed to
 	// a merged expression that DEFAULT(col) cannot treat as a field.
@@ -95,6 +99,14 @@ type OutputColumnProvenance struct {
 	// Retain MySQL temporary-field nullability before conversion/literal
 	// syntax is erased by lowering and constant folding.
 	TypeDefaultNullability typeDefaultNullability
+}
+
+func (p OutputColumnProvenance) forColumnDefault() OutputColumnProvenance {
+	if p.ColumnDefaultSource != nil {
+		p.State, p.Source = ProvenanceSingleSource, p.ColumnDefaultSource
+		p.TypeDefault = typeDefaultNone
+	}
+	return p
 }
 
 func snapshotSourceColumnMetadata(col *plan.ColDef) SourceColumnMetadata {

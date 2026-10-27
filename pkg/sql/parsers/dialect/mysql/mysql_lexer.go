@@ -416,12 +416,12 @@ func (l *Lexer) Lex(lval *yySymType) int {
 			} else {
 				typ = ID
 			}
-		} else if typ == ID && strings.EqualFold(str, "n") && l.scanner.cur() == '\'' {
+		} else if typ == ID && l.lastToken != '.' && strings.EqualFold(str, "n") && l.scanner.cur() == '\'' {
 			// National strings are one literal, not an identifier plus alias.
 			typ, str = l.scanner.Scan()
 		} else if typ == QUOTE_ID {
 			typ = ID
-		} else if digestCharsetIntroducer(str) {
+		} else if typ == ID && l.lastToken != '.' && digestCharsetIntroducer(str) {
 			typ = UNDERSCORE_BINARY
 		} else if typ == ASSIGNMENT && l.lastToken == AT_ID {
 			typ = '='

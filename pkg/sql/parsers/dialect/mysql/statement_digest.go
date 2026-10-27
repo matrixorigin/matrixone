@@ -131,6 +131,14 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 	afterDot, afterSemicolon, hintAllowed := false, false, false
 	previousEnd := 0
 	previousRaw := ""
+	hintStarted := false
+	if hint {
+		defer func() {
+			if hintStarted {
+				d.add(digestHintClose, "", false)
+			}
+		}()
+	}
 	for {
 		var kind int
 		var value string
@@ -150,6 +158,12 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 			// Invalid hints are warnings, not failures of the surrounding SQL.
 			// Keep the token prefix before the hint lexer stopped.
 			return nil
+		}
+		if hint && !hintStarted {
+			// Empty hints (including discarded dots or an initial lexical error)
+			// contribute no tokens, even at the retained-prefix boundary.
+			d.add(digestHintOpen, "", false)
+			hintStarted = true
 		}
 		if kind == LEX_ERROR || kind == VALUE_ARG {
 			return moerr.NewDigestParse(s.parseControl.ctx)
@@ -178,8 +192,8 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 			d.add(digestValue, "", true)
 			continue
 		case STRING:
-			if !hint && d.last(0) == digestIdentifier && strings.TrimSpace(s.buf[priorEnd:s.PrePos]) == "" {
-				if strings.EqualFold(priorRaw, "n") && priorEnd == s.Pos-len(raw) {
+			if !hint && d.last(0) == digestIdentifier && d.last(1) != '.' && strings.TrimSpace(s.buf[priorEnd:s.PrePos]) == "" {
+				if strings.EqualFold(priorRaw, "n") && strings.HasPrefix(raw, "'") && priorEnd == s.Pos-len(raw) {
 					d.pop(1)
 				} else if digestCharsetIntroducer(priorRaw) {
 					d.pop(1)
@@ -221,6 +235,13 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 					if symbol, ok := digestSymbols[strings.ToUpper(part)]; i == 0 && len(parts) > 1 && ok {
 						d.add(symbol.id, "", false)
 					} else {
+						// The combined variable token retains quoting on a qualified
+						// component; identifier encoding needs its decoded bytes.
+						if len(part) >= 2 && part[0] == part[len(part)-1] &&
+							(part[0] == '`' || part[0] == '"' && mode.Has(SQLModeANSIQuotes)) {
+							quote := part[:1]
+							part = strings.ReplaceAll(part[1:len(part)-1], quote+quote, quote)
+						}
 						d.add(digestIdentifier, part, false)
 					}
 				}
@@ -265,10 +286,6 @@ func (d *statementDigest) scan(s *Scanner, syntax *statementDigestSyntax, hint b
 		if !hint && upper == "ROLLUP" && d.last(0) == digestSymbols["WITH"].id {
 			d.pop(1)
 			d.add(digestWithRollup, "", false)
-			continue
-		}
-		if hint && len(raw) > 0 && isDigit(uint16(raw[0])) {
-			d.add(digestValue, "", true)
 			continue
 		}
 		if hint {
@@ -338,26 +355,30 @@ func digestRowConstructorValid(parent *Scanner) bool {
 }
 
 func digestSyntaxValid(statement tree.Statement) bool {
-	// MySQL rejects NULL defaults of NOT NULL columns while contextualizing
-	// CREATE TABLE, even though digest parsing never opens the target table.
+	// Mirror column-attribute contextualization, not CREATE TABLE execution.
+	// Attribute order matters; a table-level primary key is not applied here.
 	if create, ok := statement.(*tree.CreateTable); ok {
 		for _, definition := range create.Defs {
 			column, ok := definition.(*tree.ColumnTableDef)
 			if !ok {
 				continue
 			}
-			notNull, nullDefault := false, false
+			notNull, nullDefault, hasDefault, autoIncrement := false, false, false, false
 			for _, attribute := range column.Attributes {
 				switch attr := attribute.(type) {
 				case *tree.AttributeNull:
 					notNull = !attr.Is
+				case *tree.AttributePrimaryKey:
+					notNull = true
+				case *tree.AttributeAutoIncrement:
+					autoIncrement = true
 				case *tree.AttributeDefault:
-					if value, ok := attr.Expr.(*tree.NumVal); ok {
-						nullDefault = value.ValType == tree.P_null
-					}
+					hasDefault = true
+					value, literal := attr.Expr.(*tree.NumVal)
+					nullDefault = literal && value.ValType == tree.P_null
 				}
 			}
-			if notNull && nullDefault {
+			if notNull && nullDefault || autoIncrement && hasDefault && !nullDefault {
 				return false
 			}
 		}
@@ -382,7 +403,10 @@ func scanDigestHint(s *Scanner) (int, string) {
 		case isUnquotedIdentifierLetterAt(s.buf, s.Pos):
 			return s.scanIdentifier(false)
 		case isDigit(ch) || ch == '.' && isDigit(s.peek(1)):
-			return s.scanNumber()
+			kind, value := scanDigestHintNumber(s)
+			if kind != skippedScannerToken {
+				return kind, value
+			}
 		case ch == '.':
 			// A nonnumeric dot is discarded by the MySQL hint lexer.
 			s.inc()
@@ -398,17 +422,40 @@ func scanDigestHint(s *Scanner) (int, string) {
 	}
 }
 
+func scanDigestHintNumber(s *Scanner) (int, string) {
+	start := s.Pos
+	s.scanMantissa(10)
+	if s.cur() == '.' {
+		s.inc()
+		s.scanMantissa(10)
+		if isUnquotedIdentifierLetterAt(s.buf, s.Pos) {
+			// An invalid decimal prefix is discarded before scanning the
+			// trailing hint word; it is not a numeric token plus an alias.
+			return skippedScannerToken, ""
+		}
+		return FLOAT, s.buf[start:s.Pos]
+	}
+	end := s.Pos
+	if isUnquotedIdentifierLetterAt(s.buf, s.Pos) {
+		kind, value := s.scanIdentifier(false)
+		if kind == LEX_ERROR {
+			return kind, value
+		}
+		// Hints recognize decimal/size literals, but not SQL exponents or
+		// hex/bin literals. Thus 16K is a number while 1e2 is an identifier.
+		if s.Pos != end+1 || !strings.ContainsAny(s.buf[end:s.Pos], "kKmMgG") {
+			return ID, s.buf[start:s.Pos]
+		}
+	}
+	return INTEGRAL, s.buf[start:s.Pos]
+}
+
 func (d *statementDigest) hint(parent *Scanner, sql string) error {
 	s := NewScannerWithSQLMode(dialect.MYSQL, sql, parent.sqlMode)
 	defer PutScanner(s)
 	// Hint words are classified by digestHintSymbols, never SQL keywords.
 	s.digestMode, s.parseControl, s.identifierAfterDot = true, parent.parseControl, true
-	d.add(digestHintOpen, "", false)
-	if err := d.scan(s, nil, true); err != nil {
-		return err
-	}
-	d.add(digestHintClose, "", false)
-	return nil
+	return d.scan(s, nil, true)
 }
 
 func (d *statementDigest) last(offset int) uint16 {

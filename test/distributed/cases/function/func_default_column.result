@@ -109,6 +109,25 @@ SELECT DEFAULT(x) FROM (SELECT a AS x FROM default_column_input) derived;
 SELECT DEFAULT(x) FROM (SELECT a AS x FROM default_column_input LIMIT 1) derived;
 ➤ default(x)[4,32,0]  𝄀
 7
+SELECT DEFAULT(x) FROM (SELECT +a AS x FROM default_column_input) derived;
+➤ default(x)[4,32,0]  𝄀
+7
+SELECT DEFAULT(x) FROM (SELECT +(+a) AS x FROM default_column_input LIMIT 1) derived;
+➤ default(x)[4,32,0]  𝄀
+7
+SELECT DEFAULT(x) FROM (SELECT +h AS x FROM default_column_input LIMIT 1) derived;
+➤ default(x)[12,5,0]  𝄀
+xyz
+SELECT DEFAULT(x) FROM (SELECT -a AS x FROM default_column_input) derived;
+Field 'x' doesn't have a default value
+SELECT DEFAULT(x) FROM (SELECT -a AS x FROM default_column_input LIMIT 1) derived;
+➤ default(x)[-5,64,0]  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT +CAST(a AS SIGNED) AS x FROM default_column_input) derived;
+Field 'x' doesn't have a default value
+WITH derived AS (SELECT +a AS x FROM default_column_input) SELECT DEFAULT(x) FROM derived;
+➤ default(x)[4,32,0]  𝄀
+7
 SELECT DEFAULT(x) FROM (SELECT a+0 AS x FROM default_column_input) derived;
 Field 'x' doesn't have a default value
 SELECT DEFAULT(x) FROM (SELECT a+0 AS x FROM default_column_input LIMIT 1) derived;
@@ -152,6 +171,12 @@ SELECT a AS x FROM default_column_input ORDER BY DEFAULT(x);
 SELECT a AS x FROM default_column_input HAVING DEFAULT(x)=7;
 ➤ x[4,32,0]  𝄀
 7
+SELECT +a AS x FROM default_column_input HAVING DEFAULT(x)=7;
+➤ x[4,32,0]  𝄀
+7
+SELECT +a AS x FROM default_column_input ORDER BY DEFAULT(x);
+➤ x[4,32,0]  𝄀
+7
 SELECT a AS c FROM default_column_input HAVING DEFAULT(c)=7;
 ➤ c[4,32,0]  𝄀
 7
@@ -165,6 +190,11 @@ SELECT DEFAULT(r.a) FROM default_column_input l LEFT JOIN default_column_input r
 7
 SELECT DEFAULT(r.c) FROM default_column_input l LEFT JOIN default_column_input r ON FALSE;
 Field 'c' doesn't have a default value
+CREATE VIEW default_column_unary_view AS SELECT +a AS x,+h AS y FROM default_column_input;
+SELECT DEFAULT(x),DEFAULT(y) FROM default_column_unary_view;
+➤ default(x)[4,32,0]  ¦  default(y)[12,5,0]  𝄀
+7  ¦  xyz
+DROP VIEW default_column_unary_view;
 CREATE VIEW default_column_view AS SELECT a,h,c,d,e,f,g FROM default_column_input;
 SELECT DEFAULT(a),DEFAULT(h),DEFAULT(e),DEFAULT(f) FROM default_column_view;
 ➤ default(a)[4,32,0]  ¦  default(h)[12,5,0]  ¦  default(e)[93,19,0]  ¦  default(f)[93,19,0]  𝄀
@@ -235,6 +265,9 @@ INSERT INTO default_column_special VALUES(DEFAULT,DEFAULT);
 SELECT DEFAULT(a),DEFAULT(a)+0,DEFAULT(b),DEFAULT(b)+0 FROM default_column_special;
 ➤ default(a)[12,65535,0]  ¦  default(a) + 0[-5,64,0]  ¦  default(b)[12,65535,0]  ¦  default(b) + 0[-5,64,0]  𝄀
 blue  ¦  2  ¦  a,b  ¦  3
+SELECT DEFAULT(x),DEFAULT(y) FROM (SELECT +a AS x,+b AS y FROM default_column_special LIMIT 1) derived;
+➤ default(x)[12,65535,0]  ¦  default(y)[12,65535,0]  𝄀
+blue  ¦  a,b
 UPDATE default_column_special SET a='red',b=DEFAULT(b);
 SELECT a,b,DEFAULT(a),DEFAULT(b) FROM default_column_special;
 ➤ a[12,65535,0]  ¦  b[12,65535,0]  ¦  default(a)[12,65535,0]  ¦  default(b)[12,65535,0]  𝄀

@@ -31,12 +31,23 @@ func TestColumnDefaultPublicBinding(t *testing.T) {
 	column := requireMockColumn(t, mock, "nation", "n_regionkey")
 	column.Typ.NotNullable = false
 	column.Default = &plan.Default{NullAbility: true, OriginString: "7", Expr: makePlan2Int32ConstExprWithType(7)}
+	textColumn := requireMockColumn(t, mock, "nation", "n_name")
+	textColumn.Default = &plan.Default{OriginString: "'abc'", Expr: makePlan2StringConstExprWithType("abc")}
 	for _, sql := range []string{
 		"SELECT DEFAULT(n_regionkey)=7 FROM nation",
 		"SELECT DEFAULT(n.n_regionkey)=7 FROM nation n",
 		"SELECT DEFAULT(tpch.nation.n_regionkey)=7 FROM nation",
 		"SELECT DEFAULT(n_comment) IS NULL FROM nation",
 		"SELECT DEFAULT(x)=7 FROM (SELECT n_regionkey x FROM nation) d",
+		"SELECT DEFAULT(x)=7 FROM (SELECT +n_regionkey x FROM nation) d",
+		"SELECT DEFAULT(x)=7 FROM (SELECT +(+n_regionkey) x FROM nation LIMIT 1) d",
+		"SELECT DEFAULT(x)=7 FROM (SELECT +x x FROM (SELECT +n_regionkey x FROM nation) inner_d LIMIT 1) d",
+		"WITH d AS (SELECT +n_regionkey x FROM nation) SELECT DEFAULT(x)=7 FROM d",
+		"SELECT DEFAULT(x)='abc' FROM (SELECT +n_name x FROM nation) d",
+		"SELECT DEFAULT(x)='abc' FROM (SELECT +n_name x FROM nation LIMIT 1) d",
+		"SELECT DEFAULT(x)='' FROM (SELECT +x x FROM (SELECT 'abc' x) inner_d) d",
+		"SELECT DEFAULT(x) IS NULL FROM (SELECT +n_regionkey x FROM nation UNION ALL SELECT +n_regionkey x FROM nation) d",
+		"SELECT DEFAULT(x) IS NULL FROM (SELECT -n_regionkey x FROM nation LIMIT 1) d",
 		"SELECT DEFAULT(x)=7 FROM (SELECT n_regionkey x FROM nation LIMIT 1) d",
 		"WITH d AS (SELECT n_regionkey x FROM nation) SELECT DEFAULT(x)=7 FROM d",
 		"SELECT DEFAULT(x)=7 FROM (SELECT n_regionkey x FROM nation GROUP BY n_regionkey) d",
@@ -80,6 +91,8 @@ func TestColumnDefaultPublicBinding(t *testing.T) {
 		"SELECT (SELECT DEFAULT(n.n_regionkey) FROM (SELECT 1 z) n) FROM nation n",
 		"SELECT n_regionkey AS n_name FROM nation HAVING DEFAULT(n_name)=7",
 		"SELECT n_regionkey AS x FROM nation HAVING DEFAULT(x)=7",
+		"SELECT +n_regionkey AS x FROM nation HAVING DEFAULT(x)=7",
+		"SELECT +n_regionkey AS x FROM nation ORDER BY DEFAULT(x)",
 		"SELECT n_regionkey AS x FROM nation ORDER BY DEFAULT(x)",
 		"INSERT INTO nation(n_nationkey,n_name,n_regionkey) VALUES(1,'a',DEFAULT(n_regionkey))",
 		"INSERT INTO nation(n_nationkey,n_name,n_regionkey) VALUES(1,'a',DEFAULT(nation.n_regionkey))",
@@ -177,6 +190,9 @@ func TestColumnDefaultBindingErrors(t *testing.T) {
 		{"SELECT n_regionkey AS n_name FROM nation ORDER BY DEFAULT(n_name)", moerr.ErrNoDefaultForColumn},
 		{"SELECT 1 AS x FROM nation HAVING DEFAULT(x)=0", moerr.ErrNoDefaultForColumn},
 		{"SELECT DEFAULT(x) FROM (SELECT n_regionkey+0 x FROM nation) d", moerr.ErrNoDefaultForColumn},
+		{"SELECT DEFAULT(x) FROM (SELECT -n_regionkey x FROM nation) d", moerr.ErrNoDefaultForColumn},
+		{"SELECT DEFAULT(x) FROM (SELECT +CAST(n_regionkey AS SIGNED) x FROM nation) d", moerr.ErrNoDefaultForColumn},
+		{"SELECT DEFAULT(x) FROM (SELECT +n_name x FROM nation) d", moerr.ErrNoDefaultForColumn},
 		{"SELECT DEFAULT(x) FROM (SELECT CAST(n_regionkey AS SIGNED) x FROM nation) d", moerr.ErrNoDefaultForColumn},
 		{"INSERT INTO nation(n_nationkey) VALUES(DEFAULT(other.n_regionkey))", moerr.ErrBadFieldError},
 		{"SELECT DEFAULT(n_regionkey) FROM nation a,nation b", moerr.ErrInvalidInput},

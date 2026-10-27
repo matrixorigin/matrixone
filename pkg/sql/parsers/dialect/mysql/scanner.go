@@ -205,6 +205,10 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 		}
 		return tokenID, tBytes
 	case isUnquotedIdentifierLetterAt(s.buf, s.Pos):
+		if s.digestMode && s.identifierAfterDot {
+			// A qualified name component is not a literal introducer.
+			return s.scanIdentifier(false)
+		}
 		if ch == 'X' || ch == 'x' {
 			if s.peek(1) == '\'' {
 				s.incN(2)
@@ -851,7 +855,7 @@ func (s *Scanner) scanNumber() (int, string) {
 	// 0x construct.
 	if s.cur() == '0' {
 		s.inc()
-		if s.cur() == 'x' || s.cur() == 'X' {
+		if s.cur() == 'x' || !s.digestMode && s.cur() == 'X' {
 			token = HEXNUM
 			s.inc()
 			p1 := s.Pos
@@ -864,11 +868,11 @@ func (s *Scanner) scanNumber() (int, string) {
 						return typ, str
 					}
 				}
-				return token, toLowerASCII(s.buf[start:s.Pos])
+				return token, s.numberText(start)
 			}
 
 			goto exit
-		} else if s.cur() == 'b' || s.cur() == 'B' {
+		} else if s.cur() == 'b' || !s.digestMode && s.cur() == 'B' {
 			token = BIT_LITERAL
 			s.inc()
 			p1 := s.Pos
@@ -881,7 +885,7 @@ func (s *Scanner) scanNumber() (int, string) {
 						return typ, str
 					}
 				}
-				return token, toLowerASCII(s.buf[start:s.Pos])
+				return token, s.numberText(start)
 			}
 
 			goto exit
@@ -905,6 +909,9 @@ exponent:
 			s.incN(2)
 		} else if digitVal(s.peek(1)) < 10 {
 			token = FLOAT
+			if s.digestMode {
+				canPromoteToIdentifier = false
+			}
 			s.inc()
 		} else {
 			goto exit
@@ -919,7 +926,15 @@ exit:
 		s.scanIdentifier(false)
 	}
 
-	return token, toLowerASCII(s.buf[start:s.Pos])
+	return token, s.numberText(start)
+}
+
+func (s *Scanner) numberText(start int) string {
+	// Digest identifier bytes are case-sensitive, including digit-led names.
+	if s.digestMode {
+		return s.buf[start:s.Pos]
+	}
+	return toLowerASCII(s.buf[start:s.Pos])
 }
 
 func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {

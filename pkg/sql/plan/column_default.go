@@ -29,6 +29,23 @@ import (
 func recordColumnDefaultProjection(ctx *BindContext, binder *ProjectionBinder, ast tree.Expr, bound *plan.Expr, column int32) error {
 	provenance := OutputColumnProvenance{State: ProvenanceNone}
 	switch expr := unwrapParenExpr(ast).(type) {
+	case *tree.UnaryExpr:
+		name, columnRef := columnDefaultReference(expr)
+		if !columnRef {
+			return nil
+		}
+		source, typ, err := binder.columnDefaultMetadata(name)
+		if err != nil {
+			return err
+		}
+		provenance = source
+		if source.State == ProvenanceSingleSource {
+			provenance.ColumnDefaultSource = source.Source
+			provenance.State, provenance.Source = ProvenanceNone, nil
+			provenance.CTASDefaultPolicy = CTASDefaultNone
+		} else if provenance.ResultType == nil {
+			provenance.ResultType = DeepCopyType(&typ)
+		}
 	case *tree.DefaultColExpr:
 		source, typ, err := binder.columnDefaultMetadata(expr.Column)
 		if err != nil {
@@ -74,11 +91,28 @@ func recordColumnDefaultProjection(ctx *BindContext, binder *ProjectionBinder, a
 	return nil
 }
 
+// MySQL's unary plus preserves a field reference. Do not unwrap casts,
+// unary minus, or arithmetic, even if they later fold to the same value.
+func columnDefaultReference(ast tree.Expr) (*tree.UnresolvedName, bool) {
+	for {
+		ast = unwrapParenExpr(ast)
+		if unary, ok := ast.(*tree.UnaryExpr); ok && unary.Op == tree.UNARY_PLUS {
+			ast = unary.Expr
+			continue
+		}
+		name, ok := ast.(*tree.UnresolvedName)
+		return name, ok
+	}
+}
+
 func (b *baseBinder) bindColumnDefault(ast *tree.DefaultColExpr) (*plan.Expr, error) {
 	name := ast.Column
 	provenance, typ, err := b.columnDefaultMetadata(name)
 	if err != nil {
 		return nil, err
+	}
+	if provenance.ResultType != nil {
+		typ = *provenance.ResultType
 	}
 	var value *plan.Expr
 	if provenance.TypeDefault != typeDefaultNone {
@@ -154,7 +188,7 @@ func (b *baseBinder) columnDefaultMetadata(name *tree.UnresolvedName) (OutputCol
 		}
 		if found {
 			var column bool
-			name, column = unwrapParenExpr(projected).(*tree.UnresolvedName)
+			name, column = columnDefaultReference(projected)
 			if !column {
 				return OutputColumnProvenance{State: ProvenanceNone}, plan.Type{}, nil
 			}
@@ -185,7 +219,7 @@ func (b *baseBinder) columnDefaultMetadata(name *tree.UnresolvedName) (OutputCol
 				if int(index) < len(binding.outputColumnProvenance) {
 					provenance = binding.outputColumnProvenance[index]
 				}
-				return provenance, *binding.types[index], nil
+				return provenance.forColumnDefault(), *binding.types[index], nil
 			}
 		}
 	}
@@ -196,7 +230,7 @@ func (b *baseBinder) columnDefaultMetadata(name *tree.UnresolvedName) (OutputCol
 			return OutputColumnProvenance{}, plan.Type{}, err
 		}
 		if found && alias.idx >= 0 && int(alias.idx) < len(b.ctx.projects) {
-			return b.ctx.outputColumnProvenanceForProject(alias.idx), b.ctx.projects[alias.idx].Typ, nil
+			return b.ctx.outputColumnProvenanceForProject(alias.idx).forColumnDefault(), b.ctx.projects[alias.idx].Typ, nil
 		}
 	}
 	return OutputColumnProvenance{}, plan.Type{}, moerr.NewBadFieldErrorf(b.GetContext(), "unknown column '%s' in DEFAULT", name.ColNameOrigin())
