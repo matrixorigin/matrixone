@@ -5,6 +5,11 @@
 SET experimental_hnsw_index = 1;
 SET hnsw_threads_build = 1;
 
+-- A CN that does not run the ISCP sync keeps its cached HNSW model until the cross-CN
+-- freshness sweep (default about 10 minutes). Shorten the sweep on every CN so the
+-- serving waits below converge; restore the default at exit.
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s') not like '%failed=[%' as all_cn_updated;
+
 drop database if exists hnsw_delete_insert;
 create database hnsw_delete_insert;
 use hnsw_delete_insert;
@@ -50,16 +55,8 @@ execute wait_delta;
 deallocate prepare wait_delta;
 
 -- The delta probe only proves the model was published to the hidden tables;
--- the CN serving this connection must also have loaded that generation before
--- the exact assertions below are meaningful under lag-serving index semantics.
--- Cross-CN freshness normally takes ~10 minutes, not the 120s test deadline.
--- This test covers persisted node reuse, not that eventual-cache delay. Drop
--- only this index's search entry on every CN after publication, so a cold load
--- reads the DELETE/INSERT generation regardless of where the proxy pinned us.
-set @evict_sql = concat('select mo_ctl(''cn'', ''EvictVectorIndexCache'', ''', @meta, ''') like ''%EVICTVECTORINDEXCACHE%'' as cache_evicted');
-prepare evict_index from @evict_sql;
-execute evict_index;
-deallocate prepare evict_index;
+-- the CN serving this connection must also have loaded that generation, through
+-- the freshness sweep set above, before the exact assertions below are meaningful.
 set @wait_serve_sql = 'select (select id from t order by l2_distance(v, ''[777.2,1,2]'') limit 1) = 2001 as serve_ready';
 prepare wait_serve from @wait_serve_sql;
 -- @metacmp(false)
@@ -92,9 +89,6 @@ execute wait_delta;
 deallocate prepare wait_delta;
 
 -- Same serving-view readiness for the second cut (2002/'[888.8,1,2]').
-prepare evict_index from @evict_sql;
-execute evict_index;
-deallocate prepare evict_index;
 set @wait_serve_sql = 'select (select id from t order by l2_distance(v, ''[888.8,1,2]'') limit 1) = 2002 as serve_ready';
 prepare wait_serve from @wait_serve_sql;
 -- @metacmp(false)
@@ -105,6 +99,8 @@ deallocate prepare wait_serve;
 select count(*), count(distinct id), sum(id < 500) as below_deleted from (select id from t order by l2_distance(v, '[888.8,1,2]') limit 1000) q;
 select id from t order by l2_distance(v, '[1,1,2]') limit 3;
 commit;
+
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0') not like '%failed=[%' as all_cn_restored;
 
 drop database hnsw_delete_insert;
 SET experimental_hnsw_index = 0;
