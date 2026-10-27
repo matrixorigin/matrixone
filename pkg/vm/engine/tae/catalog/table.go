@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -141,13 +142,12 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 	}
 	schema.AcInfo.CreateAt = types.CurrentTimestamp()
 	e := &TableEntry{
-		ID: tableId,
-		BaseEntryImpl: NewBaseEntry(
-			func() *TableMVCCNode { return &TableMVCCNode{} }),
+		ID:               tableId,
+		BaseEntryImpl:    NewBaseEntry[*TableMVCCNode](),
 		db:               db,
 		TableNode:        &TableNode{},
-		dataObjects:      NewObjectList(false),
-		tombstoneObjects: NewObjectList(true),
+		dataObjects:      NewObjectListWithTableID(tableId, false),
+		tombstoneObjects: NewObjectListWithTableID(tableId, true),
 	}
 	e.TableNode.schema.Store(schema)
 	if dataFactory != nil {
@@ -160,6 +160,8 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e := NewReplayTableEntry()
 	e.ID = id
+	e.dataObjects.SetTableID(id)
+	e.tombstoneObjects.SetTableID(id)
 	e.db = db
 
 	e.TableNode.schema.Store(schema)
@@ -176,8 +178,7 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 
 func NewReplayTableEntry() *TableEntry {
 	e := &TableEntry{
-		BaseEntryImpl: NewBaseEntry(
-			func() *TableMVCCNode { return &TableMVCCNode{} }),
+		BaseEntryImpl:    NewBaseEntry[*TableMVCCNode](),
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
 		TableNode:        &TableNode{},
@@ -189,32 +190,43 @@ func NewReplayTableEntry() *TableEntry {
 func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	node := &TableNode{}
 	node.schema.Store(schema)
-	return &TableEntry{
-		ID: id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *TableMVCCNode { return &TableMVCCNode{} }),
+	e := &TableEntry{
+		ID:               id,
+		BaseEntryImpl:    NewBaseEntry[*TableMVCCNode](),
 		TableNode:        node,
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
 	}
+	e.dataObjects.SetTableID(id)
+	e.tombstoneObjects.SetTableID(id)
+	return e
+}
+
+// retireAObjectMetrics stops late ObjectList callbacks before removing the
+// table's metric children. Both table GC and whole-database GC use this path.
+func (entry *TableEntry) retireAObjectMetrics() {
+	entry.dataObjects.retireMetrics()
+	entry.tombstoneObjects.retireMetrics()
+	v2.RemoveTxnAObjectMaxCommitState(entry.ID)
 }
 
 func (entry *TableEntry) GetSoftdeleteObjects(dedupedTS, collectTS types.TS) (objs []*ObjectEntry) {
 	entry.WaitDataObjectCommitted(collectTS)
-	it := entry.MakeDataObjectIt()
-	defer it.Release()
+	snapshot := entry.MakeDataObjectSnapshot()
 	groups := [...]ObjectListGroup{
 		ObjectListGroupAppendableDrop,
 		ObjectListGroupNonAppendableDrop,
 	}
 	for _, group := range groups {
-		for ok := SeekObjectListGroup(&it, group, dedupedTS); ok; ok = it.Next() {
-			obj := it.Item()
-			if obj.ObjectListGroup() != group || obj.DeletedAt.GT(&collectTS) {
+		groupIt := snapshot.Group(group)
+		for ok := SeekObjectListGroup(&groupIt, group, dedupedTS); ok; ok = groupIt.Next() {
+			obj := groupIt.Item()
+			if obj.DeletedAt.GT(&collectTS) {
 				break
 			}
 			objs = append(objs, obj)
 		}
+		groupIt.Release()
 	}
 	return
 }
@@ -269,6 +281,10 @@ func (entry *TableEntry) MakeTombstoneObjectIt() btree.IterG[*ObjectEntry] {
 	return entry.tombstoneObjects.loadTree().Iter()
 }
 
+func (entry *TableEntry) MakeTombstoneObjectSnapshot() ObjectListSnapshot {
+	return ObjectListSnapshot{trees: entry.tombstoneObjects.loadTrees()}
+}
+
 // committed visible object iterator
 func (entry *TableEntry) MakeTombstoneVisibleObjectIt(txn txnif.TxnReader) *VisibleCommittedObjectIt {
 	return entry.tombstoneObjects.MakeVisibleCommittedObjectIt(txn)
@@ -282,12 +298,21 @@ func (entry *TableEntry) MakeDataObjectIt() btree.IterG[*ObjectEntry] {
 	return entry.dataObjects.loadTree().Iter()
 }
 
+func (entry *TableEntry) MakeDataObjectSnapshot() ObjectListSnapshot {
+	return ObjectListSnapshot{trees: entry.dataObjects.loadTrees()}
+}
+
 func (entry *TableEntry) MakeDataVisibleObjectIt(txn txnif.TxnReader) *VisibleCommittedObjectIt {
 	return entry.dataObjects.MakeVisibleCommittedObjectIt(txn)
 }
 
 func (entry *TableEntry) WaitDataObjectCommitted(ts types.TS) {
 	entry.dataObjects.WaitUntilCommitted(ts)
+}
+
+func (entry *TableEntry) MarkRestartSealedObjectBookmarks(restartTS types.TS) {
+	entry.dataObjects.MarkRestartSealedPrefix(restartTS)
+	entry.tombstoneObjects.MarkRestartSealedPrefix(restartTS)
 }
 
 func (entry *TableEntry) IsTableTailFlushed(start, end types.TS) (bool, *ObjectEntry) {
@@ -299,22 +324,23 @@ func (entry *TableEntry) IsTableTailFlushed(start, end types.TS) (bool, *ObjectE
 }
 
 func IsTableTailFlushed(table *TableEntry, start, end types.TS, isTombstone bool) (bool, *ObjectEntry) {
-	var it btree.IterG[*ObjectEntry]
+	var snapshot ObjectListSnapshot
 	if isTombstone {
 		table.WaitTombstoneObjectCommitted(end)
-		it = table.MakeTombstoneObjectIt()
+		snapshot = table.MakeTombstoneObjectSnapshot()
 	} else {
 		table.WaitDataObjectCommitted(end)
-		it = table.MakeDataObjectIt()
+		snapshot = table.MakeDataObjectSnapshot()
 	}
-	if SeekObjectListGroupReverse(&it, ObjectListGroupAppendableCreate, end) {
-		return false, it.Item()
+	createIt := snapshot.Group(ObjectListGroupAppendableCreate)
+	defer createIt.Release()
+	if SeekObjectListGroupReverse(&createIt, ObjectListGroupAppendableCreate, end) {
+		return false, createIt.Item()
 	}
-	for ok := SeekObjectListGroupReverse(&it, ObjectListGroupAppendableCreateWithDrop, end); ok; ok = it.Prev() {
-		obj := it.Item()
-		if obj.ObjectListGroup() != ObjectListGroupAppendableCreateWithDrop {
-			break
-		}
+	droppedIt := snapshot.Group(ObjectListGroupAppendableCreateWithDrop)
+	defer droppedIt.Release()
+	for ok := SeekObjectListGroupReverse(&droppedIt, ObjectListGroupAppendableCreateWithDrop, end); ok; ok = droppedIt.Prev() {
+		obj := droppedIt.Item()
 		if next := obj.GetNextVersion(); !next.IsCommitted() {
 			return false, obj
 		}
@@ -676,23 +702,21 @@ func (entry *TableEntry) GetTableData() data.Table { return entry.tableData }
 // TryFindLastAppendableObject tries to find a serving appendable object in the tail of the list, specifically determined by time range [now-5min, now]
 // Note: It not a big deal to return nil to indicate no object found, because the caller will handle it by creating a new one.
 func (entry *TableEntry) TryFindLastAppendableObject(isTombstone bool) (obj *ObjectEntry) {
-	var it btree.IterG[*ObjectEntry]
+	var snapshot ObjectListSnapshot
 	if isTombstone {
-		it = entry.MakeTombstoneObjectIt()
+		snapshot = entry.MakeTombstoneObjectSnapshot()
 	} else {
-		it = entry.MakeDataObjectIt()
+		snapshot = entry.MakeDataObjectSnapshot()
 	}
-	defer it.Release()
 
 	ago := time.Now().Add(-10 * time.Minute).UTC().UnixNano()
 
 	// For Appendable objects:
 	// Deleting objects should be ignored, because they have been freezed, which is not valid for appending.
-	if SeekObjectListGroupReverse(&it, ObjectListGroupAppendableCreate, txnif.UncommitTS) {
-		itObj := it.Item()
-		if itObj.ObjectListGroup() == ObjectListGroupAppendableCreate {
-			obj = itObj
-		}
+	groupIt := snapshot.Group(ObjectListGroupAppendableCreate)
+	defer groupIt.Release()
+	if SeekObjectListGroupReverse(&groupIt, ObjectListGroupAppendableCreate, txnif.UncommitTS) {
+		obj = groupIt.Item()
 	}
 	if obj != nil && obj.CreatedAt.Physical() < ago {
 		obj = nil
@@ -715,41 +739,45 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	}()
 
 	// As before, RecurLoop only returns the lastest version of a object entry
-	objIt := entry.MakeDataObjectIt()
-	defer objIt.Release()
-	for ok := objIt.Last(); ok; ok = objIt.Prev() {
-		objectEntry := objIt.Item()
+	entry.MakeDataObjectSnapshot().VisitAllUnlocked(func(objectEntry *ObjectEntry) bool {
 		// exclude C entries having drop intent(category-b)
 		if objectEntry.IsCEntry() && objectEntry.HasDCounterpart() {
-			continue
+			return true
 		}
 		if err = processor.OnObject(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				continue
+				err = nil
+				return true
 			}
-			return err
+			return false
 		}
 		if err = processor.OnPostObject(objectEntry); err != nil {
-			return err
+			return false
 		}
+		return true
+	})
+	if err != nil {
+		return err
 	}
 
-	tombstoneIt := entry.MakeTombstoneObjectIt()
-	defer tombstoneIt.Release()
-	for ok := tombstoneIt.Last(); ok; ok = tombstoneIt.Prev() {
-		objectEntry := tombstoneIt.Item()
+	entry.MakeTombstoneObjectSnapshot().VisitAllUnlocked(func(objectEntry *ObjectEntry) bool {
 		if objectEntry.IsCEntry() && objectEntry.HasDCounterpart() {
-			continue
+			return true
 		}
 		if err = processor.OnTombstone(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				continue
+				err = nil
+				return true
 			}
-			return err
+			return false
 		}
 		if err = processor.OnPostObject(objectEntry); err != nil {
-			return err
+			return false
 		}
+		return true
+	})
+	if err != nil {
+		return err
 	}
 	return
 }
@@ -1048,5 +1076,7 @@ func MockTableEntryWithDB(dbEntry *DBEntry, tblId uint64) *TableEntry {
 	entry.TableNode.tombstoneSchema.Store(NewEmptySchema("tombstone"))
 	entry.ID = tblId
 	entry.db = dbEntry
+	entry.dataObjects.SetTableID(tblId)
+	entry.tombstoneObjects.SetTableID(tblId)
 	return entry
 }

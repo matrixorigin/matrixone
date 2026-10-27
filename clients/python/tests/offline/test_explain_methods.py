@@ -82,8 +82,8 @@ class TestExplainMethods:
 
         assert "SELECT" in sql
         assert "FROM users" in sql
-        assert "WHERE age > 25" in sql
-        assert "ORDER BY name" in sql
+        assert "WHERE users.age > 25" in sql
+        assert "ORDER BY users.name" in sql
 
     def test_to_sql_with_parameters(self):
         """Test to_sql() method with parameters"""
@@ -109,10 +109,10 @@ class TestExplainMethods:
 
         assert "SELECT" in sql
         assert "FROM users" in sql
-        assert "WHERE age > 25" in sql
-        assert "GROUP BY department" in sql
-        assert "HAVING count(id) > 1" in sql
-        assert "ORDER BY avg(salary) DESC" in sql
+        assert "WHERE users.age > 25" in sql
+        assert "GROUP BY users.department" in sql
+        assert "HAVING count(users.id) > 1" in sql
+        assert "ORDER BY avg(users.salary) DESC" in sql
         assert "LIMIT 10" in sql
 
     def test_to_sql_with_joins(self):
@@ -130,9 +130,9 @@ class TestExplainMethods:
         sql = query.to_sql()
 
         assert "JOIN orders" in sql
-        assert "WHERE department = 'Sales'" in sql
-        assert "GROUP BY id, name" in sql
-        assert "HAVING sum(total_amount) > 10000" in sql
+        assert "WHERE users.department = 'Sales'" in sql
+        assert "GROUP BY users.id, users.name" in sql
+        assert "HAVING sum(orders.total_amount) > 10000" in sql
 
     def test_explain_sql_generation(self):
         """Test explain() method SQL generation"""
@@ -144,8 +144,8 @@ class TestExplainMethods:
         assert explain_sql.startswith("EXPLAIN")
         assert "SELECT" in explain_sql
         assert "FROM users" in explain_sql
-        assert "WHERE department = 'Engineering'" in explain_sql
-        assert "ORDER BY salary DESC" in explain_sql
+        assert "WHERE users.department = 'Engineering'" in explain_sql
+        assert "ORDER BY users.salary DESC" in explain_sql
 
     def test_explain_verbose_sql_generation(self):
         """Test explain() method with verbose SQL generation"""
@@ -163,8 +163,8 @@ class TestExplainMethods:
         explain_verbose_sql = f"EXPLAIN VERBOSE {sql}"
         assert explain_verbose_sql.startswith("EXPLAIN VERBOSE")
         assert "SELECT" in explain_verbose_sql
-        assert "GROUP BY department" in explain_verbose_sql
-        assert "HAVING count(id) > 1" in explain_verbose_sql
+        assert "GROUP BY users.department" in explain_verbose_sql
+        assert "HAVING count(users.id) > 1" in explain_verbose_sql
 
     def test_explain_analyze_sql_generation(self):
         """Test explain_analyze() method SQL generation"""
@@ -175,8 +175,8 @@ class TestExplainMethods:
         explain_analyze_sql = f"EXPLAIN ANALYZE {sql}"
         assert explain_analyze_sql.startswith("EXPLAIN ANALYZE")
         assert "SELECT" in explain_analyze_sql
-        assert "WHERE salary > 70000" in explain_analyze_sql
-        assert "ORDER BY age DESC" in explain_analyze_sql
+        assert "WHERE users.salary > 70000" in explain_analyze_sql
+        assert "ORDER BY users.age DESC" in explain_analyze_sql
 
     def test_explain_analyze_verbose_sql_generation(self):
         """Test explain_analyze() method with verbose SQL generation"""
@@ -197,7 +197,7 @@ class TestExplainMethods:
         assert explain_analyze_verbose_sql.startswith("EXPLAIN ANALYZE VERBOSE")
         assert "SELECT" in explain_analyze_verbose_sql
         assert "JOIN orders" in explain_analyze_verbose_sql
-        assert "GROUP BY id, name" in explain_analyze_verbose_sql
+        assert "GROUP BY users.id, users.name" in explain_analyze_verbose_sql
 
     def test_explain_methods_with_cte(self):
         """Test explain methods with CTE queries"""
@@ -272,12 +272,12 @@ class TestExplainMethods:
         # Query with only ORDER BY
         query = self.client.query(User).order_by(User.name)
         sql = query.to_sql()
-        assert "ORDER BY name" in sql
+        assert "ORDER BY users.name" in sql
 
         # Query with multiple ORDER BY columns
         query = self.client.query(User).order_by(User.department, User.name.desc())
         sql = query.to_sql()
-        assert "ORDER BY department, name DESC" in sql
+        assert "ORDER BY users.department, users.name DESC" in sql
 
     def test_explain_methods_performance_queries(self):
         """Test explain methods with performance-focused queries"""
@@ -304,9 +304,9 @@ class TestExplainMethods:
         assert "avg(users.salary) AS avg_salary" in sql
         assert "max(users.salary) AS max_salary" in sql
         assert "min(users.salary) AS min_salary" in sql
-        assert "GROUP BY department" in sql
-        assert "HAVING count(id) > 1" in sql
-        assert "ORDER BY avg(salary) DESC" in sql
+        assert "GROUP BY users.department" in sql
+        assert "HAVING count(users.id) > 1" in sql
+        assert "ORDER BY avg(users.salary) DESC" in sql
         assert "LIMIT 20" in sql
 
         # Test EXPLAIN ANALYZE for performance analysis
@@ -332,9 +332,9 @@ class TestExplainMethods:
         assert "year(users.created_at) AS year" in sql
         assert "month(users.created_at) AS month" in sql
         assert "count(users.id) AS user_count" in sql
-        assert "WHERE year(created_at) > 2020" in sql
-        assert "GROUP BY year(created_at), month(created_at)" in sql
-        assert "ORDER BY year(created_at) DESC, month(created_at) DESC" in sql
+        assert "WHERE year(users.created_at) > 2020" in sql
+        assert "GROUP BY year(users.created_at), month(users.created_at)" in sql
+        assert "ORDER BY year(users.created_at) DESC, month(users.created_at) DESC" in sql
 
         # Test EXPLAIN VERBOSE for function analysis
         explain_verbose_sql = f"EXPLAIN VERBOSE {sql}"

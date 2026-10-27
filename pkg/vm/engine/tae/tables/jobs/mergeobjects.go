@@ -269,6 +269,7 @@ func (task *mergeObjectsTask) LoadNextBatch(
 
 	obj := task.mergedObjsHandle[objIdx]
 	ctx = fileservice.WithFileServicePolicy(ctx, fileservice.SkipAllCache)
+	ctx = tables.WithPreservePhysicalRows(ctx)
 	if !task.isTombstone {
 		if !task.m0ProofSet[objIdx] {
 			proven, proof, proofErr := activeM0MergeProof(

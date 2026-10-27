@@ -352,7 +352,6 @@ func getView(ctx context.Context, desc *prom.Desc) *table.View {
 }
 
 type descExtra struct {
-	orig   *prom.Desc
 	fqName string
 	labels []*dto.LabelPair
 }
@@ -365,7 +364,7 @@ func newDescExtra(desc *prom.Desc) *descExtra {
 	str = str[:strings.Index(str, "}")]
 	varLblCnt := len(strings.Split(str, ","))
 	labels := prom.MakeLabelPairs(desc, make([]string, varLblCnt))
-	return &descExtra{orig: desc, fqName: fqName, labels: labels}
+	return &descExtra{fqName: fqName, labels: labels}
 }
 
 type InitOptions struct {

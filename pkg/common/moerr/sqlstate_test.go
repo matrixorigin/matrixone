@@ -100,18 +100,20 @@ func TestIsRealError(t *testing.T) {
 }
 
 func TestEnumSetValueTruncatedIsRealError(t *testing.T) {
-	err := NewEnumSetValueTruncated(context.Background(), "Data truncated for ENUM value: 'bad'")
-	require.Equal(t, uint16(20210), err.ErrorCode())
-	require.Equal(t, uint16(WARN_DATA_TRUNCATED), err.MySQLCode())
-	require.Equal(t, "01000", err.SqlState())
-	require.True(t, err.IsRealError())
-	data, encodeErr := err.MarshalBinary()
-	require.NoError(t, encodeErr)
-	var decoded Error
-	require.NoError(t, decoded.UnmarshalBinary(data))
-	require.Equal(t, err.ErrorCode(), decoded.ErrorCode())
-	require.Equal(t, err.MySQLCode(), decoded.MySQLCode())
-	require.Equal(t, err.SqlState(), decoded.SqlState())
-	require.Equal(t, err.Error(), decoded.Error())
-	require.True(t, decoded.IsRealError())
+	for _, constructor := range []func(context.Context, string) *Error{NewEnumSetValueTruncated, NewAssignmentValueTruncated} {
+		err := constructor(context.Background(), "Data truncated for DOUBLE value: 'inf'")
+		require.Equal(t, uint16(20210), err.ErrorCode())
+		require.Equal(t, uint16(WARN_DATA_TRUNCATED), err.MySQLCode())
+		require.Equal(t, "01000", err.SqlState())
+		require.True(t, err.IsRealError())
+		data, encodeErr := err.MarshalBinary()
+		require.NoError(t, encodeErr)
+		var decoded Error
+		require.NoError(t, decoded.UnmarshalBinary(data))
+		require.Equal(t, err.ErrorCode(), decoded.ErrorCode())
+		require.Equal(t, err.MySQLCode(), decoded.MySQLCode())
+		require.Equal(t, err.SqlState(), decoded.SqlState())
+		require.Equal(t, err.Error(), decoded.Error())
+		require.True(t, decoded.IsRealError())
+	}
 }

@@ -206,17 +206,12 @@ class TestQueryUpdate:
         assert "age > 65" in query._where_conditions
         assert "last_login < '2023-01-01'" in query._where_conditions
 
-    def test_update_with_sqlalchemy_quoted_columns(self):
-        """Test update with SQLAlchemy quoted column names"""
-        # Mock SQLAlchemy expression with quoted columns
-        mock_expression = Mock()
-        mock_expression.compile.return_value = Mock()
-        mock_expression.compile.return_value.__str__ = Mock(return_value="COUNT('id')")
+    def test_update_preserves_sqlalchemy_literal_values(self):
+        """A quoted function argument is a value, not a column identifier."""
+        from sqlalchemy import func
 
-        query = self.base_query.update(user_count=mock_expression)
-
-        # Check that quoted columns are fixed
-        assert "user_count = COUNT(id)" in query._update_set_columns
+        query = self.base_query.update(name=func.upper('a.b'))
+        assert "name = upper('a.b')" in query._update_set_columns
 
     def test_matrixone_query_update(self):
         """Test MatrixOneQuery update functionality"""
