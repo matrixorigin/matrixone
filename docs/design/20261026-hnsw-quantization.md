@@ -5,6 +5,7 @@ The black-box suite is `test/distributed/cases/vector/vector_hnsw_quantization.s
 its sections is headed by the claim it proves (`-- C<n>`).
 
 Status: proposed.
+Issue: #31467. Implementation PR: #31468.
 
 ## Problem
 
