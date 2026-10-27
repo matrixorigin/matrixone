@@ -4104,7 +4104,9 @@ func getUpstreamIndexTables(ctx context.Context, executor publication.SQLExecuto
 	if err != nil {
 		return nil, moerr.NewInternalErrorf(ctx, "failed to query upstream index tables: %v", err)
 	}
-	defer cancel()
+	if cancel != nil {
+		defer cancel()
+	}
 	defer result.Close()
 
 	// QueryMoIndexesSQL returns: table_id, name, algo_table_type, index_table_name

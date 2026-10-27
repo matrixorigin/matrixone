@@ -1060,6 +1060,7 @@ type upstreamIndexTestExecutor struct {
 	err       error
 	query     string
 	cancelled bool
+	noCancel  bool
 }
 
 func (e *upstreamIndexTestExecutor) ExecSQL(_ context.Context, _ *publication.ActiveRoutine, accountID uint32, query string, useTxn, needRetry bool, timeout time.Duration) (*publication.Result, context.CancelFunc, error) {
@@ -1070,6 +1071,9 @@ func (e *upstreamIndexTestExecutor) ExecSQL(_ context.Context, _ *publication.Ac
 	e.query = query
 	if e.err != nil {
 		return nil, nil, e.err
+	}
+	if e.noCancel {
+		return e.result, nil, nil
 	}
 	return e.result, func() { e.cancelled = true }, nil
 }
@@ -1087,7 +1091,8 @@ func TestGetUpstreamIndexTables(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		malformed bool
-	}{{"rows", false}, {"scan error", true}} {
+		noCancel  bool
+	}{{"rows", false, false}, {"scan error", true, false}, {"nil cancel", false, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			mp := mpool.MustNewZeroNoFixed()
 			defer mpool.DeleteMPool(mp)
@@ -1102,7 +1107,7 @@ func TestGetUpstreamIndexTables(t *testing.T) {
 				b.Vecs[3] = nil
 			}
 			b.SetRowCount(3)
-			e := &upstreamIndexTestExecutor{t: t, result: publication.NewResultFromExecutorResult(executor.Result{Batches: []*batch.Batch{b}, Mp: mp})}
+			e := &upstreamIndexTestExecutor{t: t, noCancel: tc.noCancel, result: publication.NewResultFromExecutorResult(executor.Result{Batches: []*batch.Batch{b}, Mp: mp})}
 			got, err := getUpstreamIndexTables(ctx, e, 42, "tenant", "pub", "snap")
 			if tc.malformed {
 				require.Nil(t, got)
@@ -1111,7 +1116,7 @@ func TestGetUpstreamIndexTables(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, map[string]string{"table_one": "idx_one", "table_two": "idx_two"}, got)
 			}
-			require.True(t, e.cancelled)
+			require.Equal(t, !tc.noCancel, e.cancelled)
 			require.Equal(t, int64(0), mp.CurrNB())
 		})
 	}
