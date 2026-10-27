@@ -5526,9 +5526,7 @@ func TestTimestampDiff(t *testing.T) {
 
 // StartsWith
 
-func initStartsWithTestCase() []tcTemp {
-	// FIXME: Migrating the testcases as it was from the original functions code. May refactor it later. Original code:https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/startswith_test.go#L28
-	var charVecBase = []string{"-123", "123", "+123", "8", ""}
+func initAffixTestCase(info string, charVecBase []string) []tcTemp {
 	var charVecBase2 = []string{"-", "+", "1", ""}
 	var nsp1, nsp2 []uint64
 	var origVecs = make([]FunctionTestInput, 2)
@@ -5546,7 +5544,7 @@ func initStartsWithTestCase() []tcTemp {
 		}
 	}
 
-	makeFunctionTestInputEndsWith := func(values []string, nsp []uint64) FunctionTestInput {
+	makeAffixTestInput := func(values []string, nsp []uint64) FunctionTestInput {
 		totalCount := len(values)
 		strs := make([]string, totalCount)
 		nulls := make([]bool, totalCount)
@@ -5560,12 +5558,12 @@ func initStartsWithTestCase() []tcTemp {
 		return NewFunctionTestInput(types.T_varchar.ToType(), strs, nulls)
 	}
 
-	origVecs[0] = makeFunctionTestInputEndsWith(inputVec, nsp1)
-	origVecs[1] = makeFunctionTestInputEndsWith(inputVec2, nsp2)
+	origVecs[0] = makeAffixTestInput(inputVec, nsp1)
+	origVecs[1] = makeAffixTestInput(inputVec2, nsp2)
 
 	return []tcTemp{
 		{
-			info: "test StartsWith",
+			info: info,
 			inputs: []FunctionTestInput{
 				origVecs[0],
 				origVecs[1],
@@ -5578,7 +5576,7 @@ func initStartsWithTestCase() []tcTemp {
 }
 
 func TestStartsWith(t *testing.T) {
-	testCases := initStartsWithTestCase()
+	testCases := initAffixTestCase("test StartsWith", []string{"-123", "123", "+123", "8", ""})
 
 	// do the test work.
 	proc := testutil.NewProcess(t)
@@ -5591,59 +5589,8 @@ func TestStartsWith(t *testing.T) {
 
 // EndsWith
 
-func initEndsWithTestCase() []tcTemp {
-	// FIXME: Migrating the testcases as it was from the original functions code. May refactor it later. Original code:https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/endswith_test.go#L29
-	var charVecBase = []string{"123-", "321", "123+", "8", ""}
-	var charVecBase2 = []string{"-", "+", "1", ""}
-	var nsp1, nsp2 []uint64
-	var origVecs = make([]FunctionTestInput, 2)
-	n1, n2 := len(charVecBase), len(charVecBase2)
-	inputVec := make([]string, n1*n2)
-	inputVec2 := make([]string, len(inputVec))
-	for i := 0; i < len(inputVec); i++ {
-		inputVec[i] = charVecBase[i/n2]
-		inputVec2[i] = charVecBase2[i%n2]
-		if (i / n2) == (n1 - 1) {
-			nsp1 = append(nsp1, uint64(i))
-		}
-		if (i % n2) == (n2 - 1) {
-			nsp2 = append(nsp2, uint64(i))
-		}
-	}
-
-	makeFunctionTestInputEndsWith := func(values []string, nsp []uint64) FunctionTestInput {
-		totalCount := len(values)
-		strs := make([]string, totalCount)
-		nulls := make([]bool, totalCount)
-		for i := 0; i < totalCount; i++ {
-			strs[i] = values[i]
-		}
-		for i := 0; i < len(nsp); i++ {
-			idx := nsp[i]
-			nulls[idx] = true
-		}
-		return NewFunctionTestInput(types.T_varchar.ToType(), strs, nulls)
-	}
-
-	origVecs[0] = makeFunctionTestInputEndsWith(inputVec, nsp1)
-	origVecs[1] = makeFunctionTestInputEndsWith(inputVec2, nsp2)
-
-	return []tcTemp{
-		{
-			info: "test EndsWith",
-			inputs: []FunctionTestInput{
-				origVecs[0],
-				origVecs[1],
-			},
-			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{true, false, false, true, false, false, true, true, false, true, false, true, false, false, false, true, false, false, false, true},
-				[]bool{false, false, false, true, false, false, false, true, false, false, false, true, false, false, false, true, true, true, true, true}),
-		},
-	}
-}
-
 func TestEndsWith(t *testing.T) {
-	testCases := initEndsWithTestCase()
+	testCases := initAffixTestCase("test EndsWith", []string{"123-", "321", "123+", "8", ""})
 
 	// do the test work.
 	proc := testutil.NewProcess(t)
