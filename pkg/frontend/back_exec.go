@@ -79,6 +79,13 @@ func (back *backExec) Service() string {
 	return back.backSes.GetService()
 }
 
+func (back *backExec) getTxn() TxnOperator {
+	if back == nil || back.backSes == nil || back.backSes.GetTxnHandler() == nil {
+		return nil
+	}
+	return back.backSes.GetTxnHandler().GetTxn()
+}
+
 func (back *backExec) GetLastAffectedRows() int64 {
 	return back.backSes.lastAffectedRows
 }
@@ -206,7 +213,11 @@ func (back *backExec) exec(ctx context.Context, sql string, sqlMode string, useS
 
 	var statements []tree.Statement
 	if useSQLMode {
-		statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, v.(int64), sqlMode)
+		lowerCase, modeErr := plan2.RestoredViewLowerCaseTableNames(ctx, sql, v.(int64))
+		if modeErr != nil {
+			return modeErr
+		}
+		statements, err = parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, lowerCase, sqlMode)
 	} else {
 		statements, err = mysql.Parse(ctx, sql, v.(int64))
 	}
@@ -939,6 +950,12 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 			lowerCaseTableNames = 0
 		}
 		if input.useParserSQLMode {
+			// This parse produces the executed AST; preliminary classification
+			// in back.exec is not sufficient to preserve restored identifiers.
+			lowerCaseTableNames, err = plan2.RestoredViewLowerCaseTableNames(execCtx.reqCtx, input.getSql(), lowerCaseTableNames)
+			if err != nil {
+				return nil, err
+			}
 			stmts, err = parsers.ParseWithSQLMode(
 				execCtx.reqCtx,
 				dialect.MYSQL,
@@ -1756,6 +1773,31 @@ func (backSes *backSession) GetTempTable(dbName, alias string) (string, bool) {
 		return "", false
 	}
 	return backSes.upstream.GetTempTable(dbName, alias)
+}
+
+// Forgetting confirmed-dead ownership is irreversible, including in a failed
+// stored-procedure statement. Do not journal it as a normal temporary DROP.
+func (backSes *backSession) ForgetMissingTemporaryTable(dbName, alias, physical string) {
+	if backSes == nil {
+		return
+	}
+	if owner := upstreamUserSession(backSes); owner != nil {
+		owner.ForgetMissingTemporaryTable(dbName, alias, physical)
+	}
+}
+
+var _ process.MissingTemporaryTableForgetter = (*backSession)(nil)
+
+// OwnsTemporaryTable forwards physical ownership checks to the interactive
+// session. Background executors resolve the same temporary index relations as
+// their caller, so the shared temporary-table access gate must see the caller's
+// ownership map rather than treating the executor wrapper as a foreign session.
+func (backSes *backSession) OwnsTemporaryTable(dbName, physical string) bool {
+	if backSes == nil {
+		return false
+	}
+	owner := upstreamUserSession(backSes)
+	return owner != nil && owner.OwnsTemporaryTable(dbName, physical)
 }
 
 func (backSes *backSession) AddTempTable(dbName, alias, realName string) {

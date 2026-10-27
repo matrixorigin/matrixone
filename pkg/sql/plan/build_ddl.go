@@ -2188,8 +2188,16 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		defer ctx.SetBuildingAlterView(false, "", "")
 	}
 
+	creationContext, err := restoredViewCreationContext(ctx, createView.Database, string(viewName))
+	if err != nil {
+		return nil, err
+	}
 	tableDef, err := genViewTableDef(
-		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), stmt.CheckOption, true)
+		creationContext, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), stmt.CheckOption, true)
+	if err != nil {
+		return nil, err
+	}
+	tableDef.ViewSql.View, err = preserveRestoredViewDefinition(ctx.GetContext(), createView.Database, string(viewName), tableDef.ViewSql.View)
 	if err != nil {
 		return nil, err
 	}
@@ -2854,6 +2862,7 @@ func buildCreateTable(
 			cloneStmt,
 			recoveredLegacyChecks,
 			sub,
+			false, *parserSQLModeFromContext(ctx),
 		)
 		if err != nil {
 			return nil, err
@@ -6119,7 +6128,16 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 
 	dropTable.Table = string(name.ObjectName)
 
-	obj, tableDef, err := ctx.Resolve(dropTable.Database, dropTable.Table, nil)
+	var obj *plan.ObjectRef
+	var tableDef *plan.TableDef
+	var err error
+	if resolver, ok := ctx.(interface {
+		ResolveForDrop(string, string) (*plan.ObjectRef, *plan.TableDef, error)
+	}); ok {
+		obj, tableDef, err = resolver.ResolveForDrop(dropTable.Database, dropTable.Table)
+	} else {
+		obj, tableDef, err = ctx.Resolve(dropTable.Database, dropTable.Table, nil)
+	}
 	if err != nil {
 		return nil, err
 	}

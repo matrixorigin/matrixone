@@ -382,7 +382,7 @@ func TestModel(t *testing.T) {
 	models, _, err := LoadMetadata[float32](sqlproc, "db", "meta")
 	require.Nil(t, err)
 
-	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3), IndexCapacity: 1024}
 	idxcfg.Usearch.Metric = usearch.L2sq
 	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
 

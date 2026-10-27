@@ -1,0 +1,69 @@
+# Provenance: SHA-256 checksums of the vendored source files (pre-import-rename bytes from
+# github.com/XuPeng-SH/regexp2 @ 718f43e031fe, i.e. upstream github.com/dlclark/regexp2 v1.10.0
+# plus the fastclock patch). Format: <sha256>  <relative path>, sorted by path.
+8db174fc98abc02f154c20ffdacdfbd37528ef25e0f098e20a2c21defd76329a  ATTRIB
+9be5d04bb4d706914d5bf943710da4afeb42048f7c529902fb57c82762a991a9  LICENSE
+80994787bae39ae2360483f7533e26d90f92866412c5ed74b3385d76b55a5501  README.md
+08430988503c403052dc3bc396156ebe2d14ebb8a69feeb5177ba14b96cbdd37  fastclock.go
+4583b672bada706d423115ee56f39057ba4c8f943a63ed89c4c89b931e010210  fastclock_test.go
+b0c6e9950cf9b42bd1c9923052c006911531413a4399c4c4ee7746bf0465a520  match.go
+75639ce262721b64cb46e0b296166853d895609f3212fa8585583bca177f81a4  regexp.go
+59eff8995d2f09ed7eb257d50aabea052eda85f457d4d3cc0fb00cd928609c53  regexp_mono_test.go
+27c34bad6d2cd6ed08c84c458dd83745890c58c411577e06684bec1e1b2c5bac  regexp_options_test.go
+11c3ef3e65833152e0561688f8f4d0c93d6abb1f737a5dd97cafb90f26568afe  regexp_pcre_test.go
+521c9c151a9b7df7795265a5d0fbd395c0891fc1940ae6dcb675df62611a4761  regexp_performance_test.go
+678e036434aed65ec0c37afb85c36fc347a5b5d08baaad3fa2fb7532e698d796  regexp_re2_test.go
+468d17dd6984b243446e7908f33e9c437d619b3f704eee302df58b4f50bc7be9  regexp_test.go
+7ea1258b0b8c81dc23a8e8bd2a8ab19a26882373b330922c7d36009a9f8d3693  replace.go
+120448f85579592bb301bdc2a7c6960f9ffce5438316fbf5fdd18c49545db01c  replace_test.go
+7c2420c4cf0711b268afa90471d65730cdb2ac465e94c2cc8835904c51ee0087  rtl_test.go
+d160dc3b42d725fa7d1cdca7948fd1c8d9eb6b3cdf60ec633b8fab9190b373b2  runner.go
+253ca28270d737ad081aace106b4d762e17c3557f2f984c7cc32e476e55945b6  syntax/charclass.go
+c780ab296dad7ea89d3b58d3c74567b09021afe2a2eee45380ca95c3bedbe3b5  syntax/code.go
+cece641c5b0a4827c5edad207a6dbb5ecf824a414a048f94a77c2fded12892fb  syntax/escape.go
+3faccd8bf47d8f7476803ff44fce6f33da2d14d47a541ffa94f33bc754f90532  syntax/fuzz.go
+bd496f4ea446e0f0edae46c3a66e212e268bbe0772acc73d942952ddae46551d  syntax/parser.go
+4aeb1d53d8202f5ff0752014f779fcd806f40c883b357ccb6f1e114328673f7f  syntax/prefix.go
+ee60538fa0c0e1ad7d883641bab5b8c6c800cdcf9916d7273cfd8cf22db71d15  syntax/replacerdata.go
+963fa1ac521c28ecbc637de812eecfef32d2abb8dfeae1b85fa79291960797c3  syntax/tree.go
+74150fd601fb58e458fe294e895a2e1d431547d492fef41016d9796ebd7aeaf6  syntax/writer.go
+3022578323e2d68412c1e22a492acd3326b51d19f1ece95516e8ef54879bc2aa  testoutput1
+# ---------------------------------------------------------------------------
+# Round-11 MatrixOne policy corrections layered on the pinned upstream bytes
+# (#30210 review). The hashes above still pin the PRE-EDIT upstream bytes
+# (import renames excepted). The working tree additionally deviates as
+# follows, all confined to the .go files listed above:
+#   1. err-check policy (the Makefile err-check gate scans pkg/ production
+#      code for the two standard-library error-construction helper calls and
+#      requires moerr-style construction instead): the nine upstream
+#      error-construction sites now build error values through the
+#      MatrixOne-owned errString helper in the new errors.go /
+#      syntax/errors.go files. Text stays byte-identical where MatrixOne
+#      observes it (for example "match timeout after %v on input `%v`",
+#      consumed by pkg/sql/plan/function/regexp_icu.go).
+#   2. staticcheck ST1005 (error strings lower-case, no trailing
+#      punctuation): "Count too small" -> "count too small" (replace.go),
+#      "Unexpected op code" -> "unexpected op code" (code.go panic, matching
+#      the existing prefix.go panic text), "Unknown unicode category" ->
+#      "unknown unicode category" (charclass.go panic, matching the
+#      ErrUnknownSlashP constant text), ErrReplacementError text "Replacement
+#      pattern error." -> "replacement pattern error".
+#   3. Mechanical cleanups with no behavior change: dead stores removed
+#      (scanRegex/scanCharSet ch initializers in parser.go, final mergeArmMin
+#      live output in regexpclass/core.go), redundant or ineffective
+#      switch-case breaks deleted (runner.go, charclass.go, prefix.go,
+#      tree.go, writer.go, parser.go per S1023/SA4011), Yoda conditions
+#      flipped (runner.go, prefix.go per ST1017), strings.ContainsRune in
+#      escape.go (S1003), simplified bool compare in parser.go (S1002),
+#      fixed-width int32 counts in CharSet.mapHashFill (charclass.go SA1003
+#      - binary.Write silently failed on int), empty Debug branch dropped
+#      (runner.go SA9003), unused members removed (Match.caps field,
+#      Match.dump, parser.specialCase), gofmt normalization.
+#   4. SA9004: the five const groups (code.go InstOp, tree.go nodeType,
+#      parser.go RegexOptions, parser.go scan-blank byte classes, prefix.go
+#      AnchorLoc, plus writer.go before/afterChild and the mirrored
+#      RegexOptions group in regexp2/regexp.go) are now FULLY untyped so no
+#      group carries a type only on its first member. Removing the type from
+#      previously typed first members is invisible to every use site because
+#      untyped constants convert implicitly and no declaration infers its
+#      type from these constants.

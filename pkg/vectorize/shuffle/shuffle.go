@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func FixedLengthShuffle[T types.FixedSizeT](vs, ws []T, sels []int64) []T {
+func FixedLengthShuffle[T types.FixedSizeT, S int32 | int64](vs, ws []T, sels []S) []T {
 	for i, sel := range sels {
 		ws[i] = vs[sel]
 	}

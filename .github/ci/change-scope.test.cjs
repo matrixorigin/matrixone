@@ -474,7 +474,7 @@ test('SDK impact is retained across mixed changes, control files and both rename
     [[modified('clients/python/pyproject.toml'), modified('README.md')], { scope: 'sdk', sdk_required: true }],
     [[modified('pkg/a.go'), modified('clients/python/a.py')], { scope: 'full', sdk_required: true }],
     [[modified('pkg/a.go')], { scope: 'full', sdk_required: false }],
-    [[modified('.github/workflows/python-sdk.yml')], { scope: 'full', sdk_required: true }],
+    [[modified('.github/workflows/python-sdk.yml')], { scope: 'sdk', sdk_required: true }],
     [[modified('.github/ci/change-scope.cjs')], { scope: 'full', sdk_required: true }],
     [[modified('.github/workflows/entrypoint.yaml')], { scope: 'full', sdk_required: true }],
     [[{ filename: 'clients/python/a.py', previous_filename: 'pkg/a.go', status: 'renamed' }], { scope: 'full', sdk_required: true }],
@@ -566,16 +566,59 @@ test('the reusable SDK owner preserves the matrix and isolates untrusted checkou
   assert.match(offline, /include:[\s\S]*?- python: '3.11'\n            sqlalchemy: '>=2.1,<3'/);
   assert.match(offline, /name: python-sdk-\$\{\{ github.event.pull_request.head.sha \|\| github.sha \}\}-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}-\$\{\{ strategy.job-index \}\}/);
   assert.match(offline, /if: \$\{\{ !cancelled\(\) \}\}/);
+  const core = checkoutSpec(sections['core-import']);
+  assert.equal(core.repository, checkout.repository);
+  assert.equal(core.ref, checkout.ref);
+  assert.equal(core['persist-credentials'], 'false');
+  assert.equal(core['allow-unsafe-pr-checkout'], checkout['allow-unsafe-pr-checkout']);
+  assert.doesNotMatch(sections['core-import'], /secrets\.|environment:/);
   const onlineExpression = sections.online.match(/^    if: (.*)$/m)[1];
   for (const [event, enabled, expected] of [
     ['pull_request_target', true, false], ['workflow_call', true, false],
     ['push', true, false], ['workflow_dispatch', false, false], ['workflow_dispatch', true, true],
   ]) assert.equal(runInNewContext(onlineExpression, { github: { event_name: event }, inputs: { online: enabled } }), expected);
-  assert.match(sections.online, /environment: matrixone-sdk-integration/);
+  assert.match(sections.online, /^    environment: matrixone-sdk-\$\{\{ matrix\.server \}\}$/m);
+  assert.match(sections.online, /^        server: \['4\.2\.5', 'current-source'\]$/m);
+  const databaseGuard = sections.online.match(/      - name: Validate extended-suite database configuration\n        run: \|\n([\s\S]*?)(?=^      -)/m)[1];
+  for (const database of ['', 'sdk_contracts']) {
+    const result = spawnSync('bash', ['-eu', '-c', databaseGuard], {
+      env: { ...process.env, MATRIXONE_DATABASE: database }, encoding: 'utf8',
+    });
+    assert.equal(result.status === 0, database !== '', result.stderr);
+    if (!database) assert.match(result.stderr, /Configure MATRIXONE_DATABASE/);
+  }
+  assert.match(offline, /python scripts\/run_contracts\.py --output offline-contracts/);
+  assert.match(sections.online, /python scripts\/run_contracts\.py --server "\$SDK_SERVER_TARGET" --output online-contracts/);
+  assert.ok(readFileSync(join(__dirname, '../../clients/python/scripts/run_contracts.py'), 'utf8').length > 0);
   const group = sdk.match(/^  group: (.*)$/m)[1];
   assert.ok(group.startsWith('python-sdk/'));
   assert.ok(group.includes('github.event.pull_request.head.repo.full_name || github.repository'));
   assert.ok(group.includes('github.event.pull_request.head.ref || github.ref'));
   assert.notEqual(group, readFileSync(join(__dirname, '../workflows/entrypoint.yaml'), 'utf8').match(/^  group: (.*)$/m)[1]);
   assert.match(readFileSync(join(__dirname, '../workflows/ci-scope-check.yml'), 'utf8'), /'\.github\/workflows\/python-sdk.yml'/);
+});
+
+test('SDK workflow-only changes select SDK while trust and mixed kernel edits retain full scope', () => {
+  for (const path of ['.github/workflows/python-sdk.yml', 'clients/python/matrixone/client.py']) {
+    assert.deepEqual(classify([modified(path)], 1), { scope: 'sdk', sdk_required: true });
+  }
+  assert.deepEqual(classify([modified('clients/python/a.py'), modified('.github/workflows/python-sdk.yml')], 2), { scope: 'sdk', sdk_required: true });
+  for (const other of ['pkg/a.go', 'pkg/a_test.go', '.github/workflows/entrypoint.yaml', '.github/ci/change-scope.cjs']) {
+    assert.deepEqual(classify([modified('.github/workflows/python-sdk.yml'), modified(other)], 2), { scope: 'full', sdk_required: true });
+  }
+  assert.deepEqual(classify([{ filename: '.github/workflows/python-sdk.yml', previous_filename: 'pkg/a.go', status: 'renamed' }], 1), { scope: 'full', sdk_required: true });
+});
+
+test('Iceberg module checks retain the dependency path configuration', () => {
+  const workflow = readFileSync(join(__dirname, '../workflows/iceberg-connector.yml'), 'utf8');
+  const trigger = workflow.split('\npermissions:')[0];
+  const paths = [...trigger.matchAll(/^      - '([^']+)'$/gm)].map(match => match[1]);
+  // GitHub owns glob matching. Check the declared dependency boundary, not a local reimplementation.
+  assert.deepEqual(paths, [
+    '**/*.go', '**/go.mod', '**/go.sum', 'go.work', 'go.work.sum',
+    '**/*.s', '**/*.S', '**/*.c', '**/*.cc', '**/*.cpp', '**/*.h', '**/*.syso',
+    'pkg/iceberg/**', 'cgo/**', 'thirdparties/**', 'Makefile',
+    '.github/workflows/iceberg-connector.yml', '.github/ci/**',
+  ]);
+  assert.match(readFileSync(join(__dirname, '../workflows/ci-scope-check.yml'), 'utf8'), /'\.github\/workflows\/iceberg-connector.yml'/);
 });

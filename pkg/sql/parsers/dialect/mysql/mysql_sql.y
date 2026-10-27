@@ -222,6 +222,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     jsonTableColumn *tree.JSONTableColumn
     jsonTableColumns []*tree.JSONTableColumn
     jsonTableResponse *tree.JSONTableResponse
+    jsonTableCharset *string
     rowFormatType tree.RowFormatType
     matchType tree.MatchType
     fullTextSearchType tree.FullTextSearchType
@@ -477,6 +478,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <jsonTableColumns> json_table_columns
 %type <jsonTableResponse> json_table_response json_table_on_empty json_table_on_error
 %type <str> json_table_path_opt
+%type <jsonTableCharset> json_table_charset_opt
 %nonassoc EMPTY
 %left <str> UNION EXCEPT INTERSECT MINUS
 %nonassoc LOWER_THAN_ORDER
@@ -669,12 +671,12 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 // Built-in function
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT APPROX_COUNT_DISTINCT SERIAL_EXTRACT
-%token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
+%token <str> APPROX_PERCENTILE QUANTILE_EXACT_WEIGHTED CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
 %token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV MEDIAN
 %token <str> CLUSTER_CENTERS KMEANS
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG RANK ROW_NUMBER
-%token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK
+%token <str> DENSE_RANK CUME_DIST BIT_CAST LAG LEAD FIRST_VALUE LAST_VALUE NTH_VALUE NTILE PERCENT_RANK MRANK CUMRANK TMRANK
 %token <str> SMA WMA TRIMA EMA WILDER KAMA DEMA TEMA T3 MMAXDRAWDOWN CUMPOSITIVESTREAK
 %token <str> BITMAP_BIT_POSITION BITMAP_BUCKET_NUMBER BITMAP_COUNT BITMAP_CONSTRUCT_AGG BITMAP_OR_AGG
 %token <str> JSON_ARRAYAGG JSON_OBJECTAGG
@@ -8486,12 +8488,17 @@ json_table_columns:
 json_table_column:
     ident FOR JSON_TABLE_ORDINALITY
     { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "ordinality"} }
-|   ident column_type JSON_TABLE_PATH STRING json_table_policies
-    { $$ = $5; $$.Name = $1.Origin(); $$.Kind = "path"; $$.Type = $2; $$.Path = $4 }
-|   ident column_type EXISTS JSON_TABLE_PATH STRING
-    { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "exists", Type: $2, Path: $5} }
+|   ident column_type json_table_charset_opt JSON_TABLE_PATH STRING json_table_policies
+    { $$ = $6; $$.Name = $1.Origin(); $$.Kind = "path"; $$.Type = $2; $$.Charset = $3; $$.Path = $5 }
+|   ident column_type json_table_charset_opt EXISTS JSON_TABLE_PATH STRING
+    { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "exists", Type: $2, Charset: $3, Path: $6} }
 |   JSON_TABLE_NESTED json_table_path_opt STRING COLUMNS '(' json_table_columns ')'
     { $$ = &tree.JSONTableColumn{Kind: "nested", Path: $3, Children: $6} }
+
+json_table_charset_opt:
+    { $$ = nil }
+|   charset_keyword charset_name
+    { charset := $2; $$ = &charset }
 
 json_table_path_opt:
     { $$ = "" }
@@ -13432,6 +13439,36 @@ function_call_window:
             WindowSpec: $9,
         }
     }
+|	MRANK '(' expression ',' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            WindowSpec: $7,
+        }
+    }
+|	CUMRANK '(' expression ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3},
+            WindowSpec: $5,
+        }
+    }
+|	TMRANK '(' expression ',' interval_expr ')' window_spec
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: tree.Exprs{$3, $5},
+            WindowSpec: $7,
+        }
+    }
 
 |	SMA '(' expression_list ')' window_spec_opt
     {
@@ -14107,6 +14144,17 @@ function_call_aggregate:
             WindowSpec: $6,
             OrderBy: $5,
             WithinGroup: $5 != nil,
+        }
+    }
+|   QUANTILE_EXACT_WEIGHTED '(' func_type_opt expression_list ')' window_spec_opt
+    {
+        name := tree.NewUnresolvedColName($1)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr($1, 1),
+            Exprs: $4,
+            Type: $3,
+            WindowSpec: $6,
         }
     }
 |  CLUSTER_CENTERS '(' func_type_opt expression_list order_by_opt kmeans_opt ')' window_spec_opt
@@ -17051,6 +17099,9 @@ non_reserved_keyword:
 |   FIRST_VALUE
 |   LAST_VALUE
 |   NTH_VALUE
+|   MRANK
+|   CUMRANK
+|   TMRANK
 |   SMA
 |   WMA
 |   TRIMA
@@ -17084,6 +17135,7 @@ not_keyword:
 |   APPROX_COUNT
 |   APPROX_COUNT_DISTINCT
 |   APPROX_PERCENTILE
+|   QUANTILE_EXACT_WEIGHTED
 |   CURDATE
 |   CURTIME
 |   DATE_ADD

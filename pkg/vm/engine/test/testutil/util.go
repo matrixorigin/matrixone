@@ -24,7 +24,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/rand"
 
@@ -51,13 +50,6 @@ func GetDefaultTestPath(module string, t *testing.T) string {
 	usr, _ := user.Current()
 	dirName := fmt.Sprintf("%s-ut-workspace", usr.Username)
 	return filepath.Join("/tmp", dirName, module, t.Name())
-}
-
-func MakeDefaultTestPath(module string, t *testing.T) string {
-	path := GetDefaultTestPath(module, t)
-	err := os.MkdirAll(path, os.FileMode(0755))
-	assert.Nil(t, err)
-	return path
 }
 
 type TestDisttaeEngineOptions func(*TestDisttaeEngine)
@@ -212,37 +204,6 @@ func EngineTableDefBySchema(schema *catalog.Schema) ([]engine.TableDef, error) {
 	}
 
 	return defs, nil
-}
-
-func EngineDefAddIndex(defs []engine.TableDef, idxColName string) []engine.TableDef {
-	indexes := []*plan.IndexDef{
-		{
-			IndexName:          "hnsw_idx",
-			TableExist:         true,
-			IndexAlgo:          catalog2.MoIndexHnswAlgo.ToString(),
-			IndexAlgoTableType: catalog2.Hnsw_TblType_Metadata,
-			IndexTableName:     "meta_tbl",
-			Parts:              []string{idxColName},
-			IndexAlgoParams:    `{"m":"16","ef_construction":"200","ef_search":"100","op_type":"vector_l2_ops"}`,
-		},
-		{
-			IndexName:          "hnsw_idx",
-			TableExist:         true,
-			IndexAlgo:          catalog2.MoIndexHnswAlgo.ToString(),
-			IndexAlgoTableType: catalog2.Hnsw_TblType_Storage,
-			IndexTableName:     "storage_tbl",
-			Parts:              []string{idxColName},
-			IndexAlgoParams:    `{"m":"16","ef_construction":"200","ef_search":"100","op_type":"vector_l2_ops"}`,
-		},
-	}
-	for _, def := range defs {
-		if con, ok := def.(*engine.ConstraintDef); ok {
-			con.Cts = append(con.Cts, &engine.IndexDef{
-				Indexes: indexes,
-			})
-		}
-	}
-	return defs
 }
 
 func NewDefaultTableReader(

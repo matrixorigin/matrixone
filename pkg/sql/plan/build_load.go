@@ -81,17 +81,23 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 	var newCols []*ColDef
 
 	newTableDef := DeepCopyTableDef(tableDef, true)
+	// Legacy DML filters Cols without rebuilding Name2ColIndex. Resolve against
+	// the actual columns once instead of scanning the schema for every target.
+	columns := make(map[string]*ColDef, len(newTableDef.Cols))
+	for _, column := range newTableDef.Cols {
+		columns[column.Name] = column
+	}
 	colPos := 0
 	for i, col := range stmt.Param.Tail.ColumnList {
 		switch realCol := col.(type) {
 		case *tree.UnresolvedName:
 			colName := realCol.ColName()
-			if _, ok := newTableDef.Name2ColIndex[colName]; !ok {
+			column := columns[colName]
+			if column == nil || column.Hidden {
 				return nil, nil, nil, nil, moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%s' does not exist", colName)
 			}
-			tbColIdx := newTableDef.Name2ColIndex[colName]
 			colExpr := &plan.Expr{
-				Typ: loadTimeInputType(stmt.Param.Format, newTableDef.Cols[tbColIdx].Typ),
+				Typ: loadTimeInputType(stmt.Param.Format, column.Typ),
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						ColPos: int32(colPos),
@@ -103,7 +109,7 @@ func getExternalWithColListProject(stmt *tree.Load, ctx CompilerContext, tableDe
 			colToIndex[colName] = int32(colPos)
 			colPos++
 			tbColToDataCol[colName] = int32(i)
-			newCols = append(newCols, newTableDef.Cols[tbColIdx])
+			newCols = append(newCols, column)
 		case *tree.VarExpr:
 			// Row-variable slots are recorded after target columns so referenced
 			// values can be exposed to the LOAD assignment projection.
@@ -634,7 +640,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err != nil {
 		return nil, err
 	}
-	if err := validateLoadSetAssignments(stmt.Param, ctx); err != nil {
+	if err := validateLoadSetAssignments(stmt.Param, ctx, tblInfo.tableDefs[0]); err != nil {
 		return nil, err
 	}
 	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)
