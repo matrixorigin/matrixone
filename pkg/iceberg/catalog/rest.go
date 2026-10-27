@@ -346,7 +346,7 @@ func (c *RESTClient) LoadTable(ctx context.Context, req api.LoadTableRequest) (*
 		Namespace:           req.Namespace,
 		TableName:           req.Table,
 		MetadataLocation:    wire.MetadataLocation,
-		MetadataJSON:        cloneRawMessage(wire.Metadata),
+		MetadataJSON:        append([]byte(nil), wire.Metadata...),
 		Config:              api.CloneNonEmptyMap(wire.Config),
 		TableToken:          tableTokenFromConfig(wire.Config),
 		StorageCredentials:  storageCredentialsFromWire(wire.StorageCredentials),
@@ -410,7 +410,7 @@ func (c *RESTClient) CreateTable(ctx context.Context, req api.CreateTableRequest
 		MetadataLocationHash: api.PathHash(wire.MetadataLocation),
 		TableUUID:            api.FirstNonEmptyTrimmed(wire.Config["table-uuid"], wire.Config["uuid"]),
 		Config:               api.CloneNonEmptyMap(wire.Config),
-		MetadataJSON:         cloneRawMessage(wire.Metadata),
+		MetadataJSON:         append([]byte(nil), wire.Metadata...),
 		StorageCredentials:   storageCredentialsFromWire(wire.StorageCredentials),
 	}, nil
 }
@@ -1255,15 +1255,6 @@ func cloneConfigResponse(in api.ConfigResponse) api.ConfigResponse {
 	out.Defaults = api.CloneNonEmptyMap(in.Defaults)
 	out.Overrides = api.CloneNonEmptyMap(in.Overrides)
 	out.Endpoints = append([]string(nil), in.Endpoints...)
-	return out
-}
-
-func cloneRawMessage(in json.RawMessage) json.RawMessage {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(json.RawMessage, len(in))
-	copy(out, in)
 	return out
 }
 
