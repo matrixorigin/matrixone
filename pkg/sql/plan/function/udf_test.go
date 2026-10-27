@@ -447,3 +447,8 @@ func TestPythonInvocationTupleUsesOneShotGroupsByDefault(t *testing.T) {
 	require.Equal(t, "shared-group", shared.GroupID)
 	require.Equal(t, uint64(3), shared.GroupEpoch)
 }
+
+func TestLegacyPythonCheckerRejectsMissingMetadata(t *testing.T) {
+	require.Equal(t, failedFunctionParametersWrong, checkPythonUdf(nil, nil).status)
+	require.Equal(t, failedFunctionParametersWrong, checkPythonUdf(nil, []types.Type{types.T_blob.ToType()}).status)
+}
