@@ -1312,29 +1312,39 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries .
 		return err
 	}
 
+	return writeLocalMutatorEntries(l.fileWithChecksum, baseOffset, entries)
+}
+
+type localMutatorFile interface {
+	io.Writer
+	io.WriterAt
+	io.Seeker
+}
+
+func writeLocalMutatorEntries(file localMutatorFile, baseOffset int64, entries []IOEntry) error {
 	// write
 	for _, entry := range entries {
 
 		if entry.ReaderForWrite != nil {
 			// seek and copy
-			_, err := l.fileWithChecksum.Seek(entry.Offset+baseOffset, 0)
+			_, err := file.Seek(entry.Offset+baseOffset, 0)
 			if err != nil {
 				return err
 			}
 			var buf []byte
 			put := ioBufferPool.Get(&buf)
 			defer put.Put()
-			n, err := io.CopyBuffer(l.fileWithChecksum, entry.ReaderForWrite, buf)
+			n, err := io.CopyBuffer(file, entry.ReaderForWrite, buf)
 			if err != nil {
 				return err
 			}
-			if int64(n) != entry.Size {
+			if n != entry.Size {
 				return moerr.NewSizeNotMatchNoCtx("")
 			}
 
 		} else {
 			// WriteAt
-			n, err := l.fileWithChecksum.WriteAt(entry.Data, int64(entry.Offset+baseOffset))
+			n, err := file.WriteAt(entry.Data, int64(entry.Offset+baseOffset))
 			if err != nil {
 				return err
 			}

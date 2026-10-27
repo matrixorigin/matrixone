@@ -706,40 +706,7 @@ func (l *LocalETLFSMutator) mutate(ctx context.Context, baseOffset int64, entrie
 	default:
 	}
 
-	// write
-	for _, entry := range entries {
-
-		if entry.ReaderForWrite != nil {
-			// seek and copy
-			_, err := l.osFile.Seek(int64(entry.Offset+baseOffset), 0)
-			if err != nil {
-				return err
-			}
-			var buf []byte
-			put := ioBufferPool.Get(&buf)
-			defer put.Put()
-			n, err := io.CopyBuffer(l.osFile, entry.ReaderForWrite, buf)
-			if err != nil {
-				return err
-			}
-			if n != entry.Size {
-				return moerr.NewSizeNotMatchNoCtx("")
-			}
-
-		} else {
-			// WriteAt
-			n, err := l.osFile.WriteAt(entry.Data, int64(entry.Offset+baseOffset))
-			if err != nil {
-				return err
-			}
-			if int64(n) != entry.Size {
-				return moerr.NewSizeNotMatchNoCtx("")
-			}
-		}
-
-	}
-
-	return nil
+	return writeLocalMutatorEntries(l.osFile, baseOffset, entries)
 }
 
 func (l *LocalETLFSMutator) Close() error {

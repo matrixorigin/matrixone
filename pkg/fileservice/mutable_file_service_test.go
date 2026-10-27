@@ -15,7 +15,9 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"testing"
 
@@ -176,6 +178,14 @@ func testMutableFileService(
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("123dq123"), vec.Entries[0].Data)
+
+	// Reader-backed mutations must report reader errors and declared-size mismatches.
+	err = mutator.Mutate(ctx, IOEntry{Offset: 0, Size: 1, ReaderForWrite: errReader{}})
+	assert.ErrorIs(t, err, io.ErrShortWrite)
+	err = mutator.Mutate(ctx, IOEntry{Offset: 0, Size: 2, ReaderForWrite: bytes.NewReader([]byte("x"))})
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrSizeNotMatch), "got %v", err)
+	err = mutator.Mutate(ctx, IOEntry{Offset: 0, Size: 1, ReaderForWrite: bytes.NewReader([]byte("y"))})
+	assert.NoError(t, err)
 
 	// context canceled
 	ctx, cancel := context.WithCancel(context.Background())
