@@ -440,96 +440,46 @@ func TestOrdUsesRowStringDomain(t *testing.T) {
 
 // QUOTE
 func initQuoteTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "test quote basic string",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello", "World", "Test"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'Hello'", "'World'", "'Test'"},
-				[]bool{false, false, false}),
-		},
-		{
-			info: "test quote with single quote",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Don't", "It's", "O'Brien"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'Don\\'t'", "'It\\'s'", "'O\\'Brien'"},
-				[]bool{false, false, false}),
-		},
-		{
-			info: "test quote with backslash",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"C:\\path", "test\\file"},
-					[]bool{false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'C:\\\\path'", "'test\\\\file'"},
-				[]bool{false, false}),
-		},
-		{
-			info: "test quote with control characters",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"line1\nline2", "tab\ttest", "null\x00byte"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'line1\nline2'", "'tab\ttest'", "'null\\0byte'"},
-				[]bool{false, false, false}),
-		},
-		{
-			info: "test quote empty string",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{""},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"''"},
-				[]bool{false}),
-		},
-		{
-			info: "test quote with NULL",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"test"},
-					[]bool{true}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"NULL"},
-				[]bool{false}),
-		},
-		{
-			info: "test quote with carriage return",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"line1\rline2"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'line1\rline2'"},
-				[]bool{false}),
-		},
-		{
-			info: "test quote with Ctrl+Z",
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"test\x1aend"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"'test\\Zend'"},
-				[]bool{false}),
-		},
+	cases := []struct {
+		info        string
+		values      []string
+		inputNulls  []bool
+		want        []string
+		outputNulls []bool
+	}{
+
+		{info: "test quote basic string",
+			values: []string{"Hello", "World", "Test"}, inputNulls: []bool{false, false, false},
+			want: []string{"'Hello'", "'World'", "'Test'"}, outputNulls: []bool{false, false, false}},
+		{info: "test quote with single quote",
+			values: []string{"Don't", "It's", "O'Brien"}, inputNulls: []bool{false, false, false},
+			want: []string{"'Don\\'t'", "'It\\'s'", "'O\\'Brien'"}, outputNulls: []bool{false, false, false}},
+		{info: "test quote with backslash",
+			values: []string{"C:\\path", "test\\file"}, inputNulls: []bool{false, false},
+			want: []string{"'C:\\\\path'", "'test\\\\file'"}, outputNulls: []bool{false, false}},
+		{info: "test quote with control characters",
+			values: []string{"line1\nline2", "tab\ttest", "null\x00byte"}, inputNulls: []bool{false, false, false},
+			want: []string{"'line1\nline2'", "'tab\ttest'", "'null\\0byte'"}, outputNulls: []bool{false, false, false}},
+		{info: "test quote empty string",
+			values: []string{""}, inputNulls: []bool{false},
+			want: []string{"''"}, outputNulls: []bool{false}},
+		{info: "test quote with NULL",
+			values: []string{"test"}, inputNulls: []bool{true},
+			want: []string{"NULL"}, outputNulls: []bool{false}},
+		{info: "test quote with carriage return",
+			values: []string{"line1\rline2"}, inputNulls: []bool{false},
+			want: []string{"'line1\rline2'"}, outputNulls: []bool{false}},
+		{info: "test quote with Ctrl+Z",
+			values: []string{"test\x1aend"}, inputNulls: []bool{false},
+			want: []string{"'test\\Zend'"}, outputNulls: []bool{false}},
 	}
+	result := make([]tcTemp, 0, len(cases))
+	for _, c := range cases {
+		result = append(result, tcTemp{info: c.info,
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), c.values, c.inputNulls)},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, c.want, c.outputNulls)})
+	}
+	return result
 }
 
 func TestQuote(t *testing.T) {

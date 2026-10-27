@@ -4214,87 +4214,43 @@ func TestFromUnixTimeReturnType(t *testing.T) {
 }
 
 func initStrCmpTestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "basic",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"apple", "apple", "apple", "apple"},
-					[]bool{false, false, false, false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"apple", "orange", "banana", "app"},
-					[]bool{false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
-				[]int8{0, -1, -1, 1},
-				[]bool{false, false, false, false}),
-		},
+	cases := []struct {
+		info                  string
+		leftType, rightType   types.T
+		left, right           []string
+		leftNulls, rightNulls []bool
+		want                  []int8
+		outputNulls           []bool
+	}{
 
-		{
-			info: "null handling",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"a", "", "a", ""},
-					[]bool{false, false, false, true}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"a", "a", "", ""},
-					[]bool{false, true, false, true}),
-			},
-			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
-				[]int8{0, 0, 1, 0},
-				[]bool{false, true, false, true}),
-		},
-
-		{
-			info: "edge cases",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"", "a", "a ", "a", "A"},
-					[]bool{false, false, false, false, false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"", "a", "a", "a ", "a"},
-					[]bool{false, false, false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
-				[]int8{0, 0, 1, -1, -1},
-				[]bool{false, false, false, false, false}),
-		},
-
-		{
-			info: "different types",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"a", "b", "c"},
-					[]bool{false, false, false}),
-				NewFunctionTestInput(types.T_binary.ToType(),
-					[]string{"A", "b", "d"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
-				[]int8{1, 0, -1},
-				[]bool{false, false, false}),
-		},
-
-		{
-			info: "char padding",
-			typ:  types.T_char,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_char.ToType(),
-					[]string{"a", "a ", "a  "},
-					[]bool{false, false, false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"a", "a", "a"},
-					[]bool{false, false, false}),
-			},
-			expect: NewFunctionTestResult(types.T_int8.ToType(), false,
-				[]int8{0, 1, 1},
-				[]bool{false, false, false}),
-		},
+		{info: "basic", leftType: types.T_varchar, rightType: types.T_varchar,
+			left: []string{"apple", "apple", "apple", "apple"}, right: []string{"apple", "orange", "banana", "app"},
+			leftNulls: []bool{false, false, false, false}, rightNulls: []bool{false, false, false, false},
+			want: []int8{0, -1, -1, 1}, outputNulls: []bool{false, false, false, false}},
+		{info: "null handling", leftType: types.T_varchar, rightType: types.T_varchar,
+			left: []string{"a", "", "a", ""}, right: []string{"a", "a", "", ""},
+			leftNulls: []bool{false, false, false, true}, rightNulls: []bool{false, true, false, true},
+			want: []int8{0, 0, 1, 0}, outputNulls: []bool{false, true, false, true}},
+		{info: "edge cases", leftType: types.T_varchar, rightType: types.T_varchar,
+			left: []string{"", "a", "a ", "a", "A"}, right: []string{"", "a", "a", "a ", "a"},
+			leftNulls: []bool{false, false, false, false, false}, rightNulls: []bool{false, false, false, false, false},
+			want: []int8{0, 0, 1, -1, -1}, outputNulls: []bool{false, false, false, false, false}},
+		{info: "different types", leftType: types.T_varchar, rightType: types.T_binary,
+			left: []string{"a", "b", "c"}, right: []string{"A", "b", "d"},
+			leftNulls: []bool{false, false, false}, rightNulls: []bool{false, false, false},
+			want: []int8{1, 0, -1}, outputNulls: []bool{false, false, false}},
+		{info: "char padding", leftType: types.T_char, rightType: types.T_varchar,
+			left: []string{"a", "a ", "a  "}, right: []string{"a", "a", "a"},
+			leftNulls: []bool{false, false, false}, rightNulls: []bool{false, false, false},
+			want: []int8{0, 1, 1}, outputNulls: []bool{false, false, false}},
 	}
+	result := make([]tcTemp, 0, len(cases))
+	for _, c := range cases {
+		result = append(result, tcTemp{info: c.info, typ: c.leftType,
+			inputs: []FunctionTestInput{NewFunctionTestInput(c.leftType.ToType(), c.left, c.leftNulls), NewFunctionTestInput(c.rightType.ToType(), c.right, c.rightNulls)},
+			expect: NewFunctionTestResult(types.T_int8.ToType(), false, c.want, c.outputNulls)})
+	}
+	return result
 }
 
 func TestStrCmp(t *testing.T) {
