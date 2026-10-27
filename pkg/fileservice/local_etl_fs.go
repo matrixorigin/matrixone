@@ -43,34 +43,12 @@ type LocalETLFS struct {
 var _ FileService = new(LocalETLFS)
 
 func NewLocalETLFS(name string, rootPath string) (*LocalETLFS, error) {
-	// An empty root historically meant the current working directory for final
-	// paths, but os.CreateTemp("", ...) uses the system temporary directory.
-	// Canonicalize the root first so temporary writes and their atomic rename
-	// target always belong to the same configured filesystem tree.
-	if rootPath == "" {
-		rootPath = "."
-	}
-	var err error
-	rootPath, err = filepath.Abs(rootPath)
+	rootPath, rootFile, err := prepareLocalRoot(rootPath)
 	if err != nil {
 		return nil, err
 	}
-
-	// ensure dir
-	f, err := os.Open(rootPath)
-	if os.IsNotExist(err) {
-		// not exists, create
-		err := os.MkdirAll(rootPath, 0755)
-		if err != nil {
-			return nil, err
-		}
-
-	} else if err != nil {
-		// stat error
-		return nil, err
-
-	} else {
-		defer f.Close()
+	if rootFile != nil {
+		defer rootFile.Close()
 	}
 
 	// resolve symlinks in the path to get the canonical path

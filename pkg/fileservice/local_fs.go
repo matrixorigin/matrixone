@@ -108,34 +108,12 @@ func newLocalFS(
 	noChecksum bool,
 ) (*LocalFS, error) {
 
-	// Keep os.CreateTemp and the final rename under one filesystem root. An
-	// empty root still means the current working directory, but make that
-	// meaning explicit before any temporary file is created.
-	if rootPath == "" {
-		rootPath = "."
-	}
-	var err error
-	rootPath, err = filepath.Abs(rootPath)
+	rootPath, rootFile, err := prepareLocalRoot(rootPath)
 	if err != nil {
 		return nil, err
 	}
-
-	// ensure dir
-	f, err := os.Open(rootPath)
-	if os.IsNotExist(err) {
-		// not exists, create
-		err := os.MkdirAll(rootPath, 0755)
-		if err != nil {
-			return nil, err
-		}
-
-	} else if err != nil {
-		// stat error
-		return nil, err
-
-	} else {
-		defer f.Close()
-
+	if rootFile != nil {
+		defer rootFile.Close()
 	}
 
 	fs := &LocalFS{
@@ -1247,6 +1225,29 @@ func syncLocalDir(mu *sync.RWMutex, dirFiles map[string]*os.File, nativePath str
 		return err
 	}
 	return nil
+}
+
+// prepareLocalRoot keeps temporary writes on the same filesystem as their destination.
+// The caller closes the returned directory handle when its constructor returns.
+func prepareLocalRoot(rootPath string) (string, *os.File, error) {
+	if rootPath == "" {
+		rootPath = "."
+	}
+	rootPath, err := filepath.Abs(rootPath)
+	if err != nil {
+		return "", nil, err
+	}
+	rootFile, err := os.Open(rootPath)
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(rootPath, 0755); err != nil {
+			return "", nil, err
+		}
+		return rootPath, nil, nil
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	return rootPath, rootFile, nil
 }
 
 func (l *LocalFS) toNativeFilePath(filePath string) string {
