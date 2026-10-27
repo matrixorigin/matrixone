@@ -935,125 +935,54 @@ func TestCoalesce(t *testing.T) {
 	}
 }
 
-func initTimestampAddTestCase() []tcTemp {
-	d1, _ := types.ParseDateCast("2024-12-20")
-	r1, _ := types.ParseDateCast("2024-12-25") // +5 days
-	d2, _ := types.ParseDatetime("2024-12-20 10:30:45", 6)
-	r2, _ := types.ParseDatetime("2024-12-25 10:30:45", 6) // +5 days
-	d3, _ := types.ParseTimestamp(time.Local, "2024-12-20 10:30:45", 6)
-	r3, _ := types.ParseTimestamp(time.Local, "2024-12-25 10:30:45", 6) // +5 days
+func initTimestampAddTestCase(t *testing.T) []tcTemp {
+	t.Helper()
+	d1, err := types.ParseDateCast("2024-12-20")
+	require.NoError(t, err)
+	r1, err := types.ParseDateCast("2024-12-25")
+	require.NoError(t, err)
+	d2, err := types.ParseDatetime("2024-12-20 10:30:45", 6)
+	require.NoError(t, err)
+	r2, err := types.ParseDatetime("2024-12-25 10:30:45", 6)
+	require.NoError(t, err)
+	d3, err := types.ParseTimestamp(time.Local, "2024-12-20 10:30:45", 6)
+	require.NoError(t, err)
+	r3, err := types.ParseTimestamp(time.Local, "2024-12-25 10:30:45", 6)
+	require.NoError(t, err)
 
-	return []tcTemp{
-		{
-			info: "test TimestampAdd - DATE with DAY",
-			typ:  types.T_date,
-			inputs: []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_date.ToType(),
-					[]types.Date{d1},
-					[]bool{false}),
-			},
-			// MySQL behavior: DATE input + date unit → DATE output
-			// TimestampAddDate uses SetType to change vector type to DATE for date units
-			expect: NewFunctionTestResult(types.T_date.ToType(), false,
-				[]types.Date{r1},
-				[]bool{false}),
-		},
-		{
-			info: "test TimestampAdd - DATETIME with DAY",
-			typ:  types.T_datetime,
-			inputs: []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_datetime.ToType(),
-					[]types.Datetime{d2},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
-				[]types.Datetime{r2},
-				[]bool{false}),
-		},
-		{
-			info: "test TimestampAdd - TIMESTAMP with DAY",
-			typ:  types.T_timestamp,
-			inputs: []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_timestamp.ToType(),
-					[]types.Timestamp{d3},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_timestamp.ToType(), false,
-				[]types.Timestamp{r3},
-				[]bool{false}),
-		},
-		{
-			info: "test TimestampAdd - VARCHAR with DAY",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"2024-12-20 10:30:45"},
-					[]bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"2024-12-25 10:30:45"},
-				[]bool{false}),
-		},
-		// Note: DATE with HOUR (time unit) returns DATETIME type at runtime via TempSetType
-		// This test case is skipped because the test framework cannot handle dynamic type changes
-		// The functionality is tested in TestAddIntervalMicrosecond in datetime_test.go
-		{
-			info: "test TimestampAdd - DATE input is NULL",
-			typ:  types.T_date,
-			inputs: []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{false}),
-				NewFunctionTestInput(types.T_date.ToType(),
-					[]types.Date{d1},
-					[]bool{true}),
-			},
-			// MySQL behavior: DATE input + date unit → DATE output
-			// TimestampAddDate uses SetType to change vector type to DATE for date units
-			expect: NewFunctionTestResult(types.T_date.ToType(), false,
-				[]types.Date{types.Date(0)},
-				[]bool{true}),
-		},
-		{
-			info: "test TimestampAdd - interval is NULL",
-			typ:  types.T_date,
-			inputs: []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
-				NewFunctionTestInput(types.T_int64.ToType(),
-					[]int64{5},
-					[]bool{true}),
-				NewFunctionTestInput(types.T_date.ToType(),
-					[]types.Date{d1},
-					[]bool{false}),
-			},
-			// MySQL behavior: DATE input + date unit → DATE output
-			// TimestampAddDate uses SetType to change vector type to DATE for date units
-			expect: NewFunctionTestResult(types.T_date.ToType(), false,
-				[]types.Date{types.Date(0)},
-				[]bool{true}),
-		},
+	cases := []struct {
+		info                              string
+		typ                               types.T
+		value, want                       any
+		intervalNull, valueNull, wantNull bool
+	}{
+		{"test TimestampAdd - DATE with DAY", types.T_date, []types.Date{d1}, []types.Date{r1}, false, false, false},
+		{"test TimestampAdd - DATETIME with DAY", types.T_datetime, []types.Datetime{d2}, []types.Datetime{r2}, false, false, false},
+		{"test TimestampAdd - TIMESTAMP with DAY", types.T_timestamp, []types.Timestamp{d3}, []types.Timestamp{r3}, false, false, false},
+		{"test TimestampAdd - VARCHAR with DAY", types.T_varchar, []string{"2024-12-20 10:30:45"}, []string{"2024-12-25 10:30:45"}, false, false, false},
+		{"test TimestampAdd - DATE input is NULL", types.T_date, []types.Date{d1}, []types.Date{0}, false, true, true},
+		{"test TimestampAdd - interval is NULL", types.T_date, []types.Date{d1}, []types.Date{0}, true, false, true},
 	}
+	// DATE plus a time unit changes the result type dynamically; it is covered
+	// by TestAddIntervalMicrosecond in datetime_test.go.
+	result := make([]tcTemp, 0, len(cases))
+	for _, tc := range cases {
+		result = append(result, tcTemp{
+			info: tc.info,
+			typ:  tc.typ,
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"DAY"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{5}, []bool{tc.intervalNull}),
+				NewFunctionTestInput(tc.typ.ToType(), tc.value, []bool{tc.valueNull}),
+			},
+			expect: NewFunctionTestResult(tc.typ.ToType(), false, tc.want, []bool{tc.wantNull}),
+		})
+	}
+	return result
 }
 
 func TestTimestampAdd(t *testing.T) {
-	testCases := initTimestampAddTestCase()
+	testCases := initTimestampAddTestCase(t)
 
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
