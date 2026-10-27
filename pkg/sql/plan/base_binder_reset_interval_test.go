@@ -99,19 +99,17 @@ func makeNullConst(oid types.T, scale int32) *plan.Expr {
 	}
 }
 
-// Helper to extract int64 value from expression
-func extractInt64FromExpr(expr *plan.Expr) int64 {
-	if lit, ok := expr.Expr.(*plan.Expr_Lit); ok {
-		if i64val, ok := lit.Lit.Value.(*plan.Literal_I64Val); ok {
-			return i64val.I64Val
-		}
-	} else if funcExpr, ok := expr.Expr.(*plan.Expr_F); ok && funcExpr.F != nil {
-		// For cast functions, try to extract from the first argument
-		if len(funcExpr.F.Args) > 0 {
-			return extractInt64FromExpr(funcExpr.F.Args[0])
-		}
+// extractInt64FromExpr checks an int64 literal, optionally wrapped in casts.
+func extractInt64FromExpr(t *testing.T, expr *plan.Expr) int64 {
+	t.Helper()
+	require.NotNil(t, expr)
+	if fn := expr.GetF(); fn != nil {
+		require.NotNil(t, fn.Func)
+		require.Equal(t, "cast", fn.Func.ObjName)
+		require.NotEmpty(t, fn.Args)
+		return extractInt64FromExpr(t, fn.Args[0])
 	}
-	return 0
+	return extractInt64ValueFromExpr(t, expr)
 }
 
 // TestResetIntervalFunctionArgsComprehensive tests resetIntervalFunctionArgs with comprehensive test cases
@@ -488,7 +486,7 @@ func TestResetIntervalFunctionArgsNonLiteral(t *testing.T) {
 	require.NotNil(t, normalizeExpr.Func)
 	require.Equal(t, "to_interval_microsecond", normalizeExpr.Func.GetObjName())
 	require.Equal(t, colRefVarcharExpr, normalizeExpr.Args[0])
-	require.Equal(t, int64(types.Second), extractInt64FromExpr(normalizeExpr.Args[1]))
+	require.Equal(t, int64(types.Second), extractInt64FromExpr(t, normalizeExpr.Args[1]))
 }
 
 // TestResetIntervalFunction tests the wrapper function resetIntervalFunction
@@ -533,8 +531,8 @@ func TestResetIntervalFunction(t *testing.T) {
 			args2, err2 := resetIntervalFunctionArgs(ctx, intervalExpr)
 			require.NoError(t, err2)
 			require.Equal(t, len(args), len(args2))
-			require.Equal(t, extractInt64FromExpr(args[0]), extractInt64FromExpr(args2[0]))
-			require.Equal(t, extractInt64FromExpr(args[1]), extractInt64FromExpr(args2[1]))
+			require.Equal(t, extractInt64FromExpr(t, args[0]), extractInt64FromExpr(t, args2[0]))
+			require.Equal(t, extractInt64FromExpr(t, args[1]), extractInt64FromExpr(t, args2[1]))
 		})
 	}
 }
@@ -599,10 +597,10 @@ func TestResetDateFunction(t *testing.T) {
 				require.NotNil(t, args[2])
 				// For int64 interval value, it doesn't get converted to microseconds
 				// The value remains 1, and the type is Second
-				intervalVal := extractInt64FromExpr(args[1])
+				intervalVal := extractInt64FromExpr(t, args[1])
 				require.Equal(t, int64(1), intervalVal)
 				// Verify interval type is Second
-				intervalType := extractInt64FromExpr(args[2])
+				intervalType := extractInt64FromExpr(t, args[2])
 				require.Equal(t, int64(types.Second), intervalType)
 			},
 		},
@@ -618,10 +616,10 @@ func TestResetDateFunction(t *testing.T) {
 				require.NotNil(t, args[1])
 				require.NotNil(t, args[2])
 				// Verify interval value is 5 days
-				intervalVal := extractInt64FromExpr(args[1])
+				intervalVal := extractInt64FromExpr(t, args[1])
 				require.Equal(t, int64(5), intervalVal)
 				// Verify interval type is Day (default)
-				intervalType := extractInt64FromExpr(args[2])
+				intervalType := extractInt64FromExpr(t, args[2])
 				require.Equal(t, int64(types.Day), intervalType)
 			},
 		},
@@ -637,10 +635,10 @@ func TestResetDateFunction(t *testing.T) {
 				require.NotNil(t, args[0])
 				// For int64 interval value, it doesn't get converted to microseconds
 				// The value remains 1, and the type is Hour
-				intervalVal := extractInt64FromExpr(args[1])
+				intervalVal := extractInt64FromExpr(t, args[1])
 				require.Equal(t, int64(1), intervalVal)
 				// Verify interval type is Hour
-				intervalType := extractInt64FromExpr(args[2])
+				intervalType := extractInt64FromExpr(t, args[2])
 				require.Equal(t, int64(types.Hour), intervalType)
 			},
 		},
@@ -655,10 +653,10 @@ func TestResetDateFunction(t *testing.T) {
 				// DATE with DAY interval should remain DATE
 				require.NotNil(t, args[0])
 				// Verify interval value is 1 day
-				intervalVal := extractInt64FromExpr(args[1])
+				intervalVal := extractInt64FromExpr(t, args[1])
 				require.Equal(t, int64(1), intervalVal)
 				// Verify interval type is Day
-				intervalType := extractInt64FromExpr(args[2])
+				intervalType := extractInt64FromExpr(t, args[2])
 				require.Equal(t, int64(types.Day), intervalType)
 			},
 		},
