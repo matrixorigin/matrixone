@@ -14693,6 +14693,8 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 			nodeId = builder.buildTableStats(tbl, ctx, exprs, nil)
 		case "load_file_chunks":
 			nodeId = builder.buildLoadFileChunks(tbl, ctx, exprs, nil)
+		case indexFileChunksFuncName:
+			nodeId, err = builder.buildIndexFileChunks(tbl, ctx, exprs, nil)
 		default:
 			err = moerr.NewNotSupportedf(builder.GetContext(), "table function '%s' not supported", id)
 		}
