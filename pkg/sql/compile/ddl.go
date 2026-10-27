@@ -7502,37 +7502,7 @@ var initAesKeyBySqlExecutor = func(
 	return
 }
 
-var ForeachQueriedRow = func(
-	ctx context.Context,
-	tx taskservice.SqlExecutor,
-	query string,
-	onEachRow func(context.Context, *sql.Rows) (bool, error),
-) (cnt int64, err error) {
-	var (
-		ok   bool
-		rows *sql.Rows
-	)
-	if rows, err = tx.QueryContext(ctx, query); err != nil {
-		return
-	}
-	if rows.Err() != nil {
-		err = rows.Err()
-		return
-	}
-	defer func() {
-		_ = rows.Close()
-	}()
-
-	for rows.Next() {
-		if ok, err = onEachRow(ctx, rows); err != nil {
-			return
-		}
-		if ok {
-			cnt++
-		}
-	}
-	return
-}
+var ForeachQueriedRow = taskservice.ForeachQueriedRow
 
 func (opts *CDCCreateTaskOptions) ToInsertTaskSQL(
 	ctx context.Context,
