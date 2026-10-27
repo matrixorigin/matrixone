@@ -88,3 +88,34 @@ func TestWriteFactoriesPreserveSignedAndMissingCredentialBehavior(t *testing.T) 
 	require.NoError(t, err)
 	require.False(t, ok)
 }
+
+func TestWriteFactoriesVendedCredentialsAndLoadErrors(t *testing.T) {
+	ctx := context.Background()
+	catalog := model.Catalog{AccountID: 42, CatalogID: 7, Name: "catalog", URI: "https://catalog.example.com/rest"}
+	req := api.CatalogRequest{Catalog: catalog}
+	appendFactory := NewAppendRuntimeCoordinatorFactory(AppendRuntimeCoordinatorFactoryOptions{Store: &fakeAppendRuntimeStore{}})
+	dmlFactory := NewDMLDeleteRuntimeCoordinatorFactory(DMLDeleteRuntimeCoordinatorFactoryOptions{Store: &fakeDMLDeleteRuntimeStore{}})
+	loads := 0
+	client := &icebergcatalog.MockClient{LoadCredentialsFunc: func(context.Context, api.LoadCredentialsRequest) (*api.LoadCredentialsResponse, error) {
+		loads++
+		return &api.LoadCredentialsResponse{StorageCredentials: []api.StorageCredential{{Config: map[string]string{"s3.access-key-id": "id", "s3.secret-access-key": "secret"}}}}, nil
+	}}
+	a, err := appendFactory.objectIOContext(ctx, client, req, &api.LoadTableResponse{}, api.Namespace{"db"}, "tbl", catalog)
+	require.NoError(t, err)
+	d, ok, err := dmlFactory.dmlWriteObjectIOContext(ctx, client, req, &api.LoadTableResponse{}, api.Namespace{"db"}, "tbl", catalog)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 2, loads)
+	require.Equal(t, "matrixone-append", a.ScopeForLocation("s3://bucket/tbl/file").Principal)
+	require.Equal(t, "matrixone-dml", d.ScopeForLocation("s3://bucket/tbl/file").Principal)
+	require.IsType(t, icebergio.VendedCredentialProvider{}, a.WriterProvider)
+	require.IsType(t, icebergio.VendedCredentialProvider{}, d.ReaderProvider)
+	failure := &icebergcatalog.MockClient{LoadCredentialsFunc: func(context.Context, api.LoadCredentialsRequest) (*api.LoadCredentialsResponse, error) {
+		return nil, api.NewError(api.ErrCatalogUnavailable, "credential service down", nil)
+	}}
+	_, err = appendFactory.objectIOContext(ctx, failure, req, &api.LoadTableResponse{}, api.Namespace{"db"}, "tbl", catalog)
+	require.ErrorContains(t, err, "credential service down")
+	_, ok, err = dmlFactory.dmlWriteObjectIOContext(ctx, failure, req, &api.LoadTableResponse{}, api.Namespace{"db"}, "tbl", catalog)
+	require.ErrorContains(t, err, "credential service down")
+	require.False(t, ok)
+}

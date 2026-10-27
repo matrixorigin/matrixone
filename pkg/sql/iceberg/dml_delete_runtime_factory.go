@@ -445,82 +445,11 @@ func (f DMLDeleteRuntimeCoordinatorFactory) dmlWriteObjectIOContext(
 	if loadResp != nil {
 		credentials = append(credentials, loadResp.StorageCredentials...)
 	}
-	if len(credentials) == 0 {
-		creds, err := client.LoadCredentials(ctx, api.LoadCredentialsRequest{
-			CatalogRequest: catalogReq,
-			Namespace:      namespace,
-			Table:          table,
-		})
-		if err != nil {
-			return appendObjectIOContext{}, false, api.ToMOErr(ctx, err)
-		}
-		if creds != nil {
-			credentials = append(credentials, creds.StorageCredentials...)
-		}
-	}
-	buildFileService := f.opts.BuildFileService
-	if buildFileService == nil {
-		buildFileService = icebergio.NewS3VendedFileServiceBuilder().Build
-	}
-	baseScope := icebergio.ObjectScope{
-		AccountID: catalog.AccountID,
-		CatalogID: catalog.CatalogID,
-		Principal: firstNonEmpty(catalogReq.ExternalPrincipal, "matrixone-dml"),
-	}
-	scopeForLocation := f.opts.ScopeForLocation
-	if scopeForLocation == nil {
-		scopeForLocation = icebergio.S3ObjectScopeForLocation(baseScope, credentials)
-	}
-	policies := append([]model.ResidencyPolicy(nil), f.opts.ResidencyPolicies...)
-	if len(policies) == 0 {
-		if lister, ok := f.opts.Store.(ResidencyPolicyLister); ok {
-			loaded, err := lister.ListResidencyPolicies(ctx, catalog.AccountID, catalog.CatalogID)
-			if err != nil {
-				return appendObjectIOContext{}, false, err
-			}
-			policies = append(policies, loaded...)
-		}
-	}
-	residencyValidator := ObjectScopeResidencyValidator(policies, catalog.URI)
-	vendedCredentials := filterS3AccessCredentials(credentials)
-	if len(vendedCredentials) > 0 {
-		provider := icebergio.VendedCredentialProvider{
-			Credentials:            vendedCredentials,
-			BuildFileService:       buildFileService,
-			Now:                    f.opts.Now,
-			ResidencyValidator:     residencyValidator,
-			RequireResidencyPolicy: f.requireResidencyPolicy(),
-		}
-		return appendObjectIOContext{
-			WriterProvider:   provider,
-			ReaderProvider:   provider,
-			ScopeForLocation: scopeForLocation,
-		}, true, nil
-	}
-	if loadResp != nil && loadResp.Capabilities.RemoteSigning {
-		signerFactory, ok := client.(interface {
-			NewRemoteSigner(api.CatalogRequest, map[string]string) icebergio.RemoteSigner
-		})
-		if !ok {
-			return appendObjectIOContext{}, false, api.ToMOErr(ctx, api.NewError(api.ErrRemoteSigningDenied, "Iceberg DML catalog client cannot create remote signer", map[string]string{
-				"catalog": catalog.Name,
-				"table":   table,
-			}))
-		}
-		signer := signerFactory.NewRemoteSigner(catalogReq, loadResp.Config)
-		if signer == nil {
-			return appendObjectIOContext{}, false, api.ToMOErr(ctx, api.NewError(api.ErrRemoteSigningDenied, "Iceberg DML catalog client returned empty remote signer", map[string]string{
-				"catalog": catalog.Name,
-				"table":   table,
-			}))
-		}
-		scopeForLocation = f.opts.ScopeForLocation
-		if scopeForLocation == nil {
-			scopeForLocation = icebergio.S3ObjectScopeForConfig(baseScope, loadResp.Config)
-		}
-		return signedWriteObjectIOContext(signer, scopeForLocation, f.opts.Now, residencyValidator, f.requireResidencyPolicy()), true, nil
-	}
-	return appendObjectIOContext{}, false, nil
+	return resolveWriteObjectIOContext(ctx, client, catalogReq, loadResp, namespace, table, catalog, credentials, writeObjectIOOptions{
+		buildFileService: f.opts.BuildFileService, scopeForLocation: f.opts.ScopeForLocation,
+		residencyPolicies: f.opts.ResidencyPolicies, store: f.opts.Store, now: f.opts.Now,
+		requireResidencyPolicy: f.requireResidencyPolicy(), defaultPrincipal: "matrixone-dml", operation: "DML",
+	})
 }
 
 func (f DMLDeleteRuntimeCoordinatorFactory) validateRuntimeRequest(ctx context.Context, req icebergwrite.AppendRequest) error {

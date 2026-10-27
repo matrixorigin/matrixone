@@ -644,6 +644,37 @@ func (f AppendRuntimeCoordinatorFactory) objectIOContext(
 		}, nil
 	}
 	credentials := append([]api.StorageCredential(nil), loadResp.StorageCredentials...)
+	objectIO, ok, err := resolveWriteObjectIOContext(ctx, client, catalogReq, loadResp, namespace, table, catalog, credentials, writeObjectIOOptions{
+		buildFileService: f.opts.BuildFileService, scopeForLocation: f.opts.ScopeForLocation,
+		residencyPolicies: f.opts.ResidencyPolicies, store: f.opts.Store, now: f.opts.Now,
+		requireResidencyPolicy: f.requireResidencyPolicy(), defaultPrincipal: "matrixone-append", operation: "append",
+	})
+	if err != nil {
+		return appendObjectIOContext{}, err
+	}
+	if !ok {
+		return appendObjectIOContext{}, api.ToMOErr(ctx, api.NewError(api.ErrCredentialExpired, "Iceberg append catalog did not return usable storage credentials", map[string]string{
+			"catalog": catalog.Name,
+			"table":   table,
+		}))
+	}
+	return objectIO, nil
+}
+
+// writeObjectIOOptions holds the shared object access inputs for append and DML.
+type writeObjectIOOptions struct {
+	buildFileService       icebergio.ScopedFileServiceBuilder
+	scopeForLocation       icebergio.ObjectScopeForLocation
+	residencyPolicies      []model.ResidencyPolicy
+	store                  any
+	now                    func() time.Time
+	requireResidencyPolicy bool
+	defaultPrincipal       string
+	operation              string
+}
+
+// resolveWriteObjectIOContext resolves credentials, residency and signing for a write.
+func resolveWriteObjectIOContext(ctx context.Context, client api.CatalogClient, catalogReq api.CatalogRequest, loadResp *api.LoadTableResponse, namespace api.Namespace, table string, catalog model.Catalog, credentials []api.StorageCredential, opts writeObjectIOOptions) (appendObjectIOContext, bool, error) {
 	if len(credentials) == 0 {
 		creds, err := client.LoadCredentials(ctx, api.LoadCredentialsRequest{
 			CatalogRequest: catalogReq,
@@ -651,31 +682,31 @@ func (f AppendRuntimeCoordinatorFactory) objectIOContext(
 			Table:          table,
 		})
 		if err != nil {
-			return appendObjectIOContext{}, api.ToMOErr(ctx, err)
+			return appendObjectIOContext{}, false, api.ToMOErr(ctx, err)
 		}
 		if creds != nil {
 			credentials = append(credentials, creds.StorageCredentials...)
 		}
 	}
-	buildFileService := f.opts.BuildFileService
+	buildFileService := opts.buildFileService
 	if buildFileService == nil {
 		buildFileService = icebergio.NewS3VendedFileServiceBuilder().Build
 	}
 	baseScope := icebergio.ObjectScope{
 		AccountID: catalog.AccountID,
 		CatalogID: catalog.CatalogID,
-		Principal: firstNonEmpty(catalogReq.ExternalPrincipal, "matrixone-append"),
+		Principal: firstNonEmpty(catalogReq.ExternalPrincipal, opts.defaultPrincipal),
 	}
-	scopeForLocation := f.opts.ScopeForLocation
+	scopeForLocation := opts.scopeForLocation
 	if scopeForLocation == nil {
 		scopeForLocation = icebergio.S3ObjectScopeForLocation(baseScope, credentials)
 	}
-	policies := append([]model.ResidencyPolicy(nil), f.opts.ResidencyPolicies...)
+	policies := append([]model.ResidencyPolicy(nil), opts.residencyPolicies...)
 	if len(policies) == 0 {
-		if lister, ok := f.opts.Store.(ResidencyPolicyLister); ok {
+		if lister, ok := opts.store.(ResidencyPolicyLister); ok {
 			loaded, err := lister.ListResidencyPolicies(ctx, catalog.AccountID, catalog.CatalogID)
 			if err != nil {
-				return appendObjectIOContext{}, err
+				return appendObjectIOContext{}, false, err
 			}
 			policies = append(policies, loaded...)
 		}
@@ -686,43 +717,40 @@ func (f AppendRuntimeCoordinatorFactory) objectIOContext(
 		provider := icebergio.VendedCredentialProvider{
 			Credentials:            vendedCredentials,
 			BuildFileService:       buildFileService,
-			Now:                    f.opts.Now,
+			Now:                    opts.now,
 			ResidencyValidator:     residencyValidator,
-			RequireResidencyPolicy: f.requireResidencyPolicy(),
+			RequireResidencyPolicy: opts.requireResidencyPolicy,
 		}
 		return appendObjectIOContext{
 			WriterProvider:   provider,
 			ReaderProvider:   provider,
 			ScopeForLocation: scopeForLocation,
-		}, nil
+		}, true, nil
 	}
 	if loadResp != nil && loadResp.Capabilities.RemoteSigning {
 		signerFactory, ok := client.(interface {
 			NewRemoteSigner(api.CatalogRequest, map[string]string) icebergio.RemoteSigner
 		})
 		if !ok {
-			return appendObjectIOContext{}, api.ToMOErr(ctx, api.NewError(api.ErrRemoteSigningDenied, "Iceberg append catalog client cannot create remote signer", map[string]string{
+			return appendObjectIOContext{}, false, api.ToMOErr(ctx, api.NewError(api.ErrRemoteSigningDenied, "Iceberg "+opts.operation+" catalog client cannot create remote signer", map[string]string{
 				"catalog": catalog.Name,
 				"table":   table,
 			}))
 		}
 		signer := signerFactory.NewRemoteSigner(catalogReq, loadResp.Config)
 		if signer == nil {
-			return appendObjectIOContext{}, api.ToMOErr(ctx, api.NewError(api.ErrRemoteSigningDenied, "Iceberg append catalog client returned empty remote signer", map[string]string{
+			return appendObjectIOContext{}, false, api.ToMOErr(ctx, api.NewError(api.ErrRemoteSigningDenied, "Iceberg "+opts.operation+" catalog client returned empty remote signer", map[string]string{
 				"catalog": catalog.Name,
 				"table":   table,
 			}))
 		}
-		scopeForLocation = f.opts.ScopeForLocation
+		scopeForLocation = opts.scopeForLocation
 		if scopeForLocation == nil {
 			scopeForLocation = icebergio.S3ObjectScopeForConfig(baseScope, loadResp.Config)
 		}
-		return signedWriteObjectIOContext(signer, scopeForLocation, f.opts.Now, residencyValidator, f.requireResidencyPolicy()), nil
+		return signedWriteObjectIOContext(signer, scopeForLocation, opts.now, residencyValidator, opts.requireResidencyPolicy), true, nil
 	}
-	return appendObjectIOContext{}, api.ToMOErr(ctx, api.NewError(api.ErrCredentialExpired, "Iceberg append catalog did not return usable storage credentials", map[string]string{
-		"catalog": catalog.Name,
-		"table":   table,
-	}))
+	return appendObjectIOContext{}, false, nil
 }
 
 // signedWriteObjectIOContext configures matching signed read and write providers.
