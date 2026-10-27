@@ -16,7 +16,9 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -220,20 +222,33 @@ func TestLegacyFloatTableSessionWitnesses(t *testing.T) {
 
 func TestLegacyFloatAlteredSessionWitnesses(t *testing.T) {
 	const expression = "concat(a,cast(concat(from_unixtime(0),cast(1 as decimal(10,0))/cast(7 as decimal(10,0))) as char(100)))"
-	for _, tc := range []struct {
+	type alteredSessionWitness struct {
 		name, suffix, altered string
 		offset                int
 		precision             int32
-	}{
+	}
+	cases := []alteredSessionWitness{
 		{"next_minute", "1970-01-01 08:02:00", expression, 8*3600 + 2*60, 4},
 		{"changed_precision", "1970-01-01 08:02:00", expression, 8*3600 + 2*60, 30},
 		{"earlier_witness", "1969-12-31 10:01:00", expression, -(13*3600 + 59*60), 4},
 		{"distant_witness", "1970-01-01 13:59:00", expression, 13*3600 + 59*60, 4},
 		{"distinct_source", "1970-01-01 08:04:00", strings.Replace(expression, "from_unixtime(0)", "from_unixtime(120)", 1), 8*3600 + 2*60, 4},
+		{"distinct_source_precision8", "1970-01-01 08:04:00", strings.Replace(expression, "from_unixtime(0)", "from_unixtime(120)", 1), 8*3600 + 2*60, 8},
 		{"distinct_source_precision", "1970-01-01 08:04:00", strings.Replace(expression, "from_unixtime(0)", "from_unixtime(120)", 1), 8*3600 + 2*60, 30},
 		{"distinct_source_earlier", "1969-12-31 10:03:00", strings.Replace(expression, "from_unixtime(0)", "from_unixtime(120)", 1), -(13*3600 + 59*60), 4},
 		{"distinct_source_distant", "1970-01-01 14:01:00", strings.Replace(expression, "from_unixtime(0)", "from_unixtime(120)", 1), 13*3600 + 59*60, 4},
-	} {
+	}
+	for precision := int32(0); precision <= 30; precision++ {
+		if precision == 4 || precision == 8 || precision == 30 {
+			continue // Already independently named above.
+		}
+		cases = append(cases, alteredSessionWitness{
+			name: fmt.Sprintf("distinct_source_precision%d", precision), suffix: "1970-01-01 08:04:00",
+			altered: strings.Replace(expression, "from_unixtime(0)", "from_unixtime(120)", 1),
+			offset:  8*3600 + 2*60, precision: precision,
+		})
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			compiler, source := legacyFloatScopeTable(t, "create table t(a double,g varchar(200) default("+expression+"),h varchar(200) default("+expression+"))", 4, time.FixedZone("creation", 8*3600+60))
 			func() {
@@ -269,7 +284,14 @@ func TestLegacyFloatAlteredSessionWitnesses(t *testing.T) {
 			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
 			const full = "-0.0000000000000012345678901234568"
 			require.Equal(t, full+"1970-01-01 08:01:000.1429", executeLegacyFloatScope(t, compiler, execution, "g"))
-			fraction := "0.1429"
+			// Exact rational rounding is independent of the SQL decimal/format owners.
+			fraction := new(big.Rat).SetFrac64(1, 7).FloatString(int(tc.precision))
+			if tc.precision == 4 {
+				fraction = "0.1429"
+			}
+			if tc.precision == 8 {
+				fraction = "0.14285714"
+			}
 			if tc.precision == 30 {
 				fraction = "0.142857142857142857142857142857"
 			}
@@ -369,79 +391,60 @@ func TestLegacyFloatProbeMemoIsolation(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled, "cached results must not hide cancellation")
 }
 
-func TestLegacyFloatProbePreferenceRequiresProof(t *testing.T) {
-	compiler := floatCatalogCompiler(t)
-	budget := &tableDumpBindingBudget{}
-	value := makePlan2StringConstExprWithType("first")
-	island := legacyFloatSessionIsland{source: value, want: value}
-	require.NoError(t, budget.prepareSessionIsland(&island, 0))
-	probe := &legacyFloatSessionProbe{islands: []legacyFloatSessionIsland{island}, searches: []tableDumpSessionCandidate{{increment: 4}}}
-	zones := func(yield func(*time.Location) bool) { yield(time.UTC) }
-	bind := func(tableDumpSessionCandidate, *time.Location, string) (*planpb.Expr, error) { return value, nil }
-	found, err := matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, []*legacyFloatSessionProbe{probe}, budget, tableDumpMaxCandidateVisits, bind,
-		func(tableDumpSessionCandidate, *planpb.Expr) (bool, error) { return false, nil })
-	require.NoError(t, err)
-	require.False(t, found)
-	require.Empty(t, budget.probeHints, "an island match cannot publish full-expression provenance")
-	_, err = matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, []*legacyFloatSessionProbe{probe}, budget, tableDumpMaxCandidateVisits, bind,
-		func(tableDumpSessionCandidate, *planpb.Expr) (bool, error) { return true, context.DeadlineExceeded })
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Empty(t, budget.probeHints)
-	found, err = matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, []*legacyFloatSessionProbe{probe}, budget, tableDumpMaxCandidateVisits, bind,
-		func(tableDumpSessionCandidate, *planpb.Expr) (bool, error) { return true, nil })
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Equal(t, []legacyFloatProbeHint{{increment: 4}}, budget.probeHints)
-
-	target := makePlan2StringConstExprWithType("later")
-	wrong := legacyFloatSessionIsland{source: value, want: target}
-	require.NoError(t, budget.prepareSessionIsland(&wrong, 0))
-	right := legacyFloatSessionIsland{source: target, want: target}
-	require.NoError(t, budget.prepareSessionIsland(&right, 0))
-	// A different source can use the context priority, but must still pass
-	// its own full comparison. The non-preferred candidate is listed first.
-	found, err = matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, []*legacyFloatSessionProbe{
-		{islands: []legacyFloatSessionIsland{right}, searches: []tableDumpSessionCandidate{{increment: 30}}},
-		{islands: []legacyFloatSessionIsland{right}, searches: []tableDumpSessionCandidate{{increment: 4}}},
-	}, budget, tableDumpMaxCandidateVisits,
-		func(search tableDumpSessionCandidate, _ *time.Location, _ string) (*planpb.Expr, error) {
-			require.Equal(t, int64(4), search.increment)
-			return target, nil
-		}, func(_ tableDumpSessionCandidate, bound *planpb.Expr) (bool, error) { return bound == target, nil })
-	require.NoError(t, err)
-	require.True(t, found)
-	probes := []*legacyFloatSessionProbe{
-		{islands: []legacyFloatSessionIsland{wrong}, searches: []tableDumpSessionCandidate{{increment: 4}}},
-		{islands: []legacyFloatSessionIsland{right}, searches: []tableDumpSessionCandidate{{increment: 30}}},
+func TestLegacyFloatProbeShapePriority(t *testing.T) {
+	for _, affinity := range []string{"preferred", "wrong", "all", "none"} {
+		t.Run(affinity, func(t *testing.T) {
+			compiler := floatCatalogCompiler(t)
+			budget := &tableDumpBindingBudget{}
+			value := makePlan2StringConstExprWithType("matching")
+			wrong := legacyFloatSessionIsland{source: value, want: makePlan2StringConstExprWithType("tampered")}
+			right := legacyFloatSessionIsland{source: value, want: value}
+			require.NoError(t, budget.prepareSessionIsland(&wrong, 0))
+			require.NoError(t, budget.prepareSessionIsland(&right, 0))
+			first := &legacyFloatSessionProbe{islands: []legacyFloatSessionIsland{wrong}, searches: []tableDumpSessionCandidate{{increment: 4}}}
+			second := &legacyFloatSessionProbe{islands: []legacyFloatSessionIsland{right}, searches: []tableDumpSessionCandidate{{increment: 8}}}
+			if affinity == "preferred" {
+				// Both islands match; only ordering chooses the second candidate.
+				first.islands[0] = right
+			}
+			first.readingShape = affinity == "wrong" || affinity == "all"
+			second.readingShape = affinity == "preferred" || affinity == "all"
+			visits := 0
+			zones := func(yield func(*time.Location) bool) {
+				for i := 0; i < 200; i++ {
+					visits++
+					if !yield(time.UTC) {
+						return
+					}
+				}
+			}
+			found, err := matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, []*legacyFloatSessionProbe{first, second}, budget, 200,
+				func(search tableDumpSessionCandidate, _ *time.Location, _ string) (*planpb.Expr, error) {
+					require.Equal(t, int64(8), search.increment, "an island/shape hint cannot replace this candidate's full binding")
+					return value, nil
+				}, func(_ tableDumpSessionCandidate, bound *planpb.Expr) (bool, error) { return bound == value, nil })
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Less(t, budget.visits, 200)
+			if affinity == "wrong" {
+				require.Greater(t, visits, 1, "a wrong affinity must spend its bounded prefix then fall through")
+			} else {
+				require.Equal(t, 1, visits)
+			}
+			if affinity == "all" || affinity == "none" {
+				// If no full binding matches, an all-tied preferred pass would
+				// duplicate the entire inventory before the fair pass.
+				passes := 0
+				oneZone := func(yield func(*time.Location) bool) { passes++; yield(time.UTC) }
+				found, err = matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", oneZone, []*legacyFloatSessionProbe{first, second}, &tableDumpBindingBudget{}, 200,
+					func(tableDumpSessionCandidate, *time.Location, string) (*planpb.Expr, error) { return value, nil },
+					func(tableDumpSessionCandidate, *planpb.Expr) (bool, error) { return false, nil })
+				require.NoError(t, err)
+				require.False(t, found)
+				require.Equal(t, 1, passes, "all/none ties must keep one ordinary fair pass")
+			}
+		})
 	}
-	found, err = matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, probes, budget, tableDumpMaxCandidateVisits,
-		func(search tableDumpSessionCandidate, _ *time.Location, _ string) (*planpb.Expr, error) {
-			require.Equal(t, int64(30), search.increment)
-			return target, nil
-		}, func(_ tableDumpSessionCandidate, bound *planpb.Expr) (bool, error) { return bound == target, nil })
-	require.NoError(t, err)
-	require.True(t, found, "unsuitable preference must retain fair search for another candidate")
-	modeBudget := &tableDumpBindingBudget{}
-	modeBudget.rememberProbe(4, 0)
-	formatted := right
-	require.NoError(t, modeBudget.prepareSessionIsland(&formatted, tableDumpBindingLegacyFloatFormatting))
-	found, err = matchLegacyFloatSessionProbes(compiler, time.UTC, "en_US", zones, []*legacyFloatSessionProbe{
-		{islands: []legacyFloatSessionIsland{right}, searches: []tableDumpSessionCandidate{{increment: 30}}},
-		{mode: tableDumpBindingLegacyFloatFormatting, islands: []legacyFloatSessionIsland{formatted}, searches: []tableDumpSessionCandidate{{increment: 4}}},
-	}, modeBudget, tableDumpMaxCandidateVisits,
-		func(search tableDumpSessionCandidate, _ *time.Location, _ string) (*planpb.Expr, error) {
-			require.Equal(t, int64(30), search.increment, "another folding mode must not inherit the priority")
-			return target, nil
-		}, func(_ tableDumpSessionCandidate, bound *planpb.Expr) (bool, error) { return bound == target, nil })
-	require.NoError(t, err)
-	require.True(t, found)
-	for i := 0; i <= tableDumpMaxSessionHints; i++ {
-		budget.rememberProbe(int64(i), tableDumpBindingLegacyFloatFormatting)
-		budget.rememberProbe(int64(i), tableDumpBindingLegacyFloatFormatting)
-	}
-	require.Len(t, budget.probeHints, tableDumpMaxSessionHints)
-	require.Equal(t, legacyFloatProbeHint{increment: 1, mode: tableDumpBindingLegacyFloatFormatting}, budget.probeHints[0])
-	require.Empty(t, (&tableDumpBindingBudget{}).probeHints, "hints cannot cross table operations")
 }
 
 func TestLegacyFloatLiteralFingerprintZeros(t *testing.T) {
@@ -576,10 +579,10 @@ func TestLegacyFloatSessionProbeProofBoundary(t *testing.T) {
 }
 
 func TestLegacyFloatSessionProjectionMatchesBinding(t *testing.T) {
-	const sql = "create table t(a double,g varchar(200) default(concat(a,cast(concat(from_unixtime(0),cast(1 as decimal(10,0))/cast(7 as decimal(10,0))) as char(100)))))"
+	const plainSQL = "create table t(a double,g varchar(200) default(concat(a,cast(concat(from_unixtime(0),cast(1 as decimal(10,0))/cast(7 as decimal(10,0))) as char(100)))))"
 	zone := time.FixedZone("creation", 8*3600+60)
 	for _, precision := range []int32{4, 30} {
-		for _, sql := range []string{sql,
+		for _, sql := range []string{plainSQL,
 			"create table t(a double,g varchar(200) default(concat(a,cast(concat(date_format(from_unixtime(0),'%M %H:%i'),cast(hour(from_unixtime(0)) as double)*cast('1e20' as double)) as char(100)))))",
 		} {
 			compiler, source := legacyFloatScopeTable(t, sql, precision, zone)
@@ -598,6 +601,34 @@ func TestLegacyFloatSessionProjectionMatchesBinding(t *testing.T) {
 				probe, err := prepareLegacyFloatSessionProbe(compiler, item.expr, folded, dependency.unfolded, search, budget)
 				require.NoError(t, err)
 				require.NotNil(t, probe)
+				if precision == 4 && sql == plainSQL && format == 0 {
+					require.True(t, probe.readingShape)
+					unknown := DeepCopyExpr(folded)
+					require.NoError(t, planpb.VisitExprTree(unknown, func(e *planpb.Expr) error {
+						if literal := e.GetLit(); literal != nil {
+							if _, ok := literal.Value.(*planpb.Literal_Sval); ok {
+								literal.Isnull = true
+							}
+						}
+						return nil
+					}))
+					groups := []*legacyFloatSessionProbe{}
+					keys := make(map[string]int)
+					require.NoError(t, addLegacyFloatSessionProbe(compiler, item.expr, unknown, dependency.unfolded, search, &groups, keys, budget))
+					require.Len(t, groups, 1)
+					require.False(t, groups[0].readingShape, "unknown reading values provide no priority")
+					compiler.GetProcess().GetSessionInfo().TimeZone = zone
+					possible, err := groups[0].matches(compiler, budget)
+					require.NoError(t, err)
+					require.True(t, possible, "unknown reading shape must not reject the true creation witness")
+					compiler.GetProcess().GetSessionInfo().TimeZone = time.UTC
+					require.NoError(t, addLegacyFloatSessionProbe(compiler, item.expr, folded, dependency.unfolded, search, &groups, keys, budget))
+					require.Len(t, groups, 1)
+					require.True(t, groups[0].readingShape, "an equivalent positive observation may guide the shared probe")
+					require.Len(t, groups[0].searches, 2, "grouping must retain every original binding candidate")
+				} else if sql != plainSQL {
+					require.False(t, probe.readingShape, "locale/formatting changes can invalidate the reading shape without excluding a witness")
+				}
 				for _, tz := range []*time.Location{time.UTC, zone} {
 					compiler.GetProcess().GetSessionInfo().TimeZone = tz
 					for _, lc := range []string{"en_US", "de_DE", "en_US"} {

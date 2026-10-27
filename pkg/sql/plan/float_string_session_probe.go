@@ -34,6 +34,9 @@ type legacyFloatSessionProbe struct {
 	islands  []legacyFloatSessionIsland
 	mode     tableDumpBindingMode
 	searches []tableDumpSessionCandidate
+	// Observed reading-session string lengths agree with this probe's own
+	// stored islands. This is only search affinity, never a negative proof.
+	readingShape bool
 }
 
 type legacyFloatSessionIsland struct {
@@ -65,29 +68,6 @@ type legacyFloatProbeSession struct {
 type legacyFloatIslandMemo struct {
 	owner   *tableDumpBindingBudget
 	results map[legacyFloatProbeSession]legacyFloatProbeResult
-}
-
-// A successful full comparison supplies search order only. Keeping the context
-// separate from source/result identity lets another DEFAULT use its own source
-// and expected value while trying a previously useful precision first.
-type legacyFloatProbeHint struct {
-	increment int64
-	mode      tableDumpBindingMode
-}
-
-func (b *tableDumpBindingBudget) rememberProbe(increment int64, mode tableDumpBindingMode) {
-	hint := legacyFloatProbeHint{increment, mode}
-	for _, previous := range b.probeHints {
-		if previous == hint {
-			return
-		}
-	}
-	if len(b.probeHints) == tableDumpMaxSessionHints {
-		copy(b.probeHints, b.probeHints[1:])
-		b.probeHints[len(b.probeHints)-1] = hint
-	} else {
-		b.probeHints = append(b.probeHints, hint)
-	}
 }
 
 type legacyFloatProbeResult struct {
@@ -226,7 +206,10 @@ func prepareLegacyFloatSessionProbe(ctx CompilerContext, stored, folded, source 
 	if bindPhaseValue {
 		return nil, nil
 	}
-	probe := &legacyFloatSessionProbe{mode: search.mode & (tableDumpBindingLegacyFloatFormatting | tableDumpBindingPreJSONFolding), searches: []tableDumpSessionCandidate{search}}
+	probe := &legacyFloatSessionProbe{
+		mode:     search.mode & (tableDumpBindingLegacyFloatFormatting | tableDumpBindingPreJSONFolding),
+		searches: []tableDumpSessionCandidate{search}, readingShape: true,
+	}
 	formatting := false
 	var collect func(*planpb.Expr, *planpb.Expr, *planpb.Expr) error
 	collect = func(want, bound, original *planpb.Expr) error {
@@ -282,6 +265,14 @@ func prepareLegacyFloatSessionProbe(ctx CompilerContext, stored, folded, source 
 			if err != nil {
 				return nil // An unavailable projection is never a negative proof.
 			}
+			// Type widths can hide precision inside a folded CHAR boundary. Its
+			// actual payload length is cheap ordering information already present
+			// in the reading binding. Locale/timezone changes can alter it, so
+			// disagreement must retain the candidate in the ordinary search.
+			wanted, wantString := want.GetLit().Value.(*planpb.Literal_Sval)
+			reading, readingString := bound.GetLit().Value.(*planpb.Literal_Sval)
+			probe.readingShape = probe.readingShape && wantString && readingString &&
+				!want.GetLit().Isnull && !bound.GetLit().Isnull && len(wanted.Sval) == len(reading.Sval)
 			probe.islands = append(probe.islands, legacyFloatSessionIsland{source: residual, want: want})
 			return nil
 		}
@@ -325,6 +316,7 @@ func addLegacyFloatSessionProbe(ctx CompilerContext, stored, folded, source *pla
 	if index, exists := keys[key]; exists {
 		group := (*probes)[index]
 		group.searches = append(group.searches, search)
+		group.readingShape = group.readingShape || probe.readingShape
 		group.searches[0].dependency.locale = group.searches[0].dependency.locale || search.dependency.locale
 	} else {
 		keys[key] = len(*probes)
@@ -480,7 +472,6 @@ func matchLegacyFloatSessionProbes(ctx CompilerContext, zone *time.Location, loc
 							return false, moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
 						}
 						if matched {
-							budget.rememberProbe(search.increment, p.mode)
 							return true, nil
 						}
 					}
@@ -489,26 +480,16 @@ func matchLegacyFloatSessionProbes(ctx CompilerContext, zone *time.Location, loc
 		}
 		return false, nil
 	}
-	// Try previously successful precision/folding contexts across sources. These
-	// probes and their full binding candidates still belong to THIS expression;
-	// a hint neither shares values nor authorizes a repair. Bound unsuccessful
-	// priority work, then retain every candidate in the ordinary fair search.
+	// Prefer this expression's observed string shape, without borrowing another
+	// DEFAULT's precision. Wrong affinity is bounded and all candidates remain
+	// in the fair search. When every probe ties, avoid a redundant prefix pass.
 	var preferred []*legacyFloatSessionProbe
 	for _, probe := range probes {
-		preferredProbe := false
-		for _, hint := range budget.probeHints {
-			if hint.mode != probe.mode {
-				continue
-			}
-			for _, search := range probe.searches {
-				preferredProbe = preferredProbe || search.increment == hint.increment
-			}
-		}
-		if preferredProbe {
+		if probe.readingShape {
 			preferred = append(preferred, probe)
 		}
 	}
-	if len(preferred) > 0 {
+	if len(preferred) > 0 && len(preferred) < len(probes) {
 		limit := budget.visits + (candidateVisitLimit-budget.visits)/4
 		if found, err := searchProbes(preferred, limit); found || err != nil {
 			return found, err
