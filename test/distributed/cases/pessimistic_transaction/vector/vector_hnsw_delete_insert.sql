@@ -5,6 +5,11 @@
 SET experimental_hnsw_index = 1;
 SET hnsw_threads_build = 1;
 
+-- A CN that does not run the ISCP sync keeps its cached HNSW model until the cross-CN
+-- freshness sweep (default about 10 minutes). Shorten the sweep on every CN so the
+-- serving waits below converge; restore the default at exit.
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s') not like '%failed=[%' as all_cn_updated;
+
 drop database if exists hnsw_delete_insert;
 create database hnsw_delete_insert;
 use hnsw_delete_insert;
@@ -50,8 +55,8 @@ execute wait_delta;
 deallocate prepare wait_delta;
 
 -- The delta probe only proves the model was published to the hidden tables;
--- the CN serving this connection must also have loaded that generation before
--- the exact assertions below are meaningful under lag-serving index semantics.
+-- the CN serving this connection must also have loaded that generation, through
+-- the freshness sweep set above, before the exact assertions below are meaningful.
 set @wait_serve_sql = 'select (select id from t order by l2_distance(v, ''[777.2,1,2]'') limit 1) = 2001 as serve_ready';
 prepare wait_serve from @wait_serve_sql;
 -- @metacmp(false)
@@ -94,6 +99,8 @@ deallocate prepare wait_serve;
 select count(*), count(distinct id), sum(id < 500) as below_deleted from (select id from t order by l2_distance(v, '[888.8,1,2]') limit 1000) q;
 select id from t order by l2_distance(v, '[1,1,2]') limit 3;
 commit;
+
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0') not like '%failed=[%' as all_cn_restored;
 
 drop database hnsw_delete_insert;
 SET experimental_hnsw_index = 0;
