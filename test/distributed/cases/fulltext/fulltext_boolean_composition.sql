@@ -239,7 +239,20 @@ select id, if(match(body) against('qaanchor'), 'y', 'n') as hit from every_doc w
 
 select count(if(match(body) against('qaanchor'), 1, null)) as hits from every_doc where match(body) against('qaanchor') or id = -1;
 
+-- CAST(MATCH AS BOOL) is whether the index returned the row; a cast through DOUBLE converts the score.
+select id, cast(match(body) against('qaanchor') as bool) as b, cast(cast(match(body) against('qaanchor') as double) as bool) as d from every_doc where match(body) against('qaanchor') order by id;
+
+select id, cast(match(body) against('qaanchor') as bool) as b from every_doc where match(body) against('qaanchor') or id = -1 order by id;
+
 select id from every_doc where match(body) against('qaanchor') = 0 or id = -1 order by id;
+
+select id from every_doc where (match(body) against('qaanchor') and tag = 1) or id = -1 order by id;
+
+select id from every_doc where match(body) against('qaanchor') xor tag = 1 order by id;
+
+select id from every_doc where !match(body) against('qaanchor') order by id;
+
+select id, match(body) against('qaanchor') is true as t, round(match(body) against('qaanchor'), 3) as r from every_doc where match(body) against('qaanchor') or id = -1 order by id;
 
 select id from every_doc where match(body) against('one') or not match(body) against('qaanchor') order by id;
 

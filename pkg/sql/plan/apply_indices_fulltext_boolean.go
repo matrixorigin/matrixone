@@ -28,7 +28,7 @@ func fullTextBooleanCompositionExpr(expr *plan.Expr) bool {
 		return false
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil {
-		if (fn.Func.ObjName == "or" || fn.Func.ObjName == "not") && exprCallsFunc(expr, "fulltext_match") {
+		if (fn.Func.ObjName == "or" || fn.Func.ObjName == "not" || fn.Func.ObjName == "unary_mark" || fn.Func.ObjName == "xor") && exprCallsFunc(expr, "fulltext_match") {
 			return true
 		}
 		for _, arg := range fn.Args {

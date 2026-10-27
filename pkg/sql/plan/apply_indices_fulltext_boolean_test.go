@@ -903,6 +903,8 @@ func TestFullTextBooleanMatchTruthIsFound(t *testing.T) {
 			{"if", "select id, if(match(title, body) against('hello'), 'y', 'n') from ft where match(title, body) against('hello')", true, false},
 			{"if under or", "select id, if(match(title, body) against('hello'), 'y', 'n') from ft where match(title, body) against('hello') or base_id='b1'", true, false},
 			{"if in aggregate under or", "select base_id, count(if(match(title, body) against('hello'), 1, null)) from ft where match(title, body) against('hello') or base_id='b1' group by base_id", true, false},
+			{"xor", "select id from ft where match(title, body) against('hello') xor base_id='b1'", true, false},
+			{"bang", "select id from ft where !match(title, body) against('hello')", true, false},
 			{"comparison", "select id from ft where match(title, body) against('hello') > 0 or base_id='b1'", false, true},
 			{"projected score", "select id, match(title, body) against('hello') from ft where not match(title, body) against('hello')", true, true},
 		} {
@@ -968,4 +970,21 @@ func countBoolCastOfFloat(expr *planpb.Expr) int {
 		n += countBoolCastOfFloat(arg)
 	}
 	return n
+}
+
+// A BOOL value of MATCH, an explicit CAST included, is whether the index returned the row;
+// a cast through a numeric type converts the score.
+func TestFullTextBooleanExplicitCastIsFound(t *testing.T) {
+	for _, ft2 := range []bool{false, true} {
+		for _, sql := range []string{
+			"select id, cast(match(title, body) against('hello') as bool), cast(cast(match(title, body) against('hello') as double) as bool) from ft where match(title, body) against('hello')",
+			"select id, cast(match(title, body) against('hello') as bool), cast(cast(match(title, body) against('hello') as double) as bool) from ft where match(title, body) against('hello') or base_id='b1'",
+		} {
+			query := buildBooleanFullTextPublicPlan(t, sql, ft2, false)
+			projected := query.Nodes[query.Steps[0]].ProjectList
+			require.Len(t, projected, 3, sql)
+			require.Equal(t, 1, countExprFunctionCalls(projected[1:2], "isnotnull"), sql)
+			require.Zero(t, countExprFunctionCalls(projected[2:], "isnotnull"), sql)
+		}
+	}
 }
