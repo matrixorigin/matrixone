@@ -6078,15 +6078,26 @@ func Test_ExecRequestPrepareCommandMissingStmt(t *testing.T) {
 			data := make([]byte, 4)
 			binary.LittleEndian.PutUint32(data, stmtID)
 			setRowCount(ses, ses.GetProc(), 7)
+			if tc.cmd == COM_STMT_CLOSE {
+				ses.appendErrorDiagnostic(1000, "previous diagnostic")
+			}
+			beforeDiagnostics := ses.diagnosticsSnapshot()
 
 			resp, err := ExecRequest(ses, ec, &Request{cmd: tc.cmd, data: data})
 			require.NoError(t, err)
-			require.NotNil(t, resp)
-			require.Equal(t, ErrorResponse, resp.category)
-			require.Equal(t, int(tc.cmd), resp.cmd)
-			require.Error(t, resp.GetData().(error))
+			if tc.cmd == COM_STMT_CLOSE {
+				require.Nil(t, resp)
+			} else {
+				require.NotNil(t, resp)
+				require.Equal(t, ErrorResponse, resp.category)
+				require.Equal(t, int(tc.cmd), resp.cmd)
+				require.Error(t, resp.GetData().(error))
+			}
 			require.Equal(t, tc.want, ses.GetLastAffectedRows())
 			require.Equal(t, tc.want, ses.GetProc().GetAffectedRows())
+			if tc.cmd == COM_STMT_CLOSE {
+				require.Equal(t, beforeDiagnostics, ses.diagnosticsSnapshot())
+			}
 		})
 	}
 }
