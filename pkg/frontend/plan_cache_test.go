@@ -537,6 +537,11 @@ func TestSessionPlanDependenciesInvalidatePreparedAndCachedPlans(t *testing.T) {
 		{"explicit_defaults_for_timestamp", int64(1), int64(0)},
 		{"sql_mode", "STRICT_TRANS_TABLES", "STRICT_TRANS_TABLES,TIME_TRUNCATE_FRACTIONAL"},
 		{"sql_mode", "", "STRICT_TRANS_TABLES"},
+		{"fulltext2_search_df_cutoff", float64(0), float64(0.7)},
+		{"fulltext2_search_df_cutoff", float64(0.7), float64(0)},
+		{"fulltext2_threads_search", int64(0), int64(4)},
+		{"fulltext_bloom_filter_pushdown", int8(0), int8(1)},
+		{"fulltext_bloom_filter_pushdown", int8(1), int8(0)},
 	} {
 		t.Run(fmt.Sprintf("%s/%v", tc.name, tc.b), func(t *testing.T) {
 			ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
@@ -585,6 +590,51 @@ func TestSessionDivPrecisionIncrementChangeClearsPlanCache(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "div_precision_increment", int64(10)))
 	require.False(t, ses.isCached("select decimal_a / decimal_b"))
 	require.Equal(t, 1, stmt.freed)
+}
+
+func TestSessionRollupAlgorithmChangeClearsPlanCache(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	stmt := &trackedStatement{}
+	ses.cachePlan("cached-rollup", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.True(t, ses.isCached("cached-rollup"))
+
+	// Re-setting COST does not change the physical-plan contract.
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "COST"))
+	require.True(t, ses.isCached("cached-rollup"))
+	require.Zero(t, stmt.freed)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "SORT"))
+	require.False(t, ses.isCached("cached-rollup"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-rollup", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "ROLLUP_ALGORITHM", "HASH"))
+	require.False(t, ses.isCached("cached-rollup"))
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestSessionRollupAlgorithmChangeInvalidatesPreparedPlanGeneration(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	prepared := &PrepareStmt{Name: "rollup-prepared"}
+	require.NoError(t, ses.SetPrepareStmt(ctx, prepared.Name, prepared))
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "SORT"))
+	require.True(t, prepared.needsRebuild)
+
+	prepared.needsRebuild = false
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "SORT"))
+	require.False(t, prepared.needsRebuild)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "HASH"))
+	require.True(t, prepared.needsRebuild)
+	require.True(t, ses.RemovePrepareStmt(prepared.Name))
 }
 
 func TestSessionWindowPartitionAlgorithmChangeClearsPlanCache(t *testing.T) {
