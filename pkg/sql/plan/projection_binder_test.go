@@ -24,158 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Helper function to create a float64 constant expression
-func makeFloat64ConstForProjection(val float64) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Dval{
-					Dval: val,
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_float64),
-			NotNullable: true,
-		},
-	}
-}
-
-// Helper function to create a decimal64 constant expression
-func makeDecimal64ConstForProjection(val float64, scale int32) *plan.Expr {
-	d64, _ := types.Decimal64FromFloat64(val, 18, scale)
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Decimal64Val{
-					Decimal64Val: &plan.Decimal64{A: int64(d64)},
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_decimal64),
-			NotNullable: true,
-			Scale:       scale,
-		},
-	}
-}
-
-// Helper function to create a decimal128 constant expression
-func makeDecimal128ConstForProjection(val float64, scale int32) *plan.Expr {
-	d128, _ := types.Decimal128FromFloat64(val, 38, scale)
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Decimal128Val{
-					Decimal128Val: &plan.Decimal128{
-						A: int64(d128.B0_63),
-						B: int64(d128.B64_127),
-					},
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_decimal128),
-			NotNullable: true,
-			Scale:       scale,
-		},
-	}
-}
-
-// Helper function to create a string constant expression
-func makeStringConstForProjection(s string) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Sval{
-					Sval: s,
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_char),
-			NotNullable: true,
-			Width:       int32(len(s)),
-		},
-	}
-}
-
-// Helper function to create INTERVAL expression
-func makeIntervalExprForProjection(valueExpr *plan.Expr, unit string) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_List{
-			List: &plan.ExprList{
-				List: []*plan.Expr{
-					valueExpr,
-					makeStringConstForProjection(unit),
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id: int32(types.T_interval),
-		},
-	}
-}
-
-// Helper function to create a float32 constant expression
-func makeFloat32ConstForProjection(val float32) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Fval{
-					Fval: val,
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_float32),
-			NotNullable: true,
-		},
-	}
-}
-
-// Helper function to create a varchar constant expression
-func makeVarcharConstForProjection(s string) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Sval{
-					Sval: s,
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_varchar),
-			NotNullable: true,
-			Width:       int32(len(s)),
-		},
-	}
-}
-
-// Helper function to create an int64 constant expression
-func makeInt64ConstForProjection(val int64) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_I64Val{
-					I64Val: val,
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_int64),
-			NotNullable: true,
-		},
-	}
-}
-
 // Helper function to create a decimal64 constant expression with negative scale (to test scale < 0 branch)
 func makeDecimal64ConstForProjectionWithNegativeScale(val float64, scale int32) *plan.Expr {
 	// Use a valid scale for creation, but set Typ.Scale to negative value
@@ -330,28 +178,28 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test varchar/char string interval values
 		{
 			name:                 "INTERVAL '1' SECOND (varchar)",
-			intervalValueExpr:    makeVarcharConstForProjection("1"),
+			intervalValueExpr:    makeVarcharConst("1"),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1000000,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL '1.5' SECOND (varchar)",
-			intervalValueExpr:    makeVarcharConstForProjection("1.5"),
+			intervalValueExpr:    makeVarcharConst("1.5"),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1500000, // fractional SECOND text is normalized to microseconds
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL '1' DAY (char)",
-			intervalValueExpr:    makeStringConstForProjection("1"),
+			intervalValueExpr:    makeStringConst("1"),
 			intervalUnit:         "DAY",
 			expectedIntervalVal:  1,
 			expectedIntervalType: types.Day,
 		},
 		{
 			name:                 "INTERVAL 'invalid' SECOND (varchar, invalid string)",
-			intervalValueExpr:    makeVarcharConstForProjection("invalid"),
+			intervalValueExpr:    makeVarcharConst("invalid"),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  0, // Invalid numeric prefix is a zero interval
 			expectedIntervalType: types.MicroSecond,
@@ -359,35 +207,35 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test float64 time units
 		{
 			name:                 "INTERVAL 1.1 SECOND (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.1),
+			intervalValueExpr:    makeFloat64Const(1.1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1100000,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL 1.000009 SECOND (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.000009),
+			intervalValueExpr:    makeFloat64Const(1.000009),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1000009,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL 1.5 MINUTE (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
+			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "MINUTE",
 			expectedIntervalVal:  90000000,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL 0.5 HOUR (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(0.5),
+			intervalValueExpr:    makeFloat64Const(0.5),
 			intervalUnit:         "HOUR",
 			expectedIntervalVal:  1800000000,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL 1.1 DAY (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.1),
+			intervalValueExpr:    makeFloat64Const(1.1),
 			intervalUnit:         "DAY",
 			expectedIntervalVal:  95040000000, // 1.1 * 86400 * 1000000
 			expectedIntervalType: types.MicroSecond,
@@ -395,14 +243,14 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test float32 time units
 		{
 			name:                 "INTERVAL 1.1 SECOND (float32)",
-			intervalValueExpr:    makeFloat32ConstForProjection(1.1),
+			intervalValueExpr:    makeFloat32Const(1.1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1100000,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL 2.5 MINUTE (float32)",
-			intervalValueExpr:    makeFloat32ConstForProjection(2.5),
+			intervalValueExpr:    makeFloat32Const(2.5),
 			intervalUnit:         "MINUTE",
 			expectedIntervalVal:  150000000, // 2.5 * 60 * 1000000
 			expectedIntervalType: types.MicroSecond,
@@ -410,14 +258,14 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test decimal64 time units
 		{
 			name:                 "INTERVAL 1.1 SECOND (decimal64)",
-			intervalValueExpr:    makeDecimal64ConstForProjection(1.1, 1),
+			intervalValueExpr:    makeDecimal64Const(1.1, 1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1100000,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL 1.5 MINUTE (decimal64)",
-			intervalValueExpr:    makeDecimal64ConstForProjection(1.5, 1),
+			intervalValueExpr:    makeDecimal64Const(1.5, 1),
 			intervalUnit:         "MINUTE",
 			expectedIntervalVal:  90000000,
 			expectedIntervalType: types.MicroSecond,
@@ -425,14 +273,14 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test decimal128 time units
 		{
 			name:                 "INTERVAL 1.1 SECOND (decimal128)",
-			intervalValueExpr:    makeDecimal128ConstForProjection(1.1, 1),
+			intervalValueExpr:    makeDecimal128Const(1.1, 1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1100000,
 			expectedIntervalType: types.MicroSecond,
 		},
 		{
 			name:                 "INTERVAL 0.5 HOUR (decimal128)",
-			intervalValueExpr:    makeDecimal128ConstForProjection(0.5, 1),
+			intervalValueExpr:    makeDecimal128Const(0.5, 1),
 			intervalUnit:         "HOUR",
 			expectedIntervalVal:  1800000000,
 			expectedIntervalType: types.MicroSecond,
@@ -440,14 +288,14 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test int64 (no conversion for time units, returns constant)
 		{
 			name:                 "INTERVAL 1 SECOND (int64)",
-			intervalValueExpr:    makeInt64ConstForProjection(1),
+			intervalValueExpr:    makeInt64Const(1),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1,
 			expectedIntervalType: types.Second,
 		},
 		{
 			name:                 "INTERVAL 2 MINUTE (int64)",
-			intervalValueExpr:    makeInt64ConstForProjection(2),
+			intervalValueExpr:    makeInt64Const(2),
 			intervalUnit:         "MINUTE",
 			expectedIntervalVal:  2,
 			expectedIntervalType: types.Minute,
@@ -455,21 +303,21 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test non-time units with float64 (converted to int64 via executor)
 		{
 			name:                 "INTERVAL 1.5 MONTH (float64, non-time unit)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
+			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "MONTH",
 			expectedIntervalVal:  2, // 1.5 cast to int64 = 2
 			expectedIntervalType: types.Month,
 		},
 		{
 			name:                 "INTERVAL 1.5 YEAR (float64, non-time unit)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
+			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "YEAR",
 			expectedIntervalVal:  2, // 1.5 cast to int64 = 2
 			expectedIntervalType: types.Year,
 		},
 		{
 			name:                 "INTERVAL 1.5 WEEK (float64, non-time unit)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
+			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "WEEK",
 			expectedIntervalVal:  2, // 1.5 cast to int64 = 2
 			expectedIntervalType: types.Week,
@@ -477,7 +325,7 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test error cases
 		{
 			name:              "Invalid interval unit",
-			intervalValueExpr: makeInt64ConstForProjection(1),
+			intervalValueExpr: makeInt64Const(1),
 			intervalUnit:      "INVALID_UNIT",
 			expectError:       true,
 			errorContains:     "invalid interval type",
@@ -485,7 +333,7 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test DAY unit with float64
 		{
 			name:                 "INTERVAL 1.5 DAY (float64)",
-			intervalValueExpr:    makeFloat64ConstForProjection(1.5),
+			intervalValueExpr:    makeFloat64Const(1.5),
 			intervalUnit:         "DAY",
 			expectedIntervalVal:  129600000000, // 1.5 * 24 * 60 * 60 * 1000000
 			expectedIntervalType: types.MicroSecond,
@@ -493,7 +341,7 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test HOUR unit with float32
 		{
 			name:                 "INTERVAL 0.5 HOUR (float32)",
-			intervalValueExpr:    makeFloat32ConstForProjection(0.5),
+			intervalValueExpr:    makeFloat32Const(0.5),
 			intervalUnit:         "HOUR",
 			expectedIntervalVal:  1800000000, // 0.5 * 60 * 60 * 1000000
 			expectedIntervalType: types.MicroSecond,
@@ -501,7 +349,7 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test decimal64 with DAY unit
 		{
 			name:                 "INTERVAL 2.5 DAY (decimal64)",
-			intervalValueExpr:    makeDecimal64ConstForProjection(2.5, 1),
+			intervalValueExpr:    makeDecimal64Const(2.5, 1),
 			intervalUnit:         "DAY",
 			expectedIntervalVal:  216000000000, // 2.5 * 24 * 60 * 60 * 1000000
 			expectedIntervalType: types.MicroSecond,
@@ -509,7 +357,7 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 		// Test decimal128 with HOUR unit
 		{
 			name:                 "INTERVAL 1.5 HOUR (decimal128)",
-			intervalValueExpr:    makeDecimal128ConstForProjection(1.5, 1),
+			intervalValueExpr:    makeDecimal128Const(1.5, 1),
 			intervalUnit:         "HOUR",
 			expectedIntervalVal:  5400000000, // 1.5 * 60 * 60 * 1000000
 			expectedIntervalType: types.MicroSecond,
@@ -518,7 +366,7 @@ func TestProjectionBinderResetIntervalComprehensive(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			intervalExpr := makeIntervalExprForProjection(tc.intervalValueExpr, tc.intervalUnit)
+			intervalExpr := makeIntervalExpr(tc.intervalValueExpr, tc.intervalUnit)
 
 			result, err := projectionBinder.resetInterval(intervalExpr)
 
@@ -632,7 +480,7 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 		// This test case attempts to trigger the fallback branch by using a special scenario
 		{
 			name:                 "INTERVAL 1 SECOND (decimal64, fallback to int64)",
-			intervalValueExpr:    makeDecimal64ConstForProjection(1.0, 0),
+			intervalValueExpr:    makeDecimal64Const(1.0, 0),
 			intervalUnit:         "SECOND",
 			expectedIntervalVal:  1000000,
 			expectedIntervalType: types.MicroSecond,
@@ -649,7 +497,7 @@ func TestProjectionBinderResetIntervalAdditionalCoverage(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			intervalExpr := makeIntervalExprForProjection(tc.intervalValueExpr, tc.intervalUnit)
+			intervalExpr := makeIntervalExpr(tc.intervalValueExpr, tc.intervalUnit)
 
 			result, err := projectionBinder.resetInterval(intervalExpr)
 
