@@ -7,6 +7,9 @@ by passing them to client.execute() or session.execute() as strings.
 
 from typing import Optional, Union, Type
 
+from .clone import BaseCloneManager
+from ._sql_literals import sql_object_name
+
 from ._utils import get_table_name as _get_table_name, require_non_empty as _require_non_empty
 
 
@@ -61,12 +64,11 @@ class CloneTable(CloneStatement):
     def compile(self) -> str:
         if not self._source:
             raise ValueError("source_table must be set via from_table()")
-        ine = "IF NOT EXISTS " if self._if_not_exists else ""
-        sql = f"CREATE TABLE {ine}{self._target} CLONE {self._source}"
-        if self._snapshot:
-            sql += f' {{snapshot = "{self._snapshot}"}}'
+        sql = BaseCloneManager(None)._build_clone_table_sql(
+            self._target, self._source, self._snapshot, self._if_not_exists
+        )
         if self._account:
-            sql += f" TO ACCOUNT {self._account}"
+            sql += f" TO ACCOUNT {sql_object_name(self._account)}"
         return sql
 
 
@@ -102,12 +104,11 @@ class CloneDatabase(CloneStatement):
     def compile(self) -> str:
         if not self._source:
             raise ValueError("source_database must be set via from_database()")
-        ine = "IF NOT EXISTS " if self._if_not_exists else ""
-        sql = f"CREATE DATABASE {ine}{self._target} CLONE {self._source}"
-        if self._snapshot:
-            sql += f' {{snapshot = "{self._snapshot}"}}'
+        sql = BaseCloneManager(None)._build_clone_database_sql(
+            self._target, self._source, self._snapshot, self._if_not_exists
+        )
         if self._account:
-            sql += f" TO ACCOUNT {self._account}"
+            sql += f" TO ACCOUNT {sql_object_name(self._account)}"
         return sql
 
 

@@ -16,6 +16,10 @@
 MatrixOne Async Client - Asynchronous implementation
 """
 
+from __future__ import annotations
+
+import operator
+
 try:
     import aiomysql
 except ImportError:
@@ -35,12 +39,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from ._utils import discard_unrestored_connection, is_non_transactional_statement
+from ._utils import discard_unrestored_connection, is_non_transactional_statement, result_returns_rows
 from .account import AsyncAccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .branch import AsyncBranchManager
 from .cdc import AsyncCDCManager
-from .clone import BaseCloneManager
+from .clone import AsyncCloneManager
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import (
     ConnectionError,
@@ -56,7 +60,7 @@ from .metadata import AsyncMetadataManager
 from .pitr import AsyncPitrManager
 from .pubsub import AsyncPubSubManager
 from .session import AsyncSession
-from .snapshot import Snapshot, SnapshotLevel
+from .snapshot import Snapshot, SnapshotLevel, AsyncSnapshotManager
 from .stage import AsyncStageManager
 
 
@@ -85,6 +89,9 @@ class AsyncResultSet:
 
     def fetchmany(self, size: int = 1) -> List[Tuple]:
         """Fetch many rows"""
+        size = operator.index(size)
+        if size < 0:
+            raise ValueError('size must be non-negative')
         start = self._cursor
         end = min(start + size, len(self.rows))
         rows = self.rows[start:end]
@@ -106,158 +113,6 @@ class AsyncResultSet:
 
     def __len__(self):
         return len(self.rows)
-
-
-class AsyncSnapshotManager:
-    """Async snapshot manager"""
-
-    def __init__(self, client):
-        self.client = client
-
-    async def create(
-        self,
-        name: str,
-        level: Union[str, SnapshotLevel],
-        database: Optional[str] = None,
-        table: Optional[str] = None,
-        description: Optional[str] = None,
-    ) -> Snapshot:
-        """Create snapshot asynchronously"""
-        # Convert string level to enum if needed
-        if isinstance(level, str):
-            level = SnapshotLevel(level.lower())
-
-        # Build SQL based on level
-        if level == SnapshotLevel.CLUSTER:
-            sql = f"CREATE SNAPSHOT {name} FOR CLUSTER"
-        elif level == SnapshotLevel.ACCOUNT:
-            sql = f"CREATE SNAPSHOT {name} FOR ACCOUNT"
-        elif level == SnapshotLevel.DATABASE:
-            if not database:
-                raise SnapshotError("Database name is required for database level snapshot")
-            sql = f"CREATE SNAPSHOT {name} FOR DATABASE {database}"
-        elif level == SnapshotLevel.TABLE:
-            if not database or not table:
-                raise SnapshotError("Database and table names are required for table level snapshot")
-            sql = f"CREATE SNAPSHOT {name} FOR TABLE {database} {table}"
-        else:
-            raise SnapshotError(f"Invalid snapshot level: {level}")
-
-        await self.client.execute(sql)
-        return await self.get(name)
-
-    async def get(self, name: str) -> Snapshot:
-        """Get snapshot asynchronously"""
-        # Use mo_catalog.mo_snapshots table like sync client
-        lookup_name = name
-        if len(lookup_name) >= 2 and lookup_name[0] in ('`', '"') and lookup_name[-1] == lookup_name[0]:
-            quote = lookup_name[0]
-            lookup_name = lookup_name[1:-1].replace(quote * 2, quote)
-        # Let MatrixOne apply the same Go Unicode tables used by its parser;
-        # supported Python releases can ship older character mappings.
-        sql = """
-            SELECT sname, ts, level, account_name, database_name, table_name
-            FROM mo_catalog.mo_snapshots
-            WHERE sname = LOWER(?)
-        """
-        result = await self.client.execute(sql, (lookup_name,))
-
-        if not result.rows:
-            raise SnapshotError(f"Snapshot '{name}' not found")
-
-        row = result.rows[0]
-        # Convert timestamp to datetime
-        from datetime import datetime
-
-        timestamp = datetime.fromtimestamp(row[1] / 1000000000)  # Convert nanoseconds to seconds
-
-        # Convert level string to enum
-        level_str = row[2]
-        try:
-            level = SnapshotLevel(level_str.lower())
-        except ValueError:
-            level = level_str  # Fallback to string for backward compatibility
-
-        return Snapshot(row[0], level, timestamp, None, row[4], row[5])
-
-    async def list(self) -> List[Snapshot]:
-        """List all snapshots asynchronously"""
-        # Use mo_catalog.mo_snapshots table like sync client
-        sql = """
-            SELECT sname, ts, level, account_name, database_name, table_name
-            FROM mo_catalog.mo_snapshots
-            ORDER BY ts DESC
-        """
-        result = await self.client.execute(sql)
-
-        snapshots = []
-        for row in result.rows:
-            # Convert timestamp to datetime
-            timestamp = datetime.fromtimestamp(row[1] / 1000000000)  # Convert nanoseconds to seconds
-
-            # Convert level string to enum
-            level_str = row[2]
-            try:
-                level = SnapshotLevel(level_str.lower())
-            except ValueError:
-                level = level_str  # Fallback to string for backward compatibility
-
-            snapshots.append(Snapshot(row[0], level, timestamp, None, row[4], row[5]))
-
-        return snapshots
-
-    async def delete(self, name: str) -> None:
-        """Delete snapshot asynchronously"""
-        sql = f"DROP SNAPSHOT {name}"
-        await self.client.execute(sql)
-
-    async def exists(self, name: str) -> bool:
-        """Check if snapshot exists asynchronously"""
-        try:
-            await self.get(name)
-            return True
-        except SnapshotError:
-            return False
-
-
-class AsyncCloneManager(BaseCloneManager):
-    """Async clone manager"""
-
-    async def clone_database(
-        self,
-        target_db: str,
-        source_db: str,
-        snapshot_name: Optional[str] = None,
-        if_not_exists: bool = False,
-    ) -> None:
-        """Clone database asynchronously"""
-        sql = self._build_clone_database_sql(target_db, source_db, snapshot_name, if_not_exists)
-
-        await self.client.execute(sql)
-
-    async def clone_table(
-        self,
-        target_table: str,
-        source_table: str,
-        snapshot_name: Optional[str] = None,
-        if_not_exists: bool = False,
-    ) -> None:
-        """Clone table asynchronously"""
-        sql = self._build_clone_table_sql(target_table, source_table, snapshot_name, if_not_exists)
-
-        await self.client.execute(sql)
-
-    async def clone_database_with_snapshot(
-        self, target_db: str, source_db: str, snapshot_name: str, if_not_exists: bool = False
-    ) -> None:
-        """Clone database with snapshot asynchronously"""
-        await self.clone_database(target_db, source_db, snapshot_name, if_not_exists)
-
-    async def clone_table_with_snapshot(
-        self, target_table: str, source_table: str, snapshot_name: str, if_not_exists: bool = False
-    ) -> None:
-        """Clone table with snapshot asynchronously"""
-        await self.clone_table(target_table, source_table, snapshot_name, if_not_exists)
 
 
 class AsyncRestoreManager:
@@ -366,11 +221,9 @@ class AsyncMoCtlManager:
         import json
 
         try:
-            # Build mo_ctl SQL command
-            if params:
-                sql = f"SELECT mo_ctl('{method}', '{target}', '{params}')"
-            else:
-                sql = f"SELECT mo_ctl('{method}', '{target}', '')"
+            from .moctl import _build_moctl_sql
+
+            sql = _build_moctl_sql(method, target, params)
 
             # Execute the command
             result = await self.client.execute(sql)
@@ -391,9 +244,9 @@ class AsyncMoCtlManager:
             return parsed_result
 
         except json.JSONDecodeError as e:
-            raise MoCtlError(f"Failed to parse mo_ctl result: {e}")
+            raise MoCtlError(f"Failed to parse mo_ctl result: {e}") from e
         except Exception as e:
-            raise MoCtlError(f"mo_ctl operation failed: {e}")
+            raise MoCtlError(f"mo_ctl operation failed: {e}") from e
 
     async def flush_table(self, database: str, table: str) -> Dict[str, Any]:
         """Force flush table asynchronously"""
@@ -559,6 +412,7 @@ class AsyncClient(BaseMatrixOneClient):
             slow_query_threshold: Threshold in seconds for slow query warnings (default: 1.0)
             max_sql_display_length: Maximum SQL length in auto mode before summarizing (default: 500)
         """
+        self._reset_compatibility()
         self.connection_timeout = connection_timeout
         self.query_timeout = query_timeout
         self.auto_commit = auto_commit
@@ -592,8 +446,22 @@ class AsyncClient(BaseMatrixOneClient):
         self._fulltext_index = None
         self._metadata = None
         self._load_data = None
+        self._export = None
         self._stage = None
         self._cdc = None
+
+    async def get_capabilities(self, refresh=False):
+        """Observe this server/session without enabling features or mutating data."""
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
+        from .capabilities import get_capabilities_async
+
+        import asyncio
+        from ._connection_options import positive_timeout
+
+        timeout = positive_timeout(self.query_timeout, 'query_timeout')
+        return await asyncio.wait_for(get_capabilities_async(self, refresh), timeout)
 
     async def connect(
         self,
@@ -609,6 +477,8 @@ class AsyncClient(BaseMatrixOneClient):
         connection_timeout: Optional[int] = None,
         auto_commit: bool = True,
         on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
+        capability_overrides: Optional[dict] = None,
+        local_infile: bool = False,
     ):
         """
         Connect to MatrixOne database asynchronously
@@ -650,6 +520,14 @@ class AsyncClient(BaseMatrixOneClient):
             await client.connect(host, port, user, password, database,
                                on_connect=my_callback)
         """
+        if not isinstance(local_infile, bool):
+            raise TypeError('local_infile must be a boolean')
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
+        from .capabilities import validate_overrides
+
+        overrides = validate_overrides(capability_overrides)
         from ._connection_options import positive_timeout
 
         positive_timeout(self.query_timeout, 'query_timeout')
@@ -657,6 +535,7 @@ class AsyncClient(BaseMatrixOneClient):
         positive_timeout(timeout, 'connection_timeout')
         if self._engine is not None:
             await self.disconnect()
+        self._reset_compatibility(overrides)
         self.connection_timeout = timeout
         try:
             # Build final login info based on user parameter and optional account/role
@@ -674,11 +553,16 @@ class AsyncClient(BaseMatrixOneClient):
                 "database": database,
                 "charset": charset,
                 "autocommit": auto_commit,
+                "local_infile": local_infile,
                 "connect_timeout": timeout,
             }
 
             # Create SQLAlchemy async engine instead of direct aiomysql connection
             self._engine = self._create_async_engine()
+            if on_connect is None:
+                on_connect = [ConnectionAction.ENABLE_ALL]
+            if on_connect:
+                self._setup_connection_hook(on_connect)
 
             # Test the connection by executing a simple query
             import asyncio
@@ -694,16 +578,6 @@ class AsyncClient(BaseMatrixOneClient):
 
             # Initialize metadata manager after successful connection
             self._metadata = AsyncMetadataManager(self)
-
-            # Setup connection hook (default to ENABLE_ALL if not provided)
-            # Allow empty list [] to explicitly disable hooks
-            if on_connect is None:
-                on_connect = [ConnectionAction.ENABLE_ALL]
-
-            if on_connect:  # Only setup if not empty list
-                self._setup_connection_hook(on_connect)
-                # Execute the hook once immediately for the initial connection
-                await self._execute_connection_hook_immediately(on_connect)
 
             # Report success only after initialization returns. Unhandled
             # initialization failures are fatal, but ordinary callback errors
@@ -834,6 +708,9 @@ class AsyncClient(BaseMatrixOneClient):
         client = cls(**kwargs)
 
         # Set the provided engine
+        from .sqlalchemy_ext.dialect import adapt_engine_dialect
+
+        adapt_engine_dialect(engine.sync_engine)
         client._engine = engine
 
         # Initialize vector managers after engine is set
@@ -897,17 +774,20 @@ class AsyncClient(BaseMatrixOneClient):
             pool_recycle=3600,  # Recycle connections after 1 hour
             pool_pre_ping=True,  # Verify connections before use
             pool_reset_on_return="commit",  # Reset connections on return
-            connect_args={'connect_timeout': self._connection_params['connect_timeout']},
+            connect_args={
+                'connect_timeout': self._connection_params['connect_timeout'],
+                'local_infile': self._connection_params.get('local_infile', False),
+            },
             echo=False,  # Set to True for SQL logging
         )
 
-        import sqlalchemy
+        # Older SQLAlchemy dialects infer ping's signature from PyMySQL,
+        # but their aiomysql adapter requires reconnect=False. This also
+        # affects 2.0 releases; newer dialects already pass False directly.
+        engine.dialect._send_false_to_ping = True
+        from .sqlalchemy_ext.dialect import adapt_engine_dialect
 
-        version = getattr(sqlalchemy, '__version__', '')
-        if isinstance(version, str) and version.startswith('1.4.'):
-            # 1.4 infers ping's signature from PyMySQL, but the aiomysql
-            # adapter still requires reconnect=False even with PyMySQL 1.2.
-            engine.dialect._send_false_to_ping = True
+        adapt_engine_dialect(engine.sync_engine)
 
         return engine
 
@@ -925,6 +805,10 @@ class AsyncClient(BaseMatrixOneClient):
 
     async def disconnect(self):
         """Disconnect from MatrixOne database asynchronously"""
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
+        self._reset_compatibility()
         if self._engine:
             try:
                 # First, try to close any active connections in the pool
@@ -955,6 +839,7 @@ class AsyncClient(BaseMatrixOneClient):
 
     def disconnect_sync(self):
         """Synchronous disconnect for cleanup when event loop is closed"""
+        self._reset_compatibility()
         if self._engine:
             try:
                 # Try to close the connection pool synchronously
@@ -993,6 +878,9 @@ class AsyncClient(BaseMatrixOneClient):
 
             SQLAlchemy AsyncEngine
         """
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
         if not self._engine:
             raise ConnectionError("Not connected to database")
         return self._engine
@@ -1094,7 +982,10 @@ class AsyncClient(BaseMatrixOneClient):
             self.logger.log_error(e, context=context)
             from .client import _classify_db_error
 
-            raise _classify_db_error(e, sql) from None
+            classified = _classify_db_error(e, sql)
+            if classified is e:
+                raise
+            raise classified from e
 
     async def execute(self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None) -> AsyncResultSet:
         """Execute with a deadline covering pool wait, execution, fetch and commit.
@@ -1102,6 +993,9 @@ class AsyncClient(BaseMatrixOneClient):
         A timeout cancels this call. A timed-out write's commit outcome must be
         reconciled before retrying; cancellation does not prove rollback.
         """
+        from .connection_hooks import assert_not_in_hook
+
+        assert_not_in_hook(self)
         import asyncio
 
         from ._connection_options import positive_timeout
@@ -1382,7 +1276,7 @@ class AsyncClient(BaseMatrixOneClient):
                     result = await session.execute(sql_or_stmt, params, log_mode='off')
 
                     # Convert SQLAlchemy result to AsyncResultSet
-                    if hasattr(result, 'returns_rows') and result.returns_rows:
+                    if result_returns_rows(result):
                         # SELECT query
                         columns = list(result.keys())
                         rows = result.fetchall()
@@ -1502,7 +1396,10 @@ class AsyncClient(BaseMatrixOneClient):
 
             from .client import _classify_db_error
 
-            raise _classify_db_error(e, sql_or_stmt) from None
+            classified = _classify_db_error(e, sql_or_stmt)
+            if classified is e:
+                raise
+            raise classified from e
 
     def _substitute_parameters(self, sql: str, params=None, *, sql_mode='') -> str:
         """Render legacy parameters outside SQL literals, identifiers and comments."""
@@ -1605,11 +1502,15 @@ class AsyncClient(BaseMatrixOneClient):
 
     def _escape_identifier(self, identifier: str) -> str:
         """Escapes an identifier to prevent SQL injection."""
-        return f"`{identifier.replace('`', '``')}`"
+        from ._sql_literals import sql_identifier
+
+        return sql_identifier(identifier, force=True)
 
     def _escape_string(self, value: str) -> str:
         """Escapes a string value for SQL queries."""
-        return f"'{value}'"
+        from ._sql_literals import sql_string_token
+
+        return sql_string_token(value, context='Administrative SQL')
 
     def query(self, *columns, snapshot: str = None):
         """Get async MatrixOne query builder - SQLAlchemy style
@@ -1780,266 +1681,63 @@ class AsyncClient(BaseMatrixOneClient):
 
     @asynccontextmanager
     async def session(self):
+        """Asynchronous SQLAlchemy session with MatrixOne managers.
+
+        Use ``client.session()`` to begin a server transaction before the first
+        operation. The context commits on success, rolls back on errors (including
+        cancellation), and closes the session. Explicit commits end that transaction;
+        further SQL follows SQLAlchemy's transaction rules.
+
+        A session belongs to one task. Await operations sequentially within an
+        AsyncSession. Parallel transactions require separate sessions, each owned
+        by its own task; they do not commit atomically together.
+
+        Example::
+
+            async with client.session() as session:
+                result = await session.execute("SELECT * FROM users")
+                await session.execute("UPDATE users SET active = 1 WHERE id = 1")
+
+        Managers execute through the session's connection. Server transaction
+        restrictions still apply: manager availability does not make every DDL or
+        administrative command transactional. Create snapshots through
+        ``client.snapshots`` outside the transaction. CLONE and DML rollback are
+        covered by the supported-server contract suite.
+
+        Directly constructed or wrapped sessions retain their caller's transaction
+        ownership; use the client context for explicit server BEGIN and cleanup.
         """
-        Create an async transaction-aware session for atomic database operations.
+        from .connection_hooks import assert_not_in_hook
 
-        This method returns an AsyncSession that extends SQLAlchemy AsyncSession with
-        MatrixOne-specific features. All operations within the session are executed
-        atomically using async/await patterns - they either all succeed or all fail together.
-
-        The session is an async context manager that automatically handles transaction lifecycle:
-        - Commits the transaction when the context exits normally
-        - Rolls back the transaction if any exception occurs
-        - Cleans up database resources automatically
-        - Enables non-blocking concurrent operations
-
-        Key Features:
-
-        - **Full async SQLAlchemy ORM**: All standard async Session methods with await
-        - **Atomic transactions**: Multiple async operations commit or rollback together
-        - **Async MatrixOne managers**: All MatrixOne operations available asynchronously
-        - **Concurrent execution**: Use asyncio.gather() for parallel operations
-        - **Non-blocking**: All operations use async/await and don't block event loop
-        - **ORM-style operations**: Use SQLAlchemy select(), insert(), update(), delete()
-
-        Available Async Managers (transaction-aware):
-
-        - session.snapshots: AsyncSnapshotManager for async snapshot operations
-        - session.clone: AsyncCloneManager for async clone operations
-        - session.restore: AsyncRestoreManager for async restore operations
-        - session.pitr: AsyncPitrManager for async point-in-time recovery
-        - session.pubsub: AsyncPubSubManager for async publish-subscribe
-        - session.account: AsyncAccountManager for async account management
-        - session.vector_ops: AsyncVectorManager for async vector operations
-        - session.fulltext_index: AsyncFulltextIndexManager for async fulltext search
-        - session.metadata: AsyncMetadataManager for async metadata analysis
-        - session.load_data: AsyncLoadDataManager for async bulk loading
-        - session.stage: AsyncStageManager for async stage management
-
-        Returns:
-            AsyncContextManager[AsyncSession]: Async context manager yielding AsyncSession
-
-        Raises:
-            ConnectionError: If client is not connected to database
-
-        Usage Examples::
-
-            from matrixone import AsyncClient
-            from sqlalchemy import select, insert, update, delete
-            from sqlalchemy.orm import declarative_base
-            import asyncio
-
-            Base = declarative_base()
-
-            class User(Base):
-                __tablename__ = 'users'
-                id = Column(Integer, primary_key=True)
-                name = Column(String(100))
-                email = Column(String(255))
-                age = Column(Integer)
-
-            class Order(Base):
-                __tablename__ = 'orders'
-                id = Column(Integer, primary_key=True)
-                user_id = Column(Integer)
-                amount = Column(Float)
-
-            async def main():
-                client = AsyncClient()
-                await client.connect(host='localhost', port=6001, user='root', password='111', database='test')
-
-                # ========================================
-                # Example 1: Basic Async Transaction with ORM-style SQL
-                # ========================================
-                async with client.session() as session:
-                    # Insert using SQLAlchemy insert()
-                    await session.execute(insert(User).values(name='John', email='john@example.com', age=30))
-
-                    # Update using SQLAlchemy update()
-                    await session.execute(update(User).where(User.age < 18).values(status='minor'))
-
-                    # Select using SQLAlchemy select()
-                    stmt = select(User).where(User.age > 25)
-                    result = await session.execute(stmt)
-                    for user in result.scalars():
-                        print(f"User: {user.name}")
-
-                    # Delete using SQLAlchemy delete()
-                    await session.execute(delete(User).where(User.status == 'inactive'))
-                    # All operations commit atomically
-
-                # ========================================
-                # Example 2: Async ORM Operations
-                # ========================================
-                async with client.session() as session:
-                    # Create new objects
-                    user1 = User(name='Alice', email='alice@example.com', age=28)
-                    user2 = User(name='Bob', email='bob@example.com', age=35)
-
-                    # Add to session
-                    session.add(user1)
-                    session.add(user2)
-
-                    # Query using ORM
-                    stmt = select(User).where(User.name == 'Alice')
-                    result = await session.execute(stmt)
-                    alice = result.scalar_one()
-
-                    # Update object
-                    alice.email = 'newemail@example.com'
-
-                    # Commit
-                    await session.commit()
-
-                # ========================================
-                # Example 3: Concurrent Operations with asyncio.gather
-                # ========================================
-                async with client.session() as session:
-                    # Execute multiple queries concurrently
-                    user_task = session.execute(select(User).where(User.age > 25))
-                    order_task = session.execute(select(Order).where(Order.amount > 100))
-
-                    user_result, order_result = await asyncio.gather(user_task, order_task)
-
-                    users = user_result.scalars().all()
-                    orders = order_result.scalars().all()
-
-                    print(f"Found {len(users)} users and {len(orders)} orders")
-
-                # ========================================
-                # Example 4: Async MatrixOne Managers
-                # ========================================
-                async with client.session() as session:
-                    from matrixone import SnapshotLevel
-
-                    # Create snapshot asynchronously
-                    snapshot = await session.snapshots.create(
-                        name='daily_backup',
-                        level=SnapshotLevel.DATABASE,
-                        database='production'
-                    )
-
-                    # Clone database asynchronously
-                    await session.clone.clone_database(
-                        target_db='prod_copy',
-                        source_db='production',
-                        snapshot_name='daily_backup'
-                    )
-                    # Both operations commit atomically
-
-                # ========================================
-                # Example 5: Async Data Loading with Stages
-                # ========================================
-                async with client.session() as session:
-                    # Create S3 stage using simple interface
-                    await session.stage.create_s3(
-                        name='import_stage',
-                        bucket='my-bucket',
-                        path='imports/',
-                        aws_key_id='key',
-                        aws_secret_key='secret'
-                    )
-
-                    # Load data from stage using ORM model
-                    await session.load_data.from_stage_csv('import_stage', 'users.csv', User)
-
-                    # Update statistics
-                    await session.execute("ANALYZE TABLE users")
-                    # All operations are atomic
-
-                # ========================================
-                # Example 6: Error Handling and Rollback
-                # ========================================
-                try:
-                    async with client.session() as session:
-                        await session.execute(insert(User).values(name='Charlie', age=40))
-                        await session.execute(insert(InvalidTable).values(data='test'))  # Fails
-                        # Transaction automatically rolls back - Charlie is NOT inserted
-                except Exception as e:
-                    print(f"Transaction failed and rolled back: {e}")
-
-                # ========================================
-                # Example 7: Complex Multi-Manager Transaction
-                # ========================================
-                async with client.session() as session:
-                    # Create publication
-                    await session.pubsub.create_database_publication(
-                        name='analytics_pub',
-                        database='analytics',
-                        account='subscriber_account'
-                    )
-
-                    # Create local stage
-                    await session.stage.create_local('export_stage', '/exports/')
-
-                    # Load data using ORM model
-                    await session.load_data.from_csv('/data/latest.csv', Analytics)
-
-                    # Create snapshot
-                    await session.snapshots.create(
-                        name='post_load_snapshot',
-                        level=SnapshotLevel.DATABASE,
-                        database='analytics'
-                    )
-                    # All operations commit together
-
-                # ========================================
-                # Example 8: High-Performance Concurrent Loading
-                # ========================================
-                async with client.session() as session:
-                    # Load multiple files concurrently
-                    await asyncio.gather(
-                        session.load_data.from_csv('/data/users.csv', User),
-                        session.load_data.from_csv('/data/orders.csv', Order),
-                        session.load_data.from_csv('/data/products.csv', Product)
-                    )
-                    # All loads commit atomically
-
-                await client.disconnect()
-
-            asyncio.run(main())
-
-        Best Practices:
-
-        1. **Always use async with**: Use `async with client.session()` for automatic cleanup
-        2. **Await all operations**: All execute/manager operations must be awaited
-        3. **Use asyncio.gather()**: For concurrent operations within session
-        4. **Keep transactions short**: Long transactions can block other operations
-        5. **Handle exceptions**: Wrap session code in try-except for error handling
-        6. **Use ORM-style SQL**: Prefer SQLAlchemy insert(), update(), select(), delete()
-
-        See Also:
-
-            - AsyncSession: The async session class returned by this method
-            - Client.session(): Synchronous version
-            - AsyncClient.execute(): Non-transactional async query execution
-        """
+        assert_not_in_hook(self)
         if not self._engine:
             raise ConnectionError("Not connected to database")
 
         tx_wrapper = None
+        failed = False
         try:
-            # Create async session from engine (standard SQLAlchemy async pattern)
-            # Session will automatically acquire connection from pool
             tx_wrapper = AsyncSession(bind=self._engine, client=self)
-
-            # Begin transaction explicitly
             await tx_wrapper.begin()
-
+            connection = await tx_wrapper.connection()
+            await connection.exec_driver_sql('BEGIN')
             yield tx_wrapper
-
-            # Commit the transaction on success
             await tx_wrapper.commit()
-
-        except Exception as e:
-            # Rollback on error
-            if tx_wrapper:
-                await tx_wrapper.rollback()
-            raise e
+        except BaseException:
+            failed = True
+            if tx_wrapper is not None:
+                try:
+                    await tx_wrapper.rollback()
+                except BaseException:
+                    self.logger.warning('Async Session rollback failed while preserving the original error')
+            raise
         finally:
-            # Close session (returns connection to pool)
-            if tx_wrapper:
-                await tx_wrapper.close()
+            if tx_wrapper is not None:
+                try:
+                    await tx_wrapper.close()
+                except BaseException:
+                    if not failed:
+                        raise
+                    self.logger.warning('Async Session close failed while preserving the original error')
 
     @property
     def snapshots(self) -> AsyncSnapshotManager:
@@ -2543,6 +2241,15 @@ class AsyncClient(BaseMatrixOneClient):
         if self._load_data is None:
             self._load_data = AsyncLoadDataManager(self)
         return self._load_data
+
+    @property
+    def export(self):
+        """Get the async CSV/JSONL export manager for this client."""
+        if self._export is None:
+            from .export import AsyncExportManager
+
+            self._export = AsyncExportManager(self)
+        return self._export
 
     @property
     def stage(self) -> Optional["AsyncStageManager"]:

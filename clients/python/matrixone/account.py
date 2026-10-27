@@ -167,7 +167,9 @@ class BaseAccountManager:
         sql += self._client._escape_identifier(user_name)
         return sql
 
-    def _build_alter_user_sql(self, user_name: str, password: Optional[str] = None, comment: Optional[str] = None) -> str:
+    def _build_alter_user_sql(
+        self, user_name: str, password: Optional[str] = None, comment: Optional[str] = None
+    ) -> str:
         """Build ALTER USER SQL statement"""
         sql_parts = [f"ALTER USER {self._client._escape_identifier(user_name)}"]
         if password:
@@ -325,7 +327,9 @@ class AccountManager(BaseAccountManager):
         return self.executor if self.executor else self._client
 
     # Account Management
-    def create_account(self, account_name: str, admin_name: str, password: str, comment: Optional[str] = None) -> Account:
+    def create_account(
+        self, account_name: str, admin_name: str, password: str, comment: Optional[str] = None
+    ) -> Account:
         """
         Create a new account in MatrixOne
 
@@ -350,7 +354,7 @@ class AccountManager(BaseAccountManager):
             return self.get_account(account_name)
 
         except Exception as e:
-            raise AccountError(f"Failed to create account '{account_name}': {e}") from None
+            raise AccountError(f"Failed to create account '{account_name}': {e}") from e
 
     def drop_account(self, account_name: str, if_exists: bool = False) -> None:
         """
@@ -365,7 +369,7 @@ class AccountManager(BaseAccountManager):
             sql = self._build_drop_account_sql(account_name, if_exists)
             self._get_executor().execute(sql)
         except Exception as e:
-            raise AccountError(f"Failed to drop account '{account_name}': {e}") from None
+            raise AccountError(f"Failed to drop account '{account_name}': {e}") from e
 
     def alter_account(
         self,
@@ -396,7 +400,7 @@ class AccountManager(BaseAccountManager):
             return self.get_account(account_name)
 
         except Exception as e:
-            raise AccountError(f"Failed to alter account '{account_name}': {e}") from None
+            raise AccountError(f"Failed to alter account '{account_name}': {e}") from e
 
     def get_account(self, account_name: str) -> Account:
         """Get account by name"""
@@ -414,7 +418,7 @@ class AccountManager(BaseAccountManager):
             raise AccountError(f"Account '{account_name}' not found") from None
 
         except Exception as e:
-            raise AccountError(f"Failed to get account '{account_name}': {e}") from None
+            raise AccountError(f"Failed to get account '{account_name}': {e}") from e
 
     def list_accounts(self) -> List[Account]:
         """List all accounts"""
@@ -428,7 +432,7 @@ class AccountManager(BaseAccountManager):
             return [self._row_to_account(row) for row in result.rows]
 
         except Exception as e:
-            raise AccountError(f"Failed to list accounts: {e}") from None
+            raise AccountError(f"Failed to list accounts: {e}") from e
 
     # User Management
     def create_user(self, user_name: str, password: str, comment: Optional[str] = None) -> User:
@@ -472,7 +476,7 @@ class AccountManager(BaseAccountManager):
             )
 
         except Exception as e:
-            raise AccountError(f"Failed to create user '{user_name}': {e}") from None
+            raise AccountError(f"Failed to create user '{user_name}': {e}") from e
 
     def drop_user(self, user_name: str, if_exists: bool = False) -> None:
         """
@@ -489,7 +493,7 @@ class AccountManager(BaseAccountManager):
             self._get_executor().execute(sql)
 
         except Exception as e:
-            raise AccountError(f"Failed to drop user '{user_name}': {e}") from None
+            raise AccountError(f"Failed to drop user '{user_name}': {e}") from e
 
     def alter_user(
         self,
@@ -551,7 +555,7 @@ class AccountManager(BaseAccountManager):
             )
 
         except Exception as e:
-            raise AccountError(f"Failed to alter user '{user_name}': {e}") from None
+            raise AccountError(f"Failed to alter user '{user_name}': {e}") from e
 
     def get_current_user(self) -> User:
         """Get current user information"""
@@ -584,7 +588,7 @@ class AccountManager(BaseAccountManager):
             )
 
         except Exception as e:
-            raise AccountError(f"Failed to get current user: {e}") from None
+            raise AccountError(f"Failed to get current user: {e}") from e
 
     def list_users(self) -> List[User]:
         """
@@ -611,7 +615,7 @@ class AccountManager(BaseAccountManager):
             return [User(name=current_user_name, host="%", account=current_account, status="OPEN")]
 
         except Exception as e:
-            raise AccountError(f"Failed to list users: {e}") from None
+            raise AccountError(f"Failed to list users: {e}") from e
 
     # Role Management
     def create_role(self, role_name: str, comment: Optional[str] = None) -> Role:
@@ -624,7 +628,7 @@ class AccountManager(BaseAccountManager):
             return self.get_role(role_name)
 
         except Exception as e:
-            raise AccountError(f"Failed to create role '{role_name}': {e}") from None
+            raise AccountError(f"Failed to create role '{role_name}': {e}") from e
 
     def drop_role(self, role_name: str, if_exists: bool = False) -> None:
         """
@@ -644,7 +648,7 @@ class AccountManager(BaseAccountManager):
             sql = " ".join(sql_parts)
             self._get_executor().execute(sql)
         except Exception as e:
-            raise AccountError(f"Failed to drop role '{role_name}': {e}") from None
+            raise AccountError(f"Failed to drop role '{role_name}': {e}") from e
 
     def get_role(self, role_name: str) -> Role:
         """Get role by name"""
@@ -662,7 +666,7 @@ class AccountManager(BaseAccountManager):
             raise AccountError(f"Role '{role_name}' not found") from None
 
         except Exception as e:
-            raise AccountError(f"Failed to get role '{role_name}': {e}") from None
+            raise AccountError(f"Failed to get role '{role_name}': {e}") from e
 
     def list_roles(self) -> List[Role]:
         """List all roles"""
@@ -676,7 +680,7 @@ class AccountManager(BaseAccountManager):
             return [self._row_to_role(row) for row in result.rows]
 
         except Exception as e:
-            raise AccountError(f"Failed to list roles: {e}") from None
+            raise AccountError(f"Failed to list roles: {e}") from e
 
     # Permission Management
     def grant_privilege(
@@ -714,7 +718,7 @@ class AccountManager(BaseAccountManager):
             self._get_executor().execute(sql)
 
         except Exception as e:
-            raise AccountError(f"Failed to grant privilege: {e}") from None
+            raise AccountError(f"Failed to grant privilege: {e}") from e
 
     def revoke_privilege(
         self,
@@ -739,7 +743,7 @@ class AccountManager(BaseAccountManager):
             self._get_executor().execute(sql)
 
         except Exception as e:
-            raise AccountError(f"Failed to revoke privilege: {e}") from None
+            raise AccountError(f"Failed to revoke privilege: {e}") from e
 
     def grant_role(self, role_name: str, to_user: str) -> None:
         """Grant role to user"""
@@ -748,16 +752,18 @@ class AccountManager(BaseAccountManager):
             sql = f"GRANT {self._client._escape_identifier(role_name)} TO {self._client._escape_identifier(to_user)}"
             self._get_executor().execute(sql)
         except Exception as e:
-            raise AccountError(f"Failed to grant role '{role_name}' to user '{to_user}': {e}") from None
+            raise AccountError(f"Failed to grant role '{role_name}' to user '{to_user}': {e}") from e
 
     def revoke_role(self, role_name: str, from_user: str) -> None:
         """Revoke role from user"""
         try:
             # MatrixOne syntax: REVOKE role_name FROM user_name
-            sql = f"REVOKE {self._client._escape_identifier(role_name)} FROM {self._client._escape_identifier(from_user)}"
+            sql = (
+                f"REVOKE {self._client._escape_identifier(role_name)} FROM {self._client._escape_identifier(from_user)}"
+            )
             self._get_executor().execute(sql)
         except Exception as e:
-            raise AccountError(f"Failed to revoke role '{role_name}' from user '{from_user}': {e}") from None
+            raise AccountError(f"Failed to revoke role '{role_name}' from user '{from_user}': {e}") from e
 
     def list_grants(self, user: Optional[str] = None) -> List[Grant]:
         """List grants for current user or specified user"""
@@ -780,7 +786,7 @@ class AccountManager(BaseAccountManager):
             return grants
 
         except Exception as e:
-            raise AccountError(f"Failed to list grants: {e}") from None
+            raise AccountError(f"Failed to list grants: {e}") from e
 
     # Helper methods
     def _get_current_account(self) -> str:
@@ -942,6 +948,14 @@ class AsyncAccountManager(BaseAccountManager):
 
         except Exception as e:
             raise AccountError(f"Failed to create user '{user_name}': {e}")
+
+    async def drop_user(self, user_name: str, if_exists: bool = False) -> None:
+        """Drop a user through the owning asynchronous client or session."""
+        try:
+            sql = self._build_drop_user_sql(user_name, if_exists)
+            await self._get_executor().execute(sql)
+        except Exception as error:
+            raise AccountError(f"Failed to drop user '{user_name}': {error}") from error
 
     async def list_users(self) -> List[User]:
         """List users in current account asynchronously"""
