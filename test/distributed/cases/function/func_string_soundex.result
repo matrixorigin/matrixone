@@ -164,62 +164,123 @@ DEALLOCATE PREPARE soundex_prepared_28912;
 SELECT COALESCE(NULLIF(HEX(SOUNDEX(CAST(UNHEX('C3A9') AS VARBINARY(2)))), ''), '<empty>') AS direct_binary_hex;
 ➤ direct_binary_hex[12,8,0]  𝄀
 <empty>
-SELECT 'Hello' SOUNDS LIKE 'Hallo' AS same_sound, 'Hello' SOUNDS LIKE 'World' AS different_sound, 'Hello' SOUNDS LIKE 'H%' AS not_a_pattern;
-➤ same_sound[-6,8,0]  ¦  different_sound[-6,8,0]  ¦  not_a_pattern[-6,8,0]  𝄀
-1  ¦  0  ¦  0
-SELECT NULL SOUNDS LIKE 'Hello' AS null_left, 'Hello' SOUNDS LIKE NULL AS null_right, NULL SOUNDS LIKE NULL AS null_both;
-➤ null_left[-6,8,0]  ¦  null_right[-6,8,0]  ¦  null_both[-6,8,0]  𝄀
-null  ¦  null  ¦  null
-SELECT '' SOUNDS LIKE '123!' AS empty_codes, 'pfister' SOUNDS LIKE 'Pfister' AS mixed_case, 123 SOUNDS LIKE 456 AS numeric_codes;
-➤ empty_codes[-6,8,0]  ¦  mixed_case[-6,8,0]  ¦  numeric_codes[-6,8,0]  𝄀
-1  ¦  1  ¦  1
+SELECT 'Hello' SOUNDS LIKE 'H%' AS not_a_pattern, 'pfister' SOUNDS LIKE 'Pfister' AS mixed_case;
+➤ not_a_pattern[-6,8,0]  ¦  mixed_case[-6,8,0]  𝄀
+0  ¦  1
 SELECT NOT 'Hello' SOUNDS LIKE 'Hallo' AS negated, 'Hello' SOUNDS LIKE 'Hallo' = 1 AS comparison, 'Hello' SOUNDS LIKE 'Hallo' AND FALSE AS conjunction;
 ➤ negated[-6,8,0]  ¦  comparison[-6,8,0]  ¦  conjunction[-6,8,0]  𝄀
 0  ¦  1  ¦  0
 SELECT CAST(UNHEX('C3A9') AS VARBINARY(2)) SOUNDS LIKE CAST('' AS VARBINARY(2)) AS binary_codes;
 ➤ binary_codes[-6,8,0]  𝄀
 1
-SELECT 'Hello' SOUNDS /* comment */ LIKE 'Hallo' AS comment_match, 'Hello' SOUNDS /*! LIKE */ 'Hallo' AS executable_comment_match;
-➤ comment_match[-6,8,0]  ¦  executable_comment_match[-6,8,0]  𝄀
-1  ¦  1
 SELECT 1 sounds;
 ➤ sounds[-5,64,0]  𝄀
 1
-DROP VIEW IF EXISTS sounds_like_view;
-DROP TABLE IF EXISTS sounds_like_input;
-CREATE TABLE sounds_like_input(id INT PRIMARY KEY, sounds VARCHAR(20), other VARCHAR(20));
-INSERT INTO sounds_like_input VALUES (1, 'Hello', 'Hallo'), (2, 'Hello', 'World'), (3, '', '123!'), (4, NULL, 'Hallo');
-SELECT id, sounds SOUNDS LIKE other AS matches, SOUNDEX(sounds) = SOUNDEX(other) AS explicit_comparison FROM sounds_like_input ORDER BY id;
-➤ id[4,32,0]  ¦  matches[-6,8,0]  ¦  explicit_comparison[-6,8,0]  𝄀
+SELECT 'Hello' SOUNDS /*! LIKE */ 'Hallo' AS comment_like, 'Hello' SOUNDS /*!50000 LIKE */ 'Hallo' AS version_like, 'Hello' /*! SOUNDS */ LIKE 'Hallo' AS comment_sounds;
+➤ comment_like[-6,8,0]  ¦  version_like[-6,8,0]  ¦  comment_sounds[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SELECT 'Hello' SOUNDS LIKE 'Hallo' AS matched, 'Robert' SOUNDS LIKE 'Rubin' AS different, 'BDFJLMPR' SOUNDS LIKE 'BDFJLMPRB' AS full_code;
+➤ matched[-6,8,0]  ¦  different[-6,8,0]  ¦  full_code[-6,8,0]  𝄀
+1  ¦  0  ¦  0
+SELECT NULL SOUNDS LIKE 'Robert' AS left_null, 'Robert' SOUNDS LIKE NULL AS right_null, NULL SOUNDS LIKE NULL AS both_null;
+➤ left_null[-6,8,0]  ¦  right_null[-6,8,0]  ¦  both_null[-6,8,0]  𝄀
+null  ¦  null  ¦  null
+SELECT '' SOUNDS LIKE '123!' AS empty_code, 123 SOUNDS LIKE 456 AS numeric_inputs, CAST('Robert' AS CHAR(16)) SOUNDS LIKE CAST('Rupert' AS TEXT) AS string_types;
+➤ empty_code[-6,8,0]  ¦  numeric_inputs[-6,8,0]  ¦  string_types[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SELECT CAST('Robert' AS VARBINARY(16)) SOUNDS LIKE CAST('Rupert' AS VARBINARY(16)) AS binary_inputs, CAST(UNHEX('C3A9') AS VARBINARY(2)) SOUNDS LIKE 'é' AS binary_text;
+➤ binary_inputs[-6,8,0]  ¦  binary_text[-6,8,0]  𝄀
+1  ¦  0
+SELECT CONCAT('Ro', 'bert') SOUNDS /* phrase */ LIKE LOWER('RUPERT') AS expressions, 1 + 2 SOUNDS LIKE 3 * 4 AS arithmetic, 'Robert' SOUNDS LIKE 'Rupert' = 'Smith' SOUNDS LIKE 'Smythe' AS comparisons;
+➤ expressions[-6,8,0]  ¦  arithmetic[-6,8,0]  ¦  comparisons[-6,8,0]  𝄀
+1  ¦  1  ¦  1
+SET @sounds_like_saved_mode = @@sql_mode;
+SET sql_mode = '';
+SELECT NOT 0 SOUNDS LIKE 'a' AS default_not;
+➤ default_not[-6,8,0]  𝄀
+1
+SET sql_mode = 'HIGH_NOT_PRECEDENCE';
+SELECT NOT 0 SOUNDS LIKE 'a' AS high_not;
+➤ high_not[-6,8,0]  𝄀
+0
+SET sql_mode = @sounds_like_saved_mode;
+DROP TABLE IF EXISTS sounds_like_inputs;
+CREATE TABLE sounds_like_inputs(id INT PRIMARY KEY, sounds VARCHAR(32), other VARCHAR(32));
+INSERT INTO sounds_like_inputs VALUES (1, 'Robert', 'Rupert'), (2, 'Robert', 'Rubin'), (3, NULL, 'Robert'), (4, '', '123!');
+SELECT id, sounds SOUNDS LIKE other AS matched, (sounds SOUNDS LIKE other) <=> (SOUNDEX(sounds) = SOUNDEX(other)) AS equivalent FROM sounds_like_inputs ORDER BY id;
+➤ id[4,32,0]  ¦  matched[-6,8,0]  ¦  equivalent[-6,8,0]  𝄀
 1  ¦  1  ¦  1  𝄀
-2  ¦  0  ¦  0  𝄀
-3  ¦  1  ¦  1  𝄀
-4  ¦  null  ¦  null
-SELECT id FROM sounds_like_input WHERE sounds SOUNDS LIKE other ORDER BY id;
+2  ¦  0  ¦  1  𝄀
+3  ¦  null  ¦  1  𝄀
+4  ¦  1  ¦  1
+SELECT id FROM sounds_like_inputs WHERE sounds SOUNDS LIKE other ORDER BY id;
 ➤ id[4,32,0]  𝄀
 1  𝄀
-3
-CREATE VIEW sounds_like_view AS SELECT id, sounds SOUNDS LIKE other AS matches FROM sounds_like_input;
-SELECT id, matches FROM sounds_like_view ORDER BY id;
-➤ id[4,32,0]  ¦  matches[-6,8,0]  𝄀
+4
+SELECT id, CASE WHEN sounds SOUNDS LIKE other THEN 'same' ELSE 'different' END AS category FROM sounds_like_inputs ORDER BY id;
+➤ id[4,32,0]  ¦  category[12,9,0]  𝄀
+1  ¦  same  𝄀
+2  ¦  different  𝄀
+3  ¦  different  𝄀
+4  ¦  same
+SELECT sounds FROM sounds_like_inputs WHERE sounds LIKE 'Ro%' ORDER BY id;
+➤ sounds[12,32,0]  𝄀
+Robert  𝄀
+Robert
+SELECT 'alias' sounds FROM sounds_like_inputs WHERE id = 1;
+➤ sounds[12,5,0]  𝄀
+alias
+PREPARE sounds_like_stmt FROM 'SELECT ? SOUNDS LIKE ? AS matched, ? AS marker';
+SET @sounds_like_left = 'Robert', @sounds_like_right = 'Rupert', @sounds_like_marker = 7;
+EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
+➤ matched[-6,8,0]  ¦  marker[-1,16383,0]  𝄀
+1  ¦  7
+SET @sounds_like_right = 'Rubin';
+EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
+➤ matched[-6,8,0]  ¦  marker[-1,16383,0]  𝄀
+0  ¦  7
+SET @sounds_like_left = CAST(UNHEX('C3A9') AS VARBINARY(2)), @sounds_like_right = 'é';
+EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
+➤ matched[-6,8,0]  ¦  marker[-1,16383,0]  𝄀
+1  ¦  7
+SET @sounds_like_left = NULL;
+EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
+➤ matched[-6,8,0]  ¦  marker[-1,16383,0]  𝄀
+null  ¦  7
+SET @sounds_like_left = 'Robert', @sounds_like_right = 'Rupert';
+EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
+➤ matched[-6,8,0]  ¦  marker[-1,16383,0]  𝄀
+1  ¦  7
+DEALLOCATE PREPARE sounds_like_stmt;
+CREATE VIEW sounds_like_view AS SELECT id, sounds SOUNDS LIKE other AS matched FROM sounds_like_inputs;
+SELECT id, matched FROM sounds_like_view ORDER BY id;
+➤ id[4,32,0]  ¦  matched[-6,8,0]  𝄀
 1  ¦  1  𝄀
 2  ¦  0  𝄀
-3  ¦  1  𝄀
-4  ¦  null
-DROP VIEW sounds_like_view;
-DROP TABLE sounds_like_input;
-PREPARE sounds_like_stmt FROM 'SELECT ? SOUNDS LIKE ? AS matches';
-SET @sounds_like_left='Hello', @sounds_like_right='Hallo';
-EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right;
-➤ matches[-6,8,0]  𝄀
+3  ¦  null  𝄀
+4  ¦  1
+SELECT VIEW_DEFINITION LIKE '%soundex%' AND VIEW_DEFINITION NOT LIKE '%sounds like%' AS lowered FROM information_schema.views WHERE table_schema = DATABASE() AND table_name = 'sounds_like_view';
+➤ lowered[-6,8,0]  𝄀
 1
-SET @sounds_like_right='World';
-EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right;
-➤ matches[-6,8,0]  𝄀
-0
-SET @sounds_like_left=NULL;
-EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right;
-➤ matches[-6,8,0]  𝄀
-null
-DEALLOCATE PREPARE sounds_like_stmt;
-SET @sounds_like_left=NULL, @sounds_like_right=NULL;
+SET @sounds_like_replay_sql = (SELECT CONCAT('CREATE VIEW sounds_like_replayed AS ', VIEW_DEFINITION) FROM information_schema.views WHERE table_schema = DATABASE() AND table_name = 'sounds_like_view');
+PREPARE sounds_like_replay FROM @sounds_like_replay_sql;
+EXECUTE sounds_like_replay;
+DEALLOCATE PREPARE sounds_like_replay;
+SELECT id, matched FROM sounds_like_replayed ORDER BY id;
+➤ id[4,32,0]  ¦  matched[-6,8,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0  𝄀
+3  ¦  null  𝄀
+4  ¦  1
+CREATE TABLE sounds_like_ctas AS SELECT id, sounds SOUNDS LIKE other AS matched FROM sounds_like_inputs;
+SELECT id, matched FROM sounds_like_ctas ORDER BY id;
+➤ id[4,32,0]  ¦  matched[-7,1,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  0  𝄀
+3  ¦  null  𝄀
+4  ¦  1
+DROP TABLE sounds_like_ctas;
+DROP VIEW sounds_like_replayed;
+DROP VIEW sounds_like_view;
+DROP TABLE sounds_like_inputs;
+SET @sounds_like_saved_mode = NULL, @sounds_like_left = NULL, @sounds_like_right = NULL, @sounds_like_marker = NULL, @sounds_like_replay_sql = NULL;

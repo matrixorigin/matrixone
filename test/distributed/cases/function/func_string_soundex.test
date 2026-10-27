@@ -109,36 +109,66 @@ DEALLOCATE PREPARE soundex_prepared_28912;
 # Explicit binary and direct binary inputs keep byte-oriented Soundex.
 SELECT COALESCE(NULLIF(HEX(SOUNDEX(CAST(UNHEX('C3A9') AS VARBINARY(2)))), ''), '<empty>') AS direct_binary_hex;
 
-# SOUNDS LIKE uses SOUNDEX equality, not LIKE pattern matching.
-SELECT 'Hello' SOUNDS LIKE 'Hallo' AS same_sound, 'Hello' SOUNDS LIKE 'World' AS different_sound, 'Hello' SOUNDS LIKE 'H%' AS not_a_pattern;
-SELECT NULL SOUNDS LIKE 'Hello' AS null_left, 'Hello' SOUNDS LIKE NULL AS null_right, NULL SOUNDS LIKE NULL AS null_both;
-SELECT '' SOUNDS LIKE '123!' AS empty_codes, 'pfister' SOUNDS LIKE 'Pfister' AS mixed_case, 123 SOUNDS LIKE 456 AS numeric_codes;
+# SOUNDS LIKE uses phonetic equality, not LIKE patterns.
+SELECT 'Hello' SOUNDS LIKE 'H%' AS not_a_pattern, 'pfister' SOUNDS LIKE 'Pfister' AS mixed_case;
 SELECT NOT 'Hello' SOUNDS LIKE 'Hallo' AS negated, 'Hello' SOUNDS LIKE 'Hallo' = 1 AS comparison, 'Hello' SOUNDS LIKE 'Hallo' AND FALSE AS conjunction;
 SELECT CAST(UNHEX('C3A9') AS VARBINARY(2)) SOUNDS LIKE CAST('' AS VARBINARY(2)) AS binary_codes;
-
-# Keyword lookahead retains comments and pre-existing implicit aliases.
-SELECT 'Hello' SOUNDS /* comment */ LIKE 'Hallo' AS comment_match, 'Hello' SOUNDS /*! LIKE */ 'Hallo' AS executable_comment_match;
 SELECT 1 sounds;
+SELECT 'Hello' SOUNDS /*! LIKE */ 'Hallo' AS comment_like, 'Hello' SOUNDS /*!50000 LIKE */ 'Hallo' AS version_like, 'Hello' /*! SOUNDS */ LIKE 'Hallo' AS comment_sounds;
+# Independent known results, ordinary NULL equality, and full Soundex codes.
+SELECT 'Hello' SOUNDS LIKE 'Hallo' AS matched, 'Robert' SOUNDS LIKE 'Rubin' AS different, 'BDFJLMPR' SOUNDS LIKE 'BDFJLMPRB' AS full_code;
+SELECT NULL SOUNDS LIKE 'Robert' AS left_null, 'Robert' SOUNDS LIKE NULL AS right_null, NULL SOUNDS LIKE NULL AS both_null;
+SELECT '' SOUNDS LIKE '123!' AS empty_code, 123 SOUNDS LIKE 456 AS numeric_inputs, CAST('Robert' AS CHAR(16)) SOUNDS LIKE CAST('Rupert' AS TEXT) AS string_types;
+SELECT CAST('Robert' AS VARBINARY(16)) SOUNDS LIKE CAST('Rupert' AS VARBINARY(16)) AS binary_inputs, CAST(UNHEX('C3A9') AS VARBINARY(2)) SOUNDS LIKE 'é' AS binary_text;
+SELECT CONCAT('Ro', 'bert') SOUNDS /* phrase */ LIKE LOWER('RUPERT') AS expressions, 1 + 2 SOUNDS LIKE 3 * 4 AS arithmetic, 'Robert' SOUNDS LIKE 'Rupert' = 'Smith' SOUNDS LIKE 'Smythe' AS comparisons;
 
-# Column evaluation, non-reserved identifiers, filtering, and persisted SQL.
-DROP VIEW IF EXISTS sounds_like_view;
-DROP TABLE IF EXISTS sounds_like_input;
-CREATE TABLE sounds_like_input(id INT PRIMARY KEY, sounds VARCHAR(20), other VARCHAR(20));
-INSERT INTO sounds_like_input VALUES (1, 'Hello', 'Hallo'), (2, 'Hello', 'World'), (3, '', '123!'), (4, NULL, 'Hallo');
-SELECT id, sounds SOUNDS LIKE other AS matches, SOUNDEX(sounds) = SOUNDEX(other) AS explicit_comparison FROM sounds_like_input ORDER BY id;
-SELECT id FROM sounds_like_input WHERE sounds SOUNDS LIKE other ORDER BY id;
-CREATE VIEW sounds_like_view AS SELECT id, sounds SOUNDS LIKE other AS matches FROM sounds_like_input;
-SELECT id, matches FROM sounds_like_view ORDER BY id;
-DROP VIEW sounds_like_view;
-DROP TABLE sounds_like_input;
+# The SQL mode controls NOT's operand without changing the phonetic predicate.
+SET @sounds_like_saved_mode = @@sql_mode;
+SET sql_mode = '';
+SELECT NOT 0 SOUNDS LIKE 'a' AS default_not;
+SET sql_mode = 'HIGH_NOT_PRECEDENCE';
+SELECT NOT 0 SOUNDS LIKE 'a' AS high_not;
+SET sql_mode = @sounds_like_saved_mode;
 
-# Each prepared operand retains one parameter, including NULL on reuse.
-PREPARE sounds_like_stmt FROM 'SELECT ? SOUNDS LIKE ? AS matches';
-SET @sounds_like_left='Hello', @sounds_like_right='Hallo';
-EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right;
-SET @sounds_like_right='World';
-EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right;
-SET @sounds_like_left=NULL;
-EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right;
+# Mixed rows prove vector NULL handling, filtering and CASE consumers.
+DROP TABLE IF EXISTS sounds_like_inputs;
+CREATE TABLE sounds_like_inputs(id INT PRIMARY KEY, sounds VARCHAR(32), other VARCHAR(32));
+INSERT INTO sounds_like_inputs VALUES (1, 'Robert', 'Rupert'), (2, 'Robert', 'Rubin'), (3, NULL, 'Robert'), (4, '', '123!');
+SELECT id, sounds SOUNDS LIKE other AS matched, (sounds SOUNDS LIKE other) <=> (SOUNDEX(sounds) = SOUNDEX(other)) AS equivalent FROM sounds_like_inputs ORDER BY id;
+SELECT id FROM sounds_like_inputs WHERE sounds SOUNDS LIKE other ORDER BY id;
+SELECT id, CASE WHEN sounds SOUNDS LIKE other THEN 'same' ELSE 'different' END AS category FROM sounds_like_inputs ORDER BY id;
+SELECT sounds FROM sounds_like_inputs WHERE sounds LIKE 'Ro%' ORDER BY id;
+SELECT 'alias' sounds FROM sounds_like_inputs WHERE id = 1;
+
+# One prepared plan reuses text, binary and NULL operands; the last marker
+# verifies that lowering neither duplicates nor reorders parameter occurrences.
+PREPARE sounds_like_stmt FROM 'SELECT ? SOUNDS LIKE ? AS matched, ? AS marker';
+SET @sounds_like_left = 'Robert', @sounds_like_right = 'Rupert', @sounds_like_marker = 7;
+EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
+SET @sounds_like_right = 'Rubin';
+EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
+SET @sounds_like_left = CAST(UNHEX('C3A9') AS VARBINARY(2)), @sounds_like_right = 'é';
+EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
+SET @sounds_like_left = NULL;
+EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
+SET @sounds_like_left = 'Robert', @sounds_like_right = 'Rupert';
+EXECUTE sounds_like_stmt USING @sounds_like_left, @sounds_like_right, @sounds_like_marker;
 DEALLOCATE PREPARE sounds_like_stmt;
-SET @sounds_like_left=NULL, @sounds_like_right=NULL;
+
+# Export the public canonical view definition, replay it as a second view,
+# and materialize its result. This exercises persisted and formatted consumers.
+CREATE VIEW sounds_like_view AS SELECT id, sounds SOUNDS LIKE other AS matched FROM sounds_like_inputs;
+SELECT id, matched FROM sounds_like_view ORDER BY id;
+SELECT VIEW_DEFINITION LIKE '%soundex%' AND VIEW_DEFINITION NOT LIKE '%sounds like%' AS lowered FROM information_schema.views WHERE table_schema = DATABASE() AND table_name = 'sounds_like_view';
+SET @sounds_like_replay_sql = (SELECT CONCAT('CREATE VIEW sounds_like_replayed AS ', VIEW_DEFINITION) FROM information_schema.views WHERE table_schema = DATABASE() AND table_name = 'sounds_like_view');
+PREPARE sounds_like_replay FROM @sounds_like_replay_sql;
+EXECUTE sounds_like_replay;
+DEALLOCATE PREPARE sounds_like_replay;
+SELECT id, matched FROM sounds_like_replayed ORDER BY id;
+CREATE TABLE sounds_like_ctas AS SELECT id, sounds SOUNDS LIKE other AS matched FROM sounds_like_inputs;
+SELECT id, matched FROM sounds_like_ctas ORDER BY id;
+DROP TABLE sounds_like_ctas;
+DROP VIEW sounds_like_replayed;
+DROP VIEW sounds_like_view;
+DROP TABLE sounds_like_inputs;
+SET @sounds_like_saved_mode = NULL, @sounds_like_left = NULL, @sounds_like_right = NULL, @sounds_like_marker = NULL, @sounds_like_replay_sql = NULL;

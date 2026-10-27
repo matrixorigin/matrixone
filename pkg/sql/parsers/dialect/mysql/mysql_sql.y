@@ -520,7 +520,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %right <str> NOT '!'
 %left <str> BETWEEN CASE WHEN THEN ELSE END ELSEIF
 %nonassoc LOWER_THAN_EQ
-%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT ILIKE SOUNDS
+%left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT ILIKE
 %left <str> '|'
 %left <str> '&'
 %left <str> SHIFT_LEFT SHIFT_RIGHT ARROW LONG_ARROW
@@ -1149,6 +1149,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> RESPECT
 %left <str> MEMBER
 %token <str> AUTO_ID_CACHE
+// Shift the contextual SOUNDS LIKE phrase before reducing a bare select alias.
+%left <str> SOUNDS
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -15177,11 +15179,10 @@ predicate:
     {
         $$ = tree.NewComparisonExpr(tree.MEMBER_OF, $1, $5)
     }
-|   bit_expr SOUNDS LIKE bit_expr %prec SOUNDS
+|   bit_expr SOUNDS LIKE bit_expr %prec LIKE
     {
-        name := tree.NewUnresolvedColName("soundex")
         left := &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("soundex")),
             FuncName: tree.NewCStr("soundex", 1),
             Exprs: tree.Exprs{$1},
         }
@@ -16891,8 +16892,8 @@ non_reserved_keyword:
 |   SHARE
 |   SIGNED
 |   SMALLINT
-|   SNAPSHOT
 |   SOUNDS
+|   SNAPSHOT
 |   PITR
 |   RECOVERY_WINDOW
 |   SPATIAL

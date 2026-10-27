@@ -58,6 +58,7 @@ type Scanner struct {
 	strBuilder             bytes.Buffer
 	parseControl           *parseControl
 	aliasFollowerLookahead bool
+	soundsPhraseLookahead  bool
 	identifierAfterDot     bool
 	// digestMode applies MySQL 8.4 lexical compatibility only to digest arguments.
 	digestMode bool
@@ -78,6 +79,7 @@ func (s *Scanner) reset(clearLargeOnly bool, oversized bool) {
 	s.sqlMode = 0
 	s.parseControl = nil
 	s.aliasFollowerLookahead = false
+	s.soundsPhraseLookahead = false
 	s.identifierAfterDot = false
 	s.digestMode = false
 
@@ -1027,6 +1029,19 @@ func (s *Scanner) scanIdentifierToken(isVariable bool) (int, string) {
 				return keywordID, keywordName
 			}
 			return ID, keywordName
+		}
+		// SOUNDS is non-reserved, including as an implicit SELECT alias.
+		// Only the two-word predicate needs the keyword token.
+		if lower == "sounds" {
+			if s.soundsPhraseLookahead {
+				return ID, keywordName
+			}
+			lookahead := *s
+			lookahead.soundsPhraseLookahead = true
+			next, _ := lookahead.Scan()
+			if next != LIKE {
+				return ID, keywordName
+			}
 		}
 		if lower == "offset" && !s.aliasFollowerLookahead && !s.offsetClauseAhead() {
 			return ID, keywordName

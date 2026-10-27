@@ -12,7 +12,7 @@
 
 ## SOUNDS LIKE
 
-parser 将其降低为既有两个 SOUNDEX 调用的等值比较。SOUNDS 是非保留关键字；lexer 在下个真实 token 不是 LIKE 时恢复 ID，从而保留 MO 已支持的隐式别名。独立前瞻 scanner 继承 SQL mode、可执行注释状态及解析工作/取消预算，但不改变真实 scanner 的位置或缓冲。普通 LIKE、显式别名和限定列名不受影响。
+parser 将其降低为既有两个 SOUNDEX 调用的等值比较。SOUNDS 是非保留关键字；采用上游 #31373 已合并的 scanner 上下文识别：下个真实 token 不是 LIKE 时恢复 ID，从而保留 MO 已支持的隐式别名。前瞻快照继承 SQL mode、可执行注释状态及解析工作/取消预算，并用已有递归防护标记避免连续 SOUNDS 触发递归。删除本分支重复的 lexer 前瞻；普通 LIKE、显式别名和限定列名不受影响。
 
 该方案优于新增 ComparisonOp 或独立执行函数：既有 AST、格式化、参数遍历、binder、执行器和持久化 view 消费者均可复用，不新增函数 ID 或 plan 字段。语法生成器必须无新增冲突，生成物必须可重复生成。
 
