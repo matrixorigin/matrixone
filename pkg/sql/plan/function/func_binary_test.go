@@ -3652,83 +3652,31 @@ func TestField(t *testing.T) {
 }
 
 func initFormat2Or3TestCase() []tcTemp {
-	return []tcTemp{
-		{
-			info: "2",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.123456"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"4"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"12,332.1235"}, []bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.1"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"4"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"12,332.1000"}, []bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.2"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"0"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"12,332"}, []bool{false}),
-		},
-		{
-			info: "2",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"-.12334.2"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"2"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"-0.12"}, []bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.123456"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"4"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"ar_SA"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"12332.1235"}, []bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.1"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"4"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"ar_SA"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"12332.1000"}, []bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"12332.2"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"0"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"ar_SA"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"12332"}, []bool{false}),
-		},
-		{
-			info: "3",
-			typ:  types.T_varchar,
-			inputs: []FunctionTestInput{
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"-.12334.2"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"2"}, []bool{false}),
-				NewFunctionTestInput(types.T_varchar.ToType(), []string{"ar_SA"}, []bool{false}),
-			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"-0.12"}, []bool{false}),
-		},
+	cases := []struct{ value, precision, locale, want string }{
+		{"12332.123456", "4", "", "12,332.1235"},
+		{"12332.1", "4", "", "12,332.1000"},
+		{"12332.2", "0", "", "12,332"},
+		{"-.12334.2", "2", "", "-0.12"},
+		{"12332.123456", "4", "ar_SA", "12332.1235"},
+		{"12332.1", "4", "ar_SA", "12332.1000"},
+		{"12332.2", "0", "ar_SA", "12332"},
+		{"-.12334.2", "2", "ar_SA", "-0.12"},
+	}
+	tests := make([]tcTemp, 0, len(cases)+2)
+	for _, c := range cases {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{c.value}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{c.precision}, []bool{false}),
+		}
+		arity := "2"
+		if c.locale != "" {
+			inputs = append(inputs, NewFunctionTestInput(types.T_varchar.ToType(), []string{c.locale}, []bool{false}))
+			arity = "3"
+		}
+		tests = append(tests, tcTemp{info: arity, typ: types.T_varchar, inputs: inputs,
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{c.want}, []bool{false})})
+	}
+	return append(tests, []tcTemp{
 		{
 			info: "2",
 			typ:  types.T_varchar,
@@ -3762,7 +3710,7 @@ func initFormat2Or3TestCase() []tcTemp {
 				[]string{"12,34,56,789.12", "-12,34,56,789.12", "12,34,56,789.12", "1.234,56"},
 				[]bool{false, false, false, false}),
 		},
-	}
+	}...)
 }
 
 func TestFormat2Or3(t *testing.T) {
@@ -3779,6 +3727,8 @@ func TestFormat2Or3(t *testing.T) {
 		case "3":
 			fcTC = NewFunctionTestCase(proc,
 				tc.inputs, tc.expect, FormatWith3Args)
+		default:
+			t.Fatalf("unexpected FORMAT argument count %q", tc.info)
 		}
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
@@ -5113,168 +5063,40 @@ func initLeftTestCase() []tcTemp {
 		len  int64
 		want string
 	}{
-		{
-			"abcde",
-			3,
-			"abc",
-		},
-		{
-			"abcde",
-			0,
-			"",
-		},
-		{
-			"abcde",
-			-1,
-			"",
-		},
-		{
-			"abcde",
-			100,
-			"abcde",
-		},
-		{
-			"foobarbar",
-			5,
-			"fooba",
-		},
+		{"abcde", 3, "abc"},
+		{"abcde", 0, ""},
+		{"abcde", -1, ""},
+		{"abcde", 100, "abcde"},
+		{"foobarbar", 5, "fooba"},
 
 		// TestLeft1
-		{
-			"是都方式快递费",
-			3,
-			"是都方",
-		},
-		{
-			"ｱｲｳｴｵ",
-			3,
-			"ｱｲｳ",
-		},
-		{
-			"ｱｲｳｴｵ ",
-			3,
-			"ｱｲｳ",
-		},
-		{
-			"ｱｲｳｴｵ  ",
-			3,
-			"ｱｲｳ",
-		},
-		{
-			"ｱｲｳｴｵ   ",
-			3,
-			"ｱｲｳ",
-		},
-		{
-			"あいうえお",
-			3,
-			"あいう",
-		},
-		{
-			"あいうえお ",
-			3,
-			"あいう",
-		},
-		{
-			"あいうえお  ",
-			3,
-			"あいう",
-		},
-		{
-			"あいうえお   ",
-			3,
-			"あいう",
-		},
-		{
-			"龔龖龗龞龡",
-			3,
-			"龔龖龗",
-		},
-		{
-			"龔龖龗龞龡 ",
-			3,
-			"龔龖龗",
-		},
-		{
-			"龔龖龗龞龡  ",
-			3,
-			"龔龖龗",
-		},
-		{
-			"龔龖龗龞龡   ",
-			3,
-			"龔龖龗",
-		},
-		{
-			"2017-06-15    ",
-			8,
-			"2017-06-",
-		},
-		{
-			"2019-06-25    ",
-			8,
-			"2019-06-",
-		},
-		{
-			"    2019-06-25  ",
-			8,
-			"    2019",
-		},
-		{
-			"   2019-06-25   ",
-			8,
-			"   2019-",
-		},
-		{
-			"    2012-10-12   ",
-			8,
-			"    2012",
-		},
-		{
-			"   2004-04-24.   ",
-			8,
-			"   2004-",
-		},
-		{
-			"   2008-12-04.  ",
-			8,
-			"   2008-",
-		},
-		{
-			"    2012-03-23.   ",
-			8,
-			"    2012",
-		},
-		{
-			"    2013-04-30  ",
-			8,
-			"    2013",
-		},
-		{
-			"  1994-10-04  ",
-			8,
-			"  1994-1",
-		},
-		{
-			"   2018-06-04  ",
-			8,
-			"   2018-",
-		},
-		{
-			" 2012-10-12  ",
-			8,
-			" 2012-10",
-		},
-		{
-			"1241241^&@%#^*^!@#&*(!&    ",
-			12,
-			"1241241^&@%#",
-		},
-		{
-			" 123 ",
-			2,
-			" 1",
-		},
+		{"是都方式快递费", 3, "是都方"},
+		{"ｱｲｳｴｵ", 3, "ｱｲｳ"},
+		{"ｱｲｳｴｵ ", 3, "ｱｲｳ"},
+		{"ｱｲｳｴｵ  ", 3, "ｱｲｳ"},
+		{"ｱｲｳｴｵ   ", 3, "ｱｲｳ"},
+		{"あいうえお", 3, "あいう"},
+		{"あいうえお ", 3, "あいう"},
+		{"あいうえお  ", 3, "あいう"},
+		{"あいうえお   ", 3, "あいう"},
+		{"龔龖龗龞龡", 3, "龔龖龗"},
+		{"龔龖龗龞龡 ", 3, "龔龖龗"},
+		{"龔龖龗龞龡  ", 3, "龔龖龗"},
+		{"龔龖龗龞龡   ", 3, "龔龖龗"},
+		{"2017-06-15    ", 8, "2017-06-"},
+		{"2019-06-25    ", 8, "2019-06-"},
+		{"    2019-06-25  ", 8, "    2019"},
+		{"   2019-06-25   ", 8, "   2019-"},
+		{"    2012-10-12   ", 8, "    2012"},
+		{"   2004-04-24.   ", 8, "   2004-"},
+		{"   2008-12-04.  ", 8, "   2008-"},
+		{"    2012-03-23.   ", 8, "    2012"},
+		{"    2013-04-30  ", 8, "    2013"},
+		{"  1994-10-04  ", 8, "  1994-1"},
+		{"   2018-06-04  ", 8, "   2018-"},
+		{" 2012-10-12  ", 8, " 2012-10"},
+		{"1241241^&@%#^*^!@#&*(!&    ", 12, "1241241^&@%#"},
+		{" 123 ", 2, " 1"},
 	}
 
 	var testInputs = make([]tcTemp, 0, len(cases))
@@ -5309,6 +5131,18 @@ func TestLeft(t *testing.T) {
 }
 
 // Right
+func TestLeftNullArguments(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc", "abc", "abc"}, []bool{true, false, false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 2, 2}, []bool{false, true, false}),
+	}
+	expected := NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "", "ab"}, []bool{true, true, false})
+	tc := NewFunctionTestCase(proc, inputs, expected, Left)
+	ok, info := tc.RunAndFree()
+	require.True(t, ok, info)
+}
+
 func initRightTestCase() []tcTemp {
 	cases := []struct {
 		s    string
