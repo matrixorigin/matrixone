@@ -2723,6 +2723,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// index table types.
 	isOnDupUpdate := len(astUpdateExprs) > 0 &&
 		!(len(astUpdateExprs) == 1 && astUpdateExprs[0] == nil)
+	// Resolve explicit targets before choosing the conflict action. Even an
+	// INSERT with no possible duplicate must not accept engine-owned columns.
+	if isOnDupUpdate {
+		for _, assignment := range astUpdateExprs {
+			name := assignment.Names[0].ColName()
+			idx, ok := tableDef.Name2ColIndex[name]
+			if !ok || tableDef.Cols[idx].Hidden {
+				return 0, moerr.NewBadFieldErrorf(builder.GetContext(), "invalid input: column '%s' does not exist", assignment.Names[0].ColNameOrigin())
+			}
+		}
+	}
 	isRegularDMLTarget := tableDef.TableType == catalog.SystemOrdinaryRel ||
 		tableDef.TableType == catalog.SystemIndexRel ||
 		tableDef.TableType == catalog.SystemClusterRel ||
@@ -2782,10 +2793,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		var updateExpr *plan.Expr
 		for _, astUpdateExpr := range astUpdateExprs {
 			colName := astUpdateExpr.Names[0].ColName()
-			colIdx, ok := tableDef.Name2ColIndex[colName]
-			if !ok {
-				return 0, moerr.NewBadFieldErrorf(builder.GetContext(), "invalid input: column '%s' does not exist", astUpdateExpr.Names[0].ColNameOrigin())
-			}
+			colIdx := tableDef.Name2ColIndex[colName]
 			colDef := tableDef.Cols[colIdx]
 			astExpr := astUpdateExpr.Expr
 
@@ -4751,10 +4759,21 @@ func buildODKUPKIdentityGuard(builder *QueryBuilder, oldPrimaryKey, candidate *p
 	return guard, nil
 }
 
+// isAlterCopyFakePrimaryKey admits only the row identity preserved by the
+// engine-owned COPY statement for this destination. Ordinary SQL has no COPY
+// authority, and other hidden columns are never explicit insert targets.
+func isAlterCopyFakePrimaryKey(ctx context.Context, tableDef *TableDef, col *ColDef) bool {
+	if col.Name != catalog.FakePrimaryKeyColName || tableDef.Pkey == nil ||
+		tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+		return false
+	}
+	opt, ok := ctx.Value(defines.AlterCopyOpt{}).(*plan.AlterCopyOpt)
+	return ok && opt != nil && opt.TargetTableName != "" && opt.TargetTableName == tableDef.Name
+}
+
 // getInsertColsFromStmt retrieves the list of column names to be inserted into a table
 // based on the given INSERT statement and table definition.
-// If the INSERT statement does not specify the columns, all columns except the fake primary key column
-// will be included in the list.
+// An implicit list includes only visible, non-generated columns.
 // If the INSERT statement specifies the columns, it validates the column names against the table definition
 // and returns an error if any of the column names are invalid.
 // The function returns the list of insert columns and an error, if any.
@@ -4778,10 +4797,7 @@ func (builder *QueryBuilder) getInsertColsFromStmt(astCols tree.IdentifierList, 
 		for _, column := range astCols {
 			colName := strings.ToLower(string(column))
 			idx, ok := colToIdx[colName]
-			if !ok {
-				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
-			}
-			if isFunctionalColumn(tableDef.Cols[idx]) {
+			if !ok || (tableDef.Cols[idx].Hidden && !isAlterCopyFakePrimaryKey(builder.GetContext(), tableDef, tableDef.Cols[idx])) {
 				return nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
@@ -4865,7 +4881,7 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	for i, col := range astCols {
 		colName := strings.ToLower(string(col))
 		if idx, ok := tableDef.Name2ColIndex[colName]; ok {
-			if isFunctionalColumn(tableDef.Cols[idx]) {
+			if tableDef.Cols[idx].Hidden && !isAlterCopyFakePrimaryKey(builder.GetContext(), tableDef, tableDef.Cols[idx]) {
 				return nil, nil, moerr.NewBadFieldError(builder.GetContext(), colName, tableDef.Name)
 			}
 			if tableDef.Cols[idx].GeneratedCol != nil {
