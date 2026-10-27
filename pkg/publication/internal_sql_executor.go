@@ -281,7 +281,6 @@ func (e *InternalSQLExecutor) ExecSQL(
 	backoff := &defChangedBackoff{
 		baseInterval: e.retryOpt.RetryInterval,
 		getLastErr:   func() error { return lastErr },
-		getAttempt:   func() int { return attemptCount },
 	}
 
 	policy := Policy{
@@ -433,7 +432,6 @@ func (e *InternalSQLExecutor) ExecSQLInDatabase(
 	backoff := &defChangedBackoff{
 		baseInterval: e.retryOpt.RetryInterval,
 		getLastErr:   func() error { return lastErr },
-		getAttempt:   func() int { return attemptCount },
 	}
 
 	policy := Policy{
@@ -758,7 +756,6 @@ var _ SQLExecutor = (*InternalSQLExecutor)(nil)
 type defChangedBackoff struct {
 	baseInterval time.Duration
 	getLastErr   func() error
-	getAttempt   func() int
 }
 
 // Next implements BackoffStrategy
