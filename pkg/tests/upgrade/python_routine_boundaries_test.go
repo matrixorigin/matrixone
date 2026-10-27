@@ -50,14 +50,45 @@ func TestPythonRoutineSQLBoundaries(t *testing.T) {
 	log, err := os.Create(filepath.Join(directory, "worker.log"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, log.Close()) })
-	cmd := exec.Command(python, worker, "--address=grpc+tcp://"+address)
+	cmd := exec.Command(python, "-u", "-X", "faulthandler", worker, "--address=grpc+tcp://"+address)
 	cmd.Dir = directory
 	cmd.Stdout = log
 	cmd.Stderr = log
 	started := time.Now()
 	require.NoError(t, cmd.Start())
 	t.Logf("owned worker pid=%d start=%s cwd=%s config=%s data=%s", cmd.Process.Pid, started.Format(time.RFC3339Nano), directory, strings.Join(cmd.Args, " "), directory)
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	type workerExit struct {
+		err error
+		at  time.Time
+	}
+	workerDone := make(chan workerExit, 1)
+	go func() { workerDone <- workerExit{err: cmd.Wait(), at: time.Now()} }()
+	t.Cleanup(func() {
+		var exit workerExit
+		var killErr error
+		requestedTermination := false
+		select {
+		case exit = <-workerDone:
+		default:
+			requestedTermination = true
+			killErr = cmd.Process.Kill()
+			exit = <-workerDone
+		}
+		t.Logf("owned worker pid=%d exit=%s status=%v teardown_requested=%t kill_error=%v", cmd.Process.Pid, exit.at.Format(time.RFC3339Nano), exit.err, requestedTermination, killErr)
+		if !requestedTermination {
+			t.Errorf("Python worker exited before teardown: %v", exit.err)
+		}
+		if t.Failed() {
+			info, statErr := log.Stat()
+			if statErr != nil {
+				t.Logf("worker log stat: %v", statErr)
+				return
+			}
+			tail := make([]byte, min(info.Size(), 64<<10))
+			n, readErr := log.ReadAt(tail, info.Size()-int64(len(tail)))
+			t.Logf("worker log bytes=%d tail_bytes=%d truncated=%t read_error=%v:\n%s", info.Size(), n, info.Size() > int64(n), readErr, tail[:n])
+		}
+	})
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		conn, dialErr := net.DialTimeout("tcp", address, time.Second)
