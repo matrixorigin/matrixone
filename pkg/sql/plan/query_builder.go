@@ -6345,6 +6345,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			// sending it directly to DISTINCT would keep source NULL and
 			// rollup NULL as different hash keys.
 			!selectClause.Distinct &&
+			// SAMPLE owns a separate node, so it cannot produce the additional
+			// prefixes after sort rollup suppresses grouping-set expansion.
+			!selectClauseHasSampleExpr(selectClause) &&
 			builder.sortRollupMode() != 2 &&
 			len(selectClause.GroupBy.GroupByExprsList) == 1 &&
 			(sortRollupSimpleBaseTableSource(selectClause.From.Tables) ||

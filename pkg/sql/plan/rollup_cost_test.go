@@ -741,6 +741,65 @@ func TestSortRollupCostModelUsesByteUnitsForSortSpill(t *testing.T) {
 	require.Greater(t, withSmallByteThreshold.SortMemory, float64(1000))
 }
 
+func TestSortRollupSamplePreservesGroupingSets(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	const source = "(select a, b from select_test.bind_select order by a) d"
+	for _, algorithm := range []string{"SORT", "COST", "HASH"} {
+		t.Run(algorithm, func(t *testing.T) {
+			build := func(sql string) *Query {
+				return buildAutoRollupPlanSQLWithAlgorithm(t, 100_000, sql, algorithm, 1, 1, 1).GetQuery()
+			}
+			// The same ordered source and statistics must otherwise admit SORT,
+			// including in COST mode; fallback is not an unknown-stats accident.
+			control := build("select d.a, count(*) from " + source + " group by d.a with rollup")
+			require.Equal(t, algorithm != "HASH", planHasSortRollup(control))
+			for _, grouping := range []string{"d.a with rollup", "rollup(d.a)", "d.a"} {
+				t.Run(grouping, func(t *testing.T) {
+					query := build("select d.a, sample(d.b, 100 percent) from " + source + " group by " + grouping)
+					require.False(t, planHasSortRollup(query))
+					seen := make(map[int32]bool)
+					var samples, unions int
+					var visit func(int32)
+					visit = func(id int32) {
+						if seen[id] {
+							return
+						}
+						seen[id] = true
+						node := query.Nodes[id]
+						if node.NodeType == plan.Node_SAMPLE {
+							samples++
+						}
+						if node.NodeType == plan.Node_UNION_ALL {
+							unions++
+						}
+						for _, child := range node.Children {
+							visit(child)
+						}
+					}
+					for _, root := range query.Steps {
+						visit(root)
+					}
+					if grouping == "d.a" {
+						require.Equal(t, 1, samples, "ordinary GROUP BY keeps one SAMPLE branch")
+						require.Zero(t, unions)
+					} else {
+						require.Equal(t, 2, samples, "detail and grand-total SAMPLE branches must both be reachable")
+						require.Equal(t, 1, unions)
+					}
+				})
+			}
+		})
+	}
+}
+
 func buildAutoRollupPlanWithStats(t *testing.T, rows float64, grouping string, suffix ...string) *Plan {
 	t.Helper()
 	where := ""
@@ -811,6 +870,15 @@ func buildAutoRollupPlanWithAlgorithm(
 	t *testing.T, rows float64, grouping, algorithm string, ndvs ...float64,
 ) *Plan {
 	t.Helper()
+	return buildAutoRollupPlanSQLWithAlgorithm(t, rows, fmt.Sprintf(
+		"select %s, count(*) from select_test.bind_select group by %s with rollup",
+		grouping, grouping), algorithm, ndvs...)
+}
+
+func buildAutoRollupPlanSQLWithAlgorithm(
+	t *testing.T, rows float64, sql, algorithm string, ndvs ...float64,
+) *Plan {
+	t.Helper()
 	rt := moruntime.ServiceRuntime("")
 	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
 	t.Cleanup(func() {
@@ -853,9 +921,7 @@ func buildAutoRollupPlanWithAlgorithm(
 		},
 		algorithm: algorithm,
 	}
-	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, fmt.Sprintf(
-		"select %s, count(*) from select_test.bind_select group by %s with rollup",
-		grouping, grouping), 1)
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	queryPlan, err := BuildPlan(ctx, stmts[0], false)
 	require.NoError(t, err)

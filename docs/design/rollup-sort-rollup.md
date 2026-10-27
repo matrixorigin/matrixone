@@ -203,6 +203,9 @@ The legacy grouping-set projection already performs that normalization after
 materializing explicit `GROUPING()` outputs. The fallback therefore collapses
 duplicate NULL values while retaining different projected grouping bits.
 
+`SAMPLE` stays on the legacy path too: its separate sampling node does not
+execute the streaming aggregate, so each ROLLUP prefix needs its own expanded branch.
+
 Forced SORT can retain DISTINCT value aggregates. The ordinary single-aggregate
 DISTINCT rewrite must not apply to a marked ROLLUP: deduplicating the complete
 grouping key plus its argument does not deduplicate that argument across detail

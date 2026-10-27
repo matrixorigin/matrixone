@@ -114,5 +114,23 @@ from t_rollup_sort
 group by a, b with rollup
 order by grouping_a, grouping_b;
 
+-- SAMPLE owns a separate node and needs the legacy detail/grand-total
+-- branches even when SORT is requested or ordered input is eligible for COST.
+truncate table t_rollup_sort;
+insert into t_rollup_sort values (1, 10, 0);
+set session rollup_algorithm = 'SORT';
+select a, sample(b, 100 percent) as sampled
+from t_rollup_sort group by a with rollup;
+select a, sample(b, 100 percent) as sampled
+from t_rollup_sort group by rollup(a);
+select a, sample(b, 100 percent) as sampled
+from t_rollup_sort group by a;
+set session rollup_algorithm = 'HASH';
+select a, sample(b, 100 percent) as sampled
+from t_rollup_sort group by a with rollup;
+set session rollup_algorithm = 'COST';
+select d.a, sample(d.b, 100 percent) as sampled
+from (select a, b from t_rollup_sort order by a) d group by rollup(d.a);
+
 set session rollup_algorithm = default;
 drop database rollup_sort_bvt;

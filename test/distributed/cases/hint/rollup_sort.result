@@ -146,5 +146,34 @@ order by grouping_a, grouping_b;
 null  ¦  null  ¦  1  ¦  null  ¦  0  ¦  0  𝄀
 null  ¦  null  ¦  1  ¦  null  ¦  0  ¦  1  𝄀
 null  ¦  null  ¦  1  ¦  null  ¦  1  ¦  1
+truncate table t_rollup_sort;
+insert into t_rollup_sort values (1, 10, 0);
+set session rollup_algorithm = 'SORT';
+select a, sample(b, 100 percent) as sampled
+from t_rollup_sort group by a with rollup;
+➤ a[4,32,0]  ¦  sampled[4,32,0]  𝄀
+1  ¦  10  𝄀
+1  ¦  10
+select a, sample(b, 100 percent) as sampled
+from t_rollup_sort group by rollup(a);
+➤ a[4,32,0]  ¦  sampled[4,32,0]  𝄀
+1  ¦  10  𝄀
+1  ¦  10
+select a, sample(b, 100 percent) as sampled
+from t_rollup_sort group by a;
+➤ a[4,32,0]  ¦  sampled[4,32,0]  𝄀
+1  ¦  10
+set session rollup_algorithm = 'HASH';
+select a, sample(b, 100 percent) as sampled
+from t_rollup_sort group by a with rollup;
+➤ a[4,32,0]  ¦  sampled[4,32,0]  𝄀
+1  ¦  10  𝄀
+1  ¦  10
+set session rollup_algorithm = 'COST';
+select d.a, sample(d.b, 100 percent) as sampled
+from (select a, b from t_rollup_sort order by a) d group by rollup(d.a);
+➤ a[4,32,0]  ¦  sampled[4,32,0]  𝄀
+1  ¦  10  𝄀
+1  ¦  10
 set session rollup_algorithm = default;
 drop database rollup_sort_bvt;
