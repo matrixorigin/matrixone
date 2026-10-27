@@ -2071,33 +2071,6 @@ func (e *defaultExprExpander) copyExpandedExpr(expr *plan.Expr) (*plan.Expr, err
 	return DeepCopyExpr(expr), nil
 }
 
-// expandDefaultExprsInProjection expands only the projection entries listed
-// in defaultPositions.  The resolver maps physical table-column positions to
-// the expressions currently supplying those columns (explicit values or
-// other defaults).
-func expandDefaultExprsInProjection(
-	ctx context.Context,
-	projection []*plan.Expr,
-	defaultPositions []int32,
-	columnExprs map[int32]*plan.Expr,
-) error {
-	expander := newDefaultExprExpander(ctx, func(colIdx int32) (*plan.Expr, bool) {
-		expr, ok := columnExprs[colIdx]
-		return expr, ok
-	})
-	for _, pos := range defaultPositions {
-		if pos < 0 || int(pos) >= len(projection) || projection[pos] == nil {
-			continue
-		}
-		expr, err := expander.expandExpr(projection[pos])
-		if err != nil {
-			return err
-		}
-		projection[pos] = expr
-	}
-	return nil
-}
-
 func expandDefaultExprWithColumnExprs(
 	ctx context.Context,
 	expr *plan.Expr,
