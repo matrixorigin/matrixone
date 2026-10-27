@@ -108,3 +108,26 @@ func RunTenantUpgradeEntriesWithLogger(tenantID int32, txn executor.TxnExecutor,
 	}
 	return nil
 }
+
+// RunHistoricalTenantUpgradeEntries executes the historical tenant upgrade sequence.
+func RunHistoricalTenantUpgradeEntries(tenantID int32, txn executor.TxnExecutor, entries []UpgradeEntry, logger func(string) *log.MOLogger, version func() string) error {
+
+	for _, upgEntry := range entries {
+		start := time.Now()
+
+		err := upgEntry.Upgrade(txn, uint32(tenantID))
+		if err != nil {
+			logger(txn.Txn().TxnOptions().CN).Error("tenant upgrade entry execute error", zap.Error(err), zap.Int32("tenantId", tenantID), zap.String("version", version()), zap.String("upgrade entry", upgEntry.String()))
+			return err
+		}
+
+		duration := time.Since(start)
+		logger(txn.Txn().TxnOptions().CN).Info("tenant upgrade entry complete",
+			zap.String("upgrade entry", upgEntry.String()),
+			zap.Int64("time cost(ms)", duration.Milliseconds()),
+			zap.Int32("tenantId", tenantID),
+			zap.String("toVersion", version()))
+	}
+
+	return nil
+}

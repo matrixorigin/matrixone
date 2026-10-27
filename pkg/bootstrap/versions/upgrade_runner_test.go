@@ -47,6 +47,9 @@ func TestUpgradeEntryRunnersStopOnError(t *testing.T) {
 			{"tenant", 42, 2, func(entries []UpgradeEntry, logger func(string) *log.MOLogger, version func() string) error {
 				return RunTenantUpgradeEntries(42, tx, entries, logger, version)
 			}},
+			{"historical_tenant", 42, 2, func(entries []UpgradeEntry, logger func(string) *log.MOLogger, version func() string) error {
+				return RunHistoricalTenantUpgradeEntries(42, tx, entries, logger, version)
+			}},
 			{"cluster", catalog.System_Account, 2, func(entries []UpgradeEntry, logger func(string) *log.MOLogger, version func() string) error {
 				return RunClusterUpgradeEntries(tx, entries, logger, version)
 			}},
