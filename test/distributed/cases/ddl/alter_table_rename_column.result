@@ -237,7 +237,7 @@ insert into foreign01 values(3,'bcguwgheinwqneku678',2,2);
 insert into foreign02 values(6,6,6);
 Cannot add or update a child row: a foreign key constraint fails
 delete from foreign01 where col2New = 'sfhuwe';
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from foreign02 where col2New = 2;
 update foreign01 set col2 = 'database ewueh ' where col1 = 1;
 internal error: column 'col2' not found in table 

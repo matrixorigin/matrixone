@@ -61,11 +61,14 @@ func TestIssue31401AlterCopyRebuildTransaction(t *testing.T) {
 		require.NoError(t, err)
 		db := openIssue277xxDB(t, cn.GetServiceConfig().CN.Frontend.Port)
 		defer db.Close()
-		for _, mode := range []string{"commit", "rollback", "borrowed", "retire_error", "copy_error", "cancel_rebuild", "no_change", "plugin", "lineage", "late_lineage", "fk_grant", "late_lineage_error", "create_error", "publish_retry"} {
-			t.Run(mode, func(t *testing.T) {
+		for _, scenario := range []string{"commit", "rollback", "borrowed", "retire_error", "copy_error", "cancel_rebuild", "no_change", "plugin", "lineage", "late_lineage", "fk_grant", "late_lineage_error", "create_error", "publish_retry",
+			"scalar_commit", "scalar_rollback", "scalar_borrowed", "scalar_retire_error", "scalar_copy_error", "scalar_cancel_rebuild", "scalar_no_change", "scalar_lineage", "scalar_late_lineage", "scalar_late_lineage_error", "scalar_create_error", "scalar_publish_retry"} {
+			t.Run(scenario, func(t *testing.T) {
+				mode := strings.TrimPrefix(scenario, "scalar_")
+				scalar := strings.HasPrefix(scenario, "scalar_")
 				ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
 				defer cancel()
-				name := "issue31401_txn_" + mode
+				name := "issue31401_txn_" + scenario
 				resetIssue277xxDatabase(t, ctx, db, name)
 				defer func() {
 					clean, stop := context.WithTimeout(context.Background(), 10*time.Second)
@@ -85,7 +88,11 @@ func TestIssue31401AlterCopyRebuildTransaction(t *testing.T) {
 					execSQLRequire(t, ctx, db, "set experimental_fulltext2_index=1")
 					extra = ",body text default 'needle',FULLTEXT2 ft(body)"
 				}
-				execSQLRequire(t, ctx, db, "create table "+name+".t(id int primary key,v int,unique key uq(v),key idx_v(v)"+extra+")")
+				indexes := ",unique key uq(v),key idx_v(v)"
+				if scalar {
+					indexes = ""
+				}
+				execSQLRequire(t, ctx, db, "create table "+name+".t(id int primary key,v int"+indexes+extra+")")
 				execSQLRequire(t, ctx, db, "insert into "+name+".t(id,v) values(1,10),(2,20),(3,30),(6,60)")
 				if mode == "lineage" {
 					execSQLRequire(t, ctx, db, "data branch create table "+name+".branch from "+name+".t")
@@ -298,7 +305,11 @@ func TestIssue31401AlterCopyRebuildTransaction(t *testing.T) {
 						execSQLRequire(t, ctx, db, "data branch create table "+name+".next_branch from "+name+".t")
 						require.Equal(t, [][3]int{{1, 10, 7}, {2, 20, 7}, {3, 31, 7}, {5, 50, 7}}, issue31401Rows(t, ctx, db, "select id,v,d from "+name+".next_branch order by id"))
 					} else if mode != "no_change" {
-						require.Equal(t, [][3]int{{1, 11, 7}, {3, 31, 7}, {4, 40, 7}, {5, 50, 7}}, issue31401Rows(t, ctx, db, "select id,v,d from "+name+".t force index(idx_v) where v>=11 order by id"))
+						indexHint := " force index(idx_v)"
+						if scalar {
+							indexHint = ""
+						}
+						require.Equal(t, [][3]int{{1, 11, 7}, {3, 31, 7}, {4, 40, 7}, {5, 50, 7}}, issue31401Rows(t, ctx, db, "select id,v,d from "+name+".t"+indexHint+" where v>=11 order by id"))
 					}
 				}
 				wantCopies := int32(2)

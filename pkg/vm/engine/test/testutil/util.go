@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -52,6 +53,13 @@ func GetDefaultTestPath(module string, t *testing.T) string {
 }
 
 type TestDisttaeEngineOptions func(*TestDisttaeEngine)
+
+// WithDisttaeEngineFileService wraps the file service the disttae engine reads through.
+func WithDisttaeEngineFileService(wrap func(fileservice.FileService) fileservice.FileService) TestDisttaeEngineOptions {
+	return func(e *TestDisttaeEngine) {
+		e.wrapFS = wrap
+	}
+}
 
 func WithDisttaeEngineInsertEntryMaxCount(v int) TestDisttaeEngineOptions {
 	return func(e *TestDisttaeEngine) {

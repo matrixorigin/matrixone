@@ -77,6 +77,7 @@ type TestDisttaeEngine struct {
 	newTxnMu                 sync.Mutex
 
 	rootDir string
+	wrapFS  func(fileservice.FileService) fileservice.FileService
 }
 
 func setServerLevelParams(de *TestDisttaeEngine) {
@@ -106,6 +107,9 @@ func NewTestDisttaeEngine(
 	de.broken = make(chan struct{})
 	for _, opt := range options {
 		opt(de)
+	}
+	if de.wrapFS != nil {
+		fs = de.wrapFS(fs)
 	}
 
 	if de.mp == nil {
