@@ -251,7 +251,7 @@ func (c *DMLOverwriteCoordinator) commitRequestLocked() DMLOverwriteActionStream
 	}
 	return DMLOverwriteActionStreamRequest{
 		Schema:             c.spec.Schema,
-		Base:               c.commitBase(),
+		Base:               resolveDMLCommitBase(c.spec.Base, c.writeReq),
 		Scope:              overwriteScopeOrDefault(c.spec.Scope),
 		Partition:          cloneDMLAnyMap(c.spec.Partition),
 		PartitionSpec:      c.spec.PartitionSpec,
@@ -280,32 +280,6 @@ func (c *DMLOverwriteCoordinator) Abort(ctx context.Context, cause error) error 
 	}
 	c.cleanReplacementBatchesLocked()
 	return nil
-}
-
-func (c *DMLOverwriteCoordinator) commitBase() dml.CommitBase {
-	base := c.spec.Base
-	if len(base.Namespace) == 0 && c.writeReq.Namespace != "" {
-		base.Namespace = dottedNamespace(c.writeReq.Namespace)
-	}
-	if base.Table == "" {
-		base.Table = c.writeReq.Table
-	}
-	if base.TargetRef == "" {
-		base.TargetRef = firstNonEmpty(c.writeReq.DMLScan.Ref, c.writeReq.DefaultRef, "main")
-	}
-	if base.IdempotencyKey == "" {
-		base.IdempotencyKey = firstNonEmpty(c.writeReq.IdempotencyKey, c.writeReq.StatementID)
-	}
-	if base.StatementID == "" {
-		base.StatementID = firstNonEmpty(c.writeReq.StatementID, c.writeReq.IdempotencyKey)
-	}
-	if base.BaseSnapshotID == 0 {
-		base.BaseSnapshotID = c.writeReq.DMLScan.BaseSnapshotID
-	}
-	if base.BaseSchemaID == 0 {
-		base.BaseSchemaID = c.writeReq.DMLScan.BaseSchemaID
-	}
-	return base
 }
 
 func (c *DMLOverwriteCoordinator) cleanReplacementBatchesLocked() {
