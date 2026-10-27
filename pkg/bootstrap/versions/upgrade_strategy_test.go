@@ -145,6 +145,12 @@ func TestUpgradeProbesFilterHiddenObjectsByPrefixNotLike(t *testing.T) {
 	for _, name := range []string{"table", "table-sys", "comment", "comment-sys"} {
 		require.Contains(t, seen[name], "NOT prefix_eq(tbl.relname, '__mo_index_')", name)
 	}
+	for _, name := range []string{"table", "comment"} {
+		require.NotContains(t, seen[name], "AND account_id = 0", name)
+	}
+	for _, name := range []string{"table-sys", "comment-sys"} {
+		require.Contains(t, seen[name], "AND account_id = 0", name)
+	}
 	for _, name := range []string{"column", "column-sys"} {
 		require.Contains(t, seen[name], "NOT prefix_eq(att_relname, '__mo_cpkey_')", name)
 	}

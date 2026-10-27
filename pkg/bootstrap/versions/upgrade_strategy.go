@@ -418,6 +418,23 @@ var CheckViewDefinition = func(txn executor.TxnExecutor, accountId uint32, schem
 	return loaded, view_def, nil
 }
 
+func tableDefinitionProbeSQL(accountID uint32, schema, tableName string, includeComment bool) string {
+	columns := ""
+	if includeComment {
+		columns = ", rel_comment"
+	}
+	// Keep the historical SQL text, including its account-specific indentation.
+	indent := "                              "
+	accountFilter := ""
+	if accountID == catalog.System_Account {
+		indent = "                                  "
+		accountFilter = "account_id = 0 AND "
+	}
+	return fmt.Sprintf(`SELECT reldatabase, relname, account_id%s FROM mo_catalog.mo_tables tbl
+%sWHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
+%sAND %sreldatabase = '%s' AND relname = '%s'`, columns, indent, indent, accountFilter, schema, tableName)
+}
+
 // CheckTableDefinition is used to check if the specified table definition exists in the specified database. If it exists,
 // return true; otherwise, return false.
 var CheckTableDefinition = func(txn executor.TxnExecutor, accountId uint32, schema string, tableName string) (bool, error) {
@@ -425,14 +442,7 @@ var CheckTableDefinition = func(txn executor.TxnExecutor, accountId uint32, sche
 		return false, moerr.NewInternalErrorNoCtx("schema name or table name is empty")
 	}
 
-	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl
-                              WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
-                              AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
-	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables tbl
-                                  WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
-                                  AND account_id = 0 AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
-	}
+	sql := tableDefinitionProbeSQL(accountId, schema, tableName, false)
 
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId).WithDisableLog())
 	if err != nil {
@@ -456,14 +466,7 @@ func CheckTableComment(txn executor.TxnExecutor, accountId uint32, schema string
 		return false, "", moerr.NewInternalErrorNoCtx("schema name or table name is empty")
 	}
 
-	sql := fmt.Sprintf(`SELECT reldatabase, relname, account_id, rel_comment FROM mo_catalog.mo_tables tbl
-                              WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
-                              AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
-	if accountId == catalog.System_Account {
-		sql = fmt.Sprintf(`SELECT reldatabase, relname, account_id, rel_comment FROM mo_catalog.mo_tables tbl
-                                  WHERE NOT prefix_eq(tbl.relname, '__mo_index_') AND tbl.relkind != 'partition'
-                                  AND account_id = 0 AND reldatabase = '%s' AND relname = '%s'`, schema, tableName)
-	}
+	sql := tableDefinitionProbeSQL(accountId, schema, tableName, true)
 
 	res, err := txn.Exec(sql, executor.StatementOption{}.WithAccountID(accountId))
 	if err != nil {
