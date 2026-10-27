@@ -172,7 +172,7 @@ func buildDispatchRequest(req ProcedureExecutionRequest, catalog ProcedureCatalo
 		JobID:               jobID,
 		IdempotencyKey:      idempotencyKey,
 		Operation:           req.Parsed.Operation,
-		Options:             cloneOptions(req.Parsed.Options),
+		Options:             cloneStringMap(req.Parsed.Options),
 	}, nil
 }
 
@@ -187,17 +187,6 @@ func boolOption(options map[string]string, key string) bool {
 
 func accountIDString(accountID uint32) string {
 	return strconv.FormatUint(uint64(accountID), 10)
-}
-
-func cloneOptions(options map[string]string) map[string]string {
-	if len(options) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(options))
-	for key, value := range options {
-		out[key] = value
-	}
-	return out
 }
 
 func ProcedureExecutionRequestFromParsed(accountID uint32, statementID string, parsed ParsedCall) ProcedureExecutionRequest {

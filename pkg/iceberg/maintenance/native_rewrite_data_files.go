@@ -220,7 +220,7 @@ func (p NativeRewriteDataFilesPlanner) BuildMaintenanceCommit(ctx context.Contex
 		Selection:      *selection,
 		JobID:          req.JobID,
 		IdempotencyKey: req.IdempotencyKey,
-		Options:        cloneOptions(req.Options),
+		Options:        cloneStringMap(req.Options),
 	})
 	if err != nil {
 		return nil, err
