@@ -3182,3 +3182,25 @@ func TestSplitPublicationPersistedTableList(t *testing.T) {
 	require.Equal(t, []string{"base"}, splitPublicationPersistedTableList("base,,"))
 	require.Empty(t, splitPublicationPersistedTableList(""))
 }
+
+func TestBatchInsertMoSubsSQLAndErrors(t *testing.T) {
+	accounts := map[int32]*pubsub.AccountInfo{
+		8: {Id: 8, Name: `a'\b`},
+		9: {Id: 9, Name: `other`},
+	}
+	const want = `insert into mo_catalog.mo_subs (sub_account_id, sub_account_name, pub_account_id, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status) values (8, 'a''\\b', 7, 'p''\\q', 'pub''x', 'db\\name', 'tab''a,tab2', now(), 'c''\\m', 0),(9, 'other', 7, 'p''\\q', 'pub''x', 'db\\name', 'tab''a,tab2', now(), 'c''\\m', 0)`
+	call := func(bh *backgroundExecTest, ids []int32) error {
+		return batchInsertMoSubs(context.Background(), bh, 7, `p'\q`, `pub'x`, `db\name`, `tab'a,tab2`, `c'\m`, ids, accounts)
+	}
+	bh := &backgroundExecTest{}
+	require.NoError(t, call(bh, nil))
+	require.Empty(t, bh.executedSQLs)
+	require.NoError(t, call(bh, []int32{8, 9}))
+	require.Equal(t, []string{want}, bh.executedSQLs)
+	require.Equal(t, []uint32{catalog.System_Account}, bh.executionAccountIDs)
+
+	sentinel := errors.New("batch insert failed")
+	failed := &backgroundExecTest{sql2err: map[string]error{want: sentinel}}
+	require.ErrorIs(t, call(failed, []int32{8, 9}), sentinel)
+	require.Equal(t, []string{want}, failed.executedSQLs)
+}

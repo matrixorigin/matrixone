@@ -2930,11 +2930,16 @@ func batchInsertMoSubs(
 	values := make([]string, 0, len(accIds))
 	// sub_account_id, sub_account_name, pub_account_id, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status
 	valuesFormat := "(%d, '%s', %d, '%s', '%s', '%s', '%s', now(), '%s', %d)"
+	escapedAccount := sanitizeSQLInput(pubAccountName)
+	escapedName := sanitizeSQLInput(pubName)
+	escapedDB := sanitizeSQLInput(pubDbName)
+	escapedTables := sanitizeSQLInput(pubTables)
+	escapedComment := sanitizeSQLInput(pubComment)
 	for _, accId := range accIds {
 		values = append(values, fmt.Sprintf(valuesFormat,
 			accId, sanitizeSQLInput(accIdInfoMap[accId].Name),
-			pubAccountId, sanitizeSQLInput(pubAccountName),
-			sanitizeSQLInput(pubName), sanitizeSQLInput(pubDbName), sanitizeSQLInput(pubTables), sanitizeSQLInput(pubComment),
+			pubAccountId, escapedAccount,
+			escapedName, escapedDB, escapedTables, escapedComment,
 			pubsub.SubStatusNormal,
 		))
 	}
