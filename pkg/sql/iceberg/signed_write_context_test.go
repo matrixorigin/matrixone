@@ -34,14 +34,18 @@ func (s *recordingDeniedSigner) Sign(_ context.Context, method, _ string) (icebe
 	return icebergio.SignedRequest{}, errors.New("signing denied")
 }
 
-func TestSignedWriteObjectIOContextSelectsMethodsAndPropagatesDenial(t *testing.T) {
+func TestAppendSignedWriteSelectsMethodsAndPropagatesDenial(t *testing.T) {
 	signer := &recordingDeniedSigner{}
 	scopeForLocation := func(location string) icebergio.ObjectScope {
-		return icebergio.ObjectScope{CatalogID: 7, Endpoint: "s3.example.com", Region: "us-east-1", Bucket: "bucket", Principal: "writer", StorageLocation: location}
+		return icebergio.ObjectScope{CatalogID: 7, Endpoint: "catalog.example.com", Region: "us-east-1", Bucket: "bucket", Principal: "writer", StorageLocation: location}
 	}
-	ioctx := signedWriteObjectIOContext(signer, scopeForLocation, nil, nil, false)
+	catalog := model.Catalog{AccountID: 42, CatalogID: 7, Name: "catalog", URI: "https://catalog.example.com/rest"}
+	factory := NewAppendRuntimeCoordinatorFactory(AppendRuntimeCoordinatorFactoryOptions{Store: &fakeAppendRuntimeStore{}, ScopeForLocation: scopeForLocation})
+	client := &recordingSigningCatalog{signer: signer}
+	ioctx, err := factory.objectIOContext(context.Background(), client, api.CatalogRequest{Catalog: catalog}, &api.LoadTableResponse{Capabilities: api.CatalogCapabilities{RemoteSigning: true}}, api.Namespace{"db"}, "tbl", catalog)
+	require.NoError(t, err)
 	scope := ioctx.ScopeForLocation("s3://bucket/table/data.parquet")
-	_, _, err := ioctx.WriterProvider.Resolve(context.Background(), scope)
+	_, _, err = ioctx.WriterProvider.Resolve(context.Background(), scope)
 	require.Error(t, err)
 	_, _, err = ioctx.ReaderProvider.Resolve(context.Background(), scope)
 	require.Error(t, err)

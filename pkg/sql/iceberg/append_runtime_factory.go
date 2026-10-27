@@ -748,33 +748,28 @@ func resolveWriteObjectIOContext(ctx context.Context, client api.CatalogClient, 
 		if scopeForLocation == nil {
 			scopeForLocation = icebergio.S3ObjectScopeForConfig(baseScope, loadResp.Config)
 		}
-		return signedWriteObjectIOContext(signer, scopeForLocation, opts.now, residencyValidator, opts.requireResidencyPolicy), true, nil
+		buildSignedFileService := icebergio.SignedHTTPFileServiceBuilder{}.Build
+		return appendObjectIOContext{
+			WriterProvider: icebergio.RemoteSigningProvider{
+				Signer:                 signer,
+				BuildFileService:       buildSignedFileService,
+				Method:                 http.MethodPut,
+				Now:                    opts.now,
+				ResidencyValidator:     residencyValidator,
+				RequireResidencyPolicy: opts.requireResidencyPolicy,
+			},
+			ReaderProvider: icebergio.RemoteSigningProvider{
+				Signer:                 signer,
+				BuildFileService:       buildSignedFileService,
+				Method:                 http.MethodGet,
+				Now:                    opts.now,
+				ResidencyValidator:     residencyValidator,
+				RequireResidencyPolicy: opts.requireResidencyPolicy,
+			},
+			ScopeForLocation: scopeForLocation,
+		}, true, nil
 	}
 	return appendObjectIOContext{}, false, nil
-}
-
-// signedWriteObjectIOContext configures matching signed read and write providers.
-func signedWriteObjectIOContext(signer icebergio.RemoteSigner, scopeForLocation icebergio.ObjectScopeForLocation, now func() time.Time, residencyValidator icebergio.ResidencyValidator, requireResidencyPolicy bool) appendObjectIOContext {
-	buildSignedFileService := icebergio.SignedHTTPFileServiceBuilder{}.Build
-	return appendObjectIOContext{
-		WriterProvider: icebergio.RemoteSigningProvider{
-			Signer:                 signer,
-			BuildFileService:       buildSignedFileService,
-			Method:                 http.MethodPut,
-			Now:                    now,
-			ResidencyValidator:     residencyValidator,
-			RequireResidencyPolicy: requireResidencyPolicy,
-		},
-		ReaderProvider: icebergio.RemoteSigningProvider{
-			Signer:                 signer,
-			BuildFileService:       buildSignedFileService,
-			Method:                 http.MethodGet,
-			Now:                    now,
-			ResidencyValidator:     residencyValidator,
-			RequireResidencyPolicy: requireResidencyPolicy,
-		},
-		ScopeForLocation: scopeForLocation,
-	}
 }
 
 func (f AppendRuntimeCoordinatorFactory) requireResidencyPolicy() bool {
