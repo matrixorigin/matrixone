@@ -427,7 +427,9 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			var originalSnapshot, finalSnapshot timestamp.Timestamp
 			var grants []lock.Result
 			var grantsMu sync.Mutex
-			const statement = "create table si_after_snapshot(x int, constraint si_after_snapshot_ck check(x>0))"
+			// Namespace admission, not hidden auto-increment maintenance, is
+			// under test. Keep both empty tables free of allocator side effects.
+			const statement = "create table si_after_snapshot(x int primary key, constraint si_after_snapshot_ck check(x>0))"
 			err = svc.GetSQLExecutor().ExecTxn(defines.AttachAccountId(ctx, 0), func(tx executor.TxnExecutor) error {
 				op := tx.Txn()
 				id := append([]byte(nil), op.Txn().ID...)
@@ -441,7 +443,7 @@ func TestCheckConstraintNamespace(t *testing.T) {
 					previousBefore(txnID, tableID)
 					if tableID == catalog.MO_TABLES_ID && bytes.Equal(txnID, id) {
 						inject.Do(func() {
-							_, injectedErr = other.ExecContext(ctx, "create table "+database+".si_unrelated(x int)")
+							_, injectedErr = other.ExecContext(ctx, "create table "+database+".si_unrelated(x int primary key)")
 						})
 					}
 				})
