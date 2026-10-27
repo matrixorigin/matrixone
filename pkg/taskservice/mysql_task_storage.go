@@ -1552,6 +1552,19 @@ type SqlExecutor interface {
 	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
 }
 
+// ExecRowsAffected executes a statement and returns its affected-row count.
+func ExecRowsAffected(ctx context.Context, tx SqlExecutor, query string, args ...interface{}) (int64, error) {
+	result, err := tx.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return rows, nil
+}
+
 func (m *mysqlTaskStorage) AddDaemonTask(ctx context.Context, tasks ...task.DaemonTask) (int, error) {
 	if taskFrameworkDisabled() {
 		return 0, nil
