@@ -16,7 +16,6 @@ package plan
 
 import (
 	"encoding/json"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,6 +23,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// prepareLoadScan applies prescan and serializes the final scan parameters.
+func prepareLoadScan(param *tree.ExternParam, noCompress bool, ctx CompilerContext, tableDef *plan.TableDef) (int64, error) {
+	var offset int64
+	var err error
+	// A pattern that survived checkFileExist matched more than one file, so the
+	// load fans out whole files and never splits one by byte offset.  The
+	// prescan exists only to seed that split: it would stamp one file's header
+	// length onto FileStartOff for every file and zero Tail.IgnoredLines, where
+	// the CSV reader instead re-applies IGNORE n LINES on each file it opens.
+	if param.Tail.IgnoredLines > 0 && param.Parallel && noCompress &&
+		!param.Local && !LoadFilepathHasGlob(param) {
+		offset, err = IgnoredLines(param, ctx)
+		if err != nil {
+			return 0, err
+		}
+		param.FileStartOff = offset
+	}
+	param.ArrowMatchByPosition = param.Format == tree.ARROW &&
+		param.Tail != nil && len(param.Tail.ColumnList) > 0
+	applyLoadParallelAdmission(param, offset, ctx.GetProcess().GetService())
+
+	param.Tail.ColumnList = nil
+	param.Tail.Assignments = nil
+	if param.ScanType != tree.INLINE {
+		json_byte, err := json.Marshal(param)
+		if err != nil {
+			return 0, err
+		}
+		tableDef.Createsql = string(json_byte)
+	}
+	return offset, nil
+}
 
 func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (int32, error) {
 	// LOAD never carries INSERT's duplicate-key ignore policy. Reset the
@@ -216,32 +248,9 @@ func (builder *QueryBuilder) bindExternalScan(
 	}
 
 	noCompress := getCompressType(stmt.Param, fileName) == tree.NOCOMPRESS
-	var offset int64 = 0
-	// A pattern that survived checkFileExist matched more than one file, so the
-	// load fans out whole files and never splits one by byte offset.  The
-	// prescan exists only to seed that split: it would stamp one file's header
-	// length onto FileStartOff for every file and zero Tail.IgnoredLines, where
-	// the CSV reader instead re-applies IGNORE n LINES on each file it opens.
-	if stmt.Param.Tail.IgnoredLines > 0 && stmt.Param.Parallel && noCompress &&
-		!stmt.Param.Local && !LoadFilepathHasGlob(stmt.Param) {
-		offset, err = IgnoredLines(stmt.Param, ctx)
-		if err != nil {
-			return -1, nil, err
-		}
-		stmt.Param.FileStartOff = offset
-	}
-	stmt.Param.ArrowMatchByPosition = stmt.Param.Format == tree.ARROW &&
-		stmt.Param.Tail != nil && len(stmt.Param.Tail.ColumnList) > 0
-	applyLoadParallelAdmission(stmt.Param, offset, ctx.GetProcess().GetService())
-
-	stmt.Param.Tail.ColumnList = nil
-	stmt.Param.Tail.Assignments = nil
-	if stmt.Param.ScanType != tree.INLINE {
-		json_byte, err := json.Marshal(stmt.Param)
-		if err != nil {
-			return -1, nil, err
-		}
-		tableDef.Createsql = string(json_byte)
+	offset, err := prepareLoadScan(stmt.Param, noCompress, ctx, tableDef)
+	if err != nil {
+		return -1, nil, err
 	}
 
 	terminated, enclosedBy, escapedBy := loadFieldDelimiters(stmt.Param.Tail.Fields)

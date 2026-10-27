@@ -320,3 +320,39 @@ func TestIgnoredLinesCommentWithStartingAndTerminator(t *testing.T) {
 		})
 	}
 }
+
+func TestPrepareLoadScanPrescanAndFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		path       string
+		readErr    error
+		wantOffset int64
+		wantErr    bool
+	}{
+		{name: "prescan", path: "etl:/prescan.csv", wantOffset: 7},
+		{name: "glob skips prescan", path: "etl:/part-*.csv"},
+		{name: "read error", path: "etl:/prescan.csv", readErr: errors.New("read failed"), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := newPrescanTrackingFS(t, "header\nrow\n")
+			fs.readErr = tc.readErr
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: tc.path, Format: tree.CSV, ScanType: tree.INFILE, FileSize: 1 << 30, Tail: &tree.TailParameter{IgnoredLines: 1, ColumnList: []tree.LoadColumn{&tree.VarExpr{Name: "v"}}}}, ExParam: tree.ExParam{FileService: fs, Parallel: true}}
+			table := &planpb.TableDef{Createsql: "unchanged"}
+			ctx, _, _ := newLoadGlobTestCtx(t)
+			offset, err := prepareLoadScan(param, true, ctx, table)
+			if tc.wantErr {
+				require.ErrorIs(t, err, tc.readErr)
+				require.Equal(t, "unchanged", table.Createsql)
+				require.Len(t, param.Tail.ColumnList, 1)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.wantOffset, offset)
+				require.Nil(t, param.Tail.ColumnList)
+				require.NotEqual(t, "unchanged", table.Createsql)
+			}
+			for _, r := range fs.readers {
+				require.Equal(t, 1, r.closes)
+			}
+		})
+	}
+}
