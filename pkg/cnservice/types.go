@@ -330,7 +330,6 @@ type Config struct {
 }
 
 func (c *Config) Validate() error {
-	foundMachineHost := ""
 	if c.UpgradeCatalogObjectLimit == 0 {
 		c.UpgradeCatalogObjectLimit = bootstrap.DefaultCatalogUpgradeObjectBytes
 	} else if c.UpgradeCatalogObjectLimit < bootstrap.CatalogUpgradePageBytes {
@@ -348,26 +347,8 @@ func (c *Config) Validate() error {
 	if c.ISCP.IndexFlushWatermarkInterval.Duration < 0 {
 		return moerr.NewBadConfigNoCtx("cn.iscp.index-flush-watermark-interval must be non-negative")
 	}
-	if c.ListenAddress == "" {
-		c.ListenAddress = defaultListenAddress
-	}
-	if c.ServiceAddress == "" {
-		c.ServiceAddress = c.ListenAddress
-	} else {
-		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
-	}
-	if c.Role == "" {
-		c.Role = metadata.CNRole_TP.String()
-	}
-	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
-		c.HAKeeper.DiscoveryTimeout.Duration = time.Second * 30
-	}
-	if c.HAKeeper.HeatbeatInterval.Duration == 0 {
-		c.HAKeeper.HeatbeatInterval.Duration = time.Second
-	}
-	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
-		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
-	}
+	foundMachineHost := c.setServiceDefaults()
+	c.setHAKeeperDefaults()
 	if c.HAKeeper.HeatbeatInterval.Duration < 0 {
 		return moerr.NewBadConfigNoCtx("hakeeper heartbeat interval must be positive")
 	}
@@ -464,6 +445,34 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+func (c *Config) setServiceDefaults() string {
+	foundMachineHost := ""
+	if c.ListenAddress == "" {
+		c.ListenAddress = defaultListenAddress
+	}
+	if c.ServiceAddress == "" {
+		c.ServiceAddress = c.ListenAddress
+	} else {
+		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
+	}
+	if c.Role == "" {
+		c.Role = metadata.CNRole_TP.String()
+	}
+	return foundMachineHost
+}
+
+func (c *Config) setHAKeeperDefaults() {
+	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
+		c.HAKeeper.DiscoveryTimeout.Duration = time.Second * 30
+	}
+	if c.HAKeeper.HeatbeatInterval.Duration == 0 {
+		c.HAKeeper.HeatbeatInterval.Duration = time.Second
+	}
+	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
+		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
+	}
+}
+
 func (c *Config) setTaskRunnerDefaults() {
 	if c.TaskRunner.Parallelism == 0 {
 		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
@@ -556,32 +565,10 @@ func (c *SiriusConfig) validate() error {
 	return validateSiriusEmbeddedConfig(c)
 }
 
-// SetDefaultValue setups the default of the config.
-// most of the code are copied from the Validate.
-// But, the Validate may change some global variables that the SetDefaultValue does not need.
-// So, need a different function.
+// SetDefaultValue applies defaults without Validate's checks or global side effects.
 func (c *Config) SetDefaultValue() {
-	foundMachineHost := ""
-	if c.ListenAddress == "" {
-		c.ListenAddress = defaultListenAddress
-	}
-	if c.ServiceAddress == "" {
-		c.ServiceAddress = c.ListenAddress
-	} else {
-		foundMachineHost = strings.Split(c.ServiceAddress, ":")[0]
-	}
-	if c.Role == "" {
-		c.Role = metadata.CNRole_TP.String()
-	}
-	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
-		c.HAKeeper.DiscoveryTimeout.Duration = time.Second * 30
-	}
-	if c.HAKeeper.HeatbeatInterval.Duration == 0 {
-		c.HAKeeper.HeatbeatInterval.Duration = time.Second
-	}
-	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
-		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
-	}
+	foundMachineHost := c.setServiceDefaults()
+	c.setHAKeeperDefaults()
 	c.setTaskRunnerDefaults()
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE

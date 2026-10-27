@@ -172,3 +172,30 @@ func TestTaskAndTransactionDefaults(t *testing.T) {
 	require.Zero(t, cfg.TaskRunner.Parallelism)
 	require.Zero(t, cfg.Txn.MaxActiveAges.Duration)
 }
+
+func TestServiceAddressAndHAKeeperDefaults(t *testing.T) {
+	const serviceID = "address-defaults"
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	t.Cleanup(func() { moruntime.CompareAndDeleteServiceBasedRuntime(serviceID, rt) })
+	for _, defaultsOnly := range []bool{false, true} {
+		cfg := Config{UUID: serviceID, ServiceAddress: "cn.example:6002"}
+		if defaultsOnly {
+			cfg.SetDefaultValue()
+		} else {
+			require.NoError(t, cfg.Validate())
+		}
+		require.Equal(t, defaultListenAddress, cfg.ListenAddress)
+		require.Equal(t, "cn.example:6002", cfg.ServiceAddress)
+		require.Equal(t, "cn.example:19998", cfg.QueryServiceConfig.Address.ServiceAddress)
+		require.Equal(t, time.Second, cfg.HAKeeper.HeatbeatInterval.Duration)
+		require.Equal(t, 3*time.Second, cfg.HAKeeper.HeatbeatTimeout.Duration)
+		require.Equal(t, 30*time.Second, cfg.HAKeeper.DiscoveryTimeout.Duration)
+	}
+	cfg := Config{UUID: serviceID}
+	cfg.HAKeeper.HeatbeatInterval.Duration = -time.Second
+	require.Error(t, cfg.Validate())
+	require.Equal(t, defaultListenAddress, cfg.ListenAddress)
+	require.Equal(t, 3*time.Second, cfg.HAKeeper.HeatbeatTimeout.Duration)
+	require.Empty(t, cfg.QueryServiceConfig.Address.ServiceAddress)
+}
