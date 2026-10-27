@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -33,6 +34,42 @@ const (
 	optionReadMode   = "read_mode"
 	optionWriteMode  = "write_mode"
 )
+
+// BuiltinProcedureArgs validates and extracts the common Iceberg CALL arguments.
+// The caller is responsible for checking that call is a recognized builtin.
+func BuiltinProcedureArgs(ctx context.Context, call *tree.CallStmt) (name, target, options string, err error) {
+	name = strings.TrimSpace(tree.String(call.Name, dialect.MYSQL))
+	if len(call.Args) < 1 || len(call.Args) > 2 {
+		return "", "", "", moerr.NewInvalidInputf(ctx, "Iceberg builtin procedure %s requires target and optional options string arguments", name)
+	}
+	target, err = builtinProcedureStringArg(ctx, name, "target", call.Args[0])
+	if err != nil {
+		return "", "", "", err
+	}
+	if len(call.Args) == 2 {
+		options, err = builtinProcedureStringArg(ctx, name, "options", call.Args[1])
+		if err != nil {
+			return "", "", "", err
+		}
+	}
+	return name, target, options, nil
+}
+
+func builtinProcedureStringArg(ctx context.Context, procedure, argName string, expr tree.Expr) (string, error) {
+	var out string
+	switch value := expr.(type) {
+	case *tree.StrVal:
+		out = strings.TrimSpace(value.String())
+	case *tree.NumVal:
+		if value.Kind() == tree.Str {
+			out = strings.TrimSpace(value.String())
+		}
+	}
+	if out == "" {
+		return "", moerr.NewInvalidInputf(ctx, "Iceberg builtin procedure %s requires %s as a string literal", procedure, argName)
+	}
+	return out, nil
+}
 
 type TableMappingSpec struct {
 	CatalogName string

@@ -87,20 +87,9 @@ func parseIcebergBuiltinCall(ctx context.Context, call *tree.CallStmt) (IcebergB
 	if !isIcebergBuiltinProcedure(call) {
 		return IcebergBuiltinProcedureCall{}, false, nil
 	}
-	name := strings.TrimSpace(tree.String(call.Name, dialect.MYSQL))
-	if len(call.Args) < 1 || len(call.Args) > 2 {
-		return IcebergBuiltinProcedureCall{}, true, moerr.NewInvalidInputf(ctx, "Iceberg builtin procedure %s requires target and optional options string arguments", name)
-	}
-	target, err := icebergBuiltinProcedureStringArg(ctx, name, "target", call.Args[0])
+	name, target, options, err := sqliceberg.BuiltinProcedureArgs(ctx, call)
 	if err != nil {
 		return IcebergBuiltinProcedureCall{}, true, err
-	}
-	options := ""
-	if len(call.Args) == 2 {
-		options, err = icebergBuiltinProcedureStringArg(ctx, name, "options", call.Args[1])
-		if err != nil {
-			return IcebergBuiltinProcedureCall{}, true, err
-		}
 	}
 	if strings.EqualFold(name, icebergRegisterAccessProcedure) || strings.EqualFold(name, icebergUnregisterAccessProcedure) {
 		if options == "" {
@@ -538,22 +527,6 @@ func isIcebergBuiltinProcedure(call *tree.CallStmt) bool {
 	}
 	name := strings.ToLower(strings.TrimSpace(tree.String(call.Name, dialect.MYSQL)))
 	return strings.HasPrefix(name, icebergBuiltinProcedurePrefix)
-}
-
-func icebergBuiltinProcedureStringArg(ctx context.Context, procedure, argName string, expr tree.Expr) (string, error) {
-	var out string
-	switch value := expr.(type) {
-	case *tree.StrVal:
-		out = strings.TrimSpace(value.String())
-	case *tree.NumVal:
-		if value.Kind() == tree.Str {
-			out = strings.TrimSpace(value.String())
-		}
-	}
-	if out == "" {
-		return "", moerr.NewInvalidInputf(ctx, "Iceberg builtin procedure %s requires %s as a string literal", procedure, argName)
-	}
-	return out, nil
 }
 
 func icebergMaintenanceProcedureResultSet(operation maintenance.Operation, result maintenance.Result) *MysqlResultSet {
