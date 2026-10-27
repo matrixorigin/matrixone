@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
@@ -261,6 +262,8 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleAnalyzeStmt(ses, execCtx, st); err != nil {
 			return
 		}
+	case *tree.CreateExtension, *tree.LoadExtension:
+		return stats, moerr.NewNotSupported(execCtx.reqCtx, "extension statements are not supported in MatrixOne")
 	case *tree.CheckTableStmt:
 		ses.EnterFPrint(FPCheckTableStmt)
 		defer ses.ExitFPrint(FPCheckTableStmt)

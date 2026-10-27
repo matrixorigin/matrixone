@@ -141,9 +141,8 @@ func NewTableEntryWithTableId(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn
 	}
 	schema.AcInfo.CreateAt = types.CurrentTimestamp()
 	e := &TableEntry{
-		ID: tableId,
-		BaseEntryImpl: NewBaseEntry(
-			func() *TableMVCCNode { return &TableMVCCNode{} }),
+		ID:               tableId,
+		BaseEntryImpl:    NewBaseEntry[*TableMVCCNode](),
 		db:               db,
 		TableNode:        &TableNode{},
 		dataObjects:      NewObjectListWithTableID(tableId, false),
@@ -178,8 +177,7 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 
 func NewReplayTableEntry() *TableEntry {
 	e := &TableEntry{
-		BaseEntryImpl: NewBaseEntry(
-			func() *TableMVCCNode { return &TableMVCCNode{} }),
+		BaseEntryImpl:    NewBaseEntry[*TableMVCCNode](),
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),
 		TableNode:        &TableNode{},
@@ -192,9 +190,8 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	node := &TableNode{}
 	node.schema.Store(schema)
 	e := &TableEntry{
-		ID: id,
-		BaseEntryImpl: NewBaseEntry(
-			func() *TableMVCCNode { return &TableMVCCNode{} }),
+		ID:               id,
+		BaseEntryImpl:    NewBaseEntry[*TableMVCCNode](),
 		TableNode:        node,
 		dataObjects:      NewObjectList(false),
 		tombstoneObjects: NewObjectList(true),

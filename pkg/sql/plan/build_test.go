@@ -10858,3 +10858,23 @@ func planNodeDependsOn(query *plan.Query, nodeID, dependencyID int32, visited ma
 	}
 	return false
 }
+
+func TestExtensionPlansAreNotSupported(t *testing.T) {
+	for _, sql := range []string{"load some_ext", "create extension pg as myext file '/missing.so'"} {
+		t.Run(sql, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(ctx, stmt, false)
+			require.Nil(t, p)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+			require.ErrorContains(t, err, "extension statements are not supported in MatrixOne")
+			prepared := tree.NewPrepareString("unsupported_extension", sql)
+			defer prepared.Free()
+			p, err = buildPrepare(prepared, ctx)
+			require.Nil(t, p)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+		})
+	}
+}

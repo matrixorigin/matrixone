@@ -90,14 +90,6 @@ func CreateDB(t *testing.T, e *db.DB, dbName string) {
 	assert.NoError(t, txn.Commit(context.Background()))
 }
 
-func DropDB(t *testing.T, e *db.DB, dbName string) {
-	txn, err := e.StartTxn(nil)
-	assert.NoError(t, err)
-	_, err = txn.DropDatabase(dbName)
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit(context.Background()))
-}
-
 func CreateRelation(t *testing.T, e *db.DB, dbName string, schema *catalog.Schema, createDB bool) (db handle.Database, rel handle.Relation) {
 	txn, db, rel := CreateRelationNoCommit(t, e, dbName, schema, createDB)
 	assert.NoError(t, txn.Commit(context.Background()))
