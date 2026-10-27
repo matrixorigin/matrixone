@@ -44,6 +44,9 @@ func validateRemoteExpressionDestinationWithProtocol(proc *process.Process, p *p
 		version              int64
 		missing, unsupported string
 	}{
+		{features.FloatConversionSemantics, defines.MORPCVersion132,
+			"corrected float conversions require a versioned remote destination",
+			"remote destination does not support corrected float conversions (MORPC version %d)"},
 		{features.LoadFKIgnoreCheck, defines.MORPCVersion125,
 			"LOAD IGNORE foreign-key filtering requires a versioned remote destination",
 			"remote destination does not support LOAD IGNORE foreign-key filtering (MORPC version %d)"},
@@ -113,7 +116,7 @@ func validateRemoteExpressionDestinationWithProtocol(proc *process.Process, p *p
 		{features.DecimalLiteralSemantics, defines.MORPCVersion89,
 			"exact DECIMAL256 literal semantics require a versioned remote destination",
 			"remote destination does not support exact DECIMAL256 literal semantics (MORPC protocol version %d)"},
-		{pipelineRequiresPartitionFulltextRoute(p), defines.MORPCVersion132,
+		{pipelineRequiresPartitionFulltextRoute(p), defines.MORPCVersion133,
 			"partitioned FULLTEXT routing requires a versioned remote destination",
 			"remote destination does not support partitioned FULLTEXT routing (MORPC protocol version %d)"},
 		{features.ViewMetadataFunctions, defines.MORPCVersion126,

@@ -635,6 +635,15 @@ func adjustTestingClusterTiming(svc ServiceOperator) {
 			config.CN.LockService.KeepBindDuration.Duration = testLockBindHeartbeatInterval
 			// Functional task tests need transitions, not production polling delays.
 			config.CN.TaskRunner.FetchInterval.Duration = time.Second
+			// Keep real index discovery and durable-watermark transitions on the
+			// same cadence as local BVT. Explicit timing scenarios retain their
+			// configuration, and WithPreStart can override these defaults.
+			if config.CN.ISCP.SyncTaskInterval.Duration == 0 {
+				config.CN.ISCP.SyncTaskInterval.Duration = time.Second
+			}
+			if config.CN.ISCP.IndexFlushWatermarkInterval.Duration == 0 {
+				config.CN.ISCP.IndexFlushWatermarkInterval.Duration = time.Second
+			}
 		})
 	}
 }

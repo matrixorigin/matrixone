@@ -150,6 +150,9 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if err != nil {
 		return nil, err
 	}
+	if features.FloatConversionSemantics && requiredProtocol != nil {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion132)
+	}
 	// The Query RPC probe and the execution stream can reach different worker
 	// generations. Fence affected payloads on the bound stream as well.
 	if features.IncompleteTemporalStrings && requiredProtocol != nil {
@@ -2395,7 +2398,7 @@ func validateRemotePartitionFulltextRouteProtocol(
 	}
 	if proc == nil || !supportsRemotePartitionFulltextRoute(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"partitioned FULLTEXT routing requires MORPC protocol version 132",
+			"partitioned FULLTEXT routing requires MORPC protocol version 133",
 		)
 	}
 	return nil
@@ -2579,6 +2582,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 		return moerr.NewNotSupportedNoCtx(
 			"signed INT ASCII results require MORPC protocol version 65",
 		)
+	}
+	if features.FloatConversionSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion132) {
+		return moerr.NewNotSupportedNoCtx("corrected float conversions require MORPC protocol version 132")
 	}
 	if features.StringNumericResultContracts &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion80) {

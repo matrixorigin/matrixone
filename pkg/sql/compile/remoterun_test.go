@@ -1117,17 +1117,17 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 	}}}
 	routeData, err := routePipeline.Marshal()
 	require.NoError(t, err)
-	for _, version := range []int64{defines.MORPCVersion88, defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103, defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131} {
+	for _, version := range []int64{defines.MORPCVersion88, defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103, defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131, defines.MORPCVersion132} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		_, _, err = convertToPipelineInstruction(routePreInsert, proc, ctx, 1)
-		require.ErrorContains(t, err, "partitioned FULLTEXT routing requires MORPC protocol version 132")
+		require.ErrorContains(t, err, "partitioned FULLTEXT routing requires MORPC protocol version 133")
 		require.ErrorContains(t,
 			validateRemoteStatementLastInsertIDPipelineProtocol(proc, routePipeline),
-			"partitioned FULLTEXT routing requires MORPC protocol version 132")
+			"partitioned FULLTEXT routing requires MORPC protocol version 133")
 		_, receiveErr := decodeScope(routeData, proc, true, nil)
-		require.ErrorContains(t, receiveErr, "partitioned FULLTEXT routing requires MORPC protocol version 132")
+		require.ErrorContains(t, receiveErr, "partitioned FULLTEXT routing requires MORPC protocol version 133")
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion132)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion133)
 	_, instruction, err = convertToPipelineInstruction(routePreInsert, proc, ctx, 1)
 	require.NoError(t, err)
 	require.True(t, instruction.PreInsert.PreserveInput)
