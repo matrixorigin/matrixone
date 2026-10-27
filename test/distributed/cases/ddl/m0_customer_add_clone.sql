@@ -91,6 +91,17 @@ insert into partition_explicit_copy(a,b,x) values(3,3,42);
 select count(*) as partition_explicit_copy_rows from partition_explicit_copy where (a=1 and b=1 and x is null) or (a in (2,3) and b=a and x=42);
 select count(*) as partition_explicit_copy_root from mo_catalog.mo_tables where reldatabase='m0_customer_child' and relname='partition_explicit_copy' and rel_version=0;
 select count(*) as partition_explicit_copy_live_routes from mo_catalog.mo_partition_tables p join mo_catalog.mo_tables r on p.primary_table_id=r.rel_id join mo_catalog.mo_tables c on p.partition_id=c.rel_id and p.partition_table_name=c.relname and c.reldatabase=r.reldatabase where r.reldatabase='m0_customer_child' and r.relname='partition_explicit_copy';
+-- Admitted DEFAULT false must also retain partition COPY and live child routing.
+create table birth_partition_default(c_id int not null, c_d_id int not null, c_w_id int not null, c_credit_lim decimal(12,2), c_ytd_payment decimal(12,2), c_balance decimal(12,2), primary key(c_w_id,c_d_id,c_id)) partition by hash(c_id) partitions 2;
+insert into birth_partition_default values (1,1,1,50000,100,10);
+alter table birth_partition_default add column flag boolean default false;
+select count(*) as birth_partition_copy_root from mo_catalog.mo_tables where reldatabase='m0_customer_child' and relname='birth_partition_default' and rel_version=0;
+insert into birth_partition_default(c_id,c_d_id,c_w_id,c_credit_lim,c_ytd_payment,c_balance) values (2,1,1,50000,100,20);
+insert into birth_partition_default values (3,1,1,50000,100,30,NULL);
+select count(*) as birth_partition_false_rows from birth_partition_default where flag=false;
+select count(*) as birth_partition_null_rows from birth_partition_default where flag is null;
+select count(*) as birth_partition_live_routes from mo_catalog.mo_partition_tables p join mo_catalog.mo_tables r on p.primary_table_id=r.rel_id join mo_catalog.mo_tables c on p.partition_id=c.rel_id and p.partition_table_name=c.relname and c.reldatabase=r.reldatabase where r.reldatabase='m0_customer_child' and r.relname='birth_partition_default';
+drop table birth_partition_default;
 drop snapshot m0_customer_snapshot;
 drop database m0_customer_child;
 drop database m0_customer_parent;

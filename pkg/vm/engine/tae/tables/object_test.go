@@ -72,7 +72,13 @@ func TestMemoryNodeConsumesTypedFill(t *testing.T) {
 	defer rt.VectorPool.Transient.Destory()
 	defer rt.VectorPool.Small.Destory()
 	mvcc := updates.NewAppendMVCCHandle(nil)
-	mvcc.OnReplayAppendNode(updates.MockAppendNode(types.BuildTS(1, 0), 0, 2, mvcc))
+	for row := uint32(0); row < 2; row++ {
+		ts := types.BuildTS(int64(row+1), 0)
+		appendNode := updates.NewAppendNode(nil, row, row+1, false, mvcc)
+		appendNode.Start, appendNode.Prepare, appendNode.End = ts, ts, ts
+		appendNode.Aborted = row == 0
+		mvcc.OnReplayAppendNode(appendNode)
+	}
 	node := &memoryNode{writeSchema: write, data: input, object: &baseObject{rt: rt, RWMutex: mvcc.RWMutex, appendMVCC: mvcc}}
 	for _, null := range []bool{false, true} {
 		t.Run(fmt.Sprintf("null=%t", null), func(t *testing.T) {
@@ -93,6 +99,21 @@ func TestMemoryNodeConsumesTypedFill(t *testing.T) {
 				if !null {
 					require.Equal(t, false, out.Vecs[0].Get(i))
 				}
+			}
+			var scanned *containers.Batch
+			scanErr := node.Scan(t.Context(), &scanned,
+				updates.MockTxnWithStartTS(types.BuildTS(2, 0)), read, 0, []int{1}, mp)
+			if scanned != nil {
+				defer scanned.Close()
+			}
+			require.NoError(t, scanErr)
+			require.NotNil(t, scanned)
+			require.Equal(t, 2, scanned.Length(), "typed fill preserves physical row offsets")
+			require.True(t, scanned.IsDeleted(0), "the aborted append stays invisible")
+			require.False(t, scanned.IsDeleted(1))
+			require.Equal(t, null, scanned.Vecs[0].IsNull(1))
+			if !null {
+				require.Equal(t, false, scanned.Vecs[0].Get(1))
 			}
 		})
 	}

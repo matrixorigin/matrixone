@@ -68,6 +68,26 @@ func TestM0BirthFalseFallbackSQL(t *testing.T) {
 			require.Zero(t, version)
 			require.Equal(t, 1, m0Count(t, ctx, db, "select count(*) from "+table))
 		}
+		for i, algorithm := range []string{"", ", algorithm=copy"} {
+			name := fmt.Sprintf("partition_%d", i)
+			table := schema + "." + name
+			m0Exec(t, ctx, db, "create table "+table+m0RollbackCustomerSchema+" partition by hash(c_id) partitions 2")
+			m0Exec(t, ctx, db, "insert into "+table+" values(1,1,1,50000,100,10)")
+			beforeID, _ := m0TableGeneration(t, ctx, db, schema, name)
+			_, err = db.ExecContext(ctx, "alter table "+table+" add column flag boolean default false, algorithm=inplace")
+			require.Error(t, err)
+			afterRejected, _ := m0TableGeneration(t, ctx, db, schema, name)
+			require.Equal(t, beforeID, afterRejected)
+			m0Exec(t, ctx, db, "alter table "+table+" add column flag boolean default false"+algorithm)
+			afterID, version := m0TableGeneration(t, ctx, db, schema, name)
+			require.NotEqual(t, beforeID, afterID)
+			require.Zero(t, version)
+			m0Exec(t, ctx, db, "insert into "+table+"(c_id,c_d_id,c_w_id,c_credit_lim,c_ytd_payment,c_balance) values(2,1,1,50000,100,20)")
+			m0Exec(t, ctx, db, "insert into "+table+" values(3,1,1,50000,100,30,NULL)")
+			require.Equal(t, 2, m0Count(t, ctx, db, "select count(*) from "+table+" where flag=false"))
+			require.Equal(t, 1, m0Count(t, ctx, db, "select count(*) from "+table+" where flag is null"))
+			require.Equal(t, 2, m0Count(t, ctx, db, "select count(*) from mo_catalog.mo_partition_tables p join mo_catalog.mo_tables r on p.primary_table_id=r.rel_id join mo_catalog.mo_tables c on p.partition_id=c.rel_id and p.partition_table_name=c.relname and c.reldatabase=r.reldatabase where r.reldatabase='"+schema+"' and r.relname='"+name+"'"))
+		}
 		for _, indexSQL := range []string{
 			"create index ix on %s(c_balance)",
 			"alter table %s add index ix(c_balance)",
