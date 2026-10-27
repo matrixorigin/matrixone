@@ -985,8 +985,8 @@ func (exec *hllAddExec) BatchMerge(next AggFuncExec, offset int, groups []uint64
 	return mergeHLLStates(&exec.hllStateExec, &other.hllStateExec, offset, groups)
 }
 
-func (exec *hllAddExec) Flush() ([]*vector.Vector, error) {
-	return flushHLLSketches(&exec.hllStateExec)
+func (exec *hllStateExec) Flush() ([]*vector.Vector, error) {
+	return flushHLLSketches(exec)
 }
 
 type hllMergeExec struct {
@@ -1042,10 +1042,6 @@ func (exec *hllMergeExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) erro
 func (exec *hllMergeExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
 	other := next.(*hllMergeExec)
 	return mergeHLLStates(&exec.hllStateExec, &other.hllStateExec, offset, groups)
-}
-
-func (exec *hllMergeExec) Flush() ([]*vector.Vector, error) {
-	return flushHLLSketches(&exec.hllStateExec)
 }
 
 func mergeHLLStates(destination, source *hllStateExec, offset int, groups []uint64) error {
