@@ -1494,19 +1494,19 @@ func Test_OperatorLock(t *testing.T) {
 	ses.SetTenantInfo(tenant)
 
 	// lock
-	err := setUserUnlock(ctx, "user1", bh)
+	err := setUserUnlock(ctx, 8, bh)
 	assert.NoError(t, err)
 
 	// increaseLoginAttempts
-	err = increaseLoginAttempts(ctx, "user1", bh)
+	err = increaseLoginAttempts(ctx, 8, bh)
 	assert.NoError(t, err)
 
 	// updateLockTime
-	err = updateLockTime(ctx, "user1", bh)
+	err = updateLockTime(ctx, 8, bh)
 	assert.NoError(t, err)
 
 	// unlock
-	err = setUserLock(ctx, "user1", bh)
+	err = setUserLock(ctx, 8, bh)
 	assert.NoError(t, err)
 }
 

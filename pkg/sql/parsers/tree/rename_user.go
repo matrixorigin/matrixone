@@ -41,3 +41,5 @@ func (n *RenameUser) Free() {
 	}
 	n.Pairs = nil
 }
+
+func (*RenameUser) StmtKind() StmtKind { return frontendStatusTyp }

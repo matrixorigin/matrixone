@@ -1835,6 +1835,8 @@ func (tcc *TxnCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
 }
 
 func (tcc *TxnCompilerContext) GetCurrentUserID() (uint32, error) {
+	tcc.mu.Lock()
+	defer tcc.mu.Unlock()
 	tenant := tcc.execCtx.ses.GetTenantInfo()
 	if tenant == nil {
 		return 0, moerr.NewInternalError(tcc.GetContext(), "current user identity is unavailable")

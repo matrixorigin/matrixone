@@ -189,6 +189,9 @@ func doRenameUser(ctx context.Context, ses *Session, stmt *tree.RenameUser) (err
 			return moerr.NewInvalidInput(ctx, "RENAME USER source does not exist")
 		}
 		u := src[0]
+		if protectedRenameUser(u.name) {
+			return moerr.NewInvalidInput(ctx, "cannot rename protected user")
+		}
 		if !locked[u.id] {
 			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
 		}
@@ -243,7 +246,7 @@ func executeLoginUserRead(ctx context.Context, bh BackgroundExec, sql string) ([
 		return nil, err
 	}
 	if len(rows) != 1 || rows[0] == nil || rows[0].GetRowCount() != 1 {
-		return nil, moerr.NewInternalError(ctx, "authenticated user no longer exists")
+		return nil, markAuthenticationRejected(moerr.NewInternalError(ctx, "authenticated user no longer exists"))
 	}
 	return rows, nil
 }

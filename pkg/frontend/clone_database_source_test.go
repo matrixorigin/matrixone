@@ -369,15 +369,16 @@ func TestRestoreCloneDatabaseUserDefinedFunctions(t *testing.T) {
 
 	bh := &backgroundExecTest{}
 	bh.init()
+	seedAccountUser(bh, 0, "root1")
 	require.NoError(t, restoreCloneDatabaseUserDefinedFunctions(ctx, bh, tenant, []userDefinedFunctionDefinition{function}, "target_db"))
-	require.Len(t, bh.executedSQLs, 1)
-	require.Contains(t, bh.executedSQLs[0], "insert into mo_catalog.mo_user_defined_function")
-	require.Contains(t, bh.executedSQLs[0], "\"f_answer\",2")
-	require.Contains(t, bh.executedSQLs[0], "\"target_db\"")
-	require.Contains(t, bh.executedSQLs[0], "\"root1\"")
+	require.Len(t, bh.executedSQLs, 2)
+	require.Contains(t, bh.executedSQLs[1], "insert into mo_catalog.mo_user_defined_function")
+	require.Contains(t, bh.executedSQLs[1], "\"f_answer\",2")
+	require.Contains(t, bh.executedSQLs[1], "\"target_db\"")
+	require.Contains(t, bh.executedSQLs[1], "'root1'")
 	// SQL literal quoting is an implementation detail of EscapeFormat; preserve
 	// the behavior under test rather than coupling this regression to its style.
-	require.Contains(t, bh.executedSQLs[0], "PIPES_AS_CONCAT")
+	require.Contains(t, bh.executedSQLs[1], "PIPES_AS_CONCAT")
 	require.NotContains(t, bh.executedSQLs, "begin;")
 
 	failingBase := &backgroundExecTest{}
@@ -402,15 +403,16 @@ func TestRestoreCloneDatabaseStoredProcedures(t *testing.T) {
 
 	bh := &backgroundExecTest{}
 	bh.init()
+	seedAccountUser(bh, 0, "root1")
 	bh.sql2result[checkSQL] = newMrsForPasswordOfUser(nil)
 	require.NoError(t, restoreCloneDatabaseStoredProcedures(ctx, bh, tenant, []storedProcedureDefinition{procedure}, "target_db"))
-	require.Len(t, bh.executedSQLs, 2)
+	require.Len(t, bh.executedSQLs, 3)
 	require.Equal(t, checkSQL, bh.executedSQLs[0])
-	require.Contains(t, bh.executedSQLs[1], procedure.args)
-	require.Contains(t, bh.executedSQLs[1], "'PIPES_AS_CONCAT'")
-	require.Contains(t, bh.executedSQLs[1], "'target_db'")
-	require.Contains(t, bh.executedSQLs[1], "'root1'")
-	require.NotContains(t, bh.executedSQLs[1], "create procedure")
+	require.Contains(t, bh.executedSQLs[2], procedure.args)
+	require.Contains(t, bh.executedSQLs[2], "'PIPES_AS_CONCAT'")
+	require.Contains(t, bh.executedSQLs[2], "'target_db'")
+	require.Contains(t, bh.executedSQLs[2], "'root1'")
+	require.NotContains(t, bh.executedSQLs[2], "create procedure")
 	require.NotContains(t, bh.executedSQLs, "begin;")
 
 	bh = &backgroundExecTest{}
