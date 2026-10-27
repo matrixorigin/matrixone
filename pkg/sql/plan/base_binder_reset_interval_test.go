@@ -553,26 +553,6 @@ func TestResetIntervalFunction(t *testing.T) {
 	}
 }
 
-// Helper function to create a datetime constant expression
-func makeDatetimeConstForResetDate(dtStr string) *plan.Expr {
-	dt, _ := types.ParseDatetime(dtStr, 6)
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_Datetimeval{
-					Datetimeval: int64(dt),
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_datetime),
-			NotNullable: true,
-			Scale:       6,
-		},
-	}
-}
-
 // Helper function to create a date constant expression
 func makeDateConstForResetDate(dateStr string) *plan.Expr {
 	d, _ := types.ParseDateCast(dateStr)
@@ -592,24 +572,6 @@ func makeDateConstForResetDate(dateStr string) *plan.Expr {
 	}
 }
 
-// Helper function to create an int64 constant expression
-func makeInt64ConstForResetDate(val int64) *plan.Expr {
-	return &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Isnull: false,
-				Value: &plan.Literal_I64Val{
-					I64Val: val,
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_int64),
-			NotNullable: true,
-		},
-	}
-}
-
 // TestResetDateFunction tests resetDateFunction with various scenarios
 func TestResetDateFunction(t *testing.T) {
 	ctx := context.Background()
@@ -624,7 +586,7 @@ func TestResetDateFunction(t *testing.T) {
 	}{
 		{
 			name:     "NULL interval - should return syntax error",
-			dateExpr: makeDatetimeConstForResetDate("2000-01-01 00:00:00"),
+			dateExpr: makeDatetimeConst("2000-01-01 00:00:00"),
 			intervalExpr: &plan.Expr{
 				Expr: &plan.Expr_Lit{
 					Lit: &plan.Literal{
@@ -640,8 +602,8 @@ func TestResetDateFunction(t *testing.T) {
 		},
 		{
 			name:         "Expr_List interval - should call resetDateFunctionArgs directly",
-			dateExpr:     makeDatetimeConstForResetDate("2000-01-01 00:00:00"),
-			intervalExpr: makeIntervalExpr(makeInt64ConstForResetDate(1), "SECOND"),
+			dateExpr:     makeDatetimeConst("2000-01-01 00:00:00"),
+			intervalExpr: makeIntervalExpr(makeInt64Const(1), "SECOND"),
 			expectError:  false,
 			checkFunc: func(t *testing.T, args []*plan.Expr, err error) {
 				require.NoError(t, err)
@@ -660,8 +622,8 @@ func TestResetDateFunction(t *testing.T) {
 		},
 		{
 			name:         "Non-Expr_List interval - should create default 'day' interval",
-			dateExpr:     makeDatetimeConstForResetDate("2000-01-01 00:00:00"),
-			intervalExpr: makeInt64ConstForResetDate(5),
+			dateExpr:     makeDatetimeConst("2000-01-01 00:00:00"),
+			intervalExpr: makeInt64Const(5),
 			expectError:  false,
 			checkFunc: func(t *testing.T, args []*plan.Expr, err error) {
 				require.NoError(t, err)
@@ -680,7 +642,7 @@ func TestResetDateFunction(t *testing.T) {
 		{
 			name:         "DATE type with Expr_List interval - should handle date type conversion",
 			dateExpr:     makeDateConstForResetDate("2000-01-01"),
-			intervalExpr: makeIntervalExpr(makeInt64ConstForResetDate(1), "HOUR"),
+			intervalExpr: makeIntervalExpr(makeInt64Const(1), "HOUR"),
 			expectError:  false,
 			checkFunc: func(t *testing.T, args []*plan.Expr, err error) {
 				require.NoError(t, err)
@@ -699,7 +661,7 @@ func TestResetDateFunction(t *testing.T) {
 		{
 			name:         "DATE type with DAY interval - should not convert to DATETIME",
 			dateExpr:     makeDateConstForResetDate("2000-01-01"),
-			intervalExpr: makeIntervalExpr(makeInt64ConstForResetDate(1), "DAY"),
+			intervalExpr: makeIntervalExpr(makeInt64Const(1), "DAY"),
 			expectError:  false,
 			checkFunc: func(t *testing.T, args []*plan.Expr, err error) {
 				require.NoError(t, err)
