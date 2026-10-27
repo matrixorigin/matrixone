@@ -73,7 +73,7 @@ func TestRequiredMembershipStoragePaths(t *testing.T) {
 			if tc.desc {
 				p.IndexReaderParam = &plan.IndexReaderParam{OrderBy: []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}}}
 			}
-			scanner := &scriptedRelationScanner{t: t}
+			scanner := &scriptedRelationScanner{}
 			p.RelationScanner = scanner
 			scanner.run = func(req sqlexec.RelationScanRequest) executor.Result {
 				require.Equal(t, fileservice.Policy(fileservice.SkipFullFilePreloads), req.ReadPolicy)
