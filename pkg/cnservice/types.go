@@ -380,30 +380,7 @@ func (c *Config) Validate() error {
 	if c.HAKeeper.HeatbeatTimeout.Duration < 0 {
 		return moerr.NewBadConfigNoCtx("hakeeper heartbeat timeout must be positive")
 	}
-	if c.TaskRunner.Parallelism == 0 {
-		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
-		if c.TaskRunner.Parallelism <= ReservedTasks {
-			c.TaskRunner.Parallelism = 1 + ReservedTasks
-		}
-	}
-	if c.TaskRunner.FetchInterval.Duration == 0 {
-		c.TaskRunner.FetchInterval.Duration = time.Second * 10
-	}
-	if c.TaskRunner.FetchTimeout.Duration == 0 {
-		c.TaskRunner.FetchTimeout.Duration = time.Second * 10
-	}
-	if c.TaskRunner.HeartbeatInterval.Duration == 0 {
-		c.TaskRunner.HeartbeatInterval.Duration = time.Second * 5
-	}
-	if c.TaskRunner.MaxWaitTasks == 0 {
-		c.TaskRunner.MaxWaitTasks = 256
-	}
-	if c.TaskRunner.QueryLimit == 0 {
-		c.TaskRunner.QueryLimit = c.TaskRunner.Parallelism
-	}
-	if c.TaskRunner.RetryInterval.Duration == 0 {
-		c.TaskRunner.RetryInterval.Duration = time.Second
-	}
+	c.setTaskRunnerDefaults()
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE
 	}
@@ -432,39 +409,7 @@ func (c *Config) Validate() error {
 		return moerr.NewBadDBNoCtx("not support txn isolation: " + c.Txn.Isolation)
 	}
 
-	// Fix txn mode various config, simply override
-	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
-		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = 1
-		}
-		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = -1
-		}
-		// We don't support the following now, so always disable
-		c.Txn.EnableRefreshExpression = -1
-		if c.Txn.EnableLeakCheck == 0 {
-			c.Txn.EnableLeakCheck = -1
-		}
-	} else {
-		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = 1
-		}
-		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = 1
-		}
-		// We don't support the following now, so always disable
-		c.Txn.EnableRefreshExpression = -1
-		if c.Txn.EnableLeakCheck == 0 {
-			c.Txn.EnableLeakCheck = -1
-		}
-	}
-
-	if c.Txn.MaxActiveAges.Duration == 0 {
-		c.Txn.MaxActiveAges.Duration = time.Minute * 2
-	}
-	if c.Txn.MaxActive == 0 {
-		c.Txn.MaxActive = runtime.NumCPU() * 10
-	}
+	c.setTxnFeatureDefaults()
 	c.LockService.ServiceID = c.UUID
 	c.LockService.Validate()
 
@@ -517,6 +462,69 @@ func (c *Config) Validate() error {
 		!c.Pipeline.DisableStreamReuse,
 	)
 	return nil
+}
+
+func (c *Config) setTaskRunnerDefaults() {
+	if c.TaskRunner.Parallelism == 0 {
+		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
+		if c.TaskRunner.Parallelism <= ReservedTasks {
+			c.TaskRunner.Parallelism = 1 + ReservedTasks
+		}
+	}
+	if c.TaskRunner.FetchInterval.Duration == 0 {
+		c.TaskRunner.FetchInterval.Duration = time.Second * 10
+	}
+	if c.TaskRunner.FetchTimeout.Duration == 0 {
+		c.TaskRunner.FetchTimeout.Duration = time.Second * 10
+	}
+	if c.TaskRunner.HeartbeatInterval.Duration == 0 {
+		c.TaskRunner.HeartbeatInterval.Duration = time.Second * 5
+	}
+	if c.TaskRunner.MaxWaitTasks == 0 {
+		c.TaskRunner.MaxWaitTasks = 256
+	}
+	if c.TaskRunner.QueryLimit == 0 {
+		c.TaskRunner.QueryLimit = c.TaskRunner.Parallelism
+	}
+	if c.TaskRunner.RetryInterval.Duration == 0 {
+		c.TaskRunner.RetryInterval.Duration = time.Second
+	}
+}
+
+func (c *Config) setTxnFeatureDefaults() {
+	// Fix txn mode various config, simply override
+	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
+		if c.Txn.EnableSacrificingFreshness == 0 {
+			c.Txn.EnableSacrificingFreshness = 1
+		}
+		if c.Txn.EnableCNBasedConsistency == 0 {
+			c.Txn.EnableCNBasedConsistency = -1
+		}
+		// We don't support the following now, so always disable
+		c.Txn.EnableRefreshExpression = -1
+		if c.Txn.EnableLeakCheck == 0 {
+			c.Txn.EnableLeakCheck = -1
+		}
+	} else {
+		if c.Txn.EnableSacrificingFreshness == 0 {
+			c.Txn.EnableSacrificingFreshness = 1
+		}
+		if c.Txn.EnableCNBasedConsistency == 0 {
+			c.Txn.EnableCNBasedConsistency = 1
+		}
+		// We don't support the following now, so always disable
+		c.Txn.EnableRefreshExpression = -1
+		if c.Txn.EnableLeakCheck == 0 {
+			c.Txn.EnableLeakCheck = -1
+		}
+	}
+
+	if c.Txn.MaxActiveAges.Duration == 0 {
+		c.Txn.MaxActiveAges.Duration = time.Minute * 2
+	}
+	if c.Txn.MaxActive == 0 {
+		c.Txn.MaxActive = runtime.NumCPU() * 10
+	}
 }
 
 func validateCNServiceUUID(serviceID string) error {
@@ -574,30 +582,7 @@ func (c *Config) SetDefaultValue() {
 	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
 		c.HAKeeper.HeatbeatTimeout.Duration = time.Second * 3
 	}
-	if c.TaskRunner.Parallelism == 0 {
-		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
-		if c.TaskRunner.Parallelism <= ReservedTasks {
-			c.TaskRunner.Parallelism = 1 + ReservedTasks
-		}
-	}
-	if c.TaskRunner.FetchInterval.Duration == 0 {
-		c.TaskRunner.FetchInterval.Duration = time.Second * 10
-	}
-	if c.TaskRunner.FetchTimeout.Duration == 0 {
-		c.TaskRunner.FetchTimeout.Duration = time.Second * 10
-	}
-	if c.TaskRunner.HeartbeatInterval.Duration == 0 {
-		c.TaskRunner.HeartbeatInterval.Duration = time.Second * 5
-	}
-	if c.TaskRunner.MaxWaitTasks == 0 {
-		c.TaskRunner.MaxWaitTasks = 256
-	}
-	if c.TaskRunner.QueryLimit == 0 {
-		c.TaskRunner.QueryLimit = c.TaskRunner.Parallelism
-	}
-	if c.TaskRunner.RetryInterval.Duration == 0 {
-		c.TaskRunner.RetryInterval.Duration = time.Second
-	}
+	c.setTaskRunnerDefaults()
 	if c.Engine.Type == "" {
 		c.Engine.Type = EngineDistributedTAE
 	}
@@ -616,39 +601,7 @@ func (c *Config) SetDefaultValue() {
 			c.Txn.Isolation = txn.TxnIsolation_SI.String()
 		}
 	}
-	// Fix txn mode various config, simply override
-	if txn.GetTxnMode(c.Txn.Mode) == txn.TxnMode_Pessimistic {
-		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = 1
-		}
-		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = -1
-		}
-		// We don't support the following now, so always disable
-		c.Txn.EnableRefreshExpression = -1
-		if c.Txn.EnableLeakCheck == 0 {
-			c.Txn.EnableLeakCheck = -1
-		}
-	} else {
-		if c.Txn.EnableSacrificingFreshness == 0 {
-			c.Txn.EnableSacrificingFreshness = 1
-		}
-		if c.Txn.EnableCNBasedConsistency == 0 {
-			c.Txn.EnableCNBasedConsistency = 1
-		}
-		// We don't support the following now, so always disable
-		c.Txn.EnableRefreshExpression = -1
-		if c.Txn.EnableLeakCheck == 0 {
-			c.Txn.EnableLeakCheck = -1
-		}
-	}
-
-	if c.Txn.MaxActiveAges.Duration == 0 {
-		c.Txn.MaxActiveAges.Duration = time.Minute * 2
-	}
-	if c.Txn.MaxActive == 0 {
-		c.Txn.MaxActive = runtime.NumCPU() * 10
-	}
+	c.setTxnFeatureDefaults()
 	c.Txn.NormalStateNoWait = false
 	c.LockService.ServiceID = c.UUID
 
