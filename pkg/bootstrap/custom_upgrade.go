@@ -22,6 +22,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -91,6 +92,7 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 		WithMinCommittedTS(s.now()).
 		WithWaitCommittedLogApplied().
 		WithTimeZone(time.Local)
+	pendingV407 := false
 	err := s.exec.ExecTxn(
 		ctx,
 		func(txn executor.TxnExecutor) error {
@@ -121,6 +123,12 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 					currentCN.Version, latestVersion.Version)
 			}
 			if currentCN.Version == version {
+				if s.getFinalVersionHandle() == v4_0_7.Handler {
+					if latestVersion.VersionOffset != currentCN.VersionOffset {
+						return moerr.NewInvalidStateNoCtx("4.0.7 offset-only upgrades are not supported")
+					}
+					return nil
+				}
 				if latestVersion.VersionOffset != currentCN.VersionOffset {
 					return nil
 				}
@@ -143,13 +151,20 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 				if err != nil {
 					return err
 				}
+				if len(upgrades) == 0 {
+					return moerr.NewInvalidStateNoCtx("tenant upgrade route is unavailable")
+				}
 				// latest cluster is already upgrade completed
 				if upgrades[len(upgrades)-1].State == versions.StateUpgradingTenant ||
 					upgrades[len(upgrades)-1].State == versions.StateReady {
 					break
 				}
 
-				time.Sleep(time.Second)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(time.Second):
+				}
 			}
 
 			// upgrade in current goroutine immediately
@@ -161,6 +176,10 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 			for _, v := range s.handles {
 				if versions.Compare(v.Metadata().Version, from) >= 0 &&
 					v.Metadata().CanDirectUpgrade(from) {
+					if v == v4_0_7.Handler {
+						pendingV407 = versions.Compare(from, v.Metadata().Version) < 0
+						break
+					}
 					if err := v.HandleTenantUpgrade(ctx, tenantID, txn); err != nil {
 						return err
 					}
@@ -175,6 +194,11 @@ func (s *service) UpgradeOneTenant(ctx context.Context, tenantID int32) error {
 		opts)
 	if err != nil {
 		return moerr.AttachCause(ctx, err)
+	}
+	if pendingV407 {
+		if _, err := s.upgradeV407TenantOnDemand(ctx, tenantID); err != nil {
+			return err
+		}
 	}
 	s.mu.Lock()
 	s.mu.tenants[tenantID] = true

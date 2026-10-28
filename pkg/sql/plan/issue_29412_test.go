@@ -81,13 +81,15 @@ func TestCorrelatedLocalCTEImplicitAggregateSpineRowRemoval(t *testing.T) {
 		{"volatile filter", `SELECT o.N_NATIONKEY, (WITH x AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_NATIONKEY = o.N_NATIONKEY) SELECT m FROM x WHERE RAND() > 0.5) FROM NATION o`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
-			want := "correlated aggregate spine"
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
 			switch tc.name {
 			case "non equality", "or equalities", "like":
-				want = "nested non-equality correlated aggregate"
+				require.NoError(t, err)
+				require.NotNil(t, p.GetQuery().Correlation)
+				require.NoError(t, p.GetQuery().ValidateCorrelation())
+			default:
+				require.ErrorContains(t, err, "correlated aggregate spine")
 			}
-			require.ErrorContains(t, err, want)
 		})
 	}
 	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,

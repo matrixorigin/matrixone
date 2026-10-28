@@ -770,6 +770,55 @@ func TestPreparedSQLPresentationKeepsDerivedNumericConsumer(t *testing.T) {
 	}
 }
 
+func TestPreparedSQLPresentationKeepsDependentProgramTypes(t *testing.T) {
+	const query = `SELECT ?, (o.N_NATIONKEY,(SELECT ?)) <=>
+		(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY)
+		FROM NATION o`
+	for _, binary := range []bool{false, true} {
+		for _, tc := range []struct {
+			name  string
+			typ   types.Type
+			value any
+		}{
+			{"integer", types.T_int64.ToType(), "1"},
+			{"decimal", types.New(types.T_decimal128, 20, 2), "1.25"},
+			{"boolean", types.T_bool.ToType(), "true"},
+			{"text", types.T_text.ToType(), "2"},
+			{"null", types.T_any.ToType(), nil},
+		} {
+			t.Run(fmt.Sprintf("binary=%v/%s", binary, tc.name), func(t *testing.T) {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				proc := mock.ctxt.GetProcess()
+				params := vector.NewVec(types.T_text.ToType())
+				defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+				for range 2 {
+					require.NoError(t, vector.AppendBytes(params, []byte(fmt.Sprint(tc.value)), tc.value == nil, proc.Mp()))
+				}
+				proc.SetPrepareParams(params)
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, query, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				value := ParamValue{Value: tc.value, IsBinaryProtocol: binary}
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+					[]PreparedSourceBinding{{Position: 0, Type: tc.typ}, {Position: 1, Type: tc.typ}},
+					[]any{value, value})
+				require.NoError(t, err)
+				q := bound.Plan.GetQuery()
+				require.NotNil(t, q.Correlation)
+				require.NoError(t, q.ValidateCorrelation(), "presentation must not rewrite internal program outputs")
+				if tc.value != nil {
+					root := q.Nodes[q.Steps[q.MainOutputStep()]]
+					want := types.T_text
+					if binary {
+						want = tc.typ.Oid
+					}
+					require.Equal(t, int32(want), root.ProjectList[0].Typ.Id, "preserve the public bare-marker contract")
+				}
+			})
+		}
+	}
+}
+
 func TestPreparedBindingBeforeKeyLowering(t *testing.T) {
 	for _, tc := range []struct {
 		name, predicate string

@@ -1,14 +1,14 @@
 # Sort-based ROLLUP design
 
-Status: implementation follows revision R1.2, aligning R1.1 with official-main
-ROLLUP semantics. Independent implementation approval remains pending on the
-existing PR review lane.
+Status: the original implementation merged in #28987. This follow-up preserves
+R1.2's official-main ROLLUP semantics while strengthening DISTINCT rewrite
+protection, bound-column order reuse, and automatic COST admission.
 
 Owner issue: [#20653](https://github.com/matrixorigin/matrixone/issues/20653)
 
 Implementation PR: [#28987](https://github.com/matrixorigin/matrixone/pull/28987)
 
-Implementation branch: `codex/issue-20653-sort-rollup`
+Original implementation branch: `codex/issue-20653-sort-rollup`
 
 ## Design review record
 
@@ -167,13 +167,22 @@ extension; today they use the legacy path.
 
 The planner considers the sort path only for the root query block, and only for
 one non-empty ROLLUP list over a single base-table source, or over a
-conservative derived table whose explicit `ORDER BY` already establishes the
-complete grouping-key prefix. A ROLLUP in a nested query block—including a
+direct derived-table chain with a proven complete global grouping-key order.
+A ROLLUP in a nested query block—including a
 derived table, view, CTE body or reference, or scalar subquery—always uses the
 existing grouping-set rewrite. This boundary is intentional: grouping metadata
 from a nested block feeds the outer materialization and fan-out logic, so the
 internal sort-rollup marker must not cross that boundary. A root ROLLUP may
-still consume the order of an eligible non-grouped derived input. Grouping terms
+still consume the order of an eligible non-grouped derived input. Aliases,
+reordered direct-column projections, filters and nested direct wrappers can
+preserve that order. The proof maps each consumer column through its producer's
+output binding tag and projection position, comparing exact input tags,
+positions and equality types at the global Sort. It also resolves NDV from the
+mapped base columns; an alias's position or name is not statistics provenance.
+The AST gate only limits source structure. Joins, CTEs, computed projections,
+limited/ranked inputs and unsupported topology remain outside this proof.
+CN-local scan ordering is insufficient; this path requires a Sort that the
+compiler lowers to a complete global sequence. Grouping terms
 must be distinct direct column references, their bound types must pass the same
 conservative order/equality whitelist as the executor, and the query block must
 have no named or inline window expression. Joins, ordinary derived tables,
@@ -187,10 +196,14 @@ onto one source expression after the sort path has bypassed grouping-set
 expansion.
 
 The session-only `rollup_algorithm` enum provides `COST` (the default), `SORT`,
-and `HASH` modes. `COST` uses the model below; `SORT` forces the eligible sort
+and `HASH` modes. `COST` requires an existing proven global order as well as
+known statistics and the cost/resource gates below; even a tiny unordered
+input keeps HASH. `SORT` forces the eligible sort
 path for plan validation and benchmarks; `HASH` forces the legacy
-hash/grouping-set path. Unsupported forms, unknown statistics, or an infeasible
-streaming aggregate always fall back to hash. The old
+hash/grouping-set path. Unsupported forms fall back in every mode; unknown
+statistics or an infeasible cost/resource estimate keep COST on HASH. Forced
+SORT does not acquire that estimate's admission proof and remains subject to
+runtime capacity enforcement. The old
 `optimizer_hints=rollupSort=1|2` spelling remains a compatibility fallback when
 the new variable is left at `COST`.
 Aggregates whose result observes input order (`GROUP_CONCAT`, `JSON_ARRAYAGG`,
@@ -206,9 +219,10 @@ duplicate NULL values while retaining different projected grouping bits.
 `SAMPLE` stays on the legacy path too: its separate sampling node does not
 execute the streaming aggregate, so each ROLLUP prefix needs its own expanded branch.
 
-Forced SORT can retain DISTINCT value aggregates. The ordinary single-aggregate
-DISTINCT rewrite must not apply to a marked ROLLUP: deduplicating the complete
-grouping key plus its argument does not deduplicate that argument across detail
+Forced SORT can retain DISTINCT value aggregates. At the DISTINCT optimization
+entry, a marked ROLLUP bypasses both scalar and multi-argument tuple pair
+rewrites, after recursively optimizing its children. Deduplicating the complete
+grouping key plus its arguments does not deduplicate those arguments across detail
 groups in a common subtotal. The marked node keeps its DISTINCT flag and uses
 the executor's separate aggregate state at each ROLLUP prefix, including the
 grand total. Comparison-key normalization still runs when the rewrite is
@@ -595,7 +609,8 @@ contracts. Operator memory is reported through the existing group analyzer.
 - compiler tests prove one finalizing coordinator scope retains every ordered
   input stream and explicit remote rejection;
 - cost-model tests prove hash selection for the measured high-cardinality
-  counterexample, sort selection for a small/selective input, per-level
+  counterexample, automatic sort selection only with proven input order and
+  favorable known statistics, unordered COST fallback, per-level
   aggregate charging, shared versus unshared scan/startup charging,
   unknown-statistics fallback, and aggregate-capacity rejection;
 - SQL BVT proves `GROUPING()` and empty-input behavior through the real service;
