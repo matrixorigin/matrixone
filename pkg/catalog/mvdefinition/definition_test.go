@@ -34,7 +34,7 @@ func definitionFixture(t *testing.T) (*Definition, *plan.TableDef) {
 }
 
 func TestRequiredCapabilityIsNewerThanPredecessorProtocol(t *testing.T) {
-	require.Equal(t, defines.MORPCVersion132, RequiredCapability)
+	require.Equal(t, defines.MORPCVersion135, RequiredCapability)
 	require.Equal(t, RequiredCapability, defines.MORPCLatestVersion)
 	require.Less(t, defines.MORPCVersion123, RequiredCapability)
 }

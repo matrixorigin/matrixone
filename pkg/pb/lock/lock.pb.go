@@ -5,12 +5,13 @@ package lock
 
 import (
 	fmt "fmt"
-	_ "github.com/gogo/protobuf/gogoproto"
-	proto "github.com/gogo/protobuf/proto"
-	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	io "io"
 	math "math"
 	math_bits "math/bits"
+
+	_ "github.com/gogo/protobuf/gogoproto"
+	proto "github.com/gogo/protobuf/proto"
+	timestamp "github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.

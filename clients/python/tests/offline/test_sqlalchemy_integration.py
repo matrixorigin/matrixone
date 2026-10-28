@@ -1,3 +1,5 @@
+from unittest.mock import call
+
 # Copyright 2021 - 2022 Matrix Origin
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -108,7 +110,9 @@ class TestSQLAlchemyIntegration(unittest.TestCase):
         clone_manager.clone_database("target_db", "source_db")
 
         expected_sql = "CREATE DATABASE target_db CLONE source_db"
-        mock_client.execute.assert_called_once_with(expected_sql)
+        self.assertEqual(
+            mock_client.execute.call_args_list, [call(expected_sql), call('SHOW CREATE DATABASE target_db')]
+        )
 
     def test_transaction_wrapper(self):
         """Test Session with snapshots and clones"""
@@ -150,7 +154,10 @@ class TestSQLAlchemyIntegration(unittest.TestCase):
         tx_clone.clone_database("target_db", "source_db")
 
         # Verify that the transaction's execute was called
-        mock_tx.execute.assert_called_once_with("CREATE DATABASE target_db CLONE source_db")
+        self.assertEqual(
+            mock_tx.execute.call_args_list,
+            [call('CREATE DATABASE target_db CLONE source_db'), call('SHOW CREATE DATABASE target_db')],
+        )
 
     def test_sqlalchemy_integration_pattern(self):
         """Test the integration pattern without actual SQLAlchemy"""

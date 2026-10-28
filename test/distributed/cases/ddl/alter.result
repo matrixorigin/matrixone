@@ -15,7 +15,7 @@ constraint fk foreign key fk(col1) references foreign01(col1));
 insert into foreign02 values(1,1,1);
 insert into foreign02 values(2,2,2);
 delete from foreign01 where col3 = 100;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 show create table foreign02;
 Table    Create Table
 foreign02    CREATE TABLE `foreign02` (\n  `col1` int DEFAULT NULL,\n  `col2` int DEFAULT NULL,\n  `col3` int NOT NULL,\n  PRIMARY KEY (`col3`),\n  CONSTRAINT `fk` FOREIGN KEY (`col1`) REFERENCES `foreign01` (`col1`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
@@ -46,9 +46,9 @@ show create table tm1;
 Table    Create Table
 tm1    CREATE TABLE `tm1` (\n  `a` int NOT NULL,\n  `b` int DEFAULT NULL,\n  `c` int DEFAULT NULL,\n  CONSTRAINT `fm1` FOREIGN KEY (`b`) REFERENCES `tm2` (`a`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 delete from ti2 where c = 1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 delete from tm2 where c = 1;
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 alter table ti1 drop foreign key fi1;
 alter table tm1 drop foreign key fm1;
 show create table ti1;
