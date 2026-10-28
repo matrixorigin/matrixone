@@ -612,6 +612,56 @@ func TestTableDumpSharedTimezoneWitnessAcrossDefaults(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTableDumpSharedTimezoneWitnessAcrossDistinctDefaults(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.FixedZone("creation zone", 5*3600+30*60)
+	proc.GetSessionInfo().LCTimeNames = "en_US"
+	compiler := NewMockCompilerContext(false, proc)
+	compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+		switch name {
+		case "lc_time_names":
+			return "en_US", nil
+		case "div_precision_increment":
+			return int64(0), nil
+		case "explicit_defaults_for_timestamp":
+			return true, nil
+		}
+		return "", nil
+	}
+	columns := make([]string, 3)
+	for i, unixTime := range []int{1709251200, 1709254800, 1709258400} {
+		columns[i] = fmt.Sprintf("c%d varchar(200) default (concat("+
+			"cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', "+
+			"date_format(from_unixtime(%d),'%%b %%Y-%%m-%%d %%H:%%i:%%s')))", i, unixTime)
+	}
+	stmt, err := mysql.ParseOne(t.Context(), "create table t("+strings.Join(columns, ",")+")", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef()
+	for i, want := range []string{
+		"0:Mar 2024-03-01 05:30:00",
+		"0:Mar 2024-03-01 06:30:00",
+		"0:Mar 2024-03-01 07:30:00",
+	} {
+		require.Equal(t, want, def.Cols[i].Default.Expr.GetLit().GetSval())
+	}
+	before := proto.Clone(def)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	for _, supplied := range []*planpb.TableDef{nil, def} {
+		capture, err := AnalyzeTableDumpBindings(compiler, def, supplied)
+		require.NoError(t, err)
+		require.True(t, capture)
+	}
+	require.True(t, proto.Equal(before, def))
+
+	forged := proto.Clone(def).(*planpb.TableDef)
+	forged.Cols[len(columns)-1].Default.Expr.GetLit().Value = &planpb.Literal_Sval{Sval: "forged"}
+	_, err = AnalyzeTableDumpBindings(compiler, def, forged)
+	require.Error(t, err)
+}
+
 func TestTableDumpCurrentMonthAbbrevNamedZoneRules(t *testing.T) {
 	proc := newPlanTestProcess(t)
 	creationZone, err := time.LoadLocation("America/New_York")
