@@ -92,7 +92,7 @@ INSERT INTO t1 (id,a) VALUES
 select * from t1;
 UPDATE t1 SET b = a;
 select * from t1;
-select a,count(a) from t1 where ((a = 9.223372036854776e18) and (b = '9.223372036854776E+18')) group by a having count(a)>1 order by count(a);
+select a,count(a) from t1 where ((a = 9.223372036854776e18) and (b = '9.223372036854776e18')) group by a having count(a)>1 order by count(a);
 select distinct a,b from t1 where ((a = 1.844674407370955e19) and (b != '9.223372036854776e18')) order by 1;
 CREATE TABLE t_double(id double(30,1));
 INSERT INTO t_double VALUES (1.19),(1.11), (2);
