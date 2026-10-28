@@ -271,6 +271,7 @@ func (builder *QueryBuilder) prepareSpecialIndexGuards(rootID int32) {
 
 func (builder *QueryBuilder) resetSpecialIndexGuards() {
 	clear(builder.projectAnchoredSorts)
+	clear(builder.fulltextBoundableJoins)
 	if builder.protectedScans != nil {
 		for k := range builder.protectedScans {
 			delete(builder.protectedScans, k)
@@ -1072,6 +1073,9 @@ func (builder *QueryBuilder) applyIndicesForSort(nodeID int32, sortNode *plan.No
 	// A covered fulltext rewrite may be below the explicit SQL score sort.
 	// Preserve the original projection tags while checking that complete chain.
 	builder.pushCoveredFulltext2ScoreLimitFromSort(sortNode)
+	// The non-covered (base-table JOIN) analogue: push the score LIMIT top-k into the
+	// fulltext2 search so it emits k rows instead of every match.
+	builder.pushJoinFulltext2ScoreLimitFromSort(sortNode)
 	if _, ok := builder.projectAnchoredSorts[nodeID]; ok {
 		// The PROJECT above will anchor this Top-K with full column information.
 		return nodeID, nil

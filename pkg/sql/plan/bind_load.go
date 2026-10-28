@@ -98,7 +98,7 @@ func (builder *QueryBuilder) bindExternalScan(
 	if err != nil {
 		return -1, nil, err
 	}
-	if err := validateLoadSetAssignments(stmt.Param, ctx); err != nil {
+	if err := validateLoadSetAssignments(stmt.Param, ctx, dmlCtx.tableDefs[0]); err != nil {
 		return -1, nil, err
 	}
 	userVariableAssignments, err := loadUserVariableNullIfAssignments(stmt.Param, ctx)
@@ -131,10 +131,10 @@ func (builder *QueryBuilder) bindExternalScan(
 				switch realCol := col.(type) {
 				case *tree.UnresolvedName:
 					colName := realCol.ColName()
-					if _, ok := tableDef.Name2ColIndex[colName]; !ok {
+					tbColIdx, ok := tableDef.Name2ColIndex[colName]
+					if !ok || tableDef.Cols[tbColIdx].Hidden {
 						return -1, nil, moerr.NewBadFieldErrorf(ctx.GetContext(), "internal error: column '%s' does not exist", colName)
 					}
-					tbColIdx := tableDef.Name2ColIndex[colName]
 					if tableDef.Cols[tbColIdx].GeneratedCol != nil {
 						return -1, nil, moerr.NewInvalidInputf(ctx.GetContext(),
 							"the value specified for generated column '%s' in table '%s' is not allowed",

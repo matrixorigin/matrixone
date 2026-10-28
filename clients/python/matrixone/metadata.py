@@ -45,6 +45,16 @@ class MetadataColumn(Enum):
     SUM = "sum"
 
 
+def _metadata_boolean(value):
+    if value is None:
+        return False
+    if isinstance(value, (bool, int)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str) and value.lower() in ('true', 'false', '0', '1'):
+        return value.lower() in ('true', '1')
+    raise ValueError('Unexpected metadata boolean representation')
+
+
 @dataclass
 class MetadataRow:
     """Structured representation of a metadata scan row"""
@@ -69,7 +79,7 @@ class MetadataRow:
         return cls(
             col_name=row._mapping['col_name'],
             object_name=row._mapping['object_name'],
-            is_hidden=row._mapping['is_hidden'] == 'true',
+            is_hidden=_metadata_boolean(row._mapping['is_hidden']),
             obj_loc=row._mapping['obj_loc'],
             create_ts=row._mapping['create_ts'],
             delete_ts=row._mapping['delete_ts'],

@@ -57,6 +57,13 @@ type TableConfig struct {
 	MetadataTable string `json:"metadata"` // metadata (FullText2Index_TblType_Metadata)
 	PKey          string `json:"pkey"`
 	Parser        string `json:"parser,omitempty"`
+	// TokenFilters is the ordered token_filter chain (currently only "stop"),
+	// sourced from the persisted token_filter algo_param so the build (create, CDC
+	// tail, compact) and the BM25 query strip the SAME tokens. It is a bag-of-words
+	// analyzer: NL / BOOLEAN phrase queries against a token_filter index are rejected
+	// at plan time (a dropped stopword's bytes stay in the surviving positions).
+	// gojieba parser only. nil ⇒ no filters.
+	TokenFilters []string `json:"token_filter,omitempty"`
 	// Capacity is max_index_capacity: the create build splits the tag=0 base into
 	// sub-indexes of at most Capacity docs each (0 => DefaultBuildCapacity).
 	Capacity int64 `json:"capacity,omitempty"`
@@ -64,6 +71,9 @@ type TableConfig struct {
 	// this many postings (term occurrences), whichever comes first with Capacity.
 	// Bounds per-segment build memory regardless of doc size (0 => DefaultPostingCapacity).
 	PostingCapacity int64 `json:"posting_capacity,omitempty"`
+	// ThreadsBuild is the fulltext2_threads_build parallelism of the create build (0 => the
+	// effective GOMAXPROCS). The built segments are identical at any value.
+	ThreadsBuild int64 `json:"threads_build,omitempty"`
 	// PositionFree builds segments without the positional payload (bag-of-words
 	// retrieval only; ~half the footprint, FST kept). Sourced from the persisted
 	// position_free algo_param so every build path (create, CDC tail, compact) agrees.
@@ -141,12 +151,58 @@ const maxInsertTuples = 500
 // Persist writes one sealed segment in the caller's existing transaction.
 // The segment owns its spill; SQL receives binary values with caller identity.
 func (s *Segment) Persist(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, tag int, buildTS int64) error {
-	fp, checksum, size, err := s.spill(sqlproc)
+	spilled, err := s.Spill(localSpillDir(sqlproc))
 	if err != nil {
 		return err
 	}
-	defer func() { fp.Close(); os.Remove(fp.Name()) }()
-	metadata := s.metadataInsertSQL(sqlproc, cfg, ts, checksum, size, buildTS)
+	defer spilled.Discard()
+	return spilled.Write(sqlproc, cfg, ts, tag, buildTS)
+}
+
+// SpilledSegment is a serialized segment staged in a local file. It keeps only the fields
+// its metadata row needs, so the in-memory segment can be released before the write.
+type SpilledSegment struct {
+	Id       string
+	Recency  int64
+	N        int64
+	fp       *os.File
+	checksum string
+	size     int64
+}
+
+// Spill serializes the segment into a temp file under dir ("" = the OS temp dir). It uses
+// no SQL process or transaction, so it may run off the operator goroutine.
+func (s *Segment) Spill(dir string) (*SpilledSegment, error) {
+	buf, err := s.Serialize()
+	if err != nil {
+		return nil, err
+	}
+	fp, err := os.CreateTemp(dir, "ft2build")
+	if err != nil {
+		return nil, err
+	}
+	// Unlinked at once: reads go through fp, and a crash leaves no file behind.
+	os.Remove(fp.Name())
+	if _, err = fp.Write(buf); err == nil {
+		err = fp.Sync()
+	}
+	if err != nil {
+		fp.Close()
+		return nil, err
+	}
+	return &SpilledSegment{
+		Id:       s.Id,
+		Recency:  s.Recency,
+		N:        s.N,
+		fp:       fp,
+		checksum: vectorindex.CheckSumFromBuffer(buf),
+		size:     int64(len(buf)),
+	}, nil
+}
+
+// Write inserts the spilled segment's metadata row and chunk rows in sqlproc's transaction.
+func (p *SpilledSegment) Write(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, tag int, buildTS int64) error {
+	metadata := metadataInsertSQL(sqlproc, cfg, p.Id, ts, p.checksum, p.size, p.Recency, p.N, buildTS)
 	return sqlexec.RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
 		stmt := sqlproc.StatementOption()
 		res, err := exec.Exec(metadata, stmt)
@@ -158,35 +214,24 @@ func (s *Segment) Persist(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64
 		if err != nil {
 			return err
 		}
-		if _, err = writer.WriteRange(fp, 0, size, s.Id, 0, tag); err != nil {
+		if _, err = writer.WriteRange(p.fp, 0, p.size, p.Id, 0, tag); err != nil {
 			return err
 		}
 		return writer.Flush()
 	})
 }
 
-// End serialization-buffer lifetime before SQL parameter/expression allocation.
-func (s *Segment) spill(sqlproc *sqlexec.SqlProcess) (*os.File, string, int64, error) {
-	buf, err := s.Serialize()
-	if err != nil {
-		return nil, "", 0, err
+// Discard closes the spill file, releasing its storage. It is idempotent.
+func (p *SpilledSegment) Discard() {
+	if p == nil || p.fp == nil {
+		return
 	}
-	fp, err := createLocalSpillFile(sqlproc, "ft2build")
-	if err != nil {
-		return nil, "", 0, err
-	}
-	if _, err = fp.Write(buf); err == nil {
-		err = fp.Sync()
-	}
-	if err != nil {
-		fp.Close()
-		os.Remove(fp.Name())
-		return nil, "", 0, err
-	}
-	return fp, vectorindex.CheckSumFromBuffer(buf), int64(len(buf)), nil
+	p.fp.Close()
+	p.fp = nil
 }
 
-func (s *Segment) metadataInsertSQL(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, checksum string, filesize, buildTS int64) (sql string) {
+func metadataInsertSQL(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, ts int64, checksum string,
+	filesize, recency, n, buildTS int64) (sql string) {
 	metaTbl := sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)
 	// build_ts is named only when the table has it. A fulltext2 index created before the column
 	// existed keeps the narrower shape until its tenant's v4_0_7 migration runs, and that
@@ -201,7 +246,7 @@ func (s *Segment) metadataInsertSQL(sqlproc *sqlexec.SqlProcess, cfg TableConfig
 			catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
 			catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
 			catalog.FullText2Index_TblCol_Metadata_Build_Ts,
-			sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N,
+			sqlquote.String(id), ts, sqlquote.String(checksum), filesize, recency, n,
 			buildTS)
 	} else {
 		sql = fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d)",
@@ -209,7 +254,7 @@ func (s *Segment) metadataInsertSQL(sqlproc *sqlexec.SqlProcess, cfg TableConfig
 			catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Timestamp,
 			catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
 			catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
-			sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N)
+			sqlquote.String(id), ts, sqlquote.String(checksum), filesize, recency, n)
 	}
 	return sql
 }
@@ -588,13 +633,6 @@ func LocalSpillDir(ctx context.Context, rootFS fileservice.FileService) string {
 		return ""
 	}
 	return dir
-}
-
-// createLocalSpillFile creates a NAMED temp file (prefix) under the LOCAL fileservice's
-// __fulltext2 dir — its handle is read by the segment owner. Falls back
-// to the OS temp dir when no LOCAL fileservice is attached (localSpillDir=="").
-func createLocalSpillFile(sqlproc *sqlexec.SqlProcess, prefix string) (*os.File, error) {
-	return os.CreateTemp(localSpillDir(sqlproc), prefix)
 }
 
 // createLocalTempFile returns a temp file for the segment's mmap. It prefers the
