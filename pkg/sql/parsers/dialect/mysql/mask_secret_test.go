@@ -407,6 +407,37 @@ func TestMaskPrepareAtNestedStatementBoundary(t *testing.T) {
 		}
 	})
 
+	t.Run("lex error tail recovery", func(t *testing.T) {
+		// #30747 (BVT lane): the empty quoted identifier ` `` ` poisons
+		// the scanner into reporting the remainder as one LEX_ERROR tail;
+		// without recovery the credential keyword inside stayed invisible
+		// and `create account `` ADMIN_NAME 'admin' IDENTIFIED BY 'v'`
+		// shipped its secret verbatim in records, diagnostics and the
+		// client echo.
+		poison := "create account `` ADMIN_NAME 'admin' IDENTIFIED BY '123456';"
+		got := MaskSensitiveSqlLiterals(poison)
+		require.Equal(t, "create account `` ADMIN_NAME 'admin' IDENTIFIED BY '******';", got)
+		got = MaskSensitiveSqlLiteralsPerStatement(poison, 0)
+		require.Equal(t, "create account `` ADMIN_NAME 'admin' IDENTIFIED BY '******';", got)
+		require.NotEmpty(t, SensitiveLiteralSpansForDiagnostic(poison, 0), "gate span present")
+		require.Equal(t, got, MaskSensitiveSqlLiteralsPerStatement(got, 0), "idempotent")
+
+		// a credential map inside the same swallowed shape
+		poison = "create account `` ADMIN_NAME 'a' credentials={'aws_key'='TAIL_POISON_CANARY'};"
+		got = MaskSensitiveSqlLiterals(poison)
+		require.NotContains(t, got, "TAIL_POISON_CANARY")
+		require.Contains(t, got, "credentials={'aws_key'='******'}")
+		require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+
+		// controls: empty quoted identifier alone is untouched; stacked
+		// poisons still mask through the conservative union path
+		require.Equal(t, "select ``;", MaskSensitiveSqlLiterals("select ``;"))
+		require.Empty(t, SensitiveLiteralSpansForDiagnostic("select ``;", 0))
+		require.NotContains(t,
+			MaskSensitiveSqlLiteralsPerStatement("create account `` x `` ADMIN_NAME 'a' IDENTIFIED BY 'STACKED_CANARY';", 0),
+			"STACKED_CANARY")
+	})
+
 	t.Run("controls", func(t *testing.T) {
 		// unwrapped PREPARE still masks exactly as before
 		sql := `prepare p from "create stage s url='file:///x' credentials={'aws_key'='CTRL_CANARY'}"`

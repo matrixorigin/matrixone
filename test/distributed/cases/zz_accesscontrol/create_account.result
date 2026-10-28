@@ -116,39 +116,39 @@ select account_name,comments from mo_catalog.mo_account where account_name='cm3'
 account_name    comments
 cm3
 create accout a1 ADMIN_NAME ' admin' IDENTIFIED BY '123456';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " accout a1 ADMIN_NAME ' admin' IDENTIFIED BY '123456';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " accout a1 ADMIN_NAME ' admin' IDENTIFIED BY '******';";
 create account a1;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 18 near ";";
 create accout a1 ADMIN_NAME ' admin';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " accout a1 ADMIN_NAME ' admin';";
 create accout a1 IDENTIFIED BY '123456';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " accout a1 IDENTIFIED BY '123456';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " accout a1 IDENTIFIED BY '******';";
 create accout a1 comment'aaaa';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 13 near " accout a1 comment'aaaa';";
 create account 123 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 18 near " 123 ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 18 near " 123 ADMIN_NAME 'admin' IDENTIFIED BY '******';";
 create account 非常 ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 internal error: the name "非常" is invalid
 create account "acc1" ADMIN_NAME 'admin' IDENTIFIED BY '123456';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near " "acc1" ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near " "acc1" ADMIN_NAME 'admin' IDENTIFIED BY '******';";
 create account 'acc1' ADMIN_NAME 'admin' IDENTIFIED BY '123456';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near " 'acc1' ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 21 near " 'acc1' ADMIN_NAME 'admin' IDENTIFIED BY '******';";
 create account bbb ADMIN_NAME '' IDENTIFIED BY '123456';
 internal error: the name "" is invalid
 create account `` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " `` ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " `` ADMIN_NAME 'admin' IDENTIFIED BY '******';";
 create account aaa ADMIN_NAME 'admin' IDENTIFIED BY '';
 internal error: password is empty string
 create account test:account ADMIN_NAME 'admin' IDENTIFIED BY '123456';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 27 near ":account ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 27 near ":account ADMIN_NAME 'admin' IDENTIFIED BY '******';";
 create account 'test:account' ADMIN_NAME 'admin' IDENTIFIED BY '123456';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " 'test:account' ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " 'test:account' ADMIN_NAME 'admin' IDENTIFIED BY '******';";
 create account "test:account" ADMIN_NAME 'admin' IDENTIFIED BY '123456';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " "test:account" ADMIN_NAME 'admin' IDENTIFIED BY '123456';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 29 near " "test:account" ADMIN_NAME 'admin' IDENTIFIED BY '******';";
 create account `test:account` ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 internal error: the name "test:account" is invalid
 create account default ADMIN_NAME 'root' IDENTIFIED BY '123456';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 22 near " default ADMIN_NAME 'root' IDENTIFIED BY '123456';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 22 near " default ADMIN_NAME 'root' IDENTIFIED BY '******';";
 create account account ADMIN_NAME 'root' IDENTIFIED BY '123456';
 select count(*) from mo_catalog.mo_account where account_name in ('test:account','default','account');
 count(*)

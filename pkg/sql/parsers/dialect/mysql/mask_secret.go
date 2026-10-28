@@ -159,6 +159,10 @@ type credentialRawEdit struct {
 // re-mask would destroy structural separators one mode hides inside a
 // string token of the other (#30747 review).
 func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool, mode SQLModeFlags, descendPrepare bool) ([][2]int, []credentialRawEdit, bool) {
+	return collectCredentialMasksWithLexErrorRecovery(sql, initial, maskAll, mode, descendPrepare, 2)
+}
+
+func collectCredentialMasksWithLexErrorRecovery(sql string, initial CredentialMapState, maskAll bool, mode SQLModeFlags, descendPrepare bool, lexErrTailBudget int) ([][2]int, []credentialRawEdit, bool) {
 	scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, mode)
 	defer PutScanner(scanner)
 	previousToken := 0
@@ -229,6 +233,40 @@ func collectCredentialMasks(sql string, initial CredentialMapState, maskAll bool
 			// re-armed by its preceding ';' exactly as before.
 			statementStart = typ == SPBEGIN || typ == THEN || typ == ELSE ||
 				typ == DO || typ == REPEAT || typ == LOOP
+		}
+		if typ == LEX_ERROR && lexErrTailBudget > 0 && credState == CredentialStateNone &&
+			tokStart >= coveredUntil && scanner.Pos-tokStart >= 8 {
+			// A token-level poison (for example the empty quoted
+			// identifier ` `` `) makes the scanner REPORT the remainder
+			// as one large LEX_ERROR tail, hiding every credential
+			// keyword inside it — `create account `` ADMIN_NAME 'a'
+			// IDENTIFIED BY 'x'` previously shipped its secret verbatim
+			// to records and clients (#30747). Re-collect INSIDE the
+			// tail's RAW bytes: the token's folded value is unusable for
+			// coordinates (backtick-escape folding breaks identity), so
+			// spans derive from byte positions, never from s. The budget
+			// caps the descent — each level may only shorten the
+			// remainder, and a level meeting another poison gets one
+			// more collection inside ITS tail before declining: stacked
+			// adversarial input stays linear, and the deepest fragment
+			// still falls to the conservative fallbacks.
+			// The token's own first byte IS the poison (a stray quote
+			// opener, ...); rescanning it neutralized-as-space restores
+			// the tail to ordinary trivia. Lengths — hence all offsets —
+			// are preserved by construction.
+			region := []byte(sql[tokStart:scanner.Pos])
+			region[0] = ' '
+			subSpans, subEdits, subMalformed := collectCredentialMasksWithLexErrorRecovery(string(region), CredentialStateNone, maskAll, mode, descendPrepare, lexErrTailBudget-1)
+			for _, s2 := range subSpans {
+				spans = append(spans, [2]int{s2[0] + tokStart, s2[1] + tokStart})
+			}
+			for _, e := range subEdits {
+				rawEdits = append(rawEdits, credentialRawEdit{e.start + tokStart, e.end + tokStart, e.text})
+			}
+			if subMalformed {
+				malformedMap = true
+			}
+			continue
 		}
 		if tokStart < coveredUntil {
 			// Already redacted by an unquoted value run below; skip this
