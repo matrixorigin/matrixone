@@ -23,6 +23,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -236,7 +237,10 @@ func (r *fakeReader) SetOrderBy([]*plan.OrderBySpec)       {}
 func (r *fakeReader) GetOrderBy() []*plan.OrderBySpec      { return nil }
 func (r *fakeReader) SetIndexParam(*plan.IndexReaderParam) {}
 func (r *fakeReader) SetFilterZM(objectio.ZoneMap)         {}
-func (r *fakeReader) Read(_ context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, bat *batch.Batch) (bool, error) {
+func (r *fakeReader) Read(_ context.Context, cols []string, _ *plan.Expr, mp *mpool.MPool, bat *batch.Batch) (bool, error) {
+	if !slices.Contains(cols, catalog.CPrimaryKeyColName) {
+		return false, moerr.NewInternalErrorNoCtx("the primary key filter needs the primary key column read")
+	}
 	if r.pos >= len(r.rows) {
 		return true, nil
 	}
@@ -270,7 +274,13 @@ func storageTableDef() *plan.TableDef {
 		{Name: catalog.IndexStorage_TblCol_Tag, Typ: plan.Type{Id: int32(types.T_int64)}},
 		{Name: catalog.CPrimaryKeyColName, Typ: plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}},
 	}
-	def := &plan.TableDef{Name: "idx", Cols: cols, Name2ColIndex: make(map[string]int32)}
+	def := &plan.TableDef{
+		Name: "idx", Cols: cols, Name2ColIndex: make(map[string]int32),
+		Pkey: &plan.PrimaryKeyDef{
+			PkeyColName: catalog.CPrimaryKeyColName,
+			Names:       []string{catalog.IndexStorage_TblCol_Index_Id, catalog.IndexStorage_TblCol_Chunk_Id},
+		},
+	}
 	for i, c := range cols {
 		def.Name2ColIndex[c.Name] = int32(i)
 	}
@@ -366,11 +376,10 @@ func TestOpenRebuildsThenHitsCache(t *testing.T) {
 	require.NoError(t, f.Close())
 	require.Equal(t, int32(1), tbl.scans.Load())
 
-	filter := <-tbl.filters
-	fn := filter.GetF()
+	fn := (<-tbl.filters).GetF()
 	require.Equal(t, "prefix_between", fn.Func.ObjName)
-	require.Equal(t, string(serialKey(ref.IndexID, 0)), fn.Args[1].GetLit().GetSval())
-	require.Equal(t, string(serialKey(ref.IndexID, 5)), fn.Args[2].GetLit().GetSval())
+	require.Equal(t, serialKey(ref.IndexID, 0), fn.Args[1].GetFold().GetData())
+	require.Equal(t, serialKey(ref.IndexID, 5), fn.Args[2].GetFold().GetData())
 
 	f, err = Open(ctx, env, ref)
 	require.NoError(t, err)

@@ -33,6 +33,7 @@ var scanColumns = []string{
 	catalog.IndexStorage_TblCol_Chunk_Id,
 	catalog.IndexStorage_TblCol_Data,
 	catalog.IndexStorage_TblCol_Tag,
+	catalog.CPrimaryKeyColName,
 }
 
 // openRelation opens ref's storage table in env's transaction.
@@ -157,8 +158,8 @@ func chunkRangeFilter(ctx context.Context, tableDef *plan.TableDef, ref *Ref) (*
 	}
 	typ := plan.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen, Charset: uint32(types.CharsetBinary)}
 	col := &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: catalog.CPrimaryKeyColName, ColPos: pos}}}
-	lo := bytesExpr(serialKey(ref.IndexID, ref.FirstChunk), typ)
-	hi := bytesExpr(serialKey(ref.IndexID, ref.FirstChunk+ref.numChunks()-1), typ)
+	lo := foldedBytes(serialKey(ref.IndexID, ref.FirstChunk), typ)
+	hi := foldedBytes(serialKey(ref.IndexID, ref.FirstChunk+ref.numChunks()-1), typ)
 	argTypes := []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()}
 	fn, err := function.GetFunctionByName(ctx, "prefix_between", argTypes)
 	if err != nil {
@@ -183,9 +184,11 @@ func serialKey(indexID string, chunkID int64) []byte {
 	return append([]byte(nil), p.Bytes()...)
 }
 
-func bytesExpr(b []byte, typ plan.Type) *plan.Expr {
+// foldedBytes is the constant b as a folded value, the form the reader's primary-key
+// filter takes its bounds in.
+func foldedBytes(b []byte, typ plan.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ:  typ,
-		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: string(b)}}},
+		Expr: &plan.Expr_Fold{Fold: &plan.FoldVal{IsConst: true, Data: b}},
 	}
 }
