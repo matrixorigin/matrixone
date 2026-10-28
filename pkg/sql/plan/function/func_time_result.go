@@ -82,19 +82,26 @@ func timeResultArithmetic(parameters []*vector.Vector, result vector.FunctionRes
 		}
 		var value types.Time
 		var overflow bool
+		nullResult := false
 		if kind == temporalStringDateTime {
 			var calendar types.Datetime
 			calendar, overflow = datetimeArithmeticResult(date, delta, subtract)
 			if !overflow {
 				value, _ = timestampPairDatetimeToTime(calendar)
+			} else {
+				// Calendar arithmetic keeps NULL on datetime-domain overflow,
+				// matching DATE_ADD on datetime input.
+				nullResult = true
 			}
 		} else {
+			// TIME-domain results clamp to the MySQL TIME boundary exactly
+			// like the CAST path instead of losing the computed duration.
 			value, overflow = timeArithmeticResult(duration, delta, subtract)
 		}
 		if overflow {
 			appendTimeIntervalOverflowWarning(proc)
 		}
-		if err := results.Append(value, overflow); err != nil {
+		if err := results.Append(value, nullResult); err != nil {
 			return err
 		}
 	}
