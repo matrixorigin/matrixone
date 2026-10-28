@@ -8331,8 +8331,17 @@ func (c *Compile) compileLocalGroupBy(
 		}, ss)
 	}
 	currentFirstFlag := c.anal.isFirst
+	// The parent completes these keys after a local exchange. The local Group
+	// can choose between reduction and projection using observed cardinality.
+	adaptiveLocal := isLocalPreAggregationGroup(parent, node) &&
+		node.ExtraOptions == "" && len(node.OrderBy) == 0 &&
+		len(node.GroupByHashKey) == 0 && len(parent.GroupByHashKey) == 0 &&
+		c.localPreAggregationOnSingleCN(parent, ss)
 	for i := range ss {
 		op := constructGroup(c.proc.Ctx, node, ns[node.Children[0]], false, 0, c.proc)
+		if adaptiveLocal && !op.DynamicGrouping {
+			op.LocalReductionMem = 512 << 10
+		}
 		op.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(op)
 		ss[i].HasPartialResults = false
@@ -8395,6 +8404,14 @@ func (c *Compile) canOmitLocalPreAggregation(
 	if math.IsNaN(groups) || math.IsInf(groups, 0) ||
 		math.IsNaN(rows) || math.IsInf(rows, 0) || rows <= 0 || groups > rows ||
 		groups < 2_000_000 || groups/rows < 0.25 {
+		return false
+	}
+	return c.localPreAggregationOnSingleCN(parent, ss)
+}
+
+func (c *Compile) localPreAggregationOnSingleCN(parent *plan.Node, ss []*Scope) bool {
+	if len(ss) == 0 || parent.Stats == nil || parent.Stats.Dop <= 1 ||
+		!c.canCompileShuffleGroup(parent) || !isIdentityGroupByProjection(parent) {
 		return false
 	}
 	for _, s := range ss {

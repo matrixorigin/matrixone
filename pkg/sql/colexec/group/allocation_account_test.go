@@ -1548,6 +1548,7 @@ func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {
 	defer proc.Free()
 
 	input := batch.NewWithSize(1)
+	defer input.Clean(proc.Mp())
 	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	values := []string{
 		strings.Repeat("a", 100),
@@ -1572,6 +1573,11 @@ func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {
 		nil,
 	)
 	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
+	defer func() {
+		defer finalizeGroupTestAllocation(t, g, allocation)
+		g.Free(proc, false, nil)
+		require.Zero(t, allocation.account.Snapshot().Used)
+	}()
 	require.NoError(t, g.Prepare(proc))
 	require.NoError(t, g.ctr.buildHashTable(proc.Ctx, 0))
 
@@ -1586,11 +1592,10 @@ func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {
 		input.Vecs, 0, input.RowCount(), insertedFlags, len(insertedFlags)))
 	require.NotNil(t, g.ctr.groupByStandby)
 	before := allocation.account.Snapshot().Used
-	inserted, err := g.ctr.appendGroupByBatchWithStringSources(
-		input.Vecs, 0, []uint8{1, 1, 1},
-		[][]types.StringSource{inputSources}, 0)
-	require.NoError(t, err)
-	require.Equal(t, 3, inserted)
+	require.NoError(t, g.ctr.appendGroupByBatchWithStringSources(
+		input.Vecs, 0, insertedFlags, 3, [][]types.StringSource{inputSources}, 0))
+	require.Equal(t, aggBatchSize, g.ctr.groupByBatches[0].RowCount())
+	require.Equal(t, 2, g.ctr.groupByBatches[1].RowCount())
 	require.Equal(t, before, allocation.account.Snapshot().Used)
 	require.Len(t, g.ctr.groupByBatches, 2)
 	require.Equal(t, values[0], string(
@@ -1605,11 +1610,6 @@ func TestPreAllocateBuildChunkIncludesSelectedVarlenaArea(t *testing.T) {
 		types.StringSourceCOMStmt,
 		types.StringSourceUserVariable,
 	}, g.ctr.groupByBatches[1].Vecs[0].GetStringSources())
-
-	g.Free(proc, false, nil)
-	require.Zero(t, allocation.account.Snapshot().Used)
-	finalizeGroupTestAllocation(t, g, allocation)
-	input.Clean(proc.Mp())
 }
 
 func TestAppendDuplicateOnlyChunkDoesNotAllocateAfterHashCommit(t *testing.T) {
@@ -1617,10 +1617,16 @@ func TestAppendDuplicateOnlyChunkDoesNotAllocateAfterHashCommit(t *testing.T) {
 	defer proc.Free()
 
 	input := batch.NewWithSize(1)
+	defer input.Clean(proc.Mp())
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
 	input.SetRowCount(1)
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)}, nil)
 	allocation := installGroupTestAllocation(t, g, proc, 64<<20)
+	defer func() {
+		defer finalizeGroupTestAllocation(t, g, allocation)
+		g.Free(proc, false, nil)
+		require.Zero(t, allocation.account.Snapshot().Used)
+	}()
 	require.NoError(t, g.Prepare(proc))
 
 	current, err := g.ctr.createNewGroupByBatch(input.Vecs, aggBatchSize)
@@ -1630,17 +1636,12 @@ func TestAppendDuplicateOnlyChunkDoesNotAllocateAfterHashCommit(t *testing.T) {
 	g.ctr.groupByBatches = append(g.ctr.groupByBatches, current)
 	before := allocation.account.Snapshot().Used
 
-	inserted, err := g.ctr.appendGroupByBatch(input.Vecs, 0, []uint8{0})
-	require.NoError(t, err)
-	require.Zero(t, inserted)
+	require.NoError(t, g.ctr.appendGroupByBatchWithStringSources(
+		input.Vecs, 0, []uint8{0}, 0, nil, 0))
+	require.Equal(t, aggBatchSize, current.RowCount())
 	require.Equal(t, before, allocation.account.Snapshot().Used)
 	require.Len(t, g.ctr.groupByBatches, 1)
 	require.Nil(t, g.ctr.groupByStandby)
-
-	g.Free(proc, false, nil)
-	require.Zero(t, allocation.account.Snapshot().Used)
-	finalizeGroupTestAllocation(t, g, allocation)
-	input.Clean(proc.Mp())
 }
 
 func TestDuplicateOnlyPreflightDoesNotCreateGroupStorage(t *testing.T) {
@@ -3387,6 +3388,9 @@ func TestStreamingGroupDrainsCapacitySpill(t *testing.T) {
 			}
 			partial := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_varchar)}, aggs)
 			partial.NeedEval = false
+			if !withAggregate {
+				partial.LocalReductionMem = 2 << 20
+			}
 			registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
 			require.NoError(t, err)
 			controller := &rejectNextGroupAllocationController{}
@@ -3402,12 +3406,12 @@ func TestStreamingGroupDrainsCapacitySpill(t *testing.T) {
 			merge := newMergeGroupOp(aggs)
 			merge.AppendChild(partial)
 			defer func() {
+				defer finalizeGroupTestAllocation(t, partial, allocation)
 				merge.Free(proc, false, nil)
 				partial.Free(proc, false, nil)
 				require.Zero(t, account.Snapshot().Used)
 				require.Zero(t, generation.Snapshot().SpillDiskUsed)
 				require.Zero(t, generation.Snapshot().SpillFDUsed)
-				finalizeGroupTestAllocation(t, partial, allocation)
 			}()
 			require.NoError(t, partial.Prepare(proc))
 			require.NoError(t, merge.Prepare(proc))
@@ -3431,6 +3435,8 @@ func TestStreamingGroupDrainsCapacitySpill(t *testing.T) {
 			require.True(t, rejected)
 			require.Positive(t, partial.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillRecords"])
 			require.Positive(t, partial.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadBuckets"])
+			require.Zero(t, partial.ctr.localReduction.limit,
+				"capacity recovery must disable local bypass before draining queued keys")
 			require.Len(t, got, 768)
 			for row := range 768 {
 				want := int64(1)

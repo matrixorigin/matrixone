@@ -126,6 +126,18 @@ func (m *IntHashMap) Cardinality() uint64 {
 }
 
 func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, count int) {
+	if len(vecs) == 1 && !itr.mp.hasNull {
+		vec := vecs[0]
+		// One full-width fixed key already has the H8 representation. Copy
+		// into iterator-owned scratch so preview/commit never borrows vector
+		// storage. Floats still need canonicalization, and NULL/const inputs
+		// still use the generic codec below.
+		if vec.GetType().TypeSize() == 8 && vec.GetType().Oid != types.T_float64 &&
+			!vec.IsConst() && !vec.GetNulls().Any() {
+			copy(itr.keys[:count], vector.MustFixedColNoTypeCheck[uint64](vec)[start:start+count])
+			return
+		}
+	}
 	for _, vec := range vecs {
 		switch vec.GetType().TypeSize() {
 		case 1:

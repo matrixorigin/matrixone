@@ -185,6 +185,70 @@ func TestIntHashMapPreviewInsertMatchesPublication(t *testing.T) {
 	require.Equal(t, uint64(3), hashMap.GroupCount())
 }
 
+func TestIntHashMapFlatAndConstKeysShareIdentity(t *testing.T) {
+	t.Run("int64", func(t *testing.T) { testFlatAndConstHashKeys[int64](t, types.T_int64) })
+	t.Run("uint64", func(t *testing.T) { testFlatAndConstHashKeys[uint64](t, types.T_uint64) })
+	t.Run("datetime", func(t *testing.T) { testFlatAndConstHashKeys[types.Datetime](t, types.T_datetime) })
+	t.Run("decimal64", func(t *testing.T) { testFlatAndConstHashKeys[types.Decimal64](t, types.T_decimal64) })
+}
+
+func testFlatAndConstHashKeys[T interface{ ~int64 | ~uint64 }](t *testing.T, oid types.T) {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	owner, err := NewIntHashMap(false, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		owner.Free()
+		require.Zero(t, mp.CurrNB())
+	})
+	itr := owner.NewTransactionalIterator()
+	for _, value := range []uint64{0, 1} {
+		constant, err := vector.NewConstFixed(oid.ToType(), T(value), 1, mp)
+		require.NoError(t, err)
+		t.Cleanup(func() { constant.Free(mp) })
+		_, _, err = itr.Insert(0, 1, []*vector.Vector{constant})
+		require.NoError(t, err)
+	}
+	flat := vector.NewVec(oid.ToType())
+	t.Cleanup(func() { flat.Free(mp) })
+	raw := []uint64{99, 0, math.MaxUint64, math.MaxUint64, 1 << 63, math.MaxInt64, 1, 88}
+	input := make([]T, len(raw))
+	for i, value := range raw {
+		input[i] = T(value)
+	}
+	require.NoError(t, vector.AppendFixedList(flat, input, nil, mp))
+	vecs := []*vector.Vector{flat}
+	var plan InsertPlan
+	require.NoError(t, itr.PreviewInsert(1, 6, vecs, owner.GroupCount(), &plan))
+	want := []uint64{1, 3, 3, 4, 5, 2}
+	require.Equal(t, want, plan.Values())
+	require.Equal(t, []uint8{0, 1, 0, 1, 1, 0}, plan.Inserted())
+	require.Equal(t, uint64(2), owner.GroupCount())
+
+	// Commit may resize and replan. It must use its own encoded hashes,
+	// even if the caller changes the input vector after preview.
+	data := vector.MustFixedColNoTypeCheck[uint64](flat)
+	data[2] = 123
+	before := owner.Size()
+	require.NoError(t, owner.PreAlloc(1024))
+	require.Greater(t, owner.Size(), before, "exercise replanning after table growth")
+	values, _, err := itr.CommitPreview(&plan)
+	require.NoError(t, err)
+	require.Equal(t, want, values)
+	data[2] = math.MaxUint64
+	values, _, err = itr.Find(1, 6, vecs)
+	require.NoError(t, err)
+	require.Equal(t, want, values)
+
+	// A NULL outside the selected range forces the generic codec while
+	// preserving the logical keys, including both signed extrema.
+	flat.GetNulls().Add(0)
+	values, zValues, err := itr.Find(1, 6, vecs)
+	require.NoError(t, err)
+	require.Equal(t, want, values)
+	require.Equal(t, []int64{1, 1, 1, 1, 1, 1}, zValues)
+}
+
 func TestIntHashMapPreviewInsertGrowsBeforePublication(t *testing.T) {
 	mp := mpool.MustNewZero()
 	hashMap, err := NewIntHashMap(false, mp)

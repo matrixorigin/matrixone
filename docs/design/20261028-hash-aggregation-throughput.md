@@ -1,347 +1,127 @@
-# Hash aggregation throughput with atomic publication
+# General hash aggregation throughput
 
-Status: revision 2 passed design self-review before production implementation.
-Work item: user-requested systematic exact aggregation optimization, prompted by
-the full ClickBench Q5 comparison. Delivery is one implementation branch/PR;
-the PR link is assigned when published.
-Base: `e9dc8c420818732d6a5691bef1b7ebf6e4d8a87f` (verified remote main).
+Status: implemented as an internal single-CN cost policy.
+Work item: user-requested systematic aggregation optimization; one implementation
+branch, with no query- or dataset-specific behavior.
+Base: `e9dc8c420818732d6a5691bef1b7ebf6e4d8a87f` (verified upstream main).
 
 ## Problem and evidence
 
-Q5 is `SELECT COUNT(DISTINCT UserID) FROM hits`. The official projection contains
-99,997,497 signed, non-null 64-bit keys and 17,630,976 distinct values. At
-`66c9e762`, four pinned cores, three warmups and ten sequential measured runs,
-MO takes a median 2.707 seconds and 8.98 process CPU seconds; DuckDB
-`cc9648d736fd7e4fb2fc813cba6f6d34932c3386` takes 0.634 seconds and 2.42 CPU
-seconds. Neither spills or swaps. The newer base leaves the hash/group code
-unchanged, but its complete binary is rebuilt and remeasured for comparison.
+The official ClickBench Q5 projection contains 99,997,497 signed, non-null 64-bit
+keys and 17,630,976 distinct values. Q5 is
+`SELECT COUNT(DISTINCT UserID) FROM hits`. A four-core comparison initially found
+a substantial gap to DuckDB. Profiles identify integer insertion planning and
+hash-table growth as major costs. The candidate profile attributes 43.18% flat
+CPU to planning and 12.89% cumulative CPU to in-place rehashing. Hardware cache
+counters are unavailable, so memory locality is a hypothesis rather than a
+measured cache-miss claim.
 
-The earlier 50M non-null CPU profile attributes 40.38% flat CPU to
-Int64HashMap.PlanInsertBatch. Samples concentrate on loading existing cells,
-which motivates, but does not itself prove, a memory-latency hypothesis.
-Group key publication, encoding, allocation preflight and resizing are secondary
-costs. Local aggregation reduces the 100M input to 20,297,379 rows before final
-hash partitioning; removing that stage blindly would discard useful reduction.
+Input order matters: exact aggregation must also perform well on a permutation
+of the same multiset. A fixed local-memory cap reduced original-order time but
+increased shuffled intermediate rows from 35.6M to 98.6M and regressed latency.
+It is rejected. Adaptive reduction must avoid paying for an ineffective local
+hash pass and must reconsider its decision when the distribution changes.
 
-Evidence lives in the retained `clickbench-q5-100m-20261028` and
-`clickbench-q5-50m-20261027` benchmark directories. Performance measurements are
-separate from functional UT/BVT fixtures.
+## Invariants
 
-## Contract and scope
+Preserve exact equality, NULL semantics, first-occurrence IDs within each hash
+owner, output values, insertion flags and cardinality. Preview is immutable;
+fallible admission precedes publication, and capacity rejection retries the same
+input offset. Existing table-version, stale-plan and rollback checks remain.
 
-The work spans hashtable, hashmap encoding and group-key publication. It earns
-the design gate because it materially changes a hot execution path across
-package boundaries. The overall scope is one optimization of that existing
-contract, not a new planner, aggregate family or resource controller.
+A local pre-aggregation stream is allowed to contain duplicate keys only because
+a downstream Group completes the same key after exchange. It is never treated
+as globally unique. Aggregate state, grouping sets, ordered aggregation and
+physical key subsets retain their existing paths.
 
-For every input batch, preserve exact equality, first-occurrence group IDs,
-NULL/non-matching semantics, output values, insertion flags and cardinality.
-Preview remains immutable. Every fallible allocation precedes publication;
-capacity rejection permits retry at the same input offset without lost or
-duplicated rows. Commit rejects stale owner/epoch/table versions before mutation.
-All existing collision handling and rollback checks remain authoritative.
+There is no SQL, persisted-data, hash-code or wire-format change. The new local
+cost hint defaults to disabled and is intentionally dropped during remote
+serialization, which preserves full local reduction and the original resource
+policy. Local worker clones preserve the hint.
 
-No persisted, wire, SQL, configuration or hash-code format changes are planned.
-Mixed-version boundaries retain the existing key grammar. No new worker, cache,
-lock, channel, cross-batch borrowed pointer or unbounded retained state is added.
-Empty input, empty/all-NULL groups, signed extrema, zero, duplicate values,
-collisions, growth, failed admission, reset and reuse remain valid.
+## Implementation
 
-## Selected approach
+1. Keep integer insertion planning sequential. Hoist immutable segment address
+   masks and advance directly when an existing or tentative mapping resolves.
+   Keep the tentative-slot overlay and all commit validation. String probing
+   remains unchanged because its proposed rewrite regressed controls.
+2. Copy a single non-null, non-constant eight-byte key into iterator-owned
+   scratch. Its representation already matches the existing H8 grammar.
+   Floating-point canonicalization, NULLs, constants and composite keys keep the
+   generic codec. No plan borrows input storage across preview and commit.
+3. Carry the insertion count already validated by preflight through group-key
+   publication and output-batch splitting. Preserve provenance preflight,
+   application and finalization even for duplicate-only chunks, and preserve
+   every existing aggregate update.
+4. Enable adaptive local reduction only when the compiler proves a pure-key
+   local/final pair, a single-CN exchange and eligible local inputs. Preserve
+   coordinator, remote, partial-metadata, dynamic-grouping and physical-key-subset
+   exclusions. Keep the final Group and session spill thresholds unchanged.
 
-1. Keep insertion planning sequential, hoist immutable segment address masks,
-   and advance directly when an existing or tentative mapping is resolved.
-   This removes repeated address computation and the redundant found-state
-   transition without adding another full batch scan, cell copies, table state
-   or special treatment for consecutive values. Integer and string-state
-   equality checks have separate cost evidence; only the integer rewrite is
-   retained because the string candidate regressed low-cardinality controls.
-2. Give one full-width, non-null fixed vector a direct copy path. Its eight-byte
-   representation is already the H8 grammar for integers, dates and decimals.
-   Copy into iterator-owned scratch. Constants, NULL markers, floats, composites,
-   CHAR padding and legacy codecs retain the existing implementation. No plan
-   retains a pointer to input-vector storage.
-3. Avoid redundant group-key work when the exact insertion plan proves there
-   are no new groups, and carry already-proven selection counts across the
-   publication boundary where useful. Existing-row aggregate updates and string
-   source provenance merging still run; duplicate-only input is not permission
-   to skip them. Keep every fallible metadata preflight before hash commit.
+The local hint selects a hash-table working-set target. It measures Hash.Size,
+not total operator memory: a few wide keys can have a large payload and still
+benefit from a small probe table. Whole-operator memory remains governed by the
+existing automatic spill policy and hard query/CN allocation ledger. The target
+is checked after a whole input batch, so it can be exceeded by that admitted
+batch and transient preflight allocations.
 
-These are hypotheses to evaluate independently and together, not promises to
-retain three patches regardless of their measured value. Compiler escape
-analysis and benchmark allocation counts must confirm bounded scratch remains
-allocation-free in the steady state. Any material algorithm change beyond these
-steps requires a revised design review before implementation.
+When the table reaches the target, emit its existing intermediate key batches.
+If unique groups exceed half the input rows in this resident epoch, project keys
+without local hashing for eight epochs' worth of rows. Then sample through the
+ordinary Group again. This asks the extra hash pass to remove at least half of
+the downstream rows and bounds the duration of a stale decision. It does not
+inspect values, adjacency, names or SQL text. Counter arithmetic saturates.
 
-## Alternatives and precedent
+## Ownership and transitions
 
-The status quo provides strong admission/retry safety but serializes random
-accesses and repeats generic encoding/publication work. Removing preflight or
-reserving a worst-case batch without exact duplicate detection can reject valid
-duplicate-only input under a tight budget and is rejected.
+| Transition | Ownership and termination |
+| --- | --- |
+| Build -> Eval | Finish admission/publication for the input batch before emitting keys; Group owns the output batches. |
+| Eval -> EvalReset | Drain every output batch before freeing the consumed hash/key state and restarting input. |
+| Bypass -> resample | One header borrows child/expression vectors; the next child call retires it. Prepared expressions own computed vectors. Never Clean the borrowed batch. |
+| Yield / EOF | Preserve ExecYield even with nil Batch; only genuine nil-batch EOF ends input. Non-empty ExecStop is normalized to ExecNext, matching Group's existing contract. |
+| Error / cancellation | Check cancellation after child/expression execution and before publication. Free clears the borrowed header before expression cleanup. |
+| Capacity recovery | Disable the local policy for the rest of the execution before generic disk recovery; drain every queued key using the original recovery path. |
+| Reset / reuse | Clear all local counters and borrowed references. Prepare restores the immutable operator hint. |
 
-DuckDB's inspected source revision uses radix-partitioned aggregation, adaptive
-local tables, and batch probing (src/execution/aggregate_hashtable.cpp and
-radix_partitioned_hashtable.cpp). That is useful algorithmic precedent, not a
-drop-in contract: MO has distributed partials and exact allocation-admission
-rules. Replacing MO's table ownership with a partitioned aggregate subsystem
-adds transitions, spill owners and compatibility decisions; first measure the
-common primitive improvements against that larger alternative.
+The exchange copies vectors or acknowledges a direct handoff before advancing
+its producer. Bounded ready/recycle queues and cancellation/ending signals retain
+their existing owners. No goroutine, lock, channel, timer, unbounded container or
+new asynchronous cleanup owner is added. The new state is private to the existing
+Group executor, with bounded scalar counters and one borrowed header.
 
-Fusing final DISTINCT and COUNT could avoid materializing 17.6M output rows,
-but it requires an explicit partition-disjointness and NULL contract through
-compile and remote execution. It is a separate possible follow-up if profiles
-after this work justify it. It cannot compensate for a slow per-key probe alone.
-Similarly, preallocation or changing the load factor trades resident/peak memory
-for CPU and needs a separate capacity argument rather than a Q5-only constant.
+## Alternatives
 
-## Ownership and failure closure
+Unbounded local aggregation duplicates a large final table. Omitting it based
+only on planner estimates can discard useful reduction; the existing conservative
+omission rule remains. A fixed small table repeats useless hashing on high-cardinality
+input. Adaptive reduction reuses existing partial output and projection contracts
+without introducing a partitioned aggregation subsystem and its additional owners.
 
-The existing call-local tentative-slot overlay remains bounded and dies on
-all returns. Planning reads only validated table indices; skipped rows do not
-become insertions. The same planning epoch owns hashes, slots and flags. Resize
-invalidates the table version and requires the existing complete replan.
-
-The vector retains ownership of its key storage. Source vectors stay alive for
-the synchronous encoding operation, which copies their bytes without mutation. Iterator
-scratch reset remains correct when switching between optimized and generic
-input or between Find, Insert, Preview and commit.
-
-Group continues to own key batches and aggregate state. On allocation failure,
-preflight cancellation, resident spill, retry and final cleanup keep their
-existing owners. String provenance can change even for an existing group, so its
-preflight/apply/finalize path is mandatory. No new asynchronous transition exists;
-cancellation and pipeline terminal behavior are unchanged.
-
-There are no authorization or tenant-boundary changes. Bounded scratch adds no
-input-amplified retained allocation. Rollback is reverting local algorithms;
-stored data and remote peers require no migration or feature gate.
+Batch cell snapshots and a separate confirmed-hit pass were rejected because hot
+working-set controls regressed. Adjacent-repeat shortcuts are not part of this
+implementation. The algorithm earns its default through whole-working-set and
+same-multiset ordering comparisons, not a ClickBench-specific fast path.
 
 ## Validation and acceptance
 
-| Closure | Risk | Cheapest discriminating proof |
-| --- | --- | --- |
-| Integer/string probe planning | R2 | Independent sequential-map oracle; collision/wraparound, skipped rows, empty/mixed/duplicate batches, stale plans, growth/retry; owning hashtable suite |
-| Integer vector path | R2 | Generic-codec parity and transitions across integer/constant/NULL/composite/float inputs; owning hashmap suite |
-| Group publication | R2 | Existing allocation-failure/provenance/spill/reuse oracles plus any uncovered duplicate-only transition; owning group suite |
-| Public composition | R2 | Small SQL parity cases for DISTINCT/GROUP BY/count, NULL, strings, skew, empty input; existing forced-spill tests and service parity |
-| Performance | R2 | Reproducible microbenchmarks and pinned-core SQL baseline/candidate ABBA runs with exact data/result checks |
+Owning closures are hashtable, hashmap, group and compile. Use independent map
+and final-set oracles, existing admission/spill/provenance coverage, and focused
+compiler/clone/remote-fallback tests. Exercise cross-flush duplicates, NULLs,
+strings, tuples, signed extrema, wide low-cardinality keys, distribution changes,
+computed-key ownership, yield/resume, input/expression errors, cancellation, EOF
+and reuse. Do not put timing assertions in UT.
 
-Search and extend existing cases before adding fixtures. Tests use the smallest
-cardinality that reaches the changed branch, not 100M rows. Performance data is
-generated deterministically outside UT and reports allocations, RSS, CPU,
-wall time, spill and process swap. Cover both low and high cardinality, clustered
-duplicates and shuffled keys, hits/misses, nullable/non-null and one/four workers.
-The user explicitly requires a general optimization. Make clustered keys and a
-random permutation of the exact same multiset a mandatory comparison; an
-adjacent-repeat shortcut cannot be the main source of the claimed gain. Include
-all-unique keys, hot working sets and full-table random working sets. Use fixed
-prehashed keys for primitive comparisons so process-local random hash seeds do
-not confound table layout. Report string/composite/NULL controls separately.
-No timing assertion belongs in a unit test.
+Measure baseline/candidate SQL sequentially with ABBA ordering, fixed affinity,
+identical data and exact result checks. Include both orders of the full Q5
+multiset, unique/low/high/skewed cardinalities, NULL/string/composite keys,
+grouped DISTINCT and one/four-worker controls. Verify which plans actually
+activate local reduction. Record CPU, RSS, process swap and spill alongside wall
+time. Do not overlap measurement with our builds/tests/data generation.
 
-Target a material improvement (initial acceptance target: at least 25% lower
-100M Q5 wall time) with exact results, no spill/swap and no material resident
-memory increase. Investigate repeatable control-workload regressions above 5%;
-retain a scalar/generic guard or drop the offending optimization. The target is
-not a guaranteed DuckDB parity claim. Record actual gains and residual hotspots.
-Use final-scope package checks, public-path evidence and mo-self-review; tests
-need reruns only when their relevant implementation or validation inputs change.
-
-## Design review record
-
-Reviewed design source: commit `456c0b1844` (design-only). Decision: PASS in a
-distinct self-review phase before production edits; final implementation review
-remains required. No independent or external approval is claimed.
-
-Decisions: snapshotting is restricted to an immutable preview, with a bounded
-batch and scalar handling outside its measured domain. Sequential tentative
-inserts remain authoritative even when a snapshot cell was empty. Key borrowing
-is synchronous and integer-only; float/NULL/CHAR semantics stay generic. A
-duplicate-only group shortcut must preserve existing-row provenance and
-aggregate preflight/update. Existing ownership/version/admission boundaries are
-unchanged. No unresolved design blocker remains; measured regression or an
-escaping scratch allocation rejects the corresponding implementation.
-
-Revision 2 design self-review: the first-cell experiment may publish confirmed
-existing matches to caller-owned output scratch before sequential resolution of
-unmatched rows. It does not publish table state, alter group IDs or bypass the
-planned-slot overlay. The additional same-multiset/order controls are mandatory.
-The full cell-copy experiment improves random accesses but regresses skew/hot
-controls; it is not accepted for delivery. No new owner, resource bound or
-compatibility change is introduced by the alternative. Decision: PASS before
-implementing the output-scratch variant; implementation performance remains open.
-
-Experiment update: neither first-cell copying nor a separate confirmed-hit pass
-meets the hot-cache control criterion. Both are rejected. The candidate instead
-keeps a single sequential probe pass, hoists immutable segment addressing, and
-advances immediately when a mapping is resolved. The planned-slot overlay and
-all validation/commit boundaries are preserved for both integer and string
-states. This is a simplification of the existing algorithm, with no new state or
-layout. Design self-review: PASS; numeric acceptance remains subject to SQL A/B.
-
-String probe candidate rejected after fixed-layout benchmarks: the larger
-hash-state representation incurred low-cardinality regressions above 5% despite
-better large-table misses. The string production algorithm stays at baseline;
-its benchmark remains a control. Integer probes passed an additional ABBA
-comparison after an initially noisy 1M-hit result. No adjacent-repeat shortcut,
-cardinality-specific encoding or query-pattern guard is retained.
-
-## Revision 3: bounded local reduction experiment
-
-The first implementation passes the owning suites and a shared-host SQL ABBA
-comparison: Q5 improves from 2.5202 to 2.3395 seconds (7.2%), below the 25% target.
-The candidate profile still attributes 43.18% flat CPU to insertion planning
-and 12.89% cumulative CPU to in-place rehashing. Hardware cache/TLB counters are
-unavailable; locality remains a hypothesis, not a measured cache-miss claim.
-
-Experiment: bound the resident working set of an existing pure-key local Group
-whose downstream Group completes exactly the same keys after a local shuffle.
-Reuse its established byte threshold and Build -> Eval -> EvalReset path. Start
-with a 2 MiB working-set hypothesis, then compare several sizes; no query, key
-name, adjacency, or cardinality-specific branch is allowed. Keep a smaller
-explicit threshold. This is a scheduling target checked after an input batch,
-not a replacement for hard allocation admission. The final Group retains its
-session threshold. No disk spill is introduced by a normal partial flush.
-
-The compiler must prove the existing pure-key pair contract and a single-CN
-exchange with local sources. Remote exchange retains full local reduction to
-avoid unmeasured network amplification. Ordered/grouping-set plans and
-coordinator relocation remain outside this experiment. Reuse placement checks
-with local-aggregation omission instead of duplicating their logic. The chosen
-threshold uses the existing serialized SpillMem field; no protocol or storage
-change, new resource owner, worker, or operator state is introduced. The explicit
-local threshold replaces automatic soft spill scheduling for that operator;
-the query/CN allocation ledger still owns hard admission and capacity recovery.
-
-The union of emitted local key batches must equal the local input's distinct
-keys; duplicate keys between batches are permitted only because the downstream
-Group merges them. Group owns each returned batch until the next Call. EvalReset
-frees the consumed hash, key batches and aggregate state before reading another
-input; EOF and cancellation retain the existing output/Free cleanup edges.
-Preflight and capacity-retry behavior are unchanged, including rare hard-budget
-recovery paths. Source provenance must merge across flushes exactly as across
-workers. There are no new waits; existing shuffle backpressure bounds queued
-batches. The working-set target may be exceeded by one input batch and transient
-preflight reservations, both still subject to the existing hard budget.
-
-Alternatives are the current unbounded local reduction, planner omission (can
-increase exchange traffic and requires a cost estimate), and a new partitioned
-aggregate subsystem (more owners and transitions). Bounded partial output is
-the smallest experiment that addresses the measured growing-table costs while
-preserving existing publication and distributed completion contracts.
-
-Require a full shuffled permutation of the official Q5 multiset, in addition to
-synthetic low/high-cardinality, unique, skew, NULL, string and composite controls.
-Existing 8M-key SQL plans can omit local aggregation, so verify plans actually
-exercise the changed stage. Check intermediate row amplification, wall/CPU,
-allocation/RSS, exact output, spill and swap. Reject the experiment if its gain
-depends on clustered order or repeats a control regression above 5%. Extend
-existing compile placement tests and test partial output -> reset -> resume/EOF,
-cross-flush duplicates/provenance, cancellation and final allocation release.
-
-Revision 3 design self-review of `8dfd23aaab`: PASS for the experiment, before
-implementation. This is not independent approval or performance acceptance.
-The experiment reuses an existing intermediate-output contract; it does not
-declare a locally reduced stream globally unique. The placement helper must
-also retain the parent coordinator-projection guard. A repeated order/control
-regression rejects the working-set cap even if Q5 alone meets the target.
-
-| Audit | Owner and terminal edge | Result |
-| --- | --- | --- |
-| Q1 partial batch | Group retains it until next Call; shuffle copies through BatchSet.Union or acknowledges a direct handoff before advancing the producer; reset/free releases it | Existing ownership is sufficient |
-| Q1 reset/retry | EvalReset frees hash/key/expression state; capacity retry keeps the same input offset; pipeline error invokes Group.Free | No new destruction owner |
-| Q2 exchange | Ready capacity waits release on consumer drain, pool ending, or context cancellation; failed reset aborts and joins producer before child cleanup | No new wait edge |
-| Q3 retention | Local byte target plus one admitted batch; existing query/CN ledger and bounded shuffle ready/recycle capacity remain authoritative | No unbounded new accumulation |
-
-## Revision 4: adaptive local reduction
-
-The fixed 2 MiB cap is rejected: ABBA against Stage 1 improves original-order Q5
-by 9.7% but regresses the exact shuffled multiset by 10.6%. In shuffled order its
-intermediate row count grows from 35.6M to 98.6M. Small working sets alone do not
-justify running an almost non-reducing local hash pass.
-
-Retain the compiler's pure-key/single-CN proof, and make the local Group choose
-between the two already-valid physical behaviors: reduction and key projection.
-An internal LocalReductionMem parameter enables this policy and sets its byte
-target; zero preserves existing behavior. It is separate from SpillMem so the
-session threshold, automatic memory participant and hard resource ledger remain
-unchanged. Copy it when duplicating local operators. It is a local performance
-hint and is deliberately omitted from pipeline.Group serialization: a remotely
-reconstructed Group safely retains full local reduction with the original
-SpillMem. No protocol or stored-data format change is needed for this policy.
-
-After a complete input batch reaches the local target, emit the existing partial
-key batches. If the observed unique count exceeds half the input rows in that
-resident epoch, skip the local hash for the next eight epochs' worth of rows.
-This cost policy asks the extra hash pass to remove at least half the downstream
-rows; it does not inspect SQL, data values, adjacency, or named types. After that
-bounded interval, sample through the ordinary Group again. This avoids a
-permanent decision based on a prefix when the input distribution changes.
-Counter multiplication saturates; each input batch is consumed exactly once.
-The byte target can be compared across sizes through the internal operator
-parameter, without adding a public tuning variable or benchmark-only hook.
-
-During bypass, reuse prepared group-key expression executors and one borrowed
-batch header. Expressions own computed vectors, the child owns input vectors,
-and Group owns only the header. Do not Clean borrowed vectors. The existing
-shuffle copy/direct-ack contract makes the next child Call the retirement point.
-Observe cancellation after child/expression evaluation, before returning output.
-EOF terminates once; errors and Reset/Free clear the borrowed header and counters
-before expression cleanup. ResetForSpill resets epoch rows but preserves the
-bounded bypass interval chosen for the already-emitted prefix. Actual disk-spill
-recovery disables this adaptive path until normal query cleanup, so it cannot
-skip queued spill keys or publish an incomplete recovered group.
-
-Only pure-key, non-final, non-grouping-set, non-sort-rollup Groups may enable the
-parameter. Exclude physical key subsets until their representative-value
-contract is explicitly covered. Final aggregates, runtime aggregate arguments,
-distributed transfers and ordinary MergeGroup partials retain existing behavior.
-The compiler validates the downstream completion and placement; Prepare rejects
-an inconsistent enabled operator before allocating state. No new worker, lock,
-wait or aggregate owner is introduced.
-
-Add independent final-set/provenance oracles across reduce -> emit -> reset ->
-bypass -> resample -> EOF, plus cancellation/error, reuse and zero retained
-allocation. Test low/high cardinality, NULL/string/composite keys and phase shifts
-in both directions. Verify compiler selection, local cloning, conservative
-serialization fallback and final
-threshold preservation. Public SQL must exercise tuple/grouped DISTINCT as well
-as both full Q5 orders; inspect plans, exact results, CPU, memory and spill/swap.
-Do not retain adaptive behavior on a repeatable control regression above 5%.
-
-Revision 4 design self-review of `da2da0d024`: PASS before implementation, with
-performance acceptance still open. No independent approval is claimed.
-The runtime byte limit becomes zero after hard-capacity recovery to disable the
-adaptive mode for the rest of that execution; Reset/Free clears all adaptive
-state and Prepare restores the immutable operator parameter. This explicitly
-closes recovery even after the generic spill reader clears its active buckets.
-The bypass header is not added to groupByBatches and is never a batch.Clean
-owner. Its lifetime ends before the next child/expression call. The local
-consumer reads ordinary keys and does not require MergeGroup partial framing.
-Periodic resampling and phase-shift controls are mandatory; permanent bypass is
-rejected. Q1-Q3 retain the reviewed exchange cleanup/wait bounds, with only
-bounded scalar counters and one borrowed header added to Group's owner.
-
-Pre-implementation simplification review: the local byte target changes only
-how much an already-partial Group reduces. Dropping it during remote transport
-preserves all output and completion semantics and avoids spreading a local cost
-policy into the wire contract. Local worker clones keep the hint. Decision:
-PASS; add a round-trip fallback oracle rather than a new protocol field.
-
-Implementation review refinement: the local working-set target must measure
-hash-table bytes, not total operator memory. A single wide string key can exceed
-a total-byte target while the probe table is tiny; flushing that well-reducing
-table repeatedly would be a width-dependent regression. Keep whole-operator
-capacity under the existing spill/admission controller, and trigger adaptive
-partial output when Hash.Size reaches the local target. This narrows the cost
-policy to the measured probe working set. Compare 512 KiB against the initial
-2 MiB target, including NULL/string controls. Add a wide, low-cardinality case
-whose payload exceeds the target but whose hash table does not. Design
-self-review: PASS before this refinement; ownership and state transitions are
-unchanged.
-
-Implementation review also requires preserving ExecYield with a nil batch and
-normalizing non-empty ExecStop to ExecNext, matching the existing Group input
-contract. Cancellation and genuine nil-batch EOF remain distinct. A scripted
-child now tests yield -> resume with non-empty stop -> EOF -> repeated EOF.
+The initial original-order Q5 target is 25% lower latency; an unmet target must be
+reported. Repeated control regressions above 5% block default enablement. Require
+exact results, no spill/swap in the in-memory benchmark and no material resident
+memory increase. Shared-host interference limits precision and must be reported.
+Compare working-set sizes and recheck any apparent control regression separately.
+Raw manifests, profiles, logs and experimental binaries remain outside source.
