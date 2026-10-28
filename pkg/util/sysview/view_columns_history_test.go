@@ -32,6 +32,7 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 		{"V46 upgrade", InformationSchemaColumnsV46UpgradeDDL, true},
 		{"V58", InformationSchemaColumnsV58DDL(), true},
 		{"V100", InformationSchemaColumnsV100DDL(), true},
+		{"V109", InformationSchemaColumnsV109DDL(), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			adapted, ok := AdaptLegacyInformationSchemaColumnsDDL(tc.definition)
@@ -44,9 +45,15 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 			projection := strings.SplitN(local, "from mo_catalog.mo_columns", 2)[0]
 			require.Contains(t, adapted, projection)
 			lowerName := strings.Replace(tc.definition, "information_schema.COLUMNS", "information_schema.columns", 1)
-			lowerAdapted, ok := AdaptLegacyInformationSchemaColumnsDDL(lowerName)
-			require.True(t, ok)
-			require.Equal(t, adapted, lowerAdapted)
+			for _, input := range []string{
+				lowerName,
+				strings.Replace(tc.definition, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1),
+				strings.Replace(lowerName, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1),
+			} {
+				got, ok := AdaptLegacyInformationSchemaColumnsDDL(input)
+				require.True(t, ok)
+				require.Equal(t, adapted, got)
+			}
 		})
 	}
 	v109 := InformationSchemaColumnsV109DDL()
@@ -79,7 +86,7 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 	require.Equal(t, InformationSchemaColumnsV100DDL(), adapted)
 	require.NotContains(t, adapted, "WHEN 4 then")
 	require.NotContains(t, adapted, "WHEN 5 then")
-	for _, unknown := range []string{"", "CREATE VIEW information_schema.COLUMNS AS SELECT 1", InformationSchemaColumnsDDL, v109 + " "} {
+	for _, unknown := range []string{"", "CREATE VIEW information_schema.COLUMNS AS SELECT 1", InformationSchemaColumnsDDL, v109 + " ", strings.Replace(v109, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1) + " "} {
 		adapted, ok := AdaptLegacyInformationSchemaColumnsDDL(unknown)
 		require.False(t, ok)
 		require.Empty(t, adapted)
@@ -93,4 +100,18 @@ func TestAdaptLegacyInformationSchemaColumnsDDL(t *testing.T) {
 		"information_schema.COLUMNS", "information_schema.columns", 1)))
 	require.True(t, IsInformationSchemaColumnsMigrationDDL(InformationSchemaColumnsDDL))
 	require.False(t, IsInformationSchemaColumnsMigrationDDL(InformationSchemaColumnsV58DDL()))
+	for _, tc := range []struct {
+		definition string
+		current    bool
+		migration  bool
+	}{
+		{InformationSchemaColumnsDDL, true, true},
+		{InformationSchemaColumnsV100DDL(), false, true},
+		{InformationSchemaColumnsV58DDL(), false, false},
+		{InformationSchemaColumnsDDL + " ", false, false},
+	} {
+		replacement := strings.Replace(tc.definition, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1)
+		require.Equal(t, tc.current, IsCurrentInformationSchemaColumnsDDL(replacement))
+		require.Equal(t, tc.migration, IsInformationSchemaColumnsMigrationDDL(replacement))
+	}
 }
