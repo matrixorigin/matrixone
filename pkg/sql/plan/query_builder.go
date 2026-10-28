@@ -6429,10 +6429,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			!selectClauseHasSampleExpr(selectClause) &&
 			builder.sortRollupMode() != 2 &&
 			len(selectClause.GroupBy.GroupByExprsList) == 1 &&
-			(sortRollupSimpleBaseTableSource(selectClause.From.Tables) ||
-				sortRollupOrderedDerivedSource(
-					selectClause.From.Tables,
-					selectClause.GroupBy.GroupByExprsList[0])) &&
+			sortRollupSourceEligible(selectClause.From.Tables) &&
 			sortRollupGroupingListEligible(
 				selectClause.GroupBy.GroupByExprsList[0], selectClause.Exprs) &&
 			sortRollupAggregateOrderEligible(
@@ -11501,8 +11498,8 @@ func (builder *QueryBuilder) appendAggNode(
 			}
 		}
 		// Reuse order only after the child plan proves a complete global SORT
-		// (or a transparent FILTER over one). An AST-level ORDER BY is useful for
-		// cost estimation, but it must not by itself let this node skip sorting.
+		// through direct projections and filters. The isolated cost probe's
+		// proof cannot replace checking this actual input's bound lineage.
 		// Never reuse the property when hidden pad-space equality keys were added:
 		// the visible AST order does not prove that physical key order.
 		orderedRollupInput = len(groupByHashKey) == 0 &&
