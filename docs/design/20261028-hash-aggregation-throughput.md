@@ -253,3 +253,59 @@ regression rejects the working-set cap even if Q5 alone meets the target.
 | Q1 reset/retry | EvalReset frees hash/key/expression state; capacity retry keeps the same input offset; pipeline error invokes Group.Free | No new destruction owner |
 | Q2 exchange | Ready capacity waits release on consumer drain, pool ending, or context cancellation; failed reset aborts and joins producer before child cleanup | No new wait edge |
 | Q3 retention | Local byte target plus one admitted batch; existing query/CN ledger and bounded shuffle ready/recycle capacity remain authoritative | No unbounded new accumulation |
+
+## Revision 4: adaptive local reduction
+
+The fixed 2 MiB cap is rejected: ABBA against Stage 1 improves original-order Q5
+by 9.7% but regresses the exact shuffled multiset by 10.6%. In shuffled order its
+intermediate row count grows from 35.6M to 98.6M. Small working sets alone do not
+justify running an almost non-reducing local hash pass.
+
+Retain the compiler's pure-key/single-CN proof, and make the local Group choose
+between the two already-valid physical behaviors: reduction and key projection.
+An internal LocalReductionMem parameter enables this policy and sets its byte
+target; zero preserves existing behavior. It is separate from SpillMem so the
+session threshold, automatic memory participant and hard resource ledger remain
+unchanged. Copy it when duplicating operators and serialize it in pipeline.Group.
+The additive pipeline field defaults to disabled, affects no stored data, and
+needs no mixed-version capability gate (upgrades are shutdown-only).
+
+After a complete input batch reaches the local target, emit the existing partial
+key batches. If the observed unique count exceeds half the input rows in that
+resident epoch, skip the local hash for the next eight epochs' worth of rows.
+This cost policy asks the extra hash pass to remove at least half the downstream
+rows; it does not inspect SQL, data values, adjacency, or named types. After that
+bounded interval, sample through the ordinary Group again. This avoids a
+permanent decision based on a prefix when the input distribution changes.
+Counter multiplication saturates; each input batch is consumed exactly once.
+The byte target can be compared across sizes through the internal operator
+parameter, without adding a public tuning variable or benchmark-only hook.
+
+During bypass, reuse prepared group-key expression executors and one borrowed
+batch header. Expressions own computed vectors, the child owns input vectors,
+and Group owns only the header. Do not Clean borrowed vectors. The existing
+shuffle copy/direct-ack contract makes the next child Call the retirement point.
+Observe cancellation after child/expression evaluation, before returning output.
+EOF terminates once; errors and Reset/Free clear the borrowed header and counters
+before expression cleanup. ResetForSpill resets epoch rows but preserves the
+bounded bypass interval chosen for the already-emitted prefix. Actual disk-spill
+recovery disables this adaptive path until normal query cleanup, so it cannot
+skip queued spill keys or publish an incomplete recovered group.
+
+Only pure-key, non-final, non-grouping-set, non-sort-rollup Groups may enable the
+parameter. Exclude physical key subsets until their representative-value
+contract is explicitly covered. Final aggregates, runtime aggregate arguments,
+distributed transfers and ordinary MergeGroup partials retain existing behavior.
+The compiler validates the downstream completion and placement; Prepare rejects
+an inconsistent enabled operator before allocating state. No new worker, lock,
+wait or aggregate owner is introduced.
+
+Add independent final-set/provenance oracles across reduce -> emit -> reset ->
+bypass -> resample -> EOF, plus cancellation/error, reuse and zero retained
+allocation. Test low/high cardinality, NULL/string/composite keys and phase shifts
+in both directions. Verify compiler selection, clone/serialization and final
+threshold preservation. Public SQL must exercise tuple/grouped DISTINCT as well
+as both full Q5 orders; inspect plans, exact results, CPU, memory and spill/swap.
+Do not retain adaptive behavior on a repeatable control regression above 5%.
+
+Revision 4 design review is pending; implementation must follow its review.
