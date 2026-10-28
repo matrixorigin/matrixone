@@ -514,6 +514,29 @@ func TestExternalArrowPrepareEnforcesWorkerRolloutGate(t *testing.T) {
 	require.ErrorContains(t, err, "S3 or stage is disabled")
 	require.Nil(t, arg.reader)
 	arg.Release()
+
+	// A nil service on a borrowed parameter must be filled from this worker
+	// before classifying an S3-backed alias, without changing the template.
+	alias, err := fileservice.NewS3FS(proc.Ctx, fileservice.ObjectStorageArguments{
+		Name: "archive", Endpoint: "disk", Bucket: t.TempDir(), NoBucketValidation: true,
+	}, fileservice.DisabledCacheConfig, nil, true, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { alias.Close(context.Background()) })
+	services, err := fileservice.NewFileServices("archive", alias)
+	require.NoError(t, err)
+	proc.Base.FileService = services
+	param = externalArrowParam(nil, "archive:missing.arrow", 1, tree.ARROW_CONTAINER_FILE)
+	borrowed := param.Extern
+	arg = NewArgument().WithEs(param)
+	defer func() {
+		arg.Free(proc, true, err)
+		arg.Release()
+	}()
+	err = arg.Prepare(proc)
+	require.ErrorContains(t, err, "S3 or stage is disabled")
+	require.Nil(t, arg.reader)
+	require.Nil(t, borrowed.FileService)
+	require.Same(t, services, arg.Es.Extern.FileService)
 }
 
 func TestExternalArrowAllocationAccountContract(t *testing.T) {

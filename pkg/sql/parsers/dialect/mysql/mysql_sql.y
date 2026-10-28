@@ -6937,6 +6937,10 @@ export_splitsize_opt:
 
 export_fields:
     {
+        // Defaults match the historical SELECT INTO OUTFILE framing:
+        // comma-separated, double-quoted. ESCAPED BY stays unset here so the
+        // writer keeps its built-in backslash default (tree.Fields.EscapedBy
+        // == nil means "not specified").
         $$ = &tree.Fields{
             Terminated: &tree.Terminated{
                 Value: ",",
@@ -6946,60 +6950,34 @@ export_fields:
             },
         }
     }
-|   FIELDS TERMINATED BY STRING
+|   FIELDS field_item_list
     {
-        $$ = &tree.Fields{
+        // MySQL SELECT INTO OUTFILE accepts the same FIELDS sub-clauses as
+        // LOAD DATA, in any order, each at most effective once (the last one
+        // wins, mirroring the LOAD merge above).
+        res := &tree.Fields{
             Terminated: &tree.Terminated{
-                Value: $4,
+                Value: ",",
             },
             EnclosedBy:  &tree.EnclosedBy{
                 Value: '"',
             },
         }
-    }
-|   FIELDS TERMINATED BY STRING ENCLOSED BY field_terminator
-    {
-        str := $7
-        if str != "\\" && len(str) > 1 {
-            yylex.Error("export1 error field terminator")
-            goto ret1
+        for _, f := range $2 {
+            if f.Terminated != nil {
+                res.Terminated = f.Terminated
+            }
+            if f.Optionally {
+                res.Optionally = f.Optionally
+            }
+            if f.EnclosedBy != nil {
+                res.EnclosedBy = f.EnclosedBy
+            }
+            if f.EscapedBy != nil {
+                res.EscapedBy = f.EscapedBy
+            }
         }
-        var b byte
-        if len(str) != 0 {
-           b = byte(str[0])
-        } else {
-           b = 0
-        }
-        $$ = &tree.Fields{
-            Terminated: &tree.Terminated{
-                Value: $4,
-            },
-            EnclosedBy:  &tree.EnclosedBy{
-                Value: b,
-            },
-        }
-    }
-|   FIELDS ENCLOSED BY field_terminator
-    {
-        str := $4
-        if str != "\\" && len(str) > 1 {
-            yylex.Error("export2 error field terminator")
-            goto ret1
-        }
-        var b byte
-        if len(str) != 0 {
-           b = byte(str[0])
-        } else {
-           b = 0
-        }
-        $$ = &tree.Fields{
-            Terminated: &tree.Terminated{
-                Value: ",",
-            },
-            EnclosedBy:  &tree.EnclosedBy{
-                Value: b,
-            },
-        }
+        $$ = res
     }
 
 export_lines_opt:
@@ -7010,9 +6988,19 @@ export_lines_opt:
             },
         }
     }
-|   LINES lines_terminated_opt
+|   LINES starting lines_terminated_opt
     {
         $$ = &tree.Lines{
+            StartingBy: $2,
+            TerminatedBy: &tree.Terminated{
+                Value: $3,
+            },
+        }
+    }
+|   LINES lines_terminated starting_opt
+    {
+        $$ = &tree.Lines{
+            StartingBy: $3,
             TerminatedBy: &tree.Terminated{
                 Value: $2,
             },

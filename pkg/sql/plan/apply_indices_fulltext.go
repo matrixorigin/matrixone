@@ -14,6 +14,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -401,7 +402,15 @@ func (builder *QueryBuilder) rewriteServedMatchesInFilterList(node *plan.Node) {
 	}
 	for i := range node.FilterList {
 		if exprCallsFunc(node.FilterList[i], "fulltext_match") {
-			node.FilterList[i] = replaceScoreFnInExprBy(node.FilterList[i], rewriter)
+			predicate, err := fullTextPredicateAsBool(builder.GetContext(), node.FilterList[i])
+			if err != nil {
+				continue
+			}
+			replaced := replaceScoreFnInExprBy(predicate, rewriter)
+			if predicate != node.FilterList[i] && replaced == predicate {
+				continue
+			}
+			node.FilterList[i] = replaced
 		}
 	}
 }
@@ -2084,6 +2093,8 @@ type fulltextServedMatch struct {
 	fn              *plan.Function
 	nodeID          int32
 	replacementExpr *plan.Expr
+	// foundExpr is NULL exactly for the rows the index did not return; nil means the score.
+	foundExpr *plan.Expr
 }
 
 // isServedFullTextMatch reports whether one of served is the SAME MATCH as fn.
@@ -2142,21 +2153,136 @@ func (builder *QueryBuilder) equalsFullTextMatchFuncSameTable(fn1, fn2 *plan.Fun
 // servedFullTextScoreSameTable is servedFullTextScore with the binding-tag-aware comparison,
 // for callers whose served set spans more than one table.
 func (builder *QueryBuilder) servedFullTextScoreSameTable(fn *plan.Function, served []fulltextServedMatch) *plan.Expr {
-	if fn == nil || fn.Func == nil || fn.Func.ObjName != "fulltext_match" || len(fn.Args) < 2 {
+	return builder.servedFullTextExpr(fn, served, true)
+}
+
+// servedFullTextExpr returns what replaces fn: for a MATCH the score of the index scan built
+// for it, for a MATCH cast to BOOL whether that scan returned the row. It returns nil when
+// no served scan answers fn.
+func (builder *QueryBuilder) servedFullTextExpr(fn *plan.Function, served []fulltextServedMatch, sameTable bool) *plan.Expr {
+	if builder.fullTextIfConditionAsBool(fn) {
+		return nil
+	}
+	match, found := fn, false
+	if inner := fullTextMatchCastToBool(fn); inner != nil {
+		match, found = inner, true
+	}
+	if match == nil || match.Func == nil || match.Func.ObjName != "fulltext_match" || len(match.Args) < 2 {
 		return nil
 	}
 	for _, s := range served {
-		if s.fn == nil || len(s.fn.Args) < 2 || !builder.equalsFullTextMatchFuncSameTable(fn, s.fn) {
+		if s.fn == nil || len(s.fn.Args) < 2 {
 			continue
 		}
-		if s.replacementExpr != nil {
-			return DeepCopyExpr(s.replacementExpr)
+		if sameTable && !builder.equalsFullTextMatchFuncSameTable(match, s.fn) ||
+			!sameTable && !builder.equalsFullTextMatchFunc(match, s.fn) {
+			continue
 		}
-		if expr := builder.fullTextScoreColRef(s.nodeID); expr != nil {
+		var expr *plan.Expr
+		switch {
+		case found && s.foundExpr != nil:
+			expr = DeepCopyExpr(s.foundExpr)
+		case s.replacementExpr != nil:
+			expr = DeepCopyExpr(s.replacementExpr)
+		default:
+			expr = builder.fullTextScoreColRef(s.nodeID)
+		}
+		if expr == nil {
+			continue
+		}
+		if !found {
 			return expr
 		}
+		isFound, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnotnull", []*plan.Expr{expr})
+		if err != nil {
+			return nil
+		}
+		return isFound
 	}
 	return nil
+}
+
+// fullTextMatchCastToBool returns the MATCH of `cast(MATCH AS BOOL)`, or nil for any other
+// function.
+func fullTextMatchCastToBool(fn *plan.Function) *plan.Function {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 ||
+		fn.Args[1].GetT() == nil || fn.Args[1].Typ.Id != int32(types.T_bool) {
+		return nil
+	}
+	if match := fn.Args[0].GetF(); match != nil && match.Func != nil && match.Func.ObjName == "fulltext_match" {
+		return match
+	}
+	return nil
+}
+
+// fullTextIfConditionAsBool casts a bare MATCH condition of IF, which the binder leaves
+// uncast, to BOOL in place. It reports whether fn is an IF.
+func (builder *QueryBuilder) fullTextIfConditionAsBool(fn *plan.Function) bool {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "if" || len(fn.Args) == 0 {
+		return false
+	}
+	if cond, err := fullTextPredicateAsBool(builder.GetContext(), fn.Args[0]); err == nil {
+		fn.Args[0] = cond
+	}
+	return true
+}
+
+// fullTextPredicateAsBool casts a predicate that is a bare MATCH to BOOL, so that it is
+// replaced by whether the index returned the row.
+func fullTextPredicateAsBool(ctx context.Context, expr *plan.Expr) (*plan.Expr, error) {
+	if fn := expr.GetF(); fn == nil || fn.Func == nil || fn.Func.ObjName != "fulltext_match" {
+		return expr, nil
+	}
+	return makePlan2CastExpr(ctx, expr, plan.Type{Id: int32(types.T_bool)})
+}
+
+// fullTextProjectsMatch reports whether a project list projects a bare MATCH.
+func fullTextProjectsMatch(projects []*plan.Expr) bool {
+	for _, p := range projects {
+		if fn := p.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "fulltext_match" {
+			return true
+		}
+	}
+	return false
+}
+
+// fullTextProjectedScoreAsBool rewrites each BOOL use of a column that projects a MATCH
+// (cast to BOOL, IF condition) into a comparison of that column with zero, so that it keeps
+// reading the score once the column is replaced by the MATCH. A negative tag matches columns
+// of any binding, as set operations substitute by position.
+func fullTextProjectedScoreAsBool(ctx context.Context, expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return expr
+	}
+	for i, arg := range fn.Args {
+		fn.Args[i] = fullTextProjectedScoreAsBool(ctx, arg, tag, projects)
+	}
+	switch {
+	case fn.Func.ObjName == "cast" && len(fn.Args) == 2 && fn.Args[1].GetT() != nil &&
+		fn.Args[1].Typ.Id == int32(types.T_bool):
+		if cmp := fullTextProjectedScoreNonZero(ctx, fn.Args[0], tag, projects); cmp != nil {
+			return cmp
+		}
+	case fn.Func.ObjName == "if" && len(fn.Args) > 0:
+		if cmp := fullTextProjectedScoreNonZero(ctx, fn.Args[0], tag, projects); cmp != nil {
+			fn.Args[0] = cmp
+		}
+	}
+	return expr
+}
+
+// fullTextProjectedScoreNonZero returns col <> 0 if col projects a MATCH, otherwise nil.
+func fullTextProjectedScoreNonZero(ctx context.Context, col *plan.Expr, tag int32, projects []*plan.Expr) *plan.Expr {
+	ref := col.GetCol()
+	if ref == nil || (tag >= 0 && ref.RelPos != tag) || ref.ColPos < 0 || int(ref.ColPos) >= len(projects) {
+		return nil
+	}
+	if !fullTextProjectsMatch(projects[ref.ColPos : ref.ColPos+1]) {
+		return nil
+	}
+	cmp, _ := BindFuncExprImplByPlanExpr(ctx, "<>", []*plan.Expr{col, makePlan2Float32ConstExprWithType(0)})
+	return cmp
 }
 
 // fullTextScoreColRef builds a reference to nodeID's score column, or nil if that node cannot
@@ -2181,21 +2307,7 @@ func (builder *QueryBuilder) fullTextScoreColRef(nodeID int32) *plan.Expr {
 // served scan answers this particular MATCH or its node is not usable. Only meaningful after
 // the build loop has filled in the node ids.
 func (builder *QueryBuilder) servedFullTextScore(fn *plan.Function, served []fulltextServedMatch) *plan.Expr {
-	if fn == nil || fn.Func == nil || fn.Func.ObjName != "fulltext_match" || len(fn.Args) < 2 {
-		return nil
-	}
-	for _, s := range served {
-		if s.fn == nil || len(s.fn.Args) < 2 || !builder.equalsFullTextMatchFunc(fn, s.fn) {
-			continue
-		}
-		if s.replacementExpr != nil {
-			return DeepCopyExpr(s.replacementExpr)
-		}
-		if expr := builder.fullTextScoreColRef(s.nodeID); expr != nil {
-			return expr
-		}
-	}
-	return nil
+	return builder.servedFullTextExpr(fn, served, false)
 }
 
 // fullTextScoreRewriter adapts servedFullTextScore into a replaceScoreFnInExprBy callback.
