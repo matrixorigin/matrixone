@@ -945,17 +945,15 @@ func queryIndexLog(
 	return
 }
 
-// The storage byte-JSON decoder assumes valid lengths. Isolate malformed job
-// payloads at this boundary, rather than letting one row abort log replay.
-func decodeISCPJSON(data []byte) (decoded []byte, err error) {
-	defer func() {
-		if recover() != nil {
-			decoded = nil
-			err = mvdefinition.Invalid("malformed ISCP storage JSON")
-		}
-	}()
+// Parse persisted JSON through the validating decoder so malformed job
+// payloads return an error instead of aborting log replay.
+func decodeISCPJSON(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, mvdefinition.Invalid("empty ISCP storage JSON")
 	}
-	return []byte(types.DecodeJson(data).String()), nil
+	decoded, err := types.ParseSliceToByteJson(data)
+	if err != nil {
+		return nil, mvdefinition.Invalid("malformed ISCP storage JSON")
+	}
+	return []byte(decoded.String()), nil
 }
