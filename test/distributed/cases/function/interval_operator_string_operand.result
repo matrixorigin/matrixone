@@ -23,22 +23,31 @@ select cast('2026-01-31' as char(10)) + interval 1 day, cast('2026-01-31 23:00:0
 ➤ cast(2026-01-31 as char(10)) + INTERVAL 1 day[1,255,0]  ¦  cast(2026-01-31 23:00:00 as char(19)) - INTERVAL 1 hour[1,255,0]  ¦   + INTERVAL 1 day[1,255,0]  𝄀
 2026-02-01  ¦  2026-01-31 22:00:00  ¦  null
 set @d = '2026-02-28';
-set @dt = '2024-02-29 13:14:15';
+set @dt = '2024-02-29 13:14:15.123456';
+set @bad = 'invalid';
 set @n = 3;
 set @x = null;
 prepare p1 from 'select ? + interval 1 day, ? - interval 1 day, interval 1 month + ?';
 execute p1 using @d, @d, @d;
-➤ ? + INTERVAL 1 day[12,65535,0]  ¦  ? - INTERVAL 1 day[12,65535,0]  ¦  INTERVAL 1 month + ?[12,65535,0]  𝄀
+➤ ? + INTERVAL 1 day[91,10,0]  ¦  ? - INTERVAL 1 day[91,10,0]  ¦  INTERVAL 1 month + ?[91,10,0]  𝄀
 2026-03-01  ¦  2026-02-27  ¦  2026-03-28
 execute p1 using @dt, @dt, @dt;
-➤ ? + INTERVAL 1 day[12,65535,0]  ¦  ? - INTERVAL 1 day[12,65535,0]  ¦  INTERVAL 1 month + ?[12,65535,0]  𝄀
-2024-03-01 13:14:15  ¦  2024-02-28 13:14:15  ¦  2024-03-29 13:14:15
+➤ ? + INTERVAL 1 day[91,10,0]  ¦  ? - INTERVAL 1 day[91,10,0]  ¦  INTERVAL 1 month + ?[91,10,0]  𝄀
+2024-03-01  ¦  2024-02-28  ¦  2024-03-29
 execute p1 using @x, @x, @x;
-➤ ? + INTERVAL 1 day[12,65535,0]  ¦  ? - INTERVAL 1 day[12,65535,0]  ¦  INTERVAL 1 month + ?[12,65535,0]  𝄀
+➤ ? + INTERVAL 1 day[91,10,0]  ¦  ? - INTERVAL 1 day[91,10,0]  ¦  INTERVAL 1 month + ?[91,10,0]  𝄀
 null  ¦  null  ¦  null
+execute p1 using @bad, @bad, @bad;
+➤ ? + INTERVAL 1 day[91,10,0]  ¦  ? - INTERVAL 1 day[91,10,0]  ¦  INTERVAL 1 month + ?[91,10,0]  𝄀
+null  ¦  null  ¦  null
+prepare p_hour from 'select ? + interval 1 hour';
+execute p_hour using @dt;
+➤ ? + INTERVAL 1 hour[93,26,0]  𝄀
+2024-02-29 14:14:15.123456000
+deallocate prepare p_hour;
 prepare p2 from 'select ? + interval ? day';
 execute p2 using @d, @n;
-➤ ? + INTERVAL ? day[12,65535,0]  𝄀
+➤ ? + INTERVAL ? day[91,10,0]  𝄀
 2026-03-03
 prepare p3 from 'select id from s where cast(v as date) < ? - interval 1 day order by id';
 execute p3 using @d;
