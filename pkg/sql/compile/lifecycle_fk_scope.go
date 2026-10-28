@@ -661,6 +661,11 @@ func (c *Compile) pinCreateNames(q *plan.CreateTable, database string) (bool, er
 // acquires execution resources. Later execution retries still belong to its caller.
 func (c *Compile) prepareCreateNamePlan(p *plan.Plan) (*plan.Plan, error) {
 	q := createTableForNameAdmission(p)
+	if q != nil {
+		if err := c.validateScalarAlterCopyCreate(q); err != nil {
+			return nil, err
+		}
+	}
 	if q == nil || q.Temporary || c.disableLock || !c.isLifecycleRC() {
 		return p, nil
 	}
@@ -752,6 +757,14 @@ func (c *Compile) admitReplacementNames(database, source, target string, rel eng
 		})
 		res.Close()
 	}
+	return domain, c.pinReplacementNames(domain, policy)
+}
+
+func (c *Compile) pinReplacementNames(domain map[plan2.FkReferKey]struct{}, policy lock.WaitPolicy) error {
+	actor, err := defines.GetAccountId(c.proc.Ctx)
+	if err != nil {
+		return err
+	}
 	keys := slices.Collect(maps.Keys(domain))
 	slices.SortFunc(keys, func(a, b plan2.FkReferKey) int {
 		if a.Db != b.Db {
@@ -770,21 +783,21 @@ func (c *Compile) admitReplacementNames(database, source, target string, rel eng
 	})
 	dbs, err := getRelFromMoCatalog(c, catalog.MO_DATABASE)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	tables, err := getRelFromMoCatalog(c, catalog.MO_TABLES)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	for _, key := range keys {
 		if _, err := c.lockCatalogName(dbs, actor, []string{key.Db}, lock.LockMode_Shared, policy); err != nil {
-			return nil, err
+			return err
 		}
 		if _, err := c.lockCatalogName(tables, actor, []string{key.Db, key.Tbl}, lock.LockMode_Exclusive, policy); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	// The caller's existing replacement frontier follows these pins, before
 	// any effects. Do not add another frontier or refresh inside nested CREATE.
-	return domain, nil
+	return nil
 }
