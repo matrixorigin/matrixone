@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -37,9 +38,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1580,11 +1583,15 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 			failure := errors.New("derived view creation failed")
 			var s *service
 			var creates int
-			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			op := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+			op.EXPECT().TxnOptions().DoAndReturn(func() txn.TxnOptions {
+				return txn.TxnOptions{CN: s.cfg.UUID}
+			}).AnyTimes()
+			exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
 				if sql == catalog.ViewMetadataLifecycleGateSQL {
 					return viewMetadataLifecycleGateTestResult(), nil
 				}
-				if strings.HasPrefix(sql, "CREATE VIEW") {
+				if strings.HasPrefix(sql, "CREATE VIEW ") || strings.HasPrefix(sql, "CREATE OR REPLACE VIEW ") {
 					require.Equal(t, uint64(5), s.viewMetadataCatalogFencedEpoch.Load())
 					require.False(t, s.viewMetadataIngressReady.Load())
 					creates++
@@ -1593,7 +1600,7 @@ func TestCNCompletesSystemViewsAfterAdmissionBeforeIngress(t *testing.T) {
 					}
 				}
 				return executor.Result{}, nil
-			})
+			}, op)
 			s = newViewMetadataAdmissionStartService(t, &testBootService{}, exec, time.Second)
 			s.sqlExecutor = exec
 			snapshot := *s.viewMetadataAdmission.Load()
