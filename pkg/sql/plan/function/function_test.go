@@ -470,8 +470,8 @@ func Test_GetFunctionByName(t *testing.T) {
 			name: "+", args: []types.Type{types.T_int8.ToType(), types.T_int16.ToType()},
 			shouldErr:  false,
 			requireFid: PLUS, requireOid: 0,
-			shouldCast: true, requireTyp: []types.Type{types.T_int16.ToType(), types.T_int16.ToType()},
-			requireRet: types.T_int16.ToType(),
+			shouldCast: true, requireTyp: []types.Type{types.New(types.T_int64, 64, -1), types.New(types.T_int64, 64, -1)},
+			requireRet: types.New(types.T_int64, 64, -1),
 		},
 
 		{

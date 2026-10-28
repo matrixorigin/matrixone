@@ -2947,6 +2947,102 @@ func Test_convertRowsIntoBatchError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func Test_mysqlColDef2PlanResultColDefIntegerSignedness(t *testing.T) {
+	// Saved-result metadata must round-trip wire integer signedness so an
+	// unsigned count column saves into an unsigned destination type (issue
+	// #31498) instead of forcing values through a signed destination.
+	cases := []struct {
+		mysqlType defines.MysqlType
+		signed    bool
+		wantOid   types.T
+	}{
+		{defines.MYSQL_TYPE_TINY, true, types.T_int8},
+		{defines.MYSQL_TYPE_TINY, false, types.T_uint8},
+		{defines.MYSQL_TYPE_SHORT, true, types.T_int16},
+		{defines.MYSQL_TYPE_SHORT, false, types.T_uint16},
+		{defines.MYSQL_TYPE_LONG, true, types.T_int32},
+		{defines.MYSQL_TYPE_LONG, false, types.T_uint32},
+		{defines.MYSQL_TYPE_LONGLONG, true, types.T_int64},
+		{defines.MYSQL_TYPE_LONGLONG, false, types.T_uint64},
+	}
+	for _, c := range cases {
+		column := new(MysqlColumn)
+		column.SetColumnType(c.mysqlType)
+		column.SetSigned(c.signed)
+		pCols, oids, _, err := mysqlColDef2PlanResultColDef([]Column{column})
+		require.NoError(t, err)
+		require.Equal(t, c.wantOid, oids[0].Oid)
+		require.Equal(t, int32(c.wantOid), pCols.ResultCols[0].Typ.Id)
+	}
+}
+
+func Test_convertRowsIntoBatchUnsignedRoundTrip(t *testing.T) {
+	// The SHOW COUNT(*) WARNINGS/ERRORS column publishes uint64 values with
+	// unsigned LONGLONG metadata. Saving must keep unsigned metadata and must
+	// not truncate counts above MaxInt64 (issue #31498).
+	column := new(MysqlColumn)
+	column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	column.SetSigned(false)
+	column.SetName("@@session.warning_count")
+	mrs := &MysqlResultSet{}
+	mrs.AddColumn(column)
+	values := []uint64{0, 1, math.MaxInt64, uint64(math.MaxInt64) + 1, math.MaxUint64}
+	for _, v := range values {
+		mrs.AddRow([]any{v})
+	}
+	mrs.AddRow([]any{nil}) // NULL rows must keep the unsigned metadata intact.
+
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	data, pColDefs, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+	assert.NoError(t, err)
+	assert.NotNil(t, data)
+	assert.Equal(t, int32(types.T_uint64), pColDefs.ResultCols[0].Typ.Id)
+	vec := data.Vecs[0]
+	assert.Equal(t, types.T_uint64, vec.GetType().Oid)
+	assert.Equal(t, len(values)+1, vec.Length())
+	assert.Equal(t, values, vector.MustFixedColWithTypeCheck[uint64](vec)[:len(values)])
+	assert.True(t, vec.GetNulls().Contains(uint64(len(values))))
+
+	// Nonnegative int64 row values also save for narrower unsigned metadata.
+	tinyCol := new(MysqlColumn)
+	tinyCol.SetColumnType(defines.MYSQL_TYPE_TINY)
+	tinyCol.SetSigned(false)
+	tinyCol.SetName("tiny_unsigned")
+	tiny := &MysqlResultSet{}
+	tiny.AddColumn(tinyCol)
+	tiny.AddRow([]any{int64(7)})
+	tinyData, tinyDefs, err := convertRowsIntoBatch(pool, tiny.Columns, tiny.Data)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(types.T_uint8), tinyDefs.ResultCols[0].Typ.Id)
+	assert.Equal(t, []uint8{7}, vector.MustFixedColWithTypeCheck[uint8](tinyData.Vecs[0]))
+}
+
+func Test_convertRowsIntoBatchUnsignedRejections(t *testing.T) {
+	// Values that cannot be represented exactly must fail fast instead of
+	// panicking, wrapping sign, or truncating (issue #31498).
+	pool, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+	assert.NoError(t, err)
+	run := func(mysqlType defines.MysqlType, value any) error {
+		column := new(MysqlColumn)
+		column.SetColumnType(mysqlType)
+		column.SetSigned(false)
+		mrs := &MysqlResultSet{}
+		mrs.AddColumn(column)
+		mrs.AddRow([]any{value})
+		_, _, err := convertRowsIntoBatch(pool, mrs.Columns, mrs.Data)
+		return err
+	}
+	// Negative signed values fail instead of wrapping around.
+	assert.Error(t, run(defines.MYSQL_TYPE_LONGLONG, int64(-1)))
+	// Out-of-range values fail instead of truncating to the wire width.
+	assert.Error(t, run(defines.MYSQL_TYPE_TINY, uint64(math.MaxUint8)+1))
+	assert.Error(t, run(defines.MYSQL_TYPE_SHORT, uint64(math.MaxUint16)+1))
+	assert.Error(t, run(defines.MYSQL_TYPE_LONG, uint64(math.MaxUint32)+1))
+	// Foreign value types surface a clean error rather than a panic.
+	assert.Error(t, run(defines.MYSQL_TYPE_LONGLONG, "7"))
+}
+
 func Test_issue3482(t *testing.T) {
 	s := issue3482SqlPrefix + " "
 	ui := UserInput{sql: s}

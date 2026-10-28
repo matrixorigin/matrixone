@@ -65,15 +65,14 @@ insert into rk2 select result, 'other filler filler', 'other' from generate_seri
 create fulltext2 index rk2x on rk2(body) with parser gojieba;
 
 -- Rows deleted from the source but still in the index are dropped by the join; with more of
--- them than the over-fetch the bounded page is short. The same query with a secondary ORDER
--- BY key is not bounded and returns the live match 120.
+-- them than the over-fetch the bounded page is short, also with a secondary ORDER BY key.
 begin;
 delete from rk2 where id between 101 and 115;
 -- @regex("Candidate Limit: 1",true)
 explain select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc limit 1;
 select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc limit 1;
 select id, tag from rk2 where match(body) against('needle') limit 1;
--- @regex("Candidate Limit",false)
+-- @regex("Candidate Limit: 1",true)
 explain select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc, id limit 1;
 select id, tag from rk2 where match(body) against('needle') order by match(body) against('needle') desc, id limit 1;
 -- Selecting only the primary key still joins the source table.

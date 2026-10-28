@@ -102,6 +102,28 @@ class Grant:
         return self.__str__()
 
 
+# SHOW ACCOUNTS columns (pkg/frontend/show_account.go): account_name,
+# admin_name, created_time, status, suspended_time, db_count, tbl_count,
+# size, snapshot_size, comments. It reports no suspension reason.
+_SHOW_ACCOUNTS_SUSPENDED_TIME = 4
+_SHOW_ACCOUNTS_COMMENTS = 9
+
+
+def _show_accounts_row_to_account(row: tuple) -> Account:
+    def column(index):
+        return row[index] if len(row) > index else None
+
+    return Account(
+        name=row[0],
+        admin_name=row[1],
+        created_time=column(2),
+        status=column(3),
+        comment=column(_SHOW_ACCOUNTS_COMMENTS),
+        suspended_time=column(_SHOW_ACCOUNTS_SUSPENDED_TIME),
+        suspended_reason=None,
+    )
+
+
 class BaseAccountManager:
     """
     Base class for Account management containing shared SQL building logic.
@@ -216,15 +238,7 @@ class BaseAccountManager:
 
     def _row_to_account(self, row: tuple) -> Account:
         """Convert database row to Account object"""
-        return Account(
-            name=row[0],
-            admin_name=row[1],
-            created_time=row[2] if len(row) > 2 else None,
-            status=row[3] if len(row) > 3 else None,
-            comment=row[4] if len(row) > 4 else None,
-            suspended_time=row[5] if len(row) > 5 else None,
-            suspended_reason=row[6] if len(row) > 6 else None,
-        )
+        return _show_accounts_row_to_account(row)
 
     def _row_to_role(self, row: tuple) -> Role:
         """Convert database row to Role object"""
@@ -801,15 +815,7 @@ class AccountManager(BaseAccountManager):
 
     def _row_to_account(self, row: tuple) -> Account:
         """Convert database row to Account object"""
-        return Account(
-            name=row[0],
-            admin_name=row[1],
-            created_time=row[2] if len(row) > 2 else None,
-            status=row[3] if len(row) > 3 else None,
-            comment=row[4] if len(row) > 4 else None,
-            suspended_time=row[5] if len(row) > 5 else None,
-            suspended_reason=row[6] if len(row) > 6 else None,
-        )
+        return _show_accounts_row_to_account(row)
 
     def _row_to_role(self, row: tuple) -> Role:
         """Convert database row to Role object"""

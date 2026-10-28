@@ -446,6 +446,26 @@ func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
 	return v + rows, nil
 }
 
+func replayRowColumnSize(entry *logtailreplay.RowEntry, neededCols map[string]*plan.ColDef) uint64 {
+	var size uint64
+	for i, name := range entry.Batch.Attrs {
+		if _, ok := neededCols[name]; !ok {
+			continue
+		}
+		vec := entry.Batch.Vecs[i]
+		if vec.Length() == 0 {
+			// Replayed rows keep the physical RowID on RowEntry rather than
+			// duplicating it in the retained batch. Size("*") includes it.
+			if name == catalog.Row_ID {
+				size += types.RowidSize
+			}
+			continue
+		}
+		size += uint64(vec.Size() / vec.Length())
+	}
+	return size
+}
+
 func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error) {
 	ts := types.TimestampToTS(tbl.db.op.SnapshotTS())
 	part, err := tbl.getPartitionState(ctx)
@@ -499,11 +519,7 @@ func (tbl *txnTable) Size(ctx context.Context, columnName string) (uint64, error
 			continue
 		}
 
-		for i, s := range entry.Batch.Attrs {
-			if _, ok := neededCols[s]; ok {
-				szInPart += uint64(entry.Batch.Vecs[i].Size() / entry.Batch.Vecs[i].Length())
-			}
-		}
+		szInPart += replayRowColumnSize(entry, neededCols)
 	}
 
 	s, _ := tbl.getPublishedStats(ctx, true)
