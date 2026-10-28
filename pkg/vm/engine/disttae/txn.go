@@ -1393,7 +1393,10 @@ func (e *Engine) handoffUnpublishedPendingLocked(names []string) int {
 	// drops the name from ownedNames, or the name never entered the
 	// ledger, as with test-seeded queue names). The set move keeps
 	// duplicate names from corrupting the counter the admission bound
-	// reads (issue #25590 round-18 review).
+	// reads (issue #25590 round-18 review). Queued capacity is one
+	// slot per name, so the drop retires the whole membership with
+	// its claim set (issue #25590 round-57 review): any other
+	// claimant's later terminal finds no claim left to release.
 	for _, n := range names {
 		if _, ok := e.unpublishedPending.ownedNames[n]; ok {
 			delete(e.unpublishedPending.ownedNames, n)
@@ -1451,7 +1454,20 @@ type unpublishedPendingQueue struct {
 	// alike), and names an admitted GC caller holds on the way to a
 	// delete or an enqueue - every name that could yet need this
 	// queue's space (issue #25590 round-18 review).
-	ownedNames map[string]struct{}
+	// The membership value is the name's CLAIM SET (issue #25590
+	// round-57 review): the map records every WORKSPACE whose record
+	// or retain created the obligation, idempotent per (workspace,
+	// name), so two workspaces of one engine claiming the same
+	// transferred object - the same-CN re-record the r55 design
+	// documents - spend exactly one capacity unit together. A claim
+	// holder's published-class settlement releases exactly ITS claim,
+	// and the membership plus its capacity retire only when the name's
+	// FINAL claim does; a queue entry (the enqueue below) or a storage
+	// deletion retires the whole membership, the queue and the deleted
+	// file being the obligation then. The member key exists exactly
+	// while its claim set is non-empty, so the set's reads below keep
+	// answering the bound's membership questions unchanged.
+	ownedNames map[string]map[*Transaction]struct{}
 	live       int64
 	inFlight   int64
 	// arrivalSeq counts enqueue events (one bump per call that added at
@@ -1644,7 +1660,12 @@ func (e *Engine) enqueueUnpublishedPendingFrom(
 			// caller's tail, or a failed publication's orphan - so the
 			// inbound move can never double-count a name that enters
 			// queued ownership while already counted as owned
-			// (issue #25590 round-18 review).
+			// (issue #25590 round-18 review). The delete retires the
+			// WHOLE membership, claim set included: queued capacity is
+			// one slot per name whatever the claims were, the queue owns
+			// the obligation now, and a later published-class release
+			// held by another claimant simply finds no claim left to
+			// release (issue #25590 round-57 review).
 			if e.unpublishedPending.ownedNames != nil {
 				if _, ok := e.unpublishedPending.ownedNames[n]; ok {
 					delete(e.unpublishedPending.ownedNames, n)
@@ -1721,21 +1742,28 @@ func (e *Engine) reserveUnpublishedPendingObject(name string) error {
 // round-18 review, finding 1). The names are unique per object, but the
 // conversion still consumes exactly one reservation per input name -
 // the hook fired once per persisted object - independent of any
-// membership the name already has elsewhere.
-func (e *Engine) convertUnpublishedPendingReservations(names []string) {
+// membership the name already has elsewhere. The CONVERTING workspace
+// claims each name (issue #25590 round-57 review): a name another
+// workspace already counted keeps its one capacity unit and only gains
+// this claim in the set, so the last claim's release is the only one
+// that can retire the capacity.
+func (e *Engine) convertUnpublishedPendingReservations(
+	txn *Transaction, names []string,
+) {
 	if len(names) == 0 {
 		return
 	}
 	e.unpublishedPending.mu.Lock()
 	e.unpublishedPending.inFlight -= int64(len(names))
 	if e.unpublishedPending.ownedNames == nil {
-		e.unpublishedPending.ownedNames = make(map[string]struct{}, len(names))
+		e.unpublishedPending.ownedNames = make(map[string]map[*Transaction]struct{}, len(names))
 	}
 	for _, n := range names {
 		if _, ok := e.unpublishedPending.ownedNames[n]; !ok {
-			e.unpublishedPending.ownedNames[n] = struct{}{}
+			e.unpublishedPending.ownedNames[n] = make(map[*Transaction]struct{}, 1)
 			e.unpublishedPending.live++
 		}
+		e.unpublishedPending.ownedNames[n][txn] = struct{}{}
 	}
 	e.unpublishedPending.mu.Unlock()
 }
@@ -1748,15 +1776,21 @@ func (e *Engine) convertUnpublishedPendingReservations(names []string) {
 // bound (issue #25590 round-18 review, finding 2). Refusal fails the
 // recording write fail-closed: only new obligations stop, every owner
 // keeps exactly what it holds, and a drain retiring work re-opens
-// admission. Already-counted names (a duplicate record of the same
-// object) are admitted without spending capacity twice.
-func (e *Engine) admitUnpublishedPendingRecordedNames(names []string) error {
+// admission. Already-counted names keep the duplicate-record rule -
+// no SECOND capacity unit - but the recording workspace gains its CLAIM
+// in the set (issue #25590 round-57 review): the same-CN re-record of
+// a transferred object registers the recording side's claim so a later
+// fragment settlement cannot release capacity this claim still needs,
+// and the membership retires only with the name's final claim.
+func (e *Engine) admitUnpublishedPendingRecordedNames(
+	txn *Transaction, names []string,
+) error {
 	if len(names) == 0 {
 		return nil
 	}
 	e.unpublishedPending.mu.Lock()
 	if e.unpublishedPending.ownedNames == nil {
-		e.unpublishedPending.ownedNames = make(map[string]struct{}, len(names))
+		e.unpublishedPending.ownedNames = make(map[string]map[*Transaction]struct{}, len(names))
 	}
 	fresh := 0
 	for _, n := range names {
@@ -1787,34 +1821,51 @@ func (e *Engine) admitUnpublishedPendingRecordedNames(names []string) error {
 		)
 	}
 	for _, n := range names {
+		if _, ok := e.unpublishedPending.nameSet[n]; ok {
+			continue // queued names are already counted and bound
+		}
 		if _, ok := e.unpublishedPending.ownedNames[n]; !ok {
-			if _, ok := e.unpublishedPending.nameSet[n]; ok {
-				continue
-			}
-			e.unpublishedPending.ownedNames[n] = struct{}{}
+			e.unpublishedPending.ownedNames[n] = make(map[*Transaction]struct{}, 1)
 			e.unpublishedPending.live++
 		}
+		e.unpublishedPending.ownedNames[n][txn] = struct{}{}
 	}
 	e.unpublishedPending.mu.Unlock()
 	return nil
 }
 
-// releaseUnpublishedPendingPublished retires the ledger membership of
-// names whose writing transaction COMMITTED - a committed workspace
-// object is published data, not a cleanup obligation, and must return
-// its capacity to the bound the moment the commit brings it into the
-// visible dataset (issue #25590 round-18 review, finding 2). Membership
-// is idempotent: names already moved out - handed off, deleted, or never
-// counted - simply no-op, so commit after any intermediate transfer
-// cannot double-release.
-func (e *Engine) releaseUnpublishedPendingPublished(names []string) {
+// releaseUnpublishedPendingPublished retires the CALLING workspace's
+// claims on names whose fate left the engine's obligation set this way -
+// a committed workspace object is published data, not a cleanup
+// obligation, and must return the capacity the moment the commit brings
+// it into the visible dataset (issue #25590 round-18 review, finding 2).
+// The release is per-claim (issue #25590 round-57 review): a name whose
+// claim set still holds ANOTHER workspace's claim - the same-CN
+// re-record of a transferred object - keeps its membership and its
+// capacity counted until that final claim retires, so a transferred
+// fragment's settlement cannot free capacity a live recording workspace
+// still owes. The release stays idempotent per (workspace, name) for
+// duplicate pending or repeated deliveries, and names already moved out
+// - handed off, deleted, or never claimed - simply no-op, so commit
+// after any intermediate transfer cannot double-release.
+func (e *Engine) releaseUnpublishedPendingPublished(
+	txn *Transaction, names []string,
+) {
 	if len(names) == 0 {
 		return
 	}
 	e.unpublishedPending.mu.Lock()
 	if e.unpublishedPending.ownedNames != nil {
 		for _, n := range names {
-			if _, ok := e.unpublishedPending.ownedNames[n]; ok {
+			claims, ok := e.unpublishedPending.ownedNames[n]
+			if !ok {
+				continue
+			}
+			if _, mine := claims[txn]; !mine {
+				continue
+			}
+			delete(claims, txn)
+			if len(claims) == 0 {
 				delete(e.unpublishedPending.ownedNames, n)
 				e.unpublishedPending.live--
 			}
@@ -1862,22 +1913,29 @@ func (e *Engine) detachTerminalRecordedUnpublishedObjectOwners(
 // per-object reservations the record choke or the epilogue never saw —
 // the membership is the invariant (issue #25590 round-18 review); a
 // name that IS already a member joins exactly once (fresh names from a
-// spilling writer are impossible, this is the robustness path).
-func (e *Engine) retainUnpublishedPendingNames(names []string) {
+// spilling writer are impossible, this is the robustness path), and the
+// retaining workspace claims it like every membership creator does
+// (issue #25590 round-57 review), so its terminal is the release that
+// retired exactly this claim.
+func (e *Engine) retainUnpublishedPendingNames(
+	txn *Transaction, names []string,
+) {
 	if len(names) == 0 {
 		return
 	}
 	e.unpublishedPending.mu.Lock()
 	if e.unpublishedPending.ownedNames == nil {
-		e.unpublishedPending.ownedNames = make(map[string]struct{}, len(names))
+		e.unpublishedPending.ownedNames = make(map[string]map[*Transaction]struct{}, len(names))
 	}
 	for _, n := range names {
-		if _, ok := e.unpublishedPending.ownedNames[n]; !ok {
-			if _, ok := e.unpublishedPending.nameSet[n]; !ok {
-				e.unpublishedPending.ownedNames[n] = struct{}{}
-				e.unpublishedPending.live++
-			}
+		if _, queued := e.unpublishedPending.nameSet[n]; queued {
+			continue // queued names already hold the bound's space
 		}
+		if _, ok := e.unpublishedPending.ownedNames[n]; !ok {
+			e.unpublishedPending.ownedNames[n] = make(map[*Transaction]struct{}, 1)
+			e.unpublishedPending.live++
+		}
+		e.unpublishedPending.ownedNames[n][txn] = struct{}{}
 	}
 	e.unpublishedPending.mu.Unlock()
 }
@@ -1901,7 +1959,10 @@ func (e *Engine) abandonUnpublishedPendingReservations(names []string) {
 // dropped with the caller's own pre-existing loss class - so capacity
 // held for a name a workspace recorded cannot stay frozen behind a
 // caller whose whole batch already left the caller's hands (issue
-// #25590 round-18 review).
+// #25590 round-18 review). The retire is the WHOLE membership with its
+// claim set: the file is gone for every claimant, so no later
+// published-class release may resurrect or retain capacity behind it
+// (issue #25590 round-57 review).
 func (e *Engine) settleUnpublishedPendingDeleted(names []string) {
 	if len(names) == 0 {
 		return
@@ -3722,7 +3783,7 @@ func (txn *Transaction) registerUnpublishedObjectRecordLocked(
 	}
 	txn.unpublishedDumpReservationsMu.Unlock()
 	if len(fresh) > 0 {
-		if err := e.admitUnpublishedPendingRecordedNames(fresh); err != nil {
+		if err := e.admitUnpublishedPendingRecordedNames(txn, fresh); err != nil {
 			// The refusal consumed no reservations; the split above was
 			// read-only, so nothing needs to be restored and the reserved
 			// names stay exactly as the failed dump's epilogue expects
@@ -3753,7 +3814,7 @@ func (txn *Transaction) registerUnpublishedObjectRecordLocked(
 			delete(txn.unpublishedDumpReservations, n)
 		}
 		txn.unpublishedDumpReservationsMu.Unlock()
-		e.convertUnpublishedPendingReservations(reserved)
+		e.convertUnpublishedPendingReservations(txn, reserved)
 	}
 	txn.mergeRecordedUnpublishedObjectNames(names)
 	return nil
@@ -3838,7 +3899,11 @@ func (txn *Transaction) releaseRecordedUnpublishedObjectsLocked() {
 		return
 	}
 	if txn.engine != nil {
-		txn.engine.releaseUnpublishedPendingPublished(names)
+		// Round 57 (issue #25590 review): the release retires exactly
+		// THIS workspace's claims; a name another live workspace claims
+		// keeps its membership and capacity until that final claim
+		// retires.
+		txn.engine.releaseUnpublishedPendingPublished(txn, names)
 		// round-40 (issue #25590 review of 2026-10-24, finding 1):
 		// the release just ended the recorded-name copy of every
 		// registered owner entry this transaction still had, so the
@@ -3875,10 +3940,10 @@ func (txn *Transaction) convertDumpedReservationsLocked(files []string) {
 	}
 	txn.unpublishedDumpReservationsMu.Unlock()
 	if len(reserved) > 0 {
-		e.convertUnpublishedPendingReservations(reserved)
+		e.convertUnpublishedPendingReservations(txn, reserved)
 	}
 	if len(extra) > 0 {
-		e.retainUnpublishedPendingNames(extra)
+		e.retainUnpublishedPendingNames(txn, extra)
 	}
 }
 
@@ -5739,7 +5804,11 @@ func (txn *Transaction) FinalizeRemoteFragmentWorkspace(
 	txn.releaseRecordedUnpublishedObjectsLocked()
 	txn.Unlock()
 	if txn.engine != nil && len(names) > 0 {
-		txn.engine.releaseUnpublishedPendingPublished(names)
+		// Round 57 (issue #25590 review): the fragment's released names
+		// retire exactly the FRAGMENT's claims; a name the recording
+		// workspace re-claimed keeps its membership and capacity until
+		// that workspace's own terminal retires the final claim.
+		txn.engine.releaseUnpublishedPendingPublished(txn, names)
 	}
 	logutil.Info(
 		"WORKSPACE-REMOTE-FRAGMENT-SETTLED",

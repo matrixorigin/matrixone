@@ -5678,3 +5678,128 @@ artifacts):
   `race-multiupdate.log` for the race legs;
   `green-disttae-issue25590.log` / `green-colexec-full.log` /
   `green-multiupdate-full.log` for the owning-package sweeps).
+
+## 10 design review record - round 57 (implementation follow-up): the capacity ledger's retained-name membership retires per workspace claim
+
+The request-changes review on PR #30988 head `9df36413c2` (finding P2
+at `pkg/vm/engine/disttae/txn.go:1818`): two workspaces of the SAME
+Engine record a transferred object — the exact same-CN re-recording
+case the round-55 record documents as supported production topology —
+but the unpublished-pending capacity ledger held ONE shared
+`ownedNames` membership per name, so the recording workspace's record
+added no claim of its own. When the fragment then completed
+`FinalizeRemoteFragmentWorkspace(ctx, true)` while the recording
+workspace remained live, the settlement deleted the shared membership
+and returned the object's capacity: the recorder's obligation —
+waiting to publish at its commit or transfer to the queue at its
+rollback — became invisible to the admission bound, and further
+reservations could spend the freed unit. The review's diagnostic
+probe: fragment settlement moved `live` from 1 to 0 while the recorder
+and the physical file remained live; with the limit pinned at 2, two
+further reservations succeeded (three obligations against a
+two-object bound), while the distinct-engine control correctly
+refused the second.
+
+Trigger analysis (design gate): the round-55 per-claim doctrine
+already reconciled the recording workspace's re-record for the
+SEGMENT ledger; this finding shows the same reconciliation missing on
+the CAPACITY ledger. Nothing about the admission formula, the
+fail-closed refusal policy, the capacity unit (one name, one unit),
+the queue handoff fates, the physical deletion classes, the
+recorded-name fates, or the r5/r6 transferred protocol changes. The
+correction enforces the invariant the bound's own contract already
+states — the accounting survives every ownership transfer intact —
+for the one membership whose retire the shared-engine topology could
+bypass. An implementation follow-up inside the approved r17 design;
+no new design revision.
+
+Decision (inside the approved I4 bound): `ownedNames` membership
+becomes claim-carrying. Every membership-creating path — the record
+choke's admission, the reservation conversion, the failed-publication
+retain — registers the CREATING workspace's claim, idempotent per
+(workspace, name), alongside the membership it already created; a
+name already counted keeps spending no second capacity unit when
+another workspace records it, exactly as the duplicate-record rule
+always promised, so the same-CN re-record of a transferred object
+prices exactly like its distinct-engine counterpart: one unit, two
+claims. The published-class release a workspace's terminal performs
+— the recorded-name release of the commit finalizers, the
+transferred fragment settlement's recorded and pending release —
+retires exactly THE CALLING WORKSPACE's claims, and the membership
+plus its capacity unit retire only when the name's FINAL claim does.
+The two claim-insensitive retire classes keep their whole-membership
+semantics unchanged: an enqueue moves the name to queued capacity
+and retires the membership entire (the queue is the obligation then,
+one slot whatever the claimants were), and a storage deletion
+(`settleUnpublishedPendingDeleted`) retires the membership entire
+(the file is gone for every claimant). A terminal therefore cannot
+release capacity another live workspace's claim still needs, and no
+completed workspace can leak either: every claim's terminal —
+commit, unknown-result, rollback handoff, fragment settlement —
+releases its own claims, the queue entry clears the claim set with
+the membership, and the drain's settle removes both, so no
+completed transaction stays reachable behind the maps (the round-40
+detachment doctrine applies to the claim sets as it does to
+`recordedOwners`).
+
+Deliberately unchanged, recorded for round completeness:
+
+- The bound reads (queued + owned + in-flight), the object-unit
+  reservation semantics, and the fail-closed refusal behavior are
+  byte-identical; a dual-claimed name continues to count one unit.
+- The transferred leg's fate protocol is untouched: no settlement
+  performs storage I/O, and the released claims retire bookkeeping
+  only — the physical files keep their records' fate on both legs.
+- The queued-name `recordedOwners` side-channel (round 38) and the
+  round-40 terminal detach keep their exact semantics; the claim set
+  is membership-side state, enqueued and deleted names carry none.
+
+Validation (logs under `/tmp/issue25590-r57/`, the round's handler
+artifacts):
+
+- RED on the pre-fix tree (the new production-path regression
+  present, production files unchanged):
+  `TestIssue25590SharedEngineReRecordKeepsLedgerCapacityThroughTransfer`
+  fails at "the fragment's settlement keeps the recording workspace's
+  claim counted" — the transferred settlement dropped the shared
+  membership and `live` fell to 0 while the recorder and its file
+  remained (`red-fixture.log`, exit 1).
+- GREEN on the fixed tree, same regression: `live` stays 1 through
+  the fragment's settlement, the first further reservation passes and
+  the second is refused fail-closed (the distinct-engine control's
+  verdict), the recorder's own terminal retires the final claim and
+  the capacity, the object's physical file survives both settlements
+  on its record's fate, and the full bound returns afterwards
+  (`green-fixture.log` exit 0). The unit-level matrix
+  `TestIssue25590LedgerPublishedReleaseRetiresPerWorkspaceClaim` pins
+  the claim sets directly: duplicate records stay idempotent per
+  (workspace, name), one workspace's release never touches another's
+  claim, the final claim retires membership and capacity, and the
+  enqueue/deletion classes keep whole-membership retire.
+- The owning corpora on the fixed tree: the disttae
+  `TestIssue25590` corpus passes (`p1-disttae-issue25590.log` exit 0,
+  41.337s), the verbose name-proof lists the two new regressions plus
+  the round-55 settlement and segment families passing
+  (`verbose-touched.log` exit 0, 4 PASS), the colexec parent package —
+  the `TestTxnWorkspaceSegments` per-claim corpus's home — passes
+  (`ok 6.678s` inside `p2-colexec-full.log`), the full multi_update
+  package passes (`p3-multiupdate-full.log` exit 0), and the
+  external-package engine-test drivers pass
+  (`p4-engine-test-drivers.log` exit 0); the race leg of the two new
+  regressions plus both settlement families passes
+  (`p5-race-disttae-ledger.log` exit 0). gofmt, `go vet` and
+  `golangci-lint --new-from-rev HEAD ./pkg/vm/engine/disttae` are
+  clean (0 issues).
+- Environmental classifier, recorded because the round's colexec
+  sweep used the `/...` pattern for the first time: five UPSTREAM
+  colexec subpackages (top, fill, adaptivetop, dedupjoin, mergeorder)
+  fail the same spill-budget-accounted test families on this host, and
+  the SAME failures reproduce at the verified clean baseline — the
+  round-57 diff stashed, pristine `9df36413c2` — with identical names
+  and the identical `resource exhausted: spill disk budget` class
+  (`baseline-spill.log`, exit 1). The failures therefore pre-exist
+  this round's change, in upstream-owned ground this PR never
+  touched; the same families are green in this head's Linux CI `UT
+  Test on Ubuntu/x86` run, so the residual is a local-host condition
+  of the spill test surface, not code evidence — reported, not
+  worked around.

@@ -3309,8 +3309,10 @@ func issue25590InjectOwnedOrphan(t *testing.T, txn *Transaction, name string) {
 	if txn.engine != nil {
 		// Round 18: retained ownership is set-keyed — one ledger member
 		// per name — so the injection joins the owned-name set and its
-		// counter together (issue #25590 round-18 review).
-		txn.engine.retainUnpublishedPendingNames([]string{name})
+		// counter together, claimed by this transaction exactly as the
+		// production retain paths do (issue #25590 round-18 review;
+		// claim-set keyed per workspace since round 57).
+		txn.engine.retainUnpublishedPendingNames(txn, []string{name})
 	}
 }
 
