@@ -23,6 +23,11 @@ from matrixone.account import AccountManager, Account, User, AsyncAccountManager
 from matrixone.exceptions import AccountError
 
 
+def show_accounts_row(name, admin, status='OPEN', comment=None, suspended_time=None):
+    """One row in the real SHOW ACCOUNTS layout (pkg/frontend/show_account.go)."""
+    return (name, admin, datetime.now(), status, suspended_time, 3, 10, 0.0, 0.0, comment)
+
+
 class TestAccountSQLConsistency(unittest.TestCase):
     """Test SQL generation consistency across sync/async/session interfaces"""
 
@@ -353,7 +358,7 @@ class TestAccountManager(unittest.TestCase):
         """Test successful account creation"""
         # Mock successful execution - first call for CREATE, second call for get_account
         mock_result = Mock()
-        mock_result.rows = [('test_account', 'admin_user', datetime.now(), 'OPEN', 'Test account', None, None)]
+        mock_result.rows = [show_accounts_row('test_account', 'admin_user', comment='Test account')]
         self.client.execute = Mock(return_value=mock_result)
 
         # Test account creation
@@ -378,6 +383,18 @@ class TestAccountManager(unittest.TestCase):
         self.assertIn("admin_user", first_call_args)
         self.assertIn("password123", first_call_args)
         self.assertIn("Test account", first_call_args)
+
+    def test_get_account_maps_show_accounts_columns_by_layout(self):
+        """Regression #31394: counts and sizes must not land in comment/suspension fields."""
+        suspended_at = datetime(2026, 10, 27, 8, 0, 0)
+        row = ('acc1', 'admin1', datetime(2026, 10, 1), 'SUSPENDED', suspended_at, 4, 17, 1.5, 0.25, 'quarterly audit')
+        self.client.execute = Mock(return_value=Mock(rows=[row]))
+
+        account = self.account_manager.get_account('acc1')
+
+        self.assertEqual(account.comment, 'quarterly audit')
+        self.assertEqual(account.suspended_time, suspended_at)
+        self.assertIsNone(account.suspended_reason)
 
     def test_create_account_failure(self):
         """Test account creation failure"""
@@ -416,7 +433,7 @@ class TestAccountManager(unittest.TestCase):
         """Test successful account alteration"""
         # Mock successful execution and get_account
         mock_result = Mock()
-        mock_result.rows = [('test_account', 'admin_user', datetime.now(), 'OPEN', 'Updated comment', None, None)]
+        mock_result.rows = [show_accounts_row('test_account', 'admin_user', comment='Updated comment')]
         self.client.execute = Mock(return_value=mock_result)
 
         # Test account alteration
@@ -436,15 +453,16 @@ class TestAccountManager(unittest.TestCase):
         """Test account suspension"""
         # Mock successful execution and get_account
         mock_result = Mock()
+        suspended_at = datetime.now()
+        # SUSPEND COMMENT stores the reason as the account comment; SHOW ACCOUNTS
+        # has no separate suspension-reason column.
         mock_result.rows = [
-            (
+            show_accounts_row(
                 'test_account',
                 'admin_user',
-                datetime.now(),
-                'SUSPENDED',
-                'Test account',
-                datetime.now(),
-                'Security violation',
+                status='SUSPENDED',
+                comment='Security violation',
+                suspended_time=suspended_at,
             )
         ]
         self.client.execute = Mock(return_value=mock_result)
@@ -456,7 +474,8 @@ class TestAccountManager(unittest.TestCase):
 
         # Verify
         self.assertEqual(account.status, "SUSPENDED")
-        self.assertEqual(account.suspended_reason, "Security violation")
+        self.assertEqual(account.comment, "Security violation")
+        self.assertEqual(account.suspended_time, suspended_at)
 
         # Verify SQL was called correctly - check the first call (ALTER ACCOUNT)
         self.assertEqual(self.client.execute.call_count, 2)  # ALTER + get_account
@@ -468,7 +487,7 @@ class TestAccountManager(unittest.TestCase):
         """Test successful account retrieval"""
         # Mock successful execution
         mock_result = Mock()
-        mock_result.rows = [('test_account', 'admin_user', datetime.now(), 'OPEN', 'Test account', None, None)]
+        mock_result.rows = [show_accounts_row('test_account', 'admin_user', comment='Test account')]
         self.client.execute = Mock(return_value=mock_result)
 
         # Test account retrieval
@@ -755,7 +774,7 @@ class TestAsyncAccountManager(unittest.IsolatedAsyncioTestCase):
         """Test successful async account creation"""
         # Mock successful execution
         mock_result = AsyncMock()
-        mock_result.rows = [('test_account', 'admin_user', datetime.now(), 'OPEN', 'Test account', None, None)]
+        mock_result.rows = [show_accounts_row('test_account', 'admin_user', comment='Test account')]
         self.client.execute = AsyncMock(return_value=mock_result)
 
         # Test async account creation
@@ -922,7 +941,7 @@ class TestAsyncTransactionAccountManager(unittest.IsolatedAsyncioTestCase):
         """Test account creation within async transaction"""
         # Mock successful execution
         mock_result = AsyncMock()
-        mock_result.rows = [('test_account', 'admin_user', datetime.now(), 'OPEN', 'Test account', None, None)]
+        mock_result.rows = [show_accounts_row('test_account', 'admin_user', comment='Test account')]
         self.transaction.execute = AsyncMock(return_value=mock_result)
 
         # Test account creation in async transaction
