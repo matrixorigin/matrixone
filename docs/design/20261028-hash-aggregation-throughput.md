@@ -1,6 +1,6 @@
 # Hash aggregation throughput with atomic publication
 
-Status: design review candidate, revision 1.
+Status: revision 1 passed design self-review before production implementation.
 Work item: user-requested systematic exact aggregation optimization, prompted by
 the full ClickBench Q5 comparison. Delivery is one implementation branch/PR;
 the PR link is assigned when published.
@@ -147,6 +147,15 @@ need reruns only when their relevant implementation or validation inputs change.
 
 ## Design review record
 
-Review is a distinct phase before production edits. Record the reviewed commit,
-invariant/ownership findings and PASS/REQUEST_CHANGES in the work evidence, then
-update this status. No production implementation is approved by this draft.
+Reviewed design source: commit `456c0b1844` (design-only). Decision: PASS in a
+distinct self-review phase before production edits; final implementation review
+remains required. No independent or external approval is claimed.
+
+Decisions: snapshotting is restricted to an immutable preview, with a bounded
+batch and scalar handling outside its measured domain. Sequential tentative
+inserts remain authoritative even when a snapshot cell was empty. Key borrowing
+is synchronous and integer-only; float/NULL/CHAR semantics stay generic. A
+duplicate-only group shortcut must preserve existing-row provenance and
+aggregate preflight/update. Existing ownership/version/admission boundaries are
+unchanged. No unresolved design blocker remains; measured regression or an
+escaping scratch allocation rejects the corresponding implementation.
