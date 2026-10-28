@@ -233,6 +233,7 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 	}
 	ddlScope := tableDumpDDLColumnScope(def)
 	integerDecimal := tableDumpHasIntegerDecimalCoercion(item.expr)
+	decimalPrecision := tableDumpHasLegacyDecimalPrecision(item.expr)
 	for _, parserMode := range tableDumpParserModesForOrigin(item.origin) {
 		if err := ctx.GetContext().Err(); err != nil {
 			return nil, err
@@ -307,9 +308,19 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 						modes = append(modes, mode|tableDumpBindingDDLColumnScope)
 					}
 				}
-				if integerDecimal {
-					for _, mode := range append([]tableDumpBindingMode(nil), modes...) {
-						modes = append(modes, mode|tableDumpBindingPreIntegerDecimal)
+				if decimalPrecision || integerDecimal {
+					baseModes := append([]tableDumpBindingMode(nil), modes...)
+					if decimalPrecision {
+						for _, mode := range baseModes {
+							modes = append(modes, mode|tableDumpBindingPreDecimalPrecision)
+						}
+					}
+					if integerDecimal {
+						// The pre-integer era already includes old precision;
+						// do not charge duplicate combinations to the budget.
+						for _, mode := range baseModes {
+							modes = append(modes, mode|tableDumpBindingPreIntegerDecimal)
+						}
 					}
 				}
 				for _, mode := range modes {
@@ -508,6 +519,9 @@ func finishLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 	}
 	expected := DeepCopyExpr(old)
 	rebindCtx := function.WithDivPrecisionIncrement(proofCtx.GetContext(), int32(increment))
+	if mode&tableDumpBindingPreDecimalPrecision != 0 {
+		rebindCtx = function.WithLegacyDecimalIntermediatePrecision(rebindCtx)
+	}
 	if mode&tableDumpBindingPreIntegerDecimal != 0 {
 		rebindCtx = function.WithLegacyIntegerDecimalCoercions(rebindCtx)
 	}
@@ -550,7 +564,7 @@ func finishLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 	if budget.visits > tableDumpMaxCandidateVisits {
 		return nil, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
 	}
-	mode &= tableDumpBindingPreJSONFolding | tableDumpBindingPreIntegerDecimal
+	mode &= tableDumpBindingPreJSONFolding | tableDumpBindingPreIntegerDecimal | tableDumpBindingPreDecimalPrecision
 	if legacySpecial {
 		mode |= tableDumpBindingLegacySpecial
 	}

@@ -249,20 +249,20 @@ CASE WHEN 'USD' = 'RMB'
 THEN CAST(-58140.00 AS DECIMAL(23,2))
 ELSE 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
 END AS bug_case;
-➤ direct_mul[3,38,7]  ¦  bug_case[3,38,7]  𝄀
+➤ direct_mul[3,29,7]  ¦  bug_case[3,29,7]  𝄀
 -408125.3580000  ¦  -408125.3580000
 SELECT
 CASE WHEN 'USD' = 'USD'
 THEN CAST(-58140.00 AS DECIMAL(23,2))
 ELSE 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
 END AS bug_case_then;
-➤ bug_case_then[3,38,7]  𝄀
+➤ bug_case_then[3,29,7]  𝄀
 -58140.0000000
 SELECT
 IFF('USD' = 'USD',
 CAST(-58140.00 AS DECIMAL(23,2)),
 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))) AS bug_iff;
-➤ bug_iff[3,38,7]  𝄀
+➤ bug_iff[3,29,7]  𝄀
 -58140.0000000
 SELECT
 CASE WHEN 1 = 1
@@ -291,19 +291,19 @@ CAST(0 AS DECIMAL(38,20))) AS iff_decimal256_false;
 ➤ iff_decimal256_false[3,58,20]  𝄀
 0E-20
 SELECT 7.01970 * CAST(-58140.00 AS DECIMAL(23,2)) AS direct_mul;
-➤ direct_mul[3,38,7]  𝄀
+➤ direct_mul[3,29,7]  𝄀
 -408125.3580000
 SELECT COALESCE(
 CAST(NULL AS DECIMAL(23,2)),
 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
 ) AS coalesce_decimal_scale;
-➤ coalesce_decimal_scale[3,38,7]  𝄀
+➤ coalesce_decimal_scale[3,29,7]  𝄀
 -408125.3580000
 SELECT COALESCE(
 CAST(1.23 AS DECIMAL(23,2)),
 7.01970 * CAST(-58140.00 AS DECIMAL(23,2))
 ) AS coalesce_first_non_null;
-➤ coalesce_first_non_null[3,38,7]  𝄀
+➤ coalesce_first_non_null[3,29,7]  𝄀
 1.2300000
 SELECT (CASE WHEN 1 = 1 THEN CAST(1 AS DECIMAL(38,0))
 ELSE CAST(0 AS DECIMAL(38,20)) END)
@@ -359,13 +359,13 @@ select coalesce(null, cast(1.23 as decimal(23,2)), cast(4.56780 as decimal(38,7)
 ➤ three_branch[3,38,7]  𝄀
 1.2300000
 select coalesce(cast(null as decimal(23,2)), cast(null as decimal(20,5)), 7.01970 * cast(-58140.00 as decimal(23,2))) as three_branch_all_decimal;
-➤ three_branch_all_decimal[3,38,7]  𝄀
+➤ three_branch_all_decimal[3,29,7]  𝄀
 -408125.3580000
 drop view if exists v_coalesce_meta;
 create view v_coalesce_meta as select coalesce(cast(null as decimal(23,2)), 7.01970 * cast(-58140.00 as decimal(23,2))) as c;
 desc v_coalesce_meta;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-c  ¦  decimal(38,7)  ¦  NO  ¦    ¦  null  ¦    ¦  
+c  ¦  decimal(29,7)  ¦  NO  ¦    ¦  null
 drop view v_coalesce_meta;
 drop view if exists v_flow_metadata_safe;
 create view v_flow_metadata_safe as

@@ -40,7 +40,7 @@ func TestPrepareCoalesceNumericPeerMetadata(t *testing.T) {
 		{"float", "select coalesce(?,cast(1 as double))", types.T_float64, 0, 0},
 		{"column peer", "select coalesce(?,cast(n_nationkey as decimal(20,6))) from nation", types.T_decimal128, 20, 6},
 		{"nested resolved peer", "select coalesce(coalesce(?,cast(0 as decimal(20,6))),?)", types.T_decimal128, 20, 6},
-		{"enclosing arithmetic", "select coalesce(?,cast(0 as decimal(20,6)))+cast(0 as decimal(20,6))", types.T_decimal128, 38, 6},
+		{"enclosing arithmetic", "select coalesce(?,cast(0 as decimal(20,6)))+cast(0 as decimal(20,6))", types.T_decimal128, 21, 6},
 		{"explicit CAST control", "select cast(? as decimal(20,6))", types.T_decimal128, 20, 6},
 		{"concrete string boundary", `select coalesce(?,cast(0 as decimal(20,6)),"s")`, types.T_varchar, 0, 0},
 		{"explicit string boundary", "select coalesce(cast(? as char),cast(0 as decimal(20,6)))", types.T_varchar, 0, 0},
