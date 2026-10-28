@@ -1,0 +1,101 @@
+drop database if exists txn_readonly;
+create database txn_readonly;
+use txn_readonly;
+create table t (a int primary key);
+insert into t values (1);
+start transaction read only;
+select @@session.transaction_read_only, @@session.tx_read_only;
+➤ @@transaction_read_only[-1,16383,0]  ¦  @@tx_read_only[-1,16383,0]  𝄀
+0  ¦  0
+select * from t;
+a
+1
+insert into t values (2);
+Cannot execute statement in a READ ONLY transaction.
+update t set a = a + 1;
+Cannot execute statement in a READ ONLY transaction.
+delete from t;
+Cannot execute statement in a READ ONLY transaction.
+replace into t values (3);
+Cannot execute statement in a READ ONLY transaction.
+truncate table t;
+Cannot execute statement in a READ ONLY transaction.
+create table ddl_t (a int);
+Cannot execute statement in a READ ONLY transaction.
+create index idx_a on t (a);
+Cannot execute statement in a READ ONLY transaction.
+drop table t;
+Cannot execute statement in a READ ONLY transaction.
+alter table t add column b int;
+Cannot execute statement in a READ ONLY transaction.
+rename table t to t2;
+Cannot execute statement in a READ ONLY transaction.
+select * from t;
+a
+1
+commit;
+select count(*) from t;
+count(*)
+1
+set session transaction read only;
+begin;
+insert into t values (2);
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from t;
+count(*)
+1
+rollback;
+start transaction read write;
+insert into t values (2);
+commit;
+select count(*) from t;
+count(*)
+2
+insert into t values (3);
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from t;
+count(*)
+2
+set session transaction read write;
+select @@session.transaction_read_only, @@session.tx_read_only;
+➤ @@transaction_read_only[-1,16383,0]  ¦  @@tx_read_only[-1,16383,0]  𝄀
+0  ¦  0
+start transaction read only;
+create temporary table tmp (a int);
+insert into tmp values (7);
+select * from tmp;
+a
+7
+update tmp set a = a + 1;
+select * from tmp;
+a
+8
+drop table tmp;
+commit;
+select count(*) from t;
+count(*)
+2
+start transaction read only;
+prepare s from 'insert into t values (9)';
+execute s;
+Cannot execute statement in a READ ONLY transaction.
+deallocate prepare s;
+prepare s2 from 'select count(*) from t';
+execute s2;
+count(*)
+2
+deallocate prepare s2;
+commit;
+set session transaction_read_only = 1;
+delete from t;
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from t;
+count(*)
+2
+set session tx_read_only = 0;
+insert into t values (3);
+select count(*) from t;
+count(*)
+3
+drop table t;
+drop database txn_readonly;

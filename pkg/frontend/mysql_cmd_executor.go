@@ -5890,6 +5890,15 @@ func executeStmtWithWorkspace(ses FeSession,
 		return moerr.NewInternalError(execCtx.reqCtx, "savepoint has not been implemented yet. please rollback the transaction.")
 	}
 
+	// Reject writes in a READ ONLY transaction (MySQL ERROR 1792). This runs
+	// before TxnHandler.Create so a DDL statement inside an explicit read-only
+	// transaction is rejected before its implicit commit, and the rejection
+	// leaves the transaction fully usable for reads.
+	if err = enforceReadOnlyTxnAccessMode(
+		ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+		return err
+	}
+
 	//in session migration, the txn forced to be autocommit.
 	//then the txn can be committed.
 	if execCtx.inMigration {
@@ -6755,6 +6764,19 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// completion and must not commit the new transaction opened by BEGIN.
 		_, replacementBegin := stmt.(*tree.BeginTransaction)
 		replacementBegin = replacementBegin && isTopLevelClientStatement(ses, execCtx, currentInput) && !ses.GetIsInternal()
+		if execCtx.implicitCommitBefore {
+			// A writing implicit-commit statement (TRUNCATE, RENAME) would
+			// commit an active READ ONLY transaction below and then execute in
+			// a fresh write-capable transaction. MySQL instead rejects the
+			// statement with ERROR 1792 and keeps the transaction alive for
+			// reads, so gate before the implicit commit happens.
+			execCtx.txnOpt.activeTxnAtStart = ses.GetTxnHandler().InActiveTxn()
+			execCtx.txnOpt.activeTxnAtStartKnown = true
+			if err = enforceReadOnlyTxnAccessMode(ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
+				return err
+			}
+		}
 		if execCtx.implicitCommitBefore || replacementBegin {
 			beforeCommit := ses.getLastCommitTS()
 			if err = ses.GetTxnHandler().commitBeforeStatement(execCtx); err != nil {
