@@ -88,8 +88,9 @@ commit;
 select count(*) from t;
 drop table tmp;
 
--- A procedure whose body writes runs on its own transaction; the whole
--- call is rejected up front, read-only procedures stay callable.
+-- A procedure whose body writes runs on its own transaction; the write is
+-- rejected at execution with the caller's READ ONLY mode (the procedure's
+-- own transaction rolls back), read-only procedures stay callable.
 drop procedure if exists txn_read_only_wp;
 create procedure txn_read_only_wp() 'begin insert into t values (9); end';
 drop procedure if exists txn_read_only_rp;
@@ -130,6 +131,60 @@ delete txn_readonly.dqt from dq as dqt;
 select count(*) from dq;
 drop table dq;
 drop table dqt;
+
+-- An UPDATE assigning only temporary-table columns stays allowed under
+-- READ ONLY even when a persistent table is read through the join (the
+-- planner derives written tables from the SET assignment targets, and this
+-- gate does the same); assigning a persistent column is rejected.
+create table up (a int primary key, b int);
+insert into up values (1, 10), (2, 20);
+create temporary table ut (a int primary key, b int);
+insert into ut values (1, 100), (2, 200);
+start transaction read only;
+update ut join up on ut.a = up.a set ut.b = up.b;
+select b from ut order by a;
+update ut join up on ut.a = up.a set up.b = 999;
+select b from up order by a;
+commit;
+drop table ut;
+drop table up;
+
+-- Procedure statements are gated at execution with the caller's access mode
+-- and the session temporary bindings live at that moment: a body that drops
+-- a binding and then writes the persistent table behind it is rejected where
+-- it happens, temporary writes inside procedures stay allowed, and the READ
+-- WRITE replay of the same body proves the write itself still works.
+create table pe (a int primary key);
+insert into pe values (1);
+create temporary table pt (a int primary key);
+drop procedure if exists txn_read_only_tp_proc;
+create procedure txn_read_only_tp_proc() 'begin insert into pt values (1); insert into pt values (2); end';
+drop procedure if exists txn_read_only_xp;
+create procedure txn_read_only_xp() 'begin drop table pt; insert into pe values (9); end';
+drop procedure if exists txn_read_only_tr;
+create procedure txn_read_only_tr() 'begin truncate table pe; end';
+start transaction read only;
+call txn_read_only_tp_proc();
+select count(*) from pt;
+call txn_read_only_xp();
+select count(*) from pe;
+call txn_read_only_tr();
+select count(*) from pe;
+commit;
+drop procedure if exists txn_read_only_xp2;
+create procedure txn_read_only_xp2() 'begin drop table pt2; insert into pe values (9); end';
+create temporary table pt2 (a int primary key);
+call txn_read_only_xp2();
+select count(*) from pe;
+call txn_read_only_tr();
+select count(*) from pe;
+drop procedure txn_read_only_tp_proc;
+drop procedure txn_read_only_xp;
+drop procedure txn_read_only_tr;
+drop procedure txn_read_only_xp2;
+drop table if exists pt;
+drop table if exists pt2;
+drop table pe;
 
 -- Dynamic SQL inside a procedure cannot be classified statically: it would
 -- execute on an exempt background session inside the procedure's own

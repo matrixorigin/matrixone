@@ -139,6 +139,7 @@ func TestStatementRequiresPersistentWriteAccess(t *testing.T) {
 		"insert into testdb.t values (1)",
 		"replace into t values (1)",
 		"update t set a = 1",
+		"update t as x set a = 1",
 		"update t, u set t.a = 1",
 		"delete from t",
 		"delete t from t join u",
@@ -237,6 +238,14 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 		"replace into tt values (1)",
 		"update tt set a = 1",
 		"update tt as x set a = 1",
+		// An UPDATE assigning only temporary-table columns stays allowed even
+		// when a persistent table is merely read through a join: the planner
+		// derives written tables from the SET targets and removes unmodified
+		// sources.
+		"update tt, t set tt.a = t.a",
+		"update tt as x join t as y on x.a = y.a set x.a = 1",
+		// An assignment target the sources cannot name never writes.
+		"update tt set noseuch.a = 1",
 		"delete from tt",
 		"drop table tt",
 		"drop temporary table tt",
@@ -261,7 +270,14 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 	// Mixed writes still touch persistent tables and must be gated.
 	for _, sql := range []string{
 		"insert into t values (1)",
-		"update tt, t set tt.a = t.a",
+		// A persistent assignment target writes even when joined with a
+		// temporary source; unqualified multi-source columns are gated
+		// conservatively because the column owner cannot be resolved
+		// statically. An assignment target the sources cannot name never
+		// writes (the planner rejects it), so it stays allowed.
+		"update tt, t set t.a = 1",
+		"update tt as x join t as y on x.a = y.a set y.a = 1",
+		"update tt, t set a = 1",
 		"drop table tt, t",
 		// A DELETE target alias resolves to its FROM source first; a temporary
 		// table sharing the alias' spelling must not shadow the persistent
@@ -340,7 +356,6 @@ func TestEnforceReadOnlyTxnAccessMode(t *testing.T) {
 	ses.GetTxnHandler().txnReadOnly = true
 	internalInput := &UserInput{isInternalInput: true}
 	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, readOnlyGateExecCtx(ses, insert, internalInput), insert, "testdb"))
-	require.NoError(t, enforceReadOnlyTxnAccessMode(&backSession{}, readOnlyGateExecCtx(&backSession{}, insert, &UserInput{}), insert, "testdb"))
 	ses.isInternal = true
 	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, readOnlyGateExecCtx(ses, insert, &UserInput{}), insert, "testdb"))
 	ses.isInternal = false
@@ -349,6 +364,52 @@ func TestEnforceReadOnlyTxnAccessMode(t *testing.T) {
 	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, migrationCtx, insert, "testdb"))
 
 	ses.GetTxnHandler().txnReadOnly = false
+}
+
+func TestEnforceReadOnlyTxnAccessModeBackSessionOrigin(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.SetDatabaseName("testdb")
+	ctx := context.Background()
+	insert := parseSingleStatement(t, "insert into t values (1)")
+	insertTT := parseSingleStatement(t, "insert into tt values (1)")
+	dropTT := parseSingleStatement(t, "drop table tt")
+
+	// A back session WITHOUT a user origin (daemon / maintenance work) stays
+	// exempt even under a READ ONLY regime, as does internal input on a
+	// user-origined back session.
+	originLess := &backSession{}
+	require.NoError(t, enforceReadOnlyTxnAccessMode(originLess, readOnlyGateExecCtx(originLess, insert, &UserInput{}), insert, "testdb"))
+	back := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
+	internalInput := &UserInput{isInternalInput: true}
+	require.NoError(t, enforceReadOnlyTxnAccessMode(back, readOnlyGateExecCtx(back, insert, internalInput), insert, "testdb"))
+
+	// With a user origin in READ ONLY mode, procedure-body statements are
+	// gated at execution like the caller's own statements, and origin-less
+	// freedom disappears.
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(1)))
+	requireError1792 := func(err error) {
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCantExecuteInReadOnlyTransaction))
+	}
+	requireError1792(enforceReadOnlyTxnAccessMode(back, readOnlyGateExecCtx(back, insert, &UserInput{}), insert, "testdb"))
+	// The caller's temporary bindings are consulted live (backSession
+	// delegates GetTempTable upstream): a temporary target stays writable...
+	ses.AddTempTable("testdb", "tt", "temp_tt_real_name")
+	require.NoError(t, enforceReadOnlyTxnAccessMode(back, readOnlyGateExecCtx(back, insertTT, &UserInput{}), insertTT, "testdb"))
+	require.NoError(t, enforceReadOnlyTxnAccessMode(back, readOnlyGateExecCtx(back, dropTT, &UserInput{}), dropTT, "testdb"))
+	// ...and when a body removes the binding first, the same statement shape
+	// now resolves to the persistent table behind it and is rejected. This is
+	// the stale-static-check bypass: classification must happen at execution
+	// against the bindings live at that moment.
+	ses.removeTempTable("testdb", "tt", "txnkey", "stmtkey")
+	requireError1792(enforceReadOnlyTxnAccessMode(back, readOnlyGateExecCtx(back, insertTT, &UserInput{}), insertTT, "testdb"))
+
+	// Callers not in READ ONLY mode see no restriction through a back
+	// session either.
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0)))
+	require.NoError(t, enforceReadOnlyTxnAccessMode(back, readOnlyGateExecCtx(back, insert, &UserInput{}), insert, "testdb"))
 }
 
 func parseProcedureBody(t *testing.T, body string) []tree.Statement {
@@ -394,7 +455,29 @@ func TestEnforceReadOnlyOnProcedureBody(t *testing.T) {
 	ses.SetDatabaseName("testdb")
 	ctx := context.Background()
 
-	writingBodies := []string{
+	// Only dynamic SQL is rejected at call time: EXECUTE resolves its
+	// statement at run time outside the per-statement read-only gate, so a
+	// body carrying PREPARE/EXECUTE fails closed under a READ ONLY caller,
+	// even inside nested control flow.
+	dynamicBodies := []string{
+		"begin prepare s from 'insert into t values (2)'; execute s; end",
+		"begin prepare s from 'select 1'; end",
+		"begin set @dyn_v = 'insert into t values (2)'; prepare s from @dyn_v; execute s; end",
+		"begin execute s; end",
+		"begin if 1 = 1 then prepare s from 'select 1'; execute s; end if; end",
+	}
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(1)))
+	for _, body := range dynamicBodies {
+		err := enforceReadOnlyOnProcedureBody(ctx, ses, parseProcedureBody(t, body), "testdb")
+		require.Error(t, err, body)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCantExecuteInReadOnlyTransaction), body)
+	}
+
+	// Statically resolvable statements are deliberately NOT pre-checked at
+	// call time: the caller-aware gate enforces each of them at execution
+	// against the temporary bindings live at that moment, which keeps
+	// persistent writes out without false-rejecting temporary-only bodies.
+	staticBodies := []string{
 		"begin insert into t values (2); end",
 		"begin update t set a = 2; end",
 		"begin delete from t; end",
@@ -403,47 +486,27 @@ func TestEnforceReadOnlyOnProcedureBody(t *testing.T) {
 		"begin declare p1 int default 10; declare v1 int default 5; repeat delete from t limit 1; set v1 = v1 + 1; until v1 > p1 end repeat; end",
 		"begin label1: loop insert into t values (2); leave label1; end loop label1; end",
 		"begin case 1 when 1 then truncate table t; end case; end",
-		// EXPLAIN PHYPLAN executes its wrapped statement.
 		"begin explain phyplan insert into t values (2); end",
-		// Dynamic SQL defeats static classification: it executes on the
-		// exempt background session inside the procedure's own committed
-		// transaction, so any PREPARE/EXECUTE fails closed under READ ONLY.
-		"begin prepare s from 'insert into t values (2)'; execute s; end",
-		"begin prepare s from 'select 1'; end",
-		"begin set @dyn_v = 'insert into t values (2)'; prepare s from @dyn_v; execute s; end",
-		"begin execute s; end",
-	}
-	// Inside a read-only caller every writing body is rejected with 1792.
-	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(1)))
-	for _, body := range writingBodies {
-		err := enforceReadOnlyOnProcedureBody(ctx, ses, parseProcedureBody(t, body), "testdb")
-		require.Error(t, err, body)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCantExecuteInReadOnlyTransaction), body)
-	}
-
-	readOnlyBodies := []string{
 		"begin select count(*) from t; end",
 		"begin set sql_mode = 'ANSI_QUOTES'; end",
 		"begin call read_something(); end",
 		"begin if 1 = 1 then select a from t; end if; end",
-		// DEALLOCATE PREPARE only frees a handle; it can never write.
 		"begin deallocate prepare s; end",
 	}
-	// Read-only procedures stay callable under a read-only caller.
-	for _, body := range readOnlyBodies {
+	for _, body := range staticBodies {
 		require.NoError(t, enforceReadOnlyOnProcedureBody(ctx, ses, parseProcedureBody(t, body), "testdb"), body)
 	}
 
-	// Callers not in READ ONLY mode see no new restriction.
+	// Callers not in READ ONLY mode see no restriction at all.
 	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0)))
-	for _, body := range writingBodies {
+	for _, body := range dynamicBodies {
 		require.NoError(t, enforceReadOnlyOnProcedureBody(ctx, ses, parseProcedureBody(t, body), "testdb"), body)
 	}
-	// Nested procedure execution on a background session inherits the
-	// caller's read-only mode through the upstream chain.
+	// A nested procedure on a background session inherits the caller's
+	// read-only mode through the upstream chain: dynamic SQL fails closed.
 	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(1)))
 	nested := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
-	err := enforceReadOnlyOnProcedureBody(ctx, nested, parseProcedureBody(t, "begin insert into t values (2); end"), "testdb")
+	err := enforceReadOnlyOnProcedureBody(ctx, nested, parseProcedureBody(t, "begin execute s; end"), "testdb")
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrCantExecuteInReadOnlyTransaction))
 	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0)))
 }

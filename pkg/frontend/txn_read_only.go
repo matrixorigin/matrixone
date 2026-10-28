@@ -39,11 +39,20 @@ import (
 //     transaction with the session transaction_read_only default. This also
 //     covers autocommit, where each statement is its own transaction.
 //
-// Internal executors are deliberately exempt: background jobs, upgrade
-// bootstrap and mo_catalog maintenance run through back sessions or
-// internal statements and must not observe client-facing access modes.
-// Statements belonging to derived execution (SELECT-only by construction)
-// and session migration replay are exempt as well.
+// Internal executors are deliberately exempt: upgrade bootstrap, daemon jobs
+// and mo_catalog maintenance run as internal statements or origin-less back
+// sessions and must not observe client-facing access modes. Statements
+// belonging to derived execution (SELECT-only by construction) and session
+// migration replay are exempt as well.
+//
+// A back session with a user origin (procedure bodies, nested CALLs, starlark
+// SQL callbacks) is NOT exempt: the restriction of the originating user
+// session applies to each statement at execution time, with the session
+// temporary bindings live at that moment (backSession.GetTempTable delegates
+// upstream, so bindings mutated earlier inside the procedure are honoured).
+// This closes the stale-check bypass where a statically screened body drops a
+// temporary binding and then writes the persistent table behind it from the
+// procedure's own committed transaction.
 func enforceReadOnlyTxnAccessMode(
 	ses FeSession,
 	execCtx *ExecCtx,
@@ -53,7 +62,7 @@ func enforceReadOnlyTxnAccessMode(
 	if ses == nil || execCtx == nil || stmt == nil {
 		return nil
 	}
-	if ses.IsBackgroundSession() || ses.GetIsInternal() || execCtx.inMigration {
+	if ses.GetIsInternal() || execCtx.inMigration {
 		return nil
 	}
 	if execCtx.input != nil && execCtx.input.isInternal() {
@@ -63,17 +72,39 @@ func enforceReadOnlyTxnAccessMode(
 		return nil
 	}
 
+	gateSes := ses
+	if ses.IsBackgroundSession() {
+		origin := upstreamUserSession(ses)
+		if origin == nil {
+			// Trusted maintenance without a user caller stays exempt.
+			return nil
+		}
+		gateSes = origin
+	}
+
 	readOnly := false
-	txnHandler := ses.GetTxnHandler()
-	if execCtx.txnOpt.activeTxnAtStart && txnHandler != nil {
-		// The active transaction's mode was fixed when it started. Changing
-		// the session default afterwards has no effect on it (MySQL).
-		readOnly = txnHandler.TxnReadOnly()
-	} else {
+	if gateSes != ses {
+		// The caller's mode is read live: this statement executes inside the
+		// caller's transaction lifetime (procedure body or callback), so the
+		// mode of the caller's currently active transaction governs.
 		var err error
-		readOnly, err = sessionTransactionReadOnly(execCtx)
+		readOnly, err = callerTxnReadOnly(gateSes)
 		if err != nil {
 			return err
+		}
+	} else {
+		txnHandler := gateSes.GetTxnHandler()
+		if execCtx.txnOpt.activeTxnAtStart && txnHandler != nil {
+			// The active transaction's mode was fixed when it started.
+			// Changing the session default afterwards has no effect on it
+			// (MySQL).
+			readOnly = txnHandler.TxnReadOnly()
+		} else {
+			var err error
+			readOnly, err = sessionTransactionReadOnly(execCtx)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	if readOnly {
@@ -106,7 +137,13 @@ func statementRequiresPersistentWriteAccess(
 	case *tree.Replace:
 		return !writeTargetIsSessionTemporary(ses, st.Table, defaultDatabase)
 	case *tree.Update:
-		return !tableExprsAllSessionTemporary(ses, st.Tables, defaultDatabase)
+		// The planner derives the written tables of an UPDATE from the SET
+		// assignment targets only (build_constraint_util.go getUpdateTableInfo
+		// removes every unmodified source); a join partner or FROM source
+		// that is merely read does not require write access. Mirror that:
+		// classify the actual assignment targets so temporary-only writes
+		// through a persistent join stay allowed, exactly like MySQL.
+		return updateRequiresPersistentWriteAccess(ses, st, defaultDatabase)
 	case *tree.Delete:
 		if len(st.TableRefs) != 0 {
 			// Multi-table DELETE lists bare write targets that resolve through
@@ -194,6 +231,106 @@ func statementRequiresPersistentWriteAccess(
 		return true
 	}
 	return false
+}
+
+// updateRequiresPersistentWriteAccess reports whether an UPDATE writes a
+// persistent table, mirroring getUpdateTableInfo (build_constraint_util.go)
+// step for step: the written tables derive from the SET assignment targets,
+// which resolve through the source alias map — an explicitly aliased source
+// by its alias, an unaliased one by its object name, WITH-clause names never
+// resolve. A qualified target the sources cannot name never writes (the
+// planner reports it as an unknown table before execution). An unqualified
+// column in a multi-source UPDATE targets the unique source owning it, which
+// needs catalog access the gate does not have, so such a statement is gated
+// whenever any source may be persistent; a single-source UPDATE targets that
+// source exactly.
+func updateRequiresPersistentWriteAccess(ses FeSession, st *tree.Update, defaultDatabase string) bool {
+	sources := make(map[string][2]string)
+	ctes := make(map[string]struct{})
+	if st.With != nil {
+		for _, cte := range st.With.CTEs {
+			ctes[string(cte.Name.Alias)] = struct{}{}
+		}
+	}
+	for _, expr := range st.Tables {
+		collectUpdateSource(expr, ctes, sources)
+	}
+
+	for _, updateExpr := range st.Exprs {
+		if updateExpr == nil || updateExpr.Tuple || len(updateExpr.Names) != 1 {
+			// The planner rejects these forms (NYI); they never write.
+			continue
+		}
+		parts := updateExpr.Names[0]
+		if parts == nil {
+			continue
+		}
+		if parts.NumParts > 1 {
+			base, hit := sources[parts.TblName()]
+			if !hit {
+				// The planner reports the target as an unknown table; the
+				// statement never writes.
+				continue
+			}
+			if !isSessionTemporaryTable(ses, tree.NewTableName(
+				tree.Identifier(base[1]),
+				tree.ObjectNamePrefix{SchemaName: tree.Identifier(base[0])},
+				nil,
+			), defaultDatabase) {
+				return true
+			}
+			continue
+		}
+		// Column-only assignment: the planner picks the unique source owning
+		// the column (erroring on ambiguity), which needs catalog access the
+		// gate does not have. A single-source UPDATE therefore targets that
+		// source exactly, while a multi-source one is gated whenever any
+		// source may be persistent.
+		for _, base := range sources {
+			if !isSessionTemporaryTable(ses, tree.NewTableName(
+				tree.Identifier(base[1]),
+				tree.ObjectNamePrefix{SchemaName: tree.Identifier(base[0])},
+				nil,
+			), defaultDatabase) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// collectUpdateSource mirrors how setTableExprToDmlTableInfo maps the UPDATE
+// sources: an explicitly aliased source resolves by its alias, an unaliased
+// one by its object name; joins recurse into both sides; WITH-clause names
+// and derived sources never resolve to a table.
+func collectUpdateSource(expr tree.TableExpr, ctes map[string]struct{}, sources map[string][2]string) {
+	switch t := expr.(type) {
+	case *tree.TableName:
+		name := string(t.ObjectName)
+		if _, isCTE := ctes[name]; isCTE {
+			return
+		}
+		sources[name] = [2]string{string(t.SchemaName), name}
+	case *tree.AliasedTableExpr:
+		base := sourceTableName(t.Expr)
+		if base == nil {
+			return
+		}
+		name := string(base.ObjectName)
+		if _, isCTE := ctes[name]; isCTE {
+			return
+		}
+		alias := string(t.As.Alias)
+		if alias == "" {
+			alias = name
+		}
+		sources[alias] = [2]string{string(base.SchemaName), name}
+	case *tree.JoinTableExpr:
+		collectUpdateSource(t.Left, ctes, sources)
+		collectUpdateSource(t.Right, ctes, sources)
+	case *tree.ParenTableExpr:
+		collectUpdateSource(t.Expr, ctes, sources)
+	}
 }
 
 // deleteSourceAlias mirrors the alias map buildDelete constructs over the
@@ -331,12 +468,25 @@ func callerTxnReadOnly(ses FeSession) (bool, error) {
 	return transactionReadOnlyValueEnabled(value), nil
 }
 
-// enforceReadOnlyOnProcedureBody rejects a procedure call whose body can
-// write persistent state while the calling session is in READ ONLY mode. It
-// runs after the body was fetched and parsed but before the interpreter
-// opens its own transaction, so a rejected CALL leaves no partial procedure
-// changes behind. Read-only procedures and CDC guard / iceberg builtin CALLs
-// (handled before doInterpretCall reaches this point) stay executable.
+// enforceReadOnlyOnProcedureBody enforces the only part of the procedure
+// contract that cannot be checked at execution time: dynamic SQL. An
+// EXECUTE resolves its statement at run time and the background executor
+// runs it directly (back_status_stmt.go), outside the per-statement
+// read-only gate, inside the procedure's own committed transaction that the
+// caller cannot roll back. Under a READ ONLY caller a body carrying
+// PREPARE/EXECUTE therefore fails closed up front, exactly like starlark
+// procedure bodies. Statically resolvable writes are deliberately NOT
+// pre-checked here: they are enforced per statement at execution by the
+// caller-aware read-only gate, which classifies each statement against the
+// session temporary bindings live at that moment (a body that drops a
+// binding and then writes the persistent table behind it is rejected where
+// it happens, without false-rejecting bodies that only ever touch temporary
+// tables). DEALLOCATE PREPARE only frees a handle and can never write, so
+// it stays allowed. It runs after the body was fetched and parsed but
+// before the interpreter opens its own transaction, so a rejected CALL
+// leaves no partial procedure changes behind. CDC guard / iceberg builtin
+// CALLs (handled before doInterpretCall reaches this point) keep their
+// earlier exemption.
 func enforceReadOnlyOnProcedureBody(
 	ctx context.Context,
 	ses FeSession,
@@ -351,40 +501,40 @@ func enforceReadOnlyOnProcedureBody(
 		return nil
 	}
 	for _, stmt := range body {
-		if procedureStatementRequiresWriteAccess(ses, stmt, defaultDatabase) {
+		if procedureStatementRunsDynamicSQL(stmt) {
 			return moerr.NewCantExecuteInReadOnlyTransaction(ctx)
 		}
 	}
 	return nil
 }
 
-// procedureStatementRequiresWriteAccess walks one procedure body statement.
-// Control-flow blocks recurse into their bodies; a nested CALL is gated
-// again when its own body executes, so it is not followed here.
-func procedureStatementRequiresWriteAccess(ses FeSession, stmt tree.Statement, defaultDatabase string) bool {
+// procedureStatementRunsDynamicSQL walks one procedure body statement for
+// dynamic SQL. Control-flow blocks recurse into their bodies; a nested CALL
+// re-runs this check when its own body executes, so it is not followed here.
+func procedureStatementRunsDynamicSQL(stmt tree.Statement) bool {
 	switch st := stmt.(type) {
 	case *tree.CompoundStmt:
 		for _, inner := range st.Stmts {
-			if procedureStatementRequiresWriteAccess(ses, inner, defaultDatabase) {
+			if procedureStatementRunsDynamicSQL(inner) {
 				return true
 			}
 		}
 		return false
 	case *tree.IfStmt:
 		for _, inner := range st.Body {
-			if procedureStatementRequiresWriteAccess(ses, inner, defaultDatabase) {
+			if procedureStatementRunsDynamicSQL(inner) {
 				return true
 			}
 		}
 		for _, elif := range st.Elifs {
 			for _, inner := range elif.Body {
-				if procedureStatementRequiresWriteAccess(ses, inner, defaultDatabase) {
+				if procedureStatementRunsDynamicSQL(inner) {
 					return true
 				}
 			}
 		}
 		for _, inner := range st.Else {
-			if procedureStatementRequiresWriteAccess(ses, inner, defaultDatabase) {
+			if procedureStatementRunsDynamicSQL(inner) {
 				return true
 			}
 		}
@@ -392,47 +542,40 @@ func procedureStatementRequiresWriteAccess(ses FeSession, stmt tree.Statement, d
 	case *tree.CaseStmt:
 		for _, when := range st.Whens {
 			for _, inner := range when.Body {
-				if procedureStatementRequiresWriteAccess(ses, inner, defaultDatabase) {
+				if procedureStatementRunsDynamicSQL(inner) {
 					return true
 				}
 			}
 		}
 		for _, inner := range st.Else {
-			if procedureStatementRequiresWriteAccess(ses, inner, defaultDatabase) {
+			if procedureStatementRunsDynamicSQL(inner) {
 				return true
 			}
 		}
 		return false
 	case *tree.WhileStmt:
 		for _, inner := range st.Body {
-			if procedureStatementRequiresWriteAccess(ses, inner, defaultDatabase) {
+			if procedureStatementRunsDynamicSQL(inner) {
 				return true
 			}
 		}
 		return false
 	case *tree.LoopStmt:
 		for _, inner := range st.Body {
-			if procedureStatementRequiresWriteAccess(ses, inner, defaultDatabase) {
+			if procedureStatementRunsDynamicSQL(inner) {
 				return true
 			}
 		}
 		return false
 	case *tree.RepeatStmt:
 		for _, inner := range st.Body {
-			if procedureStatementRequiresWriteAccess(ses, inner, defaultDatabase) {
+			if procedureStatementRunsDynamicSQL(inner) {
 				return true
 			}
 		}
 		return false
 	case *tree.PrepareStmt, *tree.PrepareString, *tree.PrepareVar, *tree.Execute:
-		// Dynamic SQL cannot be classified statically: EXECUTE resolves its
-		// statement at run time, procedure statements execute on a background
-		// session that is exempt from the per-statement read-only gate, and
-		// the procedure's own committed transaction cannot be rolled back by
-		// the caller. Fail closed, exactly like starlark procedure bodies.
-		// DEALLOCATE PREPARE only frees a handle and can never write, so it
-		// stays allowed.
 		return true
 	}
-	return statementRequiresPersistentWriteAccess(ses, stmt, defaultDatabase)
+	return false
 }
