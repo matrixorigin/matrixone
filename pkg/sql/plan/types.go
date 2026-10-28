@@ -382,6 +382,7 @@ type ViewData struct {
 }
 
 type QueryBuilder struct {
+	integerPrecision      *integerPrecisionBuilder
 	correlationRouteNodes map[int32]bool
 	dependentRelations    map[int32]bool
 	preparedBindingProof  *bool
@@ -874,9 +875,14 @@ type BindContext struct {
 	// observes the session's virtual-column value.
 	physicalGeneratedRefs map[*tree.UnresolvedName]struct{}
 	// Tags whose rows can be NULL-extended by a join in this query block.
-	nullExtendedTags     map[int32]bool
-	existentialBlock     uint64
-	subqueryNestingDepth uint32
+	nullExtendedTags map[int32]bool
+	// The grouping/window rewrite owns this exact generated source. Neither
+	// field is inherited by NewBindContext: genuine SQL boundaries stay real.
+	integerPrecisionGeneratedSource     *tree.Select
+	integerPrecisionTransparentBoundary bool
+	integerPrecision                    *integerPrecisionBuilder
+	existentialBlock                    uint64
+	subqueryNestingDepth                uint32
 
 	binder Binder
 

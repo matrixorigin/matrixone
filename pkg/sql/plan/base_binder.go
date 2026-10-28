@@ -63,6 +63,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		return nil, bindErr
 	}
 	defer leaveBinding()
+	defer func() {
+		if err == nil && expr != nil && b.builder != nil && b.builder.integerPrecision != nil {
+			b.builder.integerPrecision.captureSource(b, astExpr, expr)
+		}
+	}()
 	if b.numericParamType != nil && !b.isNumericContextNode(astExpr, depth) {
 		paramType := b.numericParamType
 		b.numericParamType = nil
@@ -4477,6 +4482,16 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 			}
+			if (name == "+" || name == "*") && b.numericParamType != nil && types.T(b.numericParamType.Id).IsInteger() {
+				if _, marker := unwrapParenExpr(arg).(*tree.ParamExpr); marker {
+					oid := types.T_int64
+					if types.T(b.numericParamType.Id).IsUnsignedInt() {
+						oid = types.T_uint64
+					}
+					wide := makeSimplePlan2Type(oid)
+					b.numericParamType = &wide
+				}
+			}
 			var expr *Expr
 			var err error
 			previousSuppressDefaultValueBindType := b.suppressDefaultValueBindType
@@ -4856,6 +4871,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	}
+	var integerInputs []uint32
+	if b.builder != nil && b.builder.integerPrecision != nil {
+		integerInputs = b.builder.integerPrecision.functionInputs(b.ctx, name, args)
+	}
 	if b.builder != nil {
 		var e *plan.Expr
 		var err error
@@ -4869,6 +4888,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.observeExpressionProtocol)
 		}
 		if err == nil {
+			if b.builder != nil && b.builder.integerPrecision != nil {
+				b.builder.integerPrecision.captureFunction(name, integerInputs, e)
+			}
 			if isNullIf {
 				b.rememberPreparedFieldNullIfDomain(e, args)
 			}

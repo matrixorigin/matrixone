@@ -58,6 +58,10 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 	}
 
 	if builder != nil {
+		if builder.integerPrecision == nil {
+			builder.integerPrecision = newIntegerPrecisionBuilder()
+		}
+		bc.integerPrecision = builder.integerPrecision
 		bc.lower = builder.compCtx.GetLowerCaseTableNames()
 		if parent == nil && builder.GetContext().Value(viewSchemaContextKey{}) != nil {
 			bc.defaultDatabase = builder.compCtx.DefaultDatabase()
