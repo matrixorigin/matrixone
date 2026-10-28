@@ -14,8 +14,8 @@ source/test/config hashes, test selection, counts and exit status in
 failures, errors, skips or inputs changing during execution. Server fixtures
 record observed version and git revision in JUnit properties. A revision alone
 does not identify a dirty checkout; the content manifest identifies its tested
-inputs. Portable native reports and their JUnit results are indexed in
-[docs/validation/README.md](docs/validation/README.md).
+inputs. Keep generated provenance and JUnit reports with the CI run or other
+external test artifacts; generate fresh reports for the revision being qualified.
 
 ## Dependency and server dimensions
 
