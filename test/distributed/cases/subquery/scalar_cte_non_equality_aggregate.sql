@@ -119,6 +119,27 @@ select o.id, (with x as (select i.n, max(i.v) as m from inner_rows i group by i.
               select m from x where x.n < o.n) as independent_group
 from outer_rows o where o.id = 2;
 
+-- 纯聚合结果表达式复用集合式重聚合，不改变空集、多聚合和重复外行。
+select o.id,
+       (select max(i.v) + 1 from inner_rows i where i.n <= o.n) as inside_expression,
+       (select max(i.v) from inner_rows i where i.n <= o.n) + 1 as outside_expression,
+       (select count(*) + coalesce(sum(i.v), 0) from inner_rows i where i.n <= o.n) as combined
+from outer_rows o order by o.id;
+with q as (select n from outer_rows)
+select q.n, (select count(*) + coalesce(sum(i.v), 0) from inner_rows i where i.n <= q.n) as combined
+from q order by q.n;
+prepare range_expression from 'select o.id, (select coalesce(max(i.v), ?) + count(*) from inner_rows i where i.n <= o.n) as v from outer_rows o order by o.id';
+set @range_default = 7;
+execute range_expression using @range_default;
+set @range_default = null;
+execute range_expression using @range_default;
+set @range_default = -1;
+execute range_expression using @range_default;
+set @range_default = 7;
+execute range_expression using @range_default;
+deallocate prepare range_expression;
+set @range_default = null;
+
 -- 聚合结果表达式、HAVING 和 DISTINCT 分别保留空集与删除输出行的差异。
 select o.id,
        (select max(i.v) + 1 from inner_rows i where i.n <= o.n) as plus_one,
@@ -145,6 +166,15 @@ from (select id, n from outer_rows) o order by o.id;
 select o.id, x.id,
        (select max(i.v) from inner_rows i where i.n <= o.n and i.n < x.id) as two_outer_value
 from outer_rows o join outer_rows x on x.id = o.id order by o.id;
+
+-- 结果表达式的错误也必须服从外层需求；选中后报错，连接仍可复用。
+select o.id, case when o.id < 0 then
+       (select cast(max(i.v) + 1000 as tinyint) from inner_rows i where i.n <= o.n)
+       else 7 end as skipped_expression
+from outer_rows o order by o.id;
+select (select cast(max(i.v) + 1000 as tinyint) from inner_rows i where i.n <= o.n)
+from outer_rows o where o.id = 1;
+select 1 as expression_error_recovered;
 
 -- 多组不能静默取首行；未选 CASE 分支不能触发该错误。
 select (select count(*) from inner_rows i where i.n <= o.n group by i.n having i.n > 0)

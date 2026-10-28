@@ -191,6 +191,17 @@ LIMIT 10;
     (SELECT COUNT(*) FROM q x WHERE x.k<=b.k) AS c,
     (SELECT COUNT(v) FROM q x WHERE x.k<=b.k) AS cv FROM q b ORDER BY b.k,b.v`,
 				[]string{"k", "v", "present", "m", "c", "cv"}, []string{"NULL:7:0:NULL:0:0", "0:NULL:1:NULL:1:0", "2:10:1:10:3:2", "2:10:1:10:3:2"}},
+			{"range expressions preserve bag and empty identities", `SELECT b.k,
+    (SELECT MAX(x.v)+1 FROM bag_rows x WHERE x.k<=b.k) AS m,
+    (SELECT COALESCE(MAX(x.v),-1) FROM bag_rows x WHERE x.k<=b.k) AS c,
+    (SELECT COUNT(*)+COALESCE(SUM(x.v),0) FROM bag_rows x WHERE x.k<=b.k) AS s,
+    (SELECT CASE WHEN COUNT(*)=0 THEN -7 ELSE MAX(x.v) END FROM bag_rows x WHERE x.k<=b.k) AS guarded
+    FROM bag_rows b`, []string{"k", "m", "c", "s", "guarded"},
+				[]string{"NULL:NULL:-1:0:-7", "0:NULL:-1:1:NULL", "2:11:10:23:10", "2:11:10:23:10"}},
+			{"native range expression consumer", `SELECT
+    (SELECT MAX(i.id)+1 FROM tree_rows i WHERE i.id<=b.id) AS m,
+    (SELECT COALESCE(MAX(i.id),-1) FROM tree_rows i WHERE i.id<b.id) AS c
+    FROM tree_rows b`, []string{"m", "c"}, []string{"2:-1", "3:1", "4:2"}},
 			{"renamed reordered columns", `WITH q(value,key_col) AS(SELECT v,k FROM bag_rows)
     SELECT b.key_col,(SELECT MAX(x.value) FROM q x WHERE x.key_col<=b.key_col) AS m FROM q b`,
 				[]string{"key_col", "m"}, []string{"NULL:NULL", "0:NULL", "2:10", "2:10"}},
@@ -207,6 +218,29 @@ LIMIT 10;
 				require.NoError(t, rows.Err())
 			})
 		}
+		t.Run("prepared range expression reuse", func(t *testing.T) {
+			stmt, err := db.PrepareContext(ctx, `SELECT b.k,
+    (SELECT COALESCE(MAX(x.v),?)+COUNT(*) FROM bag_rows x WHERE x.k<=b.k) AS v FROM bag_rows b`)
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, tc := range []struct {
+				value any
+				want  []string
+			}{
+				{7, []string{"NULL:7", "0:8", "2:13", "2:13"}},
+				{nil, []string{"NULL:NULL", "0:NULL", "2:13", "2:13"}},
+				{-1, []string{"NULL:-1", "0:0", "2:13", "2:13"}},
+				{7, []string{"NULL:7", "0:8", "2:13", "2:13"}},
+			} {
+				func() {
+					rows, err := stmt.QueryContext(ctx, tc.value)
+					require.NoError(t, err)
+					defer rows.Close()
+					require.ElementsMatch(t, tc.want, read(t, rows, []string{"k", "v"}))
+					require.NoError(t, rows.Err())
+				}()
+			}
+		})
 		t.Run("prepared reuse after empty output and scalar error", func(t *testing.T) {
 			stmt, err := db.PrepareContext(ctx, `WITH q AS(SELECT * FROM bag_rows) SELECT b.k,
     (SELECT MAX(v) FROM q x WHERE x.k<=b.k) AS m,

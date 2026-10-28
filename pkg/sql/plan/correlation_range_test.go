@@ -28,9 +28,11 @@ import (
 func TestRangeScalarCompleteRelation(t *testing.T) {
 	for _, tc := range []struct{ name, sql string }{
 		{"guarded row operand", `SELECT CASE WHEN o.N_NATIONKEY<0 THEN (o.N_NATIONKEY,(SELECT j.N_NATIONKEY FROM NATION j WHERE j.N_NATIONKEY<=o.N_NATIONKEY))=(SELECT COUNT(*),MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) ELSE 0 END FROM NATION o`},
-		{"arithmetic", `SELECT (SELECT MAX(i.N_NATIONKEY)+1 FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY) FROM NATION o`},
-		{"coalesce", `SELECT (SELECT COALESCE(MAX(i.N_NATIONKEY),-1) FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY) FROM NATION o`},
-		{"case", `SELECT (SELECT CASE WHEN MAX(i.N_NATIONKEY) IS NULL THEN -1 ELSE MAX(i.N_NATIONKEY) END FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY) FROM NATION o`},
+		{"guarded expression", `SELECT CASE WHEN o.N_NATIONKEY<0 THEN (SELECT SUM(i.N_NATIONKEY)+1 FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY) ELSE 0 END FROM NATION o`},
+		{"volatile result", `SELECT (SELECT MAX(i.N_NATIONKEY)+RAND() FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY) FROM NATION o`},
+		{"correlated result", `SELECT (SELECT MAX(i.N_NATIONKEY)+o.N_NATIONKEY FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY) FROM NATION o`},
+		{"wrapped expression", `SELECT (WITH q AS (SELECT MAX(i.N_NATIONKEY) AS m FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY) SELECT m+1 FROM q) FROM NATION o`},
+		{"row expression", `SELECT (o.N_NATIONKEY,1)=(SELECT MAX(i.N_NATIONKEY)+1,COUNT(*) FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY) FROM NATION o`},
 		{"having", `SELECT (SELECT MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY HAVING MAX(i.N_NATIONKEY)>=5) FROM NATION o`},
 		{"distinct", `SELECT (SELECT DISTINCT MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY) FROM NATION o`},
 		{"grouped top one", `SELECT (SELECT MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_REGIONKEY<=o.N_REGIONKEY GROUP BY i.N_REGIONKEY ORDER BY i.N_REGIONKEY DESC LIMIT 1) FROM NATION o`},
@@ -74,7 +76,12 @@ func TestRangeScalarCompleteRelation(t *testing.T) {
 }
 
 func TestRangeScalarKeepsExistingFastPaths(t *testing.T) {
-	for _, aggregate := range []string{"MAX(i.N_NATIONKEY)", "COUNT(*)", "COUNT(DISTINCT i.N_NATIONKEY)", "SUM(1)"} {
+	for _, aggregate := range []string{
+		"MAX(i.N_NATIONKEY)", "COUNT(*)", "COUNT(DISTINCT i.N_NATIONKEY)", "SUM(1)",
+		"MAX(i.N_NATIONKEY)+1", "COALESCE(MAX(i.N_NATIONKEY),-1)", "CAST(MAX(i.N_NATIONKEY) AS SIGNED)+1",
+		"CASE WHEN MAX(i.N_NATIONKEY) IS NULL THEN -1 ELSE MAX(i.N_NATIONKEY) END",
+		"COUNT(*)+COUNT(DISTINCT i.N_NATIONKEY)", "COUNT(*)+COALESCE(SUM(i.N_NATIONKEY),0)",
+	} {
 		for _, predicate := range []string{"<=", "="} {
 			t.Run(aggregate+predicate, func(t *testing.T) {
 				sql := fmt.Sprintf(`SELECT (SELECT %s FROM NATION i WHERE i.N_REGIONKEY%s o.N_REGIONKEY) FROM NATION o`, aggregate, predicate)
@@ -97,6 +104,13 @@ func TestRangeScalarKeepsExistingFastPaths(t *testing.T) {
 }
 
 func TestRangeScalarAdmissionIsReadOnly(t *testing.T) {
+	addOne := func(b *QueryBuilder, _ *planpb.SubqueryRef, _ *BindContext) {
+		expr, err := BindFuncExprImplByPlanExpr(b.GetContext(), "+", []*planpb.Expr{
+			b.qry.Nodes[4].ProjectList[0], makePlan2Int64ConstExprWithType(1),
+		})
+		require.NoError(t, err)
+		b.qry.Nodes[4].ProjectList[0] = expr
+	}
 	for _, tc := range []struct {
 		name      string
 		change    func(*QueryBuilder, *planpb.SubqueryRef, *BindContext)
@@ -106,6 +120,8 @@ func TestRangeScalarAdmissionIsReadOnly(t *testing.T) {
 		{"computed result", func(b *QueryBuilder, _ *planpb.SubqueryRef, _ *BindContext) {
 			b.qry.Nodes[4].ProjectList[0] = makePlan2Int64ConstExprWithType(1)
 		}, true},
+		{"aggregate expression", addOne, false},
+		{"guarded expression", addOne, true},
 		{"explicit group", func(b *QueryBuilder, _ *planpb.SubqueryRef, _ *BindContext) {
 			b.qry.Nodes[3].GroupBy = []*planpb.Expr{b.qry.Nodes[3].AggList[0].GetF().Args[0]}
 		}, true},
@@ -166,7 +182,7 @@ func TestRangeScalarAdmissionIsReadOnly(t *testing.T) {
 			sub := &planpb.SubqueryRef{Typ: planpb.SubqueryRef_SCALAR, NodeId: 4, RowSize: 1}
 			tc.change(b, sub, ctx)
 			before := proto.Clone(b.qry).(*planpb.Query)
-			require.Equal(t, tc.dependent, b.rangeScalarNeedsDependent(0, sub, ctx))
+			require.Equal(t, tc.dependent, b.rangeScalarNeedsDependent(0, sub, ctx, tc.name == "guarded expression"))
 			require.True(t, proto.Equal(before, b.qry), "admission changed the lexical relation")
 		})
 	}

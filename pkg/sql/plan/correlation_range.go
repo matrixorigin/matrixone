@@ -24,7 +24,7 @@ import (
 // select complete relation execution before pull-up can split aggregate groups
 // or remove filters. A range predicate above an independent aggregate does not
 // cross that aggregate and must not change its existing scalar join route.
-func (builder *QueryBuilder) rangeScalarNeedsDependent(outerID int32, sub *plan.SubqueryRef, ctx *BindContext) bool {
+func (builder *QueryBuilder) rangeScalarNeedsDependent(outerID int32, sub *plan.SubqueryRef, ctx *BindContext, guarded bool) bool {
 	if sub.Typ != plan.SubqueryRef_SCALAR {
 		return false
 	}
@@ -80,12 +80,12 @@ func (builder *QueryBuilder) rangeScalarNeedsDependent(outerID int32, sub *plan.
 			}
 		}
 	}
-	return s.pagination || s.aggregate && !builder.canReaggregateRangeScalar(outerID, sub, ctx)
+	return s.pagination || s.aggregate && !builder.canReaggregateRangeScalar(outerID, sub, ctx, guarded)
 }
 
 // This proof inspects the original relation, not a speculative rewritten copy.
 // Identity and aggregate-input admission are shared with the legacy rewrite.
-func (builder *QueryBuilder) canReaggregateRangeScalar(outerID int32, sub *plan.SubqueryRef, ctx *BindContext) bool {
+func (builder *QueryBuilder) canReaggregateRangeScalar(outerID int32, sub *plan.SubqueryRef, ctx *BindContext, guarded bool) bool {
 	// Flattening a subquery in the comparison operand composes the outer
 	// relation after this proof. Keep both operands in their demand stage.
 	if sub.Child != nil && hasSubquery(sub.Child) {
@@ -111,12 +111,20 @@ func (builder *QueryBuilder) canReaggregateRangeScalar(outerID int32, sub *plan.
 		}
 		id = n.Children[0]
 	}
-	path := scalarAggregateProjectionFromSpine(spine, 0)
-	if path == nil {
-		return false
-	}
 	subCtx := builder.ctxByNode[sub.NodeId]
 	wrapped := len(subCtx.aggregates) == 0
+	path := scalarAggregateProjectionFromSpine(spine, 0)
+	if path == nil {
+		// A direct aggregate-result expression can stay above the existing
+		// reaggregation. Do not hoist aggregate work out of a demand guard,
+		// or extend this proof to wrapped/row-valued relations.
+		if guarded || wrapped || sub.Child != nil || len(spine) != 2 ||
+			len(spine[0].ProjectList) == 0 || spine[1].NodeType != plan.Node_AGG ||
+			!rangeScalarResultSupported(spine[0].ProjectList[0], spine[1].BindingTags[1], len(spine[1].AggList)) {
+			return false
+		}
+		path = &scalarAggregateProjectionPath{aggNode: spine[1]}
+	}
 	if !wrapped && len(spine) > 2 || wrapped && sub.Child != nil {
 		return false
 	}
@@ -151,6 +159,36 @@ func (builder *QueryBuilder) canReaggregateRangeScalar(outerID int32, sub *plan.
 		}
 	}
 	return true
+}
+
+// Result expressions may consume aggregate outputs, constants and parameters,
+// but not other rows/scopes or demand/volatile effects. Require an aggregate
+// reference so this does not become an independent expression-hoisting rule.
+func rangeScalarResultSupported(expr *plan.Expr, tag int32, aggregates int) bool {
+	if containsVolatileFunction(expr) {
+		return false
+	}
+	found := false
+	var visit func(*plan.Expr) bool
+	visit = func(e *plan.Expr) bool {
+		switch item := e.Expr.(type) {
+		case *plan.Expr_Col:
+			found = true
+			return item.Col.RelPos == tag && item.Col.ColPos >= 0 && int(item.Col.ColPos) < aggregates
+		case *plan.Expr_F:
+			for _, arg := range item.F.Args {
+				if !visit(arg) {
+					return false
+				}
+			}
+			return true
+		case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_T:
+			return true
+		default:
+			return false
+		}
+	}
+	return visit(expr) && found
 }
 
 // The single visible binding must still denote individual outer rows. Staging

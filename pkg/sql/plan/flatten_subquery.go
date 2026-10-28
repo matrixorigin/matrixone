@@ -473,7 +473,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	if dependent {
 		dependent = !builder.legacyDeepScalarAggregateSafe(subquery, nullResultRejected)
 	} else {
-		dependent = builder.rangeScalarNeedsDependent(nodeID, subquery, ctx)
+		dependent = builder.rangeScalarNeedsDependent(nodeID, subquery, ctx, guarded)
 	}
 	if dependent {
 		if subquery.Child != nil && hasSubquery(subquery.Child) {
@@ -3659,8 +3659,9 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	//   AGG(...)
 	// or:
 	//   PROJECT(agg_col) -> AGG(...)
-	// Other shapes (user GROUP BY keys, HAVING/FILTER, and computed PROJECT
-	// expressions) need different rewrites to preserve scalar subquery semantics.
+	// A pure aggregate-result expression can be rebuilt above the new AGG.
+	// Other shapes (user GROUP BY keys, HAVING/FILTER, and wrapped computed
+	// projections) need different rewrites to preserve scalar semantics.
 	//
 	// Note: pullupThroughAgg may have appended inner expressions of the
 	// correlated predicates to aggNode.GroupBy.  Those entries do not affect
@@ -3702,6 +3703,9 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 				"aggregation with non equal predicate in scalar subquery will be supported in future version")
 		}
 		for i := range resultCount {
+			if subquery.Child == nil && rangeScalarResultSupported(subRoot.ProjectList[i], subCtx.aggregateTag, len(aggNode.AggList)) {
+				continue
+			}
 			col, ok := subRoot.ProjectList[i].Expr.(*plan.Expr_Col)
 			if !ok || col.Col == nil || col.Col.RelPos != subCtx.aggregateTag ||
 				col.Col.ColPos < 0 || int(col.Col.ColPos) >= len(aggNode.AggList) {
@@ -3925,13 +3929,21 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 		return nodeID, retExpr, err
 	}
 
-	aggregatePos := int32(0)
 	if wrappedAgg == nil && subRoot != aggNode {
-		aggregatePos = subRoot.ProjectList[0].GetCol().ColPos
+		if col := subRoot.ProjectList[0].GetCol(); col != nil {
+			return nodeID, GetColExpr(aggExprs[col.ColPos].Typ, newAggTag, col.ColPos), nil
+		}
+		projects := make([]*plan.Expr, len(aggExprs))
+		for i, agg := range aggExprs {
+			projects[i] = GetColExpr(agg.Typ, newAggTag, int32(i))
+		}
+		retExpr, ok := replaceAggregateRefsForPostJoin(DeepCopyExpr(subRoot.ProjectList[0]), subCtx.aggregateTag, projects)
+		if !ok {
+			return 0, nil, moerr.NewNYI(builder.GetContext(), "non-equality aggregate result cannot be reprojected")
+		}
+		return nodeID, retExpr, nil
 	}
-	retExpr := GetColExpr(aggExprs[aggregatePos].Typ, newAggTag, aggregatePos)
-
-	return nodeID, retExpr, nil
+	return nodeID, GetColExpr(aggExprs[0].Typ, newAggTag, 0), nil
 }
 
 // subtreeContainsAggregate checks every reachable child, including JOIN

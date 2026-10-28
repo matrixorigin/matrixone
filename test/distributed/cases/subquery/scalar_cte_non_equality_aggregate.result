@@ -35,7 +35,7 @@ select o.id,
 (with x as (select count(*) as c from inner_rows i where i.n = o.n) select c from x) +
 coalesce((with x as (select sum(i.n) as s from inner_rows i where i.n <= o.n) select s from x), 0) as combined_value
 from outer_rows o order by o.id;
-➤ id[4,32,0]  ¦  combined_value[-5,64,0]  𝄀
+➤ id[4,32,0]  ¦  combined_value[-5,21,0]  𝄀
 1  ¦  2  𝄀
 2  ¦  4  𝄀
 3  ¦  7  𝄀
@@ -209,6 +209,67 @@ from outer_rows o where o.id = 2;
 ➤ id[4,32,0]  ¦  independent_group[4,32,0]  𝄀
 2  ¦  10
 select o.id,
+(select max(i.v) + 1 from inner_rows i where i.n <= o.n) as inside_expression,
+(select max(i.v) from inner_rows i where i.n <= o.n) + 1 as outside_expression,
+(select count(*) + coalesce(sum(i.v), 0) from inner_rows i where i.n <= o.n) as combined
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  inside_expression[-5,64,0]  ¦  outside_expression[-5,12,0]  ¦  combined[-5,64,0]  𝄀
+1  ¦  11  ¦  11  ¦  11  𝄀
+2  ¦  11  ¦  11  ¦  12  𝄀
+3  ¦  31  ¦  31  ¦  43  𝄀
+4  ¦  null  ¦  null  ¦  0  𝄀
+5  ¦  null  ¦  null  ¦  0  𝄀
+6  ¦  11  ¦  11  ¦  12
+with q as (select n from outer_rows)
+select q.n, (select count(*) + coalesce(sum(i.v), 0) from inner_rows i where i.n <= q.n) as combined
+from q order by q.n;
+➤ n[4,32,0]  ¦  combined[-5,64,0]  𝄀
+null  ¦  0  𝄀
+0  ¦  0  𝄀
+1  ¦  11  𝄀
+2  ¦  12  𝄀
+2  ¦  12  𝄀
+3  ¦  43
+prepare range_expression from 'select o.id, (select coalesce(max(i.v), ?) + count(*) from inner_rows i where i.n <= o.n) as v from outer_rows o order by o.id';
+set @range_default = 7;
+execute range_expression using @range_default;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  12  𝄀
+3  ¦  33  𝄀
+4  ¦  7  𝄀
+5  ¦  7  𝄀
+6  ¦  12
+set @range_default = null;
+execute range_expression using @range_default;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  12  𝄀
+3  ¦  33  𝄀
+4  ¦  null  𝄀
+5  ¦  null  𝄀
+6  ¦  12
+set @range_default = -1;
+execute range_expression using @range_default;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  12  𝄀
+3  ¦  33  𝄀
+4  ¦  -1  𝄀
+5  ¦  -1  𝄀
+6  ¦  12
+set @range_default = 7;
+execute range_expression using @range_default;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  11  𝄀
+2  ¦  12  𝄀
+3  ¦  33  𝄀
+4  ¦  7  𝄀
+5  ¦  7  𝄀
+6  ¦  12
+deallocate prepare range_expression;
+set @range_default = null;
+select o.id,
 (select max(i.v) + 1 from inner_rows i where i.n <= o.n) as plus_one,
 (select coalesce(max(i.v), -1) from inner_rows i where i.n <= o.n) as coalesced,
 (select case when max(i.v) is null then -1 else max(i.v) end from inner_rows i where i.n <= o.n) as case_value,
@@ -258,6 +319,23 @@ from outer_rows o join outer_rows x on x.id = o.id order by o.id;
 4  ¦  4  ¦  null  𝄀
 5  ¦  5  ¦  null  𝄀
 6  ¦  6  ¦  10
+select o.id, case when o.id < 0 then
+(select cast(max(i.v) + 1000 as tinyint) from inner_rows i where i.n <= o.n)
+else 7 end as skipped_expression
+from outer_rows o order by o.id;
+➤ id[4,32,0]  ¦  skipped_expression[-5,64,0]  𝄀
+1  ¦  7  𝄀
+2  ¦  7  𝄀
+3  ¦  7  𝄀
+4  ¦  7  𝄀
+5  ¦  7  𝄀
+6  ¦  7
+select (select cast(max(i.v) + 1000 as tinyint) from inner_rows i where i.n <= o.n)
+from outer_rows o where o.id = 1;
+Data truncation: data out of range: data type int8, value '1010'
+select 1 as expression_error_recovered;
+➤ expression_error_recovered[-5,64,0]  𝄀
+1
 select (select count(*) from inner_rows i where i.n <= o.n group by i.n having i.n > 0)
 from outer_rows o where o.id = 3;
 Subquery returns more than 1 row

@@ -174,8 +174,11 @@ func TestDependentNativeStages(t *testing.T) {
 		{"range_row_limit_zero", `SELECT (0,NULL)<=>(SELECT COUNT(*),SUM(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<o.N_NATIONKEY LIMIT 0) FROM NATION o`, []string{"false", "false", "false"}},
 		{"range_row_computed_input", `SELECT (0,NULL)<=>(SELECT SUM(COALESCE(i.N_NATIONKEY,0)),SUM(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<o.N_NATIONKEY) FROM NATION o`, []string{"false", "false", "false"}},
 		{"range_row_composed_operand", `SELECT (o.N_NATIONKEY-1,(SELECT MAX(N_NATIONKEY) FROM NATION))=(SELECT COUNT(*),SUM(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<o.N_NATIONKEY) FROM NATION o`, []string{"NULL", "false", "true"}},
-		{"range_expression", `SELECT (SELECT MAX(i.N_NATIONKEY)+1 FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) FROM NATION o`, []string{"2", "3", "4"}},
-		{"range_empty_coalesce", `SELECT (SELECT COALESCE(MAX(i.N_NATIONKEY),-1) FROM NATION i WHERE i.N_NATIONKEY<o.N_NATIONKEY) FROM NATION o`, []string{"-1", "1", "2"}},
+		// Plain result expressions use set-based execution; the SQL integration
+		// fixture retains their original value oracles. HAVING keeps these
+		// witnesses on the complete-relation runtime and its lifecycle checks.
+		{"range_having_expression", `SELECT (SELECT MAX(i.N_NATIONKEY)+1 FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY HAVING COUNT(*)>=0) FROM NATION o`, []string{"2", "3", "4"}},
+		{"range_having_empty_coalesce", `SELECT (SELECT COALESCE(MAX(i.N_NATIONKEY),-1) FROM NATION i WHERE i.N_NATIONKEY<o.N_NATIONKEY HAVING COUNT(*)>=0) FROM NATION o`, []string{"-1", "1", "2"}},
 		{"range_having", `SELECT (SELECT MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY HAVING MAX(i.N_NATIONKEY)>=2) FROM NATION o`, []string{"NULL", "2", "3"}},
 		{"range_having_empty_count", `SELECT (SELECT COUNT(*) FROM NATION i WHERE i.N_NATIONKEY<o.N_NATIONKEY HAVING COUNT(*)=0) FROM NATION o`, []string{"0", "NULL", "NULL"}},
 		{"range_distinct", `SELECT (SELECT DISTINCT MAX(i.N_NATIONKEY) FROM NATION i WHERE i.N_NATIONKEY<=o.N_NATIONKEY) FROM NATION o`, []string{"1", "2", "3"}},
@@ -409,7 +412,7 @@ func TestDependentNativeStages(t *testing.T) {
 					require.Zero(t, budget.Used())
 				}()
 			}
-			if tc.name == "range_expression" {
+			if tc.name == "range_having_expression" {
 				require.Equal(t, 2, compiled, "compile each lexical source once, not per outer row or generation")
 				require.Equal(t, 8, opened, "each generation opens one outer source and three inner sources")
 			}
