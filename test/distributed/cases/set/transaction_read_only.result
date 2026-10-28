@@ -381,5 +381,40 @@ drop publication ro_pub;
 drop user ro_u6;
 drop role ro_r6;
 set session transaction_read_only = 0;
+create database r7_src;
+create database r7_dst;
+create table r7_dst.leak (a int primary key);
+set enable_remap_hint = 1;
+use r7_src;
+create temporary table leak (a int primary key);
+set remap_rewrites = '{"remapdb": {"r7_src": "r7_dst"}}';
+set session transaction_read_only = 1;
+insert into leak values (1);
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from r7_dst.leak;
+count(*)
+0
+prepare r7_pp from 'insert into leak values (1)';
+execute r7_pp;
+Cannot execute statement in a READ ONLY transaction.
+deallocate prepare r7_pp;
+set session transaction_read_only = 0;
+set remap_rewrites = '';
+drop temporary table leak;
+create temporary table r7_dst.okt (a int primary key);
+set remap_rewrites = '{"remapdb": {"r7_src": "r7_dst"}}';
+set session transaction_read_only = 1;
+insert into okt values (1);
+select count(*) from okt;
+count(*)
+1
+set session transaction_read_only = 0;
+set remap_rewrites = '';
+drop temporary table r7_dst.okt;
+set enable_remap_hint = 0;
+use txn_readonly;
+drop table r7_dst.leak;
+drop database r7_src;
+drop database r7_dst;
 drop table t;
 drop database txn_readonly;

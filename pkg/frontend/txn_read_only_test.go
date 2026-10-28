@@ -606,3 +606,60 @@ func TestEnforceReadOnlyOnProcedureBody(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrCantExecuteInReadOnlyTransaction))
 	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0)))
 }
+
+func TestReadOnlyGateRemapEffectiveDatabase(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.SetDatabaseName("r7_src")
+	ctx := context.Background()
+
+	remap := map[string]string{
+		tree.NewCStr("r7_src", parserLowerCaseTableNames(ses)).Compare(): "r7_dst",
+	}
+	remapCtx := func(stmt tree.Statement) *ExecCtx {
+		return &ExecCtx{reqCtx: ctx, ses: ses, stmt: stmt, txnOpt: FeTxnOption{}, input: &UserInput{}, remapDb: remap}
+	}
+	plainCtx := func(stmt tree.Statement) *ExecCtx {
+		return &ExecCtx{reqCtx: ctx, ses: ses, stmt: stmt, txnOpt: FeTxnOption{}, input: &UserInput{}}
+	}
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(1)))
+	defer func() {
+		_ = ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0))
+	}()
+	require1792 := func(err error) {
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCantExecuteInReadOnlyTransaction))
+	}
+
+	// The helper mirrors TxnCompilerContext.DefaultDatabase: the threaded
+	// default keeps its prepared-binding meaning, an empty default falls back
+	// to the session database, and only then does remapdb redirect; without
+	// an installed policy the answer is unchanged.
+	require.Equal(t, "r7_dst", effectiveDefaultDatabaseWithRemap(ses, remapCtx(nil), ""))
+	require.Equal(t, "r7_dst", effectiveDefaultDatabaseWithRemap(ses, remapCtx(nil), "r7_src"))
+	require.Equal(t, "other_src_db", effectiveDefaultDatabaseWithRemap(ses, remapCtx(nil), "other_src_db"))
+	require.Equal(t, "r7_src", effectiveDefaultDatabaseWithRemap(ses, plainCtx(nil), "r7_src"))
+
+	// Direction (i) leak: the temporary binding is keyed at the remap SOURCE,
+	// so the un-remapped check pronounced the write temporary-only. Binding
+	// redirects to the destination where no temporary binding exists, so the
+	// statement writes persistently and must be gated.
+	ses.AddTempTable("r7_src", "leak", "leak_temp_real")
+	insertLeak := parseSingleStatement(t, "insert into leak values (1)")
+	require1792(enforceReadOnlyTxnAccessMode(ses, remapCtx(insertLeak), insertLeak, ""))
+	// Same verdict when the binding database arrives threaded as the
+	// prepared binding database captured by PREPARE (the EXECUTE path).
+	require1792(enforceReadOnlyTxnAccessMode(ses, remapCtx(insertLeak), insertLeak, "r7_src"))
+	// Without the remap policy nothing changes: source-keyed temporary
+	// bindings keep the write temporary-only.
+	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, plainCtx(insertLeak), insertLeak, ""))
+
+	// Direction (ii) false 1792: the temporary binding lives at the remap
+	// DESTINATION, exactly where binding resolves the unqualified target.
+	// The write is temporary-only and must stay admitted.
+	ses.AddTempTable("r7_dst", "okt", "okt_temp_real")
+	insertOkt := parseSingleStatement(t, "insert into okt values (1)")
+	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, remapCtx(insertOkt), insertOkt, ""))
+	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, remapCtx(insertOkt), insertOkt, "r7_src"))
+}

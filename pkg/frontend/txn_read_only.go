@@ -68,6 +68,7 @@ func enforceReadOnlyTxnAccessMode(
 	if execCtx.input != nil && execCtx.input.isInternal() {
 		return nil
 	}
+	defaultDatabase = effectiveDefaultDatabaseWithRemap(ses, execCtx, defaultDatabase)
 	deferOwnership := updateOwnershipDeferred(ses, stmt, defaultDatabase)
 	if !statementRequiresPersistentWriteAccess(ses, stmt, defaultDatabase) && !deferOwnership {
 		return nil
@@ -119,6 +120,31 @@ func enforceReadOnlyTxnAccessMode(
 		return nil
 	}
 	return moerr.NewCantExecuteInReadOnlyTransaction(execCtx.reqCtx)
+}
+
+// effectiveDefaultDatabaseWithRemap resolves the database unqualified names
+// actually bind against for this statement, mirroring
+// TxnCompilerContext.DefaultDatabase (compiler_context.go): the caller's
+// default database is the prepared binding database for EXECUTE (captured
+// when PREPAREd) or, when empty, the session's current database; an active
+// remapdb policy then redirects it to the remapped destination. Admission
+// must classify temporary-target and UPDATE column ownership against the
+// same effective database — checking the un-remapped source would admit
+// persistent writes to the destination (no ERROR 1792) or falsely reject
+// temporary-only writes whose binding lives at the destination.
+func effectiveDefaultDatabaseWithRemap(ses FeSession, execCtx *ExecCtx, defaultDatabase string) string {
+	db := defaultDatabase
+	if db == "" {
+		db = ses.GetDatabaseName()
+	}
+	if db == "" || execCtx == nil || len(execCtx.remapDb) == 0 {
+		return db
+	}
+	key := tree.NewCStr(db, parserLowerCaseTableNames(ses)).Compare()
+	if dst, ok := execCtx.remapDb[key]; ok {
+		return dst
+	}
+	return db
 }
 
 // catalogOwnershipResolvable reports whether the session currently has a

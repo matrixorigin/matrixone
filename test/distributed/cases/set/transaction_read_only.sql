@@ -340,5 +340,44 @@ drop user ro_u6;
 drop role ro_r6;
 set session transaction_read_only = 0;
 
+-- remapdb redirects unqualified name resolution when the current database is
+-- a remap source (TxnCompilerContext.DefaultDatabase). Admission must
+-- classify against that same effective database: a temporary binding keyed
+-- at the source does not make the remapped persistent target writable, for
+-- direct statements and for a prepared binding database alike.
+create database r7_src;
+create database r7_dst;
+create table r7_dst.leak (a int primary key);
+set enable_remap_hint = 1;
+use r7_src;
+create temporary table leak (a int primary key);
+set remap_rewrites = '{"remapdb": {"r7_src": "r7_dst"}}';
+set session transaction_read_only = 1;
+insert into leak values (1);
+select count(*) from r7_dst.leak;
+prepare r7_pp from 'insert into leak values (1)';
+execute r7_pp;
+deallocate prepare r7_pp;
+set session transaction_read_only = 0;
+set remap_rewrites = '';
+drop temporary table leak;
+
+-- The converse: a temporary binding keyed at the remap destination is what
+-- the unqualified target binds to under remap, so the write stays
+-- temporary-only and must be admitted.
+create temporary table r7_dst.okt (a int primary key);
+set remap_rewrites = '{"remapdb": {"r7_src": "r7_dst"}}';
+set session transaction_read_only = 1;
+insert into okt values (1);
+select count(*) from okt;
+set session transaction_read_only = 0;
+set remap_rewrites = '';
+drop temporary table r7_dst.okt;
+set enable_remap_hint = 0;
+use txn_readonly;
+drop table r7_dst.leak;
+drop database r7_src;
+drop database r7_dst;
+
 drop table t;
 drop database txn_readonly;
