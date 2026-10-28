@@ -750,6 +750,13 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	var blocks []objectio.BlockObject
 	var files []resultFileInfo
 
+	// MODUMP honors the output-file suffix the same way EXPORT does:
+	// .jsonl/.jsonline/.ndjson produce JSON Lines and .parquet produces
+	// Parquet; unsuffixed and other names keep the legacy CSV bytes (#30570).
+	if err = validateExportFormat(ctx, eParam); err != nil {
+		return err
+	}
+
 	//step1: open file handler
 	if columnDefs, err = openResultMeta(ctx, ses, eParam.QueryId); err != nil {
 		return err
@@ -801,7 +808,9 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	exportParam.DefaultBufSize = getPu(exportParam.service).SV.ExportDataDefaultFlushSize
 	exportParam.FileService = getPu(exportParam.service).FileService
 	exportParam.Ctx = ctx
-	exportParam.ctx, exportParam.cancel = context.WithCancel(ctx)
+	exportParam.ctx = ctx
+	exportParam.init()
+	dumpExecCtx := &ExecCtx{reqCtx: ctx, ses: ses}
 	defer func() { err = exportParam.finish(err) }()
 
 	initExportFileParam(exportParam, mrs)
@@ -838,6 +847,16 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 			defer release()
 			tmpBatch = bat
 
+			if exportParam.getExportFormat() != "csv" {
+				//step2.fmt: feed the decoded batch into the EXPORT format
+				//machinery (JSON Lines / Parquet writers) instead of the
+				//per-row CSV converter.
+				if err = exportParam.Write(dumpExecCtx, nil, tmpBatch); err != nil {
+					return err
+				}
+				continue
+			}
+
 			//step2.1: converts it into the csv string
 			//step2.2: writes the csv string into the outfile
 			n := tmpBatch.RowCount()
@@ -868,6 +887,13 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 		}
 	}
 
+	if exportParam.getExportFormat() != "csv" {
+		// Finalize the JSON Lines / Parquet writers: flush pending buffered
+		// rows and close the writer before finish() reports success.
+		if err = exportAllDataFromBatches(exportParam); err != nil {
+			return err
+		}
+	}
 	return err
 }
 

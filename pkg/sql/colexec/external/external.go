@@ -123,6 +123,11 @@ func (external *External) Prepare(proc *process.Process) error {
 			}
 			param.Extern.FileService = proc.Base.FileService
 		}
+	} else {
+		// Parallel workers borrow the same configuration. Keep runtime context
+		// and service writes, including those in reader.Open, local to this worker.
+		privateExtern := *param.Extern
+		param.Extern = &privateExtern
 	}
 	if param.Extern.FileService == nil {
 		// Decoded remote parameters carry path/configuration but not the local

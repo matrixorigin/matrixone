@@ -329,9 +329,9 @@ select id, payload from ft_join where match(body) against('needle') and payload 
 explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc limit 2 offset 1;
 -- @regex("Candidate Limit",false)
 explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') and payload <> 'zz' order by sc desc limit 2 offset 1;
--- A secondary ORDER BY key declines: the search cannot choose among rows tied at the
--- cutoff by that key.
--- @regex("Candidate Limit",false)
+-- A secondary ORDER BY key after score DESC is bounded the same way; it orders the
+-- bounded rows.
+-- @regex("Candidate Limit: 2",true)
 explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc, id limit 2;
 select id, payload from ft_join where match(body) against('needle') order by match(body) against('needle') desc, id limit 3;
 select id, payload from ft_join where match(body) against('needle') and payload <> 'zz' order by match(body) against('needle') desc, id limit 3;
@@ -343,9 +343,9 @@ explain select id, payload, match(body) against('needle') as sc from ft_join whe
 -- @regex("Candidate Limit",false)
 explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc asc limit 2;
 
--- Rows tied at the LIMIT cutoff: id 10 scores highest, ids 1-5 tie. The secondary key
--- picks among the tied rows, so ORDER BY score DESC, id is never bounded, on the covered
--- path (id only) or the base-table join path (payload).
+-- Rows tied at the LIMIT cutoff: id 10 scores highest, ids 1-5 tie. ORDER BY score DESC
+-- with later keys is bounded on the covered path (id only) and the base-table join path
+-- (payload); the search picks which tied rows are kept, the later keys order them.
 create table ft_tie (
     id bigint primary key,
     body text,
@@ -360,16 +360,16 @@ insert into ft_tie values
 (10, 'needle needle needle filler', 't10'),
 (11, 'other filler filler filler', 't11');
 create fulltext2 index ft_tie_idx on ft_tie(body);
--- @regex("Candidate Limit",false)
+-- @regex("Candidate Limit: 2",true)
 explain select id, match(body) against('needle') as sc from ft_tie where match(body) against('needle') order by sc desc, id desc limit 2;
--- @regex("Candidate Limit",false)
+-- @regex("Candidate Limit: 2",true)
 explain select id, payload, match(body) against('needle') as sc from ft_tie where match(body) against('needle') order by sc desc, id desc limit 2;
--- @regex("Candidate Limit",false)
+-- @regex("Candidate Limit: 3",true)
 explain select id, payload, match(body) against('needle') as sc from ft_tie where match(body) against('needle') order by sc desc, id limit 2 offset 1;
-select id from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id desc limit 2;
-select id from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id limit 2;
-select id, payload from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id desc limit 2;
-select id, payload from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id limit 3 offset 1;
+select id from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id desc limit 1;
+select count(*) from (select id from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id limit 3) p where id between 1 and 5;
+select id, payload from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id desc limit 6;
+select id, payload from ft_tie where match(body) against('needle') order by match(body) against('needle') desc, id limit 10 offset 1;
 
 -- Re-ordering the top n by another key: bound the search in a derived table, then sort
 -- the page. The inner score-only order is bounded; the outer key orders the page.

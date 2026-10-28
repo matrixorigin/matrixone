@@ -73,9 +73,17 @@ func AddVersion(
 	return nil
 }
 
+// Catalog routes advance monotonically by semantic version and offset.
+// Creation timestamps have only second precision and are not a reliable order.
+const latestVersionOrder = " order by cast(substring_index(version, '.', 1) as unsigned) desc, " +
+	"cast(substring_index(substring_index(version, '.', 2), '.', -1) as unsigned) desc, " +
+	"cast(substring_index(version, '.', -1) as unsigned) desc, version_offset desc limit 1"
+
+// LatestVersionSQL reads the newest catalog identity under the version order.
+const LatestVersionSQL = "select version, version_offset, state from " + catalog.MOVersionTable + latestVersionOrder
+
 func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
-	sql := fmt.Sprintf(`select version, version_offset, state from %s order by create_at desc limit 1`, catalog.MOVersionTable)
-	res, err := txn.Exec(sql, executor.StatementOption{})
+	res, err := txn.Exec(LatestVersionSQL, executor.StatementOption{})
 	if err != nil {
 		return Version{}, err
 	}
@@ -98,11 +106,9 @@ func GetLatestVersion(txn executor.TxnExecutor) (Version, error) {
 
 func MustGetLatestReadyVersion(
 	txn executor.TxnExecutor) (string, error) {
-	sql := fmt.Sprintf(`select version from %s
-			where state = %d
-			order by create_at desc limit 1`,
+	sql := fmt.Sprintf(`select version from %s where state = %d%s`,
 		catalog.MOVersionTable,
-		StateReady)
+		StateReady, latestVersionOrder)
 
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {

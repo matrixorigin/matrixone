@@ -2853,6 +2853,11 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 		c.SetLength(math.MaxUint16)
 	}
 	setColFlag(c, col)
+	if presentation := col.IntegerResultPresentation; presentation != nil && (typ.Oid == types.T_int64 || typ.Oid == types.T_uint64) {
+		c.SetLength(presentation.DisplayLength)
+		c.SetDecimal(0)
+	}
+
 	// MySQL represents predicate results as numeric 0/1 values. Keep native
 	// BOOLEAN columns on the dedicated BOOL path, but advertise a computed BOOL
 	// result as a regular TINYINT so JDBC clients do not reinterpret the

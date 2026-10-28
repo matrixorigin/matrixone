@@ -61,6 +61,12 @@ func (builder *QueryBuilder) optimizeDistinctAgg(nodeID int32) error {
 	}
 
 	if node.NodeType == plan.Node_AGG {
+		// Pair deduplication on complete grouping keys cannot implement
+		// DISTINCT at every ROLLUP prefix, and hash pairs destroy input order.
+		// Keep all arities on the prefix executor's independent DISTINCT states.
+		if IsSortRollupOption(node.ExtraOptions) {
+			return normalizeUnrewrittenDistinctAggArguments(builder.GetContext(), node)
+		}
 		if shuffleArg := tupleDistinctShuffleArgument(node, builder); shuffleArg >= 0 {
 			return builder.optimizeTupleCountDistinct(node, shuffleArg)
 		}

@@ -162,8 +162,8 @@ type sortRollupCostEstimate struct {
 }
 
 // chooseSortRollup is the only automatic selector. Physical eligibility is
-// checked by the caller before this function, so this function is concerned
-// only with uncertainty and relative cost.
+// checked by the caller. Automatic selection additionally requires existing
+// global order, known statistics, bounded state, and a conservative cost win.
 func (builder *QueryBuilder) chooseSortRollup(
 	ctx *BindContext,
 	from tree.TableExprs,
@@ -186,7 +186,7 @@ func (builder *QueryBuilder) chooseSortRollup(
 
 	probe, ok := builder.probeSortRollupInput(
 		ctx, from, where, groupingExprs, isRoot)
-	if !ok {
+	if !ok || !probe.orderedInput {
 		return false
 	}
 	extraAggregateExprs := sortRollupAdditionalExprs(having, orderBy)

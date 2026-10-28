@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -715,7 +716,7 @@ func (op *opBuiltInJsonRow) jsonRow(params []*vector.Vector, result vector.Funct
 		case types.T_uuid:
 			encodeFixedStringer[types.Uuid](op, params[i], ulen)
 		case types.T_json:
-			if err := encodeJson(op, params[i], ulen); err != nil {
+			if err := encodeJson(proc.Ctx, op, params[i], ulen); err != nil {
 				return err
 			}
 		default:
@@ -905,7 +906,7 @@ func encodeBlockScaledArray(op *opBuiltInJsonRow, v *vector.Vector, length uint6
 	return nil
 }
 
-func encodeJson(op *opBuiltInJsonRow, v *vector.Vector, length uint64) error {
+func encodeJson(ctx context.Context, op *opBuiltInJsonRow, v *vector.Vector, length uint64) error {
 	// GenStrParam: json is varlena also.
 	p := vector.GenerateFunctionStrParameter(v)
 	for i := uint64(0); i < length; i++ {
@@ -914,7 +915,7 @@ func encodeJson(op *opBuiltInJsonRow, v *vector.Vector, length uint64) error {
 			op.enc[i].w.WriteString("null")
 		} else {
 			bj := types.DecodeJson(v)
-			val, err := bj.MarshalJSON()
+			val, err := marshalJSONForFloatStringProof(ctx, bj)
 			// this should a valid json and we should never
 			// error here.   Check it anyway.
 			if err != nil {

@@ -1190,8 +1190,9 @@ func TestShowCreateExternalWriteFilePattern(t *testing.T) {
 	require.NotContains(t, out, "JSONDATA")
 	require.NotContains(t, out, "''")
 
-	// Read-only table: legacy output unchanged — no WRITE_FILE_PATTERN key,
-	// FILEPATH masked, empty keys present.
+	// Read-only table (#31261): FILEPATH is preserved so the replayed DDL
+	// stays readable; empty optional keys are omitted like in the writable
+	// form; no WRITE_FILE_PATTERN key leaks in.
 	ro := &tree.ExternParam{ExParamConst: tree.ExParamConst{
 		Format:   tree.CSV,
 		Filepath: "/local/path.csv",
@@ -1199,9 +1200,10 @@ func TestShowCreateExternalWriteFilePattern(t *testing.T) {
 	}}
 	roOut := formatInfileExternalOptionsForShowCreate(ro, "")
 	require.NotContains(t, roOut, "WRITE_FILE_PATTERN")
-	require.Contains(t, roOut, "'FILEPATH'=''")
-	require.NotContains(t, roOut, "/local/path.csv")
-	require.Contains(t, roOut, "'JSONDATA'=''")
+	require.Contains(t, roOut, "'FILEPATH'='/local/path.csv'")
+	require.NotContains(t, roOut, "'FILEPATH'=''")
+	require.NotContains(t, roOut, "JSONDATA")
+	require.NotContains(t, roOut, "COMPRESSION")
 
 	// URL s3option{...} form.
 	s3 := &tree.ExternParam{

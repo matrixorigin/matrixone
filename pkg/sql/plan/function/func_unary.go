@@ -1412,7 +1412,7 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 			// input vector can be reused. Keep Unquote's public owning result.
 			return functionUtil.QuickBytesToStr(bj.GetString()), nil
 		}
-		return bj.Unquote()
+		return unquoteJSONForFloatStringProof(proc.Ctx, bj)
 	}
 
 	stringSingle := func(v []byte) (string, error) {
@@ -1426,7 +1426,7 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		if err != nil {
 			return "", err
 		}
-		return bj.Unquote()
+		return unquoteJSONForFloatStringProof(proc.Ctx, bj)
 	}
 
 	single := func(v []byte, row int) (string, error) {

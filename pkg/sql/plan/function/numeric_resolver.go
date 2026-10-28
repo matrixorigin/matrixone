@@ -349,6 +349,9 @@ func resolveNumericBinaryTypesMode(op numericBinaryOp, left, right types.Type, o
 	if !ok {
 		return numericTypeResolution{}, false
 	}
+	if operands, result, _, ok := resolveIntegerAddMulExecution(op, left, right); ok {
+		return numericTypeResolution{left: operands[0], right: operands[1], result: result}, true
+	}
 	if (op == numericOpAdd || op == numericOpSub || op == numericOpMul) &&
 		isMixedUnsignedInteger(left, right) {
 		return numericTypeResolution{

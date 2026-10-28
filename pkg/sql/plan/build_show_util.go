@@ -17,6 +17,7 @@ package plan
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
@@ -1550,37 +1552,199 @@ func formatForeignTableOptionsForShowCreate(cfg foreignext.Config, sqlMode strin
 	return builder.String()
 }
 
+// showCreateCredentialServiceArgKeys is the key=value service-argument
+// vocabulary that carries credentials, mirroring the parsing dispatch of
+// fileservice (parseFileServiceArguments → ObjectStorageArguments.SetFromString).
+// Key comparison is case-insensitive there, so it is here. Identity handles
+// (role-arn, external-id, ram-role, role-session-name) stay visible, matching
+// the explicit-S3 renderer in this file which shows role_arn/external_id.
+var showCreateCredentialServiceArgKeys = map[string]struct{}{
+	"key":        {},
+	"key-id":     {},
+	"secret":     {},
+	"key-secret": {},
+	"secret-id":  {},
+	// credential tokens are not distinguishable from user data except by
+	// these names, so every token alias is a credential-bearing argument
+	"bearer-token":      {},
+	"security-token":    {},
+	"token":             {},
+	"session-token":     {},
+	"kerberos-password": {},
+}
+
+// redactMalformedServiceClaim implements fail-closed handling for sections
+// that claim a known credential-bearing fileservice service but do not
+// survive the production service CSV grammar (unbalanced quote, embedded
+// newline record). Claim detection compares only the token before the FIRST
+// comma with all surrounding quote chars de-quoted, so an ordinary local
+// path can never trigger it: a path whose prefix is exactly `s3,`/
+// `s3-opts,`/... before the final colon sits inside the service grammar's
+// claim zone the production loader also treats as a service path. Unknown
+// claims pass through as-is.
+// s3-no-key is credential-free and left untouched.
+func redactMalformedServiceClaim(section, file, fp string) string {
+	claim, _, ok := strings.Cut(section, ",")
+	if !ok {
+		return fp
+	}
+	// Reviewer witness: the service field itself may be a fully quoted
+	// CSV token ("s3-opts",key=K,"secret=S:file) or carry escaped/bare
+	// quote chars; dequote all surrounding quote chars so the exact
+	// service-name equality below still claims them, while ordinary local
+	// paths (including quoted ones that do not dequote to a service name)
+	// are never rewritten.
+	claim = strings.Trim(claim, `"`)
+	switch strings.ToLower(claim) {
+	case "s3", "minio", "s3-opts", "opts", "options", "hdfs":
+		if file == "" {
+			return claim + ",<redacted>"
+		}
+		return fileservice.JoinPath(claim+",<redacted>", file)
+	}
+	return fp
+}
+
+// maskServiceArgumentCredentialsForShowCreate redacts credential-bearing
+// service arguments from a saved INFILE FILEPATH before SHOW CREATE renders
+// it. The saved path may use fileservice's service-qualified forms:
+//
+//	SERVICE,args...:file          (get.go: parseFileServiceArguments)
+//	s3,endpoint,region,bucket,key,secret,prefix[,name]:file
+//	s3-opts|opts|options|hdfs,key=value,...:file
+//
+// SHOW CREATE output feeds mo-dump and snapshot/PITR replay (#31261), so
+// embedded credentials must not ship; a restored table then carries a
+// non-secret path and the owner re-supplies credentials, mirroring the
+// redacted foreignext 'config' convention. Only recognized credential-bearing
+// services are rewritten; ordinary local paths and unknown services are
+// returned byte-for-byte unchanged (SHOW CREATE rendering is never the place
+// that validates or fails a stored path). Sections that claim a known
+// service while failing the production grammar are fail-closed redacted
+// (redactMalformedServiceClaim for CSV errors, the credential-zone
+// positional mask, the colonless claim path, and the encode-failure
+// fallback): CREATE admission (InitInfileParam) validates only option keys
+// and never parses the path grammar, so malformed-but-credential-bearing
+// forms can be stored and would otherwise be rendered raw. Splitting uses the same rules as parseService
+// (plain comma split, CSV reader for quoted sections) and the service-name
+// separator is the LAST colon, so files named a:b.csv round-trip.
+func maskServiceArgumentCredentialsForShowCreate(fp string) string {
+	const sep = ":"
+	i := strings.LastIndex(fp, sep)
+	if i <= 0 {
+		// Under the production grammar (fileservice.ParsePath) a string
+		// without a usable service separator is an ordinary local path and is
+		// preserved byte-for-byte — except a colonless credential-claimed
+		// service form (s3-opts,key=K,secret=S), which fail-closed redacts.
+		return redactMalformedServiceClaim(fp, "", fp)
+	}
+	section := fp[:i]
+	file := fp[i+1:]
+
+	var fields []string
+	record := strings.TrimSuffix(section, "\n")
+	if record == "" {
+		return fp
+	}
+	if !strings.ContainsAny(record, "\"\r\n") {
+		fields = strings.Split(record, ",")
+	} else {
+		r := csv.NewReader(strings.NewReader(section))
+		records, err := r.ReadAll()
+		if err != nil || len(records) != 1 {
+			// Fail closed: CREATE admission (InitInfileParam) validates only
+			// option keys, never the path grammar, so a malformed but
+			// credential-bearing service section can be stored while reads
+			// fail only later at stat/list time. A claim-looking section is
+			// redacted rather than rendered raw.
+			return redactMalformedServiceClaim(section, file, fp)
+		}
+		fields = records[0]
+	}
+	if len(fields) == 0 {
+		return fp
+	}
+
+	changed := false
+	switch strings.ToLower(fields[0]) {
+	case "s3-opts", "opts", "options", "hdfs":
+		for j := 1; j < len(fields); j++ {
+			key, _, ok := strings.Cut(fields[j], "=")
+			if !ok {
+				continue
+			}
+			if _, cred := showCreateCredentialServiceArgKeys[strings.ToLower(key)]; cred {
+				fields[j] = key + "=<redacted>"
+				changed = true
+			}
+		}
+	case "s3", "minio":
+		// Production grammar (fileservice/get.go parseFileServiceArguments):
+		// argv = [endpoint region bucket key secret [prefix [name]]]; key sits
+		// at index 4 and secret at index 5. Mask each positional credential
+		// independently whenever it exists so a short-but-credential-bearing
+		// form (len==5 leaks argv[0..4], key included) is redacted, while
+		// canonical non-credential positions (prefix at 6, name at 7) and
+		// credential-free short forms (s3,ep:) stay byte-for-byte.
+		if len(fields) > 4 {
+			fields[4] = "<redacted>"
+			changed = true
+		}
+		if len(fields) > 5 {
+			fields[5] = "<redacted>"
+		}
+	default:
+		return fp
+	}
+	if !changed {
+		return fp
+	}
+	// Re-encode through the production service CSV encoder so fields carrying
+	// commas/quotes keep their exact value boundaries after redaction; every
+	// non-credential token must round-trip byte-faithfully for a replayed DDL.
+	// The encoder appends a line terminator the path parser tolerates but
+	// which has no place inside a rendered SQL string literal.
+	encoded, err := fileservice.EncodeServiceCSV(fields)
+	if err != nil {
+		// Presently unreachable (csv.Writer on strings.Builder cannot fail on
+		// decoded fields), but an encoding failure must never surface the
+		// credentials that were found: fail closed.
+		return fileservice.JoinPath(fields[0]+",<redacted>", file)
+	}
+	svcOut := strings.TrimSuffix(encoded, "\n")
+	svcOut = strings.TrimSuffix(svcOut, "\r")
+	return fileservice.JoinPath(svcOut, file)
+}
+
 func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam, sqlMode string) string {
+	// External tables must be recreatable from their own DDL: SHOW CREATE
+	// output feeds mo-dump restores and snapshot/PITR replay, so the read
+	// FILEPATH is preserved rather than masked (#24372 covered the
+	// Hive-partitioned scope, #31261 the ordinary infile scope), and empty
+	// optional keys are omitted because the read-side option validator rejects
+	// them (e.g. 'JSONDATA'=''). Credential-bearing S3 sources keep their
+	// masking in formatS3ExternalOptionsForShowCreate; a plain server-local
+	// path is not a secret, and masking it builds an unreadable table. An
+	// INFILE FILEPATH carrying object-storage service arguments
+	// (s3-opts,endpoint=...,key=...,secret=...:file) is different: #31261
+	// requires dumps to be secret-free, so credentials embedded in the path
+	// itself are redacted here (maskServiceArgumentCredentialsForShowCreate);
+	// the replayed DDL then keeps a non-secret path and the owner re-supplies
+	// credentials, mirroring the redacted foreignext 'config' convention.
+	parts := make([]string, 0, 7)
+	parts = append(parts,
+		formatStrLitForSQLMode("FILEPATH", sqlMode)+"="+formatStrLitForSQLMode(maskServiceArgumentCredentialsForShowCreate(param.Filepath), sqlMode))
+	appendInfileOptionForShowCreate(&parts, "COMPRESSION", param.CompressType, sqlMode)
+	appendInfileOptionForShowCreate(&parts, "FORMAT", param.Format, sqlMode)
+	appendInfileOptionForShowCreate(&parts, "JSONDATA", param.JsonData, sqlMode)
 	if pattern, writable := GetWriteFilePattern(param); writable {
-		// Writable external tables must be recreatable from their own DDL:
-		// snapshot/PITR restore replays SHOW CREATE output, so masking the
-		// read FILEPATH (or emitting empty optional keys, which the read-side
-		// option validator rejects — e.g. 'JSONDATA'='') would silently
-		// produce a table that can write but not read its files.
-		parts := make([]string, 0, 6)
-		appendInfileOptionForShowCreate(&parts, "FILEPATH", param.Filepath, sqlMode)
-		appendInfileOptionForShowCreate(&parts, "COMPRESSION", param.CompressType, sqlMode)
-		appendInfileOptionForShowCreate(&parts, "FORMAT", param.Format, sqlMode)
-		appendInfileOptionForShowCreate(&parts, "JSONDATA", param.JsonData, sqlMode)
+		// A writable external table must retain its write pattern or the
+		// recreated table silently degrades to read-only.
 		appendInfileOptionForShowCreate(&parts, "WRITE_FILE_PATTERN", pattern, sqlMode)
-		// The CSV reader skips lines whose raw prefix matches COMMENT (the writer
-		// encloses colliding first fields), so the marker affects readback and
-		// must round-trip; omitted when unset.
-		appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param), sqlMode)
-		return " INFILE{" + strings.Join(parts, ",") + "}"
 	}
-	filepath := ""
-	if param.HivePartitioning {
-		filepath = param.Filepath
-	}
-	parts := []string{
-		formatStrLitForSQLMode("FILEPATH", sqlMode) + "=" + formatStrLitForSQLMode(filepath, sqlMode),
-		formatStrLitForSQLMode("COMPRESSION", sqlMode) + "=" + formatStrLitForSQLMode(param.CompressType, sqlMode),
-		formatStrLitForSQLMode("FORMAT", sqlMode) + "=" + formatStrLitForSQLMode(param.Format, sqlMode),
-		formatStrLitForSQLMode("JSONDATA", sqlMode) + "=" + formatStrLitForSQLMode(param.JsonData, sqlMode),
-	}
-	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
-	// changes which rows are returned; round-trip it (omitted when unset).
+	// The CSV reader skips lines whose raw prefix matches COMMENT (the writer
+	// encloses colliding first fields), so the marker affects readback and
+	// must round-trip; omitted when unset.
 	appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param), sqlMode)
 	appendInfileOptionForShowCreate(&parts, "JSON_BINARY", param.JsonBinary, sqlMode)
 	appendHivePartitionOptionsForShowCreate(&parts, param, true, sqlMode)
@@ -1610,7 +1774,10 @@ func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam, sqlMode strin
 		}
 		appendExternalOptionForShowCreate(&parts, "bucket", param.S3Param.Bucket, false, sqlMode)
 	}
-	appendExternalOptionForShowCreate(&parts, "filepath", param.Filepath, false, sqlMode)
+	// A filepath string can be service-qualified with embedded credentials
+	// (fileservice service-argument grammar); redact the same way the INFILE
+	// branch does so SHOW CREATE/dump output never ships them.
+	appendExternalOptionForShowCreate(&parts, "filepath", maskServiceArgumentCredentialsForShowCreate(param.Filepath), false, sqlMode)
 	if param.S3Param != nil {
 		appendExternalOptionForShowCreate(&parts, "provider", param.S3Param.Provider, false, sqlMode)
 		appendExternalOptionForShowCreate(&parts, "role_arn", param.S3Param.RoleArn, false, sqlMode)

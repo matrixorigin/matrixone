@@ -1209,11 +1209,11 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 
 // JSON stores an encoded value; concatenation consumes its JSON text, including
 // quotes around JSON strings. Keep assignment CAST's unquoting contract separate.
-func concatStringValue(source types.T, value []byte) ([]byte, error) {
+func concatStringValue(ctx context.Context, source types.T, value []byte) ([]byte, error) {
 	if source != types.T_json {
 		return value, nil
 	}
-	return types.DecodeJson(value).MarshalJSON()
+	return marshalJSONForFloatStringProof(ctx, types.DecodeJson(value))
 }
 
 func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -1304,7 +1304,7 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 				apv = false
 				break
 			} else {
-				v, err := concatStringValue(parameters[j].GetType().Oid, v)
+				v, err := concatStringValue(proc.Ctx, parameters[j].GetType().Oid, v)
 				if err != nil {
 					return err
 				}
