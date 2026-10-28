@@ -31,10 +31,10 @@ bounded-work protocol.
 
 Index sync jobs now select their own ranges from their own watermarks and run
 in separate iterations, including when two index jobs or a normal consumer
-have identical ranges. The scheduler caps each non-snapshot range at the
-existing 30-minute timestamp span before dispatch or clean-table watermark
-advance. Initial snapshots use the worker's snapshot timestamp and are not
-bounded by this catch-up window.
+have identical ranges. The scheduler caps only index catch-up ranges at a
+30-minute timestamp span before dispatch or clean-table watermark advance.
+Other consumers keep their full selected range. Initial snapshots use the
+worker's snapshot timestamp and are not bounded by this catch-up window.
 
 ## Validation
 

@@ -55,9 +55,11 @@ func TestIndexCandidatesOwnTheirRanges(t *testing.T) {
 			for _, iter := range iters {
 				switch iter.jobNames[0] {
 				case "index_a", "index_b":
+					require.True(t, iter.indexJob)
 					require.Len(t, iter.jobNames, 1)
 					require.Equal(t, types.MaxTs(), iter.toTS)
 				case "consumer_a", "consumer_b":
+					require.False(t, iter.indexJob)
 					require.ElementsMatch(t, []string{"consumer_a", "consumer_b"}, iter.jobNames)
 					require.Equal(t, consumerFrom.Next(), iter.fromTS)
 				default:
@@ -86,20 +88,24 @@ func TestSharedCandidateCannotJoinIndexIteration(t *testing.T) {
 	}
 }
 
-func TestLimitIterationTimeSpan(t *testing.T) {
+func TestLimitIndexIterationTimeSpan(t *testing.T) {
 	from := types.BuildTS(time.Hour.Nanoseconds(), 5)
 	to := types.BuildTS(from.Physical()+2*DefaultMaxChangeInterval.Nanoseconds(), 0)
-	iter := &IterationContext{fromTS: from, toTS: to}
-	limitIterationTimeSpan(iter)
+	iter := &IterationContext{indexJob: true, fromTS: from, toTS: to}
+	limitIndexIterationTimeSpan(iter)
 	want := types.BuildTS(from.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0)
 	require.Equal(t, want, iter.toTS)
 
 	// The next range starts just after the persisted bound and is bounded too.
-	next := &IterationContext{fromTS: iter.toTS.Next(), toTS: to}
-	limitIterationTimeSpan(next)
+	next := &IterationContext{indexJob: true, fromTS: iter.toTS.Next(), toTS: to}
+	limitIndexIterationTimeSpan(next)
 	require.Equal(t, types.BuildTS(next.fromTS.Physical()+DefaultMaxChangeInterval.Nanoseconds(), 0), next.toTS)
 
-	within := &IterationContext{fromTS: from, toTS: types.BuildTS(from.Physical()+time.Minute.Nanoseconds(), 0)}
-	limitIterationTimeSpan(within)
+	within := &IterationContext{indexJob: true, fromTS: from, toTS: types.BuildTS(from.Physical()+time.Minute.Nanoseconds(), 0)}
+	limitIndexIterationTimeSpan(within)
 	require.Equal(t, types.BuildTS(from.Physical()+time.Minute.Nanoseconds(), 0), within.toTS)
+
+	ordinary := &IterationContext{fromTS: from, toTS: to}
+	limitIndexIterationTimeSpan(ordinary)
+	require.Equal(t, to, ordinary.toTS)
 }

@@ -172,6 +172,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 			iterations = append(iterations, &IterationContext{
 				tableID:   t.tableID,
 				accountID: t.accountID,
+				indexJob:  sinker.isIndexJob,
 				jobNames:  []string{sinker.jobName},
 				jobIDs:    []uint64{sinker.jobID},
 				lsn:       []uint64{sinker.currentLSN + 1},
@@ -221,6 +222,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 			iter := &IterationContext{
 				tableID:   t.tableID,
 				accountID: t.accountID,
+				indexJob:  sinker.isIndexJob,
 				jobNames:  []string{sinker.jobName},
 				jobIDs:    []uint64{sinker.jobID},
 				lsn:       []uint64{sinker.currentLSN + 1},

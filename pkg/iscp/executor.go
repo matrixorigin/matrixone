@@ -571,7 +571,7 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 				if iter.toTS.EQ(&maxTS) {
 					iter.toTS = toTS
 				}
-				limitIterationTimeSpan(iter)
+				limitIndexIterationTimeSpan(iter)
 				// For initialized iterctx (fromTS is empty), do not check whether the table has changed
 				ok := shouldProcessIteration(iter, getDirtyTablesFailed, minTS, tables)
 				table, tableExists := exec.getTable(iter.accountID, iter.tableID)
@@ -646,11 +646,11 @@ func (exec *ISCPTaskExecutor) run(ctx context.Context, worker Worker) {
 	}
 }
 
-// limitIterationTimeSpan bounds each scheduled change range before either a
-// worker or the clean-table watermark path can advance it. Init iterations
-// have no source range yet; their snapshot bound is chosen by the worker.
-func limitIterationTimeSpan(iter *IterationContext) {
-	if iter == nil || iter.fromTS.IsEmpty() {
+// limitIndexIterationTimeSpan bounds an index catch-up range before either a
+// worker or the clean-table watermark path can advance it. Init snapshots
+// have no source range yet; their bound is chosen by the worker.
+func limitIndexIterationTimeSpan(iter *IterationContext) {
+	if iter == nil || !iter.indexJob || iter.fromTS.IsEmpty() {
 		return
 	}
 	if iter.toTS.Physical()-iter.fromTS.Physical() > DefaultMaxChangeInterval.Nanoseconds() {
