@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -104,7 +105,7 @@ func (s *sortRollupState) init(group *Group) error {
 		}
 		s.keyIndices[i] = idx
 		typ := group.ctr.groupByEvaluate.Typ[idx]
-		if !sortRollupTypeEligible(typ) {
+		if !colexec.SortRollupTypeEligible(typ.Oid) {
 			return moerr.NewNotSupportedNoCtxf(
 				"sort rollup does not support grouping key type %s", typ.String())
 		}
@@ -224,25 +225,6 @@ func (s *sortRollupState) free(mp *mpool.MPool) {
 	s.finalized = false
 	s.haveLast = false
 	s.reuseSingleGroup = false
-}
-
-// sortRollupTypeEligible is intentionally narrower than the set of types
-// accepted by hash grouping. The sort child uses SQL ORDER semantics, while
-// hash grouping uses the equality key codec; FLOAT and JSON are known to have
-// representation/equality cases where those relations are not identical.
-func sortRollupTypeEligible(typ types.Type) bool {
-	switch typ.Oid {
-	case types.T_bool,
-		types.T_bit,
-		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
-		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_decimal64, types.T_decimal128, types.T_decimal256,
-		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
-		types.T_uuid, types.T_enum:
-		return true
-	default:
-		return false
-	}
 }
 
 func (s *sortRollupState) prepareWithinBatch(keyVecs []*vector.Vector) {
