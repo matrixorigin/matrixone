@@ -4289,6 +4289,14 @@ func SetBytesAtFrom(v *Vector, idx int, source *Vector, sourceRow int, mp *mpool
 func SetBytesAtWithBinaryString(
 	v *Vector, idx int, value []byte, binaryString bool, mp *mpool.MPool,
 ) error {
+	if v.bytesAlias(value) {
+		return v.withClonedBytes(value, mp, func(source []byte) error {
+			return SetBytesAtWithBinaryString(v, idx, source, binaryString, mp)
+		})
+	}
+	if err := v.MaterializeOwned(mp); err != nil {
+		return err
+	}
 	if err := v.preflightBinaryStringCopy(idx, binaryString, mp); err != nil {
 		return err
 	}
