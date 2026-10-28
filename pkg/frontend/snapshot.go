@@ -789,14 +789,20 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 	pubAccountName := string(stmt.AccountName)
 	pubName := string(stmt.PubName)
 
+	var dropPubRow *snapshotPublicationRow
+	var dropPhysID uint32
 	if len(pubAccountName) > 0 && len(pubName) > 0 {
 		tenantInfo := ses.GetTenantInfo()
 		currentAccount := tenantInfo.GetTenant()
-		accountID, _, err := lockAccountFromPublication(ctx, bh, pubAccountName, pubName, currentAccount, tenantInfo.GetTenantID())
+		// The authorization spine is unchanged (generation + the FOR UPDATE
+		// membership row); the resolved owner is the shape-aware physical
+		// source with the shared foreign-source gate (design §4.5 step 1).
+		dropPubRow, dropPhysID, err = lockPublicationSnapshotOwner(
+			ctx, bh, pubAccountName, pubName, currentAccount, tenantInfo.GetTenantID())
 		if err != nil {
 			return err
 		}
-		ctx = defines.AttachAccountId(ctx, uint32(accountID))
+		ctx = defines.AttachAccountId(ctx, dropPhysID)
 	}
 
 	// check snapshot exists or not
@@ -826,6 +832,19 @@ func doDropSnapshot(ctx context.Context, ses *Session, stmt *tree.DropSnapShot) 
 				"snapshot %q is managed by data branch and cannot be dropped directly",
 				string(stmt.Name),
 			)
+		}
+		if dropPubRow != nil {
+			// Coverage-and-identity scope binding (design §4.5 step 2, I7): a
+			// publication-routed drop deletes only a fully bound record; any
+			// record outside the publication's scope fails closed and stays.
+			pubRecordIface, pubRecordErr := getSnapshotByName(ctx, bh, string(stmt.Name))
+			if pubRecordErr != nil {
+				return pubRecordErr
+			}
+			if err = bindPublicationSnapshotRecordForDrop(
+				ctx, bh, dropPubRow, dropPhysID, pubRecordIface); err != nil {
+				return err
+			}
 		}
 		var viewMetadataEnabled bool
 		if viewMetadataEnabled, err = prepareViewMetadataMutation(ctx, bh, ses.GetService()); err != nil {
@@ -1062,6 +1081,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	// collect views and tables during table restoration
 	viewMap := make(map[string]*tableInfo)
+	databaseRecreated := false
 
 	switch stmt.Level {
 	case tree.RESTORELEVELACCOUNT:
@@ -1083,7 +1103,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	case tree.RESTORELEVELDATABASE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
 
-		if _, err = restoreToDatabase(ctx,
+		if databaseRecreated, err = restoreToDatabase(ctx,
 			ses.GetService(),
 			bh,
 			snapshotName,
@@ -1140,6 +1160,15 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			ctx, ses, bh, snapshotName, viewMap, toAccountId, sortedView, false,
 		); err != nil {
 			return
+		}
+	}
+
+	// A successful worker may deliberately skip a database (e.g. external
+	// foreign keys). Its live publications were not removed and must not replay.
+	if databaseRecreated {
+		if err = recreatePublicationsAfterDbRestoreTS(
+			ctx, ses.GetService(), bh, stmt.Level, dbName, restoreAccount, toAccountId, snapshot.ts, publicationOmittedViews(viewMap)); err != nil {
+			return stats, err
 		}
 	}
 
