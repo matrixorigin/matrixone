@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -46,9 +47,11 @@ func (r *recordingCtx) QryDatabase() string { return "db" }
 
 func (r *recordingCtx) OriginalTableDef() *plan.TableDef {
 	return &plan.TableDef{
-		Name:  "src",
-		TblId: 42,
-		Pkey:  &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Name:          "src",
+		TblId:         42,
+		Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "id"}, {Name: "vec", Typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}}},
+		Name2ColIndex: map[string]int32{"id": 0, "vec": 1},
 	}
 }
 
@@ -92,6 +95,11 @@ func hnswDefs(async string) map[string]*plan.IndexDef {
 			Parts:          []string{"vec"},
 		},
 	}
+}
+
+func withDict(defs map[string]*plan.IndexDef) map[string]*plan.IndexDef {
+	defs[catalog.Hnsw_TblType_Dict] = &plan.IndexDef{IndexName: "idx", IndexTableName: "__mo_dict", Parts: []string{"vec"}}
+	return defs
 }
 
 // --- handleCreate branches -------------------------------------------------
@@ -208,9 +216,14 @@ func TestGenDeleteSQL(t *testing.T) {
 	sqls, err := genDeleteSQL(hnswDefs(""), "db")
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		"DELETE FROM `db`.`__mo_meta`",
-		"DELETE FROM `db`.`__mo_store`",
+		"DELETE FROM `db`.`__mo_meta` WHERE TRUE",
+		"DELETE FROM `db`.`__mo_store` WHERE TRUE",
 	}, sqls)
+
+	defs := withDict(hnswDefs(""))
+	sqls, err = genDeleteSQL(defs, "db")
+	require.NoError(t, err)
+	require.Equal(t, "DELETE FROM `db`.`__mo_dict` WHERE TRUE", sqls[2])
 
 	for _, missing := range []string{catalog.Hnsw_TblType_Metadata, catalog.Hnsw_TblType_Storage} {
 		defs := hnswDefs("")
@@ -220,18 +233,23 @@ func TestGenDeleteSQL(t *testing.T) {
 	}
 }
 
-// The build statement CROSS APPLYs hnsw_create over the source table with the quoted
-// pk and vector columns.
+// The build statement calls hnsw_create alone; its config names the source table, its
+// columns and the hidden tables.
 func TestGenBuildSQL(t *testing.T) {
 	sqls, err := genBuildSQL(newRecordingCtx(), hnswDefs(""))
 	require.NoError(t, err)
 	require.Len(t, sqls, 1)
-	require.Contains(t, sqls[0], "hnsw_create(")
-	require.Contains(t, sqls[0], "`db`.`src`")
-	require.Contains(t, sqls[0], "`src`.`id`")
-	require.Contains(t, sqls[0], "`src`.`vec`")
-	require.Contains(t, sqls[0], `"metadata":"__mo_meta"`)
-	require.Contains(t, sqls[0], `"index":"__mo_store"`)
+	require.True(t, strings.HasPrefix(sqls[0], "SELECT f.* FROM hnsw_create('"), sqls[0])
+	require.NotContains(t, sqls[0], "CROSS APPLY")
+	for _, field := range []string{`"src":"src"`, `"pkey":"id"`, `"part":"vec"`, `"partwidth":3`,
+		`"metadata":"__mo_meta"`, `"index":"__mo_store"`} {
+		require.Contains(t, sqls[0], field)
+	}
+	require.NotContains(t, sqls[0], `"dict"`)
+
+	sqls, err = genBuildSQL(newRecordingCtx(), withDict(hnswDefs("")))
+	require.NoError(t, err)
+	require.Contains(t, sqls[0], `"dict":"__mo_dict"`)
 
 	for _, missing := range []string{catalog.Hnsw_TblType_Metadata, catalog.Hnsw_TblType_Storage} {
 		defs := hnswDefs("")

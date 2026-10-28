@@ -1023,7 +1023,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 	bindings []PreparedSourceBinding, values []any) (*PreparedExecutionPlan, error) {
 	previous := ctx.GetContext()
 	if tree.ParameterCount(stmt) != len(bindings) {
-		return nil, moerr.NewInvalidInput(previous, "Incorrect arguments to EXECUTE")
+		return nil, moerr.NewWrongArguments(previous, "EXECUTE")
 	}
 	planning := withPreparedSourceBindings(previous, bindings, values)
 	fieldTypes := newPreparedFieldTypeBinding(previous, stmt)

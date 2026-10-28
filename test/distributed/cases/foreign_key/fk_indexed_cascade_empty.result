@@ -237,7 +237,7 @@ insert into p_restrict values ('empty'),('other');
 insert into c_restrict values (2,'other');
 delete from p_restrict where id='empty';
 delete from p_restrict where id='other';
-internal error: Cannot delete or update a parent row: a foreign key constraint fails
+Cannot delete or update a parent row: a foreign key constraint fails
 select id from p_restrict order by id;
 id
 other

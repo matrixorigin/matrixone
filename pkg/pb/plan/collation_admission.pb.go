@@ -1432,6 +1432,9 @@ func (v *legacyCollationVisitor) walkQuery(p *Query) error {
 	if v.visited(p) {
 		return nil
 	}
+	if err := p.ValidateIntegerPrecision(); err != nil {
+		return err
+	}
 	for _, item0 := range p.Nodes {
 		if err := v.walkNode(item0); err != nil {
 			return err

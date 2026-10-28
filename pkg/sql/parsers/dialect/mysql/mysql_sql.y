@@ -161,6 +161,8 @@ func mergeIndexOption(left, right *tree.IndexOption) *tree.IndexOption {
         left.PositionFreeSet = true
     } else if len(right.IncludeColumns) > 0 {
         left.IncludeColumns = right.IncludeColumns
+    } else if len(right.TokenFilters) > 0 {
+        left.TokenFilters = right.TokenFilters
     }
     return left
 }
@@ -598,7 +600,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ BM25
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE FULLSCAN
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE FULLSCAN TOKEN_FILTER
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -10241,6 +10243,19 @@ index_option:
 	io.PositionFreeSet = true
 	$$ = io
     }
+|   TOKEN_FILTER equal_opt STRING
+    {
+	io := tree.NewIndexOption()
+	parts := strings.Split($3, ",")
+	names := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if n := strings.TrimSpace(p); n != "" {
+			names = append(names, n)
+		}
+	}
+	io.TokenFilters = names
+	$$ = io
+    }
 |    ASYNC
      {
 	io := tree.NewIndexOption()
@@ -15325,7 +15340,7 @@ keys:
 num_literal:
     INTEGRAL
     {
-        str := fmt.Sprintf("%v", $1)
+        str := $<str>1
         switch v := $1.(type) {
         case uint64:
             $$ = tree.NewNumVal(v, str, false, tree.P_uint64)
@@ -15353,7 +15368,7 @@ literal:
     }
 |   INTEGRAL
     {
-        str := fmt.Sprintf("%v", $1)
+        str := $<str>1
         switch v := $1.(type) {
         case uint64:
             $$ = tree.NewNumVal(v, str, false, tree.P_uint64)
@@ -16796,6 +16811,7 @@ non_reserved_keyword:
 |   MAX_POSTINGS_CAPACITY
 |   QUANTIZER_TRAIN_LIMIT
 |   POSITION_FREE
+|   TOKEN_FILTER
 |   FULLSCAN
 |   KEYS
 |   LANGUAGE
