@@ -6637,20 +6637,138 @@ func rejectMongoDBExternalTableOnUpdate(ctx context.Context, stmt *tree.CreateTa
 	return nil
 }
 
-// checkDropReferencedKeyForeignKeyDependency rejects removal of the exact
-// PRIMARY/UNIQUE key selected by a live child FK. ForeignKeyDef instances
-// written before ReferencedIndexName existed cannot prove which of several
-// compatible keys was historically selected, so every compatible key is
-// protected rather than guessing from today's index set and risking a stale
-// catalog binding.
-func checkDropReferencedKeyForeignKeyDependency(
+// foreignKeyBoundIndexRebind is one child foreign key whose recorded
+// parent-key index is being dropped and whose binding must move to another
+// surviving key.
+type foreignKeyBoundIndexRebind struct {
+	childDatabase  string
+	childTable     string
+	constraintName string
+	newIndexName   string
+}
+
+// foreignKeyReferencedIndexExists reports whether the parent currently has a
+// PRIMARY/UNIQUE key under the given name.
+func foreignKeyReferencedIndexExists(parentTableDef *TableDef, name string) bool {
+	if parentTableDef == nil || name == "" {
+		return false
+	}
+	if name == "PRIMARY" {
+		return parentTableDef.Pkey != nil
+	}
+	for _, index := range parentTableDef.Indexes {
+		if index.IndexName == name {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveForeignKeyBoundIndexDrops applies MySQL 8.0's equivalent-key
+// transition: dropping the PRIMARY/UNIQUE key recorded by a child foreign key
+// is allowed when another key covering the same columns survives the
+// statement, and every affected binding moves to that key, which persists
+// through GetSqlForUpdateFkReferencedIndex in the same DDL transaction.
+// Legacy foreign keys written before ReferencedIndexName existed cannot prove
+// which of several compatible keys was historically selected, so they keep the
+// original protection: the drop is rejected instead of guessed. When no
+// covering key survives, the original 1553 rejection is returned.
+// parentTableDef provides the authoritative columns, children, and primary
+// key; droppedIndexName/droppedColumns describe the key being dropped and
+// survivingDef must already exclude every key the statement removes.
+func resolveForeignKeyBoundIndexDrops(
 	ctx CompilerContext,
 	parentTableDef *TableDef,
-	indexName string,
+	droppedIndexName string,
+	droppedColumns []string,
+	survivingDef *TableDef,
 	ignoredSelfForeignKeys map[string]struct{},
-) error {
-	return CheckDropReferencedKeyForeignKeyDependency(ctx.GetContext(), parentTableDef, indexName, ignoredSelfForeignKeys,
-		func(id uint64) (*plan.TableDef, error) { _, def, err := ctx.ResolveById(id, nil); return def, err })
+) ([]foreignKeyBoundIndexRebind, error) {
+	if len(droppedColumns) == 0 || len(parentTableDef.RefChildTbls) == 0 {
+		return nil, nil
+	}
+	rebinds := make([]foreignKeyBoundIndexRebind, 0)
+	for _, childTableID := range parentTableDef.RefChildTbls {
+		selfReference := childTableID == 0 || childTableID == parentTableDef.TblId
+		childTableDef := parentTableDef
+		childDatabase := parentTableDef.DbName
+		childTable := parentTableDef.Name
+		if !selfReference {
+			childObjRef, resolved, resolveErr := ctx.ResolveById(childTableID, nil)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			if resolved == nil {
+				return nil, moerr.NewInternalErrorf(ctx.GetContext(),
+					"The reference foreign key table %d does not exist", childTableID)
+			}
+			childTableDef = resolved
+			childDatabase = childObjRef.SchemaName
+			childTable = childObjRef.ObjName
+		}
+
+		for _, fk := range childTableDef.Fkeys {
+			if fk.ForeignTbl != parentTableDef.TblId && !(selfReference && fk.ForeignTbl == 0) {
+				continue
+			}
+			if selfReference {
+				if _, ignored := ignoredSelfForeignKeys[fk.Name]; ignored {
+					continue
+				}
+			}
+
+			referredColumns := make([]string, len(fk.ForeignCols))
+			for i, columnID := range fk.ForeignCols {
+				column := FindColumnByColId(parentTableDef.Cols, columnID)
+				if column == nil {
+					return nil, moerr.NewInternalErrorf(ctx.GetContext(),
+						"foreign key %s references missing column id %d", fk.Name, columnID)
+				}
+				referredColumns[i] = column.Name
+			}
+
+			if fk.ReferencedIndexName == "" {
+				// Legacy metadata: protect every compatible key rather than
+				// guessing which one was historically selected.
+				if foreignKeyReferencedColumnsMatch(droppedColumns, referredColumns) {
+					return nil, moerr.NewErrDropIndexNeededInForeignKey(ctx.GetContext(), droppedIndexName)
+				}
+				continue
+			}
+			if fk.ReferencedIndexName != droppedIndexName {
+				if !foreignKeyReferencedIndexExists(parentTableDef, fk.ReferencedIndexName) {
+					// The recorded binding names a key this parent no longer
+					// has: catalog binding updates applied by an earlier
+					// rebind may not be visible in this resolved child yet.
+					// Restore the bound-key invariant instead of silently
+					// skipping, or the last covering key could be dropped.
+					selected, matched := selectForeignKeyReferencedIndex(survivingDef, referredColumns)
+					if !matched {
+						return nil, moerr.NewErrDropIndexNeededInForeignKey(ctx.GetContext(), droppedIndexName)
+					}
+					rebinds = append(rebinds, foreignKeyBoundIndexRebind{
+						childDatabase:  childDatabase,
+						childTable:     childTable,
+						constraintName: fk.Name,
+						newIndexName:   selected,
+					})
+				}
+				continue
+			}
+
+			selected, matched := selectForeignKeyReferencedIndex(survivingDef, referredColumns)
+			if !matched {
+				return nil, moerr.NewErrDropIndexNeededInForeignKey(ctx.GetContext(), droppedIndexName)
+			}
+			rebinds = append(rebinds, foreignKeyBoundIndexRebind{
+				childDatabase:  childDatabase,
+				childTable:     childTable,
+				constraintName: fk.Name,
+				newIndexName:   selected,
+			})
+		}
+	}
+	return rebinds, nil
 }
 
 // CheckDropReferencedKeyForeignKeyDependency protects the selected key using
@@ -6776,8 +6894,33 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		} else {
 			return nil, moerr.NewInternalErrorf(ctx.GetContext(), "not found index: %s", requestedIndexName)
 		}
-	} else if err := checkDropReferencedKeyForeignKeyDependency(ctx, tableDef, dropIndex.IndexName, nil); err != nil {
-		return nil, err
+	} else {
+		// MySQL equivalent-key transition: when the dropped key is recorded by
+		// a child foreign key but another key covering the same columns
+		// remains, the drop is allowed and the binding moves there. Route such
+		// drops through ALTER so the rebind SQL travels in the same DDL
+		// transaction, exactly as functional-index drops do below.
+		survivingDef := DeepCopyTableDef(tableDef, true)
+		survivingDef.Indexes = RemoveIf(survivingDef.Indexes, func(indexDef *plan.IndexDef) bool {
+			return indexDef.IndexName == resolvedIndexName
+		})
+		var droppedColumns []string
+		for _, indexDef := range tableDef.Indexes {
+			if indexDef.IndexName == resolvedIndexName {
+				droppedColumns = indexDef.Parts
+				break
+			}
+		}
+		rebinds, resolveErr := resolveForeignKeyBoundIndexDrops(
+			ctx, tableDef, resolvedIndexName, droppedColumns, survivingDef, nil)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if len(rebinds) > 0 {
+			return buildAlterTable(&tree.AlterTable{Table: stmt.TableName, Options: tree.AlterTableOptions{
+				&tree.AlterOptionDrop{Typ: tree.AlterTableDropIndex, Name: tree.Identifier(resolvedIndexName)},
+			}}, ctx)
+		}
 	}
 
 	return &Plan{
@@ -7088,6 +7231,15 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	var detectSqls []string
 	var updateSqls []string
 	var renameFkSqls []string
+	// Keys dropped by this statement that a child foreign key may still record
+	// as its referenced index. They are resolved after the whole statement has
+	// been processed so that same-statement key additions count as survivors,
+	// matching MySQL's final-key-set binding transition.
+	type droppedForeignKeyKey struct {
+		indexName string
+		columns   []string
+	}
+	var droppedForeignKeyKeys []droppedForeignKeyKey
 	uniqueIndexInfos := make([]*tree.UniqueIndex, 0)
 	secondaryIndexInfos := make([]*tree.Index, 0)
 	// Planning must consume ALTER actions in statement order without mutating
@@ -7138,8 +7290,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				resolvedName, found := resolveIndexName(currentTableDef.Indexes, constraintName)
 				if found {
 					constraintName = resolvedName
-					if err := checkDropReferencedKeyForeignKeyDependency(ctx, currentTableDef, constraintName, nil); err != nil {
-						return nil, err
+					for _, indexDef := range currentTableDef.Indexes {
+						if indexDef.IndexName == constraintName {
+							droppedForeignKeyKeys = append(droppedForeignKeyKeys, droppedForeignKeyKey{
+								indexName: constraintName,
+								columns:   indexDef.Parts,
+							})
+							break
+						}
 					}
 					name_not_found = false
 				}
@@ -7757,6 +7915,22 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 				unsupportedErrFmt,
 				formatTreeNode(opt),
 			)
+		}
+	}
+
+	for _, dropped := range droppedForeignKeyKeys {
+		rebinds, dropErr := resolveForeignKeyBoundIndexDrops(
+			ctx, currentTableDef, dropped.indexName, dropped.columns, currentTableDef, nil)
+		if dropErr != nil {
+			return nil, dropErr
+		}
+		for _, rebind := range rebinds {
+			sql := GetSqlForUpdateFkReferencedIndex(
+				rebind.childDatabase, rebind.childTable,
+				rebind.constraintName, rebind.newIndexName)
+			if !slices.Contains(updateSqls, sql) {
+				updateSqls = append(updateSqls, sql)
+			}
 		}
 	}
 

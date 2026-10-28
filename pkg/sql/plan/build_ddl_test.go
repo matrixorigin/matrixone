@@ -7302,11 +7302,23 @@ func TestDropSelectedForeignKeyIndexIsRejected(t *testing.T) {
 					mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
 					mock.ctxt.id2name[child.TblId] = child.Name
 
-					_, err := runOneStmt(mock, t, sql)
-					require.Error(t, err)
-					require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+					plan, err := runOneStmt(mock, t, sql)
+					if referencedIndexName == "" {
+						require.Error(t, err)
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+					} else {
+						// MySQL equivalent-key transition: the recorded key can be
+						// dropped while an equivalent unique key remains, and the
+						// binding moves to that key in the same DDL transaction.
+						require.NoError(t, err)
+						fkSqls := plan.GetDdl().GetAlterTable().GetUpdateFkSqls()
+						require.Len(t, fkSqls, 1)
+						require.Contains(t, fkSqls[0], "referenced_index_name")
+						require.Contains(t, fkSqls[0], "idx_alternative")
+						require.Contains(t, fkSqls[0], "fk_child_parent")
+					}
 
-					plan, err := runOneStmt(mock, t, "drop index idx_unrelated on test_idx")
+					plan, err = runOneStmt(mock, t, "drop index idx_unrelated on test_idx")
 					require.NoError(t, err)
 					require.Equal(t, "idx_unrelated", plan.GetDdl().GetDropIndex().GetIndexName())
 
@@ -7345,6 +7357,236 @@ func TestAlterCanDropSelfForeignKeyAndItsSelectedIndexTogether(t *testing.T) {
 	require.Len(t, logicPlan.GetDdl().GetAlterTable().GetActions(), 2)
 }
 
+func TestAlterDropBoundIndexRebindsToSameStatementReplacement(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	parent := mock.ctxt.tables["test_idx"]
+	parent.TblId = 100
+	parent.Pkey = nil
+	parent.RefChildTbls = []uint64{200}
+	parent.Indexes = []*plan.IndexDef{
+		{IndexName: "idx1", Unique: true, Parts: []string{"n_nationkey"}},
+	}
+	child := &TableDef{
+		Name:  "fk_child",
+		TblId: 200,
+		Fkeys: []*plan.ForeignKeyDef{{
+			Name:                "fk_child_parent",
+			ForeignTbl:          parent.TblId,
+			ForeignCols:         []uint64{parent.Cols[0].ColId},
+			ReferencedIndexName: "idx1",
+		}},
+	}
+	mock.ctxt.tables[child.Name] = child
+	mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+	mock.ctxt.id2name[child.TblId] = child.Name
+
+	logicPlan, err := runOneStmt(mock, t,
+		"alter table test_idx drop index idx1, add unique index uk_new(n_nationkey)")
+	require.NoError(t, err)
+	fkSqls := logicPlan.GetDdl().GetAlterTable().GetUpdateFkSqls()
+	require.Len(t, fkSqls, 1)
+	require.Contains(t, fkSqls[0], "referenced_index_name")
+	require.Contains(t, fkSqls[0], "uk_new")
+	require.Contains(t, fkSqls[0], "fk_child_parent")
+}
+
+func TestDropForeignKeyBoundIndexWithoutAlternativeIsRejected(t *testing.T) {
+	for _, sql := range []string{
+		"drop index idx1 on test_idx",
+		"alter table test_idx drop index idx1",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			parent := mock.ctxt.tables["test_idx"]
+			parent.TblId = 100
+			parent.Pkey = nil
+			parent.RefChildTbls = []uint64{200}
+			parent.Indexes = []*plan.IndexDef{
+				{IndexName: "idx1", Unique: true, Parts: []string{"n_nationkey"}},
+				{IndexName: "idx_unrelated", Unique: true, Parts: []string{"n_name"}},
+			}
+			child := &TableDef{
+				Name:  "fk_child",
+				TblId: 200,
+				Fkeys: []*plan.ForeignKeyDef{{
+					Name:                "fk_child_parent",
+					ForeignTbl:          parent.TblId,
+					ForeignCols:         []uint64{parent.Cols[0].ColId},
+					ReferencedIndexName: "idx1",
+				}},
+			}
+			mock.ctxt.tables[child.Name] = child
+			mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+			mock.ctxt.id2name[child.TblId] = child.Name
+
+			_, err := runOneStmt(mock, t, sql)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+		})
+	}
+}
+
+func TestDropForeignKeyIndexRepairsStaleClaimMetadata(t *testing.T) {
+	t.Run("stale claim without survivor keeps the rejection", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		parent := mock.ctxt.tables["test_idx"]
+		parent.TblId = 100
+		parent.Pkey = nil
+		parent.RefChildTbls = []uint64{200}
+		parent.Indexes = []*plan.IndexDef{
+			{IndexName: "idx_now", Unique: true, Parts: []string{"n_nationkey"}},
+		}
+		child := &TableDef{
+			Name:  "fk_child",
+			TblId: 200,
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:                "fk_child_parent",
+				ForeignTbl:          parent.TblId,
+				ForeignCols:         []uint64{parent.Cols[0].ColId},
+				ReferencedIndexName: "idx_stale_gone",
+			}},
+		}
+		mock.ctxt.tables[child.Name] = child
+		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+		mock.ctxt.id2name[child.TblId] = child.Name
+
+		_, err := runOneStmt(mock, t, "alter table test_idx drop index idx_now")
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+	})
+
+	t.Run("stale claim rebinds to a covering survivor", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		parent := mock.ctxt.tables["test_idx"]
+		parent.TblId = 100
+		parent.Pkey = nil
+		parent.RefChildTbls = []uint64{200}
+		parent.Indexes = []*plan.IndexDef{
+			{IndexName: "idx_drop_me", Unique: true, Parts: []string{"n_nationkey"}},
+			{IndexName: "idx_stays", Unique: true, Parts: []string{"n_nationkey"}},
+		}
+		child := &TableDef{
+			Name:  "fk_child",
+			TblId: 200,
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:                "fk_child_parent",
+				ForeignTbl:          parent.TblId,
+				ForeignCols:         []uint64{parent.Cols[0].ColId},
+				ReferencedIndexName: "idx_stale_gone",
+			}},
+		}
+		mock.ctxt.tables[child.Name] = child
+		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+		mock.ctxt.id2name[child.TblId] = child.Name
+
+		logicPlan, err := runOneStmt(mock, t, "alter table test_idx drop index idx_drop_me")
+		require.NoError(t, err)
+		fkSqls := logicPlan.GetDdl().GetAlterTable().GetUpdateFkSqls()
+		require.Len(t, fkSqls, 1)
+		require.Contains(t, fkSqls[0], "referenced_index_name")
+		require.Contains(t, fkSqls[0], "idx_stays")
+		require.Contains(t, fkSqls[0], "fk_child_parent")
+	})
+}
+
+func TestAlterCompoundDropsLeaveNoCoveringSurvivorIsRejected(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	parent := mock.ctxt.tables["test_idx"]
+	parent.TblId = 100
+	parent.Pkey = nil
+	parent.RefChildTbls = []uint64{200}
+	parent.Indexes = []*plan.IndexDef{
+		{IndexName: "idx1", Unique: true, Parts: []string{"n_nationkey"}},
+		{IndexName: "idx2", Unique: true, Parts: []string{"n_nationkey"}},
+	}
+	child := &TableDef{
+		Name:  "fk_child",
+		TblId: 200,
+		Fkeys: []*plan.ForeignKeyDef{{
+			Name:                "fk_child_parent",
+			ForeignTbl:          parent.TblId,
+			ForeignCols:         []uint64{parent.Cols[0].ColId},
+			ReferencedIndexName: "idx1",
+		}},
+	}
+	mock.ctxt.tables[child.Name] = child
+	mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+	mock.ctxt.id2name[child.TblId] = child.Name
+
+	// Both covering keys vanish with the statement, so the final key set has
+	// no survivor and the compound drop must keep the 1553 rejection.
+	_, err := runOneStmt(mock, t, "alter table test_idx drop index idx1, drop index idx2")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+}
+
+func TestDropSelfReferencingBoundIndexRebinds(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	tableDef := mock.ctxt.tables["test_idx"]
+	tableDef.TblId = 100
+	tableDef.Pkey = nil
+	tableDef.RefChildTbls = []uint64{0}
+	tableDef.Indexes = []*plan.IndexDef{
+		{IndexName: "idx1", Unique: true, Parts: []string{"n_nationkey"}},
+		{IndexName: "idx_stays", Unique: true, Parts: []string{"n_nationkey"}},
+	}
+	tableDef.Fkeys = []*plan.ForeignKeyDef{{
+		Name:                "fk_self",
+		ForeignTbl:          0,
+		ForeignCols:         []uint64{tableDef.Cols[0].ColId},
+		ReferencedIndexName: "idx1",
+	}}
+
+	logicPlan, err := runOneStmt(mock, t, "alter table test_idx drop index idx1")
+	require.NoError(t, err)
+	fkSqls := logicPlan.GetDdl().GetAlterTable().GetUpdateFkSqls()
+	require.Len(t, fkSqls, 1)
+	require.Contains(t, fkSqls[0], "referenced_index_name")
+	require.Contains(t, fkSqls[0], "idx_stays")
+	require.Contains(t, fkSqls[0], "fk_self")
+}
+
+func TestDropBoundIndexRebindsEveryBoundChild(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	parent := mock.ctxt.tables["test_idx"]
+	parent.TblId = 100
+	parent.Pkey = nil
+	parent.RefChildTbls = []uint64{200, 300}
+	parent.Indexes = []*plan.IndexDef{
+		{IndexName: "idx1", Unique: true, Parts: []string{"n_nationkey"}},
+		{IndexName: "idx2", Unique: true, Parts: []string{"n_nationkey"}},
+	}
+	for _, spec := range []struct {
+		name string
+		id   uint64
+		fk   string
+	}{{"fk_child_one", 200, "fk_child_one"}, {"fk_child_two", 300, "fk_child_two"}} {
+		child := &TableDef{
+			Name:  spec.name,
+			TblId: spec.id,
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:                spec.fk,
+				ForeignTbl:          parent.TblId,
+				ForeignCols:         []uint64{parent.Cols[0].ColId},
+				ReferencedIndexName: "idx1",
+			}},
+		}
+		mock.ctxt.tables[child.Name] = child
+		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+		mock.ctxt.id2name[child.TblId] = child.Name
+	}
+
+	logicPlan, err := runOneStmt(mock, t, "alter table test_idx drop index idx1")
+	require.NoError(t, err)
+	fkSqls := logicPlan.GetDdl().GetAlterTable().GetUpdateFkSqls()
+	require.Len(t, fkSqls, 2)
+	for i, childFk := range []string{"fk_child_one", "fk_child_two"} {
+		require.Contains(t, fkSqls[i], childFk, childFk)
+		require.Contains(t, fkSqls[i], "idx2", childFk)
+		require.Contains(t, fkSqls[i], "referenced_index_name", childFk)
+	}
+}
+
 func TestDropReferencedPrimaryKeyIsRejected(t *testing.T) {
 	for _, referencedIndexName := range []string{"PRIMARY", ""} {
 		mock := NewMockOptimizer(true, nil)
@@ -7381,10 +7623,66 @@ func TestDropReferencedPrimaryKeyIsRejected(t *testing.T) {
 			}),
 		)
 
+		// The default test_idx mock ships a unique idx1 covering the primary
+		// column, so MySQL's equivalent-key transition lets a persisted PRIMARY
+		// binding drop the key and rebind to idx1 inside the same DDL
+		// transaction; legacy bindings keep the conservative rejection.
+		logicPlan, err := runOneStmt(mock, t, "alter table test_idx drop primary key")
+		if referencedIndexName == "" {
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
+		} else {
+			require.NoError(t, err)
+			fkSqls := logicPlan.GetDdl().GetAlterTable().GetUpdateFkSqls()
+			require.Len(t, fkSqls, 1)
+			require.Contains(t, fkSqls[0], "referenced_index_name")
+			require.Contains(t, fkSqls[0], "idx1")
+			require.Contains(t, fkSqls[0], "fk_child_primary")
+		}
+	}
+
+	t.Run("no covering survivor keeps the rejection", func(t *testing.T) {
+		mock := NewMockOptimizer(true, nil)
+		parent := mock.ctxt.tables["test_idx"]
+		parent.TblId = 100
+		parent.RefChildTbls = []uint64{200}
+		parent.Indexes = []*plan.IndexDef{
+			{IndexName: "idx_other", Unique: true, Parts: []string{"n_name"}},
+		}
+		child := &TableDef{
+			Name:  "fk_child_primary",
+			TblId: 200,
+			Fkeys: []*plan.ForeignKeyDef{{
+				Name:                "fk_child_primary",
+				ForeignTbl:          parent.TblId,
+				ForeignCols:         []uint64{parent.Cols[0].ColId},
+				ReferencedIndexName: "PRIMARY",
+			}},
+		}
+		mock.ctxt.tables[child.Name] = child
+		mock.ctxt.objects[child.Name] = &ObjectRef{SchemaName: "tpch", ObjName: child.Name}
+		mock.ctxt.id2name[child.TblId] = child.Name
+		proc := testutil.NewProc(t)
+		proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+		mock.ctxt.GetProcessFunc = func() *process.Process { return proc }
+		setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
+			executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+				require.Equal(t,
+					"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = 100", sql)
+				result := executor.NewMemResult(
+					[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+				)
+				result.NewBatchWithRowCount(1)
+				require.NoError(t, executor.AppendStringRows(result, 0, []string{"idx_other"}))
+				require.NoError(t, executor.AppendFixedRows(result, 1, []int8{1}))
+				return result.GetResult(), nil
+			}),
+		)
+
 		_, err := runOneStmt(mock, t, "alter table test_idx drop primary key")
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrDropIndexNeededInForeignKey), err.Error())
-	}
+	})
 }
 
 func TestCreateForeignKeyUsesLegacyCatalogBeforeTenantUpgrade(t *testing.T) {

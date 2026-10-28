@@ -99,8 +99,20 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 
 func DropPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, alterCtx *AlterTableContext) error {
 	tableDef := alterPlan.CopyTableDef
-	if err := checkDropReferencedKeyForeignKeyDependency(ctx, tableDef, "PRIMARY", nil); err != nil {
+	// MySQL equivalent-key transition: dropping the primary key recorded by a
+	// child foreign key is allowed when another key covering the same columns
+	// survives; the binding moves there through the ALTER's FK catalog
+	// updates. Legacy bindings and keyless survivors keep the 1553 rejection.
+	survivingDef := DeepCopyTableDef(tableDef, true)
+	survivingDef.Pkey = nil
+	rebinds, err := resolveForeignKeyBoundIndexDrops(
+		ctx, tableDef, "PRIMARY", tableDef.Pkey.Names, survivingDef, nil)
+	if err != nil {
 		return err
+	}
+	for _, rebind := range rebinds {
+		alterCtx.UpdateSqls = append(alterCtx.UpdateSqls, GetSqlForUpdateFkReferencedIndex(
+			rebind.childDatabase, rebind.childTable, rebind.constraintName, rebind.newIndexName))
 	}
 	if tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), "PRIMARY")
