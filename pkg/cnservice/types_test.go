@@ -20,11 +20,46 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCatalogUpgradeObjectLimitConfig(t *testing.T) {
+	const serviceID = "catalog-upgrade-limit-config"
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(serviceID, rt)
+	t.Cleanup(func() { moruntime.CompareAndDeleteServiceBasedRuntime(serviceID, rt) })
+	for _, tc := range []struct {
+		name  string
+		value uint64
+		want  uint64
+		bad   bool
+	}{
+		{name: "default", want: bootstrap.DefaultCatalogUpgradeObjectBytes},
+		{name: "minimum", value: bootstrap.CatalogUpgradePageBytes, want: bootstrap.CatalogUpgradePageBytes},
+		{name: "larger object", value: 128 << 20, want: 128 << 20},
+		{name: "below page budget", value: bootstrap.CatalogUpgradePageBytes - 1, bad: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{UUID: serviceID, UpgradeCatalogObjectLimit: tc.value}
+			err := cfg.Validate()
+			if tc.bad {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig), "%v", err)
+				require.ErrorContains(t, err, "cn.upgrade-catalog-object-limit")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, cfg.UpgradeCatalogObjectLimit)
+		})
+	}
+	var cfg Config
+	_, err := toml.Decode("upgrade-catalog-object-limit = 134217728", &cfg)
+	require.NoError(t, err)
+	require.Equal(t, uint64(128<<20), cfg.UpgradeCatalogObjectLimit)
+}
 
 func TestISCPConfigurationCadences(t *testing.T) {
 	const serviceID = "iscp-cadence-config"
