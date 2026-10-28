@@ -82,8 +82,9 @@ func (bc *BindContext) bindVirtualTimestampRead(binding *Binding, pos, depth int
 	// already contain display strings. Match that projection's representation;
 	// ordinary table scans still expose the storage value to baseBinder, which
 	// owns their display conversion.
-	if int(pos) < len(binding.types) && isEnumOrSetPlanType(&computed.Typ) &&
-		!isEnumOrSetPlanType(binding.types[pos]) {
+	if binding.virtualTimestampTable != nil && int(pos) < len(binding.types) &&
+		binding.types[pos] != nil && types.T(binding.types[pos].Id).IsMySQLString() &&
+		isEnumOrSetPlanType(&computed.Typ) {
 		var err error
 		computed, err = makeEnumOrSetDisplayValue(bc.builder.GetContext(), computed)
 		if err != nil {
@@ -169,7 +170,8 @@ func adaptVirtualTimestampProjectionInputs(ctx context.Context, expr *plan.Expr,
 		}
 	}
 	if pos < 0 || int(pos) >= len(table.Cols) || int(pos) >= len(binding.types) || binding.types[pos] == nil ||
-		table.Cols[pos] == nil || !isEnumOrSetPlanType(&table.Cols[pos].Typ) || isEnumOrSetPlanType(binding.types[pos]) {
+		table.Cols[pos] == nil || !isEnumOrSetPlanType(&table.Cols[pos].Typ) ||
+		!types.T(binding.types[pos].Id).IsMySQLString() {
 		return expr, nil
 	}
 	storage := &table.Cols[pos].Typ
