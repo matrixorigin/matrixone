@@ -479,6 +479,7 @@ if [[ "$1" == test ]]; then
 #!/bin/bash
 if [[ "$*" == *-test.list=* ]]; then
  printf 'TestOne\n'
+ if [[ "$PHASE" == shards ]]; then printf 'TestTwo\n'; fi
  if [[ "$PHASE" == list ]]; then printf 'ready\n' >&8; read -r _ <&9; fi
  exit 0
 fi
@@ -496,6 +497,7 @@ func TestHelperCancellationOwnership(t *testing.T) {
 	for _, tc := range []struct{ helper, phase, mode string }{
 		{"plan", "metadata", "cancel"}, {"plan", "build", "cancel"},
 		{"plan", "list", "cancel"}, {"plan", "shard", "cancel"},
+		{"plan", "shards", "cancel"},
 		{"engine", "metadata", "duplicate"}, {"plan", "metadata", "duplicate"},
 		{"engine", "metadata", "failed-drain"}, {"plan", "metadata", "failed-drain"},
 		{"prebuild", "build", "failed-drain"},
@@ -516,12 +518,12 @@ func TestHelperCancellationOwnership(t *testing.T) {
 						occurrence = 1
 					case "list":
 						occurrence = 2
-					case "shard":
+					case "shard", "shards":
 						anchor = "            shard_pids[shard]=$!\n"
 					}
 				}
 				expected := 1
-				if tc.helper == "plan" && tc.phase != "shard" {
+				if tc.helper == "plan" && tc.phase != "shard" && tc.phase != "shards" {
 					expected = 3
 				}
 				if strings.Count(text, anchor) != expected {
@@ -534,6 +536,9 @@ func TestHelperCancellationOwnership(t *testing.T) {
 						offset += len(anchor)
 					}
 				}
+				if tc.phase == "shards" {
+					offset += len(anchor) // Both PIDs must be owned before cancellation.
+				}
 				return text[:offset] + "    ut_test_publication \"$!\"\n" + text[offset:]
 			}
 			script := `source ./run_ut.sh UT
@@ -542,6 +547,7 @@ ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
 ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
 PLAN_RACE_SHARDS=1
 PLAN_RACE_PARALLEL=1
+if [[ "$PHASE" == shards ]]; then PLAN_RACE_SHARDS=2; PLAN_RACE_PARALLEL=2; fi
 mkfifo "$CASE_DIR/ready" "$CASE_DIR/hold"
 exec 8<>"$CASE_DIR/ready" 9<>"$CASE_DIR/hold"
 function cleanup_check() {
@@ -550,6 +556,13 @@ function cleanup_check() {
  if [[ -s "$CASE_DIR/child.pid" ]]; then
   pid=$(<"$CASE_DIR/child.pid")
   if ut_process_group_alive "$pid"; then kill -KILL -- -"$pid" 2>/dev/null || true; status=91; fi
+ fi
+ if [[ "$PHASE" == shards ]]; then
+  [[ $(wc -l < "$CASE_DIR/child.pids") == 2 ]] || status=94
+  while read -r pid; do
+   if ut_process_group_alive "$pid"; then kill -KILL -- -"$pid" 2>/dev/null || true; status=95; fi
+  done < "$CASE_DIR/child.pids"
+  [[ -f "${PLAN_RACE_REPORT}.00" && -f "${PLAN_RACE_REPORT}.01" && ! -e "${PLAN_RACE_REPORT}.ready" ]] || status=96
  fi
  if [[ "$MODE" == failed-drain ]]; then
   [[ -e "$(<"$CASE_DIR/artifact")" && ! -e "$CASE_DIR/joined" ]] || status=92
@@ -568,6 +581,15 @@ function terminate_ut_process_groups() {
  [[ "$MODE" != failed-drain ]]
 }
 function ut_test_publication() {
+ if [[ "$PHASE" == shards ]]; then
+  printf '%s\n' "$1" >> "$CASE_DIR/child.pids"
+  if [[ $(wc -l < "$CASE_DIR/child.pids") == 2 ]]; then
+   read -r -t 10 _ <&8 || exit 97
+   read -r -t 10 _ <&8 || exit 97
+   kill -TERM $$
+  fi
+  return
+ fi
  read -r _ <&8
  printf '%s\n' "$1" > "$CASE_DIR/child.pid"
  if [[ "$MODE" == failed-drain ]]; then
