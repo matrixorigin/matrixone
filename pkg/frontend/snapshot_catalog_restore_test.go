@@ -28,6 +28,61 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type roleGrantRestoreExec struct {
+	*backgroundExecTest
+	from, to uint32
+}
+
+func (e *roleGrantRestoreExec) ExecRestore(ctx context.Context, sql string, from, to uint32) error {
+	e.from, e.to = from, to
+	return e.backgroundExecTest.ExecRestore(ctx, sql, from, to)
+}
+
+func TestRestoreRoleGrantsKeepsTargetCatalog(t *testing.T) {
+	const columns = "granted_id,grantee_id,operation_role_id,operation_user_id,granted_time,with_grant_option"
+	const deletion = "delete from mo_catalog.mo_role_grant"
+	insert := fmt.Sprintf("insert into mo_catalog.mo_role_grant (%s) select %s from mo_catalog.mo_role_grant {MO_TS = 42}", columns, columns)
+	for _, tc := range []struct {
+		name         string
+		from, to     uint32
+		fail         string
+		wantCommands int
+	}{
+		{name: "same account", from: 7, to: 7, wantCommands: 2},
+		{name: "different accounts", from: 7, to: 9, wantCommands: 2},
+		{name: "delete failure", from: 7, to: 7, fail: deletion, wantCommands: 1},
+		{name: "insert failure", from: 7, to: 7, fail: insert, wantCommands: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := &backgroundExecTest{}
+			base.init()
+			injected := errors.New("restore failed")
+			if tc.fail != "" {
+				base.sql2err[tc.fail] = injected
+			}
+			bh := &roleGrantRestoreExec{backgroundExecTest: base}
+			err := restoreRoleGrantsAfterObjects(&systemCatalogRestoreContext{
+				ctx: t.Context(), bh: bh, snapshotTS: 42, sourceAccount: tc.from, targetAccount: tc.to,
+			})
+			if tc.fail != "" {
+				require.ErrorIs(t, err, injected)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Len(t, bh.executedSQLs, tc.wantCommands)
+			require.Equal(t, deletion, bh.executedSQLs[0])
+			require.Equal(t, tc.to, bh.executionAccountIDs[0])
+			if tc.wantCommands == 2 {
+				require.Equal(t, insert, bh.executedSQLs[1])
+			}
+			if tc.from != tc.to {
+				require.Equal(t, tc.from, bh.from)
+				require.Equal(t, tc.to, bh.to)
+			}
+		})
+	}
+}
+
 func TestInsertRolePrivilegeRestoreRows(t *testing.T) {
 	ctx := defines.AttachAccountId(t.Context(), 20)
 	for _, count := range []int{0, 255, 256, 257, 512} {
@@ -336,12 +391,8 @@ func TestValidateSystemCatalogRestoreHandlersRejectsIncompleteRegistry(t *testin
 	require.ErrorContains(t, validateSystemCatalogRestoreHandlers(t.Context()), "has multiple handlers")
 
 	handlerErr := errors.New("handler failed")
-	systemCatalogPostRestoreHandlers = []systemCatalogPostRestoreHandler{{
-		tableName: "mo_role_privs",
-		handler: func(*systemCatalogRestoreContext) error {
-			return handlerErr
-		},
-	}}
+	systemCatalogPostRestoreHandlers = slices.Clone(originalHandlers)
+	systemCatalogPostRestoreHandlers[0].handler = func(*systemCatalogRestoreContext) error { return handlerErr }
 	require.ErrorIs(t, restoreSystemCatalogsAfterObjects(t.Context(), "", nil, 0, 0, 0), handlerErr)
 
 	systemCatalogPostRestoreHandlers = originalHandlers
