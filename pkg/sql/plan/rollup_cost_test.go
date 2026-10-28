@@ -52,13 +52,18 @@ func TestSortRollupCostModelSelectsFromKnownStats(t *testing.T) {
 	small := buildAutoRollupPlanSQLWithStats(t, 100,
 		`select a, b, c, count(*) from select_test.bind_select
 		 group by a, b, c with rollup`, 1, 1, 1)
-	require.True(t, planHasSortRollup(small.GetQuery()),
-		"one scan plus sort should win for a small three-level input")
+	require.False(t, planHasSortRollup(small.GetQuery()),
+		"known small cardinality does not replace a global input-order proof")
+	ordered := buildAutoRollupPlanSQLWithStats(t, 100,
+		`select d.a,d.b,d.c,count(*) from
+		 (select a,b,c from select_test.bind_select order by a,b,c) d
+		 group by d.a,d.b,d.c with rollup`, 1, 1, 1)
+	require.True(t, planHasSortRollup(ordered.GetQuery()))
 }
 
 func TestRollupAlgorithmVariableControlsPlanner(t *testing.T) {
 	cost := buildAutoRollupPlanWithAlgorithm(t, 100, "a, b, c", "COST", 1, 1, 1)
-	require.True(t, planHasSortRollup(cost.GetQuery()))
+	require.False(t, planHasSortRollup(cost.GetQuery()))
 
 	forcedSort := buildAutoRollupPlanWithAlgorithm(t, 500_000, "a, b", "SORT")
 	require.True(t, planHasSortRollup(forcedSort.GetQuery()),
@@ -68,7 +73,7 @@ func TestRollupAlgorithmVariableControlsPlanner(t *testing.T) {
 	require.False(t, planHasSortRollup(forcedHash.GetQuery()))
 }
 
-func TestSortRollupCostModelUsesFilterCardinality(t *testing.T) {
+func TestSortRollupCostModelKeepsUnorderedFilteredInputOnHash(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
 	defer func() {
@@ -82,14 +87,11 @@ func TestSortRollupCostModelUsesFilterCardinality(t *testing.T) {
 	// shared protocol baseline has a dedicated cost-model assertion below.
 	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2,sharedComputation=1")
 
-	// The table is large enough that the unfiltered estimate favors hash. The
-	// isolated probe binds WHERE and charges the filtered cardinality instead.
-	// Equality keeps the filtered cardinality deterministic across planner
-	// selectivity changes while still contrasting with the unfiltered table.
+	// Selectivity may reduce estimated work, but cannot establish global order.
 	planWithFilter := buildAutoRollupPlanWithStats(t, 500_000,
 		"a, b", "where a = 1")
-	require.True(t, planHasSortRollup(planWithFilter.GetQuery()),
-		"a selective WHERE should make the one-pass path cheaper")
+	require.False(t, planHasSortRollup(planWithFilter.GetQuery()),
+		"a selective WHERE must not bypass COST's existing-order requirement")
 }
 
 func TestSortRollupCostModelUsesOrderedDerivedSource(t *testing.T) {
@@ -178,7 +180,10 @@ func TestSortRollupCostModelHonorsHashOverride(t *testing.T) {
 	}()
 	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2,rollupSort=2")
 
-	queryPlan := buildAutoRollupPlanWithStats(t, 100, "a, b, c")
+	queryPlan := buildAutoRollupPlanSQLWithStats(t, 100,
+		`select d.a,d.b,d.c,count(*) from
+		 (select a,b,c from select_test.bind_select order by a,b,c) d
+		 group by d.a,d.b,d.c with rollup`, 1, 1, 1)
 	require.False(t, planHasSortRollup(queryPlan.GetQuery()))
 }
 
@@ -195,7 +200,9 @@ func TestSortRollupCostModelFallsBackWithoutStats(t *testing.T) {
 	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2")
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
-		`select a, b, count(*) from select_test.bind_select group by a, b with rollup`, 1)
+		`select d.a,d.b,count(*) from
+		 (select a,b from select_test.bind_select order by a,b) d
+		 group by d.a,d.b with rollup`, 1)
 	require.NoError(t, err)
 	queryPlan, err := BuildPlan(NewMockCompilerContext(true, newPlanTestProcess(t)), stmts[0], false)
 	require.NoError(t, err)
@@ -662,9 +669,11 @@ func TestSortRollupCostModelRejectsVariableWidthValueAggregate(t *testing.T) {
 	}()
 	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2")
 
+	const orderedFrom = ` from (select a from select_test.bind_select order by a) d group by d.a with rollup`
+	control := buildAutoRollupPlanSQLWithStats(t, 100, `select d.a,count(*)`+orderedFrom, 1, 1, 1)
+	require.True(t, planHasSortRollup(control.GetQuery()))
 	queryPlan := buildAutoRollupPlanSQLWithStats(t, 100,
-		`select a, min(repeat('x', 1048576))
-		 from select_test.bind_select group by a with rollup`)
+		`select d.a, min(repeat('x', 1048576))`+orderedFrom, 1, 1, 1)
 	require.False(t, planHasSortRollup(queryPlan.GetQuery()),
 		"a variable-width MIN argument must not use an unsafe fixed-state estimate")
 }
@@ -879,6 +888,14 @@ func buildAutoRollupPlanSQLWithAlgorithm(
 	t *testing.T, rows float64, sql, algorithm string, ndvs ...float64,
 ) *Plan {
 	t.Helper()
+	return buildAutoRollupPlanSQLWithControls(t, rows, sql, algorithm,
+		"determineShuffle=2,sharedComputation=1", ndvs...)
+}
+
+func buildAutoRollupPlanSQLWithControls(
+	t *testing.T, rows float64, sql, algorithm, hints string, ndvs ...float64,
+) *Plan {
+	t.Helper()
 	rt := moruntime.ServiceRuntime("")
 	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
 	t.Cleanup(func() {
@@ -890,7 +907,7 @@ func buildAutoRollupPlanSQLWithAlgorithm(
 	})
 	// This helper exercises algorithm controls against the unshared fallback;
 	// shared protocol calibration is covered by the direct cost-model probe.
-	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2,sharedComputation=1")
+	rt.SetGlobalVariables("optimizer_hints", hints)
 
 	mock := NewMockCompilerContext(true, newPlanTestProcess(t))
 	table := mock.tables["bind_select"]
