@@ -115,8 +115,9 @@ func TestLegacyFloatScratchStorageBound(t *testing.T) {
 			}
 			ready, done := make(chan held, 4), make(chan error, 4)
 			release := make(chan struct{})
+			joined := false
 			defer func() {
-				if release != nil {
+				if !joined {
 					close(release)
 					for range compilers {
 						<-done
@@ -185,11 +186,11 @@ func TestLegacyFloatScratchStorageBound(t *testing.T) {
 				bytes += state.initialBytes
 			}
 			close(release)
-			release = nil
 			var cleanupErrors [4]error
 			for i := range cleanupErrors {
 				cleanupErrors[i] = <-done
 			}
+			joined = true
 			for _, err := range cleanupErrors {
 				require.NoError(t, err)
 			}
