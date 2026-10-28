@@ -5703,7 +5703,16 @@ func (txn *Transaction) FinalizeCommitWithUnknownResult(ctx context.Context) {
 // the retained pending names retire WITHOUT deletion (their records own
 // the fate: publish on commit, the coordinator's rollback transfer on
 // failure), and any remotely-recorded names release as published. No
-// local storage I/O runs at all.
+// local storage I/O runs at all. The transfer then tears down the
+// mirror workspace's LOCAL state through the same delTransaction the
+// other terminals end with (issue #25590 round-55 review): the copied
+// mpool batches a flush consumer's source.Write staged in this
+// workspace, the workspace index's accounting, the transaction's own
+// segment-map claims — released per claim, so an entry a recording
+// workspace re-registered stays serving that workspace — and the
+// process/compact/quota references all retire with the run, because no
+// other terminal ever reaches a settled mirror workspace again: an
+// idle-but-live completed mirror is itself the leak.
 //
 // transferred=false — the run failed or was cancelled, so the statement
 // fails everywhere and the in-flight names share one deletion fate: the
@@ -5718,7 +5727,6 @@ func (txn *Transaction) FinalizeRemoteFragmentWorkspace(
 		return txn.Rollback(ctx)
 	}
 	txn.Lock()
-	defer txn.Unlock()
 	// r6 (issue #25590 round-22 review): the reservation drain runs FIRST —
 	// leftover reservations (a fragment writer the coordinator never
 	// recorded) adopt this terminal as their last reachable owner and join
@@ -5729,6 +5737,7 @@ func (txn *Transaction) FinalizeRemoteFragmentWorkspace(
 	names := txn.pendingObjectCleanupNames()
 	txn.pendingObjectCleanup = nil
 	txn.releaseRecordedUnpublishedObjectsLocked()
+	txn.Unlock()
 	if txn.engine != nil && len(names) > 0 {
 		txn.engine.releaseUnpublishedPendingPublished(names)
 	}
@@ -5737,6 +5746,16 @@ func (txn *Transaction) FinalizeRemoteFragmentWorkspace(
 		zap.Int("retained-names-released", len(names)),
 		zap.String("txn", hex.EncodeToString(txn.op.Txn().ID)),
 	)
+	// Local workspace teardown, identical in shape to FinalizeCommit's
+	// lock-settle-unlock-teardown ordering (issue #25590 round-55
+	// review): delTransaction releases only CN-local state — the staged
+	// entry batches, the workspace index accounting, the transaction's
+	// own segment-map claims — and intentionally performs no
+	// storage I/O, so the objects the coordinator adopted remain
+	// untouched on exactly the transferred-name fate the settlement
+	// above recorded. delTransaction requires the caller to hold no
+	// transaction lock.
+	txn.delTransaction()
 	return nil
 }
 

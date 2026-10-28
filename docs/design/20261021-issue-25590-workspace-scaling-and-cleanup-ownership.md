@@ -5510,3 +5510,171 @@ registration is admitted independently of producer admission). No
 invariant, scope, validation or change-map content differs from the
 approved r17; the implementation turn executes exactly that change set
 against the reviewed owner paths.
+
+## 10 design review record - round 54 (implementation follow-up): an idle cached plan's delegate drops its execution-scoped capacity hook at Reset
+
+The request-changes review on PR #30988 head `622a803baf` (mo-bot job
+`c081744340e4e323db79a2f3`, P2 at `pkg/sql/colexec/multi_update/s3writer_delegate.go:292`)
+found: a cached UpdateWriteS3 operator persists data, unwinds before
+metadata publication, and is reset; its transaction then finalizes while
+the prepared plan remains idle. The persistent insert sinkers keep
+their `WithUncommittedCapacityHook` closure — installed by
+`dumpSinkerCapacityOption` (txn.go: `SinkerCapacityOption`), which
+captures the Transaction — alive across Reset, so the idle plan kept
+the completed workspace's remaining history, backing arrays and
+process references reachable until another Prepare or Free: completed
+long-transaction memory pinned independently of every object-admission
+bound.
+
+Trigger analysis (design gate): the round-35 rebind contract already
+decides which workspace every execution's spills reserve against, and
+this finding adds no decision about admission bounds, teardown
+ownership or scope — it releases an execution-scoped reference the
+approved ownership model leaves retained past its transaction's
+terminal. An ordinary focused defect fix, recorded here as an
+implementation follow-up; no invariant, boundary or policy text
+changes.
+
+Confirmed reproduction and root cause: Reset is the one idle boundary
+every cached execution crosses, and the round-35 rebind proved the
+Prepare path re-arms each persistent sinker with the CURRENT
+statement's workspace before any spill can run — so the retained
+completed-workspace reference after Reset is used by nothing, only
+held. The source chain (`s3writer_delegate.reset` keeps the sinker and
+its hook; `MultiUpdate.Reset` runs it; `prepare` is the rebind point)
+confirms the retention shape exactly as the review measured it.
+
+Decision (inside the approved terminal set): the delegate's reset clears
+every persistent insert sinker's capacity hook AFTER the unrecorded-name
+ownership handoff and the sinkers' own quiescing reset — the
+execution-scoped binding ends at the execution's idle boundary — while
+the sinkers themselves (buffer pools, arenas) stay back exactly as the
+reuse contract requires. `CNS3Writer.ClearWorkspaceSinkerCapacity`
+joins `RebindWorkspaceSinkerCapacity` as the Reset-side half of the
+round-35 rebind contract; a fresh execution's Prepare re-arms each
+sinker with the current workspace before any spill.
+
+Validation (logs under `/tmp/issue25590-r55/`, the round's handler
+artifacts):
+
+- RED on the pre-fix tree (production files stashed to the
+  `622a803baf` shape, tests present): both new regressions fail exactly
+  at the defect contract —
+  `TestMultiUpdateResetDropsCompletedExecutionCapacityHook` at
+  "reset drops the execution-scoped capacity hook" (hook still armed)
+  and `TestMultiUpdateResetReleasesCompletedWorkspaceRetention` at the
+  same drop assertion
+  (`red-multiupdate.log`, exit 1).
+- GREEN on the fixed tree, same filters: same tests pass
+  (`focused-multiupdate-retention.log` exit 0, then
+  `race-multiupdate.log` and `green-multiupdate-full.log` for the
+  package-level and race legs), the reclamation oracle included — a
+  hook-captured probe collects under forced GC while the delegate AND
+  its sinkers stay alive, so the collection claim cannot pass through
+  weakening the reuse contract; the next execution's Prepare re-arms
+  the binding (workspace-2 spill consults the current workspace only).
+
+## 10 design review record - round 55 (implementation follow-up): the transferred fragment settlement tears down its local workspace, and segment claims retire per ledger
+
+The request-changes review on PR #30988 head `622a803baf` (inline
+finding at `pkg/sql/compile/remoterunServer.go:331` P1): when
+`transferred` is true, `FinalizeRemoteFragmentWorkspace` releases the
+object-name accounting and returns without calling `delTransaction`;
+the false leg calls Rollback, which performs the full local teardown. A
+remote scope can carry both UpdateWriteS3 and UpdateFlushS3Info on one
+single-CPU source scope, the flush consumer's source.Write stages
+copied mpool batches in the fragment's mirror workspace and registers
+its CN segments — and no other terminal ever reaches a settled mirror
+workspace again, so every successful fragment's local state leaks:
+the staged batches' memory and the segment registrations, forever.
+
+Trigger analysis (design gate): the r5/r6 one-of terminal set, the
+adoption-before-drain barrier, the recorded-name fate and the
+shutdown-only policy are all unchanged. What the finding corrects is
+the transferred terminal's completeness BELOW the ledger settlement —
+the mirror's own local state — which the design's cleanup-ownership
+mandate (every stateful component closes every terminal path) already
+requires; nothing about the transfer protocol, the admission
+bound, or any recorded-name fate changes. An implementation follow-up,
+no new design revision.
+
+Supersession of the round-49 record's transferred-leg clause: round 49
+kept the transferred settlement from retiring segments reasoning that
+its registrations "keep serving the same transaction's reads ...
+until the transaction ends" — but no terminal ever visits the settled
+mirror, so on the transferred leg that end never came: the entry was
+not serving so much as retained forever (this review's leak). The
+visibility half of round-49's concern is real in exactly one shape: a
+coordinator whose record choke re-registers the adopted name on the
+SAME CN claims the identical (txnID, table, segment) entry in the
+RECORDING workspace's ledger (production:
+publishStagedWorkspaceRecordLocked -> PutCnSegment), and the
+adoption-before-ACK barrier (r17) guarantees that record precedes the
+fragment's settlement. So the two review-established constraints —
+round-49's "survives while a live claimant needs it" and round-55's
+"no claim outlives its owner" — reconcile to per-claim retirement:
+
+- `Server.PutCnSegment` counts one claim per DISTINCT ledger key: the
+  registering workspace's ledger dedupes re-registrations, and a key a
+  DIFFERENT ledger claimed gains a second claim.
+- `Server.RetireTxnWorkspaceSegments` releases exactly its ledger's
+  claims and deletes an entry only at the last claim — the mirror's
+  settlement now releases its own claim (a sole-claim registration
+  attached to nothing retires with it; a dual-claimed entry keeps
+  serving the recording workspace's routing until that workspace's
+  own terminal retires the last claim).
+- The zero-ledger fast path (read-only fragments) is unchanged.
+
+Decision (inside the approved terminal set): `FinalizeRemoteFragmentWorkspace(_, true)` settles the ledger obligations exactly as
+before (reservations, pending names, recorded-name release), then —
+after dropping the transaction lock, mirroring FinalizeCommit's
+settle-under-lock/teardown-after-unlock ordering — runs
+`delTransaction`, which releases only CN-local state: the staged
+entry batches' mpool memory, the workspace index accounting, and the
+transaction's own segment claims. No storage I/O runs, so the objects
+the coordinator adopted stay untouched on exactly the recorded-name
+fate: publish on its commit, the coordinator's rollback transfer on
+its failure. The failed leg's Rollback shape is unchanged and keeps
+sharing the same `delTransaction`, so both legs of the one-of terminal
+end in the same local state.
+
+Deliberately unchanged, recorded for round completeness:
+
+- The deletion writer's per-statement sinkers close in their own
+  lifecycle and hold nothing across executions; the finding is scoped
+  to the multi_update delegate, and no other operator needed touching.
+- The pending-name, reservation and recorded-name settlements on the
+  transferred leg are byte-identical to the r6 protocol; only the
+  local teardown follows them now.
+- The failed leg (`Rollback`) and every other `delTransaction` caller
+  are unchanged.
+
+Validation (logs under `/tmp/issue25590-r55/`, the round's handler
+artifacts):
+
+- RED on the pre-fix tree (production files stashed to the
+  `622a803baf` shape, tests present):
+  `TestIssue25590TransferredFragmentSettlementTearsDownLocalWorkspace`
+  fails at "a successful transfer terminates the mirror workspace — no
+  other terminal ever reaches it" (`red-disttae-teardown.log`, exit 1);
+  `TestTxnWorkspaceSegmentsRetireOnlyWhenLastClaimRetires` fails at
+  "the recording workspace's claim keeps the entry routing while that
+  workspace is live" — the parent's whole-key deletion removed the
+  entry the recording claim still needed
+  (`red-colexec-dualclaim.log`, exit 1).
+- GREEN on the fixed tree, same tests: the transferred settlement
+  restores the mirror's mpool baseline (on-heap outstanding restored
+  to the pre-stage baseline), retires the mirror's sole-claim
+  registration, keeps both probed objects on the filesystem (the
+  coordinator's recorded names own their fate), retires the
+  workspace accounting and pending obligations, and leaves the
+  re-claimed entry routing until the recording workspace's own
+  terminal — where the LAST claim retires it
+  (`green-disttae-transfer.log` exit 0 for the full transfer family
+  including the five pre-existing settlement legs and the round-49
+  segment-retirement regression unchanged;
+  `focused-colexec-segments.log` exit 0 for the whole
+  `TestTxnWorkspaceSegments` family; `race-colexec-disttae.log` and
+  `race-multiupdate.log` for the race legs;
+  `green-disttae-issue25590.log` / `green-colexec-full.log` /
+  `green-multiupdate-full.log` for the owning-package sweeps).

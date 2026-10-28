@@ -134,3 +134,136 @@ func newIssue25590SharedOpWorkspaceForTest(t *testing.T, op client.TxnOperator) 
 	txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
 	return txn
 }
+
+// TestIssue25590TransferredFragmentSettlementTearsDownLocalWorkspace
+// pins the round-55 request-changes finding (PR #30988, inline
+// remoterunServer.go:331): a successful remote fragment's settlement —
+// FinalizeRemoteFragmentWorkspace(_, true) — released the object-name
+// accounting and returned, while the failed leg ran the full workspace
+// Rollback teardown. A single-CPU source scope carrying both
+// UpdateWriteS3 and UpdateFlushS3Info stages copied mpool batches in
+// the fragment's mirror workspace and registers its CN segments, and
+// NOTHING ever revisits a settled mirror workspace again — so an
+// idle-but-live completed mirror keeps its staged batches and its
+// segment registrations forever: the settlement's own local state.
+//
+// The successful transfer must therefore tear down the local workspace
+// WITHOUT deleting the objects the coordinator adopted:
+//
+//   - the staged copied batches release, restoring the mpool baseline
+//     while the sinkers' files stay on the filesystem for the recording
+//     side's records (no storage I/O runs);
+//   - the mirror's own segment-map claims release — a sole-claim
+//     registration retires with the settlement (pre-fix this leaves
+//     the map entry leaked), while an entry the recording workspace
+//     re-claimed — what the coordinator's record choke does for an
+//     adopted object on the same CN — keeps serving that workspace's
+//     routing until its own terminal (round-49's visibility contract,
+//     now per-claim), and the recording workspace's rollback retires
+//     it as the last claim.
+func TestIssue25590TransferredFragmentSettlementTearsDownLocalWorkspace(t *testing.T) {
+	writer, _, failFS, tbl := newR32MaterializingFixture(t)
+	ctx := context.Background()
+	mp := writer.proc.Mp()
+	server := colexec.MustGetServer(writer.engine.service)
+	txnID := writer.op.Txn().ID
+
+	// The workspace the coordinator re-records on: one mirror bound to
+	// the SAME user txn operator, exactly the shape the coordinator's
+	// recording workspace carries on this CN.
+	recorder := newIssue25590SharedOpWorkspaceForTest(t, writer.op)
+
+	stats := mockStatsList(t, 2)
+	bats := make([]*batch.Batch, 0, 2)
+	defer func() {
+		for _, bat := range bats {
+			bat.Clean(mp)
+		}
+	}()
+	names := make([]string, 0, 2)
+	for i := range stats {
+		probeStats := stats[i]
+		names = append(names, probeStats.ObjectName().String())
+		recBat := colexec.AllocCNS3ResultBat(false)
+		bats = append(bats, recBat)
+		require.NoError(t, colexec.ExpandObjectStatsToBatch(
+			mp, false, recBat, false, probeStats))
+		require.NoError(t, writeObjectToFS(ctx, failFS, names[i]))
+	}
+
+	baseline := mp.OnHeapCurrNB()
+	require.False(t, writer.removed, "the mirror workspace is live before its settlement")
+
+	// Write 1 — the mirror is the ONLY workspace that claims this
+	// segment: the fragment-CN shape where no re-record happens.
+	require.NoError(t, writer.WriteFile(
+		INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
+		names[0], bats[0], writer.tnStores[0]))
+
+	// Write 2 — the same publish plus the coordinator's re-record claim:
+	// after the adoption barrier hands the name to the recording side,
+	// the record choke's publishStagedWorkspaceRecordLocked claims the
+	// same (txnID, table, segment) entry in the RECORDING workspace's
+	// ledger on this CN.
+	require.NoError(t, writer.WriteFile(
+		INSERT, 1, tbl.db.databaseId, tbl.tableId, "db", tbl.tableName,
+		names[1], bats[1], writer.tnStores[0]))
+	sidSole := stats[0].ObjectName().ObjectId().Segment()
+	sidClaimed := stats[1].ObjectName().ObjectId().Segment()
+	server.PutCnSegment(&recorder.workspaceSegments, txnID, tbl.tableId,
+		sidClaimed, colexec.TxnWorkspaceUnCommitType)
+
+	require.False(t, writer.removed)
+	require.Greater(t, mp.OnHeapCurrNB(), baseline,
+		"the downstream source.Write's staged copies are live mirror-workspace memory before the settlement")
+	require.Equal(t, int32(colexec.TxnWorkspaceUnCommitType),
+		server.GetCnSegmentType(sidSole, tbl.tableId, txnID),
+		"the mirror registered its persisted object's segment")
+	require.Equal(t, int32(colexec.TxnWorkspaceUnCommitType),
+		server.GetCnSegmentType(sidClaimed, tbl.tableId, txnID),
+		"the recording workspace's re-record sees the segment it claimed")
+	require.NotZero(t, writer.workspaceSize,
+		"the mirror's workspace accounting carries its staged entries")
+
+	// The successful fragment's terminal: transfer the objects, then
+	// tear down the local workspace state.
+	require.NoError(t, writer.FinalizeRemoteFragmentWorkspace(ctx, true))
+
+	// Local teardown without deleting adopted objects: the local state
+	// of a settled mirror retires exactly, and the stored objects stay
+	// on the filesystem for the recording side's records.
+	require.True(t, writer.removed,
+		"a successful transfer terminates the mirror workspace — no other terminal ever reaches it")
+	require.Equal(t, baseline, mp.OnHeapCurrNB(),
+		"the transferred settlement released every staged copy — the successful-transfer mpool baseline (on-heap) is restored")
+	require.Zero(t, writer.workspaceSize,
+		"the workspace accounting is torn down with the recorded-name settlement")
+	require.Empty(t, writer.pendingObjectCleanupNames(),
+		"the settlement left no pending cleanup obligations behind")
+	require.Contains(t, failFS.persistedSnapshot(), names[0],
+		"an adopted object's file stays exactly where its record owns its fate")
+	require.Contains(t, failFS.persistedSnapshot(), names[1],
+		"the re-claimed object's file stays on the same transferred-name fate")
+
+	// Segment claims: the mirror's sole-claim registration retired with
+	// the settlement — the leak the review found — while the entry the
+	// recording workspace re-claimed keeps serving that workspace's
+	// routing until ITS terminal (round-49's same-transaction
+	// visibility, released per claim now).
+	require.Zero(t, server.GetCnSegmentType(sidSole, tbl.tableId, txnID),
+		"the mirror's sole segment claim retired with its local workspace teardown")
+	require.Equal(t, int32(colexec.TxnWorkspaceUnCommitType),
+		server.GetCnSegmentType(sidClaimed, tbl.tableId, txnID),
+		"the recording workspace's claim keeps the entry routing while that workspace lives")
+
+	// The recording workspace's own terminal is the LAST claim on
+	// its entry: the dual-claimed registration cannot outlive every
+	// owner either, and its objects stay untouched by that terminal's
+	// own storage fate — the transfer already handed the names' fate
+	// to the records.
+	require.NoError(t, recorder.FinalizeRemoteFragmentWorkspace(ctx, false))
+	require.Zero(t, server.GetCnSegmentType(sidClaimed, tbl.tableId, txnID),
+		"the recording workspace's terminal released the entry's last claim")
+	require.Contains(t, failFS.persistedSnapshot(), names[1],
+		"the mirror-side settlement never handed the adopted object's storage fate anywhere but its record")
+}

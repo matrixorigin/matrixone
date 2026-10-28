@@ -148,6 +148,56 @@ func TestTxnWorkspaceSegmentsRetireEmptyNeverOpensSegmentMutex(t *testing.T) {
 	srv.cnSegmentMap.Unlock()
 }
 
+// TestTxnWorkspaceSegmentsRetireOnlyWhenLastClaimRetires pins the
+// round-55 review contract (PR #30988): two workspaces of ONE
+// transaction can claim the same map entry — a remote fragment's mirror
+// registers a persisted segment, and the coordinator that adopts and
+// records the transferred object registers it again in the recording
+// workspace's ledger on the same CN. A successful fragment's settlement
+// must release ITS claim without deleting an entry another live claim
+// still needs (round-49's visibility contract: the recording
+// workspace's reads keep routing until that workspace's own terminal),
+// and the LAST claim retires the entry so no workspace's settlement can
+// leak a sole registration forever.
+func TestTxnWorkspaceSegmentsRetireOnlyWhenLastClaimRetires(t *testing.T) {
+	srv := newSegmentMapTestServer(t)
+
+	txnID := []byte("one-distributed-txn")
+	const table = uint64(77)
+	mirror := &TxnWorkspaceSegments{}
+	recorder := &TxnWorkspaceSegments{}
+
+	sid := objectio.NewSegmentid()
+
+	// The fragment mirror registers the transferred object's segment;
+	// the coordinator's re-record claims the same entry in its own
+	// ledger — exactly what publishStagedWorkspaceRecordLocked's
+	// PutCnSegment does for the adopted record.
+	srv.PutCnSegment(mirror, txnID, table, sid, TxnWorkspaceUnCommitType)
+	srv.PutCnSegment(recorder, txnID, table, sid, TxnWorkspaceUnCommitType)
+
+	require.Equal(t, int32(TxnWorkspaceUnCommitType),
+		srv.GetCnSegmentType(sid, table, txnID),
+		"the dual-claimed entry is visible while either workspace lives")
+
+	// The successful fragment's terminal releases ONLY the mirror's
+	// claim: the entry keeps serving the recording workspace — round-49's
+	// same-transaction visibility — but the mirror's settlement no
+	// longer leaves the entry claimed by a workspace nothing ever
+	// revisits.
+	srv.RetireTxnWorkspaceSegments(mirror)
+	require.Equal(t, int32(TxnWorkspaceUnCommitType),
+		srv.GetCnSegmentType(sid, table, txnID),
+		"the recording workspace's claim keeps the entry routing while that workspace is live")
+
+	// The recording workspace's own terminal is the LAST claim: the
+	// entry — reachable while its claims lived — retires with it, so the
+	// dual-claim shape cannot outlive every owner either.
+	srv.RetireTxnWorkspaceSegments(recorder)
+	require.Zero(t, srv.GetCnSegmentType(sid, table, txnID),
+		"the last claim's terminal removes the entry — no dual-claimed entry outlives its owners")
+}
+
 // BenchmarkRetireTxnWorkspaceSegments measures the settlement-side cost
 // of segment retirement against the foreign-segment population the
 // issue #25590 review found on live CNs (its diagnostic overlay measured

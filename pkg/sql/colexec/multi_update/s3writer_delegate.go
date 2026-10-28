@@ -1027,6 +1027,22 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 		}
 	}
 
+	// Now that the retained-name handoff above and the sinkers' own reset
+	// have both quiesced, drop each persistent sinker's execution-scoped
+	// capacity hook (issue #25590 round-54 review): the hook the
+	// completed statement's workspace installed captures that workspace's
+	// TRANSACTION, and an idle cached plan must not pin the finalized
+	// workspace's remaining history and process references until its next
+	// execution or Free — Reset is the idle boundary every execution
+	// crosses, and the next execution's Prepare re-arms each sinker with
+	// the CURRENT workspace before any spill can run
+	// (rebindWorkspaceCapacity, issue #25590 round-35 review). The
+	// sinkers themselves — their buffer pools and arenas — stay alive
+	// exactly as before.
+	for _, s3w := range writer.insertSinkers {
+		s3w.ClearWorkspaceSinkerCapacity()
+	}
+
 	for _, bat := range writer.insertBlockInfo {
 		if bat != nil {
 			bat.CleanOnlyData()

@@ -445,6 +445,27 @@ func (w *CNS3Writer) RebindWorkspaceSinkerCapacity(proc *process.Process) {
 	w.sinker.RebindUncommittedCapacityHook(nil)
 }
 
+// ClearWorkspaceSinkerCapacity drops this persistent writer's
+// execution-scoped capacity hook unconditionally (issue #25590
+// round-54 review): the hook a workspace's SinkerCapacityOption
+// installed captures the workspace's TRANSACTION, and a cached plan's
+// delegate keeps its sinkers — buffer pools and arenas — alive between
+// executions. Between the terminal of the transaction that armed them
+// and the next execution's Prepare, that captured completed workspace
+// is nothing but retention: its remaining history, backing arrays and
+// process references stay reachable through an idle plan even though
+// nothing can spill or reserve again before Prepare re-arms the
+// binding with the CURRENT statement's workspace. The clear is the
+// Reset-side half of the round-35 rebind contract; nil receiver and
+// nil sinker stay no-ops, and a writer no execution armed keeps its
+// fresh-construction shape.
+func (w *CNS3Writer) ClearWorkspaceSinkerCapacity() {
+	if w == nil || w.sinker == nil {
+		return
+	}
+	w.sinker.RebindUncommittedCapacityHook(nil)
+}
+
 // Reset discards any buffered or staged data accumulated since the last
 // Sync, without tearing down the underlying sinker. Call this when the
 // enclosing pipeline execution is being reset so that stale data is not
