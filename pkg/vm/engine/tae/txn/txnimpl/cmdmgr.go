@@ -27,16 +27,20 @@ import (
 )
 
 type commandManager struct {
-	cmd    *txnbase.TxnCmd
-	lsn    uint64
-	csn    uint32
-	driver wal.Store
+	cmd           *txnbase.TxnCmd
+	lsn           uint64
+	csn           uint32
+	driver        wal.Store
+	maxWalSize    int
+	preparedEntry entry.Entry
+	preparedSize  int
 }
 
 func newCommandManager(driver wal.Store) *commandManager {
 	return &commandManager{
-		cmd:    txnbase.NewTxnCmd(),
-		driver: driver,
+		cmd:        txnbase.NewTxnCmd(),
+		driver:     driver,
+		maxWalSize: MaxWalSize,
 	}
 }
 
@@ -53,70 +57,79 @@ func (mgr *commandManager) AddCmd(cmd txnif.TxnCmd) {
 	mgr.csn++
 }
 
+func (mgr *commandManager) PreflightTxnRecord(store *txnStore) (err error) {
+	if mgr.driver == nil || mgr.preparedEntry != nil {
+		return nil
+	}
+	mgr.cmd.SetTxn(store.txn)
+
+	t1 := time.Now()
+	buf, err := mgr.cmd.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	if len(buf) > mgr.maxWalSize {
+		return wal.NewRecordTooLargeError(len(buf), mgr.maxWalSize)
+	}
+
+	logEntry := entry.GetBase()
+	info := &entry.Info{Group: wal.GroupUserTxn}
+	logEntry.SetInfo(info)
+	logEntry.SetApproxPayloadSize(int64(len(buf)))
+	logEntry.SetType(IOET_WALEntry_TxnRecord)
+	if err = logEntry.SetPayload(buf); err != nil {
+		logEntry.Free()
+		return err
+	}
+	infoBuf, err := info.Marshal()
+	if err != nil {
+		logEntry.Free()
+		return err
+	}
+	logEntry.SetInfoBuf(infoBuf)
+	if validator, ok := mgr.driver.(interface{ ValidateUserTxnRecordSize(int) error }); ok {
+		// driver/entry.Entry adds the 8-byte DSN to the complete base entry,
+		// including the fixed-size Info buffer materialized above.
+		if err = validator.ValidateUserTxnRecordSize(logEntry.TotalSize() + 8); err != nil {
+			logEntry.Free()
+			return err
+		}
+	}
+	logutil.Debugf("Marshal Command Size=%d", len(buf))
+	if len(buf) > 10*mpool.MB {
+		logutil.Info("BIG-TXN", zap.Int("wal-size", len(buf)), zap.String("txn", store.txn.String()))
+	}
+	if dur := time.Since(t1); dur >= time.Millisecond*500 {
+		logutil.Warn("SlOW-LOG", zap.Int("wal-size", len(buf)),
+			zap.String("txn", store.txn.String()), zap.Duration("marshal-log-entry-duration", dur))
+	}
+	mgr.preparedEntry = logEntry
+	mgr.preparedSize = len(buf)
+	return nil
+}
+
 func (mgr *commandManager) ApplyTxnRecord(store *txnStore) (logEntry entry.Entry, err error) {
 	if mgr.driver == nil {
 		return
 	}
-
-	mgr.cmd.SetTxn(store.txn)
-
-	store.AddEvent(txnif.WalPreparing)
-
-	logEntry = entry.GetBase()
-	info := &entry.Info{Group: wal.GroupUserTxn}
-	logEntry.SetInfo(info)
-	logEntry.SetApproxPayloadSize(mgr.cmd.ApproxSize())
-
-	logEntry.RegisterGroupWalPreCallbacks(func() error {
-		defer func() {
-			store.DoneEvent(txnif.WalPreparing)
-		}()
-
-		var (
-			err2 error
-			buf  []byte
-			t1   = time.Now()
-		)
-
-		// MarshalBinary already uses sync.Pool internally and handles copy
-		if buf, err2 = mgr.cmd.MarshalBinary(); err2 != nil {
-			return err2
-		}
-
-		logEntry.SetType(IOET_WALEntry_TxnRecord)
-		if err2 = logEntry.SetPayload(buf); err2 != nil {
-			return err2
-		}
-
-		logutil.Debugf("Marshal Command LSN=%d, Size=%d", info.GroupLSN, len(buf))
-
-		if len(buf) > 10*mpool.MB {
-			logutil.Info(
-				"BIG-TXN",
-				zap.Int("wal-size", len(buf)),
-				zap.Uint64("lsn", info.GroupLSN),
-				zap.String("txn", store.txn.String()),
-			)
-		}
-
-		if dur := time.Since(t1); dur >= time.Millisecond*500 {
-			logutil.Warn(
-				"SlOW-LOG",
-				zap.Int("wal-size", len(buf)),
-				zap.Uint64("lsn", info.GroupLSN),
-				zap.String("txn", store.txn.String()),
-				zap.Duration("marshal-log-entry-duration", dur),
-			)
-		}
-
-		return nil
-	})
+	if err = mgr.PreflightTxnRecord(store); err != nil {
+		return nil, err
+	}
+	logEntry = mgr.preparedEntry
+	mgr.preparedEntry = nil
+	walSize := mgr.preparedSize
+	mgr.preparedSize = 0
 
 	t2 := time.Now()
 	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupUserTxn, logEntry)
+	if err != nil {
+		logEntry.Free()
+		logEntry = nil
+	}
 	if dur := time.Since(t2); dur >= time.Millisecond*20 {
 		logutil.Warn(
 			"SlOW-LOG",
+			zap.Int("wal-size", walSize),
 			zap.Uint64("lsn", mgr.lsn),
 			zap.String("txn", store.txn.String()),
 			zap.Duration("append-log-entry-duration", dur),

@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"runtime"
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -621,6 +623,18 @@ func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
 func (mgr *TxnManager) onPrepare(op *OpTxn, ts types.TS) {
 	//assign txn's prepare timestamp to TxnMvccNode.
 	mgr.onPreparCommit(op.Txn)
+	if op.Txn.GetError() == nil {
+		if preflighter, ok := op.Txn.GetStore().(interface{ PreflightWAL() error }); ok {
+			if err := preflighter.PreflightWAL(); err != nil {
+				var tooLarge *wal.RecordTooLargeError
+				if !errors.As(err, &tooLarge) {
+					panic(err)
+				}
+				// Reject before PreApplyCommit has written rows or PK indexes.
+				op.Txn.SetError(tooLarge.MoErr())
+			}
+		}
+	}
 	if op.Txn.GetError() != nil {
 		op.Op = OpRollback
 		op.Txn.Lock()
@@ -752,6 +766,22 @@ func (mgr *TxnManager) onWal(op *OpTxn) bool {
 	}
 
 	if err := op.Txn.PrepareWAL(); err != nil {
+		var tooLarge *wal.RecordTooLargeError
+		if errors.As(err, &tooLarge) {
+			// This typed rejection happens before a WAL LSN or driver DSN is
+			// allocated, so the prepared transaction has a known rollback result.
+			op.Txn.SetError(tooLarge.MoErr())
+			op.Op = OpRollback
+			prepareTS := op.Txn.GetPrepareTS()
+			op.Txn.Lock()
+			stateErr := op.Txn.ToRollbackingLocked(prepareTS)
+			op.Txn.Unlock()
+			if stateErr != nil {
+				panic(stateErr)
+			}
+			mgr.onPreparRollback(op.Txn)
+			return false
+		}
 		panic(err)
 	}
 

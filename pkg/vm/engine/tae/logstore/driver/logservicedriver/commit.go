@@ -35,8 +35,12 @@ func (d *LogServiceDriver) Append(e *entry.Entry) (err error) {
 	return
 }
 
-func (d *LogServiceDriver) getCommitter() *groupCommitter {
-	if int(d.committer.writer.ApproxSize()) > d.config.ClientBufSize {
+func (d *LogServiceDriver) getCommitter(entrySize int) *groupCommitter {
+	if len(d.committer.writer.entries) > 0 &&
+		int64(EmptyLogEntrySize)+d.committer.writer.PendingEncodedSize()+int64(entrySize) > int64(d.config.MaxWALRecordSize) {
+		d.flushCurrentCommitter()
+	}
+	if d.committer.writer.PendingEncodedSize() > int64(d.config.ClientBufSize) {
 		d.flushCurrentCommitter()
 	}
 
@@ -58,8 +62,13 @@ func (d *LogServiceDriver) flushCurrentCommitter() {
 func (d *LogServiceDriver) onCommitIntents(items ...any) {
 	for _, item := range items {
 		e := item.(*entry.Entry)
+		if err := e.Prepare(); err != nil {
+			// Preparation failures remain fail-stop on this release branch.
+			panic(err)
+		}
+		entrySize := e.GetSize() + OneEntryFooterSize
 		e.DSN = d.allocateDSN()
-		committer := d.getCommitter()
+		committer := d.getCommitter(entrySize)
 		committer.AddIntent(e)
 	}
 	d.flushCurrentCommitter()
