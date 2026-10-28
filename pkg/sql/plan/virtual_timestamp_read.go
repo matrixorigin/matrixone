@@ -68,6 +68,18 @@ func (bc *BindContext) bindVirtualTimestampRead(binding *Binding, pos, depth int
 			"virtual generated column '%s' needs %d read-expression nodes (limit %d); run the virtual timestamp preflight and migrate this table before upgrade",
 			table.Cols[pos].Name, virtualTimestampReadCost(table, pos), maxVirtualTimestampExpansionNodes)
 	}
+	// Sequential UPDATE binds its RHS to a PROJECT whose ENUM/SET columns
+	// already contain display strings. Match that projection's representation;
+	// ordinary table scans still expose the storage value to baseBinder, which
+	// owns their display conversion.
+	if int(pos) < len(binding.types) && isEnumOrSetPlanType(&computed.Typ) &&
+		!isEnumOrSetPlanType(binding.types[pos]) {
+		var err error
+		computed, err = makeEnumOrSetDisplayValue(bc.builder.GetContext(), computed)
+		if err != nil {
+			return nil, true, err
+		}
+	}
 	for scope := bc; scope != nil; scope = scope.parent {
 		if !scope.nullExtendedTags[binding.tag] {
 			continue
