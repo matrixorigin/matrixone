@@ -798,9 +798,10 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 		if next <= offsets[i-1] || next >= fileSize {
 			break
 		}
-		// Once expansion admits a new boundary, every subsequent range is
-		// new too, even if its suffix probe consumes less than the old cap.
-		requiresVerifiedBoundaries = requiresVerifiedBoundaries || limit-attempt.remaining > strictProbeSoftBytes
+		// At the old cap, discovering real EOF can admit a candidate where
+		// the capped reader failed. Verify equality too, then keep verifying
+		// subsequent ranges even when their suffix probes consume less.
+		requiresVerifiedBoundaries = requiresVerifiedBoundaries || limit-attempt.remaining >= strictProbeSoftBytes
 		if requiresVerifiedBoundaries {
 			if param.FileStartOff < 0 || next-param.FileStartOff > attempt.remaining {
 				break

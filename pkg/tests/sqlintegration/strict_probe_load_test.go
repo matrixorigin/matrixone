@@ -147,34 +147,60 @@ func TestLoadCSVStrictProbeFallback(t *testing.T) {
 			name                  string
 			recordBytes           int
 			multiline, restartBOM bool
+			atSoftLimit           bool
 			wantRanges            int
 		}{
 			{name: "short record control", recordBytes: 400 * 1024, wantRanges: 2},
 			{name: "long record parallel", recordBytes: 600 * 1024, wantRanges: 2},
 			{name: "quoted multiline fallback", multiline: true, wantRanges: 1},
 			{name: "BOM restart fallback", recordBytes: 600 * 1024, restartBOM: true, wantRanges: 1},
+			{name: "soft limit plain control", atSoftLimit: true, wantRanges: 2},
+			{name: "soft limit BOM fallback", atSoftLimit: true, restartBOM: true, wantRanges: 1},
+			{name: "soft limit multiline fallback", atSoftLimit: true, multiline: true, wantRanges: 1},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				const rows = 5
-				values := make([]string, rows)
-				var content strings.Builder
-				content.WriteString("payload\n")
-				for i := range values {
+				var values []string
+				if tc.atSoftLimit {
+					// IGNORE removes the header before computing the half-file guess.
+					// The suffix is exactly the former 256 KiB physical input cap.
+					const suffixBytes, lastBytes = 256 * 1024, 6144
+					const firstBytes = 2*suffixBytes - lastBytes
 					if tc.multiline {
-						values[i] = strings.Repeat("x", 900*1024) + "\n" + strings.Repeat("y", 300*1024)
-						content.WriteByte('"')
-						content.WriteString(values[i])
-						content.WriteString("\"\n")
+						values = []string{strings.Repeat("x", firstBytes-2) + "\n" + strings.Repeat("y", lastBytes-2)}
 					} else {
-						prefix := fmt.Sprintf("%d:", i)
-						if tc.restartBOM && i == 3 {
-							prefix = "\xef\xbb\xbf" + prefix
+						last := strings.Repeat("b", lastBytes-1)
+						if tc.restartBOM {
+							last = "\xef\xbb\xbf" + strings.Repeat("b", lastBytes-4)
 						}
-						values[i] = prefix + strings.Repeat("x", tc.recordBytes-len(prefix)-1)
-						content.WriteString(values[i])
-						content.WriteByte('\n')
+						values = []string{strings.Repeat("x", firstBytes-1), last}
+					}
+				} else {
+					values = make([]string, 5)
+					for i := range values {
+						if tc.multiline {
+							values[i] = strings.Repeat("x", 900*1024) + "\n" + strings.Repeat("y", 300*1024)
+						} else {
+							prefix := fmt.Sprintf("%d:", i)
+							if tc.restartBOM && i == 3 {
+								prefix = "\xef\xbb\xbf" + prefix
+							}
+							values[i] = prefix + strings.Repeat("x", tc.recordBytes-len(prefix)-1)
+						}
 					}
 				}
+				var content strings.Builder
+				content.WriteString("payload\n")
+				for _, value := range values {
+					if tc.multiline {
+						content.WriteByte('"')
+					}
+					content.WriteString(value)
+					if tc.multiline {
+						content.WriteByte('"')
+					}
+					content.WriteByte('\n')
+				}
+				rows := len(values)
 				sort.Strings(values)
 				path := filepath.Join(t.TempDir(), "long-records.csv")
 				require.NoError(t, os.WriteFile(path, []byte(content.String()), 0600))

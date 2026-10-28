@@ -192,6 +192,52 @@ func TestStrictPrefetchOnlyExpansion(t *testing.T) {
 	t.Logf("tail=%d physical=%d opens=%v", got[1]-int64(len(data)/2), fs.stages[0].bytes, strictBoundaryStarts(fs))
 }
 
+// A partial final parser block discovers real EOF only after reading the
+// entire suffix. At the old cap, that read used to return a budget error.
+func TestStrictBoundarySoftThreshold(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind string
+		delta      int
+		wantRanges int
+	}{
+		{name: "below plain", delta: -1, wantRanges: 2},
+		{name: "equal plain", wantRanges: 2},
+		{name: "above plain", delta: 1, wantRanges: 2},
+		{name: "equal BOM", kind: "BOM", wantRanges: 1},
+		{name: "above BOM", kind: "BOM", delta: 1, wantRanges: 1},
+		{name: "equal multiline", kind: "multiline", wantRanges: 1},
+		{name: "above multiline", kind: "multiline", delta: 1, wantRanges: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const lastBytes = 6144
+			suffixBytes := strictProbeSoftBytes + tc.delta
+			firstBytes := 2*suffixBytes - lastBytes
+			data := strings.Repeat("x", firstBytes-1) + "\n" + strings.Repeat("b", lastBytes-1) + "\n"
+			switch tc.kind {
+			case "BOM":
+				data = strings.Repeat("x", firstBytes-1) + "\n\xef\xbb\xbf" + strings.Repeat("b", lastBytes-4) + "\n"
+			case "multiline":
+				data = "\"" + strings.Repeat("x", firstBytes-2) + "\n" + strings.Repeat("y", lastBytes-2) + "\"\n"
+			}
+			p, fs := strictBoundaryParam(t, data)
+			got, err := ReadFileOffset(p, 2, int64(len(data)), strictTextCols(1))
+			require.NoError(t, err)
+			require.Equal(t, suffixBytes, fs.stages[0].bytes, "physical input, including prefetch")
+			t.Logf("suffix_start=%d physical_bytes=%d candidate=%d file_bytes=%d ranges=%v", fs.stages[0].start, fs.stages[0].bytes, firstBytes, len(data), got)
+			requireStrictRangesEqual(t, p, data, got)
+			require.Len(t, got, 2*tc.wantRanges)
+			if suffixBytes < strictProbeSoftBytes {
+				require.Equal(t, []int64{int64(suffixBytes)}, strictBoundaryStarts(fs))
+			} else {
+				require.Equal(t, []int64{int64(suffixBytes), 0}, strictBoundaryStarts(fs))
+			}
+			for _, stream := range fs.stages {
+				require.Equal(t, 1, stream.closes)
+			}
+		})
+	}
+}
+
 func TestStrictBoundaryRestart(t *testing.T) {
 	plain := strings.Repeat("x", 600*1024-1) + "\n"
 	for _, tc := range []struct {
