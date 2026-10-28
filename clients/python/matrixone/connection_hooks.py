@@ -169,14 +169,10 @@ class ConnectionHook:
                         await self.custom_hook(client)
                     else:
                         # Try to call it as sync
-                        try:
-                            result = self.custom_hook(client)
-                            # If it returns a coroutine, await it
-                            if hasattr(result, '__await__'):
-                                await result
-                        except TypeError as e:
-                            if "object NoneType can't be used in 'await' expression" in str(e):
-                                client.logger.warning("Custom hook appears to be async but was called synchronously")
+                        result = self.custom_hook(client)
+                        # If it returns a coroutine, await it
+                        if hasattr(result, '__await__'):
+                            await result
 
         except Exception as e:
             client.logger.warning(f"Connection hook execution failed: {e}")

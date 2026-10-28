@@ -1547,7 +1547,7 @@ fmt:
 .PHONY: install-static-check-tools
 install-static-check-tools:
 	@GOBIN="$(GOPATH)/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
-	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
+	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20261028130237-35bd4d9a4055
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
 FRONTEND_MOCKGEN = $(CGO_OPTS) CGO_LDFLAGS="-L$(THIRDPARTIES_INSTALL_DIR)/lib -L$(CGO_DIR) -Wl,-rpath,$(CGO_DIR) -Wl,-rpath,$(THIRDPARTIES_INSTALL_DIR)/lib" GOWORK=off $(GOPATH)/bin/mockgen -build_flags="$(GO_MODULE_MODE)"
@@ -1571,7 +1571,7 @@ generate-frontend-mocks: cgo
 GOLANGCI_LINT_CONCURRENCY ?=
 GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
 STATIC_CHECK_PACKAGES ?= ./...
-STATIC_CHECK_MOLINT = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` $(STATIC_CHECK_PACKAGES)
+STATIC_CHECK_MOLINT = $(CGO_OPTS) molint check $(GO_MODULE_MODE) $(STATIC_CHECK_PACKAGES)
 STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml $(STATIC_CHECK_PACKAGES)
 static-check: override STATIC_CHECK_PACKAGES = ./...
 static-check: config err-check
