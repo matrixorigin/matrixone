@@ -16,6 +16,7 @@ package v4_0_7
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
@@ -58,7 +59,7 @@ func TestViewsUpgradeRecognizesCatalogNameCase(t *testing.T) {
 				if tc.current {
 					require.Empty(t, executed, "the committed definition is the durable no-op marker")
 				} else {
-					require.Equal(t, []string{upgradeInformationSchemaViews().PreSql, sysview.InformationSchemaViewsDDL}, executed)
+					require.Equal(t, []string{upgradeInformationSchemaViews().UpgSql}, executed)
 				}
 			})
 		}
@@ -88,21 +89,19 @@ func TestViewsDefinitionProbePropagatesCatalogErrors(t *testing.T) {
 	}
 }
 
-func TestViewsRepairPreservesHistoricalV407Identity(t *testing.T) {
+func TestViewsRepairUsesCurrentV407Identity(t *testing.T) {
 	require.Equal(t, "4.0.7", Handler.Metadata().Version)
 	require.Equal(t, "4.0.6", Handler.Metadata().MinUpgradeVersion)
-	require.Equal(t, int64(defines.MORPCVersion61), Handler.Metadata().RequiredProtocolVersion)
-	require.Zero(t, Handler.Metadata().VersionOffset)
+	require.Equal(t, int64(defines.MORPCVersion126), Handler.Metadata().RequiredProtocolVersion)
+	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries)), Handler.Metadata().VersionOffset)
 	require.Equal(t, versions.Yes, Handler.Metadata().UpgradeCluster)
 	require.Equal(t, versions.Yes, Handler.Metadata().UpgradeTenant)
-	require.Empty(t, tenantUpgEntries)
-	require.Empty(t, clusterUpgEntries)
 
 	entry := upgradeInformationSchemaViews()
 	require.Equal(t, sysview.InformationDBConst, entry.Schema)
 	require.Equal(t, "VIEWS", entry.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
-	require.Equal(t, sysview.InformationSchemaViewsDDL, entry.UpgSql)
+	require.Equal(t, strings.Replace(sysview.InformationSchemaViewsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), entry.UpgSql)
 	require.Equal(t, int64(defines.MORPCVersion126), entry.RequiredProtocolVersion)
 }
 
@@ -129,7 +128,6 @@ func TestViewsUpgradeBlocksBeforeDropOnOldCN(t *testing.T) {
 				require.Empty(t, executed)
 			} else {
 				require.NoError(t, err)
-				require.Contains(t, executed, entry.PreSql)
 				require.Contains(t, executed, entry.UpgSql)
 			}
 		})
