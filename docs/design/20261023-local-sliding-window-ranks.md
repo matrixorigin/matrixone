@@ -4,42 +4,60 @@
 
 The original direct-scan contract remains the fallback. For a materialized
 partition, `cumrank` and `mrank` with a constant width may instead compress
-the non-NULL, non-NaN values into ordered ranks and maintain their frequencies
-in a Fenwick tree. The result remains one plus the count of values strictly
+the non-NULL, non-NaN values of a demanded prefix into ordered ranks and
+maintain their frequencies in a Fenwick tree. The result remains one plus the count of values strictly
 less than the current value. NULL consumes a physical frame position but is
 never counted; a current NaN ranks 1, NaN inputs do not contribute, and signed
 zeros compare equal. Width validation still precedes NULL-result handling.
 
+The first index covers only the current output chunk. As consumption reaches
+its horizon, the indexed prefix grows geometrically, covering at most twice
+the currently requested prefix. Rebuilding seeds the tree with the already
+consumed active rows; fixed-width eviction continues to count physical rows.
+An initial short or all-NULL prefix can be reconsidered at the next horizon.
+This bounds the additional work before first output even when a LIMIT stops
+consumption early; the input partition itself remains materialized.
+
 The window container owns partition state across output chunks. It discards
-that state on partition/generation change, reset, free and partial setup error.
+that state on partition completion/change, generation change, reset, free and
+partial setup error. Replacement releases the old index before admission.
 Scratch and retained arrays are charged to the existing analytic allocation
 account before allocation, using at most 24*n + O(1) bytes simultaneously for
-three 64-bit arrays and checked size arithmetic. A resource-capacity rejection
+three 64-bit arrays, where n is the indexed prefix length. Size arithmetic is
+checked. A resource-capacity rejection
 releases partial reservations and falls back to the original scan; cancellation,
 closed-generation, account-invariant and other errors propagate. Every O(n)
-construction loop and sorting step has bounded cancellation checks. A
+construction loop, seeding pass and sorting step has bounded cancellation checks. A
 nonsequential fallback invalidates state before any subsequent fast-path use.
 For fixed-width mrank, the first width is validated after the ordinary
 cancellation check and before index construction. A capacity rejection keeps
 the partition on the scan path, without repeated admission attempts. The
-fixed-width path adds the entering row and removes the leaving row. A
+fixed-width path adds the entering row and removes the leaving row. If required
+result growth is capacity-rejected after an index was admitted, the operator
+releases the optional index, retries the unpublished fixed-width append once,
+and scans subsequent rows. Cancellation and fatal account errors still
+propagate. This local fallback does not guarantee headroom for arbitrary
+downstream operators. A
 per-row width may move its frame start backwards and therefore uses the original
 scan; short partitions, all-NULL partitions and constant widths below 128 also
 use the scan. All-NULL detection polls for cancellation; `tmrank` retains the
 original resolver and scan, including disjoint
 DST spans. Unsupported types and nonsequential evaluation fall back safely.
 
-Compression costs O(n log n) time and O(n) memory per partition, then each
-rank costs O(log n); it can increase first-output latency, especially for a
-LIMIT consumer, and must be validated against the direct scan at small and
-large partitions, several cardinalities and batch boundaries. Differential
+Geometric compression costs O(n log n) total time and O(n) memory per fully
+consumed partition, then each rank costs O(log n). First-output construction is
+bounded by the requested chunk. Rebuilding costs more than one eager sort and
+must be compared against the direct scan for first and full consumption at
+small and large partitions, several cardinalities and batch boundaries. Differential
 tests cover ties, NULL, NaN, signed zero, width overflow, partition/reuse,
-cancellation during construction and evaluation, capacity fallback, and
+cancellation during construction, seeding and evaluation, capacity fallback,
+output pressure, early reset/reuse, and
 invariant-error propagation. The original reviewed design revision
 below remains historical and is not represented as approval of this amendment.
 
 - Owning issue: [matrixorigin/matrixone#29947](https://github.com/matrixorigin/matrixone/issues/29947).
 - Implementation: [matrixorigin/matrixone#31020](https://github.com/matrixorigin/matrixone/pull/31020).
+- Performance amendment: [matrixorigin/matrixone#31516](https://github.com/matrixorigin/matrixone/pull/31516).
 - Original design approval and review history are preserved in the [original review record](https://github.com/matrixorigin/matrixone/blob/df8bfd602ecc036424ff7897187565657366919d/docs/design/20261023-local-sliding-window-ranks.md#9-review-record). The performance amendment above is a subsequent change.
 
 ## 1. Problem, evidence, and current behavior

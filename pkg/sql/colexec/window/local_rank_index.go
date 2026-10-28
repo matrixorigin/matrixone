@@ -23,16 +23,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// localRankIndex owns the compressed ranks and active frequencies of one
-// materialized partition. Rank zero denotes a NULL or NaN, neither of which
-// compares less than any input in the original scalar comparison.
+// localRankIndex owns the compressed ranks of [start,horizon) within a
+// materialized partition [start,end). Rank zero denotes a NULL or NaN,
+// neither of which compares less than any input in the scalar comparison.
 type localRankIndex struct {
 	start, end, next int
+	horizon          int
 	width            uint64 // zero means the cumulative prefix
 	ranks            []int
 	tree             []uint64
 	charge           uint64
 	fallback         bool
+}
+
+func (ctr *container) fallbackLocalRankIndex(start, end int, width uint64) {
+	ctr.freeLocalRankIndex()
+	ctr.localRank = &localRankIndex{start: start, end: end, width: width, fallback: true}
+}
+
+// Rank results are fresh fixed-width vectors: a failed append has not
+// published a row. Optional index memory must yield before output is rejected.
+func (ctr *container) appendLocalRankResult(proc *process.Process, result *vector.Vector, value uint64, isNull bool) error {
+	err := vector.AppendFixed(result, value, isNull, proc.Mp())
+	if err == nil || ctr.localRank == nil || ctr.localRank.charge == 0 {
+		return err
+	}
+	if cancel := proc.Ctx.Err(); cancel != nil {
+		return cancel
+	}
+	if !mpool.IsRetryableAllocationCapacity(err) {
+		return err
+	}
+	ctr.fallbackLocalRankIndex(ctr.localRank.start, ctr.localRank.end, ctr.localRank.width)
+	return vector.AppendFixed(result, value, isNull, proc.Mp())
 }
 
 func (ctr *container) freeLocalRankIndex() {
@@ -58,7 +81,8 @@ func localRankNaN(v *vector.Vector, row int) bool {
 // rankIndex returns nil when a partition should use the original scan. A
 // rejected capacity reservation is cached for the partition, so it is not
 // retried for every row. Other errors retain their original meaning.
-func (ctr *container) rankIndex(proc *process.Process, v *vector.Vector, start, end, row int, width uint64) (*localRankIndex, error) {
+func (ctr *container) rankIndex(proc *process.Process, v *vector.Vector, start, end, row int, width uint64, outputEnd int) (*localRankIndex, error) {
+	horizon := min(end, outputEnd)
 	s := ctr.localRank
 	if s != nil && (s.start != start || s.end != end || s.width != width || (!s.fallback && s.next != row)) {
 		ctr.freeLocalRankIndex()
@@ -68,26 +92,43 @@ func (ctr *container) rankIndex(proc *process.Process, v *vector.Vector, start, 
 		if s.fallback {
 			return nil, nil
 		}
-		return s, nil
-	}
-	// Avoid setup costs for short partitions and do not reuse state after a
-	// nonsequential invocation of the operator.
-	if end-start < 128 || (width > 0 && width < 128) || row != start {
-		ctr.localRank = &localRankIndex{start: start, end: end, width: width, fallback: true}
+		if row < s.horizon {
+			if s.ranks != nil {
+				return s, nil
+			}
+			s.next = row + 1
+			return nil, nil
+		}
+		// Geometric growth amortizes rebuilding while limiting construction to
+		// at most twice the demanded prefix. Release old storage before admission.
+		horizon = max(horizon, s.horizon+min(end-s.horizon, s.horizon-start))
+		ctr.freeLocalRankIndex()
+		s = nil
+	} else if row != start {
+		ctr.fallbackLocalRankIndex(start, end, width)
 		return nil, nil
 	}
-	// An all-NULL partition produces NULL without comparing any values. Avoid
-	// reserving an index for it, while bounding cancellation latency when the
-	// vector is non-constant and its bitmap must be inspected.
+	// Short initial fragments may be followed by enough rows to amortize an
+	// index. Only permanently small partitions/widths stay on the scan path.
+	if end-start < 128 || (width > 0 && width < 128) {
+		ctr.fallbackLocalRankIndex(start, end, width)
+		return nil, nil
+	}
+	if horizon-start < 128 {
+		ctr.localRank = &localRankIndex{start: start, end: end, next: row + 1, horizon: horizon, width: width}
+		return nil, nil
+	}
+	// Inspect only the demanded prefix. An all-NULL prefix can be followed by
+	// values, so reconsider it at its horizon instead of disabling the index.
 	if localRankValueIsNull(v, start) {
 		allNull := v.IsConstNull()
 		if !v.IsConst() {
 			allNull = true
-			for pos := start; pos < end; {
+			for pos := start; pos < horizon; {
 				if err := checkCanceled(proc, pos-start); err != nil {
 					return nil, err
 				}
-				next := pos + min(65536, end-pos)
+				next := pos + min(65536, horizon-pos)
 				if v.GetNulls().CountRange(uint64(pos), uint64(next)) != next-pos {
 					allNull = false
 					break
@@ -96,15 +137,16 @@ func (ctr *container) rankIndex(proc *process.Process, v *vector.Vector, start, 
 			}
 		}
 		if allNull {
-			ctr.localRank = &localRankIndex{start: start, end: end, width: width, fallback: true}
+			ctr.localRank = &localRankIndex{start: start, end: end, next: row + 1, horizon: horizon,
+				width: width, fallback: v.IsConstNull() || horizon == end}
 			return nil, nil
 		}
 	}
-	n := end - start
+	n := horizon - start
 	// Two int arrays and a uint64 tree coexist during construction. The extra
 	// tree element and all multiplication are checked before admission.
 	if uint64(n) > (math.MaxUint64-8)/24 {
-		ctr.localRank = &localRankIndex{start: start, end: end, width: width, fallback: true}
+		ctr.fallbackLocalRankIndex(start, end, width)
 		return nil, nil
 	}
 	charge := uint64(n)*24 + 8
@@ -113,12 +155,12 @@ func (ctr *container) rankIndex(proc *process.Process, v *vector.Vector, start, 
 			return nil, cancel
 		}
 		if mpool.IsRetryableAllocationCapacity(err) {
-			ctr.localRank = &localRankIndex{start: start, end: end, width: width, fallback: true}
+			ctr.fallbackLocalRankIndex(start, end, width)
 			return nil, nil
 		}
 		return nil, err
 	}
-	s = &localRankIndex{start: start, end: end, next: start, width: width, charge: charge}
+	s = &localRankIndex{start: start, end: end, next: row, horizon: horizon, width: width, charge: charge}
 	// Publish ownership before construction, so every error releases the charge.
 	ctr.localRank = s
 	ok := false
@@ -159,10 +201,43 @@ func (ctr *container) rankIndex(proc *process.Process, v *vector.Vector, start, 
 		}
 		s.ranks[row-start] = rank
 	}
+	if err := s.seed(proc, row); err != nil {
+		return nil, err
+	}
 	// The sort scratch no longer belongs to the index; keep its charge until the
 	// partition is released, avoiding under-accounting while the backing is live.
 	ok = true
 	return s, nil
+}
+
+func (s *localRankIndex) seed(proc *process.Process, row int) error {
+	if row == s.start {
+		return nil
+	}
+	// A rebuilt tree includes the already consumed active physical rows.
+	// Include row-width: advance adds the current row and then evicts that row.
+	seedStart := s.start
+	if s.width > 0 && uint64(row-s.start) > s.width {
+		seedStart = row - int(s.width)
+	}
+	for i := seedStart; i < row; i++ {
+		if err := checkCanceled(proc, i-seedStart); err != nil {
+			return err
+		}
+		if rank := s.ranks[i-s.start]; rank != 0 {
+			s.tree[rank]++
+		}
+	}
+	// Convert rank frequencies to a Fenwick tree in linear time.
+	for i := 1; i < len(s.tree); i++ {
+		if err := checkCanceled(proc, i); err != nil {
+			return err
+		}
+		if parent := i + (i & -i); parent < len(s.tree) {
+			s.tree[parent] += s.tree[i]
+		}
+	}
+	return nil
 }
 
 // sortRankRows uses an in-place heap sort with cancellation checks on every

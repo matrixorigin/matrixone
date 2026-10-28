@@ -521,6 +521,10 @@ func (ctr *container) processFuncRange(
 	if err != nil {
 		return nil, err
 	}
+	if ctr.localRank != nil && ctr.localRank.end <= outputEnd {
+		// Completed partition state must not compete with the next input copy.
+		ctr.freeLocalRankIndex()
+	}
 	if !vec.HasPrepareParamKind() {
 		vec.SetPrepareParamKind(ctr.prepareParamKind.Get(idx))
 	}
@@ -1707,36 +1711,27 @@ func (ctr *container) processValueFuncRange(
 			}
 			var indexed *localRankIndex
 			if nVec.IsConst() {
-				indexed, err = ctr.rankIndex(proc, srcVec, start, end, j, width)
+				indexed, err = ctr.rankIndex(proc, srcVec, start, end, j, width, outputEnd)
 				if err != nil {
 					return nil, err
 				}
 			}
-			var indexedLess uint64
+			var count uint64
 			if indexed != nil {
-				indexedLess = indexed.advance(j)
+				count = indexed.advance(j)
 			}
-			if localRankValueIsNull(srcVec, j) {
-				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
+			isNull := localRankValueIsNull(srcVec, j)
+			if !isNull && indexed == nil {
+				frameStart := j - int(width-1)
+				if frameStart < start {
+					frameStart = start
+				}
+				count, err = countLessInRankRange(proc, srcVec, frameStart, j+1, j)
+				if err != nil {
 					return nil, err
 				}
-				continue
 			}
-			if indexed != nil {
-				if err := vector.AppendAny(localResult, indexedLess+1, false, proc.Mp()); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			frameStart := j - int(width-1)
-			if frameStart < start {
-				frameStart = start
-			}
-			count, err := countLessInRankRange(proc, srcVec, frameStart, j+1, j)
-			if err != nil {
-				return nil, err
-			}
-			if err := vector.AppendAny(localResult, count+1, false, proc.Mp()); err != nil {
+			if err := ctr.appendLocalRankResult(proc, localResult, count+1, isNull); err != nil {
 				return nil, err
 			}
 		}
@@ -1752,7 +1747,7 @@ func (ctr *container) processValueFuncRange(
 			if ctr.ps != nil {
 				start, end = buildPartitionInterval(ctr.ps, j, n)
 			}
-			indexed, err := ctr.rankIndex(proc, srcVec, start, end, j, 0)
+			indexed, err := ctr.rankIndex(proc, srcVec, start, end, j, 0, outputEnd)
 			if err != nil {
 				return nil, err
 			}
@@ -1760,19 +1755,14 @@ func (ctr *container) processValueFuncRange(
 			if indexed != nil {
 				count = indexed.advance(j)
 			}
-			if localRankValueIsNull(srcVec, j) {
-				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
-					return nil, err
-				}
-				continue
-			}
-			if indexed == nil {
+			isNull := localRankValueIsNull(srcVec, j)
+			if !isNull && indexed == nil {
 				count, err = countLessInRankRange(proc, srcVec, start, j+1, j)
 			}
 			if err != nil {
 				return nil, err
 			}
-			if err := vector.AppendAny(localResult, count+1, false, proc.Mp()); err != nil {
+			if err := ctr.appendLocalRankResult(proc, localResult, count+1, isNull); err != nil {
 				return nil, err
 			}
 		}
