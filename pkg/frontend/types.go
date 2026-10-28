@@ -755,6 +755,13 @@ type BackgroundExecOption struct {
 	// transactions whose request context owns a blocked TxnClient.New call.
 	cancelTxnCreateWithRequest bool
 	authorizationSnapshot      *client.SnapshotAdmission
+	// internalExecution marks the produced executor as running trusted
+	// implementation SQL (e.g. the catalog writes generated for SET GLOBAL)
+	// rather than caller-authored statements. It flows to the back session's
+	// isInternal so internal-execution exemptions apply — including the
+	// client-facing READ ONLY transaction gate, which must never observe
+	// generated catalog maintenance as user writes.
+	internalExecution bool
 }
 
 // BackgroundExec executes the sql in background session without network output.

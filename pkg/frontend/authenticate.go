@@ -12895,7 +12895,11 @@ func doSetGlobalSystemVariables(
 ) (err error) {
 	accountId := uint64(ses.GetTenantInfo().TenantID)
 	accountName := ses.GetTenantName()
-	bh := ses.GetBackgroundExec(ctx)
+	// The generated catalog INSERT/UPDATE below is trusted implementation
+	// SQL of the SET GLOBAL statement itself, not caller-authored work: mark
+	// the executor internal so client-facing gates (e.g. the READ ONLY
+	// transaction enforcement) never observe it as user writes.
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{internalExecution: true})
 	defer bh.Close()
 
 	if err = bh.Exec(ctx, "begin;"); err != nil {

@@ -213,6 +213,80 @@ drop procedure txn_read_only_xp2;
 drop table if exists pt;
 drop table if exists pt2;
 drop table pe;
+create table nw (a int primary key);
+insert into nw values (1);
+drop procedure if exists ro_inner_ins;
+create procedure ro_inner_ins() 'begin insert into nw values (9); end';
+drop procedure if exists ro_outer_call;
+create procedure ro_outer_call() 'begin call ro_inner_ins(); end';
+start transaction read only;
+call ro_outer_call();
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from nw;
+count(*)
+1
+rollback;
+select count(*) from nw;
+count(*)
+1
+call ro_outer_call();
+select count(*) from nw;
+count(*)
+2
+delete from nw where a = 9;
+drop procedure ro_inner_ins;
+drop procedure ro_outer_call;
+drop table nw;
+create table bsrc (a int primary key);
+insert into bsrc values (1);
+data branch create table txn_readonly.bchild from txn_readonly.bsrc;
+start transaction read only;
+data branch create table txn_readonly.bchild2 from txn_readonly.bsrc;
+Cannot execute statement in a READ ONLY transaction.
+data branch delete table txn_readonly.bchild;
+Cannot execute statement in a READ ONLY transaction.
+data branch merge txn_readonly.bchild into txn_readonly.bsrc;
+Cannot execute statement in a READ ONLY transaction.
+data branch diff txn_readonly.bchild against txn_readonly.bsrc output as txn_readonly.bdiff;
+Cannot execute statement in a READ ONLY transaction.
+data branch diff txn_readonly.bchild against txn_readonly.bsrc output count;
+COUNT(*)
+0
+select count(*) from txn_readonly.bchild;
+count(*)
+1
+rollback;
+data branch delete table txn_readonly.bchild;
+drop table bsrc;
+create table uo_p (id int primary key, pv int);
+insert into uo_p values (1, 10);
+create temporary table uo_t (id int primary key, tv int);
+insert into uo_t values (1, 100);
+start transaction read only;
+update uo_t join uo_p on uo_t.id = uo_p.id set tv = 1;
+select tv from uo_t;
+tv
+1
+update uo_t join uo_p on uo_t.id = uo_p.id set pv = 9;
+Cannot execute statement in a READ ONLY transaction.
+update uo_t join uo_p on uo_t.id = uo_p.id set id = 2;
+Cannot execute statement in a READ ONLY transaction.
+select pv from uo_p;
+pv
+10
+commit;
+select tv from uo_t;
+tv
+1
+drop table uo_t;
+drop table uo_p;
+set session transaction_read_only = 1;
+set global group_concat_max_len = 2048;
+select @@global.group_concat_max_len;
+@@global.group_concat_max_len
+2048
+set global group_concat_max_len = 1024;
+set session transaction_read_only = 0;
 drop procedure if exists txn_read_only_dp;
 create procedure txn_read_only_dp() 'begin prepare ds from ''insert into t values (9)''; execute ds; end';
 drop procedure if exists txn_read_only_dsel;

@@ -213,21 +213,30 @@ func statementRequiresPersistentWriteAccess(
 		// the plan for both through Exec.Run); classify its wrapped statement
 		// exactly like EXPLAIN ANALYZE.
 		return statementRequiresPersistentWriteAccess(ses, st.Statement, defaultDatabase)
+	case *tree.DataBranchDiff:
+		// Diffing is read-only unless the result is materialized into an
+		// output table.
+		return st.OutputOpt != nil && st.OutputOpt.As.ObjectName != ""
 	}
 	if st, ok := stmt.(tree.StatementType); ok && st.GetQueryType() == tree.QueryTypeDDL {
 		return true
 	}
 	// The parser classifies these catalog writers as Other rather than DDL,
 	// but they persist data or catalog state and must observe the read-only
-	// gate as well. Operational toggles (pause/resume/restart of tasks),
-	// account administration (DCL) and CALL stay exempt.
+	// gate as well. Data branch CREATE/DELETE mutate the branch catalog and
+	// MERGE/PICK write the destination table. Operational toggles
+	// (pause/resume/restart of tasks), account administration (DCL) and CALL
+	// stay exempt.
 	switch stmt.(type) {
 	case *tree.CloneTable, *tree.CloneDatabase,
 		*tree.CreateStage, *tree.AlterStage, *tree.DropStage, *tree.RemoveStageFiles,
 		*tree.CreateSnapShot, *tree.DropSnapShot, *tree.RestoreSnapShot,
 		*tree.CreateCDC, *tree.DropCDC,
 		*tree.AlterPitr, *tree.DropPitr, *tree.RestorePitr,
-		*tree.CreateProcedure, *tree.DropProcedure:
+		*tree.CreateProcedure, *tree.DropProcedure,
+		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
+		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase,
+		*tree.DataBranchMerge, *tree.DataBranchPick:
 		return true
 	}
 	return false
@@ -240,10 +249,10 @@ func statementRequiresPersistentWriteAccess(
 // by its alias, an unaliased one by its object name, WITH-clause names never
 // resolve. A qualified target the sources cannot name never writes (the
 // planner reports it as an unknown table before execution). An unqualified
-// column in a multi-source UPDATE targets the unique source owning it, which
-// needs catalog access the gate does not have, so such a statement is gated
-// whenever any source may be persistent; a single-source UPDATE targets that
-// source exactly.
+// column targets the unique source owning it; the gate resolves column
+// ownership through the session compile context so temporary-owned columns
+// stay writable, while genuinely ambiguous assignments and unresolvable
+// persistent sources keep the conservative gate.
 func updateRequiresPersistentWriteAccess(ses FeSession, st *tree.Update, defaultDatabase string) bool {
 	sources := make(map[string][2]string)
 	ctes := make(map[string]struct{})
@@ -282,21 +291,84 @@ func updateRequiresPersistentWriteAccess(ses FeSession, st *tree.Update, default
 			continue
 		}
 		// Column-only assignment: the planner picks the unique source owning
-		// the column (erroring on ambiguity), which needs catalog access the
-		// gate does not have. A single-source UPDATE therefore targets that
-		// source exactly, while a multi-source one is gated whenever any
-		// source may be persistent.
-		for _, base := range sources {
-			if !isSessionTemporaryTable(ses, tree.NewTableName(
-				tree.Identifier(base[1]),
-				tree.ObjectNamePrefix{SchemaName: tree.Identifier(base[0])},
-				nil,
-			), defaultDatabase) {
+		// the column and errors on genuine ambiguity (dml_context.go). The
+		// gate resolves the owner through the session compile context — the
+		// same bindings and catalog view the statement will see at execution —
+		// so a column owned only by a temporary table writes freely, matching
+		// MySQL. Genuine ambiguity and unresolvable persistent sources stay
+		// conservatively gated: the gate must never open for a write it
+		// cannot classify.
+		owners := make(map[string][2]string)
+		unresolvedPersistent := false
+		for alias, base := range sources {
+			columns, err := resolveSourceColumnNames(ses, base[0], base[1], defaultDatabase)
+			if err != nil {
+				if !isSessionTemporaryTable(ses, tree.NewTableName(
+					tree.Identifier(base[1]),
+					tree.ObjectNamePrefix{SchemaName: tree.Identifier(base[0])},
+					nil,
+				), defaultDatabase) {
+					unresolvedPersistent = true
+				}
+				continue
+			}
+			if _, hit := columns[parts.ColName()]; hit {
+				owners[alias] = base
+			}
+		}
+		switch len(owners) {
+		case 0:
+			// No source owns the column: the planner rejects the statement
+			// (or an unresolvable source owns it) — gate only what cannot be
+			// proven temporary.
+			if unresolvedPersistent {
 				return true
 			}
+		case 1:
+			for _, base := range owners {
+				if !isSessionTemporaryTable(ses, tree.NewTableName(
+					tree.Identifier(base[1]),
+					tree.ObjectNamePrefix{SchemaName: tree.Identifier(base[0])},
+					nil,
+				), defaultDatabase) {
+					return true
+				}
+			}
+		default:
+			// Genuine ambiguity: the planner errors, but the write target is
+			// unprovable statically, so keep the conservative gate.
+			return true
 		}
 	}
 	return false
+}
+
+// resolveSourceColumnNames resolves the column names of one UPDATE source
+// through the session's transaction compile context — the same catalog and
+// temporary-binding view the statement executes against — mirroring the
+// planner's per-source column lookup. It is an indirection point so unit
+// tests can stub catalog access; production behavior follows
+// TxnCompilerContext.Resolve.
+var resolveSourceColumnNames = func(ses FeSession, schemaName, tableName, defaultDatabase string) (map[string]struct{}, error) {
+	dbName := schemaName
+	if dbName == "" {
+		dbName = defaultDatabase
+		if dbName == "" {
+			dbName = ses.GetDatabaseName()
+		}
+	}
+	_, tableDef, err := ses.GetTxnCompileCtx().Resolve(dbName, tableName, nil)
+	if err != nil {
+		return nil, err
+	}
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(context.Background(), dbName, tableName)
+	}
+	columns := make(map[string]struct{}, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		columns[col.Name] = struct{}{}
+	}
+	return columns, nil
 }
 
 // collectUpdateSource mirrors how setTableExprToDmlTableInfo maps the UPDATE

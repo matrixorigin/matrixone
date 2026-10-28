@@ -186,6 +186,71 @@ drop table if exists pt;
 drop table if exists pt2;
 drop table pe;
 
+-- A procedure that calls another procedure is gated per statement at
+-- execution as well: the nested callee's persistent write is rejected for a
+-- READ ONLY caller, the durable state survives the rejection, and the same
+-- call really writes under READ WRITE.
+create table nw (a int primary key);
+insert into nw values (1);
+drop procedure if exists ro_inner_ins;
+create procedure ro_inner_ins() 'begin insert into nw values (9); end';
+drop procedure if exists ro_outer_call;
+create procedure ro_outer_call() 'begin call ro_inner_ins(); end';
+start transaction read only;
+call ro_outer_call();
+select count(*) from nw;
+rollback;
+select count(*) from nw;
+call ro_outer_call();
+select count(*) from nw;
+delete from nw where a = 9;
+drop procedure ro_inner_ins;
+drop procedure ro_outer_call;
+drop table nw;
+
+-- Data branch CREATE/DELETE, MERGE, PICK and materialized DIFF output are
+-- persistent catalog/data mutations and observe READ ONLY; diffing without
+-- an output table only reads.
+create table bsrc (a int primary key);
+insert into bsrc values (1);
+data branch create table txn_readonly.bchild from txn_readonly.bsrc;
+start transaction read only;
+data branch create table txn_readonly.bchild2 from txn_readonly.bsrc;
+data branch delete table txn_readonly.bchild;
+data branch merge txn_readonly.bchild into txn_readonly.bsrc;
+data branch diff txn_readonly.bchild against txn_readonly.bsrc output as txn_readonly.bdiff;
+data branch diff txn_readonly.bchild against txn_readonly.bsrc output count;
+select count(*) from txn_readonly.bchild;
+rollback;
+data branch delete table txn_readonly.bchild;
+drop table bsrc;
+
+-- An unqualified UPDATE assignment resolves to the unique source owning the
+-- column, so a temporary-only column writes freely while the persistent
+-- owner and the genuinely ambiguous column are rejected.
+create table uo_p (id int primary key, pv int);
+insert into uo_p values (1, 10);
+create temporary table uo_t (id int primary key, tv int);
+insert into uo_t values (1, 100);
+start transaction read only;
+update uo_t join uo_p on uo_t.id = uo_p.id set tv = 1;
+select tv from uo_t;
+update uo_t join uo_p on uo_t.id = uo_p.id set pv = 9;
+update uo_t join uo_p on uo_t.id = uo_p.id set id = 2;
+select pv from uo_p;
+commit;
+select tv from uo_t;
+drop table uo_t;
+drop table uo_p;
+
+-- SET GLOBAL persists system variables through trusted implementation SQL
+-- and is not subject to the client-facing READ ONLY gate.
+set session transaction_read_only = 1;
+set global group_concat_max_len = 2048;
+select @@global.group_concat_max_len;
+set global group_concat_max_len = 1024;
+set session transaction_read_only = 0;
+
 -- Dynamic SQL inside a procedure cannot be classified statically: it would
 -- execute on an exempt background session inside the procedure's own
 -- committed transaction, so PREPARE/EXECUTE in the body fails closed under

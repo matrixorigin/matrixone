@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,6 +27,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+// stubUpdateSourceColumns replaces catalog access for UPDATE assignment
+// owner resolution with a fixed column map; unknown tables resolve with an
+// error like the real compile context.
+func stubUpdateSourceColumns(t *testing.T) {
+	t.Helper()
+	catalogColumns := map[string]map[string]struct{}{
+		"t":   {"a": {}, "common": {}},
+		"u":   {"a": {}},
+		"t1":  {"a": {}},
+		"t2":  {"a": {}},
+		"tt":  {"v": {}, "common": {}},
+		"tt2": {"a": {}},
+	}
+	stubs := gostub.Stub(&resolveSourceColumnNames, func(_ FeSession, _ string, tableName string, _ string) (map[string]struct{}, error) {
+		cols, ok := catalogColumns[tableName]
+		if !ok {
+			return nil, moerr.NewNoSuchTable(context.Background(), "", tableName)
+		}
+		return cols, nil
+	})
+	t.Cleanup(stubs.Reset)
+}
 
 func parseSingleStatement(t *testing.T, sql string) tree.Statement {
 	t.Helper()
@@ -133,6 +157,7 @@ func TestStatementRequiresPersistentWriteAccess(t *testing.T) {
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
 	ses.SetDatabaseName("testdb")
+	stubUpdateSourceColumns(t)
 
 	writingSQLs := []string{
 		"insert into t values (1)",
@@ -141,6 +166,19 @@ func TestStatementRequiresPersistentWriteAccess(t *testing.T) {
 		"update t set a = 1",
 		"update t as x set a = 1",
 		"update t, u set t.a = 1",
+		// Unqualified multi-source assignment owned by a persistent source,
+		// genuinely ambiguous, or hidden behind an unresolvable persistent
+		// source — all conservatively gated.
+		"update t1, t2 set a = 1",
+		"update ghost, t set a = 1",
+		// Data branch catalog and table mutations.
+		"data branch create table testdb.b1 from testdb.t",
+		"data branch create database bdb1 from testdb",
+		"data branch delete table testdb.b1",
+		"data branch delete database bdb1",
+		"data branch merge testdb.b1 into testdb.t",
+		"data branch pick testdb.b1 into testdb.t keys (a)",
+		"data branch diff testdb.t against testdb.u output as testdb.o1",
 		"delete from t",
 		"delete t from t join u",
 		"truncate table t",
@@ -203,6 +241,9 @@ func TestStatementRequiresPersistentWriteAccess(t *testing.T) {
 		"explain select * from t",
 		"explain analyze select * from t",
 		"explain phyplan select * from t",
+		// Data branch diffing without an output table only reads.
+		"data branch diff testdb.t against testdb.u",
+		"data branch diff testdb.t against testdb.u output count",
 		"grant select on table t.* to r1",
 		"revoke alter account on account * from r1",
 		"create user u1 identified by 'x'",
@@ -227,6 +268,7 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
 	ses.SetDatabaseName("testdb")
+	stubUpdateSourceColumns(t)
 	// Session-local temporary aliases shadow any persistent table of the
 	// same name, exactly as resolution sees them at statement time.
 	ses.AddTempTable("testdb", "tt", "temp_tt_real_name")
@@ -241,9 +283,13 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 		// An UPDATE assigning only temporary-table columns stays allowed even
 		// when a persistent table is merely read through a join: the planner
 		// derives written tables from the SET targets and removes unmodified
-		// sources.
+		// sources. Unqualified assignments resolve to their unique owner, so
+		// a column living only in the temporary table writes freely and a
+		// column owned by nobody never writes (the planner rejects it).
 		"update tt, t set tt.a = t.a",
 		"update tt as x join t as y on x.a = y.a set x.a = 1",
+		"update tt, t set v = 1",
+		"update tt, t set nosuchcol = 1",
 		// An assignment target the sources cannot name never writes.
 		"update tt set noseuch.a = 1",
 		"delete from tt",
@@ -271,13 +317,14 @@ func TestStatementRequiresPersistentWriteAccessTemporaryTables(t *testing.T) {
 	for _, sql := range []string{
 		"insert into t values (1)",
 		// A persistent assignment target writes even when joined with a
-		// temporary source; unqualified multi-source columns are gated
-		// conservatively because the column owner cannot be resolved
-		// statically. An assignment target the sources cannot name never
-		// writes (the planner rejects it), so it stays allowed.
+		// temporary source; an unqualified column owned by the persistent
+		// source writes it, and a genuinely ambiguous column stays
+		// conservatively gated. An assignment target the sources cannot name
+		// never writes (the planner rejects it), so it stays allowed.
 		"update tt, t set t.a = 1",
 		"update tt as x join t as y on x.a = y.a set y.a = 1",
 		"update tt, t set a = 1",
+		"update tt, t set common = 1",
 		"drop table tt, t",
 		// A DELETE target alias resolves to its FROM source first; a temporary
 		// table sharing the alias' spelling must not shadow the persistent

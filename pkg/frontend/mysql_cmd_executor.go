@@ -5764,6 +5764,16 @@ func executeStmtWithTxn(ses FeSession,
 		execCtx.proc.SetIncrStatementDisabled(true)
 		defer execCtx.proc.SetIncrStatementDisabled(wasDisabled)
 
+		// Derived statements on a shared-transaction background executor
+		// (e.g. nested procedure bodies) skip executeStmtWithWorkspace, so
+		// the READ ONLY admission runs here before dispatch instead. The gate
+		// evaluates the originating user session and the temporary bindings
+		// live at this moment; origin-less maintenance executions stay
+		// exempt inside it.
+		if err = enforceReadOnlyTxnAccessMode(ses, execCtx, execCtx.stmt, ses.GetDatabaseName()); err != nil {
+			return err
+		}
+
 		err = dispatchStmt(ses, statsArr, execCtx)
 		recordSessionDDL(ses, execCtx, err)
 	}
