@@ -186,10 +186,13 @@ func TestIntHashMapPreviewInsertMatchesPublication(t *testing.T) {
 }
 
 func TestIntHashMapFlatAndConstKeysShareIdentity(t *testing.T) {
+	t.Run("bit", func(t *testing.T) { testFlatAndConstHashKeys[uint64](t, types.T_bit) })
 	t.Run("int64", func(t *testing.T) { testFlatAndConstHashKeys[int64](t, types.T_int64) })
 	t.Run("uint64", func(t *testing.T) { testFlatAndConstHashKeys[uint64](t, types.T_uint64) })
 	t.Run("datetime", func(t *testing.T) { testFlatAndConstHashKeys[types.Datetime](t, types.T_datetime) })
 	t.Run("decimal64", func(t *testing.T) { testFlatAndConstHashKeys[types.Decimal64](t, types.T_decimal64) })
+	t.Run("time", func(t *testing.T) { testFlatAndConstHashKeys[types.Time](t, types.T_time) })
+	t.Run("timestamp", func(t *testing.T) { testFlatAndConstHashKeys[types.Timestamp](t, types.T_timestamp) })
 }
 
 func testFlatAndConstHashKeys[T interface{ ~int64 | ~uint64 }](t *testing.T, oid types.T) {
@@ -227,7 +230,7 @@ func testFlatAndConstHashKeys[T interface{ ~int64 | ~uint64 }](t *testing.T, oid
 
 	// Commit may resize and replan. It must use its own encoded hashes,
 	// even if the caller changes the input vector after preview.
-	data := vector.MustFixedColNoTypeCheck[uint64](flat)
+	data := vector.MustFixedColNoTypeCheck[T](flat)
 	data[2] = 123
 	before := owner.Size()
 	require.NoError(t, owner.PreAlloc(1024))
@@ -235,8 +238,17 @@ func testFlatAndConstHashKeys[T interface{ ~int64 | ~uint64 }](t *testing.T, oid
 	values, _, err := itr.CommitPreview(&plan)
 	require.NoError(t, err)
 	require.Equal(t, want, values)
-	data[2] = math.MaxUint64
+	data[2] = input[2]
 	values, _, err = itr.Find(1, 6, vecs)
+	require.NoError(t, err)
+	require.Equal(t, want, values)
+
+	// A borrowed window exposes the same logical keys from a shifted backing
+	// slice; the fast path must use its local row coordinates.
+	window, err := flat.WindowByLogicalRows(1, 7)
+	require.NoError(t, err)
+	t.Cleanup(func() { window.Free(mp) })
+	values, _, err = itr.Find(0, 6, []*vector.Vector{window})
 	require.NoError(t, err)
 	require.Equal(t, want, values)
 

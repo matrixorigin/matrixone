@@ -134,7 +134,7 @@ func (itr *intHashMapIterator) encodeHashKeys(vecs []*vector.Vector, start, coun
 		// still use the generic codec below.
 		if vec.GetType().TypeSize() == 8 && vec.GetType().Oid != types.T_float64 &&
 			!vec.IsConst() && !vec.GetNulls().Any() {
-			copy(itr.keys[:count], vector.MustFixedColNoTypeCheck[uint64](vec)[start:start+count])
+			copy(types.EncodeSlice(itr.keys[:count]), vec.GetData()[start*8:(start+count)*8])
 			return
 		}
 	}

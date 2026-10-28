@@ -1,5 +1,8 @@
 # General hash aggregation throughput
 
+Related issue: [#27665](https://github.com/matrixorigin/matrixone/issues/27665).
+Implementation: [#31586](https://github.com/matrixorigin/matrixone/pull/31586).
+
 ## Problem
 
 Integer hash insertion planning and key publication consume substantial CPU in
