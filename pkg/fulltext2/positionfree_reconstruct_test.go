@@ -55,7 +55,7 @@ func TestReconstructLiveDocsPositionFree(t *testing.T) {
 	merged, err := nb.Finish()
 	require.NoError(t, err)
 	midx := NewIndex([]*Segment{merged}, nil)
-	res, err := midx.SearchBagOfWords([]byte("apple"), ParserDefault, BM25, 10, nil)
+	res, err := midx.SearchBagOfWords([]byte("apple"), ParserDefault, BM25, 10, nil, 0)
 	require.NoError(t, err)
 	require.Equal(t, []any{int64(0)}, resultIDs(res))
 }

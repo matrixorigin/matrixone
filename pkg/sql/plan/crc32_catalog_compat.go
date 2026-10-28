@@ -49,6 +49,21 @@ func containsLegacyCRC32(owner *planpb.Expr) bool {
 	return found
 }
 
+// The legacy DML planner fills omitted columns from defaults rather than
+// evaluating GeneratedCol.Expr. Both virtual and stored generated columns are
+// materialized by the modern planner, so neither is safe on that fallback.
+func rejectLegacyCRC32GeneratedFallback(ctx context.Context, table *planpb.TableDef) error {
+	if table == nil {
+		return nil
+	}
+	for _, col := range table.Cols {
+		if col != nil && col.GeneratedCol != nil && containsLegacyCRC32(col.GeneratedCol.Expr) {
+			return moerr.NewNotSupported(ctx, "legacy DML planner cannot write a legacy CRC32 JSON generated column")
+		}
+	}
+	return nil
+}
+
 // CHANGE/MODIFY repeats the column definition even for a rename or reorder.
 // Preserve its bound identity when the expression and type are unchanged. A
 // semantic conversion needs an explicit rebuild, never a metadata-only rewrite.

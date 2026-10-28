@@ -40,6 +40,7 @@ func (c *historicalColumnsContext) Resolve(db, table string, snapshot *Snapshot)
 
 func TestHistoricalViewColumnsSQL(t *testing.T) {
 	legacy := sysview.InformationSchemaColumnsV58DDL()
+	replacement := strings.Replace(sysview.InformationSchemaColumnsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1)
 	denied := errors.New("catalog permission denied")
 	for _, tc := range []struct {
 		name        string
@@ -60,6 +61,7 @@ func TestHistoricalViewColumnsSQL(t *testing.T) {
 		{name: "current query keeps migration semantics", noSnapshot: true},
 		{name: "unrelated View", otherView: true},
 		{name: "already current", definition: sysview.InformationSchemaColumnsDDL},
+		{name: "already current replacement", definition: replacement},
 		{name: "before migration", current: legacy, wantResolve: true},
 		{name: "protocol100 migration remains active before protocol109", current: sysview.InformationSchemaColumnsV100DDL(), wantResolve: true, wantAdapt: true},
 		{name: "current v110 gate adapts v109 template", current: sysview.InformationSchemaColumnsDDL, definition: sysview.InformationSchemaColumnsV109DDL(), wantResolve: true, wantAdapt: true},
@@ -67,7 +69,11 @@ func TestHistoricalViewColumnsSQL(t *testing.T) {
 		{name: "current v110 gate rejects modified v109 template", current: sysview.InformationSchemaColumnsDDL, definition: sysview.InformationSchemaColumnsV109DDL() + " ", wantResolve: true, wantError: true},
 		{name: "pre-migration gate keeps v109 template unchanged", current: legacy, definition: sysview.InformationSchemaColumnsV109DDL(), wantResolve: true},
 		{name: "after migration", current: sysview.InformationSchemaColumnsDDL, wantResolve: true, wantAdapt: true},
+		{name: "after identity-preserving migration", current: replacement, wantResolve: true, wantAdapt: true},
+		{name: "replaced historical template", current: replacement, definition: strings.Replace(sysview.InformationSchemaColumnsV100DDL(), "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), wantResolve: true, wantAdapt: true},
+		{name: "modified replacement is not a migration gate", current: replacement + " ", wantResolve: true},
 		{name: "cross tenant", current: sysview.InformationSchemaColumnsDDL, crossTenant: true, wantResolve: true, wantAdapt: true},
+		{name: "cross tenant replacement", current: replacement, crossTenant: true, wantResolve: true, wantAdapt: true},
 		{name: "cross tenant protocol100 migration", current: sysview.InformationSchemaColumnsV100DDL(), crossTenant: true, wantResolve: true, wantAdapt: true},
 		{name: "unknown historical template", current: sysview.InformationSchemaColumnsDDL, definition: "create view columns as select 1", wantResolve: true, wantError: true},
 		{name: "permission failure", resolveErr: denied, wantResolve: true, wantError: true},
@@ -76,6 +82,7 @@ func TestHistoricalViewColumnsSQL(t *testing.T) {
 		{name: "missing current template", missing: true, wantResolve: true, wantError: true},
 		{name: "malformed current template", badJSON: true, wantResolve: true, wantError: true},
 		{name: "protocol not ready", current: sysview.InformationSchemaColumnsDDL, oldProtocol: true, wantResolve: true, wantError: true},
+		{name: "replacement protocol not ready", current: replacement, oldProtocol: true, wantResolve: true, wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockCompilerContext(true, newPlanTestProcess(t))

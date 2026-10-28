@@ -1407,7 +1407,12 @@ func appendJSONQuotedString(dst []byte, str string) []byte {
 func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	jsonSingle := func(v []byte) (string, error) {
 		bj := types.DecodeJson(v)
-		return bj.Unquote()
+		if bj.Type == bytejson.TpCodeString {
+			// The unary template copies this view into its result before the
+			// input vector can be reused. Keep Unquote's public owning result.
+			return functionUtil.QuickBytesToStr(bj.GetString()), nil
+		}
+		return unquoteJSONForFloatStringProof(proc.Ctx, bj)
 	}
 
 	stringSingle := func(v []byte) (string, error) {
@@ -1421,7 +1426,7 @@ func JsonUnquote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		if err != nil {
 			return "", err
 		}
-		return bj.Unquote()
+		return unquoteJSONForFloatStringProof(proc.Ctx, bj)
 	}
 
 	single := func(v []byte, row int) (string, error) {
