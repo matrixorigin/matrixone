@@ -5425,3 +5425,16 @@ func TestCastArrayDimensionMismatch(t *testing.T) {
 		require.True(t, ok, info)
 	})
 }
+
+func TestCastApproximateToTextMySQL(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, input := range []FunctionTestInput{
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{1e20, -1e20, 1e-7, 1e-14, 1e-16, 1e15, 0}, []bool{false, false, false, false, false, false, true}),
+		NewFunctionTestInput(types.T_float32.ToType(), []float32{1e20, -1e20, 1e-7, 1e-14, 1e-16, 1e15, 0}, []bool{false, false, false, false, false, false, true}),
+	} {
+		tc := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(types.T_varchar.ToType(), []string{}, nil)},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"1e20", "-1e20", "0.0000001", "0.00000000000001", "1e-16", "1e15", ""}, []bool{false, false, false, false, false, false, true}), NewCast)
+		succeed, info := tc.RunAndFree()
+		require.True(t, succeed, info)
+	}
+}

@@ -1739,8 +1739,8 @@ cast03    col3New    varchar    YES
 cast03    colNew    char    YES
 select * from cast03;
 newdwhjvb32v    colnew    col2new    col3new
-8329498352    1    323242.34    23432.3242
-0    200    -213443.33    32424.342424242
+8329498352    1    323242    23432.3242
+0    200    -213443    32424.342424242
 null    null    null    null
 3243342    3242f()    4728947234342,    457328990r3if943i4u9owiuo4ewfr3w4r3fre
 drop table cast03;

@@ -89,6 +89,9 @@ func resolveDivPrecisionIncrement(ctx CompilerContext) int32 {
 // expressions with the same statement setting as ordinary SELECT expressions.
 func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Context {
 	bound := function.WithDivPrecisionIncrement(base, resolveDivPrecisionIncrement(ctx))
+	if function.LegacyFloatStringBounds(ctx.GetContext()) {
+		bound = function.WithLegacyFloatStringBounds(bound)
+	}
 	if function.LegacySpecialConsumers(ctx.GetContext()) {
 		bound = function.WithLegacySpecialConsumers(bound)
 	}

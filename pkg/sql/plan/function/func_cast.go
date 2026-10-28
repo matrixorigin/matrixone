@@ -4631,6 +4631,10 @@ func floatToStr[T constraints.Float](
 	ctx context.Context, proc *process.Process,
 	from vector.FunctionParameterWrapper[T],
 	to *vector.FunctionResult[types.Varlena], length int, toType types.Type, strictStringWidth ...bool) error {
+	formatFloat := floatToBytes
+	if LegacyFloatStringFormatting(ctx) {
+		formatFloat = legacyFloatToBytes
+	}
 	var i uint64
 	l := uint64(length)
 	bitSize := int(unsafe.Sizeof(T(0)) * 8)
@@ -4638,7 +4642,7 @@ func floatToStr[T constraints.Float](
 	if toType.Oid == types.T_binary && toType.Scale == -1 {
 		for i = 0; i < l; i++ {
 			v, null := from.GetValue(i)
-			v1 := floatToBytes(float64(v), bitSize)
+			v1 := formatFloat(float64(v), bitSize)
 			if err := explicitCastToBinary(toType, v1, null, to); err != nil {
 				return err
 			}
@@ -4653,7 +4657,7 @@ func floatToStr[T constraints.Float](
 			}
 		} else {
 			// float to string, [-14,15] convert to exponent.
-			result := floatToBytes(float64(v), bitSize)
+			result := formatFloat(float64(v), bitSize)
 			result = truncateNumericBinaryAssignment(proc, result, toType, i, strictStringWidth)
 			if toType.Oid == types.T_binary || toType.Oid == types.T_varbinary {
 				if int32(len(result)) > toType.Width {
@@ -10769,7 +10773,7 @@ func jsonToStr(
 				}
 				str = s
 			} else {
-				bs, err := bj.MarshalJSON()
+				bs, err := marshalJSONForFloatStringProof(ctx, bj)
 				if err != nil {
 					return err
 				}
@@ -11513,11 +11517,7 @@ func explicitCastToBinary(toType types.Type, v []byte, null bool, to *vector.Fun
 }
 
 func floatToBytes(v float64, bitSize int) []byte {
-	if v >= float64(1e15) || (v < float64(1e-13) && v > 0) || (v < 0 && v > -1e-13) || v <= -1e15 {
-		return []byte(strconv.FormatFloat(float64(v), 'E', -1, bitSize))
-	} else {
-		return []byte(strconv.FormatFloat(float64(v), 'f', -1, bitSize))
-	}
+	return util.AppendMySQLFloat(nil, v, bitSize)
 }
 
 // yearToOthers converts YEAR type to other types
