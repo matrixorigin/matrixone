@@ -845,6 +845,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_json,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_bool,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -1357,6 +1358,10 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 		err = blockidToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_json:
 		s := vector.GenerateFunctionStrParameter(from)
+		if oid := toType.Oid; oid == types.T_date || oid == types.T_time || oid == types.T_datetime || oid == types.T_timestamp {
+			err = jsonToTemporal(execProc, s, *toType, result, length, selectList, mode)
+			break
+		}
 		err = jsonToOthers(execProc, execProc.Ctx, s, *toType, result, length, selectList,
 			strictStringWidth, allowTrailingSpaceTrim, mode.isAssignment(), mode == castModeExplicit, reportDataTooLong)
 	case types.T_enum:
@@ -3189,6 +3194,39 @@ func jsonToOthers(proc *process.Process, ctx context.Context,
 		return jsonToNumeric(ctx, source, result, length, toType)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from json to %s", toType))
+}
+
+// jsonToTemporal implements JSON -> DATE/TIME/DATETIME/TIMESTAMP like MySQL:
+// a JSON string scalar is parsed exactly as the same SQL string would be (so
+// invalid text keeps the string cast's NULL/error contract for this mode), and
+// JSON null is SQL NULL. Other JSON values have no temporal reading and fail
+// like the other JSON scalar casts.
+func jsonToTemporal(proc *process.Process, source vector.FunctionParameterWrapper[types.Varlena],
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
+	mode castMode) error {
+	text := vector.NewVec(types.T_varchar.ToType())
+	defer text.Free(proc.Mp())
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := source.GetStrValue(i)
+		if !null && !functionRowSkipped(selectList, i) {
+			bj := types.DecodeJson(v)
+			switch {
+			case bj.Type == bytejson.TpCodeString:
+				if err := vector.AppendBytes(text, bj.GetString(), false, proc.Mp()); err != nil {
+					return err
+				}
+				continue
+			case bj.Type == bytejson.TpCodeLiteral && len(bj.Data) > 0 && bj.Data[0] == bytejson.LiteralNull:
+			default:
+				return jsonCastErr(proc.Ctx, toType.Oid)
+			}
+		}
+		if err := vector.AppendBytes(text, nil, true, proc.Mp()); err != nil {
+			return err
+		}
+	}
+	return strTypeToOthers(proc, vector.GenerateFunctionStrParameter(text), toType, result, length,
+		selectList, mode, false, false)
 }
 
 // jsonCastErr returns the standard error for an invalid JSON scalar cast.

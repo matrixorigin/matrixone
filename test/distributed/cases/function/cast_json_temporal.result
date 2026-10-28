@@ -1,0 +1,50 @@
+drop database if exists cast_json_temporal;
+create database cast_json_temporal;
+use cast_json_temporal;
+select cast(cast('"2026-01-31"' as json) as date), cast(cast('"12:34:56.5"' as json) as time(1)), cast(cast('"2026-01-31 01:02:03.456"' as json) as datetime(3));
+➤ cast(cast("2026-01-31" as json) as date)[91,10,0]  ¦  cast(cast("12:34:56.5" as json) as time(1))[92,12,0]  ¦  cast(cast("2026-01-31 01:02:03.456" as json) as datetime(3))[93,23,0]  𝄀
+2026-01-31  ¦  12:34:56.500000000  ¦  2026-01-31 01:02:03.456000000
+select cast(cast('"2026-01-31 01:02:03"' as json) as timestamp) = timestamp('2026-01-31 01:02:03');
+➤ cast(cast("2026-01-31 01:02:03" as json) as timestamp) = timestamp(2026-01-31 01:02:03)[-6,8,0]  𝄀
+1
+select cast(json_extract('{"d":"2024-02-29"}', '$.d') as date), cast(json_extract('{"d":null}', '$.d') as date), cast(json_extract('{"a":1}', '$.d') as date);
+➤ cast(json_extract({"d":"2024-02-29"}, $.d) as date)[91,10,0]  ¦  cast(json_extract({"d":null}, $.d) as date)[91,10,0]  ¦  cast(json_extract({"a":1}, $.d) as date)[91,10,0]  𝄀
+2024-02-29  ¦  null  ¦  null
+select cast(cast('"not a date"' as json) as date), cast(cast('"2026-02-30"' as json) as date);
+➤ cast(cast("not a date" as json) as date)[91,10,0]  ¦  cast(cast("2026-02-30" as json) as date)[91,10,0]  𝄀
+null  ¦  null
+select cast(cast('"25:61:00"' as json) as time);
+invalid input: invalid time value 25:61:00
+select cast('25:61:00' as time);
+invalid input: invalid time value 25:61:00
+select cast(cast('20260131' as json) as date);
+invalid argument operator cast, bad value [JSON -> DATE]
+select cast(cast('true' as json) as time);
+invalid argument operator cast, bad value [JSON -> TIME]
+select cast(cast('["2026-01-31"]' as json) as datetime);
+invalid argument operator cast, bad value [JSON -> DATETIME]
+select cast(cast('{"d":"2026-01-31"}' as json) as date);
+invalid argument operator cast, bad value [JSON -> DATE]
+create table jt (id int primary key, j json);
+insert into jt values (1, '{"d":"2026-01-31","t":"10:00:00","ts":"2026-01-31 10:20:30.5"}'), (2, '{"d":null}'), (3, '{}'), (4, null);
+select id, cast(j->'$.d' as date), cast(j->'$.d' as datetime), cast(j->'$.t' as time), cast(j->'$.ts' as datetime(1)) from jt order by id;
+➤ id[4,32,0]  ¦  cast(json_extract(j, $.d) as date)[91,10,0]  ¦  cast(json_extract(j, $.d) as datetime)[93,19,0]  ¦  cast(json_extract(j, $.t) as time)[92,10,0]  ¦  cast(json_extract(j, $.ts) as datetime(1))[93,21,0]  𝄀
+1  ¦  2026-01-31  ¦  2026-01-31 00:00:00  ¦  10:00:00  ¦  2026-01-31 10:20:30.500000000  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null
+select id from jt where cast(j->'$.d' as date) = '2026-01-31';
+➤ id[4,32,0]  𝄀
+1
+select id, date_add(cast(j->'$.d' as date), interval 1 day) from jt where id = 1;
+➤ id[4,32,0]  ¦  date_add(cast(json_extract(j, $.d) as date), INTERVAL 1 day)[91,10,0]  𝄀
+1  ¦  2026-02-01
+create table jd (id int, d date, dt datetime, t time);
+insert into jd select id, cast(j->'$.d' as date), cast(j->'$.ts' as datetime), cast(j->'$.t' as time) from jt;
+select * from jd order by id;
+➤ id[4,32,0]  ¦  d[91,10,0]  ¦  dt[93,19,0]  ¦  t[92,10,0]  𝄀
+1  ¦  2026-01-31  ¦  2026-01-31 10:20:31  ¦  10:00:00  𝄀
+2  ¦  null  ¦  null  ¦  null  𝄀
+3  ¦  null  ¦  null  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null
+drop database cast_json_temporal;
