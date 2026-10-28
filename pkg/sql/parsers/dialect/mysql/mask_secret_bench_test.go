@@ -95,6 +95,34 @@ func BenchmarkMaskPrepareStage(b *testing.B) {
 
 var benchMaskedRequest string
 
+// Keep the former large-input UT shapes, including the original 2^18 repeat
+// count, in a scaling benchmark. Ordinary tests assert single-consumption
+// ranges and exact masking without depending on a shared runner's CPU budget.
+func BenchmarkMaskMalformedValueRunScale(b *testing.B) {
+	const prefix = `create stage s credentials={'aws_key'=`
+	for _, tc := range []struct{ name, start, tail, maskedTail string }{
+		{"closed", prefix, "}", "}"},
+		{"EOF", prefix, "", ""},
+		{"executable comment", prefix + "/*! ", " */}", "}"},
+	} {
+		for _, n := range []int{1 << 12, 1 << 16, 1 << 18} {
+			sql := tc.start + strings.Repeat("a=", n) + `'SCALE_CANARY'` + tc.tail
+			want := tc.start + "******" + tc.maskedTail
+			b.Run(fmt.Sprintf("%s/%d", tc.name, n), func(b *testing.B) {
+				b.SetBytes(int64(len(sql)))
+				b.ReportAllocs()
+				for i := 0; i < b.N; i++ {
+					benchMaskedRequest = MaskSensitiveSqlLiterals(sql)
+				}
+				b.StopTimer()
+				if benchMaskedRequest != want {
+					b.Fatal("malformed value was not masked as one complete range")
+				}
+			})
+		}
+	}
+}
+
 func BenchmarkMaskRequestSQLMode(b *testing.B) {
 	for _, value := range []string{"ordinary note", "sql_mode note", "SET sql_mode note"} {
 		sql := "insert into docs(id,note) values " + strings.TrimSuffix(strings.Repeat("(1,'"+value+"'),", 1000), ",") + ";"

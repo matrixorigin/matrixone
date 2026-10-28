@@ -18,7 +18,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -335,16 +334,31 @@ func TestMaskPreparedSqlLiteralsMultiStatement(t *testing.T) {
 
 // #30747 review: each malformed unquoted value run is consumed once; a long
 // run of repeated a= segments must stay linear instead of re-scanning the
-// suffix once per token. (Bound is generous: the previous quadratic form
-// needed ~seconds here, the linear form is sub-millisecond.)
+// suffix once per token. Assert the raw ranges, not scheduler-sensitive wall
+// time; large-input scaling is covered by BenchmarkMaskMalformedValueRunScale.
 func TestMaskUnquotedCredentialValueRunLinear(t *testing.T) {
-	repeat := strings.Repeat("a=", 1<<18)
-	sql := `create stage s credentials={'aws_key'=` + repeat + `'LINEAR_CANARY'}`
-	start := time.Now()
-	got := MaskSensitiveSqlLiterals(sql)
-	elapsed := time.Since(start)
-	require.NotContains(t, got, "LINEAR_CANARY")
-	require.Less(t, elapsed, 2*time.Second, "malformed unquoted run must be consumed once")
+	const prefix = `create stage s credentials={'aws_key'=`
+	value := strings.Repeat("a=", 16) + `'LINEAR_CANARY'`
+	for _, tc := range []struct{ name, tail, maskedTail string }{
+		{"closing brace", `}; select 'VISIBLE'`, `}; select 'VISIBLE'`},
+		{"next value", `,'secret_key'='NEXT_CANARY'}; select 'VISIBLE'`, `,'secret_key'='******'}; select 'VISIBLE'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sql := prefix + value + tc.tail
+			wantSpans := [][2]int{{len(prefix), len(prefix) + len(value)}}
+			if next := strings.Index(sql, "NEXT_CANARY"); next >= 0 {
+				wantSpans = append(wantSpans, [2]int{next, next + len("NEXT_CANARY")})
+			}
+			spans, edits, _ := collectCredentialMasks(sql, CredentialStateNone, true, 0, true)
+			require.Equal(t, wantSpans, spans, "one original range per value, without overlapping suffix rescans")
+			require.Empty(t, edits)
+			got := MaskSensitiveSqlLiterals(sql)
+			require.Equal(t, prefix+"******"+tc.maskedTail, got)
+			require.NotContains(t, got, "LINEAR_CANARY")
+			require.NotContains(t, got, "NEXT_CANARY")
+			require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+		})
+	}
 }
 
 // #30747 review: parser reuse must not inherit the previous statement's
@@ -425,25 +439,30 @@ func TestMaskExecutableCommentVersionPrefixValue(t *testing.T) {
 // #30747 review round 4, finding 3: the quadratic guard covered only runs
 // closed by a separator; unclosed runs at END-OF-INPUT and runs inside
 // executable comments re-scanned the tail once per token. coveredUntil now
-// consumes every byte of a run exactly once for those shapes too.
+// consumes every byte of a run exactly once for those shapes too. A single
+// original mask range proves the guard without a wall-clock threshold.
 func TestMaskMalformedRunsAtEOFAndInCommentStayLinear(t *testing.T) {
-	repeat := strings.Repeat("a=", 1<<18)
-
-	// run reaches end-of-input
-	sql := `create stage s credentials={'aws_key'=` + repeat
-	start := time.Now()
-	got := MaskSensitiveSqlLiterals(sql)
-	elapsed := time.Since(start)
-	require.NotContains(t, got, "a=a=")
-	require.Less(t, elapsed, 2*time.Second, "unclosed run at EOF must be consumed once")
-
-	// run stays inside an executable comment
-	sql = `create stage s credentials={'aws_key'=/*! ` + repeat + ` */}`
-	start = time.Now()
-	got = MaskSensitiveSqlLiterals(sql)
-	elapsed = time.Since(start)
-	require.NotContains(t, got, "a=a=")
-	require.Less(t, elapsed, 2*time.Second, "run inside an exec comment must be consumed once")
+	const prefix = `create stage s credentials={'aws_key'=`
+	value := strings.Repeat("a=", 16) + "RUN_CANARY"
+	for _, tc := range []struct {
+		name, start, tail, maskedTail string
+	}{
+		{"EOF", prefix, "", ""},
+		{"executable comment", prefix + "/*! ", " */}", "}"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sql := tc.start + value + tc.tail
+			end := len(sql) - len(tc.maskedTail)
+			spans, edits, _ := collectCredentialMasks(sql, CredentialStateNone, true, 0, true)
+			require.Equal(t, [][2]int{{len(tc.start), end}}, spans, "unquoted run produces exactly one full mask range")
+			require.Empty(t, edits)
+			got := MaskSensitiveSqlLiterals(sql)
+			require.Equal(t, tc.start+"******"+tc.maskedTail, got)
+			require.NotContains(t, got, "a=a=")
+			require.NotContains(t, got, "RUN_CANARY")
+			require.Equal(t, got, MaskSensitiveSqlLiterals(got), "idempotent")
+		})
+	}
 }
 
 // #30747 review round 4, finding 4: the COM_QUERY debug trace receives the
