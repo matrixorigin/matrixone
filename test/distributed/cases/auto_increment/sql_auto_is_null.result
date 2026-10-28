@@ -1,0 +1,72 @@
+drop database if exists sql_auto_is_null_bvt;
+create database sql_auto_is_null_bvt;
+use sql_auto_is_null_bvt;
+set sql_auto_is_null=1;
+create table t30717(id bigint auto_increment primary key, v int, w int);
+create table s30717(b int);
+select @@session.sql_auto_is_null;
+➤ @@sql_auto_is_null[-1,16383,0]  𝄀
+1
+insert into t30717(v) values (7);
+select id,v from t30717 where id is null;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  7
+set sql_auto_is_null=0;
+select id,v from t30717 where id is null;
+➤ id[-5,64,0]  ¦  v[4,32,0]
+set sql_auto_is_null=1;
+select id,v from t30717 where id is null;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  7
+select id,v from t30717 where id is null and v=7;
+➤ id[-5,64,0]  ¦  v[4,32,0]
+select id,v from t30717 where id=last_insert_id();
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+1  ¦  7
+insert into t30717(v) values (8),(9),(10);
+select id,v from t30717 where id is null;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+2  ¦  8
+insert into t30717(id,v) values (100,11);
+select id,v from t30717 where id is null;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+2  ¦  8
+insert into t30717(v) values (15);
+select id,v from t30717 where id is null;
+➤ id[-5,64,0]  ¦  v[4,32,0]  𝄀
+101  ¦  15
+insert into t30717(v,w) values (12,null);
+select v,w from t30717 where w is null order by v;
+➤ v[4,32,0]  ¦  w[4,32,0]  𝄀
+7  ¦  null  𝄀
+8  ¦  null  𝄀
+9  ¦  null  𝄀
+10  ¦  null  𝄀
+11  ¦  null  𝄀
+12  ¦  null  𝄀
+15  ¦  null
+insert into s30717 values (1),(5),(200);
+select s.b from s30717 s left join t30717 t on t.id=s.b where t.id is null order by s.b;
+➤ b[4,32,0]  𝄀
+5  𝄀
+200
+select id,v from t30717 having id is null;
+➤ id[-5,64,0]  ¦  v[4,32,0]
+set sql_auto_is_null=0;
+prepare st30717off from 'select v from t30717 where id is null';
+set sql_auto_is_null=1;
+insert into t30717(v) values (13);
+execute st30717off;
+➤ v[4,32,0]
+deallocate prepare st30717off;
+prepare st30717on from 'select v from t30717 where id is null';
+insert into t30717(v) values (14);
+execute st30717on;
+➤ v[4,32,0]  𝄀
+14
+set sql_auto_is_null=0;
+execute st30717on;
+➤ v[4,32,0]  𝄀
+14
+deallocate prepare st30717on;
+drop database if exists sql_auto_is_null_bvt;
