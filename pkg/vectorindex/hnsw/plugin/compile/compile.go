@@ -81,7 +81,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		}
 	}
 
-	if len(indexDefs) != 2 && len(indexDefs) != 3 {
+	if len(indexDefs) < 2 || len(indexDefs) > 4 {
 		return moerr.NewInternalErrorNoCtx("invalid hnsw index table definition")
 	}
 	metaDef, ok := indexDefs[catalog.Hnsw_TblType_Metadata]
@@ -136,7 +136,8 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		// (monotonic across a rebuild under a skewed/backward clock; see
 		// hnsw.BuildTimestamp / HnswSearch.IsStale). The TVF clears even when
 		// nothing is built, so a REBUILD to zero docs still empties the index.
-		sqls, err := genBuildSQL(ctx, indexDefs)
+		// A new index built by the user's statement rejects a row it cannot store.
+		sqls, err := genBuildSQL(ctx, indexDefs, ctx.IndexInfo() != nil && ctx.IsFrontend())
 		if err != nil {
 			return err
 		}
@@ -257,11 +258,14 @@ func genDeleteSQL(indexDefs map[string]*plan.IndexDef, qryDatabase string) ([]st
 	if dict, ok := indexDefs[catalog.Hnsw_TblType_Dict]; ok {
 		sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, dict.IndexTableName)))
 	}
+	if ignored, ok := indexDefs[catalog.IndexIgnored_TblType]; ok {
+		sqls = append(sqls, fmt.Sprintf("DELETE FROM %s WHERE TRUE", sqlquote.QualifiedIdent(qryDatabase, ignored.IndexTableName)))
+	}
 	return sqls, nil
 }
 
 // genBuildSQL is lifted from pkg/sql/compile/util.go:576.
-func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) ([]string, error) {
+func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, rejectUnstorable bool) ([]string, error) {
 	originalTableDef := ctx.OriginalTableDef()
 	qryDatabase := ctx.QryDatabase()
 
@@ -293,6 +297,10 @@ func genBuildSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.In
 	if dict, ok := indexDefs[catalog.Hnsw_TblType_Dict]; ok {
 		cfg.DictTable = dict.IndexTableName
 	}
+	if ignored, ok := indexDefs[catalog.IndexIgnored_TblType]; ok {
+		cfg.IgnoredTable = ignored.IndexTableName
+	}
+	cfg.RejectUnstorable = rejectUnstorable
 
 	threads, err := ctx.ResolveVariable("hnsw_threads_build", true, false)
 	if err != nil {

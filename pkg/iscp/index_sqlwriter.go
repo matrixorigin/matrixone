@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	usearch "github.com/unum-cloud/usearch/golang"
 )
 
 const (
@@ -102,6 +103,8 @@ type HnswSqlWriter[T types.ArrayElement] struct {
 	srcPos    []int32
 	srcType   []*types.Type
 	dbName    string
+	kind      usearch.Quantization
+	ignored   *ignoredRows
 }
 
 // check FulltextSqlWriter is the interface of IndexSqlWriter
@@ -427,6 +430,12 @@ func NewGenericHnswSqlWriter[T types.ArrayElement](algo string, jobID JobID, inf
 
 	w.dbName = tabledef.DbName
 
+	kind, err := hnsw.StorageQuantization(hnswparam.Quantization, tabledef.Cols[w.partsPos[0]].Typ.Id)
+	if err != nil {
+		return nil, err
+	}
+	w.kind = kind
+
 	w.meta = vectorindex.HnswCdcParam{
 		MetaTbl:   meta,
 		IndexTbl:  storage,
@@ -448,8 +457,8 @@ func NewHnswSqlWriter(algo string, jobID JobID, info *ConsumerInfo, tabledef *pl
 		return nil, moerr.NewInternalErrorNoCtx("hnsw index table only have one primary key")
 	}
 
-	if len(indexdef) != 2 && len(indexdef) != 3 {
-		return nil, moerr.NewInternalErrorNoCtx("hnsw index table must have 2 or 3 secondary tables")
+	if len(indexdef) < 2 || len(indexdef) > 4 {
+		return nil, moerr.NewInternalErrorNoCtx("hnsw index table must have 2 to 4 secondary tables")
 	}
 
 	idxdef := indexdef[0]
@@ -518,8 +527,28 @@ func (w *HnswSqlWriter[T]) Insert(ctx context.Context, row []any) error {
 		return nil
 	}
 
+	if w.unstorable(key, v) {
+		return nil
+	}
 	w.cdc.Insert(key, v, nil)
 	return nil
+}
+
+// unstorable records whether the index cannot store v, the vector of the row with key.
+func (w *HnswSqlWriter[T]) unstorable(key int64, v []T) bool {
+	if w.ignored == nil {
+		return false
+	}
+	if err := hnsw.CheckStorable(v, w.kind); err != nil {
+		w.ignored.ignore(key, err.Error())
+		return true
+	}
+	w.ignored.indexed(key)
+	return false
+}
+
+func (w *HnswSqlWriter[T]) setIgnored(ignored *ignoredRows) {
+	w.ignored = ignored
 }
 
 func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
@@ -546,6 +575,11 @@ func (w *HnswSqlWriter[T]) Upsert(ctx context.Context, row []any) error {
 		return nil
 	}
 
+	if w.unstorable(key, v) {
+		// remove the version the index holds
+		w.cdc.Delete(key)
+		return nil
+	}
 	w.cdc.Upsert(key, v, nil)
 	return nil
 }
@@ -555,6 +589,9 @@ func (w *HnswSqlWriter[T]) Delete(ctx context.Context, row []any) error {
 	key, ok := row[0].(int64)
 	if !ok {
 		return moerr.NewInternalError(ctx, "invalid key type. not int64")
+	}
+	if w.ignored != nil {
+		w.ignored.indexed(key)
 	}
 	w.cdc.Delete(key)
 	return nil

@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
@@ -38,6 +40,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	usearch "github.com/unum-cloud/usearch/golang"
+	"go.uber.org/zap"
 )
 
 // hnswCatalogHooks is the shared (stateless) catalog-hooks instance used for
@@ -55,6 +59,8 @@ type hnswCreateState struct {
 	idxcfg vectorindex.IndexConfig
 	// bounds is the range of an int8/uint8 index, written to its dict table by end.
 	bounds hnsw.QuantizeBounds
+	// ignored holds the rows the index cannot store, written to its ignored table by end.
+	ignored []vectorindex.IgnoredRow
 
 	// holding one call batch, tokenizedState owns it.
 	batch *batch.Batch
@@ -88,6 +94,18 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	}
 	if u.tblcfg.DictTable != "" && u.bounds.Set {
 		sqls = append(sqls, hnsw.DictBoundsSql(u.tblcfg.DbName, u.tblcfg.DictTable, u.bounds))
+	}
+	if len(u.ignored) > 0 {
+		buildTs := buildSnapshotTS(proc)
+		for i := range u.ignored {
+			u.ignored[i].Ts = buildTs
+		}
+		sqls = append(sqls, vectorindex.IgnoredRowsSql(u.tblcfg.DbName, u.tblcfg.IgnoredTable, u.ignored)...)
+		logutil.Warn("hnsw_create ignored rows",
+			zap.String("db", u.tblcfg.DbName),
+			zap.String("table", u.tblcfg.SrcTable),
+			zap.Int("ignored", len(u.ignored)),
+			zap.String("first", u.ignored[0].Pk+": "+u.ignored[0].Reason))
 	}
 
 	return sqlexec.RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
@@ -347,9 +365,16 @@ func (u *hnswCreateState) addResult(res executor.Result) error {
 			if idVec.IsNull(uint64(i)) || faVec.IsNull(uint64(i)) {
 				continue
 			}
-			if err := u.build.addBytes(vector.GetFixedAtNoTypeCheck[int64](idVec, i), faVec.GetBytesAt(i)); err != nil {
-				return err
+			id := vector.GetFixedAtNoTypeCheck[int64](idVec, i)
+			err := u.build.addBytes(id, faVec.GetBytesAt(i))
+			var unstorable *unstorableError
+			if !errors.As(err, &unstorable) || u.tblcfg.IgnoredTable == "" || u.tblcfg.RejectUnstorable {
+				if err != nil {
+					return err
+				}
+				continue
 			}
+			u.ignored = append(u.ignored, vectorindex.IgnoredRow{Pk: strconv.FormatInt(id, 10), Reason: unstorable.Error()})
 		}
 	}
 	return nil
@@ -362,19 +387,29 @@ type hnswBuilder interface {
 	PreparePersistence(ts int64, buildTS int64, provenance bool) ([]string, error)
 	PersistChunks(*sqlexec.ChunkInserter) error
 	Destroy() error
-	// addBytes adds a vector given in the column's encoding.
+	// addBytes adds a vector given in the column's encoding; an *unstorableError tells why the
+	// index cannot store it.
 	addBytes(id int64, data []byte) error
 }
 
+// unstorableError is the reason the index cannot store a row.
+type unstorableError struct{ error }
+
+func (e *unstorableError) Unwrap() error { return e.error }
+
 type typedHnswBuilder[T types.ArrayElement] struct {
 	*hnsw.HnswBuild[T]
-	dim uint
+	dim  uint
+	kind usearch.Quantization
 }
 
 func (b typedHnswBuilder[T]) addBytes(id int64, data []byte) error {
 	vec := types.BytesToArray[T](data)
 	if uint(len(vec)) != b.dim {
-		return moerr.NewInternalErrorNoCtx("vector dimension mismatch")
+		return &unstorableError{moerr.NewInvalidInputNoCtxf("vector dimension %d does not match the index dimension %d", len(vec), b.dim)}
+	}
+	if err := hnsw.CheckStorable(vec, b.kind); err != nil {
+		return &unstorableError{err}
 	}
 	return b.Add(id, vec)
 }
@@ -385,7 +420,7 @@ func newTypedHnswBuilder[T types.ArrayElement](sqlproc *sqlexec.SqlProcess, uid 
 	if err != nil {
 		return nil, err
 	}
-	return typedHnswBuilder[T]{HnswBuild: build, dim: idxcfg.Usearch.Dimensions}, nil
+	return typedHnswBuilder[T]{HnswBuild: build, dim: idxcfg.Usearch.Dimensions, kind: idxcfg.Usearch.Quantization}, nil
 }
 
 // newHnswBuilder returns a build that takes vectors of the column type partType as they are.

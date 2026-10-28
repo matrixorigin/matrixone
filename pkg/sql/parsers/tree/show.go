@@ -593,6 +593,24 @@ func NewShowIndex(t *UnresolvedObjectName, w *Where) *ShowIndex {
 	}
 }
 
+// ShowIndexIgnored lists the rows the indexes of a table left out because they cannot store them.
+type ShowIndexIgnored struct {
+	showImpl
+	TableName *UnresolvedObjectName
+	Where     *Where
+}
+
+func (node *ShowIndexIgnored) Format(ctx *FmtCtx) {
+	ctx.WriteString("show index ignored from ")
+	node.TableName.Format(ctx)
+	if node.Where != nil {
+		ctx.WriteByte(' ')
+		node.Where.Format(ctx)
+	}
+}
+func (node *ShowIndexIgnored) GetStatementType() string { return "Show Index Ignored" }
+func (node *ShowIndexIgnored) GetQueryType() string     { return QueryTypeOth }
+
 // show Function or Procedure statement
 
 type ShowFunctionOrProcedureStatus struct {

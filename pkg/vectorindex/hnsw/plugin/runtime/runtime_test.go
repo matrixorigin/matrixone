@@ -26,10 +26,11 @@ import (
 
 func TestHnswHiddenTableTypes(t *testing.T) {
 	got := CatalogHooks{}.HiddenTableTypes()
-	require.Len(t, got, 3)
+	require.Len(t, got, 4)
 	require.Contains(t, got, catalog.Hnsw_TblType_Metadata)
 	require.Contains(t, got, catalog.Hnsw_TblType_Storage)
 	require.Contains(t, got, catalog.Hnsw_TblType_Dict)
+	require.Contains(t, got, catalog.IndexIgnored_TblType)
 }
 
 func TestHnswNeedsDict(t *testing.T) {

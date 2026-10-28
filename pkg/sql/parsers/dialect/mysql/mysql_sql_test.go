@@ -2421,6 +2421,15 @@ var (
 		input:  "show index from t1 from db",
 		output: "show index from t1 from db",
 	}, {
+		input:  "show index ignored from t1",
+		output: "show index ignored from t1",
+	}, {
+		input:  "SHOW KEYS IGNORED IN db.t1 WHERE Key_name = 'i'",
+		output: "show index ignored from db.t1 where Key_name = i",
+	}, {
+		input:  "create table ignored (ignored int)",
+		output: "create table ignored (ignored int)",
+	}, {
 		input:  "create table t2(a int, b datalink);",
 		output: "create table t2 (a int, b datalink)",
 	}, {

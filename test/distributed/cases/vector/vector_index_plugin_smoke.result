@@ -15,7 +15,8 @@ order by algo_table_type;
 ➤ algo[12,-1,0]  ¦  algo_table_type[12,-1,0]  𝄀
   ¦    𝄀
 hnsw  ¦  hnsw_index  𝄀
-hnsw  ¦  hnsw_meta
+hnsw  ¦  hnsw_meta  𝄀
+hnsw  ¦  ignored
 show create table h;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 h  ¦  CREATE TABLE `h` (

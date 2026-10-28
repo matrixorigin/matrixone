@@ -54,6 +54,12 @@ type IndexConsumer struct {
 	rowdelete    []any
 	sqlBufSendCh chan []byte
 	algo         string
+	ignored      *ignoredRows
+}
+
+// ignoredRowWriter is a writer that leaves out the rows its index cannot store.
+type ignoredRowWriter interface {
+	setIgnored(*ignoredRows)
 }
 
 var _ Consumer = new(IndexConsumer)
@@ -126,6 +132,13 @@ func NewIndexConsumer(cnUUID string,
 		return nil, err
 	}
 
+	var ignored *ignoredRows
+	if w, ok := sqlwriter.(ignoredRowWriter); ok {
+		if ignored = newIgnoredRows(info.DBName, tableDef, ie.indexes); ignored != nil {
+			w.setIgnored(ignored)
+		}
+	}
+
 	// Give the fulltext2 sink the CN engine/txn handles so it can open a short txn with a
 	// FULL sqlproc to resolve DATALINK columns to file CONTENT during CDC (stage:// +
 	// PDF/DOCX extraction) — parity with the sync build. Done here because the write path
@@ -146,6 +159,7 @@ func NewIndexConsumer(cnUUID string,
 		rowdata:     make([]any, len(tableDef.Cols)),
 		rowdelete:   make([]any, 1),
 		algo:        ie.algo,
+		ignored:     ignored,
 		//sqlBufSendCh: make(chan []byte),
 	}
 
@@ -365,6 +379,11 @@ func runHnsw[T types.ArrayElement](c *IndexConsumer, ctx context.Context, errch 
 						if err != nil {
 							return
 						}
+						if c.ignored != nil {
+							if err = c.ignored.flush(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn(), indexName); err != nil {
+								return
+							}
+						}
 
 						// update watermark
 						if datatype == ISCPDataType_Tail {
@@ -553,6 +572,17 @@ func (c *IndexConsumer) Consume(ctx context.Context, r DataRetriever) error {
 		w.srcAccountID = r.GetAccountID()
 	}
 
+	if c.ignored != nil {
+		err := runTxnWithSqlContext(ctx, c.cnEngine, c.cnTxnClient, c.cnUUID, r.GetAccountID(), 5*time.Minute, nil, nil,
+			func(sqlproc *sqlexec.SqlProcess, cbdata any) error {
+				return c.ignored.load(sqlproc.GetContext(), sqlproc.SqlCtx.GetService(), sqlproc.SqlCtx.Txn(), datatype == ISCPDataType_Snapshot)
+			})
+		if err != nil {
+			return err
+		}
+		c.ignored.setTs(r.GetToTS())
+	}
+
 	// create thread to poll sql
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -681,6 +711,9 @@ func (c *IndexConsumer) sinkInsert(ctx context.Context, errch chan error, upsert
 	// get row from the batch
 	if err = upsertIter.Row(ctx, c.rowdata, c.valueRepr()); err != nil {
 		return err
+	}
+	if c.ignored != nil {
+		c.ignored.setTs(upsertIter.Item().Ts)
 	}
 
 	if !c.sqlWriter.CheckLastOp(vectorindex.CDC_INSERT) {

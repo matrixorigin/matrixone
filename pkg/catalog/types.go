@@ -672,6 +672,13 @@ const (
 	IndexMetadata_TblCol_Nrow      = "nrow"
 	IndexMetadata_TblCol_Build_Ts  = "build_ts"
 
+	// Ignored rows - a table of an index holding the source rows the index cannot store,
+	// keyed by the source primary key, with the reason and the commit time of the change.
+	IndexIgnored_TblType       = "ignored"
+	IndexIgnored_TblCol_Pk     = "__mo_index_pk"
+	IndexIgnored_TblCol_Reason = "__mo_index_reason"
+	IndexIgnored_TblCol_Ts     = "__mo_index_ts"
+
 	/************ 4. HNSW Index *************/
 
 	// HNSW Table Types

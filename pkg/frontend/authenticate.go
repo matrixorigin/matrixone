@@ -6848,7 +6848,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		}
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus,
-		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex,
+		*tree.ShowGrants, *tree.ShowCollation, *tree.ShowIndex, *tree.ShowIndexIgnored,
 		*tree.ShowTableNumber, *tree.ShowColumnNumber,
 		*tree.ShowTableValues, *tree.ShowNodeList, *tree.ShowRolesStmt,
 		*tree.ShowLocks, *tree.ShowFunctionOrProcedureStatus, *tree.ShowPublications, *tree.ShowSubscriptions, *tree.ShowCcprSubscriptions, *tree.ShowPublicationCoverage,
