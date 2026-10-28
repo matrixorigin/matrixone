@@ -332,6 +332,10 @@ jobs:
                 awk '$1 == "some" {printf "psi_some_%s ", $2}' "$cgroup/memory.pressure"
               fi
               echo
+              # RSS is process-local and may include shared pages. Pair it
+              # with cgroup anon/file above rather than summing it as memory.
+              printf 'SCA_PROCESSES time=%s' "$(date -u +%FT%TZ)"
+              ps -eo pid,ppid,rss,comm --sort=-rss | awk 'NR > 1 && NR <= 9 {printf " pid=%s,ppid=%s,rss_kib=%s,comm=%s", $1, $2, $3, $4} END {print ""}'
               sleep 5
             done
           ) &
