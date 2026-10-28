@@ -1,6 +1,6 @@
 # 显式 general-ci：保留默认行为的扩展设计
 
-状态：**r3-review.1，提交独立设计评审，尚未批准实现**。关联 [#25096](https://github.com/matrixorigin/matrixone/issues/25096)；本设计通过独立的design-only Draft PR评审，后续完整实现仍使用 [#31408](https://github.com/matrixorigin/matrixone/pull/31408)。源码基线：`mo/main@3b7752551b8a1cc60daddecde9a5438d5357cdf4`。本PR不包含生产、proto或测试改动，也不关闭issue。
+状态：**r3-review.2，提交独立设计评审，尚未批准实现**。关联 [#25096](https://github.com/matrixorigin/matrixone/issues/25096)；本设计通过独立的design-only Draft PR评审，后续完整实现仍使用 [#31408](https://github.com/matrixorigin/matrixone/pull/31408)。源码基线：`mo/main@3b7752551b8a1cc60daddecde9a5438d5357cdf4`。本PR不包含生产、proto或测试改动，也不关闭issue。
 
 本草案扩展 [r2设计](CLAUDE_issue-25096-ci-database-design.md) 的D1，不继承其对native general-ci的实施批准；r2事实上没有批准此项。继续遵守D2的默认不变方向、已有UCA400能力、事务修复独立和复用公共owner的要求。不重开或整支cherry-pick #30684。
 
@@ -79,7 +79,9 @@ SELECT COUNT(*) FROM t WHERE c='ABC';
 | 保存状态 | 默认域解释 |
 | --- | --- |
 | 新字段缺失/0，DefaultCharset=3，即使旧CollationVersion=1 | legacy `3/0` |
-| 新字段缺失/0，已有UCA身份10/12 | 沿用已有UCA `10/1`或`12/1` |
+| 新字段缺失/0，DefaultCharset=`collation.UTF8UnicodeCIIdentity`（9） | 沿用已有UCA400 `9/1`（`utf8_unicode_ci`） |
+| 新字段缺失/0，DefaultCharset=`collation.UTF8MB4UnicodeCIIdentity`（10） | 沿用已有UCA400 `10/1`（`utf8mb4_unicode_ci`） |
+| 新字段缺失/0，DefaultCharset=`collation.GBKChineseCIIdentity`（12） | 该原生身份仍未开放，保持既有准入拒绝；不得将`12/1`解释为UCA400或回退到legacy |
 | 新字段缺失/0，其他历史身份 | 沿用该身份已有默认规则，不根据会话猜测 |
 | 新字段V1，DefaultCharset=3 | native GeneralCI `3/1` |
 | 新字段LEGACY | 明确revision 0；仍须检查身份/修订是否合法 |
@@ -285,7 +287,7 @@ MySQL目标沿用InnoDB身份/MDL owner：native源要求实际列的`collation_
 | 原始general-ci表达式/列复现 | 现有collation_expression与database_defaults表项；红例、binary/legacy最近控制及第2节判别对 |
 | 默认/CI库/覆盖/参数 | defaults_conversion及expressions BVT；普通库不变、显式CI库、跨库目标、charset-only legacy、prepared值/NULL及默认代际 |
 | IF-derived排序 | 现有expression BVT；scalar LIMIT/OFFSET和peer关系，不能让tester结果排序掩盖实际顺序 |
-| 表默认的独立字段 | 原marker UT加旧General默认+UCA UNIQUE→新增列仍legacy、新General默认→新增列native、字段缺失/非法/克隆/ReplaceDef回滚 |
+| 表默认的独立字段 | 原marker UT加旧General默认+UCA UNIQUE→新增列仍legacy、新General默认→新增列native；新字段缺失时9→9/1、10→10/1，12仍拒绝；非法组合/克隆/ReplaceDef回滚 |
 | 会话与prepared | 相同显示名的旧域/新域、显式/隐式SET、失败后全状态、RESET、prepare后SET再重绑定/迁移；复用既有session和proxy fixture |
 | 全Type及资源 | 现有plan/vector/remote/aggregate/spill表项加入3/1，对照3/0；成功/非法/空/NULL/常量和mpool释放 |
 | 选择函数原文/求值 | 4.4的LEAST首项/GREATEST末项；a/A、变音、PAD、空串、NULL和不等控制；HEX核对原文，常量折叠/动态/跨节点一致；计数式volatile参数不重排/重复、实时Src不冻结；3/0/UCA/数值重载保持旧行为 |

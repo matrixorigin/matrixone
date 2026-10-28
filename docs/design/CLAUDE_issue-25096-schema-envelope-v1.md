@@ -1,6 +1,6 @@
 # general-ci 跨入口描述与创建请求 v1 草案
 
-状态：**r3-review.1 的送审附录，不是现有协议**。隶属[主设计](CLAUDE_issue-25096-general-ci-design.md)，须整体取得设计批准，不单独授权实现。分析基线`mo/main@3b7752551b8a1cc60daddecde9a5438d5357cdf4`。只给DUMP、GETDDL和CDC复用既有plan/schema序列化、声明验证和CREATE owner；不是通用SQL执行封装或第二套collation registry。
+状态：**r3-review.2 的送审附录，不是现有协议**。隶属[主设计](CLAUDE_issue-25096-general-ci-design.md)，须整体取得设计批准，不单独授权实现。分析基线`mo/main@3b7752551b8a1cc60daddecde9a5438d5357cdf4`。只给DUMP、GETDDL和CDC复用既有plan/schema序列化、声明验证和CREATE owner；不是通用SQL执行封装或第二套collation registry。
 
 ## 1. 三种东西不能混成一个hash
 
