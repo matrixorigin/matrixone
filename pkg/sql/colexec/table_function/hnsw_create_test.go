@@ -389,3 +389,38 @@ func modelInfos[T types.ArrayElement](models []*hnsw.HnswModel[T]) []hnswModelIn
 	}
 	return out
 }
+
+// A row the index cannot store fails the build of an index without an ignored table and of a
+// CREATE INDEX; otherwise the build leaves it out and records it.
+func TestHnswCreateIgnoresUnstorableRows(t *testing.T) {
+	src := hnswSource{typ: types.T_array_float32, dim: 2, rows: [][]float64{{1, 1}, {100000, 1}, {2, 2}}}
+	params := `{"op_type": "vector_l2_ops", "quantization": "float16"}`
+	cfg := func(ignored, reject bool) string {
+		c := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__meta", IndexTable: "__index",
+			PKey: "id", KeyPart: "v", KeyPartType: int32(src.typ), KeyPartWidth: src.dim, RejectUnstorable: reject}
+		if ignored {
+			c.IgnoredTable = "__ignored"
+		}
+		b, _ := json.Marshal(c)
+		return string(b)
+	}
+
+	_, err := runHnswCreate(t, params, cfg(false, false), src)
+	require.ErrorContains(t, err, "cannot be stored as F16")
+
+	_, err = runHnswCreate(t, params, cfg(true, true), src)
+	require.ErrorContains(t, err, "cannot be stored as F16")
+
+	run, err := runHnswCreate(t, params, cfg(true, false), src)
+	require.NoError(t, err)
+	var recorded []string
+	for _, sql := range run.sqls {
+		if strings.Contains(sql, "`__ignored`") {
+			recorded = append(recorded, sql)
+		}
+	}
+	require.Len(t, recorded, 2, "the clear and the record of the ignored row")
+	require.Contains(t, recorded[0], "DELETE FROM `db`.`__ignored`")
+	require.Contains(t, recorded[1], "REPLACE INTO `db`.`__ignored`")
+	require.Contains(t, recorded[1], "(1, 'data out of range: data type hnsw quantization, vector element 100000 cannot be stored as F16'")
+}

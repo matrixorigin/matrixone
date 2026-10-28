@@ -63,7 +63,9 @@ ignored rows of the indexes of every partition.
 ## Scope
 
 HNSW records its ignored rows first. IVF-Flat, CAGRA, IVF-PQ and FULLTEXT2 follow under #31583.
-An index created before this change records ignored rows once it is upgraded.
+The ignored table is created with the index. An index created before this change has none and
+keeps its previous behavior, without SHOW INDEX IGNORED rows, until it is dropped and created
+again; REINDEX does not add the table.
 
 ## Claims
 

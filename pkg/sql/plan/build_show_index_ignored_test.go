@@ -58,6 +58,13 @@ func newShowIndexIgnoredTestContext(t *testing.T) *MockCompilerContext {
 		}
 		cc.objects[ignored] = &planpb.ObjectRef{SchemaName: "tpch", ObjName: ignored, Obj: int64(9010 + i)}
 	}
+	// an index created before ignored tables existed has none
+	for _, typ := range []string{catalog.Hnsw_TblType_Metadata, catalog.Hnsw_TblType_Storage} {
+		vt.Indexes = append(vt.Indexes, &planpb.IndexDef{
+			IndexName: "old", IndexAlgo: catalog.MoIndexHnswAlgo.ToString(), IndexAlgoTableType: typ,
+			IndexTableName: "__mo_index_old_" + typ, Parts: []string{"v"}, TableExist: true,
+		})
+	}
 	cc.tables["vt"], cc.objects["vt"] = vt, &planpb.ObjectRef{SchemaName: "tpch", ObjName: "vt", Obj: 9001}
 	return cc
 }
