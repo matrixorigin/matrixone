@@ -28,7 +28,7 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 		"Function":         {"routine_call": 6},
 		"Node":             {"dedup_key_exprs": 95},
 		"PreInsertUkCtx":   {"key_diagnostic_exprs": 19},
-		"Query":            {"correlation": 19, "execution_dependent_access": 22, "select_lock_references": 21, "routine_dependencies": 23},
+		"Query":            {"correlation": 19, "integer_precision": 20, "execution_dependent_access": 22, "select_lock_references": 21, "routine_dependencies": 23},
 		"Type":             {"numeric_attributes": 14},
 		"Expr":             {"candidate_filter": 27},
 		"CreateDatabase":   {"defaults": 5},
@@ -59,6 +59,21 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 		delete(want, message.GetName())
 	}
 	require.Empty(t, want, "missing merged message descriptors")
+}
+
+func TestMergedQueryMetadataRoundTrip(t *testing.T) {
+	original := validIntegerPrecisionQuery()
+	original.RoutineDependencies = []*RoutinePlanDependency{{
+		FunctionRef: &FunctionRef{FunctionId: 3, Revision: 7},
+		Language:    "SQL", NamespaceFingerprint: "namespace",
+	}}
+	encoded, err := original.Marshal()
+	require.NoError(t, err)
+	require.Len(t, encoded, original.ProtoSize())
+	var decoded Query
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.Equal(t, original.IntegerPrecision, decoded.IntegerPrecision)
+	require.Equal(t, original.RoutineDependencies, decoded.RoutineDependencies)
 }
 
 func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
