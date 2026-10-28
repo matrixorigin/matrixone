@@ -145,3 +145,74 @@ func TestOversizeWALRemovesNonAppendableObject(t *testing.T) {
 	require.Error(t, lookupErr)
 	require.Equal(t, before, tableEntry.ObjectCnt(false))
 }
+
+func TestOversizeWALCatalogCreateRollsBack(t *testing.T) {
+	ctx := context.Background()
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c, mgr, driver := initTestContext(ctx, t, dir)
+	t.Cleanup(func() {
+		mgr.Stop()
+		c.Close()
+		require.NoError(t, driver.Close())
+	})
+	schema := catalog.MockSchemaAll(1, 0)
+	setup, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err := setup.CreateDatabase("wal_size_catalog", "", "")
+	require.NoError(t, err)
+	_, err = db.CreateRelation(schema)
+	require.NoError(t, err)
+	require.NoError(t, setup.Commit(ctx))
+
+	failing, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err = failing.GetDatabase("wal_size_catalog")
+	require.NoError(t, err)
+	rejected := catalog.MockSchemaAll(1, 0)
+	rejected.Name = "rejected_table"
+	_, err = db.CreateRelation(rejected)
+	require.NoError(t, err)
+	failing.GetStore().(*txnStore).cmdMgr.maxWalSize = 1
+	require.ErrorContains(t, failing.Commit(ctx), "WAL record is too large")
+
+	check, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err = check.GetDatabase("wal_size_catalog")
+	require.NoError(t, err)
+	_, err = db.GetRelationByName(rejected.Name)
+	require.Error(t, err)
+	require.NoError(t, check.Commit(ctx))
+
+	next, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err = next.GetDatabase("wal_size_catalog")
+	require.NoError(t, err)
+	successful := catalog.MockSchemaAll(1, 0)
+	successful.Name = "subsequent_table"
+	_, err = db.CreateRelation(successful)
+	require.NoError(t, err)
+	require.NoError(t, next.Commit(ctx))
+
+	verify, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err = verify.GetDatabase("wal_size_catalog")
+	require.NoError(t, err)
+	_, err = db.GetRelationByName(successful.Name)
+	require.NoError(t, err)
+	require.NoError(t, verify.Commit(ctx))
+
+	rejectedDB, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	newDB, err := rejectedDB.CreateDatabase("wal_size_rejected_db", "", "")
+	require.NoError(t, err)
+	_, err = newDB.CreateRelation(catalog.MockSchemaAll(1, 0))
+	require.NoError(t, err)
+	rejectedDB.GetStore().(*txnStore).cmdMgr.maxWalSize = 1
+	require.ErrorContains(t, rejectedDB.Commit(ctx), "WAL record is too large")
+
+	checkDB, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	_, err = checkDB.GetDatabase("wal_size_rejected_db")
+	require.Error(t, err)
+	require.NoError(t, checkDB.Commit(ctx))
+}
