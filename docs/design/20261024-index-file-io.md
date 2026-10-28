@@ -146,7 +146,9 @@ format gate is needed.
   its manifest.
 - The manifest never leaves the CN, so it uses one checksum for every file kind. The
   full checksum is verified on the first open of a cached file after the CN starts; later
-  opens on the same CN check the length only (decision, @cpegeric, 2026-10-24). A failed
+  opens on the same CN check the length only (decision, @cpegeric, 2026-10-24; reaffirmed
+  2026-10-28: every new index generation reloads all of an index's files, so a full check
+  on every open would re-read the whole index on the query path after each sync). A failed
   check removes the cached file and rebuilds it from the rows.
 - The file and its manifest are one cache entry: a directory holding both (decision,
   @cpegeric, 2026-10-24). It is written complete under a temporary name and renamed into
