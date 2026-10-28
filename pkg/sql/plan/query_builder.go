@@ -5239,9 +5239,15 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				break
 			}
 		}
+		defaultKind := typeDefaultUnion
+		if shareGroupingInput {
+			// ROLLUP's UNION is an execution rewrite, not a SQL UNION field.
+			// Its temporary fields must not acquire UNION-only strict errors.
+			defaultKind = typeDefaultImplicit
+		}
 		provenance := OutputColumnProvenance{
 			State:              ProvenanceNone,
-			TypeDefault:        typeDefaultUnion,
+			TypeDefault:        defaultKind,
 			IntegerPrecisionID: ctx.outputColumnProvenanceForProject(int32(colIdx)).IntegerPrecisionID,
 		}
 		provenance.TypeDefaultNullability = typeDefaultNotNullable

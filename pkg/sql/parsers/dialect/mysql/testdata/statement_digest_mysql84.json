@@ -1943,5 +1943,553 @@
     "sql_mode": "ANSI_QUOTES",
     "sql": "SELECT @@\"sql_mode\"",
     "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP AS ('2020-01-01') ON UPDATE CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP AS ('2020-01-01') ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP AS ('2020-01-01') ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP AS ('2020-01-01') ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP ON UPDATE NOW )",
+    "digest": "a1bba203c71d663f1031b990d2395c28f5349330b54dcb5d3f97253cd81d3b80"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP ON UPDATE NOW",
+    "digest": "a52fa03ae488ac745f32417379f30bb6b1fb7abea40c2ee08f4c5491cb2f485f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP ON UPDATE NOW",
+    "digest": "7dc75ab959ffcef1235a63acace630cb3c27e1fbcbdbf57327a95149286a7ebe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP ON UPDATE NOW",
+    "digest": "e800354fb70af07e4b560bc19a8d75cc9361d37d6c919ecdc6124bc17487484c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP AS ('2020-01-01') COLUMN_FORMAT DEFAULT)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP AS ('2020-01-01') COLUMN_FORMAT DEFAULT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP AS ('2020-01-01') COLUMN_FORMAT DEFAULT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP AS ('2020-01-01') COLUMN_FORMAT DEFAULT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP COLUMN_FORMAT DEFAULT)",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP COLUMN_FORMAT DEFAULT )",
+    "digest": "f3ce656b9bbcf6a2b6c437ebf5e962f4a15a94ac854ca21d61e4ec843267dd7c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP COLUMN_FORMAT DEFAULT",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP COLUMN_FORMAT DEFAULT",
+    "digest": "a2e62b894d775ce6f1ae957bfda13ac6caa5d7edef8b213d3919422578881704"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP COLUMN_FORMAT DEFAULT",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP COLUMN_FORMAT DEFAULT",
+    "digest": "bcefbf4f5d807e8c4e098a3a811a3a479fac86b6ddd4639d2b8e549c92935647"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP COLUMN_FORMAT DEFAULT",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP COLUMN_FORMAT DEFAULT",
+    "digest": "ac72e7f0136d878abe2300cc5d7ee83a4f777ab68f8cc81f157bc8d1061a5a63"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP AS ('2020-01-01') COLUMN_FORMAT FIXED)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP AS ('2020-01-01') COLUMN_FORMAT FIXED",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP AS ('2020-01-01') COLUMN_FORMAT FIXED",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP AS ('2020-01-01') COLUMN_FORMAT FIXED",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP COLUMN_FORMAT FIXED)",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP COLUMN_FORMAT FIXED )",
+    "digest": "952697bd955631841db1edf33d8c5d52fb5d951df1ed7fd20bf1d60162be89c6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP COLUMN_FORMAT FIXED",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP COLUMN_FORMAT FIXED",
+    "digest": "48723ce6d4ab8b4fb0e82a9162904fdf1af0f9df96b3201ae8590765616906d9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP COLUMN_FORMAT FIXED",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP COLUMN_FORMAT FIXED",
+    "digest": "e797aac48079ad71ac59e3901d56a7eead7e5d25f0107e9e6ae747f7c38fcc54"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP COLUMN_FORMAT FIXED",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP COLUMN_FORMAT FIXED",
+    "digest": "ed01f9e1b9eb5d93e3c6bbd75d3fc8c2e113167bd674697a5bc67c33d389eb94"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP AS ('2020-01-01') COLUMN_FORMAT DYNAMIC)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP AS ('2020-01-01') COLUMN_FORMAT DYNAMIC",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP AS ('2020-01-01') COLUMN_FORMAT DYNAMIC",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP AS ('2020-01-01') COLUMN_FORMAT DYNAMIC",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP COLUMN_FORMAT DYNAMIC)",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP COLUMN_FORMAT DYNAMIC )",
+    "digest": "ebdd36171748cbaf5e2e4b25e8b0dfbdb888293f06a37bcad0e91243e501e881"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP COLUMN_FORMAT DYNAMIC",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP COLUMN_FORMAT DYNAMIC",
+    "digest": "688862928e4138ad0ef442fdfa500d578293b1f6f02a131308af9541fe0757aa"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP COLUMN_FORMAT DYNAMIC",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP COLUMN_FORMAT DYNAMIC",
+    "digest": "9e21f1ba56cd535c3d0f96818066ef8cbf423efa514a1acf4ae90d1c629e4c5a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP COLUMN_FORMAT DYNAMIC",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP COLUMN_FORMAT DYNAMIC",
+    "digest": "160615f93a4d72a1399bb78a8fae07e059ec548c3b29649d0aedd8061fb9e51b"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP AS ('2020-01-01') STORAGE DEFAULT)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP AS ('2020-01-01') STORAGE DEFAULT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP AS ('2020-01-01') STORAGE DEFAULT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP AS ('2020-01-01') STORAGE DEFAULT",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP STORAGE DEFAULT)",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP STORAGE DEFAULT )",
+    "digest": "ce365654228981b0d31f19ab813b621db95d29d22d68a2ccd6557912b3e365ec"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP STORAGE DEFAULT",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP STORAGE DEFAULT",
+    "digest": "8fedadcb204acb14f82ac0b8714aa0326850bbdea7c1caae9d2cfba07ec8acd4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP STORAGE DEFAULT",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP STORAGE DEFAULT",
+    "digest": "8e07de77e8ffee4eedb3ba82b3df9d127475ad26f6aca52ac7b4419a747ee100"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP STORAGE DEFAULT",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP STORAGE DEFAULT",
+    "digest": "da8a0e25c0ba80d31fbe6d940f4c60ab495bb929f516e1f69f43fac0f0f1fe3a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP AS ('2020-01-01') STORAGE DISK)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP AS ('2020-01-01') STORAGE DISK",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP AS ('2020-01-01') STORAGE DISK",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP AS ('2020-01-01') STORAGE DISK",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP STORAGE DISK)",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP STORAGE DISK )",
+    "digest": "a9abfc1fb128044be6d75b325ba7a55d3be6791f5705cf87cd81a7a4f2b1a5a4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP STORAGE DISK",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP STORAGE DISK",
+    "digest": "432e7e06c3dd413b303f793d2e82b9e5f1a4370d8dfecee646e8070b23bee074"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP STORAGE DISK",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP STORAGE DISK",
+    "digest": "305534d0d140d8eec70473692e28e5e4a17a66da9bc026ffec6e751805c355a3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP STORAGE DISK",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP STORAGE DISK",
+    "digest": "1e2bc24be0a79bc5525d566d2811a08ce5d3c7fee3121c95a123d6ea1eb54e59"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP AS ('2020-01-01') STORAGE MEMORY)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP AS ('2020-01-01') STORAGE MEMORY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP AS ('2020-01-01') STORAGE MEMORY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP AS ('2020-01-01') STORAGE MEMORY",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP STORAGE MEMORY)",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP STORAGE MEMORY )",
+    "digest": "06742e12fd54861b332db475ad00fa19e057fcce930cb7dbe51c06e9be602779"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP STORAGE MEMORY",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP STORAGE MEMORY",
+    "digest": "d30d52e26bbf05719a82c9a8ca4cf8e6f3612e27ace67cd9c993d465c7091e4f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP STORAGE MEMORY",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP STORAGE MEMORY",
+    "digest": "56c54ad152687c6fa9647785cd8f46bc5037315ee14eb3241c91eb4bf4a459cb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP STORAGE MEMORY",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP STORAGE MEMORY",
+    "digest": "07454ce812f9feb69dc5c5f8095686827f6c00502f9f34c4b401021f59487551"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP AS ('2020-01-01') COMMENT 'ok')",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP AS (?) COMMENT ? )",
+    "digest": "4dcc8255a2e8a6053649cd2a65cdf2b4412d7d94ce0dd8cae50425c8bc72bda8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP AS ('2020-01-01') COMMENT 'ok'",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP AS (?) COMMENT ?",
+    "digest": "bcd2b02a68bb723c10ca3b1db7868e20533b1350cc6c01223ec11405841b8b3e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP AS ('2020-01-01') COMMENT 'ok'",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP AS (?) COMMENT ?",
+    "digest": "ba5226df1a7de0f69ca197ef5064fafae823828a7c67c961eddad141da864573"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP AS ('2020-01-01') COMMENT 'ok'",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP AS (?) COMMENT ?",
+    "digest": "a1e7c5947c1f988d4021381665644260bf1e5b31c6d18ccb8e4d66a8a5a66936"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP COMMENT 'ok')",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP COMMENT ? )",
+    "digest": "0f40eaaa202f47792649f81624abe3ddcd079f973d513457f28422f9335585b4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP COMMENT 'ok'",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP COMMENT ?",
+    "digest": "4b87c295aaa999471afc0017e6b138857f504b4b8f5cded389e9f42c0dee7b1f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP COMMENT 'ok'",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP COMMENT ?",
+    "digest": "2ecde9bf39906494dbc4764cb5ad7271756b6bb55246640718db8f35e72cfe79"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP COMMENT 'ok'",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP COMMENT ?",
+    "digest": "86f2ce50afef3a1d43045156f4d578a195bdd294119e148ccb1a21403a6f22e8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP AS ('2020-01-01') NULL)",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP AS (?) NULL )",
+    "digest": "926fedcf70ee44945df9fbdc013a102b0a2f638fa4bbe2e2aca8fc1e031c96ec"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP AS ('2020-01-01') NULL",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP AS (?) NULL",
+    "digest": "1cd11c012c9e278ddc7d3899b636a8696e7a962bc18b35f416876f8e6593bf33"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP AS ('2020-01-01') NULL",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP AS (?) NULL",
+    "digest": "80654a6f9e3e2ecdc75169549ff78782cdf1c4e008919c605cf85e6853f0b7b9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP AS ('2020-01-01') NULL",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP AS (?) NULL",
+    "digest": "c95b71b3aba9701c776a61c1c67fb67624b908ddaeee4f3f3ab2b97b315f1ecc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP NULL)",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP NULL )",
+    "digest": "46b4293da69b1d400232a7f8032050ba29e60f60a7627c42df807895ae15e6a6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP NULL",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP NULL",
+    "digest": "8404fc0accfec2f66cb037fd22cb3afd5849dbf16a8fc767510ef9363c86bcbe"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP NULL",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP NULL",
+    "digest": "af05829c86066a37b6c24f21120d9388f3886c6ded81c55acd37006ece68aa57"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP NULL",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP NULL",
+    "digest": "12725f8efd1525fb69cb749036dfcd8e81a74ffb34148e50fab3bc37b08f1003"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP AS ('2020-01-01') NOT NULL)",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP AS (?) NOT NULL )",
+    "digest": "4787bed841fbbefbc9fae75f09b63e86dd8bc053c6fb57ee201032832d82d70f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP AS ('2020-01-01') NOT NULL",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP AS (?) NOT NULL",
+    "digest": "19a9192288892ef65dee066255beb1cbbbe655450d0f2fac9a0113231432d9e5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP AS ('2020-01-01') NOT NULL",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP AS (?) NOT NULL",
+    "digest": "0d3f6344deba47a17bbe8c1f366d8df9d50ab5de22c5d519c85c9a36f6f7bf57"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP AS ('2020-01-01') NOT NULL",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP AS (?) NOT NULL",
+    "digest": "7500972266680ef0d073fb736a8b0200afab86acf4ad91498f572207543e9353"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP NOT NULL)",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP NOT NULL )",
+    "digest": "7d08e9ff7fd9a395c893ff32fdf422c5de29218a6dd31dd2bf9b78f62ed0fa20"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP NOT NULL",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP NOT NULL",
+    "digest": "7327ca08f829b7b52cb673eb52d4264dc5fa834d696cc916dfe77e473eb02af6"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP NOT NULL",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP NOT NULL",
+    "digest": "c7d67744d072a16e13a48e3e7cfbbafa35372237b4ce95707a6c01ae613d07a3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP NOT NULL",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP NOT NULL",
+    "digest": "1480874a7b8c304480391360c086ab807e6f1a1ddcd7410b2e7a41d04f174a1e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP AS ('2020-01-01') UNIQUE)",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP AS (?) UNIQUE )",
+    "digest": "1c75e369ee0a6755ac895428fe4a7ce0e9ae70767c52d9a99391289fffcda975"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP AS ('2020-01-01') UNIQUE",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP AS (?) UNIQUE",
+    "digest": "9273ab80fcc41ade153b15ae954c661f8895a22fd0e68505146f837d5ec07252"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP AS ('2020-01-01') UNIQUE",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP AS (?) UNIQUE",
+    "digest": "858aad850ab7189209260f4c90be060427ce34c345b935320ad7f4a90d0916ee"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP AS ('2020-01-01') UNIQUE",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP AS (?) UNIQUE",
+    "digest": "6ea8c5e006a10f1b2d315737e4fa22e1b46cce81b244f01827f8fa9a7027f604"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP UNIQUE)",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP UNIQUE )",
+    "digest": "691dbce2cbf6874f097cbd42f43c893a76416c7172cbc38897cc90bd265e1f6c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP UNIQUE",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP UNIQUE",
+    "digest": "2096803f5b84eb200a5d0f43bdf6de8fae47f1adad8340bf8b1c47bdc57cdfec"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP UNIQUE",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP UNIQUE",
+    "digest": "27051f087de8407f2c19ff6f147ef914cb94cce831095d48243a2762b44a0a6f"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a TIMESTAMP UNIQUE",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` TIMESTAMP UNIQUE",
+    "digest": "52cfc3a79473c3a307b6dcd3458b71c28ade1b361990a14c42b79207d00099c8"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(10) AS ('abc') COLLATE utf8mb4_bin)",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) AS (?) COLLATE `utf8mb4_bin` )",
+    "digest": "3b5ca57a06797fbd304f95e6233aafcee289aa4f38df209eb79ac3804827b8ae"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(10) AS ('abc') COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` VARCHARACTER (?) AS (?) COLLATE `utf8mb4_bin`",
+    "digest": "4a633026cb9d55a71f2295206a781aaeda1d95916ebcb128a3462a607d36f08d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(10) AS ('abc') COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` VARCHARACTER (?) AS (?) COLLATE `utf8mb4_bin`",
+    "digest": "3ea51a46a2ab555bfe0329b48edf9399b3785423d8279eb9f962c336fd060254"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) AS ('abc') COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` VARCHARACTER (?) AS (?) COLLATE `utf8mb4_bin`",
+    "digest": "24474f1d048d28abd382cd661e7000a2deb8c0181b8e69fc905075e497480e06"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(10) COLLATE utf8mb4_bin)",
+    "text": "CREATE TABLE `t` ( `a` VARCHARACTER (?) COLLATE `utf8mb4_bin` )",
+    "digest": "86bb4022946681c048f0beb7c56a05bdf45be129424033e144bdb4b507fcff7a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(10) COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` VARCHARACTER (?) COLLATE `utf8mb4_bin`",
+    "digest": "f1dcee575f02caec7673a35f6e8b6146052106e5f76601533f46649f688978a9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(10) COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` VARCHARACTER (?) COLLATE `utf8mb4_bin`",
+    "digest": "8ef9d9a5d8252d7c230a9fb120cbfd1b7f976a4dfdd1673c20c277f3360f1e91"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) COLLATE utf8mb4_bin",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` VARCHARACTER (?) COLLATE `utf8mb4_bin`",
+    "digest": "2c68eb8b2b4fb84884f0ce08dad97e3b5376ebac47f0828944fc40d88ed51827"
   }
 ]

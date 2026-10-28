@@ -152,6 +152,25 @@ SELECT DEFAULT(x) FROM (SELECT DEFAULT(a) AS x FROM default_column_special) deri
 SELECT DEFAULT(x) FROM (SELECT DEFAULT(a) AS x FROM default_column_special LIMIT 1) derived;
 DROP TABLE default_column_special_metadata;
 DROP TABLE default_column_special;
+-- Declared grouping keys retain their schema defaults in subtotal branches.
+SET @default_column_saved_rollup = @@rollup_algorithm;
+SET rollup_algorithm = 'HASH';
+DROP TABLE IF EXISTS default_column_grouped;
+CREATE TABLE default_column_grouped(a INT DEFAULT 7,b INT DEFAULT 9,d DATE NOT NULL DEFAULT '2020-01-01');
+INSERT INTO default_column_grouped VALUES(1,2,'2022-01-01'),(2,2,'2023-01-01');
+SELECT a AS b,COUNT(*) FROM default_column_grouped GROUP BY a,b HAVING DEFAULT(b)=9 ORDER BY a;
+SELECT a AS b,COUNT(*) FROM default_column_grouped GROUP BY a,b HAVING DEFAULT(b)=7 ORDER BY a;
+SELECT a AS b FROM default_column_grouped HAVING DEFAULT(b)=7 ORDER BY a;
+SELECT 1,COUNT(*) FROM default_column_grouped GROUP BY a,b WITH ROLLUP HAVING DEFAULT(b)=9 ORDER BY COUNT(*),1;
+SELECT 1 FROM default_column_grouped GROUP BY a WITH ROLLUP HAVING DEFAULT(b)=9;
+SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x FROM default_column_grouped GROUP BY a WITH ROLLUP) derived;
+SELECT DEFAULT(x) FROM (SELECT CAST('2020-01-01' AS DATE) AS x FROM default_column_grouped GROUP BY a WITH ROLLUP) derived;
+SELECT DEFAULT(x) FROM (SELECT d AS x FROM default_column_grouped GROUP BY d WITH ROLLUP) derived;
+SET rollup_algorithm = 'SORT';
+SELECT 1,COUNT(*) FROM default_column_grouped GROUP BY a,b WITH ROLLUP HAVING DEFAULT(b)=9 ORDER BY COUNT(*),1;
+SET rollup_algorithm = @default_column_saved_rollup;
+DROP TABLE default_column_grouped;
+
 SET sql_mode = '';
 SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x UNION SELECT DATE '2020-01-01' AS x) derived;
 PREPARE default_union_mode FROM 'SELECT DEFAULT(x) FROM (SELECT DATE ''2020-01-01'' AS x UNION ALL SELECT DATE ''2021-01-01'' AS x) derived';

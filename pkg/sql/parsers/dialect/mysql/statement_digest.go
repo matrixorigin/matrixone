@@ -391,6 +391,7 @@ func digestColumnValid(column *tree.ColumnTableDef) bool {
 	// Mirror column-attribute contextualization, not DDL execution. Attribute
 	// order matters; a table-level primary key is not applied here.
 	notNull, nullDefault, hasDefault, autoIncrement, generated := false, false, false, false, false
+	generatedDisallowedAttribute := false
 	for _, attribute := range column.Attributes {
 		switch attr := attribute.(type) {
 		case *tree.AttributeNull:
@@ -401,13 +402,15 @@ func digestColumnValid(column *tree.ColumnTableDef) bool {
 			autoIncrement = true
 		case *tree.AttributeGeneratedAlways:
 			generated = true
+		case *tree.AttributeOnUpdate, *tree.AttributeColumnFormat, *tree.AttributeStorage:
+			generatedDisallowedAttribute = true
 		case *tree.AttributeDefault:
 			hasDefault = true
 			value, literal := attr.Expr.(*tree.NumVal)
 			nullDefault = literal && value.ValType == tree.P_null
 		}
 	}
-	return !(notNull && nullDefault || autoIncrement && hasDefault && !nullDefault || generated && (hasDefault || autoIncrement))
+	return !(notNull && nullDefault || autoIncrement && hasDefault && !nullDefault || generated && (hasDefault || autoIncrement || generatedDisallowedAttribute))
 }
 
 // Hint punctuation is not SQL punctuation: '?' is not a bind parameter,

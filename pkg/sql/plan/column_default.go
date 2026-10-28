@@ -177,33 +177,39 @@ func (b *baseBinder) columnDefaultMetadata(name *tree.UnresolvedName) (OutputCol
 		return OutputColumnProvenance{}, plan.Type{}, moerr.NewBadFieldErrorf(b.GetContext(), "unknown column '%s' in DEFAULT", name.ColNameOrigin())
 	}
 
-	// HAVING prefers SELECT-list aliases, while ORDER BY expressions prefer
-	// table fields and consult aliases only when no field resolves.
+	// HAVING prefers declared source grouping keys, then SELECT-list aliases.
+	// ORDER BY expressions prefer table fields and then consult aliases.
 	if having, ok := b.impl.(*HavingBinder); ok && b.ctx != nil && !having.insideAgg && !having.bindingProjectedAlias {
 		// DEFAULT is row-independent, but that must not widen HAVING's visible
 		// namespace. Reuse its SELECT-output and direct-column identity owners
 		// without binding a row reference or manufacturing an aggregate.
-		var projected tree.Expr
-		var found, ambiguous bool
-		if name.NumParts == 1 {
-			projected, found, ambiguous = b.ctx.havingOutputExpr(name.ColName())
-		}
-		if !found && !ambiguous {
-			projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(name)
-		}
-		if ambiguous {
-			return OutputColumnProvenance{}, plan.Type{}, ambiguousHavingColumn(b.GetContext(), name.ColName())
-		}
-		if found {
-			var column bool
-			name, column = columnDefaultReference(projected)
-			if !column {
-				return OutputColumnProvenance{State: ProvenanceNone}, plan.Type{}, nil
+		_, _, local := resolveColumnIdentity(b.ctx, name)
+		_, grouped := having.lookupGroupByExpr(name, windowExprAstKey(name))
+		// A declared source grouping key precedes a colliding SELECT alias.
+		// Use the logical grouping registry, not the active subtotal bitmap:
+		// DEFAULT reads schema metadata even when this branch nulls the key.
+		if !local || !grouped {
+			var projected tree.Expr
+			var found, ambiguous bool
+			if name.NumParts == 1 {
+				projected, found, ambiguous = b.ctx.havingOutputExpr(name.ColName())
 			}
-		} else if binding, position, local := resolveColumnIdentity(b.ctx, name); local &&
-			!groupByContainsColumn(b.ctx, binding.tag, position) {
-			return OutputColumnProvenance{}, plan.Type{}, moerr.NewBadFieldErrorf(b.GetContext(),
-				"Unknown column '%s' in 'having clause'", name.ColNameOrigin())
+			if !found && !ambiguous {
+				projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(name)
+			}
+			if ambiguous {
+				return OutputColumnProvenance{}, plan.Type{}, ambiguousHavingColumn(b.GetContext(), name.ColName())
+			}
+			if found {
+				var column bool
+				name, column = columnDefaultReference(projected)
+				if !column {
+					return OutputColumnProvenance{State: ProvenanceNone}, plan.Type{}, nil
+				}
+			} else if local {
+				return OutputColumnProvenance{}, plan.Type{}, moerr.NewBadFieldErrorf(b.GetContext(),
+					"Unknown column '%s' in 'having clause'", name.ColNameOrigin())
+			}
 		}
 	}
 

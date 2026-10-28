@@ -319,6 +319,55 @@ SELECT DEFAULT(x) FROM (SELECT DEFAULT(a) AS x FROM default_column_special LIMIT
 
 DROP TABLE default_column_special_metadata;
 DROP TABLE default_column_special;
+SET @default_column_saved_rollup = @@rollup_algorithm;
+SET rollup_algorithm = 'HASH';
+DROP TABLE IF EXISTS default_column_grouped;
+CREATE TABLE default_column_grouped(a INT DEFAULT 7,b INT DEFAULT 9,d DATE NOT NULL DEFAULT '2020-01-01');
+INSERT INTO default_column_grouped VALUES(1,2,'2022-01-01'),(2,2,'2023-01-01');
+SELECT a AS b,COUNT(*) FROM default_column_grouped GROUP BY a,b HAVING DEFAULT(b)=9 ORDER BY a;
+➤ b[4,32,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+SELECT a AS b,COUNT(*) FROM default_column_grouped GROUP BY a,b HAVING DEFAULT(b)=7 ORDER BY a;
+➤ b[4,32,0]  ¦  COUNT(*)[-5,64,0]
+SELECT a AS b FROM default_column_grouped HAVING DEFAULT(b)=7 ORDER BY a;
+➤ b[4,32,0]  𝄀
+1  𝄀
+2
+SELECT 1,COUNT(*) FROM default_column_grouped GROUP BY a,b WITH ROLLUP HAVING DEFAULT(b)=9 ORDER BY COUNT(*),1;
+➤ 1[-5,64,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+1  ¦  2
+SELECT 1 FROM default_column_grouped GROUP BY a WITH ROLLUP HAVING DEFAULT(b)=9;
+Unknown column 'b' in 'having clause'
+SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x FROM default_column_grouped GROUP BY a WITH ROLLUP) derived;
+➤ default(x)[91,10,0]  𝄀
+0000-00-00  𝄀
+0000-00-00  𝄀
+0000-00-00
+SELECT DEFAULT(x) FROM (SELECT CAST('2020-01-01' AS DATE) AS x FROM default_column_grouped GROUP BY a WITH ROLLUP) derived;
+➤ default(x)[91,10,0]  𝄀
+null  𝄀
+null  𝄀
+null
+SELECT DEFAULT(x) FROM (SELECT d AS x FROM default_column_grouped GROUP BY d WITH ROLLUP) derived;
+➤ default(x)[91,10,0]  𝄀
+null  𝄀
+null  𝄀
+null
+SET rollup_algorithm = 'SORT';
+SELECT 1,COUNT(*) FROM default_column_grouped GROUP BY a,b WITH ROLLUP HAVING DEFAULT(b)=9 ORDER BY COUNT(*),1;
+➤ 1[-5,64,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+1  ¦  1  𝄀
+1  ¦  2
+SET rollup_algorithm = @default_column_saved_rollup;
+DROP TABLE default_column_grouped;
 SET sql_mode = '';
 SELECT DEFAULT(x) FROM (SELECT DATE '2020-01-01' AS x UNION SELECT DATE '2020-01-01' AS x) derived;
 ➤ default(x)[91,10,0]  𝄀

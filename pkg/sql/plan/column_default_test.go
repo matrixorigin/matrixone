@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,6 +64,8 @@ func TestColumnDefaultPublicBinding(t *testing.T) {
 		"SELECT DEFAULT(x) IS NULL FROM (SELECT n_regionkey x FROM nation UNION SELECT n_regionkey x FROM nation) d",
 		"SELECT DEFAULT(x)=0.00 FROM (SELECT 1.23 x) d",
 		"SELECT DEFAULT(x) IS NULL FROM (SELECT CAST('2020-01-01' AS DATE) x) d",
+		"SELECT DEFAULT(x) IS NOT NULL FROM (SELECT DATE '2020-01-01' x FROM nation GROUP BY n_regionkey WITH ROLLUP) d",
+		"SELECT DEFAULT(x) IS NULL FROM (SELECT CAST('2020-01-01' AS DATE) x FROM nation GROUP BY n_regionkey WITH ROLLUP) d",
 		"SELECT DEFAULT(x) IS NULL FROM (SELECT CAST('2020-01-01' AS DATE) x UNION SELECT CAST('2020-01-01' AS DATE) x) d",
 		"SELECT DEFAULT(x) IS NULL FROM (SELECT CAST('12:34:56' AS TIME) x UNION SELECT CAST('12:34:56' AS TIME) x) d",
 		"SELECT DEFAULT(x) IS NULL FROM (SELECT CAST('12:34:56' AS TIME) x) d",
@@ -104,6 +107,8 @@ func TestColumnDefaultPublicBinding(t *testing.T) {
 		"SELECT n.n_regionkey AS x FROM nation n HAVING DEFAULT(n.n_regionkey)=7",
 		"SELECT 1 FROM nation GROUP BY n_regionkey HAVING DEFAULT(n_regionkey)=7",
 		"SELECT 1 FROM nation HAVING MAX(DEFAULT(n_regionkey))=7",
+		"SELECT 1 FROM nation GROUP BY n_regionkey WITH ROLLUP HAVING DEFAULT(n_regionkey)=7",
+		"SELECT 1 FROM nation GROUP BY n_regionkey,n_nationkey WITH ROLLUP HAVING DEFAULT(n_regionkey)=7",
 		"SELECT (SELECT 1 HAVING DEFAULT(n.n_regionkey)=7) FROM nation n",
 		"SELECT +n_regionkey AS x FROM nation ORDER BY DEFAULT(x)",
 		"SELECT n_regionkey AS x FROM nation ORDER BY DEFAULT(x)",
@@ -125,6 +130,40 @@ func TestColumnDefaultPublicBinding(t *testing.T) {
 	}
 }
 
+func TestColumnDefaultHavingGroupIdentity(t *testing.T) {
+	for _, tc := range []struct{ query, predicate string }{
+		{"SELECT n_regionkey AS n_nationkey FROM nation GROUP BY n_regionkey,n_nationkey", "DEFAULT(n_nationkey)=9"},
+		{"SELECT n_regionkey AS n_nationkey FROM nation GROUP BY n_regionkey", "DEFAULT(n_nationkey)=7"},
+		{"SELECT n_regionkey AS n_nationkey FROM nation", "DEFAULT(n_nationkey)=7"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			mock := NewMockOptimizer(true, proc)
+			for name, value := range map[string]int32{"n_regionkey": 7, "n_nationkey": 9} {
+				column := requireMockColumn(t, mock, "nation", name)
+				column.Default = &plan.Default{Expr: makePlan2Int32ConstExprWithType(value)}
+			}
+			builder := NewQueryBuilder(plan.Query_SELECT, mock.CurrentContext(), false, true)
+			ctx := NewBindContext(builder, nil)
+			statement, err := mysql.ParseOne(t.Context(), tc.query, 1)
+			require.NoError(t, err)
+			defer statement.Free()
+			_, err = builder.bindSelect(statement.(*tree.Select), ctx, true)
+			require.NoError(t, err)
+			predicate, err := mysql.ParseOne(t.Context(), "SELECT "+tc.predicate, 1)
+			require.NoError(t, err)
+			defer predicate.Free()
+			ast := predicate.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			bound, err := NewHavingBinder(builder, ctx).BindExpr(ast, 0, true)
+			require.NoError(t, err)
+			value, err := ConstantFold(batch.EmptyForConstFoldBatch, bound, proc, false, true)
+			require.NoError(t, err)
+			require.NotNil(t, value.GetLit())
+			require.True(t, value.GetLit().GetBval())
+		})
+	}
+}
+
 func TestColumnDefaultUnionTemporalModes(t *testing.T) {
 	for _, mode := range []string{"", "STRICT_TRANS_TABLES"} {
 		for _, tc := range []struct {
@@ -137,7 +176,7 @@ func TestColumnDefaultUnionTemporalModes(t *testing.T) {
 			{"CAST('2020-01-01' AS DATE)", false},
 			{"1", false},
 		} {
-			for _, operator := range []string{"UNION", "UNION ALL"} {
+			for _, operator := range []string{"UNION", "UNION ALL", "ROLLUP"} {
 				t.Run(mode+"/"+operator+"/"+tc.expression, func(t *testing.T) {
 					mock := NewMockOptimizer(true, newPlanTestProcess(t))
 					currentMode := "STRICT_TRANS_TABLES"
@@ -146,11 +185,14 @@ func TestColumnDefaultUnionTemporalModes(t *testing.T) {
 					}
 					mock.ctxt.sqlModeOverride = &currentMode
 					sql := "SELECT DEFAULT(y) FROM (SELECT x AS y FROM (SELECT " + tc.expression + " x " + operator + " SELECT " + tc.expression + " x) d) outer_d"
+					if operator == "ROLLUP" {
+						sql = "SELECT DEFAULT(y) FROM (SELECT " + tc.expression + " y FROM nation GROUP BY n_regionkey WITH ROLLUP) d"
+					}
 					statement, err := mysql.ParseOneWithSQLMode(t.Context(), sql, 1, mode)
 					require.NoError(t, err)
 					defer statement.Free()
 					_, err = BuildPlan(&mock.ctxt, statement, false)
-					if mode != "" && tc.strictError {
+					if mode != "" && tc.strictError && operator != "ROLLUP" {
 						require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoDefaultForColumn), "%v", err)
 					} else {
 						require.NoError(t, err)
