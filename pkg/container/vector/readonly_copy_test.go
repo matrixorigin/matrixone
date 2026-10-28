@@ -192,6 +192,9 @@ func readonlyAreaMutations() []readonlyAreaMutation {
 		{"selection", false, func(dst, src *Vector, mp *mpool.MPool) error {
 			return dst.Union(src, []int64{0}, mp)
 		}},
+		{"selection-int32", false, func(dst, src *Vector, mp *mpool.MPool) error {
+			return dst.UnionInt32(src, []int32{0}, mp)
+		}},
 		{"all", false, func(dst, src *Vector, mp *mpool.MPool) error {
 			return GetUnionAllFunction(*dst.GetType(), mp)(dst, src)
 		}},

@@ -6684,14 +6684,11 @@ func (v *Vector) ShuffleWithBuf(sels []int64, mp *mpool.MPool, buf *[]byte) (err
 
 // Copy simply does v[vi] = w[wi]
 func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
-	// Preserve an aliased source row before COW can release its descriptors.
-	if v.HasBorrowedBacking() && byteSlicesOverlap(v.data, w.data) {
-		preserved, err := w.CloneWindow(int(wi), int(wi)+1, mp)
-		if err != nil {
-			return err
-		}
-		defer preserved.Free(mp)
-		return v.Copy(preserved, vi, 0, mp)
+	// Preserve an aliased source row before COW or growth can release it.
+	if v.dataAliases(w) && (v.typ.IsVarlen() || v.HasBorrowedBacking()) {
+		return v.withClonedSource(w, int(wi), int(wi)+1, mp, func(source *Vector) error {
+			return v.Copy(source, vi, 0, mp)
+		})
 	}
 	// Area growth must not replace data after we capture a destination header.
 	if err := v.MaterializeOwned(mp); err != nil {
@@ -6807,6 +6804,12 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, mp *mpool.MPool) error {
 func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) error {
 	union := getUnionAllFunction(typ, mp)
 	return func(v, w *Vector) error {
+		// A Window retains the area lease but may alias our owned descriptors.
+		if v.dataAliases(w) {
+			return v.withClonedSource(w, 0, w.length, mp, func(source *Vector) error {
+				return GetUnionAllFunction(typ, mp)(v, source)
+			})
+		}
 		if err := v.MaterializeOwned(mp); err != nil {
 			return err
 		}
@@ -8099,6 +8102,11 @@ func (v *Vector) UnionNull(mp *mpool.MPool) error {
 
 // It is simply append. the purpose of retention is ease of use
 func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
+	if v.dataAliases(w) {
+		return v.withClonedSource(w, int(sel), int(sel)+1, mp, func(source *Vector) error {
+			return v.UnionOne(source, 0, mp)
+		})
+	}
 	preserveAreaDisjoint := v.typ.IsVarlen() && !v.IsConst() && v.areaDisjoint &&
 		v.DataBackingKind() == OwnedMPoolUnique && v.AreaBackingKind() == OwnedMPoolUnique
 	// EmptyByFlag includes borrowed Arrow validity. Avoid row lookup only
@@ -8245,6 +8253,11 @@ func appendSelectedGrouping[T int32 | int64](
 func (v *Vector) UnionMulti(w *Vector, sel int64, cnt int, mp *mpool.MPool) error {
 	if cnt == 0 {
 		return nil
+	}
+	if v.dataAliases(w) {
+		return v.withClonedSource(w, int(sel), int(sel)+1, mp, func(source *Vector) error {
+			return v.UnionMulti(source, 0, cnt, mp)
+		})
 	}
 	if err := v.MaterializeOwned(mp); err != nil {
 		return err
@@ -8404,6 +8417,12 @@ func (v *Vector) UnionInt32(w *Vector, sels []int32, mp *mpool.MPool) error {
 func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	if len(sels) == 0 {
 		return nil
+	}
+	if v.dataAliases(w) {
+		// Keep source row indices unchanged, including reordered selections.
+		return v.withClonedSource(w, 0, w.length, mp, func(source *Vector) error {
+			return unionT(v, source, sels, mp)
+		})
 	}
 	preserveDisjointArea := v.typ.IsVarlen() &&
 		v.AreaBackingKind() == OwnedMPoolUnique &&
@@ -8669,18 +8688,15 @@ func (v *Vector) unionBatch(
 	// Window into it. Preserve that source before any destination growth: mpool
 	// growth may replace and release both the varlena headers and area backing,
 	// leaving an aliased source slice pointing at returned storage.
-	if v.typ.IsVarlen() && w != nil &&
-		(byteSlicesOverlap(v.data, w.data) || byteSlicesOverlap(v.area, w.area)) {
+	if w != nil && (v.dataAliases(w) ||
+		v.typ.IsVarlen() && byteSlicesOverlap(v.area, w.area)) {
 		sourceRows := cnt
 		if flags != nil {
 			sourceRows = len(flags)
 		}
-		preserved, err := w.CloneWindow(int(offset), int(offset)+sourceRows, mp)
-		if err != nil {
-			return err
-		}
-		defer preserved.Free(mp)
-		return v.UnionBatch(preserved, 0, cnt, flags, mp)
+		return v.withClonedSource(w, int(offset), int(offset)+sourceRows, mp, func(source *Vector) error {
+			return v.UnionBatch(source, 0, cnt, flags, mp)
+		})
 	}
 	if err := v.MaterializeOwned(mp); err != nil {
 		return err
@@ -9473,6 +9489,24 @@ func AppendAny(vec *Vector, val any, isNull bool, mp *mpool.MPool) error {
 		return appendOneBytes(vec, val.([]byte), false, mp)
 	}
 	return nil
+}
+
+// withClonedSource charges a temporary snapshot to the mutation's destination.
+// The callback consumes it synchronously. Keeping cleanup here avoids adding a
+// defer to the common non-aliasing mutation paths.
+func (v *Vector) withClonedSource(w *Vector, start, end int, mp *mpool.MPool, consume func(*Vector) error) error {
+	source, err := w.CloneWindowWithAllocation(start, end, mp, v.allocationAccount)
+	if err != nil {
+		return err
+	}
+	defer source.Free(mp)
+	return consume(source)
+}
+
+// Distinct unique owners cannot share data. Skip the range check for the
+// common owned-to-owned append; windows and leases mark data as non-owning.
+func (v *Vector) dataAliases(w *Vector) bool {
+	return (v == w || v.cantFreeData || w.cantFreeData) && byteSlicesOverlap(v.data, w.data)
 }
 
 func byteSlicesOverlap(left, right []byte) bool {
