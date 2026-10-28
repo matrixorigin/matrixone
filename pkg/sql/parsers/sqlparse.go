@@ -217,11 +217,7 @@ func handleSQLForRecordFragmentWithSecrets(sql string, mode mysql.SQLModeFlags) 
 		// SET PASSWORD owns its target and value. A target named
 		// access_key_id/secret_access_key is a user, not a credential option:
 		// generic lookahead must not consume '=' or PASSWORD('secret').
-		// IDENTIFIED is not part of the target: on malformed forms such as
-		// SET PASSWORD FOR u IDENTIFIED BY 'pw' (no '='), its literal must
-		// still pass through to the IDENTIFIED BY masking branch; skipping
-		// it would retain the password in diagnostics.
-		if sawSetPassword && typ != eq && typ != mysql.IDENTIFIED {
+		if sawSetPassword && typ != eq {
 			continue
 		}
 		if typ == mysql.IDENTIFIED {
@@ -239,6 +235,7 @@ func handleSQLForRecordFragmentWithSecrets(sql string, mode mysql.SQLModeFlags) 
 				mask(scanner.Pos-len(s)-1, scanner.Pos-2)
 			}
 		} else if sawSetPassword && typ == eq {
+			sawSet, sawSetPassword = false, false
 			// SET PASSWORD [= 'secret' | FOR user = 'secret']: mask the
 			// password literal after the '='. MySQL also accepts the
 			// PASSWORD('secret') function form, whose secret is the call
@@ -271,12 +268,17 @@ func handleSQLForRecordFragmentWithSecrets(sql string, mode mysql.SQLModeFlags) 
 				mask(start, len(sql)-1)
 				break
 			}
-			sawSet, sawSetPassword = false, false
 		} else if sawSet && typ == mysql.PASSWORD {
 			sawSetPassword = true
 		} else if typ == mysql.SET {
 			sawSet = true
 		}
+	}
+	if sawSetPassword {
+		// Without the assignment delimiter, target and secret cannot be
+		// separated reliably. Retain no raw fragment, and preserve its full
+		// provenance so frontend parser-error echoes are scrubbed as well.
+		return "******", []string{sql}
 	}
 	indexes = append(indexes, len(sql))
 

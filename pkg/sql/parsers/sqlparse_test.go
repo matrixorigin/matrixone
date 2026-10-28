@@ -500,23 +500,22 @@ func TestHandleSqlForRecord(t *testing.T) {
 		// No credential keyword: preserve ordinary invalid SQL diagnostics.
 		require.Equal(t, []string{"SELECT ``"}, HandleSqlForRecord("SELECT ``"))
 	})
-	// A malformed SET PASSWORD FOR form (missing '=') must still mask the
-	// IDENTIFIED BY literal: the target-name guard skips target tokens, not
-	// the IDENTIFIED branch.
-	t.Run("malformed set password for identified by still masks literal", func(t *testing.T) {
+	// Without '=', no target/value boundary can be trusted, regardless of
+	// whether the malformed value looks like a literal, call or IDENTIFIED BY.
+	t.Run("set password without assignment fails closed", func(t *testing.T) {
 		for _, mode := range []string{"", "NO_BACKSLASH_ESCAPES", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
-			fragments, secrets := MaskSecretLiteralsWithSQLMode(
-				"SET PASSWORD FOR ordinary_user IDENTIFIED BY 'ProbeSecret42'", mode)
-			joined := strings.Join(fragments, ";")
-			require.NotContains(t, joined, "ProbeSecret42", mode)
-			require.Contains(t, joined, "IDENTIFIED BY '******'", mode)
-			require.NotEmpty(t, secrets, mode)
+			for _, value := range []string{"'ProbeSecret42'", "PASSWORD('ProbeSecret42')", "IDENTIFIED BY 'ProbeSecret42'"} {
+				raw := "SET PASSWORD FOR ordinary_user " + value
+				fragments, secrets := MaskSecretLiteralsWithSQLMode(raw, mode)
+				require.Equal(t, []string{"******"}, fragments, mode+"/"+value)
+				require.Equal(t, []string{raw}, secrets, "retain raw provenance for diagnostic echo scrubbing")
+			}
 
 			// The target-name guard still holds: a user named
 			// access_key_id is a target, not a credential option.
-			fragments, secrets = MaskSecretLiteralsWithSQLMode(
+			fragments, secrets := MaskSecretLiteralsWithSQLMode(
 				"SET PASSWORD FOR access_key_id = 'TargetGuardPw42'", mode)
-			joined = strings.Join(fragments, ";")
+			joined := strings.Join(fragments, ";")
 			require.Contains(t, joined, "access_key_id", mode)
 			require.NotContains(t, joined, "TargetGuardPw42", mode)
 			require.NotEmpty(t, secrets, mode)

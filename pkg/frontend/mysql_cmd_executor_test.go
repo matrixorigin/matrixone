@@ -194,26 +194,47 @@ func TestDoComQueryParseErrorRedactsMongoDBSelector(t *testing.T) {
 }
 
 func TestDoComQuerySetPasswordTargetNameRedaction(t *testing.T) {
-	for _, user := range []string{"ordinary_user", "access_key_id", "secret_access_key"} {
-		t.Run(user, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, user, value, mode string
+		missingAssignment       bool
+	}{
+		{"ordinary target", "ordinary_user", "= PASSWORD('%s') trailing", "", false},
+		{"access key target", "access_key_id", "= PASSWORD('%s') trailing", "", false},
+		{"secret key target", "secret_access_key", "= PASSWORD('%s') trailing", "", false},
+		{"missing assignment literal", "ordinary_user", "'%s'", "", true},
+		{"missing assignment function", "ordinary_user", "PASSWORD('%s')", "", true},
+		{"missing assignment identified", "ordinary_user", "IDENTIFIED BY '%s'", "", true},
+		{"missing assignment no backslash", "ordinary_user", "'%s'", "NO_BACKSLASH_ESCAPES", true},
+		{"missing assignment ansi", "ordinary_user", "'%s'", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			ctx := defines.AttachAccountId(t.Context(), catalog.System_Account)
 			previousPU := getPuIfPresent("")
 			t.Cleanup(func() { setPu("", previousPU) })
 			ctrl := gomock.NewController(t)
 			ses := newTestSession(t, ctrl)
 			defer ses.Close()
+			require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", tc.mode))
+			params := getPu(ses.GetService()).SV
+			previousLimit := params.LengthOfQueryPrinted
+			t.Cleanup(func() { params.LengthOfQueryPrinted = previousLimit })
+			params.LengthOfQueryPrinted = 1024
 			observed, logs := newObservedProtocolSession()
 			ses.logger, ses.logLevel = observed.logger, observed.logLevel
 			ses.loggerOnce.Do(func() {})
 			execCtx := newTestExecCtx(ctx, ctrl)
 			execCtx.ses = ses
 			const secret = "ReviewSecret42"
-			query := "SET PASSWORD FOR " + user + " = PASSWORD('" + secret + "') trailing"
+			query := "SET PASSWORD FOR " + tc.user + " " + fmt.Sprintf(tc.value, secret)
 			err := doComQuery(ses, execCtx, &UserInput{sql: query})
 			require.Error(t, err)
 			require.NotContains(t, err.Error(), secret)
 			require.NotContains(t, ses.GetSqlOfStmt(), secret)
-			require.Contains(t, ses.GetSqlOfStmt(), "SET PASSWORD FOR "+user)
+			if tc.missingAssignment {
+				require.Equal(t, "******", ses.GetSqlOfStmt())
+			} else {
+				require.Contains(t, ses.GetSqlOfStmt(), "SET PASSWORD FOR "+tc.user)
+			}
 			require.NotEmpty(t, logs.All(), "exercise the real frontend diagnostic sink")
 			for _, entry := range logs.All() {
 				require.NotContains(t, entry.Message+fmt.Sprint(entry.ContextMap()), secret)
