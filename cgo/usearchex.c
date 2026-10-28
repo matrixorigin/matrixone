@@ -45,7 +45,7 @@ static int filtered_search_membership_cb(usearch_key_t key, void *data) {
 size_t usearchex_filtered_search_with_membership(
     usearch_index_t index,
     void const* query_vector, usearch_scalar_kind_t query_kind, size_t count,
-    void *filter, int filter_kind,
+    void *filter, int filter_kind, int exact,
     usearch_key_t* keys, usearch_distance_t* distances, usearch_error_t* error) {
 
     mo_membership_t m;
@@ -58,6 +58,7 @@ size_t usearchex_filtered_search_with_membership(
             count,
             filtered_search_membership_cb,
             &m,
+            exact != 0,
             keys,
             distances,
             error);

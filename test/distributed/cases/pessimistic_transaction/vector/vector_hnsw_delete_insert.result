@@ -1,5 +1,8 @@
 SET experimental_hnsw_index = 1;
 SET hnsw_threads_build = 1;
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s') not like '%failed=[%' as all_cn_updated;
+➤ all_cn_updated[-7,1,0]  𝄀
+1
 drop database if exists hnsw_delete_insert;
 create database hnsw_delete_insert;
 use hnsw_delete_insert;
@@ -84,6 +87,9 @@ select id from t order by l2_distance(v, '[1,1,2]') limit 3;
 2  𝄀
 3
 commit;
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0') not like '%failed=[%' as all_cn_restored;
+➤ all_cn_restored[-7,1,0]  𝄀
+1
 drop database hnsw_delete_insert;
 SET experimental_hnsw_index = 0;
 SET hnsw_threads_build = 0;

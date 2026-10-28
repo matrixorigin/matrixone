@@ -4508,6 +4508,38 @@ func TestNewCompileTxnOffsetForInternalSql(t *testing.T) {
 	})
 }
 
+func TestCompileODKUPreInsertSingleInputStream(t *testing.T) {
+	for _, tracked := range []bool{false, true} {
+		t.Run(fmt.Sprint(tracked), func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.addr = "local-cn:6001"
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+			inputs := make([]*Scope, 0, 2)
+			for range 2 {
+				input := newScope(Remote)
+				input.NodeInfo = engine.Node{Addr: "remote-cn:6001", Mcpu: 2}
+				input.Proc = c.proc.NewNoContextChildProc(0)
+				input.setRootOperator(projection.NewArgument())
+				inputs = append(inputs, input)
+			}
+			node := &plan.Node{PreInsertCtx: &plan.PreInsertCtx{
+				Ref: &plan.ObjectRef{}, TableDef: &plan.TableDef{}, TrackOdkuResult: tracked}}
+			out, err := c.compilePreInsert(nil, node, inputs)
+			require.NoError(t, err)
+			t.Cleanup(func() { ReleaseScopes(out) })
+			if tracked {
+				require.Len(t, out, 1)
+				require.Equal(t, 1, out[0].NodeInfo.Mcpu)
+				require.Len(t, out[0].PreScopes, 2)
+				require.Same(t, c.proc.Base, out[0].Proc.Base)
+			} else {
+				require.Len(t, out, 2)
+				require.Equal(t, 2, out[0].NodeInfo.Mcpu)
+			}
+		})
+	}
+}
+
 func TestWindowIntervalValidationPrecedesSourceInitialization(t *testing.T) {
 	c := newPrePipelineLockTestCompile(t, plan.Query_SELECT)
 	ctrl := gomock.NewController(t)

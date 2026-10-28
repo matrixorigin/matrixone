@@ -678,6 +678,7 @@ const (
 	// NOTE: avoid duplicate TblType name with IVFFLAT or other index
 	Hnsw_TblType_Metadata = "hnsw_meta"
 	Hnsw_TblType_Storage  = "hnsw_index"
+	Hnsw_TblType_Dict     = "hnsw_dict"
 
 	// HNSW Storage - Column names
 	Hnsw_TblCol_Storage_Index_Id = IndexStorage_TblCol_Index_Id
@@ -692,6 +693,13 @@ const (
 	Hnsw_TblCol_Metadata_Filesize  = IndexMetadata_TblCol_Filesize
 	Hnsw_TblCol_Metadata_Nrow      = IndexMetadata_TblCol_Nrow
 	Hnsw_TblCol_Metadata_Build_Ts  = IndexMetadata_TblCol_Build_Ts
+
+	// HNSW Dict - a key/value table of an int8/uint8 index; Hnsw_Dict_QuantizeMin/Max hold
+	// the [min,max] range every vector is mapped with.
+	Hnsw_TblCol_Dict_Key  = "__mo_index_key"
+	Hnsw_TblCol_Dict_Val  = "__mo_index_val"
+	Hnsw_Dict_QuantizeMin = "quantize_min"
+	Hnsw_Dict_QuantizeMax = "quantize_max"
 
 	/************ Cagra Index *************/
 

@@ -161,6 +161,8 @@ func mergeIndexOption(left, right *tree.IndexOption) *tree.IndexOption {
         left.PositionFreeSet = true
     } else if len(right.IncludeColumns) > 0 {
         left.IncludeColumns = right.IncludeColumns
+    } else if len(right.TokenFilters) > 0 {
+        left.TokenFilters = right.TokenFilters
     }
     return left
 }
@@ -222,6 +224,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
     jsonTableColumn *tree.JSONTableColumn
     jsonTableColumns []*tree.JSONTableColumn
     jsonTableResponse *tree.JSONTableResponse
+    jsonTableCharset *string
     rowFormatType tree.RowFormatType
     matchType tree.MatchType
     fullTextSearchType tree.FullTextSearchType
@@ -477,6 +480,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <jsonTableColumns> json_table_columns
 %type <jsonTableResponse> json_table_response json_table_on_empty json_table_on_error
 %type <str> json_table_path_opt
+%type <jsonTableCharset> json_table_charset_opt
 %nonassoc EMPTY
 %left <str> UNION EXCEPT INTERSECT MINUS
 %nonassoc LOWER_THAN_ORDER
@@ -596,7 +600,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 
 // Secondary Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI IVFFLAT MASTER HNSW CAGRA IVFPQ BM25
-%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE FULLSCAN
+%token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN LISTS OP_TYPE REINDEX EF_SEARCH EF_CONSTRUCTION M ASYNC FORCE_SYNC AUTO_UPDATE INTERMEDIATE_GRAPH_DEGREE GRAPH_DEGREE QUANTIZATION BITS_PER_CODE DISTRIBUTION_MODE ITOPK_SIZE INCLUDE KMEANS_TRAIN_PERCENT KMEANS_MAX_ITERATION MAX_INDEX_CAPACITY MAX_POSTINGS_CAPACITY QUANTIZER_TRAIN_LIMIT FULLTEXT2 POSITION_FREE FULLSCAN TOKEN_FILTER
 
 // Alter
 %token <str> EXPIRE ACCOUNT ACCOUNTS UNLOCK DAY NEVER PUMP MYSQL_COMPATIBILITY_MODE UNIQUE_CHECK_ON_AUTOINCR
@@ -1147,6 +1151,8 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %token <str> RESPECT
 %left <str> MEMBER
 %token <str> AUTO_ID_CACHE
+// Shift the contextual SOUNDS LIKE phrase before reducing a bare select alias.
+%left <str> SOUNDS
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -8486,12 +8492,17 @@ json_table_columns:
 json_table_column:
     ident FOR JSON_TABLE_ORDINALITY
     { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "ordinality"} }
-|   ident column_type JSON_TABLE_PATH STRING json_table_policies
-    { $$ = $5; $$.Name = $1.Origin(); $$.Kind = "path"; $$.Type = $2; $$.Path = $4 }
-|   ident column_type EXISTS JSON_TABLE_PATH STRING
-    { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "exists", Type: $2, Path: $5} }
+|   ident column_type json_table_charset_opt JSON_TABLE_PATH STRING json_table_policies
+    { $$ = $6; $$.Name = $1.Origin(); $$.Kind = "path"; $$.Type = $2; $$.Charset = $3; $$.Path = $5 }
+|   ident column_type json_table_charset_opt EXISTS JSON_TABLE_PATH STRING
+    { $$ = &tree.JSONTableColumn{Name: $1.Origin(), Kind: "exists", Type: $2, Charset: $3, Path: $6} }
 |   JSON_TABLE_NESTED json_table_path_opt STRING COLUMNS '(' json_table_columns ')'
     { $$ = &tree.JSONTableColumn{Kind: "nested", Path: $3, Children: $6} }
+
+json_table_charset_opt:
+    { $$ = nil }
+|   charset_keyword charset_name
+    { charset := $2; $$ = &charset }
 
 json_table_path_opt:
     { $$ = "" }
@@ -10230,6 +10241,19 @@ index_option:
 	io := tree.NewIndexOption()
 	io.PositionFree = false
 	io.PositionFreeSet = true
+	$$ = io
+    }
+|   TOKEN_FILTER equal_opt STRING
+    {
+	io := tree.NewIndexOption()
+	parts := strings.Split($3, ",")
+	names := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if n := strings.TrimSpace(p); n != "" {
+			names = append(names, n)
+		}
+	}
+	io.TokenFilters = names
 	$$ = io
     }
 |    ASYNC
@@ -15163,6 +15187,20 @@ predicate:
     {
         $$ = tree.NewComparisonExpr(tree.MEMBER_OF, $1, $5)
     }
+|   bit_expr SOUNDS LIKE bit_expr %prec LIKE
+    {
+        left := &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("soundex")),
+            FuncName: tree.NewCStr("soundex", 1),
+            Exprs: tree.Exprs{$1},
+        }
+        right := &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("soundex")),
+            FuncName: tree.NewCStr("soundex", 1),
+            Exprs: tree.Exprs{$4},
+        }
+        $$ = tree.NewComparisonExpr(tree.EQUAL, left, right)
+    }
 |   bit_expr LIKE simple_expr like_escape_opt
     {
         $$ = tree.NewComparisonExprWithEscape(tree.LIKE, $1, $3, $4)
@@ -15302,7 +15340,7 @@ keys:
 num_literal:
     INTEGRAL
     {
-        str := fmt.Sprintf("%v", $1)
+        str := $<str>1
         switch v := $1.(type) {
         case uint64:
             $$ = tree.NewNumVal(v, str, false, tree.P_uint64)
@@ -15330,7 +15368,7 @@ literal:
     }
 |   INTEGRAL
     {
-        str := fmt.Sprintf("%v", $1)
+        str := $<str>1
         switch v := $1.(type) {
         case uint64:
             $$ = tree.NewNumVal(v, str, false, tree.P_uint64)
@@ -16773,6 +16811,7 @@ non_reserved_keyword:
 |   MAX_POSTINGS_CAPACITY
 |   QUANTIZER_TRAIN_LIMIT
 |   POSITION_FREE
+|   TOKEN_FILTER
 |   FULLSCAN
 |   KEYS
 |   LANGUAGE
@@ -16859,6 +16898,7 @@ non_reserved_keyword:
 |   SHARE
 |   SIGNED
 |   SMALLINT
+|   SOUNDS
 |   SNAPSHOT
 |   PITR
 |   RECOVERY_WINDOW
