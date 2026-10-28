@@ -51,6 +51,11 @@ func checkTokens(t *testing.T, tokens []Token, expected []string) {
 func TestByteJson(t *testing.T) {
 	tcs := []tokenTestCase{
 		{
+			input:         `[2.0, -0.0, 1e20, -1e20, 1e-7, -1e-7, 1e-15]`,
+			tokens:        []string{"2", "-0", "100000000000000000000", "-100000000000000000000", "1e-07", "-1e-07", "1e-15"},
+			tokensWithKey: []string{"2", "-0", "100000000000000000000", "-100000000000000000000", "1e-07", "-1e-07", "1e-15"},
+		},
+		{
 			input:         `{"a": 1, "b": 2}`,
 			tokens:        []string{"1", "2"},
 			tokensWithKey: []string{"a", "1", "b", "2"},

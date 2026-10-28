@@ -1601,7 +1601,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			}
 			continue
 		}
-		sp, err = concatStringValue(ivecs[0].GetType().Oid, sp)
+		sp, err = concatStringValue(proc.Ctx, ivecs[0].GetType().Oid, sp)
 		if err != nil {
 			return err
 		}
@@ -1613,7 +1613,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			if null {
 				continue
 			}
-			v, err = concatStringValue(ivecs[j].GetType().Oid, v)
+			v, err = concatStringValue(proc.Ctx, ivecs[j].GetType().Oid, v)
 			if err != nil {
 				return err
 			}
@@ -6159,7 +6159,7 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 
 // Elt: ELT(N, str1, str2, str3, ...) - Returns str1 if N = 1, str2 if N = 2, and so on.
 // Returns NULL if N is less than 1, greater than the number of strings, or NULL.
-func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	// Rest arguments are strings
@@ -6172,7 +6172,7 @@ func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process
 		return rs.AppendBytes(nil, true)
 	}
 	appendValue := func(row uint64, idx uint64) error {
-		str, null, err := getJSONStringConsumerValue(strParams[idx], row)
+		str, null, err := getJSONStringConsumerValue(proc.Ctx, strParams[idx], row)
 		if err != nil {
 			return err
 		}
