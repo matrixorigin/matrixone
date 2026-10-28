@@ -183,8 +183,11 @@ func (b *baseBinder) columnDefaultMetadata(name *tree.UnresolvedName) (OutputCol
 		// DEFAULT is row-independent, but that must not widen HAVING's visible
 		// namespace. Reuse its SELECT-output and direct-column identity owners
 		// without binding a row reference or manufacturing an aggregate.
-		_, _, local := resolveColumnIdentity(b.ctx, name)
-		_, grouped := having.lookupGroupByExpr(name, windowExprAstKey(name))
+		binding, columnPos, local := resolveColumnIdentity(b.ctx, name)
+		grouped := false
+		if local {
+			_, grouped = b.ctx.groupBySourceColumns[[2]int32{binding.tag, columnPos}]
+		}
 		// A declared source grouping key precedes a colliding SELECT alias.
 		// Use the logical grouping registry, not the active subtotal bitmap:
 		// DEFAULT reads schema metadata even when this branch nulls the key.

@@ -416,6 +416,15 @@ func (l *Lexer) Lex(lval *yySymType) int {
 			} else {
 				typ = ID
 			}
+		} else if typ == NOW && l.previousToken == ON && l.lastToken == UPDATE {
+			// MySQL also admits NOW(fsp) for an ON UPDATE timestamp attribute.
+			// Keep this digest-only; bare NOW is not the CURRENT_TIMESTAMP form.
+			lookahead := *l.scanner
+			if next, _ := lookahead.Scan(); next == '(' {
+				typ = CURRENT_TIMESTAMP
+			} else {
+				typ = LEX_ERROR
+			}
 		} else if typ == ID && l.lastToken != '.' && strings.EqualFold(str, "n") && l.scanner.cur() == '\'' {
 			// National strings are one literal, not an identifier plus alias.
 			typ, str = l.scanner.Scan()

@@ -1000,6 +1000,11 @@ type BindContext struct {
 	groupByAst          map[string]int32
 	groupByCanonicalAst map[string]int32
 	groupByParamAst     map[string]int32
+	// groupBySourceColumns retains logical source identity before unary-plus
+	// lowering inserts numeric functions/casts. Keys are (relation tag, column).
+	// DEFAULT uses it for name visibility, never for row values or functional
+	// dependency proofs. It is query-local and independent of active subtotals.
+	groupBySourceColumns map[[2]int32]struct{}
 	// sampleGroupByAst retains the logical identity of stable GROUP BY
 	// literals removed from the physical key. SAMPLE must still reject those
 	// expressions even though ordinary projection binding should see literals.

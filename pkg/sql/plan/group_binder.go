@@ -275,6 +275,16 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 			if _, ok := b.ctx.groupByCanonicalAst[canonicalKey]; !ok {
 				b.ctx.groupByCanonicalAst[canonicalKey] = pos
 			}
+			// Capture declared column identity while the original syntax still
+			// distinguishes no-op plus/parentheses from explicit CAST/arithmetic.
+			if column, direct := havingDirectColumnExpr(astExpr); direct {
+				if binding, columnPos, resolved := resolveColumnIdentity(b.ctx, column); resolved {
+					if b.ctx.groupBySourceColumns == nil {
+						b.ctx.groupBySourceColumns = make(map[[2]int32]struct{})
+					}
+					b.ctx.groupBySourceColumns[[2]int32{binding.tag, columnPos}] = struct{}{}
+				}
+			}
 		}
 		if hasParam {
 			key := parameterizedGroupByKey(astStr, expr)

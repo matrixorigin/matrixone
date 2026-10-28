@@ -1,6 +1,6 @@
 # MySQL 兼容函数与运算符补齐设计
 
-版本：v6，2026-10-28。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
+版本：v7，2026-10-28。归属：#31319（原始报告 #23010、#23024、#23025、#23035）。STATEMENT_DIGEST 的兼容目标为 MySQL 8.4 逐字节一致的摘要，而非近似指纹。
 
 ## 范围、不变量与设计门槛
 
@@ -76,8 +76,10 @@ VALUES/REPLACE/ON DUPLICATE KEY UPDATE 通过本次 DML 已解析的目标列定
 ## 设计决策记录
 
 - 相同 UNION 分支的 DISTINCT 折叠属于优化，不是 SQL 类型默认值边界的删除。折叠前捕获 provenance，保留 UNION 的三态时间可空性、纯 NULL 与整数精度；内部 grouping-set 的共享输入 UNION 保留原投影的整数精度身份，物化字段不套用户 UNION 的默认值策略。
-- HAVING 的 DEFAULT 虽不依赖行值，仍受 HAVING 可见列约束：已声明的源分组列优先于同名 SELECT 别名，其次匹配输出别名和直接投影列；不因表达式或聚合引用了底层列就授予可见性。分组列可见性使用 HavingBinder 的逻辑分组注册表，不使用仅表示小计分支函数依赖的 active grouping 位图，因此 ROLLUP/CUBE 的非活跃声明列仍能读取元数据。复用 HavingBinder 所有的名称/列身份索引，不创建伪造行引用或聚合；聚合参数及外层相关列仍使用各自原有作用域。
+- HAVING 的 DEFAULT 虽不依赖行值，仍受 HAVING 可见列约束：已声明的源分组列优先于同名 SELECT 别名，其次匹配输出别名和直接投影列；不因表达式或聚合引用了底层列就授予可见性。分组列可见性使用 GroupBinder 在降低前保存的 query-local 源列声明索引（关系 tag/列位置），只移除 AST 中括号/一元加号，不将 CAST、负号或算术视为透明；GROUP BY ordinal/alias 先由原分组解析器选定投影再记录。该索引不改变行值/函数依赖，只供 DEFAULT 元数据可见性使用；物理分组键改写不会删除 SQL 声明身份，子查询不继承，窗口校验克隆独立复制。它不使用仅表示小计分支函数依赖的 active grouping 位图，因此 ROLLUP/CUBE 的非活跃声明列仍能读取元数据。复用 HavingBinder 所有的名称/列身份索引，不创建伪造行引用或聚合；聚合参数及外层相关列仍使用各自原有作用域。
 - 系统变量的 scoped name 按词法引号域编码：反引号和 ANSI_QUOTES 双引号为标识符，普通单/双引号字符串为占位符；无 scope 的字符串语法拒绝，不把它伪装成注册表存在性校验。
+- 普通列的裸 CURRENT_TIMESTAMP/NOW/LOCALTIME/LOCALTIMESTAMP 默认值和 ON UPDATE 只用于 TIMESTAMP/DATETIME，显式/省略小数秒精度须与列声明相等且处于 0..6；其他函数、裸算术与表达式须使用 MySQL 的括号默认值语法，不能按裸时间默认值处理。括号表达式默认值仍允许其他目标类型和不同精度。digest-only lexer 允许 ON UPDATE NOW(fsp)，不扩展普通 MO 执行语法。
+- 列级 REFERENCES 的准入依赖 AST 所在 DDL 上下文：CREATE/ADD 可接受，MODIFY/CHANGE 拒绝；表级 FOREIGN KEY 不套此限制，不解析引用表或执行建表校验。
 - CREATE 和 ALTER ADD/MODIFY/CHANGE 共用列属性上下文化规则；生成列拒绝 DEFAULT（包括裸 NULL）、AUTO_INCREMENT、ON UPDATE、COLUMN_FORMAT 和 STORAGE；COMMENT、NULL/NOT NULL、索引/字符属性及普通列上的属性通过独立控制组保留，不按建表执行期的键约束误拒绝其他合法摘要。
 - 可执行注释在 digestMode 中按普通 SQL 字符串规则扫描，不沿用 MO 普通解析对注释内单引号的特殊跳过/拼接规则；普通执行 parser 的既有契约不变，版本过滤/工作预算仍由原 scanner 所有。
 - hint 尺寸后缀区分大小写：大写 K/M/G 为数值，小写为名称。小数点之后没有数字（例如 1.）的前缀丢弃，不产生虚假数值 token；所有 text/hash 控制组来自独立 MySQL oracle。

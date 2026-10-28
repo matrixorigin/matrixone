@@ -362,7 +362,7 @@ func digestSyntaxValid(statement tree.Statement) bool {
 	switch stmt := statement.(type) {
 	case *tree.CreateTable:
 		for _, definition := range stmt.Defs {
-			if column, ok := definition.(*tree.ColumnTableDef); ok && !digestColumnValid(column) {
+			if column, ok := definition.(*tree.ColumnTableDef); ok && !digestColumnValid(column, true) {
 				return false
 			}
 		}
@@ -370,15 +370,15 @@ func digestSyntaxValid(statement tree.Statement) bool {
 		for _, option := range stmt.Options {
 			switch option := option.(type) {
 			case *tree.AlterAddCol:
-				if !digestColumnValid(option.Column) {
+				if !digestColumnValid(option.Column, true) {
 					return false
 				}
 			case *tree.AlterTableModifyColumnClause:
-				if !digestColumnValid(option.NewColumn) {
+				if !digestColumnValid(option.NewColumn, false) {
 					return false
 				}
 			case *tree.AlterTableChangeColumnClause:
-				if !digestColumnValid(option.NewColumn) {
+				if !digestColumnValid(option.NewColumn, false) {
 					return false
 				}
 			}
@@ -387,9 +387,14 @@ func digestSyntaxValid(statement tree.Statement) bool {
 	return true
 }
 
-func digestColumnValid(column *tree.ColumnTableDef) bool {
+func digestColumnValid(column *tree.ColumnTableDef, allowReferences bool) bool {
 	// Mirror column-attribute contextualization, not DDL execution. Attribute
 	// order matters; a table-level primary key is not applied here.
+	if typ, ok := column.Type.(*tree.T); ok &&
+		(typ.InternalType.Family == tree.TimestampFamily || typ.InternalType.Family == tree.TimeFamily) &&
+		(typ.InternalType.Scale < 0 || typ.InternalType.Scale > 6) {
+		return false
+	}
 	notNull, nullDefault, hasDefault, autoIncrement, generated := false, false, false, false, false
 	generatedDisallowedAttribute := false
 	for _, attribute := range column.Attributes {
@@ -402,15 +407,77 @@ func digestColumnValid(column *tree.ColumnTableDef) bool {
 			autoIncrement = true
 		case *tree.AttributeGeneratedAlways:
 			generated = true
-		case *tree.AttributeOnUpdate, *tree.AttributeColumnFormat, *tree.AttributeStorage:
+		case *tree.AttributeReference:
+			// CREATE/ADD admit inline REFERENCES, but MODIFY/CHANGE do not.
+			if !allowReferences {
+				return false
+			}
+		case *tree.AttributeOnUpdate:
+			if !digestTemporalAttributeValid(column, attr.Expr, true) {
+				return false
+			}
+			generatedDisallowedAttribute = true
+		case *tree.AttributeColumnFormat, *tree.AttributeStorage:
 			generatedDisallowedAttribute = true
 		case *tree.AttributeDefault:
+			if !digestTemporalAttributeValid(column, attr.Expr, false) {
+				return false
+			}
 			hasDefault = true
 			value, literal := attr.Expr.(*tree.NumVal)
 			nullDefault = literal && value.ValType == tree.P_null
 		}
 	}
 	return !(notNull && nullDefault || autoIncrement && hasDefault && !nullDefault || generated && (hasDefault || autoIncrement || generatedDisallowedAttribute))
+}
+
+func digestTemporalAttributeValid(column *tree.ColumnTableDef, expression tree.Expr, onUpdate bool) bool {
+	if !onUpdate {
+		switch value := expression.(type) {
+		case *tree.NumVal, *tree.ParenExpr:
+			// Parenthesized expressions are a separate DEFAULT grammar domain;
+			// their runtime value need not match the timestamp-column contract.
+			return true
+		case *tree.UnaryExpr:
+			if literal, ok := value.Expr.(*tree.NumVal); ok &&
+				(value.Op == tree.UNARY_PLUS || value.Op == tree.UNARY_MINUS) {
+				switch literal.ValType {
+				case tree.P_int64, tree.P_uint64, tree.P_float64, tree.P_decimal:
+					return true
+				}
+			}
+			return false
+		}
+	}
+	function, direct := expression.(*tree.FuncExpr)
+	if !direct || function.IsTemporalLiteral {
+		return false
+	}
+	name := ""
+	if function.FuncName != nil {
+		name = strings.ToLower(function.FuncName.Origin())
+	}
+	switch name {
+	case "current_timestamp", "now", "localtime", "localtimestamp":
+	default:
+		return false
+	}
+	typ, ok := column.Type.(*tree.T)
+	if !ok || typ.InternalType.Family != tree.TimestampFamily || len(function.Exprs) > 1 {
+		return false
+	}
+	var precision int64
+	if len(function.Exprs) == 1 {
+		literal, ok := function.Exprs[0].(*tree.NumVal)
+		if !ok {
+			return false
+		}
+		precision, ok = literal.Int64()
+		if !ok {
+			return false
+		}
+	}
+	return precision >= 0 && precision <= 6 && precision == int64(typ.InternalType.Scale)
 }
 
 // Hint punctuation is not SQL punctuation: '?' is not a bind parameter,

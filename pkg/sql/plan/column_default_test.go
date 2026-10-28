@@ -106,6 +106,8 @@ func TestColumnDefaultPublicBinding(t *testing.T) {
 		"SELECT n_regionkey AS x FROM nation HAVING DEFAULT(n_regionkey)=7",
 		"SELECT n.n_regionkey AS x FROM nation n HAVING DEFAULT(n.n_regionkey)=7",
 		"SELECT 1 FROM nation GROUP BY n_regionkey HAVING DEFAULT(n_regionkey)=7",
+		"SELECT 1 FROM nation GROUP BY +n_regionkey HAVING DEFAULT(n_regionkey)=7",
+		"SELECT 1 FROM nation n GROUP BY (+(+n.n_regionkey)) WITH ROLLUP HAVING DEFAULT(n_regionkey)=7",
 		"SELECT 1 FROM nation HAVING MAX(DEFAULT(n_regionkey))=7",
 		"SELECT 1 FROM nation GROUP BY n_regionkey WITH ROLLUP HAVING DEFAULT(n_regionkey)=7",
 		"SELECT 1 FROM nation GROUP BY n_regionkey,n_nationkey WITH ROLLUP HAVING DEFAULT(n_regionkey)=7",
@@ -133,6 +135,13 @@ func TestColumnDefaultPublicBinding(t *testing.T) {
 func TestColumnDefaultHavingGroupIdentity(t *testing.T) {
 	for _, tc := range []struct{ query, predicate string }{
 		{"SELECT n_regionkey AS n_nationkey FROM nation GROUP BY n_regionkey,n_nationkey", "DEFAULT(n_nationkey)=9"},
+		{"SELECT n_regionkey AS n_nationkey FROM nation GROUP BY n_regionkey,+n_nationkey", "DEFAULT(n_nationkey)=9"},
+		{"SELECT n_regionkey AS n_nationkey FROM nation n GROUP BY n_regionkey,+(+n.n_nationkey)", "DEFAULT(n_nationkey)=9"},
+		{"SELECT +n_nationkey AS x FROM nation GROUP BY 1", "DEFAULT(n_nationkey)=9"},
+		{"SELECT +n_nationkey AS x FROM nation GROUP BY x", "DEFAULT(n_nationkey)=9"},
+		{"SELECT n_regionkey AS n_nationkey FROM nation GROUP BY n_regionkey,CAST(n_nationkey AS SIGNED)", "DEFAULT(n_nationkey)=7"},
+		{"SELECT n_regionkey AS n_nationkey FROM nation GROUP BY n_regionkey,n_nationkey+0", "DEFAULT(n_nationkey)=7"},
+		{"SELECT n_regionkey AS n_nationkey FROM nation GROUP BY n_regionkey,-n_nationkey", "DEFAULT(n_nationkey)=7"},
 		{"SELECT n_regionkey AS n_nationkey FROM nation GROUP BY n_regionkey", "DEFAULT(n_nationkey)=7"},
 		{"SELECT n_regionkey AS n_nationkey FROM nation", "DEFAULT(n_nationkey)=7"},
 	} {
@@ -150,6 +159,11 @@ func TestColumnDefaultHavingGroupIdentity(t *testing.T) {
 			defer statement.Free()
 			_, err = builder.bindSelect(statement.(*tree.Select), ctx, true)
 			require.NoError(t, err)
+			declaredColumns := len(ctx.groupBySourceColumns)
+			validation := cloneBindContextForWindowValidation(ctx)
+			clear(validation.groupBySourceColumns)
+			require.Len(t, ctx.groupBySourceColumns, declaredColumns, "window validation owns its metadata")
+			require.Empty(t, NewBindContext(builder, ctx).groupBySourceColumns, "child queries must not inherit grouping visibility")
 			predicate, err := mysql.ParseOne(t.Context(), "SELECT "+tc.predicate, 1)
 			require.NoError(t, err)
 			defer predicate.Free()

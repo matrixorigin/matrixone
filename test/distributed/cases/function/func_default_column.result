@@ -334,6 +334,28 @@ SELECT a AS b FROM default_column_grouped HAVING DEFAULT(b)=7 ORDER BY a;
 ➤ b[4,32,0]  𝄀
 1  𝄀
 2
+SELECT 1,COUNT(*) FROM default_column_grouped GROUP BY +(+(b)) HAVING DEFAULT(b)=9;
+➤ 1[-5,64,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+1  ¦  2
+SELECT a AS b,COUNT(*) FROM default_column_grouped GROUP BY a,+(+b) HAVING DEFAULT(b)=9 ORDER BY a;
+➤ b[4,32,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+SELECT a AS b,COUNT(*) FROM default_column_grouped GROUP BY a,+b HAVING DEFAULT(b)=7 ORDER BY a;
+➤ b[4,32,0]  ¦  COUNT(*)[-5,64,0]
+SELECT 1,COUNT(*) FROM default_column_grouped GROUP BY +b WITH ROLLUP HAVING DEFAULT(b)=9;
+➤ 1[-5,64,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+1  ¦  2  𝄀
+1  ¦  2
+SELECT 1 FROM default_column_grouped GROUP BY b+0 HAVING DEFAULT(b)=9;
+Unknown column 'b' in 'having clause'
+SELECT a AS b,COUNT(*) FROM default_column_grouped GROUP BY a,b+0 HAVING DEFAULT(b)=7 ORDER BY a;
+➤ b[4,32,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+SELECT +b AS x,COUNT(*) FROM default_column_grouped GROUP BY 1 HAVING DEFAULT(b)=9 ORDER BY x;
+➤ x[4,32,0]  ¦  COUNT(*)[-5,64,0]  𝄀
+2  ¦  2
 SELECT 1,COUNT(*) FROM default_column_grouped GROUP BY a,b WITH ROLLUP HAVING DEFAULT(b)=9 ORDER BY COUNT(*),1;
 ➤ 1[-5,64,0]  ¦  COUNT(*)[-5,64,0]  𝄀
 1  ¦  1  𝄀

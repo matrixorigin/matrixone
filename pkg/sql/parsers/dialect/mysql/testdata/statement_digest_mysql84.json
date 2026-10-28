@@ -2491,5 +2491,1401 @@
     "sql": "ALTER TABLE t CHANGE COLUMN b a VARCHAR(10) COLLATE utf8mb4_bin",
     "text": "ALTER TABLE `t` CHANGE COLUMN `b` `a` VARCHARACTER (?) COLLATE `utf8mb4_bin`",
     "digest": "2c68eb8b2b4fb84884f0ce08dad97e3b5376ebac47f0828944fc40d88ed51827"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT ON UPDATE CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT CURRENT_TIMESTAMP(3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT ON UPDATE CURRENT_TIMESTAMP(3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATE DEFAULT CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATE DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATE DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATE DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATE ON UPDATE CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATE ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATE ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATE ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATE DEFAULT CURRENT_TIMESTAMP(3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATE DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATE DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATE DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATE ON UPDATE CURRENT_TIMESTAMP(3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATE ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATE ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATE ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIME DEFAULT CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIME DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIME DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIME DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIME ON UPDATE CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIME ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIME ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIME ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIME DEFAULT CURRENT_TIMESTAMP(3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIME DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIME DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIME DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIME ON UPDATE CURRENT_TIMESTAMP(3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIME ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIME ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIME ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(20) DEFAULT CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(20) DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(20) DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a VARCHAR(20) DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(20) ON UPDATE CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(20) ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(20) ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a VARCHAR(20) ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(20) DEFAULT CURRENT_TIMESTAMP(3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(20) DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(20) DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a VARCHAR(20) DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a VARCHAR(20) ON UPDATE CURRENT_TIMESTAMP(3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a VARCHAR(20) ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a VARCHAR(20) ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a VARCHAR(20) ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP DEFAULT NOW )",
+    "digest": "28a8a2d6d0c4a9eb5108b58313402a3a6cf60d88e71c96d2e980f1f6c602567c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP DEFAULT NOW",
+    "digest": "53d01b485c8de1468f12e64bba0a844a2ecfb19f7a69223daa379ebe94d6ef56"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP DEFAULT NOW",
+    "digest": "2f19d131fbd1ce1fb6546615c9ad6428742e5c568742ea2f8dac8cc759cdc816"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` TIMESTAMP DEFAULT NOW",
+    "digest": "217d89b907f98289319f3fe46e8861d705335cfb055a55cfa8a18c82f4aa907a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` TIMESTAMP ON UPDATE NOW",
+    "digest": "8c7084ede1a44d170c75bc358c67e736250b8f47a4777266ecb34e5dd3894ad4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP DEFAULT CURRENT_TIMESTAMP(3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIMESTAMP DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP ON UPDATE CURRENT_TIMESTAMP(3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIMESTAMP ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT CURRENT_TIMESTAMP)",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT NOW )",
+    "digest": "d5203305bc03b6e79a8d0d8c6c26ebb6ca5595a09ed37d864134dc1ece56ecb2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME DEFAULT CURRENT_TIMESTAMP",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` DATETIME DEFAULT NOW",
+    "digest": "073cac0d82c18d6df16c913ac9ec0093cc7697ecac64bfd00a3416caf971f13e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME DEFAULT CURRENT_TIMESTAMP",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` DATETIME DEFAULT NOW",
+    "digest": "a59ef2fec71d7a9e64452f64d5c946c393dce6b222587ee2d3b21b54e4b9f577"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME DEFAULT CURRENT_TIMESTAMP",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` DATETIME DEFAULT NOW",
+    "digest": "3700418d69e9a9e9ac6097649942136bea95b5b4a659e210d8a7bfc36a074772"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE CURRENT_TIMESTAMP)",
+    "text": "CREATE TABLE `t` ( `a` DATETIME ON UPDATE NOW )",
+    "digest": "7ee054cb45526c8040d932c7fb77e0f93fd0255c3f02c9e06c9602f16329c4e3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME ON UPDATE CURRENT_TIMESTAMP",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` DATETIME ON UPDATE NOW",
+    "digest": "49c2ae1992c42b63ead3d866474a917832e8e7bae331fd45d336a9e5066b0d91"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME ON UPDATE CURRENT_TIMESTAMP",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` DATETIME ON UPDATE NOW",
+    "digest": "d1cff9c27d8e5c014d77e20e09ac855f5175042d580c88eeed4ddfd07dba8f86"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME ON UPDATE CURRENT_TIMESTAMP",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` DATETIME ON UPDATE NOW",
+    "digest": "329c7ee281713fb598f822ac13ea72c9c7d35a87e5eb0e930b133aabe22afec0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT CURRENT_TIMESTAMP(3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE CURRENT_TIMESTAMP(3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3))",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP (?) DEFAULT NOW (?) )",
+    "digest": "6514dfbfc8119f984629d2e133239c08b8cb4b700b9ab39e344045fd31becf05"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3)",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP (?) DEFAULT NOW (?)",
+    "digest": "67fe6a04bb097f98d223865342ffdd9e2941e51d7e60740eb3f10d2801bd8761"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3)",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP (?) DEFAULT NOW (?)",
+    "digest": "baa9d30d1efb315dd20bba7658d44a7535f004784fd82ed413225576dc1d6294"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3)",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` TIMESTAMP (?) DEFAULT NOW (?)",
+    "digest": "10b801f1a214461b8b6b93ff9e73218028ce10ec554506200bc8be27c5af5739"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3))",
+    "text": "CREATE TABLE `t` ( `a` TIMESTAMP (?) ON UPDATE NOW (?) )",
+    "digest": "1f28f21f758ae56734983aa08cd2050b4599ab4d6258d94485a5300731c4442d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` TIMESTAMP (?) ON UPDATE NOW (?)",
+    "digest": "355f04347fbc8e0611c08eb3cb82b6764d77e71aa738425ce0b8d5fce783bf38"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` TIMESTAMP (?) ON UPDATE NOW (?)",
+    "digest": "e5d85726d0ac43d748ca0fe0c4789ceac94d1cd777364231789c032bc419d924"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` TIMESTAMP (?) ON UPDATE NOW (?)",
+    "digest": "7748ee23f7a4a7684833fd556ce5e73cbae77a5900be5c7906f899a78578fa23"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME(6) DEFAULT CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME(6) DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME(6) DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME(6) DEFAULT CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME(6) ON UPDATE CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME(6) ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME(6) ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME(6) ON UPDATE CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME(6) DEFAULT CURRENT_TIMESTAMP(3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME(6) DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME(6) DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME(6) DEFAULT CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME(6) ON UPDATE CURRENT_TIMESTAMP(3))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME(6) ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME(6) ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME(6) ON UPDATE CURRENT_TIMESTAMP(3)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3))",
+    "text": "CREATE TABLE `t` ( `a` DATETIME (?) DEFAULT NOW (?) ON UPDATE NOW (?) )",
+    "digest": "03f91cc81fdbc6e21232c5e5699c323b140a5e189e335d5b688096252ade4d59"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` DATETIME (?) DEFAULT NOW (?) ON UPDATE NOW (?)",
+    "digest": "86ab4a3b662139e24d3717c5a8a32dacc302fd25e02fecc3c0e04c33bb164970"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` DATETIME (?) DEFAULT NOW (?) ON UPDATE NOW (?)",
+    "digest": "a2eb1854c065d849f55c18825fd1473cdd72fc9b6e0b1676572a1bb0f6c185ad"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` DATETIME (?) DEFAULT NOW (?) ON UPDATE NOW (?)",
+    "digest": "bdc4a206a9275d006363d953ebd046fcdbdd6550a3f2e297c91295dc6d70202e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(0))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(0)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(0)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(0)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME(3) DEFAULT CURRENT_TIMESTAMP(7))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME(3) DEFAULT CURRENT_TIMESTAMP(7)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME(3) DEFAULT CURRENT_TIMESTAMP(7)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME(3) DEFAULT CURRENT_TIMESTAMP(7)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIMESTAMP(7) DEFAULT CURRENT_TIMESTAMP(7))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIMESTAMP(7) DEFAULT CURRENT_TIMESTAMP(7)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIMESTAMP(7) DEFAULT CURRENT_TIMESTAMP(7)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIMESTAMP(7) DEFAULT CURRENT_TIMESTAMP(7)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIME(7))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIME(7)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIME(7)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIME(7)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT NOW ( ) )",
+    "digest": "f4fa495bc4fee1e790729add1dd114d90bbcba4e53951e0ca75b0a21b4286aec"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME DEFAULT NOW()",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` DATETIME DEFAULT NOW ( )",
+    "digest": "4b8308ad4ad9103b9ddd5f9c447159173c9b254a9742ca581d3e30787cd49698"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME DEFAULT NOW()",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` DATETIME DEFAULT NOW ( )",
+    "digest": "c4212f9ca69d0a7f5e73f6c954a271d380b0d3defbc68f91ba294825f2d6867d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME DEFAULT NOW()",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` DATETIME DEFAULT NOW ( )",
+    "digest": "29adda78c0ac5f1e51a51188d6891877a65be3903331c01b2d3cd3c4dd1f0529"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME(3) DEFAULT NOW(3))",
+    "text": "CREATE TABLE `t` ( `a` DATETIME (?) DEFAULT NOW (?) )",
+    "digest": "6fb1a8921105393cf69ce4ed50b63e4473f50a773da0932d0a15fcc5736e5eed"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME(3) DEFAULT NOW(3)",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` DATETIME (?) DEFAULT NOW (?)",
+    "digest": "4c4ba7bfdcafb95165696c1c85a5a36027841368f437cac1ac7eb1fdc390405a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME(3) DEFAULT NOW(3)",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` DATETIME (?) DEFAULT NOW (?)",
+    "digest": "a7150f5f82ac074631d13a84d069d9c1efb79979bbafba0358e839276bc53617"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME(3) DEFAULT NOW(3)",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` DATETIME (?) DEFAULT NOW (?)",
+    "digest": "d719de69134ddc4d7e2ef144027ffd7d68cfb875f08b29f9eb7462c0c6d77735"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW())",
+    "text": "CREATE TABLE `t` ( `a` DATETIME ON UPDATE NOW ( ) )",
+    "digest": "d3f96defeb188578c40c4cfcee1b6d046bdcfc7f0bfa7b7562e03aa854c4e371"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME ON UPDATE NOW()",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` DATETIME ON UPDATE NOW ( )",
+    "digest": "49b1d3536839b0fd7da6649f277b15d3162232f760265b9de7d856d8e3b9a77e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME ON UPDATE NOW()",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` DATETIME ON UPDATE NOW ( )",
+    "digest": "de503a785c831d451599af332016a563ee2bec6e1c143996306f365969d48145"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME ON UPDATE NOW()",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` DATETIME ON UPDATE NOW ( )",
+    "digest": "5b730bf897586cc507a1ab54772194ef97832a7ca36789e30d148dc5d9b0e79d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT LOCALTIME)",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT NOW )",
+    "digest": "d5203305bc03b6e79a8d0d8c6c26ebb6ca5595a09ed37d864134dc1ece56ecb2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME DEFAULT LOCALTIME",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` DATETIME DEFAULT NOW",
+    "digest": "073cac0d82c18d6df16c913ac9ec0093cc7697ecac64bfd00a3416caf971f13e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME DEFAULT LOCALTIME",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` DATETIME DEFAULT NOW",
+    "digest": "a59ef2fec71d7a9e64452f64d5c946c393dce6b222587ee2d3b21b54e4b9f577"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME DEFAULT LOCALTIME",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` DATETIME DEFAULT NOW",
+    "digest": "3700418d69e9a9e9ac6097649942136bea95b5b4a659e210d8a7bfc36a074772"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT LOCALTIMESTAMP)",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT NOW )",
+    "digest": "d5203305bc03b6e79a8d0d8c6c26ebb6ca5595a09ed37d864134dc1ece56ecb2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME DEFAULT LOCALTIMESTAMP",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` DATETIME DEFAULT NOW",
+    "digest": "073cac0d82c18d6df16c913ac9ec0093cc7697ecac64bfd00a3416caf971f13e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME DEFAULT LOCALTIMESTAMP",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` DATETIME DEFAULT NOW",
+    "digest": "a59ef2fec71d7a9e64452f64d5c946c393dce6b222587ee2d3b21b54e4b9f577"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME DEFAULT LOCALTIMESTAMP",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` DATETIME DEFAULT NOW",
+    "digest": "3700418d69e9a9e9ac6097649942136bea95b5b4a659e210d8a7bfc36a074772"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE LOCALTIME)",
+    "text": "CREATE TABLE `t` ( `a` DATETIME ON UPDATE NOW )",
+    "digest": "7ee054cb45526c8040d932c7fb77e0f93fd0255c3f02c9e06c9602f16329c4e3"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME ON UPDATE LOCALTIME",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` DATETIME ON UPDATE NOW",
+    "digest": "49c2ae1992c42b63ead3d866474a917832e8e7bae331fd45d336a9e5066b0d91"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME ON UPDATE LOCALTIME",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` DATETIME ON UPDATE NOW",
+    "digest": "d1cff9c27d8e5c014d77e20e09ac855f5175042d580c88eeed4ddfd07dba8f86"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME ON UPDATE LOCALTIME",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` DATETIME ON UPDATE NOW",
+    "digest": "329c7ee281713fb598f822ac13ea72c9c7d35a87e5eb0e930b133aabe22afec0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE CURRENT_TIME)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME ON UPDATE CURRENT_TIME",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME ON UPDATE CURRENT_TIME",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME ON UPDATE CURRENT_TIME",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE UTC_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME ON UPDATE UTC_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME ON UPDATE UTC_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME ON UPDATE UTC_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a TIME DEFAULT CURRENT_TIME)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a TIME DEFAULT CURRENT_TIME",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a TIME DEFAULT CURRENT_TIME",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a TIME DEFAULT CURRENT_TIME",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT UTC_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME DEFAULT UTC_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME DEFAULT UTC_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME DEFAULT UTC_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT (CURRENT_TIMESTAMP))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ( NOW ) )",
+    "digest": "c531fb4bedec99e99f5cc558c78aae4a26f8e4a90ca9904d09127d0e5f5203c9"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT (CURRENT_TIMESTAMP)",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER DEFAULT ( NOW )",
+    "digest": "2e3b6c43f65778524c31308173755c88a486bb5b18d502fdd83d47e36dcbd616"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT (CURRENT_TIMESTAMP)",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER DEFAULT ( NOW )",
+    "digest": "000febb8aeab1033e21aa162ae76874c37d64cfb3a39e33eaced42cba7d7ff44"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT DEFAULT (CURRENT_TIMESTAMP)",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` INTEGER DEFAULT ( NOW )",
+    "digest": "a400411ff14ad7702d2d28cbaa9e17dd7663f49d1b049d2f22bdae6e1e0e5f66"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME(3) DEFAULT (CURRENT_TIMESTAMP))",
+    "text": "CREATE TABLE `t` ( `a` DATETIME (?) DEFAULT ( NOW ) )",
+    "digest": "af128df7a98b0119236af31ce514ac5bcb8cc80e3146bb44dbc26c34220ab419"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME(3) DEFAULT (CURRENT_TIMESTAMP)",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` DATETIME (?) DEFAULT ( NOW )",
+    "digest": "b567ebcdd58daab1c7e0170515584bd2c130c273d89ed85766abf368bb12b338"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME(3) DEFAULT (CURRENT_TIMESTAMP)",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` DATETIME (?) DEFAULT ( NOW )",
+    "digest": "705bb6f6223ba75a064fe799d63070d176b65618a6f41d6df4498f3fe30ef0db"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME(3) DEFAULT (CURRENT_TIMESTAMP)",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` DATETIME (?) DEFAULT ( NOW )",
+    "digest": "542985e88c900e5ea52a2124ed7ad68b0a3d376fab2c19fdec65f3f2900d2492"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT '2020-01-01')",
+    "text": "CREATE TABLE `t` ( `a` DATETIME DEFAULT ? )",
+    "digest": "209f9599c3e090f687fb15ac7b6cf693a6f4d6babe6a723c895e9b5d84eb9810"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME DEFAULT '2020-01-01'",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` DATETIME DEFAULT ?",
+    "digest": "b020ddc7e3d952375bb2af6f2d514b7e3a0e01791f6ca3c5fee3c80fb126e79c"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME DEFAULT '2020-01-01'",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` DATETIME DEFAULT ?",
+    "digest": "eb4a9411ca822fdc8a21a5755922488dc8ea629f87df5e8a53ccffba1f0790dc"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME DEFAULT '2020-01-01'",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` DATETIME DEFAULT ?",
+    "digest": "0a428e172cff17bc5a1ffc8062e9b511a682e4a5a42a64bc6921c03e500fe5eb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT 7)",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ? )",
+    "digest": "ff1562883c07c9e5bea4368aed3cef1b656190c4501378250a202584d166fda2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT 7",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER DEFAULT ?",
+    "digest": "dbe318a16b3a283de64839051ad81011098760d9e49abc4698314ba3ebdfe699"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT 7",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER DEFAULT ?",
+    "digest": "f3bfb42035b8c370db96432ad65f7330b585afc6565d2be48423701b590a9cfb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT DEFAULT 7",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` INTEGER DEFAULT ?",
+    "digest": "804cfa5eaa03a157fef49b00228172fa762f746af29558338595024076318e1e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT REFERENCES parent(id))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER REFERENCES `parent` ( `id` ) )",
+    "digest": "e3a3ad93605cfe0fa282c8b8c829f968e73904213e8c7f1ca6cebe9bc808d8af"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT REFERENCES parent(id)",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER REFERENCES `parent` ( `id` )",
+    "digest": "8e6b88c28ccb485d3f859b70968002c4a252a9aa25f8c6a9caab9c57530f655d"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT REFERENCES parent(id)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT REFERENCES parent(id)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT REFERENCES parent(id) ON DELETE CASCADE)",
+    "text": "CREATE TABLE `t` ( `a` INTEGER REFERENCES `parent` ( `id` ) ON DELETE CASCADE )",
+    "digest": "d9f4e83ec1766c906aeb11c01ce2b8a96d52c4030277b29812665bd9590c25cb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT REFERENCES parent(id) ON DELETE CASCADE",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER REFERENCES `parent` ( `id` ) ON DELETE CASCADE",
+    "digest": "3f9d05d597f6ed4a99f071830bc36a2f00bf889556ef46fe945cb85baa9b90c5"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT REFERENCES parent(id) ON DELETE CASCADE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT REFERENCES parent(id) ON DELETE CASCADE",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT AS (1) REFERENCES parent(id))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER AS (?) REFERENCES `parent` ( `id` ) )",
+    "digest": "edd7cc97eba5de5c552c31ffe693e9dbe47f73025ce5f68c0ed33d7d1e1a5c8a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT AS (1) REFERENCES parent(id)",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER AS (?) REFERENCES `parent` ( `id` )",
+    "digest": "88ca0dfb06515155007451eb0909054c1de566d0914da2575aa21c9f96c3ffd4"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT AS (1) REFERENCES parent(id)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT AS (1) REFERENCES parent(id)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD CONSTRAINT fk FOREIGN KEY (a) REFERENCES parent(id)",
+    "text": "ALTER TABLE `t` ADD CONSTRAINT `fk` FOREIGN KEY ( `a` ) REFERENCES `parent` ( `id` )",
+    "digest": "ebe3ee258a500dda3b8d370e626d8767d2502bbe3e3a2c36e64372e56a9a1518"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT, FOREIGN KEY (a) REFERENCES parent(id))",
+    "text": "CREATE TABLE `t` ( `a` INTEGER , FOREIGN KEY ( `a` ) REFERENCES `parent` ( `id` ) )",
+    "digest": "3904d1d334510443176de646c0d61c89a08988d9fad95e7675925d94b08ddfb0"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME ON UPDATE NOW",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME ON UPDATE NOW",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME ON UPDATE NOW",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME ON UPDATE NOW (0))",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME ON UPDATE NOW (0)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME ON UPDATE NOW (0)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME ON UPDATE NOW (0)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT NOW)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME DEFAULT NOW",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME DEFAULT NOW",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME DEFAULT NOW",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6))",
+    "text": "CREATE TABLE `t` ( `a` DATETIME (?) DEFAULT NOW (?) )",
+    "digest": "6fb1a8921105393cf69ce4ed50b63e4473f50a773da0932d0a15fcc5736e5eed"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6)",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` DATETIME (?) DEFAULT NOW (?)",
+    "digest": "4c4ba7bfdcafb95165696c1c85a5a36027841368f437cac1ac7eb1fdc390405a"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6)",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` DATETIME (?) DEFAULT NOW (?)",
+    "digest": "a7150f5f82ac074631d13a84d069d9c1efb79979bbafba0358e839276bc53617"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6)",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` DATETIME (?) DEFAULT NOW (?)",
+    "digest": "d719de69134ddc4d7e2ef144027ffd7d68cfb875f08b29f9eb7462c0c6d77735"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT UUID())",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT UUID()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT UUID()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT DEFAULT UUID()",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT CURRENT_TIMESTAMP+1)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT CURRENT_TIMESTAMP+1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT CURRENT_TIMESTAMP+1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT DEFAULT CURRENT_TIMESTAMP+1",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT 1+2)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT 1+2",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT 1+2",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT DEFAULT 1+2",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT -7)",
+    "text": "CREATE TABLE `t` ( `a` INTEGER DEFAULT ? )",
+    "digest": "ff1562883c07c9e5bea4368aed3cef1b656190c4501378250a202584d166fda2"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT -7",
+    "text": "ALTER TABLE `t` ADD COLUMN `a` INTEGER DEFAULT ?",
+    "digest": "dbe318a16b3a283de64839051ad81011098760d9e49abc4698314ba3ebdfe699"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT -7",
+    "text": "ALTER TABLE `t` MODIFY COLUMN `a` INTEGER DEFAULT ?",
+    "digest": "f3bfb42035b8c370db96432ad65f7330b585afc6565d2be48423701b590a9cfb"
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT DEFAULT -7",
+    "text": "ALTER TABLE `t` CHANGE COLUMN `old_a` `a` INTEGER DEFAULT ?",
+    "digest": "804cfa5eaa03a157fef49b00228172fa762f746af29558338595024076318e1e"
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT -'7')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT -'7'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT -'7'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT DEFAULT -'7'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a INT DEFAULT -CURRENT_TIMESTAMP)",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a INT DEFAULT -CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a INT DEFAULT -CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a INT DEFAULT -CURRENT_TIMESTAMP",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATE DEFAULT DATE '2020-01-01')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATE DEFAULT DATE '2020-01-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATE DEFAULT DATE '2020-01-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATE DEFAULT DATE '2020-01-01'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "CREATE TABLE t(a DATETIME DEFAULT TIMESTAMP '2020-01-01 00:00:00')",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t ADD COLUMN a DATETIME DEFAULT TIMESTAMP '2020-01-01 00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t MODIFY COLUMN a DATETIME DEFAULT TIMESTAMP '2020-01-01 00:00:00'",
+    "error_code": 3677
+  },
+  {
+    "sql_mode": "",
+    "sql": "ALTER TABLE t CHANGE COLUMN old_a a DATETIME DEFAULT TIMESTAMP '2020-01-01 00:00:00'",
+    "error_code": 3677
   }
 ]
