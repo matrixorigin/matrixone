@@ -8520,16 +8520,20 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 		} else {
 			switch tlen {
 			case 8:
-				for i, sel := range sels {
-					p1 := unsafe.Pointer(&v.data[(oldLen+i)*8])
-					p2 := unsafe.Pointer(&w.data[int(sel)*8])
-					*(*int64)(p1) = *(*int64)(p2)
+				if len(sels) == 1 {
+					p1 := unsafe.Pointer(&v.data[oldLen*8])
+					p2 := unsafe.Pointer(&w.data[int(sels[0])*8])
+					*(*uint64)(p1) = *(*uint64)(p2)
+				} else {
+					unionNarrowFixedSelected(v, w, oldLen, sels, tlen)
 				}
 			case 4:
-				for i, sel := range sels {
-					p1 := unsafe.Pointer(&v.data[(oldLen+i)*4])
-					p2 := unsafe.Pointer(&w.data[int(sel)*4])
-					*(*int32)(p1) = *(*int32)(p2)
+				if len(sels) == 1 {
+					p1 := unsafe.Pointer(&v.data[oldLen*4])
+					p2 := unsafe.Pointer(&w.data[int(sels[0])*4])
+					*(*uint32)(p1) = *(*uint32)(p2)
+				} else {
+					unionNarrowFixedSelected(v, w, oldLen, sels, tlen)
 				}
 			case 2:
 				for i, sel := range sels {
@@ -8556,8 +8560,18 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	return nil
 }
 
+// unionNarrowFixedSelected keeps typed-view setup out of unionT's common frame.
+// Unsigned representatives preserve the bits of every logical type of the width.
+func unionNarrowFixedSelected[S int32 | int64](v, w *Vector, oldLen int, sels []S, width int) {
+	if width == 4 {
+		unionFixedSelected[uint32](v.data[oldLen*4:(oldLen+len(sels))*4], w.data[:w.length*4], sels)
+	} else {
+		unionFixedSelected[uint64](v.data[oldLen*8:(oldLen+len(sels))*8], w.data[:w.length*8], sels)
+	}
+}
+
 // unionWideFixedSelected handles widths that otherwise require a dynamic copy
-// per row. Keep the existing scalar paths in unionT for narrow values.
+// per row.
 func unionWideFixedSelected[S int32 | int64](v, w *Vector, oldLen int, sels []S, width int) {
 	// Bound the byte ranges before constructing typed views. The backing
 	// allocation can contain padding, especially for 12/20/24-byte values.

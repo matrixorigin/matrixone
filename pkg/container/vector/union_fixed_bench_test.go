@@ -26,7 +26,7 @@ import (
 func BenchmarkUnionFixedSelection(b *testing.B) {
 	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_TS, types.T_decimal128, types.T_Blockid, types.T_Rowid, types.T_decimal256} {
-		for _, rows := range []int{1, 256} {
+		for _, rows := range []int{0, 1, 2, 4, 16, 256} {
 			for _, shape := range []string{"flat", "nullable", "constant"} {
 				b.Run(fmt.Sprintf("%s/rows=%d/%s", oid, rows, shape), func(b *testing.B) {
 					mp := mpool.MustNewZero()
