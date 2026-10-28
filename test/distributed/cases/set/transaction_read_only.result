@@ -281,11 +281,15 @@ tv
 drop table uo_t;
 drop table uo_p;
 set session transaction_read_only = 1;
+set @gcm_save = @@global.group_concat_max_len;
 set global group_concat_max_len = 2048;
 select @@global.group_concat_max_len;
 @@global.group_concat_max_len
 2048
-set global group_concat_max_len = 1024;
+set global group_concat_max_len = @gcm_save;
+select @@global.group_concat_max_len;
+@@global.group_concat_max_len
+1024
 set session transaction_read_only = 0;
 drop procedure if exists txn_read_only_dp;
 create procedure txn_read_only_dp() 'begin prepare ds from ''insert into t values (9)''; execute ds; end';
@@ -321,5 +325,47 @@ insert into t values (3);
 select count(*) from t;
 count(*)
 3
+create table uo2_p (id int primary key, pv int);
+insert into uo2_p values (1, 10);
+create temporary table uo2_t (id int primary key, tv int);
+insert into uo2_t values (1, 100);
+set session transaction_read_only = 1;
+update uo2_t join uo2_p on uo2_t.id = uo2_p.id set tv = 1;
+select tv from uo2_t;
+tv
+1
+update uo2_t join uo2_p on uo2_t.id = uo2_p.id set pv = 9;
+Cannot execute statement in a READ ONLY transaction.
+update uo2_t join uo2_p on uo2_t.id = uo2_p.id set id = 2;
+Cannot execute statement in a READ ONLY transaction.
+select pv from uo2_p;
+pv
+10
+select tv from uo2_t;
+tv
+1
+set session transaction_read_only = 0;
+drop table uo2_t;
+drop table uo2_p;
+create procedure dcl_wp() 'begin insert into t values (9); end';
+set session transaction_read_only = 1;
+create role dcl_r;
+create user dcl_u identified by 'Test@1234';
+grant select on table txn_readonly.t to dcl_r;
+revoke select on table txn_readonly.t from dcl_r;
+drop user dcl_u;
+drop role dcl_r;
+call dcl_wp();
+Cannot execute statement in a READ ONLY transaction.
+select count(*) from t;
+count(*)
+3
+set session transaction_read_only = 0;
+call dcl_wp();
+select count(*) from t;
+count(*)
+4
+delete from t where a = 9;
+drop procedure dcl_wp;
 drop table t;
 drop database txn_readonly;

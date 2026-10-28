@@ -244,11 +244,14 @@ drop table uo_t;
 drop table uo_p;
 
 -- SET GLOBAL persists system variables through trusted implementation SQL
--- and is not subject to the client-facing READ ONLY gate.
+-- and is not subject to the client-facing READ ONLY gate; the previous
+-- value is saved and restored exactly.
 set session transaction_read_only = 1;
+set @gcm_save = @@global.group_concat_max_len;
 set global group_concat_max_len = 2048;
 select @@global.group_concat_max_len;
-set global group_concat_max_len = 1024;
+set global group_concat_max_len = @gcm_save;
+select @@global.group_concat_max_len;
 set session transaction_read_only = 0;
 
 -- Dynamic SQL inside a procedure cannot be classified statically: it would
@@ -278,6 +281,44 @@ select count(*) from t;
 set session tx_read_only = 0;
 insert into t values (3);
 select count(*) from t;
+
+-- In autocommit mode admission runs before a catalog transaction exists, so
+-- a column that does not qualify its owner defers its verdict until the
+-- catalog transaction opens: only temp-table owners are writable, persistent
+-- owners and ambiguous columns are still rejected.
+create table uo2_p (id int primary key, pv int);
+insert into uo2_p values (1, 10);
+create temporary table uo2_t (id int primary key, tv int);
+insert into uo2_t values (1, 100);
+set session transaction_read_only = 1;
+update uo2_t join uo2_p on uo2_t.id = uo2_p.id set tv = 1;
+select tv from uo2_t;
+update uo2_t join uo2_p on uo2_t.id = uo2_p.id set pv = 9;
+update uo2_t join uo2_p on uo2_t.id = uo2_p.id set id = 2;
+select pv from uo2_p;
+select tv from uo2_t;
+set session transaction_read_only = 0;
+drop table uo2_t;
+drop table uo2_p;
+
+-- Account administration (role/user DDL, GRANT/REVOKE) issues its generated
+-- writes through trusted internal sessions and stays usable under READ ONLY,
+-- while a user procedure body is still gated.
+create procedure dcl_wp() 'begin insert into t values (9); end';
+set session transaction_read_only = 1;
+create role dcl_r;
+create user dcl_u identified by 'Test@1234';
+grant select on table txn_readonly.t to dcl_r;
+revoke select on table txn_readonly.t from dcl_r;
+drop user dcl_u;
+drop role dcl_r;
+call dcl_wp();
+select count(*) from t;
+set session transaction_read_only = 0;
+call dcl_wp();
+select count(*) from t;
+delete from t where a = 9;
+drop procedure dcl_wp;
 
 drop table t;
 drop database txn_readonly;

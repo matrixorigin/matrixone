@@ -1158,6 +1158,13 @@ type ExecCtx struct {
 	// transaction-boundary policy and later execution use the same prepared AST.
 	// The statement is borrowed from the computation wrapper or prepare cache.
 	effectiveTxnStatement tree.Statement
+	// deferReadOnlyOwnership marks that the pre-Create READ ONLY admission
+	// deferred an unqualified multi-source UPDATE verdict because no catalog
+	// transaction existed yet for owner resolution. executeStmtWithWorkspace
+	// re-runs the gate right after Create with the transaction attached.
+	// Only that call site consumes the flag; every other admission site
+	// already runs with an active transaction and never produces it.
+	deferReadOnlyOwnership bool
 	// implicitCommitBefore is the generation-level policy for a top-level
 	// implicit-commit statement. It is copied into txnOpt after admission.
 	implicitCommitBefore bool

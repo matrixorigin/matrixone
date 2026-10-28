@@ -68,7 +68,8 @@ func enforceReadOnlyTxnAccessMode(
 	if execCtx.input != nil && execCtx.input.isInternal() {
 		return nil
 	}
-	if !statementRequiresPersistentWriteAccess(ses, stmt, defaultDatabase) {
+	deferOwnership := updateOwnershipDeferred(ses, stmt, defaultDatabase)
+	if !statementRequiresPersistentWriteAccess(ses, stmt, defaultDatabase) && !deferOwnership {
 		return nil
 	}
 
@@ -107,10 +108,68 @@ func enforceReadOnlyTxnAccessMode(
 			}
 		}
 	}
-	if readOnly {
-		return moerr.NewCantExecuteInReadOnlyTransaction(execCtx.reqCtx)
+	if !readOnly {
+		return nil
 	}
-	return nil
+	if deferOwnership {
+		// The verdict needs a catalog transaction that does not exist yet:
+		// executeStmtWithWorkspace re-runs this gate right after Create with
+		// the transaction attached.
+		execCtx.deferReadOnlyOwnership = true
+		return nil
+	}
+	return moerr.NewCantExecuteInReadOnlyTransaction(execCtx.reqCtx)
+}
+
+// catalogOwnershipResolvable reports whether the session currently has a
+// catalog-capable transaction for resolving UPDATE assignment ownership. It
+// is an indirection point so unit tests can drive both admission phases.
+var catalogOwnershipResolvable = func(ses FeSession) bool {
+	txnHandler := ses.GetTxnHandler()
+	return txnHandler != nil && txnHandler.GetTxn() != nil
+}
+
+// updateOwnershipDeferred reports whether stmt is an UPDATE whose write
+// verdict needs a catalog transaction that does not exist yet: an
+// unqualified assignment column over multiple sources can only be owned by
+// catalog resolution, which admission cannot perform before TxnHandler.Create
+// (the autocommit path). The gate marks the statement for re-classification
+// right after Create instead of conservatively rejecting a potentially
+// temporary-only write. EXPLAIN ANALYZE/PHYPLAN wrappers defer with their
+// wrapped statement.
+func updateOwnershipDeferred(ses FeSession, stmt tree.Statement, defaultDatabase string) bool {
+	switch st := stmt.(type) {
+	case *tree.ExplainAnalyze:
+		return updateOwnershipDeferred(ses, st.Statement, defaultDatabase)
+	case *tree.ExplainPhyPlan:
+		return updateOwnershipDeferred(ses, st.Statement, defaultDatabase)
+	case *tree.Update:
+		if catalogOwnershipResolvable(ses) {
+			return false
+		}
+		ctes := make(map[string]struct{})
+		if st.With != nil {
+			for _, cte := range st.With.CTEs {
+				ctes[string(cte.Name.Alias)] = struct{}{}
+			}
+		}
+		sources := make(map[string][2]string)
+		for _, expr := range st.Tables {
+			collectUpdateSource(expr, ctes, sources)
+		}
+		if len(sources) < 2 {
+			return false
+		}
+		for _, updateExpr := range st.Exprs {
+			if updateExpr == nil || updateExpr.Tuple || len(updateExpr.Names) != 1 || updateExpr.Names[0] == nil {
+				continue
+			}
+			if updateExpr.Names[0].NumParts <= 1 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // statementRequiresPersistentWriteAccess reports whether stmt mutates
@@ -290,7 +349,38 @@ func updateRequiresPersistentWriteAccess(ses FeSession, st *tree.Update, default
 			}
 			continue
 		}
-		// Column-only assignment: the planner picks the unique source owning
+		// Column-only assignment. A single source owns the column by
+		// construction (the planner errors if it does not, and nothing
+		// writes); no catalog access is needed for the verdict.
+		if len(sources) == 1 {
+			for _, base := range sources {
+				if !isSessionTemporaryTable(ses, tree.NewTableName(
+					tree.Identifier(base[1]),
+					tree.ObjectNamePrefix{SchemaName: tree.Identifier(base[0])},
+					nil,
+				), defaultDatabase) {
+					return true
+				}
+			}
+			continue
+		}
+		if !catalogOwnershipResolvable(ses) {
+			// Without a catalog transaction this outcome defers to the
+			// post-Create gate (updateOwnershipDeferred). A bool-only
+			// consumer still gets the conservative answer whenever a
+			// persistent source may own the column.
+			for _, base := range sources {
+				if !isSessionTemporaryTable(ses, tree.NewTableName(
+					tree.Identifier(base[1]),
+					tree.ObjectNamePrefix{SchemaName: tree.Identifier(base[0])},
+					nil,
+				), defaultDatabase) {
+					return true
+				}
+			}
+			continue
+		}
+		// The planner picks the unique source owning
 		// the column and errors on genuine ambiguity (dml_context.go). The
 		// gate resolves the owner through the session compile context — the
 		// same bindings and catalog view the statement will see at execution —

@@ -3658,7 +3658,7 @@ func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivile
 	// Object lifecycle locks are part of GRANT's correctness contract. Force the
 	// private transaction into the same pessimistic RC protocol as DROP even on
 	// optimistic deployments; LockOp intentionally skips optimistic txns.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -3676,7 +3676,7 @@ func handleGrantPrivilege(ses FeSession, execCtx *ExecCtx, gp *tree.GrantPrivile
 // handleRevokePrivilege revokes the privilege from the user or role
 func handleRevokePrivilege(ses FeSession, execCtx *ExecCtx, rp *tree.RevokePrivilege) (err error) {
 	ctx := execCtx.reqCtx
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true, internalExecution: true})
 	defer bh.Close()
 
 	// put it into the single transaction
@@ -5948,6 +5948,16 @@ func executeStmtWithWorkspace(ses FeSession,
 	err = disttae.CheckTxnIsValid(txnOp)
 	if err != nil {
 		return err
+	}
+	if execCtx.deferReadOnlyOwnership {
+		// The pre-Create admission deferred an unqualified multi-source
+		// UPDATE verdict (READ ONLY path without an active transaction):
+		// re-run the gate now that a catalog transaction is attached.
+		execCtx.deferReadOnlyOwnership = false
+		if err = enforceReadOnlyTxnAccessMode(
+			ses, execCtx, effectiveStmt, effectiveDefaultDatabase); err != nil {
+			return err
+		}
 	}
 	if backSes, ok := ses.(*backSession); ok {
 		if hook := backSes.processHook; hook != nil {

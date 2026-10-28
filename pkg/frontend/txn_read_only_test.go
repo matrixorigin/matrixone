@@ -48,6 +48,9 @@ func stubUpdateSourceColumns(t *testing.T) {
 		}
 		return cols, nil
 	})
+	// Classification under a valid catalog transaction resolves owners.
+	resolvable := gostub.Stub(&catalogOwnershipResolvable, func(FeSession) bool { return true })
+	t.Cleanup(resolvable.Reset)
 	t.Cleanup(stubs.Reset)
 }
 
@@ -411,6 +414,52 @@ func TestEnforceReadOnlyTxnAccessMode(t *testing.T) {
 	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, migrationCtx, insert, "testdb"))
 
 	ses.GetTxnHandler().txnReadOnly = false
+}
+
+func TestUpdateOwnershipDeferral(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.SetDatabaseName("testdb")
+	ses.AddTempTable("testdb", "tt", "temp_tt_real_name")
+
+	// Without a catalog transaction (autocommit admission before Create)
+	// every unqualified multi-source assignment defers, qualified ones do
+	// not, and EXPLAIN wrappers defer with their wrapped statement.
+	resolvable := gostub.Stub(&catalogOwnershipResolvable, func(FeSession) bool { return false })
+	defer resolvable.Reset()
+	for _, sql := range []string{
+		"update tt, t set v = 1",
+		"update tt, t set a = 1",
+		"update tt, t set common = 1",
+		"explain analyze update tt, t set a = 1",
+		"explain phyplan update tt, t set a = 1",
+	} {
+		stmt := parseSingleStatement(t, sql)
+		require.True(t, updateOwnershipDeferred(ses, stmt, "testdb"), sql)
+	}
+	for _, sql := range []string{
+		"update tt, t set t.a = 1",
+		"update tt set v = 1",
+		"update t set a = 1",
+		"delete from t",
+		"insert into t values (1)",
+	} {
+		stmt := parseSingleStatement(t, sql)
+		require.False(t, updateOwnershipDeferred(ses, stmt, "testdb"), sql)
+	}
+
+	// Deferred but not rejected up front: under a READ ONLY session default
+	// the gate passes and arms the post-Create re-check instead of handing
+	// back 1792 for a verdict it cannot yet classify; the bool-only
+	// classifier stays conservative meanwhile.
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), transactionReadOnlySystemVariable, int64(1)))
+	stmt := parseSingleStatement(t, "update tt, t set v = 1")
+	execCtx := &ExecCtx{reqCtx: context.Background(), ses: ses, stmt: stmt, input: &UserInput{}}
+	require.NoError(t, enforceReadOnlyTxnAccessMode(ses, execCtx, stmt, "testdb"))
+	require.True(t, execCtx.deferReadOnlyOwnership)
+	require.True(t, statementRequiresPersistentWriteAccess(ses, stmt, "testdb"))
+	require.NoError(t, ses.SetSessionSysVar(context.Background(), transactionReadOnlySystemVariable, int64(0)))
 }
 
 func TestEnforceReadOnlyTxnAccessModeBackSessionOrigin(t *testing.T) {
