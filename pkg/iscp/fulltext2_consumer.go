@@ -113,6 +113,9 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 						if err != nil {
 							return err
 						}
+						if err = c.flushIgnored(sqlproc); err != nil {
+							return err
+						}
 
 						// Per-flush-cycle sink summary: Debug, not Info — a continuously-ingesting index
 						// flushes often, so this would flood production logs at Info (see the 46 GB

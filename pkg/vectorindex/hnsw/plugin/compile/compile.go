@@ -136,8 +136,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		// (monotonic across a rebuild under a skewed/backward clock; see
 		// hnsw.BuildTimestamp / HnswSearch.IsStale). The TVF clears even when
 		// nothing is built, so a REBUILD to zero docs still empties the index.
-		// A new index built by the user's statement rejects a row it cannot store.
-		sqls, err := genBuildSQL(ctx, indexDefs, ctx.IndexInfo() != nil && ctx.IsFrontend())
+		sqls, err := genBuildSQL(ctx, indexDefs, compileplugin.RejectUnstorableRows(ctx))
 		if err != nil {
 			return err
 		}

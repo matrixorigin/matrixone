@@ -35,7 +35,7 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 		return nil, err
 	}
 	tblName := stmt.TableName.GetTableName()
-	_, tableDef, err := ctx.Resolve(dbName, tblName, nil)
+	objRef, tableDef, err := ctx.Resolve(dbName, tblName, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -64,6 +64,7 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 	}
 
 	var selects []string
+	ignoredTables := make(map[string]struct{})
 	for _, def := range defs {
 		for _, idx := range def.Indexes {
 			if idx.IndexAlgoTableType != catalog.IndexIgnored_TblType || !idx.TableExist {
@@ -76,6 +77,7 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 				sqlquote.Ident(catalog.IndexIgnored_TblCol_Reason),
 				sqlquote.Ident(catalog.IndexIgnored_TblCol_Ts),
 				sqlquote.QualifiedIdent(dbName, idx.IndexTableName)))
+			ignoredTables[idx.IndexTableName] = struct{}{}
 		}
 	}
 	sql := showIndexIgnoredEmpty
@@ -90,5 +92,18 @@ func buildShowIndexIgnored(stmt *tree.ShowIndexIgnored, ctx CompilerContext) (*P
 	if stmt.Where != nil {
 		newStmt.(*tree.Select).Select.(*tree.SelectClause).Where = stmt.Where
 	}
-	return getReturnDdlBySelectStmt(ctx, newStmt, plan.DataDefinition_SHOW_INDEX)
+	p, err := getReturnDdlBySelectStmt(ctx, newStmt, plan.DataDefinition_SHOW_INDEX)
+	if err != nil {
+		return nil, err
+	}
+	// The ignored tables are read on behalf of the table: privileges are checked on it.
+	for _, node := range p.GetQuery().GetNodes() {
+		if node.NodeType != plan.Node_TABLE_SCAN || node.ObjRef == nil {
+			continue
+		}
+		if _, ok := ignoredTables[node.ObjRef.ObjName]; ok && objRef != nil {
+			node.ParentObjRef = DeepCopyObjectRef(objRef)
+		}
+	}
+	return p, nil
 }

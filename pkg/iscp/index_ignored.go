@@ -46,6 +46,8 @@ type ignoredRows struct {
 	pkType *types.Type
 	// reset replaces the whole table, for an iteration that rebuilds the index.
 	reset bool
+	// repr is how the paired writer receives primary keys.
+	repr ValueRepr
 	// present holds the keys in the table when the iteration started.
 	present map[any]struct{}
 	changes map[any]ignoredChange
@@ -53,9 +55,18 @@ type ignoredRows struct {
 }
 
 type ignoredChange struct {
+	pk      any
 	reason  string
 	ts      types.TS
 	ignored bool
+}
+
+// ignoredKey returns a map key equal for equal primary keys.
+func ignoredKey(pk any) any {
+	if b, ok := pk.([]byte); ok {
+		return string(b)
+	}
+	return pk
 }
 
 // newIgnoredRows returns the tracker of the index whose hidden tables are indexdefs, or nil
@@ -84,17 +95,18 @@ func (g *ignoredRows) setTs(ts types.TS) {
 
 // ignore records that the row with key pk is not in the index, and why.
 func (g *ignoredRows) ignore(pk any, reason string) {
-	g.changes[pk] = ignoredChange{reason: reason, ts: g.ts, ignored: true}
+	g.changes[ignoredKey(pk)] = ignoredChange{pk: pk, reason: reason, ts: g.ts, ignored: true}
 }
 
 // indexed records that the row with key pk is in the index or no longer exists.
 func (g *ignoredRows) indexed(pk any) {
-	if _, ok := g.changes[pk]; ok {
-		g.changes[pk] = ignoredChange{}
+	key := ignoredKey(pk)
+	if _, ok := g.changes[key]; ok {
+		g.changes[key] = ignoredChange{pk: pk}
 		return
 	}
-	if _, ok := g.present[pk]; ok {
-		g.changes[pk] = ignoredChange{}
+	if _, ok := g.present[key]; ok {
+		g.changes[key] = ignoredChange{pk: pk}
 	}
 }
 
@@ -113,13 +125,17 @@ func (g *ignoredRows) load(ctx context.Context, service string, txn client.TxnOp
 		return err
 	}
 	defer res.Close()
+	row := make([]any, 1)
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 		for i := 0; i < rows; i++ {
-			g.present[vectorValue(cols[0], i)] = struct{}{}
+			if err = extractRowFromVector(ctx, cols[0], 0, row, i, g.repr); err != nil {
+				return false
+			}
+			g.present[ignoredKey(row[0])] = struct{}{}
 		}
 		return true
 	})
-	return nil
+	return err
 }
 
 // flush writes the changes of the iteration in the transaction that commits it.
@@ -165,7 +181,7 @@ func (g *ignoredRows) flush(ctx context.Context, service string, txn client.TxnO
 				buf = appendString(buf, ",")
 			}
 			var err error
-			if buf, err = convertColIntoSql(ctx, k, g.pkType, buf); err != nil {
+			if buf, err = convertColIntoSql(ctx, g.changes[k].pk, g.pkType, buf); err != nil {
 				return err
 			}
 		}
@@ -176,7 +192,7 @@ func (g *ignoredRows) flush(ctx context.Context, service string, txn client.TxnO
 	}
 	rows := make([]vectorindex.IgnoredRow, 0, len(ignored))
 	for _, k := range ignored {
-		lit, err := convertColIntoSql(ctx, k, g.pkType, nil)
+		lit, err := convertColIntoSql(ctx, g.changes[k].pk, g.pkType, nil)
 		if err != nil {
 			return err
 		}
@@ -201,14 +217,4 @@ func (g *ignoredRows) flush(ctx context.Context, service string, txn client.TxnO
 			zap.Strings("samples", samples))
 	}
 	return nil
-}
-
-// vectorValue returns row i of a primary-key column as the value the writers record.
-func vectorValue(vec *vector.Vector, i int) any {
-	switch vec.GetType().Oid {
-	case types.T_int64:
-		return vector.GetFixedAtNoTypeCheck[int64](vec, i)
-	default:
-		return vec.GetStringAt(i)
-	}
 }

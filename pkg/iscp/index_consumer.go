@@ -162,6 +162,9 @@ func NewIndexConsumer(cnUUID string,
 		ignored:     ignored,
 		//sqlBufSendCh: make(chan []byte),
 	}
+	if ignored != nil {
+		ignored.repr = c.valueRepr()
+	}
 
 	return c, nil
 }
@@ -197,6 +200,11 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 				return
 			case sql, ok := <-c.sqlBufSendCh:
 				if !ok {
+					if c.ignored != nil {
+						if err := c.RunTxn(ctx, r, 5*time.Minute, c.flushIgnored); err != nil {
+							reportIndexConsumerErr(errch, err)
+						}
+					}
 					return
 				}
 
@@ -252,6 +260,9 @@ func runIndex(c *IndexConsumer, ctx context.Context, errch chan error, r DataRet
 							// channel closed
 							if objectio.ISCPIndexWatermarkErrInjected() {
 								return injectedISCPIndexErr("watermark")
+							}
+							if err := c.flushIgnored(sqlproc); err != nil {
+								return err
 							}
 							return r.UpdateWatermark(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn())
 						}
@@ -379,10 +390,8 @@ func runHnsw[T types.ArrayElement](c *IndexConsumer, ctx context.Context, errch 
 						if err != nil {
 							return
 						}
-						if c.ignored != nil {
-							if err = c.ignored.flush(sqlproc.GetContext(), sqlctx.GetService(), sqlctx.Txn(), indexName); err != nil {
-								return
-							}
+						if err = c.flushIgnored(sqlproc); err != nil {
+							return
 						}
 
 						// update watermark
@@ -480,6 +489,14 @@ func waitISCPIndexCancelCtx(ctx context.Context, key, indexName string) error {
 	}
 	logutil.Infof("ISCP-Task cancel ctx fault wait %s index=%s", key, indexName)
 	return ctx.Err()
+}
+
+// flushIgnored writes the iteration's ignored rows in the transaction that commits it.
+func (c *IndexConsumer) flushIgnored(sqlproc *sqlexec.SqlProcess) error {
+	if c.ignored == nil {
+		return nil
+	}
+	return c.ignored.flush(sqlproc.GetContext(), sqlproc.SqlCtx.GetService(), sqlproc.SqlCtx.Txn(), c.indexName())
 }
 
 func (c *IndexConsumer) indexName() string {

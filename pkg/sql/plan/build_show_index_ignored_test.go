@@ -95,6 +95,12 @@ func TestShowIndexIgnored(t *testing.T) {
 	query, err := buildShowIndexIgnoredTestPlan(t, "show index ignored from vt")
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{"__mo_index_i_ignored", "__mo_index_j_ignored"}, showIndexIgnoredScans(query))
+	// the ignored tables are read on behalf of vt, whose privileges are checked
+	for _, node := range query.Nodes {
+		if node.NodeType == planpb.Node_TABLE_SCAN {
+			require.Equal(t, "vt", node.GetParentObjRef().GetObjName())
+		}
+	}
 	require.Equal(t, []string{"Key_name", "Primary_key", "Reason", "Ignored_at"}, query.Headings)
 
 	query, err = buildShowIndexIgnoredTestPlan(t, "show index ignored from tpch.vt where Key_name = 'i' and Reason like '%F16%'")

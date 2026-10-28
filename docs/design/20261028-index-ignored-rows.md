@@ -58,7 +58,8 @@ It returns one row per ignored source row of every index of the table:
 | `Ignored_at` | when the row was recorded |
 
 `WHERE` filters on these columns, as in `SHOW INDEX`. For a partitioned table it lists the
-ignored rows of the indexes of every partition.
+ignored rows of the indexes of every partition. It shows rows of the table, so it requires the
+`SELECT` privilege on the table.
 
 ## Scope
 
@@ -69,10 +70,16 @@ again; REINDEX does not add the table.
 
 ## Claims
 
-| # | Claim | Black-box proof | Unit proof |
-|---|---|---|---|
-| I1 | A row an HNSW index cannot store does not stop later rows from being indexed. | `vector_hnsw_ignored.sql` | `TestHnswWriterIgnoresUnstorableVectors` |
-| I2 | The ignored rows follow inserts, updates and deletes of the source rows, and REINDEX and TRUNCATE start them over. | `vector_hnsw_ignored.sql` | `TestIgnoredRowsTransitions` |
-| I3 | REINDEX and incremental sync ignore the same rows, by the same rule as the conversion the index stores with. | `vector_hnsw_ignored.sql` | `TestCheckStorable` |
-| I4 | A synchronous CREATE INDEX fails on a row the index cannot store and leaves no index. | `vector_hnsw_ignored.sql`, `vector_hnsw_quantization.sql` C14 | `TestGenBuildSQL` |
-| I5 | `SHOW INDEX IGNORED` lists the ignored rows of every index and partition of a table, and `WHERE` filters them. | `vector_hnsw_ignored.sql` | `TestShowIndexIgnored` |
+Each claim heads a section of the black-box suite
+`test/distributed/cases/pessimistic_transaction/vector/vector_hnsw_ignored.sql` (`-- I<n>`).
+
+| # | Claim | Unit proof |
+|---|---|---|
+| I1 | A row an HNSW index cannot store does not stop later rows from being indexed. | `TestHnswWriterIgnoresUnstorableVectors` |
+| I2 | The ignored rows follow the source rows: a delete, or an update to a storable value, removes a row; an update to another value the index cannot store changes its reason. | `TestIgnoredRowsTransitions`, `TestIgnoredRowsLoadsKeysAsTheWriterSeesThem` |
+| I3 | An asynchronous build, REINDEX (with and without `FORCE_SYNC`) and the ALTER TABLE rebuild ignore and record the rows; REINDEX and TRUNCATE start them over. | `TestHnswCreateIgnoresUnstorableRows`, `TestCheckStorable` |
+| I4 | A synchronous `CREATE INDEX` or `ALTER TABLE ... ADD INDEX` fails on a row the index cannot store and leaves no index. | `TestHnswCreateIgnoresUnstorableRows`, `TestGenBuildSQL` |
+| I5 | A search vector the index cannot store is rejected. | `TestToStorage` |
+| I6 | `SHOW INDEX IGNORED` lists the ignored rows of every index and partition of a table, and `WHERE` filters them. | `TestShowIndexIgnored` |
+| I7 | `SHOW INDEX IGNORED` requires `SELECT` on the table. | `TestShowIndexIgnored` |
+| I8 | An index without an ignored table keeps its previous behaviour. | `TestNewIgnoredRowsWithoutTable`, `TestHnswCreateIgnoresUnstorableRows`, `TestShowIndexIgnored` |

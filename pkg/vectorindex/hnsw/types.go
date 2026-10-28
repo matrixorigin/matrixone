@@ -219,16 +219,50 @@ func ToStorage[T types.ArrayElement](vec []T, kind usearch.Quantization, bounds 
 	}
 }
 
-// CheckStorable returns the reason an index storing kind cannot store vec, or nil. It
-// applies the same element checks as ToStorage; the range of an int8/uint8 index does not
-// reject a vector.
+// The smallest float32 magnitudes that round to infinity when narrowed to float16 and bf16:
+// the midpoint above the largest finite value, which rounds to even, away from it.
+const (
+	f16Overflow  = float32(65520)
+	bf16Overflow = float32(3.3961775e38) // bits 0x7F7F8000
+)
+
+// CheckStorable returns the reason an index storing kind cannot store vec, or nil. It rejects
+// exactly the vectors ToStorage rejects, by range, without converting them; the range of an
+// int8/uint8 index does not reject a vector.
 func CheckStorable[T types.ArrayElement](vec []T, kind usearch.Quantization) error {
-	var bounds QuantizeBounds
-	if NeedsQuantizeBounds(kind) {
-		bounds = QuantizeBounds{Min: -1, Max: 1, Set: true}
+	if len(vec) == 0 {
+		return moerr.NewInternalErrorNoCtx("usearch vector is empty")
 	}
-	_, _, err := ToStorage(vec, kind, bounds)
-	return err
+	if !allFinite(vec) {
+		return moerr.NewInvalidInputNoCtx("hnsw vector has a NaN or infinite element")
+	}
+	limit, overflows := float32(math.Inf(1)), kind
+	switch kind {
+	case usearch.F64:
+		return nil
+	case usearch.F16:
+		limit = f16Overflow
+	case usearch.BF16:
+		limit = bf16Overflow
+	case usearch.I8, usearch.U8:
+		// an int8/uint8 index maps float32 values, so only the step to float32 can overflow
+		overflows = usearch.F32
+	}
+	switch x := any(vec).(type) {
+	case []float32:
+		for _, e := range x {
+			if e >= limit || e <= -limit {
+				return narrowedError(float64(e), overflows)
+			}
+		}
+	case []float64:
+		for _, e := range x {
+			if f := float32(e); math.IsInf(float64(f), 0) || f >= limit || f <= -limit {
+				return narrowedError(e, overflows)
+			}
+		}
+	}
+	return nil
 }
 
 // allFinite reports whether no element of vec is NaN or infinite.
@@ -311,9 +345,13 @@ func storedFloat32[T types.ArrayElement](vec []T, kind usearch.Quantization) []f
 // checkNarrowed rejects a finite element that overflows the element type the index stores.
 func checkNarrowed(x, stored float64, kind usearch.Quantization) error {
 	if math.IsInf(stored, 0) && !math.IsInf(x, 0) {
-		return moerr.NewOutOfRangeNoCtxf("hnsw quantization", "vector element %v cannot be stored as %s", x, kind.String())
+		return narrowedError(x, kind)
 	}
 	return nil
+}
+
+func narrowedError(x float64, kind usearch.Quantization) error {
+	return moerr.NewOutOfRangeNoCtxf("hnsw quantization", "vector element %v cannot be stored as %s", x, kind.String())
 }
 
 // BaseBounds returns the bounds an int8/uint8 index of a vecint8/vecuint8 column maps its
