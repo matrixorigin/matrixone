@@ -6109,6 +6109,21 @@ func TestExecRequestStmtCloseSuppressesDeallocateError(t *testing.T) {
 	t.Cleanup(ses.Close)
 	ec := newTestExecCtx(ctx, ctrl)
 	ec.ses = ses
+	// Keep this session in an active transaction so the close command reaches
+	// deallocation planning without creating a transaction client.
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().GetWorkspace().Return(newTestWorkspace()).AnyTimes()
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+	txnOp.EXPECT().Status().Return(txn.TxnStatus_Active).AnyTimes()
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	txnOp.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()
+	txnOp.EXPECT().ExitRunSqlWithToken(gomock.Any()).AnyTimes()
+	txnOp.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
+	ses.txnHandler.txnOp = txnOp
+	ses.txnHandler.txnCtx = ctx
+	storage := mock_frontend.NewMockEngine(ctrl)
+	storage.EXPECT().Hints().Return(engine.Hints{CommitOrRollbackTimeout: time.Second}).AnyTimes()
+	ses.txnHandler.storage = storage
 	stmtID := uint32(123)
 	stmtName := getPrepareStmtName(stmtID)
 	stmt := &PrepareStmt{Name: stmtName}
