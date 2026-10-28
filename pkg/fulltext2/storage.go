@@ -540,14 +540,15 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 	if err != nil {
 		return nil, err
 	}
-	// The mapping stays valid after the file is closed and after the cache evicts it.
 	data, err := mmapReadOnly(f.File())
+	release := f.Keep()
 	f.Close()
 	if err != nil {
+		release()
 		return nil, err
 	}
-	// The Segment owns the mapping: Free() unmaps it.
-	m := &Segment{Id: id, mmapData: data}
+	// The Segment owns the mapping and the hold on its cache entry: Free() releases both.
+	m := &Segment{Id: id, mmapData: data, release: release}
 	if err := m.decodeSegment(data); err != nil {
 		m.Free()
 		return nil, err

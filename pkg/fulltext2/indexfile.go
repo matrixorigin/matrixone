@@ -34,6 +34,7 @@ import (
 type indexFile interface {
 	File() *os.File
 	Size() int64
+	Keep() func()
 	Close() error
 }
 

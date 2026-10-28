@@ -287,6 +287,187 @@ func TestIndexFileCacheDelete(t *testing.T) {
 	require.Empty(t, trash)
 }
 
+func requireEntryDir(t *testing.T, c *IndexFileCache, name string, exists bool) {
+	t.Helper()
+	path, err := c.disk.pathForDir(name)
+	require.NoError(t, err)
+	_, err = os.Stat(path)
+	if exists {
+		require.NoError(t, err, "entry %s is on disk", name)
+	} else {
+		require.True(t, os.IsNotExist(err), "entry %s is removed, got %v", name, err)
+	}
+}
+
+// A held entry is removed by Delete or eviction only when its last hold is released.
+func TestIndexFileCacheHoldDefersRemoval(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	data := bytes.Repeat([]byte("h"), 64<<10)
+	c := newTestIndexFileCache(t, dir, 200<<10)
+
+	_, err := c.Put(ctx, "deleted", indexCacheEntry(data))
+	require.NoError(t, err)
+	release1, err := c.Hold("deleted")
+	require.NoError(t, err)
+	release2, err := c.Hold("deleted")
+	require.NoError(t, err)
+	require.NoError(t, c.Delete(ctx, "deleted"))
+	requireEntryDir(t, c, "deleted", true)
+	path, err := c.disk.pathForDir("deleted")
+	require.NoError(t, err)
+	require.False(t, c.disk.cache.Contains(path), "a deleted held entry leaves the cache accounting")
+	release1()
+	release1()
+	requireEntryDir(t, c, "deleted", true)
+	release2()
+	requireEntryDir(t, c, "deleted", false)
+	requireIndexCacheMiss(t, c, "deleted")
+
+	_, err = c.Put(ctx, "evicted", indexCacheEntry(data))
+	require.NoError(t, err)
+	release, err := c.Hold("evicted")
+	require.NoError(t, err)
+	for i := 0; i < 8; i++ {
+		_, err := c.Put(ctx, fmt.Sprintf("other-%d", i), indexCacheEntry(data))
+		require.NoError(t, err)
+	}
+	evictIndexCache(c)
+	requireEntryDir(t, c, "evicted", true)
+	release()
+	requireEntryDir(t, c, "evicted", false)
+
+	_, temps, trash := listCacheDirs(t, dir)
+	require.Empty(t, temps)
+	require.Empty(t, trash)
+}
+
+// An entry opened again after its removal was deferred is in the cache again, and the
+// release of the earlier hold leaves it.
+func TestIndexFileCacheHeldEntryReopened(t *testing.T) {
+	ctx := context.Background()
+	c := newTestIndexFileCache(t, t.TempDir(), 1<<30)
+	data := []byte("payload")
+	_, err := c.Put(ctx, "e", indexCacheEntry(data))
+	require.NoError(t, err)
+	release, err := c.Hold("e")
+	require.NoError(t, err)
+	require.NoError(t, c.Delete(ctx, "e"))
+
+	files, err := c.Open(ctx, "e", "data")
+	require.NoError(t, err)
+	closeFiles(files)
+	release()
+	requireEntryDir(t, c, "e", true)
+	files, err = c.Open(ctx, "e", "data")
+	require.NoError(t, err)
+	defer closeFiles(files)
+	require.Equal(t, data, readAllFile(t, files[0]))
+
+	_, err = c.Hold("../e")
+	require.Error(t, err)
+}
+
+func ageEntry(t *testing.T, c *IndexFileCache, name string, age time.Duration) {
+	t.Helper()
+	path, err := c.disk.pathForDir(name)
+	require.NoError(t, err)
+	at := time.Now().Add(-age)
+	require.NoError(t, os.Chtimes(path, at, at))
+}
+
+// The GC deletes an entry with no holds last used longer than the idle TTL ago; a held
+// entry, a recently used one and one whose last hold was just released stay.
+func TestIndexFileCacheCollectsIdleEntries(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	c, err := newIndexFileCache(ctx, dir, fscache.ConstCapacity(1<<30), "", "", 0, IndexFileRebuildPolicyDefault, time.Hour)
+	require.NoError(t, err)
+	<-c.disk.load.done
+	t.Cleanup(func() { c.Close(context.Background()) })
+	for _, n := range []string{"idle", "young", "held", "released"} {
+		_, err := c.Put(ctx, n, indexCacheEntry([]byte(n)))
+		require.NoError(t, err)
+	}
+	ageEntry(t, c, "idle", 2*time.Hour)
+	ageEntry(t, c, "held", 2*time.Hour)
+	ageEntry(t, c, "released", 2*time.Hour)
+	releaseHeld, err := c.Hold("held")
+	require.NoError(t, err)
+	releaseUsed, err := c.Hold("released")
+	require.NoError(t, err)
+	releaseUsed()
+
+	n, err := c.collectIdle(ctx, time.Now())
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	requireEntryDir(t, c, "idle", false)
+	idlePath, err := c.disk.pathForDir("idle")
+	require.NoError(t, err)
+	require.False(t, c.disk.cache.Contains(idlePath))
+	requireIndexCacheMiss(t, c, "idle")
+	for _, name := range []string{"young", "held", "released"} {
+		requireEntryDir(t, c, name, true)
+	}
+
+	n, err = c.collectIdle(ctx, time.Now().Add(2*time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, 2, n, "a held entry is never collected")
+	requireEntryDir(t, c, "held", true)
+	releaseHeld()
+	n, err = c.collectIdle(ctx, time.Now().Add(2*time.Hour))
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+
+	entries, temps, trash := listCacheDirs(t, dir)
+	require.Empty(t, entries)
+	require.Empty(t, temps)
+	require.Empty(t, trash)
+}
+
+// The GC runs on its own ticker until Close; an idle TTL of 0 starts none.
+func TestIndexFileCacheGCLoop(t *testing.T) {
+	ctx := context.Background()
+	c, err := newIndexFileCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<30), "", "", 0, IndexFileRebuildPolicyDefault, time.Second)
+	require.NoError(t, err)
+	<-c.disk.load.done
+	_, err = c.Put(ctx, "e", indexCacheEntry([]byte("e")))
+	require.NoError(t, err)
+	ageEntry(t, c, "e", time.Hour)
+	require.Eventually(t, func() bool {
+		path, _ := c.disk.pathForDir("e")
+		_, err := os.Stat(path)
+		return os.IsNotExist(err)
+	}, 10*time.Second, 50*time.Millisecond)
+	c.Close(ctx)
+
+	off := newTestIndexFileCache(t, t.TempDir(), 1<<30)
+	require.Nil(t, off.stopGC)
+}
+
+func TestIndexFileIdleTTLConfig(t *testing.T) {
+	var c CacheConfig
+	ttl, err := c.indexFileIdleTTL()
+	require.NoError(t, err)
+	require.Equal(t, DefaultIndexFileIdleTTL, ttl)
+	c.IndexFileIdleTTL = &toml.Duration{Duration: 0}
+	ttl, err = c.indexFileIdleTTL()
+	require.NoError(t, err)
+	require.Zero(t, ttl)
+	c.IndexFileIdleTTL = &toml.Duration{Duration: -time.Second}
+	_, err = c.indexFileIdleTTL()
+	require.Error(t, err)
+
+	config := indexCacheConfig(t, 100<<20)
+	config.IndexFileIdleTTL = &toml.Duration{Duration: -time.Second}
+	_, err = newFileServiceCaches(context.Background(), config, nil, "test", true)
+	require.Error(t, err)
+	config.IndexFileIdleTTL = &toml.Duration{Duration: time.Minute}
+	caches := newTestFileServiceCaches(t, config)
+	require.Equal(t, time.Minute, caches.index.idleTTL)
+	require.NotNil(t, caches.index.stopGC)
+}
+
 func TestIndexFileCacheReusedAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -389,13 +570,16 @@ func TestIndexFileCacheConcurrentOperations(t *testing.T) {
 			r := rand.New(rand.NewSource(seed))
 			for i := 0; i < 200; i++ {
 				name := names[r.Intn(len(names))]
-				switch r.Intn(4) {
+				switch r.Intn(6) {
 				case 0, 1:
 					_, err := c.Put(ctx, name, indexCacheEntry(payload(name)))
 					assert.NoError(t, err)
 				case 2:
+					release, err := c.Hold(name)
+					assert.NoError(t, err)
 					files, err := c.Open(ctx, name, "data", "manifest")
 					if err != nil {
+						release()
 						assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), err)
 						continue
 					}
@@ -406,8 +590,17 @@ func TestIndexFileCacheConcurrentOperations(t *testing.T) {
 					assert.Equal(t, payload(name), data)
 					assert.Equal(t, []byte(fmt.Sprintf("len=%d", len(payload(name)))), manifest)
 					closeFiles(files)
+					release()
 				case 3:
 					assert.NoError(t, c.Delete(ctx, name))
+				case 4:
+					release, err := c.Hold(name)
+					assert.NoError(t, err)
+					assert.NoError(t, c.Delete(ctx, name))
+					release()
+				case 5:
+					_, err := c.collectIdle(ctx, time.Now().Add(time.Hour))
+					assert.NoError(t, err)
 				}
 			}
 		}(int64(w))

@@ -44,8 +44,9 @@ type Env struct {
 
 // File is an open index file. The caller closes it.
 type File struct {
-	f    *os.File
-	size int64
+	f       *os.File
+	size    int64
+	release func()
 }
 
 // File returns the open file. It stays readable until Close, even if the cache evicts it.
@@ -61,8 +62,26 @@ func (f *File) Size() int64 { return f.size }
 // descriptor and shares its offset, so readers of the File use ReadAt.
 func (f *File) FDPath() string { return fmt.Sprintf("/dev/fd/%d", f.f.Fd()) }
 
-// Close closes the file.
-func (f *File) Close() error { return f.f.Close() }
+// Keep hands the File's hold on its cache entry to the caller: the entry stays on disk
+// after Close until release is called, once. A File not served from the cache holds
+// nothing.
+func (f *File) Keep() (release func()) {
+	release = f.release
+	f.release = nil
+	if release == nil {
+		return func() {}
+	}
+	return release
+}
+
+// Close closes the file and releases its hold on its cache entry, unless Keep took it.
+func (f *File) Close() error {
+	if f.release != nil {
+		f.release()
+		f.release = nil
+	}
+	return f.f.Close()
+}
 
 // Open returns the file ref names, as visible to env's transaction: from the index-file
 // cache when present, otherwise rebuilt from its chunk rows, verified and cached.
@@ -131,8 +150,13 @@ func (v *verifiedSet) remove(key string) {
 // openCached opens entry name. A missing, invalid or unreadable entry is a miss
 // (nil, nil); an invalid entry is deleted. Only cancellation is an error.
 func openCached(ctx context.Context, cache *fileservice.IndexFileCache, name string, ref *Ref) (*File, error) {
+	release, err := cache.Hold(name)
+	if err != nil {
+		return nil, err
+	}
 	files, err := cache.Open(ctx, name, dataFile, manifestFile)
 	if err != nil {
+		release()
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
@@ -146,6 +170,7 @@ func openCached(ctx context.Context, cache *fileservice.IndexFileCache, name str
 	key := cache.Path() + "\x00" + name
 	if err := checkCached(data, manifest, ref, key); err != nil {
 		_ = data.Close()
+		release()
 		verified.remove(key)
 		logutil.Warn("index file cache entry invalid, rebuilding", zap.String("entry", name), zap.Error(err))
 		if delErr := cache.Delete(ctx, name); delErr != nil {
@@ -155,7 +180,7 @@ func openCached(ctx context.Context, cache *fileservice.IndexFileCache, name str
 		}
 		return nil, nil
 	}
-	return &File{f: data, size: ref.Size}, nil
+	return &File{f: data, size: ref.Size, release: release}, nil
 }
 
 func checkCached(data, manifest *os.File, ref *Ref, key string) error {

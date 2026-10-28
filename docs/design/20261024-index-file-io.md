@@ -100,7 +100,7 @@ Decided by @cpegeric, 2026-10-24.
   second copy. It goes to the disk cache only, never the memory cache. The writing CN reads
   it warm from local disk.
 - A file cached by a transaction that aborts is never named by a committed metadata row,
-  so no reader reaches it; it is evicted unused.
+  so no reader reaches it; it is collected once idle, or evicted.
 
 Rejected alternative: writing the rows through the storage engine's relation write path
 without SQL. It skips the primary-key lock and duplicate check that `INSERT` performs, so
@@ -209,15 +209,15 @@ treatment.
   of it on disk, so the files and directories the cache keeps are bounded by its live
   entries.
 - A reader never blocks eviction. It only waits for an in-progress write or eviction of
-  the same file, then opens it. A file evicted while a reader holds it open or mapped stays
-  readable through that handle; its space is freed when the last handle closes.
+  the same file, then opens it. A file evicted while a reader holds it stays on disk until
+  the last hold is released (see "Holds and idle collection").
 - A file that is gone when a reader opens it is a miss, rebuilt from the chunk rows.
 - Cached files survive a CN restart, as table-data cache files do; the manifest is checked
   on open.
 
 Accepted consequences:
 
-- Disk use may exceed the configured capacity by evicted files that are still mapped.
+- Disk use may exceed the configured capacity by evicted files that are still held.
   Table-data reads hold a file briefly; a loaded index holds its file while it is loaded.
   The excess is bounded by what the index-cache governor keeps loaded.
 - A consumer must use the handle the layer returns, not reopen the cache path by name: an
@@ -226,6 +226,39 @@ Accepted consequences:
 
 Rejected alternative: pinning open files so eviction skips them. It keeps disk use within
 capacity, but adds a second eviction rule to the shared disk-cache code.
+
+### Holds and idle collection (decision)
+
+Decided by @cpegeric, 2026-10-28. Readers and writers of every index share the cache, so
+whether a file is in use is known only from holds; whether it is still needed is decided
+by time since its last use, not by which index generation or snapshot names it.
+
+- Every read through the layer holds its file from before the open until the reader is
+  done with it; a loaded index holds the files it keeps mapped until it is unloaded. Holds
+  are counted in memory per file and do not survive a restart.
+- Removing a held file, by eviction or by deletion, takes effect when its last hold is
+  released. Eviction still chooses its victims as before; a held victim leaves the
+  cache's accounting at once. A held file opened again before its release is cached again
+  and is not removed.
+- A file's last use is when it was published or when its last hold was released. It is
+  recorded on disk, so it survives a restart.
+- A file with no holds whose last use is older than the idle TTL is deleted by a periodic
+  collection in each CN. The TTL is configurable, 1 hour by default; 0 turns collection
+  off and leaves only eviction. A hold taken while a file is being collected either keeps
+  it or finds it missing and rebuilds it from the rows; a collection never removes a file
+  that is held.
+- Collection covers every way a file stops being used: a merge or rebuild replacing it, a
+  dropped index or table, a write whose transaction aborted, a snapshot no longer queried,
+  and files written or loaded on a CN that was down or had the index unloaded when it
+  changed. An index needs no code of its own to delete its cached files.
+
+Accepted consequence: a file that is still current but unused for longer than the TTL is
+deleted, and its next use rebuilds it from the rows.
+
+Rejected alternative: deleting the files of a generation when a newer one is loaded, and
+all of an index's files when it is dropped. It acts only on a CN that has the index loaded
+at the current snapshot when it changes, misses files written but never loaded, and
+deletes files that queries at an older snapshot keep needing.
 
 ### One rebuild per file (decision)
 
@@ -259,7 +292,8 @@ gate, and each algorithm can switch its readers and writers independently.
   cache, the internal table function the write path uses) and its contract.
 - Not in scope: adopting the layer in any index. Each algorithm adopts it in its own
   change, which decides how its files map onto the layer (for example how a CDC tail is
-  split into files), when its cached files are deleted, and the default cache share.
+  split into files) and the default cache share. When cached files are deleted is the
+  layer's (see "Holds and idle collection").
 - Not in scope: the incremental-update algorithm; a new on-disk format; changes to what
   clone, restore or backup copy; IVFFLAT, which stores no chunks; GPU residency.
 - Range reads of a file. Consumers map or load whole files today, and the disk cache
@@ -290,6 +324,14 @@ Every statement in "Contract" is checked by a test that would fail if it were fa
   after its write finished, nor for chunks outside the file, nor with an input;
 - a file evicted while open stays readable through the open handle and through the path to
   the handle, and the next open is a miss that rebuilds it;
+- a held file evicted or deleted stays on disk until its last hold is released, a file
+  opened again before then is cached again, and a hold kept past the reader's close holds
+  the file until it is released; a loaded index holds the files it maps until unloaded;
+- a file with no holds last used longer than the idle TTL ago is collected and removed from
+  the cache's accounting, while a held one, a recently used one and one whose last hold
+  was just released stay; collection runs periodically until the cache closes, a TTL of 0
+  runs none, and a negative TTL is rejected; holds, deletions and collections racing on
+  the same files leave the directory and the cache index in agreement;
 - concurrent readers missing the same file rebuild it once; a cancelled waiter does not
   hold the lock;
 - an entry is never visible before it is complete, its files come from one version, and it

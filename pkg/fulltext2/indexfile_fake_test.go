@@ -48,27 +48,65 @@ type fakeIndexFiles struct {
 	files   map[string][]byte
 	opens   int
 	openErr error
+	held    map[string]int
 }
 
 func fakeFileKey(id string, tag, first int64) string { return fmt.Sprintf("%s/%d/%d", id, tag, first) }
 
 type fakeOpenFile struct {
-	f    *os.File
-	size int64
+	f       *os.File
+	size    int64
+	release func()
 }
 
 func (f *fakeOpenFile) File() *os.File { return f.f }
 func (f *fakeOpenFile) Size() int64    { return f.size }
-func (f *fakeOpenFile) Close() error   { return f.f.Close() }
+
+func (f *fakeOpenFile) Keep() func() {
+	release := f.release
+	f.release = nil
+	return release
+}
+
+func (f *fakeOpenFile) Close() error {
+	if f.release != nil {
+		f.release()
+		f.release = nil
+	}
+	return f.f.Close()
+}
+
+// hold counts a hold on file key until the returned release.
+func (f *fakeIndexFiles) hold(key string) func() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.held[key]++
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.held[key]--
+		})
+	}
+}
+
+// holds returns the holds on the file of id, tag and first chunk.
+func (f *fakeIndexFiles) holds(id string, tag, first int64) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.held[fakeFileKey(id, tag, first)]
+}
 
 // swapIndexFiles replaces the index-file layer for the test.
 func swapIndexFiles(t *testing.T) *fakeIndexFiles {
-	fake := &fakeIndexFiles{files: make(map[string][]byte)}
+	fake := &fakeIndexFiles{files: make(map[string][]byte), held: make(map[string]int)}
 	prevOpen, prevWrite := openIndexFile, writeIndexFile
 	openIndexFile = func(_ *sqlexec.SqlProcess, ref indexfile.Ref) (indexFile, error) {
 		fake.mu.Lock()
 		fake.opens++
-		buf, ok := fake.files[fakeFileKey(ref.IndexID, ref.Tag, ref.FirstChunk)]
+		key := fakeFileKey(ref.IndexID, ref.Tag, ref.FirstChunk)
+		buf, ok := fake.files[key]
 		err := fake.openErr
 		fake.mu.Unlock()
 		if err != nil {
@@ -94,7 +132,7 @@ func swapIndexFiles(t *testing.T) *fakeIndexFiles {
 			f.Close()
 			return nil, err
 		}
-		return &fakeOpenFile{f: f, size: int64(len(buf))}, nil
+		return &fakeOpenFile{f: f, size: int64(len(buf)), release: fake.hold(key)}, nil
 	}
 	writeIndexFile = func(_ *sqlexec.SqlProcess, _ *IndexFiles, _ client.TxnOperator, ref indexfile.Ref, src io.Reader,
 		_ func(sql string) error) (int64, string, error) {

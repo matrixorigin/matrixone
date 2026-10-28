@@ -53,6 +53,9 @@ type CacheConfig struct {
 	IndexFileDiskShare *float64 `toml:"index-file-disk-share"`
 	// IndexFileDiskPath is the index-file cache directory. Default DiskPath + "-index-file".
 	IndexFileDiskPath *string `toml:"index-file-disk-path"`
+	// IndexFileIdleTTL is how long an index-file cache entry with no holds stays after its
+	// last use; 0 keeps entries until evicted. Default DefaultIndexFileIdleTTL.
+	IndexFileIdleTTL *toml.Duration `toml:"index-file-idle-ttl"`
 	// IndexFileRebuildCache is how an index-file rebuild uses the memory and disk caches:
 	// "read-write" (default), "read" or "none".
 	IndexFileRebuildCache string `toml:"index-file-rebuild-cache"`
@@ -130,6 +133,10 @@ func newFileServiceCaches(
 	if err != nil {
 		return caches, err
 	}
+	idleTTL, err := config.indexFileIdleTTL()
+	if err != nil {
+		return caches, err
+	}
 
 	if enableDiskCache && config.DiskCapacity != nil &&
 		*config.DiskCapacity > DisableCacheCapacity && config.DiskPath != nil {
@@ -180,6 +187,7 @@ func newFileServiceCaches(
 			config.MetricScope,
 			indexShare,
 			rebuildPolicy,
+			idleTTL,
 		)
 		if err != nil {
 			return caches, err
@@ -188,6 +196,7 @@ func newFileServiceCaches(
 			zap.Any("fs-name", name),
 			zap.String("path", path),
 			zap.Int64("capacity", capacity),
+			zap.Duration("idle-ttl", idleTTL),
 		)
 	}
 
@@ -231,6 +240,18 @@ func (c *CacheConfig) indexFileDiskShare() (float64, error) {
 		return 0, nil
 	}
 	return share, nil
+}
+
+// indexFileIdleTTL returns the idle TTL of index-file cache entries.
+func (c *CacheConfig) indexFileIdleTTL() (time.Duration, error) {
+	if c.IndexFileIdleTTL == nil {
+		return DefaultIndexFileIdleTTL, nil
+	}
+	ttl := c.IndexFileIdleTTL.Duration
+	if ttl < 0 {
+		return 0, moerr.NewInvalidInputNoCtxf("invalid index-file-idle-ttl %v, want >= 0", ttl)
+	}
+	return ttl, nil
 }
 
 func (c *fileServiceCaches) close(ctx context.Context) {

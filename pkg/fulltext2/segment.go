@@ -392,6 +392,8 @@ type Segment struct {
 	// eviction write-lock (no reader in flight). nil on a build-side or in-memory
 	// (tail) segment, whose bytes are GC-managed Go slices.
 	mmapData []byte
+	// release drops the hold that keeps the index file mmapData maps in the index-file cache.
+	release func()
 }
 
 // numDocs is the segment's document count, valid for both a build-side segment (== len(pks))
@@ -683,6 +685,10 @@ func (s *Segment) Free() {
 	if s.mmapData != nil {
 		_ = munmap(s.mmapData)
 		s.mmapData = nil
+	}
+	if s.release != nil {
+		s.release()
+		s.release = nil
 	}
 	s.ranking, s.blocks, s.positions = nil, nil, nil
 }

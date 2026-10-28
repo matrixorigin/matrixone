@@ -579,6 +579,7 @@ func TestFDPathSurvivesEviction(t *testing.T) {
 	f, err := Open(context.Background(), env, ref)
 	require.NoError(t, err)
 	defer f.Close()
+	f.Keep()()
 	require.NoError(t, env.Cache.Delete(context.Background(), entryName(18, &ref)))
 	_, err = env.Cache.Open(context.Background(), entryName(18, &ref), dataFile)
 	require.Error(t, err, "the cache entry is gone")
