@@ -4223,6 +4223,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("hnsw_threads_search", 0, 1024, false),
 		Default:           int64(0),
 	},
+	"hnsw_prefilter_exact_threshold": {
+		Name:              "hnsw_prefilter_exact_threshold",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("hnsw_prefilter_exact_threshold", 0, 1000000000, false),
+		Default:           int64(5000),
+	},
 	"fulltext2_threads_search": {
 		Name:              "fulltext2_threads_search",
 		Scope:             ScopeBoth,
@@ -4252,8 +4260,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableIntType("hnsw_max_index_capacity", 1, 5000000000, false),
-		Default:           int64(1000000),
+		Type:              InitSystemVariableIntType("hnsw_max_index_capacity", 0, 5000000000, false),
+		Default:           int64(0),
 	},
 	"experimental_cagra_index": {
 		Name:              "experimental_cagra_index",
