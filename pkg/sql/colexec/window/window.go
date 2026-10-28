@@ -368,6 +368,7 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 			// A new materialized input batch starts a new aggregate generation.
 			// Normally the previous generation is released after its last chunk;
 			// this also closes reuse after an interrupted or failed generation.
+			ctr.freeLocalRankIndex()
 			ctr.freeRunningAgg()
 			ctr.freeOrderedSetPartitionResults(proc.Mp())
 			// The civil-order index describes this generation's row range; the
@@ -1700,15 +1701,32 @@ func (ctr *container) processValueFuncRange(
 			if width > math.MaxInt64 {
 				width = math.MaxInt64
 			}
+			start, end := 0, n
+			if ctr.ps != nil {
+				start, end = buildPartitionInterval(ctr.ps, j, n)
+			}
+			var indexed *localRankIndex
+			if nVec.IsConst() {
+				indexed, err = ctr.rankIndex(proc, srcVec, start, end, j, width)
+				if err != nil {
+					return nil, err
+				}
+			}
+			var indexedLess uint64
+			if indexed != nil {
+				indexedLess = indexed.advance(j)
+			}
 			if localRankValueIsNull(srcVec, j) {
 				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
 					return nil, err
 				}
 				continue
 			}
-			start, _ := 0, n
-			if ctr.ps != nil {
-				start, _ = buildPartitionInterval(ctr.ps, j, n)
+			if indexed != nil {
+				if err := vector.AppendAny(localResult, indexedLess+1, false, proc.Mp()); err != nil {
+					return nil, err
+				}
+				continue
 			}
 			frameStart := j - int(width-1)
 			if frameStart < start {
@@ -1730,17 +1748,27 @@ func (ctr *container) processValueFuncRange(
 			if err = checkCanceled(proc, j-outputStart); err != nil {
 				return nil, err
 			}
+			start, end := 0, n
+			if ctr.ps != nil {
+				start, end = buildPartitionInterval(ctr.ps, j, n)
+			}
+			indexed, err := ctr.rankIndex(proc, srcVec, start, end, j, 0)
+			if err != nil {
+				return nil, err
+			}
+			var count uint64
+			if indexed != nil {
+				count = indexed.advance(j)
+			}
 			if localRankValueIsNull(srcVec, j) {
 				if err := vector.AppendAny(localResult, nil, true, proc.Mp()); err != nil {
 					return nil, err
 				}
 				continue
 			}
-			start, _ := 0, n
-			if ctr.ps != nil {
-				start, _ = buildPartitionInterval(ctr.ps, j, n)
+			if indexed == nil {
+				count, err = countLessInRankRange(proc, srcVec, start, j+1, j)
 			}
-			count, err := countLessInRankRange(proc, srcVec, start, j+1, j)
 			if err != nil {
 				return nil, err
 			}
