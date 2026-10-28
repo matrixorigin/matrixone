@@ -13166,13 +13166,26 @@ simple_expr:
             // Flatten redundant nested-paren subqueries produced by
             // `select_with_parens: '(' select_with_parens ')'`, keeping the
             // canonical single-layer `Subquery{ParenSelect{...}}` shape so
-            // formatted output re-parses to itself.
+            // formatted output re-parses to itself. Only collapse an
+            // intermediate layer whose *tree.Select is a genuinely empty
+            // wrapper: select_no_parens attaches Limit, OrderBy, With and the
+            // other semantic clauses to that same Select shape, and dropping
+            // any of them would change the subquery's meaning (e.g. LIMIT 0
+            // pins a zero-row scalar result, and a CTE definition binds the
+            // body select). See PR review 5688289986.
             for {
                 ps, ok1 := sub.Select.(*tree.ParenSelect)
                 if !ok1 {
                     break
                 }
-                inner, ok2 := ps.Select.Select.(*tree.ParenSelect)
+                mid := ps.Select
+                if mid == nil || mid.IsPerform || mid.RewriteOption != nil ||
+                    mid.TimeWindow != nil || len(mid.OrderBy) > 0 || mid.Limit != nil ||
+                    mid.RankOption != nil || mid.With != nil || mid.Ep != nil ||
+                    len(mid.IntoVars) > 0 || mid.DeprecatedInto || mid.SelectLockInfo != nil {
+                    break
+                }
+                inner, ok2 := mid.Select.(*tree.ParenSelect)
                 if !ok2 || inner == ps {
                     break
                 }

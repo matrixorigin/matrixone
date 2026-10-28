@@ -45,6 +45,14 @@ func TestBinaryPrefixOperatorSyntax(t *testing.T) {
 		{`select binary (case when true then 'a' else 'b' end)`, `select binary(case when true then 'a' else 'b' end)`},
 		{`select binary -1`, `select binary(-1)`},
 		{`select binary (select 'a')`, `select binary((select 'a'))`},
+		// redundant empty paren layers around a subquery still collapse to the
+		// canonical single layer; intermediate SELECT layers that carry semantic
+		// clauses (LIMIT/ORDER BY/WITH and friends) must NOT be flattened away:
+		// the planner consumes those clauses (PR review 5688289986).
+		{`select binary (((select 'a')))`, `select binary((select 'a'))`},
+		{`select binary(((select 'a') limit 0))`, `select binary(((select 'a') limit 0))`},
+		{`select binary(((select 1 as x) order by 1 limit 2))`, `select binary(((select 1 as x) order by 1 limit 2))`},
+		{`select binary((with c as (select 'a' as a) (select a from c) limit 1))`, `select binary((with c as (select 'a' as a) (select a from c) limit 1))`},
 		{`select binary exists (select 1)`, `select binary(exists (select 1))`},
 		// precedence: BINARY binds tighter than arithmetic/comparison
 		{`select binary 'a' = 'A'`, `select binary('a') = 'A'`},
@@ -100,4 +108,67 @@ func TestBinaryPrefixOperatorSyntax(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+// TestBinaryPrefixPreservesSubqueryClauses asserts on the consumer-visible AST
+// (the tree the planner binds), not just on formatted text, that `BINARY
+// <subquery>` keeps semantic clauses of intermediate SELECT layers when paren
+// wrappers are flattened (PR review 5688289986): dropping LIMIT 0 would turn a
+// zero-row scalar subquery into one that returns rows.
+func TestBinaryPrefixPreservesSubqueryClauses(t *testing.T) {
+	extract := func(t *testing.T, sql string) tree.SelectStatement {
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		sel, ok := stmt.(*tree.Select)
+		require.True(t, ok)
+		sc, ok := sel.Select.(*tree.SelectClause)
+		require.True(t, ok)
+		require.Len(t, sc.Exprs, 1)
+		fn, ok := sc.Exprs[0].Expr.(*tree.FuncExpr)
+		require.True(t, ok)
+		sub, ok := fn.Exprs[0].(*tree.Subquery)
+		require.True(t, ok)
+		return sub.Select
+	}
+	var walk func(root tree.SelectStatement, pred func(*tree.Select) bool, depth int) bool
+	walk = func(root tree.SelectStatement, pred func(*tree.Select) bool, depth int) bool {
+		if depth <= 0 || root == nil {
+			return false
+		}
+		switch s := root.(type) {
+		case *tree.Select:
+			if pred(s) {
+				return true
+			}
+			return walk(s.Select, pred, depth-1)
+		case *tree.ParenSelect:
+			if s.Select == nil {
+				return false
+			}
+			if pred(s.Select) {
+				return true
+			}
+			return walk(s.Select.Select, pred, depth-1)
+		}
+		return false
+	}
+	t.Run("limit 0 survives", func(t *testing.T) {
+		root := extract(t, `select binary(((select 'a') limit 0))`)
+		require.True(t, walk(root, func(s *tree.Select) bool { return s.Limit != nil }, 8),
+			"flattened subquery must retain the intermediate LIMIT")
+	})
+	t.Run("order by and limit survive", func(t *testing.T) {
+		root := extract(t, `select binary(((select 1 as x) order by 1 limit 2))`)
+		require.True(t, walk(root, func(s *tree.Select) bool {
+			return len(s.OrderBy) > 0 && s.Limit != nil
+		}, 8), "flattened subquery must retain intermediate ORDER BY and LIMIT")
+	})
+	t.Run("with cte and limit survive", func(t *testing.T) {
+		root := extract(t, `select binary((with c as (select 'a' as a) (select a from c) limit 1))`)
+		require.True(t, walk(root, func(s *tree.Select) bool { return s.With != nil }, 8),
+			"flattened subquery must retain the intermediate WITH (CTE)")
+		require.True(t, walk(root, func(s *tree.Select) bool { return s.Limit != nil }, 8),
+			"flattened subquery must retain the intermediate LIMIT")
+	})
 }
