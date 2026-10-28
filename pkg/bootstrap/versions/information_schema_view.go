@@ -26,12 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
-// InformationSchemaViewDefinitionMatches accepts only the two exact statements
-// authored by initialization and identity-preserving reconciliation.
-func InformationSchemaViewDefinitionMatches(actual, expected string) bool {
-	return actual == expected || actual == strings.Replace(expected, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1)
-}
-
 func CheckInformationSchemaViewDefinition(tx executor.TxnExecutor, account uint32, name string) (bool, string, error) {
 	exists, definition, err := CheckViewDefinition(tx, account, sysview.InformationDBConst, name)
 	if err != nil || exists || name == strings.ToLower(name) {
@@ -49,7 +43,7 @@ func InformationSchemaViewUpgradeEntry(name, definition string, protocol int64) 
 		RequiredProtocolVersion: protocol,
 		CheckFunc: func(tx executor.TxnExecutor, account uint32) (bool, error) {
 			exists, actual, err := CheckInformationSchemaViewDefinition(tx, account, name)
-			return exists && InformationSchemaViewDefinitionMatches(actual, definition), err
+			return exists && sysview.InformationSchemaViewDefinitionMatches(actual, definition), err
 		},
 	}
 }

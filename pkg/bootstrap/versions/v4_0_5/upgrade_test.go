@@ -77,7 +77,7 @@ func TestInformationSchemaTenantUpgradeEntries(t *testing.T) {
 			t.Fatalf("unexpected information_schema.%s upgrade: %+v", view.name, entry)
 		}
 		definitionSQL := entry.UpgSql
-		if !versions.InformationSchemaViewDefinitionMatches(definitionSQL, view.ddl) {
+		if !sysview.InformationSchemaViewDefinitionMatches(definitionSQL, view.ddl) {
 			t.Fatalf("%s upgrade does not use the current view definition: %s", view.name, definitionSQL)
 		}
 		for _, want := range []string{
@@ -99,13 +99,6 @@ func TestInformationSchemaTenantUpgradeEntries(t *testing.T) {
 		if entry.PostSql != "" {
 			t.Fatalf("%s regular view upgrade should not use post-sql: %s", view.name, entry.PostSql)
 		}
-	}
-}
-
-func requireSQLContains(t *testing.T, sql, want string) {
-	t.Helper()
-	if !strings.Contains(strings.ToLower(sql), want) {
-		t.Fatalf("SQL %q does not contain %q", sql, want)
 	}
 }
 

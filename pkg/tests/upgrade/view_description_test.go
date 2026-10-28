@@ -569,7 +569,7 @@ func TestViewDescriptionUdfDatabaseContext(t *testing.T) {
 	})
 }
 
-// Fail after the real DROP, while leaving transaction ownership to ExecTxn.
+// Fail after the real replacement, while leaving transaction ownership to ExecTxn.
 // This proves rollback/retry against storage, unlike an in-memory SQL recorder.
 type failedViewColumnsUpgradeTxn struct {
 	executor.TxnExecutor
@@ -577,10 +577,12 @@ type failedViewColumnsUpgradeTxn struct {
 }
 
 func (txn failedViewColumnsUpgradeTxn) Exec(sql string, opts executor.StatementOption) (executor.Result, error) {
-	if sql == sysview.InformationSchemaColumnsDDL {
+	result, err := txn.TxnExecutor.Exec(sql, opts)
+	if err == nil && sql == strings.Replace(sysview.InformationSchemaColumnsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1) {
+		result.Close()
 		return executor.Result{}, txn.failure
 	}
-	return txn.TxnExecutor.Exec(sql, opts)
+	return result, err
 }
 
 func testViewColumnsUpgradeRollback(t *testing.T, ctx context.Context, sqlExecutor executor.SQLExecutor, tenantID uint32, legacyDDL string) {
@@ -611,7 +613,7 @@ func testViewColumnsUpgradeRollback(t *testing.T, ctx context.Context, sqlExecut
 		return entry.Upgrade(failedViewColumnsUpgradeTxn{txn, injected}, tenantID)
 	}, opts)
 	require.ErrorIs(t, err, injected)
-	require.Equal(t, legacyDDL, definition(), "DROP must roll back with CREATE")
+	require.Equal(t, legacyDDL, definition(), "the replacement must roll back on failure")
 	for i := 0; i < 2; i++ {
 		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 			if i == 1 {
@@ -620,7 +622,7 @@ func testViewColumnsUpgradeRollback(t *testing.T, ctx context.Context, sqlExecut
 			}
 			return entry.Upgrade(txn, tenantID)
 		}, opts))
-		require.Equal(t, sysview.InformationSchemaColumnsDDL, definition())
+		require.Equal(t, strings.Replace(sysview.InformationSchemaColumnsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), definition())
 	}
 }
 

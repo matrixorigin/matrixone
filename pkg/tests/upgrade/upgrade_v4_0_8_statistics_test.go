@@ -134,7 +134,7 @@ func TestV407UpgradeRefreshesStatistics(t *testing.T) {
 				require.Equal(t, "ivfflat", originalAlgorithm)
 
 				for run := 0; run < 2; run++ {
-					var creates int
+					var replacements int
 					// Run the tenant-upgrade transaction as the sys account, mirroring the
 					// production driver (service.MaybeUpgradeTenant scopes the txn to
 					// System_Account and targets the tenant via the tenantID passed to
@@ -143,13 +143,13 @@ func TestV407UpgradeRefreshesStatistics(t *testing.T) {
 					// runs mo_ctl, which only the sys account may execute.
 					require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 						return v4_0_7.Handler.HandleTenantUpgrade(ctx, int32(test.accountID),
-							&statisticsUpgradeTxn{TxnExecutor: txn, creates: &creates})
+							&statisticsUpgradeTxn{TxnExecutor: txn, replacements: &replacements})
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).
 						WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied()))
 					if run == 0 {
-						require.Equal(t, 1, creates, "the old view must be recreated")
+						require.Equal(t, 1, replacements, "the old view must be replaced")
 					} else {
-						require.Zero(t, creates, "the canonical view must not be recreated again")
+						require.Zero(t, replacements, "the canonical view must not be replaced again")
 					}
 					require.ElementsMatch(t, []string{"PRIMARY", "idx_code", "uq_code"},
 						statisticsIndexNames(t, ctx, conn, btreeQuery))
@@ -165,7 +165,7 @@ func TestV407UpgradeRefreshesStatistics(t *testing.T) {
 						return err
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithAccountID(test.accountID)))
 					require.True(t, exists)
-					require.Equal(t, sysview.InformationSchemaStatisticsDDL, definition)
+					require.Equal(t, strings.Replace(sysview.InformationSchemaStatisticsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1), definition)
 				}
 			})
 		}
@@ -371,13 +371,13 @@ func TestV407LoginRejectsAccountDroppedAfterAuthentication(t *testing.T) {
 
 type statisticsUpgradeTxn struct {
 	executor.TxnExecutor
-	creates *int
+	replacements *int
 }
 
 func (txn *statisticsUpgradeTxn) Exec(statement string, opts executor.StatementOption) (executor.Result, error) {
 	res, err := txn.TxnExecutor.Exec(statement, opts)
-	if err == nil && statement == sysview.InformationSchemaStatisticsDDL {
-		(*txn.creates)++
+	if err == nil && statement == strings.Replace(sysview.InformationSchemaStatisticsDDL, "CREATE VIEW ", "CREATE OR REPLACE VIEW ", 1) {
+		(*txn.replacements)++
 	}
 	return res, err
 }
