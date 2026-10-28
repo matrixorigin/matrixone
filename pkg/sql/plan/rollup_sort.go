@@ -18,8 +18,9 @@ import (
 	"reflect"
 	"strings"
 
-	containertypes "github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	plan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -39,29 +40,6 @@ func EncodeSortRollupOption() string {
 func IsSortRollupOption(extra string) bool {
 	return extra == sortRollupExtraOption ||
 		strings.HasPrefix(extra, sortRollupExtraOption+":")
-}
-
-// sortRollupTypeEligible mirrors the executor's fail-closed whitelist. The
-// physical SORT uses SQL order equality, while the aggregate's ordinary hash
-// path uses the equality key codec. Types without a proven identical domain
-// must stay on the legacy grouping-set rewrite instead of reaching the sort
-// executor and failing after a plan has already been selected.
-func sortRollupTypeEligible(oid int32) bool {
-	switch containertypes.T(oid) {
-	case containertypes.T_bool,
-		containertypes.T_bit,
-		containertypes.T_int8, containertypes.T_int16, containertypes.T_int32,
-		containertypes.T_int64,
-		containertypes.T_uint8, containertypes.T_uint16, containertypes.T_uint32,
-		containertypes.T_uint64,
-		containertypes.T_decimal64, containertypes.T_decimal128, containertypes.T_decimal256,
-		containertypes.T_date, containertypes.T_time, containertypes.T_datetime,
-		containertypes.T_timestamp, containertypes.T_year,
-		containertypes.T_uuid, containertypes.T_enum:
-		return true
-	default:
-		return false
-	}
 }
 
 // sortRollupGroupingTypesEligible performs a planning-only binding probe. The
@@ -190,7 +168,7 @@ func (builder *QueryBuilder) probeSortRollupInput(
 			return nil, false
 		}
 		bound, err := groupBinder.BindExpr(qualified, 0, true)
-		if err != nil || bound == nil || !sortRollupTypeEligible(bound.Typ.Id) {
+		if err != nil || bound == nil || !colexec.SortRollupTypeEligible(types.T(bound.Typ.Id)) {
 			return nil, false
 		}
 		boundExprs = append(boundExprs, bound)
